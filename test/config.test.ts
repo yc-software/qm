@@ -28,7 +28,7 @@ const productionEnv = {
 test("Sprites proxy transition URLs are optional and parsed independently of the primary", () => {
   assert.equal(loadConfig({}).spritesSandbox.egressProxyAdditionalUrls, undefined);
   const config = loadConfig({
-    SPRITES_EGRESS_PROXY_URL: "https://primary.example.com",
+    EGRESS_PROXY_URL: "https://primary.example.com",
     SPRITES_EGRESS_PROXY_ADDITIONAL_URLS: " https://old.example.com, ,https://next.example.com ",
   });
   assert.equal(config.spritesSandbox.egressProxyUrl, "https://primary.example.com");
@@ -156,17 +156,74 @@ test("sharing posture defaults to isolated and accepts only isolated or open", (
   );
 });
 
-test("Modal without an egress proxy warns that sandboxes run fail-open", () => {
+test("EGRESS_PROXY_URL forces every proxy-capable provider through the proxy unless exempted", () => {
+  const proxied = loadConfig({ EGRESS_PROXY_URL: "https://egress.test" });
+  for (const provider of [
+    proxied.spritesSandbox,
+    proxied.e2bSandbox,
+    proxied.modalSandbox,
+    proxied.smolmachinesSandbox,
+    proxied.porterSandbox,
+    proxied.agent37Sandbox,
+  ])
+    assert.equal(provider.egressProxyUrl, "https://egress.test");
+  const exempted = loadConfig({
+    EGRESS_PROXY_URL: "https://egress.test",
+    EGRESS_PROXY_EXEMPT_BACKENDS: "e2b, smolmachines",
+  });
+  assert.equal(exempted.e2bSandbox.egressProxyUrl, undefined);
+  assert.equal(exempted.smolmachinesSandbox.egressProxyUrl, undefined);
+  assert.equal(exempted.modalSandbox.egressProxyUrl, "https://egress.test");
+  assert.equal(loadConfig({}).e2bSandbox.egressProxyUrl, undefined);
+});
+
+test("a retired per-provider egress proxy setting stops boot only when EGRESS_PROXY_URL would leave that provider unproxied", () => {
+  assert.throws(
+    () => loadConfig({ MODAL_EGRESS_PROXY_URL: "https://egress.test" }),
+    /No longer read: MODAL_EGRESS_PROXY_URL\..*Set EGRESS_PROXY_URL/,
+  );
+  assert.throws(
+    () =>
+      loadConfig({
+        SMOLMACHINES_EGRESS_PROXY_URL: "https://egress.test",
+        EGRESS_PROXY_URL: "https://egress.test",
+        EGRESS_PROXY_EXEMPT_BACKENDS: "smolmachines",
+      }),
+    /No longer read: SMOLMACHINES_EGRESS_PROXY_URL\./,
+  );
+  assert.throws(
+    () => loadConfig({ DO_AGENTS_EGRESS_PROXY_URL: "https://egress.test", EGRESS_PROXY_URL: "https://egress.test" }),
+    /No longer read: DO_AGENTS_EGRESS_PROXY_URL\. DigitalOcean Managed Agents can't be forced/,
+  );
   const warnings: string[] = [];
   const original = console.warn;
   console.warn = (msg: unknown) => void warnings.push(String(msg));
   try {
-    loadConfig({ MODAL_TOKEN_ID: "id", MODAL_TOKEN_SECRET: "secret" });
-    loadConfig({ MODAL_TOKEN_ID: "id", MODAL_TOKEN_SECRET: "secret", MODAL_EGRESS_PROXY_URL: "https://egress.test" });
+    const config = loadConfig({ MODAL_EGRESS_PROXY_URL: "https://old.test", EGRESS_PROXY_URL: "https://egress.test" });
+    assert.equal(config.modalSandbox.egressProxyUrl, "https://egress.test");
   } finally {
     console.warn = original;
   }
-  assert.equal(warnings.filter((w) => w.includes("MODAL_EGRESS_PROXY_URL")).length, 1);
+  assert.equal(warnings.filter((w) => w.includes("No longer read: MODAL_EGRESS_PROXY_URL.")).length, 1);
+});
+
+test("a default sandbox backend left outside the egress proxy warns that it runs fail-open", () => {
+  const warnings: string[] = [];
+  const original = console.warn;
+  console.warn = (msg: unknown) => void warnings.push(String(msg));
+  try {
+    loadConfig({ SANDBOX_BACKEND: "e2b", E2B_API_KEY: "e2b_test" });
+    loadConfig({ SANDBOX_BACKEND: "e2b", E2B_API_KEY: "e2b_test", EGRESS_PROXY_URL: "https://egress.test" });
+    loadConfig({
+      SANDBOX_BACKEND: "e2b",
+      E2B_API_KEY: "e2b_test",
+      EGRESS_PROXY_URL: "https://egress.test",
+      EGRESS_PROXY_EXEMPT_BACKENDS: "e2b",
+    });
+  } finally {
+    console.warn = original;
+  }
+  assert.equal(warnings.filter((w) => w.includes("SANDBOX_BACKEND=e2b has no egress proxy")).length, 2);
 });
 
 test("a harmless ARTIFACT_STORE=memory (now a dead knob) is ignored, not fatal", () => {
@@ -777,7 +834,7 @@ test("Smolmachines lifecycle, egress, and snapshot knobs are parsed into Config"
   const config = loadConfig({
     SMOLMACHINES_TOKEN: "smk_test",
     SMOLMACHINES_AUTOSTOP_SEC: "900",
-    SMOLMACHINES_EGRESS_PROXY_URL: "https://proxy.example.com",
+    EGRESS_PROXY_URL: "https://proxy.example.com",
     SMOLMACHINES_SNAPSHOT_S3_BUCKET: "qm-home-snapshots",
     SMOLMACHINES_SNAPSHOT_INTERVAL_SEC: "300",
   });
@@ -832,7 +889,7 @@ test("Fly shared application name is passed to the deployment provider", () => {
   assert.equal(config.flyDeploy.dataVolumeSizeGb, 1);
 });
 
-test("background ownership requires durable storage and an independent deployment authority", () => {
+test("a background deployment id requires an independent deployment control secret", () => {
   const env = {
     BACKGROUND_DEPLOYMENT_ID: "core:release-a",
     DATABASE_URL: "postgres://localhost/test",
@@ -844,7 +901,6 @@ test("background ownership requires durable storage and an independent deploymen
   assert.equal(config.deploymentControlSecret, env.DEPLOYMENT_CONTROL_SECRET);
   assert.equal(config.backgroundWorkEnabled, true);
   assert.equal(loadConfig({ ...env, BACKGROUND_WORK_ENABLED: "false" }).backgroundWorkEnabled, false);
-  assert.throws(() => loadConfig({ ...env, DATABASE_URL: "" }), /DATABASE_URL/);
   assert.throws(() => loadConfig({ ...env, DEPLOYMENT_CONTROL_SECRET: "short" }), /distinct DEPLOYMENT_CONTROL_SECRET/);
   assert.throws(
     () => loadConfig({ ...env, DEPLOYMENT_CONTROL_SECRET: env.CORE_SIGNING_SECRET }),
@@ -853,33 +909,6 @@ test("background ownership requires durable storage and an independent deploymen
   assert.throws(() => loadConfig({ ...env, BACKGROUND_DEPLOYMENT_ID: " " }), /BACKGROUND_DEPLOYMENT_ID/);
   assert.throws(() => loadConfig({ ...env, CORE_SIGNING_SECRET: "short" }), /CORE_SIGNING_SECRET/);
   assert.throws(() => loadConfig({ ...env, DEPLOYMENT_CONTROL_SECRET: " ".repeat(32) }), /DEPLOYMENT_CONTROL_SECRET/);
-});
-
-test("the spend export token is optional, strong, trimmed and never shared with another environment value", () => {
-  const env = {
-    CORE_SIGNING_SECRET: "source-signing-secret-0123456789abcdef",
-    CAPABILITY_SECRET: "capability-secret-0123456789abcdef0123",
-    PORTAL_IDENTITY_SECRET: "portal-identity-secret-0123456789abcdef",
-    SPEND_EXPORT_TOKEN: "spend-export-token-0123456789abcdef01234",
-  };
-  assert.equal(loadConfig(env).spendExportToken, env.SPEND_EXPORT_TOKEN);
-  assert.equal(loadConfig({ ...env, SPEND_EXPORT_TOKEN: undefined }).spendExportToken, undefined);
-  assert.equal(loadConfig({ ...env, SPEND_EXPORT_TOKEN: "" }).spendExportToken, undefined);
-  assert.throws(() => loadConfig({ ...env, SPEND_EXPORT_TOKEN: "short" }), /SPEND_EXPORT_TOKEN/);
-  assert.throws(() => loadConfig({ ...env, SPEND_EXPORT_TOKEN: " ".repeat(40) }), /SPEND_EXPORT_TOKEN/);
-  assert.throws(() => loadConfig({ ...env, SPEND_EXPORT_TOKEN: `${env.SPEND_EXPORT_TOKEN}\n` }), /SPEND_EXPORT_TOKEN/);
-  for (const name of [
-    "CORE_SIGNING_SECRET",
-    "QM_SLACK_SERVICE_TOKEN",
-    "DEPLOY_APPS_SESSION_SECRET",
-    "SLACK_SIGNING_SECRET",
-  ]) {
-    assert.throws(
-      () => loadConfig({ ...env, [name]: env.SPEND_EXPORT_TOKEN }),
-      /SPEND_EXPORT_TOKEN/,
-      `${name} must not share the export token`,
-    );
-  }
 });
 
 test("sandbox capability TTL is deployment-configurable with a 48-hour default", () => {

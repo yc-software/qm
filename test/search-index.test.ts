@@ -20,7 +20,7 @@ interface Sim {
 async function simSession(threadRef = "dm:search-index-test"): Promise<Sim> {
   const store = createPostgresSessionStore(testDatabaseUrl());
   const session = await store.getOrCreateByThread(threadRef, "dm", scope);
-  await store.addParticipant(session.id, VIEWER, undefined, { includeHistory: true });
+  await store.addParticipant(session.id, VIEWER);
   return { store, session, writer: { sessionId: session.id } };
 }
 
@@ -67,12 +67,13 @@ test("messages are searchable as soon as they are appended", async () => {
   assert.equal((await sim.store.searchEntries(VIEWER, "legacy document")).length, 1);
 });
 
-test("tenure windows filter search hits", async () => {
+test("membership filters search hits", async () => {
   const sim = await simSession();
   await simTurn(sim, { input: "early private question", reply: "early answer" });
   await sim.store.addParticipant(sim.session.id, "latecomer");
   await simTurn(sim, { input: "late shared question", reply: "late answer" });
-  assert.deepEqual(await sim.store.searchEntries("latecomer", "early private"), []);
-  assert.equal((await sim.store.searchEntries("latecomer", "late shared")).length, 1);
+  assert.equal((await sim.store.searchEntries("latecomer", "early private")).length, 1);
+  await sim.store.removeParticipant(sim.session.id, "latecomer");
+  assert.deepEqual(await sim.store.searchEntries("latecomer", "late shared"), []);
   assert.equal((await sim.store.searchEntries(VIEWER, "early private")).length, 1);
 });

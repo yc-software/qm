@@ -207,7 +207,7 @@ test("completed Pi attach results retain openable files in viewer history", asyn
   const store = createPostgresSessionStore(testDatabaseUrl());
   const scopeLabel = "personal:tester" as ScopeId;
   const session = await store.getOrCreateByThread("web:tester:attach-history", "dm", scopeLabel);
-  await store.addParticipant(session.id, "tester", undefined, { includeHistory: true });
+  await store.addParticipant(session.id, "tester");
   const writer = { sessionId: session.id };
   const files = [
     { name: "desktop.png", mimetype: "image/png", sizeBytes: 123, artifactId: "desktop" },
@@ -438,7 +438,7 @@ for (const stopBeforeIntake of [false, true]) {
     let steerTaken = () => {};
     const taken = new Promise<void>((resolve) => (steerTaken = resolve));
     try {
-      await agent.runTurn(
+      const result = await agent.runTurn(
         turnInput(
           session.id,
           { entries: [] },
@@ -452,7 +452,7 @@ for (const stopBeforeIntake of [false, true]) {
                 assert.equal(entries.filter(isUserItem).length, 1);
                 assert.equal((await signals.pending("tool-steer")).length, 1);
                 if (stopBeforeIntake) {
-                  await signals.send("tool-steer", { kind: "abort" });
+                  await signals.send("tool-steer", { kind: "abort", reason: "by the parent agent", scope: "run" });
                   await stopped;
                 }
                 return "saved facts";
@@ -472,6 +472,7 @@ for (const stopBeforeIntake of [false, true]) {
       );
       const users = entries.filter(isUserItem);
       if (stopBeforeIntake) {
+        assert.deepEqual([result.stopped, result.stopScope], [true, "run"]);
         assert.equal(users.length, 1);
         assert.equal((await signals.pending("tool-steer")).filter((row) => row.signal.kind === "steer").length, 1);
         const before = calls;

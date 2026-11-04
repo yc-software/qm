@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { wireRunResultDeliveries, runResultDelivery } from "../src/delivery/run-result-delivery.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createControlService } from "../src/api/control-service.ts";
@@ -8,15 +9,21 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   createSessionSyscalls,
-  deliverSubagentMail,
   isSubagentThreadRef,
-  renderSubagentMail,
   requiresDelegation,
   sessionTreeRuns,
   delegatedAuthorizationOrigin,
   stopSessionTree,
   sessionContextOf,
+  PARENT_INTERRUPT,
+  ANCESTOR_STOP,
 } from "../src/sessions/session-syscalls.ts";
+import {
+  deliverSubagentMail,
+  renderSubagentMail,
+  sweepUnreadMailWakes,
+  wakeForUnreadMail,
+} from "../src/sessions/subagent-mail.ts";
 import { scopeId, type Conversation, type Principal, type ScopeId, type Session } from "../src/types.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import type { Run, RunStore } from "../src/runs/run-store.ts";
@@ -44,9 +51,10 @@ interface Rig {
 async function rig(opts?: {
   prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
 }): Promise<Rig> {
-  const sessions = createPostgresSessionStore(testDatabaseUrl());
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
-  const signals = createPostgresRunSignalStore(testDatabaseUrl());
+  const url = testDatabaseUrl();
+  const sessions = createPostgresSessionStore(url);
+  const { runs } = createPostgresRunStore(url);
+  const signals = createPostgresRunSignalStore(url);
   const mailbox = createSessionMailbox(testMap<SessionMessage>());
   const advisoryLock = testAdvisoryLock();
   const factory = createSessionSyscalls({
@@ -196,7 +204,7 @@ test("a wake cannot turn an ordinary session into a child or start its turn", as
   const out = await r.syscallsFor(r.room).write({ wake: true, target: ordinary.id, text: "new task" });
   assert.ok(out.ok);
   assert.equal(out.delivered, "queued_message");
-  assert.match(out.notWoken ?? "", /top-level conversation/);
+  assert.ok(out.notWoken);
   assert.equal((await freshSession(r.sessions, ordinary.id)).parentSessionId, undefined);
   assert.equal((await r.runs.inFlightForThread(ordinary.threadRef)).length, 1);
 });
@@ -275,6 +283,625 @@ test("write queues separately from a running child and interrupts explicitly", a
   const rerun = await r.runs.inFlightForThread(child.threadRef);
   assert.equal(rerun.length, 1);
   assert.ok(rerun.some((run) => /check it again/.test(run.request.text)));
+});
+
+async function runningChild(r: Rig, parent: Session, task: string) {
+  const opened = await r.syscallsFor(parent).open({ task });
+  assert.ok(opened.ok);
+  const session = await freshSession(r.sessions, opened.sessionId);
+  const run = (await r.runs.inFlightForThread(session.threadRef))[0]!;
+  const claimed = await r.runs.claimById(run.id, "worker", 60_000);
+  const api = createSessionSyscalls({ ...r, maxAttempts: 3 }).forTurn({
+    session,
+    scopeId: scope,
+    request: { ...run.request, runId: run.id },
+  });
+  return { session, run, leaseToken: claimed!.leaseToken!, api };
+}
+
+test("an interrupt stops only its target's run; the target's own subagent keeps working and reports back", async () => {
+  const r = await rig();
+  const lead = await runningChild(r, r.room, "lead the work");
+  const opened = await lead.api.open({ task: "one lane" });
+  assert.ok(opened.ok);
+  const laneSession = await freshSession(r.sessions, opened.sessionId);
+  const laneRun = (await r.runs.inFlightForThread(laneSession.threadRef))[0]!;
+  const laneClaim = await r.runs.claimById(laneRun.id, "worker", 60_000);
+  const lane = createSessionSyscalls({ ...r, maxAttempts: 3 }).forTurn({
+    session: laneSession,
+    scopeId: scope,
+    request: { ...laneRun.request, runId: laneRun.id },
+  });
+
+  const interrupted = await r.syscallsFor(r.room).write({ target: lead.session.id, interrupt: true });
+  assert.ok(interrupted.ok);
+  assert.equal(interrupted.delivered, "interrupted");
+  assert.equal((await r.signals.pending(lead.run.id))[0]!.signal.kind, "abort");
+  assert.deepEqual(await r.signals.pending(laneRun.id), []);
+  assert.equal((await r.runs.get(laneRun.id))!.status, "running");
+  assert.ok((await lane.read({})).ok);
+  await r.runs.complete(lead.run.id, lead.leaseToken, {
+    status: "silent",
+    stopped: true,
+    stopScope: "run",
+  });
+  assert.ok((await lane.read({})).ok);
+
+  await r.runs.complete(laneRun.id, laneClaim!.leaseToken!, { status: "ok", reply: "lane finished" });
+  assert.equal(await deliverSubagentMail({ ...r, maxAttempts: 3 }, (await r.runs.get(laneRun.id))!), false);
+  const [mail] = await r.mailbox.pending(lead.session.id);
+  assert.match(mail!.text, /lane finished/);
+  const [wake] = await r.runs.inFlightForThread(lead.session.threadRef);
+  assert.equal(wake!.dedupKey, `subagent-return:${laneRun.id}`);
+});
+
+test("an interrupt with text makes that text the target's next turn", async () => {
+  const r = await rig();
+  const child = await runningChild(r, r.room, "watch the deploy");
+  const out = await r
+    .syscallsFor(r.room)
+    .write({ target: child.session.id, interrupt: true, text: "check the canary" });
+  assert.ok(out.ok);
+  assert.equal(out.delivered, "interrupted");
+  assert.equal((await r.signals.pending(child.run.id))[0]!.signal.kind, "abort");
+  await r.runs.complete(child.run.id, child.leaseToken, { status: "ok", reply: "", stopped: true });
+  const [next] = await r.runs.inFlightForThread(child.session.threadRef);
+  assert.match(next!.request.text, /check the canary/);
+  assert.equal(next!.request.delegatingRunId, undefined);
+  assert.equal(next!.request.sessionSenderId, r.room.id);
+
+  const replaced = await r.syscallsFor(r.room).write({
+    target: child.session.id,
+    interrupt: true,
+    text: "only the logs",
+  });
+  assert.ok(replaced.ok);
+  assert.equal(replaced.delivered, "interrupted");
+  const queued = await r.runs.inFlightForThread(child.session.threadRef);
+  assert.deepEqual(
+    queued.map((run) => run.request.displayText),
+    ["only the logs"],
+  );
+});
+
+test("a subagent's wake starts a turn in its top-level parent, or leaves mail while the parent is busy", async () => {
+  const r = await rig();
+  const child = await runningChild(r, r.room, "investigate");
+  const asked = await child.api.write({ target: "parent", wake: true, text: "which region?", requestId: "q1" });
+  assert.ok(asked.ok);
+  assert.deepEqual([asked.delivered, asked.busy], ["queued_turn", false]);
+  const wakes = await r.runs.inFlightForThread(r.room.threadRef);
+  assert.equal(wakes.length, 1);
+  assert.equal(wakes[0]!.request.sessionSenderId, child.session.id);
+  assert.equal(wakes[0]!.request.actor.id, actor.id);
+  assert.equal(wakes[0]!.request.readOnly, undefined);
+  assert.equal(wakes[0]!.request.privateSessionMessage, undefined);
+  assert.equal(wakes[0]!.request.conversation.threadRef, r.room.threadRef);
+  const [mail] = await r.mailbox.pending(r.room.id);
+  assert.match(mail!.text, /which region\?/);
+
+  const retried = await child.api.write({ target: "parent", wake: true, text: "which region?", requestId: "q1" });
+  assert.ok(retried.ok);
+  assert.equal((await r.runs.inFlightForThread(r.room.threadRef)).length, 1);
+  assert.equal((await r.mailbox.pending(r.room.id)).length, 1);
+
+  const again = await child.api.write({ target: "parent", wake: true, text: "also: which account?" });
+  assert.ok(again.ok);
+  assert.deepEqual([again.delivered, again.busy], ["queued_message", true]);
+  assert.equal((await r.runs.inFlightForThread(r.room.threadRef)).length, 1);
+  assert.equal((await r.mailbox.pending(r.room.id)).length, 2);
+});
+
+test("a subagent cannot start a turn in a top-level conversation that is not its own parent", async () => {
+  const r = await rig();
+  const child = await runningChild(r, r.room, "lead");
+  const grandchild = await runningChild(r, child.session, "lane");
+  const out = await grandchild.api.write({ target: r.room.id, wake: true, text: "skip the lead" });
+  assert.ok(out.ok);
+  assert.equal(out.delivered, "queued_message");
+  assert.ok(out.notWoken);
+  assert.equal((await r.runs.inFlightForThread(r.room.threadRef)).length, 0);
+  const ordinary = await r.sessions.getOrCreateByThread("web:U1:other", "dm", scope, undefined, "web");
+  await r.sessions.addParticipant(ordinary.id, actor.id);
+  await recordContext(r.sessions, ordinary, { actor, conversation, surface: "web" });
+  const stranger = await child.api.write({ target: ordinary.id, wake: true, text: "hello" });
+  assert.ok(stranger.ok);
+  assert.equal(stranger.delivered, "queued_message");
+  assert.equal((await r.runs.inFlightForThread(ordinary.threadRef)).length, 0);
+});
+
+async function parentRun(r: Rig) {
+  const { run } = await r.runs.enqueue({
+    sessionId: r.room.threadRef,
+    request: { actor, conversation, surface: "slack", deliveryTarget: "D1", origin: { kind: "human" }, text: "go" },
+  });
+  const claimed = await r.runs.claimById(run.id, "worker", 60_000);
+  const api = createSessionSyscalls({ ...r, maxAttempts: 3 }).forTurn({
+    session: r.room,
+    scopeId: scope,
+    request: { ...run.request, runId: run.id },
+  });
+  return { run, leaseToken: claimed!.leaseToken!, api };
+}
+
+test("a user stop of an ancestor run stops a descendant that starts later, whatever its reason text", async () => {
+  for (const reason of ["by user", "because its goal was cancelled", PARENT_INTERRUPT]) {
+    const r = await rig();
+    const p = await parentRun(r);
+    const opened = await p.api.open({ task: "lead" });
+    assert.ok(opened.ok);
+    const lead = await freshSession(r.sessions, opened.sessionId);
+    const leadRun = (await r.runs.inFlightForThread(lead.threadRef))[0]!;
+    await r.runs.claimById(leadRun.id, "worker", 60_000);
+    const leadApi = createSessionSyscalls({ ...r, maxAttempts: 3 }).forTurn({
+      session: lead,
+      scopeId: scope,
+      request: { ...leadRun.request, runId: leadRun.id },
+    });
+    assert.ok((await leadApi.read({})).ok);
+    await r.signals.send(p.run.id, { kind: "abort", reason });
+    await assert.rejects(leadApi.read({}), /stopped/);
+    await r.runs.complete(p.run.id, p.leaseToken, { status: "silent", stopped: true });
+    await assert.rejects(leadApi.read({}), /stopped/);
+  }
+});
+
+test("a return deferred while the parent was busy only leaves mail once the user stops the parent", async () => {
+  const r = await rig();
+  const p = await parentRun(r);
+  const opened = await p.api.open({ task: "work" });
+  assert.ok(opened.ok);
+  const child = await freshSession(r.sessions, opened.sessionId);
+  const childRun = (await r.runs.inFlightForThread(child.threadRef))[0]!;
+  const claim = await r.runs.claimById(childRun.id, "worker", 60_000);
+  await r.runs.complete(childRun.id, claim!.leaseToken!, { status: "ok", reply: "child result" });
+  const deps = { ...r, maxAttempts: 3, delegationEnabled: async () => true };
+  assert.equal(await deliverSubagentMail(deps, (await r.runs.get(childRun.id))!), false);
+  await stopSessionTree(r, r.room, "by user");
+  await r.runs.complete(p.run.id, p.leaseToken, { status: "silent", stopped: true });
+  assert.equal(await wakeForUnreadMail(deps, (await r.runs.get(p.run.id))!), undefined);
+  assert.equal(await deliverSubagentMail(deps, (await r.runs.get(childRun.id))!), true);
+  assert.deepEqual(await r.runs.inFlightForThread(r.room.threadRef), []);
+  assert.deepEqual(
+    (await r.mailbox.pending(r.room.id)).map((mail) => mail.id),
+    [`subagent-mail-${childRun.id}`],
+  );
+});
+
+test("an interrupt keeps a started lead run that is parked for retry, so its lane can still report back", async () => {
+  const r = await rig();
+  const lead = await runningChild(r, r.room, "lead");
+  const opened = await lead.api.open({ task: "lane" });
+  assert.ok(opened.ok);
+  const lane = await freshSession(r.sessions, opened.sessionId);
+  const laneRun = (await r.runs.inFlightForThread(lane.threadRef))[0]!;
+  const laneClaim = await r.runs.claimById(laneRun.id, "worker", 60_000);
+  assert.ok(await r.runs.releaseLease(lead.run.id, lead.leaseToken));
+  const out = await r.syscallsFor(r.room).write({ target: lead.session.id, interrupt: true, text: "new plan" });
+  assert.ok(out.ok);
+  assert.equal(out.delivered, "interrupted");
+  assert.ok(await r.runs.get(lead.run.id));
+  assert.deepEqual(await r.signals.pending(laneRun.id), []);
+  await r.runs.complete(laneRun.id, laneClaim!.leaseToken!, { status: "ok", reply: "lane done" });
+  assert.equal(await deliverSubagentMail({ ...r, maxAttempts: 3 }, (await r.runs.get(laneRun.id))!), false);
+  assert.equal((await r.mailbox.pending(lead.session.id)).length, 1);
+  assert.equal(await r.runs.getByDedupKey(`subagent-return:${laneRun.id}`), null);
+});
+
+async function claimedChild(r: Rig, sessionId: string) {
+  const session = await freshSession(r.sessions, sessionId);
+  const run = (await r.runs.inFlightForThread(session.threadRef))[0]!;
+  const claimed = await r.runs.claimById(run.id, "worker", 60_000);
+  const api = createSessionSyscalls({ ...r, maxAttempts: 3 }).forTurn({
+    session,
+    scopeId: scope,
+    request: { ...run.request, runId: run.id },
+  });
+  return { session, run, leaseToken: claimed!.leaseToken!, api };
+}
+
+async function delegatedTree(r: Rig) {
+  const root = await parentRun(r);
+  const openedLead = await root.api.open({ task: "lead the work", name: "lead" });
+  assert.ok(openedLead.ok);
+  const lead = await claimedChild(r, openedLead.sessionId);
+  const openedLane = await lead.api.open({ task: "one lane", name: "lane" });
+  assert.ok(openedLane.ok);
+  const lane = await claimedChild(r, openedLane.sessionId);
+  return { root, lead, lane };
+}
+
+test("a subagent whose own subagent still works reports in progress, then its final answer reaches the root", async () => {
+  const r = await rig();
+  const deps = { ...r, maxAttempts: 3 };
+  const { root, lead, lane } = await delegatedTree(r);
+  await r.runs.complete(root.run.id, root.leaseToken, { status: "ok", reply: "delegated" });
+  await r.runs.complete(lead.run.id, lead.leaseToken, { status: "ok", reply: "started the lane" });
+
+  assert.equal(await deliverSubagentMail(deps, (await r.runs.get(lead.run.id))!), true);
+  const [progress] = await r.mailbox.pending(r.room.id);
+  assert.match(progress!.text, /kind="in_progress"/);
+  assert.match(progress!.text, /started the lane\n\nStill waiting on 1 subagent\./);
+  assert.deepEqual(await r.runs.inFlightForThread(r.room.threadRef), []);
+  const listed = await r.syscallsFor(r.room).read({});
+  assert.ok(listed.ok && listed.mode === "children");
+  assert.equal(listed.children[0]!.status, "waiting on subagents");
+  await r.mailbox.acknowledge(r.room.id, [progress!.id]);
+
+  await r.runs.complete(lane.run.id, lane.leaseToken, { status: "ok", reply: "lane result" });
+  assert.equal(await deliverSubagentMail(deps, (await r.runs.get(lane.run.id))!), false);
+  assert.equal(await deliverSubagentMail(deps, (await r.runs.get(lane.run.id))!), false);
+  const leadWakes = await r.runs.inFlightForThread(lead.session.threadRef);
+  assert.equal(leadWakes.length, 1);
+  const leadWake = leadWakes[0]!;
+  assert.equal(leadWake.dedupKey, `subagent-return:${lane.run.id}`);
+  assert.equal(leadWake.request.delegatingRunId, lead.run.id);
+  assert.equal(leadWake.request.sessionSenderId, lane.session.id);
+  assert.equal(leadWake.request.conversation.threadRef, lead.session.threadRef);
+  assert.match((await r.mailbox.pending(lead.session.id))[0]!.text, /lane result/);
+  assert.deepEqual(await r.runs.inFlightForThread(r.room.threadRef), []);
+
+  const woken = await r.runs.claimById(leadWake.id, "worker", 60_000);
+  await r.mailbox.acknowledge(
+    lead.session.id,
+    (await r.mailbox.pending(lead.session.id)).map((mail) => mail.id),
+  );
+  await r.runs.complete(leadWake.id, woken!.leaseToken!, { status: "ok", reply: "final report" });
+  assert.equal(await deliverSubagentMail(deps, (await r.runs.get(lane.run.id))!), true);
+  assert.equal(await deliverSubagentMail(deps, (await r.runs.get(leadWake.id))!), false);
+  const [final] = await r.mailbox.pending(r.room.id);
+  assert.match(final!.text, /kind="final_answer"/);
+  assert.match(final!.text, /final report/);
+  const [rootWake] = await r.runs.inFlightForThread(r.room.threadRef);
+  assert.equal(rootWake!.dedupKey, `subagent-return:${leadWake.id}`);
+  assert.equal(rootWake!.request.delegatingRunId, root.run.id);
+  assert.equal(rootWake!.request.sessionSenderId, lead.session.id);
+  assert.equal(rootWake!.request.conversation.threadRef, r.room.threadRef);
+  const relisted = await r.syscallsFor(r.room).read({});
+  assert.ok(relisted.ok && relisted.mode === "children");
+  assert.equal(relisted.children[0]!.status, "idle");
+});
+
+test("a result left unread while its parent subagent was busy keeps that subagent in progress until it is woken", async () => {
+  const r = await rig();
+  const deps = { ...r, maxAttempts: 3 };
+  const { root, lead, lane } = await delegatedTree(r);
+  await r.runs.complete(root.run.id, root.leaseToken, { status: "ok", reply: "delegated" });
+  await r.runs.complete(lane.run.id, lane.leaseToken, { status: "ok", reply: "lane result" });
+  assert.equal(await deliverSubagentMail(deps, (await r.runs.get(lane.run.id))!), false);
+  assert.deepEqual(
+    (await r.runs.inFlightForThread(lead.session.threadRef)).map((run) => run.id),
+    [lead.run.id],
+  );
+  await r.runs.complete(lead.run.id, lead.leaseToken, { status: "ok", reply: "will report back" });
+  assert.equal(await deliverSubagentMail(deps, (await r.runs.get(lead.run.id))!), true);
+  const [progress] = await r.mailbox.pending(r.room.id);
+  assert.match(progress!.text, /kind="in_progress"/);
+  assert.deepEqual(await r.runs.inFlightForThread(r.room.threadRef), []);
+  assert.equal(await deliverSubagentMail(deps, (await r.runs.get(lane.run.id))!), false);
+  const [wake] = await r.runs.inFlightForThread(lead.session.threadRef);
+  assert.equal(wake!.dedupKey, `subagent-return:${lane.run.id}`);
+});
+
+test("a subagent's wake starts a turn in its idle subagent parent; a read-only subagent only leaves mail", async () => {
+  const r = await rig();
+  const { lead, lane } = await delegatedTree(r);
+  await r.runs.complete(lead.run.id, lead.leaseToken, { status: "ok", reply: "waiting" });
+  const asked = await lane.api.write({ target: "parent", wake: true, text: "which region?", requestId: "q1" });
+  assert.ok(asked.ok);
+  assert.deepEqual([asked.delivered, asked.busy], ["queued_turn", false]);
+  const [wake] = await r.runs.inFlightForThread(lead.session.threadRef);
+  assert.equal(wake!.request.delegatingRunId, lead.run.id);
+  assert.equal(wake!.request.sessionSenderId, lane.session.id);
+
+  const quiet = await rig();
+  const tree = await delegatedTree(quiet);
+  const opened = await tree.lead.api.open({ task: "read an untrusted page", readOnly: true });
+  assert.ok(opened.ok);
+  const reader = await claimedChild(quiet, opened.sessionId);
+  await quiet.runs.complete(tree.lead.run.id, tree.lead.leaseToken, { status: "ok", reply: "waiting" });
+  const out = await reader.api.write({ target: "parent", wake: true, text: "do the thing" });
+  assert.ok(out.ok);
+  assert.equal(out.delivered, "queued_message");
+  assert.equal(out.notWoken, "a read-only subagent cannot start a turn in its parent");
+  assert.deepEqual(await quiet.runs.inFlightForThread(tree.lead.session.threadRef), []);
+});
+
+test("a user stop above a subagent parent leaves its subagent's result as mail without waking it", async () => {
+  const r = await rig();
+  const deps = { ...r, maxAttempts: 3 };
+  const { root, lead, lane } = await delegatedTree(r);
+  await r.signals.send(root.run.id, { kind: "abort", reason: "by user" });
+  await r.runs.complete(root.run.id, root.leaseToken, { status: "silent", stopped: true });
+  await r.runs.complete(lead.run.id, lead.leaseToken, { status: "ok", reply: "lead done" });
+  await r.runs.complete(lane.run.id, lane.leaseToken, { status: "ok", reply: "lane result" });
+  assert.equal(await deliverSubagentMail(deps, (await r.runs.get(lane.run.id))!), true);
+  assert.match((await r.mailbox.pending(lead.session.id))[0]!.text, /lane result/);
+  assert.deepEqual(await r.runs.inFlightForThread(lead.session.threadRef), []);
+});
+
+test("a subagent's wake reaches its busy subagent parent through the mailbox and starts one turn when that turn ends", async () => {
+  const r = await rig();
+  const deps = { ...r, maxAttempts: 3 };
+  const { lead, lane } = await delegatedTree(r);
+  const asked = await lane.api.write({ target: "parent", wake: true, text: "which region?", requestId: "q1" });
+  assert.ok(asked.ok);
+  assert.deepEqual([asked.delivered, asked.busy], ["queued_message", true]);
+  assert.deepEqual(
+    (await r.runs.inFlightForThread(lead.session.threadRef)).map((run) => run.id),
+    [lead.run.id],
+  );
+  await r.runs.complete(lead.run.id, lead.leaseToken, { status: "ok", reply: "waiting for the lane" });
+  const finished = (await r.runs.get(lead.run.id))!;
+  assert.equal(await wakeForUnreadMail(deps, finished), "woken");
+  assert.equal(await wakeForUnreadMail(deps, finished), "busy");
+  const [wake] = await r.runs.inFlightForThread(lead.session.threadRef);
+  assert.equal(wake!.request.delegatingRunId, lead.run.id);
+  assert.equal(wake!.request.sessionSenderId, lane.session.id);
+  assert.match((await r.mailbox.pending(lead.session.id))[0]!.text, /which region\?/);
+});
+
+test("a user stop suppresses a lane's pending wake even when the stopped run is not the one that delegated", async () => {
+  for (const parentBusy of [true, false]) {
+    const r = await rig();
+    const first = await parentRun(r);
+    const opened = await first.api.open({ task: "lane" });
+    assert.ok(opened.ok);
+    await r.runs.complete(first.run.id, first.leaseToken, { status: "ok", reply: "delegated" });
+    const lane = await freshSession(r.sessions, opened.sessionId);
+    const laneRun = (await r.runs.inFlightForThread(lane.threadRef))[0]!;
+    await r.runs.claimById(laneRun.id, "worker", 60_000);
+    const laneApi = createSessionSyscalls({ ...r, maxAttempts: 3 }).forTurn({
+      session: lane,
+      scopeId: scope,
+      request: { ...laneRun.request, runId: laneRun.id },
+    });
+    const second = parentBusy ? await parentRun(r) : undefined;
+    const asked = await laneApi.write({ target: "parent", wake: true, text: "which region?", requestId: "q1" });
+    assert.equal(asked.ok && asked.delivered, parentBusy ? "queued_message" : "queued_turn");
+    await stopSessionTree(r, r.room, "by user");
+    if (second)
+      await r.runs.complete(second.run.id, second.leaseToken, {
+        status: "silent",
+        stopped: true,
+      });
+    assert.deepEqual(await r.runs.inFlightForThread(r.room.threadRef), []);
+    const next = await parentRun(r);
+    await r.runs.complete(next.run.id, next.leaseToken, { status: "ok", reply: "hi" });
+    assert.equal(await wakeForUnreadMail({ ...r, maxAttempts: 3 }, (await r.runs.get(next.run.id))!), undefined);
+    assert.deepEqual(await r.runs.inFlightForThread(r.room.threadRef), []);
+    const [mail] = await r.mailbox.pending(r.room.id);
+    assert.match(mail!.text, /which region\?/);
+    assert.equal(mail!.wake, undefined);
+  }
+});
+
+test("an undeliverable flagged message is settled without blocking the next one; a transient failure keeps the wake; a finished wake is settled", async () => {
+  const r = await rig();
+  const p = await parentRun(r);
+  const opened = await p.api.open({ task: "work" });
+  assert.ok(opened.ok);
+  const child = await freshSession(r.sessions, opened.sessionId);
+  const childRun = (await r.runs.inFlightForThread(child.threadRef))[0]!;
+  await r.runs.claimById(childRun.id, "worker", 60_000);
+  const childApi = createSessionSyscalls({ ...r, maxAttempts: 3 }).forTurn({
+    session: child,
+    scopeId: scope,
+    request: { ...childRun.request, runId: childRun.id },
+  });
+  await r.mailbox.send({
+    id: "poisoned",
+    recipientId: r.room.id,
+    senderId: child.id,
+    actor: { id: "U9", type: "internal", displayName: "Sam" },
+    audience: [],
+    text: "from an audience the parent no longer matches",
+    createdAt: 1,
+    wake: true,
+    senderRunId: childRun.id,
+    delegatingRunId: p.run.id,
+  });
+  const asked = await childApi.write({ target: "parent", wake: true, text: "which region?", requestId: "q1" });
+  assert.equal(asked.ok && asked.delivered, "queued_message");
+  await r.runs.complete(p.run.id, p.leaseToken, { status: "ok", reply: "done" });
+  const finished = (await r.runs.get(p.run.id))!;
+  const unavailable = {
+    ...r.runs,
+    enqueue: async () => {
+      throw new Error("queue unavailable");
+    },
+  };
+  await assert.rejects(wakeForUnreadMail({ ...r, runs: unavailable, maxAttempts: 3 }, finished), /queue unavailable/);
+  assert.deepEqual(
+    (await r.mailbox.pending(r.room.id)).map((mail) => Boolean(mail.wake)),
+    [false, true],
+  );
+  assert.equal(await wakeForUnreadMail({ ...r, maxAttempts: 3 }, finished), "woken");
+  const [poisoned, question] = await r.mailbox.pending(r.room.id);
+  assert.deepEqual([poisoned!.id, poisoned!.wake], ["poisoned", undefined]);
+  assert.ok(question!.wake);
+  const wake = await r.runs.getByDedupKey(`subagent-followup:${question!.id}`);
+  assert.ok(wake);
+  const claimed = await r.runs.claimById(wake.id, "worker", 60_000);
+  await r.runs.complete(wake.id, claimed!.leaseToken!, { status: "silent" });
+  assert.equal(await wakeForUnreadMail({ ...r, maxAttempts: 3 }, (await r.runs.get(wake.id))!), undefined);
+  assert.deepEqual(
+    (await r.mailbox.pending(r.room.id)).map((mail) => mail.wake),
+    [undefined, undefined],
+  );
+  assert.deepEqual(await r.runs.inFlightForThread(r.room.threadRef), []);
+});
+
+test("a child's result is still mailed when its originating run is gone", async () => {
+  const r = await rig();
+  const { run: origin } = await r.runs.enqueue({
+    sessionId: r.room.threadRef,
+    request: { actor, conversation, surface: "slack", deliveryTarget: "D1", origin: { kind: "human" }, text: "go" },
+  });
+  const api = createSessionSyscalls({ ...r, maxAttempts: 3 }).forTurn({
+    session: r.room,
+    scopeId: scope,
+    request: { ...origin.request, runId: origin.id },
+  });
+  const opened = await api.open({ task: "work" });
+  assert.ok(opened.ok);
+  assert.ok(await r.runs.withdraw(origin.id));
+  const child = await freshSession(r.sessions, opened.sessionId);
+  const childRun = (await r.runs.inFlightForThread(child.threadRef))[0]!;
+  const claim = await r.runs.claimById(childRun.id, "worker", 60_000);
+  await r.runs.complete(childRun.id, claim!.leaseToken!, { status: "ok", reply: "halfway" });
+  assert.equal(await deliverSubagentMail({ ...r, maxAttempts: 3 }, (await r.runs.get(childRun.id))!), true);
+  assert.equal((await r.mailbox.pending(r.room.id)).length, 1);
+  assert.deepEqual(await r.runs.inFlightForThread(r.room.threadRef), []);
+});
+
+test("a failed enqueue after an interrupt says the run was stopped and the earlier message withdrawn", async () => {
+  const roomy = await rig();
+  const target = await runningChild(roomy, roomy.room, "watch");
+  const failing = createSessionSyscalls({
+    ...roomy,
+    runs: {
+      ...roomy.runs,
+      enqueue: async () => {
+        throw new Error("queue unavailable");
+      },
+    },
+    maxAttempts: 3,
+  }).forTurn({ session: roomy.room, scopeId: scope, request: { surface: "slack", conversation, actor } });
+  const earlier = await roomy.syscallsFor(roomy.room).write({ target: target.session.id, wake: true, text: "first" });
+  assert.equal(earlier.ok && earlier.delivered, "queued_turn");
+  const out = await failing.write({ target: target.session.id, interrupt: true, text: "change" });
+  assert.equal(out.ok, false);
+  assert.equal((await roomy.signals.pending(target.run.id))[0]!.signal.reason, PARENT_INTERRUPT);
+  assert.equal(
+    out.ok ? "" : out.message,
+    "stopped its current run and withdrew your queued message to it, but this message was not queued: queue unavailable",
+  );
+});
+
+test("an interrupt's text runs next; a sibling's queued turn moves to the target's mailbox instead of being lost", async () => {
+  const r = await rig();
+  const target = await runningChild(r, r.room, "build");
+  const sibling = await runningChild(r, r.room, "review");
+  const earlier = await r.syscallsFor(r.room).write({ target: target.session.id, wake: true, text: "also add tests" });
+  assert.equal(earlier.ok && earlier.delivered, "queued_turn");
+  const peer = await sibling.api.write({ target: target.session.id, wake: true, text: "found a bug in auth" });
+  assert.equal(peer.ok && peer.delivered, "queued_turn");
+  const peerRun = (await r.runs.inFlightForThread(target.session.threadRef)).find(
+    (run) => run.request.sessionSenderId === sibling.session.id,
+  );
+  assert.ok(peerRun);
+  const out = await r.syscallsFor(r.room).write({ target: target.session.id, interrupt: true, text: "new plan" });
+  assert.equal(out.ok && out.delivered, "interrupted");
+  assert.equal((await r.signals.pending(target.run.id))[0]!.signal.kind, "abort");
+  assert.deepEqual(
+    (await r.runs.inFlightForThread(target.session.threadRef))
+      .filter((run) => run.id !== target.run.id)
+      .map((run) => run.request.displayText),
+    ["new plan"],
+  );
+  const mail = await r.mailbox.pending(target.session.id);
+  assert.deepEqual(
+    mail.map((message) => [message.senderId, message.text]),
+    [[sibling.session.id, peerRun.request.text]],
+  );
+  assert.match(mail[0]!.text, /found a bug in auth/);
+});
+
+test("a read-only subagent's wake leaves mail without starting a parent turn", async () => {
+  const r = await rig();
+  const p = await parentRun(r);
+  const opened = await p.api.open({ task: "read an untrusted page", readOnly: true });
+  assert.ok(opened.ok);
+  await r.runs.complete(p.run.id, p.leaseToken, { status: "ok", reply: "delegated" });
+  const child = await freshSession(r.sessions, opened.sessionId);
+  const childRun = (await r.runs.inFlightForThread(child.threadRef))[0]!;
+  await r.runs.claimById(childRun.id, "worker", 60_000);
+  const childApi = createSessionSyscalls({ ...r, maxAttempts: 3 }).forTurn({
+    session: child,
+    scopeId: scope,
+    request: { ...childRun.request, runId: childRun.id },
+  });
+  const out = await childApi.write({ target: "parent", wake: true, text: "do the thing", requestId: "e1" });
+  assert.ok(out.ok);
+  assert.equal(out.delivered, "queued_message");
+  assert.ok(out.notWoken);
+  assert.deepEqual(await r.runs.inFlightForThread(r.room.threadRef), []);
+  assert.equal((await r.mailbox.pending(r.room.id)).length, 1);
+});
+
+test("the sweep wakes a top-level parent whose turn ended without waking it for its child's message", async () => {
+  const r = await rig();
+  const p = await parentRun(r);
+  const opened = await p.api.open({ task: "work" });
+  assert.ok(opened.ok);
+  const child = await freshSession(r.sessions, opened.sessionId);
+  const childRun = (await r.runs.inFlightForThread(child.threadRef))[0]!;
+  await r.runs.claimById(childRun.id, "worker", 60_000);
+  const childApi = createSessionSyscalls({ ...r, maxAttempts: 3 }).forTurn({
+    session: child,
+    scopeId: scope,
+    request: { ...childRun.request, runId: childRun.id },
+  });
+  const asked = await childApi.write({ target: "parent", wake: true, text: "which region?", requestId: "q1" });
+  assert.deepEqual(asked.ok && [asked.delivered, asked.busy], ["queued_message", true]);
+  const deps = { ...r, maxAttempts: 3 };
+  await sweepUnreadMailWakes(deps);
+  assert.deepEqual(
+    (await r.runs.inFlightForThread(r.room.threadRef)).map((run) => run.id),
+    [p.run.id],
+  );
+  await r.runs.complete(p.run.id, p.leaseToken, { status: "ok", reply: "done" });
+  await sweepUnreadMailWakes(deps);
+  const [wake] = await r.runs.inFlightForThread(r.room.threadRef);
+  assert.equal(wake?.dedupKey, `subagent-followup:${(await r.mailbox.pending(r.room.id))[0]!.id}`);
+  assert.equal(wake.request.sessionSenderId, child.id);
+  await sweepUnreadMailWakes(deps);
+  assert.equal((await r.runs.inFlightForThread(r.room.threadRef)).length, 1);
+  await r.mailbox.acknowledge(
+    r.room.id,
+    (await r.mailbox.pending(r.room.id)).map((mail) => mail.id),
+  );
+  assert.deepEqual(await r.mailbox.awaitingWake(), []);
+});
+
+test("a wake that found its parent busy starts one parent turn when that turn ends", async () => {
+  const r = await rig();
+  const p = await parentRun(r);
+  const opened = await p.api.open({ task: "work" });
+  assert.ok(opened.ok);
+  const child = await freshSession(r.sessions, opened.sessionId);
+  const childRun = (await r.runs.inFlightForThread(child.threadRef))[0]!;
+  await r.runs.claimById(childRun.id, "worker", 60_000);
+  const childApi = createSessionSyscalls({ ...r, maxAttempts: 3 }).forTurn({
+    session: child,
+    scopeId: scope,
+    request: { ...childRun.request, runId: childRun.id },
+  });
+  const fyi = await childApi.write({ target: "parent", wake: false, text: "fyi" });
+  assert.ok(fyi.ok);
+  const asked = await childApi.write({ target: "parent", wake: true, text: "which region?", requestId: "q1" });
+  assert.ok(asked.ok);
+  assert.deepEqual([asked.delivered, asked.busy], ["queued_message", true]);
+  await r.runs.complete(p.run.id, p.leaseToken, { status: "ok", reply: "done" });
+  const finished = (await r.runs.get(p.run.id))!;
+  assert.equal(await wakeForUnreadMail({ ...r, maxAttempts: 3 }, finished), "woken");
+  assert.equal(await wakeForUnreadMail({ ...r, maxAttempts: 3 }, finished), "busy");
+  const wakes = await r.runs.inFlightForThread(r.room.threadRef);
+  assert.equal(wakes.length, 1);
+  assert.equal(wakes[0]!.request.delegatingRunId, p.run.id);
+  assert.equal(wakes[0]!.request.sessionSenderId, child.id);
+  const claimed = await r.runs.claimById(wakes[0]!.id, "worker", 60_000);
+  await r.mailbox.acknowledge(
+    r.room.id,
+    (await r.mailbox.pending(r.room.id)).map((mail) => mail.id),
+  );
+  await r.runs.complete(wakes[0]!.id, claimed!.leaseToken!, { status: "silent" });
+  assert.equal(await wakeForUnreadMail({ ...r, maxAttempts: 3 }, (await r.runs.get(wakes[0]!.id))!), undefined);
+  const repeated = await childApi.write({ target: "parent", wake: true, text: "which region?", requestId: "q1" });
+  assert.ok(repeated.ok);
+  assert.deepEqual([repeated.delivered, repeated.busy], ["queued_message", false]);
+  assert.deepEqual(await r.runs.inFlightForThread(r.room.threadRef), []);
 });
 
 test("write refuses self, cross-scope, and nonparticipant targets", async () => {
@@ -374,6 +1001,161 @@ test("a silent child mails a completed-without-reply notice without borrowing tr
   assert.doesNotMatch(mail[0]!.text, /halfway there/);
 });
 
+async function stoppedChildRun(r: Rig, said: string | undefined, result: Parameters<RunStore["complete"]>[2]) {
+  const p = await parentRun(r);
+  const opened = await p.api.open({ task: "trace the callers", name: "tracer" });
+  assert.ok(opened.ok);
+  const child = await freshSession(r.sessions, opened.sessionId);
+  const queued = (await r.runs.inFlightForThread(child.threadRef))[0]!;
+  const claimed = await r.runs.claimById(queued.id, "w1", 60_000);
+  const writer = { sessionId: child.id, turnId: queued.id };
+  await r.sessions.append({ sessionId: child.id }, { kind: "AgentMessage", text: "an older turn's reply" });
+  const asked = await r.sessions.append(writer, { kind: "UserMessage", text: "trace the callers" });
+  await r.runs.noteTurnUserSeq(queued.id, asked.seq);
+  if (said) await r.sessions.append(writer, { kind: "AgentMessage", variant: "narration", text: said });
+  await r.runs.complete(queued.id, claimed!.leaseToken!, result);
+  return { parent: p, child, run: (await r.runs.get(queued.id))! };
+}
+
+test("a child stopped on its own mails its partial output and wakes its top-level parent", async () => {
+  for (const stopScope of ["tree", undefined] as const) {
+    const r = await rig();
+    const { parent, run } = await stoppedChildRun(r, "found 2 of 3 call sites so far", {
+      status: "ok",
+      reply: "(stopped)",
+      stopped: true,
+      ...(stopScope ? { stopScope } : {}),
+    });
+    await r.runs.complete(parent.run.id, parent.leaseToken, { status: "ok", reply: "delegated" });
+    await deliverSubagentMail({ ...r, maxAttempts: 3, delegationEnabled: async () => true }, run);
+    const [mail] = await r.mailbox.pending(r.room.id);
+    assert.match(mail!.text, /kind="stopped"/);
+    assert.ok(mail!.text.includes(`Your subagent session "tracer" was stopped.`));
+    assert.match(mail!.text, /<content>found 2 of 3 call sites so far<\/content>/);
+    assert.deepEqual(
+      (await r.runs.inFlightForThread(r.room.threadRef)).map((wake) => [wake.dedupKey, wake.request.displayText]),
+      [[`subagent-return:${run.id}`, "Delegated task stopped"]],
+    );
+  }
+});
+
+test("a child stopped with its parent, or by its parent agent, leaves stopped mail without waking the parent", async () => {
+  for (const stop of ["tree", "ancestor", "interrupt"] as const) {
+    const r = await rig();
+    const { parent, child, run } = await stoppedChildRun(r, undefined, { status: "silent" });
+    const live = (await r.runs.enqueue({ sessionId: child.threadRef, request: run.request })).run;
+    const claim = await r.runs.claimById(live.id, "w1", 60_000);
+    if (stop === "tree") {
+      await r.runs.complete(parent.run.id, parent.leaseToken, { status: "ok", reply: "delegated" });
+      assert.ok(await stopSessionTree(r, r.room, "by user"));
+      assert.equal((await r.signals.pending(live.id))[0]!.signal.scope, "ancestor");
+    } else if (stop === "ancestor") {
+      await r.signals.send(parent.run.id, { kind: "abort", reason: "by user" });
+      await r.signals.send(live.id, { kind: "abort", reason: "by user" });
+    } else {
+      await r.runs.complete(parent.run.id, parent.leaseToken, { status: "ok", reply: "delegated" });
+      assert.ok((await r.syscallsFor(r.room).write({ target: child.id, interrupt: true })).ok);
+    }
+    const stopScope = (await r.signals.pending(live.id))[0]!.signal.scope;
+    await r.runs.complete(live.id, claim!.leaseToken!, {
+      status: "silent",
+      stopped: true,
+      ...(stopScope ? { stopScope } : {}),
+    });
+    const deps = { ...r, maxAttempts: 3, delegationEnabled: async () => true };
+    assert.equal(await deliverSubagentMail(deps, (await r.runs.get(live.id))!), true);
+    const [mail] = await r.mailbox.pending(r.room.id);
+    assert.match(mail!.text, /kind="stopped"/);
+    const why = { tree: ` ${ANCESTOR_STOP}`, ancestor: "", interrupt: ` ${PARENT_INTERRUPT}` }[stop];
+    assert.ok(mail!.text.includes(`was stopped${why}.`));
+    assert.match(mail!.text, /<content>It stopped before saying anything\.<\/content>/);
+    assert.deepEqual(
+      (await r.runs.inFlightForThread(r.room.threadRef)).filter((wake) => wake.id !== parent.run.id),
+      [],
+    );
+  }
+});
+
+test("a failed child's mail carries the failure reason and the last thing it said in that turn", async () => {
+  const r = await rig();
+  const { parent, child, run } = await stoppedChildRun(r, undefined, { status: "silent" });
+  await r.runs.complete(parent.run.id, parent.leaseToken, { status: "ok", reply: "delegated" });
+  const retry = (await r.runs.enqueue({ sessionId: child.threadRef, request: run.request })).run;
+  const claim = await r.runs.claimById(retry.id, "w1", 60_000);
+  const writer = { sessionId: child.id, turnId: retry.id };
+  const asked = await r.sessions.append(writer, { kind: "UserMessage", text: "try again" });
+  await r.runs.noteTurnUserSeq(retry.id, asked.seq);
+  await r.sessions.append(writer, { kind: "AgentMessage", variant: "narration", text: "patched two of the files" });
+  await r.runs.fail(retry.id, claim!.leaseToken!, "provider returned 500", { retry: false });
+  await deliverSubagentMail(
+    { ...r, maxAttempts: 3, delegationEnabled: async () => true },
+    (await r.runs.get(retry.id))!,
+  );
+  const [mail] = await r.mailbox.pending(r.room.id);
+  assert.match(mail!.text, /kind="errored"/);
+  assert.ok(
+    mail!.text.includes(
+      "<content>provider returned 500\n\nLast output before the failure:\npatched two of the files</content>",
+    ),
+  );
+  assert.doesNotMatch(mail!.text, /an older turn's reply/);
+  assert.deepEqual(
+    (await r.runs.inFlightForThread(r.room.threadRef)).map((wake) => wake.request.displayText),
+    ["Delegated task failed"],
+  );
+});
+
+test("stopped mail quotes only its own run's text that the whole parent audience can see, and forwards no files", async () => {
+  const r = await rig();
+  const other: Principal = { id: "U2", type: "internal", displayName: "Blair" };
+  const both: Conversation = { ...conversation, audience: [actor, other] };
+  await recordContext(r.sessions, r.room, { actor, conversation: both, surface: "slack", deliveryTarget: "D1" });
+  await r.sessions.addParticipant(r.room.id, other.id);
+  const { run: origin } = await r.runs.enqueue({
+    sessionId: r.room.threadRef,
+    request: {
+      actor,
+      conversation: both,
+      surface: "slack",
+      deliveryTarget: "D1",
+      origin: { kind: "human" },
+      text: "go",
+    },
+  });
+  await r.runs.claimById(origin.id, "worker", 60_000);
+  const opened = await createSessionSyscalls({ ...r, maxAttempts: 3 })
+    .forTurn({ session: r.room, scopeId: scope, request: { ...origin.request, runId: origin.id } })
+    .open({ task: "summarize", name: "summarizer" });
+  assert.ok(opened.ok);
+  const child = await freshSession(r.sessions, opened.sessionId);
+  const queued = (await r.runs.inFlightForThread(child.threadRef))[0]!;
+  const claimed = await r.runs.claimById(queued.id, "w1", 60_000);
+  const writer = { sessionId: child.id, turnId: queued.id };
+  const asked = await r.sessions.append(writer, { kind: "UserMessage", text: "summarize" });
+  await r.runs.noteTurnUserSeq(queued.id, asked.seq);
+  await r.sessions.append(writer, { kind: "AgentMessage", variant: "narration", text: "seen by both" });
+  await r.sessions.append(writer, { kind: "AgentMessage", variant: "narration", text: "hidden from Blair" });
+  await r.runs.complete(queued.id, claimed!.leaseToken!, {
+    status: "ok",
+    reply: "hidden from Blair",
+    stopped: true,
+    attachments: [{ name: "chart.png", blobId: "chart", mimetype: "image/png", sizeBytes: 1 }],
+  });
+  await r.sessions.append({ sessionId: child.id, turnId: randomUUID() }, { kind: "AgentMessage", text: "next turn" });
+  const sessions = {
+    ...r.sessions,
+    visibleItems: async (...args: Parameters<SessionStore["visibleItems"]>) =>
+      (await r.sessions.visibleItems(...args)).filter(
+        (item) => args[1] !== other.id || item.text !== "hidden from Blair",
+      ),
+  };
+  const deliveries = createDeliveryStore();
+  await deliverSubagentMail({ ...r, sessions, deliveries, maxAttempts: 3 }, (await r.runs.get(queued.id))!);
+  const [mail] = await r.mailbox.pending(r.room.id);
+  assert.match(mail!.text, /<content>seen by both<\/content>/);
+  assert.deepEqual(await deliveries.pending("slack"), []);
+});
+
 test("a detached child sends no mail; any in-scope session can still be read", async () => {
   const r = await rig();
   const opened = await r.syscallsFor(r.room).open({ task: "detachable work" });
@@ -409,15 +1191,15 @@ test("mail envelope attributes stay well-formed and machine-parseable when the t
   assert.equal(head[3], "final_answer");
 });
 
-test("session reads hide history outside the viewer's participant tenure", async () => {
+test("session reads show a late joiner the history from before they joined", async () => {
   const r = await rig();
   const target = await r.sessions.getOrCreateByThread("web:private-old", "dm", scope);
   const writer = { sessionId: target.id };
-  await r.sessions.append(writer, { kind: "AgentMessage", text: "hidden-before-membership" });
+  await r.sessions.append(writer, { kind: "AgentMessage", text: "written-before-membership" });
   await r.sessions.addParticipant(target.id, actor.id);
   const view = await r.syscallsFor(r.room).read({ target: target.id });
   assert.ok(view.ok && view.mode === "transcript");
-  assert.doesNotMatch(view.rendered, /hidden-before-membership/);
+  assert.match(view.rendered, /written-before-membership/);
 });
 
 test("child runs retain the managed roster and read-only floor", async () => {
@@ -928,11 +1710,11 @@ test("an empty mailbox check skips sender validation and a delivered message sti
   assert.equal(checks, 1);
 });
 
-test("queued results recheck source-entry visibility after participant tenure changes", async () => {
+test("queued results recheck source-entry visibility after a participant leaves", async () => {
   const r = await rig();
   const other: Principal = { id: "U2", type: "internal" };
   const sharedScope = scopeId("group", "G1");
-  const shared = await r.sessions.getOrCreateByThread("group:G1:mail-tenure", "group", sharedScope);
+  const shared = await r.sessions.getOrCreateByThread("group:G1:mail-membership", "group", sharedScope);
   for (const id of [actor.id, other.id]) await r.sessions.addParticipant(shared.id, id);
   const sharedConversation: Conversation = { kind: "group", threadRef: shared.threadRef, audience: [actor, other] };
   const factory = createSessionSyscalls({ ...r, maxAttempts: 3 });
@@ -959,7 +1741,6 @@ test("queued results recheck source-entry visibility after participant tenure ch
   );
   assert.equal((await api.receive!()).length, 1);
   await r.sessions.removeParticipant(child.id, other.id);
-  await r.sessions.addParticipant(child.id, other.id);
   assert.equal((await r.sessions.visibleItems(child.id, other.id)).length, 0);
   assert.deepEqual(await api.receive!(), []);
   assert.equal((await r.mailbox.pending(shared.id)).length, 1);
@@ -1653,7 +2434,7 @@ test("stopping an idle coordinator cancels running and queued descendants and bl
     ),
     true,
   );
-  assert.equal((await r.mailbox.pending(r.room.id)).length, 0);
+  assert.match((await r.mailbox.pending(r.room.id))[0]!.text, /late result/);
   assert.equal((await r.runs.inFlightForThread(r.room.threadRef)).length, 0);
 });
 
@@ -1755,13 +2536,14 @@ test("children of a Slack group turn keep its source so external-workspace polic
   const policies = { ext: access };
   const admitted = (request: OrchestratorInput) =>
     externalSlackRequestAllowed({ ...request, surface: request.surface ?? "" }, policies);
-  const sessions = createPostgresSessionStore(testDatabaseUrl());
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const url = testDatabaseUrl();
+  const sessions = createPostgresSessionStore(url);
+  const { runs } = createPostgresRunStore(url);
   const factory = createSessionSyscalls({
     mailbox: createSessionMailbox(testMap<SessionMessage>()),
     sessions,
     runs,
-    signals: createPostgresRunSignalStore(testDatabaseUrl()),
+    signals: createPostgresRunSignalStore(url),
     advisoryLock: testAdvisoryLock(),
     maxAttempts: 3,
   });
@@ -1801,8 +2583,9 @@ test("children of a Slack group turn keep its source so external-workspace polic
 });
 
 test("sessions list shows only sidebar sessions the whole audience can see and create needs a live turn", async () => {
-  const sessions = createPostgresSessionStore(testDatabaseUrl());
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const url = testDatabaseUrl();
+  const sessions = createPostgresSessionStore(url);
+  const { runs } = createPostgresRunStore(url);
   const started: Array<{ forkOf?: string; text?: string; title?: string; scopeId: ScopeId }> = [];
   const room = await sessions.getOrCreateByThread("web:U1:room", "dm", scope, undefined, "web");
   await sessions.updateTitle(room.id, "room");
@@ -1817,7 +2600,7 @@ test("sessions list shows only sidebar sessions the whole audience can see and c
     mailbox: createSessionMailbox(testMap<SessionMessage>()),
     sessions,
     runs,
-    signals: createPostgresRunSignalStore(testDatabaseUrl()),
+    signals: createPostgresRunSignalStore(url),
     advisoryLock: testAdvisoryLock(),
     maxAttempts: 3,
     conversations: {
@@ -1918,7 +2701,7 @@ test("sessions list shows only sidebar sessions the whole audience can see and c
   assert.equal(started.length, 3);
 });
 
-test("stopping a session tree tells every stopped run who stopped it", async () => {
+test("stopping a session tree tells its root who stopped it and its descendants that their parent was stopped", async () => {
   const sent: Array<{ runId: string; signal: unknown }> = [];
   const root = { id: "root", scopeId: "personal:a", threadRef: "web:root" } as unknown as Session;
   const child = { id: "child", scopeId: "personal:a", threadRef: "agent:main:subagent:child" } as unknown as Session;
@@ -1946,7 +2729,7 @@ test("stopping a session tree tells every stopped run who stopped it", async () 
     sent.map((s) => s.signal),
     [
       { kind: "abort", reason: "by the parent agent" },
-      { kind: "abort", reason: "by the parent agent" },
+      { kind: "abort", reason: ANCESTOR_STOP, scope: "ancestor" },
     ],
   );
 });

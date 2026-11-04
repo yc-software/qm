@@ -10,7 +10,7 @@ Reusing a request key recovers the same child and initial run after a lost recei
 
 `subagents.send_message` sends attributed text to a parent, child, sibling, or other accessible session. Targets accept IDs, child/sibling titles, or `parent`. By default it wakes the recipient: an idle attached child starts a turn on it, and a busy one gets it as its next turn, behind the active one. `wake: false` instead adds it to the recipient's durable inbox without starting a turn: a running recipient sees it at its next tool boundary, an idle one only when something else wakes it. A wake that may not start a turn (a top-level conversation, or a sender on a private turn) falls back to the inbox and the result says so. The result names which happened. Stable call IDs deduplicate retries. `subagents.wait` waits up to 60 seconds for mail. `send_message` with `interrupt: true` aborts active child work. Messages are external data, not human authorization. Each message is screened independently of its carrier tool and persisted at the receiving session's scope. Quarantined messages remain recoverable for approval; denying the approval consumes the message. Read-only and automated authorization restrictions still apply to assigned work.
 
-Read access checks scope, current participant access, audience visibility, and participant tenure. Sending and adoption require current scope access. A wider target audience cannot receive a narrower source's contents.
+Read access checks scope, current participant access, and audience visibility. Sending and adoption require current scope access. A wider target audience cannot receive a narrower source's contents.
 
 ## Parent changes and completion
 

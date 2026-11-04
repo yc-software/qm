@@ -1,4 +1,4 @@
-import { errMessage, swallow } from "../util/errors.ts";
+import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 import type { EgressPolicy, ScopeId } from "../types.ts";
 
 export interface SandboxHandle {
@@ -247,6 +247,17 @@ export interface Sandbox {
   teardown(handle: SandboxHandle, opts?: TeardownOptions): Promise<void>;
   destroyScope?(scopeId: string): Promise<void>;
   reapDeepIdle?(idleMs: number, devIdleMs?: number): Promise<{ reaped: number }>;
+}
+
+export async function removeDirAndList(
+  sandbox: Sandbox,
+  handle: SandboxHandle,
+  removeRelDir: string,
+  listRelDir: string,
+): Promise<string[]> {
+  if (sandbox.removeDirAndList) return sandbox.removeDirAndList(handle, removeRelDir, listRelDir);
+  await sandbox.removeDir(handle, removeRelDir);
+  return sandbox.listDir(handle, listRelDir).catch(swallowAs(`sandbox: list ${listRelDir}`, [] as string[]));
 }
 
 export class CapabilityUnsupportedError extends Error {

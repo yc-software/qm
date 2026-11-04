@@ -1,6 +1,8 @@
 import { withLiveTurnMembership } from "../resolution/scope-membership.ts";
+import { cacheTenant } from "../tenants/context.ts";
 import { randomUUID } from "node:crypto";
 import type { DurableMap } from "../persistence/durable-map.ts";
+import type { Claimed } from "../tenants/claim.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { parseScopeId, type CommandPolicy, type EgressPolicy, type ScopeId } from "../types.ts";
 import type { SandboxBackendName } from "./sandbox-routing.ts";
@@ -32,7 +34,6 @@ export interface SandboxAccessPlan {
   readonly egress: EgressPolicy;
   readonly commandPolicy: CommandPolicy | null;
   readonly credentialScopeId?: ScopeId;
-  readonly env?: Readonly<Record<string, string>>;
 }
 
 export interface SandboxDefault {
@@ -67,7 +68,7 @@ export interface SandboxResources {
     reservationId?: string,
     jobOnly?: boolean,
   ): Promise<SandboxResource>;
-  jobComputers(): Promise<SandboxResource[]>;
+  jobComputers(): Promise<Array<Claimed<SandboxResource>>>;
   retireJobComputer(id: string, seenState: SandboxResource["state"]): Promise<void>;
   access(actorId: string, id: string): Promise<SandboxResource>;
   status(actorId: string, id: string): Promise<ComputerStatus>;
@@ -116,14 +117,19 @@ export function createSandboxResources(opts: {
   lock: AdvisoryLock;
   canUseScope(actorId: string, scopeId: ScopeId): Promise<boolean>;
 }): SandboxResources {
-  let upgraded: Promise<void> | undefined;
+  const upgraded = new Map<string, Promise<void>>();
   const initialize = async (): Promise<void> => {
     if (!opts.upgrade) return;
-    upgraded ??= opts.upgrade().catch((error: unknown) => {
-      upgraded = undefined;
-      throw error;
-    });
-    await upgraded;
+    const tenant = cacheTenant();
+    let upgrade = upgraded.get(tenant);
+    if (!upgrade) {
+      upgrade = opts.upgrade().catch((error: unknown) => {
+        upgraded.delete(tenant);
+        throw error;
+      });
+      upgraded.set(tenant, upgrade);
+    }
+    await upgrade;
   };
   const actionsFor = (backend: Sandbox | undefined): string[] => {
     if (!backend) return [];
@@ -230,8 +236,8 @@ export function createSandboxResources(opts: {
       );
     },
     async jobComputers() {
-      await initialize();
-      return (await opts.records.all()).filter((record) => record.jobOnly);
+      const entries = await opts.records.acrossTenants();
+      return entries.flatMap(({ tenantId, value }) => (value.jobOnly ? [{ ...value, tenantId }] : []));
     },
     async retireJobComputer(id, seenState) {
       await opts.lock.withLock(`sandbox-resource:${id}`, async () => {

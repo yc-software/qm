@@ -211,7 +211,7 @@ export function createDeliveryPoller(deps: {
     };
 
   function deliveryClient(defaultClient: any, destination: Delivery["destination"]): any {
-    const account = accountWithPreviousReleaseKeys(destination);
+    const account = destination.account;
     if (deps.clientForAccount) return deps.clientForAccount(account?.id ?? "default", account?.workspace);
     return account ? undefined : defaultClient;
   }
@@ -224,7 +224,7 @@ export function createDeliveryPoller(deps: {
         if (!destinationClient) return;
         const client = destinationClient;
         const runId = d.idempotencyKey?.startsWith("run:") ? d.idempotencyKey.slice("run:".length) : undefined;
-        const account = accountWithPreviousReleaseKeys(d.destination);
+        const account = d.destination.account;
         const namespace = deps.externalNamespace?.(account?.id ?? "default");
         if (
           namespace &&
@@ -561,15 +561,4 @@ export function createDeliveryPoller(deps: {
   }
 
   return { pollDeliveries };
-}
-
-function accountWithPreviousReleaseKeys(destination: Delivery["destination"]): Delivery["destination"]["account"] {
-  if (destination.account) return destination.account;
-  const oldKeys = destination as { slackAccountId?: string; slackTeamId?: string; slackPolicyNamespace?: string };
-  if (!oldKeys.slackAccountId && !oldKeys.slackTeamId && !oldKeys.slackPolicyNamespace) return undefined;
-  return {
-    id: oldKeys.slackAccountId || "default",
-    ...(oldKeys.slackTeamId ? { workspace: oldKeys.slackTeamId } : {}),
-    ...(oldKeys.slackPolicyNamespace ? { policyNamespace: oldKeys.slackPolicyNamespace } : {}),
-  };
 }
