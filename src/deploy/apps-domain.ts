@@ -24,7 +24,7 @@ function hostOfUrl(raw: string | undefined): string | undefined {
 }
 
 /** The bound tenant's own web host, from its PUBLIC_WEB_URL setting. */
-export function tenantWebHost(): string | undefined {
+function tenantWebHost(): string | undefined {
   if (boundTenant() === undefined) return undefined;
   return hostOfUrl(tenantEnv("PUBLIC_WEB_URL"));
 }
