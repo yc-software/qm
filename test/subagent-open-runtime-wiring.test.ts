@@ -17,9 +17,10 @@ async function opener(
   parent: Partial<SessionSyscallBinding["request"]> = {},
   switched?: RuntimeChoice,
   scopeDefault?: string,
+  defaultScope = scope,
 ) {
   const built = stopAtEnd(buildApp(testConfig({ openaiApiKey: "sk-test" })));
-  if (scopeDefault) await built.config.setRuntimeSelection(scope, { modelId: scopeDefault });
+  if (scopeDefault) await built.config.setRuntimeSelection(defaultScope, { modelId: scopeDefault });
   await built.featureFlags.setEnabled("persistent_subagents", scope, true, "admin");
   const room = await built.sessions.getOrCreateByThread("web:room", "dm", scope, undefined, "web");
   await built.sessions.addParticipant(room.id, actor.id);
@@ -125,6 +126,22 @@ test("a parent runtime the subagent purpose cannot serve falls back to the subag
 
 test("a parent that only tunes effort on the default model leaves the child on the subagent default", async () => {
   const parent = await opener({ model: "gpt-6.1-sol", thinkingLevel: "high" }, undefined, "gpt-6.1-sol");
+  const out = await parent.open({ task: "draft one article" });
+  assert.ok(out.ok, out.ok ? "" : out.message);
+  assert.deepEqual(await parent.spawned(out.sessionId), {
+    model: undefined,
+    thinkingLevel: undefined,
+    fastMode: undefined,
+  });
+});
+
+test("a parent on the org's default model leaves the child on the subagent default", async () => {
+  const parent = await opener(
+    { model: "gpt-6.1-sol", thinkingLevel: "high" },
+    undefined,
+    "gpt-6.1-sol",
+    scopeId("org", "default-org"),
+  );
   const out = await parent.open({ task: "draft one article" });
   assert.ok(out.ok, out.ok ? "" : out.message);
   assert.deepEqual(await parent.spawned(out.sessionId), {

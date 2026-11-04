@@ -2121,7 +2121,7 @@ export function buildApp(
       if (error) throw new Error(error);
     },
     async defaultModel(scope) {
-      return (await resolveRuntimeChoice(configStore, runtimeOrgScope, scope, fallback, {}, hydrateModelCatalog))
+      return (await resolveRuntimeChoice(configStore, runtimeOrgScope(), scope, fallback, {}, hydrateModelCatalog))
         .modelId;
     },
   });
