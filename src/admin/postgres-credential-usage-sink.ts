@@ -38,7 +38,7 @@ export function createPostgresCredentialUsageSink(connectionString: string): Cre
             "CREATE TABLE IF NOT EXISTS credential_daily_calls(slug TEXT NOT NULL, day BIGINT NOT NULL, sent INT NOT NULL, PRIMARY KEY (slug, day))",
           ],
         },
-        tenantTables("admin/scoped-events/credential_usage/0004-daily-calls-tenants", [
+        ...tenantTables("admin/scoped-events/credential_usage/0004-daily-calls-tenants", [
           { table: "credential_daily_calls", primaryKey: "slug, day" },
         ]),
       ],

@@ -149,7 +149,7 @@ export function createPostgresSurfaceCache(
             ON channel_files(org_id, surface, account, container, ts, file_id)`,
       ],
     },
-    tenantTables("surface-cache/store/0010-tenants", [
+    ...tenantTables("surface-cache/store/0010-tenants", [
       {
         table: "channel_messages",
         primaryKey: "org_id, container, ts",

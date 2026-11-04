@@ -77,7 +77,7 @@ export function createPostgresFileArtifactStore(
         "CREATE TABLE IF NOT EXISTS file_artifact_deletions(id TEXT PRIMARY KEY, deleted_at BIGINT NOT NULL)",
       ],
     },
-    tenantTables("files/artifacts/0003-tenants", [
+    ...tenantTables("files/artifacts/0003-tenants", [
       { table: "file_artifacts", primaryKey: "id" },
       { table: "file_artifact_deletions", primaryKey: "id" },
     ]),

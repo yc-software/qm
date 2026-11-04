@@ -90,7 +90,7 @@ export function createPostgresGrantStore(connectionString: string): GrantPersist
         `CREATE INDEX CONCURRENTLY IF NOT EXISTS acl_grants_by_grantee ON acl_grants(grantee_scope_id, path text_pattern_ops)`,
       ],
     },
-    tenantTables(
+    ...tenantTables(
       "acl/grants/0005-tenants",
       [
         { table: "acl_grants", primaryKey: "owner_scope_id, path, grantee_scope_id, permission" },

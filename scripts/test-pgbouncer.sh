@@ -49,4 +49,5 @@ for attempt in $(seq 1 60); do
   if docker logs "$name-pool" 2>&1 | grep -q 'process up'; then break; fi
   sleep 1
 done
+node -e 'import("./test/support/tenant-seed.ts").then((m) => m.seedInstallTenant(process.env.DATABASE_URL))'
 node --test test/pg-pool-routing.test.ts test/tenant-background-runs.test.ts

@@ -60,7 +60,7 @@ export function createPostgresAuditLog(connectionString: string): AuditLog {
       id: "admin/audit-log/0002",
       statements: [`CREATE INDEX IF NOT EXISTS audit_log_by_action ON audit_log(action, at DESC)`],
     },
-    tenantTables("admin/audit-log/0003-tenants", [
+    ...tenantTables("admin/audit-log/0003-tenants", [
       {
         table: "audit_log",
         primaryKey: "id",

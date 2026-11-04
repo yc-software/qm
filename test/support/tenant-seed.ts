@@ -8,7 +8,7 @@ export async function seedInstallTenant(databaseUrl: string): Promise<void> {
   await client.connect();
   try {
     for (const statement of TENANCY_BASE.statements) await client.query(statement);
-    await client.query("INSERT INTO tenants(id) VALUES ($1)", [TEST_INSTALL_TENANT]);
+    await client.query("INSERT INTO tenants(id) VALUES ($1) ON CONFLICT (id) DO NOTHING", [TEST_INSTALL_TENANT]);
   } finally {
     await client.end();
   }
