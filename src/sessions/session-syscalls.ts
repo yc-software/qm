@@ -144,6 +144,7 @@ export function sessionContextOf(input: OrchestratorInput): SpawnMeta {
     conversation: input.conversation,
     actor: input.actor,
     ...(input.deliveryTarget ? { deliveryTarget: input.deliveryTarget } : {}),
+    ...(input.deliveryWebhook ? { deliveryWebhook: input.deliveryWebhook } : {}),
     ...(input.timezone ? { timezone: input.timezone } : {}),
     ...(input.readOnly ? { readOnly: true } : {}),
     ...(input.model ? { model: input.model } : {}),
@@ -249,6 +250,7 @@ interface SessionSyscallBinding {
     | "conversation"
     | "actor"
     | "deliveryTarget"
+    | "deliveryWebhook"
     | "timezone"
     | "readOnly"
     | "scopeVersion"
@@ -398,6 +400,7 @@ function childRunRequest(child: Session, meta: SpawnMeta, text: string, displayT
     surface: meta.surface,
     ...(meta.surfaceOrigin ? { surfaceOrigin: meta.surfaceOrigin } : {}),
     ...(meta.deliveryTarget ? { deliveryTarget: meta.deliveryTarget } : {}),
+    ...(meta.deliveryWebhook ? { deliveryWebhook: meta.deliveryWebhook } : {}),
     ...(meta.deliveryCandidates ? { deliveryCandidates: meta.deliveryCandidates } : {}),
     actor: meta.actor,
     conversation: { ...meta.conversation, threadRef: child.threadRef },
@@ -1161,7 +1164,7 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
     }
   }
   if (result?.attachments?.length && deps.deliveries) {
-    const delivery = deliveryCandidatesFor(meta.surface, meta.deliveryTarget, meta.deliveryCandidates, parent.scopeId);
+    const delivery = deliveryCandidatesFor(meta, parent.scopeId);
     const candidate = delivery.candidates.find((item) => item.key === delivery.defaultKey);
     const destination =
       candidate ??
