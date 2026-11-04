@@ -83,6 +83,7 @@ export async function withRequestTenant(
 ): Promise<void> {
   if (route?.tenant === "none") return next();
   const host = tenancy ? await tenancy.hostTenant(requestHost(req.headers.host)) : { multi: false };
+  if (host.retired) return refuse(req, res, 421, "unknown_host", "this host does not belong to a known tenant");
   const { tenant: claimed, refusal } =
     route?.auth === "public" ? {} : await claimedTenant(req, route?.auth, capabilitySecret);
   if (refusal) return refuse(req, res, 400, "bad_request", refusal);

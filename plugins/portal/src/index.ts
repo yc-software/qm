@@ -306,8 +306,13 @@ async function adminProbeAttempt(sub: string): Promise<boolean | null> {
   }
 }
 
+function adminKey(sub: string): string {
+  return `${boundTenant() ?? ""}\0${sub}`;
+}
+
 async function isAdmin(sub: string): Promise<boolean> {
-  const hit = adminCache.get(sub);
+  const key = adminKey(sub);
+  const hit = adminCache.get(key);
   if (hit !== undefined) return hit;
   for (let attempt = 0; attempt < ADMIN_PROBE_ATTEMPTS; attempt++) {
     const isAdmin = await adminProbeAttempt(sub);
@@ -316,7 +321,7 @@ async function isAdmin(sub: string): Promise<boolean> {
         await new Promise((resolve) => setTimeout(resolve, ADMIN_PROBE_RETRY_DELAY_MS));
       continue;
     }
-    adminCache.set(sub, isAdmin);
+    adminCache.set(key, isAdmin);
     return isAdmin;
   }
   return false;
@@ -1630,7 +1635,7 @@ async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL):
         },
         identity.subject,
       );
-      adminCache.delete(identity.sub);
+      adminCache.delete(adminKey(identity.sub));
     }
     setAuthenticatedSession(res, identity.sub, identity.name);
     res.writeHead(302, {

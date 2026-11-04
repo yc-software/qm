@@ -25,6 +25,7 @@ const UNTENANTED: Record<string, string> = {
   qm_schema_migrations: "records which migrations the whole database has applied",
   tenants: "is the tenant registry, keyed by the tenant id itself and read only through its own policy",
   tenant_hosts: "maps globally unique hostnames to tenants before any tenant is bound",
+  retired_tenant_hosts: "remembers the hostnames of deleted tenants so they are refused, not rerouted",
   qm_tenant: "names the install's own tenant, one row per database",
   qm_settings: "holds install-level settings the process reads, no tenant data",
   source_auth_replay: "holds random replay nonces for signed internal calls",

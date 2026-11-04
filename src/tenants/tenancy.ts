@@ -7,6 +7,7 @@ import { createSweeper, type Sweeper } from "../util/sweeper.ts";
 export interface HostTenant {
   tenant?: string;
   multi: boolean;
+  retired?: boolean;
 }
 
 export type RowTable = "webhooks" | "loop_ingress" | "oauth_flows" | "deployments" | "session_shares";
@@ -57,9 +58,13 @@ export function createTenancy(pool: PgPool, owner: PgPool = pool): Tenancy {
   const hostTenant = async (host: string): Promise<HostTenant> => {
     const cached = hostCache.get(host);
     if (cached) return cached;
-    const row = (await pool.q("SELECT tenant_id::text AS tenant, multi FROM qm_host_tenant($1)", [host]))[0];
+    const row = (await pool.q("SELECT tenant_id::text AS tenant, multi, retired FROM qm_host_tenant($1)", [host]))[0];
     const tenant = typeof row?.tenant === "string" ? row.tenant : undefined;
-    const resolved: HostTenant = { ...(tenant ? { tenant } : {}), multi: row?.multi === true };
+    const resolved: HostTenant = {
+      ...(tenant ? { tenant } : {}),
+      multi: row?.multi === true,
+      ...(!tenant && row?.retired === true ? { retired: true } : {}),
+    };
     hostCache.set(host, resolved);
     return resolved;
   };
@@ -99,6 +104,7 @@ export function createTenancy(pool: PgPool, owner: PgPool = pool): Tenancy {
     },
     async mapHost(tenant, host) {
       if (!(await knownTenant(tenant))) return "unknown_tenant";
+      await owner.q("DELETE FROM retired_tenant_hosts WHERE host = $1", [host]);
       const rows = await owner.q(
         `INSERT INTO tenant_hosts(host, tenant_id) VALUES ($1, $2)
          ON CONFLICT (host) DO UPDATE SET host = EXCLUDED.host WHERE tenant_hosts.tenant_id = EXCLUDED.tenant_id

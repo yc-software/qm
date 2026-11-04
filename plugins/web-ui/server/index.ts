@@ -36,9 +36,9 @@ import {
   sendBuffered,
   serveFavicon,
 } from "../../chassis/src/http.ts";
-import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER, withIdentityTenant } from "../../chassis/src/portal-identity.ts";
+import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { boundTenant, withTenant } from "../../chassis/src/tenant.ts";
-import { coreHostTenants, requestHostname } from "../../chassis/src/host-tenant.ts";
+import { coreHostTenants, inHostTenant, requestHostname } from "../../chassis/src/host-tenant.ts";
 import { createBrandingCache, injectBranding } from "../../chassis/src/branding.ts";
 import { parseSuggestedActivities } from "../../chassis/src/suggested-activities.ts";
 import { principalInAllowlist } from "../../chassis/src/principal-allowlist.ts";
@@ -501,9 +501,10 @@ function sessionCookie(id: string): string {
 const MAX_BODY_BYTES = 1_000_000;
 const readBody = (req: IncomingMessage): Promise<string> => readBodyCapped(req, MAX_BODY_BYTES);
 
-const slackUrlCache = new LRUCache<string, { url: string | null }>({ max: 1, ttl: 5 * 60_000 });
+const slackUrlCache = new LRUCache<string, { url: string | null }>({ max: 1_000, ttl: 5 * 60_000 });
 async function slackWorkspaceUrl(): Promise<string | null> {
-  const hit = slackUrlCache.get("url");
+  const key = boundTenant() ?? "";
+  const hit = slackUrlCache.get(key);
   if (hit) return hit.url;
   let urlValue: string | null = null;
   try {
@@ -512,7 +513,7 @@ async function slackWorkspaceUrl(): Promise<string | null> {
   } catch {
     void 0;
   }
-  slackUrlCache.set("url", { url: urlValue });
+  slackUrlCache.set(key, { url: urlValue });
   return urlValue;
 }
 
@@ -3593,6 +3594,33 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
   json(res, 404, { error: "not found" });
 };
 
+function identityTenant(token: string | undefined): string | undefined {
+  return token && PORTAL_IDENTITY_SECRET
+    ? verifyPortalIdentity(token, PORTAL_IDENTITY_SECRET, Date.now())?.t
+    : undefined;
+}
+
+function inRequestTenant(
+  req: IncomingMessage,
+  res: ServerResponse,
+  token: string | undefined,
+  handle: () => Promise<void>,
+): Promise<void> {
+  const claimed = identityTenant(token);
+  const bound = async (): Promise<void> => {
+    const host = boundTenant();
+    if (claimed && host && claimed !== host) {
+      req.resume();
+      return json(res, 421, {
+        error: "tenant_mismatch",
+        message: "this sign-in belongs to a different tenant than this host",
+      });
+    }
+    return claimed ? withTenant(claimed, handle) : handle();
+  };
+  return inHostTenant(hostTenants, req, res, bound, claimed === undefined);
+}
+
 export const handler = async (req: IncomingMessage, res: ServerResponse) => {
   res.setHeader("strict-transport-security", "max-age=63072000; includeSubDomains");
   res.setHeader("referrer-policy", "no-referrer");
@@ -3601,9 +3629,9 @@ export const handler = async (req: IncomingMessage, res: ServerResponse) => {
   const raw = req.headers[PORTAL_IDENTITY_HEADER];
   const token = Array.isArray(raw) ? raw[0] : raw;
   try {
-    await withIdentityTenant(token, PORTAL_IDENTITY_SECRET, () =>
-      portalTokenStore.run(token, () => routeRequest(req, res)),
-    );
+    await inRequestTenant(req, res, token, async () => {
+      await portalTokenStore.run(token, () => routeRequest(req, res));
+    });
   } catch (err) {
     if (err instanceof PayloadTooLargeError) {
       if (!res.headersSent) json(res, 413, { error: "payload_too_large", message: err.message });

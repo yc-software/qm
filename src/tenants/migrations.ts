@@ -278,3 +278,39 @@ BEGIN
 END $tenant_writes$`,
   ],
 };
+
+export const RETIRED_TENANT_HOSTS: PgMigrationDefinition = {
+  id: "0001-tenancy/retired-hosts",
+  statements: [
+    `SET LOCAL lock_timeout = '5s'`,
+    `SET LOCAL check_function_bodies = off`,
+    `CREATE TABLE IF NOT EXISTS retired_tenant_hosts(
+      host TEXT PRIMARY KEY CHECK (host = lower(host) AND host <> ''),
+      retired_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`,
+    `ALTER TABLE retired_tenant_hosts ENABLE ROW LEVEL SECURITY`,
+    `CREATE OR REPLACE FUNCTION qm_retire_tenant_hosts() RETURNS trigger
+      LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $qm_retire$
+      BEGIN
+        INSERT INTO retired_tenant_hosts(host) SELECT h.host FROM tenant_hosts h WHERE h.tenant_id = OLD.id
+          ON CONFLICT (host) DO NOTHING;
+        RETURN OLD;
+      END
+    $qm_retire$`,
+    `DROP TRIGGER IF EXISTS tenants_retire_hosts ON tenants`,
+    `CREATE TRIGGER tenants_retire_hosts BEFORE DELETE ON tenants
+      FOR EACH ROW EXECUTE FUNCTION qm_retire_tenant_hosts()`,
+    `DROP FUNCTION IF EXISTS qm_host_tenant(text)`,
+    `CREATE FUNCTION qm_host_tenant(requested text) RETURNS TABLE(tenant_id uuid, multi boolean, retired boolean)
+      LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public AS $qm_host_tenant$
+      SELECT (SELECT h.tenant_id FROM tenant_hosts h WHERE h.host = lower(requested)),
+        EXISTS (SELECT 1 FROM tenant_hosts) OR EXISTS (SELECT 1 FROM retired_tenant_hosts),
+        EXISTS (SELECT 1 FROM retired_tenant_hosts r WHERE r.host = lower(requested))
+    $qm_host_tenant$`,
+    `DO $retired_path$
+BEGIN
+  EXECUTE format('ALTER FUNCTION qm_host_tenant(text) SET search_path = pg_catalog, %I, pg_temp', current_schema());
+  EXECUTE format('ALTER FUNCTION qm_retire_tenant_hosts() SET search_path = pg_catalog, %I, pg_temp', current_schema());
+END $retired_path$`,
+  ],
+};
