@@ -136,7 +136,13 @@ export function createTenancy(pool: PgPool, owner: PgPool = pool): Tenancy {
       const parsed = tenantSettingsSchema.safeParse(merged);
       if (!parsed.success)
         return { ok: false, error: "invalid_settings", message: parsed.error.issues[0]?.message ?? "" };
-      await owner.q("UPDATE tenants SET settings = $2 WHERE id = $1", [tenant, JSON.stringify(parsed.data)]);
+      const changed = Object.keys(patch).filter((key) => patch[key] !== null);
+      const removed = Object.keys(patch).filter((key) => patch[key] === null);
+      await owner.q("UPDATE tenants SET settings = (settings || $2::jsonb) - $3::text[] WHERE id = $1", [
+        tenant,
+        JSON.stringify(Object.fromEntries(changed.map((key) => [key, merged[key]]))),
+        removed,
+      ]);
       settingsCache.delete(tenant);
       return { ok: true, keys: Object.keys(parsed.data).sort() };
     },
