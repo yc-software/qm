@@ -44,17 +44,24 @@ export async function twoTenantDatabase(registerStores: (ownerUrl: string) => un
        END $clear$`,
     );
   await owner.query("INSERT INTO tenants(id) VALUES ($1), ($2) ON CONFLICT (id) DO NOTHING", [TENANT_A, TENANT_B]);
-  await owner.query(
-    `DO $role$ BEGIN
-       IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${role}') THEN
-         CREATE ROLE ${role} LOGIN PASSWORD '${role}' NOBYPASSRLS;
-       END IF;
-     END $role$`,
-  );
-  await owner.query(`GRANT CONNECT ON DATABASE "${database}" TO ${role}`);
-  await owner.query(`GRANT USAGE, CREATE ON SCHEMA public TO ${role}`);
-  await owner.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${role}`);
-  await owner.query(`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ${role}`);
+  const grants = await owner.connect();
+  await grants.query("SELECT pg_advisory_lock(hashtext('qm-test:two-tenant-grants'))");
+  try {
+    await grants.query(
+      `DO $role$ BEGIN
+         IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${role}') THEN
+           CREATE ROLE ${role} LOGIN PASSWORD '${role}' NOBYPASSRLS;
+         END IF;
+       END $role$`,
+    );
+    await grants.query(`GRANT CONNECT ON DATABASE "${database}" TO ${role}`);
+    await grants.query(`GRANT USAGE, CREATE ON SCHEMA public TO ${role}`);
+    await grants.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${role}`);
+    await grants.query(`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ${role}`);
+  } finally {
+    await grants.query("SELECT pg_advisory_unlock(hashtext('qm-test:two-tenant-grants'))");
+    grants.release();
+  }
   const appUrl = withLogin(ownerUrl, role);
   if (pooledUrl)
     configurePgPooling({
