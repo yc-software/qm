@@ -14,11 +14,8 @@ const { vite, close } = await browserEnv({
 });
 after(close);
 const { render } = await vite.ssrLoadModule("lit");
-const { expireCronList, loadCronList, scopeToolCount, sessionTopbarTpl } = (await vite.ssrLoadModule(
-  "/src/session-scope.ts",
-)) as {
-  expireCronList: () => void;
-  loadCronList: () => Promise<unknown>;
+const { expireToolCount, scopeToolCount, sessionTopbarTpl } = (await vite.ssrLoadModule("/src/session-scope.ts")) as {
+  expireToolCount: (tool: SessionTool) => void;
   scopeToolCount: (tool: SessionTool, scope: string, ready: () => void) => number | null;
   sessionTopbarTpl: (opts: SessionTopbarOpts) => unknown;
 };
@@ -130,11 +127,10 @@ test("zero counts remain hidden in desktop and mobile tools", () => {
   assert.equal(host.querySelectorAll(".session-tool-count").length, 0);
 });
 
-test("the Crons badge counts the list the Crons page loaded and refetches after a turn ends", async () => {
+test("an expired Crons badge keeps its count on screen while it refetches", async () => {
   const scope = "personal:badge";
   const cron = (id: string) => ({ id, ownerScopeId: scope, enabled: true });
   respond = () => ({ crons: [cron("a"), cron("b")] });
-  expireCronList();
   await new Promise<void>((resolve) => {
     scopeToolCount("crons", scope, resolve);
   });
@@ -142,24 +138,13 @@ test("the Crons badge counts the list the Crons page loaded and refetches after 
     scopeToolCount("crons", scope, () => assert.fail("cached")),
     2,
   );
-
   respond = () => ({ crons: [cron("a"), cron("b"), cron("c")] });
-  await loadCronList();
-  const afterPage = requests.length;
-  assert.equal(
-    scopeToolCount("crons", scope, () => assert.fail("cached")),
-    3,
-    "the badge shows what the Crons page just loaded",
-  );
-  assert.equal(requests.length, afterPage, "without a second request");
-
-  respond = () => ({ crons: [cron("a"), cron("b"), cron("c"), cron("d")] });
-  expireCronList();
+  expireToolCount("crons");
   await new Promise<void>((resolve) => {
-    assert.equal(scopeToolCount("crons", scope, resolve), 3, "the old count shows while the refetch runs");
+    assert.equal(scopeToolCount("crons", scope, resolve), 2, "the old count shows while the refetch runs");
   });
   assert.equal(
     scopeToolCount("crons", scope, () => assert.fail("cached")),
-    4,
+    3,
   );
 });

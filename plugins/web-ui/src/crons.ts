@@ -5,7 +5,7 @@ import { errMessage } from "../../chassis/src/errors";
 import { icon } from "./icons";
 import { listBackLink, listPageTpl } from "./list-page";
 import { contextsState, ensureContexts, scopeChip } from "./contexts";
-import { loadCronList, scopedSession, scopedViewTopbar } from "./session-scope";
+import { expireToolCount, scopedSession, scopedViewTopbar } from "./session-scope";
 import { appState } from "./shell";
 import { startNewChat } from "./sessions";
 import { deepLinkPath, isPlainLeftClick, UI_BASE } from "./deep-link";
@@ -116,10 +116,11 @@ async function refreshCrons(opts: { showLoading?: boolean } = {}): Promise<boole
     cronsNotice = "";
   }
   try {
-    const r = (await loadCronList()) as { crons?: CronView[]; visible?: CronView[] };
+    const r = await api<{ crons: CronView[]; visible?: CronView[] }>("/api/crons");
     if (seq !== cronRefreshSeq) return false;
     cronList = r.crons ?? [];
     visibleCronList = r.visible ?? [];
+    expireToolCount("crons");
     cronsNotice = "";
     return true;
   } catch (e) {
