@@ -42,6 +42,7 @@ jobs:
 
   core-typecheck:
     name: Core typecheck
+    timeout-minutes: 3
     needs: reuse
     if: always() && !cancelled()
     runs-on: ubuntu-latest
@@ -70,6 +71,7 @@ jobs:
 
   core-tests:
     name: Core tests (${{ matrix.shard }}/5)
+    timeout-minutes: 25
     needs: reuse
     if: always() && !cancelled()
     runs-on: ubuntu-latest
@@ -142,6 +144,7 @@ jobs:
 
   core:
     name: Core
+    timeout-minutes: 3
     if: always() && !cancelled()
     runs-on: ubuntu-latest
     needs:
@@ -156,6 +159,7 @@ jobs:
 
   cli:
     name: CLI
+    timeout-minutes: 15
     needs: reuse
     if: always() && !cancelled()
     runs-on: ubuntu-latest
@@ -204,6 +208,7 @@ jobs:
 
   coauthor-trailers:
     name: Co-author trailers
+    timeout-minutes: 7
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
@@ -253,6 +258,7 @@ jobs:
 
   lint:
     name: Lint
+    timeout-minutes: 5
     needs: reuse
     if: always() && !cancelled()
     runs-on: ubuntu-latest
@@ -291,6 +297,7 @@ jobs:
 
   core-postgres:
     name: Core Postgres tests
+    timeout-minutes: 3
     needs: reuse
     if: always() && !cancelled()
     runs-on: ubuntu-latest
@@ -342,6 +349,7 @@ jobs:
 
   web-ui-plugin:
     name: Web UI plugin
+    timeout-minutes: 20
     needs: reuse
     if: always() && !cancelled()
     runs-on: ubuntu-latest
@@ -376,6 +384,7 @@ jobs:
 
   auth-plugin:
     name: Auth plugin
+    timeout-minutes: 3
     needs: reuse
     if: always() && !cancelled()
     runs-on: ubuntu-latest
@@ -404,6 +413,7 @@ jobs:
 
   portal-plugin:
     name: Portal plugin
+    timeout-minutes: 3
     needs: reuse
     if: always() && !cancelled()
     runs-on: ubuntu-latest
