@@ -5,7 +5,7 @@ import { errMessage } from "../../chassis/src/errors";
 import { icon } from "./icons";
 import { listBackLink, listPageTpl } from "./list-page";
 import { contextsState, ensureContexts, scopeChip } from "./contexts";
-import { noteCronList, scopedSession, scopedViewTopbar } from "./session-scope";
+import { loadCronList, scopedSession, scopedViewTopbar } from "./session-scope";
 import { appState } from "./shell";
 import { startNewChat } from "./sessions";
 import { deepLinkPath, isPlainLeftClick, UI_BASE } from "./deep-link";
@@ -116,8 +116,7 @@ async function refreshCrons(opts: { showLoading?: boolean } = {}): Promise<boole
     cronsNotice = "";
   }
   try {
-    const r = await api<{ crons: CronView[]; visible?: CronView[] }>("/api/crons");
-    noteCronList(r);
+    const r = (await loadCronList()) as { crons?: CronView[]; visible?: CronView[] };
     if (seq !== cronRefreshSeq) return false;
     cronList = r.crons ?? [];
     visibleCronList = r.visible ?? [];
@@ -596,7 +595,6 @@ function cronRunHistory(c: CronView): TemplateResult {
 async function loadCronRuns(id: string): Promise<void> {
   cronRunsLoading.add(id);
   try {
-    // Reread the cron with its runs so "Last fired" matches the run history.
     const [result] = await Promise.all([
       api<{ runs: CronRunView[] }>(`/api/crons/${encodeURIComponent(id)}/runs`),
       refreshCrons(),
