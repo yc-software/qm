@@ -5915,6 +5915,22 @@ test("controlled AWS stacks allocate identities, verify the running stack in pla
       "0",
     );
 
+    await awsSetBackgroundWork(single, dir, true);
+    const reactivated = current();
+    assert.match(reactivated.backgroundDeploymentId, /^acme-core:[0-9a-f-]{36}$/);
+    assert.notEqual(
+      reactivated.backgroundDeploymentId,
+      manifest.backgroundDeploymentId,
+      "turning background work back on starts a deployment newer than any other",
+    );
+    const reactivatedCore = JSON.parse(readFileSync(fake.state, "utf8")).definitions[
+      reactivated.tasks.core
+    ].containerDefinitions.find((container: { name: string }) => container.name === "core");
+    assert.equal(
+      reactivatedCore.environment.find((entry: { name: string }) => entry.name === "BACKGROUND_DEPLOYMENT_ID").value,
+      reactivated.backgroundDeploymentId,
+    );
+
     const inactive: QmConfig = {
       ...single,
       env: { ...single.env, core: { ...single.env.core, BACKGROUND_WORK_ENABLED: "0" } },

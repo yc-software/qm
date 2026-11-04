@@ -148,6 +148,9 @@ return its recorded boot flag and optional deployment identity. It returns
 boot flags or identities. The exported
 `awsSetBackgroundWork(config, configDir, enabled, candidatePath?)` turns a stack's
 background work on or off by replacing its core tasks with the flag changed.
+On a stack with `aws.backgroundWorkControl`, turning it on also records a new
+deployment identity, so the stack ranks as the newest deployment even if it ran
+background work earlier.
 
 Control requests require both `CORE_SIGNING_SECRET` and a distinct
 `DEPLOYMENT_CONTROL_SECRET` of at least 32 characters, restricted to core. Live

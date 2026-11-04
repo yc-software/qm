@@ -2811,6 +2811,7 @@ export async function awsRollback(
 export function taskDefinitionForBackgroundWork(
   task: Record<string, unknown>,
   enabled: boolean,
+  deploymentId?: string,
 ): Record<string, unknown> {
   const containers = structuredClone(task.containerDefinitions) as Array<Record<string, unknown>> | undefined;
   const core = containers?.find((container) => container.name === "core");
@@ -2821,8 +2822,12 @@ export function taskDefinitionForBackgroundWork(
   }
   const environment = (core.environment ?? []) as Array<{ name: string; value: string }>;
   core.environment = [
-    ...environment.filter((entry) => entry.name !== "BACKGROUND_WORK_ENABLED"),
+    ...environment.filter(
+      (entry) =>
+        entry.name !== "BACKGROUND_WORK_ENABLED" && (!deploymentId || entry.name !== "BACKGROUND_DEPLOYMENT_ID"),
+    ),
     { name: "BACKGROUND_WORK_ENABLED", value: enabled ? "1" : "0" },
+    ...(deploymentId ? [{ name: "BACKGROUND_DEPLOYMENT_ID", value: deploymentId }] : []),
   ];
   const fields = [
     "family",
@@ -3056,7 +3061,9 @@ export async function awsSetBackgroundWork(
       }
       if (workload === "core") coreTask = task;
     }
-    const desired = taskDefinitionForBackgroundWork(coreTask!, enabled);
+    const deploymentId =
+      enabled && current.backgroundDeploymentId ? `${aws.services.core!.ecsService}:${randomUUID()}` : undefined;
+    const desired = taskDefinitionForBackgroundWork(coreTask!, enabled, deploymentId);
     const core = (coreTask!.containerDefinitions as Array<Record<string, unknown>>).find(
       (item) => item.name === "core",
     )!;
@@ -3089,6 +3096,7 @@ export async function awsSetBackgroundWork(
             dbRestorePoint: current.dbRestorePoint,
             layer: current.layer,
             imageProvenance: current.imageProvenance,
+            ...(deploymentId ? { backgroundDeploymentId: deploymentId } : {}),
           },
         );
       } catch (error) {
