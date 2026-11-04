@@ -379,15 +379,22 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
   const outputSeq = result?.sourceAssistantEntrySeq ?? run.turnUserSeq ?? result?.sourceUserSeq;
   const quotes = result?.stopped === true || failed;
   const readers = [...new Set([prepared.actor.id, ...prepared.conversation.audience.map((person) => person.id)])];
-  const views =
-    quotes || (outputSeq !== undefined && outputSeq !== null)
-      ? await Promise.all(readers.map((id) => deps.sessions.visibleItems(child.id, id)))
-      : [];
-  const shared = (seq: number): boolean => views.every((view) => view.some((item) => item.seq === seq));
-  if (outputSeq !== undefined && outputSeq !== null && !shared(outputSeq))
-    throw new Error("the current parent audience cannot read this child result");
+  const turnStart = run.turnUserSeq ?? result?.sourceUserSeq;
+  const firstSeq = Math.min(outputSeq ?? Infinity, (quotes ? turnStart : undefined) ?? Infinity);
+  const views: Item[][] = [];
+  const seen: Set<number>[] = [];
+  if (Number.isFinite(firstSeq))
+    for (const id of readers) {
+      const items = await deps.sessions.visibleItems(child.id, id, { sinceSeq: firstSeq });
+      const seqs = new Set(items.map((item) => item.seq));
+      if (outputSeq !== undefined && outputSeq !== null && !seqs.has(outputSeq))
+        throw new Error("the current parent audience cannot read this child result");
+      views.push(items);
+      seen.push(seqs);
+    }
+  const shared = (seq: number): boolean => seen.every((seqs) => seqs.has(seq));
   const resultId = `${RESULT_MAIL}${run.id}`;
-  const resent = (await deps.mailbox.pending(parent.id)).some((message) => message.id === resultId);
+  const resent = await deps.mailbox.unread(parent.id, resultId);
   const waiting = result?.stopped || failed || resent ? 0 : await pendingWork(deps, child);
   const { kind, body } = mailOf(run, failed, quotes ? turnText(views[0] ?? [], shared, run) : undefined, waiting);
   const text = renderSubagentMail({
