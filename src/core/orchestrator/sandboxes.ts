@@ -6,9 +6,11 @@ import { isOpenScopeMember } from "../../resolution/sharing-access.ts";
 import { type SandboxHandle, supportsProcessSessions, SandboxProvisionCleanupError } from "../../sandbox/sandbox.ts";
 import {
   accessConversationSandbox,
+  preferredBackend,
   type SandboxAccessPlan,
   type SandboxResource,
 } from "../../sandbox/sandbox-resources.ts";
+import { ensureChildSandbox, prepareChildWorkdir } from "../../sessions/child-isolation.ts";
 import { reconcileProcesses } from "../../processes/reconcile.ts";
 import { leaseLapsed } from "../../runs/run-store.ts";
 import { finishProcessCredentials } from "../../credentials/execute-files.ts";
@@ -81,6 +83,8 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     visibleSkillsForTurn,
   } = ctx;
 
+  const isolation = session.spawnMeta?.isolation;
+  const boundSandboxId = swarmSandboxId ?? isolation?.sandboxId;
   const pool = new Map<string, Slot>();
   let retiredSlots = 0;
   let scopedUsed = false;
@@ -168,8 +172,16 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       const resource = await deps.sandboxResources?.resolve(memoryScopeId);
       if (resource && resource.ownerScopeId !== scopeId) throw new Error("External Slack requires its own sandbox.");
     }
+    if (isolation?.sandboxId)
+      await ensureChildSandbox(deps.sandboxResources, {
+        id: isolation.sandboxId,
+        session,
+        actorId: actor.id,
+        scopeId: resolution.writableScopeId,
+        backendScopeId: memoryScopeId,
+      });
     const handle = await deps.sandbox.provision(resolution.writableScopeId, {
-      ...(swarmSandboxId ? { sandboxId: swarmSandboxId } : {}),
+      ...(boundSandboxId ? { sandboxId: boundSandboxId } : {}),
       env: connectorEnv,
       egress: resolution.egress,
       ...(egressTokenForTurn ? { egressToken: egressTokenForTurn } : {}),
@@ -191,7 +203,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
         eager,
       }),
     });
-    await prepareTurnFiles(handle);
+    await Promise.all([prepareTurnFiles(handle), prepareChildWorkdir(deps.sandbox, handle, isolation)]);
     if (deps.processes && supportsProcessSessions(deps.sandbox)) {
       try {
         await reconcileProcesses(deps.sandbox, handle, deps.processes, memoryScopeId, (exited, processId) =>
@@ -328,7 +340,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   });
   const provisionJobComputer = async (): Promise<SandboxHandle> => {
     const resources = deps.sandboxResources!;
-    const backend = (await resources.resolve(memoryScopeId))?.backend ?? resources.defaultBackend();
+    const backend = await preferredBackend(resources, memoryScopeId);
     const resource = await resources.create(actor.id, memoryScopeId, backend, "background job", undefined, true);
     return provisionResource(jobComputerPlan(resource));
   };
@@ -544,6 +556,8 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   };
 
   return {
+    boundSandboxId,
+    workdir: isolation?.workdir,
     provision,
     provisionScratch,
     provisionJobComputer,

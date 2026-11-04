@@ -1,6 +1,8 @@
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { text, type ToolKit } from "./kit.ts";
+import { isolationLabel } from "../../sessions/child-isolation.ts";
+import type { ChildIsolationMode } from "../../types.ts";
 
 export function sessionTools(kit: ToolKit) {
   const { ref, opts, recordCall, recordResult, recordCoreAuthoredResult } = kit;
@@ -43,6 +45,12 @@ export function sessionTools(kit: ToolKit) {
           description: "open: model override; use one runtime get lists (unconfigured providers are rejected).",
         }),
       ),
+      isolation: Type.Optional(
+        Type.Union([Type.Literal("shared"), Type.Literal("worktree"), Type.Literal("sandbox")], {
+          description:
+            "open: where its commands run. shared: your computer and starting directory. worktree: a new directory of its own on your computer (a git worktree on a new branch if your starting directory is a git repository). sandbox: a new computer of its own, created on first use; retire it with the sandbox tool once its work is saved. Default: worktree when your own commands start in a subagent directory, otherwise shared.",
+        }),
+      ),
       thinkingLevel: Type.Optional(Type.String({ description: "open: effort override." })),
       fastMode: Type.Optional(Type.Boolean({ description: "open: fast mode." })),
       target: Type.Optional(
@@ -72,6 +80,7 @@ export function sessionTools(kit: ToolKit) {
         task?: string;
         name?: string;
         noComputer?: boolean;
+        isolation?: ChildIsolationMode;
         model?: string;
         target?: string;
         text?: string;
@@ -85,6 +94,7 @@ export function sessionTools(kit: ToolKit) {
         ...(p.task ? { task: p.task } : {}),
         ...(p.name ? { name: p.name } : {}),
         ...(p.noComputer !== undefined ? { noComputer: p.noComputer } : {}),
+        ...(p.isolation ? { isolation: p.isolation } : {}),
         ...(p.target ? { target: p.target } : {}),
         ...(p.text ? { text: p.text } : {}),
         ...(p.wake === false ? { wake: false } : {}),
@@ -121,6 +131,7 @@ export function sessionTools(kit: ToolKit) {
           ...(p.fastMode !== undefined ? { fastMode: p.fastMode } : {}),
           ...(p.name ? { name: p.name } : {}),
           ...(p.noComputer !== undefined ? { readOnly: p.noComputer } : {}),
+          ...(p.isolation ? { isolation: p.isolation } : {}),
           ...(p.model ? { model: p.model } : {}),
         });
         if (!result.ok) {
@@ -131,11 +142,12 @@ export function sessionTools(kit: ToolKit) {
             true,
           );
         }
+        const placement = isolationLabel(result.isolation);
         return recordResult(
           callId,
           { tool: "subagents", action: "open", sessionId: result.sessionId, title: result.title },
           text(
-            `Opened subagent "${result.title}" (sessionId ${result.sessionId}). It is working now. Its result will arrive as an internal message. ${delegateWork ? "End this turn promptly; completion will wake you to report the result." : "Continue independent work, then use subagents wait before your final answer if you need its result."}`,
+            `Opened subagent "${result.title}" (sessionId ${result.sessionId}${placement ? `; ${placement}` : ""}). It is working now. Its result will arrive as an internal message. ${delegateWork ? "End this turn promptly; completion will wake you to report the result." : "Continue independent work, then use subagents wait before your final answer if you need its result."}`,
           ),
         );
       }
@@ -193,7 +205,8 @@ export function sessionTools(kit: ToolKit) {
       }
       if (result.mode === "children") {
         const lines = result.children.map(
-          (c) => `- ${c.title} (${c.sessionId}) — ${c.status}${c.lastSaid ? ` — last said: ${c.lastSaid}` : ""}`,
+          (c) =>
+            `- ${c.title} (${c.sessionId}) — ${c.status}${c.isolation ? ` — ${isolationLabel(c.isolation)}` : ""}${c.lastSaid ? ` — last said: ${c.lastSaid}` : ""}`,
         );
         return recordResult(
           callId,

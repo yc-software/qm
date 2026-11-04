@@ -1837,6 +1837,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           );
 
       const {
+        boundSandboxId,
+        workdir,
         provision,
         provisionScratch,
         provisionJobComputer,
@@ -2524,6 +2526,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           provisionJobComputer,
           provisionResource,
           accessSandboxResource: accessResource,
+          boundSandboxId,
+          workdir,
           useSkill,
           listSkills: (source) => visibleSkillsForTurn(source ? [source] : [scopeId, resolution.orgScopeId]),
           writableScopeId: resolution.writableScopeId,
@@ -2998,7 +3002,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           !strictReadOnly &&
           sessionUsedTools &&
           !isPollFire &&
-          (swarmBinding?.sandboxId || (await deps.sandboxResources?.resolve(memoryScopeId)) !== null)
+          (boundSandboxId || (await deps.sandboxResources?.resolve(memoryScopeId)) !== null)
         ) {
           void provision(true).catch(swallowAs("orchestrator: eager provision", undefined));
         }

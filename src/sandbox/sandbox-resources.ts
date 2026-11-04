@@ -87,6 +87,10 @@ export class SandboxAccessError extends Error {}
 const JOB_ONLY_REFUSAL =
   "this computer belongs to a background job that uses private credentials; only that job's own controls can reach it";
 
+export async function preferredBackend(resources: SandboxResources, scopeId: ScopeId): Promise<SandboxBackendName> {
+  return (await resources.resolve(scopeId))?.backend ?? resources.defaultBackend();
+}
+
 export async function accessConversationSandbox(
   resources: SandboxResources | undefined,
   actorId: string,
