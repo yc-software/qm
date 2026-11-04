@@ -125,14 +125,10 @@ export function createPostgresProcessRegistry(connectionString: string): Process
   pg.registerMigration(credentialFilesMigration);
   let ready: Promise<void> | undefined;
   const q: typeof pg.q = async (...args) => {
-    ready ??= pg
-      .migrate(migration)
-      .then(() => pg.migrate(purposeMigration))
-      .then(() => pg.migrate(credentialFilesMigration))
-      .catch((error) => {
-        ready = undefined;
-        throw error;
-      });
+    ready ??= pg.migrate(migration, purposeMigration, credentialFilesMigration).catch((error) => {
+      ready = undefined;
+      throw error;
+    });
     await ready;
     return pg.q(...args);
   };
