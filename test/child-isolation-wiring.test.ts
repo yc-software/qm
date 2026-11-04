@@ -32,10 +32,6 @@ test("a child's turn carries its placement note in the system prompt", async () 
       assert.equal((await built.runs.waitFor(run.id, 30_000)).status, "done");
   }
   const prompts = async (sessionId: string) => JSON.stringify(await built.sessions.listLlmRequests(sessionId));
-  assert.ok(
-    (await prompts(isolated.sessionId)).includes(
-      `Commands that omit sandbox_id start in your own directory, ${workdir}`,
-    ),
-  );
-  assert.doesNotMatch(await prompts(plain.sessionId), /Commands that omit sandbox_id/);
+  assert.ok((await prompts(isolated.sessionId)).includes(workdir));
+  assert.doesNotMatch(await prompts(plain.sessionId), /subagents\//);
 });

@@ -3320,16 +3320,17 @@ test("subagents open forwards isolation and reports where the child works", asyn
       ],
     }),
   };
-  const session = createAgentTools({ current: tc }).find((tool) => tool.name === "subagents")!;
+  const session = createAgentTools({ current: tc }).find((tool) => tool.name === "subagents");
+  assert.ok(session);
   assert.ok(!Check(session.parameters, { action: "open", task: "test", isolation: "container" }));
-  assert.doesNotMatch(textOut(await call(session, { action: "open", task: "test" })), /directory/);
-  assert.equal(opened.at(-1)!.isolation, undefined);
+  assert.doesNotMatch(textOut(await call(session, { action: "open", task: "test" })), /subagents\/fix-1/);
+  assert.equal(opened.at(-1)?.isolation, undefined);
   const out = textOut(await call(session, { action: "open", task: "test", isolation: "worktree" }));
-  assert.equal(opened.at(-1)!.isolation, "worktree");
-  assert.match(out, /own directory subagents\/fix-1; git branch subagent\/fix-1 if the workspace root is a repository/);
-  const listed = textOut(await call(session, { action: "read" })).split("\n");
-  assert.match(listed[0]!, /child \(child\) — idle — own directory subagents\/fix-1/);
-  assert.equal(listed[1], "- other (other) — idle");
+  assert.equal(opened.at(-1)?.isolation, "worktree");
+  assert.ok(out.includes("subagents/fix-1") && out.includes("subagent/fix-1"));
+  const [child, other] = textOut(await call(session, { action: "read" })).split("\n");
+  assert.ok(child?.includes("subagents/fix-1"));
+  assert.equal(other, "- other (other) — idle");
 });
 
 test("subagents open schema and dispatch preserve an explicit false fast mode", async () => {

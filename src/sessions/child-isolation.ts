@@ -4,12 +4,11 @@ import { shq } from "../util/shell.ts";
 import { posixJoin } from "../sandbox/exec-file-ops.ts";
 import { execFailureDetail, type Sandbox, type SandboxHandle } from "../sandbox/sandbox.ts";
 import { preferredBackend, SandboxAccessError, type SandboxResources } from "../sandbox/sandbox-resources.ts";
+import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { ChildIsolation, ChildIsolationMode, ChildWorkdir, ScopeId, Session } from "../types.ts";
 
 const WORKDIR_ROOT = "subagents";
 const WORKDIR_TIMEOUT_SEC = 300;
-const LOCK_WAIT_SEC = 240;
-const STALE_LOCK_MIN = 5;
 
 function slug(title: string): string {
   const words = title.toLowerCase().replace(/[^a-z0-9]+/g, "-");
@@ -54,33 +53,27 @@ function workdirStep(rootDir: string, step: ChildWorkdir): string {
   const sibling = (suffix: string) =>
     shq(posixJoin(rootDir, posix.join(posix.dirname(step.workdir), `.${posix.basename(step.workdir)}.${suffix}`)));
   const dir = posixJoin(rootDir, step.workdir);
-  const [ready, lock] = [sibling("ready"), sibling("lock")];
+  const ready = sibling("ready");
   const base = posixJoin(rootDir, step.base ?? "");
   const git = `git -C ${shq(base)}`;
   const branch = shq(step.branch);
-  const isWorktree = `[ "$(git -C ${shq(dir)} rev-parse --show-toplevel 2>/dev/null)" = "$(cd ${shq(dir)} && pwd -P)" ]`;
+  const isWorktree = `[ -d ${shq(dir)} ] && [ "$(git -C ${shq(dir)} rev-parse --show-toplevel 2>/dev/null)" = "$(cd ${shq(dir)} && pwd -P)" ]`;
   return [
     `[ -f ${ready} ] && [ -d ${shq(dir)} ] && exit 0`,
     `mkdir -p ${shq(posixJoin(rootDir, WORKDIR_ROOT))} || exit 1`,
-    `waited=0; until mkdir ${lock} 2>/dev/null; do`,
-    `  find ${lock} -maxdepth 0 -mmin +${STALE_LOCK_MIN} -exec rmdir {} \\; 2>/dev/null`,
-    `  waited=$((waited + 1)); [ "$waited" -ge ${LOCK_WAIT_SEC} ] && { echo "another setup of ${step.workdir} is still running" >&2; exit 1; }`,
-    `  sleep 1`,
-    `done`,
-    `trap 'rmdir ${lock} 2>/dev/null' EXIT`,
-    `trap 'exit 1' TERM INT HUP`,
-    `[ -f ${ready} ] && [ -d ${shq(dir)} ] && exit 0`,
     `[ -d ${shq(base)} ] || { echo "base directory ${step.base ?? "."} does not exist yet" >&2; exit 1; }`,
     `if ${git} rev-parse --is-inside-work-tree >/dev/null 2>&1; then`,
-    `  ${git} worktree remove --force ${shq(dir)} >/dev/null 2>&1; rm -rf ${shq(dir)}; ${git} worktree prune || exit 1`,
     ...(step.base
       ? []
       : [
           `  info="$(cd ${shq(base)} && cd "$(git rev-parse --git-common-dir)" && pwd)/info" && mkdir -p "$info" && { grep -qxF '/${WORKDIR_ROOT}/' "$info/exclude" 2>/dev/null || echo '/${WORKDIR_ROOT}/' >> "$info/exclude"; }`,
         ]),
-    `  if ${git} show-ref --verify --quiet ${shq(`refs/heads/${step.branch}`)}; then ${git} worktree add -q ${shq(dir)} ${branch} || exit 1`,
-    `  else ${git} worktree add -q -b ${branch} ${shq(dir)} || exit 1; fi`,
-    `  ${isWorktree} || { echo "${step.workdir} is not a complete git worktree" >&2; exit 1; }`,
+    `  if ! { ${isWorktree}; }; then`,
+    `    ${git} worktree remove --force ${shq(dir)} >/dev/null 2>&1; rm -rf ${shq(dir)}; ${git} worktree prune || exit 1`,
+    `    if ${git} show-ref --verify --quiet ${shq(`refs/heads/${step.branch}`)}; then ${git} worktree add -q ${shq(dir)} ${branch} || exit 1`,
+    `    else ${git} worktree add -q -b ${branch} ${shq(dir)} || exit 1; fi`,
+    `    ${isWorktree} || { echo "${step.workdir} is not a complete git worktree" >&2; exit 1; }`,
+    `  fi`,
     `else mkdir -p ${shq(dir)} || exit 1; fi`,
     `touch ${ready}`,
   ].join("\n");
@@ -98,10 +91,13 @@ export async function prepareChildWorkdir(
   sandbox: Sandbox,
   handle: SandboxHandle,
   isolation: ChildIsolation | undefined,
+  lock: AdvisoryLock,
 ): Promise<void> {
   const script = isolation && workdirScript(handle.rootDir, isolation);
   if (!script) return;
-  const result = await sandbox.run(handle, script, { timeoutMs: WORKDIR_TIMEOUT_SEC * 1000 });
+  const result = await lock.withLock(`subagent-workdirs:${handle.resourceId ?? handle.id}`, () =>
+    sandbox.run(handle, script, { timeoutMs: WORKDIR_TIMEOUT_SEC * 1000 }),
+  );
   if (result.code !== 0)
     throw new Error(
       `could not prepare this subagent's directory ${isolation.workdir}: ${execFailureDetail(result, WORKDIR_TIMEOUT_SEC)}`,

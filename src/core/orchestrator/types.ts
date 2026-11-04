@@ -5,6 +5,7 @@ import type { RunStop, TurnPark } from "../../runs/run-store.ts";
 import type { ExternalSlackPolicies } from "../../resolution/external-slack.ts";
 import type { RuntimeService } from "../../agent/runtime-types.ts";
 import type { SandboxResources } from "../../sandbox/sandbox-resources.ts";
+import type { AdvisoryLock } from "../../persistence/advisory-lock.ts";
 import type { AwsRoleBroker } from "../../auth/aws-role-broker.ts";
 import type {
   CommandApprovalGrant,
@@ -117,6 +118,7 @@ export interface OrchestratorDeps {
   toolOutput?: ToolOutputStore;
   sandbox: Sandbox;
   sandboxResources?: SandboxResources;
+  advisoryLock: AdvisoryLock;
   auditLog: AuditLog;
   budget?: BudgetTracker;
   maxContextTokens?: number;

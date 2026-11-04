@@ -202,7 +202,10 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     slot.handles.push(handle);
     await holdResource(handle);
     audit("scoped.provision_ready", handle, { coldStart: handle.coldStart, eager });
-    await Promise.all([prepareTurnFiles(handle), prepareChildWorkdir(deps.sandbox, handle, isolation)]);
+    await Promise.all([
+      prepareTurnFiles(handle),
+      prepareChildWorkdir(deps.sandbox, handle, isolation, deps.advisoryLock),
+    ]);
     if (deps.processes && supportsProcessSessions(deps.sandbox)) {
       try {
         await reconcileProcesses(deps.sandbox, handle, deps.processes, memoryScopeId, finishProcess);
