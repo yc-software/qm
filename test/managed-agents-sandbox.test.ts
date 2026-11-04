@@ -9,11 +9,7 @@ import {
   QM_TEMPLATE_TOOLS,
   type StoredManagedAgentsSandbox,
 } from "../src/sandbox/managed-agents-sandbox.ts";
-import {
-  managedAgentsEgressAllow,
-  managedAgentsSessionState,
-  ManagedAgentsHitlRejectedError,
-} from "../src/sandbox/managed-agents-client.ts";
+import { managedAgentsSessionState, ManagedAgentsHitlRejectedError } from "../src/sandbox/managed-agents-client.ts";
 import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
 import type { HomeSnapshotStore } from "../src/sandbox/home-snapshot.ts";
 import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
@@ -370,14 +366,8 @@ test("the QM template's tools are advertised as installed, not missing", () => {
   }
 });
 
-test("egress enforcement is only claimed when a proxy is configured", () => {
+test("egress enforcement is never claimed", () => {
   assert.equal(sandbox.profile.egressEnforcement, "none");
-  assert.equal(make({ egressProxyUrl: "https://egress.example.com" }).profile.egressEnforcement, "domain");
-});
-
-test("the egress allowlist carries just the proxy host", () => {
-  assert.deepEqual(managedAgentsEgressAllow("https://egress.example.com:443/path"), ["egress.example.com"]);
-  assert.deepEqual(managedAgentsEgressAllow("http://10.0.0.7:8080"), ["10.0.0.7"]);
 });
 
 test("session status wire values map onto backend states", () => {

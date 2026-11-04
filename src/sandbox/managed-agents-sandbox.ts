@@ -4,7 +4,7 @@ import type { DurableMap } from "../persistence/durable-map.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { swallowAs, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
-import { nonInteractiveShellPrefix, DROPPED_PROXY_ENV, forceThroughProxyEnv } from "./sandbox-env.ts";
+import { nonInteractiveShellPrefix, DROPPED_PROXY_ENV } from "./sandbox-env.ts";
 import { createExecProcessSessions, type ExecProcessIo } from "./exec-process-session.ts";
 import { createLayerToolInstaller } from "./layer-tool-install.ts";
 import type { LayerInstallFile } from "../deployment/load-layer.ts";
@@ -83,7 +83,6 @@ export interface ManagedAgentsSandboxOptions extends BlobStagingOptions {
   namePrefix?: string;
   defaultTimeoutSec?: number;
   snapshotIntervalMs?: number;
-  egressProxyUrl?: string;
   extraTools?: string[];
   credentialPaths?: CredentialPathSpec[];
   layerToolFiles?: () => readonly LayerInstallFile[];
@@ -304,7 +303,7 @@ export function createManagedAgentsSandbox(opts: ManagedAgentsSandboxOptions): S
     writablePersistence: client.nativePause ? "provider_managed" : "snapshot_to_workspace",
     processSessions: true,
     parksOnTeardown: true,
-    egressEnforcement: opts.egressProxyUrl ? "domain" : "none",
+    egressEnforcement: "none",
     spec: {
       os: "Linux — DigitalOcean Managed Agents Firecracker microVM (provider pause preserves state; publish durable work to git or Files)",
       runtimes: ["Node", "Python 3"],
@@ -419,11 +418,7 @@ export function createManagedAgentsSandbox(opts: ManagedAgentsSandboxOptions): S
         ({ coldStart } = await ensureSession(scope, name, provOpts?.onStatus));
       }
 
-      const forceEgress = !!opts.egressProxyUrl && !!provOpts?.egressToken;
-      const turnEnv = Object.fromEntries(
-        Object.entries(provOpts?.env ?? {}).filter(([k]) => !DROPPED_PROXY_ENV.has(k)),
-      );
-      const env = forceEgress ? forceThroughProxyEnv(opts.egressProxyUrl!, provOpts!.egressToken!, turnEnv) : turnEnv;
+      const env = Object.fromEntries(Object.entries(provOpts?.env ?? {}).filter(([k]) => !DROPPED_PROXY_ENV.has(k)));
       const handle: SandboxHandle = {
         id: name,
         rootDir: workspaceDir,
