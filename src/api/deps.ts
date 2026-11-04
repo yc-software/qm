@@ -25,6 +25,7 @@ import type { ReplayDedupe } from "../auth/replay-dedupe.ts";
 import type { FetchLike, OAuthClientResolver } from "../connectors/oauth.ts";
 import type { ConsentLinkStore } from "../connectors/consent-link.ts";
 import type { OAuthFlowStore } from "../connectors/oauth-flow-store.ts";
+import type { Tenancy } from "../tenants/tenancy.ts";
 import type { OrgBranding, ScopedConfigStore } from "../resolution/config-store.ts";
 import type { AclStore } from "../acl/acl-store.ts";
 import type { CredentialUsageSink } from "../admin/credential-usage-sink.ts";
@@ -93,6 +94,7 @@ export interface ServerDeps {
   production?: boolean;
   allowUnauthenticatedCore?: boolean;
   signingSecret?: string;
+  operatorSigningSecret?: string;
   capabilitySecret?: string;
   capabilityTokenCompression?: boolean;
   portalIdentitySecret?: string;
@@ -109,6 +111,11 @@ export interface ServerDeps {
   slackInstallationSocketAppId?: SlackSocketAppIdReader;
   slackEnvironmentState?: "absent" | "configured" | "partial";
   slackEventsPort?: number;
+  partnerChatEvents?: (
+    timestamp: string | undefined,
+    signature: string | undefined,
+    rawBody: string,
+  ) => Promise<{ status: number; body: Record<string, unknown> }>;
   slackEnvBotToken?: string;
   oauthStateSecret?: string;
   oauthFetch?: FetchLike;
@@ -116,6 +123,7 @@ export interface ServerDeps {
   resolveClient?: OAuthClientResolver;
   consentLinks?: ConsentLinkStore;
   oauthFlows?: OAuthFlowStore;
+  tenancy?: Tenancy;
   apiBaseUrl?: string;
   publicUrl?: string;
   portalUrl?: string;
@@ -183,7 +191,6 @@ export interface ServerDeps {
   deploymentLayer?: DeploymentLayerStore;
   backgroundOwnership?: BackgroundOwnershipControl;
   deploymentControlSecret?: string;
-  spendExportToken?: string;
   deployDialTimeoutMs?: number;
   deployAppsDomain?: string;
   deployGateSecret?: string;

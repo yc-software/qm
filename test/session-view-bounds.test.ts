@@ -50,7 +50,7 @@ test("a tailTurns view is bounded yet reports the same earlierItems as the full 
 async function toolHeavySession(sessions: SessionStore, turns = 1) {
   const scope = scopeId("personal", "U1");
   const session = await sessions.getOrCreateByThread("web:U1:tool-pins", "dm", scope, undefined, "web");
-  await sessions.addParticipant(session.id, "U1", undefined, { includeHistory: true });
+  await sessions.addParticipant(session.id, "U1");
   const writer = { sessionId: session.id };
   const emit = (item: NewItem) => sessions.append(writer, item);
   let narration: Item | undefined;
@@ -123,34 +123,6 @@ test("earlier pages bound entry reads, widen for dense turns, and match full-rea
       calls.map((opts) => opts?.limit),
       [40, 80, 160, 320],
     );
-  } finally {
-    await built.runtime.stop();
-  }
-});
-
-test("earlier pages respect viewer tenure boundaries", async () => {
-  const built = freshApp();
-  try {
-    const { session } = await toolHeavySession(built.sessions, 30);
-    await built.sessions.addParticipant(session.id, "late");
-    const writer = { sessionId: session.id };
-    for (let i = 0; i < 10; i++) {
-      await built.sessions.append(writer, { kind: "UserMessage", text: `late question ${i}` });
-      await built.sessions.append(writer, { kind: "AgentMessage", text: `late reply ${i}` });
-    }
-    for (const viewer of ["late", "U1", "stranger"]) {
-      const full = await built.app.getSessionForViewer(session.id, viewer);
-      for (const beforeSeq of [100, 155, 170]) {
-        const page = await built.app.getSessionForViewer(session.id, viewer, { beforeSeq, tailTurns: 2 });
-        if (!full) {
-          assert.equal(page, null);
-          continue;
-        }
-        const expected = windowedTranscript(full.items, { beforeSeq, tailTurns: 2 });
-        assert.deepEqual(page!.items, expected.items);
-        assert.equal(page!.earlierItems ?? 0, expected.earlier);
-      }
-    }
   } finally {
     await built.runtime.stop();
   }

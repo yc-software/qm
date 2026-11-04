@@ -139,7 +139,11 @@ test("personal web selections reject wrong providers, policy exclusions and disc
       async: true,
       model,
     });
-  for (const model of ["claude-sonnet-5", "unknown"]) assert.equal((await submit(model)).status, "refused");
+  for (const model of ["claude-sonnet-5", "unknown"])
+    assert.deepEqual(await submit(model), {
+      status: "refused",
+      reason: "Your connected AI account cannot serve this model.",
+    });
   await built.config.setWebuiModels("org:default-org", ["gpt-5.6-sol"]);
   assert.equal((await submit("gpt-5.6-terra")).status, "refused");
   await built.userModelCredentials.delete("U1", "openai");

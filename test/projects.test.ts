@@ -29,7 +29,7 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { runNowSettled } from "./support/settle.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { testMap, testDeployBackings, testDatabaseUrl } from "./support/test-database.ts";
+import { testMap, testDeployBackings } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { isAgentReply } from "../src/sessions/items.ts";
 
@@ -64,7 +64,7 @@ test("session lists check each project once per request and observe membership c
         "group",
         projectScopeId(project.id),
       );
-      await built.sessions.addParticipant(session.id, "member", undefined, { includeHistory: true });
+      await built.sessions.addParticipant(session.id, "member");
       await built.sessions.updateTitle(session.id, `History ${i}`);
     }
     const get = built.projects.get.bind(built.projects);
@@ -364,7 +364,9 @@ async function listen(server: Server): Promise<string> {
 
 test("Project routes use ordinary group sessions with the durable roster as authority", async (t) => {
   assert.ok(projectRoutes.every((route) => route.auth === "either"));
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "projects-lean-")) }));
+  const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "projects-lean-")) });
+  const built = buildApp(config);
+  await built.loadTenants();
   const server = createInsecureTestServer(built.app, {});
   const base = await listen(server);
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
@@ -415,7 +417,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
 
   assert.equal((await turn("owner", "web:owner:first", "secret-before-join")).status, "ok");
   assert.equal((await built.runs.list())[0]?.request.scopeVersion, await built.projects.version(groupRef));
-  const [first] = (await built.sessions.scanAll()).filter((session) => session.scopeId === scope);
+  const [first] = await built.sessions.listByScope(scope);
   assert.ok(first);
   assert.equal(first.channelName, "Launch Cohort");
   assert.ok(!(await built.sessions.listByParticipant("outsider")).some((session) => session.id === first.id));
@@ -494,7 +496,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
     approval: { requestId: pendingApproval.requestId, approved: true },
   });
   assert.equal(forgedApproval.status, "refused");
-  const deployAcl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
+  const deployAcl = createAclStore(createPostgresGrantStore(config.databaseUrl!));
   const deploy = createDeployService({
     ...singleProcessDeps(),
     deployStore: createDeployStore(testDeployBackings()),
@@ -623,7 +625,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   assert.match(JSON.stringify(continuedForkRequest.promptEnvelope), /after joining/);
 
   assert.equal((await turn("owner", "web:owner:second")).status, "ok");
-  const projectSessions = (await built.sessions.scanAll()).filter((session) => session.scopeId === scope);
+  const projectSessions = await built.sessions.listByScope(scope);
   assert.equal(projectSessions.length, 6);
   for (const session of projectSessions) {
     assert.ok((await built.sessions.listByParticipant("member")).some((candidate) => candidate.id === session.id));
@@ -657,7 +659,6 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   await built.identity.reactivate("member");
   assert.equal((await turn("owner", "web:owner:first", "after-reactivation")).status, "ok");
   const reactivatedRequest = (await built.sessions.listLlmRequests(first.id)).at(-1)!;
-  assert.doesNotMatch(JSON.stringify(reactivatedRequest.promptEnvelope), /inactive-gap-secret/);
   assert.match(JSON.stringify(reactivatedRequest.promptEnvelope), /after-reactivation/);
   await built.identity.deactivate("owner");
   assert.deepEqual(await built.app.listProjects("member"), []);
@@ -668,12 +669,12 @@ test("Project routes use ordinary group sessions with the durable roster as auth
 
   const addParticipant = built.sessions.addParticipant.bind(built.sessions);
   let failReconcile = true;
-  built.sessions.addParticipant = async (sessionId, principalId, title, opts) => {
+  built.sessions.addParticipant = async (sessionId, principalId, title) => {
     if (principalId === "outsider" && failReconcile) {
       failReconcile = false;
       throw new Error("injected participant failure");
     }
-    return addParticipant(sessionId, principalId, title, opts);
+    return addParticipant(sessionId, principalId, title);
   };
   await assert.rejects(built.app.addProjectMember(project.id, "owner", "outsider"), /injected participant failure/);
   assert.ok((await built.projects.get(project.id))?.memberIds.includes("outsider"));
@@ -683,8 +684,9 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   assert.equal(healed.status === "ok" && healed.changed, false);
   const outsiderSessions = await built.sessions.listByParticipant("outsider");
   assert.ok(projectSessions.every((session) => outsiderSessions.some((candidate) => candidate.id === session.id)));
-  const globalTitles = new Map((await built.sessions.scanAll()).map((session) => [session.id, session.title ?? null]));
-  assert.ok(outsiderSessions.every((session) => (session.title ?? null) === globalTitles.get(session.id)));
+  for (const session of outsiderSessions) {
+    assert.equal(session.title ?? null, (await built.sessions.get(session.id))?.title ?? null);
+  }
   assert.equal((await built.app.removeProjectMember(project.id, "owner", "outsider")).status, "ok");
 
   const removed = await fetch(`${base}/v1/projects/${project.id}/members/member`, {
@@ -701,19 +703,14 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   assert.equal(await built.app.getSessionForViewer(first.id, "member"), null);
   assert.equal((await turn("member", "web:owner:first")).status, "refused");
   assert.equal(await built.app.pendingApprovalForThread(removableApprovalThread), null);
-  const closed = (await built.sessions.listParticipants()).filter(
-    (window) => window.principalId === "member" && projectSessions.some((session) => session.id === window.sessionId),
-  );
-  assert.equal(closed.length, projectSessions.length);
-  assert.ok(closed.every((window) => window.validTo !== null));
-  const closedAt = Math.max(...closed.map((window) => window.validTo!));
+  const memberRows = async () =>
+    (await built.sessions.listParticipants()).filter(
+      (p) => p.principalId === "member" && projectSessions.some((session) => session.id === p.sessionId),
+    );
+  assert.equal((await memberRows()).length, 0);
 
   assert.equal((await built.app.addProjectMember(project.id, "owner", "member")).status, "ok");
-  const reopened = (await built.sessions.listParticipants()).filter(
-    (window) => window.principalId === "member" && projectSessions.some((session) => session.id === window.sessionId),
-  );
-  assert.ok(closedAt > 0);
-  assert.ok(reopened.every((window) => window.validTo === null && window.validFrom === 0));
+  assert.equal((await memberRows()).length, projectSessions.length);
   assert.equal((await turn("member", removableApprovalThread, "continue after rejoining")).status, "ok");
 
   const queued = await built.app.turn({
@@ -1174,6 +1171,7 @@ test("a project can add a signed-in principal on a deployment whose directory is
 
 test("Slack-linked project turns use the inherited channel roster", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "projects-linked-roster-")) }));
+  await built.loadTenants();
   await built.app.upsertDirectory([
     { principalId: "owner", displayName: "Owner", type: "internal" },
     { principalId: "chan-pal", displayName: "Channel Pal", type: "internal" },

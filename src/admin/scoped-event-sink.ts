@@ -1,6 +1,7 @@
 import type { ScopeId } from "../types.ts";
 import { createPgPool, type PgMigrationDefinition, type PgPool } from "../persistence/pg-pool.ts";
 import { reportFailureAs } from "../util/errors.ts";
+import { TENANCY, tenantTables } from "../tenants/migrations.ts";
 
 export interface ScopedEvent {
   scopeLabel: ScopeId;
@@ -151,12 +152,14 @@ export function createPostgresEventSink<E>(cfg: PostgresEventSinkConfig<E>): Pos
     }
   }
   const { q } = createPgPool(cfg.connectionString, [
+    ...TENANCY,
     {
       id: scopedEventMigrationId(cfg.table, 1),
       statements: [createTable, ...(cfg.extraSchemaStatements ?? standardIndexes(cfg.table))],
       ...(cfg.schema?.expectedChecksum !== undefined ? { expectedChecksum: cfg.schema.expectedChecksum } : {}),
     },
     ...followUps,
+    ...tenantTables(scopedEventMigrationId(cfg.table, 100), [{ table: cfg.table, primaryKey: "id" }]),
   ]);
 
   const dbCols = cfg.columns.map(([db]) => db).join(", ");
