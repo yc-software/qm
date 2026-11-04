@@ -1774,3 +1774,47 @@ test("own task-card status events never enter the mirror, but ordinary bot edits
     await f.stop();
   }
 });
+
+test("each tenant's Slack account starts under its own key and replays its staged envelopes in its tenant", async () => {
+  const { boundTenant, withTenant } = await import("../src/tenants/context.ts");
+  const [tenantA, tenantB] = ["00000000-0000-4000-8000-00000000000a", "00000000-0000-4000-8000-00000000000b"];
+  const replays: Array<{ account: string; tenant: string | undefined }> = [];
+  class TenantCore extends FakeCore {
+    readonly stagedEnvelopes = {} as NonNullable<SlackCoreClient["stagedEnvelopes"]>;
+    override holdEnvelopeReplay<T>(account: string): Promise<T | null> {
+      replays.push({ account, tenant: boundTenant() });
+      return Promise.resolve(null);
+    }
+  }
+  mock.timers.enable({ apis: ["setInterval"] });
+  try {
+    const plugins = await Promise.all(
+      [tenantA, tenantB].map((tenant) =>
+        withTenant(tenant, () =>
+          startSlackPlugin(
+            {
+              botToken: "xoxb-test",
+              appToken: "xapp-test",
+              identityEmail: "0",
+              tenantId: tenant,
+              installationId: tenant,
+            },
+            new TenantCore(),
+          ),
+        ),
+      ),
+    );
+    mock.timers.tick(60_000);
+    await waitFor(() => replays.length >= 2);
+    assert.deepEqual(
+      replays.sort((x, y) => x.account.localeCompare(y.account)),
+      [
+        { account: `default:${tenantA}`, tenant: tenantA },
+        { account: `default:${tenantB}`, tenant: tenantB },
+      ],
+    );
+    await Promise.all(plugins.map((plugin) => plugin.stop()));
+  } finally {
+    mock.timers.reset();
+  }
+});
