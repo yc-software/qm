@@ -146,8 +146,7 @@ test("fresh shares freeze messages and authorized attachments with separate audi
       actor: null,
       deps: { identity, sessionShares: store, sessionShareBytes: countedBytes, deliveries },
       app: {
-        canViewSessionSnapshot: async (_id: string, user: string, bounds: { minSeq: number }) =>
-          accessible && user === "alice" && visible.some((entry) => entry.seq === bounds.minSeq),
+        canViewSessionSnapshot: async (_id: string, user: string) => accessible && user === "alice",
         getSessionForViewer: async (_id: string, user: string) =>
           accessible && user === "alice"
             ? {
@@ -256,9 +255,6 @@ test("fresh shares freeze messages and authorized attachments with separate audi
   assert.match(download.headers.get("content-security-policy")!, /sandbox/);
   assert.equal(await download.text(), "<script>attachment contents</script>");
   assert.equal((await create()).status, 409);
-  visible = visible.slice(1);
-  assert.equal((await read(token)).status, 404);
-  visible = original;
   await identity.deactivate("bob");
   assert.equal((await read(token)).status, 403);
   accessible = false;

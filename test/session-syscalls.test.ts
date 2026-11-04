@@ -932,7 +932,7 @@ test("queued results recheck source-entry visibility after a participant leaves"
   const r = await rig();
   const other: Principal = { id: "U2", type: "internal" };
   const sharedScope = scopeId("group", "G1");
-  const shared = await r.sessions.getOrCreateByThread("group:G1:mail-tenure", "group", sharedScope);
+  const shared = await r.sessions.getOrCreateByThread("group:G1:mail-membership", "group", sharedScope);
   for (const id of [actor.id, other.id]) await r.sessions.addParticipant(shared.id, id);
   const sharedConversation: Conversation = { kind: "group", threadRef: shared.threadRef, audience: [actor, other] };
   const factory = createSessionSyscalls({ ...r, maxAttempts: 3 });

@@ -67,7 +67,17 @@ test("a fully migrated database skips the base schema and drops only the retired
       ON session_llm_requests(session_id, created_at) WHERE usage_json IS NOT NULL`);
     await admin.query("CREATE TABLE qm_tenant(id UUID PRIMARY KEY)");
     await admin.query("CREATE FUNCTION safe_json(t text) RETURNS json LANGUAGE sql AS 'SELECT t::json'");
+    await admin.query(`CREATE TABLE participants(session_id TEXT, principal_id TEXT, valid_from BIGINT NOT NULL,
+      valid_to BIGINT, valid_from_seq INT, valid_to_seq INT)`);
+    await admin.query(
+      `INSERT INTO participants VALUES ('s1', 'member', 5, NULL, 3, NULL), ('s1', 'removed', 5, 9, 3, 7)`,
+    );
     await migrate(url);
+    assert.deepEqual(
+      (await admin.query("SELECT principal_id FROM participants")).rows.map((row) => row.principal_id),
+      ["member"],
+    );
+    await admin.query("INSERT INTO participants(session_id, principal_id) VALUES ('s1', 'joined')");
     const columns = await admin.query(
       "SELECT column_name FROM information_schema.columns WHERE table_name = 'items' ORDER BY ordinal_position",
     );

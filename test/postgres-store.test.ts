@@ -2180,9 +2180,11 @@ test("pg search: message writes populate the index and tool results stay unfinda
 
   await s.addParticipant(sess.id, "ULATE2");
   await s.append(writer, { kind: "UserMessage", text: "deploy key postscript" });
-  const late = await s.searchEntries("ULATE2", "deploy key");
-  assert.equal(late.length, 1, "a latecomer only searches messages inside their window");
-  assert.equal(late[0]!.text, "deploy key postscript");
+  assert.equal(
+    (await s.searchEntries("ULATE2", "deploy key")).length,
+    4,
+    "a latecomer searches the whole conversation",
+  );
 
   await s.append(writer, { kind: "UserMessage", text: "nul\u0000riddled deploy key", body: { name: "e\u0000ve" } });
   const nulHits = await s.searchEntries("UIDX", "nulriddled");
@@ -2491,26 +2493,8 @@ test("pg session lists leave out spawn metadata and group scopes per participant
   await assertLeanListing(createPostgresSessionStore(URL!), "pg-lean");
 });
 
-test("pg participantScopes leaves out sessions whose content predates the participant", { skip }, async () => {
+test("pg participantScopes counts sessions whose content predates the participant", { skip }, async () => {
   await assertLateJoinerScopes(createPostgresSessionStore(URL!), "pg-late");
-});
-
-test("pg late joiners start after any stored sequence gap", { skip }, async () => {
-  const store = createPostgresSessionStore(URL!);
-  const scope = scopeId("channel", "gap-C1");
-  const session = await store.getOrCreateByThread("slack:gap-C1:1", "channel", scope, "eng");
-  await store.addParticipant(session.id, "gap-early");
-  const writer = { sessionId: session.id };
-  await store.append(writer, { kind: "UserMessage", text: "before" });
-  const pg = (await import("pg")).default;
-  const pool = new pg.Pool({ connectionString: URL });
-  await pool.query("UPDATE sessions SET messages = messages + 3 WHERE id = $1", [session.id]);
-  await pool.end();
-  await store.addParticipant(session.id, "gap-late");
-  assert.equal((await store.getForParticipant(session.id, "gap-late"))?.hasEntries, false);
-  assert.deepEqual(await store.participantScopes("gap-late"), [
-    { scopeId: scope, channelName: "eng", sessionCount: 0, lastActivityAt: null },
-  ]);
 });
 
 test("pg LLM capture retention drops old prompt envelopes and keeps request rows", { skip }, async () => {

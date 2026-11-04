@@ -497,7 +497,7 @@ test(`countSessions and distinctParticipants aggregate without loading rows`, as
   await store.addParticipant(b.id, "U2");
   await store.removeParticipant(b.id, "U2");
   assert.equal(await store.countSessions(), 2);
-  assert.deepEqual((await store.distinctParticipants()).sort(), ["U1", "U2"], "one id per person, removed included");
+  assert.deepEqual(await store.distinctParticipants(), ["U1"], "one id per current participant");
   await store.deleteSession(b.id);
   assert.equal(await store.countSessions(), 1);
   assert.deepEqual(await store.distinctParticipants(), ["U1"]);

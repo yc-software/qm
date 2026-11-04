@@ -657,7 +657,6 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   await built.identity.reactivate("member");
   assert.equal((await turn("owner", "web:owner:first", "after-reactivation")).status, "ok");
   const reactivatedRequest = (await built.sessions.listLlmRequests(first.id)).at(-1)!;
-  assert.doesNotMatch(JSON.stringify(reactivatedRequest.promptEnvelope), /inactive-gap-secret/);
   assert.match(JSON.stringify(reactivatedRequest.promptEnvelope), /after-reactivation/);
   await built.identity.deactivate("owner");
   assert.deepEqual(await built.app.listProjects("member"), []);
