@@ -48,11 +48,12 @@ interface World {
 let cronSeq = 0;
 
 function world(over: { tokens?: boolean; fire?: boolean } = {}): World {
+  const outputs = createLoopOutputStore(testMap());
   const w: World = {
     loops: {
       store: createLoopStore(testMap()),
-      items: createLoopItemLedger(testMap()),
-      outputs: createLoopOutputStore(testMap()),
+      items: createLoopItemLedger(testMap(), undefined, undefined, outputs),
+      outputs,
       grants: createShipGrantStore(testMap()),
       crons: createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) }),
       config: testConfigStore("org"),
@@ -460,6 +461,42 @@ test("dismiss, reopen and the actioned end-state", async () => {
     body: { kind: "send" },
   });
   assert.equal(again.status, 409);
+});
+
+test("dismiss closes the item's undecided outputs, reopen leaves them closed, and dismissing again clears leftovers", async () => {
+  const w = world();
+  const { loop, item } = await seed(w);
+  const capture = (attemptId: string) =>
+    w.loops.outputs.capture({
+      loopId: loop.id,
+      itemId: item.id,
+      attemptId,
+      shipAction: "open_pr",
+      title: "Fix it",
+      capturedBy: "ledger",
+      externalRef: attemptId,
+    });
+  const states = async () =>
+    Object.fromEntries((await w.loops.outputs.byItem(item.id)).map((output) => [output.id, output.state]));
+  const path = `/v1/loops/${loop.id}/items/${item.id}/action`;
+
+  const ready = await capture("run-1");
+  await w.loops.outputs.promoteAttempt(item.id, "run-1");
+  const staged = await capture("run-2");
+  assert.equal((await call(w, { method: "POST", path, body: { kind: "dismiss" } })).status, 200);
+  assert.deepEqual(await states(), { [ready.id]: "superseded", [staged.id]: "superseded" });
+  assert.deepEqual(await w.loops.outputs.awaitingReview(loop.id), []);
+
+  await call(w, { method: "POST", path, body: { kind: "reopen" } });
+  assert.deepEqual(await states(), { [ready.id]: "superseded", [staged.id]: "superseded" });
+
+  await call(w, { method: "POST", path, body: { kind: "dismiss" } });
+  const leftover = await capture("run-3");
+  await w.loops.outputs.promoteAttempt(item.id, "run-3");
+  assert.equal((await w.loops.outputs.awaitingReview(loop.id)).length, 1);
+  assert.equal((await call(w, { method: "POST", path, body: { kind: "dismiss" } })).status, 200);
+  assert.equal((await w.loops.outputs.get(leftover.id))?.state, "superseded");
+  assert.deepEqual(await w.loops.outputs.awaitingReview(loop.id), []);
 });
 
 test("react adds the emoji, records it on the item, and leaves the item held", async () => {

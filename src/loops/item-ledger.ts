@@ -11,6 +11,7 @@ import type {
 } from "./types.ts";
 import { isResolved } from "./ledger-view.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
+import type { LoopOutputStore } from "./output-store.ts";
 import { contentPart } from "../triggers/trigger-store.ts";
 import { hashId } from "../util/crypto.ts";
 import { randomUUID } from "node:crypto";
@@ -215,6 +216,7 @@ export function createLoopItemLedger(
     lock: import("../persistence/advisory-lock.ts").AdvisoryLock;
     accepts: (loopId: string) => Promise<boolean>;
   },
+  outputs?: Pick<LoopOutputStore, "supersedeUndecided">,
 ): LoopItemLedger {
   const update = backing.update.bind(backing);
   const emit = (item: LoopItem | null | undefined, op: LedgerEventOp): void => {
@@ -447,8 +449,10 @@ export function createLoopItemLedger(
           ...(input.result !== undefined ? { actionResult: input.result } : {}),
         };
       });
-      if (applied) emit(after, "action");
-      return applied ? after : null;
+      if (!applied) return null;
+      await outputs?.supersedeUndecided(id);
+      emit(after, "action");
+      return after;
     },
     async reopen(id, opts) {
       let applied = false;

@@ -22,10 +22,11 @@ const base = {
 };
 
 function stores(): LoopStores {
+  const outputs = createLoopOutputStore(testMap());
   return {
     loops: createLoopStore(testMap()),
-    items: createLoopItemLedger(testMap()),
-    outputs: createLoopOutputStore(testMap()),
+    items: createLoopItemLedger(testMap(), undefined, undefined, outputs),
+    outputs,
   };
 }
 
@@ -64,6 +65,29 @@ test("a fire enqueues new work and holds the finished output for a person", asyn
   assert.deepEqual(summary.shipped, []);
   assert.equal((await s.outputs.awaitingReview(loop.id)).length, 1);
   assert.equal(fireNeedsAttention(summary), true);
+});
+
+test("dismissing an item closes its outputs awaiting review, so they stop holding the loop's intake", async () => {
+  const s = stores();
+  const loop = await loopIn(s, { caps: { maxOpenOutputs: 1 } });
+  await runLoopFire(loop, s, effects(s));
+  const [held] = await s.items.byLoop(loop.id);
+  await s.items.recordAction(held!.id, { kind: "dismiss", outcome: "dismissed" });
+  assert.deepEqual(
+    (await s.outputs.byItem(held!.id)).map((output) => output.state),
+    ["superseded"],
+  );
+
+  const next = await runLoopFire(
+    loop,
+    s,
+    effects(s, {
+      enumerate: async () => [{ sourceKey: "SENTRY-2", sourceSummary: "RangeError" }],
+      work: async () => ({ runId: "run-2" }),
+    }),
+  );
+  assert.equal(next.enqueued, 1);
+  assert.equal(next.worked, 1);
 });
 
 test("firing twice over the same source never works the item twice", async () => {

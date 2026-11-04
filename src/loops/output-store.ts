@@ -38,6 +38,7 @@ export interface LoopOutputStore {
   classify(id: string, input: ClassifyOutputInput): Promise<LoopOutput | null>;
   promoteAttempt(itemId: string, attemptId: string): Promise<LoopOutput[]>;
   supersedeAttempt(itemId: string, attemptId: string): Promise<LoopOutput[]>;
+  supersedeUndecided(itemId: string): Promise<LoopOutput[]>;
   supersedeActiveSiblings(itemId: string, exceptOutputId: string): Promise<LoopOutput[]>;
   claimShipping(id: string, claimedAt?: number): Promise<LoopOutput | null>;
   beginShipAttempt(id: string, claimToken: string, shipFireKey: string): Promise<LoopOutput | null>;
@@ -92,6 +93,8 @@ export function createLoopOutputStore(
   const forLoop = async (loopId: string): Promise<LoopOutput[]> =>
     (await backing.all()).filter((output) => output.loopId === loopId);
 
+  const byItem = async (itemId: string): Promise<LoopOutput[]> =>
+    (await backing.all()).filter((output) => output.itemId === itemId);
   const byAttempt = async (itemId: string, attemptId: string): Promise<LoopOutput[]> =>
     (await backing.all()).filter((output) => output.itemId === itemId && output.attemptId === attemptId);
   const atomicUpdate = backing.update.bind(backing);
@@ -112,6 +115,19 @@ export function createLoopOutputStore(
       return change(output, Date.now());
     });
     return applied ? after : null;
+  };
+
+  const supersedeUndecided = async (outputs: LoopOutput[]): Promise<LoopOutput[]> => {
+    const superseded: LoopOutput[] = [];
+    for (const output of outputs) {
+      const after = await applyIf(
+        output.id,
+        (current) => current.state === "staged" || current.state === "ready",
+        (current, now) => ({ ...current, state: "superseded", updatedAt: now }),
+      );
+      if (after) superseded.push(after);
+    }
+    return superseded;
   };
 
   return {
@@ -161,9 +177,7 @@ export function createLoopOutputStore(
     },
     get: (id) => backing.get(id),
     byLoop: forLoop,
-    async byItem(itemId) {
-      return (await backing.all()).filter((output) => output.itemId === itemId);
-    },
+    byItem,
     async awaitingReview(loopId) {
       return (await forLoop(loopId))
         .filter((output) => output.state === "ready")
@@ -184,18 +198,8 @@ export function createLoopOutputStore(
       }
       return promoted;
     },
-    async supersedeAttempt(itemId, attemptId) {
-      const superseded: LoopOutput[] = [];
-      for (const output of await byAttempt(itemId, attemptId)) {
-        const after = await applyIf(
-          output.id,
-          (current) => current.state === "staged" || current.state === "ready",
-          (current, now) => ({ ...current, state: "superseded", updatedAt: now }),
-        );
-        if (after) superseded.push(after);
-      }
-      return superseded;
-    },
+    supersedeAttempt: async (itemId, attemptId) => supersedeUndecided(await byAttempt(itemId, attemptId)),
+    supersedeUndecided: async (itemId) => supersedeUndecided(await byItem(itemId)),
     async supersedeActiveSiblings(itemId, exceptOutputId) {
       const superseded: LoopOutput[] = [];
       for (const output of (await backing.all()).filter(
