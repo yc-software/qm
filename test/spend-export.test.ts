@@ -1,24 +1,13 @@
 import "./support/auto-fake-sprites.ts";
 
 import assert from "node:assert/strict";
-import pg from "pg";
 import type { AddressInfo } from "node:net";
 import test from "node:test";
-import { createInsecureTestServer, createServer } from "../src/api/server.ts";
-import {
-  CONTROL_PLANE_AUD,
-  mintCapabilityToken,
-  SPEND_EXPORT_AUD,
-  verifyCapabilityToken,
-} from "../src/auth/capability-token.ts";
+import { createServer } from "../src/api/server.ts";
+import { mintCapabilityToken, SPEND_EXPORT_AUD } from "../src/auth/capability-token.ts";
 import { withTenant } from "../src/tenants/context.ts";
-import { TENANT_HEADER } from "../plugins/chassis/src/source-auth-sign.ts";
-import { signRequest } from "../src/auth/source-auth.ts";
-import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
-import { scopeId } from "../src/types.ts";
 import { buildApp } from "./support/build-app.ts";
-import { bill } from "./support/spend-usage.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
@@ -77,4 +66,3 @@ test("spend export: an unavailable spend store is an error, not an empty export"
     await s.close();
   }
 });
-
