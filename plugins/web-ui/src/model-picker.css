@@ -655,30 +655,30 @@
   cursor: not-allowed;
 }
 @media (max-width: 860px) {
-  .menu-control .menu-popover.loadout-popover {
+  :where(html:not(.desktop-embed)) .menu-control .menu-popover.loadout-popover {
     padding: 18px 10px calc(10px + env(safe-area-inset-bottom));
     border-radius: 20px 20px 0 0;
     border-bottom: 0;
   }
-  .loadout-control .loadout-button {
+  :where(html:not(.desktop-embed)) .loadout-control .loadout-button {
     max-width: min(360px, calc(100vw - 150px));
   }
-  .loadout-panel {
+  :where(html:not(.desktop-embed)) .loadout-panel {
     overflow-y: auto;
     overscroll-behavior: contain;
   }
-  .loadout-list {
+  :where(html:not(.desktop-embed)) .loadout-list {
     flex: none;
     max-height: none;
     overflow: visible;
   }
-  .loadout-row,
-  .loadout-pick,
-  .loadout-add,
-  .loadout-setting,
-  .loadout-effort,
-  .loadout-back,
-  .loadout-submenu .menu-option {
+  :where(html:not(.desktop-embed)) .loadout-row,
+  :where(html:not(.desktop-embed)) .loadout-pick,
+  :where(html:not(.desktop-embed)) .loadout-add,
+  :where(html:not(.desktop-embed)) .loadout-setting,
+  :where(html:not(.desktop-embed)) .loadout-effort,
+  :where(html:not(.desktop-embed)) .loadout-back,
+  :where(html:not(.desktop-embed)) .loadout-submenu .menu-option {
     min-height: 44px;
   }
 }

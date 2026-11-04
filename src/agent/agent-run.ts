@@ -1,3 +1,4 @@
+import { tenantEnv } from "../tenants/settings.ts";
 import {
   applyFastSpeed,
   buildModelRuntime,
@@ -38,7 +39,6 @@ import {
 } from "@earendil-works/pi-ai";
 import { baseModelProviders, configuredModel, CONFIG_DEFAULTS, type Config } from "../config.ts";
 
-type LegacyThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 const TURN_EFFORT_LEVELS = new Set<string>([
   "off",
   "minimal",
@@ -318,7 +318,7 @@ export function renderDetectPrompt(detect: DetectInput): string {
   return parts.join("\n\n");
 }
 
-export const TITLE_GENERATION_PROMPT = [
+const TITLE_GENERATION_PROMPT = [
   "You write a short title for a chat conversation — the label shown in the sidebar.",
   "Given the transcript, output ONLY the title: 2–6 words, sentence case.",
   'Phrase it as the action taken, imperative mood: "Turn qm-launch-post orange", "Fix hover gap',
@@ -391,7 +391,6 @@ interface TurnSession {
   agentSession: AgentSession;
   ref: ToolContextRef & { effortLevel?: string };
   composedPromptTokens: number;
-  cwd: string;
   agentDir: string;
   ephemeralCwd?: string;
 }
@@ -419,25 +418,6 @@ interface IsolatedResources {
   cwd: string;
   agentDir: string;
   ephemeralCwd?: string;
-}
-
-type PiPayloadHook = (payload: unknown, model: unknown) => unknown | Promise<unknown>;
-type PiResponseHook = (
-  response: { status: number; headers: Record<string, string> },
-  model: unknown,
-) => void | Promise<void>;
-type PiTransformContextHook = (messages: unknown, signal?: unknown) => unknown | Promise<unknown>;
-type PiPrepareNextTurnHook = (signal?: unknown) => unknown | Promise<unknown>;
-interface PiAgentWithPayloadHook {
-  onPayload?: PiPayloadHook;
-  onResponse?: PiResponseHook;
-  transformContext?: PiTransformContextHook;
-  prepareNextTurn?: PiPrepareNextTurnHook;
-  afterToolCall?: (
-    info: unknown,
-    signal?: unknown,
-  ) => Promise<{ terminate?: boolean } | undefined> | { terminate?: boolean } | undefined;
-  subscribe?(listener: (event: unknown) => Promise<void> | void): () => void;
 }
 
 export function continuableContext<M extends { role?: unknown }>(messages: readonly M[]): M[] | null {
@@ -745,7 +725,7 @@ export async function oneShot(
     signal?: AbortSignal;
     modelGateway?: ModelGatewayTransportConfig;
     purpose?: ModelRequestPurpose;
-    thinkingLevel?: LegacyThinkingLevel;
+    thinkingLevel?: ModelThinkingLevel;
     recordLlmRequest?: (rec: TurnLlmRequestRecord) => void | Promise<void>;
   },
 ): Promise<string | undefined> {
@@ -861,6 +841,12 @@ export function applyReasoningMode<T>(payload: T, model: Model<Api>, level?: str
   return payload;
 }
 
+function tenantProviderKeys(keys: ProviderKeys): ProviderKeys {
+  const anthropic = tenantEnv("ANTHROPIC_API_KEY") ?? keys.anthropic;
+  const openrouter = tenantEnv("OPENROUTER_API_KEY") ?? keys.openrouter;
+  return { ...keys, ...(anthropic ? { anthropic } : {}), ...(openrouter ? { openrouter } : {}) };
+}
+
 export function createAgent(opts?: AgentOptions): Agent {
   const baseModelId = (): string =>
     resolveConfiguredModelId(opts?.resolveBaseModelId?.() ?? opts?.modelId, opts?.defaultModelId);
@@ -873,7 +859,7 @@ export function createAgent(opts?: AgentOptions): Agent {
         ...(opts?.openrouterApiKey ? { openrouter: opts.openrouterApiKey } : {}),
       };
   const resolveProviderKeys = async (): Promise<ProviderKeys> => ({
-    ...configuredProviderKeys,
+    ...tenantProviderKeys(configuredProviderKeys),
     ...(await opts?.resolveProviderKeys?.()),
   });
   const modelGateway = opts?.modelGateway;
@@ -986,9 +972,8 @@ export function createAgent(opts?: AgentOptions): Agent {
     }
 
     {
-      const agent = (session as unknown as { agent?: PiAgentWithPayloadHook }).agent;
+      const agent = session.agent;
       if (agent) {
-        const prior = agent.onPayload;
         agent.onPayload = async (payload, model) => {
           ref.modelCalls = (ref.modelCalls ?? 0) + 1;
           ref.onModelRequest?.();
@@ -998,10 +983,9 @@ export function createAgent(opts?: AgentOptions): Agent {
           ref.firstTokenPhase = startPhase("model.first_token");
           applyFastSpeed(payload, ref.fast, (model as { api?: string } | undefined)?.api);
           applyReasoningMode(payload, model as Model<Api>, ref.effortLevel);
-          const result = prior ? await prior(payload, model) : payload;
-          const capturedPayload = ref.llmCapture ? sanitizeLlmPayload(result ?? payload, model) : undefined;
+          const capturedPayload = ref.llmCapture ? sanitizeLlmPayload(payload, model) : undefined;
           let finalPayload = await withDocumentInputs(
-            result ?? payload,
+            payload,
             model as DocumentModel,
             ref.documents ?? [],
             ref.abortSignal,
@@ -1019,16 +1003,10 @@ export function createAgent(opts?: AgentOptions): Agent {
           } catch (e) {
             swallow("pi: request byte budget", e);
           }
-          if (capturedPayload) {
-            try {
-              ref.llmCapture?.push(capturedPayload);
-            } catch (e) {
-              swallow("pi: llm request capture", e);
-            }
-          }
+          if (capturedPayload) ref.llmCapture?.push(capturedPayload);
           return finalPayload;
         };
-        agent.afterToolCall = pauseStampAfterToolCall(ref, agent.afterToolCall);
+        agent.afterToolCall = pauseStampAfterToolCall(ref);
       }
     }
 
@@ -1036,7 +1014,6 @@ export function createAgent(opts?: AgentOptions): Agent {
       agentSession: session,
       ref,
       composedPromptTokens: countTokens(systemPrompt),
-      cwd,
       agentDir,
       ...(ephemeralCwd ? { ephemeralCwd } : {}),
     };
@@ -1198,9 +1175,7 @@ export function createAgent(opts?: AgentOptions): Agent {
           await thinkTail;
           if (persistError) throw persistError;
         };
-        const unsubscribeMessageEnd = (
-          entry.agentSession as unknown as { agent?: PiAgentWithPayloadHook }
-        ).agent?.subscribe?.((event) => {
+        const unsubscribeMessageEnd = entry.agentSession.agent.subscribe((event) => {
           const e = event as { type?: string; message?: unknown };
           if (e.type === "agent_start" && toolAbort.signal.aborted) entry.agentSession.agent.abort();
           if (e.type === "message_end") noteDocumentRejection(e.message);

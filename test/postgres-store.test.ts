@@ -11,6 +11,7 @@ import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { assertLateJoinerScopes, assertLeanListing } from "./support/participant-scopes.ts";
 import { assertParticipantSessionParity } from "./support/participant-session-parity.ts";
 import { assertSpendRollupParity } from "./support/spend-rollup-parity.ts";
+import { seedInstallTenant } from "./support/tenant-seed.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres store tests";
@@ -276,6 +277,7 @@ test(
     await admin.query(`CREATE SCHEMA ${schema}`);
     const url = new globalThis.URL(URL!);
     url.searchParams.set("options", `-c search_path=${schema}`);
+    await seedInstallTenant(url.toString());
     const day = 86_400_000;
     const base = Date.UTC(2025, 5, 1);
     let clock = base + 3 * day;
@@ -595,7 +597,7 @@ test("pg session store: one-per-thread, monotonic log, membership visibility", {
   );
   assert.equal((await s.listByParticipant("U1")).find((x) => x.id === a.id)?.hasEntries, true);
   assert.equal(
-    (await s.scanAll()).some((x) => x.id === a.id),
+    (await s.listByScope(a.scopeId)).some((x) => x.id === a.id),
     true,
   );
 
@@ -1133,7 +1135,7 @@ test("pg scopeSessionSummaries: the listing plan is an index walk with no per-ro
 
 test("pg sessions table indexes scoped activity pages", { skip }, async () => {
   const s = createPostgresSessionStore(URL!);
-  await s.scanAll();
+  await s.countSessions();
   const pg = (await import("pg")).default;
   const raw = new pg.Pool({ connectionString: URL });
   try {
@@ -1254,7 +1256,7 @@ test("pg scopeHasSessions + listByScope answer scope questions without a table s
 
 test("no plpgsql exception handler is marked parallel-safe anywhere in the schema", { skip }, async () => {
   const seed = createPostgresSessionStore(URL!);
-  await seed.scanAll();
+  await seed.countSessions();
   const pg = (await import("pg")).default;
   const raw = new pg.Pool({ connectionString: URL });
   try {
@@ -1983,7 +1985,7 @@ test(
     await s.getOrCreateByThread("btr-c", "dm", uma);
     await s.updateTitle(a.id, "board deck");
 
-    const all = await s.scanAll();
+    const all = (await Promise.all((await s.distinctScopes()).map((d) => s.listByScope(d.scopeId)))).flat();
     const byRefExpected = new Map(all.map((x) => [x.threadRef, x]));
     const refs = await s.sessionsByThreadRefs(["btr-a", "btr-c", "btr-missing"]);
     assert.deepEqual(refs.map((r) => r.threadRef).sort(), ["btr-a", "btr-c"], "only existing refs returned");
@@ -1996,11 +1998,15 @@ test(
 
     const distinct = new Map((await s.distinctScopes()).map((d) => [d.scopeId, d.channelName]));
     const scopesFromAll = new Set(all.map((x) => x.scopeId));
-    assert.deepEqual([...distinct.keys()].sort(), [...scopesFromAll].sort(), "same distinct scope set as scanAll");
+    assert.deepEqual(
+      [...distinct.keys()].sort(),
+      [...scopesFromAll].sort(),
+      "same distinct scope set as the per-scope listings",
+    );
     assert.equal(distinct.get(eng), "eng", "a non-null channel name wins for the scope");
     assert.equal(distinct.get(uma), undefined, "no channel name for a personal scope");
 
-    assert.equal(await s.countSessions(), all.length, "same total as scanAll");
+    assert.equal(await s.countSessions(), all.length, "same total as the per-scope listings");
     await s.addParticipant(a.id, "UMA");
     await s.addParticipant(a.id, "UBOB");
     await s.removeParticipant(a.id, "UBOB");

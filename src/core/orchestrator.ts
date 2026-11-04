@@ -60,6 +60,7 @@ import { scopeId as toScopeId, personalScope } from "../types.ts";
 import { desktopClientForTurn, isSessionTurn } from "./turn-origin.ts";
 import { resolveTurnFastMode, turnRuntimePurpose } from "./turn-options.ts";
 import { orgId } from "../config.ts";
+import { cacheTenant } from "../tenants/context.ts";
 import { deriveTurnOutcome, approvalBlocksInput } from "./turn-outcome.ts";
 import { applyPromptVars, loadProtocolFile, type PromptVars } from "../resolution/prompt-vars.ts";
 import { cleanBrandingLabel, resolveBranding } from "../resolution/branding.ts";
@@ -90,7 +91,6 @@ import {
   type PublicServiceCredential,
   type KeychainManifestInput,
 } from "../credentials/keychain.ts";
-import { finishProcessCredentials } from "../credentials/execute-files.ts";
 import { configuredConnectorProviders } from "../credentials/connector-status.ts";
 import { CONNECTOR_HOSTS } from "../connectors/oauth.ts";
 import { SANDBOX_MODEL_PREFIX } from "../api/contract.ts";
@@ -301,11 +301,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     ttl: DIRECTORY_INDEX_TTL_MS,
   });
   async function directoryIndexFor(directory: DirectoryStore): Promise<Map<string, DirectoryMember>> {
-    const cached = directoryIndexCache.get("org");
+    const cached = directoryIndexCache.get(cacheTenant());
     if (cached) return cached;
     const byId = new Map<string, DirectoryMember>();
     for (const m of await directory.list()) byId.set(personKey(m.principalId), m);
-    directoryIndexCache.set("org", byId);
+    directoryIndexCache.set(cacheTenant(), byId);
     return byId;
   }
 
@@ -1827,6 +1827,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         provisionResource,
         useSkill,
         reclaimBox,
+        finishProcess,
         invalidateProvision,
       } = createTurnSandboxes({
         deps: { ...deps, sandboxResources: turnSandboxResources, isCurrentSharedScopeMember },
@@ -2031,7 +2032,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                     body: { securityReleaseRequestId: input.approval!.requestId },
                   }),
                 );
-              await deps.agent.resetSession?.(session.id);
             }
             const decisionEntry = await withManagedRosterVersion(() =>
               deps.sessions.append(writer, {
@@ -2278,16 +2278,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 sandbox: deps.sandbox,
                 registry: deps.processes,
                 provisionSandbox: provisionJobSandbox,
-                onExit: (handle, processId) =>
-                  finishProcessCredentials(
-                    {
-                      sandbox: deps.sandbox,
-                      processes: deps.processes!,
-                      ...(deps.keychain ? { keychain: deps.keychain } : {}),
-                    },
-                    handle,
-                    processId,
-                  ),
+                onExit: finishProcess,
                 scopeId: memoryScopeId,
                 sessionRef: conversation.threadRef,
                 ...(deps.backgroundJobTtlMs !== undefined ? { ttlMs: deps.backgroundJobTtlMs } : {}),
@@ -2314,11 +2305,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           : undefined;
 
         const monitorBroker =
-          deps.monitors && deps.processes && supportsProcessSessions(deps.sandbox)
+          deps.monitors && deps.processes && readOutputTail
             ? createMonitorBroker({
                 store: deps.monitors,
                 registry: deps.processes,
-                readOutputTail: readOutputTail ?? (async () => ({ outputTail: "" })),
+                readOutputTail,
                 scopeId: memoryScopeId,
                 owner: actor.id,
                 ownerScopeId: scopeId,
@@ -2487,18 +2478,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             `[orchestrator] trigger delivery has no surface tools (missing deliveries store?) — reply would be lost session=${session.id}`,
           );
 
-        const canInstallCanvas = deps.installSharedCanvas && liveTurn && actorFeatures.has("ui_canvas");
         const baseTools = createToolContext({
           desktopClientId: desktopClientForTurn(input),
-          ...(canInstallCanvas
-            ? {
-                installSharedCanvas: (fileId: string) =>
-                  deps.installSharedCanvas!(actor.id, fileId, {
-                    threadRef: conversation.threadRef,
-                    sessionId: session.id,
-                  }),
-              }
-            : {}),
           sandbox: deps.sandbox,
           sandboxResources: turnSandboxResources,
           invalidateProvision,
@@ -2575,6 +2556,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   orgScopeId: resolution.orgScopeId,
                   liveTurn,
                   request: { ...input, readOnly: strictReadOnly, cancel: turnAbort.signal },
+                  switchedRuntime: () => switchedRuntime,
                 }),
               }
             : {}),
@@ -3052,10 +3034,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           }
         };
         let agentSwitch: "task" | "scope" | undefined;
+        let switchedRuntime: RuntimeChoice | undefined;
         const adoptRuntime = async (choice: RuntimeChoice, lifetime: "task" | "scope") => {
           const error = await checkRuntimeAuth(choice);
           if (error) throw new NonRetryableTurnError(error);
           agentSwitch = lifetime;
+          switchedRuntime = choice;
           ({ userProviderKeys, userModelOverride, personalAuth, authLabel } = await loadRuntimeAuth(choice));
           requestedRuntime = userModelOverride ? { ...choice, modelId: userModelOverride } : choice;
         };
@@ -3587,7 +3571,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             const recovery = "context" in segment.runtimeHandoff;
             if ("choice" in segment.runtimeHandoff) {
               await adoptRuntime(segment.runtimeHandoff.choice, segment.runtimeHandoff.lifetime);
-              await deps.agent.resetSession?.(session.id);
             }
             let resumedHistory = filterHistory(forModelContext((await historyWindow()).items));
             if (recovery)

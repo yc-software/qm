@@ -1,3 +1,5 @@
+import { coreHostTenants, inHostTenant, type HostTenant } from "../../chassis/src/host-tenant.ts";
+import { coreTenantSignIn } from "../../chassis/src/tenant-sign-in.ts";
 import {
   DESKTOP_LAUNCH_SCRIPT,
   DESKTOP_LAUNCH_SCRIPT_HASH,
@@ -15,7 +17,7 @@ import { pathToFileURL } from "node:url";
 import { ADMIN_LOGIN_SCRIPT, ADMIN_LOGIN_SCRIPT_HASH, openAdminLogin } from "./admin-login.ts";
 import { LRUCache } from "lru-cache";
 import { createCanonicalResolver } from "./canonical.ts";
-import { createTrustedEntry, trustedEntryConfig } from "./trusted-entry.ts";
+import { createTrustedEntry, tenantTrustedConfig, trustedEntryConfig } from "./trusted-entry.ts";
 import { answerPreflight, parseAllowedOrigins, prepareCors } from "./cors.ts";
 import {
   deriveKey,
@@ -31,6 +33,7 @@ import {
   safeEqual,
   sanitizeReturnTo,
   type SessionClaims,
+  servesTenant,
   type ImpersonationClaims,
   type TmpClaims,
 } from "./session.ts";
@@ -44,6 +47,8 @@ import {
   type OidcConfig,
   type PrincipalRule,
   hostedDomainHint,
+  tenantOidc,
+  tenantPrincipalRule,
 } from "./oidc.ts";
 import {
   proxyToSurface,
@@ -61,6 +66,7 @@ import { coreClaimStore, claimOnce, withinRateLimit, ClaimStoreUnavailableError 
 import { coreEmailAdmission } from "../../chassis/src/external-members.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { errMessage } from "../../chassis/src/errors.ts";
+import { boundTenant } from "../../chassis/src/tenant.ts";
 import {
   json,
   escapeHtml,
@@ -115,20 +121,32 @@ function playgroundIntEnv(name: string, fallback: number): number {
 const PLAYGROUND_MINTS_PER_IP = playgroundIntEnv("PORTAL_PLAYGROUND_MINTS_PER_IP", 30);
 const PLAYGROUND_MINT_WINDOW_S = playgroundIntEnv("PORTAL_PLAYGROUND_MINT_WINDOW_S", 3600);
 const NEUTRAL_ACCENT = "#4f46e5";
-let brandAccent = NEUTRAL_ACCENT;
-let modelProviderConfigured: boolean | undefined;
-let surfaceConfigNextAt = 0;
-let surfaceConfigInflight: Promise<void> | null = null;
+interface SurfaceConfig {
+  brandAccent: string;
+  modelProviderConfigured?: boolean;
+  nextAt: number;
+  inflight: Promise<void> | null;
+}
+const surfaceConfigs = new Map<string, SurfaceConfig>();
+function surfaceConfig(): SurfaceConfig {
+  const key = boundTenant() ?? "";
+  const existing = surfaceConfigs.get(key);
+  if (existing) return existing;
+  const fresh: SurfaceConfig = { brandAccent: NEUTRAL_ACCENT, nextAt: 0, inflight: null };
+  surfaceConfigs.set(key, fresh);
+  return fresh;
+}
 function refreshSurfaceConfig(): Promise<void> {
-  if (Date.now() >= surfaceConfigNextAt) {
-    surfaceConfigNextAt = Date.now() + 5_000;
-    surfaceConfigInflight = fetchSurfaceConfig().finally(() => {
-      surfaceConfigInflight = null;
+  const config = surfaceConfig();
+  if (Date.now() >= config.nextAt) {
+    config.nextAt = Date.now() + 5_000;
+    config.inflight = fetchSurfaceConfig(config).finally(() => {
+      config.inflight = null;
     });
   }
-  return surfaceConfigInflight ?? Promise.resolve();
+  return config.inflight ?? Promise.resolve();
 }
-async function fetchSurfaceConfig(): Promise<void> {
+async function fetchSurfaceConfig(config: SurfaceConfig): Promise<void> {
   try {
     const path = withSourceAuthNonce("/v1/surface-config", CORE_SIGNING_SECRET);
     const r = await fetch(`${CORE}${path}`, {
@@ -137,10 +155,10 @@ async function fetchSurfaceConfig(): Promise<void> {
     });
     if (r.ok) {
       const body = (await r.json()) as { branding?: { accent?: unknown }; modelProviderConfigured?: unknown };
-      brandAccent = typeof body.branding?.accent === "string" ? body.branding.accent : NEUTRAL_ACCENT;
-      modelProviderConfigured =
+      config.brandAccent = typeof body.branding?.accent === "string" ? body.branding.accent : NEUTRAL_ACCENT;
+      config.modelProviderConfigured =
         typeof body.modelProviderConfigured === "boolean" ? body.modelProviderConfigured : undefined;
-      surfaceConfigNextAt = Date.now() + (modelProviderConfigured === false ? 5_000 : 30_000);
+      config.nextAt = Date.now() + (config.modelProviderConfigured === false ? 5_000 : 30_000);
     }
   } catch {
     void 0;
@@ -232,11 +250,7 @@ if (
     PORTAL_IDENTITY_SECRET === CORE_SIGNING_SECRET)
 )
   throw new Error("Trusted administrator provisioning requires trusted OIDC and a distinct portal identity secret");
-const trustedEntry = trustedOidc
-  ? createTrustedEntry(trustedOidc, SESSION_SECRET ?? DEV_SECRET, (key, expiresAt) =>
-      claimOnce(coreClaimStore(CORE, CORE_SIGNING_SECRET, "portal"), key, expiresAt),
-    )
-  : null;
+const trustedEntries = new LRUCache<string, ReturnType<typeof createTrustedEntry>>({ max: 256 });
 const IMPERSONATE_TTL_S = Number(process.env.PORTAL_IMPERSONATE_TTL_S ?? 3600);
 
 const TMP_TTL_S = 600;
@@ -292,8 +306,13 @@ async function adminProbeAttempt(sub: string): Promise<boolean | null> {
   }
 }
 
+function adminKey(sub: string): string {
+  return `${boundTenant() ?? ""}\0${sub}`;
+}
+
 async function isAdmin(sub: string): Promise<boolean> {
-  const hit = adminCache.get(sub);
+  const key = adminKey(sub);
+  const hit = adminCache.get(key);
   if (hit !== undefined) return hit;
   for (let attempt = 0; attempt < ADMIN_PROBE_ATTEMPTS; attempt++) {
     const isAdmin = await adminProbeAttempt(sub);
@@ -302,7 +321,7 @@ async function isAdmin(sub: string): Promise<boolean> {
         await new Promise((resolve) => setTimeout(resolve, ADMIN_PROBE_RETRY_DELAY_MS));
       continue;
     }
-    adminCache.set(sub, isAdmin);
+    adminCache.set(key, isAdmin);
     return isAdmin;
   }
   return false;
@@ -435,14 +454,43 @@ function localDevSession(req: IncomingMessage, nowMs = Date.now(), ignoreLogout 
   if (!isLoopbackAddress(req.socket.remoteAddress)) return null;
   if (!ignoreLogout && readCookie(req.headers.cookie, LOCAL_LOGOUT_COOKIE) === "1") return null;
   const now = Math.floor(nowMs / 1000);
-  return { k: "session", sub: LOCAL_AUTH_PRINCIPAL, org: ORG, iat: now, exp: now + SESSION_TTL_S };
+  return {
+    k: "session",
+    sub: LOCAL_AUTH_PRINCIPAL,
+    org: ORG,
+    ...sessionTenantClaim(),
+    iat: now,
+    exp: now + SESSION_TTL_S,
+  };
+}
+
+const hostTenantOf = new WeakMap<IncomingMessage, HostTenant & { host: string }>();
+
+function tenantHostOf(req: IncomingMessage): string | undefined {
+  const found = hostTenantOf.get(req);
+  return found?.multi && boundTenant() ? found.host : undefined;
+}
+
+function sessionTenantClaim(): { t?: string } {
+  const tenant = boundTenant();
+  return tenant === undefined ? {} : { t: tenant };
+}
+
+function cookieSession(req: IncomingMessage): SessionClaims | null {
+  const session = openSession(
+    readCookie(req.headers.cookie, "portal_session"),
+    sessionKey,
+    Date.now(),
+    ORG,
+    SESSION_MAX_TTL_S,
+  );
+  if (!session) return null;
+  const tenant = { bound: boundTenant(), legacy: hostTenantOf.get(req)?.sole === true };
+  return servesTenant(session, tenant) ? session : null;
 }
 
 function currentSession(req: IncomingMessage): SessionClaims | null {
-  return (
-    openSession(readCookie(req.headers.cookie, "portal_session"), sessionKey, Date.now(), ORG, SESSION_MAX_TTL_S) ??
-    localDevSession(req)
-  );
+  return cookieSession(req) ?? localDevSession(req);
 }
 
 const CARD_STYLE = `<style>
@@ -568,7 +616,7 @@ export function notConfiguredHtml(): string {
 }
 
 const connectStyle = (): string => `<style>
-  :root{ --bg:#0a0a0a; --text:#fafafa; --muted:#a3a3a3; --border:#2a2a2a; --brand:${brandAccent}; --radius-md:10px; }
+  :root{ --bg:#0a0a0a; --text:#fafafa; --muted:#a3a3a3; --border:#2a2a2a; --brand:${surfaceConfig().brandAccent}; --radius-md:10px; }
   html,body{ height:100%; margin:0; }
   body{ background:var(--bg); color:var(--text); display:grid; place-items:center; padding:40px 20px;
     font:14px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; -webkit-font-smoothing:antialiased; }
@@ -874,6 +922,7 @@ async function mintPlaygroundSession(req: IncomingMessage, res: ServerResponse):
     k: "session",
     sub: `playground-${randomToken(8)}`,
     org: ORG,
+    ...sessionTenantClaim(),
     name: "Guest",
     anon: true,
     auth: now,
@@ -885,13 +934,7 @@ async function mintPlaygroundSession(req: IncomingMessage, res: ServerResponse):
 }
 
 function renewSessionCookie(req: IncomingMessage, res: ServerResponse): SessionClaims | null {
-  const session = openSession(
-    readCookie(req.headers.cookie, "portal_session"),
-    sessionKey,
-    Date.now(),
-    ORG,
-    SESSION_MAX_TTL_S,
-  );
+  const session = cookieSession(req);
   if (!session) return null;
   if (session.appOnly) return session;
   const now = Math.floor(Date.now() / 1000);
@@ -899,6 +942,7 @@ function renewSessionCookie(req: IncomingMessage, res: ServerResponse): SessionC
   const authenticatedAt = session.auth ?? session.iat;
   const renewed: SessionClaims = {
     ...session,
+    ...sessionTenantClaim(),
     auth: authenticatedAt,
     iat: now,
     exp: Math.min(now + SESSION_TTL_S, authenticatedAt + SESSION_MAX_TTL_S),
@@ -906,6 +950,16 @@ function renewSessionCookie(req: IncomingMessage, res: ServerResponse): SessionC
   setSession(res, sessionCookieSet(seal(renewed, sessionKey), renewed.sub));
   return renewed;
 }
+
+function isAppHost(req: IncomingMessage): boolean {
+  if (!APPS_DOMAIN) return false;
+  const host = (req.headers.host ?? "").toLowerCase().split(":")[0]!;
+  const apps = APPS_DOMAIN.toLowerCase();
+  return host === apps || host.endsWith(`.${apps}`);
+}
+
+const hostTenants = coreHostTenants(CORE, CORE_SIGNING_SECRET);
+const tenantSignIn = coreTenantSignIn(CORE, CORE_SIGNING_SECRET);
 
 const server = createServer((req, res) => {
   const startedAt = performance.now();
@@ -919,7 +973,13 @@ const server = createServer((req, res) => {
         Math.round(performance.now() - startedAt),
       );
   });
-  void handle(req, res).catch((err: unknown) => {
+  const lookup = async (host: string): Promise<HostTenant> => {
+    const found = await hostTenants(host);
+    hostTenantOf.set(req, { ...found, host });
+    return found;
+  };
+  const served = isAppHost(req) ? handle(req, res) : inHostTenant(lookup, req, res, () => handle(req, res));
+  void served.catch((err: unknown) => {
     errorLogged = true;
     reportBackendError(err);
     console.error("[portal] 500 %s %s: %s", req.method ?? "?", (req.url ?? "?").split("?")[0], String(err));
@@ -1052,6 +1112,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   if (brokerPath) {
     if (method !== "GET" && !sameOriginRequest(req))
       return json(res, 403, { error: "forbidden", message: "cross-origin request refused" });
+    const tenantHost = tenantHostOf(req);
     return proxyToUpstream(
       req,
       res,
@@ -1059,6 +1120,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       FORWARD_BROKER_HEADERS,
       {
         "x-qm-client-ip": clientIpOf(req),
+        ...(tenantHost ? { "x-forwarded-host": tenantHost } : {}),
         cookie: (req.headers.cookie ?? "")
           .split(";")
           .map((part) => part.trim())
@@ -1301,7 +1363,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   const settingsPath = pathname === "/settings" || pathname.startsWith("/settings/");
   if (method === "GET" && wantsHtml(req) && !settingsPath) {
     await refreshSurfaceConfig();
-    if (modelProviderConfigured === false) {
+    if (surfaceConfig().modelProviderConfigured === false) {
       if (await isAdmin(session.sub)) {
         res.writeHead(302, { location: "/settings/onboarding", "cache-control": "no-store" });
         return void res.end();
@@ -1357,6 +1419,7 @@ async function desktopLogin(req: IncomingMessage, res: ServerResponse, url: URL)
       ORIGIN,
       ORG,
       SESSION_MAX_TTL_S,
+      boundTenant(),
     );
     if (!claims) return json(res, 400, { error: "invalid_desktop_login" });
     try {
@@ -1535,8 +1598,23 @@ async function adminLogin(req: IncomingMessage, res: ServerResponse): Promise<vo
   res.end();
 }
 
+async function tenantTrustedEntry() {
+  const oidc = tenantTrustedConfig(process.env, PUBLIC_URL, await tenantSignIn());
+  if (!oidc) return null;
+  const key = JSON.stringify(oidc);
+  const cached = trustedEntries.get(key);
+  if (cached) return { oidc, entry: cached };
+  const entry = createTrustedEntry(oidc, SESSION_SECRET ?? DEV_SECRET, (claimKey, expiresAt) =>
+    claimOnce(coreClaimStore(CORE, CORE_SIGNING_SECRET, "portal"), claimKey, expiresAt),
+  );
+  trustedEntries.set(key, entry);
+  return { oidc, entry };
+}
+
 async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
-  if (!trustedEntry) return json(res, 404, { error: "not_found" });
+  const trusted = await tenantTrustedEntry();
+  if (!trusted) return json(res, 404, { error: "not_found" });
+  const { oidc: trustedConfig, entry: trustedEntry } = trusted;
   const cookieName = "portal_trusted_tmp";
   const path = "/auth/trusted";
   if (url.pathname === `${path}/login`) {
@@ -1545,7 +1623,7 @@ async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL):
       openTmp(readCookie(req.headers.cookie, "portal_oidc_tmp"), tmpKey, Date.now())?.returnTo ??
       null;
     const existing = currentSession(req);
-    const trustedPrefix = `oidc:${createHash("sha256").update(trustedOidc!.issuer).digest("hex")}:`;
+    const trustedPrefix = `oidc:${createHash("sha256").update(trustedConfig.issuer).digest("hex")}:`;
     if (existing && !existing.anon && !existing.appOnly && existing.sub.startsWith(trustedPrefix)) {
       res.writeHead(302, {
         location: sanitizeReturnTo(returnTo, PUBLIC_URL, APPS_DOMAIN),
@@ -1569,11 +1647,11 @@ async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL):
           signingSecret: CORE_SIGNING_SECRET!,
           identitySecret: PORTAL_IDENTITY_SECRET!,
           org: ORG,
-          issuer: trustedOidc!.issuer,
+          issuer: trustedConfig.issuer,
         },
         identity.subject,
       );
-      adminCache.delete(identity.sub);
+      adminCache.delete(adminKey(identity.sub));
     }
     setAuthenticatedSession(res, identity.sub, identity.name);
     res.writeHead(302, {
@@ -1596,6 +1674,7 @@ function setAuthenticatedSession(res: ServerResponse, sub: string, name = "", ap
     k: "session",
     sub,
     org: ORG,
+    ...sessionTenantClaim(),
     auth: now,
     iat: now,
     exp: now + SESSION_TTL_S,
@@ -1610,7 +1689,7 @@ function setAuthenticatedSession(res: ServerResponse, sub: string, name = "", ap
   ]);
 }
 
-function authLogin(req: IncomingMessage, res: ServerResponse, url: URL): void {
+async function authLogin(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
   if (
     trustedOidc &&
     trustedSignInLabel &&
@@ -1645,7 +1724,8 @@ function authLogin(req: IncomingMessage, res: ServerResponse, url: URL): void {
   setSession(res, [
     setCookie("portal_oidc_tmp", seal(tmp, tmpKey), { path: "/auth", maxAge: TMP_TTL_S, secure: SECURE_COOKIES }),
   ]);
-  res.writeHead(302, { location: buildAuthorizeUrl(OIDC, { state, nonce, challenge }), "cache-control": "no-store" });
+  const oidc = tenantOidc(OIDC, await tenantSignIn(), tenantHostOf(req));
+  res.writeHead(302, { location: buildAuthorizeUrl(oidc, { state, nonce, challenge }), "cache-control": "no-store" });
   res.end();
 }
 
@@ -1667,18 +1747,22 @@ async function authCallback(req: IncomingMessage, res: ServerResponse, url: URL)
   let principal: { sub: string; appOnly?: true };
   let name = "";
   try {
-    const { accessToken, idToken } = await exchangeCode(OIDC, { code, codeVerifier: tmp.pkceVerifier });
-    const claims = await verifyIdToken(OIDC, idToken, tmp.nonce);
-    if (OIDC.expectedTeamId) {
+    const signIn = await tenantSignIn();
+    const oidc = tenantOidc(OIDC, signIn, tenantHostOf(req));
+    const { accessToken, idToken } = await exchangeCode(oidc, { code, codeVerifier: tmp.pkceVerifier });
+    const claims = await verifyIdToken(oidc, idToken, tmp.nonce);
+    if (oidc.expectedTeamId) {
       const team = claims["https://slack.com/team_id"];
-      if (team !== OIDC.expectedTeamId) throw new Error("workspace not permitted");
+      if (team !== oidc.expectedTeamId) throw new Error("workspace not permitted");
     }
-    const info = await fetchUserinfo(OIDC, accessToken);
+    const info = await fetchUserinfo(oidc, accessToken);
     const infoSub = typeof info.sub === "string" ? info.sub : "";
     if (!infoSub) throw new Error("userinfo missing sub");
     if (typeof claims.sub === "string" && claims.sub !== infoSub) throw new Error("subject mismatch");
-    principal = await resolvePrincipal(PRINCIPAL_RULE, { sub: infoSub, claims, userinfo: info }, (email) =>
-      coreEmailAdmission(CORE, CORE_SIGNING_SECRET, email, "portal"),
+    principal = await resolvePrincipal(
+      tenantPrincipalRule(PRINCIPAL_RULE, signIn),
+      { sub: infoSub, claims, userinfo: info },
+      (email) => coreEmailAdmission(CORE, CORE_SIGNING_SECRET, email, "portal"),
     );
     const rawName = info.name ?? claims.name;
     if (typeof rawName === "string") name = rawName.trim().slice(0, 200);

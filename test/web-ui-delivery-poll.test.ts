@@ -7,7 +7,11 @@ let deliveriesStatus = 503;
 const acked: string[] = [];
 const core = createServer((req, res) => {
   const url = new URL(req.url ?? "/", "http://core");
-  if (req.method === "GET" && url.pathname === "/v1/deliveries" && url.searchParams.get("type") === "web") {
+  if (
+    req.method === "GET" &&
+    url.pathname === "/v1/deliveries/across-tenants" &&
+    url.searchParams.get("type") === "web"
+  ) {
     res.writeHead(deliveriesStatus, { "content-type": "application/json" });
     res.end(
       deliveriesStatus === 200

@@ -49,7 +49,7 @@ import { brandMark, brandName } from "./ui";
 import { desktopHistoryNav } from "./desktop-history";
 import { beginNavigation, cancelNavigation, endNavigation, navigationInFlight } from "./url-history";
 import { icon } from "./icons";
-import { PHONE_MAX_WIDTH, trackVisualViewport } from "./viewport";
+import { isPhone, markDesktopEmbed, onPhoneChange, trackVisualViewport } from "./viewport";
 import { markConnectorConnected } from "./chat";
 import { clearSkillsCache, resyncModelSelection } from "./composer";
 import { ensureDeliveryStream, mainConversation, onExitCanvas } from "./conversations";
@@ -198,8 +198,7 @@ async function restoreChatsEntry(sessionId: string | null): Promise<void> {
 const appEl = document.getElementById("app");
 if (!appEl) throw new Error("missing #app");
 
-const narrowViewport = window.matchMedia(`(max-width: ${PHONE_MAX_WIDTH}px)`);
-let sidebarOpen = !narrowViewport.matches;
+let sidebarOpen = !isPhone();
 trackVisualViewport();
 
 const SIDEBAR_MIN_W = 200;
@@ -909,7 +908,7 @@ function toggleSidebar(): void {
 }
 
 export function closeSidebarOnNarrowView(): void {
-  if (!narrowViewport.matches || !sidebarOpen) return;
+  if (!isPhone() || !sidebarOpen) return;
   setSidebarOpen(false, false);
   requestAnimationFrame(() => appState.mainEl?.focus({ preventScroll: true }));
 }
@@ -920,7 +919,7 @@ let swipe: { x: number; y: number; fromEdge: boolean; onDrawer: boolean } | null
 appEl.addEventListener(
   "touchstart",
   (e) => {
-    if (!narrowViewport.matches || e.touches.length !== 1) return;
+    if (!isPhone() || e.touches.length !== 1) return;
     const t = e.touches[0]!;
     const target = e.target as Element | null;
     const onDrawer = Boolean(target?.closest(".sidebar, .sidebar-scrim"));
@@ -948,13 +947,13 @@ appEl.addEventListener(
 );
 appEl.addEventListener("touchcancel", () => (swipe = null), { passive: true });
 
-narrowViewport.addEventListener("change", (event) => {
-  if (event.matches && sidebarOpen) setSidebarOpen(false, false);
+onPhoneChange((phone) => {
+  if (phone && sidebarOpen) setSidebarOpen(false, false);
   else syncSidebarAccessibility(false);
 });
 
 function setSidebarOpen(open: boolean, moveFocus = true): void {
-  if (open && narrowViewport.matches) document.dispatchEvent(new CustomEvent("qm:close-overlays"));
+  if (open && isPhone()) document.dispatchEvent(new CustomEvent("qm:close-overlays"));
   sidebarOpen = open;
   (appEl as HTMLElement).querySelector(".layout")?.classList.toggle("sidebar-closed", !sidebarOpen);
   (appEl as HTMLElement).querySelector(".sidebar")?.setAttribute("data-tip-placement", open ? "top" : "right");
@@ -968,14 +967,14 @@ function syncSidebarAccessibility(moveFocus: boolean): void {
   const sidebar = root.querySelector<HTMLElement>(".sidebar");
   const main = root.querySelector<HTMLElement>(".main");
   const scrim = root.querySelector<HTMLButtonElement>(".sidebar-scrim");
-  const modal = narrowViewport.matches && sidebarOpen;
+  const modal = isPhone() && sidebarOpen;
   if (!sidebar || !main || !scrim) return;
   main.inert = modal;
   sidebar.setAttribute("role", modal ? "dialog" : "navigation");
   if (modal) sidebar.setAttribute("aria-modal", "true");
   else sidebar.removeAttribute("aria-modal");
   scrim.hidden = !modal;
-  if (!moveFocus || !narrowViewport.matches) return;
+  if (!moveFocus || !isPhone()) return;
 
   const next = sidebarOpen
     ? sidebar.querySelector<HTMLElement>(".sidebar-collapse-toggle")
@@ -984,7 +983,7 @@ function syncSidebarAccessibility(moveFocus: boolean): void {
 }
 
 function onSidebarKeydown(event: KeyboardEvent): void {
-  if (!narrowViewport.matches || !sidebarOpen) return;
+  if (!isPhone() || !sidebarOpen) return;
   if (event.key === "Escape" && event.defaultPrevented) return;
   if (event.key === "Escape" && closeOpenSessionMenu()) {
     event.preventDefault();
@@ -1093,7 +1092,9 @@ export async function boot(): Promise<void> {
     session: wantedSession,
     item: wantedItem,
   } = parseDeepLink(UI_BASE, location.pathname, location.search);
-  document.body.classList.toggle("app-edit-embed", wanted === "app-edit" && params.get("embed") === "1");
+  const appEditEmbed = wanted === "app-edit" && params.get("embed") === "1";
+  document.body.classList.toggle("app-edit-embed", appEditEmbed);
+  markDesktopEmbed(appEditEmbed);
   const prefillRoute = wanted === null || wanted === "new";
   const prefill = prefillRoute && !wantedSession ? (params.get("q")?.slice(0, 20_000) ?? null) : null;
   const chatsLink = wanted === null || wanted === "chats";

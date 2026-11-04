@@ -211,5 +211,4 @@ export interface ModelUtilities {
 export interface Agent extends ModelUtilities {
   runTurn(input: AgentTurnInput): Promise<AgentTurnResult>;
   close?(): Promise<void> | void;
-  resetSession?(sessionId: string): Promise<void> | void;
 }
