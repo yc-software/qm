@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { ServerResponse } from "node:http";
+import { Writable } from "node:stream";
+import { finished } from "node:stream/promises";
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
 import { composioUserId } from "../src/api/routes/composio.ts";
 import { composioProxyRoutes } from "../src/api/routes/composio-proxy.ts";
@@ -74,19 +76,23 @@ async function fixture() {
   async function send(body: unknown, options: { capability?: CapabilityClaims; actor?: string } = {}) {
     let status = 0;
     let headers: Record<string, string> = {};
-    let raw = Buffer.alloc(0);
-    const res = {
+    const chunks: Buffer[] = [];
+    const sink = new Writable({
+      write(chunk: Buffer, _encoding, done) {
+        chunks.push(Buffer.from(chunk));
+        done();
+      },
+    });
+    const res = Object.assign(sink, {
       headersSent: false,
       setHeader() {},
       getHeader() {},
       writeHead(code: number, h?: Record<string, string>) {
         status = code;
         headers = { ...headers, ...h };
+        return sink;
       },
-      end(value?: string | Buffer) {
-        raw = value === undefined ? Buffer.alloc(0) : Buffer.from(value);
-      },
-    } as unknown as ServerResponse;
+    }) as unknown as ServerResponse;
     const ctx = {
       deps,
       res,
@@ -96,6 +102,8 @@ async function fixture() {
       actor: options.actor ? { p: options.actor, exp: Date.now() + 60_000 } : null,
     } as unknown as ApiCtx;
     await composioProxyRoutes[0]!.handle(ctx);
+    if (!sink.writableFinished) await finished(sink);
+    const raw = Buffer.concat(chunks);
     const text = raw.toString("utf8");
     const parse = (): Record<string, unknown> => {
       try {

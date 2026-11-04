@@ -8,6 +8,9 @@ import {
   ownedAccount,
   request,
 } from "./composio.ts";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import type { ReadableStream as WebReadableStream } from "node:stream/web";
 import { sendJson } from "../http.ts";
 import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
 import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
@@ -44,7 +47,7 @@ const BLOCKED_HEADERS = new Set([
 ]);
 const PASSED_HEADERS = ["location", "retry-after", "etag", "content-disposition"];
 const PROXY_TIMEOUT_MS = 90_000;
-const MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024;
+const COMPOSIO_REQUEST_LIMIT_BYTES = 4_500_000;
 
 function toolkitsFor(url: URL): string[] {
   return Object.entries(PROXY_TOOLKIT_HOSTS)
@@ -82,7 +85,7 @@ function parse(raw: unknown): ProxyInput | string {
     return `Supply only ${INPUT_KEYS.join(", ")}.`;
   let url: URL | null = null;
   try {
-    if (typeof body.url === "string" && body.url.length <= 8192) url = new URL(body.url);
+    if (typeof body.url === "string") url = new URL(body.url);
   } catch {
     url = null;
   }
@@ -105,8 +108,7 @@ function parse(raw: unknown): ProxyInput | string {
     if (!body.headers || typeof body.headers !== "object" || Array.isArray(body.headers))
       return "headers must be an object of strings.";
     for (const [name, value] of Object.entries(body.headers)) {
-      if (!/^[A-Za-z0-9-]{1,100}$/.test(name) || typeof value !== "string" || value.length > 8192)
-        return "headers must be an object of strings.";
+      if (typeof value !== "string") return "headers must be an object of strings.";
       if (BLOCKED_HEADERS.has(name.toLowerCase()))
         return `Do not send ${name}; the connection supplies authentication.`;
       headers.push({ name, value });
@@ -188,15 +190,7 @@ async function pickAccount(
   return null;
 }
 
-function tooLarge(ctx: ApiCtx): void {
-  sendJson(ctx.res, 502, {
-    error: "composio_proxy_failed",
-    cause: "too_large",
-    message: `The response is larger than ${MAX_DOWNLOAD_BYTES / 1024 / 1024} MB. Request a smaller range or export.`,
-  });
-}
-
-async function relay(ctx: ApiCtx, accountId: string, result: Record<string, unknown>): Promise<boolean> {
+async function relay(ctx: ApiCtx, accountId: string, result: Record<string, unknown>): Promise<void> {
   const status = typeof result.status === "number" && result.status >= 200 && result.status <= 599 ? result.status : 0;
   if (!status) throw new Error("Invalid proxy status");
   const upstream = (result.headers ?? {}) as Record<string, unknown>;
@@ -205,28 +199,23 @@ async function relay(ctx: ApiCtx, accountId: string, result: Record<string, unkn
     const value = upstream[name];
     if (typeof value === "string") headers[name] = value;
   }
-  const binary = result.binary_data as { url?: unknown; content_type?: unknown; size?: unknown } | undefined;
-  let payload: Buffer | string = "";
+  const binary = result.binary_data as { url?: unknown; content_type?: unknown } | undefined;
   if (binary && typeof binary.url === "string") {
     const location = new URL(binary.url);
     if (location.protocol !== "https:" || location.username || location.password) throw new Error("Invalid file URL");
-    if (typeof binary.size === "number" && binary.size > MAX_DOWNLOAD_BYTES) {
-      tooLarge(ctx);
-      return false;
-    }
     const file = await (ctx.deps.composioFetch ?? fetch)(location.href, {
       redirect: "error",
       signal: AbortSignal.timeout(PROXY_TIMEOUT_MS),
     });
-    if (!file.ok) throw new Error(`File download failed with status ${file.status}`);
-    payload = Buffer.from(await file.arrayBuffer());
-    if (payload.length > MAX_DOWNLOAD_BYTES) {
-      tooLarge(ctx);
-      return false;
-    }
+    if (!file.ok || !file.body) throw new Error(`File download failed with status ${file.status}`);
     headers["content-type"] =
       typeof binary.content_type === "string" ? binary.content_type : "application/octet-stream";
-  } else if (typeof result.data === "string" && result.data) {
+    ctx.res.writeHead(status, headers);
+    await pipeline(Readable.fromWeb(file.body as WebReadableStream), ctx.res);
+    return;
+  }
+  let payload = "";
+  if (typeof result.data === "string" && result.data) {
     payload = result.data;
     const type = upstream["content-type"];
     headers["content-type"] = typeof type === "string" ? type : "text/plain; charset=utf-8";
@@ -236,7 +225,6 @@ async function relay(ctx: ApiCtx, accountId: string, result: Record<string, unkn
   }
   ctx.res.writeHead(status, headers);
   ctx.res.end(payload);
-  return true;
 }
 
 async function proxy(ctx: ApiCtx): Promise<void> {
@@ -289,10 +277,10 @@ async function proxy(ctx: ApiCtx): Promise<void> {
       },
       PROXY_TIMEOUT_MS,
     );
-    const relayed = await relay(ctx, account.id, result);
+    await relay(ctx, account.id, result);
     audit(ctx.deps, {
       principalId: access.principal,
-      action: relayed ? "composio.proxy.completed" : "composio.proxy.failed",
+      action: "composio.proxy.completed",
       resource: `${account.id}/${resource}`,
       scopeLabel: ctx.capability.scopeId,
     });
@@ -324,5 +312,11 @@ async function proxy(ctx: ApiCtx): Promise<void> {
 }
 
 export const composioProxyRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "POST", path: "/v1/composio/proxy", auth: "either", maxBodyBytes: 6_000_000, handle: proxy },
+  {
+    method: "POST",
+    path: "/v1/composio/proxy",
+    auth: "either",
+    maxBodyBytes: COMPOSIO_REQUEST_LIMIT_BYTES,
+    handle: proxy,
+  },
 ];
