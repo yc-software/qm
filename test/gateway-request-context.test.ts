@@ -199,7 +199,11 @@ test("the goal governor judges with its turn's context", async (t) => {
       return { reply: "" };
     },
   };
-  const router = withResolvedRuntime(adapter, () => ({ modelId: "claude-haiku-4-5" }));
+  const router = withResolvedRuntime(
+    adapter,
+    () => ({ modelId: "claude-haiku-4-5" }),
+    async () => ({ modelId: "claude-haiku-4-5" }),
+  );
 
   await withModelRequestContext(cronContext, () => router.runTurn(turn()));
   assert.deepEqual(contextHeaders(requests.at(-1)!.headers), { ...cronHeaders, "x-qm-purpose": "judge" });

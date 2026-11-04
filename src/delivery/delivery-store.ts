@@ -43,7 +43,7 @@ export interface DeliveryStore {
     shadow?: boolean;
   }): Promise<Delivery>;
   pending(type: string): Promise<Delivery[]>;
-  claimPending(type: string, ttlMs: number): Promise<Delivery[]>;
+  claimPending(type: string, ttlMs: number, opts?: { oldestPerConversation?: boolean }): Promise<Delivery[]>;
   listShadow(opts?: { limit?: number }): Promise<Delivery[]>;
   ack(id: string, at: number, slackApiMs?: number): Promise<void>;
   fail(id: string, reason: string, at: number): Promise<Delivery | null>;
@@ -122,17 +122,18 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
         (d) => d.deliveredAt === null && d.expiredAt === undefined && !d.shadow && d.destination.type === type,
       );
     },
-    async claimPending(type, ttlMs) {
+    async claimPending(type, ttlMs, opts) {
       const now = Date.now();
       expireOveraged(now);
-      const rows = [...deliveries.values()].filter(
-        (d) =>
-          d.deliveredAt === null &&
-          d.expiredAt === undefined &&
-          !d.shadow &&
-          d.destination.type === type &&
-          (claimedUntil.get(d.id) ?? 0) <= now,
+      const open = [...deliveries.values()].filter(
+        (d) => d.deliveredAt === null && d.expiredAt === undefined && !d.shadow && d.destination.type === type,
       );
+      const seen = new Set<string>();
+      const rows = open.filter((d) => {
+        const first = !seen.has(d.destination.target);
+        seen.add(d.destination.target);
+        return (claimedUntil.get(d.id) ?? 0) <= now && (first || !opts?.oldestPerConversation);
+      });
       for (const d of rows) claimedUntil.set(d.id, now + ttlMs);
       return rows;
     },

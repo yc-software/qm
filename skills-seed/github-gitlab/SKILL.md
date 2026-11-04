@@ -141,5 +141,6 @@ Only merge when all gates pass, with GitHub's atomic head guard:
 gh pr merge NUMBER --repo OWNER/REPO --squash --match-head-commit REVIEWED_HEAD_SHA
 ```
 
-Never use auto-merge or bypass repository gates. This helper does not retry GitLab
-commands or change their authentication behavior.
+On a branch that requires a merge queue, this queues the PR; it is merged only once
+GitHub shows it as merged. Never use auto-merge or bypass repository gates. This
+helper does not retry GitLab commands or change their authentication behavior.

@@ -171,7 +171,8 @@ const FAMILIES: AgentApiFamily[] = [
       {
         method: "PATCH",
         path: "/v1/projects/:id",
-        summary: "rename a project the asking person owns — body {name}",
+        summary:
+          'update a project — body {name} renames it (owner only); body {icon} sets its sidebar icon — {kind:"emoji",value} with one emoji or {kind:"custom",name} with a workspace custom emoji, or null to clear (any member)',
       },
       {
         method: "POST",
@@ -530,7 +531,7 @@ const FAMILIES: AgentApiFamily[] = [
   },
   {
     guidance:
-      "Save a skill when you've worked out a repeatable procedure worth keeping (a checklist, a multi-step flow, a house style) — it is advertised in the skill index and loaded with the skills tool on future turns. The skill homes in THIS conversation's scope: in a 1:1 DM it's yours alone; in a private channel or group DM it's owned by that room and every member can edit or delete it (the audit trail records who changed what); a public channel stays owner-only. Write the `body` as a plain-step recipe addressed to your future self; edit or delete it as it goes stale.",
+      "Save a skill when you've worked out a repeatable procedure worth keeping (a checklist, a multi-step flow, a house style) — it is advertised in the skill index and loaded with the skills tool on future turns. The skill homes in THIS conversation's scope: in a 1:1 DM it's yours alone; in a private channel or group DM it's owned by that room and every member can edit or delete it (the audit trail records who changed what); a public channel stays owner-only. Write the `body` as a plain-step recipe addressed to your future self; edit or delete it as it goes stale. The skills tool's save and edit actions make the POST and PUT calls for you.",
     routes: [
       {
         method: "POST",

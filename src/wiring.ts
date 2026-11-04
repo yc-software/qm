@@ -49,11 +49,8 @@ import {
   createSessionSyscalls,
   type SessionSyscallsFactory,
   deliverSubagentMail,
-  sessionTreeRoot,
-  sessionTreeRuns,
   sessionTreeWorking,
   stoppableRoot,
-  SUBAGENT_TREE_RUN_CAP,
 } from "./sessions/session-syscalls.ts";
 import { createMemoryEmbedder } from "./model/embeddings.ts";
 import { createSemanticMemory } from "./memory/semantic-memory.ts";
@@ -150,6 +147,8 @@ import { wireRunResultDeliveries } from "./delivery/run-result-delivery.ts";
 import { adminSessionUrl } from "./util/admin-links.ts";
 import { uuidSchema } from "./util/ids.ts";
 import { withWebTranscriptDeliveries } from "./delivery/web-transcript-delivery.ts";
+import { WEBHOOK_CLAIM_MS, webhookSender } from "./delivery/webhook-delivery.ts";
+import { createDeliveryRelay } from "./delivery/relay.ts";
 import type { DirectoryStore } from "./directory/directory-store.ts";
 import { createPostgresDirectoryStore } from "./directory/postgres-directory-store.ts";
 import { createPostgresEnvironmentStore, type EnvironmentStore } from "./environments/environment-store.ts";
@@ -299,7 +298,7 @@ import { keychainEnvCredential } from "./credentials/keychain-env-credential.ts"
 import { createAgent, agentConfigOptions } from "./agent/agent-run.ts";
 import { withResolvedRuntime, resolveRuntimeChoice } from "./agent/runtime-choice.ts";
 import { selectableModelCatalog } from "./model/model-catalog.ts";
-import type { Agent } from "./agent/agent.ts";
+import type { Agent, RuntimeChoice, SessionRoute } from "./agent/agent.ts";
 import { createSecurityScreenProxy, type SecurityScreener } from "./security/security-screener.ts";
 import { createMemoryStrategy } from "./memory/strategy.ts";
 import { createOrchestrator, egressClaimAllowingControlPlane, type OrchestratorDeps } from "./core/orchestrator.ts";
@@ -358,7 +357,6 @@ import {
   codexSubscriptionModelId,
   isOverlayModel,
   modelRequestOverrides,
-  auxiliaryModelForProvider,
   defaultModel,
   resolveModel,
   modelSupported,
@@ -1463,42 +1461,50 @@ export function buildApp(
       }),
     auditLog,
   );
-  const judgeModelId = (): string => config.judgeModelId ?? auxiliaryModelFor(orgBaseModelId() ?? fallback.modelId);
+  const utilityModelId = (): string => auxiliaryModelFor(orgBaseModelId() ?? fallback.modelId);
+  const judgeModelId = (): string => config.judgeModelId ?? utilityModelId();
   const hydrateModelCatalog = async (): Promise<unknown> => {
     await refreshModels();
     if (!(await modelCredentials.availability()).openrouter) return undefined;
     return selectableModelCatalog(overrides.modelCredentialFetch);
   };
-  const agent = withResolvedRuntime(baseAgent, async (input, routedBy) => {
-    const resolve = (requested: typeof input.runtime) =>
-      resolveRuntimeChoice(
-        configStore,
-        runtimeOrgScope,
-        input.scopeLabel,
-        fallback,
-        requested,
-        hydrateModelCatalog,
-        input.runtimePurpose,
-      );
-    const decision = await tracePhase("turn.decision", () =>
-      decide("turn_start", turnStartState(input), {
-        ...(input.runtimeActorId ? { actorId: input.runtimeActorId } : {}),
-        scopeLabel: input.scopeLabel,
-        sessionId: input.session.id,
-        ...(input.runId ? { runId: input.runId } : {}),
-        ...(input.cancel ? { cancel: input.cancel } : {}),
-      }),
+  const resolveRequestedRuntime = (route: SessionRoute, requested: SessionRoute["runtime"]) =>
+    resolveRuntimeChoice(
+      configStore,
+      runtimeOrgScope,
+      route.scopeLabel ?? runtimeOrgScope,
+      fallback,
+      requested,
+      hydrateModelCatalog,
+      route.runtimePurpose,
     );
-    const routed = await routeTurnRuntime(decision, resolve, async () => {
-      if (input.runtimePinned && input.runtime?.modelId) {
-        if (!modelSupported(input.runtime.modelId)) throw new Error(`Unsupported model: ${input.runtime.modelId}`);
-        return { ...input.runtime, modelId: input.runtime.modelId };
-      }
-      return resolve(input.runtime);
-    });
-    if (routed.routedBy) routedBy(routed.routedBy);
-    return routed.choice;
-  });
+  const resolveSessionRuntime = async (route: SessionRoute): Promise<RuntimeChoice> => {
+    if (!route.runtimePinned || !route.runtime?.modelId) return resolveRequestedRuntime(route, route.runtime);
+    if (!modelSupported(route.runtime.modelId)) throw new Error(`Unsupported model: ${route.runtime.modelId}`);
+    return { ...route.runtime, modelId: route.runtime.modelId };
+  };
+  const agent = withResolvedRuntime(
+    baseAgent,
+    async (input, routedBy) => {
+      const decision = await tracePhase("turn.decision", () =>
+        decide("turn_start", turnStartState(input), {
+          ...(input.runtimeActorId ? { actorId: input.runtimeActorId } : {}),
+          scopeLabel: input.scopeLabel,
+          sessionId: input.session.id,
+          ...(input.runId ? { runId: input.runId } : {}),
+          ...(input.cancel ? { cancel: input.cancel } : {}),
+        }),
+      );
+      const routed = await routeTurnRuntime(
+        decision,
+        (requested) => resolveRequestedRuntime(input, requested),
+        () => resolveSessionRuntime(input),
+      );
+      if (routed.routedBy) routedBy(routed.routedBy);
+      return routed.choice;
+    },
+    resolveSessionRuntime,
+  );
 
   if (config.securityScreen === "off" || config.securityScreenClassifier !== "model") {
     delete agent.screenSecurity;
@@ -1532,38 +1538,27 @@ export function buildApp(
   const runs: RunStore = {
     ...runStore.runs,
     async enqueue(input) {
-      const enqueue = async () => {
-        const known = await sessions.getByThread(input.sessionId);
-        if (
-          known &&
-          (known.parentSessionId || (await sessions.childrenOf(known.id)).length > 0) &&
-          !(input.dedupKey && (await runStore.runs.getByDedupKey(input.dedupKey))) &&
-          (await sessionTreeRuns(sessions, runStore.runs, await sessionTreeRoot(sessions, known))).length >=
-            SUBAGENT_TREE_RUN_CAP
-        )
-          throw new Error(`all ${SUBAGENT_TREE_RUN_CAP} session run slots are in use`);
-        const participants = known ? await sessions.participantsOf(known.id) : [];
-        const ancestors = known?.parentSessionId ? await workingAncestors(known) : [];
-        const result = await runStore.runs.enqueue(input);
-        if (result.deduped) return result;
+      const known = await sessions.getByThread(input.sessionId);
+      const participants = known ? await sessions.participantsOf(known.id) : [];
+      const ancestors = known?.parentSessionId ? await workingAncestors(known) : [];
+      const result = await runStore.runs.enqueue(input);
+      if (result.deduped) return result;
+      sessionStateBus.emit({
+        threadRef: input.sessionId,
+        ...(known ? { sessionId: known.id } : {}),
+        state: "working",
+        at: result.run.createdAt,
+        participants: participants.length ? participants : [input.request.actor.id],
+      });
+      for (const ancestor of ancestors)
         sessionStateBus.emit({
-          threadRef: input.sessionId,
-          ...(known ? { sessionId: known.id } : {}),
+          threadRef: ancestor.session.threadRef,
+          sessionId: ancestor.session.id,
           state: "working",
           at: result.run.createdAt,
-          participants: participants.length ? participants : [input.request.actor.id],
+          participants: ancestor.participants,
         });
-        for (const ancestor of ancestors)
-          sessionStateBus.emit({
-            threadRef: ancestor.session.threadRef,
-            sessionId: ancestor.session.id,
-            state: "working",
-            at: result.run.createdAt,
-            participants: ancestor.participants,
-          });
-        return result;
-      };
-      return advisoryLock.withLock("session-run-admission", enqueue);
+      return result;
     },
   };
   const swarms =
@@ -2381,7 +2376,7 @@ export function buildApp(
     runs,
     turnStream,
     ackPicks: ackEmojiPicks,
-    ackModelId: () => auxiliaryModelForProvider("anthropic"),
+    ackModelId: utilityModelId,
     ...(config.brandingDefault ? { brandingDefault: config.brandingDefault } : {}),
     ...(agent.pickAckEmoji ? { pickAckEmoji: (t, c) => agent.pickAckEmoji!(t, c) } : {}),
   });
@@ -2491,6 +2486,11 @@ export function buildApp(
         immediate: true,
       })
     : null;
+  const webhookDelivery = createDeliveryRelay(deliveries, {
+    type: "webhook",
+    send: webhookSender(config.signingSecret),
+    claimMs: WEBHOOK_CLAIM_MS,
+  });
   const approvalDeliverySweeper = createSweeper(
     () => advisoryLock.withLock("approval-deliveries", () => approvals.deliverPending()),
     30_000,
@@ -2891,6 +2891,7 @@ export function buildApp(
       runResultSweeper.start();
       approvalDeliverySweeper.start();
       partnerChatDeliverySweeper?.start();
+      webhookDelivery.start();
     };
     if (backgroundStopping)
       void backgroundClaimsStopping.then(startPeriodic).catch(swallowAs("wiring: periodic resume failed", undefined));
@@ -2904,6 +2905,7 @@ export function buildApp(
     const monitorStopping = monitorPoller?.stop();
     monitorDrained = monitorStopping ?? Promise.resolve();
     const stopping = [
+      webhookDelivery.stop(),
       reaper.stop(),
       processReaper?.stop(),
       monitorRetentionSweeper.stop(),

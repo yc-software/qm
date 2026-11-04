@@ -97,6 +97,7 @@ export interface SpawnMeta {
   conversation: Conversation;
   actor: Principal;
   deliveryTarget?: string;
+  deliveryWebhook?: DeliveryWebhook;
   timezone?: string;
   readOnly?: boolean;
   model?: string;
@@ -173,7 +174,13 @@ export interface GrantedHandle {
   permission: Permission;
 }
 
+export interface DeliveryWebhook {
+  binding: string;
+  url: string;
+}
+
 export interface Destination {
+  webhook?: DeliveryWebhook;
   account?: SurfaceAccount;
   keychainAskId?: string;
   deploymentAccess?: { deploymentId: string; requesterId: string };
@@ -207,6 +214,8 @@ export interface CandidateDestination extends Destination {
 export type BackgroundWakeTrigger = "cron" | "webhook" | "monitor" | (string & {});
 
 export interface DeliveryProvenance {
+  sourceRequestId?: string;
+  sourceRunId?: string;
   sourceTitle?: string;
   trigger: BackgroundWakeTrigger;
   surface: string;
@@ -343,6 +352,7 @@ export interface TurnRequest {
   surface: string;
   scopeVersion?: string;
   deliveryTarget?: string;
+  deliveryWebhook?: DeliveryWebhook;
   deliveryCandidates?: { target: string; label: string }[];
   actor: ActorAssertion;
   conversation: {
@@ -359,6 +369,7 @@ export interface TurnRequest {
   origin?: TurnOrigin;
   gatewayContext?: GatewayContext;
   unattendedGrants?: string[];
+  cronScript?: import("./triggers/types.ts").CronScript;
   botActor?: boolean;
   conversationHeader?: string;
   priorTurns?: ConversationTurn[];
@@ -468,5 +479,6 @@ export interface TurnResult {
   sourceUserSeq?: number;
   sourceAssistantEntrySeq?: number;
   runtime?: TurnRuntime;
+  scriptVerdict?: string;
   retracted?: string[];
 }

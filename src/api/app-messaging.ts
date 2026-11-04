@@ -25,6 +25,7 @@ import { availableRuntimeError, validateRuntimeChoice } from "./runtime-config.t
 import { assertCronRuntime } from "../cron/runtime.ts";
 import type { Cron } from "../triggers/types.ts";
 import { validateUserSchedule } from "../cron/schedule.ts";
+import { trialBeforeSave } from "../cron/script.ts";
 
 import type { App, AppDeps, ReachNowResult } from "./app-types.ts";
 import { CONTEXT_REQUEST_EXPIRY_MS } from "./app-types.ts";
@@ -168,9 +169,10 @@ export function createMessagingMethods(
   };
 
   return {
-    async createCron(input) {
+    async createCron(input, trial) {
       await validateRuntime(input);
       validateUserSchedule(input.schedule);
+      await trialBeforeSave(input.script, input.schedule, trial);
       const cron = await deps.crons.create(input);
       deps.auditLog.record({
         at: Date.now(),
@@ -209,11 +211,12 @@ export function createMessagingMethods(
         });
       return { owned, visible };
     },
-    async updateCron(id, patch) {
+    async updateCron(id, patch, trial) {
       const before = await deps.crons.get(id);
       if (!before) return null;
       if (patch.runtime !== undefined) await validateRuntime({ ...before, ...patch });
       if (patch.schedule) validateUserSchedule(patch.schedule);
+      await trialBeforeSave(patch.script, patch.schedule, trial);
       const grantsReaffirmed = patch.unattendedGrants !== undefined;
       const guardedPatch =
         (before.unattendedGrants?.length ?? 0) > 0 && !grantsReaffirmed ? { ...patch, unattendedGrants: [] } : patch;

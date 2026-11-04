@@ -1759,3 +1759,29 @@ test("a cron whose model can't run fires on the default model and is told why", 
   assert.equal(calls[1]?.model, "claude-sonnet-5", "the stored model is used again once it can run");
   assert.doesNotMatch(calls[1]?.text ?? "", /default model because/);
 });
+
+test("a fire is told when its previous output was refused by the cron's destination", async () => {
+  const { crons, deliveries, calls, scheduler } = agent("tick");
+  const cron = await crons.create({
+    schedule: { everyMs: 60_000 },
+    action: "post the tick",
+    owner: "U7",
+    createdBy: "U7",
+    ownerScopeId: scopeId("personal", "U7"),
+    destination: { type: "slack", target: "D7", audienceScopeId: scopeId("personal", "U7") },
+  });
+  await crons.setFireNote(cron.id, { text: "cursor 42", at: 1_000 });
+  await runNowSettled(scheduler, cron.id);
+  const [first] = await deliveries.pending("slack");
+  await deliveries.fail(first!.id, "receiver returned HTTP 410: binding revoked", Date.now());
+  await runNowSettled(scheduler, cron.id);
+  assert.match(
+    calls[1]?.text ?? "",
+    /previous fire's output was refused by this cron's destination and not delivered: receiver returned HTTP 410: binding revoked/,
+  );
+  assert.match(calls[1]?.text ?? "", /cursor 42/, "the agent's own note is untouched");
+  const [second] = await deliveries.pending("slack");
+  await deliveries.ack(second!.id, Date.now());
+  await runNowSettled(scheduler, cron.id);
+  assert.doesNotMatch(calls[2]?.text ?? "", /was refused/);
+});

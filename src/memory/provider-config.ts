@@ -17,6 +17,7 @@ export interface McpMemoryOperationConfig {
   auth: McpMemoryAuthConfig;
   queryArg?: string;
   contentArg?: string;
+  factsArg?: string;
   actorArg?: string;
   scopeArg?: string;
   maxCharsArg?: string;
@@ -106,6 +107,7 @@ function operation(value: unknown, at: string, env: NodeJS.ProcessEnv): McpMemor
   for (const key of [
     "queryArg",
     "contentArg",
+    "factsArg",
     "actorArg",
     "scopeArg",
     "maxCharsArg",
@@ -120,6 +122,7 @@ function operation(value: unknown, at: string, env: NodeJS.ProcessEnv): McpMemor
     if (!ARG.test(name)) throw new Error(`${at}.${key} is invalid`);
     out[key] = name;
   }
+  if (out.factsArg && out.contentArg) throw new Error(`${at} sets both factsArg and contentArg; keep one`);
   return out;
 }
 
@@ -179,13 +182,17 @@ export function parseMemoryProviderConfig(
       throw new Error(
         `memory route ${i}: provider ${provider} does not support capture "${String(capture)}" (allowed: ${[...capturePoliciesOf(target)].join(", ")})`,
       );
+    const manage = typeof raw.manage === "boolean" ? raw.manage : provider === "default";
+    if (manage && target?.type === "mcp" && target.attestActor)
+      throw new Error(
+        `memory route ${i}: provider ${provider} sets attestActor, so it cannot manage a notebook; set "manage": false (docs/memory-providers.md#troubleshooting)`,
+      );
     return {
       provider,
       scopes: raw.scopes.map((value, j) => scope(value, `memory route ${i}.scopes[${j}]`)),
       capture: capture as MemoryCapturePolicy,
       ...(typeof raw.recall === "boolean" ? { recall: raw.recall } : {}),
-      manage: provider === "default",
-      ...(typeof raw.manage === "boolean" ? { manage: raw.manage } : {}),
+      manage,
       ...(typeof raw.label === "string" && raw.label ? { label: raw.label } : {}),
       failOpen: provider !== "default",
       ...(typeof raw.failOpen === "boolean" ? { failOpen: raw.failOpen } : {}),
