@@ -373,6 +373,7 @@ test("human turns are always traced while other runs follow the configured rate"
       await traceQueued(undefined, 'human-run', { 'messaging.message.id': 'run-' + i, 'qm.surface': 'slack', 'qm.origin': 'human' }, async () => {});
       await traceQueued(undefined, 'cron-run', { 'qm.surface': 'cron', 'qm.origin': 'automation' }, async () => {});
       await traceQueued(undefined, 'subagent-run', { 'qm.origin': 'direct' }, async () => {});
+      await traceQueued(undefined, 'human-child-run', { 'qm.origin': 'human', 'qm.spawn': 'delegated', 'qm.parent_run': 'parent-' + i }, async () => {});
     }
     await traceQueued(declined, 'human-after-unsampled-request', { 'qm.origin': 'human' }, async () => {});
     await traceQueued(declined, 'cron-after-unsampled-request', { 'qm.origin': 'automation' }, async () => {});
@@ -395,4 +396,8 @@ test("human turns are always traced while other runs follow the configured rate"
   assert.equal(human.tags["qm.origin"], "human");
   assert.equal(human.tags["qm.surface"], "slack");
   assert.match(human.tags["messaging.message.id"], /^run-\d+$/);
+  assert.equal(human.tags["qm.spawn"], undefined, "a turn a person sent carries no spawn tag");
+  const child = sampled.transactions.find((event) => event.transaction === "human-child-run")!;
+  assert.equal(child.tags["qm.spawn"], "delegated");
+  assert.match(child.tags["qm.parent_run"], /^parent-\d+$/);
 });
