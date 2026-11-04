@@ -223,6 +223,10 @@ import { uiCanvasPanel } from "./ui-canvas";
 installMarkdownSanitizer();
 
 const detachedAgents = new WeakSet<Agent>();
+interface SubagentStop {
+  state: "stopping" | "failed";
+  run: number | undefined;
+}
 interface SettledRowKey {
   day: string;
   index: number;
@@ -2729,7 +2733,7 @@ export function createChatSurface(
   const SUBAGENT_POLL_MS = 4000;
   const subagentUi = {
     expanded: false,
-    stops: new Map<string, "stopping" | "failed">(),
+    stops: new Map<string, SubagentStop>(),
     ticking: false,
     rowsRoot: null as string | null,
     rowsTimer: null as ReturnType<typeof setInterval> | null,
@@ -2753,25 +2757,33 @@ export function createChatSurface(
     subagentUi.rowsRoot = rootId;
   }
 
-  const subagentStopKey = (row: SubagentRow) => `${row.session.id}@${row.startedAt}`;
-
   async function stopSubagent(rootId: string, row: SubagentRow): Promise<void> {
-    const key = subagentStopKey(row);
-    if (subagentUi.stops.get(key) === "stopping") return;
-    subagentUi.stops.set(key, "stopping");
+    const { id, threadRef, workingSince } = row.session;
+    if (subagentUi.stops.get(id)?.state === "stopping") return;
+    const stop: SubagentStop = { state: "stopping", run: workingSince };
+    subagentUi.stops.set(id, stop);
     drawActiveChat();
     try {
-      await stopThreadRun(row.session.threadRef);
+      if ((await stopThreadRun(threadRef)) === "ended" && subagentUi.stops.get(id) === stop)
+        subagentUi.stops.delete(id);
       refreshTree(rootId);
     } catch {
-      if (subagentUi.stops.get(key) === "stopping") subagentUi.stops.set(key, "failed");
-      drawActiveChat();
+      if (subagentUi.stops.get(id) === stop) stop.state = "failed";
+    }
+    drawActiveChat();
+  }
+
+  function pruneSubagentStops(rows: readonly SubagentRow[]): void {
+    for (const [id, stop] of subagentUi.stops) {
+      const row = rows.find((candidate) => candidate.session.id === id && candidate.state === "working");
+      const run = row?.session.workingSince;
+      if (!row || (stop.run !== undefined && run !== undefined && run !== stop.run)) subagentUi.stops.delete(id);
     }
   }
 
   function subagentStopTpl(rootId: string, row: SubagentRow): TemplateResult | typeof nothing {
     if (row.state !== "working") return nothing;
-    const stop = subagentUi.stops.get(subagentStopKey(row));
+    const stop = subagentUi.stops.get(row.session.id)?.state;
     return html`${stop === "failed" ? html`<span class="subagent-row-error" role="alert">Couldn't stop</span>` : nothing}
       <button
         type="button"
@@ -2882,8 +2894,7 @@ export function createChatSurface(
     }
     const rows = visibleSubagents(subagentRows(sessionsState.list, rootId), subagentUi.acknowledged);
     syncSubagentRowsRefresh(rows.some((row) => row.state === "working") ? rootId : null);
-    const stoppable = new Set(rows.filter((row) => row.state === "working").map(subagentStopKey));
-    for (const key of subagentUi.stops.keys()) if (!stoppable.has(key)) subagentUi.stops.delete(key);
+    pruneSubagentStops(rows);
     syncSubagentApprovals(rows);
     subagentUi.ticking = rows.some((row) => row.state === "working" || row.state === "waiting");
     syncWorkTicker();

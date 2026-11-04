@@ -28,6 +28,8 @@ interface Fixture {
   signals: Array<{ path: string; body: unknown }>;
   failSignal: boolean;
   holdSignal: Promise<void> | null;
+  signalReply?: () => Response;
+  endOnSignal?: boolean;
 }
 
 async function strip(fixture: Fixture) {
@@ -55,8 +57,9 @@ async function strip(fixture: Fixture) {
           fixture.signals.push({ path, body: JSON.parse(String(init.body)) });
           if (fixture.holdSignal) await fixture.holdSignal;
           if (fixture.failSignal) return Response.json({ error: "boom" }, { status: 500 });
+          if (fixture.signalReply) return fixture.signalReply();
           const stopped = fixture.lanes.find((row) => row.id === signal[1]);
-          if (stopped) stopped.working = false;
+          if (stopped && fixture.endOnSignal !== false) stopped.working = false;
           return Response.json({ accepted: true });
         })();
       const opened = fixture.lanes.find(
@@ -100,11 +103,11 @@ test("a row's Stop stops only that subagent's current run", async () => {
     signals: [],
     failSignal: false,
     holdSignal: new Promise<void>((resolve) => (release = resolve)),
+    endOnSignal: false,
   };
   const h = await strip(fixture);
   try {
     await expandedStrip(h);
-    assert.equal(main().querySelector(".subagent-stop-all"), null);
     present(stopFor("Schema lane")).click();
     await until(() => fixture.signals.length === 1);
     assert.deepEqual(fixture.signals[0], { path: "/api/runs/run-lane-a/signal", body: { kind: "abort" } });
@@ -112,6 +115,13 @@ test("a row's Stop stops only that subagent's current run", async () => {
     assert.equal(present(stopFor("Schema lane")).textContent?.trim(), "Stopping…");
     assert.equal(present(stopFor("Backfill lane")).textContent?.trim(), "Stop");
     release();
+    const childReads = () => h.requests.filter((path) => path.endsWith(`/api/sessions/${SESSION.id}/children`)).length;
+    const seen = childReads();
+    await until(() => childReads() > seen);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(present(stopFor("Schema lane")).textContent?.trim(), "Stopping…");
+    assert.equal(present(stopFor("Schema lane")).disabled, true);
+    present(fixture.lanes[0]).working = false;
     await until(() => rowFor("Schema lane") === undefined);
     assert.equal(present(stopFor("Backfill lane")).textContent?.trim(), "Stop");
     assert.equal(fixture.signals.length, 1);
@@ -163,6 +173,27 @@ test("clicking a row opens that subagent", async () => {
     await until(() => h.requests.some((path) => path.startsWith("/api/sessions/lane-b")));
     await until(() => main().querySelector(".subagent-row") === null);
     assert.equal(fixture.signals.length, 0);
+  } finally {
+    await h.close();
+  }
+});
+
+test("Stop on a run that already ended puts the button back instead of hanging", async () => {
+  const fixture: Fixture = {
+    lanes: [lane("lane-a", "Schema lane"), lane("lane-b", "Backfill lane")],
+    signals: [],
+    failSignal: false,
+    holdSignal: null,
+    signalReply: () => Response.json({ accepted: false, reason: "terminal" }, { status: 409 }),
+  };
+  const h = await strip(fixture);
+  try {
+    await expandedStrip(h);
+    stopFor("Schema lane")?.click();
+    await until(() => fixture.signals.length === 1);
+    await until(() => stopFor("Schema lane")?.disabled === false);
+    assert.equal(present(stopFor("Schema lane")).textContent?.trim(), "Stop");
+    assert.equal(rowFor("Schema lane")?.querySelector(".subagent-row-error") ?? null, null);
   } finally {
     await h.close();
   }

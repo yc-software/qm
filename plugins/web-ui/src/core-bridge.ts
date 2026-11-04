@@ -1474,17 +1474,22 @@ async function followRun(
   }
 }
 
-export async function stopThreadRun(threadRef: string): Promise<void> {
+export async function stopThreadRun(threadRef: string): Promise<"stopped" | "ended"> {
   const { runId } = await activeRunForThread(threadRef);
-  if (!runId) return;
+  if (!runId) return "ended";
   try {
     await api(runPath(runId, "/signal"), {
       method: "POST",
       signal: AbortSignal.timeout(RUN_REQUEST_TIMEOUT_MS),
       body: JSON.stringify({ kind: "abort" }),
     });
+    return "stopped";
   } catch (err) {
-    if (!(err instanceof ApiError && (err.status === 409 || err.status === 404))) throw err;
+    if (!(err instanceof ApiError)) throw err;
+    const { body } = err;
+    const terminal = typeof body === "object" && body !== null && "reason" in body && body.reason === "terminal";
+    if (err.status === 404 || (err.status === 409 && terminal)) return "ended";
+    throw err;
   }
 }
 
