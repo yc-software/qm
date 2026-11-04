@@ -23,7 +23,7 @@ test("session search reuses indexed search with participant intersection, tenure
   const scope = scopeId("group", "room");
   const current = await sessions.getOrCreateByThread("web:room", "group", scope);
   const source = await sessions.getOrCreateByThread("web:source", "group", scopeId("group", "source"));
-  await sessions.addParticipant(source.id, alice.id, undefined, { includeHistory: true });
+  await sessions.addParticipant(source.id, alice.id);
   const writer = { sessionId: source.id };
   await sessions.append(writer, {
     kind: "UserMessage",

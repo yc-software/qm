@@ -412,6 +412,15 @@ END $session_facts$`,
   ],
 };
 
+const PARTICIPANT_MEMBERSHIP: PgMigrationDefinition = {
+  id: "sessions/store/0055-participant-membership",
+  statements: [
+    `SET LOCAL lock_timeout = '5s'`,
+    `ALTER TABLE participants ALTER COLUMN valid_from SET DEFAULT 0, ALTER COLUMN valid_from_seq SET DEFAULT 0`,
+    `DELETE FROM participants WHERE valid_to IS NOT NULL OR valid_to_seq IS NOT NULL`,
+  ],
+};
+
 export const SESSION_MIGRATIONS = [
   TENANCY_BASE,
   SESSION_SCHEMA,
@@ -421,4 +430,5 @@ export const SESSION_MIGRATIONS = [
   SPEND_RECOVERY_INDEX,
   SESSION_FACTS,
   SESSION_FACTS_COPY,
+  PARTICIPANT_MEMBERSHIP,
 ];

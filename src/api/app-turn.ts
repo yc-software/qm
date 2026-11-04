@@ -278,7 +278,7 @@ export function createTurnMethods(
           deps.sessions.getByThread(conversation.threadRef),
         ]);
         if (!approvalSession || (await approvalResumable(approvalSession, actor.id, approval)) !== "ok") {
-          return { status: "refused", reason: "approval isn't visible in your project tenure" };
+          return { status: "refused", reason: "approval isn't visible to you in this project" };
         }
       }
       const sealedByApproval = async (): Promise<TurnResult | undefined> => {

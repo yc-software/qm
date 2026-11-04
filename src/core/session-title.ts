@@ -24,7 +24,6 @@ export function createSessionTitles(deps: {
     sessionId: string,
     scopeId: ScopeId,
     transcript: string,
-    principalId?: string,
     fallbackText?: string,
   ): Promise<string | undefined> {
     if (!transcript.trim()) return undefined;
@@ -44,10 +43,7 @@ export function createSessionTitles(deps: {
       );
     }
     title ??= fallbackText ? fallbackSessionTitle(fallbackText) : undefined;
-    if (title) {
-      if (principalId) await deps.sessions.updateParticipantView(sessionId, principalId, { title });
-      else await deps.sessions.updateTitle(sessionId, title);
-    }
+    if (title) await deps.sessions.updateTitle(sessionId, title);
     return title;
   }
 

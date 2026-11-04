@@ -20,7 +20,7 @@ interface Sim {
 async function simSession(threadRef = "dm:search-index-test"): Promise<Sim> {
   const store = createPostgresSessionStore(testDatabaseUrl());
   const session = await store.getOrCreateByThread(threadRef, "dm", scope);
-  await store.addParticipant(session.id, VIEWER, undefined, { includeHistory: true });
+  await store.addParticipant(session.id, VIEWER);
   return { store, session, writer: { sessionId: session.id } };
 }
 

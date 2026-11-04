@@ -409,15 +409,15 @@ test("mail envelope attributes stay well-formed and machine-parseable when the t
   assert.equal(head[3], "final_answer");
 });
 
-test("session reads hide history outside the viewer's participant tenure", async () => {
+test("session reads show a late joiner the history from before they joined", async () => {
   const r = await rig();
   const target = await r.sessions.getOrCreateByThread("web:private-old", "dm", scope);
   const writer = { sessionId: target.id };
-  await r.sessions.append(writer, { kind: "AgentMessage", text: "hidden-before-membership" });
+  await r.sessions.append(writer, { kind: "AgentMessage", text: "written-before-membership" });
   await r.sessions.addParticipant(target.id, actor.id);
   const view = await r.syscallsFor(r.room).read({ target: target.id });
   assert.ok(view.ok && view.mode === "transcript");
-  assert.doesNotMatch(view.rendered, /hidden-before-membership/);
+  assert.match(view.rendered, /written-before-membership/);
 });
 
 test("child runs retain the managed roster and read-only floor", async () => {
@@ -928,7 +928,7 @@ test("an empty mailbox check skips sender validation and a delivered message sti
   assert.equal(checks, 1);
 });
 
-test("queued results recheck source-entry visibility after participant tenure changes", async () => {
+test("queued results recheck source-entry visibility after a participant leaves", async () => {
   const r = await rig();
   const other: Principal = { id: "U2", type: "internal" };
   const sharedScope = scopeId("group", "G1");
@@ -959,7 +959,6 @@ test("queued results recheck source-entry visibility after participant tenure ch
   );
   assert.equal((await api.receive!()).length, 1);
   await r.sessions.removeParticipant(child.id, other.id);
-  await r.sessions.addParticipant(child.id, other.id);
   assert.equal((await r.sessions.visibleItems(child.id, other.id)).length, 0);
   assert.deepEqual(await api.receive!(), []);
   assert.equal((await r.mailbox.pending(shared.id)).length, 1);

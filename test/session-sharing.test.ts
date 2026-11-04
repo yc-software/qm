@@ -288,36 +288,15 @@ test("attachment projection includes only user and delivered attachments", () =>
   ]);
 });
 
-test("snapshot authorization checks mixed tenure bounds without reading transcript payloads", async () => {
+test("snapshot authorization follows current conversation access", async () => {
   let allowed = true;
-  let window = {
-    principalId: "alice",
-    validFrom: 100,
-    validTo: 500,
-    validFromSeq: 2 as number | null,
-    validToSeq: null as number | null,
-  };
   const methods = createSessionMethods(
-    { sessions: { participantWindowsOf: async () => [window] } } as unknown as Parameters<
-      typeof createSessionMethods
-    >[0],
+    {} as unknown as Parameters<typeof createSessionMethods>[0],
     { sessionForViewer: async () => (allowed ? {} : null) } as unknown as Parameters<typeof createSessionMethods>[1],
   );
-  const bounds = { minSeq: 2, maxSeq: 9, minCreatedAt: 50, maxCreatedAt: 499 };
-  assert.equal(await methods.canViewSessionSnapshot("s1", "alice", bounds), true);
-  assert.equal(await methods.canViewSessionSnapshot("s1", "bob", bounds), false);
-  assert.equal(await methods.canViewSessionSnapshot("s1", "alice", { ...bounds, minSeq: 1 }), false);
-  assert.equal(await methods.canViewSessionSnapshot("s1", "alice", { ...bounds, maxCreatedAt: 500 }), false);
-  window = { ...window, validFromSeq: null, validToSeq: 10 };
-  assert.equal(await methods.canViewSessionSnapshot("s1", "alice", bounds), false);
-  assert.equal(await methods.canViewSessionSnapshot("s1", "alice", { ...bounds, minCreatedAt: 100 }), true);
-  assert.equal(
-    await methods.canViewSessionSnapshot("s1", "alice", { ...bounds, minCreatedAt: 100, maxSeq: 10 }),
-    false,
-  );
-  assert.equal(await methods.canViewSessionSnapshot("s1", "alice", { ...bounds, minSeq: NaN }), false);
+  assert.equal(await methods.canViewSessionSnapshot("s1", "alice"), true);
   allowed = false;
-  assert.equal(await methods.canViewSessionSnapshot("s1", "alice", { ...bounds, minCreatedAt: 100 }), false);
+  assert.equal(await methods.canViewSessionSnapshot("s1", "alice"), false);
 });
 
 test("staged tool attachments are never shared without confirmed delivery", () => {
