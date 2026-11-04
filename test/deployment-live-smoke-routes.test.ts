@@ -11,6 +11,8 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { runSessionSmoke } from "../src/deployment/postdeploy-smoke.ts";
+import { installTenantNow } from "../src/tenants/context.ts";
 
 const sourceSecret = "source-only-secret".repeat(3);
 const controlSecret = "deployment-only-secret".repeat(3);
@@ -187,5 +189,54 @@ test("live smoke fails when a newer build supersedes it mid-check and never retu
     assert.ok(!raw.includes("secret-value"));
   } finally {
     await failed.close();
+  }
+});
+
+test("live smoke runs the real session canary in-process under the install tenant", async () => {
+  const portalIdentitySecret = "portal-identity-secret".repeat(3);
+  const config = testConfig({ signingSecret: sourceSecret, portalIdentitySecret, orgId: "acme" });
+  const built = buildApp(config);
+  await built.loadTenants();
+  assert.ok(installTenantNow(), "the install tenant is registered, so the route binds it");
+  const dedupe = createPostgresReplayDedupe(testDatabaseUrl());
+  let canaryError: unknown;
+  const server = createServer(built.app, {
+    signingSecret: sourceSecret,
+    portalIdentitySecret,
+    capabilitySecret: "capability-only-secret".repeat(3),
+    requireSignedPortalIdentity: true,
+    tenancy: built.tenancy,
+    deploymentControlSecret: controlSecret,
+    deploymentLiveSmoke: {
+      deploymentId: "cohort-a",
+      superseded: () => false,
+      run: () =>
+        runSessionSmoke(config, `http://127.0.0.1:${(server.address() as AddressInfo).port}`).catch((error) => {
+          canaryError = error;
+          throw error;
+        }),
+    },
+    replayDedupe: { claim: (...args) => dedupe.claim(...args) },
+  });
+  server.listen(0);
+  try {
+    const raw = JSON.stringify(body());
+    const ts = Math.floor(Date.now() / 1000);
+    const response = await fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}${path}`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-timestamp": String(ts),
+        "x-signature": signRequest(sourceSecret, ts, `POST\n${path}\n${raw}`),
+        authorization: `Bearer ${controlSecret}`,
+      },
+      body: raw,
+    });
+    assert.equal(response.status, 200);
+    const result = (await response.json()) as { ok: boolean; error?: string };
+    assert.equal(canaryError, undefined);
+    assert.equal(result.ok, true);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });

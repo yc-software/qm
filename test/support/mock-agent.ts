@@ -729,6 +729,8 @@ export function createMockAgent(): Agent {
               .map((m) => `${m.name ?? "you"}@${m.ts}: ${m.text}${m.files?.length ? ` [${m.files.join(",")}]` : ""}`)
               .join("\n")
           : "overheard:none";
+      } else if (command0.startsWith("Reply with exactly: ")) {
+        reply = command0.slice("Reply with exactly: ".length);
       } else {
         reply = `You said: ${modelPrompt}`;
       }
