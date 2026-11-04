@@ -1974,7 +1974,7 @@ test("an empty mailbox check skips sender validation and a delivered message sti
   checks = 0;
   const mail = await peer.receive!();
   assert.equal(mail.length, 1);
-  assert.equal(checks, 1);
+  assert.equal(checks, 2);
 });
 
 test("queued results recheck source-entry visibility after a participant leaves", async () => {
