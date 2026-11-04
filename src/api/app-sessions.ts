@@ -10,7 +10,7 @@ import { isUserItem, type Item, messageTs, proseText } from "../sessions/items.t
 import { orgId as orgIdOf } from "../config.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { fileArtifactId, artifactPath } from "../files/file-artifact-store.ts";
-import { windowedTranscript } from "../sessions/session-store.ts";
+import { isWebThread, windowedTranscript } from "../sessions/session-store.ts";
 import { createTranscriptSource } from "../sessions/transcript-source.ts";
 import { cancelGoal, goalCancelledItem, openGoal } from "../agent/goal.ts";
 import { goalView } from "../runs/turn-stream.ts";
@@ -22,7 +22,8 @@ import { cronRef, deployRef, encodeRef, fileRef, parseRef, skillRef } from "../a
 import { samePerson } from "../directory/person.ts";
 import { AdminError } from "../admin/admin-service.ts";
 import { swallowAs } from "../util/errors.ts";
-import { waitForNoRunningRun } from "../runs/run-store.ts";
+import { hasRunningRun, waitForNoRunningRun } from "../runs/run-store.ts";
+import { messageRevision, webMessageEdit } from "../slack/message-revisions.ts";
 import { type ArtifactHome } from "./artifact-share.ts";
 import { randomUUID } from "node:crypto";
 import { isOpenScopeMember } from "../resolution/sharing-access.ts";
@@ -108,6 +109,7 @@ export function createSessionMethods(
   | "updateSession"
   | "detachSession"
   | "cancelSessionGoal"
+  | "editSessionMessage"
   | "regenerateTitle"
   | "spawnSession"
   | "discardSession"
@@ -1050,6 +1052,19 @@ export function createSessionMethods(
       return { cancelled: true as const };
     },
 
+    async editSessionMessage(sessionId, principalId, seq, text) {
+      const session = await sessionForViewer(sessionId, principalId);
+      if (!session || !(await mayWriteSession(principalId, session))) return null;
+      if (!isWebThread(session.threadRef)) return { edited: false as const, reason: "not_editable" as const };
+      if (await hasRunningRun(deps.runs, session.threadRef)) return { edited: false as const, reason: "busy" as const };
+      const items = await deps.sessions.getItems(session.id, { sinceSeq: seq });
+      const revision = webMessageEdit(items, seq, (author) => samePerson(author, principalId), text);
+      if (revision === "not_editable" || revision === "empty_text") return { edited: false as const, reason: revision };
+      if (revision)
+        await deps.sessions.append({ sessionId: session.id }, { kind: "Retraction", body: { ...revision } });
+      return { edited: true as const };
+    },
+
     async regenerateTitle(sessionId, principalId) {
       const session = await sessionForViewer(sessionId, principalId);
       if (!session) return null;
@@ -1062,6 +1077,36 @@ export function createSessionMethods(
     },
 
     async forkSession(sessionId, principalId, opts) {
+      // Web message edits name their message by seq, and a fork renumbers every item, so append in runs that
+      // end before each such edit and point the edit at its message's new seq.
+      const copyItemsRemappingEdits = async (forkId: string, items: readonly Item[]): Promise<Item[]> => {
+        const newSeq = new Map<number, number>();
+        const out: Item[] = [];
+        let run: Item[] = [];
+        const flush = async () => {
+          if (!run.length) return;
+          const appended = await deps.sessions.appendMany(
+            { sessionId: forkId },
+            run.map(({ sessionId: _sessionId, seq: _seq, createdAt: _createdAt, ...item }) => item),
+          );
+          run.forEach((item, i) => newSeq.set(item.seq, appended[i]!.seq));
+          out.push(...appended);
+          run = [];
+        };
+        for (const item of items) {
+          const editSeq = messageRevision(item)?.seq;
+          if (editSeq === undefined) {
+            run.push(item);
+            continue;
+          }
+          await flush();
+          const target = newSeq.get(editSeq);
+          if (target === undefined) continue;
+          run.push({ ...item, body: { ...item.body, seq: target } } as Item);
+        }
+        await flush();
+        return out;
+      };
       if (!(await sessionForViewer(sessionId, principalId))) return null;
       const source = await deps.sessions.get(sessionId);
       if (!source) return null;
@@ -1086,10 +1131,7 @@ export function createSessionMethods(
         await Promise.all(
           (projectMembers ?? [principalId]).map((memberId) => deps.sessions.addParticipant(forked.id, memberId)),
         );
-        const copiedItems = await deps.sessions.appendMany(
-          { sessionId: forked.id },
-          copied.map(({ sessionId: _sessionId, seq: _seq, createdAt: _createdAt, ...item }) => item),
-        );
+        const copiedItems = await copyItemsRemappingEdits(forked.id, copied);
         const forkBoundarySeq = copiedItems.at(-1)?.seq ?? null;
         if (forkBoundarySeq !== null) {
           await deps.sessions.updateForkProvenance(forked.id, {

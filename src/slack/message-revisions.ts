@@ -8,11 +8,20 @@ import { isAgentReply, isHidden, isUserItem, type Item, messageTs } from "../ses
 
 export interface MessageRevisionPayload {
   action: "edited" | "deleted";
-  ts: string;
+  /** Slack message ts of the revised message. Absent for web edits, which name the message by `seq`. */
+  ts?: string;
+  /** Transcript seq of the revised web UserMessage. */
+  seq?: number;
+  /** ISO send time of a web message (Slack derives it from `ts`). */
+  sentAt?: string;
+  /** Excerpt of the web message's text before this edit, so the model can tell which message changed. */
+  original?: string;
   text?: string;
   name?: string;
   sourceRole?: "agent";
 }
+
+const WEB_EDIT_ORIGINAL_MAX_CHARS = 300;
 
 interface MessageRevisionSource {
   self?: boolean;
@@ -33,20 +42,61 @@ export function messageRevision(e: Pick<Item, "kind" | "body">): MessageRevision
   if (e.kind !== "Retraction") return null;
   const p = e.body;
   if (p.action !== "edited" && p.action !== "deleted") return null;
-  if (typeof p.ts !== "string" || !p.ts) return null;
+  const hasTs = typeof p.ts === "string" && p.ts !== "";
+  const hasSeq = typeof p.seq === "number" && Number.isInteger(p.seq) && p.seq >= 0;
+  if (!hasTs && !hasSeq) return null;
   return p as unknown as MessageRevisionPayload;
 }
 
 export function renderMessageRevision(p: MessageRevisionPayload): string {
+  const sentAt = p.ts ? isoFromTs(p.ts) : (p.sentAt ?? "");
   const attrs = [
-    `id="${xmlAttrEscape(p.ts)}"`,
+    ...(p.ts ? [`id="${xmlAttrEscape(p.ts)}"`] : []),
     ...(p.sourceRole ? [`from="${p.sourceRole}"`] : []),
     ...(p.name?.trim() ? [`author="${xmlAttrEscape(p.name.trim())}"`] : []),
-    ...(isoFromTs(p.ts) ? [`sent-at="${isoFromTs(p.ts)}"`] : []),
+    ...(sentAt ? [`sent-at="${sentAt}"`] : []),
+    ...(p.original ? [`original="${xmlAttrEscape(p.original)}"`] : []),
   ].join(" ");
   return p.action === "deleted"
     ? `<message-deleted ${attrs}>the author deleted this message</message-deleted>`
     : `<message-edited ${attrs}>${xmlEscape(p.text ?? "")}</message-edited>`;
+}
+
+export type WebEditRefusal = "not_editable" | "empty_text";
+
+/**
+ * Revision record for a person editing their own web message (a UserMessage named by transcript seq).
+ * Returns null when the text is unchanged since the last edit.
+ */
+export function webMessageEdit(
+  items: readonly Item[],
+  seq: number,
+  editor: (author: string | null) => boolean,
+  text: string,
+): MessageRevisionPayload | null | WebEditRefusal {
+  const original = items.find((e) => e.seq === seq);
+  if (!original || original.kind !== "UserMessage" || isHidden(original) || !editor(original.author))
+    return "not_editable";
+  if (!text.trim()) return "empty_text";
+  const display =
+    typeof original.body.display === "string" && original.body.display.trim() ? original.body.display : null;
+  const originalText = display ?? original.text ?? "";
+  let effective = originalText;
+  for (const e of items) {
+    const r = messageRevision(e);
+    if (r?.seq === seq && r.action === "edited") effective = r.text ?? effective;
+  }
+  if (text === effective) return null;
+  const { name } = original.body;
+  const flat = originalText.trim().replace(/\s+/g, " ");
+  return {
+    action: "edited",
+    seq,
+    sentAt: new Date(original.createdAt).toISOString(),
+    original: flat.length > WEB_EDIT_ORIGINAL_MAX_CHARS ? `${flat.slice(0, WEB_EDIT_ORIGINAL_MAX_CHARS)}…` : flat,
+    text,
+    ...(typeof name === "string" && name.trim() ? { name: name.trim() } : {}),
+  };
 }
 
 function isRevisionEvent(e: IngestEvent): boolean {

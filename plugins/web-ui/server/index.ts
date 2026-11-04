@@ -2111,6 +2111,21 @@ const apiRoutes: readonly WebRoute[] = [
     },
   },
   {
+    method: "POST",
+    path: "/api/sessions/:id/items/:seq/edit",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      const p = await readJson<{ text?: unknown }>(req, res);
+      if (!p) return;
+      return relayCore(
+        res,
+        "POST",
+        `/v1/sessions/${encodeURIComponent(c.params.id!)}/items/${encodeURIComponent(c.params.seq!)}/edit`,
+        JSON.stringify({ principalId: user, text: p.text }),
+      );
+    },
+  },
+  {
     method: "GET",
     path: "/api/sessions/:id/side-chats",
     handle: async (c) =>

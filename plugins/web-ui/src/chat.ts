@@ -32,6 +32,8 @@ import { html, nothing, render, type TemplateResult } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { ref } from "lit/directives/ref.js";
 import { guard } from "lit/directives/guard.js";
+import { live } from "lit/directives/live.js";
+import { emojiCompletion } from "./emoji-completion";
 import {
   Activity,
   ArrowDown,
@@ -97,6 +99,7 @@ import {
   forkCutSeq,
   forkSession,
   cancelSessionGoal,
+  editSessionMessage,
   inheritedRefreshItems,
   inheritedTranscript,
   loadInheritedTranscript,
@@ -245,6 +248,7 @@ interface SettledRowKey {
   speakerLabel: string | undefined;
   edited: boolean;
   deleted: boolean;
+  editKey: string;
   tpl: TemplateResult | typeof nothing;
 }
 const settledRowCache = new WeakMap<object, SettledRowKey>();
@@ -289,6 +293,7 @@ export function createChatSurface(
   });
   const sideChats = createSideChatController(ctx);
   let pendingFork: { index: number } | null = null;
+  let messageEdit: { sessionId: string; seq: number; text: string; saving: boolean; error: string } | null = null;
   const transcriptViewport = createTranscriptViewport({ pinPrompt: pinLatestPrompt });
   const stopPrefsWatch = onChatPrefsChange(() => transcriptViewport.refresh());
   let preserveConnectionScroll = isConnectionReturn();
@@ -1946,6 +1951,7 @@ export function createChatSurface(
         : speaker && `${speaker}\n${speakerMember(message)?.avatarUrl ?? ""}`;
     const edited = Boolean((message as { edited?: boolean }).edited);
     const deleted = Boolean((message as { deleted?: boolean }).deleted);
+    const editKey = messageEditKey(message);
     const day = new Date().toDateString();
     const hit = settledRowCache.get(message as object);
     if (
@@ -1964,7 +1970,8 @@ export function createChatSurface(
       hit.forking === forking &&
       hit.speakerLabel === speakerLabel &&
       hit.edited === edited &&
-      hit.deleted === deleted
+      hit.deleted === deleted &&
+      hit.editKey === editKey
     ) {
       return hit.tpl;
     }
@@ -1985,6 +1992,7 @@ export function createChatSurface(
       speakerLabel,
       edited,
       deleted,
+      editKey,
       tpl,
     });
     return tpl;
@@ -2046,9 +2054,10 @@ export function createChatSurface(
         >
           ${speakerLabelTpl(speaker, message)}
           ${attachmentGallery(attachments, (attachment) => browserRenderableImage(attachment.mimeType), userAttachmentBadge)}
+          ${editingThis(message) ? messageEditor() : nothing}
           <div
             class="message-bubble user-bubble ${deleted ? "deleted-bubble" : ""}"
-            ?hidden=${!messageText(message).trim() && !edited && !deleted}
+            ?hidden=${(!messageText(message).trim() && !edited && !deleted) || editingThis(message)}
           >
             <div class="pin-content">
               ${isReadOnlySlackView() ? slackWireBubble(messageText(message)) : markdown(messageText(message))}
@@ -2068,7 +2077,7 @@ export function createChatSurface(
                 </div>`
               : nothing
           }
-          ${messageMeta(message, index)}
+          ${editingThis(message) ? nothing : messageMeta(message, index)}
         </article>
       `;
     }
@@ -2238,6 +2247,19 @@ export function createChatSurface(
             : nothing
         }
         ${
+          canEditMessage(message)
+            ? html`<button
+                class="msg-copy msg-edit"
+                type="button"
+                ${tip("Edit")}
+                aria-label="Edit message"
+                @click=${() => startMessageEdit(message)}
+              >
+                ${icon(Pencil, 13)}
+              </button>`
+            : nothing
+        }
+        ${
           forkable
             ? html`<button
                 class="msg-copy msg-fork"
@@ -2254,6 +2276,145 @@ export function createChatSurface(
         }
       </div>
     `;
+  }
+
+  function editableSeq(message: AgentMessage): number | null {
+    const m = message as {
+      role?: string;
+      entrySeq?: number;
+      steered?: boolean;
+      subagentMail?: unknown;
+      sendFailure?: string;
+      speakerId?: string;
+      ts?: string;
+    };
+    if (m.role !== "user" && m.role !== "user-with-attachments") return null;
+    if (typeof m.entrySeq !== "number" || m.steered || m.subagentMail || m.sendFailure || m.ts) return null;
+    if (m.speakerId && m.speakerId !== appState.me?.user) return null;
+    return m.entrySeq;
+  }
+
+  /** Your own sent message in an idle web conversation; Slack-backed messages are edited in Slack. */
+  function canEditMessage(message: AgentMessage): boolean {
+    if (ctx.inbox || isReadOnlySlackView() || !chatState.sessionId || !chatState.threadRef?.startsWith("web:"))
+      return false;
+    if (!messageText(message).trim()) return false;
+    const agent = chatState.agent;
+    if (!agent || agent.state.isStreaming || chatState.pendingSend !== null || messageEdit) return false;
+    return editableSeq(message) !== null;
+  }
+
+  function editingThis(message: AgentMessage): boolean {
+    const seq = editableSeq(message);
+    return messageEdit !== null && seq === messageEdit.seq && messageEdit.sessionId === chatState.sessionId;
+  }
+
+  function messageEditKey(message: AgentMessage): string {
+    if (editingThis(message)) return `editing:${messageEdit!.saving}:${messageEdit!.error}`;
+    return canEditMessage(message) ? "editable" : "";
+  }
+
+  function startMessageEdit(message: AgentMessage): void {
+    const seq = editableSeq(message);
+    if (seq === null || !chatState.sessionId) return;
+    const edit = (messageEdit = {
+      sessionId: chatState.sessionId,
+      seq,
+      text: messageText(message),
+      saving: false,
+      error: "",
+    });
+    drawActiveChat();
+    requestAnimationFrame(() => {
+      if (messageEdit !== edit) return;
+      const input = chatState.host?.querySelector<HTMLTextAreaElement>(".message-edit-input");
+      if (!input) return;
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+      fitEditInput(input);
+    });
+  }
+
+  function fitEditInput(input: HTMLTextAreaElement): void {
+    input.style.height = "auto";
+    input.style.height = `${Math.min(input.scrollHeight + 2, 320)}px`;
+  }
+
+  function cancelMessageEdit(): void {
+    if (!messageEdit || messageEdit.saving) return;
+    messageEdit = null;
+    drawActiveChat();
+  }
+
+  async function saveMessageEdit(): Promise<void> {
+    const edit = messageEdit;
+    const agent = chatState.agent;
+    if (!edit || edit.saving || !agent) return;
+    if (!edit.text.trim()) {
+      edit.error = "A message can't be empty.";
+      drawActiveChat(agent);
+      return;
+    }
+    edit.saving = true;
+    edit.error = "";
+    drawActiveChat(agent);
+    try {
+      await editSessionMessage(edit.sessionId, edit.seq, edit.text);
+      if (agent === chatState.agent) await refreshTranscriptFromItems(agent);
+      if (messageEdit === edit) messageEdit = null;
+    } catch (err) {
+      edit.saving = false;
+      edit.error = errMessage(err, "Could not save the edit.");
+    } finally {
+      if (agent === chatState.agent) drawActiveChat(agent);
+    }
+  }
+
+  function messageEditor(): TemplateResult {
+    const edit = messageEdit!;
+    return html`<div class="message-edit">
+      <textarea
+        class="message-edit-input"
+        ${emojiCompletion(edit.text)}
+        aria-label="Edit message"
+        rows="1"
+        .value=${live(edit.text)}
+        ?disabled=${edit.saving}
+        @input=${(event: Event) => {
+          const input = event.target as HTMLTextAreaElement;
+          edit.text = input.value;
+          fitEditInput(input);
+        }}
+        @keydown=${(event: KeyboardEvent) => {
+          if (event.isComposing || edit.saving) return;
+          if (event.key === "Escape") {
+            event.preventDefault();
+            event.stopPropagation();
+            cancelMessageEdit();
+          } else if (event.key === "Enter" && !event.shiftKey) {
+            event.preventDefault();
+            event.stopPropagation();
+            void saveMessageEdit();
+          }
+        }}
+      ></textarea>
+      <div class="message-edit-actions">
+        ${edit.error ? html`<span class="message-edit-error" role="alert">${edit.error}</span>` : nothing}
+        <span class="message-edit-hint">Esc to cancel · Enter to save</span>
+        <button type="button" class="btn compact" ?disabled=${edit.saving} @click=${() => cancelMessageEdit()}>
+          Cancel
+        </button>
+        <button
+          type="button"
+          class="btn compact primary"
+          ?disabled=${edit.saving}
+          aria-busy=${edit.saving ? "true" : "false"}
+          @click=${() => void saveMessageEdit()}
+        >
+          ${edit.saving ? "Saving…" : "Save"}
+        </button>
+      </div>
+    </div>`;
   }
 
   async function forkFromMessage(index: number): Promise<void> {

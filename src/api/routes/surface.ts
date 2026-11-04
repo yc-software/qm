@@ -118,6 +118,25 @@ async function cancelSessionGoal(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, out);
 }
 
+async function editSessionMessage(ctx: ApiCtx): Promise<void> {
+  const { res, app, body } = ctx;
+  const b = body as { principalId?: unknown; text?: unknown };
+  if (typeof b.principalId !== "string" || !b.principalId || typeof b.text !== "string")
+    return sendJson(res, 400, { error: "bad_request", message: "principalId and text required" });
+  const seq = Number(ctx.params.seq);
+  if (!Number.isInteger(seq) || seq < 0)
+    return sendJson(res, 400, { error: "bad_request", message: "seq must be a non-negative integer" });
+  const out = await app.editSessionMessage(ctx.params.id!, b.principalId, seq, b.text);
+  if (!out) return sendJson(res, 404, { error: "not_found" });
+  if (out.edited) return sendJson(res, 200, out);
+  const messages = {
+    busy: "Wait for the reply to finish, or stop it, before editing.",
+    empty_text: "A message can't be empty.",
+    not_editable: "Only your own messages in web conversations can be edited.",
+  };
+  return sendJson(res, out.reason === "empty_text" ? 400 : 409, { error: out.reason, message: messages[out.reason] });
+}
+
 async function forkSession(ctx: ApiCtx): Promise<void> {
   const { res, app, body } = ctx;
   const id = ctx.params.id!;
@@ -1522,6 +1541,7 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
     { method: "POST", path: "/v1/sessions/:id/fork", auth: "source", handle: forkSession },
     { method: "POST", path: "/v1/sessions/:id/detach", auth: "source", handle: detachSession },
     { method: "POST", path: "/v1/sessions/:id/goal/cancel", auth: "source", handle: cancelSessionGoal },
+    { method: "POST", path: "/v1/sessions/:id/items/:seq/edit", auth: "source", handle: editSessionMessage },
     { method: "POST", path: "/v1/files/upload", auth: "source", handle: uploadFile },
     { method: "POST", path: "/v1/sessions/:id", auth: "source", handle: patchSession },
     { method: "PATCH", path: "/v1/memory", auth: "source", handle: selfMemory },

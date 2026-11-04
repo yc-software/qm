@@ -409,6 +409,12 @@ export interface App {
     sessionId: string,
     principalId: string,
   ): Promise<{ cancelled: true } | { cancelled: false; reason: "no_open_goal" | "busy" } | null>;
+  editSessionMessage(
+    sessionId: string,
+    principalId: string,
+    seq: number,
+    text: string,
+  ): Promise<{ edited: true } | { edited: false; reason: "not_editable" | "empty_text" | "busy" } | null>;
   spawnSession(principalId: string, opts: { scopeId: ScopeId; title?: string }): Promise<{ session: Session } | null>;
   discardSession(sessionId: string, principalId: string): Promise<boolean>;
   forkSession(

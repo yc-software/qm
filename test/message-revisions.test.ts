@@ -254,7 +254,7 @@ test("while a turn is live the ingest-time marker is skipped, and the turn-end c
     fallbackSince: 0,
   });
   assert.equal(recorded, 2, "only the thread's own messages are marked; the other thread's edit is not this session's");
-  const marks = revisions(await history(sessions, session.id)).sort((a, b) => (a.ts < b.ts ? -1 : 1));
+  const marks = revisions(await history(sessions, session.id)).sort((a, b) => (a.ts! < b.ts! ? -1 : 1));
   assert.deepEqual(
     marks.map((m) => [m.action, m.ts, m.text ?? null]),
     [

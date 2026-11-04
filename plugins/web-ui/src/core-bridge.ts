@@ -474,6 +474,13 @@ export async function detachSession(id: string): Promise<{ detached: true }> {
 export async function cancelSessionGoal(id: string): Promise<{ cancelled: true }> {
   return api<{ cancelled: true }>(`/api/sessions/${encodeURIComponent(id)}/goal/cancel`, { method: "POST" });
 }
+
+export async function editSessionMessage(id: string, seq: number, text: string): Promise<{ edited: true }> {
+  return api<{ edited: true }>(`/api/sessions/${encodeURIComponent(id)}/items/${seq}/edit`, {
+    method: "POST",
+    body: JSON.stringify({ text }),
+  });
+}
 type WorkStatus = "thinking" | "working" | "complete" | "failed";
 export interface WorkBlock {
   streamStartOffset?: number;
@@ -2060,6 +2067,14 @@ function messageRevisionNote(item: Item): MessageRevisionNote | null {
   };
 }
 
+/** A person's edit of their own web message, named by the message's transcript seq. */
+function webMessageEditOf(item: Item): { seq: number; text: string } | null {
+  if (item.kind !== "Retraction" || item.body.action !== "edited") return null;
+  const { seq, text } = item.body;
+  if (typeof seq !== "number" || typeof text !== "string") return null;
+  return { seq, text };
+}
+
 function isAgentEcho(item: Item): boolean {
   return item.body.overheard === true && item.body.sourceRole === "agent";
 }
@@ -2144,6 +2159,7 @@ function isWorkHistoryItem(item: Item): boolean {
 export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage[] {
   const out: AgentMessage[] = [];
   const userByTs = new Map<string, HistoryUserMessage>();
+  const userBySeq = new Map<number, HistoryUserMessage>();
   let pending: Item[] = [];
   let deliveryFiles: DeliveredFile[] = [];
   let posted = false;
@@ -2297,6 +2313,7 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
       const msg = userItemMessage(e);
       if (msg) {
         if (msg.ts) userByTs.set(msg.ts, msg);
+        if (msg.entrySeq !== undefined) userBySeq.set(msg.entrySeq, msg);
         if (steered) pending.push(e);
         out.push(msg as AgentMessage);
       }
@@ -2327,6 +2344,13 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
       spillHeldPosts();
       flushWork("", e.createdAt);
       out.push({ ...goalCancelledNote(e)!, timestamp: e.createdAt } as unknown as AgentMessage);
+    } else if (webMessageEditOf(e)) {
+      const edit = webMessageEditOf(e)!;
+      const original = userBySeq.get(edit.seq);
+      if (original) {
+        original.content = edit.text;
+        original.edited = true;
+      }
     } else if (messageRevisionNote(e)) {
       const revision = messageRevisionNote(e)!;
       spillHeldPosts();

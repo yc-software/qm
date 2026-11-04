@@ -2474,6 +2474,40 @@ qm-markdown .tok-in {
   font: inherit;
   line-height: 1.5;
 }
+.message-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: min(72%, 620px);
+}
+.message-edit-input {
+  width: 100%;
+  min-width: 0;
+  resize: none;
+  padding: 10px 14px;
+  border: 1px solid var(--ring, var(--border));
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--secondary) 76%, var(--background));
+  color: var(--foreground);
+  font: inherit;
+  font-size: max(min(12px, var(--chat-font-size)), calc(var(--chat-font-size) * var(--text-scale)));
+  line-height: 1.55;
+  outline: none;
+}
+.message-edit-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  font-size: 11px;
+}
+.message-edit-hint {
+  margin-right: auto;
+  color: var(--muted-foreground);
+}
+.message-edit-error {
+  color: var(--destructive, #c0392b);
+}
 .queued-chip + .queued-chip {
   margin-top: -10px;
 }
