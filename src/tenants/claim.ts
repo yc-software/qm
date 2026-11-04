@@ -40,3 +40,8 @@ export async function listTenants(store: PgPool): Promise<TenantRow[]> {
 export async function forEachTenant(store: PgPool, fn: () => Promise<unknown>): Promise<void> {
   for (const tenant of await listTenants(store)) await withTenant(tenant.id, fn);
 }
+
+export async function inInstallTenant<T>(store: PgPool, fn: () => Promise<T>): Promise<T> {
+  const install = (await withoutTenant(() => listTenants(store))).find((tenant) => tenant.install);
+  return inTenantOf(install?.id, fn);
+}

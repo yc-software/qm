@@ -155,7 +155,7 @@ import { createPostgresDirectoryStore } from "./directory/postgres-directory-sto
 import { createPostgresEnvironmentStore, type EnvironmentStore } from "./environments/environment-store.ts";
 import { createIdempotencyStore, type IdempotencyRecord } from "./idempotency/idempotency-store.ts";
 import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
-import { forEachTenant, inTenantOf, listTenants, type TenantRow } from "./tenants/claim.ts";
+import { forEachTenant, inInstallTenant, inTenantOf, listTenants, type TenantRow } from "./tenants/claim.ts";
 import { withoutTenant, withTenant } from "./tenants/context.ts";
 import { createPgBossCronQueue } from "./cron/job-queue.ts";
 import { ownerPgPool } from "./tenants/owner-pool.ts";
@@ -2690,9 +2690,13 @@ export function buildApp(
     currentScopeMembers,
     resolveRecipient,
   });
+  const ownershipStore = createBackgroundOwnershipStore(artifactMap<BackgroundOwnership>("background_ownership"));
   const backgroundOwnership: BackgroundOwnershipControl | undefined = config.backgroundDeploymentId
     ? {
-        store: createBackgroundOwnershipStore(artifactMap<BackgroundOwnership>("background_ownership")),
+        store: {
+          get: () => inInstallTenant(pgArtifactMap.pool, () => ownershipStore.get()),
+          set: (change) => inInstallTenant(pgArtifactMap.pool, () => ownershipStore.set(change)),
+        },
         instanceId: randomUUID(),
         deploymentId: config.backgroundDeploymentId,
         active: () => backgroundActive(),
