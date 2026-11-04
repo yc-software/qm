@@ -329,7 +329,6 @@ export function controlPlaneTools(kit: ToolKit) {
   };
   function sharingTool(type: "file" | "skill" | "deploy" | "cron"): ToolDefinition {
     const tool = { file: "files", skill: "skills", deploy: "apps", cron: "cron" }[type];
-    const action = "share";
     let description = "Grant access to an artifact you own; grantees cannot reshare.";
     if (type === "file")
       description = "Share a Files record by ID (upload a sandbox path with POST /v1/files/uploads first).";
@@ -337,8 +336,8 @@ export function controlPlaneTools(kit: ToolKit) {
       description =
         "Change access to an app you own: `public`, or toScope/email for signed-in access (external emails view-only).";
     return defineTool({
-      name: action,
-      label: action,
+      name: "share",
+      label: "share",
       description,
       parameters: Type.Object({
         id: Type.String({ description: ARTIFACT_ID_DESCRIPTIONS[type] }),
@@ -389,26 +388,26 @@ export function controlPlaneTools(kit: ToolKit) {
         const tc = ref.current;
         if (!tc) return text("[error] no active tool context");
         const id = params.id;
-        await recordCall(callId, { tool, action, type, id });
+        await recordCall(callId, { tool, action: "share", type, id });
         if (type === "deploy" && params.public !== undefined) {
           if (params.toScope !== undefined || params.email !== undefined)
             return recordResult(
               callId,
-              { tool, action, error: "bad_request" },
+              { tool, action: "share", error: "bad_request" },
               text("[error] set public, email, or toScope, not more than one"),
               true,
             );
           const d = await tc.setDeploymentPublic(id, params.public);
           return recordResult(
             callId,
-            { tool, action, type, id: d.id, public: d.public },
+            { tool, action: "share", type, id: d.id, public: d.public },
             text(`${d.name ?? d.id} is now ${d.public ? "public — anyone with the link can open it" : "restricted"}.`),
           );
         }
         if (!params.toScope && !params.email)
           return recordResult(
             callId,
-            { tool, action, error: "bad_request" },
+            { tool, action: "share", error: "bad_request" },
             text("[error] toScope or email is required unless public is set"),
             true,
           );
@@ -425,7 +424,12 @@ export function controlPlaneTools(kit: ToolKit) {
           const candidates = r.candidates?.length
             ? `\nCandidates: ${r.candidates.map((c) => `${c.label} (${c.id})`).join(", ")}`
             : "";
-          return recordResult(callId, { tool, action, error: r.code }, text(`[error] ${r.message}${candidates}`), true);
+          return recordResult(
+            callId,
+            { tool, action: "share", error: r.code },
+            text(`[error] ${r.message}${candidates}`),
+            true,
+          );
         }
         let invitationNote = "";
         if (params.notify === false) invitationNote = " No DM or invitation email sent.";
@@ -436,7 +440,7 @@ export function controlPlaneTools(kit: ToolKit) {
         if (r.invitation?.appUrl) invitationNote += ` App link: ${r.invitation.appUrl}`;
         return recordResult(
           callId,
-          { tool, action, verb: r.verb, type: r.type, id: r.id, target: r.target.scope },
+          { tool, action: "share", verb: r.verb, type: r.type, id: r.id, target: r.target.scope },
           text(
             `Shared ${r.type} ${r.id} → ${r.target.label}${r.verb === "share" ? ` (${r.permission})` : ""}.${invitationNote}`,
           ),
