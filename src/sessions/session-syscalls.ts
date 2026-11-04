@@ -277,7 +277,6 @@ export interface SessionSyscallsFactory {
 
 export interface SessionSyscallDeps {
   mailbox: SessionMailbox;
-  enabled?: (actorId: string) => Promise<boolean>;
   sessions: Pick<
     SessionStore,
     | "get"
@@ -605,8 +604,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
         binding.request.cancel?.throwIfAborted();
         if (await sessionRunCancelled(deps.runs, deps.signals, binding.request.runId))
           throw new Error("this delegated task was stopped");
-        if (deps.enabled && !(await deps.enabled(binding.request.actor.id)))
-          throw new Error("persistent subagents are not enabled for this user");
         const current = await deps.sessions.get(binding.session.id);
         if (
           !current ||
