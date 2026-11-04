@@ -7,7 +7,6 @@ import type { Item, NewItem } from "../sessions/items.ts";
 import type { ToolContext } from "../tools/primitives.ts";
 import { type Phase } from "../../plugins/chassis/src/error-reporting.ts";
 import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
-import { isObj } from "../util/objects.ts";
 import { type GoalGovernor, type GoalInbox, type GoalRecord } from "./goal.ts";
 import { type ToolResultScreen, type ToolResultScreenInput } from "../security/security-posture.ts";
 import { createToolKit } from "./agent-tools/kit.ts";
@@ -148,7 +147,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const kit = createToolKit(ref, opts);
   const { retryMarks, resourceTool } = kit;
   const { execute, sandboxManagement, background } = computerTools(kit);
-  const { discoverSkills, skill, saveSkill, editSkill, read, installCanvas, write, publish } = workspaceTools(kit);
+  const { discoverSkills, skill, saveSkill, editSkill, read, write, publish } = workspaceTools(kit);
   const { memory, history } = recallTools(kit);
   const { subagentTool, sessionTool, sidebarSessions } = sessionTools(kit);
   const { cron } = cronTools(kit);
@@ -165,21 +164,16 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       search: discoverSkills(true),
       read: skill,
       ...(controlTools && ref.current?.selfApi ? { save: saveSkill, edit: editSkill } : {}),
-      ...(controlTools ? { share: sharingTool("skill"), move: sharingTool("skill", true) } : {}),
+      ...(controlTools ? { share: sharingTool("skill") } : {}),
     }),
-    {
-      ...resourceTool("files", {
-        read,
-        write,
-        ...(controlTools ? { share: sharingTool("file") } : {}),
-        ...(ref.current?.installSharedCanvas ? { install_canvas: installCanvas } : {}),
-      }),
-      needsApproval: (params: unknown) => isObj(params) && params.action === "install_canvas",
-      approvalReason: "install an always-on canvas someone shared with you; its code runs in your QM web UI",
-    },
+    resourceTool("files", {
+      read,
+      write,
+      ...(controlTools ? { share: sharingTool("file") } : {}),
+    }),
     resourceTool("apps", {
       publish,
-      ...(controlTools ? { share: sharingTool("deploy"), move: sharingTool("deploy", true) } : {}),
+      ...(controlTools ? { share: sharingTool("deploy") } : {}),
     }),
     memory,
     history,

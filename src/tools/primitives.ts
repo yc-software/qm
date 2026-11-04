@@ -195,7 +195,6 @@ export type AttachResult = { ok: true; files: AttachedFileMeta[]; staged: number
 export type AttachFiles = (files: readonly OutboundFile[], sandboxId?: string) => Promise<AttachResult>;
 
 export interface ToolContext extends SurfaceToolDeps {
-  installSharedCanvas?: (fileId: string) => Promise<string | null>;
   admin?: AdminToolAccess;
   selfApi?: SelfApiCall;
   runtime?(request: RuntimeRequest, signal?: AbortSignal): Promise<RuntimeResult>;
@@ -417,12 +416,6 @@ export interface SurfaceSearchResult {
   message?: string;
 }
 
-interface SurfaceMembersResult {
-  ok: boolean;
-  members?: Array<{ displayName: string }>;
-  message?: string;
-}
-
 type SurfaceStandingOrderResult =
   | { ok: true; orders: string; bots?: Record<string, BotPolicy>; ambientEnabled?: boolean }
   | { ok: false; message: string };
@@ -446,7 +439,6 @@ export interface SurfaceToolDeps {
   readThread(opts?: { limit?: number }): Promise<SurfaceReadResult>;
   whatsNew(opts?: { since?: string }): Promise<SurfaceWhatsNewResult>;
   search(query: string, opts?: SurfaceSearchToolOpts): Promise<SurfaceSearchResult>;
-  readMembers(): Promise<SurfaceMembersResult>;
   getStandingOrder(): Promise<SurfaceStandingOrderResult>;
   setStandingOrder(
     orders: string | undefined,
@@ -471,7 +463,6 @@ export interface ToolContextDeps {
   desktopClientId?: string;
   admin?: AdminToolAccess;
   selfApi?: SelfApiCall;
-  installSharedCanvas?: (fileId: string) => Promise<string | null>;
   sandbox: Sandbox;
   commandCredentials?: readonly CommandCredential[];
   resolveCommandCredentials?: (handles: readonly string[]) => Promise<readonly CommandCredential[]>;
@@ -725,7 +716,6 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
   return {
     ...(deps.admin ? { admin: deps.admin } : {}),
     ...(deps.selfApi ? { selfApi: deps.selfApi } : {}),
-    ...(deps.installSharedCanvas ? { installSharedCanvas: deps.installSharedCanvas } : {}),
     ...(deps.toolOutput ? { toolOutput: deps.toolOutput } : {}),
     ...(deps.sandboxResources && deps.accessSandboxResource
       ? {
@@ -1291,7 +1281,6 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     readThread: (opts) => surfaceOp((s) => s.readThread(opts)),
     whatsNew: (opts) => surfaceOp((s) => s.whatsNew(opts)),
     search: (query, opts) => surfaceOp((s) => s.search(query, opts)),
-    readMembers: () => surfaceOp((s) => s.readMembers()),
     getStandingOrder: () => surfaceOp((s) => s.getStandingOrder()),
     setStandingOrder: (orders, bots, ambientEnabled, expectedOrders) =>
       surfaceOp((s) => s.setStandingOrder(orders, bots, ambientEnabled, expectedOrders)),

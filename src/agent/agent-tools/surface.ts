@@ -20,8 +20,8 @@ export function surfaceTool(kit: ToolKit) {
       `Everything you do on ${surfaceLabel} goes through this tool — posting (the ONLY way your words ` +
       "reach people; end the turn without a post and you stay silent), " +
       (textOnly ? "" : "reacting, editing/deleting your own messages, ") +
-      "reading threads, checking what's new, searching, listing members" +
-      (textOnly ? ". This conversation takes text messages only." : ", fetching files.") +
+      "reading threads, checking what's new, searching" +
+      (textOnly ? ". This conversation takes text messages only." : ".") +
       " Pick an `action`.",
     parameters: Type.Object({
       action: Type.Union(
@@ -34,7 +34,6 @@ export function surfaceTool(kit: ToolKit) {
           Type.Literal("read_thread"),
           Type.Literal("whats_new"),
           Type.Literal("search"),
-          Type.Literal("read_members"),
         ],
         {
           description:
@@ -43,7 +42,7 @@ export function surfaceTool(kit: ToolKit) {
             "leave this conversation), " +
             (textOnly ? "" : "react (emoji on a message), edit/delete (revise/retract your OWN message), ") +
             "read_thread (read stored thread messages, with live fallback for missing context), whats_new (pointers to what " +
-            "changed), search (find messages), read_members (the roster)." +
+            "changed), search (find messages)." +
             (textOnly ? " There is no way to react, edit, delete, or attach files here." : ""),
         },
       ),
@@ -384,32 +383,12 @@ export function surfaceTool(kit: ToolKit) {
             "surface search",
           );
         }
-        case "read_members": {
-          await recordCall(callId, { tool: surfaceName, action: "read_members" });
-          const r = await tc.readMembers();
-          if (!r.ok)
-            return recordResult(
-              callId,
-              { tool: surfaceName, action: "read_members", ok: false },
-              text(`[couldn't read the members] ${r.message ?? "unavailable"}`),
-              true,
-            );
-          const members = r.members ?? [];
-          const body = members.length
-            ? members.map((m) => `- ${m.displayName}`).join("\n")
-            : "[no members to show here]";
-          return recordResult(
-            callId,
-            { tool: surfaceName, action: "read_members", ok: true, count: members.length },
-            text(body),
-          );
-        }
         default:
           return recordResult(
             callId,
             { tool: surfaceName, error: "unknown_action" },
             text(
-              `[error] unknown action "${(params as { action?: string }).action}" — valid actions: post, react, edit, delete, read_thread, whats_new, search, read_members.`,
+              `[error] unknown action "${(params as { action?: string }).action}" — valid actions: post, react, edit, delete, read_thread, whats_new, search.`,
             ),
             true,
           );

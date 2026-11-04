@@ -168,11 +168,6 @@ export interface OrchestratorDeps {
   connectorTokens?: ConnectorTokenStore;
   resolveConnectorClient?: OAuthClientResolver;
   featureFlags?: FeatureFlagStore;
-  installSharedCanvas?: (
-    actorId: string,
-    fileId: string,
-    at: { threadRef: string; sessionId: string },
-  ) => Promise<string | null>;
   teams?: TeamStore;
   credentialUsage?: CredentialUsageSink;
   keychain?: Keychain;

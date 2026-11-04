@@ -2478,18 +2478,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             `[orchestrator] trigger delivery has no surface tools (missing deliveries store?) — reply would be lost session=${session.id}`,
           );
 
-        const canInstallCanvas = deps.installSharedCanvas && liveTurn && actorFeatures.has("ui_canvas");
         const baseTools = createToolContext({
           desktopClientId: desktopClientForTurn(input),
-          ...(canInstallCanvas
-            ? {
-                installSharedCanvas: (fileId: string) =>
-                  deps.installSharedCanvas!(actor.id, fileId, {
-                    threadRef: conversation.threadRef,
-                    sessionId: session.id,
-                  }),
-              }
-            : {}),
           sandbox: deps.sandbox,
           sandboxResources: turnSandboxResources,
           invalidateProvision,

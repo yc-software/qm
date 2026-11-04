@@ -121,7 +121,6 @@ export const adminOperations = {
     offset: Type.Optional(Type.Integer({ minimum: 0 })),
   }),
   egress: operation("Read outbound-destination audit.", "GET", "/egress", scope),
-  retention: operation("Read usage and retention.", "GET", "/retention"),
   spend: operation("Read spend for a date range.", "GET", "/spend", {
     from: optionalString,
     to: optionalString,
@@ -189,7 +188,6 @@ export const adminOperations = {
       { additionalProperties: false },
     ),
   }),
-  slack_emoji: operation("List Slack emoji.", "GET", "/slack-emoji"),
   model_providers: operation("Read model-provider metadata.", "GET", "/model-providers"),
   custom_providers: operation("Read custom model-provider metadata.", "GET", "/custom-providers"),
   mcp_servers: operation("Read MCP-server metadata.", "GET", "/mcp-servers"),
@@ -228,7 +226,6 @@ export const adminOperations = {
     "/model-registry/:id",
     { id: string, value: object },
   ),
-  shadow_deliveries: operation("Read shadow-delivery diagnostics.", "GET", "/deliveries/shadow", scope),
   slack_mirror: operation("List mirrored Slack containers.", "GET", "/slack-mirror", scope),
   slack_messages: operation("Read mirrored Slack messages.", "GET", "/slack-mirror/messages", {
     ...scope,
@@ -241,14 +238,6 @@ export const adminOperations = {
     ...scope,
     container: optionalString,
     decision: optionalString,
-    before: Type.Optional(Type.Integer()),
-    beforeId: Type.Optional(Type.Integer()),
-    limit,
-  }),
-  ack_emoji_picks: operation("Read acknowledgment emoji decisions.", "GET", "/ack-emoji-picks", {
-    ...scope,
-    container: optionalString,
-    outcome: optionalString,
     before: Type.Optional(Type.Integer()),
     beforeId: Type.Optional(Type.Integer()),
     limit,
