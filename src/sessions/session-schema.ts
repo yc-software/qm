@@ -412,6 +412,11 @@ END $session_facts$`,
   ],
 };
 
+const DROP_SESSION_LEASES: PgMigrationDefinition = {
+  id: "sessions/store/0055-drop-session-leases",
+  statements: [`SET LOCAL lock_timeout = '5s'`, `DROP TABLE IF EXISTS session_leases`],
+};
+
 export const SESSION_MIGRATIONS = [
   TENANCY_BASE,
   SESSION_SCHEMA,
@@ -421,4 +426,5 @@ export const SESSION_MIGRATIONS = [
   SPEND_RECOVERY_INDEX,
   SESSION_FACTS,
   SESSION_FACTS_COPY,
+  DROP_SESSION_LEASES,
 ];
