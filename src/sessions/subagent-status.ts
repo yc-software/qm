@@ -1,39 +1,20 @@
 import type { Session } from "../types.ts";
 import type { Run, RunStore } from "../runs/run-store.ts";
 import type { SessionStore } from "./session-store.ts";
-import type { SessionMailbox } from "./session-mailbox.ts";
 import { xmlEscape } from "../util/message-tag.ts";
+import { mailOf, pendingWork } from "./subagent-mail.ts";
 
-export type SubagentMailKind = "final_answer" | "no_reply" | "awaiting_input" | "errored" | "refused";
-
-export function subagentOutcome(run: Pick<Run, "status" | "result">): { kind: SubagentMailKind; body: string } {
-  const result = run.result;
-  if (run.status === "failed" || result?.status === "failed")
-    return { kind: "errored", body: result?.reason ?? "the turn failed" };
-  if (result?.pendingApprovals?.length || result?.status === "pending_approval")
-    return {
-      kind: "awaiting_input",
-      body: result.pendingApprovals?.map((a) => a.command).join("; ") ?? "a command needs human approval",
-    };
-  if (result?.status === "refused") return { kind: "refused", body: result.reason ?? "the turn was refused" };
-  if (result?.status === "ok") {
-    const reply = result.reply?.trim();
-    if (reply) return { kind: "final_answer", body: reply };
-    const files = result.attachments?.map((file) => file.name) ?? [];
-    if (files.length) return { kind: "final_answer", body: `Produced ${files.join(", ")}.` };
-  }
-  return { kind: "no_reply", body: "completed without sending a reply." };
-}
-
-export type RunState = "running" | "pending" | "idle";
+type RunState = "running" | "pending" | "idle";
 
 export function runState(run: Pick<Run, "status"> | null | undefined): RunState {
   if (run?.status === "running") return "running";
   return run?.status === "pending" ? "pending" : "idle";
 }
 
+export type SessionStatus = RunState | "waiting on subagents";
+
 export interface SubagentActivity {
-  status: RunState;
+  status: SessionStatus;
   stepAgoMs?: number;
   startedAgoMs?: number;
   tool?: string;
@@ -43,11 +24,10 @@ export interface SubagentActivity {
   unread: number;
 }
 
-export interface SubagentActivityDeps {
+export type SubagentActivityDeps = Parameters<typeof pendingWork>[0] & {
   sessions: Pick<SessionStore, "descendantsOf" | "latestToolSteps">;
   runs: Pick<RunStore, "activeForThreads" | "lastFinishedForThreads">;
-  mailbox: Pick<SessionMailbox, "pending">;
-}
+};
 
 export async function visibleChildren(
   deps: { sessions: Pick<SessionStore, "getForParticipant"> },
@@ -59,24 +39,6 @@ export async function visibleChildren(
     inScope.map((child) => deps.sessions.getForParticipant(child.id, caller.request.actor.id)),
   );
   return inScope.filter((_, index) => seen[index]);
-}
-
-export async function openChildren(deps: SubagentActivityDeps, children: readonly Session[]): Promise<Session[]> {
-  if (!children.length) return [];
-  const descendants = await deps.sessions.descendantsOf(children.map((child) => child.id));
-  const threads = children.map((child) => child.threadRef);
-  const [active, finished] = await Promise.all([
-    deps.runs.activeForThreads([...threads, ...descendants.map((d) => d.threadRef)]),
-    deps.runs.lastFinishedForThreads(threads),
-  ]);
-  return children.filter((child) => {
-    const last = finished.get(child.threadRef);
-    return (
-      active.has(child.threadRef) ||
-      descendants.some((d) => d.rootId === child.id && active.has(d.threadRef)) ||
-      (!!last && !last.result?.stopped && subagentOutcome(last).kind === "awaiting_input")
-    );
-  });
 }
 
 export async function subagentActivity(
@@ -92,6 +54,7 @@ export async function subagentActivity(
     deps.runs.lastFinishedForThreads(threads),
     Promise.all(sessions.map((s) => deps.mailbox.pending(s.id))),
   ]);
+  const waiting = await Promise.all(sessions.map((s) => (active.has(s.threadRef) ? 0 : pendingWork(deps, s))));
   const runs = sessions.flatMap((s) => [active.get(s.threadRef), finished.get(s.threadRef)].flatMap((r) => r ?? []));
   const steps = await deps.sessions.latestToolSteps(runs.map((run) => run.id));
   const stepOf = (run: Run | undefined) => (run ? steps.get(run.id.toLowerCase()) : undefined);
@@ -102,11 +65,13 @@ export async function subagentActivity(
     const step = running ? stepOf(current) : (stepOf(current) ?? stepOf(last));
     const started = running && !step ? current.startedAt : null;
     const activity: SubagentActivity = {
-      status: runState(current),
+      status: !current && waiting[index] ? "waiting on subagents" : runState(current),
       ...(step ? { stepAgoMs: Math.max(0, now - step.at), tool: step.tool } : {}),
       ...(started ? { startedAgoMs: Math.max(0, now - started) } : {}),
       ...(step?.purpose ? { purpose: step.purpose } : {}),
-      ...(last ? { outcome: last.result?.stopped ? "stopped" : subagentOutcome(last).kind } : {}),
+      ...(last
+        ? { outcome: mailOf(last, last.status === "failed" || last.result?.status === "failed", undefined, 0).kind }
+        : {}),
       liveDescendants: descendants.filter((d) => d.rootId === session.id && active.has(d.threadRef)).length,
       unread: inboxes[index]?.length ?? 0,
     };
@@ -156,11 +121,12 @@ export function liveSubagentsNote(
   children: readonly { session: Session; activity: SubagentActivity }[],
   titleOf: (session: Session) => string,
 ): string {
-  if (!children.length) return "";
+  const open = children.filter(({ activity }) => activity.status !== "idle" || activity.outcome === "awaiting_input");
+  if (!open.length) return "";
   return xmlEscape(
     [
       "Subagents opened from this conversation that are still working or blocked:",
-      ...children.map(
+      ...open.map(
         ({ session, activity }) =>
           `- ${clip(titleOf(session), 80)} (${session.id}) — ${renderSubagentActivity(activity)}`,
       ),

@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { ScopeId } from "../types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
+import type { Claimed } from "../tenants/claim.ts";
 import type { PgPool } from "../persistence/pg-pool.ts";
-import { swallow } from "../util/errors.ts";
 import {
   createDeployGitStore,
   type DeployGitDiff,
@@ -10,6 +10,8 @@ import {
   type DeployGitStoreOptions,
   type DeployGitTreeFile,
 } from "./deploy-git-store.ts";
+import { TENANCY, createIfParentTenantKeyed, tenantTables } from "../tenants/migrations.ts";
+import { durableMapTenancy } from "../persistence/durable-map.ts";
 
 export interface DeploymentVersion {
   version: number;
@@ -103,6 +105,7 @@ export interface DeployStore {
   get(id: string): Promise<Deployment | null>;
   getByName(name: string): Promise<Deployment | null>;
   list(): Promise<Deployment[]>;
+  acrossTenants(): Promise<Array<Claimed<Deployment>>>;
   setCurrentVersion(id: string, version: number): Promise<void>;
   setVersionImage(id: string, version: number, image: string): Promise<void>;
   setStatus(id: string, status: DeploymentStatus): Promise<void>;
@@ -146,6 +149,33 @@ interface DeployAccess {
   findByName?(name: string): Promise<Deployment | null>;
 }
 
+const NAME_LOOKUP = {
+  id: "durable-map/deployments/0011-access-tenants-name-lookup",
+  statements: [
+    `CREATE INDEX CONCURRENTLY IF NOT EXISTS deployments_name_lookup ON deployments ((json->>'name')) WHERE json->>'name' IS NOT NULL`,
+  ],
+};
+
+const ACCESS_TENANCY = tenantTables(
+  "durable-map/deployments/0011-access-tenants",
+  [{ table: "deployment_access", primaryKey: "id" }],
+  {
+    foreignKeys: [
+      {
+        table: "deployment_access",
+        name: "deployment_access_id_fkey",
+        columns: "id",
+        references: "deployments(tenant_id, id)",
+        onDelete: "CASCADE",
+      },
+    ],
+    after: [
+      `DROP INDEX IF EXISTS ${NAME_INDEX}`,
+      `CREATE UNIQUE INDEX ${NAME_INDEX} ON deployments (tenant_id, (json->>'name')) WHERE json->>'name' IS NOT NULL`,
+    ],
+  },
+);
+
 function createPgDeployAccess(pg: PgPool): DeployAccess {
   const migration = {
     id: "deploy/access/0001",
@@ -157,24 +187,25 @@ function createPgDeployAccess(pg: PgPool): DeployAccess {
       )`,
     ],
   };
-  pg.registerMigration(migration);
+  const preKeyed = createIfParentTenantKeyed(
+    "deploy/access/0000-tenant-keyed-deployments",
+    "deployments",
+    "deployment_access",
+    "CREATE TABLE deployment_access (id TEXT NOT NULL, last_access_at BIGINT NOT NULL)",
+  );
+  const migrations = [
+    ...TENANCY,
+    preKeyed,
+    migration,
+    ...durableMapTenancy("deployments"),
+    ...ACCESS_TENANCY,
+    NAME_LOOKUP,
+  ];
+  for (const definition of migrations) pg.registerMigration(definition);
   let readyP: Promise<void> | null = null;
   function ready(): Promise<void> {
     if (!readyP) {
-      readyP = (async () => {
-        await pg.migrate(migration);
-        await pg
-          .q(
-            `CREATE UNIQUE INDEX IF NOT EXISTS ${NAME_INDEX}
-             ON deployments ((json->>'name')) WHERE json->>'name' IS NOT NULL`,
-          )
-          .catch((e) =>
-            swallow(
-              "deploy-store: could not create unique name index on deployments (concurrent boot, or duplicate names)",
-              e,
-            ),
-          );
-      })().catch((e) => {
+      readyP = pg.migrate(...migrations).catch((e) => {
         readyP = null;
         throw e;
       });
@@ -197,7 +228,7 @@ function createPgDeployAccess(pg: PgPool): DeployAccess {
       const res = await pg.query(
         `INSERT INTO deployment_access (id, last_access_at)
          SELECT d.id, $2::bigint FROM deployments d WHERE d.id = $1
-         ON CONFLICT (id) DO UPDATE SET last_access_at = GREATEST(deployment_access.last_access_at, EXCLUDED.last_access_at)`,
+         ON CONFLICT (tenant_id, id) DO UPDATE SET last_access_at = GREATEST(deployment_access.last_access_at, EXCLUDED.last_access_at)`,
         [id, at],
       );
       return res.rowCount > 0;
@@ -345,6 +376,9 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
     async list() {
       const [ds, accessAt] = await Promise.all([backingMap.all(), access.readAll()]);
       return ds.map((d) => withAccess(d, accessAt.get(d.id)));
+    },
+    async acrossTenants() {
+      return (await backingMap.acrossTenants()).map(({ tenantId, value }) => ({ ...value, tenantId }));
     },
     async setCurrentVersion(id, version) {
       const d = await backingMap.get(id);

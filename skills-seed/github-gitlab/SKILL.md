@@ -133,8 +133,8 @@ Do not suppress a nonzero exit or print a success marker after it. Keep `set -e`
 
 Success means the checks observed for the expected head passed, not permission to
 merge. Re-read checks and review threads immediately before merging. Wait for async
-reviewers on that exact head; resolve findings and obtain a fresh-context adversarial
-review. After any push or head change, discard old success/review evidence and repeat.
+reviewers on that exact head; resolve findings and complete any review the repo
+requires. After any push or head change, discard old success/review evidence and repeat.
 Only merge when all gates pass, with GitHub's atomic head guard:
 
 ```bash

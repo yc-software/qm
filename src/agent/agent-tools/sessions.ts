@@ -13,7 +13,7 @@ export function sessionTools(kit: ToolKit) {
     description:
       "Spawn and coordinate subagents: background workers that cannot see this conversation. Brief one like a capable colleague (goal, why it matters, what you know, real limits) and leave the approach to them; its final answer arrives as an internal message. " +
       "open: start one with `task`. " +
-      'send_message: message a subagent, sibling or parent (target="parent"); it wakes the recipient unless wake:false. Wake when you need it to act or answer (more work, a re-review, a question); use wake:false for FYI it can act on later (status, a finding, an ack), which an idle recipient won\'t see until something else wakes it. interrupt:true stops its run. ' +
+      'send_message: message a subagent, sibling or parent (target="parent"); it wakes the recipient unless wake:false. Wake when you need it to act or answer (more work, a re-review, a question); use wake:false for FYI it can act on later (status, a finding, an ack), which an idle recipient won\'t see until something else wakes it. interrupt:true stops its current run (not its subagents) and makes any text its next turn. ' +
       "read: list subagents or read one's transcript. " +
       (delegateWork
         ? "Delegate substantial work, then end this turn promptly; a subagent's completion wakes you with the result. Do not wait or poll. "
@@ -41,11 +41,18 @@ export function sessionTools(kit: ToolKit) {
       ),
       model: Type.Optional(
         Type.String({
-          description: "open: model override; use one runtime get lists (unconfigured providers are rejected).",
+          description:
+            "open: model override; use one runtime get lists (unconfigured providers are rejected). Omitted: the model you switched to or were given for this task when it is not the default, else the subagent default (also used when yours cannot run subagents).",
         }),
       ),
-      thinkingLevel: Type.Optional(Type.String({ description: "open: effort override." })),
-      fastMode: Type.Optional(Type.Boolean({ description: "open: fast mode." })),
+      thinkingLevel: Type.Optional(
+        Type.String({
+          description: "open: effort override; omitted: yours when the model is inherited, else the default.",
+        }),
+      ),
+      fastMode: Type.Optional(
+        Type.Boolean({ description: "open: fast mode; omitted: yours when the model is inherited, else the default." }),
+      ),
       target: Type.Optional(
         Type.String({
           description:
@@ -58,7 +65,9 @@ export function sessionTools(kit: ToolKit) {
           description: "send_message: false leaves it in the mailbox without starting a turn.",
         }),
       ),
-      interrupt: Type.Optional(Type.Boolean({ description: "send_message: abort the target's run instead." })),
+      interrupt: Type.Optional(
+        Type.Boolean({ description: "send_message: stop its current run; text becomes its next turn." }),
+      ),
       limit: Type.Optional(Type.Integer({ description: "read: max entries (default 30)." })),
     }),
     async execute(callId, params) {
@@ -157,10 +166,12 @@ export function sessionTools(kit: ToolKit) {
           );
         }
         const name = `"${result.title}"`;
-        let outcome = `Sent ${name} an interrupt request — it stays re-taskable.`;
+        let outcome = p.text?.trim()
+          ? `Stopped ${name}'s current run; it starts on this message next. Its own subagents keep running.`
+          : `Stopped ${name}'s current run; it is idle until messaged. Its own subagents keep running and wake it when they report back.`;
         if (result.delivered === "queued_turn")
           outcome = result.busy
-            ? `Queued for ${name}: it is busy and starts on this when its current turn ends. To change what it is doing now, interrupt it and send again.`
+            ? `Queued for ${name}: it is busy and starts on this when its current turn ends.`
             : `Woke ${name}; it is working on this now.`;
         else if (result.delivered !== "interrupted")
           outcome = `Left in ${name}'s mailbox${result.notWoken ? ` without waking it: ${result.notWoken}` : ""}. ${

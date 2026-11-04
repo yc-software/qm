@@ -23,13 +23,9 @@ async function fixture() {
       kind: "UserMessage",
       text: `old message ${i} `.repeat(100),
     });
-  let resets = 0;
   const agent = {
     compactHistory: async (): Promise<string> => {
       throw new Error("summary unavailable");
-    },
-    resetSession: () => {
-      resets++;
     },
   };
   const compaction = createCompaction({
@@ -45,14 +41,13 @@ async function fixture() {
     orgScopeId: "org:test",
     actorId: "test",
   };
-  return { sessions, agent, compaction, input, resets: () => resets };
+  return { sessions, agent, compaction, input };
 }
 
 test("mandatory summarizer failure recovers instead of wedging the pending turn", async () => {
   const f = await fixture();
   const history = await f.compaction.compactContextIfNeeded(f.input);
   assert.ok(history.length < f.input.visibleHistory.length);
-  assert.equal(f.resets(), 1);
   assert.equal((await f.sessions.getItems(f.input.session.id)).length, f.input.visibleHistory.length + 1);
   assert.deepEqual(await modelContext(f.sessions, f.input.session.id), history);
 });
@@ -111,32 +106,24 @@ for (const stage of ["before", "during", "abort-error"] as const) {
     await assert.rejects(f.compaction.compactContextIfNeeded({ ...f.input, cancel: abort.signal }), {
       name: "AbortError",
     });
-    assert.equal(f.resets(), 0);
     assert.deepEqual(await f.sessions.getItems(f.input.session.id), f.input.visibleHistory);
   });
 }
 
-for (const stage of ["append", "reset"] as const) {
-  test(`${stage} failure is not swallowed or retried as summarization failure`, async () => {
-    const f = await fixture();
-    let calls = 0;
-    f.agent.compactHistory = async () => {
-      calls++;
-      return "Summary.";
-    };
-    if (stage === "reset")
-      f.agent.resetSession = () => {
-        throw new Error("storage unavailable");
-      };
-    else
-      f.sessions[stage] = async () => {
-        throw new Error("storage unavailable");
-      };
-    await assert.rejects(f.compaction.compactContextIfNeeded(f.input), /storage unavailable/);
-    assert.equal(calls, 1);
-    assert.ok(!(await f.sessions.getItems(f.input.session.id)).some((e) => e.body.mode === "recent"));
-  });
-}
+test("append failure is not swallowed or retried as summarization failure", async () => {
+  const f = await fixture();
+  let calls = 0;
+  f.agent.compactHistory = async () => {
+    calls++;
+    return "Summary.";
+  };
+  f.sessions.append = async () => {
+    throw new Error("storage unavailable");
+  };
+  await assert.rejects(f.compaction.compactContextIfNeeded(f.input), /storage unavailable/);
+  assert.equal(calls, 1);
+  assert.ok(!(await f.sessions.getItems(f.input.session.id)).some((e) => e.body.mode === "recent"));
+});
 
 test("oversized entries and orphaned parallel tool results cannot bypass the recent budget", async () => {
   const f = await fixture();

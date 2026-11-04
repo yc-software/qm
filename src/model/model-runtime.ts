@@ -39,6 +39,7 @@ import {
   resolveModel,
 } from "./pi-models.ts";
 import { providerTurnError } from "./provider-error.ts";
+import { perTenant } from "../tenants/context.ts";
 
 export function piUsageToCallUsage(
   u: Partial<Usage> | undefined,
@@ -94,10 +95,11 @@ export interface ProviderKeys {
   [provider: string]: string | undefined;
 }
 
-let cachedCustomModels: { version: number; path: string | null } | null = null;
+const customModelFiles = perTenant<{ cached?: { version: string; path: string | null } }>(() => ({}));
 function customModelsPath(): string | null {
-  const version = customProvidersVersion() + gatewayModelsVersion();
-  if (cachedCustomModels?.version === version) return cachedCustomModels.path;
+  const files = customModelFiles();
+  const version = `${customProvidersVersion()}:${gatewayModelsVersion()}`;
+  if (files.cached?.version === version) return files.cached.path;
   const providers = { ...customModelsJson()?.providers, ...gatewayModelsJson() };
   const custom = Object.keys(providers).length ? { providers } : undefined;
   let path: string | null = null;
@@ -105,7 +107,7 @@ function customModelsPath(): string | null {
     path = join(mkdtempSync(join(tmpdir(), "pi-custom-models-")), "models.json");
     writeFileSync(path, JSON.stringify(custom));
   }
-  cachedCustomModels = { version, path };
+  files.cached = { version, path };
   return path;
 }
 

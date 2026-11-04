@@ -116,16 +116,8 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     if ((await managedProjectMembership(session.scopeId, viewer)) === false) return [];
     const parsed = parseScopeId(session.scopeId);
     if (parsed.kind !== "group" || !isProjectGroupRef(parsed.ref)) return own;
-    const window = (await deps.sessions.participantWindowsOf(session.id)).find((candidate) =>
-      samePerson(candidate.principalId, viewer),
-    );
-    if (!window) return [];
-    return own.filter(
-      ({ record }) =>
-        record.createdAt !== undefined &&
-        record.createdAt >= window.validFrom &&
-        (window.validTo === null || record.createdAt < window.validTo),
-    );
+    const participants = await deps.sessions.participantsOf(session.id);
+    return participants.some((principalId) => samePerson(principalId, viewer)) ? own : [];
   }
 
   async function approvalVisibleToViewer(
@@ -672,7 +664,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
   async function reconcileProjectMember(project: Project, memberId: string, add: boolean): Promise<void> {
     const sessions = await deps.sessions.listByScope(projectScopeId(project.id));
     for (const session of sessions) {
-      if (add) await deps.sessions.addParticipant(session.id, memberId, undefined, { includeHistory: true });
+      if (add) await deps.sessions.addParticipant(session.id, memberId);
       else await deps.sessions.removeParticipant(session.id, memberId);
     }
   }

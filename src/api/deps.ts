@@ -4,7 +4,6 @@ import type { DecisionStore } from "../decisions/store.ts";
 import type { ExternalSlackPolicies } from "../resolution/external-slack.ts";
 import type { ModelGatewayTransportConfig } from "../model/provider-endpoints.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
-import type { BackgroundOwnershipControl } from "../runs/background-ownership.ts";
 import type { LoopIngressService } from "../loops/ingress.ts";
 import type { createSuggestedActivityService } from "../suggestions/activities.ts";
 import type { ManagedSlack } from "../surfaces/slack-managed.ts";
@@ -25,6 +24,7 @@ import type { ReplayDedupe } from "../auth/replay-dedupe.ts";
 import type { FetchLike, OAuthClientResolver } from "../connectors/oauth.ts";
 import type { ConsentLinkStore } from "../connectors/consent-link.ts";
 import type { OAuthFlowStore } from "../connectors/oauth-flow-store.ts";
+import type { Tenancy } from "../tenants/tenancy.ts";
 import type { OrgBranding, ScopedConfigStore } from "../resolution/config-store.ts";
 import type { AclStore } from "../acl/acl-store.ts";
 import type { CredentialUsageSink } from "../admin/credential-usage-sink.ts";
@@ -93,13 +93,14 @@ export interface ServerDeps {
   production?: boolean;
   allowUnauthenticatedCore?: boolean;
   signingSecret?: string;
+  operatorSigningSecret?: string;
   capabilitySecret?: string;
   capabilityTokenCompression?: boolean;
   portalIdentitySecret?: string;
   requireSignedPortalIdentity?: boolean;
   control: ControlService;
   replayDedupe?: ReplayDedupe;
-  deploymentLiveSmoke?: () => Promise<void>;
+  deploymentLiveSmoke?: { deploymentId: string; superseded(): boolean; run(): Promise<void> };
   brokerSessions?: BrokerSessionStore;
   connectorTokens?: ConnectorTokenStore;
   managedSlack?: ManagedSlack;
@@ -109,6 +110,11 @@ export interface ServerDeps {
   slackInstallationSocketAppId?: SlackSocketAppIdReader;
   slackEnvironmentState?: "absent" | "configured" | "partial";
   slackEventsPort?: number;
+  partnerChatEvents?: (
+    timestamp: string | undefined,
+    signature: string | undefined,
+    rawBody: string,
+  ) => Promise<{ status: number; body: Record<string, unknown> }>;
   slackEnvBotToken?: string;
   oauthStateSecret?: string;
   oauthFetch?: FetchLike;
@@ -116,6 +122,7 @@ export interface ServerDeps {
   resolveClient?: OAuthClientResolver;
   consentLinks?: ConsentLinkStore;
   oauthFlows?: OAuthFlowStore;
+  tenancy?: Tenancy;
   apiBaseUrl?: string;
   publicUrl?: string;
   portalUrl?: string;
@@ -181,9 +188,7 @@ export interface ServerDeps {
   sessionShareBytes?: DurableByteStore;
   environments?: EnvironmentStore;
   deploymentLayer?: DeploymentLayerStore;
-  backgroundOwnership?: BackgroundOwnershipControl;
   deploymentControlSecret?: string;
-  spendExportToken?: string;
   deployDialTimeoutMs?: number;
   deployAppsDomain?: string;
   deployGateSecret?: string;

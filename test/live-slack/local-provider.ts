@@ -1,11 +1,10 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig } from "../../src/config.ts";
-import { buildApp } from "../../src/wiring.ts";
-import { migrateRegisteredPgSchemas } from "../../src/persistence/pg-pool.ts";
+import { startQm } from "../../src/start.ts";
 import { setOnboardingStatus } from "../../src/onboarding/onboarding.ts";
 import { assertSandboxExecution } from "./scenarios-sandbox-providers.ts";
 
@@ -19,11 +18,11 @@ async function main(): Promise<void> {
   assert.ok(process.env.EXPECTED_SOURCE_SHA, "the expected source pin is required");
   assert.equal(process.env.GIT_SHA, process.env.EXPECTED_SOURCE_SHA, "candidate image does not match the source pin");
   assert.ok(process.env.DATABASE_URL, "DATABASE_URL must point at a Postgres server");
-  const config = loadConfig();
-  const built = buildApp({
-    ...config,
+  const { built, stop } = await startQm({
+    ...loadConfig(),
+    port: 0,
+    signingSecret: randomBytes(32).toString("hex"),
     dataDir: mkdtempSync(join(tmpdir(), "provider-qualification-")),
-    databaseUrl: process.env.DATABASE_URL,
     sandboxBackend: "local",
     backgroundWorkEnabled: true,
     turnWallClockMs: 180_000,
@@ -33,15 +32,10 @@ async function main(): Promise<void> {
   const name = `local-${randomUUID()}`;
   const failures: unknown[] = [];
   try {
-    await migrateRegisteredPgSchemas(process.env.DATABASE_URL);
-    await built.identity.refresh();
-    await built.deploymentLayerReady;
-    await built.sandboxResources.initialize();
     await setOnboardingStatus(built.memory, scopeId, "completed", new Date().toISOString().slice(0, 10), actorId);
     const sandbox = await built.sandboxResources.create(actorId, scopeId, "local", name);
     assert.equal(sandbox.backend, "local");
     await built.sandboxResources.setDefault(actorId, scopeId, sandbox.id);
-    built.runtime.start();
     const left = randomUUID();
     const right = randomUUID();
     const result = await built.app.turn({
@@ -70,7 +64,7 @@ async function main(): Promise<void> {
   } catch (error) {
     failures.push(error);
   }
-  await built.runtime.stop();
+  await stop();
   if (failures.length)
     throw new AggregateError(failures, `local qualification failed: ${failures.map(String).join("; ")}`);
   console.log(

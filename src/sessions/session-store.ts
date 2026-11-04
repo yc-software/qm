@@ -149,25 +149,9 @@ export interface NewLlmRequest {
   transport?: LlmTransportMeta | null;
 }
 
-export interface ParticipantWindow {
+export interface Participant {
   sessionId: string;
   principalId: string;
-  validFrom: number;
-  validTo: number | null;
-  validFromSeq: number | null;
-  validToSeq: number | null;
-}
-
-export function itemWithinTenure(
-  item: Pick<Item, "seq" | "createdAt">,
-  window: Pick<ParticipantWindow, "validFrom" | "validTo" | "validFromSeq" | "validToSeq">,
-): boolean {
-  const fromOk = window.validFromSeq !== null ? item.seq >= window.validFromSeq : item.createdAt >= window.validFrom;
-  const toOk =
-    window.validToSeq !== null
-      ? item.seq < window.validToSeq
-      : window.validTo === null || item.createdAt < window.validTo;
-  return fromOk && toOk;
 }
 
 export interface AttributedTurn {
@@ -408,10 +392,6 @@ export class DuplicateCallError extends Error {
   }
 }
 
-interface AddParticipantOptions {
-  includeHistory?: boolean;
-}
-
 interface SessionFacts {
   surfaceBinding?: Session["surfaceBinding"];
   context?: SpawnMeta;
@@ -463,7 +443,7 @@ export interface SessionStore {
   listLlmRequests(sessionId: string, opts?: ListLlmRequestsOptions): Promise<LlmRequestRecord[]>;
   purgeLlmCaptures?(cutoff: number, opts?: { deadline?: number; stop?: () => boolean }): Promise<number>;
 
-  addParticipant(sessionId: string, principalId: string, title?: string, opts?: AddParticipantOptions): Promise<void>;
+  addParticipant(sessionId: string, principalId: string, title?: string): Promise<void>;
   removeParticipant(sessionId: string, principalId: string): Promise<void>;
   listByParticipant(principalId: string, opts?: { limit: number }): Promise<Session[]>;
   participantScopes(principalId: string): Promise<ParticipantScope[]>;
@@ -489,8 +469,6 @@ export interface SessionStore {
 
   searchSessionTitles(principalId: string, query: string, limit?: number): Promise<Session[]>;
 
-  scanAll(): Promise<Session[]>;
-
   countSessions(): Promise<number>;
 
   listByScope(scope: ScopeId): Promise<Session[]>;
@@ -515,11 +493,9 @@ export interface SessionStore {
 
   refreshSpendRollup?(): Promise<void>;
 
-  listParticipants(): Promise<ParticipantWindow[]>;
+  listParticipants(): Promise<Participant[]>;
 
   distinctParticipants(): Promise<string[]>;
-
-  participantWindowsOf(sessionId: string): Promise<ParticipantWindow[]>;
 
   participantsOf(sessionId: string): Promise<string[]>;
 }

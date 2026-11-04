@@ -1,4 +1,3 @@
-import { commonEntrySeqs } from "../sessions/transcript-source.ts";
 import { isAgentReply, isOverheard, isUserItem, type Item, type NewItem, stepMessage } from "../sessions/items.ts";
 import type { ItemKind } from "../sessions/items-schema.ts";
 import { countTokens } from "../util/tokens.ts";
@@ -61,6 +60,7 @@ import { scopeId as toScopeId, personalScope } from "../types.ts";
 import { desktopClientForTurn, isSessionTurn } from "./turn-origin.ts";
 import { resolveTurnFastMode, turnRuntimePurpose } from "./turn-options.ts";
 import { orgId } from "../config.ts";
+import { cacheTenant } from "../tenants/context.ts";
 import { deriveTurnOutcome, approvalBlocksInput } from "./turn-outcome.ts";
 import { applyPromptVars, loadProtocolFile, type PromptVars } from "../resolution/prompt-vars.ts";
 import { cleanBrandingLabel, resolveBranding } from "../resolution/branding.ts";
@@ -91,7 +91,6 @@ import {
   type PublicServiceCredential,
   type KeychainManifestInput,
 } from "../credentials/keychain.ts";
-import { finishProcessCredentials } from "../credentials/execute-files.ts";
 import { configuredConnectorProviders } from "../credentials/connector-status.ts";
 import { CONNECTOR_HOSTS } from "../connectors/oauth.ts";
 import { SANDBOX_MODEL_PREFIX } from "../api/contract.ts";
@@ -302,11 +301,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     ttl: DIRECTORY_INDEX_TTL_MS,
   });
   async function directoryIndexFor(directory: DirectoryStore): Promise<Map<string, DirectoryMember>> {
-    const cached = directoryIndexCache.get("org");
+    const cached = directoryIndexCache.get(cacheTenant());
     if (cached) return cached;
     const byId = new Map<string, DirectoryMember>();
     for (const m of await directory.list()) byId.set(personKey(m.principalId), m);
-    directoryIndexCache.set("org", byId);
+    directoryIndexCache.set(cacheTenant(), byId);
     return byId;
   }
 
@@ -435,7 +434,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       return block("strict-verdict", verdict?.reason);
     },
 
-    async regenerateTitle(sessionId, principalId, participantIds) {
+    async regenerateTitle(sessionId, principalId, personal) {
       const session = await deps.sessions.get(sessionId);
       if (!session) return null;
       Object.assign(currentModelRequestContext(), {
@@ -444,14 +443,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         scopeId: session.scopeId,
         origin: await originOf(session),
       });
-      let items = (await transcripts.forViewer(sessionId, principalId)).items;
-      if (participantIds?.length) {
-        const views = await Promise.all(
-          participantIds.map(async (memberId) => (await transcripts.forViewer(sessionId, memberId)).items),
-        );
-        const common = commonEntrySeqs(views);
-        items = items.filter((item) => common.has(item.seq));
-      }
+      const items = (await transcripts.forViewer(sessionId, principalId)).items;
       if (items.length === 0) return null;
       const transcript = renderTitleTranscript(items);
       const fallbackEntry = items.find((item) => isUserItem(item) && !isOverheard(item));
@@ -459,10 +451,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         session.id,
         session.scopeId,
         transcript,
-        participantIds?.length ? principalId : undefined,
+        personal ? principalId : undefined,
         fallbackEntry ? visibleTitleEntryText(fallbackEntry) : undefined,
       );
-      return { title: title ?? (participantIds ? null : (session.title ?? null)) };
+      return { title: title ?? (personal ? null : (session.title ?? null)) };
     },
 
     async handleTurn(input: OrchestratorInput): Promise<TurnResult> {
@@ -668,13 +660,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         scopeId,
         verified: liveAuthorTurn && conversation.kind !== "dm",
       });
-      let participantHistorySeqs: Set<number> | undefined;
-      let participantHistoryMaxSeq = -1;
-      const filterHistory = (items: Item[]): Item[] => {
-        if (!conversation.audience.length) return [];
-        if (!participantHistorySeqs) return items;
-        return items.filter((entry) => entry.seq > participantHistoryMaxSeq || participantHistorySeqs!.has(entry.seq));
-      };
+      const filterHistory = (items: Item[]): Item[] => (conversation.audience.length ? items : []);
       const reconcileSessionParticipants = async (sessionId: string): Promise<void> => {
         const participantIds = input.sessionParticipantIds;
         if (!participantIds?.length) return;
@@ -686,13 +672,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             .map((principalId) => deps.sessions.removeParticipant(sessionId, principalId)),
         );
         await Promise.all(participantIds.map((principalId) => deps.sessions.addParticipant(sessionId, principalId)));
-        const snapshot = await deps.sessions.getItems(sessionId);
-        participantHistoryMaxSeq = snapshot.reduce((max, item) => Math.max(max, item.seq), -1);
-        const views = await Promise.all(
-          participantIds.map((principalId) => deps.sessions.visibleItems(sessionId, principalId)),
-        );
-        participantHistorySeqs = commonEntrySeqs(views);
-        await deps.agent.resetSession?.(sessionId);
       };
       const securityPolicy = resolution.securityPolicy;
       const enforceScreen = securityPolicy.screening === "enforce";
@@ -962,8 +941,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const isWeb = input.surface === "web";
       const surfaceTool = input.surface ?? "slack";
       const surfaceHints = surface?.promptHints;
+      const automationDestination = input.origin.kind === "automation" ? input.origin.destination?.type : undefined;
       const surfaceName =
-        input.origin.kind === "automation" && input.origin.destination ? "slack" : (input.surface ?? "slack");
+        automationDestination === undefined
+          ? (input.surface ?? "slack")
+          : (deps.surfaces.get(automationDestination)?.kind ?? "slack");
       const toolSurface = deps.surfaces.get(surfaceName || "slack");
       const branding = await resolveBranding(deps.config, resolution.orgScopeId, deps.brandingDefault);
       const botName = branding.selfLabel ?? "QM";
@@ -1063,7 +1045,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ? `\n\n${deliveryMenu(delivery.candidates, delivery.defaultKey)}`
           : "";
 
-      await deps.skillsReady;
+      await deps.skillsReady?.();
       const configuredProviders =
         !external && deps.resolveConnectorClient
           ? await configuredConnectorProviders(deps.resolveConnectorClient).catch(
@@ -1845,6 +1827,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         provisionResource,
         useSkill,
         reclaimBox,
+        finishProcess,
         invalidateProvision,
       } = createTurnSandboxes({
         deps: { ...deps, sandboxResources: turnSandboxResources, isCurrentSharedScopeMember },
@@ -2049,7 +2032,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                     body: { securityReleaseRequestId: input.approval!.requestId },
                   }),
                 );
-              await deps.agent.resetSession?.(session.id);
             }
             const decisionEntry = await withManagedRosterVersion(() =>
               deps.sessions.append(writer, {
@@ -2296,16 +2278,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 sandbox: deps.sandbox,
                 registry: deps.processes,
                 provisionSandbox: provisionJobSandbox,
-                onExit: (handle, processId) =>
-                  finishProcessCredentials(
-                    {
-                      sandbox: deps.sandbox,
-                      processes: deps.processes!,
-                      ...(deps.keychain ? { keychain: deps.keychain } : {}),
-                    },
-                    handle,
-                    processId,
-                  ),
+                onExit: finishProcess,
                 scopeId: memoryScopeId,
                 sessionRef: conversation.threadRef,
                 ...(deps.backgroundJobTtlMs !== undefined ? { ttlMs: deps.backgroundJobTtlMs } : {}),
@@ -2332,11 +2305,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           : undefined;
 
         const monitorBroker =
-          deps.monitors && deps.processes && supportsProcessSessions(deps.sandbox)
+          deps.monitors && deps.processes && readOutputTail
             ? createMonitorBroker({
                 store: deps.monitors,
                 registry: deps.processes,
-                readOutputTail: readOutputTail ?? (async () => ({ outputTail: "" })),
+                readOutputTail,
                 scopeId: memoryScopeId,
                 owner: actor.id,
                 ownerScopeId: scopeId,
@@ -2498,33 +2471,25 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           openStored: openStoredOutbound,
           blobTransfer,
           fileRegistration,
+          ...(surface?.capabilities.textOnly ? { textOnly: true } : {}),
         });
         if (input.surfaceTools && input.origin.kind === "automation" && input.origin.destination && !surfaceToolDeps)
           console.error(
             `[orchestrator] trigger delivery has no surface tools (missing deliveries store?) — reply would be lost session=${session.id}`,
           );
 
-        const canInstallCanvas = deps.installSharedCanvas && liveTurn && actorFeatures.has("ui_canvas");
         const turnSessionSyscalls = sessionSyscalls?.forTurn({
           session,
           scopeId: scopeId as ScopeId,
           orgScopeId: resolution.orgScopeId,
           liveTurn,
           request: { ...input, readOnly: strictReadOnly, cancel: turnAbort.signal },
+          switchedRuntime: () => switchedRuntime,
         });
         const liveNote = async () =>
           (await turnSessionSyscalls?.liveSubagents?.().catch(swallowAs("live note", ""))) ?? "";
         const baseTools = createToolContext({
           desktopClientId: desktopClientForTurn(input),
-          ...(canInstallCanvas
-            ? {
-                installSharedCanvas: (fileId: string) =>
-                  deps.installSharedCanvas!(actor.id, fileId, {
-                    threadRef: conversation.threadRef,
-                    sessionId: session.id,
-                  }),
-              }
-            : {}),
           sandbox: deps.sandbox,
           sandboxResources: turnSandboxResources,
           invalidateProvision,
@@ -3069,10 +3034,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           }
         };
         let agentSwitch: "task" | "scope" | undefined;
+        let switchedRuntime: RuntimeChoice | undefined;
         const adoptRuntime = async (choice: RuntimeChoice, lifetime: "task" | "scope") => {
           const error = await checkRuntimeAuth(choice);
           if (error) throw new NonRetryableTurnError(error);
           agentSwitch = lifetime;
+          switchedRuntime = choice;
           ({ userProviderKeys, userModelOverride, personalAuth, authLabel } = await loadRuntimeAuth(choice));
           requestedRuntime = userModelOverride ? { ...choice, modelId: userModelOverride } : choice;
         };
@@ -3604,7 +3571,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             const recovery = "context" in segment.runtimeHandoff;
             if ("choice" in segment.runtimeHandoff) {
               await adoptRuntime(segment.runtimeHandoff.choice, segment.runtimeHandoff.lifetime);
-              await deps.agent.resetSession?.(session.id);
             }
             let resumedHistory = filterHistory(forModelContext((await historyWindow()).items));
             if (recovery)
@@ -3677,7 +3643,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           if (spine.surfaceOutboundCount === 0 && (!isPollFire || primaryReply)) {
             const nudgeHistory = filterHistory(forModelContext((await historyWindow()).items));
             result = await runAgentTurn(
-              "[system] You were addressed directly. Reply with the `slack` tool's `post` action, or decline explicitly with finish_silently — ending the turn without either is not allowed here.",
+              `[system] You were addressed directly. Reply with the \`${surfaceName}\` tool's \`post\` action, or decline explicitly with finish_silently — ending the turn without either is not allowed here.`,
               inbound.images.length ? { images: inbound.images } : {},
               { history: nudgeHistory },
             );
@@ -3775,10 +3741,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         };
 
         let finalResult: TurnResult;
+        const stopScope = result.stopScope ? { stopScope: result.stopScope } : {};
         const sourceUserSeq = turnUserSeq;
         const sourceAssistantEntrySeq = emittedEntries.findLast(isAgentReply)?.seq;
         if (cancelStopped && !result.pendingApprovals?.length) {
-          finalResult = { status: "silent", sessionId: session.id, stopped: true };
+          finalResult = { status: "silent", sessionId: session.id, stopped: true, ...stopScope };
         } else if (isPollFire && result.silent && !stagedAttachments.length && result.pausedOnApproval !== true) {
           finalResult = { status: "silent", sessionId: session.id };
         } else if (result.pendingApprovals?.length || quarantineReleaseApprovals.length) {
@@ -3836,14 +3803,18 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         } else if (isPollFire && !stagedAttachments.length && !reply.trim()) {
           finalResult = { status: "silent", sessionId: session.id };
         } else if (input.surfaceTools && surfaceToolDeps && !strictReadOnly) {
-          finalResult = { status: "silent", sessionId: session.id, ...(result.stopped ? { stopped: true } : {}) };
+          finalResult = {
+            status: "silent",
+            sessionId: session.id,
+            ...(result.stopped ? { stopped: true, ...stopScope } : {}),
+          };
         } else {
           finalResult = {
             status: "ok",
             sessionId: session.id,
             reply,
             ...(result.retracted?.length ? { retracted: result.retracted } : {}),
-            ...(result.stopped ? { stopped: true } : {}),
+            ...(result.stopped ? { stopped: true, ...stopScope } : {}),
             ...(stagedAttachments.length ? { attachments: stagedAttachments } : {}),
             ...(sourceUserSeq !== undefined ? { sourceUserSeq } : {}),
             ...(sourceAssistantEntrySeq !== undefined ? { sourceAssistantEntrySeq } : {}),

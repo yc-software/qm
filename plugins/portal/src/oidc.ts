@@ -1,4 +1,5 @@
 import type { EmailAdmission } from "../../chassis/src/external-members.ts";
+import type { TenantSignIn } from "../../chassis/src/tenant-sign-in.ts";
 import { createHash, randomBytes } from "node:crypto";
 import { createRemoteJWKSet, customFetch, jwtVerify, type JWTPayload } from "jose";
 
@@ -17,6 +18,7 @@ export interface OidcConfig {
   expectedTeamId?: string;
   prompt?: string;
   hostedDomain?: string;
+  tenantHost?: string;
 }
 
 const GOOGLE_ISSUER = "https://accounts.google.com";
@@ -69,6 +71,7 @@ export async function exchangeCode(
       "content-type": "application/x-www-form-urlencoded",
       authorization: `Basic ${basic}`,
       accept: "application/json",
+      ...tenantHeader(cfg),
     },
     body: body.toString(),
   });
@@ -86,7 +89,7 @@ export async function fetchUserinfo(
   fetchImpl: FetchLike = fetch,
 ): Promise<Record<string, unknown>> {
   const r = await fetchImpl(cfg.userinfoEndpoint, {
-    headers: { authorization: `Bearer ${accessToken}`, accept: "application/json" },
+    headers: { authorization: `Bearer ${accessToken}`, accept: "application/json", ...tenantHeader(cfg) },
   });
   const json = await readJson(r, "userinfo");
   if (!r.ok) throw new Error(`userinfo failed: HTTP ${r.status}`);
@@ -186,4 +189,39 @@ async function readJson(r: Response, what: string): Promise<Record<string, unkno
   } catch {
     throw new Error(`${what} returned non-JSON (HTTP ${r.status})`);
   }
+}
+
+function tenantHeader(cfg: OidcConfig): Record<string, string> {
+  return cfg.tenantHost ? { "x-forwarded-host": cfg.tenantHost } : {};
+}
+
+function onHost(url: string, from: string, to: string): string {
+  return url === from || url.startsWith(`${from}/`) ? `${to}${url.slice(from.length)}` : url;
+}
+
+export function tenantOidc(base: OidcConfig, signIn: TenantSignIn, tenantHost: string | undefined): OidcConfig {
+  const client = signIn.oidcClient;
+  if (!client && !tenantHost) return base;
+  const from = new URL(base.redirectUri).origin;
+  const to = tenantHost ? `${new URL(from).protocol}//${tenantHost}` : from;
+  return {
+    ...base,
+    ...(client ? { clientId: client.clientId, clientSecret: client.clientSecret } : {}),
+    issuer: onHost(base.issuer, from, to),
+    authEndpoint: onHost(base.authEndpoint, from, to),
+    tokenEndpoint: onHost(base.tokenEndpoint, from, to),
+    userinfoEndpoint: onHost(base.userinfoEndpoint, from, to),
+    jwksUri: onHost(base.jwksUri, from, to),
+    redirectUri: onHost(base.redirectUri, from, to),
+    ...(tenantHost ? { tenantHost } : {}),
+  };
+}
+
+export function tenantPrincipalRule(rule: PrincipalRule, signIn: TenantSignIn): PrincipalRule {
+  if (!signIn.allowedEmails) return rule;
+  return {
+    claim: rule.claim,
+    allowedEmails: signIn.allowedEmails,
+    requireCoreAdmission: rule.requireCoreAdmission === true || rule.claim === "sub",
+  };
 }

@@ -41,7 +41,7 @@ export function computeRetention(input: RetentionInput): RetentionReport {
   forEachAttributedTurn(
     { participants, turns },
     {
-      onWindow(sessionId, w) {
+      onParticipant(sessionId, w) {
         const set = sessionsByUser.get(w.principalId);
         if (set) set.add(sessionId);
         else sessionsByUser.set(w.principalId, new Set([sessionId]));
