@@ -142,5 +142,5 @@ gh pr merge NUMBER --repo OWNER/REPO --squash --match-head-commit REVIEWED_HEAD_
 ```
 
 On a branch that requires a merge queue, this queues the PR; it is merged only once
-GitHub shows it as merged. Never use auto-merge or bypass repository gates. This helper does not retry GitLab
-commands or change their authentication behavior.
+GitHub shows it as merged. Never use auto-merge or bypass repository gates. This
+helper does not retry GitLab commands or change their authentication behavior.

@@ -351,6 +351,9 @@ test("a main push without a green merge group run of its exact commit runs full 
       f.run.conclusion = "failure";
     },
     (f: any) => {
+      f.run.conclusion = "cancelled";
+    },
+    (f: any) => {
       f.run.event = "pull_request";
     },
     (f: any) => {
