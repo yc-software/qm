@@ -146,7 +146,7 @@ export function createPartnerChatInbound(deps: {
         audience: humans,
       },
       deliveryTarget: replyTarget,
-      ...(replyTarget !== container
+      ...(chat.kind === "group" && replyTarget !== container
         ? {
             deliveryCandidates: [
               { target: replyTarget, label: "this thread" },
