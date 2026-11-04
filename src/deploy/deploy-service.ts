@@ -139,6 +139,7 @@ export class DeployAccessError extends Error {
 export interface DeployServiceDeps {
   deliveries?: DeliveryStore;
   deployAppsDomain?: string;
+  deployAppsTenantSubdomain?: string;
   publicLinksAvailable?: boolean;
   publicWebUrl?: string;
   deployStore: DeployStore;
