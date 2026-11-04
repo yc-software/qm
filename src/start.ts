@@ -18,9 +18,7 @@ export async function startQm(
 ) {
   const built = buildApp(config, overrides);
   await migrateRegisteredPgSchemas(config.databaseUrl);
-  await built.sandboxResources.initialize();
-  const backfilledFires = await built.crons.backfillFires();
-  if (backfilledFires > 0) console.log(`[qm] backfilled ${backfilledFires} cron fire log entries into cron_fires`);
+  if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) await built.ownSharedState();
   const slackConfig = slackPluginConfigFromEnv(env);
   let slackEnvironmentState: "absent" | "configured" | "partial" =
     env.SLACK_BOT_TOKEN || env.SLACK_APP_TOKEN ? "partial" : "absent";
@@ -129,6 +127,7 @@ export async function startQm(
   if (built.backgroundOwnership) {
     let periodicStop: Promise<void> = Promise.resolve();
     let activationEpoch = 0;
+    let sharedStateOwned = false;
     const stopPeriodic = () => {
       activationEpoch++;
       periodicStop = built.scheduler.stopClaims();
@@ -145,6 +144,11 @@ export async function startQm(
       async start(signal) {
         const epoch = ++activationEpoch;
         if (signal.aborted) return;
+        if (!sharedStateOwned) {
+          await built.ownSharedState();
+          sharedStateOwned = true;
+          if (signal.aborted || epoch !== activationEpoch) return;
+        }
         built.runtime.startBackground();
         await periodicStop;
         if (signal.aborted || epoch !== activationEpoch) return;
