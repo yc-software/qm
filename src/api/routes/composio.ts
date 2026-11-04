@@ -135,7 +135,7 @@ export async function credential(ctx: ApiCtx): Promise<{ key: string; principal:
   return { key: record.secret, principal };
 }
 
-export class ComposioHttpError extends Error {
+class ComposioHttpError extends Error {
   readonly status: number;
   constructor(status: number, message: string) {
     super(message);
