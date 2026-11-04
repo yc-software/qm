@@ -129,7 +129,7 @@ import { createPostgresAppPageViewLog, type AppPageViewLog } from "./deploy/page
 import type { BudgetTracker } from "./ratelimit/budget.ts";
 import { createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
 import { createCronStore, DROP_RUN_AS_MIGRATION, type CronStore } from "./cron/cron-store.ts";
-import { SETTLED_CANDIDATES_MIGRATION, rewriteSurfaceOrigins } from "./surfaces/origin-migration.ts";
+import { RETIRED_ORIGIN_SWEEP_MIGRATION } from "./surfaces/origin-migration.ts";
 import { DROP_RECIPIENT_CONSENT_MIGRATION } from "./triggers/trigger-store.ts";
 import { createPostgresCronFireStore } from "./cron/fire-store.ts";
 import { createLoopStore } from "./loops/loop-store.ts";
@@ -386,6 +386,10 @@ import { sleep, withTimeout } from "./util/async.ts";
 import { createSlackInstallationStore, type SlackInstallationStore } from "./surfaces/slack-installation.ts";
 import { createSurfaceRegistry } from "./surfaces/registry.ts";
 import { createSlackSurface } from "./surfaces/slack/adapter.ts";
+import { createPartnerChatSurface } from "./surfaces/partner-chat/adapter.ts";
+import { createPartnerChatInbound } from "./surfaces/partner-chat/inbound.ts";
+import { PARTNER_CHAT_CLAIM_MS, partnerChatSender } from "./surfaces/partner-chat/outbound.ts";
+import { createPartnerChatNotices, partnerChatRunNotice } from "./surfaces/partner-chat/notices.ts";
 import { type probeModel, type ProviderKeys } from "./model/model-runtime.ts";
 
 export interface Runtime {
@@ -480,6 +484,7 @@ export interface BuiltApp {
   scheduler: Scheduler;
   loops: LoopServiceDeps;
   webhookReceiver: WebhookReceiver;
+  partnerChatEvents?: ServerDeps["partnerChatEvents"];
   loopIngress: LoopIngressService;
   admin: AdminService;
   budget: BudgetTracker | undefined;
@@ -1753,6 +1758,15 @@ export function buildApp(
       errors.record({ category: "memory", code: "capture_failed", message: errMessage(e), scopeLabel: scope }, e),
   });
   const directory = createPostgresDirectoryStore(databaseUrl);
+  const vouchedInternalEmail = async (email: string): Promise<boolean> => {
+    await identity.refresh();
+    return (
+      identity.isInternal(identity.classify(email)) &&
+      (config.emailAuthPrincipals?.includes(email) === true ||
+        Boolean(config.emailAuthDomain && email.endsWith(`@${config.emailAuthDomain}`)) ||
+        (await directory.get(email))?.type === "internal")
+    );
+  };
   const projects = createProjectStore(artifactMap<Project>("projects"), {
     isActiveMember: (principalId) => identity.isInternal(identity.classify(principalId)),
     advisoryLock,
@@ -1791,16 +1805,9 @@ export function buildApp(
     canReadScope,
     canWriteScope,
     externalSharingAllowed: (ownerScopeId) => externalAppSharingAllowed(featureFlags, ownerScopeId),
-    canManageEmail: async (email) => {
-      await identity.refresh();
-      return (
-        identity.isInternal(identity.classify(email)) &&
-        ((await directory.get(email))?.type === "internal" ||
-          config.emailAuthPrincipals?.includes(email) ||
-          Boolean(config.emailAuthDomain && email.endsWith(`@${config.emailAuthDomain}`)) ||
-          identity.externalMember(email) !== undefined)
-      );
-    },
+    canManageEmail: async (email) =>
+      (await vouchedInternalEmail(email)) ||
+      (identity.isInternal(identity.classify(email)) && identity.externalMember(email) !== undefined),
     managesArtifactHome,
     ...(deployGitSecret && deployGitBase
       ? {
@@ -1881,7 +1888,7 @@ export function buildApp(
     },
   };
   pgArtifactMap.pool.registerMigration(DROP_RUN_AS_MIGRATION);
-  pgArtifactMap.pool.registerMigration(SETTLED_CANDIDATES_MIGRATION);
+  pgArtifactMap.pool.registerMigration(RETIRED_ORIGIN_SWEEP_MIGRATION);
   pgArtifactMap.pool.registerMigration(DROP_RECIPIENT_CONSENT_MIGRATION);
   pgArtifactMap.pool.registerMigration({
     id: "durable-map/turn_wall_clock_configs/0002-drop",
@@ -2044,7 +2051,20 @@ export function buildApp(
     },
   });
   const uiState = artifactMap<PersistedUiState>("web_ui_state");
-  const surfaces = createSurfaceRegistry({ surfaces: [createSlackSurface({ deliveries })] });
+  const surfaces = createSurfaceRegistry({
+    surfaces: [
+      createSlackSurface({ deliveries }),
+      ...(config.partnerChat
+        ? [
+            createPartnerChatSurface({
+              deliveries,
+              surfaceCache: { readMessages: (container, opts) => surfaceCache.readMessages(container, opts) },
+              ...(config.partnerChat.label ? { label: config.partnerChat.label } : {}),
+            }),
+          ]
+        : []),
+    ],
+  });
   const orchestratorDeps: OrchestratorDeps = {
     admittedWork,
     installSharedCanvas: async (actorId, fileId, where) => {
@@ -2151,7 +2171,13 @@ export function buildApp(
     ? (sessionId: string): string | undefined =>
         uuidSchema.safeParse(sessionId).success ? adminSessionUrl(recoveryAdminBase, sessionId) : undefined
     : undefined;
-  const runResultRecovery = wireRunResultDeliveries(runs, deliveries, recoveryAdminUrlFor, sessions);
+  const runResultRecovery = wireRunResultDeliveries(
+    runs,
+    deliveries,
+    recoveryAdminUrlFor,
+    sessions,
+    partnerChatRunNotice,
+  );
   const idempotency = createIdempotencyStore(artifactMap<IdempotencyRecord>("idempotency"));
   const skillFetcher = createGitFetcher(
     keychain
@@ -2424,6 +2450,24 @@ export function buildApp(
       afterId = batch.at(-1)!.id;
     }
   };
+  const partnerChatNotices = config.partnerChat ? createPartnerChatNotices({ deliveries }) : null;
+  const partnerChatInbound =
+    partnerChatNotices && config.partnerChat
+      ? createPartnerChatInbound({
+          secret: config.partnerChat.secret,
+          app,
+          surfaceCache,
+          isInternalEmail: async (email) => email.includes("@") && (await vouchedInternalEmail(email)),
+          unansweredReply: partnerChatNotices.unanswered,
+        })
+      : null;
+  const partnerChatDelivery = config.partnerChat
+    ? createDeliveryRelay(deliveries, {
+        type: "partner-chat",
+        send: partnerChatSender({ url: config.partnerChat.url, secret: config.partnerChat.secret, app }),
+        claimMs: PARTNER_CHAT_CLAIM_MS,
+      })
+    : null;
   const webhookDelivery = createDeliveryRelay(deliveries, {
     type: "webhook",
     send: webhookSender(config.signingSecret),
@@ -2537,6 +2581,7 @@ export function buildApp(
     items: loopItems,
     outputs: loopOutputs,
     grants: loopGrants,
+    files,
     trigger: {
       deliveries,
       idempotency,
@@ -2828,6 +2873,7 @@ export function buildApp(
       sessionReturnSweeper.start();
       runResultSweeper.start();
       approvalDeliverySweeper.start();
+      partnerChatDelivery?.start();
       webhookDelivery.start();
     };
     if (backgroundStopping)
@@ -2862,6 +2908,7 @@ export function buildApp(
       sessionReturnSweeper.stop(),
       runResultSweeper.stop(),
       approvalDeliverySweeper.stop(),
+      partnerChatDelivery?.stop(),
       preemptionSweeper.stop(),
       worker.stopClaims(),
     ];
@@ -2952,7 +2999,6 @@ export function buildApp(
     deploymentLayerReady,
     deploymentLayerRefresh,
     ownSharedState: async () => {
-      await rewriteSurfaceOrigins(pgArtifactMap.pool);
       const backfilledFires = await crons.backfillFires();
       if (backfilledFires > 0) console.log(`[qm] backfilled ${backfilledFires} cron fire log entries into cron_fires`);
       ownsSharedState = true;
@@ -3001,6 +3047,7 @@ export function buildApp(
     scheduler,
     loops,
     webhookReceiver,
+    ...(partnerChatInbound ? { partnerChatEvents: partnerChatInbound.handle } : {}),
     loopIngress,
     admin,
     errors,
@@ -3147,6 +3194,7 @@ export function serverDeps(
     ...(built.appPageViews ? { appPageViews: built.appPageViews } : {}),
     scheduler: built.scheduler,
     webhookReceiver: built.webhookReceiver,
+    ...(built.partnerChatEvents ? { partnerChatEvents: built.partnerChatEvents } : {}),
     loopIngress: built.loopIngress,
     identity: built.identity,
     principalLinks: built.principalLinks,
