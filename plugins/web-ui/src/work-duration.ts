@@ -3,9 +3,16 @@ import type { GoalStripState } from "./goal-strip.ts";
 import { workPausedForApproval, type WorkBlock } from "./core-bridge.ts";
 import { activityCreatedAt } from "./items.ts";
 
+/** When the work began: the run's start, else its earliest activity; null
+ * while neither is known (e.g. the run is still queued). */
+export function workStart(work: WorkBlock): number | null {
+  const times = work.activity.map(activityCreatedAt).filter((t) => typeof t === "number" && t > 0);
+  return work.startedAt ?? (times.length ? Math.min(...times) : null);
+}
+
 export function workSeconds(work: WorkBlock): number {
   const times = work.activity.map(activityCreatedAt).filter((t) => typeof t === "number" && t > 0);
-  const start = work.startedAt ?? (times.length ? Math.min(...times) : null);
+  const start = workStart(work);
   if (start == null) return 0;
   const live = work.status === "thinking" || work.status === "working";
   const phase = currentTextPhase(work);
