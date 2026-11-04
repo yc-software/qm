@@ -31,22 +31,40 @@ interface CronLite {
 const toolCountCache = new Map<string, { count: number; at: number }>();
 const toolCountInFlight = new Set<string>();
 
-export function expireToolCount(tool: SessionTool): void {
-  for (const [key, hit] of toolCountCache) if (key.startsWith(`${tool}:`)) hit.at = 0;
+interface CronList {
+  crons?: CronLite[];
+  visible?: CronLite[];
+}
+
+let cronList: { list: CronList; at: number } | null = null;
+let cronListLoad: Promise<CronList> | null = null;
+
+export function loadCronList(): Promise<CronList> {
+  cronListLoad ??= api<CronList>("/api/crons")
+    .finally(() => (cronListLoad = null))
+    .then(
+      (list) => (cronList = { list, at: Date.now() }).list,
+      (error: unknown) => {
+        cronList = { list: cronList?.list ?? {}, at: Date.now() };
+        throw error;
+      },
+    );
+  return cronListLoad;
+}
+
+export function expireCronList(): void {
+  if (cronList) cronList.at = 0;
+}
+
+function activeCronCount(scope: string): number | null {
+  if (!cronList) return null;
+  const { crons = [], visible = [] } = cronList.list;
+  return new Set(
+    [...crons, ...visible].filter((c) => c.ownerScopeId === scope && c.enabled && !c.archived).map((c) => c.id),
+  ).size;
 }
 
 const TOOL_COUNTERS: Partial<Record<SessionTool, (scope: string) => Promise<number>>> = {
-  crons: async (scope) => {
-    const r = await api<{ crons?: CronLite[]; visible?: CronLite[] }>("/api/crons");
-    const seen = new Set<string>();
-    let count = 0;
-    for (const c of [...(r.crons ?? []), ...(r.visible ?? [])]) {
-      if (seen.has(c.id)) continue;
-      seen.add(c.id);
-      if (c.ownerScopeId === scope && c.enabled && !c.archived) count++;
-    }
-    return count;
-  },
   apps: async (scope) => {
     const r = await api<{ deployments?: Array<{ status?: string; ownerScopeId?: string; createdInScope?: string }> }>(
       "/api/deployments",
@@ -60,8 +78,21 @@ const TOOL_COUNTERS: Partial<Record<SessionTool, (scope: string) => Promise<numb
 /** Cached count of a tool's items in a scope; kicks off a refresh and calls
  * onReady when a fresh count lands. Tools without a counter return null. */
 export function scopeToolCount(tool: SessionTool, scope: string, onReady: () => void): number | null {
+  if (!scope) return null;
+  if (tool === "crons") {
+    if ((!cronList || Date.now() - cronList.at >= 60_000) && !toolCountInFlight.has("crons")) {
+      toolCountInFlight.add("crons");
+      void loadCronList()
+        .catch(() => undefined)
+        .finally(() => {
+          toolCountInFlight.delete("crons");
+          onReady();
+        });
+    }
+    return activeCronCount(scope);
+  }
   const counter = TOOL_COUNTERS[tool];
-  if (!counter || !scope) return null;
+  if (!counter) return null;
   const key = `${tool}:${scope}`;
   const hit = toolCountCache.get(key);
   if (hit && Date.now() - hit.at < 60_000) return hit.count;
