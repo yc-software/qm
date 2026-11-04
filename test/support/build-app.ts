@@ -1,14 +1,25 @@
-import { after } from "node:test";
+import { after, afterEach, beforeEach } from "node:test";
 import type { Config } from "../../src/config.ts";
 import type { Agent, ScreenSecurityInput } from "../../src/agent/agent.ts";
 import { buildApp as buildProductionApp, type BuiltApp } from "../../src/wiring.ts";
 import { createMockAgent } from "./mock-agent.ts";
 
 const built: BuiltApp[] = [];
+const runningTests = new Map<object, BuiltApp[]>();
+const isTopLevel = (t: { name: string; fullName: string }) => t.fullName === t.name;
+beforeEach((t) => {
+  if (isTopLevel(t)) runningTests.set(t, []);
+});
+afterEach(async (t) => {
+  const apps = runningTests.get(t);
+  runningTests.delete(t);
+  await Promise.all((apps ?? []).map((app) => app.runtime.stop()));
+});
 after(() => Promise.all(built.splice(0).map((app) => app.runtime.stop())));
 
 export function stopAtEnd(app: BuiltApp): BuiltApp {
-  built.push(app);
+  const [owner, ...others] = runningTests.values();
+  (owner && !others.length ? owner : built).push(app);
   return app;
 }
 
@@ -46,7 +57,8 @@ export function buildApp(
     ),
   );
   const { runtime } = app;
-  const { start, startBackground } = runtime;
+  const { start, startBackground, stop } = runtime;
+  let stopped = false;
   let testStartedWorkers = false;
   let waiting = 0;
   runtime.setBackgroundAdmission(
@@ -55,17 +67,21 @@ export function buildApp(
   );
   runtime.start = () => {
     testStartedWorkers = true;
-    start();
+    if (!stopped) start();
   };
   runtime.startBackground = () => {
     testStartedWorkers = true;
-    startBackground();
+    if (!stopped) startBackground();
+  };
+  runtime.stop = () => {
+    stopped = true;
+    return stop();
   };
   const turn = app.app.turn.bind(app.app);
   app.app.turn = async (req, replay) => {
     if (req.async) return turn(req, replay);
     waiting++;
-    start();
+    if (!stopped) start();
     try {
       return await turn(req, replay);
     } finally {
