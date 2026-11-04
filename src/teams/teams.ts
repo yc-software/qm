@@ -78,7 +78,7 @@ export function createPostgresTeamStore(
   const { q, pool } = createPgPool(connectionString, [
     ...TENANCY,
     { id: "teams/0001", statements: SCHEMA },
-    tenantTables(
+    ...tenantTables(
       "teams/0002-tenants",
       [
         { table: "teams", primaryKey: "team_id" },

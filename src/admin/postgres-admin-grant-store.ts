@@ -28,7 +28,9 @@ export function createPostgresAdminGrantStore(connectionString: string): AdminGr
   const pg = createPgPool(connectionString, [
     ...TENANCY,
     { id: "admin/grants/0001", statements: SCHEMA_SQL },
-    tenantTables("admin/grants/0002-tenants", [{ table: "admin_grants", primaryKey: "principal_id, scope_id, role" }]),
+    ...tenantTables("admin/grants/0002-tenants", [
+      { table: "admin_grants", primaryKey: "principal_id, scope_id, role" },
+    ]),
   ]);
 
   return {

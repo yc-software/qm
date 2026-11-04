@@ -3,6 +3,7 @@ import test from "node:test";
 import { randomUUID } from "node:crypto";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { createPostgresResourceSearch } from "../src/search/resource-search.ts";
+import { seedInstallTenant } from "./support/tenant-seed.ts";
 
 const database = process.env.DATABASE_URL;
 test(
@@ -14,6 +15,7 @@ test(
     await admin.q(`CREATE SCHEMA ${schema}`);
     const url = new URL(database!);
     url.searchParams.set("options", `-c search_path=${schema}`);
+    await seedInstallTenant(url.toString());
     const pg = createPgPool(url.toString());
     try {
       let searchSql = "";

@@ -391,6 +391,8 @@ async function rewriteSessionPage(client: PoolClient, after: string): Promise<st
 }
 
 export async function rewriteSurfaceOrigins(pg: PgPool): Promise<void> {
+  const settled = await pg.q("SELECT 1 FROM qm_schema_migrations WHERE id = $1", [SETTLED_ORIGIN_MIGRATION.id]);
+  if (settled.length) return;
   const pool = await pg.pool();
   const rewrite = (migration: { id: string; statements: string[] }) =>
     rewriteInTransaction(pool, migration.id, REWRITE_LOCK, async (client) => {

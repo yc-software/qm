@@ -59,7 +59,7 @@ export function createPostgresDecisionStore(connectionString: string): DecisionS
   const { q, pool } = createPgPool(connectionString, [
     ...TENANCY,
     { id: "decisions/0001", statements: SCHEMA },
-    tenantTables(
+    ...tenantTables(
       "decisions/0002-tenants",
       [
         { table: "decision_providers", primaryKey: "provider_id" },

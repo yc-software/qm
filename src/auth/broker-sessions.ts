@@ -32,7 +32,7 @@ export function createPostgresBrokerSessions(connectionString: string): BrokerSe
   const pg = createPgPool(connectionString, [
     ...TENANCY,
     { id: "auth/broker-sessions/0001", statements: SCHEMA },
-    tenantTables("auth/broker-sessions/0002-tenants", [{ table: "auth_broker_sessions", primaryKey: "token_hash" }]),
+    ...tenantTables("auth/broker-sessions/0002-tenants", [{ table: "auth_broker_sessions", primaryKey: "token_hash" }]),
   ]);
   const session = (row: Record<string, unknown>): BrokerSession => ({
     email: String(row.email),

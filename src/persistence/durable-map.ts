@@ -52,6 +52,13 @@ const VERSIONS_TENANCY = {
   ],
 };
 
+export function durableMapLookup(table: string): { id: string; statements: string[] } {
+  return {
+    id: `durable-map/${table}/0010-tenants-lookups`,
+    statements: [`CREATE INDEX CONCURRENTLY IF NOT EXISTS ${table}_id_lookup ON ${table}(id)`],
+  };
+}
+
 export function durableMapTenancy(table: string): { id: string; statements: string[] } {
   return {
     id: `durable-map/${table}/0010-tenants`,
@@ -82,6 +89,7 @@ export function createPostgresMap<T>(
     migration,
     VERSIONS_TENANCY,
     durableMapTenancy(table),
+    durableMapLookup(table),
     ...indexedFields.flatMap((field) => {
       if (!/^[a-z_][a-z0-9_]*$/i.test(field)) throw new Error(`invalid index field: ${field}`);
       return [
