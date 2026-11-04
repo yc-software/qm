@@ -26,6 +26,7 @@ import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from ".
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { interimReplyDelivery } from "../src/core/orchestrator/reply-check.ts";
 import { turnPostKeys } from "../src/core/orchestrator/turn-helpers.ts";
+import { createPostgresProcessRegistry, type ProcessRecord } from "../src/processes/process-registry.ts";
 
 const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };
@@ -57,6 +58,7 @@ function buildOrchestrator(
   sessions: ReturnType<typeof createPostgresSessionStore>,
   deliveries: DeliveryStore,
   replyCheck?: OrchestratorDeps["replyCheck"],
+  extra: Partial<OrchestratorDeps> = {},
 ) {
   const config = testConfigStore(ORG);
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
@@ -84,6 +86,7 @@ function buildOrchestrator(
     deploy,
     acl,
     ...(replyCheck ? { replyCheck } : {}),
+    ...extra,
   });
 }
 
@@ -209,23 +212,42 @@ test("the reply check is armed for people's turns but never for automations such
   assert.deepEqual(armed, ["from a person"]);
 });
 
-test("the turn-end continuation check is armed for automations and delegated turns, never for a person's turn", async () => {
+test("the turn-end continuation check is armed for automations and subagent turns, never for a person's turn", async () => {
   const sessions = createPostgresSessionStore(testDatabaseUrl());
   const deliveries = createDeliveryStore();
-  const armed: boolean[] = [];
+  const parent = await sessions.getOrCreateByThread("web-ending-parent", "dm", "personal:U1");
+  const child = await sessions.getOrCreateByThread("web-ending-child", "dm", "personal:U1");
+  await sessions.setParentSession(child.id, parent.id);
+  const job = (processId: string, sessionRef: string): ProcessRecord => ({
+    processId,
+    scopeId: "personal:U1",
+    kind: "background",
+    command: "npm test",
+    startedAt: Date.now(),
+    expiresAt: Date.now() + 60_000,
+    status: "running",
+    sessionRef,
+  });
+  const notes: Array<string | undefined | null> = [];
   const agent: Agent = {
     ...createMockAgent(),
     runTurn: async (turn) => {
-      armed.push(typeof turn.checkEnding === "function");
+      notes.push(turn.checkEnding ? await turn.checkEnding("All three shards are running.") : null);
       return { reply: "done" };
     },
   };
-  const orch = buildOrchestrator(agent, sessions, deliveries);
+  const orch = buildOrchestrator(agent, sessions, deliveries, undefined, {
+    processes: {
+      ...createPostgresProcessRegistry(testDatabaseUrl()),
+      liveByScope: async () => [job("p-cron", "web-ending-cron"), job("p-elsewhere", "web-ending-elsewhere")],
+    },
+  });
   for (const [request, threadRef] of [
     [{ origin: { kind: "direct" }, text: "from a person" }, "web-ending-person"],
     [{ origin: { kind: "human" }, text: "from a person in chat" }, "web-ending-human"],
+    [{ origin: { kind: "human" }, sessionSenderId: parent.id, text: "a session a person asked for" }, "web-ending-new"],
     [{ origin: { kind: "automation" }, text: "from a cron" }, "web-ending-cron"],
-    [{ origin: { kind: "human" }, sessionSenderId: "parent-session", text: "from a parent agent" }, "web-ending-child"],
+    [{ origin: { kind: "human" }, sessionSenderId: parent.id, text: "from a parent agent" }, "web-ending-child"],
   ] as const)
     await orch.handleTurn({
       surface: "web",
@@ -234,5 +256,9 @@ test("the turn-end continuation check is armed for automations and delegated tur
       runId: `run-${threadRef}`,
       ...request,
     } as OrchestratorInput);
-  assert.deepEqual(armed, [false, false, true, true]);
+  assert.deepEqual(
+    notes.map((note) => (note === null ? "unarmed" : (note?.includes("p-cron") ?? false))),
+    ["unarmed", "unarmed", "unarmed", true, false],
+  );
+  assert.ok(!notes.some((note) => note?.includes("p-elsewhere")));
 });

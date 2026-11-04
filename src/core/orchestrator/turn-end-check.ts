@@ -12,16 +12,15 @@ const NEXT_STEP_OPENINGS = [
   "next i will",
   "next, i will",
   "let me",
-  "i'm going to",
-  "i am going to",
+  "now let me",
 ];
 const SENTENCE_BREAKS = [". ", "! ", "? ", "\n"];
 
-export const NEXT_STEP_ENDING =
+const NEXT_STEP_ENDING =
   "Your message above announces a next step but makes no tool call, and no one is waiting to prompt you.";
-export const unwatchedJobsEnding = (processIds: string[]): string =>
-  `Background jobs you started this turn are still running with no watch, so nothing will wake you when they finish: ${processIds.join(", ")}.`;
-export const ENDING_CHECK_CLOSE =
+const unwatchedJobsEnding = (processIds: string[]): string =>
+  `Background jobs you started this turn may still be running, and with no watch nothing will wake you when they finish: ${processIds.join(", ")}.`;
+const ENDING_CHECK_CLOSE =
   "If work remains, do it now; otherwise end with a final answer that stands on its own, since only your last message is delivered.";
 
 function lastSentence(text: string): string {

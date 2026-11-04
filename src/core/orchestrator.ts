@@ -3532,7 +3532,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             saveGoal,
             ...(goalInbox ? { goalInbox } : {}),
             ...(checkReply ? { checkReply } : {}),
-            ...(automatedTurn || sessionTurn
+            ...(automatedTurn || (sessionTurn && session.parentSessionId)
               ? {
                   checkEnding: turnEndCheck(deps, {
                     processScopeId: memoryScopeId,

@@ -67,12 +67,13 @@ function textReplyEvents(text: string, thinking?: string): Array<Record<string, 
   ];
 }
 
-function fakeModel(replies: string[], thinking?: string) {
+function fakeModel(replies: Array<string | Response>, thinking?: string) {
   const requests: Array<Array<{ role: string; content: unknown }>> = [];
   const realFetch = globalThis.fetch;
   globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
     requests.push((JSON.parse(String(init?.body ?? "{}")) as { messages?: [] }).messages ?? []);
-    return sse(textReplyEvents(replies[Math.min(requests.length, replies.length) - 1]!, thinking));
+    const reply = replies[Math.min(requests.length, replies.length) - 1]!;
+    return typeof reply === "string" ? sse(textReplyEvents(reply, thinking)) : reply;
   }) as typeof globalThis.fetch;
   return { requests, restore: () => (globalThis.fetch = realFetch) };
 }
@@ -463,6 +464,24 @@ test("a turn without the ending check, such as one a person is waiting on, ends 
     const result = await agent.runTurn(turnInput("ending-attended", sink));
     assert.equal(model.requests.length, 1);
     assert.equal(result.reply, "I'll now run the tests.");
+  } finally {
+    model.restore();
+  }
+});
+
+test("a continuation that fails at the provider keeps the reply it followed instead of failing the turn", async () => {
+  const agent = createAgent({ apiKey: "sk-test" });
+  const sink: Sink = { entries: [] };
+  const draft = "All 12 services are healthy. Let me double-check the queue.";
+  const rejected = new Response(
+    JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: "rejected" } }),
+    { status: 400, headers: { "content-type": "application/json" } },
+  );
+  const model = fakeModel([draft, rejected]);
+  try {
+    const result = await agent.runTurn(turnInput("ending-failed", sink, { checkEnding: unattendedCheck }));
+    assert.equal(model.requests.length, 2);
+    assert.equal(result.reply, draft);
   } finally {
     model.restore();
   }

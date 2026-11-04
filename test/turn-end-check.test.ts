@@ -10,7 +10,7 @@ test("a reply whose last sentence announces the next step, or that ends on a col
     "Found the leak in the pool.\n\nNext, I will write the regression test.",
     "Build is green. Let me check the deploy logs.",
     "- **Now I\u2019ll** merge it.",
-    "I'm going to rerun the flaky shard",
+    "Now let me check the logs",
     "Running the migration against staging:",
   ])
     assert.equal(announcesNextStep(reply), true, reply);
@@ -21,7 +21,7 @@ test("a finished reply, an offer to the reader, or an announcement earlier in th
     "The PR is open: https://example.test/pr/1. All checks pass.",
     "I'll now summarize. Three jobs failed, all on the same flaky test.",
     "Done. Let me know if you want the logs.",
-    "I'm going.",
+    "I'm going to wait for approval before merging.",
     "",
   ])
     assert.equal(announcesNextStep(reply), false, reply);

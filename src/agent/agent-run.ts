@@ -1274,6 +1274,7 @@ export function createAgent(opts?: AgentOptions): Agent {
         let userAborted = false;
         let abortReason: string | undefined;
         let recoveryDead = false;
+        let keptReply: string | undefined;
         entry.ref.abortSignal = toolAbort.signal;
         const onCancel = (): void => {
           toolAbort.abort();
@@ -1493,7 +1494,7 @@ export function createAgent(opts?: AgentOptions): Agent {
             session: entry.agentSession,
             turnWallClockMs,
             elapsedMs: turnWallClockMs > 0 ? turnWallClockMs - floorCap.remainingCapMs() : Date.now() - promptStart,
-            ...(turn.checkEnding ? { checkEnding: turn.checkEnding } : {}),
+            ...(turn.checkEnding && !goalAfterPrompt ? { checkEnding: turn.checkEnding } : {}),
           });
           if (note) {
             console.error(
@@ -1501,6 +1502,8 @@ export function createAgent(opts?: AgentOptions): Agent {
             );
             await thinkTail;
             if (!userAborted && !turn.cancel?.aborted && roomToReprompt()) {
+              const draft = entry.agentSession.getLastAssistantText() ?? "";
+              const beforeNote = entry.agentSession.messages.length;
               try {
                 const outcome = await reprompt(note);
                 if (outcome !== "ok" && !userAborted) {
@@ -1513,8 +1516,18 @@ export function createAgent(opts?: AgentOptions): Agent {
                   console.error(`[pi] turn still ended empty after re-prompt session=${turn.session.id}`);
                 }
               } catch (e) {
-                swallow("pi: empty-ending re-prompt", e);
+                swallow("pi: ending re-prompt", e);
                 recoveryDead = true;
+              }
+              if (
+                draft.trim() &&
+                !userAborted &&
+                !turn.cancel?.aborted &&
+                (recoveryDead || piRoundFailed(entry.agentSession, beforeNote))
+              ) {
+                console.error(`[pi] continuation failed; keeping the reply it followed session=${turn.session.id}`);
+                dropFailedAssistant(entry.agentSession, beforeNote);
+                keptReply = draft;
               }
             }
           }
@@ -1658,7 +1671,7 @@ export function createAgent(opts?: AgentOptions): Agent {
         }
 
         await settleGoal(false);
-        const closingText = recoveryDead ? "" : (piLastAssistantTextOrThrow(entry.agentSession) ?? "");
+        const closingText = keptReply ?? (recoveryDead ? "" : (piLastAssistantTextOrThrow(entry.agentSession) ?? ""));
         const reply = entry.ref.silentRequested ? "" : closingText;
         const closing = steps.closing(reply);
         await turn.emit({ kind: "AgentMessage", text: reply, step: closing?.step ?? null, body: { ...closing?.body } });
