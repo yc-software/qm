@@ -2064,7 +2064,6 @@ export function buildApp(
               deliveries,
               surfaceCache: { readMessages: (container, opts) => surfaceCache.readMessages(container, opts) },
               ...(config.partnerChat.label ? { label: config.partnerChat.label } : {}),
-              ...(config.partnerChat.promptHints ? { promptHints: config.partnerChat.promptHints } : {}),
             }),
           ]
         : []),
@@ -2181,7 +2180,7 @@ export function buildApp(
     deliveries,
     recoveryAdminUrlFor,
     sessions,
-    config.partnerChat ? partnerChatRunNotice : undefined,
+    partnerChatRunNotice,
   );
   const idempotency = createIdempotencyStore(artifactMap<IdempotencyRecord>("idempotency"));
   const skillFetcher = createGitFetcher(

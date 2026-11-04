@@ -472,25 +472,12 @@ test("a chat with any member the deployment does not vouch for is neither mirror
   }
 });
 
-test("partner-chat config requires the url and secret together and validates prompt hints", () => {
+test("partner-chat config requires the url and secret together", () => {
   assert.throws(() => loadConfig({ PARTNER_CHAT_URL: "https://chat.example" }), /must be set together/);
-  assert.throws(
-    () =>
-      loadConfig({
-        PARTNER_CHAT_URL: "https://chat.example",
-        PARTNER_CHAT_SECRET: "s",
-        PARTNER_CHAT_PROMPT_HINTS: '{"tone":1}',
-      }),
-    /PARTNER_CHAT_PROMPT_HINTS/,
-  );
   assert.deepEqual(
-    loadConfig({
-      PARTNER_CHAT_URL: "https://chat.example",
-      PARTNER_CHAT_SECRET: "s",
-      PARTNER_CHAT_LABEL: "Acme Chat",
-      PARTNER_CHAT_PROMPT_HINTS: '{"linkSyntax":"plain urls"}',
-    }).partnerChat,
-    { url: "https://chat.example", secret: "s", label: "Acme Chat", promptHints: { linkSyntax: "plain urls" } },
+    loadConfig({ PARTNER_CHAT_URL: "https://chat.example", PARTNER_CHAT_SECRET: "s", PARTNER_CHAT_LABEL: "Acme Chat" })
+      .partnerChat,
+    { url: "https://chat.example", secret: "s", label: "Acme Chat" },
   );
 });
 

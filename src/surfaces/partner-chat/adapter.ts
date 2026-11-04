@@ -38,7 +38,6 @@ export function createPartnerChatSurface(deps: {
   deliveries: DeliveryStore;
   surfaceCache: Pick<SurfaceCache, "readMessages">;
   label?: string;
-  promptHints?: Partial<SurfacePromptHints>;
 }): Surface<null> {
   return {
     kind: "partner-chat",
@@ -50,7 +49,7 @@ export function createPartnerChatSurface(deps: {
       externalParticipants: false,
       textOnly: true,
     },
-    promptHints: { ...DEFAULT_PROMPT_HINTS, ...deps.promptHints },
+    promptHints: DEFAULT_PROMPT_HINTS,
     async post(ref, message, idempotencyKey) {
       if (idempotencyKey.startsWith("run:"))
         throw new Error(`partner-chat surface post: reserved idempotency key ${idempotencyKey}`);

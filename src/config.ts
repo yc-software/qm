@@ -1,7 +1,4 @@
-import { errMessage } from "./util/errors.ts";
-import { z } from "zod";
 import { isClaudeSubscriptionToken } from "./model/claude-subscription.ts";
-import type { SurfacePromptHints } from "./surfaces/contract.ts";
 import {
   deploymentBrokerCredentialsFromEnv,
   type DeploymentBrokerCredential,
@@ -120,7 +117,7 @@ export interface Config extends SandboxSettings, DeploySettings {
   requireSignedPortalIdentity?: boolean;
   connectorSecretKey?: string;
   slackEventsPort?: number;
-  partnerChat?: { url: string; secret: string; label?: string; promptHints?: Partial<SurfacePromptHints> };
+  partnerChat?: { url: string; secret: string; label?: string };
   secretsBackend: "env" | "aws";
   secretsPrefix: string;
   apiBaseUrl?: string;
@@ -358,33 +355,6 @@ function modelProviderEnvStrict(env: NodeJS.ProcessEnv): ModelProvider | undefin
     );
   }
   return declared;
-}
-
-const promptHintsSchema = z
-  .object({
-    mentionSyntax: z.string(),
-    linkSyntax: z.string(),
-    autonomousStyle: z.string(),
-    conversationStyle: z.string(),
-  })
-  .partial()
-  .strict();
-
-function partnerChatPromptHints(raw: string): Partial<SurfacePromptHints> {
-  const invalid = (problem: string) =>
-    new Error(
-      `PARTNER_CHAT_PROMPT_HINTS must be a JSON object of strings keyed by ${Object.keys(promptHintsSchema.shape).join(", ")}: ${problem}`,
-    );
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (e) {
-    throw invalid(errMessage(e));
-  }
-  const hints = promptHintsSchema.safeParse(parsed);
-  if (!hints.success)
-    throw invalid(hints.error.issues.map((i) => `${i.path.join(".") || "value"}: ${i.message}`).join("; "));
-  return hints.data;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -632,9 +602,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
             url: env.PARTNER_CHAT_URL.trim(),
             secret: env.PARTNER_CHAT_SECRET.trim(),
             ...(env.PARTNER_CHAT_LABEL?.trim() ? { label: env.PARTNER_CHAT_LABEL.trim() } : {}),
-            ...(env.PARTNER_CHAT_PROMPT_HINTS?.trim()
-              ? { promptHints: partnerChatPromptHints(env.PARTNER_CHAT_PROMPT_HINTS) }
-              : {}),
           },
         }
       : {}),
