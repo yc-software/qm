@@ -476,6 +476,9 @@ async function treeSessions(sessions: Pick<SessionStore, "childrenOf">, root: Se
 }
 
 export const PARENT_INTERRUPT = "by the parent agent";
+export const ANCESTOR_STOP = "because the parent session was stopped";
+
+type StopRequest = { reason?: string | undefined; scope?: StopScope };
 
 async function stopOf(
   signals: Pick<RunSignalStore, "pending">,
@@ -492,16 +495,17 @@ export async function runStopped(
   runId: string | undefined,
 ): Promise<"self" | "ancestor" | undefined> {
   const seen = new Set<string>();
+  let self = false;
   for (let current = runId; current;) {
-    const self = current === runId;
     if (seen.has(current)) return "ancestor";
     seen.add(current);
     const run = await runs.get(current);
     const stop = run && (await stopOf(signals, run));
-    if (!run || (stop && (self || stop.scope !== "run"))) return self ? "self" : "ancestor";
-    current = run.request.delegatingRunId;
+    if (current === runId) self = !run || stop !== undefined;
+    else if (!run || (stop && stop.scope !== "run")) return "ancestor";
+    current = run?.request.delegatingRunId;
   }
-  return undefined;
+  return self ? "self" : undefined;
 }
 
 const unstarted = (run: Run): boolean => run.status === "pending" && run.attempts === 0 && run.turnUserSeq === null;
@@ -510,7 +514,7 @@ const interruptible = (run: Run): boolean => !unstarted(run) || Boolean(run.requ
 async function stopSessionRuns(
   deps: { runs: Pick<RunStore, "inFlightForThread" | "withdraw">; signals: Pick<RunSignalStore, "send"> },
   session: Session,
-  reason?: string,
+  stop: StopRequest,
   interrupt?: { by: string; mailbox: Pick<SessionMailbox, "send"> },
 ): Promise<{ id: string; withdrawn: boolean }[]> {
   const stopped: { id: string; withdrawn: boolean }[] = [];
@@ -530,8 +534,8 @@ async function stopSessionRuns(
       });
     await deps.signals.send(run.id, {
       kind: "abort",
-      ...(reason ? { reason } : {}),
-      ...(interrupt ? { scope: "run" } : {}),
+      ...(stop.reason ? { reason: stop.reason } : {}),
+      ...(stop.scope ? { scope: stop.scope } : {}),
     });
     const withdrawn =
       run.status === "pending" && (await deps.runs.withdraw(run.id, { unstartedOnly: Boolean(interrupt) }));
@@ -568,8 +572,10 @@ export async function stopSessionTree(
   reason?: string,
 ): Promise<boolean> {
   let stopped = false;
-  for (const session of await treeSessions(deps.sessions, root))
-    if (session.scopeId === root.scopeId && (await stopSessionRuns(deps, session, reason)).length) stopped = true;
+  for (const session of await treeSessions(deps.sessions, root)) {
+    const stop: StopRequest = session.id === root.id ? { reason } : { reason: ANCESTOR_STOP, scope: "ancestor" };
+    if (session.scopeId === root.scopeId && (await stopSessionRuns(deps, session, stop)).length) stopped = true;
+  }
   return stopped;
 }
 
@@ -858,10 +864,15 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 if (!input.interrupt)
                   return { ok: false, message: "send_message requires `text` (or interrupt: true)." };
                 return (
-                  await stopSessionRuns(deps, target, PARENT_INTERRUPT, {
-                    by: binding.session.id,
-                    mailbox: deps.mailbox,
-                  })
+                  await stopSessionRuns(
+                    deps,
+                    target,
+                    { reason: PARENT_INTERRUPT, scope: "run" },
+                    {
+                      by: binding.session.id,
+                      mailbox: deps.mailbox,
+                    },
+                  )
                 ).length
                   ? { ok: true, sessionId: target.id, title, delivered: "interrupted" }
                   : { ok: false, message: `subagent "${title}" is not running — nothing to interrupt.` };
@@ -907,10 +918,15 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               const accepted = await acceptedFollowup(deps.runs, dedupKey, target, stamped, title);
               if (accepted) return accepted;
               const stopped = input.interrupt
-                ? await stopSessionRuns(deps, target, PARENT_INTERRUPT, {
-                    by: binding.session.id,
-                    mailbox: deps.mailbox,
-                  })
+                ? await stopSessionRuns(
+                    deps,
+                    target,
+                    { reason: PARENT_INTERRUPT, scope: "run" },
+                    {
+                      by: binding.session.id,
+                      mailbox: deps.mailbox,
+                    },
+                  )
                 : [];
               request.origin = sessionTurnOrigin(request.origin, stamped);
               request.sessionSenderId = binding.session.id;
