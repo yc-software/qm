@@ -25,6 +25,7 @@ docker build -f "deploy/$service/Dockerfile" -t "$image" .
 if [[ "$service" == "portal" ]]; then
   signing_jwk="$(node -e "const {generateKeyPairSync}=require('node:crypto');process.stdout.write(JSON.stringify(generateKeyPairSync('ec',{namedCurve:'P-256'}).privateKey.export({format:'jwk'})))")"
   docker run -d --name "$container" -p 127.0.0.1::"$container_port" \
+    -e CORE_API_URL=http://127.0.0.1:9 \
     -e PORTAL_SESSION_SECRET=runtime-smoke-portal-session-secret \
     -e CORE_SIGNING_SECRET=runtime-smoke-core-signing-secret \
     -e AUTH_EMBEDDED=1 \
@@ -49,6 +50,7 @@ if [[ "$service" == "portal" ]]; then
 elif [[ "$service" == "auth" ]]; then
   signing_jwk="$(node -e "const {generateKeyPairSync}=require('node:crypto');process.stdout.write(JSON.stringify(generateKeyPairSync('ec',{namedCurve:'P-256'}).privateKey.export({format:'jwk'})))")"
   docker run -d --name "$container" -p 127.0.0.1::"$container_port" \
+    -e CORE_API_URL=http://127.0.0.1:9 \
     -e CORE_SIGNING_SECRET=runtime-smoke-core-signing-secret-0123456789 \
     -e AUTH_ISSUER=https://portal.example.com/idp \
     -e AUTH_REDIRECT_URI=https://portal.example.com/auth/callback \
@@ -62,7 +64,8 @@ elif [[ "$service" == "auth" ]]; then
     -e RESEND_API_KEY=re_runtime_smoke \
     "$image" >/dev/null
 else
-  docker run -d --name "$container" -p 127.0.0.1::"$container_port" "$image" >/dev/null
+  docker run -d --name "$container" -p 127.0.0.1::"$container_port" \
+    -e CORE_API_URL=http://127.0.0.1:9 "$image" >/dev/null
 fi
 port="$(docker port "$container" "$container_port/tcp" | sed 's/.*://')"
 

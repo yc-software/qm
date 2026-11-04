@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
+import { Agent, get } from "node:http";
 import { once } from "node:events";
 import { fileURLToPath } from "node:url";
 
@@ -47,19 +48,33 @@ test("SIGTERM ends event streams, finishes in-flight requests, serves until quie
       for await (const chunk of events.body!) void chunk;
       return Date.now();
     })();
-    const slow = fetch(`${base}/slow`).then(async (r) => ({ status: r.status, body: await r.text() }));
+    const idleSocketClosed = new Promise<number>((resolve) => {
+      get(`${base}/`, { agent: new Agent({ keepAlive: true }) }, (res) => {
+        res.resume();
+        res.socket.once("close", () => resolve(Date.now()));
+      });
+    });
+    const slow = fetch(`${base}/slow`).then(async (r) => ({
+      status: r.status,
+      body: await r.text(),
+      connection: r.headers.get("connection"),
+    }));
     await new Promise((r) => setTimeout(r, 200));
     const signalled = Date.now();
     server.child.kill("SIGTERM");
+    assert.ok((await idleSocketClosed) - signalled < 1_000, "idle keep-alive connections close right after SIGTERM");
     assert.ok((await streamEnded) - signalled < 1_000, "event streams end right after SIGTERM");
+    await new Promise((r) => setTimeout(r, 1_000));
+    const lastRequest = Date.now();
     const lameDuck = await fetch(`${base}/`);
     assert.equal(await lameDuck.text(), "ok");
     assert.equal(lameDuck.headers.get("connection"), "close");
-    assert.deepEqual(await slow, { status: 200, body: "slow done" });
+    assert.deepEqual(await slow, { status: 200, body: "slow done", connection: "close" });
     const { code, signal, at } = await server.exit;
     assert.equal(signal, null);
     assert.equal(code, 0);
-    assert.ok(at - signalled < 6_000, `exited ${at - signalled} ms after SIGTERM`);
+    assert.ok(at - lastRequest >= 2_500, `exited ${at - lastRequest} ms after the last request`);
+    assert.ok(at - signalled < 7_000, `exited ${at - signalled} ms after SIGTERM`);
     assert.match(server.stdout(), /\[fixture\] SIGTERM received, draining/);
     await assert.rejects(fetch(`${base}/`));
   } finally {
