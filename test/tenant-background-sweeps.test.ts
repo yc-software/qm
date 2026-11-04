@@ -222,6 +222,7 @@ test(
           },
         },
       }),
+      eachTenant: store.eachTenant,
       leaderLease: createNoopLeaderLease(),
       onError: (error) => assert.fail(String(error)),
     });
