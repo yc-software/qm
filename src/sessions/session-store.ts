@@ -463,8 +463,6 @@ export interface SessionStore {
 
   searchSessionTitles(principalId: string, query: string, limit?: number): Promise<Session[]>;
 
-  scanAll(): Promise<Session[]>;
-
   countSessions(): Promise<number>;
 
   listByScope(scope: ScopeId): Promise<Session[]>;
