@@ -5818,6 +5818,30 @@ a.connector-widget:focus-visible {
   text-overflow: ellipsis;
   font-weight: 600;
 }
+.context-row .group-avatar-stack.context-row-avatars {
+  position: static;
+  margin-left: auto;
+  transform: none;
+}
+.context-row-avatars + .context-row-meta {
+  margin-left: 0;
+}
+.context-row-avatars .group-avatar {
+  width: 22px;
+  height: 22px;
+  margin-left: -7px;
+  border-color: var(--background);
+}
+.context-row-avatars .group-avatar:first-child {
+  margin-left: 0;
+}
+.context-row:hover .context-row-avatars .group-avatar {
+  border-color: color-mix(in srgb, var(--background) 88%, var(--secondary));
+}
+.context-row-avatars .group-avatar.initial,
+.context-row-avatars .group-avatar.more {
+  font-size: 10px;
+}
 .context-row-meta {
   overflow: hidden;
   margin-left: auto;

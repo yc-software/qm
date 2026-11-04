@@ -101,6 +101,7 @@ import {
   scopeChip,
 } from "./contexts";
 import { groupDmLabel, groupDmText } from "./group-dm-label";
+import { groupAvatarStackTpl } from "./group-avatars";
 import { transcriptModel } from "./model-options";
 import { appState, closeSidebarOnNarrowView, renderSidebarTop, syncDocumentTitle, syncUrlFromState } from "./shell";
 import { beginNavigation, endNavigation } from "./url-history";
@@ -458,21 +459,7 @@ function newChatHint(name: string): string {
 function groupAvatars(item: Extract<RecentItem, { kind: "project" }>): TemplateResult | typeof nothing {
   if (item.groupKind !== "group") return nothing;
   const context = contextsState.list.find((candidate) => candidate.scopeId === item.scopeId);
-  const members = context && !context.project ? (context.groupMembers ?? []) : [];
-  if (!members.length) return nothing;
-  const shown = members.length > 3 ? members.slice(0, 2) : members;
-  const overflow = members.length - shown.length;
-  const everyone = members.map((member) => member.displayName).join(", ");
-  return html`<span class="group-avatar-stack" role="img" aria-label=${`With ${everyone}`}>
-    ${shown.map((member) =>
-      member.avatarUrl
-        ? html`<img class="group-avatar" src=${member.avatarUrl} alt="" loading="lazy" referrerpolicy="no-referrer" />`
-        : html`<span class="group-avatar initial" aria-hidden="true"
-            >${[...member.displayName.trim()][0]?.toUpperCase() ?? "?"}</span
-          >`,
-    )}
-    ${overflow ? html`<span class="group-avatar more" aria-hidden="true">+${overflow}</span>` : nothing}
-  </span>`;
+  return groupAvatarStackTpl(context && !context.project ? (context.groupMembers ?? []) : []);
 }
 
 function recentItem(item: RecentItem, shownThreads: ReadonlySet<string>): TemplateResult {
