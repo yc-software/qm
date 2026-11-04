@@ -438,7 +438,7 @@ export function stopWithBackstop(
 export interface BuiltApp {
   checkReadiness: (signal: AbortSignal) => Promise<void>;
   backgroundOwnership?: BackgroundOwnershipControl;
-  rewriteSurfaceOrigins: () => Promise<void>;
+  ownSharedState: () => Promise<void>;
   suggestedActivities?: ReturnType<typeof createSuggestedActivityService>;
   app: App;
   deploymentLayer: DeploymentLayerRuntime;
@@ -658,6 +658,7 @@ export function buildApp(
   const brokeredTools = deploymentLayer.brokeredTools;
   const orgScope = scopeId("org", config.orgId);
   const auditLog = createPostgresAuditLog(databaseUrl);
+  let ownsSharedState = false;
   const deploymentLayerStore = createDeploymentLayerStore({
     backing: artifactMap<StoredDeploymentLayer>("deployment_layer"),
     runtime: deploymentLayer,
@@ -675,13 +676,15 @@ export function buildApp(
       }),
     ...(config.seedSkills && layerSkillsDir
       ? {
-          seedFallback: () =>
-            installSeedSkills(skills, {
+          seedFallback: async () => {
+            if (!ownsSharedState) return false;
+            await installSeedSkills(skills, {
               dir: layerSkillsDir,
               scopeId: orgScope,
               createdBy: LAYER_CREATED_BY,
               reviewer: LAYER_REVIEWER,
-            }),
+            });
+          },
         }
       : {}),
   });
@@ -689,31 +692,23 @@ export function buildApp(
   const deploymentLayerRefresh = createUntrackedSweeper(() => deploymentLayerStore.hydrate(), 30_000, {
     label: "deployment layer refresh",
   });
-  let skillsReady: Promise<void>;
-  if (config.seedSkills) {
-    const installCatalogs = async (): Promise<void> => {
-      await installSeedSkills(skills, { dir: config.skillsSeedDir, scopeId: orgScope, respectArchived: true });
-      for (const dir of config.pluginSkillDirs) {
-        if (layerSkillsDir && resolve(dir) === layerSkillsDir) continue;
-        await installSeedSkills(skills, {
-          dir,
-          scopeId: orgScope,
-          createdBy: "system:plugin-skills",
-          reviewer: "system:plugin-skills-reviewer",
-          respectArchived: true,
-        });
-      }
-    };
-    skillsReady = Promise.all([
-      installCatalogs().catch((e) => console.error("[seed] failed to install seed skills:", errMessage(e))),
-      deploymentLayerReady.catch((e) => console.error("[seed] deployment layer not ready:", errMessage(e))),
-    ]).then(() => undefined);
-  } else {
-    skillsReady = deploymentLayerReady.then(
-      () => undefined,
-      (e) => console.error("[seed] deployment layer not ready:", errMessage(e)),
-    );
-  }
+  const installCatalogs = async (): Promise<void> => {
+    await installSeedSkills(skills, { dir: config.skillsSeedDir, scopeId: orgScope, respectArchived: true });
+    for (const dir of config.pluginSkillDirs) {
+      if (layerSkillsDir && resolve(dir) === layerSkillsDir) continue;
+      await installSeedSkills(skills, {
+        dir,
+        scopeId: orgScope,
+        createdBy: "system:plugin-skills",
+        reviewer: "system:plugin-skills-reviewer",
+        respectArchived: true,
+      });
+    }
+  };
+  const skillsReady = deploymentLayerReady.then(
+    () => undefined,
+    (e) => console.error("[seed] deployment layer not ready:", errMessage(e)),
+  );
   const budgetOpts = {
     ...(config.budgetUsdPerWindow !== undefined ? { limitUsd: config.budgetUsdPerWindow } : {}),
     ...(config.orgBudgetUsdPerWindow !== undefined ? { orgLimitUsd: config.orgBudgetUsdPerWindow } : {}),
@@ -2955,7 +2950,19 @@ export function buildApp(
     brokeredTools,
     deploymentLayerReady,
     deploymentLayerRefresh,
-    rewriteSurfaceOrigins: () => rewriteSurfaceOrigins(pgArtifactMap.pool),
+    ownSharedState: async () => {
+      ownsSharedState = true;
+      await rewriteSurfaceOrigins(pgArtifactMap.pool);
+      await sandboxResources.initialize();
+      const backfilledFires = await crons.backfillFires();
+      if (backfilledFires > 0) console.log(`[qm] backfilled ${backfilledFires} cron fire log entries into cron_fires`);
+      await Promise.all([
+        config.seedSkills
+          ? installCatalogs().catch((e) => console.error("[seed] failed to install seed skills:", errMessage(e)))
+          : undefined,
+        deploymentLayerStore.hydrate().catch((e) => console.error("[seed] deployment layer not ready:", errMessage(e))),
+      ]);
+    },
     sessions,
     runs,
     signals: runSignals,

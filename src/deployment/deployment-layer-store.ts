@@ -253,7 +253,7 @@ export function createDeploymentLayerStore(opts: {
   skills: SkillStore;
   skillBundles?: SkillBundleStore;
   scopeId: ScopeId;
-  seedFallback?: () => Promise<unknown>;
+  seedFallback?: () => Promise<boolean | void>;
   now?: () => number;
   retryDelaysMs?: readonly number[];
   advisoryLock: AdvisoryLock;
@@ -444,8 +444,7 @@ export function createDeploymentLayerStore(opts: {
     } catch (error) {
       reportApplyFailure(record, error);
       if (!(error instanceof DeploymentLayerMutationError) && opts.seedFallback && !seeded) {
-        await opts.seedFallback();
-        seeded = true;
+        seeded = (await opts.seedFallback()) !== false;
       }
     }
     return record;
@@ -479,8 +478,7 @@ export function createDeploymentLayerStore(opts: {
             return applyForHydrate(record);
           }
           if (opts.seedFallback && !seeded) {
-            await opts.seedFallback();
-            seeded = true;
+            seeded = (await opts.seedFallback()) !== false;
             let appeared: StoredDeploymentLayer | null = null;
             try {
               appeared = await retrying(() => opts.backing.get(CURRENT));
