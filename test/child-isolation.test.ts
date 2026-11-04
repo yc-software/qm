@@ -9,7 +9,7 @@ import { createSessionMailbox, type SessionMessage } from "../src/sessions/sessi
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
-import { prepareChildWorkdir } from "../src/sessions/child-isolation.ts";
+import { isolationBrief, prepareChildWorkdir } from "../src/sessions/child-isolation.ts";
 import { createTurnSandboxes, type TurnSandboxContext } from "../src/core/orchestrator/sandboxes.ts";
 import { createToolContext } from "../src/tools/primitives.ts";
 import { createSandboxResources, type SandboxDefault, type SandboxResource } from "../src/sandbox/sandbox-resources.ts";
@@ -104,9 +104,11 @@ test("worktree isolation gives each child its own directory and branch, named in
   assert.equal(a?.branch, `subagent/${a?.workdir?.slice("subagents/".length)}`);
   assert.equal(a?.base, undefined);
   assert.notEqual(a?.workdir, b?.workdir);
-  const brief = await rig.taskText(first);
+  const brief = isolationBrief(a) ?? "";
   assert.ok(brief.includes(`start in your own directory, ${a?.workdir} in the workspace`));
   assert.ok(brief.includes(`branch ${a?.branch} if the workspace root is a git repository`));
+  assert.ok(brief.includes(`prefix them with ${a?.workdir}/`));
+  assert.doesNotMatch(await rig.taskText(first), /omit sandbox_id/);
   const listed = await rig.syscallsFor(rig.room).read({});
   assert.ok(listed.ok && listed.mode === "children");
   assert.deepEqual(listed.children.map((c) => c.isolation?.workdir).sort(), [a?.workdir, b?.workdir].sort());
@@ -122,10 +124,9 @@ test("sandbox isolation reserves a sandbox named by the child's own id; open rep
   assert.ok(replay.ok);
   assert.equal(replay.sessionId, opened.sessionId);
   assert.deepEqual(replay.isolation, opened.isolation);
-  const child = await rig.child(opened.sessionId);
   assert.match(
-    await rig.taskText(child),
-    new RegExp(`run on your own sandbox, ${opened.sessionId}, created the first time`),
+    isolationBrief(opened.isolation) ?? "",
+    new RegExp(`default computer is your own sandbox, ${opened.sessionId}, created the first time`),
   );
 });
 
@@ -145,7 +146,7 @@ test("grandchildren default from their parent's placement", async () => {
   assert.equal(nested.spawnMeta?.isolation?.base, workdir);
   assert.notEqual(nested.spawnMeta?.isolation?.workdir, workdir);
   const helper = await openChild(rig, worker, { task: "run the linter", isolation: "shared" });
-  assert.deepEqual(helper.spawnMeta?.isolation, { mode: "shared", workdir });
+  assert.deepEqual(helper.spawnMeta?.isolation, { ...worker.spawnMeta?.isolation, mode: "shared" });
 
   const boxed = await openChild(rig, rig.room, { task: "own box", isolation: "sandbox" });
   const sharer = await openChild(rig, boxed, { task: "use the box" });
@@ -247,6 +248,12 @@ test("a worktree child outside a git repository gets an empty directory, and a b
 
 function turnRig() {
   const disk = localDisk();
+  const failing = new Set<string>();
+  const provision = disk.backend.provision.bind(disk.backend);
+  disk.backend.provision = async (id, opts) => {
+    if (failing.delete(id)) throw new Error("provider hiccup");
+    return provision(id, opts);
+  };
   const records = testMap<SandboxResource>();
   const resources = createSandboxResources({
     records,
@@ -254,14 +261,14 @@ function turnRig() {
     backends: { local: disk.backend },
     defaultBackend: "local",
     lock: testAdvisoryLock(),
-    canUseScope: async (who, owner) => owner === `personal:${who}`,
+    canUseScope: async (who, owner) => owner === `personal:${who}` || (who === "carol" && owner === scope),
   });
   const router = createSandboxRouter({ backends: { local: disk.backend }, defaultBackend: "local", resources });
-  const turn = (session: Session) => {
+  const turn = (session: Session, who: Principal = actor) => {
     const sandboxes = createTurnSandboxes({
       deps: { sandbox: router, sandboxResources: resources },
       input: { origin: { kind: "human" } },
-      actor,
+      actor: who,
       session,
       resolution: { writableScopeId: scope, readOnlyScopeIds: [] },
       scopeId: scope,
@@ -289,7 +296,7 @@ function turnRig() {
       grantedHandles: [],
       deploy: {} as never,
       acl: {} as never,
-      createdBy: actor.id,
+      createdBy: who.id,
       backgroundBroker: {
         async start(handle, command) {
           const out = await router.run(handle, command);
@@ -322,7 +329,7 @@ function turnRig() {
       ? { spawnMeta: { surface: "web", conversation, actor, isolation } }
       : { spawnMeta: { surface: "web", conversation, actor } }),
   });
-  return { ...disk, resources, records, router, turn, session };
+  return { ...disk, failing, resources, records, router, turn, session };
 }
 
 test("a sandbox-isolated child's commands run on its own computer, created once and kept across turns", async () => {
@@ -389,4 +396,69 @@ test("a child never adopts a sandbox from another scope as its own", async () =>
   const child = rig.session("intruder", { mode: "shared", sandboxId: foreign.id });
   await assert.rejects(rig.turn(child).tools.execute("true"), /belongs to another scope/);
   assert.equal((await rig.resources.get(foreign.id)).state, "ready");
+});
+
+test("a half-made worktree is rebuilt, and a repository workspace root ignores subagent directories", async () => {
+  const { backend } = localDisk();
+  const handle = await backend.provision("box");
+  const git = (cwd: string, ...args: string[]) =>
+    execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd, encoding: "utf8" }).trim();
+  git(handle.rootDir, "init", "-q", "-b", "main");
+  writeFileSync(join(handle.rootDir, "README.md"), "hello\n");
+  git(handle.rootDir, "add", ".");
+  git(handle.rootDir, "commit", "-q", "-m", "init");
+  const isolation: ChildIsolation = { mode: "worktree", workdir: "subagents/half-1", branch: "subagent/half-1" };
+  const dir = workdirOf(handle, isolation);
+  mkdirSync(dir, { recursive: true });
+  await prepareChildWorkdir(backend, handle, isolation);
+  assert.equal(git(dir, "rev-parse", "--show-toplevel"), dir);
+  assert.ok(existsSync(join(dir, "README.md")));
+  assert.equal(git(handle.rootDir, "status", "--porcelain"), "");
+});
+
+test("a worktree based on a directory that does not exist yet fails with the reason", async () => {
+  const { backend } = localDisk();
+  const handle = await backend.provision("box");
+  const isolation: ChildIsolation = {
+    mode: "worktree",
+    workdir: "subagents/kid-1",
+    branch: "subagent/kid-1",
+    base: "subagents/lead-1",
+  };
+  await assert.rejects(
+    prepareChildWorkdir(backend, handle, isolation),
+    /base directory subagents\/lead-1 does not exist yet/,
+  );
+});
+
+test("a shared grandchild sets up its parent's directory when the parent has not yet", async () => {
+  const rig = turnRig();
+  const shared = await rig.resources.create(actor.id, scope, "local", "scope default");
+  await rig.resources.setDefault(actor.id, scope, shared.id);
+  const helper = rig.session("helper", { mode: "shared", workdir: "subagents/lead-1", branch: "subagent/lead-1" });
+  assert.equal(
+    (await rig.turn(helper).tools.execute("pwd")).stdout.trim(),
+    join(rig.root, `sandbox-${shared.id}`, "workspace", "subagents/lead-1"),
+  );
+});
+
+test("a child sandbox whose first creation failed is created on a later turn started by someone else", async () => {
+  const rig = turnRig();
+  const childId = "22222222-2222-4333-8444-555555555555";
+  const child = rig.session(childId, { mode: "sandbox", sandboxId: childId });
+  rig.failing.add(`sandbox-${childId}`);
+  await assert.rejects(rig.turn(child).tools.execute("true"), /provider hiccup/);
+  assert.equal((await rig.resources.get(childId)).state, "failed");
+  const carol: Principal = { id: "carol", type: "internal", displayName: "Carol" };
+  assert.equal((await rig.turn(child, carol).tools.execute("echo ok")).stdout.trim(), "ok");
+  assert.equal((await rig.resources.get(childId)).state, "ready");
+});
+
+test("a child cannot get its own sandbox on a provider that cannot retire computers", async () => {
+  const rig = turnRig();
+  delete rig.backend.destroyScope;
+  const childId = "33333333-2222-4333-8444-555555555555";
+  const child = rig.session(childId, { mode: "sandbox", sandboxId: childId });
+  await assert.rejects(rig.turn(child).tools.execute("true"), /local computers cannot be retired/);
+  await assert.rejects(rig.resources.get(childId), /not found/);
 });

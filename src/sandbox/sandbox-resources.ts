@@ -307,7 +307,7 @@ export function createSandboxResources(opts: {
       return opts.lock.withLock(`sandbox-resource:${id}`, async () => {
         const existing = await opts.records.get(id);
         if (existing) {
-          if (existing.ownerScopeId !== scopeId || existing.createdBy !== actorId || existing.backend !== backend)
+          if (existing.ownerScopeId !== scopeId || existing.backend !== backend)
             throw new Error("sandbox reservation ownership mismatch");
           if (existing.state === "ready") return existing;
           if (existing.state === "retired") throw new Error("sandbox reservation is retired");

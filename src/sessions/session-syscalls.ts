@@ -15,7 +15,7 @@ import { hashId } from "../util/crypto.ts";
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import type { CoreSearch } from "../search/core-search.ts";
 import type { ChildIsolation, ChildIsolationMode, ScopeId, Session, SpawnMeta, TurnOrigin } from "../types.ts";
-import { childIsolation, isolationBrief } from "./child-isolation.ts";
+import { childIsolation } from "./child-isolation.ts";
 import type { OrchestratorInput } from "../core/orchestrator/types.ts";
 import type { Run, RunStore } from "../runs/run-store.ts";
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
@@ -353,17 +353,10 @@ function snippet(text: string, max: number): string {
   return oneLine.length <= max ? oneLine : `${oneLine.slice(0, max - 1).trimEnd()}…`;
 }
 
-function renderSubagentTask(input: {
-  title: string;
-  parentTitle: string;
-  task: string;
-  isolation?: ChildIsolation;
-}): string {
-  const placement = isolationBrief(input.isolation);
+function renderSubagentTask(input: { title: string; parentTitle: string; task: string }): string {
   return [
     `<subagent-task session="${xmlAttrEscape(input.title)}">`,
     `You are the subagent session "${input.title}", spawned from the conversation "${input.parentTitle}". To message your parent use subagents send_message with target="parent"; use an exact sibling title or sessionId for peers, never filesystem paths. When your turn ends, your final message is delivered to your current parent session — make it the result, stated plainly. Your parent can change while you work; detached sessions have no automatic return. Use your judgment on details within the task's real limits; if an instruction seems to work against the goal, follow the goal and say so. Do not contact people, post to conversations, or change standing configuration unless the task says to. If you are blocked, end your turn saying exactly what you need.`,
-    ...(placement ? [placement] : []),
     "",
     "<task>",
     input.task.trim(),
@@ -754,7 +747,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               ]))
                 await deps.sessions.addParticipant(child.id, id);
               await deps.sessions.updateTitle(child.id, title);
-              const text = renderSubagentTask({ title, parentTitle: callerTitle, task, isolation });
+              const text = renderSubagentTask({ title, parentTitle: callerTitle, task });
               const request = {
                 ...childRunRequest(child, meta, text, task),
                 sessionSenderId: binding.session.id,
