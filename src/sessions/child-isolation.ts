@@ -9,7 +9,7 @@ import type { ChildIsolation, ChildIsolationMode, ChildWorkdir, ScopeId, Session
 const WORKDIR_ROOT = "subagents";
 const WORKDIR_TIMEOUT_SEC = 300;
 const LOCK_WAIT_SEC = 240;
-const STALE_LOCK_MIN = 10;
+const STALE_LOCK_MIN = 5;
 
 function slug(title: string): string {
   const words = title.toLowerCase().replace(/[^a-z0-9]+/g, "-");
@@ -58,7 +58,7 @@ function workdirStep(rootDir: string, step: ChildWorkdir): string {
   const base = posixJoin(rootDir, step.base ?? "");
   const git = `git -C ${shq(base)}`;
   const branch = shq(step.branch);
-  const isWorktree = `[ "$(git -C ${shq(dir)} rev-parse --show-toplevel 2>/dev/null)" = ${shq(dir)} ]`;
+  const isWorktree = `[ "$(git -C ${shq(dir)} rev-parse --show-toplevel 2>/dev/null)" = "$(cd ${shq(dir)} && pwd -P)" ]`;
   return [
     `[ -f ${ready} ] && [ -d ${shq(dir)} ] && exit 0`,
     `mkdir -p ${shq(posixJoin(rootDir, WORKDIR_ROOT))} || exit 1`,
@@ -68,6 +68,7 @@ function workdirStep(rootDir: string, step: ChildWorkdir): string {
     `  sleep 1`,
     `done`,
     `trap 'rmdir ${lock} 2>/dev/null' EXIT`,
+    `trap 'exit 1' TERM INT HUP`,
     `[ -f ${ready} ] && [ -d ${shq(dir)} ] && exit 0`,
     `[ -d ${shq(base)} ] || { echo "base directory ${step.base ?? "."} does not exist yet" >&2; exit 1; }`,
     `if ${git} rev-parse --is-inside-work-tree >/dev/null 2>&1; then`,

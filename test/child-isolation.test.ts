@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile, execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync, readdirSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createSessionSyscalls, sessionContextOf } from "../src/sessions/session-syscalls.ts";
@@ -514,4 +514,23 @@ test("a worktree grandchild sets up its parent's worktree first when the parent 
   await prepareChildWorkdir(backend, handle, isolation);
   assert.equal(git(join(handle.rootDir, "subagents/lead-1"), "rev-parse", "--abbrev-ref", "HEAD"), "subagent/lead-1");
   assert.equal(git(workdirOf(handle, isolation), "rev-parse", "--abbrev-ref", "HEAD"), "subagent/kid-1");
+});
+
+test("a lock left by an interrupted setup goes stale instead of blocking the child", async () => {
+  const { backend } = localDisk();
+  const handle = await backend.provision("box");
+  const git = gitRepo(join(handle.rootDir, "repo"));
+  const lock = join(handle.rootDir, "subagents", ".lead-1.lock");
+  mkdirSync(lock, { recursive: true });
+  const old = new Date(Date.now() - 6 * 60_000);
+  utimesSync(lock, old, old);
+  const isolation: ChildIsolation = {
+    mode: "worktree",
+    workdir: "subagents/lead-1",
+    branch: "subagent/lead-1",
+    base: "repo",
+  };
+  await prepareChildWorkdir(backend, handle, isolation);
+  assert.equal(git(workdirOf(handle, isolation), "rev-parse", "--abbrev-ref", "HEAD"), "subagent/lead-1");
+  assert.equal(existsSync(lock), false);
 });
