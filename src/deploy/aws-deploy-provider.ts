@@ -158,11 +158,28 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
   const sts: Pick<STSClient, "send"> | undefined = litestream
     ? (opts.sts ?? new STSClient({ region, ...(opts.profile ? { profile: opts.profile } : {}) }))
     : undefined;
-  // A tenant with its own object store (tenant S3_BUCKET) keeps its app data there.
-  const bucketNow = async (): Promise<string | undefined> =>
-    dataBucket ? ((await tenantSettings()).env?.S3_BUCKET ?? dataBucket) : undefined;
-  const dataKeyFor = (deploymentId: string): string => `${dataPrefix}/${deploymentId}.tar`;
-  const litestreamKeyPrefix = (deploymentId: string): string => `${dataPrefix}/${deploymentId}/litestream`;
+  // Where one deployment's app data lives. In tenant mode (one core, many tenants) every key
+  // carries the tenant id, so two tenants with the same deployment id never share a key, even in
+  // the shared bucket, and a tenant with its own object store (tenant S3_BUCKET) keeps its data
+  // there. The pre-tenant key is only ever read from the tenant's own bucket, never the shared
+  // one, so a tenant can't pick up another's old snapshot. Single-tenant deployments keep their
+  // existing keys.
+  interface DataScope {
+    bucket: string;
+    prefix: string;
+    legacy?: { bucket: string; prefix: string };
+  }
+  const dataScope = async (): Promise<DataScope | undefined> => {
+    if (!dataBucket) return undefined;
+    if (!opts.tenantAppsSubdomain) return { bucket: dataBucket, prefix: dataPrefix };
+    const tenant = boundTenant();
+    if (!tenant) throw new Error("app data access needs a bound tenant");
+    const own = (await tenantSettings()).env?.S3_BUCKET;
+    const prefix = `${dataPrefix}/${tenant}`;
+    return own ? { bucket: own, prefix, legacy: { bucket: own, prefix: dataPrefix } } : { bucket: dataBucket, prefix };
+  };
+  const dataKeyIn = (prefix: string, deploymentId: string): string => `${prefix}/${deploymentId}.tar`;
+  const litestreamKeyIn = (prefix: string, deploymentId: string): string => `${prefix}/${deploymentId}/litestream`;
 
   function ensureConfigured(): void {
     if (!region) throw new Error("AWS_DEPLOY_REGION/AWS_REGION not set (DEPLOY_PROVIDER=aws)");
@@ -201,7 +218,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
 
   async function mintDataCreds(
     deploymentId: string,
-    bucket: string,
+    where: DataScope,
   ): Promise<{ accessKeyId: string; secretAccessKey: string; sessionToken: string }> {
     const policy = JSON.stringify({
       Version: "2012-10-17",
@@ -209,13 +226,13 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
         {
           Effect: "Allow",
           Action: ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload"],
-          Resource: `arn:aws:s3:::${bucket}/${litestreamKeyPrefix(deploymentId)}/*`,
+          Resource: `arn:aws:s3:::${where.bucket}/${litestreamKeyIn(where.prefix, deploymentId)}/*`,
         },
         {
           Effect: "Allow",
           Action: "s3:ListBucket",
-          Resource: `arn:aws:s3:::${bucket}`,
-          Condition: { StringLike: { "s3:prefix": `${litestreamKeyPrefix(deploymentId)}/*` } },
+          Resource: `arn:aws:s3:::${where.bucket}`,
+          Condition: { StringLike: { "s3:prefix": `${litestreamKeyIn(where.prefix, deploymentId)}/*` } },
         },
       ],
     });
@@ -233,16 +250,16 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
     return { accessKeyId: c.AccessKeyId, secretAccessKey: c.SecretAccessKey, sessionToken: c.SessionToken };
   }
 
-  async function stageLitestream(deploymentId: string, bucket: string, id: string, endpoint: string): Promise<void> {
-    const creds = await mintDataCreds(deploymentId, bucket);
+  async function stageLitestream(deploymentId: string, where: DataScope, id: string, endpoint: string): Promise<void> {
+    const creds = await mintDataCreds(deploymentId, where);
     const env = `AWS_ACCESS_KEY_ID=${creds.accessKeyId}\nAWS_SECRET_ACCESS_KEY=${creds.secretAccessKey}\nAWS_SESSION_TOKEN=${creds.sessionToken}\nAWS_REGION=${region}\n`;
     const config = [
       "dbs:",
       `  - path: ${DATA_DB}`,
       "    replicas:",
       "      - type: s3",
-      `        bucket: ${bucket}`,
-      `        path: ${litestreamKeyPrefix(deploymentId)}`,
+      `        bucket: ${where.bucket}`,
+      `        path: ${litestreamKeyIn(where.prefix, deploymentId)}`,
       `        region: ${region}`,
       "",
     ].join("\n");
@@ -250,12 +267,12 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
     await writeAbs(id, endpoint, LITESTREAM_CONFIG, Buffer.from(config));
   }
 
-  const litestreamStartScript = (deploymentId: string, bucket: string): string => {
+  const litestreamStartScript = (deploymentId: string, where: DataScope): string => {
     const fail = (code: number): string => `{ tail -c 400 ${shq(LITESTREAM_LOG)} >&2 2>/dev/null; exit ${code}; }`;
     return [
       `command -v litestream >/dev/null 2>&1 && command -v aws >/dev/null 2>&1 || exit 24`,
       `chmod 600 ${shq(LITESTREAM_ENV)} 2>/dev/null || true`,
-      `( set -a; . ${shq(LITESTREAM_ENV)}; set +a; litestream snapshots -config ${shq(LITESTREAM_CONFIG)} ${shq(DATA_DB)} && printf ok | aws s3 cp - s3://${bucket}/${litestreamKeyPrefix(deploymentId)}/.write-probe && aws s3 rm s3://${bucket}/${litestreamKeyPrefix(deploymentId)}/.write-probe ) >> ${shq(LITESTREAM_LOG)} 2>&1 || ${fail(23)}`,
+      `( set -a; . ${shq(LITESTREAM_ENV)}; set +a; litestream snapshots -config ${shq(LITESTREAM_CONFIG)} ${shq(DATA_DB)} && printf ok | aws s3 cp - s3://${where.bucket}/${litestreamKeyIn(where.prefix, deploymentId)}/.write-probe && aws s3 rm s3://${where.bucket}/${litestreamKeyIn(where.prefix, deploymentId)}/.write-probe ) >> ${shq(LITESTREAM_LOG)} 2>&1 || ${fail(23)}`,
       LIVE_REPLICATOR_PIDS,
       `for q in $(ls_pids); do kill -TERM "$q" 2>/dev/null || true; done`,
       `for i in $(seq 1 40); do [ -z "$(ls_pids)" ] && break; sleep 0.25; done`,
@@ -272,16 +289,16 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
   };
 
   async function refreshLitestream(deploymentId: string, id: string, endpoint: string): Promise<void> {
-    const bucket = await bucketNow();
-    if (!bucket) throw new Error("litestream refresh needs a data bucket");
-    await stageLitestream(deploymentId, bucket, id, endpoint);
-    const r = await execRaw(id, endpoint, litestreamStartScript(deploymentId, bucket), 120);
+    const where = await dataScope();
+    if (!where) throw new Error("litestream refresh needs a data bucket");
+    await stageLitestream(deploymentId, where, id, endpoint);
+    const r = await execRaw(id, endpoint, litestreamStartScript(deploymentId, where), 120);
     if (r.code !== 0) throw new Error(`litestream refresh failed (code ${r.code}): ${r.stderr.slice(0, 400)}`);
   }
 
   async function snapshotData(deploymentId: string, id: string, endpoint: string): Promise<boolean> {
-    const bucket = await bucketNow();
-    if (!s3 || !bucket) return false;
+    const where = await dataScope();
+    if (!s3 || !where) return false;
     const tarPath = dataTarPath();
     const excl = `--exclude='./app.db' --exclude='./app.db-*' --exclude='./.app.db-litestream'`;
     const ff = `! -name 'app.db' ! -name 'app.db-*' ! -path './.app.db-litestream*'`;
@@ -305,23 +322,30 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
       swallowAs("aws-deploy: remove data snapshot tar", undefined),
     );
     if (!tar?.length) throw new Error("data snapshot read-back empty");
-    await s3.send(new PutObjectCommand({ Bucket: bucket, Key: dataKeyFor(deploymentId), Body: tar }));
+    await s3.send(
+      new PutObjectCommand({ Bucket: where.bucket, Key: dataKeyIn(where.prefix, deploymentId), Body: tar }),
+    );
     return true;
   }
 
-  async function hydrateData(deploymentId: string, id: string, endpoint: string): Promise<void> {
-    const bucket = await bucketNow();
-    if (!s3 || !bucket) return;
-    let tar: Uint8Array | null;
+  async function readDataTar(bucket: string, key: string): Promise<Uint8Array | null> {
     try {
-      const got = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: dataKeyFor(deploymentId) }));
-      tar = (await got.Body?.transformToByteArray()) ?? null;
+      const got = await s3!.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+      return (await got.Body?.transformToByteArray()) ?? null;
     } catch (e) {
       const code = (e as { name?: string })?.name ?? "";
       const status = (e as { $metadata?: { httpStatusCode?: number } })?.$metadata?.httpStatusCode;
-      if (/NoSuchKey|NotFound/.test(code) || status === 404) return;
+      if (/NoSuchKey|NotFound/.test(code) || status === 404) return null;
       throw e;
     }
+  }
+
+  async function hydrateData(deploymentId: string, id: string, endpoint: string): Promise<void> {
+    const where = await dataScope();
+    if (!s3 || !where) return;
+    let tar = await readDataTar(where.bucket, dataKeyIn(where.prefix, deploymentId));
+    if (!tar?.length && where.legacy)
+      tar = await readDataTar(where.legacy.bucket, dataKeyIn(where.legacy.prefix, deploymentId));
     if (!tar?.length) return;
     const tarPath = dataTarPath();
     await writeAbs(id, endpoint, tarPath, tar);
@@ -519,10 +543,10 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
     await writeAbs(id, endpoint, READY_PATH, Buffer.from(`${version.commit ?? version.version}\n`));
     if (litestream) {
       await launchQueue(keyOf(d.id), async () => {
-        const bucket = await bucketNow();
-        if (!bucket) throw new Error("litestream start needs a data bucket");
-        await stageLitestream(d.id, bucket, id, endpoint);
-        const r = await execRaw(id, endpoint, `mkdir -p ${shq(DATA_DIR)}; ${litestreamStartScript(d.id, bucket)}`, 180);
+        const where = await dataScope();
+        if (!where) throw new Error("litestream start needs a data bucket");
+        await stageLitestream(d.id, where, id, endpoint);
+        const r = await execRaw(id, endpoint, `mkdir -p ${shq(DATA_DIR)}; ${litestreamStartScript(d.id, where)}`, 180);
         if (r.code !== 0) {
           let msg = `litestream start failed (code ${r.code}): ${r.stderr.slice(0, 400)}`;
           if (r.code === 24) {
