@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresDeliveryStore } from "../src/delivery/postgres-delivery-store.ts";
-import { createWebhookDelivery, webhookSender, webhookSigningKey } from "../src/delivery/webhook-delivery.ts";
+import { WEBHOOK_CLAIM_MS, webhookSender, webhookSigningKey } from "../src/delivery/webhook-delivery.ts";
+import { createDeliveryRelay } from "../src/delivery/relay.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import type { Delivery } from "../src/types.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
@@ -47,10 +48,14 @@ test(
     const slow = new Promise<void>((r) => {
       release = r;
     });
-    const delivery = createWebhookDelivery(store, async (d) => {
-      if (d.text === "refuse") return { refused: "receiver returned HTTP 422" };
-      if (d.text === "slow1") await slow;
-      sent.push(d.text);
+    const delivery = createDeliveryRelay(store, {
+      type: "webhook",
+      claimMs: WEBHOOK_CLAIM_MS,
+      send: async (d) => {
+        if (d.text === "refuse") return { refused: "receiver returned HTTP 422" };
+        if (d.text === "slow1") await slow;
+        sent.push(d.text);
+      },
     });
     delivery.start();
     try {
@@ -78,7 +83,7 @@ test(
 test("the webhook sender signs with a key core does not accept and reports refusals with the receiver's reason", async () => {
   const secret = "s".repeat(32);
   const requests: Request[] = [];
-  const statuses = [200, 422];
+  const statuses = [200, 422, 401];
   const send = webhookSender(secret, (async (u: URL, init: RequestInit) => {
     requests.push(new Request(u, init));
     const status = statuses.shift()!;
@@ -100,4 +105,5 @@ test("the webhook sender signs with a key core does not accept and reports refus
   assert.equal(req.headers.get("x-signature"), signRequest(webhookSigningKey(secret), ts, canonical));
   assert.notEqual(req.headers.get("x-signature"), signRequest(secret, ts, canonical));
   assert.deepEqual(await send(d), { refused: "receiver returned HTTP 422: binding unknown" });
+  await assert.rejects(send(d), /HTTP 401/, "an auth failure is retried, not refused");
 });

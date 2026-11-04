@@ -1,13 +1,9 @@
 import { createHmac } from "node:crypto";
 import { signedRequestHeaders } from "../../plugins/chassis/src/source-auth-sign.ts";
-import type { DeliveryStore } from "./delivery-store.ts";
-import { createSweeper } from "../util/sweeper.ts";
-import { reportFailure } from "../util/errors.ts";
-import type { Delivery } from "../types.ts";
+import { refusedStatus, type Send } from "./relay.ts";
 
-type Send = (d: Delivery) => Promise<{ refused: string } | void>;
-
-const CLAIM_MS = 20_000;
+const SEND_TIMEOUT_MS = 10_000;
+export const WEBHOOK_CLAIM_MS = 2 * SEND_TIMEOUT_MS;
 
 export function webhookSigningKey(signingSecret: string): string {
   return createHmac("sha256", signingSecret).update("delivery-webhook").digest("hex");
@@ -26,7 +22,7 @@ export function webhookSender(signingSecret: string | undefined, fetcher: typeof
         "content-type": "application/json",
       }),
       redirect: "error",
-      signal: AbortSignal.timeout(10_000),
+      signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
     });
     if (res.ok) {
       await res.body?.cancel().catch(() => {});
@@ -34,53 +30,7 @@ export function webhookSender(signingSecret: string | undefined, fetcher: typeof
     }
     const detail = (await res.text().catch(() => "")).trim().slice(0, 500);
     const reason = `receiver returned HTTP ${res.status}${detail ? `: ${detail}` : ""}`;
-    if (res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429) return { refused: reason };
+    if (refusedStatus(res.status)) return { refused: reason };
     throw new Error(reason);
-  };
-}
-
-export function createWebhookDelivery(deliveries: DeliveryStore, send: Send) {
-  let stopped = true;
-  const inFlight = new Set<Promise<void>>();
-  const track = (work: Promise<void>): void => {
-    inFlight.add(work);
-    void work.finally(() => inFlight.delete(work));
-  };
-  const deliver = async (d: Delivery): Promise<void> => {
-    const outcome = await send(d).catch((e: unknown) => {
-      reportFailure("webhook delivery: not accepted; retrying once its claim lapses", e, `delivery=${d.id}`);
-      return null;
-    });
-    if (outcome === null) return;
-    if (outcome) await deliveries.fail(d.id, outcome.refused, Date.now());
-    else await deliveries.ack(d.id, Date.now());
-    pass();
-  };
-  const pass = (): void => {
-    if (stopped) return;
-    track(
-      deliveries
-        .claimPending("webhook", CLAIM_MS, { oldestPerConversation: true })
-        .then((rows) => {
-          for (const d of rows) track(deliver(d).catch((e) => reportFailure("webhook delivery failed", e)));
-        })
-        .catch((e) => reportFailure("webhook delivery: claim failed", e)),
-    );
-  };
-  const sweeper = createSweeper(pass, CLAIM_MS / 4, { label: "webhook deliveries", immediate: true });
-  let unsubscribe: (() => void) | undefined;
-  return {
-    start(): void {
-      stopped = false;
-      unsubscribe ??= deliveries.onEnqueue(pass);
-      sweeper.start();
-    },
-    async stop(): Promise<void> {
-      stopped = true;
-      unsubscribe?.();
-      unsubscribe = undefined;
-      await sweeper.stop();
-      while (inFlight.size) await Promise.allSettled(inFlight);
-    },
   };
 }

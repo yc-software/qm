@@ -54,7 +54,7 @@ export interface DeliveryStore {
   recordRecipientThread(id: string, recipientThreadRef: string, at: number): Promise<void>;
   listByRecipientThread(recipientThreadRef: string, opts?: { limit?: number }): Promise<Delivery[]>;
   listBySourceSession(sourceSessionId: string, sourceThreadRef: string, opts?: { limit?: number }): Promise<Delivery[]>;
-  onEnqueue(listener: () => void): () => void;
+  onEnqueue(listener: (type: string) => void): () => void;
 }
 
 export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore {
@@ -62,7 +62,7 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
   const deliveries = new Map<string, Delivery>();
   const byKey = new Map<string, string>();
   const claimedUntil = new Map<string, number>();
-  const enqueueListeners = new Set<() => void>();
+  const enqueueListeners = new Set<(type: string) => void>();
 
   const expireOveraged = (now: number): void => {
     for (const d of deliveries.values()) {
@@ -97,7 +97,7 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
           claimedUntil.delete(existing.id);
           if (input.shadow) existing.shadow = true;
           else delete existing.shadow;
-          if (!existing.shadow) for (const l of enqueueListeners) l();
+          if (!existing.shadow) for (const l of enqueueListeners) l(existing.destination.type);
         }
         return existing;
       }
@@ -114,7 +114,7 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
       };
       deliveries.set(delivery.id, delivery);
       byKey.set(delivery.idempotencyKey, delivery.id);
-      if (!delivery.shadow) for (const l of enqueueListeners) l();
+      if (!delivery.shadow) for (const l of enqueueListeners) l(delivery.destination.type);
       return delivery;
     },
     async pending(type) {
