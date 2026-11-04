@@ -9,7 +9,7 @@ const TENANT_A = "00000000-0000-4000-8000-0000000000a1";
 const TENANT_B = "00000000-0000-4000-8000-0000000000b2";
 const HOSTS: Record<string, string> = { "a.example": TENANT_A, "b.example": TENANT_B };
 
-function answer(req: IncomingMessage): unknown {
+function answer(req: IncomingMessage, body: string): unknown {
   const path = (req.url ?? "").split("?")[0] ?? "";
   const tenant = req.headers["x-qm-tenant"];
   if (path.startsWith("/v1/operator/hosts/")) {
@@ -18,14 +18,24 @@ function answer(req: IncomingMessage): unknown {
   }
   if (path === "/v1/sessions") return { sessions: [{ title: `recent of ${String(tenant)}` }] };
   if (path === "/v1/directory/meta") return { workspaceUrl: `https://${String(tenant)}.slack.example` };
-  if (path === "/v1/surface-config") return tenant === TENANT_A ? { welcomeCohort: "S26" } : {};
+  if (path === "/v1/surface-config") return tenant === TENANT_A ? { welcomeCohort: "S26", orgId: "org-a" } : {};
+  if (path.startsWith("/v1/connectors/oauth/") || path === "/v1/composio/authorize" || path.startsWith("/v1/admin/"))
+    return {
+      query: Object.fromEntries(new URL(req.url ?? "/", "http://core").searchParams),
+      body,
+      actor: req.headers["x-admin-actor"],
+    };
   return {};
 }
 
 const core = createServer((req, res) => {
-  req.resume();
-  res.writeHead(200, { "content-type": "application/json" });
-  res.end(JSON.stringify(answer(req)));
+  let body = "";
+  req.setEncoding("utf8");
+  req.on("data", (chunk: string) => (body += chunk));
+  req.on("end", () => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify(answer(req, body)));
+  });
 });
 await new Promise<void>((resolve) => core.listen(0, resolve));
 
@@ -34,6 +44,8 @@ process.env.CORE_SIGNING_SECRET = SECRET;
 process.env.PORTAL_IDENTITY_SECRET = SECRET;
 process.env.WEB_UI_PRINCIPALS = "alice";
 process.env.WEB_UI_WELCOME_COHORT = "F26";
+process.env.WEB_UI_PUBLIC_URL = "https://shared.example";
+process.env.CORE_ORG_ID = "shared-org";
 
 const { handler } = await import("../server/index.ts");
 const surface = createServer((req, res) => void handler(req, res));
@@ -45,20 +57,25 @@ test.after(() => {
   core.close();
 });
 
-function call(host: string, path: string, tenant?: string): Promise<{ status: number; body: string }> {
+function call(host: string, path: string, tenant?: string, body?: unknown): Promise<{ status: number; body: string }> {
   const identity = mintPortalIdentity(
     { p: "alice", exp: Date.now() + 60_000, ...(tenant ? { t: tenant } : {}) },
     SECRET,
   );
   return new Promise((resolve, reject) => {
-    const req = request({ port, path, headers: { host, [PORTAL_IDENTITY_HEADER]: identity } }, (res) => {
+    const headers = {
+      host,
+      [PORTAL_IDENTITY_HEADER]: identity,
+      ...(body === undefined ? {} : { "content-type": "application/json" }),
+    };
+    const req = request({ port, path, method: body === undefined ? "GET" : "POST", headers }, (res) => {
       let body = "";
       res.setEncoding("utf8");
       res.on("data", (chunk: string) => (body += chunk));
       res.on("end", () => resolve({ status: res.statusCode ?? 0, body }));
     });
     req.on("error", reject);
-    req.end();
+    req.end(body === undefined ? undefined : JSON.stringify(body));
   });
 }
 
@@ -100,4 +117,34 @@ test("the welcome cohort comes from the tenant's settings, falling back to the d
   const b = await call("b.example", "/me");
   assert.equal(JSON.parse(a.body).welcomeCohort, "S26");
   assert.equal(JSON.parse(b.body).welcomeCohort, "F26");
+});
+
+test("the account's org is the tenant's own org, falling back to the deployment's", async () => {
+  assert.equal(JSON.parse((await call("a.example", "/me")).body).org, "org-a");
+  assert.equal(JSON.parse((await call("b.example", "/me")).body).org, "shared-org");
+});
+
+test("admin requests act as the tenant's org", async () => {
+  const a = await call("a.example", "/api/admin/users");
+  const b = await call("b.example", "/api/admin/users");
+  assert.equal(JSON.parse(a.body).actor, "alice@org-a");
+  assert.equal(JSON.parse(b.body).actor, "alice@shared-org");
+});
+
+test("connector and Composio callbacks return to the company's own host", async () => {
+  const oauth = JSON.parse(
+    (await call("a.example", "/api/connectors/gmail/start", undefined, { returnTo: "/settings" })).body,
+  );
+  assert.equal(oauth.query.redirectUri, "https://a.example/v1/connectors/oauth/gmail/callback");
+  assert.equal(oauth.query.returnTo, "/settings");
+  const state = "s".repeat(24);
+  const composio = await call("b.example", "/api/composio/authorize", undefined, {
+    toolkit: "gmail",
+    returnTo: "/settings",
+    state,
+  });
+  assert.equal(
+    JSON.parse(JSON.parse(composio.body).body).callbackUrl,
+    `https://b.example/settings?composioReturn=${state}`,
+  );
 });
