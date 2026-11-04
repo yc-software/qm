@@ -53,7 +53,7 @@ import {
   wakeForUnreadMail,
 } from "./sessions/subagent-mail.ts";
 import { createMemoryEmbedder } from "./model/embeddings.ts";
-import { configRouteOptions, createModelRoutes } from "./model/model-route.ts";
+import { configRouteOptions, createModelRoutes, type ModelRoutes } from "./model/model-route.ts";
 import { createSemanticMemory } from "./memory/semantic-memory.ts";
 import { createPostgresBrokerSessions, type BrokerSessionStore } from "./auth/broker-sessions.ts";
 import { createDirectFileUploads, type DirectFileUploads } from "./files/direct-file-upload.ts";
@@ -488,7 +488,7 @@ export interface BuiltApp {
   tenancy: Tenancy;
   secretDrops: SecretDropStore;
   modelGatewayTransport?: ModelGatewayTransportConfig;
-  resolveBrowserCompanyKeys: (includeSubscription?: boolean) => Promise<ProviderKeys>;
+  modelRoutes: ModelRoutes;
   modelCredentials: ModelCredentialStore;
   userModelCredentials: UserModelCredentialStore;
   modelRegistry: ModelOverlayStore;
@@ -1468,8 +1468,6 @@ export function buildApp(
     ]);
     return { ...claude, ...metered, ...chatgpt };
   };
-  const resolveBrowserCompanyKeys = async (includeSubscription = true): Promise<ProviderKeys> =>
-    includeSubscription ? resolveCompanyProviderKeys() : resolveModelProviderKeys();
   const companyModelId = (id: string): string => {
     if (resolveModel(id)?.provider !== "openai" || isOverlayModel(id) || modelRequestOverrides(id)) return id;
     const subscription = codexSubscriptionModelId(id);
@@ -2214,7 +2212,7 @@ export function buildApp(
     monitors,
     crons,
     webhooks,
-    resolveBaseModelId: () => orgBaseModelId() ?? fallback.modelId,
+    resolveSessionRuntime,
     directory,
     isCurrentSharedScopeMember,
     currentScopeMembers: createCurrentScopeMembers({ managedGroups: projects, directory, identity }, true),
@@ -3083,8 +3081,8 @@ export function buildApp(
     tenancy,
     secretDrops,
     modelGatewayTransport: gatewayTransport,
+    modelRoutes,
     budget,
-    resolveBrowserCompanyKeys,
     modelCredentials,
     userModelCredentials,
     modelRegistry,
@@ -3172,7 +3170,7 @@ export function serverDeps(
   return {
     externalSlackPolicies: config.externalSlackPolicies,
     modelGatewayTransport: built.modelGatewayTransport,
-    resolveBrowserCompanyKeys: built.resolveBrowserCompanyKeys,
+    modelRoutes: built.modelRoutes,
     production: config.production,
     checkReadiness: built.checkReadiness,
     ...(config.backgroundDeploymentId && config.backgroundWorkEnabled
