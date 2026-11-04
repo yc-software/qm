@@ -1,6 +1,11 @@
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import type { AddressInfo } from "node:net";
+import { createServer } from "../src/api/server.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
+import { testMigratedDatabaseUrl } from "./support/test-database.ts";
 import { configureTenantCaches } from "../src/api/tenant-ingress.ts";
 import { withTenant } from "../src/tenants/context.ts";
 import { hostRequest } from "./support/host-request.ts";
@@ -8,6 +13,7 @@ import {
   deliver,
   HOOK_SECRET,
   type Instance,
+  operatorSigned,
   signed,
   skip,
   startTenantInstance,
@@ -38,7 +44,7 @@ before(async () => {
     [b, "b.example.test"],
   ] as const) {
     const path = `/v1/operator/tenants/${tenant}/hosts/${host}`;
-    assert.equal((await signed(multi, "core.internal", "PUT", path)).status, 200);
+    assert.equal((await operatorSigned(multi, "PUT", path)).status, 200);
   }
 });
 
@@ -46,18 +52,12 @@ after(() => stopTenantInstance(multi));
 
 describe("operator routes", { skip }, () => {
   it("map hosts, refuse a host owned by another tenant, and report lookups", async () => {
+    assert.equal((await operatorSigned(multi, "PUT", `/v1/operator/tenants/${b}/hosts/a.example.test`)).status, 409);
     assert.equal(
-      (await signed(multi, "core.internal", "PUT", `/v1/operator/tenants/${b}/hosts/a.example.test`)).status,
-      409,
-    );
-    assert.equal(
-      (await signed(multi, "core.internal", "PUT", `/v1/operator/tenants/${randomUUID()}/hosts/x.example.test`)).status,
+      (await operatorSigned(multi, "PUT", `/v1/operator/tenants/${randomUUID()}/hosts/x.example.test`)).status,
       404,
     );
-    assert.equal(
-      (await signed(multi, "core.internal", "PUT", `/v1/operator/tenants/${a}/hosts/not_a_host`)).status,
-      400,
-    );
+    assert.equal((await operatorSigned(multi, "PUT", `/v1/operator/tenants/${a}/hosts/not_a_host`)).status, 400);
     const unsigned = await hostRequest(
       `${multi.base}/v1/operator/tenants/${a}/hosts/evil.example.test`,
       "core.internal",
@@ -74,7 +74,7 @@ describe("operator routes", { skip }, () => {
       404,
     );
     assert.equal(
-      (await signed(multi, "core.internal", "PATCH", `/v1/operator/tenants/${randomUUID()}/settings`, "{}")).status,
+      (await operatorSigned(multi, "PATCH", `/v1/operator/tenants/${randomUUID()}/settings`, "{}")).status,
       404,
     );
     const listed = await signed(multi, "core.internal", "GET", `/v1/operator/tenants/${a}/hosts`);
@@ -84,10 +84,51 @@ describe("operator routes", { skip }, () => {
   it("set settings without echoing their values", async () => {
     const path = `/v1/operator/tenants/${a}/settings`;
     const body = JSON.stringify({ modelGatewayKey: "gateway-key-a" });
-    const set = await signed(multi, "core.internal", "PATCH", path, body);
+    const set = await operatorSigned(multi, "PATCH", path, body);
     assert.deepEqual(JSON.parse(set.text), { keys: ["modelGatewayKey"] });
-    const bad = await signed(multi, "core.internal", "PATCH", path, JSON.stringify({ storageBucket: 7 }));
+    const bad = await operatorSigned(multi, "PATCH", path, JSON.stringify({ storageBucket: 7 }));
     assert.equal(bad.status, 400);
+  });
+
+  it("refuse tenant writes signed with the plugin-held source secret", async () => {
+    const writes: Array<[string, string, string]> = [
+      ["PUT", `/v1/operator/tenants/${b}/hosts/hijack.example.test`, ""],
+      ["DELETE", `/v1/operator/tenants/${a}/hosts/a.example.test`, ""],
+      ["PATCH", `/v1/operator/tenants/${b}/settings`, JSON.stringify({ modelGatewayKey: "stolen" })],
+    ];
+    for (const [method, path, body] of writes)
+      assert.equal((await signed(multi, "core.internal", method, path, body)).status, 401, `${method} ${path}`);
+    const lookup = await signed(multi, "core.internal", "GET", "/v1/operator/hosts/a.example.test");
+    assert.deepEqual(JSON.parse(lookup.text), { tenant: a, multi: true, sole: false });
+    const listed = await signed(multi, "core.internal", "GET", `/v1/operator/tenants/${b}/hosts`);
+    assert.deepEqual(JSON.parse(listed.text), { hosts: ["b.example.test"] });
+    const mapped = await operatorSigned(multi, "PUT", `/v1/operator/tenants/${b}/hosts/b2.example.test`);
+    assert.equal(mapped.status, 200);
+    const unmapped = await operatorSigned(multi, "DELETE", `/v1/operator/tenants/${b}/hosts/b2.example.test`);
+    assert.equal(unmapped.status, 200);
+  });
+
+  it("refuse tenant writes when no operator secret is configured", async () => {
+    const secret = "no-operator-core-signing-secret".repeat(2);
+    const server = createServer(multi.built.app, {
+      signingSecret: secret,
+      replayDedupe: createPostgresReplayDedupe(testMigratedDatabaseUrl()),
+      tenancy: multi.built.tenancy,
+    });
+    server.listen(0);
+    try {
+      const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+      const send = (method: string, path: string) =>
+        hostRequest(`${base}${path}`, "core.internal", {
+          method,
+          headers: signedRequestHeaders(secret, method, path, "", { "content-type": "application/json" }),
+        });
+      assert.equal((await send("PUT", `/v1/operator/tenants/${b}/hosts/hijack.example.test`)).status, 503);
+      assert.equal((await send("GET", "/v1/operator/hosts/a.example.test")).status, 200);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 
   it("answer health probes on any host and refuse unknown hosts otherwise", async () => {

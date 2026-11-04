@@ -113,6 +113,7 @@ export interface Config extends SandboxSettings, DeploySettings {
   skillSyncPollMs: number;
   monitorHeartbeatMs: number;
   signingSecret?: string;
+  operatorSigningSecret?: string;
   capabilitySecret?: string;
   capabilityTokenCompression?: boolean;
   portalIdentitySecret?: string;
@@ -587,6 +588,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     monitorHeartbeatMs:
       (numEnvStrict("MONITOR_HEARTBEAT_SEC", env.MONITOR_HEARTBEAT_SEC) ?? CONFIG_DEFAULTS.monitorHeartbeatSec) * 1000,
     ...(env.CORE_SIGNING_SECRET ? { signingSecret: env.CORE_SIGNING_SECRET } : {}),
+    ...(env.OPERATOR_SIGNING_SECRET ? { operatorSigningSecret: env.OPERATOR_SIGNING_SECRET } : {}),
     ...((env.CAPABILITY_SECRET ?? env.CORE_SIGNING_SECRET)
       ? { capabilitySecret: env.CAPABILITY_SECRET ?? env.CORE_SIGNING_SECRET }
       : {}),

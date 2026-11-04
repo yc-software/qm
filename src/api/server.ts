@@ -85,6 +85,7 @@ interface Wiring {
   deps: ServerDeps;
   secret: string | undefined;
   auth: SourceAuth | null;
+  operator: { secret: string; auth: SourceAuth } | null;
   requirePortalIdentity: boolean;
   allowUnsignedSourceAuth: boolean;
 }
@@ -201,6 +202,13 @@ async function gate(
   const capToken = capabilityToken(req, false);
   if (isPublicRoute) {
     void isPublicRoute;
+  } else if (routeAuth === "operator") {
+    if (!wiring.operator) {
+      sendJson(res, 503, { error: "operator_auth_unavailable", message: "OPERATOR_SIGNING_SECRET is not configured" });
+      return null;
+    }
+    const signed = { method, path: pathname + url.search, body: raw };
+    if (!(await verifyOrReject(req, res, wiring.operator.secret, wiring.operator.auth, signed, true))) return null;
   } else if (requiredAud || capToken) {
     capability = await verifyCapability(req, res, wiring, method, pathname, requiredAuth);
     if (!capability) return null;
@@ -481,11 +489,17 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
     deps.signingSecret && deps.replayDedupe
       ? createSourceAuth({ signingSecret: deps.signingSecret, dedupe: deps.replayDedupe })
       : null;
+  const operatorSecret = deps.operatorSigningSecret;
+  const operator =
+    isStrongSigningSecret(operatorSecret) && operatorSecret !== deps.signingSecret && deps.replayDedupe
+      ? { secret: operatorSecret, auth: createSourceAuth({ signingSecret: operatorSecret, dedupe: deps.replayDedupe }) }
+      : null;
   const wiring: Wiring = {
     app,
     deps: { ...deps, control: createControlService(app, deps.scheduler, deps.admin) },
     secret: deps.signingSecret,
     auth,
+    operator,
     requirePortalIdentity,
     allowUnsignedSourceAuth,
   };

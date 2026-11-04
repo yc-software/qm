@@ -20,6 +20,7 @@ import { testMigratedDatabaseUrl } from "./test-database.ts";
 
 export const skip = process.env.DATABASE_URL ? false : "set DATABASE_URL (a Postgres) to run the tenancy tests";
 const SECRET = "tenant-rows-core-signing-secret".repeat(2);
+const OPERATOR_SECRET = "tenant-rows-operator-signing-secret".repeat(2);
 export const HOOK_SECRET = "hook-secret";
 
 export interface Instance {
@@ -51,6 +52,7 @@ export async function startTenantInstance(
   };
   const server = createServer(built.app, {
     signingSecret: SECRET,
+    operatorSigningSecret: OPERATOR_SECRET,
     replayDedupe: createPostgresReplayDedupe(databaseUrl),
     tenancy: built.tenancy,
     webhookReceiver: built.webhookReceiver,
@@ -87,10 +89,26 @@ export function deliver(instance: Instance, host: string, id: string, secret = H
   });
 }
 
+export function operatorSigned(instance: Instance, method: string, path: string, body = "") {
+  return signedWith(OPERATOR_SECRET, instance, "core.internal", method, path, body);
+}
+
 export function signed(instance: Instance, host: string, method: string, path: string, body = "", tenant?: string) {
+  return signedWith(SECRET, instance, host, method, path, body, tenant);
+}
+
+function signedWith(
+  secret: string,
+  instance: Instance,
+  host: string,
+  method: string,
+  path: string,
+  body = "",
+  tenant?: string,
+) {
   return hostRequest(`${instance.base}${path}`, host, {
     method,
-    headers: signedRequestHeaders(SECRET, method, path, body, {
+    headers: signedRequestHeaders(secret, method, path, body, {
       "content-type": "application/json",
       ...(tenant ? { "x-qm-tenant": tenant } : {}),
     }),
