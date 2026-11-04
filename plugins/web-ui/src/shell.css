@@ -2364,7 +2364,7 @@ qm-markdown .tok-in {
 .composer-image > span {
   display: none;
 }
-.composer-image:has(.composer-image-open[hidden]) > span {
+.composer-image-open[hidden] ~ span {
   display: block;
   padding: 6px 28px 6px 0;
 }
@@ -8007,21 +8007,15 @@ h3.ambient-field-label {
     transition: opacity 0.16s ease;
   }
 
-  .dockview-theme-qm
-    .dv-tabs-and-actions-container:not(.dv-single-tab):is(
-      :hover,
-      :has(:focus-visible, [aria-expanded="true"], .split-tab-menu)
-    )
-    .split-pane-actions {
+  .dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab):is(:hover, :focus-within) .split-pane-actions,
+  .dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .split-pane-actions.menu-open {
     opacity: 1;
     pointer-events: auto;
   }
 
   .split-canvas:not(.single-pane)
-    .dv-tabs-and-actions-container.dv-single-tab:not(:hover):not(
-      :has(:focus-visible, [aria-expanded="true"], .split-tab-menu)
-    )
-    .split-pane-actions
+    .dv-tabs-and-actions-container.dv-single-tab:not(:hover, :focus-within)
+    .split-pane-actions:not(.menu-open)
     > :not(.split-group-close) {
     display: none;
   }
