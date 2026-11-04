@@ -11,31 +11,33 @@ const REFRESH_MS = 30_000;
 const RETRY_MS = 5_000;
 const FIRST_RENDER_WAIT_MS = 1_500;
 
-export interface BrandingCache {
-  current(): OrgBranding;
-  forRender(): Promise<OrgBranding>;
+export interface BrandingCache<T extends OrgBranding = OrgBranding> {
+  current(): T;
+  forRender(): Promise<T>;
   refreshNow(): Promise<void>;
 }
 
-interface BrandingState {
-  value: OrgBranding;
+interface BrandingState<T> {
+  value: T;
   warmed: boolean;
   nextAt: number;
   inflight: Promise<void> | null;
 }
 
-export function createBrandingCache(fetchBranding: () => Promise<OrgBranding>): BrandingCache {
-  const states = new Map<string, BrandingState>();
-  const state = (): BrandingState => {
+export function createBrandingCache<T extends OrgBranding = OrgBranding>(
+  fetchBranding: () => Promise<T>,
+): BrandingCache<T> {
+  const states = new Map<string, BrandingState<T>>();
+  const state = (): BrandingState<T> => {
     const key = boundTenant() ?? "";
     const existing = states.get(key);
     if (existing) return existing;
-    const fresh: BrandingState = { value: {}, warmed: false, nextAt: 0, inflight: null };
+    const fresh: BrandingState<T> = { value: {} as T, warmed: false, nextAt: 0, inflight: null };
     states.set(key, fresh);
     return fresh;
   };
 
-  const kick = (current: BrandingState): void => {
+  const kick = (current: BrandingState<T>): void => {
     if (current.inflight || Date.now() < current.nextAt) return;
     current.inflight = (async () => {
       try {
@@ -55,7 +57,7 @@ export function createBrandingCache(fetchBranding: () => Promise<OrgBranding>): 
 
   return {
     current: () => state().value,
-    async forRender(): Promise<OrgBranding> {
+    async forRender(): Promise<T> {
       const current = state();
       kick(current);
       if (!current.warmed && current.inflight) {

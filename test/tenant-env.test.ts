@@ -71,6 +71,7 @@ describe("per-tenant keys and settings", () => {
 
   it("accepts only allowlisted env names", () => {
     assert.equal(tenantSettingsSchema.safeParse({ env: { SPRITES_TOKEN: "t", BROKER_SECRET_X: "s" } }).success, true);
+    assert.equal(tenantSettingsSchema.safeParse({ env: { WEB_UI_WELCOME_COHORT: "F26" } }).success, true);
     assert.equal(tenantSettingsSchema.safeParse({ env: { DATABASE_URL: "postgres://x" } }).success, false);
     assert.equal(tenantSettingsSchema.safeParse({ env: { CORE_SIGNING_SECRET: "x" } }).success, false);
   });
