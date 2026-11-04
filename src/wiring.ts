@@ -724,7 +724,9 @@ export function buildApp(
       }
     };
     skillsReady = Promise.all([
-      installCatalogs().catch((e) => console.error("[seed] failed to install seed skills:", errMessage(e))),
+      installTenant
+        .then(() => withoutTenant(() => forEachTenant(pgArtifactMap.pool, installCatalogs)))
+        .catch((e) => console.error("[seed] failed to install seed skills:", errMessage(e))),
       deploymentLayerReady.catch((e) => console.error("[seed] deployment layer not ready:", errMessage(e))),
     ]).then(() => undefined);
   } else {
