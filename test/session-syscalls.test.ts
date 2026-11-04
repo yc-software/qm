@@ -330,14 +330,11 @@ test("an interrupt stops only its target's run; the target's own subagent keeps 
   assert.ok((await lane.read({})).ok);
 
   await r.runs.complete(laneRun.id, laneClaim!.leaseToken!, { status: "ok", reply: "lane finished" });
-  assert.equal(await deliverSubagentMail({ ...r, maxAttempts: 3 }, (await r.runs.get(laneRun.id))!), true);
+  assert.equal(await deliverSubagentMail({ ...r, maxAttempts: 3 }, (await r.runs.get(laneRun.id))!), false);
   const [mail] = await r.mailbox.pending(lead.session.id);
   assert.match(mail!.text, /lane finished/);
-  assert.deepEqual(await r.runs.inFlightForThread(lead.session.threadRef), []);
-  const nudged = await lane.write({ target: "parent", wake: true, text: "still there?" });
-  assert.ok(nudged.ok);
-  assert.equal(nudged.delivered, "queued_message");
-  assert.deepEqual(await r.runs.inFlightForThread(lead.session.threadRef), []);
+  const [wake] = await r.runs.inFlightForThread(lead.session.threadRef);
+  assert.equal(wake!.dedupKey, `subagent-return:${laneRun.id}`);
 });
 
 test("an interrupt with text makes that text the target's next turn, even when its stopped run held the last slot", async () => {

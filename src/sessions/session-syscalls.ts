@@ -293,7 +293,7 @@ export interface SessionSyscallDeps {
     | "visibleItems"
     | "getForParticipant"
   >;
-  runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "getByDedupKey" | "get" | "withdraw" | "list">;
+  runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "getByDedupKey" | "get" | "withdraw">;
   signals: Pick<RunSignalStore, "send" | "pending">;
   maxAttempts: number;
   treeRunCap?: number;
@@ -453,7 +453,7 @@ export async function workingSessionThreadRefs(
   return working;
 }
 
-async function treeSessions(sessions: Pick<SessionStore, "childrenOf">, root: Session): Promise<Session[]> {
+export async function treeSessions(sessions: Pick<SessionStore, "childrenOf">, root: Session): Promise<Session[]> {
   const all: Session[] = [root];
   const queue = [root];
   const seen = new Set([root.id]);

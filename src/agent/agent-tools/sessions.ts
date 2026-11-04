@@ -160,7 +160,7 @@ export function sessionTools(kit: ToolKit) {
         const name = `"${result.title}"`;
         let outcome = p.text?.trim()
           ? `Stopped ${name}'s current run; it starts on this message next. Its own subagents keep running.`
-          : `Stopped ${name}'s current run; it is idle until messaged. Its own subagents keep running.`;
+          : `Stopped ${name}'s current run; it is idle until messaged. Its own subagents keep running and wake it when they report back.`;
         if (result.delivered === "queued_turn")
           outcome = result.busy
             ? `Queued for ${name}: it is busy and starts on this when its current turn ends.`

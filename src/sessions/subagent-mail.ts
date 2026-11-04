@@ -21,8 +21,8 @@ import {
   requiresDelegation,
   runStopped,
   snippet,
-  sessionTreeRuns,
   storedContext,
+  treeSessions,
 } from "./session-syscalls.ts";
 
 const MAIL_ERROR_CAP = 1_000;
@@ -69,8 +69,7 @@ export interface SubagentMailDeps {
   delegationEnabled?: (actorId: string) => Promise<boolean>;
   mailbox: SessionMailbox;
   sessions: Pick<SessionStore, "get" | "getByThread" | "latestItemSeq" | "visibleItems" | "childrenOf">;
-  runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "getByDedupKey" | "withdraw" | "list"> &
-    Partial<Pick<RunStore, "get">>;
+  runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "getByDedupKey" | "withdraw"> & Partial<Pick<RunStore, "get">>;
   maxAttempts: number;
   prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
 }
@@ -123,9 +122,11 @@ export async function pendingWork(
   const stopped = async (runId: string | undefined) =>
     !!deps.signals && !!deps.runs.get && !!(await runStopped({ get: deps.runs.get }, deps.signals, runId));
   const waiting = new Set<string>();
-  for (const run of await sessionTreeRuns(deps.sessions, deps.runs, session))
-    if (run.sessionId !== session.threadRef && !run.request.privateSessionMessage && !(await stopped(run.id)))
-      waiting.add(run.sessionId);
+  for (const descendant of (await treeSessions(deps.sessions, session)).slice(1)) {
+    if (descendant.scopeId !== session.scopeId) continue;
+    for (const run of await deps.runs.inFlightForThread(descendant.threadRef))
+      if (!run.request.privateSessionMessage && !(await stopped(run.id))) waiting.add(descendant.threadRef);
+  }
   for (const message of await deps.mailbox.pending(session.id)) {
     const sender = await deps.sessions.get(message.senderId);
     if (!sender || sender.parentSessionId !== session.id || waiting.has(sender.threadRef)) continue;
@@ -232,8 +233,6 @@ async function wakeParent(
   }
   if (existing && (existing.status === "done" || existing.status === "failed")) return "settled";
   if ((await deps.runs.inFlightForThread(parent.threadRef)).length) return "busy";
-  const [latest] = await deps.runs.list({ threadRef: parent.threadRef, limit: 1 });
-  if (latest?.result?.stopped && latest.result.stopReason === PARENT_INTERRUPT) return "settled";
   const surfaceTools =
     meta.surfaceTools === true ||
     requiresDelegation(prepared, (await deps.delegationEnabled?.(prepared.actor.id)) === true);
