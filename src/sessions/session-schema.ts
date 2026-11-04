@@ -353,9 +353,16 @@ const SESSION_FACTS: PgMigrationDefinition = {
 };
 
 const SESSION_FACTS_COPY: PgMigrationDefinition = {
-  id: "sessions/store/0053-session-facts-copy",
+  id: "sessions/store/0054-session-facts-copy",
   autocommit: true,
   statements: [
+    `CREATE OR REPLACE FUNCTION qm_session_fact_json(run_id TEXT, raw TEXT) RETURNS JSONB LANGUAGE plpgsql IMMUTABLE AS $fact_json$
+BEGIN
+  RETURN raw::jsonb;
+EXCEPTION WHEN invalid_text_representation OR untranslatable_character THEN
+  RAISE WARNING 'session facts copy skipped run %: % (SQLSTATE %)', run_id, SQLERRM, SQLSTATE;
+  RETURN NULL;
+END $fact_json$`,
     `CREATE OR REPLACE PROCEDURE qm_copy_session_facts() LANGUAGE plpgsql AS $session_facts$
 DECLARE
   after_id TEXT := '';
@@ -398,24 +405,24 @@ BEGIN
       END AS context
     FROM sessions x
     LEFT JOIN LATERAL (
-      SELECT request::jsonb->'slackSource' AS value FROM runs
-      WHERE session_id = x.thread_ref AND COALESCE(request::jsonb->'slackSource', 'null') <> 'null'
+      SELECT qm_session_fact_json(id, request)->'slackSource' AS value FROM runs
+      WHERE session_id = x.thread_ref AND COALESCE(qm_session_fact_json(id, request)->'slackSource', 'null') <> 'null'
       ORDER BY created_at DESC, seq DESC LIMIT 1
     ) binding ON x.surface = 'slack'
     LEFT JOIN LATERAL (
-      SELECT result::jsonb->'runtime' AS value FROM runs
-      WHERE session_id = x.thread_ref AND COALESCE(result::jsonb->'runtime', 'null') <> 'null'
+      SELECT qm_session_fact_json(id, result)->'runtime' AS value FROM runs
+      WHERE session_id = x.thread_ref AND COALESCE(qm_session_fact_json(id, result)->'runtime', 'null') <> 'null'
       ORDER BY created_at DESC, seq DESC LIMIT 1
     ) label ON true
     LEFT JOIN LATERAL (
-      SELECT request FROM (SELECT request::jsonb AS request, created_at, seq FROM runs WHERE session_id = x.thread_ref) owned
-      WHERE COALESCE(request->>'privateSessionMessage', 'false') <> 'true'
+      SELECT request FROM (SELECT qm_session_fact_json(id, request) AS request, created_at, seq FROM runs WHERE session_id = x.thread_ref) owned
+      WHERE request IS NOT NULL AND COALESCE(request->>'privateSessionMessage', 'false') <> 'true'
         AND COALESCE(request->>'sessionSenderId', '') = ''
         AND COALESCE(request->>'delegatingRunId', '') = ''
         AND COALESCE(request->'swarm', 'null') IN ('null', 'false')
       ORDER BY created_at DESC, seq DESC LIMIT 1
     ) public ON x.thread_ref NOT LIKE 'agent:main:subagent:%' AND x.thread_ref NOT LIKE 'swarm:%'
-    WHERE x.id = ANY(page)
+    WHERE x.id = ANY(page) AND ((x.surface = 'slack' AND x.slack_binding IS NULL) OR x.runtime IS NULL OR x.spawn_meta IS NULL)
   ) facts
   WHERE s.id = facts.id
     AND ((s.slack_binding IS NULL AND facts.slack_binding IS NOT NULL) OR (s.runtime IS NULL AND facts.runtime IS NOT NULL)
@@ -425,6 +432,7 @@ BEGIN
 END $session_facts$`,
     `CALL qm_copy_session_facts()`,
     `DROP PROCEDURE qm_copy_session_facts()`,
+    `DROP FUNCTION qm_session_fact_json(TEXT, TEXT)`,
   ],
 };
 

@@ -1046,9 +1046,7 @@ export function createSessionMethods(
         await deps.sessions.setParentSession(sessionId, null);
         return { detached: true as const };
       };
-      return deps.advisoryLock.withLock("session-tree-admission", () =>
-        deps.advisoryLock.withLock("session-run-admission", detach),
-      );
+      return deps.advisoryLock.withLock("session-tree-admission", detach);
     },
 
     async cancelSessionGoal(sessionId, principalId) {
