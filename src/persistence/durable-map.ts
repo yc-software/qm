@@ -1,7 +1,7 @@
 import { createPgPool, withPgTransaction, type PgPool, type PoolClient } from "./pg-pool.ts";
 import { jsonbStringify } from "../util/text.ts";
 import { claimAcrossTenants } from "../tenants/claim.ts";
-import { TENANCY, tenantColumn, tenantPolicies } from "../tenants/migrations.ts";
+import { TENANCY, swapPrimaryKey, tenantColumn, tenantPolicies } from "../tenants/migrations.ts";
 import { workTenant } from "../tenants/work-tenant.ts";
 
 export interface TenantEntry<T> {
@@ -52,23 +52,24 @@ const VERSIONS_TENANCY = {
   ],
 };
 
-export function durableMapLookup(table: string): { id: string; statements: string[] } {
-  return {
-    id: `durable-map/${table}/0010-tenants-lookups`,
-    statements: [`CREATE INDEX CONCURRENTLY IF NOT EXISTS ${table}_id_lookup ON ${table}(id)`],
-  };
-}
-
-export function durableMapTenancy(table: string): { id: string; statements: string[] } {
-  return {
-    id: `durable-map/${table}/0010-tenants`,
-    statements: [
-      `SET LOCAL lock_timeout = '5s'`,
-      tenantColumn(table),
-      `ALTER TABLE ${table} DROP CONSTRAINT ${table}_pkey CASCADE, ADD PRIMARY KEY (tenant_id, id)`,
-      ...tenantPolicies(table),
-    ],
-  };
+export function durableMapTenancy(table: string): { id: string; statements: string[] }[] {
+  return [
+    {
+      id: `durable-map/${table}/0010-tenants`,
+      statements: [`SET LOCAL lock_timeout = '5s'`, tenantColumn(table), ...tenantPolicies(table)],
+    },
+    {
+      id: `durable-map/${table}/0010-tenants-lookups`,
+      statements: [
+        `CREATE INDEX CONCURRENTLY IF NOT EXISTS ${table}_id_lookup ON ${table}(id)`,
+        `CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS ${table}_tenant_pkey ON ${table}(tenant_id, id)`,
+      ],
+    },
+    {
+      id: `durable-map/${table}/0010-tenants-swap`,
+      statements: [`SET LOCAL lock_timeout = '5s'`, swapPrimaryKey(table, true)],
+    },
+  ];
 }
 
 export function createPostgresMap<T>(
@@ -88,8 +89,7 @@ export function createPostgresMap<T>(
     ...TENANCY,
     migration,
     VERSIONS_TENANCY,
-    durableMapTenancy(table),
-    durableMapLookup(table),
+    ...durableMapTenancy(table),
     ...indexedFields.flatMap((field) => {
       if (!/^[a-z_][a-z0-9_]*$/i.test(field)) throw new Error(`invalid index field: ${field}`);
       return [

@@ -120,17 +120,47 @@ function lookupIndexes({ table, primaryKey, unique = [] }: TenantTable): string[
   ];
 }
 
-function typedTableStatements({ table, primaryKey, unique = [] }: TenantTable): string[] {
+function tenantKeyIndexes({ table, primaryKey, unique = [] }: TenantTable): string[] {
   return [
-    tenantColumn(table),
     ...(primaryKey === undefined
       ? []
-      : [`ALTER TABLE ${table} DROP CONSTRAINT IF EXISTS ${table}_pkey, ADD PRIMARY KEY (tenant_id, ${primaryKey})`]),
-    ...unique.flatMap(({ name, columns, where, constraint }) => [
-      constraint ? `ALTER TABLE ${table} DROP CONSTRAINT IF EXISTS ${name}` : `DROP INDEX IF EXISTS ${name}`,
-      `CREATE UNIQUE INDEX ${name} ON ${table}(tenant_id, ${columns})${where ? ` WHERE ${where}` : ""}`,
-    ]),
-    ...tenantPolicies(table),
+      : [`CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS ${table}_tenant_pkey ON ${table}(tenant_id, ${primaryKey})`]),
+    ...unique.map(
+      ({ name, columns, where }) =>
+        `CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS ${name}_tenant ON ${table}(tenant_id, ${columns})${where ? ` WHERE ${where}` : ""}`,
+    ),
+  ];
+}
+
+export function swapPrimaryKey(table: string, cascade = false): string {
+  return `DO $swap_pkey$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = '${table}'::regclass AND contype = 'p'
+              AND pg_get_constraintdef(oid) LIKE 'PRIMARY KEY (tenant_id,%') THEN
+    DROP INDEX IF EXISTS ${table}_tenant_pkey;
+  ELSE
+    ALTER TABLE ${table} DROP CONSTRAINT IF EXISTS ${table}_pkey${cascade ? " CASCADE" : ""};
+    ALTER TABLE ${table} ADD CONSTRAINT ${table}_pkey PRIMARY KEY USING INDEX ${table}_tenant_pkey;
+  END IF;
+END $swap_pkey$`;
+}
+
+function swapUnique(table: string, { name, constraint }: TenantIndex): string {
+  return `DO $swap_unique$
+BEGIN
+  IF to_regclass('${name}') IS NOT NULL AND pg_get_indexdef(to_regclass('${name}')) LIKE '%(tenant_id,%' THEN
+    DROP INDEX IF EXISTS ${name}_tenant;
+  ELSE
+    ${constraint ? `ALTER TABLE ${table} DROP CONSTRAINT IF EXISTS ${name}` : `DROP INDEX IF EXISTS ${name}`};
+    ALTER INDEX ${name}_tenant RENAME TO ${name};
+  END IF;
+END $swap_unique$`;
+}
+
+function keySwaps({ table, primaryKey, unique = [] }: TenantTable): string[] {
+  return [
+    ...(primaryKey === undefined ? [] : [swapPrimaryKey(table)]),
+    ...unique.map((index) => swapUnique(table, index)),
   ];
 }
 
@@ -143,22 +173,29 @@ export function tenantTables(
     after = [],
   }: { foreignKeys?: readonly TenantForeignKey[]; before?: readonly string[]; after?: readonly string[] } = {},
 ): PgMigrationDefinition[] {
-  const lookups = tables.flatMap(lookupIndexes);
+  const concurrent = [...tables.flatMap(lookupIndexes), ...tables.flatMap(tenantKeyIndexes)];
   const main = {
     id,
     statements: [
       `SET LOCAL lock_timeout = '5s'`,
       ...before,
+      ...tables.flatMap(({ table }) => [tenantColumn(table), ...tenantPolicies(table)]),
+      ...after,
+    ],
+  };
+  const swap = {
+    id: `${id}-swap`,
+    statements: [
+      `SET LOCAL lock_timeout = '5s'`,
       ...foreignKeys.map(({ table, name }) => `ALTER TABLE ${table} DROP CONSTRAINT IF EXISTS ${name}`),
-      ...tables.flatMap(typedTableStatements),
+      ...tables.flatMap(keySwaps),
       ...foreignKeys.map(
         ({ table, name, columns, references, onDelete }) =>
           `ALTER TABLE ${table} ADD CONSTRAINT ${name} FOREIGN KEY (tenant_id, ${columns}) REFERENCES ${references}${onDelete ? ` ON DELETE ${onDelete}` : ""} NOT VALID`,
       ),
-      ...after,
     ],
   };
-  return lookups.length ? [main, { id: `${id}-lookups`, statements: lookups }] : [main];
+  return concurrent.length ? [main, { id: `${id}-lookups`, statements: concurrent }, swap] : [main, swap];
 }
 
 export function createIfParentTenantKeyed(
