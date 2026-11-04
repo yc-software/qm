@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto";
+import { inlineScript } from "../../chassis/src/inline-script.ts";
 import { deriveKey, open, randomToken, safeEqual, seal, type SessionClaims } from "./session.ts";
 
-export const DESKTOP_LAUNCH_SCRIPT = `window.location.href = document.getElementById("desktop-launch").href;`;
-export const DESKTOP_LAUNCH_SCRIPT_HASH = `sha256-${createHash("sha256").update(DESKTOP_LAUNCH_SCRIPT).digest("base64")}`;
+export const { text: DESKTOP_LAUNCH_SCRIPT, hash: DESKTOP_LAUNCH_SCRIPT_HASH } = inlineScript(
+  `window.location.href = document.getElementById("desktop-launch").href;`,
+);
 
 export function desktopChallenge(value: string): boolean {
   return /^[A-Za-z0-9_-]{43}$/.test(value);

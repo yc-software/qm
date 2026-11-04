@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto";
+import { inlineScript } from "../../chassis/src/inline-script.ts";
 
-export const INVITE_LOGIN_SCRIPT = `(function () {
+export const { text: INVITE_LOGIN_SCRIPT, hash: INVITE_LOGIN_SCRIPT_HASH } = inlineScript(`(function () {
   var token = new URLSearchParams(location.hash.slice(1)).get("token");
   history.replaceState(null, "", location.pathname);
   if (token && token.length <= 4096) {
@@ -15,5 +15,4 @@ export const INVITE_LOGIN_SCRIPT = `(function () {
   } else {
     document.getElementById("invite-status").textContent = "This invitation is missing or invalid. Ask your administrator for a new one.";
   }
-})();`;
-export const INVITE_LOGIN_SCRIPT_HASH = `sha256-${createHash("sha256").update(INVITE_LOGIN_SCRIPT).digest("base64")}`;
+})();`);
