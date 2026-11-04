@@ -90,3 +90,16 @@ export async function tenantSetting<K extends keyof TenantSettings>(key: K): Pro
 export function tenantEnv(name: TenantEnvName): string | undefined {
   return loadedTenantSettings().env?.[name];
 }
+
+export function tenantAllowedEmails(): string[] | undefined {
+  const raw = tenantEnv("AUTH_ALLOWED_EMAILS");
+  if (raw === undefined) return undefined;
+  return [
+    ...new Set(
+      raw
+        .split(",")
+        .map((email) => email.trim().toLowerCase())
+        .filter(Boolean),
+    ),
+  ];
+}

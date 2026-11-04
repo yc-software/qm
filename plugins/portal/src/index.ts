@@ -1,4 +1,5 @@
 import { coreHostTenants, inHostTenant } from "../../chassis/src/host-tenant.ts";
+import { coreTenantSignIn } from "../../chassis/src/tenant-sign-in.ts";
 import {
   DESKTOP_LAUNCH_SCRIPT,
   DESKTOP_LAUNCH_SCRIPT_HASH,
@@ -45,6 +46,8 @@ import {
   type OidcConfig,
   type PrincipalRule,
   hostedDomainHint,
+  tenantOidc,
+  tenantPrincipalRule,
 } from "./oidc.ts";
 import {
   proxyToSurface,
@@ -916,6 +919,7 @@ function isAppHost(req: IncomingMessage): boolean {
 }
 
 const hostTenants = coreHostTenants(CORE, CORE_SIGNING_SECRET);
+const tenantSignIn = coreTenantSignIn(CORE, CORE_SIGNING_SECRET);
 
 const server = createServer((req, res) => {
   const startedAt = performance.now();
@@ -1612,7 +1616,7 @@ function setAuthenticatedSession(res: ServerResponse, sub: string, name = "", ap
   ]);
 }
 
-function authLogin(req: IncomingMessage, res: ServerResponse, url: URL): void {
+async function authLogin(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
   if (
     trustedOidc &&
     trustedSignInLabel &&
@@ -1647,7 +1651,8 @@ function authLogin(req: IncomingMessage, res: ServerResponse, url: URL): void {
   setSession(res, [
     setCookie("portal_oidc_tmp", seal(tmp, tmpKey), { path: "/auth", maxAge: TMP_TTL_S, secure: SECURE_COOKIES }),
   ]);
-  res.writeHead(302, { location: buildAuthorizeUrl(OIDC, { state, nonce, challenge }), "cache-control": "no-store" });
+  const oidc = tenantOidc(OIDC, await tenantSignIn());
+  res.writeHead(302, { location: buildAuthorizeUrl(oidc, { state, nonce, challenge }), "cache-control": "no-store" });
   res.end();
 }
 
@@ -1669,18 +1674,22 @@ async function authCallback(req: IncomingMessage, res: ServerResponse, url: URL)
   let principal: { sub: string; appOnly?: true };
   let name = "";
   try {
-    const { accessToken, idToken } = await exchangeCode(OIDC, { code, codeVerifier: tmp.pkceVerifier });
-    const claims = await verifyIdToken(OIDC, idToken, tmp.nonce);
-    if (OIDC.expectedTeamId) {
+    const signIn = await tenantSignIn();
+    const oidc = tenantOidc(OIDC, signIn);
+    const { accessToken, idToken } = await exchangeCode(oidc, { code, codeVerifier: tmp.pkceVerifier });
+    const claims = await verifyIdToken(oidc, idToken, tmp.nonce);
+    if (oidc.expectedTeamId) {
       const team = claims["https://slack.com/team_id"];
-      if (team !== OIDC.expectedTeamId) throw new Error("workspace not permitted");
+      if (team !== oidc.expectedTeamId) throw new Error("workspace not permitted");
     }
-    const info = await fetchUserinfo(OIDC, accessToken);
+    const info = await fetchUserinfo(oidc, accessToken);
     const infoSub = typeof info.sub === "string" ? info.sub : "";
     if (!infoSub) throw new Error("userinfo missing sub");
     if (typeof claims.sub === "string" && claims.sub !== infoSub) throw new Error("subject mismatch");
-    principal = await resolvePrincipal(PRINCIPAL_RULE, { sub: infoSub, claims, userinfo: info }, (email) =>
-      coreEmailAdmission(CORE, CORE_SIGNING_SECRET, email, "portal"),
+    principal = await resolvePrincipal(
+      tenantPrincipalRule(PRINCIPAL_RULE, signIn),
+      { sub: infoSub, claims, userinfo: info },
+      (email) => coreEmailAdmission(CORE, CORE_SIGNING_SECRET, email, "portal"),
     );
     const rawName = info.name ?? claims.name;
     if (typeof rawName === "string") name = rawName.trim().slice(0, 200);
