@@ -1,4 +1,4 @@
-import { loadConfig } from "./config.ts";
+import { loadConfig, type Config } from "./config.ts";
 import { migrateCronQueue } from "./cron/job-queue.ts";
 import { createPostgresAppPageViewLog } from "./deploy/page-views.ts";
 import { createPostgresFileUploadStore } from "./files/file-upload-store.ts";
@@ -16,19 +16,31 @@ async function vectorExtensionAvailable(databaseUrl: string): Promise<boolean> {
   }
 }
 
-const config = loadConfig();
-const built = buildApp(config);
-try {
-  if (config.databaseUrl) {
-    createPostgresFileUploadStore(config.databaseUrl);
-    createPostgresAppPageViewLog(config.databaseUrl);
-    createPostgresBudgetTracker(config.databaseUrl);
-    if (await vectorExtensionAvailable(config.databaseUrl)) createPostgresVectorStore(config.databaseUrl);
+export async function withRegisteredPgSchemas<T>(
+  config: Config,
+  run: (built: ReturnType<typeof buildApp>) => Promise<T>,
+  { vector }: { vector?: boolean } = {},
+): Promise<T> {
+  const built = buildApp(config);
+  try {
+    if (config.databaseUrl) {
+      createPostgresFileUploadStore(config.databaseUrl);
+      createPostgresAppPageViewLog(config.databaseUrl);
+      createPostgresBudgetTracker(config.databaseUrl);
+      if (vector ?? (await vectorExtensionAvailable(config.databaseUrl))) createPostgresVectorStore(config.databaseUrl);
+    }
+    return await run(built);
+  } finally {
+    await built.runtime.stop();
   }
-  await migrateRegisteredPgSchemas(config.databaseUrl);
-  if (config.databaseUrl) await migrateCronQueue(config.databaseUrl);
-  await built.rewriteSurfaceOrigins();
-  console.log("[qm:migrate] database migrations applied");
-} finally {
-  await built.runtime.stop();
+}
+
+if (import.meta.main) {
+  const config = loadConfig();
+  await withRegisteredPgSchemas(config, async (built) => {
+    await migrateRegisteredPgSchemas(config.databaseUrl);
+    if (config.databaseUrl) await migrateCronQueue(config.databaseUrl);
+    await built.rewriteSurfaceOrigins();
+    console.log("[qm:migrate] database migrations applied");
+  });
 }

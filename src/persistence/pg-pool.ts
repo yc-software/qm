@@ -246,6 +246,34 @@ export function concurrentIndexName(stmt: string): string | undefined {
   )?.[1];
 }
 
+export function concurrentIndexTable(stmt: string): string | undefined {
+  return /\sON\s+(?:ONLY\s+)?([a-z_][a-z0-9_$]*(?:\.[a-z_][a-z0-9_$]*)?)\s*(?:USING\s+[a-z_]+\s*)?\(/i.exec(stmt)?.[1];
+}
+
+export async function buildConcurrentIndex(client: Pick<PoolClient, "query">, statement: string): Promise<void> {
+  const name = concurrentIndexName(statement);
+  const table = concurrentIndexTable(statement);
+  if (!name || !table) throw new Error(`pg-pool: unsupported concurrent index statement: ${statement.slice(0, 80)}`);
+  const inspect = () =>
+    client.query<{ indisvalid: boolean; indisready: boolean; same_table: boolean; qualified_name: string }>(
+      `SELECT i.indisvalid, i.indisready, i.indrelid = t.oid AS same_table,
+              quote_ident(n.nspname) || '.' || quote_ident(c.relname) AS qualified_name
+         FROM pg_class t JOIN pg_namespace n ON n.oid = t.relnamespace
+         JOIN pg_class c ON c.relnamespace = n.oid AND c.relname = $2
+         JOIN pg_index i ON i.indexrelid = c.oid WHERE t.oid = to_regclass($1)`,
+      [table.toLowerCase(), name.toLowerCase()],
+    );
+  const existing = (await inspect()).rows[0];
+  if (existing && !existing.same_table)
+    throw new Error(`pg-pool: concurrent index ${name} belongs to a different table`);
+  if (existing?.indisvalid === false) await client.query(`DROP INDEX CONCURRENTLY ${existing.qualified_name}`);
+  await client.query(statement);
+  const built = (await inspect()).rows[0];
+  if (!built?.indisvalid || !built.indisready || !built.same_table) {
+    throw new Error(`pg-pool: concurrent index ${name} is not ready and valid`);
+  }
+}
+
 export function pgMigrationChecksum(statements: readonly string[]): string {
   return createHash("sha256")
     .update(JSON.stringify(statements.map((statement) => statement.trim())))
@@ -347,32 +375,7 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
         if (migration.legacyId || !migration.statements.every((statement) => concurrentIndexName(statement))) {
           throw new Error(`pg-pool: concurrent index migration ${migration.id} must contain only concurrent indexes`);
         }
-        for (const statement of migration.statements) {
-          const name = concurrentIndexName(statement)!;
-          const table =
-            /\sON\s+(?:ONLY\s+)?([a-z_][a-z0-9_$]*(?:\.[a-z_][a-z0-9_$]*)?)\s*(?:USING\s+[a-z_]+\s*)?\(/i.exec(
-              statement,
-            )?.[1];
-          if (!table) throw new Error(`pg-pool: unsupported concurrent index target in ${migration.id}`);
-          const inspect = () =>
-            client.query<{ indisvalid: boolean; indisready: boolean; same_table: boolean; qualified_name: string }>(
-              `SELECT i.indisvalid, i.indisready, i.indrelid = t.oid AS same_table,
-                    quote_ident(n.nspname) || '.' || quote_ident(c.relname) AS qualified_name
-             FROM pg_class t JOIN pg_namespace n ON n.oid = t.relnamespace
-             JOIN pg_class c ON c.relnamespace = n.oid AND c.relname = $2
-             JOIN pg_index i ON i.indexrelid = c.oid WHERE t.oid = to_regclass($1)`,
-              [table.toLowerCase(), name.toLowerCase()],
-            );
-          const existing = (await inspect()).rows[0];
-          if (existing && !existing.same_table)
-            throw new Error(`pg-pool: concurrent index ${name} belongs to a different table`);
-          if (existing?.indisvalid === false) await client.query(`DROP INDEX CONCURRENTLY ${existing.qualified_name}`);
-          await client.query(statement);
-          const built = (await inspect()).rows[0];
-          if (!built?.indisvalid || !built.indisready || !built.same_table) {
-            throw new Error(`pg-pool: concurrent index ${name} is not ready and valid`);
-          }
-        }
+        for (const statement of migration.statements) await buildConcurrentIndex(client, statement);
         await client.query(`INSERT INTO ${PG_MIGRATIONS_TABLE}(id, checksum) VALUES ($1, $2)`, [
           migration.id,
           migration.checksum,
