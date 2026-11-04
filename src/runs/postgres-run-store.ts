@@ -513,7 +513,7 @@ END $base_schema$`,
         `SELECT last.* FROM unnest($1::text[]) AS threads(id)
          CROSS JOIN LATERAL (
            SELECT * FROM runs WHERE session_id = threads.id AND status IN ('done', 'failed')
-           ORDER BY finished_at DESC NULLS LAST, seq DESC LIMIT 1
+           ORDER BY created_at DESC, seq DESC LIMIT 1
          ) last`,
         [[...new Set(threadRefs)]],
       );

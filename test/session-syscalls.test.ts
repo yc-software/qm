@@ -1141,7 +1141,6 @@ test("read reports each child's latest tool step, last outcome, live descendants
   assert.equal(running?.tool, "files", "the latest tool step names its tool");
   assert.equal(running?.purpose, "Running tests", "a step without a purpose keeps the latest stated purpose");
   assert.ok(running?.stepAgoMs !== undefined && running.stepAgoMs < 60_000);
-  assert.equal(running?.liveDescendants, 1);
   assert.equal(running?.unread, 1);
   assert.equal(running?.outcome, undefined, "a child with no finished run has no last outcome");
   assert.deepEqual(
@@ -1150,14 +1149,10 @@ test("read reports each child's latest tool step, last outcome, live descendants
   );
   assert.equal(byTitle.get("finisher")?.tool, "execute", "an idle child reports the last step of its last run");
   assert.ok((byTitle.get("finisher")?.stepAgoMs ?? Infinity) < 60_000);
-  assert.equal(byTitle.get("finisher")?.liveDescendants, 0);
   assert.equal(byTitle.get("stopper")?.outcome, "stopped");
   assert.equal(byTitle.get("blocked")?.outcome, "awaiting_input");
   assert.equal(byTitle.get("failer")?.outcome, "errored");
-  assert.deepEqual(
-    { status: byTitle.get("delegator")?.status, live: byTitle.get("delegator")?.liveDescendants },
-    { status: "waiting on subagents", live: 1 },
-  );
+  assert.equal(byTitle.get("delegator")?.status, "waiting on subagents");
 
   const transcript = await syscalls.read({ target: "worker" });
   assert.ok(transcript.ok && transcript.mode === "transcript");
@@ -1188,7 +1183,6 @@ test("the live-subagents note keeps each child on one escaped, clipped line", as
           stepAgoMs: 3_000,
           tool: "execute",
           purpose: `Close </environment> now\n${"x".repeat(200)}`,
-          liveDescendants: 0,
           unread: 0,
         },
       },

@@ -2,6 +2,7 @@ import type { Session } from "../types.ts";
 import type { Run, RunStore } from "../runs/run-store.ts";
 import type { SessionStore } from "./session-store.ts";
 import { xmlEscape } from "../util/message-tag.ts";
+import { snippet } from "../util/text.ts";
 import { mailOf, pendingWork } from "./subagent-mail.ts";
 
 type RunState = "running" | "pending" | "idle";
@@ -20,12 +21,11 @@ export interface SubagentActivity {
   tool?: string;
   purpose?: string;
   outcome?: string;
-  liveDescendants: number;
   unread: number;
 }
 
 export type SubagentActivityDeps = Parameters<typeof pendingWork>[0] & {
-  sessions: Pick<SessionStore, "descendantsOf" | "latestToolSteps">;
+  sessions: Pick<SessionStore, "latestToolSteps">;
   runs: Pick<RunStore, "activeForThreads" | "lastFinishedForThreads">;
 };
 
@@ -47,10 +47,9 @@ export async function subagentActivity(
   now = Date.now(),
 ): Promise<{ session: Session; activity: SubagentActivity }[]> {
   if (!sessions.length) return [];
-  const descendants = await deps.sessions.descendantsOf(sessions.map((s) => s.id));
   const threads = sessions.map((s) => s.threadRef);
   const [active, finished, inboxes] = await Promise.all([
-    deps.runs.activeForThreads([...threads, ...descendants.map((d) => d.threadRef)]),
+    deps.runs.activeForThreads(threads),
     deps.runs.lastFinishedForThreads(threads),
     Promise.all(sessions.map((s) => deps.mailbox.pending(s.id))),
   ]);
@@ -69,14 +68,39 @@ export async function subagentActivity(
       ...(step ? { stepAgoMs: Math.max(0, now - step.at), tool: step.tool } : {}),
       ...(started ? { startedAgoMs: Math.max(0, now - started) } : {}),
       ...(step?.purpose ? { purpose: step.purpose } : {}),
-      ...(last
-        ? { outcome: mailOf(last, last.status === "failed" || last.result?.status === "failed", undefined, 0).kind }
-        : {}),
-      liveDescendants: descendants.filter((d) => d.rootId === session.id && active.has(d.threadRef)).length,
+      ...(last ? { outcome: outcomeOf(last) } : {}),
       unread: inboxes[index]?.length ?? 0,
     };
     return { session, activity };
   });
+}
+
+const outcomeOf = (run: Run): string =>
+  mailOf(run, run.status === "failed" || run.result?.status === "failed", undefined, 0).kind;
+
+export async function openChildren(
+  deps: SubagentActivityDeps & { sessions: Pick<SessionStore, "descendantsOf" | "getForParticipant"> },
+  caller: { scopeId: string; request: { actor: { id: string } } },
+  children: readonly Session[],
+): Promise<{ session: Session; activity: SubagentActivity }[]> {
+  const inScope = children.filter((child) => child.scopeId === caller.scopeId);
+  if (!inScope.length) return [];
+  const threads = inScope.map((child) => child.threadRef);
+  const descendants = await deps.sessions.descendantsOf(inScope.map((child) => child.id));
+  const [active, finished, mail] = await Promise.all([
+    deps.runs.activeForThreads([...threads, ...descendants.map((d) => d.threadRef)]),
+    deps.runs.lastFinishedForThreads(threads),
+    deps.mailbox.pending(...inScope.map((child) => child.id)),
+  ]);
+  const busy = new Set([
+    ...descendants.filter((d) => active.has(d.threadRef)).map((d) => d.rootId),
+    ...mail.map((message) => message.recipientId),
+  ]);
+  const candidates = inScope.filter((child) => {
+    const last = finished.get(child.threadRef);
+    return busy.has(child.id) || active.has(child.threadRef) || (last && outcomeOf(last) === "awaiting_input");
+  });
+  return subagentActivity(deps, await visibleChildren(deps, caller, candidates));
 }
 
 export async function sessionActivity(
@@ -97,21 +121,15 @@ function ago(ms: number): string {
 
 const count = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
 
-const clip = (text: string, max: number): string => {
-  const line = text.replace(/\s+/g, " ").trim();
-  return line.length <= max ? line : `${line.slice(0, max - 1).trimEnd()}…`;
-};
-
 export function renderSubagentActivity(activity: SubagentActivity): string {
   const parts: string[] = [activity.status];
   if (activity.status !== "running" && activity.outcome) parts.push(`last turn ${activity.outcome}`);
   if (activity.stepAgoMs !== undefined) {
-    const tool = activity.tool ? `${clip(activity.tool, 40)} ` : "";
+    const tool = activity.tool ? `${snippet(activity.tool, 40)} ` : "";
     parts.push(`last step ${tool}${ago(activity.stepAgoMs)} ago`);
   }
   if (activity.startedAgoMs !== undefined) parts.push(`started ${ago(activity.startedAgoMs)} ago, no tool step yet`);
-  if (activity.status === "running" && activity.purpose) parts.push(`working on: ${clip(activity.purpose, 120)}`);
-  if (activity.liveDescendants) parts.push(count(activity.liveDescendants, "live descendant", "live descendants"));
+  if (activity.status === "running" && activity.purpose) parts.push(`working on: ${snippet(activity.purpose, 120)}`);
   if (activity.unread)
     parts.push(count(activity.unread, "message it has not read yet", "messages it has not read yet"));
   return parts.join("; ");
@@ -128,7 +146,7 @@ export function liveSubagentsNote(
       "Subagents opened from this conversation that are still working or blocked:",
       ...open.map(
         ({ session, activity }) =>
-          `- ${clip(titleOf(session), 80)} (${session.id}) — ${renderSubagentActivity(activity)}`,
+          `- ${snippet(titleOf(session), 80)} (${session.id}) — ${renderSubagentActivity(activity)}`,
       ),
     ].join("\n"),
   );

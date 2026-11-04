@@ -3,7 +3,7 @@ import { isSessionTurn, sessionTurnOrigin } from "../core/turn-origin.ts";
 import type { SessionMailbox, SessionMessage } from "./session-mailbox.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import { sleep } from "../util/async.ts";
-import { pgTextSafe } from "../util/text.ts";
+import { pgTextSafe, snippet } from "../util/text.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { errMessage } from "../util/errors.ts";
 import { randomUUID } from "node:crypto";
@@ -21,6 +21,7 @@ import { xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
 import { wakeOwnParent } from "./subagent-mail.ts";
 import {
   liveSubagentsNote,
+  openChildren,
   runState,
   sessionActivity,
   subagentActivity,
@@ -315,6 +316,7 @@ export interface SessionSyscallDeps {
     | "visibleItems"
     | "participantsOf"
     | "getForParticipant"
+    | "descendantsOf"
   > &
     SubagentActivityDeps["sessions"];
   runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "getByDedupKey" | "get" | "withdraw"> &
@@ -369,11 +371,6 @@ function lastAssistantText(items: readonly Item[]): string | undefined {
     if (text) return text;
   }
   return undefined;
-}
-
-export function snippet(text: string, max: number): string {
-  const oneLine = text.replace(/\s+/g, " ").trim();
-  return oneLine.length <= max ? oneLine : `${oneLine.slice(0, max - 1).trimEnd()}…`;
 }
 
 function renderSubagentTask(input: { title: string; parentTitle: string; task: string }): string {
@@ -1036,8 +1033,10 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           };
         },
         async liveSubagents() {
-          const visible = await visibleChildren(deps, binding, await deps.sessions.childrenOf(binding.session.id));
-          return liveSubagentsNote(await subagentActivity(deps, visible), visibleTitle);
+          return liveSubagentsNote(
+            await openChildren(deps, binding, await deps.sessions.childrenOf(binding.session.id)),
+            visibleTitle,
+          );
         },
         async search(input) {
           const caller = await currentCaller();

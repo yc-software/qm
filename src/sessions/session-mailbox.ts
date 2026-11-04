@@ -22,8 +22,8 @@ export function createSessionMailbox(backing: DurableMap<SessionMessage>) {
     async send(message: SessionMessage): Promise<void> {
       await backing.putIfAbsent(message.id, message);
     },
-    async pending(recipientId: string): Promise<SessionMessage[]> {
-      const rows = await backing.select({ where: { field: "recipientId", anyOfFold: [recipientId] } });
+    async pending(...recipientIds: string[]): Promise<SessionMessage[]> {
+      const rows = await backing.select({ where: { field: "recipientId", anyOfFold: recipientIds } });
       return rows.filter((row) => !row.consumed).sort((a, b) => a.createdAt - b.createdAt);
     },
     async unread(recipientId: string, id: string): Promise<boolean> {

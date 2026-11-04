@@ -3877,7 +3877,7 @@ test("subagents read renders each child's liveness compactly", async () => {
             sessionId: "s1",
             title: "builder",
             status: "idle",
-            activity: { status: "idle", outcome: "final_answer", liveDescendants: 0, unread: 0 },
+            activity: { status: "idle", outcome: "final_answer", unread: 0 },
             rendered: "AgentMessage#4 done",
           }
         : {
@@ -3893,7 +3893,7 @@ test("subagents read renders each child's liveness compactly", async () => {
                   tool: "execute",
                   purpose: "Running\n  tests",
                   outcome: "final_answer",
-                  liveDescendants: 2,
+
                   unread: 1,
                 },
                 lastSaid: "on it",
@@ -3901,7 +3901,7 @@ test("subagents read renders each child's liveness compactly", async () => {
               {
                 sessionId: "s2",
                 title: "fresh",
-                activity: { status: "running", startedAgoMs: 5_000, liveDescendants: 0, unread: 0 },
+                activity: { status: "running", startedAgoMs: 5_000, unread: 0 },
               },
               {
                 sessionId: "s3",
@@ -3911,14 +3911,14 @@ test("subagents read renders each child's liveness compactly", async () => {
                   stepAgoMs: 7_200_000,
                   tool: "files",
                   outcome: "errored",
-                  liveDescendants: 0,
+
                   unread: 0,
                 },
               },
               {
                 sessionId: "s4",
                 title: "quiet",
-                activity: { status: "idle", stepAgoMs: 5_000, tool: "", liveDescendants: 0, unread: 2 },
+                activity: { status: "idle", stepAgoMs: 5_000, tool: "", unread: 2 },
               },
             ],
           },
@@ -3928,7 +3928,7 @@ test("subagents read renders each child's liveness compactly", async () => {
   assert.equal(
     textOut(await call(subagents, { action: "read" })),
     [
-      "- builder (s1) — running; last step execute 42s ago; working on: Running tests; 2 live descendants; 1 message it has not read yet — last said: on it",
+      "- builder (s1) — running; last step execute 42s ago; working on: Running tests; 1 message it has not read yet — last said: on it",
       "- fresh (s2) — running; started 5s ago, no tool step yet",
       "- reviewer (s3) — idle; last turn errored; last step files 2h ago",
       "- quiet (s4) — idle; last step 5s ago; 2 messages it has not read yet",
