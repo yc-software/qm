@@ -5,6 +5,7 @@ import type { LoopStore } from "./loop-store.ts";
 import { adapterForItem } from "./sources/index.ts";
 import { EVENT_TEXT_CHARS, type LatestEvent } from "./ingress.ts";
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
+import { readTextPrefix } from "../files/read-text-prefix.ts";
 import { promptText } from "../util/text.ts";
 
 export const INBOX_SYNC_DEFAULT_EVERY_MS = 15 * 60 * 1000;
@@ -126,17 +127,9 @@ export async function loadEmailVoiceProfile(
   if (!artifact) return undefined;
   const opened = await files.open(artifact.id);
   if (!opened) return undefined;
-  const chunks: Buffer[] = [];
-  let total = 0;
-  for await (const chunk of opened.stream) {
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    chunks.push(buffer);
-    total += buffer.length;
-    if (total >= VOICE_PROFILE_MAX_CHARS * 4) break;
-  }
-  opened.stream.destroy();
-  const body = Buffer.concat(chunks).toString("utf8").trim();
-  return body ? body.slice(0, VOICE_PROFILE_MAX_CHARS) : undefined;
+  const { text } = await readTextPrefix(opened.stream, VOICE_PROFILE_MAX_CHARS * 4);
+  const body = text.trim().slice(0, VOICE_PROFILE_MAX_CHARS);
+  return body || undefined;
 }
 
 export function inboxTaskContext(loop: Loop, voiceProfile?: string): InboxTaskContext {

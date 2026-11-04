@@ -6,6 +6,7 @@ import { contentDispositionAttachment, contentTypeWithUtf8Charset, pipeToRespons
 import { audit, authorizeAdmin, requireScopedAdmin } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
 import { discoverScopes, FILES_PAGE_SIZE } from "./common.ts";
+import { readTextPrefix } from "../../../files/read-text-prefix.ts";
 
 const FILE_PREVIEW_MAX_BYTES = 256 * 1024;
 const FILES_LIST_MAX = 2000;
@@ -22,21 +23,7 @@ export async function readAdminFile(ctx: ApiCtx): Promise<void> {
   audit(deps, { principalId: actor.id, action: "file.read", resource: art.path, scopeLabel: art.ownerScopeId });
   const opened = await deps.files.open(id);
   if (!opened) return sendJson(res, 404, { error: "not_found" });
-  const chunks: Buffer[] = [];
-  let total = 0;
-  let truncated = false;
-  for await (const chunk of opened.stream) {
-    const b = chunk as Buffer;
-    if (total + b.length >= FILE_PREVIEW_MAX_BYTES) {
-      chunks.push(b.subarray(0, FILE_PREVIEW_MAX_BYTES - total));
-      truncated = true;
-      opened.stream.destroy();
-      break;
-    }
-    chunks.push(b);
-    total += b.length;
-  }
-  const content = Buffer.concat(chunks).toString("utf8");
+  const { text: content, truncated } = await readTextPrefix(opened.stream, FILE_PREVIEW_MAX_BYTES);
   return sendJson(res, 200, {
     id: art.id,
     scopeId: art.ownerScopeId,
