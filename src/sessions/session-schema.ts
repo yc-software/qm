@@ -333,15 +333,9 @@ const SESSION_FACTS_COPY: PgMigrationDefinition = {
   autocommit: true,
   statements: [
     `CREATE OR REPLACE FUNCTION qm_session_fact_json(raw TEXT) RETURNS JSONB LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE AS $fact_json$
-DECLARE
-  stripped TEXT;
 BEGIN
-  IF raw IS NULL OR strpos(raw, '\\u') = 0 OR pg_input_is_valid(raw, 'jsonb') THEN
+  IF pg_input_is_valid(raw, 'jsonb') THEN
     RETURN raw::jsonb;
-  END IF;
-  stripped := regexp_replace(raw, '(?<!\\\\)((?:\\\\\\\\)*)\\\\u0000', '\\1', 'g');
-  IF pg_input_is_valid(stripped, 'jsonb') THEN
-    RETURN stripped::jsonb;
   END IF;
   RETURN NULL;
 END $fact_json$`,
@@ -350,8 +344,7 @@ DECLARE
   after_id TEXT := '';
   page TEXT[];
 BEGIN
-  IF to_regclass('runs') IS NULL
-    OR EXISTS (SELECT 1 FROM qm_schema_migrations WHERE id = 'sessions/store/0053-session-facts-copy') THEN
+  IF to_regclass('runs') IS NULL THEN
     RETURN;
   END IF;
   LOOP
