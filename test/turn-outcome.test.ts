@@ -9,27 +9,27 @@ test("a plain reply: completed, nothing pending", () => {
     pendingApprovals: [],
     terminatedOnApproval: false,
   });
-  assert.deepEqual(o, { completed: true, paused: false, approvalsBlock: false, awaitingApproval: false });
+  assert.deepEqual(o, { completed: true, paused: false, approvalsBlock: false });
 });
 
-test("a parked command with no reply: paused AND awaiting approval", () => {
+test("a parked command with no reply: paused and blocking", () => {
   const o = deriveTurnOutcome({
     reply: "",
     attachments: 0,
     pendingApprovals: [{ kind: "command" }],
     terminatedOnApproval: true,
   });
-  assert.deepEqual(o, { completed: false, paused: true, approvalsBlock: true, awaitingApproval: true });
+  assert.deepEqual(o, { completed: false, paused: true, approvalsBlock: true });
 });
 
-test("the split-brain case — a reply AND a terminating parked command: completed yet still awaiting approval", () => {
+test("the split-brain case — a reply AND a terminating parked command: completed yet still blocking", () => {
   const o = deriveTurnOutcome({
     reply: "here's what I had before the wall",
     attachments: 0,
     pendingApprovals: [{ kind: "command" }],
     terminatedOnApproval: true,
   });
-  assert.deepEqual(o, { completed: true, paused: false, approvalsBlock: true, awaitingApproval: true });
+  assert.deepEqual(o, { completed: true, paused: false, approvalsBlock: true });
 });
 
 test("a COLLECTED approval — the agent worked around it and finished — is a non-blocking offer, not a wait", () => {
@@ -39,37 +39,37 @@ test("a COLLECTED approval — the agent worked around it and finished — is a 
     pendingApprovals: [{ kind: "command" }],
     terminatedOnApproval: false,
   });
-  assert.deepEqual(o, { completed: true, paused: false, approvalsBlock: false, awaitingApproval: false });
+  assert.deepEqual(o, { completed: true, paused: false, approvalsBlock: false });
 });
 
-test("an input pause (2FA prompt) never blocks and never marks the session awaiting approval", () => {
+test("an input pause (2FA prompt) with a reply never blocks", () => {
   const o = deriveTurnOutcome({
     reply: "what's the code?",
     attachments: 0,
     pendingApprovals: [{ kind: "input" }],
     terminatedOnApproval: false,
   });
-  assert.deepEqual(o, { completed: true, paused: false, approvalsBlock: false, awaitingApproval: false });
+  assert.deepEqual(o, { completed: true, paused: false, approvalsBlock: false });
 });
 
-test("an input pause with no reply still pauses the run but is not awaiting approval", () => {
+test("an input pause with no reply still pauses the run", () => {
   const o = deriveTurnOutcome({
     reply: "",
     attachments: 0,
     pendingApprovals: [{ kind: "input" }],
     terminatedOnApproval: false,
   });
-  assert.deepEqual(o, { completed: false, paused: true, approvalsBlock: true, awaitingApproval: false });
+  assert.deepEqual(o, { completed: false, paused: true, approvalsBlock: true });
 });
 
-test("a mixed pause (input + command) with no output is awaiting approval", () => {
+test("a mixed pause (input + command) with no output pauses and blocks", () => {
   const o = deriveTurnOutcome({
     reply: "",
     attachments: 0,
     pendingApprovals: [{ kind: "input" }, { kind: "command" }],
     terminatedOnApproval: true,
   });
-  assert.deepEqual(o, { completed: false, paused: true, approvalsBlock: true, awaitingApproval: true });
+  assert.deepEqual(o, { completed: false, paused: true, approvalsBlock: true });
 });
 
 test("outbound files count as visible output", () => {

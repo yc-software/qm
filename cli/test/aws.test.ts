@@ -29,7 +29,6 @@ import {
   githubTrustSubject,
   imageTransferArgs,
   isPinnedWorkloadImage,
-  probeAwsSecretStore,
   renderTaskDefinition,
   secretArns,
   serviceEnvironment,
@@ -5083,54 +5082,6 @@ test("AWS renders adopted logGroup and stopTimeout pins; the defaults stay deriv
   assert.equal(container.stopTimeout, 120);
   const pinnedLongDrain: QmConfig = { ...adopted, env: withDrain("100000").env };
   assert.equal(renderTaskDefinition(pinnedLongDrain, "core", image).containerDefinitions[0]!.stopTimeout, 120);
-});
-
-test("AWS doctor classifies an un-pushed secret store as pending, not drift", () => {
-  const rnf = new Error(
-    "An error occurred (ResourceNotFoundException) when calling the GetSecretValue operation: Secrets Manager can't find the specified secret.",
-  );
-  const secrets = computedSecrets({
-    contract: 1,
-    orgId: "acme",
-    publicUrl: "https://acme.example.com",
-    target: "aws",
-    services: ["core"],
-    plugins: [],
-    skills: [],
-    env: {},
-    imageOverrides: {},
-  });
-  const requiredNames = secrets.filter((secret) => secret.required).map((secret) => secret.name);
-  assert.ok(requiredNames.length > 0);
-  const probe = probeAwsSecretStore(
-    secrets,
-    () => {
-      throw rnf;
-    },
-    () => assert.fail("PUBLIC_API_URL must not be validated when the store is empty"),
-  );
-  assert.deepEqual(probe.pending, requiredNames);
-  assert.deepEqual(probe.failures, []);
-  assert.equal(probe.values.size, 0);
-});
-
-test("AWS doctor still fails a pushed secret store holding a placeholder value", () => {
-  const probe = probeAwsSecretStore(
-    [
-      {
-        name: "CORE_SIGNING_SECRET",
-        services: ["core"],
-        description: "",
-        required: true,
-        managedBy: "operator",
-      },
-    ],
-    () => "replace-me",
-    () => {},
-  );
-  assert.deepEqual(probe.pending, []);
-  assert.equal(probe.failures.length, 1);
-  assert.match(probe.failures[0]!, /CORE_SIGNING_SECRET: missing, placeholder, or insecure value/);
 });
 
 for (const mode of ["draining", "stale", "failed"] as const) {

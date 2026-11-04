@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isSessionWorking, liveTurnThreadRef } from "../src/working-dot.ts";
+import { liveTurnThreadRef } from "../src/working-dot.ts";
 
 test("no mounted chat → no thread is live", () => {
   assert.equal(liveTurnThreadRef({ mountedThreadRef: null, isStreaming: true, pendingSend: "web:u:A" }), null);
@@ -35,26 +35,4 @@ test("mid-switch, the incoming idle row shows no dot; the outgoing streaming cha
     "incoming finished row must not borrow the dot",
   );
   assert.equal(dotFor({ working: false, threadRef: "web:u:A" }), true, "outgoing streaming chat keeps its dot");
-});
-
-test("the mounted idle chat keeps server work visible during reload or background runs", () => {
-  assert.equal(
-    isSessionWorking({
-      serverWorking: true,
-      threadRef: "web:u:A",
-      liveThreadRef: null,
-    }),
-    true,
-  );
-});
-
-test("an unmounted chat keeps using the server working flag", () => {
-  assert.equal(
-    isSessionWorking({
-      serverWorking: true,
-      threadRef: "web:u:A",
-      liveThreadRef: null,
-    }),
-    true,
-  );
 });
