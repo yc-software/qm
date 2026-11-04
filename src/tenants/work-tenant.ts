@@ -18,7 +18,7 @@ const BYPASSES_ROW_SECURITY = `SELECT r.rolsuper OR r.rolbypassrls OR EXISTS (
 const BYPASS_REFUSAL =
   "Refusing tenant work: the database login owns the tenant tables or bypasses row-level security while more than one tenant exists. Connect as a non-owner login without BYPASSRLS.";
 
-async function readTenants(pg: Pick<PgPool, "pool">): Promise<void> {
+async function readTenants(pg: Pick<PgPool, "pool">, enforce: boolean): Promise<void> {
   const pool = await pg.pool();
   const [soleRows, installRows, bypassRows] = await Promise.all([
     pool.query("SELECT sole::text AS id, tenants FROM qm_sole_tenant()").then((result) => result.rows),
@@ -33,15 +33,16 @@ async function readTenants(pg: Pick<PgPool, "pool">): Promise<void> {
   ]);
   const idOf = (rows: Record<string, unknown>[]): string | undefined =>
     rows[0]?.id == null ? undefined : String(rows[0].id);
-  refuseTenancy(Number(soleRows[0]?.tenants ?? 0) > 1 && bypassRows[0]?.bypass === true ? BYPASS_REFUSAL : undefined);
+  if (enforce)
+    refuseTenancy(Number(soleRows[0]?.tenants ?? 0) > 1 && bypassRows[0]?.bypass === true ? BYPASS_REFUSAL : undefined);
   sole = idOf(soleRows);
   const install = idOf(installRows);
   if (install !== undefined) registerTenants(install, sole);
   assertTenancyAllowed();
 }
 
-export function refreshTenants(pg: Pick<PgPool, "pool">): Promise<void> {
-  const done = readTenants(pg);
+export function refreshTenants(pg: Pick<PgPool, "pool">, enforce = false): Promise<void> {
+  const done = readTenants(pg, enforce);
   const entry = { at: Date.now(), done };
   checked = entry;
   done.catch(() => {
@@ -51,8 +52,8 @@ export function refreshTenants(pg: Pick<PgPool, "pool">): Promise<void> {
 }
 
 export async function watchTenants(pg: Pick<PgPool, "pool">, onError: (error: unknown) => void): Promise<() => void> {
-  await refreshTenants(pg);
-  const timer = setInterval(() => void refreshTenants(pg).catch(onError), TENANT_RECHECK_MS);
+  await refreshTenants(pg, true);
+  const timer = setInterval(() => void refreshTenants(pg, true).catch(onError), TENANT_RECHECK_MS);
   timer.unref();
   return () => clearInterval(timer);
 }

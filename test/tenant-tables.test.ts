@@ -143,7 +143,7 @@ describe("tenant tables", () => {
     await assert.rejects(appMap.get("solo"), /No tenant is bound to this query/);
     await assert.rejects(appMap.all(), /No tenant is bound to this query/);
     await assert.rejects(owned.put("late", { n: 2 }), /No tenant is bound to this query/);
-    await refreshTenants(app);
+    await refreshTenants(app, true);
     assert.equal(soleTenantNow(), undefined);
     assert.equal(installTenantNow(), install);
     await assert.rejects(workTenant(app), /No tenant is bound to this work/);
@@ -152,9 +152,9 @@ describe("tenant tables", () => {
   });
 
   it("refuses an owner login once two tenants exist, and accepts a non-owner login", async () => {
-    await refreshTenants(app);
+    await refreshTenants(app, true);
     assert.deepEqual(await withTenant(install, () => app.q("SELECT 1 AS one")), [{ one: 1 }]);
-    await assert.rejects(refreshTenants(owner), /owns the tenant tables or bypasses row-level security/);
+    await assert.rejects(refreshTenants(owner, true), /owns the tenant tables or bypasses row-level security/);
     await assert.rejects(
       withTenant(install, () => app.q("SELECT 1 AS one")),
       TenantUnavailable,
@@ -178,7 +178,7 @@ describe("tenant tables", () => {
       useOwnerDatabase(undefined);
       await main.close();
     }
-    await refreshTenants(app);
+    await refreshTenants(app, true);
     assert.deepEqual(await owner.q("SELECT 1 AS one"), [{ one: 1 }]);
   });
 
