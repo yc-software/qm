@@ -410,3 +410,18 @@ test("with exactly one tenant, unbound work resolves to it", () => {
   );
   assert.equal(unboundTenantAllowed(), true);
 });
+
+test("a failed configuration load is retried on the next call", async () => {
+  const maps = configStoreMaps(() => tenantMap<never>());
+  const souls = maps.souls;
+  let failures = 1;
+  const flaky: typeof souls = {
+    ...souls,
+    all: () => (failures-- > 0 ? Promise.reject(new Error("connection reset")) : souls.all()),
+  };
+  const store = createConfigStore("acme", { ...maps, souls: flaky });
+  await withTenant(A, async () => {
+    await assert.rejects(store.hydrate?.() ?? Promise.resolve(), /connection reset/);
+    await store.hydrate?.();
+  });
+});

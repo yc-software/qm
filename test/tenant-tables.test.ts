@@ -8,10 +8,16 @@ import { createPostgresAppPageViewLog } from "../src/deploy/page-views.ts";
 import { createPostgresFileUploadStore } from "../src/files/file-upload-store.ts";
 import { createPostgresVectorStore } from "../src/memory/postgres-vector-store.ts";
 import { createPostgresMap } from "../src/persistence/durable-map.ts";
-import { createPgPool, migrateRegisteredPgSchemas, type PgPool } from "../src/persistence/pg-pool.ts";
+import {
+  createPgPool,
+  migrateRegisteredPgSchemas,
+  withPgTransaction,
+  type PgPool,
+} from "../src/persistence/pg-pool.ts";
 import { createPostgresBudgetTracker } from "../src/ratelimit/postgres-budget.ts";
 import { createPostgresInstanceRegistry } from "../src/runs/instance-registry.ts";
-import { installTenantNow, soleTenantNow, withTenant } from "../src/tenants/context.ts";
+import { installTenantNow, soleTenantNow, TenantUnavailable, withTenant } from "../src/tenants/context.ts";
+import { ownerPgPool, useOwnerDatabase } from "../src/tenants/owner-pool.ts";
 import { refreshTenants, workTenant } from "../src/tenants/work-tenant.ts";
 import { testMigratedDatabaseUrl } from "./support/test-database.ts";
 
@@ -69,9 +75,11 @@ describe("tenant tables", () => {
   const tenantA = randomUUID();
   const tenantB = randomUUID();
   let install = "";
+  let ownerUrl = "";
 
   before(async () => {
     const databaseUrl = testMigratedDatabaseUrl();
+    ownerUrl = databaseUrl;
     createPostgresVectorStore(databaseUrl);
     createPostgresAppPageViewLog(databaseUrl);
     createPostgresFileUploadStore(databaseUrl);
@@ -140,6 +148,37 @@ describe("tenant tables", () => {
     await assert.rejects(workTenant(app), /No tenant is bound to this work/);
     assert.deepEqual(await withTenant(install, () => appMap.get("solo")), { n: 1 });
     assert.equal(await withTenant(tenantA, () => appMap.get("solo")), null);
+  });
+
+  it("refuses an owner login once two tenants exist, and accepts a non-owner login", async () => {
+    await refreshTenants(app);
+    assert.deepEqual(await withTenant(install, () => app.q("SELECT 1 AS one")), [{ one: 1 }]);
+    await assert.rejects(refreshTenants(owner), /owns the tenant tables or bypasses row-level security/);
+    await assert.rejects(
+      withTenant(install, () => app.q("SELECT 1 AS one")),
+      TenantUnavailable,
+    );
+    await assert.rejects(owner.q("SELECT 1 AS one"), TenantUnavailable);
+    const main = createPgPool(ownerUrl);
+    useOwnerDatabase(ownerUrl);
+    try {
+      assert.deepEqual(await ownerPgPool(main).q("SELECT 1 AS one"), [{ one: 1 }]);
+      const claimed = await withPgTransaction(
+        await ownerPgPool(main).pool(),
+        async (client) => (await client.query("SELECT count(*)::int AS n FROM tenants")).rows,
+      );
+      assert.deepEqual(claimed, [{ n: 3 }]);
+      await assert.rejects(
+        withPgTransaction(await main.pool(), async () => undefined),
+        TenantUnavailable,
+      );
+      await assert.rejects(main.q("SELECT 1 AS one"), TenantUnavailable);
+    } finally {
+      useOwnerDatabase(undefined);
+      await main.close();
+    }
+    await refreshTenants(app);
+    assert.deepEqual(await owner.q("SELECT 1 AS one"), [{ one: 1 }]);
   });
 
   it("keeps two tenants' key-value rows and snapshots apart under the app login", async () => {

@@ -21,7 +21,7 @@ import {
   type SourceAuth,
 } from "../auth/source-auth.ts";
 import { CONTROL_PLANE_AUD, type CapabilityClaims } from "../auth/capability-token.ts";
-import { boundTenant } from "../tenants/context.ts";
+import { boundTenant, TenantUnavailable } from "../tenants/context.ts";
 import { capabilityToken, requestCapability, withRequestTenant } from "./tenant-ingress.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER, type PortalIdentity } from "../auth/portal-identity.ts";
 import { errMessage } from "../util/errors.ts";
@@ -319,6 +319,11 @@ function respondError(req: IncomingMessage, res: ServerResponse, err: unknown): 
     const status = err instanceof MemoryFactsMissing ? 404 : 403;
     if (!res.headersSent)
       sendJson(res, status, { error: status === 404 ? "not_found" : "forbidden", message: err.message });
+    else res.destroy();
+    return;
+  }
+  if (err instanceof TenantUnavailable) {
+    if (!res.headersSent) sendJson(res, 503, { error: "tenant_unavailable", message: err.message });
     else res.destroy();
     return;
   }

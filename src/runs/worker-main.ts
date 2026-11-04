@@ -11,7 +11,8 @@ const config = loadConfig();
 useOwnerDatabase(config.databaseOwnerUrl);
 const built = buildApp(config);
 await migrateRegisteredPgSchemas(config.databaseUrl);
-if (config.databaseUrl) watchTenants(createPgPool(config.databaseUrl), reportFailureAs("tenant watch", undefined));
+if (config.databaseUrl)
+  await watchTenants(createPgPool(config.databaseUrl), reportFailureAs("tenant watch", undefined));
 await built.tenancy.refreshSettings();
 built.tenancy.keepSettingsFresh();
 if (!config.backgroundDeploymentId) await built.rewriteSurfaceOrigins();

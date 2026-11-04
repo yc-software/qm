@@ -3050,10 +3050,11 @@ export function buildApp(
       const rows = await ownerPgPool(pgArtifactMap.pool).q("SELECT id::text AS id FROM tenants ORDER BY id");
       const tenants = rows.map((row) => String(row.id));
       registerTenants(install, tenants.length === 1 ? tenants[0] : undefined);
-      for (const tenant of tenants)
-        await withTenant(tenant, () => tenantLoader.load()).catch(
-          reportFailureAs("startup: load tenant caches", undefined),
-        );
+      for (const tenant of tenants) {
+        const loading = withTenant(tenant, () => tenantLoader.load());
+        if (tenant === install || tenants.length === 1) await loading;
+        else await loading.catch(reportFailureAs("startup: load tenant caches", undefined));
+      }
     },
     rewriteSurfaceOrigins: () => rewriteSurfaceOrigins(ownerPgPool(pgArtifactMap.pool)),
     forEachTenant: (fn) => forEachTenant(pgArtifactMap.pool, fn),

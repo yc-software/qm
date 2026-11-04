@@ -13,6 +13,6 @@ export function useOwnerDatabase(url: string | undefined): void {
 
 export function ownerPgPool(pg: PgPool): PgPool {
   if (!ownerUrl) return pg;
-  ownerPool ??= createPgPool(ownerUrl);
+  ownerPool ??= createPgPool(ownerUrl, [], [], { ownerLogin: true });
   return ownerPool;
 }
