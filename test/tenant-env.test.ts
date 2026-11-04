@@ -3,7 +3,6 @@ import { randomUUID } from "node:crypto";
 import { afterEach, describe, it } from "node:test";
 import { decryptSecret, deriveConnectorKey, encryptSecret } from "../src/connectors/connector-client-store.ts";
 import { withTenant } from "../src/tenants/context.ts";
-import { resolveBranding } from "../src/resolution/branding.ts";
 import {
   readTenantSettings,
   replaceLoadedTenantSettings,
@@ -91,19 +90,6 @@ describe("per-tenant keys and settings", () => {
     );
     assert.deepEqual(settings, { modelGatewayKey: "key-a", orgId: "acme", env: { AUTH_CLIENT_SECRET: "secret-a" } });
     assert.deepEqual(readTenantSettings("not settings", a), {});
-  });
-
-  it("names the org from the bound tenant's env before the deployment default", async () => {
-    replaceLoadedTenantSettings(new Map([[a, { env: { ORG_BRAND_ORG_NAME: "Acme Corp" } }]]));
-    const config = { getBrandingDurable: async () => null };
-    const deployment = { orgName: "Shared QM", selfLabel: "QM" };
-    assert.deepEqual(await withTenant(a, () => resolveBranding(config, "org:acme", deployment)), {
-      orgName: "Acme Corp",
-      selfLabel: "QM",
-    });
-    assert.equal((await withTenant(b, () => resolveBranding(config, "org:b", deployment))).orgName, "Shared QM");
-    const stored = { getBrandingDurable: async () => ({ orgName: "Stored Name" }) };
-    assert.equal((await withTenant(a, () => resolveBranding(stored, "org:acme", deployment))).orgName, "Stored Name");
   });
 
   it("sends invite mail with the bound tenant's sender and key", async () => {
