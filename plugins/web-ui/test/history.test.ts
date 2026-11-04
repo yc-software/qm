@@ -623,6 +623,40 @@ test("a message_revision marker renders as a system note and badges the original
   assert.equal((msgs[3] as { action?: string }).action, "deleted");
 });
 
+test("a web edit rewrites the person's own bubble in place, badged, with no separate note", () => {
+  const msgs = itemsToMessages(
+    [
+      item("UserMessage", { seq: 1, createdAt: 1, text: "Summarize the Q3 deck", body: {} }),
+      item("AgentMessage", { seq: 2, createdAt: 2, text: "Here is the Q3 summary." }),
+      item("Retraction", {
+        seq: 3,
+        createdAt: 3,
+        body: {
+          action: "edited",
+          seq: 1,
+          sentAt: "x",
+          original: "Summarize the Q3 deck",
+          text: "Summarize the Q4 deck",
+        },
+      }),
+      item("Retraction", {
+        seq: 4,
+        createdAt: 4,
+        body: { action: "edited", seq: 1, text: "Summarize the Q4 deck, briefly" },
+      }),
+    ],
+    MODEL,
+  );
+  assert.deepEqual(
+    msgs.map((m) => m.role),
+    ["user", "assistant"],
+  );
+  const bubble = msgs[0] as { content?: string; edited?: boolean; entrySeq?: number };
+  assert.equal(bubble.content, "Summarize the Q4 deck, briefly", "the latest edit wins");
+  assert.equal(bubble.edited, true);
+  assert.equal(bubble.entrySeq, 1);
+});
+
 test("a revision of the agent's own Slack message is attributed to the agent, not the person", () => {
   const msgs = itemsToMessages(
     [
