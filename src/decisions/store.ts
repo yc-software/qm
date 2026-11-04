@@ -2,6 +2,7 @@ import type { PoolClient } from "pg";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { checkRuleSet, type DecisionHook, type DecisionProvider, type DecisionRule } from "./decisions.ts";
 import { TENANCY, tenantTables } from "../tenants/migrations.ts";
+import { perTenant } from "../tenants/context.ts";
 
 interface DecisionWriter {
   actorId: string;
@@ -77,18 +78,23 @@ export function createPostgresDecisionStore(connectionString: string): DecisionS
       },
     ),
   ]);
-  const active = new Map<DecisionHook, { at: number; rules: Promise<DecisionRule[]> }>();
-  let known: { at: number; providers: Promise<DecisionProvider[]> } | undefined;
+  const cache = perTenant(() => ({
+    active: new Map<DecisionHook, { at: number; rules: Promise<DecisionRule[]> }>(),
+    known: undefined as { at: number; providers: Promise<DecisionProvider[]> } | undefined,
+  }));
   const write = async (fn: (db: PoolClient) => Promise<unknown>) => {
     await withPgTransaction(await pool(), async (db) => {
       await db.query("LOCK TABLE decision_rules IN SHARE ROW EXCLUSIVE MODE");
       await fn(db);
     });
-    active.clear();
-    known = undefined;
+    const tenant = cache();
+    tenant.active.clear();
+    tenant.known = undefined;
   };
   return {
     async providers(ids) {
+      const tenant = cache();
+      let known = tenant.known;
       if (!known || Date.now() - known.at >= CACHE_MS) {
         const providers = q("SELECT * FROM decision_providers ORDER BY provider_id").then((rows) =>
           rows.map((r) => ({
@@ -97,19 +103,21 @@ export function createPostgresDecisionStore(connectionString: string): DecisionS
             ...(r.base_url ? { baseUrl: r.base_url as string, credential: r.credential as string } : {}),
           })),
         );
-        known = { at: Date.now(), providers };
-        providers.catch(() => (known = undefined));
+        const entry = { at: Date.now(), providers };
+        known = tenant.known = entry;
+        providers.catch(() => tenant.known === entry && (tenant.known = undefined));
       }
       const all = await known.providers;
       return ids ? all.filter((p) => ids.includes(p.id)) : all;
     },
     async rules(hook) {
       if (!hook) return (await q(`${RULES} ORDER BY rule_id`)).map(toRule);
+      const { active } = cache();
       const hit = active.get(hook);
       if (hit && Date.now() - hit.at < CACHE_MS) return hit.rules;
       const rules = q(`${RULES} WHERE hook = $1 AND mode <> 'off' ORDER BY rule_id`, [hook]).then((r) => r.map(toRule));
       active.set(hook, { at: Date.now(), rules });
-      rules.catch(() => active.delete(hook));
+      rules.catch(() => active.get(hook)?.rules === rules && active.delete(hook));
       return rules;
     },
     saveProvider: (p, by) =>
