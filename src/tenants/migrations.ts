@@ -19,7 +19,7 @@ END $qm_bound_tenant$`,
   ],
 };
 
-export const SOLE_TENANT: PgMigrationDefinition = {
+const SOLE_TENANT: PgMigrationDefinition = {
   id: "0000-tenancy/sole-tenant",
   statements: [
     `SET LOCAL check_function_bodies = off`,
@@ -30,7 +30,7 @@ export const SOLE_TENANT: PgMigrationDefinition = {
   ],
 };
 
-export const UNBOUND_SOLE_TENANT: PgMigrationDefinition = {
+const UNBOUND_SOLE_TENANT: PgMigrationDefinition = {
   id: "0000-tenancy/unbound-sole-tenant",
   statements: [
     `CREATE OR REPLACE FUNCTION qm_bound_tenant() RETURNS uuid LANGUAGE plpgsql STABLE PARALLEL SAFE AS $qm_bound_tenant$

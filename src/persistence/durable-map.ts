@@ -4,7 +4,7 @@ import { claimAcrossTenants } from "../tenants/claim.ts";
 import { TENANCY, swapPrimaryKey, tenantColumn, tenantPolicies } from "../tenants/migrations.ts";
 import { workTenant } from "../tenants/work-tenant.ts";
 
-export interface TenantEntry<T> {
+interface TenantEntry<T> {
   tenantId: string;
   id: string;
   value: T;

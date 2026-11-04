@@ -118,7 +118,7 @@ type AuthHandler = (req: IncomingMessage, res: ServerResponse) => Promise<void>;
 
 const MAX_TENANT_HANDLERS = 256;
 
-export function tenantAuthConfig(cfg: AuthConfig, signIn: TenantSignIn): AuthConfig {
+function tenantAuthConfig(cfg: AuthConfig, signIn: TenantSignIn): AuthConfig {
   const clientId = signIn.oidcClient?.clientId;
   const clientSecret = signIn.oidcClient?.clientSecret ?? signIn.clientSecret;
   if (!signIn.allowedEmails && !clientId && !clientSecret) return cfg;

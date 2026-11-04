@@ -4,14 +4,14 @@ import { isTenantId, withTenant } from "./context.ts";
 import { replaceLoadedTenantSettings, tenantSettingsSchema, type TenantSettings } from "./settings.ts";
 import { createSweeper, type Sweeper } from "../util/sweeper.ts";
 
-export interface HostTenant {
+interface HostTenant {
   tenant?: string;
   multi: boolean;
 }
 
 export type RowTable = "webhooks" | "loop_ingress" | "oauth_flows" | "deployments" | "session_shares";
 
-export type SettingsUpdate =
+type SettingsUpdate =
   | { ok: true; keys: string[] }
   | { ok: false; error: "unknown_tenant" }
   | { ok: false; error: "invalid_settings"; message: string };

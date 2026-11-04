@@ -3,7 +3,7 @@ import { boundTenant } from "./context.ts";
 
 const text = z.string().min(1).max(4096);
 
-export const TENANT_ENV_NAMES = [
+const TENANT_ENV_NAMES = [
   "ADMIN_GRANTS",
   "ANTHROPIC_API_KEY",
   "AUTH_ALLOWED_EMAILS",
@@ -41,7 +41,7 @@ export type TenantEnvName = (typeof TENANT_ENV_NAMES)[number] | `BROKER_SECRET_$
 
 const tenantEnvNames: ReadonlySet<string> = new Set(TENANT_ENV_NAMES);
 
-export function isTenantEnvName(name: string): name is TenantEnvName {
+function isTenantEnvName(name: string): name is TenantEnvName {
   return tenantEnvNames.has(name) || BROKER_SECRET_ENV.test(name);
 }
 

@@ -4,7 +4,7 @@ import { boundTenant } from "./tenant.ts";
 
 const SIGN_IN_PATH = "/v1/auth/broker/sign-in-settings";
 
-export interface TenantOidcClient {
+interface TenantOidcClient {
   issuer: string;
   clientId: string;
   clientSecret: string;

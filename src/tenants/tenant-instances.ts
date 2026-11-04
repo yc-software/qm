@@ -4,7 +4,7 @@ import { loadedTenantSettings, type TenantEnvName } from "./settings.ts";
 
 export type TenantEnvSubset = Partial<Record<TenantEnvName, string>>;
 
-export function tenantEnvSubset(names: readonly TenantEnvName[]): TenantEnvSubset | undefined {
+function tenantEnvSubset(names: readonly TenantEnvName[]): TenantEnvSubset | undefined {
   const env = loadedTenantSettings().env ?? {};
   const picked: TenantEnvSubset = {};
   for (const name of names) {
