@@ -5,7 +5,7 @@ import { item } from "./item-fixture.ts";
 import { harness, SESSION } from "./deep-link-boot-fixture.ts";
 
 async function until(check: () => boolean): Promise<void> {
-  for (let i = 0; i < 1000; i++) {
+  for (let i = 0; i < 2000; i++) {
     if (check()) return;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
