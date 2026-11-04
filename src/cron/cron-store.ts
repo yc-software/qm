@@ -1,3 +1,4 @@
+import type { Claimed } from "../tenants/claim.ts";
 import type { Destination } from "../types.ts";
 import type { Cron, CronFireLogEntry, CronFireNote, CronSchedule, CronScript } from "../triggers/types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
@@ -65,14 +66,14 @@ export interface CronStore {
   listFires(id: string, opts?: { limit?: number }): Promise<{ runs: CronFireLogEntry[]; total: number }>;
   firesByThreadRefs(threadRefs: readonly string[]): Promise<CronFireRecord[]>;
   latestFireForThread(id: string, threadRef: string): Promise<CronFireLogEntry | undefined>;
-  backfillFires(): Promise<number>;
   setFireNote(id: string, note: CronFireNote): Promise<"applied" | "superseded" | "missing">;
   markFired(id: string, at: number, scheduledAt?: number): Promise<void>;
   markAttempted(id: string, at: number): Promise<void>;
   defer(id: string, until: number): Promise<void>;
   claimSlot(id: string, scheduledAt: number, at: number): Promise<boolean>;
   unclaimSlot(id: string, scheduledAt: number, at: number, priorLastFiredAt: number | undefined): Promise<void>;
-  due(now: number): Promise<Array<Cron & { scheduledAt: number }>>;
+  scheduled(): Promise<Array<Claimed<Cron>>>;
+  due(now: number): Promise<Array<Claimed<Cron> & { scheduledAt: number }>>;
 }
 
 export function cronIsActive(cron: Pick<Cron, "enabled" | "archived" | "schedule" | "lastFiredAt">): boolean {
@@ -138,6 +139,10 @@ export function createCronStore(
     },
     get: (id) => backing.get(id),
     list: () => backing.all(),
+    scheduled: async () =>
+      (await backing.acrossTenants())
+        .filter(({ value }) => value.enabled && !value.archived)
+        .map(({ tenantId, value }) => ({ ...value, tenantId })),
     ownedBy: (scopeId) => ownedBy(backing, scopeId),
     async update(id, patch) {
       const before = await backing.get(id);
@@ -187,22 +192,6 @@ export function createCronStore(
     listFires: (id, opts) => fires.listByCron(id, opts),
     firesByThreadRefs: (threadRefs) => fires.listByThreadRefs(threadRefs),
     latestFireForThread: (id, threadRef) => fires.latestForThread(id, threadRef),
-    async backfillFires() {
-      let backfilled = 0;
-      for (const [id, cron] of await backing.entries()) {
-        const log = cron.fireLog;
-        if (log === undefined) continue;
-        if (log.length) {
-          await fires.backfill(id, log);
-          backfilled += log.length;
-        }
-        await backing.update(id, (current) => {
-          const { fireLog: _legacy, ...rest } = current;
-          return rest;
-        });
-      }
-      return backfilled;
-    },
     async setFireNote(id, note) {
       let applied = false;
       const apply = (cron: Cron): Cron => {
@@ -257,11 +246,12 @@ export function createCronStore(
       await backing.merge(id, { deferUntil: until });
     },
     async due(now) {
-      const due: Array<Cron & { scheduledAt: number }> = [];
-      for (const c of await backing.all()) {
+      const due: Array<Claimed<Cron> & { scheduledAt: number }> = [];
+      for (const { tenantId, value: c } of await backing.acrossTenants()) {
         if (c.archived || !c.enabled || isDeferred(c, now)) continue;
         const scheduledAt = recoverNextFireAt(c.schedule, c.createdAt, c.lastFiredAt, c.nextFireAt);
-        if (scheduledAt !== undefined && now >= scheduledAt) due.push({ ...c, nextFireAt: scheduledAt, scheduledAt });
+        if (scheduledAt !== undefined && now >= scheduledAt)
+          due.push({ ...c, tenantId, nextFireAt: scheduledAt, scheduledAt });
       }
       return due;
     },

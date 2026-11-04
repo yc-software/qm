@@ -54,9 +54,10 @@ python3 "<skill dir>/scripts/gmail.py" send-draft DRAFT_ID
   message shows the matter is settled ("thanks", "done", someone else answered),
   don't flag it. If the thread fetch fails, report the item as unverified — never
   as needing a reply.
-- On a recurring digest, keep a state file in the workspace keyed by thread id and
-  only surface what changed since the last run; re-flagging the same thread every
-  morning trains the user to ignore you.
+- On a recurring digest, keep the seen-thread state in Files (upload a small JSON keyed
+  by thread id each run and keep its id in the cron note or a memory fact), never on
+  the computer, which is replaced without notice; surface only what changed since the
+  last run. Re-flagging the same thread every morning trains the user to ignore you.
 - Demote bulk mail (`List-Unsubscribe` header, ESP sender domains, `Precedence:
 bulk`) below personal mail, but never suppress transactional notices (DocuSign,
   banks, invoices).
@@ -148,4 +149,5 @@ curl -sS -X POST 'https://www.googleapis.com/calendar/v3/calendars/primary/event
   --data @event.json
 ```
 
-Always show what changed and keep enough IDs in the workspace to undo or inspect later.
+Always show what changed and keep the IDs needed to undo or inspect later in your
+reply or in memory, not on the computer.

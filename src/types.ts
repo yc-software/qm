@@ -97,6 +97,7 @@ export interface SpawnMeta {
   conversation: Conversation;
   actor: Principal;
   deliveryTarget?: string;
+  deliveryWebhook?: DeliveryWebhook;
   timezone?: string;
   readOnly?: boolean;
   model?: string;
@@ -173,7 +174,13 @@ export interface GrantedHandle {
   permission: Permission;
 }
 
+export interface DeliveryWebhook {
+  binding: string;
+  url: string;
+}
+
 export interface Destination {
+  webhook?: DeliveryWebhook;
   account?: SurfaceAccount;
   keychainAskId?: string;
   deploymentAccess?: { deploymentId: string; requesterId: string };
@@ -207,6 +214,8 @@ export interface CandidateDestination extends Destination {
 export type BackgroundWakeTrigger = "cron" | "webhook" | "monitor" | (string & {});
 
 export interface DeliveryProvenance {
+  sourceRequestId?: string;
+  sourceRunId?: string;
   sourceTitle?: string;
   trigger: BackgroundWakeTrigger;
   surface: string;
@@ -220,6 +229,7 @@ export interface DeliveryProvenance {
 
 export interface Delivery {
   id: string;
+  tenantId?: string;
   destination: Destination;
   text: string;
   attachments?: OutgoingAttachment[];
@@ -343,6 +353,7 @@ export interface TurnRequest {
   surface: string;
   scopeVersion?: string;
   deliveryTarget?: string;
+  deliveryWebhook?: DeliveryWebhook;
   deliveryCandidates?: { target: string; label: string }[];
   actor: ActorAssertion;
   conversation: {
@@ -451,6 +462,8 @@ export interface TurnRuntime {
   change?: { rule: string } | { agent: "task" | "scope" };
 }
 
+export type StopScope = "run" | "tree" | "ancestor";
+
 export interface TurnResult {
   status: "ok" | "refused" | "failed" | "pending_approval" | "queued" | "silent" | "react";
   sessionId?: string;
@@ -464,7 +477,7 @@ export interface TurnResult {
   steered?: true;
   steerTs?: string;
   stopped?: boolean;
-  stopReason?: string;
+  stopScope?: StopScope;
   pendingApprovals?: PendingApproval[];
   attachments?: OutgoingAttachment[];
   sourceUserSeq?: number;

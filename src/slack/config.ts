@@ -19,6 +19,7 @@ export interface SlackPluginConfig {
   externalAccess?: ExternalSlackAccess;
   historyLimit?: number;
   installationId?: string;
+  tenantId?: string;
   sharedServiceUrl?: string;
   receiverFactory?: (staging?: EnvelopeStaging) => Receiver;
   botToken: string;
@@ -55,6 +56,32 @@ export function parseAckEmoji(raw: string | undefined): string[] {
     seen.add(name);
     out.push(name);
   }
+  return out;
+}
+
+const DEPLOYMENT_SLACK_KEYS = [
+  "SLACK_USER_TOKEN",
+  "SLACK_COPILOT_BOT_TOKEN",
+  "SLACK_SIGNING_SECRET",
+  "SLACK_ALLOW_FROM",
+  "SLACK_DENY_MESSAGE",
+  "SLACK_IDENTITY_EMAIL",
+  "SLACK_EXTERNAL_ACCESS",
+  "SLACK_EVENTS_PORT",
+];
+
+export function storedSlackEnv(
+  env: Record<string, string | undefined>,
+  stored: { botToken: string; appToken?: string },
+  install: boolean,
+): Record<string, string | undefined> {
+  const out: Record<string, string | undefined> = {
+    ...env,
+    SLACK_BOT_TOKEN: stored.botToken,
+    SLACK_APP_TOKEN: stored.appToken,
+    SLACK_EVENTS_MODE: stored.appToken ? "socket" : env.SLACK_EVENTS_MODE,
+  };
+  if (!install) for (const key of DEPLOYMENT_SLACK_KEYS) delete out[key];
   return out;
 }
 

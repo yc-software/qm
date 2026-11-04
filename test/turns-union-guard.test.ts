@@ -117,50 +117,6 @@ test("POST /v1/turns strips nested owner-keychain union from typed automation or
   assert.deepEqual(run?.request.origin, { kind: "automation", screenData: "external event" });
 });
 
-for (const [name, legacy] of [
-  ["a live human message spelled the old way", { liveActor: true, triggerTs: "1.0" }],
-  [
-    "legacy automation alongside a typed origin",
-    { triggered: true, securityScreenData: "external event", origin: { kind: "human" } },
-  ],
-  ["an owner-keychain flag", { ownerKeychainUnion: true, origin: { kind: "automation" } }],
-] as const)
-  test(`POST /v1/turns rejects legacy origin fields rather than reading the turn as direct: ${name}`, async () => {
-    const body = JSON.stringify({
-      surface: "webhook",
-      actor: { externalId: "internal:owner" },
-      conversation: { kind: "dm", threadRef: `t-legacy-${name}` },
-      text: "x",
-      async: true,
-      ...legacy,
-    });
-    const r = await fetch(`${base}/v1/turns`, {
-      method: "POST",
-      headers: { ...signedHeaders(SECRET, "POST", "/v1/turns", body), "content-type": "application/json" },
-      body,
-    });
-    assert.equal(r.status, 400);
-    const fields = Object.keys(legacy).filter((key) => key !== "origin");
-    const json = (await r.json()) as { error: string; message: string };
-    assert.equal(json.error, "bad_request");
-    assert.match(json.message, new RegExp(`^body\\.(${fields.join("|")}): `));
-  });
-
-test("an in-process turn request with retired origin fields and no origin is refused, not run as direct", async () => {
-  const request = {
-    surface: "webhook",
-    actor: { externalId: "internal:owner" },
-    conversation: { kind: "dm", threadRef: "t-legacy-in-process" },
-    text: "x",
-    async: true,
-    triggered: true,
-    securityScreenData: "external event",
-  } as unknown as Parameters<typeof built.app.turn>[0];
-  const res = await built.app.turn(request);
-  assert.equal(res.status, "refused");
-  assert.equal(res.runId, undefined);
-});
-
 test("POST /v1/turns strips spawned: an external body can't opt out of mid-turn steer folding", async () => {
   const turnBody = (text: string, extra: Record<string, unknown> = {}): string =>
     JSON.stringify({
@@ -238,7 +194,7 @@ test("POST /v1/turns rejects a client idempotencyKey in the reserved slack: name
   assert.match(JSON.stringify(await r.json()), /reserved slack: prefix/);
 });
 
-test("POST /v1/turns drops a caller-supplied Slack origin in the current and legacy shapes", async () => {
+test("POST /v1/turns drops a caller-supplied surface origin", async () => {
   const body = JSON.stringify({
     surface: "cron",
     actor: { externalId: "internal:owner" },
@@ -255,8 +211,6 @@ test("POST /v1/turns drops a caller-supplied Slack origin in the current and leg
       workspace: "TPARTNER",
       audience: "internal",
     },
-    slackSource: { accountId: "partner", teamId: "TPARTNER", userId: "U1" },
-    externalSlack: { accountId: "partner", teamId: "TPARTNER", userId: "U1" },
     async: true,
   });
   const r = await fetch(`${base}/v1/turns`, {
@@ -268,6 +222,4 @@ test("POST /v1/turns drops a caller-supplied Slack origin in the current and leg
   const { runId } = (await r.json()) as { runId: string };
   const run = await built.runs.get(runId);
   assert.equal(run?.request.surfaceOrigin, undefined);
-  assert.equal("slackSource" in run!.request, false);
-  assert.equal("externalSlack" in run!.request, false);
 });

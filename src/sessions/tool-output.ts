@@ -106,15 +106,17 @@ export function createPostgresToolOutputStore(opts: {
 }): ToolOutputStore {
   const now = opts.now ?? (() => Date.now());
   let setting: { value: number; at: number } | null = null;
-  let tenant: Promise<{ id: string; bytes: DurableByteStore }> | null = null;
-  const tenantBytes = (): Promise<{ id: string; bytes: DurableByteStore }> =>
-    (tenant ??= opts.pool.q("SELECT qm_tenant_id()::text AS id").then((rows) => {
-      const id = rows[0]?.id as string;
-      return { id, bytes: opts.bytesFor(`${TOOL_OUTPUT_PATH}${id}/`) };
-    })).catch((err: unknown) => {
-      tenant = null;
-      throw err;
-    });
+  const stores = new Map<string, DurableByteStore>();
+  const tenantBytes = async (): Promise<{ id: string; bytes: DurableByteStore }> => {
+    const rows = await opts.pool.q("SELECT qm_bound_tenant()::text AS id");
+    const id = String(rows[0]?.id);
+    let bytes = stores.get(id);
+    if (!bytes) {
+      bytes = opts.bytesFor(`${TOOL_OUTPUT_PATH}${id}/`);
+      stores.set(id, bytes);
+    }
+    return { id, bytes };
+  };
   return {
     async inlineTokens() {
       if (setting && now() - setting.at < SETTING_CACHE_MS) return setting.value;
@@ -146,7 +148,7 @@ export function createPostgresToolOutputStore(opts: {
         `SELECT b.storage_key, i.created_at <= now() - interval '30 days' AS expired
            FROM items i
       LEFT JOIN blobs b ON b.tenant_id = i.tenant_id AND b.sha256 = i.blob_sha
-          WHERE i.tenant_id = qm_tenant_id() AND i.session_id = $1 AND i.kind = 'ToolResult'
+          WHERE i.tenant_id = qm_bound_tenant() AND i.session_id = $1 AND i.kind = 'ToolResult'
             AND md5(i.call_id) = $2 AND ($3::text IS NULL OR i.call_id = $3)
             AND i.blob_sha IS NOT NULL`,
         [sessionId, ref.digest, ref.callId ?? null],

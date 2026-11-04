@@ -1,4 +1,3 @@
-import { commonEntrySeqs } from "../sessions/transcript-source.ts";
 import { isSideChatAnchor } from "../sessions/side-chat.ts";
 import { composeSoul } from "../resolution/resolution-service.ts";
 import { createCurrentScopeMembers } from "../resolution/scope-membership.ts";
@@ -11,7 +10,7 @@ import { isUserItem, type Item, messageTs, proseText } from "../sessions/items.t
 import { orgId as orgIdOf } from "../config.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { fileArtifactId, artifactPath } from "../files/file-artifact-store.ts";
-import { itemWithinTenure, windowedTranscript } from "../sessions/session-store.ts";
+import { windowedTranscript } from "../sessions/session-store.ts";
 import { createTranscriptSource } from "../sessions/transcript-source.ts";
 import { cancelGoal, goalCancelledItem, openGoal } from "../agent/goal.ts";
 import { goalView } from "../runs/turn-stream.ts";
@@ -183,10 +182,8 @@ export function createSessionMethods(
   const storedItemAt = (sessionId: string, seq: number) => deps.sessions.getItem(sessionId, seq);
 
   const viewerStoredItemAt = async (sessionId: string, principalId: string, seq: number) => {
-    const window = (await deps.sessions.participantWindowsOf(sessionId)).find((w) => w.principalId === principalId);
-    if (!window) return undefined;
-    const item = await storedItemAt(sessionId, seq);
-    return item && itemWithinTenure(item, window) ? item : undefined;
+    if (!(await deps.sessions.participantsOf(sessionId)).includes(principalId)) return undefined;
+    return storedItemAt(sessionId, seq);
   };
 
   const viewerItemAt = async (sessionId: string, principalId: string, seq: number) => {
@@ -419,23 +416,8 @@ export function createSessionMethods(
       };
     },
 
-    async canViewSessionSnapshot(sessionId, principalId, visibility) {
-      if (
-        !visibility ||
-        ![visibility.minSeq, visibility.maxSeq, visibility.minCreatedAt, visibility.maxCreatedAt].every(
-          Number.isFinite,
-        ) ||
-        visibility.minSeq > visibility.maxSeq ||
-        visibility.minCreatedAt > visibility.maxCreatedAt
-      )
-        return false;
-      if (!(await sessionForViewer(sessionId, principalId))) return false;
-      const window = (await deps.sessions.participantWindowsOf(sessionId)).find((w) => w.principalId === principalId);
-      return (
-        !!window &&
-        itemWithinTenure({ seq: visibility.minSeq, createdAt: visibility.minCreatedAt }, window) &&
-        itemWithinTenure({ seq: visibility.maxSeq, createdAt: visibility.maxCreatedAt }, window)
-      );
+    async canViewSessionSnapshot(sessionId, principalId) {
+      return !!(await sessionForViewer(sessionId, principalId));
     },
 
     async getSessionForViewer(sessionId, principalId, window) {
@@ -1046,9 +1028,7 @@ export function createSessionMethods(
         await deps.sessions.setParentSession(sessionId, null);
         return { detached: true as const };
       };
-      return deps.advisoryLock.withLock("session-tree-admission", () =>
-        deps.advisoryLock.withLock("session-run-admission", detach),
-      );
+      return deps.advisoryLock.withLock("session-tree-admission", detach);
     },
 
     async cancelSessionGoal(sessionId, principalId) {
@@ -1074,8 +1054,11 @@ export function createSessionMethods(
       const session = await sessionForViewer(sessionId, principalId);
       if (!session) return null;
       const parsed = parseScopeId(session.scopeId);
-      const projectMembers = parsed.kind === "group" ? await deps.projects?.members(parsed.ref) : undefined;
-      return deps.orchestrator.regenerateTitle(sessionId, principalId, projectMembers);
+      return deps.orchestrator.regenerateTitle(
+        sessionId,
+        principalId,
+        parsed.kind === "group" && projectIdFromGroupRef(parsed.ref) !== null,
+      );
     },
 
     async forkSession(sessionId, principalId, opts) {
@@ -1084,14 +1067,7 @@ export function createSessionMethods(
       if (!source) return null;
       const parsed = parseScopeId(source.scopeId);
       const fork = async (projectMembers?: readonly string[]) => {
-        let visible = (await transcripts.forViewer(sessionId, principalId)).items;
-        if (projectMembers?.length) {
-          const views = await Promise.all(
-            projectMembers.map(async (memberId) => (await transcripts.forViewer(sessionId, memberId)).items),
-          );
-          const common = commonEntrySeqs(views);
-          visible = visible.filter((item) => common.has(item.seq));
-        }
+        const visible = (await transcripts.forViewer(sessionId, principalId)).items;
         const upToSeq = opts?.upToSeq;
         const copied = upToSeq === undefined ? visible : visible.filter((item) => item.seq <= upToSeq);
         if (

@@ -3,6 +3,7 @@ import type { PendingApprovalRecord } from "../types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import { principalDestination } from "../reach/reach.ts";
+import { withTenant } from "../tenants/context.ts";
 
 export function approvalDeliveryKey(id: string, record: Pick<PendingApprovalRecord, "createdAt">): string {
   return `command-approval:${id}:${record.createdAt ?? 0}`;
@@ -41,7 +42,8 @@ export function createApprovalStore(
       await deliver(id, record).catch(swallowAs("approvals: enqueue delivery", undefined));
     },
     async deliverPending(): Promise<void> {
-      for (const [id, record] of await backing.entries()) await deliver(id, record);
+      for (const { tenantId, id, value } of await backing.acrossTenants())
+        await withTenant(tenantId, () => deliver(id, value));
     },
   };
 }

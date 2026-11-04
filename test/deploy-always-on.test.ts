@@ -187,8 +187,8 @@ test("reaper re-checks alwaysOn under the deploy lock (no stale-snapshot destroy
   });
   const d = await deploy.deploy({ ...owner, entrypoint: "x", files: [] });
 
-  const realList = deployStore.list.bind(deployStore);
-  deployStore.list = async () => {
+  const realList = deployStore.acrossTenants.bind(deployStore);
+  deployStore.acrossTenants = async () => {
     const snapshot = (await realList()).map((x) => ({ ...x, alwaysOn: undefined }));
     await deployStore.setAlwaysOn(d.id, true);
     return snapshot;
@@ -218,8 +218,8 @@ test("maintainDeployments skips a deployment whose flag was turned off after the
   const { deploy, deployStore } = ctx;
   const d = await deploy.deploy({ ...owner, entrypoint: "x", files: [] });
   await deploy.setDeploymentAlwaysOn(d.id, true);
-  const realList = deployStore.list.bind(deployStore);
-  deployStore.list = async () => {
+  const realList = deployStore.acrossTenants.bind(deployStore);
+  deployStore.acrossTenants = async () => {
     const snapshot = await realList();
     await deployStore.setAlwaysOn(d.id, false);
     return snapshot;
