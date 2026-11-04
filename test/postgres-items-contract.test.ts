@@ -16,6 +16,7 @@ import {
 } from "../src/sessions/tool-output.ts";
 import { scopeId } from "../src/types.ts";
 import type { Item, NewItem } from "../src/sessions/items.ts";
+import { seedInstallTenant } from "./support/tenant-seed.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the items contract test";
@@ -37,6 +38,7 @@ async function withSchema(
   await admin.query(`CREATE SCHEMA ${schema}`);
   const url = new globalThis.URL(URL!);
   url.searchParams.set("options", `-c search_path=${schema}`);
+  await seedInstallTenant(url.toString());
   const raw = new pg.Pool({ connectionString: url.toString() });
   try {
     await fn({ raw, url: url.toString(), store: createPostgresSessionStore(url.toString()) });

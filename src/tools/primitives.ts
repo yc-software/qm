@@ -1,4 +1,6 @@
+import { trialCronScript, type CronScriptTrial } from "../cron/script.ts";
 import type { AdminToolAccess } from "./admin.ts";
+import type { SelfApiCall } from "./self-api.ts";
 import { parkedOutputKey, type ToolOutputStore } from "../sessions/tool-output.ts";
 import { rankedSkills } from "../skills/materialize.ts";
 import type { SkillResolution } from "../skills/skill-store.ts";
@@ -195,6 +197,7 @@ export type AttachFiles = (files: readonly OutboundFile[], sandboxId?: string) =
 export interface ToolContext extends SurfaceToolDeps {
   installSharedCanvas?: (fileId: string) => Promise<string | null>;
   admin?: AdminToolAccess;
+  selfApi?: SelfApiCall;
   runtime?(request: RuntimeRequest, signal?: AbortSignal): Promise<RuntimeResult>;
   attach: AttachFiles;
   sessionSyscalls?: SessionSyscalls;
@@ -467,6 +470,7 @@ export const CONTROL_UNAVAILABLE: ControlUnavailable = {
 export interface ToolContextDeps {
   desktopClientId?: string;
   admin?: AdminToolAccess;
+  selfApi?: SelfApiCall;
   installSharedCanvas?: (fileId: string) => Promise<string | null>;
   sandbox: Sandbox;
   commandCredentials?: readonly CommandCredential[];
@@ -627,6 +631,11 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
 
   const runId = deps.runId;
 
+  const trialOn =
+    (tools: Pick<ToolContext, "execute">): CronScriptTrial =>
+    (script) =>
+      trialCronScript(script, (command, opts) => tools.execute(command, opts), deps.toolOutput);
+
   function controlOp<R>(
     run: (control: ControlService, claims: CapabilityClaims) => Promise<R>,
   ): Promise<R | ControlUnavailable> {
@@ -716,6 +725,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
 
   return {
     ...(deps.admin ? { admin: deps.admin } : {}),
+    ...(deps.selfApi ? { selfApi: deps.selfApi } : {}),
     ...(deps.installSharedCanvas ? { installSharedCanvas: deps.installSharedCanvas } : {}),
     ...(deps.toolOutput ? { toolOutput: deps.toolOutput } : {}),
     ...(deps.sandboxResources && deps.accessSandboxResource
@@ -1249,11 +1259,15 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       return deps.monitorBroker!.unwatch(monitorId);
     },
 
-    cronCreate: (req) => controlOp((c, cl) => c.createCron(req, cl)),
+    cronCreate(req) {
+      return controlOp((c, cl) => c.createCron(req, cl, trialOn(this)));
+    },
     cronList: () => controlOp((c, cl) => c.listCrons(cl)),
     cronGet: (id) => controlOp((c, cl) => c.getCron(id, cl)),
     cronRuns: (id, req) => controlOp((c, cl) => c.getCronRuns(id, req ?? {}, cl)),
-    cronPatch: (id, req) => controlOp((c, cl) => c.patchCron(id, req, cl)),
+    cronPatch(id, req) {
+      return controlOp((c, cl) => c.patchCron(id, req, cl, trialOn(this)));
+    },
     cronNote: (id, note) => controlOp((c, cl) => c.noteCron(id, note, cl)),
     cronDelete: (id) => controlOp((c, cl) => c.deleteCron(id, cl)),
     cronSetEnabled: (id, enabled) => controlOp((c, cl) => c.setCronEnabled(id, enabled, cl)),

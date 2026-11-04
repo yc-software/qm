@@ -537,7 +537,7 @@ test("expiry classifies an external as guest, and the signed broker check answer
   }
 });
 
-test("the directory resolves participants without loading their session windows", async (t) => {
+test("the directory resolves participants without loading every participant row", async (t) => {
   const s = start();
   t.after(s.close);
   for (const thread of ["first", "second"]) {
@@ -547,7 +547,7 @@ test("the directory resolves participants without loading their session windows"
   }
   await s.built.identity.deactivate("inactive");
   t.mock.method(s.built.sessions, "listParticipants", () => {
-    throw new Error("Directory lookup must not load participant windows");
+    throw new Error("Directory lookup must not load every participant row");
   });
   const alice = { principalId: "alice", displayName: "alice", type: "internal" };
   assert.deepEqual(await s.built.app.directoryMembers(), [alice]);

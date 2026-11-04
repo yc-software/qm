@@ -48,20 +48,36 @@ export function parkedOutputKey(path: string): ParkedOutputKey | null {
   return name && !name.includes("/") ? { digest: md5Hex(name), callId: name } : null;
 }
 
-export function cutToolOutput(
+export function cutToInline(
   text: string,
   inlineTokens: number,
-  callId: string,
+  where = "",
 ): { text: string; shownChars: number } | null {
   if (inlineTokens <= 0) return null;
   const budget = inlineTokens * CHARS_PER_TOKEN;
   if (text.length <= budget) return null;
   const head = headSlice(text, Math.floor(budget / 2));
   const tail = tailSlice(text, Math.floor(budget / 2));
-  const marker =
-    `\n…[output cut: showing the first ${head.length} and last ${tail.length} of ${text.length} chars. ` +
-    `The full output is in ${TOOL_OUTPUT_PATH}${DIGEST_DIR}${md5Hex(callId)}; reading it with the files tool copies it onto the computer (kept 30 days)]…\n`;
+  const marker = `\n…[output cut: showing the first ${head.length} and last ${tail.length} of ${text.length} chars.${where}]…\n`;
   return { text: head + marker + tail, shownChars: head.length + tail.length };
+}
+
+export function cutToolOutput(
+  text: string,
+  inlineTokens: number,
+  callId: string,
+): { text: string; shownChars: number } | null {
+  return cutToInline(
+    text,
+    inlineTokens,
+    ` The full output is in ${TOOL_OUTPUT_PATH}${DIGEST_DIR}${md5Hex(callId)}; reading it with the files tool copies it onto the computer (kept 30 days)`,
+  );
+}
+
+export async function inlineTokensOf(store: Pick<ToolOutputStore, "inlineTokens"> | undefined): Promise<number> {
+  return store
+    ? store.inlineTokens().catch(swallowAs("tool output: inline cap", DEFAULT_INLINE_TOKENS))
+    : DEFAULT_INLINE_TOKENS;
 }
 
 export async function parkIfOverCap(
@@ -69,7 +85,7 @@ export async function parkIfOverCap(
   text: string,
   callId: string,
 ): Promise<{ text: string; output: ToolOutputRef } | null> {
-  const inlineTokens = await store.inlineTokens().catch(swallowAs("tool output: inline cap", DEFAULT_INLINE_TOKENS));
+  const inlineTokens = await inlineTokensOf(store);
   const cut = cutToolOutput(text, inlineTokens, callId);
   if (!cut) return null;
   const blob = await store.save(text).catch(swallowAs("tool output: park full text", null));
@@ -90,15 +106,17 @@ export function createPostgresToolOutputStore(opts: {
 }): ToolOutputStore {
   const now = opts.now ?? (() => Date.now());
   let setting: { value: number; at: number } | null = null;
-  let tenant: Promise<{ id: string; bytes: DurableByteStore }> | null = null;
-  const tenantBytes = (): Promise<{ id: string; bytes: DurableByteStore }> =>
-    (tenant ??= opts.pool.q("SELECT qm_tenant_id()::text AS id").then((rows) => {
-      const id = rows[0]?.id as string;
-      return { id, bytes: opts.bytesFor(`${TOOL_OUTPUT_PATH}${id}/`) };
-    })).catch((err: unknown) => {
-      tenant = null;
-      throw err;
-    });
+  const stores = new Map<string, DurableByteStore>();
+  const tenantBytes = async (): Promise<{ id: string; bytes: DurableByteStore }> => {
+    const rows = await opts.pool.q("SELECT qm_bound_tenant()::text AS id");
+    const id = String(rows[0]?.id);
+    let bytes = stores.get(id);
+    if (!bytes) {
+      bytes = opts.bytesFor(`${TOOL_OUTPUT_PATH}${id}/`);
+      stores.set(id, bytes);
+    }
+    return { id, bytes };
+  };
   return {
     async inlineTokens() {
       if (setting && now() - setting.at < SETTING_CACHE_MS) return setting.value;
@@ -130,7 +148,7 @@ export function createPostgresToolOutputStore(opts: {
         `SELECT b.storage_key, i.created_at <= now() - interval '30 days' AS expired
            FROM items i
       LEFT JOIN blobs b ON b.tenant_id = i.tenant_id AND b.sha256 = i.blob_sha
-          WHERE i.tenant_id = qm_tenant_id() AND i.session_id = $1 AND i.kind = 'ToolResult'
+          WHERE i.tenant_id = qm_bound_tenant() AND i.session_id = $1 AND i.kind = 'ToolResult'
             AND md5(i.call_id) = $2 AND ($3::text IS NULL OR i.call_id = $3)
             AND i.blob_sha IS NOT NULL`,
         [sessionId, ref.digest, ref.callId ?? null],

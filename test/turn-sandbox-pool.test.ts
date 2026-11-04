@@ -102,6 +102,7 @@ function fixture(over: { holdKeepsWarm?: boolean | Error; live?: string[] | Erro
     turnSessionDir: "turn/s",
     turnFilesDir: "turn/s/t",
     connectorEnv: {},
+    egressTokenForPolicy: async () => undefined,
     openResourceAccess: true,
     visibleSkillsForTurn: async () => [],
   } as unknown as TurnSandboxContext);
@@ -179,6 +180,14 @@ for (const [kind, { id, open }] of Object.entries(kinds)) {
     }
   });
 }
+
+test("a scratch computer is destroyed at turn end even when its job or another turn would keep a computer warm", async () => {
+  const f = fixture({ holdKeepsWarm: true, live: ["scratch-1", "box-2"] });
+  const scratch = await f.turn.provisionScratch();
+  const box = await f.turn.provision();
+  await f.turn.reclaimBox();
+  assert.deepEqual(f.released(), { [scratch.id]: { destroy: true }, [box.id]: { keepWarm: true } });
+});
 
 test("concurrent opens of one computer share a single provision", async () => {
   const f = fixture();

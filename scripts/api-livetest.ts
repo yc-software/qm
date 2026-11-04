@@ -3,8 +3,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig } from "../src/config.ts";
-import { buildApp } from "../src/wiring.ts";
-import { createInsecureTestServer } from "../src/api/server.ts";
+import { startQm } from "../src/start.ts";
 import { scopeId } from "../src/types.ts";
 
 if (!process.env.ANTHROPIC_API_KEY) {
@@ -13,15 +12,15 @@ if (!process.env.ANTHROPIC_API_KEY) {
 }
 
 const DATA = mkdtempSync(join(tmpdir(), "api-livetest-"));
-const built = buildApp({
+const { built, server } = await startQm({
   ...loadConfig(),
   port: 0,
   dataDir: DATA,
+  signingSecret: undefined,
+  allowUnauthenticatedCore: true,
 });
 await built.config.setSoul(scopeId("personal", "USOUL"), "When you reply, always end with the exact token --AGENT-X.");
 
-const server = createInsecureTestServer(built.app);
-await new Promise<void>((r) => server.listen(0, r));
 const base = `http://localhost:${(server.address() as AddressInfo).port}`;
 
 async function post(body: unknown): Promise<{ http: number; json: any }> {
@@ -281,5 +280,4 @@ for (const [i, c] of cases.entries()) {
   }
 }
 console.log(`\n${pass}/${cases.length} passed`);
-await new Promise<void>((r) => server.close(() => r()));
 process.exit(pass === cases.length ? 0 : 1);

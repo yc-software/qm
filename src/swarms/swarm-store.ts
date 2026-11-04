@@ -1,3 +1,4 @@
+import type { Claimed } from "../tenants/claim.ts";
 import type { GoalCreateInput } from "../agent/goal.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { withPgTransaction, type PgPool } from "../persistence/pg-pool.ts";
@@ -108,7 +109,7 @@ export interface SwarmStore {
   get(id: string): Promise<Swarm | null>;
   create(swarm: Swarm, fence?: SwarmRunFence): Promise<Swarm>;
   update(id: string, mutate: (swarm: Swarm) => void, fence?: SwarmRunFence): Promise<Swarm>;
-  pending(afterId?: string): Promise<Swarm[]>;
+  pending(afterId?: string): Promise<Array<Claimed<Swarm>>>;
 }
 
 export interface SwarmStorage extends Omit<Swarm, "members" | "messages"> {
@@ -163,14 +164,14 @@ export function createSwarmStore(
         );
         if (!session.rowCount) throw new Error("capability session mismatch");
         await client.query(
-          "INSERT INTO durable_map_versions (tbl,v) VALUES ('swarms',1) ON CONFLICT (tbl) DO UPDATE SET v=durable_map_versions.v+1",
+          "INSERT INTO durable_map_versions (tbl,v) VALUES ('swarms',1) ON CONFLICT (tenant_id, tbl) DO UPDATE SET v=durable_map_versions.v+1",
         );
         const current = await client.query<{ json: SwarmStorage }>("SELECT json FROM swarms WHERE id=$1 FOR UPDATE", [
           id,
         ]);
         const next = mutate(current.rows[0]?.json ?? null);
         await client.query(
-          "INSERT INTO swarms (id,json) VALUES ($1,$2) ON CONFLICT (id) DO UPDATE SET json=EXCLUDED.json",
+          "INSERT INTO swarms (id,json) VALUES ($1,$2) ON CONFLICT (tenant_id, id) DO UPDATE SET json=EXCLUDED.json",
           [id, jsonbStringify(next)],
         );
         assertSwarmRun(fence, run);
@@ -223,13 +224,11 @@ export function createSwarmStore(
       return decode(updated);
     },
     async pending(afterId) {
-      return (
-        await backing.select({
-          where: { field: "pending", anyOfFold: ["true"] },
-          limit: SWARM_LIMITS.sweepBatch,
-          afterId,
-        })
-      ).map(decode);
+      return (await backing.acrossTenants())
+        .filter(({ id, value }) => value.pending && (afterId === undefined || id > afterId))
+        .sort((left, right) => (left.id < right.id ? -1 : Number(left.id > right.id)))
+        .slice(0, SWARM_LIMITS.sweepBatch)
+        .map(({ tenantId, value }) => ({ ...decode(value), tenantId }));
     },
   };
 }

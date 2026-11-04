@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Delivery, DeliveryProvenance, Destination, OutgoingAttachment, ScopeId } from "../types.ts";
 import type { TurnOrigin } from "../core/turn-origin.ts";
+import { createTenantListeners } from "../tenants/context.ts";
 
 export const DELIVERY_MAX_AGE_MS = 6 * 3_600_000;
 
@@ -33,6 +34,10 @@ export function turnDeliveryProvenance(input: {
   };
 }
 
+export interface ClaimOptions {
+  oldestPerConversation?: boolean;
+}
+
 export interface DeliveryStore {
   enqueue(input: {
     destination: Destination;
@@ -43,7 +48,9 @@ export interface DeliveryStore {
     shadow?: boolean;
   }): Promise<Delivery>;
   pending(type: string): Promise<Delivery[]>;
-  claimPending(type: string, ttlMs: number): Promise<Delivery[]>;
+  pendingAcrossTenants(type: string): Promise<Delivery[]>;
+  claimPending(type: string, ttlMs: number, opts?: ClaimOptions): Promise<Delivery[]>;
+  claimPendingAcrossTenants(type: string, ttlMs: number, opts?: ClaimOptions): Promise<Delivery[]>;
   listShadow(opts?: { limit?: number }): Promise<Delivery[]>;
   ack(id: string, at: number, slackApiMs?: number): Promise<void>;
   fail(id: string, reason: string, at: number): Promise<Delivery | null>;
@@ -54,7 +61,7 @@ export interface DeliveryStore {
   recordRecipientThread(id: string, recipientThreadRef: string, at: number): Promise<void>;
   listByRecipientThread(recipientThreadRef: string, opts?: { limit?: number }): Promise<Delivery[]>;
   listBySourceSession(sourceSessionId: string, sourceThreadRef: string, opts?: { limit?: number }): Promise<Delivery[]>;
-  onEnqueue(listener: () => void): () => void;
+  onEnqueue(listener: (type: string) => void): () => void;
 }
 
 export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore {
@@ -62,7 +69,7 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
   const deliveries = new Map<string, Delivery>();
   const byKey = new Map<string, string>();
   const claimedUntil = new Map<string, number>();
-  const enqueueListeners = new Set<() => void>();
+  const enqueueListeners = createTenantListeners<[string]>("delivery enqueue");
 
   const expireOveraged = (now: number): void => {
     for (const d of deliveries.values()) {
@@ -97,7 +104,7 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
           claimedUntil.delete(existing.id);
           if (input.shadow) existing.shadow = true;
           else delete existing.shadow;
-          if (!existing.shadow) for (const l of enqueueListeners) l();
+          if (!existing.shadow) enqueueListeners.emit(existing.destination.type);
         }
         return existing;
       }
@@ -114,25 +121,32 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
       };
       deliveries.set(delivery.id, delivery);
       byKey.set(delivery.idempotencyKey, delivery.id);
-      if (!delivery.shadow) for (const l of enqueueListeners) l();
+      if (!delivery.shadow) enqueueListeners.emit(delivery.destination.type);
       return delivery;
+    },
+    async pendingAcrossTenants(type) {
+      return this.pending(type);
+    },
+    async claimPendingAcrossTenants(type, ttlMs, opts) {
+      return this.claimPending(type, ttlMs, opts);
     },
     async pending(type) {
       return [...deliveries.values()].filter(
         (d) => d.deliveredAt === null && d.expiredAt === undefined && !d.shadow && d.destination.type === type,
       );
     },
-    async claimPending(type, ttlMs) {
+    async claimPending(type, ttlMs, opts) {
       const now = Date.now();
       expireOveraged(now);
-      const rows = [...deliveries.values()].filter(
-        (d) =>
-          d.deliveredAt === null &&
-          d.expiredAt === undefined &&
-          !d.shadow &&
-          d.destination.type === type &&
-          (claimedUntil.get(d.id) ?? 0) <= now,
+      const open = [...deliveries.values()].filter(
+        (d) => d.deliveredAt === null && d.expiredAt === undefined && !d.shadow && d.destination.type === type,
       );
+      const seen = new Set<string>();
+      const rows = open.filter((d) => {
+        const first = !seen.has(d.destination.target);
+        seen.add(d.destination.target);
+        return (claimedUntil.get(d.id) ?? 0) <= now && (first || !opts?.oldestPerConversation);
+      });
       for (const d of rows) claimedUntil.set(d.id, now + ttlMs);
       return rows;
     },
@@ -218,8 +232,7 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
         .slice(-limit);
     },
     onEnqueue(listener) {
-      enqueueListeners.add(listener);
-      return () => enqueueListeners.delete(listener);
+      return enqueueListeners.add(listener);
     },
   };
 }

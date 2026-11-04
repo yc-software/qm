@@ -74,6 +74,12 @@ Do not call Composio's callback completion API from the computer. Callback ident
 
 Tools don't transfer files: a local filename passed as an argument uploads nothing. The one exception is X images, below. When Composio is unavailable, use direct OAuth only if independently configured and authorized; do not use it to bypass a denial.
 
+### Gmail
+
+- Create drafts as HTML (`is_html: true`) with plain `<p>` paragraphs and no styling. Plain-text drafts have reached recipients hard-wrapped at about 70 characters.
+- Only the SENT label (`in:sent`) shows what was sent. Draft timestamps are creation times, not send times.
+- If the user states a fact about their own mail that conflicts with your read, re-check before contradicting them, and say exactly what you misread.
+
 ### Images for X posts
 
 X's post tool attaches media by ID but can't upload it. Upload the image from the computer first, then post with the returned ID:

@@ -26,15 +26,14 @@ export function computeUsers(input: UsersInput): AdminUserRow[] {
   };
 
   forEachAttributedTurn(input, {
-    onWindow(sessionId, w) {
-      const principalId = canonicalPerson(w.principalId);
+    onParticipant(sessionId, p) {
+      const principalId = canonicalPerson(p.principalId);
       const set = sessionsByUser.get(principalId);
       if (set) set.add(sessionId);
       else sessionsByUser.set(principalId, new Set([sessionId]));
-      bumpLastSeen(principalId, w.validFrom);
     },
-    onTurn(w, turn) {
-      const principalId = canonicalPerson(w.principalId);
+    onTurn(p, turn) {
+      const principalId = canonicalPerson(p.principalId);
       turnsByUser.set(principalId, (turnsByUser.get(principalId) ?? 0) + turn.turns);
       bumpLastSeen(principalId, turn.lastAt);
     },

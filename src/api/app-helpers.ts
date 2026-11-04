@@ -26,9 +26,10 @@ import {
   createMembershipControlsScope,
 } from "../resolution/scope-membership.ts";
 import { samePerson } from "../directory/person.ts";
+import type { DirectoryMember } from "../directory/directory-store.ts";
 import { actorAssertionActive } from "../identity/identity-service.ts";
 import type { Deployment } from "../deploy/deploy-store.ts";
-import { reportFailureAs, swallow } from "../util/errors.ts";
+import { reportFailureAs, swallow, swallowAs } from "../util/errors.ts";
 import { adminSessionUrl } from "../util/admin-links.ts";
 import {
   openGroupViaSurface,
@@ -115,16 +116,8 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     if ((await managedProjectMembership(session.scopeId, viewer)) === false) return [];
     const parsed = parseScopeId(session.scopeId);
     if (parsed.kind !== "group" || !isProjectGroupRef(parsed.ref)) return own;
-    const window = (await deps.sessions.participantWindowsOf(session.id)).find((candidate) =>
-      samePerson(candidate.principalId, viewer),
-    );
-    if (!window) return [];
-    return own.filter(
-      ({ record }) =>
-        record.createdAt !== undefined &&
-        record.createdAt >= window.validFrom &&
-        (window.validTo === null || record.createdAt < window.validTo),
-    );
+    const participants = await deps.sessions.participantsOf(session.id);
+    return participants.some((principalId) => samePerson(principalId, viewer)) ? own : [];
   }
 
   async function approvalVisibleToViewer(
@@ -356,6 +349,21 @@ export function createAppHelpers(deps: AppDeps, app: App) {
       ctx.sessionCount += scope.sessionCount;
       if (scope.lastActivityAt !== null) ctx.lastActivityAt = Math.max(ctx.lastActivityAt ?? 0, scope.lastActivityAt);
       byScope.set(scope.scopeId, ctx);
+    }
+    const slackGroups = [...byScope.values()].filter((ctx) => ctx.kind === "group" && !ctx.project);
+    const rosters = await deps.directory
+      .groupRosters(slackGroups.map((ctx) => parseScopeId(ctx.scopeId).ref))
+      .catch(swallowAs("contexts: group DM rosters", new Map<string, DirectoryMember[]>()));
+    for (const ctx of slackGroups) {
+      const roster = rosters.get(parseScopeId(ctx.scopeId).ref);
+      if (!roster) continue;
+      ctx.groupMembers = roster
+        .filter((member) => !samePerson(member.principalId, principalId))
+        .map((member) => ({
+          principalId: member.principalId,
+          displayName: member.displayName,
+          ...(member.avatarUrl?.startsWith("https://") ? { avatarUrl: member.avatarUrl } : {}),
+        }));
     }
     return [...byScope.values()].sort((a, b) => {
       if (a.kind === "personal") return -1;
@@ -656,7 +664,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
   async function reconcileProjectMember(project: Project, memberId: string, add: boolean): Promise<void> {
     const sessions = await deps.sessions.listByScope(projectScopeId(project.id));
     for (const session of sessions) {
-      if (add) await deps.sessions.addParticipant(session.id, memberId, undefined, { includeHistory: true });
+      if (add) await deps.sessions.addParticipant(session.id, memberId);
       else await deps.sessions.removeParticipant(session.id, memberId);
     }
   }

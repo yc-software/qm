@@ -69,7 +69,7 @@ import type { SurfaceRegistry } from "../../surfaces/registry.ts";
 
 export interface OrchestratorInput extends Omit<
   TurnRequest,
-  "surface" | "actor" | "conversation" | "idempotencyKey" | "spawned" | "async"
+  "surface" | "actor" | "conversation" | "spawned" | "async"
 > {
   modelAccount?: ModelAccount;
   surface?: string;
@@ -145,7 +145,7 @@ export interface OrchestratorDeps {
   memoryStrategy?: MemoryStrategy;
   skills?: SkillStore;
   skillBundles?: SkillBundleStore;
-  skillsReady?: Promise<void>;
+  skillsReady?: () => Promise<void>;
   approvals: DurableMap<PendingApprovalRecord>;
   approvalGrants: DurableMap<CommandApprovalGrant>;
   errors?: ErrorLog;
@@ -208,9 +208,5 @@ export interface Orchestrator {
     sessionId?: string;
     verifiedSwarm?: boolean;
   }): Promise<"allow" | "block" | "unscreened">;
-  regenerateTitle(
-    sessionId: string,
-    principalId: string,
-    participantIds?: readonly string[],
-  ): Promise<{ title: string | null } | null>;
+  regenerateTitle(sessionId: string, principalId: string, personal?: boolean): Promise<{ title: string | null } | null>;
 }

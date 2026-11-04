@@ -1,4 +1,6 @@
 import { isClaudeSubscriptionToken } from "./model/claude-subscription.ts";
+import { cacheTenant, isInstallTenant } from "./tenants/context.ts";
+import { loadedTenantSettings, tenantSettingsLoaded } from "./tenants/settings.ts";
 import {
   deploymentBrokerCredentialsFromEnv,
   type DeploymentBrokerCredential,
@@ -7,7 +9,7 @@ import { boolEnv, boolEnvStrict, numEnvStrict, optNum } from "./util/env.ts";
 import { sandboxSettings, type SandboxSettings } from "./sandbox/sandbox-settings.ts";
 import { deploySettings, type DeploySettings } from "./deploy/deploy-settings.ts";
 import type { ExternalSlackPolicies } from "./resolution/external-slack.ts";
-import { isBearerSecret, isStrongSigningSecret } from "./auth/source-auth.ts";
+import { isStrongSigningSecret } from "./auth/source-auth.ts";
 import { parseSandboxCapabilityTtlMs } from "./auth/capability-token.ts";
 import { existsSync, readdirSync } from "node:fs";
 import {
@@ -64,6 +66,7 @@ export interface Config extends SandboxSettings, DeploySettings {
   databaseUrl?: string;
   databaseCaCert?: string;
   databaseCaCertFile?: string;
+  databaseOwnerUrl?: string;
   databasePoolUrl?: string;
   databasePoolCaCert?: string;
   securityPosture: SecurityPosture;
@@ -105,18 +108,19 @@ export interface Config extends SandboxSettings, DeploySettings {
   backgroundWorkEnabled: boolean;
   backgroundDeploymentId?: string;
   deploymentControlSecret?: string;
-  spendExportToken?: string;
   buildSha?: string;
   monitorPollMs: number;
   skillSyncPollMs: number;
   monitorHeartbeatMs: number;
   signingSecret?: string;
+  operatorSigningSecret?: string;
   capabilitySecret?: string;
   capabilityTokenCompression?: boolean;
   portalIdentitySecret?: string;
   requireSignedPortalIdentity?: boolean;
   connectorSecretKey?: string;
   slackEventsPort?: number;
+  partnerChat?: { url: string; secret: string; label?: string };
   secretsBackend: "env" | "aws";
   secretsPrefix: string;
   apiBaseUrl?: string;
@@ -203,8 +207,16 @@ export function companySubscriptionAuth(config: Config): ModelProvider | undefin
 
 const DEFAULT_ORG_ID = "default-org";
 
+export function tenantOrgId(fallback: string): string {
+  const configured = loadedTenantSettings().orgId;
+  if (configured) return configured;
+  if (isInstallTenant()) return fallback;
+  if (!tenantSettingsLoaded()) throw new Error("This tenant's settings are not loaded for this work");
+  return cacheTenant();
+}
+
 export function orgId(): string {
-  return process.env.ORG_ID ?? DEFAULT_ORG_ID;
+  return tenantOrgId(process.env.ORG_ID ?? DEFAULT_ORG_ID);
 }
 
 export function orgScope(): string {
@@ -376,14 +388,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
         "AWS_ENDPOINT_URL_S3 must be an HTTP or HTTPS URL without credentials, query parameters, or a fragment",
       );
   }
-  const token = env.SPEND_EXPORT_TOKEN;
-  if (token) {
-    const reused = Object.entries(env).some(([name, value]) => name !== "SPEND_EXPORT_TOKEN" && value === token);
-    if (!isStrongSigningSecret(token) || !isBearerSecret(token) || reused)
-      throw new Error(
-        "SPEND_EXPORT_TOKEN must be at least 32 characters, have no surrounding whitespace and differ from every other environment value",
-      );
-  }
   if (env.BACKGROUND_DEPLOYMENT_ID !== undefined) {
     if (!env.BACKGROUND_DEPLOYMENT_ID.trim() || env.BACKGROUND_DEPLOYMENT_ID.length > 256)
       throw new Error("BACKGROUND_DEPLOYMENT_ID must be nonempty and at most 256 characters");
@@ -477,6 +481,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   );
   const slackEventsPort =
     env.SLACK_EVENTS_MODE?.trim() === "http" ? numEnvStrict("SLACK_EVENTS_PORT", env.SLACK_EVENTS_PORT) : undefined;
+  if (Boolean(env.PARTNER_CHAT_URL?.trim()) !== Boolean(env.PARTNER_CHAT_SECRET?.trim()))
+    throw new Error("PARTNER_CHAT_URL and PARTNER_CHAT_SECRET must be set together");
   if (
     slackEventsPort !== undefined &&
     (!Number.isSafeInteger(slackEventsPort) || slackEventsPort <= 0 || slackEventsPort > 65_535)
@@ -498,6 +504,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       ? { productAnalytics: { apiKey: env.POSTHOG_API_KEY.trim(), host: env.POSTHOG_HOST?.trim() } }
       : {}),
     ...(env.DATABASE_URL ? { databaseUrl: env.DATABASE_URL } : {}),
+    ...(env.DATABASE_OWNER_URL ? { databaseOwnerUrl: env.DATABASE_OWNER_URL } : {}),
     ...(env.DATABASE_POOL_URL ? { databasePoolUrl: env.DATABASE_POOL_URL } : {}),
     ...(env.DATABASE_POOL_CA_CERT ? { databasePoolCaCert: env.DATABASE_POOL_CA_CERT } : {}),
     ...(env.DATABASE_CA_CERT ? { databaseCaCert: env.DATABASE_CA_CERT } : {}),
@@ -575,13 +582,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(env.BACKGROUND_DEPLOYMENT_ID
       ? { backgroundDeploymentId: env.BACKGROUND_DEPLOYMENT_ID, deploymentControlSecret: env.DEPLOYMENT_CONTROL_SECRET }
       : {}),
-    ...(env.SPEND_EXPORT_TOKEN ? { spendExportToken: env.SPEND_EXPORT_TOKEN } : {}),
     ...(env.GIT_SHA ? { buildSha: env.GIT_SHA } : {}),
     monitorPollMs: numEnvStrict("MONITOR_POLL_MS", env.MONITOR_POLL_MS) ?? CONFIG_DEFAULTS.monitorPollMs,
     skillSyncPollMs: numEnvStrict("SKILL_SYNC_POLL_MS", env.SKILL_SYNC_POLL_MS) ?? CONFIG_DEFAULTS.skillSyncPollMs,
     monitorHeartbeatMs:
       (numEnvStrict("MONITOR_HEARTBEAT_SEC", env.MONITOR_HEARTBEAT_SEC) ?? CONFIG_DEFAULTS.monitorHeartbeatSec) * 1000,
     ...(env.CORE_SIGNING_SECRET ? { signingSecret: env.CORE_SIGNING_SECRET } : {}),
+    ...(env.OPERATOR_SIGNING_SECRET ? { operatorSigningSecret: env.OPERATOR_SIGNING_SECRET } : {}),
     ...((env.CAPABILITY_SECRET ?? env.CORE_SIGNING_SECRET)
       ? { capabilitySecret: env.CAPABILITY_SECRET ?? env.CORE_SIGNING_SECRET }
       : {}),
@@ -593,6 +600,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     requireSignedPortalIdentity: env.REQUIRE_SIGNED_PORTAL_IDENTITY === "1",
     ...(env.CONNECTOR_SECRET_KEY ? { connectorSecretKey: env.CONNECTOR_SECRET_KEY } : {}),
     ...(slackEventsPort !== undefined ? { slackEventsPort } : {}),
+    ...(env.PARTNER_CHAT_URL?.trim() && env.PARTNER_CHAT_SECRET?.trim()
+      ? {
+          partnerChat: {
+            url: env.PARTNER_CHAT_URL.trim(),
+            secret: env.PARTNER_CHAT_SECRET.trim(),
+            ...(env.PARTNER_CHAT_LABEL?.trim() ? { label: env.PARTNER_CHAT_LABEL.trim() } : {}),
+          },
+        }
+      : {}),
     secretsBackend: secretsBackendEnvStrict(env.SECRETS_BACKEND, env.SECRETS_PREFIX ?? ""),
     secretsPrefix: env.SECRETS_PREFIX ?? "",
     layerEnv: { ...env },

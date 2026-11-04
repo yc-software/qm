@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { buildAuthorizeUrl, exchangeCode, fetchUserinfo, pkcePair, verifyIdToken, type OidcConfig } from "./oidc.ts";
+import type { TenantSignIn } from "../../chassis/src/tenant-sign-in.ts";
 import { deriveKey, openTmp, randomToken, safeEqual, seal, type TmpClaims } from "./session.ts";
 
 export function trustedEntryConfig(env: NodeJS.ProcessEnv, publicUrl: string): OidcConfig | null {
@@ -37,6 +38,17 @@ export function trustedEntryConfig(env: NodeJS.ProcessEnv, publicUrl: string): O
     scopes: "openid profile",
     prompt: "login",
   };
+}
+
+export function tenantTrustedConfig(
+  env: NodeJS.ProcessEnv,
+  publicUrl: string,
+  signIn: TenantSignIn,
+): OidcConfig | null {
+  const raw = signIn.trustedOidc ?? env.PORTAL_TRUSTED_OIDC;
+  const secret = signIn.trustedClientSecret ?? env.PORTAL_TRUSTED_OIDC_CLIENT_SECRET;
+  const origin = signIn.publicUrl ? new URL(signIn.publicUrl).origin : publicUrl;
+  return trustedEntryConfig({ ...env, PORTAL_TRUSTED_OIDC: raw, PORTAL_TRUSTED_OIDC_CLIENT_SECRET: secret }, origin);
 }
 
 export function trustedPrincipal(issuer: string, sub: string): string {
