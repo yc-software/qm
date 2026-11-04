@@ -14,6 +14,8 @@ import { hashId } from "../util/crypto.ts";
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import type { CoreSearch } from "../search/core-search.ts";
 import type { ScopeId, Session, SpawnMeta, TurnOrigin } from "../types.ts";
+import { openRuntime, parentRuntime } from "./subagent-runtime.ts";
+import type { RuntimeChoice } from "../agent/agent.ts";
 import type { OrchestratorInput } from "../core/orchestrator/types.ts";
 import type { Run, RunStore } from "../runs/run-store.ts";
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
@@ -161,7 +163,7 @@ const READ_MAX_CHARS_CEILING = 20_000;
 const MAIL_ERROR_CAP = 1_000;
 const LAST_SAID_SCAN = 40;
 
-interface SessionOpenInput {
+export interface SessionOpenInput {
   requestId?: string;
   task: string;
   name?: string;
@@ -230,7 +232,7 @@ type SessionReadResult =
   | { ok: true; mode: "transcript"; sessionId: string; title: string; status: string; rendered: string }
   | { ok: false; message: string };
 
-interface SessionSyscallBinding {
+export interface SessionSyscallBinding {
   session: Session;
   scopeId: ScopeId;
   orgScopeId?: ScopeId;
@@ -255,7 +257,11 @@ interface SessionSyscallBinding {
     | "scopeVersion"
     | "sessionParticipantIds"
     | "surfaceOrigin"
+    | "model"
+    | "thinkingLevel"
+    | "fastMode"
   > & { origin?: OrchestratorInput["origin"] };
+  switchedRuntime?: () => RuntimeChoice | undefined;
 }
 
 export interface SessionSyscalls {
@@ -299,6 +305,7 @@ export interface SessionSyscallDeps {
   prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
   authorize?: (session: Session, actorId: string) => Promise<boolean>;
   validateRuntime?: (input: SessionOpenInput, scopeId: ScopeId) => Promise<void>;
+  defaultModel?: (scopeId: ScopeId) => Promise<string>;
   conversations?: {
     search?: CoreSearch["search"];
     list(actorId: string): Promise<Session[]>;
@@ -676,7 +683,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               const task = input.task?.trim();
               if (!task)
                 return { ok: false, message: "open requires a task: the full instruction the subagent works from." };
-              await deps.validateRuntime?.(input, binding.scopeId);
               const threadRef = `${SUBAGENT_THREAD_PREFIX}${
                 input.requestId
                   ? hashId([binding.session.id, binding.request.runId ?? "", input.requestId], 40)
@@ -688,6 +694,16 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 throw new Error("the requestId was already used for different work");
               const initialRun = await deps.runs.getByDedupKey(`subagent-open:${threadRef}`);
               if (existing && initialRun) return { ok: true, sessionId: existing.id, title: visibleTitle(existing) };
+              const runtime =
+                existing?.spawnMeta ??
+                (await openRuntime(
+                  input,
+                  parentRuntime(binding.request, binding.switchedRuntime?.()),
+                  async (choice) => {
+                    await deps.validateRuntime?.({ ...input, ...choice }, binding.scopeId);
+                  },
+                  async () => deps.defaultModel?.(binding.scopeId),
+                ));
               const child = await deps.sessions.getOrCreateByThread(
                 threadRef,
                 binding.session.type,
@@ -703,9 +719,9 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   origin: caller.origin,
                   unattendedGrants: caller.unattendedGrants,
                   readOnly: input.readOnly || binding.request.readOnly,
-                  model: input.model,
-                  thinkingLevel: input.thinkingLevel,
-                  fastMode: input.fastMode,
+                  model: runtime.model,
+                  thinkingLevel: runtime.thinkingLevel,
+                  fastMode: runtime.fastMode,
                   text: "",
                 }),
                 origin: caller.origin,

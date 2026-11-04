@@ -2120,6 +2120,10 @@ export function buildApp(
       const error = await requestedRuntimeError({ deps: runtimeDeps }, scope, requested, "subagent");
       if (error) throw new Error(error);
     },
+    async defaultModel(scope) {
+      return (await resolveRuntimeChoice(configStore, runtimeOrgScope, scope, fallback, {}, hydrateModelCatalog))
+        .modelId;
+    },
   });
   const uiState = artifactMap<PersistedUiState>("web_ui_state");
   const surfaces = createSurfaceRegistry({
