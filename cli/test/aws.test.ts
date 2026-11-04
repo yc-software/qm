@@ -2987,7 +2987,7 @@ test("AWS candidate builds honor their concurrency bound and join failures befor
 const fs = require("node:fs");
 const path = require("node:path");
 const args = process.argv.slice(2);
-if (args[0] === "login") process.exit(0);
+if (args[0] === "login" || args[1] === "inspect") process.exit(0);
 const name = args[args.indexOf("-t") + 1].split("/").at(-1).split(":")[0].slice(3);
 const dir = ${JSON.stringify(dir)};
 const events = ${JSON.stringify(events)};
@@ -3065,6 +3065,56 @@ fs.writeFileSync(path.join(dir, "started-" + name), "");
   }
 });
 
+test("AWS source builds reuse a per-repository registry cache when the builder can export one", async () => {
+  for (const driver of ["", "docker", "docker-container"]) {
+    const dir = mkdtempSync(join(tmpdir(), "qm-aws-build-cache-"));
+    const candidatePath = join(dir, "candidate.json");
+    const calls = join(dir, "docker-calls");
+    const fake = statefulAws(dir, config);
+    const docker = join(dir, "docker");
+    writeFileSync(
+      docker,
+      `#!${process.execPath}
+const args = process.argv.slice(2);
+if (args[1] === "inspect") console.log("Name:   default\\nDriver: ${driver}\\n");
+else if (args[0] !== "login") require("node:fs").appendFileSync(${JSON.stringify(calls)}, JSON.stringify(args) + "\\n");
+`,
+    );
+    chmodSync(docker, 0o755);
+    const priorPath = process.env.PATH;
+    process.env.PATH = `${dir}:${priorPath}`;
+    try {
+      await awsUp(config, dir, {
+        buildOnly: true,
+        buildFrom: true,
+        imageLabel: "cached-candidate",
+        candidateOut: candidatePath,
+      });
+      const builds = readFileSync(calls, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as string[]);
+      assert.equal(builds.length, runnableServices(config.services).length);
+      for (const args of builds) {
+        const tagged = args[args.indexOf("-t") + 1]!;
+        const ref = `${tagged.slice(0, tagged.lastIndexOf(":"))}:buildcache-${args[args.indexOf("--platform") + 1]!.split("/")[1]}`;
+        if (driver !== "docker-container") assert.ok(!args.includes("--cache-from") && !args.includes("--cache-to"));
+        else {
+          assert.equal(args[args.indexOf("--cache-from") + 1], `type=registry,ref=${ref}`);
+          assert.equal(
+            args[args.indexOf("--cache-to") + 1],
+            `type=registry,ref=${ref},mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true`,
+          );
+        }
+      }
+    } finally {
+      process.env.PATH = priorPath;
+      fake.restore();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
 test("cancelling candidate builds terminates and joins every Docker child without a manifest", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-aws-build-cancel-"));
   const candidatePath = join(dir, "candidate.json");
@@ -3076,7 +3126,7 @@ test("cancelling candidate builds terminates and joins every Docker child withou
 const fs = require("node:fs");
 const path = require("node:path");
 const args = process.argv.slice(2);
-if (args[0] === "login") process.exit(0);
+if (args[0] === "login" || args[1] === "inspect") process.exit(0);
 const name = args[args.indexOf("-t") + 1].split("/").at(-1).split(":")[0].slice(3);
 const dir = ${JSON.stringify(dir)};
 if (name === "core") process.on("SIGTERM", () => {});
