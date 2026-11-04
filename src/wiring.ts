@@ -392,22 +392,6 @@ import { PARTNER_CHAT_CLAIM_MS, partnerChatSender } from "./surfaces/partner-cha
 import { createPartnerChatNotices, partnerChatRunNotice } from "./surfaces/partner-chat/notices.ts";
 import { type probeModel, type ProviderKeys } from "./model/model-runtime.ts";
 
-const RETIRED_KEY_VALUE_TABLES = [
-  "turn_wall_clock_configs",
-  "connector_status",
-  "pinned_skills",
-  "internal_member_overrides",
-  "brain_clients",
-  "break_glass_grants",
-  "browse_provider_configs",
-  "device_flow_cutover",
-  "device_flow_cutover_resets",
-  "inbox_state",
-  "provider_request_capture_flag",
-  "run_state_retention_configs",
-  "slack_agent_requests",
-];
-
 export interface Runtime {
   start(): void;
   startBackground(): void;
@@ -1917,8 +1901,24 @@ export function buildApp(
     id: "durable-map/retired-tables/0001-drop",
     statements: [
       "DROP TABLE IF EXISTS rate_limit_windows",
-      ...RETIRED_KEY_VALUE_TABLES.map((table) => `DROP TABLE IF EXISTS ${table}`),
-      `DELETE FROM durable_map_versions WHERE tbl = ANY('{${RETIRED_KEY_VALUE_TABLES.join(",")}}')`,
+      ...[
+        "turn_wall_clock_configs",
+        "connector_status",
+        "pinned_skills",
+        "internal_member_overrides",
+        "brain_clients",
+        "break_glass_grants",
+        "browse_provider_configs",
+        "device_flow_cutover",
+        "device_flow_cutover_resets",
+        "inbox_state",
+        "provider_request_capture_flag",
+        "run_state_retention_configs",
+        "slack_agent_requests",
+      ].flatMap((table) => [
+        `DROP TABLE IF EXISTS ${table}`,
+        `DELETE FROM durable_map_versions WHERE tbl = '${table}'`,
+      ]),
     ],
   });
   pgArtifactMap.pool.registerMigration({
