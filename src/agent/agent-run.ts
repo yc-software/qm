@@ -1,3 +1,4 @@
+import { tenantEnv } from "../tenants/settings.ts";
 import {
   applyFastSpeed,
   buildModelRuntime,
@@ -861,6 +862,12 @@ export function applyReasoningMode<T>(payload: T, model: Model<Api>, level?: str
   return payload;
 }
 
+function tenantProviderKeys(keys: ProviderKeys): ProviderKeys {
+  const anthropic = tenantEnv("ANTHROPIC_API_KEY") ?? keys.anthropic;
+  const openrouter = tenantEnv("OPENROUTER_API_KEY") ?? keys.openrouter;
+  return { ...keys, ...(anthropic ? { anthropic } : {}), ...(openrouter ? { openrouter } : {}) };
+}
+
 export function createAgent(opts?: AgentOptions): Agent {
   const baseModelId = (): string =>
     resolveConfiguredModelId(opts?.resolveBaseModelId?.() ?? opts?.modelId, opts?.defaultModelId);
@@ -873,7 +880,7 @@ export function createAgent(opts?: AgentOptions): Agent {
         ...(opts?.openrouterApiKey ? { openrouter: opts.openrouterApiKey } : {}),
       };
   const resolveProviderKeys = async (): Promise<ProviderKeys> => ({
-    ...configuredProviderKeys,
+    ...tenantProviderKeys(configuredProviderKeys),
     ...(await opts?.resolveProviderKeys?.()),
   });
   const modelGateway = opts?.modelGateway;

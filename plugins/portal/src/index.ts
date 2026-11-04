@@ -1,3 +1,4 @@
+import { coreHostTenants, inHostTenant } from "../../chassis/src/host-tenant.ts";
 import {
   DESKTOP_LAUNCH_SCRIPT,
   DESKTOP_LAUNCH_SCRIPT_HASH,
@@ -907,6 +908,15 @@ function renewSessionCookie(req: IncomingMessage, res: ServerResponse): SessionC
   return renewed;
 }
 
+function isAppHost(req: IncomingMessage): boolean {
+  if (!APPS_DOMAIN) return false;
+  const host = (req.headers.host ?? "").toLowerCase().split(":")[0]!;
+  const apps = APPS_DOMAIN.toLowerCase();
+  return host === apps || host.endsWith(`.${apps}`);
+}
+
+const hostTenants = coreHostTenants(CORE, CORE_SIGNING_SECRET);
+
 const server = createServer((req, res) => {
   const startedAt = performance.now();
   let errorLogged = false;
@@ -919,7 +929,8 @@ const server = createServer((req, res) => {
         Math.round(performance.now() - startedAt),
       );
   });
-  void handle(req, res).catch((err: unknown) => {
+  const served = isAppHost(req) ? handle(req, res) : inHostTenant(hostTenants, req, res, () => handle(req, res));
+  void served.catch((err: unknown) => {
     errorLogged = true;
     reportBackendError(err);
     console.error("[portal] 500 %s %s: %s", req.method ?? "?", (req.url ?? "?").split("?")[0], String(err));

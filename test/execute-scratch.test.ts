@@ -298,6 +298,7 @@ test("execute masks credential output before model delivery, screening, and tran
     scopeLabel: scopeId("personal", "U1"),
     emit: async (entry) => {
       emitted.push(entry);
+      return undefined;
     },
     screenToolResult: async (input) => {
       screened.push(input);
@@ -372,6 +373,7 @@ test("execute records a safe provider-error result for native replay", async () 
     scopeLabel: scopeId("personal", "U1"),
     emit: async (entry) => {
       entries.push(entry);
+      return undefined;
     },
   });
   const result = await call(execute, { command: "diagnose", purpose: "Run test command" });

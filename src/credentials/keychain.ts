@@ -1409,8 +1409,7 @@ export function createKeychain(deps: {
         byTenant.set(tenantId, [...(byTenant.get(tenantId) ?? []), value]);
       const out: Array<Claimed<KeychainAsk>> = [];
       for (const [tenantId, asks] of byTenant)
-        for (const ask of await withTenant(tenantId, () => settleAsks(asks, nowAt)))
-          out.push({ ...ask, tenantId });
+        for (const ask of await withTenant(tenantId, () => settleAsks(asks, nowAt))) out.push({ ...ask, tenantId });
       return out;
     },
 
