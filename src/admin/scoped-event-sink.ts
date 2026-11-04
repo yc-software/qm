@@ -159,7 +159,7 @@ export function createPostgresEventSink<E>(cfg: PostgresEventSinkConfig<E>): Pos
       ...(cfg.schema?.expectedChecksum !== undefined ? { expectedChecksum: cfg.schema.expectedChecksum } : {}),
     },
     ...followUps,
-    tenantTables(scopedEventMigrationId(cfg.table, 100), [{ table: cfg.table, primaryKey: "id" }]),
+    ...tenantTables(scopedEventMigrationId(cfg.table, 100), [{ table: cfg.table, primaryKey: "id" }]),
   ]);
 
   const dbCols = cfg.columns.map(([db]) => db).join(", ");

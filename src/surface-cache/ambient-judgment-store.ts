@@ -62,7 +62,7 @@ export function createPostgresAmbientJudgmentStore(connectionString: string): Am
         ON ambient_judgments(org_id, decision)`,
       ],
     },
-    tenantTables("surface-cache/ambient-judgment/0002-tenants", [{ table: "ambient_judgments", primaryKey: "id" }]),
+    ...tenantTables("surface-cache/ambient-judgment/0002-tenants", [{ table: "ambient_judgments", primaryKey: "id" }]),
   ]);
   const row = (r: Record<string, unknown>): AmbientJudgment => ({
     id: Number(r.id),

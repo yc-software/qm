@@ -104,7 +104,7 @@ export function createPostgresProcessRegistry(connectionString: string): Process
         `CREATE INDEX IF NOT EXISTS idx_proc_scope_status ON process_sessions(scope_id, status)`,
       ],
     },
-    tenantTables("processes/registry/0005-tenants", [{ table: "process_sessions", primaryKey: "process_id" }]),
+    ...tenantTables("processes/registry/0005-tenants", [{ table: "process_sessions", primaryKey: "process_id" }]),
   ]);
 
   const migration = {

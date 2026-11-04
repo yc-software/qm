@@ -188,7 +188,7 @@ export const DIRECTORY_MIGRATIONS = [
     id: "directory/store/0005",
     statements: ["ALTER TABLE directory_members ADD COLUMN IF NOT EXISTS avatar_url TEXT"],
   },
-  tenantTables("directory/store/0006-tenants", [
+  ...tenantTables("directory/store/0006-tenants", [
     { table: "directory_members", primaryKey: "org_id, principal_id" },
     { table: "directory_channels", primaryKey: "org_id, channel_id" },
     { table: "directory_channel_members", primaryKey: "org_id, channel_id, principal_id" },

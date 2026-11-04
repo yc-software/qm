@@ -105,7 +105,7 @@ export const MEMORY_FACTS_MIGRATIONS = [
       "ALTER TABLE memory_facts ALTER COLUMN text_hash SET NOT NULL",
     ],
   },
-  tenantTables("memory/facts/0003-tenants", [{ table: "memory_facts", primaryKey: "id" }]),
+  ...tenantTables("memory/facts/0003-tenants", [{ table: "memory_facts", primaryKey: "id" }]),
 ];
 
 export function createPostgresMemoryService(connectionString: string): MemoryService {

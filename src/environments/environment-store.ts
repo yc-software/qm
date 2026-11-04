@@ -83,7 +83,7 @@ export function createPostgresEnvironmentStore(
         ON environment_attachments(environment_id)`,
       ],
     },
-    tenantTables(
+    ...tenantTables(
       "environments/store/0002-tenants",
       [
         { table: "environments", primaryKey: "id" },

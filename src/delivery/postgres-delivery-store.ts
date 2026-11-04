@@ -86,7 +86,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
         `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS failed_reason TEXT`,
       ],
     },
-    tenantTables("delivery/store/0008-tenants", [
+    ...tenantTables("delivery/store/0008-tenants", [
       {
         table: "deliveries",
         primaryKey: "id",

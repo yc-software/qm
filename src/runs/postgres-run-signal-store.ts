@@ -48,7 +48,7 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
         `CREATE UNIQUE INDEX IF NOT EXISTS run_signals_by_dedupe_key ON run_signals(dedupe_key) WHERE dedupe_key IS NOT NULL`,
       ],
     },
-    tenantTables("runs/signals/0003-tenants", [
+    ...tenantTables("runs/signals/0003-tenants", [
       {
         table: "run_signals",
         primaryKey: "id",

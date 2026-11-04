@@ -106,7 +106,7 @@ export function createPostgresChannelPolicyStore(connectionString: string): Chan
         ON channel_policy_history(org_id, container, id DESC)`,
       ],
     },
-    tenantTables("surface-cache/channel-policy/0002-tenants", [
+    ...tenantTables("surface-cache/channel-policy/0002-tenants", [
       { table: "channel_policy", primaryKey: "org_id, container" },
       { table: "channel_policy_history", primaryKey: "id" },
     ]),

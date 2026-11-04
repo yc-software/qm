@@ -61,7 +61,7 @@ export function createPostgresAckEmojiPickStore(connectionString: string): AckEm
         ON ack_emoji_picks(org_id, outcome)`,
       ],
     },
-    tenantTables("surface-cache/ack-emoji-pick/0002-tenants", [{ table: "ack_emoji_picks", primaryKey: "id" }]),
+    ...tenantTables("surface-cache/ack-emoji-pick/0002-tenants", [{ table: "ack_emoji_picks", primaryKey: "id" }]),
   ]);
   const row = (r: Record<string, unknown>): AckEmojiPick => ({
     id: Number(r.id),

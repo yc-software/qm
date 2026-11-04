@@ -134,7 +134,7 @@ END $base_schema$`,
         `DROP TABLE IF EXISTS tool_calls`,
       ],
     },
-    tenantTables("runs/store/0012-tenants", [
+    ...tenantTables("runs/store/0012-tenants", [
       {
         table: "runs",
         primaryKey: "id",

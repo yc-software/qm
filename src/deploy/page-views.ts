@@ -65,7 +65,7 @@ export function createPostgresAppPageViewLog(connectionString: string): AppPageV
         `CREATE INDEX IF NOT EXISTS app_page_views_by_at ON app_page_views(at)`,
       ],
     },
-    tenantTables("deploy/app-page-views/0002-tenants", [{ table: "app_page_views", primaryKey: "id" }]),
+    ...tenantTables("deploy/app-page-views/0002-tenants", [{ table: "app_page_views", primaryKey: "id" }]),
     durableMapTenancy("deployments"),
     {
       id: "durable-map/deployments/0012-page-views-tenants",

@@ -108,6 +108,18 @@ export interface TenantForeignKey {
   onDelete?: "CASCADE";
 }
 
+function lookupIndexes({ table, primaryKey, unique = [] }: TenantTable): string[] {
+  return [
+    ...(primaryKey === undefined
+      ? []
+      : [`CREATE INDEX CONCURRENTLY IF NOT EXISTS ${table}_key_lookup ON ${table}(${primaryKey})`]),
+    ...unique.map(
+      ({ name, columns, where }) =>
+        `CREATE INDEX CONCURRENTLY IF NOT EXISTS ${name}_lookup ON ${table}(${columns})${where ? ` WHERE ${where}` : ""}`,
+    ),
+  ];
+}
+
 function typedTableStatements({ table, primaryKey, unique = [] }: TenantTable): string[] {
   return [
     tenantColumn(table),
@@ -130,8 +142,9 @@ export function tenantTables(
     before = [],
     after = [],
   }: { foreignKeys?: readonly TenantForeignKey[]; before?: readonly string[]; after?: readonly string[] } = {},
-): PgMigrationDefinition {
-  return {
+): PgMigrationDefinition[] {
+  const lookups = tables.flatMap(lookupIndexes);
+  const main = {
     id,
     statements: [
       `SET LOCAL lock_timeout = '5s'`,
@@ -145,6 +158,7 @@ export function tenantTables(
       ...after,
     ],
   };
+  return lookups.length ? [main, { id: `${id}-lookups`, statements: lookups }] : [main];
 }
 
 export function createIfParentTenantKeyed(

@@ -23,7 +23,7 @@ export function createPostgresRunActivityStore(connectionString: string): RunAct
   const pg = createPgPool(connectionString, [
     ...TENANCY,
     { id: "runs/activity/0001", statements: SCHEMA },
-    tenantTables("runs/activity/0002-tenants", [{ table: "run_activity", primaryKey: "id" }]),
+    ...tenantTables("runs/activity/0002-tenants", [{ table: "run_activity", primaryKey: "id" }]),
   ]);
   const q = pg.query;
   let nextPruneAt = Number.NEGATIVE_INFINITY;

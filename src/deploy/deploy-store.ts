@@ -148,6 +148,13 @@ interface DeployAccess {
   findByName?(name: string): Promise<Deployment | null>;
 }
 
+const NAME_LOOKUP = {
+  id: "durable-map/deployments/0011-access-tenants-name-lookup",
+  statements: [
+    `CREATE INDEX CONCURRENTLY IF NOT EXISTS deployments_name_lookup ON deployments ((json->>'name')) WHERE json->>'name' IS NOT NULL`,
+  ],
+};
+
 const ACCESS_TENANCY = tenantTables(
   "durable-map/deployments/0011-access-tenants",
   [{ table: "deployment_access", primaryKey: "id" }],
@@ -185,7 +192,14 @@ function createPgDeployAccess(pg: PgPool): DeployAccess {
     "deployment_access",
     "CREATE TABLE deployment_access (id TEXT NOT NULL, last_access_at BIGINT NOT NULL)",
   );
-  const migrations = [...TENANCY, preKeyed, migration, durableMapTenancy("deployments"), ACCESS_TENANCY];
+  const migrations = [
+    ...TENANCY,
+    preKeyed,
+    migration,
+    durableMapTenancy("deployments"),
+    ...ACCESS_TENANCY,
+    NAME_LOOKUP,
+  ];
   for (const definition of migrations) pg.registerMigration(definition);
   let readyP: Promise<void> | null = null;
   function ready(): Promise<void> {

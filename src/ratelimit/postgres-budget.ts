@@ -26,7 +26,7 @@ export function createPostgresBudgetTracker(
         `CREATE INDEX IF NOT EXISTS budget_spend_by_principal_at ON budget_spend(principal_id, at)`,
       ],
     },
-    tenantTables("ratelimit/budget/0002-tenants", [{ table: "budget_spend", primaryKey: "id" }]),
+    ...tenantTables("ratelimit/budget/0002-tenants", [{ table: "budget_spend", primaryKey: "id" }]),
   ]);
 
   return {
