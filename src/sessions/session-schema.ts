@@ -397,7 +397,7 @@ BEGIN
         AND COALESCE(request->'swarm', 'null') IN ('null', 'false')
       ORDER BY created_at DESC, seq DESC LIMIT 1
     ) public ON x.thread_ref NOT LIKE 'agent:main:subagent:%' AND x.thread_ref NOT LIKE 'swarm:%'
-    WHERE x.id = ANY(page)
+    WHERE x.id = ANY(page) AND ((x.surface = 'slack' AND x.slack_binding IS NULL) OR x.runtime IS NULL OR x.spawn_meta IS NULL)
   ) facts
   WHERE s.id = facts.id
     AND ((s.slack_binding IS NULL AND facts.slack_binding IS NOT NULL) OR (s.runtime IS NULL AND facts.runtime IS NOT NULL)
