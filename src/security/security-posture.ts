@@ -1,4 +1,4 @@
-import type { OverheardMessage, ScopeId } from "../types.ts";
+import type { OverheardMessage, ScopeId, TurnOrigin } from "../types.ts";
 
 export const SECURITY_POSTURES = ["dangerous", "auto", "strict"] as const;
 export type SecurityPosture = (typeof SECURITY_POSTURES)[number];
@@ -163,9 +163,7 @@ export function parseSecurityScreenVerdict(output: string | undefined): Security
 interface SecurityScreenInput {
   surface?: string;
   text: string;
-  triggered?: boolean;
-  unprompted?: boolean;
-  securityScreenData?: string;
+  origin?: TurnOrigin;
   verifiedSwarm?: boolean;
   verifiedSessionMessage?: boolean;
   overheard?: Array<Pick<OverheardMessage, "role" | "name" | "text">>;
@@ -182,12 +180,13 @@ export interface SecurityScreenPayload {
 
 export function securityScreenPayload(input: SecurityScreenInput): SecurityScreenPayload | null {
   const payloads: Array<{ source: string; content: string }> = [];
+  const origin = input.origin;
   if (
-    input.triggered &&
+    origin?.kind === "automation" &&
     input.surface &&
-    (input.securityScreenData !== undefined || DATA_BEARING_SURFACES.has(input.surface))
+    (origin.screenData !== undefined || DATA_BEARING_SURFACES.has(input.surface))
   ) {
-    const content = input.securityScreenData ?? input.text;
+    const content = origin.screenData ?? input.text;
     let source = input.surface;
     if (input.verifiedSessionMessage) source = "session-delegation";
     if (input.verifiedSwarm) source = "swarm-delegation";
@@ -220,7 +219,7 @@ const SCREEN_CHUNK_CHARS = 7_500;
 const SCREEN_CHUNK_OVERLAP = 500;
 
 function boundedChunk(surface: string, slice: string, out: string[]): void {
-  const payload = securityScreenPayload({ surface, text: "", triggered: true, securityScreenData: slice });
+  const payload = securityScreenPayload({ surface, text: "", origin: { kind: "automation", screenData: slice } });
   if (!payload) return;
   if (!payload.truncated || slice.length <= 1) {
     out.push(payload.content);

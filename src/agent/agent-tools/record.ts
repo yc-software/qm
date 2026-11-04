@@ -24,7 +24,7 @@ function isPolicyNotice(summary: Record<string, unknown>): boolean {
 export const MAX_TOOL_RESULT_CHARS = 100_000;
 const TRUNCATED_TAIL_CHARS = 10_000;
 
-function capResultText(t: string): string {
+export function capResultText(t: string): string {
   if (t.length <= MAX_TOOL_RESULT_CHARS) return t;
   const notice =
     `\n…[truncated — full result was ${t.length} chars and the middle was dropped; ` +

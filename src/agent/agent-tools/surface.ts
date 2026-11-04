@@ -10,7 +10,8 @@ function capText(t: string): string {
 export function surfaceTool(kit: ToolKit) {
   const { ref, opts, recordCall, recordResult, recordExternalResult } = kit;
   const surfaceName = opts?.surfaceName ?? "slack";
-  const surfaceLabel = surfaceName === "slack" ? "Slack" : surfaceName;
+  const surfaceLabel = opts?.surfacePrompt?.label ?? surfaceName;
+  const mentionSyntax = opts?.surfacePrompt?.mentionSyntax;
   const surface = defineTool({
     name: surfaceName,
     label: surfaceName,
@@ -45,9 +46,7 @@ export function surfaceTool(kit: ToolKit) {
         Type.String({
           description:
             "post/reach: the message to send. edit: the new message content. Use Markdown, including [label](url) links; the surface renders it." +
-            (surfaceName === "slack"
-              ? " To @-mention on Slack, use `<@U…>` for a person or `<!subteam^S…>` for a user group (ids appear in the conversation roster and in read / search results). A typed `@name` is plain text and pings no one; @here/@channel/@everyone never ping."
-              : ""),
+            (mentionSyntax ? ` ${mentionSyntax}` : ""),
         }),
       ),
       channel: Type.Optional(

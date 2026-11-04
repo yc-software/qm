@@ -1,6 +1,7 @@
 import { createSlackCoreClient, type SlackCoreClientDeps } from "../src/api/slack-core-client.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { slackSurfaceOrigin } from "../src/surfaces/slack/adapter.ts";
 import {
   companySlackActor,
   externalSlackNamespace,
@@ -158,8 +159,8 @@ test("external account directory lookups admit only company workspace DMs", asyn
     assert.equal(turns.length, trusted ? 1 : 0);
     assert.deepEqual(personalScopes, trusted ? ["personal:employee@company.example"] : []);
     if (trusted) {
-      assert.equal(turns[0]?.slackSource?.externalPolicyNamespace, externalSlackNamespace("TPARTNER", policy));
-      assert.equal(turns[0]?.externalSlack, undefined);
+      assert.equal(turns[0]?.surfaceOrigin?.policyNamespace, externalSlackNamespace("TPARTNER", policy));
+      assert.equal(turns[0]?.surfaceOrigin?.audience, "internal");
     }
   }
 });
@@ -184,7 +185,12 @@ function handoffFixture() {
   const source: TurnRequest = {
     surface: "slack",
     actor: { externalId: "employee@company.example" },
-    externalSlack: { accountId: "partner", teamId: "TPARTNER", userId: "UEMPLOYEE", ...policy },
+    surfaceOrigin: slackSurfaceOrigin({
+      accountId: "partner",
+      teamId: "TPARTNER",
+      userId: "UEMPLOYEE",
+      external: policy,
+    }),
     conversation: {
       kind: "group",
       threadRef: "external-slack:TPARTNER:policy:group:CEXTERNAL:1",
@@ -194,7 +200,7 @@ function handoffFixture() {
     text: "Invite Alex and Morgan next Tuesday.",
     priorTurns: [{ role: "user", text: "Alex: alex@outside.example; Morgan: morgan@outside.example" }],
     attachments: [{ name: "agenda.txt", mimetype: "text/plain", blobId: "public-agenda", sizeBytes: 8 }],
-    triggerTs: "1.0",
+    origin: { kind: "human", messageTs: "1.0" },
   };
   const submissions: Omit<TurnRequest, "surface">[] = [];
   const work = new Set<string>();
@@ -247,16 +253,14 @@ test("handoff preserves request and participant list, runs in requester DM, and 
   const request = f.submissions[0]!;
   assert.equal(request.actor.externalId, f.source.actor.externalId);
   assert.equal(request.conversation.kind, "dm");
-  assert.equal(request.externalSlack, undefined);
-  assert.equal(request.slackSource?.externalPolicyNamespace, externalSlackNamespace("TPARTNER", policy));
+  assert.equal(request.surfaceOrigin?.audience, "internal");
+  assert.equal(request.surfaceOrigin?.policyNamespace, externalSlackNamespace("TPARTNER", policy));
   assert.equal(request.deliveryTarget, "DPRIVATE");
   assert.match(request.conversation.threadRef, /^slack-account:TPARTNER:/);
   assert.match(request.text, /Invite Alex and Morgan/);
   assert.deepEqual(request.priorTurns, f.source.priorTurns);
   assert.deepEqual(request.attachments, f.source.attachments);
-  assert.equal(request.liveActor, true);
-  assert.equal(request.origin?.kind, "human");
-  assert.equal(request.triggerDestination, undefined);
+  assert.deepEqual(request.origin, { kind: "human" });
   assert.equal(request.deliveryCandidates, undefined);
 });
 
@@ -281,69 +285,74 @@ test("handoff fails closed on revoked identity, wrong workspace, and missing DM"
 });
 
 test("delivery recovery routes private result only through its originating account", async () => {
-  const posts: unknown[] = [];
-  const acks: string[] = [];
-  let pending = true;
-  const client = {
-    conversations: { history: async () => ({ messages: [] }) },
-    chat: {
-      postMessage: async (args: unknown) => {
-        posts.push(args);
-        return { ts: "3" };
-      },
-    },
-  };
-  const core = {
-    holdDeliveryDispatch: (fn: (lost: Promise<void>) => Promise<unknown>) => fn(new Promise<void>(() => {})),
-    claimDeliveries: async (type: string) => {
-      if (type !== "slack" || !pending) return [];
-      pending = false;
-      return [
-        {
-          id: "delivery",
-          idempotencyKey: "run:dm-run",
-          text: "Synthetic private result",
-          createdAt: Date.now() - 30_000,
-          destination: {
-            type: "slack",
-            target: "DPRIVATE",
-            slackAccountId: "partner",
-            slackPolicyNamespace: externalSlackNamespace("TPARTNER", policy),
-          },
+  const namespace = externalSlackNamespace("TPARTNER", policy);
+  for (const account of [
+    { account: { id: "partner", policyNamespace: namespace } },
+    { slackAccountId: "partner", slackPolicyNamespace: namespace },
+  ]) {
+    const posts: unknown[] = [];
+    const acks: string[] = [];
+    let pending = true;
+    const client = {
+      conversations: { history: async () => ({ messages: [] }) },
+      chat: {
+        postMessage: async (args: unknown) => {
+          posts.push(args);
+          return { ts: "3" };
         },
-      ];
-    },
-    ackDelivery: async (id: string) => {
-      acks.push(id);
-    },
-  };
-  const poller = createDeliveryPoller({
-    core: core as never,
-    flow: { inFlightRuns: new Set() } as never,
-    threads: { mark: () => {} } as never,
-    clientForIdentity: () => {
-      throw new Error("wrong identity route");
-    },
-    clientForAccount: (id) => {
-      assert.equal(id, "partner");
-      return client;
-    },
-    externalNamespace: () => externalSlackNamespace("TPARTNER", policy),
-  });
-  await poller.pollDeliveries({
-    chat: {
-      postMessage: () => {
-        throw new Error("default account used");
       },
-    },
-  });
-  assert.equal(posts.length, 1);
-  assert.equal((posts[0] as { channel: string }).channel, "DPRIVATE");
-  assert.deepEqual(acks, ["delivery"]);
+    };
+    const core = {
+      holdDeliveryDispatch: (fn: (lost: Promise<void>) => Promise<unknown>) => fn(new Promise<void>(() => {})),
+      claimDeliveries: async (type: string) => {
+        if (type !== "slack" || !pending) return [];
+        pending = false;
+        return [
+          {
+            id: "delivery",
+            idempotencyKey: "run:dm-run",
+            text: "Synthetic private result",
+            createdAt: Date.now() - 30_000,
+            destination: {
+              type: "slack",
+              target: "DPRIVATE",
+              ...account,
+            },
+          },
+        ];
+      },
+      ackDelivery: async (id: string) => {
+        acks.push(id);
+      },
+    };
+    const poller = createDeliveryPoller({
+      core: core as never,
+      flow: { inFlightRuns: new Set() } as never,
+      threads: { mark: () => {} } as never,
+      clientForIdentity: () => {
+        throw new Error("wrong identity route");
+      },
+      clientForAccount: (id) => {
+        assert.equal(id, "partner");
+        return client;
+      },
+      externalNamespace: () => externalSlackNamespace("TPARTNER", policy),
+    });
+    await poller.pollDeliveries({
+      chat: {
+        postMessage: () => {
+          throw new Error("default account used");
+        },
+      },
+    });
+    assert.equal(posts.length, 1);
+    assert.equal((posts[0] as { channel: string }).channel, "DPRIVATE");
+    assert.deepEqual(acks, ["delivery"]);
+  }
 });
 
 test("external account poller neither claims default identity nor releases pre-policy answers", async () => {
-  for (const [hasDefault, target, slackPolicyNamespace] of [
+  for (const [hasDefault, target, policyNamespace] of [
     [false, "CSHARED", undefined],
     [true, "CSHARED", undefined],
     [true, "DPRIVATE", undefined],
@@ -362,7 +371,11 @@ test("external account poller neither claims default identity nor releases pre-p
             idempotencyKey: "run:legacy",
             text: "Synthetic pre-policy private answer",
             createdAt: 1,
-            destination: { type: "slack", target, slackPolicyNamespace },
+            destination: {
+              type: "slack",
+              target,
+              ...(policyNamespace ? { account: { id: "default", policyNamespace } } : {}),
+            },
           },
         ];
       },
@@ -401,7 +414,12 @@ test("delegated human-origin runs cannot restart themselves as a person's privat
     actor: { id: "employee", type: "internal" as const },
     conversation: { kind: "dm" as const, threadRef: "external:dm", audience: [] },
     origin: { kind: "human" as const },
-    externalSlack: { accountId: "partner", teamId: "TPARTNER", userId: "UEMPLOYEE", ...policy },
+    surfaceOrigin: slackSurfaceOrigin({
+      accountId: "partner",
+      teamId: "TPARTNER",
+      userId: "UEMPLOYEE",
+      external: policy,
+    }),
     text: "continue privately",
   };
   const direct = await runs.enqueue({ sessionId: request.conversation.threadRef, request });

@@ -2,7 +2,7 @@ import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
 import type { DeliveryProvenance, Destination, OutgoingAttachment } from "../types.ts";
 import { waitForNoRunningRun, type Run, type RunStore } from "../runs/run-store.ts";
 import { turnDeliveryProvenance, type DeliveryStore } from "./delivery-store.ts";
-import { boundWebhook, isSessionTurn, resolveTurnOrigin } from "../core/turn-origin.ts";
+import { boundWebhook, isSessionTurn } from "../core/turn-origin.ts";
 import { turnFailureItem } from "../core/turn-error.ts";
 import { standaloneFailureText, userFacingFailureClause } from "../core/failure-copy.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
@@ -28,9 +28,14 @@ function webTranscriptNote(run: Run, surface: string, failed: boolean): Destinat
 
 export type AdminUrlFor = (sessionId: string) => string | undefined;
 
+export function replyEditNote(retracted: readonly string[] | undefined): string | undefined {
+  return retracted?.length ? `Edited after a reply check: ${[...new Set(retracted)].join(", ")}` : undefined;
+}
+
 export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor): RunResultDelivery | null {
   if (isSubagentThreadRef(run.sessionId) || run.request.swarm || run.request.privateSessionMessage) return null;
-  const origin = resolveTurnOrigin(run.request);
+  const origin = run.request.origin;
+  const surfaceOrigin = run.request.surfaceOrigin;
   const bound = boundWebhook(run.request);
   const webhook = bound?.webhook;
   const target = bound?.target ?? run.request.deliveryTarget;
@@ -43,11 +48,14 @@ export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor): RunResul
     type: webhook ? "webhook" : surface,
     ...(webhook ? { webhook } : {}),
     target,
-    ...(run.request.slackSource
-      ? { slackAccountId: run.request.slackSource.accountId, slackTeamId: run.request.slackSource.teamId }
-      : {}),
-    ...(run.request.slackSource?.externalPolicyNamespace
-      ? { slackPolicyNamespace: run.request.slackSource.externalPolicyNamespace }
+    ...(surfaceOrigin
+      ? {
+          account: {
+            id: surfaceOrigin.author.account,
+            workspace: surfaceOrigin.workspace,
+            ...(surfaceOrigin.policyNamespace ? { policyNamespace: surfaceOrigin.policyNamespace } : {}),
+          },
+        }
       : {}),
     ...(editRef ? { editRef } : {}),
     ...(webTranscript ? { webTranscript } : {}),
@@ -89,8 +97,9 @@ export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor): RunResul
     return { destination, text: `⚠️ I couldn't finish that turn: ${clause}${detail}`, provenance, idempotencyKey };
   }
   if (run.result?.status === "ok" && (run.result.reply || run.result.attachments?.length)) {
+    const editNote = replyEditNote(run.result.retracted);
     return {
-      destination,
+      destination: editNote ? { ...destination, editNote } : destination,
       text: run.result.reply ?? "",
       ...(run.result.attachments?.length ? { attachments: run.result.attachments } : {}),
       provenance,

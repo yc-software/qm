@@ -312,10 +312,113 @@ export const TENANT_BACKFILL: PgMigrationDefinition = {
   ],
 };
 
+const SPEND_RECOVERY_INDEX: PgMigrationDefinition = {
+  id: "sessions/store/0051-spend-recovery-index",
+  statements: [
+    `CREATE INDEX CONCURRENTLY IF NOT EXISTS session_llm_requests_session_spend_recovery
+      ON session_llm_requests(session_id, created_at) WHERE usage_json IS NOT NULL`,
+  ],
+};
+
+const SESSION_FACTS: PgMigrationDefinition = {
+  id: "sessions/store/0052-session-facts",
+  statements: [
+    `SET LOCAL lock_timeout = '5s'`,
+    `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS slack_binding JSONB, ADD COLUMN IF NOT EXISTS runtime JSONB`,
+  ],
+};
+
+const SESSION_FACTS_COPY: PgMigrationDefinition = {
+  id: "sessions/store/0054-session-facts-copy",
+  autocommit: true,
+  statements: [
+    `CREATE OR REPLACE FUNCTION qm_session_fact_json(run_id TEXT, raw TEXT) RETURNS JSONB LANGUAGE plpgsql IMMUTABLE AS $fact_json$
+BEGIN
+  RETURN raw::jsonb;
+EXCEPTION WHEN invalid_text_representation OR untranslatable_character THEN
+  RAISE WARNING 'session facts copy skipped run %: % (SQLSTATE %)', run_id, SQLERRM, SQLSTATE;
+  RETURN NULL;
+END $fact_json$`,
+    `CREATE OR REPLACE PROCEDURE qm_copy_session_facts() LANGUAGE plpgsql AS $session_facts$
+DECLARE
+  after_id TEXT := '';
+  page TEXT[];
+BEGIN
+  IF to_regclass('runs') IS NULL THEN
+    RETURN;
+  END IF;
+  LOOP
+  SELECT array_agg(id ORDER BY id) INTO page FROM (SELECT id FROM sessions WHERE id > after_id ORDER BY id LIMIT 2000) next_page;
+  EXIT WHEN page IS NULL;
+  after_id := page[array_length(page, 1)];
+  UPDATE sessions s
+  SET slack_binding = COALESCE(s.slack_binding, facts.slack_binding),
+      runtime = COALESCE(s.runtime, facts.runtime),
+      spawn_meta = COALESCE(s.spawn_meta, facts.context::text)
+  FROM (
+    SELECT x.id,
+      binding.value AS slack_binding,
+      label.value AS runtime,
+      CASE WHEN public.request IS NOT NULL THEN (
+        SELECT COALESCE(jsonb_object_agg(key, value), '{}') FROM jsonb_each(public.request)
+        WHERE key IN ('surfaceTools', 'deliveryCandidates', 'unattendedGrants', 'externalSlack', 'scopeVersion',
+          'sessionParticipantIds', 'conversation', 'actor', 'deliveryTarget', 'timezone', 'readOnly', 'model',
+          'thinkingLevel', 'fastMode')
+          AND value <> 'null' AND (key = 'fastMode' OR value NOT IN ('false', '""'))
+      ) || jsonb_build_object(
+        'surface', COALESCE(NULLIF(public.request->'surface', 'null'), '"web"'),
+        'origin', CASE
+          WHEN public.request->'origin'->>'kind' = 'automation' OR public.request->>'triggered' = 'true' THEN
+            jsonb_strip_nulls(jsonb_build_object('kind', 'automation', 'destination',
+              COALESCE(public.request->'origin'->'destination', public.request->'triggerDestination')))
+          WHEN public.request->'origin'->>'kind' = 'ambient' OR public.request->>'unprompted' = 'true' THEN
+            CASE WHEN public.request->'origin'->>'live' = 'true' OR public.request->>'liveActor' = 'true'
+              THEN '{"kind": "ambient", "live": true}'::jsonb ELSE '{"kind": "ambient"}'::jsonb END
+          WHEN public.request->'origin'->>'kind' = 'human' OR public.request->>'liveActor' = 'true' THEN '{"kind": "human"}'::jsonb
+          WHEN public.request->'origin' IS NULL OR public.request->'origin'->>'kind' = 'direct' THEN '{"kind": "direct"}'::jsonb
+          ELSE '{"kind": "automation"}'::jsonb
+        END)
+      END AS context
+    FROM sessions x
+    LEFT JOIN LATERAL (
+      SELECT qm_session_fact_json(id, request)->'slackSource' AS value FROM runs
+      WHERE session_id = x.thread_ref AND COALESCE(qm_session_fact_json(id, request)->'slackSource', 'null') <> 'null'
+      ORDER BY created_at DESC, seq DESC LIMIT 1
+    ) binding ON x.surface = 'slack'
+    LEFT JOIN LATERAL (
+      SELECT qm_session_fact_json(id, result)->'runtime' AS value FROM runs
+      WHERE session_id = x.thread_ref AND COALESCE(qm_session_fact_json(id, result)->'runtime', 'null') <> 'null'
+      ORDER BY created_at DESC, seq DESC LIMIT 1
+    ) label ON true
+    LEFT JOIN LATERAL (
+      SELECT request FROM (SELECT qm_session_fact_json(id, request) AS request, created_at, seq FROM runs WHERE session_id = x.thread_ref) owned
+      WHERE request IS NOT NULL AND COALESCE(request->>'privateSessionMessage', 'false') <> 'true'
+        AND COALESCE(request->>'sessionSenderId', '') = ''
+        AND COALESCE(request->>'delegatingRunId', '') = ''
+        AND COALESCE(request->'swarm', 'null') IN ('null', 'false')
+      ORDER BY created_at DESC, seq DESC LIMIT 1
+    ) public ON x.thread_ref NOT LIKE 'agent:main:subagent:%' AND x.thread_ref NOT LIKE 'swarm:%'
+    WHERE x.id = ANY(page) AND ((x.surface = 'slack' AND x.slack_binding IS NULL) OR x.runtime IS NULL OR x.spawn_meta IS NULL)
+  ) facts
+  WHERE s.id = facts.id
+    AND ((s.slack_binding IS NULL AND facts.slack_binding IS NOT NULL) OR (s.runtime IS NULL AND facts.runtime IS NOT NULL)
+      OR (s.spawn_meta IS NULL AND facts.context IS NOT NULL));
+  COMMIT;
+  END LOOP;
+END $session_facts$`,
+    `CALL qm_copy_session_facts()`,
+    `DROP PROCEDURE qm_copy_session_facts()`,
+    `DROP FUNCTION qm_session_fact_json(TEXT, TEXT)`,
+  ],
+};
+
 export const SESSION_MIGRATIONS = [
   TENANCY_BASE,
   SESSION_SCHEMA,
   MESSAGE_SEARCH_INDEX,
   DROP_ITEMS_SEARCH,
   TENANT_BACKFILL,
+  SPEND_RECOVERY_INDEX,
+  SESSION_FACTS,
+  SESSION_FACTS_COPY,
 ];

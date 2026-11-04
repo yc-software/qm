@@ -89,5 +89,8 @@ removes every copy of a skill that turn's speaker cannot see, so archived, revok
 or another person's skills do not linger on a shared computer. Publish changes through the
 skill API to update the source.
 
-A skill saved from a conversation or the Skills page keeps only its instructions, so put its scripts
-in the project's Files and have the instructions point to them there.
+An agent saves or edits a skill from a conversation with the `skills` tool's `save` and `edit`
+actions, which call `POST /v1/skills` and `PUT /v1/skills/:id`. They are offered only when the turn
+has control tools and a self API, so read-only and strict-posture turns do not get them. A skill
+saved from a conversation or the Skills page keeps only its instructions, so put its scripts
+in this scope's Files and have the instructions point to them there.

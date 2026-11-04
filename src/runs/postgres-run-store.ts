@@ -5,7 +5,6 @@ import { jsonbStringify, pgTextSafe } from "../util/text.ts";
 import { isObj } from "../util/objects.ts";
 import type { TurnResult } from "../types.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
-import { resolveTurnOrigin } from "../core/turn-origin.ts";
 import type {
   EnqueueInput,
   EnqueueResult,
@@ -50,7 +49,7 @@ function rowToRun(r: Record<string, unknown>): Run {
     id: r.id as string,
     sessionId: r.session_id as string,
     status: r.status as Run["status"],
-    request: { ...request, origin: resolveTurnOrigin(request) },
+    request,
     result: r.result != null ? (JSON.parse(r.result as string) as TurnResult) : null,
     deliveryState: r.delivery_state != null ? (JSON.parse(r.delivery_state as string) as RunDeliveryState) : null,
     turnUserSeq: r.turn_user_seq != null ? Number(r.turn_user_seq) : null,
@@ -243,18 +242,35 @@ END $base_schema$`,
     return { requeued: false, applied: rowCount > 0 };
   }
 
-  const claimable = (now: string) => `candidate.status='pending' AND candidate.retry_after <= ${now}
+  const parked = (run: string) => `(${run}.claim_priority > 0 AND ${run}.last_stop::jsonb->>'kind' = 'parked')`;
+
+  const turnOrder = (run: string) => `(CASE WHEN ${run}.claim_priority <> 0 THEN 1
+      WHEN EXISTS (
+        SELECT 1 FROM runs ahead WHERE ahead.session_id=${run}.session_id AND ahead.status='pending'
+          AND ahead.claim_priority > 0 AND ${parked("ahead")} IS NOT TRUE
+          AND (ahead.created_at, ahead.seq) < (${run}.created_at, ${run}.seq)
+      ) THEN 1 ELSE 0 END), ${run}.created_at, ${run}.seq`;
+
+  const before = (a: string, b: string) => `(CASE
+      WHEN ${parked(a)} IS NOT TRUE AND ${parked(b)} IS NOT TRUE
+        THEN (${a}.created_at, ${a}.seq) < (${b}.created_at, ${b}.seq)
+      ELSE (${turnOrder(a)}) < (${turnOrder(b)}) END)`;
+
+  const claimable = (
+    now: string,
+    behindRunning = false,
+  ) => `candidate.status='pending' AND candidate.retry_after <= ${now}
     AND NOT EXISTS (
       SELECT 1 FROM runs sibling WHERE sibling.session_id=candidate.session_id
-        AND (sibling.status='running' OR (sibling.status='pending'
-          AND (sibling.retry_after > ${now} OR (sibling.created_at, sibling.seq) < (candidate.created_at, candidate.seq))))
+        AND (${behindRunning ? "false" : "sibling.status='running'"} OR (sibling.status='pending'
+          AND (sibling.retry_after > ${now} OR ${before("sibling", "candidate")})))
       OFFSET 0
     )`;
 
   async function claim(
     workerId: string,
     ttlMs: number,
-    target: { limit?: number; runId?: string; sessionId?: string } = {},
+    target: { limit?: number; runId?: string } = {},
   ): Promise<Run[]> {
     const now = Date.now();
     try {
@@ -262,13 +278,12 @@ END $base_schema$`,
         `WITH picked AS (
            SELECT candidate.id FROM runs candidate WHERE ${claimable("$3")}
              AND ($4::text IS NULL OR candidate.id=$4)
-             AND ($5::text IS NULL OR candidate.session_id=$5)
-           ORDER BY candidate.claim_priority ASC, candidate.created_at ASC, candidate.seq ASC FOR UPDATE SKIP LOCKED LIMIT $6
+           ORDER BY candidate.claim_priority ASC, candidate.created_at ASC, candidate.seq ASC FOR UPDATE SKIP LOCKED LIMIT $5
          )
          UPDATE runs SET status='running', lease_token=gen_random_uuid()::text, lease_expires_at=$1, worker_id=$2,
            attempts=attempts+1, started_at=COALESCE(started_at,$3)
          FROM picked WHERE runs.id = picked.id RETURNING runs.*`,
-        [now + ttlMs, workerId, now, target.runId ?? null, target.sessionId ?? null, target.limit ?? 1],
+        [now + ttlMs, workerId, now, target.runId ?? null, target.limit ?? 1],
       );
       return rows.map(rowToRun);
     } catch (err) {
@@ -329,7 +344,6 @@ END $base_schema$`,
 
     claim: (workerId, ttlMs, limit) => claim(workerId, ttlMs, { limit }),
     claimById: async (runId, workerId, ttlMs) => (await claim(workerId, ttlMs, { runId }))[0] ?? null,
-    claimForSession: async (sessionId, workerId, ttlMs) => (await claim(workerId, ttlMs, { sessionId }))[0] ?? null,
     async personWaiting(createdBefore) {
       const { rows } = await q(
         `SELECT EXISTS (
@@ -339,6 +353,14 @@ END $base_schema$`,
         [createdBefore, Date.now()],
       );
       return rows[0]?.waiting === true;
+    },
+    async personWaitingIn(sessionIds, createdBefore) {
+      const { rows } = await q(
+        `SELECT DISTINCT candidate.session_id FROM runs candidate WHERE candidate.session_id = ANY($1::text[])
+           AND candidate.claim_priority=0 AND candidate.created_at <= $2 AND ${claimable("$3", true)}`,
+        [sessionIds, createdBefore, Date.now()],
+      );
+      return new Set(rows.map((row) => row.session_id as string));
     },
 
     async heartbeat(runId, leaseToken, ttlMs): Promise<boolean> {
@@ -406,16 +428,15 @@ END $base_schema$`,
       return rowCount > 0;
     },
 
-    async latestForThreads(threadRefs, opts) {
+    async activeForThreads(threadRefs) {
       if (!threadRefs.length) return new Map();
       const { rows } = await q(
-        `SELECT latest.* FROM unnest($1::text[]) AS threads(id)
+        `SELECT current.* FROM unnest($1::text[]) AS threads(id)
          CROSS JOIN LATERAL (
-           SELECT * FROM runs WHERE session_id = threads.id
-           AND (NOT $2::boolean OR COALESCE(request::jsonb->>'privateSessionMessage', 'false') <> 'true')
-           ORDER BY created_at DESC, seq DESC LIMIT 1
-         ) latest`,
-        [[...new Set(threadRefs)], Boolean(opts?.excludePrivateMessages)],
+           SELECT * FROM runs WHERE session_id = threads.id AND status IN ('pending', 'running')
+           ORDER BY status = 'running' DESC, ${turnOrder("runs")} LIMIT 1
+         ) current`,
+        [[...new Set(threadRefs)]],
       );
       return new Map(
         rows.map((row) => {
@@ -423,13 +444,6 @@ END $base_schema$`,
           return [run.sessionId, run];
         }),
       );
-    },
-    async latestForThread(threadRef, opts) {
-      const { rows } = await q(
-        "SELECT * FROM runs WHERE session_id = $1 AND (NOT $2::boolean OR COALESCE(request::jsonb->>'privateSessionMessage', 'false') <> 'true') ORDER BY created_at DESC, seq DESC LIMIT 1",
-        [threadRef, Boolean(opts?.excludePrivateMessages)],
-      );
-      return rows[0] ? rowToRun(rows[0]) : null;
     },
     async pendingReturns(limit = 100, afterId = "") {
       const { rows } = await q(
@@ -473,16 +487,12 @@ END $base_schema$`,
     get: getRun,
 
     async activeForThread(sessionId: string): Promise<Run | null> {
-      const { rows } = await q(
-        "SELECT * FROM runs WHERE session_id = $1 AND status IN ('pending','running') ORDER BY (status = 'running') DESC, created_at ASC, seq ASC LIMIT 1",
-        [sessionId],
-      );
-      return rows[0] ? rowToRun(rows[0]) : null;
+      return (await runs.activeForThreads([sessionId])).get(sessionId) ?? null;
     },
 
     async inFlightForThread(sessionId: string): Promise<Run[]> {
       const { rows } = await q(
-        "SELECT * FROM runs WHERE session_id = $1 AND status IN ('pending','running') ORDER BY created_at ASC, seq ASC",
+        `SELECT * FROM runs WHERE session_id = $1 AND status IN ('pending','running') ORDER BY (status = 'running') DESC, ${turnOrder("runs")}`,
         [sessionId],
       );
       return rows.map(rowToRun);
@@ -507,7 +517,7 @@ END $base_schema$`,
     },
 
     async steerQueued(queuedRunId, targetRunId, signal, signals) {
-      await signals.hasDedupeKey(signal.dedupeKey!);
+      await signals.runForDedupeKey(signal.dedupeKey!);
       const { rows } = await q(
         `WITH target AS (
            SELECT id FROM runs WHERE id=$2 AND status IN ('pending','running') FOR UPDATE
@@ -540,10 +550,10 @@ END $base_schema$`,
     async list({ limit = 200, threadRef }: { limit?: number; threadRef?: string } = {}): Promise<Run[]> {
       const { rows } = threadRef
         ? await q(
-            "SELECT * FROM runs WHERE session_id = $1 OR starts_with(session_id, $1 || ':task:') OR starts_with(session_id, $1 || ':status:') ORDER BY created_at DESC LIMIT $2",
+            "SELECT * FROM runs WHERE session_id = $1 OR starts_with(session_id, $1 || ':task:') OR starts_with(session_id, $1 || ':status:') ORDER BY created_at DESC, seq DESC LIMIT $2",
             [threadRef, limit],
           )
-        : await q("SELECT * FROM runs ORDER BY created_at DESC LIMIT $1", [limit]);
+        : await q("SELECT * FROM runs ORDER BY created_at DESC, seq DESC LIMIT $1", [limit]);
       return rows.map(rowToRun);
     },
 

@@ -25,8 +25,7 @@ async function main(): Promise<void> {
     dataDir: mkdtempSync(join(tmpdir(), "provider-qualification-")),
     databaseUrl: process.env.DATABASE_URL,
     sandboxBackend: "local",
-
-    backgroundWorkEnabled: false,
+    backgroundWorkEnabled: true,
     turnWallClockMs: 180_000,
   });
   const actorId = `provider-qualification-${randomUUID()}`;
@@ -42,6 +41,7 @@ async function main(): Promise<void> {
     const sandbox = await built.sandboxResources.create(actorId, scopeId, "local", name);
     assert.equal(sandbox.backend, "local");
     await built.sandboxResources.setDefault(actorId, scopeId, sandbox.id);
+    built.runtime.start();
     const left = randomUUID();
     const right = randomUUID();
     const result = await built.app.turn({

@@ -23,6 +23,7 @@ import { goalTools } from "./agent-tools/goal.ts";
 import { pageClientTools } from "./agent-tools/client.ts";
 import { mcpTools } from "./agent-tools/mcp.ts";
 import { withRetrySafety, withRuntimeBarrier, withToolApprovalGate, withToolSpan } from "./agent-tools/wrappers.ts";
+import type { SurfaceToolPrompt } from "../surfaces/registry.ts";
 
 export interface ToolContextRef {
   documents?: DocumentInput[];
@@ -94,12 +95,13 @@ export interface AgentToolsOptions {
   surfaceTools?: boolean;
   delegateWork?: boolean;
   surfaceName?: string;
+  surfacePrompt?: SurfaceToolPrompt;
   clientTools?: readonly ClientToolDeclaration[];
 }
 
 export type CoreToolOptions = Omit<
   AgentToolsOptions,
-  "readOnly" | "surfaceTools" | "surfaceName" | "delegateWork" | "clientTools"
+  "readOnly" | "surfaceTools" | "surfaceName" | "surfacePrompt" | "delegateWork" | "clientTools"
 >;
 
 export function coreToolOptions(config: Config): CoreToolOptions {
@@ -146,7 +148,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const kit = createToolKit(ref, opts);
   const { retryMarks, resourceTool } = kit;
   const { execute, sandboxManagement, background } = computerTools(kit);
-  const { discoverSkills, skill, read, installCanvas, write, publish } = workspaceTools(kit);
+  const { discoverSkills, skill, saveSkill, editSkill, read, installCanvas, write, publish } = workspaceTools(kit);
   const { memory, history } = recallTools(kit);
   const { subagentTool, sessionTool, sidebarSessions } = sessionTools(kit);
   const { cron } = cronTools(kit);
@@ -162,6 +164,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       list: discoverSkills(false),
       search: discoverSkills(true),
       read: skill,
+      ...(controlTools && ref.current?.selfApi ? { save: saveSkill, edit: editSkill } : {}),
       ...(controlTools ? { share: sharingTool("skill"), move: sharingTool("skill", true) } : {}),
     }),
     {

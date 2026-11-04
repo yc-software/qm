@@ -12,7 +12,12 @@ import { projectRoutes } from "../src/api/routes/projects.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
-import { createProjectStore, projectGroupRef, projectScopeId } from "../src/projects/project-store.ts";
+import {
+  createProjectStore,
+  projectGroupRef,
+  projectScopeId,
+  validProjectIcon,
+} from "../src/projects/project-store.ts";
 import {
   createCanManageScope,
   createCanReadScope,
@@ -106,6 +111,47 @@ test("ProjectStore rename is owner-only and cleans the name", async () => {
   );
   const same = await projects.rename(project.id, "owner", "After Hours");
   assert.ok(same.status === "ok" && !same.changed);
+});
+
+test("validProjectIcon accepts exactly one emoji or a named custom emoji", () => {
+  const emoji = (value: string) => ({ kind: "emoji", value });
+  for (const ok of [...["🚢", "👩🏽‍💻", "🏳️‍🌈", "🇺🇸", "❤️"].map(emoji), { kind: "custom", name: "party_parrot" }])
+    assert.ok(validProjectIcon(ok), `accepts ${JSON.stringify(ok)}`);
+  assert.ok(validProjectIcon(null));
+  for (const bad of [
+    ...["", "abc", "🚢 ship", "🚢🚢", "©️🚢", "<img>"].map(emoji),
+    { kind: "custom", name: "" },
+    { kind: "custom", name: "x", extra: 1 },
+    "🚢",
+    ":shipit:",
+    42,
+  ])
+    assert.ok(!validProjectIcon(bad), `rejects ${JSON.stringify(bad)}`);
+});
+
+test("ProjectStore icon is member-managed, validated, and not a roster change", async () => {
+  let at = 900;
+  const projects = createProjectStore(testMap(), { ...singleProcessDeps(), id: () => "ic", now: () => at++ });
+  const project = await projects.create({ name: "Iconic", ownerId: "owner" });
+  await projects.addMember(project.id, "owner", "member");
+  const groupRef = projectGroupRef(project.id);
+  const versionBefore = await projects.version(groupRef);
+  assert.equal((await projects.setIcon(project.id, "mallory", { kind: "emoji", value: "🚢" })).status, "forbidden");
+  assert.equal((await projects.setIcon("missing", "owner", { kind: "emoji", value: "🚢" })).status, "not_found");
+  assert.equal(
+    (await projects.setIcon(project.id, "owner", { kind: "emoji", value: "not an emoji" })).status,
+    "invalid_icon",
+  );
+  const shipit = { kind: "custom", name: "shipit" } as const;
+  const set = await projects.setIcon(project.id, "member", shipit);
+  assert.ok(set.status === "ok" && set.changed);
+  assert.deepEqual(set.project.icon, shipit);
+  assert.deepEqual((await projects.get(project.id))?.icon, shipit);
+  const same = await projects.setIcon(project.id, "owner", { ...shipit });
+  assert.ok(same.status === "ok" && !same.changed);
+  const cleared = await projects.setIcon(project.id, "owner", null);
+  assert.ok(cleared.status === "ok" && cleared.changed && !("icon" in cleared.project));
+  assert.equal(await projects.version(groupRef), versionBefore, "icon is not a roster change");
 });
 
 test("ProjectStore slack-channel link is member-managed and not a roster change", async () => {
@@ -593,7 +639,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
         audience: [{ externalId: "outsider" }],
       },
       text: "background project work",
-      triggered: true,
+      origin: { kind: "automation" },
     });
   assert.equal((await background()).status, "ok");
   const removableApprovalThread = "web:member:approval-to-cancel";
@@ -818,7 +864,7 @@ test("Auto quarantine honors the current Project roster epoch", async () => {
         audience: [],
       },
       text: `!security-risk ${marker}`,
-      unprompted: true,
+      origin: { kind: "ambient" },
       ...(overheard
         ? {
             overheard: [
@@ -841,7 +887,7 @@ test("Auto quarantine honors the current Project roster epoch", async () => {
       audience: [],
     },
     text: "!security-risk initial-marker",
-    unprompted: true,
+    origin: { kind: "ambient" },
     approval: { requestId: quarantined.pendingApprovals![0]!.requestId, approved: false },
   });
   assert.equal(denied.status, "refused");

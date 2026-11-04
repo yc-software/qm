@@ -190,7 +190,7 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
     const parent = (await sessions.getByThread(threadRef))!;
     const [child] = await sessions.childrenOf(parent.id);
     assert.ok(child, "the parent opened a subagent");
-    await execute((await runs.latestForThread(child.threadRef))!);
+    await execute((await runs.list({ threadRef: child.threadRef, limit: 1 }).then(([run]) => run))!);
     return { parent: turns.get(threadRef)!, child: turns.get(child.threadRef)! };
   };
   return { parentTurn };

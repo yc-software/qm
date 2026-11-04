@@ -17,6 +17,7 @@ const config = loadConfig();
 
 const built = buildApp(config);
 await migrateRegisteredPgSchemas(config.databaseUrl);
+if (!config.backgroundDeploymentId) await built.rewriteSurfaceOrigins();
 await built.sandboxResources.initialize();
 const backfilledFires = await built.crons.backfillFires();
 if (backfilledFires > 0) console.log(`[qm] backfilled ${backfilledFires} cron fire log entries into cron_fires`);
@@ -130,6 +131,7 @@ let backgroundController: ReturnType<typeof createBackgroundController> | undefi
 if (built.backgroundOwnership) {
   let periodicStop: Promise<void> = Promise.resolve();
   let activationEpoch = 0;
+  let surfaceOriginsRewritten = false;
   const stopPeriodic = () => {
     activationEpoch++;
     periodicStop = built.scheduler.stopClaims();
@@ -146,6 +148,11 @@ if (built.backgroundOwnership) {
     async start(signal) {
       const epoch = ++activationEpoch;
       if (signal.aborted) return;
+      if (!surfaceOriginsRewritten) {
+        await built.rewriteSurfaceOrigins();
+        surfaceOriginsRewritten = true;
+        if (signal.aborted || epoch !== activationEpoch) return;
+      }
       built.runtime.startBackground();
       await periodicStop;
       if (signal.aborted || epoch !== activationEpoch) return;

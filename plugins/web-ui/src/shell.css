@@ -491,6 +491,47 @@ a.chat-row-open {
   font-weight: 400;
   text-align: center;
 }
+.group-avatar-stack {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  display: inline-flex;
+  width: max-content;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+.recent-project-head:has(.group-avatar-stack) .recent-project-toggle {
+  padding-right: 26px;
+}
+.recent-project-head:hover .group-avatar-stack,
+.recent-project-head:focus-within .group-avatar-stack,
+.recent-project-head .session-menu.menu-open .group-avatar-stack {
+  visibility: hidden;
+}
+.group-avatar {
+  box-sizing: border-box;
+  width: 18px;
+  height: 18px;
+  margin-left: -6px;
+  border: 1.5px solid var(--sidebar, var(--background));
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--secondary);
+}
+.group-avatar:first-child {
+  margin-left: 0;
+}
+.group-avatar.initial,
+.group-avatar.more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--foreground);
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
 .recent-project-new-chat {
   display: inline-flex;
   align-items: center;
@@ -3005,6 +3046,14 @@ qm-markdown .tok-in {
 .thinking-row {
   display: block;
   min-width: 0;
+}
+.continuing-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  color: var(--muted-foreground);
+  font-size: max(min(12px, calc(var(--chat-font-size) - 1px)), calc((var(--chat-font-size) - 1px) * var(--text-scale)));
 }
 .thinking-summary {
   display: flex;
@@ -12962,4 +13011,163 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   margin-left: 6px;
   color: var(--muted-foreground);
   font-size: var(--font-12-5);
+}
+
+/* Project icons: one emoji or a workspace custom emoji in place of the folder. */
+.project-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--project-icon-size, 16px);
+  height: var(--project-icon-size, 16px);
+  font-size: calc(var(--project-icon-size, 16px) * 0.9);
+  line-height: 1;
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+  color: var(--foreground);
+}
+.project-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.context-glyph:has(.project-icon) {
+  background: transparent;
+}
+.project-icon-trigger {
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+.project-icon-trigger:hover,
+.project-icon-trigger:focus-visible {
+  background: var(--secondary);
+}
+.project-icon-picker {
+  position: fixed;
+  z-index: 1000;
+  width: 408px;
+  max-width: calc(100vw - 16px);
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--background);
+  box-shadow:
+    0 12px 32px rgb(0 0 0 / 0.18),
+    0 2px 6px rgb(0 0 0 / 0.08);
+  overflow: hidden;
+}
+.project-icon-picker-top {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 8px 0 12px;
+  border-bottom: 1px solid var(--border);
+  min-height: 38px;
+}
+.project-icon-picker-remove {
+  border: 0;
+  background: none;
+  color: var(--muted-foreground);
+  font: inherit;
+  font-size: var(--font-13, 13px);
+  padding: 4px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.project-icon-picker-remove:hover {
+  background: var(--secondary);
+  color: var(--foreground);
+}
+.project-icon-error {
+  padding: 6px 12px;
+  font-size: var(--font-12-5);
+  color: var(--destructive);
+}
+.project-icon-search {
+  display: flex;
+  gap: 6px;
+  padding: 10px 10px 4px;
+}
+.project-icon-search input {
+  flex: 1;
+  min-width: 0;
+  height: 30px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--secondary);
+  color: var(--foreground);
+  font: inherit;
+  font-size: var(--font-13, 13px);
+  outline: none;
+}
+.project-icon-search input:focus {
+  border-color: var(--ring, var(--border));
+  background: var(--background);
+}
+.project-icon-random {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--background);
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+.project-icon-random:hover {
+  color: var(--foreground);
+  background: var(--secondary);
+}
+.project-icon-grid-scroll {
+  height: 300px;
+  overflow-y: auto;
+  padding: 0 6px 8px;
+  overscroll-behavior: contain;
+}
+.project-icon-section {
+  padding: 10px 6px 4px;
+  font-size: var(--font-12, 12px);
+  font-weight: 500;
+  color: var(--muted-foreground);
+}
+.project-icon-grid {
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+}
+.project-icon-cell {
+  aspect-ratio: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  padding: 0;
+  border-radius: 6px;
+  background: none;
+  cursor: pointer;
+  font-size: 22px;
+  line-height: 1;
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+}
+.project-icon-cell img {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+}
+.project-icon-cell.active {
+  background: var(--secondary);
+}
+.project-icon-cell.current {
+  box-shadow: inset 0 0 0 1.5px var(--border);
+}
+.project-icon-empty {
+  padding: 40px 0;
+  text-align: center;
+  color: var(--muted-foreground);
+  font-size: var(--font-13, 13px);
 }
