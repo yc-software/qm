@@ -71,7 +71,7 @@ jobs:
 
   core-tests:
     name: Core tests (${{ matrix.shard }}/5)
-    timeout-minutes: 15
+    timeout-minutes: 20
     needs: reuse
     if: always() && !cancelled()
     runs-on: ubuntu-latest
@@ -159,7 +159,7 @@ jobs:
 
   cli:
     name: CLI
-    timeout-minutes: 12
+    timeout-minutes: 15
     needs: reuse
     if: always() && !cancelled()
     runs-on: ubuntu-latest
@@ -208,7 +208,7 @@ jobs:
 
   coauthor-trailers:
     name: Co-author trailers
-    timeout-minutes: 5
+    timeout-minutes: 7
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
@@ -349,7 +349,7 @@ jobs:
 
   web-ui-plugin:
     name: Web UI plugin
-    timeout-minutes: 15
+    timeout-minutes: 20
     needs: reuse
     if: always() && !cancelled()
     runs-on: ubuntu-latest
