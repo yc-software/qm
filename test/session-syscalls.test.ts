@@ -322,7 +322,7 @@ test("read reports each child's latest tool step, last outcome, live descendants
   const r = await rig();
   const syscalls = r.syscallsFor(r.room);
   const children = new Map<string, Session>();
-  for (const name of ["worker", "finisher", "stopper"]) {
+  for (const name of ["worker", "finisher", "stopper", "blocked", "failer", "delegator"]) {
     const out = await syscalls.open({ task: `task for ${name}`, name });
     assert.ok(out.ok);
     children.set(name, await freshSession(r.sessions, out.sessionId));
@@ -336,23 +336,23 @@ test("read reports each child's latest tool step, last outcome, live descendants
     assert.ok(claimed?.leaseToken);
     return { session, run: queued, leaseToken: claimed.leaseToken };
   };
-  const working = await claim("worker");
-  const step = (callId: string, tool: string, body: Record<string, unknown>) =>
-    r.sessions.append(
-      { sessionId: working.session.id },
-      { kind: "ToolCall", tool, callId, turnId: working.run.id, body },
+  const step = (run: { session: Session; run: Run }, callId: string, tool: string, body: Record<string, unknown>) =>
+    r.sessions.append({ sessionId: run.session.id }, { kind: "ToolCall", tool, callId, turnId: run.run.id, body });
+  const grandchildOf = async (parent: Session, name: string, request: OrchestratorInput) => {
+    const grandchild = await r.sessions.getOrCreateByThread(
+      `agent:main:subagent:${name}`,
+      "dm",
+      scope,
+      undefined,
+      "slack",
     );
-  await step("c1", "execute", { purpose: "Running tests" });
-  await step("c2", "files", {});
-  const grandchild = await r.sessions.getOrCreateByThread(
-    "agent:main:subagent:grandchild",
-    "dm",
-    scope,
-    undefined,
-    "slack",
-  );
-  await r.sessions.setParentSession(grandchild.id, working.session.id);
-  await r.runs.enqueue({ sessionId: grandchild.threadRef, request: working.run.request });
+    await r.sessions.setParentSession(grandchild.id, parent.id);
+    await r.runs.enqueue({ sessionId: grandchild.threadRef, request });
+  };
+  const working = await claim("worker");
+  await step(working, "c1", "execute", { purpose: "Running tests" });
+  await step(working, "c2", "files", {});
+  await grandchildOf(working.session, "grandchild", working.run.request);
   await r.mailbox.send({
     id: "fyi-1",
     recipientId: working.session.id,
@@ -363,9 +363,17 @@ test("read reports each child's latest tool step, last outcome, live descendants
     createdAt: Date.now(),
   });
   const finished = await claim("finisher");
+  await step(finished, "f1", "execute", { purpose: "Writing the summary" });
   await r.runs.complete(finished.run.id, finished.leaseToken, { status: "ok", reply: "done" });
   const halted = await claim("stopper");
   await r.runs.complete(halted.run.id, halted.leaseToken, { status: "ok", reply: "", stopped: true });
+  const blocked = await claim("blocked");
+  await r.runs.complete(blocked.run.id, blocked.leaseToken, { status: "pending_approval" });
+  const failed = await claim("failer");
+  await r.runs.complete(failed.run.id, failed.leaseToken, { status: "failed", reason: "boom" });
+  const delegated = await claim("delegator");
+  await r.runs.complete(delegated.run.id, delegated.leaseToken, { status: "ok", reply: "handed off" });
+  await grandchildOf(delegated.session, "delegated-grandchild", delegated.run.request);
 
   const list = await syscalls.read({});
   assert.ok(list.ok && list.mode === "children");
@@ -382,17 +390,33 @@ test("read reports each child's latest tool step, last outcome, live descendants
     { status: byTitle.get("finisher")?.status, outcome: byTitle.get("finisher")?.outcome },
     { status: "idle", outcome: "final_answer" },
   );
-  assert.equal(byTitle.get("stopper")?.outcome, "stopped");
+  assert.equal(byTitle.get("finisher")?.tool, "execute", "an idle child reports the last step of its last run");
+  assert.ok((byTitle.get("finisher")?.stepAgoMs ?? Infinity) < 60_000);
   assert.equal(byTitle.get("finisher")?.liveDescendants, 0);
+  assert.equal(byTitle.get("stopper")?.outcome, "stopped");
+  assert.equal(byTitle.get("blocked")?.outcome, "awaiting_input");
+  assert.equal(byTitle.get("failer")?.outcome, "errored");
+  assert.deepEqual(
+    { status: byTitle.get("delegator")?.status, live: byTitle.get("delegator")?.liveDescendants },
+    { status: "idle", live: 1 },
+  );
 
   const transcript = await syscalls.read({ target: "worker" });
   assert.ok(transcript.ok && transcript.mode === "transcript");
-  assert.equal(transcript.activity.status, "running");
+  assert.equal(transcript.status, "running");
+  assert.equal(transcript.activity?.tool, "files");
 
   assert.ok(syscalls.liveSubagents);
   const note = await syscalls.liveSubagents();
-  assert.match(note, /^Subagents opened from this conversation that are still running or queued:\n- worker \(/);
-  assert.doesNotMatch(note, /finisher|stopper/);
+  assert.equal(note.split("\n")[0], "Subagents opened from this conversation that are still working or blocked:");
+  assert.deepEqual(
+    note
+      .split("\n")
+      .slice(1)
+      .map((line) => line.split(" ")[1])
+      .sort(),
+    ["blocked", "delegator", "worker"],
+  );
 });
 
 test("the live-subagents note is empty when no child is running or queued", async () => {

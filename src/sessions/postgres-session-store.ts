@@ -657,24 +657,19 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     async latestToolSteps(turnIds) {
       if (!turnIds.length) return new Map();
       const rows = await q(
-        `SELECT DISTINCT ON (i.turn_id) i.turn_id::text AS turn_id, i.tool, ${msOf("i.created_at")} AS at,
-                (SELECT btrim(c.body->>'purpose') FROM items c
-                  WHERE c.tenant_id = ${TENANT} AND c.turn_id = i.turn_id AND c.kind = 'ToolCall'
-                    AND btrim(c.body->>'purpose') <> ''
-                  ORDER BY c.seq DESC LIMIT 1) AS purpose
-           FROM items i
-          WHERE i.tenant_id = ${TENANT} AND i.turn_id = ANY($1::uuid[]) AND i.kind IN ('ToolCall', 'ToolResult')
-          ORDER BY i.turn_id, i.seq DESC`,
-        [turnIds.map((id) => id.toLowerCase())],
+        `SELECT t.id::text AS turn_id, s.tool, ${msOf("s.created_at")} AS at, p.purpose
+           FROM unnest($1::uuid[]) AS t(id)
+           CROSS JOIN LATERAL (SELECT tool, created_at FROM items WHERE tenant_id = ${TENANT} AND turn_id = t.id
+                                 AND kind IN ('ToolCall', 'ToolResult') ORDER BY seq DESC LIMIT 1) s
+           LEFT JOIN LATERAL (SELECT btrim(body->>'purpose') AS purpose FROM items WHERE tenant_id = ${TENANT}
+                                AND turn_id = t.id AND kind = 'ToolCall' AND btrim(body->>'purpose') <> ''
+                              ORDER BY seq DESC LIMIT 1) p ON true`,
+        [[...new Set(turnIds.map((id) => id.toLowerCase()))]],
       );
       return new Map(
         rows.map((r) => [
-          r.turn_id as string,
-          {
-            tool: (r.tool as string | null) ?? "",
-            at: Number(r.at),
-            ...(r.purpose ? { purpose: r.purpose as string } : {}),
-          },
+          String(r.turn_id),
+          { tool: String(r.tool ?? ""), at: Number(r.at), ...(r.purpose ? { purpose: String(r.purpose) } : {}) },
         ]),
       );
     },

@@ -503,7 +503,7 @@ test("a guidance change from another session is announced on this session's next
 
 test("the live-subagents note rides wake turns and the first turn after a compaction, never an ordinary turn", async () => {
   const conversation: Conversation = { kind: "dm", threadRef: "dm:U1:roster", audience: [actor] };
-  let roster = "Subagents opened from this conversation that are still running or queued:\n- builder (s1) — running";
+  let roster = "Subagents opened from this conversation that are still working or blocked:\n- builder (s1) — running";
   const sessions = createPostgresSessionStore(testDatabaseUrl());
   const orchestrator = await buildOrchestrator({
     sessions,
@@ -516,8 +516,14 @@ test("the live-subagents note rides wake turns and the first turn after a compac
       }),
     },
     featureFlags: {
+      list: async () => [],
+      get: async () => null,
+      enabled: async () => true,
       enabledFor: async () => new Set(FEATURE_NAMES),
-    } as unknown as OrchestratorDeps["featureFlags"],
+      setEnabled: async () => {
+        throw new Error("unused");
+      },
+    },
   });
   const destination = {
     type: "principal" as const,
@@ -538,5 +544,5 @@ test("the live-subagents note rides wake turns and the first turn after a compac
   assert.equal(noted(await sysprompt(orchestrator, ordinary)), true, "the first turn after a compaction carries it");
   assert.equal(noted(await sysprompt(orchestrator, ordinary)), false, "later ordinary turns do not");
   roster = "";
-  assert.doesNotMatch(await sysprompt(orchestrator, wake), /still running or queued/, "no note when no child is live");
+  assert.doesNotMatch(await sysprompt(orchestrator, wake), /still working or blocked/, "no note when no child is live");
 });

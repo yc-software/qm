@@ -22,6 +22,7 @@ import type { SessionStore } from "./session-store.ts";
 import { xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
 import {
   liveSubagentsNote,
+  openChildren,
   runState,
   sessionActivity,
   subagentActivity,
@@ -240,7 +241,15 @@ type SessionListResult = { ok: true; sessions: SessionSummary[] } | { ok: false;
 
 type SessionReadResult =
   | { ok: true; mode: "children"; children: SessionChildSummary[] }
-  | { ok: true; mode: "transcript"; sessionId: string; title: string; activity: SubagentActivity; rendered: string }
+  | {
+      ok: true;
+      mode: "transcript";
+      sessionId: string;
+      title: string;
+      status: RunState;
+      activity?: SubagentActivity;
+      rendered: string;
+    }
   | { ok: false; message: string };
 
 interface SessionSyscallBinding {
@@ -306,7 +315,7 @@ export interface SessionSyscallDeps {
     | "getForParticipant"
   > &
     SubagentActivityDeps["sessions"];
-  runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "getByDedupKey" | "get" | "withdraw"> &
+  runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "getByDedupKey" | "get" | "withdraw" | "activeForThread"> &
     SubagentActivityDeps["runs"];
   signals: Pick<RunSignalStore, "send" | "pending">;
   maxAttempts: number;
@@ -898,7 +907,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
             const summaries: SessionChildSummary[] = [];
             for (const { session: child, activity } of await subagentActivity(
               deps,
-              await visibleChildren(deps, binding),
+              await visibleChildren(deps, binding, await deps.sessions.childrenOf(binding.session.id)),
             )) {
               const said = lastAssistantText((await visibleHistory(child)).slice(-LAST_SAID_SCAN));
               summaries.push({
@@ -938,12 +947,15 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
             mode: "transcript",
             sessionId: target.id,
             title: visibleTitle(target),
-            activity: await sessionActivity(deps, target),
+            status: runState(await deps.runs.activeForThread(target.threadRef)),
+            ...(input.peer ? {} : { activity: await sessionActivity(deps, target) }),
             rendered: rendered || "[no readable entries yet]",
           };
         },
         async liveSubagents() {
-          return liveSubagentsNote(await subagentActivity(deps, await visibleChildren(deps, binding)), visibleTitle);
+          const open = await openChildren(deps, await deps.sessions.childrenOf(binding.session.id));
+          const visible = await visibleChildren(deps, binding, open);
+          return liveSubagentsNote(await subagentActivity(deps, visible), visibleTitle);
         },
         async search(input) {
           const caller = await currentCaller();

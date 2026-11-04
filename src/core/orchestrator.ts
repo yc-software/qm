@@ -2512,6 +2512,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           liveTurn,
           request: { ...input, readOnly: strictReadOnly, cancel: turnAbort.signal },
         });
+        const liveSubagents = async () =>
+          (await turnSessionSyscalls?.liveSubagents?.().catch(swallowAs("orchestrator: live subagents", ""))) ?? "";
         const baseTools = createToolContext({
           desktopClientId: desktopClientForTurn(input),
           ...(canInstallCanvas
@@ -2938,9 +2940,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           unscreenedNote,
           input.conversationHeader?.trim(),
           ...turnEvents,
-          turnSessionSyscalls?.liveSubagents && (sessionTurn || automatedTurn || compactedSinceLastTurn(history))
-            ? await turnSessionSyscalls.liveSubagents().catch(swallowAs("orchestrator: live subagents note", ""))
-            : "",
+          sessionTurn || automatedTurn || compactedSinceLastTurn(history) ? await liveSubagents() : "",
           deps.keychain
             ? await askResolutionEvents(
                 scopeAskList,
@@ -3625,7 +3625,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               runtimeSwitchNote("choice" in segment.runtimeHandoff ? segment.runtimeHandoff.choice : undefined) +
                 (recovery && !resumedHistory.some((item) => isUserItem(item) && (item.text ?? "").startsWith(baseText))
                   ? `\nCurrent request:\n${baseText}`
-                  : ""),
+                  : "") +
+                (recovery ? `\n${await liveSubagents()}` : ""),
               inbound.images.length ? { images: inbound.images } : {},
               { history: resumedHistory },
             );

@@ -2,6 +2,7 @@ import type { Session } from "../types.ts";
 import type { Run, RunStore } from "../runs/run-store.ts";
 import type { SessionStore } from "./session-store.ts";
 import type { SessionMailbox } from "./session-mailbox.ts";
+import { xmlEscape } from "../util/message-tag.ts";
 
 export type SubagentMailKind = "final_answer" | "no_reply" | "awaiting_input" | "errored" | "refused";
 
@@ -49,14 +50,33 @@ export interface SubagentActivityDeps {
 }
 
 export async function visibleChildren(
-  deps: { sessions: Pick<SessionStore, "childrenOf" | "getForParticipant"> },
-  caller: { session: Session; scopeId: string; request: { actor: { id: string } } },
+  deps: { sessions: Pick<SessionStore, "getForParticipant"> },
+  caller: { scopeId: string; request: { actor: { id: string } } },
+  children: readonly Session[],
 ): Promise<Session[]> {
-  const visible: Session[] = [];
-  for (const child of await deps.sessions.childrenOf(caller.session.id))
-    if (child.scopeId === caller.scopeId && (await deps.sessions.getForParticipant(child.id, caller.request.actor.id)))
-      visible.push(child);
-  return visible;
+  const inScope = children.filter((child) => child.scopeId === caller.scopeId);
+  const seen = await Promise.all(
+    inScope.map((child) => deps.sessions.getForParticipant(child.id, caller.request.actor.id)),
+  );
+  return inScope.filter((_, index) => seen[index]);
+}
+
+export async function openChildren(deps: SubagentActivityDeps, children: readonly Session[]): Promise<Session[]> {
+  if (!children.length) return [];
+  const descendants = await deps.sessions.descendantsOf(children.map((child) => child.id));
+  const threads = children.map((child) => child.threadRef);
+  const [active, finished] = await Promise.all([
+    deps.runs.activeForThreads([...threads, ...descendants.map((d) => d.threadRef)]),
+    deps.runs.lastFinishedForThreads(threads),
+  ]);
+  return children.filter((child) => {
+    const last = finished.get(child.threadRef);
+    return (
+      active.has(child.threadRef) ||
+      descendants.some((d) => d.rootId === child.id && active.has(d.threadRef)) ||
+      (!!last && !last.result?.stopped && subagentOutcome(last).kind === "awaiting_input")
+    );
+  });
 }
 
 export async function subagentActivity(
@@ -94,9 +114,11 @@ export async function subagentActivity(
   });
 }
 
-export async function sessionActivity(deps: SubagentActivityDeps, session: Session): Promise<SubagentActivity> {
-  const [row] = await subagentActivity(deps, [session]);
-  return row?.activity ?? { status: "idle", liveDescendants: 0, unread: 0 };
+export async function sessionActivity(
+  deps: SubagentActivityDeps,
+  session: Session,
+): Promise<SubagentActivity | undefined> {
+  return (await subagentActivity(deps, [session]))[0]?.activity;
 }
 
 function ago(ms: number): string {
@@ -110,14 +132,23 @@ function ago(ms: number): string {
 
 const count = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
 
+const clip = (text: string, max: number): string => {
+  const line = text.replace(/\s+/g, " ").trim();
+  return line.length <= max ? line : `${line.slice(0, max - 1).trimEnd()}…`;
+};
+
 export function renderSubagentActivity(activity: SubagentActivity): string {
   const parts: string[] = [activity.status];
   if (activity.status !== "running" && activity.outcome) parts.push(`last turn ${activity.outcome}`);
-  if (activity.stepAgoMs !== undefined) parts.push(`last step ${activity.tool} ${ago(activity.stepAgoMs)} ago`);
+  if (activity.stepAgoMs !== undefined) {
+    const tool = activity.tool ? `${clip(activity.tool, 40)} ` : "";
+    parts.push(`last step ${tool}${ago(activity.stepAgoMs)} ago`);
+  }
   if (activity.startedAgoMs !== undefined) parts.push(`started ${ago(activity.startedAgoMs)} ago, no tool step yet`);
-  if (activity.status === "running" && activity.purpose) parts.push(`latest purpose: ${activity.purpose}`);
+  if (activity.status === "running" && activity.purpose) parts.push(`working on: ${clip(activity.purpose, 120)}`);
   if (activity.liveDescendants) parts.push(count(activity.liveDescendants, "live descendant", "live descendants"));
-  if (activity.unread) parts.push(count(activity.unread, "unread message", "unread messages"));
+  if (activity.unread)
+    parts.push(count(activity.unread, "message it has not read yet", "messages it has not read yet"));
   return parts.join("; ");
 }
 
@@ -125,12 +156,14 @@ export function liveSubagentsNote(
   children: readonly { session: Session; activity: SubagentActivity }[],
   titleOf: (session: Session) => string,
 ): string {
-  const live = children.filter(({ activity }) => activity.status !== "idle");
-  if (!live.length) return "";
-  return [
-    "Subagents opened from this conversation that are still running or queued:",
-    ...live.map(
-      ({ session, activity }) => `- ${titleOf(session)} (${session.id}) — ${renderSubagentActivity(activity)}`,
-    ),
-  ].join("\n");
+  if (!children.length) return "";
+  return xmlEscape(
+    [
+      "Subagents opened from this conversation that are still working or blocked:",
+      ...children.map(
+        ({ session, activity }) =>
+          `- ${clip(titleOf(session), 80)} (${session.id}) — ${renderSubagentActivity(activity)}`,
+      ),
+    ].join("\n"),
+  );
 }

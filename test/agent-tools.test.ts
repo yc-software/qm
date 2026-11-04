@@ -3859,6 +3859,7 @@ test("subagents read renders each child's liveness compactly", async () => {
             mode: "transcript",
             sessionId: "s1",
             title: "builder",
+            status: "idle",
             activity: { status: "idle", outcome: "final_answer", liveDescendants: 0, unread: 0 },
             rendered: "AgentMessage#4 done",
           }
@@ -3873,7 +3874,7 @@ test("subagents read renders each child's liveness compactly", async () => {
                   status: "running",
                   stepAgoMs: 42_000,
                   tool: "execute",
-                  purpose: "Running tests",
+                  purpose: "Running\n  tests",
                   outcome: "final_answer",
                   liveDescendants: 2,
                   unread: 1,
@@ -3897,16 +3898,23 @@ test("subagents read renders each child's liveness compactly", async () => {
                   unread: 0,
                 },
               },
+              {
+                sessionId: "s4",
+                title: "quiet",
+                activity: { status: "idle", stepAgoMs: 5_000, tool: "", liveDescendants: 0, unread: 2 },
+              },
             ],
           },
   };
-  const subagents = createAgentTools({ current: tc }).find((tool) => tool.name === "subagents")!;
+  const subagents = createAgentTools({ current: tc }).find((tool) => tool.name === "subagents");
+  assert.ok(subagents);
   assert.equal(
     textOut(await call(subagents, { action: "read" })),
     [
-      "- builder (s1) — running; last step execute 42s ago; latest purpose: Running tests; 2 live descendants; 1 unread message — last said: on it",
+      "- builder (s1) — running; last step execute 42s ago; working on: Running tests; 2 live descendants; 1 message it has not read yet — last said: on it",
       "- fresh (s2) — running; started 5s ago, no tool step yet",
       "- reviewer (s3) — idle; last turn errored; last step files 2h ago",
+      "- quiet (s4) — idle; last step 5s ago; 2 messages it has not read yet",
     ].join("\n"),
   );
   assert.equal(

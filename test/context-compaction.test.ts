@@ -399,6 +399,11 @@ test("compactedSinceLastTurn holds from a new summary until the next turn's mess
     true,
     "an overheard message is not a turn",
   );
+  assert.equal(
+    compactedSinceLastTurn([mkItem(2), summary(4), mkItem(5, { kind: "SteeringMessage", text: "also check X" })]),
+    true,
+    "a steering message mid-turn is not a new turn",
+  );
 });
 
 test("planCompaction returns null when nothing needs to move (a still-fitting prior summary is reused)", () => {

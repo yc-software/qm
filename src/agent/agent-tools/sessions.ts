@@ -210,9 +210,11 @@ export function sessionTools(kit: ToolKit) {
           action: "read",
           sessionId: result.sessionId,
           title: result.title,
-          status: result.activity.status,
+          status: result.status,
         },
-        text(`"${result.title}" — ${renderSubagentActivity(result.activity)}\n${result.rendered}`),
+        text(
+          `"${result.title}" — ${result.activity ? renderSubagentActivity(result.activity) : result.status}\n${result.rendered}`,
+        ),
       );
     },
   });
@@ -336,9 +338,9 @@ export function sessionTools(kit: ToolKit) {
           action: "read",
           sessionId: result.sessionId,
           title: result.title,
-          status: result.activity.status,
+          status: result.status,
         },
-        text(`"${result.title}" — ${result.activity.status}\n${result.rendered}`),
+        text(`"${result.title}" — ${result.status}\n${result.rendered}`),
       );
     },
   });
