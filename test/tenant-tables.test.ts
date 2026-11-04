@@ -188,14 +188,14 @@ describe("tenant tables", () => {
     const ddl = new pg.Client({ connectionString: ownerUrl });
     await ddl.connect();
     try {
-      await ddl.query("CREATE UNIQUE INDEX tenant_probe_legacy_id_key ON tenant_probe(id)");
+      await ddl.query("CREATE UNIQUE INDEX tenant_probe_legacy_i ON tenant_probe(id)");
       await assert.rejects(refreshTenants(app, true), /legacy single-tenant unique indexes/);
       await assert.rejects(
         withTenant(install, () => app.q("SELECT 1 AS one")),
         TenantUnavailable,
       );
     } finally {
-      await ddl.query("DROP INDEX IF EXISTS tenant_probe_legacy_id_key");
+      await ddl.query("DROP INDEX IF EXISTS tenant_probe_legacy_i");
       await ddl.end();
     }
     await refreshTenants(app, true);

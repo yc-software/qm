@@ -14,8 +14,8 @@ const BYPASSES_ROW_SECURITY = `SELECT r.rolsuper OR r.rolbypassrls OR EXISTS (
      WHERE c.relrowsecurity AND c.relnamespace = current_schema()::regnamespace AND pg_has_role(c.relowner, 'USAGE')
   ) AS bypass,
   EXISTS (
-    SELECT 1 FROM pg_class c
-     WHERE c.relkind = 'i' AND c.relnamespace = current_schema()::regnamespace AND c.relname ~ '_legacy_.*_key$'
+    SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+     WHERE i.indisunique AND c.relnamespace = current_schema()::regnamespace AND c.relname LIKE '%\\_legacy\\_%'
   ) AS legacy_keys
   FROM pg_roles r WHERE r.rolname = current_user`;
 
