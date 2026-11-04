@@ -1,4 +1,5 @@
 import { loadConfig } from "./config.ts";
+import { migrateCronQueue } from "./cron/job-queue.ts";
 import { createPostgresAppPageViewLog } from "./deploy/page-views.ts";
 import { createPostgresFileUploadStore } from "./files/file-upload-store.ts";
 import { createPostgresVectorStore } from "./memory/postgres-vector-store.ts";
@@ -25,6 +26,7 @@ try {
     if (await vectorExtensionAvailable(config.databaseUrl)) createPostgresVectorStore(config.databaseUrl);
   }
   await migrateRegisteredPgSchemas(config.databaseUrl);
+  if (config.databaseUrl) await migrateCronQueue(config.databaseUrl);
   await built.rewriteSurfaceOrigins();
   console.log("[qm:migrate] database migrations applied");
 } finally {

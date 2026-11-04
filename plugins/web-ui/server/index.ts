@@ -38,6 +38,7 @@ import {
 } from "../../chassis/src/http.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER, withIdentityTenant } from "../../chassis/src/portal-identity.ts";
 import { boundTenant, withTenant } from "../../chassis/src/tenant.ts";
+import { coreHostTenants, requestHostname } from "../../chassis/src/host-tenant.ts";
 import { createBrandingCache, injectBranding } from "../../chassis/src/branding.ts";
 import { parseSuggestedActivities } from "../../chassis/src/suggested-activities.ts";
 import { principalInAllowlist } from "../../chassis/src/principal-allowlist.ts";
@@ -164,6 +165,8 @@ function rememberRun(runId: string, user: string, threadRef: string): void {
 
 const deliveryClients = new Map<string, Set<ServerResponse>>();
 const clientTenants = new WeakMap<ServerResponse, string | undefined>();
+const hostTenants = coreHostTenants(CORE, CORE_SIGNING_SECRET);
+let multiTenant = true;
 
 function ownerOfWebThread(threadRef: string): string | null {
   if (!threadRef.startsWith("web:")) return null;
@@ -604,7 +607,7 @@ export function forwardSessionState(frame: SessionStateFrame): void {
 function tenantClients(user: string, tenant: string | undefined): ServerResponse[] {
   return [...(deliveryClients.get(user) ?? [])].filter((res) => {
     const own = clientTenants.get(res);
-    return own === undefined || own === tenant;
+    return own === undefined ? !multiTenant : own === tenant;
   });
 }
 
@@ -2783,6 +2786,7 @@ const apiRoutes: readonly WebRoute[] = [
     path: "/api/deliveries/events",
     handle: async (c) => {
       const { req, res, user } = c;
+      if (boundTenant() === undefined) multiTenant = (await hostTenants(requestHostname(req))).multi;
       res.writeHead(200, {
         "content-type": "text/event-stream; charset=utf-8",
         "cache-control": "no-cache, no-transform",

@@ -30,7 +30,10 @@ export interface Instance {
   shareReads: { token: string; tenant: string | undefined }[];
 }
 
-export async function startTenantInstance(tenants: string[]): Promise<Instance> {
+export async function startTenantInstance(
+  tenants: string[],
+  appSignIn: { deployAppsSessionSecret?: string; deployAppsLoginUrl?: string } = {},
+): Promise<Instance> {
   const databaseUrl = testMigratedDatabaseUrl();
   const owner = new pg.Pool({ connectionString: databaseUrl });
   for (const tenant of tenants) await owner.query("INSERT INTO tenants(id) VALUES ($1)", [tenant]);
@@ -57,6 +60,7 @@ export async function startTenantInstance(tenants: string[]): Promise<Instance> 
     sessionShares,
     deployAppsDomain: "apps.example.test",
     deployGateSecret: SECRET,
+    ...appSignIn,
   });
   server.listen(0);
   return { built, server, owner, shareReads, base: `http://127.0.0.1:${(server.address() as AddressInfo).port}` };

@@ -50,8 +50,13 @@ async function lookupHost(ctx: ApiCtx): Promise<void> {
   const tenancy = tenancyOf(ctx);
   if (!tenancy) return;
   const resolved = await tenancy.hostTenant(requestHost(ctx.params.host));
-  const tenant = resolved.tenant ?? (resolved.multi ? undefined : await tenancy.soleTenant());
-  sendJson(ctx.res, 200, { tenant: tenant ?? null, multi: resolved.multi });
+  const sole = await tenancy.soleTenant();
+  const tenant = resolved.tenant ?? (resolved.multi ? undefined : sole);
+  sendJson(ctx.res, 200, {
+    tenant: tenant ?? null,
+    multi: resolved.multi,
+    sole: tenant !== undefined && tenant === sole,
+  });
 }
 
 async function updateSettings(ctx: ApiCtx): Promise<void> {

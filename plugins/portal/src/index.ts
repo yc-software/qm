@@ -1,4 +1,4 @@
-import { coreHostTenants, inHostTenant } from "../../chassis/src/host-tenant.ts";
+import { coreHostTenants, inHostTenant, type HostTenant } from "../../chassis/src/host-tenant.ts";
 import { coreTenantSignIn } from "../../chassis/src/tenant-sign-in.ts";
 import {
   DESKTOP_LAUNCH_SCRIPT,
@@ -33,6 +33,7 @@ import {
   safeEqual,
   sanitizeReturnTo,
   type SessionClaims,
+  servesTenant,
   type ImpersonationClaims,
   type TmpClaims,
 } from "./session.ts";
@@ -448,14 +449,38 @@ function localDevSession(req: IncomingMessage, nowMs = Date.now(), ignoreLogout 
   if (!isLoopbackAddress(req.socket.remoteAddress)) return null;
   if (!ignoreLogout && readCookie(req.headers.cookie, LOCAL_LOGOUT_COOKIE) === "1") return null;
   const now = Math.floor(nowMs / 1000);
-  return { k: "session", sub: LOCAL_AUTH_PRINCIPAL, org: ORG, iat: now, exp: now + SESSION_TTL_S };
+  return {
+    k: "session",
+    sub: LOCAL_AUTH_PRINCIPAL,
+    org: ORG,
+    ...sessionTenantClaim(),
+    iat: now,
+    exp: now + SESSION_TTL_S,
+  };
+}
+
+const hostTenantOf = new WeakMap<IncomingMessage, HostTenant>();
+
+function sessionTenantClaim(): { t?: string } {
+  const tenant = boundTenant();
+  return tenant === undefined ? {} : { t: tenant };
+}
+
+function cookieSession(req: IncomingMessage): SessionClaims | null {
+  const session = openSession(
+    readCookie(req.headers.cookie, "portal_session"),
+    sessionKey,
+    Date.now(),
+    ORG,
+    SESSION_MAX_TTL_S,
+  );
+  if (!session) return null;
+  const tenant = { bound: boundTenant(), legacy: hostTenantOf.get(req)?.sole === true };
+  return servesTenant(session, tenant) ? session : null;
 }
 
 function currentSession(req: IncomingMessage): SessionClaims | null {
-  return (
-    openSession(readCookie(req.headers.cookie, "portal_session"), sessionKey, Date.now(), ORG, SESSION_MAX_TTL_S) ??
-    localDevSession(req)
-  );
+  return cookieSession(req) ?? localDevSession(req);
 }
 
 const CARD_STYLE = `<style>
@@ -887,6 +912,7 @@ async function mintPlaygroundSession(req: IncomingMessage, res: ServerResponse):
     k: "session",
     sub: `playground-${randomToken(8)}`,
     org: ORG,
+    ...sessionTenantClaim(),
     name: "Guest",
     anon: true,
     auth: now,
@@ -898,13 +924,7 @@ async function mintPlaygroundSession(req: IncomingMessage, res: ServerResponse):
 }
 
 function renewSessionCookie(req: IncomingMessage, res: ServerResponse): SessionClaims | null {
-  const session = openSession(
-    readCookie(req.headers.cookie, "portal_session"),
-    sessionKey,
-    Date.now(),
-    ORG,
-    SESSION_MAX_TTL_S,
-  );
+  const session = cookieSession(req);
   if (!session) return null;
   if (session.appOnly) return session;
   const now = Math.floor(Date.now() / 1000);
@@ -912,6 +932,7 @@ function renewSessionCookie(req: IncomingMessage, res: ServerResponse): SessionC
   const authenticatedAt = session.auth ?? session.iat;
   const renewed: SessionClaims = {
     ...session,
+    ...sessionTenantClaim(),
     auth: authenticatedAt,
     iat: now,
     exp: Math.min(now + SESSION_TTL_S, authenticatedAt + SESSION_MAX_TTL_S),
@@ -942,7 +963,12 @@ const server = createServer((req, res) => {
         Math.round(performance.now() - startedAt),
       );
   });
-  const served = isAppHost(req) ? handle(req, res) : inHostTenant(hostTenants, req, res, () => handle(req, res));
+  const lookup = async (host: string): Promise<HostTenant> => {
+    const found = await hostTenants(host);
+    hostTenantOf.set(req, found);
+    return found;
+  };
+  const served = isAppHost(req) ? handle(req, res) : inHostTenant(lookup, req, res, () => handle(req, res));
   void served.catch((err: unknown) => {
     errorLogged = true;
     reportBackendError(err);
@@ -1372,6 +1398,7 @@ async function desktopLogin(req: IncomingMessage, res: ServerResponse, url: URL)
       ORIGIN,
       ORG,
       SESSION_MAX_TTL_S,
+      boundTenant(),
     );
     if (!claims) return json(res, 400, { error: "invalid_desktop_login" });
     try {
@@ -1626,6 +1653,7 @@ function setAuthenticatedSession(res: ServerResponse, sub: string, name = "", ap
     k: "session",
     sub,
     org: ORG,
+    ...sessionTenantClaim(),
     auth: now,
     iat: now,
     exp: now + SESSION_TTL_S,

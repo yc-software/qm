@@ -28,7 +28,12 @@ import { appAnnotationAsset } from "../../deploy/app-annotate.ts";
 import { APP_SHELL_PATH_PREFIX, appShellHtml } from "../../deploy/app-shell.ts";
 import type { AppViewAuthMode } from "../../deploy/page-views.ts";
 import { principalDestination } from "../../reach/reach.ts";
-import { FRAME_SESSION_COOKIE, portalSession, portalSessionFrom } from "../../deploy/viewer-session.ts";
+import {
+  appViewerTenant,
+  FRAME_SESSION_COOKIE,
+  portalSession,
+  portalSessionFrom,
+} from "../../deploy/viewer-session.ts";
 import { EMBED_ANCESTORS_HINT, parseEmbedAncestors } from "../../deploy/embed-ancestors.ts";
 import { proxyHeaders } from "../../util/http-proxy.ts";
 import { bindTenant, withRowTenant } from "../tenant-ingress.ts";
@@ -801,7 +806,7 @@ async function fetchDeploymentResponse(
 }
 
 export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
-  const { req, res, app, deps, url, pathname } = ctx;
+  const { req, res, deps } = ctx;
   const appsDomain = deps.deployAppsDomain;
   const gateSecret = deps.deployGateSecret;
   const fromAppHost = req.headers["x-qm-app-host"] === "1";
@@ -863,13 +868,14 @@ async function serveAppSubdomain(ctx: BaseCtx, rawHost: string, slug: string, fr
   const sessionSecret = deps.deployAppsSessionSecret;
   const loginUrl = deps.deployAppsLoginUrl;
   const wantsHtml = ctx.method === "GET" && String(req.headers.accept ?? "").includes("text/html");
-  let session = sessionSecret ? portalSession(req.headers.cookie, sessionSecret) : null;
+  const viewerTenant = appViewerTenant();
+  let session = sessionSecret ? portalSession(req.headers.cookie, sessionSecret, viewerTenant) : null;
   const dest = req.headers["sec-fetch-dest"];
   const site = req.headers["sec-fetch-site"];
   const framed = dest === "iframe" || site === "same-origin";
   const embedAncestors = framed ? (deployment?.embedAncestors ?? []) : [];
   if (!session && sessionSecret && embedAncestors.length) {
-    session = portalSessionFrom(req.headers.cookie, FRAME_SESSION_COOKIE, sessionSecret);
+    session = portalSessionFrom(req.headers.cookie, FRAME_SESSION_COOKIE, sessionSecret, viewerTenant);
   }
   const sub = session?.sub;
   if (embedAncestors.length) res.setHeader("content-security-policy", frameAncestorsDirective(embedAncestors));

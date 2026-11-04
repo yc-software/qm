@@ -9,7 +9,12 @@ import { shutdownOnUncaught } from "./util/process-guard.ts";
 import { createServer } from "./api/server.ts";
 import { dockerDaemonFailure } from "./deploy/docker-deploy-provider.ts";
 import { errMessage, reportFailureAs } from "./util/errors.ts";
-import { slackAccountConfigsFromEnv, slackPluginConfigFromEnv, startSlackPlugin } from "./slack/index.ts";
+import {
+  slackAccountConfigsFromEnv,
+  slackPluginConfigFromEnv,
+  startSlackPlugin,
+  storedSlackEnv,
+} from "./slack/index.ts";
 import { createSlackRuntimeReconciler, createTenantSlackRuntimes } from "./surfaces/slack-runtime.ts";
 import { useOwnerDatabase } from "./tenants/owner-pool.ts";
 import { withoutTenant } from "./tenants/context.ts";
@@ -105,12 +110,7 @@ const slackRuntime = createTenantSlackRuntimes({
     if (stored) {
       if (stored.installId && !managedSlack) return null;
       const dynamic = slackPluginConfigFromEnv(
-        {
-          ...process.env,
-          SLACK_BOT_TOKEN: stored.botToken,
-          SLACK_APP_TOKEN: stored.appToken,
-          SLACK_EVENTS_MODE: stored.appToken ? "socket" : process.env.SLACK_EVENTS_MODE,
-        },
+        storedSlackEnv(process.env, stored, tenant.install),
         stored.installId && managedSlack ? (staging) => managedSlack.receiver(stored.installId!, staging) : undefined,
       );
       if (dynamic && stored.installId) dynamic.installationId = stored.installId;
