@@ -406,5 +406,25 @@ export function surfaceTool(kit: ToolKit) {
     },
   });
 
+  if (opts?.surfacePrompt?.textOnly) {
+    surface.description =
+      `Everything you do on ${surfaceLabel} goes through this tool — posting (the ONLY way your words ` +
+      "reach people; end the turn without a post and you stay silent), reading threads, checking what's new, " +
+      "searching, listing members. This conversation takes text messages only. Pick an `action`.";
+    const { sandbox_id: _sandbox, files: _files, emoji: _emoji, ref: _ref, ...kept } = surface.parameters.properties;
+    surface.parameters = Type.Object({
+      ...kept,
+      action: Type.Union(
+        ["post", "reach", "read_thread", "whats_new", "search", "read_members"].map((a) => Type.Literal(a)),
+        {
+          description:
+            "What to do: post (reply HERE, in this conversation — the normal way to answer), reach (send to a " +
+            "DIFFERENT audience — the ONLY way to leave this conversation), read_thread (read stored thread " +
+            "messages), whats_new (pointers to what changed), search (find messages), read_members (the roster). " +
+            "There is no way to react, edit, delete, or attach files here.",
+        },
+      ),
+    }) as unknown as typeof surface.parameters;
+  }
   return { surface };
 }

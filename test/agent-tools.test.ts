@@ -3087,6 +3087,27 @@ test("surface messages use Markdown and teach only the mention syntax their regi
   }
 });
 
+test("a text-only surface's tool offers only the actions and fields it can carry out", () => {
+  const ref: ToolContextRef = { current: fakeToolContext(), scopeLabel: "channel:C1" };
+  const schemaOf = (textOnly: boolean) => {
+    const tool = createAgentTools(ref, {
+      surfaceTools: true,
+      surfaceName: "chat",
+      surfacePrompt: { label: "Chat", ...(textOnly ? { textOnly: true } : {}) },
+    }).find((t) => t.name === "chat")!;
+    const properties = (tool.parameters as { properties: Record<string, { anyOf?: { const: string }[] }> }).properties;
+    return { fields: Object.keys(properties).sort(), actions: properties.action!.anyOf!.map((a) => a.const) };
+  };
+  const full = schemaOf(false);
+  const textOnly = schemaOf(true);
+  assert.deepEqual(textOnly.actions, ["post", "reach", "read_thread", "whats_new", "search", "read_members"]);
+  assert.deepEqual(
+    full.fields.filter((f) => !textOnly.fields.includes(f)),
+    ["emoji", "files", "ref", "sandbox_id"],
+  );
+  assert.ok(["react", "edit", "delete"].every((a) => full.actions.includes(a)));
+});
+
 test("read passes turn cancellation through and cannot record a late success", async () => {
   const controller = new AbortController();
   const started = Promise.withResolvers<void>();
