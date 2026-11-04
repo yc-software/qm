@@ -684,6 +684,7 @@ export function buildApp(
               createdBy: LAYER_CREATED_BY,
               reviewer: LAYER_REVIEWER,
             });
+            return true;
           },
         }
       : {}),
