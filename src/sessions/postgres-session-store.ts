@@ -5,6 +5,7 @@ import { likeContains } from "../persistence/like.ts";
 import { createPgPool, type PoolClient, withPgTransaction } from "../persistence/pg-pool.ts";
 import { jsonbStringify, pgTextSafe } from "../util/text.ts";
 import { reportFailure } from "../util/errors.ts";
+import { claimAcrossTenants, inTenantOf, rowTenant } from "../tenants/claim.ts";
 import type { Session, SessionType, ScopeId } from "../types.ts";
 import type { GoalRecord } from "../agent/goal.ts";
 import type {
@@ -154,7 +155,7 @@ function rowToItem(r: Record<string, unknown>): Item {
 
 const ITEM_FIELDS = `i.session_id, i.seq, ${ITEM_COLUMNS.map(([column, key]) => `${column === "blob_sha" ? "encode(i.blob_sha, 'hex')" : `i.${column}`} AS "${key}"`).join(",")}, ${msOf("i.created_at")} AS created_at`;
 const ITEM_FROM = "items i";
-const TENANT = "qm_tenant_id()";
+const TENANT = "qm_bound_tenant()";
 const LIST_COLUMNS = `s.id, s.type, s.scope_id, s.thread_ref, s.surface, s.created_at, s.title, s.channel_name,
   s.forked_from_session_id, s.forked_from_title, s.fork_boundary_seq, s.parent_session_id, s.origin, s.side_chat`;
 const USER_ACTIVITY = "COALESCE(s.last_user_activity, s.created_at)";
@@ -371,7 +372,61 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
          )
          SELECT * FROM rollup ORDER BY day, scope_id, origin, cron_id, model`;
 
-  const { pool, q, query } = createPgPool(connectionString, [...DIRECTORY_MIGRATIONS, ...SESSION_MIGRATIONS]);
+  const db = createPgPool(connectionString, [...DIRECTORY_MIGRATIONS, ...SESSION_MIGRATIONS]);
+  const { pool, q } = db;
+
+  async function refreshTenantSpend(): Promise<void> {
+    const started = Date.now();
+    await withPgTransaction(await pool(), async (client) => {
+      const changed = await client.query(
+        `DELETE FROM session_spend_dirty WHERE tenant_id = qm_bound_tenant() AND session_id IS NOT NULL RETURNING session_id`,
+      );
+      if (!changed.rowCount) return;
+      await client.query(
+        `WITH RECURSIVE affected(id) AS (
+           SELECT unnest($1::text[])
+           UNION
+           SELECT c.id FROM affected a
+             CROSS JOIN LATERAL (SELECT id FROM sessions WHERE tenant_id = qm_bound_tenant() AND parent_session_id = a.id OFFSET 0) c
+         )
+         INSERT INTO session_spend_dirty(day)
+         SELECT DISTINCT d.day FROM affected a
+           CROSS JOIN LATERAL (
+             SELECT floor(created_at::numeric / 86400000)::bigint AS day FROM session_llm_requests
+              WHERE tenant_id = qm_bound_tenant() AND session_id = a.id AND usage_json IS NOT NULL OFFSET 0
+           ) d
+         ON CONFLICT DO NOTHING`,
+        [changed.rows.map((r) => r.session_id)],
+      );
+    });
+    const days = await q(
+      `SELECT d.day FROM (SELECT DISTINCT day FROM session_spend_dirty WHERE tenant_id = qm_bound_tenant() AND day IS NOT NULL) d
+       LEFT JOIN session_spend_days c ON c.tenant_id = qm_bound_tenant() AND c.day = d.day
+       ORDER BY d.day = max(d.day) OVER () DESC, c.updated_at NULLS FIRST, d.day DESC`,
+    );
+    for (const [index, { day }] of days.entries()) {
+      try {
+        await withPgTransaction(await pool(), async (client) => {
+          const pending = await client.query(
+            `DELETE FROM session_spend_dirty WHERE tenant_id = qm_bound_tenant() AND day = $1 RETURNING day`,
+            [day],
+          );
+          if (!pending.rowCount) return;
+          const updatedAt = now();
+          const rows = await client.query(spendSql, [Number(day) * 86_400_000, (Number(day) + 1) * 86_400_000]);
+          await client.query(
+            `INSERT INTO session_spend_days(day, rows, updated_at) VALUES ($1, $2, $3)
+             ON CONFLICT (tenant_id, day) DO UPDATE SET rows = EXCLUDED.rows, updated_at = EXCLUDED.updated_at`,
+            [day, jsonbStringify(rows.rows), updatedAt],
+          );
+        });
+      } catch (error) {
+        reportFailure("spend: refresh daily totals", error);
+        continue;
+      }
+      if (index > 0 && Date.now() - started >= 5_000) break;
+    }
+  }
 
   const lockSession = (client: PoolClient, sessionId: string) =>
     client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [sessionId]);
@@ -493,7 +548,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         ...(surface ? { surface } : {}),
       };
       await q(
-        "INSERT INTO sessions(id, type, scope_id, thread_ref, created_at, channel_name, surface, last_activity, messages, turns, origin, origin_id, client_tools) VALUES ($1,$2,$3,$4,$5,$6,$7,$5,0,0,$8,$9,$10::jsonb) ON CONFLICT (thread_ref) DO NOTHING",
+        "INSERT INTO sessions(id, type, scope_id, thread_ref, created_at, channel_name, surface, last_activity, messages, turns, origin, origin_id, client_tools) VALUES ($1,$2,$3,$4,$5,$6,$7,$5,0,0,$8,$9,$10::jsonb) ON CONFLICT (tenant_id, thread_ref) DO NOTHING",
         [
           session.id,
           session.type,
@@ -650,7 +705,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
                                      active_since, completion_note, cancel_note, governor, pause_reason,
                                      created_at, updated_at)
            VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14)
-           ON CONFLICT (session_id) DO UPDATE SET
+           ON CONFLICT (tenant_id, session_id) DO UPDATE SET
              objective = EXCLUDED.objective, status = EXCLUDED.status, floor = EXCLUDED.floor,
              token_cap = EXCLUDED.token_cap, tokens_used = EXCLUDED.tokens_used, active_ms = EXCLUDED.active_ms,
              active_since = EXCLUDED.active_since, completion_note = EXCLUDED.completion_note,
@@ -740,7 +795,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       if (envelope) {
         await q(
           `INSERT INTO llm_prompt_envelopes(hash, body, created_at) VALUES ($1,$2,$3)
-           ON CONFLICT (hash) DO UPDATE SET created_at = EXCLUDED.created_at
+           ON CONFLICT (tenant_id, hash) DO UPDATE SET created_at = EXCLUDED.created_at
             WHERE llm_prompt_envelopes.created_at < EXCLUDED.created_at - ${ENVELOPE_TOUCH_MS}`,
           [envelope.hash, envelope.body, now()],
         );
@@ -809,9 +864,10 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       const deadline = opts?.deadline ?? Infinity;
       let envelopes = 0;
       while (Date.now() < deadline && !opts?.stop?.()) {
-        const deleted = await query(
+        const deleted = await claimAcrossTenants(
+          db,
           `DELETE FROM llm_prompt_envelopes
-            WHERE hash IN (SELECT hash FROM llm_prompt_envelopes WHERE created_at < $1
+            WHERE (tenant_id, hash) IN (SELECT tenant_id, hash FROM llm_prompt_envelopes WHERE created_at < $1
                             ORDER BY created_at LIMIT $2 FOR UPDATE SKIP LOCKED)
               AND created_at < $1`,
           [cutoff, LLM_CAPTURE_PURGE_BATCH],
@@ -825,7 +881,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     async addParticipant(sessionId, principalId, title): Promise<void> {
       await q(
         `INSERT INTO participants(session_id, principal_id, title) VALUES ($1, $2, $3)
-         ON CONFLICT (session_id, principal_id) DO UPDATE SET title = EXCLUDED.title WHERE EXCLUDED.title IS NOT NULL`,
+         ON CONFLICT (tenant_id, session_id, principal_id) DO UPDATE SET title = EXCLUDED.title WHERE EXCLUDED.title IS NOT NULL`,
         [sessionId, principalId, title ?? null],
       );
     },
@@ -1221,53 +1277,8 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     },
 
     async refreshSpendRollup() {
-      const started = Date.now();
-      await withPgTransaction(await pool(), async (client) => {
-        const changed = await client.query(
-          "DELETE FROM session_spend_dirty WHERE session_id IS NOT NULL RETURNING session_id",
-        );
-        if (!changed.rowCount) return;
-        await client.query(
-          `WITH RECURSIVE affected(id) AS (
-             SELECT unnest($1::text[])
-             UNION
-             SELECT c.id FROM affected a
-               CROSS JOIN LATERAL (SELECT id FROM sessions WHERE parent_session_id = a.id OFFSET 0) c
-           )
-           INSERT INTO session_spend_dirty(day)
-           SELECT DISTINCT d.day FROM affected a
-             CROSS JOIN LATERAL (
-               SELECT floor(created_at::numeric / 86400000)::bigint AS day FROM session_llm_requests
-                WHERE session_id = a.id AND usage_json IS NOT NULL OFFSET 0
-             ) d
-           ON CONFLICT DO NOTHING`,
-          [changed.rows.map((r) => r.session_id)],
-        );
-      });
-      const days = await q(
-        `SELECT d.day FROM (SELECT DISTINCT day FROM session_spend_dirty WHERE day IS NOT NULL) d
-         LEFT JOIN session_spend_days c ON c.day = d.day
-         ORDER BY d.day = max(d.day) OVER () DESC, c.updated_at NULLS FIRST, d.day DESC`,
-      );
-      for (const [index, { day }] of days.entries()) {
-        try {
-          await withPgTransaction(await pool(), async (client) => {
-            const pending = await client.query("DELETE FROM session_spend_dirty WHERE day = $1 RETURNING day", [day]);
-            if (!pending.rowCount) return;
-            const updatedAt = now();
-            const rows = await client.query(spendSql, [Number(day) * 86_400_000, (Number(day) + 1) * 86_400_000]);
-            await client.query(
-              `INSERT INTO session_spend_days(day, rows, updated_at) VALUES ($1, $2, $3)
-               ON CONFLICT (day) DO UPDATE SET rows = EXCLUDED.rows, updated_at = EXCLUDED.updated_at`,
-              [day, jsonbStringify(rows.rows), updatedAt],
-            );
-          });
-        } catch (error) {
-          reportFailure("spend: refresh daily totals", error);
-          continue;
-        }
-        if (index > 0 && Date.now() - started >= 5_000) break;
-      }
+      const dirty = await claimAcrossTenants(db, "SELECT DISTINCT tenant_id FROM session_spend_dirty");
+      for (const row of dirty.rows) await inTenantOf(rowTenant(row).tenantId, refreshTenantSpend);
     },
 
     async listParticipants(): Promise<Participant[]> {

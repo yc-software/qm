@@ -23,6 +23,7 @@ export function mintDesktopLogin(
       aud: origin,
       sub: session.sub,
       org: session.org,
+      t: session.t,
       name: session.name,
       auth: session.auth ?? session.iat,
       sessionExp: session.exp,
@@ -44,6 +45,7 @@ export function openDesktopLogin(
   origin: string,
   org: string,
   maxAge: number,
+  tenant: string | undefined,
   nowMs = Date.now(),
 ) {
   if (code.length > 8192 || !desktopChallenge(verifier) || !desktopChallenge(state)) return null;
@@ -55,6 +57,7 @@ export function openDesktopLogin(
     p.appOnly !== undefined ||
     p.aud !== origin ||
     p.org !== org ||
+    p.t !== tenant ||
     typeof p.sub !== "string" ||
     !p.sub ||
     typeof p.auth !== "number" ||
@@ -85,6 +88,7 @@ export function openDesktopLogin(
     k: "session",
     sub: p.sub,
     org,
+    ...(tenant === undefined ? {} : { t: tenant }),
     auth: p.auth,
     iat: now,
     exp: p.sessionExp,

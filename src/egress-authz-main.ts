@@ -1,11 +1,11 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { BlockList, isIP } from "node:net";
 import { lookup as dnsLookup } from "node:dns/promises";
-import { EGRESS_PROXY_AUD, verifyCapabilityToken, type CapabilityClaims } from "./auth/capability-token.ts";
+import { EGRESS_PROXY_AUD, verifyCapabilityToken, type VerifiedCapability } from "./auth/capability-token.ts";
 import { egressDecision, hostMatches, isHostDenied, type EgressVerdict } from "./resolution/egress-policy.ts";
 import { createEgressAuditSink, type EgressAuditRecord, type EgressAuditSink } from "./admin/egress-audit-sink.ts";
 import { createPostgresEgressAuditSink } from "./admin/postgres-egress-audit-sink.ts";
-import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
+import { signedRequestHeaders, TENANT_HEADER } from "../plugins/chassis/src/source-auth-sign.ts";
 import { createSweeper } from "./util/sweeper.ts";
 import { errMessage, swallow } from "./util/errors.ts";
 import { shutdownOnUncaught } from "./util/process-guard.ts";
@@ -73,7 +73,7 @@ export function hostFromAuthority(authority: string): string | null {
   return a;
 }
 
-export type EgressAuditRecorder = Pick<EgressAuditSink, "record">;
+export type EgressAuditRecorder = { record(record: Parameters<EgressAuditSink["record"]>[0], tenant?: string): void };
 
 export interface EgressAuthzDeps {
   capabilitySecret?: string;
@@ -88,7 +88,7 @@ function defaultLookup(host: string): Promise<string[]> {
   return dnsLookup(host, { all: true, verbatim: true }).then((rs) => rs.map((r) => r.address));
 }
 
-async function claimsFor(token: string | null, deps: EgressAuthzDeps): Promise<CapabilityClaims | null> {
+async function claimsFor(token: string | null, deps: EgressAuthzDeps): Promise<VerifiedCapability | null> {
   const claims =
     token && deps.capabilitySecret ? await verifyCapabilityToken(token, deps.capabilitySecret, deps.now?.()) : null;
   return claims && claims.aud === EGRESS_PROXY_AUD ? claims : null;
@@ -146,14 +146,17 @@ export function buildEgressAuthzServer(deps: EgressAuthzDeps): Server {
       ? { allow: false, verdict: "denied" }
       : await decide(host, policy, lookup);
     try {
-      deps.audit.record({
-        source: "proxy",
-        host,
-        allowed: d.allow,
-        verdict: d.verdict,
-        scopeLabel: (claims?.scopeId ?? "unknown") as ScopeId,
-        principalId: claims?.actorId ?? "unknown",
-      });
+      deps.audit.record(
+        {
+          source: "proxy",
+          host,
+          allowed: d.allow,
+          verdict: d.verdict,
+          scopeLabel: (claims?.scopeId ?? "unknown") as ScopeId,
+          principalId: claims?.actorId ?? "unknown",
+        },
+        claims?.tenant,
+      );
     } catch (error) {
       swallow("egress-authz: audit record", error);
     }
@@ -188,44 +191,62 @@ export function createRelayAuditSink(
 ): EgressAuditRecorder & { flush(): Promise<void>; start(): void; stop(): void } {
   const url = coreApiUrl.replace(/\/$/, "") + RELAY_PATH;
   const pathWithQuery = new URL(url).pathname;
-  const buffer: Array<Omit<EgressAuditRecord, "ts" | "source">> = [];
+  const buffer: Array<{ tenant: string | undefined; record: Omit<EgressAuditRecord, "ts" | "source"> }> = [];
   let flushing = false;
   let dropped = 0;
+  async function send(tenant: string | undefined, batch: typeof buffer): Promise<void> {
+    const body = JSON.stringify({ records: batch.map((entry) => entry.record) });
+    const res = await fetchImpl(url, {
+      method: "POST",
+      headers: signedRequestHeaders(signingSecret, "POST", pathWithQuery, body, {
+        "content-type": "application/json",
+        ...(tenant ? { [TENANT_HEADER]: tenant } : {}),
+      }),
+      body,
+      signal: AbortSignal.timeout(10_000),
+    });
+    const refused = res.status === 400 || res.status === 403;
+    if (!res.ok && !refused) throw new Error(`core responded ${res.status}`);
+    if (refused)
+      console.warn(
+        `[egress-authz] core refused ${batch.length} audit records with HTTP ${res.status}: ${(await res.text()).slice(0, 500)}`,
+      );
+  }
   async function flush(): Promise<void> {
     if (flushing || buffer.length === 0) return;
     flushing = true;
+    const failed = new Set<string | undefined>();
     try {
-      const batch = buffer.slice(0, RELAY_MAX_BATCH);
-      const body = JSON.stringify({ records: batch });
-      const res = await fetchImpl(url, {
-        method: "POST",
-        headers: signedRequestHeaders(signingSecret, "POST", pathWithQuery, body, {
-          "content-type": "application/json",
-        }),
-        body,
-        signal: AbortSignal.timeout(10_000),
-      });
-      if (!res.ok) throw new Error(`core responded ${res.status}`);
-      buffer.splice(0, batch.length);
-      if (dropped > 0) {
-        console.warn(`[egress-authz] audit relay recovered; ${dropped} records were dropped while the buffer was full`);
-        dropped = 0;
+      for (let next = buffer[0]; next; next = buffer.find((entry) => !failed.has(entry.tenant))) {
+        const tenant = next.tenant;
+        const batch = buffer.filter((entry) => entry.tenant === tenant).slice(0, RELAY_MAX_BATCH);
+        try {
+          await send(tenant, batch);
+        } catch (e) {
+          failed.add(tenant);
+          console.warn(`[egress-authz] audit relay to ${url} failed (${buffer.length} buffered): ${errMessage(e)}`);
+          continue;
+        }
+        const sent = new Set(batch);
+        buffer.splice(0, buffer.length, ...buffer.filter((entry) => !sent.has(entry)));
       }
-    } catch (e) {
-      console.warn(`[egress-authz] audit relay to ${url} failed (${buffer.length} buffered): ${errMessage(e)}`);
     } finally {
       flushing = false;
+    }
+    if (dropped > 0 && failed.size === 0) {
+      console.warn(`[egress-authz] audit relay recovered; ${dropped} records were dropped while the buffer was full`);
+      dropped = 0;
     }
   }
   const sweeper = createSweeper(flush, RELAY_FLUSH_MS, { label: "egress-audit-relay" });
   return {
-    record(r) {
+    record(r, tenant) {
       if (buffer.length >= RELAY_MAX_BUFFER) {
         dropped++;
         return;
       }
-      const { source: _source, ...rest } = r;
-      buffer.push(rest);
+      const { source: _source, ...record } = r;
+      buffer.push({ tenant, record });
     },
     flush,
     start: () => sweeper.start(),

@@ -17,7 +17,7 @@ const sourceSecret = "source-only-secret".repeat(3);
 const controlSecret = "deployment-only-secret".repeat(3);
 const path = "/v1/deployment/live-session";
 
-async function fixture(run: () => Promise<void> = async () => {}) {
+async function fixture(run: () => Promise<void> = async () => {}, mappedHosts = false) {
   const store = createBackgroundOwnershipStore(testMap<BackgroundOwnership>());
   await store.set({ ownerDeploymentId: "cohort-a", setBy: "cohort-a" });
   let active = true;
@@ -32,6 +32,7 @@ async function fixture(run: () => Promise<void> = async () => {}) {
     deploymentControlSecret: controlSecret,
     deploymentLiveSmoke: run,
     replayDedupe: { claim: (...args) => dedupe.claim(...args) },
+    ...(mappedHosts ? { tenancy: { ...built.tenancy, hostTenant: async () => ({ multi: true }) } } : {}),
   });
   server.listen(0);
   const url = `http://localhost:${(server.address() as AddressInfo).port}${path}`;
@@ -120,6 +121,22 @@ test("live smoke returns exact identity and rejects request replay", async () =>
     });
     assert.equal((await srv.request("POST", request)).status, 409);
     assert.equal(calls, 1);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("live smoke still runs once company hosts are mapped to tenants", async () => {
+  let calls = 0;
+  const srv = await fixture(async () => {
+    calls++;
+  }, true);
+  try {
+    const response = await srv.request("POST", body());
+    assert.equal(response.status, 200);
+    assert.equal(((await response.json()) as { ok: boolean }).ok, true);
+    assert.equal(calls, 1);
+    assert.equal((await srv.request("POST", body(), { authorization: "" })).status, 401);
   } finally {
     await srv.close();
   }
