@@ -48,8 +48,12 @@ RUN case "$TARGETARCH" in \
   && rm -rf /tmp/aws /tmp/awscliv2.zip \
   && aws --version
 
+ARG PYYAML_VERSION=6.0.3
+ARG OPENPYXL_VERSION=3.1.5
 RUN python3 -m venv /opt/agent-venv \
-  && /opt/agent-venv/bin/pip install --no-cache-dir --upgrade pip
+  && /opt/agent-venv/bin/pip install --no-cache-dir --upgrade pip \
+  && /opt/agent-venv/bin/pip install --no-cache-dir "PyYAML==${PYYAML_VERSION}" "openpyxl==${OPENPYXL_VERSION}" \
+  && /opt/agent-venv/bin/python -c "import openpyxl, yaml"
 ENV PATH="/opt/agent-venv/bin:${PATH}"
 ENV VIRTUAL_ENV=/opt/agent-venv
 

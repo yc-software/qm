@@ -271,14 +271,14 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       }
     })?.content;
     if (file !== "SKILL.md" && asset === undefined) return missing;
-    const contentDigest = createHash("sha256")
-      .update(file === "SKILL.md" ? resolution.skill.manifest.body : asset!)
-      .digest("hex");
+    const skillContentDigest = createHash("sha256").update(resolution.skill.manifest.body).digest("hex");
+    const contentDigest =
+      file === "SKILL.md" ? skillContentDigest : createHash("sha256").update(asset!).digest("hex");
     const authorized = await authorizeSkillRead?.({
       name,
       skillId: resolution.skill.id,
       skillVersion: resolution.skill.version,
-      contentDigest,
+      contentDigest: skillContentDigest,
     });
     if (authorized === false) return missing;
     const shipsFiles = (resolution.skill.manifest.files?.length ?? 0) > 0 || resolution.skill.pack !== undefined;

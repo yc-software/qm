@@ -11,6 +11,35 @@ import type { Lease, SessionStore } from "../../sessions/session-store.ts";
 import type { ScopeId, Session, TurnRuntime } from "../../types.ts";
 import type { SkillResolution } from "../../skills/skill-store.ts";
 
+export async function workflowAgentForSession(input: {
+  sessions: Pick<SessionStore, "get" | "getEntries">;
+  sessionId: string;
+  configured: readonly WorkflowDefinition[];
+}): Promise<string | undefined> {
+  const session = await input.sessions.get(input.sessionId);
+  if (!session) return undefined;
+  const rootSessionId = session.parentSessionId ?? session.id;
+  const entries = await input.sessions.getEntries(rootSessionId, {
+    tools: ["workflow_definition", "workflow_gate", "workflow_reviewer_assignment"],
+  });
+  const definitions = await workflowDefinitionsForSession({
+    sessions: input.sessions,
+    sessionId: rootSessionId,
+    configured: input.configured,
+    entries,
+  });
+  if (!session.parentSessionId) return definitions[0]?.agent;
+  const review = await activeWorkflowReviewAssignment({
+    sessions: input.sessions,
+    parentSessionId: session.parentSessionId,
+    reviewerSessionId: session.id,
+    definitions,
+    entries,
+  });
+  if (!review) return undefined;
+  return review.definition.reviewAgent;
+}
+
 export async function authorizeWorkflowSkillForSession(input: {
   sessions: Pick<SessionStore, "get" | "getEntries">;
   sessionId: string;

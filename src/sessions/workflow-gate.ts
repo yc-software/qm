@@ -22,6 +22,17 @@ export interface WorkflowGateStep {
 export interface WorkflowDefinition {
   id: string;
   version: number;
+  agent?: string;
+  reviewAgent?: string;
+  sourceExecution?: {
+    approvalStep: string;
+    compiler: {
+      skillName: string;
+      path: string;
+      contentDigest: string;
+    };
+    expectedPopulations: readonly string[];
+  };
   steps: readonly WorkflowGateStep[];
 }
 
@@ -31,6 +42,7 @@ export interface WorkflowGateSubmission {
   subject: string;
   inputEvidence?: readonly WorkflowEvidence[];
   outputEvidence?: readonly WorkflowEvidence[];
+  findings?: readonly string[];
 }
 
 export interface WorkflowEvidence {
@@ -57,6 +69,7 @@ export interface WorkflowGateResult {
   missingSkills: WorkflowSkillRequirement[];
   unexpectedSkills: ObservedWorkflowSkill[];
   blockers: string[];
+  findings: string[];
   inputEvidence: WorkflowEvidence[];
   outputEvidence: WorkflowEvidence[];
 }
@@ -155,7 +168,8 @@ export async function activeWorkflowSkillRequirements(input: {
       .filter((gate) => gate.workflowId === latest.workflowId && gate.workflowVersion === latest.workflowVersion)
       .map((gate) => gate.step),
   );
-  return definition?.steps.find((step) => !passedSteps.has(step.id))?.requiredSkills ?? [];
+  const next = definition?.steps.find((step) => !passedSteps.has(step.id));
+  return next?.separateFrom ? [] : (next?.requiredSkills ?? []);
 }
 
 export function acceptedWorkflowGate(entry: SessionEntry): WorkflowGateResult | null {
@@ -234,11 +248,7 @@ export async function evaluateWorkflowGate(input: {
       : []),
   ];
   const result: WorkflowGateResult = {
-    accepted:
-      input.submission.decision === "pass" &&
-      missingSkills.length === 0 &&
-      unexpectedSkills.length === 0 &&
-      blockers.length === 0,
+    accepted: input.submission.decision === "pass" && missingSkills.length === 0 && blockers.length === 0,
     workflowId: input.definition.id,
     workflowVersion: input.definition.version,
     step: step.id,
@@ -249,6 +259,7 @@ export async function evaluateWorkflowGate(input: {
     missingSkills: [...missingSkills],
     unexpectedSkills,
     blockers,
+    findings: [...(input.submission.findings ?? [])],
     inputEvidence,
     outputEvidence,
   };

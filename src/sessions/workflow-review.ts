@@ -82,6 +82,22 @@ function reviewerAssignment(entry: SessionEntry): WorkflowReviewerAssignment | n
   return payload as unknown as WorkflowReviewerAssignment;
 }
 
+async function latestWorkflowReviewReceipt(
+  sessions: Pick<SessionStore, "getEntries">,
+  reviewerSessionId: string,
+  assignment: WorkflowReviewerAssignment,
+): Promise<WorkflowReviewReceipt | undefined> {
+  return (await sessions.getEntries(reviewerSessionId, { tools: ["workflow_review"] }))
+    .map(reviewReceipt)
+    .filter((candidate): candidate is WorkflowReviewReceipt => candidate !== null)
+    .findLast(
+      (candidate) =>
+        candidate.workflowId === assignment.workflowId &&
+        candidate.workflowVersion === assignment.workflowVersion &&
+        candidate.step === assignment.step,
+    );
+}
+
 export async function assignWorkflowReviewer(input: {
   sessions: Pick<SessionStore, "get" | "appendMany">;
   lease: Lease;
@@ -151,7 +167,7 @@ export async function recordWorkflowReview(input: {
   const missingSkills = missingWorkflowSkills(observedSkills, step.requiredSkills);
   const unexpectedSkills = unexpectedWorkflowSkills(observedSkills, step.requiredSkills);
   const receipt: WorkflowReviewReceipt = {
-    valid: missingSkills.length === 0 && unexpectedSkills.length === 0,
+    valid: missingSkills.length === 0,
     workflowId: input.definition.id,
     workflowVersion: input.definition.version,
     step: step.id,
@@ -201,6 +217,7 @@ export async function importWorkflowReview(input: {
     decision: "pass" | "reject";
     inputEvidence?: readonly WorkflowEvidence[];
     outputEvidence?: readonly WorkflowEvidence[];
+    findings?: readonly string[];
   };
   reviewerSessionId?: string;
   reviewStep?: string;
@@ -226,15 +243,7 @@ export async function importWorkflowReview(input: {
     step: input.reviewStep,
   });
   if (!assignment) throw new Error("reviewer is not assigned to this workflow step");
-  const receipt = (await input.sessions.getEntries(reviewer.id, { tools: ["workflow_review"] }))
-    .map(reviewReceipt)
-    .filter((candidate): candidate is WorkflowReviewReceipt => candidate !== null)
-    .findLast(
-      (candidate) =>
-        candidate.workflowId === input.definition.id &&
-        candidate.workflowVersion === input.definition.version &&
-        candidate.step === input.reviewStep,
-    );
+  const receipt = await latestWorkflowReviewReceipt(input.sessions, reviewer.id, assignment);
   if (!receipt) throw new Error("reviewer has no valid durable receipt for this workflow step");
   if (receipt.assignmentId !== assignment.assignmentId)
     throw new Error("reviewer receipt does not match the durable assignment");
@@ -252,8 +261,47 @@ export async function importWorkflowReview(input: {
       subject: reviewer.id,
       inputEvidence: receipt.inputEvidence,
       outputEvidence: receipt.outputEvidence,
+      findings: receipt.findings,
     },
   });
+}
+
+export async function workflowReviewReady(input: {
+  sessions: Pick<SessionStore, "getEntries">;
+  parentSessionId: string;
+  reviewerSessionId: string;
+  definition: WorkflowDefinition;
+  step: string;
+}): Promise<boolean> {
+  const assignment = await assignedWorkflowReview(input);
+  if (!assignment) return false;
+  const parentEntries = await input.sessions.getEntries(input.parentSessionId, {
+    tools: ["workflow_reviewer_assignment", "workflow_gate"],
+  });
+  const assignmentEntry = parentEntries.findLast(
+    (entry) => reviewerAssignment(entry)?.assignmentId === assignment.assignmentId,
+  );
+  if (
+    assignmentEntry &&
+    parentEntries.some((entry) => {
+      if (entry.seq <= assignmentEntry.seq || entry.type !== "tool_result" || !entry.payload) return false;
+      const payload = entry.payload as Record<string, unknown>;
+      return (
+        payload.tool === "workflow_gate" &&
+        payload.workflowId === assignment.workflowId &&
+        payload.workflowVersion === assignment.workflowVersion &&
+        payload.step === assignment.step &&
+        payload.subject === input.reviewerSessionId
+      );
+    })
+  )
+    return false;
+  const receipt = await latestWorkflowReviewReceipt(input.sessions, input.reviewerSessionId, assignment);
+  return (
+    !!receipt &&
+    receipt.assignmentId === assignment.assignmentId &&
+    matchingRuntime(receipt.runtime, assignment.runtime)
+  );
 }
 
 export async function assignedWorkflowReview(input: {
@@ -326,4 +374,47 @@ export async function activeWorkflowReviewAssignment(input: {
       return { assignment, definition, step };
   }
   return undefined;
+}
+
+export async function workflowEvidenceForReviewer(input: {
+  sessions: Pick<SessionStore, "getEntries">;
+  parentSessionId: string;
+  reviewerSessionId: string;
+  definitions: readonly WorkflowDefinition[];
+}): Promise<WorkflowEvidence[]> {
+  const entries = await input.sessions.getEntries(input.parentSessionId, {
+    tools: ["workflow_gate", "workflow_reviewer_assignment"],
+  });
+  const review = await activeWorkflowReviewAssignment({ ...input, entries });
+  if (!review?.step.evidenceFrom) return [];
+  const evidenceGate = entries
+    .map(acceptedWorkflowGate)
+    .filter((candidate): candidate is WorkflowGateResult => candidate !== null)
+    .findLast(
+      (gate) =>
+        gate.workflowId === review.definition.id &&
+        gate.workflowVersion === review.definition.version &&
+        gate.step === review.step.evidenceFrom,
+    );
+  return [...(evidenceGate?.outputEvidence ?? [])];
+}
+
+export async function workflowEvidenceForProducer(input: {
+  sessions: Pick<SessionStore, "getEntries">;
+  sessionId: string;
+  definitions: readonly WorkflowDefinition[];
+}): Promise<WorkflowEvidence[]> {
+  const entries = await input.sessions.getEntries(input.sessionId, { tools: ["workflow_gate"] });
+  const accepted = entries
+    .map(acceptedWorkflowGate)
+    .filter((candidate): candidate is WorkflowGateResult => candidate !== null)
+    .filter((gate) =>
+      input.definitions.some(
+        (definition) => definition.id === gate.workflowId && definition.version === gate.workflowVersion,
+      ),
+    );
+  const evidence = new Map<string, WorkflowEvidence>();
+  for (const gate of accepted)
+    for (const item of gate.outputEvidence) evidence.set(`${item.id}:${item.digest}`, { ...item });
+  return [...evidence.values()];
 }

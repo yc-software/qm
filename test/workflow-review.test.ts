@@ -7,6 +7,9 @@ import {
   assignWorkflowReviewer,
   importWorkflowReview,
   recordWorkflowReview,
+  workflowEvidenceForProducer,
+  workflowEvidenceForReviewer,
+  workflowReviewReady,
 } from "../src/sessions/workflow-review.ts";
 import { scopeId } from "../src/types.ts";
 
@@ -26,6 +29,92 @@ const definition = {
     },
   ],
 } as const;
+
+test("a producer can read accepted evidence from its workflow lineage", async () => {
+  const sessions = createMemorySessionStore();
+  const parent = await sessions.getOrCreateByThread("producer-evidence-parent", "dm", scope);
+  const attempt = await sessions.acquireLease(parent.id, "turn");
+  assert.ok(attempt.lease);
+  const evidence = [{ id: "raw-evidence", digest: "d".repeat(64) }];
+  await importWorkflowReview({
+    sessions,
+    lease: attempt.lease,
+    scopeLabel: scope,
+    parentSessionId: parent.id,
+    definition,
+    producerSubmission: { step: "raw-evidence-ready", decision: "pass", outputEvidence: evidence },
+  });
+
+  assert.deepEqual(
+    await workflowEvidenceForProducer({ sessions, sessionId: parent.id, definitions: [definition] }),
+    evidence,
+  );
+  assert.deepEqual(
+    await workflowEvidenceForProducer({
+      sessions,
+      sessionId: parent.id,
+      definitions: [{ ...definition, version: 2 }],
+    }),
+    [],
+  );
+});
+
+test("an assigned reviewer can read the approved evidence lineage through its stage", async () => {
+  const sessions = createMemorySessionStore();
+  const parent = await sessions.getOrCreateByThread("evidence-parent", "dm", scope);
+  const child = await sessions.getOrCreateByThread("evidence-child", "dm", scope);
+  const unrelated = await sessions.getOrCreateByThread("evidence-unrelated", "dm", scope);
+  await sessions.setParentSession(child.id, parent.id);
+  await sessions.setParentSession(unrelated.id, parent.id);
+  for (const reviewer of [child, unrelated])
+    await sessions.setSpawnMeta(reviewer.id, {
+      surface: "web",
+      actor: { id: "reviewer", type: "internal" },
+      conversation: { kind: "dm", threadRef: reviewer.threadRef, audience: [] },
+      harness: "pi",
+      model: "gpt-5.4",
+      readOnly: true,
+    });
+  const attempt = await sessions.acquireLease(parent.id, "turn");
+  assert.ok(attempt.lease);
+  const evidence = [{ id: "raw-evidence", digest: "d".repeat(64) }];
+  await importWorkflowReview({
+    sessions,
+    lease: attempt.lease,
+    scopeLabel: scope,
+    parentSessionId: parent.id,
+    definition,
+    producerSubmission: { step: "raw-evidence-ready", decision: "pass", outputEvidence: evidence },
+  });
+  await assignWorkflowReviewer({
+    sessions,
+    lease: attempt.lease,
+    scopeLabel: scope,
+    parentSessionId: parent.id,
+    reviewerSessionId: child.id,
+    definition,
+    step: "auditor-1-pass",
+  });
+
+  assert.deepEqual(
+    await workflowEvidenceForReviewer({
+      sessions,
+      parentSessionId: parent.id,
+      reviewerSessionId: child.id,
+      definitions: [definition],
+    }),
+    evidence,
+  );
+  assert.deepEqual(
+    await workflowEvidenceForReviewer({
+      sessions,
+      parentSessionId: parent.id,
+      reviewerSessionId: unrelated.id,
+      definitions: [definition],
+    }),
+    [],
+  );
+});
 
 test("an ordinary writable child cannot be assigned as a workflow reviewer", async () => {
   const sessions = createMemorySessionStore();
@@ -126,6 +215,16 @@ test("the parent imports the child reviewer receipt instead of a producer-suppli
     definition,
     step: "auditor-1-pass",
   });
+  assert.equal(
+    await workflowReviewReady({
+      sessions,
+      parentSessionId: parent.id,
+      reviewerSessionId: child.id,
+      definition,
+      step: "auditor-1-pass",
+    }),
+    false,
+  );
   await sessions.releaseLease(parentLease);
 
   const childAttempt = await sessions.acquireLease(child.id, "turn");
@@ -168,6 +267,16 @@ test("the parent imports the child reviewer receipt instead of a producer-suppli
     },
   });
   assert.equal(review.valid, true);
+  assert.equal(
+    await workflowReviewReady({
+      sessions,
+      parentSessionId: parent.id,
+      reviewerSessionId: child.id,
+      definition,
+      step: "auditor-1-pass",
+    }),
+    true,
+  );
   await sessions.releaseLease(childLease);
 
   const importAttempt = await sessions.acquireLease(parent.id, "turn");
@@ -188,6 +297,16 @@ test("the parent imports the child reviewer receipt instead of a producer-suppli
   assert.equal(imported.decision, "reject");
   assert.equal(imported.accepted, false);
   assert.equal(imported.subject, child.id);
+  assert.equal(
+    await workflowReviewReady({
+      sessions,
+      parentSessionId: parent.id,
+      reviewerSessionId: child.id,
+      definition,
+      step: "auditor-1-pass",
+    }),
+    false,
+  );
   assert.deepEqual(imported.observedSkills, [
     { name: "finance-audit", skillId: "finance-audit", skillVersion: 2, contentDigest: "audit-digest" },
   ]);

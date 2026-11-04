@@ -3,8 +3,10 @@ import assert from "node:assert/strict";
 import {
   authorizeWorkflowSkillForSession,
   createWorkflowTurnContext,
+  workflowAgentForSession,
 } from "../src/core/orchestrator/workflow-turn.ts";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
+import { assignWorkflowReviewer } from "../src/sessions/workflow-review.ts";
 import { scopeId } from "../src/types.ts";
 import type { SkillResolution } from "../src/skills/skill-store.ts";
 
@@ -68,6 +70,58 @@ test("workflow turn context authorizes only the active stage skills", async () =
       },
     }),
     false,
+  );
+});
+
+test("workflow reviewer child resolves the assignment-specific agent", async () => {
+  const sessions = createMemorySessionStore();
+  const scope = scopeId("personal", "workflow-agent");
+  const parent = await sessions.getOrCreateByThread("workflow-agent-parent", "dm", scope);
+  const child = await sessions.getOrCreateByThread("workflow-agent-child", "dm", scope);
+  await sessions.setParentSession(child.id, parent.id);
+  await sessions.setSpawnMeta(child.id, {
+    surface: "web",
+    actor: { id: "reviewer", type: "internal" },
+    conversation: { kind: "dm", threadRef: child.threadRef, audience: [] },
+    harness: "ultimate",
+    model: "gpt",
+    readOnly: true,
+  });
+  const definition = {
+    id: "finance",
+    version: 1,
+    agent: "finance-ops",
+    reviewAgent: "finance-auditor",
+    steps: [
+      { id: "evidence", role: "producer", requiredSkills: [] },
+      {
+        id: "audit",
+        role: "auditor",
+        after: "evidence",
+        separateFrom: "evidence",
+        requiredSkills: [],
+      },
+    ],
+  } as const;
+  const attempt = await sessions.acquireLease(parent.id, "turn");
+  assert.ok(attempt.lease);
+  await assignWorkflowReviewer({
+    sessions,
+    lease: attempt.lease,
+    scopeLabel: scope,
+    parentSessionId: parent.id,
+    reviewerSessionId: child.id,
+    definition,
+    step: "audit",
+  });
+
+  assert.equal(
+    await workflowAgentForSession({ sessions, sessionId: parent.id, configured: [definition] }),
+    "finance-ops",
+  );
+  assert.equal(
+    await workflowAgentForSession({ sessions, sessionId: child.id, configured: [definition] }),
+    "finance-auditor",
   );
 });
 

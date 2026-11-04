@@ -75,7 +75,7 @@ import { createModelOverlayStore, type ModelOverlayStore } from "./model/model-o
 import { mkdirSync } from "node:fs";
 import type { StagedEnvelope } from "./slack/envelope-staging.ts";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import {
   baseModelProviders,
   configuredModelForHarness,
@@ -223,7 +223,7 @@ import {
   createS3DurableByteStore,
   type DurableByteStore,
 } from "./files/durable-byte-store.ts";
-import { createMemoryFileArtifactStore, type FileArtifactStore } from "./files/file-artifact-store.ts";
+import { artifactPath, createMemoryFileArtifactStore, type FileArtifactStore } from "./files/file-artifact-store.ts";
 import { createPostgresFileArtifactStore } from "./files/postgres-file-artifact-store.ts";
 import { createAwsSandbox, type StoredMicrovm } from "./sandbox/aws-sandbox.ts";
 import { createLocalSandbox } from "./sandbox/local-sandbox.ts";
@@ -315,7 +315,14 @@ import { createMemorySessionStore } from "./sessions/memory-session-store.ts";
 import { createPostgresSessionStore } from "./sessions/postgres-session-store.ts";
 import { createMemoryToolOutputStore, createPostgresToolOutputStore } from "./sessions/tool-output.ts";
 import { LLM_CAPTURE_RETENTION_MS, type SessionStore } from "./sessions/session-store.ts";
+import { workflowDefinitionsForSession } from "./sessions/workflow-control.ts";
+import {
+  workflowEvidenceForProducer,
+  workflowEvidenceForReviewer,
+  workflowReviewReady,
+} from "./sessions/workflow-review.ts";
 import { loadWorkflowDefinitions } from "./sessions/workflow-registry.ts";
+import { workflowAgentForSession } from "./core/orchestrator/workflow-turn.ts";
 import {
   fileCompanyChatGPTAuth,
   keychainCompanyChatGPTAuth,
@@ -324,7 +331,8 @@ import {
 import { keychainHarnessAuthEnv } from "./credentials/harness-auth-env.ts";
 import { createClaudeHarness, claudeHarnessConfigOptions } from "./harness/claude-harness.ts";
 import { createPiHarness, piHarnessConfigOptions, type ProviderKeys } from "./harness/pi-harness.ts";
-import { createUltimateHarness } from "./harness/ultimate-harness.ts";
+import { createUltimateHarness, ultimateWorkflowSnapshot } from "./harness/ultimate-harness.ts";
+import { collectBytes } from "./util/bytes.ts";
 import { createHarnessRouter, resolveRuntimeChoiceDurable } from "./harness/harness-router.ts";
 import { selectableModelCatalog } from "./model/model-catalog.ts";
 import type { Harness } from "./harness/harness.ts";
@@ -823,7 +831,18 @@ export function buildApp(
   const fileUploads =
     config.databaseUrl && config.snapshotStore === "s3" && config.s3Bucket
       ? createDirectFileUploads({
-          ...(s3 ? { client: s3, presign: (command, expiresIn) => getSignedUrl(s3, command, { expiresIn }) } : {}),
+          ...(s3
+            ? {
+                client: s3,
+                presign: (command, expiresIn) =>
+                  getSignedUrl(
+                    config.s3PublicEndpoint ? s3Client(config.s3Region, { endpoint: config.s3PublicEndpoint }) : s3,
+                    command,
+                    { expiresIn },
+                  ),
+              }
+            : {}),
+          ...(config.s3PublicEndpoint ? { publicEndpoint: config.s3PublicEndpoint } : {}),
           bucket: config.s3Bucket,
           ...(config.s3Region ? { region: config.s3Region } : {}),
           ...(config.s3Prefix ? { prefix: config.s3Prefix } : {}),
@@ -1519,6 +1538,12 @@ export function buildApp(
         createUltimateHarness({
           baseUrl: config.ultimateUrl ?? "http://127.0.0.1:4747",
           projectRoot: process.cwd(),
+          agent: (input) =>
+            workflowAgentForSession({
+              sessions,
+              sessionId: input.session.id,
+              configured: workflowDefinitions,
+            }),
           model: (modelId) => ({ provider: "qm", modelId }),
           modelBroker: async (input) => {
             const secret = config.capabilitySecret ?? config.signingSecret;
@@ -1547,6 +1572,8 @@ export function buildApp(
                 actorId: input.runtimeActorId ?? "system:ultimate-turn",
                 scopeId: input.scopeLabel ?? scopeId("org", config.orgId),
                 aud: TOOL_BROKER_AUD,
+                sessionId: input.session.id,
+                ...(input.runId ? { runId: input.runId } : {}),
                 exp: Date.now() + CAPABILITY_TTL_MS,
               },
               secret,
@@ -1556,6 +1583,152 @@ export function buildApp(
               baseUrl: (config.apiBaseUrl ?? "http://127.0.0.1:4000").replace(/\/+$/, ""),
               token,
             };
+          },
+          publishArtifact: async (input, artifact) => {
+            const artifactId = randomBytes(16).toString("hex");
+            const name = basename(artifact.name);
+            if (!name || name === ".") throw new Error("artifact name is required");
+            const stored = await files.put({
+              id: artifactId,
+              ownerScopeId: input.scopeLabel,
+              createdBy: input.runtimeActorId ?? "system:ultimate-turn",
+              name,
+              path: artifactPath(artifactId, name),
+              mimetype: "application/json",
+              data: Buffer.from(JSON.stringify(artifact.value)),
+              direction: "out",
+              createdInScope: input.scopeLabel,
+            });
+            if (!stored.artifact.sha256) throw new Error("artifact digest is unavailable");
+            return { artifactId, digest: stored.artifact.sha256 };
+          },
+          readArtifact: async (input, artifactId) => {
+            const session = await sessions.get(input.session.id);
+            if (!session) return undefined;
+            const workflowSessionId = session.parentSessionId ?? session.id;
+            const entries = await sessions.getEntries(workflowSessionId, {
+              tools: ["workflow_definition", "workflow_gate", "workflow_reviewer_assignment"],
+            });
+            const definitions = await workflowDefinitionsForSession({
+              sessions,
+              sessionId: workflowSessionId,
+              configured: workflowDefinitions,
+              entries,
+            });
+            const evidence = session.parentSessionId
+              ? await workflowEvidenceForReviewer({
+                  sessions,
+                  parentSessionId: session.parentSessionId,
+                  reviewerSessionId: session.id,
+                  definitions,
+                })
+              : await workflowEvidenceForProducer({ sessions, sessionId: session.id, definitions });
+            const opened = await files.open(artifactId);
+            if (!opened) return undefined;
+            const expected = evidence.find((candidate) => candidate.id === artifactId);
+            const sameTurnDraft =
+              !session.parentSessionId &&
+              opened.artifact.createdBy === input.runtimeActorId &&
+              opened.artifact.createdInScope === input.scopeLabel;
+            const digest = expected?.digest ?? (sameTurnDraft ? opened.artifact.sha256 : undefined);
+            if (!digest || opened.artifact.sha256 !== digest) return undefined;
+            const collected = await collectBytes(opened.stream, { maxBytes: opened.sizeBytes });
+            if (collected.sha256 !== digest) return undefined;
+            return {
+              artifactId,
+              name: opened.artifact.name,
+              mimetype: opened.artifact.mimetype,
+              digest: collected.sha256,
+              value:
+                opened.artifact.mimetype === "application/json"
+                  ? JSON.parse(collected.data.toString("utf8"))
+                  : collected.data.toString("base64"),
+            };
+          },
+          dispatchReviewer: async (input, review) => {
+            const syscalls = input.tools.sessionSyscalls;
+            const workflow = input.tools.workflow;
+            const model = input.runtime?.modelId;
+            const actorId = input.runtimeActorId;
+            if (!syscalls?.openWithAdmission)
+              throw new Error("governed reviewer dispatch is unavailable: session admission is missing");
+            if (!workflow) throw new Error("governed reviewer dispatch is unavailable: workflow control is missing");
+            if (!model) throw new Error("governed reviewer dispatch is unavailable: runtime model is missing");
+            if (!actorId) throw new Error("governed reviewer dispatch is unavailable: runtime actor is missing");
+            const opened = await syscalls.openWithAdmission(
+              {
+                task: `Independently review workflow ${review.workflowId} step ${review.step}. Read and inspect this exact predecessor evidence through the governed evidence tool: ${JSON.stringify(review.inputEvidence)}. Use only the assigned stage skills and submit the verdict through workflow review_submit.`,
+                name: `${review.role} ${review.step}`,
+                readOnly: true,
+                harness: "ultimate",
+                model,
+                requestId: `workflow-review:${review.workflowId}:${review.workflowVersion}:${review.step}:${input.runId ?? randomBytes(8).toString("hex")}`,
+              },
+              async (reviewerSessionId) => {
+                const status = (await workflow({ action: "status", workflowId: review.workflowId })) as {
+                  steps?: Array<{ step?: unknown; reviewerSessionId?: unknown }>;
+                };
+                const assigned = status.steps?.find((step) => step.step === review.step)?.reviewerSessionId;
+                if (assigned === reviewerSessionId) return;
+                await workflow({
+                  action: "assign_reviewer",
+                  workflowId: review.workflowId,
+                  step: review.step,
+                  reviewerSessionId,
+                });
+              },
+              { requireEnabled: false },
+            );
+            if (!opened.ok) throw new Error(opened.message);
+            return { sessionId: opened.sessionId };
+          },
+          importReviewer: async (input, review) => {
+            const workflow = input.tools.workflow;
+            if (!workflow) throw new Error("governed reviewer import is unavailable");
+            const entries = await sessions.getEntries(input.session.id, {
+              tools: ["workflow_definition", "workflow_gate", "workflow_reviewer_assignment"],
+            });
+            const definitions = await workflowDefinitionsForSession({
+              sessions,
+              sessionId: input.session.id,
+              configured: workflowDefinitions,
+              entries,
+            });
+            const definition = definitions.find(
+              (candidate) => candidate.id === review.workflowId && candidate.version === review.workflowVersion,
+            );
+            if (!definition) return false;
+            if (
+              !(await workflowReviewReady({
+                sessions,
+                parentSessionId: input.session.id,
+                reviewerSessionId: review.reviewerSessionId,
+                definition,
+                step: review.step,
+              }))
+            )
+              return false;
+            const result = (await workflow({
+              action: "advance",
+              workflowId: review.workflowId,
+              step: review.step,
+              reviewerSessionId: review.reviewerSessionId,
+            })) as { accepted?: unknown };
+            return result.accepted === true;
+          },
+          workflowSnapshot: async (input) => {
+            const session = await sessions.get(input.session.id);
+            const rootSessionId = session?.parentSessionId ?? input.session.id;
+            const entries = await sessions.getEntries(rootSessionId, {
+              tools: ["workflow_definition", "workflow_gate", "workflow_reviewer_assignment"],
+            });
+            const definitions = await workflowDefinitionsForSession({
+              sessions,
+              sessionId: rootSessionId,
+              configured: workflowDefinitions,
+              entries,
+            });
+            return ultimateWorkflowSnapshot(input.session.id, definitions, entries);
           },
         }),
     ],
@@ -3319,6 +3492,7 @@ export function serverDeps(
     crons: built.crons,
     loops: built.loops,
     deploymentLayer: built.deploymentLayerStore,
+    skills: built.skills,
     deployDialTimeoutMs: config.deployDialTimeoutMs,
     ...(config.awsDeploy.appsDomain ? { deployAppsDomain: config.awsDeploy.appsDomain } : {}),
     ...(config.awsDeploy.gateSecret ? { deployGateSecret: config.awsDeploy.gateSecret } : {}),

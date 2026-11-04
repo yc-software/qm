@@ -45,6 +45,7 @@ test("workflow control derives the producer identity from the host session", asy
     missingSkills: [],
     unexpectedSkills: [],
     blockers: [],
+    findings: [],
     inputEvidence: [],
     outputEvidence: [],
   });
@@ -56,8 +57,10 @@ test("workflow control derives the producer identity from the host session", asy
   });
   assert.equal((retry as { accepted: boolean }).accepted, false);
   assert.deepEqual(await control({ action: "status", workflowId: "finance" }), {
+    jobId: session.id,
     workflowId: "finance",
     workflowVersion: 1,
+    current: { state: "complete" },
     steps: [
       {
         step: "request-bound",
@@ -65,6 +68,7 @@ test("workflow control derives the producer identity from the host session", asy
         state: "passed",
         decision: "pass",
         subject: session.id,
+        findings: [],
       },
     ],
   });
@@ -107,6 +111,121 @@ test("a human approval step cannot be advanced through the ordinary producer act
   );
 });
 
+test("a human approval durably carries forward exactly the evidence it approved", async () => {
+  const sessions = createMemorySessionStore();
+  const scope = scopeId("personal", "workflow-approval-evidence");
+  const session = await sessions.getOrCreateByThread("approval-evidence", "dm", scope);
+  const attempt = await sessions.acquireLease(session.id, "turn");
+  assert.ok(attempt.lease);
+  const control = createWorkflowControl({
+    sessions,
+    lease: attempt.lease,
+    scopeLabel: scope,
+    session,
+    runtime: () => ({ harnessId: "ultimate", modelId: "gpt-6.1-sol" }),
+    resolveEvidence: async (ids) => ids.map((id) => ({ id, digest: `host:${id}` })),
+    definitions: [
+      {
+        id: "approval",
+        version: 1,
+        steps: [{ id: "PLAN_APPROVED", role: "producer", humanApproval: true, requiredSkills: [] }],
+      },
+    ],
+  });
+
+  const result = await control({
+    action: "approve",
+    workflowId: "approval",
+    step: "PLAN_APPROVED",
+    decision: "pass",
+    inputEvidence: [{ id: "source-plan" }],
+  });
+
+  assert.deepEqual((result as { inputEvidence: unknown }).inputEvidence, [
+    { id: "source-plan", digest: "host:source-plan" },
+  ]);
+  assert.deepEqual((result as { outputEvidence: unknown }).outputEvidence, [
+    { id: "source-plan", digest: "host:source-plan" },
+  ]);
+});
+
+test("a human approval rejects output evidence that differs from its approved input", async () => {
+  const sessions = createMemorySessionStore();
+  const scope = scopeId("personal", "workflow-approval-mismatch");
+  const session = await sessions.getOrCreateByThread("approval-mismatch", "dm", scope);
+  const attempt = await sessions.acquireLease(session.id, "turn");
+  assert.ok(attempt.lease);
+  const control = createWorkflowControl({
+    sessions,
+    lease: attempt.lease,
+    scopeLabel: scope,
+    session,
+    runtime: () => ({ harnessId: "ultimate", modelId: "gpt-6.1-sol" }),
+    resolveEvidence: async (ids) => ids.map((id) => ({ id, digest: `host:${id}` })),
+    definitions: [
+      {
+        id: "approval",
+        version: 1,
+        steps: [{ id: "PLAN_APPROVED", role: "producer", humanApproval: true, requiredSkills: [] }],
+      },
+    ],
+  });
+
+  await assert.rejects(
+    control({
+      action: "approve",
+      workflowId: "approval",
+      step: "PLAN_APPROVED",
+      decision: "pass",
+      inputEvidence: [{ id: "source-plan" }],
+      outputEvidence: [{ id: "other-plan" }],
+    }),
+    /approval output evidence must match its approved input evidence/,
+  );
+});
+
+test("a human approval cannot import an isolated reviewer receipt", async () => {
+  const sessions = createMemorySessionStore();
+  const scope = scopeId("personal", "workflow-approval-reviewer");
+  const session = await sessions.getOrCreateByThread("approval-reviewer", "dm", scope);
+  const attempt = await sessions.acquireLease(session.id, "turn");
+  assert.ok(attempt.lease);
+  const control = createWorkflowControl({
+    sessions,
+    lease: attempt.lease,
+    scopeLabel: scope,
+    session,
+    runtime: () => ({ harnessId: "ultimate", modelId: "gpt-6.1-sol" }),
+    resolveEvidence: async (ids) => ids.map((id) => ({ id, digest: `host:${id}` })),
+    definitions: [
+      {
+        id: "approval",
+        version: 1,
+        steps: [
+          {
+            id: "PLAN_APPROVED",
+            role: "producer",
+            humanApproval: true,
+            separateFrom: "PLAN_APPROVED",
+            requiredSkills: [],
+          },
+        ],
+      },
+    ],
+  });
+
+  await assert.rejects(
+    control({
+      action: "approve",
+      workflowId: "approval",
+      step: "PLAN_APPROVED",
+      reviewerSessionId: "reviewer",
+      inputEvidence: [{ id: "source-plan" }],
+    }),
+    /human approval cannot import a reviewer receipt/,
+  );
+});
+
 test("workflow status reports a valid rejection without marking an invalid attempt rejected", async () => {
   const sessions = createMemorySessionStore();
   const scope = scopeId("personal", "workflow-rejection");
@@ -128,11 +247,28 @@ test("workflow status reports a valid rejection without marking an invalid attem
       },
     ],
   });
-  await control({ action: "advance", workflowId: "rejection", step: "review", decision: "reject" });
+  await control({
+    action: "advance",
+    workflowId: "rejection",
+    step: "review",
+    decision: "reject",
+    findings: ["source evidence is incomplete"],
+  });
   assert.deepEqual(await control({ action: "status", workflowId: "rejection" }), {
+    jobId: session.id,
     workflowId: "rejection",
     workflowVersion: 1,
-    steps: [{ step: "review", role: "reviewer", state: "rejected", decision: "reject", subject: session.id }],
+    current: { step: "review", role: "reviewer", state: "rejected" },
+    steps: [
+      {
+        step: "review",
+        role: "reviewer",
+        state: "rejected",
+        decision: "reject",
+        subject: session.id,
+        findings: ["source evidence is incomplete"],
+      },
+    ],
   });
 });
 

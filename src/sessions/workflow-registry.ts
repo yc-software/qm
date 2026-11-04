@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { WorkflowDefinition, WorkflowGateStep, WorkflowSkillRequirement } from "./workflow-gate.ts";
+import { safeSkillFilePath } from "../skills/skill-store.ts";
 
 function record(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${label} must be an object`);
@@ -46,6 +47,8 @@ function definition(value: unknown, index: number): WorkflowDefinition {
       if (raw[field] !== undefined && !seen.has(text(raw[field], `workflow ${id} step ${stepId}.${field}`)))
         throw new Error(`workflow ${id} step ${stepId}.${field} must reference an earlier step`);
     }
+    if (raw.humanApproval === true && raw.separateFrom !== undefined)
+      throw new Error(`workflow ${id} step ${stepId} cannot combine human approval with reviewer separation`);
     if (!Array.isArray(raw.requiredSkills))
       throw new Error(`workflow ${id} step ${stepId}.requiredSkills must be an array`);
     const step: WorkflowGateStep = {
@@ -62,7 +65,47 @@ function definition(value: unknown, index: number): WorkflowDefinition {
     seen.add(stepId);
     return step;
   });
-  return { id, version: Number(item.version), steps };
+  const approvals = steps.filter((step) => step.humanApproval);
+  if (approvals.length !== 1 || approvals[0]!.id !== "PLAN_APPROVED")
+    throw new Error(`workflow ${id} must define PLAN_APPROVED as its only human-approval step`);
+  let sourceExecution: WorkflowDefinition["sourceExecution"];
+  if (item.sourceExecution !== undefined) {
+    const source = record(item.sourceExecution, `workflow ${id}.sourceExecution`);
+    const approvalStep = text(source.approvalStep, `workflow ${id}.sourceExecution.approvalStep`);
+    if (!steps.some((step) => step.id === approvalStep && step.humanApproval))
+      throw new Error(`workflow ${id}.sourceExecution.approvalStep must name a human-approval step`);
+    const compiler = record(source.compiler, `workflow ${id}.sourceExecution.compiler`);
+    const contentDigest = text(compiler.contentDigest, `workflow ${id}.sourceExecution.compiler.contentDigest`);
+    if (!/^[a-f0-9]{64}$/.test(contentDigest))
+      throw new Error(`workflow ${id}.sourceExecution.compiler.contentDigest must be a SHA-256 digest`);
+    const path = safeSkillFilePath(text(compiler.path, `workflow ${id}.sourceExecution.compiler.path`));
+    if (!Array.isArray(source.expectedPopulations) || !source.expectedPopulations.length)
+      throw new Error(`workflow ${id}.sourceExecution.expectedPopulations must be a nonempty array`);
+    const expectedPopulations = source.expectedPopulations.map((population, populationIndex) =>
+      text(population, `workflow ${id}.sourceExecution.expectedPopulations[${populationIndex}]`),
+    );
+    if (new Set(expectedPopulations).size !== expectedPopulations.length)
+      throw new Error(`workflow ${id}.sourceExecution.expectedPopulations must be unique`);
+    sourceExecution = {
+      approvalStep,
+      compiler: {
+        skillName: text(compiler.skillName, `workflow ${id}.sourceExecution.compiler.skillName`),
+        path,
+        contentDigest,
+      },
+      expectedPopulations,
+    };
+  }
+  const agent = item.agent === undefined ? undefined : text(item.agent, `workflow ${id}.agent`);
+  const reviewAgent = item.reviewAgent === undefined ? undefined : text(item.reviewAgent, `workflow ${id}.reviewAgent`);
+  return {
+    id,
+    version: Number(item.version),
+    ...(agent ? { agent } : {}),
+    ...(reviewAgent ? { reviewAgent } : {}),
+    ...(sourceExecution ? { sourceExecution } : {}),
+    steps,
+  };
 }
 
 export function loadWorkflowDefinitions(deploymentLayerDir?: string): WorkflowDefinition[] {

@@ -114,7 +114,7 @@ const READ_MAX_CHARS_CEILING = 20_000;
 const MAIL_ERROR_CAP = 1_000;
 const LAST_SAID_SCAN = 40;
 
-interface SessionOpenInput {
+export interface SessionOpenInput {
   requestId?: string;
   task: string;
   name?: string;
@@ -125,7 +125,7 @@ interface SessionOpenInput {
   fastMode?: boolean;
 }
 
-type SessionOpenResult =
+export type SessionOpenResult =
   { ok: true; sessionId: string; title: string; liveRunsRemaining: number } | { ok: false; message: string };
 
 interface SessionWriteInput {
@@ -215,6 +215,11 @@ export interface SessionSyscalls {
   receive?(timeoutMs?: number): Promise<SessionMessage[]>;
   acknowledge?(ids: string[]): Promise<void>;
   open(input: SessionOpenInput): Promise<SessionOpenResult>;
+  openWithAdmission?(
+    input: SessionOpenInput,
+    admission: (sessionId: string) => Promise<void>,
+    options?: { requireEnabled?: boolean },
+  ): Promise<SessionOpenResult>;
   write(input: SessionWriteInput): Promise<SessionWriteResult>;
   read(input: SessionReadInput): Promise<SessionReadResult>;
   search?(input: { query: string; limit?: number }): ReturnType<CoreSearch["search"]>;
@@ -564,11 +569,11 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
         return (views[0] ?? []).filter((entry) => allowed.every((seqs) => seqs.has(entry.seq)));
       }
 
-      async function currentCaller(): Promise<OrchestratorInput> {
+      async function currentCaller(requireEnabled = true): Promise<OrchestratorInput> {
         binding.request.cancel?.throwIfAborted();
         if (await sessionRunCancelled(deps.runs, deps.signals, binding.request.runId))
           throw new Error("this delegated task was stopped");
-        if (deps.enabled && !(await deps.enabled(binding.request.actor.id)))
+        if (requireEnabled && deps.enabled && !(await deps.enabled(binding.request.actor.id)))
           throw new Error("persistent subagents are not enabled for this user");
         const current = await deps.sessions.get(binding.session.id);
         if (
@@ -632,11 +637,14 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           await deps.mailbox?.acknowledge(binding.session.id, ids);
         },
         async open(input) {
+          return this.openWithAdmission!(input, async () => {});
+        },
+        async openWithAdmission(input, admission, options) {
           return lock
             .withLock("session-tree-admission", async (): Promise<SessionOpenResult> => {
               if (binding.request.swarm || binding.session.threadRef.startsWith("swarm:"))
                 throw new Error("swarm workers coordinate through the swarm API");
-              const caller = await currentCaller();
+              const caller = await currentCaller(options?.requireEnabled !== false);
               assertAudienceCompatible(binding.request, caller);
               if (binding.request.privateSessionMessage)
                 throw new Error("private session messages cannot delegate new work");
@@ -715,6 +723,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               ]))
                 await deps.sessions.addParticipant(child.id, id);
               await deps.sessions.updateTitle(child.id, title);
+              await admission(child.id);
               const text = renderSubagentTask({ title, parentTitle: callerTitle, task });
               const request = {
                 ...childRunRequest(child, meta, text, task),

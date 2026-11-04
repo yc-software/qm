@@ -383,6 +383,29 @@ test("env assembly precedence: caller > login shell > dev.env > worktree .env; h
   assert.match(ultimate.env.MODEL_GATEWAY_MODELS!, /(?:^|,)gpt-6\.1-sol=gpt-6\.1-sol(?:,|$)/);
   assert.match(ultimate.env.MODEL_GATEWAY_MODELS!, /(?:^|,)gpt-6\.1-sol-ultrafast=gpt-6\.1-sol(?:,|$)/);
 
+  const configuredUltimate = await assembleEnv({
+    worktree,
+    callerEnv: {
+      HARNESS: "ultimate",
+      MODEL_GATEWAY_URL: "https://models.example.test/v1",
+      MODEL_GATEWAY_API_KEY: "configured-gateway-key",
+      MODEL_GATEWAY_API_KEY_HEADER: "X-API-Key",
+      MODEL_GATEWAY_MODELS: "finance-model=provider-model",
+    },
+    log,
+    probeLoginShell: async () => "",
+  });
+  assert.equal(configuredUltimate.harness, "ultimate");
+  assert.equal(configuredUltimate.env.MODEL_GATEWAY_URL, "https://models.example.test/v1");
+  assert.equal(configuredUltimate.env.MODEL_GATEWAY_API_KEY, "configured-gateway-key");
+  assert.equal(configuredUltimate.env.MODEL_GATEWAY_API_KEY_HEADER, "X-API-Key");
+  assert.equal(configuredUltimate.env.MODEL_GATEWAY_MODELS, "finance-model=provider-model");
+
+  writeFileSync(liveEnv, "HARNESS=ultimate\nOPENAI_API_KEY=from-liveenv\n");
+  const persistedHarness = await assembleEnv({ worktree, callerEnv: {}, log, probeLoginShell: async () => "" });
+  assert.equal(persistedHarness.harness, "ultimate");
+  writeFileSync(liveEnv, "ANTHROPIC_API_KEY=from-liveenv\nLIVE_ONLY=live\n");
+
   const fromLiveEnv = await assembleEnv({
     worktree,
     callerEnv: {},
@@ -417,6 +440,21 @@ test("env assembly precedence: caller > login shell > dev.env > worktree .env; h
   assert.equal(fromDotenv.env.ANTHROPIC_API_KEY, "from-dotenv");
   assert.equal(fromDotenv.anthropicKeySource, "the worktree .env");
 
+  writeFileSync(
+    join(worktree, ".env"),
+    "HARNESS=ultimate\nOPENAI_API_KEY=from-dotenv\nULTIMATE_URL=http://127.0.0.1:4748\n",
+  );
+  const dotenvHarness = await assembleEnv({ worktree, callerEnv: {}, log, probeLoginShell: async () => "" });
+  assert.equal(dotenvHarness.harness, "ultimate");
+  assert.equal(dotenvHarness.env.ULTIMATE_URL, "http://127.0.0.1:4748");
+  const callerHarness = await assembleEnv({
+    worktree,
+    callerEnv: { HARNESS: "pi" },
+    log,
+    probeLoginShell: async () => "",
+  });
+  assert.equal(callerHarness.harness, "pi");
+
   writeFileSync(join(worktree, ".env"), "");
   await assert.rejects(
     assembleEnv({ worktree, callerEnv: {}, log, probeLoginShell: async () => "" }),
@@ -441,7 +479,8 @@ test("dev security secrets are stable, complete, and distinct", () => {
   completeDevSecuritySecrets(first, "postgres://dev");
   completeDevSecuritySecrets(second, "postgres://dev");
   assert.deepEqual(first, second);
-  assert.equal(new Set(Object.values(first)).size, 5);
+  assert.equal(first.SKILL_SIGNING_SECRET, second.SKILL_SIGNING_SECRET);
+  assert.equal(new Set(Object.values(first)).size, 6);
   assert.throws(
     () => completeDevSecuritySecrets({ CORE_SIGNING_SECRET: "same", CAPABILITY_SECRET: "same" }, "postgres://dev"),
     /must be distinct/,

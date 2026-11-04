@@ -1090,7 +1090,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       }
       const surfaceName =
         input.origin.kind === "automation" && input.origin.destination ? "slack" : (input.surface ?? "slack");
-      const sessionSyscalls =
+      let sessionSyscalls =
         !external && deps.sessionSyscalls && (delegationEnabled || actorFeatures.has("persistent_subagents"))
           ? deps.sessionSyscalls
           : undefined;
@@ -1966,8 +1966,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         egressTokenForPolicy,
         openResourceAccess: !external && (liveAuthorTurn || openAutomationKeychain),
         visibleSkillsForTurn,
-        filterVisibleSkills: async (skills) => (workflowTurn ? workflowTurn.filterSkills(skills) : skills),
-        authorizeSkillRead: async (skill) => workflowTurn?.authorizeSkillRead(skill),
+        filterVisibleSkills: async (skills) => skills,
       });
       const leaseStart = Date.now();
       const acquired = await acquireTurnLeaseOrRefuse({
@@ -1998,9 +1997,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           lease,
           configured: deps.workflowDefinitions ?? [],
         });
-        if (workflowTurn) {
-          turnContextBlocks["Skills"] = skillsIndex(workflowTurn.filterSkills(nativeSkills));
-        }
+        if (!external && workflowTurn && deps.sessionSyscalls) sessionSyscalls = deps.sessionSyscalls;
         if (!ambientTurn) assignSessionTitle();
         revisionAnchor = trackRevisions ? await revisionAnchorAt(deps.sessions, session.id) : undefined;
       } catch (error) {
@@ -2606,6 +2603,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         };
         let readableHandles: Awaited<ReturnType<typeof deps.acl.handlesForAudience>> | undefined;
         const mayReadArtifact = async (artifact: FileArtifact, fresh = false): Promise<boolean> => {
+          if (artifact.createdBy === actor.id && artifact.createdInScope === scopeId) return true;
           if (
             conversation.audience.every((principal) =>
               principalEntitledToScope(principal, artifact.ownerScopeId, scopeId, resolution.orgScopeId),
@@ -2692,10 +2690,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           provisionResource,
           accessSandboxResource: accessResource,
           useSkill,
-          listSkills: async (source) => {
-            const visible = await visibleSkillsForTurn(source ? [source] : [scopeId, resolution.orgScopeId]);
-            return workflowTurn ? workflowTurn.filterSkills(visible) : visible;
-          },
+          listSkills: async (source) => visibleSkillsForTurn(source ? [source] : [scopeId, resolution.orgScopeId]),
           ...(reachAvailable
             ? {
                 reach: {

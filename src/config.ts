@@ -159,6 +159,7 @@ export interface Config {
   s3Bucket?: string;
   s3Region?: string;
   s3Endpoint?: string;
+  s3PublicEndpoint?: string;
   s3Prefix?: string;
   deployIdleTtlMs?: number;
   deployGitDir: string;
@@ -1737,6 +1738,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(env.S3_BUCKET ? { s3Bucket: env.S3_BUCKET } : {}),
     ...(env.S3_REGION ? { s3Region: env.S3_REGION } : {}),
     ...(s3Endpoint ? { s3Endpoint } : {}),
+    ...(env.S3_PUBLIC_ENDPOINT?.trim() ? { s3PublicEndpoint: env.S3_PUBLIC_ENDPOINT.trim() } : {}),
     ...(env.S3_PREFIX ? { s3Prefix: env.S3_PREFIX } : {}),
     ...(numEnvStrict("DEPLOY_IDLE_TTL_MS", env.DEPLOY_IDLE_TTL_MS) !== undefined
       ? { deployIdleTtlMs: numEnvStrict("DEPLOY_IDLE_TTL_MS", env.DEPLOY_IDLE_TTL_MS) }

@@ -387,7 +387,7 @@ test("a skill body read observes every materialized manifest asset digest", () =
   ]);
 });
 
-test("a stage rejects full skill bodies outside its registered role allowlist", async () => {
+test("a stage records ancillary skill reads without rejecting required skill evidence", async () => {
   const sessions = createMemorySessionStore();
   const session = await sessions.getOrCreateByThread("finance-stage-allowlist", "dm", scope);
   const { lease } = await sessions.acquireLease(session.id, "turn");
@@ -435,7 +435,7 @@ test("a stage rejects full skill bodies outside its registered role allowlist", 
     submission: { step: "audit", decision: "pass", subject: "auditor" },
   });
 
-  assert.equal(result.accepted, false);
+  assert.equal(result.accepted, true);
   assert.deepEqual(
     result.unexpectedSkills.map((skill) => skill.name),
     ["month-end-close"],
@@ -470,6 +470,47 @@ test("the host exposes only the next durable workflow stage's skills", async () 
   assert.deepEqual(
     await activeWorkflowSkillRequirements({ sessions, sessionId: session.id, definitions: [definition] }),
     [{ skillName: "netsuite-readonly" }],
+  );
+});
+
+test("a producer waiting for a separated reviewer receives no reviewer skills", async () => {
+  const sessions = createMemorySessionStore();
+  const session = await sessions.getOrCreateByThread("finance-review-wait", "dm", scope);
+  const { lease } = await sessions.acquireLease(session.id, "turn");
+  assert.ok(lease);
+  const definition = {
+    id: "review-wait",
+    version: 1,
+    steps: [
+      { id: "evidence", role: "producer", requiredSkills: [{ skillName: "netsuite-readonly" }] },
+      {
+        id: "audit",
+        role: "auditor",
+        after: "evidence",
+        separateFrom: "evidence",
+        requiredSkills: [{ skillName: "finance-audit" }],
+      },
+    ],
+  } as const;
+  await evaluateWorkflowGate({
+    sessions,
+    lease,
+    scopeLabel: scope,
+    definition,
+    observedSkills: [
+      {
+        name: "netsuite-readonly",
+        skillId: "netsuite-readonly",
+        skillVersion: 1,
+        contentDigest: "netsuite-readonly",
+      },
+    ],
+    submission: { step: "evidence", decision: "pass", subject: session.id },
+  });
+
+  assert.deepEqual(
+    await activeWorkflowSkillRequirements({ sessions, sessionId: session.id, definitions: [definition] }),
+    [],
   );
 });
 

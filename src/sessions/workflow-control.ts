@@ -45,9 +45,9 @@ export async function ensureWorkflowDefinition(input: {
   entries?: readonly SessionEntry[];
 }): Promise<void> {
   if (
-    (input.entries ?? (await input.sessions.getEntries(input.lease.sessionId, { tools: ["workflow_definition"] }))).some(
-      durableWorkflowDefinition,
-    )
+    (
+      input.entries ?? (await input.sessions.getEntries(input.lease.sessionId, { tools: ["workflow_definition"] }))
+    ).some(durableWorkflowDefinition)
   )
     return;
   const callId = `workflow-definition-${randomUUID()}`;
@@ -92,51 +92,67 @@ export function createWorkflowControl(input: {
       const payloads = entries
         .filter((entry) => entry.type === "tool_result" && entry.payload && typeof entry.payload === "object")
         .map((entry) => entry.payload as Record<string, unknown>);
+      const steps = definition.steps.map((step) => {
+        const gates = payloads.filter(
+          (payload) =>
+            payload.tool === "workflow_gate" &&
+            payload.workflowId === definition.id &&
+            payload.workflowVersion === definition.version &&
+            payload.step === step.id,
+        );
+        const passed = gates.findLast((payload) => payload.accepted === true);
+        const gate = passed ?? gates.at(-1);
+        const assignment = payloads.findLast(
+          (payload) =>
+            payload.tool === "workflow_reviewer_assignment" &&
+            payload.workflowId === definition.id &&
+            payload.workflowVersion === definition.version &&
+            payload.step === step.id,
+        );
+        let state = assignment ? "assigned" : "pending";
+        if (passed) state = "passed";
+        else if (
+          gate?.decision === "reject" &&
+          Array.isArray(gate.blockers) &&
+          gate.blockers.length === 0 &&
+          Array.isArray(gate.missingSkills) &&
+          gate.missingSkills.length === 0 &&
+          Array.isArray(gate.unexpectedSkills) &&
+          gate.unexpectedSkills.length === 0
+        )
+          state = "rejected";
+        return {
+          step: step.id,
+          role: step.role,
+          state,
+          ...(gate?.decision === "pass" || gate?.decision === "reject" ? { decision: gate.decision } : {}),
+          ...(typeof gate?.subject === "string" ? { subject: gate.subject } : {}),
+          ...(Array.isArray(gate?.findings)
+            ? { findings: gate.findings.filter((finding): finding is string => typeof finding === "string") }
+            : {}),
+          ...(typeof assignment?.reviewerSessionId === "string"
+            ? { reviewerSessionId: assignment.reviewerSessionId }
+            : {}),
+        };
+      });
+      const firstIncomplete = steps.findIndex((step) => step.state !== "passed");
+      const active = firstIncomplete < 0 ? undefined : definition.steps[firstIncomplete];
+      const activeState = firstIncomplete < 0 ? "complete" : steps[firstIncomplete]!.state;
+      let state = "runnable";
+      if (!active) state = "complete";
+      else if (activeState === "rejected") state = "rejected";
+      else if (active.humanApproval) state = "approval_pending";
+      else if (active.separateFrom) state = "review_pending";
+      const current = active ? { step: active.id, role: active.role, state } : { state };
       return {
+        jobId: rootSessionId,
         workflowId: definition.id,
         workflowVersion: definition.version,
-        steps: definition.steps.map((step) => {
-          const gates = payloads.filter(
-            (payload) =>
-              payload.tool === "workflow_gate" &&
-              payload.workflowId === definition.id &&
-              payload.workflowVersion === definition.version &&
-              payload.step === step.id,
-          );
-          const passed = gates.findLast((payload) => payload.accepted === true);
-          const gate = passed ?? gates.at(-1);
-          const assignment = payloads.findLast(
-            (payload) =>
-              payload.tool === "workflow_reviewer_assignment" &&
-              payload.workflowId === definition.id &&
-              payload.workflowVersion === definition.version &&
-              payload.step === step.id,
-          );
-          let state = assignment ? "assigned" : "pending";
-          if (passed) state = "passed";
-          else if (
-            gate?.decision === "reject" &&
-            Array.isArray(gate.blockers) &&
-            gate.blockers.length === 0 &&
-            Array.isArray(gate.missingSkills) &&
-            gate.missingSkills.length === 0 &&
-            Array.isArray(gate.unexpectedSkills) &&
-            gate.unexpectedSkills.length === 0
-          )
-            state = "rejected";
-          return {
-            step: step.id,
-            role: step.role,
-            state,
-            ...(gate?.decision === "pass" || gate?.decision === "reject" ? { decision: gate.decision } : {}),
-            ...(typeof gate?.subject === "string" ? { subject: gate.subject } : {}),
-            ...(typeof assignment?.reviewerSessionId === "string"
-              ? { reviewerSessionId: assignment.reviewerSessionId }
-              : {}),
-          };
-        }),
+        current,
+        steps,
       };
     }
+
     const step = required(request.step, "step");
     const configuredStep = definition.steps.find((candidate) => candidate.id === step);
     if (!configuredStep) throw new Error(`workflow ${definition.id} has no step ${step}`);
@@ -177,25 +193,53 @@ export function createWorkflowControl(input: {
       definition,
     });
     if (request.action === "assign_reviewer") {
+      const reviewerSessionId = required(request.reviewerSessionId, "reviewerSessionId");
+      const reviewerEntries = await input.sessions.getEntries(reviewerSessionId, { tools: ["workflow_review"] });
+      if (
+        reviewerEntries.some(
+          (entry) =>
+            entry.type === "tool_result" &&
+            !!entry.payload &&
+            typeof entry.payload === "object" &&
+            "valid" in entry.payload &&
+            entry.payload.valid === false,
+        )
+      )
+        throw new Error(
+          `reviewer session ${reviewerSessionId} has an invalid terminal receipt and cannot be reassigned`,
+        );
       return assignWorkflowReviewer({
         sessions: input.sessions,
         lease: input.lease,
         scopeLabel: input.scopeLabel,
         parentSessionId: input.session.id,
-        reviewerSessionId: required(request.reviewerSessionId, "reviewerSessionId"),
+        reviewerSessionId,
         definition,
         step,
       });
     }
     if (configuredStep.separateFrom && !request.reviewerSessionId)
       throw new Error(`workflow step ${step} requires a reviewer receipt`);
+    if (configuredStep.humanApproval && request.reviewerSessionId)
+      throw new Error(`workflow step ${step} human approval cannot import a reviewer receipt`);
     if (configuredStep.humanApproval && request.action !== "approve")
       throw new Error(`workflow step ${step} requires the approval action`);
     if (!configuredStep.humanApproval && request.action === "approve")
       throw new Error(`workflow step ${step} does not accept the approval action`);
     if (!request.reviewerSessionId && !request.decision) throw new Error("decision is required");
-    const inputEvidence = await input.resolveEvidence((request.inputEvidence ?? []).map((evidence) => evidence.id));
-    const outputEvidence = await input.resolveEvidence((request.outputEvidence ?? []).map((evidence) => evidence.id));
+    const inputEvidenceIds = (request.inputEvidence ?? []).map((evidence) => evidence.id);
+    const outputEvidenceIds = (request.outputEvidence ?? []).map((evidence) => evidence.id);
+    if (
+      configuredStep.humanApproval &&
+      outputEvidenceIds.length > 0 &&
+      (outputEvidenceIds.length !== inputEvidenceIds.length ||
+        outputEvidenceIds.some((evidenceId, index) => evidenceId !== inputEvidenceIds[index]))
+    )
+      throw new Error("approval output evidence must match its approved input evidence");
+    const inputEvidence = await input.resolveEvidence(inputEvidenceIds);
+    const outputEvidence = configuredStep.humanApproval
+      ? inputEvidence.map((evidence) => ({ ...evidence }))
+      : await input.resolveEvidence(outputEvidenceIds);
     return importWorkflowReview({
       sessions: input.sessions,
       lease: input.lease,
@@ -210,6 +254,7 @@ export function createWorkflowControl(input: {
               decision: request.decision!,
               inputEvidence,
               outputEvidence,
+              findings: request.findings,
             },
           }),
     });

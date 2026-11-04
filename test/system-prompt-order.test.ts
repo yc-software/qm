@@ -5,10 +5,11 @@ import { createSkillBundleStore, type SkillBundleStore } from "../src/skills/ski
 import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
+import { createOrchestrator, type OrchestratorDeps, type OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
@@ -93,6 +94,8 @@ function buildOrchestrator(
     securityScreener?: SecurityScreener;
     managedGroups?: Pick<ManagedGroupDirectory, "recognizes" | "members" | "version" | "withVersion" | "slackChannel">;
     isCurrentSharedScopeMember?: IsCurrentSharedScopeMember;
+    sessionSyscalls?: OrchestratorDeps["sessionSyscalls"];
+    workflowDefinitions?: OrchestratorDeps["workflowDefinitions"];
   } = {},
 ) {
   const config = createMemoryConfigStore(ORG);
@@ -196,6 +199,90 @@ test("system prompt is ordered cached-prefix → volatile tail, with memory LAST
   assert.match(prompt, /## System orientation/);
   assert.match(prompt, /sandbox files as cached, not durably saved/);
   assert.match(prompt, /\$AGENT_API_URL/);
+});
+
+test("governed workflow turns expose reviewer session syscalls without the user subagent feature", async () => {
+  const harness = createMockHarness();
+  let reviewerSessionsAvailable = false;
+  harness.turns.runTurn = async (turn) => {
+    reviewerSessionsAvailable = Boolean(turn.tools.sessionSyscalls?.openWithAdmission);
+    return { reply: "done" };
+  };
+  const { orchestrator } = buildOrchestrator({
+    harness,
+    sessionSyscalls: {
+      forTurn: () => ({ openWithAdmission: async () => ({ ok: true, sessionId: "reviewer" }) }),
+    } as unknown as OrchestratorDeps["sessionSyscalls"],
+    workflowDefinitions: [
+      {
+        id: "finance",
+        version: 1,
+        steps: [{ id: "source", role: "producer", requiredSkills: [] }],
+      },
+    ],
+  });
+
+  const result = await orchestrator.handleTurn(dm("workflow-review-dispatch", "run finance workflow"));
+
+  assert.equal(result.status, "ok");
+  assert.equal(reviewerSessionsAvailable, true);
+});
+
+test("governed workflow skills expose files from the exact pinned skill version", async () => {
+  const skillBody = "Run the governed compiler.";
+  const skills = createSkillStore();
+  const skill = await skills.create({
+    scopeId: scopeId("personal", actor.id),
+    createdBy: actor.id,
+    manifest: {
+      name: "finance-compiler",
+      description: "Compile governed finance evidence",
+      body: skillBody,
+      requiredCapabilities: [],
+      files: [{ path: "scripts/compile.py", content: "print('governed')" }],
+    },
+  });
+  await skills.review(skill.id, actor.id, []);
+  await skills.publish(skill.id);
+  const harness = createMockHarness();
+  harness.turns.runTurn = async (turn) => {
+    const result = await turn.tools.skill("finance-compiler", { path: "scripts/compile.py" });
+    return { reply: result.content ?? "missing" };
+  };
+  const { orchestrator } = buildOrchestrator({
+    harness,
+    skills,
+    sandbox: {
+      ...readSandbox(),
+      listDir: async () => [],
+      removeDir: async () => {},
+      writeFile: async () => {},
+      writeFileBytes: async () => {},
+    },
+    workflowDefinitions: [
+      {
+        id: "finance",
+        version: 1,
+        steps: [
+          {
+            id: "source",
+            role: "producer",
+            requiredSkills: [
+              {
+                skillName: "finance-compiler",
+                contentDigest: createHash("sha256").update(skillBody).digest("hex"),
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+
+  const result = await orchestrator.handleTurn(dm("workflow-skill-file", "run finance compiler"));
+
+  assert.equal(result.status, "ok");
+  assert.equal(result.reply, "print('governed')");
 });
 
 test("Open carries only the live actor's personal reads into a shared turn and audits actual access", async () => {

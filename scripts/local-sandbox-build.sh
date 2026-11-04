@@ -30,5 +30,6 @@ echo "==> building ${LOCAL_TAG} from local/Dockerfile (fingerprint ${FINGERPRINT
 docker build --platform "${PLATFORM}" -f local/Dockerfile --build-arg "BASE=${BASE_TAG}" \
   --label "qm.sandbox-fingerprint=${FINGERPRINT}" \
   -t "${LOCAL_TAG}" .
+docker run --rm --platform "${PLATFORM}" "${LOCAL_TAG}" python3 -c 'import openpyxl, yaml'
 
 echo "==> done: ${LOCAL_TAG}"

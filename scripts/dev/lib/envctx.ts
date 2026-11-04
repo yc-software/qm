@@ -24,6 +24,7 @@ const DEV_SECURITY_SECRET_KEYS = [
   "PORTAL_IDENTITY_SECRET",
   "CONNECTOR_SECRET_KEY",
   "PORTAL_SESSION_SECRET",
+  "SKILL_SIGNING_SECRET",
 ] as const;
 
 export function completeDevSecuritySecrets(env: Record<string, string>, seed: string): void {
@@ -137,23 +138,34 @@ export async function assembleEnv(opts: {
     codexAuthSource = codexAuthCandidate;
   }
 
+  const requestedHarness = env.HARNESS || wtEnv.HARNESS;
   let harness: "pi" | "claude" | "ultimate";
-  if (opts.callerEnv.HARNESS === "claude" || opts.callerEnv.HARNESS === "ultimate") {
-    harness = opts.callerEnv.HARNESS;
+  if (requestedHarness === "claude" || requestedHarness === "ultimate") {
+    harness = requestedHarness;
     env.HARNESS = harness;
     if (harness === "ultimate") {
-      if (!env.OPENAI_API_KEY)
-        throw new Error("HARNESS=ultimate requires the existing OPENAI_API_KEY for QM brokerage");
-      env.MODEL_GATEWAY_URL = "https://api.openai.com/v1";
-      env.MODEL_GATEWAY_API_KEY = `Bearer ${env.OPENAI_API_KEY}`;
-      env.MODEL_GATEWAY_API_KEY_HEADER = "Authorization";
-      env.MODEL_GATEWAY_MODELS ||= selectableBaseModels()
-        .flatMap(({ id }) => {
-          if (resolveModel(id)?.provider !== "openai") return [];
-          return [`${id}=${modelRequestOverrides(id)?.model ?? id}`];
-        })
-        .join(",");
-      env.ULTIMATE_URL = opts.callerEnv.ULTIMATE_URL || env.ULTIMATE_URL || "http://127.0.0.1:4747";
+      for (const key of [
+        "MODEL_GATEWAY_URL",
+        "MODEL_GATEWAY_API_KEY",
+        "MODEL_GATEWAY_API_KEY_HEADER",
+        "MODEL_GATEWAY_MODELS",
+      ]) {
+        if (!env[key] && wtEnv[key]) env[key] = wtEnv[key];
+      }
+      if (!env.MODEL_GATEWAY_URL) {
+        if (!env.OPENAI_API_KEY)
+          throw new Error("HARNESS=ultimate requires a model gateway or OPENAI_API_KEY for QM brokerage");
+        env.MODEL_GATEWAY_URL = "https://api.openai.com/v1";
+        env.MODEL_GATEWAY_API_KEY = `Bearer ${env.OPENAI_API_KEY}`;
+        env.MODEL_GATEWAY_API_KEY_HEADER = "Authorization";
+        env.MODEL_GATEWAY_MODELS ||= selectableBaseModels()
+          .flatMap(({ id }) => {
+            if (resolveModel(id)?.provider !== "openai") return [];
+            return [`${id}=${modelRequestOverrides(id)?.model ?? id}`];
+          })
+          .join(",");
+      }
+      env.ULTIMATE_URL = env.ULTIMATE_URL || wtEnv.ULTIMATE_URL || "http://127.0.0.1:4747";
     }
   } else if (env.ANTHROPIC_API_KEY || env.OPENAI_API_KEY || codexOAuthConfigured) {
     harness = "pi";

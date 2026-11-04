@@ -63,9 +63,13 @@ export function createDirectFileUploads(options: {
   files: FileArtifactStore;
   client?: S3Send;
   presign?: (command: UploadPartCommand, expiresIn: number) => Promise<string>;
+  publicEndpoint?: string;
   now?: () => number;
 }): DirectFileUploads {
-  const nativeClient = new S3Client(options.region ? { region: options.region } : {});
+  const nativeClient = new S3Client({
+    ...(options.region ? { region: options.region } : {}),
+    ...(options.publicEndpoint ? { endpoint: options.publicEndpoint, forcePathStyle: true } : {}),
+  });
   const client = options.client ?? nativeClient;
   const presign =
     options.presign ??
