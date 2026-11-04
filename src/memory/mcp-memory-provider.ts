@@ -1,6 +1,6 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { McpCallError, mcpEnvelope, mcpResultText, type McpClient } from "../mcp/mcp-client.ts";
-import { withTimeout } from "../util/async.ts";
+import { TimeoutError, withTimeout } from "../util/async.ts";
 import { attestedPerson } from "../directory/person.ts";
 import type { MemoryRecallContext, MemoryService } from "./memory-service.ts";
 import { DENIED_CODES, MAX_FACTS_PER_WRITE, reportEnvelope } from "./provider-outcome.ts";
@@ -30,11 +30,9 @@ export function createMcpMemoryProvider(opts: {
     const person = opts.attestActor ? attestedPerson(actorId, "memory provider") : actorId;
     if (person) args[op.actorArg ?? "acting_user"] = person;
     const headers = opts.attestActor && person ? { "x-qm-actor": person } : undefined;
-    const result = await withTimeout(
-      () => op.client.callTool(op.tool, args, headers),
-      Math.max(0, deadline - Date.now()),
-      "memory provider",
-    );
+    const ms = deadline - Date.now();
+    if (ms <= 0) throw new TimeoutError(`memory provider timed out after ${op.timeoutMs}ms`);
+    const result = await withTimeout(() => op.client.callTool(op.tool, args, headers), ms, "memory provider");
     reportEnvelope(mcpEnvelope(result));
     return result;
   };

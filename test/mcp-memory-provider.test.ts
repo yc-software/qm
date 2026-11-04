@@ -153,9 +153,11 @@ test("every batch of a split write shares the write's one deadline", async () =>
   );
 });
 
-test("a split write is pending when any of its batches is", async () => {
+test("a split write is pending when any of its batches is, with its last batch's code", async () => {
   let calls = 0;
-  const queued = answering(async () => ({ status: ++calls === 1 ? "pending" : "committed" }));
+  const queued = answering(async () =>
+    ++calls === 1 ? { status: "pending", code: "queued" } : { status: "committed" },
+  );
   const outcomes: MemoryProviderOutcome[] = [];
   const memory = createRoutedMemoryService({
     providers: {
@@ -173,7 +175,31 @@ test("a split write is pending when any of its batches is", async () => {
   });
   assert.equal(calls, 2);
   assert.deepEqual(
-    outcomes.map(({ outcome }) => outcome),
-    ["pending"],
+    outcomes.map(({ outcome, code }) => ({ outcome, code })),
+    [{ outcome: "pending", code: undefined }],
   );
+});
+
+test("a split write sends no batch once its deadline has passed", async () => {
+  let calls = 0;
+  const blocking: McpClient = {
+    async listTools() {
+      return { tools: [] };
+    },
+    callTool() {
+      calls++;
+      const until = Date.now() + 70;
+      while (Date.now() < until);
+      return Promise.resolve({ content: [], structuredContent: { status: "committed" } });
+    },
+  };
+  const memory = createMcpMemoryProvider({
+    read: { client: blocking, tool: "read", timeoutMs: 100 },
+    write: { client: blocking, tool: "write", timeoutMs: 100, factsArg: "facts" },
+  });
+  await assert.rejects(
+    memory.capture("org:acme", facts(60), 10, "u1", { mode: "automatic", actorId: "u1" }),
+    /timed out after 100ms/,
+  );
+  assert.equal(calls, 2);
 });

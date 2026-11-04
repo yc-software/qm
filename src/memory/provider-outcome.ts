@@ -25,8 +25,7 @@ export const reportEnvelope = (envelope: McpEnvelope) => envelopes.getStore()?.(
 export async function withEnvelope<T>(run: () => Promise<T>): Promise<{ value: T; envelope: McpEnvelope }> {
   let envelope: McpEnvelope = {};
   const value = await envelopes.run(
-    (received) =>
-      void (envelope = { ...envelope, ...received, ...(envelope.status === "pending" ? { status: "pending" } : {}) }),
+    (received) => void (envelope = envelope.status === "pending" ? { ...received, status: "pending" } : received),
     run,
   );
   return { value, envelope };
