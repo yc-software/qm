@@ -1887,7 +1887,7 @@ a.chat-row-open {
   top: auto;
 }
 
-.message-stack .user-row.latest-prompt > .user-bubble {
+.message-stack .user-row.latest-prompt > :is(.user-bubble, .message-edit) {
   pointer-events: auto;
   transition: box-shadow 120ms ease;
 }
