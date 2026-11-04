@@ -1898,33 +1898,22 @@ export function buildApp(
     ],
   });
   pgArtifactMap.pool.registerMigration({
-    id: "durable-map/turn_wall_clock_configs/0002-drop",
+    id: "durable-map/retired-tables/0001-drop",
     statements: [
-      "DROP TABLE IF EXISTS turn_wall_clock_configs",
-      "DELETE FROM durable_map_versions WHERE tbl = 'turn_wall_clock_configs'",
-    ],
-  });
-  pgArtifactMap.pool.registerMigration({
-    id: "durable-map/connector_status/0002-drop",
-    statements: [
-      "DROP TABLE IF EXISTS connector_status",
-      "DELETE FROM durable_map_versions WHERE tbl = 'connector_status'",
-    ],
-  });
-  pgArtifactMap.pool.registerMigration({
-    id: "durable-map/pinned_skills/0002-drop",
-    statements: ["DROP TABLE IF EXISTS pinned_skills", "DELETE FROM durable_map_versions WHERE tbl = 'pinned_skills'"],
-  });
-  pgArtifactMap.pool.registerMigration({
-    id: "durable-map/internal_member_overrides/0002-drop",
-    statements: [
-      "DROP TABLE IF EXISTS internal_member_overrides",
-      "DELETE FROM durable_map_versions WHERE tbl = 'internal_member_overrides'",
-    ],
-  });
-  pgArtifactMap.pool.registerMigration({
-    id: "ratelimit/limiter/0002-drop",
-    statements: ["DROP TABLE IF EXISTS rate_limit_windows"],
+      "turn_wall_clock_configs",
+      "connector_status",
+      "pinned_skills",
+      "internal_member_overrides",
+      "brain_clients",
+      "break_glass_grants",
+      "browse_provider_configs",
+      "device_flow_cutover",
+      "device_flow_cutover_resets",
+      "inbox_state",
+      "provider_request_capture_flag",
+      "run_state_retention_configs",
+      "slack_agent_requests",
+    ].flatMap((table) => [`DROP TABLE IF EXISTS ${table}`, `DELETE FROM durable_map_versions WHERE tbl = '${table}'`]),
   });
   pgArtifactMap.pool.registerMigration({
     id: "runtime/0002-drop-harness-choice",
