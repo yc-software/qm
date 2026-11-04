@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "../src/agent/agent-tools.ts";
 import { createGrindMeter } from "../src/agent/goal.ts";
 import { turnToolContext } from "../src/agent/turn-support.ts";
-import { emptyEndingNote } from "../src/agent/agent-run.ts";
+import { endingNote } from "../src/agent/agent-run.ts";
 import {
   GovernorUndecided,
   supersedeGoal,
@@ -749,14 +749,14 @@ test("a swarm-paused worker's next tool result ends its reply", async () => {
   assert.equal(received, 0, "a held worker's queued messages stay queued for when it resumes");
   const endedEmpty = { getLastAssistantText: () => "", messages: [{ role: "assistant", stopReason: "stop" }] };
   assert.equal(
-    emptyEndingNote({
+    await endingNote({
       wallClock: "ok",
       userAborted: false,
       cancelled: false,
       surfaceTools: false,
       pollFire: false,
       ref: { ...ref, modelCalls: 3 },
-      session: endedEmpty as unknown as Parameters<typeof emptyEndingNote>[0]["session"],
+      session: endedEmpty as unknown as Parameters<typeof endingNote>[0]["session"],
       turnWallClockMs: 0,
       elapsedMs: 0,
     }),

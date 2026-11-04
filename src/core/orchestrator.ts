@@ -67,6 +67,7 @@ import { cleanBrandingLabel, resolveBranding } from "../resolution/branding.ts";
 import { resolveTurnContext } from "../resolution/turn-context.ts";
 import { reachEnqueue } from "../reach/reach.ts";
 import { interimReplyDelivery, turnGuidance } from "./orchestrator/reply-check.ts";
+import { turnEndCheck } from "./orchestrator/turn-end-check.ts";
 import { turnDeliveryProvenance } from "../delivery/delivery-store.ts";
 import { replyEditNote } from "../delivery/run-result-delivery.ts";
 import type { DirectoryStore, DirectoryMember } from "../directory/directory-store.ts";
@@ -3531,6 +3532,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             saveGoal,
             ...(goalInbox ? { goalInbox } : {}),
             ...(checkReply ? { checkReply } : {}),
+            ...(automatedTurn || sessionTurn
+              ? {
+                  checkEnding: turnEndCheck(deps, {
+                    processScopeId: memoryScopeId,
+                    monitorScopeId: scopeId,
+                    threadRef: conversation.threadRef,
+                    turnStartedAt: turnStart,
+                  }),
+                }
+              : {}),
             onInterimReply: interimReplyDelivery({
               surfaceName,
               spineTurn: input.surfaceTools === true,

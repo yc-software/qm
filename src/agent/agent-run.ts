@@ -617,7 +617,7 @@ export const EMPTY_ENDING_MIN_BUDGET_MS = 30_000;
 export const EMPTY_ENDING_NOTE =
   "[system] The turn ended with an empty message. If the work above is unfinished, continue it — without redoing steps that already succeeded; otherwise reply with your answer now.";
 
-export function emptyEndingNote(opts: {
+export async function endingNote(opts: {
   wallClock: TurnWallClockOutcome;
   userAborted: boolean;
   cancelled: boolean;
@@ -634,16 +634,18 @@ export function emptyEndingNote(opts: {
   session: AssistantTextSession;
   turnWallClockMs: number;
   elapsedMs: number;
-}): string | null {
+  checkEnding?: (reply: string) => Promise<string | undefined>;
+}): Promise<string | null> {
   if (opts.wallClock !== "ok" || opts.userAborted || opts.cancelled || opts.surfaceTools) return null;
   if (endedOnPurpose(opts.ref) || opts.ref.pendingApprovals?.length) return null;
   if (opts.pollFire) return null;
   const calls = opts.ref.modelCalls ?? 0;
   if (calls === 0) return null;
   if (piFailedAssistant(opts.session)) return null;
-  if ((opts.session.getLastAssistantText() ?? "").trim()) return null;
   if (opts.turnWallClockMs > 0 && opts.turnWallClockMs - opts.elapsedMs < EMPTY_ENDING_MIN_BUDGET_MS) return null;
-  return EMPTY_ENDING_NOTE;
+  const reply = (opts.session.getLastAssistantText() ?? "").trim();
+  if (!reply) return EMPTY_ENDING_NOTE;
+  return (await opts.checkEnding?.(reply)) ?? null;
 }
 
 export async function raceTurnWallClock(
@@ -1481,7 +1483,7 @@ export function createAgent(opts?: AgentOptions): Agent {
               },
             });
           }
-          const note = emptyEndingNote({
+          const note = await endingNote({
             wallClock,
             userAborted,
             cancelled: !!turn.cancel?.aborted,
@@ -1491,10 +1493,11 @@ export function createAgent(opts?: AgentOptions): Agent {
             session: entry.agentSession,
             turnWallClockMs,
             elapsedMs: turnWallClockMs > 0 ? turnWallClockMs - floorCap.remainingCapMs() : Date.now() - promptStart,
+            ...(turn.checkEnding ? { checkEnding: turn.checkEnding } : {}),
           });
           if (note) {
             console.error(
-              `[pi] empty final response after ${entry.ref.modelCalls} model calls — re-prompting once session=${turn.session.id}`,
+              `[pi] ${note === EMPTY_ENDING_NOTE ? "empty" : "unfinished"} final response after ${entry.ref.modelCalls} model calls — re-prompting once session=${turn.session.id}`,
             );
             await thinkTail;
             if (!userAborted && !turn.cancel?.aborted && roomToReprompt()) {

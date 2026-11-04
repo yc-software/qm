@@ -6,6 +6,7 @@ import { storedItem, type Item } from "../src/sessions/items.ts";
 import type { RunSignal, RunSignalStore } from "../src/runs/run-signal-store.ts";
 import { reconstructMessagesFromHistory } from "../src/agent/replay.ts";
 import { forModelContext } from "../src/agent/context-compaction.ts";
+import { turnEndCheck } from "../src/core/orchestrator/turn-end-check.ts";
 
 type Sink = { entries: Item[] };
 
@@ -408,5 +409,61 @@ test("a prod nobody can see is ignored and the reply stands", async () => {
     } finally {
       model.restore();
     }
+  }
+});
+
+const unattendedCheck = turnEndCheck(
+  {},
+  {
+    processScopeId: "personal:tester",
+    monitorScopeId: "personal:tester",
+    threadRef: "thread-1",
+    turnStartedAt: 0,
+  },
+);
+
+test("an unattended turn that ends by announcing its next step is continued once, then ends on its final answer", async () => {
+  const agent = createAgent({ apiKey: "sk-test" });
+  const sink: Sink = { entries: [] };
+  const draft = "Found the leak in the pool. Next I'll write the regression test.";
+  const model = fakeModel([draft, "Fixed the pool leak; the regression test fails before the fix and passes after."]);
+  try {
+    const result = await agent.runTurn(turnInput("ending-continued", sink, { checkEnding: unattendedCheck }));
+    assert.equal(result.reply, "Fixed the pool leak; the regression test fails before the fix and passes after.");
+    assert.equal(model.requests.length, 2);
+    const second = model.requests[1]!;
+    assert.deepEqual(
+      second.map((m) => m.role),
+      ["user", "assistant", "user"],
+    );
+    assert.equal(userText(second[2]!), await unattendedCheck(draft));
+  } finally {
+    model.restore();
+  }
+});
+
+test("the continuation is single-shot: a second announcement ends the turn instead of looping", async () => {
+  const agent = createAgent({ apiKey: "sk-test" });
+  const sink: Sink = { entries: [] };
+  const model = fakeModel(["I'll now run the tests.", "Let me check the logs.", "never requested"]);
+  try {
+    const result = await agent.runTurn(turnInput("ending-once", sink, { checkEnding: unattendedCheck }));
+    assert.equal(model.requests.length, 2);
+    assert.equal(result.reply, "Let me check the logs.");
+  } finally {
+    model.restore();
+  }
+});
+
+test("a turn without the ending check, such as one a person is waiting on, ends on its announcement", async () => {
+  const agent = createAgent({ apiKey: "sk-test" });
+  const sink: Sink = { entries: [] };
+  const model = fakeModel(["I'll now run the tests.", "never requested"]);
+  try {
+    const result = await agent.runTurn(turnInput("ending-attended", sink));
+    assert.equal(model.requests.length, 1);
+    assert.equal(result.reply, "I'll now run the tests.");
+  } finally {
+    model.restore();
   }
 });

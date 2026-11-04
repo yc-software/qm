@@ -208,3 +208,31 @@ test("the reply check is armed for people's turns but never for automations such
     } as OrchestratorInput);
   assert.deepEqual(armed, ["from a person"]);
 });
+
+test("the turn-end continuation check is armed for automations and delegated turns, never for a person's turn", async () => {
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  const deliveries = createDeliveryStore();
+  const armed: boolean[] = [];
+  const agent: Agent = {
+    ...createMockAgent(),
+    runTurn: async (turn) => {
+      armed.push(typeof turn.checkEnding === "function");
+      return { reply: "done" };
+    },
+  };
+  const orch = buildOrchestrator(agent, sessions, deliveries);
+  for (const [request, threadRef] of [
+    [{ origin: { kind: "direct" }, text: "from a person" }, "web-ending-person"],
+    [{ origin: { kind: "human" }, text: "from a person in chat" }, "web-ending-human"],
+    [{ origin: { kind: "automation" }, text: "from a cron" }, "web-ending-cron"],
+    [{ origin: { kind: "human" }, sessionSenderId: "parent-session", text: "from a parent agent" }, "web-ending-child"],
+  ] as const)
+    await orch.handleTurn({
+      surface: "web",
+      actor,
+      conversation: { kind: "dm", threadRef, audience: [actor] } as Conversation,
+      runId: `run-${threadRef}`,
+      ...request,
+    } as OrchestratorInput);
+  assert.deepEqual(armed, [false, false, true, true]);
+});
