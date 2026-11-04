@@ -52,7 +52,7 @@ import { brandMark, brandName } from "./ui";
 import { desktopHistoryNav } from "./desktop-history";
 import { beginNavigation, cancelNavigation, endNavigation, navigationInFlight } from "./url-history";
 import { icon } from "./icons";
-import { PHONE_MAX_WIDTH, trackVisualViewport } from "./viewport";
+import { markDesktopEmbed, PHONE_MAX_WIDTH, trackVisualViewport } from "./viewport";
 import { markConnectorConnected } from "./chat";
 import { clearSkillsCache, resyncModelSelection } from "./composer";
 import { allConversations, ensureDeliveryStream, mainConversation, onExitCanvas } from "./conversations";
@@ -1125,7 +1125,9 @@ export async function boot(): Promise<void> {
     session: wantedSession,
     item: wantedItem,
   } = parseDeepLink(UI_BASE, location.pathname, location.search);
-  document.body.classList.toggle("app-edit-embed", wanted === "app-edit" && params.get("embed") === "1");
+  const appEditEmbed = wanted === "app-edit" && params.get("embed") === "1";
+  document.body.classList.toggle("app-edit-embed", appEditEmbed);
+  markDesktopEmbed(appEditEmbed);
   const prefillRoute = wanted === null || wanted === "new";
   const prefill = prefillRoute && !wantedSession ? (params.get("q")?.slice(0, 20_000) ?? null) : null;
   const chatsLink = wanted === null || wanted === "chats";
