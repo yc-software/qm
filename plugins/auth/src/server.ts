@@ -9,6 +9,7 @@ import { passwordConfigured, validEmail } from "./config.ts";
 import { verifyPassword } from "./password.ts";
 import { claimOnce, withinRateLimit, ClaimStoreUnavailableError, type ClaimStore } from "../../chassis/src/claims.ts";
 import { coreEmailAllowed } from "../../chassis/src/external-members.ts";
+import type { TenantSignIn, TenantSignInLookup } from "../../chassis/src/tenant-sign-in.ts";
 import { mintIdToken, pkceMatches, safeEqual, subjectFor, TokenSigner, type AuthRequest } from "./tokens.ts";
 import { ID_TOKEN_ALG, type SigningKey } from "./keys.ts";
 import type { Mailer } from "../../chassis/src/resend.ts";
@@ -29,6 +30,7 @@ export interface AuthDeps {
   brandName?: () => string;
   trustedSignInLabel?: string;
   emailAllowed?: (email: string) => Promise<boolean>;
+  signIn?: TenantSignInLookup;
   now?: () => number;
   onBackgroundTask?: (task: Promise<void>) => void;
 }
@@ -112,7 +114,43 @@ function readAuthorizeRequest(
   };
 }
 
-export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
+type AuthHandler = (req: IncomingMessage, res: ServerResponse) => Promise<void>;
+
+const MAX_TENANT_HANDLERS = 256;
+
+export function tenantAuthConfig(cfg: AuthConfig, signIn: TenantSignIn): AuthConfig {
+  const clientId = signIn.oidcClient?.clientId;
+  const clientSecret = signIn.oidcClient?.clientSecret ?? signIn.clientSecret;
+  if (!signIn.allowedEmails && !clientId && !clientSecret) return cfg;
+  return {
+    ...cfg,
+    ...(signIn.allowedEmails ? { allowedEmails: signIn.allowedEmails, allowedEmailDomain: undefined } : {}),
+    ...(clientId ? { clientId } : {}),
+    ...(clientSecret ? { clientSecret } : {}),
+  };
+}
+
+export function createAuthHandler(deps: AuthDeps): AuthHandler {
+  const base = buildAuthHandler(deps);
+  const lookup = deps.signIn;
+  if (!lookup) return base;
+  const built = new Map<string, AuthHandler>();
+  return async (req, res) => {
+    const signIn = await lookup();
+    const cfg = tenantAuthConfig(deps.cfg, signIn);
+    if (cfg === deps.cfg) return base(req, res);
+    const key = JSON.stringify(signIn);
+    let handler = built.get(key);
+    if (!handler) {
+      if (built.size >= MAX_TENANT_HANDLERS) built.clear();
+      handler = buildAuthHandler({ ...deps, cfg });
+      built.set(key, handler);
+    }
+    return handler(req, res);
+  };
+}
+
+function buildAuthHandler(deps: AuthDeps): AuthHandler {
   const { cfg, signer, claims, mailer, signingKey } = deps;
   const sessions = deps.sessions ?? coreRememberedSessions(cfg.coreApiUrl, cfg.coreSigningSecret);
   const brandName = deps.brandName ?? ((): string => cfg.brandName);

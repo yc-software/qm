@@ -1,4 +1,5 @@
 import { coreHostTenants, inHostTenant } from "../../chassis/src/host-tenant.ts";
+import { coreTenantSignIn } from "../../chassis/src/tenant-sign-in.ts";
 import { reportBackendError } from "../../chassis/src/error-reporting.ts";
 import "./instrument.ts";
 import { coreRememberedSessions } from "./sessions.ts";
@@ -50,6 +51,7 @@ export async function startServer(
     sessions: coreRememberedSessions(CFG.coreApiUrl, CFG.coreSigningSecret),
     claims: coreClaimStore(CFG.coreApiUrl, CFG.coreSigningSecret, "auth"),
     mailer,
+    signIn: coreTenantSignIn(CFG.coreApiUrl, CFG.coreSigningSecret),
     brandName: () => {
       void branding.forRender();
       return branding.current().selfLabel || CFG.brandName;

@@ -1,4 +1,5 @@
 import type { EmailAdmission } from "../../chassis/src/external-members.ts";
+import type { TenantSignIn } from "../../chassis/src/tenant-sign-in.ts";
 import { createHash, randomBytes } from "node:crypto";
 import { createRemoteJWKSet, customFetch, jwtVerify, type JWTPayload } from "jose";
 
@@ -186,4 +187,34 @@ async function readJson(r: Response, what: string): Promise<Record<string, unkno
   } catch {
     throw new Error(`${what} returned non-JSON (HTTP ${r.status})`);
   }
+}
+
+function rebased(endpoint: string, from: string, to: string): string {
+  return endpoint.startsWith(`${from}/`) ? `${to}${endpoint.slice(from.length)}` : endpoint;
+}
+
+export function tenantOidc(base: OidcConfig, signIn: TenantSignIn): OidcConfig {
+  const client = signIn.oidcClient;
+  if (!client) return base;
+  const from = base.issuer.replace(/\/$/, "");
+  const to = client.issuer.replace(/\/$/, "");
+  return {
+    ...base,
+    issuer: client.issuer,
+    clientId: client.clientId,
+    clientSecret: client.clientSecret,
+    authEndpoint: rebased(base.authEndpoint, from, to),
+    tokenEndpoint: rebased(base.tokenEndpoint, from, to),
+    userinfoEndpoint: rebased(base.userinfoEndpoint, from, to),
+    jwksUri: rebased(base.jwksUri, from, to),
+  };
+}
+
+export function tenantPrincipalRule(rule: PrincipalRule, signIn: TenantSignIn): PrincipalRule {
+  if (!signIn.allowedEmails) return rule;
+  return {
+    claim: rule.claim,
+    allowedEmails: signIn.allowedEmails,
+    requireCoreAdmission: rule.requireCoreAdmission === true || rule.claim === "sub",
+  };
 }
