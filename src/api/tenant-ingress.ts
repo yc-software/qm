@@ -34,6 +34,10 @@ export function requestCapability(
   return claims;
 }
 
+// The x-qm-tenant header is unsigned and is only trusted after a check. With a capability
+// token it must match the verified token's tenant (below). With no token, it binds the
+// tenant here but no handler runs until the route's source signature (the portal's signed
+// request) or capability check verifies. Never treat the header alone as proof of tenant.
 async function claimedTenant(
   req: IncomingMessage,
   auth: Route["auth"] | undefined,
