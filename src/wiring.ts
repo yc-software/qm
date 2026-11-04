@@ -49,11 +49,8 @@ import {
   createSessionSyscalls,
   type SessionSyscallsFactory,
   deliverSubagentMail,
-  sessionTreeRoot,
-  sessionTreeRuns,
   sessionTreeWorking,
   stoppableRoot,
-  SUBAGENT_TREE_RUN_CAP,
 } from "./sessions/session-syscalls.ts";
 import { createMemoryEmbedder } from "./model/embeddings.ts";
 import { createSemanticMemory } from "./memory/semantic-memory.ts";
@@ -1534,38 +1531,27 @@ export function buildApp(
   const runs: RunStore = {
     ...runStore.runs,
     async enqueue(input) {
-      const enqueue = async () => {
-        const known = await sessions.getByThread(input.sessionId);
-        if (
-          known &&
-          (known.parentSessionId || (await sessions.childrenOf(known.id)).length > 0) &&
-          !(input.dedupKey && (await runStore.runs.getByDedupKey(input.dedupKey))) &&
-          (await sessionTreeRuns(sessions, runStore.runs, await sessionTreeRoot(sessions, known))).length >=
-            SUBAGENT_TREE_RUN_CAP
-        )
-          throw new Error(`all ${SUBAGENT_TREE_RUN_CAP} session run slots are in use`);
-        const participants = known ? await sessions.participantsOf(known.id) : [];
-        const ancestors = known?.parentSessionId ? await workingAncestors(known) : [];
-        const result = await runStore.runs.enqueue(input);
-        if (result.deduped) return result;
+      const known = await sessions.getByThread(input.sessionId);
+      const participants = known ? await sessions.participantsOf(known.id) : [];
+      const ancestors = known?.parentSessionId ? await workingAncestors(known) : [];
+      const result = await runStore.runs.enqueue(input);
+      if (result.deduped) return result;
+      sessionStateBus.emit({
+        threadRef: input.sessionId,
+        ...(known ? { sessionId: known.id } : {}),
+        state: "working",
+        at: result.run.createdAt,
+        participants: participants.length ? participants : [input.request.actor.id],
+      });
+      for (const ancestor of ancestors)
         sessionStateBus.emit({
-          threadRef: input.sessionId,
-          ...(known ? { sessionId: known.id } : {}),
+          threadRef: ancestor.session.threadRef,
+          sessionId: ancestor.session.id,
           state: "working",
           at: result.run.createdAt,
-          participants: participants.length ? participants : [input.request.actor.id],
+          participants: ancestor.participants,
         });
-        for (const ancestor of ancestors)
-          sessionStateBus.emit({
-            threadRef: ancestor.session.threadRef,
-            sessionId: ancestor.session.id,
-            state: "working",
-            at: result.run.createdAt,
-            participants: ancestor.participants,
-          });
-        return result;
-      };
-      return advisoryLock.withLock("session-run-admission", enqueue);
+      return result;
     },
   };
   const swarms =

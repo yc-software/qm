@@ -5,7 +5,6 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
-import { SUBAGENT_TREE_RUN_CAP } from "../src/sessions/session-syscalls.ts";
 import { testConfig } from "./support/test-config.ts";
 
 test("detaching a subagent session requires current channel membership", async () => {
@@ -28,37 +27,7 @@ test("detaching a subagent session requires current channel membership", async (
   assert.deepEqual(await built.app.detachSession(child.id, "U1"), { detached: true });
 });
 
-test("direct child enqueues share the tree cap across concurrent callers", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "session-cap-")) }));
-  const root = await built.sessions.getOrCreateByThread("web:U1:root", "dm", "personal:U1");
-  const children = await Promise.all(
-    Array.from({ length: SUBAGENT_TREE_RUN_CAP + 1 }, async (_, i) => {
-      const child = await built.sessions.getOrCreateByThread(`agent:main:subagent:cap-${i}`, "dm", "personal:U1");
-      await built.sessions.setParentSession(child.id, root.id);
-      return child;
-    }),
-  );
-  const outcomes = await Promise.allSettled(
-    children.map((child) =>
-      built.runs.enqueue({
-        sessionId: child.threadRef,
-        maxAttempts: 3,
-        request: {
-          actor: { id: "U1", type: "internal" },
-          conversation: { kind: "dm", threadRef: child.threadRef, audience: [{ id: "U1", type: "internal" }] },
-          text: "work",
-          origin: { kind: "direct" },
-        },
-      }),
-    ),
-  );
-  assert.equal(outcomes.filter((result) => result.status === "fulfilled").length, SUBAGENT_TREE_RUN_CAP);
-  const rejected = outcomes.find((result) => result.status === "rejected");
-  assert.ok(rejected?.status === "rejected");
-  assert.match(String(rejected.reason), new RegExp(`all ${SUBAGENT_TREE_RUN_CAP} session run slots are in use`));
-});
-
-test("a late child steer remains pending when admission fails, then replays once", async () => {
+test("a late child steer replays once", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "session-signal-retry-")) }));
   const root = await built.sessions.getOrCreateByThread("web:U1:signal-root", "dm", "personal:U1");
   const child = await built.sessions.getOrCreateByThread("agent:main:subagent:signal-child", "dm", "personal:U1");
@@ -76,13 +45,7 @@ test("a late child steer remains pending when admission fails, then replays once
   const { run } = await built.runs.enqueue({ sessionId: child.threadRef, request });
   const claimed = await built.runs.claimById(run.id, "worker", 60_000);
   await built.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
-  const full = [];
-  for (let i = 0; i < SUBAGENT_TREE_RUN_CAP; i++)
-    full.push((await built.runs.enqueue({ sessionId: child.threadRef, request })).run);
   await built.signals.send(run.id, { kind: "steer", text: "late update" });
-  await assert.rejects(built.app.replayOrphanedRunSignals(run.id), /slots/);
-  assert.equal((await built.signals.pending(run.id)).length, 1);
-  await built.runs.withdraw(full[0]!.id);
   await built.app.replayOrphanedRunSignals(run.id);
   const replays = (await built.runs.inFlightForThread(child.threadRef)).filter((candidate) =>
     candidate.dedupKey?.startsWith("session-signal:"),
