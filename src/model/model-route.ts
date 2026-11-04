@@ -27,7 +27,7 @@ export interface ModelRoute {
 
 const BILLING_LABELS: Record<ModelBilling, string> = {
   model_gateway: "the shared model gateway",
-  org_key: "the organization's own provider key",
+  org_key: "the organization's own provider key or subscription",
   personal_account: "the person's own account",
 };
 
