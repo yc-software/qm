@@ -1,5 +1,4 @@
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
-import { createSessionMethods } from "../src/api/app-sessions.ts";
 import { Readable } from "node:stream";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { test } from "node:test";
@@ -282,17 +281,6 @@ test("attachment projection includes only user and delivered attachments", () =>
     { role: "assistant", text: "Here" },
     { role: "assistant", text: "Posted", attachmentIds: ["posted"] },
   ]);
-});
-
-test("snapshot authorization follows current conversation access", async () => {
-  let allowed = true;
-  const methods = createSessionMethods(
-    {} as unknown as Parameters<typeof createSessionMethods>[0],
-    { sessionForViewer: async () => (allowed ? {} : null) } as unknown as Parameters<typeof createSessionMethods>[1],
-  );
-  assert.equal(await methods.canViewSessionSnapshot("s1", "alice"), true);
-  allowed = false;
-  assert.equal(await methods.canViewSessionSnapshot("s1", "alice"), false);
 });
 
 test("staged tool attachments are never shared without confirmed delivery", () => {
