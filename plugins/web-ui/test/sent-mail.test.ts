@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { JSDOM, VirtualConsole } from "jsdom";
-import { createServer } from "vite";
+import { testViteServer } from "./vite-server.ts";
 
 test("sent view pages Gmail messages and opens the matching Google account", async () => {
   const domErrors: Error[] = [];
@@ -34,7 +34,7 @@ test("sent view pages Gmail messages and opens the matching Google account", asy
     value: dom.window.getComputedStyle.bind(dom.window),
   });
   const originalFetch = globalThis.fetch;
-  const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  const vite = await testViteServer();
   try {
     await vite.ssrLoadModule("/src/shell.ts");
     const {

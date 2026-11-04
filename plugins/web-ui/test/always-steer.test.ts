@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { Agent } from "@earendil-works/pi-agent-core";
 import { JSDOM } from "jsdom";
-import { createServer } from "vite";
+import { testViteServer } from "./vite-server.ts";
 import type { ComposerSurface, ConvCtx } from "../src/conv-types.ts";
 
 test("a mid-run send with the steer preference asks core to steer and queues only when core says so", async (t) => {
@@ -52,7 +52,7 @@ test("a mid-run send with the steer preference asks core to steer and queues onl
     descriptors.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
     Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
   }
-  const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  const vite = await testViteServer();
   let composer: ComposerSurface | undefined;
   try {
     const { appState } = await vite.ssrLoadModule("/src/shell-state.ts");

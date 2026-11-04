@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { JSDOM } from "jsdom";
-import { createServer } from "vite";
+import { testViteServer } from "./vite-server.ts";
 
 test("conversation details include the waiting message after prior context with correctly routed attachments", async () => {
   const dom = new JSDOM('<!doctype html><div id="app"></div><main id="main"></main>', {
@@ -15,7 +15,7 @@ test("conversation details include the waiting message after prior context with 
       configurable: true,
       value: key === "window" ? dom.window : dom.window[key as keyof typeof dom.window],
     });
-  const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  const vite = await testViteServer();
   try {
     await vite.ssrLoadModule("/src/shell.ts");
     const { contextTpl, toInboxItem } = await vite.ssrLoadModule("/src/inbox.ts");
