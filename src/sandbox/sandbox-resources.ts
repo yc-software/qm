@@ -1,5 +1,5 @@
 import { withLiveTurnMembership } from "../resolution/scope-membership.ts";
-import { boundTenant } from "../tenants/context.ts";
+import { cacheTenant } from "../tenants/context.ts";
 import { randomUUID } from "node:crypto";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { Claimed } from "../tenants/claim.ts";
@@ -117,7 +117,7 @@ export function createSandboxResources(opts: {
   const upgraded = new Map<string, Promise<void>>();
   const initialize = async (): Promise<void> => {
     if (!opts.upgrade) return;
-    const tenant = boundTenant() ?? "";
+    const tenant = cacheTenant();
     let upgrade = upgraded.get(tenant);
     if (!upgrade) {
       upgrade = opts.upgrade().catch((error: unknown) => {

@@ -18,7 +18,7 @@ const BYPASSES_ROW_SECURITY = `SELECT r.rolsuper OR r.rolbypassrls OR EXISTS (
 const BYPASS_REFUSAL =
   "Refusing tenant work: the database login owns the tenant tables or bypasses row-level security while more than one tenant exists. Connect as a non-owner login without BYPASSRLS.";
 
-async function readTenants(pg: Pick<PgPool, "pool">, enforce: boolean): Promise<void> {
+async function readTenants(pg: Pick<PgPool, "pool">, watch: boolean): Promise<void> {
   const pool = await pg.pool();
   const [soleRows, installRows, bypassRows] = await Promise.all([
     pool.query("SELECT sole::text AS id, tenants FROM qm_sole_tenant()").then((result) => result.rows),
@@ -33,16 +33,16 @@ async function readTenants(pg: Pick<PgPool, "pool">, enforce: boolean): Promise<
   ]);
   const idOf = (rows: Record<string, unknown>[]): string | undefined =>
     rows[0]?.id == null ? undefined : String(rows[0].id);
-  if (enforce)
+  if (watch)
     refuseTenancy(Number(soleRows[0]?.tenants ?? 0) > 1 && bypassRows[0]?.bypass === true ? BYPASS_REFUSAL : undefined);
   sole = idOf(soleRows);
   const install = idOf(installRows);
-  if (install !== undefined) registerTenants(install, sole);
+  if (watch && install !== undefined) registerTenants(install, sole);
   assertTenancyAllowed();
 }
 
-export function refreshTenants(pg: Pick<PgPool, "pool">, enforce = false): Promise<void> {
-  const done = readTenants(pg, enforce);
+export function refreshTenants(pg: Pick<PgPool, "pool">, watch = false): Promise<void> {
+  const done = readTenants(pg, watch);
   const entry = { at: Date.now(), done };
   checked = entry;
   done.catch(() => {

@@ -1,4 +1,4 @@
-import { boundTenant } from "../tenants/context.ts";
+import { boundTenant, cacheTenant } from "../tenants/context.ts";
 
 export interface EngagedSession {
   tenantId?: string;
@@ -13,7 +13,7 @@ export interface EngagedRegistry {
 
 export function createEngagedRegistry(): EngagedRegistry {
   const engaged = new Map<string, EngagedSession>();
-  const key = (threadRef: string) => `${boundTenant() ?? ""}\n${threadRef}`;
+  const key = (threadRef: string) => `${cacheTenant()}\n${threadRef}`;
   return {
     engage(threadRef) {
       const tenantId = boundTenant();

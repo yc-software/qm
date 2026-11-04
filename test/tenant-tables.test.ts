@@ -135,6 +135,8 @@ describe("tenant tables", () => {
     assert.deepEqual(await appMap.get("solo"), { n: 1 });
     assert.deepEqual(await appMap.all(), [{ n: 1 }]);
     assert.equal(await workTenant(app), install);
+    assert.equal(soleTenantNow(), undefined);
+    await refreshTenants(app, true);
     assert.equal(soleTenantNow(), install);
     const stored = await owner.q("SELECT tenant_id::text AS tenant FROM tenant_probe WHERE id = 'solo'");
     assert.equal(stored[0]?.tenant, install);

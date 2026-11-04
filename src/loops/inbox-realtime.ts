@@ -4,7 +4,7 @@ import { conversationEvent, type IngressEntry } from "./ingress.ts";
 import type { ConversationEvent } from "./sources/adapter.ts";
 import { sourceAdapter } from "./sources/index.ts";
 import { isResolved } from "./ledger-view.ts";
-import { boundTenant } from "../tenants/context.ts";
+import { cacheTenant } from "../tenants/context.ts";
 
 export interface InboxRealtimeDeps {
   loops: Pick<LoopStore, "list">;
@@ -21,7 +21,7 @@ export function createInboxRealtime(deps: InboxRealtimeDeps): {
 
   async function inboxLoops(): Promise<Array<{ id: string; owner: string }>> {
     const now = Date.now();
-    const tenant = boundTenant() ?? "";
+    const tenant = cacheTenant();
     const cached = cachedInboxLoops.get(tenant);
     if (cached && now - cached.at <= LOOP_CACHE_TTL_MS) return cached.loops;
     const loops = (await deps.loops.list())
