@@ -16,7 +16,7 @@ export const INBOX_LEDGER_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 export const EMAIL_VOICE_PROFILE_NAME = "email-voice-profile.md";
 
-export const INBOX_PLAYBOOK =
+const INBOX_PLAYBOOK =
   "Inbox loops follow the built-in sync task for their source, rendered fresh on every fire; this stored playbook is not used.";
 
 export interface InboxTaskContext {
