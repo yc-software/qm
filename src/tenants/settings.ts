@@ -45,19 +45,60 @@ function isTenantEnvName(name: string): name is TenantEnvName {
   return tenantEnvNames.has(name) || BROKER_SECRET_ENV.test(name);
 }
 
+const envName = z.string().max(64);
+
+const tenantSettingsFields = {
+  env: z.record(envName, text),
+  modelGatewayKey: text,
+  oidcClient: z.object({ issuer: z.url(), clientId: text, clientSecret: text }).strict(),
+  slackBridgeToken: text,
+  connectorSecretKey: z.string().min(32).max(4096),
+  orgId: z.string().min(1).max(200),
+};
+
 export const tenantSettingsSchema = z
   .object({
-    env: z
-      .record(z.string().max(64), text)
-      .refine((env) => Object.keys(env).every(isTenantEnvName), "not a per-tenant env name"),
-    modelGatewayKey: text,
-    oidcClient: z.object({ issuer: z.url(), clientId: text, clientSecret: text }).strict(),
-    slackBridgeToken: text,
-    connectorSecretKey: z.string().min(32).max(4096),
-    orgId: z.string().min(1).max(200),
+    ...tenantSettingsFields,
+    env: tenantSettingsFields.env.refine((env) => Object.keys(env).every(isTenantEnvName), "not a per-tenant env name"),
   })
   .partial()
   .strict();
+
+const warnedSettings = new Set<string>();
+
+function warnIgnoredSetting(tenant: string, key: string): void {
+  const warning = `${tenant}:${key}`;
+  if (warnedSettings.has(warning)) return;
+  warnedSettings.add(warning);
+  console.warn(`[tenant settings] ignoring unknown or invalid setting ${key} for tenant ${tenant}`);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function readTenantSettings(value: unknown, tenant: string): TenantSettings {
+  const settings: Record<string, unknown> = {};
+  for (const [key, raw] of Object.entries(isRecord(value) ? value : {})) {
+    if (key === "env" && isRecord(raw)) {
+      const env: Record<string, string> = {};
+      for (const [name, entry] of Object.entries(raw)) {
+        const parsed = text.safeParse(entry);
+        if (envName.safeParse(name).success && isTenantEnvName(name) && parsed.success) env[name] = parsed.data;
+        else warnIgnoredSetting(tenant, `env.${name}`);
+      }
+      settings.env = env;
+      continue;
+    }
+    const field = Object.hasOwn(tenantSettingsFields, key)
+      ? tenantSettingsFields[key as keyof typeof tenantSettingsFields]
+      : undefined;
+    const parsed = field?.safeParse(raw);
+    if (parsed?.success) settings[key] = parsed.data;
+    else warnIgnoredSetting(tenant, key);
+  }
+  return settings as TenantSettings;
+}
 
 export type TenantSettings = z.infer<typeof tenantSettingsSchema>;
 

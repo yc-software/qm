@@ -165,6 +165,26 @@ describe("tenant settings", { skip }, () => {
     assert.equal(await withTenant(a, () => tenantSetting("modelGatewayKey")), undefined);
   });
 
+  it("keeps a tenant's known settings when its row has keys this core does not know, and leaves those keys in place on write", async () => {
+    const c = randomUUID();
+    const stored = { modelGatewayKey: "key-c", futureSetting: "x", env: { S3_PREFIX: "c/", FUTURE_ENV: "y" } };
+    await owner.query("INSERT INTO tenants(id, settings) VALUES ($1, $2)", [c, JSON.stringify(stored)]);
+    const fresh = createTenancy(appPool, ownerPool);
+    assert.deepEqual(await fresh.settings(c), { modelGatewayKey: "key-c", env: { S3_PREFIX: "c/" } });
+    await fresh.refreshSettings();
+    assert.equal(
+      withTenant(c, () => loadedTenantSettings().modelGatewayKey),
+      "key-c",
+    );
+    assert.deepEqual(await fresh.updateSettings(c, { slackBridgeToken: "bridge-c" }), {
+      ok: true,
+      keys: ["env", "modelGatewayKey", "slackBridgeToken"],
+    });
+    const row = await owner.query("SELECT settings FROM tenants WHERE id = $1", [c]);
+    assert.deepEqual(row.rows[0]?.settings, { ...stored, slackBridgeToken: "bridge-c" });
+    await owner.query("DELETE FROM tenants WHERE id = $1", [c]);
+  });
+
   it("loads the bound tenant's settings when a request binds it", async () => {
     let key: string | undefined;
     await tenancy.updateSettings(b, { modelGatewayKey: "key-b" });

@@ -4,6 +4,7 @@ import { afterEach, describe, it } from "node:test";
 import { decryptSecret, deriveConnectorKey, encryptSecret } from "../src/connectors/connector-client-store.ts";
 import { withTenant } from "../src/tenants/context.ts";
 import {
+  readTenantSettings,
   replaceLoadedTenantSettings,
   tenantEnv,
   tenantSettingsSchema,
@@ -73,6 +74,21 @@ describe("per-tenant keys and settings", () => {
     assert.equal(tenantSettingsSchema.safeParse({ env: { SPRITES_TOKEN: "t", BROKER_SECRET_X: "s" } }).success, true);
     assert.equal(tenantSettingsSchema.safeParse({ env: { DATABASE_URL: "postgres://x" } }).success, false);
     assert.equal(tenantSettingsSchema.safeParse({ env: { CORE_SIGNING_SECRET: "x" } }).success, false);
+  });
+
+  it("ignores unknown settings and env names while keeping the known ones", () => {
+    const settings = readTenantSettings(
+      {
+        modelGatewayKey: "key-a",
+        orgId: "acme",
+        settingFromNewerCore: { on: true },
+        slackBridgeToken: "",
+        env: { AUTH_CLIENT_SECRET: "secret-a", ENV_FROM_NEWER_CORE: "x" },
+      },
+      a,
+    );
+    assert.deepEqual(settings, { modelGatewayKey: "key-a", orgId: "acme", env: { AUTH_CLIENT_SECRET: "secret-a" } });
+    assert.deepEqual(readTenantSettings("not settings", a), {});
   });
 
   it("sends invite mail with the bound tenant's sender and key", async () => {

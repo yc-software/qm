@@ -1,7 +1,12 @@
 import { LRUCache } from "lru-cache";
 import type { PgPool } from "../persistence/pg-pool.ts";
 import { isTenantId, withTenant } from "./context.ts";
-import { replaceLoadedTenantSettings, tenantSettingsSchema, type TenantSettings } from "./settings.ts";
+import {
+  readTenantSettings,
+  replaceLoadedTenantSettings,
+  tenantSettingsSchema,
+  type TenantSettings,
+} from "./settings.ts";
 import { createSweeper, type Sweeper } from "../util/sweeper.ts";
 
 interface HostTenant {
@@ -44,11 +49,6 @@ export function isHostname(host: string): boolean {
   return HOSTNAME.test(host);
 }
 
-function parsedSettings(value: unknown): TenantSettings {
-  const parsed = tenantSettingsSchema.safeParse(value ?? {});
-  return parsed.success ? parsed.data : {};
-}
-
 export function createTenancy(pool: PgPool, owner: PgPool = pool): Tenancy {
   const hostCache = new LRUCache<string, HostTenant>({ max: 10_000, ttl: CACHE_TTL_MS });
   const settingsCache = new LRUCache<string, TenantSettings>({ max: 1_000, ttl: CACHE_TTL_MS });
@@ -71,7 +71,7 @@ export function createTenancy(pool: PgPool, owner: PgPool = pool): Tenancy {
 
   const refreshSettings = async (): Promise<void> => {
     const rows = await owner.q("SELECT id::text AS id, settings FROM tenants");
-    const all = new Map(rows.map((row) => [String(row.id), parsedSettings(row.settings)]));
+    const all = new Map(rows.map((row) => [String(row.id), readTenantSettings(row.settings, String(row.id))]));
     for (const [tenant, settings] of all) settingsCache.set(tenant, settings);
     replaceLoadedTenantSettings(all);
   };
@@ -87,7 +87,7 @@ export function createTenancy(pool: PgPool, owner: PgPool = pool): Tenancy {
       const cached = settingsCache.get(tenant);
       if (cached) return cached;
       const rows = await withTenant(tenant, () => pool.q("SELECT qm_tenant_settings() AS settings"));
-      const settings = parsedSettings(rows[0]?.settings);
+      const settings = readTenantSettings(rows[0]?.settings, tenant);
       settingsCache.set(tenant, settings);
       return settings;
     },
@@ -124,8 +124,9 @@ export function createTenancy(pool: PgPool, owner: PgPool = pool): Tenancy {
     },
     async updateSettings(tenant, patch) {
       if (!(await knownTenant(tenant))) return { ok: false, error: "unknown_tenant" };
-      const current = parsedSettings(
+      const current = readTenantSettings(
         (await owner.q("SELECT settings FROM tenants WHERE id = $1", [tenant]))[0]?.settings,
+        tenant,
       );
       const merged: Record<string, unknown> = { ...current };
       for (const [key, value] of Object.entries(patch)) {
@@ -135,7 +136,13 @@ export function createTenancy(pool: PgPool, owner: PgPool = pool): Tenancy {
       const parsed = tenantSettingsSchema.safeParse(merged);
       if (!parsed.success)
         return { ok: false, error: "invalid_settings", message: parsed.error.issues[0]?.message ?? "" };
-      await owner.q("UPDATE tenants SET settings = $2 WHERE id = $1", [tenant, JSON.stringify(parsed.data)]);
+      const changed = Object.keys(patch).filter((key) => patch[key] !== null);
+      const removed = Object.keys(patch).filter((key) => patch[key] === null);
+      await owner.q("UPDATE tenants SET settings = (settings || $2::jsonb) - $3::text[] WHERE id = $1", [
+        tenant,
+        JSON.stringify(Object.fromEntries(changed.map((key) => [key, merged[key]]))),
+        removed,
+      ]);
       settingsCache.delete(tenant);
       return { ok: true, keys: Object.keys(parsed.data).sort() };
     },
