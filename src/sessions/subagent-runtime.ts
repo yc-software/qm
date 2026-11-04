@@ -12,8 +12,9 @@ export async function openRuntime(
   input: SessionOpenInput,
   parent: OpenRuntime,
   validate: (choice: OpenRuntime) => Promise<void>,
+  defaultModel: () => Promise<string | undefined>,
 ): Promise<OpenRuntime> {
-  if (!input.model && parent.model) {
+  if (!input.model && parent.model && parent.model !== (await defaultModel())) {
     const inherited = {
       model: parent.model,
       thinkingLevel: input.thinkingLevel ?? parent.thinkingLevel,

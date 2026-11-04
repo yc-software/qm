@@ -305,6 +305,7 @@ export interface SessionSyscallDeps {
   prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
   authorize?: (session: Session, actorId: string) => Promise<boolean>;
   validateRuntime?: (input: SessionOpenInput, scopeId: ScopeId) => Promise<void>;
+  defaultModel?: (scopeId: ScopeId) => Promise<string>;
   conversations?: {
     search?: CoreSearch["search"];
     list(actorId: string): Promise<Session[]>;
@@ -686,13 +687,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               const task = input.task?.trim();
               if (!task)
                 return { ok: false, message: "open requires a task: the full instruction the subagent works from." };
-              const runtime = await openRuntime(
-                input,
-                parentRuntime(binding.request, binding.switchedRuntime?.()),
-                async (choice) => {
-                  await deps.validateRuntime?.({ ...input, ...choice }, binding.scopeId);
-                },
-              );
               const threadRef = `${SUBAGENT_THREAD_PREFIX}${
                 input.requestId
                   ? hashId([binding.session.id, binding.request.runId ?? "", input.requestId], 40)
@@ -704,6 +698,16 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 throw new Error("the requestId was already used for different work");
               const initialRun = await deps.runs.getByDedupKey(`subagent-open:${threadRef}`);
               if (existing && initialRun) return { ok: true, sessionId: existing.id, title: visibleTitle(existing) };
+              const runtime =
+                existing?.spawnMeta ??
+                (await openRuntime(
+                  input,
+                  parentRuntime(binding.request, binding.switchedRuntime?.()),
+                  async (choice) => {
+                    await deps.validateRuntime?.({ ...input, ...choice }, binding.scopeId);
+                  },
+                  async () => deps.defaultModel?.(binding.scopeId),
+                ));
               const child = await deps.sessions.getOrCreateByThread(
                 threadRef,
                 binding.session.type,

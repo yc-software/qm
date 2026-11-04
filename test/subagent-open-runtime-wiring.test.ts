@@ -12,8 +12,13 @@ import type { SessionSyscallBinding } from "../src/sessions/session-syscalls.ts"
 const actor: Principal = { id: "U1", type: "internal" };
 const scope = scopeId("personal", "U1");
 
-async function opener(parent: Partial<SessionSyscallBinding["request"]> = {}, switched?: RuntimeChoice) {
+async function opener(
+  parent: Partial<SessionSyscallBinding["request"]> = {},
+  switched?: RuntimeChoice,
+  scopeDefault?: string,
+) {
   const built = stopAtEnd(buildApp(testConfig({ openaiApiKey: "sk-test" })));
+  if (scopeDefault) await built.config.setRuntimeSelection(scope, { modelId: scopeDefault });
   await built.featureFlags.setEnabled("persistent_subagents", scope, true, "admin");
   const room = await built.sessions.getOrCreateByThread("web:room", "dm", scope, undefined, "web");
   await built.sessions.addParticipant(room.id, actor.id);
@@ -108,6 +113,28 @@ test("a child of a parent on the default keeps the configured subagent default",
 
 test("a parent runtime the subagent purpose cannot serve falls back to the subagent default", async () => {
   const parent = await opener({}, { modelId: "claude-opus-4-1", effortLevel: "high" });
+  const out = await parent.open({ task: "draft one article" });
+  assert.ok(out.ok, out.ok ? "" : out.message);
+  assert.deepEqual(await parent.spawned(out.sessionId), {
+    model: undefined,
+    thinkingLevel: undefined,
+    fastMode: undefined,
+  });
+});
+
+test("a parent that only tunes effort on the default model leaves the child on the subagent default", async () => {
+  const parent = await opener({ model: "gpt-6.1-sol", thinkingLevel: "high" }, undefined, "gpt-6.1-sol");
+  const out = await parent.open({ task: "draft one article" });
+  assert.ok(out.ok, out.ok ? "" : out.message);
+  assert.deepEqual(await parent.spawned(out.sessionId), {
+    model: undefined,
+    thinkingLevel: undefined,
+    fastMode: undefined,
+  });
+});
+
+test("a parent that switched back to its default leaves the child on the subagent default", async () => {
+  const parent = await opener({}, { modelId: "gpt-6.1-sol", effortLevel: "medium" }, "gpt-6.1-sol");
   const out = await parent.open({ task: "draft one article" });
   assert.ok(out.ok, out.ok ? "" : out.message);
   assert.deepEqual(await parent.spawned(out.sessionId), {

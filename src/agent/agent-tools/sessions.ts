@@ -41,14 +41,16 @@ export function sessionTools(kit: ToolKit) {
       model: Type.Optional(
         Type.String({
           description:
-            "open: model override; use one runtime get lists (unconfigured providers are rejected). Omitted: your current model if this task runs on a chosen one (runtime set or an explicit model), else the subagent default.",
+            "open: model override; use one runtime get lists (unconfigured providers are rejected). Omitted: the model you switched to or were given for this task when it is not the default, else the subagent default (also used when yours cannot run subagents).",
         }),
       ),
       thinkingLevel: Type.Optional(
-        Type.String({ description: "open: effort override; omitted, it follows the model default above." }),
+        Type.String({
+          description: "open: effort override; omitted: yours when the model is inherited, else the default.",
+        }),
       ),
       fastMode: Type.Optional(
-        Type.Boolean({ description: "open: fast mode; omitted, it follows the model default above." }),
+        Type.Boolean({ description: "open: fast mode; omitted: yours when the model is inherited, else the default." }),
       ),
       target: Type.Optional(
         Type.String({
