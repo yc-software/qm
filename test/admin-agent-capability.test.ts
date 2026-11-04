@@ -73,7 +73,14 @@ function start(withConfig = true) {
 
 const capFor = async (
   actorId: string,
-  opts: { aud?: string | null; live?: boolean; liveAuthor?: boolean; scope?: string; grants?: string[] } = {},
+  opts: {
+    aud?: string | null;
+    live?: boolean;
+    liveAuthor?: boolean;
+    scope?: string;
+    grants?: string[];
+    sessionId?: string;
+  } = {},
 ) => {
   const aud = opts.aud === undefined ? CONTROL_PLANE_AUD : opts.aud;
   return await mintCapabilityToken(
@@ -84,11 +91,56 @@ const capFor = async (
       ...(opts.live === false ? {} : { liveActor: true }),
       ...(opts.liveAuthor ? { liveAuthor: true } : {}),
       ...(opts.grants ? { grants: opts.grants } : {}),
+      ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
       exp: Date.now() + CAPABILITY_TTL_MS,
     },
     SECRET,
   );
 };
+
+test("an active workflow capability cannot read a later-stage skill through the admin detail route", async () => {
+  const s = start();
+  try {
+    const skill = await s.built.skills.create({
+      scopeId: ORG,
+      manifest: { name: "later-stage", description: "later", requiredCapabilities: [], body: "# later" },
+      createdBy: "admin-alice",
+    });
+    await s.built.skills.review(skill.id, "reviewer", []);
+    await s.built.skills.publish(skill.id);
+    const session = await s.built.sessions.getOrCreateByThread("admin-workflow-skill", "dm", ORG);
+    const attempt = await s.built.sessions.acquireLease(session.id, "turn");
+    assert.ok(attempt.lease);
+    await s.built.sessions.appendMany(attempt.lease, [
+      {
+        type: "tool_result",
+        scopeLabel: ORG,
+        payload: {
+          tool: "workflow_definition",
+          callId: "admin-workflow-definition",
+          definition: {
+            id: "finance",
+            version: 1,
+            steps: [
+              {
+                id: "current",
+                role: "producer",
+                requiredSkills: [{ skillName: "current-stage", contentDigest: "a".repeat(64) }],
+              },
+            ],
+          },
+        },
+      },
+    ]);
+    const response = await fetch(`${s.base}/v1/admin/skills/${skill.id}?scope=${encodeURIComponent(ORG)}`, {
+      headers: { "x-agent-capability": await capFor("admin-alice", { sessionId: session.id }) },
+    });
+
+    assert.equal(response.status, 404);
+  } finally {
+    await s.close();
+  }
+});
 
 test("an org admin's capability token can read and rewrite a scope's notebook via the admin API", async () => {
   const s = start();

@@ -9,7 +9,8 @@ import { dirname, join } from "node:path";
 import { createHmac } from "node:crypto";
 import { installSeedSkills, parseSeedSkill, upsertSeedSkill } from "../src/skills/seed.ts";
 import { materializeSkillTree } from "../src/skills/materialize.ts";
-import { createSkillStore, safeSkillFilePath } from "../src/skills/skill-store.ts";
+import { createSkillStore, safeSkillFilePath, type Skill } from "../src/skills/skill-store.ts";
+import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { buildApp } from "./support/build-app.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
@@ -145,6 +146,22 @@ test("installSeedSkills re-seeds a changed manifest over its own prior install, 
   const guarded = await installSeedSkills(skills, { dir: userDir, scopeId: org });
   assert.deepEqual(guarded, { installed: [], updated: [], skipped: ["mine"] });
   assert.equal((await skills.get(mine.id))!.manifest.description, "user authored");
+});
+
+test("installSeedSkills re-signs an unchanged published skill after a signing-key rotation", async () => {
+  const backing = createMemoryMap<Skill>();
+  const org = scopeId("org", "default-org");
+  const dir = mkdtempSync(join(tmpdir(), "seed-resign-"));
+  writeSeedSkill(dir, "demo", "stable description", "# Demo");
+  const first = createSkillStore({ backing, signingSecret: "old-signing-secret" });
+  await installSeedSkills(first, { dir, scopeId: org });
+
+  const restarted = createSkillStore({ backing, signingSecret: "stable-signing-secret" });
+  assert.equal(restarted.verify((await restarted.list())[0]!), false);
+  const result = await installSeedSkills(restarted, { dir, scopeId: org });
+
+  assert.deepEqual(result, { installed: [], updated: ["demo"], skipped: [] });
+  assert.ok(restarted.verify((await restarted.list())[0]!));
 });
 
 test("installSeedSkills leaves an admin-archived catalog skill archived when asked to", async () => {

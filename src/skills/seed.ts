@@ -118,7 +118,7 @@ async function upsertSeedSkillUnsafe(
   if (!existing && foreignSkillCollision(all, scopeId, manifest.name, isOwn)) return "foreign";
   if (existing?.status === "archived" && input.respectArchived) return "skipped";
   if (existing) {
-    const changed = !sameManifest(existing.manifest, manifest);
+    const changed = !sameManifest(existing.manifest, manifest) || !skills.verify(existing);
     if (!changed && existing.status === "published") return "skipped";
     if (changed) await skills.update(existing.id, manifest);
     await skills.review(existing.id, reviewer, manifest.requiredCapabilities);

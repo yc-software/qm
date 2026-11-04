@@ -261,7 +261,11 @@ type AdminCall = (
   signal?: AbortSignal,
 ) => Promise<{ status: number; body: unknown; requestId?: string }>;
 
-export function createAdminCall(baseUrl: string, capability: string): AdminCall {
+export function createAdminCall(
+  baseUrl: string,
+  capability: string,
+  authorizeAction: (action: string) => boolean = () => true,
+): AdminCall {
   while (baseUrl.endsWith("/")) baseUrl = baseUrl.slice(0, -1);
   return async (input, signal) => {
     const { action, retrySafe: _retrySafe, ...params } = input;
@@ -269,6 +273,8 @@ export function createAdminCall(baseUrl: string, capability: string): AdminCall 
       ? adminOperations[action as keyof typeof adminOperations]
       : undefined;
     if (!op || !Check(op.parameters, params)) throw new Error("Invalid admin action or arguments");
+    if (!authorizeAction(String(action)))
+      throw new Error(`Admin action ${String(action)} is not available on this turn`);
     if (action === "configure" && (params.resource === "service-credentials" || params.resource === "connectors"))
       throw new Error("Secret-bearing configuration uses the existing admin self-API, not native tool arguments");
     if (action === "session" && params.limit === undefined) params.limit = 50;

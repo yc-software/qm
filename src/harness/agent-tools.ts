@@ -14,7 +14,7 @@ import { Type, type TSchema } from "typebox";
 import { Check } from "typebox/value";
 import { CONFIG_DEFAULTS, type Config } from "../config.ts";
 import type { ClientToolDeclaration, CronFireLogEntry, EntryType, ScopeId } from "../types.ts";
-import type { ToolContext, PublishInput, PublishAudienceDescriptor } from "../tools/primitives.ts";
+import type { ToolContext, PublishInput, PublishAudienceDescriptor, WorkflowToolInput } from "../tools/primitives.ts";
 import { tracePhase, type Phase } from "../../plugins/chassis/src/error-reporting.ts";
 import { NeedsApproval, CommandDenied } from "../tools/primitives.ts";
 import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
@@ -335,6 +335,7 @@ export interface AgentToolsOptions {
   delegateWork?: boolean;
   surfaceName?: string;
   clientTools?: readonly ClientToolDeclaration[];
+  workflowReview?: boolean;
 }
 
 export type CoreToolOptions = Omit<
@@ -359,6 +360,33 @@ const CLIENT_TOOL_DEFAULT_TIMEOUT_MS = 10_000;
 const CLIENT_TOOL_TIMEOUT_TEXT = "The page didn't respond in time. It may have been closed or navigated away.";
 
 const READ_ONLY_TOOL_NAMES = new Set(["memory", "history", "finish_silently", "runtime", "sessions", "subagents"]);
+
+type ActionScopedTool = ToolDefinition & { readOnlyActions?: readonly string[] };
+
+function readOnlyTool(tool: ActionScopedTool): ToolDefinition | null {
+  if (READ_ONLY_TOOL_NAMES.has(tool.name)) return tool;
+  const actions = tool.readOnlyActions;
+  if (!actions?.length) return null;
+  const parameters = tool.parameters as { properties?: Record<string, TSchema> };
+  if (!parameters.properties?.action) return null;
+  const allowed = new Set(actions);
+  return {
+    ...tool,
+    parameters: {
+      ...parameters,
+      properties: {
+        ...parameters.properties,
+        action: Type.Union(actions.map((action) => Type.Literal(action))),
+      },
+    } as ToolDefinition["parameters"],
+    async execute(callId, params, ...rest) {
+      const action = isObj(params) ? params.action : undefined;
+      if (typeof action !== "string" || !allowed.has(action))
+        throw new Error(`${tool.name} action ${String(action)} is unavailable in a read-only turn`);
+      return tool.execute(callId, params, ...rest);
+    },
+  };
+}
 
 export function endedOnPurpose(ref: {
   runtimeHandoff?: unknown;
@@ -4136,14 +4164,53 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     },
   });
 
+  const workflow = defineTool({
+    name: "workflow",
+    label: "workflow",
+    description:
+      "Advance a host-enforced workflow, assign an isolated reviewer, submit a reviewer decision, or inspect status. QM validates durable order, evidence, role separation, and observed skills.",
+    parameters: Type.Object({
+      action: Type.Union([
+        Type.Literal("advance"),
+        Type.Literal("approve"),
+        Type.Literal("assign_reviewer"),
+        Type.Literal("review_submit"),
+        Type.Literal("status"),
+      ]),
+      workflowId: Type.String({ minLength: 1 }),
+      step: Type.Optional(Type.String({ minLength: 1 })),
+      decision: Type.Optional(Type.Union([Type.Literal("pass"), Type.Literal("reject")])),
+      reviewerSessionId: Type.Optional(Type.String({ minLength: 1 })),
+      inputEvidence: Type.Optional(Type.Array(Type.Object({ id: Type.String({ minLength: 1 }) }))),
+      outputEvidence: Type.Optional(Type.Array(Type.Object({ id: Type.String({ minLength: 1 }) }))),
+      findings: Type.Optional(Type.Array(Type.String())),
+    }),
+    async execute(callId, raw) {
+      const handler = ref.current?.workflow;
+      if (!handler) return text("[error] workflow control is unavailable");
+      const input = raw as WorkflowToolInput;
+      await recordCall(callId, { tool: "workflow", ...input });
+      const result = await handler(input);
+      return recordCoreAuthoredResult(callId, { tool: "workflow", action: input.action }, text(JSON.stringify(result)));
+    },
+  }) as ActionScopedTool;
+  workflow.readOnlyActions = opts?.workflowReview ? ["review_submit", "status"] : [];
+  Object.assign(workflow, {
+    needsApproval: (params: unknown) => isObj(params) && params.action === "approve",
+    approvalReason: "approve the exact workflow plan before source execution",
+  });
+
   const tools = [
     ...(!delegateWork ? [execute] : []),
-    resourceTool("skills", {
-      list: discoverSkills(false),
-      search: discoverSkills(true),
-      read: skill,
-      ...(controlTools ? { share: sharingTool("skill"), move: sharingTool("skill", true) } : {}),
-    }),
+    {
+      ...resourceTool("skills", {
+        list: discoverSkills(false),
+        search: discoverSkills(true),
+        read: skill,
+        ...(controlTools ? { share: sharingTool("skill"), move: sharingTool("skill", true) } : {}),
+      }),
+      readOnlyActions: opts?.workflowReview ? ["read"] : [],
+    },
     {
       ...resourceTool("files", {
         read,
@@ -4151,6 +4218,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         ...(controlTools ? { share: sharingTool("file") } : {}),
         ...(ref.current?.installSharedCanvas ? { install_canvas: installCanvas } : {}),
       }),
+      readOnlyActions: opts?.workflowReview ? ["read"] : [],
       needsApproval: (params: unknown) => isObj(params) && params.action === "install_canvas",
       approvalReason: "install an always-on canvas someone shared with you; its code runs in your QM web UI",
     },
@@ -4183,6 +4251,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     resourceTool("goal", { create: createGoal, get: getGoal, update: updateGoal }),
     runtime,
     context,
+    ...(ref.current?.workflow ? [workflow] : []),
     ...clientTools,
   ];
   const searchable = deferredMcpTools(opts?.mcpTools, opts?.readOnly);
@@ -4279,7 +4348,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     };
   };
   const active = opts?.readOnly
-    ? tools.filter((t) => READ_ONLY_TOOL_NAMES.has(t.name) || inline.has(t.name) || connectorTools.includes(t))
+    ? tools.flatMap((tool) => {
+        if (inline.has(tool.name) || connectorTools.includes(tool)) return [tool];
+        const constrained = readOnlyTool(tool);
+        return constrained ? [constrained] : [];
+      })
     : tools;
   const clientNames = new Set(clientTools.map((tool) => tool.name));
   return active.map((tool) => {

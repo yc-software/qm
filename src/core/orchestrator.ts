@@ -122,6 +122,7 @@ import { artifactImageLoader } from "../harness/replay-images.ts";
 import { principalEntitledToScope } from "../resolution/context-filter.ts";
 import { openSessionEntry, searchSessionEntries } from "../sessions/history-search.ts";
 import { createTranscriptSource } from "../sessions/transcript-source.ts";
+import { createWorkflowTurnContext } from "./orchestrator/workflow-turn.ts";
 import { defaultPublishAudience } from "../resolution/publish-audience.ts";
 import {
   INBOX_DIR,
@@ -1089,7 +1090,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       }
       const surfaceName =
         input.origin.kind === "automation" && input.origin.destination ? "slack" : (input.surface ?? "slack");
-      const sessionSyscalls =
+      let sessionSyscalls =
         !external && deps.sessionSyscalls && (delegationEnabled || actorFeatures.has("persistent_subagents"))
           ? deps.sessionSyscalls
           : undefined;
@@ -1936,6 +1937,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           )
         : renderSandboxProviders([scopeProfile.backend], scopeProfile.backend, false);
 
+      let workflowTurn: Awaited<ReturnType<typeof createWorkflowTurnContext>>;
       const {
         provision,
         provisionScratch,
@@ -1964,6 +1966,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         egressTokenForPolicy,
         openResourceAccess: !external && (liveAuthorTurn || openAutomationKeychain),
         visibleSkillsForTurn,
+        filterVisibleSkills: async (skills) => skills,
       });
       const leaseStart = Date.now();
       const acquired = await acquireTurnLeaseOrRefuse({
@@ -1976,9 +1979,33 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       });
       if (!acquired.lease) return acquired.refusal;
       const lease = acquired.lease;
-      if (!ambientTurn) assignSessionTitle();
+      let leaseReleased = false;
+      let turnProgress = 0;
+      const turnAbort = new AbortController();
+      if (input.cancel?.aborted) turnAbort.abort();
+      else input.cancel?.addEventListener("abort", () => turnAbort.abort(), { once: true });
+      const stopLeaseKeepalive = startLeaseKeepalive(deps.sessions, lease, leaseKeepaliveMs, () => leaseReleased, {
+        progress: () => turnProgress,
+        onStalled: () => turnAbort.abort(),
+      });
       const trackRevisions = input.surface === "slack" && Boolean(deps.surfaceCache);
-      const revisionAnchor = trackRevisions ? await revisionAnchorAt(deps.sessions, session.id) : undefined;
+      let revisionAnchor: number | undefined;
+      try {
+        workflowTurn = await createWorkflowTurnContext({
+          sessions: deps.sessions,
+          session,
+          lease,
+          configured: deps.workflowDefinitions ?? [],
+        });
+        if (!external && workflowTurn && deps.sessionSyscalls) sessionSyscalls = deps.sessionSyscalls;
+        if (!ambientTurn) assignSessionTitle();
+        revisionAnchor = trackRevisions ? await revisionAnchorAt(deps.sessions, session.id) : undefined;
+      } catch (error) {
+        stopLeaseKeepalive();
+        leaseReleased = true;
+        await deps.sessions.releaseLease(lease).catch(swallowAs("orchestrator: setup lease release", undefined));
+        throw error;
+      }
       const catchUpMessageRevisions = async (): Promise<void> => {
         if (!trackRevisions || !deps.surfaceCache) return;
         await reconcileMessageRevisions({
@@ -1992,16 +2019,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }).catch(swallowAs("orchestrator: message revision catch-up", undefined));
       };
       let tailOwnsCleanup = false;
-      let leaseReleased = false;
       let contextRecovered = false;
-      let turnProgress = 0;
-      const turnAbort = new AbortController();
-      if (input.cancel?.aborted) turnAbort.abort();
-      else input.cancel?.addEventListener("abort", () => turnAbort.abort(), { once: true });
-      const stopLeaseKeepalive = startLeaseKeepalive(deps.sessions, lease, leaseKeepaliveMs, () => leaseReleased, {
-        progress: () => turnProgress,
-        onStalled: () => turnAbort.abort(),
-      });
       let failureUserPayload: Record<string, unknown> | undefined;
       try {
         await withManagedRosterVersion(async () => {
@@ -2585,6 +2603,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         };
         let readableHandles: Awaited<ReturnType<typeof deps.acl.handlesForAudience>> | undefined;
         const mayReadArtifact = async (artifact: FileArtifact, fresh = false): Promise<boolean> => {
+          if (artifact.createdBy === actor.id && artifact.createdInScope === scopeId) return true;
           if (
             conversation.audience.every((principal) =>
               principalEntitledToScope(principal, artifact.ownerScopeId, scopeId, resolution.orgScopeId),
@@ -2641,6 +2660,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           );
 
         const canInstallCanvas = deps.installSharedCanvas && liveTurn && actorFeatures.has("ui_canvas");
+        let turnRuntime: TurnRuntime | undefined;
+        const workflow = workflowTurn?.control({
+          lease,
+          scopeLabel: scopeId,
+          strictReadOnly,
+          runtime: () => turnRuntime,
+          files: deps.files,
+          mayReadArtifact,
+        });
         const baseTools = createToolContext({
           desktopClientId: desktopClientForTurn(input),
           ...(canInstallCanvas
@@ -2652,6 +2680,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   }),
               }
             : {}),
+          ...(workflow ? { workflow } : {}),
           sandbox: deps.sandbox,
           sandboxResources: turnSandboxResources,
           invalidateProvision,
@@ -2661,7 +2690,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           provisionResource,
           accessSandboxResource: accessResource,
           useSkill,
-          listSkills: (source) => visibleSkillsForTurn(source ? [source] : [scopeId, resolution.orgScopeId]),
+          listSkills: async (source) => visibleSkillsForTurn(source ? [source] : [scopeId, resolution.orgScopeId]),
           ...(reachAvailable
             ? {
                 reach: {
@@ -2716,7 +2745,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(deps.apiBaseUrl && connectorEnv.AGENT_API_TOKEN
             ? {
                 admin: {
-                  call: createAdminCall(deps.apiBaseUrl, connectorEnv.AGENT_API_TOKEN),
+                  call: createAdminCall(
+                    deps.apiBaseUrl,
+                    connectorEnv.AGENT_API_TOKEN,
+                    (action) => !workflowTurn || !["skills", "skill", "archive_skill"].includes(action),
+                  ),
                   operationsAvailable:
                     actorIsOrgAdmin || Boolean(controlClaims?.grants?.some((grant) => grant.startsWith("admin."))),
                 },
@@ -3047,7 +3080,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const turnStart = Date.now();
         let dispatchTrace: DispatchTrace | undefined;
         const emittedEntries: SessionEntry[] = [];
-        let turnRuntime: TurnRuntime | undefined;
         const syntheticPrompt = syntheticInput || partial || approvalReplay || !!releasedToolOutput;
         failureUserPayload =
           !syntheticPrompt && (input.text.trim() || inboundIssues.length)

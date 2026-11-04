@@ -79,6 +79,7 @@ export function credentialRequestHeaders(rec: {
   injection?: CredentialInjection;
   secret: string;
 }): Record<string, string> {
+  if (rec.injection?.signer) throw new Error("request-signing credential must use the credential broker");
   const header = rec.injection?.header || DEFAULT_AUTH_HEADER;
   const rawScheme = rec.injection?.scheme ?? "Bearer ";
   const scheme = rawScheme && !/\s$/.test(rawScheme) ? `${rawScheme} ` : rawScheme;

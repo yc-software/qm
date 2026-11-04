@@ -18,6 +18,7 @@ import { assembleEnv, completeDevSecuritySecrets, currentBranch, gitHead, seedEn
 import { ensureDeps } from "../lib/deps.ts";
 import { destroyLocalDevSandboxes, resolveSandbox, type SandboxResolution } from "../lib/sandbox.ts";
 import { adminGrantCount, checkPostgres, ensureLocalPostgres, firstAdminPrincipal } from "../lib/postgres.ts";
+import { ensureLocalObjectStorage } from "../lib/object-storage.ts";
 import { killTree } from "../lib/proc.ts";
 import { envFileGet } from "../lib/envctx.ts";
 import { envSha as computeEnvSha, errMessage, nowEpoch, sleep } from "../lib/util.ts";
@@ -392,6 +393,17 @@ async function assembleAndPrepare(spec: BootSpec): Promise<SpecInputs> {
     phase("durability", "ok", "memory stores");
   }
   durability = { sessionStore, runStore, databaseUrl };
+  const externalStorage = ["SNAPSHOT_STORE", "S3_BUCKET", "AWS_ENDPOINT_URL_S3"].filter(
+    (key) => assembled.env[key],
+  );
+  if (databaseUrl && externalStorage.length === 0 && sandbox.backend === "local") {
+    const storage = await ensureLocalObjectStorage(worktree, log);
+    Object.assign(assembled.env, storage.env);
+  } else if (externalStorage.length > 0 && externalStorage.length < 3) {
+    throw new Error(
+      "Direct file storage is partially configured. Set SNAPSHOT_STORE=s3, S3_BUCKET, and AWS_ENDPOINT_URL_S3 together, or unset all three so a local Docker dev instance can provision MinIO.",
+    );
+  }
 
   completeDevSecuritySecrets(assembled.env, databaseUrl || worktree);
   const portalSessionSecret = assembled.env.PORTAL_SESSION_SECRET!;

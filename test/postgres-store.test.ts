@@ -809,6 +809,39 @@ test("pg session store: one-per-thread, TTL/fenced lease, monotonic log, visibil
   assert.equal(await s.renewLease(dead!), false, "the superseded holder cannot renew the new lock");
   await assert.rejects(s.append(dead!, { type: "user", payload: {}, scopeLabel: scope }), /valid session lease/);
 
+  const workflowTurnId = randomUUID();
+  const workflowEntries = await s.appendMany({ ...fresh!, turnId: workflowTurnId }, [
+    {
+      type: "tool_call",
+      payload: { tool: "workflow_gate", callId: "workflow-filter", action: "advance" },
+      scopeLabel: scope,
+    },
+    {
+      type: "tool_result",
+      payload: { tool: "workflow_gate", callId: "workflow-filter", accepted: true },
+      scopeLabel: scope,
+    },
+    {
+      type: "tool_result",
+      payload: { tool: "skills", callId: "skill-filter", found: true },
+      scopeLabel: scope,
+    },
+  ]);
+  assert.deepEqual(
+    (
+      await s.getEntries(a.id, {
+        tools: ["workflow_gate"],
+        turnId: workflowTurnId,
+        transcript: true,
+        sinceSeq: workflowEntries[0]!.seq,
+        beforeSeq: workflowEntries[2]!.seq,
+        limit: 2,
+      })
+    ).map((entry) => entry.type),
+    ["tool_call", "tool_result"],
+    "tool filtering composes with turn, transcript, bounds, and limit",
+  );
+
   await s.addParticipant(a.id, "U1");
   assert.equal((await s.visibleEntries(a.id, "U1")).length, 0, "a late joiner sees none of the pre-tenure backlog");
   await s.append(fresh!, { type: "user", payload: { text: "after-join" }, scopeLabel: scope });

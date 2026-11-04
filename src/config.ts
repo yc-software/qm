@@ -72,7 +72,8 @@ export interface Config {
   databasePoolCaCert?: string;
   databasePoolMax?: number;
   databaseDirectPoolMax?: number;
-  harness: "pi" | "claude";
+  harness: "pi" | "claude" | "ultimate";
+  ultimateUrl?: string;
   securityPosture: SecurityPosture;
   sharingPosture: SharingPosture;
   legacySandboxScopeDefaults?: LegacySandboxScopeDefaults;
@@ -158,6 +159,7 @@ export interface Config {
   s3Bucket?: string;
   s3Region?: string;
   s3Endpoint?: string;
+  s3PublicEndpoint?: string;
   s3Prefix?: string;
   deployIdleTtlMs?: number;
   deployGitDir: string;
@@ -1079,8 +1081,8 @@ function orgBrandingFromEnv(env: NodeJS.ProcessEnv): Config["brandingDefault"] {
 function harnessEnvStrict(value: string | undefined): Config["harness"] {
   if (value === undefined || value.trim() === "") return "pi";
   const harness = value.trim();
-  if (harness === "pi" || harness === "claude") return harness;
-  throw new Error(`HARNESS=${JSON.stringify(value)} is not recognized — use pi or claude, or unset it.`);
+  if (harness === "pi" || harness === "claude" || harness === "ultimate") return harness;
+  throw new Error(`HARNESS=${JSON.stringify(value)} is not recognized — use pi, claude, or ultimate, or unset it.`);
 }
 
 export function enabledSandboxBackends(config: Config): Array<Config["sandboxBackend"]> {
@@ -1588,6 +1590,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(env.DATABASE_CA_CERT ? { databaseCaCert: env.DATABASE_CA_CERT } : {}),
     ...(env.DATABASE_CA_CERT_FILE ? { databaseCaCertFile: env.DATABASE_CA_CERT_FILE } : {}),
     harness,
+    ...(env.ULTIMATE_URL?.trim() ? { ultimateUrl: env.ULTIMATE_URL.trim() } : {}),
     securityPosture: securityPostureEnvStrict(env.HARNESS_SECURITY_POSTURE),
     sharingPosture: sharingPostureEnvStrict(env.HARNESS_SHARING_POSTURE),
     securityScreen,
@@ -1735,6 +1738,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(env.S3_BUCKET ? { s3Bucket: env.S3_BUCKET } : {}),
     ...(env.S3_REGION ? { s3Region: env.S3_REGION } : {}),
     ...(s3Endpoint ? { s3Endpoint } : {}),
+    ...(env.S3_PUBLIC_ENDPOINT?.trim() ? { s3PublicEndpoint: env.S3_PUBLIC_ENDPOINT.trim() } : {}),
     ...(env.S3_PREFIX ? { s3Prefix: env.S3_PREFIX } : {}),
     ...(numEnvStrict("DEPLOY_IDLE_TTL_MS", env.DEPLOY_IDLE_TTL_MS) !== undefined
       ? { deployIdleTtlMs: numEnvStrict("DEPLOY_IDLE_TTL_MS", env.DEPLOY_IDLE_TTL_MS) }

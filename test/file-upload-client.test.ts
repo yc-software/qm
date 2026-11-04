@@ -18,12 +18,15 @@ test("publisher resumes an existing transfer after new uploads are disabled", as
   let begins = 0;
   let puts = 0;
   let origin = "";
+  let beginBody = "";
   const server = createServer(async (request, response) => {
-    for await (const _ of request) void _;
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
     response.setHeader("content-type", "application/json");
     const url = request.url!;
     if (url === "/v1/files/uploads") {
       begins++;
+      beginBody = Buffer.concat(chunks).toString();
       if (!enabled) {
         response.writeHead(503).end("{}");
         return;
@@ -94,6 +97,7 @@ test("publisher resumes an existing transfer after new uploads are disabled", as
     assert.equal(JSON.parse(await run()).file.id, "published");
     assert.equal(begins, 1);
     assert.equal(puts, 1);
+    assert.equal(JSON.parse(beginBody).sha256, createHash("sha256").update("").digest("hex"));
     token = await mintSignedPayload(
       {
         encoding: "deflate-raw",
@@ -201,11 +205,12 @@ test("publisher starts a fresh upload when the saved session was aborted or expi
       Buffer.from(JSON.stringify({ actorId: "user", scopeId: "personal:user" })).toString("base64url") + ".signature";
     await writeFile(source, "abc");
     const checksum = createHash("sha256").update("abc").digest("base64");
+    const sha256 = createHash("sha256").update("abc").digest("hex");
     await writeFile(
       source + ".qm-upload.json",
       JSON.stringify({
         id: stale,
-        manifest: { name: "note.txt", mimetype: "text/plain", sizeBytes: 3, checksums: [checksum] },
+        manifest: { name: "note.txt", mimetype: "text/plain", sizeBytes: 3, checksums: [checksum], sha256 },
         destination: { origin, actor: "user", scope: "personal:user" },
         next: 1,
       }),

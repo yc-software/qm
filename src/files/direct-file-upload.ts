@@ -4,6 +4,8 @@ import {
   AbortMultipartUploadCommand,
   CompleteMultipartUploadCommand,
   CreateMultipartUploadCommand,
+  DeleteObjectCommand,
+  GetObjectCommand,
   HeadObjectCommand,
   ListPartsCommand,
   ListMultipartUploadsCommand,
@@ -11,7 +13,7 @@ import {
   type Part,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import { isNoSuchKey, type S3Send } from "../persistence/s3.ts";
+import { bodyToReadable, isNoSuchKey, type S3Send } from "../persistence/s3.ts";
 import {
   FileArtifactDeletedError,
   artifactPath,
@@ -21,12 +23,14 @@ import {
 import { FileUploadError, type FileUpload, type FileUploadStore } from "./file-upload-store.ts";
 import { safeAttachmentName, mimeFromName } from "../core/attachments.ts";
 import { createSweeper } from "../util/sweeper.ts";
+import { swallow } from "../util/errors.ts";
 
 export const FILE_UPLOAD_PART_SIZE = 64 * 1024 * 1024;
 const MAX_DIRECT_FILE_BYTES = 100 * 1024 ** 3;
 const UPLOAD_TTL_MS = 24 * 60 * 60 * 1000;
 const URL_TTL_SECONDS = 15 * 60;
 const SHA256_BASE64 = /^[A-Za-z0-9+/]{43}=$/;
+const SHA256_HEX = /^[0-9a-f]{64}$/;
 
 export function multipartChecksum(checksums: string[]): string {
   return `${createHash("sha256")
@@ -37,6 +41,7 @@ export function multipartChecksum(checksums: string[]): string {
 export interface DirectFileUploads {
   begin(
     input: Pick<FileUpload, "actorId" | "scopeId" | "name" | "mimetype" | "sizeBytes" | "checksums"> & {
+      sha256: string;
       requestId?: string;
     },
   ): Promise<FileUpload>;
@@ -58,9 +63,13 @@ export function createDirectFileUploads(options: {
   files: FileArtifactStore;
   client?: S3Send;
   presign?: (command: UploadPartCommand, expiresIn: number) => Promise<string>;
+  publicEndpoint?: string;
   now?: () => number;
 }): DirectFileUploads {
-  const nativeClient = new S3Client(options.region ? { region: options.region } : {});
+  const nativeClient = new S3Client({
+    ...(options.region ? { region: options.region } : {}),
+    ...(options.publicEndpoint ? { endpoint: options.publicEndpoint, forcePathStyle: true } : {}),
+  });
   const client = options.client ?? nativeClient;
   const presign =
     options.presign ??
@@ -99,6 +108,12 @@ export function createDirectFileUploads(options: {
       if (isNoSuchKey(error)) return false;
       throw error;
     }
+  }
+  async function objectDigest(row: FileUpload): Promise<string> {
+    const result = (await client.send(new GetObjectCommand(target(row)))) as { Body?: unknown };
+    const hash = createHash("sha256");
+    for await (const chunk of bodyToReadable(result.Body)) hash.update(chunk);
+    return hash.digest("hex");
   }
   async function uploadedParts(row: FileUpload): Promise<Part[]> {
     const parts: Part[] = [];
@@ -142,6 +157,8 @@ export function createDirectFileUploads(options: {
         )
       )
         throw new FileUploadError("checksums must contain one base64 SHA-256 per 64 MiB part");
+      if (typeof input.sha256 !== "string" || !SHA256_HEX.test(input.sha256))
+        throw new FileUploadError("sha256 must be 64 lowercase hex characters");
       if (
         input.requestId !== undefined &&
         (typeof input.requestId !== "string" || !/^[0-9a-f]{32}$/.test(input.requestId))
@@ -167,6 +184,7 @@ export function createDirectFileUploads(options: {
         existing.name === row.name &&
         existing.mimetype === row.mimetype &&
         existing.sizeBytes === row.sizeBytes &&
+        existing.sha256 === row.sha256 &&
         JSON.stringify(existing.checksums) === JSON.stringify(row.checksums);
       const existing = await store.get(id);
       if (existing) {
@@ -280,6 +298,14 @@ export function createDirectFileUploads(options: {
       const current = await requireRow(id);
       if (current.state !== "completing" && current.state !== "complete")
         throw new FileUploadError("upload cannot be published", 409);
+      const sha256 = await objectDigest(row);
+      if (row.sha256 !== undefined && sha256 !== row.sha256) {
+        await store.transition(id, ["completing"], "failed");
+        await client
+          .send(new DeleteObjectCommand(target(row)))
+          .catch((error) => swallow("file uploads: delete invalid object", error));
+        throw new FileUploadError("uploaded object SHA-256 does not match the manifest", 409);
+      }
       let artifact: FileArtifact;
       try {
         ({ artifact } = await files.publish({
@@ -291,7 +317,7 @@ export function createDirectFileUploads(options: {
           mimetype: row.mimetype,
           blobKey: `files/uploads/${id}`,
           sizeBytes: row.sizeBytes,
-          sha256: null,
+          sha256,
           direction: "out",
           createdInScope: row.scopeId,
           createdAt: row.createdAt,

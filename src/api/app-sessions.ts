@@ -26,6 +26,7 @@ import { randomUUID } from "node:crypto";
 import { isOpenScopeMember } from "../resolution/sharing-access.ts";
 import { MAX_ATTACHMENT_BYTES, mimeFromName, safeAttachmentName } from "../core/attachments.ts";
 import { projectIdFromGroupRef, projectScopeId } from "../projects/project-store.ts";
+import { authorizeWorkflowSkillForSession } from "../core/orchestrator/workflow-turn.ts";
 
 import type { App, AppDeps } from "./app-types.ts";
 import {
@@ -70,6 +71,7 @@ export function createSessionMethods(
 ): Pick<
   App,
   | "getSession"
+  | "authorizeWorkflowSkillRead"
   | "getSessionForViewer"
   | "canViewSessionSnapshot"
   | "getSessionEntryForViewer"
@@ -379,6 +381,9 @@ export function createSessionMethods(
   }
 
   return {
+    authorizeWorkflowSkillRead(sessionId, skill) {
+      return authorizeWorkflowSkillForSession({ sessions: deps.sessions, sessionId, skill });
+    },
     async getSession(sessionId, window) {
       const session = await deps.sessions.get(sessionId);
       if (!session) return null;

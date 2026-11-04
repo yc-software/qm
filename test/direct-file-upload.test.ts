@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { Readable } from "node:stream";
 import { createDirectFileUploads, multipartChecksum, FILE_UPLOAD_PART_SIZE } from "../src/files/direct-file-upload.ts";
 import { FileUploadError, type FileUpload, type FileUploadStore } from "../src/files/file-upload-store.ts";
 import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
@@ -8,6 +9,7 @@ import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts
 import { scopeId } from "../src/types.ts";
 
 const checksum = (text: string) => createHash("sha256").update(text).digest("base64");
+const digest = (text: string) => createHash("sha256").update(text).digest("hex");
 function fixture() {
   const rows = new Map<string, FileUpload>();
   const store: FileUploadStore = {
@@ -51,6 +53,7 @@ function fixture() {
   let parts: Array<Record<string, unknown>> = [];
   let time = 1_000;
   let loseCompleteResponse = false;
+  let object = Buffer.from("abc");
   const client = {
     async send(command: any) {
       calls.push({ name: command.constructor.name, input: command.input });
@@ -60,6 +63,12 @@ function fixture() {
         case "HeadObjectCommand":
           if (!head) throw Object.assign(new Error("missing"), { name: "NotFound" });
           return head;
+        case "GetObjectCommand":
+          if (!head) throw Object.assign(new Error("missing"), { name: "NotFound" });
+          return { Body: Readable.from([object]) };
+        case "DeleteObjectCommand":
+          head = undefined;
+          return {};
         case "ListPartsCommand":
           return { Parts: parts };
         case "CompleteMultipartUploadCommand": {
@@ -100,6 +109,7 @@ function fixture() {
     mimetype: "text/plain",
     sizeBytes: 3,
     checksums: [checksum("abc")],
+    sha256: digest("abc"),
   };
   const uploadParts = (row: FileUpload) => {
     parts = row.checksums.map((c, i) => ({
@@ -120,6 +130,9 @@ function fixture() {
     uploadParts,
     setHead: (h: Record<string, unknown>) => {
       head = h;
+    },
+    setObject: (value: string | Buffer) => {
+      object = Buffer.from(value);
     },
     loseResponse: () => {
       loseCompleteResponse = true;
@@ -187,7 +200,7 @@ test("completion recovers a lost S3 response and is idempotent", async () => {
   f.loseResponse();
   const file = await f.service.complete(row.id);
   assert.equal(file.sizeBytes, 3);
-  assert.equal(file.sha256, null);
+  assert.equal(file.sha256, digest("abc"));
   assert.equal(file.blobKey, `files/uploads/${row.id}`);
   assert.equal((await f.service.complete(row.id)).id, file.id);
   assert.equal(f.calls.filter((c) => c.name === "CompleteMultipartUploadCommand").length, 1);
@@ -219,6 +232,27 @@ test("wrong completed-object integrity cannot produce a file", async () => {
   assert.equal(await f.files.get(row.id), null);
 });
 
+test("completion rejects a client digest that does not match the uploaded bytes", async () => {
+  const f = fixture();
+  const row = await f.service.begin({ ...f.input, sha256: digest("forged") });
+  f.uploadParts(row);
+  await assert.rejects(f.service.complete(row.id), /SHA-256/);
+  assert.equal(await f.files.get(row.id), null);
+  assert.equal((await f.store.get(row.id))!.state, "failed");
+  assert.ok(f.calls.some((call) => call.name === "DeleteObjectCommand"));
+});
+
+test("completion resumes a legacy upload manifest without a whole-object digest", async () => {
+  const f = fixture();
+  const row = await f.service.begin(f.input);
+  delete f.rows.get(row.id)!.sha256;
+  f.uploadParts(row);
+  const artifact = await f.service.complete(row.id);
+  assert.equal(artifact.sha256, digest("abc"));
+  assert.equal((await f.store.get(row.id))!.state, "complete");
+  assert.ok(!f.calls.some((call) => call.name === "DeleteObjectCommand"));
+});
+
 test("expiry prevents signing and sweeper aborts without publishing", async () => {
   const f = fixture();
   const row = await f.service.begin(f.input);
@@ -247,9 +281,10 @@ test("abort wins the CAS before completion and prevents publication", async () =
 
 test("empty files and multi-part manifests use correctly sized signed requests", async () => {
   const f = fixture();
-  const empty = await f.service.begin({ ...f.input, sizeBytes: 0, checksums: [checksum("")] });
+  const empty = await f.service.begin({ ...f.input, sizeBytes: 0, checksums: [checksum("")], sha256: digest("") });
   assert.equal((await f.service.sign(empty.id, 1)).headers["content-length"], "0");
   f.uploadParts(empty);
+  f.setObject("");
   assert.equal((await f.service.complete(empty.id)).sizeBytes, 0);
   const next = await f.service.begin({
     ...f.input,

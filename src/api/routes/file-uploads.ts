@@ -3,7 +3,7 @@ import { sendJson } from "../http.ts";
 import { scopeId, type ScopeId } from "../../types.ts";
 import { FileUploadError } from "../../files/file-upload-store.ts";
 import { isObj, audit } from "./shared.ts";
-import { withActor, type ApiCtx, type Route } from "./route.ts";
+import type { ApiCtx, Route } from "./route.ts";
 
 type Uploads = NonNullable<ApiCtx["deps"]["fileUploads"]>;
 type Upload = NonNullable<Awaited<ReturnType<Uploads["get"]>>>;
@@ -93,6 +93,7 @@ const beginUpload = uploadRoute(async (ctx, uploads, actorId) => {
     mimetype: typeof body.mimetype === "string" ? body.mimetype : "",
     sizeBytes: body.sizeBytes as number,
     checksums: body.checksums as string[],
+    sha256: body.sha256 as string,
     ...(body.requestId != null ? { requestId: body.requestId as string } : {}),
   });
   audit(deps, { principalId: actorId, action: "file.upload.begin", resource: upload.id, scopeLabel: targetScope });
@@ -118,13 +119,11 @@ const abortUpload = ownedUpload(async ({ res, deps }, uploads, upload, actorId) 
 });
 
 export const fileUploadRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "GET", path: "/v1/files/upload-client", actor: "query.viewer", auth: "either", handle: uploadClient },
-  { method: "GET", path: "/v1/files/uploads", actor: "query.viewer", auth: "either", handle: listUploads },
-  { method: "GET", path: "/v1/files/uploads/:id", actor: "query.viewer", auth: "either", handle: getUpload },
-  ...withActor("body.principalId", [
-    { method: "POST", path: "/v1/files/uploads", auth: "either", handle: beginUpload },
-    { method: "POST", path: "/v1/files/uploads/:id/parts/:part", auth: "either", handle: signPart },
-    { method: "POST", path: "/v1/files/uploads/:id/complete", auth: "either", handle: completeUpload },
-    { method: "DELETE", path: "/v1/files/uploads/:id", auth: "either", handle: abortUpload },
-  ]),
+  { method: "GET", path: "/v1/files/upload-client", actor: "person", auth: "either", handle: uploadClient },
+  { method: "GET", path: "/v1/files/uploads", actor: "person", auth: "either", handle: listUploads },
+  { method: "GET", path: "/v1/files/uploads/:id", actor: "person", auth: "either", handle: getUpload },
+  { method: "POST", path: "/v1/files/uploads", actor: "person", auth: "either", handle: beginUpload },
+  { method: "POST", path: "/v1/files/uploads/:id/parts/:part", actor: "person", auth: "either", handle: signPart },
+  { method: "POST", path: "/v1/files/uploads/:id/complete", actor: "person", auth: "either", handle: completeUpload },
+  { method: "DELETE", path: "/v1/files/uploads/:id", actor: "person", auth: "either", handle: abortUpload },
 ];

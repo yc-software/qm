@@ -1453,6 +1453,10 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         params.push(opts.turnId);
         sql += ` AND i.turn_id = $${params.length}::uuid`;
       }
+      if (opts?.tools !== undefined) {
+        params.push(opts.tools);
+        sql += ` AND i.tool = ANY($${params.length}::text[])`;
+      }
       sql += " ORDER BY i.seq DESC";
       if (opts?.limit !== undefined) {
         params.push(opts.limit);

@@ -6,6 +6,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
+import { createHash } from "node:crypto";
 import { createInsecureTestServer, createServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { scopeId, type ScopeId } from "../src/types.ts";
@@ -430,13 +431,19 @@ async function startSecure() {
   const server = createServer(built.app, { signingSecret: SECRET });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  const cap = (actorId: string, scope: ScopeId = scopeId("personal", actorId), liveActor = true) =>
+  const cap = (
+    actorId: string,
+    scope: ScopeId = scopeId("personal", actorId),
+    liveActor = true,
+    sessionId?: string,
+  ) =>
     mintCapabilityToken(
       {
         actorId,
         scopeId: scope,
         aud: CONTROL_PLANE_AUD,
         ...(liveActor ? { liveActor: true } : {}),
+        ...(sessionId ? { sessionId } : {}),
         exp: Date.now() + CAPABILITY_TTL_MS,
       },
       SECRET,
@@ -450,6 +457,68 @@ async function startSecure() {
     close: () => new Promise<void>((r) => server.close(() => r())),
   };
 }
+
+test("GET /v1/skills/:id hides skills outside the active workflow stage from its capability", async () => {
+  const srv = await startSecure();
+  try {
+    const scope = scopeId("personal", "U1");
+    const allowed = await srv.skills.create({
+      scopeId: scope,
+      manifest: { name: "producer-skill", description: "produce", requiredCapabilities: [], body: "# producer" },
+      createdBy: "U1",
+    });
+    const forbidden = await srv.skills.create({
+      scopeId: scope,
+      manifest: { name: "auditor-skill", description: "audit", requiredCapabilities: [], body: "# auditor" },
+      createdBy: "U1",
+    });
+    for (const skill of [allowed, forbidden]) {
+      await srv.skills.review(skill.id, "reviewer", []);
+      await srv.skills.publish(skill.id);
+    }
+    const session = await srv.sessions.getOrCreateByThread("workflow-skill-http", "dm", scope);
+    const attempt = await srv.sessions.acquireLease(session.id, "turn");
+    assert.ok(attempt.lease);
+    await srv.sessions.appendMany(attempt.lease, [
+      {
+        type: "tool_result",
+        scopeLabel: scope,
+        payload: {
+          tool: "workflow_definition",
+          callId: "workflow-definition-http",
+          definition: {
+            id: "finance",
+            version: 1,
+            steps: [
+              {
+                id: "produce",
+                role: "producer",
+                requiredSkills: [
+                  {
+                    skillId: allowed.id,
+                    contentDigest: createHash("sha256").update(allowed.manifest.body).digest("hex"),
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      },
+    ]);
+    const token = await srv.cap("U1", scope, true, session.id);
+
+    assert.equal(
+      (await fetch(`${srv.base}/v1/skills/${allowed.id}`, { headers: { "x-agent-capability": token } })).status,
+      200,
+    );
+    assert.equal(
+      (await fetch(`${srv.base}/v1/skills/${forbidden.id}`, { headers: { "x-agent-capability": token } })).status,
+      404,
+    );
+  } finally {
+    await srv.close();
+  }
+});
 
 test("POST /v1/skills via a capability token authors as the token's own principal (body principalId ignored)", async () => {
   const srv = await startSecure();

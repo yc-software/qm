@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { createHash } from "node:crypto";
 import { isCronRuntime } from "../../../cron/runtime.ts";
 import { errMessage } from "../../../util/errors.ts";
 import { parseScopeId, type Destination } from "../../../types.ts";
@@ -179,6 +180,16 @@ export async function getAdminSkill(ctx: ApiCtx): Promise<void> {
   );
   if (!scoped) return;
   const { actor, record: skill } = scoped;
+  if (
+    ctx.capability?.sessionId &&
+    (await app.authorizeWorkflowSkillRead(ctx.capability.sessionId, {
+      name: skill.manifest.name,
+      skillId: skill.id,
+      skillVersion: skill.version,
+      contentDigest: createHash("sha256").update(skill.manifest.body).digest("hex"),
+    })) === false
+  )
+    return sendJson(res, 404, { error: "not_found" });
   const provenance = skill.pack;
   const provenancePack = provenance ? ((await app.getSkillPack(provenance.packId)) ?? undefined) : undefined;
   audit(deps, { principalId: actor.id, action: "skill.read", resource: id, scopeLabel: skill.scopeId });

@@ -339,6 +339,10 @@ export interface App {
     sessionId: string,
     window?: TranscriptWindow,
   ): Promise<{ session: Session; entries: TranscriptEntry[]; earlierEntries?: number; pins?: SessionPinView[] } | null>;
+  authorizeWorkflowSkillRead(
+    sessionId: string,
+    skill: { name: string; skillId: string; skillVersion: number; contentDigest: string },
+  ): Promise<boolean | undefined>;
   getSessionForViewer(
     sessionId: string,
     principalId: string,

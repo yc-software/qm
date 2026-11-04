@@ -112,9 +112,11 @@ def main():
     state_path = args.state or args.file.with_name(args.file.name + ".qm-upload.json")
     checksums = []
     size = 0
+    sha256 = hashlib.sha256()
     with args.file.open("rb") as source:
         while chunk := source.read(PART_SIZE):
             size += len(chunk)
+            sha256.update(chunk)
             checksums.append(base64.b64encode(hashlib.sha256(chunk).digest()).decode())
     if not checksums:
         checksums.append(base64.b64encode(hashlib.sha256(b"").digest()).decode())
@@ -129,7 +131,7 @@ def main():
             raise RuntimeError("invalid or oversized capability claims")
         claims = json.loads(decoded)
     destination = {"origin": os.environ["AGENT_API_URL"].rstrip("/"), "actor": claims["actorId"], "scope": args.scope or claims["scopeId"]}
-    manifest = {"name": args.name or args.file.name, "mimetype": mimetypes.guess_type(args.file.name)[0] or "application/octet-stream", "sizeBytes": size, "checksums": checksums}
+    manifest = {"name": args.name or args.file.name, "mimetype": mimetypes.guess_type(args.file.name)[0] or "application/octet-stream", "sizeBytes": size, "checksums": checksums, "sha256": sha256.hexdigest()}
     if args.scope:
         manifest["scopeId"] = args.scope
     state = json.loads(state_path.read_text()) if state_path.exists() else None

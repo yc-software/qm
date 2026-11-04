@@ -25,6 +25,7 @@ import { scopeId, type Conversation, type Principal, type ScopeId, type Session 
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import type { RunStore } from "../src/runs/run-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
+import { activeWorkflowReviewAssignment, assignWorkflowReviewer } from "../src/sessions/workflow-review.ts";
 
 const actor: Principal = { id: "U1", type: "internal", displayName: "Alex" };
 const scope: ScopeId = scopeId("personal", "U1");
@@ -104,6 +105,90 @@ test("open creates a child session with parent pointer, spawn meta, and a queued
   assert.match(request.text, /subagent-task/);
   assert.match(request.text, /build a personal website/);
   assert.equal(out.liveRunsRemaining, SUBAGENT_TREE_RUN_CAP - 1);
+});
+
+test("openWithAdmission records governed child state before enqueue", async () => {
+  const r = await rig();
+  const order: string[] = [];
+  const attempt = await r.sessions.acquireLease(r.room.id, "turn");
+  assert.ok(attempt.lease);
+  const lease = attempt.lease;
+  const definition = {
+    id: "finance",
+    version: 1,
+    steps: [
+      { id: "evidence", role: "producer", requiredSkills: [] },
+      { id: "audit", role: "auditor", after: "evidence", separateFrom: "evidence", requiredSkills: [] },
+    ],
+  } as const;
+  const syscalls = r.syscallsFor(r.room);
+  assert.ok(syscalls.openWithAdmission);
+  const out = await syscalls.openWithAdmission(
+    {
+      task: "audit the finance evidence",
+      name: "finance auditor",
+      readOnly: true,
+      harness: "ultimate",
+      model: "gpt",
+    },
+    async (sessionId) => {
+      const child = await freshSession(r.sessions, sessionId);
+      assert.equal(child.parentSessionId, r.room.id);
+      assert.equal(child.spawnMeta?.readOnly, true);
+      assert.equal(child.spawnMeta?.harness, "ultimate");
+      assert.equal((await r.runs.inFlightForThread(child.threadRef)).length, 0);
+      await assignWorkflowReviewer({
+        sessions: r.sessions,
+        lease,
+        scopeLabel: scope,
+        parentSessionId: r.room.id,
+        reviewerSessionId: child.id,
+        definition,
+        step: "audit",
+      });
+      order.push("admitted");
+    },
+  );
+  assert.ok(out.ok);
+  const child = await freshSession(r.sessions, out.sessionId);
+  assert.equal((await r.runs.inFlightForThread(child.threadRef)).length, 1);
+  assert.equal(
+    (
+      await activeWorkflowReviewAssignment({
+        sessions: r.sessions,
+        parentSessionId: r.room.id,
+        reviewerSessionId: child.id,
+        definitions: [definition],
+      })
+    )?.step.id,
+    "audit",
+  );
+  order.push("enqueued");
+  assert.deepEqual(order, ["admitted", "enqueued"]);
+});
+
+test("governed admission can open a workflow reviewer when user subagents are disabled", async () => {
+  const r = await rig();
+  const factory = createSessionSyscalls({ ...r, maxAttempts: 3, enabled: async () => false });
+  const syscalls = factory.forTurn({
+    session: r.room,
+    scopeId: scope,
+    request: { actor, conversation },
+  });
+
+  assert.equal((await syscalls.open({ task: "ordinary delegation" })).ok, false);
+  const governed = await syscalls.openWithAdmission!(
+    {
+      task: "audit governed finance evidence",
+      readOnly: true,
+      harness: "ultimate",
+      model: "gpt",
+    },
+    async () => {},
+    { requireEnabled: false },
+  );
+
+  assert.equal(governed.ok, true);
 });
 
 for (const explicit of [

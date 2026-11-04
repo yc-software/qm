@@ -147,6 +147,7 @@ export const isWebThread = (threadRef: string): boolean => threadRef.startsWith(
 export interface GetEntriesOptions {
   transcript?: boolean;
   turnId?: string;
+  tools?: readonly string[];
   sinceSeq?: number;
   beforeSeq?: number;
   limit?: number;

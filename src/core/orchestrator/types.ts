@@ -69,6 +69,7 @@ import type { AclStore } from "../../acl/acl-store.ts";
 import type { SwarmService, SwarmTurn } from "../../swarms/swarm-service.ts";
 import type { ChannelPolicyStore } from "../../surface-cache/channel-policy-store.ts";
 import type { SurfaceCache } from "../../surface-cache/types.ts";
+import type { WorkflowDefinition } from "../../sessions/workflow-gate.ts";
 
 export interface OrchestratorInput extends Omit<
   TurnRequest,
@@ -126,6 +127,7 @@ export interface OrchestratorDeps {
   brandingDefault?: OrgBranding;
   resolveBaseModelId?: () => string | undefined;
   sessions: SessionStore;
+  workflowDefinitions?: readonly WorkflowDefinition[];
   sessionStateBus?: SessionStateBus;
   sessionSyscalls?: SessionSyscallsFactory;
   workspace: WorkspaceStore;

@@ -416,8 +416,13 @@ test("HARNESS=pi can boot before an admin configures a model provider", () => {
 
 test("HARNESS accepts only the remaining harnesses", () => {
   for (const harness of ["codex", " opencode ", "mock"])
-    assert.throws(() => loadConfig({ HARNESS: harness }), /is not recognized — use pi or claude/);
+    assert.throws(() => loadConfig({ HARNESS: harness }), /is not recognized — use pi, claude, or ultimate/);
   assert.equal(loadConfig({ HARNESS: "pi" }).harness, "pi");
+  assert.equal(loadConfig({ HARNESS: "ultimate" }).harness, "ultimate");
+  assert.equal(
+    loadConfig({ HARNESS: "ultimate", ULTIMATE_URL: "http://127.0.0.1:4747" }).ultimateUrl,
+    "http://127.0.0.1:4747",
+  );
   assert.equal(loadConfig({}).harness, "pi");
 });
 

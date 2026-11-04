@@ -335,9 +335,13 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
     },
 
     async getEntries(sessionId, opts?: GetEntriesOptions) {
-      const all = (entries.get(sessionId) ?? []).filter(
-        (e) => opts?.turnId === undefined || (e.payload as { runId?: string } | null)?.runId === opts.turnId,
-      );
+      const all = (entries.get(sessionId) ?? []).filter((e) => {
+        const payload = e.payload as { runId?: string; tool?: string } | null;
+        return (
+          (opts?.turnId === undefined || payload?.runId === opts.turnId) &&
+          (opts?.tools === undefined || (typeof payload?.tool === "string" && opts.tools.includes(payload.tool)))
+        );
+      });
       const log = opts?.transcript ? transcriptEntries(all) : all;
       const since = opts?.sinceSeq ?? 0;
       const filtered = log.filter((e) => e.seq >= since && (opts?.beforeSeq === undefined || e.seq < opts.beforeSeq));

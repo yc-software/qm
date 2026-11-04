@@ -169,6 +169,22 @@ test("resolvePackAuth: a credential's fixed headers ride along with its auth hea
   );
 });
 
+test("resolvePackAuth: a request-signing credential cannot become a static Git header", async () => {
+  const sources = {
+    serviceCredential: async () => ({
+      secret: '{"consumerKey":"secret"}',
+      host: "github.com",
+      enabled: true,
+      injection: { signer: "netsuite-tba" as const },
+    }),
+    connectorToken: async () => "connector",
+  };
+  await assert.rejects(
+    resolvePackAuth(sources, { url: "https://github.com/o/r", authCredentialSlug: "dep", createdBy: "u1" }),
+    /signing credential.*broker/,
+  );
+});
+
 test("resolvePackAuth: an explicit slug fails closed when disabled or outside host/path/method policy", async () => {
   const connectorToken = async () => "connector";
   assert.equal(

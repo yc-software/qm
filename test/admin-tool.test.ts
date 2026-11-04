@@ -40,7 +40,7 @@ test("admin sends only fixed routes with encoded identifiers and preserves HTTP 
     });
     assert.deepEqual(requests, [
       {
-        url: "/v1/admin/scopes/channel%3Atest%2F%3Fevil%3D1/soul?",
+        url: "/v1/admin/scopes/channel%3Atest%2F%3Fevil%3D1/soul",
         token: "synthetic-capability",
         method: "PUT",
         body: '{"content":"hello"}',
@@ -77,6 +77,29 @@ test("admin never forwards a capability through redirects", async () => {
     const call = createAdminCall(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, "synthetic-capability");
     await assert.rejects(() => call({ action: "whoami" }));
     assert.equal(redirected, false);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("admin rejects an action denied by the turn policy before HTTP", async () => {
+  let requests = 0;
+  const server = createServer((_req, res) => {
+    requests++;
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end("{}");
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  try {
+    const call = createAdminCall(
+      `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+      "synthetic-capability",
+      (action) => action !== "skills" && action !== "skill",
+    );
+    await assert.rejects(() => call({ action: "skills", scope: "org:test" }), /not available on this turn/);
+    assert.equal(requests, 0);
   } finally {
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));

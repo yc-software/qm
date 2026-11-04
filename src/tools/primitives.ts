@@ -166,6 +166,7 @@ export interface SkillResult {
     skillId: string;
     skillVersion: number;
     contentDigest: string;
+    materializedContentDigests?: string[];
     pack?: {
       packId: string;
       commit: string;
@@ -203,10 +204,22 @@ export type AttachResult = { ok: true; files: AttachedFileMeta[]; staged: number
 
 export type AttachFiles = (files: readonly OutboundFile[], sandboxId?: string) => Promise<AttachResult>;
 
+export interface WorkflowToolInput {
+  action: "advance" | "approve" | "assign_reviewer" | "review_submit" | "status";
+  workflowId: string;
+  step?: string;
+  decision?: "pass" | "reject";
+  reviewerSessionId?: string;
+  inputEvidence?: Array<{ id: string }>;
+  outputEvidence?: Array<{ id: string }>;
+  findings?: string[];
+}
+
 export interface ToolContext extends SurfaceToolDeps {
   installSharedCanvas?: (fileId: string) => Promise<string | null>;
   admin?: AdminToolAccess;
   runtime?(request: RuntimeRequest, signal?: AbortSignal): Promise<RuntimeResult>;
+  workflow?(input: WorkflowToolInput): Promise<unknown>;
   attach: AttachFiles;
   sessionSyscalls?: SessionSyscalls;
   /** True when a person's own message started this turn (not a cron, webhook, ambient or delegated wake). */
@@ -487,6 +500,7 @@ export const CONTROL_UNAVAILABLE: ControlUnavailable = {
 export interface ToolContextDeps {
   desktopClientId?: string;
   admin?: AdminToolAccess;
+  workflow?: (input: WorkflowToolInput) => Promise<unknown>;
   installSharedCanvas?: (fileId: string) => Promise<string | null>;
   sandbox: Sandbox;
   commandCredentials?: readonly CommandCredential[];
@@ -745,6 +759,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
   return {
     ...(deps.admin ? { admin: deps.admin } : {}),
     ...(deps.installSharedCanvas ? { installSharedCanvas: deps.installSharedCanvas } : {}),
+    ...(deps.workflow ? { workflow: deps.workflow } : {}),
     ...(deps.toolOutput ? { toolOutput: deps.toolOutput } : {}),
     ...(deps.commandCredentials?.length
       ? { commandCredentialHandles: deps.commandCredentials.map((credential) => credential.handle) }

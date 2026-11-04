@@ -17,6 +17,12 @@ import {
 import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
 import type { ProvisionOptions } from "../src/sandbox/sandbox.ts";
 
+test("OpenAI-compatible harnesses receive the sandbox model API version in their base URL", async () => {
+  const contract = (await import("../src/api/contract.ts")) as Record<string, unknown>;
+  const resolve = contract.sandboxModelOpenAiBaseUrl as ((apiBaseUrl: string) => string) | undefined;
+  assert.equal(resolve?.("http://127.0.0.1:8083/"), "http://127.0.0.1:8083/v1/sandbox-model/v1");
+});
+
 const key = "company-gateway-secret";
 const endUser = createHmac("sha256", TEST_CAPABILITY_SECRET).update("U1").digest("hex").slice(0, 32);
 const routes = {

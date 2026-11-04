@@ -12,6 +12,7 @@ export interface FileUpload {
   sizeBytes: number;
   partSize: number;
   checksums: string[];
+  sha256?: string;
   uploadId: string;
   state: FileUploadState;
   expiresAt: number;

@@ -81,6 +81,7 @@ import type { BudgetTracker } from "../ratelimit/budget.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { AppPageViewLog } from "../deploy/page-views.ts";
 import type { SlackInstallationStore, SlackSocketAppIdReader } from "../surfaces/slack-installation.ts";
+import type { SkillStore } from "../skills/skill-store.ts";
 
 import type { SlackAccountLink, ComposioReturn } from "./routes/composio.ts";
 
@@ -189,6 +190,7 @@ export interface ServerDeps {
   sessionShareBytes?: DurableByteStore;
   environments?: EnvironmentStore;
   deploymentLayer?: DeploymentLayerStore;
+  skills?: SkillStore;
   backgroundOwnership?: BackgroundOwnershipControl;
   deploymentControlSecret?: string;
   spendExportToken?: string;

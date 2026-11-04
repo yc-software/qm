@@ -137,6 +137,7 @@ export function harnessToolOptions(opts: HarnessToolPlumbing, turn?: HarnessTurn
     ...(turn
       ? {
           readOnly: turn.readOnly,
+          workflowReview: Boolean(turn.readOnly && turn.tools.workflow),
           sessionTools: Boolean(turn.tools.sessionSyscalls),
           surfaceTools: turn.surfaceTools,
           delegateWork: turn.delegateWork,

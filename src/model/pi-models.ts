@@ -50,7 +50,7 @@ export const THINKING_LEVELS = [
   "max",
   "ultracode",
 ] as const;
-export const HARNESS_IDS = ["pi", "claude"] as const;
+export const HARNESS_IDS = ["pi", "claude", "ultimate"] as const;
 export type HarnessId = (typeof HARNESS_IDS)[number];
 
 export function modelSupportsAdaptiveThinking(model: Pick<Model<Api>, "api" | "reasoning" | "compat">): boolean {
@@ -73,17 +73,23 @@ export function thinkingLevelsForHarness(harnessId: HarnessId, modelId?: string)
   const model = modelId ? resolveModel(modelId) : undefined;
   return THINKING_LEVELS.filter((level) => {
     if (level === "adaptive")
-      return harnessId === "pi" && (!modelId || (!!model && modelSupportsAdaptiveThinking(model)));
+      return (
+        (harnessId === "pi" || harnessId === "ultimate") &&
+        (!modelId || (!!model && modelSupportsAdaptiveThinking(model)))
+      );
     if (level === "default")
-      return harnessId === "pi" && (!modelId || (!!model && modelSupportsProviderDefault(model)));
-    if (harnessId === "pi") return true;
+      return (
+        (harnessId === "pi" || harnessId === "ultimate") &&
+        (!modelId || (!!model && modelSupportsProviderDefault(model)))
+      );
+    if (harnessId === "pi" || harnessId === "ultimate") return true;
     if (harnessId === "claude") return level !== "ultracode";
     return level === "auto";
   });
 }
 
 export function harnessSupportsFastMode(harnessId: HarnessId): boolean {
-  return harnessId === "pi" || harnessId === "claude";
+  return harnessId === "pi" || harnessId === "claude" || harnessId === "ultimate";
 }
 export const MODEL_PROVIDERS = ["anthropic", "openai", "openrouter"] as const;
 export type ModelProvider = (typeof MODEL_PROVIDERS)[number];
@@ -712,12 +718,13 @@ export function modelHasPrices(model: Pick<Model<Api>, "cost">): boolean {
 }
 
 export function modelSupportedByHarness(id: string | undefined, harness: string): boolean {
-  if (id && modelRequestOverrides(id)) return harness === "pi";
-  if (id && isGatewayModelId(id)) return harness === "pi" && Boolean(resolveGatewayModel(id));
+  if (id && modelRequestOverrides(id)) return harness === "pi" || harness === "ultimate";
+  if (id && isGatewayModelId(id))
+    return (harness === "pi" || harness === "ultimate") && Boolean(resolveGatewayModel(id));
   if (!id || unavailableOverlays.has(id)) return false;
-  if (overlays.has(id)) return !isEmbeddingModel(overlays.get(id)!) && harness === "pi";
-  if (isCustomModelId(id) && !REGISTRY_BY_ID.has(id)) return harness === "pi";
-  if (harness === "pi") return Boolean(resolveModel(id));
+  if (overlays.has(id)) return !isEmbeddingModel(overlays.get(id)!) && (harness === "pi" || harness === "ultimate");
+  if (isCustomModelId(id) && !REGISTRY_BY_ID.has(id)) return harness === "pi" || harness === "ultimate";
+  if (harness === "pi" || harness === "ultimate") return Boolean(resolveModel(id));
   const provider = resolveModel(id)?.provider;
   if (harness === "claude") return provider === "anthropic" || /^claude-/i.test(id);
   return false;
@@ -783,6 +790,7 @@ export function modelProviderAvailabilityFor(
   configKeys: ModelProviderAvailability,
   managedKeys: ModelProviderAvailability = configKeys,
 ): ModelProviderAvailability {
+  if (harness === "ultimate") return ALL_PROVIDERS_AVAILABLE;
   if (harness === "pi") return managedKeys;
   return ALL_PROVIDERS_AVAILABLE;
 }

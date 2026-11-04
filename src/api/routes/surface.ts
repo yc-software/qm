@@ -1,4 +1,5 @@
 import { isSideChatAnchor } from "../../sessions/side-chat.ts";
+import { createHash } from "node:crypto";
 import type { CapabilityClaims } from "../../auth/capability-token.ts";
 import { memoryForRequest } from "./memory-access.ts";
 import type { MemoryEdit, MemoryService } from "../../memory/memory-service.ts";
@@ -939,6 +940,16 @@ async function getSkillDetail(ctx: ApiCtx): Promise<void> {
   ) {
     return sendJson(res, 404, { error: "not_found" });
   }
+  if (
+    capability?.sessionId &&
+    (await app.authorizeWorkflowSkillRead(capability.sessionId, {
+      name: skill.manifest.name,
+      skillId: skill.id,
+      skillVersion: skill.version,
+      contentDigest: createHash("sha256").update(skill.manifest.body).digest("hex"),
+    })) === false
+  )
+    return sendJson(res, 404, { error: "not_found" });
   return sendJson(res, 200, {
     skill: {
       id: skill.id,

@@ -10,6 +10,7 @@ const PYTHON_PACKAGES = [
   "openpyxl==3.1.5",
   "pypdf==6.19.0",
   "python-docx==1.2.0",
+  "PyYAML==6.0.3",
 ];
 const UV_VERSION = "0.12.19";
 const UV_SHA256 = "23bf5552d220e0842b65c862097b2ebaeba0064b74eda5e565e77fd25969d8c8";
@@ -20,6 +21,7 @@ export const MODAL_DEFAULT_IMAGE_SETUP =
   " && tar -xzf /tmp/uv.tgz -C /usr/local/bin --strip-components=1 && rm /tmp/uv.tgz" +
   " && mkdir -p /etc/uv && printf '[pip]\\nsystem = true\\nbreak-system-packages = true\\n' > /etc/uv/uv.toml" +
   ` && uv pip install --no-cache --only-binary=:all: ${PYTHON_PACKAGES.join(" ")}` +
+  " && python3 -c 'import openpyxl, yaml'" +
   ` && ${AWS_CLI_INSTALL}`;
 
 export async function resolveModalImage(client: ModalClient, reference?: string) {

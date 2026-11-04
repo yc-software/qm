@@ -30,6 +30,7 @@ import { sleep } from "../../util/async.ts";
 import { tracePhase } from "../../../plugins/chassis/src/error-reporting.ts";
 import { loadActiveBundles } from "./turn-helpers.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
+import type { ObservedWorkflowSkill } from "../../sessions/workflow-gate.ts";
 
 const TURN_FILES_MAX_AGE_MS = 24 * 60 * 60_000;
 
@@ -50,6 +51,8 @@ export interface TurnSandboxContext {
   egressTokenForPolicy?: (policy: Resolution["egress"]) => Promise<string | undefined>;
   openResourceAccess?: boolean;
   visibleSkillsForTurn: (sources?: readonly string[]) => Promise<SkillResolution[]>;
+  filterVisibleSkills?: (skills: readonly SkillResolution[]) => Promise<readonly SkillResolution[]>;
+  authorizeSkillRead?: (skill: ObservedWorkflowSkill) => Promise<boolean | undefined>;
 }
 
 export function createTurnSandboxes(ctx: TurnSandboxContext) {
@@ -70,6 +73,8 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     egressTokenForPolicy,
     openResourceAccess,
     visibleSkillsForTurn,
+    filterVisibleSkills,
+    authorizeSkillRead,
   } = ctx;
 
   const box: {
@@ -258,7 +263,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       (r) => r.skill?.manifest.name === name,
     );
     if (!resolution?.skill) return missing;
-    const shipsFiles = (resolution.skill.manifest.files?.length ?? 0) > 0 || resolution.skill.pack !== undefined;
     const asset = resolution.skill.manifest.files?.find((f) => {
       try {
         return safeSkillFilePath(f.path) === file;
@@ -267,15 +271,29 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       }
     })?.content;
     if (file !== "SKILL.md" && asset === undefined) return missing;
+    const skillContentDigest = createHash("sha256").update(resolution.skill.manifest.body).digest("hex");
+    const contentDigest =
+      file === "SKILL.md" ? skillContentDigest : createHash("sha256").update(asset!).digest("hex");
+    const authorized = await authorizeSkillRead?.({
+      name,
+      skillId: resolution.skill.id,
+      skillVersion: resolution.skill.version,
+      contentDigest: skillContentDigest,
+    });
+    if (authorized === false) return missing;
+    const shipsFiles = (resolution.skill.manifest.files?.length ?? 0) > 0 || resolution.skill.pack !== undefined;
     if (deps.skills)
       void deps.skills.recordUse(resolution.skill.id).catch((e) => swallow("orchestrator: skill recordUse", e));
     const render = (root?: string) =>
       file === "SKILL.md"
         ? renderSkillBody(resolution, root)
         : rehomeSkillPaths(resolution, asset!, root ?? skillsRoot(resolution));
-    const contentDigest = createHash("sha256")
-      .update(file === "SKILL.md" ? resolution.skill.manifest.body : asset!)
-      .digest("hex");
+    const materializedContentDigests =
+      file === "SKILL.md"
+        ? (resolution.skill.manifest.files ?? []).map((item) =>
+            createHash("sha256").update(item.content).digest("hex"),
+          )
+        : [];
     const result = (content: string, bundles: NonNullable<SkillResolution["screenedBundles"]>): SkillResult => {
       const bundle = resolution.skill!.pack
         ? bundles.find((candidate) => candidate.packId === resolution.skill!.pack!.packId)
@@ -287,6 +305,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
           skillId: resolution.skill!.id,
           skillVersion: resolution.skill!.version,
           contentDigest,
+          ...(materializedContentDigests.length > 0 ? { materializedContentDigests } : {}),
           ...(resolution.skill!.pack
             ? {
                 pack: {
@@ -478,16 +497,20 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     }
   };
   const pruneSkills = async (handle: SandboxHandle): Promise<void> => {
-    const visible = (await visibleSkillsForTurn()).flatMap((r) => (r.skill ? [r.skill, ...r.shadowed] : []));
+    const conversation = turnSessionDir.split("/").at(-1);
+    const resolved = await visibleSkillsForTurn();
+    const visible = (filterVisibleSkills ? await filterVisibleSkills(resolved) : resolved).flatMap((r) =>
+      r.skill ? [r.skill, ...r.shadowed] : [],
+    );
     const keep = new Set(visible.map((skill) => hashId([skill.id, String(skill.version)], 16)));
     const stale = new Set<string>();
     const listed = await deps.sandbox
       .listDir(handle, SKILLS_ROOT)
       .catch(swallowAs("orchestrator: list skills to prune", [] as string[]));
     for (const path of listed) {
-      const [root, conversation, identity] = path.split("/");
-      if (root === SKILLS_ROOT && conversation && identity && !keep.has(identity))
-        stale.add(`${SKILLS_ROOT}/${conversation}/${identity}`);
+      const [root, candidate, identity] = path.split("/");
+      if (root === SKILLS_ROOT && candidate === conversation && identity && !keep.has(identity))
+        stale.add(`${SKILLS_ROOT}/${candidate}/${identity}`);
     }
     await Promise.all(
       [...stale].map((dir) =>
