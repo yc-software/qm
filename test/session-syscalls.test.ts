@@ -521,7 +521,7 @@ test("a user stop suppresses a lane's pending wake even when the stopped run is 
   }
 });
 
-test("an undeliverable flagged message is settled without blocking the next one, and a finished wake is settled too", async () => {
+test("an undeliverable flagged message is settled without blocking the next one; a transient failure keeps the wake; a finished wake is settled", async () => {
   const r = await rig();
   const p = await parentRun(r);
   const opened = await p.api.open({ task: "work" });
@@ -547,7 +547,19 @@ test("an undeliverable flagged message is settled without blocking the next one,
   const asked = await childApi.write({ target: "parent", wake: true, text: "which region?", requestId: "q1" });
   assert.equal(asked.ok && asked.delivered, "queued_message");
   await r.runs.complete(p.run.id, p.leaseToken, { status: "ok", reply: "done" });
-  assert.equal(await wakeForUnreadMail({ ...r, maxAttempts: 3 }, (await r.runs.get(p.run.id))!), "woken");
+  const finished = (await r.runs.get(p.run.id))!;
+  const unavailable = {
+    ...r.runs,
+    enqueue: async () => {
+      throw new Error("queue unavailable");
+    },
+  };
+  await assert.rejects(wakeForUnreadMail({ ...r, runs: unavailable, maxAttempts: 3 }, finished), /queue unavailable/);
+  assert.deepEqual(
+    (await r.mailbox.pending(r.room.id)).map((mail) => Boolean(mail.wake)),
+    [false, true],
+  );
+  assert.equal(await wakeForUnreadMail({ ...r, maxAttempts: 3 }, finished), "woken");
   const [poisoned, question] = await r.mailbox.pending(r.room.id);
   assert.deepEqual([poisoned!.id, poisoned!.wake], ["poisoned", undefined]);
   assert.ok(question!.wake);
@@ -621,7 +633,7 @@ test("an interrupt refused for lack of run slots stops nothing; a failed enqueue
   );
 });
 
-test("an interrupt withdraws only the interrupter's own queued messages; a sibling's queued turn survives", async () => {
+test("an interrupt's text runs next; a sibling's queued turn moves to the target's mailbox instead of being lost", async () => {
   const r = await rig();
   const target = await runningChild(r, r.room, "build");
   const sibling = await runningChild(r, r.room, "review");
@@ -636,13 +648,18 @@ test("an interrupt withdraws only the interrupter's own queued messages; a sibli
   const out = await r.syscallsFor(r.room).write({ target: target.session.id, interrupt: true, text: "new plan" });
   assert.equal(out.ok && out.delivered, "interrupted");
   assert.equal((await r.signals.pending(target.run.id))[0]!.signal.kind, "abort");
-  assert.deepEqual(await r.signals.pending(peerRun.id), []);
   assert.deepEqual(
     (await r.runs.inFlightForThread(target.session.threadRef))
       .filter((run) => run.id !== target.run.id)
       .map((run) => run.request.displayText),
-    ["found a bug in auth", "new plan"],
+    ["new plan"],
   );
+  const mail = await r.mailbox.pending(target.session.id);
+  assert.deepEqual(
+    mail.map((message) => [message.senderId, message.text]),
+    [[sibling.session.id, peerRun.request.text]],
+  );
+  assert.match(mail[0]!.text, /found a bug in auth/);
 });
 
 test("a read-only subagent's wake leaves mail without starting a parent turn", async () => {

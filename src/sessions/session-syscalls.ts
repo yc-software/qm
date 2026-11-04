@@ -497,25 +497,34 @@ export async function runStopped(
   return undefined;
 }
 
-const interruptible = (run: Run, interrupter: string): boolean =>
-  run.status !== "pending" ||
-  run.attempts > 0 ||
-  run.turnUserSeq !== null ||
-  run.request.sessionSenderId === interrupter;
+const unstarted = (run: Run): boolean => run.status === "pending" && run.attempts === 0 && run.turnUserSeq === null;
+const interruptible = (run: Run): boolean => !unstarted(run) || Boolean(run.request.sessionSenderId);
 
 async function stopSessionRuns(
   deps: { runs: Pick<RunStore, "inFlightForThread" | "withdraw">; signals: Pick<RunSignalStore, "send"> },
   session: Session,
   reason?: string,
-  interrupter?: string,
+  interrupt?: { by: string; mailbox: Pick<SessionMailbox, "send"> },
 ): Promise<{ id: string; withdrawn: boolean }[]> {
   const stopped: { id: string; withdrawn: boolean }[] = [];
   for (const run of await deps.runs.inFlightForThread(session.threadRef)) {
-    if (interrupter && !interruptible(run, interrupter)) continue;
+    if (interrupt && !interruptible(run)) continue;
+    const sender = interrupt && unstarted(run) ? run.request.sessionSenderId : undefined;
+    const foreign = interrupt && sender && sender !== interrupt.by ? { mailbox: interrupt.mailbox, sender } : undefined;
+    if (foreign)
+      await foreign.mailbox.send({
+        id: `interrupted-${run.id}`,
+        recipientId: session.id,
+        senderId: foreign.sender,
+        actor: run.request.actor,
+        audience: run.request.conversation.audience,
+        text: run.request.text,
+        createdAt: run.createdAt,
+      });
     await deps.signals.send(run.id, { kind: "abort", ...(reason ? { reason } : {}) });
     const withdrawn =
       run.status === "pending" && (await deps.runs.withdraw(run.id, { unstartedOnly: reason === PARENT_INTERRUPT }));
-    stopped.push({ id: run.id, withdrawn });
+    stopped.push({ id: run.id, withdrawn: withdrawn && !foreign });
   }
   return stopped;
 }
@@ -850,7 +859,12 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               if (!text) {
                 if (!input.interrupt)
                   return { ok: false, message: "send_message requires `text` (or interrupt: true)." };
-                return (await stopSessionRuns(deps, target, PARENT_INTERRUPT, binding.session.id)).length
+                return (
+                  await stopSessionRuns(deps, target, PARENT_INTERRUPT, {
+                    by: binding.session.id,
+                    mailbox: deps.mailbox,
+                  })
+                ).length
                   ? { ok: true, sessionId: target.id, title, delivered: "interrupted" }
                   : { ok: false, message: `subagent "${title}" is not running — nothing to interrupt.` };
               }
@@ -894,9 +908,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               const dedupKey = input.requestId ? `subagent-followup:${messageId}` : undefined;
               const accepted = await acceptedFollowup(deps.runs, dedupKey, target, stamped, title);
               if (accepted) return accepted;
-              const replaced = input.interrupt
-                ? inFlight.filter((run) => interruptible(run, binding.session.id)).map((run) => run.id)
-                : [];
+              const replaced = input.interrupt ? inFlight.filter(interruptible).map((run) => run.id) : [];
               const live = (
                 await sessionTreeRuns(deps.sessions, deps.runs, await sessionTreeRoot(deps.sessions, target))
               ).filter((run) => !replaced.includes(run.id));
@@ -906,7 +918,10 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   message: `all ${cap} session run slots are in use; nothing was sent. Retry later, or send with wake:false to leave it in the mailbox.`,
                 };
               const stopped = input.interrupt
-                ? await stopSessionRuns(deps, target, PARENT_INTERRUPT, binding.session.id)
+                ? await stopSessionRuns(deps, target, PARENT_INTERRUPT, {
+                    by: binding.session.id,
+                    mailbox: deps.mailbox,
+                  })
                 : [];
               request.origin = sessionTurnOrigin(request.origin, stamped);
               request.sessionSenderId = binding.session.id;

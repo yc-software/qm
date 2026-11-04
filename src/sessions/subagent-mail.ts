@@ -266,23 +266,18 @@ export async function wakeForUnreadMail(
       child.parentSessionId !== parent.id ||
       !isSubagentThreadRef(child.threadRef)
         ? "settled"
-        : await deps.advisoryLock
-            .withLock("session-tree-admission", async () => {
-              if (await runStopped(runs, deps.signals, marker.runId ?? marker.delegatingRunId)) return "settled";
-              const source = {
-                actor: message.actor,
-                conversation: { audience: message.audience },
-                ...(marker.delegatingRunId ? { delegatingRunId: marker.delegatingRunId } : {}),
-              };
-              return wakeParent(
-                deps,
-                parent,
-                await parentTurn(deps, child, parent, source, message.text, MESSAGE_DISPLAY),
-                message.id,
-                wake,
-              );
-            })
-            .catch(swallowAs("sessions: unread mail wake", "settled" as const));
+        : await deps.advisoryLock.withLock("session-tree-admission", async () => {
+            if (await runStopped(runs, deps.signals, marker.runId ?? marker.delegatingRunId)) return "settled";
+            const source = {
+              actor: message.actor,
+              conversation: { audience: message.audience },
+              ...(marker.delegatingRunId ? { delegatingRunId: marker.delegatingRunId } : {}),
+            };
+            const turn = await parentTurn(deps, child, parent, source, message.text, MESSAGE_DISPLAY).catch(
+              swallowAs("sessions: unread mail wake", undefined),
+            );
+            return turn ? wakeParent(deps, parent, turn, message.id, wake) : "settled";
+          });
     if (outcome !== "settled") return outcome;
     await deps.mailbox.settle(parent.id, message.id);
   }
