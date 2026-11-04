@@ -348,7 +348,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
         const handle = await deps.sandbox.provision(crossScope ? resource.ownerScopeId : writableScopeId, {
           sandboxId: resource.id,
           ...(!crossScope ? { env: connectorEnv } : {}),
-          ...(access.env ? { env: { ...access.env } } : {}),
           egress,
           ...(egressToken ? { egressToken } : {}),
         });

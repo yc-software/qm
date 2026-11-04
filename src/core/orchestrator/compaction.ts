@@ -146,7 +146,6 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
       throughSeq,
       body: { ...(mode ? { mode } : {}), ...(savedSummary ? { savedSummary } : {}) },
     });
-    await deps.agent.resetSession?.(input.session.id);
     return summary;
   }
 
