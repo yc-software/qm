@@ -2,8 +2,7 @@ import { pgConnectionOptions, resolvePgCaTrust } from "../persistence/pg-pool.ts
 import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../auth/portal-identity.ts";
-import { boundTenant } from "../../plugins/chassis/src/tenant.ts";
-import { signedRequestHeaders, TENANT_HEADER } from "../../plugins/chassis/src/source-auth-sign.ts";
+import { signedRequestHeaders } from "../../plugins/chassis/src/source-auth-sign.ts";
 import { loadConfig, type Config } from "../config.ts";
 import { errMessage } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
@@ -98,11 +97,7 @@ export async function stagingApiHeaders(
   base: Record<string, string> = {},
   nowMs = Date.now(),
 ): Promise<Record<string, string>> {
-  const tenant = base[TENANT_HEADER] ?? boundTenant();
-  const portalIdentity = await mintPortalIdentity(
-    { p: principalId, exp: nowMs + 60_000, ...(tenant ? { t: tenant } : {}) },
-    portalIdentitySecret,
-  );
+  const portalIdentity = await mintPortalIdentity({ p: principalId, exp: nowMs + 60_000 }, portalIdentitySecret);
   return signedRequestHeaders(
     sourceSecret,
     method,
