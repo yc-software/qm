@@ -2389,9 +2389,6 @@ test("pauseStampAfterToolCall stamps terminate on sibling results once the turn 
 
   ref.pausedOnApproval = true;
   assert.deepEqual(await hook({}, undefined), { terminate: true });
-
-  const withPrior = pauseStampAfterToolCall(ref, () => ({ terminate: false }));
-  assert.deepEqual(await withPrior({}, undefined), { terminate: true });
 });
 
 test("execute output is external regardless of what the command looks like", async () => {

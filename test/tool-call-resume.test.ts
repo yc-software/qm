@@ -10,8 +10,8 @@ import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import type { Agent, AgentTurnInput } from "../src/agent/agent.ts";
-import { bridgedTools, resumeInterruptedToolCall } from "../src/agent/turn-support.ts";
-import type { ToolContextRef } from "../src/agent/agent-tools.ts";
+import { resumeInterruptedToolCall, type BridgedTool } from "../src/agent/turn-support.ts";
+import { createAgentTools, type ToolContextRef } from "../src/agent/agent-tools.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
@@ -92,7 +92,7 @@ test("resumeInterruptedToolCall re-runs the recorded input exactly once and reco
   const emit: ToolContextRef["emit"] = (item) => turn.emit(item);
   const ref: ToolContextRef = { current: tools, emit, scopeLabel: personal, orgScopeId: turn.orgScopeId };
 
-  const resumed = await resumeInterruptedToolCall(turn, ref, bridgedTools(ref, {}));
+  const resumed = await resumeInterruptedToolCall(turn, ref, createAgentTools(ref) as unknown as BridgedTool[]);
 
   assert.deepEqual(queries, ["budget"], "the tool body ran exactly once with the stripped input");
   assert.deepEqual(
@@ -127,7 +127,7 @@ test("resumeInterruptedToolCall does nothing without a call to resume", async ()
   const tools = historyToolContext(queries);
   const idle = turnFor([danglingCall], undefined, sink, tools);
   const ref: ToolContextRef = { current: tools, emit: (item) => idle.emit(item), scopeLabel: personal };
-  assert.equal(await resumeInterruptedToolCall(idle, ref, bridgedTools(ref, {})), null);
+  assert.equal(await resumeInterruptedToolCall(idle, ref, createAgentTools(ref) as unknown as BridgedTool[]), null);
   assert.deepEqual(queries, []);
   assert.deepEqual(sink, []);
 });
@@ -138,7 +138,7 @@ test("when the tool is unavailable on the retried turn the call is closed as int
   const tools = historyToolContext(queries);
   const missing = turnFor([danglingCall], { callId: "c-x", tool: "no_such_tool", input: {} }, sink, tools);
   const ref: ToolContextRef = { current: tools, emit: (item) => missing.emit(item), scopeLabel: personal };
-  const resumed = await resumeInterruptedToolCall(missing, ref, bridgedTools(ref, {}));
+  const resumed = await resumeInterruptedToolCall(missing, ref, createAgentTools(ref) as unknown as BridgedTool[]);
   assert.ok(resumed);
   assert.equal(resumed.message.isError, true);
   assert.equal(resumed.message.content[0]!.text, INTERRUPTED_TOOL_RESULT);
@@ -162,7 +162,7 @@ test("a cancelled turn does not re-run anything and closes the call as interrupt
   );
   turn.cancel = AbortSignal.abort();
   const ref: ToolContextRef = { current: tools, emit: (item) => turn.emit(item), scopeLabel: personal };
-  const resumed = await resumeInterruptedToolCall(turn, ref, bridgedTools(ref, {}));
+  const resumed = await resumeInterruptedToolCall(turn, ref, createAgentTools(ref) as unknown as BridgedTool[]);
   assert.equal(resumed?.message.isError, true);
   assert.deepEqual(queries, []);
   assert.equal(sink.length, 1);
@@ -183,7 +183,7 @@ test("a tool that throws during the re-run still records an error result so the 
     tools,
   );
   const ref: ToolContextRef = { current: tools, emit: (item) => turn.emit(item), scopeLabel: personal };
-  const resumed = await resumeInterruptedToolCall(turn, ref, bridgedTools(ref, {}));
+  const resumed = await resumeInterruptedToolCall(turn, ref, createAgentTools(ref) as unknown as BridgedTool[]);
   assert.ok(resumed);
   assert.equal(resumed.message.isError, true);
   assert.match(resumed.message.content[0]!.text ?? "", /transcript index offline/);

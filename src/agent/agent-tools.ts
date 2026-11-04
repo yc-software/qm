@@ -128,16 +128,8 @@ export function endedOnPurpose(ref: {
 
 export function pauseStampAfterToolCall(
   ref: Pick<ToolContextRef, "pausedOnApproval" | "silentRequested" | "runtimeHandoff" | "swarmHeld">,
-  prior?: (
-    info: unknown,
-    signal?: unknown,
-  ) => Promise<{ terminate?: boolean } | undefined> | { terminate?: boolean } | undefined,
 ): (info: unknown, signal?: unknown) => Promise<{ terminate?: boolean } | undefined> {
-  return async (info, signal) => {
-    const upstream = prior ? await prior(info, signal) : undefined;
-    if (endedOnPurpose(ref)) return { ...upstream, terminate: true };
-    return upstream;
-  };
+  return async () => (endedOnPurpose(ref) ? { terminate: true } : undefined);
 }
 
 export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions): ToolDefinition[] {
