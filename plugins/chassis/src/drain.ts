@@ -22,6 +22,7 @@ export function drainOnSigterm(server: Server, label: string): void {
     for (const res of open) if (!res.headersSent) res.shouldKeepAlive = false;
     server.closeIdleConnections();
     setTimeout(() => {
+      console.warn(`[${label}] drain overran ${DEADLINE_MS} ms; closing ${open.size} open responses`);
       server.closeAllConnections();
       exit();
     }, DEADLINE_MS).unref();

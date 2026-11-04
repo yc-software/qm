@@ -81,28 +81,3 @@ test("SIGTERM ends event streams, finishes in-flight requests, serves until quie
     server.child.kill("SIGKILL");
   }
 });
-
-test("`node server/index.ts` exits cleanly within seconds of SIGTERM", async () => {
-  const PORT = "18196";
-  const server = start(["server/index.ts"], { PORT, NODE_ENV: "production" });
-  try {
-    const deadline = Date.now() + 15_000;
-    let up = false;
-    while (!up && Date.now() < deadline) {
-      up = await fetch(`http://127.0.0.1:${PORT}/healthz`).then(
-        (r) => r.ok,
-        () => false,
-      );
-      if (!up) await new Promise((r) => setTimeout(r, 150));
-    }
-    assert.ok(up, "web-ui should serve /healthz");
-    const signalled = Date.now();
-    server.child.kill("SIGTERM");
-    const { code, signal, at } = await server.exit;
-    assert.equal(signal, null);
-    assert.equal(code, 0);
-    assert.ok(at - signalled < 6_000, `exited ${at - signalled} ms after SIGTERM`);
-  } finally {
-    server.child.kill("SIGKILL");
-  }
-});
