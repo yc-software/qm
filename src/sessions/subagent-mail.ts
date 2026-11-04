@@ -173,7 +173,7 @@ async function wakeParent(
 ): Promise<"woken" | "busy" | "settled"> {
   const { meta, prepared } = turn;
   const existing = await deps.runs.getByDedupKey(wake.dedupKey);
-  if (!(await deps.mailbox.pending(parent.id)).some((message) => message.id === mailId)) {
+  if (!(await deps.mailbox.unread(parent.id, mailId))) {
     if (existing?.status === "pending") await deps.runs.withdraw(existing.id, { unstartedOnly: true });
     return "settled";
   }
@@ -275,8 +275,7 @@ async function wakeParentForMail(
 ): Promise<"woken" | "busy" | "settled" | undefined> {
   if (parent.parentSessionId || !deps.runs.get) return undefined;
   const runs = { get: deps.runs.get };
-  for (const message of await deps.mailbox.pending(parent.id)) {
-    if (!message.wake) continue;
+  for (const message of await deps.mailbox.wakesFor(parent.id)) {
     const wake = messageWake(message.id);
     const existing = await deps.runs.getByDedupKey(wake.dedupKey);
     const child = await deps.sessions.get(message.senderId);
