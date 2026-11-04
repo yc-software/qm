@@ -310,12 +310,105 @@ test("read lists children with status and renders a child's recent transcript", 
   assert.ok(list.ok && list.mode === "children");
   assert.equal(list.children.length, 1);
   assert.equal(list.children[0]!.title, "research_callers");
-  assert.equal(list.children[0]!.status, "pending");
+  assert.equal(list.children[0]!.activity.status, "pending");
   assert.match(list.children[0]!.lastSaid ?? "", /3 call sites/);
 
   const transcript = await syscalls.read({ target: "research_callers" });
   assert.ok(transcript.ok && transcript.mode === "transcript");
   assert.match(transcript.rendered, /found 3 call sites/);
+});
+
+test("read reports each child's latest tool step, last outcome, live descendants and unread mail", async () => {
+  const r = await rig();
+  const syscalls = r.syscallsFor(r.room);
+  const children = new Map<string, Session>();
+  for (const name of ["worker", "finisher", "stopper"]) {
+    const out = await syscalls.open({ task: `task for ${name}`, name });
+    assert.ok(out.ok);
+    children.set(name, await freshSession(r.sessions, out.sessionId));
+  }
+  const claim = async (name: string) => {
+    const session = children.get(name);
+    assert.ok(session);
+    const [queued] = await r.runs.inFlightForThread(session.threadRef);
+    assert.ok(queued);
+    const claimed = await r.runs.claimById(queued.id, "w1", 60_000);
+    assert.ok(claimed?.leaseToken);
+    return { session, run: queued, leaseToken: claimed.leaseToken };
+  };
+  const working = await claim("worker");
+  const step = (callId: string, tool: string, body: Record<string, unknown>) =>
+    r.sessions.append(
+      { sessionId: working.session.id },
+      { kind: "ToolCall", tool, callId, turnId: working.run.id, body },
+    );
+  await step("c1", "execute", { purpose: "Running tests" });
+  await step("c2", "files", {});
+  const grandchild = await r.sessions.getOrCreateByThread(
+    "agent:main:subagent:grandchild",
+    "dm",
+    scope,
+    undefined,
+    "slack",
+  );
+  await r.sessions.setParentSession(grandchild.id, working.session.id);
+  await r.runs.enqueue({ sessionId: grandchild.threadRef, request: working.run.request });
+  await r.mailbox.send({
+    id: "fyi-1",
+    recipientId: working.session.id,
+    senderId: r.room.id,
+    actor,
+    text: "fyi",
+    audience: [actor],
+    createdAt: Date.now(),
+  });
+  const finished = await claim("finisher");
+  await r.runs.complete(finished.run.id, finished.leaseToken, { status: "ok", reply: "done" });
+  const halted = await claim("stopper");
+  await r.runs.complete(halted.run.id, halted.leaseToken, { status: "ok", reply: "", stopped: true });
+
+  const list = await syscalls.read({});
+  assert.ok(list.ok && list.mode === "children");
+  const byTitle = new Map(list.children.map((child) => [child.title, child.activity]));
+  const running = byTitle.get("worker");
+  assert.equal(running?.status, "running");
+  assert.equal(running?.tool, "files", "the latest tool step names its tool");
+  assert.equal(running?.purpose, "Running tests", "a step without a purpose keeps the latest stated purpose");
+  assert.ok(running?.stepAgoMs !== undefined && running.stepAgoMs < 60_000);
+  assert.equal(running?.liveDescendants, 1);
+  assert.equal(running?.unread, 1);
+  assert.equal(running?.outcome, undefined, "a child with no finished run has no last outcome");
+  assert.deepEqual(
+    { status: byTitle.get("finisher")?.status, outcome: byTitle.get("finisher")?.outcome },
+    { status: "idle", outcome: "final_answer" },
+  );
+  assert.equal(byTitle.get("stopper")?.outcome, "stopped");
+  assert.equal(byTitle.get("finisher")?.liveDescendants, 0);
+
+  const transcript = await syscalls.read({ target: "worker" });
+  assert.ok(transcript.ok && transcript.mode === "transcript");
+  assert.equal(transcript.activity.status, "running");
+
+  assert.ok(syscalls.liveSubagents);
+  const note = await syscalls.liveSubagents();
+  assert.match(note, /^Subagents opened from this conversation that are still running or queued:\n- worker \(/);
+  assert.doesNotMatch(note, /finisher|stopper/);
+});
+
+test("the live-subagents note is empty when no child is running or queued", async () => {
+  const r = await rig();
+  const syscalls = r.syscallsFor(r.room);
+  assert.ok(syscalls.liveSubagents);
+  assert.equal(await syscalls.liveSubagents(), "");
+  const opened = await syscalls.open({ task: "one quick thing", name: "quick" });
+  assert.ok(opened.ok);
+  const child = await freshSession(r.sessions, opened.sessionId);
+  const [queued] = await r.runs.inFlightForThread(child.threadRef);
+  assert.ok(queued);
+  const claimed = await r.runs.claimById(queued.id, "w1", 60_000);
+  assert.ok(claimed?.leaseToken);
+  await r.runs.complete(queued.id, claimed.leaseToken, { status: "ok", reply: "done" });
+  assert.equal(await syscalls.liveSubagents(), "");
 });
 
 test("a finished child durably wakes its Slack parent exactly once and leaves the result in its mailbox", async () => {

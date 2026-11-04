@@ -118,7 +118,7 @@ import type {
   RuntimeChoice,
   SessionRoute,
 } from "../agent/agent.ts";
-import { forModelContext, forSearchView } from "../agent/context-compaction.ts";
+import { compactedSinceLastTurn, forModelContext, forSearchView } from "../agent/context-compaction.ts";
 import {
   quarantineReleaseKey,
   securityScreenChunks,
@@ -2505,6 +2505,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           );
 
         const canInstallCanvas = deps.installSharedCanvas && liveTurn && actorFeatures.has("ui_canvas");
+        const turnSessionSyscalls = sessionSyscalls?.forTurn({
+          session,
+          scopeId: scopeId as ScopeId,
+          orgScopeId: resolution.orgScopeId,
+          liveTurn,
+          request: { ...input, readOnly: strictReadOnly, cancel: turnAbort.signal },
+        });
         const baseTools = createToolContext({
           desktopClientId: desktopClientForTurn(input),
           ...(canInstallCanvas
@@ -2584,17 +2591,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(humanInput && !external ? { humanTurn: true } : {}),
           ...(deps.toolOutput ? { toolOutput: deps.toolOutput, sessionId: session.id } : {}),
           ...(surfaceToolDeps ? { surface: surfaceToolDeps } : {}),
-          ...(sessionSyscalls
-            ? {
-                sessionSyscalls: sessionSyscalls.forTurn({
-                  session,
-                  scopeId: scopeId as ScopeId,
-                  orgScopeId: resolution.orgScopeId,
-                  liveTurn,
-                  request: { ...input, readOnly: strictReadOnly, cancel: turnAbort.signal },
-                }),
-              }
-            : {}),
+          ...(turnSessionSyscalls ? { sessionSyscalls: turnSessionSyscalls } : {}),
           ...(strictReadOnly ? {} : { attach: attachStaging.attach }),
           memory: context.memory,
           memoryCaptureMetadata: () => ({ sessionId: session.id, inheritedFacts: captureDependencies() }),
@@ -2941,6 +2938,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           unscreenedNote,
           input.conversationHeader?.trim(),
           ...turnEvents,
+          turnSessionSyscalls?.liveSubagents && (sessionTurn || automatedTurn || compactedSinceLastTurn(history))
+            ? await turnSessionSyscalls.liveSubagents().catch(swallowAs("orchestrator: live subagents note", ""))
+            : "",
           deps.keychain
             ? await askResolutionEvents(
                 scopeAskList,

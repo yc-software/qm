@@ -5,7 +5,7 @@ import { createCurrentScopeMembers } from "../resolution/scope-membership.ts";
 import { notifyDeploymentShared } from "../deploy/share-notice.ts";
 import { deploymentShareScope } from "../deploy/email-access.ts";
 import { workingSessionThreadRefs } from "../sessions/session-syscalls.ts";
-import type { ParticipantPageQuery } from "../sessions/session-store.ts";
+import type { ParticipantPageQuery, ToolStep } from "../sessions/session-store.ts";
 import type { PendingApprovalRecord, ScopeId, Session } from "../types.ts";
 import { isUserItem, type Item, messageTs, proseText } from "../sessions/items.ts";
 import { orgId as orgIdOf } from "../config.ts";
@@ -349,14 +349,14 @@ export function createSessionMethods(
       const run = s.parentSessionId ? currentRuns.get(s.threadRef) : undefined;
       return run ? [{ id: s.id, run }] : [];
     });
-    const purposes = childRuns.length
+    const steps = childRuns.length
       ? await deps.sessions
-          .latestToolPurposes(childRuns.map(({ run }) => run.id))
-          .catch(swallowAs("app sessions: subagent purposes", new Map<string, string>()))
-      : new Map<string, string>();
+          .latestToolSteps(childRuns.map(({ run }) => run.id))
+          .catch(swallowAs("app sessions: subagent purposes", new Map<string, ToolStep>()))
+      : new Map<string, ToolStep>();
     const workingChildren = new Map(
       childRuns.map(({ id, run }) => {
-        const purpose = purposes.get(run.id.toLowerCase());
+        const purpose = steps.get(run.id.toLowerCase())?.purpose;
         return [id, { workingSince: run.startedAt ?? run.createdAt, ...(purpose ? { purpose } : {}) }];
       }),
     );

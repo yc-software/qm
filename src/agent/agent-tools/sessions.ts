@@ -1,6 +1,7 @@
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { text, type ToolKit } from "./kit.ts";
+import { renderSubagentActivity } from "../../sessions/subagent-status.ts";
 
 export function sessionTools(kit: ToolKit) {
   const { ref, opts, recordCall, recordResult, recordCoreAuthoredResult } = kit;
@@ -193,7 +194,8 @@ export function sessionTools(kit: ToolKit) {
       }
       if (result.mode === "children") {
         const lines = result.children.map(
-          (c) => `- ${c.title} (${c.sessionId}) — ${c.status}${c.lastSaid ? ` — last said: ${c.lastSaid}` : ""}`,
+          (c) =>
+            `- ${c.title} (${c.sessionId}) — ${renderSubagentActivity(c.activity)}${c.lastSaid ? ` — last said: ${c.lastSaid}` : ""}`,
         );
         return recordResult(
           callId,
@@ -203,8 +205,14 @@ export function sessionTools(kit: ToolKit) {
       }
       return recordResult(
         callId,
-        { tool: "subagents", action: "read", sessionId: result.sessionId, title: result.title, status: result.status },
-        text(`"${result.title}" — ${result.status}\n${result.rendered}`),
+        {
+          tool: "subagents",
+          action: "read",
+          sessionId: result.sessionId,
+          title: result.title,
+          status: result.activity.status,
+        },
+        text(`"${result.title}" — ${renderSubagentActivity(result.activity)}\n${result.rendered}`),
       );
     },
   });
@@ -323,8 +331,14 @@ export function sessionTools(kit: ToolKit) {
       if (result.mode === "children") return fail("read requires `target`: a sessionId from list.");
       return recordResult(
         callId,
-        { tool: "sessions", action: "read", sessionId: result.sessionId, title: result.title, status: result.status },
-        text(`"${result.title}" — ${result.status}\n${result.rendered}`),
+        {
+          tool: "sessions",
+          action: "read",
+          sessionId: result.sessionId,
+          title: result.title,
+          status: result.activity.status,
+        },
+        text(`"${result.title}" — ${result.activity.status}\n${result.rendered}`),
       );
     },
   });

@@ -3847,6 +3847,74 @@ test("thrown execution errors leave pending child messages for the next delivere
   }
 });
 
+test("subagents read renders each child's liveness compactly", async () => {
+  const tc = fakeToolContext();
+  tc.sessionSyscalls = {
+    open: async () => ({ ok: false, message: "unused" }),
+    write: async () => ({ ok: false, message: "unused" }),
+    read: async (input) =>
+      input.target
+        ? {
+            ok: true,
+            mode: "transcript",
+            sessionId: "s1",
+            title: "builder",
+            activity: { status: "idle", outcome: "final_answer", liveDescendants: 0, unread: 0 },
+            rendered: "AgentMessage#4 done",
+          }
+        : {
+            ok: true,
+            mode: "children",
+            children: [
+              {
+                sessionId: "s1",
+                title: "builder",
+                activity: {
+                  status: "running",
+                  stepAgoMs: 42_000,
+                  tool: "execute",
+                  purpose: "Running tests",
+                  outcome: "final_answer",
+                  liveDescendants: 2,
+                  unread: 1,
+                },
+                lastSaid: "on it",
+              },
+              {
+                sessionId: "s2",
+                title: "fresh",
+                activity: { status: "running", startedAgoMs: 5_000, liveDescendants: 0, unread: 0 },
+              },
+              {
+                sessionId: "s3",
+                title: "reviewer",
+                activity: {
+                  status: "idle",
+                  stepAgoMs: 7_200_000,
+                  tool: "files",
+                  outcome: "errored",
+                  liveDescendants: 0,
+                  unread: 0,
+                },
+              },
+            ],
+          },
+  };
+  const subagents = createAgentTools({ current: tc }).find((tool) => tool.name === "subagents")!;
+  assert.equal(
+    textOut(await call(subagents, { action: "read" })),
+    [
+      "- builder (s1) — running; last step execute 42s ago; latest purpose: Running tests; 2 live descendants; 1 unread message — last said: on it",
+      "- fresh (s2) — running; started 5s ago, no tool step yet",
+      "- reviewer (s3) — idle; last turn errored; last step files 2h ago",
+    ].join("\n"),
+  );
+  assert.equal(
+    textOut(await call(subagents, { action: "read", target: "builder" })),
+    '"builder" — idle; last turn final_answer\nAgentMessage#4 done',
+  );
+});
+
 test("subagents and sessions are separate tools with one noun each", async () => {
   const writes: Array<{ wake?: boolean; target: string; text?: string }> = [];
   const starts: Array<{ fork: boolean; text?: string; title?: string }> = [];

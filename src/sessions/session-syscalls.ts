@@ -20,6 +20,18 @@ import type { Run, RunStore } from "../runs/run-store.ts";
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
 import type { SessionStore } from "./session-store.ts";
 import { xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
+import {
+  liveSubagentsNote,
+  runState,
+  sessionActivity,
+  subagentActivity,
+  subagentOutcome,
+  visibleChildren,
+  type RunState,
+  type SubagentActivity,
+  type SubagentActivityDeps,
+  type SubagentMailKind,
+} from "./subagent-status.ts";
 
 const SUBAGENT_THREAD_PREFIX = "agent:main:subagent:";
 
@@ -204,7 +216,7 @@ interface SessionReadInput {
 interface SessionChildSummary {
   sessionId: string;
   title: string;
-  status: "running" | "pending" | "idle";
+  activity: SubagentActivity;
   lastSaid?: string;
 }
 
@@ -220,7 +232,7 @@ type SessionStartResult =
 interface SessionSummary {
   sessionId: string;
   title: string;
-  status: "running" | "pending" | "idle";
+  status: RunState;
   current: boolean;
 }
 
@@ -228,7 +240,7 @@ type SessionListResult = { ok: true; sessions: SessionSummary[] } | { ok: false;
 
 type SessionReadResult =
   | { ok: true; mode: "children"; children: SessionChildSummary[] }
-  | { ok: true; mode: "transcript"; sessionId: string; title: string; status: string; rendered: string }
+  | { ok: true; mode: "transcript"; sessionId: string; title: string; activity: SubagentActivity; rendered: string }
   | { ok: false; message: string };
 
 interface SessionSyscallBinding {
@@ -265,6 +277,7 @@ export interface SessionSyscalls {
   open(input: SessionOpenInput): Promise<SessionOpenResult>;
   write(input: SessionWriteInput): Promise<SessionWriteResult>;
   read(input: SessionReadInput): Promise<SessionReadResult>;
+  liveSubagents?(): Promise<string>;
   search?(input: { query: string; limit?: number }): ReturnType<CoreSearch["search"]>;
   list?(): Promise<SessionListResult>;
   start?(input: SessionStartInput): Promise<SessionStartResult>;
@@ -291,8 +304,10 @@ export interface SessionSyscallDeps {
     | "latestItemSeq"
     | "visibleItems"
     | "getForParticipant"
-  >;
-  runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "getByDedupKey" | "get" | "withdraw">;
+  > &
+    SubagentActivityDeps["sessions"];
+  runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "getByDedupKey" | "get" | "withdraw"> &
+    SubagentActivityDeps["runs"];
   signals: Pick<RunSignalStore, "send" | "pending">;
   maxAttempts: number;
   advisoryLock: AdvisoryLock;
@@ -368,8 +383,6 @@ function renderSubagentMessage(sender: { title: string; sessionId: string }, tex
     "</subagent-message>",
   ].join("\n");
 }
-
-export type SubagentMailKind = "final_answer" | "no_reply" | "awaiting_input" | "errored" | "refused";
 
 export function renderSubagentMail(input: {
   title: string;
@@ -579,12 +592,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
         if (target.parentSessionId || isSubagentThreadRef(target.threadRef) || target.threadRef.startsWith("swarm:"))
           return `"${target.title?.trim() || target.id}" is a subagent, not a session — use the subagents tool for it.`;
         return null;
-      }
-
-      async function statusOf(session: Session): Promise<"running" | "pending" | "idle"> {
-        const inFlight = await deps.runs.inFlightForThread(session.threadRef);
-        if (inFlight.some((r) => r.status === "running")) return "running";
-        return inFlight.length ? "pending" : "idle";
       }
 
       const visibleTitle = (target: Session) => target.title?.trim() || target.id;
@@ -888,19 +895,16 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
         async read(input) {
           await currentCaller();
           if (!input.target?.trim()) {
-            const children = await deps.sessions.childrenOf(binding.session.id);
             const summaries: SessionChildSummary[] = [];
-            for (const child of children) {
-              if (
-                child.scopeId !== binding.scopeId ||
-                !(await deps.sessions.getForParticipant(child.id, binding.request.actor.id))
-              )
-                continue;
+            for (const { session: child, activity } of await subagentActivity(
+              deps,
+              await visibleChildren(deps, binding),
+            )) {
               const said = lastAssistantText((await visibleHistory(child)).slice(-LAST_SAID_SCAN));
               summaries.push({
                 sessionId: child.id,
                 title: visibleTitle(child),
-                status: await statusOf(child),
+                activity,
                 ...(said ? { lastSaid: snippet(said, 200) } : {}),
               });
             }
@@ -934,9 +938,12 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
             mode: "transcript",
             sessionId: target.id,
             title: visibleTitle(target),
-            status: await statusOf(target),
+            activity: await sessionActivity(deps, target),
             rendered: rendered || "[no readable entries yet]",
           };
+        },
+        async liveSubagents() {
+          return liveSubagentsNote(await subagentActivity(deps, await visibleChildren(deps, binding)), visibleTitle);
         },
         async search(input) {
           const caller = await currentCaller();
@@ -981,14 +988,13 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           const recent = visible
             .sort((a, b) => (b.lastActivityAt ?? b.createdAt) - (a.lastActivityAt ?? a.createdAt))
             .slice(0, SESSION_LIST_LIMIT);
-          const sessions: SessionSummary[] = [];
-          for (const session of recent)
-            sessions.push({
-              sessionId: session.id,
-              title: session.title?.trim() || "Untitled",
-              status: await statusOf(session),
-              current: session.id === binding.session.id,
-            });
+          const active = await deps.runs.activeForThreads(recent.map((session) => session.threadRef));
+          const sessions: SessionSummary[] = recent.map((session) => ({
+            sessionId: session.id,
+            title: session.title?.trim() || "Untitled",
+            status: runState(active.get(session.threadRef)),
+            current: session.id === binding.session.id,
+          }));
           return { ok: true, sessions };
         },
         async start(input) {
@@ -1081,27 +1087,9 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
       };
   const title = child.title?.trim() || child.id;
   const result = run.result;
-  let kind: SubagentMailKind;
-  let body: string;
-  if (run.status === "failed" || result?.status === "failed") {
-    kind = "errored";
-    body = snippet(result?.reason ?? "the turn failed", MAIL_ERROR_CAP);
-  } else if (result?.pendingApprovals?.length || result?.status === "pending_approval") {
-    kind = "awaiting_input";
-    body = snippet(
-      result.pendingApprovals?.map((a) => a.command).join("; ") ?? "a command needs human approval",
-      MAIL_ERROR_CAP,
-    );
-  } else if (result?.status === "refused") {
-    kind = "refused";
-    body = snippet(result.reason ?? "the turn was refused", MAIL_ERROR_CAP);
-  } else if (result?.status === "ok" && (result.reply?.trim() || result.attachments?.length)) {
-    kind = "final_answer";
-    body = result.reply?.trim() || `Produced ${result.attachments!.map((file) => file.name).join(", ")}.`;
-  } else {
-    kind = "no_reply";
-    body = "completed without sending a reply.";
-  }
+  const outcome = subagentOutcome(run);
+  const kind = outcome.kind;
+  const body = kind === "final_answer" ? outcome.body : snippet(outcome.body, MAIL_ERROR_CAP);
   const text = renderSubagentMail({
     title,
     sessionId: child.id,
