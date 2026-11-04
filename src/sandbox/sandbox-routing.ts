@@ -10,6 +10,7 @@ import {
 import { swallow, swallowAs } from "../util/errors.ts";
 import {
   CapabilityUnsupportedError,
+  removeDirAndList,
   SandboxProvisionCleanupError,
   supportsBlobStaging,
   supportsProcessSessions,
@@ -165,14 +166,7 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
       return useHandle(handle, remove);
     },
     removeDirAndList(handle, removeRelDir, listRelDir) {
-      return useHandle(handle, async () => {
-        const sandbox = forHandle(handle);
-        if (sandbox.removeDirAndList) return sandbox.removeDirAndList(handle, removeRelDir, listRelDir);
-        await sandbox.removeDir(handle, removeRelDir);
-        return sandbox
-          .listDir(handle, listRelDir)
-          .catch(swallowAs(`sandbox-routing: list ${listRelDir}`, [] as string[]));
-      });
+      return useHandle(handle, () => removeDirAndList(forHandle(handle), handle, removeRelDir, listRelDir));
     },
     teardown(handle, tdOpts?: TeardownOptions): Promise<void> {
       const action = () => forHandle(handle).teardown(handle, tdOpts);

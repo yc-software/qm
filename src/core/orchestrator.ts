@@ -91,7 +91,6 @@ import {
   type PublicServiceCredential,
   type KeychainManifestInput,
 } from "../credentials/keychain.ts";
-import { finishProcessCredentials } from "../credentials/execute-files.ts";
 import { configuredConnectorProviders } from "../credentials/connector-status.ts";
 import { CONNECTOR_HOSTS } from "../connectors/oauth.ts";
 import { SANDBOX_MODEL_PREFIX } from "../api/contract.ts";
@@ -1828,6 +1827,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         provisionResource,
         useSkill,
         reclaimBox,
+        finishProcess,
         invalidateProvision,
       } = createTurnSandboxes({
         deps: { ...deps, sandboxResources: turnSandboxResources, isCurrentSharedScopeMember },
@@ -2278,16 +2278,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 sandbox: deps.sandbox,
                 registry: deps.processes,
                 provisionSandbox: provisionJobSandbox,
-                onExit: (handle, processId) =>
-                  finishProcessCredentials(
-                    {
-                      sandbox: deps.sandbox,
-                      processes: deps.processes!,
-                      ...(deps.keychain ? { keychain: deps.keychain } : {}),
-                    },
-                    handle,
-                    processId,
-                  ),
+                onExit: finishProcess,
                 scopeId: memoryScopeId,
                 sessionRef: conversation.threadRef,
                 ...(deps.backgroundJobTtlMs !== undefined ? { ttlMs: deps.backgroundJobTtlMs } : {}),
