@@ -91,14 +91,19 @@ async function hasInboxLoopPreview(user: string): Promise<boolean> {
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const DIST = join(ROOT, "dist-web");
 
-const brandingCache = createBrandingCache<OrgBranding & { welcomeCohort?: string }>(async () => {
+const brandingCache = createBrandingCache<OrgBranding & { welcomeCohort?: string; orgId?: string }>(async () => {
   const r = await coreFetch("GET", "/v1/surface-config", "", 2_000);
   if (r.status !== 200) throw new Error(`surface-config ${r.status}`);
-  const surface = JSON.parse(r.text) as { branding?: Record<string, unknown>; welcomeCohort?: unknown };
+  const surface = JSON.parse(r.text) as {
+    branding?: Record<string, unknown>;
+    welcomeCohort?: unknown;
+    orgId?: unknown;
+  };
   const b = surface.branding;
   const cohort = typeof surface.welcomeCohort === "string" ? surface.welcomeCohort.trim().slice(0, 40) : "";
   return {
     ...(cohort ? { welcomeCohort: cohort } : {}),
+    ...(typeof surface.orgId === "string" && surface.orgId ? { orgId: surface.orgId } : {}),
     ...(typeof b?.orgName === "string" ? { orgName: b.orgName } : {}),
     ...(typeof b?.accent === "string" ? { accent: b.accent } : {}),
     ...(typeof b?.mark === "string" ? { mark: b.mark } : {}),
@@ -169,6 +174,21 @@ function rememberRun(runId: string, user: string, threadRef: string): void {
 const deliveryClients = new Map<string, Set<ServerResponse>>();
 const clientTenants = new WeakMap<ServerResponse, string | undefined>();
 const hostTenants = coreHostTenants(CORE, CORE_SIGNING_SECRET);
+
+async function tenantOrg(): Promise<string> {
+  return boundTenant() === undefined ? ORG : ((await brandingCache.forRender()).orgId ?? ORG);
+}
+
+async function publicUrlFor(req: IncomingMessage): Promise<string> {
+  const tenant = boundTenant();
+  if (tenant === undefined) return PUBLIC_URL;
+  const host = requestHostname(req);
+  const found = await hostTenants(host).catch(() => undefined);
+  if (!found?.multi || found.tenant !== tenant) return PUBLIC_URL;
+  const url = new URL(PUBLIC_URL);
+  url.host = host;
+  return url.href.replace(/\/$/, "");
+}
 let multiTenant = true;
 
 function ownerOfWebThread(threadRef: string): string | null {
@@ -1365,10 +1385,9 @@ const apiRoutes: readonly WebRoute[] = [
       );
       if (result.status !== 200) return relay(c.res, result);
       const data = JSON.parse(result.text) as { returnTo?: string | null };
-      const base = new URL(PUBLIC_URL);
-      const target = data.returnTo
-        ? new URL(data.returnTo, base)
-        : new URL("./?view=settings", `${PUBLIC_URL.replace(/\/$/, "")}/`);
+      const publicUrl = await publicUrlFor(c.req);
+      const base = new URL(publicUrl);
+      const target = data.returnTo ? new URL(data.returnTo, base) : new URL("./?view=settings", `${publicUrl}/`);
       if (target.origin !== base.origin) return json(c.res, 400, { error: "invalid_return_url" });
       c.res.writeHead(303, { location: target.href });
       c.res.end();
@@ -1390,7 +1409,7 @@ const apiRoutes: readonly WebRoute[] = [
     handle: async (c) => {
       const body = await readJson<{ returnTo?: unknown; state?: unknown }>(c.req, c.res, false);
       if (!body) return;
-      const callback = composioCallbackUrl(PUBLIC_URL, body.returnTo, body.state);
+      const callback = composioCallbackUrl(await publicUrlFor(c.req), body.returnTo, body.state);
       if (!callback) return json(c.res, 400, { error: "invalid_return_url" });
       const url = new URL(callback);
       url.searchParams.delete("composioReturn");
@@ -1438,7 +1457,7 @@ const apiRoutes: readonly WebRoute[] = [
       const body = await readJson<{ toolkit?: unknown; returnTo?: unknown; state?: unknown }>(c.req, c.res, false);
       if (!body) return;
       c.res.setHeader("Cache-Control", "no-store");
-      const callbackUrl = composioCallbackUrl(PUBLIC_URL, body.returnTo, body.state);
+      const callbackUrl = composioCallbackUrl(await publicUrlFor(c.req), body.returnTo, body.state);
       if (!callbackUrl && (body.returnTo !== undefined || body.state !== undefined)) {
         return json(c.res, 400, { error: "invalid_return_url" });
       }
@@ -1495,7 +1514,7 @@ const apiRoutes: readonly WebRoute[] = [
       const cohort = companyBranding.welcomeCohort || welcomeCohort;
       return json(res, 200, {
         user,
-        org: ORG,
+        org: companyBranding.orgId ?? ORG,
         companyName: companyBranding.orgName?.trim() || null,
         ...(analyticsConfig && !resolveIdentity(req)?.impersonator ? { analytics: analyticsConfig } : {}),
         ...(browserErrors && !resolveIdentity(req)?.impersonator ? { browserErrors } : {}),
@@ -1824,7 +1843,7 @@ const apiRoutes: readonly WebRoute[] = [
   ...adminRoutes({
     origin: CORE,
     secret: CORE_SIGNING_SECRET,
-    org: ORG,
+    org: tenantOrg,
     portalHeaders: (): Record<string, string> => {
       const token = portalTokenStore.getStore();
       return token ? { [PORTAL_IDENTITY_HEADER]: token } : {};
@@ -2379,7 +2398,8 @@ const apiRoutes: readonly WebRoute[] = [
     handle: async (c) => {
       const { res, user } = c;
       const provider = c.params.provider!;
-      const callback = `${PUBLIC_URL}/v1/connectors/oauth/${encodeURIComponent(provider)}/callback`;
+      const publicUrl = await publicUrlFor(c.req);
+      const callback = `${publicUrl}/v1/connectors/oauth/${encodeURIComponent(provider)}/callback`;
       const body = await readJson<{ returnTo?: unknown }>(c.req, res);
       if (!body) return;
       const returnTo =
@@ -2387,7 +2407,7 @@ const apiRoutes: readonly WebRoute[] = [
         body.returnTo.startsWith("/") &&
         !body.returnTo.startsWith("//") &&
         !body.returnTo.includes("\\") &&
-        new URL(body.returnTo, PUBLIC_URL).origin === new URL(PUBLIC_URL).origin
+        new URL(body.returnTo, publicUrl).origin === new URL(publicUrl).origin
           ? body.returnTo
           : "/keychain";
       const params = new URLSearchParams({ principalId: user, redirectUri: callback, returnTo });
@@ -3540,8 +3560,8 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (!user) return unauthorized(res, req);
     if (["/api/dictation", "/api/voice", "/api/voice/sessions"].includes(path)) {
       return handleVoiceRoute(req, res, path, resolveIdentity(req)!, {
-        org: ORG,
-        publicUrl: PUBLIC_URL,
+        org: await tenantOrg(),
+        publicUrl: await publicUrlFor(req),
       });
     }
 

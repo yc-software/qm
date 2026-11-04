@@ -12,7 +12,7 @@ interface AdminCtx {
 interface AdminRouteDeps {
   origin: string;
   secret: string | undefined;
-  org: string;
+  org: () => Promise<string>;
   portalHeaders: () => Record<string, string>;
   impersonated: (req: IncomingMessage) => boolean;
   readBody: (req: IncomingMessage) => Promise<string>;
@@ -63,24 +63,24 @@ const ALLOWED: Record<string, string> = {
 };
 
 export function adminRoutes(d: AdminRouteDeps) {
-  const actorHeaders = (user: string) => ({ "x-admin-actor": `${user}@${d.org}`, ...d.portalHeaders() });
+  const actorHeaders = async (user: string) => ({ "x-admin-actor": `${user}@${await d.org()}`, ...d.portalHeaders() });
 
-  const relay = (c: AdminCtx, method: HttpMethod, corePath: string, body = "") =>
+  const relay = async (c: AdminCtx, method: HttpMethod, corePath: string, body = "") =>
     relayCoreStream(c.res, {
       origin: d.origin,
       secret: d.secret,
       method,
       path: corePath,
       body,
-      headers: actorHeaders(c.user),
+      headers: await actorHeaders(c.user),
     });
 
-  const download = (c: AdminCtx, corePath: string) =>
+  const download = async (c: AdminCtx, corePath: string) =>
     relayCoreDownload(c.res, {
       origin: d.origin,
       secret: d.secret,
       path: corePath,
-      headers: actorHeaders(c.user),
+      headers: await actorHeaders(c.user),
       copyHeaders: [
         "content-type",
         "content-length",
@@ -91,7 +91,7 @@ export function adminRoutes(d: AdminRouteDeps) {
       ],
     });
 
-  const upload = (c: AdminCtx) => {
+  const upload = async (c: AdminCtx) => {
     const scope = c.url.searchParams.get("scope") ?? "";
     if (!scope) {
       c.req.resume();
@@ -105,7 +105,7 @@ export function adminRoutes(d: AdminRouteDeps) {
       {
         path: `/v1/admin/files/upload?scope=${encodeURIComponent(scope)}`,
         fields: {},
-        headers: actorHeaders(c.user),
+        headers: await actorHeaders(c.user),
       },
     );
   };
@@ -134,7 +134,7 @@ export function adminRoutes(d: AdminRouteDeps) {
           method: "PUT",
           path: corePath,
           body,
-          headers: actorHeaders(c.user),
+          headers: await actorHeaders(c.user),
         });
         if (saved.status < 300) await d.refreshBranding().catch((err: unknown) => reportBackendError(err));
         c.res.writeHead(saved.status, { "content-type": "application/json", "x-content-type-options": "nosniff" });

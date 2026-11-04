@@ -45,7 +45,7 @@ import {
 import { redactWebhook } from "./webhooks.ts";
 import { selfSpend } from "./admin/spend.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
-import { tenantEnv } from "../../tenants/settings.ts";
+import { loadedTenantSettings, tenantEnv } from "../../tenants/settings.ts";
 import {
   ARTIFACT_TYPES,
   isArtifactType,
@@ -1300,6 +1300,7 @@ async function getSurfaceConfig(ctx: ApiCtx): Promise<void> {
   const configuredPicker = webuiModels?.filter((id) => modelSupported(id)) ?? [];
   const resolvedBase = modelSupported(baseModel ?? undefined) ? baseModel! : defaultModel(deps.baseModelDefault);
   const welcomeCohort = tenantEnv("WEB_UI_WELCOME_COHORT")?.trim().slice(0, 40);
+  const tenantOrg = loadedTenantSettings().orgId;
   const resolvedBranding = {
     ...(branding.orgName ? { orgName: branding.orgName } : {}),
     ...(branding.accent ? { accent: branding.accent } : {}),
@@ -1322,6 +1323,7 @@ async function getSurfaceConfig(ctx: ApiCtx): Promise<void> {
     externalSlackParticipants,
     ...(Object.keys(resolvedBranding).length ? { branding: resolvedBranding } : {}),
     ...(welcomeCohort ? { welcomeCohort } : {}),
+    ...(tenantOrg ? { orgId: tenantOrg } : {}),
   });
 }
 
