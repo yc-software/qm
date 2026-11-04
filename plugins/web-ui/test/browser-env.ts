@@ -80,6 +80,7 @@ export async function browserEnv(
     vite = await createServer({
       server: { middlewareMode: true, hmr: false, ws: false },
       appType: "custom",
+      optimizeDeps: { noDiscovery: true },
       plugins: options.plugins,
     });
   } catch (error) {
