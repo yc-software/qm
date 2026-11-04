@@ -112,6 +112,28 @@ describe("host routing", { skip }, () => {
     const tokenB = await withTenant(b, () => mintCapabilityToken(claims, SECRET));
     assert.deepEqual(await seen({ host: "core.internal", [CAPABILITY_HEADER]: tokenB }), [2]);
   });
+
+  it("refuses a deleted tenant's host, even with a live tenant's credential, until the host is mapped again", async () => {
+    const gone = randomUUID();
+    await owner.query("INSERT INTO tenants(id) VALUES ($1)", [gone]);
+    assert.equal(await tenancy.mapHost(gone, "gone.example.test"), "mapped");
+    await owner.query("DELETE FROM tenants WHERE id = $1", [gone]);
+    const fresh = createTenancy(appPool, ownerPool);
+    assert.deepEqual(await fresh.hostTenant("gone.example.test"), { multi: true, retired: true });
+    const tokenA = await withTenant(a, () => mintCapabilityToken(claims, SECRET));
+    const req = new IncomingMessage(new Socket());
+    req.headers = { host: "gone.example.test", [CAPABILITY_HEADER]: tokenA };
+    const res = new ServerResponse(req);
+    let reached = false;
+    await withRequestTenant(req, res, { auth: "source" }, SECRET, fresh, () => {
+      reached = true;
+    });
+    assert.equal(reached, false);
+    assert.equal(res.statusCode, 421);
+    assert.equal(await fresh.mapHost(a, "gone.example.test"), "mapped");
+    assert.deepEqual(await fresh.hostTenant("gone.example.test"), { tenant: a, multi: true });
+    assert.equal(await fresh.unmapHost(a, "gone.example.test"), true);
+  });
 });
 
 describe("tenant settings", { skip }, () => {
