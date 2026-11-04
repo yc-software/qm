@@ -24,12 +24,17 @@ const settings = new Map<string, TenantSignIn>([
   ],
 ]);
 
+const hosts = new Map([
+  ["127.0.0.1", TENANT_A],
+  ["localhost", TENANT_B],
+]);
+
 async function twoTenantHarness(): Promise<{ h: Harness; a: string; b: string }> {
   const h = await startHarness({
-    hostTenants: async (host) => ({
-      multi: true,
-      ...(host === "127.0.0.1" ? { tenant: TENANT_A } : host === "localhost" ? { tenant: TENANT_B } : {}),
-    }),
+    hostTenants: async (host) => {
+      const tenant = hosts.get(host);
+      return tenant ? { multi: true, tenant } : { multi: true };
+    },
     signIn: async () => settings.get(boundTenant() ?? "") ?? {},
   });
   const port = new URL(h.base).port;
