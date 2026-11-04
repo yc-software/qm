@@ -42,6 +42,7 @@ import type { RuntimeChoice } from "../agent/agent.ts";
 import { modelDisplayName } from "../model/pi-models.ts";
 import type { ConversationEvent } from "../loops/sources/adapter.ts";
 import { slackConversationRef } from "../loops/sources/slack.ts";
+import { boundTenant, installTenantNow } from "../tenants/context.ts";
 
 interface SlackRunHooks {
   onReplying?(): void;
@@ -162,6 +163,14 @@ export interface SlackCoreClientDeps {
   surfaceCache?: SurfaceCache;
   memory?: MemoryService;
   inboxEvent?(event: ConversationEvent): Promise<void>;
+}
+
+// Each tenant's workspace dispatches and syncs under its own lease. The install tenant keeps the
+// unqualified key, so single-tenant installs and mixed-version rollouts still exclude each other.
+function tenantLeaseKey(key: string): string {
+  const tenant = boundTenant();
+  const install = installTenantNow();
+  return tenant === undefined || install === undefined || tenant === install ? key : `${key}:tenant:${tenant}`;
 }
 
 const RUN_FALLBACK_POLL_MS = 1_000;
@@ -414,10 +423,10 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
       return deps.app.pendingDeliveries(type, claimMs);
     },
     holdDeliveryDispatch(fn) {
-      return lease.hold("slack:delivery-dispatch", fn);
+      return lease.hold(tenantLeaseKey("slack:delivery-dispatch"), fn);
     },
     holdDirectorySync(fn) {
-      return lease.hold("slack:directory-sync", fn);
+      return lease.hold(tenantLeaseKey("slack:directory-sync"), fn);
     },
     holdEnvelopeReplay(account, fn) {
       return lease.hold(`slack:envelope-replay:${account}`, fn);

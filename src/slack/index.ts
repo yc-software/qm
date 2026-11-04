@@ -1,4 +1,5 @@
 import { inTenantOf } from "../tenants/claim.ts";
+import { installTenantNow } from "../tenants/context.ts";
 import { continueInPrivate } from "./private-continuation.ts";
 import { externalSlackNamespace, type ExternalSlackAccess } from "./external-access.ts";
 import { registerKeychainApprovalActions } from "./keychain-approvals.ts";
@@ -55,6 +56,18 @@ const slackAccountClients = new Map<
   }
 >();
 
+// One process serves every tenant's workspace, so an account is keyed by its tenant as well as its id.
+// Accounts started without a tenant (operator-configured extra accounts) stay reachable from the install tenant.
+const accountKey = (tenantId: string | undefined, accountId: string): string => `${tenantId ?? ""}\u0000${accountId}`;
+function slackAccountFor(tenantId: string | undefined, accountId: string) {
+  const own = slackAccountClients.get(accountKey(tenantId, accountId));
+  if (own || tenantId === undefined) return own;
+  const install = installTenantNow();
+  return install === undefined || install === tenantId
+    ? slackAccountClients.get(accountKey(undefined, accountId))
+    : undefined;
+}
+
 export async function startSlackPlugin(
   cfg: SlackPluginConfig,
   core: SlackCoreClient,
@@ -97,6 +110,8 @@ export async function startSlackPlugin(
   let stopped = false;
   const CORE_SINGLETON = cfg.coreSingleton !== false;
   const ACCOUNT_LABEL = cfg.accountId ?? "default";
+  const ACCOUNT_KEY = accountKey(cfg.tenantId, ACCOUNT_LABEL);
+  const accountById = (id: string) => slackAccountFor(cfg.tenantId, id);
   const ENVELOPE_REPLAY_SWEEP_MS = 60_000;
   const ENVELOPE_REPLAY_RETRY_NUM = 99;
   const configuredActorGate = createActorGate(cfg.allowFrom);
@@ -191,14 +206,16 @@ export async function startSlackPlugin(
   const replaySweeper = staging
     ? createSweeper(
         () =>
-          core.holdEnvelopeReplay(stagingAccount, () =>
-            staging.sweep((body, ackGate) =>
-              app.processEvent({
-                body,
-                ack: async () => {},
-                retryNum: ENVELOPE_REPLAY_RETRY_NUM,
-                customProperties: { ackGate },
-              }),
+          inTenantOf(cfg.tenantId, () =>
+            core.holdEnvelopeReplay(stagingAccount, () =>
+              staging.sweep((body, ackGate) =>
+                app.processEvent({
+                  body,
+                  ack: async () => {},
+                  retryNum: ENVELOPE_REPLAY_RETRY_NUM,
+                  customProperties: { ackGate },
+                }),
+              ),
             ),
           ),
         ENVELOPE_REPLAY_SWEEP_MS,
@@ -339,7 +356,7 @@ export async function startSlackPlugin(
   const handler = createTurnHandler({
     accountId: ACCOUNT_LABEL,
     ...(cfg.externalAccess ? { externalAccess: cfg.externalAccess } : {}),
-    continuePrivate: (runId, task) => continueInPrivate(core, runId, task, (id) => slackAccountClients.get(id)),
+    continuePrivate: (runId, task) => continueInPrivate(core, runId, task, accountById),
     onEngaged: (runId, channel, threadTs) => {
       void core.sessionStatus
         ?.start(statusClient, statusAccount(), runId, channel, threadTs)
@@ -432,15 +449,15 @@ export async function startSlackPlugin(
   });
   const deliveries = createDeliveryPoller({
     clientForAccount: (id, teamId) => {
-      const account = slackAccountClients.get(id);
+      const account = accountById(id);
       if (!account || (teamId && account.teamId !== teamId)) return undefined;
       return account.client;
     },
     externalNamespace: (id) => {
-      const account = slackAccountClients.get(id);
+      const account = accountById(id);
       return account?.policy ? externalSlackNamespace(account.teamId, account.policy) : undefined;
     },
-    continuePrivate: (runId, task) => continueInPrivate(core, runId, task, (id) => slackAccountClients.get(id)),
+    continuePrivate: (runId, task) => continueInPrivate(core, runId, task, accountById),
     core,
     flow,
     threads,
@@ -450,6 +467,7 @@ export async function startSlackPlugin(
 
   let auth: AuthTestResponse;
   try {
+    if (slackAccountClients.has(ACCOUNT_KEY)) throw new Error(`Duplicate Slack account id: ${ACCOUNT_LABEL}`);
     auth = await app.client.auth.test();
     ids.ownTeamId = auth.team_id ?? "";
     ids.botUserId = auth.user_id ?? "";
@@ -468,8 +486,8 @@ export async function startSlackPlugin(
       }
     }
     await directory.getUserSnapshot(app.client);
-    if (slackAccountClients.has(ACCOUNT_LABEL)) throw new Error(`Duplicate Slack account id: ${ACCOUNT_LABEL}`);
-    slackAccountClients.set(ACCOUNT_LABEL, {
+    if (slackAccountClients.has(ACCOUNT_KEY)) throw new Error(`Duplicate Slack account id: ${ACCOUNT_LABEL}`);
+    slackAccountClients.set(ACCOUNT_KEY, {
       client: app.client,
       inFlightRuns: flow.inFlightRuns,
       teamId: ids.ownTeamId,
@@ -478,7 +496,7 @@ export async function startSlackPlugin(
     await app.start();
     replaySweeper?.start();
   } catch (err) {
-    if (slackAccountClients.get(ACCOUNT_LABEL)?.client === app.client) slackAccountClients.delete(ACCOUNT_LABEL);
+    if (slackAccountClients.get(ACCOUNT_KEY)?.client === app.client) slackAccountClients.delete(ACCOUNT_KEY);
     stopped = true;
     await devIntrospection?.close().catch(swallowAs("slack: dev-introspection close on failed start", undefined));
     try {
@@ -582,7 +600,7 @@ export async function startSlackPlugin(
         return;
       }
       stopped = true;
-      if (slackAccountClients.get(ACCOUNT_LABEL)?.client === app.client) slackAccountClients.delete(ACCOUNT_LABEL);
+      if (slackAccountClients.get(ACCOUNT_KEY)?.client === app.client) slackAccountClients.delete(ACCOUNT_KEY);
       await statusSweep.stop();
       await replaySweeper?.stop();
       if (deliveriesTimer) clearInterval(deliveriesTimer);
