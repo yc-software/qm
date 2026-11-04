@@ -31,6 +31,7 @@ interface MemoryOutcomeSink {
 
 export interface MemoryRecallContext extends MemoryOutcomeSink {
   query?: string;
+  message?: string;
   disclosedFacts?: ReadonlyMap<ScopeId, readonly MemoryFact[]>;
   actorId?: string;
   sessionId?: string;

@@ -32,7 +32,8 @@ export function createMcpMemoryProvider(opts: {
 
   const read = async (scopeId: string, query: string, context?: MemoryRecallContext): Promise<string> => {
     const op = opts.read;
-    const args: Record<string, unknown> = { [op.queryArg ?? "query"]: query };
+    const question = op.maxQueryChars ? (context?.message?.trim() || query).slice(0, op.maxQueryChars) : query;
+    const args: Record<string, unknown> = { [op.queryArg ?? "query"]: question };
     if (op.scopeArg) args[op.scopeArg] = scopeId;
     const maxChars = context?.maxChars;
     if (maxChars && op.maxCharsArg) args[op.maxCharsArg] = maxChars;

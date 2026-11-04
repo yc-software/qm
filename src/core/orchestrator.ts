@@ -2727,6 +2727,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           memoryRecallQuery(input.text, visibleHistory),
           memoryView.loaded,
           (outcome) => void recallOutcomes.push(outcome),
+          input.text,
         );
         const partial = isRetry ? (recordedTurn ?? findTrailingPartialTurn(visibleHistory, input.runId)) : null;
         const reconciled = partial ? reconcile(visibleHistory, partial, input.resumeCause) : null;
