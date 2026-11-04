@@ -2596,6 +2596,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   orgScopeId: resolution.orgScopeId,
                   liveTurn,
                   request: { ...input, readOnly: strictReadOnly, cancel: turnAbort.signal },
+                  switchedRuntime: () => switchedRuntime,
                 }),
               }
             : {}),
@@ -3073,10 +3074,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           }
         };
         let agentSwitch: "task" | "scope" | undefined;
+        let switchedRuntime: RuntimeChoice | undefined;
         const adoptRuntime = async (choice: RuntimeChoice, lifetime: "task" | "scope") => {
           const error = await checkRuntimeAuth(choice);
           if (error) throw new NonRetryableTurnError(error);
           agentSwitch = lifetime;
+          switchedRuntime = choice;
           ({ userProviderKeys, userModelOverride, personalAuth, authLabel } = await loadRuntimeAuth(choice));
           requestedRuntime = userModelOverride ? { ...choice, modelId: userModelOverride } : choice;
         };

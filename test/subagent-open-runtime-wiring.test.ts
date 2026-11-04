@@ -6,20 +6,35 @@ import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
 import { stopAtEnd } from "./support/build-app.ts";
 import { scopeId, type Principal } from "../src/types.ts";
+import type { RuntimeChoice } from "../src/agent/agent.ts";
+import type { SessionSyscallBinding } from "../src/sessions/session-syscalls.ts";
 
 const actor: Principal = { id: "U1", type: "internal" };
 const scope = scopeId("personal", "U1");
 
-async function opener() {
+async function opener(parent: Partial<SessionSyscallBinding["request"]> = {}, switched?: RuntimeChoice) {
   const built = stopAtEnd(buildApp(testConfig({ openaiApiKey: "sk-test" })));
   await built.featureFlags.setEnabled("persistent_subagents", scope, true, "admin");
   const room = await built.sessions.getOrCreateByThread("web:room", "dm", scope, undefined, "web");
   await built.sessions.addParticipant(room.id, actor.id);
-  return built.sessionSyscalls.forTurn({
+  const syscalls = built.sessionSyscalls.forTurn({
     session: room,
     scopeId: scope,
-    request: { surface: "web", conversation: { kind: "dm", threadRef: "web:room", audience: [actor] }, actor },
+    request: {
+      surface: "web",
+      conversation: { kind: "dm", threadRef: "web:room", audience: [actor] },
+      actor,
+      ...parent,
+    },
+    switchedRuntime: () => switched,
   });
+  return {
+    open: syscalls.open,
+    async spawned(sessionId: string) {
+      const meta = (await built.sessions.get(sessionId))?.spawnMeta;
+      return { model: meta?.model, thinkingLevel: meta?.thinkingLevel, fastMode: meta?.fastMode };
+    },
+  };
 }
 
 test("subagent open refuses a known model this deployment does not serve", async () => {
@@ -45,4 +60,59 @@ test("subagent open accepts a model this deployment serves", async () => {
 test("subagent open without overrides inherits the default", async () => {
   const out = await (await opener()).open({ task: "draft one article" });
   assert.ok(out.ok, out.ok ? "" : out.message);
+});
+
+test("a child opened without a model runs on the parent's task-switched runtime", async () => {
+  const parent = await opener({}, { modelId: "gpt-6.1-sol", effortLevel: "high", fastMode: false });
+  const out = await parent.open({ task: "draft one article" });
+  assert.ok(out.ok, out.ok ? "" : out.message);
+  assert.deepEqual(await parent.spawned(out.sessionId), {
+    model: "gpt-6.1-sol",
+    thinkingLevel: "high",
+    fastMode: false,
+  });
+});
+
+test("a child opened without a model runs on the parent's explicitly requested model", async () => {
+  const parent = await opener({ model: "gpt-6.1-sol", thinkingLevel: "medium" });
+  const out = await parent.open({ task: "draft one article", fastMode: true });
+  assert.ok(out.ok, out.ok ? "" : out.message);
+  assert.deepEqual(await parent.spawned(out.sessionId), {
+    model: "gpt-6.1-sol",
+    thinkingLevel: "medium",
+    fastMode: true,
+  });
+});
+
+test("an explicit open model wins over the parent's runtime and drops its effort", async () => {
+  const parent = await opener({}, { modelId: "claude-opus-4-1", effortLevel: "high", fastMode: true });
+  const out = await parent.open({ task: "draft one article", model: "gpt-6.1-sol" });
+  assert.ok(out.ok, out.ok ? "" : out.message);
+  assert.deepEqual(await parent.spawned(out.sessionId), {
+    model: "gpt-6.1-sol",
+    thinkingLevel: undefined,
+    fastMode: undefined,
+  });
+});
+
+test("a child of a parent on the default keeps the configured subagent default", async () => {
+  const parent = await opener({ thinkingLevel: "low", fastMode: true });
+  const out = await parent.open({ task: "draft one article" });
+  assert.ok(out.ok, out.ok ? "" : out.message);
+  assert.deepEqual(await parent.spawned(out.sessionId), {
+    model: undefined,
+    thinkingLevel: undefined,
+    fastMode: undefined,
+  });
+});
+
+test("a parent runtime the subagent purpose cannot serve falls back to the subagent default", async () => {
+  const parent = await opener({}, { modelId: "claude-opus-4-1", effortLevel: "high" });
+  const out = await parent.open({ task: "draft one article" });
+  assert.ok(out.ok, out.ok ? "" : out.message);
+  assert.deepEqual(await parent.spawned(out.sessionId), {
+    model: undefined,
+    thinkingLevel: undefined,
+    fastMode: undefined,
+  });
 });
