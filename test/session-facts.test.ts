@@ -21,8 +21,10 @@ const binding: TurnSurfaceOrigin = {
   audience: "internal",
 };
 
-async function copySessionFactsAgain(url: string): Promise<void> {
+async function copySessionFactsAgain(url: string): Promise<string[]> {
   const raw = new pg.Pool({ connectionString: url, max: 1 });
+  const warnings: string[] = [];
+  raw.on("connect", (client) => client.on("notice", (notice) => warnings.push(notice.message ?? "")));
   try {
     await raw.query(
       "ALTER TABLE sessions DROP COLUMN slack_binding, DROP COLUMN runtime; UPDATE sessions SET spawn_meta = NULL; DELETE FROM qm_schema_migrations WHERE id LIKE 'sessions/store/005_-session-facts%'",
@@ -34,6 +36,7 @@ async function copySessionFactsAgain(url: string): Promise<void> {
   } finally {
     await raw.end();
   }
+  return warnings;
 }
 
 function request(threadRef: string, extra: Partial<OrchestratorInput> = {}): OrchestratorInput {
@@ -171,18 +174,26 @@ test("the session facts copy skips runs an earlier release stored as JSON jsonb 
       JSON.stringify(input),
       JSON.stringify(result),
     ]);
+    return run.id;
   };
   try {
     const session = await sessions.getOrCreateByThread("slack:dm:unreadable", "dm", scope, undefined, "slack");
     const readable = request(session.threadRef, { ...previousRelease, timezone: "UTC" });
-    await finishAsEarlierRelease(session.threadRef, readable, "ok", "m1");
+    const readableRun = await finishAsEarlierRelease(session.threadRef, readable, "ok", "m1");
     const pasted = request(session.threadRef, { ...previousRelease, text: "pasted \u0000" });
-    await finishAsEarlierRelease(session.threadRef, pasted, "Markets error: \u0015\u0003\u0000", "m2");
+    const pastedRun = await finishAsEarlierRelease(
+      session.threadRef,
+      pasted,
+      "Markets error: \u0015\u0003\u0000",
+      "m2",
+    );
     const cut = request(session.threadRef, { text: "cut \ud83d" });
-    await finishAsEarlierRelease(session.threadRef, cut, "cut \ud83d", "m3");
+    const cutRun = await finishAsEarlierRelease(session.threadRef, cut, "cut \ud83d", "m3");
 
-    await copySessionFactsAgain(url);
+    const warnings = await copySessionFactsAgain(url);
 
+    const named = (id: string) => warnings.some((warning) => warning.includes(`skipped run ${id}:`));
+    assert.deepEqual([pastedRun, cutRun, readableRun].map(named), [true, true, false], "each skipped run is named");
     const filled = (await sessions.get(session.id))!;
     assert.deepEqual(filled.runtime, { modelId: "m1" }, "runs jsonb cannot read are skipped, not fatal");
     assert.deepEqual(filled.spawnMeta, sessionContextOf(readable), "context comes from the newest readable turn");
