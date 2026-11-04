@@ -1076,6 +1076,7 @@ test("a bot post whose content lives only in attachment blocks reaches the ambie
       "Amazon Q Developer": { mode: "action" },
     });
     const mirror = createMirror({
+      account: "default",
       core: {
         ingestSurfaceEvents: async (events, self) => {
           await built.app.ingestSurfaceEvents(events, "slack", self);
@@ -1127,6 +1128,143 @@ test("a batch with no readable text records an ignore without claiming a model c
     assert.equal(rows[0]!.model, undefined);
     assert.equal(rows[0]!.latencyMs, undefined);
     assert.equal(rows[0]!.prompt, undefined);
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+const partnerSlackPolicies = {
+  partner: { companyDomains: ["acme.com"], companyTeamIds: ["TINTERNAL"], serviceCredentials: [] },
+};
+
+function isolatedApp() {
+  const dataDir = mkdtempSync(join(tmpdir(), "ap-surfcache-"));
+  return buildApp(testConfig({ dataDir, externalSlackPolicies: partnerSlackPolicies }));
+}
+
+function internalMirror(built: ReturnType<typeof isolatedApp>) {
+  return createMirror({
+    account: "default",
+    core: {
+      ingestSurfaceEvents: async (events, self) => {
+        await built.app.ingestSurfaceEvents(events, "slack", self);
+      },
+    } as SlackCoreClient,
+    ids: { botUserId: "UBOT", ownBotId: "BBOT", botHandle: "qm", ownTeamId: "TINTERNAL" } as BotIdentity,
+    directory: {} as Directory,
+    externalParticipantsEnabled: async () => true,
+  });
+}
+
+test("with an external Slack account configured, an internal channel's proactive ambient wake still starts a worker", async () => {
+  const built = isolatedApp();
+  built.runtime.start();
+  try {
+    const container = "C-internal-proactive";
+    await built.app.setChannelPolicy(container, "!engage !post ambient reply", "U-admin");
+    await internalMirror(built).mirrorMessageEvent(
+      { channel: container, channel_type: "channel", ts: "500.1", user: "U1", text: "we're in for the round" },
+      {},
+    );
+
+    const pending = await pollDeliveries(built.deliveries);
+    assert.equal(pending.length, 1, "the proactive worker posted");
+    assert.match(pending[0].text, /^ambient reply/);
+    const worker = await built.sessions.getByThread(`slack:${container}:ambient:500.1`);
+    assert.ok(worker, "the worker session exists");
+    assert.deepEqual(worker!.surfaceBinding, {
+      author: { surface: "slack", account: "default", id: "U1" },
+      workspace: "TINTERNAL",
+      audience: "internal",
+    });
+    assert.deepEqual(
+      await built.sessions.participantsOf(worker!.id),
+      [],
+      "the proactive worker does not take on the message author's identity",
+    );
+    const rows = await judged(built.ambientJudgments!, container);
+    assert.equal(rows[0]!.decision, "act");
+    assert.equal(rows[0]!.startError, undefined);
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+test("with an external Slack account configured, an internal channel's solicited ambient wake runs as the asker", async () => {
+  const built = isolatedApp();
+  built.runtime.start();
+  try {
+    const container = "C-internal-solicited";
+    await built.directory.replace([
+      { principalId: "alice@acme.com", displayName: "Alice", type: "internal", slackId: "U1" },
+    ]);
+    await built.directory.replaceChannels(
+      [{ channelId: container, name: "internal-solicited", isPrivate: false }],
+      [{ channelId: container, principalId: "alice@acme.com" }],
+    );
+    await built.app.setChannelPolicy(container, "!engage-asked", "U-admin");
+    await internalMirror(built).mirrorMessageEvent(
+      { channel: container, channel_type: "channel", ts: "510.1", user: "U1", text: "!post solicited reply" },
+      {},
+    );
+
+    const pending = await pollDeliveries(built.deliveries);
+    assert.equal(pending.length, 1, "the solicited worker posted");
+    assert.match(pending[0].text, /^solicited reply/);
+    const worker = await built.sessions.getByThread(`slack:${container}:ambient:510.1`);
+    assert.ok(worker);
+    assert.deepEqual(await built.sessions.participantsOf(worker!.id), ["alice@acme.com"]);
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+test("under external Slack isolation, an ambient wake without a recorded source is refused and the refusal is recorded", async () => {
+  const built = isolatedApp();
+  built.runtime.start();
+  try {
+    const container = "C-unsourced";
+    await built.app.setChannelPolicy(container, "!engage !post ambient reply", "U-admin");
+    await built.app.ingestSurfaceEvents([
+      { container, ts: "520.1", authorId: "U1", text: "we're in for the round", createdAt: 1 },
+    ]);
+
+    const rows = await judged(built.ambientJudgments!, container);
+    assert.equal(rows[0]!.decision, "act");
+    assert.match(rows[0]!.startError ?? "", /^refused: External Slack requests require/);
+    assert.equal(await built.sessions.getByThread(`slack:${container}:ambient:520.1`), null);
+    assert.deepEqual(await built.deliveries.pending("slack"), []);
+    await built.errors.flush();
+    const errors = await built.errors.list({ scopeId: `channel:${container}` });
+    assert.deepEqual(
+      errors.map((e) => [e.category, e.code, e.message]),
+      [["ambient", "worker_start_failed", rows[0]!.startError]],
+    );
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+test("under external Slack isolation, a source naming the external account cannot start a channel worker", async () => {
+  const built = isolatedApp();
+  built.runtime.start();
+  try {
+    const container = "C-external-source";
+    await built.app.setChannelPolicy(container, "!engage !post ambient reply", "U-admin");
+    await built.app.ingestSurfaceEvents([
+      {
+        container,
+        ts: "530.1",
+        authorId: "U1",
+        text: "we're in for the round",
+        createdAt: 1,
+        source: { account: "partner", workspace: "TPARTNER" },
+      },
+    ]);
+
+    const rows = await judged(built.ambientJudgments!, container);
+    assert.match(rows[0]!.startError ?? "", /^refused: External Slack requests require/);
+    assert.equal(await built.sessions.getByThread(`slack:${container}:ambient:530.1`), null);
   } finally {
     await built.runtime.stop();
   }

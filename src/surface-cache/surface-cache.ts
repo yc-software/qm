@@ -13,6 +13,7 @@ export type {
   ReadMessagesOpts,
   SearchOpts,
   SurfaceCache,
+  SurfaceSource,
 } from "./types.ts";
 
 const DEFAULT_READ_LIMIT = 100;
@@ -166,6 +167,13 @@ export function createPostgresSurfaceCache(
         unique: [{ name: "channel_files_surface_key", columns: "org_id, surface, account, container, ts, file_id" }],
       },
     ]),
+    {
+      id: "surface-cache/store/0011-source",
+      statements: [
+        `ALTER TABLE channel_state ADD COLUMN IF NOT EXISTS source_account TEXT`,
+        `ALTER TABLE channel_state ADD COLUMN IF NOT EXISTS source_workspace TEXT`,
+      ],
+    },
   ]);
 
   const liveFallback = opts.liveFallback;
@@ -286,8 +294,8 @@ export function createPostgresSurfaceCache(
             }
           }
           await client.query(
-            `INSERT INTO channel_state(org_id, container, last_ts, oldest_ts, name, kind, members, updated_at, surface, account)
-             VALUES ($1,$2,$3,$3,$4,$5,$6::jsonb,$7,$8,$9)
+            `INSERT INTO channel_state(org_id, container, last_ts, oldest_ts, name, kind, members, updated_at, surface, account, source_account, source_workspace)
+             VALUES ($1,$2,$3,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11)
              ON CONFLICT (tenant_id, org_id, surface, account, container) DO UPDATE SET
                last_ts = GREATEST(channel_state.last_ts, EXCLUDED.last_ts),
                oldest_ts = CASE
@@ -296,6 +304,8 @@ export function createPostgresSurfaceCache(
                name = COALESCE(EXCLUDED.name, channel_state.name),
                kind = COALESCE(EXCLUDED.kind, channel_state.kind),
                members = CASE WHEN EXCLUDED.members = '[]'::jsonb THEN channel_state.members ELSE EXCLUDED.members END,
+               source_account = COALESCE(EXCLUDED.source_account, channel_state.source_account),
+               source_workspace = COALESCE(EXCLUDED.source_workspace, channel_state.source_workspace),
                updated_at = EXCLUDED.updated_at`,
             [
               orgId,
@@ -307,6 +317,8 @@ export function createPostgresSurfaceCache(
               now,
               surface,
               account,
+              e.source?.account ?? null,
+              e.source?.workspace ?? null,
             ],
           );
         }
@@ -479,6 +491,9 @@ export function createPostgresSurfaceCache(
         ...(r.oldest_ts != null ? { oldestTs: r.oldest_ts as string } : {}),
         ...(r.name != null ? { name: r.name as string } : {}),
         ...(r.kind != null ? { kind: r.kind as ContainerState["kind"] } : {}),
+        ...(r.source_account != null && r.source_workspace != null
+          ? { source: { account: r.source_account as string, workspace: r.source_workspace as string } }
+          : {}),
         updatedAt: Number(r.updated_at),
       };
     },

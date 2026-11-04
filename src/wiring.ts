@@ -2324,6 +2324,7 @@ export function buildApp(
     advisoryLock,
   };
   const app = createApp({
+    errors,
     settleTreeWakes: (root) => settleTreeWakes(subagentMail, root),
     teams,
     externalSlackPolicies: config.externalSlackPolicies,

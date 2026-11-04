@@ -1,4 +1,5 @@
 import { scopeId, type ActorAssertion, type TurnRequest } from "../types.ts";
+import type { TurnSurfaceOrigin } from "../surfaces/contract.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
 import { samePerson } from "../directory/person.ts";
@@ -139,11 +140,12 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
       : (policy?.orders ?? "");
     let decision: AmbientDecision = { act: false };
     if (forJudge.length || scheduled) {
-      const containerKind = (await deps.surfaceCache.containerState(container, { surface }).catch(() => null))?.kind;
+      const state = await deps.surfaceCache.containerState(container, { surface }).catch(() => null);
       const judgeBatch: AmbientBatch = {
         container,
         surface,
-        ...(containerKind ? { kind: containerKind } : {}),
+        ...(state?.kind ? { kind: state.kind } : {}),
+        ...(state?.source ? { source: state.source } : {}),
         orders: ordersForJudge,
         ...(self ? { self } : {}),
         messages: forJudge,
@@ -172,12 +174,20 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
         },
         judgeBatch,
       ).catch(() => ({ act: false }) as AmbientDecision);
+      if (decision.startError)
+        deps.errors?.record({
+          category: "ambient",
+          code: "worker_start_failed",
+          message: decision.startError,
+          scopeLabel: scopeId(judgeBatch.kind === "group" ? "group" : "channel", container),
+        });
       recordJudgment({
         surface,
         container,
         decision: decision.act ? "act" : "ignore",
         ...(decision.reason ? { reason: decision.reason } : {}),
         ...(decision.askedBy ? { askedBy: decision.askedBy } : {}),
+        ...(decision.startError ? { startError: decision.startError } : {}),
         prompt,
         ...(judgeModel ? { model: judgeModel } : {}),
         latencyMs: Date.now() - startedAt,
@@ -250,8 +260,22 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
     }));
   }
 
-  async function spawnAmbientWorker(batch: AmbientBatch, decision: AmbientDecision): Promise<void> {
+  function sourceOrigin(batch: AmbientBatch): TurnSurfaceOrigin | undefined {
+    const author = batch.messages.reduce<CachedMessage | undefined>(
+      (newest, m) => (m.authorId && (!newest || m.ts > newest.ts) ? m : newest),
+      undefined,
+    );
+    if (!batch.source || !author?.authorId) return undefined;
+    return {
+      author: { surface: batch.surface, account: batch.source.account, id: author.authorId },
+      workspace: batch.source.workspace,
+      audience: "internal",
+    };
+  }
+
+  async function spawnAmbientWorker(batch: AmbientBatch, decision: AmbientDecision): Promise<string | undefined> {
     const latestTs = batch.messages.reduce((max, m) => (m.ts > max ? m.ts : max), "");
+    const surfaceOrigin = sourceOrigin(batch);
     const threadRef = `${batch.surface}:${batch.container}:ambient:${latestTs}`;
     let solicited = await solicitedAsker(batch, decision);
     let audience: ActorAssertion[] = [];
@@ -274,6 +298,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
     const req: TurnRequest = solicited
       ? {
           surface: batch.surface,
+          ...(surfaceOrigin ? { surfaceOrigin } : {}),
           actor: {
             externalId: solicited.member.principalId,
             ...(solicited.member.displayName ? { displayName: solicited.member.displayName } : {}),
@@ -289,6 +314,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
         }
       : {
           surface: batch.surface,
+          ...(surfaceOrigin ? { surfaceOrigin } : {}),
           actor: { externalId: `system:ambient:${orgIdOf()}` },
           conversation,
           deliveryTarget: batch.container,
@@ -314,8 +340,11 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
           spawned: true,
           idempotencyKey: `ambient:${orgIdOf()}:${batch.surface}:${batch.container}:${latestTs}`,
         };
-    if (!solicited && (await steerIntoLiveAmbientRun(batch, latestTs, req))) return;
-    await app.turn(req).catch(reportFailureAs("ambient: spawn worker", undefined));
+    if (!solicited && (await steerIntoLiveAmbientRun(batch, latestTs, req))) return undefined;
+    const result = await app.turn(req);
+    return result.status === "refused" || result.status === "failed"
+      ? `${result.status}: ${result.reason ?? "no reason given"}`
+      : undefined;
   }
 
   async function steerIntoLiveAmbientRun(batch: AmbientBatch, latestTs: string, req: TurnRequest): Promise<boolean> {

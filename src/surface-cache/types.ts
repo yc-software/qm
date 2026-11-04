@@ -3,6 +3,11 @@ export interface SurfaceKey {
   account?: string;
 }
 
+export interface SurfaceSource {
+  account: string;
+  workspace: string;
+}
+
 export interface CachedMessage extends SurfaceKey {
   container: string;
   ts: string;
@@ -32,6 +37,7 @@ export interface ContainerState {
   oldestTs?: string;
   name?: string;
   kind?: "channel" | "dm" | "group";
+  source?: SurfaceSource;
   updatedAt: number;
 }
 
@@ -66,6 +72,7 @@ export interface IngestEvent extends SurfaceKey {
   members?: string[];
   containerName?: string;
   kind?: "channel" | "dm" | "group";
+  source?: SurfaceSource;
 }
 
 export interface ContainerSummary extends ContainerState {

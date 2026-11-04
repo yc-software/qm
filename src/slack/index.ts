@@ -228,7 +228,7 @@ export async function startSlackPlugin(
   });
   const mirror = cfg.externalAccess
     ? { pushSurfaceEvents: async () => {}, mirrorMessageEvent: async () => {} }
-    : createMirror({ core, ids, directory, externalParticipantsEnabled });
+    : createMirror({ account: ACCOUNT_LABEL, core, ids, directory, externalParticipantsEnabled });
   const historyRateLimitOptions = {
     managed: Boolean(cfg.installationId && cfg.sharedServiceUrl?.trim()),
     ...(cfg.webUiPublicUrl
