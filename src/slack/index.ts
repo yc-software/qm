@@ -56,17 +56,7 @@ const slackAccountClients = new Map<
   }
 >();
 
-// One process serves every tenant's workspace, so an account is keyed by its tenant as well as its id.
-// Accounts started without a tenant (operator-configured extra accounts) stay reachable from the install tenant.
 const accountKey = (tenantId: string | undefined, accountId: string): string => `${tenantId ?? ""}\u0000${accountId}`;
-function slackAccountFor(tenantId: string | undefined, accountId: string) {
-  const own = slackAccountClients.get(accountKey(tenantId, accountId));
-  if (own || tenantId === undefined) return own;
-  const install = installTenantNow();
-  return install === undefined || install === tenantId
-    ? slackAccountClients.get(accountKey(undefined, accountId))
-    : undefined;
-}
 
 export async function startSlackPlugin(
   cfg: SlackPluginConfig,
@@ -110,8 +100,10 @@ export async function startSlackPlugin(
   let stopped = false;
   const CORE_SINGLETON = cfg.coreSingleton !== false;
   const ACCOUNT_LABEL = cfg.accountId ?? "default";
-  const ACCOUNT_KEY = accountKey(cfg.tenantId, ACCOUNT_LABEL);
-  const accountById = (id: string) => slackAccountFor(cfg.tenantId, id);
+  const ACCOUNT_TENANT = cfg.tenantId ?? installTenantNow();
+  const ACCOUNT_KEY = accountKey(ACCOUNT_TENANT, ACCOUNT_LABEL);
+  const accountById = (id: string) => slackAccountClients.get(accountKey(ACCOUNT_TENANT, id));
+  const inInstallTenant = <T>(fn: () => T): T => inTenantOf(cfg.tenantId, fn);
   const ENVELOPE_REPLAY_SWEEP_MS = 60_000;
   const ENVELOPE_REPLAY_RETRY_NUM = 99;
   const configuredActorGate = createActorGate(cfg.allowFrom);
@@ -206,7 +198,7 @@ export async function startSlackPlugin(
   const replaySweeper = staging
     ? createSweeper(
         () =>
-          inTenantOf(cfg.tenantId, () =>
+          inInstallTenant(() =>
             core.holdEnvelopeReplay(stagingAccount, () =>
               staging.sweep((body, ackGate) =>
                 app.processEvent({
@@ -348,7 +340,6 @@ export async function startSlackPlugin(
       });
     return statusSync;
   };
-  const inInstallTenant = <T>(fn: () => T): T => inTenantOf(cfg.tenantId, fn);
   const statusSweep = createSweeper(() => inInstallTenant(reconcileStatus), 60_000, {
     label: "slack session status",
     immediate: true,
