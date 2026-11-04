@@ -41,9 +41,9 @@ test.after(() => {
   upstream.close();
 });
 
-function get(host: string, path: string, headers: Record<string, string> = {}): Promise<number> {
+function get(host: string, path: string, headers: Record<string, string> = {}, method = "GET"): Promise<number> {
   return new Promise((resolve, reject) => {
-    const req = request({ host: "127.0.0.1", port, method: "GET", path, headers: { host, ...headers } }, (res) => {
+    const req = request({ host: "127.0.0.1", port, method, path, headers: { host, ...headers } }, (res) => {
       res.resume();
       res.on("end", () => resolve(res.statusCode ?? 0));
     });
@@ -93,4 +93,12 @@ test("a client cannot choose the tenant header itself", async () => {
     200,
   );
   assert.equal(lastSeen("/v1/apis")["x-qm-tenant"], undefined);
+});
+
+test("an agent call on a host with no tenant goes straight to core, past the portal's own routes", async () => {
+  const path = "/v1/surfaces/partner-chat/events";
+  assert.equal(await get("portal.test", path, { "x-agent-capability": "token-8" }, "POST"), 200);
+  const headers = lastSeen(path);
+  assert.equal(headers["x-agent-capability"], "token-8");
+  assert.equal(headers["x-qm-tenant"], undefined);
 });
