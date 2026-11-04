@@ -89,7 +89,7 @@ function backendsFixture() {
     SANDBOX_BACKEND: "sprites",
     SPRITES_TOKEN: "sprites-deployment",
     SPRITES_NAME_PREFIX: "dep",
-    SPRITES_EGRESS_PROXY_URL: "https://egress.invalid",
+    EGRESS_PROXY_URL: "https://egress.invalid",
     SPRITES_SNAPSHOT_S3_BUCKET: "snapshots",
     MODAL_TOKEN_ID: "modal-id-deployment",
     MODAL_TOKEN_SECRET: "modal-secret-deployment",

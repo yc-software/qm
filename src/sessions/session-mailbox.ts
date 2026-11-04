@@ -13,6 +13,7 @@ export interface SessionMessage {
   consumed?: boolean;
   wake?: true;
   senderRunId?: string;
+  resultOf?: string;
   delegatingRunId?: string;
 }
 
