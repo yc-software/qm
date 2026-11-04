@@ -146,6 +146,8 @@ import { wireRunResultDeliveries } from "./delivery/run-result-delivery.ts";
 import { adminSessionUrl } from "./util/admin-links.ts";
 import { uuidSchema } from "./util/ids.ts";
 import { withWebTranscriptDeliveries } from "./delivery/web-transcript-delivery.ts";
+import { WEBHOOK_CLAIM_MS, webhookSender } from "./delivery/webhook-delivery.ts";
+import { createDeliveryRelay } from "./delivery/relay.ts";
 import type { DirectoryStore } from "./directory/directory-store.ts";
 import { createPostgresDirectoryStore } from "./directory/postgres-directory-store.ts";
 import { createPostgresEnvironmentStore, type EnvironmentStore } from "./environments/environment-store.ts";
@@ -2403,6 +2405,11 @@ export function buildApp(
       afterId = batch.at(-1)!.id;
     }
   };
+  const webhookDelivery = createDeliveryRelay(deliveries, {
+    type: "webhook",
+    send: webhookSender(config.signingSecret),
+    claimMs: WEBHOOK_CLAIM_MS,
+  });
   const approvalDeliverySweeper = createSweeper(
     () => advisoryLock.withLock("approval-deliveries", () => approvals.deliverPending()),
     30_000,
@@ -2769,12 +2776,14 @@ export function buildApp(
     sessionReturnSweeper.start();
     runResultSweeper.start();
     approvalDeliverySweeper.start();
+    webhookDelivery.start();
   }
   async function stopBackground(): Promise<void> {
     stopping = true;
     backgroundRunning = false;
     admittedWork.pause();
     await Promise.all([
+      webhookDelivery.stop(),
       monitorPoller?.stop(),
       processReaper?.stop(),
       monitorRetentionSweeper.stop(),

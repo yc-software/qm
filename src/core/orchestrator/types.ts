@@ -72,7 +72,6 @@ export interface OrchestratorInput extends Omit<
   | "surface"
   | "actor"
   | "conversation"
-  | "idempotencyKey"
   | "spawned"
   | "async"
   | "triggerTs"

@@ -498,3 +498,96 @@ for (const surface of ["slack", "web"] as const) {
     });
   }
 }
+
+test("webhook run delivery correlates with the original caller request", () => {
+  const request = {
+    ...turn("hi", "web:alice:conversation"),
+    surface: "web",
+    origin: { kind: "human" as const },
+    idempotencyKey: "external-request-123",
+    deliveryWebhook: { binding: "binding", url: "https://receiver.example/qm" },
+  };
+  const delivery = runResultDelivery(run({ request, dedupKey: "external-request-123" }));
+  assert.equal(delivery?.destination.type, "webhook");
+  assert.deepEqual(delivery?.destination.webhook, { binding: "binding", url: "https://receiver.example/qm" });
+  assert.equal(delivery?.provenance.sourceRequestId, "external-request-123");
+});
+
+test("bound webhook results identify every terminal outcome for native receiver handling", () => {
+  const results: TurnResult[] = [
+    {
+      status: "pending_approval",
+      pendingApprovals: [{ requestId: "approval-1", command: "send email", reason: "permission required" }],
+    },
+    { status: "react", reactions: ["thumbsup"] },
+    { status: "refused", reason: "not permitted" },
+    { status: "failed", reason: "connection failed" },
+  ];
+  for (const result of results) {
+    const request = {
+      ...turn("hi", "web:alice:conversation"),
+      surface: "web",
+      deliveryWebhook: { binding: "binding", url: "https://receiver.example/qm" },
+    };
+    const delivery = runResultDelivery(run({ request, result }), () => "https://portal.example.com/admin");
+    assert.equal(delivery?.provenance.sourceRunId, "r-1");
+    assert.equal(delivery?.text, "");
+    assert.equal(delivery?.destination.type, "webhook");
+  }
+  for (const result of [{ status: "silent" }, { status: "ok", reply: "" }] as TurnResult[]) {
+    const bound = {
+      ...turn("hi", "web:alice:conversation"),
+      surface: "web",
+      deliveryWebhook: { binding: "binding", url: "https://receiver.example/qm" },
+    };
+    assert.equal(
+      runResultDelivery(run({ request: bound, result })),
+      null,
+      "a background run with nothing to show sends nothing",
+    );
+    const waiting = { ...bound, origin: { kind: "human" as const }, idempotencyKey: "external-request-123" };
+    const closing = runResultDelivery(run({ request: waiting, result, dedupKey: "external-request-123" }));
+    assert.equal(
+      closing?.provenance.sourceRequestId,
+      "external-request-123",
+      "a waiting caller still gets its terminal delivery",
+    );
+    assert.equal(closing?.text, "");
+  }
+  const failed = runResultDelivery(
+    run({
+      status: "failed",
+      request: {
+        ...turn("hi", "web:alice:conversation"),
+        surface: "web",
+        deliveryWebhook: { binding: "binding", url: "https://receiver.example/qm" },
+      },
+      result: { status: "failed", reason: "connection failed", sessionId: "s-1" },
+    }),
+    () => "https://portal.example.com/admin",
+  );
+  assert.match(failed?.text ?? "", /couldn't finish that turn.*portal\.example\.com/);
+  assert.equal(failed?.provenance.sourceRunId, "r-1");
+});
+
+test("a scheduled approval continuation correlates with the receiver's action request", () => {
+  const request = {
+    ...turn("scheduled update"),
+    surface: "cron",
+    origin: {
+      kind: "automation" as const,
+      destination: {
+        type: "webhook" as const,
+        target: "web:alice:conversation",
+        webhook: { binding: "binding", url: "https://receiver.example/qm" },
+      },
+    },
+    idempotencyKey: "receiver-approval-1",
+    approval: { requestId: "approval-1", approved: true },
+  };
+  const delivery = runResultDelivery(run({ request, dedupKey: "receiver-approval-1:approval:approval-1:true" }));
+  assert.equal(delivery?.provenance.sourceRequestId, "receiver-approval-1");
+  assert.equal(delivery?.provenance.sourceRunId, "r-1");
+  assert.equal(delivery?.destination.target, "web:alice:conversation");
+  assert.deepEqual(delivery?.destination.webhook, { binding: "binding", url: "https://receiver.example/qm" });
+});
