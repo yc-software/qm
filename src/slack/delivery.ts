@@ -2,7 +2,6 @@ import { errMessage, swallowAs } from "../util/errors.ts";
 import { safeChunks, safeClip } from "./safe-cut.ts";
 import { sleep } from "./util.ts";
 import { isExternallyShared, isMpim, type ChannelMeta } from "./identity.ts";
-import type { SlackCoreClient } from "../api/slack-core-client.ts";
 
 export interface SlackReplyArgs {
   channel: string;
@@ -48,7 +47,7 @@ export function personaFor(channel: string): BotIdentityOverride {
   return { ...persona, icon_emoji: defaultIdentity.icon_emoji };
 }
 
-export function refreshPersonas(core: Pick<SlackCoreClient, "agentPersonas">): Promise<void> {
+export function refreshPersonas(core: { agentPersonas?(): Promise<Map<string, SlackPersona>> }): Promise<void> {
   if (!core.agentPersonas) return Promise.resolve();
   personaRefresh ??= core
     .agentPersonas()
