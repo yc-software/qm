@@ -2,83 +2,85 @@ import { unitVector, type MemoryEmbedder } from "../model/embeddings.ts";
 import type { LeaderLease } from "../persistence/leader-lease.ts";
 import { reportFailure } from "../util/errors.ts";
 import type { MemoryVectorStore } from "./postgres-vector-store.ts";
-import { claimThenBind } from "../tenants/claim.ts";
+import { claimThenBind, type ClaimedRow } from "../tenants/claim.ts";
 import { currentTenant } from "../tenants/context.ts";
 
+type IndexStore = Pick<MemoryVectorStore, "missing" | "put" | "prune">;
+interface IndexState {
+  model?: string;
+  dimensions?: number;
+  nextProbeAt: number;
+  afterId?: string;
+}
+
 export function createMemoryVectorIndexer(opts: {
-  resolve: () => Promise<
-    | { embedder: MemoryEmbedder; store: Pick<MemoryVectorStore, "missing" | "put" | "prune" | "claimTenants"> }
-    | undefined
-  >;
+  claim: () => Promise<readonly ClaimedRow[]>;
+  resolve: () => Promise<{ embedder: MemoryEmbedder; store: IndexStore } | undefined>;
   leaderLease: LeaderLease;
   onError?: (error: unknown) => void;
   now?: () => number;
 }) {
   const onError = opts.onError ?? ((error: unknown) => reportFailure("memory vector index", error));
+  const clock = opts.now ?? Date.now;
   let pending: Promise<void> | undefined;
   let active: AbortController | undefined;
-  let model: string | undefined;
-  let dimensions: number | undefined;
-  const afterIds = new Map<string, string | undefined>();
-  let nextProbeAt = 0;
+  const states = new Map<string, IndexState>();
+  async function index(signal: AbortSignal): Promise<void> {
+    const current = await opts.resolve();
+    if (!current) return;
+    signal.throwIfAborted();
+    const { embedder, store } = current;
+    const tenant = currentTenant();
+    const state = states.get(tenant) ?? { nextProbeAt: 0 };
+    states.set(tenant, state);
+    const now = clock();
+    if (state.model !== embedder.id || state.dimensions === undefined || now >= state.nextProbeAt) {
+      const probe = await embedder.embed(["Memory index dimension probe."], signal);
+      if (probe.length !== 1) throw new Error("Invalid memory index dimension probe");
+      const width = unitVector(probe[0]).length;
+      if (width > 16000) throw new Error("Memory embedding exceeds pgvector dimensions");
+      if (state.model !== embedder.id || state.dimensions !== width) state.afterId = undefined;
+      state.model = embedder.id;
+      state.dimensions = width;
+      state.nextProbeAt = now + 10 * 60_000;
+    }
+    try {
+      do {
+        signal.throwIfAborted();
+        const facts = await store.missing(embedder.id, 64, state.dimensions, signal, state.afterId);
+        state.afterId = facts.at(-1)?.factId;
+        if (!facts.length) break;
+        const vectors = await embedder.embed(
+          facts.map((fact) => fact.text.slice(0, 8000)),
+          signal,
+        );
+        if (vectors.length !== facts.length) throw new Error("Invalid memory index embedding count");
+        const rows = facts.map((fact, i) => ({
+          scope: fact.scope,
+          factId: fact.factId,
+          hash: fact.hash,
+          model: embedder.id,
+          vector: unitVector(vectors[i]),
+        }));
+        if (rows.some((row) => row.vector.length !== state.dimensions)) {
+          Object.assign(state, { dimensions: undefined, nextProbeAt: 0, afterId: undefined });
+          throw new Error("Memory embedding dimensions changed during indexing");
+        }
+        signal.throwIfAborted();
+        await store.put(rows, signal);
+        if (facts.length < 64) break;
+      } while (clock() - now < 20_000);
+    } finally {
+      if (!signal.aborted) await store.prune(embedder.id, 200, state.dimensions, signal).catch(onError);
+    }
+  }
   async function run(): Promise<void> {
     const controller = (active = new AbortController());
     await opts.leaderLease.hold("memory:vector-index", async (lost) => {
-      const current = await opts.resolve();
-      if (!current) return;
       void lost.then(() => controller.abort());
       const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(60_000)]);
       signal.throwIfAborted();
-      const { embedder, store } = current;
-      const now = (opts.now ?? Date.now)();
-      if (model !== embedder.id || dimensions === undefined || now >= nextProbeAt) {
-        const probe = await embedder.embed(["Memory index dimension probe."], signal);
-        if (probe.length !== 1) throw new Error("Invalid memory index dimension probe");
-        const width = unitVector(probe[0]).length;
-        if (width > 16000) throw new Error("Memory embedding exceeds pgvector dimensions");
-        if (model !== embedder.id || dimensions !== width) afterIds.clear();
-        model = embedder.id;
-        dimensions = width;
-        nextProbeAt = now + 10 * 60_000;
-      }
-      const work = async (): Promise<void> => {
-        const tenant = currentTenant();
-        let afterId = afterIds.get(tenant);
-        try {
-          do {
-            signal.throwIfAborted();
-            const facts = await store.missing(embedder.id, 64, dimensions, signal, afterId);
-            afterId = facts.at(-1)?.factId;
-            if (!facts.length) break;
-            const vectors = await embedder.embed(
-              facts.map((fact) => fact.text.slice(0, 8000)),
-              signal,
-            );
-            if (vectors.length !== facts.length) throw new Error("Invalid memory index embedding count");
-            const rows = facts.map((fact, i) => ({
-              scope: fact.scope,
-              factId: fact.factId,
-              hash: fact.hash,
-              model: embedder.id,
-              vector: unitVector(vectors[i]),
-            }));
-            if (rows.some((row) => row.vector.length !== dimensions)) {
-              dimensions = undefined;
-              nextProbeAt = 0;
-              afterIds.clear();
-              afterId = undefined;
-              throw new Error("Memory embedding dimensions changed during indexing");
-            }
-            signal.throwIfAborted();
-            await store.put(rows, signal);
-            if (facts.length < 64) break;
-          } while ((opts.now ?? Date.now)() - now < 20_000);
-        } finally {
-          afterIds.set(tenant, afterId);
-          if (!signal.aborted) await store.prune(embedder.id, 200, dimensions, signal).catch(onError);
-        }
-      };
-      await claimThenBind(() => store.claimTenants(embedder.id, dimensions), work);
+      await claimThenBind(opts.claim, () => index(signal));
     });
   }
   return {

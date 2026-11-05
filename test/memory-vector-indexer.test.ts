@@ -41,6 +41,7 @@ function fixture() {
     },
   };
   const indexer = createMemoryVectorIndexer({
+    claim: store.claimTenants,
     resolve: async () => ({ store, embedder }),
     leaderLease: createNoopLeaderLease(),
     now: () => now,
@@ -146,6 +147,7 @@ test("indexer refuses malformed batches and never writes after losing its leader
     return texts.map(() => [1, 0]);
   };
   const indexer = createMemoryVectorIndexer({
+    claim: f.store.claimTenants,
     resolve: async () => ({ store: f.store, embedder: f.embedder }),
     leaderLease: { hold: async (_key, fn) => fn(lost) },
     onError: (error) => {

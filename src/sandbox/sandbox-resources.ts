@@ -232,10 +232,10 @@ export function createSandboxResources(opts: {
       );
     },
     async eachJobComputer(work) {
-      await initialize();
       await claimThenBind(
         () => opts.records.claimIds(),
         async (id) => {
+          await initialize();
           const record = await opts.records.get(id);
           if (record?.jobOnly) await work(record);
         },
