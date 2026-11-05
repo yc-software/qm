@@ -186,6 +186,23 @@ test("each binding QM can't serve names its reason", () => {
   );
 });
 
+test("a brain keeps its client credentials exactly as sent", () => {
+  const record = putBinding(
+    personalBrain(EMPTY_MEMORY_REGISTRY, { clientId: " qm-personal ", clientSecret: "\tpadded secret " }),
+    "everyone",
+    { brain: "acme-personal", scope: "personal" },
+    change,
+  );
+  const [provider] = resolveMemoryRegistry(record, change).config.providers;
+  assert.ok(provider?.type === "mcp");
+  assert.deepEqual(provider.read.auth, { clientId: " qm-personal ", clientSecret: "\tpadded secret " });
+  refused(
+    () => personalBrain(EMPTY_MEMORY_REGISTRY, { clientSecret: " \t " }),
+    400,
+    /clientSecret must be a non-empty string/,
+  );
+});
+
 test("moving a brain drops its secret, and a brain with bindings can't be deleted", () => {
   let record = putBinding(personalBrain(), "alice", { brain: "acme-personal", scope: "personal:U1" }, change);
   const sealed = record.brains[0]!.auth.clientSecretEnc;

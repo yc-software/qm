@@ -204,10 +204,12 @@ function object(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function text(value: unknown, field: string): string {
+function nonBlank(value: unknown, field: string): string {
   if (typeof value !== "string" || !value.trim()) throw invalid(`${field} must be a non-empty string`);
-  return value.trim();
+  return value;
 }
+
+const text = (value: unknown, field: string): string => nonBlank(value, field).trim();
 
 function flag(value: unknown, field: string, fallback: boolean): boolean {
   if (value === undefined) return fallback;
@@ -244,7 +246,7 @@ export function putBrain(
     throw invalid(`preset must be one of: ${Object.keys(BRAIN_PRESETS).join(", ")}`);
   const url = text(body.url ?? existing?.url, "url");
   if (brainOwner) publicUrl(url);
-  const clientSecret = body.clientSecret === undefined ? undefined : text(body.clientSecret, "clientSecret");
+  const clientSecret = body.clientSecret === undefined ? undefined : nonBlank(body.clientSecret, "clientSecret");
   const kept = url === existing?.url ? existing.auth.clientSecretEnc : undefined;
   const clientSecretEnc = clientSecret === undefined ? kept : encryptSecret(clientSecret, change.key);
   const timeoutMs = body.timeoutMs ?? existing?.timeoutMs;
@@ -253,7 +255,7 @@ export function putBrain(
     preset,
     url,
     auth: {
-      clientId: text(body.clientId ?? existing?.auth.clientId, "clientId"),
+      clientId: nonBlank(body.clientId ?? existing?.auth.clientId, "clientId"),
       ...(clientSecretEnc ? { clientSecretEnc } : {}),
     },
     ...(brainOwner ? { owner: brainOwner } : {}),
