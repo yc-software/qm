@@ -11,7 +11,7 @@ import { scopeId } from "../../types.ts";
 import { parseRef } from "../../acl/resource-ref.ts";
 import { currentTenant } from "../../tenants/context.ts";
 import { orgId } from "../../config.ts";
-import { externalOrgId } from "../../tenants/settings.ts";
+import { externalOrgId } from "../../tenants/external-org.ts";
 import { entitledScopes } from "../../resolution/context-filter.ts";
 import { sendJson } from "../http.ts";
 import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";

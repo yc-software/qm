@@ -1,5 +1,6 @@
 import { onTenantLoad, perTenant } from "./tenants/cache.ts";
-import { externalOrgId, loadTenantSettings } from "./tenants/settings.ts";
+import { externalOrgId } from "./tenants/external-org.ts";
+import { loadTenantSettings } from "./tenants/settings.ts";
 import { nonDeploymentCredential, withDeploymentCredentials } from "./credentials/deployment-credentials.ts";
 import { resolveEmbeddingModel } from "./model/pi-models.ts";
 import { createPostgresTeamStore, type TeamStore } from "./teams/teams.ts";

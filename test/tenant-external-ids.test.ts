@@ -4,7 +4,8 @@ import { composioUserId, composioUserIds } from "../src/api/routes/composio.ts";
 import { orgId } from "../src/config.ts";
 import { bindBootTenant } from "../src/tenants/boot.ts";
 import { withTenant } from "../src/tenants/context.ts";
-import { externalOrgId, loadTenantSettings } from "../src/tenants/settings.ts";
+import { externalOrgId } from "../src/tenants/external-org.ts";
+import { loadTenantSettings } from "../src/tenants/settings.ts";
 import { createProductAnalytics } from "../src/util/product-analytics.ts";
 import { twoTenants, type TwoTenants } from "./support/two-tenants.ts";
 
