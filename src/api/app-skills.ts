@@ -1,7 +1,7 @@
 import type { ScopeId } from "../types.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
-import { foreignSkillCollision, type Skill, type SkillManifest } from "../skills/skill-store.ts";
+import { foreignSkillCollision, type SkillManifest } from "../skills/skill-store.ts";
 import type { SkillPack, SkillPackStore } from "../skills/skill-pack-store.ts";
 import type { SkillPackFetcher } from "../skills/pack-fetcher.ts";
 import { planIngest, importPack, collectSharedBundle, type ImportResult } from "../skills/ingest.ts";
@@ -10,7 +10,7 @@ import { persistedSkillRecordPaths, SKILL_MATERIALIZATION_LOCK } from "../skills
 import { triggerBlocksSharedSkill } from "./artifact-share.ts";
 
 import type { App, AppDeps } from "./app-types.ts";
-import { encodeRef, parseRef, skillRef } from "../acl/resource-ref.ts";
+import { parseRef } from "../acl/resource-ref.ts";
 import { entitledScopes } from "../resolution/context-filter.ts";
 import type { Principal } from "../types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
@@ -243,13 +243,7 @@ export function createSkillMethods(
   | "createOwnedSkill"
   | "deleteOwnedSkill"
 > {
-  const { canManageSkill, republishIfShared } = h;
-  const assertMayInstructSkill = async (skill: Skill, actor: { id: string; live: boolean }) => {
-    if (!deps.namedAgents) return;
-    const grants = await deps.acl.grantsFor(skill.scopeId, encodeRef(skillRef(skill.id)));
-    for (const scope of new Set([skill.scopeId, ...grants.map((g) => g.granteeScopeId)]))
-      await deps.namedAgents.assertMayInstruct(scope, actor);
-  };
+  const { canManageSkill, assertMayInstructSkill, republishIfShared } = h;
   return {
     listSkills() {
       return deps.skills.list();

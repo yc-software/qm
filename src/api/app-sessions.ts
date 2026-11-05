@@ -1294,8 +1294,8 @@ export function createSessionMethods(
         throw new Error(`moving a ${type}'s home isn't supported — share it instead (add a grant)`);
       }
       const mover = { id: movedBy, live: opts?.liveActor === true };
-      const from = (await deps.skills.get(id))?.scopeId;
-      if (from) await deps.namedAgents?.assertMayInstruct(from, mover);
+      const skill = await deps.skills.get(id);
+      if (skill) await h.assertMayInstructSkill(skill, mover);
       await deps.namedAgents?.assertMayInstruct(toScope, mover);
       await deps.skills.move(id, toScope);
       deps.auditLog.record({

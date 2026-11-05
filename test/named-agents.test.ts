@@ -350,6 +350,51 @@ test("a skill shared into or archived in the channel before its agent was named 
   }
 });
 
+test("moving a skill shared into the agent's channel takes a live owner, so its grant can't be dropped and revived", async () => {
+  const { built, control } = await setup();
+  const OPEN_SCOPE = scopeId("channel", "C0OPEN");
+  const skillOf = async (principalId: string, name: string) => {
+    const skill = await built.app.createOwnedSkill({
+      principalId,
+      name,
+      description: name,
+      body: name,
+      liveActor: true,
+    });
+    assert.ok(skill);
+    const claims = {
+      actorId: principalId,
+      scopeId: personal(principalId),
+      liveActor: true,
+      exp: Date.now() + CAPABILITY_TTL_MS,
+    };
+    assert.equal((await control.shareArtifact({ type: "skill", id: skill.id, scope: DESIGN_SCOPE }, claims)).ok, true);
+    return {
+      skill,
+      move: (scope: string) => control.shareArtifact({ type: "skill", id: skill.id, scope, move: true }, claims),
+    };
+  };
+  const cy = await skillOf(CY, "cy-notes");
+  const ann = await skillOf(ANN, "ann-tips");
+  await createAda(control);
+  const inDesign = async (id: string) =>
+    (await built.acl.grantsFor((await built.app.getSkill(id))!.scopeId, encodeRef(skillRef(id)))).some(
+      (g) => g.granteeScopeId === DESIGN_SCOPE,
+    );
+
+  const refused = await cy.move(OPEN_SCOPE);
+  assert.equal(refused.ok, false);
+  assert.equal((await built.app.getSkill(cy.skill.id))?.scopeId, personal(CY));
+  assert.ok(await inDesign(cy.skill.id));
+
+  assert.equal((await ann.move(OPEN_SCOPE)).ok, true);
+  assert.equal((await built.app.getSkill(ann.skill.id))?.scopeId, OPEN_SCOPE);
+  assert.equal(await inDesign(ann.skill.id), false);
+  assert.equal((await ann.move(personal(ANN))).ok, true);
+  assert.equal((await built.app.getSkill(ann.skill.id))?.scopeId, personal(ANN));
+  assert.ok(await inDesign(ann.skill.id));
+});
+
 test("overlapping edits by two owners keep both changes", async () => {
   const { built, control } = await setup();
   await createAda(control);
