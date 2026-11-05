@@ -51,6 +51,18 @@ export const SLACK_TENANTS: PgMigrationDefinition = {
   ],
 };
 
+export const PRINCIPAL_TENANTS: PgMigrationDefinition = {
+  id: "tenancy/lookups/0003-principal-tenants",
+  statements: [
+    `CREATE OR REPLACE FUNCTION qm_tenants_for_principal(principal text) RETURNS SETOF uuid
+      LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp
+      AS $lookup$ BEGIN
+        RETURN QUERY SELECT DISTINCT tenant_id FROM principal_links
+          WHERE id = principal OR json->>'canonicalId' = principal;
+      END $lookup$`,
+  ],
+};
+
 export interface TenantLookup {
   tenantFor(key: TenantKey, value: string | undefined): Promise<string | undefined>;
   gmailTenants(email: string): Promise<string[]>;

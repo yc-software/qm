@@ -87,7 +87,10 @@ function start(identity: IdentityService, tenants: DirectoryStore["tenantsForEma
     portalIdentitySecret: IDENTITY_SECRET,
     identity,
     emailAuthDomain: "shared.test",
-    directory: { tenantsForEmail: tenants } as unknown as DirectoryStore,
+    directory: {
+      tenantsForEmail: tenants,
+      tenantsForPrincipal: (principal: string) => directory.tenantsForPrincipal!(principal),
+    } as unknown as DirectoryStore,
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -173,4 +176,26 @@ test("a tenant's own allowed-emails list decides admission under it, and the ins
       ).body.allowed;
     assert.equal(await as(alpha), false);
     assert.equal(await as(beta), true);
+  }));
+
+test("a trusted principal maps to the tenants whose principal links name it, through the broker route", (t) =>
+  withoutTenant(async () => {
+    const srv = start(identityAdmitting(undefined, []), async () => []);
+    t.after(srv.close);
+    const link = (tenant: string, alias: string, canonical: string) =>
+      owner.q(
+        `INSERT INTO principal_links(tenant_id, id, json) VALUES ($1, $2, jsonb_build_object('principalId', $2::text, 'canonicalId', $3::text))
+         ON CONFLICT DO NOTHING`,
+        [tenant, alias, canonical],
+      );
+    await link(alpha, "oidc:issuer:both", "both@shared.test");
+    await link(beta, "oidc:issuer:both", "both@shared.test");
+    await link(beta, "oidc:issuer:one", "bob@beta.test");
+    const tenantsOf = async (principal: string) =>
+      (await srv.get(`/v1/auth/broker/principal-tenants?principal=${encodeURIComponent(principal)}`)).body;
+    const both = await tenantsOf("oidc:issuer:both");
+    assert.deepEqual((both.tenants as Array<{ id: string }>).map(({ id }) => id).sort(), [alpha, beta].sort());
+    assert.equal(both.shared, true);
+    assert.deepEqual(await tenantsOf("oidc:issuer:one"), { tenants: [{ id: beta }], shared: true });
+    assert.deepEqual(await tenantsOf("oidc:issuer:nobody"), { tenants: [], shared: true });
   }));

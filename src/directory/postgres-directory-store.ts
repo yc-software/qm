@@ -12,6 +12,7 @@ import {
   type DirectoryStore,
 } from "./directory-store.ts";
 import { createDirectorySync } from "./directory-sync.ts";
+import { PRINCIPAL_TENANTS } from "../tenants/lookup.ts";
 import { tenantTables } from "../tenants/migrations.ts";
 import { withTenant } from "../tenants/context.ts";
 
@@ -143,6 +144,7 @@ BEGIN
 END $tenants_for_email$`,
     ],
   },
+  PRINCIPAL_TENANTS,
 ];
 
 export function createPostgresDirectoryStore(connectionString: string): DirectoryStore {
@@ -212,6 +214,17 @@ export function createPostgresDirectoryStore(connectionString: string): Director
     return rosters;
   }
 
+  function branded(rows: Record<string, unknown>[]) {
+    return Promise.all(
+      rows.map(({ id }) =>
+        withTenant(String(id), async () => {
+          const [tenant] = await q("SELECT settings->>'brandName' AS brand FROM tenants WHERE id = $1", [id]);
+          return { id: String(id), ...(typeof tenant?.brand === "string" ? { brandName: tenant.brand } : {}) };
+        }),
+      ),
+    );
+  }
+
   return {
     ...createDirectorySync({ q, pool, orgId }),
     async meta() {
@@ -221,14 +234,14 @@ export function createPostgresDirectoryStore(connectionString: string): Director
 
     async tenantsForEmail(email) {
       const rows = await q("SELECT tenant_id::text AS id FROM qm_tenants_for_email($1) ORDER BY tenant_id", [email]);
-      return Promise.all(
-        rows.map(({ id }) =>
-          withTenant(String(id), async () => {
-            const [tenant] = await q("SELECT settings->>'brandName' AS brand FROM tenants WHERE id = $1", [id]);
-            return { id: String(id), ...(typeof tenant?.brand === "string" ? { brandName: tenant.brand } : {}) };
-          }),
-        ),
-      );
+      return branded(rows);
+    },
+
+    async tenantsForPrincipal(principal) {
+      const rows = await q("SELECT tenant::text AS id FROM qm_tenants_for_principal($1) tenant ORDER BY tenant", [
+        principal,
+      ]);
+      return branded(rows);
     },
 
     async channelMember(channelId, principalId) {

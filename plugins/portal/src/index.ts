@@ -20,6 +20,7 @@ import { createCanonicalResolver } from "./canonical.ts";
 import { createTrustedEntry, trustedEntryConfig } from "./trusted-entry.ts";
 import {
   coreEmailTenants,
+  corePrincipalTenants,
   openChoice,
   tenantChoiceForms,
   verifiedEmail,
@@ -1588,7 +1589,7 @@ async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL):
     }
     const found = identity.email
       ? await coreEmailTenants(CORE, CORE_SIGNING_SECRET, identity.email)
-      : { tenants: [], shared: false };
+      : await corePrincipalTenants(CORE, CORE_SIGNING_SECRET, identity.sub);
     if (found.shared && !found.tenants.length) return sendHtml(res, 400, signInErrorHtml("account is not permitted"));
     const who = { sub: identity.sub, name: identity.name };
     if (found.tenants.length > 1) return chooseTenant(res, { trusted: who }, identity.returnTo, found.tenants);

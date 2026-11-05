@@ -118,6 +118,17 @@ async function emailTenants(ctx: ApiCtx): Promise<void> {
   });
 }
 
+async function principalTenants(ctx: ApiCtx): Promise<void> {
+  const principal = (ctx.url.searchParams.get("principal") ?? "").trim();
+  if (!principal || principal.length > 512)
+    return sendJson(ctx.res, 400, { error: "bad_request", message: "principal required" });
+  const tenants = ctx.deps.directory?.tenantsForPrincipal;
+  return sendJson(ctx.res, 200, {
+    tenants: tenants ? await tenants(principal) : [],
+    shared: !(await ctx.app.readBootTenant()),
+  });
+}
+
 async function brokerSession(ctx: ApiCtx): Promise<void> {
   const { res, deps, body } = ctx;
   if (!deps.brokerSessions) return sendJson(res, 503, { error: "not_configured" });
@@ -297,4 +308,11 @@ export const authBrokerRoutes: ReadonlyArray<Route<ApiCtx>> = [
   },
   { method: "GET", path: "/v1/auth/broker/email-allowed", auth: "source", tenant: "optional", handle: emailAllowed },
   { method: "GET", path: "/v1/auth/broker/email-tenants", auth: "source", tenant: "none", handle: emailTenants },
+  {
+    method: "GET",
+    path: "/v1/auth/broker/principal-tenants",
+    auth: "source",
+    tenant: "none",
+    handle: principalTenants,
+  },
 ];

@@ -83,6 +83,7 @@ export interface DirectoryStore {
   setWorkspaceUrl(url: string): Promise<void>;
   meta(): Promise<DirectoryMeta>;
   tenantsForEmail?(email: string): Promise<SignInTenant[]>;
+  tenantsForPrincipal?(principal: string): Promise<SignInTenant[]>;
 }
 
 export const MAX_CANDIDATES = 10;

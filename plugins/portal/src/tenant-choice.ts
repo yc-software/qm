@@ -40,12 +40,28 @@ export function verifiedEmail(userinfo: Record<string, unknown>): string | null 
   return email.trim().toLowerCase();
 }
 
-export async function coreEmailTenants(
+export function coreEmailTenants(
   coreApiUrl: string,
   signingSecret: string | undefined,
   email: string,
 ): Promise<EmailTenants> {
-  const path = withSourceAuthNonce(`/v1/auth/broker/email-tenants?email=${encodeURIComponent(email)}`, signingSecret);
+  return coreTenants(coreApiUrl, signingSecret, `email-tenants?email=${encodeURIComponent(email)}`);
+}
+
+export function corePrincipalTenants(
+  coreApiUrl: string,
+  signingSecret: string | undefined,
+  principal: string,
+): Promise<EmailTenants> {
+  return coreTenants(coreApiUrl, signingSecret, `principal-tenants?principal=${encodeURIComponent(principal)}`);
+}
+
+async function coreTenants(
+  coreApiUrl: string,
+  signingSecret: string | undefined,
+  query: string,
+): Promise<EmailTenants> {
+  const path = withSourceAuthNonce(`/v1/auth/broker/${query}`, signingSecret);
   const r = await fetch(`${coreApiUrl}${path}`, {
     headers: signedHeaders(signingSecret, "GET", path),
     signal: AbortSignal.timeout(4_000),

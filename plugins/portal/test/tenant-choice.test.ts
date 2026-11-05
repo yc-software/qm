@@ -21,7 +21,9 @@ let tenants: unknown[] = [];
 let nonce = "";
 let audience = "portal-client";
 let shared = true;
-let email = "founder@company.test";
+let email: string | null = "founder@company.test";
+let principalTenants: unknown[] = [];
+const principalLookups: string[] = [];
 const admissions: Array<string | undefined> = [];
 const surface: Array<string | undefined> = [];
 const coreCalls: Array<{ path: string; tenant: string | undefined }> = [];
@@ -47,7 +49,12 @@ const upstream = createServer((req, res) => {
         .sign(privateKey);
       return void res.end(JSON.stringify({ access_token: "test-access", id_token: idToken }));
     }
-    if (path === "/userinfo") return void res.end(JSON.stringify({ sub: "idp-subject", email, email_verified: true }));
+    if (path === "/userinfo")
+      return void res.end(JSON.stringify({ sub: "idp-subject", ...(email ? { email, email_verified: true } : {}) }));
+    if (path === "/v1/auth/broker/principal-tenants") {
+      principalLookups.push(new URL(req.url!, origin).searchParams.get("principal") ?? "");
+      return void res.end(JSON.stringify({ tenants: principalTenants, shared }));
+    }
     if (path === "/v1/auth/broker/claim") {
       let raw = "";
       for await (const chunk of req) raw += String(chunk);
@@ -227,7 +234,7 @@ test("a signed-in person's admin, connect, drop, desktop and branding calls all 
   assert.equal(sessionOf(redeemed)?.t, beta);
 });
 
-async function trustedCallback(as: string): Promise<Response> {
+async function trustedCallback(as: string | null): Promise<Response> {
   email = as;
   audience = "trusted-client";
   const login = await fetch(`${base}/auth/trusted/login?returnTo=%2F`, { redirect: "manual" });
@@ -282,4 +289,38 @@ test("a trusted sign-in on a single-tenant install stays untenanted when the dir
   shared = true;
   assert.equal(response.status, 302);
   assert.equal(sessionOf(response)?.t, undefined);
+});
+
+test("a trusted provider that sends no email picks the tenant from the principal's links", async () => {
+  shared = true;
+  const principal = trustedPrincipal(upstreamUrl, "idp-subject");
+  principalLookups.length = 0;
+
+  principalTenants = [
+    { id: alpha, brandName: "Alpha" },
+    { id: beta, brandName: "Beta" },
+  ];
+  const both = await trustedCallback(null);
+  assert.equal(both.status, 200);
+  assert.match(await both.text(), /Choose a workspace[\s\S]*Alpha[\s\S]*Beta/);
+  const chosen = await choose(cookieFrom(both, "portal_tenant_choice")!, alpha);
+  assert.deepEqual([sessionOf(chosen)?.sub, sessionOf(chosen)?.t], [principal, alpha]);
+
+  principalTenants = [{ id: beta, brandName: "Beta" }];
+  const one = await trustedCallback(null);
+  assert.equal(one.status, 302);
+  assert.deepEqual([sessionOf(one)?.sub, sessionOf(one)?.t], [principal, beta]);
+
+  principalTenants = [];
+  const unlinked = await trustedCallback(null);
+  assert.equal(unlinked.status, 400);
+  assert.match(await unlinked.text(), /account is not permitted/);
+  assert.equal(sessionOf(unlinked), null);
+
+  shared = false;
+  const solo = await trustedCallback(null);
+  shared = true;
+  assert.equal(solo.status, 302);
+  assert.equal(sessionOf(solo)?.t, undefined);
+  assert.deepEqual([...new Set(principalLookups)], [principal]);
 });
