@@ -55,6 +55,7 @@ const welcomeCohort = process.env.WEB_UI_WELCOME_COHORT?.trim().slice(0, 40) || 
 const suggestedActivities = parseSuggestedActivities(process.env.WEB_UI_SUGGESTED_ACTIVITIES);
 const PUBLIC_URL = (process.env.WEB_UI_PUBLIC_URL ?? `http://localhost:${PORT}`).replace(/\/$/, "");
 const WEB_UI_DEV = process.env.WEB_UI_DEV === "1";
+const RELEASE = process.env.GIT_SHA?.trim();
 const ALLOW_UNSIGNED_TEST_IDENTITY =
   process.env.NODE_ENV === "test" && process.env.ALLOW_UNSIGNED_TEST_IDENTITY === "1";
 const COOKIE_AUTH = !CORE_SIGNING_SECRET || ALLOW_UNSIGNED_TEST_IDENTITY;
@@ -3509,6 +3510,7 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
   if (path === "/me" || path.startsWith("/api/")) {
     const user = cookieUser(req);
     if (!user) return unauthorized(res, req);
+    if (RELEASE) res.setHeader("x-qm-release", RELEASE);
     if (["/api/dictation", "/api/voice", "/api/voice/sessions"].includes(path)) {
       return handleVoiceRoute(req, res, path, resolveIdentity(req)!, {
         org: ORG,
