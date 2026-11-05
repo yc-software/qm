@@ -4,11 +4,14 @@ import { MemoryFactsMissing } from "../memory/facts.ts";
 import { nameRequest, reportBackendError } from "../../plugins/chassis/src/error-reporting.ts";
 import {
   createServer as createHttpServer,
+  ServerResponse,
   type IncomingMessage,
   type RequestListener,
-  type ServerResponse,
   type Server,
 } from "node:http";
+import { Socket } from "node:net";
+import type { Duplex } from "node:stream";
+import { isWebSocketUpgrade } from "./routes/deployment-upgrade.ts";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest, type HTTPMethods } from "fastify";
 import type { App } from "./app.ts";
 import type { ServerDeps } from "./deps.ts";
@@ -497,6 +500,10 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
     res.on("error", () => res.destroy());
     void front(req, res).catch((err: unknown) => respondError(req, res, err));
   });
+  server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+    socket.on("error", () => socket.destroy());
+    void upgradeFront(req, socket, head).catch(() => socket.destroy());
+  });
   const { fastify, routing } = buildFastify(wiring, server);
   const ready = Promise.resolve(fastify.ready());
   ready.catch((err: unknown) => console.error("[server] fastify initialization failed:", errMessage(err)));
@@ -504,6 +511,17 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
   server.headersTimeout = 10_000;
   server.keepAliveTimeout = 5_000;
   server.maxConnections = 1024;
+
+  async function upgradeFront(req: IncomingMessage, socket: Duplex, head: Buffer): Promise<void> {
+    if (!(socket instanceof Socket) || !isWebSocketUpgrade(req)) return void socket.destroy();
+    const res = new ServerResponse(req);
+    res.assignSocket(socket);
+    res.shouldKeepAlive = false;
+    res.on("finish", () => socket.end());
+    const base: BaseCtx = { ...baseCtx(req, res, wiring), upgrade: { socket, head } };
+    if (await proxyDeploymentSubdomain(base)) return nameRequest(base.method, "/deployment-proxy/websocket");
+    sendJson(res, 404, { error: "not_found" });
+  }
 
   async function front(req: IncomingMessage, res: ServerResponse): Promise<void> {
     armBodyDeadline(req, deps.requestBodyDeadlineMs ?? 30_000);

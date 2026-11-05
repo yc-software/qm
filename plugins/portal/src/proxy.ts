@@ -1,4 +1,6 @@
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
+import { request as httpsRequest } from "node:https";
+import type { Duplex } from "node:stream";
 import { signedHeaders } from "../../chassis/src/core-client.ts";
 import { withVary } from "../../chassis/src/http.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
@@ -249,8 +251,11 @@ export function proxyToUpstream(
 
 export const FORWARD_BROKER_HEADERS = ["accept", "accept-language", "user-agent", "content-type"];
 
-export function proxyToAppHost(req: IncomingMessage, res: ServerResponse, coreBase: string, clientIp?: string): void {
-  const upstream = new URL(coreBase);
+function appHostHeaders(
+  req: IncomingMessage,
+  clientIp: string | undefined,
+  keep: readonly string[] = [],
+): Record<string, string | string[]> {
   const blocked = new Set([
     ...DROP_RESPONSE_HEADERS,
     "x-signature",
@@ -267,6 +272,7 @@ export function proxyToAppHost(req: IncomingMessage, res: ServerResponse, coreBa
     "x-forwarded-for",
     ...(req.headers.connection ?? "").split(",").map((name) => name.trim().toLowerCase()),
   ]);
+  for (const name of keep) blocked.delete(name);
   const headers: Record<string, string | string[]> = {
     "x-qm-app-host": "1",
     ...(clientIp ? { "x-qm-client-ip": clientIp } : {}),
@@ -274,6 +280,12 @@ export function proxyToAppHost(req: IncomingMessage, res: ServerResponse, coreBa
   for (const [name, value] of Object.entries(req.headers)) {
     if (value !== undefined && !blocked.has(name)) headers[name] = value;
   }
+  return headers;
+}
+
+export function proxyToAppHost(req: IncomingMessage, res: ServerResponse, coreBase: string, clientIp?: string): void {
+  const upstream = new URL(coreBase);
+  const headers = appHostHeaders(req, clientIp);
   res.removeHeader("x-frame-options");
   relay(req, res, {
     protocol: upstream.protocol,
@@ -283,4 +295,57 @@ export function proxyToAppHost(req: IncomingMessage, res: ServerResponse, coreBa
     headers,
     forwardCookies: true,
   });
+}
+
+export function relayUpgradeToAppHost(
+  req: IncomingMessage,
+  socket: Duplex,
+  head: Buffer,
+  coreBase: string,
+  clientIp?: string,
+): void {
+  const upstream = new URL(coreBase);
+  const requestFn = upstream.protocol === "https:" ? httpsRequest : httpRequest;
+  const up = requestFn({
+    protocol: upstream.protocol,
+    hostname: upstream.hostname,
+    port: requestPort(upstream),
+    path: req.url ?? "/",
+    method: "GET",
+    headers: appHostHeaders(req, clientIp, ["connection", "upgrade"]),
+  });
+  const close = (): void => {
+    socket.destroy();
+    up.destroy();
+  };
+  socket.on("error", close);
+  socket.on("close", () => up.destroy());
+  up.on("error", close);
+  up.on("upgrade", (upRes, upSocket, upHead) => {
+    const lines = [`HTTP/1.1 ${upRes.statusCode ?? 101} ${upRes.statusMessage ?? "Switching Protocols"}`];
+    for (let i = 0; i < upRes.rawHeaders.length; i += 2)
+      lines.push(`${upRes.rawHeaders[i]}: ${upRes.rawHeaders[i + 1]}`);
+    socket.write(`${lines.join("\r\n")}\r\n\r\n`);
+    if (upHead.length) socket.write(upHead);
+    if (head.length) upSocket.write(head);
+    const end = (): void => {
+      socket.destroy();
+      upSocket.destroy();
+    };
+    for (const side of [socket, upSocket]) {
+      side.on("error", end);
+      side.on("end", end);
+      side.on("close", end);
+    }
+    upSocket.pipe(socket);
+    socket.pipe(upSocket);
+  });
+  up.on("response", (upRes) => {
+    const lines = [`HTTP/1.1 ${upRes.statusCode ?? 502} ${upRes.statusMessage ?? ""}`, "Connection: close"];
+    const type = upRes.headers["content-type"];
+    if (typeof type === "string") lines.push(`Content-Type: ${type}`);
+    socket.write(`${lines.join("\r\n")}\r\n\r\n`);
+    upRes.pipe(socket);
+  });
+  up.end();
 }

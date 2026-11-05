@@ -10,7 +10,9 @@ import { reportBackendError } from "../../chassis/src/error-reporting.ts";
 import "./instrument.ts";
 import { provisionTrustedAdmin } from "./trusted-admin.ts";
 import { createHash } from "node:crypto";
-import { createServer, METHODS, type IncomingMessage, type ServerResponse } from "node:http";
+import { createServer, METHODS, ServerResponse, type IncomingMessage } from "node:http";
+import { Socket } from "node:net";
+import type { Duplex } from "node:stream";
 import { ADMIN_LOGIN_SCRIPT, ADMIN_LOGIN_SCRIPT_HASH, openAdminLogin } from "./admin-login.ts";
 import { LRUCache } from "lru-cache";
 import { createCanonicalResolver } from "./canonical.ts";
@@ -49,6 +51,7 @@ import {
   proxyToDeployment,
   proxyToUpstream,
   proxyToAppHost,
+  relayUpgradeToAppHost,
   FORWARD_AGENT_API_HEADERS,
   FORWARD_DEPLOYMENT_GIT_HEADERS,
   FORWARD_DEPLOYMENT_LAYER_HEADERS,
@@ -912,6 +915,21 @@ const server = createServer((req, res) => {
     if (!res.headersSent) json(res, 500, { error: "internal_error" });
     else res.end();
   });
+});
+
+server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+  socket.on("error", () => socket.destroy());
+  const requestHost = (req.headers.host ?? "").toLowerCase().split(":")[0]!;
+  const appSuffix = APPS_DOMAIN ? `.${APPS_DOMAIN.toLowerCase()}` : undefined;
+  const label = appSuffix && requestHost.endsWith(appSuffix) ? requestHost.slice(0, -appSuffix.length) : "";
+  if (/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label))
+    return relayUpgradeToAppHost(req, socket, head, CORE, clientIpOf(req));
+  if (!(socket instanceof Socket)) return void socket.destroy();
+  const res = new ServerResponse(req);
+  res.assignSocket(socket);
+  res.shouldKeepAlive = false;
+  res.on("finish", () => socket.end());
+  void handle(req, res).catch(() => socket.destroy());
 });
 
 async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {

@@ -31,6 +31,7 @@ import { principalDestination } from "../../reach/reach.ts";
 import { FRAME_SESSION_COOKIE, portalSession, portalSessionFrom } from "../../deploy/viewer-session.ts";
 import { EMBED_ANCESTORS_HINT, parseEmbedAncestors } from "../../deploy/embed-ancestors.ts";
 import { proxyHeaders } from "../../util/http-proxy.ts";
+import { proxyWebSocketUpgrade, upgradeOriginAllowed } from "./deployment-upgrade.ts";
 import { deploymentGitParts, isDeploymentGitRoute } from "../../../plugins/chassis/src/deployment-git.ts";
 
 function deploymentProxyAgent(port?: number): { agent?: SocksProxyAgent } {
@@ -560,6 +561,11 @@ async function proxyReach(
       viewerIdentityKey(ctx.secret, reach.id),
     );
   }
+  if (ctx.upgrade) {
+    const agent = deploymentProxyAgent(reach.endpoint.socksProxyPort).agent;
+    proxyWebSocketUpgrade(res, ctx.upgrade, reach.endpoint, subPath + url.search, headers, agent);
+    return;
+  }
   if (/(?:^|,)\s*chunked\s*$/i.test(String(req.headers["transfer-encoding"] ?? ""))) {
     const chunks: Buffer[] = [];
     let size = 0;
@@ -819,6 +825,10 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
   const slug = rawHost.slice(0, -suffix.length);
   if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(slug)) {
     sendJson(res, 404, { error: "not_found" });
+    return true;
+  }
+  if (ctx.upgrade && !upgradeOriginAllowed(req, rawHost)) {
+    sendJson(res, 403, { error: "forbidden", message: "cross-origin WebSocket refused" });
     return true;
   }
   if (!["GET", "HEAD", "OPTIONS"].includes(ctx.method)) {
