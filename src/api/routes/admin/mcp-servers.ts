@@ -10,7 +10,7 @@ import {
   type McpServer,
   type McpServerAuthMode,
 } from "../../../mcp/mcp-server-store.ts";
-import { isAccountType, PROVIDERS } from "../../../connectors/oauth.ts";
+import { isAccountType, oauthCallbackUrl, PROVIDERS } from "../../../connectors/oauth.ts";
 import {
   discoverOAuth,
   httpsUrl,
@@ -92,11 +92,9 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
   }
   const existing = await ctx.deps.mcpServers.get(id);
   let discovered: DiscoveredOAuth | undefined;
-  if (!b.auth && !existing && b.validate !== false && parsed.protocol === "https:") {
-    discovered = await discoverOAuth(parsed);
-    if (!discovered.authorize) discovered = undefined;
-  }
-  const auth = (b.auth ?? (discovered ? "oauth-user" : "none")) as McpServerAuthMode;
+  const discover = async () => (discovered ??= await discoverOAuth(parsed));
+  const probe = !b.auth && !existing && b.validate !== false && parsed.protocol === "https:";
+  const auth = (b.auth ?? (probe && (await discover()).authorize ? "oauth-user" : "none")) as McpServerAuthMode;
   if (!AUTH_MODES.includes(auth)) {
     return sendJson(ctx.res, 400, { error: "bad_request", message: `auth must be one of ${AUTH_MODES.join(", ")}` });
   }
@@ -174,9 +172,9 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
     return sendJson(ctx.res, 400, { error: "bad_request", message: "per-user credentials require HTTPS" });
   }
   if (oauthUser && (!oauthAuthorizeUrl || !oauthTokenUrl)) {
-    discovered ??= await discoverOAuth(parsed);
-    oauthAuthorizeUrl ??= discovered.authorize;
-    oauthTokenUrl ??= discovered.token;
+    const found = await discover();
+    oauthAuthorizeUrl ??= found.authorize;
+    oauthTokenUrl ??= found.token;
   }
   const server: McpServer = {
     id,
@@ -219,11 +217,11 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
       message: "client-credentials auth requires clientId and clientSecret",
     });
   }
-  const callbacks = [...new Set([ctx.deps.publicUrl, ctx.deps.portalUrl].filter((u): u is string => !!u))].map(
-    (u) => `${u.replace(/\/$/, "")}/v1/connectors/oauth/${encodeURIComponent(id)}/callback`,
+  const callbacks = [...new Set([ctx.deps.publicUrl, ctx.deps.portalUrl].filter((u): u is string => !!u))].map((base) =>
+    oauthCallbackUrl(base, id),
   );
   if (oauthUser && !server.clientId && callbacks.length) {
-    const found = (discovered ??= await discoverOAuth(parsed));
+    const found = await discover();
     if (found.registrable)
       server.clientId = await registerPublicClient(found.registrable, callbacks).catch(
         (e) => void found.errors.push(`dynamic registration: ${errMessage(e)}`),
