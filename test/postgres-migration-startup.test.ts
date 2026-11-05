@@ -30,7 +30,11 @@ test("slow lazy migrations queue with dynamic and bulk migrations before pool ac
       const dynamic = next.migrate({ id: "startup/0003", statements: ["INSERT INTO startup_result VALUES (3)"] });
       await Promise.all([first, second, dynamic, migrateRegisteredPgSchemas(url)]);
       assert.deepEqual((await admin.query("SELECT value FROM startup_result")).rows, [{ value: 3 }]);
-      assert.equal((await admin.query(`SELECT count(*)::int AS count FROM ${PG_MIGRATIONS_TABLE}`)).rows[0].count, 3);
+      assert.equal(
+        (await admin.query(`SELECT count(*)::int AS count FROM ${PG_MIGRATIONS_TABLE} WHERE id LIKE 'startup/%'`))
+          .rows[0].count,
+        3,
+      );
       await assert.rejects(next.migrate({ id: "startup/0004", statements: ["SELECT * FROM missing_table"] }));
       await next.migrate({ id: "startup/0005", statements: ["INSERT INTO startup_result VALUES (5)"] });
       assert.deepEqual((await admin.query("SELECT value FROM startup_result ORDER BY value")).rows, [

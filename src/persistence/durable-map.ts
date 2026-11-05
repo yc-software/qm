@@ -123,9 +123,7 @@ export function createPostgresMap<T>(
   let readyP: Promise<void> | null = null;
   function ready(): Promise<void> {
     if (!readyP) {
-      readyP = (async () => {
-        for (const definition of migrations) await pg.migrate(definition);
-      })().catch((e) => {
+      readyP = pg.migrate(migrations).catch((e) => {
         readyP = null;
         throw e;
       });
