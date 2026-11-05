@@ -15,7 +15,7 @@ const KEYS = {
   secret_drop: `SELECT tenant_id FROM secret_drops WHERE id = $1`,
 } as const;
 
-export type TenantKey = keyof typeof KEYS;
+export type TenantKey = keyof typeof KEYS | "slack_bridge";
 
 const definer = (name: string, returns: string, body: string): string =>
   `CREATE OR REPLACE FUNCTION ${name}(key text) RETURNS ${returns}
@@ -60,6 +60,18 @@ export const PRINCIPAL_TENANTS: PgMigrationDefinition = {
         RETURN QUERY SELECT DISTINCT tenant_id FROM principal_links
           WHERE id = principal OR json->>'canonicalId' = principal;
       END $lookup$`,
+  ],
+};
+
+export const SLACK_BRIDGE_TENANT: PgMigrationDefinition = {
+  id: "tenancy/lookups/0004-slack-bridge",
+  statements: [
+    `SET LOCAL check_function_bodies = off`,
+    definer(
+      "qm_tenant_for_slack_bridge",
+      "uuid",
+      `SELECT (array_agg(id))[1] FROM tenants WHERE settings->>'slackBridgeToken' = $1 HAVING count(*) = 1`,
+    ),
   ],
 };
 

@@ -55,7 +55,7 @@ export async function startQm(
   const managedSlack = env.QM_SLACK_SERVICE_URL
     ? createManagedSlack({
         serviceUrl: env.QM_SLACK_SERVICE_URL,
-        token: env.QM_SLACK_SERVICE_TOKEN ?? "",
+        ...(env.QM_SLACK_SERVICE_TOKEN ? { token: env.QM_SLACK_SERVICE_TOKEN } : {}),
         appId: env.QM_SLACK_APP_ID ?? "",
         store: built.slackInstallation,
         reconcile: config.backgroundWorkEnabled ? () => slackRuntime.reconcile() : undefined,

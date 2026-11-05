@@ -18,6 +18,7 @@ export const tenantSettingsSchema = z
     brandName: z.string().trim().min(1).max(40),
     modelGatewayKey: text,
     orgSlug: z.string().regex(/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/, "expected a lowercase org slug"),
+    slackBridgeToken: z.string().regex(/^[\x21-\x7e]{16,512}$/, "expected a Slack service bridge token"),
   })
   .partial()
   .strict();

@@ -171,9 +171,9 @@ export async function startSlackInstallation(ctx: ApiCtx): Promise<void> {
   }
 }
 
-export async function managedSlackRequest(ctx: ApiCtx): Promise<void> {
-  if (!ctx.deps.managedSlack) return sendJson(ctx.res, 404, { error: "not_configured" });
-  await ctx.deps.managedSlack.handle(ctx.req, ctx.res, ctx.body);
+async function managedSlackTenant(ctx: ApiCtx): Promise<string | undefined> {
+  const token = /^Bearer\s+(\S+)$/i.exec(ctx.req.headers.authorization ?? "")?.[1];
+  return (await ctx.app.tenantFor("slack_bridge", token)) ?? (await ctx.app.readBootTenant());
 }
 
 function slackTeam(value: unknown): string | undefined {
@@ -182,11 +182,25 @@ function slackTeam(value: unknown): string | undefined {
   return typeof team === "string" ? team : undefined;
 }
 
+export async function managedSlackRequest(ctx: ApiCtx): Promise<void> {
+  const slack = ctx.deps.managedSlack;
+  if (!slack) return sendJson(ctx.res, 404, { error: "not_configured" });
+  const tenant = await managedSlackTenant(ctx);
+  if (!tenant) return sendJson(ctx.res, 401, { error: "unauthorized" });
+  const teamId = (ctx.body as { teamId?: unknown } | undefined)?.teamId;
+  if (ctx.req.method === "POST" && typeof teamId === "string") {
+    const owner = await ctx.app.tenantFor("slack_team", teamId);
+    if (owner && owner !== tenant) return sendJson(ctx.res, 409, { error: "installation_conflict" });
+  }
+  return inTenant(tenant, () => slack.handle(ctx.req, ctx.res, ctx.body));
+}
+
 export async function managedSlackEvent(ctx: ApiCtx): Promise<void> {
   const slack = ctx.deps.managedSlack;
   if (!slack) return sendJson(ctx.res, 404, { error: "not_configured" });
-  if (!slack.authenticated(ctx.req)) return sendJson(ctx.res, 401, { error: "unauthorized" });
-  const tenant = await ctx.app.tenantFor("slack_team", slackTeam(ctx.body));
-  if (!tenant) return sendJson(ctx.res, 409, { error: "installation_mismatch" });
+  const tenant = await managedSlackTenant(ctx);
+  if (!tenant) return sendJson(ctx.res, 401, { error: "unauthorized" });
+  if ((await ctx.app.tenantFor("slack_team", slackTeam(ctx.body))) !== tenant)
+    return sendJson(ctx.res, 409, { error: "installation_mismatch" });
   return inTenant(tenant, () => slack.handle(ctx.req, ctx.res, ctx.body));
 }
