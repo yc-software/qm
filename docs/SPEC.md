@@ -182,15 +182,15 @@ Inventing a small cap (a count, length, byte size, page size, timeout or retry b
 
 ### Explaining-away UI (1 example)
 
-If the UI needs a sentence to explain why it didn't do what the person asked, the rule is wrong, not the copy. A note, toast or tooltip that justifies a refusal or a quiet reroute is evidence to fix the behaviour; keep such text only for a real constraint the person can act on.
+The UI form of a band-aid: if the UI needs a sentence to explain why it didn't do what the person asked, the rule is wrong, not the copy. Treat any note, toast or tooltip that justifies a refusal or a quiet reroute as a reason to question the rule behind it; keep such text only for a real constraint the person can act on.
 
-- **Steer refused during an automation turn** (2026-11-04): After [qm#2907](https://github.com/yc-software/qm/pull/2907), clicking Steer in a web chat while the agent was handling a subagent's report was refused, and the composer said "This message will run as its own turn after the current one." The note made the refusal look intended; the cause was a Slack bystander rule applied to every surface. _Status:_ [qm#3109](https://github.com/yc-software/qm/pull/3109) lets an explicit web steer through.
+- **Steer refused with an explanation** (2026-11-04): The web composer answered a refused Steer with "This message will run as its own turn after the current one." In a person's own web chat, a Steer during a turn woken by another conversation's message got that note, so the copy made a wrong refusal look intended. _Status:_ the refusal is removed for explicit steers in [qm#3109](https://github.com/yc-software/qm/pull/3109); the note remains for a model-account change, which the person can act on.
 
 ### Category gate without census (1 example)
 
 Gating behaviour on a category (origin, kind, role, surface) without listing what falls into it. Before adding or moving such a gate, grep every assignment of the category, list the real cases it catches, and say which of them change. A category named for its first use quietly grows to cover unrelated producers.
 
-- **Automation origin in the mid-turn router** (2026-11-03): [qm#2907](https://github.com/yc-software/qm/pull/2907) moved "a person's message never steers into a live automation turn", written for cron posts in shared Slack channels, into the one router for every surface. Automation origin also covers subagent-report wakes, session messages, job watches, webhooks and orphan replays, so web steers into those turns were refused. _Status:_ [qm#3109](https://github.com/yc-software/qm/pull/3109) applies the gate only to messages that did not explicitly ask to steer.
+- **Automation origin in the mid-turn router** (2026-11-03): [qm#2907](https://github.com/yc-software/qm/pull/2907) moved "a person's message never steers into a live automation turn", written for cron posts in shared Slack channels, into the one router for every surface. Automation origin also covers webhooks, job watches, loops, swarms, Slack ambient wakes, orphan-steer replays, and messages handed over from other conversations, so web steers into those turns were refused. _Status:_ [qm#3109](https://github.com/yc-software/qm/pull/3109) applies the gate only to messages that did not explicitly ask to steer.
 
 ### Historylessness (always reviewed, 5 examples)
 
