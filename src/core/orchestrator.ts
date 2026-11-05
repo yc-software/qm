@@ -93,6 +93,7 @@ import {
 import { configuredConnectorProviders } from "../credentials/connector-status.ts";
 import { CONNECTOR_HOSTS } from "../connectors/oauth.ts";
 import { SANDBOX_MODEL_PREFIX } from "../api/contract.ts";
+import { livePersonCapability } from "../api/artifact-share.ts";
 import { estimateCostUsd } from "../ratelimit/budget.ts";
 import { createSpendLimits, spendLimitNote, spendLimitRefusal } from "../ratelimit/spend-limits.ts";
 import {
@@ -2624,7 +2625,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           },
           ...(deps.config ? { config: deps.config } : {}),
           ...(deps.control && controlClaims ? { control: deps.control, controlClaims } : {}),
-          ...(controlClaims && (await deps.namedAgents?.toolOffered({ id: actor.id, live: liveTurn }, scopeId))
+          ...(controlClaims &&
+          (await deps.namedAgents?.toolOffered(
+            { id: actor.id, live: livePersonCapability(controlClaims) && !controlClaims.triggered },
+            scopeId,
+          ))
             ? { agentsTool: true }
             : {}),
           ...(deps.apiBaseUrl && connectorEnv.AGENT_API_TOKEN

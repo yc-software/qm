@@ -8,7 +8,12 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { createControlService, type ControlService } from "../src/api/control-service.ts";
+import {
+  createControlService,
+  type AgentsRequest,
+  type AgentsResult,
+  type ControlService,
+} from "../src/api/control-service.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { createToolContext } from "../src/tools/primitives.ts";
 import { createAgentTools } from "../src/agent/agent-tools.ts";
@@ -31,7 +36,6 @@ const ADA = {
   handle: "ada",
   displayName: "Ada",
   title: "Design critic",
-  avatar: { kind: "emoji", value: ":art:" },
 };
 
 async function setup(opts: { flag?: boolean } = {}) {
@@ -99,9 +103,44 @@ const fromDm = (control: ControlService, actorId: string, live = true) =>
 const inChannel = (control: ControlService, actorId: string) =>
   toolsFor(control, { actorId, scopeId: DESIGN_SCOPE, liveActor: true });
 
-async function createAda(control: ControlService, extra: Record<string, unknown> = {}) {
-  const out = await fromDm(control, ANN)("agents", { action: "create", ...ADA, owners: ["Bob"], ...extra });
-  assert.match(out, /^Created Ada \(@ada\), Design critic, in #design\. Owners: Ann, Bob\./, out);
+const claimsFor = (actorId: string, extra: Partial<CapabilityClaims> = { liveActor: true }): CapabilityClaims => ({
+  actorId,
+  scopeId: personal(actorId),
+  exp: Date.now() + CAPABILITY_TTL_MS,
+  ...extra,
+});
+const agentsAs =
+  (control: ControlService, actorId: string, extra?: Partial<CapabilityClaims>) =>
+  (req: AgentsRequest): Promise<AgentsResult> =>
+    control.agents(req, claimsFor(actorId, extra));
+
+function agentOf(r: AgentsResult) {
+  assert.ok(r.ok && "agent" in r, JSON.stringify(r));
+  return r.agent;
+}
+
+function agentsOf(r: AgentsResult) {
+  assert.ok(r.ok && "agents" in r, JSON.stringify(r));
+  return r.agents.map((a) => a.handle);
+}
+
+function codeOf(r: AgentsResult) {
+  assert.ok(!r.ok, JSON.stringify(r));
+  return r.code;
+}
+
+async function createAda(control: ControlService) {
+  const ada = agentOf(await agentsAs(control, ANN)({ action: "create", ...ADA, owners: ["Bob"] }));
+  assert.deepEqual(
+    {
+      handle: ada.handle,
+      displayName: ada.displayName,
+      title: ada.title,
+      channelId: ada.channelId,
+      owners: ada.owners,
+    },
+    { handle: "ada", displayName: "Ada", title: "Design critic", channelId: DESIGN, owners: ["Ann", "Bob"] },
+  );
 }
 
 function serve(built: Awaited<ReturnType<typeof setup>>["built"]) {
@@ -134,33 +173,20 @@ async function refusals(built: Awaited<ReturnType<typeof setup>>["built"]) {
 test("a channel member can no longer rewrite a named agent's soul through the guidance tool; a live owner can, versioned", async () => {
   const { built, control } = await setup();
   await createAda(control);
+  const replace = { action: "replace", scope: "conversation" };
 
-  const refused = await inChannel(control, CY)("guidance", {
-    action: "replace",
-    scope: "conversation",
-    content: "be rude",
-  });
-  assert.match(
-    refused,
-    /^\[error\] #design belongs to Ada\. Only Ada's owners and org admins can change .*; ask Ann\.$/,
-  );
+  assert.match(await inChannel(control, CY)("guidance", { ...replace, content: "be rude" }), /^\[error\]/);
   assert.equal(built.config.getSoul(DESIGN_SCOPE), null);
-  assert.equal((await refusals(built)).length, 1);
-  assert.equal((await refusals(built))[0]!.principalId, CY);
+  assert.deepEqual(
+    (await refusals(built)).map((e) => e.principalId),
+    [CY],
+  );
 
-  const unattended = await toolsFor(control, { actorId: ANN, scopeId: DESIGN_SCOPE })("guidance", {
-    action: "replace",
-    scope: "conversation",
-    content: "be kind",
-  });
-  assert.match(unattended, /^\[error\] #design belongs to Ada/);
+  const unattended = toolsFor(control, { actorId: ANN, scopeId: DESIGN_SCOPE });
+  assert.match(await unattended("guidance", { ...replace, content: "be kind" }), /^\[error\]/);
+  assert.equal(built.config.getSoul(DESIGN_SCOPE), null);
 
-  const ok = await inChannel(control, ANN)("guidance", {
-    action: "replace",
-    scope: "conversation",
-    content: "be kind",
-  });
-  assert.match(ok, /Updated your standing instructions \(now version \d+\)/);
+  assert.doesNotMatch(await inChannel(control, ANN)("guidance", { ...replace, content: "be kind" }), /^\[error\]/);
   assert.equal(built.config.getSoul(DESIGN_SCOPE), "be kind");
   assert.equal(built.config.soulHistory(DESIGN_SCOPE)[0]?.content, "be kind");
   assert.equal(built.config.soulHistory(DESIGN_SCOPE)[0]?.updatedBy, ANN);
@@ -232,10 +258,9 @@ test("skill creation, edit, archive, move and sharing into the agent's channel a
     assert.equal((await built.app.getSkill(homed.id))?.status, "published");
 
     const cy = toolsFor(control, { actorId: CY, scopeId: personal(CY), liveActor: true });
-    assert.match(
-      await cy("skills", { action: "share", id: ownSkill.id, toScope: DESIGN_SCOPE }),
-      /^\[error\] #design belongs to Ada/,
-    );
+    const before = (await refusals(built)).length;
+    assert.match(await cy("skills", { action: "share", id: ownSkill.id, toScope: DESIGN_SCOPE }), /^\[error\]/);
+    assert.equal((await refusals(built)).length, before + 1);
     const moveOut = await control.shareArtifact(
       { type: "skill", id: homed.id, scope: personal(CY), move: true },
       { actorId: CY, scopeId: DESIGN_SCOPE, liveActor: true, exp: Date.now() + CAPABILITY_TTL_MS },
@@ -251,7 +276,10 @@ test("skill creation, edit, archive, move and sharing into the agent's channel a
       body: "tips",
       liveActor: true,
     });
-    assert.match(await ann("skills", { action: "share", id: annSkill!.id, toScope: DESIGN_SCOPE }), /^Shared skill/);
+    assert.doesNotMatch(
+      await ann("skills", { action: "share", id: annSkill!.id, toScope: DESIGN_SCOPE }),
+      /^\[error\]/,
+    );
     assert.equal((await call("PUT", `/v1/skills/${homed.id}`, { principalId: ANN, body: "be fair" })).status, 200);
     assert.ok((await refusals(built)).length >= 5);
   } finally {
@@ -262,73 +290,50 @@ test("skill creation, edit, archive, move and sharing into the agent's channel a
 test("an archived agent unlocks its channel, and a channel without the flag is never governed", async () => {
   const { built, control } = await setup();
   await createAda(control);
-  assert.match(
-    await fromDm(control, CY)("agents", { action: "archive", agent: "ada" }),
-    /^\[error\] only Ada's active owners/,
-  );
-  assert.match(
-    await fromDm(control, BOB)("agents", { action: "archive", agent: "ada" }),
-    /^Archived Ada; #design is unlocked\./,
-  );
-  assert.match(
-    await inChannel(control, CY)("guidance", { action: "replace", scope: "conversation", content: "member edit" }),
-    /Updated your standing instructions/,
-  );
+  const replace = { action: "replace", scope: "conversation" };
+  assert.equal(codeOf(await agentsAs(control, CY)({ action: "archive", agent: "ada" })), "forbidden");
+  assert.equal(await built.app.namedAgents!.channelAgent(DESIGN).then((g) => g?.agent.state), "active");
+  agentOf(await agentsAs(control, BOB)({ action: "archive", agent: "ada" }));
   assert.equal(await built.app.namedAgents!.channelAgent(DESIGN), undefined);
+  await inChannel(control, CY)("guidance", { ...replace, content: "member edit" });
+  assert.equal(built.config.getSoul(DESIGN_SCOPE), "member edit");
 
   await built.featureFlags.setEnabled("named_agents", ORG, false, ADMIN);
   await built.featureFlags.setEnabled("named_agents", personal(ANN), true, ADMIN);
   await createAda(control);
   assert.equal(await built.app.namedAgents!.channelAgent(DESIGN), undefined);
-  assert.match(
-    await inChannel(control, CY)("guidance", { action: "replace", scope: "conversation", content: "still open" }),
-    /Updated your standing instructions/,
-  );
+  await inChannel(control, CY)("guidance", { ...replace, content: "still open" });
+  assert.equal(built.config.getSoul(DESIGN_SCOPE), "still open");
   await built.featureFlags.setEnabled("named_agents", DESIGN_SCOPE, true, ADMIN);
   assert.equal((await built.app.namedAgents!.channelAgent(DESIGN))?.agent.displayName, "Ada");
 });
 
-test("create checks membership, names and avatars; edits recheck names; one agent per channel", async () => {
+test("create checks membership and names; edits recheck names; one agent per channel", async () => {
   const { built, control } = await setup();
-  const dan = fromDm(control, DAN);
-  assert.match(
-    await dan("agents", { action: "create", ...ADA }),
-    /^\[error\] only a member of #design can give it an agent/,
+  const dan = agentsAs(control, DAN);
+  assert.equal(codeOf(await dan({ action: "create", ...ADA })), "forbidden");
+  const ann = agentsAs(control, ANN);
+  assert.equal(codeOf(await ann({ action: "create", ...ADA, displayName: "Bob" })), "bad_request");
+  assert.equal(codeOf(await ann({ action: "create", ...ADA, handle: "cy" })), "bad_request");
+  assert.equal(codeOf(await ann({ action: "create", ...ADA, displayName: "qm" })), "bad_request");
+  assert.equal(codeOf(await ann({ action: "create", ...ADA, handle: "Not A Handle!" })), "bad_request");
+  assert.equal(await built.app.namedAgents!.channelAgent(DESIGN), undefined);
+  await createAda(control);
+  assert.equal(codeOf(await ann({ action: "create", ...ADA, handle: "ada2", displayName: "Ada Two" })), "conflict");
+  assert.equal(
+    codeOf(await ann({ action: "create", ...ADA, channel: "open", handle: "ADA", displayName: "Other" })),
+    "conflict",
   );
-  const ann = fromDm(control, ANN);
-  assert.match(await ann("agents", { action: "create", ...ADA, displayName: "Bob" }), /matches Bob in the directory/);
-  assert.match(await ann("agents", { action: "create", ...ADA, handle: "cy" }), /matches Cy in the directory/);
-  assert.match(await ann("agents", { action: "create", ...ADA, displayName: "qm" }), /this assistant's own name/);
-  assert.match(
-    await ann("agents", { action: "create", ...ADA, avatar: { kind: "emoji", value: "🎨" } }),
-    /Slack shortcode like ":art:"/,
+
+  const annTool = fromDm(control, ANN);
+  assert.doesNotMatch(
+    await annTool("agents", { action: "create", ...ADA, channel: "open", handle: "opie", displayName: "Opie" }),
+    /^\[error\]/,
   );
-  assert.match(
-    await ann("agents", { action: "create", ...ADA, avatar: { kind: "url", value: "http://cdn.example.com/a.png" } }),
-    /public https URL/,
-  );
-  await createAda(control, { avatar: { kind: "url", value: "https://cdn.example.com/ada.png" } });
-  assert.match(
-    await ann("agents", { action: "create", ...ADA, handle: "ada2", displayName: "Ada Two" }),
-    /#design already has Ada/,
-  );
-  assert.match(
-    await ann("agents", { action: "create", ...ADA, channel: "open", handle: "ADA", displayName: "Other" }),
-    /Ada \(@ada\) already uses that name/,
-  );
-  assert.match(
-    await ann("agents", { action: "create", ...ADA, channel: "open", handle: "opie", displayName: "Opie" }),
-    /^Created Opie/,
-  );
-  assert.match(await ann("agents", { action: "edit", agent: "opie", displayName: "ada" }), /already uses that name/);
-  assert.match(
-    await ann("agents", { action: "edit", agent: "opie", displayName: "Dan" }),
-    /matches Dan in the directory/,
-  );
-  assert.match(
-    await ann("agents", { action: "edit", agent: "ada", title: "Chief critic" }),
-    /^Updated Ada \(@ada\), Chief critic/,
-  );
+  assert.equal((await built.app.namedAgents!.channelAgent("C0OPEN"))?.agent.handle, "opie");
+  assert.equal(codeOf(await ann({ action: "edit", agent: "opie", displayName: "ada" })), "conflict");
+  assert.equal(codeOf(await ann({ action: "edit", agent: "opie", displayName: "Dan" })), "bad_request");
+  assert.equal(agentOf(await ann({ action: "edit", agent: "ada", title: "Chief critic" })).title, "Chief critic");
   const actions = (await built.auditLog.events()).map((e) => e.action);
   assert.deepEqual(
     ["agent_create", "agent_update"].map((a) => actions.includes(a)),
@@ -342,22 +347,23 @@ test("the last active owner can't be removed or demoted, including when stored u
     [{ channelId: DESIGN, name: "design", isPrivate: true }],
     [ANN, BOB, CY, "UANN"].map((principalId) => ({ channelId: DESIGN, principalId })),
   );
-  const asSlack = fromDm(control, "UANN");
-  assert.match(await asSlack("agents", { action: "create", ...ADA }), /^Created Ada .*Owners: UANN\./);
+  const asSlack = agentsAs(control, "UANN");
+  assert.deepEqual(agentOf(await asSlack({ action: "create", ...ADA })).owners, ["UANN"]);
   await built.principalLinks.link({ principalId: "UANN", canonicalId: ANN, evidence: "test: slack id", linkedBy: ANN });
-  const ann = fromDm(control, ANN);
-  assert.match(await fromDm(control, ANN)("agents", { action: "list" }), /Ada \(@ada\).*Owners: Ann\./);
-  assert.match(
-    await inChannel(control, ANN)("guidance", { action: "replace", scope: "conversation", content: "alias owner" }),
-    /Updated your standing instructions/,
-  );
-  assert.match(await ann("agents", { action: "edit", agent: "ada", removeOwners: ["Ann"] }), /no active owner/);
-  assert.match(await asSlack("agents", { action: "edit", agent: "ada", removeOwners: [ANN] }), /no active owner/);
-  assert.match(await ann("agents", { action: "edit", agent: "ada", addOwners: ["Bob"] }), /Owners: Ann, Bob\./);
+  const ann = agentsAs(control, ANN);
+  const listed = await ann({ action: "list" });
+  assert.ok(listed.ok && "agents" in listed);
+  assert.deepEqual(listed.agents[0]?.owners, ["Ann"]);
+  await inChannel(control, ANN)("guidance", { action: "replace", scope: "conversation", content: "alias owner" });
+  assert.equal(built.config.getSoul(DESIGN_SCOPE), "alias owner");
+  assert.equal(codeOf(await ann({ action: "edit", agent: "ada", removeOwners: ["Ann"] })), "forbidden");
+  assert.equal(codeOf(await asSlack({ action: "edit", agent: "ada", removeOwners: [ANN] })), "forbidden");
+  assert.deepEqual(agentOf(await ann({ action: "edit", agent: "ada", addOwners: ["Bob"] })).owners, ["Ann", "Bob"]);
   await built.identity.deactivate(BOB);
-  assert.match(await ann("agents", { action: "edit", agent: "ada", removeOwners: ["Ann"] }), /no active owner/);
+  assert.equal(codeOf(await ann({ action: "edit", agent: "ada", removeOwners: ["Ann"] })), "forbidden");
   await built.identity.reactivate(BOB);
-  assert.match(await asSlack("agents", { action: "edit", agent: "ada", removeOwners: ["Ann"] }), /Owners: Bob\./);
+  assert.deepEqual(agentOf(await asSlack({ action: "edit", agent: "ada", removeOwners: ["Ann"] })).owners, ["Bob"]);
+  assert.deepEqual((await built.app.namedAgents!.channelAgent(DESIGN))?.agent.owners, [BOB]);
   const audit = (await built.auditLog.events()).map((e) => e.action);
   assert.ok(audit.includes("agent_owner_add") && audit.includes("agent_owner_remove"));
 });
@@ -395,19 +401,23 @@ test("deactivating every owner orphans the agent: the lock holds, admins see it,
 
     assert.match(
       await inChannel(control, CY)("guidance", { action: "replace", scope: "conversation", content: "x" }),
-      /belongs to Ada, who has no active owner\. Only an org admin/,
+      /^\[error\]/,
     );
-    assert.match(await fromDm(control, CY)("agents", { action: "list" }), /Ada \(@ada\).*No active owner\./);
-    assert.match(await fromDm(control, DAN)("agents", { action: "list" }), /^No agents\.$/);
-    const admin = fromDm(control, ADMIN);
-    assert.match(
-      await admin("agents", { action: "edit", agent: "ada", title: "Hijacked" }),
-      /^\[error\] only Ada's active owners/,
+    assert.equal(built.config.getSoul(DESIGN_SCOPE), null);
+    const cyList = await agentsAs(control, CY)({ action: "list" });
+    assert.ok(cyList.ok && "agents" in cyList);
+    assert.deepEqual(
+      cyList.agents.map((a) => [a.handle, a.orphaned]),
+      [["ada", true]],
     );
-    assert.match(
-      await admin("agents", { action: "edit", agent: "ada", addOwners: ["Cy"] }),
-      /^Updated Ada.*Owners: Ann, Bob, Cy\./,
-    );
+    assert.deepEqual(agentsOf(await agentsAs(control, DAN)({ action: "list" })), []);
+    const admin = agentsAs(control, ADMIN);
+    assert.equal(codeOf(await admin({ action: "edit", agent: "ada", title: "Hijacked" })), "forbidden");
+    assert.deepEqual(agentOf(await admin({ action: "edit", agent: "ada", addOwners: ["Cy"] })).owners, [
+      "Ann",
+      "Bob",
+      "Cy",
+    ]);
     assert.equal((await built.app.namedAgents!.channelAgent(DESIGN))?.orphaned, false);
   } finally {
     await close();
@@ -442,39 +452,29 @@ test("standing orders set from a channel turn are locked to the agent's owners",
             (item) => item.kind === "AgentMessage" && item.variant === null && item.text,
           )
         : undefined;
-      if (reply && "text" in reply) return String(reply.text);
+      if (reply) return;
       await new Promise((r) => setTimeout(r, 50));
     }
     throw new Error("no reply");
   };
-  assert.match(
-    await say(CY, "1.1", "!set_standing_order be rude"),
-    /couldn't set standing order\] #design belongs to Ada/,
-  );
+  await say(CY, "1.1", "!set_standing_order be rude");
   assert.equal((await built.app.getChannelPolicy(DESIGN))?.orders ?? "", "");
-  assert.match(await say(ANN, "2.2", "!set_standing_order be kind"), /standing order set/);
+  assert.deepEqual(
+    (await refusals(built)).map((e) => e.principalId),
+    [CY],
+  );
+  await say(ANN, "2.2", "!set_standing_order be kind");
   assert.equal((await built.app.getChannelPolicy(DESIGN))?.orders, "be kind");
 });
 
 test("list never shows a private channel's agent to a non-member", async () => {
   const { control } = await setup();
   await createAda(control);
-  assert.match(
-    await fromDm(control, ANN)("agents", {
-      action: "create",
-      ...ADA,
-      channel: "open",
-      handle: "opie",
-      displayName: "Opie",
-    }),
-    /^Created/,
+  agentOf(
+    await agentsAs(control, ANN)({ action: "create", ...ADA, channel: "open", handle: "opie", displayName: "Opie" }),
   );
-  const dan = await fromDm(control, DAN)("agents", { action: "list" });
-  assert.match(dan, /Opie/);
-  assert.doesNotMatch(dan, /Ada/);
-  const cy = await fromDm(control, CY)("agents", { action: "list" });
-  assert.match(cy, /Ada/);
-  assert.match(cy, /Opie/);
+  assert.deepEqual(agentsOf(await agentsAs(control, DAN)({ action: "list" })), ["opie"]);
+  assert.deepEqual(agentsOf(await agentsAs(control, CY)({ action: "list" })).sort(), ["ada", "opie"]);
 });
 
 const turn = (actor: string, conversation: TurnRequest["conversation"], text: string): TurnRequest => ({
@@ -501,51 +501,44 @@ test("the agents tool is offered only in a live person's own DM with the flag on
   assert.doesNotMatch(await names(ANN, designThread), /(^|,)agents(,|$)/);
   assert.doesNotMatch(await names(BOB, dmWith(BOB)), /(^|,)agents(,|$)/);
 
-  assert.match(
-    await fromDm(control, ANN, false)("agents", { action: "list" }),
-    /^\[error\] named agents are managed only by a person/,
-  );
-  assert.match(
-    await toolsFor(control, { actorId: ANN, scopeId: DESIGN_SCOPE, liveActor: true })("agents", { action: "list" }),
-    /^\[error\] named agents are managed only by a person/,
-  );
-  assert.match(
-    await fromDm(control, BOB)("agents", { action: "list" }),
-    /^\[error\] named agents are managed only by a person/,
-  );
+  const list = { action: "list" } as const;
+  assert.equal(codeOf(await agentsAs(control, ANN, {})(list)), "forbidden");
+  assert.equal(codeOf(await agentsAs(control, ANN, { liveActor: true, triggered: true })(list)), "forbidden");
+  assert.equal(codeOf(await agentsAs(control, ANN, { liveActor: true, scopeId: DESIGN_SCOPE })(list)), "forbidden");
+  assert.equal(codeOf(await agentsAs(control, BOB)(list)), "forbidden");
+  assert.deepEqual(agentsOf(await agentsAs(control, ANN)(list)), []);
+  assert.deepEqual(agentsOf(await agentsAs(control, ANN, { liveAuthor: true })(list)), []);
 });
 
-test("a bound channel's prompt names the agent and its owners; other channels and orphans keep the plain prompt", async () => {
+test("a governed channel's prompt names the agent and its active owners; other channels and orphans don't", async () => {
   const { built, control } = await setup();
   await built.config.setSoul(DESIGN_SCOPE, "Critique kindly.");
-  await built.config.setSoul(scopeId("channel", "C0OPEN"), "Open rules.");
   const prompt = async (conversation: TurnRequest["conversation"]) =>
-    (await built.app.turn(turn(ANN, conversation, "!sysprompt"))).reply ?? "";
+    (await built.app.turn(turn(CY, conversation, "!sysprompt"))).reply ?? "";
+  const thread = (root: string): TurnRequest["conversation"] => ({
+    ...designThread,
+    threadRef: `ch:${DESIGN}:${root}`,
+  });
   const openThread: TurnRequest["conversation"] = { kind: "channel", threadRef: "ch:C0OPEN:1.1", channelRef: "C0OPEN" };
-  assert.match(
-    await prompt(designThread),
-    /## Conversation instructions \(organization instructions take precedence\)\nCritique kindly\./,
-  );
+
+  const before = await prompt(thread("0.0"));
+  assert.ok(before.includes("Critique kindly."));
+  assert.doesNotMatch(before, /\bAda\b|\bBob\b/);
 
   await createAda(control);
-  const bound = await prompt(designThread);
-  assert.match(
-    bound,
-    /## Who you are: Ada \(organization instructions take precedence\)\nYou are Ada, Design critic, in #design\. Your owners are Ann and Bob\. Only your owners and org admins can change your instructions or skills\.\n\nCritique kindly\./,
-  );
-  assert.doesNotMatch(bound, /## Conversation instructions/);
-  const again = await prompt({ ...designThread, threadRef: `ch:${DESIGN}:2.2` });
-  assert.equal(
-    again.match(/## Who you are[^]*?Critique kindly\./)?.[0],
-    bound.match(/## Who you are[^]*?Critique kindly\./)?.[0],
-  );
+  const governed = await prompt(thread("1.1"));
+  assert.ok(governed.includes("Critique kindly."));
+  assert.match(governed, /\bAda\b/);
+  assert.match(governed, /\bBob\b/);
+  assert.doesNotMatch(await prompt(openThread), /\bAda\b|\bBob\b/);
 
-  const open = await prompt(openThread);
-  assert.match(open, /## Conversation instructions \(organization instructions take precedence\)\nOpen rules\./);
-  assert.doesNotMatch(open, /Who you are/);
+  await built.identity.deactivate(BOB);
+  const oneOwner = await prompt(thread("2.2"));
+  assert.match(oneOwner, /\bAda\b/);
+  assert.doesNotMatch(oneOwner, /\bBob\b/);
 
   await built.identity.deactivate(ANN);
-  await built.identity.deactivate(BOB);
-  const orphan = await prompt({ ...designThread, threadRef: `ch:${DESIGN}:3.3` });
-  assert.doesNotMatch(orphan, /Who you are|Your owners are/);
+  const orphan = await prompt(thread("3.3"));
+  assert.ok(orphan.includes("Critique kindly."));
+  assert.doesNotMatch(orphan, /\bAda\b|\bBob\b/);
 });

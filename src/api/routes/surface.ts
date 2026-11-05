@@ -1483,7 +1483,7 @@ export async function postSoul(ctx: ApiCtx): Promise<void> {
   try {
     const version = await app.updateSoul(scopeIdVal, content, actorId, {
       ...(allowSharedScope ? { allowSharedScope: true } : {}),
-      liveActor: capability ? capability.liveActor === true : true,
+      liveActor: capability ? livePersonCapability(capability) : true,
     });
     return sendJson(res, 200, { ok: true, version });
   } catch (e) {

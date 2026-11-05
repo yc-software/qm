@@ -819,7 +819,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
           allowSharedScope: true,
           expectedVersion,
           sessionId: capability.sessionId,
-          liveActor: capability.liveActor === true,
+          liveActor: livePersonCapability(capability),
         });
         return { ok: true, version };
       } catch (e) {
@@ -969,7 +969,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
     },
 
     async agents(req, capability) {
-      const actor = { id: capability.actorId, live: capability.liveActor === true && capability.triggered !== true };
+      const actor = { id: capability.actorId, live: livePersonCapability(capability) && !capability.triggered };
       const agents = app.namedAgents;
       if (!agents || !(await agents.toolOffered(actor, capability.scopeId)))
         return {

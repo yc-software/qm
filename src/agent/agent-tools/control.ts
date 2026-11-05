@@ -498,13 +498,6 @@ export function controlPlaneTools(kit: ToolKit) {
       "Admin API; authority is rechecked on every call and audited. Private content needs a live admin in a DM or Open conversation; unattended reads need explicit grants. Admin-role changes, impersonation, identity links and teammate invitations are portal-only. Confirm every mutation, report exactly what changed, and disclose only what this conversation needs. Never put secrets in arguments.\n\n" +
       admin.description;
 
-  const avatarSchema = Type.Object(
-    {
-      kind: Type.Union([Type.Literal("emoji"), Type.Literal("url")]),
-      value: Type.String({ description: 'A Slack shortcode like ":art:", or a public https image URL.' }),
-    },
-    { additionalProperties: false },
-  );
   const agentRef = Type.String({ description: "The agent's handle." });
   const people = (description: string) => Type.Optional(Type.Array(Type.String(), { description }));
   const describeAgent = (a: AgentView) =>
@@ -534,13 +527,12 @@ export function controlPlaneTools(kit: ToolKit) {
   const agents = resourceTool("agents", {
     create: agentAction(
       "create",
-      "Give a Slack channel you belong to a named agent: posts there carry its name and picture, and only its owners and org admins can change the channel's instructions, standing orders and skills. You become an owner.",
+      "Give a Slack channel you belong to a named agent. Its owners alone can change the channel's instructions, standing orders and skills from a conversation; org admins use the admin console. You become an owner.",
       Type.Object({
         channel: Type.String({ description: "Channel name or id." }),
         handle: Type.String({ description: "Unique lowercase handle, e.g. ada." }),
         displayName: Type.String(),
         title: Type.String({ description: "What it does, e.g. Design critic." }),
-        avatar: avatarSchema,
         owners: people("Teammates who also own it."),
       }),
       (r) => ("agent" in r ? `Created ${describeAgent(r.agent)}` : ""),
@@ -553,7 +545,6 @@ export function controlPlaneTools(kit: ToolKit) {
         handle: Type.Optional(Type.String()),
         displayName: Type.Optional(Type.String()),
         title: Type.Optional(Type.String()),
-        avatar: Type.Optional(avatarSchema),
         addOwners: people("Teammates to add as owners."),
         removeOwners: people("Owners to remove."),
       }),
