@@ -58,6 +58,7 @@ import { SplitDropPreview } from "./split-drop-preview";
 import { paneKindByKey, paneKindEntry } from "./pane-kinds";
 import { focusComposerOnPaneClick, focusPaneComposer, preservingFocus } from "./pane-focus";
 import { tip } from "./tooltip";
+import { personaName, sessionPersonaChip } from "./personas";
 import { workingWave } from "./ui";
 import { icon } from "./icons";
 import { contextsState, scopeTitle } from "./contexts";
@@ -832,7 +833,7 @@ function computeHeaderSignature(): string {
       const parent = session?.parentSessionId
         ? sessionsState.list.find((row) => row.id === session.parentSessionId)
         : undefined;
-      return `${p.id}|${session?.id ?? ""}|${paneCrumb(p) ?? ""}|${paneTitle(p)}|${paneIsWorking(p)}|${paneAwaitsInput(p)}|${paneBackground(p)?.label ?? ""}|${paneKindBadge(p)}|${session?.parentSessionId ?? ""}|${parent?.title ?? ""}`;
+      return `${p.id}|${session?.id ?? ""}|${paneCrumb(p) ?? ""}|${paneTitle(p)}|${paneIsWorking(p)}|${paneAwaitsInput(p)}|${paneBackground(p)?.label ?? ""}|${paneKindBadge(p)}|${session?.parentSessionId ?? ""}|${parent?.title ?? ""}|${session?.personaId ? personaName(session.personaId) : ""}`;
     })
     .join("~");
 }
@@ -1279,6 +1280,10 @@ class PaneTab implements ITabRenderer {
             : nothing
         }
         <span class="split-pane-title-text" dir="auto">${title}</span>
+        ${sessionPersonaChip(paneSession(panel), () => {
+          this.draw();
+          paneContents.get(panel.id)?.conversation?.redraw();
+        })}
         ${
           this.inStrip
             ? html`<span class="split-tab-actions">
