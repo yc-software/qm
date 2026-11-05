@@ -63,6 +63,7 @@ test("a last message preview becomes the row title with the old title beneath, f
     [
       chat("talked", "Quarterly plan", 3, { lastUserPreview: "now tighten the intro please" }),
       chat("empty", "Named but empty", 2, { lastUserPreview: null }),
+      chat("same", "fix the login bug", 1, { lastUserPreview: "fix the login bug" }),
     ],
     (row, sidebar) => {
       assert.deepEqual(row("talked"), {
@@ -71,6 +72,7 @@ test("a last message preview becomes the row title with the old title beneath, f
         flagged: true,
       });
       assert.deepEqual(row("empty"), { main: "Named but empty", detail: null, flagged: false });
+      assert.deepEqual(row("same"), { main: "fix the login bug", detail: null, flagged: false });
       sidebar.bumpSessionActivity("web:tester:empty", "what about Q3 hiring?");
       assert.deepEqual(row("empty"), { main: "what about Q3 hiring?", detail: "Named but empty", flagged: true });
     },

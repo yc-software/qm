@@ -1120,7 +1120,8 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
   } else if (untitledProjectChild) {
     titleContent = title;
   }
-  const lastMessage = lastMessageTitle(s);
+  const preview = lastMessageTitle(s);
+  const lastMessage = preview !== title ? preview : null;
   const ariaLabel = [
     lastMessage,
     title,

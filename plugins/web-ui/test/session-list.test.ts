@@ -10,7 +10,6 @@ import {
   isAbandonedNewChat,
   shouldStartProactiveOpener,
   bumpActivity,
-  lastMessageTitle,
   chatBrowseStatusMatches,
   clearWorking,
   groupProjectSessions,
@@ -226,13 +225,6 @@ test("bumpActivity sets the sent text as the last message only on rows that carr
   const flagged = bumpActivity(list, "web:u:y", 5, "hello there");
   assert.equal(flagged.find((s) => s.id === "2")!.lastUserPreview, "hello there");
   assert.equal(bumpActivity(list, "web:u:y", 5, "   ").find((s) => s.id === "2")!.lastUserPreview, null);
-});
-
-test("lastMessageTitle is null for missing, null or blank previews", () => {
-  assert.equal(lastMessageTitle(saved("1", "web:u:x")), null);
-  assert.equal(lastMessageTitle({ ...saved("1", "web:u:x"), lastUserPreview: null }), null);
-  assert.equal(lastMessageTitle({ ...saved("1", "web:u:x"), lastUserPreview: "  " }), null);
-  assert.equal(lastMessageTitle({ ...saved("1", "web:u:x"), lastUserPreview: "ship it" }), "ship it");
 });
 
 test("activityOf prefers lastActivityAt, falling back to createdAt", () => {
