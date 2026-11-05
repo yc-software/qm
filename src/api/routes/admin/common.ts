@@ -79,5 +79,16 @@ export async function discoverScopes(
       }
     }
   }
+  return distinctPersonalLabels(labels);
+}
+
+function distinctPersonalLabels(labels: Map<string, string>): Map<string, string> {
+  const personal = [...labels].filter(([id, label]) => label && parseScopeId(id).kind === "personal");
+  const uses = new Map<string, number>();
+  for (const [, label] of personal) uses.set(label, (uses.get(label) ?? 0) + 1);
+  for (const [id, label] of personal) {
+    if ((uses.get(label) ?? 0) < 2) continue;
+    labels.set(id, `${label} (${parseScopeId(id).ref.includes("@") ? "by email" : "by sign-in"})`);
+  }
   return labels;
 }

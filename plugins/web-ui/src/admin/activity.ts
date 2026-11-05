@@ -116,7 +116,7 @@ function audit(page: AdminPage, data: Row): [string, unknown] {
   const content = table(
     ["Admin", "Action", "Resource", ...(all ? ["Scope"] : []), "Time"],
     events.map((e) => [
-      { text: e.principalId, cls: "mono" },
+      { node: html`<span title=${e.principalId}>${e.displayName || e.principalId}</span>`, cls: "mono" },
       {
         node: html`<span class=${/revoke|delete|deny|fail/.test(String(e.action || "")) ? "flag-err" : "subline"}
           >${e.action || "event"}</span
