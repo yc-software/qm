@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomBytes } from "node:crypto";
+import { LRUCache } from "lru-cache";
 import { signedHeaders, withSourceAuthNonce } from "../../chassis/src/core-client.ts";
 import { isTenantId } from "../../chassis/src/tenant.ts";
 import { open, seal } from "./session.ts";
@@ -65,13 +66,12 @@ export function coreHostTenant(coreApiUrl: string, signingSecret: string | undef
 }
 
 export function createHostTenants(lookup: (host: string) => Promise<HostRecord | null>) {
-  const cache = new Map<string, { record: HostRecord | null; until: number }>();
+  const cache = new LRUCache<string, { record: HostRecord | null }>({ max: 1_000, ttl: CACHE_MS });
   return async (host: string): Promise<HostRecord | null> => {
     const hit = cache.get(host);
-    if (hit && hit.until > Date.now()) return hit.record;
+    if (hit) return hit.record;
     const record = await lookup(host);
-    if (cache.size >= 1_000) cache.delete(cache.keys().next().value!);
-    cache.set(host, { record, until: Date.now() + CACHE_MS });
+    cache.set(host, { record });
     return record;
   };
 }
