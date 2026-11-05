@@ -63,6 +63,24 @@ export const PRINCIPAL_TENANTS: PgMigrationDefinition = {
   ],
 };
 
+export const PRINCIPAL_ADMIN_TENANTS: PgMigrationDefinition = {
+  id: "tenancy/lookups/0005-principal-admin-tenants",
+  statements: [
+    `CREATE OR REPLACE FUNCTION qm_tenants_for_principal(principal text) RETURNS SETOF uuid
+      LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp
+      AS $lookup$ BEGIN
+        RETURN QUERY
+          SELECT l.tenant_id FROM principal_links l WHERE l.id = principal OR l.json->>'canonicalId' = principal
+          UNION
+          SELECT g.tenant_id FROM admin_grants g WHERE g.principal_id = principal
+          UNION
+          SELECT g.tenant_id FROM admin_grants g JOIN principal_links l ON l.tenant_id = g.tenant_id
+            WHERE (l.id = principal AND g.principal_id = l.json->>'canonicalId')
+               OR (l.json->>'canonicalId' = principal AND g.principal_id = l.id);
+      END $lookup$`,
+  ],
+};
+
 export const SLACK_BRIDGE_TENANT: PgMigrationDefinition = {
   id: "tenancy/lookups/0004-slack-bridge",
   statements: [

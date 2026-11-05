@@ -107,6 +107,35 @@ function start(identity: IdentityService, tenants: DirectoryStore["tenantsForEma
   };
 }
 
+test("a company admin is found by email or sign-in principal, directly or through a principal link, with no directory row", () =>
+  withoutTenant(async () => {
+    const grant = (tenant: string, principal: string) =>
+      owner.q(
+        `INSERT INTO admin_grants(tenant_id, principal_id, scope_id, role) VALUES ($1, $2, 'org:x', 'org_admin')`,
+        [tenant, principal],
+      );
+    await grant(alpha, "Founder@Copied.test");
+    await grant(beta, "oidc:issuer:direct");
+    await grant(beta, "linked@copied.test");
+    await owner.q(
+      `INSERT INTO principal_links(tenant_id, id, json) VALUES ($1, 'oidc:issuer:linked', '{"canonicalId":"linked@copied.test"}'),
+        ($2, 'oidc:issuer:elsewhere', '{"canonicalId":"linked@copied.test"}')`,
+      [beta, alpha],
+    );
+    try {
+      assert.deepEqual(await directory.tenantsForEmail!("founder@copied.test"), [{ id: alpha, brandName: "Alpha" }]);
+      assert.deepEqual(await directory.tenantsForPrincipal!("oidc:issuer:direct"), [{ id: beta }]);
+      assert.deepEqual(await directory.tenantsForPrincipal!("oidc:issuer:linked"), [{ id: beta }]);
+      assert.deepEqual(await directory.tenantsForPrincipal!("oidc:issuer:elsewhere"), [
+        { id: alpha, brandName: "Alpha" },
+      ]);
+      assert.deepEqual(await directory.tenantsForPrincipal!("oidc:issuer:stranger"), []);
+    } finally {
+      await owner.q(`DELETE FROM admin_grants WHERE scope_id = 'org:x'`);
+      await owner.q(`DELETE FROM principal_links WHERE id LIKE 'oidc:issuer:%'`);
+    }
+  }));
+
 test("on a host with two tenants the broker finds an email's tenants and admits it under the one that lists it", (t) =>
   withoutTenant(async () => {
     const seen: Array<string | undefined> = [];

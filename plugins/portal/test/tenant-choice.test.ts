@@ -276,6 +276,7 @@ async function trustedCallback(as: string | null): Promise<Response> {
 
 test("a trusted sign-in on a shared host picks the tenant by the provider's email but keeps its own principal", async () => {
   shared = true;
+  principalTenants = [];
   const principal = trustedPrincipal(upstreamUrl, "idp-subject");
 
   tenants = [{ id: alpha, brandName: "Alpha" }];
@@ -299,8 +300,8 @@ test("a trusted sign-in on a shared host picks the tenant by the provider's emai
 
   tenants = [];
   const nobody = await trustedCallback("stranger@nowhere.test");
-  assert.equal(nobody.status, 400);
-  assert.match(await nobody.text(), /account is not permitted/);
+  assert.equal(nobody.status, 403);
+  assert.match(await nobody.text(), /No access to this workspace/);
   assert.equal(sessionOf(nobody), null);
 });
 
@@ -335,8 +336,8 @@ test("a trusted provider that sends no email picks the tenant from the principal
 
   principalTenants = [];
   const unlinked = await trustedCallback(null);
-  assert.equal(unlinked.status, 400);
-  assert.match(await unlinked.text(), /account is not permitted/);
+  assert.equal(unlinked.status, 403);
+  assert.match(await unlinked.text(), /No access to this workspace/);
   assert.equal(sessionOf(unlinked), null);
 
   shared = false;
@@ -345,6 +346,31 @@ test("a trusted provider that sends no email picks the tenant from the principal
   assert.equal(solo.status, 302);
   assert.equal(sessionOf(solo)?.t, undefined);
   assert.deepEqual([...new Set(principalLookups)], [principal]);
+});
+
+test("a trusted sign-in with an email also counts the companies that know its principal, each listed once", async () => {
+  shared = true;
+  const principal = trustedPrincipal(upstreamUrl, "idp-subject");
+  principalLookups.length = 0;
+
+  tenants = [];
+  principalTenants = [{ id: beta, brandName: "Beta" }];
+  const copied = await trustedCallback("founder@copied.test");
+  assert.equal(copied.status, 302);
+  assert.deepEqual([sessionOf(copied)?.sub, sessionOf(copied)?.t], [principal, beta]);
+
+  tenants = [{ id: alpha, brandName: "Alpha" }];
+  principalTenants = [
+    { id: beta, brandName: "Beta" },
+    { id: alpha, brandName: "Alpha" },
+  ];
+  const both = await trustedCallback("founder@copied.test");
+  assert.equal(both.status, 200);
+  const page = await both.text();
+  assert.equal(page.match(/>Alpha</g)?.length, 1);
+  assert.equal(page.match(/>Beta</g)?.length, 1);
+  assert.deepEqual([...new Set(principalLookups)], [principal]);
+  principalTenants = [];
 });
 
 test("a session core no longer recognises is signed out, while a core outage still says try again", async () => {
