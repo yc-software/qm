@@ -329,6 +329,8 @@ interface PorterSandboxEnv {
   namePrefix?: string;
   homeDir?: string;
   ttlSec?: number;
+  memoryGb?: number;
+  maxMemoryGb?: number;
   egressProxyUrl?: string;
   defaultTimeoutSec?: number;
 }
@@ -357,6 +359,8 @@ function porterSandboxEnv(env: NodeJS.ProcessEnv): PorterSandboxEnv {
     ...(env.PORTER_SANDBOX_NAME_PREFIX ? { namePrefix: env.PORTER_SANDBOX_NAME_PREFIX } : {}),
     ...(env.PORTER_SANDBOX_HOME ? { homeDir: env.PORTER_SANDBOX_HOME } : {}),
     ...(ttlSec !== undefined ? { ttlSec } : {}),
+    ...optNum(env, "PORTER_SANDBOX_MEMORY_GB", "memoryGb"),
+    ...optNum(env, "PORTER_SANDBOX_MAX_MEMORY_GB", "maxMemoryGb"),
     ...egressProxyFor(env, "porter"),
     ...optNum(env, "SANDBOX_TIMEOUT_SEC", "defaultTimeoutSec"),
   };

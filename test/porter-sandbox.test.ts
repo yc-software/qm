@@ -170,6 +170,21 @@ test("restartComputer replaces the body but keeps the home volume", async () => 
   assert.deepEqual(await sandbox.computerStatus!(scope), { machine: "running", guestResponsive: true });
 });
 
+const liveMemory = () => fake.bodies().find((b) => b.phase === "running" && b.tags["qm-scope"] === slug)?.memory;
+
+test("bodies are created at the computer's memory size, else the install default, else the cluster's", async () => {
+  await sandbox.provision(scope);
+  assert.equal(liveMemory(), undefined);
+  const sized = make({ memoryGb: 4 });
+  await sized.restartComputer!(scope);
+  assert.equal(liveMemory(), "4Gi");
+  await sized.restartComputer!(scope, 6);
+  assert.equal(liveMemory(), "6Gi");
+  fake.terminateAll();
+  await make({ memoryGb: 4 }).provision(scope, { memoryGb: 6 });
+  assert.equal(liveMemory(), "6Gi");
+});
+
 test("porter API errors surface the response body detail, not just the status", async () => {
   const failing = withPorterErrorDetails({
     sandboxes: {

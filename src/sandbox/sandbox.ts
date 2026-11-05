@@ -69,6 +69,8 @@ export interface AgentComputerProfile {
   parksOnTeardown?: boolean;
   egressEnforcement?: EgressEnforcement;
   spec?: AgentComputerSpec;
+  /** Set only by backends that take a per-computer memory size. */
+  maxMemoryGb?: number;
 }
 
 export function effectiveEgressEnforcement(
@@ -100,6 +102,7 @@ export interface ProvisionOptions {
   egressToken?: string;
   scratch?: { key: string };
   onStatus?: (text: string) => void;
+  memoryGb?: number;
 }
 
 export interface ExecPressure {
@@ -243,7 +246,7 @@ export interface Sandbox {
   listProcesses?(handle: SandboxHandle): Promise<ProcessSession[]>;
   persistHomeSnapshot?(scopeId: string): Promise<void>;
   computerStatus?(scopeId: string): Promise<ComputerStatus>;
-  restartComputer?(scopeId: string): Promise<void>;
+  restartComputer?(scopeId: string, memoryGb?: number): Promise<void>;
   teardown(handle: SandboxHandle, opts?: TeardownOptions): Promise<void>;
   destroyScope?(scopeId: string): Promise<void>;
   reapDeepIdle?(idleMs: number, devIdleMs?: number): Promise<{ reaped: number }>;
