@@ -1,6 +1,7 @@
 import type { ProcessCredentialFiles } from "../credentials/execute-files.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { tenantTables } from "../tenants/migrations.ts";
+import { claimFunction, claimRows, type ClaimedRow } from "../tenants/claim.ts";
 
 export type ProcessKind = "build" | "dev-server" | "background";
 
@@ -49,7 +50,7 @@ export interface ProcessRegistry {
   markStatus(processId: string, status: ProcessStatus): Promise<boolean>;
   credentialFiles(processId: string): Promise<ProcessCredentialFiles | null>;
   setCredentialFiles(processId: string, files: ProcessCredentialFiles | null): Promise<void>;
-  listExpired(now?: number): Promise<ProcessRecord[]>;
+  claimExpired(now?: number): Promise<ClaimedRow[]>;
   delete(processId: string): Promise<void>;
   close?(): void;
 }
@@ -104,6 +105,16 @@ export function createPostgresProcessRegistry(connectionString: string): Process
       ],
     },
     ...tenantTables("processes/registry/0005-tenants", [{ table: "process_sessions", primaryKey: "process_id" }]),
+    {
+      id: "processes/registry/0006-claim-expired",
+      statements: [
+        claimFunction(
+          "claim_expired_process_sessions",
+          "bigint",
+          "SELECT tenant_id, process_id FROM process_sessions WHERE status = 'running' AND expires_at <= $1",
+        ),
+      ],
+    },
   ]);
 
   const migration = {
@@ -192,9 +203,8 @@ export function createPostgresProcessRegistry(connectionString: string): Process
       ]);
       return updated.length > 0;
     },
-    async listExpired(now = Date.now()) {
-      const rows = await q("SELECT * FROM process_sessions WHERE status = 'running' AND expires_at <= $1", [now]);
-      return rows.map(pgRowToRecord);
+    async claimExpired(now = Date.now()) {
+      return claimRows({ q }, "claim_expired_process_sessions", [now]);
     },
     async delete(processId) {
       await q("DELETE FROM process_sessions WHERE process_id = $1", [processId]);

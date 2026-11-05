@@ -25,7 +25,7 @@ export async function swarmFixture(
   const sessions = options.sessions ?? createPostgresSessionStore(testDatabaseUrl());
   const runs = options.runs ?? createPostgresRunStore(testDatabaseUrl()).runs;
   const lock = options.lock ?? testAdvisoryLock();
-  const store = options.store ?? createSwarmStore(testMap(), { runs, sessions });
+  const store = options.store ?? createSwarmStore(testMap(["pending"]), { runs, sessions });
   const records = testMap<SandboxResource>();
   const disks = new Map<string, Map<string, string>>();
   const provisioned: string[] = [];

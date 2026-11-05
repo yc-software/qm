@@ -6,6 +6,8 @@ import type { SessionStore } from "../sessions/session-store.ts";
 import { assertSwarmRun, type SwarmRunFence } from "./swarm-fence.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { jsonbStringify } from "../util/text.ts";
+import { claimThenBind } from "../tenants/claim.ts";
+import { currentTenant } from "../tenants/context.ts";
 
 import type { SwarmSettings } from "./swarm-settings.ts";
 import type { SandboxBackendName } from "../sandbox/sandbox-routing.ts";
@@ -108,8 +110,10 @@ export interface SwarmStore {
   get(id: string): Promise<Swarm | null>;
   create(swarm: Swarm, fence?: SwarmRunFence): Promise<Swarm>;
   update(id: string, mutate: (swarm: Swarm) => void, fence?: SwarmRunFence): Promise<Swarm>;
-  pending(afterId?: string): Promise<Swarm[]>;
+  pending(afterId?: string): Promise<PendingSwarm[]>;
 }
+
+export type PendingSwarm = Swarm & { tenantId: string };
 
 export interface SwarmStorage extends Omit<Swarm, "members" | "messages"> {
   members: Array<Omit<SwarmMember, "context"> & { contextJson: string }>;
@@ -223,13 +227,18 @@ export function createSwarmStore(
       return decode(updated);
     },
     async pending(afterId) {
-      return (
-        await backing.select({
-          where: { field: "pending", anyOfFold: ["true"] },
-          limit: SWARM_LIMITS.sweepBatch,
-          afterId,
-        })
-      ).map(decode);
+      const due = (await backing.claimIdsWhere("pending", "true"))
+        .filter(({ id }) => afterId === undefined || id > afterId)
+        .sort((a, b) => (a.id < b.id ? -1 : Number(a.id > b.id)))
+        .slice(0, SWARM_LIMITS.sweepBatch);
+      const claimed = await claimThenBind(
+        async () => due,
+        async (id) => {
+          const row = await backing.get(id);
+          return row?.pending ? [{ ...decode(row), tenantId: currentTenant() }] : [];
+        },
+      );
+      return claimed.flat();
     },
   };
 }

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createPostgresAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { createPostgresMap } from "../src/persistence/durable-map.ts";
 import { createPgPool, configurePgPooling } from "../src/persistence/pg-pool.ts";
+import { TEST_TENANT } from "./support/test-tenant.ts";
 
 const direct = process.env.DATABASE_URL;
 const pooled = process.env.DATABASE_POOL_URL;
@@ -149,7 +150,7 @@ test(
           fired = true;
         },
       });
-      await queue.enqueueFire({ cronId: "pool-test", scheduledAt: Date.now() });
+      await queue.enqueueFire({ tenantId: TEST_TENANT, cronId: "pool-test", scheduledAt: Date.now() });
       const deadline = Date.now() + 10_000;
       while (!fired && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
       assert.ok(fired);
@@ -170,7 +171,7 @@ test(
           fired = true;
         },
       });
-      await queue.enqueueFire({ cronId: "pool-test-restart", scheduledAt: Date.now() });
+      await queue.enqueueFire({ tenantId: TEST_TENANT, cronId: "pool-test-restart", scheduledAt: Date.now() });
       const restartedDeadline = Date.now() + 10_000;
       while (!fired && Date.now() < restartedDeadline) await new Promise((r) => setTimeout(r, 50));
       assert.ok(fired);

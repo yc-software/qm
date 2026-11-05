@@ -246,8 +246,8 @@ import {
   createEnvSecretSource,
   createLayeredSecretSource,
 } from "./credentials/secret-source.ts";
+import { credentialRequestHeaders } from "./credentials/credential-injection.ts";
 import {
-  credentialRequestHeaders,
   createKeychain,
   type ConnectorTokenStore,
   type OAuthToken,
@@ -319,6 +319,7 @@ import {
 import { createControlService } from "./api/control-service.ts";
 import { createPostgresRunStore } from "./runs/postgres-run-store.ts";
 import { boundTenant, currentTenant, withTenant } from "./tenants/context.ts";
+import { claimThenBind } from "./tenants/claim.ts";
 import type { RunSignalStore } from "./runs/run-signal-store.ts";
 import { createPostgresRunSignalStore } from "./runs/postgres-run-signal-store.ts";
 import { isTerminal, type Run, type RunStore } from "./runs/run-store.ts";
@@ -2408,9 +2409,7 @@ export function buildApp(
   runs.onTerminal((run) => {
     void runs
       .activeForThread(run.sessionId)
-      .then((live) => {
-        if (!live) engaged.settle(run.sessionId);
-      })
+      .then((live) => void (live ?? engaged.settle({ tenantId: run.tenantId, threadRef: run.sessionId })))
       .catch(swallowAs("wake: settle on terminal", undefined));
   });
   runs.onTerminal((run) => {
@@ -2457,10 +2456,8 @@ export function buildApp(
     for (;;) {
       const batch = await runs.pendingReturns(100, afterId);
       if (!batch.length) return sweepUnreadMailWakes(subagentMail);
-      for (const run of batch)
-        await withTenant(run.tenantId, () => returnSessionRun(run)).catch(
-          swallowAs("sessions: recover return", undefined),
-        );
+      const recover = swallowAs("sessions: recover return", undefined);
+      for (const run of batch) await withTenant(run.tenantId, () => returnSessionRun(run)).catch(recover);
       afterId = batch.at(-1)!.id;
     }
   };
@@ -2507,11 +2504,11 @@ export function buildApp(
   );
   const orphanedSignalSweeper = createSweeper(
     async () => {
-      for (const runId of await runSignals.pendingRunIds()) {
+      await claimThenBind(runSignals.pendingRuns, async (runId) => {
         const run = await runs.get(runId);
         if (!run || isTerminal(run.status))
           await app.replayOrphanedRunSignals(runId).catch(swallowAs("sessions: recover signal", undefined));
-      }
+      });
       if (Date.now() - lastSignalPrune > 60 * 60_000) {
         lastSignalPrune = Date.now();
         await runSignals.prune(7 * 24 * 60 * 60_000);
@@ -2529,7 +2526,7 @@ export function buildApp(
         const live = await runs.activeForThread(threadRef);
         if (!live) {
           pokeReaper();
-          engaged.settle(threadRef);
+          engaged.settle({ tenantId: currentTenant(), threadRef });
           return 1;
         }
         return 0;
@@ -2807,10 +2804,10 @@ export function buildApp(
   const BLOB_TTL_MS = 6 * 60 * 60_000;
   const composioReturns = artifactMap<ComposioReturn>("composio_returns");
   const composioReturnSweeper = createSweeper(
-    async () => {
-      for (const [id, entry] of await composioReturns.entries())
-        if (entry.expiresAt <= Date.now()) await composioReturns.delete(id);
-    },
+    () =>
+      claimThenBind(composioReturns.claimIds, async (id) => {
+        if (((await composioReturns.get(id))?.expiresAt ?? Infinity) <= Date.now()) await composioReturns.delete(id);
+      }),
     30 * 60_000,
     { label: "Composio consent returns", immediate: true },
   );

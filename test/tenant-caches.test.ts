@@ -68,6 +68,7 @@ function tenantMap<T>(): DurableMap<T> & { reads: string[] } {
     select: unsupported,
     selectEntries: unsupported,
     claimIds: unsupported,
+    claimIdsWhere: unsupported,
     async get(id) {
       return own().get(id) ?? null;
     },
@@ -209,9 +210,9 @@ test("loadTenant runs each registered load once per tenant and retries a failed 
 
 test("engaged sessions with the same thread are tracked per tenant", () => {
   const registry = createEngagedRegistry();
-  withTenant(A, () => registry.engage("thread"));
-  withTenant(B, () => registry.engage("thread"));
-  withTenant(A, () => registry.settle("thread"));
+  registry.engage({ tenantId: A, threadRef: "thread" });
+  registry.engage({ tenantId: B, threadRef: "thread" });
+  registry.settle({ tenantId: A, threadRef: "thread" });
   assert.deepEqual(registry.list(), [{ tenantId: B, threadRef: "thread" }]);
 });
 

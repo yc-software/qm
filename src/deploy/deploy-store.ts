@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { ScopeId } from "../types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { PgPool } from "../persistence/pg-pool.ts";
+import type { ClaimedRow } from "../tenants/claim.ts";
 import { swallow } from "../util/errors.ts";
 import { DEPLOYMENT_TABLES, NAME_INDEX } from "./page-views.ts";
 import {
@@ -104,6 +105,7 @@ export interface DeployStore {
   get(id: string): Promise<Deployment | null>;
   getByName(name: string): Promise<Deployment | null>;
   list(): Promise<Deployment[]>;
+  claimIds(): Promise<ClaimedRow[]>;
   setCurrentVersion(id: string, version: number): Promise<void>;
   setVersionImage(id: string, version: number, image: string): Promise<void>;
   setStatus(id: string, status: DeploymentStatus): Promise<void>;
@@ -331,6 +333,9 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
         ? await access.findByName(name)
         : ((await backingMap.all()).find((x) => x.name === name) ?? null);
       return d ? withAccess(d, await access.readOne(d.id)) : null;
+    },
+    claimIds() {
+      return backingMap.claimIds();
     },
     async list() {
       const [ds, accessAt] = await Promise.all([backingMap.all(), access.readAll()]);
