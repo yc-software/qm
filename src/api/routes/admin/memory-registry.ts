@@ -86,14 +86,26 @@ export const getMemoryBinding = (ctx: ApiCtx) =>
     return binding && { ...binding, disabled: full.disabled.filter((route) => route.binding === binding.id) };
   });
 
+function putAgentBrain(record: MemoryRegistry, id: string, body: unknown, c: RegistryChange): MemoryRegistry {
+  if ((body as { clientSecret?: unknown } | null)?.clientSecret !== undefined)
+    throw new MemoryRegistryError(
+      400,
+      "a brain's client secret never goes through the agent: register the brain without clientSecret, then set it through the admin API outside chat",
+    );
+  const next = putBrain(record, id, body, c);
+  const url = ({ brains }: MemoryRegistry) => brains.find((brain) => brain.id === id)?.url;
+  if (url(record) !== undefined && url(next) !== url(record))
+    throw new MemoryRegistryError(
+      400,
+      "a brain's url never changes through the agent: moving it clears its client secret, so move it through the admin API outside chat",
+    );
+  return next;
+}
+
 export const putMemoryBrain = (ctx: ApiCtx) =>
-  ctx.capability && (ctx.body as { clientSecret?: unknown }).clientSecret !== undefined
-    ? sendJson(ctx.res, 400, {
-        error: "bad_request",
-        message:
-          "a brain's client secret never goes through the agent: register the brain without clientSecret, then set it through the admin API outside chat",
-      })
-    : change(ctx, "memory-registry.brain.update", (record, c) => putBrain(record, ctx.params.id ?? "", ctx.body, c));
+  change(ctx, "memory-registry.brain.update", (record, c) =>
+    (ctx.capability ? putAgentBrain : putBrain)(record, ctx.params.id ?? "", ctx.body, c),
+  );
 
 export const deleteMemoryBrain = (ctx: ApiCtx) =>
   change(ctx, "memory-registry.brain.delete", (record) => deleteBrain(record, ctx.params.id ?? ""));
