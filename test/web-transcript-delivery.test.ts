@@ -79,8 +79,8 @@ test("enqueue stays a plain insert; the drain writes the text durably before the
     ],
   );
   const messages = reconstructMessagesFromHistory(entries);
-  assert.equal(messages.at(-1)!.role, "assistant");
-  assert.match(JSON.stringify(messages), /Reminder: standup in 10 minutes/);
+  assert.equal(messages.at(-1)!.role, "user");
+  assert.match(JSON.stringify(messages), /<message from=\\"agent\\" via=\\"cron\\">Reminder: standup in 10 minutes/);
   assert.doesNotMatch(JSON.stringify(messages), /toolCall|toolResult/);
 });
 

@@ -618,7 +618,7 @@ test(
             { type: "text", text: "Done." },
           ],
         },
-        { role: "assistant", content: [{ type: "text", text: "Daily digest" }] },
+        { role: "user", content: [{ type: "text", text: '<message from="agent" via="cron">Daily digest</message>' }] },
         { role: "user", content: [{ type: "text", text: "and Q3?" }] },
       ]);
     });
