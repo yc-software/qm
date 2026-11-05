@@ -48,10 +48,11 @@ test("app-only gateway checks exact current personal read grants without inherit
   });
   await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
+  const backings = testDeployBackings({ git: { repoRoot: join(dir, "repos") } });
   const deploy = createDeployService({
     ...singleProcessDeps(),
     externalSharingAllowed: async () => true,
-    deployStore: createDeployStore(testDeployBackings({ git: { repoRoot: join(dir, "repos") } })),
+    deployStore: createDeployStore(backings),
     provider: {
       profile: { managedScaleToZero: false },
       apply: async () => ({ host: "127.0.0.1", port: (upstream.address() as AddressInfo).port }),
@@ -66,7 +67,7 @@ test("app-only gateway checks exact current personal read grants without inherit
     deploy,
     acl,
     directory: createPostgresDirectoryStore(testDatabaseUrl()),
-    sessions: createPostgresSessionStore(testDatabaseUrl()),
+    sessions: createPostgresSessionStore(backings.databaseUrl),
     identity,
   } as unknown as Parameters<typeof createApp>[0]);
   const ownerScopeId = scopeId("personal", "owner@example.test");

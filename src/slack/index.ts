@@ -1,4 +1,5 @@
 import { continueInPrivate } from "./private-continuation.ts";
+import { currentTenant, withTenant } from "../tenants/context.ts";
 import { externalSlackNamespace, type ExternalSlackAccess } from "./external-access.ts";
 import { registerKeychainApprovalActions } from "./keychain-approvals.ts";
 import { registerDeployAccessActions } from "./deploy-access.ts";
@@ -57,6 +58,7 @@ export async function startSlackPlugin(
   cfg: SlackPluginConfig,
   core: SlackCoreClient,
 ): Promise<{ stop(): Promise<void> }> {
+  const tenant = currentTenant();
   const EVENTS_MODE = cfg.eventsMode ?? "socket";
   if (!cfg.botToken) {
     throw new Error("Slack plugin needs botToken (SLACK_BOT_TOKEN, xoxb-…)");
@@ -179,6 +181,7 @@ export async function startSlackPlugin(
     logLevel: parseLogLevel(cfg.logLevel),
     clientOptions: { ...CLIENT_OPTIONS },
   });
+  app.use(({ next }) => withTenant(tenant, next));
   if (cfg.externalAccess)
     app.use(async ({ body, next }) => {
       const envelope = body as unknown as { team_id?: string; team?: { id?: string } };

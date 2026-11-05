@@ -499,7 +499,6 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
 
   const capabilitySecret = deps.capabilitySecret ?? deps.signingSecret;
   async function front(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    armBodyDeadline(req, deps.requestBodyDeadlineMs ?? 30_000);
     const base = baseCtx(req, res, wiring);
     const raw = findRoute(rawRoutes, base.method, base.pathname);
     const matched = raw ? null : findRoute(apiRoutes, base.method, base.pathname);
@@ -525,6 +524,7 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
     raw: Matched<BaseCtx>,
     matched: Matched<ApiCtx>,
   ): Promise<void> {
+    armBodyDeadline(req, deps.requestBodyDeadlineMs ?? 30_000);
     if (await proxyDeploymentSubdomain(base)) {
       nameRequest(base.method, "/deployment-proxy/*");
       return;

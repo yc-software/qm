@@ -28,7 +28,9 @@ import {
   type SwarmMember,
   type SwarmMessage,
   type SwarmStore,
+  type PendingSwarm,
 } from "./swarm-store.ts";
+import { withTenant } from "../tenants/context.ts";
 
 export type SwarmCaller =
   { kind: "agent"; claims: CapabilityClaims } | { kind: "human"; actorId: string; sessionId: string; runId?: string };
@@ -528,13 +530,13 @@ export function createSwarmService(deps: {
   }
 
   let sweeping: Promise<void> | undefined;
-  let selecting: Promise<Swarm[]> | undefined;
+  let selecting: Promise<PendingSwarm[]> | undefined;
   let afterId: string | undefined;
   const reconciling = {
     resources: new Map<string, Promise<void>>(),
     delivery: new Map<string, Promise<void>>(),
   };
-  async function reconcileBatch(batch: Swarm[], phase: keyof typeof reconciling): Promise<void> {
+  async function reconcileBatch(batch: PendingSwarm[], phase: keyof typeof reconciling): Promise<void> {
     const active = reconciling[phase];
     const remaining = batch.values();
     await Promise.all(
@@ -547,11 +549,9 @@ export function createSwarmService(deps: {
           )
             continue;
           if (active.size >= SWARM_LIMITS.sweepConcurrency) return;
-          const operation = reconcile(swarm.id, phase)
+          const operation = withTenant(swarm.tenantId, () => reconcile(swarm.id, phase))
             .catch((error) => swallow("swarm outbox reconciliation", error))
-            .finally(() => {
-              active.delete(swarm.id);
-            });
+            .finally(() => active.delete(swarm.id));
           active.set(swarm.id, operation);
           await withTimeout(() => operation, SWARM_LIMITS.reconcileMs, "swarm reconciliation").catch((error) =>
             swallow("swarm outbox reconciliation", error),

@@ -3,7 +3,12 @@ import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
 import { createTurnSandboxes, type TurnSandboxContext } from "../src/core/orchestrator/sandboxes.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createSandboxResources, type SandboxResource, type SandboxDefault } from "../src/sandbox/sandbox-resources.ts";
+import {
+  createSandboxResources,
+  type SandboxResource,
+  type SandboxResources,
+  type SandboxDefault,
+} from "../src/sandbox/sandbox-resources.ts";
 import { createSandboxRouter } from "../src/sandbox/sandbox-routing.ts";
 import {
   upgradeLegacySandboxes,
@@ -16,6 +21,12 @@ import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
+
+async function jobComputers(resources: SandboxResources): Promise<SandboxResource[]> {
+  const found: SandboxResource[] = [];
+  await resources.eachJobComputer(async (computer) => void found.push(computer));
+  return found;
+}
 
 function fixture(configure?: (backend: Sandbox) => void, legacyScopes = ["personal:alice"]) {
   const records = testMap<SandboxResource>();
@@ -967,11 +978,11 @@ test("a job computer is invisible and untargetable for everyone, and only the jo
   const handle = await router.provision("personal:alice", { sandboxId: job.id });
   assert.equal(handle.resourceId, job.id);
   assert.deepEqual(
-    (await resources.jobComputers()).map((s) => s.id),
+    (await jobComputers(resources)).map((s) => s.id),
     [job.id],
   );
   await resources.retireJobComputer(job.id, (await resources.get(job.id)).state);
-  assert.deepEqual(await resources.jobComputers(), []);
+  assert.deepEqual(await jobComputers(resources), []);
   await assert.rejects(router.provision("personal:alice", { sandboxId: job.id }), /sandbox not found/);
 });
 
@@ -981,12 +992,12 @@ test("retiring a job computer is skipped when its state moved on, and its backin
   assert.ok(job.backingScopeId.startsWith("job-"));
   await resources.retireJobComputer(job.id, "provisioning");
   assert.deepEqual(
-    (await resources.jobComputers()).map((s) => s.id),
+    (await jobComputers(resources)).map((s) => s.id),
     [job.id],
     "a box that became ready since the sweep looked is left alone",
   );
   await resources.retireJobComputer(job.id, "ready");
-  assert.deepEqual(await resources.jobComputers(), []);
+  assert.deepEqual(await jobComputers(resources), []);
   const room = await resources.create("alice", "personal:alice", "local", "room");
   assert.ok(room.backingScopeId.startsWith("sandbox-"));
 });
@@ -1003,11 +1014,11 @@ test("a job computer whose destroy fails keeps its record for retry, and is refu
   const job = await resources.create("alice", "personal:alice", "local", "background job", undefined, true);
   await assert.rejects(resources.retireJobComputer(job.id, "ready"), /provider unavailable/);
   assert.deepEqual(
-    (await resources.jobComputers()).map((s) => [s.id, s.state, Boolean(s.error)]),
+    (await jobComputers(resources)).map((s) => [s.id, s.state, Boolean(s.error)]),
     [[job.id, "retired", true]],
   );
   await resources.retireJobComputer(job.id, (await resources.get(job.id)).state);
-  assert.deepEqual(await resources.jobComputers(), []);
+  assert.deepEqual(await jobComputers(resources), []);
   await assert.rejects(resources.get(job.id), /sandbox not found/);
   const { resources: cannotRetire } = fixture((backend) => {
     delete backend.destroyScope;

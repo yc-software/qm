@@ -447,7 +447,7 @@ export function createTurnMethods(
       const { run, deduped } = enqueued;
       if (deduped && redeliveryKey && run.dedupKey === redeliveryKey) return { status: "silent" };
       if (spineRouted && !deduped) markTriggerHandled(input as OrchestratorInput);
-      if (spineRouted) deps.engaged?.engage(conversation.threadRef);
+      if (spineRouted) deps.engaged?.engage({ tenantId: run.tenantId, threadRef: conversation.threadRef });
       const terminalResult = deduped && isTerminal(run.status) ? run.result : null;
       if (req.async && !terminalResult) return { status: "queued", runId: run.id };
       const result = terminalResult ? await withAdminLink(terminalResult) : await awaitRun(run.id);

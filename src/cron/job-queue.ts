@@ -3,6 +3,7 @@ import { createPgPool, type PgPool } from "../persistence/pg-pool.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 
 export interface CronFireJob {
+  tenantId: string;
   cronId: string;
   scheduledAt: number;
   notBefore?: number;
@@ -27,6 +28,51 @@ export interface CronJobQueue {
 const UNHEALTHY_AFTER_ERROR_MS = 30_000;
 
 const FIRE_QUEUE = "cron-fire";
+const FIRE_QUEUE_OPTIONS = { policy: "short", notify: true } as const;
+
+function grantLikePublic(schema: string): string {
+  return `DO $grant$
+DECLARE
+  grantee text;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = '${schema}' AND pg_has_role(nspowner, 'USAGE')) THEN
+    RETURN;
+  END IF;
+  FOR grantee IN
+    SELECT DISTINCT r.rolname FROM pg_namespace n, aclexplode(n.nspacl) a JOIN pg_roles r ON r.oid = a.grantee
+     WHERE n.nspname = 'public' AND a.privilege_type = 'USAGE' AND a.grantee <> n.nspowner AND NOT r.rolsuper
+  LOOP
+    EXECUTE format('GRANT USAGE ON SCHEMA %I TO %I', '${schema}', grantee);
+    EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA %I TO %I', '${schema}', grantee);
+    EXECUTE format('GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA %I TO %I', '${schema}', grantee);
+    EXECUTE format('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA %I TO %I', '${schema}', grantee);
+  END LOOP;
+END $grant$`;
+}
+
+export async function installCronQueue(databaseUrl: string, schema: string = "pgboss"): Promise<void> {
+  if (!/^[a-z_][a-z0-9_]*$/.test(schema)) throw new Error(`invalid cron queue schema: ${schema}`);
+  const pg = createPgPool(databaseUrl);
+  const boss = new PgBoss({
+    schema,
+    supervise: false,
+    schedule: false,
+    db: { executeSql: async (text, values) => (await pg.pool()).query(text, values) },
+  });
+  try {
+    await boss.start();
+    await boss.createQueue(FIRE_QUEUE, FIRE_QUEUE_OPTIONS);
+    await pg.q(grantLikePublic(schema));
+  } finally {
+    await boss.stop({ close: true, graceful: false });
+    await pg.close();
+  }
+}
+
+export function cronQueueMisconfigured(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  return code === "42501" || /pg-boss (is not installed|database requires migrations)/.test(errMessage(error));
+}
 
 export function createPgBossCronQueue(
   databaseUrl: string,
@@ -36,6 +82,7 @@ export function createPgBossCronQueue(
   let pg: PgPool | null = null;
   const boss = new PgBoss({
     schema,
+    migrate: false,
     db: {
       executeSql: async (text, values) => {
         if (!pg) throw new Error("Cron queue database is closed");
@@ -64,7 +111,7 @@ export function createPgBossCronQueue(
           await boss.start();
           initialized = true;
         }
-        await boss.createQueue(FIRE_QUEUE, { policy: "short", notify: true });
+        await boss.createQueue(FIRE_QUEUE, FIRE_QUEUE_OPTIONS);
         const localConcurrency = Math.min(32, Math.max(1, Math.trunc(fireConcurrency)));
         await boss.work<CronFireJob>(
           FIRE_QUEUE,
@@ -94,7 +141,7 @@ export function createPgBossCronQueue(
       await boss
         .send(FIRE_QUEUE, job, {
           startAfter: new Date(fireJobStartsAt(job)),
-          singletonKey: `${job.cronId}:${job.scheduledAt}`,
+          singletonKey: `${job.tenantId}:${job.cronId}:${job.scheduledAt}`,
           retryLimit: 0,
         })
         .catch((e: unknown) => {

@@ -1,7 +1,8 @@
-import { createPgPool } from "../persistence/pg-pool.ts";
+import { createPgPool, type PgMigrationDefinition } from "../persistence/pg-pool.ts";
 import { unitVector } from "../model/embeddings.ts";
 import { MEMORY_FACTS_MIGRATIONS } from "./postgres-memory-service.ts";
 import { tenantTables } from "../tenants/migrations.ts";
+import { claimFunction, claimRows, type ClaimedRow } from "../tenants/claim.ts";
 
 export interface MemoryVector {
   scope: string;
@@ -36,6 +37,7 @@ export interface MemoryVectorStore {
     afterId?: string,
   ): Promise<Array<{ scope: string; factId: string; hash: string; text: string }>>;
   prune(model: string, limit: number, dimensions?: number, signal?: AbortSignal): Promise<number>;
+  claimTenants(model: string, dimensions?: number): Promise<ClaimedRow[]>;
   close(): Promise<void>;
 }
 
@@ -61,15 +63,39 @@ function vectorWidth(dimensions: number | undefined): number | null {
   return dimensions;
 }
 
+export const VECTOR_MIGRATIONS: PgMigrationDefinition[] = [
+  ...MEMORY_FACTS_MIGRATIONS,
+  { id: "memory/vectors/0001-extension", statements: ["CREATE EXTENSION IF NOT EXISTS vector"] },
+  { id: "memory/vectors/0002", statements: SCHEMA },
+  ...tenantTables("memory/vectors/0003-tenants", [
+    { table: "memory_fact_vectors", primaryKey: "scope_id, model, fact_id" },
+  ]),
+  {
+    id: "memory/vectors/0004-claims",
+    statements: [
+      claimFunction(
+        "claim_memory_index",
+        "model text, dims integer",
+        `SELECT f.tenant_id, 'memory'::text FROM memory_facts f
+             WHERE f.deleted_at IS NULL AND NOT EXISTS (
+               SELECT 1 FROM memory_fact_vectors v
+                WHERE v.tenant_id = f.tenant_id AND v.scope_id = f.scope_id AND v.fact_id = f.id AND v.model = $1
+                  AND v.fact_hash = f.text_hash AND ($2::integer IS NULL OR v.dimensions = $2))
+             GROUP BY f.tenant_id
+           UNION
+           SELECT s.tenant_id, 'memory'::text FROM memory_fact_vectors s
+             WHERE s.model <> $1 OR ($2::integer IS NOT NULL AND s.dimensions <> $2) OR NOT EXISTS (
+               SELECT 1 FROM memory_facts f
+                WHERE f.tenant_id = s.tenant_id AND f.scope_id = s.scope_id AND f.id = s.fact_id
+                  AND f.deleted_at IS NULL AND f.text_hash = s.fact_hash)
+             GROUP BY s.tenant_id`,
+      ),
+    ],
+  },
+];
+
 export function createPostgresVectorStore(connectionString: string): MemoryVectorStore {
-  const db = createPgPool(connectionString, [
-    ...MEMORY_FACTS_MIGRATIONS,
-    { id: "memory/vectors/0001-extension", statements: ["CREATE EXTENSION IF NOT EXISTS vector"] },
-    { id: "memory/vectors/0002", statements: SCHEMA },
-    ...tenantTables("memory/vectors/0003-tenants", [
-      { table: "memory_fact_vectors", primaryKey: "scope_id, model, fact_id" },
-    ]),
-  ]);
+  const db = createPgPool(connectionString, VECTOR_MIGRATIONS);
   return {
     async search(input) {
       if (!input.ids.length) return [];
@@ -165,6 +191,17 @@ export function createPostgresVectorStore(connectionString: string): MemoryVecto
       );
       return rowCount;
     },
+    claimTenants: (model, dimensions) => claimRows(db, "claim_memory_index", [model, vectorWidth(dimensions)]),
     close: () => db.close(),
   };
+}
+
+export async function registerVectorMigrations(connectionString: string): Promise<void> {
+  const pg = createPgPool(connectionString);
+  try {
+    const available = await pg.q("SELECT 1 FROM pg_available_extensions WHERE name = 'vector'");
+    if (available.length) for (const migration of VECTOR_MIGRATIONS) pg.registerMigration(migration);
+  } finally {
+    await pg.close();
+  }
 }

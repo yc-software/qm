@@ -4,12 +4,8 @@ import { attestableActor, UNATTESTABLE_ACTOR_FIX } from "../directory/person.ts"
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { ScopeId } from "../types.ts";
 import type { CredentialUsageSink } from "../admin/credential-usage-sink.ts";
-import {
-  credentialInjectionError,
-  credentialRequestHeaders,
-  type DecryptedServiceCredential,
-  type ServiceCredentialReader,
-} from "../credentials/keychain.ts";
+import type { DecryptedServiceCredential, ServiceCredentialReader } from "../credentials/keychain.ts";
+import { credentialInjectionError, credentialRequestHeaders } from "../credentials/credential-injection.ts";
 
 export interface BrokerFetchResponse {
   status: number;

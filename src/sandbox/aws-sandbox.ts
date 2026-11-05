@@ -28,6 +28,7 @@ import type {
 } from "./sandbox.ts";
 import { execFailureDetail, visibleNotInstalled, visibleTools } from "./sandbox.ts";
 import { createHomeSnapshotOps, createS3SnapshotStore, HOME_SNAPSHOT_PRUNE, snapshotDue } from "./home-snapshot.ts";
+import { claimThenBind } from "../tenants/claim.ts";
 import {
   ephemeralCredLinkPaths,
   ephemeralCredLinkScript,
@@ -529,33 +530,35 @@ export function createAwsSandbox(opts: AwsSandboxOptions): Sandbox {
       if (!(idleMs > 0)) return { reaped: 0 };
       const cutoff = Date.now() - idleMs;
       let reaped = 0;
-      for (const [scope, candidate] of await store.entries()) {
-        await withScopeLock(scope, async () => {
-          const rec = await store.get(scope);
-          if (!rec || rec.microvmId !== candidate.microvmId) return;
-          if (rec.orgId && rec.orgId !== configOrgId()) return;
-          if (!rec.lastActivityMs || rec.lastActivityMs > cutoff) return;
-          if (activeByMicrovm.has(rec.microvmId)) return;
-          const desc = await api.tryGetMicrovm(rec.microvmId);
-          if (!desc || desc.state === "TERMINATED" || desc.state === "TERMINATING") {
-            await store.delete(scope).catch(() => {});
-            return;
-          }
-          try {
-            endpointById.set(rec.microvmId, rec.endpoint);
-            const due = !rec.lastSnapshotMs || (rec.lastActivityMs ?? 0) > rec.lastSnapshotMs;
-            if (due) {
-              await ensureRunning(rec.microvmId);
-              await snapshotHome(scope, rec.microvmId);
+      await claimThenBind(
+        () => store.claimIds(),
+        (scope) =>
+          withScopeLock(scope, async () => {
+            const rec = await store.get(scope);
+            if (!rec) return;
+            if (rec.orgId && rec.orgId !== configOrgId()) return;
+            if (!rec.lastActivityMs || rec.lastActivityMs > cutoff) return;
+            if (activeByMicrovm.has(rec.microvmId)) return;
+            const desc = await api.tryGetMicrovm(rec.microvmId);
+            if (!desc || desc.state === "TERMINATED" || desc.state === "TERMINATING") {
+              await store.delete(scope).catch(() => {});
+              return;
             }
-            await api.terminate(rec.microvmId);
-            await store.delete(scope);
-            reaped++;
-          } catch (e) {
-            reportError("sandbox_reap", "deep_idle_reap_failed", errMessage(e), scope);
-          }
-        });
-      }
+            try {
+              endpointById.set(rec.microvmId, rec.endpoint);
+              const due = !rec.lastSnapshotMs || (rec.lastActivityMs ?? 0) > rec.lastSnapshotMs;
+              if (due) {
+                await ensureRunning(rec.microvmId);
+                await snapshotHome(scope, rec.microvmId);
+              }
+              await api.terminate(rec.microvmId);
+              await store.delete(scope);
+              reaped++;
+            } catch (e) {
+              reportError("sandbox_reap", "deep_idle_reap_failed", errMessage(e), scope);
+            }
+          }),
+      );
       return { reaped };
     },
   };

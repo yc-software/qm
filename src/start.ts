@@ -9,6 +9,7 @@ import { dockerDaemonFailure } from "./deploy/docker-deploy-provider.ts";
 import { errMessage, reportFailureAs } from "./util/errors.ts";
 import { slackAccountConfigsFromEnv, slackPluginConfigFromEnv, startSlackPlugin } from "./slack/index.ts";
 import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
+import { installCronQueue } from "./cron/job-queue.ts";
 import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
 import { bindBootTenant, inBootTenant } from "./tenants/boot.ts";
 import { loadTenant } from "./tenants/cache.ts";
@@ -19,6 +20,10 @@ export async function startQm(
 ) {
   const built = buildApp(config, overrides);
   await migrateRegisteredPgSchemas(config.databaseUrl);
+  if (config.databaseUrl)
+    await installCronQueue(config.databaseUrl).catch((error: unknown) =>
+      console.error(`[scheduler] misconfiguration: could not install the cron job queue: ${errMessage(error)}`),
+    );
   const tenant = await bindBootTenant(() => built.app.readBootTenant());
   if (config.backgroundWorkEnabled) await inBootTenant(tenant, () => built.ownSharedState());
   const slackConfig = slackPluginConfigFromEnv(env);

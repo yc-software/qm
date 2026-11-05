@@ -12,6 +12,8 @@ import { getVerifier, type VerifierInput } from "../webhooks/verifiers.ts";
 import { hashId } from "../util/crypto.ts";
 import { errMessage, swallow } from "../util/errors.ts";
 import { isObj } from "./sources/adapter.ts";
+import { claimThenBind } from "../tenants/claim.ts";
+import { currentTenant, withTenant } from "../tenants/context.ts";
 import { slackConversationRef } from "./sources/slack.ts";
 import { isDirectChannelType } from "../slack/payloads.ts";
 import { createGmailPushClient, verifyGmailPush, type GmailCursor, type GmailPushConfig } from "./gmail-push.ts";
@@ -256,6 +258,31 @@ export function createLoopIngress(deps: LoopIngressDeps) {
     });
   }
 
+  async function renew(source: LoopIngress): Promise<void> {
+    if (source.kind === "gmail" && deps.gmailClient && (source.nextWatchAt ?? 0) <= Date.now()) {
+      await deps.lock.withLock(`loop-ingress:${source.id}`, async () => {
+        const current = await deps.sources.get(source.id);
+        if (!current?.enabled || (current.nextWatchAt ?? 0) > Date.now()) return;
+        try {
+          const watch = await deps.gmailClient!.watch(source.owner);
+          if (current.gmail && watch.email !== current.gmail.email) throw new Error("Connected Gmail account changed");
+          await deps.sources.merge(source.id, {
+            gmail: { ...watch, historyId: current.gmail?.historyId ?? watch.historyId },
+            nextWatchAt: Date.now() + 86_400_000,
+            lastError: undefined,
+          });
+          await enqueue(source, `reconcile:${Date.now()}`, { historyId: watch.historyId });
+        } catch (error) {
+          await deps.sources.merge(source.id, { lastError: errMessage(error), nextWatchAt: Date.now() + 300_000 });
+        }
+      });
+    }
+    if (source.kind === "gmail" && (source.nextReconcileAt ?? 0) <= Date.now()) {
+      await enqueue(source, `reconcile:${Math.floor(Date.now() / 600_000)}`, {});
+      await deps.sources.merge(source.id, { nextReconcileAt: Date.now() + 600_000 });
+    }
+  }
+
   return {
     gmailAvailable: Boolean(deps.gmailConfig && deps.gmailClient),
     async enqueueConversation(loop: Pick<Loop, "id" | "owner">, entries: IngressEntry[]): Promise<boolean> {
@@ -439,40 +466,29 @@ export function createLoopIngress(deps: LoopIngressDeps) {
     },
     async maintain() {
       if (Date.now() >= nextCleanupAt) {
-        for (const delivery of await deps.deliveries.select({ omit: ["entries"] }))
-          if (delivery.completedAt && delivery.completedAt < Date.now() - 30 * 86_400_000)
-            await deps.deliveries.delete(delivery.id);
+        await claimThenBind(
+          () => deps.deliveries.claimIds(),
+          async (id) => {
+            const delivery = await deps.deliveries.get(id);
+            if (delivery?.completedAt && delivery.completedAt < Date.now() - 30 * 86_400_000)
+              await deps.deliveries.delete(id);
+          },
+        );
         nextCleanupAt = Date.now() + 86_400_000;
       }
-      const sources = await deps.sources.all();
+      const sources = await claimThenBind(
+        () => deps.sources.claimIds(),
+        async (id) => {
+          const source = await deps.sources.get(id);
+          if (source?.enabled && (await deps.enabledFor(source.owner))) await renew(source);
+          return { tenantId: currentTenant(), id, enabled: Boolean(source?.enabled) };
+        },
+      );
       for (const source of sources) {
-        if (!source.enabled || !(await deps.enabledFor(source.owner))) continue;
-        if (source.kind === "gmail" && deps.gmailClient && (source.nextWatchAt ?? 0) <= Date.now()) {
-          await deps.lock.withLock(`loop-ingress:${source.id}`, async () => {
-            const current = await deps.sources.get(source.id);
-            if (!current?.enabled || (current.nextWatchAt ?? 0) > Date.now()) return;
-            try {
-              const watch = await deps.gmailClient!.watch(source.owner);
-              if (current.gmail && watch.email !== current.gmail.email)
-                throw new Error("Connected Gmail account changed");
-              await deps.sources.merge(source.id, {
-                gmail: { ...watch, historyId: current.gmail?.historyId ?? watch.historyId },
-                nextWatchAt: Date.now() + 86_400_000,
-                lastError: undefined,
-              });
-              await enqueue(source, `reconcile:${Date.now()}`, { historyId: watch.historyId });
-            } catch (error) {
-              await deps.sources.merge(source.id, { lastError: errMessage(error), nextWatchAt: Date.now() + 300_000 });
-            }
-          });
-        }
-        if (source.kind === "gmail" && (source.nextReconcileAt ?? 0) <= Date.now()) {
-          await enqueue(source, `reconcile:${Math.floor(Date.now() / 600_000)}`, {});
-          await deps.sources.merge(source.id, { nextReconcileAt: Date.now() + 600_000 });
-        }
-      }
-      for (const source of sources) {
-        if (source.enabled) await process(source.id).catch((error) => swallow("Loop ingestion", error));
+        if (source.enabled)
+          await withTenant(source.tenantId, () => process(source.id)).catch((error) =>
+            swallow("Loop ingestion", error),
+          );
       }
     },
     process,

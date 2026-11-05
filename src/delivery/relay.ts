@@ -2,6 +2,7 @@ import type { DeliveryStore } from "./delivery-store.ts";
 import { createSweeper } from "../util/sweeper.ts";
 import { reportFailure } from "../util/errors.ts";
 import type { Delivery } from "../types.ts";
+import { withTenant } from "../tenants/context.ts";
 
 export type Send = (d: Delivery) => Promise<{ refused: string } | void>;
 
@@ -33,9 +34,10 @@ export function createDeliveryRelay(
     if (stopped) return;
     track(
       deliveries
-        .claimPending(type, claimMs, { oldestPerConversation: true })
+        .claimDue(type, claimMs)
         .then((rows) => {
-          for (const d of rows) track(deliver(d).catch((e) => reportFailure(`${type} delivery failed`, e)));
+          for (const d of rows)
+            track(withTenant(d.tenantId, () => deliver(d)).catch((e) => reportFailure(`${type} delivery failed`, e)));
         })
         .catch((e) => reportFailure(`${type} delivery: claim failed`, e)),
     );

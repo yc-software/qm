@@ -47,7 +47,8 @@ async function fixture(
   });
   upstream.listen(0);
   const upstreamPort = (upstream.address() as AddressInfo).port;
-  const deployStore = createDeployStore(testDeployBackings());
+  const backings = testDeployBackings();
+  const deployStore = createDeployStore(backings);
   const deploy = createDeployService({
     ...singleProcessDeps(),
     deployStore,
@@ -64,7 +65,7 @@ async function fixture(
     deploy,
     acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
     directory: createPostgresDirectoryStore(testDatabaseUrl()),
-    sessions: createPostgresSessionStore(testDatabaseUrl()),
+    sessions: createPostgresSessionStore(backings.databaseUrl),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
   } as unknown as Parameters<typeof createApp>[0]);
   await app.deploy({

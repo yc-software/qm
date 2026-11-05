@@ -21,14 +21,13 @@ import {
 } from "../../model/pi-models.ts";
 import { resolveRuntimeChoice } from "../../agent/runtime-choice.ts";
 import { sanitizeBranding } from "../../resolution/branding.ts";
+import { credentialInjectionError, type CredentialInjection } from "../../credentials/credential-injection.ts";
 import {
-  credentialInjectionError,
   isValidCredentialSlug,
   isValidServiceCredentialEnvKey,
   isValidBrokerHost,
   isValidBrokerMethod,
   isValidBrokerPathPrefix,
-  type CredentialInjection,
   type DecryptedServiceCredential,
   type PublicServiceCredential,
   type ServiceCredentialInput,

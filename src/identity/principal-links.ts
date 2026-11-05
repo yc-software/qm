@@ -1,7 +1,8 @@
+import { definePgMigration } from "../persistence/pg-pool.ts";
 import { perTenant } from "../tenants/cache.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createTtlRefresh } from "../util/async.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { durableMapTenancy, type DurableMap } from "../persistence/durable-map.ts";
 import { foldPrincipalId, type PrincipalLinkResolver } from "../directory/person.ts";
 
 export interface PrincipalLink {
@@ -29,6 +30,42 @@ export const PRINCIPAL_LINKS_RESTORE = {
      END $$`,
   ],
 };
+
+const RESTORE_CHECKSUM = definePgMigration(PRINCIPAL_LINKS_RESTORE).checksum;
+
+export const PRINCIPAL_LINKS_TENANCY = [
+  ...durableMapTenancy("principal_links"),
+  {
+    id: "durable-map/principal_links/0030-restore-tenanted",
+    statements: [
+      `DO $restore_tenanted$
+       DECLARE
+         tenant uuid;
+       BEGIN
+         IF to_regclass('user_links') IS NULL
+            OR EXISTS (SELECT 1 FROM qm_schema_migrations WHERE id = '${PRINCIPAL_LINKS_RESTORE.id}') THEN
+           RETURN;
+         END IF;
+         IF EXISTS (SELECT 1 FROM user_links WHERE linked_by <> 'migration') THEN
+           IF NOT EXISTS (SELECT 1 FROM tenants) THEN
+             INSERT INTO tenants DEFAULT VALUES;
+           END IF;
+           SELECT id INTO tenant FROM tenants ORDER BY created_at, id LIMIT 1;
+           INSERT INTO principal_links (tenant_id, id, json)
+             SELECT tenant, alias_id, jsonb_build_object(
+                      'principalId', alias_id, 'canonicalId', user_id, 'evidence', evidence, 'linkedBy', linked_by,
+                      'createdAt', (extract(epoch FROM created_at) * 1000)::bigint)
+               FROM user_links
+              WHERE linked_by <> 'migration'
+           ON CONFLICT (tenant_id, id) DO NOTHING;
+         END IF;
+         INSERT INTO qm_schema_migrations(id, checksum)
+           VALUES ('${PRINCIPAL_LINKS_RESTORE.id}', '${RESTORE_CHECKSUM}');
+       END $restore_tenanted$`,
+    ],
+  },
+  PRINCIPAL_LINKS_RESTORE,
+];
 
 interface PrincipalLinkInput {
   principalId: unknown;

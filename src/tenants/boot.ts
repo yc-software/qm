@@ -5,7 +5,11 @@ export function bootTenantReader(db: Pick<PgPool, "q">): () => Promise<string | 
   let read: Promise<string | undefined> | undefined;
   return () =>
     (read ??= db.q("SELECT qm_boot_tenant()::text AS id").then(
-      (rows) => (rows[0]?.id as string | null) ?? undefined,
+      (rows) => {
+        const id = (rows[0]?.id as string | null) ?? undefined;
+        if (!id) read = undefined;
+        return id;
+      },
       (error: unknown) => {
         read = undefined;
         throw error;

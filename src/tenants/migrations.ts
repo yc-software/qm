@@ -1,6 +1,6 @@
 import type { PgMigrationDefinition } from "../persistence/pg-pool.ts";
 
-export const TENANCY_BASE: PgMigrationDefinition = {
+const TENANCY_BASE: PgMigrationDefinition = {
   id: "0000-tenancy/base",
   statements: [
     `CREATE TABLE IF NOT EXISTS tenants(
@@ -19,7 +19,7 @@ END $qm_bound_tenant$`,
   ],
 };
 
-export const TENANT_SETTINGS: PgMigrationDefinition = {
+const TENANT_SETTINGS: PgMigrationDefinition = {
   id: "0000-tenancy/settings",
   statements: [
     `SET LOCAL lock_timeout = '5s'`,
@@ -56,7 +56,7 @@ export const TENANCY: readonly PgMigrationDefinition[] = [
   BOOT_TENANT,
 ];
 
-export interface TenantKey {
+interface TenantKey {
   name: string;
   columns: string;
   where?: string;
@@ -69,7 +69,7 @@ export interface TenantTable {
   unique?: readonly TenantKey[];
 }
 
-export interface TenantReference {
+interface TenantReference {
   table: string;
   name: string;
   columns: string;
