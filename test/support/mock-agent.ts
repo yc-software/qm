@@ -196,25 +196,27 @@ export function createMockAgent(): Agent {
         return true;
       };
 
-      if (turn.approvedToolCall) {
-        const approved = turn.approvedToolCall;
-        const allowed = turn.toolApprovalGate?.(approved.tool, toolCallApprovalKey(approved.tool, approved.input));
-        await turn.emit({
-          kind: "ToolCall",
-          tool: approved.tool,
-          callId: approved.callId,
-          body: { approvedRequestId: approved.requestId },
-        });
-        await turn.emit({
-          kind: "ToolResult",
-          tool: approved.tool,
-          callId: approved.callId,
-          isError: !allowed,
-          text: allowed ? `sent ${JSON.stringify(approved.input)}` : "[blocked: needs human approval]",
-          body: { approvedRequestId: approved.requestId },
-        });
-        usedTool = true;
-        reply = allowed ? `sent ${JSON.stringify(approved.input)}` : "[approved call blocked]";
+      if (turn.approvedToolCalls?.length) {
+        reply = "";
+        for (const approved of turn.approvedToolCalls) {
+          const allowed = turn.toolApprovalGate?.(approved.tool, toolCallApprovalKey(approved.tool, approved.input));
+          await turn.emit({
+            kind: "ToolCall",
+            tool: approved.tool,
+            callId: approved.callId,
+            body: { approvedRequestId: approved.requestId },
+          });
+          await turn.emit({
+            kind: "ToolResult",
+            tool: approved.tool,
+            callId: approved.callId,
+            isError: !allowed,
+            text: allowed ? `sent ${JSON.stringify(approved.input)}` : "[blocked: needs human approval]",
+            body: { approvedRequestId: approved.requestId },
+          });
+          usedTool = true;
+          reply = allowed ? `sent ${JSON.stringify(approved.input)}` : "[approved call blocked]";
+        }
       } else if (command0.startsWith("!hold ")) {
         const name = command0.slice("!hold ".length).trim();
         await new Promise<void>((release) => heldTurns.set(name, { turn, release }));

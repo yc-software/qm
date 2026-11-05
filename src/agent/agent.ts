@@ -119,7 +119,7 @@ export interface AgentTurnInput {
   toolApprovalGate?(tool: string, callKey?: string): boolean;
   emit(item: NewItem): Promise<Item>;
   resumeToolCall?: ResumableToolCall;
-  approvedToolCall?: ApprovedToolCall;
+  approvedToolCalls?: ApprovedToolCall[];
   resolveSteeredApproval?(request: TurnRequest): Promise<SteeredApproval>;
   scopeLabel: ScopeId;
   orgScopeId: ScopeId;

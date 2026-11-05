@@ -217,7 +217,7 @@ function buildScenario() {
     input: string;
     continueTurn?: boolean;
     resumeToolCall?: ResumableToolCall;
-    approvedToolCall?: AgentTurnInput["approvedToolCall"];
+    approvedToolCalls?: AgentTurnInput["approvedToolCalls"];
     toolApprovalGate?: AgentTurnInput["toolApprovalGate"];
     historyKinds: string[];
   }> = [];
@@ -227,7 +227,7 @@ function buildScenario() {
         input: turn.input,
         ...(turn.continueTurn ? { continueTurn: true } : {}),
         ...(turn.resumeToolCall ? { resumeToolCall: turn.resumeToolCall } : {}),
-        ...(turn.approvedToolCall ? { approvedToolCall: turn.approvedToolCall } : {}),
+        ...(turn.approvedToolCalls ? { approvedToolCalls: turn.approvedToolCalls } : {}),
         ...(turn.toolApprovalGate ? { toolApprovalGate: turn.toolApprovalGate } : {}),
         historyKinds: turn.history.map((e) => e.kind),
       });
@@ -435,7 +435,7 @@ test("a retried turn runs an approved call its first attempt recorded but never 
 
   await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 2 }));
   const turn = received.at(-1)!;
-  assert.deepEqual(turn.approvedToolCall, call, "the stored call is run on the retry");
+  assert.deepEqual(turn.approvedToolCalls, [call], "the stored call is run on the retry");
   assert.equal(turn.toolApprovalGate?.(call.tool, approvalKey), true, "the retry carries the once-use approval");
   assert.equal(turn.toolApprovalGate?.(call.tool, approvalKey), false, "and only once");
 
@@ -446,5 +446,5 @@ test("a retried turn runs an approved call its first attempt recorded but never 
     body: { approvedRequestId: "req7" },
   });
   await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 3 }));
-  assert.equal(received.at(-1)!.approvedToolCall, undefined, "a call that started is never run again");
+  assert.equal(received.at(-1)!.approvedToolCalls, undefined, "a call that started is never run again");
 });

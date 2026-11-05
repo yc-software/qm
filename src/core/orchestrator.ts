@@ -1312,7 +1312,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       });
 
       let releasedToolOutput: PendingApprovalRecord["screenedOutput"];
-      let approvedCall: ApprovedToolCall | undefined;
+      const approvedCalls: ApprovedToolCall[] = [];
       const commandUses = new Map<string, number>();
       for (const grant of await approvalGrantsFor(actor.id)) {
         if (grant.scope === "session" && grant.sessionId !== session.id) continue;
@@ -2008,6 +2008,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         ];
         const historyWindow = () => deps.sessions.getContextWindow(session.id);
         const turnWindow = async () => (historyAppended ? historyWindow() : memoryWindow);
+        const grantOnce = (key: string) => commandUses.set(key, (commandUses.get(key) ?? 0) + 1);
         const recordApprovalDecision = async (
           requestId: string,
           record: PendingApprovalRecord,
@@ -2015,6 +2016,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           author: string,
           call?: ApprovedToolCall,
         ): Promise<boolean> => {
+          if (!(await pending.take(requestId))) return false;
           const decisionEntry = await withManagedRosterVersion(() =>
             deps.sessions.append(writer, {
               kind: "ElicitationResponse",
@@ -2024,11 +2026,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               body: {
                 command: record.command,
                 ...(decided.scope ? { scope: decided.scope } : {}),
-                ...(call ? { call, approvalKey: record.approvalKey ?? record.command } : {}),
+                ...(call && record.approvalKey ? { call, approvalKey: record.approvalKey } : {}),
               },
             }),
           );
-          if (!(await pending.take(requestId))) return false;
           await mirrorRunActivity(decisionEntry);
           return true;
         };
@@ -2049,11 +2050,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           input.runId && (input.attempt ?? 1) > 1
             ? approvedCallsOnEarlierAttempt(await deps.sessions.getItems(session.id, { turnId: input.runId }), actor.id)
             : null;
-        if (earlier?.unstarted) {
-          const { call, approvalKey } = earlier.unstarted;
-          await pending.delete(call.requestId);
-          commandUses.set(approvalKey, (commandUses.get(approvalKey) ?? 0) + 1);
-          approvedCall = call;
+        for (const { call, approvalKey } of earlier?.unstarted ?? []) {
+          grantOnce(approvalKey);
+          approvedCalls.push(call);
           audit({
             action: "command_approval.recovered",
             resource: approvalKey,
@@ -2062,7 +2061,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           });
         }
         const recovered = !!input.approval && earlier?.decided.has(input.approval.requestId) === true;
-        if (earlier?.unstarted || recovered) turnEvents.push(APPROVED_CALL_RAN_NOTE);
+        if (earlier?.unstarted.length || recovered) turnEvents.push(APPROVED_CALL_RAN_NOTE);
         if (input.approval && !recovered) {
           const p = await pending.get(input.approval.requestId);
           const decision = input.approval.approved ? "approve" : "deny";
@@ -2214,8 +2213,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               resource: p.command,
               status: "ok",
             });
-            approvedCall = call;
-            if (approvedCall) turnEvents.push(APPROVED_CALL_RAN_NOTE);
+            if (call) approvedCalls.push(call);
+            if (call) turnEvents.push(APPROVED_CALL_RAN_NOTE);
             else
               turnEvents.push(
                 p.kind === "input" || p.approvalKey?.startsWith("security-screen-release:")
@@ -3314,7 +3313,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                     deps.identity.resolve(request.actor).id,
                     call,
                   ),
-                grantOnce: (key) => commandUses.set(key, (commandUses.get(key) ?? 0) + 1),
+                grantOnce,
               }),
             prepareSteer: async (text, request) => {
               const steerer = request ? deps.identity.resolve(request.actor) : actor;
@@ -3591,7 +3590,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             tools,
             ...(mcpTools ? { mcpTools } : {}),
             ...(reconciled?.rerun && !continuation ? { resumeToolCall: reconciled.rerun } : {}),
-            ...(approvedCall && !continuation ? { approvedToolCall: approvedCall } : {}),
+            ...(approvedCalls.length && !continuation ? { approvedToolCalls: approvedCalls } : {}),
             emit,
             goal: sessionGoal,
             saveGoal,

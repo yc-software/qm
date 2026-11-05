@@ -930,16 +930,20 @@ export function createAgent(opts?: AgentOptions): Agent {
       };
       let activeSteps: StepRecorder | undefined;
       const tools = recordingTools(createTurnTools(ref, dispatched), () => activeSteps);
-      const approvedRun = dispatched.approvedToolCall
-        ? await runApprovedToolCall(
-            dispatched.approvedToolCall,
-            ref,
-            tools as unknown as BridgedTool[],
-            dispatched.cancel ? { cancel: dispatched.cancel } : {},
-          )
-        : null;
-      const approvedTurn = approvedRun
-        ? { ...dispatched, history: [...dispatched.history, ...approvedRun.items] }
+      const approvedItems: Item[] = [];
+      for (const call of dispatched.approvedToolCalls ?? [])
+        approvedItems.push(
+          ...(
+            await runApprovedToolCall(
+              call,
+              ref,
+              tools as unknown as BridgedTool[],
+              dispatched.cancel ? { cancel: dispatched.cancel } : {},
+            )
+          ).items,
+        );
+      const approvedTurn = approvedItems.length
+        ? { ...dispatched, history: [...dispatched.history, ...approvedItems] }
         : dispatched;
       const resumed = await resumeInterruptedToolCall(approvedTurn, ref, tools as unknown as BridgedTool[]);
       const turn = resumed ? { ...approvedTurn, history: resumed.history } : approvedTurn;

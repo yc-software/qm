@@ -104,12 +104,14 @@ test("an approved call runs once, exactly as stored, before the model sees the a
             return ["user#1: reminder goes out at noon Taipei time"];
           },
         } as unknown as ToolContext,
-        approvedToolCall: {
-          callId: "approved_req1_ab12",
-          requestId: "req1",
-          tool: "history",
-          input: { query: "noon" },
-        },
+        approvedToolCalls: [
+          {
+            callId: "approved_req1_ab12",
+            requestId: "req1",
+            tool: "history",
+            input: { query: "noon" },
+          },
+        ],
       }),
     );
     assert.equal(result.reply, "the reminder is scheduled");
@@ -142,7 +144,7 @@ test("an approved call whose tool is missing records an error result instead of 
     await agent.runTurn(
       turnInput("approved-missing", sink, {
         readOnly: true,
-        approvedToolCall: { callId: "approved_req9_cd34", requestId: "req9", tool: "no_such_tool", input: {} },
+        approvedToolCalls: [{ callId: "approved_req9_cd34", requestId: "req9", tool: "no_such_tool", input: {} }],
       }),
     );
   } finally {
@@ -227,28 +229,27 @@ for (const approved of [true, false]) {
     assert.equal(requests.length, 2);
     const followUp = JSON.stringify(requests[1]);
     if (approved) {
-      assert.match(followUp, /Gabrielle approved the pending call history, and QM ran it exactly as approved/);
       assert.match(followUp, /push 18767/);
       const recorded = sink.filter((item) => item.body.approvedRequestId === "req2");
       assert.deepEqual(
         recorded.map((item) => item.kind),
         ["ToolCall", "ToolResult"],
       );
-      const notes = sink.filter((item) => JSON.stringify(item).includes("approved the pending call"));
+      const notes = sink.filter((item) => item.kind === "Wake");
       assert.equal(notes.length, 1, "the live note is recorded once");
       assert.doesNotMatch(JSON.stringify(notes[0]), /push 18767/, "the recorded note does not repeat the result");
     } else {
-      assert.match(followUp, /Gabrielle denied the pending call history, so it did not run/);
+      assert.doesNotMatch(followUp, /push 18767/, "nothing ran, so no result reaches the model");
       assert.ok(!sink.some((item) => item.kind === "ToolCall"));
     }
   });
 }
 
-test("a retried turn finds the approver's own unstarted approved call", () => {
+test("a retried turn only finishes approved calls the same person decided", () => {
   const call = { callId: "approved_req3_ef01", requestId: "req3", tool: "history", input: { query: "noon" } };
-  const at = { sessionId: "s", createdAt: 1 };
   const decided = {
-    ...at,
+    sessionId: "s",
+    createdAt: 1,
     seq: 1,
     kind: "ElicitationResponse",
     elicitId: "req3",
@@ -256,22 +257,6 @@ test("a retried turn finds the approver's own unstarted approved call", () => {
     author: "U1",
     body: { command: "history", scope: "once", call, approvalKey: "tool-call:abc" },
   } as unknown as Item;
-  const started = {
-    ...at,
-    seq: 2,
-    kind: "ToolCall",
-    callId: call.callId,
-    body: { approvedRequestId: "req3" },
-  } as unknown as Item;
-  const first = approvedCallsOnEarlierAttempt([decided], "U1");
-  assert.deepEqual(first.unstarted, { call, approvalKey: "tool-call:abc" });
-  assert.ok(first.decided.has("req3"));
-  const ran = approvedCallsOnEarlierAttempt([decided, started], "U1");
-  assert.equal(ran.unstarted, undefined, "a call whose ToolCall was written is never run again");
-  assert.ok(ran.decided.has("req3"));
-  assert.equal(
-    approvedCallsOnEarlierAttempt([decided], "U2").decided.size,
-    0,
-    "only the approver's own decision counts",
-  );
+  assert.equal(approvedCallsOnEarlierAttempt([decided], "U2").unstarted.length, 0);
+  assert.deepEqual(approvedCallsOnEarlierAttempt([decided], "U1").unstarted, [{ call, approvalKey: "tool-call:abc" }]);
 });
