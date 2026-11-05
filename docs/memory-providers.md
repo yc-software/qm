@@ -314,7 +314,7 @@ An org admin's switch, `PUT /v1/admin/memory-registry/member-brains` with `{"ena
 | `PUT /v1/memory/brain`    | `url`, `clientId`, and optionally `label`; `clientSecret` is refused. Audited as `memory-registry.member-brain.update` |
 | `DELETE /v1/memory/brain` | Deletes the brain and its binding. Audited as `memory-registry.member-brain.delete`                                    |
 
-These routes take only an agent capability from a turn the member sent (never a triggered one), refuse inactive members, and are blocked like any other control-plane change in a strict conversation. An admin can still change or delete a member's brain through the admin API outside chat; its `owner` never changes. A member has no route outside chat to their brain, so their own agent may change its `url` or disconnect it on a turn they sent. A new `url` clears the brain's secret, and the fresh brain link's form shows the new origin before they enter the secret again.
+These routes take only an agent capability from a turn the member sent (never a triggered one), refuse inactive members, and are blocked like any other control-plane change in a strict conversation. Their replies show the brain's `url`, client id and binding, so they answer only in the member's DM or in a conversation whose sharing is open. An admin can still change or delete a member's brain through the admin API outside chat; its `owner` never changes. A member has no route outside chat to their brain, so their own agent may change its `url` or disconnect it on a turn they sent. A new `url` clears the brain's secret, and the fresh brain link's form shows the new origin before they enter the secret again.
 
 ### API
 

@@ -507,7 +507,7 @@ test("an admin's agent can register and bind a brain but never carries its secre
   );
 });
 
-test("an admin's agent reaches every registry route only where the registry may be shown", async (t) => {
+test("an agent reaches every registry route only where the registry may be shown", async (t) => {
   const secret = "memory-registry-private-read-secret".repeat(2);
   const built = buildApp(
     testConfig({ signingSecret: secret, capabilitySecret: secret, apiBaseUrl: "http://core.example.test" }),
@@ -541,25 +541,26 @@ test("an admin's agent reaches every registry route only where the registry may 
       secret,
     );
   const call = async (cap: string, method: string, path: string, body: unknown) => {
-    const res = await fetch(
-      `http://localhost:${(server.address() as AddressInfo).port}/v1/admin/memory-registry${path}`,
-      {
-        method,
-        headers: { "x-agent-capability": cap, "content-type": "application/json" },
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      },
-    );
+    const res = await fetch(`http://localhost:${(server.address() as AddressInfo).port}${path}`, {
+      method,
+      headers: { "x-agent-capability": cap, "content-type": "application/json" },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
     return { status: res.status, text: await res.text() };
   };
   const routes = [
-    ["GET", "", undefined, 200],
-    ["GET", "/brains/acme-personal", undefined, 200],
-    ["GET", "/bindings/alice", undefined, 200],
-    ["PUT", "/brains/acme-personal", { label: "Acme memory" }, 200],
-    ["PUT", "/bindings/alice", {}, 200],
-    ["PUT", "/bindings/everyone", { brain: "acme-personal", scope: "personal" }, 409],
-    ["DELETE", "/bindings/alice", undefined, 403],
-    ["DELETE", "/brains/acme-personal", undefined, 403],
+    ["GET", "/v1/admin/memory-registry", undefined, 200],
+    ["GET", "/v1/admin/memory-registry/brains/acme-personal", undefined, 200],
+    ["GET", "/v1/admin/memory-registry/bindings/alice", undefined, 200],
+    ["PUT", "/v1/admin/memory-registry/brains/acme-personal", { label: "Acme memory" }, 200],
+    ["PUT", "/v1/admin/memory-registry/bindings/alice", {}, 200],
+    ["PUT", "/v1/admin/memory-registry/bindings/everyone", { brain: "acme-personal", scope: "personal" }, 409],
+    ["PUT", "/v1/admin/memory-registry/member-brains", { enabled: true }, 200],
+    ["DELETE", "/v1/admin/memory-registry/bindings/alice", undefined, 403],
+    ["DELETE", "/v1/admin/memory-registry/brains/acme-personal", undefined, 403],
+    ["GET", "/v1/memory/brain", undefined, 200],
+    ["PUT", "/v1/memory/brain", { url: "https://brain.alice.example/mcp", clientId: "alice-qm" }, 200],
+    ["DELETE", "/v1/memory/brain", undefined, 200],
   ] as const;
   const record = async () => JSON.stringify((await built.memoryRegistry.current()).record);
   const before = await record();
@@ -569,7 +570,7 @@ test("an admin's agent reaches every registry route only where the registry may 
     assert.equal(refused.status, 403, `${method} ${path}`);
     assert.match(
       refused.text,
-      method === "DELETE" ? /never goes through the agent/ : /ask the agent in a DM/,
+      method === "DELETE" && path.startsWith("/v1/admin/") ? /never goes through the agent/ : /ask the agent in a DM/,
       `${method} ${path}`,
     );
     assert.doesNotMatch(refused.text, /personal:U1|brain\.acme\.example|qm-personal|alice/, `${method} ${path}`);
