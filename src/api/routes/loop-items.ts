@@ -219,11 +219,13 @@ async function serveItemImage(ctx: ApiCtx): Promise<void> {
   if (!upstream.ok || !upstream.body || !type.startsWith("image/")) {
     return sendJson(ctx.res, 502, { error: "upstream", message: `upstream returned ${upstream.status} ${type}` });
   }
+  const imageTooLarge = new Error("image too large");
   let bytes: Buffer;
   try {
-    bytes = await readBoundedBytes(upstream, IMAGE_MAX_BYTES, () => new Error("image too large"));
+    bytes = await readBoundedBytes(upstream, IMAGE_MAX_BYTES, () => imageTooLarge);
   } catch (e) {
-    return sendJson(ctx.res, 502, { error: "upstream", message: errMessage(e) });
+    if (e !== imageTooLarge) throw e;
+    return sendJson(ctx.res, 502, { error: "upstream", message: imageTooLarge.message });
   }
   ctx.res.writeHead(200, {
     "content-type": type,

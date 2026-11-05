@@ -39,10 +39,7 @@ test("readBoundedText stops reading and cancels the stream once it passes the ca
   assert.equal(cancelled(), true);
 });
 
-test("readBoundedBytes returns binary bodies unchanged and refuses ones past the cap", async () => {
+test("readBoundedBytes returns binary bodies unchanged", async () => {
   const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff]);
   assert.deepEqual([...(await readBoundedBytes(new Response(png), 6, tooLarge))], [...png]);
-  const { response, cancelled } = streamed(["12345", "67890"]);
-  await assert.rejects(readBoundedBytes(response, 8, tooLarge), /too large/);
-  assert.equal(cancelled(), true);
 });

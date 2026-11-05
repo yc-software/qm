@@ -1,7 +1,8 @@
 import { sleep } from "./util.ts";
 import { channelShareTs, parseUploadedFileIds, slackErrorCode } from "./payloads.ts";
-import { BlobTooLargeError } from "../persistence/blob-transfer.ts";
+import { BlobTooLargeError, MAX_BLOB_BYTES } from "../persistence/blob-transfer.ts";
 import type { ByteSource } from "../util/bytes.ts";
+import { errMessage } from "../util/errors.ts";
 
 export interface IncomingAttachment {
   name: string;
@@ -51,7 +52,7 @@ export async function hydrateSlackFiles(
   );
 }
 
-export const MAX_ATTACHMENT_BYTES = 1_000_000_000;
+export const MAX_ATTACHMENT_BYTES = MAX_BLOB_BYTES;
 
 export function isOversize(file: Pick<SlackFile, "size">): boolean {
   return typeof file.size === "number" && file.size > MAX_ATTACHMENT_BYTES;
@@ -113,7 +114,8 @@ export async function downloadSlackFile(file: SlackFile, opts: DownloadOptions =
   if (ct.includes("text/html")) throw new Error("got an HTML page (check files:read scope)");
   const len = Number(res.headers.get("content-length") ?? "0");
   if (len > MAX_ATTACHMENT_BYTES) throw new Error("file too large");
-  return res.body ?? new Uint8Array();
+  if (!res.body) throw new Error(`HTTP ${res.status} with no body`);
+  return res.body;
 }
 
 export interface ProcessedInbound {
@@ -148,9 +150,7 @@ export async function processInboundFiles(
         issues.push(oversizeMsg(label));
         continue;
       }
-      issues.push(
-        `I couldn't read "${label}" — check my file-access permission (files:read) (${(err as Error).message})`,
-      );
+      issues.push(`I couldn't read "${label}" — check my file-access permission (files:read) (${errMessage(err)})`);
     }
   }
   return { attachments, issues };

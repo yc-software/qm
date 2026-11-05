@@ -3,12 +3,15 @@ import { swallowAs } from "./errors.ts";
 
 export type ByteSource = Uint8Array | AsyncIterable<Uint8Array>;
 
-export async function* asChunks(source: ByteSource): AsyncIterable<Uint8Array> {
+const bufferView = (bytes: Uint8Array): Buffer =>
+  Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+
+export async function* asChunks(source: ByteSource): AsyncIterable<Buffer> {
   if (source instanceof Uint8Array) {
-    yield source;
+    yield bufferView(source);
     return;
   }
-  yield* source;
+  for await (const chunk of source) yield bufferView(chunk);
 }
 
 export interface CollectedBytes {
@@ -24,8 +27,7 @@ export async function collectBytes(
   const hash = createHash("sha256");
   const chunks: Buffer[] = [];
   let size = 0;
-  for await (const chunk of asChunks(source)) {
-    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+  for await (const buf of asChunks(source)) {
     size += buf.length;
     if (opts?.maxBytes != null && size > opts.maxBytes) {
       throw opts.tooLarge ? opts.tooLarge() : new Error("byte source exceeds the size limit");
