@@ -514,6 +514,7 @@ export async function ensureSentChat(ctx: ApiCtx): Promise<void> {
     },
     sentChat: true,
     sourceGone: null,
+    sourceRefreshError: null,
   } as LoopSourcePayload;
   const defaults = await ensureDefaultInboxLoops(deps.store, owner);
   const loop = defaults.find((entry) => entry.sources?.includes("gmail"))!;

@@ -60,7 +60,7 @@ function metaOf(item: LoopItem): GmailMeta | undefined {
 }
 
 export async function gmailToken(tokens: ConnectorTokenSource, owner: string, item: LoopItem): Promise<string | null> {
-  const accountType = metaOf(item)?.accountType ?? (item.sourcePayload?.sentChat === true ? "default" : undefined);
+  const accountType = metaOf(item)?.accountType;
   return accountType
     ? await tokens.connectorAccessToken(GMAIL_HOST, owner, accountType)
     : await tokenFor(tokens, GMAIL_HOST, owner);

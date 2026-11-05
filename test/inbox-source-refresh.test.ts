@@ -186,9 +186,9 @@ test("a deleted source conversation stops refreshing without logging an error; t
 });
 
 test("Gmail refresh reads the mailbox the item came from, not the first connected account", async () => {
-  for (const [meta, extra, expected] of [
-    [{ threadId: "t1", accountType: "company" }, {}, "Bearer token-company"],
-    [{ threadId: "t1" }, { sentChat: true }, "Bearer token-default"],
+  for (const [meta, expected] of [
+    [{ threadId: "t1", accountType: "company" }, "Bearer token-company"],
+    [{ threadId: "t1", accountType: "default" }, "Bearer token-default"],
   ] as const) {
     const { items, item } = await fixture("gmail", meta);
     const seen: string[] = [];
@@ -201,7 +201,7 @@ test("Gmail refresh reads the mailbox the item came from, not the first connecte
         seen.push(String(new Headers(init?.headers).get("authorization")));
         return json({ messages: [] });
       },
-    })("owner", [{ ...item, sourcePayload: { ...item.sourcePayload, ...extra } }]);
+    })("owner", [item]);
     assert.deepEqual(seen, [expected]);
   }
 });
