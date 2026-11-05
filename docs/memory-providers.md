@@ -298,7 +298,7 @@ QM is always an MCP client of gbrain and never gets gbrain's database URL or its
 
 ### API
 
-Every route needs an org admin and is audited. Client secrets are write-only and read back as `hasClientSecret`; QM stores them encrypted with a key derived from `CONNECTOR_SECRET_KEY`, and changing a brain's `url` clears its secret.
+Every route needs an org admin and is audited. Client secrets are write-only and read back as `hasClientSecret`; QM stores them encrypted with a key derived from `CONNECTOR_SECRET_KEY`, exactly as sent, and changing a brain's `url` clears its secret. An admin's agent can register a brain but never sends its `clientSecret` or changes an existing brain's `url`; QM refuses both with 400, so a secret is only ever set outside chat, for a URL the admin chose.
 
 An agent can register a brain for an admin but never carries its client secret. On the admin's own turn it mints a brain link with `POST /v1/keychain/drops` and body `{"memoryBrain": "<brain id>", "purpose": "…"}`. The single-use form shows the brain, its origin and who is bound to it, and writes the secret straight into the registry, audited as `memory-registry.brain.secret`. It never enters a keychain, can't be granted and never reaches the agent's computer. The link stops working if the brain's `url` changes or its owner stops being an org admin.
 

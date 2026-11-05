@@ -347,7 +347,7 @@ test("org-admin routes: admins only, secrets write-only, env providers read-only
   assert.doesNotMatch(rows, /never-shown-secret/);
 });
 
-test("an admin's agent can register a brain but never carries its client secret", async (t) => {
+test("an admin's agent can register a brain but never carries its client secret or moves its url", async (t) => {
   const secret = "memory-registry-capability-secret".repeat(2);
   const built = buildApp(
     testConfig({ signingSecret: secret, capabilitySecret: secret, apiBaseUrl: "http://core.example.test" }),
@@ -372,7 +372,7 @@ test("an admin's agent can register a brain but never carries its client secret"
     },
     secret,
   );
-  const put = (body: Record<string, unknown>) =>
+  const put = (body: Record<string, unknown> | null) =>
     fetch(`http://localhost:${(server.address() as AddressInfo).port}/v1/admin/memory-registry/brains/acme-personal`, {
       method: "PUT",
       headers: { "x-agent-capability": cap, "content-type": "application/json" },
@@ -388,8 +388,15 @@ test("an admin's agent can register a brain but never carries its client secret"
   assert.equal(carried.status, 400);
   assert.match(await carried.text(), /never goes through the agent/);
   assert.equal((await put(brain)).status, 200);
+  const moved = await put({ ...brain, url: "https://elsewhere.acme.example/mcp" });
+  assert.equal(moved.status, 400);
+  assert.match(await moved.text(), /url never changes through the agent/);
+  assert.equal((await put({ label: "Acme memory" })).status, 200);
+  assert.equal((await put(null)).status, 400);
   const stored = (await built.memoryRegistry.current()).record as MemoryRegistry;
   assert.deepEqual(stored.brains[0]!.auth, { clientId: "qm-personal" });
+  assert.equal(stored.brains[0]!.url, brain.url);
+  assert.equal(stored.brains[0]!.label, "Acme memory");
 });
 
 test("blue-green: a binding written through one instance serves turns on the other, in both directions", async (t) => {
