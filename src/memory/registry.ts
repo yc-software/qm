@@ -1,7 +1,7 @@
-import { createHash } from "node:crypto";
 import { decryptSecret, encryptSecret, type SecretKey } from "../connectors/connector-client-store.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { parseScopeId, scopeId, type ScopeId } from "../types.ts";
+import { hashId } from "../util/crypto.ts";
 import { errMessage } from "../util/errors.ts";
 import { isPrivateNetworkIp } from "../util/network.ts";
 import { MEMORY_PROVIDER_ID, parseMemoryProviderConfig, type MemoryProviderConfig } from "./provider-config.ts";
@@ -345,8 +345,7 @@ const MEMBER_BRAIN_FIELDS = new Set(["url", "clientId", "label"]);
 
 export const memberBrainsOn = (record: MemoryRegistry): boolean => record.memberBrains !== false;
 
-export const memberBrainId = (owner: string): string =>
-  `member-${createHash("sha256").update(owner).digest("hex").slice(0, 16)}`;
+export const memberBrainId = (owner: string): string => `member-${hashId([owner])}`;
 
 const memberBrainsOff = () =>
   new MemoryRegistryError(403, "member brains are turned off for this org; an org admin can turn them back on");
