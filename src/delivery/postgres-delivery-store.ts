@@ -4,6 +4,7 @@ import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import type { Delivery, DeliveryProvenance, Destination, OutgoingAttachment } from "../types.ts";
 import { DELIVERY_MAX_AGE_MS, logDeliveryExpiry, type DeliveryStore } from "./delivery-store.ts";
 import { pgTextSafe } from "../util/text.ts";
+import { tenantTables } from "../tenants/migrations.ts";
 
 const NOW_MS_SQL = "(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT";
 function rowToDelivery(r: Record<string, unknown>): Delivery {
@@ -83,6 +84,13 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
         `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS failed_reason TEXT`,
       ],
     },
+    ...tenantTables("delivery/store/0008-tenants", [
+      {
+        table: "deliveries",
+        primaryKey: "id",
+        unique: [{ name: "deliveries_idempotency_key_key", columns: "idempotency_key", constraint: true }],
+      },
+    ]),
   ]);
 
   const enqueueListeners = tenantListeners<[string]>("delivery enqueue");
@@ -114,7 +122,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
       const inserted = await q(
         `INSERT INTO deliveries (id, idempotency_key, destination, text, attachments, provenance, created_at, shadow)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-         ON CONFLICT (idempotency_key) DO UPDATE
+         ON CONFLICT (tenant_id, idempotency_key) DO UPDATE
            SET destination = EXCLUDED.destination,
                text = EXCLUDED.text,
                attachments = EXCLUDED.attachments,
@@ -217,7 +225,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
       await query(
         `INSERT INTO deliveries (id, idempotency_key, destination, text, created_at, delivered_at)
          VALUES ($1, $2, '{"type":"ack-tombstone","target":""}', '', $3, $3)
-         ON CONFLICT (idempotency_key)
+         ON CONFLICT (tenant_id, idempotency_key)
          DO UPDATE SET delivered_at = COALESCE(deliveries.delivered_at, EXCLUDED.delivered_at),
                        expired_at = CASE WHEN deliveries.delivered_at IS NULL THEN NULL ELSE deliveries.expired_at END`,
         [randomUUID(), idempotencyKey, at],

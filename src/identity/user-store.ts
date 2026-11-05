@@ -4,6 +4,7 @@ import { DIRECTORY_MIGRATIONS } from "../directory/postgres-directory-store.ts";
 import { SESSION_MIGRATIONS } from "../sessions/session-schema.ts";
 import { msOf } from "../sessions/items.ts";
 import { foldPrincipalId } from "../directory/person.ts";
+import { tenantTables } from "../tenants/migrations.ts";
 
 type UserSource = "turn" | "invite" | "admin";
 
@@ -177,6 +178,23 @@ export const USER_MIGRATIONS: PgMigrationDefinition[] = [
        END $$`,
     ],
   },
+  ...tenantTables(
+    "users/0005-tenants",
+    [
+      { table: "users", primaryKey: "id" },
+      { table: "user_links", primaryKey: "alias_id" },
+    ],
+    {
+      references: [
+        {
+          table: "user_links",
+          name: "user_links_user_id_fkey",
+          columns: "user_id",
+          references: "users(tenant_id, id)",
+        },
+      ],
+    },
+  ),
 ];
 
 const COLUMNS = `id, ${msOf("first_seen_at")} AS first_seen_at, source, ${msOf("offboarded_at")} AS offboarded_at, offboarded_by`;
@@ -205,7 +223,7 @@ async function linkInTransaction(client: PoolClient, link: UserLink): Promise<Us
   await client.query(`LOCK TABLE users IN SHARE ROW EXCLUSIVE MODE`);
   const existing = await client.query(`SELECT ${LINK_COLUMNS} FROM user_links WHERE alias_id = $1`, [link.principalId]);
   if (existing.rows[0]) return toLink(existing.rows[0]);
-  await client.query(`INSERT INTO users(id) VALUES ($1) ON CONFLICT (id) DO NOTHING`, [link.canonicalId]);
+  await client.query(`INSERT INTO users(id) VALUES ($1) ON CONFLICT (tenant_id, id) DO NOTHING`, [link.canonicalId]);
   await client.query(
     `UPDATE users c SET
        first_seen_at = least(c.first_seen_at, a.first_seen_at),
@@ -240,7 +258,7 @@ export function createPostgresUserStore(connectionString: string): UserStore {
     async record({ id, source, at }) {
       const rows = await q(
         `INSERT INTO users AS u(id, first_seen_at, source) VALUES (${person("$1")}, ${ts("$2")}, $3)
-         ON CONFLICT (id) DO UPDATE SET first_seen_at = EXCLUDED.first_seen_at, source = EXCLUDED.source
+         ON CONFLICT (tenant_id, id) DO UPDATE SET first_seen_at = EXCLUDED.first_seen_at, source = EXCLUDED.source
            WHERE u.first_seen_at IS NULL
          RETURNING id`,
         [foldPrincipalId(id), at, source],
@@ -250,7 +268,7 @@ export function createPostgresUserStore(connectionString: string): UserStore {
     async markOffboarded(id, by) {
       const rows = await q(
         `INSERT INTO users AS u(id, offboarded_at, offboarded_by) VALUES (${person("$1")}, now(), $2)
-         ON CONFLICT (id) DO UPDATE SET offboarded_at = coalesce(u.offboarded_at, EXCLUDED.offboarded_at),
+         ON CONFLICT (tenant_id, id) DO UPDATE SET offboarded_at = coalesce(u.offboarded_at, EXCLUDED.offboarded_at),
            offboarded_by = CASE WHEN u.offboarded_at IS NULL THEN EXCLUDED.offboarded_by ELSE u.offboarded_by END
          RETURNING ${COLUMNS}`,
         [foldPrincipalId(id), by],

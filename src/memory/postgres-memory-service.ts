@@ -3,6 +3,7 @@ import type { ScopeId } from "../types.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { createNotebookMemory, type FactStoreTx, type MemoryService } from "./memory-service.ts";
 import { isMemorySensitivity, type MemoryFact } from "./facts.ts";
+import { tenantTables } from "../tenants/migrations.ts";
 
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS memory_facts(
@@ -103,6 +104,7 @@ export const MEMORY_FACTS_MIGRATIONS = [
       "ALTER TABLE memory_facts ALTER COLUMN text_hash SET NOT NULL",
     ],
   },
+  ...tenantTables("memory/facts/0003-tenants", [{ table: "memory_facts", primaryKey: "id" }]),
 ];
 
 export function createPostgresMemoryService(connectionString: string): MemoryService {
