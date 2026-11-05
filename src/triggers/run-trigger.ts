@@ -36,7 +36,7 @@ export interface TriggerDeps {
   resolveRecipient?: (query: string) => Promise<RecipientResolution>;
 }
 
-export interface TriggerSpec extends Pick<TurnRequest, "model" | "fastMode" | "attachments"> {
+export interface TriggerSpec extends Pick<TurnRequest, "model" | "fastMode" | "attachments" | "infrequentCron"> {
   runtime?: import("../agent/agent.ts").RuntimeChoice | null;
   title?: string;
   owner: string;
@@ -299,10 +299,12 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       },
       ...(spec.unattendedGrants && grantsHomedWithOwner(spec) ? { unattendedGrants: spec.unattendedGrants } : {}),
       ...(spec.cronScript ? { cronScript: spec.cronScript } : {}),
+      ...(spec.infrequentCron ? { infrequentCron: true } : {}),
       ...(spec.runtime ? { model: spec.runtime.modelId } : {}),
       ...turnModelOptions({
         triggered: true,
         surface: spec.surface,
+        infrequentCron: spec.infrequentCron,
         thinkingLevel: spec.runtime?.effortLevel ?? spec.thinkingLevel,
         fastMode: spec.fastMode ?? spec.runtime?.fastMode,
       }),

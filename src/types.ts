@@ -388,6 +388,7 @@ export interface TurnRequest {
   gatewayContext?: GatewayContext;
   unattendedGrants?: string[];
   cronScript?: import("./triggers/types.ts").CronScript;
+  infrequentCron?: boolean;
   botActor?: boolean;
   conversationHeader?: string;
   priorTurns?: ConversationTurn[];

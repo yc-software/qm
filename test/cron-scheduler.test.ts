@@ -1686,6 +1686,32 @@ test("scheduled and manual fires use the saved runtime; clearing it restores inh
   assert.equal(calls[2]?.fastMode, undefined);
 });
 
+test("daily-or-less crons mark their fires infrequent; frequent ones do not", async () => {
+  const { crons, calls, scheduler } = agent();
+  const daily = await crons.create({
+    schedule: { cron: "0 9 * * *", timezone: "America/Los_Angeles" },
+    action: "daily digest",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: "personal:U1",
+  });
+  const polling = await crons.create({
+    schedule: { everyMs: 60_000 },
+    action: "check status",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: "personal:U1",
+  });
+  await runNowSettled(scheduler, daily.id);
+  await runNowSettled(scheduler, polling.id);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0]?.infrequentCron, true);
+  assert.equal(calls[0]?.thinkingLevel, undefined);
+  assert.equal(calls[0]?.fastMode, false);
+  assert.equal(calls[1]?.infrequentCron, undefined);
+  assert.equal(calls[1]?.fastMode, undefined);
+});
+
 test("a failing cron posts one notice to its destination, then stays quiet until a fire succeeds", async () => {
   let result: TurnResult = {
     status: "refused",

@@ -229,6 +229,7 @@ async function parentTurn(
     "detectOpener",
     "conversationHeader",
     "cronScript",
+    "infrequentCron",
   ] as const)
     delete request[key];
   if (!originalParent) request.addressed = false;
