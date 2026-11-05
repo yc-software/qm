@@ -130,7 +130,7 @@ async function approvedSourcePlanWorld(
         ],
       },
     ],
-    runtime: () => ({ harnessId: "ultimate", modelId: "gpt-5.6-luna" }),
+    runtime: () => ({ harnessId: "pi", modelId: "gpt-5.6-luna" }),
     resolveEvidence: async (ids) =>
       ids.map((id) => {
         assert.equal(id, sourcePlanArtifactId);
@@ -309,7 +309,7 @@ test("executeSuiteQL does not treat an unrelated durable workflow as governed fi
     scopeLabel: scope,
     session,
     definitions: [{ id: "content-review", version: 1, steps: [{ id: "READY", role: "author", requiredSkills: [] }] }],
-    runtime: () => ({ harnessId: "ultimate", modelId: "gpt-5.6-luna" }),
+    runtime: () => ({ harnessId: "pi", modelId: "gpt-5.6-luna" }),
     resolveEvidence: async () => [],
   });
   await workflow({ action: "advance", workflowId: "content-review", step: "READY", decision: "pass" });

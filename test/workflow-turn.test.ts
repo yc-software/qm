@@ -83,7 +83,7 @@ test("workflow reviewer child resolves the assignment-specific agent", async () 
     surface: "web",
     actor: { id: "reviewer", type: "internal" },
     conversation: { kind: "dm", threadRef: child.threadRef, audience: [] },
-    harness: "ultimate",
+    harness: "pi",
     model: "gpt",
     readOnly: true,
   });

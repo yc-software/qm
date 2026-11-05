@@ -122,7 +122,7 @@ test("a human approval durably carries forward exactly the evidence it approved"
     lease: attempt.lease,
     scopeLabel: scope,
     session,
-    runtime: () => ({ harnessId: "ultimate", modelId: "gpt-6.1-sol" }),
+    runtime: () => ({ harnessId: "pi", modelId: "gpt-6.1-sol" }),
     resolveEvidence: async (ids) => ids.map((id) => ({ id, digest: `host:${id}` })),
     definitions: [
       {
@@ -160,7 +160,7 @@ test("a human approval rejects output evidence that differs from its approved in
     lease: attempt.lease,
     scopeLabel: scope,
     session,
-    runtime: () => ({ harnessId: "ultimate", modelId: "gpt-6.1-sol" }),
+    runtime: () => ({ harnessId: "pi", modelId: "gpt-6.1-sol" }),
     resolveEvidence: async (ids) => ids.map((id) => ({ id, digest: `host:${id}` })),
     definitions: [
       {
@@ -195,7 +195,7 @@ test("a human approval cannot import an isolated reviewer receipt", async () => 
     lease: attempt.lease,
     scopeLabel: scope,
     session,
-    runtime: () => ({ harnessId: "ultimate", modelId: "gpt-6.1-sol" }),
+    runtime: () => ({ harnessId: "pi", modelId: "gpt-6.1-sol" }),
     resolveEvidence: async (ids) => ids.map((id) => ({ id, digest: `host:${id}` })),
     definitions: [
       {
