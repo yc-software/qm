@@ -31,7 +31,7 @@ export function groupParticipantsKey(participants: readonly string[]): string {
   return [...new Set(participants.filter((p) => p))].sort().join(",");
 }
 
-export interface SignInTenant {
+interface SignInTenant {
   id: string;
   brandName?: string;
 }

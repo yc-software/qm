@@ -324,10 +324,10 @@ async function isAdmin(sub: string): Promise<boolean> {
 
 const CANONICAL_TIMEOUT_MS = 4_000;
 
-const canonicalPrincipal = createCanonicalResolver(async (sub) => {
+const canonicalPrincipal = createCanonicalResolver(async (sub, tenant) => {
   const path = withSourceAuthNonce(`/v1/principals/${encodeURIComponent(sub)}/canonical`, CORE_SIGNING_SECRET);
   const r = await fetch(`${CORE}${path}`, {
-    headers: signedHeaders(CORE_SIGNING_SECRET, "GET", path),
+    headers: { ...signedHeaders(CORE_SIGNING_SECRET, "GET", path), ...portalIdentityHeaders(sub, tenant) },
     signal: AbortSignal.timeout(CANONICAL_TIMEOUT_MS),
   });
   if (!r.ok) {
@@ -740,7 +740,10 @@ async function handleSelfConnect(res: ServerResponse, o: { provider: string; ses
   );
   try {
     const r = await fetch(`${CORE}${path}`, {
-      headers: { ...signedHeaders(CORE_SIGNING_SECRET, "GET", path), ...portalIdentityHeaders(o.session.sub) },
+      headers: {
+        ...signedHeaders(CORE_SIGNING_SECRET, "GET", path),
+        ...portalIdentityHeaders(o.session.sub, o.session.t),
+      },
     });
     const data = (await r.json().catch(() => ({}))) as { authorizeUrl?: string; message?: string };
     if (!r.ok) console.warn(`[portal] self-connect start returned HTTP ${r.status}: ${data.message ?? "no message"}`);
@@ -1087,7 +1090,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   const authenticatedPrincipal = session?.sub;
   let staleSession: SessionClaims | null = null;
   if (session && !session.anon && (!pathname.startsWith("/auth/") || pathname.startsWith("/auth/impersonate"))) {
-    const canonical = await canonicalPrincipal(session.sub);
+    const canonical = await canonicalPrincipal(session.sub, session.t);
     if (!canonical) return identityUnavailable(req, res);
     if (canonical.stale) staleSession = { ...session, sub: canonical.id };
     session = canonical.stale ? null : { ...session, sub: canonical.id };
@@ -1099,7 +1102,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     if (!(await isAdmin(session.sub))) return json(res, 403, { error: "forbidden", message: "admin access required" });
     const target = (url.searchParams.get("target") ?? "").trim();
     if (!target) return json(res, 400, { error: "bad_request", message: "target required" });
-    if (target === session.sub || (await canonicalPrincipal(target))?.id === session.sub)
+    if (target === session.sub || (await canonicalPrincipal(target, session.t))?.id === session.sub)
       return json(res, 400, { error: "bad_request", message: "cannot impersonate yourself" });
     const result = await coreImpersonate("start", session.sub, target);
     if (!result.ok) {
