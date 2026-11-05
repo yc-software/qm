@@ -8,7 +8,8 @@ import type { MemoryProviderOutcome, MemoryService } from "../src/memory/memory-
 import { startMcpTestServer } from "./support/mcp-test-server.ts";
 import { createRoutedMemoryService } from "../src/memory/provider-router.ts";
 import { searchNotebooks } from "../src/memory/cross-scope.ts";
-import { McpCallError } from "../src/mcp/mcp-client.ts";
+import { createMcpClient, McpCallError } from "../src/mcp/mcp-client.ts";
+import { createMcpMemoryProvider } from "../src/memory/mcp-memory-provider.ts";
 import { recallText } from "./support/recall-text.ts";
 
 const notebook: MemoryService = {
@@ -64,6 +65,24 @@ function configured(
       }),
       env,
     ),
+  });
+}
+
+function routedWithTimeout(url: string, timeoutMs: number) {
+  const client = (clientId: string, clientSecret: string) =>
+    createMcpClient({ url, auth: { mode: "client-credentials", clientId, clientSecret }, fetch });
+  return createRoutedMemoryService({
+    providers: {
+      default: notebook,
+      knowledge: createMcpMemoryProvider({
+        read: { client: client("ro", "x"), tool: "search_knowledge", timeoutMs },
+        write: { client: client("rw", "y"), tool: "write_knowledge", idempotencyArg: "request_id", timeoutMs },
+      }),
+    },
+    routes: [
+      { provider: "default", scopes: ["personal"], capture: "automatic" },
+      { provider: "knowledge", scopes: ["personal"], capture: "explicit", manage: false, failOpen: true },
+    ],
   });
 }
 
@@ -268,7 +287,7 @@ test("explicit writes record committed, pending and unknown with a stable UUID i
         : { content: [{ type: "text", text: JSON.stringify({ status: "pending" }) }] };
     },
   });
-  const memory = configured(mcp.url, { timeoutMs: 200 });
+  const memory = routedWithTimeout(mcp.url, 200);
   const write = (facts: string[], turn?: string) =>
     writeFacts(memory, "personal:U1", facts, "U1", { mode: "explicit", actorId: "U1" }, turn);
 
@@ -308,6 +327,25 @@ test("explicit writes record committed, pending and unknown with a stable UUID i
   assert.notEqual(none, first);
   assert.notEqual(otherNotebook, first);
   assert.match(String(slow), uuid);
+});
+
+test("timeoutMs bounds reads, and a write slower than it still commits", async (t) => {
+  const mcp = await startMcpTestServer(t, {
+    tools: TOOLS,
+    clients: { ro: "x", rw: "y" },
+    call: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      return { content: [{ type: "text", text: "stored" }] };
+    },
+  });
+  const memory = configured(mcp.url, { timeoutMs: 100 });
+  const read = await withProviders("search", (report) => memory.recall("personal:U1", { actorId: "U1", report }));
+  const written = await writeFacts(memory, "personal:U1", ["fact"], "U1", { mode: "explicit", actorId: "U1" }, "run-1");
+  await settled(mcp, 2);
+
+  assert.deepEqual(external(read.outcomes), [{ outcome: "timed_out", code: undefined }]);
+  assert.deepEqual(external(written.outcomes), [{ outcome: "committed", code: undefined }]);
+  assert.deepEqual(written.problems, []);
 });
 
 test("a failing built-in notebook write stays QM's own error, not a provider problem", async (t) => {

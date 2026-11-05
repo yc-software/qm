@@ -8,6 +8,7 @@ import type { MemoryProviderOutcome, MemoryService } from "../src/memory/memory-
 import { parseMemoryProviderConfig } from "../src/memory/provider-config.ts";
 import { createConfiguredMemoryService } from "../src/memory/provider-factory.ts";
 import { withProviders, writeFacts } from "../src/memory/provider-outcome.ts";
+import { createPerTurnStrategy } from "../src/memory/strategies/per-turn.ts";
 import { recallAcrossScopes } from "../src/memory/cross-scope.ts";
 import { memoryRecallQuery } from "../src/memory/semantic-recall.ts";
 import { type NewItem, storedItem } from "../src/sessions/items.ts";
@@ -56,6 +57,7 @@ interface Call {
 async function gbrain(
   t: { after(fn: () => Promise<void>): void },
   answer: (name: string, args: Record<string, unknown>) => CallToolResult,
+  routes = recipe.routes,
 ) {
   installPrincipalLinks({
     canonical: (key) => (key === "jordan@acme.example" || key === "U0JORDAN" ? "U0JORDAN" : undefined),
@@ -96,7 +98,7 @@ async function gbrain(
   const memory = createConfiguredMemoryService({
     defaultMemory: notebook,
     config: parseMemoryProviderConfig(
-      JSON.stringify({ ...recipe, providers: [{ ...recipe.providers[0], url: server.url }] }),
+      JSON.stringify({ ...recipe, routes, providers: [{ ...recipe.providers[0], url: server.url }] }),
       SECRETS,
     ),
     onError: () => {},
@@ -283,9 +285,7 @@ test("gbrain's answers and refusals become the outcomes the contract classes the
     }),
     "pending",
   );
-  for (const { code, class: cls } of contract.errors.codes.filter(
-    ({ code }) => code !== "on_behalf_of_invalid_audience",
-  ))
+  for (const { code, class: cls } of contract.errors.codes)
     assert.equal(await write(refusal(code)), expected(code, cls), code);
 });
 
@@ -328,6 +328,70 @@ test("a gbrain write's provenance stays within the contract's limit for a long s
   assert.deepEqual(calls.flatMap(violations), []);
   const [fact] = calls[0]!.args.facts as Array<{ provenance: string }>;
   assert.equal(fact?.provenance, scope.slice(0, contract.memory_write.limits.provenance_chars));
+});
+
+test("automatic capture of more than 20 facts reaches gbrain as writes within the contract, each with its own key", async (t) => {
+  const [notebookRoute, gbrainRoute] = recipe.routes as Array<Record<string, unknown>>;
+  const { calls, memory, notebookWrites } = await gbrain(
+    t,
+    () => committed(20, "8c1f7a0e-0000-5000-8000-000000000008"),
+    [notebookRoute, { ...gbrainRoute, capture: "automatic" }],
+  );
+  const facts = Array.from({ length: 45 }, (_, i) => `Prefers seat ${i + 1}`);
+  const strategy = createPerTurnStrategy({
+    agent: { oneShot: async () => `SENSITIVITY: ordinary\n${facts.map((fact) => `- ${fact}`).join("\n")}` },
+    memory,
+  });
+  await strategy.onTurnEnd!({
+    scopeId: JORDAN,
+    actorId: "U0JORDAN",
+    idempotencyKey: "run-4",
+    input: "My seats",
+    reply: "Noted",
+  });
+
+  const { limits } = contract.memory_write;
+  assert.deepEqual(calls.flatMap(violations), []);
+  const writes = calls.map(({ args }) => ({
+    facts: (args.facts as Array<{ fact: string }>).map(({ fact }) => fact),
+    key: String(args.idempotency_key),
+  }));
+  for (const write of writes) {
+    assert.ok(write.facts.length >= limits.facts.min && write.facts.length <= limits.facts.max);
+    assert.match(write.key, new RegExp(limits.idempotency_key.pattern));
+  }
+  assert.deepEqual(
+    writes.flatMap((write) => write.facts),
+    facts,
+  );
+  assert.equal(new Set(writes.map(({ key }) => key)).size, writes.length);
+  assert.deepEqual(notebookWrites, facts);
+});
+
+test("a strict gbrain route that refuses a later batch still leaves every automatic fact in the notebook", async (t) => {
+  const [notebookRoute, gbrainRoute] = recipe.routes as Array<Record<string, unknown>>;
+  let writes = 0;
+  const { memory, notebookWrites } = await gbrain(
+    t,
+    () => (++writes > 1 ? refusal("invalid_params") : committed(20, "8c1f7a0e-0000-5000-8000-000000000009")),
+    [notebookRoute, { ...gbrainRoute, capture: "automatic", failOpen: false }],
+  );
+  const facts = Array.from({ length: 45 }, (_, i) => `Prefers seat ${i + 1}`);
+  const strategy = createPerTurnStrategy({
+    agent: { oneShot: async () => `SENSITIVITY: ordinary\n${facts.map((fact) => `- ${fact}`).join("\n")}` },
+    memory,
+  });
+  await assert.rejects(
+    strategy.onTurnEnd!({
+      scopeId: JORDAN,
+      actorId: "U0JORDAN",
+      idempotencyKey: "run-5",
+      input: "My seats",
+      reply: "Noted",
+    }),
+    /invalid_params/,
+  );
+  assert.deepEqual(notebookWrites, facts);
 });
 
 test("a long conversation's recall asks gbrain with the member's message, within gbrain's question limit", async (t) => {
