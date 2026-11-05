@@ -160,7 +160,20 @@ test("an emit reaches only listeners registered under the same tenant", () => {
     ["b", "two", B],
   ]);
   assert.throws(() => listeners.emit("unbound"), /No tenant is bound/);
-  assert.throws(() => listeners.add(() => {}), /No tenant is bound/);
+});
+
+test("a listener registered with no tenant bound hears every tenant, bound to the emitting tenant", () => {
+  const listeners = tenantListeners<[string]>("test");
+  const heard: Array<[string, string | undefined]> = [];
+  const off = listeners.add((value) => heard.push([value, boundTenant()]));
+  withTenant(A, () => listeners.emit("one"));
+  withTenant(B, () => listeners.emit("two"));
+  off();
+  withTenant(A, () => listeners.emit("three"));
+  assert.deepEqual(heard, [
+    ["one", A],
+    ["two", B],
+  ]);
 });
 
 test("a failing listener does not stop the others", () => {

@@ -172,7 +172,6 @@ export function createMcpToolService(opts: {
 }): McpToolService {
   const now = opts.now ?? (() => Date.now());
   const refreshIntervalMs = opts.refreshIntervalMs ?? REFRESH_INTERVAL_MS;
-  const unsubscribers: Array<() => void> = [];
   const tenantState = perTenant<{
     clients: Map<string, { client: McpClient; server: McpServer }>;
     snapshot: McpToolDescriptor[];
@@ -180,19 +179,12 @@ export function createMcpToolService(opts: {
     catalogs: LRUCache<string, Promise<RemoteTool[]>>;
     loadedAt?: number;
     pending?: Promise<void>;
-  }>(() => {
-    unsubscribers.push(
-      opts.servers.onChange(() => {
-        if (!closed) void Promise.resolve().then(refresh).catch(reportFailureAs("mcp: refresh tools", undefined));
-      }),
-    );
-    return {
-      clients: new Map(),
-      snapshot: [],
-      perUserServers: new Map(),
-      catalogs: new LRUCache({ max: CATALOG_CACHE_MAX, ttl: CATALOG_TTL_MS }),
-    };
-  });
+  }>(() => ({
+    clients: new Map(),
+    snapshot: [],
+    perUserServers: new Map(),
+    catalogs: new LRUCache({ max: CATALOG_CACHE_MAX, ttl: CATALOG_TTL_MS }),
+  }));
 
   function signInMessage(server: McpServer): string {
     const url = opts.signInUrl?.(server.id);
@@ -408,6 +400,10 @@ export function createMcpToolService(opts: {
 
   setPublicOAuthClientSource(async () => mcpPublicOAuthClients(await opts.servers.list()));
 
+  const unsubscribe = opts.servers.onChange(() => {
+    if (!closed) void Promise.resolve().then(refresh).catch(reportFailureAs("mcp: refresh tools", undefined));
+  });
+
   return {
     toolDefs: async () => (await loaded()).snapshot,
     toolDefsFor,
@@ -462,7 +458,7 @@ export function createMcpToolService(opts: {
     },
     close() {
       closed = true;
-      for (const unsubscribe of unsubscribers.splice(0)) unsubscribe();
+      unsubscribe();
     },
   };
 }

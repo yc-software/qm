@@ -1,5 +1,5 @@
 import { swallow } from "../util/errors.ts";
-import { currentTenant } from "./context.ts";
+import { boundTenant, currentTenant } from "./context.ts";
 
 export function perTenant<V>(create: () => V): () => V {
   const values = new Map<string, V>();
@@ -19,14 +19,15 @@ export interface TenantListeners<A extends unknown[]> {
 
 export function tenantListeners<A extends unknown[]>(label: string): TenantListeners<A> {
   const listeners = perTenant(() => new Set<(...args: A) => void>());
+  const everyTenant = new Set<(...args: A) => void>();
   return {
     add(listener) {
-      const own = listeners();
+      const own = boundTenant() === undefined ? everyTenant : listeners();
       own.add(listener);
       return () => own.delete(listener);
     },
     emit(...args) {
-      for (const listener of listeners()) {
+      for (const listener of [...listeners(), ...everyTenant]) {
         try {
           listener(...args);
         } catch (e) {
