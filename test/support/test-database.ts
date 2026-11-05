@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { boundTenant } from "../../src/tenants/context.ts";
 import { MessageChannel, receiveMessageOnPort, Worker, type MessagePort } from "node:worker_threads";
 import { createPostgresAdminGrantStore } from "../../src/admin/postgres-admin-grant-store.ts";
 import { createAdminGrantStore, type AdminGrant, type AdminGrantStore } from "../../src/admin/admin-grant-store.ts";
@@ -94,7 +95,10 @@ export function testAdminGrantStore(
     role: "org_admin" as const,
   })),
 ): AdminGrantStore {
-  return createAdminGrantStore(createPostgresAdminGrantStore(testDatabaseUrl()), { seed });
+  return createAdminGrantStore(createPostgresAdminGrantStore(testDatabaseUrl()), {
+    seed,
+    seedTenant: async () => boundTenant(),
+  });
 }
 
 export function testDeployBackings(
