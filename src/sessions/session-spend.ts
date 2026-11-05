@@ -97,7 +97,7 @@ export function createSessionSpend(deps: {
     });
     const days = await q(
       `SELECT d.day FROM (SELECT DISTINCT day FROM session_spend_dirty WHERE day IS NOT NULL) d
-       LEFT JOIN session_spend_days c ON c.c.day = d.day
+       LEFT JOIN session_spend_days c ON c.day = d.day
        ORDER BY d.day = max(d.day) OVER () DESC, c.updated_at NULLS FIRST, d.day DESC`,
     );
     for (const [index, { day }] of days.entries()) {
