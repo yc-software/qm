@@ -115,7 +115,7 @@ export interface DeployStore {
   get(id: string): Promise<Deployment | null>;
   getByName(name: string): Promise<Deployment | null>;
   list(): Promise<Deployment[]>;
-  claimIds(): Promise<ClaimedRow[]>;
+  claimTenants(): Promise<ClaimedRow[]>;
   setCurrentVersion(id: string, version: number): Promise<void>;
   setVersionImage(id: string, version: number, image: string): Promise<void>;
   setStatus(id: string, status: DeploymentStatus): Promise<void>;
@@ -333,8 +333,8 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
         : ((await backingMap.all()).find((x) => x.name === name) ?? null);
       return d ? withAccess(d, await access.readOne(d.id)) : null;
     },
-    claimIds() {
-      return backingMap.claimIds();
+    claimTenants() {
+      return backingMap.claimTenants();
     },
     async list() {
       const [ds, accessAt] = await Promise.all([backingMap.all(), access.readAll()]);
