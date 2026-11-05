@@ -204,6 +204,7 @@ test("a stale baked-in filesystem seed never downgrades or resurrects the durabl
       });
       await skills.review(stale.id, "system:deployment-layer-reviewer", []);
       await skills.publish(stale.id);
+      return true;
     },
   });
   await booted.hydrate();
@@ -236,6 +237,7 @@ test("with no durable record the filesystem seed applies once, and a later durab
       });
       await skills.review(fs.id, "system:deployment-layer-reviewer", []);
       await skills.publish(fs.id);
+      return true;
     },
   });
   assert.equal(await store.hydrate(), null);
@@ -323,6 +325,7 @@ test("a stored record that no longer applies degrades to the seed instead of fai
     retryDelaysMs: [1],
     seedFallback: async () => {
       seeded++;
+      return true;
     },
   });
   const record = await store.hydrate();
@@ -347,12 +350,36 @@ test("a failed seed is retried on the next hydrate (seeded only latches on succe
     seedFallback: async () => {
       attempts++;
       if (attempts === 1) throw new Error("skill store hiccup");
+      return true;
     },
   });
   await assert.rejects(store.hydrate(), /skill store hiccup/);
   await store.hydrate();
   await store.hydrate();
   assert.equal(attempts, 2, "the failed seed retried once, then latched");
+});
+
+test("a declined seed is retried on a later hydrate and then latches", async () => {
+  let owner = false;
+  let seeds = 0;
+  const store = createDeploymentLayerStore({
+    ...singleProcessDeps(),
+    backing: testMap<StoredDeploymentLayer>(),
+    runtime: emptyDeploymentLayer(),
+    skills: createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap(), signingSecret: "layer-test" }),
+    scopeId: scopeId("org", "default-org"),
+    seedFallback: async () => {
+      if (!owner) return false;
+      seeds++;
+      return true;
+    },
+  });
+  await store.hydrate();
+  assert.equal(seeds, 0);
+  owner = true;
+  await store.hydrate();
+  await store.hydrate();
+  assert.equal(seeds, 1);
 });
 
 test("a failed fallback seed after an incompatible stored layer fails boot and retries", async (t) => {
@@ -379,6 +406,7 @@ test("a failed fallback seed after an incompatible stored layer fails boot and r
     retryDelaysMs: [],
     seedFallback: async () => {
       if (++attempts === 1) throw new Error("fallback write failed");
+      return true;
     },
   });
 
@@ -426,6 +454,7 @@ test("a PUT landing on another instance mid-seed is applied right after seeding 
         },
         "api",
       );
+      return true;
     },
   });
   const record = await booted.hydrate();
@@ -462,6 +491,7 @@ test("a layer that appears mid-seed but fails to apply leaves the fallback live 
           return resolved;
         })(),
       });
+      return true;
     },
   });
 
@@ -513,6 +543,7 @@ test("a mid-seed layer that fails during skill mutation keeps the fallback live 
           return resolved;
         })(),
       });
+      return true;
     },
   });
 

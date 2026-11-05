@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { createAgent } from "../src/agent/agent-run.ts";
+import { createModelRoutes } from "../src/model/model-route.ts";
 import { modelRequestOverrides } from "../src/model/pi-models.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
 
@@ -50,13 +51,15 @@ test("Pi reports each model request to the turn before the reply streams, and on
   const address = server.address();
   assert(address && typeof address !== "string");
   const agent = createAgent({
-    defaultModelId: modelId,
-    modelGateway: {
-      url: `http://127.0.0.1:${address.port}`,
-      apiKey: "test-key",
-      apiKeyHeader: "api-key",
-      models: { [modelId]: modelRequestOverrides(modelId)?.model ?? modelId },
-    },
+    routes: createModelRoutes({
+      defaultModelId: modelId,
+      modelGateway: {
+        url: `http://127.0.0.1:${address.port}`,
+        apiKey: "test-key",
+        apiKeyHeader: "api-key",
+        models: { [modelId]: modelRequestOverrides(modelId)?.model ?? modelId },
+      },
+    }),
   });
   t.after(() => agent.close?.());
   let seq = 0;

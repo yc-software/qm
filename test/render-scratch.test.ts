@@ -13,7 +13,6 @@ import {
   type StoredRenderScratch,
 } from "../src/sandbox/render-sandbox.ts";
 import { SandboxProvisionCleanupError, type SandboxHandle } from "../src/sandbox/sandbox.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createFakeRender } from "./support/fake-render.ts";
 import { testMap, testAdvisoryLock } from "./support/test-database.ts";
 
@@ -29,7 +28,6 @@ function setup(t: TestContext) {
       rmSync(dir, { recursive: true, force: true });
     }
   });
-  const workspace = createLocalWorkspaceStore(dir);
   const store = testMap<StoredRenderSandbox>();
   const scratchStore = testMap<StoredRenderScratch>();
   const cleanupStore = testMap<StoredRenderCleanup>();
@@ -38,7 +36,7 @@ function setup(t: TestContext) {
   const ref = `ghcr.io/acme/sandbox-base:${"0".repeat(40)}@sha256:${"a".repeat(64)}`;
   const golden = { ref, snapshotId: fake.seedGolden(ref) };
   const make = (backing = scratchStore, lock = advisoryLock) =>
-    createRenderSandbox(workspace, {
+    createRenderSandbox({
       client: fake.client,
       base: { ready: async () => golden, prepare: async () => {} },
       store,
@@ -58,7 +56,7 @@ test("Render preserves an allocation error when no disposable sandbox was create
   t.mock.method(fake.client, "create", async () => {
     throw failure;
   });
-  await assert.rejects(make().provision([], options), (error) => error === failure);
+  await assert.rejects(make().provision("personal:scratch", options), (error) => error === failure);
   assert.deepEqual(await scratchStore.entries(), []);
   assert.deepEqual(fake.terminated, []);
 });
@@ -66,7 +64,7 @@ test("Render preserves an allocation error when no disposable sandbox was create
 test("Render keeps the provider error when a disposable sandbox ends under a command", async (t) => {
   const { make, fake, store } = setup(t);
   const sandbox = make();
-  const handle = await sandbox.provision([], options);
+  const handle = await sandbox.provision("personal:scratch", options);
   await fake.client.terminate(handle.providerSandboxId!);
   await assert.rejects(sandbox.run(handle, "true"), /no longer running/);
   assert.deepEqual(await store.entries(), []);
@@ -76,8 +74,8 @@ test("Render keeps the provider error when a disposable sandbox ends under a com
 test("Render keeps a disposable sandbox until its last local handle is released", async (t) => {
   const { make, fake, scratchStore, store } = setup(t);
   const sandbox = make();
-  const a = await sandbox.provision([], options);
-  const b = await sandbox.provision([], options);
+  const a = await sandbox.provision("personal:scratch", options);
+  const b = await sandbox.provision("personal:scratch", options);
   assert.equal(a.providerSandboxId, "sbx-1");
   assert.equal(b.providerSandboxId, a.providerSandboxId);
   assert.equal(fake.sandboxes.size, 1);
@@ -92,7 +90,7 @@ test("Render keeps a disposable sandbox until its last local handle is released"
 
 test("Another Render core can execute and destroy a saved disposable handle", async (t) => {
   const { make, fake, scratchStore } = setup(t);
-  const handle = await make().provision([], options);
+  const handle = await make().provision("personal:scratch", options);
   const other = make();
   assert.equal((await other.run(handle, "echo retained")).stdout, "retained\n");
   await other.teardown(handle, { destroy: true });
@@ -103,7 +101,10 @@ test("Another Render core can execute and destroy a saved disposable handle", as
 
 test("Another Render core cannot reuse an active disposable allocation", async (t) => {
   const { make, fake } = setup(t);
-  const results = await Promise.allSettled([make().provision([], options), make().provision([], options)]);
+  const results = await Promise.allSettled([
+    make().provision("personal:scratch", options),
+    make().provision("personal:scratch", options),
+  ]);
   assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
   const rejected = results.filter((result): result is PromiseRejectedResult => result.status === "rejected");
   assert.equal(rejected.length, 1);
@@ -115,12 +116,12 @@ test("Another Render core cannot reuse an active disposable allocation", async (
 test("A Render core cannot reuse a replacement through its old local allocation", async (t) => {
   const { make, fake } = setup(t);
   const owner = make();
-  const old = await owner.provision([], options);
+  const old = await owner.provision("personal:scratch", options);
   const other = make();
   await other.teardown(old, { destroy: true });
-  const current = await other.provision([], options);
+  const current = await other.provision("personal:scratch", options);
   const before = fake.commands.length;
-  await assert.rejects(owner.provision([], options), /in use by another core/);
+  await assert.rejects(owner.provision("personal:scratch", options), /in use by another core/);
   assert.equal(fake.commands.length, before);
   await owner.teardown(old, { destroy: true });
   assert.equal(fake.sandboxes.get(current.providerSandboxId!)?.status, "running");
@@ -129,7 +130,7 @@ test("A Render core cannot reuse a replacement through its old local allocation"
 test("Render removes a disposable allocation after preparation fails", async (t) => {
   const { make, fake, scratchStore } = setup(t);
   t.mock.method(fake.client, "runScript", async () => ({ stdout: "", stderr: "preparation refused", exitCode: 1 }));
-  await assert.rejects(make().provision([], options), /preparation refused/);
+  await assert.rejects(make().provision("personal:scratch", options), /preparation refused/);
   assert.deepEqual(fake.terminated, ["sbx-1"]);
   assert.deepEqual(await scratchStore.entries(), []);
 });
@@ -139,7 +140,7 @@ test("Render retries failed preparation cleanup from another core", async (t) =>
   fake.failTerminate(new Error("termination refused"));
   t.mock.method(fake.client, "runScript", async () => ({ stdout: "", stderr: "preparation refused", exitCode: 1 }));
   let handle: SandboxHandle | undefined;
-  await assert.rejects(make().provision([], options), (error) => {
+  await assert.rejects(make().provision("personal:scratch", options), (error) => {
     assert.ok(error instanceof SandboxProvisionCleanupError);
     handle = error.handle;
     return true;
@@ -158,7 +159,7 @@ test("Render retries failed preparation cleanup from another core", async (t) =>
 
 test("Render can retry disposable teardown with a saved handle", async (t) => {
   const { make, fake, scratchStore } = setup(t);
-  const handle = await make().provision([], options);
+  const handle = await make().provision("personal:scratch", options);
   fake.failTerminate(new Error("termination refused"));
   await assert.rejects(make().teardown(handle, { destroy: true }), /termination refused/);
   assert.equal((await scratchStore.get(handle.id))?.cleanupPending, true);
@@ -180,7 +181,7 @@ test("Render deletes an allocation when its durable record cannot be saved", asy
     }
     await put(id, value);
   });
-  await assert.rejects(make().provision([], options), (error) => error === failure);
+  await assert.rejects(make().provision("personal:scratch", options), (error) => error === failure);
   assert.deepEqual(fake.terminated, ["sbx-1"]);
   assert.deepEqual(await scratchStore.entries(), []);
 });
@@ -197,7 +198,7 @@ test("Render retains cleanup when both the initial record and termination fail",
     await put(id, value);
   });
   fake.failTerminate(new Error("termination refused"));
-  await assert.rejects(make().provision([], options), SandboxProvisionCleanupError);
+  await assert.rejects(make().provision("personal:scratch", options), SandboxProvisionCleanupError);
   assert.equal((await scratchStore.entries())[0]?.[1].cleanupPending, true);
   fake.failTerminate();
   assert.deepEqual(await make().reapDeepIdle!(0), { reaped: 1 });
@@ -206,7 +207,7 @@ test("Render retains cleanup when both the initial record and termination fail",
 
 test("Render retries record removal after the native sandbox was terminated", async (t) => {
   const { make, fake, scratchStore } = setup(t);
-  const handle = await make().provision([], options);
+  const handle = await make().provision("personal:scratch", options);
   const remove = scratchStore.delete;
   let refuse = true;
   t.mock.method(scratchStore, "delete", async (id: string) => {
@@ -226,8 +227,8 @@ test("Render retries record removal after the native sandbox was terminated", as
 test("Render sweeps expired disposable allocations and keeps active allocations", async (t) => {
   const { make, fake, scratchStore } = setup(t);
   const sandbox = make();
-  const expired = await sandbox.provision([], options);
-  const active = await sandbox.provision([], { scratch: { key: "active" } });
+  const expired = await sandbox.provision("personal:scratch", options);
+  const active = await sandbox.provision("personal:scratch", { scratch: { key: "active" } });
   await scratchStore.merge(expired.id, { expiresAtMs: Date.now() - 1 });
   assert.deepEqual(await make().reapDeepIdle!(0), { reaped: 1 });
   assert.equal(fake.sandboxes.get(expired.providerSandboxId!)?.status, "terminated");
@@ -238,9 +239,9 @@ test("Render sweeps expired disposable allocations and keeps active allocations"
 test("Render does not execute or delete a new allocation through an old handle", async (t) => {
   const { make, fake } = setup(t);
   const sandbox = make();
-  const old = await sandbox.provision([], options);
+  const old = await sandbox.provision("personal:scratch", options);
   await sandbox.teardown(old, { destroy: true });
-  const current = await sandbox.provision([], options);
+  const current = await sandbox.provision("personal:scratch", options);
   assert.notEqual(current.providerSandboxId, old.providerSandboxId);
   await assert.rejects(sandbox.run(old, "touch unexpected"), /has been released/);
   await sandbox.teardown(old, { destroy: true });
@@ -250,7 +251,7 @@ test("Render does not execute or delete a new allocation through an old handle",
 
 test("Render serializes disposable cleanup across cores", async (t) => {
   const { make, fake, scratchStore } = setup(t);
-  const handle = await make().provision([], options);
+  const handle = await make().provision("personal:scratch", options);
   await Promise.all([make().teardown(handle, { destroy: true }), make().teardown(handle, { destroy: true })]);
   assert.deepEqual(fake.terminated, [handle.providerSandboxId]);
   assert.deepEqual(await scratchStore.entries(), []);
@@ -260,7 +261,7 @@ for (const cleanup of ["teardown", "expiry sweep"] as const) {
   test(`Render completes a disposable file import before ${cleanup}`, { timeout: 10_000 }, async (t) => {
     const { make, fake, scratchStore } = setup(t);
     const sandbox = make();
-    const handle = await sandbox.provision([], options);
+    const handle = await sandbox.provision("personal:scratch", options);
     const uploading = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
     const write = fake.client.writeFileBytes;
@@ -298,7 +299,7 @@ test("A failed Render initialization cannot later delete a replacement allocatio
   );
   const sandbox = make();
   let old: SandboxHandle | undefined;
-  await assert.rejects(sandbox.provision([], options), (error) => {
+  await assert.rejects(sandbox.provision("personal:scratch", options), (error) => {
     assert.ok(error instanceof SandboxProvisionCleanupError);
     old = error.handle;
     return true;
@@ -306,7 +307,7 @@ test("A failed Render initialization cannot later delete a replacement allocatio
   assert.equal(old!.providerSandboxId, "sbx-1");
   refuse = false;
   fake.failTerminate();
-  const current = await sandbox.provision([], options);
+  const current = await sandbox.provision("personal:scratch", options);
   await make().teardown(old!, { destroy: true });
   assert.equal(fake.sandboxes.get(current.providerSandboxId!)?.status, "running");
 });
@@ -324,7 +325,7 @@ test(
     fake.failTerminate(new Error("termination refused"));
     try {
       const owner = make(initial, createPostgresAdvisoryLock(first.pool));
-      const handle = await owner.provision([], options);
+      const handle = await owner.provision("personal:scratch", options);
       await assert.rejects(owner.teardown(handle, { destroy: true }), /termination refused/);
       await first.pool.close();
       assert.equal((await recovered.get(handle.id))?.cleanupPending, true);

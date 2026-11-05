@@ -1,28 +1,18 @@
 import { createMcpClient } from "../mcp/mcp-client.ts";
 import { errMessage } from "../util/errors.ts";
 import { createMcpMemoryProvider, type McpMemoryOperation } from "./mcp-memory-provider.ts";
-import type { MemoryProviderConfig, McpMemoryOperationConfig } from "./provider-config.ts";
+import {
+  MAX_PROVIDER_TIMEOUT_MS,
+  type MemoryProviderConfig,
+  type McpMemoryOperationConfig,
+} from "./provider-config.ts";
 import type { MemoryService } from "./memory-service.ts";
 import { createMemorableMemoryProvider } from "./memorable/provider.ts";
 import { createSecretValueMasker } from "../security/secret-masking.ts";
 import type { Item } from "../sessions/items.ts";
 
-function operation(url: string, spec: McpMemoryOperationConfig, timeoutMs: number): McpMemoryOperation {
-  return {
-    client: createMcpClient({ url, auth: { mode: "client-credentials", ...spec.auth }, fetch }),
-    tool: spec.tool,
-    timeoutMs,
-    ...(spec.queryArg ? { queryArg: spec.queryArg } : {}),
-    ...(spec.contentArg ? { contentArg: spec.contentArg } : {}),
-    ...(spec.actorArg ? { actorArg: spec.actorArg } : {}),
-    ...(spec.scopeArg ? { scopeArg: spec.scopeArg } : {}),
-    ...(spec.maxCharsArg ? { maxCharsArg: spec.maxCharsArg } : {}),
-    ...(spec.inputArg ? { inputArg: spec.inputArg } : {}),
-    ...(spec.replyArg ? { replyArg: spec.replyArg } : {}),
-    ...(spec.capturedAtArg ? { capturedAtArg: spec.capturedAtArg } : {}),
-    ...(spec.sourceArg ? { sourceArg: spec.sourceArg } : {}),
-    ...(spec.idempotencyArg ? { idempotencyArg: spec.idempotencyArg } : {}),
-  };
+function operation(url: string, { auth, ...spec }: McpMemoryOperationConfig, timeoutMs: number): McpMemoryOperation {
+  return { client: createMcpClient({ url, auth: { mode: "client-credentials", ...auth }, fetch }), timeoutMs, ...spec };
 }
 
 export const logMemoryProviderError = (error: unknown, provider: string, operation: string): void =>
@@ -49,7 +39,7 @@ export function createMemoryProviders(
     }
     providers[provider.id] = createMcpMemoryProvider({
       read: operation(provider.url, provider.read, provider.timeoutMs),
-      ...(provider.write ? { write: operation(provider.url, provider.write, provider.timeoutMs) } : {}),
+      ...(provider.write ? { write: operation(provider.url, provider.write, MAX_PROVIDER_TIMEOUT_MS) } : {}),
       attestActor: provider.attestActor,
     });
   }

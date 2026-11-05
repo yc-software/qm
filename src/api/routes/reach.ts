@@ -196,10 +196,10 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
     let provisioned: Promise<SandboxHandle> | undefined;
     const handle = () =>
       (provisioned ??= resource
-        ? sandbox!.provision([{ scopeId: resource.ownerScopeId, mountPath: "", mode: "rw" }], {
+        ? sandbox!.provision(resource.ownerScopeId, {
             sandboxId: resource.id,
           })
-        : sandbox!.provision([{ scopeId: envScope, mountPath: "", mode: "rw" }]));
+        : sandbox!.provision(envScope));
     try {
       const r = await collectNamedOutbound(sandbox, handle, files, blobTransfer, register, [], (id) =>
         app.openFileForViewer(id, capability.actorId),

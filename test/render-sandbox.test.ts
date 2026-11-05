@@ -9,7 +9,6 @@ import {
   type StoredRenderCleanup,
   type StoredRenderScratch,
 } from "../src/sandbox/render-sandbox.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createLocalBlobTransferStore } from "../src/persistence/blob-transfer.ts";
 import { scopeId } from "../src/types.ts";
 import { supportsAgentComputerExport, supportsProcessSessions } from "../src/sandbox/sandbox.ts";
@@ -31,7 +30,6 @@ function setup(
   const http = options.http ? serveFakeRenderApi(t, fake, options.intercept) : undefined;
   const client = http ? createSdkRenderClient({ apiKey: "render-test-key", workspaceId: "tea-test" }) : fake.client;
   const dir = mkdtempSync(join(tmpdir(), "render-ws-"));
-  const workspace = createLocalWorkspaceStore(dir);
   const blobTransfer = createLocalBlobTransferStore(join(dir, "blobs"));
   const store = testMap<StoredRenderSandbox>();
   const scratchStore = testMap<StoredRenderScratch>();
@@ -48,7 +46,7 @@ function setup(
     return golden.snapshotId;
   };
   const make = (checkpointIntervalMs = -1, goldens = base) =>
-    createRenderSandbox(workspace, {
+    createRenderSandbox({
       client,
       base: goldens,
       store,
@@ -60,7 +58,6 @@ function setup(
       onError: (error) => errors.push({ code: error.code, message: error.message }),
     });
   const scope = scopeId("personal", "tester");
-  const layers = [{ scopeId: scope, mountPath: "/", mode: "rw" as const }];
   t.after(() => {
     fake.cleanup();
     rmSync(dir, { recursive: true, force: true });
@@ -73,10 +70,8 @@ function setup(
     cleanupStore,
     make,
     scope,
-    layers,
     blobTransfer,
     dir,
-    workspace,
     advisoryLock,
     errors,
     useGolden,
@@ -92,11 +87,11 @@ const finishBackgroundProcess = (fake: ReturnType<typeof createFakeRender>, sand
   fake.client.writeFileBytes(sandboxId, `${processPath}/code`, Buffer.from("0"));
 
 test("Render keeps turn and background process secrets out of run token requests and runs scripts past the argument limit", async (t) => {
-  const { make, http, layers } = setup(t, { http: true });
+  const { make, http, scope } = setup(t, { http: true });
   const sandbox = make();
   const turnSecret = "turn-secret-8d1f";
   const processSecret = "process-secret-2c7a";
-  const handle = await sandbox.provision(layers, { env: { QM_TURN_TOKEN: turnSecret } });
+  const handle = await sandbox.provision(scope, { env: { QM_TURN_TOKEN: turnSecret } });
   assert.equal((await sandbox.run(handle, 'printf %s "$QM_TURN_TOKEN"')).stdout, turnSecret);
   const payload = "y".repeat(200 * 1024);
   assert.equal(
@@ -125,7 +120,7 @@ test("Render keeps turn and background process secrets out of run token requests
 test("Render resumes from its native checkpoint through transient API errors and sends a failed exec once", async (t) => {
   const failures: Array<{ method: string; path: RegExp; status: number }> = [];
   const injected: string[] = [];
-  const { make, fake, http, layers, store, scope } = setup(t, {
+  const { make, fake, http, store, scope } = setup(t, {
     http: true,
     intercept: (request) => {
       const url = new URL(request.url);
@@ -137,7 +132,7 @@ test("Render resumes from its native checkpoint through transient API errors and
     },
   });
   const sandbox = make();
-  await sandbox.provision(layers);
+  await sandbox.provision(scope);
   const stored = (await store.get(scope))!;
   const checkpoint = stored.checkpoint!.id;
   await fake.client.terminate(stored.sandboxId);
@@ -145,7 +140,7 @@ test("Render resumes from its native checkpoint through transient API errors and
     { method: "GET", path: new RegExp(`^/v1/sandboxes/${stored.sandboxId}$`), status: 503 },
     { method: "GET", path: new RegExp(`/snapshots/${checkpoint}$`), status: 429 },
   );
-  const resumed = await sandbox.provision(layers);
+  const resumed = await sandbox.provision(scope);
   assert.equal((await sandbox.run(resumed, "echo resumed")).stdout, "resumed\n");
   assert.deepEqual(injected, [
     `503 GET /v1/sandboxes/${stored.sandboxId}`,
@@ -179,10 +174,10 @@ test("Render declares the tools and resources of the base image", (t) => {
 });
 
 test("Render starts computers and disposable sandboxes from the golden snapshot and keeps a computer's base image", async (t) => {
-  const { make, fake, layers, store, scope, useGolden } = setup(t);
+  const { make, fake, store, scope, useGolden } = setup(t);
   const sandbox = make();
   const goldenA = fake.createdFrom.length;
-  const handle = await sandbox.provision(layers);
+  const handle = await sandbox.provision(scope);
   const first = (await store.get(scope))!;
   assert.match(fake.createdFrom[goldenA]!, /^snp-golden-/);
   assert.equal(first.baseImage, BASE_REF);
@@ -192,18 +187,18 @@ test("Render starts computers and disposable sandboxes from the golden snapshot 
 
   const refB = BASE_REF.replace("0123456789abcdef", "fedcba9876543210");
   const goldenB = useGolden(refB);
-  const restored = await sandbox.provision(layers);
+  const restored = await sandbox.provision(scope);
   assert.equal(fake.createdFrom.at(-1), (await store.get(scope))!.checkpoint!.id);
   assert.equal((await store.get(scope))!.baseImage, BASE_REF);
   assert.equal((await sandbox.run(restored, "cat /root/.base-image")).stdout.trim(), BASE_REF);
 
-  const disposable = await sandbox.provision(layers, { scratch: { key: "job" } });
+  const disposable = await sandbox.provision(scope, { scratch: { key: "job" } });
   assert.equal(fake.createdFrom.at(-1), goldenB);
   assert.equal((await sandbox.run(disposable, "cat /root/.base-image")).stdout.trim(), refB);
 });
 
 test("Render waits for the deployment's first golden snapshot before starting a computer", async (t) => {
-  const { fake, layers, store, scope, make } = setup(t, { http: true });
+  const { fake, store, scope, make } = setup(t, { http: true });
   const source = "ghcr.io/acme/sandbox-base:0123456789abcdef0123456789abcdef01234567";
   fake.publishImage(source, `sha256:${"a".repeat(64)}`);
   const goldens = createRenderBase({
@@ -214,7 +209,7 @@ test("Render waits for the deployment's first golden snapshot before starting a 
   });
   const statuses: string[] = [];
   const sandbox = make(-1, goldens);
-  const provisioning = sandbox.provision(layers, { onStatus: (text) => statuses.push(text) });
+  const provisioning = sandbox.provision(scope, { onStatus: (text) => statuses.push(text) });
   while (!statuses.length) await new Promise((resolve) => setTimeout(resolve, 5));
   await goldens.prepare(new AbortController().signal);
   const handle = await provisioning;
@@ -230,12 +225,12 @@ test("Render waits for the deployment's first golden snapshot before starting a 
 });
 
 test("Render provisions one durable sandbox across two cores and executes in its workspace", async (t) => {
-  const { make, fake, layers, store, scope } = setup(t);
+  const { make, fake, store, scope } = setup(t);
   const first = make();
   const second = make();
   const [a, b] = await Promise.all([
-    first.provision(layers, { env: { QM_TEST_VALUE: "hello" } }),
-    second.provision(layers),
+    first.provision(scope, { env: { QM_TEST_VALUE: "hello" } }),
+    second.provision(scope),
   ]);
   assert.equal(fake.createdFrom.length, 1);
   assert.equal(a.id, b.id);
@@ -251,16 +246,16 @@ test("Render provisions one durable sandbox across two cores and executes in its
 });
 
 test("Render restores files from its checkpoint after sandbox expiry and a core restart", async (t) => {
-  const { make, fake, layers, store, scope } = setup(t);
+  const { make, fake, store, scope } = setup(t);
   const first = make();
-  const handle = await first.provision(layers);
+  const handle = await first.provision(scope);
   await first.writeFile(handle, "nested/work.txt", "retained");
   await first.teardown(handle);
   const stored = (await store.get(scope))!;
   const checkpointId = stored.checkpoint!.id;
   await fake.client.terminate(stored.sandboxId);
   const second = make();
-  const restored = await second.provision(layers);
+  const restored = await second.provision(scope);
   assert.equal(restored.coldStart, false);
   assert.equal(fake.createdFrom[1], checkpointId);
   assert.equal(fake.snapshotSource(checkpointId)?.name, "qm-personal-tester-e41213");
@@ -272,9 +267,9 @@ test("Render restores files from its checkpoint after sandbox expiry and a core 
 });
 
 test("Render checkpoint failure keeps the sandbox running and its last native checkpoint until a new one exists", async (t) => {
-  const { make, fake, layers, store, scope } = setup(t);
+  const { make, fake, store, scope } = setup(t);
   const sandbox = make();
-  const handle = await sandbox.provision(layers);
+  const handle = await sandbox.provision(scope);
   const before = (await store.get(scope))!;
   await sandbox.writeFile(handle, "new", "not checkpointed");
   fake.failCheckpoint(new Error("snapshot outage"));
@@ -296,14 +291,14 @@ test("Render checkpoint failure keeps the sandbox running and its last native ch
 });
 
 test("Render replaces a suspended sandbox from its checkpoint", async (t) => {
-  const { make, fake, layers, store, scope } = setup(t);
+  const { make, fake, store, scope } = setup(t);
   const sandbox = make();
-  const handle = await sandbox.provision(layers);
+  const handle = await sandbox.provision(scope);
   await sandbox.writeFile(handle, "kept", "before suspension");
   await sandbox.teardown(handle);
   const stored = (await store.get(scope))!;
   fake.sandboxes.get(stored.sandboxId)!.status = "suspended";
-  const restored = await make().provision(layers);
+  const restored = await make().provision(scope);
   assert.equal(restored.coldStart, false);
   assert.equal(fake.sandboxes.get(stored.sandboxId)?.status, "terminated");
   assert.equal(fake.createdFrom[1], stored.checkpoint!.id);
@@ -311,8 +306,8 @@ test("Render replaces a suspended sandbox from its checkpoint", async (t) => {
 });
 
 test("Render refuses an empty replacement for an existing sandbox without a snapshot", async (t) => {
-  const { make, fake, layers, store, scope } = setup(t);
-  await make().provision(layers);
+  const { make, fake, store, scope } = setup(t);
+  await make().provision(scope);
   const stored = (await store.get(scope))!;
   await store.put(scope, {
     sandboxId: stored.sandboxId,
@@ -321,7 +316,7 @@ test("Render refuses an empty replacement for an existing sandbox without a snap
     baseImage: stored.baseImage,
   });
   await fake.client.terminate(stored.sandboxId);
-  await assert.rejects(make().provision(layers), /no available native snapshot/);
+  await assert.rejects(make().provision(scope), /no available native snapshot/);
   assert.equal(fake.createdFrom.length, 1);
   assert.equal((await store.get(scope))!.sandboxId, stored.sandboxId);
 });
@@ -340,9 +335,9 @@ test(
   "Render lets other turns provision, tear down, and checkpoint during a command and restarts after it ends",
   { timeout: 60_000 },
   async (t) => {
-    const { make, fake, layers, store, scope, advisoryLock } = setup(t);
+    const { make, fake, store, scope, advisoryLock } = setup(t);
     const sandbox = make();
-    const handle = await sandbox.provision(layers);
+    const handle = await sandbox.provision(scope);
     const gate = blockCommands(fake);
     const blocked = sandbox.run(handle, "echo blocked-command");
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -350,7 +345,7 @@ test(
     assert.equal((await sandbox.run(handle, "echo concurrent")).stdout, "concurrent\n");
     const before = (await store.get(scope))!;
     const other = make();
-    const second = await other.provision(layers);
+    const second = await other.provision(scope);
     await other.writeFile(second, "second-turn", "saved");
     await other.teardown(second);
     assert.equal((await store.get(scope))!.homeDirty, true);
@@ -368,13 +363,13 @@ test(
     await restarting;
     assert.equal(fake.sandboxes.get(before.sandboxId)?.status, "terminated");
     assert.equal((await store.get(scope))!.homeDirty, false);
-    const restored = await make().provision(layers);
+    const restored = await make().provision(scope);
     assert.equal(await sandbox.readFile(restored, "second-turn"), "saved");
   },
 );
 
 test("Render turns share one computer through the sandbox router", { timeout: 60_000 }, async (t) => {
-  const { make, fake, layers, scope, advisoryLock } = setup(t);
+  const { make, fake, scope, advisoryLock } = setup(t);
   const render = make();
   const resources = createSandboxResources({
     records: testMap(),
@@ -387,12 +382,12 @@ test("Render turns share one computer through the sandbox router", { timeout: 60
   const router = createSandboxRouter({ backends: { render }, defaultBackend: "render", resources });
   const record = await resources.create("tester", scope, "render");
   await resources.setDefault("tester", scope, record.id);
-  const first = await router.provision(layers);
+  const first = await router.provision(scope);
   assert.equal(first.resourceId, record.id);
   const gate = blockCommands(fake);
   const blocked = router.run(first, "echo blocked-command");
   await new Promise<void>((resolve) => setImmediate(resolve));
-  const second = await router.provision(layers);
+  const second = await router.provision(scope);
   assert.equal((await router.run(second, "echo concurrent")).stdout, "concurrent\n");
   await router.teardown(second);
   gate.resolve();
@@ -401,9 +396,9 @@ test("Render turns share one computer through the sandbox router", { timeout: 60
 });
 
 test("Render reaping keeps a sandbox whose background process starts after the first process probe", async (t) => {
-  const { make, fake, layers, store, scope } = setup(t);
+  const { make, fake, store, scope } = setup(t);
   const sandbox = make();
-  const handle = await sandbox.provision(layers);
+  const handle = await sandbox.provision(scope);
   const stored = (await store.get(scope))!;
   await store.merge(scope, { lastActivityMs: Date.now() - 7200_000 });
   const run = fake.client.runScript;
@@ -423,10 +418,10 @@ test("Render reaping keeps a sandbox whose background process starts after the f
 });
 
 test("Render scratch sandboxes are shared only until the last handle is released", async (t) => {
-  const { make, fake, layers, store } = setup(t);
+  const { make, fake, scope, store } = setup(t);
   const sandbox = make();
-  const a = await sandbox.provision(layers, { scratch: { key: "job" } });
-  const b = await sandbox.provision(layers, { scratch: { key: "job" } });
+  const a = await sandbox.provision(scope, { scratch: { key: "job" } });
+  const b = await sandbox.provision(scope, { scratch: { key: "job" } });
   assert.equal(fake.createdFrom.length, 1);
   assert.equal((await store.entries()).length, 0);
   await sandbox.teardown(a);
@@ -437,9 +432,9 @@ test("Render scratch sandboxes are shared only until the last handle is released
 });
 
 test("Render destroys both the sandbox and its checkpoint", async (t) => {
-  const { make, fake, layers, store, scope } = setup(t);
+  const { make, fake, store, scope } = setup(t);
   const sandbox = make();
-  const handle = await sandbox.provision(layers);
+  const handle = await sandbox.provision(scope);
   await sandbox.teardown(handle, { destroy: true });
   assert.equal(await store.get(scope), null);
   assert.equal(fake.snapshots.size, 0);
@@ -447,18 +442,18 @@ test("Render destroys both the sandbox and its checkpoint", async (t) => {
 });
 
 test("Render does not replay a command when an exec call fails", async (t) => {
-  const { make, fake, layers, store, scope } = setup(t);
+  const { make, fake, store, scope } = setup(t);
   const sandbox = make();
-  const handle = await sandbox.provision(layers);
+  const handle = await sandbox.provision(scope);
   await fake.client.terminate((await store.get(scope))!.sandboxId);
   await assert.rejects(sandbox.run(handle, "side-effect"), /has stopped; the next turn restores it/);
   assert.equal(fake.createdFrom.length, 1);
 });
 
 test("Render clears expired temporary credentials after a native restore", async (t) => {
-  const { make, fake, layers, store, scope } = setup(t);
+  const { make, fake, store, scope } = setup(t);
   const source = make();
-  const handle = await source.provision(layers);
+  const handle = await source.provision(scope);
   await fake.client.writeFileBytes(
     (await store.get(scope))!.sandboxId,
     "/root/.cred-state-secret",
@@ -467,7 +462,7 @@ test("Render clears expired temporary credentials after a native restore", async
   await source.teardown(handle);
   await fake.client.terminate((await store.get(scope))!.sandboxId);
   const target = make();
-  await target.provision(layers);
+  await target.provision(scope);
   assert.equal(await fake.client.readFileBytes((await store.get(scope))!.sandboxId, "/root/.cred-state-secret"), null);
 });
 
@@ -501,7 +496,7 @@ test("Render disposes a new native checkpoint when its staging record write fail
 });
 
 test("Render retains the provider reason when a native checkpoint fails", async (t) => {
-  const { make, fake, layers, store, scope, errors } = setup(t);
+  const { make, fake, store, scope, errors } = setup(t);
   const create = fake.client.createSnapshot;
   fake.client.createSnapshot = async (id, name) => {
     const saved = fake.snapshots.get((await create(id, name)).id)!;
@@ -509,7 +504,7 @@ test("Render retains the provider reason when a native checkpoint fails", async 
     saved.error = "Provider: insufficient snapshot capacity";
     return { ...saved };
   };
-  await assert.rejects(make().provision(layers), /insufficient snapshot capacity/);
+  await assert.rejects(make().provision(scope), /insufficient snapshot capacity/);
   assert.match((await store.get(scope))!.recoveryError!, /insufficient snapshot capacity/);
   assert.ok(
     errors.some(
@@ -519,15 +514,15 @@ test("Render retains the provider reason when a native checkpoint fails", async 
 });
 
 test("Render finishes a destroy that stopped after it wrote the cleanup record", async (t) => {
-  const { make, fake, layers, store, scope, cleanupStore } = setup(t);
+  const { make, fake, store, scope, cleanupStore } = setup(t);
   const sandbox = make();
-  const handle = await sandbox.provision(layers);
+  const handle = await sandbox.provision(scope);
   await sandbox.teardown(handle);
   const before = (await store.get(scope))!;
   await cleanupStore.put(scope, {
     resources: [{ sandboxId: before.sandboxId, checkpoint: before.checkpoint }],
   });
-  const replacement = await make().provision(layers);
+  const replacement = await make().provision(scope);
   assert.equal(replacement.coldStart, true);
   assert.equal(await cleanupStore.get(scope), null);
   assert.equal(fake.sandboxes.get(before.sandboxId)?.status, "terminated");
@@ -536,9 +531,9 @@ test("Render finishes a destroy that stopped after it wrote the cleanup record",
 });
 
 test("Render removes a destroyed scope at once and deletes a retired checkpoint that is still being created later", async (t) => {
-  const { make, fake, layers, store, scope, cleanupStore } = setup(t);
+  const { make, fake, store, scope, cleanupStore } = setup(t);
   const sandbox = make();
-  const handle = await sandbox.provision(layers);
+  const handle = await sandbox.provision(scope);
   await sandbox.teardown(handle);
   const before = (await store.get(scope))!;
   const stray = await fake.client.createSnapshot(before.sandboxId, "qm-stray");
@@ -549,7 +544,7 @@ test("Render removes a destroyed scope at once and deletes a retired checkpoint 
   assert.equal(fake.sandboxes.get(before.sandboxId)?.status, "terminated");
   assert.deepEqual([...fake.snapshots.keys()], [stray.id]);
   assert.equal((await sandbox.computerStatus!(scope)).recovery?.state, "cleanup_pending");
-  const replacement = await make().provision(layers);
+  const replacement = await make().provision(scope);
   assert.equal(replacement.coldStart, true);
   fake.snapshots.get(stray.id)!.status = "available";
   await make().reapDeepIdle!(3600_000);
@@ -557,9 +552,9 @@ test("Render removes a destroyed scope at once and deletes a retired checkpoint 
   assert.equal(fake.snapshots.has(stray.id), false);
 });
 test("Render checkpoints background changes even when deep idle reaping is disabled", async (t) => {
-  const { make, fake, layers, store, scope } = setup(t);
+  const { make, fake, store, scope } = setup(t);
   const sandbox = make(5 * 60_000);
-  const handle = await sandbox.provision(layers);
+  const handle = await sandbox.provision(scope);
   const stored = (await store.get(scope))!;
   await startBackgroundProcess(fake, stored.sandboxId);
   await sandbox.writeFile(handle, "background", "retained output");
@@ -573,61 +568,52 @@ test("Render checkpoints background changes even when deep idle reaping is disab
   assert.equal((await store.get(scope))!.savedAtMs, checkpointAtMs);
   await fake.client.terminate(stored.sandboxId);
   const other = make();
-  const restored = await other.provision(layers);
+  const restored = await other.provision(scope);
   assert.equal(await other.readFile(restored, "background"), "retained output");
 });
 
-for (const operation of ["file import", "provision preparation"] as const) {
-  test(
-    `Render completes ${operation} before another core checkpoints and stops its idle sandbox`,
-    { timeout: 60_000 },
-    async (t) => {
-      const { make, fake, layers, store, scope, workspace, advisoryLock } = setup(t);
-      const sandbox = make();
-      const other = make();
-      const handle = await sandbox.provision(layers);
-      const stored = (await store.get(scope))!;
-      const layerScope = scopeId("personal", "reference");
-      await workspace.write(layerScope, "latest", "completed operation");
-      const uploading = Promise.withResolvers<void>();
-      const release = Promise.withResolvers<void>();
-      const archivePath = operation === "file import" ? /\/\.extract-[^/]+\.tar$/ : /\/\.ro-layers\.tar$/;
-      const write = fake.client.writeFileBytes;
-      fake.client.writeFileBytes = async (id, path, data) => {
-        await write(id, path, data);
-        if (archivePath.test(path)) {
-          uploading.resolve();
-          await release.promise;
-        }
-      };
-      const pending =
-        operation === "file import"
-          ? sandbox.importFiles!(handle, [{ path: "latest", data: Buffer.from("completed operation") }])
-          : sandbox.provision([...layers, { scopeId: layerScope, mountPath: "", mode: "ro" }]);
-      await uploading.promise;
-      await store.merge(scope, { lastActivityMs: Date.now() - 7200_000 });
-      try {
-        const key = operation === "file import" ? `render-sandbox-use:${handle.id}` : `render-sandbox:${handle.id}`;
-        assert.equal(await advisoryLock.tryWithLock!(key, async () => true), null);
-        assert.deepEqual(await other.reapDeepIdle!(0), { reaped: 0 });
-        assert.equal(fake.sandboxes.get(stored.sandboxId)?.status, "running");
-      } finally {
-        release.resolve();
-        await pending;
+test(
+  "Render completes file import before another core checkpoints and stops its idle sandbox",
+  { timeout: 60_000 },
+  async (t) => {
+    const { make, fake, store, scope, advisoryLock } = setup(t);
+    const sandbox = make();
+    const other = make();
+    const handle = await sandbox.provision(scope);
+    const stored = (await store.get(scope))!;
+    const uploading = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const write = fake.client.writeFileBytes;
+    fake.client.writeFileBytes = async (id, path, data) => {
+      await write(id, path, data);
+      if (/\/\.extract-[^/]+\.tar$/.test(path)) {
+        uploading.resolve();
+        await release.promise;
       }
-      await store.merge(scope, { lastActivityMs: Date.now() - 7200_000 });
-      assert.deepEqual(await other.reapDeepIdle!(0), { reaped: 1 });
-      assert.equal(fake.sandboxes.get(stored.sandboxId)?.status, "terminated");
-      const restored = await other.provision(layers);
-      assert.equal(await other.readFile(restored, "latest"), "completed operation");
-    },
-  );
-}
+    };
+    const pending = sandbox.importFiles!(handle, [{ path: "latest", data: Buffer.from("completed operation") }]);
+    await uploading.promise;
+    await store.merge(scope, { lastActivityMs: Date.now() - 7200_000 });
+    try {
+      assert.equal(await advisoryLock.tryWithLock!(`render-sandbox-use:${handle.id}`, async () => true), null);
+      assert.deepEqual(await other.reapDeepIdle!(0), { reaped: 0 });
+      assert.equal(fake.sandboxes.get(stored.sandboxId)?.status, "running");
+    } finally {
+      release.resolve();
+      await pending;
+    }
+    await store.merge(scope, { lastActivityMs: Date.now() - 7200_000 });
+    assert.deepEqual(await other.reapDeepIdle!(0), { reaped: 1 });
+    assert.equal(fake.sandboxes.get(stored.sandboxId)?.status, "terminated");
+    const restored = await other.provision(scope);
+    assert.equal(await other.readFile(restored, "latest"), "completed operation");
+  },
+);
 
 test("Render skips remote probes and checkpoints for a recently used sandbox", async (t) => {
-  const { make, fake, layers, store, scope } = setup(t);
+  const { make, fake, store, scope } = setup(t);
   const sandbox = make();
-  await sandbox.provision(layers);
+  await sandbox.provision(scope);
   await store.merge(scope, { savedAtMs: Date.now() - 360_000 });
   const before = (await store.get(scope))!;
   const get = t.mock.method(fake.client, "get");
@@ -636,15 +622,15 @@ test("Render skips remote probes and checkpoints for a recently used sandbox", a
   assert.equal(get.mock.callCount(), 0);
   assert.equal(fake.commands.length, commands);
   assert.equal((await store.get(scope))!.savedAtMs, before.savedAtMs);
-  await make().provision(layers);
+  await make().provision(scope);
   assert.ok(fake.commands.slice(commands).every((command) => !command.includes(".agent-proc")));
   assert.equal((await store.get(scope))!.savedAtMs, before.savedAtMs);
 });
 
 test("Render leaves an idle sandbox with a running process running", async (t) => {
-  const { make, fake, layers, store, scope } = setup(t);
+  const { make, fake, store, scope } = setup(t);
   const sandbox = make();
-  await sandbox.provision(layers);
+  await sandbox.provision(scope);
   const before = (await store.get(scope))!;
   await startBackgroundProcess(fake, before.sandboxId);
   const stale = Date.now() - 360_000;
@@ -655,11 +641,11 @@ test("Render leaves an idle sandbox with a running process running", async (t) =
 });
 
 test("Render records command and file activity without a write for each operation", async (t) => {
-  const { make, layers, store, scope } = setup(t);
+  const { make, store, scope } = setup(t);
   let now = Date.now();
   t.mock.method(Date, "now", () => now);
   const sandbox = make(5 * 60_000);
-  const handle = await sandbox.provision(layers);
+  const handle = await sandbox.provision(scope);
   await store.merge(scope, { lastActivityMs: now - 7200_000 });
   const merge = t.mock.method(store, "merge");
   await sandbox.run(handle, "true");
@@ -676,28 +662,28 @@ test("Render records command and file activity without a write for each operatio
 
 for (const operation of ["command", "upload"]) {
   test(`Render recovers ${operation} work after core restart without teardown`, async (t) => {
-    const { make, fake, layers, store, scope } = setup(t);
+    const { make, fake, store, scope } = setup(t);
     let now = Date.now();
     t.mock.method(Date, "now", () => now);
     const sandbox = make(5 * 60_000);
-    const handle = await sandbox.provision(layers);
+    const handle = await sandbox.provision(scope);
     if (operation === "command") await sandbox.run(handle, "printf retained > crash-work");
     else await sandbox.writeFileBytes(handle, "crash-work", Buffer.from("retained"));
     now += 6 * 60_000;
     const next = make(5 * 60_000);
     assert.deepEqual(await next.reapDeepIdle!(0), { reaped: 0 });
     await fake.client.terminate((await store.get(scope))!.sandboxId);
-    const restored = await next.provision(layers);
+    const restored = await next.provision(scope);
     assert.equal(await next.readFile(restored, "crash-work"), "retained");
   });
 }
 
 test("Render preserves a write that arrives during native snapshot capture", async (t) => {
-  const { make, fake, layers, store, scope } = setup(t);
+  const { make, fake, store, scope } = setup(t);
   let now = Date.now();
   t.mock.method(Date, "now", () => now);
   const sandbox = make(5 * 60_000);
-  const handle = await sandbox.provision(layers);
+  const handle = await sandbox.provision(scope);
   const captured = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
   const create = fake.client.createSnapshot;
@@ -717,13 +703,13 @@ test("Render preserves a write that arrives during native snapshot capture", asy
   const next = make(5 * 60_000);
   await next.reapDeepIdle!(0);
   await fake.client.terminate((await store.get(scope))!.sandboxId);
-  const restored = await next.provision(layers);
+  const restored = await next.provision(scope);
   assert.equal(await next.readFile(restored, "after-capture"), "retained");
 });
 test("Render rechecks activity after it waits for a sandbox operation", async (t) => {
-  const { make, fake, layers, store, scope, advisoryLock } = setup(t);
+  const { make, fake, store, scope, advisoryLock } = setup(t);
   const sandbox = make();
-  const handle = await sandbox.provision(layers);
+  const handle = await sandbox.provision(scope);
   await store.merge(scope, { lastActivityMs: Date.now() - 7200_000 });
   const held = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
@@ -750,9 +736,9 @@ test("Render rechecks activity after it waits for a sandbox operation", async (t
 });
 
 test("Render saves a home in use without stopping its sandbox and stops it once idle", async (t) => {
-  const { make, fake, layers, store, scope } = setup(t);
+  const { make, fake, store, scope } = setup(t);
   const sandbox = make();
-  const handle = await sandbox.provision(layers);
+  const handle = await sandbox.provision(scope);
   await sandbox.writeFile(handle, "latest", "retained before stopping");
   const before = (await store.get(scope))!;
   const stale = Date.now() - 360_000;
@@ -768,24 +754,24 @@ test("Render saves a home in use without stopping its sandbox and stops it once 
   assert.deepEqual(await sandbox.reapDeepIdle!(0), { reaped: 0 });
   assert.equal(get.mock.callCount(), 1);
   const next = make();
-  const restored = await next.provision(layers);
+  const restored = await next.provision(scope);
   assert.equal(await next.readFile(restored, "latest"), "retained before stopping");
 });
 
 test("Render clears a stale stopped mark when its computer is still running", async (t) => {
-  const { make, layers, store, scope } = setup(t);
+  const { make, store, scope } = setup(t);
   const sandbox = make();
-  await sandbox.provision(layers);
+  await sandbox.provision(scope);
   await store.merge(scope, { stopped: true });
-  const handle = await sandbox.provision(layers);
+  const handle = await sandbox.provision(scope);
   assert.equal((await store.get(scope))!.stopped, undefined);
   assert.equal((await sandbox.run(handle, "echo ok")).stdout, "ok\n");
 });
 
 test("Render clears temporary credentials before the checkpoint of an idle stop", async (t) => {
-  const { make, fake, layers, store, scope } = setup(t);
+  const { make, fake, store, scope } = setup(t);
   const sandbox = make();
-  const handle = await sandbox.provision(layers);
+  const handle = await sandbox.provision(scope);
   const running = (await store.get(scope))!.sandboxId;
   await fake.client.writeFileBytes(running, "/root/.cred-state-secret", Buffer.from("token"));
   await fake.client.writeFileBytes(running, "/tmp/agent-creds/gh", Buffer.from("token"));
@@ -801,19 +787,19 @@ test("Render clears temporary credentials before the checkpoint of an idle stop"
 });
 
 test("Render tells a turn that its computer was stopped instead of running on a dead sandbox", async (t) => {
-  const { make, layers, store, scope } = setup(t);
+  const { make, store, scope } = setup(t);
   const sandbox = make();
-  const handle = await sandbox.provision(layers);
+  const handle = await sandbox.provision(scope);
   await store.merge(scope, { lastActivityMs: Date.now() - 7200_000 });
   assert.deepEqual(await sandbox.reapDeepIdle!(0), { reaped: 1 });
   await assert.rejects(sandbox.run(handle, "true"), /has stopped; the next turn restores it from its last checkpoint/);
-  const restored = await sandbox.provision(layers);
+  const restored = await sandbox.provision(scope);
   assert.equal((await sandbox.run(restored, "echo ok")).stdout, "ok\n");
 });
 
 test("Render stops an idle computer at its idle limit even when deep idle allows longer", async (t) => {
-  const { make, fake, layers, store, scope } = setup(t);
-  await make().provision(layers);
+  const { make, fake, store, scope } = setup(t);
+  await make().provision(scope);
   const stored = (await store.get(scope))!;
   await store.merge(scope, { lastActivityMs: Date.now() - 50 * 60_000 });
   const threeDays = 3 * 24 * 3600_000;
@@ -825,11 +811,11 @@ test("Render stops an idle computer at its idle limit even when deep idle allows
 });
 
 test("Render creates computers with a 30-day lifetime and disposable sandboxes with a 24-hour lifetime", async (t) => {
-  const { make, fake, layers } = setup(t);
+  const { make, fake, scope } = setup(t);
   const create = t.mock.method(fake.client, "create");
   const sandbox = make();
-  const computer = await sandbox.provision(layers);
-  const disposable = await sandbox.provision(layers, { scratch: { key: "job" } });
+  const computer = await sandbox.provision(scope);
+  const disposable = await sandbox.provision(scope, { scratch: { key: "job" } });
   assert.deepEqual(
     create.mock.calls.map((call) => call.arguments[0]?.lifetimeSec),
     [2592000, 86400],
@@ -840,7 +826,7 @@ test("Render creates computers with a 30-day lifetime and disposable sandboxes w
 
 for (const failure of ["cleanup release", "record write"] as const) {
   test(`Render terminates a sandbox that a failed ${failure} left untracked`, async (t) => {
-    const { make, fake, layers, store, cleanupStore, scope } = setup(t);
+    const { make, fake, store, cleanupStore, scope } = setup(t);
     const release = cleanupStore.delete;
     const put = store.put;
     if (failure === "cleanup release")
@@ -852,7 +838,7 @@ for (const failure of ["cleanup release", "record write"] as const) {
         throw new Error(`${failure} failed`);
       };
     fake.failTerminate(new Error("terminate outage"));
-    await assert.rejects(make().provision(layers), new RegExp(`${failure} failed`));
+    await assert.rejects(make().provision(scope), new RegExp(`${failure} failed`));
     assert.deepEqual(await cleanupStore.get(scope), { resources: [{ sandboxId: "sbx-1" }] });
     assert.equal(fake.sandboxes.get("sbx-1")?.status, "running");
     assert.equal(await store.get(scope), null);
@@ -862,16 +848,16 @@ for (const failure of ["cleanup release", "record write"] as const) {
     await make().reapDeepIdle!(0);
     assert.equal(fake.sandboxes.get("sbx-1")?.status, "terminated");
     assert.equal(await cleanupStore.get(scope), null);
-    await make().provision(layers);
+    await make().provision(scope);
     assert.equal((await store.get(scope))!.sandboxId, "sbx-2");
     assert.equal(await cleanupStore.get(scope), null);
   });
 }
 
 test("Render checkpoints at teardown once per interval and skips an unused computer", async (t) => {
-  const { make, layers, store, scope } = setup(t);
+  const { make, store, scope } = setup(t);
   const sandbox = make(5 * 60_000);
-  const handle = await sandbox.provision(layers);
+  const handle = await sandbox.provision(scope);
   const initial = (await store.get(scope))!.savedAtMs;
   await sandbox.writeFile(handle, "recent", "written within the interval");
   await sandbox.teardown(handle, { keepWarm: true });
@@ -888,32 +874,32 @@ test("Render checkpoints at teardown once per interval and skips an unused compu
 });
 
 test("Render replaces an idle computer near the end of its lifetime at turn start", async (t) => {
-  const { make, fake, layers, store, scope } = setup(t);
+  const { make, fake, store, scope } = setup(t);
   const sandbox = make();
-  const handle = await sandbox.provision(layers);
+  const handle = await sandbox.provision(scope);
   await sandbox.writeFile(handle, "kept", "work");
   const first = (await store.get(scope))!.sandboxId;
   fake.sandboxes.get(first)!.expiresAtMs = Date.now() + 60_000;
-  const next = await sandbox.provision(layers);
+  const next = await sandbox.provision(scope);
   assert.notEqual((await store.get(scope))!.sandboxId, first);
   assert.equal(fake.sandboxes.get(first)?.status, "terminated");
   assert.equal(await sandbox.readFile(next, "kept"), "work");
 });
 
 test("Render tells a turn that its sandbox ended and restores it on the next turn", async (t) => {
-  const { make, fake, layers, store, scope, errors } = setup(t);
+  const { make, fake, store, scope, errors } = setup(t);
   const sandbox = make();
-  const handle = await sandbox.provision(layers);
+  const handle = await sandbox.provision(scope);
   await sandbox.writeFile(handle, "kept", "work");
   await sandbox.reapDeepIdle!(0);
   const first = (await store.get(scope))!.sandboxId;
-  await sandbox.provision(layers);
+  await sandbox.provision(scope);
   await fake.client.terminate((await store.get(scope))!.sandboxId);
   await assert.rejects(sandbox.run(handle, "true"), /has stopped; the next turn restores it from its last checkpoint/);
   assert.equal((await store.get(scope))!.stopped, true);
   await store.merge(scope, { expiresAtMs: Date.now() - 1 });
   await sandbox.reapDeepIdle!(3600_000);
-  const restored = await sandbox.provision(layers);
+  const restored = await sandbox.provision(scope);
   assert.notEqual((await store.get(scope))!.sandboxId, first);
   assert.equal(await sandbox.readFile(restored, "kept"), "work");
   assert.deepEqual(
@@ -923,9 +909,9 @@ test("Render tells a turn that its sandbox ended and restores it on the next tur
 });
 
 test("Render marks a computer that reached its lifetime stopped without reporting it as ended", async (t) => {
-  const { make, fake, layers, store, scope, errors } = setup(t);
+  const { make, fake, store, scope, errors } = setup(t);
   const sandbox = make();
-  await sandbox.provision(layers);
+  await sandbox.provision(scope);
   const stored = (await store.get(scope))!;
   await fake.client.terminate(stored.sandboxId);
   await store.merge(scope, { expiresAtMs: Date.now() - 1000 });
@@ -938,9 +924,9 @@ test("Render marks a computer that reached its lifetime stopped without reportin
 });
 
 test("Render does not report a computer that QM itself restarted as ended", async (t) => {
-  const { make, fake, layers, store, scope, errors } = setup(t);
+  const { make, fake, store, scope, errors } = setup(t);
   const sandbox = make();
-  const handle = await sandbox.provision(layers);
+  const handle = await sandbox.provision(scope);
   await sandbox.writeFile(handle, "kept", "work");
   const first = (await store.get(scope))!.sandboxId;
   await sandbox.restartComputer!(scope);
@@ -951,15 +937,15 @@ test("Render does not report a computer that QM itself restarted as ended", asyn
     errors.filter((error) => error.code === "computer_ended"),
     [],
   );
-  const restored = await sandbox.provision(layers);
+  const restored = await sandbox.provision(scope);
   assert.equal(await sandbox.readFile(restored, "kept"), "work");
   assert.equal((await store.get(scope))!.stopped, undefined);
 });
 
 test("Render reports a computer that ended outside QM, probes it once, and leaves it alone until it is provisioned again", async (t) => {
-  const { make, fake, layers, store, scope, errors } = setup(t);
+  const { make, fake, store, scope, errors } = setup(t);
   const sandbox = make();
-  await sandbox.provision(layers);
+  await sandbox.provision(scope);
   const stored = (await store.get(scope))!;
   await fake.client.terminate(stored.sandboxId);
   await store.merge(scope, { lastActivityMs: Date.now() - 7200_000 });
@@ -970,14 +956,14 @@ test("Render reports a computer that ended outside QM, probes it once, and leave
   assert.deepEqual(await sandbox.reapDeepIdle!(3600_000), { reaped: 0 });
   assert.equal(get.mock.callCount(), 1);
   assert.deepEqual(errors, [{ code: "computer_ended", message: `Render sandbox ${stored.sandboxId} is terminated` }]);
-  await sandbox.provision(layers);
+  await sandbox.provision(scope);
   assert.equal((await store.get(scope))!.stopped, undefined);
 });
 
 test("Render reaper checkpoints changes a throttled teardown left behind", async (t) => {
-  const { make, fake, layers, store, scope } = setup(t);
+  const { make, fake, store, scope } = setup(t);
   const sandbox = make(5 * 60_000);
-  const handle = await sandbox.provision(layers);
+  const handle = await sandbox.provision(scope);
   const initial = (await store.get(scope))!;
   await sandbox.writeFile(handle, "late", "written after the checkpoint");
   await sandbox.teardown(handle, { keepWarm: true });
@@ -996,11 +982,11 @@ test("Render reaper checkpoints changes a throttled teardown left behind", async
 });
 
 test("Render backs up each interval of a detached process and its completed output", async (t) => {
-  const { make, fake, layers, store, scope } = setup(t);
+  const { make, fake, store, scope } = setup(t);
   let now = Date.now();
   t.mock.method(Date, "now", () => now);
   const sandbox = make(5 * 60_000);
-  const handle = await sandbox.provision(layers);
+  const handle = await sandbox.provision(scope);
   const initial = (await store.get(scope))!;
   await startBackgroundProcess(fake, initial.sandboxId);
   await sandbox.writeFile(handle, "foreground-output", "complete");
@@ -1025,15 +1011,15 @@ test("Render backs up each interval of a detached process and its completed outp
   assert.equal((await store.get(scope))!.homeDirty, false);
   await fake.client.terminate(initial.sandboxId);
   const next = make();
-  const restored = await next.provision(layers);
+  const restored = await next.provision(scope);
   assert.equal(await next.readFile(restored, "foreground-output"), "complete");
   assert.equal(await next.readFile(restored, "detached-output"), "complete");
 });
 
 test("Render keeps process reads available during a background checkpoint", async (t) => {
-  const { make, fake, layers, store, scope } = setup(t);
+  const { make, fake, store, scope } = setup(t);
   const sandbox = make();
-  const handle = await sandbox.provision(layers);
+  const handle = await sandbox.provision(scope);
   const stored = (await store.get(scope))!;
   await startBackgroundProcess(fake, stored.sandboxId);
   const captured = Promise.withResolvers<void>();
@@ -1061,9 +1047,9 @@ test("Render keeps process reads available during a background checkpoint", asyn
 
 for (const state of ["expired", "missing", "failed"] as const) {
   test(`Render refuses an empty replacement when its native snapshot is ${state}`, async (t) => {
-    const { make, fake, layers, store, scope } = setup(t);
+    const { make, fake, store, scope } = setup(t);
     const sandbox = make();
-    const handle = await sandbox.provision(layers);
+    const handle = await sandbox.provision(scope);
     await sandbox.writeFile(handle, "work", "retained");
     await sandbox.teardown(handle);
     const stored = (await store.get(scope))!;
@@ -1072,7 +1058,7 @@ for (const state of ["expired", "missing", "failed"] as const) {
     else if (state === "missing") await fake.client.deleteSnapshot(stored.checkpoint!);
     else snapshot.status = "failed";
     await fake.client.terminate(stored.sandboxId);
-    await assert.rejects(make().provision(layers), /no available native snapshot/);
+    await assert.rejects(make().provision(scope), /no available native snapshot/);
     assert.equal(fake.createdFrom.length, 1);
     assert.equal((await store.get(scope))!.sandboxId, stored.sandboxId);
   });
@@ -1080,9 +1066,9 @@ for (const state of ["expired", "missing", "failed"] as const) {
 
 for (const operation of ["restart", "idle cleanup"] as const) {
   test(`Render keeps the current computer when a native snapshot fails during ${operation}`, async (t) => {
-    const { make, fake, layers, store, scope } = setup(t);
+    const { make, fake, store, scope } = setup(t);
     const sandbox = make();
-    const handle = await sandbox.provision(layers);
+    const handle = await sandbox.provision(scope);
     await sandbox.writeFile(handle, "work", "not saved yet");
     const stored = (await store.get(scope))!;
     fake.failCheckpoint(new Error("native snapshot outage"));
@@ -1100,9 +1086,9 @@ for (const operation of ["restart", "idle cleanup"] as const) {
 }
 
 test("Render restores its published native snapshot after the database reply is lost", async (t) => {
-  const { make, fake, layers, store, scope } = setup(t);
+  const { make, fake, store, scope } = setup(t);
   const sandbox = make();
-  const handle = await sandbox.provision(layers);
+  const handle = await sandbox.provision(scope);
   const before = (await store.get(scope))!;
   await sandbox.writeFile(handle, "work", "published before reply loss");
   const merge = store.merge;
@@ -1122,6 +1108,6 @@ test("Render restores its published native snapshot after the database reply is 
   assert.equal(fake.snapshots.has(before.checkpoint!.id), false);
   await fake.client.terminate(published.sandboxId);
   const next = make();
-  const restored = await next.provision(layers);
+  const restored = await next.provision(scope);
   assert.equal(await next.readFile(restored, "work"), "published before reply loss");
 });

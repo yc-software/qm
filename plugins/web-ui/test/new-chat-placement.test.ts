@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { JSDOM } from "jsdom";
-import { createServer } from "vite";
+import { testViteServer } from "./vite-server.ts";
 import type { Conversation } from "../src/conv-types.ts";
 import { MAX_PANES, MAX_TILES } from "../src/split-layout.ts";
 
@@ -68,7 +68,7 @@ async function withCanvas(
   Object.defineProperty(dom.window, "matchMedia", {
     value: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
   });
-  const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  const vite = await testViteServer();
   try {
     const { appState } = await vite.ssrLoadModule("/src/shell.ts");
     const split = await vite.ssrLoadModule("/src/split.ts");

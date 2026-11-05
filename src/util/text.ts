@@ -5,6 +5,11 @@ export function headSlice(s: string, n: number): string {
   return /[\uD800-\uDBFF]$/.test(cut) ? cut.slice(0, -1) : cut;
 }
 
+export function snippet(text: string, max: number): string {
+  const oneLine = text.replace(/\s+/g, " ").trim();
+  return oneLine.length <= max ? oneLine : `${headSlice(oneLine, max - 1).trimEnd()}…`;
+}
+
 export function tailSlice(s: string, n: number): string {
   if (n <= 0) return "";
   if (s.length <= n) return s;

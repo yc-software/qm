@@ -309,6 +309,7 @@ test("live admin lifecycle is authorized, audited, immediately selectable and re
 
 import { createServer } from "node:http";
 import { oneShot, createAgent } from "../src/agent/agent-run.ts";
+import { createModelRoutes } from "../src/model/model-route.ts";
 import { setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
 import { calculateCost } from "@earendil-works/pi-ai";
 
@@ -360,7 +361,7 @@ test("Pi serves an overlay via the inherited provider endpoint and metadata driv
     assert.equal(received?.model, MODEL_ID);
     assert.equal(received?.max_tokens, 10_000);
     assert.equal(authorized, true);
-    const agent = createAgent({ apiKey: "local-test-key", captureRequests: false });
+    const agent = createAgent({ routes: createModelRoutes({ apiKey: "local-test-key" }), captureRequests: false });
     const turn = {
       session: { id: "overlay-runtime" } as import("../src/agent/agent.ts").AgentTurnInput["session"],
       input: "Hello",

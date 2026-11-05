@@ -8,19 +8,19 @@ import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-t
 import { scopeId } from "../src/types.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { buildApp } from "./support/build-app.ts";
-import { createBackgroundOwnershipStore, type BackgroundOwnership } from "../src/runs/background-ownership.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
-import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const sourceSecret = "source-only-secret".repeat(3);
 const controlSecret = "deployment-only-secret".repeat(3);
 const path = "/v1/deployment/live-session";
 
-async function fixture(run: () => Promise<void> = async () => {}) {
-  const store = createBackgroundOwnershipStore(testMap<BackgroundOwnership>());
-  await store.set({ ownerDeploymentId: "cohort-a", setBy: "cohort-a" });
-  let active = true;
+async function fixture(run: (supersede: () => void) => Promise<void> = async () => {}) {
+  let superseded = false;
+  const supersede = () => {
+    superseded = true;
+  };
   const dedupe = createPostgresReplayDedupe(testDatabaseUrl());
   const built = buildApp(testConfig({ signingSecret: sourceSecret }));
   const server = createServer(built.app, {
@@ -28,9 +28,8 @@ async function fixture(run: () => Promise<void> = async () => {}) {
     portalIdentitySecret: "portal-identity-secret".repeat(3),
     capabilitySecret: "capability-only-secret".repeat(3),
     requireSignedPortalIdentity: true,
-    backgroundOwnership: { store, instanceId: "instance-a", deploymentId: "cohort-a", active: () => active },
     deploymentControlSecret: controlSecret,
-    deploymentLiveSmoke: run,
+    deploymentLiveSmoke: { deploymentId: "cohort-a", superseded: () => superseded, run: () => run(supersede) },
     replayDedupe: { claim: (...args) => dedupe.claim(...args) },
   });
   server.listen(0);
@@ -52,11 +51,8 @@ async function fixture(run: () => Promise<void> = async () => {}) {
     });
   };
   return {
-    store,
     request,
-    deactivate: () => {
-      active = false;
-    },
+    supersede,
     close: () => new Promise<void>((resolve) => server.close(() => resolve())),
   };
 }
@@ -91,11 +87,10 @@ test("live smoke requires distinct credentials, rejects capabilities and arbitra
     ]) {
       assert.equal((await srv.request("POST", request)).status, 400);
     }
-    await srv.store.set({ ownerDeploymentId: "cohort-b", setBy: "cohort-b" });
-    assert.equal((await srv.request("POST", body())).status, 409);
-    await srv.store.set({ ownerDeploymentId: "cohort-a", setBy: "cohort-a" });
-    srv.deactivate();
-    assert.equal((await srv.request("POST", body())).status, 409);
+    srv.supersede();
+    const refused = await srv.request("POST", body());
+    assert.equal(refused.status, 409);
+    assert.deepEqual(await refused.json(), { error: "deployment_smoke_superseded" });
     assert.equal(calls, 0);
   } finally {
     await srv.close();
@@ -116,7 +111,6 @@ test("live smoke returns exact identity and rejects request replay", async () =>
       ok: true,
       requestId: request.requestId,
       deploymentId: "cohort-a",
-      instanceId: "instance-a",
     });
     assert.equal((await srv.request("POST", request)).status, 409);
     assert.equal(calls, 1);
@@ -155,14 +149,14 @@ test("live smoke keeps singleflight through client disconnect and cleanup", asyn
   }
 });
 
-test("live smoke fails when ownership changes and never returns raw errors", async () => {
-  const srv = await fixture(async () => {
-    await srv.store.set({ ownerDeploymentId: null, setBy: "operator" });
+test("live smoke fails when a newer build supersedes it mid-check and never returns raw errors", async () => {
+  const srv = await fixture(async (supersede) => {
+    supersede();
   });
   try {
     const result = (await (await srv.request("POST", body())).json()) as { ok: boolean; error: string };
     assert.equal(result.ok, false);
-    assert.equal(result.error, "deployment_smoke_ownership_changed");
+    assert.equal(result.error, "deployment_smoke_superseded");
   } finally {
     await srv.close();
   }

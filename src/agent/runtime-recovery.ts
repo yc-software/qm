@@ -1,19 +1,18 @@
 import type { RuntimeChoice } from "./agent.ts";
-import type { SessionEntry } from "../types.ts";
+import type { Item } from "../sessions/items.ts";
 import { isObj } from "../util/objects.ts";
 
 export function recoveredRuntime(
-  entries: readonly SessionEntry[],
+  items: readonly Item[],
   runId: string,
   actorId: string,
 ): { choice: RuntimeChoice; lifetime: "task" | "scope" } | undefined {
-  for (const entry of [...entries].reverse()) {
-    const p = entry.payload;
+  for (const item of [...items].reverse()) {
+    const p = item.body;
     if (
-      entry.type !== "tool_result" ||
-      !isObj(p) ||
-      p.tool !== "runtime" ||
-      p.runId !== runId ||
+      item.kind !== "ToolResult" ||
+      item.tool !== "runtime" ||
+      item.turnId !== runId ||
       p.actorId !== actorId ||
       !isObj(p.runtimeHandoff)
     )

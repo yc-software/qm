@@ -16,7 +16,7 @@ test("sandbox maintenance runs when both idle stopping settings are disabled", a
   };
   const deadline = new AbortController();
   try {
-    built.runtime.startBackground();
+    built.runtime.start();
     assert.deepEqual(
       await Promise.race([
         called.promise,

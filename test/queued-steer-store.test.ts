@@ -6,6 +6,7 @@ import { type RunSignal } from "../src/runs/run-signal-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { sleep } from "../src/util/async.ts";
 
 test("queued steering transfers files once or leaves the original queue intact", async () => {
   const url = testDatabaseUrl();
@@ -59,6 +60,48 @@ test("queued steering transfers files once or leaves the original queue intact",
     assert.deepEqual((await runs.get(late.id))?.request.attachments, attachments);
     await runs.withdraw(late.id);
   } finally {
+    await signals.close?.();
+    await runs.close?.();
+  }
+});
+
+test("steering a queued run into the running one wakes that session's waiters", async () => {
+  const url = testDatabaseUrl();
+  const { runs } = createPostgresRunStore(url);
+  const signals = createPostgresRunSignalStore(url);
+  const sessionId = randomUUID();
+  const actor = { id: "queued-owner", type: "internal" as const };
+  const request: OrchestratorInput = {
+    actor,
+    conversation: { kind: "dm", threadRef: sessionId, audience: [actor] },
+    origin: { kind: "direct" },
+    text: "follow-up",
+  };
+  const watch = runs.watchSession(sessionId);
+  try {
+    const { run: target } = await runs.enqueue({ sessionId, request: { ...request, text: "working" } });
+    const { run: queued } = await runs.enqueue({ sessionId, request });
+    await sleep(300);
+    await watch.changed(0);
+    const woke = watch.changed(5_000);
+    const steeredAt = performance.now();
+    const signal: RunSignal = {
+      kind: "steer",
+      text: "follow-up",
+      dedupeKey: randomUUID(),
+      request: {
+        surface: "web",
+        actor: { externalId: actor.id },
+        conversation: { kind: "dm", threadRef: sessionId },
+        text: "follow-up",
+      },
+    };
+    assert.equal(await runs.steerQueued(queued.id, target.id, signal, signals), true);
+    await woke;
+    const wokeAfterMs = performance.now() - steeredAt;
+    assert.ok(wokeAfterMs < 1_000, `woke ${Math.round(wokeAfterMs)}ms after the queued run was steered`);
+  } finally {
+    watch.close();
     await signals.close?.();
     await runs.close?.();
   }

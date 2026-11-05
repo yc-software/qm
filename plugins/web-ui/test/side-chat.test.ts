@@ -1,3 +1,4 @@
+import { item } from "./item-fixture.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { harness } from "./deep-link-boot-fixture.ts";
@@ -21,8 +22,8 @@ test("select a passage, discuss beside the source, reopen, and expand the same s
     createdAt: Date.now(),
     title: "Queue design",
   };
-  const entries = [
-    { seq: 0, type: "user", createdAt: Date.now(), payload: { text: "Use durable, then durable shared queue" } },
+  const items = [
+    item("UserMessage", { seq: 0, createdAt: Date.now(), text: "Use durable, then durable shared queue" }),
   ];
   let fork: CoreSession | undefined;
   let forkBody: unknown;
@@ -36,7 +37,7 @@ test("select a passage, discuss beside the source, reopen, and expand the same s
     path: "/s/source",
     session: source,
     listSessions: [source],
-    entries,
+    items,
     api(path, init) {
       if (path.startsWith("/api/runtime-config"))
         return Response.json({
@@ -77,7 +78,7 @@ test("select a passage, discuss beside the source, reopen, and expand the same s
             failFork = false;
             return Response.json({ error: "Fork temporarily unavailable" }, { status: 503 });
           }
-          return Response.json({ session: fork, entries });
+          return Response.json({ session: fork, items });
         });
       }
       if (path.startsWith("/api/sessions/side?") || path === "/api/sessions/side") {
@@ -85,7 +86,7 @@ test("select a passage, discuss beside the source, reopen, and expand the same s
           failOpen = false;
           return Response.json({ error: "Load temporarily unavailable" }, { status: 503 });
         }
-        return Response.json({ session: fork, entries });
+        return Response.json({ session: fork, items });
       }
       if (path === "/api/sessions/side/expand") {
         assert.equal(init?.method, "POST");

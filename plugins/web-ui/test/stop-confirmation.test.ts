@@ -1,3 +1,4 @@
+import { item } from "./item-fixture.ts";
 import { streamingTextTail } from "../src/timeline.ts";
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
@@ -119,8 +120,22 @@ test("the authoritative final answer replaces longer accumulated commentary", as
     partial: commentary + "\n\nOK",
     result: { status: "ok", reply: "OK" },
     activity: [
-      { seq: 1, type: "text", payload: { text: "I will check this carefully." }, createdAt: 1 },
-      { seq: 2, type: "text", payload: { text: "I will check this carefully." }, createdAt: 2 },
+      {
+        item: item("AgentMessage", {
+          seq: 1,
+          createdAt: 1,
+          variant: "narration",
+          text: "I will check this carefully.",
+        }),
+      },
+      {
+        item: item("AgentMessage", {
+          seq: 2,
+          createdAt: 2,
+          variant: "narration",
+          text: "I will check this carefully.",
+        }),
+      },
     ],
   });
   const stream = await fn(model, {} as Context, {});
@@ -134,7 +149,17 @@ test("a failure after commentary preserves only unfinished text outside its work
     status: "failed",
     partial: "Checking.\n\nUnfinished",
     result: { status: "failed", reason: "provider failed" },
-    activity: [{ seq: 1, type: "text", payload: { text: "Checking.", phase: "commentary" }, createdAt: 1 }],
+    activity: [
+      {
+        item: item("AgentMessage", {
+          seq: 1,
+          createdAt: 1,
+          variant: "narration",
+          text: "Checking.",
+          body: { phase: "commentary" },
+        }),
+      },
+    ],
   });
   const stream = await fn(model, {} as Context, {});
   const final = (await stream.result()) as AssistantWork;

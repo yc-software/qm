@@ -40,6 +40,27 @@ legacy source-built first-party candidates without that record require an explic
 architecture matching the image, or regeneration with the current CLI. Candidate
 deployment and migration reject platform mismatches before accessing AWS.
 
+## Docker
+
+`init --target docker` scaffolds a local test drive. Core serves the web UI and
+sign-in at `http://localhost:8082` and its API at `http://localhost:8080`, with
+the built-in sign-in broker. Put the first administrator in `ADMIN_GRANTS`
+(`qm setup` asks for it and derives `AUTH_ALLOWED_EMAILS`), run `qm up`, then
+`qm admin-login` for a sign-in link; no email transport is needed. Sign-in
+accepts plain HTTP only when `publicUrl` is a loopback address.
+
+To upgrade a deployment that ran separate `web-ui`, `portal` or `auth`
+containers, once:
+
+1. In `qm.config.jsonc`, remove `"web-ui"` and `"portal"` from `services`, set
+   `publicUrl` to `http://localhost:8082` (base port + 2), keep or add
+   `"auth"`, set `env.auth.AUTH_EMAIL_TRANSPORT` to `"resend"` or `"smtp"`, and
+   add `"secretEnv": { "core": { "ADMIN_GRANTS": "ADMIN_GRANTS" } }`.
+2. Run `qm setup`. It asks for `ADMIN_GRANTS` and generates the sign-in secrets.
+3. Run `qm down`. It removes every container of the deployment, including the
+   old ones, and keeps the database and data volumes.
+4. Run `qm up`, then `qm admin-login`.
+
 ## Render
 
 ```bash
@@ -121,69 +142,52 @@ and the private live-session canary also wait up to `QM_AWS_ROLLOUT_DEADLINE_MS`
 (default 30 minutes for them); a task still running then is left to finish, and a
 migration that outlasts it fails `up` before any service changes.
 
-AWS deployments can opt into durable background ownership with
+AWS deployments can opt into deployment identities with
 `aws.backgroundWorkControl: true`. The CLI allocates a unique
 `BACKGROUND_DEPLOYMENT_ID` for each replacement core deployment and records it in
 the deployment manifest. A no-op deployment and automatic ECS task replacement keep
-that identity; an explicit core restart allocates a new one. Pending preparation
-is persisted before ECS changes, and an ambiguous previous deployment must be
-reconciled before another identity can be allocated.
+that identity; an explicit core restart allocates a new one.
 
-Control requests require both `CORE_SIGNING_SECRET` and a distinct
-`DEPLOYMENT_CONTROL_SECRET` of at least 32 characters. The control secret is
-restricted to core. One shared record names the deployment that owns background
-work; a core process with a configured identity admits work only while that
-record names its deployment, and `BACKGROUND_WORK_ENABLED` is ignored there.
+Every core process with background work enabled heartbeats under its deployment
+identity (its build hash when it has none). A deployment counts as started when its
+first process started, remembered while any of its processes heartbeats and for an
+hour after, so a replaced task does not make its deployment newer. When a deployment with another identity started more
+recently and is still heartbeating, the older one stops claiming runs, stops its
+cron scheduler and closes its Slack connections within ten seconds, and finishes
+admitted work under its leases. It resumes within ten seconds after the newer
+deployment's processes shut down cleanly, or about forty seconds after their last
+heartbeat if they die. Background work therefore follows the most recently started
+deployment that has `BACKGROUND_WORK_ENABLED` on: to hand it to another stack, start
+that stack with background work enabled; to hand it back, stop that stack's core
+tasks (`qm down`) or turn its background work off. Turning background work on for a
+stack whose flag is already on replaces no tasks, so rolling back to a stack that
+never turned its flag off means turning the newer stack's background work off.
 
 The exported `awsBackgroundWorkBootState` reads the exact manifest core task to
 return its recorded boot flag and optional deployment identity. It returns
 `undefined` only without a recorded core task, and rejects missing or ambiguous
-boot flags or identities.
+boot flags or identities. The exported
+`awsSetBackgroundWork(config, configDir, enabled, candidatePath?)` turns a stack's
+background work on or off by replacing its core tasks with the flag changed.
+On a stack with `aws.backgroundWorkControl`, turning it on also records a new
+deployment identity, so the stack ranks as the newest deployment even if it ran
+background work earlier.
 
-The exported `awsBackgroundWorkStatus(config, configDir, candidatePath?)` proves
-the stack's exact healthy core task set and reads the owner record through the
-stack's own API, returning the responder's `ownerDeploymentId`, `setAt`, `setBy`,
-and whether the responding process is currently active. The exported
-`awsSetBackgroundWork(config, configDir, enabled, candidatePath?, expected?)` sets
-the owner record to the stack's identity (or clears it when `enabled` is false)
-without restarting ECS tasks, then polls until every core task of the stack has
-reported matching activity. Passing `expected: { ownerDeploymentId }` refuses the change
-if the owner differs from what the caller last observed. A demotion refuses to
-clear a different deployment's ownership.
-
-The exported `awsBackgroundWorkCapacity(config, configDir, candidatePath?)` proves
-that an inactive controlled stack is currently reusable. It requires another
-owner, stable native deployments and exact task inventories for every workload,
-and resolved deployment preparation. It never changes deployment state. The
-result binds the manifest and deployment identities, the owner, workload task
-definitions, native deployment IDs, and task ARNs. A release coordinator can
-combine both snapshots with immutable candidate provenance and compare them
-again under its production lock before any mutation. This is a point-in-time
-check, not a reservation: intervening maintenance or task replacement
-invalidates the proof and must block promotion.
-
-Live checks use the owning deployment's authenticated canary endpoint to verify a
-real model reply, session persistence, generated title, error records, session
-cleanup, and database catalog health. The CLI confirms the stack owns background
-work and is active before and after the check, and requires a final success bound
-to the request and responding process; heartbeats alone do not count. An uncertain
-result never triggers an automatic replay or fallback. Legacy deployments retain
-the Fargate canary, and a controlled stack that does not own background work uses
-that same path.
-
-Replacing or rolling back a controlled stack's core tasks requires that the stack
-is not the current owner: hand ownership to the other stack first. Processes that
-lose ownership stop claiming within their poll interval (at most their ten-second
-validity window) and finish admitted work under their leases; ECS task
-replacement then drains them through `SIGTERM`. `qm down` is not guarded: if the
-record still names a stack that has no tasks, set the live stack active to
-recover.
+Control requests require both `CORE_SIGNING_SECRET` and a distinct
+`DEPLOYMENT_CONTROL_SECRET` of at least 32 characters, restricted to core. Live
+checks of a controlled stack that runs background work use its authenticated
+canary endpoint to verify a real model reply, session persistence, generated
+title, error records, session cleanup, and database catalog health. The endpoint
+refuses while a newer deployment supersedes the stack, and the CLI requires a
+final success bound to the request and deployment identity; heartbeats alone do
+not count. An uncertain result never triggers an automatic replay or fallback.
+Other deployments, including a controlled stack with background work off, use the
+Fargate canary.
 
 Core secret uploads defer activation to a subsequent staged `up --restart core`.
 The generic upload path refuses changes to either control credential while a
-controlled deployment is recorded, because replacing credentials before coordinating
-all running processes would break ownership control. Legacy AWS deployments keep
-the task replacement path when ownership control is not configured.
+controlled deployment is recorded, because replacing credentials before every
+running process has them would break the live session check.
 
 Batch operators can set `QM_DEPLOY_PROGRESS_FILE` to a new absolute file path and
 `QM_DEPLOY_PROGRESS_TOKEN` to a unique attempt identifier for candidate `up --yes`.
@@ -238,7 +242,7 @@ is redeemed. The command creates no account or role grant.
 
 Run it from the deployment directory with its `.env`, or use `--config` and
 `--env-file`. Inside a running deployment without a config file, supply
-`PORTAL_PUBLIC_URL`, `PORTAL_SESSION_SECRET`, and `ADMIN_GRANTS` through its
+`PUBLIC_WEB_URL`, `PORTAL_SESSION_SECRET`, and `ADMIN_GRANTS` through its
 environment. The CLI prints only the URL, which is a temporary login credential;
 do not publish it or put it in shared logs.
 

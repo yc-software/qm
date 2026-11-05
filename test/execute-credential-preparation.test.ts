@@ -23,7 +23,8 @@ function context(events: string[], credentials: CommandCredential[], extra: Part
       events.push("provision");
       return handle;
     },
-    layers: [{ scopeId: scopeId("personal", "credential-tester"), mountPath: "", mode: "rw" }],
+    writableScopeId: scopeId("personal", "credential-tester"),
+    readOnlyScopeIds: [],
     commandPolicy() {
       events.push("policy");
       return { mode: "denylist", rules: [] };
@@ -31,7 +32,6 @@ function context(events: string[], credentials: CommandCredential[], extra: Part
     authorizeCommand: () => false,
     commandCredentials: credentials,
     grantedHandles: [],
-    workspace: {} as never,
     deploy: {} as never,
     acl: {} as never,
     createdBy: "credential-tester",
@@ -274,7 +274,10 @@ test("the model and transcript see when a command moved to the scratch computer"
   });
   const execute = createAgentTools({
     current: ctx,
-    emit: (entry) => void entries.push(entry.payload as Record<string, unknown>),
+    emit: async (item) => {
+      entries.push({ ...item.body, isError: item.isError });
+      return undefined;
+    },
     scopeLabel: scopeId("channel", "room"),
   })[0]!;
   const run = (params: Record<string, unknown>) =>

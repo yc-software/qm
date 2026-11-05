@@ -2,7 +2,8 @@ import cronstrue from "cronstrue";
 import { CronPattern } from "croner";
 import { retainedSnapshot } from "../../agent/context-snapshot.ts";
 import { DEFAULT_CRON_TIMEZONE } from "../../cron/schedule.ts";
-import type { CandidateDestination, GatewayContext, GrantedHandle, SessionEntry } from "../../types.ts";
+import type { CandidateDestination, GatewayContext, GrantedHandle } from "../../types.ts";
+import type { Item } from "../../sessions/items.ts";
 import type { Cron, Monitor, Webhook } from "../../triggers/types.ts";
 import type { DirectoryMember } from "../../directory/directory-store.ts";
 import type { PersistedSoulRevision } from "../../resolution/config-store.ts";
@@ -35,7 +36,7 @@ interface RosterSnapshot {
 
 export function membershipEvent(
   current: ReadonlyArray<{ principalId: string; displayName: string; slackId?: string }> | undefined,
-  history: readonly SessionEntry[],
+  history: readonly Item[],
   sessionId: string,
 ): { text: string; record?: RosterSnapshot } {
   if (!current) return { text: "" };
@@ -57,8 +58,8 @@ export function membershipEvent(
   return { text: parts.join(" "), record: { roster, sessionId } };
 }
 
-function rosterOf(entry: SessionEntry): RosterSnapshot | undefined {
-  const snapshot = (entry.payload as { rosterSnapshot?: Partial<RosterSnapshot> } | null)?.rosterSnapshot;
+function rosterOf(item: Item): RosterSnapshot | undefined {
+  const snapshot = item.body.rosterSnapshot as Partial<RosterSnapshot> | undefined;
   return Array.isArray(snapshot?.roster) && typeof snapshot.sessionId === "string"
     ? (snapshot as RosterSnapshot)
     : undefined;
@@ -71,7 +72,7 @@ interface GuidanceSnapshot {
 
 export function guidanceUpdateEvent(
   guidance: { version: number; personal: boolean; revisions: readonly PersistedSoulRevision[] },
-  history: readonly SessionEntry[],
+  history: readonly Item[],
   sessionId: string,
 ): { text: string; record: GuidanceSnapshot } {
   const record = { version: guidance.version, sessionId };
@@ -115,8 +116,8 @@ export function guidanceUpdateEvent(
   };
 }
 
-function guidanceOf(entry: SessionEntry): GuidanceSnapshot | undefined {
-  const snapshot = (entry.payload as { guidanceSnapshot?: Partial<GuidanceSnapshot> } | null)?.guidanceSnapshot;
+function guidanceOf(item: Item): GuidanceSnapshot | undefined {
+  const snapshot = item.body.guidanceSnapshot as Partial<GuidanceSnapshot> | undefined;
   return typeof snapshot?.version === "number" && typeof snapshot.sessionId === "string"
     ? (snapshot as GuidanceSnapshot)
     : undefined;

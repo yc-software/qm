@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
 import type {
   PendingApproval,
@@ -11,10 +12,8 @@ import type {
 import { orgId as orgIdOf } from "../config.ts";
 import { isManageableCreationScope, parseScopeId, scopeId } from "../types.ts";
 import { type ListOwnedOptions } from "../files/file-artifact-store.ts";
-import { isTerminal, type Run } from "../runs/run-store.ts";
-import { sleep } from "../util/async.ts";
+import { isTerminal, RUN_WAIT_FALLBACK_MS, type Run, type SessionWatch } from "../runs/run-store.ts";
 import type { RunSignal } from "../runs/run-signal-store.ts";
-import { processRun } from "../runs/worker.ts";
 import { deployRef, encodeRef, parseRef } from "../acl/resource-ref.ts";
 import type { Skill } from "../skills/skill-store.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
@@ -27,9 +26,10 @@ import {
   createMembershipControlsScope,
 } from "../resolution/scope-membership.ts";
 import { samePerson } from "../directory/person.ts";
+import type { DirectoryMember } from "../directory/directory-store.ts";
 import { actorAssertionActive } from "../identity/identity-service.ts";
 import type { Deployment } from "../deploy/deploy-store.ts";
-import { reportFailureAs, swallow } from "../util/errors.ts";
+import { reportFailureAs, swallow, swallowAs } from "../util/errors.ts";
 import { adminSessionUrl } from "../util/admin-links.ts";
 import {
   openGroupViaSurface,
@@ -116,16 +116,8 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     if ((await managedProjectMembership(session.scopeId, viewer)) === false) return [];
     const parsed = parseScopeId(session.scopeId);
     if (parsed.kind !== "group" || !isProjectGroupRef(parsed.ref)) return own;
-    const window = (await deps.sessions.participantWindowsOf(session.id)).find((candidate) =>
-      samePerson(candidate.principalId, viewer),
-    );
-    if (!window) return [];
-    return own.filter(
-      ({ record }) =>
-        record.createdAt !== undefined &&
-        record.createdAt >= window.validFrom &&
-        (window.validTo === null || record.createdAt < window.validTo),
-    );
+    const participants = await deps.sessions.participantsOf(session.id);
+    return participants.some((principalId) => samePerson(principalId, viewer)) ? own : [];
   }
 
   async function approvalVisibleToViewer(
@@ -204,38 +196,28 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     };
   }
 
-  async function drive(runId: string): Promise<TurnResult> {
+  async function awaitRun(runId: string): Promise<TurnResult> {
     const timeoutMs = deps.runWaitMs ?? 60_000;
     const deadline = performance.now() + timeoutMs;
-    for (;;) {
-      const run = await deps.runs.get(runId);
-      if (!run) throw new Error(`run ${runId} not found`);
-      if (isTerminal(run.status)) {
-        return withAdminLink(
-          run.result ?? { status: "failed", sessionId: run.sessionId, reason: "run produced no result" },
-        );
-      }
-      const shutdown = deps.shutdown?.();
-      if (shutdown?.aborted) return { status: "queued", sessionId: run.sessionId, runId };
-      const claimed =
-        run.status === "running" ? null : await deps.runs.claimForSession(run.sessionId, "inline", deps.leaseTtlMs);
-      if (claimed) {
-        try {
-          const result = await processRun(
-            { runs: deps.runs, orchestrator: deps.orchestrator, leaseTtlMs: deps.leaseTtlMs },
-            claimed,
-            { shutdown },
+    let watch: SessionWatch | undefined;
+    try {
+      for (;;) {
+        const run = await deps.runs.get(runId);
+        if (!run) throw new Error(`run ${runId} not found`);
+        if (isTerminal(run.status)) {
+          return withAdminLink(
+            run.result ?? { status: "failed", sessionId: run.sessionId, reason: "run produced no result" },
           );
-          if (claimed.id === runId && !shutdown?.aborted) return withAdminLink(result);
-        } catch (error) {
-          if (claimed.id === runId && !shutdown?.aborted) throw error;
-          swallow("inline run did not complete", error);
         }
-        continue;
+        watch ??= deps.runs.watchSession(run.sessionId);
+        const shutdown = deps.shutdown?.();
+        if (shutdown?.aborted) return { status: "queued", sessionId: run.sessionId, runId };
+        const remaining = deadline - performance.now();
+        if (remaining <= 0) throw new Error(`run ${runId} did not finish within ${timeoutMs}ms`);
+        await watch.changed(Math.min(RUN_WAIT_FALLBACK_MS, remaining), shutdown);
       }
-      const remaining = deadline - performance.now();
-      if (remaining <= 0) throw new Error(`run ${runId} did not finish within ${timeoutMs}ms`);
-      await sleep(Math.min(100, remaining));
+    } finally {
+      watch?.close();
     }
   }
 
@@ -367,6 +349,21 @@ export function createAppHelpers(deps: AppDeps, app: App) {
       ctx.sessionCount += scope.sessionCount;
       if (scope.lastActivityAt !== null) ctx.lastActivityAt = Math.max(ctx.lastActivityAt ?? 0, scope.lastActivityAt);
       byScope.set(scope.scopeId, ctx);
+    }
+    const slackGroups = [...byScope.values()].filter((ctx) => ctx.kind === "group" && !ctx.project);
+    const rosters = await deps.directory
+      .groupRosters(slackGroups.map((ctx) => parseScopeId(ctx.scopeId).ref))
+      .catch(swallowAs("contexts: group DM rosters", new Map<string, DirectoryMember[]>()));
+    for (const ctx of slackGroups) {
+      const roster = rosters.get(parseScopeId(ctx.scopeId).ref);
+      if (!roster) continue;
+      ctx.groupMembers = roster
+        .filter((member) => !samePerson(member.principalId, principalId))
+        .map((member) => ({
+          principalId: member.principalId,
+          displayName: member.displayName,
+          ...(member.avatarUrl?.startsWith("https://") ? { avatarUrl: member.avatarUrl } : {}),
+        }));
     }
     return [...byScope.values()].sort((a, b) => {
       if (a.kind === "personal") return -1;
@@ -532,7 +529,10 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     const r = parseRef(ref);
     if (r.kind === "skill") return (await deps.skills.get(r.id))?.createdBy;
     if (r.kind === "cron") return (await deps.crons.get(r.id))?.createdBy;
-    if (r.kind === "deploy") return (await deps.deploy.listDeployments()).find((d) => d.id === r.id)?.createdBy;
+    if (r.kind === "deploy") {
+      const d = await deps.deploy.getDeployment(r.id);
+      return d?.id === r.id ? d.createdBy : undefined;
+    }
     if (r.kind === "file") return (await deps.files.resolveByIds([{ ownerScopeId, id: r.id }]))[0]?.createdBy;
     return undefined;
   }
@@ -664,11 +664,30 @@ export function createAppHelpers(deps: AppDeps, app: App) {
   async function reconcileProjectMember(project: Project, memberId: string, add: boolean): Promise<void> {
     const sessions = await deps.sessions.listByScope(projectScopeId(project.id));
     for (const session of sessions) {
-      if (add) await deps.sessions.addParticipant(session.id, memberId, undefined, { includeHistory: true });
+      if (add) await deps.sessions.addParticipant(session.id, memberId);
       else await deps.sessions.removeParticipant(session.id, memberId);
     }
   }
 
+  async function steerRun(
+    run: Run,
+    signal: RunSignal,
+    queuedRunId?: string,
+  ): Promise<{ sent: boolean; terminal?: boolean; drained?: boolean; replayRunId?: string }> {
+    const sent = queuedRunId
+      ? await deps.runs.steerQueued(queuedRunId, run.id, signal, deps.signals!)
+      : await deps.signals!.send(run.id, signal);
+    if (!sent) return { sent };
+    const after = await deps.runs.get(run.id);
+    if (after && !isTerminal(after.status)) return { sent };
+    const own = (await replayOrphanedRunSignals(run.id)).find((drained) => drained.signal.ts === signal.ts);
+    return {
+      sent,
+      terminal: true,
+      drained: Boolean(own),
+      ...(own?.replayRunId ? { replayRunId: own.replayRunId } : {}),
+    };
+  }
   async function replayOrphanedRunSignals(runId: string): Promise<Array<{ signal: RunSignal; replayRunId?: string }>> {
     if (!deps.signals) return [];
     const drained: Array<{ signal: RunSignal; replayRunId?: string }> = [];
@@ -684,20 +703,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
           }
           let replayRunId: string | undefined;
           const dedupKey = `session-signal:${runId}:${id}`;
-          if (signal.sessionRequest) {
-            const {
-              clientTools: _clientTools,
-              desktopClientId: _desktopClientId,
-              ...sessionRequest
-            } = signal.sessionRequest;
-            const { run } = await deps.runs.enqueue({
-              sessionId: completed.sessionId,
-              request: sessionRequest,
-              dedupKey,
-              maxAttempts: deps.maxAttempts,
-            });
-            replayRunId = run.id;
-          } else if (signal.request) {
+          if (signal.request) {
             const {
               approval: _ap,
               redeliveryKey: _redeliveryKey,
@@ -765,7 +771,10 @@ export function createAppHelpers(deps: AppDeps, app: App) {
             ...(base.fastMode === undefined && prior?.fastMode !== undefined ? { fastMode: prior.fastMode } : {}),
             ...(base.timezone === undefined && prior?.timezone !== undefined ? { timezone: prior.timezone } : {}),
           };
-          const replayed = await app.turn({ ...base, ...inheritedOptions, async: true });
+          const replayed = await app.turn(
+            { ...base, ...inheritedOptions, async: true },
+            { signalDedupKey: `steer-replay:${runId}:${signal.ts ?? signal.dedupeKey ?? randomUUID()}` },
+          );
           replayRunId = replayed.runId;
         } catch (err) {
           replayOutcomeKnown = false;
@@ -815,7 +824,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     approvalVisibleToViewer,
     pendingApprovalForSession,
     pendingApprovalResultForThread,
-    drive,
+    awaitRun,
     mayUseSharedScope,
     viewerMayUseRun,
     projectView,
@@ -847,6 +856,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     syncProjectChannelRoster,
     syncLinkedProjectRosters,
     replayOrphanedRunSignals,
+    steerRun,
   };
 }
 

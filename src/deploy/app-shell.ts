@@ -41,7 +41,8 @@ export function appShellHtml(opts: {
   header { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 6px 0 12px; flex: none;
     box-sizing: border-box; user-select: none;
     border-bottom: 1px solid var(--border);
-    background: var(--background); }
+    background: var(--background);
+    transition: margin-top 0.24s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.16s ease; }
   header .name { font-size: 11px; font-weight: 500; line-height: 1.25; color: var(--foreground);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   header .ver { display: none; }
@@ -64,14 +65,19 @@ export function appShellHtml(opts: {
   #app { flex: 1; border: 0; width: 100%; height: 100%; background: var(--background); }
   aside { display: none; flex: none; width: 420px; min-width: 320px; max-width: 70vw; position: relative;
     border-left: 1px solid var(--border);
-    background: color-mix(in srgb, var(--secondary) 42%, var(--background)); }
+    background: color-mix(in srgb, var(--secondary) 42%, var(--background));
+    transition: width 0.24s cubic-bezier(0.2, 0.8, 0.2, 1), min-width 0.24s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.16s ease; }
   aside.open { display: flex; }
   aside .drag { position: absolute; left: -3px; top: 0; bottom: 0; width: 6px; cursor: col-resize; }
   #chat { border: 0; flex: 1; width: 100%; height: 100%; }
+  body.leaving header { margin-top: -32px; opacity: 0; pointer-events: none; }
+  body.leaving aside { flex: none; width: 0 !important; min-width: 0; opacity: 0; overflow: hidden; pointer-events: none; }
+  body.leaving #chat { flex: none; }
+  @media (prefers-reduced-motion: reduce) { header, aside { transition: none; } }
   button:focus-visible, .drag:focus-visible { outline: 2px solid var(--foreground); outline-offset: -2px; }
   @media (max-width: 640px) {
     aside { min-width: 0; width: min(100vw, 420px); max-width: 100vw; }
-    body:not(.bare) main:has(aside.open) #app { display: none; }
+    body:not(.bare):not(.leaving) main:has(aside.open) #app { display: none; }
     aside.open { flex: 1; }
     .drag { display: none; }
   }
@@ -161,10 +167,25 @@ ${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
     event.preventDefault();
     panel.style.width = Math.max(320, panel.offsetWidth + (event.key === "ArrowLeft" ? 20 : -20)) + "px";
   });
+  let bare = false;
   hide.addEventListener("click", () => {
-    const target = new URL(location.href);
-    target.searchParams.set("__qm_no_shell", "1");
-    location.assign(target.href);
+    let framed = false;
+    try { framed = app.contentWindow.location.href !== "about:blank"; } catch {}
+    if (!framed) {
+      const target = new URL(location.href);
+      target.searchParams.set("__qm_no_shell", "1");
+      location.assign(target.href);
+      return;
+    }
+    bare = true;
+    lastHref = null;
+    sync();
+    chat.style.width = chat.offsetWidth + "px";
+    document.body.classList.add("leaving");
+    window.dispatchEvent(new Event("qm:shell-bare"));
+    const done = () => { document.body.classList.add("bare"); chat.src = "about:blank"; };
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) done();
+    else setTimeout(done, 260);
   });
 
   const defaultName = document.getElementById("name").textContent;
@@ -177,7 +198,9 @@ ${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
       const loc = app.contentWindow.location;
       if (loc.href === "about:blank" || loc.href === lastHref) return;
       lastHref = loc.href;
-      history.replaceState(null, "", loc.pathname + loc.search + loc.hash);
+      const shown = new URL(loc.pathname + loc.search + loc.hash, location.origin);
+      if (bare) shown.searchParams.set("__qm_no_shell", "1");
+      history.replaceState(null, "", shown.pathname + shown.search + shown.hash);
     } catch {}
   };
   setInterval(sync, 500);
@@ -190,7 +213,7 @@ ${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
     try { app.contentWindow.location.reload(); } catch { app.src = app.src; }
   };
   const poll = async () => {
-    if (document.hidden) return;
+    if (document.hidden || bare) return;
     try {
       const r = await fetch("/__claw__/version", { cache: "no-store" });
       if (!r.ok) return;

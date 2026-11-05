@@ -38,7 +38,7 @@ await new Promise<void>((r) => surface.listen(0, "127.0.0.1", r));
 const surfaceUrl = `http://127.0.0.1:${(surface.address() as AddressInfo).port}`;
 
 const PUBLIC = "http://portal.test";
-process.env.PORTAL_PUBLIC_URL = PUBLIC;
+process.env.PUBLIC_WEB_URL = PUBLIC;
 process.env.PORTAL_SESSION_SECRET = "broker-proxy-test-portal-secret";
 process.env.PORTAL_IDENTITY_SECRET = "broker-proxy-test-identity-secret";
 process.env.CORE_SIGNING_SECRET = "broker-proxy-test-core-secret";

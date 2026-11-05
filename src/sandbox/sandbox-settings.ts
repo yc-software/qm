@@ -106,12 +106,52 @@ interface SpritesSandboxEnv {
   defaultTimeoutSec?: number;
 }
 
+const csvList = (value: string | undefined): string[] | undefined => {
+  const items = (value ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return items.length ? items : undefined;
+};
+
+function egressProxyFor(env: NodeJS.ProcessEnv, backend: string): { egressProxyUrl?: string } {
+  return env.EGRESS_PROXY_URL && !csvList(env.EGRESS_PROXY_EXEMPT_BACKENDS)?.includes(backend)
+    ? { egressProxyUrl: env.EGRESS_PROXY_URL }
+    : {};
+}
+
+const retiredEgressProxyKeys = {
+  SPRITES_EGRESS_PROXY_URL: "sprites",
+  E2B_EGRESS_PROXY_URL: "e2b",
+  MODAL_EGRESS_PROXY_URL: "modal",
+  SMOLMACHINES_EGRESS_PROXY_URL: "smolmachines",
+  PORTER_SANDBOX_EGRESS_PROXY_URL: "porter",
+  AGENT37_EGRESS_PROXY_URL: "agent37",
+};
+
+function checkRetiredEgressProxyKeys(env: NodeJS.ProcessEnv): void {
+  if (env.DO_AGENTS_EGRESS_PROXY_URL)
+    throw new Error(
+      "No longer read: DO_AGENTS_EGRESS_PROXY_URL. DigitalOcean Managed Agents can't be forced through the QM egress proxy (docs/do-managed-agents.md), so its sessions keep open egress. Remove the setting.",
+    );
+  const set = Object.entries(retiredEgressProxyKeys).filter(([key]) => env[key]);
+  const uncovered = set.filter(([, backend]) => !egressProxyFor(env, backend).egressProxyUrl).map(([key]) => key);
+  if (uncovered.length)
+    throw new Error(
+      `No longer read: ${uncovered.join(", ")}. EGRESS_PROXY_URL doesn't cover the provider, so its sandboxes would run without the egress proxy. Set EGRESS_PROXY_URL (keeping the provider out of EGRESS_PROXY_EXEMPT_BACKENDS), then remove the old setting.`,
+    );
+  if (set.length)
+    console.warn(
+      `[config] No longer read: ${set.map(([key]) => key).join(", ")}. EGRESS_PROXY_URL applies instead, so remove the old setting.`,
+    );
+}
+
 function spritesSandboxEnv(env: NodeJS.ProcessEnv): SpritesSandboxEnv {
   return {
     ...(env.SPRITES_TOKEN ? { token: env.SPRITES_TOKEN } : {}),
     ...(env.SPRITES_BASE_URL ? { baseUrl: env.SPRITES_BASE_URL } : {}),
     ...(env.SPRITES_NAME_PREFIX ? { namePrefix: env.SPRITES_NAME_PREFIX } : {}),
-    ...(env.SPRITES_EGRESS_PROXY_URL ? { egressProxyUrl: env.SPRITES_EGRESS_PROXY_URL } : {}),
+    ...egressProxyFor(env, "sprites"),
     ...(env.SPRITES_EGRESS_PROXY_ADDITIONAL_URLS?.trim()
       ? {
           egressProxyAdditionalUrls: env.SPRITES_EGRESS_PROXY_ADDITIONAL_URLS.split(",")
@@ -149,7 +189,7 @@ function e2bSandboxEnv(env: NodeJS.ProcessEnv): E2bSandboxEnv {
     ...optNum(env, "E2B_SANDBOX_TTL_SEC", "sandboxTtlSec"),
     ...optNum(env, "E2B_MAX_LIFETIME_SEC", "maxLifetimeSec"),
     ...(env.E2B_PROXY ? { proxy: env.E2B_PROXY } : {}),
-    ...(env.E2B_EGRESS_PROXY_URL ? { egressProxyUrl: env.E2B_EGRESS_PROXY_URL } : {}),
+    ...egressProxyFor(env, "e2b"),
     ...(env.E2B_SNAPSHOT_S3_BUCKET ? { snapshotS3Bucket: env.E2B_SNAPSHOT_S3_BUCKET } : {}),
     ...optNum(env, "E2B_SNAPSHOT_INTERVAL_SEC", "snapshotIntervalSec"),
     ...optNum(env, "E2B_NATIVE_SNAPSHOT_INTERVAL_SEC", "nativeSnapshotIntervalSec"),
@@ -183,7 +223,6 @@ interface ManagedAgentsSandboxEnv {
   namePrefix?: string;
   sizeSlug?: string;
   idleTimeoutSec?: number;
-  egressProxyUrl?: string;
   snapshotS3Bucket?: string;
   snapshotIntervalSec?: number;
   defaultTimeoutSec?: number;
@@ -197,7 +236,6 @@ function managedAgentsSandboxEnv(env: NodeJS.ProcessEnv): ManagedAgentsSandboxEn
     ...(env.DO_AGENTS_NAME_PREFIX ? { namePrefix: env.DO_AGENTS_NAME_PREFIX } : {}),
     ...(env.DO_AGENTS_SIZE_SLUG ? { sizeSlug: env.DO_AGENTS_SIZE_SLUG } : {}),
     ...optNum(env, "DO_AGENTS_IDLE_TIMEOUT_SEC", "idleTimeoutSec"),
-    ...(env.DO_AGENTS_EGRESS_PROXY_URL ? { egressProxyUrl: env.DO_AGENTS_EGRESS_PROXY_URL } : {}),
     ...(env.DO_AGENTS_SNAPSHOT_S3_BUCKET ? { snapshotS3Bucket: env.DO_AGENTS_SNAPSHOT_S3_BUCKET } : {}),
     ...optNum(env, "DO_AGENTS_SNAPSHOT_INTERVAL_SEC", "snapshotIntervalSec"),
     ...optNum(env, "SANDBOX_TIMEOUT_SEC", "defaultTimeoutSec"),
@@ -246,7 +284,7 @@ function modalSandboxEnv(env: NodeJS.ProcessEnv): ModalSandboxEnv {
     ...optNum(env, "MODAL_SANDBOX_TIMEOUT_SEC", "sandboxTimeoutSec"),
     ...optNum(env, "MODAL_ROTATE_AFTER_SEC", "rotateAfterSec"),
     ...optNum(env, "MODAL_REAP_IDLE_SEC", "reapIdleSec"),
-    ...(env.MODAL_EGRESS_PROXY_URL ? { egressProxyUrl: env.MODAL_EGRESS_PROXY_URL } : {}),
+    ...egressProxyFor(env, "modal"),
     ...(env.MODAL_SNAPSHOT_S3_BUCKET ? { snapshotS3Bucket: env.MODAL_SNAPSHOT_S3_BUCKET } : {}),
     ...optNum(env, "SANDBOX_TIMEOUT_SEC", "defaultTimeoutSec"),
   };
@@ -277,7 +315,7 @@ function smolmachinesSandboxEnv(env: NodeJS.ProcessEnv): SmolmachinesSandboxEnv 
     ...optNum(env, "SMOLMACHINES_MEMORY_MB", "memoryMb"),
     ...optNum(env, "SMOLMACHINES_DISK_GB", "diskGb"),
     ...optNum(env, "SMOLMACHINES_AUTOSTOP_SEC", "autoStopSec"),
-    ...(env.SMOLMACHINES_EGRESS_PROXY_URL ? { egressProxyUrl: env.SMOLMACHINES_EGRESS_PROXY_URL } : {}),
+    ...egressProxyFor(env, "smolmachines"),
     ...(env.SMOLMACHINES_SNAPSHOT_S3_BUCKET ? { snapshotS3Bucket: env.SMOLMACHINES_SNAPSHOT_S3_BUCKET } : {}),
     ...optNum(env, "SMOLMACHINES_SNAPSHOT_INTERVAL_SEC", "snapshotIntervalSec"),
     ...optNum(env, "SANDBOX_TIMEOUT_SEC", "defaultTimeoutSec"),
@@ -319,7 +357,7 @@ function porterSandboxEnv(env: NodeJS.ProcessEnv): PorterSandboxEnv {
     ...(env.PORTER_SANDBOX_NAME_PREFIX ? { namePrefix: env.PORTER_SANDBOX_NAME_PREFIX } : {}),
     ...(env.PORTER_SANDBOX_HOME ? { homeDir: env.PORTER_SANDBOX_HOME } : {}),
     ...(ttlSec !== undefined ? { ttlSec } : {}),
-    ...(env.PORTER_SANDBOX_EGRESS_PROXY_URL ? { egressProxyUrl: env.PORTER_SANDBOX_EGRESS_PROXY_URL } : {}),
+    ...egressProxyFor(env, "porter"),
     ...optNum(env, "SANDBOX_TIMEOUT_SEC", "defaultTimeoutSec"),
   };
 }
@@ -345,7 +383,7 @@ function agent37SandboxEnv(env: NodeJS.ProcessEnv): Agent37SandboxEnv {
     ...optNum(env, "AGENT37_CPUS", "cpus"),
     ...optNum(env, "AGENT37_MEMORY_GB", "memoryGb"),
     ...optNum(env, "AGENT37_DISK_GB", "diskGb"),
-    ...(env.AGENT37_EGRESS_PROXY_URL ? { egressProxyUrl: env.AGENT37_EGRESS_PROXY_URL } : {}),
+    ...egressProxyFor(env, "agent37"),
     ...optNum(env, "SANDBOX_TIMEOUT_SEC", "defaultTimeoutSec"),
   };
 }
@@ -363,14 +401,6 @@ interface SuperserveSandboxEnv {
   defaultTimeoutSec?: number;
   configGeneration?: number;
 }
-
-const csvList = (value: string | undefined): string[] | undefined => {
-  const items = (value ?? "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-  return items.length ? items : undefined;
-};
 
 function superserveSandboxEnv(env: NodeJS.ProcessEnv): SuperserveSandboxEnv {
   const egressAllow = csvList(env.SUPERSERVE_EGRESS_ALLOW);
@@ -440,6 +470,14 @@ function sandboxBackendEnvStrict(value: string | undefined, name = "SANDBOX_BACK
 }
 
 function warnUnprotectedSandboxes(env: NodeJS.ProcessEnv): void {
+  if (
+    ["sprites", "e2b", "modal", "smolmachines", "porter"].includes(env.SANDBOX_BACKEND ?? "") &&
+    !egressProxyFor(env, env.SANDBOX_BACKEND ?? "").egressProxyUrl
+  ) {
+    console.warn(
+      `[config] SANDBOX_BACKEND=${env.SANDBOX_BACKEND} has no egress proxy — sandboxes run with NO egress enforcement (fail-open); set EGRESS_PROXY_URL to the public egress proxy and keep ${env.SANDBOX_BACKEND} out of EGRESS_PROXY_EXEMPT_BACKENDS to force sandbox traffic through it.`,
+    );
+  }
   if (env.E2B_API_KEY && !env.E2B_SNAPSHOT_S3_BUCKET) {
     console.warn(
       "[config] e2b sandbox backend enabled without E2B_SNAPSHOT_S3_BUCKET — provider pause preserves the machine, but there are no home snapshots, so a sandbox the provider loses comes back with an empty home; set E2B_SNAPSHOT_S3_BUCKET for durable portable recovery.",
@@ -455,29 +493,9 @@ function warnUnprotectedSandboxes(env: NodeJS.ProcessEnv): void {
       "[config] smolmachines sandbox backend enabled without SMOLMACHINES_SNAPSHOT_S3_BUCKET — stopping a machine is not a backup; set SMOLMACHINES_SNAPSHOT_S3_BUCKET for durable home recovery snapshots.",
     );
   }
-  if (env.SANDBOX_BACKEND === "sprites" && !env.SPRITES_EGRESS_PROXY_URL) {
-    console.warn(
-      "[config] SANDBOX_BACKEND=sprites without SPRITES_EGRESS_PROXY_URL — sandboxes run with NO egress enforcement (fail-open); set SPRITES_EGRESS_PROXY_URL to the public egress proxy to force sandbox traffic through it.",
-    );
-  }
-  if (env.SANDBOX_BACKEND === "e2b" && !env.E2B_EGRESS_PROXY_URL) {
-    console.warn(
-      "[config] SANDBOX_BACKEND=e2b without E2B_EGRESS_PROXY_URL — sandboxes run with NO egress enforcement (fail-open); set E2B_EGRESS_PROXY_URL to the public egress proxy so E2B's network rules admit only that host.",
-    );
-  }
-  if (env.SANDBOX_BACKEND === "do-managed-agents" && !env.DO_AGENTS_EGRESS_PROXY_URL) {
-    console.warn(
-      "[config] SANDBOX_BACKEND=do-managed-agents without DO_AGENTS_EGRESS_PROXY_URL — sandboxes run with NO egress enforcement (fail-open); set DO_AGENTS_EGRESS_PROXY_URL to the public egress proxy so the session's egress allowlist admits only that host.",
-    );
-  }
   if (env.DO_AGENTS_API_TOKEN && !env.DO_AGENTS_SNAPSHOT_S3_BUCKET) {
     console.warn(
       "[config] do-managed-agents sandbox backend enabled without DO_AGENTS_SNAPSHOT_S3_BUCKET — pause preserves the microVM, but a destroyed session takes the home with it; set DO_AGENTS_SNAPSHOT_S3_BUCKET so a replacement session can hydrate from a portable snapshot.",
-    );
-  }
-  if (env.MODAL_TOKEN_ID && env.MODAL_TOKEN_SECRET && !env.MODAL_EGRESS_PROXY_URL) {
-    console.warn(
-      "[config] modal sandbox backend enabled without MODAL_EGRESS_PROXY_URL — sandboxes run with NO egress enforcement (fail-open); set MODAL_EGRESS_PROXY_URL to the public https egress proxy so Modal's outbound allowlist admits only that host.",
     );
   }
   if (env.SANDBOX_BACKEND === "sprites" && !env.SPRITES_SNAPSHOT_S3_BUCKET) {
@@ -485,19 +503,10 @@ function warnUnprotectedSandboxes(env: NodeJS.ProcessEnv): void {
       "[config] SANDBOX_BACKEND=sprites without SPRITES_SNAPSHOT_S3_BUCKET — retiring a computer deletes its sprite and every checkpoint irreversibly with no exported home; set SPRITES_SNAPSHOT_S3_BUCKET to export the home to S3 before a sprite is destroyed and to rehydrate a replacement.",
     );
   }
-  if (env.SANDBOX_BACKEND === "smolmachines" && !env.SMOLMACHINES_EGRESS_PROXY_URL) {
-    console.warn(
-      "[config] SANDBOX_BACKEND=smolmachines without SMOLMACHINES_EGRESS_PROXY_URL — machines are created with open outbound networking and NO egress enforcement (fail-open); set SMOLMACHINES_EGRESS_PROXY_URL to allow-list only the egress proxy.",
-    );
-  }
-  if (env.SANDBOX_BACKEND === "porter" && !env.PORTER_SANDBOX_EGRESS_PROXY_URL) {
-    console.warn(
-      "[config] SANDBOX_BACKEND=porter without PORTER_SANDBOX_EGRESS_PROXY_URL — sandboxes run with NO egress enforcement (fail-open); set PORTER_SANDBOX_EGRESS_PROXY_URL to the egress proxy to force sandbox traffic through it.",
-    );
-  }
 }
 
 export function sandboxSettings(env: NodeJS.ProcessEnv): SandboxSettings {
+  checkRetiredEgressProxyKeys(env);
   warnUnprotectedSandboxes(env);
   if (env.SANDBOX_BACKEND === "porter" && !porterLocatorPresent(env)) {
     throw new Error(
@@ -512,8 +521,6 @@ export function sandboxSettings(env: NodeJS.ProcessEnv): SandboxSettings {
   const sandboxBackend = sandboxBackendEnvStrict(env.SANDBOX_BACKEND);
   if (sandboxBackend === "render" && !env.RENDER_WORKSPACE_ID?.trim())
     throw new Error("Render providers require RENDER_WORKSPACE_ID");
-  if (sandboxBackend === "render" && env.WORKSPACE_STORE !== "postgres")
-    throw new Error("SANDBOX_BACKEND=render requires WORKSPACE_STORE=postgres");
   if (sandboxBackend === "render" && !env.RENDER_SANDBOX_IMAGE?.trim())
     throw new Error("SANDBOX_BACKEND=render requires RENDER_SANDBOX_IMAGE");
   const renderSandboxEnabled =

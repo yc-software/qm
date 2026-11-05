@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import test from "node:test";
+import { SERVICE_NAMES } from "../cli/src/services.ts";
 
 test("the release publishes signed images and never a package", () => {
   const workflow = readFileSync(".github/workflows/release-package.yml", "utf8");
@@ -84,7 +85,6 @@ test("the published package pins real image digests, never the checked-in sentin
     workflow.indexOf("Pin published image digests") < workflow.indexOf("npm publish"),
     "digests are resolved before the package is published",
   );
-  assert.match(workflow, /for service in core web-ui portal auth egress-proxy sandbox-base; do/);
   assert.match(workflow, /printf '%s\\n' "\$out" > cli\/manifest\.json/);
   assert.match(workflow, /no published image for \$repo at \$IMAGES_REF/);
   assert.match(workflow, /\{63\}\$"\) \| not\)/);
@@ -93,8 +93,8 @@ test("the published package pins real image digests, never the checked-in sentin
     sandboxBase: string;
     services: Record<string, string>;
   };
+  assert.deepEqual(Object.keys(sentinel.services), [...SERVICE_NAMES]);
   const refs = [sentinel.sandboxBase, ...Object.values(sentinel.services)];
-  assert.equal(refs.length, 6);
   assert.ok(
     refs.every((ref) => ref.startsWith("registry.invalid/")),
     "the checked-in manifest stays a sentinel so a source checkout never pulls a stale digest",
