@@ -1051,10 +1051,44 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               swallowAs("orchestrator: configured connector providers", []),
             )
           : [];
+      const orgServiceCreds =
+        !strictReadOnly && deps.serviceCreds
+          ? await deps.serviceCreds.listServiceCredentials(resolution.orgScopeId)
+          : [];
+      const aclGrantedServiceCredSlugs = async (): Promise<Set<string>> =>
+        new Set(
+          (
+            await deps.acl.grantsOfKind(
+              "service-cred",
+              conversation.audience,
+              scopeId,
+              resolution.orgScopeId,
+              entitledScopes,
+            )
+          ).map((g) => parseRef(g.ref).id),
+        );
+      const orgWideAudience =
+        conversation.audience.length > 0 &&
+        conversation.audience.every((p) =>
+          principalEntitledToScope(p, resolution.orgScopeId, scopeId, resolution.orgScopeId),
+        );
+      const grantedServiceCredSlugs = async (records: readonly PublicServiceCredential[]): Promise<Set<string>> => {
+        const granted = await aclGrantedServiceCredSlugs();
+        if (orgWideAudience) for (const record of records) if (record.source === "deployment") granted.add(record.slug);
+        return granted;
+      };
+      const serviceCredRecords: PublicServiceCredential[] = orgServiceCreds.filter((record) =>
+        serviceAllowed(record.slug),
+      );
+      let grantedCredSlugs = new Set<string>();
+      if (serviceCredRecords.length > 0) grantedCredSlugs = await grantedServiceCredSlugs(serviceCredRecords);
+      const appConnections = serviceCredRecords.some(
+        (cred) => isBackendCredential(cred) && cred.enabled && cred.hasSecret && grantedCredSlugs.has(cred.slug),
+      );
       const carriedSkillScreens = new Map<string, Promise<boolean>>();
       const visibleSkillsForTurn = async (sources?: readonly string[]): Promise<SkillResolution[]> => {
         const current = await tracePhase("turn.skills", () => context.listSkills(sources), { counts: countSkills });
-        const resolved = filterConnectorSkills(current.skills, configuredProviders);
+        const resolved = filterConnectorSkills(current.skills, configuredProviders, appConnections);
         const allowed: SkillResolution[] = [];
         for (const entry of resolved) {
           const skill = entry.skill;
@@ -1127,7 +1161,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         .sort();
       if (otherSkillSources.length)
         systemPrompt += `\n\nAdditional skill sources: ${otherSkillSources.join(", ")}. Use skills list/search with source to discover their authorized skills; read with the same source.`;
-      const nativeSkills = filterConnectorSkills(skillSourceContext.skills, configuredProviders);
+      const nativeSkills = filterConnectorSkills(skillSourceContext.skills, configuredProviders, appConnections);
       turnContextBlocks["Skills"] = skillsIndex(nativeSkills);
       const transferId = turnFileId(input.runId, input.attempt);
       const turnSessionDir = `${TURN_FILES_DIR}/${hashId([conversation.threadRef], 24)}`;
@@ -1455,36 +1489,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
       };
       await tracePhase("turn.credentials", () => registerConnectorCredentials(addCredentialToCatalog));
-      const aclGrantedServiceCredSlugs = async (): Promise<Set<string>> =>
-        new Set(
-          (
-            await deps.acl.grantsOfKind(
-              "service-cred",
-              conversation.audience,
-              scopeId,
-              resolution.orgScopeId,
-              entitledScopes,
-            )
-          ).map((g) => parseRef(g.ref).id),
-        );
-      const orgWideAudience =
-        conversation.audience.length > 0 &&
-        conversation.audience.every((p) =>
-          principalEntitledToScope(p, resolution.orgScopeId, scopeId, resolution.orgScopeId),
-        );
-      const grantedServiceCredSlugs = async (records: readonly PublicServiceCredential[]): Promise<Set<string>> => {
-        const granted = await aclGrantedServiceCredSlugs();
-        if (orgWideAudience) for (const record of records) if (record.source === "deployment") granted.add(record.slug);
-        return granted;
-      };
-      let serviceCredRecords: PublicServiceCredential[] = [];
-      let grantedCredSlugs = new Set<string>();
-      if (!strictReadOnly && deps.serviceCreds) {
-        serviceCredRecords = (await deps.serviceCreds.listServiceCredentials(resolution.orgScopeId)).filter((record) =>
-          serviceAllowed(record.slug),
-        );
-        if (serviceCredRecords.length > 0) grantedCredSlugs = await grantedServiceCredSlugs(serviceCredRecords);
-      }
       const authorizeServiceCredential = async (slug: string): Promise<void> => {
         if (!serviceAllowed(slug)) throw new Error("Service is not approved for external Slack.");
         if ((await aclGrantedServiceCredSlugs()).has(slug)) return;
@@ -1503,7 +1507,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           connectorEnv.BROWSE_LAB_MAX_STEPS = String(browseSteps);
       }
       const runtimePurpose = turnRuntimePurpose(
-        { surface: input.surface, triggered: automatedTurn },
+        { surface: input.surface, triggered: automatedTurn, infrequentCron: input.infrequentCron },
         !!session.parentSessionId || !!swarmBinding?.member.parentId,
       );
       const purposeDefault = runtimePurpose ? await deps.config?.getPurposeRuntimeDurable(runtimePurpose) : undefined;
@@ -1935,10 +1939,25 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           await Promise.all(pendingScreenRequests.splice(0).map((rec) => recordScreenRequest(rec)));
           return true;
         });
-        const [memoryWindow, memoryView] = await Promise.all([
-          deps.sessions.getContextWindow(session.id),
-          context.memorySnapshot(),
-        ]);
+        const contextWindow = deps.sessions.getContextWindow(session.id);
+        const snapshot = context.memorySnapshot();
+        const recallOutcomes: MemoryProviderOutcome[] = [];
+        const loadedFacts = snapshot.then((view) => view.loaded);
+        void loadedFacts.catch(() => undefined);
+        const recallFor = (history: Item[]) =>
+          context.recallMemory(
+            memoryRecallQuery(input.text, history),
+            loadedFacts,
+            (outcome) => void recallOutcomes.push(outcome),
+            isPersonAuthored(input.origin.kind) && !sessionTurn ? titleText : undefined,
+          );
+        const importsOverheard = (!input.envelopeWrapped || humanInput) && !!input.overheard?.length;
+        const earlyRecall =
+          input.approval || importsOverheard || ambientTurn || input.cronScript
+            ? undefined
+            : contextWindow.then((window) => recallFor(filterHistory(forModelContext(window.items))));
+        void earlyRecall?.catch(() => undefined);
+        const [memoryWindow, memoryView] = await Promise.all([contextWindow, snapshot]);
         let historyAppended = input.approval !== undefined;
         const captureDependencies = () => [
           ...memoryView.facts,
@@ -2129,13 +2148,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           }
         }
 
-        if (
-          serviceCredRecords.some(
-            (cred) => isBackendCredential(cred) && cred.enabled && cred.hasSecret && grantedCredSlugs.has(cred.slug),
-          )
-        )
+        if (appConnections)
           systemPrompt +=
-            "\n\n## Connected app access\nComposio is configured in the backend. Load the composio skill and use /v1/composio through the authenticated agent API. No Composio project key is delivered to your computer; the backend checks account ownership and context access.";
+            "\n\n## Connected app access\nComposio is configured in the backend. Load the composio skill and use /v1/composio through the authenticated agent API. Apps that have their own skill work over these connections too; prefer that skill. No Composio project key is delivered to your computer; the backend checks account ownership and context access.";
         if (actorIsOrgAdmin) {
           systemPrompt +=
             "\n\n## Acting for an org admin\n" +
@@ -2715,7 +2730,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         );
 
         const importedOverheard: OverheardEntryPayload[] = [];
-        if ((!input.envelopeWrapped || humanInput) && input.overheard?.length) {
+        if (importsOverheard) {
           const toImport = await transcripts
             .forRender(session.id)
             .then((read) => selectOverheardToImport(input.overheard!, recordedMessageTimestamps(read.items)))
@@ -2736,13 +2751,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const rawEntries = (await turnWindow()).items;
         const priorTurns = input.priorTurns;
         let visibleHistory = filterHistory(forModelContext(rawEntries));
-        const recallOutcomes: MemoryProviderOutcome[] = [];
-        const recalled = await context.recallMemory(
-          memoryRecallQuery(input.text, visibleHistory),
-          memoryView.loaded,
-          (outcome) => void recallOutcomes.push(outcome),
-          isPersonAuthored(input.origin.kind) && !sessionTurn ? titleText : undefined,
-        );
+        const recalled = await (earlyRecall ?? recallFor(visibleHistory));
         const partial = isRetry ? (recordedTurn ?? findTrailingPartialTurn(visibleHistory, input.runId)) : null;
         const reconciled = partial ? reconcile(visibleHistory, partial, input.resumeCause) : null;
         if (reconciled?.settleItems.length) {

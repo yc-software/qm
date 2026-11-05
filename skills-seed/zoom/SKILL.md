@@ -1,6 +1,6 @@
 ---
 name: zoom
-description: Find, create, reschedule, and cancel the user's Zoom meetings through per-user OAuth.
+description: Find, create, reschedule, and cancel the user's Zoom meetings through their own Zoom connection.
 requiredCapabilities:
   - egress:api.zoom.us
 ---
@@ -10,13 +10,27 @@ requiredCapabilities:
 Use this skill when the user asks for a Zoom meeting or link, wants to know what Zoom
 meetings they have coming up, or wants to move or cancel one.
 
-This is an OAuth connector. The resolved user's Zoom token already lives on your computer
-as an environment variable (the way a logged-in CLI's cached credential would):
+## Connection
 
-- `$VAULT_TOKEN_API_ZOOM_US` — for `api.zoom.us`
+Zoom reaches you one of two ways; the requests are the same either way.
 
-Pass it as `-H "Authorization: Bearer $VAULT_TOKEN_API_ZOOM_US"`. Never ask the user for a
-token, log it, or use another principal's credential.
+- **Direct token:** `$VAULT_TOKEN_API_ZOOM_US` holds the user's Zoom token for
+  `api.zoom.us`; pass it as `-H "Authorization: Bearer $VAULT_TOKEN_API_ZOOM_US"`. The
+  examples below use it as written.
+- **App connection:** with no token, the user connects Zoom as an
+  app instead (composio skill). Send the same request through QM — same method, URL, `query`,
+  headers and JSON `body`, but no Authorization header:
+
+  ```bash
+  curl -sS "$AGENT_API_URL/v1/composio/proxy" -H "X-Agent-Capability: $AGENT_API_TOKEN" \
+    -H 'content-type: application/json' \
+    --data '{"method":"GET","url":"https://api.zoom.us/v2/users/me"}'
+  ```
+
+  The reply is the provider's own status and body; the composio skill's "Raw requests"
+  section covers `409` answers, choosing an account, and file bodies.
+
+Never ask the user for a token, log it, or use another principal's credential.
 
 Per-user connector tokens are present in the user's own DM and personal scheduled tasks,
 and in a shared room or channel automation only when the user has opened their connections

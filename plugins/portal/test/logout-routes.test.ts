@@ -18,7 +18,7 @@ const origin = "http://127.0.0.1:19996";
 const secret = "logout-route-fixture-secret-at-least-32-characters";
 Object.assign(process.env, {
   NODE_ENV: "test",
-  PORTAL_PUBLIC_URL: origin,
+  PUBLIC_WEB_URL: origin,
   PORTAL_SESSION_SECRET: secret,
   CORE_ORG_ID: "logout",
   CORE_API_URL: `http://127.0.0.1:${(core.address() as AddressInfo).port}`,

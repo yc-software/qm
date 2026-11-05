@@ -63,7 +63,8 @@ export interface PersistedBaseModel {
   effortLevel?: string;
   fastMode?: boolean;
 }
-export type RuntimePurpose = "cron" | "subagent" | "fallback";
+type RuntimePurpose = "cron" | "subagent" | "fallback";
+export type TurnRuntimePurpose = RuntimePurpose | "infrequentCron";
 
 interface RuntimeSelection {
   modelId: string;
@@ -128,7 +129,7 @@ export interface ScopedConfigStore {
   getChannelHeaderPinDefaultDurable(): Promise<boolean>;
   onChannelHeaderPinChanged(listener: (id: ScopeId) => void): void;
   getPurposeRuntime(purpose: RuntimePurpose): RuntimeSelection | undefined;
-  getPurposeRuntimeDurable(purpose: RuntimePurpose): Promise<RuntimeSelection | undefined>;
+  getPurposeRuntimeDurable(purpose: TurnRuntimePurpose): Promise<RuntimeSelection | undefined>;
   setPurposeRuntime(purpose: RuntimePurpose, selection: RuntimeSelection): Promise<void>;
   clearPurposeRuntime(purpose: RuntimePurpose): Promise<void>;
   getBaseModel(id: ScopeId): string | null;
@@ -641,6 +642,7 @@ export function createConfigStore(
       return selection ? { ...selection } : undefined;
     },
     getPurposeRuntimeDurable: async (purpose) => {
+      if (purpose === "infrequentCron") return undefined;
       const selection = (await baseModelStore.get(org))?.[`${purpose}Runtime`];
       return selection ? { ...selection } : undefined;
     },

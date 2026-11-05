@@ -2,9 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, request as httpRequest, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { releaseFiles } from "./release-fixture.ts";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { sendBuffered } from "../../chassis/src/http.ts";
@@ -35,15 +33,16 @@ process.env.CORE_API_URL = `http://localhost:${(core.address() as AddressInfo).p
 process.env.CORE_SIGNING_SECRET = SECRET;
 process.env.WEB_UI_PRINCIPALS = "alice";
 
-const assetsDir = join(dirname(fileURLToPath(import.meta.url)), "..", "dist-web", "assets");
 const assetName = "compression-fixture-Aa1Bb2Cc.js";
-const assetPath = join(assetsDir, assetName);
 const assetBody = `export const filler = ${JSON.stringify("x".repeat(50)).repeat(200)};\n`;
-mkdirSync(assetsDir, { recursive: true });
-writeFileSync(assetPath, assetBody);
-writeFileSync(`${assetPath}.gz`, gzipSync(Buffer.from(assetBody), { level: 9 }));
 
-const { handler } = await import("../server/index.ts");
+const { handler, serveReleasesFrom } = await import("../server/index.ts");
+serveReleasesFrom(
+  releaseFiles({
+    [`assets/${assetName}`]: assetBody,
+    [`assets/${assetName}.gz`]: gzipSync(Buffer.from(assetBody), { level: 9 }),
+  }),
+);
 const surface = createServer((req, res) => void handler(req, res));
 await new Promise<void>((r) => surface.listen(0, r));
 const base = `http://localhost:${(surface.address() as AddressInfo).port}`;
@@ -51,8 +50,6 @@ const base = `http://localhost:${(surface.address() as AddressInfo).port}`;
 test.after(() => {
   surface.close();
   core.close();
-  rmSync(assetPath, { force: true });
-  rmSync(`${assetPath}.gz`, { force: true });
 });
 
 function identityHeaders(): Record<string, string> {
