@@ -43,9 +43,11 @@ test("an unbound non-owner reads the boot tenant only when exactly one tenant ex
     const [me] = await app.q("SELECT rolbypassrls AS bypass FROM pg_roles WHERE rolname = current_user");
     assert.equal(me?.bypass, false);
     await assert.rejects(app.q("SELECT id FROM tenants"), { code: "42501", message: /No tenant is bound/ });
-    assert.equal(await bootTenantReader(app)(), undefined);
+    const read = bootTenantReader(app);
+    assert.equal(await read(), undefined);
     const only = randomUUID();
     await owner.query("INSERT INTO tenants(id) VALUES ($1)", [only]);
+    assert.equal(await read(), only);
     assert.equal(await bootTenantReader(app)(), only);
     await owner.query("INSERT INTO tenants(id) VALUES ($1)", [randomUUID()]);
     assert.equal(await bootTenantReader(app)(), undefined);
