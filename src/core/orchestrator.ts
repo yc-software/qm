@@ -1935,10 +1935,24 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           await Promise.all(pendingScreenRequests.splice(0).map((rec) => recordScreenRequest(rec)));
           return true;
         });
-        const [memoryWindow, memoryView] = await Promise.all([
-          deps.sessions.getContextWindow(session.id),
-          context.memorySnapshot(),
-        ]);
+        const contextWindow = deps.sessions.getContextWindow(session.id);
+        const snapshot = context.memorySnapshot();
+        const recallOutcomes: MemoryProviderOutcome[] = [];
+        const loadedFacts = snapshot.then((view) => view.loaded);
+        void loadedFacts.catch(() => undefined);
+        const recallFor = (history: Item[]) =>
+          context.recallMemory(
+            memoryRecallQuery(input.text, history),
+            loadedFacts,
+            (outcome) => void recallOutcomes.push(outcome),
+          );
+        const importsOverheard = (!input.envelopeWrapped || humanInput) && !!input.overheard?.length;
+        const earlyRecall =
+          input.approval || importsOverheard || ambientTurn || input.cronScript
+            ? undefined
+            : contextWindow.then((window) => recallFor(filterHistory(forModelContext(window.items))));
+        void earlyRecall?.catch(() => undefined);
+        const [memoryWindow, memoryView] = await Promise.all([contextWindow, snapshot]);
         let historyAppended = input.approval !== undefined;
         const captureDependencies = () => [
           ...memoryView.facts,
@@ -2715,7 +2729,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         );
 
         const importedOverheard: OverheardEntryPayload[] = [];
-        if ((!input.envelopeWrapped || humanInput) && input.overheard?.length) {
+        if (importsOverheard) {
           const toImport = await transcripts
             .forRender(session.id)
             .then((read) => selectOverheardToImport(input.overheard!, recordedMessageTimestamps(read.items)))
@@ -2736,12 +2750,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const rawEntries = (await turnWindow()).items;
         const priorTurns = input.priorTurns;
         let visibleHistory = filterHistory(forModelContext(rawEntries));
-        const recallOutcomes: MemoryProviderOutcome[] = [];
-        const recalled = await context.recallMemory(
-          memoryRecallQuery(input.text, visibleHistory),
-          memoryView.loaded,
-          (outcome) => void recallOutcomes.push(outcome),
-        );
+        const recalled = await (earlyRecall ?? recallFor(visibleHistory));
         const partial = isRetry ? (recordedTurn ?? findTrailingPartialTurn(visibleHistory, input.runId)) : null;
         const reconciled = partial ? reconcile(visibleHistory, partial, input.resumeCause) : null;
         if (reconciled?.settleItems.length) {

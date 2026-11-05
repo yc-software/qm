@@ -43,10 +43,12 @@ export function createSemanticMemoryService(
       ...notebook,
       withDisclosure: (access) => view(disclosedMemory(notebook, access)),
       async recall(scope: string, context: MemoryRecallContext = {}): Promise<MemoryCandidate[]> {
-        const facts = context.disclosedFacts?.get(scope) ?? (await notebook.facts?.(scope)) ?? [];
+        const pending = index && context.query?.trim() ? queryFor(context) : undefined;
+        void pending?.catch(() => undefined);
+        const facts = (await context.disclosedFacts)?.get(scope) ?? (await notebook.facts?.(scope)) ?? [];
         if (!facts.length) return [];
         try {
-          const query = index && context.query?.trim() ? await queryFor(context) : undefined;
+          const query = await pending;
           if (query && index) {
             const byId = new Map(facts.map((fact) => [fact.id, fact]));
             const matches = await index.search({
