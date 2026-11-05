@@ -56,7 +56,7 @@ import type {
   PendingApprovalRecord,
 } from "../types.ts";
 import { scopeId as toScopeId, personalScope } from "../types.ts";
-import { desktopClientForTurn, isSessionTurn } from "./turn-origin.ts";
+import { desktopClientForTurn, introducesUser, isSessionTurn } from "./turn-origin.ts";
 import { resolveTurnFastMode, turnRuntimePurpose } from "./turn-options.ts";
 import { orgId } from "../config.ts";
 import { deriveTurnOutcome, approvalBlocksInput } from "./turn-outcome.ts";
@@ -243,6 +243,15 @@ import { createAttachStaging } from "./orchestrator/attach-tool.ts";
 import { reconcileMessageRevisions, revisionAnchorAt } from "../slack/message-revisions.ts";
 import { type ProviderKeys } from "../model/model-runtime.ts";
 import { surfaceToolPrompt } from "../surfaces/registry.ts";
+
+async function recordUser(users: OrchestratorDeps["users"], id: string, botActor: boolean | undefined): Promise<void> {
+  try {
+    await users.record({ id, source: "turn", at: Date.now() });
+    if (botActor) await users.markApps([id]);
+  } catch (err) {
+    reportFailure("users: record user", err);
+  }
+}
 
 export { egressClaimAllowingControlPlane, filterConnectorSkills } from "./orchestrator/turn-helpers.ts";
 export type { Orchestrator, OrchestratorDeps, OrchestratorInput, SurfaceContextPuller } from "./orchestrator/types.ts";
@@ -1226,6 +1235,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         (!!input.swarmGoal || !!openGoal((await deps.sessions.goals([session.id])).get(session.id)));
       if (!input.sessionParticipantIds?.length && !automatedTurn)
         await deps.sessions.addParticipant(session.id, actor.id);
+      if (introducesUser(input.origin, input)) await recordUser(deps.users, actor.id, input.botActor);
 
       const delegatedTask = !!input.sessionSenderId && session.parentSessionId === input.sessionSenderId;
       const syntheticInput =
@@ -3261,6 +3271,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   };
                 if (screen === "unscreened") said = `${unscreenedNotice("mid-turn message")}\n${said}`;
               }
+              if (request && introducesUser(speaker.origin, request))
+                await recordUser(deps.users, author, request.botActor);
               const refreshedInbox =
                 input.surface === "web" &&
                 conversation.kind === "dm" &&

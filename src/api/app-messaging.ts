@@ -440,6 +440,9 @@ export function createMessagingMethods(
     async upsertDirectory(members, syncedAt) {
       const previous = await deps.directory.list();
       if (!(await deps.directory.replace(members, syncedAt))) return false;
+      const apps = members.filter((m) => m.isBot).map((m) => m.principalId);
+      if (apps.length && deps.admin)
+        await deps.admin.users.markApps(apps).catch(reportFailureAs("users: mark apps", 0));
       const present = members.filter((m) => m.type === "internal").map((m) => m.principalId);
       const presentSet = new Set(present);
       const removed = previous.map((m) => m.principalId).filter((id) => !presentSet.has(id));
