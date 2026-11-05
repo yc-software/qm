@@ -1,6 +1,6 @@
 # Memory providers
 
-QM keeps its built-in notebook memory unless `MEMORY_PROVIDER_CONFIG` defines a scope-aware provider router. Routes independently select where each scope recalls from, accepts explicit writes, and receives automatic post-turn capture.
+QM keeps its built-in notebook memory unless `MEMORY_PROVIDER_CONFIG` defines a scope-aware provider router. Routes independently select where each scope recalls from, accepts explicit writes, and receives automatic post-turn capture. Org admins can also bind members to personal-memory brains at runtime through the [memory registry](#memory-registry).
 
 ## Prompt memory
 
