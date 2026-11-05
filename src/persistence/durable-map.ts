@@ -138,6 +138,10 @@ export function durableMapMigrations(table: string): PgMigrationDefinition[] {
   return mapMigrations(table, [], durableMapTenancy(table), []);
 }
 
+export function processMapMigrations(table: string): PgMigrationDefinition[] {
+  return mapMigrations(table, [], [], [processLevelMap(table)]);
+}
+
 export function createPostgresMap<T>(
   pg: PgPool,
   table: string,
