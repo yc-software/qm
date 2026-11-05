@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import type { IncomingMessage } from "node:http";
 import { after, before, describe, it } from "./support/unbound-test.ts";
 import { EMPTY_TENANT, inboundKey, withInboundTenant } from "../src/api/inbound-tenant.ts";
-import { boundTenant, withTenant } from "../src/tenants/context.ts";
+import { boundTenant, withoutTenant, withTenant } from "../src/tenants/context.ts";
 import { tenantLookup, type TenantKey, type TenantLookup } from "../src/tenants/lookup.ts";
 import { twoTenants, type TwoTenants } from "./support/two-tenants.ts";
 
@@ -80,7 +80,7 @@ describe("inbound tenant lookups", () => {
       assert.equal(await row("deployments", "dep-1"), b);
       assert.equal(await row("deployments", "dep-0"), null);
     });
-    await assert.rejects(row("webhooks", "webhooks-1"), /No tenant is bound/);
+    await withoutTenant(() => assert.rejects(row("webhooks", "webhooks-1"), /No tenant is bound/));
   });
 
   it("finds every tenant watching a Gmail mailbox", async () => {

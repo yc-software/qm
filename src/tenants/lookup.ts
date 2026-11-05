@@ -42,9 +42,19 @@ export const TENANT_LOOKUPS: PgMigrationDefinition = {
   ],
 };
 
+export const SLACK_TENANTS: PgMigrationDefinition = {
+  id: "tenancy/lookups/0002-slack-tenants",
+  statements: [
+    `CREATE OR REPLACE FUNCTION qm_tenants_with_slack() RETURNS SETOF uuid
+      LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp
+      AS $lookup$ SELECT DISTINCT tenant_id FROM slack_installation WHERE ${ACTIVE} $lookup$`,
+  ],
+};
+
 export interface TenantLookup {
   tenantFor(key: TenantKey, value: string | undefined): Promise<string | undefined>;
   gmailTenants(email: string): Promise<string[]>;
+  slackTenants(): Promise<string[]>;
 }
 
 export function tenantLookup(pg: Pick<PgPool, "q">): TenantLookup {
@@ -57,6 +67,10 @@ export function tenantLookup(pg: Pick<PgPool, "q">): TenantLookup {
     },
     async gmailTenants(email) {
       const rows = await pg.q("SELECT tenant::text AS tenant FROM qm_tenants_for_gmail($1) tenant", [email]);
+      return rows.map((row) => String(row.tenant));
+    },
+    async slackTenants() {
+      const rows = await pg.q("SELECT tenant::text AS tenant FROM qm_tenants_with_slack() tenant");
       return rows.map((row) => String(row.tenant));
     },
   };

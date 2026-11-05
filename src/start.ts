@@ -9,6 +9,7 @@ import { dockerDaemonFailure } from "./deploy/docker-deploy-provider.ts";
 import { errMessage, reportFailureAs } from "./util/errors.ts";
 import { slackAccountConfigsFromEnv, slackPluginConfigFromEnv, startSlackPlugin } from "./slack/index.ts";
 import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
+import { createTenantSlackRuntimes } from "./surfaces/slack-tenants.ts";
 import { installCronQueue } from "./cron/job-queue.ts";
 import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
 import { bindBootTenant, inBootTenant } from "./tenants/boot.ts";
@@ -86,31 +87,39 @@ export async function startQm(
   if (!config.backgroundWorkEnabled)
     console.log("[qm] background work disabled; scheduler and runtime loops will not start");
 
-  const slackRuntime = createSlackRuntimeReconciler({
-    startPaused: true,
-    load: async () => {
-      const status = await built.slackInstallation.status();
-      const stored = await built.slackInstallation.get();
-      if (stored) {
-        if (stored.installId && !managedSlack) return null;
-        const dynamic = slackPluginConfigFromEnv(
-          {
-            ...env,
-            SLACK_BOT_TOKEN: stored.botToken,
-            SLACK_APP_TOKEN: stored.appToken,
-            SLACK_EVENTS_MODE: stored.appToken ? "socket" : env.SLACK_EVENTS_MODE,
-          },
-          stored.installId && managedSlack ? (staging) => managedSlack.receiver(stored.installId!, staging) : undefined,
-        );
-        if (dynamic && stored.installId) dynamic.installationId = stored.installId;
-        return dynamic ? { version: stored.version, config: dynamic } : null;
-      }
-      if (status.managed) return null;
-      if (slackConfig) return { version: "environment", config: slackConfig };
-      return null;
-    },
-    startPlugin: (desired) => startSlackPlugin(desired, built.slackCore),
-    onError: reportFailureAs("slack plugin reconciliation", undefined),
+  const slackRuntimeFor = (slackTenant: string) =>
+    createSlackRuntimeReconciler({
+      startPaused: true,
+      load: async () => {
+        const status = await built.slackInstallation.status();
+        const stored = await built.slackInstallation.get();
+        if (stored) {
+          if (stored.installId && !managedSlack) return null;
+          const dynamic = slackPluginConfigFromEnv(
+            {
+              ...env,
+              SLACK_BOT_TOKEN: stored.botToken,
+              SLACK_APP_TOKEN: stored.appToken,
+              SLACK_EVENTS_MODE: stored.appToken ? "socket" : env.SLACK_EVENTS_MODE,
+            },
+            stored.installId && managedSlack
+              ? (staging) => managedSlack.receiver(stored.installId!, staging)
+              : undefined,
+          );
+          if (dynamic && stored.installId) dynamic.installationId = stored.installId;
+          return dynamic ? { version: stored.version, config: dynamic } : null;
+        }
+        if (status.managed) return null;
+        if (slackConfig && slackTenant === tenant) return { version: "environment", config: slackConfig };
+        return null;
+      },
+      startPlugin: (desired) => startSlackPlugin(desired, built.slackCore),
+      onError: reportFailureAs("slack plugin reconciliation", undefined, `tenant=${slackTenant}`),
+    });
+  const slackRuntime = createTenantSlackRuntimes({
+    runtimeFor: slackRuntimeFor,
+    tenants: async () => [tenant, ...(await built.sessions.tenantLookup.slackTenants())],
+    onError: reportFailureAs("slack tenant discovery", undefined),
   });
 
   const slackAccountRuntimes = slackAccountConfigsFromEnv(env).map((account) =>

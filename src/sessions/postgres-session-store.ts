@@ -24,7 +24,7 @@ import { LIST_COLUMNS, rowToParticipantSession, rowToSession } from "./session-r
 import { cronIdOf, sessionOrigin } from "./session-store.ts";
 import { TENANT } from "./items.ts";
 import { bootTenantReader } from "../tenants/boot.ts";
-import { TENANT_LOOKUPS, tenantLookup } from "../tenants/lookup.ts";
+import { SLACK_TENANTS, TENANT_LOOKUPS, tenantLookup } from "../tenants/lookup.ts";
 
 export function createPostgresSessionStore(connectionString: string, opts: StoreOptions = {}): SessionStore {
   const now = opts.now ?? (() => Date.now());
@@ -44,7 +44,12 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     return rows.map((r) => ({ id: r.id as string, rootId: r.root_id as string, threadRef: r.thread_ref as string }));
   };
 
-  const db = createPgPool(connectionString, [...DIRECTORY_MIGRATIONS, ...SESSION_MIGRATIONS, TENANT_LOOKUPS]);
+  const db = createPgPool(connectionString, [
+    ...DIRECTORY_MIGRATIONS,
+    ...SESSION_MIGRATIONS,
+    TENANT_LOOKUPS,
+    SLACK_TENANTS,
+  ]);
   const { pool, q } = db;
 
   return {
