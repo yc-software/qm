@@ -403,11 +403,12 @@ export function createAppHelpers(deps: AppDeps, app: App) {
       scopeId("org", orgIdOf()),
     ]);
     try {
-      const [sessionScopes, channels, groups, projects] = await Promise.all([
+      const [sessionScopes, channels, groups, projects, personas] = await Promise.all([
         deps.sessions ? scopesForViewer(principalId) : Promise.resolve([]),
         deps.directory ? deps.directory.listChannelsFor(principalId) : Promise.resolve([]),
         deps.directory?.listGroupsFor?.(principalId) ?? Promise.resolve([]),
         projectsForViewer(principalId),
+        deps.personas?.list(principalId),
       ]);
       const historical = new Set(sessionScopes.map((scope) => scope.scopeId));
       for (const channel of channels) {
@@ -416,6 +417,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
       }
       for (const groupId of groups) scopes.add(scopeId("group", groupId));
       for (const project of projects) scopes.add(project.scopeId);
+      if (personas?.status === "ok") for (const persona of personas.value) scopes.add(scopeId("persona", persona.id));
     } catch (error) {
       swallow("app: current resource scopes for viewer", error);
     }

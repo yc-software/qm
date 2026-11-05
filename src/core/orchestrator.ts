@@ -946,6 +946,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const persona = personaTurn && typeof personaTurn === "object" ? personaTurn : null;
       if (persona) resolution.readOnlyScopeIds.push(persona.scope);
       const credentialScopes = persona ? [scopeId, persona.scope] : [scopeId];
+      const scopeKeychainGrants = async () => {
+        const rows = (
+          await Promise.all(
+            credentialScopes.map(async (grantScope) =>
+              ((await deps.keychain?.grantsForScope(grantScope)) ?? []).map((row) => ({ ...row, grantScope })),
+            ),
+          )
+        ).flat();
+        return rows.filter((row, i) => rows.findIndex((r) => r.credential.id === row.credential.id) === i);
+      };
 
       const context = await resolveTurnContext({
         external,
@@ -1442,27 +1452,26 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const registerKeychainCredentials = async (addCredential: typeof addCredentialToCatalog): Promise<void> => {
         if (external || strictReadOnly || !deps.keychain) return;
         const keychain = deps.keychain;
-        for (const grantScope of credentialScopes)
-          for (const { grant, credential } of await keychain.grantsForScope(grantScope)) {
-            if (credential.kind === "broker" || isBackendCredential(credential)) continue;
-            addCredential(
-              {
-                handle: credentialHandle(credential),
-                resolve: async () => {
-                  const prepared = await keychain.prepareMaterialize(grant.id, grantScope, actor.id);
-                  return {
-                    ...resolvedCredential(prepared.materialized, samePerson(credential.ownerId, actor.id)),
-                    commit: prepared.commit,
-                    singleUse: prepared.singleUse,
-                  };
-                },
+        for (const { grant, credential, grantScope } of await scopeKeychainGrants()) {
+          if (credential.kind === "broker" || isBackendCredential(credential)) continue;
+          addCredential(
+            {
+              handle: credentialHandle(credential),
+              resolve: async () => {
+                const prepared = await keychain.prepareMaterialize(grant.id, grantScope, actor.id);
+                return {
+                  ...resolvedCredential(prepared.materialized, samePerson(credential.ownerId, actor.id)),
+                  commit: prepared.commit,
+                  singleUse: prepared.singleUse,
+                };
               },
-              credential.service,
-              credential.id,
-              credential.ownerId,
-              credential.id,
-            );
-          }
+            },
+            credential.service,
+            credential.id,
+            credential.ownerId,
+            credential.id,
+          );
+        }
         if (ownCredentialsAllowed) {
           for (const credential of await keychain.listByOwner(actor.id)) {
             if (credential.kind === "broker" || isBackendCredential(credential)) continue;
@@ -2265,14 +2274,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           const [entriesByOwner, connectorsByOwner, scopeGrants, scopeAsks] = await Promise.all([
             !external ? (deps.keychain?.listByOwners(members.map((m) => m.id)) ?? new Map()) : new Map(),
             !external ? (deps.keychain?.listConnectorsByOwners(members.map((m) => m.id)) ?? new Map()) : new Map(),
-            !external
-              ? Promise.all(credentialScopes.map((grantScope) => deps.keychain?.grantsForScope(grantScope) ?? [])).then(
-                  (lists) =>
-                    lists
-                      .flat()
-                      .filter((row, i, all) => all.findIndex((r) => r.credential.id === row.credential.id) === i),
-                )
-              : [],
+            !external ? scopeKeychainGrants() : [],
             !external ? (deps.keychain?.listAsks({ requesterScopeId: scopeId }) ?? []) : [],
           ]);
           const keychainBlock = renderKeychainManifest({
