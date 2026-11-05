@@ -174,6 +174,26 @@ async function resolveDirectory(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { matches });
 }
 
+const CHANNEL_MATCH_LIMIT = 20;
+
+async function channelsFor(ctx: ApiCtx): Promise<void> {
+  const principalId = (ctx.url.searchParams.get("principalId") ?? "").trim();
+  if (!principalId) return sendJson(ctx.res, 400, { error: "bad_request", message: "principalId required" });
+  const term = (ctx.url.searchParams.get("q") ?? "").trim().replace(/^#/, "").toLowerCase();
+  const startsWith = (name: string) => (name.toLowerCase().startsWith(term) ? 0 : 1);
+  const channels = (await ctx.app.directoryChannelsFor(principalId))
+    .filter((channel) => channel.name.toLowerCase().includes(term))
+    .sort((a, b) => startsWith(a.name) - startsWith(b.name))
+    .slice(0, CHANNEL_MATCH_LIMIT)
+    .map((channel) => ({
+      scopeId: `channel:${channel.channelId}`,
+      channelId: channel.channelId,
+      name: channel.name,
+      isPrivate: channel.isPrivate === true,
+    }));
+  return sendJson(ctx.res, 200, { channels });
+}
+
 async function channelMembership(ctx: ApiCtx): Promise<void> {
   return sendJson(ctx.res, 200, {
     member: await ctx.app.channelMember(ctx.params.channelId!, ctx.params.principalId!),
@@ -183,6 +203,7 @@ async function channelMembership(ctx: ApiCtx): Promise<void> {
 export const directoryRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/principals/:id/canonical", auth: "source", handle: canonicalPrincipal },
   { method: "GET", path: "/v1/directory/meta", auth: "source", handle: directoryMeta },
+  { method: "GET", path: "/v1/directory/channels", auth: "source", handle: channelsFor },
   {
     method: "GET",
     path: "/v1/directory/channels/:channelId/members/:principalId",

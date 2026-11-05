@@ -544,6 +544,7 @@ export interface App {
   ambientJudge?(systemPrompt: string, prompt: string): Promise<string | undefined>;
   directoryMembers(): Promise<DirectoryMember[]>;
   directoryChannels(): Promise<DirectoryChannel[]>;
+  directoryChannelsFor(principalId: string): Promise<DirectoryChannel[]>;
   channelMember(channelId: string, principalId: string): Promise<boolean>;
   channelVisibleTo(actorId: string, channelId: string, isPrivate?: boolean): Promise<boolean>;
   recordPrincipalDelivery(deliveryId: string, recipientThreadRef: string): Promise<void>;

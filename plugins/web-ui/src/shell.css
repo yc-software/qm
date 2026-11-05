@@ -13258,6 +13258,17 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
 .persona-share-typed input {
   font-size: var(--font-13);
 }
+.persona-channel-glyph {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--muted);
+  color: var(--muted-foreground);
+}
 .persona-share-channel {
   margin-bottom: 8px;
 }

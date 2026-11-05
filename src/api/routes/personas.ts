@@ -48,7 +48,20 @@ async function getPersona(ctx: ApiCtx): Promise<void> {
   const personas = service(ctx);
   const principalId = personas && principalOf(ctx, "query");
   if (!personas || !principalId) return;
-  respond(ctx, await personas.detail(principalId, ctx.params.id!), "persona");
+  const result = await personas.detail(principalId, ctx.params.id!);
+  if (result.status !== "ok") return respond(ctx, result, "persona");
+  const access = await Promise.all(
+    result.value.access.map(async (grant) => ({ ...grant, label: await granteeLabel(ctx, grant.scopeId) })),
+  );
+  respond(ctx, { status: "ok", value: { ...result.value, access } }, "persona");
+}
+
+async function granteeLabel(ctx: ApiCtx, scopeId: string): Promise<string | undefined> {
+  const [kind, ...rest] = scopeId.split(":");
+  const ref = rest.join(":");
+  if (kind === "channel") return ctx.app.channelName(ref).catch(() => undefined);
+  if (kind === "personal") return (await ctx.app.directoryMember(ref).catch(() => null))?.displayName || undefined;
+  return undefined;
 }
 
 async function createPersona(ctx: ApiCtx): Promise<void> {

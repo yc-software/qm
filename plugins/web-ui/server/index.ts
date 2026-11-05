@@ -1786,6 +1786,18 @@ const apiRoutes: readonly WebRoute[] = [
   },
   {
     method: "GET",
+    path: "/api/directory/channels",
+    handle: (c) => {
+      const q = (c.url.searchParams.get("q") ?? "").trim().slice(0, 80);
+      return relayCore(
+        c.res,
+        "GET",
+        `/v1/directory/channels?principalId=${encodeURIComponent(c.user)}&q=${encodeURIComponent(q)}`,
+      );
+    },
+  },
+  {
+    method: "GET",
     path: "/api/directory/resolve",
     handle: async (c) => {
       const { res, url } = c;

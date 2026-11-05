@@ -1,12 +1,12 @@
 import { html, nothing, render, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
-import { Bot, GitFork, MessageSquare, Pencil, Search, Share2, Trash2, X } from "lucide";
+import { Bot, GitFork, Hash, Lock, MessageSquare, Pencil, Plus, Search, Share2, Trash2, X } from "lucide";
 import { api, ApiError, type CoreSession, type ProjectIcon } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { icon } from "./icons";
 import { listBackLink, listPageTpl } from "./list-page";
 import { appState } from "./shell-state";
-import { contextsState, ensureContexts, personalScopeId, scopeTitle } from "./contexts";
+import { ensureContexts, personalScopeId, scopeTitle } from "./contexts";
 import { openSession, renderList, replacePendingSession, sessionsState } from "./sessions";
 import { switchView } from "./shell";
 import { openProjectIconPicker, projectIconTpl } from "./project-icon";
@@ -40,6 +40,7 @@ interface PersonaGrant {
   role: PersonaRole;
   grantedBy?: string;
   grantedAt?: number | string;
+  label?: string;
 }
 
 interface PersonaDetail extends PersonaView {
@@ -342,13 +343,18 @@ function granteeLabel(scopeId: string, names: ReadonlyMap<string, string> = new 
   return scopeId;
 }
 
+function grantLabel(grant: PersonaGrant): string {
+  if (grant.scopeId === `personal:${appState.me?.user ?? ""}`) return "You";
+  return grant.label ?? granteeLabel(grant.scopeId);
+}
+
 function accessListTpl(access: readonly PersonaGrant[]): TemplateResult {
   return html`<div class="project-member-list persona-access-list">
     ${access.map(
       (grant) =>
         html`<div class="permission-row">
-          ${avatarTpl({ key: grant.scopeId, name: granteeLabel(grant.scopeId) })}
-          <span class="permission-person-label" dir="auto">${granteeLabel(grant.scopeId)}</span>
+          ${avatarTpl({ key: grant.scopeId, name: grantLabel(grant) })}
+          <span class="permission-person-label" dir="auto">${grantLabel(grant)}</span>
           <span class="permission-owner">${ROLE_LABELS[grant.role]}</span>
         </div>`,
     )}
@@ -385,6 +391,13 @@ function personaFactsTpl(persona: PersonaDetail): TemplateResult {
       ${accessListTpl(persona.access)}
     </div>
   `;
+}
+
+interface ChannelMatch {
+  scopeId: string;
+  channelId: string;
+  name: string;
+  isPrivate: boolean;
 }
 
 interface FormState {
@@ -571,10 +584,13 @@ function openPersonaShare(persona: PersonaDetail, onSaved: () => void): void {
     scopeId,
     role,
   }));
-  const names = new Map<string, string>();
+  const names = new Map<string, string>(
+    persona.access.flatMap((grant) => (grant.label ? [[grant.scopeId, grantLabel(grant)] as const] : [])),
+  );
   let kind: GranteeKind = "person";
   let search = "";
   let matches: DirectoryMatch[] = [];
+  let channelMatches: ChannelMatch[] = [];
   let searching = false;
   let searched = false;
   let searchSeq = 0;
@@ -582,7 +598,6 @@ function openPersonaShare(persona: PersonaDetail, onSaved: () => void): void {
   let typed = "";
   let busyNow = false;
   let error = "";
-  const channels = () => contextsState.list.filter((context) => context.kind === "channel");
   const close = () => {
     clearTimeout(timer);
     searchSeq++;
@@ -602,6 +617,7 @@ function openPersonaShare(persona: PersonaDetail, onSaved: () => void): void {
     search = "";
     typed = "";
     matches = [];
+    channelMatches = [];
     searched = false;
     error = "";
     draw();
@@ -620,7 +636,7 @@ function openPersonaShare(persona: PersonaDetail, onSaved: () => void): void {
   const runSearch = async () => {
     const seq = ++searchSeq;
     const term = search.trim();
-    if (!term) {
+    if (!term && kind !== "channel") {
       matches = [];
       searched = false;
       searching = false;
@@ -630,6 +646,15 @@ function openPersonaShare(persona: PersonaDetail, onSaved: () => void): void {
     searching = true;
     draw();
     try {
+      if (kind === "channel") {
+        const r = await api<{ channels?: ChannelMatch[] }>(`/api/directory/channels?q=${encodeURIComponent(term)}`);
+        if (seq !== searchSeq || !dialog.isConnected) return;
+        channelMatches = (r.channels ?? [])
+          .filter((channel) => !grants.some((grant) => grant.scopeId === channel.scopeId))
+          .slice(0, 8);
+        searched = true;
+        return;
+      }
       const r = await api<{ matches?: DirectoryMatch[] }>(`/api/directory/resolve?q=${encodeURIComponent(term)}`);
       if (seq !== searchSeq || !dialog.isConnected) return;
       matches = (r.matches ?? [])
@@ -729,31 +754,49 @@ function openPersonaShare(persona: PersonaDetail, onSaved: () => void): void {
           Add ${granteeLabel(orgScope).toLowerCase()}
         </button>
       </div>`;
-    const known = channels().filter((context) => !grants.some((grant) => grant.scopeId === context.scopeId));
-    return html`
-      ${
-        known.length
-          ? html`<fieldset class="permission-control persona-share-channel">
-              ${menuSelect({
-                value: null,
-                ariaLabel: "Add a Slack channel",
-                options: [
-                  { value: null, label: "Choose a channel" },
-                  ...known.map((context) => ({
-                    value: context.scopeId,
-                    label: scopeTitle(context.scopeId, context.name),
-                  })),
-                ],
-                onSelect: (value) => {
-                  if (value) add(value);
-                },
-              })}
-            </fieldset>`
-          : nothing
-      }
-      ${typedAdd("channel", "Slack channel ID, like C0123ABCD")}
-      <p class="permission-note">Channel members can chat with ${persona.name} only in that channel.</p>
-    `;
+    return html`<form class="project-member-search" @submit=${(e: SubmitEvent) => e.preventDefault()}>
+        <div class="project-member-search-row">
+          ${icon(Hash, 16)}<input
+            aria-label="Add a Slack channel"
+            placeholder="Find a Slack channel by name"
+            type="search"
+            autocomplete="off"
+            .value=${live(search)}
+            @focus=${() => {
+              if (!searched && !searching) void runSearch();
+            }}
+            @input=${(e: Event) => {
+              search = (e.currentTarget as HTMLInputElement).value;
+              searchSeq++;
+              channelMatches = [];
+              searched = false;
+              clearTimeout(timer);
+              timer = setTimeout(() => void runSearch(), 200);
+            }}
+          />
+        </div>
+        <div class="project-member-results">
+          ${channelMatches.map(
+            (channel) =>
+              html`<button
+                class="project-member-result"
+                type="button"
+                ?disabled=${busyNow}
+                @click=${() => add(channel.scopeId, `#${channel.name}`)}
+              >
+                <span class="persona-channel-glyph">${icon(channel.isPrivate ? Lock : Hash, 15)}</span>
+                <span class="project-member-name" dir="auto">${channel.name}</span>${icon(Plus, 15)}
+              </button>`,
+          )}
+        </div>
+        ${searching ? html`<p class="permission-note" role="status">Searching…</p>` : nothing}
+        ${
+          !searching && searched && !channelMatches.length
+            ? html`<p class="permission-note">No channels you're in match that.</p>`
+            : nothing
+        }
+      </form>
+      <p class="permission-note">Channel members can chat with ${persona.name} only in that channel.</p> `;
   };
   const kinds: Array<{ value: GranteeKind; label: string }> = [
     { value: "person", label: "Person" },
@@ -782,6 +825,13 @@ function openPersonaShare(persona: PersonaDetail, onSaved: () => void): void {
                 @click=${() => {
                   kind = option.value;
                   typed = "";
+                  search = "";
+                  searchSeq++;
+                  matches = [];
+                  channelMatches = [];
+                  searched = false;
+                  searching = false;
+                  if (kind === "channel") void runSearch();
                   error = "";
                   draw();
                 }}
