@@ -513,6 +513,14 @@ test("sandbox creation and default routing remain independent", async () => {
   assert.deepEqual(calls, [{ action: "create", input: { backend: "modal", name: "analysis", sandboxId: undefined } }]);
   await call(sandbox, { action: "set_default", sandbox_id: null, purpose: "p" });
   assert.deepEqual(calls[1], { action: "default", input: { backend: undefined, name: undefined, sandboxId: null } });
+  assert.match(
+    textOut(await call(sandbox, { action: "list", sandbox_id: null, backend: "", name: "", purpose: "p" })),
+    /list doesn't take `sandbox_id`, `backend`, `name`; omit them/,
+  );
+  assert.match(
+    textOut(await call(sandbox, { action: "status", sandbox_id: null, purpose: "p" })),
+    /`sandbox_id: null` only clears the default/,
+  );
 });
 
 test("sandbox management preserves approval handling", async () => {
@@ -1814,6 +1822,19 @@ test("background per-action validation returns a crisp [error] instead of throwi
     /\[error\].*requires `data`/,
   );
   assert.match(textOf(await call(background, { action: "send_input", data: "x" })), /\[error\].*requires `process_id`/);
+  assert.match(textOf(await call(background, { action: "start" })), /unknown action `start`/);
+  const watched = textOf(
+    await call(background, {
+      action: "watch",
+      process_id: "bg-1",
+      data: "",
+      monitor_id: "",
+      wait_seconds: 0,
+      max_bytes: 65536,
+      signal: "TERM",
+    }),
+  );
+  assert.match(watched, /watch doesn't take `data`, `monitor_id`, `wait_seconds`, `max_bytes`, `signal`; omit them/);
 });
 
 test("background surfaces a policy denial/approval as a tool_result, not a throw", async () => {
