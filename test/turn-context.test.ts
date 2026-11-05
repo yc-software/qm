@@ -1,6 +1,6 @@
 import { createAclStore } from "../src/acl/acl-store.ts";
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "./support/tenant-test.ts";
 import { resolveTurnContext } from "../src/resolution/turn-context.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import type { Resolution, Session } from "../src/types.ts";

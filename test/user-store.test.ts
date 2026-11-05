@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test } from "./support/tenant-test.ts";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { foldPrincipalId, installPrincipalLinks } from "../src/directory/person.ts";

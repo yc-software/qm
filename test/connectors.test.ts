@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test } from "./support/tenant-test.ts";
 import assert from "node:assert/strict";
 import { envKey, withOperatorTokenFallback } from "../src/credentials/connector-token.ts";
 import { createEnvSecretSource } from "../src/credentials/secret-source.ts";

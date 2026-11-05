@@ -1,10 +1,11 @@
-import { test, after } from "node:test";
+import { test, after } from "./support/tenant-test.ts";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { migrateRegisteredPgSchemas } from "../src/persistence/pg-pool.ts";
+import { schemaUrl, seedSchemaTenant } from "./support/test-tenant.ts";
 
 const BASE = process.env.DATABASE_URL;
 const skip = BASE ? false : "set DATABASE_URL (a Postgres) to run the ACL file-ID migration test";
@@ -22,12 +23,11 @@ test("file grants move from owner paths to enabled Files record IDs", { skip }, 
   const pg = (await import("pg")).default;
   const admin = new pg.Pool({ connectionString: BASE });
   await admin.query(`CREATE SCHEMA ${schema}`);
-  const url = new URL(BASE!);
-  url.searchParams.set("options", `-c search_path=${schema}`);
-  const db = url.toString();
+  const db = schemaUrl(BASE!, schema);
   const grants = createPostgresGrantStore(db);
   createPostgresFileArtifactStore(db, createMemoryDurableByteStore());
   await migrateRegisteredPgSchemas(db);
+  await seedSchemaTenant(db);
   const pool = new pg.Pool({ connectionString: db });
   try {
     await pool.query("DELETE FROM qm_schema_migrations WHERE id = 'acl/grants/0003-file-ids'");

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test } from "./support/tenant-test.ts";
 import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
 import { sortLedgerItems } from "../src/loops/ledger-view.ts";
 import { planTriage, removeFromGroup, settleGroup, triageWork, workOrder } from "../src/loops/triage.ts";

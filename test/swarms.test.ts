@@ -1,5 +1,5 @@
 import { SWARM_DEFAULTS } from "../src/swarms/swarm-settings.ts";
-import { test, type TestContext } from "node:test";
+import { test, type TestContext } from "./support/tenant-test.ts";
 import assert from "node:assert/strict";
 import { createSwarmService, type SwarmCaller } from "../src/swarms/swarm-service.ts";
 import { SWARM_LIMITS } from "../src/swarms/swarm-store.ts";

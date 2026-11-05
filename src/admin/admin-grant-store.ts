@@ -46,7 +46,7 @@ export function createAdminGrantStore(
     const state = seeding();
     if (!state.done) {
       const done = (async () => {
-        if (!seeds.length || (await opts.seedTenant?.()) !== currentTenant()) return;
+        if (!seeds.length || (opts.seedTenant && (await opts.seedTenant()) !== currentTenant())) return;
         if ((await persist.all()).length > 0) return;
         await opts.beforeSeed?.(seeds);
         for (const g of seeds) await persist.put({ grantedBy: "system", createdAt: 0, ...g });

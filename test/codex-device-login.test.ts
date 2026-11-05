@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test, type TestContext } from "node:test";
+import { test, type TestContext } from "./support/tenant-test.ts";
 import { createCodexDeviceLogin } from "../src/model/codex-device-login.ts";
 
 function accessToken(accountId: string): string {

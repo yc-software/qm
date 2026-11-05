@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test } from "./support/tenant-test.ts";
 import assert from "node:assert/strict";
 import { scopeId, type ScopeId } from "../src/types.ts";
 import { testConfigStore } from "./support/test-database.ts";

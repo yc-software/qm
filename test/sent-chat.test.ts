@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test } from "./support/tenant-test.ts";
 import { ensureSentChat, loopItemRoutes } from "../src/api/routes/loop-items.ts";
 import { buildGmailReplyMime } from "../src/loops/sources/gmail.ts";
 import { findRoute, run, type ApiCtx } from "../src/api/routes/route.ts";

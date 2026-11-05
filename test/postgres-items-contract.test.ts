@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test } from "./support/tenant-test.ts";
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -16,6 +16,7 @@ import {
 } from "../src/sessions/tool-output.ts";
 import { scopeId } from "../src/types.ts";
 import type { Item, NewItem } from "../src/sessions/items.ts";
+import { schemaUrl, seedSchemaTenant } from "./support/test-tenant.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the items contract test";
@@ -35,8 +36,8 @@ async function withSchema(
   const admin = new pg.Pool({ connectionString: URL });
   const schema = `${prefix}_${randomUUID().replaceAll("-", "")}`;
   await admin.query(`CREATE SCHEMA ${schema}`);
-  const url = new globalThis.URL(URL!);
-  url.searchParams.set("options", `-c search_path=${schema}`);
+  const url = new globalThis.URL(schemaUrl(URL!, schema));
+  await seedSchemaTenant(url.toString());
   const raw = new pg.Pool({ connectionString: url.toString() });
   try {
     await fn({ raw, url: url.toString(), store: createPostgresSessionStore(url.toString()) });

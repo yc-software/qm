@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test } from "./support/tenant-test.ts";
 import { loopItemRoutes } from "../src/api/routes/loop-items.ts";
 import type { LoopServiceDeps } from "../src/api/routes/loops.ts";
 import { findRoute, run, type ApiCtx } from "../src/api/routes/route.ts";

@@ -1,4 +1,4 @@
-import { test, before, after } from "node:test";
+import { test, before, after } from "./support/tenant-test.ts";
 import assert from "node:assert/strict";
 import { setTimeout as sleep } from "node:timers/promises";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
@@ -8,18 +8,18 @@ import { createPostgresAdvisoryLock } from "../src/persistence/advisory-lock.ts"
 import { createSwarmStore, SWARM_LIMITS, type SwarmStorage } from "../src/swarms/swarm-store.ts";
 import { createSwarmService } from "../src/swarms/swarm-service.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
+import { schemaUrl, seedSchemaTenant } from "./support/test-tenant.ts";
 
 const baseUrl = process.env.DATABASE_URL;
 const schema = `swarm_test_${process.pid}`;
-const isolatedUrl = baseUrl ? new URL(baseUrl) : undefined;
-isolatedUrl?.searchParams.set("options", `-c search_path=${schema}`);
-const databaseUrl = isolatedUrl?.toString();
+const databaseUrl = baseUrl ? schemaUrl(baseUrl, schema) : undefined;
 before(async () => {
   if (!baseUrl) return;
   const { default: pg } = await import("pg");
   const pool = new pg.Pool({ connectionString: baseUrl });
   try {
     await pool.query(`CREATE SCHEMA ${schema}`);
+    await seedSchemaTenant(databaseUrl!);
   } finally {
     await pool.end();
   }

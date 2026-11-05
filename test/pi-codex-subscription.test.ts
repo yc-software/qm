@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test } from "./support/tenant-test.ts";
 import { zstdDecompressSync } from "node:zlib";
 import { CODEX_SUBSCRIPTION_PROVIDER, getRequiredModel } from "../src/model/pi-models.ts";
 import { buildModelRuntime } from "../src/model/model-runtime.ts";

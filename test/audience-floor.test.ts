@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test } from "./support/tenant-test.ts";
 import assert from "node:assert/strict";
 import { audienceEgressFloor, audienceDeniedFloor } from "../src/resolution/audience-floor.ts";
 import { scopeId, type Principal } from "../src/types.ts";
