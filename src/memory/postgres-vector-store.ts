@@ -83,7 +83,8 @@ export function createPostgresVectorStore(connectionString: string): MemoryVecto
     },
     {
       id: "memory/vectors/0004-sketch-backfill",
-      prepare: [
+      autocommit: true,
+      statements: [
         `DO $memory_sketch_backfill$
         DECLARE
           batch tid[];
@@ -98,6 +99,9 @@ export function createPostgresVectorStore(connectionString: string): MemoryVecto
           END LOOP;
         END $memory_sketch_backfill$`,
       ],
+    },
+    {
+      id: "memory/vectors/0005-sketch-not-null",
       statements: [
         "SET LOCAL lock_timeout = '3s'",
         "ALTER TABLE memory_fact_vectors ALTER COLUMN embedding_bits SET NOT NULL",
