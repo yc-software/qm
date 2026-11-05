@@ -11,7 +11,7 @@ export interface TenantFeedDeps {
   openFeed(path: string, signal: AbortSignal): Promise<Response>;
   sseEvent(res: ServerResponse, event: string, data: unknown): void;
   ownerOfWebThread(threadRef: string): string | null;
-  noteDeliveries(failure: unknown): void;
+  noteDeliveries(tenant: string | undefined, failure: unknown): void;
   reconnectMs: number;
   giveupMs: number;
 }
@@ -199,14 +199,10 @@ export function createTenantFeeds(deps: TenantFeedDeps) {
 
   return {
     requestTenant: (): string | undefined => portalIdentityTenant(deps.currentToken(), deps.identitySecret),
-    start: () => {
-      const lane = lanes.get("") ?? openLane(undefined);
-      if (!lane.running) runLane(lane);
-    },
     async drain(): Promise<void> {
-      if (!lanes.has("")) openLane(undefined);
-      const failures = await Promise.all([...lanes.values()].map(drainLane));
-      deps.noteDeliveries(failures.find((f) => f !== undefined));
+      await Promise.all(
+        [...lanes.values()].map(async (lane) => deps.noteDeliveries(lane.tenant, await drainLane(lane))),
+      );
     },
     attach(user: string, res: ServerResponse): () => void {
       const tenant = portalIdentityTenant(deps.currentToken(), deps.identitySecret);
@@ -214,11 +210,11 @@ export function createTenantFeeds(deps: TenantFeedDeps) {
       let set = lane.clients.get(user);
       if (!set) lane.clients.set(user, (set = new Set()));
       set.add(res);
-      if (!lane.running && lane.tenant) runLane(lane);
+      if (!lane.running) runLane(lane);
       return () => {
         set.delete(res);
         if (!set.size) lane.clients.delete(user);
-        if (!lane.tenant || lane.clients.size) return;
+        if (lane.clients.size) return;
         lane.stop.abort();
         lanes.delete(tenant ?? "");
       };
