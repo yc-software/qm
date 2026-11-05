@@ -96,6 +96,7 @@ export function createPostgresGrantStore(connectionString: string): GrantPersist
         { table: "acl_grants_version", primaryKey: "only_row" },
       ],
       {
+        before: [`DELETE FROM acl_grants_version`],
         after: [
           `CREATE OR REPLACE FUNCTION acl_grants_bump_version() RETURNS trigger LANGUAGE plpgsql AS $fn$
       BEGIN
