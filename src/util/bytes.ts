@@ -37,18 +37,22 @@ export async function collectBytes(
 }
 
 export async function readBoundedText(response: Response, maxBytes: number, tooLarge: () => Error): Promise<string> {
+  return new TextDecoder().decode(await readBoundedBytes(response, maxBytes, tooLarge));
+}
+
+export async function readBoundedBytes(response: Response, maxBytes: number, tooLarge: () => Error): Promise<Buffer> {
   const cancel = () => void response.body?.cancel().catch(swallowAs("bounded response cancel", undefined));
   if (Number(response.headers.get("content-length")) > maxBytes) {
     cancel();
     throw tooLarge();
   }
-  if (!response.body) return "";
+  if (!response.body) return Buffer.alloc(0);
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
   for (;;) {
     const { done, value } = await reader.read();
-    if (done) return new TextDecoder().decode(Buffer.concat(chunks, size));
+    if (done) return Buffer.concat(chunks, size);
     size += value.byteLength;
     if (size > maxBytes) {
       void reader.cancel().catch(swallowAs("bounded response cancel", undefined));

@@ -1,6 +1,7 @@
 import { sleep } from "./util.ts";
 import { channelShareTs, parseUploadedFileIds, slackErrorCode } from "./payloads.ts";
 import { BlobTooLargeError } from "../persistence/blob-transfer.ts";
+import type { ByteSource } from "../util/bytes.ts";
 
 export interface IncomingAttachment {
   name: string;
@@ -65,19 +66,19 @@ export function isTrustedSlackHost(url: string, extraHost?: string): boolean {
   }
 }
 
-export function attachmentFromBytes(
-  file: SlackFile,
-  bytes: Uint8Array,
-  blobId: string,
-  author?: string,
-): IncomingAttachment {
+export interface StagedBlob {
+  blobId: string;
+  sizeBytes: number;
+}
+
+export function attachmentFromStaged(file: SlackFile, staged: StagedBlob, author?: string): IncomingAttachment {
   const name = file.name || file.title || file.id || "file";
   const mimetype = file.mimetype || "application/octet-stream";
   return {
     name,
     mimetype,
-    sizeBytes: bytes.length,
-    blobId,
+    sizeBytes: staged.sizeBytes,
+    blobId: staged.blobId,
     ...(file.id ? { sourceId: file.id } : {}),
     ...(author ? { author } : {}),
   };
@@ -96,7 +97,7 @@ export interface DownloadOptions {
   trustedHost?: string;
 }
 
-export async function downloadSlackFile(file: SlackFile, opts: DownloadOptions = {}): Promise<Uint8Array> {
+export async function downloadSlackFile(file: SlackFile, opts: DownloadOptions = {}): Promise<ByteSource> {
   const url = file.url_private_download || file.url_private;
   if (!url) throw new Error("no url_private");
   if (file.mode === "external" || file.mode === "remote") throw new Error("external/remote files aren't supported");
@@ -112,7 +113,7 @@ export async function downloadSlackFile(file: SlackFile, opts: DownloadOptions =
   if (ct.includes("text/html")) throw new Error("got an HTML page (check files:read scope)");
   const len = Number(res.headers.get("content-length") ?? "0");
   if (len > MAX_ATTACHMENT_BYTES) throw new Error("file too large");
-  return new Uint8Array(await res.arrayBuffer());
+  return res.body ?? new Uint8Array();
 }
 
 export interface ProcessedInbound {
@@ -122,8 +123,8 @@ export interface ProcessedInbound {
 
 export async function processInboundFiles(
   files: readonly SlackFile[],
-  download: (file: SlackFile) => Promise<Uint8Array>,
-  stage: (bytes: Uint8Array) => Promise<{ blobId: string }>,
+  download: (file: SlackFile) => Promise<ByteSource>,
+  stage: (source: ByteSource) => Promise<StagedBlob>,
   resolveAuthor?: (userId: string | undefined) => Promise<string | undefined> | string | undefined,
 ): Promise<ProcessedInbound> {
   const attachments: IncomingAttachment[] = [];
@@ -139,20 +140,17 @@ export async function processInboundFiles(
       continue;
     }
     try {
-      const bytes = await download(f);
-      if (bytes.length > MAX_ATTACHMENT_BYTES) {
+      const staged = await stage(await download(f));
+      const author = resolveAuthor ? await resolveAuthor(f.user) : undefined;
+      attachments.push(attachmentFromStaged(f, staged, author));
+    } catch (err) {
+      if (err instanceof BlobTooLargeError) {
         issues.push(oversizeMsg(label));
         continue;
       }
-      const { blobId } = await stage(bytes);
-      const author = resolveAuthor ? await resolveAuthor(f.user) : undefined;
-      attachments.push(attachmentFromBytes(f, bytes, blobId, author));
-    } catch (err) {
-      const detail =
-        err instanceof BlobTooLargeError
-          ? "that request was too large — try fewer or smaller files"
-          : (err as Error).message;
-      issues.push(`I couldn't read "${label}" — check my file-access permission (files:read) (${detail})`);
+      issues.push(
+        `I couldn't read "${label}" — check my file-access permission (files:read) (${(err as Error).message})`,
+      );
     }
   }
   return { attachments, issues };

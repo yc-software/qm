@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   isOversize,
-  attachmentFromBytes,
+  attachmentFromStaged,
   isTrustedSlackHost,
   downloadSlackFile,
   processInboundFiles,
@@ -10,8 +10,14 @@ import {
   uploadFailureNote,
   MAX_ATTACHMENT_BYTES,
   MAX_ATTACHMENTS_PER_TURN,
+  oversizeMsg,
   type SlackFile,
 } from "../src/slack/lib.ts";
+import { asChunks, collectBytes, type ByteSource } from "../src/util/bytes.ts";
+import { createLocalBlobTransferStore } from "../src/persistence/blob-transfer.ts";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 function fakeFetch(opts: {
   ok?: boolean;
@@ -30,19 +36,18 @@ function fakeFetch(opts: {
         return null;
       },
     },
-    arrayBuffer: async () => (opts.bytes ?? new Uint8Array()).buffer,
+    body: new Response(opts.bytes ?? new Uint8Array()).body,
   })) as unknown as typeof fetch;
 }
 
 const SLACK_URL = "https://files.slack.com/files-pri/T1-F1/x";
 
-test("isOversize trips above the cap; attachmentFromBytes references the staged blob", () => {
+test("isOversize trips above the cap; attachmentFromStaged references the staged blob", () => {
   assert.equal(isOversize({ size: MAX_ATTACHMENT_BYTES + 1 }), true);
   assert.equal(isOversize({ size: 10 }), false);
-  const a = attachmentFromBytes(
+  const a = attachmentFromStaged(
     { id: "F1", name: "n.txt", mimetype: "text/plain" },
-    new Uint8Array(Buffer.from("hi")),
-    "blob123",
+    { blobId: "blob123", sizeBytes: 2 },
   );
   assert.equal(a.name, "n.txt");
   assert.equal(a.sizeBytes, 2);
@@ -51,8 +56,8 @@ test("isOversize trips above the cap; attachmentFromBytes references the staged 
   assert.equal(a.author, undefined);
 });
 
-test("attachmentFromBytes carries the author when one is provided", () => {
-  const a = attachmentFromBytes({ name: "n.txt" }, new Uint8Array(Buffer.from("hi")), "blob1", "eve");
+test("attachmentFromStaged carries the author when one is provided", () => {
+  const a = attachmentFromStaged({ name: "n.txt" }, { blobId: "blob1", sizeBytes: 2 }, "eve");
   assert.equal(a.author, "eve");
 });
 
@@ -110,10 +115,27 @@ test("downloadSlackFile rejects by Content-Length before buffering", async () =>
   );
 });
 
-test("downloadSlackFile returns bytes on success", async () => {
+test("downloadSlackFile returns the body on success", async () => {
   const bytes = new Uint8Array(Buffer.from("hello"));
   const out = await downloadSlackFile({ url_private: SLACK_URL }, { token: "t", fetchImpl: fakeFetch({ bytes }) });
-  assert.equal(Buffer.from(out).toString("utf8"), "hello");
+  assert.equal((await collectBytes(out)).data.toString("utf8"), "hello");
+});
+
+test("downloadSlackFile hands back the body before the download finishes", async () => {
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new Uint8Array(Buffer.from("first chunk")));
+    },
+  });
+  const fetchImpl = (async () =>
+    new Response(body, { headers: { "content-type": "application/zip" } })) as typeof fetch;
+  const out = await Promise.race([
+    downloadSlackFile({ url_private: SLACK_URL }, { token: "t", fetchImpl }),
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error("waited for the whole body")), 1000)),
+  ]);
+  const first = await asChunks(out)[Symbol.asyncIterator]().next();
+  assert.equal(Buffer.from(first.value!).toString("utf8"), "first chunk");
+  await body.cancel().catch(() => undefined);
 });
 
 test("downloadSlackFile throws when the file has no url", async () => {
@@ -137,7 +159,7 @@ test("downloadSlackFile refuses a redirect instead of following it off-Slack", a
 
 const fakeStage = (() => {
   let n = 0;
-  return async (_bytes: Uint8Array) => ({ blobId: `blob${++n}` });
+  return async (source: ByteSource) => ({ blobId: `blob${++n}`, sizeBytes: (await collectBytes(source)).sizeBytes });
 })();
 
 test("processInboundFiles forwards good files (staging each) and notes the failed ones", async () => {
@@ -151,6 +173,44 @@ test("processInboundFiles forwards good files (staging each) and notes the faile
   assert.ok(r.attachments[0]!.blobId);
   assert.equal(r.issues.length, 1);
   assert.match(r.issues[0]!, /couldn't read "bad\.txt"/);
+});
+
+test("processInboundFiles streams each file into the blob store and records its size", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "qm-slack-attachments-"));
+  try {
+    const store = createLocalBlobTransferStore(dir);
+    const chunks = ["zip-", "part-", "two"].map((c) => new Uint8Array(Buffer.from(c)));
+    const r = await processInboundFiles(
+      [{ name: "archive.zip" }],
+      async () =>
+        (async function* () {
+          yield* chunks;
+        })(),
+      (source) => store.put(source),
+    );
+    assert.deepEqual(r.issues, []);
+    assert.equal(r.attachments[0]!.sizeBytes, "zip-part-two".length);
+    const opened = await store.open(r.attachments[0]!.blobId);
+    assert.equal((await collectBytes(opened!.stream)).data.toString("utf8"), "zip-part-two");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("processInboundFiles reports a file that outgrows the blob cap mid-stream as too large", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "qm-slack-attachments-"));
+  try {
+    const store = createLocalBlobTransferStore(dir);
+    const r = await processInboundFiles(
+      [{ name: "undeclared.bin" }],
+      async () => new Uint8Array(16),
+      (source) => store.put(source, { maxBytes: 8 }),
+    );
+    assert.equal(r.attachments.length, 0);
+    assert.deepEqual(r.issues, [oversizeMsg("undeclared.bin")]);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("processInboundFiles skips an oversize file by declared size WITHOUT downloading", async () => {

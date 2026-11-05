@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mock, test } from "node:test";
 import type { SlackCoreClient } from "../src/slack/index.ts";
 import type { TurnResult } from "../src/types.ts";
+import { collectBytes, type ByteSource } from "../src/util/bytes.ts";
 
 type Handler = (args: any) => Promise<void>;
 
@@ -269,8 +270,8 @@ class FakeCore implements SlackCoreClient {
   onChannelHeaderPinChanged(listener: (scope: any) => void): void {
     this.headerPinChangeListeners.push(listener);
   }
-  async stageBlob(bytes: Uint8Array): Promise<{ blobId: string; sizeBytes: number }> {
-    return { blobId: "blob-1", sizeBytes: bytes.byteLength };
+  async stageBlob(source: ByteSource): Promise<{ blobId: string; sizeBytes: number }> {
+    return { blobId: "blob-1", sizeBytes: (await collectBytes(source)).sizeBytes };
   }
   async readBlob(): Promise<Buffer> {
     return Buffer.alloc(0);
