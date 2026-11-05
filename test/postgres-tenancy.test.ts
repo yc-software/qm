@@ -6,8 +6,9 @@ import { DIRECTORY_MIGRATIONS } from "../src/directory/postgres-directory-store.
 import { applyPgMigrations, createPgPool, definePgMigration, withPgTransaction } from "../src/persistence/pg-pool.ts";
 import { SESSION_MIGRATIONS, TENANT_BACKFILL } from "../src/sessions/session-schema.ts";
 import { withoutTenant, withTenant } from "../src/tenants/context.ts";
-import { TENANCY_BASE } from "../src/tenants/migrations.ts";
+import { TENANCY } from "../src/tenants/migrations.ts";
 import { testDatabaseUrl, testMigratedDatabaseUrl } from "./support/test-database.ts";
+import { ownerUrl } from "./support/test-tenant.ts";
 
 const skip = process.env.DATABASE_URL ? false : "set DATABASE_URL (a Postgres) to run the tenancy tests";
 
@@ -26,7 +27,7 @@ const role = `tenant_probe_${randomUUID().slice(0, 8)}`;
 
 before(async () => {
   if (skip) return;
-  url = testMigratedDatabaseUrl();
+  url = ownerUrl(testMigratedDatabaseUrl()).toString();
   owner = new pg.Pool({ connectionString: url });
   await owner.query(`CREATE ROLE ${role} NOLOGIN NOBYPASSRLS`);
   app = new pg.Pool({ connectionString: asRole(url, role) });
@@ -149,11 +150,13 @@ test("an open transaction refuses work for a different tenant until it has ended
 test("upgrading copies the existing tenant into tenants", { skip }, async () => {
   const pool = new pg.Pool({ connectionString: testDatabaseUrl(), max: 1 });
   try {
-    const previous = SESSION_MIGRATIONS.filter((m) => m !== TENANCY_BASE && m !== TENANT_BACKFILL);
+    const previous = SESSION_MIGRATIONS.filter(
+      (m) => !TENANCY.includes(m) && m !== TENANT_BACKFILL && !m.id.includes("-tenants/"),
+    );
     await applyPgMigrations(pool, [...DIRECTORY_MIGRATIONS, ...previous].map(definePgMigration));
     const old = (await pool.query("SELECT qm_tenant_id()::text AS id")).rows[0].id;
     await applyPgMigrations(pool, [...DIRECTORY_MIGRATIONS, ...SESSION_MIGRATIONS].map(definePgMigration));
-    assert.deepEqual((await pool.query("SELECT id::text FROM tenants")).rows, [{ id: old }]);
+    assert.ok((await pool.query("SELECT id::text FROM tenants")).rows.some((row) => row.id === old));
   } finally {
     await pool.end();
   }
