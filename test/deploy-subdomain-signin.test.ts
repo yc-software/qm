@@ -182,7 +182,8 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
   upstream.listen(0);
   const upstreamPort = (upstream.address() as AddressInfo).port;
 
-  const deployStore = createDeployStore(testDeployBackings());
+  const backings = testDeployBackings();
+  const deployStore = createDeployStore(backings);
   const deploy = createDeployService({
     ...singleProcessDeps(),
     externalSharingAllowed: async () => true,
@@ -200,7 +201,7 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
     deploy,
     acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
     directory: createPostgresDirectoryStore(testDatabaseUrl()),
-    sessions: createPostgresSessionStore(testDatabaseUrl()),
+    sessions: createPostgresSessionStore(backings.databaseUrl),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
   } as unknown as Parameters<typeof createApp>[0]);
   await app.deploy({
@@ -383,12 +384,13 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
 test("org-wide app access admits only signed-in org members", async () => {
   const upstream = createHttpServer((_req, res) => res.end("UPSTREAM OK"));
   upstream.listen(0);
+  const backings = testDeployBackings();
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const identity = createIdentityService(testMap(), { externalMembers: testMap() });
   const deploy = createDeployService({
     ...singleProcessDeps(),
     externalSharingAllowed: async () => false,
-    deployStore: createDeployStore(testDeployBackings()),
+    deployStore: createDeployStore(backings),
     provider: {
       profile: { managedScaleToZero: false },
       apply: async () => ({ host: "127.0.0.1", port: (upstream.address() as AddressInfo).port }),
@@ -402,7 +404,7 @@ test("org-wide app access admits only signed-in org members", async () => {
     deploy,
     acl,
     directory: createPostgresDirectoryStore(testDatabaseUrl()),
-    sessions: createPostgresSessionStore(testDatabaseUrl()),
+    sessions: createPostgresSessionStore(backings.databaseUrl),
     identity,
   } as unknown as Parameters<typeof createApp>[0]);
   const d = await app.deploy({
@@ -445,7 +447,8 @@ test("org-wide app access admits only signed-in org members", async () => {
 });
 
 test("subdomain ingress: without the session config the domain has no door — a 503, not a bounce", async () => {
-  const deployStore = createDeployStore(testDeployBackings());
+  const backings = testDeployBackings();
+  const deployStore = createDeployStore(backings);
   const deploy = createDeployService({
     ...singleProcessDeps(),
     externalSharingAllowed: async () => true,
@@ -463,7 +466,7 @@ test("subdomain ingress: without the session config the domain has no door — a
     deploy,
     acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
     directory: createPostgresDirectoryStore(testDatabaseUrl()),
-    sessions: createPostgresSessionStore(testDatabaseUrl()),
+    sessions: createPostgresSessionStore(backings.databaseUrl),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
   } as unknown as Parameters<typeof createApp>[0]);
   await app.deploy({

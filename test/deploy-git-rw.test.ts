@@ -35,9 +35,8 @@ const GIT_ENV = {
 };
 
 function fixture(urls: { apiBaseUrl?: string; publicUrl?: string } = {}) {
-  const deployStore = createDeployStore(
-    testDeployBackings({ git: { repoRoot: mkdtempSync(join(tmpdir(), "git-rw-repo-")) } }),
-  );
+  const backings = testDeployBackings({ git: { repoRoot: mkdtempSync(join(tmpdir(), "git-rw-repo-")) } });
+  const deployStore = createDeployStore(backings);
   const acl: AclStore = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const deploy = createDeployService({
     ...singleProcessDeps(),
@@ -56,7 +55,7 @@ function fixture(urls: { apiBaseUrl?: string; publicUrl?: string } = {}) {
     deploy,
     acl,
     directory: createPostgresDirectoryStore(testDatabaseUrl()),
-    sessions: createPostgresSessionStore(testDatabaseUrl()),
+    sessions: createPostgresSessionStore(backings.databaseUrl),
     identity,
   } as unknown as Parameters<typeof createApp>[0]);
   const server: Server = createServer(app, {
