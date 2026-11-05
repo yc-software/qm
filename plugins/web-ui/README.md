@@ -302,11 +302,20 @@ the portal serves the same web application, so it needs no separate SDK.
 Events are explicit pageviews by navigation view, accepted `message_sent` events,
 and `session_started` for the first user message in a chat. Company grouping uses
 `CORE_ORG_ID`; user identities combine company and authenticated principal. Browser
-analytics is disabled during impersonation. Autocapture, replay, exception capture,
+analytics is disabled during impersonation. Autocapture, replay (unless enabled below), exception capture,
 performance capture and feature flags are disabled. Event properties exclude chat
 content, URLs, query strings, titles and referrers. Delivery is best effort.
 
-Set the same variables on core to capture `app_published` after a successful new
+Set `POSTHOG_SESSION_REPLAY=1` as well to record sessions. Recording follows the
+PostHog project's session replay setting (read from its remote config), so the
+project toggle can stop it without a redeploy. The recorder is bundled rather than
+loaded from PostHog's CDN. Recordings mask all text and inputs, mask attributes other
+than layout and styling ones (titles, labels, alt text and links are masked), and
+block images, video, audio, canvas and frames, so they show layout and interaction
+but not chat content. Console and network capture stay off, and impersonated
+sessions are never recorded. Snapshots include the page URL.
+
+Set `POSTHOG_API_KEY` and `POSTHOG_HOST` on core to capture `app_published` after a successful new
 application or version deployment. Publications use the application's creator and
 company, matching browser identity. No key means no analytics requests.
 

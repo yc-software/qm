@@ -29,6 +29,40 @@ const allowedProperties = new Set([
   "surface",
   "view",
 ]);
+const snapshotProperties = new Set(["$snapshot_data", "$snapshot_bytes", "$snapshot_host"]);
+const replayAttributes = new Set([
+  "class",
+  "id",
+  "style",
+  "role",
+  "type",
+  "rel",
+  "dir",
+  "width",
+  "height",
+  "hidden",
+  "disabled",
+  "tabindex",
+  "aria-hidden",
+  "aria-expanded",
+  "aria-selected",
+  "aria-current",
+  "viewBox",
+  "xmlns",
+  "d",
+  "fill",
+  "stroke",
+  "stroke-width",
+  "stroke-linecap",
+  "stroke-linejoin",
+  "transform",
+]);
+
+function maskReplayAttribute(name: string, value: string, element?: Element): string {
+  if (replayAttributes.has(name) || name.startsWith("rr_") || name.startsWith("_")) return value;
+  if (name === "href" && element?.tagName === "LINK") return value;
+  return "*".repeat(value.length);
+}
 
 export function stopAnalytics(): void {
   generation++;
@@ -48,7 +82,11 @@ export async function initializeAnalytics(me: Me, view = "chats"): Promise<void>
   lastCapturedView = undefined;
   if (!me.analytics?.apiKey || me.impersonatedBy) return;
   try {
-    const { default: posthog } = await import("posthog-js");
+    const replay = me.analytics.sessionReplay === true;
+    const [{ default: posthog }] = await Promise.all([
+      import("posthog-js"),
+      ...(replay ? [import("posthog-js/dist/posthog-recorder")] : []),
+    ]);
     if (current !== generation) return;
     const options: Partial<PostHogConfig> = {
       api_host: me.analytics.host,
@@ -59,17 +97,28 @@ export async function initializeAnalytics(me: Me, view = "chats"): Promise<void>
       capture_pageleave: false,
       capture_exceptions: false,
       capture_performance: false,
-      disable_session_recording: true,
+      disable_session_recording: !replay,
+      session_recording: {
+        maskAllInputs: true,
+        maskTextSelector: "*",
+        maskAttributeFn: maskReplayAttribute,
+        blockSelector: "img, video, audio, canvas, iframe, object, embed",
+        recordHeaders: false,
+        recordBody: false,
+      },
+      enable_recording_console_log: false,
       disable_surveys: true,
       disable_external_dependency_loading: true,
-      advanced_disable_flags: true,
+      advanced_disable_flags: !replay,
+      advanced_disable_feature_flags: true,
       person_profiles: "identified_only",
       save_referrer: false,
       save_campaign_params: false,
       before_send: (event) => {
         if (!event) return null;
+        const snapshot = event.event === "$snapshot";
         for (const key of Object.keys(event.properties)) {
-          if (!allowedProperties.has(key)) delete event.properties[key];
+          if (!allowedProperties.has(key) && !(snapshot && snapshotProperties.has(key))) delete event.properties[key];
         }
         delete event.properties.$set;
         delete event.properties.$set_once;

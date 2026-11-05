@@ -201,7 +201,15 @@ if (
 ) {
   throw new Error("POSTHOG_HOST must be an HTTPS origin");
 }
-const analyticsConfig = analyticsKey ? { apiKey: analyticsKey, host: analyticsHost.origin } : undefined;
+const sessionReplay = Boolean(analyticsKey) && process.env.POSTHOG_SESSION_REPLAY === "1";
+const analyticsConfig = analyticsKey
+  ? { apiKey: analyticsKey, host: analyticsHost.origin, ...(sessionReplay ? { sessionReplay } : {}) }
+  : undefined;
+const [analyticsRegion, ...analyticsDomain] = analyticsHost.hostname.split(".");
+const analyticsAssetsOrigin =
+  sessionReplay && analyticsDomain.join(".") === "i.posthog.com"
+    ? `https://${analyticsRegion}-assets.i.posthog.com`
+    : undefined;
 
 const browserErrors = browserErrorConfig(process.env);
 const browserErrorOrigin = browserErrors ? new URL(browserErrors.dsn).origin : undefined;
@@ -212,7 +220,7 @@ const SPA_CSP = [
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https:",
   "font-src 'self' data:",
-  `connect-src 'self'${analyticsConfig ? ` ${analyticsConfig.host}` : ""}${browserErrorOrigin ? ` ${browserErrorOrigin}` : ""}`,
+  `connect-src 'self'${analyticsConfig ? ` ${analyticsConfig.host}` : ""}${analyticsAssetsOrigin ? ` ${analyticsAssetsOrigin}` : ""}${browserErrorOrigin ? ` ${browserErrorOrigin}` : ""}`,
   "frame-src 'self' data: https:",
   "worker-src 'self' blob:",
   "frame-ancestors 'self'",
