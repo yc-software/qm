@@ -14,6 +14,7 @@ import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 function appWith(endpoint: Record<string, unknown>): App {
   return {
     readBootTenant: async () => TEST_TENANT,
+    tenantFor: async () => TEST_TENANT,
     reachDeployment: async () => ({ status: "ok", endpoint }),
   } as unknown as App;
 }
@@ -247,6 +248,7 @@ test("/d/ proxy keeps the shared HTTP/2 session when one request has invalid hea
   const upstreamPort = (upstream.address() as AddressInfo).port;
   const app = {
     readBootTenant: async () => TEST_TENANT,
+    tenantFor: async () => TEST_TENANT,
     reachDeployment: async () => ({
       status: "ok",
       endpoint: {
@@ -410,6 +412,7 @@ test("admin deployment proxy bypasses deployment ACL after admin auth and audits
   let bypassAcl: boolean | undefined;
   const app = {
     readBootTenant: async () => TEST_TENANT,
+    tenantFor: async () => TEST_TENANT,
     getDeployment: async (id: string) => (id === "d1" ? { id: "d1", ownerScopeId: "personal:U1" } : null),
     reachDeployment: async (_id: string, _principal: string, opts?: { bypassAcl?: boolean }) => {
       bypassAcl = opts?.bypassAcl;

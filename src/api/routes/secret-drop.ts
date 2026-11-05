@@ -129,6 +129,8 @@ async function dropLinkClaims(
   return claims;
 }
 
+const INVALID_DROP = "this drop link is invalid or was already used — ask the agent for a fresh one";
+
 function dropFormHtml(
   dropId: string,
   rec: { service: string; purpose: string; fields?: SecretDropField[]; createdAt?: number } | null,
@@ -288,16 +290,14 @@ async function redeemDrop(ctx: ApiCtx): Promise<void> {
   const peeked = await deps.secretDrops.peek(params.id!);
   if (!peeked.ok) {
     const message =
-      peeked.reason === "expired"
-        ? "this drop link has expired — ask the agent for a fresh one"
-        : "this drop link is invalid or was already used — ask the agent for a fresh one";
+      peeked.reason === "expired" ? "this drop link has expired — ask the agent for a fresh one" : INVALID_DROP;
     return sendJson(res, 404, { error: "not_found", message });
   }
   const linkClaims = await dropLinkClaims(ctx, params.id!, peeked.rec);
   if (!linkClaims) {
     return sendJson(res, 404, {
       error: "not_found",
-      message: "this drop link is invalid or was already used — ask the agent for a fresh one",
+      message: INVALID_DROP,
     });
   }
   if (!samePerson(req.headers["x-drop-owner"] as string | undefined, peeked.rec.ownerId)) {
@@ -330,9 +330,7 @@ async function redeemDrop(ctx: ApiCtx): Promise<void> {
   const redeemed = await deps.secretDrops.redeem(params.id!);
   if (!redeemed.ok) {
     const message =
-      redeemed.reason === "expired"
-        ? "this drop link has expired — ask the agent for a fresh one"
-        : "this drop link is invalid or was already used — ask the agent for a fresh one";
+      redeemed.reason === "expired" ? "this drop link has expired — ask the agent for a fresh one" : INVALID_DROP;
     return sendJson(res, 404, { error: "not_found", message });
   }
   const drop = redeemed.rec;
@@ -392,6 +390,30 @@ async function redeemDrop(ctx: ApiCtx): Promise<void> {
 
 export const secretDropRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/keychain/drops", actor: "system", auth: "either", handle: mintDrop },
-  { method: "GET", path: "/v1/keychain/drops/:id/form", auth: "source", handle: dropForm },
-  { method: "POST", path: "/v1/keychain/drops/:id", actor: "system", auth: "source", handle: redeemDrop },
+  {
+    method: "GET",
+    path: "/v1/keychain/drops/:id/form",
+    auth: "source",
+    tenant: {
+      by: "secret_drop",
+      key: (params) => params.id,
+      unknown: (res, id) => {
+        res.writeHead(404, { "content-type": "text/html; charset=utf-8" });
+        res.end(dropFormHtml(id, null));
+      },
+    },
+    handle: dropForm,
+  },
+  {
+    method: "POST",
+    path: "/v1/keychain/drops/:id",
+    actor: "system",
+    auth: "source",
+    tenant: {
+      by: "secret_drop",
+      key: (params) => params.id,
+      unknown: (res) => sendJson(res, 404, { error: "not_found", message: INVALID_DROP }),
+    },
+    handle: redeemDrop,
+  },
 ];

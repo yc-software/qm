@@ -1,4 +1,3 @@
-import type { MemoryEmbedder } from "./model/embeddings.ts";
 import { onTenantLoad } from "./tenants/cache.ts";
 import { nonDeploymentCredential, withDeploymentCredentials } from "./credentials/deployment-credentials.ts";
 import { resolveEmbeddingModel } from "./model/pi-models.ts";
@@ -53,7 +52,7 @@ import {
   sweepUnreadMailWakes,
   wakeForUnreadMail,
 } from "./sessions/subagent-mail.ts";
-import { createMemoryEmbedder } from "./model/embeddings.ts";
+import { createMemoryEmbedder, type MemoryEmbedder } from "./model/embeddings.ts";
 import { configRouteOptions, createModelRoutes, type ModelRoutes } from "./model/model-route.ts";
 import { createSemanticMemory } from "./memory/semantic-memory.ts";
 import { createPostgresBrokerSessions, type BrokerSessionStore } from "./auth/broker-sessions.ts";
@@ -2580,6 +2579,7 @@ export function buildApp(
     outputs: loopOutputs,
     fire: loopFire,
     lock: advisoryLock,
+    tenants: sessions.tenantLookup,
     ...(config.gmailPubSub && keychain
       ? { gmailConfig: config.gmailPubSub, gmailClient: createGmailPushClient(keychain, config.gmailPubSub) }
       : {}),
