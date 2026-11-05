@@ -17,6 +17,14 @@ import { ADMIN_LOGIN_SCRIPT, ADMIN_LOGIN_SCRIPT_HASH, openAdminLogin } from "./a
 import { LRUCache } from "lru-cache";
 import { createCanonicalResolver } from "./canonical.ts";
 import { createTrustedEntry, trustedEntryConfig } from "./trusted-entry.ts";
+import {
+  coreEmailTenants,
+  openChoice,
+  tenantChoiceForms,
+  verifiedEmail,
+  type SignInTenant,
+  type VerifiedSignIn,
+} from "./tenant-choice.ts";
 import { answerPreflight, parseAllowedOrigins, prepareCors } from "./cors.ts";
 import {
   deriveKey,
@@ -258,9 +266,14 @@ const ADMIN_PROBE_ATTEMPTS = 2;
 const ADMIN_PROBE_RETRY_DELAY_MS = 250;
 const adminCache = new LRUCache<string, boolean>({ max: 10_000, ttl: ADMIN_TTL_MS });
 
-function portalIdentityHeaders(sub: string): Record<string, string> {
+function portalIdentityHeaders(sub: string, t?: string): Record<string, string> {
   return PORTAL_IDENTITY_SECRET
-    ? { [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: sub, exp: Date.now() + 60_000 }, PORTAL_IDENTITY_SECRET) }
+    ? {
+        [PORTAL_IDENTITY_HEADER]: mintPortalIdentity(
+          { p: sub, ...(t ? { t } : {}), exp: Date.now() + 60_000 },
+          PORTAL_IDENTITY_SECRET,
+        ),
+      }
     : {};
 }
 
@@ -311,10 +324,10 @@ async function isAdmin(sub: string): Promise<boolean> {
 
 const CANONICAL_TIMEOUT_MS = 4_000;
 
-const canonicalPrincipal = createCanonicalResolver(async (sub) => {
+const canonicalPrincipal = createCanonicalResolver(async (sub, tenant) => {
   const path = withSourceAuthNonce(`/v1/principals/${encodeURIComponent(sub)}/canonical`, CORE_SIGNING_SECRET);
   const r = await fetch(`${CORE}${path}`, {
-    headers: signedHeaders(CORE_SIGNING_SECRET, "GET", path),
+    headers: { ...signedHeaders(CORE_SIGNING_SECRET, "GET", path), ...portalIdentityHeaders(sub, tenant) },
     signal: AbortSignal.timeout(CANONICAL_TIMEOUT_MS),
   });
   if (!r.ok) {
@@ -727,7 +740,10 @@ async function handleSelfConnect(res: ServerResponse, o: { provider: string; ses
   );
   try {
     const r = await fetch(`${CORE}${path}`, {
-      headers: { ...signedHeaders(CORE_SIGNING_SECRET, "GET", path), ...portalIdentityHeaders(o.session.sub) },
+      headers: {
+        ...signedHeaders(CORE_SIGNING_SECRET, "GET", path),
+        ...portalIdentityHeaders(o.session.sub, o.session.t),
+      },
     });
     const data = (await r.json().catch(() => ({}))) as { authorizeUrl?: string; message?: string };
     if (!r.ok) console.warn(`[portal] self-connect start returned HTTP ${r.status}: ${data.message ?? "no message"}`);
@@ -978,6 +994,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 
   if (pathname === "/auth/login" && method === "GET") return authLogin(req, res, url);
   if (pathname === "/auth/callback" && method === "GET") return authCallback(req, res, url);
+  if (pathname === "/auth/tenant" && method === "POST") return authTenant(req, res);
   if (pathname.startsWith("/auth/trusted/") && method === "GET") return trustedAuth(req, res, url);
   if (pathname === "/auth/desktop" || pathname === "/auth/desktop/redeem") return desktopLogin(req, res, url);
   if (pathname === "/auth/invite") return inviteLogin(req, res);
@@ -1016,7 +1033,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
           method: "POST",
           headers: {
             ...signedHeaders(CORE_SIGNING_SECRET, "POST", path, body),
-            ...portalIdentityHeaders(session.sub),
+            ...portalIdentityHeaders(session.sub, session.t),
           },
           body,
           signal: AbortSignal.timeout(4_000),
@@ -1073,7 +1090,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   const authenticatedPrincipal = session?.sub;
   let staleSession: SessionClaims | null = null;
   if (session && !session.anon && (!pathname.startsWith("/auth/") || pathname.startsWith("/auth/impersonate"))) {
-    const canonical = await canonicalPrincipal(session.sub);
+    const canonical = await canonicalPrincipal(session.sub, session.t);
     if (!canonical) return identityUnavailable(req, res);
     if (canonical.stale) staleSession = { ...session, sub: canonical.id };
     session = canonical.stale ? null : { ...session, sub: canonical.id };
@@ -1085,7 +1102,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     if (!(await isAdmin(session.sub))) return json(res, 403, { error: "forbidden", message: "admin access required" });
     const target = (url.searchParams.get("target") ?? "").trim();
     if (!target) return json(res, 400, { error: "bad_request", message: "target required" });
-    if (target === session.sub || (await canonicalPrincipal(target))?.id === session.sub)
+    if (target === session.sub || (await canonicalPrincipal(target, session.t))?.id === session.sub)
       return json(res, 400, { error: "bad_request", message: "cannot impersonate yourself" });
     const result = await coreImpersonate("start", session.sub, target);
     if (!result.ok) {
@@ -1293,6 +1310,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       principal: session.sub,
       signingSecret: CORE_SIGNING_SECRET,
       ...(PORTAL_IDENTITY_SECRET ? { identitySecret: PORTAL_IDENTITY_SECRET } : {}),
+      ...(session.t ? { tenant: session.t } : {}),
     });
   }
 
@@ -1327,6 +1345,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     ...(!impersonator && session.name ? { displayName: session.name } : {}),
     ...(impersonator ? { impersonator } : {}),
     ...(PORTAL_IDENTITY_SECRET ? { identitySecret: PORTAL_IDENTITY_SECRET } : {}),
+    ...(session.t ? { tenant: session.t } : {}),
     authenticatedPrincipal,
   });
 }
@@ -1588,7 +1607,7 @@ async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL):
   }
 }
 
-function setAuthenticatedSession(res: ServerResponse, sub: string, name = "", appOnly = false): void {
+function setAuthenticatedSession(res: ServerResponse, sub: string, name = "", appOnly = false, tenant?: string): void {
   const now = Math.floor(Date.now() / 1000);
   const session: SessionClaims = {
     k: "session",
@@ -1599,11 +1618,13 @@ function setAuthenticatedSession(res: ServerResponse, sub: string, name = "", ap
     exp: now + SESSION_TTL_S,
     ...(name ? { name } : {}),
     ...(appOnly ? { appOnly: true } : {}),
+    ...(tenant ? { t: tenant } : {}),
   };
   setSession(res, [
     ...sessionCookieSet(seal(session, sessionKey), session.sub),
     clearCookie("portal_trusted_tmp", "/auth/trusted", SECURE_COOKIES),
     clearCookie("portal_oidc_tmp", "/auth", SECURE_COOKIES),
+    clearCookie("portal_tenant_choice", "/auth", SECURE_COOKIES),
     clearCookie("portal_impersonate", "/", SECURE_COOKIES),
   ]);
 }
@@ -1662,8 +1683,8 @@ async function authCallback(req: IncomingMessage, res: ServerResponse, url: URL)
   if (!code || !stateParam || !safeEqual(stateParam, tmp.state)) return fail("invalid login state");
   if (!consumeState(tmp.state)) return fail("login already used, please try again");
 
-  let principal: { sub: string; appOnly?: true };
-  let name = "";
+  let signIn: VerifiedSignIn;
+  let tenants: SignInTenant[] = [];
   try {
     const { accessToken, idToken } = await exchangeCode(OIDC, { code, codeVerifier: tmp.pkceVerifier });
     const claims = await verifyIdToken(OIDC, idToken, tmp.nonce);
@@ -1675,18 +1696,79 @@ async function authCallback(req: IncomingMessage, res: ServerResponse, url: URL)
     const infoSub = typeof info.sub === "string" ? info.sub : "";
     if (!infoSub) throw new Error("userinfo missing sub");
     if (typeof claims.sub === "string" && claims.sub !== infoSub) throw new Error("subject mismatch");
-    principal = await resolvePrincipal(PRINCIPAL_RULE, { sub: infoSub, claims, userinfo: info }, (email) =>
-      coreEmailAdmission(CORE, CORE_SIGNING_SECRET, email, "portal"),
-    );
     const rawName = info.name ?? claims.name;
-    if (typeof rawName === "string") name = rawName.trim().slice(0, 200);
+    signIn = {
+      sub: infoSub,
+      name: typeof rawName === "string" ? rawName.trim().slice(0, 200) : "",
+      claims,
+      userinfo: info,
+    };
+    const email = verifiedEmail(info);
+    if (email) tenants = await coreEmailTenants(CORE, CORE_SIGNING_SECRET, email);
   } catch (e) {
     return fail(errMessage(e, "sign-in failed"));
   }
+  if (tenants.length > 1) return chooseTenant(res, signIn, tmp.returnTo, tenants);
+  return finishSignIn(res, signIn, tmp.returnTo, tenants[0]?.id);
+}
 
-  setAuthenticatedSession(res, principal.sub, name, principal.appOnly);
+function chooseTenant(res: ServerResponse, signIn: VerifiedSignIn, returnTo: string, tenants: SignInTenant[]): void {
+  const exp = Math.floor(Date.now() / 1000) + TMP_TTL_S;
+  const choice = { k: "choice", signIn, returnTo, tenants: tenants.map(({ id }) => id), exp };
+  setSession(res, [
+    clearCookie("portal_oidc_tmp", "/auth", SECURE_COOKIES),
+    setCookie("portal_tenant_choice", seal(choice, tmpKey), {
+      path: "/auth",
+      maxAge: TMP_TTL_S,
+      secure: SECURE_COOKIES,
+    }),
+  ]);
+  sendHtml(
+    res,
+    200,
+    cardPage({
+      title: "Choose a workspace",
+      heading: "Choose a workspace",
+      icon: LOCK_ICON,
+      msg: "Your account belongs to more than one workspace. Pick the one to sign in to.",
+      actions: tenantChoiceForms(tenants, escapeHtml),
+      help: "To switch later, sign out and sign in again.",
+    }),
+  );
+}
+
+async function authTenant(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  if (!sameOriginRequest(req)) return json(res, 403, { error: "forbidden" });
+  const choice = openChoice(readCookie(req.headers.cookie, "portal_tenant_choice"), tmpKey, Date.now());
+  const tenant = new URLSearchParams(await readBody(req, 4096)).get("tenant") ?? "";
+  if (!choice || !choice.tenants.includes(tenant)) {
+    setSession(res, [clearCookie("portal_tenant_choice", "/auth", SECURE_COOKIES)]);
+    return sendHtml(res, 400, signInErrorHtml("workspace choice expired, please sign in again"));
+  }
+  return finishSignIn(res, choice.signIn, choice.returnTo, tenant);
+}
+
+async function finishSignIn(
+  res: ServerResponse,
+  { sub, name, claims, userinfo }: VerifiedSignIn,
+  returnTo: string,
+  tenant: string | undefined,
+): Promise<void> {
+  let principal: { sub: string; appOnly?: true };
+  try {
+    principal = await resolvePrincipal(PRINCIPAL_RULE, { sub, claims, userinfo }, (email) =>
+      coreEmailAdmission(CORE, CORE_SIGNING_SECRET, email, "portal", portalIdentityHeaders(email, tenant)),
+    );
+  } catch (e) {
+    setSession(res, [
+      clearCookie("portal_oidc_tmp", "/auth", SECURE_COOKIES),
+      clearCookie("portal_tenant_choice", "/auth", SECURE_COOKIES),
+    ]);
+    return sendHtml(res, 400, signInErrorHtml(errMessage(e, "sign-in failed")));
+  }
+  setAuthenticatedSession(res, principal.sub, name, principal.appOnly, tenant);
   res.writeHead(302, {
-    location: sanitizeReturnTo(tmp.returnTo, PUBLIC_URL, APPS_DOMAIN),
+    location: sanitizeReturnTo(returnTo, PUBLIC_URL, APPS_DOMAIN),
     "cache-control": "no-store",
   });
   res.end();
