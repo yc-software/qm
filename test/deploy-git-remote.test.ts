@@ -48,7 +48,7 @@ async function fixture(): Promise<{
     git: { repoRoot: mkdtempSync(join(tmpdir(), "deploy-git-remote-reader-")), archiveStore },
   });
   const app = {
-    bootTenant: async () => TEST_TENANT,
+    readBootTenant: async () => TEST_TENANT,
     listDeployments: async () => [deployment],
     deploymentGitRepoPath: async (id: string) => (id === deployment.id ? await readerStore.repoUrl(id) : null),
   } as unknown as App;

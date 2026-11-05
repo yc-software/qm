@@ -33,14 +33,19 @@ export async function withRequestTenant(
   res: ServerResponse,
   route: Pick<Route, "auth" | "tenant"> | undefined,
   capabilitySecret: string | undefined,
-  bootTenant: () => Promise<string | undefined>,
+  readBootTenant: () => Promise<string | undefined>,
   next: () => Promise<void> | void,
+  ready?: () => Promise<void>,
 ): Promise<void> {
   if (route?.tenant === "none") return next();
   const token = capabilityToken(req, typeof route?.auth === "object" && route.auth.bearer === true);
   const claims = token ? await requestCapability(req, token, capabilitySecret) : null;
-  const tenant = claims?.tenant ?? (await bootTenant());
-  if (tenant) return withTenant(tenant, next);
+  const tenant = claims?.tenant ?? (await readBootTenant());
+  if (tenant)
+    return withTenant(tenant, async () => {
+      await ready?.();
+      return next();
+    });
   sendJson(res, 401, { error: "unauthorized", message: "this request does not name a tenant" });
   req.resume();
 }

@@ -17,7 +17,7 @@ const channel = scopeId("channel", "C1");
 
 function makeApp(files: FileArtifactStore, acl: ReturnType<typeof createAclStore>) {
   return createApp({
-    sessions: { bootTenant: async () => TEST_TENANT },
+    sessions: { readBootTenant: async () => TEST_TENANT },
     acl,
     files,
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),

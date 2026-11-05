@@ -17,7 +17,7 @@ test("swarm HTTP rejects body identity selectors and completed capabilities whil
   const capabilitySecret = "swarm-regression-capability-secret";
   const server = createServer(
     {
-      bootTenant: async () => TEST_TENANT,
+      readBootTenant: async () => TEST_TENANT,
       swarms: fixture.service,
       authorizesCapabilityScope: async () => true,
     } as unknown as App,
@@ -85,7 +85,7 @@ test("authenticated swarm API binds agent operations to the token and human oper
   const capabilitySecret = "capability-test-secret".repeat(3);
   const portalIdentitySecret = "portal-test-secret".repeat(3);
   const app = {
-    bootTenant: async () => TEST_TENANT,
+    readBootTenant: async () => TEST_TENANT,
     swarms: fixture.service,
     authorizesCapabilityScope: async () => true,
     getSessionForViewer: async (id: string, actorId: string) => {
@@ -185,7 +185,7 @@ test("swarm HTTP rejects credentials from a replaced run attempt", async () => {
   const secret = "swarm-attempt-regression-secret";
   const server = createServer(
     {
-      bootTenant: async () => TEST_TENANT,
+      readBootTenant: async () => TEST_TENANT,
       swarms: fixture.service,
       authorizesCapabilityScope: async () => true,
     } as unknown as App,
@@ -227,7 +227,7 @@ test("HTTP retry after a lost initial response exposes only a complete pool and 
   const capabilitySecret = "swarm-atomic-http-test-secret";
   const server = createServer(
     {
-      bootTenant: async () => TEST_TENANT,
+      readBootTenant: async () => TEST_TENANT,
       swarms: f.service,
       authorizesCapabilityScope: async () => true,
     } as unknown as App,

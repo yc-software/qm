@@ -590,7 +590,7 @@ test("deployment public access is explicit, owner-only, and reversible", async (
 test("without an apps domain, a public link is refused on the share route and the agent's apps tool", async () => {
   const { deploy } = makeDeploy(undefined, true, false);
   const app = createApp({
-    sessions: { bootTenant: async () => TEST_TENANT },
+    sessions: { readBootTenant: async () => TEST_TENANT },
     advisoryLock: testAdvisoryLock(),
     deploy,
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
@@ -616,7 +616,7 @@ test("without an apps domain, a public link is refused on the share route and th
 test("with external app sharing off, public links and outside emails are refused while org sharing still works", async () => {
   const { deploy } = makeDeploy(async (email) => email.endsWith("@acme.test"), false);
   const app = createApp({
-    sessions: { bootTenant: async () => TEST_TENANT },
+    sessions: { readBootTenant: async () => TEST_TENANT },
     advisoryLock: testAdvisoryLock(),
     deploy,
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
@@ -732,7 +732,7 @@ test("exact email read grants admit app-only login and guest reach without membe
   const identity = createIdentityService(testMap(), { externalMembers: testMap() });
   const directory = createPostgresDirectoryStore(testDatabaseUrl());
   const app = createApp({
-    sessions: { bootTenant: async () => TEST_TENANT },
+    sessions: { readBootTenant: async () => TEST_TENANT },
     advisoryLock: testAdvisoryLock(),
     deploy,
     acl,
@@ -813,7 +813,7 @@ test("exact email read grants admit app-only login and guest reach without membe
 test("uniform app share accepts exact emails and enforces view-only outside the directory", async () => {
   const { deploy, acl } = makeDeploy();
   const app = createApp({
-    sessions: { bootTenant: async () => TEST_TENANT },
+    sessions: { readBootTenant: async () => TEST_TENANT },
     advisoryLock: testAdvisoryLock(),
     deploy,
     acl,
@@ -845,7 +845,7 @@ test("new email grants send an app-specific invitation once; re-adds and revocat
   const { deploy, acl } = makeDeploy();
   const sent: Array<{ to: string; subject: string; text: string; html: string }> = [];
   const app = createApp({
-    sessions: { bootTenant: async () => TEST_TENANT },
+    sessions: { readBootTenant: async () => TEST_TENANT },
     advisoryLock: testAdvisoryLock(),
     deploy,
     acl,
@@ -901,7 +901,7 @@ test("failed invitation delivery leaves the grant and reports the failure and ma
   ]) {
     const { deploy, acl } = makeDeploy();
     const app = createApp({
-      sessions: { bootTenant: async () => TEST_TENANT },
+      sessions: { readBootTenant: async () => TEST_TENANT },
       advisoryLock: testAdvisoryLock(),
       deploy,
       acl,
@@ -931,7 +931,7 @@ test("uniform app share uses the same invitation sender", async () => {
   const { deploy, acl } = makeDeploy();
   const sent: string[] = [];
   const app = createApp({
-    sessions: { bootTenant: async () => TEST_TENANT },
+    sessions: { readBootTenant: async () => TEST_TENANT },
     advisoryLock: testAdvisoryLock(),
     deploy,
     acl,

@@ -59,7 +59,7 @@ describe("agent deployment fetch", () => {
     await new Promise<void>((resolve) => closed.close(() => resolve()));
 
     const app = {
-      bootTenant: async () => TEST_TENANT,
+      readBootTenant: async () => TEST_TENANT,
       authorizesCapabilityScope: async () => true,
       reachDeployment: async (id: string, viewer: string) => {
         if (id !== "mine" && id !== "down") return { status: "not_found" as const };

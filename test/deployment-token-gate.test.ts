@@ -70,7 +70,7 @@ describe("a published app's broker token follows the app it was minted for, on e
 
   before(async () => {
     const app = {
-      bootTenant: async () => TEST_TENANT,
+      readBootTenant: async () => TEST_TENANT,
       authorizesCapabilityScope: async (claims: unknown) => {
         authorized.push(claims);
         return scopeAuthorized;

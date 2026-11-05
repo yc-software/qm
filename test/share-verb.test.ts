@@ -60,7 +60,7 @@ function authorOfGrant(state: FakeState, ownerScopeId: ScopeId, ref: string): st
 
 function fakeApp(state: FakeState): App {
   return {
-    bootTenant: async () => TEST_TENANT,
+    readBootTenant: async () => TEST_TENANT,
     async getArtifactHome(type: ArtifactType, idOrName: string) {
       return state.artifacts[`${type}:${idOrName}`] ?? null;
     },

@@ -35,7 +35,7 @@ describe("deployment logs route", () => {
 
   before(async () => {
     const app = {
-      bootTenant: async () => TEST_TENANT,
+      readBootTenant: async () => TEST_TENANT,
       authorizesCapabilityScope: async () => true,
       deploymentLogsFor: async (id: string, viewer: string, opts: { tailLines: number }) => {
         lastTail = opts.tailLines;

@@ -47,7 +47,7 @@ describe("deployment always-on route", () => {
       versions: [{ version: 1, createdAt: 1, entrypoint: "x", snapshotDir: "/tmp" }],
     };
     const app = {
-      bootTenant: async () => TEST_TENANT,
+      readBootTenant: async () => TEST_TENANT,
       authorizesCapabilityScope: async () => true,
       getDeployment: async (id: string) => (id === deployment.id || id === deployment.name ? deployment : null),
       canManageDeployment: async (_id: string, principalId: string) => principalId === "U1",

@@ -47,7 +47,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
   const { pool, q } = db;
 
   return {
-    bootTenant: bootTenantReader(db),
+    readBootTenant: bootTenantReader(db),
     async getOrCreateByThread(threadRef, type, scopeId, channelName, surface, clientTools, facts): Promise<Session> {
       const heal = async (row: Record<string, unknown>): Promise<Session> => {
         const s = rowToSession(row);

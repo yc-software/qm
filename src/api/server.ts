@@ -507,7 +507,7 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
       res,
       route,
       capabilitySecret,
-      () => app.bootTenant(),
+      () => app.readBootTenant(),
       () => serve(req, res, base, raw, matched),
     );
   }

@@ -3,12 +3,12 @@ import { loadConfig } from "../config.ts";
 import { buildApp, stopWithBackstop } from "../wiring.ts";
 import { shutdownOnUncaught } from "../util/process-guard.ts";
 import { migrateRegisteredPgSchemas } from "../persistence/pg-pool.ts";
-import { inBootTenant } from "../tenants/boot.ts";
+import { bindBootTenant, inBootTenant } from "../tenants/boot.ts";
 
 const config = loadConfig();
 const built = buildApp(config);
 await migrateRegisteredPgSchemas(config.databaseUrl);
-const tenant = await built.app.bootTenant();
+const tenant = await bindBootTenant(() => built.app.readBootTenant());
 if (config.backgroundWorkEnabled) await inBootTenant(tenant, () => built.ownSharedState());
 await inBootTenant(tenant, async () => {
   await built.config.hydrate?.();

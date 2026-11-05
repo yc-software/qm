@@ -10,7 +10,7 @@ import { errMessage, reportFailureAs } from "./util/errors.ts";
 import { slackAccountConfigsFromEnv, slackPluginConfigFromEnv, startSlackPlugin } from "./slack/index.ts";
 import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
 import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
-import { inBootTenant } from "./tenants/boot.ts";
+import { bindBootTenant, inBootTenant } from "./tenants/boot.ts";
 
 export async function startQm(
   config: Config,
@@ -18,7 +18,7 @@ export async function startQm(
 ) {
   const built = buildApp(config, overrides);
   await migrateRegisteredPgSchemas(config.databaseUrl);
-  const tenant = await built.app.bootTenant();
+  const tenant = await bindBootTenant(() => built.app.readBootTenant());
   if (config.backgroundWorkEnabled) await inBootTenant(tenant, () => built.ownSharedState());
   const slackConfig = slackPluginConfigFromEnv(env);
   let slackEnvironmentState: "absent" | "configured" | "partial" =

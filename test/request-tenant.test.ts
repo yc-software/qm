@@ -8,7 +8,7 @@ import { mintCapabilityToken, verifyCapabilityToken } from "../src/auth/capabili
 import { withRequestTenant } from "../src/api/request-tenant.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import type { Route } from "../src/api/routes/route.ts";
-import { inBootTenant } from "../src/tenants/boot.ts";
+import { bindBootTenant, bootTenant, inBootTenant } from "../src/tenants/boot.ts";
 import { boundTenant, withTenant } from "../src/tenants/context.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -22,7 +22,7 @@ const claims = () => ({ actorId: "U1", scopeId: "personal:U1" as const, exp: Dat
 
 async function probe(
   route: Pick<Route, "auth" | "tenant"> | undefined,
-  bootTenant: string | undefined,
+  readBootTenant: string | undefined,
   headers: Record<string, string> = {},
 ): Promise<{ status: number; tenant: string | null }> {
   const server = createHttpServer((req, res) => {
@@ -31,7 +31,7 @@ async function probe(
       res,
       route,
       SECRET,
-      async () => bootTenant,
+      async () => readBootTenant,
       () => void res.end(JSON.stringify({ tenant: boundTenant() ?? null })),
     );
   });
@@ -108,7 +108,7 @@ test("an install with one tenant serves requests bound to it and refuses them on
   try {
     const rows = (await db.query("SELECT id::text AS id FROM tenants")).rows as { id: string }[];
     assert.equal(rows.length, 1);
-    assert.equal(await buildApp(testConfig({ databaseUrl })).app.bootTenant(), rows[0]!.id);
+    assert.equal(await buildApp(testConfig({ databaseUrl })).app.readBootTenant(), rows[0]!.id);
     assert.notEqual(await single.get("/v1/deliveries"), 401);
     await db.query("INSERT INTO tenants(id) VALUES ($1)", [randomUUID()]);
     const multi = await serve(databaseUrl);
@@ -123,4 +123,25 @@ test("an install with one tenant serves requests bound to it and refuses them on
     single.close();
     await db.end();
   }
+});
+
+test("bindBootTenant records the tenant boot read so bootTenant names it afterwards", async () => {
+  assert.equal(await bindBootTenant(async () => a), a);
+  assert.equal(bootTenant(), a);
+  assert.equal(await bindBootTenant(async () => undefined), undefined);
+  assert.equal(bootTenant(), undefined);
+});
+
+test("a ready hook runs inside the bound tenant before the route", async () => {
+  const seen: (string | undefined)[] = [];
+  await withRequestTenant(
+    { headers: {} } as never,
+    {} as never,
+    { auth: "source" },
+    SECRET,
+    async () => b,
+    () => void seen.push(`next:${boundTenant()}`),
+    async () => void seen.push(`ready:${boundTenant()}`),
+  );
+  assert.deepEqual(seen, [`ready:${b}`, `next:${b}`]);
 });
