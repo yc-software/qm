@@ -137,6 +137,31 @@ test("a persona conversation stays private to the people in it, even from the pe
   assert.equal(bobList.sessions.find((session) => session.id === bobChat.sessionId)?.personaId, ada.id);
 });
 
+test("skills written into a persona show for everyone with a role on it, and nobody else", async () => {
+  const { built, personas, enable } = setup();
+  for (const who of [ALICE, BOB, CAROL]) await enable(who);
+  const ada = ok(await personas.create(ALICE, { name: "Ada" }));
+  ok(
+    await personas.setAccess(ALICE, ada.id, [
+      { scopeId: scopeId("personal", ALICE), role: "owner" },
+      { scopeId: scopeId("personal", BOB), role: "read" },
+    ]),
+  );
+  const skill = await built.app.createOwnedSkill({
+    principalId: ALICE,
+    homeScope: scopeId("persona", ada.id),
+    name: "review-checklist",
+    description: "Use when reviewing a change.",
+    body: "Check tests first.",
+  });
+  assert.equal(skill?.scopeId, scopeId("persona", ada.id));
+  const sees = async (who: string) =>
+    (await built.app.listVisibleSkills(who)).some((row) => row.skill?.id === skill!.id);
+  assert.equal(await sees(ALICE), true);
+  assert.equal(await sees(BOB), true);
+  assert.equal(await sees(CAROL), false);
+});
+
 test("credentials attached by an owner reach every turn that uses the persona, and leave with it", async () => {
   const { built, personas, enable, sysprompt } = setup();
   const keychain = built.keychain;

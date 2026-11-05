@@ -53,7 +53,17 @@ async function getPersona(ctx: ApiCtx): Promise<void> {
   const access = await Promise.all(
     result.value.access.map(async (grant) => ({ ...grant, label: await granteeLabel(ctx, grant.scopeId) })),
   );
-  respond(ctx, { status: "ok", value: { ...result.value, access } }, "persona");
+  const home = `persona:${result.value.id}`;
+  const skills = (await ctx.app.listSkills())
+    .filter((skill) => skill.scopeId === home && skill.status !== "archived")
+    .map((skill) => ({
+      id: skill.id,
+      name: skill.manifest.name,
+      description: skill.manifest.description,
+      status: skill.status,
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  respond(ctx, { status: "ok", value: { ...result.value, access, skills } }, "persona");
 }
 
 async function granteeLabel(ctx: ApiCtx, scopeId: string): Promise<string | undefined> {

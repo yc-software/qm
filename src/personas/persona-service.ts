@@ -281,7 +281,7 @@ export function personaPrompt(turn: PersonaForTurn, actorId: string): string {
   const lines = [
     `## Persona: ${persona.name}`,
     `You are acting as the persona "${persona.name}" (${turn.scope}). Its skills, notes and credentials come from that scope; who is in the room and where your writes land still come from this conversation. Organization instructions take precedence over the persona's.`,
-    `The sender's role on this persona is ${turn.role}${samePerson(persona.createdBy, actorId) ? " (they created it)" : ""}. Owners and writers may change it through the personas API; readers may only use it.`,
+    `The sender's role on this persona is ${turn.role}${samePerson(persona.createdBy, actorId) ? " (they created it)" : ""}. Owners and writers may change it through the personas API, and add a skill to it by creating one with \`scopeId: "${turn.scope}"\` on \`POST /v1/skills\`; readers may only use it.`,
   ];
   if (persona.description.trim()) lines.push(`Purpose: ${persona.description.trim()}`);
   if (persona.instructions.trim()) lines.push("", persona.instructions.trim());

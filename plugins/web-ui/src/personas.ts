@@ -14,6 +14,7 @@ import { peopleResults, type DirectoryMatch } from "./people-results";
 import { avatarTpl, closeFormMenus, menuSelect } from "./ui";
 import { canvasToast } from "./split";
 import { tip } from "./tooltip";
+import { openSkillById } from "./skills";
 
 type PersonaRole = "owner" | "write" | "read";
 
@@ -47,6 +48,7 @@ interface PersonaDetail extends PersonaView {
   access: PersonaGrant[];
   credentials: Array<{ grantId: string; service: string; ownerId: string }>;
   forkedFromName?: string;
+  skills?: Array<{ id: string; name: string; description: string; status: string }>;
 }
 
 type GranteeKind = "person" | "team" | "org" | "channel";
@@ -112,9 +114,24 @@ export function personaSeeds(): Array<{ scopeId: string; name: string; kind: "pe
   return personasState.list.map((p) => ({ scopeId: `persona:${p.id}`, name: p.name, kind: "persona" }));
 }
 
-export function viewPersona(personaId: string): void {
+function openPersonaSkill(skillId: string): void {
+  openSkillById(skillId);
+  switchView("skills");
+}
+
+export function viewPersona(personaId: string, focusEditor = false): void {
   switchView("personas");
-  void openPersona(personaId);
+  void openPersona(personaId).then(() => {
+    if (!focusEditor) return;
+    requestAnimationFrame(() =>
+      document.querySelector<HTMLTextAreaElement>(".persona-form textarea[name=instructions]")?.focus(),
+    );
+  });
+}
+
+export function personaEditable(personaId: string): boolean {
+  const persona = personasState.list.find((p) => p.id === personaId);
+  return persona ? canEditPersona(persona.role) : false;
 }
 
 export async function chatWithPersonaId(personaId: string): Promise<void> {
@@ -371,6 +388,28 @@ function personaFactsTpl(persona: PersonaDetail): TemplateResult {
           </div>`
         : nothing
     }
+    <div class="field">
+      <label>Skills</label>
+      ${
+        persona.skills?.length
+          ? html`<div class="persona-skill-list">
+              ${persona.skills.map(
+                (skill) =>
+                  html`<button class="persona-skill" type="button" @click=${() => openPersonaSkill(skill.id)}>
+                    <span class="persona-skill-name">${skill.name}</span>
+                    ${skill.status === "published" ? nothing : html`<span class="badge">${skill.status}</span>`}
+                    <span class="persona-skill-description hint" dir="auto">${skill.description}</span>
+                  </button>`,
+              )}
+            </div>`
+          : html`<div class="value"><span class="hint">None yet.</span></div>`
+      }
+      ${
+        canEditPersona(persona.role)
+          ? html`<div class="hint">Ask QM to write a skill for ${persona.name}, or move one of yours into it.</div>`
+          : nothing
+      }
+    </div>
     <div class="field">
       <label>Credentials</label>
       <div class="value persona-credentials">
@@ -892,8 +931,20 @@ export function sessionPersonaChip(
   const sessionId = session.id;
   const persona = personasState.list.find((p) => p.id === personaId);
   const name = personaName(personaId);
-  return html`<span class="session-fork-badge session-persona-badge" ${tip(`Chatting as ${name}`)}>
-    ${personaIconTpl(persona?.icon, 13)}<span dir="auto">${name}</span>
+  return html`<span class="session-fork-badge session-persona-badge">
+    <button
+      class="session-persona-open"
+      type="button"
+      aria-label=${`View ${name}`}
+      ${tip(`Chatting as ${name}. Open persona`)}
+      @pointerdown=${(e: Event) => e.stopPropagation()}
+      @click=${(e: Event) => {
+        e.stopPropagation();
+        viewPersona(personaId);
+      }}
+    >
+      ${personaIconTpl(persona?.icon, 13)}<span dir="auto">${name}</span>
+    </button>
     <button
       class="session-persona-clear"
       type="button"

@@ -32,7 +32,11 @@ export async function skillVisibilityContext(
   ];
   const accessibleScopes = new Set(await h.currentResourceScopesForViewer(principalId));
   const member = sharedHomes.map((sid) => (accessibleScopes.has(sid) ? sid : null));
-  const shared = member.filter((sid): sid is ScopeId => sid !== null);
+  const personaHomes = [...new Set(homes.filter((sid) => parseScopeId(sid).kind === "persona"))];
+  const personas = (
+    await Promise.all(personaHomes.map(async (sid) => ((await h.principalCanReadScope(principalId, sid)) ? sid : null)))
+  ).filter((sid): sid is ScopeId => sid !== null);
+  const shared = [...member.filter((sid): sid is ScopeId => sid !== null), ...personas];
   const teams = (actor.teamIds ?? []).map((t) => scopeId("team", t));
   const ordered = [...new Set([scopeId("personal", principalId), ...shared, ...teams, scopeId("org", orgIdOf())])];
   const entitled = (p: Principal, sess: ScopeId, org: ScopeId) => [
@@ -402,7 +406,7 @@ export function createSkillMethods(
       if (!name || !description || !body) throw new Error("skill requires a non-empty name, description, and body");
       const homeScope = input.homeScope ?? scopeId("personal", input.principalId);
       const homeKind = parseScopeId(homeScope).kind;
-      if (homeKind !== "personal" && homeKind !== "channel" && homeKind !== "group") {
+      if (homeKind !== "personal" && homeKind !== "channel" && homeKind !== "group" && homeKind !== "persona") {
         throw new Error(
           "a skill cannot be created directly in an org or team scope — promote a published skill instead",
         );

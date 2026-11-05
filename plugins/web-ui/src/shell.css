@@ -13274,6 +13274,59 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
 }
 .session-persona-badge {
   cursor: default;
+  gap: 4px;
+}
+.session-persona-open {
+  display: inline-flex;
+  align-items: center;
+  gap: inherit;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.session-persona-open:hover {
+  text-decoration: underline;
+}
+.persona-skill-list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.persona-skill {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  column-gap: 8px;
+  row-gap: 2px;
+  padding: 8px 12px;
+  border: 0;
+  border-top: 1px solid var(--border);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.persona-skill:first-child {
+  border-top: 0;
+}
+.persona-skill:hover {
+  background: var(--muted);
+}
+.persona-skill-name {
+  font-weight: 500;
+  font-size: var(--font-13);
+}
+.persona-skill-description {
+  grid-column: 1 / -1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .session-persona-clear {
   display: inline-flex;

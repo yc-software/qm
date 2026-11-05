@@ -838,6 +838,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     currentResourceScopesForViewer,
     canUseContext,
     principalCanAccessCurrentScope,
+    principalCanReadScope,
     principalCanWriteScope,
     canContinueOnWeb,
     mayWriteSession,
