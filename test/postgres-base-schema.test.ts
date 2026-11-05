@@ -32,7 +32,7 @@ async function migrate(url: string): Promise<void> {
 async function markTenancyApplied(url: string, admin: pg.Pool): Promise<void> {
   createPostgresSessionStore(url);
   await createPostgresRunStore(url).close();
-  const tenancy = registeredPgMigrations(url).filter((m) => /-tenants\//.test(m.id));
+  const tenancy = registeredPgMigrations(url).filter((m) => /-tenants[/-]/.test(m.id));
   await admin.query("INSERT INTO qm_schema_migrations(id, checksum) SELECT * FROM unnest($1::text[], $2::text[])", [
     tenancy.map((m) => m.id),
     tenancy.map((m) => m.checksum),
