@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createServer, request } from "node:http";
 import type { AddressInfo } from "node:net";
 import { proxyToAppHost, relayUpgradeToAppHost } from "../src/proxy.ts";
+import { responseOnSocket } from "../../chassis/src/websocket-relay.ts";
 
 const upgrades: Array<Record<string, string | string[] | undefined>> = [];
 const upstream = createServer(async (req, res) => {
@@ -23,7 +24,10 @@ upstream.on("upgrade", (req, socket) => {
 await new Promise<void>((resolve) => upstream.listen(0, resolve));
 const upstreamUrl = `http://localhost:${(upstream.address() as AddressInfo).port}`;
 const portal = createServer((req, res) => proxyToAppHost(req, res, upstreamUrl, "198.51.100.1"));
-portal.on("upgrade", (req, socket, head) => relayUpgradeToAppHost(req, socket, head, upstreamUrl, "198.51.100.1"));
+portal.on("upgrade", (req, socket, head) => {
+  const res = responseOnSocket(req, socket);
+  if (res) relayUpgradeToAppHost(req, res, { socket, head }, upstreamUrl, "198.51.100.1");
+});
 await new Promise<void>((resolve) => portal.listen(0, resolve));
 test.after(() => {
   upstream.close();

@@ -1,4 +1,4 @@
-import type { UpgradeTarget } from "./deployment-upgrade.ts";
+import type { UpgradeTarget } from "../../../plugins/chassis/src/websocket-relay.ts";
 import type { UNATTENDED_ADMIN_GRANTS } from "../control-service.ts";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { compilePath, findRoute } from "../../../plugins/chassis/src/router.ts";

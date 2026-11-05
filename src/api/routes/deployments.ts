@@ -31,7 +31,7 @@ import { principalDestination } from "../../reach/reach.ts";
 import { FRAME_SESSION_COOKIE, portalSession, portalSessionFrom } from "../../deploy/viewer-session.ts";
 import { EMBED_ANCESTORS_HINT, parseEmbedAncestors } from "../../deploy/embed-ancestors.ts";
 import { proxyHeaders } from "../../util/http-proxy.ts";
-import { proxyWebSocketUpgrade, upgradeOriginAllowed } from "./deployment-upgrade.ts";
+import { relayWebSocket } from "../../../plugins/chassis/src/websocket-relay.ts";
 import { deploymentGitParts, isDeploymentGitRoute } from "../../../plugins/chassis/src/deployment-git.ts";
 
 function deploymentProxyAgent(port?: number): { agent?: SocksProxyAgent } {
@@ -562,8 +562,16 @@ async function proxyReach(
     );
   }
   if (ctx.upgrade) {
-    const agent = deploymentProxyAgent(reach.endpoint.socksProxyPort).agent;
-    proxyWebSocketUpgrade(res, ctx.upgrade, reach.endpoint, subPath + url.search, headers, agent);
+    const target = {
+      tls: reach.endpoint.tls === true,
+      hostname: host,
+      port,
+      path: subPath + url.search,
+      headers,
+      timeoutMs: deps.deployDialTimeoutMs ?? CONFIG_DEFAULTS.deployDialTimeoutMs,
+      ...deploymentProxyAgent(reach.endpoint.socksProxyPort),
+    };
+    relayWebSocket(res, ctx.upgrade, target, "deployment-websocket");
     return;
   }
   if (/(?:^|,)\s*chunked\s*$/i.test(String(req.headers["transfer-encoding"] ?? ""))) {
@@ -827,11 +835,7 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
     sendJson(res, 404, { error: "not_found" });
     return true;
   }
-  if (ctx.upgrade && !upgradeOriginAllowed(req, rawHost)) {
-    sendJson(res, 403, { error: "forbidden", message: "cross-origin WebSocket refused" });
-    return true;
-  }
-  if (!["GET", "HEAD", "OPTIONS"].includes(ctx.method)) {
+  if (ctx.upgrade || !["GET", "HEAD", "OPTIONS"].includes(ctx.method)) {
     const origin = req.headers.origin;
     const site = req.headers["sec-fetch-site"];
     if ((origin !== undefined && origin !== `https://${rawHost}`) || (site !== undefined && site !== "same-origin")) {

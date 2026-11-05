@@ -4,14 +4,13 @@ import { MemoryFactsMissing } from "../memory/facts.ts";
 import { nameRequest, reportBackendError } from "../../plugins/chassis/src/error-reporting.ts";
 import {
   createServer as createHttpServer,
-  ServerResponse,
   type IncomingMessage,
   type RequestListener,
+  type ServerResponse,
   type Server,
 } from "node:http";
-import { Socket } from "node:net";
 import type { Duplex } from "node:stream";
-import { isWebSocketUpgrade } from "./routes/deployment-upgrade.ts";
+import { failUpgrade, isWebSocketUpgrade, responseOnSocket } from "../../plugins/chassis/src/websocket-relay.ts";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest, type HTTPMethods } from "fastify";
 import type { App } from "./app.ts";
 import type { ServerDeps } from "./deps.ts";
@@ -502,7 +501,7 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
   });
   server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
     socket.on("error", () => socket.destroy());
-    void upgradeFront(req, socket, head).catch(() => socket.destroy());
+    void upgradeFront(req, socket, head).catch((error: unknown) => failUpgrade(socket, "deployment-websocket", error));
   });
   const { fastify, routing } = buildFastify(wiring, server);
   const ready = Promise.resolve(fastify.ready());
@@ -513,11 +512,8 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
   server.maxConnections = 1024;
 
   async function upgradeFront(req: IncomingMessage, socket: Duplex, head: Buffer): Promise<void> {
-    if (!(socket instanceof Socket) || !isWebSocketUpgrade(req)) return void socket.destroy();
-    const res = new ServerResponse(req);
-    res.assignSocket(socket);
-    res.shouldKeepAlive = false;
-    res.on("finish", () => socket.end());
+    const res = isWebSocketUpgrade(req) ? responseOnSocket(req, socket) : null;
+    if (!res) return void socket.destroy();
     const base: BaseCtx = { ...baseCtx(req, res, wiring), upgrade: { socket, head } };
     if (await proxyDeploymentSubdomain(base)) return nameRequest(base.method, "/deployment-proxy/websocket");
     sendJson(res, 404, { error: "not_found" });
