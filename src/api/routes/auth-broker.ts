@@ -7,6 +7,7 @@ import { deployRef, encodeRef } from "../../acl/resource-ref.ts";
 import { externalMemberActive, validEmail } from "../../identity/external-members.ts";
 import { isObj, authorizeAdmin, orgScope, audit, activePrincipal } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
+import { loadTenant } from "../../tenants/cache.ts";
 import { boundTenant, withTenant } from "../../tenants/context.ts";
 
 const NAMESPACE = "authbroker:";
@@ -96,7 +97,10 @@ async function emailAllowed(ctx: ApiCtx): Promise<void> {
   const tenants = ctx.deps.directory?.tenantsForEmail;
   if (boundTenant() || !tenants) return sendJson(ctx.res, 200, await admission(ctx, email));
   for (const { id } of await tenants(email)) {
-    const admitted = await withTenant(id, () => admission(ctx, email));
+    const admitted = await withTenant(id, async () => {
+      await loadTenant();
+      return admission(ctx, email);
+    });
     if (admitted.allowed) return sendJson(ctx.res, 200, admitted);
   }
   return sendJson(ctx.res, 200, { allowed: false });
