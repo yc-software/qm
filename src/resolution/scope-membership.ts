@@ -17,6 +17,7 @@ interface ScopeMembershipDeps {
   managedGroups?: Pick<ManagedGroupDirectory, "recognizes" | "membership" | "members">;
   directory?: {
     channelMember(channelId: string, principalId: string): Promise<boolean>;
+    liveChannelMember?(channelId: string, principalId: string): Promise<boolean>;
     groupMember(groupId: string, principalId: string): Promise<boolean>;
     channelMembership(channelId: string, principalId: string): Promise<boolean | undefined>;
     groupMembership(groupId: string, principalId: string): Promise<boolean | undefined>;
@@ -69,9 +70,13 @@ async function currentSharedScopeMember(
   const member = await deps.directory?.get?.(principalId).catch(swallowAs("scope membership: directory lookup", null));
   const ids = [...new Set([principalId, member?.principalId, member?.slackId].filter((id): id is string => !!id))];
   const managed = kind === "group" && deps.managedGroups?.recognizes(ref);
-  const membership = (id: string) => {
+  const membership = async (id: string) => {
     if (managed) return deps.managedGroups!.membership(ref, id);
-    return kind === "channel" ? deps.directory?.channelMember(ref, id) : deps.directory?.groupMember(ref, id);
+    if (kind === "group") return deps.directory?.groupMember(ref, id);
+    if (await deps.directory?.channelMember(ref, id)) return true;
+    // Private channels shared with another organization never count from a crawled roster; a live Slack
+    // check recorded at turn admission is the only proof accepted there.
+    return deps.directory?.liveChannelMember?.(ref, id);
   };
   for (const id of ids)
     if (

@@ -654,6 +654,14 @@ export async function sessionTreeRuns(
   return live;
 }
 
+// Shown to the model when helper work is refused for access. It says what happened and what the
+// model can still do, so a refusal doesn't strand the person's request.
+export const HELPER_ACCESS_REFUSED =
+  "helpers can't run from this conversation right now: the requester's membership here can't be confirmed " +
+  "from what QM has recorded (common in private Slack channels shared with another organization, and in " +
+  "brand-new group DMs before they sync). Nothing was started or sent. Do the work yourself in this turn " +
+  "with your own tools instead; only if that isn't possible, tell the person plainly what you couldn't do.";
+
 export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscallsFactory {
   const lock = deps.advisoryLock;
 
@@ -713,7 +721,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           current.scopeId !== binding.scopeId ||
           (deps.authorize && !(await deps.authorize(current, binding.request.actor.id)))
         )
-          throw new Error("the sender no longer has access to this session");
+          throw new Error(HELPER_ACCESS_REFUSED);
         const request: OrchestratorInput = {
           ...binding.request,
           origin: binding.request.origin ?? { kind: "automation" },

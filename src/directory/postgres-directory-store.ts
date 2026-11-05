@@ -204,6 +204,17 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       return rows.length > 0;
     },
 
+    async liveChannelMember(channelId, principalId) {
+      const rows = await q(
+        `SELECT 1 FROM directory_channel_members member
+         JOIN directory_channels channel USING (org_id, channel_id)
+         WHERE member.org_id = $1 AND member.channel_id = $2 AND member.principal_id = ANY($3::text[])
+           AND channel.observed_at IS NOT NULL LIMIT 1`,
+        [orgId, channelId, rosterIds(principalId)],
+      );
+      return rows.length > 0;
+    },
+
     async channelMemberIds(channelId) {
       const known = await q("SELECT roster_known FROM directory_channels WHERE org_id = $1 AND channel_id = $2", [
         orgId,

@@ -9,6 +9,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   createSessionSyscalls,
+  HELPER_ACCESS_REFUSED,
   isSubagentThreadRef,
   requiresDelegation,
   sessionTreeRuns,
@@ -2002,6 +2003,24 @@ test("writes revalidate access even while a target is running", async () => {
   }).forTurn({ session: r.room, scopeId: scope, request: { actor, conversation } });
   assert.equal((await api.write({ target: child.id, text: "hello" })).ok, false);
   assert.deepEqual(await r.signals.takePending(run!.id), []);
+});
+
+test("a refused helper start tells the model it can do the work itself", async () => {
+  const r = await rig();
+  const api = createSessionSyscalls({
+    mailbox: r.mailbox,
+    sessions: r.sessions,
+    runs: r.runs,
+    signals: r.signals,
+    steerRun: r.steerRun,
+    advisoryLock: r.advisoryLock,
+    maxAttempts: 3,
+    authorize: async () => false,
+  }).forTurn({ session: r.room, scopeId: scope, request: { actor, conversation } });
+  const opened = await api.open({ task: "work" });
+  assert.equal(opened.ok, false);
+  assert.equal(opened.ok ? "" : opened.message, HELPER_ACCESS_REFUSED);
+  assert.match(HELPER_ACCESS_REFUSED, /Do the work yourself in this turn/);
 });
 
 test("completion cannot expand the finished run's audience and retries after its return delay", async (t) => {

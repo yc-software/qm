@@ -176,3 +176,18 @@ const EXPECTED = [
   "group:project-1 system:channel:priv -----",
   "group:project-1 (none) -----",
 ];
+
+test("a private shared channel admits writes only from a live Slack check", async () => {
+  const live = new Set<string>();
+  const shared = {
+    ...directory,
+    channelMember: async () => false,
+    liveChannelMember: async (channelId: string, principalId: string) => live.has(`${channelId}|${principalId}`),
+  };
+  const canWrite = createCanWriteScope({ ...deps, directory: shared });
+  assert.equal(await canWrite("alice@x.com", scopeId("channel", "connect")), false);
+  live.add("connect|alice@x.com");
+  assert.equal(await canWrite("alice@x.com", scopeId("channel", "connect")), true);
+  assert.equal(await canWrite("bob@x.com", scopeId("channel", "connect")), false);
+  assert.equal(await canWrite("alice@x.com", scopeId("group", "connect")), false);
+});

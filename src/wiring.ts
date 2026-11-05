@@ -42,6 +42,7 @@ import { createMemoryTidyService, withMemoryTidy, type MemoryTidyProfile } from 
 import { createRuntimeService } from "./agent/runtime-control.ts";
 import {
   createSessionSyscalls,
+  HELPER_ACCESS_REFUSED,
   type SessionSyscallsFactory,
   sessionTreeWorking,
   stoppableRoot,
@@ -1974,7 +1975,7 @@ export function buildApp(
   };
   const prepareSessionRequest = async (request: Parameters<RunStore["enqueue"]>[0]["request"]) => {
     const scope = resolution.scopeFor(request.conversation, request.actor);
-    if (!(await canWriteScope(request.actor.id, scope))) throw new Error("session actor no longer has scope access");
+    if (!(await canWriteScope(request.actor.id, scope))) throw new Error(HELPER_ACCESS_REFUSED);
     const ref = request.conversation.channelRef;
     if (request.conversation.kind !== "group" || !ref || !projects.recognizes(ref)) return request;
     const version = await projects.version(ref);

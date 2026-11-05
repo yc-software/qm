@@ -112,13 +112,41 @@ test("unknown, external and group metadata never publish an ordinary channel", a
     {},
     { name: "room" },
     { name: "room", is_private: true, is_member: false },
-    { name: "room", is_private: true, is_ext_shared: true },
     { name: "room", is_private: true, is_mpim: true },
   ]) {
     const { state, observe } = fixture();
     await observe(info);
     assert.equal(state.writes, 0);
   }
+});
+
+test("a private channel shared with another org records a live check that only grants write proof", async () => {
+  const { store, state, observe } = fixture();
+  await observe({ name: "room", is_private: true, is_ext_shared: true });
+  assert.equal(state.writes, 1);
+  assert.equal(await store.liveChannelMember("C_ONE", "U_ONE"), true);
+  assert.equal(await store.channelMember("C_ONE", "U_ONE"), false);
+  assert.equal(await store.conversationMembers("channel", "C_ONE"), undefined);
+  await store.replaceChannels(
+    [{ channelId: "C_ONE", name: "room", isPrivate: true, isExternal: true }],
+    [{ channelId: "C_ONE", principalId: "U_ONE" }],
+    Date.now() + 60_000,
+  );
+  assert.equal(await store.liveChannelMember("C_ONE", "U_ONE"), false);
+});
+
+test("a shared channel observation that fails to record never blocks the live turn", async () => {
+  for (const options of [{ failWrite: true }, { throwWrite: true }]) {
+    const { observe } = fixture(options);
+    assert.ok((await observe({ name: "room", is_private: true, is_ext_shared: true })).audience.length);
+  }
+});
+
+test("a shared channel observation is skipped when the speaker is not a live member", async () => {
+  const { state, observe } = fixture();
+  state.memberIds = [];
+  await observe({ name: "room", is_private: true, is_ext_shared: true });
+  assert.equal(state.writes, 0);
 });
 
 test("newer removal rejects an older in-flight live observation", async () => {

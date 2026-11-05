@@ -635,6 +635,22 @@ export function createDirectory(deps: {
           partialChannels: true,
         });
         if (!applied) throw new Error("Slack channel membership was not persisted before admission");
+      } else if (info.is_private && isExternallyShared(info) && membership.slackIdsByPrincipal?.has(actor.externalId)) {
+        // A private channel shared with another organization: its crawled roster never grants access, so
+        // record this live check (our own members only) for this turn's helpers. Best effort — the turn
+        // itself is already admitted from the live check.
+        await core
+          .pushDirectory({
+            channels: [{ channelId: channel, name: info.name, isPrivate: true, isExternal: true }],
+            channelMembers: [...membership.slackIdsByPrincipal.keys()].map((principalId) => ({
+              channelId: channel,
+              principalId,
+            })),
+            channelRosterIds: [channel],
+            channelsSyncedAt: observedAt,
+            partialChannels: true,
+          })
+          .catch((err: unknown) => console.warn(`[slack] shared channel observation not recorded: ${errMessage(err)}`));
       }
     }
     return membership;
