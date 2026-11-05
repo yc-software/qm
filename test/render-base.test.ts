@@ -1,12 +1,8 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import type { DurableMap } from "../src/persistence/durable-map.ts";
-import {
-  createRenderBase,
-  renderBaseStore,
-  type RenderBase,
-  type StoredRenderBase,
-} from "../src/sandbox/render-base.ts";
+import { createPostgresMap, processLevelMap, type DurableMap } from "../src/persistence/durable-map.ts";
+import type { PgPool } from "../src/persistence/pg-pool.ts";
+import { createRenderBase, type RenderBase, type StoredRenderBase } from "../src/sandbox/render-base.ts";
 import { parseRenderSandboxImage } from "../src/sandbox/render-limits.ts";
 import { createFakeRender } from "./support/fake-render.ts";
 import { testMap } from "./support/test-database.ts";
@@ -47,6 +43,9 @@ function setup(t: TestContext) {
   };
   return { fake, store, errors, make, prepareUntil };
 }
+
+const renderBaseStore = (pg: PgPool) =>
+  createPostgresMap<StoredRenderBase>(pg, "render_sandbox_bases", [], [], [processLevelMap("render_sandbox_bases")]);
 
 const prepare = (base: RenderBase) => base.prepare(new AbortController().signal);
 
