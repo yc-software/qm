@@ -5,7 +5,7 @@ import type { ScopeId } from "../types.ts";
 export const PERSONA_ROLES = ["read", "write", "owner"] as const;
 export type PersonaRole = (typeof PERSONA_ROLES)[number];
 
-export const roleRank = (role: PersonaRole | null | undefined): number => (role ? PERSONA_ROLES.indexOf(role) + 1 : 0);
+const roleRank = (role: PersonaRole | null | undefined): number => (role ? PERSONA_ROLES.indexOf(role) + 1 : 0);
 export const atLeast = (role: PersonaRole | null | undefined, floor: PersonaRole): boolean =>
   roleRank(role) >= roleRank(floor);
 
@@ -50,7 +50,7 @@ export interface PersonaStore {
   roles(grantees: readonly ScopeId[], id?: string): Promise<Map<string, PersonaRole>>;
 }
 
-export const PERSONA_MIGRATIONS: PgMigrationDefinition[] = [
+const PERSONA_MIGRATIONS: PgMigrationDefinition[] = [
   {
     id: "personas/store/0001",
     statements: [

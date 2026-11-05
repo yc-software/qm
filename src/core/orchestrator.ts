@@ -1026,12 +1026,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         surfaceLinks: surfaceHints?.linkSyntax ?? "",
         sessions: isWeb && surfaceName === "web" && Boolean(sessionSyscalls) && !input.swarm,
       });
-      const personaBlock =
-        typeof personaTurn === "string"
-          ? `## Persona\n${personaTurn}`
-          : persona
-            ? personaPrompt(persona, actor.id)
-            : "";
+      let personaBlock = persona ? personaPrompt(persona, actor.id) : "";
+      if (typeof personaTurn === "string") personaBlock = `## Persona\n${personaTurn}`;
       let systemPrompt = `${modeFrame}\n\n${[resolution.systemPrompt, personaBlock].filter(Boolean).join("\n\n")}\n\n${sharedCore}`;
       if (external)
         systemPrompt +=

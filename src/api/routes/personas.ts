@@ -5,12 +5,8 @@ import { KeychainError } from "../../credentials/keychain.ts";
 import type { PersonaResult } from "../../personas/persona-service.ts";
 
 function principalOf(ctx: ApiCtx, from: "query" | "body"): string | null {
-  const raw =
-    from === "query"
-      ? (ctx.url.searchParams.get("principalId") ?? "")
-      : isObj(ctx.body) && typeof ctx.body.principalId === "string"
-        ? ctx.body.principalId
-        : "";
+  const body = isObj(ctx.body) && typeof ctx.body.principalId === "string" ? ctx.body.principalId : "";
+  const raw = from === "query" ? (ctx.url.searchParams.get("principalId") ?? "") : body;
   const requested = raw.trim();
   if (ctx.capability) {
     if (requested && requested !== ctx.capability.actorId) {

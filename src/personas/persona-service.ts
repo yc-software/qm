@@ -16,15 +16,13 @@ import {
   type PersonaStore,
 } from "./persona-store.ts";
 
-export type { Persona, PersonaRole } from "./persona-store.ts";
+const personaScope = (id: string): ScopeId => scopeId("persona", id);
 
-export const personaScope = (id: string): ScopeId => scopeId("persona", id);
-
-export interface PersonaView extends Persona {
+interface PersonaView extends Persona {
   role: PersonaRole;
 }
 
-export interface PersonaDetail extends PersonaView {
+interface PersonaDetail extends PersonaView {
   access: PersonaAccess[];
   credentials: Array<{ grantId: string; service: string; ownerId: string }>;
   forkedFromName?: string;
