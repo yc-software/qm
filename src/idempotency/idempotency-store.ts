@@ -1,5 +1,6 @@
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { errMessage } from "../util/errors.ts";
+import { claimThenBind } from "../tenants/claim.ts";
 
 export interface IdempotencyRecord {
   key: string;
@@ -36,11 +37,9 @@ export function createIdempotencyStore(
     lastPruneAt = t;
     const cutoff = t - retentionMs;
     for (const [key, at] of done) if (at < cutoff) done.delete(key);
-    void (async () => {
-      for (const r of await backing.all()) {
-        if (r.at < cutoff) await backing.delete(r.key);
-      }
-    })().catch((e: unknown) => {
+    void claimThenBind(backing.claimIds, async (key) => {
+      if (((await backing.get(key))?.at ?? Infinity) < cutoff) await backing.delete(key);
+    }).catch((e: unknown) => {
       console.error("[idempotency] retention prune failed:", errMessage(e));
     });
   }
