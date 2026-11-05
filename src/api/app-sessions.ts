@@ -1217,7 +1217,9 @@ export function createSessionMethods(
           g.grantedBy,
         );
     },
-    async revokeGrant(ownerScopeId, ref, granteeScopeId, revokedBy) {
+    async revokeGrant(ownerScopeId, ref, granteeScopeId, revokedBy, opts) {
+      if (parseRef(ref).kind === "skill")
+        await deps.namedAgents?.assertMayInstruct(granteeScopeId, { id: revokedBy, live: opts?.liveActor === true });
       await deps.acl.revoke(ownerScopeId, ref, granteeScopeId, revokedBy, await artifactAuthor(ownerScopeId, ref));
       deps.auditLog.record({
         at: Date.now(),

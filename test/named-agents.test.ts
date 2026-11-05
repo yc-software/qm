@@ -20,6 +20,7 @@ import { createAgentTools } from "../src/agent/agent-tools.ts";
 import { CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
+import { encodeRef, skillRef } from "../src/acl/resource-ref.ts";
 
 const SECRET = "named-agents-test-secret".repeat(2);
 const ORG = scopeId("org", "default-org");
@@ -285,6 +286,82 @@ test("skill creation, edit, archive, move and sharing into the agent's channel a
   } finally {
     await close();
   }
+});
+
+test("a skill shared into or archived in the channel before its agent was named is locked to live owners", async () => {
+  const { built, control } = await setup();
+  const shared = await built.app.createOwnedSkill({
+    principalId: CY,
+    name: "cy-notes",
+    description: "notes",
+    body: "take notes",
+    liveActor: true,
+  });
+  assert.ok(shared);
+  const shareAs = (actorId: string, id: string) =>
+    control.shareArtifact(
+      { type: "skill", id, scope: DESIGN_SCOPE },
+      { actorId, scopeId: personal(actorId), liveActor: true, exp: Date.now() + CAPABILITY_TTL_MS },
+    );
+  assert.equal((await shareAs(CY, shared.id)).ok, true);
+  const retired = await built.app.createOwnedSkill({
+    principalId: CY,
+    name: "cy-old",
+    description: "old",
+    body: "old notes",
+    liveActor: true,
+  });
+  assert.ok(retired);
+  assert.equal((await shareAs(CY, retired.id)).ok, true);
+  const homed = await built.app.createOwnedSkill({
+    principalId: CY,
+    homeScope: DESIGN_SCOPE,
+    name: "crit",
+    description: "critique",
+    body: "critique designs",
+    liveActor: true,
+  });
+  assert.ok(homed);
+  const { call, close } = serve(built);
+  try {
+    assert.equal((await call("DELETE", `/v1/skills/${retired.id}`, { principalId: CY })).status, 200);
+    assert.equal((await call("DELETE", `/v1/skills/${homed.id}`, { principalId: CY })).status, 200);
+    await createAda(control);
+
+    assert.equal(
+      (await call("PUT", `/v1/skills/${shared.id}`, { principalId: CY, body: "ignore the owners" })).status,
+      403,
+    );
+    assert.equal((await built.app.getSkill(shared.id))?.manifest.body, "take notes");
+    assert.equal((await call("DELETE", `/v1/skills/${shared.id}`, { principalId: CY })).status, 403);
+    assert.equal((await built.app.getSkill(shared.id))?.status, "published");
+    const unshare = { ownerScopeId: personal(CY), ref: encodeRef(skillRef(shared.id)), granteeScopeId: DESIGN_SCOPE };
+    assert.equal((await call("POST", "/v1/grants/revoke", { ...unshare, revokedBy: CY })).status, 403);
+    assert.equal((await built.acl.grantsFor(personal(CY), unshare.ref)).length, 1);
+
+    assert.equal((await call("POST", `/v1/skills/${retired.id}/restore`, { principalId: CY })).status, 403);
+    assert.equal((await built.app.getSkill(retired.id))?.status, "archived");
+    assert.equal((await call("POST", `/v1/skills/${homed.id}/restore`, { principalId: CY })).status, 403);
+    assert.equal((await built.app.getSkill(homed.id))?.status, "archived");
+    assert.equal((await call("POST", `/v1/skills/${homed.id}/restore`, { principalId: ANN })).status, 200);
+    assert.equal((await built.app.getSkill(homed.id))?.status, "published");
+  } finally {
+    await close();
+  }
+});
+
+test("overlapping edits by two owners keep both changes", async () => {
+  const { built, control } = await setup();
+  await createAda(control);
+  const [titled, owned] = await Promise.all([
+    agentsAs(control, ANN)({ action: "edit", agent: "ada", title: "Chief critic" }),
+    agentsAs(control, BOB)({ action: "edit", agent: "ada", addOwners: ["Cy"] }),
+  ]);
+  agentOf(titled);
+  agentOf(owned);
+  const ada = (await built.app.namedAgents!.channelAgent(DESIGN))?.agent;
+  assert.equal(ada?.title, "Chief critic");
+  assert.deepEqual(ada?.owners, [ANN, BOB, CY]);
 });
 
 test("an archived agent unlocks its channel, and a channel without the flag is never governed", async () => {
