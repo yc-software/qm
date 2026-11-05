@@ -30,7 +30,7 @@ export function createLlmCaptures(deps: {
   now: () => number;
 }): Pick<SessionStore, "recordLlmRequest" | "listLlmRequests" | "purgeLlmCaptures"> {
   const { db, now } = deps;
-  const { q } = db;
+  const { q, query } = db;
   return {
     async recordLlmRequest(sessionId, rec: NewLlmRequest): Promise<LlmRequestRecord> {
       const envelope = promptEnvelopeBody(rec.promptEnvelope);
@@ -106,7 +106,7 @@ export function createLlmCaptures(deps: {
       const deadline = opts?.deadline ?? Infinity;
       let envelopes = 0;
       while (Date.now() < deadline && !opts?.stop?.()) {
-        const deleted = await db.query(
+        const deleted = await query(
           `DELETE FROM llm_prompt_envelopes
             WHERE hash IN (SELECT hash FROM llm_prompt_envelopes WHERE created_at < $1
                             ORDER BY created_at LIMIT $2 FOR UPDATE SKIP LOCKED)

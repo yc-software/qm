@@ -83,20 +83,20 @@ export const USER_MIGRATIONS: PgMigrationDefinition[] = [
        DECLARE skipped bigint; skipped_ids text;
        BEGIN
          IF to_regclass('principal_links') IS NULL OR to_regclass('users') IS NULL THEN RETURN; END IF;
-         CREATE TEMP TABLE copied_links ON COMMIT DROP AS SELECT id, json FROM principal_links;
          INSERT INTO users(id)
-           SELECT DISTINCT ${fold("json->>'canonicalId'")} FROM copied_links
+           SELECT DISTINCT ${fold("json->>'canonicalId'")} FROM principal_links
           WHERE coalesce(btrim(json->>'canonicalId'), '') <> ''
          ON CONFLICT (id) DO NOTHING;
          INSERT INTO user_links(alias_id, user_id, evidence, linked_by, created_at)
            SELECT ${fold("id")}, ${fold("json->>'canonicalId'")}, coalesce(json->>'evidence', ''),
                   coalesce(json->>'linkedBy', ''), to_timestamp(coalesce((json->>'createdAt')::double precision, 0) / 1000)
-             FROM copied_links
+             FROM principal_links
             WHERE coalesce(btrim(json->>'canonicalId'), '') <> ''
               AND ${fold("id")} <> ${fold("json->>'canonicalId'")}
          ON CONFLICT (alias_id) DO NOTHING;
-         SELECT count(*), string_agg(p.id, ', ') INTO skipped, skipped_ids FROM copied_links p
-          WHERE NOT EXISTS (SELECT 1 FROM user_links l WHERE l.alias_id = ${fold("p.id")} AND l.user_id = ${fold("p.json->>'canonicalId'")});
+         SELECT count(*), string_agg(p.id, ', ') INTO skipped, skipped_ids FROM principal_links p
+          WHERE NOT EXISTS (SELECT 1 FROM user_links l
+                             WHERE l.alias_id = ${fold("p.id")} AND l.user_id = ${fold("p.json->>'canonicalId'")});
          IF skipped > 0 THEN
            RAISE EXCEPTION 'users/0002: % principal_links rows cannot be copied (empty canonical, self-link or collision): %',
              skipped, skipped_ids;

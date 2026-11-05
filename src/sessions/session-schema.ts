@@ -1,5 +1,6 @@
 import type { PgMigrationDefinition } from "../persistence/pg-pool.ts";
 import { TENANCY, tenantRowSecurity, tenantTables } from "../tenants/migrations.ts";
+import { DROP_TENANT_PREBUILD_INDEXES } from "../tenants/prebuilt-indexes.ts";
 
 export const SPEND_INDEXABLE = `(spend_usage_json(usage_json) IS NOT NULL
   AND octet_length(session_id) + octet_length(model) + octet_length(usage_json) <= 2000)`;
@@ -504,6 +505,7 @@ export const SESSION_MIGRATIONS = [
   SESSION_FACTS,
   SESSION_FACTS_COPY,
   PARTICIPANT_MEMBERSHIP,
+  DROP_TENANT_PREBUILD_INDEXES,
   ...SESSION_TABLES,
 ];
 
