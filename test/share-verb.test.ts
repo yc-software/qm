@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test } from "./support/tenant-test.ts";
 import { TEST_TENANT } from "./support/test-config.ts";
 import assert from "node:assert/strict";
 import { createControlService } from "../src/api/control-service.ts";

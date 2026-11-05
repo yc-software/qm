@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test } from "./support/tenant-test.ts";
 import { createHmac } from "node:crypto";
 import { conversationEvent, createLoopIngress, type LoopIngress, type IngressDelivery } from "../src/loops/ingress.ts";
 import { createLoopStore } from "../src/loops/loop-store.ts";
@@ -9,6 +9,7 @@ import { createGmailPushClient, type GmailCursor } from "../src/loops/gmail-push
 import { loopIngressRoutes } from "../src/api/routes/loop-ingress.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { TEST_TENANT } from "./support/test-tenant.ts";
 
 async function world() {
   const sources = testMap<LoopIngress>();
@@ -32,6 +33,7 @@ async function world() {
     items,
     outputs: createLoopOutputStore(testMap()),
     lock: testAdvisoryLock(),
+    tenants: { gmailTenants: async () => [TEST_TENANT] },
     fire: {
       fire: async (
         loopId: string,

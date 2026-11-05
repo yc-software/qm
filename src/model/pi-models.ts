@@ -284,7 +284,10 @@ export function resolveBuiltinModel(id: string): PiModel | undefined {
   return builtinModel(id);
 }
 
-function resolveBaseModel(id: string): PiModel | undefined {
+function resolveBaseModel(
+  id: string,
+  customModel: (id: string) => CustomRuntimeModel | undefined = resolveCustomModel,
+): PiModel | undefined {
   if (isGatewayModelId(id)) return resolveGatewayModel(id);
   if (overlayUnavailableReason(id) !== undefined) return undefined;
   const builtin = resolveBuiltinModel(id);
@@ -293,8 +296,12 @@ function resolveBaseModel(id: string): PiModel | undefined {
   if (overlay && !isEmbeddingModel(overlay)) {
     return modelFromOverlay(overlay, false);
   }
-  const custom = resolveCustomModel(id);
+  const custom = customModel(id);
   return custom ? customPiModel(custom) : OPENROUTER_CATALOG_MODELS.get(id);
+}
+
+export function resolveDeploymentModel(id: string): PiModel | undefined {
+  return resolveBaseModel(id, () => undefined);
 }
 
 function customPiModel(custom: CustomRuntimeModel): PiModel {

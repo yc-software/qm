@@ -5,7 +5,7 @@ import type { SecurityScreener } from "../src/security/security-screener.ts";
 import { MAX_SCREEN_CHARS } from "../src/security/security-posture.ts";
 import { createSkillBundleStore, type SkillBundleStore } from "../src/skills/skill-bundle-store.ts";
 import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
-import { test } from "node:test";
+import { test } from "./support/tenant-test.ts";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";

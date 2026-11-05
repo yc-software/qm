@@ -1,4 +1,4 @@
-import { test, afterEach, beforeEach } from "node:test";
+import { test, afterEach, beforeEach } from "./support/tenant-test.ts";
 import assert from "node:assert/strict";
 import { rmSync } from "node:fs";
 import { join } from "node:path";

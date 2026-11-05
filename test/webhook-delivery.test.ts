@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test } from "./support/tenant-test.ts";
 import assert from "node:assert/strict";
 import { createPostgresDeliveryStore } from "../src/delivery/postgres-delivery-store.ts";
 import { WEBHOOK_CLAIM_MS, webhookSender, webhookSigningKey } from "../src/delivery/webhook-delivery.ts";

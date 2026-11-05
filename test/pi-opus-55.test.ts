@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test, type TestContext } from "node:test";
+import { test, type TestContext } from "./support/tenant-test.ts";
 import { getRequiredModel, modelSupportsFastMode } from "../src/model/pi-models.ts";
 import { buildModelRuntime, probeModel } from "../src/model/model-runtime.ts";
 

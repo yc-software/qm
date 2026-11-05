@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test } from "./support/tenant-test.ts";
 import { createHmac } from "node:crypto";
 import { configurePgPooling, createPgPool } from "../src/persistence/pg-pool.ts";
 import { createPostgresAdvisoryLock } from "../src/persistence/advisory-lock.ts";
@@ -36,6 +36,7 @@ test(
         items,
         outputs: createLoopOutputStore(testMap()),
         lock,
+        tenants: { gmailTenants: async () => [] },
         fire: {
           fire: async () =>
             lock.withLock(`loop-lifecycle:${loop.id}`, async () => {

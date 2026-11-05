@@ -1,7 +1,7 @@
 import type { SandboxResource, SandboxDefault } from "../src/sandbox/sandbox-resources.ts";
 import { upgradeLegacySandboxes, type SandboxResourceUpgradeMarker } from "../src/sandbox/sandbox-resource-upgrade.ts";
 import { createPostgresMap } from "../src/persistence/durable-map.ts";
-import { test } from "node:test";
+import { test } from "./support/tenant-test.ts";
 import assert from "node:assert/strict";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { createPostgresAdvisoryLock, createNoopAdvisoryLock } from "../src/persistence/advisory-lock.ts";

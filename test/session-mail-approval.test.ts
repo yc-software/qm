@@ -1,5 +1,5 @@
 import type { NewItem } from "../src/sessions/items.ts";
-import { test } from "node:test";
+import { test } from "./support/tenant-test.ts";
 import assert from "node:assert/strict";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

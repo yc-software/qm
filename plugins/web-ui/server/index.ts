@@ -37,6 +37,7 @@ import {
   serveFavicon,
 } from "../../chassis/src/http.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
+import { createTenantFeeds } from "./tenant-feeds.ts";
 import { createBrandingCache, injectBranding } from "../../chassis/src/branding.ts";
 import { parseSuggestedActivities } from "../../chassis/src/suggested-activities.ts";
 import { principalInAllowlist } from "../../chassis/src/principal-allowlist.ts";
@@ -138,7 +139,7 @@ const runThreadKeys = new Map<string, string>();
 const activeRunsByThread = new Map<string, string[]>();
 
 function threadKey(user: string, threadRef: string): string {
-  return `${user}\0${threadRef}`;
+  return `${feeds.requestTenant() ?? ""}\0${user}\0${threadRef}`;
 }
 
 function forgetRun(runId: string): void {
@@ -160,8 +161,6 @@ function rememberRun(runId: string, user: string, threadRef: string): void {
   runThreadKeys.set(runId, key);
   activeRunsByThread.set(key, [...(activeRunsByThread.get(key) ?? []), runId]);
 }
-
-const deliveryClients = new Map<string, Set<ServerResponse>>();
 
 function ownerOfWebThread(threadRef: string): string | null {
   if (!threadRef.startsWith("web:")) return null;
@@ -512,27 +511,8 @@ async function slackWorkspaceUrl(): Promise<string | null> {
 }
 
 const WEB_DELIVERY_POLL_MS = Number(process.env.WEB_DELIVERY_POLL_MS ?? 2500);
-const WEB_DELIVERY_GIVEUP_MS = 60_000;
-let deliveriesPollInFlight = false;
+const SSE_HEARTBEAT_MS = 15_000;
 let deliveriesPollFailing = false;
-
-interface PendingWebDelivery {
-  id: string;
-  createdAt: number;
-  destination?: { target?: string };
-}
-
-export async function drainWebDeliveries(): Promise<void> {
-  if (deliveriesPollInFlight) return;
-  deliveriesPollInFlight = true;
-  try {
-    noteDeliveriesPoll(await pollWebDeliveries());
-  } catch (e) {
-    noteDeliveriesPoll(e);
-  } finally {
-    deliveriesPollInFlight = false;
-  }
-}
 
 function noteDeliveriesPoll(failure: unknown): void {
   if (failure === undefined) {
@@ -544,151 +524,28 @@ function noteDeliveriesPoll(failure: unknown): void {
   deliveriesPollFailing = true;
 }
 
-async function pollWebDeliveries(): Promise<unknown> {
-  const r = await coreFetch("GET", "/v1/deliveries?type=web");
-  if (r.status !== 200) return new Error(`GET /v1/deliveries http ${r.status}: ${r.text.slice(0, 200)}`);
-  const pending = (JSON.parse(r.text) as { deliveries?: PendingWebDelivery[] }).deliveries ?? [];
-  const now = Date.now();
-  let failure: unknown;
-  for (const d of pending) {
-    const target = d.destination?.target ?? "";
-    const conns = deliveryClients.get(ownerOfWebThread(target) ?? "");
-    if (conns && conns.size) {
-      for (const res of conns) sseEvent(res, "delivery", { threadRef: target });
-    } else if (now - (d.createdAt ?? 0) < WEB_DELIVERY_GIVEUP_MS) {
-      continue;
-    }
-    try {
-      const ack = await coreFetch("POST", `/v1/deliveries/${encodeURIComponent(d.id)}/ack`);
-      if (ack.status !== 200)
-        failure ??= new Error(`ack delivery ${d.id} http ${ack.status}: ${ack.text.slice(0, 200)}`);
-    } catch (e) {
-      failure ??= e;
-    }
-  }
-  return failure;
-}
-
-const SSE_HEARTBEAT_MS = 15_000;
-const STATE_FEED_RECONNECT_MS = Number(process.env.STATE_FEED_RECONNECT_MS ?? 3_000);
-
-interface SessionStateFrame {
-  threadRef?: string;
-  state?: string;
-  participants?: string[];
-  [k: string]: unknown;
-}
-
-function forwardSessionState(frame: SessionStateFrame): void {
-  const threadRef = typeof frame.threadRef === "string" ? frame.threadRef : "";
-  if (!threadRef) return;
-  const targets = new Set<string>(
-    Array.isArray(frame.participants) ? frame.participants.filter((p): p is string => typeof p === "string") : [],
-  );
-  if (targets.size === 0) {
-    const owner = ownerOfWebThread(threadRef);
-    if (owner) targets.add(owner);
-  }
-  const { participants: _participants, ...visible } = frame;
-  for (const user of targets) {
-    for (const res of deliveryClients.get(user) ?? []) sseEvent(res, "session_state", visible);
-  }
-}
-
-async function consumeCoreFeed(
-  path: string,
-  eventName: string,
-  onEvent: (data: unknown) => void,
-  onReconnect?: () => void,
-): Promise<void> {
-  let dropped = false;
-  for (;;) {
-    try {
-      const signedPath = withSourceAuthNonce(path, CORE_SIGNING_SECRET);
-      const r = await fetch(`${CORE}${signedPath}`, {
-        headers: signedHeaders(CORE_SIGNING_SECRET, "GET", signedPath, ""),
-      });
-      if (r.status === 200 && r.body) {
-        if (dropped) {
-          dropped = false;
-          onReconnect?.();
-        }
-        const reader = r.body.getReader();
-        const decoder = new TextDecoder();
-        let buf = "";
-        for (;;) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          buf += decoder.decode(value, { stream: true });
-          const frames = buf.split("\n\n");
-          buf = frames.pop() ?? "";
-          for (const frame of frames) {
-            const lines = frame.split("\n");
-            if (lines.some((l) => l === `event: ${eventName}_resync`)) {
-              onReconnect?.();
-              continue;
-            }
-            if (!lines.some((l) => l === `event: ${eventName}`)) continue;
-            const data = lines.find((l) => l.startsWith("data: "))?.slice("data: ".length);
-            if (!data) continue;
-            try {
-              onEvent(JSON.parse(data));
-            } catch {
-              void 0;
-            }
-          }
-        }
-      }
-      dropped = true;
-    } catch {
-      dropped = true;
-    }
-    await new Promise((resolve) => setTimeout(resolve, STATE_FEED_RECONNECT_MS));
-  }
-}
-
-function runStateFeed(): Promise<void> {
-  return consumeCoreFeed(
-    "/v1/session-state/events",
-    "session_state",
-    (data) => forwardSessionState(data as SessionStateFrame),
-    () => {
-      for (const conns of deliveryClients.values()) for (const res of conns) sseEvent(res, "session_state_resync", {});
-    },
-  );
-}
-
-function runInboxFeed(): Promise<void> {
-  return consumeCoreFeed(
-    "/v1/loop-items/events",
-    "loop_item",
-    (data) => void forwardInboxItem(data as { loopId?: string; itemId?: string; op?: string }),
-    resyncInbox,
-  );
-}
-
-function resyncInbox(): void {
-  for (const conns of deliveryClients.values()) for (const res of conns) sseEvent(res, "inbox_resync", {});
-}
-
-async function forwardInboxItem(ev: { loopId?: string; itemId?: string; op?: string }): Promise<void> {
-  if (!ev.loopId || !ev.itemId || !deliveryClients.size) return;
-  const r = await coreFetch(
-    "POST",
-    "/v1/inbox/viewers",
-    JSON.stringify({ loopId: ev.loopId, candidates: [...deliveryClients.keys()] }),
-  ).catch(() => null);
-  if (r?.status === 404) return;
-  let viewers: string[] | undefined;
-  try {
-    viewers = r?.status === 200 ? (JSON.parse(r.text) as { viewers?: string[] }).viewers : undefined;
-  } catch {
-    viewers = undefined;
-  }
-  if (!viewers) return resyncInbox();
-  const frame = { loopId: ev.loopId, itemId: ev.itemId, op: ev.op ?? "" };
-  for (const user of viewers) for (const res of deliveryClients.get(user) ?? []) sseEvent(res, "inbox_item", frame);
-}
+const feeds = createTenantFeeds({
+  identitySecret: PORTAL_IDENTITY_SECRET,
+  currentToken: () => portalTokenStore.getStore(),
+  asToken: (token, fn) => portalTokenStore.run(token, fn),
+  coreFetch: (method, path, body) => coreFetch(method, path, body),
+  openFeed: (path, signal) => {
+    const signedPath = withSourceAuthNonce(path, CORE_SIGNING_SECRET);
+    const portalTok = portalTokenStore.getStore();
+    return fetch(`${CORE}${signedPath}`, {
+      headers: {
+        ...signedHeaders(CORE_SIGNING_SECRET, "GET", signedPath, ""),
+        ...(portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : {}),
+      },
+      signal,
+    });
+  },
+  sseEvent,
+  ownerOfWebThread,
+  noteDeliveries: noteDeliveriesPoll,
+  reconnectMs: Number(process.env.STATE_FEED_RECONNECT_MS ?? 3_000),
+  giveupMs: 60_000,
+});
 
 async function coreFetch(
   method: HttpMethod,
@@ -2769,21 +2626,12 @@ const apiRoutes: readonly WebRoute[] = [
         "x-accel-buffering": "no",
       });
       res.write(": open\n\n");
-      let set = deliveryClients.get(user);
-      if (!set) {
-        set = new Set();
-        deliveryClients.set(user, set);
-      }
-      set.add(res);
+      const detach = feeds.attach(user, res);
       const beat = setInterval(() => res.write(": ping\n\n"), SSE_HEARTBEAT_MS);
       beat.unref?.();
       req.on("close", () => {
         clearInterval(beat);
-        const s = deliveryClients.get(user);
-        if (s) {
-          s.delete(res);
-          if (!s.size) deliveryClients.delete(user);
-        }
+        detach();
       });
       return;
     },
@@ -3610,10 +3458,9 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
           console.warn("[web-ui] dist-web/ not built, run `npm run build`");
         if (ALLOW.length === 0)
           console.warn("[web-ui] WEB_UI_PRINCIPALS unset, any principal id may sign in (dev only)");
-        const t = setInterval(() => void drainWebDeliveries(), WEB_DELIVERY_POLL_MS);
+        const t = setInterval(() => void feeds.drain(), WEB_DELIVERY_POLL_MS);
         t.unref?.();
-        void runStateFeed();
-        void runInboxFeed();
+        feeds.start();
         void sweepDictationSpool();
       });
     })

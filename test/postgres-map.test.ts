@@ -1,4 +1,4 @@
-import { test, before } from "node:test";
+import { test, before } from "./support/tenant-test.ts";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";

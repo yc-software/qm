@@ -1,6 +1,6 @@
 import { readContextFile } from "../src/resolution/context-files.ts";
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "./support/tenant-test.ts";
 import { composeSharingPosture, parseSharingPosture, type SharingPosture } from "../src/resolution/sharing-posture.ts";
 import {
   carriedFileHandles,

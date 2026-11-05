@@ -1,4 +1,4 @@
-import { describe, it } from "node:test";
+import { describe, it } from "./support/tenant-test.ts";
 import assert from "node:assert/strict";
 
 import { openGroupViaSurface, resolveReachTarget, type ReachDirectory } from "../src/reach/reach.ts";

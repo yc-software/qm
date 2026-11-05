@@ -1,8 +1,34 @@
 import { perTenant } from "../tenants/cache.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createTtlRefresh } from "../util/async.ts";
+import type { DurableMap } from "../persistence/durable-map.ts";
 import { foldPrincipalId, type PrincipalLinkResolver } from "../directory/person.ts";
-import type { UserLink, UserLinkStore } from "./user-store.ts";
+
+export interface PrincipalLink {
+  principalId: string;
+  canonicalId: string;
+  evidence: string;
+  linkedBy: string;
+  createdAt: number;
+}
+
+export const PRINCIPAL_LINKS_RESTORE = {
+  id: "durable-map/principal_links/restore-from-user-links",
+  statements: [
+    `DO $$
+     BEGIN
+       IF to_regclass('user_links') IS NULL THEN RETURN; END IF;
+       CREATE TABLE IF NOT EXISTS principal_links (id TEXT PRIMARY KEY, json JSONB NOT NULL);
+       INSERT INTO principal_links (id, json)
+         SELECT alias_id, jsonb_build_object(
+                  'principalId', alias_id, 'canonicalId', user_id, 'evidence', evidence, 'linkedBy', linked_by,
+                  'createdAt', (extract(epoch FROM created_at) * 1000)::bigint)
+           FROM user_links
+          WHERE linked_by <> 'migration'
+       ON CONFLICT (id) DO NOTHING;
+     END $$`,
+  ],
+};
 
 interface PrincipalLinkInput {
   principalId: unknown;
@@ -20,9 +46,9 @@ export class PrincipalLinkError extends Error {
 }
 
 export interface PrincipalLinkService extends PrincipalLinkResolver {
-  list(): Promise<UserLink[]>;
-  link(input: PrincipalLinkInput): Promise<UserLink>;
-  unlink(principalId: string): Promise<UserLink | null>;
+  list(): Promise<PrincipalLink[]>;
+  link(input: PrincipalLinkInput): Promise<PrincipalLink>;
+  unlink(principalId: string): Promise<PrincipalLink | null>;
   refresh(force?: boolean): Promise<void>;
 }
 
@@ -34,14 +60,14 @@ function validId(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0 && value.trim().length <= MAX_ID_LENGTH;
 }
 
-export function createPrincipalLinkService(store: UserLinkStore, lock: AdvisoryLock): PrincipalLinkService {
+export function createPrincipalLinkService(store: DurableMap<PrincipalLink>, lock: AdvisoryLock): PrincipalLinkService {
   const links = perTenant(() => ({
-    byAlias: new Map<string, UserLink>(),
-    byCanonical: new Map<string, UserLink[]>(),
-    refresh: createTtlRefresh(REFRESH_TTL_MS, async () => index(await store.links())),
+    byAlias: new Map<string, PrincipalLink>(),
+    byCanonical: new Map<string, PrincipalLink[]>(),
+    refresh: createTtlRefresh(REFRESH_TTL_MS, async () => index(await store.all())),
   }));
 
-  function index(rows: UserLink[]): void {
+  function index(rows: PrincipalLink[]): void {
     const { byAlias, byCanonical } = links();
     byAlias.clear();
     byCanonical.clear();
@@ -102,9 +128,9 @@ export function createPrincipalLinkService(store: UserLinkStore, lock: AdvisoryL
             400,
             `${principalId} is the canonical principal of other links; unlink those first`,
           );
-        const stored = await store.link({
-          principalId: aliasKey,
-          canonicalId: canonicalKey,
+        const stored = await store.putIfAbsent(aliasKey, {
+          principalId,
+          canonicalId,
           evidence,
           linkedBy: input.linkedBy,
           createdAt: Date.now(),
@@ -117,7 +143,7 @@ export function createPrincipalLinkService(store: UserLinkStore, lock: AdvisoryL
     },
     async unlink(principalId) {
       return lock.withLock("principal-links", async () => {
-        const row = await store.unlink(foldPrincipalId(principalId));
+        const row = await store.take(foldPrincipalId(principalId));
         await refresh(true);
         return row;
       });
