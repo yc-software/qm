@@ -31,6 +31,7 @@ import { createMockAgent } from "./support/mock-agent.ts";
 import type { Agent } from "../src/agent/agent.ts";
 import { brokerCredentialCall } from "../src/api/credential-broker.ts";
 import { principalDestination } from "../src/reach/reach.ts";
+import { installPrincipalLinks } from "../src/directory/person.ts";
 import { parseMemoryProviderConfig } from "../src/memory/provider-config.ts";
 import { startMcpTestServer } from "./support/mcp-test-server.ts";
 
@@ -617,6 +618,9 @@ test("a scheduled turn attests its owner only when the answer goes back to the o
     };
   };
   const refused = { offered: ["wiki"], called: "refused", broker: "private_only", memory: [] };
+  const attested = { offered: ["records", "wiki"], called: "sent", broker: 200, memory: ["U1"] };
+  installPrincipalLinks({ canonical: (key) => (key === "u1@example.test" ? "U1" : undefined), aliases: () => [] });
+  t.after(() => installPrincipalLinks(null));
   assert.deepEqual(
     {
       dmToTeammate: await fire("dm-to-teammate", principalDestination("U2", "U1")),
@@ -627,12 +631,17 @@ test("a scheduled turn attests its owner only when the answer goes back to the o
       }),
       channelToOwner: await fire("channel-to-owner", principalDestination("U1", "U1"), scopeId("channel", "C1")),
       dmToOwner: await fire("dm-to-owner", principalDestination("U1", "U1")),
+      dmToOwnerAlias: await fire("dm-to-owner-alias", {
+        ...principalDestination("U1", "U1"),
+        audienceScopeId: scopeId("personal", "u1@example.test"),
+      }),
     },
     {
       dmToTeammate: refused,
       personalToChannel: refused,
       channelToOwner: refused,
-      dmToOwner: { offered: ["records", "wiki"], called: "sent", broker: 200, memory: ["U1"] },
+      dmToOwner: attested,
+      dmToOwnerAlias: attested,
     },
   );
 });

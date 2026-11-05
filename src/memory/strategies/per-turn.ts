@@ -109,7 +109,7 @@ function createBurstBuffer(
     };
     if (quietMs <= 0) return flush(burst);
 
-    const key = `${scopeId}\0${burst.conversationScopeId}\0${actorId ?? ""}\0${sessionId ?? ""}`;
+    const key = `${scopeId}\0${burst.conversationScopeId}\0${actorId ?? ""}\0${sessionId ?? ""}\0${audienceScopeId ?? ""}`;
     const pending = bursts.get(key);
     if (pending) {
       pending.turns.push({ input, reply });

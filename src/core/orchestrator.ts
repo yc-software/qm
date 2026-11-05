@@ -183,7 +183,7 @@ import {
   turnFailureMessage,
   turnFailureItem,
 } from "./turn-error.ts";
-import { personKey, rosterIds, samePerson } from "../directory/person.ts";
+import { attestableAudience, personKey, rosterIds, samePerson } from "../directory/person.ts";
 import type { FeatureName } from "../feature-flags.ts";
 import { sleep } from "../util/async.ts";
 import { hashId } from "../util/crypto.ts";
@@ -640,7 +640,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const scopeId = deps.resolution.scopeFor(conversation, actor);
       const automationDestination = input.origin.kind === "automation" ? input.origin.destination : undefined;
       const audienceScopeId =
-        !automationDestination || automationDestination.audienceScopeId === scopeId ? scopeId : undefined;
+        !automationDestination ||
+        automationDestination.audienceScopeId === scopeId ||
+        (attestableAudience(actor.id, scopeId) && attestableAudience(actor.id, automationDestination.audienceScopeId))
+          ? scopeId
+          : undefined;
       const audit = (event: Omit<AuditEvent, "at" | "principalId" | "scopeLabel">) =>
         deps.auditLog.record({ at: Date.now(), principalId: actor.id, scopeLabel: scopeId, ...event });
       const spendLimit = spendLimits
