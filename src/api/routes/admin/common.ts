@@ -1,6 +1,7 @@
 import type { App } from "../../app.ts";
 import type { ServerDeps } from "../../deps.ts";
 import { parseScopeId, scopeId as makeScopeId, type Principal } from "../../../types.ts";
+import { foldPrincipalId, personIds } from "../../../directory/person.ts";
 import { sendJson } from "../../http.ts";
 import { orgScope, requireScopedAdmin } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
@@ -31,6 +32,15 @@ export async function requireScopedResource<T>(
 
 export const FILES_PAGE_SIZE = 200;
 
+export async function personNamer(app: App, deps: ServerDeps): Promise<(principalId: string) => string | undefined> {
+  const [members] = await Promise.all([app.directoryMembers(), deps.identity?.refresh()]);
+  const byId = new Map(members.map((m) => [foldPrincipalId(m.principalId), m.displayName?.trim() || m.principalId]));
+  return (principalId) => {
+    const ids = [principalId, ...personIds(principalId)];
+    return ids.map((id) => byId.get(foldPrincipalId(id))).find(Boolean) ?? ids.find((id) => id.includes("@"));
+  };
+}
+
 export async function discoverScopes(
   app: App,
   deps: ServerDeps,
@@ -56,14 +66,13 @@ export async function discoverScopes(
     if (!labels.has(id)) labels.set(id, "");
   }
   if ([...labels.values()].some((l) => !l)) {
-    const [members, channels] = await Promise.all([app.directoryMembers(), app.directoryChannels()]);
-    const membersById = new Map(members.map((m) => [m.principalId, m.displayName]));
+    const [nameOf, channels] = await Promise.all([personNamer(app, deps), app.directoryChannels()]);
     const channelsById = new Map(channels.map((c) => [c.channelId, c.name]));
     for (const [id, label] of labels) {
       if (label) continue;
       const { kind, ref } = parseScopeId(id);
       if (kind === "personal" && ref) {
-        labels.set(id, membersById.get(ref) ?? "");
+        labels.set(id, nameOf(ref) ?? "");
       } else if (kind === "channel" && ref) {
         const name = channelsById.get(ref);
         if (name) labels.set(id, `#${name}`);

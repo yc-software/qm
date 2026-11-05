@@ -16,6 +16,7 @@ import { detectOnboardingStatus, setOnboardingStatus, type OnboardingStatus } fr
 import { sendJson } from "../../http.ts";
 import { audit, authorizeAdmin, isObj, orgScope } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
+import { personNamer } from "./common.ts";
 
 const EXTERNAL_ORG_ADMIN_PORTAL_ONLY =
   "granting or removing org admin for an external user is portal-only — the agent cannot manage who governs the org";
@@ -61,11 +62,17 @@ export async function listUsers(ctx: ApiCtx): Promise<void> {
     ...(signInUrl ? { signInUrl } : {}),
   };
   const actorKey = deps.modelGatewayTransport?.actorKey;
+  const nameOf = await personNamer(ctx.app, deps);
   return sendJson(res, 200, {
     scopeId: scope,
-    users: actorKey
-      ? users.map((user) => ({ ...user, gatewayActor: gatewayActorId(user.principalId, actorKey) }))
-      : users,
+    users: users.map((user) => {
+      const displayName = nameOf(user.principalId);
+      return {
+        ...user,
+        ...(displayName && displayName !== user.principalId ? { displayName } : {}),
+        ...(actorKey ? { gatewayActor: gatewayActorId(user.principalId, actorKey) } : {}),
+      };
+    }),
     grants,
     externalUsers,
     inviteEmail,

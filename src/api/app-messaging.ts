@@ -1,7 +1,7 @@
 import type { ScopeId } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import { parseScopeId, scopeId } from "../types.ts";
-import { personKey, personKeys, samePersonInDirectory, samePersonMatcher } from "../directory/person.ts";
+import { personIds, personKey, personKeys, samePersonInDirectory, samePersonMatcher } from "../directory/person.ts";
 import type { Destination } from "../types.ts";
 import type { SurfaceContextRequest, SurfaceContextResult } from "../reach/reach.ts";
 import { reportFailureAs } from "../util/errors.ts";
@@ -519,10 +519,15 @@ export function createMessagingMethods(
       return deps.directory.listChannels();
     },
     async directoryMember(principalId) {
+      const direct = await deps.directory.get(principalId);
+      if (direct) return direct;
+      await deps.identity.refresh();
+      for (const alias of personIds(principalId).filter((id) => id !== principalId)) {
+        const member = await deps.directory.get(alias);
+        if (member) return member;
+      }
       return (
-        (await deps.directory.get(principalId)) ??
-        (await identityMembers()).find((member) => personKey(member.principalId) === personKey(principalId)) ??
-        null
+        (await identityMembers()).find((member) => personKey(member.principalId) === personKey(principalId)) ?? null
       );
     },
     samePerson(a, b) {

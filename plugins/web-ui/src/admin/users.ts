@@ -2,7 +2,7 @@ import { html, render } from "lit";
 import { copyText, relTime } from "../ui.ts";
 import { formatMessageTime } from "../message-time.ts";
 import type { AdminPage } from "./sections.ts";
-import { pageHeader, table, card, badge, subline, matches } from "./shared.ts";
+import { pageHeader, table, card, badge, stacked, subline, matches } from "./shared.ts";
 import { keychain } from "./keychain.ts";
 import { detail, labelRole } from "./user-detail.ts";
 
@@ -86,7 +86,7 @@ function users(page: AdminPage, initial: any) {
   };
   function draw() {
     const roster = (data.users || []).filter((u: any) =>
-      matches(filter, u.principalId, u.admin?.role || "", u.admin?.scopeId || "member"),
+      matches(filter, u.principalId, u.displayName || "", u.admin?.role || "", u.admin?.scopeId || "member"),
     );
     const admins = (data.grants || []).filter((g: any) => g.role === "org_admin").length;
     const lastAdmin = (u: any) => u.admin?.isAdmin && admins <= 1;
@@ -138,7 +138,12 @@ function users(page: AdminPage, initial: any) {
               ${table(
                 ["Principal", "Role", "Last seen", "Sessions", "Turns", ""],
                 roster.map((u: any) => [
-                  { node: html`<a href=${userHref(u.principalId)}>${u.principalId}</a>`, cls: "mono" },
+                  {
+                    node: html`<a href=${userHref(u.principalId)}
+                      >${stacked(u.displayName || u.principalId, u.displayName ? u.principalId : "")}</a
+                    >`,
+                    cls: "mono",
+                  },
                   { node: subline(u.admin?.isAdmin ? labelRole(u.admin.role) : "member") },
                   { text: u.lastSeenAt ? relTime(u.lastSeenAt) : "-", cls: "num" },
                   { text: String(u.sessionCount), cls: "num" },

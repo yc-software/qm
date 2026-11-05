@@ -38,7 +38,8 @@ import {
 } from "../../chassis/src/http.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { createTenantFeeds } from "./tenant-feeds.ts";
-import { createBrandingCache, injectBranding } from "../../chassis/src/branding.ts";
+import { injectBranding } from "../../chassis/src/branding.ts";
+import { brandingFrom, createTenantBranding } from "./tenant-branding.ts";
 import { parseSuggestedActivities } from "../../chassis/src/suggested-activities.ts";
 import { principalInAllowlist } from "../../chassis/src/principal-allowlist.ts";
 
@@ -90,18 +91,15 @@ async function hasInboxLoopPreview(user: string): Promise<boolean> {
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const DIST = join(ROOT, "dist-web");
 
-const brandingCache = createBrandingCache(async () => {
-  const r = await coreFetch("GET", "/v1/surface-config", "", 2_000);
-  if (r.status !== 200) throw new Error(`surface-config ${r.status}`);
-  const b = (JSON.parse(r.text) as { branding?: Record<string, unknown> }).branding;
-  return {
-    ...(typeof b?.orgName === "string" ? { orgName: b.orgName } : {}),
-    ...(typeof b?.accent === "string" ? { accent: b.accent } : {}),
-    ...(typeof b?.mark === "string" ? { mark: b.mark } : {}),
-    ...(typeof b?.markUrl === "string" ? { markUrl: b.markUrl } : {}),
-    ...(typeof b?.selfLabel === "string" ? { selfLabel: b.selfLabel } : {}),
-  };
-});
+const brandingCache = createTenantBranding(
+  async () => {
+    const r = await coreFetch("GET", "/v1/surface-config", "", 2_000);
+    if (r.status !== 200) throw new Error(`surface-config ${r.status}`);
+    return brandingFrom(r.text);
+  },
+  () => portalTokenStore.getStore(),
+  PORTAL_IDENTITY_SECRET,
+);
 
 async function serveWebManifest(res: ServerResponse): Promise<void> {
   const branding = await brandingCache.forRender();
@@ -1329,6 +1327,7 @@ const apiRoutes: readonly WebRoute[] = [
         user,
         org: ORG,
         companyName: companyBranding.orgName?.trim() || null,
+        workspace: brandingCache.tenant() ? companyBranding.orgName?.trim() || null : null,
         ...(analyticsConfig && !resolveIdentity(req)?.impersonator ? { analytics: analyticsConfig } : {}),
         ...(browserErrors && !resolveIdentity(req)?.impersonator ? { browserErrors } : {}),
         mode: AUTH_MODE,
