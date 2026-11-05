@@ -552,7 +552,7 @@ test("teardown of a box the turn never used skips the checkpoint only while the 
   assert.equal((await store.get(scope))?.homeDirty, false);
 });
 
-test("a sandbox that vanishes before its teardown snapshot is retried only after the interval and reported once", async () => {
+test("a sandbox that vanishes before its teardown snapshot is reported once across repeated teardowns", async () => {
   const events: Array<{ code: string }> = [];
   const s = make({ onError: (e: { code: string }) => events.push(e) });
   const h = await s.provision(scope);
