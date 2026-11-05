@@ -174,17 +174,19 @@ async function resolveDirectory(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { matches });
 }
 
-const CHANNEL_MATCH_LIMIT = 20;
-
 async function channelsFor(ctx: ApiCtx): Promise<void> {
   const principalId = (ctx.url.searchParams.get("principalId") ?? "").trim();
   if (!principalId) return sendJson(ctx.res, 400, { error: "bad_request", message: "principalId required" });
-  const term = (ctx.url.searchParams.get("q") ?? "").trim().replace(/^#/, "").toLowerCase();
-  const startsWith = (name: string) => (name.toLowerCase().startsWith(term) ? 0 : 1);
+  const typed = (ctx.url.searchParams.get("q") ?? "").trim().toLowerCase();
+  const term = typed.startsWith("#") ? typed.slice(1) : typed;
+  const rank = (name: string) => {
+    const lower = name.toLowerCase();
+    if (lower === term) return 0;
+    return lower.startsWith(term) ? 1 : 2;
+  };
   const channels = (await ctx.app.directoryChannelsFor(principalId))
     .filter((channel) => channel.name.toLowerCase().includes(term))
-    .sort((a, b) => startsWith(a.name) - startsWith(b.name))
-    .slice(0, CHANNEL_MATCH_LIMIT)
+    .sort((a, b) => rank(a.name) - rank(b.name) || Number(a.name > b.name) - Number(a.name < b.name))
     .map((channel) => ({
       scopeId: `channel:${channel.channelId}`,
       channelId: channel.channelId,

@@ -1788,7 +1788,7 @@ const apiRoutes: readonly WebRoute[] = [
     method: "GET",
     path: "/api/directory/channels",
     handle: (c) => {
-      const q = (c.url.searchParams.get("q") ?? "").trim().slice(0, 80);
+      const q = (c.url.searchParams.get("q") ?? "").trim();
       return relayCore(
         c.res,
         "GET",

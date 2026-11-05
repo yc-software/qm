@@ -4,6 +4,7 @@ import { DIRECTORY_MIGRATIONS } from "../directory/postgres-directory-store.ts";
 import { SESSION_MIGRATIONS } from "../sessions/session-schema.ts";
 import { msOf } from "../sessions/items.ts";
 import { foldPrincipalId } from "../directory/person.ts";
+import { PERSONA_MIGRATIONS } from "../personas/persona-schema.ts";
 
 type UserSource = "turn" | "invite" | "admin";
 type UserKind = "person" | "app";
@@ -231,6 +232,7 @@ export const USER_MIGRATIONS: PgMigrationDefinition[] = [
        END $$`,
     ],
   },
+  ...PERSONA_MIGRATIONS,
 ];
 
 const COLUMNS = `u.id, u.primary_alias, u.kind, ${msOf("u.first_seen_at")} AS first_seen_at, u.source,
@@ -324,10 +326,8 @@ async function linkInTransaction(client: PoolClient, link: UserLink): Promise<Us
     );
     await q(`UPDATE users SET offboarded_by = $1 WHERE offboarded_by = $2`, [target, source]);
     await q(`UPDATE user_links SET linked_by = $1 WHERE linked_by = $2`, [target, source]);
-    if ((await q(`SELECT to_regclass('persona_access') IS NOT NULL AS present`))[0]?.present) {
-      await q(`UPDATE personas SET created_by = $1 WHERE created_by = $2`, [target, source]);
-      await q(`UPDATE persona_access SET granted_by = $1 WHERE granted_by = $2`, [target, source]);
-    }
+    await q(`UPDATE personas SET created_by = $1 WHERE created_by = $2`, [target, source]);
+    await q(`UPDATE persona_access SET granted_by = $1 WHERE granted_by = $2`, [target, source]);
     await q(`DELETE FROM users WHERE id = $1`, [source]);
   }
   const linkedBy = link.linkedBy ? await ensureUserIn(client, foldPrincipalId(link.linkedBy)) : null;

@@ -892,12 +892,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
 
         if (req.move) {
           const deployPersonTransfer = req.type === "deploy" && toKind === "personal" && capability.liveActor === true;
-          if (
-            !deployPersonTransfer &&
-            !(toKind === "persona"
-              ? await app.managesScope(capability.actorId, toScope)
-              : await app.belongsToScope(capability.actorId, toScope))
-          ) {
+          if (!deployPersonTransfer && !(await app.belongsToScope(capability.actorId, toScope))) {
             return {
               ok: false,
               code: "forbidden",

@@ -17,11 +17,12 @@ routes are listed in `GET /v1/apis` when personas are enabled for the asker.
    service names of attached credentials.
 2. **Confirm the name** in one line (default: `<source name> (fork)`) unless they gave one.
 3. **Create it:** `POST /v1/personas` with `name`, the source's `description`,
-   `instructions` and `icon`, and `forkedFromId: <source id>`. The asker becomes its sole
-   owner.
+   `instructions` and `icon`. Mention the source in the description if they want the
+   lineage kept. The asker becomes its sole owner.
 4. **Copy skills.** The source's skills live in `persona:<source id>`. List them with the
-   skills tool (`list` with `source: "persona:<source id>"`), `read` each one, `save` a copy
-   here, then `move` the copy to `persona:<new id>`. Copy only what they want if they said
+   skills tool (`list` with `source: "persona:<source id>"`) and `read` each one, then
+   create the copy directly in the fork with `POST /v1/skills` and
+   `scopeId: "persona:<new id>"`. Copy only what they want if they said
    so; otherwise copy all. Skills are copies: later edits to the source don't flow through.
 5. **Credentials.** Tell them which services the source had attached (from step 1), that
    those were not copied, and offer to attach their own. Attaching needs a credential the

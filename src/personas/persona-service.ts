@@ -1,18 +1,16 @@
-import { personIds, samePerson } from "../directory/person.ts";
+import { personIds } from "../directory/person.ts";
+import { validProjectIcon } from "../projects/project-store.ts";
 import type { FeatureFlagStore } from "../feature-flags.ts";
 import type { TeamStore } from "../teams/teams.ts";
 import type { Keychain } from "../credentials/keychain.ts";
 import { parseScopeId, scopeId, type ScopeId, type Session } from "../types.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
+import { PERSONA_ROLES, atLeast, type PersonaRole } from "./persona-schema.ts";
 import {
-  PERSONA_ROLES,
   PersonaOwnerRequired,
-  atLeast,
   type Persona,
   type PersonaAccess,
   type PersonaFields,
-  type PersonaIcon,
-  type PersonaRole,
   type PersonaStore,
 } from "./persona-store.ts";
 
@@ -25,7 +23,6 @@ interface PersonaView extends Persona {
 interface PersonaDetail extends PersonaView {
   access: PersonaAccess[];
   credentials: Array<{ grantId: string; service: string; ownerId: string }>;
-  forkedFromName?: string;
 }
 
 export type PersonaResult<T> =
@@ -36,7 +33,6 @@ export type PersonaResult<T> =
 export interface PersonaForTurn {
   persona: Persona;
   scope: ScopeId;
-  role: PersonaRole;
 }
 
 export interface PersonaService {
@@ -63,16 +59,6 @@ export interface PersonaService {
 }
 
 const GRANTEE_KINDS = new Set(["personal", "team", "org", "channel"]);
-const ONE_EMOJI = /^\p{RGI_Emoji}$/v;
-
-function validIcon(value: unknown): value is PersonaIcon | null {
-  if (value === null) return true;
-  if (!value || typeof value !== "object") return false;
-  const icon = value as Record<string, unknown>;
-  if (typeof icon.value !== "string" || !icon.value) return false;
-  return icon.kind === "custom" || (icon.kind === "emoji" && ONE_EMOJI.test(icon.value));
-}
-
 function fieldsFrom(input: unknown, requireName: boolean): PersonaFields | string {
   if (!input || typeof input !== "object") return "expected an object";
   const body = input as Record<string, unknown>;
@@ -83,11 +69,10 @@ function fieldsFrom(input: unknown, requireName: boolean): PersonaFields | strin
     fields[key] = body[key];
   }
   if (fields.name !== undefined && !fields.name.trim()) return "name must not be empty";
-  if (fields.name && fields.name.trim().length > 200) return "name must be at most 200 characters";
   if (requireName && !fields.name) return "name required";
   if (body.icon !== undefined) {
-    if (!validIcon(body.icon))
-      return 'icon must be {kind:"emoji",value:<one emoji>}, {kind:"custom",value:<custom emoji name>}, or null';
+    if (!validProjectIcon(body.icon))
+      return 'icon must be {kind:"emoji",value:<one emoji>}, {kind:"custom",name:<custom emoji name>}, or null';
     fields.icon = body.icon;
   }
   return fields;
@@ -105,7 +90,7 @@ export function createPersonaService(deps: {
   const enabledFor = (principalId: string) => deps.flags.enabled("personas", scopeId("personal", principalId));
 
   async function granteeScopes(principalId: string, contextScope?: ScopeId): Promise<ScopeId[]> {
-    const teams = (await deps.teams?.forTurn("", [principalId]).catch(() => [])) ?? [];
+    const teams = (await deps.teams?.forTurn("", [principalId])) ?? [];
     return [
       ...personIds(principalId).map((id) => scopeId("personal", id)),
       deps.orgScope,
@@ -146,42 +131,20 @@ export function createPersonaService(deps: {
     role,
     async list(principalId) {
       if (!(await enabledFor(principalId))) return { status: "disabled" };
-      const roles = await store.roles(await granteeScopes(principalId));
-      const personas = await Promise.all([...roles.keys()].map((id) => store.get(id)));
-      return {
-        status: "ok",
-        value: personas
-          .filter((persona): persona is Persona => persona !== null)
-          .map((persona) => ({ ...persona, role: roles.get(persona.id)! }))
-          .sort((a, b) => a.name.localeCompare(b.name)),
-      };
+      return { status: "ok", value: await store.listFor(await granteeScopes(principalId)) };
     },
     detail(principalId, id) {
-      return guarded<PersonaDetail>(principalId, id, "read", async (persona, held) => {
-        const source = persona.forkedFromId ? await store.get(persona.forkedFromId) : null;
-        return {
-          status: "ok",
-          value: {
-            ...persona,
-            role: held,
-            access: await store.access(id),
-            credentials: await credentialsOf(id),
-            ...(source ? { forkedFromName: source.name } : {}),
-          },
-        };
-      });
+      return guarded<PersonaDetail>(principalId, id, "read", async (persona, held) => ({
+        status: "ok",
+        value: { ...persona, role: held, access: await store.access(id), credentials: await credentialsOf(id) },
+      }));
     },
     async create(principalId, input) {
       if (!(await enabledFor(principalId))) return { status: "disabled" };
       const fields = fieldsFrom(input, true);
       if (typeof fields === "string") return { status: "invalid", message: fields };
-      const forkedFromId = (input as Record<string, unknown>).forkedFromId;
-      if (forkedFromId !== undefined) {
-        if (typeof forkedFromId !== "string" || !(await role(principalId, forkedFromId)))
-          return { status: "invalid", message: "forkedFromId must name a persona you can read" };
-      }
       const persona = await store.create(
-        { ...fields, name: fields.name!, ...(forkedFromId ? { forkedFromId } : {}) },
+        { ...fields, name: fields.name! },
         scopeId("personal", principalId),
         principalId,
       );
@@ -271,17 +234,15 @@ export function createPersonaService(deps: {
       const held = await role(actorId, personaId, contextScope);
       if (!held)
         return `This conversation uses the persona "${persona.name}", but the person who sent this message has no access to it, so this turn runs without it.`;
-      return { persona, scope: personaScope(personaId), role: held };
+      return { persona, scope: personaScope(personaId) };
     },
   };
 }
 
-export function personaPrompt(turn: PersonaForTurn, actorId: string): string {
-  const { persona } = turn;
+export function personaPrompt({ persona, scope }: PersonaForTurn): string {
   const lines = [
     `## Persona: ${persona.name}`,
-    `You are acting as the persona "${persona.name}" (${turn.scope}). Its skills, notes and credentials come from that scope; who is in the room and where your writes land still come from this conversation. Organization instructions take precedence over the persona's.`,
-    `The sender's role on this persona is ${turn.role}${samePerson(persona.createdBy, actorId) ? " (they created it)" : ""}. Owners and writers may change it through the personas API, and add a skill to it by creating one with \`scopeId: "${turn.scope}"\` on \`POST /v1/skills\`; readers may only use it.`,
+    `You are acting as the persona "${persona.name}" (${scope}). Its skills, notes and credentials come from that scope; who is in the room and where your writes land still come from this conversation. Organization instructions take precedence over the persona's.`,
   ];
   if (persona.description.trim()) lines.push(`Purpose: ${persona.description.trim()}`);
   if (persona.instructions.trim()) lines.push("", persona.instructions.trim());

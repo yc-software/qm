@@ -1026,7 +1026,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         surfaceLinks: surfaceHints?.linkSyntax ?? "",
         sessions: isWeb && surfaceName === "web" && Boolean(sessionSyscalls) && !input.swarm,
       });
-      let personaBlock = persona ? personaPrompt(persona, actor.id) : "";
+      let personaBlock = persona ? personaPrompt(persona) : "";
       if (typeof personaTurn === "string") personaBlock = `## Persona\n${personaTurn}`;
       let systemPrompt = `${modeFrame}\n\n${[resolution.systemPrompt, personaBlock].filter(Boolean).join("\n\n")}\n\n${sharedCore}`;
       if (external)
@@ -2267,7 +2267,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             !external ? (deps.keychain?.listConnectorsByOwners(members.map((m) => m.id)) ?? new Map()) : new Map(),
             !external
               ? Promise.all(credentialScopes.map((grantScope) => deps.keychain?.grantsForScope(grantScope) ?? [])).then(
-                  (lists) => lists.flat(),
+                  (lists) =>
+                    lists
+                      .flat()
+                      .filter((row, i, all) => all.findIndex((r) => r.credential.id === row.credential.id) === i),
                 )
               : [],
             !external ? (deps.keychain?.listAsks({ requesterScopeId: scopeId }) ?? []) : [],

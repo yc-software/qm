@@ -70,10 +70,11 @@ describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", a
     }
   });
 
-  it("channel lookup offers public channels and private ones the person is in, best name match first", async () => {
+  it("channel lookup offers public channels and private ones the person is in, exact name first, then prefix matches", async () => {
     await built.app.upsertChannels(
       [
         { channelId: "CPUBLIC", name: "public", isPrivate: false },
+        { channelId: "CPUB", name: "pub", isPrivate: false },
         { channelId: "CLAUNCH", name: "launch-pub", isPrivate: false },
         { channelId: "CSECRET", name: "pub-secret", isPrivate: true },
         { channelId: "COTHER", name: "pub-other-team", isPrivate: true },
@@ -90,7 +91,7 @@ describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", a
     const { channels } = (await response.json()) as { channels: Array<{ scopeId: string; isPrivate: boolean }> };
     assert.deepEqual(
       channels.map((channel) => channel.scopeId),
-      ["channel:CPUBLIC", "channel:CSECRET", "channel:CLAUNCH"],
+      ["channel:CPUB", "channel:CSECRET", "channel:CPUBLIC", "channel:CLAUNCH"],
     );
     assert.equal(channels.find((channel) => channel.scopeId === "channel:CSECRET")?.isPrivate, true);
   });

@@ -1,4 +1,5 @@
 import { sendJson } from "../http.ts";
+import { swallowAs } from "../../util/errors.ts";
 import { isObj } from "./shared.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
 import { KeychainError } from "../../credentials/keychain.ts";
@@ -54,14 +55,9 @@ async function getPersona(ctx: ApiCtx): Promise<void> {
     result.value.access.map(async (grant) => ({ ...grant, label: await granteeLabel(ctx, grant.scopeId) })),
   );
   const home = `persona:${result.value.id}`;
-  const skills = (await ctx.app.listSkills())
-    .filter((skill) => skill.scopeId === home && skill.status !== "archived")
-    .map((skill) => ({
-      id: skill.id,
-      name: skill.manifest.name,
-      description: skill.manifest.description,
-      status: skill.status,
-    }))
+  const skills = (await ctx.app.listVisibleSkills(principalId))
+    .flatMap((row) => (row.skill?.scopeId === home ? [row.skill] : []))
+    .map((skill) => ({ id: skill.id, name: skill.manifest.name, description: skill.manifest.description }))
     .sort((a, b) => a.name.localeCompare(b.name));
   respond(ctx, { status: "ok", value: { ...result.value, access, skills } }, "persona");
 }
@@ -69,8 +65,13 @@ async function getPersona(ctx: ApiCtx): Promise<void> {
 async function granteeLabel(ctx: ApiCtx, scopeId: string): Promise<string | undefined> {
   const [kind, ...rest] = scopeId.split(":");
   const ref = rest.join(":");
-  if (kind === "channel") return ctx.app.channelName(ref).catch(() => undefined);
-  if (kind === "personal") return (await ctx.app.directoryMember(ref).catch(() => null))?.displayName || undefined;
+  if (kind === "channel")
+    return ctx.app.channelName(ref).catch(swallowAs(`persona grantee label ${scopeId}`, undefined));
+  if (kind === "personal")
+    return (
+      (await ctx.app.directoryMember(ref).catch(swallowAs(`persona grantee label ${scopeId}`, null)))?.displayName ||
+      undefined
+    );
   return undefined;
 }
 

@@ -59,6 +59,10 @@ const { vite, dom, close } = await browserEnv({
         },
       });
     }
+    if (path.startsWith("/api/directory/resolve"))
+      return json({ matches: [{ principalId: "bo@acme.com", displayName: "Bo Person", type: "internal" }] });
+    if (path.startsWith("/api/directory/channels"))
+      return json({ channels: [{ scopeId: "channel:C1", channelId: "C1", name: "eng-launch", isPrivate: false }] });
     if (path === "/api/contexts")
       return json({ contexts: [{ scopeId: "personal:tester", kind: "personal", name: null, sessionCount: 0 }] });
     if (path === "/api/sessions" && method === "POST")
@@ -179,21 +183,17 @@ test("Chat starts a conversation and sets its persona before anything is sent", 
   assert.equal(sessionsState.list.find((s: { id: string }) => s.id === "s-new")?.personaId, "p-cy");
 });
 
-test("Fork creates an owned copy named after the source and opens it", async () => {
+test("Fork hands off to QM in a new chat instead of copying on the page", async () => {
   const { main } = await mountPage();
+  const { storedDraft, newChatDraftKey } = await vite.ssrLoadModule("/src/drafts.ts");
   calls = [];
   button(main, "Fork", "Ada").click();
   await settle();
-  const create = calls.find((c) => c.method === "POST" && c.path === "/api/personas");
-  assert.deepEqual(create?.body, {
-    name: "Ada (fork)",
-    description: "Ada description",
-    instructions: "Ada instructions",
-    icon: { kind: "emoji", value: "🧮" },
-    forkedFromId: "p-ada",
-  });
-  assert.equal(main.querySelector(".persona-heading")?.textContent?.trim(), "Ada (fork)");
-  assert.match(main.textContent ?? "", /Credentials aren't copied/);
+  assert.equal(storedDraft(newChatDraftKey("tester")), "Fork the Ada persona for me.");
+  assert.equal(
+    calls.some((c) => c.method === "POST" && c.path === "/api/personas"),
+    false,
+  );
 });
 
 test("a reader sees a read-only summary with credential names and who has access", async () => {
@@ -232,7 +232,6 @@ test("sharing stages grants and shows the server's reason when the last owner is
   await settle();
   const dialog = document.querySelector<HTMLDialogElement>("dialog.persona-share-dialog")!;
   assert.ok(dialog.open);
-  button(dialog, "Everyone").click();
   button(dialog, "Add everyone at acme").click();
   assert.deepEqual(
     [...dialog.querySelectorAll(".permission-row .permission-person-label")].map((l) => l.textContent?.trim()),
@@ -257,6 +256,27 @@ test("sharing stages grants and shows the server's reason when the last owner is
   await settle();
   assert.equal(again.querySelector('[role="alert"]')?.textContent?.trim(), "a persona must keep at least one owner");
   assert.ok(again.isConnected);
+});
+
+test("one search finds people and Slack channels, and either can be added", async () => {
+  const { main } = await mountPage();
+  button(main, "Share", "Ada").click();
+  await settle();
+  const dialog = document.querySelector<HTMLDialogElement>("dialog.persona-share-dialog")!;
+  const input = dialog.querySelector<HTMLInputElement>('input[aria-label="Add people or Slack channels"]')!;
+  input.value = "b";
+  input.dispatchEvent(new window.Event("input"));
+  input.closest("form")!.dispatchEvent(new window.Event("submit", { cancelable: true }));
+  await settle();
+  assert.deepEqual(
+    [...dialog.querySelectorAll(".project-member-result .project-member-name")].map((n) => n.textContent?.trim()),
+    ["Bo Person", "eng-launch"],
+  );
+  [...dialog.querySelectorAll<HTMLButtonElement>(".project-member-result")].at(-1)!.click();
+  assert.deepEqual(
+    [...dialog.querySelectorAll(".permission-row .permission-person-label")].map((l) => l.textContent?.trim()),
+    ["You", "#eng-launch"],
+  );
 });
 
 test("the conversation shows its persona, and clearing it unsets the session's persona", async () => {

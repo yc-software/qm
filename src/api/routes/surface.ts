@@ -1143,9 +1143,9 @@ async function createSkill(ctx: ApiCtx): Promise<void> {
   if (capability) {
     principalId = capability.actorId;
     homeScope = capability.scopeId;
-    if (typeof b.scopeId === "string" && b.scopeId !== homeScope && parseScopeId(b.scopeId).kind === "persona") {
+    if (typeof b.scopeId === "string" && b.scopeId !== homeScope) {
       if (!(await app.managesScope(principalId, b.scopeId as ScopeId))) {
-        return sendJson(res, 403, { error: "forbidden", message: "you need write access to that persona" });
+        return sendJson(res, 403, { error: "forbidden", message: "you cannot create a skill in that context" });
       }
       homeScope = b.scopeId as ScopeId;
     }

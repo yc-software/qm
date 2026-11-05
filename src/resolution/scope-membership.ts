@@ -1,4 +1,5 @@
 import type { Principal, ScopeId } from "../types.ts";
+import { atLeast, type PersonaRole } from "../personas/persona-schema.ts";
 import { actsAsScope, parseScopeId, scopeId } from "../types.ts";
 import { samePerson } from "../directory/person.ts";
 import { swallowAs } from "../util/errors.ts";
@@ -32,17 +33,16 @@ interface ScopeMembershipDeps {
   };
   teams?: { isMember(principalId: string, teamId: string): Promise<boolean> };
   sessions?: { participantScopes(principalId: string): Promise<readonly { scopeId: ScopeId }[]> };
-  personas?: { role(principalId: string, personaId: string): Promise<"read" | "write" | "owner" | null> };
+  personas?: { role(principalId: string, personaId: string): Promise<PersonaRole | null> };
 }
 
 async function personaRoleAtLeast(
   deps: ScopeMembershipDeps,
   principalId: string,
   personaId: string,
-  floor: "read" | "write",
+  floor: PersonaRole,
 ): Promise<boolean> {
-  const role = await deps.personas?.role(principalId, personaId);
-  return floor === "read" ? role != null : role === "write" || role === "owner";
+  return atLeast(await deps.personas?.role(principalId, personaId), floor);
 }
 
 async function teamMember(deps: ScopeMembershipDeps, principalId: string, teamId: string): Promise<boolean> {

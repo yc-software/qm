@@ -77,18 +77,18 @@ const FAMILIES: AgentApiFamily[] = [
   {
     when: (view) => view.personasEnabled,
     guidance:
-      "Personas are reusable agents (instructions, skills, notes, credentials) living in a persona:<id> scope; people hold owner, write or read on them through people (personal:), teams (team:), the org (org:) or Slack channels (channel:, usable only in that channel). Writers edit instructions with PATCH and add skills by moving them into persona:<id> with the skills tool; only owners share, attach credentials or delete. Use the persona-fork skill to copy one.",
+      "Personas are reusable agents (instructions, skills, notes, credentials) living in a persona:<id> scope; people hold owner, write or read on them through people (personal:), teams (team:), the org (org:) or Slack channels (channel:, usable only in that channel). Writers edit instructions with PATCH and add a skill by creating it with scopeId persona:<id> on POST /v1/skills or moving one in with the skills tool; only owners share, attach credentials or delete. Use the persona-fork skill to copy one.",
     routes: [
       { method: "GET", path: "/v1/personas", summary: "personas you hold a role on, with your role" },
       {
         method: "GET",
         path: "/v1/personas/:id",
-        summary: "one persona: instructions, access list, attached credential names (never secrets), forkedFrom",
+        summary: "one persona: instructions, access list, attached credential names (never secrets), skills",
       },
       {
         method: "POST",
         path: "/v1/personas",
-        summary: "{name,description?,instructions?,icon?,forkedFromId?} creates one you own",
+        summary: "{name,description?,instructions?,icon?} creates one you own",
       },
       {
         method: "PATCH",

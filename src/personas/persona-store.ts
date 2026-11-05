@@ -1,30 +1,19 @@
 import { randomUUID } from "node:crypto";
-import { createPgPool, withPgTransaction, type PgMigrationDefinition, type Rows } from "../persistence/pg-pool.ts";
+import { createPgPool, withPgTransaction, type Rows } from "../persistence/pg-pool.ts";
 import { DIRECTORY_MIGRATIONS } from "../directory/postgres-directory-store.ts";
 import { foldPrincipalId } from "../directory/person.ts";
 import { ensureUserIn, USER_MIGRATIONS } from "../identity/user-store.ts";
 import { SESSION_MIGRATIONS } from "../sessions/session-schema.ts";
 import type { ScopeId } from "../types.ts";
-
-export const PERSONA_ROLES = ["read", "write", "owner"] as const;
-export type PersonaRole = (typeof PERSONA_ROLES)[number];
-
-const roleRank = (role: PersonaRole | null | undefined): number => (role ? PERSONA_ROLES.indexOf(role) + 1 : 0);
-export const atLeast = (role: PersonaRole | null | undefined, floor: PersonaRole): boolean =>
-  roleRank(role) >= roleRank(floor);
-
-export interface PersonaIcon {
-  kind: "emoji" | "custom";
-  value: string;
-}
+import type { ProjectIcon } from "../projects/project-store.ts";
+import type { PersonaRole } from "./persona-schema.ts";
 
 export interface Persona {
   id: string;
   name: string;
   description: string;
   instructions: string;
-  icon?: PersonaIcon;
-  forkedFromId?: string;
+  icon?: ProjectIcon;
   createdBy: string;
   createdAt: number;
   updatedAt: number;
@@ -41,48 +30,21 @@ export interface PersonaFields {
   name?: string;
   description?: string;
   instructions?: string;
-  icon?: PersonaIcon | null;
+  icon?: ProjectIcon | null;
 }
 
 export interface PersonaStore {
-  create(input: PersonaFields & { name: string; forkedFromId?: string }, owner: ScopeId, by: string): Promise<Persona>;
+  create(input: PersonaFields & { name: string }, owner: ScopeId, by: string): Promise<Persona>;
   get(id: string): Promise<Persona | null>;
   update(id: string, fields: PersonaFields): Promise<Persona | null>;
   remove(id: string): Promise<boolean>;
   access(id: string): Promise<PersonaAccess[]>;
   replaceAccess(id: string, access: ReadonlyArray<{ scopeId: ScopeId; role: PersonaRole }>, by: string): Promise<void>;
   roles(grantees: readonly ScopeId[], id?: string): Promise<Map<string, PersonaRole>>;
+  listFor(grantees: readonly ScopeId[]): Promise<Array<Persona & { role: PersonaRole }>>;
 }
 
-const PERSONA_MIGRATIONS: PgMigrationDefinition[] = [
-  {
-    id: "users/v2/personas-0001",
-    statements: [
-      `CREATE TABLE IF NOT EXISTS personas(
-        id             TEXT        PRIMARY KEY,
-        name           TEXT        NOT NULL CHECK (length(btrim(name)) BETWEEN 1 AND 200),
-        description    TEXT        NOT NULL DEFAULT '',
-        instructions   TEXT        NOT NULL DEFAULT '',
-        icon_kind      TEXT        CHECK (icon_kind IN ('emoji', 'custom')),
-        icon_value     TEXT,
-        forked_from_id TEXT,
-        created_by     UUID        NOT NULL REFERENCES users(id),
-        created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-        updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-        CHECK ((icon_kind IS NULL) = (icon_value IS NULL))
-      )`,
-      `CREATE TABLE IF NOT EXISTS persona_access(
-        persona_id       TEXT        NOT NULL REFERENCES personas(id) ON DELETE CASCADE,
-        grantee_scope_id TEXT        NOT NULL CHECK (grantee_scope_id ~ '^(personal|team|org|channel):.+'),
-        role             TEXT        NOT NULL CHECK (role IN ('owner', 'write', 'read')),
-        granted_by       UUID        NOT NULL REFERENCES users(id),
-        granted_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
-        PRIMARY KEY (persona_id, grantee_scope_id)
-      )`,
-      `CREATE INDEX IF NOT EXISTS persona_access_grantee ON persona_access(grantee_scope_id)`,
-    ],
-  },
-];
+const BEST_ROLE = `(ARRAY['read','write','owner'])[MAX(array_position(ARRAY['read','write','owner'], role))]`;
 
 const PERSONA_SELECT = `SELECT p.*, u.primary_alias AS created_by_alias FROM personas p JOIN users u ON u.id = p.created_by`;
 
@@ -94,8 +56,7 @@ function toPersona(r: Rows[number]): Persona {
     name: r.name as string,
     description: r.description as string,
     instructions: r.instructions as string,
-    ...(r.icon_kind ? { icon: { kind: r.icon_kind as PersonaIcon["kind"], value: r.icon_value as string } } : {}),
-    ...(r.forked_from_id ? { forkedFromId: r.forked_from_id as string } : {}),
+    ...(r.icon ? { icon: r.icon as ProjectIcon } : {}),
     createdBy: r.created_by_alias as string,
     createdAt: ms(r.created_at),
     updatedAt: ms(r.updated_at),
@@ -113,7 +74,6 @@ export function createPostgresPersonaStore(connectionString: string, opts: { id?
     ...DIRECTORY_MIGRATIONS,
     ...SESSION_MIGRATIONS,
     ...USER_MIGRATIONS,
-    ...PERSONA_MIGRATIONS,
   ]);
   const nextId = opts.id ?? randomUUID;
   return {
@@ -122,18 +82,9 @@ export function createPostgresPersonaStore(connectionString: string, opts: { id?
       return withPgTransaction(await pool(), async (db) => {
         const user = await ensureUserIn(db, foldPrincipalId(by));
         await db.query(
-          `INSERT INTO personas (id, name, description, instructions, icon_kind, icon_value, forked_from_id, created_by)
-           VALUES ($1, btrim($2), $3, $4, $5, $6, $7, $8)`,
-          [
-            id,
-            input.name,
-            input.description ?? "",
-            input.instructions ?? "",
-            input.icon?.kind ?? null,
-            input.icon?.value ?? null,
-            input.forkedFromId ?? null,
-            user,
-          ],
+          `INSERT INTO personas (id, name, description, instructions, icon, created_by)
+           VALUES ($1, btrim($2), $3, $4, $5, $6)`,
+          [id, input.name, input.description ?? "", input.instructions ?? "", input.icon ?? null, user],
         );
         await db.query(
           `INSERT INTO persona_access (persona_id, grantee_scope_id, role, granted_by) VALUES ($1, $2, 'owner', $3)`,
@@ -147,14 +98,12 @@ export function createPostgresPersonaStore(connectionString: string, opts: { id?
       return rows[0] ? toPersona(rows[0]) : null;
     },
     async update(id, fields) {
-      const icon = fields.icon === undefined ? undefined : fields.icon;
       const rows = await q(
         `UPDATE personas SET
            name = COALESCE(btrim($2), name),
            description = COALESCE($3, description),
            instructions = COALESCE($4, instructions),
-           icon_kind = CASE WHEN $5 THEN $6 ELSE icon_kind END,
-           icon_value = CASE WHEN $5 THEN $7 ELSE icon_value END,
+           icon = CASE WHEN $5 THEN $6::jsonb ELSE icon END,
            updated_at = now()
          WHERE id = $1 RETURNING id`,
         [
@@ -162,9 +111,8 @@ export function createPostgresPersonaStore(connectionString: string, opts: { id?
           fields.name ?? null,
           fields.description ?? null,
           fields.instructions ?? null,
-          icon !== undefined,
-          icon?.kind ?? null,
-          icon?.value ?? null,
+          fields.icon !== undefined,
+          fields.icon ? JSON.stringify(fields.icon) : null,
         ],
       );
       return rows[0] ? toPersona((await q(`${PERSONA_SELECT} WHERE p.id = $1`, [id]))[0]!) : null;
@@ -208,17 +156,23 @@ export function createPostgresPersonaStore(connectionString: string, opts: { id?
     },
     async roles(grantees, id) {
       const rows = await q(
-        `SELECT persona_id, role FROM persona_access
-          WHERE grantee_scope_id = ANY($1) AND ($2::text IS NULL OR persona_id = $2)`,
+        `SELECT persona_id, ${BEST_ROLE} AS role FROM persona_access
+          WHERE grantee_scope_id = ANY($1) AND ($2::text IS NULL OR persona_id = $2) GROUP BY persona_id`,
         [[...new Set(grantees)], id ?? null],
       );
-      const best = new Map<string, PersonaRole>();
-      for (const r of rows) {
-        const role = r.role as PersonaRole;
-        const key = r.persona_id as string;
-        if (roleRank(role) > roleRank(best.get(key))) best.set(key, role);
-      }
-      return best;
+      return new Map(rows.map((r) => [r.persona_id as string, r.role as PersonaRole]));
+    },
+    async listFor(grantees) {
+      const rows = await q(
+        `SELECT p.*, u.primary_alias AS created_by_alias, best.role
+           FROM (SELECT persona_id, ${BEST_ROLE} AS role FROM persona_access
+                  WHERE grantee_scope_id = ANY($1) GROUP BY persona_id) best
+           JOIN personas p ON p.id = best.persona_id
+           JOIN users u ON u.id = p.created_by
+          ORDER BY lower(p.name), p.id`,
+        [[...new Set(grantees)]],
+      );
+      return rows.map((r) => ({ ...toPersona(r), role: r.role as PersonaRole }));
     },
   };
 }

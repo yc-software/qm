@@ -10,32 +10,19 @@ _wears_ rather than one it _lives in_.
 
 ## Storage
 
-```sql
-CREATE TABLE personas (
-  id             TEXT        PRIMARY KEY,           -- scope is persona:<id>
-  name           TEXT        NOT NULL CHECK (length(btrim(name)) BETWEEN 1 AND 200),
-  description    TEXT        NOT NULL DEFAULT '',
-  instructions   TEXT        NOT NULL DEFAULT '',
-  icon_kind      TEXT        CHECK (icon_kind IN ('emoji', 'custom')),
-  icon_value     TEXT,
-  forked_from_id TEXT,                              -- no FK: the source may be deleted
-  created_by     TEXT        NOT NULL,
-  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CHECK ((icon_kind IS NULL) = (icon_value IS NULL))
-);
+The tables are created by migration `users/v2/0004-personas` in the users chain, so the
+foreign keys to `users(id)` exist wherever users are merged. The authoritative shape is
+`src/personas/persona-schema.ts`; in short:
 
-CREATE TABLE persona_access (
-  persona_id       TEXT        NOT NULL REFERENCES personas(id) ON DELETE CASCADE,
-  grantee_scope_id TEXT        NOT NULL CHECK (grantee_scope_id ~ '^(personal|team|org|channel):.+'),
-  role             TEXT        NOT NULL CHECK (role IN ('owner', 'write', 'read')),
-  granted_by       TEXT        NOT NULL,
-  granted_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
-  PRIMARY KEY (persona_id, grantee_scope_id)
-);
+- `personas`: `id`, `name`, `description`, `instructions`, `icon` (JSONB, the project icon
+  shape), `created_by UUID REFERENCES users(id)`, timestamps.
+- `persona_access`: one row per `(persona_id, grantee_scope_id)` with `role` owner, write
+  or read, `granted_by UUID REFERENCES users(id)`, `granted_at`. Deleting the persona
+  deletes its rows.
+- `sessions.persona_id`: nullable, no foreign key; a deleted persona just stops applying.
 
-ALTER TABLE sessions ADD COLUMN persona_id TEXT;  -- nullable; no FK, a deleted persona just stops applying
-```
+Roles live in their own table rather than in `acl_grants`, whose permissions are only
+read and write; a persona also needs owner (sharing, credentials, deletion).
 
 Everything else already keys off scopes: skills homed in `persona:<id>`, its memory
 notebook, and keychain grants to `persona:<id>`.
@@ -78,9 +65,10 @@ your own conversations under the persona.
 
 ## Forking
 
-The `persona-fork` skill uses only these APIs: create a persona with `forkedFromId`, copy
-instructions, icon and description, copy skills as snapshots, then offer to attach the
-forker's own credentials. Credentials and access are never copied.
+Forking has one owner, the `persona-fork` skill; the page's Fork button asks QM to run it.
+It uses only these APIs: create a persona, copy instructions, icon and description, copy
+skills as snapshots, then offer to attach the forker's own credentials. Credentials and
+access are never copied.
 
 ## API
 
