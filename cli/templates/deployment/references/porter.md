@@ -69,8 +69,8 @@ AUTH_ALLOWED_EMAILS=<email>
 
 With Postgres and no `ADMIN_GRANTS`, the instance boots, sign-in works, and
 the admin console is permanently unreachable — there is no in-product way to
-grant the first admin afterwards. The Helm chart bridges `AUTH_ALLOWED_EMAILS`
-to the portal's `OIDC_ALLOWED_EMAILS`; on the raw `porter/apps/` path set both.
+grant the first admin afterwards. The Helm chart mirrors `AUTH_ALLOWED_EMAILS`
+to `OIDC_ALLOWED_EMAILS`; on the raw `porter/apps/` path set both.
 
 ## Build, deploy, verify
 
@@ -81,8 +81,9 @@ for f in porter/apps/*.yaml; do porter apply -f "$f"; done
 Push images only to repositories that already exist — ECR does not create
 them on push. In the v2 app YAML, `env` belongs at the app level; nested
 under a service it is silently dropped. Apply runs once per app file, twice
-overall — assigned hostnames land on the second pass. Then hand-wire the six
-service URLs per the table in `docs/porter.md` ("Hosting the qm surfaces"),
+overall — core's assigned hostname lands on the second pass. Then hand-wire
+core's public URL and the rest of the environment per the table in
+`docs/porter.md` ("Hosting the qm surfaces"),
 push secrets as Porter env groups, and verify by signing in as the
 administrator and opening the Admin tab. Published-app serving needs nothing further: apps are reachable
 signed-in at `/d/<app>/`; setting `DEPLOY_APPS_DOMAIN` upgrades them to
