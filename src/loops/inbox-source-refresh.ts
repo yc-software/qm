@@ -29,12 +29,15 @@ interface RefreshDeps {
 export type InboxSourceRefresh = (owner: string, items: LoopItem[], mode?: "avatars") => Promise<void>;
 
 class SourceGoneError extends Error {
-  constructor() {
+  readonly detail: string;
+
+  constructor(detail: string) {
     super("The original message is no longer available. Your item has not been dismissed.");
+    this.detail = detail;
   }
 }
 
-const SLACK_GONE_ERRORS = new Set(["channel_not_found", "message_not_found", "thread_not_found"]);
+const SLACK_GONE_ERRORS = new Set(["channel_not_found", "thread_not_found"]);
 
 interface SlackParticipant {
   id: string;
@@ -84,7 +87,7 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
         return await gmailApi(token, fetchImpl)<Record<string, unknown>>(path, { timeoutMs });
       } catch (error) {
         if (!(error instanceof GmailApiError)) throw error;
-        if (error.status === 404 || error.status === 410) throw new SourceGoneError();
+        if (error.status === 404) throw new SourceGoneError(error.message);
         if (error.status === 429) rateLimit(error.retryAfterSeconds);
         throw failure(error);
       }
@@ -98,8 +101,9 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
     const body: unknown = await res.json();
     if (isObj(body) && body.ok !== false) return body;
     const code = isObj(body) && typeof body.error === "string" ? body.error : "Invalid response";
-    if (SLACK_GONE_ERRORS.has(code)) throw new SourceGoneError();
-    throw failure(new Error(`${source} ${method}: ${code}`));
+    const detail = `${source} ${method}: ${code}`;
+    if (SLACK_GONE_ERRORS.has(code)) throw new SourceGoneError(detail);
+    throw failure(new Error(detail));
   }
 
   async function slackInfo(owner: string, path: string, token: string): Promise<Record<string, unknown>> {
@@ -204,7 +208,7 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
     if (source !== "gmail" && source !== "slack") return;
     if (source === "gmail" && isResolved(item)) return;
     const payload = item.sourcePayload ?? {};
-    if (payload.sourceGone === true) return;
+    if (typeof payload.sourceGone === "string") return;
     const token = await tokenFor(deps.tokens, source === "gmail" ? "gmail.googleapis.com" : "slack.com", owner);
     if (!token) throw new Error(`${source === "gmail" ? "Google" : "Slack"} is not connected. Source not refreshed.`);
     if (source === "gmail") {
@@ -245,7 +249,10 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
       .filter(isObj)
       .filter((m) => !root || m.ts === root || m.thread_ts === root)
       .sort((a, b) => Number(a.ts) - Number(b.ts));
-    if (root && !messages.some((m) => m.ts === root)) throw new SourceGoneError();
+    const partial =
+      body.has_more === true || (isObj(body.response_metadata) && Boolean(body.response_metadata.next_cursor));
+    if (root && !partial && !messages.some((m) => m.ts === root))
+      throw new SourceGoneError(`slack ${path.split("?")[0]}: root message missing`);
     const waiting = messages.find((message) => message.ts === meta.ts);
     const saved = savedParticipants(payload);
     const sender =
@@ -302,8 +309,6 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
             .filter((m) => m.nearby === true)
             .slice(0, 6)
         : [];
-    const partial =
-      body.has_more === true || (isObj(body.response_metadata) && Boolean(body.response_metadata.next_cursor));
     await deps.items.annotate(
       item.id,
       {
@@ -362,7 +367,7 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
           item.id,
           {
             sourceRefreshError: e instanceof Error ? e.message : "Source refresh failed.",
-            ...(gone ? { sourceGone: true } : {}),
+            ...(gone ? { sourceGone: redactSecrets(e.detail) } : {}),
           },
           { expectedSourceAt: item.sourceAt },
         );

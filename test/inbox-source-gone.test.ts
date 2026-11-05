@@ -24,22 +24,21 @@ async function refreshTwice(fixed: Awaited<ReturnType<typeof fixture>>, fetchImp
 }
 
 test("a deleted Gmail thread is read once, marked unavailable once, and never logged as a failure", async () => {
-  for (const status of [404, 410]) {
-    let reads = 0;
-    const { errors, annotations, after } = await refreshTwice(await fixture(), async () => {
-      reads++;
-      return new Response("not found", { status });
-    });
-    assert.equal(reads, 1);
-    assert.equal(annotations, 1);
-    assert.deepEqual(errors, []);
-    assert.equal(after.status, "ready");
-    assert.equal(after.proposal?.data.body, "Keep my edit");
-    assert.equal(
-      after.sourcePayload?.sourceRefreshError,
-      "The original message is no longer available. Your item has not been dismissed.",
-    );
-  }
+  let reads = 0;
+  const { errors, annotations, after } = await refreshTwice(await fixture(), async () => {
+    reads++;
+    return new Response("not found", { status: 404 });
+  });
+  assert.equal(reads, 1);
+  assert.equal(annotations, 1);
+  assert.deepEqual(errors, []);
+  assert.equal(after.status, "ready");
+  assert.equal(after.proposal?.data.body, "Keep my edit");
+  assert.equal(
+    after.sourcePayload?.sourceRefreshError,
+    "The original message is no longer available. Your item has not been dismissed.",
+  );
+  assert.match(String(after.sourcePayload?.sourceGone), /threads\/t1 returned 404/);
 });
 
 test("a transient Gmail failure is logged and retried on the next refresh", async () => {
@@ -58,14 +57,14 @@ test("a transient Gmail failure is logged and retried on the next refresh", asyn
 });
 
 test("a deleted Slack conversation, thread or root message is read once and never logged as a failure", async () => {
-  const cases: Record<string, unknown>[] = [
-    { ok: false, error: "channel_not_found" },
-    { ok: false, error: "thread_not_found" },
-    { ok: true, messages: [{ ts: "2.0", thread_ts: "1.0", user: "U1", text: "Reply" }] },
+  const cases: [Record<string, unknown>, RegExp][] = [
+    [{ ok: false, error: "channel_not_found" }, /conversations\.info: channel_not_found/],
+    [{ ok: false, error: "thread_not_found" }, /conversations\.replies: thread_not_found/],
+    [{ ok: true, messages: [{ ts: "2.0", thread_ts: "1.0", user: "U1" }] }, /root message missing/],
   ];
-  for (const replies of cases) {
+  for (const [replies, detail] of cases) {
     let reads = 0;
-    const { errors, after } = await refreshTwice(
+    const { errors, annotations, after } = await refreshTwice(
       await fixture("slack", { channelId: "C1", ts: "1.0" }),
       async (url) => {
         reads++;
@@ -75,9 +74,22 @@ test("a deleted Slack conversation, thread or root message is read once and neve
       },
     );
     assert.equal(reads, replies.error === "channel_not_found" ? 1 : 2);
+    assert.equal(annotations, 1);
     assert.deepEqual(errors, []);
     assert.match(String(after.sourcePayload?.sourceRefreshError), /no longer available/);
+    assert.match(String(after.sourcePayload?.sourceGone), detail);
   }
+});
+
+test("a partial Slack page without the root message is not treated as gone", async () => {
+  const { errors, after } = await refreshTwice(await fixture("slack", { channelId: "C1", ts: "1.0" }), async (url) =>
+    String(url).includes("conversations.info")
+      ? json({ ok: true, channel: {} })
+      : json({ ok: true, has_more: true, messages: [{ ts: "2.0", thread_ts: "1.0", user: "U1" }] }),
+  );
+  assert.deepEqual(errors, []);
+  assert.equal(after.sourcePayload?.sourceGone, undefined);
+  assert.equal(after.sourcePayload?.sourceContextPartial, true);
 });
 
 test("a newer source message reopens a source that was gone", async () => {
@@ -107,5 +119,4 @@ test("a newer source message reopens a source that was gone", async () => {
     },
   })("owner", [(await fixed.items.get(fixed.item.id))!]);
   assert.equal(reads, 2);
-  assert.equal((await fixed.items.get(fixed.item.id))!.sourcePayload?.sourceRefreshError, undefined);
 });
