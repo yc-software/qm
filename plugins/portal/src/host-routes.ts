@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { isIP } from "node:net";
 import { hostName, hostReturnTo, mintHandoff, openHandoff, type HostRecord, type MappedHost } from "./host-tenant.ts";
 
 interface HostSession {
@@ -31,6 +32,10 @@ function redirect(res: ServerResponse, location: string): void {
   res.end();
 }
 
+function ipLiteral(header: string): boolean {
+  return header.startsWith("[") ? isIP(header.slice(1, header.indexOf("]"))) === 6 : isIP(hostName(header)) === 4;
+}
+
 export function createHostRoutes(deps: HostRouteDeps) {
   const shared = new URL(deps.publicUrl);
   const appsDomain = deps.appsDomain?.toLowerCase();
@@ -53,7 +58,7 @@ export function createHostRoutes(deps: HostRouteDeps) {
     async resolve(req: IncomingMessage, res: ServerResponse): Promise<MappedHost | undefined | null> {
       const host = hostName(req.headers.host);
       if (!host || host === hostName(shared.host) || (req.url ?? "").split("?")[0] === "/healthz") return;
-      if (host === "localhost" || host.startsWith("[") || /^[\d.]+$/.test(host)) return;
+      if (host === "localhost" || ipLiteral(req.headers.host ?? "")) return;
       try {
         const record = await deps.lookup(host);
         if (record && !record.app) return { ...record, host, origin: `${shared.protocol}//${req.headers.host}` };

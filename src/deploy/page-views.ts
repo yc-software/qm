@@ -1,4 +1,5 @@
 import { durableMapTenancy } from "../persistence/durable-map.ts";
+import { inboundIndexes } from "../tenants/lookup.ts";
 import { createPgPool, type PgMigrationDefinition } from "../persistence/pg-pool.ts";
 
 export const NAME_INDEX = "deployments_name_unique";
@@ -75,6 +76,7 @@ export const DEPLOYMENT_TABLES: PgMigrationDefinition[] = [
       END $name_index$`,
     ],
   },
+  inboundIndexes("deployments", ["name"]),
 ];
 
 export type AppViewAuthMode = "signed_in" | "public" | "app_only";

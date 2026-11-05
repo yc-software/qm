@@ -32,7 +32,7 @@ test("the app login refuses to create a table a migration never made", { skip },
   try {
     await assert.rejects(
       createPostgresMap<{ v: number }>(app, "unmigrated_probe").get("x"),
-      /misconfiguration: migration durable-map\/unmigrated_probe\/0001 for table unmigrated_probe has not been applied/,
+      /misconfiguration: migration durable-map\/unmigrated_probe\/0001 has not been applied/,
     );
     assert.deepEqual(await owner.q("SELECT to_regclass('unmigrated_probe') AS t"), [{ t: null }]);
   } finally {

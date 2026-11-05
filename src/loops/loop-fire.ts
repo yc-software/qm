@@ -974,11 +974,10 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
   }
 
   async function sweepStale(now: number): Promise<void> {
-    await claimThenBind(deps.loops.claimIds, async (id) => {
-      const loop = await deps.loops.get(id);
-      if (loop?.state !== "enabled" || loop.governor?.staleFireMs === undefined) return;
-      if (now - (loop.lastFiredAt ?? loop.createdAt) > loop.governor.staleFireMs)
-        await applyGovernor(id, undefined, now);
+    await claimThenBind(deps.loops.claimTenants, async () => {
+      for (const { id, state, governor, lastFiredAt, createdAt } of await deps.loops.list())
+        if (state === "enabled" && now - (lastFiredAt ?? createdAt) > (governor?.staleFireMs ?? Infinity))
+          await applyGovernor(id, undefined, now);
     });
   }
 

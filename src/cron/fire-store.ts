@@ -163,6 +163,7 @@ export function createPostgresCronFireStore(connectionString: string): CronFireS
         `DROP FUNCTION IF EXISTS qm_sync_legacy_cron_fire()`,
       ],
     },
+    { id: "cron/fires/0005-drop-fire-log", statements: ["DROP TABLE IF EXISTS cron_fire_log"] },
   ]);
 
   return {
@@ -190,25 +191,7 @@ export function createPostgresCronFireStore(connectionString: string): CronFireS
         .length;
     },
     async pruneEnded({ endedBefore, keepPerCron }) {
-      return withPgTransaction(await pool(), async (client) => {
-        const legacy = await client.query("SELECT to_regclass('cron_fire_log') IS NOT NULL AS present");
-        if (legacy.rows[0]?.present) await client.query("LOCK TABLE cron_fire_log IN SHARE ROW EXCLUSIVE MODE");
-        const removed = await claimRows(
-          { q: async (text, params) => (await client.query(text, params)).rows },
-          "claim_pruned_cron_fires",
-          [keepPerCron, endedBefore],
-        );
-        const keys = removed.map(({ id }) => JSON.parse(id) as [string, string]);
-        if (keys.length && legacy.rows[0]?.present) {
-          await client.query(
-            `DELETE FROM cron_fire_log source
-               USING unnest($1::text[], $2::text[]) removed(cron_id, fire_key)
-               WHERE source.cron_id = removed.cron_id AND source.fire_key = removed.fire_key`,
-            [keys.map(([cronId]) => cronId), keys.map(([, fireKey]) => fireKey)],
-          );
-        }
-        return removed.length;
-      });
+      return (await claimRows({ q }, "claim_pruned_cron_fires", [keepPerCron, endedBefore])).length;
     },
     async listByCron(cronId, opts) {
       if (opts?.limit !== undefined && opts.limit <= 0) {

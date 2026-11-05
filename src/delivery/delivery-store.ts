@@ -50,7 +50,7 @@ export interface DeliveryStore {
   pending(type: string): Promise<Delivery[]>;
   claimPending(type: string, ttlMs: number): Promise<Delivery[]>;
   claimDue(type: string, ttlMs: number): Promise<ClaimedDelivery[]>;
-  undeliveredIds(type: string): Promise<ClaimedRow[]>;
+  undeliveredTenants(type: string): Promise<ClaimedRow[]>;
   listShadow(opts?: { limit?: number }): Promise<Delivery[]>;
   ack(id: string, at: number, slackApiMs?: number): Promise<void>;
   fail(id: string, reason: string, at: number): Promise<Delivery | null>;
@@ -151,10 +151,11 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
     async claimDue(type, ttlMs) {
       return (await claim(type, ttlMs, true)).map((d) => ({ ...d, tenantId: currentTenant() }));
     },
-    async undeliveredIds(type) {
-      return [...deliveries.values()]
-        .filter((d) => d.deliveredAt === null && d.expiredAt === undefined && !d.shadow && d.destination.type === type)
-        .map((d) => ({ tenantId: currentTenant(), id: d.id }));
+    async undeliveredTenants(type) {
+      const waiting = [...deliveries.values()].some(
+        (d) => d.deliveredAt === null && d.expiredAt === undefined && !d.shadow && d.destination.type === type,
+      );
+      return waiting ? [{ tenantId: currentTenant(), id: type }] : [];
     },
     async listShadow(opts) {
       const limit = Math.max(1, opts?.limit ?? 100);

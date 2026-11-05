@@ -41,15 +41,16 @@ export async function personNamer(app: App, deps: ServerDeps): Promise<(principa
   };
 }
 
-const THREAD_REF = /^([a-z]+):(.+):([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
-
 export function threadRefLabel(
   resource: string | undefined,
   nameOf: (principalId: string) => string | undefined,
 ): string | undefined {
-  const ref = THREAD_REF.exec(resource ?? "");
-  const owner = ref ? nameOf(ref[2]!) : undefined;
-  return ref && owner && owner !== ref[2] ? `${ref[1]}:${owner}:${ref[3]}` : undefined;
+  const start = resource?.indexOf(":") ?? -1;
+  const end = resource?.lastIndexOf(":") ?? -1;
+  if (!resource || start < 1 || end <= start + 1 || end === resource.length - 1) return undefined;
+  const principalId = resource.slice(start + 1, end);
+  const owner = nameOf(principalId);
+  return owner && owner !== principalId ? `${resource.slice(0, start)}:${owner}${resource.slice(end)}` : undefined;
 }
 
 export async function discoverScopes(

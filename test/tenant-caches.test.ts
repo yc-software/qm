@@ -5,10 +5,8 @@ import type { DurableMap } from "../src/persistence/durable-map.ts";
 import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { boundTenant, currentTenant, withoutTenant, withTenant } from "../src/tenants/context.ts";
 import { loadTenant, onTenantLoad, perTenant, tenantListeners } from "../src/tenants/cache.ts";
-import { customModelCatalog, customProvidersVersion, setCustomProviders } from "../src/model/custom-providers.ts";
-import { overlayUnavailableReason, overlaysVersion, publishModelOverlays } from "../src/model/model-overlay.ts";
+import { customProvidersVersion, setCustomProviders } from "../src/model/custom-providers.ts";
 import { resolveDeploymentModel } from "../src/model/pi-models.ts";
-import { gatewayModelCatalog, gatewayModelsVersion, setGatewayModels } from "../src/model/gateway-models.ts";
 import { createMcpToolService } from "../src/mcp/mcp-tool-service.ts";
 import type { McpServer, McpServerStore } from "../src/mcp/mcp-server-store.ts";
 import { createIdentityService, type DeactivationRecord } from "../src/identity/identity-service.ts";
@@ -68,6 +66,8 @@ function tenantMap<T>(): DurableMap<T> & { reads: string[] } {
     select: unsupported,
     selectEntries: unsupported,
     claimIds: unsupported,
+    claimTenants: unsupported,
+    deleteBefore: unsupported,
     claimIdsWhere: unsupported,
     async get(id) {
       return own().get(id) ?? null;
@@ -309,26 +309,16 @@ function signInServer(id: string): McpServer {
   };
 }
 
-test("custom providers are per tenant; deployment model state resolves unbound", () => {
+test("a tenant's custom providers neither bump another tenant's version nor resolve deployment-wide", () => {
+  const before = withTenant(B, customProvidersVersion);
   withTenant(A, () => {
     setCustomProviders([
       { id: "tenant-a", name: "A", protocol: "openai", baseUrl: "https://a.example/v1", models: [{ id: "model-a" }] },
     ]);
   });
-  const before = withTenant(B, customProvidersVersion);
-  withTenant(A, () => assert.equal(customModelCatalog().length, 1));
-  withTenant(B, () => assert.deepEqual(customModelCatalog(), []));
+  assert.equal(resolveDeploymentModel("model-a"), undefined);
   withTenant(A, () => setCustomProviders([]));
   assert.equal(withTenant(B, customProvidersVersion), before);
-  const overlays = overlaysVersion();
-  publishModelOverlays(new Map(), new Map([["overlay-a", "missing key"]]), []);
-  assert.equal(overlayUnavailableReason("overlay-a"), "missing key");
-  assert.equal(overlaysVersion(), overlays + 1);
-  publishModelOverlays(new Map(), new Map(), []);
-  setGatewayModels([]);
-  assert.deepEqual(gatewayModelCatalog(true), []);
-  assert.ok(gatewayModelsVersion() >= 0);
-  assert.equal(resolveDeploymentModel("model-a"), undefined);
 });
 
 test("MCP tool lists are loaded and refreshed per tenant", async (t) => {

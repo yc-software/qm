@@ -182,11 +182,8 @@ export function withWebTranscriptDeliveries(
     },
     async transcribeUndelivered(type) {
       await claimThenBind(
-        () => store.undeliveredIds(type),
-        async (id) => {
-          const d = await store.get(id);
-          if (d) await drained([d]);
-        },
+        () => store.undeliveredTenants(type),
+        async () => drained(await store.pending(type)),
       );
     },
     async claimDue(type, ttlMs) {

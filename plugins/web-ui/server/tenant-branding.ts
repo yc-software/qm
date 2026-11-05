@@ -1,5 +1,5 @@
 import { createBrandingCache, type BrandingCache, type OrgBranding } from "../../chassis/src/branding.ts";
-import { verifyPortalIdentity } from "../../chassis/src/portal-identity.ts";
+import { portalIdentityTenant } from "../../chassis/src/portal-identity.ts";
 
 export interface TenantBranding {
   tenant(): string | undefined;
@@ -13,10 +13,7 @@ export function createTenantBranding(
   identitySecret: string | undefined,
 ): TenantBranding {
   const caches = new Map<string, BrandingCache>([["", createBrandingCache(fetchBranding)]]);
-  const tenant = (): string | undefined => {
-    const token = currentToken();
-    return token && identitySecret ? verifyPortalIdentity(token, identitySecret, Date.now())?.t : undefined;
-  };
+  const tenant = (): string | undefined => portalIdentityTenant(currentToken(), identitySecret);
   const cache = (): BrandingCache => {
     const key = tenant() ?? "";
     let found = caches.get(key);

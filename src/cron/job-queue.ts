@@ -1,4 +1,5 @@
 import { PgBoss } from "pg-boss";
+import pgBossPackage from "pg-boss/package.json" with { type: "json" };
 import { createPgPool, type PgPool } from "../persistence/pg-pool.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 
@@ -64,14 +65,23 @@ export async function installCronQueue(databaseUrl: string, schema: string = "pg
     await boss.createQueue(FIRE_QUEUE, FIRE_QUEUE_OPTIONS);
     await pg.q(grantLikePublic(schema));
   } finally {
-    await boss.stop({ close: true, graceful: false });
-    await pg.close();
+    await boss.stop({ close: true, graceful: false }).catch(swallowAs("cron queue install: cleanup", undefined));
+    await pg.close().catch(swallowAs("cron queue install: cleanup", undefined));
   }
 }
 
+export class CronQueueNotInstalled extends Error {}
+
+async function assertInstalled(boss: PgBoss, schema: string): Promise<void> {
+  const installed = (await boss.isInstalled()) ? await boss.schemaVersion() : null;
+  if (installed !== pgBossPackage.pgboss.schema)
+    throw new CronQueueNotInstalled(
+      `cron queue schema ${schema} is at version ${installed ?? "none"}, expected ${pgBossPackage.pgboss.schema}`,
+    );
+}
+
 export function cronQueueMisconfigured(error: unknown): boolean {
-  const code = (error as { code?: unknown } | null)?.code;
-  return code === "42501" || /pg-boss (is not installed|database requires migrations)/.test(errMessage(error));
+  return error instanceof CronQueueNotInstalled || (error as { code?: unknown } | null)?.code === "42501";
 }
 
 export function createPgBossCronQueue(
@@ -108,6 +118,7 @@ export function createPgBossCronQueue(
       pg ??= createPgPool(databaseUrl);
       try {
         if (!initialized) {
+          await assertInstalled(boss, schema);
           await boss.start();
           initialized = true;
         }

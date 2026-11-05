@@ -14,8 +14,7 @@ import type { VisibilityDirectory } from "../directory/visibility.ts";
 import type { DirectoryMember } from "../directory/directory-store.ts";
 import type { LeaderLease } from "../persistence/leader-lease.ts";
 import { createSweeper } from "../util/sweeper.ts";
-import { claimThenBind } from "../tenants/claim.ts";
-import { loadTenant } from "../tenants/cache.ts";
+import { claimThenBind, inTenant } from "../tenants/claim.ts";
 import { currentTenant, withTenant } from "../tenants/context.ts";
 import { recoverNextFireAt } from "./schedule.ts";
 import { cronQueueMisconfigured, fireJobStartsAt, type CronFireJob, type CronJobQueue } from "./job-queue.ts";
@@ -505,16 +504,14 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   async function reconcile(): Promise<void> {
     try {
       const horizon = now() + 2 * REPAIR_INTERVAL_MS;
-      await claimThenBind(
-        () => deps.crons.claimIds(),
-        async (id) => {
+      await claimThenBind(deps.crons.claimTenants, async () => {
+        for (const cron of await deps.crons.list()) {
           if (stopped) return;
-          const cron = await deps.crons.get(id);
-          if (!cron || cron.archived || !cron.enabled) return;
+          if (cron.archived || !cron.enabled) continue;
           const job = nextJob(cron);
           if (job && fireJobStartsAt(job) <= horizon) await deps.jobQueue!.enqueueFire(job);
-        },
-      );
+        }
+      });
     } catch (e) {
       reportFailure("scheduler: reconcile", e);
     }
@@ -626,12 +623,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       starting = deps.jobQueue
         .start({
           onFire: (job) =>
-            observed === epoch
-              ? withTenant(job.tenantId, async () => {
-                  await loadTenant();
-                  return runQueueTask(() => fireJob(job));
-                })
-              : Promise.resolve(),
+            observed === epoch ? inTenant(job.tenantId, () => runQueueTask(() => fireJob(job))) : Promise.resolve(),
         })
         .then(
           () => {

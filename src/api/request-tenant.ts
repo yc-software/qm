@@ -14,7 +14,12 @@ export function capabilityToken(req: IncomingMessage, bearer: boolean): string |
   if (!bearer) return null;
   const apiKey = req.headers["x-api-key"];
   if (typeof apiKey === "string" && apiKey) return apiKey;
-  return /^Bearer\s+(\S+)$/i.exec(req.headers.authorization ?? "")?.[1] ?? null;
+  return bearerToken(req);
+}
+
+export function bearerToken(req: IncomingMessage): string | null {
+  const [scheme, token, ...rest] = (req.headers.authorization ?? "").split(" ");
+  return scheme?.toLowerCase() === "bearer" && token && !rest.length ? token : null;
 }
 
 export function requestCapability(

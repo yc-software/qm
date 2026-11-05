@@ -1,6 +1,7 @@
 import type { IncomingMessage } from "node:http";
 import { withTenant } from "../tenants/context.ts";
-import { inTenant, type TenantKey, type TenantLookup } from "../tenants/lookup.ts";
+import { inTenant } from "../tenants/claim.ts";
+import type { TenantKey, TenantLookup } from "../tenants/lookup.ts";
 import type { KeyedTenant, Route } from "./routes/route.ts";
 
 export const EMPTY_TENANT = "00000000-0000-0000-0000-000000000000";

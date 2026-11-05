@@ -139,6 +139,30 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
         ),
       ],
     },
+    {
+      id: "delivery/store/0011-undelivered-uncapped",
+      statements: [
+        claimFunction(
+          "undelivered_deliveries",
+          "text",
+          `SELECT tenant_id, id::text FROM deliveries
+            WHERE delivered_at IS NULL AND expired_at IS NULL AND NOT shadow AND destination->>'type' = $1
+            ORDER BY created_at`,
+        ),
+      ],
+    },
+    {
+      id: "delivery/store/0012-undelivered-tenants",
+      statements: [
+        "DROP FUNCTION IF EXISTS undelivered_deliveries(text)",
+        claimFunction(
+          "undelivered_delivery_tenants",
+          "text",
+          `SELECT DISTINCT tenant_id, $1 FROM deliveries
+            WHERE delivered_at IS NULL AND expired_at IS NULL AND NOT shadow AND destination->>'type' = $1`,
+        ),
+      ],
+    },
   ]);
   const { q, query } = pg;
 
@@ -237,7 +261,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
       );
       return claimed.filter((d) => d !== null).sort((a, b) => a.createdAt - b.createdAt);
     },
-    undeliveredIds: (type) => claimRows(pg, "undelivered_deliveries", [type]),
+    undeliveredTenants: (type) => claimRows(pg, "undelivered_delivery_tenants", [type]),
     async listShadow(opts) {
       const limit = Math.max(1, opts?.limit ?? 100);
       const rows = await q(

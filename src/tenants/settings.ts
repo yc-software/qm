@@ -4,7 +4,7 @@ import { loadTenant, perTenant } from "./cache.ts";
 import { boundTenant } from "./context.ts";
 import { appHandleSchema } from "./app-handle.ts";
 
-const text = z.string().min(1).max(4096);
+const text = z.string().min(1);
 
 const emailOrDomain = z
   .string()
@@ -16,12 +16,12 @@ const emailOrDomain = z
 export const tenantSettingsSchema = z
   .object({
     oidcClient: z.object({ clientId: text, clientSecret: text.optional() }).strict(),
-    allowedEmails: z.array(emailOrDomain).max(10_000),
-    brandName: z.string().trim().min(1).max(40),
+    allowedEmails: z.array(emailOrDomain),
+    brandName: z.string().trim().min(1),
     modelGatewayKey: text,
     orgSlug: z.string().regex(/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/, "expected a lowercase org slug"),
     handle: appHandleSchema,
-    slackBridgeToken: z.string().regex(/^[\x21-\x7e]{16,512}$/, "expected a Slack service bridge token"),
+    slackBridgeToken: z.string().regex(/^[\x21-\x7e]{16,}$/, "expected a Slack service bridge token"),
   })
   .partial()
   .strict();

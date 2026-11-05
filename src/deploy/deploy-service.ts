@@ -224,8 +224,10 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     });
   }
 
-  const eachDeployment = (work: (id: string) => Promise<void>) =>
-    claimThenBind(() => deps.deployStore.claimIds(), work);
+  const eachRunning = (work: (d: Deployment) => Promise<void>) =>
+    claimThenBind(deps.deployStore.claimTenants, async () => {
+      for (const d of await deps.deployStore.list()) if (d.status === "running") await work(d);
+    });
   function withDeployLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
     return deployQueue(id, () => advisoryLock.withLock(`deploy:${id}`, fn));
   }
@@ -642,15 +644,15 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     async maintainDeployments() {
       const result = await leaderLease.hold("deployments:keep-warm", async () => {
         let maintained = 0;
-        await eachDeployment(async (id) => {
+        await eachRunning(async (listed) => {
           try {
-            const cur = await deps.deployStore.get(id);
-            if (!cur || cur.status !== "running") return;
-            const rotate = await deps.provider.rotationDue?.(cur);
+            const rotate = await deps.provider.rotationDue?.(listed);
+            const cur = rotate || listed.alwaysOn ? await deps.deployStore.get(listed.id) : null;
+            if (cur?.status !== "running") return;
             if (rotate) await rotateDeployment(cur.id);
             if (rotate || (cur.alwaysOn && (await liveEndpoint(cur)))) maintained++;
           } catch (e) {
-            console.error("%s", `[deploy] maintenance failed for ${id}:`, errMessage(e));
+            console.error("%s", `[deploy] maintenance failed for ${listed.id}:`, errMessage(e));
           }
         });
         return maintained;
@@ -730,10 +732,8 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       const result = await leaderLease.hold("deployments:reaper", async () => {
         if (deps.provider.profile.managedScaleToZero) return 0;
         let stopped = 0;
-        await eachDeployment(async (id) => {
-          const d = await deps.deployStore.get(id);
-          if (!d || d.status !== "running" || d.alwaysOn) return;
-          if (now - (d.lastAccessAt ?? d.versions.at(-1)?.createdAt ?? 0) < ttlMs) return;
+        await eachRunning(async ({ id, alwaysOn, lastAccessAt, versions }) => {
+          if (alwaysOn || now - (lastAccessAt ?? versions.at(-1)?.createdAt ?? 0) < ttlMs) return;
           await withDeployLock(id, async () => {
             const cur = await deps.deployStore.get(id);
             if (!cur || cur.status !== "running" || cur.alwaysOn) return;

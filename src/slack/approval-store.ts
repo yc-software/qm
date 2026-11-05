@@ -40,13 +40,9 @@ export function createApprovalStore(
       await deliver(id, record).catch(swallowAs("approvals: enqueue delivery", undefined));
     },
     async deliverPending(): Promise<void> {
-      await claimThenBind(
-        () => backing.claimIds(),
-        async (id) => {
-          const record = await backing.get(id);
-          if (record) await deliver(id, record);
-        },
-      );
+      await claimThenBind(backing.claimTenants, async () => {
+        for (const [id, record] of await backing.entries()) await deliver(id, record);
+      });
     },
   };
 }

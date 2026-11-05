@@ -322,6 +322,7 @@ import { createControlService } from "./api/control-service.ts";
 import { createPostgresRunStore } from "./runs/postgres-run-store.ts";
 import { boundTenant, currentTenant, withTenant } from "./tenants/context.ts";
 import { claimThenBind } from "./tenants/claim.ts";
+import { inboundTenancy } from "./tenants/lookup.ts";
 import type { RunSignalStore } from "./runs/run-signal-store.ts";
 import { createPostgresRunSignalStore } from "./runs/postgres-run-signal-store.ts";
 import { isTerminal, type Run, type RunStore } from "./runs/run-store.ts";
@@ -540,15 +541,12 @@ const MEMORY_CAPTURE_ENTRY_WINDOW = 2_000;
 
 const CONFIGURED_MAPS = [
   "sprites_initialization",
-  "render_sandbox_bases",
   "sandbox_resource_rollout",
   "sandbox_routing",
   "render_deploy_credentials",
   "render_app_storage",
   "aws_deploy_bodies",
-  "fly_peer_claims",
   "fly_deploy_configs",
-  "fly_deploy_ports",
   "porter_deploy_bodies",
 ];
 
@@ -604,6 +602,10 @@ export function buildApp(
   const pgArtifactMap = createPostgresMapFactory(databaseUrl);
   const artifactMap = <T>(table: string, indexedFields?: readonly Extract<keyof T, string>[]): DurableMap<T> =>
     pgArtifactMap.map<T>(table, indexedFields);
+  const processMap = <T>(table: string): DurableMap<T> =>
+    createPostgresMap<T>(pgArtifactMap.pool, table, [], [], [processLevelMap(table)]);
+  const inboundMap = <T>(table: string, indexedFields?: readonly Extract<keyof T, string>[]): DurableMap<T> =>
+    pgArtifactMap.map<T>(table, indexedFields, inboundTenancy(table));
   for (const migration of [
     ...FILE_UPLOAD_MIGRATIONS,
     ...BUDGET_MIGRATIONS,
@@ -690,13 +692,7 @@ export function buildApp(
   const auditLog = createPostgresAuditLog(databaseUrl);
   let ownsSharedState = false;
   const deploymentLayerStore = createDeploymentLayerStore({
-    backing: createPostgresMap<StoredDeploymentLayer>(
-      pgArtifactMap.pool,
-      "deployment_layer",
-      [],
-      [],
-      [processLevelMap("deployment_layer")],
-    ),
+    backing: processMap<StoredDeploymentLayer>("deployment_layer"),
     runtime: deploymentLayer,
     skills,
     skillBundles,
@@ -908,7 +904,7 @@ export function buildApp(
     renderClient && config.renderSandbox.image
       ? createRenderBase({
           client: renderClient,
-          store: artifactMap<StoredRenderBase>("render_sandbox_bases"),
+          store: processMap<StoredRenderBase>("render_sandbox_bases"),
           image: config.renderSandbox.image,
           hold: (work) => leaderLease.hold(`render:sandbox-base:${config.renderSandbox.image}`, work),
           onError: sandboxOnError,
@@ -1045,7 +1041,7 @@ export function buildApp(
       onError: sandboxOnError,
     });
   const superserveBodies = artifactMap<StoredSuperserveSandbox>("superserve_sandbox_bodies");
-  const superserveEpochs = artifactMap<StoredConfigEpoch>("superserve_config_epochs");
+  const superserveEpochs = processMap<StoredConfigEpoch>("superserve_config_epochs");
   const buildSuperserve = (): Sandbox => {
     const ss = config.superserveSandbox;
     if (!ss.apiKey) throw new Error("SANDBOX_BACKEND=superserve requires SUPERSERVE_API_KEY");
@@ -1325,9 +1321,9 @@ export function buildApp(
     ? createBrowserSessionStore({ sessions: artifactMap<StoredBrowserSession>("browser_sessions"), key: credentialKey })
     : undefined;
   const connectorTokens = withOperatorTokenFallback(credentialStore, config.egressServiceHosts ?? [], secretSource);
-  const consentLinks: ConsentLinkStore = createConsentLinkStore(artifactMap<ConsentLinkRecord>("consent_links"));
-  const oauthFlows: OAuthFlowStore = createOAuthFlowStore(artifactMap<OAuthState>("oauth_flows"));
-  const secretDrops: SecretDropStore = createSecretDropStore(artifactMap<SecretDropRecord>("secret_drops"));
+  const consentLinks: ConsentLinkStore = createConsentLinkStore(inboundMap<ConsentLinkRecord>("consent_links"));
+  const oauthFlows: OAuthFlowStore = createOAuthFlowStore(inboundMap<OAuthState>("oauth_flows"));
+  const secretDrops: SecretDropStore = createSecretDropStore(inboundMap<SecretDropRecord>("secret_drops"));
 
   const sessions: SessionStore = createPostgresSessionStore(databaseUrl);
   memorySessions.store = sessions;
@@ -1753,7 +1749,7 @@ export function buildApp(
     config.deployProvider === "fly" && config.flyDeploy.wireguardPeers
       ? createFlyTunnelManager({
           peers: parseFlyWireguardPeers(config.flyDeploy.wireguardPeers),
-          claims: artifactMap<FlyPeerClaim>("fly_peer_claims"),
+          claims: processMap<FlyPeerClaim>("fly_peer_claims"),
           metadataUri: config.flyDeploy.metadataUri ?? "",
           executable: "wireproxy",
           port: 18096,
@@ -1768,7 +1764,7 @@ export function buildApp(
         ...config.flyDeploy,
         ...(flyTunnel ? { privateTransport: flyTunnel } : {}),
         configStore: artifactMap<FlyMachineConfig>("fly_deploy_configs"),
-        portStore: artifactMap<string>("fly_deploy_ports"),
+        portStore: processMap<string>("fly_deploy_ports"),
         onError: sandboxOnError,
       }),
     porter: () =>
@@ -1993,7 +1989,7 @@ export function buildApp(
     ],
   });
   const webhooks = createWebhookStore(
-    artifactMap<Webhook>("webhooks", ["ownerScopeId"]),
+    inboundMap<Webhook>("webhooks", ["ownerScopeId"]),
     artifactMap<WebhookHistory>("webhook_history"),
   );
   pgArtifactMap.pool.registerMigration({
@@ -2636,7 +2632,7 @@ export function buildApp(
   });
   const loopIngress = createLoopIngress({
     enabledFor: (owner) => featureFlags.enabled("inbox_loops", scopeId("personal", owner)),
-    sources: artifactMap<LoopIngress>("loop_ingress", ["loopId"]),
+    sources: inboundMap<LoopIngress>("loop_ingress", ["loopId"]),
     deliveries: artifactMap<IngressDelivery>("loop_ingress_deliveries", ["queueKey"]),
     loops: loopStore,
     items: loopItems,
@@ -2834,10 +2830,7 @@ export function buildApp(
   const BLOB_TTL_MS = 6 * 60 * 60_000;
   const composioReturns = artifactMap<ComposioReturn>("composio_returns");
   const composioReturnSweeper = createSweeper(
-    () =>
-      claimThenBind(composioReturns.claimIds, async (id) => {
-        if (((await composioReturns.get(id))?.expiresAt ?? Infinity) <= Date.now()) await composioReturns.delete(id);
-      }),
+    () => claimThenBind(composioReturns.claimTenants, () => composioReturns.deleteBefore("expiresAt", Date.now() + 1)),
     30 * 60_000,
     { label: "Composio consent returns", immediate: true },
   );
@@ -3111,7 +3104,7 @@ export function buildApp(
     ...(config.suggestedActivitiesEnabled && config.backgroundWorkEnabled ? { suggestedActivities } : {}),
     drain,
     uiState,
-    sessionShares: artifactMap<SessionShare>("session_shares"),
+    sessionShares: inboundMap<SessionShare>("session_shares"),
     sessionShareBytes:
       config.snapshotStore === "s3" && config.s3Bucket
         ? createS3DurableByteStore({
