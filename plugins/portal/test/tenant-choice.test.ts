@@ -505,6 +505,22 @@ test("a session works only on the host it was minted for, in both directions", a
   assert.equal((await onHost("a.test", "/api/sessions", sessionCookie(alpha, undefined, "b.test"), json)).status, 401);
 });
 
+test("a company's published app opens on its own hostname with that company's session, and nowhere else with it", async () => {
+  const companyHost = sessionCookie(alpha, undefined, "a.test");
+  surface.length = 0;
+  const own = await onHost("a.test", "/d/demo-app/", companyHost);
+  assert.equal(own.status, 200);
+  assert.deepEqual(JSON.parse(own.body), { path: "/d/demo-app/" });
+  assert.equal(surface.at(-1), alpha);
+  surface.length = 0;
+  for (const host of ["portal.test", "b.test"]) {
+    const refused = await onHost(host, "/d/demo-app/", companyHost);
+    assert.equal(refused.status, 302);
+    assert.match(refused.location, /\/auth\/login/);
+  }
+  assert.deepEqual(surface, []);
+});
+
 test("signing in for a company's hostname with an account outside it shows no access and starts no session", async () => {
   tenants = [{ id: beta }];
   const denied = await signInThroughSharedHost("http://a.test/");
