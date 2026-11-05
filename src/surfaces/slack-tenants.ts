@@ -23,7 +23,7 @@ export function createTenantSlackRuntimes(opts: {
     return runtime;
   };
   return {
-    reconcile(): Promise<void> {
+    async reconcile(): Promise<void> {
       return ensure(currentTenant()).reconcile();
     },
     start(): void {

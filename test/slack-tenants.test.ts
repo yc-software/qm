@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
+import { createSlackInstallationStore } from "../src/surfaces/slack-installation.ts";
 import { createTenantSlackRuntimes } from "../src/surfaces/slack-tenants.ts";
+import { testMap } from "./support/test-database.ts";
 import { boundTenant, withTenant } from "../src/tenants/context.ts";
 import { tenantLookup } from "../src/tenants/lookup.ts";
 import { twoTenants, type TwoTenants } from "./support/two-tenants.ts";
@@ -48,5 +50,14 @@ describe("per-tenant Slack runtimes", () => {
     assert.deepEqual(events.slice(2), [`create ${b} in ${b}`, `start ${b} in ${b}`, `reconcile ${b} in ${b}`]);
     await runtimes.stop();
     assert.deepEqual(events.slice(5).sort(), [`stop ${a}`, `stop ${b}`].sort());
+  });
+
+  it("tells listeners when an admin saves Slack tokens, in the saving request's tenant", async () => {
+    const store = createSlackInstallationStore("org", testMap(), "k".repeat(32));
+    const heard: (string | undefined)[] = [];
+    store.onSet(() => heard.push(boundTenant()));
+    const tenant = boundTenant();
+    await store.set({ botToken: "xoxb-1", updatedBy: "admin" });
+    assert.deepEqual(heard, [tenant]);
   });
 });

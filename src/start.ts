@@ -10,10 +10,31 @@ import { errMessage, reportFailureAs } from "./util/errors.ts";
 import { slackAccountConfigsFromEnv, slackPluginConfigFromEnv, startSlackPlugin } from "./slack/index.ts";
 import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
 import { createTenantSlackRuntimes } from "./surfaces/slack-tenants.ts";
+import type { SlackPluginConfig } from "./slack/config.ts";
 import { installCronQueue } from "./cron/job-queue.ts";
 import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
 import { bindBootTenant, inBootTenant } from "./tenants/boot.ts";
 import { loadTenant } from "./tenants/cache.ts";
+
+function envSlackAccountRuntimes(
+  env: NodeJS.ProcessEnv,
+  tenant: string | undefined,
+  startPlugin: (config: SlackPluginConfig) => Promise<{ stop(): Promise<void> }>,
+) {
+  const accounts = slackAccountConfigsFromEnv(env);
+  if (accounts.length && !tenant) {
+    console.error("[slack] misconfiguration: env-configured Slack accounts need a single-tenant install; ignored");
+    return [];
+  }
+  return accounts.map((account) =>
+    createSlackRuntimeReconciler({
+      startPaused: true,
+      load: () => Promise.resolve({ version: `environment:${account.accountId}`, config: account }),
+      startPlugin,
+      onError: reportFailureAs("slack account reconciliation", undefined, `account=${account.accountId}`),
+    }),
+  );
+}
 
 export async function startQm(
   config: Config,
@@ -121,14 +142,12 @@ export async function startQm(
     tenants: async () => [tenant, ...(await built.sessions.tenantLookup.slackTenants())],
     onError: reportFailureAs("slack tenant discovery", undefined),
   });
+  built.slackInstallation.onSet(
+    () => void slackRuntime.reconcile().catch(reportFailureAs("slack install start", undefined)),
+  );
 
-  const slackAccountRuntimes = slackAccountConfigsFromEnv(env).map((account) =>
-    createSlackRuntimeReconciler({
-      startPaused: true,
-      load: () => Promise.resolve({ version: `environment:${account.accountId}`, config: account }),
-      startPlugin: (desired) => startSlackPlugin(desired, built.slackCore),
-      onError: reportFailureAs("slack account reconciliation", undefined, `account=${account.accountId}`),
-    }),
+  const slackAccountRuntimes = envSlackAccountRuntimes(env, tenant, (desired) =>
+    startSlackPlugin(desired, built.slackCore),
   );
 
   const slackRuntimes = [slackRuntime, ...slackAccountRuntimes];
