@@ -387,7 +387,7 @@ test("self message deletions reach the mirror without dispatch", async () => {
       deleted: true,
       sub: "1",
       self: true,
-      source: { account: "default", workspace: "T1" },
+      source: { account: "default", workspace: "T1", assistant: "UBOT" },
     },
   ]);
   assert.equal(f.dispatches.length, 0);

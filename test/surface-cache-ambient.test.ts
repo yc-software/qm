@@ -1172,11 +1172,11 @@ test("with an external Slack account configured, an internal channel's proactive
     assert.match(pending[0].text, /^ambient reply/);
     const worker = await built.sessions.getByThread(`slack:${container}:ambient:500.1`);
     assert.ok(worker, "the worker session exists");
-    assert.deepEqual(worker!.surfaceBinding, {
-      author: { surface: "slack", account: "default", id: "U1" },
-      workspace: "TINTERNAL",
-      audience: "internal",
-    });
+    assert.deepEqual(
+      worker!.surfaceBinding,
+      { author: { surface: "slack", account: "default", id: "UBOT" }, workspace: "TINTERNAL", audience: "internal" },
+      "a proactive worker's Slack origin is the assistant itself, not the person who spoke",
+    );
     assert.deepEqual(
       await built.sessions.participantsOf(worker!.id),
       [],
@@ -1258,7 +1258,7 @@ test("under external Slack isolation, a source naming the external account canno
         authorId: "U1",
         text: "we're in for the round",
         createdAt: 1,
-        source: { account: "partner", workspace: "TPARTNER" },
+        source: { account: "partner", workspace: "TPARTNER", assistant: "UBOT" },
       },
     ]);
 
@@ -1336,6 +1336,41 @@ test("the assistant's own reply after the last judged message reaches the next j
     assert.match(newSection(hold.prompt!), /\[12\.0\] Alice: hold off on Example Co/);
     assert.equal(hold.tsFrom, "12.0");
     assert.equal(hold.tsTo, "12.0");
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+test("with an external Slack account configured, a scheduled check-in with no new messages still starts a worker from the channel's recorded source", async () => {
+  const built = isolatedApp();
+  built.runtime.start();
+  try {
+    const container = "C-internal-scheduled";
+    await built.app.setChannelPolicy(container, "watch this channel", "U-admin");
+    await internalMirror(built).mirrorMessageEvent(
+      { channel: container, channel_type: "channel", ts: "550.1", user: "U1", text: "we're in for the round" },
+      {},
+    );
+    await judged(built.ambientJudgments!, container);
+    await built.app.setChannelPolicy(container, "!engage !post scheduled check-in", "U-admin");
+
+    await built.app.judgeAmbientContainer("slack", container, { reason: "scheduled" });
+
+    const pending = await pollDeliveries(built.deliveries);
+    assert.equal(pending.length, 1, "the scheduled worker posted");
+    assert.match(pending[0].text, /^scheduled check-in/);
+    const rows = await judged(built.ambientJudgments!, container, (rows) =>
+      rows.some((r: any) => r.decision === "act"),
+    );
+    const scheduled = rows.find((r: any) => r.decision === "act")!;
+    assert.equal(scheduled.startError, undefined);
+    const worker = await built.sessions.getByThread(`slack:${container}:ambient:`);
+    assert.deepEqual(worker?.surfaceBinding, {
+      author: { surface: "slack", account: "default", id: "UBOT" },
+      workspace: "TINTERNAL",
+      audience: "internal",
+    });
+    assert.deepEqual(await built.sessions.participantsOf(worker!.id), []);
   } finally {
     await built.runtime.stop();
   }

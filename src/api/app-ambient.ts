@@ -265,22 +265,14 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
     }));
   }
 
-  function sourceOrigin(batch: AmbientBatch): TurnSurfaceOrigin | undefined {
-    const author = batch.messages.reduce<CachedMessage | undefined>(
-      (newest, m) => (m.authorId && (!newest || m.ts > newest.ts) ? m : newest),
-      undefined,
-    );
-    if (!batch.source || !author?.authorId) return undefined;
-    return slackSurfaceOrigin({
-      accountId: batch.source.account,
-      teamId: batch.source.workspace,
-      userId: author.authorId,
-    });
+  function sourceOrigin(batch: AmbientBatch, asker?: CachedMessage): TurnSurfaceOrigin | undefined {
+    const userId = asker ? asker.authorId : batch.source?.assistant;
+    if (!batch.source || !userId) return undefined;
+    return slackSurfaceOrigin({ accountId: batch.source.account, teamId: batch.source.workspace, userId });
   }
 
   async function spawnAmbientWorker(batch: AmbientBatch, decision: AmbientDecision): Promise<string | undefined> {
     const latestTs = batch.messages.reduce((max, m) => (m.ts > max ? m.ts : max), "");
-    const surfaceOrigin = sourceOrigin(batch);
     const threadRef = `${batch.surface}:${batch.container}:ambient:${latestTs}`;
     let solicited = await solicitedAsker(batch, decision);
     let audience: ActorAssertion[] = [];
@@ -294,6 +286,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
         audience = resolved;
       }
     }
+    const surfaceOrigin = sourceOrigin(batch, solicited?.message);
     const conversation = workerConversation(batch, threadRef, audience);
     if (decision.askedBy && !solicited)
       console.error(

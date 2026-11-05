@@ -86,7 +86,8 @@ export function createMirror(deps: {
 
   async function pushSurfaceEvents(events: IngestEvent[]): Promise<void> {
     if (!events.length) return;
-    const source = ids.ownTeamId ? { account, workspace: ids.ownTeamId } : undefined;
+    const source =
+      ids.ownTeamId && ids.botUserId ? { account, workspace: ids.ownTeamId, assistant: ids.botUserId } : undefined;
     await core.ingestSurfaceEvents(source ? events.map((e) => ({ ...e, source })) : events, {
       name: ids.botHandle,
       mentionId: ids.botUserId,

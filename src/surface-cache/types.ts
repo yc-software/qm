@@ -6,6 +6,7 @@ export interface SurfaceKey {
 export interface SurfaceSource {
   account: string;
   workspace: string;
+  assistant: string;
 }
 
 export interface CachedMessage extends SurfaceKey {

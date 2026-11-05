@@ -67,7 +67,12 @@ test("toEvent preserves authoritative root, subtype and broadcast corrections", 
 });
 
 test("toEvent never accepts a caller-supplied source account", () => {
-  const e = toEvent({ container: "C1", ts: "4.0", text: "hi", source: { account: "default", workspace: "T1" } });
+  const e = toEvent({
+    container: "C1",
+    ts: "4.0",
+    text: "hi",
+    source: { account: "default", workspace: "T1", assistant: "UBOT" },
+  });
   assert.ok(e);
   assert.equal(e.source, undefined, "only the in-process Slack mirror may record where a message came from");
 });
