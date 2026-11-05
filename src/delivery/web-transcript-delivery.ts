@@ -6,6 +6,7 @@ import { isAgentReply, isUserItem, type Item, type NewItem } from "../sessions/i
 import { turnFailureItem } from "../core/turn-error.ts";
 import { reportFailure, swallow } from "../util/errors.ts";
 import { withTenant } from "../tenants/context.ts";
+import { claimThenBind } from "../tenants/claim.ts";
 
 const DEDUPE_SCAN_LIMIT = 200;
 const RECORDED_CACHE_CAP = 1000;
@@ -43,7 +44,7 @@ export function withWebTranscriptDeliveries(
   store: DeliveryStore,
   sessions: WebTranscriptSessions,
   runs: Pick<RunStore, "inFlightForThread">,
-): DeliveryStore {
+): DeliveryStore & { transcribeUndelivered(type: string): Promise<void> } {
   const recorded = new Set<string>();
   const remember = (key: string): void => {
     if (recorded.size >= RECORDED_CACHE_CAP) recorded.clear();
@@ -163,6 +164,15 @@ export function withWebTranscriptDeliveries(
     async claimPending(type, ttlMs) {
       const rows = await store.claimPending(type, ttlMs);
       return transcribed(type) ? drained(rows) : rows;
+    },
+    async transcribeUndelivered(type) {
+      await claimThenBind(
+        () => store.undeliveredIds(type),
+        async (id) => {
+          const d = await store.get(id);
+          if (d) await drained([d]);
+        },
+      );
     },
     async claimDue(type, ttlMs) {
       const rows = await store.claimDue(type, ttlMs);

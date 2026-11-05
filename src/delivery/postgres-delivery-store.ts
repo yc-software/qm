@@ -127,6 +127,18 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
         ),
       ],
     },
+    {
+      id: "delivery/store/0010-undelivered-claims",
+      statements: [
+        claimFunction(
+          "undelivered_deliveries",
+          "text",
+          `SELECT tenant_id, id::text FROM deliveries
+            WHERE delivered_at IS NULL AND expired_at IS NULL AND NOT shadow AND destination->>'type' = $1
+            ORDER BY created_at LIMIT 200`,
+        ),
+      ],
+    },
   ]);
   const { q, query } = pg;
 
@@ -225,6 +237,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
       );
       return claimed.filter((d) => d !== null).sort((a, b) => a.createdAt - b.createdAt);
     },
+    undeliveredIds: (type) => claimRows(pg, "undelivered_deliveries", [type]),
     async listShadow(opts) {
       const limit = Math.max(1, opts?.limit ?? 100);
       const rows = await q(
