@@ -70,6 +70,7 @@ import {
   automationRunLabel,
   chatBrowseStatusMatches,
   bumpActivity,
+  lastMessageTitle,
   sidebarSessions,
   groupProjectSessions,
   recencyGroup,
@@ -1037,8 +1038,8 @@ export function dropPendingSession(threadRef: string): void {
   renderList();
 }
 
-export function bumpSessionActivity(threadRef: string): void {
-  sessionsState.list = bumpActivity(sessionsState.list, threadRef, Date.now());
+export function bumpSessionActivity(threadRef: string, sent?: string): void {
+  sessionsState.list = bumpActivity(sessionsState.list, threadRef, Date.now(), sent);
   renderList();
 }
 
@@ -1119,7 +1120,9 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
   } else if (untitledProjectChild) {
     titleContent = title;
   }
+  const lastMessage = lastMessageTitle(s);
   const ariaLabel = [
+    lastMessage,
     title,
     surface !== "web" ? surface : null,
     context,
@@ -1136,7 +1139,7 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
   return html`
     <div
       data-session-id=${saved ? s.id : nothing}
-      class="session-row ${active ? "active" : ""} ${saved && selection.ids.has(s.id) ? "selected" : ""} ${menuOpen ? "menu-open" : ""} ${readOnly ? "read-only" : ""} ${refreshingTitle ? "title-refreshing" : ""} ${working ? "working" : ""} ${s.awaitingInput ? "awaiting-input" : ""} ${showsUnread(s) ? "unread" : ""} ${projectChild ? "project-child" : ""} ${color ? "colored" : ""}"
+      class="session-row ${active ? "active" : ""} ${saved && selection.ids.has(s.id) ? "selected" : ""} ${menuOpen ? "menu-open" : ""} ${readOnly ? "read-only" : ""} ${refreshingTitle ? "title-refreshing" : ""} ${working ? "working" : ""} ${s.awaitingInput ? "awaiting-input" : ""} ${showsUnread(s) ? "unread" : ""} ${projectChild ? "project-child" : ""} ${color ? "colored" : ""} ${lastMessage ? "last-message-title" : ""}"
       style=${color ? `--session-color:${color}` : nothing}
     >
       <a
@@ -1193,9 +1196,10 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
         }}
       >
         <div class="title" aria-live="polite">
-          ${statusMarks(s)}${surfaceGlyph(s)}<span class="tl" dir="auto">${titleContent}</span
+          ${statusMarks(s)}${surfaceGlyph(s)}<span class="tl" dir="auto">${lastMessage ?? titleContent}</span
           >${context ? html`<span class="row-context" ${tip(context)}>${context}</span>` : nothing}${unreadDot(s)}
         </div>
+        ${lastMessage ? html`<div class="row-detail" dir="auto">${titleContent}</div>` : nothing}
       </a>
       ${
         saved
