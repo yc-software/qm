@@ -172,6 +172,24 @@ test("empty replies stay empty and pass through location for resumable uploads",
   assert.equal(result.headers.location, "https://www.googleapis.com/upload/drive/v3/files?upload_id=u1");
 });
 
+test("dropbox file calls forward Dropbox-API-Arg upstream and return Dropbox-API-Result", async () => {
+  const f = await fixture();
+  f.replies.push(
+    accounts({ ...gmail, id: "ca_dbx", toolkit: { slug: "dropbox" } }),
+    proxied("hello", 200, { "Dropbox-API-Result": '{"name":"a.txt"}', "Content-Type": "application/octet-stream" }),
+  );
+  const result = await f.send({
+    method: "POST",
+    url: "https://content.dropboxapi.com/2/files/download",
+    headers: { "Dropbox-API-Arg": '{"path":"/a.txt"}' },
+  });
+  assert.equal(result.status, 200);
+  assert.equal(result.headers["dropbox-api-result"], '{"name":"a.txt"}');
+  assert.deepEqual(f.calls.at(-1)?.body?.parameters, [
+    { name: "Dropbox-API-Arg", value: '{"path":"/a.txt"}', type: "header" },
+  ]);
+});
+
 test("binary uploads go as a binary body and binary downloads come back as bytes", async () => {
   const bytes = Buffer.from([0, 255, 1, 254, 137, 80, 78, 71]);
   const f = await fixture();

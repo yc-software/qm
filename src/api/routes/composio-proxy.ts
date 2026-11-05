@@ -32,7 +32,7 @@ const BLOCKED_HEADERS = new Set([
   "connection",
   "x-api-key",
 ]);
-const PASSED_HEADERS = ["location", "retry-after", "etag", "content-disposition"];
+const PASSED_HEADERS = ["location", "retry-after", "etag", "content-disposition", "dropbox-api-result"];
 const COMPOSIO_REQUEST_LIMIT_BYTES = 4_500_000;
 
 function toolkitsFor(url: URL): string[] {
@@ -172,7 +172,12 @@ async function pickAccount(
 async function relay(ctx: ApiCtx, accountId: string, result: Record<string, unknown>): Promise<void> {
   const status = typeof result.status === "number" && result.status >= 200 && result.status <= 599 ? result.status : 0;
   if (!status) throw new Error("Invalid proxy status");
-  const upstream = (result.headers ?? {}) as Record<string, unknown>;
+  const upstream = Object.fromEntries(
+    Object.entries((result.headers ?? {}) as Record<string, unknown>).map(([name, value]) => [
+      name.toLowerCase(),
+      value,
+    ]),
+  );
   const headers: Record<string, string> = { "x-composio-account": accountId };
   for (const name of PASSED_HEADERS) {
     const value = upstream[name];
