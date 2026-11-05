@@ -43,6 +43,7 @@ import {
   sessionCookieHeaders,
   clearCookie,
   readCookie,
+  withoutCookies,
   randomToken,
   safeEqual,
   sanitizeReturnTo,
@@ -474,11 +475,10 @@ function signedOutCookies(): string[] {
   ];
 }
 
+const SESSION_COOKIE_NAMES = new Set(["portal_session", "portal_impersonate"]);
+
 function withoutSessionCookies(cookie: string | undefined): string | undefined {
-  return cookie
-    ?.split(";")
-    .filter((part) => !/^\s*(portal_session|portal_impersonate)=/.test(part))
-    .join(";");
+  return withoutCookies(cookie, SESSION_COOKIE_NAMES);
 }
 
 function sharedHostSession(req: IncomingMessage): SessionClaims | null {
