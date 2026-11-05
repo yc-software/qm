@@ -58,7 +58,11 @@ export async function recordSnapshot(
   try {
     await capture();
   } catch (error) {
-    await record({ lastSnapshotAttemptMs: attemptedAtMs }, errMessage(error));
+    try {
+      await record({ lastSnapshotAttemptMs: attemptedAtMs }, errMessage(error));
+    } catch (recordError) {
+      swallow("home-snapshot: record failed attempt", recordError);
+    }
     throw error;
   }
   await record({ lastSnapshotMs: Date.now(), lastSnapshotAttemptMs: undefined, homeDirty: false });

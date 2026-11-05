@@ -552,6 +552,17 @@ test("teardown of a box the turn never used skips the checkpoint only while the 
   assert.equal((await store.get(scope))?.homeDirty, false);
 });
 
+test("a sandbox that vanishes before its teardown snapshot is retried only after the interval and reported once", async () => {
+  const events: Array<{ code: string }> = [];
+  const s = make({ onError: (e: { code: string }) => events.push(e) });
+  const h = await s.provision(scope);
+  fake.terminate(h.id);
+  await s.teardown(h);
+  await s.teardown(h);
+  await s.teardown(h);
+  assert.equal(events.filter((e) => e.code === "teardown_snapshot_failed").length, 1);
+});
+
 test("native checkpoints restore across rotation and core restarts without transferring a tar", async () => {
   const store = testMap<StoredModalSandbox>();
   const portable = instrumentedSnapshotStore();

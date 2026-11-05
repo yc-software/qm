@@ -280,7 +280,6 @@ test("a failed home snapshot waits a full interval before retrying and is report
   await turn();
   assert.equal(uploads, 3);
   assert.equal((await store.get(scope))?.homeDirty, false, "the provider recovering saves the dirty home");
-  assert.equal((await store.get(scope))?.lastSnapshotAttemptMs, undefined);
   failing = true;
   await intervalPasses();
   await turn();

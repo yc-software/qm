@@ -158,7 +158,6 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
 
   async function snapshotHome(scope: string, session: ModalSession): Promise<void> {
     if (isJobComputerScope(scope)) return;
-    await assertHydrated(session);
     const requested = await store.update(scope, (current) => {
       if (current.sandboxId !== session.sandboxId) throw new Error("Modal checkpoint source has been replaced");
       return {
@@ -168,6 +167,7 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
       };
     });
     if (!requested) throw new Error("Modal checkpoint source is no longer tracked");
+    await assertHydrated(session);
     const capturedAtMs = Date.now();
     try {
       const snapshot = await session.snapshotHome();

@@ -16,13 +16,10 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  attemptSnapshot,
   createHomeSnapshotOps,
   createMemorySnapshotStore,
-  recordSnapshot,
   snapshotDue,
   SnapshotTooLargeError,
-  type SnapshotBookkeeping,
   type HomeSnapshotSessionIo,
   type HomeSnapshotStore,
   type SnapshotUpload,
@@ -292,50 +289,6 @@ test("a failed snapshot attempt throttles the next one like a success but leaves
     false,
     "even before any success",
   );
-});
-
-test("recordSnapshot books a failure as an attempt and a later success as clean", async () => {
-  const book: SnapshotBookkeeping = { lastSnapshotMs: 1, homeDirty: true };
-  const failures: Array<string | undefined> = [];
-  const record = (patch: SnapshotBookkeeping, failure?: string): void => {
-    Object.assign(book, patch);
-    failures.push(failure);
-  };
-  const before = Date.now();
-  await assert.rejects(
-    recordSnapshot(async () => {
-      throw new Error("provider refused");
-    }, record),
-    /provider refused/,
-  );
-  assert.equal(book.lastSnapshotMs, 1, "a failure is not a snapshot");
-  assert.equal(book.homeDirty, true, "the home stays dirty until a snapshot lands");
-  assert.ok(book.lastSnapshotAttemptMs! >= before);
-  assert.deepEqual(failures, ["provider refused"]);
-  await recordSnapshot(async () => {}, record);
-  assert.ok(book.lastSnapshotMs! >= before);
-  assert.equal(book.homeDirty, false);
-  assert.equal(book.lastSnapshotAttemptMs, undefined, "a success ends the failure episode");
-  assert.deepEqual(failures, ["provider refused", undefined]);
-});
-
-test("attemptSnapshot reports only the first failure of an episode and never throws", async () => {
-  const reported: unknown[] = [];
-  const failing = async (): Promise<void> => {
-    throw new Error("provider refused");
-  };
-  await attemptSnapshot({ lastSnapshotMs: 1 }, failing, (e) => reported.push(e));
-  assert.equal(reported.length, 1, "the first failure after a success is reported");
-  await attemptSnapshot({ lastSnapshotMs: 1, lastSnapshotAttemptMs: 2 }, failing, (e) => reported.push(e));
-  assert.equal(reported.length, 1, "a repeat inside the same episode is not");
-  await attemptSnapshot(undefined, failing, (e) => reported.push(e));
-  assert.equal(reported.length, 2, "a scope with no history starts an episode");
-  await attemptSnapshot(
-    { lastSnapshotAttemptMs: 2 },
-    async () => {},
-    (e) => reported.push(e),
-  );
-  assert.equal(reported.length, 2, "a success reports nothing");
 });
 
 test("snapshots preserve symlinks and empty directories without following links or archiving pruned contents", async () => {

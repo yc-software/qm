@@ -5,7 +5,7 @@ import type { CredentialPathSpec } from "../credentials/resident-paths.ts";
 import { ephemeralCredLinkPaths } from "../credentials/resident-paths.ts";
 import type { LayerInstallFile } from "../deployment/load-layer.ts";
 import { createLayerToolInstaller } from "./layer-tool-install.ts";
-import { errMessage, swallow, swallowAs } from "../util/errors.ts";
+import { errMessage, errorAlreadyReported, markErrorReported, swallow, swallowAs } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import { createExecSandboxBase, sandboxScopeName } from "./exec-sandbox-base.ts";
 import { createExecProcessSessions } from "./exec-process-session.ts";
@@ -229,6 +229,7 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
       saved = merged;
     } catch (error) {
       if (stored.lastSnapshotAttemptMs === undefined) reportError("native_checkpoint_failed", error, scope);
+      markErrorReported(error);
       const current = await store.get(scope);
       if (current) {
         const failed = await store.merge(scope, {
@@ -578,7 +579,11 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
         if (!options?.homeUnchanged && stored.homeDirty !== true)
           stored = (await store.merge(scope, { homeDirty: true })) ?? stored;
         if (checkpointDue(stored))
-          await checkpoint(scope, stored).catch(swallowAs("render-sandbox: teardown checkpoint", undefined));
+          await checkpoint(scope, stored).catch((error) =>
+            errorAlreadyReported(error)
+              ? swallow("render-sandbox: teardown checkpoint", error)
+              : reportError("teardown_checkpoint_failed", error, scope),
+          );
         await store.merge(scope, { lastActivityMs: Date.now() });
       });
     },
