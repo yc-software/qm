@@ -21,21 +21,23 @@ scopes, so nothing new is stored for it:
 | Default runtime | scoped runtime setting for `persona:<id>` |
 | Notes / knowledge | memory notebook for `persona:<id>` (read-only in turns, curated by writers) |
 
-The only new record is the persona's identity:
+The only new record is the persona's identity, in a typed table:
 
-```jsonc
-// durable map "personas" (new table, one JSON value per id)
-{
-  "id": "4b0c…",                       // uuid; scope is persona:4b0c…
-  "orgId": "acme",
-  "name": "Ada",
-  "description": "Files expense receipts",
-  "icon": { "kind": "emoji", "value": "🧾" },   // same shape as project icons
-  "forkedFrom": { "id": "91fe…", "name": "Receipts" },  // optional
-  "createdBy": "U123",
-  "createdAt": 1793836800000,
-  "updatedAt": 1793836800000
-}
+```sql
+CREATE TABLE personas (
+  tenant_id      TEXT        NOT NULL,
+  id             TEXT        NOT NULL,              -- uuid; scope is persona:<id>
+  name           TEXT        NOT NULL CHECK (length(name) BETWEEN 1 AND 200),
+  description    TEXT        NOT NULL DEFAULT '',
+  icon_kind      TEXT        CHECK (icon_kind IN ('emoji', 'custom')),
+  icon_value     TEXT,
+  forked_from_id TEXT,                              -- no FK: the source may be deleted
+  created_by     TEXT        NOT NULL,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (tenant_id, id),
+  CHECK ((icon_kind IS NULL) = (icon_value IS NULL))
+);
 ```
 
 ## Access
@@ -109,12 +111,22 @@ description. Row actions: Chat, Fork, and Edit / Share for writers and owners.
 
 ## Schema and config changes
 
-- New durable-map table `personas` (shape above).
+- New table `personas` (above).
 - `sessions.persona_id TEXT NULL` — nullable, no backfill.
 - `acl_grants`: no DDL; new rows with `path` `persona:<id>` and `permission` `owner`
   in addition to `read`/`write`.
-- New scoped-config durable-map table `channel_persona_defaults`
-  (`id` = channel scope, `json` = `{ "scopeId": "channel:C…", "personaId": "…" }`).
+- New table `channel_persona_defaults`:
+  ```sql
+  CREATE TABLE channel_persona_defaults (
+    tenant_id        TEXT        NOT NULL,
+    channel_scope_id TEXT        NOT NULL,          -- channel:C…
+    persona_id       TEXT        NOT NULL,
+    set_by           TEXT        NOT NULL,
+    set_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (tenant_id, channel_scope_id),
+    FOREIGN KEY (tenant_id, persona_id) REFERENCES personas (tenant_id, id) ON DELETE CASCADE
+  );
+  ```
 - New scope kind `persona` in existing scope-id text columns; no DDL.
 - New feature flag `personas`, per person or org, off by default. No env vars.
 
