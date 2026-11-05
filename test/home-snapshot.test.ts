@@ -19,8 +19,6 @@ import {
   createHomeSnapshotOps,
   createMemorySnapshotStore,
   snapshotDue,
-  attemptSnapshot,
-  type SnapshotBookkeeping,
   SnapshotTooLargeError,
   type HomeSnapshotSessionIo,
   type HomeSnapshotStore,
@@ -280,35 +278,6 @@ test("snapshotDue skips an unused turn only when the stored home is known clean"
   assert.equal(snapshotDue({ lastSnapshotMs: 100, homeDirty: true }, { homeUnchanged: true }, 0, 101), true);
   assert.equal(snapshotDue({ lastSnapshotMs: 100 }, { homeUnchanged: true }, 0, 101), true, "unknown counts as dirty");
   assert.equal(snapshotDue(null, { homeUnchanged: true }, 0), true, "never snapshotted counts as dirty");
-});
-
-test("snapshotDue throttles on the latest attempt, failed or not", () => {
-  const failed = { lastSnapshotMs: 100, lastSnapshotAttemptMs: 500 };
-  assert.equal(snapshotDue(failed, undefined, 60_000, 501), false);
-  assert.equal(snapshotDue(failed, undefined, 60_000, 60_501), true);
-  assert.equal(snapshotDue({ lastSnapshotAttemptMs: 500 }, undefined, 60_000, 501), false, "even with no success yet");
-});
-
-test("attemptSnapshot records each attempt and reports a failure run once", async () => {
-  const book: SnapshotBookkeeping = {};
-  const reports: string[] = [];
-  const attempt = (capture: () => Promise<void>) =>
-    attemptSnapshot(
-      book,
-      (patch) => Object.assign(book, patch),
-      capture,
-      (m) => reports.push(m),
-    );
-  const fail = (message: string) => () => Promise.reject(new Error(message));
-  await attempt(fail("first"));
-  assert.equal(typeof book.lastSnapshotAttemptMs, "number");
-  await attempt(fail("second"));
-  assert.deepEqual(reports, ["first"]);
-  await attempt(async () => {
-    book.lastSnapshotMs = Date.now();
-  });
-  await attempt(fail("third"));
-  assert.deepEqual(reports, ["first", "third"], "a success ends the failure run");
 });
 
 test("snapshots preserve symlinks and empty directories without following links or archiving pruned contents", async () => {

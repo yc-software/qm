@@ -15,6 +15,7 @@ after(() => ff.cleanup());
 function spritesHandle(env?: Record<string, string>) {
   const sandbox = createSpritesSandbox({
     initializationStore: testMap(),
+    checkpointStore: testMap(),
     advisoryLock: testAdvisoryLock(),
     token: "test-token",
     baseUrl: ff.baseUrl,

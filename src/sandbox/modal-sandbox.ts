@@ -855,7 +855,7 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
         if (snapshotDue(stored, tdOpts, snapshotIntervalMs))
           await attemptSnapshot(
             stored,
-            () => undefined,
+            (patch) => store.merge(scope, patch),
             () => snapshotHome(scope, session),
             (message) => reportError("sandbox_snapshot", "teardown_snapshot_failed", message, scope),
           );
