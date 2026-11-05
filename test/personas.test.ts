@@ -11,6 +11,9 @@ import { scopeId, type TurnRequest } from "../src/types.ts";
 import { credentialHandle } from "../src/credentials/keychain.ts";
 import type { PersonaResult } from "../src/personas/persona-service.ts";
 import { orgId } from "../src/config.ts";
+import { createPostgresPersonaStore } from "../src/personas/persona-store.ts";
+import { createPostgresUserStore } from "../src/identity/user-store.ts";
+import { testMigratedDatabaseUrl } from "./support/test-database.ts";
 
 const ALICE = "U_ALICE";
 const BOB = "U_BOB";
@@ -192,4 +195,21 @@ test("credentials attached by an owner reach every turn that uses the persona, a
 
   ok(await personas.remove(ALICE, ada.id));
   assert.ok(!(await sysprompt(BOB, dm)).reply.includes(handle));
+});
+
+test("linking a sign-in keeps persona authorship and grants with the person", async () => {
+  const url = testMigratedDatabaseUrl();
+  const users = createPostgresUserStore(url);
+  const store = createPostgresPersonaStore(url);
+  const persona = await store.create({ name: "Ada" }, scopeId("personal", "alias@example.com"), "alias@example.com");
+  assert.equal(persona.createdBy, "alias@example.com");
+  await users.link({
+    principalId: "alias@example.com",
+    canonicalId: "canon@example.com",
+    evidence: "test",
+    linkedBy: "admin",
+    createdAt: Date.now(),
+  });
+  assert.equal((await store.get(persona.id))?.createdBy, "canon@example.com");
+  assert.equal((await store.access(persona.id))[0]?.grantedBy, "canon@example.com");
 });
