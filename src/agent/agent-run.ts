@@ -931,9 +931,12 @@ export function createAgent(opts?: AgentOptions): Agent {
       let activeSteps: StepRecorder | undefined;
       const tools = recordingTools(createTurnTools(ref, dispatched), () => activeSteps);
       const approvedRun = dispatched.approvedToolCall
-        ? await runApprovedToolCall(dispatched.approvedToolCall, ref, tools as unknown as BridgedTool[], {
-            ...(dispatched.cancel ? { cancel: dispatched.cancel } : {}),
-          })
+        ? await runApprovedToolCall(
+            dispatched.approvedToolCall,
+            ref,
+            tools as unknown as BridgedTool[],
+            dispatched.cancel ? { cancel: dispatched.cancel } : {},
+          )
         : null;
       const approvedTurn = approvedRun
         ? { ...dispatched, history: [...dispatched.history, ...approvedRun.items] }
