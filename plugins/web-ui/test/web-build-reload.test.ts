@@ -74,11 +74,12 @@ test("instances answering with alternating builds reload at most once per build 
     t.mock.timers.tick(10_000);
     assert.equal(tab.reloads(), reloads, `booted ${booted}, served ${served}`);
   }
-  t.mock.timers.tick(5 * 60_000);
   const stranded = await tab.load("a");
   await stranded.respond("b");
   t.mock.timers.tick(10_000);
-  assert.equal(tab.reloads(), 3, "a tab stranded on the old build retries once the cool-off passes");
+  assert.equal(tab.reloads(), 2);
+  t.mock.timers.tick(5 * 60_000);
+  assert.equal(tab.reloads(), 3, "a tab stranded on the old build retries by itself once the cool-off passes");
 });
 
 test("a write in flight, typed text or an unsafe composer defers the reload to the next quiet moment", async (t) => {

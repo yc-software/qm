@@ -57,6 +57,7 @@ function reloadIfStale(): void {
   if (!stale()) return;
   if (!pageIsIdle()) return settle();
   if (claimReload(servedBuild!)) location.reload();
+  else settle();
 }
 
 function settle(restart = false): void {
