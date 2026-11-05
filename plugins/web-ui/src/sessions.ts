@@ -72,8 +72,8 @@ import {
   bumpActivity,
   sidebarSessions,
   groupProjectSessions,
+  sidebarProjectSeeds,
   recencyGroup,
-  recentProjectSeeds,
   mergeChildren,
   mergeFirstPage,
   rowIndicators,
@@ -132,6 +132,7 @@ export const sessionsState = {
   renamingId: null as string | null,
   openingKey: null as string | null,
   webOnly: false,
+  groupByActivity: false,
   hasArchived: false,
   collapsedProjectScopes: new Set<string>(),
   expandedProjectScopes: new Set<string>(),
@@ -183,6 +184,15 @@ const WEB_ONLY_KEY = "web-ui:web-only";
 sessionsState.webOnly = ((): boolean => {
   try {
     return localStorage.getItem(WEB_ONLY_KEY) === "1";
+  } catch {
+    return false;
+  }
+})();
+
+const GROUP_BY_ACTIVITY_KEY = "web-ui:sidebar-group-by-activity";
+sessionsState.groupByActivity = ((): boolean => {
+  try {
+    return localStorage.getItem(GROUP_BY_ACTIVITY_KEY) === "1";
   } catch {
     return false;
   }
@@ -261,7 +271,7 @@ export function resetSessionsState(): void {
 }
 
 function projectSeedsForRecents() {
-  return recentProjectSeeds(contextsState.list);
+  return sidebarProjectSeeds(contextsState.list, sessionsState.groupByActivity);
 }
 
 function recentItemActivity(item: RecentItem): number {
@@ -1094,7 +1104,7 @@ function surfaceGlyph(s: CoreSession): TemplateResult | typeof nothing {
 }
 
 function rowContext(s: CoreSession): string | null {
-  let label = sharedContextLabel(s.scopeId, s.channelName ?? null);
+  let label = projectName(s.scopeId) ?? sharedContextLabel(s.scopeId, s.channelName ?? null);
   if (surfaceOf(s) === "slack") label = s.type === "group" ? groupDmText(s.channelName) : channelLabel(s);
   return label && label !== sessionTitle(s) ? label : null;
 }
@@ -1504,6 +1514,17 @@ export function setWebOnly(webOnly: boolean): void {
   if (showArchived) void loadMoreSessions("archived");
   renderList();
   void refreshSessions({ silent: true });
+}
+
+export function setGroupByActivity(groupByActivity: boolean): void {
+  if (sessionsState.groupByActivity === groupByActivity) return;
+  sessionsState.groupByActivity = groupByActivity;
+  try {
+    localStorage.setItem(GROUP_BY_ACTIVITY_KEY, groupByActivity ? "1" : "0");
+  } catch {
+    void 0;
+  }
+  renderList();
 }
 
 export function revealSessionSurface(s: CoreSession): void {

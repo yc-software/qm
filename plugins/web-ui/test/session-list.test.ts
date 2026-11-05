@@ -19,6 +19,7 @@ import {
   recencyGroup,
   rowIndicators,
   recentProjectSeeds,
+  sidebarProjectSeeds,
   mergeChildren,
   mergeFirstPage,
   upsertSessions,
@@ -393,6 +394,24 @@ test("project metadata groups only its group scope while ordinary chats stay fla
   assert.equal(items[0]?.kind, "project");
   assert.deepEqual(items[0]?.kind === "project" ? items[0].sessions.map((session) => session.id) : [], ["1", "3"]);
   assert.equal(items[1]?.kind, "session");
+});
+
+test("grouping by activity lists scoped conversations flat, newest first", () => {
+  const contexts = [
+    { scopeId: "channel:C1", kind: "channel" as const, name: "launch", sessionCount: 1, lastActivityAt: 30 },
+    { scopeId: "personal:alice", kind: "personal" as const, name: null, sessionCount: 1, lastActivityAt: 20 },
+  ];
+  const channel = { ...saved("1", "ch:C1:1.0"), type: "channel" as const, scopeId: "channel:C1", lastActivityAt: 30 };
+  const plain = { ...saved("2", "web:alice:plain"), scopeId: "personal:alice", lastActivityAt: 20 };
+  const byScope = groupProjectSessions([plain, channel], sidebarProjectSeeds(contexts, false));
+  assert.deepEqual(
+    byScope.map((item) => item.kind),
+    ["project", "project"],
+  );
+  assert.deepEqual(groupProjectSessions([plain, channel], sidebarProjectSeeds(contexts, true)), [
+    { kind: "session", session: channel },
+    { kind: "session", session: plain },
+  ]);
 });
 
 test("empty projects appear in Recents", () => {
