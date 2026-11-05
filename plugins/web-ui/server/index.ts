@@ -514,16 +514,17 @@ async function slackWorkspaceUrl(): Promise<string | null> {
 
 const WEB_DELIVERY_POLL_MS = Number(process.env.WEB_DELIVERY_POLL_MS ?? 2500);
 const SSE_HEARTBEAT_MS = 15_000;
-let deliveriesPollFailing = false;
+const failingDeliveryPolls = new Set<string>();
 
-function noteDeliveriesPoll(failure: unknown): void {
+function noteDeliveriesPoll(tenant: string | undefined, failure: unknown): void {
+  const lane = tenant ? ` for tenant ${tenant}` : "";
   if (failure === undefined) {
-    if (deliveriesPollFailing) console.log("[web-ui] web delivery poll recovered");
-    deliveriesPollFailing = false;
+    if (failingDeliveryPolls.delete(tenant ?? "")) console.log(`[web-ui] web delivery poll${lane} recovered`);
     return;
   }
-  if (!deliveriesPollFailing) swallow("web-ui: web delivery poll (further failures quiet until recovery)", failure);
-  deliveriesPollFailing = true;
+  if (!failingDeliveryPolls.has(tenant ?? ""))
+    swallow(`web-ui: web delivery poll${lane} (further failures quiet until recovery)`, failure);
+  failingDeliveryPolls.add(tenant ?? "");
 }
 
 const feeds = createTenantFeeds({
@@ -3463,7 +3464,6 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
           console.warn("[web-ui] WEB_UI_PRINCIPALS unset, any principal id may sign in (dev only)");
         const t = setInterval(() => void drainWebDeliveries(), WEB_DELIVERY_POLL_MS);
         t.unref?.();
-        feeds.start();
         void sweepDictationSpool();
       });
     })
