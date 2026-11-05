@@ -459,8 +459,8 @@ test("a pause refused by a busy host leaves the sandbox running and reports once
     reported.push({ code: e.code, error });
   };
   const box = make({ client, store, onError });
+  await box.teardown(await box.provision(scope));
   const handle = await box.provision(scope);
-  await box.teardown(handle);
   await box.teardown(handle);
   assert.equal((await store.get(scope))?.preservationState, "pause_failed");
   assert.equal(fake.current(scopeName())?.state, "running");
