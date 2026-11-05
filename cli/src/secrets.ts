@@ -124,14 +124,6 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
     generate: MINT_LOCALLY,
   },
   {
-    name: "OPERATOR_SIGNING_SECRET",
-    service: "core",
-    required: false,
-    description:
-      "HMAC key for cross-tenant operator writes (tenant hosts and settings), held only by core and operator tooling; must differ from CORE_SIGNING_SECRET.",
-    generate: MINT_LOCALLY,
-  },
-  {
     name: "CAPABILITY_SECRET",
     service: "core",
     required: true,
@@ -263,13 +255,6 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
     service: "core",
     required: false,
     description: "Transaction-mode PgBouncer URL using the direct database's company credentials and database name.",
-  },
-  {
-    name: "DATABASE_OWNER_URL",
-    service: "core",
-    required: false,
-    description:
-      "Postgres connection string for the table owner, used by background claims across tenants and operator writes when DATABASE_URL is a restricted app login.",
   },
   {
     name: "DATABASE_POOL_CA_CERT",
@@ -708,11 +693,9 @@ export function computedSecrets(config: QmConfig): ComputedSecret[] {
       });
     }
   }
-  for (const name of ["DEPLOYMENT_CONTROL_SECRET", "OPERATOR_SIGNING_SECRET"]) {
-    const coreOnly = byName.get(name);
-    if (coreOnly && (coreOnly.services.some((service) => service !== "core") || coreOnly.aliases?.length))
-      throw new Error(`${name} must be delivered only to core under its original name`);
-  }
+  const control = byName.get("DEPLOYMENT_CONTROL_SECRET");
+  if (control && (control.services.some((service) => service !== "core") || control.aliases?.length))
+    throw new Error("DEPLOYMENT_CONTROL_SECRET must be delivered only to core under its original name");
   const secrets = [...byName.values()]
     .map((secret) => ({
       ...secret,

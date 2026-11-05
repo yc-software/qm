@@ -2,6 +2,7 @@ import {
   resolveGatewayEmbeddingModel,
   gatewayEmbeddingModelIds,
   gatewayModelCatalog,
+  gatewayModelsVersion,
   isGatewayModelId,
   resolveGatewayModel,
 } from "./gateway-models.ts";
@@ -11,6 +12,7 @@ import {
   isEmbeddingModel,
   overlayModel,
   overlayModels,
+  overlaysVersion,
   overlayUnavailableReason,
   type EmbeddingModel,
   type EmbeddingModelDefinition,
@@ -32,10 +34,22 @@ const CODEX_SUBSCRIPTION_PREFIX = "codex/";
 export function codexSubscriptionModelId(id: string): string {
   return id.startsWith(CODEX_SUBSCRIPTION_PREFIX) ? id : CODEX_SUBSCRIPTION_PREFIX + id;
 }
-export function personalModelId(id: string, keys: ProviderKeys): string {
-  if (!keys[CODEX_SUBSCRIPTION_PROVIDER]) return id;
+function subscriptionServedId(id: string): string {
   const subscription = codexSubscriptionModelId(id);
   return resolveModel(subscription, false)?.provider === CODEX_SUBSCRIPTION_PROVIDER ? subscription : id;
+}
+export function personalModelId(id: string, keys: ProviderKeys): string {
+  return keys[CODEX_SUBSCRIPTION_PROVIDER] ? subscriptionServedId(id) : id;
+}
+export function companyModelId(id: string, providers: Pick<ModelProviderAvailability, "codexOAuth">): string {
+  if (
+    !providers.codexOAuth ||
+    resolveModel(id)?.provider !== "openai" ||
+    isOverlayModel(id) ||
+    modelRequestOverrides(id)
+  )
+    return id;
+  return subscriptionServedId(id);
 }
 export function codexProviderModelId(id: string): string {
   return id.startsWith(CODEX_SUBSCRIPTION_PREFIX) ? id.slice(CODEX_SUBSCRIPTION_PREFIX.length) : id;
@@ -84,6 +98,10 @@ export function isModelProvider(value: unknown): value is ModelProvider {
 }
 
 type PiModel = Model<Api>;
+
+export function modelOverlayVersion(): number {
+  return overlaysVersion() + gatewayModelsVersion();
+}
 
 export function isOverlayModel(id: string): boolean {
   return overlayModel(id) !== undefined;

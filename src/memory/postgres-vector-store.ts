@@ -1,8 +1,6 @@
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { unitVector } from "../model/embeddings.ts";
 import { MEMORY_FACTS_MIGRATIONS } from "./postgres-memory-service.ts";
-import { forEachTenant } from "../tenants/claim.ts";
-import { tenantTables } from "../tenants/migrations.ts";
 
 export interface MemoryVector {
   scope: string;
@@ -37,7 +35,6 @@ export interface MemoryVectorStore {
     afterId?: string,
   ): Promise<Array<{ scope: string; factId: string; hash: string; text: string }>>;
   prune(model: string, limit: number, dimensions?: number, signal?: AbortSignal): Promise<number>;
-  eachTenant(fn: () => Promise<unknown>): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -68,9 +65,6 @@ export function createPostgresVectorStore(connectionString: string): MemoryVecto
     ...MEMORY_FACTS_MIGRATIONS,
     { id: "memory/vectors/0001-extension", statements: ["CREATE EXTENSION IF NOT EXISTS vector"] },
     { id: "memory/vectors/0002", statements: SCHEMA },
-    ...tenantTables("memory/vectors/0003-tenants", [
-      { table: "memory_fact_vectors", primaryKey: "scope_id, model, fact_id" },
-    ]),
   ]);
   return {
     async search(input) {
@@ -125,17 +119,17 @@ export function createPostgresVectorStore(connectionString: string): MemoryVecto
         )
         INSERT INTO memory_fact_vectors(scope_id, model, fact_id, fact_hash, dimensions, embedding)
         SELECT scope, model, "factId", hash, jsonb_array_length(vector), vector::text::vector FROM live
-        ON CONFLICT (tenant_id, scope_id, model, fact_id) DO UPDATE
+        ON CONFLICT (scope_id, model, fact_id) DO UPDATE
         SET fact_hash = EXCLUDED.fact_hash, dimensions = EXCLUDED.dimensions, embedding = EXCLUDED.embedding`,
         [JSON.stringify([...latest.values()])],
         { signal, timeoutMs: 5000 },
       );
     },
     async missing(model, limit, dimensions, signal, afterId) {
-      const { rows } = await db.query(
+      const rows = await db.q(
         `SELECT f.scope_id, f.id, f.text, f.text_hash AS hash
          FROM memory_facts f LEFT JOIN memory_fact_vectors v
-           ON v.tenant_id = f.tenant_id AND v.scope_id = f.scope_id AND v.fact_id = f.id AND v.model = $1
+           ON v.scope_id = f.scope_id AND v.fact_id = f.id AND v.model = $1
            AND v.fact_hash = f.text_hash
            AND ($3::integer IS NULL OR v.dimensions = $3)
          WHERE f.deleted_at IS NULL AND v.fact_id IS NULL AND ($4::bigint IS NULL OR f.id > $4)
@@ -153,21 +147,20 @@ export function createPostgresVectorStore(connectionString: string): MemoryVecto
     async prune(model, limit, dimensions, signal) {
       const { rowCount } = await db.query(
         `DELETE FROM memory_fact_vectors v USING (
-          SELECT s.tenant_id, s.scope_id, s.model, s.fact_id FROM memory_fact_vectors s
+          SELECT s.scope_id, s.model, s.fact_id FROM memory_fact_vectors s
           WHERE s.model <> $1 OR ($3::integer IS NOT NULL AND s.dimensions <> $3) OR NOT EXISTS (
             SELECT 1 FROM memory_facts f
-            WHERE f.tenant_id = s.tenant_id AND f.scope_id = s.scope_id AND f.id = s.fact_id
+            WHERE f.scope_id = s.scope_id AND f.id = s.fact_id
               AND f.deleted_at IS NULL AND f.text_hash = s.fact_hash
           )
           LIMIT $2 FOR UPDATE OF s SKIP LOCKED
         ) stale
-        WHERE v.tenant_id = stale.tenant_id AND v.scope_id = stale.scope_id AND v.model = stale.model AND v.fact_id = stale.fact_id`,
+        WHERE v.scope_id = stale.scope_id AND v.model = stale.model AND v.fact_id = stale.fact_id`,
         [model, batchSize(limit), vectorWidth(dimensions)],
         { signal, timeoutMs: 30_000 },
       );
       return rowCount;
     },
-    eachTenant: (fn) => forEachTenant(db, fn),
     close: () => db.close(),
   };
 }

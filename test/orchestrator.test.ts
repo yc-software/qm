@@ -1173,7 +1173,6 @@ test("admin-configured browse step limit rides provision env (BROWSE_LAB_MAX_STE
     apiBaseUrl: "https://core.example.com",
   });
   const built = buildApp(config);
-  await built.loadTenants();
   const { app, sandbox } = built;
   let captured: ProvisionOptions | undefined;
   const realProvision = sandbox.provision.bind(sandbox);
