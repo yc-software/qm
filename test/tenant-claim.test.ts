@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "./support/unbound-test.ts";
 import { createPostgresMap } from "../src/persistence/durable-map.ts";
-import { claimThenBind } from "../src/tenants/claim.ts";
+import { claimThenBind, claimThenLoad } from "../src/tenants/claim.ts";
 import { currentTenant, withTenant, withoutTenant } from "../src/tenants/context.ts";
 import { twoTenants, type TwoTenants } from "./support/two-tenants.ts";
 
@@ -45,6 +45,29 @@ withoutTenant(() =>
       assert.deepEqual(tenants.map((t) => t.tenantId).sort(), [a, b].sort());
       await claimThenBind(map.claimTenants, () => map.deleteBefore("at", 2));
       for (const tenant of [a, b]) assert.deepEqual(await withTenant(tenant, () => map.all()), [{ at: 3 }]);
+    });
+
+    it("loads claimed rows with one read per tenant in claim order", async () => {
+      const map = createPostgresMap<{ tenant: string }>(db.app, "claim_probe");
+      const [a, b] = db.tenants;
+      for (const tenant of [a, b]) await withTenant(tenant, () => map.put("y", { tenant }));
+      const reads: string[][] = [];
+      const claimed = [b, a, b].map((tenantId, i) => ({ tenantId, id: ["y", "y", "missing"][i]! }));
+      const rows = await claimThenLoad(
+        async () => claimed,
+        async (ids) => {
+          reads.push(ids);
+          return (await Promise.all(ids.map(async (id) => ({ id, row: await map.get(id) })))).filter((r) => r.row);
+        },
+      );
+      assert.deepEqual(reads, [["y", "missing"], ["y"]]);
+      assert.deepEqual(
+        rows.map((r) => [r.tenantId, r.row?.tenant]),
+        [
+          [b, b],
+          [a, a],
+        ],
+      );
     });
 
     it("refuses to read rows when no tenant is bound", async () => {

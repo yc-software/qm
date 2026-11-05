@@ -37,6 +37,20 @@ export async function claimThenBind<T>(
   return done;
 }
 
+export async function claimThenLoad<T extends { id: string }>(
+  claim: () => Promise<readonly ClaimedRow[]>,
+  load: (ids: string[]) => Promise<T[]>,
+): Promise<Array<T & { tenantId: string }>> {
+  const claimed = await claim();
+  const byKey = new Map<string, T & { tenantId: string }>();
+  for (const tenantId of new Set(claimed.map((row) => row.tenantId))) {
+    const ids = claimed.filter((row) => row.tenantId === tenantId).map(({ id }) => id);
+    for (const row of await inTenant(tenantId, () => load(ids)))
+      byKey.set(`${tenantId} ${row.id}`, { ...row, tenantId });
+  }
+  return claimed.flatMap(({ tenantId, id }) => byKey.get(`${tenantId} ${id}`) ?? []);
+}
+
 export function inTenant<T>(tenant: string, fn: () => Promise<T>): Promise<T> {
   return withTenant(tenant, async () => {
     await loadTenant();

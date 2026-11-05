@@ -27,7 +27,7 @@ import {
 import { swallow } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
 import { tenantTables } from "../tenants/migrations.ts";
-import { claimFunction, claimRows, claimThenBind, type ClaimedRow } from "../tenants/claim.ts";
+import { claimFunction, claimRows, claimThenBind, claimThenLoad, type ClaimedRow } from "../tenants/claim.ts";
 
 const NOTIFY_SESSION_AVAILABLE =
   "pg_notify('qm_run_available', to_json(encode(sha256(convert_to(session_id, 'UTF8')), 'hex'))::text)";
@@ -261,21 +261,10 @@ END $base_schema$`,
     const { rows } = await q("SELECT * FROM runs WHERE id = $1", [id]);
     return rows[0] ? rowToRun(rows[0]) : null;
   }
-  async function loaded(claim: () => Promise<ClaimedRow[]>): Promise<Run[]> {
-    const claimed = await claim();
-    const tenants = [...new Set(claimed.map(({ tenantId }) => tenantId))].map((tenantId) => ({
-      tenantId,
-      id: tenantId,
-    }));
-    const loadedRuns = await claimThenBind(
-      async () => tenants,
-      async (tenantId) => {
-        const ids = claimed.filter((row) => row.tenantId === tenantId).map(({ id }) => id);
-        return (await q("SELECT * FROM runs WHERE id = ANY($1)", [ids])).rows.map(rowToRun);
-      },
+  function loaded(claim: () => Promise<ClaimedRow[]>): Promise<Run[]> {
+    return claimThenLoad(claim, async (ids) =>
+      (await q("SELECT * FROM runs WHERE id = ANY($1)", [ids])).rows.map(rowToRun),
     );
-    const byKey = new Map(loadedRuns.flat().map((run) => [`${run.tenantId} ${run.id}`, run]));
-    return claimed.flatMap(({ tenantId, id }) => byKey.get(`${tenantId} ${id}`) ?? []);
   }
   function watchSession(sessionId: string): SessionWatch {
     let changed = true;
