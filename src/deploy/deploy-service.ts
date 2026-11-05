@@ -15,6 +15,7 @@ import { samePerson } from "../directory/person.ts";
 import { CONNECTOR_HOSTS } from "../connectors/oauth.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import {
+  appUrlOf,
   currentVersionOf,
   deployCurrentGitRef,
   type DeployStore,
@@ -80,6 +81,7 @@ export interface DeployService {
   deploy(input: DeployInput): Promise<Deployment>;
   redeploy(id: string, input: RedeployInput): Promise<Deployment>;
   getDeployment(idOrName: string): Promise<Deployment | null>;
+  appUrl?(d: Deployment): string | undefined;
   listDeployments(): Promise<Deployment[]>;
   rollbackDeployment(id: string, version: number, options?: { alwaysOn?: boolean; actor?: string }): Promise<void>;
   archiveDeployment(id: string): Promise<void>;
@@ -356,6 +358,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
   }
 
   return {
+    appUrl: (d) => appUrlOf(d, { sharedWebUrl: deps.publicWebUrl, appsDomain: deps.deployAppsDomain }),
     providerProfile: deps.provider.profile,
     assertShareAllowed,
 

@@ -85,6 +85,8 @@ export interface DirectoryStore {
   tenantsForEmail?(email: string): Promise<SignInTenant[]>;
   tenantsForPrincipal?(principal: string): Promise<SignInTenant[]>;
   tenantForHost?(host: string): Promise<string | undefined>;
+  setAppHandle?(handle: string): Promise<"ok" | "taken">;
+  tenantForAppHandle?(handle: string): Promise<string | undefined>;
   trustedClientFor?(tenant: string): Promise<{ clientId: string; clientSecret: string } | undefined>;
 }
 

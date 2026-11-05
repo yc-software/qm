@@ -1,4 +1,5 @@
 import type { PgMigrationDefinition } from "../persistence/pg-pool.ts";
+import { TENANT_APP_HANDLES } from "./app-handle.ts";
 
 const TENANCY_BASE: PgMigrationDefinition = {
   id: "0000-tenancy/base",
@@ -73,6 +74,7 @@ export const TENANCY: readonly PgMigrationDefinition[] = [
   TENANT_ROW_SECURITY,
   BOOT_TENANT,
   TENANT_HOSTS,
+  TENANT_APP_HANDLES,
 ];
 
 interface TenantKey {

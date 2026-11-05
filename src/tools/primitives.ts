@@ -1054,7 +1054,10 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         grantees.map((g) => g.scope),
         d.createdInScope,
       );
-      const url = appUrlOf(d, deps.publicWebUrl) ?? `/d/${ref}/`;
+      const url =
+        deps.deploy.appUrl?.(d) ??
+        appUrlOf(d, { sharedWebUrl: deps.publicWebUrl, appsDomain: undefined }) ??
+        `/d/${ref}/`;
       const dataDir = effectiveEntrypoint ? deps.deploy.providerProfile?.dataDir : undefined;
       return {
         id: d.id,

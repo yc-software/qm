@@ -35,6 +35,9 @@ import { APP_SHELL_PATH_PREFIX, appShellHtml } from "../../deploy/app-shell.ts";
 import type { AppViewAuthMode } from "../../deploy/page-views.ts";
 import { principalDestination } from "../../reach/reach.ts";
 import { FRAME_SESSION_COOKIE, portalSession, portalSessionFrom } from "../../deploy/viewer-session.ts";
+import { appHostLabel, appNameFromLabel } from "../../tenants/app-handle.ts";
+import { tenantAppHandle } from "../../tenants/settings.ts";
+import { boundTenant } from "../../tenants/context.ts";
 import { EMBED_ANCESTORS_HINT, parseEmbedAncestors } from "../../deploy/embed-ancestors.ts";
 import { proxyHeaders } from "../../util/http-proxy.ts";
 
@@ -106,9 +109,10 @@ async function proxyDeployment(ctx: BaseCtx): Promise<void> {
   ) {
     const d = await app.getDeployment(id).catch(swallowAs("deployments: load deployment", null));
     const slug = d?.name ?? d?.id;
-    if (d && slug && /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(slug)) {
+    const handle = tenantAppHandle();
+    if (d && slug && /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(handle ? appHostLabel(handle, slug) : slug)) {
       res.writeHead(302, {
-        location: `https://${slug}.${deps.deployAppsDomain}${subPath}${url.search}`,
+        location: `https://${handle ? appHostLabel(handle, slug) : slug}.${deps.deployAppsDomain}${subPath}${url.search}`,
         "cache-control": "no-store",
       });
       res.end();
@@ -821,8 +825,10 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
     sendJson(res, 404, { error: "not_found" });
     return true;
   }
-  const slug = rawHost.slice(0, -suffix.length);
-  if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(slug)) {
+  const label = rawHost.slice(0, -suffix.length);
+  const handle = tenantAppHandle();
+  const slug = appNameFromLabel(label, handle);
+  if (!slug || !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label)) {
     sendJson(res, 404, { error: "not_found" });
     return true;
   }
@@ -859,13 +865,17 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
   const sessionSecret = deps.deployAppsSessionSecret;
   const loginUrl = deps.deployAppsLoginUrl;
   const wantsHtml = ctx.method === "GET" && String(req.headers.accept ?? "").includes("text/html");
-  let session = sessionSecret ? portalSession(req.headers.cookie, sessionSecret) : null;
+  let session = sessionSecret ? portalSession(req.headers.cookie, sessionSecret, Date.now(), rawHost) : null;
   const dest = req.headers["sec-fetch-dest"];
   const site = req.headers["sec-fetch-site"];
   const framed = dest === "iframe" || site === "same-origin";
   const embedAncestors = framed ? (deployment?.embedAncestors ?? []) : [];
   if (!session && sessionSecret && embedAncestors.length) {
-    session = portalSessionFrom(req.headers.cookie, FRAME_SESSION_COOKIE, sessionSecret);
+    session = portalSessionFrom(req.headers.cookie, FRAME_SESSION_COOKIE, sessionSecret, Date.now(), rawHost);
+  }
+  if (session?.t !== undefined && session.t !== boundTenant()) {
+    sendJson(res, 404, { error: "not_found" });
+    return true;
   }
   const sub = session?.sub;
   if (embedAncestors.length) res.setHeader("content-security-policy", frameAncestorsDirective(embedAncestors));
@@ -876,7 +886,9 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
   if (!sub && !isPublic) {
     const qs = url.searchParams.toString();
     const returnTo = `https://${rawHost}${safePathname}?${qs ? `${qs}&` : ""}dpl_signin=1`;
-    const signIn = `${loginUrl}${deps.deployAppsLoginPath ?? "/auth/login"}?returnTo=${encodeURIComponent(returnTo)}`;
+    const signIn = handle
+      ? `${loginUrl}/auth/host?to=${encodeURIComponent(returnTo)}`
+      : `${loginUrl}${deps.deployAppsLoginPath ?? "/auth/login"}?returnTo=${encodeURIComponent(returnTo)}`;
     if (!wantsHtml) {
       sendJson(res, 401, { error: "unauthorized", message: "sign-in required", loginUrl: signIn });
     } else if (signInAttempted) {

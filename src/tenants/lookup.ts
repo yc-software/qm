@@ -15,7 +15,7 @@ const KEYS = {
   secret_drop: `SELECT tenant_id FROM secret_drops WHERE id = $1`,
 } as const;
 
-export type TenantKey = keyof typeof KEYS | "slack_bridge";
+export type TenantKey = keyof typeof KEYS | "slack_bridge" | "app_host";
 
 const definer = (name: string, returns: string, body: string): string =>
   `CREATE OR REPLACE FUNCTION ${name}(key text) RETURNS ${returns}
