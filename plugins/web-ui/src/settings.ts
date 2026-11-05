@@ -310,27 +310,22 @@ function openBehaviorRow(): TemplateResult {
 
 const REPLY_WORD_LIMIT_KEY = "reply-word-limit";
 let replyWordLimit: number | null = null;
-let replyWordLimitState: "unloaded" | "loading" | "settled" = "unloaded";
+let replyWordLimitTouched = false;
 
 function loadReplyWordLimit(): void {
-  if (replyWordLimitState !== "unloaded") return;
-  replyWordLimitState = "loading";
   void fetchUiState(REPLY_WORD_LIMIT_KEY).then(
     (rec) => {
-      if (replyWordLimitState !== "loading") return;
-      replyWordLimitState = "settled";
+      if (replyWordLimitTouched) return;
       replyWordLimit = typeof rec.value === "number" && Number.isInteger(rec.value) && rec.value > 0 ? rec.value : null;
       drawSettings();
     },
-    () => {
-      if (replyWordLimitState === "loading") replyWordLimitState = "unloaded";
-    },
+    swallowAs("web-ui: load reply word limit", undefined),
   );
 }
 
 function setReplyWordLimit(raw: string): void {
   const words = Number(raw);
-  replyWordLimitState = "settled";
+  replyWordLimitTouched = true;
   replyWordLimit = raw.trim() && Number.isInteger(words) && words > 0 ? words : null;
   drawSettings();
   void putUiState(REPLY_WORD_LIMIT_KEY, replyWordLimit, Date.now()).catch(
