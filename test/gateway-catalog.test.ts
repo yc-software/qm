@@ -8,6 +8,7 @@ import { createGatewayCatalog } from "../src/model/gateway-catalog.ts";
 import { setGatewayModels } from "../src/model/gateway-models.ts";
 import { modelGatewayRequest } from "../src/model/provider-endpoints.ts";
 import {
+  contextTokenBudgetForModel,
   modelIdReserved,
   modelUnavailableReason,
   modelServiceable,
@@ -136,19 +137,24 @@ test("only models present in both responses with valid chat capabilities are sel
   );
 });
 
-test("output limits equal to or above the context window are clamped rather than rejected", async () => {
+test("output limits at or above the context window fall back to a safe limit instead of being rejected", async () => {
   const f = fixture([
     group("vendor/equal-limits", { max_input_tokens: 1_000_000, max_output_tokens: 1_000_000 }),
     group("vendor/output-over-context", { max_input_tokens: 128_000, max_output_tokens: 200_000 }),
     group("vendor/small-context", { max_input_tokens: 32_000, max_output_tokens: 32_000 }),
-    group("vendor/modest-output", { max_input_tokens: 1_000_000, max_output_tokens: 65_536 }),
+    group("vendor/honest-output", { max_input_tokens: 1_000_000, max_output_tokens: 128_000 }),
   ]);
   await f.catalog.refresh();
-  assert.equal(resolveModel("gateway/vendor/equal-limits")?.contextWindow, 1_000_000);
-  assert.equal(resolveModel("gateway/vendor/equal-limits")?.maxTokens, 128_000);
-  assert.equal(resolveModel("gateway/vendor/output-over-context")?.maxTokens, 127_999);
-  assert.equal(resolveModel("gateway/vendor/small-context")?.maxTokens, 31_999);
-  assert.equal(resolveModel("gateway/vendor/modest-output")?.maxTokens, 65_536);
+  const limits = (id: string) => {
+    const model = resolveModel(`gateway/${id}`);
+    return [model?.contextWindow, model?.maxTokens];
+  };
+  assert.deepEqual(limits("vendor/equal-limits"), [1_000_000, 65_536]);
+  assert.deepEqual(limits("vendor/output-over-context"), [128_000, 64_000]);
+  assert.deepEqual(limits("vendor/small-context"), [32_000, 16_000]);
+  assert.deepEqual(limits("vendor/honest-output"), [1_000_000, 128_000]);
+  assert.equal(contextTokenBudgetForModel("gateway/vendor/equal-limits"), 150_000);
+  assert.equal(contextTokenBudgetForModel("gateway/vendor/small-context"), 8_000);
 });
 
 test("successful revocation clears legacy aliases and cached models and cannot be undone by a failure", async () => {

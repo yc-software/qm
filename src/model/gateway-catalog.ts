@@ -9,10 +9,10 @@ const MAX_MODELS = 1_000;
 const TTL_MS = 5 * 60_000;
 const RETRY_MS = 30_000;
 const STALE_MS = 15 * 60_000;
-// Ceiling on requested output tokens. Some gateways report max_output_tokens equal to the context
-// window (e.g. 1M/1M); requesting that much output leaves no room for input, so clamp instead of
-// dropping the model.
-const MAX_OUTPUT_TOKENS = 128_000;
+// LiteLLM reports some models (e.g. Gemini 4 Argon/Carbon) with max_output_tokens equal to the
+// context window. That output limit is not real, so use a conservative one that every current
+// provider accepts (Vertex Gemini rejects more than 65,536) and that leaves half the window for input.
+const UNRELIABLE_OUTPUT_LIMIT_FALLBACK = 65_536;
 
 function transientFailure(error: unknown): boolean {
   const status = (error as { status?: unknown } | null)?.status;
@@ -59,7 +59,10 @@ function parseModel(value: unknown, allowed: Set<string>, baseUrl: string): Gate
   const input = price(info.input_cost_per_token);
   const output = price(info.output_cost_per_token);
   if (!contextWindow || !reportedMaxTokens || input === undefined || output === undefined) return undefined;
-  const maxTokens = Math.min(reportedMaxTokens, MAX_OUTPUT_TOKENS, contextWindow - 1);
+  const maxTokens =
+    reportedMaxTokens < contextWindow
+      ? reportedMaxTokens
+      : Math.min(UNRELIABLE_OUTPUT_LIMIT_FALLBACK, Math.floor(contextWindow / 2));
   if (maxTokens < 1) return undefined;
   const providers = Array.isArray(info.providers) ? info.providers : [];
   const anthropic = providers.length > 0 && providers.every((provider) => provider === "anthropic");
