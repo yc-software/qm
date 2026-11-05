@@ -1285,6 +1285,16 @@ a.chat-row-open {
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--secondary) 55%, var(--background));
 }
+.settings-number {
+  width: 7.5em;
+  padding: 6px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--background);
+  color: var(--foreground);
+  font: inherit;
+  font-size: var(--font-13);
+}
 .settings-choice-option {
   display: inline-flex;
   align-items: center;

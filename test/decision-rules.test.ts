@@ -630,3 +630,44 @@ test("the reply check is armed only when a turn_end rule is active, enforces onl
   );
   assert.equal(guidanceReads, 4, "guidance is not read when no rule is active");
 });
+
+test("a per-user word limit arms an enforcing reply check without any rule, and only for that user", async () => {
+  const { createDecisionHooks, createReplyCheck, replyWordLimit } = await import("../src/decisions/hooks.ts");
+  const audit = { record: () => {} } as never;
+  let classified = 0;
+  const backend: DecisionBackend = {
+    async choose({ questions }) {
+      classified++;
+      return Object.fromEntries(Object.keys(questions).map((k) => [k, { ok: 0.9, table: 0.1 }]));
+    },
+  };
+  const limits = new Map<string, unknown>([
+    ["alice", 5],
+    ["bob", "5"],
+    ["carol", 0],
+  ]);
+  const factory = (rules: DecisionRule[]) =>
+    createReplyCheck(
+      { rules: async () => rules },
+      createDecisionHooks({ rules: async () => rules } as never, backend, audit),
+      async (actorId) => replyWordLimit(limits.get(actorId)),
+    );
+  const context = (actorId?: string) => ({
+    guidance: async () => "",
+    input: "status?",
+    turn: { ...(actorId ? { actorId } : {}), scopeLabel: "personal:a", sessionId: "s1" },
+  });
+  const alice = await factory([])(context("alice"));
+  assert.equal(alice?.enforce, true);
+  const verdict = await alice.check("one two three\n\nfour five six");
+  assert.equal(verdict?.action, "retry");
+  assert.match(verdict?.message ?? "", /6 words.*limit of 5 words/);
+  assert.equal(await alice.check("one two  three four five"), undefined);
+  for (const other of ["bob", "carol", "dave", undefined]) assert.equal(await factory([])(context(other)), undefined);
+  const withRule = await factory([{ ...guidanceCheck(), mode: "observe" }])(context("alice"));
+  assert.equal(withRule?.enforce, true);
+  assert.equal((await withRule.check("one two three four five six"))?.reason, "over word limit");
+  assert.equal(classified, 0);
+  assert.equal(await withRule.check("short"), undefined);
+  assert.equal(classified, 1);
+});

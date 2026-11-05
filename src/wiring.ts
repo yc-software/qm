@@ -3,7 +3,14 @@ import { nonDeploymentCredential, withDeploymentCredentials } from "./credential
 import { resolveEmbeddingModel } from "./model/pi-models.ts";
 import { createPostgresTeamStore, type TeamStore } from "./teams/teams.ts";
 import type { DecisionBackend } from "./decisions/decisions.ts";
-import { createDecisionHooks, createReplyCheck, routeTurnRuntime, turnStartState } from "./decisions/hooks.ts";
+import {
+  createDecisionHooks,
+  createReplyCheck,
+  REPLY_WORD_LIMIT_KEY,
+  replyWordLimit,
+  routeTurnRuntime,
+  turnStartState,
+} from "./decisions/hooks.ts";
 import { createDecisionBackend } from "./decisions/providers.ts";
 import { createPostgresDecisionStore, type DecisionStore } from "./decisions/store.ts";
 import type { SlackSessionStatusState } from "./slack/session-status.ts";
@@ -107,7 +114,7 @@ import { createSkillBundleStore, type SkillBundle, type SkillBundleStore } from 
 import { createGitFetcher, resolvePackAuth, type SkillPackFetcher } from "./skills/pack-fetcher.ts";
 import { installSeedSkills } from "./skills/seed.ts";
 import { createPostgresMap, createPostgresMapFactory, type DurableMap } from "./persistence/durable-map.ts";
-import type { PersistedUiState, UiStateStore } from "./surfaces/ui-state.ts";
+import { uiStateId, type PersistedUiState, type UiStateStore } from "./surfaces/ui-state.ts";
 import { slackUserClientFactory } from "./loops/sources/slack.ts";
 import { configurePgCaTrust, configurePgPooling } from "./persistence/pg-pool.ts";
 import { createPostgresLeaderLease, type LeaderLease } from "./persistence/leader-lease.ts";
@@ -2136,7 +2143,9 @@ export function buildApp(
     managedGroups: projects,
     projects,
     ...(config.surfaceDebugFooter ? { surfaceDebugFooter: true } : {}),
-    ...(decisions ? { replyCheck: createReplyCheck(decisions, decide) } : {}),
+    replyCheck: createReplyCheck(decisions, decide, async (actorId) =>
+      replyWordLimit((await uiState.get(uiStateId(actorId, REPLY_WORD_LIMIT_KEY)))?.value),
+    ),
     environments,
     brokeredTools,
     deploymentLayer,

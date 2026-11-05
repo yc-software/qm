@@ -131,26 +131,49 @@ export type ReplyCheckFactory = (context: {
   turn: DecisionTurn;
 }) => Promise<{ enforce: boolean; check: ReplyCheck } | undefined>;
 
+export const REPLY_WORD_LIMIT_KEY = "reply-word-limit";
+
+export const replyWordLimit = (value: unknown): number | undefined =>
+  typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
+
+function overWordLimit(draft: string, limit: number): ReplyVerdict | undefined {
+  const words = draft.split(/\s+/).filter(Boolean).length;
+  return words > limit
+    ? {
+        action: "retry",
+        reason: "over word limit",
+        message: `The reply is ${words} words; this user set a limit of ${limit} words per reply. Keep what matters most and cut the rest to fit.`,
+      }
+    : undefined;
+}
+
 export function createReplyCheck(
   store: Pick<DecisionStore, "rules"> | undefined,
   decide: ReturnType<typeof createDecisionHooks>,
+  wordLimit?: (actorId: string) => Promise<number | undefined>,
 ): ReplyCheckFactory {
   return async (context) => {
-    const rules = (await store?.rules("turn_end")) ?? [];
-    if (!rules.length) return undefined;
-    const guidance = await context.guidance();
+    const actorId = context.turn.actorId;
+    const [rules, limit] = await Promise.all([
+      store?.rules("turn_end") ?? [],
+      actorId && wordLimit ? wordLimit(actorId) : undefined,
+    ]);
+    if (!rules.length && !limit) return undefined;
+    const guidance = rules.length ? await context.guidance() : "";
+    const classify = async (draft: string): Promise<ReplyVerdict | undefined> => {
+      if (!rules.length) return undefined;
+      const verdict = await decide("turn_end", turnEndState({ ...context, guidance, reply: draft }), context.turn);
+      return (verdict?.action === "retry" || verdict?.action === "prod") && verdict.message
+        ? {
+            action: verdict.action,
+            reason: verdict.option.replaceAll("_", " ").replaceAll("-", " "),
+            message: verdict.message,
+          }
+        : undefined;
+    };
     return {
-      enforce: rules.some((rule) => rule.mode === "enforce"),
-      check: async (draft) => {
-        const verdict = await decide("turn_end", turnEndState({ ...context, guidance, reply: draft }), context.turn);
-        return (verdict?.action === "retry" || verdict?.action === "prod") && verdict.message
-          ? {
-              action: verdict.action,
-              reason: verdict.option.replaceAll("_", " ").replaceAll("-", " "),
-              message: verdict.message,
-            }
-          : undefined;
-      },
+      enforce: !!limit || rules.some((rule) => rule.mode === "enforce"),
+      check: async (draft) => (limit ? overWordLimit(draft, limit) : undefined) ?? classify(draft),
     };
   };
 }

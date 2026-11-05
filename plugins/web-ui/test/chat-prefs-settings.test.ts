@@ -20,6 +20,7 @@ test("chat preference rows persist to per-user ui-state", async (t) => {
     navigator: dom.window.navigator,
     localStorage: dom.window.localStorage,
     HTMLElement: dom.window.HTMLElement,
+    HTMLInputElement: dom.window.HTMLInputElement,
     Element: dom.window.Element,
     Node: dom.window.Node,
     customElements: dom.window.customElements,
@@ -137,6 +138,29 @@ test("chat preference rows persist to per-user ui-state", async (t) => {
       choice("Pin my last message", "Off").click();
       assert.deepEqual(saved.at(-1), { key: "pin-latest-prompt", value: false });
       assert.equal(localStorage.getItem("chat-pref:pin-latest-prompt"), "0");
+    });
+
+    await t.test("the reply word limit loads, saves a positive whole number, and clears to no limit", async () => {
+      const input = () => document.querySelector<HTMLInputElement>('input[aria-label="Reply word limit"]')!;
+      assert.equal(input().value, "");
+      saved.length = 0;
+      const set = (value: string) => {
+        input().value = value;
+        input().dispatchEvent(new dom.window.Event("change"));
+      };
+      set("150");
+      set("0");
+      set("2.5");
+      set("");
+      assert.deepEqual(saved, [
+        { key: "reply-word-limit", value: 150 },
+        { key: "reply-word-limit", value: null },
+        { key: "reply-word-limit", value: null },
+        { key: "reply-word-limit", value: null },
+      ]);
+      assert.equal(input().value, "");
+      set("300");
+      assert.equal(input().value, "300");
     });
 
     stop();

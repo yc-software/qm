@@ -308,6 +308,62 @@ function openBehaviorRow(): TemplateResult {
   `;
 }
 
+const REPLY_WORD_LIMIT_KEY = "reply-word-limit";
+let replyWordLimit: number | null = null;
+let replyWordLimitState: "unloaded" | "loading" | "settled" = "unloaded";
+
+function loadReplyWordLimit(): void {
+  if (replyWordLimitState !== "unloaded") return;
+  replyWordLimitState = "loading";
+  void fetchUiState(REPLY_WORD_LIMIT_KEY).then(
+    (rec) => {
+      if (replyWordLimitState !== "loading") return;
+      replyWordLimitState = "settled";
+      replyWordLimit = typeof rec.value === "number" && Number.isInteger(rec.value) && rec.value > 0 ? rec.value : null;
+      drawSettings();
+    },
+    () => {
+      if (replyWordLimitState === "loading") replyWordLimitState = "unloaded";
+    },
+  );
+}
+
+function setReplyWordLimit(raw: string): void {
+  const words = Number(raw);
+  replyWordLimitState = "settled";
+  replyWordLimit = raw.trim() && Number.isInteger(words) && words > 0 ? words : null;
+  drawSettings();
+  void putUiState(REPLY_WORD_LIMIT_KEY, replyWordLimit, Date.now()).catch(
+    swallowAs("web-ui: save reply word limit", undefined),
+  );
+}
+
+function replyLengthRow(): TemplateResult {
+  return html`
+    <div class="settings-row">
+      <div class="settings-row-copy">
+        <div class="settings-row-title">Reply length</div>
+        <div class="settings-row-note">
+          Replies to your messages that run longer than this many words are rewritten to fit. Leave empty for no limit.
+        </div>
+      </div>
+      <input
+        class="settings-number"
+        type="number"
+        min="1"
+        step="1"
+        inputmode="numeric"
+        placeholder="No limit"
+        aria-label="Reply word limit"
+        .value=${replyWordLimit ? String(replyWordLimit) : ""}
+        @change=${(e: Event) => {
+          if (e.currentTarget instanceof HTMLInputElement) setReplyWordLimit(e.currentTarget.value);
+        }}
+      />
+    </div>
+  `;
+}
+
 function choiceRow(
   title: string,
   note: string,
@@ -625,7 +681,7 @@ function generalPane(): TemplateResult {
   return html`
     <div class="settings-group">
       ${aiAccountsRow()} ${themeRow()} ${openBehaviorRow()} ${pinPromptRow()} ${sendWhileWorkingRow()}
-      ${sidebarSurfaceRow()} ${desktopRow()} ${accountRow()}
+      ${replyLengthRow()} ${sidebarSurfaceRow()} ${desktopRow()} ${accountRow()}
       <div class="settings-row settings-slack-account">
         <qm-slack-account .user=${`${appState.me?.org}:${appState.me?.user}`}></qm-slack-account>
       </div>
@@ -680,4 +736,5 @@ export function renderSettings(): void {
   drawSettings();
   if (section !== "general") void mountAdmin();
   void loadAiStatus();
+  loadReplyWordLimit();
 }
