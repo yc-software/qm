@@ -167,7 +167,10 @@ test("/v1/admin/users: org_admin sees the roster + grants; a non-admin is denied
       "authoritative grants present",
     );
 
-    const migration = USER_MIGRATIONS.find((m) => m.id === "users/0002-copy-principal-links")!.statements[0]!;
+    const tenantFirst = (sql: string) => sql.replace(/ON CONFLICT \((\w+)\)/g, "ON CONFLICT (tenant_id, $1)");
+    const migration = tenantFirst(
+      USER_MIGRATIONS.find((m) => m.id === "users/0002-copy-principal-links")!.statements[0]!,
+    );
     await pg.query("CREATE TABLE principal_links (id TEXT PRIMARY KEY, json JSONB NOT NULL)");
     await pg.query(
       `INSERT INTO principal_links VALUES ('u-self', '{"principalId":"U-Self","canonicalId":"u-self","evidence":"qa","linkedBy":"admin-alice","createdAt":2}')`,
@@ -183,18 +186,18 @@ test("/v1/admin/users: org_admin sees the roster + grants; a non-admin is denied
       `INSERT INTO sessions(id, type, scope_id, thread_ref, created_at, origin) VALUES ('hist-s', 'channel', 'org:default-org', 'hist:1', 1, 'conversation')`,
     );
     await pg.query(
-      `INSERT INTO items(tenant_id, session_id, seq, kind, author, text, body, created_at)
-       VALUES (qm_tenant_id(), 'hist-s', 1, 'UserMessage', 'U7', 'hi', '{}', now() - interval '1 day'),
-              (qm_tenant_id(), 'hist-s', 2, 'UserMessage', 'Seven@Example.com', 'hi', '{}', now()),
-              (qm_tenant_id(), 'hist-s', 3, 'UserMessage', 'U9', 'hi', '{}', now())`,
+      `INSERT INTO items(session_id, seq, kind, author, text, body, created_at)
+       VALUES ('hist-s', 1, 'UserMessage', 'U7', 'hi', '{}', now() - interval '1 day'),
+              ('hist-s', 2, 'UserMessage', 'Seven@Example.com', 'hi', '{}', now()),
+              ('hist-s', 3, 'UserMessage', 'U9', 'hi', '{}', now())`,
     );
     await pg.query(
       `INSERT INTO sessions(id, type, scope_id, thread_ref, created_at, origin, spawn_meta)
        VALUES ('ext-s', 'channel', 'org:default-org', 'ext:1', 1, 'conversation', '{"surfaceOrigin":{"audience":"external"}}')`,
     );
     await pg.query(
-      `INSERT INTO items(tenant_id, session_id, seq, kind, author, text, body, created_at)
-       VALUES (qm_tenant_id(), 'ext-s', 1, 'UserMessage', 'U-ext', 'hi', '{}', now())`,
+      `INSERT INTO items(session_id, seq, kind, author, text, body, created_at)
+       VALUES ('ext-s', 1, 'UserMessage', 'U-ext', 'hi', '{}', now())`,
     );
     await s.built.identity.putExternalMember({
       email: "Mate@Example.com",
@@ -206,7 +209,7 @@ test("/v1/admin/users: org_admin sees the roster + grants; a non-admin is denied
       updatedAt: 5,
     });
     for (const m of USER_MIGRATIONS.filter((m) => /^users\/000[234]/.test(m.id)))
-      for (const statement of m.statements) await pg.query(statement);
+      for (const statement of m.statements) await pg.query(tenantFirst(statement));
     assert.deepEqual(
       (await pg.q("SELECT alias_id, user_id, evidence FROM user_links ORDER BY alias_id")).map((r) => [
         r.alias_id,
