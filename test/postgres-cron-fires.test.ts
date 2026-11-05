@@ -5,6 +5,8 @@ import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { scopeId } from "../src/types.ts";
 import type { Cron } from "../src/triggers/types.ts";
+import { migrateRegisteredPgSchemas } from "../src/persistence/pg-pool.ts";
+import { testBareDatabaseUrl } from "./support/test-database.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the cron fire table tests";
@@ -220,4 +222,55 @@ test("pg cron_fires: pruneEnded respects the keep window, the age cutoff, and ru
     0,
     "k3 outlived the cutoff; nothing else qualifies",
   );
+});
+
+test("pg cron_fires: older fire history is copied once into the first tenant", { skip }, async () => {
+  const pg = (await import("pg")).default;
+  const databaseUrl = testBareDatabaseUrl();
+  const owner = new pg.Pool({ connectionString: databaseUrl, max: 1 });
+  try {
+    await owner.query(`CREATE TABLE cron_fire_log (
+      cron_id text NOT NULL, fire_key text NOT NULL, fired_at bigint NOT NULL, json jsonb NOT NULL,
+      PRIMARY KEY (cron_id, fire_key)
+    )`);
+    await owner.query(`INSERT INTO cron_fire_log VALUES ($1, $2, $3, $4), ($1, $5, $6, $7)`, [
+      "old-c",
+      "k1",
+      1000,
+      { threadRef: "t", status: "ok", reply: "done" },
+      "k2",
+      2000,
+      { status: "running", scheduledAt: 1990 },
+    ]);
+    createPostgresCronFireStore(databaseUrl);
+    await migrateRegisteredPgSchemas(databaseUrl);
+    const tenant = (await owner.query("SELECT id FROM tenants ORDER BY created_at, id LIMIT 1")).rows[0].id;
+    const rows = await owner.query(
+      "SELECT tenant_id, fire_key, thread_ref, scheduled_at, ended_at, status, reply FROM cron_fires ORDER BY fire_key",
+    );
+    assert.deepEqual(rows.rows, [
+      {
+        tenant_id: tenant,
+        fire_key: "k1",
+        thread_ref: "t",
+        scheduled_at: null,
+        ended_at: "1000",
+        status: "ok",
+        reply: "done",
+      },
+      {
+        tenant_id: tenant,
+        fire_key: "k2",
+        thread_ref: "cron:old-c",
+        scheduled_at: "1990",
+        ended_at: null,
+        status: "running",
+        reply: null,
+      },
+    ]);
+    const sync = await owner.query("SELECT 1 FROM pg_proc WHERE proname = 'qm_sync_legacy_cron_fire'");
+    assert.equal(sync.rowCount, 0);
+  } finally {
+    await owner.end();
+  }
 });

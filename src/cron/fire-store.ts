@@ -46,6 +46,19 @@ const FIRE_COLUMNS = FIRE_COLUMN_DEFS.map((c) => c.name).join(", ");
 const VALUE_COLUMN_DEFS = FIRE_COLUMN_DEFS.filter((c) => c.name !== "cron_id" && c.name !== "fire_key");
 const UPSERT_SET = VALUE_COLUMN_DEFS.map((c) => `${c.name} = EXCLUDED.${c.name}`).join(", ");
 
+const HISTORY_FIELDS = [
+  "source.cron_id",
+  "source.fire_key",
+  "COALESCE(source.json->>'threadRef', 'cron:' || source.cron_id)",
+  "source.json->>'sessionId'",
+  "source.fired_at",
+  "(source.json->>'scheduledAt')::bigint",
+  "COALESCE((source.json->>'endedAt')::bigint, CASE WHEN source.json->>'status' IS DISTINCT FROM 'running' THEN source.fired_at END)",
+  "source.json->>'status'",
+  "source.json->>'note'",
+  "source.json->>'reply'",
+].join(", ");
+
 const UPSERT_FIRE = `INSERT INTO cron_fires (${FIRE_COLUMNS})
    VALUES (${FIRE_COLUMN_DEFS.map((_c, i) => `$${i + 1}`).join(", ")})
    ON CONFLICT (tenant_id, cron_id, fire_key) DO UPDATE
@@ -114,6 +127,29 @@ export function createPostgresCronFireStore(connectionString: string): CronFireS
                 AND cf.ended_at IS NOT NULL AND cf.ended_at < ended_before
               RETURNING cf.tenant_id, jsonb_build_array(cf.cron_id, cf.fire_key)::text`,
         ),
+      ],
+    },
+    {
+      id: "cron/fires/0004-copy-history",
+      statements: [
+        `DO $copy_history$
+         DECLARE
+           tenant uuid;
+         BEGIN
+           IF to_regclass('cron_fire_log') IS NULL THEN
+             RETURN;
+           END IF;
+           IF NOT EXISTS (SELECT 1 FROM cron_fire_log) THEN
+             RETURN;
+           END IF;
+           IF NOT EXISTS (SELECT 1 FROM tenants) THEN
+             INSERT INTO tenants DEFAULT VALUES;
+           END IF;
+           SELECT id INTO tenant FROM tenants ORDER BY created_at, id LIMIT 1;
+           INSERT INTO cron_fires (tenant_id, ${FIRE_COLUMNS})
+             SELECT tenant, ${HISTORY_FIELDS} FROM cron_fire_log source
+           ON CONFLICT (tenant_id, cron_id, fire_key) DO NOTHING;
+         END $copy_history$`,
       ],
     },
     {
