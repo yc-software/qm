@@ -396,17 +396,32 @@ test("project metadata groups only its group scope while ordinary chats stay fla
   assert.equal(items[1]?.kind, "session");
 });
 
-test("grouping by activity lists scoped conversations flat, newest first", () => {
+test("grouping by activity lists scoped conversations flat, newest first, without empty project rows", () => {
   const contexts = [
     { scopeId: "channel:C1", kind: "channel" as const, name: "launch", sessionCount: 1, lastActivityAt: 30 },
     { scopeId: "personal:alice", kind: "personal" as const, name: null, sessionCount: 1, lastActivityAt: 20 },
+    {
+      scopeId: "group:web-project-empty",
+      kind: "group" as const,
+      name: "Empty",
+      sessionCount: 0,
+      lastActivityAt: 10,
+      project: {
+        id: "empty",
+        name: "Empty",
+        ownerId: "alice",
+        memberIds: ["alice"],
+        scopeId: "group:web-project-empty",
+        members: [{ principalId: "alice", displayName: "Alice" }],
+      },
+    },
   ];
   const channel = { ...saved("1", "ch:C1:1.0"), type: "channel" as const, scopeId: "channel:C1", lastActivityAt: 30 };
   const plain = { ...saved("2", "web:alice:plain"), scopeId: "personal:alice", lastActivityAt: 20 };
   const byScope = groupProjectSessions([plain, channel], sidebarProjectSeeds(contexts, false));
   assert.deepEqual(
     byScope.map((item) => item.kind),
-    ["project", "project"],
+    ["project", "project", "project"],
   );
   assert.deepEqual(groupProjectSessions([plain, channel], sidebarProjectSeeds(contexts, true)), [
     { kind: "session", session: channel },
