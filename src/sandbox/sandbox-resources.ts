@@ -232,14 +232,10 @@ export function createSandboxResources(opts: {
       );
     },
     async eachJobComputer(work) {
-      await claimThenBind(
-        () => opts.records.claimIds(),
-        async (id) => {
-          await initialize();
-          const record = await opts.records.get(id);
-          if (record?.jobOnly) await work(record);
-        },
-      );
+      await claimThenBind(opts.records.claimTenants, async () => {
+        await initialize();
+        for (const record of await opts.records.all()) if (record.jobOnly) await work(record);
+      });
     },
     async retireJobComputer(id, seenState) {
       await opts.lock.withLock(`sandbox-resource:${id}`, async () => {

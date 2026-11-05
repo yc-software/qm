@@ -2834,10 +2834,7 @@ export function buildApp(
   const BLOB_TTL_MS = 6 * 60 * 60_000;
   const composioReturns = artifactMap<ComposioReturn>("composio_returns");
   const composioReturnSweeper = createSweeper(
-    () =>
-      claimThenBind(composioReturns.claimIds, async (id) => {
-        if (((await composioReturns.get(id))?.expiresAt ?? Infinity) <= Date.now()) await composioReturns.delete(id);
-      }),
+    () => claimThenBind(composioReturns.claimTenants, () => composioReturns.deleteBefore("expiresAt", Date.now() + 1)),
     30 * 60_000,
     { label: "Composio consent returns", immediate: true },
   );

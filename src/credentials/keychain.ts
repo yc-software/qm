@@ -1315,15 +1315,16 @@ export function createKeychain(deps: {
     },
 
     async unnotifiedResolvedAsks(nowAt) {
-      const recs = await claimThenBind(
-        () => deps.asks.claimIds(),
-        async (id) => ({ tenantId: currentTenant(), rec: await deps.asks.get(id) }),
+      const recs = await claimThenBind(deps.asks.claimTenants, async () =>
+        (await deps.asks.all()).map((rec) => ({ tenantId: currentTenant(), rec })),
       );
       const out: Array<KeychainAsk & { tenantId: string }> = [];
       const taskDecisions = new Set<string>();
-      for (const { tenantId, rec } of recs.reverse().sort((a, b) => (b.rec?.createdAt ?? 0) - (a.rec?.createdAt ?? 0)))
+      for (const { tenantId, rec } of recs
+        .flat()
+        .reverse()
+        .sort((a, b) => b.rec.createdAt - a.rec.createdAt))
         await withTenant(tenantId, async () => {
-          if (!rec) return;
           const a = await freshAsk(rec, nowAt);
           const origin = cronIdOf(a.requesterThreadRef) ?? a.requesterThreadRef;
           const task = JSON.stringify([tenantId, a.credentialId, a.requesterScopeId, origin]);
