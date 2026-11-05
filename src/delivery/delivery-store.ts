@@ -34,7 +34,7 @@ export function turnDeliveryProvenance(input: {
   };
 }
 
-export type ClaimedDelivery = Delivery & { tenantId: string };
+type ClaimedDelivery = Delivery & { tenantId: string };
 
 export interface DeliveryStore {
   enqueue(input: {
