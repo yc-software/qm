@@ -28,7 +28,7 @@ const seen = (userId: string | null, principalId: string, sessions: number, turn
   days: [],
 });
 
-test("computeUsers lists exactly the roster with each user's activity; a grant on any sign-in makes them an admin", () => {
+test("computeUsers lists exactly the roster with each user's activity and admin status", () => {
   const rows = computeUsers({
     roster: [
       user("u-1", ["pat@example.com", "U1"]),
@@ -41,7 +41,7 @@ test("computeUsers lists exactly the roster with each user's activity; a grant o
       seen(null, "U9", 5, 5, 900),
     ],
     grants: [
-      { principalId: "U1", scopeId: "org:default-org", role: "org_admin" },
+      { principalId: "Pat@Example.com", scopeId: "org:default-org", role: "org_admin" },
       { principalId: "Quiet@Example.com", scopeId: "org:default-org", role: "org_admin" },
     ],
   });

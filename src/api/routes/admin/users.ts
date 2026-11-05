@@ -338,7 +338,8 @@ export async function listKeychainStatus(ctx: ApiCtx): Promise<void> {
     ...asks.map((a) => a.requesterId),
     ...adminGrants.map((g) => g.principalId),
   ];
-  const users = await deps.admin!.users.resolve(ids);
+  const members = await app.directoryMembers();
+  const users = await deps.admin!.users.resolve([...ids, ...members.map((m) => m.principalId)]);
   const keyOf = (id: string) => users.get(id)?.id ?? foldPrincipalId(id);
   const byKey = new Map<string, { userId: string | null; principalId: string }>();
   for (const id of ids) {
@@ -347,13 +348,11 @@ export async function listKeychainStatus(ctx: ApiCtx): Promise<void> {
     const user = users.get(id);
     byKey.set(key, { userId: user?.id ?? null, principalId: user?.principalId ?? foldPrincipalId(id) });
   }
-  const members = await app.directoryMembers();
-  const names = await deps.admin!.users.resolve(members.map((m) => m.principalId));
   const nameOf = new Map<string, DirectoryMember>();
   for (const m of members) {
-    const user = names.get(m.principalId);
-    const key = user?.id ?? foldPrincipalId(m.principalId);
-    if (!nameOf.has(key) || foldPrincipalId(m.principalId) === user?.principalId) nameOf.set(key, m);
+    const key = keyOf(m.principalId);
+    if (!nameOf.has(key) || foldPrincipalId(m.principalId) === users.get(m.principalId)?.principalId)
+      nameOf.set(key, m);
   }
   const now = Date.now();
   const people = [...byKey]
