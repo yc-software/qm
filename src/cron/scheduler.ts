@@ -15,7 +15,7 @@ import type { DirectoryMember } from "../directory/directory-store.ts";
 import type { LeaderLease } from "../persistence/leader-lease.ts";
 import { createSweeper } from "../util/sweeper.ts";
 import { recoverNextFireAt } from "./schedule.ts";
-import { fireJobStartsAt, type CronFireJob, type CronJobQueue } from "./job-queue.ts";
+import { cronQueueMisconfigured, fireJobStartsAt, type CronFireJob, type CronJobQueue } from "./job-queue.ts";
 import { hashId } from "../util/crypto.ts";
 import { utcMinute } from "../util/time.ts";
 import { errMessage, reportFailure, reportFailureAs } from "../util/errors.ts";
@@ -622,7 +622,11 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
             if (!stopped) leaseGuard.start();
           },
           (e: unknown) => {
-            reportFailure("scheduler: cron job queue start (falling back to interval ticks)", e);
+            if (cronQueueMisconfigured(e))
+              console.error(
+                `[scheduler] misconfiguration: the cron job queue is not installed or this login cannot use it; run the migrations as the database owner (falling back to interval ticks): ${errMessage(e)}`,
+              );
+            else reportFailure("scheduler: cron job queue start (falling back to interval ticks)", e);
             if (!stopped) sweeper.start(intervalMs);
           },
         );
