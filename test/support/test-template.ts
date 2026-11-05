@@ -7,6 +7,7 @@ import { createPostgresVectorStore } from "../../src/memory/postgres-vector-stor
 import { createPostgresBudgetTracker } from "../../src/ratelimit/postgres-budget.ts";
 import { createPostgresProcessRegistry } from "../../src/processes/process-registry.ts";
 import { testConfig } from "./test-config.ts";
+import { ownerUrl, TEST_TENANT } from "./test-tenant.ts";
 
 async function vectorAvailable(databaseUrl: string): Promise<boolean> {
   const client = new pg.Client({ connectionString: databaseUrl });
@@ -27,6 +28,10 @@ if (import.meta.main) {
   createPostgresProcessRegistry(databaseUrl);
   if (await vectorAvailable(databaseUrl)) createPostgresVectorStore(databaseUrl);
   await migrateRegisteredPgSchemas(databaseUrl);
+  const owner = new pg.Client({ connectionString: ownerUrl(databaseUrl).toString() });
+  await owner.connect();
+  await owner.query("DELETE FROM tenants WHERE id <> $1", [TEST_TENANT]);
+  await owner.end();
   await runtime.stop();
   process.exit(0);
 }
