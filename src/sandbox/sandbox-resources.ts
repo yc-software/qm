@@ -204,14 +204,19 @@ export function createSandboxResources(opts: {
       throw error;
     }
   };
-  const locked = <T>(id: string, exclusive: boolean, ifRetired: () => Promise<T>, action: () => Promise<T>) => {
-    const guarded = async (): Promise<T> => ((await get(id)).state === "retired" ? ifRetired() : action());
-    return exclusive ? opts.lock.withLock(`sandbox-resource:${id}`, guarded) : guarded();
-  };
+  const locked = <T>(id: string, exclusive: boolean, action: () => Promise<T>): Promise<T> =>
+    exclusive ? opts.lock.withLock(`sandbox-resource:${id}`, action) : action();
   const use = <T>(id: string, action: () => Promise<T>, exclusive = false): Promise<T> =>
-    locked(id, exclusive, () => Promise.reject(new Error("sandbox has been retired")), action);
+    locked(id, exclusive, async () => {
+      if ((await get(id)).state === "retired") throw new Error("sandbox has been retired");
+      return action();
+    });
   const cleanUp = (id: string, action: () => Promise<void>, exclusive = false): Promise<void> =>
-    locked(id, exclusive, async () => {}, action);
+    locked(id, exclusive, async () => {
+      await initialize();
+      const current = await opts.records.get(id);
+      if (current && current.state !== "retired") await action();
+    });
   const profiles = (): SandboxProviderProfile[] =>
     (Object.entries(opts.backends) as Array<[SandboxBackendName, Sandbox]>)
       .filter(([, backend]) => !!backend)

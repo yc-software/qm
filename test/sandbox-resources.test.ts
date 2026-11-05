@@ -1093,6 +1093,25 @@ test("a job computer is invisible and untargetable for everyone, and only the jo
   await assert.rejects(router.provision("personal:alice", { sandboxId: job.id }), /sandbox not found/);
 });
 
+test("a turn still holding a job computer the sweep deleted ends without reaching the backend", async () => {
+  let backendCalls = 0;
+  const { resources, router } = fixture((backend) => {
+    backend.removeDir = async () => {
+      backendCalls++;
+    };
+    backend.teardown = async () => {
+      backendCalls++;
+    };
+  });
+  const job = await resources.create("alice", "personal:alice", "local", "background job", undefined, true);
+  const handle = await router.provision("personal:alice", { sandboxId: job.id });
+  await resources.retireJobComputer(job.id, "ready");
+  await router.removeDir(handle, "dir");
+  await router.teardown(handle);
+  await assert.rejects(router.run(handle, "work"), /not found/);
+  assert.equal(backendCalls, 0);
+});
+
 test("retiring a job computer is skipped when its state moved on, and its backing scope is marked as a job's", async () => {
   const { resources } = fixture();
   const job = await resources.create("alice", "personal:alice", "local", "background job", undefined, true);
