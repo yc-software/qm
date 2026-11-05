@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { jsonbStringify } from "../src/util/text.ts";
 import type { TurnRequest } from "../src/types.ts";
+import type { ModelAccount } from "../src/resolution/config-store.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { SecurityScreener } from "../src/security/security-screener.ts";
 
@@ -981,19 +982,58 @@ test("an addressed stop withdraws queued work before a worker can claim it", asy
   assert.equal(await built.runs.claimById(first.runId!, "worker", 30_000), null);
 });
 
-test("signalRun: a steer the live turn can't take runs as its own turn instead of vanishing", async () => {
-  const built = freshApp();
-  const threadRef = "web:U1:automation-live";
-  const { run } = await built.runs.enqueue({
+function subagentWakeRun(
+  built: ReturnType<typeof freshApp>,
+  threadRef: string,
+  modelAccount: ModelAccount = "company",
+) {
+  return built.runs.enqueue({
     sessionId: threadRef,
     request: {
+      surface: "web",
       actor: { id: "U1", type: "internal" },
       conversation: { kind: "dm", threadRef, audience: [{ id: "U1", type: "internal" }] },
-      text: "scheduled fire",
+      text: '<wake reason="subagent" name="worker" kind="completed">…</wake>',
       origin: { kind: "automation" },
-      modelAccount: "company",
+      modelAccount,
     },
   });
+}
+
+test("signalRun: a person's Steer on web reaches a live automation turn, such as a subagent-report wake", async () => {
+  const built = freshApp();
+  const threadRef = "web:U1:subagent-wake";
+  const { run } = await subagentWakeRun(built, threadRef);
+  const steer = { kind: "steer" as const, text: "also check the logs", ts: "t-1", request: web("draft", threadRef) };
+  const outcome = await built.app.signalRun(run.id, steer, "U1");
+  assert.deepEqual(outcome, { accepted: true }, "steered into the live turn, not queued as its own");
+  const signals = await built.signals.takePending(run.id);
+  assert.deepEqual(
+    signals.map((signal) => [signal.kind, signal.text]),
+    [["steer", "also check the logs"]],
+  );
+  assert.equal((await built.runs.list()).filter((r) => r.sessionId === threadRef).length, 1);
+});
+
+test("web's Steer preference folds a typed message into a live automation turn; Queue still waits", async () => {
+  const built = freshApp();
+  const threadRef = "web:U1:subagent-wake-typed";
+  const { run } = await subagentWakeRun(built, threadRef);
+  const queued = await built.app.turn(web("after that, summarize", threadRef));
+  assert.notEqual(queued.runId, run.id);
+  const steered = await built.app.turn(web("and keep it short", threadRef, "steer"));
+  assert.equal(steered.runId, run.id);
+  assert.equal(steered.steered, true);
+  assert.deepEqual(
+    (await built.signals.takePending(run.id)).map((signal) => signal.text),
+    ["and keep it short"],
+  );
+});
+
+test("signalRun: a steer the live turn can't take runs as its own turn instead of vanishing", async () => {
+  const built = freshApp();
+  const threadRef = "web:U1:other-account";
+  const { run } = await subagentWakeRun(built, threadRef, "openai");
   const steer = { kind: "steer" as const, text: "also this", ts: "t-1", request: web("stale draft", threadRef) };
   const outcome = await built.app.signalRun(run.id, steer, "U1");
   assert.equal(outcome.accepted, true);
