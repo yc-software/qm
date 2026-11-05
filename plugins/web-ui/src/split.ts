@@ -6,15 +6,11 @@ import { ref } from "lit/directives/ref.js";
 import {
   Archive,
   ArrowUpLeft,
-  Binoculars,
-  Bot,
-  Target,
   Box,
   Brain,
   Clock3,
   ChevronDown,
   Columns2,
-  Cog,
   Files,
   KeyRound,
   Link,
@@ -82,6 +78,7 @@ import {
   sessionTitle,
   archiveSessionById,
   syncWorkingPulse,
+  backgroundIcons,
 } from "./sessions";
 import { conversationBackground, rowIndicators, type RowIndicators } from "./session-list";
 import { scopeToolCount, setScopedSession, type SessionTool } from "./session-scope";
@@ -1273,9 +1270,7 @@ class PaneTab implements ITabRenderer {
         ${
           background
             ? html`<span class="bg-chip" aria-label=${background.label} ${tip(background.label)}
-                >${background.jobs > 0 ? icon(Cog, 11) : nothing}${
-                  background.watches > 0 ? icon(Binoculars, 11) : nothing
-                }${background.crons > 0 ? icon(Clock3, 11) : nothing}${background.subagents > 0 ? icon(Bot, 11) : nothing}${background.goal ? icon(Target, 11) : nothing}</span
+                >${backgroundIcons(background)}</span
               >`
             : nothing
         }

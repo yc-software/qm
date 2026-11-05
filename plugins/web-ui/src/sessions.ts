@@ -78,6 +78,7 @@ import {
   mergeChildren,
   mergeFirstPage,
   rowIndicators,
+  type RowIndicators,
   surfaceOf,
   splitPinned,
   upsertSessions,
@@ -890,20 +891,20 @@ function liveThreads(): ReadonlySet<string> {
   return live;
 }
 
-function sessionWorking(s: CoreSession): boolean {
-  return rowIndicators(s, liveThreads()).working;
-}
-
-function statusMarks(s: CoreSession): TemplateResult {
-  const ind = rowIndicators(s, liveThreads());
+function statusMarks(ind: RowIndicators): TemplateResult {
   return html`${ind.working ? html`<span class="working-mark" ${ref(syncWorkingPulse)}>${workingWave()}</span>` : nothing}${
     ind.awaiting ? html`<span class="awaiting-dot" aria-label="Waiting for your reply"></span>` : nothing
   }`;
 }
 
-/** Background-work chip (jobs, watches, crons, subagents, goal); sits to the right of the title. */
-function backgroundChip(s: CoreSession): TemplateResult | typeof nothing {
-  const background = rowIndicators(s, liveThreads()).background;
+export function backgroundIcons(background: NonNullable<RowIndicators["background"]>): TemplateResult {
+  return html`${background.jobs > 0 ? icon(Cog, 11) : nothing}${background.watches > 0 ? icon(Binoculars, 11) : nothing}${
+    background.crons > 0 ? icon(Clock3, 11) : nothing
+  }${background.subagents > 0 ? icon(Bot, 11) : nothing}${background.goal ? icon(Target, 11) : nothing}`;
+}
+
+function backgroundChip(s: CoreSession, ind: RowIndicators): TemplateResult | typeof nothing {
+  const background = ind.background;
   if (!background) return nothing;
   return html`<span
     class="bg-chip"
@@ -913,9 +914,7 @@ function backgroundChip(s: CoreSession): TemplateResult | typeof nothing {
     ${tip(`${background.label}. Click to inspect`)}
     @click=${(e: Event) => openBackgroundInspector(e, s)}
     @keydown=${(e: KeyboardEvent) => (e.key === "Enter" || e.key === " ") && openBackgroundInspector(e, s)}
-    >${background.jobs > 0 ? icon(Cog, 11) : nothing}${background.watches > 0 ? icon(Binoculars, 11) : nothing}${
-      background.crons > 0 ? icon(Clock3, 11) : nothing
-    }${background.subagents > 0 ? icon(Bot, 11) : nothing}${background.goal ? icon(Target, 11) : nothing}</span
+    >${backgroundIcons(background)}</span
   >`;
 }
 
@@ -935,6 +934,7 @@ function isActiveRow(s: CoreSession): boolean {
 }
 
 function chatPageRow(s: CoreSession): TemplateResult {
+  const ind = rowIndicators(s, liveThreads());
   const readOnly = surfaceOf(s) !== "slack" && !s.canContinue;
   const color = displaySessionColor(s.color);
   return html`
@@ -949,7 +949,7 @@ function chatPageRow(s: CoreSession): TemplateResult {
         }}
       >
         <span class="list-row-title"
-          >${statusMarks(s)}<span dir="auto">${groupDmTitle(s)}</span>${backgroundChip(s)}</span
+          >${statusMarks(ind)}<span dir="auto">${groupDmTitle(s)}</span>${backgroundChip(s, ind)}</span
         >
         <span class="list-row-meta">
           ${unreadDot(s)} ${scopeChip(s.scopeId, s.channelName ?? null)}
@@ -1117,7 +1117,8 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
   const readOnly = surfaceOf(s) !== "slack" && !s.canContinue;
   const surface = surfaceOf(s);
   const context = projectChild ? null : rowContext(s);
-  const working = sessionWorking(s);
+  const ind = rowIndicators(s, liveThreads());
+  const working = ind.working;
   const color = displaySessionColor(s.color);
   let titleContent: string | TemplateResult = groupDmTitle(s);
   if (refreshingTitle || pendingForkThreads.has(s.threadRef)) {
@@ -1202,8 +1203,8 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
         }}
       >
         <div class="title" aria-live="polite">
-          ${statusMarks(s)}${surfaceGlyph(s)}<span class="tl" dir="auto">${lastMessage ?? titleContent}</span
-          >${backgroundChip(s)}${context ? html`<span class="row-context" ${tip(context)}>${context}</span>` : nothing}${unreadDot(s)}
+          ${statusMarks(ind)}${surfaceGlyph(s)}<span class="tl" dir="auto">${lastMessage ?? titleContent}</span
+          >${backgroundChip(s, ind)}${context ? html`<span class="row-context" ${tip(context)}>${context}</span>` : nothing}${unreadDot(s)}
         </div>
         ${lastMessage ? html`<div class="row-detail" dir="auto">${titleContent}</div>` : nothing}
       </a>
