@@ -1,4 +1,4 @@
-import { test } from "./support/tenant-test.ts";
+import { test } from "node:test";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import {
   exerciseDeliveryExpiry,

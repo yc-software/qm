@@ -1,4 +1,4 @@
-import { test, inTestTenant } from "./support/tenant-test.ts";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { zstdDecompressSync } from "node:zlib";
 import { contentText, createAssistantMessageEventStream, type StopReason } from "@earendil-works/pi-ai";
@@ -8,7 +8,7 @@ import { type NewItem, storedItem } from "../src/sessions/items.ts";
 import { ProviderTurnError } from "../src/core/turn-error.ts";
 import { buildModelRuntime, zeroUsage } from "../src/model/model-runtime.ts";
 
-const model = inTestTenant(() => getRequiredModel("claude-opus-5"));
+const model = getRequiredModel("claude-opus-5");
 const summary = "## Goal\nInvestigate migration failures.\n## Constraints & Preferences\nDo not change production.";
 const item = (seq: number, fields: NewItem) =>
   storedItem(fields, { sessionId: "test-session", seq, createdAt: 1_700_000_000_000 + seq });

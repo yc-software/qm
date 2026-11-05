@@ -1,4 +1,4 @@
-import { test } from "./support/tenant-test.ts";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { swarmFixture } from "./support/swarm-fixture.ts";
 import { testMap } from "./support/test-database.ts";

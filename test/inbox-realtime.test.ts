@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "./support/tenant-test.ts";
+import { test } from "node:test";
 import { createLoopItemLedger, type IngestEntryInput } from "../src/loops/item-ledger.ts";
 import { createInboxRealtime } from "../src/loops/inbox-realtime.ts";
 import { renderSourceInboxTask } from "../src/loops/inbox-loop.ts";

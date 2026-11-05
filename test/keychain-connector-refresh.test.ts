@@ -1,4 +1,4 @@
-import { test } from "./support/tenant-test.ts";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createKeychain, type KeychainCredential, type OAuthRefresh } from "../src/credentials/keychain.ts";
 import type { DurableMap } from "../src/persistence/durable-map.ts";

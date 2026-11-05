@@ -1,4 +1,4 @@
-import { test } from "./support/tenant-test.ts";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { type PersistedDeploymentIdentity } from "../src/resolution/config-store.ts";
 import { testConfigStore, testMap } from "./support/test-database.ts";

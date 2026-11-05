@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test, type TestContext } from "./support/tenant-test.ts";
+import { test, type TestContext } from "node:test";
 import { createPostgresAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import {

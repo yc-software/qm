@@ -1,6 +1,6 @@
 import { createSlackCoreClient, type SlackCoreClientDeps } from "../src/api/slack-core-client.ts";
 import assert from "node:assert/strict";
-import { test } from "./support/tenant-test.ts";
+import { test } from "node:test";
 import { slackSurfaceOrigin } from "../src/surfaces/slack/adapter.ts";
 import {
   companySlackActor,

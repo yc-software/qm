@@ -1,4 +1,4 @@
-import { test } from "./support/tenant-test.ts";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { withWebTranscriptDeliveries } from "../src/delivery/web-transcript-delivery.ts";

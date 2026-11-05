@@ -1,19 +1,19 @@
-import { test } from "node:test";
+import { test as nodeTest, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import type { DurableMap } from "../src/persistence/durable-map.ts";
 import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";
-import { boundTenant, currentTenant, withTenant } from "../src/tenants/context.ts";
+import { boundTenant, currentTenant, withoutTenant, withTenant } from "../src/tenants/context.ts";
 import { loadTenant, onTenantLoad, perTenant, tenantListeners } from "../src/tenants/cache.ts";
 import { customModelCatalog, customProvidersVersion, setCustomProviders } from "../src/model/custom-providers.ts";
 import { overlayUnavailableReason, overlaysVersion, publishModelOverlays } from "../src/model/model-overlay.ts";
+import { resolveDeploymentModel } from "../src/model/pi-models.ts";
 import { gatewayModelCatalog, gatewayModelsVersion, setGatewayModels } from "../src/model/gateway-models.ts";
 import { createMcpToolService } from "../src/mcp/mcp-tool-service.ts";
 import type { McpServer, McpServerStore } from "../src/mcp/mcp-server-store.ts";
 import { createIdentityService, type DeactivationRecord } from "../src/identity/identity-service.ts";
 import type { ExternalMember } from "../src/identity/external-members.ts";
-import { createPrincipalLinkService } from "../src/identity/principal-links.ts";
-import type { UserLink, UserLinkStore } from "../src/identity/user-store.ts";
+import { createPrincipalLinkService, type PrincipalLink } from "../src/identity/principal-links.ts";
 import { configStoreMaps, createConfigStore } from "../src/resolution/config-store.ts";
 import { createSpendLimits } from "../src/ratelimit/spend-limits.ts";
 import { createAdminGrantStore, type AdminGrant } from "../src/admin/admin-grant-store.ts";
@@ -25,6 +25,10 @@ import { selectableModelCatalog } from "../src/model/model-catalog.ts";
 import { scopeActivity } from "../src/api/routes/admin/scope-activity.ts";
 import { setMentionIndex, toSlackMrkdwn } from "../src/slack/mrkdwn.ts";
 import { botIdentityArgs, setDefaultBotIdentity } from "../src/slack/delivery.ts";
+
+function test(name: string, fn: (t: TestContext) => void | Promise<void>): void {
+  void nodeTest(name, (t) => withoutTenant(() => fn(t)));
+}
 
 const noLock: AdvisoryLock = {
   withLock: (_key, fn) => fn(),
@@ -102,25 +106,6 @@ function tenantMap<T>(): DurableMap<T> & { reads: string[] } {
     async take(id) {
       const existing = own().get(id) ?? null;
       own().delete(id);
-      return existing;
-    },
-  };
-}
-
-function linkStore(): UserLinkStore {
-  const rows = new Map<string, Map<string, UserLink>>();
-  const own = () => partition(rows);
-  return {
-    async links() {
-      return [...own().values()];
-    },
-    async link(link) {
-      own().set(link.principalId, link);
-      return link;
-    },
-    async unlink(aliasId) {
-      const existing = own().get(aliasId) ?? null;
-      own().delete(aliasId);
       return existing;
     },
   };
@@ -297,34 +282,26 @@ function signInServer(id: string): McpServer {
   };
 }
 
-test("each tenant gets its own custom providers, model overlays and gateway models", () => {
+test("custom providers are per tenant; deployment model state resolves unbound", () => {
   withTenant(A, () => {
     setCustomProviders([
       { id: "tenant-a", name: "A", protocol: "openai", baseUrl: "https://a.example/v1", models: [{ id: "model-a" }] },
     ]);
-    publishModelOverlays(new Map(), new Map([["overlay-a", "missing key"]]), []);
-    setGatewayModels([]);
   });
-  const versions = () => ({
-    custom: customProvidersVersion(),
-    overlays: overlaysVersion(),
-    gateway: gatewayModelsVersion(),
-  });
-  const before = withTenant(B, versions);
-  withTenant(A, () => {
-    assert.equal(customModelCatalog().length, 1);
-    assert.equal(overlayUnavailableReason("overlay-a"), "missing key");
-  });
-  withTenant(B, () => {
-    assert.deepEqual(customModelCatalog(), []);
-    assert.equal(overlayUnavailableReason("overlay-a"), undefined);
-    assert.deepEqual(gatewayModelCatalog(true), []);
-  });
-  withTenant(A, () => {
-    setCustomProviders([]);
-    publishModelOverlays(new Map(), new Map(), []);
-  });
-  assert.deepEqual(withTenant(B, versions), before);
+  const before = withTenant(B, customProvidersVersion);
+  withTenant(A, () => assert.equal(customModelCatalog().length, 1));
+  withTenant(B, () => assert.deepEqual(customModelCatalog(), []));
+  withTenant(A, () => setCustomProviders([]));
+  assert.equal(withTenant(B, customProvidersVersion), before);
+  const overlays = overlaysVersion();
+  publishModelOverlays(new Map(), new Map([["overlay-a", "missing key"]]), []);
+  assert.equal(overlayUnavailableReason("overlay-a"), "missing key");
+  assert.equal(overlaysVersion(), overlays + 1);
+  publishModelOverlays(new Map(), new Map(), []);
+  setGatewayModels([]);
+  assert.deepEqual(gatewayModelCatalog(true), []);
+  assert.ok(gatewayModelsVersion() >= 0);
+  assert.equal(resolveDeploymentModel("model-a"), undefined);
 });
 
 test("MCP tool lists are loaded and refreshed per tenant", async (t) => {
@@ -345,7 +322,7 @@ test("MCP tool lists are loaded and refreshed per tenant", async (t) => {
 test("identity rosters and principal links are kept and refreshed per tenant", async () => {
   const deactivations = tenantMap<DeactivationRecord>();
   const externals = tenantMap<ExternalMember>();
-  const links = createPrincipalLinkService(linkStore(), noLock);
+  const links = createPrincipalLinkService(tenantMap<PrincipalLink>(), noLock);
   const identity = createIdentityService(deactivations, { externalMembers: externals, principalLinks: links });
   await withTenant(A, async () => {
     await identity.refresh(true);

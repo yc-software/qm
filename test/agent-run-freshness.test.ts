@@ -1,4 +1,4 @@
-import { test } from "./support/tenant-test.ts";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

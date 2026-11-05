@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { test } from "./support/tenant-test.ts";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createAgent } from "../src/agent/agent-run.ts";
 import { createModelRoutes } from "../src/model/model-route.ts";

@@ -1,4 +1,4 @@
-import { test } from "./support/tenant-test.ts";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { providerTokenStatuses } from "../src/credentials/connector-status.ts";
 import type { ConnectorTokenStore, OAuthTokenStatus } from "../src/credentials/keychain.ts";

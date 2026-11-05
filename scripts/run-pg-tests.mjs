@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { readFileSync, statSync } from "node:fs";
+import { statSync } from "node:fs";
 import { availableParallelism } from "node:os";
 import process from "node:process";
 import { parseArgs } from "node:util";
@@ -76,12 +76,9 @@ function runFile(file, env) {
       children.delete(child);
       resolve({ file, ok, ms: Date.now() - started, output });
     };
-    const source = readFileSync(file, "utf8");
-    const boots = source.includes("support/build-app.ts") || source.includes("src/wiring.ts");
-    const entry = boots ? BOOT_TENANT_ENTRY : file;
-    const child = spawn(process.execPath, ["--experimental-test-module-mocks", "--test", entry], {
+    const child = spawn(process.execPath, ["--experimental-test-module-mocks", "--test", BOOT_TENANT_ENTRY], {
       detached: true,
-      env: { ...process.env, ...env, ...(boots ? { QM_BOOT_TENANT_TEST_FILE: file } : {}) },
+      env: { ...process.env, ...env, QM_BOOT_TENANT_TEST_FILE: file },
     });
     children.add(child);
     child.stdout?.on("data", (chunk) => (output += chunk));

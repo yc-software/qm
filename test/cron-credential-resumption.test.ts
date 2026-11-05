@@ -1,5 +1,5 @@
 import type { TurnOrigin } from "../src/types.ts";
-import { test } from "./support/tenant-test.ts";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";

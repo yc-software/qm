@@ -1,4 +1,4 @@
-import { test, after } from "./support/tenant-test.ts";
+import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { type PersistedBaseModel } from "../src/resolution/config-store.ts";
 import { createPostgresMapFactory, type DurableMap } from "../src/persistence/durable-map.ts";

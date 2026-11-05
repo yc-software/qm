@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test, type TestContext } from "./support/tenant-test.ts";
+import { test, type TestContext } from "node:test";
 import { loadConfig } from "../src/config.ts";
 import { createAgent, agentConfigOptions } from "../src/agent/agent-run.ts";
 import { configRouteOptions, createModelRoutes } from "../src/model/model-route.ts";

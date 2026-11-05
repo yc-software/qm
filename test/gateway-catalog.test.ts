@@ -2,7 +2,7 @@ import { nativeDocumentFormat } from "../src/agent/document-inputs.ts";
 import { runtimeFallback } from "../src/api/runtime-config.ts";
 import { validateWebTurnModelOptions } from "../src/api/runtime-config.ts";
 import { resolveRuntimeChoice } from "../src/agent/runtime-choice.ts";
-import { afterEach, test } from "./support/tenant-test.ts";
+import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { createGatewayCatalog } from "../src/model/gateway-catalog.ts";
 import { setGatewayModels } from "../src/model/gateway-models.ts";

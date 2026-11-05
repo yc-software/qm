@@ -1,4 +1,4 @@
-import { test } from "./support/tenant-test.ts";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createKeychain, type KeychainAsk, type KeychainGrant } from "../src/credentials/keychain.ts";
 import { approvalCardDestination, createKeychainApprovals } from "../src/credentials/keychain-approval.ts";

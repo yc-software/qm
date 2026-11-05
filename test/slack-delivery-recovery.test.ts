@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "./support/tenant-test.ts";
+import { test } from "node:test";
 import { createDeliveryPoller } from "../src/slack/deliveries.ts";
 import { statusPlaceholderKey } from "../src/slack/lib.ts";
 

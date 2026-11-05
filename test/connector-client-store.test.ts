@@ -1,4 +1,4 @@
-import { test } from "./support/tenant-test.ts";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash, createCipheriv, randomBytes } from "node:crypto";
 import { scopeId } from "../src/types.ts";

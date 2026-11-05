@@ -1,4 +1,4 @@
-import { test } from "./support/tenant-test.ts";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createApp, type App, type AppDeps } from "../src/api/app.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";

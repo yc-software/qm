@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "./support/tenant-test.ts";
+import { test } from "node:test";
 import { createNoopLeaderLease } from "../src/persistence/leader-lease.ts";
 import { createTaskAcknowledgements, type TaskAckState } from "../src/slack/task-ack.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";

@@ -1,4 +1,4 @@
-import { test, before } from "./support/tenant-test.ts";
+import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { createScheduler, type Scheduler } from "../src/cron/scheduler.ts";
 import { createPgBossCronQueue, type CronFireJob, type CronJobQueue } from "../src/cron/job-queue.ts";

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { test, type TestContext } from "./support/tenant-test.ts";
+import test from "node:test";
 import type { App as BoltApp, ReceiverEvent } from "@slack/bolt";
 import { createSlackInstallationStore } from "../src/surfaces/slack-installation.ts";
 import { createManagedSlack } from "../src/surfaces/slack-managed.ts";
@@ -21,7 +21,7 @@ const event = {
   event: { type: "message", channel: "C123", user: "U123", ts: "1.0", text: "hello" },
 };
 
-async function fixture(t: TestContext, appId = "A123") {
+async function fixture(t: test.TestContext, appId = "A123") {
   const map = testMap();
   const store = createSlackInstallationStore(
     "company",

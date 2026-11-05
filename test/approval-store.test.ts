@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "./support/tenant-test.ts";
+import test from "node:test";
 import { createApprovalStore } from "../src/slack/approval-store.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { slackSurfaceOrigin } from "../src/surfaces/slack/adapter.ts";
