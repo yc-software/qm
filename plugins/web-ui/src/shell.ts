@@ -52,7 +52,7 @@ import { icon } from "./icons";
 import { isPhone, markDesktopEmbed, onPhoneChange, trackVisualViewport } from "./viewport";
 import { markConnectorConnected } from "./chat";
 import { clearSkillsCache, resyncModelSelection } from "./composer";
-import { ensureDeliveryStream, mainConversation, onExitCanvas } from "./conversations";
+import { allConversations, ensureDeliveryStream, mainConversation, onExitCanvas } from "./conversations";
 import { clearAllDrafts, newChatDraftKey, saveDraft, storedDraft } from "./drafts";
 import { deepLinkPath, isPlainLeftClick, parseDeepLink, sessionLinkTarget, UI_BASE } from "./deep-link";
 import {
@@ -66,6 +66,7 @@ import {
   focusedPaneSession,
   loadPersistedSplit,
   mountRestoredCanvas,
+  notifyPanesChanged,
   restoredCanvasNeedsSessionList,
   splitState,
   singlePaneSessionId,
@@ -91,6 +92,7 @@ import {
 import { openCronById, renderCronsPage, resetActiveCron, routeCronsHistory } from "./crons";
 import { renderLoopsPage, resetActiveLoop } from "./loops";
 import { openWebhookById, renderWebhooksPage, resetActiveWebhook, routeWebhooksHistory } from "./webhooks";
+import { loadPersonas, renderPersonasPage } from "./personas";
 import { renderFiles } from "./files";
 import { setScopedSession } from "./session-scope";
 import { openChatSearch } from "./search";
@@ -794,6 +796,9 @@ function showView(v: View): void {
     case "skills":
       void renderSkills();
       break;
+    case "personas":
+      void renderPersonasPage();
+      break;
     case "settings":
       renderSettings();
       break;
@@ -861,6 +866,9 @@ function refreshActiveView(v: View): void {
       break;
     case "skills":
       void renderSkills();
+      break;
+    case "personas":
+      void renderPersonasPage();
       break;
     case "settings":
       renderSettings();
@@ -1134,6 +1142,10 @@ export async function boot(): Promise<void> {
   appState.me = (await r.json()) as Me;
   void initializeBrowserErrors(appState.me);
   void initializeAnalytics(appState.me, isView(wanted) && canView(wanted) ? wanted : "chats");
+  void loadPersonas().then(() => {
+    notifyPanesChanged();
+    for (const conversation of allConversations()) conversation.redraw();
+  });
   authMode = appState.me.mode ?? "portal";
   clearPortalAttempt();
   if (appState.me.individualModelAuth && !appState.me.modelAuthConnected) {

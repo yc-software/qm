@@ -22,6 +22,7 @@ const API_RESOURCES = new Set([
   "keychain",
   "loops",
   "memory",
+  "personas",
   "playgrounds",
   "projects",
   "resources",
