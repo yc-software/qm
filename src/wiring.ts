@@ -141,6 +141,7 @@ import { createInboxRealtime } from "./loops/inbox-realtime.ts";
 import { createLoopOutputStore } from "./loops/output-store.ts";
 import { createShipGrantStore } from "./loops/ship-grant-store.ts";
 import { createLoopFireService, type LoopFireService } from "./loops/loop-fire.ts";
+import { createInboxQuietCheck } from "./loops/inbox-quiet-check.ts";
 import type { LoopServiceDeps } from "./api/routes/loops.ts";
 import type { DeliveryStore } from "./delivery/delivery-store.ts";
 import { createPostgresDeliveryStore } from "./delivery/postgres-delivery-store.ts";
@@ -2553,6 +2554,14 @@ export function buildApp(
     outputs: loopOutputs,
     grants: loopGrants,
     files,
+    ...(keychain
+      ? {
+          inboxQuiet: createInboxQuietCheck({
+            tokens: keychain,
+            ...(config.slack?.apiUrl ? { slackApiUrl: config.slack.apiUrl } : {}),
+          }),
+        }
+      : {}),
     trigger: {
       deliveries,
       idempotency,

@@ -61,6 +61,7 @@ function service(
     directory?: DirectoryStore;
     resolveRecipient?: TriggerDeps["resolveRecipient"];
     files?: Parameters<typeof createLoopFireService>[0]["files"];
+    inboxQuiet?: Parameters<typeof createLoopFireService>[0]["inboxQuiet"];
   },
 ) {
   const loops = createLoopStore(testMap());
@@ -81,6 +82,7 @@ function service(
     outputs,
     grants,
     files: overrides?.files ?? fakeFiles([]).store,
+    ...(overrides?.inboxQuiet ? { inboxQuiet: overrides.inboxQuiet } : {}),
     trigger: {
       deliveries: deliveries.store as never,
       idempotency,
@@ -890,6 +892,49 @@ test("inbox sync exceptions count once and recover on a successful retry", async
   await s.loops.setState(loop.id, "paused");
   assert.equal((await s.fire.fire(loop.id, "paused")).status, "silent");
   assert.equal(s.turns.length, 2);
+});
+
+test("an inbox fire skips the sync turn only when the pre-check proves nothing new", async () => {
+  let verdict: () => Promise<{ quiet: true } | { quiet: false; reason: string }> = async () => ({ quiet: true });
+  const seen: number[] = [];
+  const s = service(() => "Synced", {
+    inboxQuiet: async (_loop, items) => {
+      seen.push(items.length);
+      return verdict();
+    },
+  });
+  const loop = await makeLoop(s.loops, { surface: "inbox:slack", sources: ["slack"] });
+  const before = Date.now();
+  assert.deepEqual(await s.fire.fire(loop.id, "quiet"), {
+    status: "silent",
+    note: "inbox quiet: nothing new since the last pass",
+  });
+  assert.equal(s.turns.length, 0);
+  const afterQuiet = await s.loops.get(loop.id);
+  assert.ok((afterQuiet?.lastScanAt ?? 0) >= before);
+  assert.equal(afterQuiet?.consecutiveFailedFires, 0);
+
+  verdict = async () => ({ quiet: false, reason: "new Slack message for the user" });
+  assert.deepEqual(await s.fire.fire(loop.id, "news"), {
+    status: "silent",
+    note: "inbox sync ran: new Slack message for the user",
+  });
+  assert.equal(s.turns.length, 1);
+  assert.match(s.turns[0]?.text ?? "", /Slack inbox loop current/);
+
+  verdict = async () => {
+    throw new Error("token store down");
+  };
+  assert.deepEqual(await s.fire.fire(loop.id, "broken-check"), {
+    status: "silent",
+    note: "inbox sync ran: pre-check failed: token store down",
+  });
+  assert.equal(s.turns.length, 2);
+  assert.deepEqual(seen, [0, 0, 0]);
+
+  const plain = await makeLoop(s.loops);
+  await s.fire.fire(plain.id, "not-inbox");
+  assert.equal(seen.length, 3);
 });
 
 const RATE_LIMITED = new ProviderTurnError("Model provider API error (rate_limit_error): slow down", {

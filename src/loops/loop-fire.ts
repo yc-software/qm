@@ -56,6 +56,7 @@ import {
 } from "./triage.ts";
 import type { TriagePatch } from "./item-ledger.ts";
 import { adapterForItem } from "./sources/index.ts";
+import type { InboxQuietCheck } from "./inbox-quiet-check.ts";
 
 export interface LoopFireDeps {
   admittedWork?: AdmittedWork;
@@ -69,6 +70,7 @@ export interface LoopFireDeps {
   grants: ShipGrantStore;
   files: Pick<FileArtifactStore, "listOwnedByScopes" | "open">;
   trigger: TriggerDeps;
+  inboxQuiet?: InboxQuietCheck;
 }
 
 interface LoopFireResult {
@@ -754,6 +756,19 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     if (inboxSource(loop) && options?.enumerate !== false) {
       if (!isRunnable(loop)) return notRunnable(loop);
       const firedAt = Date.now();
+      const quiet = deps.inboxQuiet
+        ? await deps.items
+            .byLoop(loopId)
+            .then((items) => deps.inboxQuiet!(loop, items))
+            .catch((error: unknown) => ({ quiet: false as const, reason: `pre-check failed: ${errMessage(error)}` }))
+        : undefined;
+      if (quiet?.quiet) {
+        await triage(loop, fireKey, threadRef);
+        await deps.loops.recordScan(loopId, firedAt);
+        await deps.loops.recordFireOutcome(loopId, "ok");
+        await applyGovernor(loopId);
+        return { status: "silent", note: "inbox quiet: nothing new since the last pass" };
+      }
       let failure: unknown;
       try {
         const outcome = await stageTurn(loop, `${fireKey}:sync`, threadRef, playbookText(loop, await voiceProfile()));
@@ -767,7 +782,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
         await deps.loops.recordScan(loopId, firedAt);
         await deps.loops.recordFireOutcome(loopId, "ok");
         await applyGovernor(loopId);
-        return { status: "silent" };
+        return { status: "silent", ...(quiet ? { note: `inbox sync ran: ${quiet.reason}` } : {}) };
       }
       return recordFailedFire(loopId, failure);
     }
