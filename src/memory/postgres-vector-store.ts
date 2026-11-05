@@ -100,16 +100,11 @@ export function createPostgresVectorStore(connectionString: string): MemoryVecto
         END $memory_sketch_backfill$`,
       ],
     },
-    {
-      id: "memory/vectors/0005-sketch-not-null",
-      statements: [
-        "SET LOCAL lock_timeout = '3s'",
-        "ALTER TABLE memory_fact_vectors ALTER COLUMN embedding_bits SET NOT NULL",
-      ],
-    },
   ]);
   return {
     async search(input) {
+      if (!Number.isInteger(input.limit) || input.limit < 1)
+        throw new Error(`Memory vector search limit must be a positive integer, got ${input.limit}`);
       if (!input.ids.length) return [];
       const vector = unitVector(input.vector);
       const minSimilarity = input.minSimilarity ?? 0.2;
@@ -149,7 +144,7 @@ export function createPostgresVectorStore(connectionString: string): MemoryVecto
           1 - minSimilarity,
           1 - Math.min(0.2, minSimilarity),
           input.ids,
-          batchSize(input.limit),
+          input.limit,
         ],
         { timeoutMs: 5000 },
       );
