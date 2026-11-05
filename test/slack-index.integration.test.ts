@@ -178,6 +178,8 @@ class FakeApp {
     FakeApp.instances.push(this);
   }
 
+  use(): void {}
+
   message(handler: Handler): void {
     this.messageHandlers.push(handler);
   }
