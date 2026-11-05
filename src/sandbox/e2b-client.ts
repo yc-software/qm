@@ -174,8 +174,6 @@ function commandResultFrom(value: unknown): E2bCommandResult | null {
 
 type E2bSdk = typeof import("e2b");
 
-const PAUSE_DEADLINE_MS = 10 * 60_000;
-
 const SANDBOX_TIMEOUT_MESSAGE = /sandbox timeout|end of life|not running anymore/i;
 
 function isSandboxGone(sdk: E2bSdk, err: unknown): boolean {
@@ -269,8 +267,7 @@ export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
       keepAlive: (ms) => extend(ms),
       async pause(): Promise<void> {
         try {
-          await retryOperation(() => sbx.pause({ keepMemory: true }), "idempotent", {
-            timeoutMs: PAUSE_DEADLINE_MS,
+          await retryOperation((signal) => sbx.pause({ keepMemory: true, signal }), "idempotent", {
             statusOf: (err) => (err instanceof lib.ServiceBusyError ? err.statusCode : undefined),
           });
         } catch (err) {
