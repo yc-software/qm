@@ -561,7 +561,7 @@ export function controlPlaneTools(kit: ToolKit) {
     ),
     archive: agentAction(
       "archive",
-      "Retire an agent you own, or one with no active owner if you are an org admin; its channel returns to the default name, picture and rules.",
+      "Retire an agent you own, or one with no active owner if you are an org admin; its channel is unlocked and keeps its instructions and skills.",
       Type.Object({ agent: agentRef }),
       (r) => ("agent" in r ? `Archived ${r.agent.displayName}; #${r.agent.channelName} is unlocked.` : ""),
     ),

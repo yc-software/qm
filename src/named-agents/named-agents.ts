@@ -1,7 +1,8 @@
 import type { AuditLog } from "../audit/audit-log.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
-import type { DirectoryStore } from "../directory/directory-store.ts";
+import type { DirectoryChannel, DirectoryStore } from "../directory/directory-store.ts";
 import { canonicalPerson, personIds, samePerson } from "../directory/person.ts";
+import { isVisible } from "../directory/visibility.ts";
 import type { FeatureFlagStore } from "../feature-flags.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
 import { swallow } from "../util/errors.ts";
@@ -79,7 +80,15 @@ export interface NamedAgentsDeps {
   identity: Pick<IdentityService, "classify" | "isInternal">;
   directory: Pick<
     DirectoryStore,
-    "get" | "list" | "resolve" | "resolveChannel" | "channelMembership" | "channelPrivacy"
+    | "get"
+    | "list"
+    | "resolve"
+    | "resolveChannel"
+    | "channelMembership"
+    | "channelPrivacy"
+    | "channelMember"
+    | "groupMember"
+    | "listChannelsFor"
   >;
   isOrgAdmin: (principalId: string) => Promise<boolean>;
   auditLog: AuditLog;
@@ -125,6 +134,12 @@ export function createNamedAgents(deps: NamedAgentsDeps): NamedAgents {
   const orphaned = (agent: NamedAgent) => !agent.owners.some(isActive);
   const liveActiveOwner = (agent: NamedAgent, actor: AgentActor) =>
     actor.live && isActive(actor.id) && isOwner(agent, actor.id);
+  const seesChannel = async (agent: NamedAgent, actorId: string) =>
+    isVisible(deps.directory, actorId, {
+      kind: "channel",
+      channelId: agent.channelId,
+      isPrivate: await deps.directory.channelPrivacy(agent.channelId),
+    });
 
   async function displayNameOf(principalId: string): Promise<string> {
     for (const id of new Set([principalId, ...personIds(principalId)])) {
@@ -225,10 +240,12 @@ export function createNamedAgents(deps: NamedAgentsDeps): NamedAgents {
     return { ids };
   }
 
-  async function findActive(ref: string): Promise<NamedAgent | undefined> {
-    return (await deps.store.list()).find(
+  async function findActive(ref: string, actor: AgentActor, admin: boolean): Promise<NamedAgent | undefined> {
+    const agent = (await deps.store.list()).find(
       (agent) => agent.state === "active" && (agent.id === ref.trim() || agent.handle === cleanHandle(ref)),
     );
+    if (!agent || admin || isOwner(agent, actor.id) || (await seesChannel(agent, actor.id))) return agent;
+    return undefined;
   }
 
   function conflictMessage(conflict: "channel" | "name", other: NamedAgent): AgentRefusal {
@@ -236,7 +253,7 @@ export function createNamedAgents(deps: NamedAgentsDeps): NamedAgents {
       "conflict",
       conflict === "channel"
         ? `#${other.channelName} already has ${other.displayName}; archive it first`
-        : `${other.displayName} (@${other.handle}) already uses that name`,
+        : "another agent already uses that handle or display name",
     );
   }
 
@@ -255,6 +272,10 @@ export function createNamedAgents(deps: NamedAgentsDeps): NamedAgents {
       if (!governed || liveActiveOwner(governed.agent, actor)) return;
       const { agent } = governed;
       audit(actor, "agent_lock_refused", agent);
+      if (!(await seesChannel(agent, actor.id)))
+        throw new AgentLocked(
+          "This change reaches a channel whose named agent's owners alone can change its instructions, standing orders or skills. Org admins can change them in the admin console.",
+        );
       const channel = `#${agent.channelName}`;
       const activeOwner = agent.owners.find(isActive);
       throw new AgentLocked(
@@ -293,13 +314,21 @@ export function createNamedAgents(deps: NamedAgentsDeps): NamedAgents {
       const badAvatar = avatarProblem(input.avatar);
       if (badAvatar) return refuse("bad_request", badAvatar);
       const found = await deps.directory.resolveChannel(input.channel);
-      if (found.kind === "none") return refuse("not_found", `no channel matches "${input.channel}"`);
+      const matches: DirectoryChannel[] = found.kind === "one" ? [found.channel] : [];
+      if (found.kind === "ambiguous") matches.push(...found.candidates);
+      const visible: DirectoryChannel[] = [];
+      for (const c of matches)
+        if (
+          await isVisible(deps.directory, actor.id, { kind: "channel", channelId: c.channelId, isPrivate: c.isPrivate })
+        )
+          visible.push(c);
+      const [channel] = visible;
+      if (!channel) return refuse("not_found", `no channel matches "${input.channel}"`);
       if (found.kind === "ambiguous")
         return refuse(
           "bad_request",
-          `"${input.channel}" matches ${nameList.format(found.candidates.map((c) => `#${c.name}`))}; name one`,
+          `"${input.channel}" matches ${nameList.format(visible.map((c) => `#${c.name}`))}; name one`,
         );
-      const { channel } = found;
       if (!isActive(actor.id) || (await deps.directory.channelMembership(channel.channelId, actor.id)) !== true)
         return refuse("forbidden", `only a member of #${channel.name} can give it an agent`);
       const badName = await nameProblem(handle, displayName);
@@ -326,7 +355,8 @@ export function createNamedAgents(deps: NamedAgentsDeps): NamedAgents {
     },
 
     async edit(actor, input) {
-      const agent = await findActive(input.agent);
+      const admin = actor.live && (await deps.isOrgAdmin(actor.id));
+      const agent = await findActive(input.agent, actor, admin);
       if (!agent) return refuse("not_found", `no active agent "${input.agent}"`);
       const handle = input.handle === undefined ? agent.handle : cleanHandle(input.handle);
       const displayName = input.displayName === undefined ? agent.displayName : cleanText(input.displayName);
@@ -353,7 +383,6 @@ export function createNamedAgents(deps: NamedAgentsDeps): NamedAgents {
         avatar?.value !== agent.avatar?.value;
       const onlyAddsOwners = !detailsChange && !removals.length;
       if (onlyAddsOwners && !added.ids.length) return refuse("bad_request", "nothing to change");
-      const admin = actor.live && (await deps.isOrgAdmin(actor.id));
       const outcome = await deps.store.update(
         agent.id,
         (current): AgentDecision<{ added: string[]; removed: string[] }, AgentRefusal> => {
@@ -411,9 +440,9 @@ export function createNamedAgents(deps: NamedAgentsDeps): NamedAgents {
     },
 
     async archive(actor, ref) {
-      const agent = await findActive(ref);
-      if (!agent) return refuse("not_found", `no active agent "${ref}"`);
       const admin = actor.live && (await deps.isOrgAdmin(actor.id));
+      const agent = await findActive(ref, actor, admin);
+      if (!agent) return refuse("not_found", `no active agent "${ref}"`);
       const outcome = await deps.store.update(agent.id, (current): AgentDecision<undefined, AgentRefusal> => {
         if (current.state !== "active") return { refused: refuse("not_found", `no active agent "${ref}"`) };
         if (!liveActiveOwner(current, actor) && !(admin && orphaned(current)))

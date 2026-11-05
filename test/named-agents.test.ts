@@ -62,10 +62,12 @@ async function setup(opts: { flag?: boolean } = {}) {
     [
       { channelId: DESIGN, name: "design", isPrivate: true },
       { channelId: "C0OPEN", name: "open", isPrivate: false },
+      { channelId: "C0CRIT", name: "design-crit", isPrivate: false },
     ],
     [ANN, BOB, CY]
       .map((principalId) => ({ channelId: DESIGN, principalId }))
-      .concat([ANN, BOB, CY, DAN].map((principalId) => ({ channelId: "C0OPEN", principalId }))),
+      .concat([ANN, BOB, CY, DAN].map((principalId) => ({ channelId: "C0OPEN", principalId })))
+      .concat([{ channelId: "C0CRIT", principalId: DAN }]),
   );
   if (opts.flag !== false) await built.featureFlags.setEnabled("named_agents", ORG, true, ADMIN);
   const control = createControlService(built.app, built.scheduler, built.admin);
@@ -387,6 +389,7 @@ test("every skill mutation that reaches the agent's channel, through its home, a
       edit: "locked",
       archive: "locked",
       restore: "locked",
+      recreate: "locked",
       shareOut: "locked",
       unshare: "locked",
       moveOut: "locked",
@@ -395,6 +398,7 @@ test("every skill mutation that reaches the agent's channel, through its home, a
       edit: "locked",
       archive: "locked",
       restore: "locked",
+      recreate: "locked",
       shareOut: "locked",
       unshare: "locked",
       moveOut: "locked",
@@ -404,6 +408,7 @@ test("every skill mutation that reaches the agent's channel, through its home, a
       edit: "open",
       archive: "open",
       restore: "open",
+      recreate: "open",
       shareIn: "locked",
       shareOut: "open",
       unshare: "locked",
@@ -414,6 +419,7 @@ test("every skill mutation that reaches the agent's channel, through its home, a
       edit: "open",
       archive: "open",
       restore: "open",
+      recreate: "open",
       shareIn: "locked",
       shareOut: "open",
       unshare: "open",
@@ -458,6 +464,20 @@ test("every skill mutation that reaches the agent's channel, through its home, a
       archive: async (id) =>
         assert.equal(await app.deleteOwnedSkill({ principalId: CY, id, liveActor: true }), "deleted"),
       restore: async (id) => assert.ok(await app.restoreOwnedSkill(id, CY, live)),
+      recreate: async (id) => {
+        const { scopeId: homeScope, manifest } = await skillOf(id);
+        const name = manifest.name;
+        assert.ok(
+          await app.createOwnedSkill({
+            principalId: CY,
+            homeScope,
+            name,
+            description: "d",
+            body: "b",
+            liveActor: true,
+          }),
+        );
+      },
       shareIn: async (id) => grant((await skillOf(id)).scopeId, id, DESIGN_SCOPE),
       shareOut: async (id) => grant((await skillOf(id)).scopeId, id, personal(DAN)),
       unshare: (id, shape) => app.revokeGrant(shape.unshare[0], encodeRef(skillRef(id)), shape.unshare[1], CY, live),
@@ -480,7 +500,7 @@ test("every skill mutation that reaches the agent's channel, through its home, a
         assert.ok(skill);
         for (const to of shape.shares) await grant(shape.home, skill.id, to);
         if (shape.parkIn) await move(skill.id, shape.parkIn);
-        if (mutation === "restore") await mutations.archive!(skill.id, shape);
+        if (mutation === "restore" || mutation === "recreate") await mutations.archive!(skill.id, shape);
         cases.push({ label: shapeName + " " + mutation, id: skill.id, shape, mutation, outcome });
       }
     }
@@ -543,7 +563,20 @@ test("an archived agent unlocks its channel, and a channel without the flag is n
 test("create checks membership and names; edits recheck names; one agent per channel", async () => {
   const { built, control } = await setup();
   const dan = agentsAs(control, DAN);
-  assert.equal(codeOf(await dan({ action: "create", ...ADA })), "forbidden");
+  const refusalTo = async (r: Promise<AgentsResult>) => {
+    const result = await r;
+    assert.ok(!result.ok, JSON.stringify(result));
+    return result;
+  };
+  for (const channel of ["design", DESIGN]) {
+    const hidden = await refusalTo(dan({ action: "create", ...ADA, channel }));
+    assert.equal(hidden.code, "not_found");
+    assert.ok(!hidden.message.includes("#design"), hidden.message);
+  }
+  const ambiguous = await refusalTo(dan({ action: "create", ...ADA, channel: "des" }));
+  assert.equal(ambiguous.code, "bad_request");
+  assert.ok(ambiguous.message.includes("#design-crit"), ambiguous.message);
+  assert.ok(!ambiguous.message.replaceAll("#design-crit", "").includes("#design"), ambiguous.message);
   const ann = agentsAs(control, ANN);
   assert.equal(codeOf(await ann({ action: "create", ...ADA, displayName: "Bob" })), "bad_request");
   assert.equal(codeOf(await ann({ action: "create", ...ADA, handle: "cy" })), "bad_request");
@@ -552,6 +585,11 @@ test("create checks membership and names; edits recheck names; one agent per cha
   assert.equal(await built.app.namedAgents!.channelAgent(DESIGN), undefined);
   await createAda(control);
   assert.equal(codeOf(await ann({ action: "create", ...ADA, handle: "ada2", displayName: "Ada Two" })), "conflict");
+  const taken = await refusalTo(
+    dan({ action: "create", ...ADA, channel: "open", handle: "ada", displayName: "Other" }),
+  );
+  assert.equal(taken.code, "conflict");
+  assert.ok(!taken.message.includes("Ada"), taken.message);
   assert.equal(
     codeOf(await ann({ action: "create", ...ADA, channel: "open", handle: "ADA", displayName: "Other" })),
     "conflict",
@@ -707,6 +745,46 @@ test("list never shows a private channel's agent to a non-member", async () => {
   );
   assert.deepEqual(agentsOf(await agentsAs(control, DAN)({ action: "list" })), ["opie"]);
   assert.deepEqual(agentsOf(await agentsAs(control, CY)({ action: "list" })).sort(), ["ada", "opie"]);
+});
+
+test("a lock refusal through a grant, or a lookup by handle, names nothing about a private channel the actor isn't in", async () => {
+  const { built, control } = await setup();
+  assert.ok(
+    await built.app.upsertChannels(
+      [{ channelId: "C0SIDE", name: "side", isPrivate: true }],
+      [CY, DAN].map((principalId) => ({ channelId: "C0SIDE", principalId })),
+      Date.now(),
+      undefined,
+      undefined,
+      true,
+    ),
+  );
+  const skill = await built.app.createOwnedSkill({
+    principalId: CY,
+    homeScope: scopeId("channel", "C0SIDE"),
+    name: "side-notes",
+    description: "notes",
+    body: "take notes",
+    liveActor: true,
+  });
+  assert.ok(skill);
+  const shared = await control.shareArtifact(
+    { type: "skill", id: skill.id, scope: DESIGN_SCOPE },
+    { actorId: CY, scopeId: personal(CY), liveActor: true, exp: Date.now() + CAPABILITY_TTL_MS },
+  );
+  assert.equal(shared.ok, true);
+  await createAda(control);
+  const editAs = (principalId: string) =>
+    built.app.updateOwnedSkill(skill.id, principalId, { body: "changed" }, { liveActor: true });
+  await assert.rejects(editAs(CY), (e: Error) => e instanceof AgentLocked && e.message.includes("#design"));
+  await assert.rejects(editAs(DAN), (e: Error) => e instanceof AgentLocked && !/design|Ada|Ann|Bob/.test(e.message));
+  assert.equal((await built.app.getSkill(skill.id))?.manifest.body, "take notes");
+
+  const probe = await agentsAs(control, DAN)({ action: "edit", agent: "ada", title: "Spy" });
+  assert.equal(codeOf(probe), "not_found");
+  assert.doesNotMatch(JSON.stringify(probe), /Ada/);
+  assert.equal(codeOf(await agentsAs(control, DAN)({ action: "archive", agent: "ada" })), "not_found");
+  assert.equal(codeOf(await agentsAs(control, CY)({ action: "edit", agent: "ada", title: "Spy" })), "forbidden");
 });
 
 const turn = (actor: string, conversation: TurnRequest["conversation"], text: string): TurnRequest => ({

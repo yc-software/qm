@@ -409,10 +409,12 @@ export function createSkillMethods(
           "a skill cannot be created directly in an org or team scope — promote a published skill instead",
         );
       }
-      await assertMayInstructSkill({ homes: [homeScope] }, { id: input.principalId, live: input.liveActor === true });
+      const actor = { id: input.principalId, live: input.liveActor === true };
+      await assertMayInstructSkill({ homes: [homeScope] }, actor);
       return deps.skills.withNameLock(homeScope, name, async () => {
         const sameName = (await deps.skills.list()).filter((s) => s.scopeId === homeScope && s.manifest.name === name);
         if (sameName.some((s) => s.status !== "archived")) return null;
+        for (const s of sameName) await assertMayInstructSkill({ id: s.id, homes: [homeScope] }, actor);
         for (const s of sameName) await deps.skills.delete(s.id);
         const manifest: SkillManifest = {
           name,
