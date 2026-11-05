@@ -3758,19 +3758,19 @@ export function assertAwsPublicRouting(
   for (const name of ingress) {
     const owner = routes.get(name)!.service;
     const attachments = routingServices.get(owner)?.loadBalancers ?? [];
-    const apiPort = serviceDef("core").docker.internalPort;
-    const onApiPort = attachments.filter((item) => item.containerPort === apiPort);
-    const expectedName = awsTargetGroupName(config, name);
-    const targetArn =
-      name === CORE_API_ROUTE
-        ? onApiPort.length === 1
-          ? onApiPort[0]!.targetGroupArn
-          : undefined
-        : targetGroups.find((group) => group.TargetGroupName === expectedName)?.TargetGroupArn;
-    if (name === CORE_API_ROUTE && !targetArn) {
-      throw new Error(
-        `ECS service core must be attached to one target group on container port ${apiPort} for core's API host rules (${routes.get(name)!.hosts.join(", ")})`,
-      );
+    let targetArn: string | undefined;
+    if (name === CORE_API_ROUTE) {
+      const apiPort = serviceDef("core").docker.internalPort;
+      const onApiPort = attachments.filter((item) => item.containerPort === apiPort);
+      if (onApiPort.length !== 1) {
+        throw new Error(
+          `ECS service core must be attached to one target group on container port ${apiPort} for core's API host rules (${routes.get(name)!.hosts.join(", ")})`,
+        );
+      }
+      targetArn = onApiPort[0]!.targetGroupArn;
+    } else {
+      const expectedName = awsTargetGroupName(config, name);
+      targetArn = targetGroups.find((group) => group.TargetGroupName === expectedName)?.TargetGroupArn;
     }
     if (!targetArn || !targetGroups.some((group) => group.TargetGroupArn === targetArn)) {
       throw new Error(`target group for ${name} is missing`);
