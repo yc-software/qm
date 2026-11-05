@@ -58,7 +58,7 @@ import { configRouteOptions, createModelRoutes, type ModelRoutes } from "./model
 import { createSemanticMemory } from "./memory/semantic-memory.ts";
 import { createPostgresBrokerSessions, type BrokerSessionStore } from "./auth/broker-sessions.ts";
 import { createDirectFileUploads, type DirectFileUploads } from "./files/direct-file-upload.ts";
-import { createPostgresFileUploadStore } from "./files/file-upload-store.ts";
+import { createPostgresFileUploadStore, FILE_UPLOAD_MIGRATIONS } from "./files/file-upload-store.ts";
 import {
   createSandboxResources,
   type SandboxResource,
@@ -112,6 +112,7 @@ import {
   createPostgresMapFactory,
   type DurableMap,
   processLevelMap,
+  durableMapMigrations,
 } from "./persistence/durable-map.ts";
 import type { PersistedUiState, UiStateStore } from "./surfaces/ui-state.ts";
 import { slackUserClientFactory } from "./loops/sources/slack.ts";
@@ -134,7 +135,7 @@ import type { AuditLog } from "./audit/audit-log.ts";
 import { createPostgresAuditLog } from "./admin/postgres-audit-log.ts";
 import { createPostgresAppPageViewLog, DEPLOYMENT_TABLES, type AppPageViewLog } from "./deploy/page-views.ts";
 import type { BudgetTracker } from "./ratelimit/budget.ts";
-import { createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
+import { BUDGET_MIGRATIONS, createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
 import { createCronStore, DROP_RUN_AS_MIGRATION, type CronStore } from "./cron/cron-store.ts";
 import { RETIRED_ORIGIN_SWEEP_MIGRATION } from "./surfaces/origin-migration.ts";
 import { DROP_RECIPIENT_CONSENT_MIGRATION } from "./triggers/trigger-store.ts";
@@ -327,6 +328,7 @@ import { createRunPreemption, createWorker, SHUTDOWN_RELEASE_MS } from "./runs/w
 import {
   createNoopInstanceRegistry,
   createPostgresInstanceRegistry,
+  INSTANCE_HEARTBEAT_MIGRATIONS,
   type InstanceRegistry,
 } from "./runs/instance-registry.ts";
 import { createDrainController, type BackgroundServices, type DrainController } from "./runs/drain.ts";
@@ -535,6 +537,20 @@ export interface BuiltApp {
 
 const MEMORY_CAPTURE_ENTRY_WINDOW = 2_000;
 
+const CONFIGURED_MAPS = [
+  "sprites_initialization",
+  "render_sandbox_bases",
+  "sandbox_resource_rollout",
+  "sandbox_routing",
+  "render_deploy_credentials",
+  "render_app_storage",
+  "aws_deploy_bodies",
+  "fly_peer_claims",
+  "fly_deploy_configs",
+  "fly_deploy_ports",
+  "porter_deploy_bodies",
+];
+
 export function buildApp(
   config: Config,
   overrides: {
@@ -587,6 +603,13 @@ export function buildApp(
   const pgArtifactMap = createPostgresMapFactory(databaseUrl);
   const artifactMap = <T>(table: string, indexedFields?: readonly Extract<keyof T, string>[]): DurableMap<T> =>
     pgArtifactMap.map<T>(table, indexedFields);
+  for (const migration of [
+    ...FILE_UPLOAD_MIGRATIONS,
+    ...BUDGET_MIGRATIONS,
+    ...INSTANCE_HEARTBEAT_MIGRATIONS,
+    ...CONFIGURED_MAPS.flatMap(durableMapMigrations),
+  ])
+    pgArtifactMap.pool.registerMigration(migration);
   setProviderBaseUrls(config.providerBaseUrls);
   const unknownGatewayModels = Object.keys(config.modelGateway?.models ?? {}).filter(
     (id) => !resolveDeploymentModel(id),

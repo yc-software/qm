@@ -1,4 +1,4 @@
-import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
+import { createPgPool, type PgMigrationDefinition, withPgTransaction } from "../persistence/pg-pool.ts";
 import type { ScopeId } from "../types.ts";
 import { tenantTables } from "../tenants/migrations.ts";
 import { claimFunction, claimRows, type ClaimedRow } from "../tenants/claim.ts";
@@ -47,8 +47,7 @@ const MAX_ACTIVE_UPLOAD_BYTES = 500 * 1024 ** 3;
 const HOLDS_QUOTA =
   "actor_id=$1 AND state NOT IN ('complete','aborted','failed') AND NOT (state='pending' AND expires_at <= $2)";
 
-export function createPostgresFileUploadStore(connectionString: string): FileUploadStore {
-  const db = createPgPool(connectionString, [
+export const FILE_UPLOAD_MIGRATIONS: PgMigrationDefinition[] = [
     {
       id: "files/uploads/0001",
       statements: [
@@ -89,7 +88,10 @@ export function createPostgresFileUploadStore(connectionString: string): FileUpl
         claimFunction("claim_file_upload", "text", "SELECT tenant_id, id FROM file_uploads WHERE id = $1"),
       ],
     },
-  ]);
+];
+
+export function createPostgresFileUploadStore(connectionString: string): FileUploadStore {
+  const db = createPgPool(connectionString, FILE_UPLOAD_MIGRATIONS);
   const decode = (row: Record<string, unknown>): FileUpload => ({
     ...(row.data as FileUpload),
     state: row.state as FileUploadState,

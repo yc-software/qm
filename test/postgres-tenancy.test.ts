@@ -151,7 +151,7 @@ test("upgrading copies the existing tenant into tenants", { skip }, async () => 
   const pool = new pg.Pool({ connectionString: testBareDatabaseUrl(), max: 1 });
   try {
     const previous = SESSION_MIGRATIONS.filter(
-      (m) => !TENANCY.includes(m) && m !== TENANT_BACKFILL && !m.id.includes("-tenants/"),
+      (m) => !TENANCY.includes(m) && m !== TENANT_BACKFILL && !m.id.includes("-tenants/") && !m.id.endsWith("-claims"),
     );
     await applyPgMigrations(pool, [...DIRECTORY_MIGRATIONS, ...previous].map(definePgMigration));
     const old = (await pool.query("SELECT qm_tenant_id()::text AS id")).rows[0].id;
