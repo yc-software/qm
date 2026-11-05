@@ -1,16 +1,12 @@
+import { item } from "./item-fixture.ts";
 import assert from "node:assert/strict";
 import test, { after, beforeEach } from "node:test";
 import { browserEnv } from "./browser-env.ts";
 import type { TranscriptPage } from "../src/core-bridge.ts";
 
-const entry = (seq: number, text: string) => ({
-  seq,
-  type: seq % 2 ? "assistant" : "user",
-  createdAt: 1_700_000_000_000 + seq,
-  payload: { text },
-});
-const page = (...seqs: number[]): TranscriptPage =>
-  ({ entries: seqs.map((seq) => entry(seq, `message ${seq}`)) }) as TranscriptPage;
+const entry = (seq: number, text: string) =>
+  item(seq % 2 ? "AgentMessage" : "UserMessage", { seq, createdAt: 1_700_000_000_000 + seq, text });
+const page = (...seqs: number[]): TranscriptPage => ({ items: seqs.map((seq) => entry(seq, `message ${seq}`)) });
 
 const pin = (id: string) => ({ id, addedBy: "tester", createdAt: 1 });
 
@@ -40,8 +36,8 @@ const env = await browserEnv({
     if (id) {
       const all = transcripts.get(decodeURIComponent(id)) ?? [];
       const since = Number(url.searchParams.get("sinceSeq") ?? 0);
-      const entries = all.filter((e) => e.seq >= since).slice(-TAIL);
-      return Response.json({ entries, earlierEntries: all.length - entries.length });
+      const items = all.filter((e) => e.seq >= since).slice(-TAIL);
+      return Response.json({ items, earlierItems: all.length - items.length });
     }
     return Response.json({ contexts: [], items: [], crons: [] });
   },
@@ -138,7 +134,7 @@ test("revisiting a session mounts from cache at once, then refreshes the tail in
   assert.match(mounted(), /fresh answer/);
   assert.match(mounted(), /first answer/);
   assert.deepEqual(
-    cache.cachedTranscript("a").entries.map((e: { seq: number }) => e.seq),
+    cache.cachedTranscript("a").items.map((e: { seq: number }) => e.seq),
     [0, 1, 2, 3],
   );
 });
@@ -181,7 +177,7 @@ test("a read-only session mounts from cache and remounts with the refreshed tail
   await opening;
   await settle();
   assert.match(document.body.textContent ?? "", /late arrival/);
-  assert.equal(cache.cachedTranscript("ro").entries.length, TAIL, "the cache holds the server's tail window");
+  assert.equal(cache.cachedTranscript("ro").items.length, TAIL, "the cache holds the server's tail window");
 });
 
 test("a failed refresh keeps the cached view and drops the cache entry", async () => {

@@ -82,7 +82,7 @@ issuer = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
 const sessionSecret = "trusted-route-test-session-secret";
 Object.assign(process.env, {
   NODE_ENV: "test",
-  PORTAL_PUBLIC_URL: "http://127.0.0.1:19998",
+  PUBLIC_WEB_URL: "http://127.0.0.1:19998",
   PORTAL_SESSION_SECRET: sessionSecret,
   CORE_ORG_ID: "test-company",
   CORE_API_URL: issuer,
@@ -195,7 +195,7 @@ test(
     const session = cookies.find((cookie) => cookie.startsWith("portal_session="))!.split(";")[0]!;
     const logout = await fetch(`${base}/auth/logout`, {
       method: "POST",
-      headers: { origin: process.env.PORTAL_PUBLIC_URL!, cookie: session },
+      headers: { origin: process.env.PUBLIC_WEB_URL!, cookie: session },
     });
     assert.equal(logout.status, 200);
     assert.ok(logout.headers.getSetCookie().includes(preference));

@@ -27,7 +27,7 @@ test("getRun reports stale exactly when no live worker owns a previously-claimed
 
   assert.equal((await built.app.getRun(runId))?.stale, undefined, "a fresh pending run was never claimed — not stale");
 
-  const claimed = await built.runs.claim("w1", 60_000);
+  const claimed = (await built.runs.claim("w1", 60_000))[0] ?? null;
   assert.equal(claimed?.id, runId);
   assert.equal((await built.app.getRun(runId))?.stale, undefined, "running on a live lease — not stale");
 
@@ -44,7 +44,7 @@ test("getRun reports stale exactly when no live worker owns a previously-claimed
     "requeued after a claim (deploy drain) — awaiting re-claim",
   );
 
-  const reclaimed = await built.runs.claim("w2", 5_000);
+  const reclaimed = (await built.runs.claim("w2", 5_000))[0] ?? null;
   assert.equal(reclaimed?.id, runId);
   assert.equal((await built.app.getRun(runId))?.stale, undefined, "re-claimed on a fresh lease — not stale");
 

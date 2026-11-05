@@ -10,7 +10,7 @@ import type { MemoryRecallContext, MemoryService } from "../src/memory/memory-se
 
 const recall = async (memory: MemoryService, scope: string, context: MemoryRecallContext = {}) =>
   (await recallAcrossScopes(memory, [scope], context)).map((fact) => fact.text).join("\n");
-import type { SessionEntry } from "../src/types.ts";
+import { type NewItem, storedItem } from "../src/sessions/items.ts";
 
 const AT = Date.parse("2026-10-01T12:00:00Z");
 
@@ -48,15 +48,28 @@ test("semantic recall selects an old match, respects budget, and leaves full gre
 });
 
 test("empty/deleted notebooks and other scopes cannot return cached facts", async () => {
-  const { base, memory, calls } = await fixture();
+  const { base, memory } = await fixture();
   await base.capture("personal:a", ["browser preference"], AT);
   await recall(memory, "personal:a", { query: "verify" });
-  calls.length = 0;
   assert.equal(await recall(memory, "personal:b", { query: "verify" }), "");
-  assert.deepEqual(calls, []);
   await base.delete!("personal:a", ["1"]);
   assert.equal(await recall(memory, "personal:a", { query: "verify" }), "");
-  assert.deepEqual(calls, []);
+});
+
+test("recall embeds the query while the notebook is still loading", async () => {
+  const { base, memory, calls } = await fixture();
+  await base.capture("personal:a", ["browser preference", "release notes"], AT);
+  const facts = await base.facts!("personal:a");
+  let load!: () => void;
+  const loaded = new Promise<void>((resolve) => (load = resolve));
+  const recalled = recall(memory, "personal:a", {
+    query: "verify",
+    disclosedFacts: loaded.then(() => new Map([["personal:a", facts]])),
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(calls, [["verify"]]);
+  load();
+  assert.match(await recalled, /^- \(2026-10-01\) browser preference/);
 });
 
 test("embedding outage falls back to whole bullets, without disabling grep or writes", async () => {
@@ -82,16 +95,18 @@ test("embedding outage falls back to whole bullets, without disabling grep or wr
 });
 
 test("recall query includes bounded dialogue, not tool payloads", () => {
-  const entry = (type: string, text: string) => ({ type, payload: { text } }) as SessionEntry;
+  const entry = (item: NewItem) => storedItem(item, { sessionId: "s", seq: 1, createdAt: 1 });
   const q = memoryRecallQuery("yes, do that", [
-    entry("user", "Let's revise the portal timeout"),
-    entry("assistant", "Extend the session"),
-    entry("tool_result", "SECRET TOOL PAYLOAD"),
+    entry({ kind: "UserMessage", text: "Let's revise the portal timeout" }),
+    entry({ kind: "AgentMessage", text: "Extend the session" }),
+    entry({ kind: "ToolResult", callId: "c1", text: "SECRET TOOL PAYLOAD" }),
   ]);
   assert.match(q, /portal timeout/);
   assert.match(q, /yes, do that/);
   assert.doesNotMatch(q, /SECRET/);
-  assert.ok(memoryRecallQuery("x".repeat(10000), [entry("user", "y".repeat(10000))]).length < 4100);
+  assert.ok(
+    memoryRecallQuery("x".repeat(10000), [entry({ kind: "UserMessage", text: "y".repeat(10000) })]).length < 4100,
+  );
 });
 
 test("embedding client orders responses and normalizes vectors", async () => {

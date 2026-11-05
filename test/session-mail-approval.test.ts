@@ -1,14 +1,12 @@
+import type { NewItem } from "../src/sessions/items.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { emitEntry } from "../src/agent/turn-support.ts";
 import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import type { Agent } from "../src/agent/agent.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
@@ -82,7 +80,7 @@ async function scenario() {
       const ref = {
         current: turn.tools,
         scopeLabel: turn.scopeLabel,
-        emit: (entry: Parameters<typeof emitEntry>[1]) => emitEntry(turn, entry),
+        emit: (item: NewItem) => turn.emit(item),
         screenToolResult: turn.screenToolResult,
         pendingApprovals: [],
       };
@@ -99,14 +97,12 @@ async function scenario() {
   };
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
-  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "session-mail-")));
   const orchestrator = createOrchestrator({
     ...singleProcessDeps(),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     resolution: createResolutionService(ORG, testConfigStore(ORG), acl),
     sessions,
     runs,
-    workspace,
     files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
     sandbox: fakeSandbox(),
     auditLog,

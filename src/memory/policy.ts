@@ -1,4 +1,4 @@
-import type { ScopeId, WorkspaceLayer } from "../types.ts";
+import type { ScopeId } from "../types.ts";
 
 export type MemoryRecallMode = "off" | "writable" | "visible";
 export type MemoryCaptureMode = "off" | "writable";
@@ -18,18 +18,13 @@ export function parseMemoryCaptureMode(value: string | undefined): MemoryCapture
   return value === "off" ? "off" : DEFAULT_MEMORY_POLICY.capture;
 }
 
-export function writableMemoryScope(layers: WorkspaceLayer[], fallback: ScopeId): ScopeId {
-  return layers.find((l) => l.mode === "rw")?.scopeId ?? fallback;
-}
-
 export function recallMemoryScopes(
   policy: MemoryPolicy,
-  layers: WorkspaceLayer[],
   writableScopeId: ScopeId,
+  readOnlyScopeIds: ScopeId[],
 ): ScopeId[] {
   if (policy.recall === "off") return [];
   if (policy.recall === "writable") return [writableScopeId];
 
-  const scopes = [writableScopeId, ...layers.map((l) => l.scopeId)];
-  return [...new Set(scopes)];
+  return [...new Set([writableScopeId, ...readOnlyScopeIds])];
 }

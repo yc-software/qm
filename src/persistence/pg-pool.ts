@@ -100,6 +100,7 @@ export interface PgMigrationDefinition {
   statements: readonly string[];
   expectedChecksum?: string;
   legacyId?: string;
+  autocommit?: true;
 }
 
 export interface PgMigration extends PgMigrationDefinition {
@@ -243,10 +244,17 @@ export function pgMigrationChecksum(statements: readonly string[]): string {
     .digest("hex");
 }
 
-export function definePgMigration({ id, statements, expectedChecksum, legacyId }: PgMigrationDefinition): PgMigration {
+export function definePgMigration({
+  id,
+  statements,
+  expectedChecksum,
+  legacyId,
+  autocommit,
+}: PgMigrationDefinition): PgMigration {
   if (!/^[a-z0-9][a-z0-9._/-]*$/i.test(id) || id.includes("..")) {
     throw new Error(`pg-pool: invalid migration id ${JSON.stringify(id)}`);
   }
+  if (autocommit && legacyId) throw new Error(`pg-pool: autocommit migration ${id} cannot adopt a legacy id`);
   const normalized = statements.map((statement) => statement.trim()).filter((statement) => statement.length > 0);
   for (const statement of normalized) assertOneStatement(statement);
   const checksum = pgMigrationChecksum(normalized);
@@ -260,6 +268,7 @@ export function definePgMigration({ id, statements, expectedChecksum, legacyId }
     statements: normalized,
     checksum,
     ...(legacyId ? { legacyId } : {}),
+    ...(autocommit ? { autocommit } : {}),
   };
 }
 
@@ -299,6 +308,14 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
             `pg-pool: migration ${migration.id} checksum mismatch (database=${applied.rows[0].checksum}, source=${migration.checksum})`,
           );
         }
+        continue;
+      }
+      if (migration.autocommit) {
+        for (const statement of migration.statements) await client.query(statement);
+        await client.query(`INSERT INTO ${PG_MIGRATIONS_TABLE}(id, checksum) VALUES ($1, $2)`, [
+          migration.id,
+          migration.checksum,
+        ]);
         continue;
       }
       if (migration.statements.some((statement) => concurrentIndexName(statement))) {

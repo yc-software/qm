@@ -13,6 +13,13 @@ import { testConfig } from "./support/test-config.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { createAgentTools } from "../src/agent/agent-tools.ts";
+import type { ToolContext } from "../src/tools/primitives.ts";
+import { createSelfApiCall, type SelfApiCall } from "../src/tools/self-api.ts";
+import { SHARED_SKILL_TRIGGER_REFUSAL } from "../src/api/artifact-share.ts";
+import { createMockAgent } from "./support/mock-agent.ts";
+import { SKILL_NAME_RULE } from "../src/skills/skill-name.ts";
+import { sleep } from "../src/util/async.ts";
 
 function start() {
   const built = buildApp(
@@ -214,6 +221,33 @@ test("an archived skill can be restored by its manager", async () => {
   }
 });
 
+test("restoring an archived skill is a 409 when a live skill already has its name", async () => {
+  const srv = start();
+  try {
+    const home = scopeId("personal", "U1");
+    const old = await srv.skills.create({
+      scopeId: home,
+      manifest: { name: "recover-me", description: "old", requiredCapabilities: [], body: "# old" },
+      createdBy: "U1",
+    });
+    await srv.skills.archive(old.id);
+    await publish(srv.skills, home, "recover-me", "live");
+    const restored = await fetch(`${srv.base}/v1/skills/${old.id}/restore`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ principalId: "U1" }),
+    });
+    assert.equal(restored.status, 409);
+    const live = (await srv.skills.list()).filter(
+      (s) => s.scopeId === home && s.manifest.name === "recover-me" && s.status !== "archived",
+    );
+    assert.equal(live.length, 1);
+    assert.equal((await srv.skills.get(old.id))?.status, "archived");
+  } finally {
+    await srv.close();
+  }
+});
+
 test("an archived skill name can be reused for a replacement", async () => {
   const srv = start();
   try {
@@ -240,6 +274,33 @@ test("an archived skill name can be reused for a replacement", async () => {
     const created = (await replacement.json()) as { skill: SkillView };
     assert.notEqual(created.skill.id, oldId);
     assert.equal(await srv.skills.get(oldId), null, "the reused name retires its archived tombstone");
+  } finally {
+    await srv.close();
+  }
+});
+
+test("POST /v1/skills is a 409 when the name has a live skill beside an archived one", async () => {
+  const srv = start();
+  try {
+    const home = scopeId("personal", "U1");
+    const draft = await srv.skills.create({
+      scopeId: home,
+      manifest: { name: "watch-ci", description: "old", requiredCapabilities: [], body: "# old" },
+      createdBy: "U1",
+    });
+    await srv.skills.delete(draft.id);
+    await srv.skills.restore({ ...draft, id: "00000000-0000-4000-8000-000000000000", status: "archived" });
+    await publish(srv.skills, home, "watch-ci", "live");
+    const res = await fetch(`${srv.base}/v1/skills`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ principalId: "U1", name: "watch-ci", description: "dup", body: "# dup" }),
+    });
+    assert.equal(res.status, 409);
+    const live = (await srv.skills.list()).filter(
+      (s) => s.scopeId === home && s.manifest.name === "watch-ci" && s.status !== "archived",
+    );
+    assert.equal(live.length, 1);
   } finally {
     await srv.close();
   }
@@ -383,6 +444,42 @@ test("POST /v1/skills rejects a duplicate name in the caller's personal scope wi
   }
 });
 
+test("concurrent POST /v1/skills of one name in one scope save it once and 409 the rest", async () => {
+  const srv = start();
+  const list = srv.skills.list;
+  srv.skills.list = async () => {
+    const rows = await list();
+    await sleep(50);
+    return rows;
+  };
+  try {
+    const statuses = await Promise.all(
+      Array.from({ length: 5 }, (_, i) =>
+        fetch(`${srv.base}/v1/skills`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            principalId: "U1",
+            name: "watch-ci",
+            description: `attempt ${i}`,
+            body: "# watch-ci",
+          }),
+        }).then((res) => res.status),
+      ),
+    );
+    assert.deepEqual(
+      statuses.toSorted((a, b) => a - b),
+      [201, 409, 409, 409, 409],
+    );
+    const rows = (await srv.skills.list()).filter(
+      (s) => s.scopeId === scopeId("personal", "U1") && s.manifest.name === "watch-ci",
+    );
+    assert.equal(rows.length, 1);
+  } finally {
+    await srv.close();
+  }
+});
+
 test("POST /v1/skills is a 400 when a required field is missing or blank", async () => {
   const srv = start();
   try {
@@ -432,6 +529,7 @@ async function startSecure() {
   const server = createServer(built.app, {
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: SECRET,
+    config: built.config,
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -452,7 +550,32 @@ async function startSecure() {
     skills: built.skills,
     directory: built.directory,
     sessions: built.sessions,
+    config: built.config,
     close: () => new Promise<void>((r) => server.close(() => r())),
+  };
+}
+
+function skillsDefinition(selfApi?: SelfApiCall) {
+  return createAgentTools(
+    { current: (selfApi ? { selfApi } : {}) as unknown as ToolContext },
+    {
+      controlTools: true,
+    },
+  ).find((t) => t.name === "skills")!;
+}
+
+function skillsActions(selfApi?: SelfApiCall) {
+  const { parameters } = skillsDefinition(selfApi) as unknown as {
+    parameters: { properties: { action: { anyOf: Array<{ const: string }> } } };
+  };
+  return parameters.properties.action.anyOf.map((a) => a.const);
+}
+
+function skillsTool(selfApi?: SelfApiCall) {
+  const tool = skillsDefinition(selfApi);
+  return async (args: Record<string, unknown>) => {
+    const result = await tool.execute("call", args, undefined, undefined, {} as never);
+    return (result.content[0] as { text: string }).text;
   };
 }
 
@@ -1103,5 +1226,185 @@ test("skill detail and restore capability calls hide other principals' skills an
     assert.equal((await srv.skills.get(skill.id))?.status, "archived");
   } finally {
     await srv.close();
+  }
+});
+
+test("the skills tool saves a skill into the turn's scope and edits it through the skill API", async () => {
+  const srv = await startSecure();
+  try {
+    await srv.directory.replaceChannels(
+      [{ channelId: "C9", name: "avery-jordan", isPrivate: true }],
+      [
+        { channelId: "C9", principalId: "avery" },
+        { channelId: "C9", principalId: "jordan" },
+      ],
+    );
+    const skills = skillsTool(createSelfApiCall(srv.base, await srv.cap("avery", scopeId("channel", "C9"))));
+    const saved = await skills({
+      action: "save",
+      name: "investor-update",
+      description: "draft the weekly investor update",
+      body: "# investor-update",
+    });
+    const sk = (await srv.skills.list()).find((s) => s.manifest.name === "investor-update");
+    assert.ok(sk, saved);
+    assert.equal(sk.scopeId, scopeId("channel", "C9"));
+    assert.equal(sk.createdBy, "avery");
+    assert.equal(sk.status, "published");
+    assert.match(saved, new RegExp(`Saved skill investor-update \\(id ${sk.id}`));
+
+    const jordan = skillsTool(createSelfApiCall(srv.base, await srv.cap("jordan", scopeId("channel", "C9"))));
+    const edited = await jordan({ action: "edit", id: sk.id, body: "# investor-update v2" });
+    assert.match(edited, /^Updated skill investor-update/);
+    assert.equal((await srv.skills.get(sk.id))!.manifest.body, "# investor-update v2");
+    const version = (await srv.skills.get(sk.id))!.version;
+    assert.match(await jordan({ action: "edit", id: sk.id }), /^\[error\] description or body required \(HTTP 400/);
+    assert.match(
+      await jordan({ action: "edit", id: sk.id, description: " ", body: "# investor-update v3" }),
+      /^\[error\] description and body can't be blank \(HTTP 400/,
+    );
+    assert.equal(await jordan({ action: "edit", id: ".." }), "[error] Invalid API path: /v1/skills/..");
+    assert.equal((await srv.skills.get(sk.id))!.version, version);
+
+    assert.match(
+      await skills({ action: "save", name: " padded-name\n", description: "d", body: "# b" }),
+      /^Saved skill padded-name \(/,
+    );
+    const again = await skills({ action: "save", name: "investor-update", description: "d", body: "# b" });
+    assert.match(again, /already exists here/);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("the skills tool cannot save or edit where the skill API refuses", async () => {
+  const srv = await startSecure();
+  try {
+    await srv.directory.replaceChannels(
+      [{ channelId: "C9", name: "avery-jordan", isPrivate: true }],
+      [{ channelId: "C9", principalId: "avery" }],
+    );
+    const trigger = skillsTool(createSelfApiCall(srv.base, await srv.cap("avery", scopeId("channel", "C9"), false)));
+    assert.ok(
+      (await trigger({ action: "save", name: "auto-thing", description: "d", body: "# b" })).startsWith(
+        `[error] ${SHARED_SKILL_TRIGGER_REFUSAL} (HTTP 403`,
+      ),
+    );
+
+    await srv.config.setSecurityPosture(scopeId("personal", "strict-user"), "strict");
+    const strict = skillsTool(createSelfApiCall(srv.base, await srv.cap("strict-user")));
+    assert.match(
+      await strict({ action: "save", name: "strict-thing", description: "d", body: "# b" }),
+      /^\[error\] Strict posture blocks direct control-plane mutations \(HTTP 403/,
+    );
+
+    const id = await seedChannelSkill(srv);
+    const outsider = skillsTool(createSelfApiCall(srv.base, await srv.cap("mallory")));
+    assert.match(await outsider({ action: "edit", id, description: "taken over" }), /isn't yours to edit/);
+
+    assert.ok(
+      (
+        await skillsTool(createSelfApiCall(srv.base, await srv.cap("namer")))({
+          action: "save",
+          name: "Weekly Investor Update",
+          description: "d",
+          body: "# b",
+        })
+      ).startsWith(`[error] ${SKILL_NAME_RULE} (HTTP 400`),
+    );
+    assert.deepEqual(skillsActions(), ["list", "search", "read", "share"]);
+    assert.equal(
+      await skillsTool(async () => {
+        throw new Error("connect ECONNREFUSED");
+      })({ action: "save", name: "unreachable", description: "d", body: "# b" }),
+      "[error] connect ECONNREFUSED",
+    );
+    assert.equal(
+      await skillsTool(async () => ({ status: 502, body: "<html>bad gateway</html>", requestId: "r1" }))({
+        action: "edit",
+        id,
+        body: "# b",
+      }),
+      "[error] <html>bad gateway</html> (HTTP 502, request r1)",
+    );
+    const names = (await srv.skills.list()).map((s) => s.manifest.name);
+    for (const name of ["auto-thing", "strict-thing", "Weekly Investor Update"]) assert.ok(!names.includes(name), name);
+    assert.notEqual((await srv.skills.get(id))!.manifest.description, "taken over");
+  } finally {
+    await srv.close();
+  }
+});
+
+test("a turn's skills tool saves with that turn's own capability, and read-only and strict-posture turns get no save", async () => {
+  const SECRET = "skills-turn-cap-secret".repeat(3);
+  const mock = createMockAgent();
+  const seen: ToolContext[] = [];
+  const built = buildApp(
+    testConfig({
+      dataDir: mkdtempSync(join(tmpdir(), "skills-turn-")),
+      orgId: "acme",
+      seedSkills: false,
+      signingSecret: SECRET,
+      capabilitySecret: SECRET,
+      apiBaseUrl: "http://core.example.test",
+    }),
+    {
+      agent: {
+        ...mock,
+        runTurn: (input) => {
+          seen.push(input.tools);
+          return mock.runTurn(input);
+        },
+      },
+    },
+  );
+  const server = createServer(built.app, {
+    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+    signingSecret: SECRET,
+    capabilitySecret: SECRET,
+    config: built.config,
+  });
+  server.listen(0);
+  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (input, init) => realFetch(String(input).replace("http://core.example.test", base), init);
+  try {
+    await built.directory.replaceChannels(
+      [{ channelId: "C9", name: "avery-jordan", isPrivate: true }],
+      [{ channelId: "C9", principalId: "avery" }],
+    );
+    const avery = { externalId: "avery" };
+    const turn = (readOnly: boolean, label = readOnly ? "read" : "live") =>
+      built.app.turn({
+        surface: "test",
+        actor: avery,
+        conversation: {
+          kind: "channel",
+          threadRef: `ch:C9:${label}`,
+          channelRef: "C9",
+          audience: [avery],
+          publishMembers: [avery],
+        },
+        text: "hello",
+        origin: { kind: "human" },
+        ...(readOnly ? { readOnly: true } : {}),
+      });
+    assert.equal((await turn(false)).status, "ok");
+    assert.equal((await turn(true)).status, "ok");
+    const [live, readOnly] = seen;
+    assert.equal(readOnly!.selfApi, undefined);
+    assert.match(
+      await skillsTool(live!.selfApi)({ action: "save", name: "from-a-turn", description: "d", body: "# b" }),
+      /^Saved skill from-a-turn/,
+    );
+    const sk = (await built.skills.list()).find((s) => s.manifest.name === "from-a-turn");
+    assert.equal(sk?.scopeId, scopeId("channel", "C9"));
+    assert.equal(sk?.createdBy, "avery");
+    await built.config.setSecurityPosture(scopeId("channel", "C9"), "strict");
+    assert.equal((await turn(false, "strict")).status, "ok");
+    assert.equal(seen[2]!.selfApi, undefined);
+  } finally {
+    globalThis.fetch = realFetch;
+    await new Promise<void>((r) => server.close(() => r()));
   }
 });

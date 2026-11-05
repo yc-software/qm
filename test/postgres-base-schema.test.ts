@@ -40,6 +40,10 @@ test("a fresh database gets the base schema without items.target_seq", { skip },
       "SELECT 1 FROM information_schema.columns WHERE table_name = 'items' AND column_name = 'target_seq'",
     );
     assert.equal(column.rowCount, 0);
+    assert.equal(
+      await present(admin, "pg_get_indexdef('session_llm_requests_session_spend_recovery'::regclass)"),
+      "CREATE INDEX session_llm_requests_session_spend_recovery ON public.session_llm_requests USING btree (session_id, created_at) WHERE (usage_json IS NOT NULL)",
+    );
   });
 });
 
@@ -48,17 +52,34 @@ test("a fully migrated database skips the base schema and drops only the retired
     await admin.query(`CREATE TABLE qm_schema_migrations(
       id TEXT PRIMARY KEY, checksum TEXT NOT NULL, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
     await admin.query(`INSERT INTO qm_schema_migrations(id, checksum) VALUES
-      ('sessions/store/0046-spend-days-cron-rebuild', 'x'), ('runs/store/0010-drop-turn-metrics', 'x')`);
-    await admin.query("CREATE TABLE sessions(id TEXT PRIMARY KEY)");
-    await admin.query("CREATE TABLE runs(id TEXT PRIMARY KEY)");
+      ('sessions/store/0046-spend-days-cron-rebuild', 'x'), ('runs/store/0010-drop-turn-metrics', 'x'),
+      ('directory/store/0005', 'x')`);
+    await admin.query("CREATE TABLE directory_sync(org_id TEXT PRIMARY KEY, channel_members_synced BOOLEAN)");
+    await admin.query("CREATE TABLE sessions(id TEXT PRIMARY KEY, thread_ref TEXT, spawn_meta TEXT)");
+    await admin.query(
+      "CREATE TABLE runs(id TEXT PRIMARY KEY, session_id TEXT, request TEXT, result TEXT, created_at BIGINT, seq BIGINT)",
+    );
     await admin.query("CREATE EXTENSION IF NOT EXISTS btree_gin");
     await admin.query(`CREATE TABLE items(seq BIGINT, tenant_id TEXT, kind TEXT, variant TEXT, text TEXT,
       search TSVECTOR, target_seq BIGINT,
       CONSTRAINT items_target_seq_kind CHECK (target_seq IS NULL OR kind = 'Retraction'))`);
     await admin.query("CREATE TABLE tool_calls(run_id TEXT)");
+    await admin.query("CREATE TABLE session_llm_requests(session_id TEXT, created_at BIGINT, usage_json TEXT)");
+    await admin.query(`CREATE INDEX session_llm_requests_session_spend_recovery
+      ON session_llm_requests(session_id, created_at) WHERE usage_json IS NOT NULL`);
     await admin.query("CREATE TABLE qm_tenant(id UUID PRIMARY KEY)");
     await admin.query("CREATE FUNCTION safe_json(t text) RETURNS json LANGUAGE sql AS 'SELECT t::json'");
+    await admin.query(`CREATE TABLE participants(session_id TEXT, principal_id TEXT, valid_from BIGINT NOT NULL,
+      valid_to BIGINT, valid_from_seq INT, valid_to_seq INT)`);
+    await admin.query(
+      `INSERT INTO participants VALUES ('s1', 'member', 5, NULL, 3, NULL), ('s1', 'removed', 5, 9, 3, 7)`,
+    );
     await migrate(url);
+    assert.deepEqual(
+      (await admin.query("SELECT principal_id FROM participants")).rows.map((row) => row.principal_id),
+      ["member"],
+    );
+    await admin.query("INSERT INTO participants(session_id, principal_id) VALUES ('s1', 'joined')");
     const columns = await admin.query(
       "SELECT column_name FROM information_schema.columns WHERE table_name = 'items' ORDER BY ordinal_position",
     );
@@ -69,6 +90,13 @@ test("a fully migrated database skips the base schema and drops only the retired
     assert.equal(await present(admin, "to_regclass('blobs') IS NULL"), true);
     assert.equal(await present(admin, "to_regclass('tool_calls') IS NULL"), true);
     assert.equal(await present(admin, "to_regprocedure('safe_json(text)') IS NULL"), true);
+    assert.equal(
+      await present(
+        admin,
+        "EXISTS (SELECT 1 FROM qm_schema_migrations WHERE id = 'sessions/store/0051-spend-recovery-index')",
+      ),
+      true,
+    );
   });
 });
 

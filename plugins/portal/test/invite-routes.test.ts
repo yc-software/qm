@@ -40,7 +40,7 @@ await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
 const upstreamUrl = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
 Object.assign(process.env, {
   NODE_ENV: "test",
-  PORTAL_PUBLIC_URL: origin,
+  PUBLIC_WEB_URL: origin,
   PORTAL_SESSION_SECRET: sessionSecret,
   CORE_SIGNING_SECRET: coreSecret,
   CORE_ORG_ID: "invite-test",

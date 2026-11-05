@@ -11,8 +11,8 @@ const config: QmConfig = {
   orgId: "acme",
   publicUrl: "https://agent.acme.example",
   target: "aws",
-  services: ["core", "web-ui"],
-  plugins: [],
+  services: ["core"],
+  plugins: [{ name: "linear", image: "ghcr.io/acme/linear:1" }],
   skills: [],
   env: {},
   imageOverrides: {},
@@ -26,7 +26,7 @@ const config: QmConfig = {
     networking: { cloudMapNamespace: "acme.internal" },
     services: {
       core: { ecrRepository: "acme-core", ecsService: "acme-core", cpu: 2048, memory: 4096 },
-      "web-ui": { ecrRepository: "acme-web", ecsService: "acme-web", cpu: 256, memory: 512 },
+      linear: { ecrRepository: "acme-web", ecsService: "acme-web", cpu: 256, memory: 512 },
     },
   },
 };

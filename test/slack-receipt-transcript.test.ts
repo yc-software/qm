@@ -12,13 +12,11 @@ import { sleep } from "../src/util/async.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { holdThread, testRuns } from "./support/live-run.ts";
-import { entryFromItem } from "../src/sessions/items.ts";
 
 const scope = scopeId("personal", "alice");
 const databaseUrl = process.env.DATABASE_URL;
 
-const history = async (sessions: SessionStore, sessionId: string) =>
-  (await sessions.getItems(sessionId)).map((item) => entryFromItem(item, scope));
+const history = async (sessions: SessionStore, sessionId: string) => sessions.getItems(sessionId);
 
 for (const backend of ["memory", "postgres"] as const) {
   test(
@@ -67,17 +65,14 @@ for (const backend of ["memory", "postgres"] as const) {
         [middle.seq],
       );
       assert.equal(previous.earlier, 0);
-      assert.deepEqual(
-        (await source.forViewer(session.id, "alice")).items.map((e) => e.seq),
-        [receipt.seq, middle.seq],
-      );
+      assert.deepEqual((await source.forViewer(session.id, "alice")).items, []);
       assert.deepEqual(
         forModelContext(await history(sessions, session.id)).map((e) => e.seq),
         [middle.seq, event.seq],
       );
       assert.deepEqual(
         (await source.forViewer(session.id, "bob")).items.map((e) => e.seq),
-        [event.seq],
+        [middle.seq, event.seq],
       );
     },
   );

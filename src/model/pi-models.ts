@@ -21,6 +21,7 @@ import {
 import { MODEL_REGISTRY, type ModelEntry } from "./model-registry.ts";
 import { providerBaseUrl } from "./provider-endpoints.ts";
 import { type CustomRuntimeModel, isCustomModelId, resolveCustomModel } from "./custom-providers.ts";
+import type { ProviderKeys } from "./model-runtime.ts";
 
 const getModel = getBuiltinModel as unknown as (provider: string, id: string) => Model<Api> | undefined;
 
@@ -32,6 +33,23 @@ const CODEX_SUBSCRIPTION_PREFIX = "codex/";
 
 export function codexSubscriptionModelId(id: string): string {
   return id.startsWith(CODEX_SUBSCRIPTION_PREFIX) ? id : CODEX_SUBSCRIPTION_PREFIX + id;
+}
+function subscriptionServedId(id: string): string {
+  const subscription = codexSubscriptionModelId(id);
+  return resolveModel(subscription, false)?.provider === CODEX_SUBSCRIPTION_PROVIDER ? subscription : id;
+}
+export function personalModelId(id: string, keys: ProviderKeys): string {
+  return keys[CODEX_SUBSCRIPTION_PROVIDER] ? subscriptionServedId(id) : id;
+}
+export function companyModelId(id: string, providers: Pick<ModelProviderAvailability, "codexOAuth">): string {
+  if (
+    !providers.codexOAuth ||
+    resolveModel(id)?.provider !== "openai" ||
+    isOverlayModel(id) ||
+    modelRequestOverrides(id)
+  )
+    return id;
+  return subscriptionServedId(id);
 }
 export function codexProviderModelId(id: string): string {
   return id.startsWith(CODEX_SUBSCRIPTION_PREFIX) ? id.slice(CODEX_SUBSCRIPTION_PREFIX.length) : id;

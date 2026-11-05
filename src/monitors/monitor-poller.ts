@@ -159,6 +159,7 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
       fireKey,
       surface: "monitor",
       threadRef: m.threadRef,
+      redrivesHandOff: true,
       ...(m.destination ? { destination: m.destination } : {}),
       ...(withErrorNotice
         ? {
@@ -290,7 +291,7 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
         let handle = handles.get(targetKey);
         if (!handle) {
           try {
-            handle = await sandbox.provision([{ scopeId: rec.scopeId, mode: "rw", mountPath: "" }], {
+            handle = await sandbox.provision(rec.scopeId, {
               sandboxId: rec.sandboxId,
             });
           } catch (e) {

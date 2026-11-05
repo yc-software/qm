@@ -59,6 +59,7 @@ import {
   Pin,
   Radar,
   RefreshCw,
+  RotateCcw,
   Target,
   Rocket,
   ScrollText,
@@ -72,11 +73,12 @@ import {
   continuableMessages,
   hasRecordedRunReply,
   messagesWithStreaming,
-  userEntryMessage,
+  userItemMessage,
   appendConsumedSteers,
   withBase,
   type SessionPin,
   activeRunForThread,
+  stopThreadRun,
   api,
   approvalBlocksComposer,
   createRunSlot,
@@ -86,8 +88,8 @@ import {
   runIsTerminal,
   signalLiveRun,
   attachPendingApprovals,
-  entriesToMessages,
-  fetchEntry,
+  itemsToMessages,
+  fetchItem,
   fetchTranscript,
   fetchSessionApprovals,
   currentEarlierCount,
@@ -95,7 +97,7 @@ import {
   forkCutSeq,
   forkSession,
   cancelSessionGoal,
-  inheritedRefreshEntries,
+  inheritedRefreshItems,
   inheritedTranscript,
   loadInheritedTranscript,
   makeCoreStreamFn,
@@ -115,9 +117,7 @@ import {
   type PendingApproval,
   type SessionBackgroundOutput,
   type SessionBackgroundView,
-  type SessionEntry,
   type SubagentMailRef,
-  type ToolActivity,
   type TranscriptPage,
   type TurnOptions,
   type TurnRuntime,
@@ -129,8 +129,12 @@ import {
 } from "./core-bridge";
 import {
   buildTimeline,
-  thinkingStepKey,
+  rowArgs,
+  rowTool,
+  toolBody,
+  toolCallArguments,
   messageWorkTimeline,
+  retractedReplies,
   workTimelineSegments,
   streamedAnswer,
   currentTextPhase,
@@ -142,6 +146,7 @@ import {
   type ToolPayload,
   type ToolRowModel,
 } from "./timeline";
+import { activityItems, retractedReason, type Item } from "./items";
 import "./slack-setup";
 import { connectorLinksIn, stripConnectorLinks, type ConnectorLink } from "./connector-link";
 import { deepLinkPath, sessionLink, UI_BASE } from "./deep-link";
@@ -167,7 +172,7 @@ import {
   workingWave,
 } from "./ui";
 import { icon } from "./icons";
-import { createLiveStepLine, currentStep, preStepWork } from "./live-step";
+import { checkedReplyStep, createLiveStepLine, currentStep, preStepWork } from "./live-step";
 import { appState, renderSidebarTop, switchView, syncUrlFromState } from "./shell";
 import { contextsState, scopeTitle } from "./contexts";
 import { openProjectPage, scopeToolCount, sessionTopbarTpl, setScopedSession } from "./session-scope";
@@ -199,15 +204,7 @@ import {
 } from "./session-list";
 import { liveTurnThreadRef } from "./working-dot";
 import { goalElapsedLabel, goalObjectiveLabel, goalWorkedLabel, type GoalStripState } from "./goal-strip";
-import {
-  ackKey,
-  peekLines,
-  subagentRows,
-  subagentSummary,
-  visibleSubagents,
-  type PeekLine,
-  type SubagentRow,
-} from "./subagent-activity";
+import { ackKey, subagentRows, subagentSummary, visibleSubagents, type SubagentRow } from "./subagent-activity";
 import { createSwarmStrip } from "./swarm-strip.ts";
 import { newChatDraftKey, saveDraft, storedDraft } from "./drafts";
 import { createForkOriginController, forkOriginView } from "./fork-origin";
@@ -226,6 +223,12 @@ import { uiCanvasPanel } from "./ui-canvas";
 installMarkdownSanitizer();
 
 const detachedAgents = new WeakSet<Agent>();
+interface SubagentStop {
+  state: "stopping" | "failed";
+  run: number | undefined;
+  error?: string;
+}
+const SUBAGENT_STOP_LABEL = { idle: "Stop", stopping: "Stopping…", failed: "Couldn't stop" };
 interface SettledRowKey {
   day: string;
   index: number;
@@ -316,7 +319,7 @@ export function createChatSurface(
     earlierCount: 0,
     loadingEarlier: false,
     forkSession: null as CoreSession | null,
-    inheritedMessages: [] as ReturnType<typeof entriesToMessages>,
+    inheritedMessages: [] as ReturnType<typeof itemsToMessages>,
     inheritedExpanded: false,
     inheritedLoaded: false,
     pins: [] as SessionPin[],
@@ -338,10 +341,10 @@ export function createChatSurface(
       if (!activity) continue;
       let steers = steerMessageCache.get(activity);
       if (!steers) {
-        steers = activity.flatMap((entry) => {
-          if (entry.type !== "user") return [];
-          const user = userEntryMessage(entry);
-          return user?.steered ? [{ seq: entry.seq, message: user as AgentMessage }] : [];
+        steers = activityItems(activity).flatMap((item) => {
+          if (item.kind !== "SteeringMessage") return [];
+          const user = userItemMessage(item);
+          return user ? [{ seq: item.seq, message: user as AgentMessage }] : [];
         });
         steerMessageCache.set(activity, steers);
       }
@@ -401,8 +404,8 @@ export function createChatSurface(
     load: async () => {
       const session = chatState.forkSession;
       if (!session) return [];
-      const entries = await loadInheritedTranscript(session, [], transcriptFetcher);
-      return entriesToMessages(entries, transcriptModel());
+      const items = await loadInheritedTranscript(session, [], transcriptFetcher);
+      return itemsToMessages(items, transcriptModel());
     },
     navigate: async () => {
       const sourceId = chatState.forkSession?.forkedFrom?.sessionId;
@@ -544,10 +547,10 @@ export function createChatSurface(
     threadRef: string,
     sessionId: string | null,
     scopeId: string | null,
-    messages: ReturnType<typeof entriesToMessages>,
+    messages: ReturnType<typeof itemsToMessages>,
     contextName: string | null = null,
     session?: CoreSession,
-    inheritedMessages: ReturnType<typeof entriesToMessages> = [],
+    inheritedMessages: ReturnType<typeof itemsToMessages> = [],
   ): void {
     const container = ctx.claimContainer();
     if (!container) return;
@@ -643,7 +646,7 @@ export function createChatSurface(
         }
         if (agent !== chatState.agent) return;
         adoptActiveSessionFromList(agent);
-        await refreshTranscriptFromEntries(agent);
+        await refreshTranscriptFromItems(agent);
         void ctx.composer.refreshRuntimeSelection(scopeId, agent, true);
         void followNextQueuedRun(agent, threadRef, normalStreamFn, onWork);
         if (wasUnsaved && chatState.sessionId) void settleNewSessionTitle(agent, threadRef);
@@ -672,7 +675,7 @@ export function createChatSurface(
     onWork: (work: WorkBlock) => void,
     sessionId: string | null,
     scopeId: string | null,
-    messages: ReturnType<typeof entriesToMessages>,
+    messages: ReturnType<typeof itemsToMessages>,
   ): boolean {
     if (ctx.inbox || appState.me?.welcomeCohort || appEditSlug(threadRef, appState.me?.user)) return false;
     if (
@@ -761,7 +764,7 @@ export function createChatSurface(
     }
     const agent = chatState.agent;
     if (!agent || threadRef !== chatState.threadRef || agent.state.isStreaming) return;
-    void refreshTranscriptFromEntries(agent);
+    void refreshTranscriptFromItems(agent);
   }
 
   async function stopLiveRun(): Promise<void> {
@@ -847,7 +850,7 @@ export function createChatSurface(
         } catch {
           void 0;
         }
-        await refreshTranscriptFromEntries(agent);
+        await refreshTranscriptFromItems(agent);
       }
       const active = chatState.agent;
       if (active) {
@@ -921,8 +924,8 @@ export function createChatSurface(
 
   let transcriptRefresh: Promise<void> = Promise.resolve();
 
-  function refreshTranscriptFromEntries(agent: Agent): Promise<void> {
-    const refresh = replaceTranscriptFromEntries(agent);
+  function refreshTranscriptFromItems(agent: Agent): Promise<void> {
+    const refresh = replaceTranscriptFromItems(agent);
     transcriptRefresh = refresh;
     return refresh;
   }
@@ -936,8 +939,8 @@ export function createChatSurface(
   }
 
   function pageMessages(page: TranscriptPage): AgentMessage[] {
-    const split = inheritedTranscript(chatState.forkSession ?? {}, page.entries ?? []);
-    return entriesToMessages(split.current, transcriptModel());
+    const split = inheritedTranscript(chatState.forkSession ?? {}, page.items);
+    return itemsToMessages(split.current, transcriptModel());
   }
 
   function commitTranscriptPage(agent: Agent, page: TranscriptPage, messages: AgentMessage[]): void {
@@ -945,11 +948,11 @@ export function createChatSurface(
     chatState.pins = page.pins ?? [];
     chatState.goal = page.goal ?? null;
     if (page.runtime) chatState.turnRuntime = page.runtime;
-    const refreshedInherited = inheritedRefreshEntries(fork, page.entries ?? [], chatState.inheritedLoaded);
-    if (refreshedInherited) chatState.inheritedMessages = entriesToMessages(refreshedInherited, transcriptModel());
+    const refreshedInherited = inheritedRefreshItems(fork, page.items, chatState.inheritedLoaded);
+    if (refreshedInherited) chatState.inheritedMessages = itemsToMessages(refreshedInherited, transcriptModel());
     agent.state.messages = messages;
     approvalsEpoch++;
-    chatState.earlierCount = currentEarlierCount(fork, page.earlierEntries ?? 0);
+    chatState.earlierCount = currentEarlierCount(fork, page.earlierItems ?? 0);
     chatState.transcriptAnchorSeq = pageAnchor(page);
   }
 
@@ -992,7 +995,7 @@ export function createChatSurface(
     return refresh;
   }
 
-  async function replaceTranscriptFromEntries(agent: Agent): Promise<void> {
+  async function replaceTranscriptFromItems(agent: Agent): Promise<void> {
     const sessionId = chatState.sessionId;
     if (!sessionId || agent !== chatState.agent || agent.state.isStreaming) return drawActiveChat(agent);
     const generation = ++transcriptRefreshGeneration;
@@ -1023,7 +1026,7 @@ export function createChatSurface(
       const anchor = chatState.transcriptAnchorSeq;
       const page = await transcriptFetcher(sessionId, anchor !== null ? { sinceSeq: anchor } : undefined);
       if (!isCurrent()) return;
-      if (last?.stopReason === "error" && !hasRecordedRunReply(page.entries ?? [], last.interruptedRunId!))
+      if (last?.stopReason === "error" && !hasRecordedRunReply(page.items, last.interruptedRunId!))
         return drawActiveChat(agent);
       const messages = pageMessages(page);
       await syncPendingApprovals(agent, messages);
@@ -1078,7 +1081,7 @@ export function createChatSurface(
     } finally {
       if (agent === chatState.agent) {
         agent.streamFn = normalStreamFn;
-        await refreshTranscriptFromEntries(agent);
+        await refreshTranscriptFromItems(agent);
       }
     }
   }
@@ -1117,7 +1120,7 @@ export function createChatSurface(
       agent.state.isStreaming
     )
       return false;
-    await refreshTranscriptFromEntries(agent);
+    await refreshTranscriptFromItems(agent);
     if (agent !== chatState.agent || agent.state.isStreaming) return false;
     if (!initialRun) initialRun = await api<RunPoll>(`/api/runs/${encodeURIComponent(runId)}`);
     if (agent !== chatState.agent || agent.state.isStreaming) return false;
@@ -1138,7 +1141,7 @@ export function createChatSurface(
     } finally {
       if (agent === chatState.agent) {
         agent.streamFn = normalStreamFn;
-        await refreshTranscriptFromEntries(agent);
+        await refreshTranscriptFromItems(agent);
       }
     }
     return true;
@@ -1221,10 +1224,10 @@ export function createChatSurface(
 
   function mountReadOnly(
     s: CoreSession,
-    messages: ReturnType<typeof entriesToMessages>,
+    messages: ReturnType<typeof itemsToMessages>,
     earlierCount = 0,
     anchorSeq: number | null = null,
-    inheritedMessages: ReturnType<typeof entriesToMessages> = [],
+    inheritedMessages: ReturnType<typeof itemsToMessages> = [],
   ): void {
     const container = ctx.claimContainer();
     if (!container) return;
@@ -1314,16 +1317,16 @@ export function createChatSurface(
                               const scroller = container?.querySelector<HTMLElement>(".chat-scroll");
                               const priorHeight = scroller?.scrollHeight ?? 0;
                               const priorTop = scroller?.scrollTop ?? 0;
-                              const rawRemaining = page.earlierEntries ?? 0;
+                              const rawRemaining = page.earlierItems ?? 0;
                               const remaining = currentEarlierCount(s, rawRemaining);
-                              const split = inheritedTranscript(s, page.entries ?? []);
+                              const split = inheritedTranscript(s, page.items);
                               mountReadOnly(
                                 s,
-                                [...entriesToMessages(split.current, transcriptModel()), ...messages],
+                                [...itemsToMessages(split.current, transcriptModel()), ...messages],
                                 remaining,
-                                rawRemaining > 0 ? (page.entries?.[0]?.seq ?? null) : null,
+                                rawRemaining > 0 ? (page.items?.[0]?.seq ?? null) : null,
                                 [
-                                  ...entriesToMessages(split.inherited, transcriptModel()),
+                                  ...itemsToMessages(split.inherited, transcriptModel()),
                                   ...chatState.inheritedMessages,
                                 ],
                               );
@@ -1403,13 +1406,13 @@ export function createChatSurface(
   }
 
   function mountReadOnlyPage(s: CoreSession, page: TranscriptPage): void {
-    const split = inheritedTranscript(s, page.entries ?? []);
+    const split = inheritedTranscript(s, page.items);
     mountReadOnly(
       s,
-      entriesToMessages(split.current, transcriptModel()),
-      currentEarlierCount(s, page.earlierEntries ?? 0),
-      page.entries?.[0]?.seq ?? null,
-      entriesToMessages(split.inherited, transcriptModel()),
+      itemsToMessages(split.current, transcriptModel()),
+      currentEarlierCount(s, page.earlierItems ?? 0),
+      page.items?.[0]?.seq ?? null,
+      itemsToMessages(split.inherited, transcriptModel()),
     );
     setPins(page.pins ?? []);
   }
@@ -1564,19 +1567,19 @@ export function createChatSurface(
       const page = await fetchTranscript(sessionId, { beforeSeq: anchor, tailTurns: TAIL_TURNS });
       if (agent !== chatState.agent || sessionId !== chatState.sessionId || anchor !== chatState.transcriptAnchorSeq)
         return;
-      const split = inheritedTranscript(chatState.forkSession ?? {}, page.entries ?? []);
-      const earlierMessages = entriesToMessages(split.current, transcriptModel());
+      const split = inheritedTranscript(chatState.forkSession ?? {}, page.items);
+      const earlierMessages = itemsToMessages(split.current, transcriptModel());
       if (!chatState.inheritedLoaded)
         chatState.inheritedMessages = [
-          ...entriesToMessages(split.inherited, transcriptModel()),
+          ...itemsToMessages(split.inherited, transcriptModel()),
           ...chatState.inheritedMessages,
         ];
       const scroller = chatState.host?.querySelector<HTMLElement>(".chat-scroll");
       const priorHeight = scroller?.scrollHeight ?? 0;
       const priorTop = scroller?.scrollTop ?? 0;
       agent.state.messages = [...earlierMessages, ...agent.state.messages];
-      const rawRemaining = page.earlierEntries ?? 0;
-      chatState.transcriptAnchorSeq = rawRemaining > 0 ? (page.entries?.[0]?.seq ?? null) : null;
+      const rawRemaining = page.earlierItems ?? 0;
+      chatState.transcriptAnchorSeq = rawRemaining > 0 ? (page.items?.[0]?.seq ?? null) : null;
       chatState.earlierCount = currentEarlierCount(chatState.forkSession ?? {}, rawRemaining);
       chatState.loadingEarlier = false;
       drawActiveChat(agent);
@@ -1929,10 +1932,8 @@ export function createChatSurface(
     const cacheable =
       !isStreaming &&
       !(message as { subagentMail?: SubagentMailRef }).subagentMail &&
-      !work?.activity.some(
-        (activity) =>
-          activity.type === "user" ||
-          ["session", "sessions", "subagents"].includes((activity.payload as ToolPayload | null)?.tool ?? ""),
+      !activityItems(work?.activity ?? []).some(
+        (item) => item.kind === "SteeringMessage" || ["session", "sessions", "subagents"].includes(item.tool ?? ""),
       ) &&
       (!work || ((work.status === "complete" || work.status === "failed") && !work.pendingApprovals?.length));
     if (!cacheable) return chatMessage(message, index, isStreaming);
@@ -2103,6 +2104,7 @@ export function createChatSurface(
           <div class="system-note">${body}</div>
         </article>
       `;
+      if (note.note === "notice") return row(html`${note.content}`);
       if (note.note === "goal_cancelled")
         return row(html`Goal cancelled: <span class="system-note-text">${goalObjectiveLabel(note.content)}</span>`);
       const who = note.byAgent ? brandName() : (note.speaker ?? "The user");
@@ -2270,22 +2272,22 @@ export function createChatSurface(
     renderList();
     drawActiveChat();
     try {
-      const { entries } = await api<{ entries: SessionEntry[] }>(`/api/sessions/${encodeURIComponent(sessionId)}`);
-      const upToSeq = forkCutSeq(entries ?? [], messages, index, floorSeq);
+      const { items } = await fetchTranscript(sessionId);
+      const upToSeq = forkCutSeq(items, messages, index, floorSeq);
       if (upToSeq === undefined) throw new Error("That message is still saving. Try forking again in a moment.");
       const forked = await forkSession(sessionId, upToSeq);
       replacePendingSession(pendingRef, forked.session);
       if (chatState.agent !== agent || chatState.sessionId !== sessionId) return;
-      const split = inheritedTranscript(forked.session, forked.entries ?? []);
+      const split = inheritedTranscript(forked.session, forked.items);
       ctx.composer.carryModelPick(sourceThreadRef, forked.session.threadRef);
       mountContinuable(
         forked.session.threadRef,
         forked.session.id,
         forked.session.scopeId,
-        entriesToMessages(split.current, transcriptModel()),
+        itemsToMessages(split.current, transcriptModel()),
         forked.session.channelName ?? null,
         forked.session,
-        entriesToMessages(split.inherited, transcriptModel()),
+        itemsToMessages(split.inherited, transcriptModel()),
       );
       renderList();
     } catch (err) {
@@ -2363,6 +2365,10 @@ export function createChatSurface(
   function assistantContent(message: AssistantMessage, isStreaming = false, hasWork = false): TemplateResult[] {
     const animating = isStreaming && runSlot.stopGeneration !== runSlot.generation;
     const parts: TemplateResult[] = [];
+    const answered = message.content.some((chunk) => chunk.type === "text" && chunk.text.trim());
+    const finishedWork = isStreaming || !answered ? undefined : (message as AssistantWork).work;
+    if (finishedWork)
+      for (const draft of retractedReplies(finishedWork)) parts.push(retractedRow(draft.reason, draft.text));
     for (const [chunkIndex, chunk] of message.content.entries()) {
       if (chunk.type === "text") {
         const work = (message as AssistantWork).work;
@@ -2414,6 +2420,9 @@ export function createChatSurface(
     for (const playground of playgroundsIn((message as AssistantWork).work?.activity)) {
       parts.push(playgroundCard(playground));
     }
+    const continuing = isStreaming ? undefined : (message as AssistantWork).continuing;
+    if (continuing)
+      parts.push(html`<div class="continuing-note">${icon(RefreshCw, 13)}<span>Continuing: ${continuing}</span></div>`);
     return parts;
   }
 
@@ -2726,10 +2735,8 @@ export function createChatSurface(
   const SUBAGENT_POLL_MS = 4000;
   const subagentUi = {
     expanded: false,
-    peekId: null as string | null,
-    peek: null as PeekLine[] | null,
+    stops: new Map<string, SubagentStop>(),
     ticking: false,
-    timer: null as ReturnType<typeof setInterval> | null,
     rowsRoot: null as string | null,
     rowsTimer: null as ReturnType<typeof setInterval> | null,
     approvals: new Map<string, PendingApproval[]>(),
@@ -2752,29 +2759,46 @@ export function createChatSurface(
     subagentUi.rowsRoot = rootId;
   }
 
-  function stopSubagentPeek(): void {
-    if (subagentUi.timer) clearInterval(subagentUi.timer);
-    subagentUi.timer = null;
-    subagentUi.peekId = null;
-    subagentUi.peek = null;
-  }
-
-  async function refreshSubagentPeek(id: string): Promise<void> {
-    const page = await fetchTranscript(id, { tailTurns: 1 }).catch(() => null);
-    if (subagentUi.peekId !== id) return;
-    subagentUi.peek = page ? peekLines(page.entries) : [];
+  async function stopSubagent(rootId: string, row: SubagentRow): Promise<void> {
+    const { id, threadRef, workingSince } = row.session;
+    if (subagentUi.stops.get(id)?.state === "stopping") return;
+    const stop: SubagentStop = { state: "stopping", run: workingSince };
+    subagentUi.stops.set(id, stop);
+    drawActiveChat();
+    try {
+      if ((await stopThreadRun(threadRef)) === "ended" && subagentUi.stops.get(id) === stop)
+        subagentUi.stops.delete(id);
+      refreshTree(rootId);
+    } catch (err) {
+      swallow("web-ui: subagent stop", err);
+      if (subagentUi.stops.get(id) === stop) {
+        stop.state = "failed";
+        stop.error = errMessage(err, "Could not stop the subagent.");
+      }
+    }
     drawActiveChat();
   }
 
-  function toggleSubagentPeek(row: SubagentRow): void {
-    const id = row.session.id;
-    const same = subagentUi.peekId === id;
-    stopSubagentPeek();
-    if (same) return drawActiveChat();
-    subagentUi.peekId = id;
-    void refreshSubagentPeek(id);
-    if (row.state === "working") subagentUi.timer = setInterval(() => void refreshSubagentPeek(id), SUBAGENT_POLL_MS);
-    drawActiveChat();
+  function pruneSubagentStops(rows: readonly SubagentRow[]): void {
+    for (const [id, stop] of subagentUi.stops) {
+      const row = rows.find((candidate) => candidate.session.id === id && candidate.state === "working");
+      const run = row?.session.workingSince;
+      if (!row || (stop.run !== undefined && run !== undefined && run !== stop.run)) subagentUi.stops.delete(id);
+    }
+  }
+
+  function subagentStopTpl(rootId: string, row: SubagentRow): TemplateResult | typeof nothing {
+    if (row.state !== "working") return nothing;
+    const { state: stop, error } = subagentUi.stops.get(row.session.id) ?? {};
+    return html`<button
+      type="button"
+      class="subagent-row-action"
+      title=${error ?? nothing}
+      ?disabled=${stop === "stopping"}
+      @click=${() => void stopSubagent(rootId, row)}
+    >
+      ${SUBAGENT_STOP_LABEL[stop ?? "idle"]}
+    </button>`;
   }
 
   function acknowledgeSubagent(row: SubagentRow): void {
@@ -2784,7 +2808,6 @@ export function createChatSurface(
     } catch {
       return drawActiveChat();
     }
-    if (subagentUi.peekId === row.session.id) stopSubagentPeek();
     drawActiveChat();
   }
 
@@ -2831,22 +2854,13 @@ export function createChatSurface(
     failed: "failed",
   };
 
-  function subagentRowTpl(row: SubagentRow): TemplateResult {
+  function subagentRowTpl(rootId: string, row: SubagentRow): TemplateResult {
     const now = Date.now();
     const elapsed = goalElapsedLabel(row.startedAt, row.endedAt ?? now);
-    const peeking = subagentUi.peekId === row.session.id;
     const approvals = unresolvedApprovals(subagentUi.approvals.get(row.session.id) ?? []);
     const title = row.session.title?.trim() || "Subagent";
-    return html`<div
-      class="subagent-row ${row.state} ${peeking ? "peeking" : ""}"
-      style=${`--subagent-depth:${row.depth - 1}`}
-    >
-      <button
-        type="button"
-        class="subagent-row-head"
-        aria-expanded=${String(peeking)}
-        @click=${() => toggleSubagentPeek(row)}
-      >
+    return html`<div class="subagent-row ${row.state}" style=${`--subagent-depth:${row.depth - 1}`}>
+      <button type="button" class="subagent-row-head" @click=${() => void openSessionById(row.session.id)}>
         ${row.state === "working" ? html`<span class="working-mark" ${ref(syncWorkingPulse)}>${workingWave()}</span>` : nothing}
         ${row.state === "waiting" ? html`<span class="awaiting-dot" aria-hidden="true"></span>` : nothing}
         ${row.state === "failed" ? html`<span class="subagent-failed-mark">${icon(TriangleAlert, 12)}</span>` : nothing}
@@ -2867,9 +2881,7 @@ export function createChatSurface(
             </button>`
           : nothing
       }
-      <button type="button" class="subagent-row-action" @click=${() => void openSessionById(row.session.id)}>
-        Open
-      </button>
+      ${subagentStopTpl(rootId, row)}
       ${
         approvals.length
           ? ctx.composer.composerApprovalPanel(approvals, (decision) =>
@@ -2877,22 +2889,7 @@ export function createChatSurface(
             )
           : nothing
       }
-      ${peeking ? subagentPeekTpl() : nothing}
     </div>`;
-  }
-
-  function subagentPeekTpl(): TemplateResult {
-    const lines = subagentUi.peek;
-    if (!lines) return html`<div class="subagent-peek bg-panel-note">Loading…</div>`;
-    if (!lines.length) return html`<div class="subagent-peek bg-panel-note">No activity yet</div>`;
-    return html`<ol class="subagent-peek" aria-live="polite">
-      ${lines.map(
-        (line) =>
-          html`<li class="subagent-peek-line ${line.kind}">
-            ${line.kind === "tool" ? icon(Wrench, 11) : nothing}<span dir="auto">${line.text}</span>
-          </li>`,
-      )}
-    </ol>`;
   }
 
   function subagentStrip(): TemplateResult | typeof nothing {
@@ -2903,7 +2900,7 @@ export function createChatSurface(
     }
     const rows = visibleSubagents(subagentRows(sessionsState.list, rootId), subagentUi.acknowledged);
     syncSubagentRowsRefresh(rows.some((row) => row.state === "working") ? rootId : null);
-    if (subagentUi.peekId && !rows.some((row) => row.session.id === subagentUi.peekId)) stopSubagentPeek();
+    pruneSubagentStops(rows);
     syncSubagentApprovals(rows);
     subagentUi.ticking = rows.some((row) => row.state === "working" || row.state === "waiting");
     syncWorkTicker();
@@ -2922,7 +2919,6 @@ export function createChatSurface(
                 aria-expanded=${String(expanded)}
                 @click=${() => {
                   subagentUi.expanded = !subagentUi.expanded;
-                  if (!subagentUi.expanded) stopSubagentPeek();
                   drawActiveChat();
                 }}
               >
@@ -2930,7 +2926,7 @@ export function createChatSurface(
                 <span class="bg-activity-toggle">${icon(ChevronRight, 14)}</span>
               </button>`
         }
-        ${expanded ? html`<div class="subagent-list ${single ? "single" : "bg-panel"}">${rows.map(subagentRowTpl)}</div>` : nothing}
+        ${expanded ? html`<div class="subagent-list ${single ? "single" : "bg-panel"}">${rows.map((row) => subagentRowTpl(rootId, row))}</div>` : nothing}
       </section>
     `;
   }
@@ -2944,7 +2940,7 @@ export function createChatSurface(
     try {
       await cancelSessionGoal(sessionId);
       goalCancels.set(key, "done");
-      if (agent === chatState.agent) await refreshTranscriptFromEntries(agent);
+      if (agent === chatState.agent) await refreshTranscriptFromItems(agent);
     } catch (err) {
       goalCancels.delete(key);
       ctx.composer.state.error = errMessage(err, "Could not cancel the goal.");
@@ -3030,13 +3026,13 @@ export function createChatSurface(
   function liveWorkSummary(work: WorkBlock): { icon: IconNode; label: string; detail: string } | null {
     if (work.stale) {
       const active = activeToolRow(work);
-      const call = (active?.call?.payload ?? {}) as ToolPayload;
-      const tool = call.tool ?? "";
-      const verb = active ? (TOOL_META[toolCategory(call)] ?? UNKNOWN_TOOL).active : null;
+      const call = toolBody(active?.call);
+      const tool = active?.call?.tool ?? "";
+      const verb = active ? (TOOL_META[toolCategory(active.call?.tool ?? null, call)] ?? UNKNOWN_TOOL).active : null;
       return {
         icon: RefreshCw,
         label: verb ? `${verb} interrupted, resuming…` : "Interrupted, resuming…",
-        detail: active ? toolDetail(tool, call, (active.result?.payload ?? {}) as ToolPayload) : "",
+        detail: active ? toolDetail(tool, call, toolBody(active.result)) : "",
       };
     }
     const active = activeToolRow(work);
@@ -3053,10 +3049,10 @@ export function createChatSurface(
   }
 
   function activeToolSummary(row: ToolRowModel, work: WorkBlock): { icon: IconNode; label: string; detail: string } {
-    const call = (row.call?.payload ?? {}) as ToolPayload;
-    const result = (row.result?.payload ?? {}) as ToolPayload;
-    const tool = call.tool ?? result.tool ?? "unknown";
-    const meta = TOOL_META[toolCategory({ ...result, ...call })] ?? UNKNOWN_TOOL;
+    const call = toolBody(row.call);
+    const result = toolBody(row.result);
+    const tool = rowTool(row) ?? "unknown";
+    const meta = TOOL_META[toolCategory(rowTool(row), rowArgs(row))] ?? UNKNOWN_TOOL;
     const secs = elapsedSeconds(row.call?.createdAt) || workSeconds(work);
     const posting = postSpeechText(row, true);
     if (posting) {
@@ -3079,7 +3075,7 @@ export function createChatSurface(
   }
 
   function usedToolsSuffix(work: WorkBlock): string {
-    const n = work.activity.filter((a) => a.type === "tool_call").length;
+    const n = activityItems(work.activity).filter((item) => item.kind === "ToolCall").length;
     return n > 0 ? ` (used ${n} tool${n === 1 ? "" : "s"})` : "";
   }
 
@@ -3102,9 +3098,8 @@ export function createChatSurface(
   function timelineKey(item: TimelineItem): string {
     if (item.kind === "tool") return `tool:${item.row.call?.seq ?? item.row.result?.seq ?? item.row.approval?.seq}`;
     if (item.kind === "approval") return `approval:${item.approval.requestId}`;
-    const step = item.kind === "thinking" ? thinkingStepKey(item.activity.payload) : null;
-    if (step) return `thinking:${step}`;
-    return `${item.kind}:${item.activity.seq}`;
+    if (item.kind === "thinking") return `thinking:${item.step ?? item.seq}`;
+    return `${item.kind}:${item.item.seq}`;
   }
 
   function workBlock(
@@ -3138,7 +3133,8 @@ export function createChatSurface(
       const live = active && last && !work.stale && !work.pendingApprovals?.length;
       const oneStep = live && !stopping;
       const step = oneStep
-        ? currentStep(timeline, work, (payload) => TOOL_META[toolCategory(payload)] ?? UNKNOWN_TOOL)
+        ? (currentStep(timeline, work, (tool, payload) => TOOL_META[toolCategory(tool, payload)] ?? UNKNOWN_TOOL) ??
+          checkedReplyStep(segments[index - 1]?.[0]))
         : null;
       let label = last ? workLabel(work) : "Worked";
       if (step) label = step.label;
@@ -3281,13 +3277,13 @@ export function createChatSurface(
     const status = work.status;
     const stale = work.stale === true;
     if (item.kind === "steer") {
-      const steer = inlineSteers.get(item.activity.seq);
+      const steer = inlineSteers.get(item.item.seq);
       return html`<div class="inline-steer">
         ${steer ? chatMessage(steer.message, steer.index, false, true) : nothing}
       </div>`;
     }
     if (item.kind === "thinking") {
-      const thought = thinkingPresentation((item.activity.payload as { thinking?: string }).thinking ?? "");
+      const thought = thinkingPresentation(item.text);
       const key = timelineKey(item);
       return html`<details
         class="thinking-row"
@@ -3304,13 +3300,26 @@ export function createChatSurface(
         <div class="thinking-body">${markdown(thought.body)}</div>
       </details>`;
     }
-    if (item.kind === "text") return interimReply(item.activity);
+    if (item.kind === "text") {
+      const reason = retractedReason(item.item);
+      return reason ? retractedRow(reason, item.item.text ?? "") : interimReply(item.item);
+    }
     if (item.kind === "approval") return approvalMarker(item.approval);
     return toolRow(item.row, work, status, stale);
   }
 
-  function interimReply(activity: ToolActivity): TemplateResult {
-    const text = (activity.payload as { text?: string } | null)?.text ?? "";
+  function retractedRow(reason: string, text: string): TemplateResult {
+    return html`<details class="thinking-row retracted-reply">
+      <summary class="thinking-summary">
+        <span class="tool-icon">${icon(RotateCcw, 15)}</span><span class="thinking-title">Retracted: ${reason}</span>
+        <span class="activity-chevron">${icon(ChevronRight, 14)}</span>
+      </summary>
+      <div class="thinking-body" dir="auto">${markdown(text)}</div>
+    </details>`;
+  }
+
+  function interimReply(item: Item): TemplateResult {
+    const text = item.text ?? "";
     return html`<div class="work-said streaming-text" dir="auto">${markdown(text)}</div>`;
   }
 
@@ -3385,7 +3394,7 @@ export function createChatSurface(
 
   function toolDetail(tool: string, call: ToolPayload, result: ToolPayload): string {
     if (typeof call.purpose === "string" && call.purpose.trim()) return call.purpose.trim();
-    switch (toolCategory({ ...result, ...call, tool })) {
+    switch (toolCategory(tool, { ...result, ...call })) {
       case "execute":
         return call.command ? firstLine(call.command) : "";
       case "read":
@@ -3492,18 +3501,19 @@ export function createChatSurface(
     work: WorkBlock,
     row: ToolRowModel,
   ): TemplateResult {
-    const execution = toolCategory({ ...result, ...call, tool }) === "execute";
-    const input = execution ? (call.command ?? "") : toolPayloadText(call);
-    const output = execution ? "" : toolPayloadText(result);
+    const execution = toolCategory(tool, { ...result, ...call }) === "execute";
+    const input = execution ? (call.command ?? "") : toolPayloadText(toolCallArguments(row.call));
+    const text = row.result?.text ?? null;
+    const output = execution ? "" : toolPayloadText({ ...result, ...(text !== null ? { result: text } : {}) });
     return html`<div class="tool-disclosure">
-      ${toolPayloadCard(execution ? null : "Input", input, row.call?.truncated ? () => void loadFullEntry(work, row.call!) : undefined)}
-      ${toolPayloadCard("Result", output, row.result?.truncated ? () => void loadFullEntry(work, row.result!) : undefined)}
+      ${toolPayloadCard(execution ? null : "Input", input, row.call?.truncated ? () => void loadFullItem(work, row.call!) : undefined)}
+      ${toolPayloadCard("Result", output, row.result?.truncated ? () => void loadFullItem(work, row.result!) : undefined)}
     </div>`;
   }
 
   function toolRow(row: ToolRowModel, work: WorkBlock, status: WorkBlock["status"], stale = false): TemplateResult {
     if (row.approval) {
-      const p = (row.approval.payload ?? {}) as ToolPayload;
+      const p = toolBody(row.approval);
       return html`<div class="tool-row tool-approval">
         <span class="tool-icon">${icon(Wrench, 13)}</span>
         <span class="tool-label"
@@ -3512,10 +3522,10 @@ export function createChatSurface(
         >
       </div>`;
     }
-    const call = (row.call?.payload ?? {}) as ToolPayload;
-    const result = (row.result?.payload ?? {}) as ToolPayload;
-    const tool = call.tool ?? result.tool ?? "unknown";
-    const knownMeta = TOOL_META[toolCategory({ ...result, ...call, tool })];
+    const call = toolBody(row.call);
+    const result = toolBody(row.result);
+    const tool = rowTool(row) ?? "unknown";
+    const knownMeta = TOOL_META[toolCategory(tool, rowArgs(row))];
     const meta = knownMeta ?? UNKNOWN_TOOL;
     const name = toolName(tool) || "Tool";
     const kind = toolRowKind(row, status);
@@ -3536,9 +3546,9 @@ export function createChatSurface(
     const visible = semantic
       ? [semantic, why, attempts, stale && kind === "running" ? "interrupted" : ""].filter(Boolean).join(" · ")
       : [label, detail].filter(Boolean).join(" ");
-    const description = activityDescription(call, result);
+    const description = activityDescription(row);
     const session = sessionPresentation(row, status);
-    const sessionView = session ? sessionToolView(call, result, sessionsState.list) : null;
+    const sessionView = session ? sessionToolView(row, sessionsState.list) : null;
     const sessionDetail = [sessionView?.detail, session?.preview].filter(Boolean).join(" · ");
     const sessionText = session ? [session.label, sessionDetail].filter(Boolean).join(" ") : null;
     const rowIcon = session
@@ -3572,14 +3582,12 @@ export function createChatSurface(
     else drawActiveChat();
   }
 
-  async function loadFullEntry(work: WorkBlock, activity: ToolActivity): Promise<void> {
+  async function loadFullItem(work: WorkBlock, item: Item): Promise<void> {
     const sessionId = chatState.sessionId;
-    if (!sessionId || !activity.truncated) return;
+    if (!sessionId || !item.truncated) return;
     try {
-      const full = await fetchEntry(sessionId, activity.seq);
-      work.activity = work.activity.map((a) =>
-        a === activity ? { ...a, payload: full.payload, truncated: false } : a,
-      );
+      const full = await fetchItem(sessionId, item.seq);
+      work.activity = work.activity.map((entry) => ("item" in entry && entry.item === item ? { item: full } : entry));
     } catch (err) {
       ctx.composer.state.error = errMessage(err, "Couldn't load the full output.");
     }

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { JSDOM } from "jsdom";
-import { createServer } from "vite";
+import { testViteServer } from "./vite-server.ts";
 
 test("AI account modal interactions", async (t) => {
   const dom = new JSDOM('<!doctype html><div id="app"></div><button id="opener">Manage AI accounts</button>', {
@@ -29,10 +29,8 @@ test("AI account modal interactions", async (t) => {
     getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
   }))
     Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
-  const vite = await createServer({
+  const vite = await testViteServer({
     root: fileURLToPath(new URL("..", import.meta.url)),
-    server: { middlewareMode: true, hmr: false },
-    appType: "custom",
     plugins: [
       {
         name: "settings-shell-boundary",

@@ -1,12 +1,6 @@
 import type { App } from "../../app.ts";
 import type { ServerDeps } from "../../deps.ts";
-import {
-  parseScopeId,
-  type Delivery,
-  type DeliveryProvenance,
-  type Session,
-  type SessionEntry,
-} from "../../../types.ts";
+import { parseScopeId, type Delivery, type DeliveryProvenance, type Session } from "../../../types.ts";
 import {
   sessionCategory,
   type LlmRequestRecord,
@@ -14,7 +8,7 @@ import {
   type SessionSummary,
 } from "../../../sessions/session-store.ts";
 import { createTranscriptSource } from "../../../sessions/transcript-source.ts";
-import { entryFromItem, isUserItem } from "../../../sessions/items.ts";
+import { isUserItem, type Item } from "../../../sessions/items.ts";
 import { sendJson } from "../../http.ts";
 import { audit, requireScopedAdmin } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
@@ -36,23 +30,16 @@ async function inferSingleParticipantName(app: App, deps: ServerDeps, sessionId:
   return displayNameForPrincipal(app, deps, [...participantIds][0]!);
 }
 
-function withEntryName(entry: SessionEntry, name: string): SessionEntry {
-  if (entry.type !== "user" || !name.trim() || typeof entry.payload !== "object" || entry.payload === null)
-    return entry;
-  const payload = entry.payload as Record<string, unknown>;
-  if (typeof payload.name === "string" && payload.name.trim()) return entry;
-  return { ...entry, payload: { ...payload, name } };
+function withSpeakerName(item: Item, name: string): Item {
+  if (!isUserItem(item) || !name.trim()) return item;
+  if (typeof item.body.name === "string" && item.body.name.trim()) return item;
+  return { ...item, body: { ...item.body, name } };
 }
 
-async function labelTranscriptEntries(
-  app: App,
-  deps: ServerDeps,
-  session: Session,
-  entries: SessionEntry[],
-): Promise<SessionEntry[]> {
+async function labelTranscriptItems(app: App, deps: ServerDeps, session: Session, items: Item[]): Promise<Item[]> {
   const fallbackName = await inferSingleParticipantName(app, deps, session.id);
-  if (!fallbackName) return entries;
-  return entries.map((entry) => withEntryName(entry, fallbackName));
+  if (!fallbackName) return items;
+  return items.map((item) => withSpeakerName(item, fallbackName));
 }
 
 type ProvenanceSidecar = {
@@ -262,12 +249,10 @@ export async function getAdminSession(ctx: ApiCtx): Promise<void> {
   const all = want >= TRANSCRIPT_LIMIT_MAX;
   const limit = Math.min(want, TRANSCRIPT_LIMIT_MAX);
   const raw = deps.sessions
-    ? (await createTranscriptSource(deps.sessions).forRender(id, all ? undefined : { limit: limit + 1 })).items.map(
-        (item) => entryFromItem(item, session.scopeId),
-      )
+    ? (await createTranscriptSource(deps.sessions).forRender(id, all ? undefined : { limit: limit + 1 })).items
     : [];
   const hasMore = !all && raw.length > limit;
-  const entries = await labelTranscriptEntries(app, deps, session, hasMore ? raw.slice(raw.length - limit) : raw);
+  const items = await labelTranscriptItems(app, deps, session, hasMore ? raw.slice(raw.length - limit) : raw);
   const recipientDeliveries = deps.deliveries
     ? await deps.deliveries.listByRecipientThread(session.threadRef, { limit: 100 })
     : [];
@@ -313,7 +298,7 @@ export async function getAdminSession(ctx: ApiCtx): Promise<void> {
   const deliveryEvents = [...recipientDeliveryEvents, ...sourceDeliveryEvents];
   return sendJson(res, 200, {
     session,
-    entries,
+    items,
     deliveryEvents,
     hasMore,
     limit,

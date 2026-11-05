@@ -1,14 +1,12 @@
-import type { ScopeId, SessionEntry } from "../types.ts";
 import type { SessionStore, SessionWriter } from "../sessions/session-store.ts";
 import { hasRunningRun, type RunStore } from "../runs/run-store.ts";
 import { parseSlackThreadRef, slackThreadRefCandidates } from "./message-gating.ts";
 import type { IngestEvent, SurfaceCache } from "../surface-cache/types.ts";
 import { isoFromTs, xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
 import { sleep } from "../util/async.ts";
-import { entryFromItem, isAgentReply, isUserItem, itemFromEntry } from "../sessions/items.ts";
+import { isAgentReply, isHidden, isUserItem, type Item, messageTs } from "../sessions/items.ts";
 
 export interface MessageRevisionPayload {
-  kind: "message_revision";
   action: "edited" | "deleted";
   ts: string;
   text?: string;
@@ -29,13 +27,11 @@ export type RevisionRuns = Pick<RunStore, "inFlightForThread">;
 
 interface RevisionSession {
   id: string;
-  scopeId: ScopeId;
 }
 
-export function messageRevision(e: Pick<SessionEntry, "type" | "payload">): MessageRevisionPayload | null {
-  if (e.type !== "system") return null;
-  const p = e.payload as { kind?: unknown; action?: unknown; ts?: unknown } | null;
-  if (p?.kind !== "message_revision") return null;
+export function messageRevision(e: Pick<Item, "kind" | "body">): MessageRevisionPayload | null {
+  if (e.kind !== "Retraction") return null;
+  const p = e.body;
   if (p.action !== "edited" && p.action !== "deleted") return null;
   if (typeof p.ts !== "string" || !p.ts) return null;
   return p as unknown as MessageRevisionPayload;
@@ -67,32 +63,22 @@ interface OriginalMessage {
   sourceRole?: "agent";
 }
 
-function findOriginal(entries: readonly SessionEntry[], ts: string): OriginalMessage | null {
+function findOriginal(items: readonly Item[], ts: string): OriginalMessage | null {
   let found: OriginalMessage | null = null;
-  for (const e of entries) {
-    if (e.type !== "user") continue;
-    const p = e.payload as {
-      ts?: unknown;
-      text?: unknown;
-      name?: unknown;
-      sourceRole?: unknown;
-      hidden?: unknown;
-    } | null;
-    if (p?.ts !== ts) continue;
-    if (p.hidden === true) return null;
+  for (const e of items) {
+    if (!isUserItem(e) || messageTs(e) !== ts) continue;
+    if (isHidden(e)) return null;
+    const { name, sourceRole } = e.body;
     found = {
-      text: typeof p.text === "string" ? p.text : "",
-      ...(p.sourceRole === "agent" ? { sourceRole: "agent" as const } : {}),
-      ...(typeof p.name === "string" && p.name.trim() ? { name: p.name.trim() } : {}),
+      text: e.text ?? "",
+      ...(sourceRole === "agent" ? { sourceRole: "agent" as const } : {}),
+      ...(typeof name === "string" && name.trim() ? { name: name.trim() } : {}),
     };
   }
   return found;
 }
 
-function revisionToRecord(
-  entries: readonly SessionEntry[],
-  source: MessageRevisionSource,
-): MessageRevisionPayload | null {
+function revisionToRecord(entries: readonly Item[], source: MessageRevisionSource): MessageRevisionPayload | null {
   const original = findOriginal(entries, source.ts);
   if (!original || (source.self && original.sourceRole !== "agent")) return null;
   let last: MessageRevisionPayload | null = null;
@@ -106,29 +92,23 @@ function revisionToRecord(
   };
   if (source.deleted) {
     if (last?.action === "deleted") return null;
-    return { kind: "message_revision", action: "deleted", ts: source.ts, ...named };
+    return { action: "deleted", ts: source.ts, ...named };
   }
   const text = String(source.text ?? "");
   const effective = last?.action === "deleted" ? null : (last?.text ?? original.text);
   if (!text.trim() || text === effective) return null;
-  return { kind: "message_revision", action: "edited", ts: source.ts, text, ...named };
+  return { action: "edited", ts: source.ts, text, ...named };
 }
-
-const sessionEntries = async (
-  sessions: Pick<SessionStore, "getItems">,
-  session: RevisionSession,
-): Promise<SessionEntry[]> => (await sessions.getItems(session.id)).map((item) => entryFromItem(item, session.scopeId));
 
 async function recordRevision(
   sessions: Pick<SessionStore, "append">,
   writer: SessionWriter,
-  session: RevisionSession,
-  entries: readonly SessionEntry[],
+  items: readonly Item[],
   source: MessageRevisionSource,
 ): Promise<boolean> {
-  const payload = revisionToRecord(entries, source);
-  if (!payload) return false;
-  await sessions.append(writer, itemFromEntry({ type: "system", payload }));
+  const revision = revisionToRecord(items, source);
+  if (!revision) return false;
+  await sessions.append(writer, { kind: "Retraction", body: { ...revision } });
   return true;
 }
 
@@ -146,11 +126,11 @@ async function recordWhenIdle(
   source: MessageRevisionSource,
   retry: IdleRetry,
 ): Promise<void> {
-  if (!revisionToRecord(await sessionEntries(sessions, session), source)) return;
+  if (!revisionToRecord(await sessions.getItems(session.id), source)) return;
   for (let attempt = 0; attempt < retry.attempts; attempt++) {
     if (attempt > 0) await sleep(retry.retryMs, { unref: true });
     if (await hasRunningRun(runs, session.threadRef)) continue;
-    await recordRevision(sessions, { sessionId: session.id }, session, await sessionEntries(sessions, session), source);
+    await recordRevision(sessions, { sessionId: session.id }, await sessions.getItems(session.id), source);
     return;
   }
 }
@@ -203,10 +183,10 @@ export async function reconcileMessageRevisions(opts: {
   const since = Math.max(1, Math.min(opts.anchorAt ?? opts.fallbackSince, slackTsToMs(opts.triggerTs) ?? Infinity));
   const revised = await opts.surfaceCache.revisedSince(ref.container, since, ref.root ? { thread: ref.root } : {});
   if (!revised.length) return 0;
-  const entries = await sessionEntries(opts.sessions, opts.session);
+  const items = await opts.sessions.getItems(opts.session.id);
   let recorded = 0;
   for (const row of revised) {
-    if (await recordRevision(opts.sessions, opts.writer, opts.session, entries, row)) recorded++;
+    if (await recordRevision(opts.sessions, opts.writer, items, row)) recorded++;
   }
   return recorded;
 }

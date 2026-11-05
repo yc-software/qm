@@ -7,7 +7,7 @@ import {
   renderSandboxProviders,
   renderStandingObligations,
 } from "../src/core/orchestrator/prompt-blocks.ts";
-import type { SessionEntry } from "../src/types.ts";
+import { type Item, storedItem } from "../src/sessions/items.ts";
 import type { Cron } from "../src/triggers/types.ts";
 
 const member = (principalId: string, displayName = principalId.toLowerCase(), slackId?: string) => ({
@@ -16,26 +16,21 @@ const member = (principalId: string, displayName = principalId.toLowerCase(), sl
   ...(slackId ? { slackId } : {}),
 });
 
-function entry(seq: number, members: ReturnType<typeof member>[], history: SessionEntry[]): SessionEntry {
+function entry(seq: number, members: ReturnType<typeof member>[], history: Item[]): Item {
   const event = membershipEvent(members, history, "s");
-  return {
-    sessionId: "s",
-    seq,
-    parentSeq: seq - 1,
-    type: "user",
-    createdAt: seq,
-    scopeLabel: "channel:C1",
-    payload: { text: "hello", environment: event.text, rosterSnapshot: event.record },
-  };
+  return storedItem(
+    { kind: "UserMessage", text: "hello", body: { environment: event.text, rosterSnapshot: event.record } },
+    { sessionId: "s", seq, createdAt: seq },
+  );
 }
 
 test("membership changes are reported once, after the turn that first saw the roster", () => {
   const first = entry(1, [member("U1"), member("U2")], []);
-  assert.equal((first.payload as { environment: string }).environment, "");
-  const history: SessionEntry[] = JSON.parse(JSON.stringify([first]));
+  assert.equal(first.body.environment, "");
+  const history: Item[] = JSON.parse(JSON.stringify([first]));
   assert.equal(membershipEvent([member("U2"), member("U1")], history, "s").text, "");
   const second = entry(2, [member("U1"), member("u3@example.com", "Cy", "U3")], history);
-  assert.equal((second.payload as { environment: string }).environment, "Joined: Cy (u3@example.com, U3). Left: u2.");
+  assert.equal(second.body.environment, "Joined: Cy (u3@example.com, U3). Left: u2.");
   assert.equal(
     membershipEvent([member("U1"), member("u3@example.com", "Cy", "U3")], [...history, second], "s").text,
     "",
@@ -132,17 +127,12 @@ const revision = (version: number, content: string, sessionId?: string) => ({
   ...(sessionId ? { sessionId } : {}),
 });
 
-function guidanceTurn(seq: number, guidance: Parameters<typeof guidanceUpdateEvent>[0], history: SessionEntry[]) {
+function guidanceTurn(seq: number, guidance: Parameters<typeof guidanceUpdateEvent>[0], history: Item[]) {
   const event = guidanceUpdateEvent(guidance, history, "s");
-  const turn: SessionEntry = {
-    sessionId: "s",
-    seq,
-    parentSeq: seq - 1,
-    type: "user",
-    createdAt: seq,
-    scopeLabel: "personal:u1",
-    payload: { text: "hi", environment: event.text, guidanceSnapshot: event.record },
-  };
+  const turn = storedItem(
+    { kind: "UserMessage", text: "hi", body: { environment: event.text, guidanceSnapshot: event.record } },
+    { sessionId: "s", seq, createdAt: seq },
+  );
   return { event, history: [...history, turn] };
 }
 

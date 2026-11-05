@@ -4,18 +4,15 @@ import { createCompaction } from "../src/core/orchestrator/compaction.ts";
 import type { OrchestratorDeps } from "../src/core/orchestrator/types.ts";
 import { estimateHistoryTokens, forModelContext } from "../src/agent/context-compaction.ts";
 
-import { contextSummaryPayload } from "../src/sessions/session-store.ts";
+import { contextSummary } from "../src/sessions/session-store.ts";
 import { reconstructMessagesFromHistory } from "../src/agent/replay.ts";
 import { countTokens } from "../src/util/tokens.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { entryFromItem, itemFromEntry } from "../src/sessions/items.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 
 const modelContext = async (sessions: SessionStore, sessionId: string) =>
-  forModelContext(
-    (await sessions.getContextWindow(sessionId)).items.map((item) => entryFromItem(item, "personal:test")),
-  );
+  forModelContext((await sessions.getContextWindow(sessionId)).items);
 
 async function fixture() {
   const sessions = createPostgresSessionStore(testDatabaseUrl());
@@ -26,13 +23,9 @@ async function fixture() {
       kind: "UserMessage",
       text: `old message ${i} `.repeat(100),
     });
-  let resets = 0;
   const agent = {
     compactHistory: async (): Promise<string> => {
       throw new Error("summary unavailable");
-    },
-    resetSession: () => {
-      resets++;
     },
   };
   const compaction = createCompaction({
@@ -48,14 +41,13 @@ async function fixture() {
     orgScopeId: "org:test",
     actorId: "test",
   };
-  return { sessions, agent, compaction, input, resets: () => resets };
+  return { sessions, agent, compaction, input };
 }
 
 test("mandatory summarizer failure recovers instead of wedging the pending turn", async () => {
   const f = await fixture();
   const history = await f.compaction.compactContextIfNeeded(f.input);
   assert.ok(history.length < f.input.visibleHistory.length);
-  assert.equal(f.resets(), 1);
   assert.equal((await f.sessions.getItems(f.input.session.id)).length, f.input.visibleHistory.length + 1);
   assert.deepEqual(await modelContext(f.sessions, f.input.session.id), history);
 });
@@ -80,13 +72,13 @@ test("recent recovery preserves a fitting saved summary without a model call", a
   const before = await f.sessions.getItems(f.input.session.id);
   const history = await f.compaction.compactRecent(f.input);
   assert.equal(calls, 0);
-  assert.match(contextSummaryPayload(history[0]!)!.text, /without a new summary/);
-  assert.match(contextSummaryPayload(history[0]!)!.text, /Saved work/);
+  assert.match(contextSummary(history[0]!)!.text, /without a new summary/);
+  assert.match(contextSummary(history[0]!)!.text, /Saved work/);
   assert.ok(estimateHistoryTokens(history) <= 300);
   const all = await f.sessions.getItems(f.input.session.id);
   assert.deepEqual(all.slice(0, before.length), before);
   assert.deepEqual(await modelContext(f.sessions, f.input.session.id), history);
-  assert.equal((history[0]!.payload as { mode: string }).mode, "recent");
+  assert.equal(history[0]!.body.mode, "recent");
 });
 
 for (const failure of ["throw", "empty", "oversized"] as const) {
@@ -98,7 +90,7 @@ for (const failure of ["throw", "empty", "oversized"] as const) {
     };
     const history = await f.compaction.compactContextIfNeeded(f.input);
     assert.ok(estimateHistoryTokens(history) <= 300);
-    assert.equal((history[0]!.payload as { mode: string }).mode, "recent");
+    assert.equal(history[0]!.body.mode, "recent");
   });
 }
 
@@ -114,51 +106,40 @@ for (const stage of ["before", "during", "abort-error"] as const) {
     await assert.rejects(f.compaction.compactContextIfNeeded({ ...f.input, cancel: abort.signal }), {
       name: "AbortError",
     });
-    assert.equal(f.resets(), 0);
-    assert.deepEqual(
-      (await f.sessions.getItems(f.input.session.id)).map((item) => entryFromItem(item, "personal:test")),
-      f.input.visibleHistory,
-    );
+    assert.deepEqual(await f.sessions.getItems(f.input.session.id), f.input.visibleHistory);
   });
 }
 
-for (const stage of ["append", "reset"] as const) {
-  test(`${stage} failure is not swallowed or retried as summarization failure`, async () => {
-    const f = await fixture();
-    let calls = 0;
-    f.agent.compactHistory = async () => {
-      calls++;
-      return "Summary.";
-    };
-    if (stage === "reset")
-      f.agent.resetSession = () => {
-        throw new Error("storage unavailable");
-      };
-    else
-      f.sessions[stage] = async () => {
-        throw new Error("storage unavailable");
-      };
-    await assert.rejects(f.compaction.compactContextIfNeeded(f.input), /storage unavailable/);
-    assert.equal(calls, 1);
-    assert.ok(!(await f.sessions.getItems(f.input.session.id)).some((e) => e.body.mode === "recent"));
-  });
-}
+test("append failure is not swallowed or retried as summarization failure", async () => {
+  const f = await fixture();
+  let calls = 0;
+  f.agent.compactHistory = async () => {
+    calls++;
+    return "Summary.";
+  };
+  f.sessions.append = async () => {
+    throw new Error("storage unavailable");
+  };
+  await assert.rejects(f.compaction.compactContextIfNeeded(f.input), /storage unavailable/);
+  assert.equal(calls, 1);
+  assert.ok(!(await f.sessions.getItems(f.input.session.id)).some((e) => e.body.mode === "recent"));
+});
 
 test("oversized entries and orphaned parallel tool results cannot bypass the recent budget", async () => {
   const f = await fixture();
-  for (const [type, payload] of [
-    ["tool_call", { callId: "large", tool: "files", data: "oversized ".repeat(1000) }],
-    ["tool_call", { callId: "small", tool: "files" }],
-    ["tool_result", { callId: "large", result: "ok" }],
-    ["tool_result", { callId: "small", result: "ok" }],
-    ["user", { text: "Continue." }],
+  for (const item of [
+    { kind: "ToolCall", callId: "large", tool: "files", body: { data: "oversized ".repeat(1000) } },
+    { kind: "ToolCall", callId: "small", tool: "files" },
+    { kind: "ToolResult", callId: "large", text: "ok" },
+    { kind: "ToolResult", callId: "small", text: "ok" },
+    { kind: "UserMessage", text: "Continue." },
   ] as const)
-    await f.sessions.append(f.input.writer, itemFromEntry({ type, payload }));
+    await f.sessions.append(f.input.writer, item);
   await refresh(f);
   const history = await f.compaction.compactRecent(f.input);
   assert.ok(estimateHistoryTokens(history) <= 300);
-  assert.ok(!history.some((e) => e.type === "tool_result"));
-  assert.equal(history.at(-1)!.type, "user");
+  assert.ok(!history.some((e) => e.kind === "ToolResult"));
+  assert.equal(history.at(-1)!.kind, "UserMessage");
   await f.sessions.append(f.input.writer, {
     kind: "UserMessage",
     text: "oversized ".repeat(1000),
@@ -184,4 +165,24 @@ test("recent recovery drops an oversized request inside a completed turn", async
   assert.ok(countTokens(JSON.stringify(reconstructMessagesFromHistory(history))) < 500);
   assert.doesNotMatch(JSON.stringify(history), /discarded oversized request/);
   assert.equal(history.at(-1)!.seq, last.seq);
+});
+
+test("a trim says why the summary failed and keeps the last saved summary, not the previous failure", async () => {
+  const f = await fixture();
+  await f.sessions.append(f.input.writer, { kind: "ContextCompaction", throughSeq: 1, text: "Saved work summary." });
+  const reasons = ["gateway budget exhausted", "provider key revoked"];
+  let marker = "";
+  for (const reason of reasons) {
+    f.agent.compactHistory = async () => {
+      throw new Error(reason);
+    };
+    for (let i = 0; i < 12; i++)
+      await f.sessions.append(f.input.writer, { kind: "UserMessage", text: `newer message ${i} `.repeat(100) });
+    const visibleHistory = await modelContext(f.sessions, f.input.session.id);
+    const history = await f.compaction.compactContextIfNeeded({ ...f.input, visibleHistory });
+    marker = contextSummary(history.find((item) => contextSummary(item))!)!.text;
+    assert.ok(marker.includes(reason));
+    assert.ok(marker.includes("Saved work summary."));
+  }
+  assert.ok(!marker.includes(reasons[0]!));
 });

@@ -2,7 +2,7 @@ import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { MemoryFactsMissing } from "../../memory/facts.ts";
 import { MemoryDisclosureDenied } from "../../memory/disclosure.ts";
-import { problemLine } from "../../memory/provider-outcome.ts";
+import { MAX_FACTS_PER_WRITE, problemLine } from "../../memory/provider-outcome.ts";
 import { quotedData } from "../../util/text.ts";
 import { text, type ToolKit } from "./kit.ts";
 
@@ -111,6 +111,10 @@ export function recallTools(kit: ToolKit) {
           case "add": {
             const texts = facts.map((fact) => fact.text).filter(Boolean);
             if (!texts.length) return fail("memory add requires `facts` (a non-empty list of {text}).");
+            if (texts.length > MAX_FACTS_PER_WRITE)
+              return fail(
+                `memory add takes at most ${MAX_FACTS_PER_WRITE} facts per call; add the rest in another call.`,
+              );
             const written = await tc.memoryAdd(texts);
             if (written === null) return unavailable();
             const { added, outcomes, problems } = written;
@@ -165,7 +169,7 @@ export function recallTools(kit: ToolKit) {
     label: "history",
     description:
       "Search or reopen this conversation's own transcript (including parts compacted out of context; tool results excluded) when something said earlier is not in front of you. " +
-      "`query` returns the newest matching entries tagged type#seq; `seq` returns one entry (very long ones trimmed in the middle).",
+      "`query` returns the newest matching entries tagged kind#seq; `seq` returns one entry (very long ones trimmed in the middle).",
     parameters: Type.Object({
       query: Type.Optional(Type.String({ description: "Words to find (all must match, case-insensitive)." })),
       seq: Type.Optional(Type.Integer({ description: "Reopen this entry instead of searching." })),
@@ -186,7 +190,7 @@ export function recallTools(kit: ToolKit) {
           return recordResult(
             callId,
             { tool: "history", error: "seq must be an integer" },
-            text("[error] history `seq` must be an integer entry number, like the 87 in tool_call#87."),
+            text("[error] history `seq` must be an integer entry number, like the 87 in ToolCall#87."),
             true,
           );
         }

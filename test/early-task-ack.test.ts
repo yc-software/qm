@@ -5,7 +5,6 @@ import * as mockAgent from "./support/mock-agent.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { TurnRequest } from "../src/types.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
-import { emitEntry } from "../src/agent/turn-support.ts";
 import { settle } from "./support/settle.ts";
 
 let exercise: (turn: AgentTurnInput) => Promise<void>;
@@ -28,7 +27,7 @@ for (const scenario of [
   { name: "human DM", enabled: true },
   { name: "channel", enabled: false, conversation: { kind: "channel", channelRef: "C1" } },
   { name: "group DM", enabled: false, conversation: { kind: "group", channelRef: "G1", isMpim: true } },
-  { name: "automation", enabled: false, triggered: true },
+  { name: "automation", enabled: false, origin: { kind: "automation" } },
   { name: "bot", enabled: false, botActor: true },
 ] as const) {
   test(`queued ${scenario.name} closes acknowledgement at tool start=${scenario.enabled}`, async () => {
@@ -52,7 +51,7 @@ for (const scenario of [
     try {
       const request: TurnRequest = {
         surface: "slack",
-        liveActor: true,
+        origin: { kind: "human" },
         actor: { externalId: "U1" },
         ...scenario,
         conversation: {
@@ -93,9 +92,11 @@ for (const action of ["read", "react", "post", "delegated-read"] as const) {
       turn.onDelta?.("Building the website now.");
       turn.onToolCallStart?.("slack");
       assert.equal((await built.deliveries.pending("slack")).length, 0);
-      await emitEntry(turn, {
-        type: "tool_call",
-        payload: { tool: "slack", callId: `slack-${action}`, action: action === "delegated-read" ? "read" : action },
+      await turn.emit({
+        kind: "ToolCall",
+        tool: "slack",
+        callId: `slack-${action}`,
+        body: { action: action === "delegated-read" ? "read" : action },
       });
       started();
       await block;
@@ -104,7 +105,7 @@ for (const action of ["read", "react", "post", "delegated-read"] as const) {
     try {
       const queued = await built.app.turn({
         surface: "slack",
-        liveActor: true,
+        origin: { kind: "human" },
         actor: { externalId: "U1" },
         conversation: { kind: "dm", threadRef: `surface-${action}` },
         text: "Build a website",
