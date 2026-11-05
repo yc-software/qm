@@ -128,7 +128,9 @@ final class ChatModel {
         "api/runtime-config", query: [.init(name: "scopeId", value: conversation.scopeId)])
       guard !Task.isCancelled else { return }
       runtimeConfiguration = configuration
-    } catch {}
+    } catch {
+      Log.background.failure("Loading runtime settings", error)
+    }
   }
 
   func selectRuntime(_ selection: RuntimeSelection?) {
@@ -622,6 +624,7 @@ final class ChatModel {
           }
         } catch {
           if Task.isCancelled || current != generation { return }
+          Log.background.failure("Following run events", error)
           if case QMError.signedOut = error {
             self.error = error.localizedDescription
             return
@@ -642,6 +645,7 @@ final class ChatModel {
           try await Task.sleep(for: .seconds(2))
         } catch {
           if Task.isCancelled { return }
+          Log.background.failure("Reading run status", error)
           if case QMError.signedOut = error {
             self.error = error.localizedDescription
             return

@@ -83,7 +83,7 @@ final class NativeDictationModel: NSObject, AVAudioRecorderDelegate {
         }
         try FileManager.default.setAttributes(
           [.protectionKey: FileProtectionType.complete], ofItemAtPath: url.path)
-        guard recorder.record(forDuration: 300) else {
+        guard recorder.record() else {
           throw QMError.message("Could not start recording.")
         }
         state = .recording
