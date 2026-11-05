@@ -28,9 +28,15 @@ before proxying, and the keychain stores credentials under the canonical owner.
   a linked sign-in cannot become canonical for others.
 - **Evidence is required.** Every link records how the two identities were
   verified as one person and which admin created it.
+- **Linking merges the users row.** If the linked sign-in already has its own
+  user (it is that user's only sign-in), linking folds it into the canonical
+  person's user in the same transaction (earliest first-seen time, earliest
+  offboarding) and deletes it.
 - **Links are reversible.** Deleting a link restores two separate principals.
-  Records written while the link existed stay under the canonical id, so a
-  wrong link is an incident to reconcile, not just a row to delete.
+  Records written while the link existed stay under the canonical id,
+  including the merged user: the sign-in gets a new user of its own only
+  when it next writes to QM. A wrong link is an incident to reconcile, not
+  just a row to delete.
 - **Deactivation follows the person.** Deactivating either id deactivates both.
 
 ## Admin API
@@ -53,7 +59,14 @@ The portal caches the answer for one minute and refuses to proxy (503) when
 core cannot answer, rather than acting as the unresolved subject. A deleted
 link therefore stays effective for at most a minute of cached sessions.
 
-Links live in the `principal_links` durable map of the company database.
+Each user has a generated UUID (`users.id`). Every sign-in, including the
+person's main one, is a row in `user_links` (`alias_id` → `user_id`), so a
+link is one more alias on an existing user. `users.primary_alias` names the
+main sign-in, which is the canonical id QM resolves to; a constraint keeps it
+one of the user's own aliases. `linked_by` (and `users.offboarded_by`) point at
+the acting admin's user. An actor QM has not met yet gets a user row with no
+first-seen time, so they are referenced without being listed. Directory-derived
+links have no `linked_by`. Sign-ins are stored folded: emails lower-cased.
 
 ## Attested actors
 
