@@ -14,6 +14,8 @@ import type { VisibilityDirectory } from "../directory/visibility.ts";
 import type { DirectoryMember } from "../directory/directory-store.ts";
 import type { LeaderLease } from "../persistence/leader-lease.ts";
 import { createSweeper } from "../util/sweeper.ts";
+import { claimThenBind } from "../tenants/claim.ts";
+import { currentTenant, withTenant } from "../tenants/context.ts";
 import { recoverNextFireAt } from "./schedule.ts";
 import { fireJobStartsAt, type CronFireJob, type CronJobQueue } from "./job-queue.ts";
 import { hashId } from "../util/crypto.ts";
@@ -394,7 +396,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       for (const cron of ordered) {
         if (batch.length >= maxFiresPerTick) break;
         try {
-          await deps.crons.markAttempted(cron.id, t);
+          await withTenant(cron.tenantId, () => deps.crons.markAttempted(cron.id, t));
           batch.push(cron);
         } catch (e) {
           reportFailure("scheduler: attempt mark (holding this cron back)", e);
@@ -405,11 +407,13 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     for (const cron of batch) {
       if (stopped || observed !== epoch) break;
       try {
-        await withCronLifecycle(cron.id, true, async () => {
-          if (stopped || observed !== epoch) return;
-          const { authzFailed } = await fire(cron, t, `cron:${cron.id}:${cron.scheduledAt}`, cron.scheduledAt);
-          if (!authzFailed) await deps.crons.markFired(cron.id, t, cron.scheduledAt);
-        });
+        await withTenant(cron.tenantId, () =>
+          withCronLifecycle(cron.id, true, async () => {
+            if (stopped || observed !== epoch) return;
+            const { authzFailed } = await fire(cron, t, `cron:${cron.id}:${cron.scheduledAt}`, cron.scheduledAt);
+            if (!authzFailed) await deps.crons.markFired(cron.id, t, cron.scheduledAt);
+          }),
+        );
       } catch (e) {
         reportFailure("scheduler: fire", e);
       }
@@ -444,6 +448,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     const slot = nextSlot(cron);
     if (slot === undefined) return undefined;
     return {
+      tenantId: currentTenant(),
       cronId: cron.id,
       scheduledAt: slot,
       ...(cron.deferUntil !== undefined ? { notBefore: cron.deferUntil } : {}),
@@ -499,12 +504,16 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   async function reconcile(): Promise<void> {
     try {
       const horizon = now() + 2 * REPAIR_INTERVAL_MS;
-      for (const cron of await deps.crons.list()) {
-        if (stopped) break;
-        if (cron.archived || !cron.enabled) continue;
-        const job = nextJob(cron);
-        if (job && fireJobStartsAt(job) <= horizon) await deps.jobQueue!.enqueueFire(job);
-      }
+      await claimThenBind(
+        () => deps.crons.claimIds(),
+        async (id) => {
+          if (stopped) return;
+          const cron = await deps.crons.get(id);
+          if (!cron || cron.archived || !cron.enabled) return;
+          const job = nextJob(cron);
+          if (job && fireJobStartsAt(job) <= horizon) await deps.jobQueue!.enqueueFire(job);
+        },
+      );
     } catch (e) {
       reportFailure("scheduler: reconcile", e);
     }
@@ -615,7 +624,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       const observed = epoch;
       starting = deps.jobQueue
         .start({
-          onFire: (job) => (observed === epoch ? runQueueTask(() => fireJob(job)) : Promise.resolve()),
+          onFire: (job) =>
+            observed === epoch ? withTenant(job.tenantId, () => runQueueTask(() => fireJob(job))) : Promise.resolve(),
         })
         .then(
           () => {

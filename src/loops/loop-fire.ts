@@ -56,6 +56,7 @@ import {
 } from "./triage.ts";
 import type { TriagePatch } from "./item-ledger.ts";
 import { adapterForItem } from "./sources/index.ts";
+import { claimThenBind } from "../tenants/claim.ts";
 
 export interface LoopFireDeps {
   admittedWork?: AdmittedWork;
@@ -973,15 +974,12 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
   }
 
   async function sweepStale(now: number): Promise<void> {
-    for (const loop of await deps.loops.list()) {
-      if (
-        loop.state === "enabled" &&
-        loop.governor?.staleFireMs !== undefined &&
-        now - (loop.lastFiredAt ?? loop.createdAt) > loop.governor.staleFireMs
-      ) {
-        await applyGovernor(loop.id, undefined, now);
-      }
-    }
+    await claimThenBind(deps.loops.claimIds, async (id) => {
+      const loop = await deps.loops.get(id);
+      if (loop?.state !== "enabled" || loop.governor?.staleFireMs === undefined) return;
+      if (now - (loop.lastFiredAt ?? loop.createdAt) > loop.governor.staleFireMs)
+        await applyGovernor(id, undefined, now);
+    });
   }
 
   async function itemTurn(
