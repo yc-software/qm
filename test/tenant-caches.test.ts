@@ -229,7 +229,7 @@ test("engaged sessions with the same thread are tracked per tenant", () => {
   assert.deepEqual(registry.list(), [{ tenantId: B, threadRef: "thread" }]);
 });
 
-test("admin seed grants are applied once per tenant and stay with it", async () => {
+test("admin seed grants go only to the boot tenant, once", async () => {
   const persisted = new Map<string, AdminGrant[]>();
   let puts = 0;
   const grants = createAdminGrantStore(
@@ -246,10 +246,14 @@ test("admin seed grants are applied once per tenant and stay with it", async () 
       },
       async remove() {},
     },
-    { seed: [{ principalId: "admin@example.com", scopeId: scopeId("org", "acme"), role: "org_admin" }] },
+    {
+      seed: [{ principalId: "admin@example.com", scopeId: scopeId("org", "acme"), role: "org_admin" }],
+      seedTenant: async () => A,
+    },
   );
   await withTenant(A, () => grants.list());
   await withTenant(A, () => grants.list());
+  await withTenant(B, () => grants.list());
   assert.equal(puts, 1);
   assert.deepEqual(persisted.get(B), undefined);
 });

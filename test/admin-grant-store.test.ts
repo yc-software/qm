@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { TEST_TENANT, tenantTest as test } from "./support/tenant-test.ts";
 import assert from "node:assert/strict";
 import { createAdminGrantStore, grantKey } from "../src/admin/admin-grant-store.ts";
 import { createPostgresAdminGrantStore } from "../src/admin/postgres-admin-grant-store.ts";
@@ -23,13 +23,13 @@ test("grant store: add / list / revoke round-trip on (principal, scope, role)", 
 test("grant store: seed applies only when empty and never undoes a revoke", async () => {
   const persist = createPostgresAdminGrantStore(testDatabaseUrl());
   const seed = [{ principalId: "A", scopeId: "org:default-org", role: "org_admin" as const }];
-  const store = createAdminGrantStore(persist, { seed });
+  const store = createAdminGrantStore(persist, { seed, seedTenant: async () => TEST_TENANT });
   assert.equal((await store.list()).length, 1);
   await store.revoke("A", "org:default-org", "org_admin");
   assert.equal((await store.list()).length, 0);
 
   await persist.put({ principalId: "B", scopeId: "org:default-org", role: "org_admin" });
-  const store2 = createAdminGrantStore(persist, { seed });
+  const store2 = createAdminGrantStore(persist, { seed, seedTenant: async () => TEST_TENANT });
   assert.deepEqual(
     (await store2.list()).map((g) => g.principalId),
     ["B"],
