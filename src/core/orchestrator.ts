@@ -3634,7 +3634,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         });
         if (replyCheck && !replyCheck.enforce && result.reply.trim() && !result.silent && !result.stopped)
           void replyCheck.check(result.reply).catch(swallowAs("orchestrator: observed reply check", undefined));
-        const followedUpByPerson = !input.addressed && spokenByPerson(input.origin) && !sessionTurn && !input.botActor;
+        const followedUpByPerson = !input.addressed && spokenByPerson(input.origin) && !sessionTurn;
         if (
           (input.addressed || followedUpByPerson) &&
           !strictReadOnly &&
