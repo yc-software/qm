@@ -40,12 +40,21 @@ export function tenantListeners<A extends unknown[]>(label: string): TenantListe
 
 const tenantLoads = new Set<() => Promise<void>>();
 
-export function onTenantLoad(load: () => Promise<unknown>): () => void {
-  const runs = perTenant<{ run?: Promise<void> }>(() => ({}));
+export function onTenantLoad(load: () => Promise<unknown>, refreshMs?: number): () => void {
+  const runs = perTenant<{ run?: Promise<void>; at?: number; refreshing?: boolean }>(() => ({}));
   const memoized = (): Promise<void> => {
     const state = runs();
-    if (state.run) return state.run;
-    const run = load().then(() => undefined);
+    if (state.run) {
+      if (refreshMs !== undefined && !state.refreshing && Date.now() - (state.at ?? Infinity) >= refreshMs) {
+        state.refreshing = true;
+        void load()
+          .then(() => (state.at = Date.now()))
+          .catch((e: unknown) => swallow("tenant load refresh", e))
+          .finally(() => (state.refreshing = false));
+      }
+      return state.run;
+    }
+    const run = load().then(() => void (state.at = Date.now()));
     state.run = run;
     run.catch(() => state.run === run && (state.run = undefined));
     return run;

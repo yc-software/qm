@@ -27,6 +27,8 @@ export type TenantSettings = z.infer<typeof tenantSettingsSchema>;
 
 export const TENANT_SETTING_KEYS = Object.keys(tenantSettingsSchema.shape) as (keyof TenantSettings)[];
 
+export const TENANT_SETTINGS_REFRESH_MS = 30_000;
+
 const loaded = perTenant<{ settings?: TenantSettings }>(() => ({}));
 
 export async function loadTenantSettings(db: Pick<PgPool, "q">): Promise<void> {

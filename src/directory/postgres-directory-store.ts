@@ -249,6 +249,16 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       return typeof rows[0]?.id === "string" ? rows[0].id : undefined;
     },
 
+    async trustedClientFor(tenant) {
+      const [row] = await withTenant(tenant, () =>
+        q("SELECT settings->'oidcClient' AS client FROM tenants WHERE id = $1", [tenant]),
+      );
+      const client = row?.client as { clientId?: unknown; clientSecret?: unknown } | null | undefined;
+      return typeof client?.clientId === "string" && typeof client.clientSecret === "string"
+        ? { clientId: client.clientId, clientSecret: client.clientSecret }
+        : undefined;
+    },
+
     async channelMember(channelId, principalId) {
       const rows = await q(
         `SELECT 1 FROM directory_channel_members member

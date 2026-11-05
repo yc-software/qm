@@ -8,7 +8,7 @@ import { externalMemberActive, validEmail } from "../../identity/external-member
 import { isObj, authorizeAdmin, orgScope, audit, activePrincipal } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 import { loadTenant } from "../../tenants/cache.ts";
-import { tenantAllowsEmail, tenantSettings } from "../../tenants/settings.ts";
+import { tenantAllowsEmail } from "../../tenants/settings.ts";
 import { boundTenant, withTenant } from "../../tenants/context.ts";
 
 const NAMESPACE = "authbroker:";
@@ -135,11 +135,8 @@ async function hostTenant(ctx: ApiCtx): Promise<void> {
   if (!host || host.length > 253) return sendJson(ctx.res, 400, { error: "bad_request", message: "host required" });
   const tenant = await ctx.deps.directory?.tenantForHost?.(host);
   if (!tenant) return sendJson(ctx.res, 200, { tenant: null });
-  const client = await withTenant(tenant, async () => {
-    await loadTenant();
-    return tenantSettings().oidcClient;
-  });
-  return sendJson(ctx.res, 200, { tenant, ...(client?.clientSecret ? { trustedClient: client } : {}) });
+  const client = await ctx.deps.directory?.trustedClientFor?.(tenant);
+  return sendJson(ctx.res, 200, { tenant, ...(client ? { trustedClient: client } : {}) });
 }
 
 async function brokerSession(ctx: ApiCtx): Promise<void> {

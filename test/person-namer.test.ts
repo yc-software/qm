@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { App } from "../src/api/app.ts";
 import type { ServerDeps } from "../src/api/deps.ts";
-import { discoverScopes, personNamer } from "../src/api/routes/admin/common.ts";
+import { discoverScopes, personNamer, threadRefLabel } from "../src/api/routes/admin/common.ts";
 import { installPrincipalLinks } from "../src/directory/person.ts";
 
 const trusted = "oidc:issuer-hash:c3ViamVjdA";
@@ -51,4 +51,13 @@ test("one person's two personal scopes get labels that tell them apart", async (
   assert.equal(labels.get(`personal:${trusted}`), "founder@company.test (by sign-in)");
   assert.equal(labels.get("personal:founder@company.test"), "founder@company.test (by email)");
   assert.equal(labels.get("personal:solo@company.test"), "solo@company.test");
+});
+
+test("a thread reference in the audit log names its owner and keeps the thread id", () => {
+  const nameOf = (id: string) => (id === trusted ? "founder@company.test" : undefined);
+  const thread = "0b6c8a52-3f4e-4c1a-9d2b-5e7f8a9b0c1d";
+  assert.equal(threadRefLabel(`web:${trusted}:${thread}`, nameOf), `web:founder@company.test:${thread}`);
+  assert.equal(threadRefLabel(`web:oidc:stranger:${thread}`, nameOf), undefined);
+  assert.equal(threadRefLabel("audit", nameOf), undefined);
+  assert.equal(threadRefLabel(undefined, nameOf), undefined);
 });

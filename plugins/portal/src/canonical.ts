@@ -36,9 +36,8 @@ export function createCanonicalResolver(
     const found = known.get(key);
     const hit = found && Date.now() - found.at < STALE_MS ? found : undefined;
     if (hit && Date.now() - hit.at < FRESH_MS) return { id: hit.id, stale: false };
-    const next = refresh(key, sub, tenant);
-    if (hit) return { id: hit.id, stale: true };
-    const id = await next;
+    const id = await refresh(key, sub, tenant);
+    if (id === null && hit) return { id: hit.id, stale: true };
     return id === null || id === "rejected" ? id : { id, stale: false };
   };
 }

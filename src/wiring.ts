@@ -1,6 +1,6 @@
 import { onTenantLoad, perTenant } from "./tenants/cache.ts";
 import { externalOrgId } from "./tenants/external-org.ts";
-import { loadTenantSettings } from "./tenants/settings.ts";
+import { loadTenantSettings, TENANT_SETTINGS_REFRESH_MS } from "./tenants/settings.ts";
 import { nonDeploymentCredential, withDeploymentCredentials } from "./credentials/deployment-credentials.ts";
 import { resolveEmbeddingModel } from "./model/pi-models.ts";
 import { createPostgresTeamStore, type TeamStore } from "./teams/teams.ts";
@@ -1376,8 +1376,11 @@ export function buildApp(
       configStore.hydrate?.().catch(reported("tenant load: hydrate configuration")),
       refreshCustomProviders().catch(reported("tenant load: hydrate custom providers")),
       identity.refresh().catch(reported("tenant load: hydrate identity")),
-      loadTenantSettings(pgArtifactMap.pool).catch(reported("tenant load: hydrate tenant settings")),
     ]),
+  );
+  const stopSettingsLoad = onTenantLoad(
+    () => loadTenantSettings(pgArtifactMap.pool).catch(reported("tenant load: hydrate tenant settings")),
+    TENANT_SETTINGS_REFRESH_MS,
   );
   const refreshModels = async () => {
     await gatewayCatalog?.refresh();
@@ -2980,6 +2983,7 @@ export function buildApp(
     releaseInFlightRuns,
     async stop() {
       stopTenantLoad();
+      stopSettingsLoad();
       stopLayerLoad();
       renderBasePreparing?.abort();
       const draining = drain.stop();

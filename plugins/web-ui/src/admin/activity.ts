@@ -122,7 +122,12 @@ function audit(page: AdminPage, data: Row): [string, unknown] {
           >${e.action || "event"}</span
         >`,
       },
-      { text: e.status ? e.resource + " (" + e.status + ")" : e.resource || "", cls: "mono" },
+      {
+        node: html`<span title=${e.resource || ""}
+          >${(e.resourceLabel || e.resource || "") + (e.status ? " (" + e.status + ")" : "")}</span
+        >`,
+        cls: "mono",
+      },
       ...(all ? [scopeName(e.scopeLabel)] : []),
       { node: when(e.ts), cls: "num" },
     ]),

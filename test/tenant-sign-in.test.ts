@@ -14,8 +14,6 @@ import { createPostgresDirectoryStore } from "../src/directory/postgres-director
 import type { DirectoryStore } from "../src/directory/directory-store.ts";
 import type { IdentityService } from "../src/identity/identity-service.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
-import { onTenantLoad } from "../src/tenants/cache.ts";
-import { loadTenantSettings } from "../src/tenants/settings.ts";
 import { boundTenant, withoutTenant } from "../src/tenants/context.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -95,6 +93,7 @@ function start(identity: IdentityService, tenants: DirectoryStore["tenantsForEma
       tenantsForEmail: tenants,
       tenantsForPrincipal: (principal: string) => directory.tenantsForPrincipal!(principal),
       tenantForHost: (host: string) => directory.tenantForHost!(host),
+      trustedClientFor: (tenant: string) => directory.trustedClientFor!(tenant),
     } as unknown as DirectoryStore,
   });
   server.listen(0);
@@ -246,12 +245,6 @@ test("a company's hostname maps to exactly that company through the broker route
       `UPDATE tenants SET settings = settings || '{"oidcClient":{"clientId":"beta-client","clientSecret":"beta-client-secret-0123456789abcdef"}}' WHERE id = $1`,
       [beta],
     );
-    const settingsPool = createPgPool(appUrl(databaseUrl).toString());
-    const stopLoad = onTenantLoad(() => loadTenantSettings(settingsPool));
-    t.after(async () => {
-      stopLoad();
-      await settingsPool.close();
-    });
     const withClient = (await srv.get("/v1/auth/broker/host-tenant?host=beta.company.test")).body;
     assert.deepEqual(withClient.trustedClient, {
       clientId: "beta-client",

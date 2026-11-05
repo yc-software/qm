@@ -33,6 +33,8 @@ function redirect(res: ServerResponse, location: string): void {
 export function createHostRoutes(deps: HostRouteDeps) {
   const shared = new URL(deps.publicUrl);
   const appsDomain = deps.appsDomain?.toLowerCase();
+  const labels = hostName(shared.host).split(".");
+  const siblings = labels.length >= 3 ? `.${labels.slice(1).join(".")}` : undefined;
 
   async function target(to: string | null): Promise<MappedHost | null> {
     let url: URL;
@@ -54,7 +56,10 @@ export function createHostRoutes(deps: HostRouteDeps) {
       if (appsDomain && (host === appsDomain || host.endsWith(`.${appsDomain}`))) return;
       try {
         const record = await deps.lookup(host);
-        return record ? { ...record, host, origin: `${shared.protocol}//${req.headers.host}` } : undefined;
+        if (record) return { ...record, host, origin: `${shared.protocol}//${req.headers.host}` };
+        if (!siblings || !host.endsWith(siblings)) return undefined;
+        deps.page(res, 404, deps.errorHtml("unknown workspace address"));
+        return null;
       } catch (error) {
         console.warn(`[portal] could not resolve the workspace for a host: ${String(error)}`);
         deps.unavailable(res);

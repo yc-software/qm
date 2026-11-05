@@ -7,7 +7,7 @@ import { sendJson } from "../../http.ts";
 import { audit, requireScopedAdmin } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
 import { notifyOwnerOfCronEdit } from "../../../triggers/edit-notice.ts";
-import { requireScopedResource } from "./common.ts";
+import { personNamer, requireScopedResource } from "./common.ts";
 import { unattendedGrantRefusal } from "../../../cron/authority.ts";
 
 function isAdminCronDestination(v: unknown): v is Destination {
@@ -29,6 +29,11 @@ export async function listAdminArtifacts(ctx: ApiCtx): Promise<void> {
   const { actor, scope } = authz;
   audit(deps, { principalId: actor.id, action: `${resource}.read`, resource, scopeLabel: scope });
   const orgWide = parseScopeId(scope).kind === "org";
+  const nameOf = resource === "skills" ? undefined : await personNamer(app, deps);
+  const named = (principalId: string | undefined) => {
+    const name = principalId ? nameOf?.(principalId) : undefined;
+    return name && name !== principalId ? name : undefined;
+  };
   if (resource === "crons") {
     const crons = (await app.listCrons())
       .filter((c) => orgWide || c.ownerScopeId === scope)
@@ -40,6 +45,7 @@ export async function listAdminArtifacts(ctx: ApiCtx): Promise<void> {
         message: c.message,
         owner: c.owner,
         createdBy: c.createdBy,
+        createdByName: named(c.createdBy),
         enabled: c.enabled,
         archived: c.archived,
         schedule: c.schedule,
@@ -63,6 +69,7 @@ export async function listAdminArtifacts(ctx: ApiCtx): Promise<void> {
         currentVersion: d.currentVersion,
         versions: d.versions.length,
         createdBy: d.createdBy,
+        createdByName: named(d.createdBy),
         createdAt: d.versions[0]?.createdAt,
         lastAccessAt: d.lastAccessAt,
         publicUrl: publicUrlOf(d.endpoint),

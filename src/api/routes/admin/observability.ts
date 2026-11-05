@@ -2,7 +2,7 @@ import { parseScopeId, type ScopeId } from "../../../types.ts";
 import { sendJson } from "../../http.ts";
 import { audit, requireScopedAdmin } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
-import { personNamer } from "./common.ts";
+import { personNamer, threadRefLabel } from "./common.ts";
 
 const EGRESS_LIST_LIMIT = 1000;
 const ERRORS_LIST_LIMIT = 200;
@@ -100,6 +100,7 @@ export async function listAdminAudit(ctx: ApiCtx): Promise<void> {
     })) ?? []
   ).map((e) => {
     const displayName = nameOf(e.principalId);
+    const resourceLabel = threadRefLabel(e.resource, nameOf);
     return {
       ts: e.at,
       principalId: e.principalId,
@@ -107,6 +108,7 @@ export async function listAdminAudit(ctx: ApiCtx): Promise<void> {
       action: e.action,
       scopeLabel: e.scopeLabel,
       resource: e.resource,
+      ...(resourceLabel ? { resourceLabel } : {}),
       ...(e.status ? { status: e.status } : {}),
     };
   });

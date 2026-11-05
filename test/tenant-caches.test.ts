@@ -208,6 +208,32 @@ test("loadTenant runs each registered load once per tenant and retries a failed 
   stopFailing();
 });
 
+test("a load registered with a refresh interval re-runs in the background once its answer is that old", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 1_000_000 });
+  const loads: string[] = [];
+  let release: (() => void) | undefined;
+  const stop = onTenantLoad(async () => {
+    loads.push(currentTenant());
+    if (loads.length === 2) await new Promise<void>((resolve) => (release = resolve));
+  }, 30_000);
+  await withTenant(A, () => loadTenant());
+  t.mock.timers.tick(29_000);
+  await withTenant(A, () => loadTenant());
+  assert.deepEqual(loads, [A]);
+  t.mock.timers.tick(1_000);
+  await withTenant(A, () => loadTenant());
+  await withTenant(A, () => loadTenant());
+  assert.deepEqual(loads, [A, A]);
+  release!();
+  await new Promise((resolve) => setImmediate(resolve));
+  await withTenant(A, () => loadTenant());
+  assert.deepEqual(loads, [A, A]);
+  t.mock.timers.tick(30_000);
+  await withTenant(A, () => loadTenant());
+  assert.deepEqual(loads, [A, A, A]);
+  stop();
+});
+
 test("engaged sessions with the same thread are tracked per tenant", () => {
   const registry = createEngagedRegistry();
   registry.engage({ tenantId: A, threadRef: "thread" });
