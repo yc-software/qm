@@ -7,6 +7,7 @@ export interface Me {
   analytics?: { apiKey: string; host: string };
   companyName?: string | null;
   welcomeCohort?: string;
+  openNewChatByDefault?: boolean;
   suggestedActivities?: SuggestedActivity[];
   suggestedActivitiesGeneration?: boolean;
   individualModelAuth?: boolean;

@@ -31,3 +31,32 @@ test("by default the saved multiview layout reopens", async () => {
     await h.close();
   }
 });
+
+test("a deployment default opens a new chat for users who have not chosen", async () => {
+  const { harness } = await import("./deep-link-boot-fixture.ts");
+  const h = await harness({ path: "/", savedCanvas: true, openNewChatByDefault: true });
+  try {
+    h.releaseSessions();
+    await h.boot();
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.equal(document.querySelectorAll(".split-pane-content").length, 0);
+    assert.doesNotMatch(h.visibleConversation().state.threadRef ?? "", /old-a|old-b/);
+    assert.doesNotMatch(h.mainText(), /old-a|old-b/);
+  } finally {
+    await h.close();
+  }
+});
+
+test("choosing the last session overrides a deployment default of a new chat", async () => {
+  const { harness } = await import("./deep-link-boot-fixture.ts");
+  const h = await harness({ path: "/", savedCanvas: true, openNewChat: false, openNewChatByDefault: true });
+  try {
+    h.releaseSessions();
+    await h.boot();
+    for (let i = 0; i < 200 && document.querySelectorAll(".split-pane-content").length < 2; i++)
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(document.querySelectorAll(".split-pane-content").length, 2);
+  } finally {
+    await h.close();
+  }
+});

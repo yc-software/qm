@@ -50,6 +50,7 @@ import {
 
 const SUBAGENT_THREAD_PREFIX = "agent:main:subagent:";
 const welcomeCohort = process.env.WEB_UI_WELCOME_COHORT?.trim().slice(0, 40) || undefined;
+const openNewChatByDefault = process.env.WEB_UI_OPEN_NEW_CHAT === "1";
 const suggestedActivities = parseSuggestedActivities(process.env.WEB_UI_SUGGESTED_ACTIVITIES);
 const PUBLIC_URL = (process.env.PUBLIC_WEB_URL ?? "http://localhost:8096").replace(/\/$/, "");
 const WEB_UI_DEV = process.env.WEB_UI_DEV === "1";
@@ -1487,6 +1488,7 @@ const apiRoutes: readonly WebRoute[] = [
         impersonatedBy: resolveIdentity(req)?.impersonator ?? null,
         displayName: resolveIdentity(req)?.name ?? null,
         ...(welcomeCohort ? { welcomeCohort } : {}),
+        ...(openNewChatByDefault ? { openNewChatByDefault: true } : {}),
         ...(activityConfig ? { suggestedActivitiesGeneration: true } : {}),
         ...(suggestedActivities.length && !activityConfig ? { suggestedActivities } : {}),
         permissions,

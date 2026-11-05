@@ -272,6 +272,8 @@ Gmail, Google Calendar, Google Drive, and Google Sheets artwork comes from
 
 ## Cohort welcome and app picker
 
+Set `WEB_UI_OPEN_NEW_CHAT=1` on the web surface to start a bare visit on a new chat instead of reopening the last session. It changes only the default for users who have not chosen **When QM opens** in Settings; an explicit choice always wins.
+
 Set `WEB_UI_WELCOME_COHORT=F26` on the web surface to show the cohort welcome in a new user's empty chat. It replaces the automatic first agent turn for that deployment; ordinary chat starts when the user sends a message. The greeting uses the signed-in display name. The welcome remains above the messages in the earliest personal web conversation, including when reopened. It is selected from persisted session creation times. The champagne and soft flutter sequence replays on refresh only before the first message and respects reduced motion.
 
 The picker reads Composio's live catalog in usage order, omits apps that need no authorization, and searches the complete paginated catalog. Known services use local logos; remaining catalog logos use Composio's logo host. Selecting an app submits to the authenticated web surface and opens the provider's authorization link directly. Consent remains on the provider page. Slack is excluded from this picker. A dedicated Connect Slack card in onboarding and Settings authorizes the signed-in person’s Slack tools through Composio and links their verified Slack workspace identity to their existing web account. Installing the company bot remains a separate administrator action.
