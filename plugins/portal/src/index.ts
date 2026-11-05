@@ -16,7 +16,7 @@ import { createServer, METHODS, type IncomingMessage, type ServerResponse } from
 import { pathToFileURL } from "node:url";
 import { ADMIN_LOGIN_SCRIPT, ADMIN_LOGIN_SCRIPT_HASH, openAdminLogin } from "./admin-login.ts";
 import { LRUCache } from "lru-cache";
-import { createCanonicalResolver } from "./canonical.ts";
+import { createCanonicalResolver, IdentityRejected } from "./canonical.ts";
 import { createTrustedEntry, trustedEntryConfig } from "./trusted-entry.ts";
 import {
   coreEmailTenants,
@@ -319,6 +319,7 @@ const canonicalPrincipal = createCanonicalResolver(async (sub, tenant) => {
     headers: { ...signedHeaders(CORE_SIGNING_SECRET, "GET", path), ...portalIdentityHeaders(sub, tenant) },
     signal: AbortSignal.timeout(CANONICAL_TIMEOUT_MS),
   });
+  if ([401, 403, 404].includes(r.status)) throw new IdentityRejected(`HTTP ${r.status}`);
   if (!r.ok) {
     console.warn(`[portal] canonical principal lookup returned HTTP ${r.status}`);
     return null;
@@ -439,6 +440,25 @@ function localDevSession(req: IncomingMessage, nowMs = Date.now(), ignoreLogout 
   if (!ignoreLogout && readCookie(req.headers.cookie, LOCAL_LOGOUT_COOKIE) === "1") return null;
   const now = Math.floor(nowMs / 1000);
   return { k: "session", sub: LOCAL_AUTH_PRINCIPAL, org: ORG, iat: now, exp: now + SESSION_TTL_S };
+}
+
+function signedOutCookies(): string[] {
+  return [
+    clearCookie("portal_impersonate", "/", SECURE_COOKIES),
+    clearCookie("portal_trusted_tmp", "/auth/trusted", SECURE_COOKIES),
+    clearCookie("portal_session", "/", SECURE_COOKIES, COOKIE_DOMAIN),
+    clearCookie(FRAME_SESSION_COOKIE, "/", SECURE_COOKIES, COOKIE_DOMAIN),
+    ...(COOKIE_DOMAIN
+      ? [clearCookie("portal_session", "/", SECURE_COOKIES), clearCookie(FRAME_SESSION_COOKIE, "/", SECURE_COOKIES)]
+      : []),
+  ];
+}
+
+function withoutSessionCookies(cookie: string | undefined): string | undefined {
+  return cookie
+    ?.split(";")
+    .filter((part) => !/^\s*(portal_session|portal_impersonate)=/.test(part))
+    .join(";");
 }
 
 function currentSession(req: IncomingMessage): SessionClaims | null {
@@ -1041,13 +1061,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     const redirectTo = !AUTH_BROKER_UPSTREAM && signedOutSession && !signedOutSession.anon ? "/auth/signed-out" : "/";
     setSession(res, [
       ...(signedOutSession ? loginProviderCookie(signedOutSession.sub) : []),
-      clearCookie("portal_impersonate", "/", SECURE_COOKIES),
-      clearCookie("portal_trusted_tmp", "/auth/trusted", SECURE_COOKIES),
-      clearCookie("portal_session", "/", SECURE_COOKIES, COOKIE_DOMAIN),
-      clearCookie(FRAME_SESSION_COOKIE, "/", SECURE_COOKIES, COOKIE_DOMAIN),
-      ...(COOKIE_DOMAIN
-        ? [clearCookie("portal_session", "/", SECURE_COOKIES), clearCookie(FRAME_SESSION_COOKIE, "/", SECURE_COOKIES)]
-        : []),
+      ...signedOutCookies(),
       clearCookie("portal_oidc_tmp", "/auth", SECURE_COOKIES),
       ...(AUTH_BROKER_UPSTREAM ? [clearCookie("qm_idp_session", AUTH_BROKER_PREFIX, true)] : []),
       ...(LOCAL_AUTH_BYPASS && isLoopbackAddress(req.socket.remoteAddress)
@@ -1085,9 +1099,16 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   let staleSession: SessionClaims | null = null;
   if (session && !session.anon && (!pathname.startsWith("/auth/") || pathname.startsWith("/auth/impersonate"))) {
     const canonical = await canonicalPrincipal(session.sub, session.t);
-    if (!canonical) return identityUnavailable(req, res);
-    if (canonical.stale) staleSession = { ...session, sub: canonical.id };
-    session = canonical.stale ? null : { ...session, sub: canonical.id };
+    if (canonical === "rejected") {
+      console.warn("[portal] core no longer recognises this session; signing it out");
+      for (const cookie of signedOutCookies()) res.appendHeader("set-cookie", cookie);
+      req.headers.cookie = withoutSessionCookies(req.headers.cookie);
+      session = null;
+    } else if (!canonical) return identityUnavailable(req, res);
+    else {
+      if (canonical.stale) staleSession = { ...session, sub: canonical.id };
+      session = canonical.stale ? null : { ...session, sub: canonical.id };
+    }
   }
 
   if (pathname === "/auth/impersonate" && method === "POST") {
@@ -1097,7 +1118,8 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       return json(res, 403, { error: "forbidden", message: "admin access required" });
     const target = (url.searchParams.get("target") ?? "").trim();
     if (!target) return json(res, 400, { error: "bad_request", message: "target required" });
-    if (target === session.sub || (await canonicalPrincipal(target, session.t))?.id === session.sub)
+    const targetCanonical = await canonicalPrincipal(target, session.t);
+    if (target === session.sub || (typeof targetCanonical === "object" && targetCanonical?.id === session.sub))
       return json(res, 400, { error: "bad_request", message: "cannot impersonate yourself" });
     const result = await coreImpersonate("start", session.sub, target, session.t);
     if (!result.ok) {

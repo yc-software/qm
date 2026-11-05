@@ -46,6 +46,8 @@ test.before(async () => {
   await member(alpha, "both@shared.test");
   await member(beta, "Both@Shared.test");
   await member(beta, "guest@alpha.test", "guest");
+  await member(beta, "carol@elsewhere.test");
+  await member(alpha, "dan@elsewhere.test");
 });
 
 test.after(() => owner.close());
@@ -198,4 +200,22 @@ test("a trusted principal maps to the tenants whose principal links name it, thr
     assert.equal(both.shared, true);
     assert.deepEqual(await tenantsOf("oidc:issuer:one"), { tenants: [{ id: beta }], shared: true });
     assert.deepEqual(await tenantsOf("oidc:issuer:nobody"), { tenants: [], shared: true });
+  }));
+
+test("on a shared host the directory, not the install allowlist, permits email sign-in, and canonical lookups bind the session's tenant", (t) =>
+  withoutTenant(async () => {
+    const srv = start(identityAdmitting(undefined, []), (email) => directory.tenantsForEmail!(email));
+    t.after(srv.close);
+    const allowed = async (email: string) =>
+      (await srv.get(`/v1/auth/broker/email-allowed?email=${encodeURIComponent(email)}`)).body.allowed;
+    assert.equal(await allowed("carol@elsewhere.test"), true);
+    assert.equal(await allowed("dan@elsewhere.test"), false);
+    assert.equal(await allowed("stranger@elsewhere.test"), false);
+    const canonical = "/v1/principals/carol%40elsewhere.test/canonical";
+    assert.equal((await srv.get(canonical)).status, 401);
+    const asBeta = await mintPortalIdentity(
+      { p: "carol@elsewhere.test", t: beta, exp: Date.now() + 60_000 },
+      IDENTITY_SECRET,
+    );
+    assert.equal((await srv.get(canonical, { "x-portal-identity": asBeta })).status, 200);
   }));

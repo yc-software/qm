@@ -58,7 +58,7 @@ async function claimBrokerNonce(ctx: ApiCtx): Promise<void> {
 
 type Admission = { allowed: boolean; appOnly?: true; expiresAt?: number | null };
 
-async function admission(ctx: ApiCtx, email: string): Promise<Admission> {
+async function admission(ctx: ApiCtx, email: string, listed = false): Promise<Admission> {
   const { deps, app } = ctx;
   if (!deps.identity) return { allowed: false };
   await deps.identity.refresh();
@@ -66,7 +66,8 @@ async function admission(ctx: ApiCtx, email: string): Promise<Admission> {
   const member = deps.identity.externalMember(email);
   const configured =
     (boundTenant() ? await tenantAllowsEmail(email) : undefined) ??
-    (deps.emailAuthPrincipals?.includes(email) ||
+    (listed ||
+      deps.emailAuthPrincipals?.includes(email) ||
       Boolean(deps.emailAuthDomain && email.endsWith(`@${deps.emailAuthDomain}`)));
   const allowed =
     deps.identity.classify(email).type === "internal" && (member ? externalMemberActive(member) : configured);
@@ -101,7 +102,7 @@ async function emailAllowed(ctx: ApiCtx): Promise<void> {
   for (const { id } of await tenants(email)) {
     const admitted = await withTenant(id, async () => {
       await loadTenant();
-      return admission(ctx, email);
+      return admission(ctx, email, true);
     });
     if (admitted.allowed) return sendJson(ctx.res, 200, admitted);
   }

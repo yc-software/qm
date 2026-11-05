@@ -23,6 +23,7 @@ let audience = "portal-client";
 let shared = true;
 let email: string | null = "founder@company.test";
 let principalTenants: unknown[] = [];
+let canonicalStatus = 200;
 const principalLookups: string[] = [];
 const admissions: Array<string | undefined> = [];
 const surface: Array<string | undefined> = [];
@@ -51,6 +52,10 @@ const upstream = createServer((req, res) => {
     }
     if (path === "/userinfo")
       return void res.end(JSON.stringify({ sub: "idp-subject", ...(email ? { email, email_verified: true } : {}) }));
+    if (path.startsWith("/v1/principals/") && canonicalStatus !== 200) {
+      res.statusCode = canonicalStatus;
+      return void res.end(JSON.stringify({ error: "unauthorized" }));
+    }
     if (path === "/v1/auth/broker/principal-tenants") {
       principalLookups.push(new URL(req.url!, origin).searchParams.get("principal") ?? "");
       return void res.end(JSON.stringify({ tenants: principalTenants, shared }));
@@ -323,4 +328,44 @@ test("a trusted provider that sends no email picks the tenant from the principal
   assert.equal(solo.status, 302);
   assert.equal(sessionOf(solo)?.t, undefined);
   assert.deepEqual([...new Set(principalLookups)], [principal]);
+});
+
+test("a session core no longer recognises is signed out, while a core outage still says try again", async () => {
+  const now = Math.floor(Date.now() / 1000);
+  const stale = (sub: string) =>
+    `portal_session=${seal({ k: "session", sub, org: "acme", auth: now, iat: now, exp: now + 600 }, sessionKey)}`;
+  try {
+    canonicalStatus = 401;
+    const signedOut = await fetch(`${base}/`, {
+      headers: { cookie: stale("untenanted@company.test"), accept: "text/html" },
+      redirect: "manual",
+    });
+    assert.equal(signedOut.status, 302);
+    assert.match(signedOut.headers.get("location") ?? "", /^\/auth\/login/);
+    assert.ok(signedOut.headers.getSetCookie().some((c) => c.startsWith("portal_session=;")));
+    canonicalStatus = 502;
+    const outage = await fetch(`${base}/`, {
+      headers: { cookie: stale("outage@company.test"), accept: "text/html" },
+      redirect: "manual",
+    });
+    assert.equal(outage.status, 503);
+  } finally {
+    canonicalStatus = 200;
+  }
+});
+
+test("a trusted callback with a stale login cookie fails, and its retry link starts a fresh login", async () => {
+  const leftover = `portal_trusted_tmp=${seal({ k: "tmp", state: "old", nonce: "n", pkceVerifier: "v", returnTo: "/", iat: 0, exp: 1 }, deriveKey(secret, "trusted-entry-tmp"))}`;
+  const failed = await fetch(`${base}/auth/trusted/callback?code=test&state=old`, {
+    headers: { cookie: leftover },
+    redirect: "manual",
+  });
+  assert.equal(failed.status, 400);
+  assert.ok(failed.headers.getSetCookie().some((c) => c.startsWith("portal_trusted_tmp=;")));
+  const retry = /href="(\/auth\/trusted\/login)"/.exec(await failed.text())?.[1];
+  assert.equal(retry, "/auth/trusted/login");
+  const restarted = await fetch(`${base}${retry}`, { redirect: "manual" });
+  assert.equal(restarted.status, 302);
+  assert.match(restarted.headers.get("location") ?? "", /\/authorize\?/);
+  assert.ok(cookieFrom(restarted, "portal_trusted_tmp"));
 });
