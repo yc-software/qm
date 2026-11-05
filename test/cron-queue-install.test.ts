@@ -2,7 +2,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPgBossCronQueue, cronQueueMisconfigured, installCronQueue } from "../src/cron/job-queue.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { appUrl, ownerUrl, TEST_TENANT } from "./support/test-tenant.ts";
+import { grantAppRole } from "../src/persistence/app-role-grants.ts";
+import { createPgPool } from "../src/persistence/pg-pool.ts";
+import { APP_ROLE, appUrl, ownerUrl, TEST_TENANT } from "./support/test-tenant.ts";
 
 const skip = process.env.DATABASE_URL ? false : "set DATABASE_URL (a Postgres) to run the cron queue install tests";
 
@@ -17,6 +19,8 @@ test("the owner installs the cron queue at migrate time and the app login only u
   );
   assert.ok(cronQueueMisconfigured(refused), String(refused));
   await installCronQueue(ownerUrl(databaseUrl).toString());
+  const owner = createPgPool(ownerUrl(databaseUrl).toString());
+  await grantAppRole((text, params) => owner.q(text, params), APP_ROLE, "pgboss").finally(() => owner.close());
   await installCronQueue(appUrl(databaseUrl));
   const queue = createPgBossCronQueue(appUrl(databaseUrl));
   try {

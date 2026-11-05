@@ -1,7 +1,6 @@
 import { test as nodeTest, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import type { DurableMap } from "../src/persistence/durable-map.ts";
 import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { boundTenant, currentTenant, withoutTenant, withTenant } from "../src/tenants/context.ts";
 import { loadTenant, onTenantLoad, perTenant, tenantListeners } from "../src/tenants/cache.ts";
@@ -18,6 +17,7 @@ import { createAdminGrantStore, type AdminGrant } from "../src/admin/admin-grant
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createEngagedRegistry } from "../src/wake/engaged-registry.ts";
 import { scopeId } from "../src/types.ts";
+import { tenantMap } from "./support/tenant-map.ts";
 import type { ScopeActivity, SessionStore, SpendRow } from "../src/sessions/session-store.ts";
 import { selectableModelCatalog } from "../src/model/model-catalog.ts";
 import { scopeActivity } from "../src/api/routes/admin/scope-activity.ts";
@@ -37,80 +37,6 @@ const noLock: AdvisoryLock = {
 
 const A = randomUUID();
 const B = randomUUID();
-
-function partition<T>(rows: Map<string, Map<string, T>>): Map<string, T> {
-  const key = currentTenant();
-  const existing = rows.get(key);
-  if (existing) return existing;
-  const fresh = new Map<string, T>();
-  rows.set(key, fresh);
-  return fresh;
-}
-
-function tenantMap<T>(): DurableMap<T> & { reads: string[] } {
-  const rows = new Map<string, Map<string, T>>();
-  const reads: string[] = [];
-  const own = () => partition(rows);
-  const unsupported = (): never => {
-    throw new Error("not used by these tests");
-  };
-  return {
-    reads,
-    async all() {
-      reads.push(currentTenant());
-      return [...own().values()];
-    },
-    async entries() {
-      return [...own().entries()];
-    },
-    select: unsupported,
-    selectEntries: unsupported,
-    claimIds: unsupported,
-    claimTenants: unsupported,
-    deleteBefore: unsupported,
-    claimIdsWhere: unsupported,
-    async get(id) {
-      return own().get(id) ?? null;
-    },
-    async put(id, value) {
-      own().set(id, value);
-    },
-    async putIfAbsent(id, value) {
-      const existing = own().get(id);
-      if (existing !== undefined) return existing;
-      own().set(id, value);
-      return value;
-    },
-    async insertIfAbsent(id, value) {
-      if (own().has(id)) return false;
-      own().set(id, value);
-      return true;
-    },
-    merge: unsupported,
-    async update(id, fn) {
-      const existing = own().get(id);
-      if (existing === undefined) return null;
-      const next = fn(existing);
-      own().set(id, next);
-      return next;
-    },
-    mutateMany: unsupported,
-    async deleteIf(id, predicate) {
-      const existing = own().get(id);
-      if (existing === undefined || !predicate(existing)) return false;
-      own().delete(id);
-      return true;
-    },
-    async delete(id) {
-      own().delete(id);
-    },
-    async take(id) {
-      const existing = own().get(id) ?? null;
-      own().delete(id);
-      return existing;
-    },
-  };
-}
 
 test("two tenants reading the same cache get their own values", () => {
   const slot = perTenant(() => new Map<string, string>());

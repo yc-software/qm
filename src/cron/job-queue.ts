@@ -31,26 +31,6 @@ const UNHEALTHY_AFTER_ERROR_MS = 30_000;
 const FIRE_QUEUE = "cron-fire";
 const FIRE_QUEUE_OPTIONS = { policy: "short", notify: true } as const;
 
-function grantLikePublic(schema: string): string {
-  return `DO $grant$
-DECLARE
-  grantee text;
-BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = '${schema}' AND pg_has_role(nspowner, 'USAGE')) THEN
-    RETURN;
-  END IF;
-  FOR grantee IN
-    SELECT DISTINCT r.rolname FROM pg_namespace n, aclexplode(n.nspacl) a JOIN pg_roles r ON r.oid = a.grantee
-     WHERE n.nspname = 'public' AND a.privilege_type = 'USAGE' AND a.grantee <> n.nspowner AND NOT r.rolsuper
-  LOOP
-    EXECUTE format('GRANT USAGE ON SCHEMA %I TO %I', '${schema}', grantee);
-    EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA %I TO %I', '${schema}', grantee);
-    EXECUTE format('GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA %I TO %I', '${schema}', grantee);
-    EXECUTE format('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA %I TO %I', '${schema}', grantee);
-  END LOOP;
-END $grant$`;
-}
-
 export async function installCronQueue(databaseUrl: string, schema: string = "pgboss"): Promise<void> {
   if (!/^[a-z_][a-z0-9_]*$/.test(schema)) throw new Error(`invalid cron queue schema: ${schema}`);
   const pg = createPgPool(databaseUrl);
@@ -63,7 +43,6 @@ export async function installCronQueue(databaseUrl: string, schema: string = "pg
   try {
     await boss.start();
     await boss.createQueue(FIRE_QUEUE, FIRE_QUEUE_OPTIONS);
-    await pg.q(grantLikePublic(schema));
   } finally {
     await boss.stop({ close: true, graceful: false }).catch(swallowAs("cron queue install: cleanup", undefined));
     await pg.close().catch(swallowAs("cron queue install: cleanup", undefined));

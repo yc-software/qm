@@ -4,7 +4,6 @@ import { join } from "node:path";
 import { loadConfig, type Config } from "../../src/config.ts";
 import { TEST_ADMIN_GRANTS, testMigratedDatabaseUrl } from "./test-database.ts";
 
-export { TEST_TENANT } from "./test-tenant.ts";
 export const TEST_CAPABILITY_SECRET = "test-capability-key-distinct-from-ingress-auth";
 
 export function testConfig(overrides: Partial<Config> = {}): Config {
