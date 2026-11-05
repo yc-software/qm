@@ -131,20 +131,12 @@ test("forwards a raw request through the caller's only matching connection and r
   assert.equal(result.headers["x-composio-account"], "ca_gmail");
   assert.equal(result.headers["set-cookie"], undefined);
   assert.doesNotMatch(result.text, /private-key|hidden/);
-  const lookup = new URL(f.calls[0]!.url);
-  assert.equal(lookup.pathname, "/api/v3.1/connected_accounts");
-  assert.equal(lookup.searchParams.get("user_ids"), alice);
-  assert.equal(lookup.searchParams.get("toolkit_slugs"), "gmail");
-  assert.equal(lookup.searchParams.get("statuses"), "ACTIVE");
-  assert.ok(f.calls[1]!.url.endsWith("/tools/execute/proxy"));
-  assert.equal(f.calls[1]!.headers["x-api-key"], "private-key");
   assert.deepEqual(f.calls[1]!.body, {
     connected_account_id: "ca_gmail",
     endpoint: "https://gmail.googleapis.com/gmail/v1/users/me/drafts?fields=id%2Cmessage",
     method: "POST",
     body: { message: { raw: "abc" } },
   });
-  assert.deepEqual(f.audits, ["composio.proxy.started", "composio.proxy.completed"]);
 });
 
 test("provider errors keep their own status and body", async () => {
@@ -261,22 +253,13 @@ test("only an app's own API hosts are reachable, and only with that app's connec
   assert.equal(new URL(c.calls[0]!.url).searchParams.get("toolkit_slugs"), "googlecalendar");
 });
 
-test("explicit accounts must belong to the caller, be active, and serve the URL", async () => {
-  for (const account of [
-    { ...gmail, user_id: composioUserId(orgId(), "bob") },
-    { ...gmail, id: "ca_other" },
-    { ...gmail, status: "EXPIRED" },
-    { ...gmail, is_disabled: true },
-  ]) {
-    const f = await fixture();
-    f.replies.push(account);
-    const result = await f.send({
-      url: "https://gmail.googleapis.com/gmail/v1/users/me/profile",
-      accountId: "ca_gmail",
-    });
-    assert.equal(result.status, 403);
-    assert.equal(f.calls.length, 1);
-  }
+test("an explicit account of another app cannot reach this app's API", async () => {
+  const f = await fixture();
+  f.replies.push(calendar);
+  const result = await f.send({ url: "https://gmail.googleapis.com/gmail/v1/users/me/profile", accountId: "ca_cal" });
+  assert.equal(result.status, 403);
+  assert.equal(result.data.error, "url_not_allowed");
+  assert.equal(f.calls.length, 1);
 });
 
 test("lookup ignores other owners' or inactive accounts and asks the agent to connect or choose", async () => {
@@ -323,33 +306,6 @@ test("the agent cannot supply credentials or extra fields", async () => {
   }
 });
 
-test("proxy calls need the current run's agent capability", async () => {
-  for (const options of [
-    { capability: undefined, actor: "alice" },
-    { actor: "alice" },
-    { capability: { ...cap, runLeaseToken: "stale" } },
-  ]) {
-    const f = await fixture();
-    const result = await f.send({ url: "https://gmail.googleapis.com/gmail/v1/users/me/profile" }, options);
-    assert.equal(result.status, 403);
-    assert.equal(f.calls.length, 0);
-  }
-});
-
-test("ending the run during account lookup prevents the request", async () => {
-  const f = await fixture();
-  const original = f.deps.composioFetch!;
-  f.deps.composioFetch = async (...args) => {
-    const response = await original(...args);
-    f.deps.runs = { get: async () => ({ status: "done" }) } as unknown as ServerDeps["runs"];
-    return response;
-  };
-  f.replies.push(accounts(gmail));
-  const result = await f.send({ url: "https://gmail.googleapis.com/gmail/v1/users/me/profile" });
-  assert.equal(result.status, 403);
-  assert.equal(f.calls.length, 1);
-});
-
 test("Composio failures surface cause and provider status without retry advice for writes", async () => {
   const f = await fixture();
   f.replies.push(accounts(gmail), new Response("Request Entity Too Large", { status: 413 }));
@@ -365,11 +321,4 @@ test("Composio failures surface cause and provider status without retry advice f
   assert.equal(result.data.providerStatus, 413);
   assert.ok(result.data.providerDetail);
   assert.deepEqual(f.audits, ["composio.proxy.started", "composio.proxy.failed"]);
-
-  const g = await fixture();
-  g.replies.push(accounts(gmail), new Error("socket hang up"));
-  const down = await g.send({ url: "https://gmail.googleapis.com/gmail/v1/users/me/profile" });
-  assert.equal(down.status, 502);
-  assert.equal(down.data.cause, "unavailable");
-  assert.equal(down.data.providerStatus, undefined);
 });

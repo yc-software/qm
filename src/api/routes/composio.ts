@@ -335,7 +335,7 @@ async function authorize(ctx: ApiCtx, linkSlack = false): Promise<void> {
   }
 }
 
-export async function ownedAccount(
+async function ownedAccount(
   ctx: ApiCtx,
   access: { key: string; principal: string },
   accountId: string,
@@ -349,6 +349,15 @@ export async function ownedAccount(
     toolkit !== "composio"
     ? { account, toolkit }
     : null;
+}
+
+export async function activeOwnedAccount(
+  ctx: ApiCtx,
+  access: { key: string; principal: string },
+  accountId: string,
+): Promise<{ account: Record<string, unknown>; toolkit: string } | null> {
+  const owned = await ownedAccount(ctx, access, accountId);
+  return owned && owned.account.status === "ACTIVE" && owned.account.is_disabled !== true ? owned : null;
 }
 
 const SCOPES_TTL_MS = 5 * 60_000;
@@ -512,9 +521,8 @@ async function execute(ctx: ApiCtx): Promise<void> {
     });
   const resource = `${body.accountId}/${body.tool}@${body.version}`;
   try {
-    const owned = await ownedAccount(ctx, access, body.accountId);
-    if (!owned || owned.account.status !== "ACTIVE" || owned.account.is_disabled === true)
-      return sendJson(ctx.res, 403, { error: "connection_not_authorized" });
+    const owned = await activeOwnedAccount(ctx, access, body.accountId);
+    if (!owned) return sendJson(ctx.res, 403, { error: "connection_not_authorized" });
     const { account, toolkit } = owned;
     const tool = await request(
       ctx,

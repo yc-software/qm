@@ -5,7 +5,7 @@ import {
   activeRun,
   composioUserIds,
   credential,
-  ownedAccount,
+  activeOwnedAccount,
   request,
   sendExecutionFailure,
   usableAccount,
@@ -127,8 +127,8 @@ async function pickAccount(
   toolkits: string[],
 ): Promise<string | null> {
   if (input.accountId) {
-    const owned = await ownedAccount(ctx, access, input.accountId);
-    if (!owned || owned.account.status !== "ACTIVE" || owned.account.is_disabled === true) {
+    const owned = await activeOwnedAccount(ctx, access, input.accountId);
+    if (!owned) {
       sendJson(ctx.res, 403, { error: "connection_not_authorized" });
       return null;
     }
