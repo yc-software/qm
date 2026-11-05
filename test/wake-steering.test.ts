@@ -982,7 +982,7 @@ test("an addressed stop withdraws queued work before a worker can claim it", asy
   assert.equal(await built.runs.claimById(first.runId!, "worker", 30_000), null);
 });
 
-function subagentWakeRun(
+function automationWakeRun(
   built: ReturnType<typeof freshApp>,
   threadRef: string,
   modelAccount: ModelAccount = "company",
@@ -993,17 +993,17 @@ function subagentWakeRun(
       surface: "web",
       actor: { id: "U1", type: "internal" },
       conversation: { kind: "dm", threadRef, audience: [{ id: "U1", type: "internal" }] },
-      text: '<wake reason="subagent" name="worker" kind="completed">…</wake>',
+      text: "Another conversation handed you a task.",
       origin: { kind: "automation" },
       modelAccount,
     },
   });
 }
 
-test("signalRun: a person's Steer on web reaches a live automation turn, such as a subagent-report wake", async () => {
+test("signalRun: a person's Steer on web reaches a live automation turn, such as another conversation's hand-off", async () => {
   const built = freshApp();
-  const threadRef = "web:U1:subagent-wake";
-  const { run } = await subagentWakeRun(built, threadRef);
+  const threadRef = "web:U1:peer-wake";
+  const { run } = await automationWakeRun(built, threadRef);
   const steer = { kind: "steer" as const, text: "also check the logs", ts: "t-1", request: web("draft", threadRef) };
   const outcome = await built.app.signalRun(run.id, steer, "U1");
   assert.deepEqual(outcome, { accepted: true }, "steered into the live turn, not queued as its own");
@@ -1017,8 +1017,8 @@ test("signalRun: a person's Steer on web reaches a live automation turn, such as
 
 test("web's Steer preference folds a typed message into a live automation turn; Queue still waits", async () => {
   const built = freshApp();
-  const threadRef = "web:U1:subagent-wake-typed";
-  const { run } = await subagentWakeRun(built, threadRef);
+  const threadRef = "web:U1:peer-wake-typed";
+  const { run } = await automationWakeRun(built, threadRef);
   const queued = await built.app.turn(web("after that, summarize", threadRef));
   assert.notEqual(queued.runId, run.id);
   const steered = await built.app.turn(web("and keep it short", threadRef, "steer"));
@@ -1033,7 +1033,7 @@ test("web's Steer preference folds a typed message into a live automation turn; 
 test("signalRun: a steer the live turn can't take runs as its own turn instead of vanishing", async () => {
   const built = freshApp();
   const threadRef = "web:U1:other-account";
-  const { run } = await subagentWakeRun(built, threadRef, "openai");
+  const { run } = await automationWakeRun(built, threadRef, "openai");
   const steer = { kind: "steer" as const, text: "also this", ts: "t-1", request: web("stale draft", threadRef) };
   const outcome = await built.app.signalRun(run.id, steer, "U1");
   assert.equal(outcome.accepted, true);
