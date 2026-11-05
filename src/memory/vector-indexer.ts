@@ -3,6 +3,15 @@ import type { LeaderLease } from "../persistence/leader-lease.ts";
 import { reportFailure } from "../util/errors.ts";
 import type { MemoryVectorStore } from "./postgres-vector-store.ts";
 
+export async function embedFacts(embedder: MemoryEmbedder, texts: readonly string[], signal: AbortSignal) {
+  const vectors = await embedder.embed(
+    texts.map((text) => text.slice(0, 8000)),
+    signal,
+  );
+  if (vectors.length !== texts.length) throw new Error("Invalid memory index embedding count");
+  return vectors.map(unitVector);
+}
+
 export function createMemoryVectorIndexer(opts: {
   resolve: () => Promise<
     { embedder: MemoryEmbedder; store: Pick<MemoryVectorStore, "missing" | "put" | "prune"> } | undefined
@@ -44,17 +53,17 @@ export function createMemoryVectorIndexer(opts: {
           const facts = await store.missing(embedder.id, 64, dimensions, signal, afterId);
           afterId = facts.at(-1)?.factId;
           if (!facts.length) break;
-          const vectors = await embedder.embed(
-            facts.map((fact) => fact.text.slice(0, 8000)),
+          const vectors = await embedFacts(
+            embedder,
+            facts.map((fact) => fact.text),
             signal,
           );
-          if (vectors.length !== facts.length) throw new Error("Invalid memory index embedding count");
           const rows = facts.map((fact, i) => ({
             scope: fact.scope,
             factId: fact.factId,
             hash: fact.hash,
             model: embedder.id,
-            vector: unitVector(vectors[i]),
+            vector: vectors[i]!,
           }));
           if (rows.some((row) => row.vector.length !== dimensions)) {
             dimensions = undefined;

@@ -15,8 +15,8 @@ test("a stored match wins, later lines fold into an earlier similar line, and di
   ]);
 });
 
-test("the cutoff sits at cosine 0.9", () => {
-  const just = (Math.acos(0.9) * 180) / Math.PI;
+test("the cutoff sits at cosine 0.92", () => {
+  const just = (Math.acos(0.92) * 180) / Math.PI;
   assert.deepEqual(nearDuplicateMatches([at(0), at(just - 0.1)], []), [undefined, { line: 0 }]);
   assert.deepEqual(nearDuplicateMatches([at(0), at(just + 0.1)], []), [undefined, undefined]);
   assert.deepEqual(nearDuplicateMatches([unitVector([3, 4])], []), [undefined]);

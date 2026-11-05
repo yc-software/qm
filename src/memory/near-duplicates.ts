@@ -1,9 +1,10 @@
-import { unitVector, type MemoryEmbedder } from "../model/embeddings.ts";
+import type { MemoryEmbedder } from "../model/embeddings.ts";
 import { factHash } from "./facts.ts";
 import type { FindNearDuplicates, NearDuplicate } from "./memory-service.ts";
 import type { MemoryVectorStore } from "./postgres-vector-store.ts";
+import { embedFacts } from "./vector-indexer.ts";
 
-export const NEAR_DUPLICATE_SIMILARITY = 0.9;
+const NEAR_DUPLICATE_SIMILARITY = 0.92;
 
 const cosine = (a: readonly number[], b: readonly number[]) => a.reduce((sum, value, i) => sum + value * b[i]!, 0);
 
@@ -28,12 +29,7 @@ export function createNearDuplicateFinder(
       const current = await resolve();
       if (!current) return undefined;
       const { embedder, store } = current;
-      const embedded = await embedder.embed(
-        texts.map((text) => text.slice(0, 8000)),
-        AbortSignal.timeout(8000),
-      );
-      if (embedded.length !== texts.length) throw new Error("Invalid memory embedding count");
-      const vectors = embedded.map(unitVector);
+      const vectors = await embedFacts(embedder, texts, AbortSignal.timeout(8000));
       const model = embedder.id;
       const stored = await store.nearest({ scope, model, vectors, minSimilarity: NEAR_DUPLICATE_SIMILARITY });
       return {

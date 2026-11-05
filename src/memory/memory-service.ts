@@ -102,6 +102,15 @@ function editedText(text: string): string {
     .replace(/^\(\d{4}-\d\d-\d\d\)\s*/, "");
 }
 
+function sameProvenance(a: MemoryProvenance, b: MemoryProvenance): boolean {
+  return (
+    a.sensitivity === b.sensitivity &&
+    a.sourceUnknown === b.sourceUnknown &&
+    a.sources.length === b.sources.length &&
+    a.sources.every((source) => b.sources.includes(source))
+  );
+}
+
 function resolveIds(facts: readonly MemoryFact[], ids: readonly string[]): MemoryFact[] {
   const byId = new Map(facts.map((fact) => [fact.id, fact]));
   const wanted = ids.map(parseFactId);
@@ -112,7 +121,7 @@ function resolveIds(facts: readonly MemoryFact[], ids: readonly string[]): Memor
 
 export type NearDuplicate = { factId: string } | { line: number };
 
-export interface NearDuplicates {
+interface NearDuplicates {
   matches: readonly (NearDuplicate | undefined)[];
   index(written: readonly { id: string; line: number }[]): Promise<void>;
 }
@@ -162,16 +171,16 @@ export function createNotebookMemory(store: FactStore): MemoryService {
           if (similar) nearHits++;
           const duplicate = exact ?? similar;
           if (duplicate) {
-            const patch = {
-              ...mergeProvenance([duplicate, provenance], duplicate.sensitivity),
-              text: similar ? text : duplicate.text,
-            };
-            await tx.update(duplicate.id, patch, at);
-            const kept = { ...duplicate, ...patch };
-            byText.delete(normalize(duplicate.text));
-            byText.set(normalize(text), kept);
-            byId.set(kept.id, kept);
-            if (similar) written.push({ id: kept.id, line });
+            const merged = mergeProvenance([duplicate, provenance], duplicate.sensitivity);
+            if (similar || !sameProvenance(merged, duplicate)) {
+              const patch = { ...merged, text: similar ? text : duplicate.text };
+              await tx.update(duplicate.id, patch, at);
+              const kept = { ...duplicate, ...patch };
+              byText.delete(normalize(duplicate.text));
+              byText.set(normalize(kept.text), kept);
+              byId.set(kept.id, kept);
+              if (similar) written.push({ id: kept.id, line });
+            }
             continue;
           }
           const fact = { text, ...provenance, ...(author ? { author } : {}), createdAt: at, updatedAt: at };
