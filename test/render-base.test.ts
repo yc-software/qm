@@ -1,4 +1,4 @@
-import { test, type TestContext } from "node:test";
+import { test, type TestContext } from "./support/tenant-test.ts";
 import assert from "node:assert/strict";
 import type { DurableMap } from "../src/persistence/durable-map.ts";
 import { createRenderBase, type RenderBase, type StoredRenderBase } from "../src/sandbox/render-base.ts";

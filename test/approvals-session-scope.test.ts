@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test } from "./support/tenant-test.ts";
 import assert from "node:assert/strict";
 import { createApp } from "../src/api/app.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";

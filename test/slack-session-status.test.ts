@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test } from "./support/tenant-test.ts";
 import { createNoopLeaderLease } from "../src/persistence/leader-lease.ts";
 import { createFeatureFlagStore } from "../src/feature-flags.ts";
 import { createSlackSessionStatus, type SlackSessionStatusState } from "../src/slack/session-status.ts";

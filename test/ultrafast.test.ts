@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test } from "./support/tenant-test.ts";
 import { calculateCost } from "@earendil-works/pi-ai";
 import { zstdDecompressSync } from "node:zlib";
 import { getRequiredModel, modelSupported, resolveModel } from "../src/model/pi-models.ts";

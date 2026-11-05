@@ -118,7 +118,7 @@ export interface PgPool {
   q(text: string, params?: unknown[], options?: PgQueryOptions): Promise<Rows>;
   query(text: string, params?: unknown[], options?: PgQueryOptions): Promise<{ rows: Rows; rowCount: number }>;
   registerMigration(migration: PgMigrationDefinition): void;
-  migrate(migration: PgMigrationDefinition): Promise<void>;
+  migrate(migration: PgMigrationDefinition | readonly PgMigrationDefinition[]): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -577,12 +577,12 @@ export function createPgPool(
       sessionPoolP?.then((instance) => releasePool(connectionString, instance, "session")),
     ]);
   }
-  async function migrate(definition: PgMigrationDefinition): Promise<void> {
-    const migration = definePgMigration(definition);
-    registerPgMigration(connectionString, migration);
+  async function migrate(definition: PgMigrationDefinition | readonly PgMigrationDefinition[]): Promise<void> {
+    const batch = (Array.isArray(definition) ? definition : [definition]).map(definePgMigration);
+    for (const migration of batch) registerPgMigration(connectionString, migration);
     if (closed) throw new Error("Postgres store is closed");
     await ready();
-    await withMigrationPool((instance) => applyPgMigrations(instance, [migration]));
+    await withMigrationPool((instance) => applyPgMigrations(instance, batch));
   }
   function registerMigration(definition: PgMigrationDefinition): void {
     registerPgMigration(connectionString, definePgMigration(definition));

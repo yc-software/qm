@@ -1,4 +1,5 @@
 import { onTenantLoad } from "./tenants/cache.ts";
+import { loadTenantSettings } from "./tenants/settings.ts";
 import { nonDeploymentCredential, withDeploymentCredentials } from "./credentials/deployment-credentials.ts";
 import { resolveEmbeddingModel } from "./model/pi-models.ts";
 import { createPostgresTeamStore, type TeamStore } from "./teams/teams.ts";
@@ -106,7 +107,12 @@ import { createSkillPackStore, type SkillPack } from "./skills/skill-pack-store.
 import { createSkillBundleStore, type SkillBundle, type SkillBundleStore } from "./skills/skill-bundle-store.ts";
 import { createGitFetcher, resolvePackAuth, type SkillPackFetcher } from "./skills/pack-fetcher.ts";
 import { installSeedSkills } from "./skills/seed.ts";
-import { createPostgresMap, createPostgresMapFactory, type DurableMap } from "./persistence/durable-map.ts";
+import {
+  createPostgresMap,
+  createPostgresMapFactory,
+  type DurableMap,
+  processLevelMap,
+} from "./persistence/durable-map.ts";
 import type { PersistedUiState, UiStateStore } from "./surfaces/ui-state.ts";
 import { slackUserClientFactory } from "./loops/sources/slack.ts";
 import { configurePgCaTrust, configurePgPooling } from "./persistence/pg-pool.ts";
@@ -312,7 +318,7 @@ import {
 } from "./auth/capability-token.ts";
 import { createControlService } from "./api/control-service.ts";
 import { createPostgresRunStore } from "./runs/postgres-run-store.ts";
-import { withTenant } from "./tenants/context.ts";
+import { boundTenant, currentTenant, withTenant } from "./tenants/context.ts";
 import type { RunSignalStore } from "./runs/run-signal-store.ts";
 import { createPostgresRunSignalStore } from "./runs/postgres-run-signal-store.ts";
 import { isTerminal, type Run, type RunStore } from "./runs/run-store.ts";
@@ -357,7 +363,7 @@ import {
   CODEX_SUBSCRIPTION_PROVIDER,
   companyModelId,
   defaultModel,
-  resolveModel,
+  resolveDeploymentModel,
   modelSupported,
 } from "./model/pi-models.ts";
 import { createAdminService, parseAdminGrants, type AdminService } from "./admin/admin-service.ts";
@@ -581,7 +587,9 @@ export function buildApp(
   const artifactMap = <T>(table: string, indexedFields?: readonly Extract<keyof T, string>[]): DurableMap<T> =>
     pgArtifactMap.map<T>(table, indexedFields);
   setProviderBaseUrls(config.providerBaseUrls);
-  const unknownGatewayModels = Object.keys(config.modelGateway?.models ?? {}).filter((id) => !resolveModel(id));
+  const unknownGatewayModels = Object.keys(config.modelGateway?.models ?? {}).filter(
+    (id) => !resolveDeploymentModel(id),
+  );
   if (unknownGatewayModels.length) {
     throw new Error(`MODEL_GATEWAY_MODELS contains unsupported models: ${unknownGatewayModels.join(", ")}`);
   }
@@ -657,7 +665,13 @@ export function buildApp(
   const auditLog = createPostgresAuditLog(databaseUrl);
   let ownsSharedState = false;
   const deploymentLayerStore = createDeploymentLayerStore({
-    backing: artifactMap<StoredDeploymentLayer>("deployment_layer"),
+    backing: createPostgresMap<StoredDeploymentLayer>(
+      pgArtifactMap.pool,
+      "deployment_layer",
+      [],
+      [],
+      [processLevelMap("deployment_layer")],
+    ),
     runtime: deploymentLayer,
     skills,
     skillBundles,
@@ -686,8 +700,16 @@ export function buildApp(
         }
       : {}),
   });
-  const deploymentLayerReady = deploymentLayerStore.hydrate();
-  const deploymentLayerRefresh = createUntrackedSweeper(() => deploymentLayerStore.hydrate(), 30_000, {
+  const layerTenants = new Set<string>();
+  const deploymentLayerReady = boundTenant() ? deploymentLayerStore.hydrate() : Promise.resolve(null);
+  const stopLayerLoad = onTenantLoad(async () => {
+    layerTenants.add(currentTenant());
+    await deploymentLayerStore.hydrate();
+  });
+  const refreshLayerTenants = async (): Promise<void> => {
+    for (const tenant of layerTenants) await withTenant(tenant, () => deploymentLayerStore.hydrate());
+  };
+  const deploymentLayerRefresh = createUntrackedSweeper(refreshLayerTenants, 30_000, {
     label: "deployment layer refresh",
   });
   const installCatalogs = async (): Promise<void> => {
@@ -1321,7 +1343,12 @@ export function buildApp(
     setCustomProviders(await customProviders.enabled());
   };
   const stopTenantLoad = onTenantLoad(() =>
-    Promise.all([configStore.hydrate?.(), refreshCustomProviders(), identity.refresh()]),
+    Promise.all([
+      configStore.hydrate?.(),
+      refreshCustomProviders(),
+      identity.refresh(),
+      loadTenantSettings(pgArtifactMap.pool),
+    ]),
   );
   const refreshModels = async () => {
     await gatewayCatalog?.refresh();
@@ -2917,6 +2944,7 @@ export function buildApp(
     releaseInFlightRuns,
     async stop() {
       stopTenantLoad();
+      stopLayerLoad();
       renderBasePreparing?.abort();
       const draining = drain.stop();
       await stopBackground();

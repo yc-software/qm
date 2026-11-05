@@ -1,4 +1,4 @@
-import { test, before } from "node:test";
+import { test, before } from "./support/tenant-test.ts";
 import assert from "node:assert/strict";
 import { createPostgresDeliveryStore } from "../src/delivery/postgres-delivery-store.ts";
 import {

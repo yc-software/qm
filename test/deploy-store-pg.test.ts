@@ -1,4 +1,4 @@
-import { test, before, after } from "node:test";
+import { test, before, after } from "./support/tenant-test.ts";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";

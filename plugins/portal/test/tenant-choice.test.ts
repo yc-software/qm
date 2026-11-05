@@ -1,4 +1,5 @@
 import test from "node:test";
+import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -20,6 +21,7 @@ let nonce = "";
 const email = "founder@company.test";
 const admissions: Array<string | undefined> = [];
 const surface: Array<string | undefined> = [];
+const coreCalls: Array<{ path: string; tenant: string | undefined }> = [];
 
 function identityTenant(header: unknown): string | undefined {
   return typeof header === "string" ? verifyPortalIdentity(header, identitySecret, Date.now())?.t : undefined;
@@ -28,6 +30,7 @@ function identityTenant(header: unknown): string | undefined {
 const upstream = createServer((req, res) => {
   void (async () => {
     const path = new URL(req.url!, origin).pathname;
+    coreCalls.push({ path, tenant: identityTenant(req.headers["x-portal-identity"]) });
     res.setHeader("content-type", "application/json");
     if (path === "/keys") return void res.end(JSON.stringify({ keys: [jwk] }));
     if (path === "/token") {
@@ -42,6 +45,11 @@ const upstream = createServer((req, res) => {
       return void res.end(JSON.stringify({ access_token: "test-access", id_token: idToken }));
     }
     if (path === "/userinfo") return void res.end(JSON.stringify({ sub: "idp-subject", email, email_verified: true }));
+    if (path === "/v1/auth/broker/claim") {
+      let raw = "";
+      for await (const chunk of req) raw += String(chunk);
+      return void res.end(JSON.stringify({ claimed: (JSON.parse(raw) as { ids: string[] }).ids[0] }));
+    }
     if (path === "/v1/auth/broker/email-tenants") return void res.end(JSON.stringify({ tenants }));
     if (path === "/v1/auth/broker/email-allowed") {
       admissions.push(identityTenant(req.headers["x-portal-identity"]));
@@ -169,4 +177,40 @@ test("a tampered session tenant is refused", () => {
   return fetch(`${base}/`, { headers: { cookie: `portal_session=${forged}` }, redirect: "manual" }).then((r) =>
     assert.notEqual(r.status, 200),
   );
+});
+
+test("a signed-in person's admin, connect, drop, desktop and branding calls all name their tenant", async () => {
+  const now = Math.floor(Date.now() / 1000);
+  const cookie = `portal_session=${seal({ k: "session", sub: email, org: "acme", t: beta, auth: now, iat: now, exp: now + 600 }, sessionKey)}`;
+  coreCalls.length = 0;
+  for (const path of ["/connect/redeem/abc", "/drop/abc/form", "/connect/google/self-connect", "/"])
+    await fetch(`${base}${path}`, { headers: { cookie, accept: "text/html" }, redirect: "manual" });
+  await fetch(`${base}/auth/impersonate?target=other%40company.test`, {
+    method: "POST",
+    headers: { cookie, origin },
+    redirect: "manual",
+  });
+  const named = (prefix: string) => coreCalls.filter((c) => c.path.startsWith(prefix)).map((c) => c.tenant);
+  assert.deepEqual(named("/v1/connectors/oauth/consent/redeem/"), [beta]);
+  assert.deepEqual(named("/v1/keychain/drops/"), [beta]);
+  assert.deepEqual(named("/v1/connectors/oauth/google/start"), [beta]);
+  assert.ok(named("/v1/surface-config").includes(beta));
+  assert.deepEqual([...new Set(named("/v1/admin/whoami"))], [beta]);
+  const verifier = "v".repeat(43);
+  const challenge = createHash("sha256").update(verifier).digest("base64url");
+  const state = "s".repeat(43);
+  const page = await fetch(`${base}/auth/desktop?challenge=${challenge}&state=${state}`, {
+    method: "POST",
+    headers: { cookie, origin },
+  });
+  const code = new URL(/href="([^"]+)"/.exec(await page.text())![1]!.replaceAll("&amp;", "&")).searchParams.get(
+    "code",
+  )!;
+  const redeemed = await fetch(`${base}/auth/desktop/redeem`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ code, verifier, state }).toString(),
+  });
+  assert.equal(redeemed.status, 200);
+  assert.equal(sessionOf(redeemed)?.t, beta);
 });

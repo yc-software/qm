@@ -5,7 +5,7 @@ import { createControlService } from "../src/api/control-service.ts";
 import { deliveryCandidatesFor } from "../src/core/orchestrator/turn-helpers.ts";
 import { jsonbStringify } from "../src/util/text.ts";
 import { createSessionMailbox, type SessionMailbox, type SessionMessage } from "../src/sessions/session-mailbox.ts";
-import { test } from "node:test";
+import { test } from "./support/tenant-test.ts";
 import assert from "node:assert/strict";
 import {
   createSessionSyscalls,

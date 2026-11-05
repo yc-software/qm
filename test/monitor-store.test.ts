@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test } from "./support/tenant-test.ts";
 import assert from "node:assert/strict";
 import { createMonitorStore } from "../src/monitors/monitor-store.ts";
 import { scopeId } from "../src/types.ts";

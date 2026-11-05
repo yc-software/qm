@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test } from "./support/tenant-test.ts";
 import assert from "node:assert/strict";
 import { createIdempotencyStore, type IdempotencyRecord } from "../src/idempotency/idempotency-store.ts";
 import { testMap } from "./support/test-database.ts";

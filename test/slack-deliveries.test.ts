@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test } from "./support/tenant-test.ts";
 import { createDeliveryPoller } from "../src/slack/deliveries.ts";
 import { SLACK_POST_SPLIT_LIMIT } from "../src/slack/lib.ts";
 

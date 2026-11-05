@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test } from "./support/tenant-test.ts";
 import assert from "node:assert/strict";
 import { createModalSandbox } from "../src/sandbox/modal-sandbox.ts";
 import type { ModalClient, ModalSession } from "../src/sandbox/modal-client.ts";

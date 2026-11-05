@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
+import { test } from "./support/tenant-test.ts";
 import { createAgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
 import { buildModelRuntime } from "../src/model/model-runtime.ts";
 import { getRequiredModel } from "../src/model/pi-models.ts";

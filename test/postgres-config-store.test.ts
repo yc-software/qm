@@ -1,4 +1,4 @@
-import { test, before } from "node:test";
+import { test, before } from "./support/tenant-test.ts";
 import assert from "node:assert/strict";
 import { configStoreMaps, type PersistedSoul, type PersistedSoulRevision } from "../src/resolution/config-store.ts";
 import { settle } from "./support/settle.ts";

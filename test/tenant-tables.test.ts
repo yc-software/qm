@@ -17,6 +17,7 @@ const UNTENANTED: Record<string, string> = {
   source_auth_replay: "holds random replay nonces for signed internal calls",
   instance_heartbeats: "records the liveness of core processes",
   auth_broker_sessions: "holds identity-provider sign-in sessions, which exist before a tenant is chosen",
+  deployment_layer: "describes the installation's deployment layer, which the process reads before any tenant binds",
 };
 
 describe("tenant tables", () => {

@@ -66,3 +66,20 @@ export function appUrl(databaseUrl: string): string {
   url.searchParams.set("options", [otherOptions(url), `-c role=${APP_ROLE}`].filter(Boolean).join(" "));
   return url.toString();
 }
+
+export function schemaUrl(databaseUrl: string, schema: string): string {
+  const url = new URL(databaseUrl);
+  const options = url.searchParams.get("options");
+  url.searchParams.set("options", `${options ? `${options} ` : ""}-c search_path=${schema}`);
+  return url.toString();
+}
+
+export async function seedSchemaTenant(schemaDatabaseUrl: string): Promise<void> {
+  const pool = new pg.Pool({ connectionString: schemaDatabaseUrl, max: 1 });
+  try {
+    await applyPgMigrations(pool, TENANCY.map(definePgMigration));
+    await pool.query("INSERT INTO tenants(id) VALUES ($1) ON CONFLICT (id) DO NOTHING", [TEST_TENANT]);
+  } finally {
+    await pool.end();
+  }
+}

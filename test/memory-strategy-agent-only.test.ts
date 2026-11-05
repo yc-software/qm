@@ -1,4 +1,4 @@
-import test from "node:test";
+import { test } from "./support/tenant-test.ts";
 import assert from "node:assert/strict";
 import { createMemoryStrategy } from "../src/memory/strategy.ts";
 import { AGENT_ONLY_PROMPT_LINES, createAgentOnlyStrategy } from "../src/memory/strategies/agent-only.ts";

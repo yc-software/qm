@@ -1,5 +1,5 @@
 import type { TurnOrigin } from "../src/types.ts";
-import { describe, it } from "node:test";
+import { describe, it } from "./support/tenant-test.ts";
 import assert from "node:assert/strict";
 import { runTrigger, type TriggerDeps } from "../src/triggers/run-trigger.ts";
 import { composeCronEditNotice, notifyOwnerOfCronEdit, type CronEditNoticeSink } from "../src/triggers/edit-notice.ts";
