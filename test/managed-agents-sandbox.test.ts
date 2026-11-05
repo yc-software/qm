@@ -242,8 +242,9 @@ test("with a home backup store, restart backs up the home and replaces the sessi
   assert.equal((await sandbox.run(again, "cat ~/kept.txt")).stdout.trim(), "after");
 });
 
-test("a failed home snapshot retries on the next teardown", async () => {
+test("a failed home snapshot is reported once and waits out the interval before it retries", async () => {
   const uploads: number[] = [];
+  const failures: string[] = [];
   const snapshots: HomeSnapshotStore = {
     open: async () => null,
     put: async () => undefined,
@@ -252,13 +253,14 @@ test("a failed home snapshot retries on the next teardown", async () => {
       throw new Error("snapshot upload failed");
     },
   };
-  sandbox = make({ snapshots });
+  sandbox = make({ snapshots, onError: (e: { code: string }) => failures.push(e.code) });
   const h = await sandbox.provision(scope);
   await sandbox.teardown(h);
   const again = await sandbox.provision(scope);
   await sandbox.teardown(again);
   assert.equal(fake.checkpointCalls().length, 0);
-  assert.equal(uploads.length, 2);
+  assert.equal(uploads.length, 1);
+  assert.deepEqual(failures, ["teardown_snapshot_failed"]);
 });
 
 test("teardown pauses the session and the next provision resumes it", async () => {
