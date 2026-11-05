@@ -48,10 +48,10 @@ const HOLDS_QUOTA =
   "actor_id=$1 AND state NOT IN ('complete','aborted','failed') AND NOT (state='pending' AND expires_at <= $2)";
 
 export const FILE_UPLOAD_MIGRATIONS: PgMigrationDefinition[] = [
-    {
-      id: "files/uploads/0001",
-      statements: [
-        `CREATE TABLE IF NOT EXISTS file_uploads (
+  {
+    id: "files/uploads/0001",
+    statements: [
+      `CREATE TABLE IF NOT EXISTS file_uploads (
       id TEXT PRIMARY KEY,
       actor_id TEXT NOT NULL,
       state TEXT NOT NULL,
@@ -59,35 +59,35 @@ export const FILE_UPLOAD_MIGRATIONS: PgMigrationDefinition[] = [
       expires_at BIGINT NOT NULL,
       data JSONB NOT NULL
     )`,
-        `CREATE INDEX IF NOT EXISTS file_uploads_actor_state ON file_uploads(actor_id, state)`,
-        `CREATE INDEX IF NOT EXISTS file_uploads_expiry ON file_uploads(expires_at) WHERE state NOT IN ('complete', 'aborted')`,
-      ],
-    },
-    {
-      id: "files/uploads/0002",
-      statements: [
-        "ALTER TABLE file_uploads ADD COLUMN IF NOT EXISTS next_attempt_at BIGINT NOT NULL DEFAULT 0",
-        "CREATE INDEX IF NOT EXISTS file_uploads_retry ON file_uploads(next_attempt_at,expires_at) WHERE state NOT IN ('complete','aborted','failed')",
-      ],
-    },
-    ...tenantTables("files/uploads/0003-tenants", [{ table: "file_uploads", primaryKey: "id" }]),
-    {
-      id: "files/uploads/0004-claims",
-      statements: [
-        claimFunction(
-          "claim_expired_file_uploads",
-          "bigint",
-          `WITH due AS (
+      `CREATE INDEX IF NOT EXISTS file_uploads_actor_state ON file_uploads(actor_id, state)`,
+      `CREATE INDEX IF NOT EXISTS file_uploads_expiry ON file_uploads(expires_at) WHERE state NOT IN ('complete', 'aborted')`,
+    ],
+  },
+  {
+    id: "files/uploads/0002",
+    statements: [
+      "ALTER TABLE file_uploads ADD COLUMN IF NOT EXISTS next_attempt_at BIGINT NOT NULL DEFAULT 0",
+      "CREATE INDEX IF NOT EXISTS file_uploads_retry ON file_uploads(next_attempt_at,expires_at) WHERE state NOT IN ('complete','aborted','failed')",
+    ],
+  },
+  ...tenantTables("files/uploads/0003-tenants", [{ table: "file_uploads", primaryKey: "id" }]),
+  {
+    id: "files/uploads/0004-claims",
+    statements: [
+      claimFunction(
+        "claim_expired_file_uploads",
+        "bigint",
+        `WITH due AS (
              SELECT tenant_id, id FROM file_uploads
              WHERE expires_at <= $1 AND next_attempt_at <= $1 AND state NOT IN ('complete','aborted','failed')
              ORDER BY next_attempt_at, expires_at, id FOR UPDATE SKIP LOCKED LIMIT 100
            ) UPDATE file_uploads SET next_attempt_at=$1+60000 FROM due
              WHERE file_uploads.tenant_id=due.tenant_id AND file_uploads.id=due.id
              RETURNING file_uploads.tenant_id, file_uploads.id`,
-        ),
-        claimFunction("claim_file_upload", "text", "SELECT tenant_id, id FROM file_uploads WHERE id = $1"),
-      ],
-    },
+      ),
+      claimFunction("claim_file_upload", "text", "SELECT tenant_id, id FROM file_uploads WHERE id = $1"),
+    ],
+  },
 ];
 
 export function createPostgresFileUploadStore(connectionString: string): FileUploadStore {
