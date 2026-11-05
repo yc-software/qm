@@ -63,7 +63,7 @@ export interface PersistedBaseModel {
   effortLevel?: string;
   fastMode?: boolean;
 }
-export type RuntimePurpose = "cron" | "subagent" | "fallback";
+type RuntimePurpose = "cron" | "subagent" | "fallback";
 export type TurnRuntimePurpose = RuntimePurpose | "infrequentCron";
 
 interface RuntimeSelection {
