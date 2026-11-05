@@ -53,12 +53,8 @@ export interface AmbientBatch {
 }
 
 export function renderAmbientPrompt(batch: AmbientBatch, readable: Surface["readableText"]): string {
-  const tag = (m: CachedMessage): string => {
-    if (m.self) return " (you)";
-    return m.bot ? " (bot)" : "";
-  };
   const fmt = (m: CachedMessage): string =>
-    `${m.authorName || m.authorId || "someone"}${tag(m)}: ${readable(m.text, m.mentions)}`;
+    `${m.authorName || m.authorId || "someone"}${m.bot ? " (bot)" : ""}: ${readable(m.text, m.mentions)}`;
   const fmtBackdrop = (m: CachedMessage): string =>
     m.handled || m.mentionsSelf ? `${fmt(m)} [handled by the direct responder — do not re-engage]` : fmt(m);
   const shown = (ms: CachedMessage[]): CachedMessage[] => ms.filter((m) => !m.deleted && (m.text ?? "").trim());
