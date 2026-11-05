@@ -8,6 +8,9 @@ import type { MemoryProviderOutcome, MemoryService } from "../src/memory/memory-
 import { parseMemoryProviderConfig } from "../src/memory/provider-config.ts";
 import { createConfiguredMemoryService } from "../src/memory/provider-factory.ts";
 import { withProviders, writeFacts } from "../src/memory/provider-outcome.ts";
+import { recallAcrossScopes } from "../src/memory/cross-scope.ts";
+import { memoryRecallQuery } from "../src/memory/semantic-recall.ts";
+import { type NewItem, storedItem } from "../src/sessions/items.ts";
 import { startMcpTestServer } from "./support/mcp-test-server.ts";
 
 const contract = JSON.parse(
@@ -325,4 +328,33 @@ test("a gbrain write's provenance stays within the contract's limit for a long s
   assert.deepEqual(calls.flatMap(violations), []);
   const [fact] = calls[0]!.args.facts as Array<{ provenance: string }>;
   assert.equal(fact?.provenance, scope.slice(0, contract.memory_write.limits.provenance_chars));
+});
+
+test("a long conversation's recall asks gbrain with the member's message, within gbrain's question limit", async (t) => {
+  const quartet = [{ text: "Plays viola in a string quartet", date: "2026-11-02", kind: "fact" }];
+  const { calls, memory } = await gbrain(t, (_name, args) => {
+    const facts = String(args.query).trim().slice(0, 2000).includes("quartet") ? quartet : [];
+    return { content: [{ type: "text", text: recallLines(facts) }], structuredContent: { facts, truncated: false } };
+  });
+  const entry = (item: NewItem) => storedItem(item, { sessionId: "s", seq: 1, createdAt: 1 });
+  const dialogue = "We went through the quarterly plan, the hiring loop and the vendor renewal in detail. ".repeat(12);
+  const history = [
+    entry({ kind: "UserMessage", text: dialogue }),
+    entry({ kind: "AgentMessage", text: dialogue }),
+    entry({ kind: "UserMessage", text: dialogue }),
+    entry({ kind: "AgentMessage", text: dialogue }),
+  ];
+  const message = "Which instrument do I play in my string quartet?";
+  const recalled = await recallAcrossScopes(memory, [JORDAN], {
+    query: memoryRecallQuery(message, history),
+    input: message,
+    actorId: "U0JORDAN",
+    maxChars: 6000,
+  });
+
+  assert.deepEqual(
+    calls.map(({ args }) => args.query),
+    [message],
+  );
+  assert.ok(recalled.some(({ text }) => text.includes("Plays viola in a string quartet")));
 });

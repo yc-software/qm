@@ -8,7 +8,7 @@ import { replayableRequest } from "../src/core/orchestrator/turn-helpers.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
-import type { MemoryService } from "../src/memory/memory-service.ts";
+import type { MemoryRecallContext, MemoryService } from "../src/memory/memory-service.ts";
 import type { MemoryStrategy } from "../src/memory/strategy.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
@@ -238,4 +238,27 @@ test("recall does NOT block on an in-flight capture; continuity is eventually-co
     reply = (await orch.handleTurn(dm(`dm:U1:tC${i}`, "!sysprompt"))).reply ?? "";
   }
   assert.match(reply, /ZULU77/, "the recalled fact appears once the detached capture has settled");
+});
+
+test("an addressed turn asks memory with the message the member sent, not its wake envelope", async () => {
+  const contexts: Array<MemoryRecallContext | undefined> = [];
+  const memory: MemoryService = {
+    recall: async (_scope, context) => (contexts.push(context), []),
+    capture: async () => 0,
+    query: async () => [],
+    read: async () => "",
+  };
+  const orch = buildOrchestrator(createMockAgent(), memory);
+  const message = "Which instrument do I play in my string quartet?";
+
+  const result = await orch.handleTurn({
+    ...dm("dm:U1:addressed", '<wake reason="addressed"><message>Which instrument do I play?</message></wake>'),
+    origin: { kind: "human" },
+    displayText: message,
+    envelopeWrapped: true,
+  });
+
+  assert.equal(result.status, "ok");
+  assert.ok(contexts.length > 0);
+  assert.deepEqual(new Set(contexts.map((context) => context?.input)), new Set([message]));
 });

@@ -1966,6 +1966,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             memoryRecallQuery(input.text, history),
             loadedFacts,
             (outcome) => void recallOutcomes.push(outcome),
+            isPersonAuthored(input.origin.kind) && !sessionTurn ? titleText : undefined,
           );
         const importsOverheard = (!input.envelopeWrapped || humanInput) && !!input.overheard?.length;
         const earlyRecall =
