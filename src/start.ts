@@ -42,7 +42,6 @@ export async function startQm(
   await inBootTenant(tenant, async () => {
     if (tenant) await loadTenant();
     await built.deploymentLayerReady;
-    if (tenant) await built.deploymentLayerStore.hydrate();
     built.deploymentLayerRefresh.start();
   });
   server.listen(config.port);

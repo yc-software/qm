@@ -318,7 +318,7 @@ import {
 } from "./auth/capability-token.ts";
 import { createControlService } from "./api/control-service.ts";
 import { createPostgresRunStore } from "./runs/postgres-run-store.ts";
-import { withTenant } from "./tenants/context.ts";
+import { boundTenant, currentTenant, withTenant } from "./tenants/context.ts";
 import type { RunSignalStore } from "./runs/run-signal-store.ts";
 import { createPostgresRunSignalStore } from "./runs/postgres-run-signal-store.ts";
 import { isTerminal, type Run, type RunStore } from "./runs/run-store.ts";
@@ -700,8 +700,16 @@ export function buildApp(
         }
       : {}),
   });
-  const deploymentLayerReady = deploymentLayerStore.hydrate();
-  const deploymentLayerRefresh = createUntrackedSweeper(() => deploymentLayerStore.hydrate(), 30_000, {
+  const layerTenants = new Set<string>();
+  const deploymentLayerReady = boundTenant() ? deploymentLayerStore.hydrate() : Promise.resolve(null);
+  const stopLayerLoad = onTenantLoad(async () => {
+    layerTenants.add(currentTenant());
+    await deploymentLayerStore.hydrate();
+  });
+  const refreshLayerTenants = async (): Promise<void> => {
+    for (const tenant of layerTenants) await withTenant(tenant, () => deploymentLayerStore.hydrate());
+  };
+  const deploymentLayerRefresh = createUntrackedSweeper(refreshLayerTenants, 30_000, {
     label: "deployment layer refresh",
   });
   const installCatalogs = async (): Promise<void> => {
@@ -2936,6 +2944,7 @@ export function buildApp(
     releaseInFlightRuns,
     async stop() {
       stopTenantLoad();
+      stopLayerLoad();
       renderBasePreparing?.abort();
       const draining = drain.stop();
       await stopBackground();
