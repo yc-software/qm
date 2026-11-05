@@ -206,15 +206,15 @@ async function brainTarget(ctx: ApiCtx, b: Record<string, unknown>): Promise<Sec
     });
     return null;
   }
+  if ((await adminStanding(deps, capability!.actorId)) !== "admin") {
+    sendJson(res, 403, { error: "forbidden", message: "only an org admin can set a memory brain's secret" });
+    return null;
+  }
   const brain = readRegistry((await deps.memoryRegistry.current()).record).brains.find(
     ({ id }) => id === b.memoryBrain,
   );
   if (!brain) {
     sendJson(res, 404, { error: "not_found", message: `no memory brain ${String(b.memoryBrain)}` });
-    return null;
-  }
-  if ((await adminStanding(deps, capability!.actorId)) !== "admin") {
-    sendJson(res, 403, { error: "forbidden", message: `only an org admin can set brain ${brain.id}'s secret` });
     return null;
   }
   return { id: brain.id, url: brain.url };
@@ -339,11 +339,11 @@ async function mintDrop(ctx: ApiCtx): Promise<void> {
     purpose: b.purpose.trim(),
     requestedBy: capability.actorId,
     audienceScopeId: capability.scopeId,
-    ...(wantsGrant && capability.scopeVersion ? { scopeVersion: capability.scopeVersion } : {}),
     ...(brain
       ? { memoryBrain: brain }
       : {
           ...(wantsGrant ? { grantMode: (b.grantMode as GrantMode | undefined) ?? "standing" } : {}),
+          ...(wantsGrant && capability.scopeVersion ? { scopeVersion: capability.scopeVersion } : {}),
           ...(dest.ok && dest.destination ? { destination: dest.destination } : {}),
           ...(capability.threadRef ? { threadRef: capability.threadRef } : {}),
         }),
@@ -419,7 +419,7 @@ async function redeemDrop(ctx: ApiCtx): Promise<void> {
     });
   }
   const attestation = linkClaims === true ? undefined : linkClaims;
-  if (!(await dropScopeAuthorized(ctx, peeked.rec, attestation))) {
+  if (!peeked.rec.memoryBrain && !(await dropScopeAuthorized(ctx, peeked.rec, attestation))) {
     return sendJson(res, 409, {
       error: "scope_changed",
       message: "couldn't confirm you're still in this conversation — try again, or ask the agent for a fresh link",
