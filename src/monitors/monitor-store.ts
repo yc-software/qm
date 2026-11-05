@@ -72,12 +72,8 @@ export function createMonitorStore(backing: DurableMap<Monitor>): MonitorStore {
       return (await backing.all()).filter((m) => m.enabled);
     },
     async claimEnabled() {
-      const claimed = await claimThenBind(
-        () => backing.claimIds(),
-        async (id) => {
-          const m = await backing.get(id);
-          return m?.enabled ? [{ ...m, tenantId: currentTenant() }] : [];
-        },
+      const claimed = await claimThenBind(backing.claimTenants, async () =>
+        (await backing.all()).filter((m) => m.enabled).map((m) => ({ ...m, tenantId: currentTenant() })),
       );
       return claimed.flat();
     },
@@ -87,11 +83,11 @@ export function createMonitorStore(backing: DurableMap<Monitor>): MonitorStore {
     delete: (id) => backing.delete(id),
     async deleteDefunct(now) {
       const isDefunct = defunctBefore(now - DEFUNCT_MONITOR_GRACE_MS);
-      const deleted = await claimThenBind(
-        () => backing.claimIds(),
-        (id) => backing.deleteIf(id, isDefunct),
-      );
-      return deleted.filter(Boolean).length;
+      const deleted = await claimThenBind(backing.claimTenants, async () => {
+        const defunct = (await backing.entries()).filter(([, m]) => isDefunct(m));
+        return Promise.all(defunct.map(([id]) => backing.deleteIf(id, isDefunct)));
+      });
+      return deleted.flat().filter(Boolean).length;
     },
     async advance(id, fields) {
       await backing.merge(id, {
