@@ -8,7 +8,7 @@ import {
   UploadPartCommand,
 } from "@aws-sdk/client-s3";
 import { shq } from "../util/shell.ts";
-import { swallowAs } from "../util/errors.ts";
+import { errMessage, swallowAs } from "../util/errors.ts";
 import { sleep, withTimeout } from "../util/async.ts";
 import { bodyToReadable, isNoSuchKey, s3Client, type S3Send } from "../persistence/s3.ts";
 import { displacedPruneGlobs } from "../credentials/resident-paths.ts";
@@ -32,8 +32,12 @@ export const HOME_SNAPSHOT_PRUNE = [
 
 export interface SnapshotBookkeeping {
   lastSnapshotMs?: number;
+  lastSnapshotAttemptMs?: number;
   homeDirty?: boolean;
 }
+
+export const lastSnapshotAttemptAt = (stored: SnapshotBookkeeping | null | undefined): number =>
+  Math.max(stored?.lastSnapshotMs ?? 0, stored?.lastSnapshotAttemptMs ?? 0);
 
 export function snapshotDue(
   stored: SnapshotBookkeeping | null | undefined,
@@ -41,9 +45,36 @@ export function snapshotDue(
   intervalMs: number,
   now = Date.now(),
 ): boolean {
-  const throttled = !!stored?.lastSnapshotMs && now - stored.lastSnapshotMs <= intervalMs;
-  if (throttled) return false;
+  const lastAttempt = lastSnapshotAttemptAt(stored);
+  if (lastAttempt && now - lastAttempt <= intervalMs) return false;
   return !tdOpts?.homeUnchanged || stored?.homeDirty !== false;
+}
+
+export async function recordSnapshot(
+  capture: () => Promise<void>,
+  record: (patch: SnapshotBookkeeping, failure?: string) => Promise<unknown> | unknown,
+): Promise<void> {
+  const attemptedAtMs = Date.now();
+  try {
+    await capture();
+  } catch (error) {
+    await record({ lastSnapshotAttemptMs: attemptedAtMs }, errMessage(error));
+    throw error;
+  }
+  await record({ lastSnapshotMs: Date.now(), lastSnapshotAttemptMs: undefined, homeDirty: false });
+}
+
+export async function attemptSnapshot(
+  stored: SnapshotBookkeeping | null | undefined,
+  snapshot: () => Promise<void>,
+  reportFailure: (error: unknown) => void,
+): Promise<void> {
+  const alreadyFailing = stored?.lastSnapshotAttemptMs !== undefined;
+  try {
+    await snapshot();
+  } catch (error) {
+    if (!alreadyFailing) reportFailure(error);
+  }
 }
 
 export interface SnapshotUpload {

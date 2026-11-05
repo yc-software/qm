@@ -242,23 +242,50 @@ test("with a home backup store, restart backs up the home and replaces the sessi
   assert.equal((await sandbox.run(again, "cat ~/kept.txt")).stdout.trim(), "after");
 });
 
-test("a failed home snapshot retries on the next teardown", async () => {
-  const uploads: number[] = [];
+test("a failed home snapshot waits a full interval before retrying and is reported once per episode", async () => {
+  let uploads = 0;
+  let failing = true;
+  const memory = createMemorySnapshotStore();
   const snapshots: HomeSnapshotStore = {
-    open: async () => null,
-    put: async () => undefined,
-    createUpload: async () => {
-      uploads.push(1);
-      throw new Error("snapshot upload failed");
+    ...memory,
+    createUpload: async (key) => {
+      uploads++;
+      if (failing) throw new Error("snapshot upload failed");
+      return memory.createUpload(key);
     },
   };
-  sandbox = make({ snapshots });
-  const h = await sandbox.provision(scope);
-  await sandbox.teardown(h);
-  const again = await sandbox.provision(scope);
-  await sandbox.teardown(again);
+  const store: DurableMap<StoredManagedAgentsSandbox> = testMap<StoredManagedAgentsSandbox>();
+  const events: Array<{ code: string }> = [];
+  sandbox = make({ snapshots, store, onError: (e: { code: string }) => events.push(e) });
+  const reported = (): number => events.filter((e) => e.code === "teardown_snapshot_failed").length;
+  const turn = async (): Promise<void> => sandbox.teardown(await sandbox.provision(scope));
+  const intervalPasses = async (): Promise<void> => {
+    const stored = (await store.get(scope))!;
+    await store.merge(scope, {
+      ...(stored.lastSnapshotMs ? { lastSnapshotMs: stored.lastSnapshotMs - 10 * 60_000 } : {}),
+      ...(stored.lastSnapshotAttemptMs ? { lastSnapshotAttemptMs: stored.lastSnapshotAttemptMs - 10 * 60_000 } : {}),
+    });
+  };
+  await turn();
+  await turn();
+  assert.equal(uploads, 1, "a failed snapshot is not retried by the next teardown");
+  assert.equal(reported(), 1);
+  assert.equal((await store.get(scope))?.homeDirty, true);
+  await intervalPasses();
+  await turn();
+  assert.equal(uploads, 2, "it is retried once the interval has passed");
+  assert.equal(reported(), 1, "the repeat failure is not reported again");
+  failing = false;
+  await intervalPasses();
+  await turn();
+  assert.equal(uploads, 3);
+  assert.equal((await store.get(scope))?.homeDirty, false, "the provider recovering saves the dirty home");
+  assert.equal((await store.get(scope))?.lastSnapshotAttemptMs, undefined);
+  failing = true;
+  await intervalPasses();
+  await turn();
+  assert.equal(reported(), 2, "a failure after a success starts a new episode");
   assert.equal(fake.checkpointCalls().length, 0);
-  assert.equal(uploads.length, 2);
 });
 
 test("teardown pauses the session and the next provision resumes it", async () => {

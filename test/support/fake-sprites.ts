@@ -38,6 +38,7 @@ export interface FakeSprites {
   policy(name: string): NetworkRule[] | null;
   resources(name: string): { limitMB: number } | null;
   checkpoints(name: string): string[];
+  failCheckpoints(name: string, error: string | null): void;
   execScripts(): string[];
   stallAfterRun(name: string): void;
   fail502(name: string): void;
@@ -176,6 +177,7 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
   const unhealthy = new Map<string, string>();
   const health = new Map<string, { status: string; reason: string }>();
   const brokenReadback = new Set<string>();
+  const checkpointFailures = new Map<string, string>();
   const restarts: string[] = [];
   let refuseDeleteStatus: number | undefined;
   let rateLimitRetryAfter: number | undefined;
@@ -362,6 +364,8 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
       return new Response(null, { status: 204 });
     }
     if (sub === "checkpoint" && method === "POST") {
+      const failure = checkpointFailures.get(name);
+      if (failure !== undefined) return ndjson([{ type: "error", error: failure }]);
       const body = JSON.parse(toBuf(init?.body).toString() || "{}") as { comment?: string };
       const id = `v${++checkpointSeq}`;
       const dir = join(root, ".checkpoints", name, id);
@@ -448,6 +452,10 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
     policy: (name) => policies.get(name) ?? null,
     resources: (name) => resources.get(name) ?? null,
     checkpoints: (name) => (checkpoints.get(name) ?? []).map((c) => c.id),
+    failCheckpoints: (name, error) => {
+      if (error === null) checkpointFailures.delete(name);
+      else checkpointFailures.set(name, error);
+    },
     execScripts: () => [...execScripts],
     stallAfterRun: (name) => {
       stallAfterRun.add(name);
@@ -495,6 +503,7 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
       unhealthy.clear();
       health.clear();
       brokenReadback.clear();
+      checkpointFailures.clear();
       restarts.length = 0;
       injected.length = 0;
       refuseDeleteStatus = undefined;

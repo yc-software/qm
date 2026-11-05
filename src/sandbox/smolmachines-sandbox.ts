@@ -15,7 +15,15 @@ import { ephemeralCredLinkPaths, type CredentialPathSpec } from "../credentials/
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
 import { createExecSandboxBase, sandboxScopeName } from "./exec-sandbox-base.ts";
 import { createLayerToolInstaller } from "./layer-tool-install.ts";
-import { createHomeSnapshotOps, HOME_SNAPSHOT_PRUNE, snapshotDue, type HomeSnapshotStore } from "./home-snapshot.ts";
+import {
+  attemptSnapshot,
+  createHomeSnapshotOps,
+  HOME_SNAPSHOT_PRUNE,
+  recordSnapshot,
+  snapshotDue,
+  type HomeSnapshotStore,
+  type SnapshotBookkeeping,
+} from "./home-snapshot.ts";
 import type { LayerInstallFile } from "../deployment/load-layer.ts";
 import type { AgentComputerProfile, ComputerStatus, ExecResult, Sandbox, TeardownOptions } from "./sandbox.ts";
 
@@ -57,10 +65,8 @@ interface MachineExecResponse {
   stderrTruncated?: boolean;
 }
 
-export interface StoredSmolmachinesSandbox {
+export interface StoredSmolmachinesSandbox extends SnapshotBookkeeping {
   initializationPending?: boolean;
-  lastSnapshotMs?: number;
-  homeDirty?: boolean;
   snapshotError?: string;
 }
 
@@ -369,13 +375,10 @@ export function createSmolmachinesSandbox(opts: SmolmachinesSandboxOptions): San
   }
 
   async function snapshotHome(scope: string, name: string): Promise<void> {
-    try {
-      await homeSnapshots!.snapshotHome(scope, name);
-      await mergeStored(scope, { lastSnapshotMs: Date.now(), homeDirty: false, snapshotError: undefined });
-    } catch (e) {
-      await mergeStored(scope, { snapshotError: errMessage(e) });
-      throw e;
-    }
+    await recordSnapshot(
+      () => homeSnapshots!.snapshotHome(scope, name),
+      (patch, failure) => mergeStored(scope, { ...patch, snapshotError: failure }),
+    );
   }
 
   function ensureMachine(
@@ -601,16 +604,17 @@ export function createSmolmachinesSandbox(opts: SmolmachinesSandboxOptions): San
             if (stored?.initializationPending) return;
             if (!tdOpts?.homeUnchanged) await mergeStored(scope, { homeDirty: true });
             if (!snapshotDue(stored, tdOpts, snapshotIntervalMs)) return;
-            try {
-              await snapshotHome(scope, handle.id);
-            } catch (e) {
-              opts.onError?.({
-                category: "sandbox_snapshot",
-                code: "teardown_snapshot_failed",
-                message: errMessage(e),
-                scopeLabel: scope,
-              });
-            }
+            await attemptSnapshot(
+              stored,
+              () => snapshotHome(scope, handle.id),
+              (e) =>
+                opts.onError?.({
+                  category: "sandbox_snapshot",
+                  code: "teardown_snapshot_failed",
+                  message: errMessage(e),
+                  scopeLabel: scope,
+                }),
+            );
           }),
         );
       }

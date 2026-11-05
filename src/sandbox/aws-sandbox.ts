@@ -27,7 +27,15 @@ import type {
   TeardownOptions,
 } from "./sandbox.ts";
 import { execFailureDetail, visibleNotInstalled, visibleTools } from "./sandbox.ts";
-import { createHomeSnapshotOps, createS3SnapshotStore, HOME_SNAPSHOT_PRUNE, snapshotDue } from "./home-snapshot.ts";
+import {
+  attemptSnapshot,
+  createHomeSnapshotOps,
+  createS3SnapshotStore,
+  HOME_SNAPSHOT_PRUNE,
+  recordSnapshot,
+  snapshotDue,
+  type SnapshotBookkeeping,
+} from "./home-snapshot.ts";
 import {
   ephemeralCredLinkPaths,
   ephemeralCredLinkScript,
@@ -46,14 +54,12 @@ const DEFAULT_INGRESS = (region: string) =>
 const DEFAULT_EGRESS = (region: string) =>
   `arn:aws:lambda:${region}:aws:network-connector:aws-network-connector:INTERNET_EGRESS`;
 
-export interface StoredMicrovm {
+export interface StoredMicrovm extends SnapshotBookkeeping {
   microvmId: string;
   endpoint: string;
   imageVersion?: string;
   createdAtMs: number;
-  lastSnapshotMs?: number;
   lastActivityMs?: number;
-  homeDirty?: boolean;
   provisioning?: boolean;
   orgId?: string;
 }
@@ -186,7 +192,11 @@ export function createAwsSandbox(opts: AwsSandboxOptions): Sandbox {
     },
   });
 
-  const snapshotHome = (scope: string, id: string): Promise<void> => homeSnapshots.snapshotHome(scope, id);
+  const snapshotHome = (scope: string, id: string): Promise<void> =>
+    recordSnapshot(
+      () => homeSnapshots.snapshotHome(scope, id),
+      (patch) => store.merge(scope, patch),
+    );
   const hydrateHome = (scope: string, id: string): Promise<boolean> => homeSnapshots.hydrateHome(scope, id);
 
   let resolvedImageArn: string | undefined;
@@ -509,17 +519,13 @@ export function createAwsSandbox(opts: AwsSandboxOptions): Sandbox {
           const stored = await store.get(scope);
           if (stored?.microvmId !== handle.id) return;
           if (!tdOpts?.homeUnchanged) await store.merge(scope, { homeDirty: true });
-          if (snapshotDue(stored, tdOpts, snapshotIntervalMs)) {
-            try {
-              await snapshotHome(scope, handle.id);
-              await store.merge(scope, { lastSnapshotMs: Date.now(), lastActivityMs: Date.now(), homeDirty: false });
-            } catch (e) {
-              reportError("sandbox_snapshot", "teardown_snapshot_failed", errMessage(e), scope);
-              await store.merge(scope, { lastActivityMs: Date.now() }).catch(() => {});
-            }
-          } else {
-            await store.merge(scope, { lastActivityMs: Date.now() }).catch(() => {});
-          }
+          if (snapshotDue(stored, tdOpts, snapshotIntervalMs))
+            await attemptSnapshot(
+              stored,
+              () => snapshotHome(scope, handle.id),
+              (e) => reportError("sandbox_snapshot", "teardown_snapshot_failed", errMessage(e), scope),
+            );
+          await store.merge(scope, { lastActivityMs: Date.now() }).catch(() => {});
           await api.suspend(handle.id).catch(swallowAs("aws-sandbox: suspend on teardown", undefined));
         });
       }

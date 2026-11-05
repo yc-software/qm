@@ -26,6 +26,7 @@ import {
 } from "./sandbox.ts";
 import type { RenderClient, RenderSandboxInfo, RenderSnapshot } from "./render-client.ts";
 import type { RenderBase } from "./render-base.ts";
+import { attemptSnapshot, lastSnapshotAttemptAt } from "./home-snapshot.ts";
 import { RENDER_COMPUTER_LIFETIME_SEC, RENDER_IDLE_STOP_MS, RENDER_SANDBOX_TTL_SEC } from "./render-limits.ts";
 
 interface RenderSandboxResources {
@@ -41,6 +42,7 @@ export interface StoredRenderSandbox extends RenderSandboxResources {
   stopped?: boolean;
   homeDirty?: boolean;
   savedAtMs?: number;
+  lastSnapshotAttemptMs?: number;
   retiredResources?: RenderSandboxResources[];
   retirementError?: string;
   recoveryError?: string;
@@ -115,7 +117,7 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
     return scope;
   };
   const recentlySaved = (stored: StoredRenderSandbox): boolean =>
-    stored.savedAtMs !== undefined && Date.now() - stored.savedAtMs < checkpointIntervalMs;
+    Date.now() - lastSnapshotAttemptAt({ ...stored, lastSnapshotMs: stored.savedAtMs }) < checkpointIntervalMs;
   const idFor = async (name: string, homeDirty = false): Promise<string> => {
     if (!base.scopeFor(name)) {
       const temporary = await scratchStore.get(name);
@@ -213,6 +215,7 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
       const merged = await store.merge(scope, {
         checkpoint: available,
         savedAtMs: Date.now(),
+        lastSnapshotAttemptMs: undefined,
         homeDirty: active,
         recoveryError: undefined,
         retiredResources: stored.checkpoint
@@ -222,11 +225,12 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
       if (!merged) throw new Error(`Render sandbox checkpoint lost its scope: ${scope}`);
       saved = merged;
     } catch (error) {
-      reportError("native_checkpoint_failed", error, scope);
+      if (stored.lastSnapshotAttemptMs === undefined) reportError("native_checkpoint_failed", error, scope);
       const current = await store.get(scope);
       if (current) {
         const failed = await store.merge(scope, {
           recoveryError: errMessage(error),
+          lastSnapshotAttemptMs: Date.now(),
           ...(snapshot &&
           current.checkpoint?.id !== snapshot.id &&
           !current.retiredResources?.some((resources) => resources.checkpoint?.id === snapshot?.id)
@@ -571,7 +575,11 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
         if (!options?.homeUnchanged && stored.homeDirty !== true)
           stored = (await store.merge(scope, { homeDirty: true })) ?? stored;
         if (stored.homeDirty !== false && !recentlySaved(stored))
-          await checkpoint(scope, stored).catch((error) => reportError("teardown_checkpoint_failed", error, scope));
+          await attemptSnapshot(
+            stored,
+            () => checkpoint(scope, stored).then(() => undefined),
+            (error) => reportError("teardown_checkpoint_failed", error, scope),
+          );
         await store.merge(scope, { lastActivityMs: Date.now() });
       });
     },

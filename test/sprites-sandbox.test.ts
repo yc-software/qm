@@ -363,6 +363,40 @@ test("a checkpoint failure is reported and never fails the teardown", async () =
   assert.ok(fake.checkpoints(h.id).length <= 1);
 });
 
+test("a provider-side checkpoint failure waits a full interval and is reported once per failure episode", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+  const events: Array<{ code: string; message: string }> = [];
+  const s = make({ onError: (e: { code: string; message: string }) => events.push(e) });
+  const h = await s.provision(scope);
+  const attempts = (): number => fake.calls.filter((c) => c.method === "POST" && c.path.endsWith("/checkpoint")).length;
+  const reported = (): number => events.filter((e) => e.code === "checkpoint_failed").length;
+  const nextInterval = (): void => t.mock.timers.tick(5 * 60_000 + 1);
+  fake.failCheckpoints(h.id, "Failed to create checkpoint: rename checkpoints/v7.in-progress");
+  await s.teardown(h);
+  assert.equal(attempts(), 1);
+  assert.equal(reported(), 1);
+  assert.match(events[0]!.message, /v7\.in-progress/);
+  await s.teardown(h);
+  await s.teardown(h);
+  assert.equal(attempts(), 1, "teardowns inside the interval do not retry a failed checkpoint");
+  nextInterval();
+  await s.teardown(h);
+  assert.equal(attempts(), 2, "the next interval retries");
+  assert.equal(reported(), 1, "a repeat of the same failure is not reported again");
+  fake.failCheckpoints(h.id, null);
+  nextInterval();
+  await s.teardown(h, { homeUnchanged: true });
+  assert.deepEqual(
+    fake.checkpoints(h.id),
+    ["v1"],
+    "the home dirtied before the failures is saved once the provider recovers",
+  );
+  fake.failCheckpoints(h.id, "Failed to create checkpoint: storage offline");
+  nextInterval();
+  await s.teardown(h);
+  assert.equal(reported(), 2, "a failure after a success starts a new episode");
+});
+
 test("computerStatus reports checkpoint recovery and a healthy machine whose shell has stopped answering", async () => {
   const h = await sandbox.provision(scope);
   const fresh = await sandbox.computerStatus!(scope);

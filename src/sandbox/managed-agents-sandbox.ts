@@ -31,11 +31,14 @@ import {
   type ManagedAgentsSession,
 } from "./managed-agents-client.ts";
 import {
+  attemptSnapshot,
   createHomeSnapshotOps,
   HOME_SNAPSHOT_PRUNE,
   isJobComputerScope,
+  recordSnapshot,
   snapshotDue,
   type HomeSnapshotStore,
+  type SnapshotBookkeeping,
 } from "./home-snapshot.ts";
 import type {
   AgentComputerProfile,
@@ -64,14 +67,12 @@ function transfersDirectly(absPath: string): boolean {
   return (absPath === WORKSPACE_ROOT || absPath.startsWith(`${WORKSPACE_ROOT}/`)) && !hasParentPathSegment(absPath);
 }
 
-export interface StoredManagedAgentsSandbox {
+export interface StoredManagedAgentsSandbox extends SnapshotBookkeeping {
   sessionId: string;
   sandboxId: string;
   preservationState?: "running" | "paused" | "pause_failed";
   preservationError?: string;
   createdAtMs: number;
-  lastSnapshotMs?: number;
-  homeDirty?: boolean;
   checkpointId?: string;
   checkpointAtMs?: number;
   checkpointError?: string;
@@ -129,8 +130,10 @@ export function createManagedAgentsSandbox(opts: ManagedAgentsSandboxOptions): S
 
   async function snapshotHome(scope: string, session: ManagedAgentsSession): Promise<void> {
     if (!homeSnapshots) return;
-    await homeSnapshots.snapshotHome(scope, session);
-    await store.merge(scope, { lastSnapshotMs: Date.now(), homeDirty: false });
+    await recordSnapshot(
+      () => homeSnapshots.snapshotHome(scope, session),
+      (patch) => store.merge(scope, patch),
+    );
   }
 
   async function pendingDeletes(scope: string): Promise<string[]> {
@@ -158,19 +161,25 @@ export function createManagedAgentsSandbox(opts: ManagedAgentsSandboxOptions): S
 
   async function captureCheckpoint(scope: string, session: ManagedAgentsSession): Promise<void> {
     if (isJobComputerScope(scope)) return;
-    const stored = await store.get(scope);
-    const previous = stored?.checkpointId;
-    const captured = await session.createCheckpoint(CHECKPOINT_LABEL);
-    const pending = stored?.pendingCheckpointDeletes ?? [];
-    const queued =
-      previous && previous !== captured.checkpointId && !pending.includes(previous) ? [...pending, previous] : pending;
-    await store.merge(scope, {
-      checkpointId: captured.checkpointId,
-      checkpointAtMs: captured.createdAtMs ?? Date.now(),
-      checkpointError: undefined,
-      pendingCheckpointDeletes: queued,
-    });
-    if (previous && previous !== captured.checkpointId) await forgetCheckpoint(scope, session, previous);
+    await recordSnapshot(
+      async () => {
+        const stored = await store.get(scope);
+        const previous = stored?.checkpointId;
+        const captured = await session.createCheckpoint(CHECKPOINT_LABEL);
+        const pending = stored?.pendingCheckpointDeletes ?? [];
+        const queued =
+          previous && previous !== captured.checkpointId && !pending.includes(previous)
+            ? [...pending, previous]
+            : pending;
+        await store.merge(scope, {
+          checkpointId: captured.checkpointId,
+          checkpointAtMs: captured.createdAtMs ?? Date.now(),
+          pendingCheckpointDeletes: queued,
+        });
+        if (previous && previous !== captured.checkpointId) await forgetCheckpoint(scope, session, previous);
+      },
+      (patch, failure) => store.merge(scope, { ...patch, checkpointError: failure }),
+    );
   }
 
   const hydrateHome = async (scope: string, session: ManagedAgentsSession): Promise<boolean> =>
@@ -633,25 +642,19 @@ export function createManagedAgentsSandbox(opts: ManagedAgentsSandboxOptions): S
     const stored = await store.get(scope);
     if (!tdOpts?.homeUnchanged) await store.merge(scope, { homeDirty: true });
     await retryPendingCheckpointDeletes(scope, session);
-    const homeDirty = stored?.homeDirty;
-    if (
-      !homeSnapshots &&
-      snapshotDue({ lastSnapshotMs: stored?.checkpointAtMs, homeDirty }, tdOpts, snapshotIntervalMs)
-    ) {
-      try {
-        await captureCheckpoint(scope, session);
-      } catch (e) {
-        await store.merge(scope, { checkpointError: errMessage(e) });
-        reportError("sandbox_snapshot", "checkpoint_failed", errMessage(e), scope);
-      }
-    }
-    if (snapshotDue({ lastSnapshotMs: stored?.lastSnapshotMs, homeDirty }, tdOpts, snapshotIntervalMs)) {
-      try {
-        await snapshotHome(scope, session);
-      } catch (e) {
-        reportError("sandbox_snapshot", "teardown_snapshot_failed", errMessage(e), scope);
-      }
-    }
+    if (homeSnapshots) {
+      if (snapshotDue(stored, tdOpts, snapshotIntervalMs))
+        await attemptSnapshot(
+          stored,
+          () => snapshotHome(scope, session),
+          (e) => reportError("sandbox_snapshot", "teardown_snapshot_failed", errMessage(e), scope),
+        );
+    } else if (snapshotDue({ ...stored, lastSnapshotMs: stored?.checkpointAtMs }, tdOpts, snapshotIntervalMs))
+      await attemptSnapshot(
+        stored,
+        () => captureCheckpoint(scope, session),
+        (e) => reportError("sandbox_snapshot", "checkpoint_failed", errMessage(e), scope),
+      );
     if (tdOpts?.keepWarm) return;
     try {
       await session.pause();

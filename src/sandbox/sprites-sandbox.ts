@@ -20,8 +20,10 @@ import { createExecSandboxBase, sandboxScopeName } from "./exec-sandbox-base.ts"
 import { withConnectorSdk, type ConnectorSdkBundle } from "./connector-sdk.ts";
 import { createLayerToolInstaller } from "./layer-tool-install.ts";
 import {
+  attemptSnapshot,
   createHomeSnapshotOps,
   HOME_SNAPSHOT_PRUNE,
+  recordSnapshot,
   snapshotDue,
   type HomeSnapshotStore,
   type SnapshotBookkeeping,
@@ -409,13 +411,15 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
     checkpointBooks.set(name, book);
     if (!tdOpts?.homeUnchanged) book.homeDirty = true;
     if (!snapshotDue(book, tdOpts, checkpointIntervalMs)) return;
-    try {
-      await createCheckpoint(name);
-      book.lastSnapshotMs = Date.now();
-      book.homeDirty = false;
-    } catch (e) {
-      reportError("sandbox_snapshot", "checkpoint_failed", errMessage(e), base.scopeFor(name));
-    }
+    await attemptSnapshot(
+      book,
+      () =>
+        recordSnapshot(
+          () => createCheckpoint(name),
+          (patch) => Object.assign(book, patch),
+        ),
+      (e) => reportError("sandbox_snapshot", "checkpoint_failed", errMessage(e), base.scopeFor(name)),
+    );
   }
 
   const forget = (name: string): void => {
