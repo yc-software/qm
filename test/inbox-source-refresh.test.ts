@@ -1,31 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createInboxSourceRefresh as createRefresh } from "../src/loops/inbox-source-refresh.ts";
-import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
 import type { IngressEntry } from "../src/loops/ingress.ts";
 import { createPostgresErrorLog } from "../src/admin/postgres-error-log.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { createInboxSourceRefresh, featureFlags, fixture, json, tokens } from "./support/inbox-source-refresh.ts";
 
-async function fixture(source = "gmail", meta: Record<string, unknown> = { threadId: "t1" }) {
-  const items = createLoopItemLedger(testMap());
-  await items.ingest([
-    {
-      loopId: "inbox",
-      dedupeKey: "ask",
-      source,
-      sourceAt: 1000,
-      sourcePayload: { [source]: meta, context: [{ author: "Elsewhere", text: "UNRELATED CHANNEL TAIL" }] },
-      proposal: { by: "human", data: { body: "Keep my edit" } },
-    },
-  ]);
-  return { items, item: (await items.byLoop("inbox"))[0]! };
-}
-const featureFlags = { enabled: async () => true };
-const createInboxSourceRefresh = (
-  deps: Omit<Parameters<typeof createRefresh>[0], "enqueue"> & {
-    enqueue?: Parameters<typeof createRefresh>[0]["enqueue"];
-  },
-) => createRefresh({ enqueue: async () => undefined, ...deps });
 function recorder() {
   const events: unknown[] = [];
   const enqueue = async (_loop: unknown, entries: IngressEntry[]) => {
@@ -33,8 +12,6 @@ function recorder() {
   };
   return { events, enqueue };
 }
-const tokens = { connectorAccessToken: async () => "synthetic-token" };
-const json = (body: unknown) => Response.json(body);
 const ALEX = "https://avatars.slack-edge.com/alex.png";
 function directoryOf(
   people: Record<string, { displayName: string; avatarUrl?: string }>,
