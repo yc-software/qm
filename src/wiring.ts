@@ -90,7 +90,7 @@ import {
 } from "./identity/identity-service.ts";
 import {
   createPrincipalLinkService,
-  PRINCIPAL_LINKS_RESTORE,
+  PRINCIPAL_LINKS_TENANCY,
   type PrincipalLink,
   type PrincipalLinkService,
 } from "./identity/principal-links.ts";
@@ -626,7 +626,7 @@ export function buildApp(
   };
   const advisoryLock: AdvisoryLock = createPostgresAdvisoryLock(pgArtifactMap.pool);
   const principalLinks = createPrincipalLinkService(
-    createPostgresMap<PrincipalLink>(pgArtifactMap.pool, "principal_links", [], undefined, [PRINCIPAL_LINKS_RESTORE]),
+    createPostgresMap<PrincipalLink>(pgArtifactMap.pool, "principal_links", [], PRINCIPAL_LINKS_TENANCY),
     advisoryLock,
   );
   installPrincipalLinks(principalLinks);
