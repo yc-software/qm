@@ -100,3 +100,23 @@ test("pg delivery store: once-ever keys revive after a TTL drop instead of deadl
 test("pg delivery store: a permanently refused row fails once and never revives", { skip }, async () => {
   await exerciseDeliveryFail((opts) => createPostgresDeliveryStore(URL!, opts));
 });
+
+test(
+  "pg delivery store: undelivered web rows beyond the oldest 200 still reach the transcript sweep",
+  { skip },
+  async () => {
+    const store = createPostgresDeliveryStore(URL!);
+    const ids = new Set<string>();
+    for (let i = 0; i < 205; i++) {
+      const queued = await store.enqueue({
+        destination: { type: "web", target: "web:backlog" },
+        text: `backlog ${i}`,
+        idempotencyKey: `web-backlog-${i}`,
+      });
+      ids.add(queued.id);
+    }
+    const listed = new Set((await store.undeliveredIds("web")).map((row) => row.id));
+    for (const id of ids) assert.ok(listed.has(id));
+    for (const id of ids) await store.ack(id, Date.now());
+  },
+);
