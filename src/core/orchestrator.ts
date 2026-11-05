@@ -62,6 +62,7 @@ import {
   introducesUser,
   isPersonAuthored,
   isSessionTurn,
+  midTurnSessionMessage,
   spokenByPerson,
 } from "./turn-origin.ts";
 import { resolveTurnFastMode, turnRuntimePurpose } from "./turn-options.ts";
@@ -3263,7 +3264,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 author,
                 ...(samePerson(author, actor.id) ? {} : { authorName: speakerName(speaker, nameOf) }),
               };
-              let said = [text.trim() ? speakerLine(speaker) : "", text].filter(Boolean).join("\n");
+              let said =
+                request?.sessionSenderId && request.text.trim()
+                  ? midTurnSessionMessage(request.text, request.sessionSenderId === session.parentSessionId)
+                  : [text.trim() ? speakerLine(speaker) : "", text].filter(Boolean).join("\n");
               const screened = [wordsToScreen(said, speaker, actor.id), ...(request?.inboundNotes ?? [])]
                 .filter(Boolean)
                 .join("\n\n");

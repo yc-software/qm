@@ -2007,6 +2007,7 @@ export function buildApp(
     sessions,
     runs,
     signals: runSignals,
+    steerRun: (run, signal) => app.steerRun(run, signal),
     maxAttempts,
     advisoryLock,
     prepareRequest: prepareSessionRequest,
