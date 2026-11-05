@@ -1,3 +1,4 @@
+import { tenantListeners } from "../tenants/cache.ts";
 import { randomUUID } from "node:crypto";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import type { Delivery, DeliveryProvenance, Destination, OutgoingAttachment } from "../types.ts";
@@ -84,7 +85,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
     },
   ]);
 
-  const enqueueListeners = new Set<(type: string) => void>();
+  const enqueueListeners = tenantListeners<[string]>("delivery enqueue");
 
   async function expireOveraged(): Promise<void> {
     const rows = await q(
@@ -137,7 +138,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
         ],
       );
       if (inserted[0]) {
-        if (input.shadow !== true) for (const l of enqueueListeners) l(input.destination.type);
+        if (input.shadow !== true) enqueueListeners.emit(input.destination.type);
         return rowToDelivery(inserted[0]);
       }
       const existing = await q("SELECT * FROM deliveries WHERE idempotency_key = $1", [input.idempotencyKey]);
@@ -273,8 +274,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
       return rows.map(rowToDelivery).reverse();
     },
     onEnqueue(listener) {
-      enqueueListeners.add(listener);
-      return () => enqueueListeners.delete(listener);
+      return enqueueListeners.add(listener);
     },
   };
 }
