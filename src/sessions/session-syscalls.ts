@@ -654,8 +654,6 @@ export async function sessionTreeRuns(
   return live;
 }
 
-// Shown to the model when helper work is refused for access. It says what happened and what the
-// model can still do, so a refusal doesn't strand the person's request.
 export const HELPER_ACCESS_REFUSED =
   "helpers can't run from this conversation right now: the requester's membership here can't be confirmed " +
   "from what QM has recorded (common in private Slack channels shared with another organization, and in " +

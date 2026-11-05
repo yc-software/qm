@@ -173,8 +173,6 @@ export function createCurrentScopeMembers(deps: ScopeMembershipDeps, requireComp
 
     if (!deps.directory?.list) return undefined;
     if (kind === "channel" && (await deps.directory.channelPrivacy?.(ref)) !== true) return undefined;
-    // A shared channel's stored roster lists only our own members, never the other organization's
-    // guests, so it can't stand in for the full audience.
     if (kind === "channel" && (await deps.directory.channelShared?.(ref)) === true) return [];
 
     const candidates = await deps.directory.list();

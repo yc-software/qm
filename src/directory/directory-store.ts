@@ -62,7 +62,6 @@ export interface DirectoryStore {
   channelMembership(channelId: string, principalId: string): Promise<boolean | undefined>;
   channelMemberIds(channelId: string): Promise<string[] | undefined>;
   channelPrivacy(channelId: string): Promise<boolean | undefined>;
-  /** Whether the channel is shared with another organization (Slack Connect). */
   channelShared(channelId: string): Promise<boolean | undefined>;
   replaceGroups(
     groupMembers: GroupMembership[],
