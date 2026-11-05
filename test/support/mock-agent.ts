@@ -828,6 +828,7 @@ export function createMockAgent(): Agent {
     },
 
     judge(_systemPrompt: string, prompt: string): Promise<string | undefined> {
+      if (/!judge-outage\b/i.test(prompt)) return Promise.reject(new Error("mock judge outage"));
       const asked = /!engage-asked\b[:\s]*(.*)/i.exec(prompt);
       if (asked) {
         const id = /^\[([^\]]+)\]/m.exec(prompt)?.[1];

@@ -32,10 +32,21 @@ function dm(text: string, thread: string): TurnRequest {
 
 const BLOCKED_CMD = ["git", "push", `--${"force"}`, "origin", "main"].join(" ");
 
-function record(bus: { subscribe(cb: (e: SessionStateEvent) => void): () => void }): SessionStateEvent[] {
+async function record(bus: {
+  subscribe(cb: (e: SessionStateEvent) => void): () => void;
+  emit(e: SessionStateEvent): void;
+}): Promise<SessionStateEvent[]> {
   const got: SessionStateEvent[] = [];
   bus.subscribe((e) => got.push(e));
+  await heardProbe(bus, got);
   return got;
+}
+
+async function heardProbe(bus: { emit(e: SessionStateEvent): void }, got: SessionStateEvent[]): Promise<void> {
+  for (let attempt = 0; attempt < 100 && !got.some((e) => e.threadRef === "web:U1:probe"); attempt++) {
+    bus.emit({ threadRef: "web:U1:probe", state: "idle", at: 1 });
+    await waitFor(() => got.some((e) => e.threadRef === "web:U1:probe"), 100);
+  }
 }
 
 function parseFrame(data: string): SessionStateEvent | null {
@@ -57,14 +68,14 @@ async function settledStates(events: SessionStateEvent[], threadRef: string, cou
 
 test("a plain turn emits working then idle", async () => {
   const built = freshApp();
-  const got = record(built.sessionStateBus);
+  const got = await record(built.sessionStateBus);
   await built.app.turn(dm("hello", "web:U1:plain"));
   assert.deepEqual(await settledStates(got, "web:U1:plain", 2), ["working", "idle"]);
 });
 
 test("a turn parking a blocking command emits working then awaiting_approval", async () => {
   const built = freshApp();
-  const got = record(built.sessionStateBus);
+  const got = await record(built.sessionStateBus);
   const r = await built.app.turn(dm(`!run ${BLOCKED_CMD}`, "web:U1:park"));
   assert.equal(r.status, "pending_approval");
   assert.deepEqual(await settledStates(got, "web:U1:park", 2), ["working", "awaiting_approval"]);
@@ -72,12 +83,12 @@ test("a turn parking a blocking command emits working then awaiting_approval", a
 
 test("resolving the approval emits working, then idle once the resumed turn settles", async () => {
   const built = freshApp();
-  const parked = record(built.sessionStateBus);
+  const parked = await record(built.sessionStateBus);
   const paused = await built.app.turn(dm(`!run ${BLOCKED_CMD}`, "web:U1:resolve"));
   const requestId = paused.pendingApprovals?.[0]?.requestId;
   assert.ok(requestId);
   await settledStates(parked, "web:U1:resolve", 2);
-  const got = record(built.sessionStateBus);
+  const got = await record(built.sessionStateBus);
   await built.app.turn({
     surface: "test",
     actor,
@@ -90,7 +101,7 @@ test("resolving the approval emits working, then idle once the resumed turn sett
 
 test("a COLLECTED (non-blocking) approval settles idle — push and snapshot agree", async () => {
   const built = freshApp();
-  const got = record(built.sessionStateBus);
+  const got = await record(built.sessionStateBus);
   const r = await built.app.turn(dm(`!collect-approval ${BLOCKED_CMD}`, "web:U1:collected"));
   assert.equal(r.status, "ok");
   assert.equal(r.pendingApprovals?.length, 1);
@@ -101,7 +112,7 @@ test("a COLLECTED (non-blocking) approval settles idle — push and snapshot agr
 
 test("the settle event derives from the durable approvals store, exactly what listSessions reads", async () => {
   const built = freshApp();
-  const got = record(built.sessionStateBus);
+  const got = await record(built.sessionStateBus);
   const r = await built.app.turn(dm(`!run ${BLOCKED_CMD}`, "web:U1:agree"));
   assert.equal(r.status, "pending_approval");
   const states = await settledStates(got, "web:U1:agree", 2);
@@ -112,7 +123,7 @@ test("the settle event derives from the durable approvals store, exactly what li
 
 test("the events carry the session UUID and a timestamp", async () => {
   const built = freshApp();
-  const got = record(built.sessionStateBus);
+  const got = await record(built.sessionStateBus);
   const r = await built.app.turn(dm("hello", "web:U1:meta"));
   await settledStates(got, "web:U1:meta", 2);
   const settle = got.find((e) => e.threadRef === "web:U1:meta" && e.state === "idle");
@@ -124,10 +135,7 @@ test("the events carry the session UUID and a timestamp", async () => {
 async function listen(built: ReturnType<typeof freshApp>): Promise<SessionStateEvent[]> {
   const got: SessionStateEvent[] = [];
   built.app.subscribeSessionStates((e) => got.push(e));
-  for (let attempt = 0; attempt < 100 && !got.some((e) => e.threadRef === "web:U1:probe"); attempt++) {
-    built.sessionStateBus.emit({ threadRef: "web:U1:probe", state: "idle", at: 1 });
-    await waitFor(() => got.some((e) => e.threadRef === "web:U1:probe"), 100);
-  }
+  await heardProbe(built.sessionStateBus, got);
   return got;
 }
 
@@ -246,7 +254,7 @@ async function waitFor(cond: () => boolean, ms = 10_000): Promise<boolean> {
 test("a terminal run with another run still queued on the thread emits no settle — the LAST live run owns it", async () => {
   const built = freshApp();
   const thread = "web:U1:queued";
-  const got = record(built.sessionStateBus);
+  const got = await record(built.sessionStateBus);
   await built.app.turn(dm("hello", thread));
   await settledStates(got, thread, 2);
   got.length = 0;
@@ -282,7 +290,7 @@ test("a FAILED (parked) run still settles from durable truth: leftover blocking 
   assert.equal(parked.status, "pending_approval");
   const uuid = parked.sessionId;
   assert.ok(uuid && uuid !== thread);
-  const got = record(built.sessionStateBus);
+  const got = await record(built.sessionStateBus);
   const { run } = await built.runs.enqueue({ sessionId: thread, request: resolvedDm("boom", thread), maxAttempts: 3 });
   const leased = await claimForTest(built, run.id);
   assert.ok(leased);
@@ -299,7 +307,7 @@ test("a FAILED (parked) run still settles from durable truth: leftover blocking 
 test("a settle frame is stamped with the run's durable finishedAt — a later enqueue always out-stamps it", async () => {
   const built = freshApp();
   const thread = "web:U1:stamp";
-  const got = record(built.sessionStateBus);
+  const got = await record(built.sessionStateBus);
   await built.app.turn(dm("hello", thread));
   await settledStates(got, thread, 2);
   const settle = got.find((e) => e.threadRef === thread && e.state === "idle");
@@ -318,7 +326,7 @@ test("a parent stays working while a subagent runs after its own turn ends — p
   const built = freshApp();
   const parentThread = "web:U1:parent";
   const childThread = "web:U1:parent-child";
-  const got = record(built.sessionStateBus);
+  const got = await record(built.sessionStateBus);
   const parent = await built.app.turn(dm("hello", parentThread));
   const child = await built.app.turn(dm("hello", childThread));
   assert.ok(
@@ -360,7 +368,7 @@ test("a parent parked on a blocking approval keeps awaiting while its subagent r
   const parentThread = "web:U1:parked-parent";
   const childThread = "web:U1:parked-child";
   const child = await built.app.turn(dm("hello", childThread));
-  const got = record(built.sessionStateBus);
+  const got = await record(built.sessionStateBus);
   const parent = await built.app.turn(dm(`!run ${BLOCKED_CMD}`, parentThread));
   assert.equal(parent.status, "pending_approval");
   await built.sessions.setParentSession(child.sessionId!, parent.sessionId!);
@@ -390,7 +398,7 @@ test("a parent whose own turn parks on an approval while its subagent runs settl
   });
   const leased = await claimForTest(built, run.id);
   assert.ok(leased);
-  const got = record(built.sessionStateBus);
+  const got = await record(built.sessionStateBus);
   const parked = await built.app.turn(dm(`!run ${BLOCKED_CMD}`, parentThread));
   assert.equal(parked.status, "pending_approval");
   assert.ok(await waitFor(() => statesFor(got, parentThread).includes("awaiting_approval")));
@@ -405,7 +413,7 @@ test("a subagent idle between its own runs is not working while its own subagent
   const rootThread = "web:U1:tree-root";
   const midThread = "web:U1:tree-mid";
   const leafThread = "web:U1:tree-leaf";
-  const got = record(built.sessionStateBus);
+  const got = await record(built.sessionStateBus);
   const root = await built.app.turn(dm("hello", rootThread));
   const mid = await built.app.turn(dm("hello", midThread));
   const leaf = await built.app.turn(dm("hello", leafThread));
