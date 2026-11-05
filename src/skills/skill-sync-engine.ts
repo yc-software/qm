@@ -2,6 +2,7 @@ import type { SkillPackStore } from "./skill-pack-store.ts";
 import type { SkillPackFetcher } from "./pack-fetcher.ts";
 import type { LeaderLease } from "../persistence/leader-lease.ts";
 import { createSweeper } from "../util/sweeper.ts";
+import { claimThenBind } from "../tenants/claim.ts";
 import { errMessage, reportFailureAs } from "../util/errors.ts";
 
 const TICK_LEASE_KEY = "skills:sync:tick";
@@ -40,13 +41,16 @@ export function createSkillSyncEngine(deps: SkillSyncDeps): SkillSyncEngine {
   }
 
   async function syncAll(): Promise<void> {
-    for (const pack of await deps.packs.list()) {
-      try {
-        await syncOne(pack.id);
-      } catch (e) {
-        console.error("%s", `[skill-sync] pack ${pack.id} failed:`, errMessage(e));
-      }
-    }
+    await claimThenBind(
+      () => deps.packs.claimIds(),
+      async (id) => {
+        try {
+          await syncOne(id);
+        } catch (e) {
+          console.error("%s", `[skill-sync] pack ${id} failed:`, errMessage(e));
+        }
+      },
+    );
   }
 
   const tick = async (): Promise<void> => {

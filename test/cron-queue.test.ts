@@ -12,6 +12,8 @@ import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import type { Cron } from "../src/triggers/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { TEST_TENANT } from "./support/test-tenant.ts";
+import { withTenant } from "../src/tenants/context.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the cron queue tests";
@@ -88,7 +90,7 @@ test(
         createdBy: "U1",
         ownerScopeId: scopeId("personal", "U1"),
       });
-      a.scheduler.notifyChanged(cron.id);
+      withTenant(TEST_TENANT, () => a.scheduler.notifyChanged(cron.id));
       await until(() => calls.length >= 1, 30_000);
       assert.equal(calls.length, 1, "the due slot starts exactly one turn");
       await new Promise((r) => setTimeout(r, 16_000));
@@ -121,7 +123,7 @@ test(
         createdBy: "U2",
         ownerScopeId: scopeId("personal", "U2"),
       });
-      a.scheduler.notifyChanged(cron.id);
+      withTenant(TEST_TENANT, () => a.scheduler.notifyChanged(cron.id));
       const fires = () => calls.filter((c) => c.idempotencyKey?.startsWith(`cron:${cron.id}:`)).length;
       await until(() => fires() >= 3, 45_000);
       assert.ok(fires() >= 3, "a recurring cron chains fire jobs across instances");
@@ -129,7 +131,7 @@ test(
       assert.equal(new Set(keys).size, keys.length, "no slot fires twice");
 
       await b.crons.update(cron.id, { schedule: { everyMs: 60_000 } });
-      b.scheduler.notifyChanged(cron.id);
+      withTenant(TEST_TENANT, () => b.scheduler.notifyChanged(cron.id));
       const at = fires();
       await new Promise((r) => setTimeout(r, 6_000));
       assert.equal(fires(), at, "a rescheduled cron's stale slot jobs do not fire");

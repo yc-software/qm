@@ -236,8 +236,8 @@ import {
   createEnvSecretSource,
   createLayeredSecretSource,
 } from "./credentials/secret-source.ts";
+import { credentialRequestHeaders } from "./credentials/credential-injection.ts";
 import {
-  credentialRequestHeaders,
   createKeychain,
   type ConnectorTokenStore,
   type OAuthToken,
