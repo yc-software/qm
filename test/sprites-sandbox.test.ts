@@ -362,16 +362,18 @@ test("a checkpoint failure is reported and never fails the teardown", async () =
   assert.ok(fake.checkpoints(h.id).length <= 1);
 });
 
-test("a failed checkpoint waits out the interval before it is tried again", async () => {
+test("a failed checkpoint waits out the interval before it is tried again, across core restarts", async () => {
   const events: Array<{ code: string }> = [];
-  const s = make({ onError: (e: { code: string }) => events.push(e) });
+  const options = { initializationStore: testMap(), onError: (e: { code: string }) => events.push(e) };
+  const s = make(options);
   const h = await s.provision(scope);
   fake.failCheckpoints(h.id, "Failed to create checkpoint: rename clone: file exists");
   const attempts = () => fake.calls.filter((c) => c.method === "POST" && c.path.endsWith(`/${h.id}/checkpoint`));
   await s.teardown(h);
   await s.teardown(h);
-  await s.teardown(h);
-  assert.equal(attempts().length, 1, "the failed attempt throttles the next teardowns");
+  const restarted = make(options);
+  await restarted.teardown(await restarted.provision(scope));
+  assert.equal(attempts().length, 1, "the failed attempt throttles the next teardowns, in this core and the next");
   assert.deepEqual(
     events.map((e) => e.code),
     ["checkpoint_failed"],
