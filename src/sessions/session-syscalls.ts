@@ -24,7 +24,8 @@ import { childIsolation } from "./child-isolation.ts";
 import { openRuntime, parentRuntime } from "./subagent-runtime.ts";
 import type { RuntimeChoice } from "../agent/agent.ts";
 import type { OrchestratorInput } from "../core/orchestrator/types.ts";
-import type { Run, RunStore } from "../runs/run-store.ts";
+import { isTerminal, type Run, type RunStore } from "../runs/run-store.ts";
+import { replayableRequest } from "../core/orchestrator/turn-helpers.ts";
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
 import type { SessionStore } from "./session-store.ts";
 import { xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
@@ -212,7 +213,7 @@ type SessionWriteResult =
       ok: true;
       sessionId: string;
       title: string;
-      delivered: "queued_turn" | "interrupted" | "queued_message";
+      delivered: "queued_turn" | "steered" | "interrupted" | "queued_message";
       busy?: boolean;
       notWoken?: string;
     }
@@ -337,7 +338,7 @@ export interface SessionSyscallDeps {
     SubagentActivityDeps["sessions"];
   runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "getByDedupKey" | "get" | "withdraw"> &
     SubagentActivityDeps["runs"];
-  signals: Pick<RunSignalStore, "send" | "pending">;
+  signals: Pick<RunSignalStore, "send" | "pending" | "acknowledge" | "runForDedupeKey">;
   maxAttempts: number;
   advisoryLock: AdvisoryLock;
   prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
@@ -598,6 +599,39 @@ async function acceptedFollowup(
     return { ok: false, message: "the requestId was already used for different work" };
   const others = (await runs.inFlightForThread(target.threadRef)).filter((run) => run.id !== existing.id);
   return { ok: true, sessionId: target.id, title, delivered: "queued_turn", busy: others.length > 0 };
+}
+
+/**
+ * Delivers a message into the target's running turn as a steer, the same signal a person's mid-turn message
+ * uses. Returns false when there is no running turn to steer, or when the signal landed after that turn ended
+ * and was withdrawn here so the caller can start a turn instead.
+ */
+async function steerRunningTurn(
+  deps: Pick<SessionSyscallDeps, "runs" | "signals" | "advisoryLock">,
+  target: Session,
+  request: OrchestratorInput,
+  message: { text: string; dedupKey: string | undefined },
+): Promise<boolean> {
+  if (message.dedupKey && (await deps.signals.runForDedupeKey(message.dedupKey))) return true;
+  const live = (await deps.runs.inFlightForThread(target.threadRef)).find((run) => run.status === "running");
+  if (!live || (request.readOnly && !live.request.readOnly)) return false;
+  const ts = `${Date.now()}.${randomUUID().slice(0, 8)}`;
+  const sent = await deps.signals.send(live.id, {
+    kind: "steer",
+    text: message.text,
+    ts,
+    request: replayableRequest(request),
+    ...(message.dedupKey ? { dedupeKey: message.dedupKey } : {}),
+  });
+  if (!sent) return true;
+  const after = await deps.runs.get(live.id);
+  if (after && !isTerminal(after.status)) return true;
+  return deps.advisoryLock.withLock(`run-signal-replay:${live.id}`, async () => {
+    const orphan = (await deps.signals.pending(live.id)).find(({ signal }) => signal.ts === ts);
+    if (!orphan) return true;
+    await deps.signals.acknowledge(live.id, orphan.id);
+    return false;
+  });
 }
 
 export async function stopSessionTree(
@@ -983,6 +1017,14 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               const dedupKey = input.requestId ? `subagent-followup:${messageId}` : undefined;
               const accepted = await acceptedFollowup(deps.runs, dedupKey, target, stamped, title);
               if (accepted) return accepted;
+              request.origin = sessionTurnOrigin(request.origin, stamped);
+              request.sessionSenderId = binding.session.id;
+              request.delegatingRunId = binding.request.runId;
+              if (!input.interrupt && !privateMessage) {
+                const steerRequest = { ...request, text: stamped, displayText: text };
+                const steered = await steerRunningTurn(deps, target, steerRequest, { text, dedupKey });
+                if (steered) return { ok: true, sessionId: target.id, title, delivered: "steered", busy: true };
+              }
               const stopped = input.interrupt
                 ? await stopSessionRuns(
                     deps,
@@ -994,9 +1036,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                     },
                   )
                 : [];
-              request.origin = sessionTurnOrigin(request.origin, stamped);
-              request.sessionSenderId = binding.session.id;
-              request.delegatingRunId = binding.request.runId;
               await deps.runs
                 .enqueue({
                   sessionId: target.threadRef,
