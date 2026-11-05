@@ -5,8 +5,7 @@ import type { Delivery, DeliveryProvenance, Destination, OutgoingAttachment } fr
 import { DELIVERY_MAX_AGE_MS, logDeliveryExpiry, type DeliveryStore } from "./delivery-store.ts";
 import { pgTextSafe } from "../util/text.ts";
 import { tenantTables } from "../tenants/migrations.ts";
-import { claimFunction, claimRows, claimThenBind } from "../tenants/claim.ts";
-import { currentTenant } from "../tenants/context.ts";
+import { claimFunction, claimRows, claimThenLoad } from "../tenants/claim.ts";
 
 const NOW_MS_SQL = "(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT";
 const CLAIMABLE = `delivered_at IS NULL AND expired_at IS NULL AND NOT shadow
@@ -245,21 +244,12 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
       return rows.map(rowToDelivery).sort((a, b) => a.createdAt - b.createdAt);
     },
     async claimDue(type, ttlMs) {
-      await claimThenBind(
-        () => claimRows(pg, "expire_deliveries", [maxAgeMs]),
-        async (id) => {
-          const d = await get(id);
-          if (d) logDeliveryExpiry(d, d.expiredAt ?? Date.now());
-        },
-      );
-      const claimed = await claimThenBind(
-        () => claimRows(pg, "claim_deliveries", [type, ttlMs]),
-        async (id) => {
-          const d = await get(id);
-          return d && { ...d, tenantId: currentTenant() };
-        },
-      );
-      return claimed.filter((d) => d !== null).sort((a, b) => a.createdAt - b.createdAt);
+      const load = async (ids: string[]) =>
+        (await q("SELECT * FROM deliveries WHERE id = ANY($1)", [ids])).map(rowToDelivery);
+      for (const d of await claimThenLoad(() => claimRows(pg, "expire_deliveries", [maxAgeMs]), load))
+        logDeliveryExpiry(d, d.expiredAt ?? Date.now());
+      const claimed = await claimThenLoad(() => claimRows(pg, "claim_deliveries", [type, ttlMs]), load);
+      return claimed.sort((a, b) => a.createdAt - b.createdAt);
     },
     undeliveredTenants: (type) => claimRows(pg, "undelivered_delivery_tenants", [type]),
     async listShadow(opts) {

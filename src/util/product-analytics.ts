@@ -1,5 +1,6 @@
 import { isSessionTurn } from "../core/turn-origin.ts";
 import type { Run } from "../runs/run-store.ts";
+import { swallowAs } from "./errors.ts";
 
 export function createProductAnalytics(
   companyOf: () => string,
@@ -15,8 +16,8 @@ export function createProductAnalytics(
   const company = (): string | undefined => {
     try {
       return companyOf();
-    } catch {
-      return undefined;
+    } catch (e) {
+      return swallowAs("product analytics: resolve company", undefined)(e);
     }
   };
   async function capture(

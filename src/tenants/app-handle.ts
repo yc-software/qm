@@ -62,3 +62,10 @@ export function appNameFromLabel(label: string, handle: string | undefined): str
     ? label.slice(handle.length + 1)
     : undefined;
 }
+
+export function labelOfAppHost(host: string | undefined, appsDomain: string | undefined): string | undefined {
+  if (!appsDomain) return undefined;
+  const bare = (host ?? "").split(":")[0]!.toLowerCase();
+  const suffix = `.${appsDomain.toLowerCase()}`;
+  return bare.endsWith(suffix) ? bare.slice(0, -suffix.length) : undefined;
+}
