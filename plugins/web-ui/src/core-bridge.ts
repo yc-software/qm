@@ -11,6 +11,7 @@ import type { Attachment } from "@earendil-works/pi-web-ui";
 import type { Api, AssistantMessage, AssistantMessageEventStream, Context, Model, Usage } from "@earendil-works/pi-ai";
 import type { Agent, AgentMessage, StreamFn } from "@earendil-works/pi-agent-core";
 import { errMessage, swallow } from "../../chassis/src/errors.ts";
+import { trackWebBuild } from "./web-build.ts";
 import { userFacingFailureText } from "../../chassis/src/failure-copy.ts";
 import { groupDmText } from "./group-dm-label.ts";
 import { base64ToBytes } from "./paste-text.ts";
@@ -785,7 +786,7 @@ export async function webFetch(input: RequestInfo | URL, init?: RequestInit): Pr
   const method = init?.method ?? request?.method ?? "GET";
   let response: Response;
   try {
-    response = await fetch(input, init);
+    response = await trackWebBuild(fetch(input, init), method);
   } catch (error) {
     reportRequestTiming(url, method, startMs, null);
     throw error;

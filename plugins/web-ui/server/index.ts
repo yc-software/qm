@@ -5,6 +5,7 @@ import { flushErrorReporting, reportBackendError } from "../../chassis/src/error
 import { swallow } from "../../chassis/src/errors.ts";
 import { drainOnSigterm } from "../../chassis/src/drain.ts";
 import { appEditSlug } from "../src/app-edit.ts";
+import { WEB_BUILD_HEADER, stampWebBuild } from "../src/web-build-wire.ts";
 import { composioCallbackUrl } from "./composio-return.ts";
 import { sharedSessionHtml } from "./shared-session.ts";
 import { uiCanvasRoutes } from "./ui-canvas-routes.ts";
@@ -15,7 +16,7 @@ import { Readable } from "node:stream";
 import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, extname, join, normalize } from "node:path";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { LRUCache } from "lru-cache";
 import {
   fetchCoreText,
@@ -88,6 +89,11 @@ async function hasInboxLoopPreview(user: string): Promise<boolean> {
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const DIST = join(ROOT, "dist-web");
+const DIST_INDEX = join(DIST, "index.html");
+const WEB_BUILD =
+  WEB_UI_DEV || !existsSync(DIST_INDEX)
+    ? undefined
+    : createHash("sha256").update(readFileSync(DIST_INDEX)).digest("hex").slice(0, 16);
 
 const brandingCache = createBrandingCache(async () => {
   const r = await coreFetch("GET", "/v1/surface-config", "", 2_000);
@@ -129,7 +135,7 @@ async function serveWebManifest(res: ServerResponse): Promise<void> {
 
 async function brandIndexHtml(html: string): Promise<string> {
   const branding = await brandingCache.forRender();
-  return injectBranding(html, branding, { titleSuffix: "· Web" });
+  return stampWebBuild(injectBranding(html, branding, { titleSuffix: "· Web" }), WEB_BUILD);
 }
 
 const portalTokenStore = new AsyncLocalStorage<string | undefined>();
@@ -1007,7 +1013,7 @@ async function serveStatic(res: ServerResponse, urlPath: string): Promise<void> 
   const immutable = isFile && /(?:^|[/\\])assets[/\\]/.test(rel);
   if (!isFile) {
     if (extname(rel)) return void json(res, 404, { error: "not_found" });
-    filePath = join(DIST, "index.html");
+    filePath = DIST_INDEX;
     if (!existsSync(filePath)) {
       return void json(res, 503, { error: "not_built", message: "run `npm run build` to produce dist-web/" });
     }
@@ -1046,9 +1052,8 @@ async function serveAppEditHtml(req: IncomingMessage, res: ServerResponse, url: 
     const raw = readFileSync(join(ROOT, "index.html"), "utf8").replace("%BASE_URL%favicon.svg", "favicon.svg");
     html = await vite.transformIndexHtml(req.url ?? "/", raw);
   } else {
-    const filePath = join(DIST, "index.html");
-    if (!existsSync(filePath)) return false;
-    html = readFileSync(filePath, "utf8");
+    if (!existsSync(DIST_INDEX)) return false;
+    html = readFileSync(DIST_INDEX, "utf8");
   }
   const headers = withSecurityHeaders({ "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" });
   const csp = SPA_CSP.replace("frame-ancestors 'self'", `frame-ancestors 'self' ${slug}.${APPS_FRAME_DOMAIN}`);
@@ -3574,6 +3579,7 @@ export const handler = async (req: IncomingMessage, res: ServerResponse) => {
   res.setHeader("referrer-policy", "no-referrer");
   res.setHeader("x-content-type-options", "nosniff");
   res.setHeader("x-frame-options", "DENY");
+  if (WEB_BUILD) res.setHeader(WEB_BUILD_HEADER, WEB_BUILD);
   const raw = req.headers[PORTAL_IDENTITY_HEADER];
   const token = Array.isArray(raw) ? raw[0] : raw;
   try {
@@ -3606,8 +3612,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
         console.log(
           `[web-ui] surface on http://localhost:${PORT} → core ${CORE} (org ${ORG})${WEB_UI_DEV ? " [vite hmr]" : ""}`,
         );
-        if (!WEB_UI_DEV && !existsSync(join(DIST, "index.html")))
-          console.warn("[web-ui] dist-web/ not built, run `npm run build`");
+        if (!WEB_UI_DEV && !existsSync(DIST_INDEX)) console.warn("[web-ui] dist-web/ not built, run `npm run build`");
         if (ALLOW.length === 0)
           console.warn("[web-ui] WEB_UI_PRINCIPALS unset, any principal id may sign in (dev only)");
         const t = setInterval(() => void drainWebDeliveries(), WEB_DELIVERY_POLL_MS);

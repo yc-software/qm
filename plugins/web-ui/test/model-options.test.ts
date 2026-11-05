@@ -3,6 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { defaultModelValue, getModelOptions, runtimeModelOptions, transcriptModel } from "../src/model-options.ts";
 import { metadata } from "./model-metadata.ts";
+import { cacheRuntimeConfig, type RuntimeConfig } from "../src/runtime-config-cache.ts";
 
 const catalog = { future: metadata("future", "Future API Model"), custom: metadata("custom", "Custom", "gateway") };
 
@@ -101,4 +102,12 @@ test("gateway display preserves explicit labels and leaves unknown families alon
   assert.equal(knownOption?.displayProvider, "anthropic");
   assert.equal(unknownOption?.label, "Special");
   assert.equal(unknownOption?.displayProvider, undefined);
+});
+
+test("a runtime config in another server shape yields no options instead of breaking every render", () => {
+  const otherShape = { scopeId: "scope:other", approvedHarnesses: ["pi"], modelsByHarness: { pi: ["future"] } };
+  cacheRuntimeConfig("scope:other", otherShape as unknown as RuntimeConfig);
+  assert.deepEqual(getModelOptions("scope:other"), []);
+  assert.equal(defaultModelValue("scope:other"), "");
+  assert.equal(transcriptModel("scope:other"), undefined);
 });
