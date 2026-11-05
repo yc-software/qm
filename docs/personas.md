@@ -70,6 +70,12 @@ A session's `persona_id` is set from the Personas page ("Chat") or by the agent
 If the sender has no role, the persona is skipped and the block says so. Writes (memory,
 files, crons) stay in the conversation's scope.
 
+Unlike a project, a persona is not a place conversations live. A conversation with a
+persona stays in the scope it started in (your DM, a channel, a group), so only the
+people who could already see that conversation can see it. Holding a role on a persona,
+even owner, shows you nothing of other people's chats with it; the sidebar groups only
+your own conversations under the persona.
+
 ## Forking
 
 The `persona-fork` skill uses only these APIs: create a persona with `forkedFromId`, copy

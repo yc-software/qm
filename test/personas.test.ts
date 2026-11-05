@@ -118,6 +118,25 @@ test("a conversation's persona shapes the turn only for people who hold a role o
   assert.equal((await personas.assign(BOB, (await built.sessions.get(bobDm.sessionId))!, ada.id)).status, "not_found");
 });
 
+test("a persona conversation stays private to the people in it, even from the persona's other owners", async () => {
+  const { built, personas, enable, sysprompt } = setup();
+  for (const who of [ALICE, BOB]) await enable(who);
+  const ada = ok(await personas.create(ALICE, { name: "Ada" }));
+  ok(
+    await personas.setAccess(ALICE, ada.id, [
+      { scopeId: scopeId("personal", ALICE), role: "owner" },
+      { scopeId: scopeId("personal", BOB), role: "owner" },
+    ]),
+  );
+  const bobChat = await sysprompt(BOB, { kind: "dm", threadRef: "dm:U_BOB:with-ada" });
+  ok(await personas.assign(BOB, (await built.sessions.get(bobChat.sessionId))!, ada.id));
+  assert.equal(await built.app.getSessionForViewer(bobChat.sessionId, ALICE), null);
+  const aliceList = await built.app.listSessionPage(ALICE, { limit: 50, status: "active" });
+  assert.ok(!aliceList.sessions.some((session) => session.id === bobChat.sessionId));
+  const bobList = await built.app.listSessionPage(BOB, { limit: 50, status: "active" });
+  assert.equal(bobList.sessions.find((session) => session.id === bobChat.sessionId)?.personaId, ada.id);
+});
+
 test("credentials attached by an owner reach every turn that uses the persona, and leave with it", async () => {
   const { built, personas, enable, sysprompt } = setup();
   const keychain = built.keychain;
