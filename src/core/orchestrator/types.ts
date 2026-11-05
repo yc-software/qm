@@ -1,4 +1,5 @@
 import type { AdmittedWork } from "../../util/admitted-work.ts";
+import type { NamedAgents } from "../../named-agents/named-agents.ts";
 import type { TraceCarrier } from "../../../plugins/chassis/src/error-reporting.ts";
 import type { GoalCreateInput } from "../../agent/goal.ts";
 import type { RunStop, TurnPark } from "../../runs/run-store.ts";
@@ -179,6 +180,7 @@ export interface OrchestratorDeps {
   deliveries?: DeliveryStore;
   directory?: DirectoryStore;
   projects?: Pick<ProjectStore, "recognizes" | "name">;
+  namedAgents?: NamedAgents;
   isCurrentSharedScopeMember?: IsCurrentSharedScopeMember;
   currentScopeMembers?: import("../../resolution/scope-membership.ts").CurrentScopeMembers;
   managedGroups?: Pick<ManagedGroupDirectory, "recognizes" | "members" | "version" | "withVersion" | "slackChannel">;

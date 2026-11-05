@@ -8,6 +8,7 @@ import {
 } from "../../src/agent/agent.ts";
 import { NonRetryableTurnError, ProviderTurnError, TitleRejected } from "../../src/core/turn-error.ts";
 import { NeedsApproval } from "../../src/tools/primitives.ts";
+import { createAgentTools } from "../../src/agent/agent-tools.ts";
 import { toolCallApprovalKey } from "../../src/core/approval-id.ts";
 import { deterministicCompactSummary, estimateHistoryTokens } from "../../src/agent/context-compaction.ts";
 import { countTokens } from "../../src/util/tokens.ts";
@@ -324,6 +325,10 @@ export function createMockAgent(): Agent {
         reply = [turn.systemPrompt, turn.environment].filter((s) => s && s.trim()).join("\n\n");
       } else if (command0 === "!wallclock") {
         reply = `wallclock:${turn.turnWallClockMs ?? 0}`;
+      } else if (command0 === "!toolnames") {
+        reply = createAgentTools({ current: turn.tools }, { controlTools: true })
+          .map((tool) => tool.name)
+          .join(",");
       } else if (command0 === "!surfacename") {
         reply = `surface:${turn.surfaceName ?? "none"}`;
       } else if (command0.startsWith("!think ")) {

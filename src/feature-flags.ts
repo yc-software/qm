@@ -20,6 +20,10 @@ export const FEATURES = {
     hint: "Shows an activity card in Slack threads, including background work and monitors. After five minutes, the card links to the web conversation. Everyone in a shared thread can see it. Top-level DMs stay unchanged. Turning this off leaves existing cards.",
   },
   external_app_sharing: { label: "External app sharing (public links, outside emails)" },
+  named_agents: {
+    label: "Named agents",
+    hint: "Lets the selected people name a channel's agent from their DM, and locks that channel's instructions, standing orders and skills to the agent's owners and org admins wherever the flag is on.",
+  },
   loop_triage: { label: "Loop triage (prioritize and consolidate)" },
   swarms: { label: "Swarms", personalOnly: true },
   team_scopes: { label: "Team scopes" },

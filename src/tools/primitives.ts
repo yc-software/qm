@@ -83,6 +83,8 @@ import type {
   WebhookCreateResult,
   ControlOk,
   ControlErr,
+  AgentsRequest,
+  AgentsResult,
 } from "../api/control-service.ts";
 import type { ShareArtifactRequest, ShareArtifactResult } from "../api/artifact-share.ts";
 import type { Cron, Webhook } from "../triggers/types.ts";
@@ -335,6 +337,7 @@ export interface ToolContext extends SurfaceToolDeps {
     | ControlUnavailable
   >;
   shareArtifact(req: ShareArtifactRequest): Promise<ShareArtifactResult | ControlUnavailable>;
+  agents?(req: AgentsRequest): Promise<AgentsResult | ControlUnavailable>;
 }
 
 interface SurfaceSearchToolOpts {
@@ -525,6 +528,7 @@ export interface ToolContextDeps {
   monitorBroker?: MonitorBroker;
   control?: ControlService;
   controlClaims?: CapabilityClaims;
+  agentsTool?: boolean;
   webhookPublicUrl?: string;
   surface?: SurfaceToolDeps;
   attach?: AttachFiles;
@@ -1286,6 +1290,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     },
     soulWrite: (content, expectedVersion) => controlOp(async (c, cl) => c.writeSoul(content, cl, expectedVersion)),
     shareArtifact: (req) => controlOp((c, cl) => c.shareArtifact(req, cl)),
+    ...(deps.agentsTool ? { agents: (req: AgentsRequest) => controlOp((c, cl) => c.agents(req, cl)) } : {}),
 
     post: (text, opts, files, sandboxId) => surfaceOp((s) => s.post(text, opts, files, sandboxId)),
     reach: (text, target, files, sandboxId) => surfaceOp((s) => s.reach(text, target, files, sandboxId)),

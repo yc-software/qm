@@ -1,4 +1,5 @@
 import type { TeamStore } from "../teams/teams.ts";
+import type { NamedAgents } from "../named-agents/named-agents.ts";
 import type { CronScriptTrial } from "../cron/script.ts";
 import type { ExternalSlackPolicies } from "../resolution/external-slack.ts";
 import type { Mailer } from "../../plugins/chassis/src/resend.ts";
@@ -280,6 +281,7 @@ export interface SessionSearchHit {
 
 export interface App {
   swarms?: SwarmService;
+  namedAgents?: NamedAgents;
   turn(req: TurnRequest, replay?: { signalDedupKey: string }): Promise<TurnResult>;
   getApproval(requestId: string, viewer?: string): Promise<(PendingApprovalRecord & { requestId: string }) | null>;
   subscribeSessionStates(cb: (event: SessionStateEvent) => void, opts?: SubscribeOptions): () => void;
@@ -432,14 +434,20 @@ export interface App {
     claims: Pick<CapabilityClaims, "actorId" | "scopeId" | "scopeVersion" | "botActor" | "liveActor" | "members">,
   ): Promise<boolean>;
   openFileForViewer(id: string, principalId: string): Promise<OpenedFile | null>;
-  grant(g: Grant, opts?: { notify?: boolean }): Promise<void>;
+  grant(g: Grant, opts?: { notify?: boolean; liveActor?: boolean }): Promise<void>;
   revokeGrant(ownerScopeId: ScopeId, ref: string, granteeScopeId: ScopeId, revokedBy: string): Promise<void>;
   promoteSkill(id: string, targetScopeId: ScopeId, actorId: string, liveActor: boolean): Promise<Skill>;
   belongsToScope(principalId: string, scope: ScopeId): Promise<boolean>;
   canManageArtifactHome(homeScopeId: ScopeId, createdBy: string, principalId: string): Promise<boolean>;
   artifactGrantPermission(ownerScopeId: ScopeId, ref: string, principalId: string): Promise<Permission | null>;
   getArtifactHome(type: ArtifactType, idOrName: string): Promise<ArtifactHome | null>;
-  moveArtifactHome(type: ArtifactType, id: string, toScope: ScopeId, movedBy: string): Promise<void>;
+  moveArtifactHome(
+    type: ArtifactType,
+    id: string,
+    toScope: ScopeId,
+    movedBy: string,
+    opts?: { liveActor?: boolean },
+  ): Promise<void>;
   getSoul(scopeId: ScopeId): {
     scopeId: ScopeId;
     soul: string | null;
@@ -453,7 +461,7 @@ export interface App {
     scopeId: ScopeId,
     content: string,
     actorId: string,
-    opts?: { allowSharedScope?: boolean; expectedVersion?: number; sessionId?: string },
+    opts?: { allowSharedScope?: boolean; expectedVersion?: number; sessionId?: string; liveActor?: boolean },
   ): Promise<number>;
   createCron(input: CreateCronInput, trial?: CronScriptTrial): Promise<Cron>;
   getCron(id: string): Promise<Cron | null>;
@@ -565,7 +573,7 @@ export interface App {
     patch: { description?: string; body?: string },
     opts?: { liveActor?: boolean },
   ): Promise<Skill | "trigger_blocked" | null>;
-  restoreOwnedSkill(id: string, principalId: string): Promise<Skill | "exists" | null>;
+  restoreOwnedSkill(id: string, principalId: string, opts?: { liveActor?: boolean }): Promise<Skill | "exists" | null>;
   listSkillPacks(): Promise<SkillPack[]>;
   getSkillPack(id: string): Promise<SkillPack | null>;
   registerSkillPack(input: NewSkillPack): Promise<SkillPack>;
@@ -581,6 +589,7 @@ export interface App {
     description: string;
     body: string;
     requiredCapabilities?: string[];
+    liveActor?: boolean;
   }): Promise<Skill | null>;
   deleteOwnedSkill(input: {
     principalId: string;
@@ -688,6 +697,7 @@ export interface AppDeps {
   teams?: Pick<TeamStore, "isMember">;
   emailAuthMembers?: DirectoryMember[];
   projects?: ProjectStore;
+  namedAgents?: NamedAgents;
   deploy: DeployService;
   deployAppsDomain?: string;
   deploymentGitPrincipals?: DeploymentGitPrincipals;

@@ -1,4 +1,5 @@
 import { sendJson } from "../http.ts";
+import { scopeId } from "../../types.ts";
 import { audit, isObj, orgScope } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 import type { IngestEvent } from "../../surface-cache/surface-cache.ts";
@@ -93,6 +94,7 @@ async function setChannelPolicy(ctx: ApiCtx): Promise<void> {
   if (typeof b.orders !== "string")
     return sendJson(res, 400, { error: "bad_request", message: "orders (string) required" });
   const setBy = typeof b.setBy === "string" ? b.setBy : undefined;
+  await app.namedAgents?.assertMayInstruct(scopeId("channel", b.container), { id: setBy ?? "system", live: false });
   const policy = await app.setChannelPolicy(b.container, b.orders, setBy);
   if (!policy) return sendJson(res, 404, { error: "not_found", message: "surface cache not enabled" });
   audit(deps, {

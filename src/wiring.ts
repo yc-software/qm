@@ -360,6 +360,9 @@ import { createAdminService, parseAdminGrants, type AdminService } from "./admin
 import { createAdminGrantStore } from "./admin/admin-grant-store.ts";
 import { createPostgresAdminGrantStore } from "./admin/postgres-admin-grant-store.ts";
 import { createProjectStore, type Project, type ProjectStore } from "./projects/project-store.ts";
+import { createAgentStore, type NamedAgent } from "./named-agents/agent-store.ts";
+import { createNamedAgents } from "./named-agents/named-agents.ts";
+import { resolveBranding } from "./resolution/branding.ts";
 import { withErrorReporting, type ErrorLog } from "./admin/error-log.ts";
 import { createPostgresReplayDedupe, type ReplayDedupe } from "./auth/replay-dedupe.ts";
 import {
@@ -718,6 +721,7 @@ export function buildApp(
     configStore,
     acl,
     config.securityScreen === "off" && overrides.securityScreener ? "enforce" : config.securityScreen,
+    (scope) => namedAgents.promptFor(scope),
   );
 
   const s3 = config.s3Endpoint ? s3Client(config.s3Region, { endpoint: config.s3Endpoint }) : undefined;
@@ -1761,6 +1765,15 @@ export function buildApp(
     isActiveMember: (principalId) => identity.isInternal(identity.classify(principalId)),
     advisoryLock,
   });
+  const namedAgents = createNamedAgents({
+    store: createAgentStore(artifactMap<NamedAgent>("agents", ["handle", "channelId"]), { advisoryLock }),
+    featureFlags,
+    identity,
+    directory,
+    isOrgAdmin: async (principalId) => (await admin.adminStatusOf({ id: principalId, type: "internal" })).isAdmin,
+    auditLog,
+    botNames: async () => [(await resolveBranding(configStore, orgScope, config.brandingDefault)).selfLabel ?? "QM"],
+  });
   const canReadScope = createCanReadScope({ managedGroups: projects, directory, identity, teams, sessions });
   const canWriteScope = createCanWriteScope({ managedGroups: projects, directory, identity, teams });
   const canManageScope = createCanManageScope({ managedGroups: projects, directory, identity, sessions });
@@ -2137,6 +2150,7 @@ export function buildApp(
     currentScopeMembers: createCurrentScopeMembers({ managedGroups: projects, directory, identity }, true),
     managedGroups: projects,
     projects,
+    namedAgents,
     ...(config.surfaceDebugFooter ? { surfaceDebugFooter: true } : {}),
     ...(decisions ? { replyCheck: createReplyCheck(decisions, decide) } : {}),
     environments,
@@ -2296,6 +2310,7 @@ export function buildApp(
         }
       : {}),
     projects,
+    namedAgents,
     environments,
     deploy: deployService,
     deployAppsDomain: config.awsDeploy.appsDomain,

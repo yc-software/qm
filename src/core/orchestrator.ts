@@ -2543,6 +2543,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           postProvenance,
           postKeys,
           spine,
+          liveTurn,
         });
         const attachStaging = createAttachStaging({
           sandbox: deps.sandbox,
@@ -2623,6 +2624,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           },
           ...(deps.config ? { config: deps.config } : {}),
           ...(deps.control && controlClaims ? { control: deps.control, controlClaims } : {}),
+          ...(controlClaims && (await deps.namedAgents?.toolOffered({ id: actor.id, live: liveTurn }, scopeId))
+            ? { agentsTool: true }
+            : {}),
           ...(deps.apiBaseUrl && connectorEnv.AGENT_API_TOKEN
             ? {
                 ...(securityPolicy.posture !== "strict"

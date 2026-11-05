@@ -68,6 +68,7 @@ export interface SurfaceToolsContext {
   postProvenance: (deliveryKey: string) => DeliveryProvenance;
   postKeys: TurnPostKeys;
   spine: SpineState;
+  liveTurn?: boolean;
 }
 
 function postedFileMetas(attachments: readonly OutgoingAttachment[]): PostedFileMeta[] {
@@ -95,6 +96,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
     postProvenance,
     postKeys,
     spine,
+    liveTurn,
   } = ctx;
   if (strictReadOnly || !(input.surfaceTools && defaultDestination && deps.deliveries)) return undefined;
   const deliveries = deps.deliveries;
@@ -494,6 +496,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       }
       let p: ChannelPolicy;
       try {
+        await deps.namedAgents?.assertMayInstruct(scopeId, { id: actor.id, live: liveTurn === true });
         p = await deps.channelPolicy.set(conversation.channelRef, orders, {
           setBy: actor.id,
           bots: parsedBots,

@@ -143,7 +143,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const { memory, history } = recallTools(kit);
   const { subagentTool, sessionTool, sidebarSessions } = sessionTools(kit);
   const { cron } = cronTools(kit);
-  const { webhook, guidance, sharingTool, admin } = controlPlaneTools(kit);
+  const { webhook, guidance, sharingTool, admin, agents } = controlPlaneTools(kit);
   const { surface } = surfaceTool(kit);
   const { createGoal, getGoal, updateGoal } = goalTools(kit);
   const { clientTools } = pageClientTools(kit);
@@ -184,6 +184,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           }),
           webhook,
           admin,
+          ...(ref.current?.agents ? [agents] : []),
         ]
       : []),
     ...(controlTools || surfaceTools ? [guidance] : []),

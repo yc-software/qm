@@ -1,5 +1,6 @@
 import { externalSlackCapabilityAllowed } from "./external-slack-capability.ts";
 import { MemoryDisclosureDenied } from "../memory/disclosure.ts";
+import { AgentLocked } from "../named-agents/named-agents.ts";
 import { MemoryFactsMissing } from "../memory/facts.ts";
 import { nameRequest, reportBackendError } from "../../plugins/chassis/src/error-reporting.ts";
 import {
@@ -327,6 +328,11 @@ function respondError(req: IncomingMessage, res: ServerResponse, err: unknown): 
     const status = err instanceof MemoryFactsMissing ? 404 : 403;
     if (!res.headersSent)
       sendJson(res, status, { error: status === 404 ? "not_found" : "forbidden", message: err.message });
+    else res.destroy();
+    return;
+  }
+  if (err instanceof AgentLocked) {
+    if (!res.headersSent) sendJson(res, 403, { error: err.code, message: err.message });
     else res.destroy();
     return;
   }
