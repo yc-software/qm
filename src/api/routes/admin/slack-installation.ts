@@ -1,5 +1,6 @@
 import { sendJson } from "../../http.ts";
-import { inTenant } from "../../../tenants/lookup.ts";
+import { bearerToken } from "../../request-tenant.ts";
+import { inTenant } from "../../../tenants/claim.ts";
 import { audit, authorizeAdmin, orgScope } from "../shared.ts";
 import type { ApiCtx } from "../route.ts";
 import { errMessage } from "../../../util/errors.ts";
@@ -172,8 +173,7 @@ export async function startSlackInstallation(ctx: ApiCtx): Promise<void> {
 }
 
 async function managedSlackTenant(ctx: ApiCtx): Promise<string | undefined> {
-  const token = /^Bearer\s+(\S+)$/i.exec(ctx.req.headers.authorization ?? "")?.[1];
-  return (await ctx.app.tenantFor("slack_bridge", token)) ?? (await ctx.app.readBootTenant());
+  return (await ctx.app.tenantFor("slack_bridge", bearerToken(ctx.req) ?? undefined)) ?? (await ctx.app.readBootTenant());
 }
 
 function slackTeam(value: unknown): string | undefined {

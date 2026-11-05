@@ -14,8 +14,7 @@ import type { VisibilityDirectory } from "../directory/visibility.ts";
 import type { DirectoryMember } from "../directory/directory-store.ts";
 import type { LeaderLease } from "../persistence/leader-lease.ts";
 import { createSweeper } from "../util/sweeper.ts";
-import { claimThenBind } from "../tenants/claim.ts";
-import { loadTenant } from "../tenants/cache.ts";
+import { claimThenBind, inTenant } from "../tenants/claim.ts";
 import { currentTenant, withTenant } from "../tenants/context.ts";
 import { recoverNextFireAt } from "./schedule.ts";
 import { cronQueueMisconfigured, fireJobStartsAt, type CronFireJob, type CronJobQueue } from "./job-queue.ts";
@@ -627,10 +626,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         .start({
           onFire: (job) =>
             observed === epoch
-              ? withTenant(job.tenantId, async () => {
-                  await loadTenant();
-                  return runQueueTask(() => fireJob(job));
-                })
+              ? inTenant(job.tenantId, () => runQueueTask(() => fireJob(job)))
               : Promise.resolve(),
         })
         .then(
