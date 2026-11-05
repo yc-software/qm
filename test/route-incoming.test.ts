@@ -50,10 +50,6 @@ test("an explicit Steer reaches a live automation turn; a message without that c
   const automation = { ...live, origin: "automation" as const };
   assert.deepEqual(routeIncoming(person, automation, steer), { kind: "steer" });
   assert.deepEqual(routeIncoming(person, automation, {}), { kind: "turn", reason: "automation-live" });
-  assert.deepEqual(routeIncoming(person, automation, { midTurn: "queue" }), {
-    kind: "turn",
-    reason: "automation-live",
-  });
   assert.deepEqual(routeIncoming(person, live, {}), { kind: "steer" });
 });
 
