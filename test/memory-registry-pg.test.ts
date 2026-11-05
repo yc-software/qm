@@ -347,7 +347,7 @@ test("org-admin routes: admins only, secrets write-only, env providers read-only
   assert.doesNotMatch(rows, /never-shown-secret/);
 });
 
-test("an admin's agent can register a brain but never carries its client secret or moves its url", async (t) => {
+test("an admin's agent can register and bind a brain but never carries its secret, moves its url or deletes an entry", async (t) => {
   const secret = "memory-registry-capability-secret".repeat(2);
   const built = buildApp(
     testConfig({ signingSecret: secret, capabilitySecret: secret, apiBaseUrl: "http://core.example.test" }),
@@ -372,12 +372,13 @@ test("an admin's agent can register a brain but never carries its client secret 
     },
     secret,
   );
-  const put = (body: Record<string, unknown> | null) =>
-    fetch(`http://localhost:${(server.address() as AddressInfo).port}/v1/admin/memory-registry/brains/acme-personal`, {
-      method: "PUT",
+  const agent = (method: string, path: string, body?: unknown) =>
+    fetch(`http://localhost:${(server.address() as AddressInfo).port}/v1/admin/memory-registry/${path}`, {
+      method,
       headers: { "x-agent-capability": cap, "content-type": "application/json" },
-      body: JSON.stringify(body),
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
+  const put = (body: Record<string, unknown> | null) => agent("PUT", "brains/acme-personal", body);
   const brain = {
     preset: "gbrain-v1",
     url: "https://brain.acme.example/mcp",
@@ -397,6 +398,38 @@ test("an admin's agent can register a brain but never carries its client secret 
   assert.deepEqual(stored.brains[0]!.auth, { clientId: "qm-personal" });
   assert.equal(stored.brains[0]!.url, brain.url);
   assert.equal(stored.brains[0]!.label, "Acme memory");
+  await built.memoryRegistry.update((record) =>
+    putBrain(
+      record,
+      "acme-personal",
+      { clientSecret: "set-outside-chat" },
+      {
+        actor: "admin-alice",
+        now: Date.now(),
+        overlayIds: built.memoryRegistry.overlayIds,
+        key: built.memoryRegistry.key,
+      },
+    ),
+  );
+  const binding = { brain: "acme-personal", scope: "personal:U1" };
+  assert.equal((await agent("PUT", "bindings/alice", binding)).status, 200);
+  for (const [method, path, body] of [
+    ["DELETE", "bindings/alice", undefined],
+    ["DELETE", "brains/acme-personal", undefined],
+    ["PUT", "brains/acme-personal", { ...brain, url: "https://elsewhere.acme.example/mcp" }],
+  ] as const) {
+    const refused = await agent(method, path, body);
+    assert.equal(refused.status, 400);
+    assert.match(await refused.text(), /never (goes|changes) through the agent/);
+  }
+  assert.equal((await agent("PUT", "bindings/alice", binding)).status, 200);
+  const kept = (await built.memoryRegistry.current()).record as MemoryRegistry;
+  assert.equal(kept.brains[0]!.url, brain.url);
+  assert.ok(kept.brains[0]!.auth.clientSecretEnc);
+  assert.deepEqual(
+    kept.bindings.map((entry) => [entry.id, entry.brain]),
+    [["alice", "acme-personal"]],
+  );
 });
 
 test("blue-green: a binding written through one instance serves turns on the other, in both directions", async (t) => {
