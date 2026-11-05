@@ -33,8 +33,14 @@ export function allConversations(): Conversation[] {
   return [...live];
 }
 
+function editingOutsideComposers(): boolean {
+  const active = document.activeElement as HTMLInputElement | null;
+  if (document.querySelector("dialog[open]") || active?.isContentEditable) return true;
+  return Boolean(active?.matches("input, textarea") && active.value);
+}
+
 export function reloadIntoServedRelease(): boolean {
-  if (!servedReleaseChanged() || document.visibilityState !== "visible") return false;
+  if (!servedReleaseChanged() || document.visibilityState !== "visible" || editingOutsideComposers()) return false;
   for (const { state, composer } of live) {
     if (state.agent?.state.isStreaming || state.pendingSend !== null) return false;
     if (composer.state.draft.trim() || composer.state.attachments.length > 0) return false;

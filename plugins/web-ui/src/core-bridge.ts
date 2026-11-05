@@ -778,11 +778,11 @@ function reportSigninRequired(detail: SigninRequired): void {
   onSigninRequired?.(detail);
 }
 
-let bootRelease: string | null = null;
 let servedRelease: string | null = null;
 
 export function servedReleaseChanged(): boolean {
-  return servedRelease !== bootRelease;
+  const booted = document.querySelector<HTMLMetaElement>('meta[name="qm-release"]')?.content;
+  return Boolean(booted && servedRelease && servedRelease !== booted);
 }
 
 export async function webFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
@@ -798,11 +798,7 @@ export async function webFetch(input: RequestInfo | URL, init?: RequestInit): Pr
     throw error;
   }
   reportRequestTiming(url, method, startMs, response.status);
-  const release = response.headers.get("x-qm-release");
-  if (release) {
-    bootRelease ??= release;
-    servedRelease = release;
-  }
+  servedRelease = response.headers.get("x-qm-release") ?? servedRelease;
   if (response.status !== 401) return response;
   stopBrowserErrors();
   stopAnalytics();

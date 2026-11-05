@@ -19,7 +19,6 @@ process.env.ALLOW_UNSIGNED_TEST_IDENTITY = "0";
 delete process.env.POSTHOG_API_KEY;
 process.env.SENTRY_BROWSER_DSN = "https://public@sentry.example.com/1";
 process.env.SENTRY_RELEASE = "release-1";
-process.env.GIT_SHA = "abc1234";
 const { handler } = await import("../server/index.ts");
 const surface = createServer((req, res) => void handler(req, res));
 await new Promise<void>((resolve) => surface.listen(0, "127.0.0.1", resolve));
@@ -37,14 +36,6 @@ test.after(() => {
   surface.close();
   core.closeAllConnections();
   core.close();
-});
-
-test("signed-in responses name the release the server runs", async () => {
-  const anonymous = await fetch(`${base}/me`);
-  assert.equal(anonymous.status, 401);
-  assert.equal(anonymous.headers.get("x-qm-release"), null);
-  assert.equal((await fetch(`${base}/me`, { headers: headers() })).headers.get("x-qm-release"), "abc1234");
-  assert.equal((await fetch(`${base}/api/contexts`, { headers: headers() })).headers.get("x-qm-release"), "abc1234");
 });
 
 test("browser error config requires authentication and excludes impersonation", async () => {

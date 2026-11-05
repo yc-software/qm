@@ -35,6 +35,7 @@ import {
   PayloadTooLargeError,
   sendBuffered,
   serveFavicon,
+  escapeHtml,
 } from "../../chassis/src/http.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { createBrandingCache, injectBranding } from "../../chassis/src/branding.ts";
@@ -130,7 +131,10 @@ async function serveWebManifest(res: ServerResponse): Promise<void> {
 
 async function brandIndexHtml(html: string): Promise<string> {
   const branding = await brandingCache.forRender();
-  return injectBranding(html, branding, { titleSuffix: "· Web" });
+  const stamped = RELEASE
+    ? html.replace("</head>", () => `<meta name="qm-release" content="${escapeHtml(RELEASE)}" /></head>`)
+    : html;
+  return injectBranding(stamped, branding, { titleSuffix: "· Web" });
 }
 
 const portalTokenStore = new AsyncLocalStorage<string | undefined>();
