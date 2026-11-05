@@ -4,6 +4,7 @@ import { createMemoryVectorIndexer } from "../src/memory/vector-indexer.ts";
 import { createNoopLeaderLease } from "../src/persistence/leader-lease.ts";
 import type { MemoryVectorStore, MemoryVector } from "../src/memory/postgres-vector-store.ts";
 import type { MemoryEmbedder } from "../src/model/embeddings.ts";
+import { TEST_TENANT } from "./support/test-tenant.ts";
 
 function fixture() {
   let now = 1000;
@@ -11,7 +12,8 @@ function fixture() {
   const writes: MemoryVector[][] = [];
   const failures: unknown[] = [];
   const prunes: string[] = [];
-  const store: Pick<MemoryVectorStore, "missing" | "put" | "prune"> = {
+  const store: Pick<MemoryVectorStore, "missing" | "put" | "prune" | "claimTenants"> = {
+    claimTenants: async () => [{ tenantId: TEST_TENANT, id: "memory" }],
     async missing(model, limit, dimensions, _signal, afterId) {
       requests.push({ model, limit, dimensions, afterId });
       return [

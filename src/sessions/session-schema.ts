@@ -1,6 +1,7 @@
 import type { PgMigrationDefinition } from "../persistence/pg-pool.ts";
 import { TENANCY, tenantRowSecurity, tenantTables } from "../tenants/migrations.ts";
 import { DROP_TENANT_PREBUILD_INDEXES } from "../tenants/prebuilt-indexes.ts";
+import { claimFunction } from "../tenants/claim.ts";
 
 export const SPEND_INDEXABLE = `(spend_usage_json(usage_json) IS NOT NULL
   AND octet_length(session_id) + octet_length(model) + octet_length(usage_json) <= 2000)`;
@@ -495,6 +496,26 @@ const SESSION_TABLES = tenantTables(
   },
 );
 
+const SESSION_CLAIMS: PgMigrationDefinition = {
+  id: "sessions/store/0057-claims",
+  statements: [
+    claimFunction(
+      "claim_dirty_spend",
+      "",
+      "SELECT DISTINCT tenant_id, 'spend'::text FROM session_spend_dirty ORDER BY tenant_id",
+    ),
+    claimFunction(
+      "claim_purged_envelopes",
+      "cutoff bigint, lim integer",
+      `DELETE FROM llm_prompt_envelopes
+        WHERE (tenant_id, hash) IN (SELECT tenant_id, hash FROM llm_prompt_envelopes WHERE created_at < $1
+                                     ORDER BY created_at LIMIT $2 FOR UPDATE SKIP LOCKED)
+          AND created_at < $1
+        RETURNING tenant_id, hash`,
+    ),
+  ],
+};
+
 export const SESSION_MIGRATIONS = [
   ...TENANCY,
   SESSION_SCHEMA,
@@ -507,6 +528,7 @@ export const SESSION_MIGRATIONS = [
   PARTICIPANT_MEMBERSHIP,
   DROP_TENANT_PREBUILD_INDEXES,
   ...SESSION_TABLES,
+  SESSION_CLAIMS,
 ];
 
 export const ancestry = (seed: string): string => `ancestry AS (
