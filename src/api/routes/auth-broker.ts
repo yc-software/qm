@@ -155,6 +155,10 @@ async function brokerSession(ctx: ApiCtx): Promise<void> {
 
 async function trustedAdmin(ctx: ApiCtx): Promise<void> {
   const { deps, res, body } = ctx;
+  if (!boundTenant()) {
+    res.writeHead(204);
+    return void res.end();
+  }
   const secret = deps.portalIdentitySecret;
   if (!secret || secret.length < 32 || secret === ctx.secret || !deps.admin || !deps.replayDedupe)
     return sendJson(res, 503, { error: "not_configured" });
@@ -248,7 +252,14 @@ async function redeemInvitation(ctx: ApiCtx): Promise<void> {
 
 export const authBrokerRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/auth/invitations/redeem", actor: "system", auth: "source", handle: redeemInvitation },
-  { method: "POST", path: "/v1/auth/trusted/admin", actor: "system", auth: "source", handle: trustedAdmin },
+  {
+    method: "POST",
+    path: "/v1/auth/trusted/admin",
+    actor: "system",
+    auth: "source",
+    tenant: "optional",
+    handle: trustedAdmin,
+  },
   {
     method: "POST",
     path: "/v1/auth/broker/sessions",

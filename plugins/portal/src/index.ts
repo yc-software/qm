@@ -1590,7 +1590,8 @@ async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL):
       "cache-control": "no-store",
     });
     res.end();
-  } catch {
+  } catch (error) {
+    console.warn(`[portal] trusted sign-in failed: ${errMessage(error)}`);
     sendHtml(
       res,
       400,

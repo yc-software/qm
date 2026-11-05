@@ -14,11 +14,12 @@ import { trustedPrincipal } from "../plugins/portal/src/trusted-entry.ts";
 import { provisionTrustedAdmin } from "../plugins/portal/src/trusted-admin.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { withoutTenant } from "../src/tenants/context.ts";
 
 const signingSecret = "core-test-secret".repeat(3);
 const identitySecret = "portal-test-secret".repeat(3);
 const issuer = "https://identity.example.test";
-function start(enabled = true) {
+function start(enabled = true, shared = false) {
   const built = buildApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "trusted-admin-")),
@@ -36,6 +37,7 @@ function start(enabled = true) {
     identity: built.identity,
     auditLog: built.auditLog,
   });
+  if (shared) Object.assign(built.app, { readBootTenant: async () => undefined });
   server.listen(0);
   return {
     built,
@@ -124,4 +126,18 @@ test("provisioning needs core opt-in and never reactivates a deactivated founder
   await s.built.identity.deactivate(id);
   assert.equal((await send(s.base, claims())).status, 403);
   assert.equal((await s.built.admin.adminStatusOf({ id, type: "internal" })).isAdmin, false);
+});
+
+test("on a shared host with no tenant bound, a trusted sign-in grants admin nowhere", async (t) => {
+  const s = withoutTenant(() => start(true, true));
+  t.after(s.close);
+  const before = await s.built.admin.listGrants();
+  const response = await withoutTenant(() => send(s.base, claims({ subject: "founder-shared" })));
+  assert.equal(response.status, 204);
+  assert.deepEqual(await s.built.admin.listGrants(), before);
+  const principal = { id: trustedPrincipal(issuer, "founder-shared"), type: "internal" as const };
+  assert.equal((await s.built.admin.adminStatusOf(principal)).isAdmin, false);
+  const config = { core: s.base, signingSecret, identitySecret, org: "default-org", issuer };
+  await withoutTenant(() => provisionTrustedAdmin(config, "founder-shared"));
+  assert.deepEqual(await s.built.admin.listGrants(), before);
 });
