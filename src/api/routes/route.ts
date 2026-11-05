@@ -47,7 +47,7 @@ export type Route<C extends BaseCtx = ApiCtx> = {
   actor?: RouteActor;
   admin?: AdminAccess;
   allowedInStrict?: true;
-  tenant?: "none";
+  tenant?: "none" | "optional";
   maxBodyBytes?: number;
 } & ({ method: string; path: string } | { match: (method: string, pathname: string) => boolean });
 

@@ -5,6 +5,7 @@ export interface PortalIdentity {
   authenticatedAs?: string;
   n?: string;
   imp?: string;
+  t?: string;
   exp: number;
 }
 

@@ -5,15 +5,24 @@ import { TENANCY } from "../../src/tenants/migrations.ts";
 export const TEST_TENANT = "00000000-0000-4000-8000-000000000001";
 export const APP_ROLE = "qm_app";
 
+const BINDING = /\s*-c (role|qm\.tenant_id)=\S+/g;
+
+function otherOptions(url: URL): string {
+  return (url.searchParams.get("options") ?? "").replace(BINDING, "").trim();
+}
+
 export function ownerUrl(databaseUrl: string): URL {
   const url = new URL(databaseUrl);
-  url.searchParams.delete("options");
+  const options = otherOptions(url);
+  if (options) url.searchParams.set("options", options);
+  else url.searchParams.delete("options");
   return url;
 }
 
 export function boundUrl(databaseUrl: string, role?: string): string {
   const url = ownerUrl(databaseUrl);
-  url.searchParams.set("options", `${role ? `-c role=${role} ` : ""}-c qm.tenant_id=${TEST_TENANT}`);
+  const options = [otherOptions(url), role ? `-c role=${role}` : "", `-c qm.tenant_id=${TEST_TENANT}`];
+  url.searchParams.set("options", options.filter(Boolean).join(" "));
   return url.toString();
 }
 
@@ -54,6 +63,6 @@ export async function seedTestTenant(databaseUrl: string): Promise<void> {
 
 export function appUrl(databaseUrl: string): string {
   const url = ownerUrl(databaseUrl);
-  url.searchParams.set("options", `-c role=${APP_ROLE}`);
+  url.searchParams.set("options", [otherOptions(url), `-c role=${APP_ROLE}`].filter(Boolean).join(" "));
   return url.toString();
 }
