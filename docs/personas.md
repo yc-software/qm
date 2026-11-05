@@ -87,8 +87,8 @@ on the personas page) or switch an existing session. When set, resolution:
 Owners add channels from the persona's page or by asking the agent ("give Ada
 #finance-ops"), which writes a `channel:` grant and can mark the persona as the
 channel's **default**: new threads there start with `persona_id` set, so people just
-talk to QM and get Ada. The default is the channel scope's existing `persona` setting
-(one per channel); without one, anyone can still say "use Ada" in a thread and the agent
+talk to QM and get Ada. The default lives in a new scoped-config table, `channel_persona_defaults`
+(one row per channel); without one, anyone can still say "use Ada" in a thread and the agent
 switches that session. Removing the grant clears the default.
 
 Writes (memory, files, crons) stay in the context's own scope, as now. In a shared
@@ -113,8 +113,8 @@ description. Row actions: Chat, Fork, and Edit / Share for writers and owners.
 - `sessions.persona_id TEXT NULL` — nullable, no backfill.
 - `acl_grants`: no DDL; new rows with `path` `persona:<id>` and `permission` `owner`
   in addition to `read`/`write`.
-- Channel scopes gain a `persona` setting (default persona id, nullable) in the existing
-  scoped settings; no DDL.
+- New scoped-config durable-map table `channel_persona_defaults`
+  (`id` = channel scope, `json` = `{ "scope": "channel:C…", "personaId": "…" }`).
 - New scope kind `persona` in existing scope-id text columns; no DDL.
 - New feature flag `personas`, per person or org, off by default. No env vars.
 
