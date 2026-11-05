@@ -14,7 +14,7 @@ const upstream = createServer((req, res) => {
   res.end("public content");
 });
 await new Promise<void>((resolve) => upstream.listen(0, resolve));
-process.env.PORTAL_PUBLIC_URL = "http://localhost:18197";
+process.env.PUBLIC_WEB_URL = "http://localhost:18197";
 process.env.PORTAL_SESSION_SECRET = "share-test-portal-secret";
 process.env.CORE_SIGNING_SECRET = "share-test-core-secret";
 process.env.WEB_UI_UPSTREAM = `http://localhost:${(upstream.address() as AddressInfo).port}`;

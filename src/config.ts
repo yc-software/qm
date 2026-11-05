@@ -59,6 +59,7 @@ export interface Config extends SandboxSettings, DeploySettings {
   production: boolean;
   allowUnauthenticatedCore: boolean;
   port: number;
+  publicPort?: number;
   dataDir: string;
   orgId: string;
   databaseUrl?: string;
@@ -124,7 +125,6 @@ export interface Config extends SandboxSettings, DeploySettings {
   publicUrl?: string;
   gmailPubSub?: { topic: string; audience: string; serviceAccount: string };
   publicWebUrl?: string;
-  flyAppName?: string;
   slack?: SlackPluginConfig;
   externalSlackPolicies?: ExternalSlackPolicies;
   skillSigningSecret?: string;
@@ -413,6 +413,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     });
     throw new Error(`missing or insecure required core secrets: ${described.join(", ")}`);
   }
+  if (env.NODE_ENV === "production" && !env.PUBLIC_PORT?.trim())
+    throw new Error("PUBLIC_PORT is required in production: core serves the web UI and sign-in on it");
+  if (env.PUBLIC_PORT?.trim() && env.PUBLIC_PORT.trim() === (env.PORT?.trim() || "8080"))
+    throw new Error(
+      `PUBLIC_PORT and PORT are both ${env.PUBLIC_PORT.trim()}; core's API and its public front door need separate ports`,
+    );
   const modelProvider = modelProviderEnvStrict(env);
   const sandbox = sandboxSettings(env);
   const dataDir = resolve(env.DATA_DIR ?? "./data");
@@ -494,6 +500,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     production: env.NODE_ENV === "production",
     allowUnauthenticatedCore: boolEnvStrict("ALLOW_UNAUTHENTICATED_CORE", env.ALLOW_UNAUTHENTICATED_CORE) ?? false,
     port: numEnvStrict("PORT", env.PORT) ?? CONFIG_DEFAULTS.port,
+    ...optNum(env, "PUBLIC_PORT", "publicPort"),
     dataDir,
     orgId: env.ORG_ID ?? DEFAULT_ORG_ID,
     ...(env.POSTHOG_API_KEY?.trim()
@@ -619,7 +626,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
         }
       : {}),
     ...(env.PUBLIC_WEB_URL ? { publicWebUrl: env.PUBLIC_WEB_URL } : {}),
-    ...(env.FLY_APP_NAME ? { flyAppName: env.FLY_APP_NAME } : {}),
     ...(slack ? { slack } : {}),
     externalSlackPolicies,
     ...(env.SKILL_SIGNING_SECRET ? { skillSigningSecret: env.SKILL_SIGNING_SECRET } : {}),

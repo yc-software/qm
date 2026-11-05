@@ -5,7 +5,11 @@ Drafts and replies go out as multipart/alternative (the plain-text body plus a
 generated HTML mirror): Gmail shows text/plain-only mail to recipients at an
 altered, narrower width even though the sender's own view looks normal.
 
-Usage (token from $VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM):
+Uses $VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM when present; otherwise sends the same
+requests through the user's app connection via QM's /v1/composio/proxy. Pass
+--account ca_... before the command when several Gmail connections match.
+
+Usage:
   gmail.py search 'newer_than:7d is:unread' [--limit 10]
   gmail.py read MESSAGE_ID [--full]
   gmail.py thread THREAD_ID [--full]    # all messages oldest-first + lastFromMe
@@ -27,6 +31,7 @@ import json
 import os
 import re
 import subprocess
+import tempfile
 import sys
 import urllib.parse
 from email.message import EmailMessage
@@ -36,23 +41,46 @@ from email.utils import formataddr, getaddresses
 API = "https://gmail.googleapis.com/gmail/v1/users/me"
 
 
+ACCOUNT: str | None = None
+
+
 def call(method: str, path: str, body: dict | None = None, query: dict | None = None):
+    global ACCOUNT
     url = f"{API}/{path}" + (f"?{urllib.parse.urlencode(query, doseq=True)}" if query else "")
     tok = os.environ.get("VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM", "")
-    if not tok:
-        sys.exit("no Gmail token: ask the user to connect Google")
-    cmd = ["curl", "-sS", "--max-time", "60", "-X", method,
-           "-H", f"Authorization: Bearer {tok}", "-H", "Content-Type: application/json",
-           "-w", "\n%{http_code}", url]
-    if body is not None:
+    base, cap = os.environ.get("AGENT_API_URL", ""), os.environ.get("AGENT_API_TOKEN", "")
+    head = None
+    if tok:
+        cmd = ["curl", "-sS", "--max-time", "60", "-X", method,
+               "-H", f"Authorization: Bearer {tok}", "-H", "Content-Type: application/json",
+               "-w", "\n%{http_code}", url]
+        payload = json.dumps(body) if body is not None else None
+    elif base and cap:
+        head = tempfile.NamedTemporaryFile(prefix="gmail-proxy-", delete=False)
+        head.close()
+        cmd = ["curl", "-sS", "--max-time", "120", "-X", "POST", "-D", head.name,
+               "-H", f"X-Agent-Capability: {cap}", "-H", "Content-Type: application/json",
+               "-w", "\n%{http_code}", f"{base}/v1/composio/proxy"]
+        payload = json.dumps({"method": method, "url": url,
+                              **({"body": body} if body is not None else {}),
+                              **({"accountId": ACCOUNT} if ACCOUNT else {})})
+    else:
+        sys.exit("no Gmail connection: ask the user to connect Gmail")
+    if payload is not None:
         cmd[1:1] = ["--data-binary", "@-"]
-    res = subprocess.run(cmd, input=json.dumps(body) if body is not None else None,
-                         capture_output=True, text=True)
+    res = subprocess.run(cmd, input=payload, capture_output=True, text=True)
+    if head:
+        with open(head.name) as f:
+            seen = [l.split(":", 1)[1].strip() for l in f if l.lower().startswith("x-composio-account:")]
+        os.unlink(head.name)
+        ACCOUNT = ACCOUNT or (seen[-1] if seen else None)
     if res.returncode != 0:
         sys.exit(f"gmail api unreachable on {method} {path}: {res.stderr.strip()[:500]}")
     text, _, status = res.stdout.rpartition("\n")
     if not status.startswith("2"):
         sys.exit(f"gmail api {status} on {method} {path}: {text[:500]}")
+    if not text:
+        return {}
     try:
         return json.loads(text)
     except ValueError:
@@ -174,7 +202,9 @@ def strip_addrs(addrs: str, exclude: str) -> str:
 
 
 def main() -> None:
+    global ACCOUNT
     p = argparse.ArgumentParser()
+    p.add_argument("--account", help="app connection id (ca_...) when several Gmail connections match")
     sub = p.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("search")
     s.add_argument("query")
@@ -199,6 +229,7 @@ def main() -> None:
     sd = sub.add_parser("send-draft")
     sd.add_argument("draft_id")
     a = p.parse_args()
+    ACCOUNT = a.account
 
     if a.cmd == "search":
         meta_q = {"format": "metadata", "metadataHeaders": ["From", "Date", "Subject"]}

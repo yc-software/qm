@@ -266,7 +266,7 @@ test("semantic recall reuses the turn's memory snapshot instead of reloading not
   const snapshot = await context.memorySnapshot();
   assert.deepEqual(loads.sort(), ["channel:eng", "org:test", "personal:alice"]);
   loads.length = 0;
-  const recalled = await context.recallMemory("anything", snapshot.loaded);
+  const recalled = await context.recallMemory("anything", Promise.resolve(snapshot.loaded));
   assert.deepEqual(
     recalled.map((fact) => fact.text),
     ["- (" + new Date().toISOString().slice(0, 10) + ") LAST_FACT"],

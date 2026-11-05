@@ -60,6 +60,9 @@ test("init scaffolds a loadable config, generated local secrets, and a valid san
     assert.equal(config.target, "docker");
     assert.equal(config.publicUrl, "http://localhost:8082");
     assert.equal(config.sandbox, undefined);
+    assert.deepEqual(config.services, ["core", "auth"]);
+    assert.deepEqual(config.secretEnv?.core, { ADMIN_GRANTS: "ADMIN_GRANTS" });
+    assert.equal(config.env.auth?.AUTH_EMAIL_TRANSPORT, "resend");
 
     const env = readFileSync(join(dir, ".env.example"), "utf8");
     assert.equal(env, renderEnvExample(config), ".env.example is exactly renderEnvExample output");
@@ -78,6 +81,10 @@ test("init scaffolds a loadable config, generated local secrets, and a valid san
     assert.ok(coreSecret, "init generates a strong core signing key");
     assert.ok(skillSecret, "init generates a strong skill signing key");
     assert.notEqual(coreSecret, skillSecret, "generated keys are independent");
+    for (const name of ["PORTAL_SESSION_SECRET", "AUTH_TOKEN_SECRET", "AUTH_CLIENT_SECRET"])
+      assert.match(localEnv, new RegExp(`^${name}=[a-f0-9]{64}$`, "m"), `init generates ${name} for docker sign-in`);
+    for (const line of ["ADMIN_GRANTS=", "AUTH_ALLOWED_EMAILS="])
+      assert.ok(env.split("\n").includes(line), `.env.example should require ${line} for docker sign-in`);
     assert.equal(statSync(join(dir, ".env")).mode & 0o777, 0o600, ".env is owner-readable only");
     for (const stale of ["HARNESS=", "ORG_ID=", "PORT="]) {
       assert.ok(!env.includes(stale), `.env.example should not offer ${stale} as a value to fill in`);
@@ -149,8 +156,8 @@ test("init --target fly scaffolds the full hosted topology and both Slack apps",
     quiet(() => runInit({ dir, org: "acme", target: "fly" }));
     const { config } = loadConfigInDir(dir);
     assert.equal(config.target, "fly");
-    assert.deepEqual(config.services, ["core", "slack", "web-ui", "portal", "auth"]);
-    assert.equal(config.publicUrl, "https://acme-portal.fly.dev");
+    assert.deepEqual(config.services, ["core", "slack", "auth"]);
+    assert.equal(config.publicUrl, "https://acme-core.fly.dev");
     assert.equal(config.flyOrg, "personal");
     assert.ok(config.region, "region is scaffolded");
     assert.equal(config.appPrefix, "acme");
@@ -166,7 +173,7 @@ test("init --target fly scaffolds the full hosted topology and both Slack apps",
     assert.deepEqual(config.secretEnv?.core, { ADMIN_GRANTS: "ADMIN_GRANTS" });
     assert.equal(config.env.slack?.SLACK_IDENTITY_EMAIL, "1");
     assert.equal(config.env.auth?.AUTH_EMAIL_TRANSPORT, "resend");
-    assert.equal(config.env.portal?.OIDC_PRINCIPAL_CLAIM, undefined, "the broker derives every OIDC_* value");
+    assert.equal(config.env.core?.OIDC_PRINCIPAL_CLAIM, undefined, "the broker derives every OIDC_* value");
     const env = readFileSync(join(dir, ".env.example"), "utf8");
     for (const line of ["ADMIN_GRANTS=", "AUTH_ALLOWED_EMAILS=", "PORTAL_SESSION_SECRET=", "ANTHROPIC_API_KEY="]) {
       assert.ok(env.split("\n").includes(line), `.env.example should require ${line} for the fly scaffold`);
@@ -246,7 +253,7 @@ test("init --target aws scaffolds the full hosted topology, Terraform, and the o
     const { config } = loadConfigInDir(dir);
     assert.equal(config.target, "aws");
     assert.equal(config.publicUrl, "https://acme.example.com");
-    assert.deepEqual(config.services, ["core", "slack", "web-ui", "portal", "auth"]);
+    assert.deepEqual(config.services, ["core", "slack", "auth"]);
     assert.equal(config.env.core?.AWS_DEPLOY_IMAGE, "acme-qm-sandbox");
     assert.equal(config.env.core?.AWS_PUBLIC_ORIGIN_URL, "http://replace-with-alb-hostname");
     assert.equal(config.env.slack?.SLACK_IDENTITY_EMAIL, "1");
@@ -259,7 +266,7 @@ test("init --target aws scaffolds the full hosted topology, Terraform, and the o
       cpu: 2048,
       memory: 4096,
     });
-    assert.deepEqual(Object.keys(config.aws?.services ?? {}), ["core", "web-ui", "portal"]);
+    assert.deepEqual(Object.keys(config.aws?.services ?? {}), ["core"]);
     for (const name of ["main.tf", "outputs.tf", "variables.tf", "versions.tf", "terraform.tfvars"]) {
       assert.ok(existsSync(join(dir, "infra", name)), `infra/${name} is scaffolded`);
     }

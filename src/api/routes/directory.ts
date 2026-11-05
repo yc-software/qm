@@ -93,6 +93,7 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
         type: m.type,
         ...(typeof m.slackId === "string" && m.slackId ? { slackId: m.slackId } : {}),
         ...(typeof m.avatarUrl === "string" && m.avatarUrl.startsWith("https://") ? { avatarUrl: m.avatarUrl } : {}),
+        ...(m.isBot === true ? { isBot: true } : {}),
       }));
     await app.upsertDirectory(members, numOrUndef(b.membersSyncedAt));
     memberCount = members.length;
