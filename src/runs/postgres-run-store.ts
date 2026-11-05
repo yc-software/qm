@@ -26,6 +26,7 @@ import {
 } from "./run-store.ts";
 import { swallow } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
+import { tenantTables } from "../tenants/migrations.ts";
 
 const NOTIFY_SESSION_AVAILABLE =
   "pg_notify('qm_run_available', to_json(encode(sha256(convert_to(session_id, 'UTF8')), 'hex'))::text)";
@@ -129,6 +130,16 @@ END $base_schema$`,
         `DROP TABLE IF EXISTS tool_calls`,
       ],
     },
+    ...tenantTables("runs/store/0012-tenants", [
+      {
+        table: "runs",
+        primaryKey: "id",
+        unique: [
+          { name: "runs_idempotency_key_key", columns: "idempotency_key", constraint: true },
+          { name: "idx_runs_one_running_per_session", columns: "session_id", where: "status = 'running'" },
+        ],
+      },
+    ]),
   ]);
 
   const availabilityListeners = new Map<() => void, number>();
@@ -319,7 +330,7 @@ END $base_schema$`,
         const { rows } = await q(
           `INSERT INTO runs(id, session_id, status, request, idempotency_key, attempts, max_attempts, created_at, claim_priority)
            VALUES ($1,$2,'pending',$3,$4,0,$5,$6,$7)
-           ON CONFLICT (idempotency_key) DO NOTHING
+           ON CONFLICT (tenant_id, idempotency_key) DO NOTHING
            RETURNING *, ${NOTIFY_SESSION_AVAILABLE}`,
           [
             id,
