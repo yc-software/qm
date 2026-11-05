@@ -16,6 +16,7 @@ function routes() {
     session: () => null,
     signOut: () => undefined,
     signIn: () => undefined,
+    signInApp: () => undefined,
     page: (_res, status, html) => void pages.push([status, html]),
     errorHtml: (detail) => detail,
     unavailable: () => undefined,
