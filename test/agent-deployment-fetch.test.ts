@@ -1,4 +1,5 @@
 import { after, before, describe, it } from "node:test";
+import { TEST_TENANT } from "./support/test-config.ts";
 import assert from "node:assert/strict";
 import { createServer as createHttpServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -58,6 +59,7 @@ describe("agent deployment fetch", () => {
     await new Promise<void>((resolve) => closed.close(() => resolve()));
 
     const app = {
+      bootTenant: async () => TEST_TENANT,
       authorizesCapabilityScope: async () => true,
       reachDeployment: async (id: string, viewer: string) => {
         if (id !== "mine" && id !== "down") return { status: "not_found" as const };

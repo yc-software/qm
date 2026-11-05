@@ -1,4 +1,5 @@
 import { after, before, describe, it } from "node:test";
+import { TEST_TENANT } from "./support/test-config.ts";
 import assert from "node:assert/strict";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -34,6 +35,7 @@ describe("deployment logs route", () => {
 
   before(async () => {
     const app = {
+      bootTenant: async () => TEST_TENANT,
       authorizesCapabilityScope: async () => true,
       deploymentLogsFor: async (id: string, viewer: string, opts: { tailLines: number }) => {
         lastTail = opts.tailLines;
