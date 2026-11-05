@@ -937,6 +937,19 @@ test("an inbox fire skips the sync turn only when the pre-check proves nothing n
   assert.equal(seen.length, 3);
 });
 
+test("a failed inbox sync turn keeps the pre-check reason in its note", async () => {
+  const s = service(
+    () => {
+      throw new Error("connector unavailable");
+    },
+    { inboxQuiet: async () => ({ quiet: false, reason: "new Slack message for the user" }) },
+  );
+  const loop = await makeLoop(s.loops, { surface: "inbox:slack", sources: ["slack"] });
+  const result = await s.fire.fire(loop.id, "news-fails");
+  assert.equal(result.status, "failed");
+  assert.match(result.note ?? "", /connector unavailable; inbox sync ran: new Slack message for the user$/);
+});
+
 const RATE_LIMITED = new ProviderTurnError("Model provider API error (rate_limit_error): slow down", {
   code: "rate_limit",
   retryable: true,

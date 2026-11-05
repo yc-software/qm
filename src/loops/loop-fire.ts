@@ -762,6 +762,8 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
             .then((items) => deps.inboxQuiet!(loop, items))
             .catch((error: unknown) => ({ quiet: false as const, reason: `pre-check failed: ${errMessage(error)}` }))
         : undefined;
+      const quietNote =
+        quiet && (quiet.quiet ? "inbox quiet: nothing new since the last pass" : `inbox sync ran: ${quiet.reason}`);
       let failure: unknown;
       try {
         if (!quiet?.quiet) {
@@ -777,13 +779,10 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
         await deps.loops.recordScan(loopId, firedAt);
         await deps.loops.recordFireOutcome(loopId, "ok");
         await applyGovernor(loopId);
-        if (!quiet) return { status: "silent" };
-        return {
-          status: "silent",
-          note: quiet.quiet ? "inbox quiet: nothing new since the last pass" : `inbox sync ran: ${quiet.reason}`,
-        };
+        return { status: "silent", ...(quietNote ? { note: quietNote } : {}) };
       }
-      return recordFailedFire(loopId, failure);
+      const failed = await recordFailedFire(loopId, failure);
+      return quietNote ? { ...failed, note: `${failed.note}; ${quietNote}` } : failed;
     }
     const maxAttempts = loop.caps?.maxItemAttempts ?? DEFAULT_MAX_ATTEMPTS;
     const grants = await deps.grants.byLoop(loopId);

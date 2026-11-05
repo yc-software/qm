@@ -226,7 +226,13 @@ export function createInboxQuietCheck(deps: QuietCheckDeps): InboxQuietCheck {
     try {
       return await check(source, loop, open, loop.lastScanAt - OVERLAP_MS);
     } catch (error) {
-      return run(error instanceof Overflow ? error.message : `pre-check failed: ${errMessage(error)}`);
+      if (error instanceof Overflow) return run(error.message);
+      const code = slackErrorCode(error);
+      console.warn(
+        "%s",
+        `[loops] inbox pre-check for ${loop.id} failed open: ${errMessage(error)}${code ? ` (${code})` : ""}`,
+      );
+      return run(`pre-check failed: ${errMessage(error)}`);
     }
   };
 }
