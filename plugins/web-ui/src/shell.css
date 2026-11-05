@@ -492,45 +492,33 @@ a.chat-row-open {
   text-align: center;
 }
 .group-avatar-stack {
+  display: inline-flex;
+  width: max-content;
+}
+.recent-project-head .group-avatar-stack {
   position: absolute;
   top: 50%;
   right: 4px;
-  display: inline-flex;
-  width: max-content;
   transform: translateY(-50%);
   pointer-events: none;
 }
 .recent-project-head:has(.group-avatar-stack) .recent-project-toggle {
-  padding-right: 26px;
+  padding-right: 32px;
 }
 .recent-project-head:hover .group-avatar-stack,
 .recent-project-head:focus-within .group-avatar-stack,
 .recent-project-head .session-menu.menu-open .group-avatar-stack {
   visibility: hidden;
 }
-.group-avatar {
+.group-avatar-stack > .inbox-avatar {
   box-sizing: border-box;
   width: 18px;
   height: 18px;
-  margin-left: -6px;
+  margin-left: -3px;
   border: 1.5px solid var(--sidebar, var(--background));
-  border-radius: 50%;
-  object-fit: cover;
-  background: var(--secondary);
 }
-.group-avatar:first-child {
+.group-avatar-stack > .inbox-avatar:first-child {
   margin-left: 0;
-}
-.group-avatar.initial,
-.group-avatar.more {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--foreground);
-  font-size: 9px;
-  font-weight: 600;
-  line-height: 1;
-  font-variant-numeric: tabular-nums;
 }
 .recent-project-new-chat {
   display: inline-flex;
@@ -5817,6 +5805,21 @@ a.connector-widget:focus-visible {
   flex-shrink: 1;
   text-overflow: ellipsis;
   font-weight: 600;
+}
+.context-row-avatars {
+  margin-left: auto;
+}
+.context-row-avatars + .context-row-meta {
+  margin-left: 0;
+}
+.context-row-avatars > .inbox-avatar {
+  width: 22px;
+  height: 22px;
+  margin-left: -5px;
+  border-color: var(--background);
+}
+.context-row:hover .context-row-avatars > .inbox-avatar {
+  border-color: color-mix(in srgb, var(--background) 88%, var(--secondary));
 }
 .context-row-meta {
   overflow: hidden;

@@ -108,6 +108,7 @@ export async function resolveTurnContext(input: ContextInput) {
       query: string,
       disclosedFacts?: Promise<ReadonlyMap<ScopeId, readonly MemoryFact[]>>,
       report?: MemoryRecallContext["report"],
+      text?: string,
     ) =>
       tracePhase(
         "turn.memory_recall",
@@ -117,6 +118,7 @@ export async function resolveTurnContext(input: ContextInput) {
             read,
             {
               query,
+              ...(text ? { input: text } : {}),
               ...reader,
               maxChars: RECALL_MAX_CHARS,
               ...(disclosedFacts ? { disclosedFacts } : {}),

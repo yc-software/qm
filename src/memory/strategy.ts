@@ -14,7 +14,6 @@ export interface MemoryStrategy {
       reply: string;
       actorId?: string;
       audienceScopeId?: ScopeId;
-      autonomous?: boolean;
       conversationScopeId?: ScopeId;
       sessionId?: string;
       idempotencyKey?: string;

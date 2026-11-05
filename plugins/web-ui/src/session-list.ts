@@ -77,6 +77,13 @@ export function recentProjectSeeds(contexts: readonly ProjectAwareContext[]): Re
   });
 }
 
+export function sidebarProjectSeeds(
+  contexts: readonly ProjectAwareContext[],
+  groupByActivity: boolean,
+): RecentProjectSeed[] {
+  return groupByActivity ? [] : recentProjectSeeds(contexts);
+}
+
 export function groupProjectSessions(
   sessions: readonly CoreSession[],
   projectSeeds: readonly RecentProjectSeed[],
