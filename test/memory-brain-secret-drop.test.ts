@@ -245,11 +245,9 @@ test("an unfilled brain link is never a pending sibling of a keychain drop in th
     [{ channelId: "C1", principalId: "admin-alice" }],
   );
   const channel = scopeId("channel", "C1");
-  const brainLink = await mint("admin-alice", { memoryBrain: "acme-personal", purpose: "p" }, channel, {
-    threadRef: "th1",
-  });
+  const brainLink = await mint("admin-alice", { memoryBrain: "acme-personal", purpose: "p" }, channel);
   assert.equal(brainLink.status, 200);
-  const stripe = await mint("admin-alice", { service: "stripe", purpose: "p" }, channel, { threadRef: "th1" });
+  const stripe = await mint("admin-alice", { service: "stripe", purpose: "p" }, channel);
   const waited = new Promise<void>((resolve) => {
     fired = resolve;
   });
