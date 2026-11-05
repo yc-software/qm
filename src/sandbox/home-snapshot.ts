@@ -51,7 +51,7 @@ export function snapshotDue(
 
 export async function attemptSnapshot(
   stored: SnapshotBookkeeping | null | undefined,
-  record: (patch: SnapshotBookkeeping) => unknown,
+  record: (patch: SnapshotBookkeeping) => Promise<unknown>,
   capture: () => Promise<unknown>,
   report: (message: string) => void,
 ): Promise<void> {
@@ -59,11 +59,14 @@ export async function attemptSnapshot(
   try {
     await record({ lastSnapshotAttemptMs: Date.now() });
     await capture();
-    await record({ lastSnapshotAttemptMs: undefined });
   } catch (e) {
     if (failing) swallow("home-snapshot: snapshot still failing", e);
     else report(errMessage(e));
+    return;
   }
+  await record({ lastSnapshotAttemptMs: undefined }).catch(
+    swallowAs("home-snapshot: clear snapshot attempt", undefined),
+  );
 }
 
 export interface SnapshotUpload {

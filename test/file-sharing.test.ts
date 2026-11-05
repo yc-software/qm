@@ -499,7 +499,6 @@ test("removeDir wipes a per-turn spool dir (and only it), tolerating an absent d
   after(() => ff.cleanup());
   const sandbox = createSpritesSandbox({
     initializationStore: testMap(),
-    checkpointStore: testMap(),
     advisoryLock: testAdvisoryLock(),
     token: "test-token",
     baseUrl: ff.baseUrl,
@@ -524,7 +523,6 @@ test("a binary file round-trips through the sandbox (base64-over-exec) without u
   after(() => ff.cleanup());
   const sandbox = createSpritesSandbox({
     initializationStore: testMap(),
-    checkpointStore: testMap(),
     advisoryLock: testAdvisoryLock(),
     token: "test-token",
     baseUrl: ff.baseUrl,

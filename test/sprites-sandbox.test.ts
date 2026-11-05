@@ -29,7 +29,6 @@ const scope = scopeId("personal", "tester");
 function make(extra: Record<string, unknown> = {}): Sandbox {
   return createSpritesSandbox({
     initializationStore: testMap(),
-    checkpointStore: testMap(),
     advisoryLock: testAdvisoryLock(),
     token: FAKE_SPRITES_TOKEN,
     namePrefix: "qmt",

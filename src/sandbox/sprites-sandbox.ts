@@ -112,6 +112,10 @@ export function processKeepaliveScript(processId: string): string {
   return `LOOP=${shq(loop)}; if command -v setsid >/dev/null 2>&1; then setsid sh -c "$LOOP" >/dev/null 2>&1 & else sh -c "$LOOP" >/dev/null 2>&1 & fi; echo OK`;
 }
 
+export interface StoredSprite extends SnapshotBookkeeping {
+  pending?: boolean;
+}
+
 export interface SpritesSandboxOptions extends BlobStagingOptions {
   token?: string;
   baseUrl?: string;
@@ -121,8 +125,7 @@ export interface SpritesSandboxOptions extends BlobStagingOptions {
   egressProxyAdditionalUrls?: string[];
   checkpointIntervalMs?: number;
   snapshots?: HomeSnapshotStore;
-  initializationStore: DurableMap<{ pending: boolean }>;
-  checkpointStore: DurableMap<SnapshotBookkeeping>;
+  initializationStore: DurableMap<StoredSprite>;
   advisoryLock: AdvisoryLock;
   extraTools?: string[];
   credentialPaths?: CredentialPathSpec[];
@@ -176,7 +179,6 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
   const appliedSize = new Map<string, number>();
   const egressPolicyByName = new Map<string, string>();
   const pressureEpisodes = new Set<string>();
-  const checkpointStore = opts.checkpointStore;
 
   const reportError = (category: string, code: string, message: string, scopeLabel?: string): void => {
     try {
@@ -369,7 +371,7 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
     } catch (e) {
       if (!isMissing(e)) throw new Error(`sprites delete ${name}: ${spritesErrorDetail(e)}`, { cause: e });
     }
-    await checkpointStore.delete(name);
+    await initializationStore.delete(name);
   }
 
   const homeSnapshots = opts.snapshots
@@ -428,9 +430,9 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
 
   async function checkpointIfDue(name: string, tdOpts?: TeardownOptions): Promise<void> {
     await requireInitialized(name);
-    const book = await checkpointStore.putIfAbsent(name, {});
-    const record = (patch: SnapshotBookkeeping) => checkpointStore.merge(name, patch);
-    if (!tdOpts?.homeUnchanged) await record({ homeDirty: true });
+    const book = (await initializationStore.get(name)) ?? (await initializationStore.putIfAbsent(name, {}));
+    const record = (patch: SnapshotBookkeeping) => initializationStore.merge(name, patch);
+    if (!tdOpts?.homeUnchanged && book.homeDirty !== true) await record({ homeDirty: true });
     if (!snapshotDue(book, tdOpts, checkpointIntervalMs)) return;
     await attemptSnapshot(
       book,

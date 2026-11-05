@@ -224,7 +224,7 @@ import type { FileArtifactStore } from "./files/file-artifact-store.ts";
 import { createPostgresFileArtifactStore } from "./files/postgres-file-artifact-store.ts";
 import { createAwsSandbox, type StoredMicrovm } from "./sandbox/aws-sandbox.ts";
 import { createLocalSandbox } from "./sandbox/local-sandbox.ts";
-import { createSpritesSandbox } from "./sandbox/sprites-sandbox.ts";
+import { createSpritesSandbox, type StoredSprite } from "./sandbox/sprites-sandbox.ts";
 import { createSmolmachinesSandbox, type StoredSmolmachinesSandbox } from "./sandbox/smolmachines-sandbox.ts";
 import { createAgent37Sandbox } from "./sandbox/agent37-sandbox.ts";
 import {
@@ -243,7 +243,7 @@ import {
 } from "./sandbox/managed-agents-sandbox.ts";
 import { createSdkManagedAgentsClient } from "./sandbox/managed-agents-client.ts";
 import { s3Client } from "./persistence/s3.ts";
-import { createS3SnapshotStore, type SnapshotBookkeeping } from "./sandbox/home-snapshot.ts";
+import { createS3SnapshotStore } from "./sandbox/home-snapshot.ts";
 import { createModalSandbox, type StoredModalSandbox } from "./sandbox/modal-sandbox.ts";
 import { createSdkModalClient } from "./sandbox/modal-client.ts";
 import { tenantModalClient, tenantSandboxChoice, tenantSuperserveSandbox } from "./sandbox/tenant-sandbox-shape.ts";
@@ -879,8 +879,7 @@ export function buildApp(
     const { snapshotS3Bucket, ...sprites } = config.spritesSandbox;
     return createSpritesSandbox({
       ...sprites,
-      initializationStore: artifactMap<{ pending: boolean }>("sprites_initialization"),
-      checkpointStore: artifactMap<SnapshotBookkeeping>("sprites_checkpoints"),
+      initializationStore: artifactMap<StoredSprite>("sprites_initialization"),
       advisoryLock,
       ...(snapshotS3Bucket
         ? { snapshots: createS3SnapshotStore({ bucket: snapshotS3Bucket, prefix: "sprites-home" }) }
