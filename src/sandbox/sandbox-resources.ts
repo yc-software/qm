@@ -73,6 +73,7 @@ export interface SandboxResources {
   restart(actorId: string, id: string): Promise<void>;
   retire(actorId: string, id: string): Promise<void>;
   use<T>(id: string, action: () => Promise<T>, exclusive?: boolean): Promise<T>;
+  cleanUp(id: string, action: () => Promise<void>, exclusive?: boolean): Promise<void>;
   hold(id: string, runId: string): Promise<void>;
   release(id: string, runId: string | undefined, isLive: (runId: string) => Promise<boolean>): Promise<boolean>;
   setDefault(actorId: string, scopeId: ScopeId, id: string | null): Promise<void>;
@@ -162,14 +163,14 @@ export function createSandboxResources(opts: {
       throw error;
     }
   };
-  const use = async <T>(id: string, action: () => Promise<T>, exclusive = false): Promise<T> => {
+  const locked = <T>(id: string, exclusive: boolean, ifRetired: () => Promise<T>, action: () => Promise<T>) => {
     const lock = exclusive ? opts.lock.withLock : opts.lock.withSharedLock;
-    return lock(`sandbox-resource:${id}`, async () => {
-      const current = await get(id);
-      if (current.state === "retired") throw new Error("sandbox has been retired");
-      return action();
-    });
+    return lock(`sandbox-resource:${id}`, async () => ((await get(id)).state === "retired" ? ifRetired() : action()));
   };
+  const use = <T>(id: string, action: () => Promise<T>, exclusive = false): Promise<T> =>
+    locked(id, exclusive, () => Promise.reject(new Error("sandbox has been retired")), action);
+  const cleanUp = (id: string, action: () => Promise<void>, exclusive = false): Promise<void> =>
+    locked(id, exclusive, async () => {}, action);
   const profiles = (): SandboxProviderProfile[] =>
     (Object.entries(opts.backends) as Array<[SandboxBackendName, Sandbox]>)
       .filter(([, backend]) => !!backend)
@@ -191,6 +192,7 @@ export function createSandboxResources(opts: {
     initialize,
     get,
     use,
+    cleanUp,
     async hold(id, runId) {
       await opts.records.update(id, (current) =>
         current.holders?.includes(runId) ? current : { ...current, holders: [...(current.holders ?? []), runId] },

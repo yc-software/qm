@@ -288,7 +288,7 @@ test("retirement refuses the default, waits for an active command, and prevents 
   await assert.rejects(resources.setDefault("alice", "personal:alice", record.id), /retired/);
 });
 
-test("every handle operation rejects retirement before reaching a backend that could revive the machine", async () => {
+test("handle operations reject retirement, and cleanup settles without reaching a backend that could revive the machine", async () => {
   let backendCalls = 0;
   const hit = async (): Promise<never> => {
     backendCalls++;
@@ -305,6 +305,8 @@ test("every handle operation rejects retirement before reaching a backend that c
     backend.stageIn = hit;
     backend.stageOut = hit;
     backend.importFiles = hit;
+    backend.removeDir = hit;
+    backend.teardown = hit;
   });
   const record = await resources.create("alice", "personal:alice", "local");
   const handle = await router.provision("personal:alice", { sandboxId: record.id });
@@ -316,8 +318,6 @@ test("every handle operation rejects retirement before reaching a backend that c
     () => router.writeFile(handle, "file", "data"),
     () => router.writeFileBytes(handle, "file", new Uint8Array()),
     () => router.listDir(handle, "."),
-    () => router.removeDir(handle, "dir"),
-    () => router.teardown(handle),
     () => router.startProcess!(handle, "work"),
     () => router.readProcess!(handle, "process"),
     () => router.writeStdin!(handle, "process", "input"),
@@ -331,6 +331,9 @@ test("every handle operation rejects retirement before reaching a backend that c
     () => resources.restart("alice", record.id),
   ];
   for (const operation of operations) await assert.rejects(operation(), /retired/);
+  await router.removeDir(handle, "dir");
+  await router.teardown(handle);
+  await router.teardown(handle, { destroy: true });
   assert.equal(backendCalls, 0);
 });
 
