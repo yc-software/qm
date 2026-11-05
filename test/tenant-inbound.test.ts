@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import type { IncomingMessage, ServerResponse } from "node:http";
+import type { IncomingMessage } from "node:http";
 import { after, before, describe, it } from "node:test";
-import { inboundKey, withInboundTenant } from "../src/api/inbound-tenant.ts";
+import { EMPTY_TENANT, inboundKey, withInboundTenant } from "../src/api/inbound-tenant.ts";
 import { boundTenant, withTenant } from "../src/tenants/context.ts";
 import { tenantLookup, type TenantKey, type TenantLookup } from "../src/tenants/lookup.ts";
 import { twoTenants, type TwoTenants } from "./support/two-tenants.ts";
@@ -14,26 +14,6 @@ const TABLES: Record<Exclude<TenantKey, "slack_team" | "deployment">, string> = 
   share: "session_shares",
   secret_drop: "secret_drops",
 };
-
-function response() {
-  const sent: { status?: number; body?: string } = {};
-  const res = {
-    req: { method: "POST", headers: {} },
-    headersSent: false,
-    writableEnded: false,
-    destroyed: false,
-    getHeader: () => undefined,
-    setHeader() {},
-    writeHead(status: number) {
-      sent.status = status;
-      return res;
-    },
-    end(body?: string) {
-      sent.body = body;
-    },
-  } as unknown as ServerResponse;
-  return { res, sent };
-}
 
 const request = (host = "core.test") => ({ headers: { host }, resume() {} }) as unknown as IncomingMessage;
 
@@ -108,20 +88,22 @@ describe("inbound tenant lookups", () => {
     assert.deepEqual(await lookup.gmailTenants("nobody@x.test"), []);
   });
 
-  it("binds keyed routes and app hosts at ingress, and answers unknown keys without a tenant", async () => {
+  it("binds keyed routes and app hosts at ingress, and gives unknown keys a tenant that owns no rows", async () => {
     const route = { tenant: { by: "webhook" as const, key: (params: Record<string, string>) => params.id } };
     const url = new URL("http://core.test/v1/webhooks/incoming/x");
-    const known = inboundKey(request(), {}, { route, params: { id: "webhooks-1" } }, url)!;
-    let seen: string | undefined;
-    await withInboundTenant(request(), response().res, lookup, known, async () => {
-      seen = boundTenant();
-    });
-    assert.equal(seen, db.tenants[1]);
-
-    const missing = inboundKey(request(), {}, { route, params: { id: "webhooks-gone" } }, url)!;
-    const { res, sent } = response();
-    await withInboundTenant(request(), res, lookup, missing, async () => assert.fail("must not run"));
-    assert.equal(sent.status, 404);
+    const seen = async (id: string) => {
+      const inbound = inboundKey(request(), {}, { route, params: { id } }, url)!;
+      let bound: { tenant?: string; rows?: unknown[] } = {};
+      await withInboundTenant(lookup, inbound, async () => {
+        bound = { tenant: boundTenant(), rows: await db.app.q("SELECT id FROM webhooks") };
+      });
+      return bound;
+    };
+    const known = await seen("webhooks-1");
+    assert.equal(known.tenant, db.tenants[1]);
+    assert.deepEqual(known.rows?.map((r) => (r as { id: string }).id).sort(), ["webhooks-1", "webhooks-shared"]);
+    assert.deepEqual(await seen("webhooks-gone"), { tenant: EMPTY_TENANT, rows: [] });
+    assert.deepEqual(await seen("webhooks-shared"), { tenant: EMPTY_TENANT, rows: [] });
 
     const gate = { deployAppsDomain: "apps.test", deployGateSecret: "s" };
     assert.deepEqual(inboundKey(request("dep-1.apps.test:443"), gate, null, url), { by: "deployment", key: "dep-1" });

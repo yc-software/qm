@@ -505,7 +505,7 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
     const matched = raw ? null : findRoute(apiRoutes, base.method, base.pathname);
     const route = (raw ?? matched)?.route;
     const inbound = inboundKey(req, deps, raw ?? matched, base.url);
-    if (inbound) return withInboundTenant(req, res, app, inbound, () => serve(req, res, base, raw, matched));
+    if (inbound) return withInboundTenant(app, inbound, () => serve(req, res, base, raw, matched));
     await withRequestTenant(
       req,
       res,

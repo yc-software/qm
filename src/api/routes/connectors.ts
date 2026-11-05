@@ -498,11 +498,7 @@ export const connectorRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
   {
     match: (m, p) => m === "GET" && parseOAuthRoute(p)?.action === "callback",
     auth: "public",
-    tenant: {
-      by: "oauth_flow",
-      key: (_params, url) => url.searchParams.get("state") ?? undefined,
-      unknown: (res) => sendJson(res, 400, { error: "oauth_callback_failed", message: "invalid OAuth state" }),
-    },
+    tenant: { by: "oauth_flow", key: (_params, url) => url.searchParams.get("state") ?? undefined },
     handle: oauthCallback,
   },
 ];
@@ -563,11 +559,7 @@ export const connectorRoutes: ReadonlyArray<Route<ApiCtx>> = [
     method: "GET",
     path: "/v1/connectors/oauth/consent/redeem/:linkId",
     auth: "source",
-    tenant: {
-      by: "consent_link",
-      key: (params) => params.linkId,
-      unknown: (res) => sendJson(res, 200, { status: "invalid" }),
-    },
+    tenant: { by: "consent_link", key: (params) => params.linkId },
     handle: consentRedeem,
   },
   {

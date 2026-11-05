@@ -35,7 +35,6 @@ export interface ApiCtx extends BaseCtx {
 export interface KeyedTenant {
   by: TenantKey;
   key: (params: Record<string, string>, url: URL) => string | undefined;
-  unknown?: (res: ServerResponse, key: string) => void;
 }
 
 export type RouteAuth = "either" | "source" | "public" | { aud: string; bearer?: true };
