@@ -9,9 +9,6 @@ const MAX_MODELS = 1_000;
 const TTL_MS = 5 * 60_000;
 const RETRY_MS = 30_000;
 const STALE_MS = 15 * 60_000;
-// LiteLLM reports some models (e.g. Gemini 4 Argon/Carbon) with max_output_tokens equal to the
-// context window. That output limit is not real, so use a conservative one that every current
-// provider accepts (Vertex Gemini rejects more than 65,536) and that leaves half the window for input.
 const UNRELIABLE_OUTPUT_LIMIT_FALLBACK = 65_536;
 
 function transientFailure(error: unknown): boolean {
