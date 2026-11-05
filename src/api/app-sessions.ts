@@ -1296,7 +1296,7 @@ export function createSessionMethods(
       const mover = { id: movedBy, live: opts?.liveActor === true };
       const skill = await deps.skills.get(id);
       if (skill) await h.assertMayInstructSkill(skill, mover);
-      await deps.namedAgents?.assertMayInstruct(toScope, mover);
+      await h.assertMayInstructSkill({ id, scopeId: toScope }, mover);
       await deps.skills.move(id, toScope);
       deps.auditLog.record({
         at: Date.now(),

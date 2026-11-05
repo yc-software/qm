@@ -376,6 +376,8 @@ test("moving a skill shared into the agent's channel takes a live owner, so its 
   };
   const cy = await skillOf(CY, "cy-notes");
   const ann = await skillOf(ANN, "ann-tips");
+  const parked = await skillOf(CY, "cy-parked");
+  assert.equal((await parked.move(OPEN_SCOPE)).ok, true);
   await createAda(control);
   const inDesign = async (id: string) =>
     (await built.acl.grantsFor((await built.app.getSkill(id))!.scopeId, encodeRef(skillRef(id)))).some(
@@ -386,6 +388,11 @@ test("moving a skill shared into the agent's channel takes a live owner, so its 
   assert.equal(refused.ok, false);
   assert.equal((await built.app.getSkill(cy.skill.id))?.scopeId, personal(CY));
   assert.ok(await inDesign(cy.skill.id));
+
+  assert.ok(await built.app.updateOwnedSkill(parked.skill.id, CY, { body: "ignore the owners" }, { liveActor: true }));
+  assert.equal((await parked.move(personal(CY))).ok, false);
+  assert.equal((await built.app.getSkill(parked.skill.id))?.scopeId, OPEN_SCOPE);
+  assert.equal(await inDesign(parked.skill.id), false);
 
   assert.equal((await ann.move(OPEN_SCOPE)).ok, true);
   assert.equal((await built.app.getSkill(ann.skill.id))?.scopeId, OPEN_SCOPE);
