@@ -33,7 +33,7 @@ const MESSAGE_WAKE =
   "A subagent sent you a message. Check internal messages with subagents wait (timeoutMs: 0) and decide whether it affects the user's request; report only what is relevant. If it does not, end without posting.";
 const MESSAGE_DISPLAY = "Subagent sent a message";
 const PEER_WAKE =
-  "Another conversation handed you a task. Read it with subagents wait (timeoutMs: 0), then do it, or decline it and tell the sender with sessions send_message.";
+  "Another conversation handed you a task. Read it with subagents wait (timeoutMs: 0), then do it, or decline it and tell the sender with sessions send_message and wake:false.";
 const PEER_DISPLAY = "Another conversation handed over a task";
 const RESULT_MAIL = "subagent-mail-";
 const returnWakeKey = (runId: string) => `subagent-return:${runId}`;

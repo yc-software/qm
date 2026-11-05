@@ -248,7 +248,7 @@ export function sessionTools(kit: ToolKit) {
     description:
       "Work with sessions, the conversations in the web sidebar (subagents are not sessions). " +
       "search: entries across conversations visible to everyone here, with sessionId/seq references. list: sessions you can see here. read: a session's recent transcript. " +
-      "send_message: a private note delivered to another session as internal context. By default it is a task: it wakes the session if idle, otherwise the session gets it at its next step as handed-off work. wake:false sends an FYI instead, which wakes nothing and is read whenever that session next runs. " +
+      "send_message: a private note delivered to another session as internal context. wake:true (default) hands over work that needs a turn: it wakes the session if idle, otherwise the session gets it at its next step as a task. Send replies, status reports and completion notes with wake:false, an FYI that wakes nothing. " +
       "new: a clean session starting with `text`. fork: copy this conversation's visible history into a new session, optionally running `text` there. " +
       "Create new/forked sessions only when the attending person asks (they appear under their name); refused on automated turns.",
     parameters: Type.Object({
@@ -270,7 +270,8 @@ export function sessionTools(kit: ToolKit) {
       title: Type.Optional(Type.String({ description: "new/fork: optional sidebar title." })),
       wake: Type.Optional(
         Type.Boolean({
-          description: "send_message: false sends an FYI that wakes nothing; default true sends a task.",
+          description:
+            "send_message: true (default) for work that needs a turn; false for replies, status and completion notes.",
         }),
       ),
       limit: Type.Optional(Type.Integer({ description: "read: default 30. search: default 20, max 100." })),
