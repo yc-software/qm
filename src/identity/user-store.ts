@@ -273,7 +273,7 @@ async function findUser(q: Query, alias: string): Promise<string | undefined> {
   return (await q(`SELECT user_id FROM user_links WHERE alias_id = $1`, [alias]))[0]?.user_id as string | undefined;
 }
 
-async function ensureUserIn(client: PoolClient, alias: string): Promise<string> {
+export async function ensureUserIn(client: PoolClient, alias: string): Promise<string> {
   const q = onClient(client);
   const found = await findUser(q, alias);
   if (found) return found;
@@ -324,6 +324,10 @@ async function linkInTransaction(client: PoolClient, link: UserLink): Promise<Us
     );
     await q(`UPDATE users SET offboarded_by = $1 WHERE offboarded_by = $2`, [target, source]);
     await q(`UPDATE user_links SET linked_by = $1 WHERE linked_by = $2`, [target, source]);
+    if ((await q(`SELECT to_regclass('persona_access') IS NOT NULL AS present`))[0]?.present) {
+      await q(`UPDATE personas SET created_by = $1 WHERE created_by = $2`, [target, source]);
+      await q(`UPDATE persona_access SET granted_by = $1 WHERE granted_by = $2`, [target, source]);
+    }
     await q(`DELETE FROM users WHERE id = $1`, [source]);
   }
   const linkedBy = link.linkedBy ? await ensureUserIn(client, foldPrincipalId(link.linkedBy)) : null;

@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { createPgPool, withPgTransaction, type PgMigrationDefinition, type Rows } from "../persistence/pg-pool.ts";
+import { DIRECTORY_MIGRATIONS } from "../directory/postgres-directory-store.ts";
+import { foldPrincipalId } from "../directory/person.ts";
+import { ensureUserIn, USER_MIGRATIONS } from "../identity/user-store.ts";
+import { SESSION_MIGRATIONS } from "../sessions/session-schema.ts";
 import type { ScopeId } from "../types.ts";
 
 export const PERSONA_ROLES = ["read", "write", "owner"] as const;
@@ -52,7 +56,7 @@ export interface PersonaStore {
 
 const PERSONA_MIGRATIONS: PgMigrationDefinition[] = [
   {
-    id: "personas/store/0001",
+    id: "users/v2/personas-0001",
     statements: [
       `CREATE TABLE IF NOT EXISTS personas(
         id             TEXT        PRIMARY KEY,
@@ -62,7 +66,7 @@ const PERSONA_MIGRATIONS: PgMigrationDefinition[] = [
         icon_kind      TEXT        CHECK (icon_kind IN ('emoji', 'custom')),
         icon_value     TEXT,
         forked_from_id TEXT,
-        created_by     TEXT        NOT NULL,
+        created_by     UUID        NOT NULL REFERENCES users(id),
         created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
         updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
         CHECK ((icon_kind IS NULL) = (icon_value IS NULL))
@@ -71,7 +75,7 @@ const PERSONA_MIGRATIONS: PgMigrationDefinition[] = [
         persona_id       TEXT        NOT NULL REFERENCES personas(id) ON DELETE CASCADE,
         grantee_scope_id TEXT        NOT NULL CHECK (grantee_scope_id ~ '^(personal|team|org|channel):.+'),
         role             TEXT        NOT NULL CHECK (role IN ('owner', 'write', 'read')),
-        granted_by       TEXT        NOT NULL,
+        granted_by       UUID        NOT NULL REFERENCES users(id),
         granted_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
         PRIMARY KEY (persona_id, grantee_scope_id)
       )`,
@@ -79,6 +83,8 @@ const PERSONA_MIGRATIONS: PgMigrationDefinition[] = [
     ],
   },
 ];
+
+const PERSONA_SELECT = `SELECT p.*, u.primary_alias AS created_by_alias FROM personas p JOIN users u ON u.id = p.created_by`;
 
 const ms = (value: unknown): number => new Date(value as string).getTime();
 
@@ -90,7 +96,7 @@ function toPersona(r: Rows[number]): Persona {
     instructions: r.instructions as string,
     ...(r.icon_kind ? { icon: { kind: r.icon_kind as PersonaIcon["kind"], value: r.icon_value as string } } : {}),
     ...(r.forked_from_id ? { forkedFromId: r.forked_from_id as string } : {}),
-    createdBy: r.created_by as string,
+    createdBy: r.created_by_alias as string,
     createdAt: ms(r.created_at),
     updatedAt: ms(r.updated_at),
   };
@@ -103,15 +109,21 @@ export class PersonaOwnerRequired extends Error {
 }
 
 export function createPostgresPersonaStore(connectionString: string, opts: { id?: () => string } = {}): PersonaStore {
-  const { q, pool } = createPgPool(connectionString, PERSONA_MIGRATIONS);
+  const { q, pool } = createPgPool(connectionString, [
+    ...DIRECTORY_MIGRATIONS,
+    ...SESSION_MIGRATIONS,
+    ...USER_MIGRATIONS,
+    ...PERSONA_MIGRATIONS,
+  ]);
   const nextId = opts.id ?? randomUUID;
   return {
     async create(input, owner, by) {
       const id = nextId();
       return withPgTransaction(await pool(), async (db) => {
-        const { rows } = await db.query(
+        const user = await ensureUserIn(db, foldPrincipalId(by));
+        await db.query(
           `INSERT INTO personas (id, name, description, instructions, icon_kind, icon_value, forked_from_id, created_by)
-           VALUES ($1, btrim($2), $3, $4, $5, $6, $7, $8) RETURNING *`,
+           VALUES ($1, btrim($2), $3, $4, $5, $6, $7, $8)`,
           [
             id,
             input.name,
@@ -120,18 +132,18 @@ export function createPostgresPersonaStore(connectionString: string, opts: { id?
             input.icon?.kind ?? null,
             input.icon?.value ?? null,
             input.forkedFromId ?? null,
-            by,
+            user,
           ],
         );
         await db.query(
           `INSERT INTO persona_access (persona_id, grantee_scope_id, role, granted_by) VALUES ($1, $2, 'owner', $3)`,
-          [id, owner, by],
+          [id, owner, user],
         );
-        return toPersona(rows[0]!);
+        return toPersona((await db.query(`${PERSONA_SELECT} WHERE p.id = $1`, [id])).rows[0]!);
       });
     },
     async get(id) {
-      const rows = await q("SELECT * FROM personas WHERE id = $1", [id]);
+      const rows = await q(`${PERSONA_SELECT} WHERE p.id = $1`, [id]);
       return rows[0] ? toPersona(rows[0]) : null;
     },
     async update(id, fields) {
@@ -144,7 +156,7 @@ export function createPostgresPersonaStore(connectionString: string, opts: { id?
            icon_kind = CASE WHEN $5 THEN $6 ELSE icon_kind END,
            icon_value = CASE WHEN $5 THEN $7 ELSE icon_value END,
            updated_at = now()
-         WHERE id = $1 RETURNING *`,
+         WHERE id = $1 RETURNING id`,
         [
           id,
           fields.name ?? null,
@@ -155,7 +167,7 @@ export function createPostgresPersonaStore(connectionString: string, opts: { id?
           icon?.value ?? null,
         ],
       );
-      return rows[0] ? toPersona(rows[0]) : null;
+      return rows[0] ? toPersona((await q(`${PERSONA_SELECT} WHERE p.id = $1`, [id]))[0]!) : null;
     },
     async remove(id) {
       const rows = await q("DELETE FROM personas WHERE id = $1 RETURNING id", [id]);
@@ -163,13 +175,14 @@ export function createPostgresPersonaStore(connectionString: string, opts: { id?
     },
     async access(id) {
       const rows = await q(
-        "SELECT * FROM persona_access WHERE persona_id = $1 ORDER BY array_position(ARRAY['owner','write','read'], role), grantee_scope_id",
+        `SELECT a.*, u.primary_alias AS granted_by_alias FROM persona_access a JOIN users u ON u.id = a.granted_by
+          WHERE a.persona_id = $1 ORDER BY array_position(ARRAY['owner','write','read'], a.role), a.grantee_scope_id`,
         [id],
       );
       return rows.map((r) => ({
         scopeId: r.grantee_scope_id as ScopeId,
         role: r.role as PersonaRole,
-        grantedBy: r.granted_by as string,
+        grantedBy: r.granted_by_alias as string,
         grantedAt: ms(r.granted_at),
       }));
     },
@@ -177,6 +190,7 @@ export function createPostgresPersonaStore(connectionString: string, opts: { id?
       if (!access.some((entry) => entry.role === "owner")) throw new PersonaOwnerRequired();
       await withPgTransaction(await pool(), async (db) => {
         await db.query("SELECT 1 FROM personas WHERE id = $1 FOR UPDATE", [id]);
+        const user = await ensureUserIn(db, foldPrincipalId(by));
         const kept = access.map((entry) => entry.scopeId);
         await db.query("DELETE FROM persona_access WHERE persona_id = $1 AND NOT (grantee_scope_id = ANY($2))", [
           id,
@@ -188,7 +202,7 @@ export function createPostgresPersonaStore(connectionString: string, opts: { id?
              ON CONFLICT (persona_id, grantee_scope_id) DO UPDATE
                SET role = EXCLUDED.role, granted_by = EXCLUDED.granted_by, granted_at = now()
                WHERE persona_access.role IS DISTINCT FROM EXCLUDED.role`,
-            [id, entry.scopeId, entry.role, by],
+            [id, entry.scopeId, entry.role, user],
           );
       });
     },
