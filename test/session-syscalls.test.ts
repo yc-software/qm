@@ -21,6 +21,7 @@ import {
   USER_STOP_ALL,
   runStopped,
   ANCESTOR_STOP,
+  type SessionSyscallDeps,
 } from "../src/sessions/session-syscalls.ts";
 import {
   deliverSubagentMail,
@@ -38,7 +39,12 @@ import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
+import type { RunSignal } from "../src/runs/run-signal-store.ts";
 import { liveSubagentsNote } from "../src/sessions/subagent-status.ts";
+
+const unexpectedSteer: SessionSyscallDeps["steerRun"] = async () => {
+  throw new Error("unexpected steer");
+};
 
 const actor: Principal = { id: "U1", type: "internal", displayName: "Alex" };
 const scope: ScopeId = scopeId("personal", "U1");
@@ -50,6 +56,7 @@ interface Rig {
   runs: RunStore;
   signals: ReturnType<typeof createPostgresRunSignalStore>;
   advisoryLock: AdvisoryLock;
+  steerRun: SessionSyscallDeps["steerRun"];
   room: Session;
   syscallsFor(session: Session): ReturnType<ReturnType<typeof createSessionSyscalls>["forTurn"]>;
 }
@@ -62,11 +69,15 @@ async function rig(opts?: {
   const signals = createPostgresRunSignalStore(testDatabaseUrl());
   const mailbox = createSessionMailbox(testMap<SessionMessage>());
   const advisoryLock = testAdvisoryLock();
+  const steerRun: SessionSyscallDeps["steerRun"] = async (run, signal) => ({
+    sent: await signals.send(run.id, signal),
+  });
   const factory = createSessionSyscalls({
     mailbox,
     sessions,
     runs,
     signals,
+    steerRun,
     advisoryLock,
     maxAttempts: 3,
     ...(opts?.prepareRequest ? { prepareRequest: opts.prepareRequest } : {}),
@@ -95,6 +106,7 @@ async function rig(opts?: {
     runs,
     signals,
     advisoryLock,
+    steerRun,
     room,
     syscallsFor: (session) => factory.forTurn(binding(session)),
   };
@@ -299,28 +311,28 @@ test("write steers a running child's turn and interrupts explicitly", async () =
 test("a message whose running turn ended before the steer landed is replayed as a turn instead of being lost", async () => {
   const r = await rig();
   const target = await runningChild(r, r.room, "build");
-  await r.runs.complete(target.run.id, target.leaseToken, { status: "ok", reply: "done" });
-  const stale = { ...target.run, status: "running" as const };
-  const replayed: string[] = [];
+  const steers: Array<[string, RunSignal]> = [];
   const api = createSessionSyscalls({
     ...r,
-    runs: {
-      ...r.runs,
-      inFlightForThread: async (threadRef) =>
-        threadRef === target.session.threadRef ? [stale] : r.runs.inFlightForThread(threadRef),
-    },
-    replayOrphanedRunSignals: async (runId) => {
-      replayed.push(runId);
+    steerRun: async (run, signal) => {
+      steers.push([run.id, signal]);
+      return { sent: true, terminal: true, drained: true, replayRunId: "replayed-run" };
     },
     maxAttempts: 3,
   }).forTurn({ session: r.room, scopeId: scope, request: { surface: "slack", conversation, actor } });
   const out = await api.write({ target: target.session.id, wake: true, text: "keep going" });
   assert.equal(out.ok && out.delivered, "queued_turn");
-  assert.deepEqual(replayed, [target.run.id]);
-  const [orphan] = await r.signals.pending(target.run.id);
-  assert.equal(orphan?.signal.text, "keep going");
-  assert.equal(orphan.signal.request?.spawned, true);
-  assert.equal(orphan.signal.request?.sessionSenderId, r.room.id);
+  assert.deepEqual(
+    steers.map(([runId, signal]) => [runId, signal.text, signal.request?.spawned, signal.request?.sessionSenderId]),
+    [[target.run.id, "keep going", true, r.room.id]],
+  );
+  const refusing = createSessionSyscalls({
+    ...r,
+    steerRun: async () => ({ sent: true, terminal: true, drained: true }),
+    maxAttempts: 3,
+  }).forTurn({ session: r.room, scopeId: scope, request: { surface: "slack", conversation, actor } });
+  const refused = await refusing.write({ target: target.session.id, wake: true, text: "keep going" });
+  assert.equal(refused.ok, false);
 });
 
 test("a retried message with the same requestId steers the running turn once", async () => {
@@ -1547,6 +1559,7 @@ test("child runs retain the managed roster and read-only floor", async () => {
     sessions: r.sessions,
     runs: r.runs,
     signals: r.signals,
+    steerRun: r.steerRun,
     advisoryLock: r.advisoryLock,
     maxAttempts: 3,
   }).forTurn({
@@ -1935,6 +1948,7 @@ test("read-only callers cannot steer writable children and preserve the floor wh
     sessions: r.sessions,
     runs: r.runs,
     signals: r.signals,
+    steerRun: r.steerRun,
     advisoryLock: r.advisoryLock,
     maxAttempts: 3,
   }).forTurn({
@@ -1963,6 +1977,7 @@ test("writes revalidate access even while a target is running", async () => {
     sessions: r.sessions,
     runs: r.runs,
     signals: r.signals,
+    steerRun: r.steerRun,
     advisoryLock: r.advisoryLock,
     maxAttempts: 3,
     authorize: async (session) => session.id !== child.id,
@@ -2040,6 +2055,7 @@ test("private session replies stay read-only, queue behind running work, and do 
     sessions: r.sessions,
     runs: r.runs,
     signals: r.signals,
+    steerRun: r.steerRun,
     advisoryLock: r.advisoryLock,
     maxAttempts: 3,
   });
@@ -2081,6 +2097,7 @@ test("session tools cannot bypass swarm worker admission or message budgets", as
     sessions: r.sessions,
     runs: r.runs,
     signals: r.signals,
+    steerRun: r.steerRun,
     advisoryLock: r.advisoryLock,
     maxAttempts: 3,
   });
@@ -3092,6 +3109,7 @@ test("children of a Slack group turn keep its source so external-workspace polic
     sessions,
     runs,
     signals: createPostgresRunSignalStore(testDatabaseUrl()),
+    steerRun: unexpectedSteer,
     advisoryLock: testAdvisoryLock(),
     maxAttempts: 3,
   });
@@ -3148,6 +3166,7 @@ test("sessions list shows only sidebar sessions the whole audience can see and c
     sessions,
     runs,
     signals: createPostgresRunSignalStore(testDatabaseUrl()),
+    steerRun: unexpectedSteer,
     advisoryLock: testAdvisoryLock(),
     maxAttempts: 3,
     conversations: {

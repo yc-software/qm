@@ -66,11 +66,13 @@ async function scenario() {
   const mailbox = createSessionMailbox(testMap<SessionMessage>());
   const featureFlags = createFeatureFlagStore(testMap());
   await featureFlags.setEnabled("persistent_subagents", "personal:U1", true, "test");
+  const signals = createPostgresRunSignalStore(testDatabaseUrl());
   const sessionSyscalls = createSessionSyscalls({
     sessions,
     runs,
     mailbox,
-    signals: createPostgresRunSignalStore(testDatabaseUrl()),
+    signals,
+    steerRun: async (run, signal) => ({ sent: await signals.send(run.id, signal) }),
     maxAttempts: 3,
     advisoryLock: testAdvisoryLock(),
   });

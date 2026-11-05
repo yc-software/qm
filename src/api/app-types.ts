@@ -336,6 +336,10 @@ export interface App {
     viewer?: string,
   ): Promise<{ accepted: boolean; reason?: string; why?: string; queuedRunId?: string; replayed?: boolean }>;
   replayOrphanedRunSignals(runId: string): Promise<void>;
+  steerRun(
+    run: Run,
+    signal: RunSignal,
+  ): Promise<{ sent: boolean; terminal?: boolean; drained?: boolean; replayRunId?: string }>;
   getSession(
     sessionId: string,
     window?: TranscriptWindow,
