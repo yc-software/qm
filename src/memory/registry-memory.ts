@@ -8,6 +8,7 @@ import type { MemoryProviderConfig } from "./provider-config.ts";
 import { createMemoryProviders, logMemoryProviderError } from "./provider-factory.ts";
 import {
   captureAllowed,
+  capturesInto,
   createRoutedMemoryService,
   routeMatches,
   type MemoryProviderRoute,
@@ -114,7 +115,8 @@ export function createRegistryMemoryService(opts: {
       },
       async capture(scopeId, facts, at, author, context) {
         const { service, disabled } = await serve();
-        flag(disabled, scopeId, context, (route) => captureAllowed(route.capture, context?.mode ?? "explicit"));
+        if (capturesInto({ attestActor: true }, scopeId, context))
+          flag(disabled, scopeId, context, (route) => captureAllowed(route.capture, context?.mode ?? "explicit"));
         return service.capture(scopeId, facts, at, author, context);
       },
       read: async (scopeId) => (await serve()).service.read(scopeId),

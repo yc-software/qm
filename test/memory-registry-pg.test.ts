@@ -9,7 +9,8 @@ import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { createRegistryMemoryService } from "../src/memory/registry-memory.ts";
-import { withProviders } from "../src/memory/provider-outcome.ts";
+import type { MemoryCaptureContext } from "../src/memory/memory-service.ts";
+import { withProviders, writeFacts } from "../src/memory/provider-outcome.ts";
 import { parseMemoryProviderConfig } from "../src/memory/provider-config.ts";
 import {
   MEMORY_REGISTRY_TABLE,
@@ -199,6 +200,25 @@ test("a disabled binding gives a problem line and never calls the brain", async 
       ],
     ],
   );
+  assert.deepEqual(brain.calls, []);
+});
+
+test("a disabled binding reports a problem only for writes a served binding would send", async (t) => {
+  const brain = await startBrain(t);
+  const url = testDatabaseUrl();
+  const registry = stores(url);
+  const memory = createRegistryMemoryService({ defaultMemory: createPostgresMemoryService(url), registry });
+  await registry.update(personalBrain(brain.url, {}));
+  await registry.update((record) =>
+    putBinding(record, "alice", { brain: "acme-personal", scope: "personal:U1", capture: "explicit" }, change),
+  );
+  const problems = async (context: Omit<MemoryCaptureContext, "report">) =>
+    (await writeFacts(memory, "personal:U1", ["Prefers aisle seats"], "U1", context, undefined)).problems.map(
+      ({ code }) => code,
+    );
+  assert.deepEqual(await problems({ mode: "explicit", actorId: "U1" }), ["memory_provider_disabled"]);
+  assert.deepEqual(await problems({ mode: "explicit", actorId: "system:personal:U1" }), []);
+  assert.deepEqual(await problems({ mode: "explicit", actorId: "U1", conversationScopeId: "channel:C1" }), []);
   assert.deepEqual(brain.calls, []);
 });
 
