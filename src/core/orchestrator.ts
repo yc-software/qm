@@ -56,7 +56,7 @@ import type {
   PendingApprovalRecord,
 } from "../types.ts";
 import { scopeId as toScopeId, personalScope } from "../types.ts";
-import { desktopClientForTurn, introducesPerson, isSessionTurn } from "./turn-origin.ts";
+import { desktopClientForTurn, isSessionTurn } from "./turn-origin.ts";
 import { resolveTurnFastMode, turnRuntimePurpose } from "./turn-options.ts";
 import { orgId } from "../config.ts";
 import { deriveTurnOutcome, approvalBlocksInput } from "./turn-outcome.ts";
@@ -243,10 +243,6 @@ import { createAttachStaging } from "./orchestrator/attach-tool.ts";
 import { reconcileMessageRevisions, revisionAnchorAt } from "../slack/message-revisions.ts";
 import { type ProviderKeys } from "../model/model-runtime.ts";
 import { surfaceToolPrompt } from "../surfaces/registry.ts";
-
-function recordPerson(users: OrchestratorDeps["users"], id: string): Promise<unknown> {
-  return users.record({ id, source: "turn", at: Date.now() }).catch(reportFailureAs("users: record person", false));
-}
 
 export { egressClaimAllowingControlPlane, filterConnectorSkills } from "./orchestrator/turn-helpers.ts";
 export type { Orchestrator, OrchestratorDeps, OrchestratorInput, SurfaceContextPuller } from "./orchestrator/types.ts";
@@ -1196,7 +1192,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         (!!input.swarmGoal || !!openGoal((await deps.sessions.goals([session.id])).get(session.id)));
       if (!input.sessionParticipantIds?.length && !automatedTurn)
         await deps.sessions.addParticipant(session.id, actor.id);
-      if (introducesPerson(input.origin, input)) await recordPerson(deps.users, actor.id);
 
       const delegatedTask = !!input.sessionSenderId && session.parentSessionId === input.sessionSenderId;
       const syntheticInput =
@@ -3257,7 +3252,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   };
                 if (screen === "unscreened") said = `${unscreenedNotice("mid-turn message")}\n${said}`;
               }
-              if (request && introducesPerson(speaker.origin, request)) await recordPerson(deps.users, author);
               const refreshedInbox =
                 input.surface === "web" &&
                 conversation.kind === "dm" &&
