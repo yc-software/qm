@@ -201,13 +201,10 @@ if (
 ) {
   throw new Error("POSTHOG_HOST must be an HTTPS origin");
 }
-const sessionReplay = Boolean(analyticsKey) && process.env.POSTHOG_SESSION_REPLAY === "1";
-const analyticsConfig = analyticsKey
-  ? { apiKey: analyticsKey, host: analyticsHost.origin, ...(sessionReplay ? { sessionReplay } : {}) }
-  : undefined;
+const analyticsConfig = analyticsKey ? { apiKey: analyticsKey, host: analyticsHost.origin } : undefined;
 const [analyticsRegion, ...analyticsDomain] = analyticsHost.hostname.split(".");
 const analyticsAssetsOrigin =
-  sessionReplay && analyticsDomain.join(".") === "i.posthog.com"
+  analyticsConfig && analyticsDomain.join(".") === "i.posthog.com"
     ? `https://${analyticsRegion}-assets.i.posthog.com`
     : undefined;
 

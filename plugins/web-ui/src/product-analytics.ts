@@ -82,10 +82,9 @@ export async function initializeAnalytics(me: Me, view = "chats"): Promise<void>
   lastCapturedView = undefined;
   if (!me.analytics?.apiKey || me.impersonatedBy) return;
   try {
-    const replay = me.analytics.sessionReplay === true;
     const [{ default: posthog }] = await Promise.all([
       import("posthog-js"),
-      ...(replay ? [import("posthog-js/dist/posthog-recorder")] : []),
+      import("posthog-js/dist/posthog-recorder"),
     ]);
     if (current !== generation) return;
     const options: Partial<PostHogConfig> = {
@@ -97,7 +96,6 @@ export async function initializeAnalytics(me: Me, view = "chats"): Promise<void>
       capture_pageleave: false,
       capture_exceptions: false,
       capture_performance: false,
-      disable_session_recording: !replay,
       session_recording: {
         maskAllInputs: true,
         maskTextSelector: "*",
@@ -109,7 +107,6 @@ export async function initializeAnalytics(me: Me, view = "chats"): Promise<void>
       enable_recording_console_log: false,
       disable_surveys: true,
       disable_external_dependency_loading: true,
-      advanced_disable_flags: !replay,
       advanced_disable_feature_flags: true,
       person_profiles: "identified_only",
       save_referrer: false,
