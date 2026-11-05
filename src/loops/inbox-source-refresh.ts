@@ -12,6 +12,7 @@ import { isObj, tokenFor, type ConnectorTokenSource } from "./sources/adapter.ts
 import { normalizeSlackApiUrl } from "../slack/config.ts";
 import { slackMessageContent } from "../slack/message-content.ts";
 import { GmailApiError, gmailApi } from "../connectors/gmail-api.ts";
+import { gmailToken } from "./sources/gmail.ts";
 import type { DirectoryStore } from "../directory/directory-store.ts";
 
 interface RefreshDeps {
@@ -201,8 +202,10 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
     const source = item.source;
     if (source !== "gmail" && source !== "slack") return;
     const payload = item.sourcePayload ?? {};
-    if (payload.sourceGone || (source === "gmail" && isResolved(item))) return;
-    const token = await tokenFor(deps.tokens, source === "gmail" ? "gmail.googleapis.com" : "slack.com", owner);
+    const gone = isObj(payload.sourceGone) && payload.sourceGone.sourceAt === item.sourceAt;
+    if (gone || (source === "gmail" && isResolved(item))) return;
+    const token =
+      source === "gmail" ? await gmailToken(deps.tokens, owner, item) : await tokenFor(deps.tokens, "slack.com", owner);
     if (!token) throw new Error(`${source === "gmail" ? "Google" : "Slack"} is not connected. Source not refreshed.`);
     if (source === "gmail") {
       const meta = isObj(payload.gmail) ? payload.gmail : {};
@@ -359,7 +362,7 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
           item.id,
           {
             sourceRefreshError: e instanceof Error ? e.message : "Source refresh failed.",
-            ...(gone ? { sourceGone: errMessage(e.cause) } : {}),
+            ...(gone ? { sourceGone: { sourceAt: item.sourceAt, error: errMessage(e.cause) } } : {}),
           },
           { expectedSourceAt: item.sourceAt },
         );

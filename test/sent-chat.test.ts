@@ -45,6 +45,7 @@ test("sent chats are durable, idempotent, and isolated to the signed-in owner", 
   assert.equal(response!.item.thread[0]!.text, "Summarize this");
   await items.setProposal(original.id, { data: { body: "My unfinished draft" }, by: "human" });
   const proposal = (await items.get(original.id))!.proposal;
+  await items.annotate(original.id, { sourceGone: { error: "Gmail threads/sent-only-thread returned 404" } });
   ctx.body = {
     threadId: "sent-only-thread",
     messageId: "newer-message",
@@ -58,6 +59,7 @@ test("sent chats are durable, idempotent, and isolated to the signed-in owner", 
   assert.equal(refreshed.sourcePayload!.snippet, "New context");
   assert.equal(refreshed.sourcePayload!.from, "New sender");
   assert.equal(refreshed.sourcePayload!.title, "New title");
+  assert.equal(refreshed.sourcePayload!.sourceGone, null);
   assert.equal(refreshed.sourceSummary, "New title");
   assert.equal((refreshed.sourcePayload!.gmail as { messageId: string }).messageId, "newer-message");
   ctx.body = { ...(ctx.body as object), accountType: "personal" };

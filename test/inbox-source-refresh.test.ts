@@ -167,16 +167,42 @@ test("a deleted source conversation stops refreshing without logging an error; t
     const readsBefore = reads;
     await refresh(after);
     if (gone) {
-      assert.match(String(after.sourcePayload?.sourceGone), gone);
+      assert.match(JSON.stringify(after.sourcePayload?.sourceGone), gone);
       assert.match(String(after.sourcePayload?.sourceRefreshError), /deleted or is no longer accessible/);
       assert.deepEqual(await errors.list(), []);
       assert.equal(reads, readsBefore);
+      await items.ingest([
+        { loopId: "inbox", dedupeKey: "ask", source, sourceAt: 2000, sourcePayload: after.sourcePayload! },
+      ]);
+      await refresh((await items.get(item.id))!);
+      assert.ok(reads > readsBefore);
     } else {
       assert.equal(after.sourcePayload?.sourceGone, undefined);
       assert.match(String(after.sourcePayload?.sourceRefreshError), /not been dismissed/);
       assert.equal((await errors.list()).length, 2);
       assert.ok(reads > readsBefore);
     }
+  }
+});
+
+test("Gmail refresh reads the mailbox the item came from, not the first connected account", async () => {
+  for (const [meta, extra, expected] of [
+    [{ threadId: "t1", accountType: "company" }, {}, "Bearer token-company"],
+    [{ threadId: "t1" }, { sentChat: true }, "Bearer token-default"],
+  ] as const) {
+    const { items, item } = await fixture("gmail", meta);
+    const seen: string[] = [];
+    await createInboxSourceRefresh({
+      featureFlags,
+      items,
+      tokens: { connectorAccessToken: async (_host, _owner, accountType) => `token-${accountType ?? "default"}` },
+      directory,
+      fetchImpl: async (_url, init) => {
+        seen.push(String(new Headers(init?.headers).get("authorization")));
+        return json({ messages: [] });
+      },
+    })("owner", [{ ...item, sourcePayload: { ...item.sourcePayload, ...extra } }]);
+    assert.deepEqual(seen, [expected]);
   }
 });
 
