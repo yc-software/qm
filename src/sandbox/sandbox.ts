@@ -1,5 +1,5 @@
-import { errMessage, swallow } from "../util/errors.ts";
-import type { EgressPolicy, WorkspaceLayer } from "../types.ts";
+import { errMessage, swallow, swallowAs } from "../util/errors.ts";
+import type { EgressPolicy, ScopeId } from "../types.ts";
 
 export interface SandboxHandle {
   resourceId?: string;
@@ -99,7 +99,6 @@ export interface ProvisionOptions {
   egress?: EgressPolicy;
   egressToken?: string;
   scratch?: { key: string };
-  routeScopeId?: string;
   onStatus?: (text: string) => void;
 }
 
@@ -218,7 +217,7 @@ export interface TeardownOptions {
 export interface Sandbox {
   readonly profile: AgentComputerProfile;
   profileFor?(scopeId: string, sandboxId?: string): Promise<AgentComputerProfile>;
-  provision(layers: WorkspaceLayer[], opts?: ProvisionOptions): Promise<SandboxHandle>;
+  provision(ownerScopeId: ScopeId, opts?: ProvisionOptions): Promise<SandboxHandle>;
   run(handle: SandboxHandle, command: string, opts?: ExecOptions): Promise<ExecResult>;
   readFile(handle: SandboxHandle, relPath: string): Promise<string | null>;
   writeFile(handle: SandboxHandle, relPath: string, data: string): Promise<void>;
@@ -248,6 +247,17 @@ export interface Sandbox {
   teardown(handle: SandboxHandle, opts?: TeardownOptions): Promise<void>;
   destroyScope?(scopeId: string): Promise<void>;
   reapDeepIdle?(idleMs: number, devIdleMs?: number): Promise<{ reaped: number }>;
+}
+
+export async function removeDirAndList(
+  sandbox: Sandbox,
+  handle: SandboxHandle,
+  removeRelDir: string,
+  listRelDir: string,
+): Promise<string[]> {
+  if (sandbox.removeDirAndList) return sandbox.removeDirAndList(handle, removeRelDir, listRelDir);
+  await sandbox.removeDir(handle, removeRelDir);
+  return sandbox.listDir(handle, listRelDir).catch(swallowAs(`sandbox: list ${listRelDir}`, [] as string[]));
 }
 
 export class CapabilityUnsupportedError extends Error {

@@ -3,12 +3,12 @@ import { parseEnv } from "node:util";
 import { mkdtempSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
-import { buildApp } from "../src/wiring.ts";
+import type { Server } from "node:http";
+import { createLocalWebReleaseStore, createWebReleaseReader } from "../src/web/releases.ts";
+import { startQm } from "../src/start.ts";
 import { loadConfig } from "../src/config.ts";
-import { createServer } from "../src/api/server.ts";
 import { PROVIDERS } from "../src/connectors/oauth.ts";
 import { scopeId } from "../src/types.ts";
 import { buildGoogleWorkspaceReadSmokeCommand } from "./google-workspace-read-smoke-command.ts";
@@ -90,7 +90,7 @@ function providerStatus(body: Json): { connected: boolean } {
 }
 
 async function runWorkspaceReadSmoke(input: {
-  built: ReturnType<typeof buildApp>;
+  built: Awaited<ReturnType<typeof startQm>>["built"];
   actor: string;
   orgId: string;
   hosts: string[];
@@ -133,21 +133,6 @@ async function probeGoogleTokenEndpoint(redirectUri: string): Promise<string> {
   return error || `http_${res.status}`;
 }
 
-async function closeServer(server: ReturnType<typeof createServer>): Promise<void> {
-  await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
-}
-
-function stopChild(child: ChildProcessWithoutNullStreams): Promise<void> {
-  if (child.exitCode !== null || child.killed) return Promise.resolve();
-  return new Promise((resolveStop) => {
-    child.once("exit", () => resolveStop());
-    child.kill("SIGTERM");
-    setTimeout(() => {
-      if (child.exitCode === null) child.kill("SIGKILL");
-    }, 2_000).unref();
-  });
-}
-
 const loadedEnv = loadEnvFallbacks();
 const missing = ["GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET"].filter((name) => !process.env[name]);
 if (missing.length > 0) {
@@ -180,41 +165,29 @@ if (expectedRedirect && expectedRedirect !== redirectUri) {
   process.exit(2);
 }
 
-const built = buildApp({
+const { built, stop } = await startQm({
   ...loadConfig({}),
   databaseUrl: process.env.DATABASE_URL,
   port: corePort,
   dataDir: process.env.DATA_DIR ?? mkdtempSync(join(tmpdir(), "qm-google-oauth-smoke-")),
   orgId,
-});
-const core = createServer(built.app, {
   signingSecret: secret,
-  connectorTokens: built.connectorTokens,
-  auditLog: built.auditLog,
-  replayDedupe: built.replayDedupe,
-  oauthEnv: process.env,
 });
 
-let web: ChildProcessWithoutNullStreams | null = null;
+let web: Server | null = null;
 try {
-  await new Promise<void>((resolveListen) => core.listen(corePort, "127.0.0.1", () => resolveListen()));
-  web = spawn(process.execPath, ["plugins/web-ui/server/index.ts"], {
-    cwd: process.cwd(),
-    env: {
-      PATH: process.env.PATH ?? "",
-      HOME: process.env.HOME ?? "",
-      NODE_OPTIONS: process.env.NODE_OPTIONS ?? "",
-      CORE_API_URL: coreBase,
-      CORE_ORG_ID: orgId,
-      CORE_SIGNING_SECRET: secret,
-      PORT: String(webPort),
-      WEB_UI_PUBLIC_URL: webBase,
-      WEB_UI_PRINCIPALS: actor,
-    },
+  Object.assign(process.env, {
+    CORE_API_URL: coreBase,
+    CORE_ORG_ID: orgId,
+    CORE_SIGNING_SECRET: secret,
+    PUBLIC_WEB_URL: webBase,
+    WEB_UI_PRINCIPALS: actor,
   });
-  web.stderr.on("data", (chunk) => {
-    const text = String(chunk);
-    if (!/WEB_UI_PRINCIPALS unset/.test(text)) process.stderr.write(`[web-ui] ${text}`);
+  const webUi = await import("../plugins/web-ui/server/index.ts");
+  web = await webUi.startServer({
+    port: webPort,
+    host: "127.0.0.1",
+    releases: createWebReleaseReader(createLocalWebReleaseStore(mkdtempSync(join(tmpdir(), "qm-web-releases-")))),
   });
   await waitFor(`${webBase}/healthz`, 10_000);
 
@@ -286,7 +259,6 @@ try {
     console.log("google oauth smoke complete: live Google callback stored a token without printing it");
   }
 } finally {
-  if (web) await stopChild(web);
-  await closeServer(core);
-  await built.runtime.stop();
+  web?.close();
+  await stop();
 }

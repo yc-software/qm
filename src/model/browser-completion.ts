@@ -1,19 +1,7 @@
 import { Type } from "typebox";
-import {
-  modelGatewayRequest,
-  type ModelGatewayTransportConfig,
-  type ModelRequestPurpose,
-} from "./provider-endpoints.ts";
 import type { Context, ImageContent, TextContent } from "@earendil-works/pi-ai";
-import {
-  CODEX_SUBSCRIPTION_PROVIDER,
-  codexSubscriptionModelId,
-  resolveModel,
-  type ModelProvider,
-} from "./pi-models.ts";
-import type { resolveBrowserModel } from "./browser-model.ts";
-import type { UserModelCredentialStore } from "./user-model-credential-store.ts";
-import { buildModelRuntime, type ProviderKeys, zeroUsage } from "./model-runtime.ts";
+import { buildModelRuntime, zeroUsage } from "./model-runtime.ts";
+import { routeLabel, type ModelRoute } from "./model-route.ts";
 
 function object(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
@@ -27,38 +15,8 @@ export class BrowserCompletionError extends Error {
   }
 }
 
-export async function nativeBrowserCompletion(
-  input: {
-    selection: Awaited<ReturnType<typeof resolveBrowserModel>>;
-    credentials?: UserModelCredentialStore;
-    companyProviderKeys?: ProviderKeys;
-    modelGateway?: ModelGatewayTransportConfig;
-    companySubscriptionProvider?: ModelProvider;
-    actorId: string;
-    body: Record<string, unknown>;
-    signal: AbortSignal;
-  },
-  runtimeFactory: (
-    keys: Parameters<typeof buildModelRuntime>[0],
-    modelGateway?: ModelGatewayTransportConfig,
-    purpose?: ModelRequestPurpose,
-  ) => Promise<Pick<Awaited<ReturnType<typeof buildModelRuntime>>, "completeSimple">> = buildModelRuntime,
-) {
-  const { selection, body } = input;
-  const routing = selection.routing;
-  let model = selection.model ? resolveModel(selection.model, selection.account === "company") : undefined;
-  if ((!routing && selection.account !== "company") || !model)
-    throw new BrowserCompletionError("Selected browser model is unavailable", 409);
-  if (selection.account === "company" && input.companySubscriptionProvider === model.provider) {
-    if (model.provider === "anthropic")
-      throw new BrowserCompletionError("Claude subscription access does not support browser inference", 422);
-    if (model.provider === "openai") {
-      model = resolveModel(codexSubscriptionModelId(selection.model!), false);
-      if (!model) throw new BrowserCompletionError("Selected browser model is unavailable", 409);
-    }
-  }
-  if (routing?.kind === "oauth" && routing.provider !== "openai")
-    throw new BrowserCompletionError("Claude subscription access does not support browser inference", 422);
+export async function completeBrowserRequest(route: ModelRoute, body: Record<string, unknown>, signal: AbortSignal) {
+  const { model } = route;
   if (body.tools || body.tool_choice || body.parallel_tool_calls || !Array.isArray(body.messages))
     throw new BrowserCompletionError("Unsupported browser completion request");
   const context: Context = { messages: [] };
@@ -119,26 +77,10 @@ export async function nativeBrowserCompletion(
   const limit = body.max_completion_tokens ?? body.max_tokens ?? 4096;
   if (typeof limit !== "number" || !Number.isSafeInteger(limit) || limit <= 0)
     throw new BrowserCompletionError("Invalid browser output token limit");
-  const gateway = selection.account === "company" ? input.modelGateway : undefined;
-  const gatewayRequest = modelGatewayRequest(gateway, model);
-  let keys: ProviderKeys;
-  if (selection.account === "company") {
-    const key = input.companyProviderKeys?.[model.provider];
-    if (!key && !gatewayRequest) throw new BrowserCompletionError("Company model credentials are unavailable", 503);
-    keys = key ? { [model.provider]: key } : {};
-  } else {
-    if (!routing) throw new BrowserCompletionError("Selected browser model is unavailable", 409);
-    const auth =
-      routing.kind === "apikey"
-        ? routing.apiKey
-        : (await input.credentials?.derivedOAuth(input.actorId, "openai"))?.accessToken;
-    if (!auth) throw new BrowserCompletionError("Reconnect your selected AI account in Settings", 409);
-    keys = { [routing.kind === "apikey" ? routing.provider : CODEX_SUBSCRIPTION_PROVIDER]: auth };
-  }
-  const runtime = await runtimeFactory(keys, gateway, "browser");
+  const runtime = await buildModelRuntime(route.keys, route.gateway, "browser");
   const modelApi = model.api;
   const result = await runtime.completeSimple(model, context, {
-    signal: input.signal,
+    signal,
     maxTokens: Math.min(limit, model.maxTokens),
     maxRetries: 0,
     onPayload: schema
@@ -154,10 +96,13 @@ export async function nativeBrowserCompletion(
       : undefined,
   });
   if (result.stopReason === "error" || result.stopReason === "aborted" || result.stopReason === "length")
-    throw new BrowserCompletionError("Selected AI account could not complete the browser request", 502);
+    throw new BrowserCompletionError(
+      `${routeLabel(route)} could not complete the browser request: ${result.errorMessage ?? result.stopReason}`,
+      502,
+    );
   const structured = result.content.find((part) => part.type === "toolCall" && part.name === "browser_result");
   if (schema && !structured)
-    throw new BrowserCompletionError("Selected AI account did not return a structured browser result", 502);
+    throw new BrowserCompletionError(`${routeLabel(route)} did not return a structured browser result`, 502);
   const text =
     structured?.type === "toolCall"
       ? JSON.stringify(structured.arguments)
@@ -169,7 +114,7 @@ export async function nativeBrowserCompletion(
     id: "browser-completion",
     object: "chat.completion",
     created: Math.floor(Date.now() / 1000),
-    model: selection.model,
+    model: route.modelId,
     choices: [{ index: 0, message: { role: "assistant", content: text }, finish_reason: "stop" }],
     usage: {
       prompt_tokens: result.usage.input,

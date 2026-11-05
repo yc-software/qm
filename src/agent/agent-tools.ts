@@ -2,11 +2,11 @@ import type { DocumentInput } from "../core/documents.ts";
 import type { TurnHandoff } from "./runtime-types.ts";
 import { type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { type Config } from "../config.ts";
-import type { ClientToolDeclaration, EntryType, ScopeId } from "../types.ts";
+import type { ClientToolDeclaration, ScopeId } from "../types.ts";
+import type { Item, NewItem } from "../sessions/items.ts";
 import type { ToolContext } from "../tools/primitives.ts";
 import { type Phase } from "../../plugins/chassis/src/error-reporting.ts";
 import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
-import { isObj } from "../util/objects.ts";
 import { type GoalGovernor, type GoalInbox, type GoalRecord } from "./goal.ts";
 import { type ToolResultScreen, type ToolResultScreenInput } from "../security/security-posture.ts";
 import { createToolKit } from "./agent-tools/kit.ts";
@@ -22,12 +22,12 @@ import { goalTools } from "./agent-tools/goal.ts";
 import { pageClientTools } from "./agent-tools/client.ts";
 import { mcpTools } from "./agent-tools/mcp.ts";
 import { withRetrySafety, withRuntimeBarrier, withToolApprovalGate, withToolSpan } from "./agent-tools/wrappers.ts";
+import type { SurfaceToolPrompt } from "../surfaces/registry.ts";
 
 export interface ToolContextRef {
   documents?: DocumentInput[];
   documentsStubbed?: boolean;
   runtimeHandoff?: TurnHandoff;
-  runtimeRunId?: string;
   runtimeActorId?: string;
   runtimeMutationPending?: boolean;
   runtimeInFlight?: Set<Promise<unknown>>;
@@ -43,7 +43,7 @@ export interface ToolContextRef {
     grantModes?: { session: boolean; always: boolean };
   }>;
   pausedOnApproval?: boolean;
-  emit?: (entry: { type: EntryType; payload: unknown; scopeLabel: ScopeId }) => void | Promise<unknown>;
+  emit?: (item: NewItem) => Promise<Item | undefined>;
   scopeLabel?: ScopeId;
   orgScopeId?: ScopeId;
   llmCapture?: Array<{
@@ -94,12 +94,13 @@ export interface AgentToolsOptions {
   surfaceTools?: boolean;
   delegateWork?: boolean;
   surfaceName?: string;
+  surfacePrompt?: SurfaceToolPrompt;
   clientTools?: readonly ClientToolDeclaration[];
 }
 
 export type CoreToolOptions = Omit<
   AgentToolsOptions,
-  "readOnly" | "surfaceTools" | "surfaceName" | "delegateWork" | "clientTools"
+  "readOnly" | "surfaceTools" | "surfaceName" | "surfacePrompt" | "delegateWork" | "clientTools"
 >;
 
 export function coreToolOptions(config: Config): CoreToolOptions {
@@ -127,16 +128,8 @@ export function endedOnPurpose(ref: {
 
 export function pauseStampAfterToolCall(
   ref: Pick<ToolContextRef, "pausedOnApproval" | "silentRequested" | "runtimeHandoff" | "swarmHeld">,
-  prior?: (
-    info: unknown,
-    signal?: unknown,
-  ) => Promise<{ terminate?: boolean } | undefined> | { terminate?: boolean } | undefined,
 ): (info: unknown, signal?: unknown) => Promise<{ terminate?: boolean } | undefined> {
-  return async (info, signal) => {
-    const upstream = prior ? await prior(info, signal) : undefined;
-    if (endedOnPurpose(ref)) return { ...upstream, terminate: true };
-    return upstream;
-  };
+  return async () => (endedOnPurpose(ref) ? { terminate: true } : undefined);
 }
 
 export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions): ToolDefinition[] {
@@ -146,7 +139,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const kit = createToolKit(ref, opts);
   const { retryMarks, resourceTool } = kit;
   const { execute, sandboxManagement, background } = computerTools(kit);
-  const { discoverSkills, skill, read, installCanvas, write, publish } = workspaceTools(kit);
+  const { discoverSkills, skill, saveSkill, editSkill, read, write, publish } = workspaceTools(kit);
   const { memory, history } = recallTools(kit);
   const { subagentTool, sessionTool, sidebarSessions } = sessionTools(kit);
   const { cron } = cronTools(kit);
@@ -162,21 +155,17 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       list: discoverSkills(false),
       search: discoverSkills(true),
       read: skill,
-      ...(controlTools ? { share: sharingTool("skill"), move: sharingTool("skill", true) } : {}),
+      ...(controlTools && ref.current?.selfApi ? { save: saveSkill, edit: editSkill } : {}),
+      ...(controlTools ? { share: sharingTool("skill") } : {}),
     }),
-    {
-      ...resourceTool("files", {
-        read,
-        write,
-        ...(controlTools ? { share: sharingTool("file") } : {}),
-        ...(ref.current?.installSharedCanvas ? { install_canvas: installCanvas } : {}),
-      }),
-      needsApproval: (params: unknown) => isObj(params) && params.action === "install_canvas",
-      approvalReason: "install an always-on canvas someone shared with you; its code runs in your QM web UI",
-    },
+    resourceTool("files", {
+      read,
+      write,
+      ...(controlTools ? { share: sharingTool("file") } : {}),
+    }),
     resourceTool("apps", {
       publish,
-      ...(controlTools ? { share: sharingTool("deploy"), move: sharingTool("deploy", true) } : {}),
+      ...(controlTools ? { share: sharingTool("deploy") } : {}),
     }),
     memory,
     history,

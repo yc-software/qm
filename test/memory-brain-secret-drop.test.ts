@@ -60,7 +60,6 @@ async function setup(
     keychain: built.keychain,
     secretDrops: built.secretDrops,
     deliveries: built.deliveries,
-    workspace: built.workspace,
     auditLog: built.auditLog,
     admin: built.admin,
     memoryRegistry: registry,

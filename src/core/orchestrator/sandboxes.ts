@@ -3,12 +3,19 @@ import type { Principal, Resolution, ScopeId, Session } from "../../types.ts";
 import { personalScope } from "../../types.ts";
 import { intersectEgressPolicies } from "../../resolution/egress-policy.ts";
 import { isOpenScopeMember } from "../../resolution/sharing-access.ts";
-import { type SandboxHandle, supportsProcessSessions, SandboxProvisionCleanupError } from "../../sandbox/sandbox.ts";
+import {
+  removeDirAndList,
+  type SandboxHandle,
+  supportsProcessSessions,
+  SandboxProvisionCleanupError,
+} from "../../sandbox/sandbox.ts";
 import {
   accessConversationSandbox,
+  preferredBackend,
   type SandboxAccessPlan,
   type SandboxResource,
 } from "../../sandbox/sandbox-resources.ts";
+import { ensureChildSandbox, prepareChildWorkdir } from "../../sessions/child-isolation.ts";
 import { reconcileProcesses } from "../../processes/reconcile.ts";
 import { leaseLapsed } from "../../runs/run-store.ts";
 import { finishProcessCredentials } from "../../credentials/execute-files.ts";
@@ -39,7 +46,15 @@ interface Slot {
   pending: boolean;
   ready: SandboxHandle | null;
   policy?: string;
+  ephemeral: boolean;
   handles: SandboxHandle[];
+}
+
+interface Release {
+  handle: SandboxHandle;
+  scoped: boolean;
+  unchanged: boolean;
+  ephemeral: [string, Slot] | undefined;
 }
 
 export interface TurnSandboxContext {
@@ -56,7 +71,7 @@ export interface TurnSandboxContext {
   turnFilesDir: string;
   connectorEnv: Record<string, string>;
   egressTokenForTurn: string | undefined;
-  egressTokenForPolicy?: (policy: Resolution["egress"]) => Promise<string | undefined>;
+  egressTokenForPolicy: (policy: Resolution["egress"]) => Promise<string | undefined>;
   openResourceAccess?: boolean;
   visibleSkillsForTurn: (sources?: readonly string[]) => Promise<SkillResolution[]>;
 }
@@ -81,15 +96,22 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     visibleSkillsForTurn,
   } = ctx;
 
+  const isolation = session.spawnMeta?.isolation;
+  const boundSandboxId = swarmSandboxId ?? isolation?.sandboxId;
+  const turnAccess = {
+    env: connectorEnv,
+    egress: resolution.egress,
+    ...(egressTokenForTurn ? { egressToken: egressTokenForTurn } : {}),
+  };
   const pool = new Map<string, Slot>();
   let retiredSlots = 0;
   let scopedUsed = false;
   const open = (
     key: string,
     create: (slot: Slot) => Promise<SandboxHandle>,
-    policy?: string,
+    { policy, ephemeral = false }: { policy?: string; ephemeral?: boolean } = {},
   ): Promise<SandboxHandle> => {
-    const slot = pool.get(key) ?? { opening: null, pending: false, ready: null, handles: [] };
+    const slot = pool.get(key) ?? { opening: null, pending: false, ready: null, ephemeral, handles: [] };
     pool.set(key, slot);
     slot.pending = true;
     const opening: Promise<SandboxHandle> = create(slot).then(
@@ -107,17 +129,11 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     return opening;
   };
   const scratchKey = () => `turn:${session.id}:${transferId}`;
-  let scratchStartedAt: number | undefined;
-  let scratchReadyAt: number | undefined;
-  const recordScratchLifecycle = (
-    action: string,
-    handle?: SandboxHandle,
-    extra?: { releasedAt?: number; cleanupMs?: number; error?: string },
-  ): void => {
+  const audit = (action: string, handle?: SandboxHandle, extra?: Record<string, unknown>): void => {
     deps.auditLog?.record({
       at: Date.now(),
       principalId: actor.id,
-      action: `sandbox.scratch.${action}`,
+      action: `sandbox.${action}`,
       resource: scratchKey(),
       scopeLabel: scopeId,
       detail: JSON.stringify({
@@ -125,24 +141,21 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
         sessionId: session.id,
         backend: handle?.backend,
         sandboxId: handle?.id,
-        startedAt: scratchStartedAt,
-        readyAt: scratchReadyAt,
         ...extra,
       }),
     });
   };
-  const destroyEphemeralHandle = async (handle: SandboxHandle): Promise<void> => {
+  const retried = async (label: string, attempt: () => Promise<void>): Promise<void> => {
     const errors: unknown[] = [];
-    for (let attempt = 1; attempt <= 3; attempt++) {
+    for (let n = 1; n <= 3; n++) {
       try {
-        await deps.sandbox.teardown(handle, { destroy: true });
-        return;
+        return await attempt();
       } catch (error) {
         errors.push(error);
-        if (attempt < 3) await sleep(50 * attempt);
+        if (n < 3) await sleep(50 * n);
       }
     }
-    throw new AggregateError(errors, "Disposable sandbox destruction failed");
+    throw new AggregateError(errors, label);
   };
   const holdResource = async (handle: SandboxHandle): Promise<void> => {
     if (handle.resourceId && deps.runs && input.runId)
@@ -156,6 +169,12 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       return run?.status === "running" && !leaseLapsed(run, Date.now());
     });
   };
+  const finishProcess = (handle: SandboxHandle, processId: string): Promise<void> =>
+    finishProcessCredentials(
+      { sandbox: deps.sandbox, processes: deps.processes!, ...(deps.keychain ? { keychain: deps.keychain } : {}) },
+      handle,
+      processId,
+    );
   const provision = (eager = false): Promise<SandboxHandle> => {
     if (!eager) scopedUsed = true;
     return (
@@ -164,47 +183,32 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     );
   };
   const openScoped = async (slot: Slot, eager: boolean): Promise<SandboxHandle> => {
-    if (input.externalSlack) {
+    if (input.surfaceOrigin?.audience === "external") {
       const resource = await deps.sandboxResources?.resolve(memoryScopeId);
       if (resource && resource.ownerScopeId !== scopeId) throw new Error("External Slack requires its own sandbox.");
     }
-    const handle = await deps.sandbox.provision(resolution.layers, {
-      ...(swarmSandboxId ? { sandboxId: swarmSandboxId } : {}),
-      env: connectorEnv,
-      egress: resolution.egress,
-      ...(egressTokenForTurn ? { egressToken: egressTokenForTurn } : {}),
+    if (isolation?.sandboxId)
+      await ensureChildSandbox(deps.sandboxResources, {
+        id: isolation.sandboxId,
+        session,
+        actorId: actor.id,
+        scopeId: resolution.writableScopeId,
+        backendScopeId: memoryScopeId,
+      });
+    const handle = await deps.sandbox.provision(resolution.writableScopeId, {
+      ...(boundSandboxId ? { sandboxId: boundSandboxId } : {}),
+      ...turnAccess,
     });
     slot.handles.push(handle);
     await holdResource(handle);
-    deps.auditLog?.record({
-      at: Date.now(),
-      principalId: actor.id,
-      action: "sandbox.scoped.provision_ready",
-      resource: scratchKey(),
-      scopeLabel: scopeId,
-      detail: JSON.stringify({
-        runId: input.runId,
-        sessionId: session.id,
-        backend: handle.backend,
-        sandboxId: handle.id,
-        coldStart: handle.coldStart,
-        eager,
-      }),
-    });
-    await prepareTurnFiles(handle);
+    audit("scoped.provision_ready", handle, { coldStart: handle.coldStart, eager });
+    await Promise.all([
+      prepareTurnFiles(handle),
+      prepareChildWorkdir(deps.sandbox, handle, isolation, deps.advisoryLock),
+    ]);
     if (deps.processes && supportsProcessSessions(deps.sandbox)) {
       try {
-        await reconcileProcesses(deps.sandbox, handle, deps.processes, memoryScopeId, (exited, processId) =>
-          finishProcessCredentials(
-            {
-              sandbox: deps.sandbox,
-              processes: deps.processes!,
-              ...(deps.keychain ? { keychain: deps.keychain } : {}),
-            },
-            exited,
-            processId,
-          ),
-        );
+        await reconcileProcesses(deps.sandbox, handle, deps.processes, memoryScopeId, finishProcess);
       } catch (err) {
         deps.errors?.record(
           {
@@ -285,7 +289,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       ...(pack ? { packDir: pack } : {}),
     };
   };
-  const writableScopeId = resolution.layers.find((layer) => layer.mode === "rw")?.scopeId;
+  const writableScopeId = resolution.writableScopeId;
   const canUseSandboxScope = async (target: ScopeId): Promise<boolean> => {
     if (target === writableScopeId || target === scopeId) return true;
     if (!openResourceAccess || actor.type !== "internal" || !deps.config || !deps.isCurrentSharedScopeMember)
@@ -328,7 +332,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   });
   const provisionJobComputer = async (): Promise<SandboxHandle> => {
     const resources = deps.sandboxResources!;
-    const backend = (await resources.resolve(memoryScopeId))?.backend ?? resources.defaultBackend();
+    const backend = await preferredBackend(resources, memoryScopeId);
     const resource = await resources.create(actor.id, memoryScopeId, backend, "background job", undefined, true);
     return provisionResource(jobComputerPlan(resource));
   };
@@ -354,18 +358,10 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     return open(
       key,
       async (slot) => {
-        const layers = crossScope
-          ? resolution.layers
-              .filter((layer) => layer.mode === "rw" || layer.mountPath === "global")
-              .map((layer) => (layer.mode === "rw" ? { ...layer, scopeId: resource.ownerScopeId } : layer))
-          : resolution.layers;
-        if (crossScope && egressTokenForTurn && !egressTokenForPolicy)
-          throw new Error("target sandbox egress authorization unavailable");
-        const egressToken = crossScope ? await egressTokenForPolicy?.(egress) : egressTokenForTurn;
-        const handle = await deps.sandbox.provision(layers, {
+        const egressToken = crossScope ? await egressTokenForPolicy(egress) : egressTokenForTurn;
+        const handle = await deps.sandbox.provision(crossScope ? resource.ownerScopeId : writableScopeId, {
           sandboxId: resource.id,
           ...(!crossScope ? { env: connectorEnv } : {}),
-          ...(access.env ? { env: { ...access.env } } : {}),
           egress,
           ...(egressToken ? { egressToken } : {}),
         });
@@ -374,7 +370,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
         if (!crossScope) await prepareTurnFiles(handle);
         return handle;
       },
-      policy,
+      { policy },
     );
   };
 
@@ -383,42 +379,28 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     if (cached?.opening) return cached.opening;
     if (cached?.handles.length)
       return Promise.reject(new Error("Disposable sandbox initialization cleanup is still pending"));
-    return open(SCRATCH, async (slot) => {
-      scratchStartedAt = Date.now();
-      recordScratchLifecycle("provision_started");
-      try {
-        const handle = await deps.sandbox.provision(
-          resolution.layers.filter((l) => l.mode === "ro" && l.mountPath === "global"),
-          {
-            env: connectorEnv,
-            egress: resolution.egress,
-            ...(egressTokenForTurn ? { egressToken: egressTokenForTurn } : {}),
-            scratch: { key: scratchKey() },
-            routeScopeId: memoryScopeId,
-          },
-        );
-        slot.handles.push(handle);
-        scratchReadyAt = Date.now();
-        recordScratchLifecycle("provision_ready", handle);
-        return handle;
-      } catch (error) {
-        if (error instanceof SandboxProvisionCleanupError) slot.handles.push(error.handle);
-        recordScratchLifecycle("provision_failed", slot.handles[0], { error: errMessage(error) });
-        throw error;
-      }
-    });
+    audit("scratch.provision_started");
+    return open(
+      SCRATCH,
+      async (slot) => {
+        try {
+          const handle = await deps.sandbox.provision(memoryScopeId, { ...turnAccess, scratch: { key: scratchKey() } });
+          slot.handles.push(handle);
+          audit("scratch.provision_ready", handle);
+          return handle;
+        } catch (error) {
+          if (error instanceof SandboxProvisionCleanupError) slot.handles.push(error.handle);
+          audit("scratch.provision_failed", slot.handles[0], { error: errMessage(error) });
+          throw error;
+        }
+      },
+      { ephemeral: true },
+    );
   };
-  const clearTurnFiles = async (handle: SandboxHandle): Promise<void> => {
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      try {
-        await deps.sandbox.removeDir(handle, turnFilesDir);
-        return;
-      } catch (err) {
-        if (attempt === 3) swallow("orchestrator: turn file cleanup", err);
-        else await sleep(50);
-      }
-    }
-  };
+  const clearTurnFiles = (handle: SandboxHandle): Promise<void> =>
+    retried("turn file cleanup failed", () => deps.sandbox.removeDir(handle, turnFilesDir)).catch((err: unknown) =>
+      swallow("orchestrator: turn file cleanup", err),
+    );
   const pruneSkills = async (handle: SandboxHandle): Promise<void> => {
     const visible = (await visibleSkillsForTurn()).flatMap((r) => (r.skill ? [r.skill, ...r.shadowed] : []));
     const keep = new Set(visible.map((skill) => hashId([skill.id, String(skill.version)], 16)));
@@ -439,14 +421,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   };
   const clearStaleTurnFiles = async (handle: SandboxHandle): Promise<void> => {
     const cutoff = Date.now() - TURN_FILES_MAX_AGE_MS;
-    const paths = deps.sandbox.removeDirAndList
-      ? await deps.sandbox.removeDirAndList(handle, turnSessionDir, TURN_FILES_DIR)
-      : await (async () => {
-          await deps.sandbox.removeDir(handle, turnSessionDir);
-          return deps.sandbox
-            .listDir(handle, TURN_FILES_DIR)
-            .catch(swallowAs("orchestrator: list stale turn files", [] as string[]));
-        })();
+    const paths = await removeDirAndList(deps.sandbox, handle, turnSessionDir, TURN_FILES_DIR);
     const stale = new Set<string>();
     for (const path of paths) {
       const parts = path.split("/");
@@ -465,7 +440,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     await Promise.all([pruneSkills(handle), clearStaleTurnFiles(handle)]);
   };
   const releaseHandle = async (
-    { handle, scoped, unchanged }: { handle: SandboxHandle; scoped: boolean; unchanged: boolean },
+    { handle, scoped, unchanged }: Release,
     hasLiveJob: (handle: SandboxHandle) => Promise<boolean>,
   ): Promise<void> => {
     if (scoped || handle.scopeId === undefined || handle.scopeId === writableScopeId || handle.scopeId === scopeId)
@@ -487,32 +462,20 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
         );
       });
   };
-  const destroyScratch = async (slot: Slot): Promise<void> => {
-    const [handle] = slot.handles;
-    if (!handle) return;
+  const destroyHandle = async ([key, slot]: [string, Slot], handle: SandboxHandle): Promise<void> => {
     const cleanupStart = Date.now();
     try {
-      await destroyEphemeralHandle(handle);
-      recordScratchLifecycle("released", handle, { releasedAt: Date.now(), cleanupMs: Date.now() - cleanupStart });
+      await retried("Disposable sandbox destruction failed", () => deps.sandbox.teardown(handle, { destroy: true }));
+      audit("scratch.released", handle, { cleanupMs: Date.now() - cleanupStart });
     } catch (error) {
-      if (!pool.has(SCRATCH)) pool.set(SCRATCH, slot);
-      const failure = error instanceof Error ? error : new Error(errMessage(error));
-      recordScratchLifecycle("release_failed", handle, {
-        releasedAt: Date.now(),
-        cleanupMs: Date.now() - cleanupStart,
-        error: errMessage(error),
-      });
+      if (!pool.has(key)) pool.set(key, slot);
+      const message = errMessage(error);
+      audit("scratch.release_failed", handle, { cleanupMs: Date.now() - cleanupStart, error: message });
       deps.errors?.record(
-        {
-          category: "sandbox",
-          code: "scratch_destroy_failed",
-          message: errMessage(error),
-          scopeLabel: scopeId,
-          sessionId: session.id,
-        },
-        failure,
+        { category: "sandbox", code: "scratch_destroy_failed", message, scopeLabel: scopeId, sessionId: session.id },
+        error,
       );
-      throw failure;
+      throw error;
     }
   };
   const releasePool = async (): Promise<void> => {
@@ -521,9 +484,9 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       await Promise.all(waiting.map((open) => open.catch(swallowAs("orchestrator: provision", undefined))));
     const slots = [...pool];
     pool.clear();
-    const targets = new Map<string, { handle: SandboxHandle; scoped: boolean; unchanged: boolean }>();
+    const targets = new Map<string, Release>();
     for (const [key, slot] of slots)
-      for (const handle of key === SCRATCH ? [] : slot.handles) {
+      for (const handle of slot.handles) {
         const id = `${handle.backend}:${handle.id}`;
         const seen = targets.get(id);
         const scoped = key === SCOPED;
@@ -531,6 +494,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
           handle: seen?.scoped ? seen.handle : handle,
           scoped: scoped || !!seen?.scoped,
           unchanged: (seen?.unchanged ?? true) && scoped && !scopedUsed,
+          ephemeral: slot.ephemeral ? [key, slot] : seen?.ephemeral,
         });
       }
     let live: Promise<Set<string | undefined>> | undefined;
@@ -539,20 +503,22 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       live ??= deps.processes.listLive().then((processes) => new Set(processes.map((p) => p.sandboxId)));
       return (await live).has(handle.resourceId);
     };
-    const scratch = slots.find(([key]) => key === SCRATCH)?.[1];
-    const [destroyed] = await Promise.allSettled([
-      scratch && destroyScratch(scratch),
-      ...[...targets.values()].map((target) =>
-        releaseHandle(target, hasLiveJob).catch(swallowAs("orchestrator: release", undefined)),
+    const released = await Promise.allSettled(
+      [...targets.values()].map((target) =>
+        target.ephemeral
+          ? destroyHandle(target.ephemeral, target.handle)
+          : releaseHandle(target, hasLiveJob).catch(swallowAs("orchestrator: release", undefined)),
       ),
-    ]);
-    if (destroyed?.status === "rejected") throw destroyed.reason;
+    );
+    for (const result of released) if (result.status === "rejected") throw result.reason;
   };
   const reclaimBox = async (): Promise<void> => {
     while (pool.size) await releasePool();
   };
 
   return {
+    boundSandboxId,
+    workdir: isolation?.workdir,
     provision,
     provisionScratch,
     provisionJobComputer,
@@ -561,6 +527,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     provisionResource,
     useSkill,
     reclaimBox,
+    finishProcess,
     invalidateProvision: () => {
       const slot = pool.get(SCOPED);
       if (slot) {

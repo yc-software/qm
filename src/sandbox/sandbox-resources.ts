@@ -32,7 +32,6 @@ export interface SandboxAccessPlan {
   readonly egress: EgressPolicy;
   readonly commandPolicy: CommandPolicy | null;
   readonly credentialScopeId?: ScopeId;
-  readonly env?: Readonly<Record<string, string>>;
 }
 
 export interface SandboxDefault {
@@ -86,6 +85,10 @@ export class SandboxAccessError extends Error {}
 
 const JOB_ONLY_REFUSAL =
   "this computer belongs to a background job that uses private credentials; only that job's own controls can reach it";
+
+export async function preferredBackend(resources: SandboxResources, scopeId: ScopeId): Promise<SandboxBackendName> {
+  return (await resources.resolve(scopeId))?.backend ?? resources.defaultBackend();
+}
 
 export async function accessConversationSandbox(
   resources: SandboxResources | undefined,
@@ -303,7 +306,7 @@ export function createSandboxResources(opts: {
       return opts.lock.withLock(`sandbox-resource:${id}`, async () => {
         const existing = await opts.records.get(id);
         if (existing) {
-          if (existing.ownerScopeId !== scopeId || existing.createdBy !== actorId || existing.backend !== backend)
+          if (existing.ownerScopeId !== scopeId || existing.backend !== backend)
             throw new Error("sandbox reservation ownership mismatch");
           if (existing.state === "ready") return existing;
           if (existing.state === "retired") throw new Error("sandbox reservation is retired");
@@ -311,10 +314,7 @@ export function createSandboxResources(opts: {
         await opts.records.put(id, record);
         const sandbox = opts.backends[record.backend]!;
         try {
-          const handle = await sandbox.provision(
-            [{ scopeId: record.backingScopeId, mountPath: "/", mode: "rw" }],
-            await opts.provisionOptions?.(scopeId),
-          );
+          const handle = await sandbox.provision(record.backingScopeId, await opts.provisionOptions?.(scopeId));
           const ready: SandboxResource = {
             ...record,
             state: "ready",

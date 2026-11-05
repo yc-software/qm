@@ -78,7 +78,7 @@ test("processRun threads runId into the turn and completes the run with the resu
   const deps = { runs, orchestrator, leaseTtlMs: 5_000 };
 
   await runs.enqueue({ sessionId: "s1", request: turn });
-  const fg = await runs.claim("w1", 5_000);
+  const fg = (await runs.claim("w1", 5_000))[0] ?? null;
   const result = await processRun(deps, fg!);
   assert.deepEqual(result, { status: "ok", reply: "echo: x" });
   assert.equal(seen[0]?.runId, fg!.id, "the orchestrator sees the run's id");
@@ -99,11 +99,11 @@ test("processRun rejects when a reaped attempt finishes after a retry claims the
   const orchestrator = fakeOrchestrator(() => turnResult);
 
   await runs.enqueue({ sessionId: "s1", request: turn });
-  const first = await runs.claim("w1", -1);
+  const first = (await runs.claim("w1", -1))[0] ?? null;
   const pending = processRun({ runs, orchestrator, leaseTtlMs: 5_000 }, first!);
 
   assert.deepEqual(await runs.reapExpired(), { requeued: 1, parked: 0 });
-  const second = await runs.claim("w2", 5_000);
+  const second = (await runs.claim("w2", 5_000))[0] ?? null;
   assert.equal(second?.attempts, 2);
 
   finish({ status: "ok", reply: "stale" });
@@ -113,26 +113,6 @@ test("processRun rejects when a reaped attempt finishes after a retry claims the
   assert.equal(current?.status, "running");
   assert.equal(current?.leaseToken, second?.leaseToken);
   assert.equal(current?.result, null);
-});
-
-test("processRun upgrades legacy queued provenance before orchestration", async () => {
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
-  const legacy = { ...turn, origin: undefined, liveActor: true, triggerTs: "1" } as unknown as OrchestratorInput;
-  await runs.enqueue({ sessionId: "legacy", request: legacy });
-  const claimed = await runs.claim("w1", 5_000);
-  let seen: OrchestratorInput | undefined;
-  await processRun(
-    {
-      runs,
-      orchestrator: fakeOrchestrator(async (input) => {
-        seen = input;
-        return { status: "ok" };
-      }),
-      leaseTtlMs: 5_000,
-    },
-    claimed!,
-  );
-  assert.deepEqual(seen?.origin, { kind: "human", messageTs: "1" });
 });
 
 test("processRun heartbeats the lease while the turn runs, and the beat stops with the turn", async (t) => {
@@ -147,7 +127,7 @@ test("processRun heartbeats the lease while the turn runs, and the beat stops wi
   const orchestrator = fakeOrchestrator(() => gate);
 
   await runs.enqueue({ sessionId: "s1", request: turn });
-  const run = await runs.claim("w1", 9_000);
+  const run = (await runs.claim("w1", 9_000))[0] ?? null;
   const pending = processRun({ runs, orchestrator, leaseTtlMs: 9_000 }, run!);
 
   t.mock.timers.tick(3_000);
@@ -186,7 +166,7 @@ test("a retryable turn failure requeues the run, rethrows, and stops the heartbe
   const orchestrator = fakeOrchestrator(() => gate);
 
   await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 3 });
-  const run = await runs.claim("w1", 9_000);
+  const run = (await runs.claim("w1", 9_000))[0] ?? null;
   const pending = processRun({ runs, orchestrator, leaseTtlMs: 9_000 }, run!);
 
   t.mock.timers.tick(3_000);
@@ -201,12 +181,12 @@ test("a retryable turn failure requeues the run, rethrows, and stops the heartbe
   assert.equal(requeued?.attempts, 1);
   assert.deepEqual(requeued?.lastStop, { kind: "error" }, "an untyped error records no message, only that it failed");
 
-  assert.equal(await runs.claim("w2", 9_000), null);
+  assert.equal((await runs.claim("w2", 9_000))[0] ?? null, null);
   t.mock.timers.tick(30_000);
   await microtasks();
   assert.equal(beats.length, 1, "no heartbeat leaks past the failure");
 
-  const retried = await runs.claim("w2", 9_000);
+  const retried = (await runs.claim("w2", 9_000))[0] ?? null;
   assert.equal(retried?.id, run!.id, "another worker can pick the requeued run up");
 
   const seen: OrchestratorInput[] = [];
@@ -240,14 +220,14 @@ test("finalAttempt marks the attempt whose error would park the run, from the cl
   const deps = { runs, orchestrator, leaseTtlMs: 5_000 };
 
   await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 2 });
-  const first = await runs.claim("w1", 5_000);
+  const first = (await runs.claim("w1", 5_000))[0] ?? null;
   await assert.rejects(processRun(deps, first!), /hiccup/);
   assert.equal(seen[0]?.finalAttempt, false, "budget remains — the orchestrator must not record a terminal failure");
   assert.equal((await runs.get(first!.id))?.status, "pending");
 
-  assert.equal(await runs.claim("w1", 5_000), null);
+  assert.equal((await runs.claim("w1", 5_000))[0] ?? null, null);
   t.mock.timers.tick(60_000);
-  const second = await runs.claim("w1", 5_000);
+  const second = (await runs.claim("w1", 5_000))[0] ?? null;
   await assert.rejects(processRun(deps, second!), /hiccup/);
   assert.equal(seen[1]?.finalAttempt, true, "the last budgeted attempt is marked — an error now is terminal");
   assert.equal((await runs.get(first!.id))?.status, "failed", "and the store indeed parks on its error");
@@ -263,10 +243,10 @@ test("finalAttempt also marks the claim-cap park — an error on an over-claimed
 
   await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 5 });
   for (let i = 0; i < 2; i++) {
-    const r = await runs.claim("w1", 5_000);
+    const r = (await runs.claim("w1", 5_000))[0] ?? null;
     await runs.releaseLease(r!.id, r!.leaseToken!);
   }
-  const third = await runs.claim("w1", 5_000);
+  const third = (await runs.claim("w1", 5_000))[0] ?? null;
   await assert.rejects(processRun({ runs, orchestrator, leaseTtlMs: 5_000 }, third!), /hiccup/);
   assert.equal(seen[0]?.finalAttempt, true, "claim cap reached — an error is terminal despite error budget left");
   assert.equal((await runs.get(third!.id))?.status, "failed");
@@ -315,7 +295,7 @@ test("a thrown heartbeat (a DB blip) never cancels the turn", async (t) => {
   const { orchestrator, cancelled, finish } = cancellableOrchestrator();
 
   await store.runs.enqueue({ sessionId: "s1", request: turn });
-  const run = await store.runs.claim("w1", 9_000);
+  const run = (await store.runs.claim("w1", 9_000))[0] ?? null;
   const pending = processRun({ runs, orchestrator, leaseTtlMs: 9_000 }, run!);
 
   for (let i = 0; i < LEASE_LOST_CONSECUTIVE + 3; i++) {
@@ -335,7 +315,7 @@ test("a single definitive lease-lost beat does not cancel, but N consecutive do"
   const { orchestrator, cancelled } = cancellableOrchestrator();
 
   await store.runs.enqueue({ sessionId: "s1", request: turn });
-  const run = await store.runs.claim("w1", 9_000);
+  const run = (await store.runs.claim("w1", 9_000))[0] ?? null;
   const pending = processRun({ runs, orchestrator, leaseTtlMs: 9_000 }, run!);
 
   t.mock.timers.tick(3_000);
@@ -368,7 +348,7 @@ test("the heartbeat stops before complete(), so a late tick cannot spuriously ab
   const orchestrator = fakeOrchestrator(() => gate);
 
   await runs.enqueue({ sessionId: "s1", request: turn });
-  const run = await runs.claim("w1", 9_000);
+  const run = (await runs.claim("w1", 9_000))[0] ?? null;
   const pending = processRun({ runs, orchestrator, leaseTtlMs: 9_000 }, run!);
 
   t.mock.timers.tick(3_000);
@@ -396,7 +376,7 @@ test("a NonRetryableTurnError parks the run even with attempts remaining", async
   });
 
   await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 3 });
-  const run = await runs.claim("w1", 5_000);
+  const run = (await runs.claim("w1", 5_000))[0] ?? null;
   await assert.rejects(processRun({ runs, orchestrator, leaseTtlMs: 5_000 }, run!), /policy says no/);
 
   const parked = await runs.get(run!.id);
@@ -412,7 +392,7 @@ test("a crashed turn's raw exception text never reaches the stored reason", asyn
   });
 
   await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 1 });
-  const run = await runs.claim("w1", 5_000);
+  const run = (await runs.claim("w1", 5_000))[0] ?? null;
   await assert.rejects(processRun({ runs, orchestrator, leaseTtlMs: 5_000 }, run!), /db-internal/);
 
   const parked = await runs.get(run!.id);
@@ -429,7 +409,7 @@ test("a NonRetryableTurnError keeps its human-readable reason on the stored resu
   });
 
   await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 1 });
-  const run = await runs.claim("w1", 5_000);
+  const run = (await runs.claim("w1", 5_000))[0] ?? null;
   await assert.rejects(processRun({ runs, orchestrator, leaseTtlMs: 5_000 }, run!));
   assert.equal((await runs.get(run!.id))?.result?.reason, "Codex turn exceeded 300s wall clock");
 });
@@ -438,7 +418,7 @@ for (const rejects of [false, true]) {
   test(`shutdown requeues without spending the error budget when cancellation ${rejects ? "throws" : "returns"}`, async () => {
     const { runs } = createPostgresRunStore(testDatabaseUrl());
     const enq = (await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 1 })).run;
-    const run = await runs.claim("old", 5_000);
+    const run = (await runs.claim("old", 5_000))[0] ?? null;
     const shutdown = new AbortController();
     const entered = Promise.withResolvers<void>();
     const orchestrator = fakeOrchestrator(async (input) => {
@@ -458,14 +438,14 @@ for (const rejects of [false, true]) {
     assert.equal(handedBack.result, null);
     assert.equal(handedBack.leaseToken, null);
     assert.deepEqual(handedBack.lastStop, { kind: "shutdown" });
-    assert.ok(await runs.claim("replacement", 5_000));
+    assert.ok((await runs.claim("replacement", 5_000))[0] ?? null);
   });
 }
 
 test("explicit user Stop still completes instead of retrying", async () => {
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const enq = (await runs.enqueue({ sessionId: "s1", request: turn })).run;
-  const run = await runs.claim("w1", 5_000);
+  const run = (await runs.claim("w1", 5_000))[0] ?? null;
   const shutdown = new AbortController();
   await processRun(
     { runs, leaseTtlMs: 5_000, orchestrator: fakeOrchestrator(async () => ({ status: "silent", stopped: true })) },
@@ -474,13 +454,13 @@ test("explicit user Stop still completes instead of retrying", async () => {
   );
   assert.equal((await runs.get(enq.id))?.status, "done");
   assert.equal((await runs.get(enq.id))?.errorAttempts, 0);
-  assert.equal(await runs.claim("replacement", 5_000), null);
+  assert.equal((await runs.claim("replacement", 5_000))[0] ?? null, null);
 });
 
 test("failed shutdown handback retains the lease for expiry without charging an error", async () => {
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const enq = (await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 1 })).run;
-  const run = await runs.claim("w1", 5_000);
+  const run = (await runs.claim("w1", 5_000))[0] ?? null;
   const shutdown = new AbortController();
   const originalToken = run!.leaseToken;
   runs.releaseLease = async () => {
@@ -495,13 +475,13 @@ test("failed shutdown handback retains the lease for expiry without charging an 
   assert.equal(retained.status, "running");
   assert.equal(retained.leaseToken, originalToken);
   assert.equal(retained.errorAttempts, 0);
-  assert.equal(await runs.claim("replacement", 5_000), null);
+  assert.equal((await runs.claim("replacement", 5_000))[0] ?? null, null);
 });
 
 test("a claim that lands after shutdown began is handed back without starting a turn", async () => {
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const enq = (await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 1 })).run;
-  const run = await runs.claim("old", 5_000);
+  const run = (await runs.claim("old", 5_000))[0] ?? null;
   const shutdown = new AbortController();
   shutdown.abort();
   const orchestrator = fakeOrchestrator(async () => {
@@ -514,5 +494,5 @@ test("a claim that lands after shutdown began is handed back without starting a 
   assert.equal(handedBack.errorAttempts, 0);
   assert.equal(handedBack.leaseToken, null);
   assert.equal(handedBack.lastStop ?? null, null, "a turn that never started records no stop cause");
-  assert.ok(await runs.claim("replacement", 5_000));
+  assert.ok((await runs.claim("replacement", 5_000))[0] ?? null);
 });

@@ -94,6 +94,7 @@
     "fastify": "^5.12.5",
     "jose": "^6.2.3",
     "lru-cache": "^11.5.2",
+    "marked": "^18.1.2",
     "modal": "^0.10.1",
     "nodemailer": "^10.2.1",
     "officeparser": "^8.0.0",

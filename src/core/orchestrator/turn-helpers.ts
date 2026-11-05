@@ -5,12 +5,11 @@ import type {
   EgressPolicy,
   Principal,
   ScopeId,
-  SessionEntry,
   TurnRequest,
   ActorAssertion,
 } from "../../types.ts";
-import { turnOriginRequestFields } from "../turn-origin.ts";
-import { isOverheardEntry } from "../../sessions/session-store.ts";
+import { boundWebhook } from "../turn-origin.ts";
+import { isAgentReply, isOverheard, isUserItem, type Item, proseText } from "../../sessions/items.ts";
 import type { DeliveryStore } from "../../delivery/delivery-store.ts";
 import type { SkillBundle, SkillBundleStore } from "../../skills/skill-bundle-store.ts";
 import type { SkillResolution } from "../../skills/skill-store.ts";
@@ -42,27 +41,28 @@ export function stripAckPrefix(text: string, ack: string | undefined): string {
   return lead.slice(ack.length).trimStart();
 }
 
-const CONNECTOR_SKILL_PROVIDERS: Readonly<Record<string, string>> = {
-  dropbox: "dropbox",
-  "email-draft-in-voice": "google",
-  "email-voice-profile": "google",
-  "google-drive-sheets": "google",
-  "google-workspace": "google",
-  linear: "linear",
-  "morning-digest": "x",
-  "slack-drafts": "slack",
-  x: "x",
-  zoom: "zoom",
+const CONNECTOR_SKILLS: Readonly<Record<string, { provider: string; appConnection?: true }>> = {
+  dropbox: { provider: "dropbox", appConnection: true },
+  "email-draft-in-voice": { provider: "google" },
+  "email-voice-profile": { provider: "google" },
+  "google-drive-sheets": { provider: "google", appConnection: true },
+  "google-workspace": { provider: "google", appConnection: true },
+  linear: { provider: "linear", appConnection: true },
+  "morning-digest": { provider: "x" },
+  "slack-drafts": { provider: "slack" },
+  x: { provider: "x" },
+  zoom: { provider: "zoom", appConnection: true },
 };
 
 export function filterConnectorSkills(
   resolved: SkillResolution[],
   availableProviders: readonly string[],
+  appConnections: boolean,
 ): SkillResolution[] {
   const available = new Set(availableProviders);
   return resolved.filter((entry) => {
-    const provider = entry.skill ? CONNECTOR_SKILL_PROVIDERS[entry.skill.manifest.name] : undefined;
-    return !provider || available.has(provider);
+    const skill = CONNECTOR_SKILLS[entry.skill?.manifest.name ?? ""];
+    return !skill || available.has(skill.provider) || (appConnections && skill.appConnection === true);
   });
 }
 
@@ -111,22 +111,21 @@ export function stripTurnBoilerplate(text: string): string {
   return kept || text.trim();
 }
 
-export function visibleTitleEntryText(entry: SessionEntry): string | undefined {
-  const payload = entry.payload as { text?: unknown; display?: unknown } | null;
-  const value = entry.type === "user" && typeof payload?.display === "string" ? payload.display : payload?.text;
-  return typeof value === "string" ? value.trim() || undefined : undefined;
+export function visibleTitleEntryText(item: Item): string | undefined {
+  const value = isUserItem(item) && typeof item.body.display === "string" ? item.body.display : proseText(item);
+  return value?.trim() || undefined;
 }
 
-export function renderTitleTranscript(entries: SessionEntry[]): string {
+export function renderTitleTranscript(items: Item[]): string {
   const lines: string[] = [];
-  for (const e of entries) {
-    if (e.type !== "user" && e.type !== "assistant") continue;
-    if (isOverheardEntry(e)) continue;
+  for (const e of items) {
+    if (!isUserItem(e) && !isAgentReply(e)) continue;
+    if (isOverheard(e)) continue;
     const raw = visibleTitleEntryText(e);
     if (!raw) continue;
-    const text = e.type === "user" ? stripTurnBoilerplate(raw) : raw;
+    const text = isUserItem(e) ? stripTurnBoilerplate(raw) : raw;
     if (!text) continue;
-    lines.push(`${e.type === "user" ? "User" : "Assistant"}:\n${text}`);
+    lines.push(`${isUserItem(e) ? "User" : "Assistant"}:\n${text}`);
     if (lines.length >= 6) break;
   }
   return lines.join("\n\n");
@@ -170,12 +169,12 @@ export function replayableRequest(input: OrchestratorInput): TurnRequest {
   const c = input.conversation;
   return {
     surface: input.surface ?? "unknown",
-    ...(input.slackSource ? { slackSource: input.slackSource } : {}),
-    ...(input.externalSlack ? { externalSlack: input.externalSlack } : {}),
+    ...(input.surfaceOrigin ? { surfaceOrigin: input.surfaceOrigin } : {}),
     ...(input.sessionSenderId ? { sessionSenderId: input.sessionSenderId } : {}),
     ...(input.delegatingRunId ? { delegatingRunId: input.delegatingRunId } : {}),
     ...(input.scopeVersion ? { scopeVersion: input.scopeVersion } : {}),
     ...(input.deliveryTarget ? { deliveryTarget: input.deliveryTarget } : {}),
+    ...(input.deliveryWebhook ? { deliveryWebhook: input.deliveryWebhook } : {}),
     ...(input.deliveryCandidates?.length ? { deliveryCandidates: input.deliveryCandidates } : {}),
     actor: principalAssertion(input.actor),
     conversation: {
@@ -192,7 +191,7 @@ export function replayableRequest(input: OrchestratorInput): TurnRequest {
     ...(input.gatewayContext ? { gatewayContext: input.gatewayContext } : {}),
     ...(input.analyticsSuppressed ? { analyticsSuppressed: true } : {}),
     ...(input.proactiveOpener ? { proactiveOpener: true } : {}),
-    ...turnOriginRequestFields(input.origin),
+    origin: input.origin,
     ...(input.conversationHeader ? { conversationHeader: input.conversationHeader } : {}),
     ...(input.priorTurns?.length ? { priorTurns: input.priorTurns } : {}),
     ...(input.overheard?.length ? { overheard: input.overheard } : {}),
@@ -203,9 +202,8 @@ export function replayableRequest(input: OrchestratorInput): TurnRequest {
     ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
     ...(input.fastMode !== undefined ? { fastMode: input.fastMode } : {}),
     ...(input.readOnly ? { readOnly: true } : {}),
-    ...(input.privateSessionMessage
-      ? { privateSessionMessage: true as const, sessionMessageDepth: input.sessionMessageDepth }
-      : {}),
+    ...(input.privateSessionMessage ? { privateSessionMessage: true as const } : {}),
+    ...(input.sessionMessageDepth !== undefined ? { sessionMessageDepth: input.sessionMessageDepth } : {}),
     ...(input.skipMemory ? { skipMemory: true } : {}),
     ...(input.surfaceTools ? { surfaceTools: true } : {}),
     ...(input.addressed ? { addressed: true } : {}),
@@ -228,27 +226,20 @@ function candidateKey(target: string, audienceScopeId: ScopeId): string {
 
 const SURFACE_ENQUEUE_ACTIONS = new Set(["post", "reach", "react", "edit", "delete"]);
 
-export function completedSurfaceEnqueues(
-  entries: readonly SessionEntry[],
-  sinceSeq: number,
-  surfaceTool: string,
-): number {
-  const calls: Array<{ enqueues: boolean; callId: string | undefined; done: boolean }> = [];
-  for (const e of entries) {
+export function completedSurfaceEnqueues(items: readonly Item[], sinceSeq: number, surfaceTool: string): number {
+  const calls: Array<{ enqueues: boolean; callId: string | null; done: boolean }> = [];
+  for (const e of items) {
     if (e.seq <= sinceSeq) continue;
-    if (e.type === "tool_call") {
-      const p = e.payload as { tool?: unknown; action?: unknown; callId?: unknown } | null;
+    if (e.kind === "ToolCall") {
       calls.push({
-        enqueues: p?.tool === surfaceTool && SURFACE_ENQUEUE_ACTIONS.has(String(p?.action)),
-        callId: typeof p?.callId === "string" ? p.callId : undefined,
+        enqueues: e.tool === surfaceTool && SURFACE_ENQUEUE_ACTIONS.has(String(e.body.action)),
+        callId: e.callId,
         done: false,
       });
-    } else if (e.type === "tool_result") {
-      const payload = e.payload as { callId?: unknown; interrupted?: unknown } | null;
-      if (payload?.interrupted === true) continue;
-      const cid = payload?.callId;
-      const call =
-        typeof cid === "string" ? calls.find((c) => c.callId === cid && !c.done) : calls.findLast((c) => !c.done);
+    } else if (e.kind === "ToolResult") {
+      if (e.body.interrupted === true) continue;
+      const cid = e.callId;
+      const call = cid ? calls.find((c) => c.callId === cid && !c.done) : calls.findLast((c) => !c.done);
       if (call) call.done = true;
     }
   }
@@ -279,11 +270,14 @@ export function replaceThreadSegment(target: string, threadTs: string): string {
 }
 
 export function deliveryCandidatesFor(
-  surface: string | undefined,
-  deliveryTarget: string | undefined,
-  surfaceCandidates: { target: string; label: string }[] | undefined,
+  request: Pick<
+    Partial<TurnRequest>,
+    "surface" | "deliveryTarget" | "deliveryCandidates" | "deliveryWebhook" | "origin" | "approval"
+  >,
   sessionScopeId: ScopeId,
 ): { candidates: CandidateDestination[]; defaultKey?: string } {
+  const { surface, deliveryTarget, deliveryCandidates: surfaceCandidates } = request;
+  const deliveryWebhook = boundWebhook(request)?.webhook;
   if (!surface) return { candidates: [] };
   let raw: { target: string; label: string }[] = [];
   if (surfaceCandidates && surfaceCandidates.length > 0) raw = surfaceCandidates;
@@ -294,7 +288,14 @@ export function deliveryCandidatesFor(
     const key = candidateKey(c.target, sessionScopeId);
     if (seen.has(key)) continue;
     seen.add(key);
-    candidates.push({ type: surface, target: c.target, audienceScopeId: sessionScopeId, key, label: c.label });
+    candidates.push({
+      type: deliveryWebhook ? "webhook" : surface,
+      target: c.target,
+      audienceScopeId: sessionScopeId,
+      key,
+      label: c.label,
+      ...(deliveryWebhook ? { webhook: deliveryWebhook } : {}),
+    });
   }
   const defaultKey = candidates.find((c) => c.target === deliveryTarget)?.key ?? candidates[0]?.key;
   return { candidates, ...(defaultKey ? { defaultKey } : {}) };

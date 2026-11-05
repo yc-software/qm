@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { entriesToMessages, type AssistantWork } from "../src/core-bridge.ts";
+import { itemsToMessages, type AssistantWork } from "../src/core-bridge.ts";
+import { item } from "./item-fixture.ts";
 import { harness, SESSION } from "./deep-link-boot-fixture.ts";
 
 test("replacing and disposing a chat disconnects its live work timer", async (t) => {
@@ -29,8 +30,8 @@ test("replacing and disposing a chat disconnects its live work timer", async (t)
       chat.newChat();
       const agent = chat.state.agent!;
       const startedAt = Date.now() - 1230;
-      const message = entriesToMessages([
-        { seq: 1, type: "assistant", payload: { text: "QA", workStartedAt: startedAt }, createdAt: startedAt },
+      const message = itemsToMessages([
+        item("AgentMessage", { seq: 1, text: "QA", body: { workStartedAt: startedAt }, createdAt: startedAt }),
       ])[0] as AssistantWork;
       message.content = [];
       message.work = {
@@ -38,18 +39,22 @@ test("replacing and disposing a chat disconnects its live work timer", async (t)
         startedAt,
         activity: [
           {
-            seq: 2,
-            parentSeq: null,
-            type: "tool_call",
-            payload: { tool: "execute", command: "printf start" },
-            createdAt: startedAt,
+            item: item("ToolCall", {
+              seq: 2,
+              tool: "execute",
+              callId: "c2",
+              body: { command: "printf start" },
+              createdAt: startedAt,
+            }),
           },
           {
-            seq: 3,
-            parentSeq: null,
-            type: "tool_call",
-            payload: { tool: "execute", command: "sleep 10" },
-            createdAt: startedAt,
+            item: item("ToolCall", {
+              seq: 3,
+              tool: "execute",
+              callId: "c3",
+              body: { command: "sleep 10" },
+              createdAt: startedAt,
+            }),
           },
         ],
       };

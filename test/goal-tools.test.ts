@@ -2,7 +2,6 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "../src/agent/agent-tools.ts";
 import { createGrindMeter } from "../src/agent/goal.ts";
-import { turnToolContext } from "../src/agent/turn-support.ts";
 import { emptyEndingNote } from "../src/agent/agent-run.ts";
 import {
   GovernorUndecided,
@@ -14,6 +13,7 @@ import {
   type GoalRecord,
 } from "../src/agent/goal.ts";
 import type { ScopeId } from "../src/types.ts";
+import type { NewItem } from "../src/sessions/items.ts";
 
 function toolbox(screenToolResult?: ToolContextRef["screenToolResult"]) {
   const ref: ToolContextRef = {
@@ -329,9 +329,10 @@ test("resume only applies to a paused goal", async () => {
 
 test("goal mutations save the session goal before returning, without writing goal log entries", async () => {
   const { ref, saved, create, update } = toolbox();
-  const entries: Array<{ type: string; payload: unknown }> = [];
-  ref.emit = async (entry) => {
-    entries.push(structuredClone(entry));
+  const items: NewItem[] = [];
+  ref.emit = async (item) => {
+    items.push(structuredClone(item));
+    return undefined;
   };
   await create.execute("c1", { objective: "keep working", floor: { minMs: 1000 } });
   ref.goal!.activeMs = 1000;
@@ -341,7 +342,7 @@ test("goal mutations save the session goal before returning, without writing goa
   await update.execute("u3", { status: "complete", note: "verified" });
   assert.equal(saved()?.status, "complete");
   assert.equal(openGoal(saved()), null);
-  assert.ok(entries.every((entry) => entry.type !== "system"));
+  assert.ok(items.every((item) => item.kind === "ToolCall" || item.kind === "ToolResult"));
 });
 
 test("agent cannot pause a goal or bypass its work floor", async () => {
@@ -524,11 +525,7 @@ test("a turn resumed mid-way cannot cancel: it is not answering a fresh message 
   const first = toolbox();
   await first.create.execute("c1", { objective: "long haul" });
   const resumed = nextTurn(first.ref.goal!);
-  Object.assign(
-    resumed.ref,
-    turnToolContext({ continueTurn: true, history: [], tools: { humanTurn: true } } as never),
-    { goal: resumed.ref.goal },
-  );
+  Object.assign(resumed.ref, { current: { humanTurn: true }, goalRound: 1 });
   const result = await resumed.update.execute("u1", { status: "cancel", note: "user: cancel" });
   assert.match(textOf(result as never), /Only the user's own message can cancel/);
   assert.equal(resumed.ref.goal?.status, "active");
@@ -609,8 +606,8 @@ test("swarm messages ride on the next tool result and can replace the goal", asy
   const { ref, create, get } = toolbox();
   await create.execute("c1", { objective: "lane A", floor: { minTurns: 5 } });
   const saved: string[] = [];
-  ref.emit = async (entry) => {
-    if (entry.type === "tool_result") saved.push(JSON.stringify(entry.payload));
+  ref.emit = async (item) => {
+    if (item.kind === "ToolResult") saved.push(JSON.stringify(item));
     return undefined;
   };
   let pending = [{ id: "m2", text: "Swarm agent message m2: take lane B" }];

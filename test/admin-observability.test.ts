@@ -10,6 +10,7 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { isAgentReply, isUserItem, type Item } from "../src/sessions/items.ts";
 
 function start(overrides: Parameters<typeof testConfig>[0] = {}) {
   const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-obs-")), ...overrides });
@@ -20,7 +21,6 @@ function start(overrides: Parameters<typeof testConfig>[0] = {}) {
     auditLog: built.auditLog,
     errors: built.errors,
     runs: built.runs,
-    workspace: built.workspace,
     files: built.files,
     config: built.config,
     deliveries: built.deliveries,
@@ -57,12 +57,12 @@ test("an org admin sees conversations, transcripts, and files top-down", async (
     const tx = await get(s.base, `/v1/admin/sessions/${encodeURIComponent(conv.id)}?scope=org:default-org`);
     assert.equal(tx.status, 200);
     const txd = await tx.json();
-    const transcript = txd as { entries: { type: string }[] };
+    const transcript = txd as { items: Item[] };
+    assert.ok(transcript.items.some(isUserItem), "transcript includes the user message");
     assert.ok(
-      transcript.entries.some((e) => e.type === "user"),
-      "transcript includes the user message",
+      !transcript.items.some((item) => (item.kind as string) === "soul"),
+      "resolved prompt context is not a transcript item",
     );
-    assert.ok(!transcript.entries.some((e) => e.type === "soul"), "resolved prompt context is not a transcript entry");
 
     await s.built.files.put({
       id: "todo-art-1",
@@ -309,11 +309,7 @@ test("recipient delivery rows expose origin provenance and gated origin context"
     const orgRead = await get(s.base, `/v1/admin/sessions/${encodeURIComponent(recipient!.id)}?scope=org:default-org`);
     assert.equal(orgRead.status, 200);
     const orgBody = (await orgRead.json()) as any;
-    assert.equal(
-      orgBody.entries.some((e: any) => e.type === "assistant"),
-      false,
-      "recipient transcript is not copied assistant history",
-    );
+    assert.equal(orgBody.items.some(isAgentReply), false, "recipient transcript is not copied assistant history");
     assert.equal(orgBody.deliveryEvents.length, 1, "recipient transcript renders delivered output inline");
     const event = orgBody.deliveryEvents[0];
     assert.equal(event.type, "principal_delivery");
@@ -333,10 +329,7 @@ test("recipient delivery rows expose origin provenance and gated origin context"
     );
     assert.equal(scopedRead.status, 200);
     const scopedBody = (await scopedRead.json()) as any;
-    assert.equal(
-      scopedBody.entries.some((e: any) => e.type === "assistant"),
-      false,
-    );
+    assert.equal(scopedBody.items.some(isAgentReply), false);
     assert.equal(scopedBody.deliveryEvents.length, 1);
     assert.equal(scopedBody.deliveryEvents[0].provenance.sourceSessionId, source.id);
     assert.equal(scopedBody.deliveryEvents[0].sourceSession, undefined);
@@ -543,7 +536,7 @@ test("a cron-fired transcript carries its originating cron", async () => {
     assert.equal(body.origin.fireSlot, "42");
     assert.equal(body.origin.cron.title, "Daily security audit");
     assert.equal(body.origin.cron.ownerScopeId, scope);
-    assert.equal(body.entries[0].type, "user");
+    assert.equal(body.items[0].kind, "UserMessage");
   } finally {
     await s.close();
   }
@@ -587,7 +580,7 @@ test("principal deliveries render as delivery events and later DM turns get stru
     const orgTx = await get(s.base, `/v1/admin/sessions/${encodeURIComponent(session!.id)}?scope=org:default-org`);
     assert.equal(orgTx.status, 200);
     const orgBody = (await orgTx.json()) as any;
-    assert.equal(orgBody.entries.length, 0, "delivery is not a transcript entry");
+    assert.equal(orgBody.items.length, 0, "delivery is not a transcript item");
     assert.equal(orgBody.deliveryEvents.length, 1, "recipient transcript renders delivery rows inline");
     assert.equal(orgBody.deliveryEvents[0].text, "the deploy is done");
     assert.deepEqual(orgBody.deliveryEvents[0].attachments, [
@@ -1000,7 +993,6 @@ test("the Files view is the document store (write-tool artifacts), not the sandb
     auditLog: built.auditLog,
     errors: built.errors,
     runs: built.runs,
-    workspace: built.workspace,
     files: built.files,
     sandboxBackend: "sprites",
   });
@@ -1071,7 +1063,6 @@ test("a saved document is read and downloaded by artifact id", async () => {
     auditLog: built.auditLog,
     errors: built.errors,
     runs: built.runs,
-    workspace: built.workspace,
     files: built.files,
     sandboxBackend: "sprites",
   });
@@ -1318,117 +1309,6 @@ test("admin governance: spend limits round-trip per scope, validate, and clear",
     assert.deepEqual(await built.config.getSpendLimitDurable("channel:C1"), { monthlyUsd: 40 });
     assert.equal((await put("channel:C1", { inherit: true })).status, 200);
     assert.equal(await built.config.getSpendLimitDurable("channel:C1"), null, "inherit clears it");
-  } finally {
-    await new Promise<void>((r) => server.close(() => r()));
-  }
-});
-
-test("an OpenAI-only deployment still gets a browse model picker, and Anthropic picks are refused", async () => {
-  const built = buildApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "admin-browsemodel-oa-")),
-      modelId: "gpt-5.6-sol",
-      openaiApiKey: "sk-openai-test",
-    }),
-  );
-  const server = createInsecureTestServer(built.app, {
-    admin: built.admin,
-    config: built.config,
-    auditLog: built.auditLog,
-    baseModelDefault: "gpt-5.6-sol",
-    providerKeys: { anthropic: false, openai: true, openrouter: false },
-  });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  const putModel = (modelId: unknown) =>
-    fetch(base + "/v1/admin/scopes/org%3Adefault-org/browse-model", {
-      method: "PUT",
-      headers: { ...ALICE, "content-type": "application/json" },
-      body: JSON.stringify({ modelId }),
-    });
-  try {
-    const opts = (await getJson(base, "/v1/admin/scopes/org:default-org")).browseModelOptions as Array<{ id: string }>;
-    assert.ok(opts.length > 0, "the picker is not empty just because the deployment has no Anthropic key");
-    assert.ok(
-      opts.every((m) => m.id.startsWith("gpt-")),
-      "only models this deployment can actually serve are offered",
-    );
-
-    assert.equal(
-      (await putModel("claude-opus-4-8")).status,
-      400,
-      "an Anthropic pick is refused when no Anthropic key is configured",
-    );
-    assert.equal((await putModel("gpt-5.6-luna")).status, 200);
-    assert.equal(built.config.getBrowseModel("org:default-org"), "gpt-5.6-luna");
-  } finally {
-    await new Promise<void>((r) => server.close(() => r()));
-  }
-});
-
-test("admin governance: browse model round-trips, validates, and is org-scoped", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-browsemodel-")) }));
-  const server = createInsecureTestServer(built.app, {
-    admin: built.admin,
-    config: built.config,
-    auditLog: built.auditLog,
-  });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  const putModel = (scope: string, modelId: unknown, headers: Record<string, string>) =>
-    fetch(base + `/v1/admin/scopes/${encodeURIComponent(scope)}/browse-model`, {
-      method: "PUT",
-      headers: { ...headers, "content-type": "application/json" },
-      body: JSON.stringify({ modelId }),
-    });
-  try {
-    assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).browseModel, null, "no override by default");
-
-    assert.equal(
-      (await putModel("org:default-org", "claude-sonnet-4-6", { "x-admin-actor": "nobody@default-org" })).status,
-      403,
-      "admin-gated",
-    );
-    assert.equal(
-      (await putModel("channel:C1", "claude-sonnet-4-6", ALICE)).status,
-      400,
-      "org-wide only — a channel scope is rejected",
-    );
-    assert.equal(
-      (await putModel("org:default-org", "not-a-model", ALICE)).status,
-      400,
-      "an unknown model id is rejected",
-    );
-    assert.equal(
-      (await putModel("org:default-org", "gpt-5.6-luna", ALICE)).status,
-      200,
-      "a non-Anthropic model is accepted — the browse runner follows the model's provider",
-    );
-    assert.equal(
-      (await putModel("org:default-org", 42, ALICE)).status,
-      400,
-      "a non-string is rejected, not treated as a clear",
-    );
-
-    assert.equal((await putModel("org:default-org", "claude-sonnet-4-6", ALICE)).status, 200);
-    assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).browseModel, "claude-sonnet-4-6");
-    assert.equal(
-      built.config.getBrowseModel("org:default-org"),
-      "claude-sonnet-4-6",
-      "the store the orchestrator reads sees the change",
-    );
-    const opts = (await getJson(base, "/v1/admin/scopes/org:default-org")).browseModelOptions;
-    assert.ok(
-      Array.isArray(opts) && opts.some((m: { id: string }) => m.id === "claude-opus-4-8"),
-      "the scope read carries the browse model picker options",
-    );
-    assert.ok(
-      opts.some((m: { id: string }) => m.id === "gpt-5.6-sol"),
-      "the browse picker spans providers, not Anthropic alone",
-    );
-
-    assert.equal((await putModel("org:default-org", "", ALICE)).status, 200, "empty clears to the default");
-    assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).browseModel, null);
   } finally {
     await new Promise<void>((r) => server.close(() => r()));
   }

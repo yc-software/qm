@@ -3,17 +3,19 @@ name: Wall of shame review
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened]
+  merge_group:
 
 permissions:
   contents: read
 
 concurrency:
-  group: wall-of-shame-${{ github.event.pull_request.number }}
+  group: wall-of-shame-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
   wall-of-shame:
     name: Wall of shame review
+    if: github.event_name == 'pull_request'
     timeout-minutes: 3
     runs-on: ubuntu-latest
     steps:

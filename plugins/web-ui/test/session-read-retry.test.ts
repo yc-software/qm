@@ -26,7 +26,7 @@ const core = createServer((req, res) => {
     res.writeHead(200, { "content-length": "100" });
     res.write("partial");
     setTimeout(() => res.destroy(), 10);
-  } else res.end(JSON.stringify({ session: { id: "test" }, entries: [] }));
+  } else res.end(JSON.stringify({ session: { id: "test" }, items: [] }));
 }).listen(0, "127.0.0.1");
 await once(core, "listening");
 process.env.CORE_API_URL = `http://127.0.0.1:${(core.address() as AddressInfo).port}`;
@@ -49,7 +49,7 @@ test("session route retries interrupted body with the same viewer and fresh vali
     { headers: { [PORTAL_IDENTITY_HEADER]: token } },
   );
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { session: { id: "test" }, entries: [] });
+  assert.deepEqual(await response.json(), { session: { id: "test" }, items: [] });
   assert.equal(requests.length, 2);
   assert.notEqual(requests[0]!.url, requests[1]!.url);
   for (const request of requests) {

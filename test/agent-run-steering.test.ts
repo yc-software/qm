@@ -2,16 +2,18 @@ import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createAgent } from "../src/agent/agent-run.ts";
+import { createModelRoutes } from "../src/model/model-route.ts";
 import type { TurnLlmRequestRecord, AgentTurnInput } from "../src/agent/agent.ts";
 import { promptEnvelopeBody } from "../src/sessions/session-store.ts";
-import { entryFromItem, storedItem } from "../src/sessions/items.ts";
-import type { ScopeId, SessionEntry } from "../src/types.ts";
+import { isAgentReply, isUserItem, messageTs, storedItem, type Item } from "../src/sessions/items.ts";
+import type { ScopeId } from "../src/types.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
+import { PARKED } from "../src/runs/run-store.ts";
 
 type Sink = {
-  entries: Array<{ seq: number; type: string; payload: unknown }>;
+  entries: Item[];
 };
 
 function turnInput(sessionId: string, sink: Sink, overrides: Partial<AgentTurnInput> = {}): AgentTurnInput {
@@ -26,7 +28,7 @@ function turnInput(sessionId: string, sink: Sink, overrides: Partial<AgentTurnIn
     orgScopeId: "org:test" as AgentTurnInput["orgScopeId"],
     emit: async (item) => {
       const stored = storedItem(item, { sessionId, seq: seq++, createdAt: Date.now() });
-      sink.entries.push(entryFromItem(stored, "personal:tester"));
+      sink.entries.push(stored);
       return stored;
     },
     recordModelCall: () => {},
@@ -82,7 +84,7 @@ for (const variant of ["text", "images", "documents", "finished during preparati
   const finishDuringPreparation = variant === "finished during preparation";
   test(`steered input lands in consumption order, including steered ${variant}`, { timeout: 60_000 }, async () => {
     const signals = createPostgresRunSignalStore(testDatabaseUrl());
-    const agent = createAgent({ apiKey: "sk-test", signals });
+    const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }), signals });
     const sink: Sink = { entries: [] };
     const documentBase64 = (await readFile(new URL("./fixtures/documents/sample.pdf", import.meta.url))).toString(
       "base64",
@@ -130,11 +132,7 @@ for (const variant of ["text", "images", "documents", "finished during preparati
         } else {
           setTimeout(() => {
             releaseFirstStep();
-            assert.equal(
-              sink.entries.filter((entry) => entry.type === "user").length,
-              1,
-              "enqueue is not model intake",
-            );
+            assert.equal(sink.entries.filter(isUserItem).length, 1, "enqueue is not model intake");
           });
         }
         if (!withImages) return { text };
@@ -162,21 +160,15 @@ for (const variant of ["text", "images", "documents", "finished during preparati
         assert.ok(JSON.stringify(requestMessages[1]).includes(documentBase64));
         assert.ok(!JSON.stringify(sink.entries).includes(documentBase64));
       }
-      const steeredEntry = sink.entries.find(
-        (entry) => entry.type === "user" && (entry.payload as { steered?: boolean }).steered,
-      );
+      const steeredEntry = sink.entries.find((entry) => entry.kind === "SteeringMessage");
       assert.ok(steeredEntry);
       if (variant === "text")
         assert.ok(
-          steeredEntry.seq > sink.entries.find((entry) => entry.type === "thinking")!.seq,
+          steeredEntry.seq > sink.entries.find((entry) => entry.kind === "Reasoning")!.seq,
           "slow persistence of prior thinking must not cross the intake event",
         );
-      assert.equal(
-        (steeredEntry.payload as { ts?: string }).ts,
-        "1712.001",
-        "the steer entry is stamped with its arrival ts",
-      );
-      assert.match((steeredEntry.payload as { text: string }).text, /actually, do it differently/);
+      assert.equal(messageTs(steeredEntry), "1712.001", "the steer entry is stamped with its arrival ts");
+      assert.match(steeredEntry.text ?? "", /actually, do it differently/);
       assert.deepEqual(await signals.takePending("run-order"), [], "consumed steer is acknowledged");
       assert.equal(calls, 2);
       assert.deepEqual(
@@ -191,7 +183,7 @@ for (const variant of ["text", "images", "documents", "finished during preparati
 }
 
 test("a session deleted mid-turn fails the turn instead of degrading silently", async () => {
-  const agent = createAgent({ apiKey: "sk-test" });
+  const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }) });
   const sink: Sink = { entries: [] };
   const store = createPostgresSessionStore(testDatabaseUrl());
   const session = await store.getOrCreateByThread("dm:session-deleted", "dm", "personal:tester" as ScopeId);
@@ -216,14 +208,14 @@ test("completed Pi attach results retain openable files in viewer history", asyn
   const store = createPostgresSessionStore(testDatabaseUrl());
   const scopeLabel = "personal:tester" as ScopeId;
   const session = await store.getOrCreateByThread("web:tester:attach-history", "dm", scopeLabel);
-  await store.addParticipant(session.id, "tester", undefined, { includeHistory: true });
+  await store.addParticipant(session.id, "tester");
   const writer = { sessionId: session.id };
   const files = [
     { name: "desktop.png", mimetype: "image/png", sizeBytes: 123, artifactId: "desktop" },
     { name: "phone.png", mimetype: "image/png", sizeBytes: 456, artifactId: "phone" },
     { name: "preview.html", mimetype: "text/html", sizeBytes: 789, artifactId: "preview" },
   ];
-  const agent = createAgent({ apiKey: "sk-test" });
+  const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }) });
   const realFetch = globalThis.fetch;
   let calls = 0;
   globalThis.fetch = (async () => {
@@ -277,18 +269,20 @@ for (const route of ["gateway", "direct", "personal"] as const) {
   test(`native document byte budget respects ${route} routing`, async () => {
     const modelId = "claude-opus-5";
     const agent = createAgent({
-      apiKey: "sk-test",
-      modelId,
-      ...(route !== "direct"
-        ? {
-            modelGateway: {
-              url: "https://gateway.test",
-              apiKey: "gateway-test",
-              apiKeyHeader: "api-key",
-              models: { [modelId]: "router/opus" },
-            },
-          }
-        : {}),
+      routes: createModelRoutes({
+        apiKey: "sk-test",
+        modelId,
+        ...(route !== "direct"
+          ? {
+              modelGateway: {
+                url: "https://gateway.test",
+                apiKey: "gateway-test",
+                apiKeyHeader: "api-key",
+                models: { [modelId]: "router/opus" },
+              },
+            }
+          : {}),
+      }),
     });
     const sink: Sink = { entries: [] };
     const pdf = await readFile(new URL("./fixtures/documents/sample.pdf", import.meta.url));
@@ -323,7 +317,7 @@ for (const route of ["gateway", "direct", "personal"] as const) {
 }
 
 test("native document bytes reach the provider on every step without entering session entries", async () => {
-  const agent = createAgent({ apiKey: "sk-test" });
+  const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }) });
   const sink: Sink = { entries: [] };
   const realFetch = globalThis.fetch;
   const requests: Array<Record<string, unknown>> = [];
@@ -352,7 +346,7 @@ test("native document bytes reach the provider on every step without entering se
 });
 
 test("Pi Responses captures exclude history and document text without changing requests or entries", async () => {
-  const agent = createAgent({ openaiApiKey: "sk-test", modelId: "gpt-5.6-sol" });
+  const agent = createAgent({ routes: createModelRoutes({ openaiApiKey: "sk-test", modelId: "gpt-5.6-sol" }) });
   const sink: Sink = { entries: [] };
   const captures: TurnLlmRequestRecord[] = [];
   const realFetch = globalThis.fetch;
@@ -421,7 +415,7 @@ for (const stopBeforeIntake of [false, true]) {
       if (rows.some((row) => row.signal.kind === "abort")) setTimeout(stopTaken);
       return rows;
     };
-    const agent = createAgent({ apiKey: "sk-test", signals });
+    const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }), signals });
     const store = createPostgresSessionStore(testDatabaseUrl());
     const session = await store.getOrCreateByThread("web:steer-tool", "dm", "personal:tester" as ScopeId);
     const writer = { sessionId: session.id };
@@ -443,11 +437,11 @@ for (const stopBeforeIntake of [false, true]) {
       events[4] = { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 3 } };
       return sse(events);
     }) as typeof fetch;
-    const entries: SessionEntry[] = [];
+    const entries: Item[] = [];
     let steerTaken = () => {};
     const taken = new Promise<void>((resolve) => (steerTaken = resolve));
     try {
-      await agent.runTurn(
+      const result = await agent.runTurn(
         turnInput(
           session.id,
           { entries: [] },
@@ -458,10 +452,10 @@ for (const stopBeforeIntake of [false, true]) {
               memoryRead: async () => {
                 await signals.send("tool-steer", { kind: "steer", text: "use the other file", ts: "tool.1" });
                 await taken;
-                assert.equal(entries.filter((entry) => entry.type === "user").length, 1);
+                assert.equal(entries.filter(isUserItem).length, 1);
                 assert.equal((await signals.pending("tool-steer")).length, 1);
                 if (stopBeforeIntake) {
-                  await signals.send("tool-steer", { kind: "abort" });
+                  await signals.send("tool-steer", { kind: "abort", reason: "by the parent agent", scope: "run" });
                   await stopped;
                 }
                 return "saved facts";
@@ -473,14 +467,15 @@ for (const stopBeforeIntake of [false, true]) {
             },
             emit: async (entry) => {
               const saved = await store.append(writer, entry);
-              entries.push(entryFromItem(saved, session.scopeId));
+              entries.push(saved);
               return saved;
             },
           },
         ),
       );
-      const users = entries.filter((entry) => entry.type === "user");
+      const users = entries.filter(isUserItem);
       if (stopBeforeIntake) {
+        assert.deepEqual([result.stopped, result.stopScope], [true, "run"]);
         assert.equal(users.length, 1);
         assert.equal((await signals.pending("tool-steer")).filter((row) => row.signal.kind === "steer").length, 1);
         const before = calls;
@@ -488,13 +483,13 @@ for (const stopBeforeIntake of [false, true]) {
         assert.equal(calls, before + 1, "cached Pi session must not redeliver the queued steer on its own");
       } else {
         assert.deepEqual(
-          entries.map((entry) => entry.type),
-          ["user", "tool_call", "tool_result", "user", "assistant"],
+          entries.map((entry) => entry.kind),
+          ["UserMessage", "ToolCall", "ToolResult", "SteeringMessage", "AgentMessage"],
         );
-        assert.equal((users[1]!.payload as { ts?: string }).ts, "tool.1");
+        assert.equal(messageTs(users[1]!), "tool.1");
         assert.deepEqual(
-          (await store.getItems(session.id)).map((item) => [item.seq, entryFromItem(item, session.scopeId).type]),
-          entries.map((entry) => [entry.seq, entry.type]),
+          (await store.getItems(session.id)).map((item) => [item.seq, item.kind]),
+          entries.map((entry) => [entry.seq, entry.kind]),
         );
         assert.equal((await signals.pending("tool-steer")).length, 0);
       }
@@ -507,7 +502,7 @@ for (const stopBeforeIntake of [false, true]) {
 
 test("a steer wakes a waiting background poll and lands without waiting out the poll", async () => {
   const signals = createPostgresRunSignalStore(testDatabaseUrl());
-  const agent = createAgent({ apiKey: "sk-test", signals });
+  const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }), signals });
   const sink: Sink = { entries: [] };
   const realFetch = globalThis.fetch;
   let calls = 0;
@@ -555,11 +550,11 @@ test("a steer wakes a waiting background poll and lands without waiting out the 
     assert.equal(result.reply, "done");
     assert.deepEqual(waits, [30, undefined, 1]);
     assert.deepEqual(
-      sink.entries.map((entry) => entry.type),
-      ["user", "tool_call", "tool_result", "user", "tool_call", "tool_result", "assistant"],
+      sink.entries.map((entry) => entry.kind),
+      ["UserMessage", "ToolCall", "ToolResult", "SteeringMessage", "ToolCall", "ToolResult", "AgentMessage"],
     );
-    assert.equal((sink.entries[3]!.payload as { ts?: string }).ts, "poll.1");
-    assert.match(String((sink.entries[2]!.payload as { result?: unknown }).result), /still building/);
+    assert.equal(messageTs(sink.entries[3]!), "poll.1");
+    assert.match(sink.entries[2]!.text ?? "", /still building/);
   } finally {
     globalThis.fetch = realFetch;
     await agent.close?.();
@@ -571,7 +566,7 @@ test("a consumed steer is recorded when its acknowledgement fails", { timeout: 6
   signals.acknowledge = async () => {
     throw new Error("signal store unavailable");
   };
-  const agent = createAgent({ apiKey: "sk-test", signals });
+  const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }), signals });
   const sink: Sink = { entries: [] };
   const realFetch = globalThis.fetch;
   let calls = 0;
@@ -610,11 +605,9 @@ test("a consumed steer is recorded when its acknowledgement fails", { timeout: 6
     });
     const result = await agent.runTurn(turn);
     assert.equal(result.reply, "done", "an acknowledgement failure does not tear down the live turn");
-    const steered = sink.entries.filter(
-      (entry) => entry.type === "user" && (entry.payload as { steered?: boolean }).steered,
-    );
+    const steered = sink.entries.filter((entry) => entry.kind === "SteeringMessage");
     assert.equal(steered.length, 1);
-    assert.equal((steered[0]!.payload as { ts?: string }).ts, "fail.1");
+    assert.equal(messageTs(steered[0]!), "fail.1");
     assert.equal(
       (await signals.pending("steer-failure")).filter((row) => row.signal.kind === "steer").length,
       1,
@@ -628,7 +621,7 @@ test("a consumed steer is recorded when its acknowledgement fails", { timeout: 6
 
 for (const abort of ["shutdown", "stop"] as const) {
   test(`a tool still running at ${abort === "shutdown" ? "shutdown is recorded interrupted and replays its cause" : "a user Stop is recorded stopped and answered"} without waiting for it`, async () => {
-    const agent = createAgent({ apiKey: "sk-test" });
+    const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }) });
     const store = createPostgresSessionStore(testDatabaseUrl());
     const session = await store.getOrCreateByThread(`web:${abort}-tool`, "dm", "personal:tester" as ScopeId);
     const writer = { sessionId: session.id };
@@ -652,7 +645,7 @@ for (const abort of ["shutdown", "stop"] as const) {
     }) as typeof fetch;
     const shutdown = new AbortController();
     const cancel = new AbortController();
-    const entries: SessionEntry[] = [];
+    const entries: Item[] = [];
     const toolFinished = Promise.withResolvers<void>();
     try {
       await agent.runTurn(
@@ -674,7 +667,7 @@ for (const abort of ["shutdown", "stop"] as const) {
             } as AgentTurnInput["tools"],
             emit: async (entry) => {
               const saved = await store.append(writer, entry);
-              entries.push(entryFromItem(saved, session.scopeId));
+              entries.push(saved);
               return saved;
             },
           },
@@ -682,18 +675,18 @@ for (const abort of ["shutdown", "stop"] as const) {
       );
       toolFinished.resolve();
       await new Promise((resolve) => setTimeout(resolve, 200));
-      const results = entries.filter((entry) => entry.type === "tool_result");
+      const results = entries.filter((entry) => entry.kind === "ToolResult");
       assert.equal(results.length, 1, "the late tool outcome does not add a second result");
       assert.deepEqual(
-        (({ interrupted, stopped }) => ({ interrupted, stopped }))(results[0]!.payload as Record<string, unknown>),
+        (({ interrupted, stopped }) => ({ interrupted, stopped }))(results[0]!.body),
         abort === "shutdown" ? { interrupted: true, stopped: undefined } : { interrupted: undefined, stopped: true },
       );
-      const { resumeStrategy } = await import("../src/core/turn-resume.ts");
-      const userSeq = entries.find((entry) => entry.type === "user")!.seq;
-      assert.equal(
-        resumeStrategy(entries, { userSeq, workEntries: entries.filter((e) => e.seq > userSeq).length }).kind,
-        "continue",
-      );
+      const { reconcile } = await import("../src/core/turn-resume.ts");
+      const userSeq = entries.find((entry) => entry.kind === "UserMessage")!.seq;
+      assert.deepEqual(reconcile(entries, { userSeq, workEntries: entries.filter((e) => e.seq > userSeq).length }), {
+        settleItems: [],
+        resumed: true,
+      });
     } finally {
       globalThis.fetch = realFetch;
       await agent.close?.();
@@ -702,7 +695,7 @@ for (const abort of ["shutdown", "stop"] as const) {
 }
 
 test("a request rejected as too long retries once without its inline documents instead of failing the turn", async () => {
-  const agent = createAgent({ apiKey: "sk-test" });
+  const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }) });
   const sink: Sink = { entries: [] };
   const realFetch = globalThis.fetch;
   const requests: string[] = [];
@@ -733,5 +726,128 @@ test("a request rejected as too long retries once without its inline documents i
     assert.match(requests.at(-1)!, /doc-big/);
   } finally {
     globalThis.fetch = realFetch;
+  }
+});
+
+test("a park lets the running tool finish, records its real result and stops before the next model step", async () => {
+  const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }) });
+  const store = createPostgresSessionStore(testDatabaseUrl());
+  const session = await store.getOrCreateByThread("web:park-tool", "dm", "personal:tester" as ScopeId);
+  const writer = { sessionId: session.id };
+  const realFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    if (++calls > 1) return sse(textReplyEvents("done"));
+    const events = textReplyEvents("");
+    events[1] = {
+      type: "content_block_start",
+      index: 0,
+      content_block: { type: "tool_use", id: "read-memory", name: "memory", input: {} },
+    };
+    events[2] = {
+      type: "content_block_delta",
+      index: 0,
+      delta: { type: "input_json_delta", partial_json: JSON.stringify({ action: "read", retrySafe: false }) },
+    };
+    events[4] = { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 3 } };
+    return sse(events);
+  }) as typeof fetch;
+  const shutdown = new AbortController();
+  const cancel = new AbortController();
+  const parkRequest = new AbortController();
+  const entries: Item[] = [];
+  let stoppedDuringTool: boolean | undefined;
+  try {
+    await agent.runTurn(
+      turnInput(
+        session.id,
+        { entries: [] },
+        {
+          session,
+          runId: "park-tool",
+          cancel: cancel.signal,
+          shutdown: shutdown.signal,
+          park: {
+            requested: () => parkRequest.signal.aborted,
+            now: () => {
+              shutdown.abort(PARKED);
+              cancel.abort();
+            },
+          },
+          tools: {
+            memoryRead: async () => {
+              parkRequest.abort();
+              await new Promise((resolve) => setTimeout(resolve, 100));
+              stoppedDuringTool = shutdown.signal.aborted;
+              return "saved facts";
+            },
+          } as AgentTurnInput["tools"],
+          emit: async (entry) => {
+            const saved = await store.append(writer, entry);
+            entries.push(saved);
+            return saved;
+          },
+        },
+      ),
+    );
+    assert.equal(stoppedDuringTool, false, "the park waits for the running tool");
+    assert.equal(shutdown.signal.aborted, true, "the park lands at the step boundary");
+    assert.equal(calls, 1, "no model step runs after the park");
+    const results = entries.filter((entry) => entry.kind === "ToolResult");
+    assert.equal(results.length, 1);
+    const body = results[0]!.body;
+    assert.deepEqual([body.interrupted, body.stopped], [undefined, undefined], "the result is the tool's own");
+    assert.match(results[0]!.text ?? "", /saved facts/);
+    assert.equal(entries.filter(isAgentReply).length, 0, "the parked turn stays open for resume");
+  } finally {
+    globalThis.fetch = realFetch;
+    await agent.close?.();
+  }
+});
+
+test("a park requested during the turn's last model step lets the turn finish", async () => {
+  const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }) });
+  const store = createPostgresSessionStore(testDatabaseUrl());
+  const session = await store.getOrCreateByThread("web:park-last-step", "dm", "personal:tester" as ScopeId);
+  const writer = { sessionId: session.id };
+  const realFetch = globalThis.fetch;
+  const parkRequest = new AbortController();
+  globalThis.fetch = (async () => {
+    parkRequest.abort();
+    return sse(textReplyEvents("all done"));
+  }) as typeof fetch;
+  const shutdown = new AbortController();
+  const cancel = new AbortController();
+  const entries: Item[] = [];
+  try {
+    const result = await agent.runTurn(
+      turnInput(
+        session.id,
+        { entries: [] },
+        {
+          session,
+          runId: "park-last-step",
+          cancel: cancel.signal,
+          shutdown: shutdown.signal,
+          park: {
+            requested: () => parkRequest.signal.aborted,
+            now: () => {
+              shutdown.abort(PARKED);
+              cancel.abort();
+            },
+          },
+          emit: async (entry) => {
+            const saved = await store.append(writer, entry);
+            entries.push(saved);
+            return saved;
+          },
+        },
+      ),
+    );
+    assert.equal(shutdown.signal.aborted, false, "no model step follows, so nothing parks");
+    assert.equal(result.reply, "all done");
+  } finally {
+    globalThis.fetch = realFetch;
+    await agent.close?.();
   }
 });

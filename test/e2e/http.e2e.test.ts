@@ -11,6 +11,7 @@ import { buildApp } from "../../src/wiring.ts";
 import { createInsecureTestServer } from "../../src/api/server.ts";
 import { scopeId } from "../../src/types.ts";
 import { testConfig } from "../support/test-config.ts";
+import { isAgentReply, isUserItem, type Item } from "../../src/sessions/items.ts";
 
 const NO_KEY = !process.env.ANTHROPIC_API_KEY;
 
@@ -93,10 +94,9 @@ describe("HTTP e2e (live Pi over the API)", { skip: NO_KEY ? "set ANTHROPIC_API_
       headers: { "X-Actor": "U1@default-org" },
     });
     assert.equal(res.status, 200);
-    const body = (await res.json()) as { entries: Array<{ type: string }> };
-    const types = body.entries.map((e) => e.type);
-    assert.ok(types.includes("user"));
-    assert.ok(types.includes("assistant"));
+    const body = (await res.json()) as { items: Item[] };
+    assert.ok(body.items.some(isUserItem));
+    assert.ok(body.items.some(isAgentReply));
   });
 
   it("the composed SOUL is the real system prompt (model obeys personal SOUL)", { timeout: 120_000 }, async () => {

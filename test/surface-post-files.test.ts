@@ -17,6 +17,10 @@ import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { createPostgresChannelPolicyStore } from "../src/surface-cache/channel-policy-store.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { testSurfaces } from "./support/single-process.ts";
+import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
+import { createSurfaceRegistry } from "../src/surfaces/registry.ts";
+import { createPartnerChatSurface } from "../src/surfaces/partner-chat/adapter.ts";
 
 function fakeSandbox(files: Record<string, Uint8Array>): Sandbox {
   return {
@@ -74,6 +78,7 @@ test("surface post rejects traversal before provisioning or staging any attachme
   const calls = { provision: 0, read: 0, put: 0, grant: 0 };
   const tools = createSurfaceToolDeps({
     deps: {
+      surfaces: testSurfaces(),
       deliveries: {},
       sandbox: {
         async readFileBytes() {
@@ -111,7 +116,7 @@ test("surface post rejects traversal before provisioning or staging any attachme
 test("surface standing orders preserve and reset the stored ambient reply policy", async () => {
   const channelPolicy = createPostgresChannelPolicyStore(testDatabaseUrl());
   const tools = createSurfaceToolDeps({
-    deps: { deliveries: {}, channelPolicy, auditLog: { record() {} } },
+    deps: { surfaces: testSurfaces(), deliveries: {}, channelPolicy, auditLog: { record() {} } },
     input: { surfaceTools: true },
     actor: { id: "U1" },
     conversation: { kind: "channel", channelRef: "C1" },
@@ -186,6 +191,7 @@ test("surface post returns the sent attachments' metadata (so surfaces can rende
   const enqueued: unknown[] = [];
   const tools = createSurfaceToolDeps({
     deps: {
+      surfaces: testSurfaces(),
       deliveries: {
         async enqueue(input: unknown) {
           enqueued.push(input);
@@ -384,6 +390,7 @@ test("surface edit rewrites a Slack message in place and refuses outside Slack i
     const queued: Array<{ destination: Record<string, unknown>; text: string }> = [];
     const tools = createSurfaceToolDeps({
       deps: {
+        surfaces: testSurfaces(),
         deliveries: {
           enqueue: async (d: { destination: Record<string, unknown>; text: string }) => {
             queued.push(d);
@@ -407,4 +414,27 @@ test("surface edit rewrites a Slack message in place and refuses outside Slack i
   const web = await edit({ type: "web", target: "web:U1:S1" });
   assert.equal(web.result.ok, false);
   assert.deepEqual(web.queued, []);
+});
+
+test("a text-only surface refuses reactions, deletes, file posts and attachments instead of queueing them", async () => {
+  const deliveries = createDeliveryStore();
+  const tools = createSurfaceToolDeps({
+    deps: {
+      surfaces: createSurfaceRegistry({
+        surfaces: [createPartnerChatSurface({ deliveries, surfaceCache: { readMessages: async () => [] } })],
+      }),
+      deliveries,
+    },
+    input: { surfaceTools: true },
+    defaultDestination: { type: "partner-chat", target: "partner-chat:7001:group:88:1002" },
+    strictReadOnly: false,
+    postProvenance: () => ({}),
+    postKeys: turnPostKeys("run-test"),
+    spine: { surfaceOutboundCount: 0, crossConversationPosts: 0 },
+  } as unknown as SurfaceToolsContext)!;
+  assert.equal((await tools.react({ ts: "1793649600.00000000000000001002", emoji: "eyes" })).ok, false);
+  assert.equal((await tools.delete({ ref: "1793649600.00000000000000001002" })).ok, false);
+  assert.equal((await tools.post("see attached", undefined, ["a.txt"])).ok, false);
+  assert.equal((await createAttachStaging({ textOnly: true } as never).attach(["a.txt"])).ok, false);
+  assert.deepEqual(await deliveries.pending("partner-chat"), []);
 });

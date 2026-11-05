@@ -40,9 +40,6 @@ import {
   TAIL_TURNS,
   webFetch,
   withBase,
-  type CoreSession,
-  type PendingApproval,
-  type TranscriptPage,
   loadChatPrefs,
   fetchSessionRow,
 } from "./core-bridge";
@@ -52,10 +49,10 @@ import { brandMark, brandName } from "./ui";
 import { desktopHistoryNav } from "./desktop-history";
 import { beginNavigation, cancelNavigation, endNavigation, navigationInFlight } from "./url-history";
 import { icon } from "./icons";
-import { PHONE_MAX_WIDTH, trackVisualViewport } from "./viewport";
+import { isPhone, markDesktopEmbed, onPhoneChange, trackVisualViewport } from "./viewport";
 import { markConnectorConnected } from "./chat";
 import { clearSkillsCache, resyncModelSelection } from "./composer";
-import { allConversations, ensureDeliveryStream, mainConversation, onExitCanvas } from "./conversations";
+import { ensureDeliveryStream, mainConversation, onExitCanvas } from "./conversations";
 import { clearAllDrafts, newChatDraftKey, saveDraft, storedDraft } from "./drafts";
 import { deepLinkPath, isPlainLeftClick, parseDeepLink, sessionLinkTarget, UI_BASE } from "./deep-link";
 import {
@@ -97,7 +94,8 @@ import { openWebhookById, renderWebhooksPage, resetActiveWebhook, routeWebhooksH
 import { renderFiles } from "./files";
 import { setScopedSession } from "./session-scope";
 import { openChatSearch } from "./search";
-import { closeBrowse, openBrowse } from "./browse";
+import { openSessionAtMessage, showLinkedSession } from "./open-message";
+import { closeBrowse, openBrowse, sidebarDestinations } from "./browse";
 import { attachTooltip, hideTooltip, tip } from "./tooltip";
 import { clearConnectorNotice, noteConnectorResult, renderConnectors, resetKeychainState } from "./connectors";
 import { openDeployById, renderDeploys } from "./deploys";
@@ -200,8 +198,7 @@ async function restoreChatsEntry(sessionId: string | null): Promise<void> {
 const appEl = document.getElementById("app");
 if (!appEl) throw new Error("missing #app");
 
-const narrowViewport = window.matchMedia(`(max-width: ${PHONE_MAX_WIDTH}px)`);
-let sidebarOpen = !narrowViewport.matches;
+let sidebarOpen = !isPhone();
 trackVisualViewport();
 
 const SIDEBAR_MIN_W = 200;
@@ -669,6 +666,7 @@ export function renderSidebarTop(): void {
           hideTooltip();
           openChatSearch();
         })}
+        ${sidebarDestinations().map((d) => navRow(d.view, d.glyph, d.label))}
         ${actionRow(ICON.browse, "Browse", () => {
           hideTooltip();
           openBrowse();
@@ -910,7 +908,7 @@ function toggleSidebar(): void {
 }
 
 export function closeSidebarOnNarrowView(): void {
-  if (!narrowViewport.matches || !sidebarOpen) return;
+  if (!isPhone() || !sidebarOpen) return;
   setSidebarOpen(false, false);
   requestAnimationFrame(() => appState.mainEl?.focus({ preventScroll: true }));
 }
@@ -921,7 +919,7 @@ let swipe: { x: number; y: number; fromEdge: boolean; onDrawer: boolean } | null
 appEl.addEventListener(
   "touchstart",
   (e) => {
-    if (!narrowViewport.matches || e.touches.length !== 1) return;
+    if (!isPhone() || e.touches.length !== 1) return;
     const t = e.touches[0]!;
     const target = e.target as Element | null;
     const onDrawer = Boolean(target?.closest(".sidebar, .sidebar-scrim"));
@@ -949,13 +947,13 @@ appEl.addEventListener(
 );
 appEl.addEventListener("touchcancel", () => (swipe = null), { passive: true });
 
-narrowViewport.addEventListener("change", (event) => {
-  if (event.matches && sidebarOpen) setSidebarOpen(false, false);
+onPhoneChange((phone) => {
+  if (phone && sidebarOpen) setSidebarOpen(false, false);
   else syncSidebarAccessibility(false);
 });
 
 function setSidebarOpen(open: boolean, moveFocus = true): void {
-  if (open && narrowViewport.matches) document.dispatchEvent(new CustomEvent("qm:close-overlays"));
+  if (open && isPhone()) document.dispatchEvent(new CustomEvent("qm:close-overlays"));
   sidebarOpen = open;
   (appEl as HTMLElement).querySelector(".layout")?.classList.toggle("sidebar-closed", !sidebarOpen);
   (appEl as HTMLElement).querySelector(".sidebar")?.setAttribute("data-tip-placement", open ? "top" : "right");
@@ -969,14 +967,14 @@ function syncSidebarAccessibility(moveFocus: boolean): void {
   const sidebar = root.querySelector<HTMLElement>(".sidebar");
   const main = root.querySelector<HTMLElement>(".main");
   const scrim = root.querySelector<HTMLButtonElement>(".sidebar-scrim");
-  const modal = narrowViewport.matches && sidebarOpen;
+  const modal = isPhone() && sidebarOpen;
   if (!sidebar || !main || !scrim) return;
   main.inert = modal;
   sidebar.setAttribute("role", modal ? "dialog" : "navigation");
   if (modal) sidebar.setAttribute("aria-modal", "true");
   else sidebar.removeAttribute("aria-modal");
   scrim.hidden = !modal;
-  if (!moveFocus || !narrowViewport.matches) return;
+  if (!moveFocus || !isPhone()) return;
 
   const next = sidebarOpen
     ? sidebar.querySelector<HTMLElement>(".sidebar-collapse-toggle")
@@ -985,7 +983,7 @@ function syncSidebarAccessibility(moveFocus: boolean): void {
 }
 
 function onSidebarKeydown(event: KeyboardEvent): void {
-  if (!narrowViewport.matches || !sidebarOpen) return;
+  if (!isPhone() || !sidebarOpen) return;
   if (event.key === "Escape" && event.defaultPrevented) return;
   if (event.key === "Escape" && closeOpenSessionMenu()) {
     event.preventDefault();
@@ -1070,22 +1068,6 @@ export async function bootSafely(): Promise<void> {
   }
 }
 
-async function showLinkedSession(
-  linked: CoreSession,
-  transcript?: Promise<TranscriptPage | null>,
-  seq: number | null = null,
-  approvals?: Promise<{ approvals: PendingApproval[] } | null>,
-): Promise<void> {
-  if (!sessionsState.list.some((s) => s.id === linked.id)) sessionsState.list = [linked, ...sessionsState.list];
-  revealSessionSurface(linked);
-  await openSession(linked, transcript, approvals, "replace");
-  if (seq !== null)
-    requestAnimationFrame(() => {
-      for (const conversation of allConversations())
-        if (conversation.state.sessionId === linked.id) conversation.revealEntry(seq);
-    });
-}
-
 // Session links nobody else handled (chat messages, markdown) switch the view instead of opening a new
 // tab or desktop window. Modified clicks fall through, so cmd/ctrl-click still opens a new tab.
 document.addEventListener("click", (e) => {
@@ -1095,23 +1077,9 @@ document.addEventListener("click", (e) => {
   const target = sessionLinkTarget(anchor.href, location.origin, UI_BASE);
   if (!target) return;
   e.preventDefault();
-  const open = allConversations().find(
-    (conversation) => conversation.state.sessionId === target.session && conversation.state.host?.isConnected,
-  );
-  if (open) {
-    if (target.seq !== null) open.revealEntry(target.seq);
-    return;
-  }
-  const transcript = loadMessageTranscript(
-    (window) => fetchTranscript(target.session, window),
-    target.seq,
-    TAIL_TURNS,
-  ).catch(() => null);
-  void (async () => {
-    const linked = sessionsState.list.find((s) => s.id === target.session) ?? (await transcript)?.session;
-    if (linked) await showLinkedSession(linked, transcript, target.seq);
-    else location.assign(anchor.href);
-  })();
+  void openSessionAtMessage(target.session, target.seq).then((found) => {
+    if (!found) location.assign(anchor.href);
+  });
 });
 
 export async function boot(): Promise<void> {
@@ -1124,7 +1092,9 @@ export async function boot(): Promise<void> {
     session: wantedSession,
     item: wantedItem,
   } = parseDeepLink(UI_BASE, location.pathname, location.search);
-  document.body.classList.toggle("app-edit-embed", wanted === "app-edit" && params.get("embed") === "1");
+  const appEditEmbed = wanted === "app-edit" && params.get("embed") === "1";
+  document.body.classList.toggle("app-edit-embed", appEditEmbed);
+  markDesktopEmbed(appEditEmbed);
   const prefillRoute = wanted === null || wanted === "new";
   const prefill = prefillRoute && !wantedSession ? (params.get("q")?.slice(0, 20_000) ?? null) : null;
   const chatsLink = wanted === null || wanted === "chats";
@@ -1136,7 +1106,7 @@ export async function boot(): Promise<void> {
       transcriptUnavailable = !(error instanceof ApiError && (error.status === 404 || error.status === 403));
       return null;
     });
-  const entriesPrefetch = linkedId ? loadLinkedTranscript(linkedId) : null;
+  const transcriptPrefetch = linkedId ? loadLinkedTranscript(linkedId) : null;
   const approvalsPrefetch = linkedId ? fetchSessionApprovals(linkedId) : null;
   const runtimeConfigFetch = fetchRuntimeConfig();
   const remoteSplitFetch = fetchRemoteSplit();
@@ -1206,7 +1176,7 @@ export async function boot(): Promise<void> {
   if (restoreLast && bareEntry && !restoredCanvasNeedsSessionList()) mountRestoredCanvas(true);
 
   if (wantedSession && !viewIntent && wanted !== "app-edit") {
-    const transcript = entriesPrefetch ?? loadLinkedTranscript(wantedSession);
+    const transcript = transcriptPrefetch ?? loadLinkedTranscript(wantedSession);
     const linked = (await transcript)?.session;
     if (linked) {
       exitSplitIfActive();

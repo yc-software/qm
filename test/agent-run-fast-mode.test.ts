@@ -1,10 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { applyTurnEffort, createAgent } from "../src/agent/agent-run.ts";
-import type { AgentOptions } from "../src/agent/agent-run.ts";
+import { createModelRoutes, type ModelRouteOptions } from "../src/model/model-route.ts";
 import type { TurnLlmRequestRecord, AgentTurnInput } from "../src/agent/agent.ts";
 import { storedItem } from "../src/sessions/items.ts";
-import type { SessionEntry } from "../src/types.ts";
 import type { Api, Model, Usage } from "@earendil-works/pi-ai";
 import { defaultInteractiveThinkingLevel, getRequiredModel, modelSupportsFastMode } from "../src/model/pi-models.ts";
 import {
@@ -332,30 +331,32 @@ async function runTurn(
   fastMode: boolean,
   respond: (payload: Record<string, unknown>, index: number) => Response,
   gateway = false,
-  extra: Partial<AgentOptions> = {},
+  extra: ModelRouteOptions = {},
 ): Promise<{ rows: TurnLlmRequestRecord[]; payloads: Array<Record<string, unknown>>; betas: Array<string | null> }> {
   const rows: TurnLlmRequestRecord[] = [];
   const payloads: Array<Record<string, unknown>> = [];
   const betas: Array<string | null> = [];
   const agent = createAgent({
-    apiKey: "sk-anthropic-test",
-    openaiApiKey: "sk-openai-test",
-    ...(gateway
-      ? {
-          modelGateway: {
-            url: "https://gateway.example/v1",
-            apiKey: "sk-gateway-test",
-            apiKeyHeader: "x-gateway-key",
-            models: {
-              "gpt-6-astra": "openai/gpt-6-astra",
-              "gpt-6-astra-ultrafast": "openai/gpt-6-astra",
-              "gpt-6.1-sol-ultrafast": "openai/gpt-6.1-sol",
-              "claude-sonnet-5": "anthropic/claude-sonnet-5",
+    routes: createModelRoutes({
+      apiKey: "sk-anthropic-test",
+      openaiApiKey: "sk-openai-test",
+      ...(gateway
+        ? {
+            modelGateway: {
+              url: "https://gateway.example/v1",
+              apiKey: "sk-gateway-test",
+              apiKeyHeader: "x-gateway-key",
+              models: {
+                "gpt-6-astra": "openai/gpt-6-astra",
+                "gpt-6-astra-ultrafast": "openai/gpt-6-astra",
+                "gpt-6.1-sol-ultrafast": "openai/gpt-6.1-sol",
+                "claude-sonnet-5": "anthropic/claude-sonnet-5",
+              },
             },
-          },
-        }
-      : {}),
-    ...extra,
+          }
+        : {}),
+      ...extra,
+    }),
   });
   const realFetch = globalThis.fetch;
   globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
@@ -448,10 +449,16 @@ test("gateway-routed Claude requests carry neither the binding beta nor block_bi
 });
 
 test("a refusal fallback prices each step on its actual model and tier", async () => {
-  const { rows, payloads } = await runTurn("refusal-fallback-pricing", "claude-sonnet-5", true, (_payload, index) =>
-    index === 0
-      ? anthropicReply("", ANTHROPIC_WIRE_USAGE, "refusal")
-      : anthropicReply("recovered", ANTHROPIC_WIRE_USAGE),
+  const { rows, payloads } = await runTurn(
+    "refusal-fallback-pricing",
+    "claude-sonnet-5",
+    true,
+    (_payload, index) =>
+      index === 0
+        ? anthropicReply("", ANTHROPIC_WIRE_USAGE, "refusal")
+        : anthropicReply("recovered", ANTHROPIC_WIRE_USAGE),
+    false,
+    { resolveFallbackRuntime: () => ({ modelId: "claude-opus-5" }) },
   );
   assert.equal(payloads.length, 2);
   assert.equal(payloads[0]?.model, "claude-sonnet-5");
@@ -547,10 +554,12 @@ test("an unavailable gateway model fails the turn without fallback (no structure
 
 test("compaction retries a refused summary on the configured fallback model", async () => {
   const agent = createAgent({
-    apiKey: "sk-anthropic-test",
-    openaiApiKey: "sk-openai-test",
-    modelId: "claude-sonnet-5",
-    resolveFallbackRuntime: () => ({ modelId: "gpt-6-sol" }),
+    routes: createModelRoutes({
+      apiKey: "sk-anthropic-test",
+      openaiApiKey: "sk-openai-test",
+      modelId: "claude-sonnet-5",
+      resolveFallbackRuntime: () => ({ modelId: "gpt-6-sol" }),
+    }),
   });
   const models: unknown[] = [];
   const realFetch = globalThis.fetch;
@@ -565,9 +574,9 @@ test("compaction retries a refused summary on the configured fallback model", as
     const text = await agent.compactHistory!({
       session: { id: "compact-fallback" } as AgentTurnInput["session"],
       history: [
-        { seq: 1, kind: "user", payload: { text: "hello" }, createdAt: 1 },
-        { seq: 2, kind: "assistant", payload: { text: "hi" }, createdAt: 2 },
-      ] as unknown as SessionEntry[],
+        storedItem({ kind: "UserMessage", text: "hello" }, { sessionId: "compact-fallback", seq: 1, createdAt: 1 }),
+        storedItem({ kind: "AgentMessage", text: "hi" }, { sessionId: "compact-fallback", seq: 2, createdAt: 2 }),
+      ],
       recordModelCall: () => {},
     });
     assert.match(text, /summary of the work/);

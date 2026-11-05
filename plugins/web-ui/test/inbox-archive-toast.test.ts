@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { JSDOM, VirtualConsole } from "jsdom";
-import { createServer } from "vite";
+import { testViteServer } from "./vite-server.ts";
 
 test("dismiss toast undoes the correct item and failed dismissals do not offer undo", async () => {
   const domErrors: Error[] = [];
@@ -24,7 +24,7 @@ test("dismiss toast undoes the correct item and failed dismissals do not offer u
     value: dom.window.getComputedStyle.bind(dom.window),
   });
   const originalFetch = globalThis.fetch;
-  const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  const vite = await testViteServer();
   try {
     await vite.ssrLoadModule("/src/shell.ts");
     const { setItemStatus, toInboxItem, inboxState, resetInboxState } = await vite.ssrLoadModule("/src/inbox.ts");

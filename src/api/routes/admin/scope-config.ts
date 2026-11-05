@@ -4,7 +4,6 @@ import { computeRetention } from "../../../admin/retention.ts";
 import {
   FAST_MODE_MODEL_IDS,
   modelCatalogFor,
-  selectableBaseModels,
   embeddingModelCatalog,
   defaultModel,
   modelServiceable,
@@ -255,7 +254,6 @@ const SETTINGS_RESOURCES = {
     "interactiveFastMode",
     "individualModelAuth",
     "memoryEmbeddingModel",
-    "browseModel",
     "browseMaxSteps",
   ],
   credentials: [],
@@ -268,11 +266,10 @@ type SettingsView = keyof typeof SETTINGS_RESOURCES;
 async function scopeServiceCredentials(deps: ApiCtx["deps"], targetScope: string) {
   const [credentials, grants] = await Promise.all([
     deps.serviceCreds?.listServiceCredentials(targetScope) ?? [],
-    deps.acl?.list() ?? [],
+    deps.acl?.find({ ownerScopeId: targetScope, kind: "service-cred" }) ?? [],
   ]);
   const grantees = new Map<string, string[]>();
   for (const grant of grants) {
-    if (grant.ownerScopeId !== targetScope) continue;
     const scopes = grantees.get(grant.ref) ?? [];
     scopes.push(grant.granteeScopeId);
     grantees.set(grant.ref, scopes);
@@ -373,7 +370,6 @@ async function scopeModelOptions(deps: ApiCtx["deps"], values: Record<string, un
     modelCatalog: modelCatalogFor(baseModelOptions.map((model) => model.id)),
     fastModeModelIds: FAST_MODE_MODEL_IDS,
     memoryEmbeddingOptions: embeddingModelCatalog(),
-    browseModelOptions: selectableBaseModels().filter((m) => modelServiceable(m.id, managedKeys)),
   };
 }
 

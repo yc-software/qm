@@ -215,7 +215,7 @@ test("doctor reports an SMTP relay reachable when it answers and unreachable whe
   const smtp = await fakeSmtp("right");
   const relay = (port: number): QmConfig => ({
     ...CONFIG,
-    env: { auth: { AUTH_EMAIL_TRANSPORT: "smtp", SMTP_PORT: String(port) } },
+    env: { auth: { AUTH_EMAIL_TRANSPORT: "smtp", SMTP_PORT: String(port), AUTH_ALLOWED_EMAIL_DOMAIN: "example.com" } },
   });
   const secrets = new Map([
     ["SMTP_HOST", "127.0.0.1"],

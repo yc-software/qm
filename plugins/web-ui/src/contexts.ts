@@ -23,6 +23,7 @@ import {
   type CoreProject,
   type CoreSession,
   fileContentUrl,
+  type ProjectIcon,
 } from "./core-bridge";
 import { UI_BASE } from "./deep-link";
 import { errMessage, swallowAs } from "../../chassis/src/errors";
@@ -31,7 +32,7 @@ import { slackMark } from "./slack-mark";
 import { icon } from "./icons";
 import { appState, replacePanePreservingFocus, switchView, syncUrlFromState } from "./shell";
 import { startNewChat } from "./sessions";
-import { groupDmTitle, loadScopeSessions, openSession, refreshSessions, sessionsState } from "./sessions";
+import { groupDmTitle, loadScopeSessions, openSession, refreshSessions, renderList, sessionsState } from "./sessions";
 import { activityOf, sidebarSessions, surfaceOf } from "./session-list";
 import type { WebhookView } from "./webhooks";
 import type { CronView } from "./crons";
@@ -41,6 +42,8 @@ import { ambientPolicySection, loadAmbientPolicy, resetAmbientPolicy } from "./a
 import { contextModelSection, loadContextModel, resetContextModel } from "./context-model";
 import { channelHeaderSection, loadChannelHeader, resetChannelHeader } from "./channel-header";
 import { tip } from "./tooltip";
+import { groupAvatarStackTpl } from "./group-avatars";
+import { onCustomEmojiLoaded, openProjectIconPicker, projectIconTpl } from "./project-icon";
 
 interface ScopeFile {
   id: string;
@@ -407,10 +410,11 @@ function contextRow(c: CoreContext): TemplateResult {
     .filter(Boolean)
     .join(" · ");
   return html`
-    <button class="context-row" type="button" ${tip(sub)} @click=${() => selectContext(c.scopeId)}>
-      <span class="context-glyph">${icon(glyph, 15)}</span>
+    <button class="context-row" type="button" @click=${() => selectContext(c.scopeId)}>
+      <span class="context-glyph">${projectIconTpl(c.project?.icon, 17) ?? icon(glyph, 15)}</span>
       <span class="context-row-title" dir="auto">${title}</span>
       ${c.isPrivate ? html`<span class="context-lock" ${tip("Private channel")}>${icon(Lock, 12)}</span>` : nothing}
+      ${c.kind === "group" && !c.project ? groupAvatarStackTpl(c.groupMembers ?? [], "context-row-avatars") : nothing}
       <span class="context-row-meta">${meta}</span>
     </button>
   `;
@@ -426,7 +430,20 @@ function detailTpl(c: CoreContext): TemplateResult {
         ${icon(ArrowLeft, 15)}<span>Projects</span>
       </button>
       <div class="context-detail-head">
-        <span class="context-glyph large">${icon(glyph, 22)}</span>
+        ${
+          c.project
+            ? html`<button
+                class="context-glyph large project-icon-trigger"
+                type="button"
+                aria-label=${c.project.icon ? "Change icon" : "Add icon"}
+                aria-haspopup="dialog"
+                ${tip(c.project.icon ? "Change icon" : "Add icon")}
+                @click=${(event: Event) => pickDetailIcon(event, c.scopeId)}
+              >
+                ${projectIconTpl(c.project.icon, 26) ?? icon(glyph, 22)}
+              </button>`
+            : html`<span class="context-glyph large">${icon(glyph, 22)}</span>`
+        }
         <div class="context-detail-titles">
           <h1 class="pane-title">
             ${title}
@@ -1106,6 +1123,44 @@ export async function renameProject(project: CoreProject, name: string): Promise
     return true;
   } catch {
     return false;
+  }
+}
+
+function pickDetailIcon(event: Event, scopeId: string): void {
+  const anchor = event.currentTarget as HTMLElement;
+  const project = contextsState.list.find((context) => context.scopeId === scopeId)?.project;
+  if (!project) return;
+  openProjectIconPicker({
+    anchor,
+    current: project.icon,
+    onPick: async (value) => {
+      const latest = contextsState.list.find((context) => context.scopeId === scopeId)?.project;
+      const error = latest ? await setProjectIcon(latest, value) : "This project is no longer available.";
+      renderList();
+      return error;
+    },
+  });
+}
+
+onCustomEmojiLoaded(() => {
+  if (appState.currentView === "contexts") drawContexts();
+});
+
+/** Saves a project's icon; resolves to an error message, or null on success. */
+export async function setProjectIcon(project: CoreProject, value: ProjectIcon | null): Promise<string | null> {
+  try {
+    const updated = projectFromResponse(
+      await api(`/api/projects/${encodeURIComponent(project.id)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ icon: value }),
+      }),
+    );
+    if (!updated) return "Couldn't change the project icon: unexpected response from the server.";
+    upsertProject(updated);
+    if (appState.currentView === "contexts") drawContexts();
+    return null;
+  } catch (e) {
+    return errMessage(e, "Couldn't change the project icon.");
   }
 }
 

@@ -1,8 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { releaseFiles } from "./release-fixture.ts";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
@@ -16,17 +14,13 @@ process.env.CORE_API_URL = `http://localhost:${(core.address() as AddressInfo).p
 process.env.CORE_SIGNING_SECRET = "web-ui-favicon-test";
 process.env.WEB_UI_PRINCIPALS = "alice";
 
-const distDir = join(dirname(fileURLToPath(import.meta.url)), "..", "dist-web");
-const distIndex = join(distDir, "index.html");
-if (!existsSync(distIndex)) {
-  mkdirSync(distDir, { recursive: true });
-  writeFileSync(
-    distIndex,
-    '<!doctype html><html><head><meta name="brand-self-label" content="Agent" /></head><body></body></html>',
-  );
-}
-
-const { handler } = await import("../server/index.ts");
+const { handler, serveReleasesFrom } = await import("../server/index.ts");
+serveReleasesFrom(
+  releaseFiles({
+    "index.html":
+      '<!doctype html><html><head><meta name="brand-self-label" content="Agent" /></head><body></body></html>',
+  }),
+);
 const surface = createServer((req, res) => void handler(req, res));
 await new Promise<void>((r) => surface.listen(0, r));
 const base = `http://localhost:${(surface.address() as AddressInfo).port}`;

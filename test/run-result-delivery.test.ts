@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
+import { slackSurfaceOrigin } from "../src/surfaces/slack/adapter.ts";
 import {
   runResultDelivery,
   wireRunResultDeliveries,
@@ -78,19 +79,17 @@ test("runResultDelivery carries the reply's attachments so recovery can replay t
 test("runResultDelivery retains the Slack policy used for private admission", () => {
   const request = {
     ...turn("hi", "DPRIVATE"),
-    slackSource: {
+    surfaceOrigin: slackSurfaceOrigin({
       accountId: "partner",
       teamId: "TPARTNER",
       userId: "U1",
-      externalPolicyNamespace: "external-slack:TPARTNER:policy",
-    },
+      policyNamespace: "external-slack:TPARTNER:policy",
+    }),
   };
   assert.deepEqual(runResultDelivery(run({ request }))?.destination, {
     type: "slack",
     target: "DPRIVATE",
-    slackAccountId: "partner",
-    slackTeamId: "TPARTNER",
-    slackPolicyNamespace: request.slackSource.externalPolicyNamespace,
+    account: { id: "partner", workspace: "TPARTNER", policyNamespace: "external-slack:TPARTNER:policy" },
   });
 });
 
@@ -209,12 +208,6 @@ test("runResultDelivery keeps unprompted failures quiet, like the live path", ()
   assert.equal(runResultDelivery(ok)?.text, "the reply", "an unprompted reply the agent chose to send still recovers");
 });
 
-test("runResultDelivery recognizes legacy queued ambient turns", () => {
-  const failed = run({ status: "failed", result: { status: "failed", reason: "boom" } });
-  failed.request = { ...failed.request, origin: undefined, unprompted: true } as unknown as OrchestratorInput;
-  assert.equal(runResultDelivery(failed), null);
-});
-
 test("runResultDelivery skips terminal results that cannot be safely replayed", () => {
   assert.equal(runResultDelivery(run({ request: turn("hi") })), null);
   assert.equal(runResultDelivery(run({ result: { status: "refused", reason: "not allowed" } })), null);
@@ -234,7 +227,7 @@ test("wired stores: a completed turn lands in the outbox unless the live path ac
   wireRunResultDeliveries(runs, deliveries);
 
   const crashed = (await runs.enqueue({ sessionId: "sA", request: turn("a", "C9:171.001") })).run;
-  const c1 = await runs.claim("w1", 5_000);
+  const c1 = (await runs.claim("w1", 5_000))[0] ?? null;
   await runs.setDeliveryState(crashed.id, null, { editRef: "171.002" });
   await runs.complete(crashed.id, c1?.leaseToken ?? "", { status: "ok", reply: "recovered reply" });
   const pending = await deliveries.pending("slack");
@@ -244,7 +237,7 @@ test("wired stores: a completed turn lands in the outbox unless the live path ac
   assert.equal(pending[0]!.idempotencyKey, `run:${crashed.id}`);
 
   const live = (await runs.enqueue({ sessionId: "sB", request: turn("b", "C9") })).run;
-  const c2 = await runs.claim("w2", 5_000);
+  const c2 = (await runs.claim("w2", 5_000))[0] ?? null;
   await deliveries.ackByKey(`run:${live.id}`, 99);
   await runs.complete(live.id, c2?.leaseToken ?? "", { status: "ok", reply: "delivered live" });
   await new Promise((r) => setTimeout(r, 0));
@@ -260,7 +253,7 @@ test("sweep enqueues the recovery delivery for a terminal run whose outbox row n
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const deliveries = createDeliveryStore();
   const bypassed = (await runs.enqueue({ sessionId: "sA", request: turn("a", "C9:171.001") })).run;
-  const claimed = await runs.claim("w1", 5_000);
+  const claimed = (await runs.claim("w1", 5_000))[0] ?? null;
   await runs.complete(bypassed.id, claimed?.leaseToken ?? "", { status: "ok", reply: "lost on the way out" });
   const recovery = wireRunResultDeliveries(runs, deliveries);
   assert.deepEqual(await deliveries.pending("slack"), [], "wired after the fact: nothing enqueued");
@@ -280,7 +273,7 @@ test("sweep leaves runs alone when their delivery already exists, was acked live
   const recovery = wireRunResultDeliveries(runs, deliveries);
   const finish = async (threadRef: string, reply: string): Promise<Run> => {
     const run = (await runs.enqueue({ sessionId: threadRef, request: turn(reply, "C9:171.001") })).run;
-    const claimed = await runs.claimForSession(threadRef, "w1", 5_000);
+    const claimed = await runs.claimById(run.id, "w1", 5_000);
     await runs.complete(run.id, claimed?.leaseToken ?? "", { status: "ok", reply });
     return run;
   };
@@ -288,7 +281,7 @@ test("sweep leaves runs alone when their delivery already exists, was acked live
   const live = await finish("sB", "delivered live");
   await deliveries.ackByKey(`run:${live.id}`, Date.now());
   const silent = (await runs.enqueue({ sessionId: "sC", request: turn("c", "C9:171.001") })).run;
-  await runs.complete(silent.id, (await runs.claimForSession("sC", "w1", 5_000))?.leaseToken ?? "", {
+  await runs.complete(silent.id, (await runs.claimById(silent.id, "w1", 5_000))?.leaseToken ?? "", {
     status: "silent",
   });
   await new Promise((r) => setTimeout(r, 0));
@@ -318,7 +311,7 @@ test("sweep pages through terminal runs by (finishedAt, id) without skipping tie
   const finished = new Set<string>();
   for (let i = 0; i < 205; i++) {
     const run = (await runs.enqueue({ sessionId: `s${i}`, request: turn(`r${i}`, "C9:171.001") })).run;
-    const claimed = await runs.claimForSession(`s${i}`, "w1", 5_000);
+    const claimed = await runs.claimById(run.id, "w1", 5_000);
     await runs.complete(run.id, claimed?.leaseToken ?? "", { status: "ok", reply: `r${i}` });
     finished.add(`run:${run.id}`);
   }
@@ -336,7 +329,7 @@ test("wired stores: a parked run lands a durable, non-ackable failure note", asy
   wireRunResultDeliveries(runs, deliveries);
 
   const parked = (await runs.enqueue({ sessionId: "sP", request: turn("p", "C9:171.001"), maxAttempts: 1 })).run;
-  const claimed = await runs.claim("w1", 5_000);
+  const claimed = (await runs.claim("w1", 5_000))[0] ?? null;
   await runs.fail(parked.id, claimed?.leaseToken ?? "", "boom", { retry: true });
   await new Promise((r) => setTimeout(r, 0));
 
@@ -434,6 +427,16 @@ test("a web-drain-recorded failure delivery suppresses the onTerminal entry by i
   assert.equal((await sessions.getItems(session.id)).length, 1);
 });
 
+test("a withheld-steer note in the transcript does not suppress the run's failure entry", async () => {
+  const { recordRunFailureEntry } = await import("../src/delivery/run-result-delivery.ts");
+  const { steerWithheldItem } = await import("../src/core/turn-error.ts");
+  const { sessions, session } = await failureSessions();
+  await sessions.append({ sessionId: session.id }, steerWithheldItem("U2"));
+
+  assert.equal(await recordRunFailureEntry(sessions, testRuns(), failedRun()), true);
+  assert.equal((await sessions.getItems(session.id)).length, 2);
+});
+
 test("a done run records nothing", async () => {
   const { recordRunFailureEntry } = await import("../src/delivery/run-result-delivery.ts");
   const { sessions, session } = await failureSessions();
@@ -448,7 +451,7 @@ test("wired stores: a parked Slack run gets both the durable session entry and t
   wireRunResultDeliveries(runs, deliveries, undefined, sessions);
 
   const parked = (await runs.enqueue({ sessionId: "slack:D1", request: turn("p", "D1:171.001"), maxAttempts: 1 })).run;
-  const claimed = await runs.claim("w1", 5_000);
+  const claimed = (await runs.claim("w1", 5_000))[0] ?? null;
   await runs.fail(parked.id, claimed?.leaseToken ?? "", "lease expired (reaped)", { retry: true });
 
   for (let i = 0; i < 50 && (await sessions.getItems(session.id)).length === 0; i++) {
@@ -526,3 +529,131 @@ for (const surface of ["slack", "web"] as const) {
     });
   }
 }
+
+test("webhook run delivery correlates with the original caller request", () => {
+  const request = {
+    ...turn("hi", "web:alice:conversation"),
+    surface: "web",
+    origin: { kind: "human" as const },
+    idempotencyKey: "external-request-123",
+    deliveryWebhook: { binding: "binding", url: "https://receiver.example/qm" },
+  };
+  const delivery = runResultDelivery(run({ request, dedupKey: "external-request-123" }));
+  assert.equal(delivery?.destination.type, "webhook");
+  assert.deepEqual(delivery?.destination.webhook, { binding: "binding", url: "https://receiver.example/qm" });
+  assert.equal(delivery?.provenance.sourceRequestId, "external-request-123");
+});
+
+test("bound webhook results identify every terminal outcome for native receiver handling", () => {
+  const results: TurnResult[] = [
+    {
+      status: "pending_approval",
+      pendingApprovals: [{ requestId: "approval-1", command: "send email", reason: "permission required" }],
+    },
+    { status: "react", reactions: ["thumbsup"] },
+    { status: "refused", reason: "not permitted" },
+    { status: "failed", reason: "connection failed" },
+  ];
+  for (const result of results) {
+    const request = {
+      ...turn("hi", "web:alice:conversation"),
+      surface: "web",
+      deliveryWebhook: { binding: "binding", url: "https://receiver.example/qm" },
+    };
+    const delivery = runResultDelivery(run({ request, result }), () => "https://portal.example.com/admin");
+    assert.equal(delivery?.provenance.sourceRunId, "r-1");
+    assert.equal(delivery?.text, "");
+    assert.equal(delivery?.destination.type, "webhook");
+  }
+  for (const result of [{ status: "silent" }, { status: "ok", reply: "" }] as TurnResult[]) {
+    const bound = {
+      ...turn("hi", "web:alice:conversation"),
+      surface: "web",
+      deliveryWebhook: { binding: "binding", url: "https://receiver.example/qm" },
+    };
+    assert.equal(
+      runResultDelivery(run({ request: bound, result })),
+      null,
+      "a background run with nothing to show sends nothing",
+    );
+    const waiting = { ...bound, origin: { kind: "human" as const }, idempotencyKey: "external-request-123" };
+    const closing = runResultDelivery(run({ request: waiting, result, dedupKey: "external-request-123" }));
+    assert.equal(
+      closing?.provenance.sourceRequestId,
+      "external-request-123",
+      "a waiting caller still gets its terminal delivery",
+    );
+    assert.equal(closing?.text, "");
+  }
+  const failed = runResultDelivery(
+    run({
+      status: "failed",
+      request: {
+        ...turn("hi", "web:alice:conversation"),
+        surface: "web",
+        deliveryWebhook: { binding: "binding", url: "https://receiver.example/qm" },
+      },
+      result: { status: "failed", reason: "connection failed", sessionId: "s-1" },
+    }),
+    () => "https://portal.example.com/admin",
+  );
+  assert.match(failed?.text ?? "", /couldn't finish that turn.*portal\.example\.com/);
+  assert.equal(failed?.provenance.sourceRunId, "r-1");
+});
+
+test("recovery replays an authorized scheduled webhook result after its caller exits", async () => {
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const deliveries = createDeliveryStore();
+  const target = "web:alice:conversation";
+  const request: OrchestratorInput = {
+    ...turn("scheduled update", target),
+    surface: "cron",
+    origin: {
+      kind: "automation",
+      destination: { type: "webhook", target, webhook: { binding: "binding", url: "https://receiver.example/qm" } },
+    },
+  };
+  const submitted = (await runs.enqueue({ sessionId: "scheduled", request })).run;
+  const claim = (await runs.claim("worker", 5_000))[0];
+  await runs.complete(submitted.id, claim!.leaseToken!, { status: "ok", reply: "Recovered update" });
+  assert.deepEqual(await deliveries.pending("webhook"), []);
+  const recovery = wireRunResultDeliveries(runs, deliveries);
+  assert.equal(await recovery.sweep(Date.now() + 61_000), 1);
+  const delivered = (await deliveries.pending("webhook"))[0]!;
+  assert.equal(delivered.idempotencyKey, `run:${submitted.id}`);
+  assert.equal(delivered.provenance?.sourceRunId, submitted.id);
+  assert.equal(delivered.provenance?.sourceRequestId, undefined);
+  assert.equal(await recovery.sweep(Date.now() + 61_000), 0);
+  const { deliveryTarget: _, ...withoutAuthorization } = request;
+  assert.equal(runResultDelivery(run({ request: withoutAuthorization })), null);
+});
+
+test("a scheduled approval continuation correlates with the receiver's action request", () => {
+  const request = {
+    ...turn("scheduled update"),
+    surface: "cron",
+    origin: {
+      kind: "automation" as const,
+      destination: {
+        type: "webhook" as const,
+        target: "web:alice:conversation",
+        webhook: { binding: "binding", url: "https://receiver.example/qm" },
+      },
+    },
+    idempotencyKey: "receiver-approval-1",
+    approval: { requestId: "approval-1", approved: true },
+  };
+  const delivery = runResultDelivery(run({ request, dedupKey: "receiver-approval-1:approval:approval-1:true" }));
+  assert.equal(delivery?.provenance.sourceRequestId, "receiver-approval-1");
+  assert.equal(delivery?.provenance.sourceRunId, "r-1");
+  assert.equal(delivery?.destination.target, "web:alice:conversation");
+  assert.deepEqual(delivery?.destination.webhook, { binding: "binding", url: "https://receiver.example/qm" });
+});
+
+test("runResultDelivery notes a reply the reply check retracted and rewrote", () => {
+  const d = runResultDelivery(
+    run({ result: { status: "ok", reply: "the reply", retracted: ["em dash", "too long", "em dash"] } }),
+  );
+  assert.equal(d?.destination.editNote, "Edited after a reply check: em dash, too long");
+  assert.equal(runResultDelivery(run({}))?.destination.editNote, undefined);
+});

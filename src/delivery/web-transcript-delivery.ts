@@ -1,8 +1,9 @@
 import type { Delivery, ScopeId } from "../types.ts";
 import type { DeliveryStore } from "./delivery-store.ts";
-import { type NewEntry, type SessionStore } from "../sessions/session-store.ts";
+import type { SessionStore } from "../sessions/session-store.ts";
 import { hasRunningRun, type RunStore } from "../runs/run-store.ts";
-import { isAgentReply, isUserItem, type Item, itemFromEntry } from "../sessions/items.ts";
+import { isAgentReply, isUserItem, type Item, type NewItem } from "../sessions/items.ts";
+import { turnFailureItem } from "../core/turn-error.ts";
 import { reportFailure, swallow } from "../util/errors.ts";
 
 const DEDUPE_SCAN_LIMIT = 200;
@@ -13,7 +14,7 @@ type WebTranscriptSessions = Pick<SessionStore, "appendMany" | "hasDeliveryEntry
 
 export function turnRecordedFailure(tail: readonly Item[], note: { notBefore: number; runId?: string }): boolean {
   return tail.some((item) => {
-    if (item.kind !== "Error") return false;
+    if (item.kind !== "Error" || item.errorCode !== "turn_failure") return false;
     if (item.turnId !== null) return item.turnId === note.runId;
     return item.createdAt >= note.notBefore;
   });
@@ -22,6 +23,11 @@ export function turnRecordedFailure(tail: readonly Item[], note: { notBefore: nu
 type Disposition = "deliver" | "record" | "settle";
 
 function classify(d: Delivery): Disposition {
+  if (d.destination.type === "webhook") {
+    const recorded =
+      d.provenance?.sourceThreadRef === d.destination.target && d.provenance.sourceAssistantEntrySeq !== undefined;
+    return d.text.trim() && !recorded ? "record" : "deliver";
+  }
   if (d.destination.type !== "web") return "deliver";
   if (d.destination.webTranscript && d.text.trim()) return "record";
   if (!d.provenance) return "deliver";
@@ -29,6 +35,8 @@ function classify(d: Delivery): Disposition {
   if (d.provenance.sourceAssistantEntrySeq === undefined || d.attachments?.length) return "deliver";
   return "settle";
 }
+
+const transcribed = (type: string): boolean => type === "web" || type === "webhook";
 
 export function withWebTranscriptDeliveries(
   store: DeliveryStore,
@@ -62,27 +70,20 @@ export function withWebTranscriptDeliveries(
       return true;
     const ownReply = d.provenance?.sourceThreadRef === d.destination.target;
     const via = d.provenance?.trigger && !ownReply ? d.provenance.trigger : undefined;
-    let entry: Pick<NewEntry, "type" | "payload">;
+    let item: NewItem;
     if (reply) {
-      entry = {
-        type: "user",
-        payload: {
-          text: d.text,
-          name: reply.name,
-          ts: reply.ts,
-          slackReplyReceipt: true,
-          deliveryKey: d.idempotencyKey,
-        },
+      item = {
+        kind: "UserMessage",
+        text: d.text,
+        externalId: reply.ts,
+        body: { name: reply.name, slackReplyReceipt: true, deliveryKey: d.idempotencyKey },
       };
     } else if (failure) {
-      entry = {
-        type: "system",
-        payload: { kind: "turn_failure", message: d.text, ...(failure.runId ? { runId: failure.runId } : {}) },
-      };
+      item = turnFailureItem(d.text, failure.runId);
     } else {
-      entry = { type: "assistant", payload: { text: d.text, ...(via ? { via } : {}) } };
+      item = { kind: "AgentMessage", text: d.text, body: via ? { via } : {} };
     }
-    await sessions.appendMany({ sessionId: session.id, turnId }, [itemFromEntry(entry)]);
+    await sessions.appendMany({ sessionId: session.id, turnId }, [item]);
     return true;
   };
 
@@ -156,11 +157,11 @@ export function withWebTranscriptDeliveries(
     },
     async pending(type) {
       const rows = await store.pending(type);
-      return type === "web" ? drained(rows) : rows;
+      return transcribed(type) ? drained(rows) : rows;
     },
-    async claimPending(type, ttlMs) {
-      const rows = await store.claimPending(type, ttlMs);
-      return type === "web" ? drained(rows) : rows;
+    async claimPending(type, ttlMs, opts) {
+      const rows = await store.claimPending(type, ttlMs, opts);
+      return transcribed(type) ? drained(rows) : rows;
     },
   };
 }

@@ -13,7 +13,6 @@ import type { DeliveryProvenance, Destination, Principal, ScopeId, TurnResult } 
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { entryFromItem } from "../src/sessions/items.ts";
 import { randomUUID } from "node:crypto";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 
@@ -79,7 +78,7 @@ test("enqueue stays a plain insert; the drain writes the text durably before the
       },
     ],
   );
-  const messages = reconstructMessagesFromHistory(entries.map((e) => entryFromItem(e, SCOPE)));
+  const messages = reconstructMessagesFromHistory(entries);
   assert.equal(messages.at(-1)!.role, "assistant");
   assert.match(JSON.stringify(messages), /Reminder: standup in 10 minutes/);
   assert.doesNotMatch(JSON.stringify(messages), /toolCall|toolResult/);
@@ -256,7 +255,7 @@ test("a web delivery whose target session is missing is delivered as a nudge, lo
     restore();
   }
   assert.ok(lines.some((line) => line.includes("web:nobody@example.com:gone")));
-  assert.equal((await sessions.scanAll()).length, 1, "no odd session state is invented for the dead target");
+  assert.equal(await sessions.countSessions(), 1, "no odd session state is invented for the dead target");
 });
 
 const actor: Principal = { id: "alice@example.com", type: "internal" };
@@ -278,7 +277,7 @@ async function terminalRun(
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   wireRunResultDeliveries(runs, deliveries);
   const run = (await runs.enqueue({ sessionId: THREAD, request: webTurn(THREAD), maxAttempts: 1 })).run;
-  const claimed = await runs.claim("w1", 5_000);
+  const claimed = (await runs.claim("w1", 5_000))[0] ?? null;
   await duringTurn?.();
   if ("fail" in result) await runs.fail(run.id, claimed?.leaseToken ?? "", result.fail, { retry: true });
   else await runs.complete(run.id, claimed?.leaseToken ?? "", result);
@@ -309,7 +308,7 @@ test("an onTerminal-recorded failure entry suppresses the web drain's duplicate 
   const runs = createPostgresRunStore(testDatabaseUrl()).runs;
   wireRunResultDeliveries(runs, inner, undefined, sessions);
   const run = (await runs.enqueue({ sessionId: THREAD, request: webTurn(THREAD), maxAttempts: 1 })).run;
-  const claimed = await runs.claim("w1", 5_000);
+  const claimed = (await runs.claim("w1", 5_000))[0] ?? null;
   await runs.fail(run.id, claimed?.leaseToken ?? "", "lease expired (reaped)", { retry: true });
   const deadline = Date.now() + 2_000;
   while ((await inner.pending("web")).length === 0 && Date.now() < deadline) await sleep(5);
@@ -409,7 +408,7 @@ test("a recovered reply the turn never recorded is written into the transcript a
   assert.equal(entries.length, 1);
   assert.equal(entries[0]!.kind, "AgentMessage");
   assert.equal(entries[0]!.text, "recovered reply");
-  const model = JSON.stringify(reconstructMessagesFromHistory(entries.map((e) => entryFromItem(e, SCOPE))));
+  const model = JSON.stringify(reconstructMessagesFromHistory(entries));
   assert.match(model, /recovered reply/);
   assert.doesNotMatch(model, /"via"/, "the turn's own reply carries no delivery badge");
 });

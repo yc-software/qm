@@ -11,6 +11,8 @@ export {
   setMentionIndex,
   isReservedMentionName,
   slackSectionBlocks,
+  plainContext,
+  blocksWithContext,
 } from "./mrkdwn.ts";
 export {
   type ActorAssertion,
@@ -47,9 +49,6 @@ export {
   dedupeKey,
   createDeduper,
   dedupedRun,
-  isBareStop,
-  createInFlightThreadMap,
-  maybeInterceptStop,
 } from "./message-gating.ts";
 export {
   type SlackFile,

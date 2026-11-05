@@ -1,8 +1,9 @@
+import { item } from "./item-fixture.ts";
 import { metadata } from "./model-metadata.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { JSDOM } from "jsdom";
-import { createServer } from "vite";
+import { testViteServer } from "./vite-server.ts";
 import type { Conversation } from "../src/conv-types.ts";
 import type { PendingApproval } from "../src/core-bridge.ts";
 
@@ -57,7 +58,7 @@ test("worker transcripts allow approvals without enabling the composer", async (
     scopeId: "personal:owner",
     title: "Test",
   };
-  const entries = [{ seq: 1, type: "user", createdAt: Date.now(), payload: { text: "run the command" } }];
+  const items = [item("UserMessage", { seq: 1, createdAt: Date.now(), text: "run the command" })];
   const credential: PendingApproval = {
     requestId: "keychain:readonly-cache",
     command: "aws",
@@ -89,20 +90,20 @@ test("worker transcripts allow approvals without enabling the composer", async (
     if (path === "/api/runs/r1") return continuation.promise;
     if (path.endsWith("/approvals")) return Response.json({ approvals: pending });
     if (path.startsWith("/api/sessions/s1")) {
-      return Response.json({ session: row, entries, earlierEntries: 0 });
+      return Response.json({ session: row, items, earlierItems: 0 });
     }
     if (path.startsWith("/api/sessions?")) return Response.json({ sessions: [row] });
     if (path === "/api/contexts") return Response.json({ contexts: [] });
     throw new Error(`Unexpected request: ${path}`);
   };
-  const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  const vite = await testViteServer();
   let conv: Conversation | undefined;
   try {
     await vite.ssrLoadModule("/src/shell.ts");
     const { appState } = await vite.ssrLoadModule("/src/shell-state.ts");
     const { sessionsState } = await vite.ssrLoadModule("/src/sessions.ts");
     const { createConversation } = await vite.ssrLoadModule("/src/conversations.ts");
-    const { entriesToMessages, resolveApproval } = await vite.ssrLoadModule("/src/core-bridge.ts");
+    const { itemsToMessages, resolveApproval } = await vite.ssrLoadModule("/src/core-bridge.ts");
     const { transcriptModel } = await vite.ssrLoadModule("/src/model-options.ts");
     const { seedRuntimeConfig } = await vite.ssrLoadModule("/src/runtime-config-store.ts");
     seedRuntimeConfig(row.scopeId, await (await fetch("/api/runtime-config")).json());
@@ -122,7 +123,7 @@ test("worker transcripts allow approvals without enabling the composer", async (
       ensureDeliveryStream() {},
     }) as Conversation;
     const chat = conv;
-    chat.mountReadOnly(row, entriesToMessages(entries, transcriptModel()));
+    chat.mountReadOnly(row, itemsToMessages(items, transcriptModel()));
     await until(() => !!host.querySelector(".approval-btn"));
     assert.equal(host.querySelector("textarea"), null);
     const before = host.querySelectorAll(".approval-btn").length;

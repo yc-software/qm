@@ -10,7 +10,7 @@ const upstream = createServer((req: IncomingMessage, res) => {
 await new Promise<void>((r) => upstream.listen(0, r));
 const upstreamUrl = `http://localhost:${(upstream.address() as AddressInfo).port}`;
 
-process.env.PORTAL_PUBLIC_URL = "http://localhost:18197";
+process.env.PUBLIC_WEB_URL = "http://localhost:18197";
 process.env.PORTAL_SESSION_SECRET = "local-auth-test-portal-secret";
 process.env.CORE_SIGNING_SECRET = "local-auth-test-core-secret";
 process.env.WEB_UI_UPSTREAM = upstreamUrl;
@@ -59,7 +59,7 @@ test("local auth bypass only treats loopback client addresses as local", () => {
 test("local auth bypass respects logout until explicit login", async () => {
   const logout = await fetch(`${base}/auth/logout`, {
     method: "POST",
-    headers: { origin: process.env.PORTAL_PUBLIC_URL ?? "" },
+    headers: { origin: process.env.PUBLIC_WEB_URL ?? "" },
     redirect: "manual",
   });
   assert.equal(logout.status, 200);

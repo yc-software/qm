@@ -1,4 +1,5 @@
 import { openSessionShare } from "./session-share";
+import { onCustomEmojiLoaded, openProjectIconPicker, projectIconTpl } from "./project-icon";
 import { html, nothing, render, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
 import { ref } from "lit/directives/ref.js";
@@ -28,6 +29,7 @@ import {
   PinOff,
   Plus,
   RefreshCw,
+  Smile,
   SquareTerminal,
   Users,
   X,
@@ -42,7 +44,7 @@ import {
   currentEarlierCount,
   detachSession,
   inheritedTranscript,
-  entriesToMessages,
+  itemsToMessages,
   regenerateTitle,
   sharedContextLabel,
   slackThreadUrl,
@@ -70,8 +72,8 @@ import {
   bumpActivity,
   sidebarSessions,
   groupProjectSessions,
+  sidebarProjectSeeds,
   recencyGroup,
-  recentProjectSeeds,
   mergeChildren,
   mergeFirstPage,
   rowIndicators,
@@ -95,9 +97,11 @@ import {
   openProjectDetail,
   personalScopeId,
   renameProject,
+  setProjectIcon,
   scopeChip,
 } from "./contexts";
 import { groupDmLabel, groupDmText } from "./group-dm-label";
+import { groupAvatarStackTpl } from "./group-avatars";
 import { transcriptModel } from "./model-options";
 import { appState, closeSidebarOnNarrowView, renderSidebarTop, syncDocumentTitle, syncUrlFromState } from "./shell";
 import { beginNavigation, endNavigation } from "./url-history";
@@ -129,6 +133,7 @@ export const sessionsState = {
   renamingId: null as string | null,
   openingKey: null as string | null,
   webOnly: false,
+  groupByActivity: false,
   hasArchived: false,
   collapsedProjectScopes: new Set<string>(),
   expandedProjectScopes: new Set<string>(),
@@ -176,14 +181,26 @@ function visibleRowOrder(): string[] {
     .filter(Boolean);
 }
 
-const WEB_ONLY_KEY = "web-ui:web-only";
-sessionsState.webOnly = ((): boolean => {
+function storedFlag(key: string): boolean {
   try {
-    return localStorage.getItem(WEB_ONLY_KEY) === "1";
+    return localStorage.getItem(key) === "1";
   } catch {
     return false;
   }
-})();
+}
+
+function storeFlag(key: string, value: boolean): void {
+  try {
+    localStorage.setItem(key, value ? "1" : "0");
+  } catch {
+    void 0;
+  }
+}
+
+const WEB_ONLY_KEY = "web-ui:web-only";
+const GROUP_BY_ACTIVITY_KEY = "web-ui:sidebar-group-by-activity";
+sessionsState.webOnly = storedFlag(WEB_ONLY_KEY);
+sessionsState.groupByActivity = storedFlag(GROUP_BY_ACTIVITY_KEY);
 
 let sessionsLoading = false;
 let sessionsNotice = "";
@@ -258,7 +275,7 @@ export function resetSessionsState(): void {
 }
 
 function projectSeedsForRecents() {
-  return recentProjectSeeds(contextsState.list);
+  return sidebarProjectSeeds(contextsState.list, sessionsState.groupByActivity);
 }
 
 function recentItemActivity(item: RecentItem): number {
@@ -452,6 +469,12 @@ function newChatHint(name: string): string {
   return `Start a new chat in ${name}`;
 }
 
+function groupAvatars(item: Extract<RecentItem, { kind: "project" }>): TemplateResult | typeof nothing {
+  if (item.groupKind !== "group") return nothing;
+  const context = contextsState.list.find((candidate) => candidate.scopeId === item.scopeId);
+  return groupAvatarStackTpl(context && !context.project ? (context.groupMembers ?? []) : []);
+}
+
 function recentItem(item: RecentItem, shownThreads: ReadonlySet<string>): TemplateResult {
   if (item.kind === "session") return sessionRow(item.session);
   const collapsed = sessionsState.collapsedProjectScopes.has(item.scopeId);
@@ -467,6 +490,7 @@ function recentItem(item: RecentItem, shownThreads: ReadonlySet<string>): Templa
   if (item.groupKind === "channel") fallbackName = "Channel";
   else if (item.groupKind === "group") fallbackName = "Group DM";
   const name = item.name ?? fallbackName;
+  const customGlyph = glyph === Folder ? projectIconTpl(projectOf(item.scopeId)?.icon, 14) : null;
   const childrenId = `recent-${item.scopeId.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
   const menuKey = projectMenuKey(item.scopeId);
   const menuOpen = sessionsState.openMenuId === menuKey;
@@ -484,12 +508,17 @@ function recentItem(item: RecentItem, shownThreads: ReadonlySet<string>): Templa
                 @click=${() => toggleRecentProject(item.scopeId)}
               >
                 <span class="recent-project-glyph">
-                  ${glyph && !collapsed ? html`<span class="glyph">${icon(glyph, glyphSize)}</span>` : nothing}
+                  ${
+                    glyph && !collapsed
+                      ? html`<span class="glyph">${customGlyph ?? icon(glyph, glyphSize)}</span>`
+                      : nothing
+                  }
                   <span class="chev">${icon(collapsed ? ChevronRight : ChevronDown, 13)}</span>
                 </span>
                 <span class="recent-project-name" dir="auto">${name.replace(/^#/, "")}</span>
               </button>
               <div class="session-menu recent-project-menu ${menuOpen ? "menu-open" : ""}">
+                ${groupAvatars(item)}
                 <button
                   class="session-menu-btn"
                   data-menu-id=${menuKey}
@@ -628,9 +657,42 @@ function projectMenuPopover(item: Extract<RecentItem, { kind: "project" }>): Tem
             </button>`
           : nothing
       }
+      ${
+        projectOf(item.scopeId)
+          ? html`<button
+              class="session-menu-option"
+              type="button"
+              role="menuitem"
+              @click=${(event: Event) => changeProjectIcon(event, item.scopeId)}
+            >
+              ${icon(Smile, 15)}<span>${projectOf(item.scopeId)?.icon ? "Change icon" : "Add icon"}</span>
+            </button>`
+          : nothing
+      }
     </div>
   `;
 }
+
+function changeProjectIcon(event: Event, scopeId: string): void {
+  const head = (event.currentTarget as HTMLElement).closest(".recent-project-head");
+  sessionsState.openMenuId = null;
+  renderList();
+  const anchor = head?.querySelector<HTMLElement>(".recent-project-toggle");
+  const project = projectOf(scopeId);
+  if (!anchor || !project) return;
+  openProjectIconPicker({
+    anchor,
+    current: project.icon,
+    onPick: async (value) => {
+      const latest = projectOf(scopeId);
+      const error = latest ? await setProjectIcon(latest, value) : "This project is no longer available.";
+      renderList();
+      return error;
+    },
+  });
+}
+
+onCustomEmojiLoaded(() => renderList());
 
 function openProjectFromMenu(scopeId: string): void {
   sessionsState.openMenuId = null;
@@ -1032,7 +1094,7 @@ function surfaceGlyph(s: CoreSession): TemplateResult | typeof nothing {
 }
 
 function rowContext(s: CoreSession): string | null {
-  let label = sharedContextLabel(s.scopeId, s.channelName ?? null);
+  let label = projectName(s.scopeId) ?? sharedContextLabel(s.scopeId, s.channelName ?? null);
   if (surfaceOf(s) === "slack") label = s.type === "group" ? groupDmText(s.channelName) : channelLabel(s);
   return label && label !== sessionTitle(s) ? label : null;
 }
@@ -1430,11 +1492,7 @@ async function loadMoreSessions(kind: "active" | "archived"): Promise<void> {
 export function setWebOnly(webOnly: boolean): void {
   if (sessionsState.webOnly === webOnly) return;
   sessionsState.webOnly = webOnly;
-  try {
-    localStorage.setItem(WEB_ONLY_KEY, webOnly ? "1" : "0");
-  } catch {
-    void 0;
-  }
+  storeFlag(WEB_ONLY_KEY, webOnly);
   activeCursor = null;
   activePaged = false;
   archivedCursor = null;
@@ -1442,6 +1500,13 @@ export function setWebOnly(webOnly: boolean): void {
   if (showArchived) void loadMoreSessions("archived");
   renderList();
   void refreshSessions({ silent: true });
+}
+
+export function setGroupByActivity(groupByActivity: boolean): void {
+  if (sessionsState.groupByActivity === groupByActivity) return;
+  sessionsState.groupByActivity = groupByActivity;
+  storeFlag(GROUP_BY_ACTIVITY_KEY, groupByActivity);
+  renderList();
 }
 
 export function revealSessionSurface(s: CoreSession): void {
@@ -2042,7 +2107,7 @@ async function loadSessionNeighbors(s: CoreSession): Promise<void> {
 
 export async function openSession(
   s: CoreSession,
-  entriesPrefetch?: Promise<TranscriptPage | null>,
+  transcriptPrefetch?: Promise<TranscriptPage | null>,
   approvalsPrefetch?: Promise<{ approvals: PendingApproval[] } | null>,
   historyMode: "push" | "replace" = "push",
 ): Promise<void> {
@@ -2050,7 +2115,7 @@ export async function openSession(
   if (keptUnreadId !== s.id) keptUnreadId = null;
   const navigation = historyMode === "push" ? beginNavigation() : null;
   try {
-    await showSession(s, entriesPrefetch, approvalsPrefetch);
+    await showSession(s, transcriptPrefetch, approvalsPrefetch);
   } finally {
     if (navigation && endNavigation(navigation)) syncUrlFromState(undefined, "push");
   }
@@ -2058,7 +2123,7 @@ export async function openSession(
 
 async function showSession(
   s: CoreSession,
-  entriesPrefetch?: Promise<TranscriptPage | null>,
+  transcriptPrefetch?: Promise<TranscriptPage | null>,
   approvalsPrefetch?: Promise<{ approvals: PendingApproval[] } | null>,
 ): Promise<void> {
   if (appState.currentView !== "chats") {
@@ -2073,13 +2138,13 @@ async function showSession(
   const pane = splitInterceptsOpen(s);
   closeSidebarOnNarrowView();
   if (projectName(s.scopeId) && sessionsState.collapsedProjectScopes.delete(s.scopeId)) renderList();
-  await openSessionInto(pane ?? mainConversation(), s, entriesPrefetch, approvalsPrefetch, true);
+  await openSessionInto(pane ?? mainConversation(), s, transcriptPrefetch, approvalsPrefetch, true);
 }
 
 export async function openSessionInto(
   conv: Conversation,
   s: CoreSession,
-  entriesPrefetch?: Promise<TranscriptPage | null>,
+  transcriptPrefetch?: Promise<TranscriptPage | null>,
   approvalsPrefetch?: Promise<{ approvals: PendingApproval[] } | null>,
   tracked = conv === mainConversation(),
 ): Promise<boolean> {
@@ -2092,13 +2157,13 @@ export async function openSessionInto(
     }
     return true;
   }
-  if (s.id === conv.state.sessionId && !entriesPrefetch) return true;
+  if (s.id === conv.state.sessionId && !transcriptPrefetch) return true;
   const started = Date.now();
 
   refreshSessionsOnOpen();
   void loadSessionNeighbors(s);
 
-  const cached = entriesPrefetch ? undefined : cachedTranscript(s.id);
+  const cached = transcriptPrefetch ? undefined : cachedTranscript(s.id);
   if (cached) {
     if (!isLiveConversation(conv)) return false;
     if (tracked) sessionsState.openingKey = null;
@@ -2112,7 +2177,7 @@ export async function openSessionInto(
       prefetched: false,
       cached: true,
       tracked,
-      entries: cached.entries?.length ?? 0,
+      items: cached.items?.length ?? 0,
     });
     void reconcileCachedTranscript(conv, s, cached, approvals, conv.transcriptAnchor()).catch((error: unknown) =>
       reportHandledError("web:transcript_reconcile", error),
@@ -2128,39 +2193,39 @@ export async function openSessionInto(
   if (!isLiveConversation(conv)) return false;
   const isCurrent = conv.mountLoadingPane();
 
-  const fetchEntries = (): Promise<TranscriptPage | null> =>
+  const fetchPage = (): Promise<TranscriptPage | null> =>
     fetchTranscript(s.id, { tailTurns: TAIL_TURNS }).catch(swallowAs("web-ui: load session transcript", null));
   const continuable = s.canContinue === true;
   const approvals = continuable ? (approvalsPrefetch ?? fetchSessionApprovals(s.id)) : null;
   let prefetched = false;
-  const entriesRes = await (entriesPrefetch
-    ? entriesPrefetch.then((r) => {
+  const transcriptRes = await (transcriptPrefetch
+    ? transcriptPrefetch.then((r) => {
         prefetched = r !== null;
-        return r ?? fetchEntries();
+        return r ?? fetchPage();
       })
-    : fetchEntries());
+    : fetchPage());
   if (!isLiveConversation(conv) || !isCurrent()) return false;
   const fetched = Date.now();
   const reportPainted = () =>
     reportSwitchPainted(started, {
       fetchedMs: fetched,
-      loaded: entriesRes !== null,
+      loaded: transcriptRes !== null,
       prefetched,
       cached: false,
       tracked,
-      entries: entriesRes?.entries?.length ?? 0,
+      items: transcriptRes?.items.length ?? 0,
     });
 
   if (tracked) {
     if (sessionsState.openingKey !== opening) return false;
     sessionsState.openingKey = null;
   }
-  if (!entriesPrefetch && conv.state.sessionId === s.id) {
+  if (!transcriptPrefetch && conv.state.sessionId === s.id) {
     renderList();
     return true;
   }
 
-  if (!entriesRes) {
+  if (!transcriptRes) {
     dropTranscript(s.id);
     conv.mountLoadError(() => void openSessionInto(conv, s, undefined, undefined, tracked));
     renderList();
@@ -2168,8 +2233,8 @@ export async function openSessionInto(
     return false;
   }
 
-  storeTranscript(s.id, entriesRes);
-  mountTranscript(conv, s, entriesRes, approvals);
+  storeTranscript(s.id, transcriptRes);
+  mountTranscript(conv, s, transcriptRes, approvals);
   renderList();
   reportPainted();
   return true;
@@ -2183,7 +2248,7 @@ function reportSwitchPainted(
     prefetched: boolean;
     cached: boolean;
     tracked: boolean;
-    entries: number;
+    items: number;
   },
 ): void {
   if (document.visibilityState !== "visible") return;
@@ -2197,17 +2262,17 @@ function mountTranscript(
   approvals: Promise<{ approvals: PendingApproval[] } | null> | null,
 ): void {
   if (s.canContinue === true) {
-    const split = inheritedTranscript(s, page.entries ?? []);
+    const split = inheritedTranscript(s, page.items);
     conv.mountContinuable(
       s.threadRef,
       s.id,
       s.scopeId,
-      entriesToMessages(split.current, transcriptModel()),
+      itemsToMessages(split.current, transcriptModel()),
       s.channelName ?? null,
       s,
-      entriesToMessages(split.inherited, transcriptModel()),
+      itemsToMessages(split.inherited, transcriptModel()),
     );
-    const rawEarlier = page.earlierEntries ?? 0;
+    const rawEarlier = page.earlierItems ?? 0;
     conv.setTranscriptWindow(pageAnchor(page), currentEarlierCount(s, rawEarlier), rawEarlier > 0);
     if (approvals) conv.attachApprovalsWhenLoaded(s.id, approvals);
     conv.setPins(page.pins ?? []);

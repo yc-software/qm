@@ -13,7 +13,7 @@ import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/po
 const testTmp = await mkdtemp(join(tmpdir(), "dictation-route-test-"));
 process.env.TMPDIR = testTmp;
 process.env.CORE_SIGNING_SECRET = "voice-route-test";
-process.env.WEB_UI_PUBLIC_URL = "https://qm.example.test";
+process.env.PUBLIC_WEB_URL = "https://qm.example.test";
 process.env.WEB_UI_VOICE_USERS = "alice";
 process.env.OPENAI_API_KEY = "voice-test-key";
 const { handler } = await import("../server/index.ts");

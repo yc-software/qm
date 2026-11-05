@@ -9,8 +9,8 @@ import { createPostgresMemoryService } from "../../src/memory/postgres-memory-se
 import { parseMemoryProviderConfig } from "../../src/memory/provider-config.ts";
 import { createRegistryMemoryService } from "../../src/memory/registry-memory.ts";
 import { emptyMemoryRegistry } from "../support/memory-registry.ts";
-import { scopeId, type EntryType, type ScopeId } from "../../src/types.ts";
-import { itemFromEntry, storedItem, type Item } from "../../src/sessions/items.ts";
+import { scopeId, type ScopeId } from "../../src/types.ts";
+import { storedItem, type Item, type NewItem } from "../../src/sessions/items.ts";
 import { recallText } from "../support/recall-text.ts";
 
 /**
@@ -44,30 +44,30 @@ type Step =
 function session(id: string, steps: Step[]): Item[] {
   const out: Item[] = [];
   let seq = 0;
-  const push = (type: EntryType, payload: unknown) =>
-    out.push(storedItem(itemFromEntry({ type, payload }), { sessionId: id, seq: ++seq, createdAt: seq }));
+  const push = (item: NewItem) => out.push(storedItem(item, { sessionId: id, seq: ++seq, createdAt: seq }));
   let n = 0;
   for (const step of steps) {
     const callId = `${id}-${++n}`;
-    if ("user" in step) push("user", { text: step.user });
+    if ("user" in step) push({ kind: "UserMessage", text: step.user });
     else if ("exec" in step) {
-      push("tool_call", { tool: "execute", callId, command: step.exec });
+      push({ kind: "ToolCall", tool: "execute", callId, body: { command: step.exec } });
       const ok = step.ok ?? true;
-      push("tool_result", {
+      push({
+        kind: "ToolResult",
         tool: "execute",
         callId,
         ...(ok ? {} : { isError: true }),
-        code: step.code ?? (ok ? 0 : 1),
+        body: { code: step.code ?? (ok ? 0 : 1) },
       });
     } else if ("write" in step) {
-      push("tool_call", { tool: "files", action: "write", callId, path: step.write, data: "…" });
-      push("tool_result", { tool: "files", action: "write", callId });
+      push({ kind: "ToolCall", tool: "files", callId, body: { action: "write", path: step.write, data: "…" } });
+      push({ kind: "ToolResult", tool: "files", callId, body: { action: "write" } });
     } else if ("read" in step) {
-      push("tool_call", { tool: "files", action: "read", callId, path: step.read });
-      push("tool_result", { tool: "files", action: "read", callId });
+      push({ kind: "ToolCall", tool: "files", callId, body: { action: "read", path: step.read } });
+      push({ kind: "ToolResult", tool: "files", callId, body: { action: "read" } });
     } else {
-      push("tool_call", { tool: "history", callId, query: step.search });
-      push("tool_result", { tool: "history", callId });
+      push({ kind: "ToolCall", tool: "history", callId, body: { query: step.search } });
+      push({ kind: "ToolResult", tool: "history", callId });
     }
   }
   return out;

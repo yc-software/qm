@@ -27,7 +27,6 @@ const TABLES = [
   "base_model_configs",
   "browse_provider_configs",
   "browse_max_steps_configs",
-  "browse_model_configs",
   "deployment_identity",
 ];
 
@@ -237,7 +236,6 @@ test(
     await a.setEgress(ch, { allowedHosts: ["api.example.com"], deniedHosts: ["evil.example"] });
     await a.setBaseModel(ch, "claude-opus-4-8");
     await a.setBrowseMaxSteps(ch, 120);
-    await a.setBrowseModel(ch, "claude-sonnet-4-6");
     await settle(
       async () =>
         (await m.souls.get(ch))?.version === version &&
@@ -247,8 +245,7 @@ test(
         (await m.approvalGrantModes.get(ch))?.modes.session === false &&
         (await m.egressPolicies.get(ch))?.policy.allowedHosts[0] === "api.example.com" &&
         (await m.baseModels.get(ch))?.modelId === "claude-opus-4-8" &&
-        (await m.browseMaxSteps.get(ch))?.steps === 120 &&
-        (await m.browseModels.get(ch))?.modelId === "claude-sonnet-4-6",
+        (await m.browseMaxSteps.get(ch))?.steps === 120,
     );
 
     const b = testConfigStore("default-org", maps(f));
@@ -268,7 +265,6 @@ test(
     );
     assert.equal(b.getBaseModel(ch), "claude-opus-4-8", "the base model survived");
     assert.equal(b.getBrowseMaxSteps(ch), 120, "the browse step limit survived");
-    assert.equal(b.getBrowseModel(ch), "claude-sonnet-4-6", "the browse model survived");
   },
 );
 
@@ -290,15 +286,12 @@ test(
     await a.setBaseModel(ch, null);
     await a.setBrowseMaxSteps(ch, 60);
     await a.setBrowseMaxSteps(ch, null);
-    await a.setBrowseModel(ch, "claude-sonnet-4-6");
-    await a.setBrowseModel(ch, null);
     await settle(
       async () =>
         (await m.souls.get(ch))?.content === "soul v8" &&
         (await m.egressPolicies.get(ch))?.policy.allowedHosts[0] === "host8.example" &&
         !(await m.baseModels.get(ch)) &&
-        !(await m.browseMaxSteps.get(ch)) &&
-        !(await m.browseModels.get(ch)),
+        !(await m.browseMaxSteps.get(ch)),
     );
 
     const b = testConfigStore("default-org", maps(f));
@@ -312,7 +305,6 @@ test(
     );
     assert.equal(b.getBaseModel(ch), null, "a cleared base model stays cleared after restart");
     assert.equal(b.getBrowseMaxSteps(ch), null, "a cleared browse step limit stays cleared after restart");
-    assert.equal(b.getBrowseModel(ch), null, "a cleared browse model stays cleared after restart");
   },
 );
 
@@ -328,7 +320,6 @@ test("pg config store: settings written on one core reach another core through r
   await a.setWebuiModels(ch, ["claude-opus-4-8"]);
   await a.setAckEmoji(ch, ["eyes"]);
   await a.setBrowseMaxSteps(ch, 77);
-  await a.setBrowseModel(ch, "claude-sonnet-4-6");
   await a.setBranding(ch, { accent: "#123456" });
   await a.setChannelHeaderPin(ch, true);
   await a.setApprovalGrantModes(ch, { session: false, always: true });
@@ -339,7 +330,6 @@ test("pg config store: settings written on one core reach another core through r
   assert.deepEqual(b.getWebuiModels(ch), ["claude-opus-4-8"]);
   assert.deepEqual(b.getAckEmoji(ch), ["eyes"]);
   assert.equal(b.getBrowseMaxSteps(ch), 77);
-  assert.equal(b.getBrowseModel(ch), "claude-sonnet-4-6");
   assert.deepEqual(b.getBranding(ch), { accent: "#123456" });
   assert.equal(b.getChannelHeaderPin(ch), true);
   assert.deepEqual(await b.getApprovalGrantModesDurable(ch), { session: false, always: true });
@@ -348,12 +338,10 @@ test("pg config store: settings written on one core reach another core through r
   await a.setWebuiModels(ch, null);
   await a.setAckEmoji(ch, null);
   await a.setBrowseMaxSteps(ch, null);
-  await a.setBrowseModel(ch, null);
   await b.refreshScope(ch);
   await b.refreshScope(org);
 
   assert.equal(b.getWebuiModels(ch), null);
   assert.equal(b.getAckEmoji(ch), null);
   assert.equal(b.getBrowseMaxSteps(ch), null);
-  assert.equal(b.getBrowseModel(ch), null);
 });

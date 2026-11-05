@@ -43,9 +43,9 @@ function isSlackHost(value: string | undefined): boolean {
 }
 
 export function usesSlackOidc(config: QmConfig): boolean {
-  const portal = config.env.portal ?? {};
+  const core = config.env.core ?? {};
   return ["OIDC_AUTH_ENDPOINT", "OIDC_TOKEN_ENDPOINT", "OIDC_USERINFO_ENDPOINT", "OIDC_ISSUER"].some((name) =>
-    isSlackHost(portal[name]),
+    isSlackHost(core[name]),
   );
 }
 

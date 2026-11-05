@@ -1,8 +1,9 @@
 import { disclosedMemory, MemoryRecallWithheld } from "./disclosure.ts";
-import { parseScopeId, type ScopeId, type ScopeKind } from "../types.ts";
+import { isSystemActor, parseScopeId, type ScopeId, type ScopeKind } from "../types.ts";
 import type { McpEnvelope } from "../mcp/mcp-client.ts";
 import type { MemoryProviderOutcome, MemoryRecallContext, MemoryService } from "./memory-service.ts";
 import { failedOutcome, strictFailure, withEnvelope } from "./provider-outcome.ts";
+import { OutsideAudience } from "../directory/person.ts";
 
 export type MemoryCapturePolicy = "off" | "explicit" | "automatic";
 
@@ -61,6 +62,11 @@ export function createRoutedMemoryService(opts: {
     } catch (error) {
       if (error instanceof MemoryRecallWithheld) return { value: fallback };
       const failed = failedOutcome(error);
+      if (error instanceof OutsideAudience) {
+        report(failed);
+        opts.onError?.(error, route.provider, operation);
+        return { value: fallback };
+      }
       report(operation === "capture" && failed.outcome === "timed_out" ? { ...failed, outcome: "unknown" } : failed);
       if (!route.failOpen) return { value: fallback, error };
       opts.onError?.(error, route.provider, operation);
@@ -117,6 +123,7 @@ export function createRoutedMemoryService(opts: {
             const provider = providerFor(route);
             if (context?.conversationScopeId && context.conversationScopeId !== scopeId && !provider.facts)
               return { value: 0 };
+            if (provider.attestActor && (!context?.actorId || isSystemActor(context.actorId))) return { value: 0 };
             return attempt(
               route,
               scopeId,

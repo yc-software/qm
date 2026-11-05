@@ -1,9 +1,8 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createSpritesSandbox } from "../src/sandbox/sprites-sandbox.ts";
 import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
 import { createBackgroundBroker } from "../src/connectors/background-exec-broker.ts";
@@ -59,8 +58,7 @@ img.save("diffusion-out.png")
 print("PHASE: image saved diffusion-out.png", flush=True)
 `;
 
-const ws = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "monitor-smoke-")));
-const sb = createSpritesSandbox(ws, {
+const sb = createSpritesSandbox({
   ...loadConfig().spritesSandbox,
   initializationStore: smokeMap("sprites_initialization"),
   advisoryLock: createNoopAdvisoryLock(),
@@ -127,7 +125,7 @@ const poller = createMonitorPoller({
 
 try {
   console.log("%s", `[${ts()}] provisioning sprite for`, scope, "…");
-  h = await sb.provision([{ scopeId: scope, mountPath: "", mode: "rw" }]);
+  h = await sb.provision(scope);
 
   console.log(`[${ts()}] staging job.sh + diffusion.py into the workspace …`);
   await sb.writeFile(h, "job.sh", JOB_SH);
