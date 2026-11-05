@@ -31,7 +31,7 @@ CREATE TABLE personas (
   icon_kind      TEXT        CHECK (icon_kind IN ('emoji', 'custom')),
   icon_value     TEXT,
   forked_from_id TEXT,                              -- no FK: the source may be deleted
-  created_by     TEXT        NOT NULL REFERENCES users(id),
+  created_by     UUID        NOT NULL REFERENCES users(id),
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   CHECK ((icon_kind IS NULL) = (icon_value IS NULL))
@@ -118,7 +118,7 @@ description. Row actions: Chat, Fork, and Edit / Share for writers and owners.
   CREATE TABLE channel_persona_defaults (
     channel_scope_id TEXT        PRIMARY KEY,       -- channel:C…
     persona_id       TEXT        NOT NULL REFERENCES personas(id) ON DELETE CASCADE,
-    set_by           TEXT        NOT NULL REFERENCES users(id),
+    set_by           UUID        NOT NULL REFERENCES users(id),
     set_at           TIMESTAMPTZ NOT NULL DEFAULT now()
   );
   ```
