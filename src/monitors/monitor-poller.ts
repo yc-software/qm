@@ -160,6 +160,7 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
       fireKey,
       surface: "monitor",
       threadRef: m.threadRef,
+      redrivesHandOff: true,
       ...(m.destination ? { destination: m.destination } : {}),
       ...(withErrorNotice
         ? {

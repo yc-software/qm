@@ -8,12 +8,10 @@ import {
 import { createSurfaceConfigs } from "./surface-config.ts";
 import { INVITE_LOGIN_SCRIPT, INVITE_LOGIN_SCRIPT_HASH } from "./invite-login.ts";
 import { reportBackendError } from "../../chassis/src/error-reporting.ts";
-import { drainOnSigterm } from "../../chassis/src/drain.ts";
 import "./instrument.ts";
 import { provisionTrustedAdmin } from "./trusted-admin.ts";
 import { createHash } from "node:crypto";
 import { createServer, METHODS, type IncomingMessage, type ServerResponse } from "node:http";
-import { pathToFileURL } from "node:url";
 import { ADMIN_LOGIN_SCRIPT, ADMIN_LOGIN_SCRIPT_HASH, openAdminLogin } from "./admin-login.ts";
 import { LRUCache } from "lru-cache";
 import { createCanonicalResolver, IdentityRejected } from "./canonical.ts";
@@ -67,6 +65,7 @@ import {
   proxyToUpstream,
   proxyToAppHost,
   FORWARD_AGENT_API_HEADERS,
+  FORWARD_DEPLOYMENT_GIT_HEADERS,
   FORWARD_DEPLOYMENT_LAYER_HEADERS,
   FORWARD_OAUTH_HEADERS,
   FORWARD_BROKER_HEADERS,
@@ -85,6 +84,8 @@ import {
   readBody,
   PayloadTooLargeError,
   sameOriginRequest as sameOriginFor,
+  isLoopbackUrl,
+  isSecureOrLoopbackUrl,
 } from "../../chassis/src/http.ts";
 import {
   CORE_API_URL as CORE,
@@ -92,11 +93,10 @@ import {
   CORE_SIGNING_SECRET,
   PORTAL_IDENTITY_SECRET,
   isMissingOrPlaceholder,
-  portFromEnv,
 } from "../../chassis/src/env.ts";
+import { isDeploymentGitRoute } from "../../chassis/src/deployment-git.ts";
 
-const PORT = portFromEnv(8097);
-const PUBLIC_URL = (process.env.PORTAL_PUBLIC_URL ?? `http://localhost:${PORT}`).replace(/\/$/, "");
+const PUBLIC_URL = (process.env.PUBLIC_WEB_URL ?? "http://localhost:8097").replace(/\/$/, "");
 const SESSION_SECRET = process.env.PORTAL_SESSION_SECRET;
 const SESSION_TTL_S = Number(process.env.PORTAL_SESSION_TTL_S ?? 604800);
 const SESSION_MAX_TTL_S = Number(process.env.PORTAL_SESSION_MAX_TTL_S ?? Math.max(2592000, SESSION_TTL_S));
@@ -104,7 +104,7 @@ const SESSION_RENEW_AFTER_S = Math.floor(SESSION_TTL_S / 2);
 const APPS_DOMAIN = process.env.PORTAL_APPS_DOMAIN || process.env.DEPLOY_APPS_DOMAIN || undefined;
 const COOKIE_DOMAIN =
   process.env.PORTAL_COOKIE_DOMAIN ||
-  (APPS_DOMAIN ? derivedCookieDomain(hostOf(process.env.PORTAL_PUBLIC_URL ?? ""), APPS_DOMAIN) : undefined);
+  (APPS_DOMAIN ? derivedCookieDomain(hostOf(process.env.PUBLIC_WEB_URL ?? ""), APPS_DOMAIN) : undefined);
 const IS_PROD = process.env.NODE_ENV === "production";
 const SECURE_COOKIES = PUBLIC_URL.startsWith("https://");
 const ORIGIN = (() => {
@@ -116,7 +116,7 @@ const ORIGIN = (() => {
 })();
 const API_ALLOWED_ORIGINS = parseAllowedOrigins(process.env.PORTAL_API_ALLOWED_ORIGINS);
 const LOCAL_AUTH_BYPASS_REQUESTED = process.env.PORTAL_LOCAL_AUTH_BYPASS === "1";
-const LOCAL_AUTH_BYPASS = LOCAL_AUTH_BYPASS_REQUESTED && !IS_PROD && isLocalPortalUrl(PUBLIC_URL);
+const LOCAL_AUTH_BYPASS = LOCAL_AUTH_BYPASS_REQUESTED && !IS_PROD && isLoopbackUrl(PUBLIC_URL);
 const LOCAL_AUTH_PRINCIPAL = process.env.PORTAL_DEV_PRINCIPAL || process.env.USER || "dev-admin";
 const PLAYGROUND = process.env.PORTAL_PLAYGROUND === "1";
 const DEPLOYMENTS_ENABLED = process.env.PORTAL_DEPLOYMENTS_ENABLED
@@ -404,21 +404,6 @@ export function hostIsWithinDomain(host: string, domain: string): boolean {
   const h = host.toLowerCase();
   const d = domain.toLowerCase().replace(/^\./, "");
   return !!h && !!d && (h === d || h.endsWith(`.${d}`));
-}
-
-function isLocalPortalUrl(raw: string): boolean {
-  try {
-    const hostname = new URL(raw).hostname.toLowerCase();
-    return (
-      hostname === "localhost" ||
-      hostname.endsWith(".localhost") ||
-      hostname === "127.0.0.1" ||
-      hostname === "::1" ||
-      hostname === "[::1]"
-    );
-  } catch {
-    return false;
-  }
 }
 
 function originOf(raw: string): string {
@@ -940,6 +925,10 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 
   if (method === "GET" && pathname === "/healthz") return json(res, 200, { ok: true });
 
+  if (method === "GET" && pathname === "/readyz") {
+    return proxyToUpstream(req, res, { baseUrl: CORE, path: pathname, search: "" }, ["accept"]);
+  }
+
   if (method === "GET" && (pathname === "/favicon.ico" || pathname === "/favicon.svg")) {
     return serveFavicon(
       res,
@@ -1071,7 +1060,10 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     const target = (url.searchParams.get("target") ?? "").trim();
     if (!target) return json(res, 400, { error: "bad_request", message: "target required" });
     const targetCanonical = await canonicalPrincipal(target, session.t);
-    if (target === session.sub || (typeof targetCanonical === "object" && targetCanonical?.id === session.sub))
+    if (
+      target === session.sub ||
+      (targetCanonical && !(targetCanonical instanceof IdentityRejected) && targetCanonical.id === session.sub)
+    )
       return json(res, 400, { error: "bad_request", message: "cannot impersonate yourself" });
     const result = await coreImpersonate("start", session.sub, target, session.t);
     if (!result.ok) {
@@ -1131,6 +1123,22 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       "content-length",
       "x-agent-app-request-timestamp",
       "x-agent-app-signature",
+    ]);
+  }
+
+  if (method === "POST" && pathname === "/slack/events") {
+    return proxyToUpstream(req, res, { baseUrl: CORE, path: pathname, search: url.search }, [
+      ...FORWARD_WEBHOOK_HEADERS,
+      "content-length",
+      "x-slack-retry-num",
+      "x-slack-retry-reason",
+    ]);
+  }
+
+  if (method === "GET" && pathname === "/v1/spend/export") {
+    return proxyToUpstream(req, res, { baseUrl: CORE, path: pathname, search: url.search }, [
+      "authorization",
+      "accept",
     ]);
   }
 
@@ -1206,6 +1214,15 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       ...FORWARD_DEPLOYMENT_LAYER_HEADERS,
       "authorization",
     ]);
+  }
+
+  if (isDeploymentGitRoute(method, pathname)) {
+    return proxyToUpstream(
+      req,
+      res,
+      { baseUrl: CORE, path: pathname, search: url.search },
+      FORWARD_DEPLOYMENT_GIT_HEADERS,
+    );
   }
 
   if (isDeploymentLayerPassthrough(method, pathname)) {
@@ -1800,8 +1817,8 @@ export function bootChecks(): void {
   if (LOCAL_AUTH_BYPASS_REQUESTED && IS_PROD) {
     problems.push("PORTAL_LOCAL_AUTH_BYPASS may not be enabled in production");
   }
-  if (LOCAL_AUTH_BYPASS_REQUESTED && !isLocalPortalUrl(PUBLIC_URL)) {
-    problems.push("PORTAL_LOCAL_AUTH_BYPASS requires a localhost, 127.0.0.1, or ::1 PORTAL_PUBLIC_URL");
+  if (LOCAL_AUTH_BYPASS_REQUESTED && !isLoopbackUrl(PUBLIC_URL)) {
+    problems.push("PORTAL_LOCAL_AUTH_BYPASS requires a localhost, 127.0.0.1, or ::1 PUBLIC_WEB_URL");
   }
   if (PLAYGROUND) {
     if (!Number.isInteger(PLAYGROUND_MINTS_PER_IP) || PLAYGROUND_MINTS_PER_IP < 1 || PLAYGROUND_MINTS_PER_IP > 64) {
@@ -1835,7 +1852,7 @@ export function bootChecks(): void {
     );
   }
   if (COOKIE_DOMAIN && !hostIsWithinDomain(hostOf(PUBLIC_URL), COOKIE_DOMAIN)) {
-    problems.push(`PORTAL_COOKIE_DOMAIN (${COOKIE_DOMAIN}) must cover PORTAL_PUBLIC_URL's host`);
+    problems.push(`PORTAL_COOKIE_DOMAIN (${COOKIE_DOMAIN}) must cover PUBLIC_WEB_URL's host`);
   }
   if (APPS_DOMAIN && COOKIE_DOMAIN && !hostIsWithinDomain(APPS_DOMAIN, COOKIE_DOMAIN)) {
     problems.push(`PORTAL_COOKIE_DOMAIN (${COOKIE_DOMAIN}) must cover PORTAL_APPS_DOMAIN (${APPS_DOMAIN})`);
@@ -1895,9 +1912,12 @@ export function bootChecks(): void {
     if (SESSION_SECRET && CORE_SIGNING_SECRET && SESSION_SECRET === CORE_SIGNING_SECRET) {
       problems.push("PORTAL_SESSION_SECRET must differ from CORE_SIGNING_SECRET");
     }
-    if (!PUBLIC_URL.startsWith("https://")) problems.push("PORTAL_PUBLIC_URL must be https in production");
-    if (!OIDC.authEndpoint.startsWith("https://")) {
-      problems.push(`OIDC_AUTH_ENDPOINT must be https, since the browser is sent there: ${OIDC.authEndpoint}`);
+    if (!isSecureOrLoopbackUrl(PUBLIC_URL))
+      problems.push("PUBLIC_WEB_URL must be https in production unless it is a loopback address");
+    if (!isSecureOrLoopbackUrl(OIDC.authEndpoint)) {
+      problems.push(
+        `OIDC_AUTH_ENDPOINT must be https unless it is a loopback address, since the browser is sent there: ${OIDC.authEndpoint}`,
+      );
     }
     const brokerOrigin =
       AUTH_BROKER_UPSTREAM && isPrivateNetworkUrl(AUTH_BROKER_UPSTREAM) ? originOf(AUTH_BROKER_UPSTREAM) : "";
@@ -1937,7 +1957,7 @@ function validEmailDomain(value: string): boolean {
     );
 }
 
-export async function startServer(): Promise<void> {
+export async function startServer(options: { port: number; host?: string }): Promise<void> {
   bootChecks();
   if (process.env.AUTH_EMBEDDED === "1") {
     if (AUTH_BROKER_UPSTREAM !== "http://127.0.0.1:8099") {
@@ -1954,14 +1974,13 @@ export async function startServer(): Promise<void> {
   }
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
-    server.listen(PORT, () => {
+    server.listen(options.port, options.host, () => {
       server.off("error", reject);
       resolve();
-      console.log(`[portal] public front door on http://localhost:${PORT} → web-ui over 6PN (org ${ORG})`);
+      console.log(`[portal] public front door on http://localhost:${options.port} (org ${ORG})`);
       if (!SESSION_SECRET)
         console.warn("[portal] PORTAL_SESSION_SECRET unset, using an INSECURE dev key (dev/test only)");
-      if (!SECURE_COOKIES)
-        console.warn("[portal] PORTAL_PUBLIC_URL is not https, cookies are NOT Secure (dev/test only)");
+      if (!SECURE_COOKIES) console.warn("[portal] PUBLIC_WEB_URL is not https, cookies are NOT Secure (dev/test only)");
       if (LOCAL_AUTH_BYPASS)
         console.warn(
           `[portal] PORTAL_LOCAL_AUTH_BYPASS=1 -- using ${LOCAL_AUTH_PRINCIPAL} as the local session principal (dev/test only)`,
@@ -1979,14 +1998,3 @@ export async function startServer(): Promise<void> {
 }
 
 export { handle, server };
-
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  startServer().then(
-    () => drainOnSigterm(server, "portal"),
-    (error: unknown) => {
-      reportBackendError(error);
-      console.error("[portal] failed to start:", errMessage(error));
-      process.exitCode = 1;
-    },
-  );
-}

@@ -5,6 +5,28 @@ import { renderSubagentActivity } from "../../sessions/subagent-status.ts";
 import { isolationLabel } from "../../sessions/child-isolation.ts";
 import type { ChildIsolationMode } from "../../types.ts";
 
+function deliveryOutcome(
+  result: { title: string; delivered: string; busy?: boolean; notWoken?: string },
+  withText: boolean,
+): string {
+  const name = `"${result.title}"`;
+  if (result.delivered === "queued_turn")
+    return result.busy
+      ? `Queued for ${name}: it is busy and starts on this when its current turn ends.`
+      : `Woke ${name}; it is working on this now.`;
+  if (result.delivered === "steered")
+    return `Delivered into ${name}'s running turn; it sees this at its next step. Don't re-send it.`;
+  if (result.delivered === "interrupted")
+    return withText
+      ? `Stopped ${name}'s current run; it starts on this message next. Its own subagents keep running.`
+      : `Stopped ${name}'s current run; it is idle until messaged. Its own subagents keep running and wake it when they report back.`;
+  return `Left in ${name}'s mailbox${result.notWoken ? ` without waking it: ${result.notWoken}` : ""}. ${
+    result.busy
+      ? "It has work running or queued and sees this at its next step."
+      : "It is idle and won't see this until something wakes it."
+  }`;
+}
+
 export function sessionTools(kit: ToolKit) {
   const { ref, opts, recordCall, recordResult, recordCoreAuthoredResult } = kit;
   const delegateWork = opts?.delegateWork === true;
@@ -15,7 +37,7 @@ export function sessionTools(kit: ToolKit) {
     description:
       "Spawn and coordinate subagents: background workers that cannot see this conversation. Brief one like a capable colleague (goal, why it matters, what you know, real limits) and leave the approach to them; its final answer arrives as an internal message. " +
       "open: start one with `task`. " +
-      'send_message: message a subagent, sibling or parent (target="parent"); it wakes the recipient unless wake:false. Wake when you need it to act or answer (more work, a re-review, a question); use wake:false for FYI it can act on later (status, a finding, an ack), which an idle recipient won\'t see until something else wakes it. interrupt:true stops its current run (not its subagents) and makes any text its next turn. ' +
+      'send_message: message a subagent, sibling or parent (target="parent"); it wakes the recipient unless wake:false, and a subagent already mid-turn gets it at its next step instead of after the turn ends. Wake when you need it to act or answer (more work, a re-review, a question); use wake:false for FYI it can act on later (status, a finding, an ack), which an idle recipient won\'t see until something else wakes it. interrupt:true stops its current run (not its subagents) and makes any text its next turn. ' +
       "read: list subagents or read one's transcript. " +
       (delegateWork
         ? "Delegate substantial work, then end this turn promptly; a subagent's completion wakes you with the result. Do not wait or poll. "
@@ -177,20 +199,6 @@ export function sessionTools(kit: ToolKit) {
             true,
           );
         }
-        const name = `"${result.title}"`;
-        let outcome = p.text?.trim()
-          ? `Stopped ${name}'s current run; it starts on this message next. Its own subagents keep running.`
-          : `Stopped ${name}'s current run; it is idle until messaged. Its own subagents keep running and wake it when they report back.`;
-        if (result.delivered === "queued_turn")
-          outcome = result.busy
-            ? `Queued for ${name}: it is busy and starts on this when its current turn ends.`
-            : `Woke ${name}; it is working on this now.`;
-        else if (result.delivered !== "interrupted")
-          outcome = `Left in ${name}'s mailbox${result.notWoken ? ` without waking it: ${result.notWoken}` : ""}. ${
-            result.busy
-              ? "It has work running or queued and sees this at its next step."
-              : "It is idle and won't see this until something wakes it."
-          }`;
         return recordResult(
           callId,
           {
@@ -200,7 +208,7 @@ export function sessionTools(kit: ToolKit) {
             title: result.title,
             delivered: result.delivered,
           },
-          text(outcome),
+          text(deliveryOutcome(result, !!p.text?.trim())),
         );
       }
       const result = await syscalls.read({
@@ -242,7 +250,7 @@ export function sessionTools(kit: ToolKit) {
     description:
       "Work with sessions, the conversations in the web sidebar (subagents are not sessions). " +
       "search: entries across conversations visible to everyone here, with sessionId/seq references. list: sessions you can see here. read: a session's recent transcript. " +
-      "send_message: a private note delivered to another session as internal context, without starting a turn. " +
+      "send_message: a private note delivered to another session as internal context. wake:true (default) hands over work that needs a turn: it wakes the session if idle, otherwise the session gets it at its next step as a task. Send replies, status reports and completion notes with wake:false, an FYI that wakes nothing. " +
       "new: a clean session starting with `text`. fork: copy this conversation's visible history into a new session, optionally running `text` there. " +
       "Create new/forked sessions only when the attending person asks (they appear under their name); refused on automated turns.",
     parameters: Type.Object({
@@ -262,6 +270,12 @@ export function sessionTools(kit: ToolKit) {
         }),
       ),
       title: Type.Optional(Type.String({ description: "new/fork: optional sidebar title." })),
+      wake: Type.Optional(
+        Type.Boolean({
+          description:
+            "send_message: true (default) for work that needs a turn; false for replies, status and completion notes.",
+        }),
+      ),
       limit: Type.Optional(Type.Integer({ description: "read: default 30. search: default 20, max 100." })),
     }),
     async execute(callId, params) {
@@ -273,6 +287,7 @@ export function sessionTools(kit: ToolKit) {
         text?: string;
         title?: string;
         limit?: number;
+        wake?: boolean;
       };
       await recordCall(callId, {
         tool: "sessions",
@@ -327,7 +342,13 @@ export function sessionTools(kit: ToolKit) {
       if (!p.target?.trim()) return fail(`${p.action} requires \`target\`: a sessionId from list.`);
       if (p.action === "send_message") {
         if (!p.text?.trim()) return fail("send_message requires `text`: the note to deliver.");
-        const result = await syscalls.write({ requestId: callId, peer: true, target: p.target, text: p.text });
+        const result = await syscalls.write({
+          requestId: callId,
+          peer: true,
+          wake: p.wake !== false,
+          target: p.target,
+          text: p.text,
+        });
         if (!result.ok) return fail(result.message);
         return recordResult(
           callId,
@@ -338,7 +359,7 @@ export function sessionTools(kit: ToolKit) {
             title: result.title,
             delivered: result.delivered,
           },
-          text(`Message to "${result.title}" queued internally without starting a turn.`),
+          text(deliveryOutcome(result, true)),
         );
       }
       const result = await syscalls.read({

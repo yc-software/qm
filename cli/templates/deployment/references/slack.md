@@ -34,7 +34,7 @@ It needs no email transport, no verified sender, and no DNS work, which makes it
 the shorter path for a workspace that already runs on Slack. Do not read
 `references/email.md` for this route.
 
-Drop `"auth"` from `services` and declare Slack's endpoints in `env.portal`:
+Drop `"auth"` from `services` and declare Slack's endpoints in `env.core`:
 
 ```json
 {
@@ -49,7 +49,7 @@ Drop `"auth"` from `services` and declare Slack's endpoints in `env.portal`:
 
 The portal already defaults to exactly these endpoints, so sign-in would work
 without them — write them anyway. `qm slack render` and `qm outputs` decide a
-deployment uses Slack sign-in by finding `slack.com` in `env.portal`, and
+deployment uses Slack sign-in by finding `slack.com` in `env.core`, and
 silently skip the SSO manifest and its links when the values are left implicit.
 
 Every deployment needs one tenant trust boundary or the portal refuses to start:
@@ -74,7 +74,7 @@ npm exec qm -- outputs
 (`<publicUrl>/auth/callback`). Create the app from the exact creation URL — that
 manifest already carries the callback, so there is no redirect URL to register by
 hand. From Basic Information, put the client secret in `.env` as
-`OIDC_CLIENT_SECRET` and the client id in either `env.portal.OIDC_CLIENT_ID` or
+`OIDC_CLIENT_SECRET` and the client id in either `env.core.OIDC_CLIENT_ID` or
 `.env`, then run `npm exec qm -- secrets push`.
 
 Prove it before calling sign-in done: open the `Slack sign-in` URL, complete

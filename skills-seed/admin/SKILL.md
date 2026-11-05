@@ -212,6 +212,12 @@ GET /v1/admin/retention
 GET /v1/admin/users            → roster + admin status (org-wide)
 ```
 
+Users lists the `users` table, the people and apps QM has met: someone joins on their own first
+message (not a non-person actor; a Slack id is recorded as the person the directory maps it to),
+when invited as a teammate, or when made an admin. Each row has a generated `userId`; `principalId`
+is the person's main sign-in. Linking merges a sign-in's user into its person's. Rows carry
+`kind` (`person` or `app`, for Slack apps), `firstSeenAt` and `source`; activity counts are computed.
+
 ## External users
 
 Outside collaborators, admitted by email with a role and an expiry; they sign in at the
@@ -257,8 +263,14 @@ one call. Run it from a DM with the admin; it reads private inventory.
    - an admin grant — portal-only, revoked under Admins in the dashboard;
    - computers whose provider can't retire them.
 
+Applying sets `offboardedAt`/`offboardedBy` on the person's row in the `users` table: the response's `user`
+(also on the `user` detail, and `offboarded` in the `users` list) holds when and by whom; the audit log's
+`user.offboard.*` entries are the change list. The row is written before any change is applied, so if it
+can't be written the call fails and nothing changes. The dashboard hides offboarded people from Users until "Show offboarded" is clicked.
+
 Conversations, memory and files stay as the record. `reactivate_user` turns sign-in back on (even after a
-directory-sync removal) and restores nothing else; owners or admins restore crons, loops, apps and skills
+directory-sync removal), clears `offboardedAt`/`offboardedBy` (the audit log keeps the history), and
+restores nothing else; owners or admins restore crons, loops, apps and skills
 through their usual controls.
 
 ## Scheduling admin-reading work

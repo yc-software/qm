@@ -11,6 +11,7 @@ import { DEPLOYMENT_TABLES } from "../../src/deploy/page-views.ts";
 import { configStoreMaps, createConfigStore } from "../../src/resolution/config-store.ts";
 import { orgId } from "../../src/config.ts";
 import { scopeId } from "../../src/types.ts";
+import { createPostgresUserStore } from "../../src/identity/user-store.ts";
 
 function baseDatabaseUrl(): URL {
   const base = process.env.DATABASE_URL;
@@ -122,3 +123,7 @@ export function testDeployBackings(
     ...backings,
   };
 }
+
+export const testUsers = () => createPostgresUserStore(sharedDatabase().url);
+
+export const testUserStore = () => createPostgresUserStore(testMigratedDatabaseUrl());

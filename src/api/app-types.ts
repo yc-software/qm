@@ -103,6 +103,7 @@ import type { RuntimeChoice } from "../agent/agent.ts";
 import { type ReachOpts, type ReachResolution, type ReachTarget } from "../reach/reach.ts";
 import { type Project, type ProjectIcon, type ProjectStore } from "../projects/project-store.ts";
 import type { SearchHit } from "../search/core-search.ts";
+import type { ErrorLog } from "../admin/error-log.ts";
 
 interface DeploymentVersionView {
   version: number;
@@ -336,6 +337,10 @@ export interface App {
     viewer?: string,
   ): Promise<{ accepted: boolean; reason?: string; why?: string; queuedRunId?: string; replayed?: boolean }>;
   replayOrphanedRunSignals(runId: string): Promise<void>;
+  steerRun(
+    run: Run,
+    signal: RunSignal,
+  ): Promise<{ sent: boolean; terminal?: boolean; drained?: boolean; replayRunId?: string }>;
   getSession(
     sessionId: string,
     window?: TranscriptWindow,
@@ -709,6 +714,7 @@ export interface AppDeps {
   ambientJudge?: (systemPrompt: string, prompt: string, signal?: AbortSignal) => Promise<string | undefined>;
   ambientCursors?: DurableMap<{ lastJudgedTs: string; lastJudgedAt?: number }>;
   ambientJudgments?: AmbientJudgmentStore;
+  errors?: ErrorLog;
   ackEmojiPicks?: AckEmojiPickStore;
   judgeModelId?: () => string;
   modelProviders?: ModelProviderAvailability;

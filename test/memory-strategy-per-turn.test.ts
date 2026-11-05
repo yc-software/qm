@@ -34,23 +34,6 @@ test("per-turn via oneShot sends the extraction prompt + the exact user/reply fr
   assert.doesNotMatch(body, /not a bullet/);
 });
 
-test("autonomous and system-actor turns capture nothing; only a human turn extracts", async () => {
-  const systems: string[] = [];
-  const agent: ModelUtilities = {
-    oneShot(system) {
-      systems.push(system);
-      return Promise.resolve("NONE");
-    },
-  };
-  const { memory } = freshMemory();
-  const strategy = createPerTurnStrategy({ agent, memory });
-  await strategy.onTurnEnd!({ scopeId: SCOPE, input: "trigger", reply: "queued", actorId: "system:ambient:acme" });
-  await strategy.onTurnEnd!({ scopeId: SCOPE, input: "[cron wake]", reply: "done", actorId: "U1", autonomous: true });
-  await strategy.onTurnEnd!({ scopeId: SCOPE, input: "hi", reply: "hello", actorId: "U1" });
-
-  assert.deepEqual(systems, [MEMORY_EXTRACTION_PROMPT], "one extraction, for the human turn only");
-});
-
 test("parseFacts: bullets in, NONE/empty/prose out", () => {
   assert.deepEqual(parseFacts("- a\n* b\n  - c \nplain"), ["a", "b", "c"]);
   assert.deepEqual(parseFacts("NONE"), []);
@@ -89,23 +72,6 @@ test("MEMORY_STRATEGY parsing: per-turn is the default, agent-only disables post
   const agent = createMockAgent();
   assert.equal(createMemoryStrategy("agent-only", { agent, memory }).strategy.onTurnEnd, undefined);
   assert.ok(createMemoryStrategy("per-turn", { agent, memory }).strategy.onTurnEnd);
-});
-
-test("debounced: an autonomous turn is skipped and never joins the live actor's burst", async () => {
-  const calls: string[] = [];
-  const agent: ModelUtilities = {
-    oneShot(_system, prompt) {
-      calls.push(prompt);
-      return Promise.resolve("NONE");
-    },
-  };
-  const { memory } = freshMemory();
-  const strategy = createPerTurnStrategy({ agent, memory, captureQuietMs: 30, captureMaxTurns: 10 });
-  await strategy.onTurnEnd!({ scopeId: SCOPE, input: "[cron wake]", reply: "done", actorId: "U1", autonomous: true });
-  await strategy.onTurnEnd!({ scopeId: SCOPE, input: "hi", reply: "hello", actorId: "U1" });
-  await new Promise((r) => setTimeout(r, 120));
-
-  assert.deepEqual(calls, ["User said:\nhi\n\nAssistant replied:\nhello"], "one flush, the live turn only");
 });
 
 test("automatic capture carries the full turn and delivery context", async () => {

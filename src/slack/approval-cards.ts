@@ -1,6 +1,7 @@
 import { clip, inlineCode } from "./util.ts";
 import { escapeSlackText, slackSectionBlocks } from "./mrkdwn.ts";
 import { isObj } from "../util/objects.ts";
+import { isSystemActor } from "../types.ts";
 import { parseDeliveryTarget } from "./delivery.ts";
 
 export const APPROVAL_ACTION_IDS = ["hilo_allow_once", "hilo_allow_session", "hilo_allow_always", "hilo_deny"] as const;
@@ -48,7 +49,7 @@ export interface ApprovalRequester {
 
 export function approvalDeliveryRecipient(request: ApprovalRequester | undefined): string | undefined {
   const id = request?.actor?.externalId;
-  if (!id || id.startsWith("system:")) return undefined;
+  if (!id || isSystemActor(id)) return undefined;
   const author = request?.surfaceOrigin?.author;
   return author?.surface === "slack" && author.id ? author.id : id;
 }

@@ -110,8 +110,8 @@ test("no feed is opened or polled until a browser connects, and a tenantless bro
   const h = harness();
   await h.tenantFeeds.drain();
   await tick();
-  assert.deepEqual(h.feeds, []);
-  assert.deepEqual(h.calls, []);
+  assert.equal(h.feeds.length, 0);
+  assert.equal(h.calls.length, 0);
   const detach = h.attach("solo@x.test", undefined, "plain");
   await tick();
   assert.deepEqual(

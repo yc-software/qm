@@ -179,14 +179,12 @@ export async function doctorCommon(
       step("Slack setup: deferred to the admin connector page");
     }
   }
-  if (config.services.includes("portal")) {
-    validatePortalTrust(config, "config", opts.allowMissingValues ? undefined : secrets);
-    step(
-      config.services.includes("auth")
-        ? "built-in sign-in broker and email trust boundary: ok"
-        : "portal OIDC client and tenant trust boundary: ok",
-    );
-  }
+  validatePortalTrust(config, "config", opts.allowMissingValues ? undefined : secrets);
+  step(
+    config.services.includes("auth")
+      ? "built-in sign-in broker and email trust boundary: ok"
+      : "portal OIDC client and tenant trust boundary: ok",
+  );
   if (config.services.includes("auth")) await authBrokerCheck(config, secrets, !opts.allowMissingValues);
   await baseModelCheck(config, secrets);
 }

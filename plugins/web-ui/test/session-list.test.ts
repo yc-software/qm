@@ -19,6 +19,7 @@ import {
   recencyGroup,
   rowIndicators,
   recentProjectSeeds,
+  sidebarProjectSeeds,
   mergeChildren,
   mergeFirstPage,
   upsertSessions,
@@ -218,6 +219,15 @@ test("bumpActivity is a no-op when no row matches the threadRef", () => {
   assert.deepEqual(bumpActivity(list, "web:u:missing", 999), list);
 });
 
+test("bumpActivity sets the sent text as the last message only on rows that carry previews", () => {
+  const list = [saved("1", "web:u:x"), { ...saved("2", "web:u:y"), lastUserPreview: null }];
+  const plain = bumpActivity(list, "web:u:x", 5, "hello");
+  assert.equal("lastUserPreview" in plain.find((s) => s.id === "1")!, false);
+  const flagged = bumpActivity(list, "web:u:y", 5, "hello there");
+  assert.equal(flagged.find((s) => s.id === "2")!.lastUserPreview, "hello there");
+  assert.equal(bumpActivity(list, "web:u:y", 5, "   ").find((s) => s.id === "2")!.lastUserPreview, null);
+});
+
 test("activityOf prefers lastActivityAt, falling back to createdAt", () => {
   assert.equal(activityOf(saved("1", "web:u:x")), 1, "no lastActivityAt -> createdAt (createdAt is 1 here)");
   assert.equal(activityOf({ ...saved("2", "web:u:y"), lastActivityAt: 999 }), 999, "lastActivityAt wins when present");
@@ -393,6 +403,39 @@ test("project metadata groups only its group scope while ordinary chats stay fla
   assert.equal(items[0]?.kind, "project");
   assert.deepEqual(items[0]?.kind === "project" ? items[0].sessions.map((session) => session.id) : [], ["1", "3"]);
   assert.equal(items[1]?.kind, "session");
+});
+
+test("grouping by activity lists scoped conversations flat, newest first, without empty project rows", () => {
+  const contexts = [
+    { scopeId: "channel:C1", kind: "channel" as const, name: "launch", sessionCount: 1, lastActivityAt: 30 },
+    { scopeId: "personal:alice", kind: "personal" as const, name: null, sessionCount: 1, lastActivityAt: 20 },
+    {
+      scopeId: "group:web-project-empty",
+      kind: "group" as const,
+      name: "Empty",
+      sessionCount: 0,
+      lastActivityAt: 10,
+      project: {
+        id: "empty",
+        name: "Empty",
+        ownerId: "alice",
+        memberIds: ["alice"],
+        scopeId: "group:web-project-empty",
+        members: [{ principalId: "alice", displayName: "Alice" }],
+      },
+    },
+  ];
+  const channel = { ...saved("1", "ch:C1:1.0"), type: "channel" as const, scopeId: "channel:C1", lastActivityAt: 30 };
+  const plain = { ...saved("2", "web:alice:plain"), scopeId: "personal:alice", lastActivityAt: 20 };
+  const byScope = groupProjectSessions([plain, channel], sidebarProjectSeeds(contexts, false));
+  assert.deepEqual(
+    byScope.map((item) => item.kind),
+    ["project", "project", "project"],
+  );
+  assert.deepEqual(groupProjectSessions([plain, channel], sidebarProjectSeeds(contexts, true)), [
+    { kind: "session", session: channel },
+    { kind: "session", session: plain },
+  ]);
 });
 
 test("empty projects appear in Recents", () => {

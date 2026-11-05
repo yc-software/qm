@@ -15,6 +15,22 @@ let deploymentLayerRequests = 0;
 const VALID_SOURCE_SIGNATURE = "v0=valid-source-signature";
 
 const upstream = createServer((req: IncomingMessage, res) => {
+  if (req.url === "/readyz" || req.url?.startsWith("/slack/events") || req.url?.startsWith("/v1/spend/export")) {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    return void req.on("end", () => {
+      res.writeHead(req.url === "/readyz" ? 503 : 200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ url: req.url, headers: req.headers, body: Buffer.concat(chunks).toString("utf8") }));
+    });
+  }
+  if (req.url?.startsWith("/v1/deployments/app-1/git/")) {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    return void req.on("end", () => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ url: req.url, headers: req.headers, body: Buffer.concat(chunks).toString("utf8") }));
+    });
+  }
   if (req.url?.startsWith("/v1/deployment-layer") || req.url?.startsWith("/v1/deployment/live-session")) {
     deploymentLayerRequests++;
     if (req.headers["x-timestamp"] !== "123" || req.headers["x-signature"] !== VALID_SOURCE_SIGNATURE) {
@@ -110,7 +126,7 @@ await new Promise<void>((r) => upstream.listen(0, r));
 const upstreamUrl = `http://localhost:${(upstream.address() as AddressInfo).port}`;
 
 const PUBLIC = "http://portal.test";
-process.env.PORTAL_PUBLIC_URL = PUBLIC;
+process.env.PUBLIC_WEB_URL = PUBLIC;
 process.env.PORTAL_SESSION_SECRET = "router-test-portal-secret";
 process.env.CORE_SIGNING_SECRET = "router-test-core-secret";
 process.env.WEB_UI_UPSTREAM = upstreamUrl;
@@ -803,6 +819,61 @@ test("the deployment live session forwards both credentials only on its exact ro
     });
     assert.equal(response.status, 404);
   }
+});
+
+test("core's readiness, Slack HTTP events and the spend export reach core through the front door", async () => {
+  assert.equal((await fetch(`${base}/readyz`)).status, 503);
+  const events = await fetch(`${base}/slack/events`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-slack-signature": "v0=sig",
+      "x-slack-request-timestamp": "123",
+      "x-slack-retry-num": "1",
+      cookie: "portal_session=x",
+    },
+    body: '{"type":"event_callback"}',
+  });
+  assert.equal(events.status, 200);
+  const event = (await events.json()) as { headers: Record<string, string>; body: string };
+  assert.equal(event.body, '{"type":"event_callback"}');
+  assert.equal(event.headers["x-slack-signature"], "v0=sig");
+  assert.equal(event.headers["x-slack-retry-num"], "1");
+  assert.equal(event.headers.cookie, undefined);
+  const spend = await fetch(`${base}/v1/spend/export?from=2026-10-01&to=2026-11-01`, {
+    headers: { authorization: "Bearer spend-token" },
+  });
+  assert.equal(spend.status, 200);
+  const exported = (await spend.json()) as { url: string; headers: Record<string, string> };
+  assert.equal(exported.url, "/v1/spend/export?from=2026-10-01&to=2026-11-01");
+  assert.equal(exported.headers.authorization, "Bearer spend-token");
+  assert.equal((await fetch(`${base}/slack/events`)).status === 200, false);
+});
+
+test("deployment git requests reach core with their token and without browser credentials", async () => {
+  const refs = await fetch(`${base}/v1/deployments/app-1/git/info/refs?service=git-upload-pack`, {
+    headers: { authorization: "Bearer deploy-git-token", cookie: "portal_session=x", "git-protocol": "version=2" },
+  });
+  assert.equal(refs.status, 200);
+  const refsBody = (await refs.json()) as { url: string; headers: Record<string, string> };
+  assert.equal(refsBody.url, "/v1/deployments/app-1/git/info/refs?service=git-upload-pack");
+  assert.equal(refsBody.headers.authorization, "Bearer deploy-git-token");
+  assert.equal(refsBody.headers["git-protocol"], "version=2");
+  assert.equal(refsBody.headers.cookie, undefined);
+  const pack = await fetch(`${base}/v1/deployments/app-1/git/git-upload-pack`, {
+    method: "POST",
+    headers: { authorization: "Bearer deploy-git-token", "content-type": "application/x-git-upload-pack-request" },
+    body: "0032want",
+  });
+  assert.equal(pack.status, 200);
+  assert.equal(((await pack.json()) as { body: string }).body, "0032want");
+  for (const [method, path] of [
+    ["POST", "/v1/deployments/app-1/git/info/refs"],
+    ["GET", "/v1/deployments/app-1/git/git-upload-pack"],
+    ["GET", "/v1/deployments/app-1/git/HEAD"],
+    ["GET", "/v1/deployments/app-1/versions"],
+  ] as const)
+    assert.equal((await fetch(`${base}${path}`, { method })).status, 404, `${method} ${path}`);
 });
 
 test("Loop ingress forwards signed events and Google identity without a portal session", async () => {

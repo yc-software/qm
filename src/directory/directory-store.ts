@@ -6,6 +6,7 @@ export interface DirectoryMember {
   type: PrincipalType;
   slackId?: string;
   avatarUrl?: string;
+  isBot?: boolean;
 }
 
 export interface DirectoryChannel {

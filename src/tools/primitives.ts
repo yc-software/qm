@@ -507,6 +507,7 @@ export interface ToolContextDeps {
   memoryCaptureMetadata?: () => MemoryCaptureMetadata;
   memoryAccess?: { write?: ScopeId; read: ScopeId[] };
   mcp?: McpToolService;
+  scopeId?: ScopeId;
   sessionHistory?: {
     search(q: string, limit?: number): Promise<string[]>;
     open(seq: number): Promise<string | null>;
@@ -818,7 +819,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       const requested = await selectCredentials(requestedCredentials);
       const scratchOnly = scratchOnlyHandles(requested);
       if (scratch && execOpts?.sandboxId !== undefined) {
-        throw new Error("a command runs on one computer — choose scratch or a sandbox_id");
+        throw new Error('a command runs on one computer — pass `sandbox_id` or `scope: "scratch"`, not both');
       }
       if ((scratch || scratchOnly) && !deps.provisionScratch) {
         throw new Error('scratch execution is not available on this computer — run without scope:"scratch"');
@@ -1147,12 +1148,12 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
 
     async callMcpTool(name: string, args: Record<string, unknown>, approval?: string): Promise<string> {
       if (!deps.mcp) throw new Error("no MCP connectors are configured");
-      return deps.mcp.call(name, args, deps.createdBy, approval);
+      return deps.mcp.call(name, args, deps.createdBy, approval, deps.scopeId);
     },
 
     async mcpToolNeedsApproval(name: string, args: Record<string, unknown>): Promise<boolean> {
       if (!deps.mcp) throw new Error("no MCP connectors are configured");
-      return deps.mcp.needsApproval(name, args, deps.createdBy);
+      return deps.mcp.needsApproval(name, args, deps.createdBy, deps.scopeId);
     },
 
     async awaitClientResult(callId, timeoutMs, signal, toolName) {
