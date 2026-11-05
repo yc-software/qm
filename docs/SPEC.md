@@ -180,6 +180,18 @@ Inventing a small cap (a count, length, byte size, page size, timeout or retry b
 - **Approval summaries:** `redactCommand` both redacts secrets and cuts its output to 500 characters, and approval cards are built from it, so a person can approve a call whose arguments they were shown only in part, with no marker. _Status:_ still present on main.
 - **Slack context and inbox snippets:** Every message from `/v1/surface-context` is clipped to 600 characters, the agent's built-in route to Slack history beyond the injected window. Inbox items cut snippets to 500 characters while the sync task tells the agent to send the full text, "never shortened". _Status:_ still present on main.
 
+### Explaining-away UI (1 example)
+
+If the UI needs a sentence to explain why it didn't do what the person asked, the rule is wrong, not the copy. A note, toast or tooltip that justifies a refusal or a quiet reroute is evidence to fix the behaviour; keep such text only for a real constraint the person can act on.
+
+- **Steer refused during an automation turn** (2026-11-04): After [qm#2907](https://github.com/yc-software/qm/pull/2907), clicking Steer in a web chat while the agent was handling a subagent's report was refused, and the composer said "This message will run as its own turn after the current one." The note made the refusal look intended; the cause was a Slack bystander rule applied to every surface. _Status:_ [qm#3109](https://github.com/yc-software/qm/pull/3109) lets an explicit web steer through.
+
+### Category gate without census (1 example)
+
+Gating behaviour on a category (origin, kind, role, surface) without listing what falls into it. Before adding or moving such a gate, grep every assignment of the category, list the real cases it catches, and say which of them change. A category named for its first use quietly grows to cover unrelated producers.
+
+- **Automation origin in the mid-turn router** (2026-11-03): [qm#2907](https://github.com/yc-software/qm/pull/2907) moved "a person's message never steers into a live automation turn", written for cron posts in shared Slack channels, into the one router for every surface. Automation origin also covers subagent-report wakes, session messages, job watches, webhooks and orphan replays, so web steers into those turns were refused. _Status:_ [qm#3109](https://github.com/yc-software/qm/pull/3109) applies the gate only to messages that did not explicitly ask to steer.
+
 ### Historylessness (always reviewed, 5 examples)
 
 Growing the codebase to keep every path it ever took alive. The canonical case: a conditional that string-matches IDs or prefixes because older rows lack a typed field. Trust the typed field; rows without it get no special handling, and if they matter, migrate them once. The same goes for compatibility shims, dual reads and writes, and old endpoints or data shapes kept beside their replacement. Make the breaking change and let people adapt; agents can usually smooth over the breakage for existing users. If keeping an old shape truly seems necessary, ask the user rather than building it. The codebase represents the system at its current best, without sedimentary layers of how it got there.
