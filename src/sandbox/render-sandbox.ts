@@ -477,7 +477,7 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
       processSessions: true,
       egressEnforcement: "none",
       spec: {
-        os: `Debian 12 — Render sandbox from the QM sandbox base image (it stops after ${RENDER_IDLE_STOP_MS / 60_000} idle minutes with no running processes and runs at most ${RENDER_COMPUTER_LIFETIME_SEC / 86400} days, or 1 day on a Render Hobby workspace; files return from checkpoints when it starts again, but background processes do not; publish durable work to git or Files)`,
+        os: `Debian 12 — Render sandbox from the QM sandbox base image (it stops after ${RENDER_IDLE_STOP_MS / 60_000} idle minutes with no running processes and runs at most ${RENDER_COMPUTER_LIFETIME_SEC / 86400} days; files return from checkpoints when it starts again, but background processes do not; publish durable work to git or Files)`,
         runtimes: ["Node 24", "Python 3 (venv on PATH — `pip install` just works)"],
         cpus: 2,
         memoryMb: 4096,
