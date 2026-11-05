@@ -367,7 +367,7 @@ export function createTurnMethods(
             : undefined;
         const candidates = await liveTurnsFor(conversation.threadRef, ambientRef, stopsLiveWork(incoming, true));
         if (redeliveryKey && candidates.some(({ run }) => run?.dedupKey === redeliveryKey)) return { status: "silent" };
-        const prefs = { midTurn: req.midTurn ?? "steer" } as const;
+        const prefs = req.midTurn ? { midTurn: req.midTurn } : {};
         const routes = candidates.map((candidate) => ({
           ...candidate,
           route: routeIncoming(incoming, candidate.turn, prefs),
