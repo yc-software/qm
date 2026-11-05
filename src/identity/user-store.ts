@@ -2,16 +2,17 @@ import type { PoolClient } from "pg";
 import { createPgPool, withPgTransaction, type PgMigrationDefinition } from "../persistence/pg-pool.ts";
 import { DIRECTORY_MIGRATIONS } from "../directory/postgres-directory-store.ts";
 import { SESSION_MIGRATIONS } from "../sessions/session-schema.ts";
-import { msOf } from "../sessions/items.ts";
+import { msOf, TENANT, userTurn } from "../sessions/items.ts";
 import { foldPrincipalId } from "../directory/person.ts";
 import { PERSONA_MIGRATIONS } from "../personas/persona-schema.ts";
 
 type UserSource = "turn" | "invite" | "admin";
 type UserKind = "person" | "app";
 
-interface UserRecord {
+export interface UserRecord {
   id: string;
   principalId: string;
+  aliases: string[];
   kind: UserKind;
   firstSeenAt?: number;
   source?: UserSource;
@@ -25,6 +26,16 @@ export interface UserLink {
   evidence: string;
   linkedBy: string;
   createdAt: number;
+}
+
+export interface UserActivity {
+  userId: string | null;
+  principalId: string;
+  kind: UserKind;
+  sessions: number;
+  turns: number;
+  lastSeenAt: number | null;
+  days: number[];
 }
 
 export interface UserLinkStore {
@@ -41,7 +52,9 @@ interface SeenPerson {
 
 export interface UserStore extends UserLinkStore {
   list(): Promise<UserRecord[]>;
-  get(id: string): Promise<UserRecord | null>;
+  get(idOrAlias: string): Promise<UserRecord | null>;
+  resolve(aliases: readonly string[]): Promise<Map<string, UserRecord>>;
+  activity(): Promise<UserActivity[]>;
   record(person: SeenPerson): Promise<boolean>;
   markOffboarded(id: string, by: string): Promise<UserRecord>;
   markReactivated(id: string): Promise<UserRecord | null>;
@@ -235,7 +248,9 @@ export const USER_MIGRATIONS: PgMigrationDefinition[] = [
   ...PERSONA_MIGRATIONS,
 ];
 
-const COLUMNS = `u.id, u.primary_alias, u.kind, ${msOf("u.first_seen_at")} AS first_seen_at, u.source,
+const COLUMNS = `u.id, u.primary_alias, u.kind,
+  ARRAY(SELECT a.alias_id FROM user_links a WHERE a.user_id = u.id
+         ORDER BY a.alias_id = u.primary_alias DESC, a.created_at, a.alias_id) AS aliases, ${msOf("u.first_seen_at")} AS first_seen_at, u.source,
   ${msOf("u.offboarded_at")} AS offboarded_at,
   (SELECT b.primary_alias FROM users b WHERE b.id = u.offboarded_by) AS offboarded_by`;
 const LINK_SELECT = `SELECT l.alias_id, u.primary_alias AS canonical_id, l.evidence,
@@ -247,6 +262,7 @@ function toRecord(r: Record<string, unknown>): UserRecord {
   return {
     id: r.id as string,
     principalId: r.primary_alias as string,
+    aliases: (r.aliases as string[] | null) ?? [r.primary_alias as string],
     kind: (r.kind as UserKind | undefined) ?? "person",
     ...(r.first_seen_at != null ? { firstSeenAt: Number(r.first_seen_at), source: r.source as UserSource } : {}),
     ...(r.offboarded_at != null ? { offboardedAt: Number(r.offboarded_at) } : {}),
@@ -261,6 +277,42 @@ function toLink(r: Record<string, unknown>): UserLink {
     evidence: r.evidence as string,
     linkedBy: r.linked_by as string,
     createdAt: Number(r.created_at),
+  };
+}
+
+const USER_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const ACTIVITY = `
+  WITH member AS (
+    SELECT DISTINCT coalesce(l.user_id::text, ${fold("p.principal_id")}) AS who, l.user_id, p.session_id
+      FROM participants p LEFT JOIN user_links l ON l.alias_id = ${fold("p.principal_id")}
+     WHERE coalesce(btrim(p.principal_id), '') <> ''
+  ), daily AS (
+    SELECT m.who, (${msOf("e.created_at")} / 86400000)::bigint AS day, COUNT(*) AS turns,
+           ${msOf("MAX(e.created_at)")} AS last_at
+      FROM member m JOIN items e ON e.tenant_id = ${TENANT} AND e.session_id = m.session_id
+     WHERE ${userTurn("e")}
+     GROUP BY m.who, day
+  ), per AS (
+    SELECT who, SUM(turns) AS turns, MAX(last_at) AS last_at, array_agg(day ORDER BY day) AS days
+      FROM daily GROUP BY who
+  )
+  SELECT m.user_id, coalesce(u.primary_alias, m.who) AS principal_id, coalesce(u.kind, 'person') AS kind,
+         COUNT(DISTINCT m.session_id) AS sessions, coalesce(per.turns, 0) AS turns, per.last_at, per.days
+    FROM member m
+    LEFT JOIN users u ON u.id = m.user_id
+    LEFT JOIN per ON per.who = m.who
+   GROUP BY m.who, m.user_id, u.primary_alias, u.kind, per.turns, per.last_at, per.days`;
+
+function toActivity(r: Record<string, unknown>): UserActivity {
+  return {
+    userId: (r.user_id as string | null) ?? null,
+    principalId: r.principal_id as string,
+    kind: r.kind as UserKind,
+    sessions: Number(r.sessions),
+    turns: Number(r.turns),
+    lastSeenAt: r.last_at == null ? null : Number(r.last_at),
+    days: ((r.days as (string | number)[] | null) ?? []).map(Number),
   };
 }
 
@@ -352,9 +404,27 @@ export function createPostgresUserStore(connectionString: string): UserStore {
       );
       return rows.map(toRecord);
     },
-    async get(id) {
-      const rows = await q(`SELECT ${COLUMNS} FROM users u WHERE u.id = ${userOf("$1")}`, [foldPrincipalId(id)]);
+    async get(idOrAlias) {
+      const key = idOrAlias.trim();
+      const rows = USER_ID.test(key)
+        ? await q(`SELECT ${COLUMNS} FROM users u WHERE u.id = $1::uuid`, [key])
+        : await q(`SELECT ${COLUMNS} FROM users u WHERE u.id = ${userOf("$1")}`, [foldPrincipalId(key)]);
       return rows[0] ? toRecord(rows[0]) : null;
+    },
+    async resolve(aliases) {
+      const wanted = [...new Set(aliases.filter((a) => foldPrincipalId(a)))];
+      if (!wanted.length) return new Map();
+      const rows = await q(
+        `SELECT s.alias AS requested, ${COLUMNS}
+           FROM unnest($1::text[]) AS s(alias)
+           JOIN user_links l ON l.alias_id = ${fold("s.alias")}
+           JOIN users u ON u.id = l.user_id`,
+        [wanted],
+      );
+      return new Map(rows.map((r) => [r.requested as string, toRecord(r)]));
+    },
+    async activity() {
+      return (await q(ACTIVITY)).map(toActivity);
     },
     async record({ id, source, at }) {
       const alias = foldPrincipalId(id);

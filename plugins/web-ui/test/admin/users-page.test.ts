@@ -196,3 +196,50 @@ test("users: apps carry an app badge and the search finds them", async () => {
   assert.doesNotMatch(page.host.textContent!, /pat@example\.com/);
   page.close();
 });
+
+test("users: a person links to their user id, lists their other sign-ins, and the search finds any of them", async () => {
+  const page = await mountPage("/settings/users", {
+    "GET /users": {
+      users: [
+        { userId: "u-1", principalId: "pat@example.com", aliases: ["pat@example.com", "U0PAT"], sessionCount: 2 },
+        { userId: "u-2", principalId: "sam@example.com", aliases: ["sam@example.com"] },
+      ],
+      grants: [],
+      externalUsers: [],
+    },
+  });
+  await page.settle();
+  const links = [...page.document.querySelectorAll<HTMLAnchorElement>("td a")].map((a) => a.getAttribute("href"));
+  assert.deepEqual(links, ["/settings/user?user=u-1", "/settings/user?user=u-2"]);
+  assert.match(page.host.textContent!, /U0PAT/);
+  const search = page.document.querySelector<HTMLInputElement>("input[type=search]")!;
+  search.value = "u0pat";
+  search.dispatchEvent(new page.window.Event("input"));
+  await page.settle();
+  assert.deepEqual(
+    [...page.document.querySelectorAll("td a")].map((a) => a.textContent),
+    ["pat@example.com"],
+  );
+  page.close();
+});
+
+test("user detail: opens by user id, lists every sign-in, and acts on the person's primary sign-in", async () => {
+  const puts: unknown[] = [];
+  const page = await mountPage("/settings/user?user=u-1", {
+    "GET /users/u-1": {
+      userId: "u-1",
+      principalId: "pat@example.com",
+      onboarding: "pending",
+      user: { id: "u-1", principalId: "pat@example.com", aliases: ["pat@example.com", "U0PAT"] },
+    },
+    "GET /keychain": { credentials: [], grants: [] },
+    "PUT /users/pat@example.com/onboarding": ({ body }) => (puts.push(body), { body: { status: body.status } }),
+  });
+  await page.settle();
+  assert.match(page.host.textContent!, /Sign-ins \(2\)/);
+  assert.match(page.host.textContent!, /U0PAT/);
+  button(page.host, "Mark completed").click();
+  await page.settle();
+  assert.deepEqual(puts, [{ status: "completed" }]);
+  page.close();
+});

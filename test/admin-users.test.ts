@@ -11,75 +11,48 @@ import type { ServerDeps } from "../src/api/deps.ts";
 import { gatewayActorId } from "../src/model/provider-endpoints.ts";
 import { buildApp } from "./support/build-app.ts";
 import { computeUsers } from "../src/admin/users.ts";
+import type { UserRecord } from "../src/identity/user-store.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { testMigratedDatabaseUrl } from "./support/test-database.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 
-test("computeUsers dedupes participants, credits their turns, and joins admin status", () => {
-  const participants = [
-    { sessionId: "s1", principalId: "U1" },
-    { sessionId: "s2", principalId: "U1" },
-    { sessionId: "s1", principalId: "U2" },
-  ];
-  const turns = [
-    { principalId: "U1", sessionId: "s1", day: 0, turns: 2, firstAt: 150, lastAt: 160 },
-    { principalId: "U2", sessionId: "s1", day: 0, turns: 2, firstAt: 150, lastAt: 160 },
-    { principalId: "U1", sessionId: "s2", day: 0, turns: 1, firstAt: 250, lastAt: 250 },
-  ];
-  const grants = [{ principalId: "U2", scopeId: "org:default-org", role: "org_admin" as const }];
-  const rows = computeUsers({ participants, turns, grants, people: ["U1", "U2"] });
-  const byId: Record<string, any> = Object.fromEntries(rows.map((r) => [r.principalId, r]));
-
-  assert.equal(byId.U1.sessionCount, 2);
-  assert.equal(byId.U1.turnCount, 3);
-  assert.equal(byId.U1.lastSeenAt, 250);
-  assert.deepEqual(byId.U1.admin, { isAdmin: false });
-  assert.equal(byId.U2.admin.role, "org_admin");
-  assert.equal(rows[0]!.principalId, "U2");
+const user = (id: string, aliases: string[]): UserRecord => ({ id, principalId: aliases[0]!, aliases, kind: "person" });
+const seen = (userId: string | null, principalId: string, sessions: number, turns: number, lastSeenAt: number) => ({
+  userId,
+  principalId,
+  kind: "person" as const,
+  sessions,
+  turns,
+  lastSeenAt,
+  days: [],
 });
 
-test("computeUsers sums a participant's turn rollup and takes its latest timestamp", () => {
+test("computeUsers lists exactly the roster with each user's activity; a grant on any sign-in makes them an admin", () => {
   const rows = computeUsers({
-    participants: [{ sessionId: "s1", principalId: "U1" }],
-    turns: [{ principalId: "U1", sessionId: "s1", day: 0, turns: 2, firstAt: 100, lastAt: 199 }],
-    grants: [],
-    people: ["U1"],
-  });
-  assert.equal(rows.length, 1);
-  assert.equal(rows[0]!.turnCount, 2, "the participant's two turns");
-  assert.equal(rows[0]!.lastSeenAt, 199);
-});
-
-test("computeUsers lists exactly the roster: a quiet admin gets a row, a participant who is not on it does not", () => {
-  const rows = computeUsers({
-    participants: [{ sessionId: "s1", principalId: "U9" }],
-    turns: [],
-    grants: [{ principalId: "ghost-admin", scopeId: "org:default-org", role: "org_admin" as const }],
-    people: ["ghost-admin"],
-  });
-  assert.equal(rows.length, 1);
-  assert.equal(rows[0]!.principalId, "ghost-admin");
-  assert.equal(rows[0]!.sessionCount, 0);
-  assert.equal(rows[0]!.lastSeenAt, null);
-  assert.equal(rows[0]!.admin.isAdmin, true);
-});
-
-test("computeUsers credits activity to a roster person whatever the case of their id", () => {
-  const rows = computeUsers({
-    participants: [
-      {
-        sessionId: "s1",
-        principalId: "Pat@Example.com",
-      },
+    roster: [
+      user("u-1", ["pat@example.com", "U1"]),
+      user("u-2", ["sam@example.com"]),
+      user("u-3", ["quiet@example.com"]),
     ],
-    turns: [{ principalId: "Pat@Example.com", sessionId: "s1", day: 0, turns: 3, firstAt: 100, lastAt: 150 }],
-    grants: [],
-    people: ["pat@example.com"],
+    activity: [
+      seen("u-1", "pat@example.com", 2, 3, 250),
+      seen("u-2", "sam@example.com", 1, 1, 400),
+      seen(null, "U9", 5, 5, 900),
+    ],
+    grants: [
+      { principalId: "U1", scopeId: "org:default-org", role: "org_admin" },
+      { principalId: "Quiet@Example.com", scopeId: "org:default-org", role: "org_admin" },
+    ],
   });
   assert.deepEqual(
-    rows.map((r) => [r.principalId, r.sessionCount, r.turnCount, r.lastSeenAt]),
-    [["pat@example.com", 1, 3, 150]],
+    rows.map((r) => [r.userId, r.sessionCount, r.turnCount, r.lastSeenAt, r.admin.isAdmin]),
+    [
+      ["u-1", 2, 3, 250, true],
+      ["u-3", 0, 0, null, true],
+      ["u-2", 1, 1, 400, false],
+    ],
+    "admins first, then most recently seen; a participant who is not on the roster gets no row",
   );
 });
 
@@ -240,7 +213,6 @@ test("/v1/admin/users/:principalId: per-user detail counts personal conversation
       throw new Error("User detail must not load org history or artifact lists");
     };
     t.mock.method(s.built.sessions, "listParticipants", fail);
-    t.mock.method(s.built.sessions, "attributedTurns", fail);
     t.mock.method(s.built.sessions, "scopeSessionSummaries", fail);
     t.mock.method(s.built.files, "listOwnedByScopes", fail);
     t.mock.method(s.built.app, "listCrons", fail);
@@ -496,3 +468,46 @@ for (const canonicalPrincipal of ["alice@example.com", "Alice@example.com"]) {
     }
   });
 }
+
+test("/v1/admin/users: a person with a linked sign-in is one row with every sign-in, and their detail opens by user id", async () => {
+  const s = start();
+  try {
+    const dm: TurnRequest = {
+      surface: "test",
+      actor: { externalId: "pat@example.com" },
+      conversation: { kind: "dm", threadRef: "dm:pat:t1" },
+      text: "hello",
+    };
+    assert.equal((await s.built.app.turn(dm)).status, "ok");
+    await s.built.app.turn({
+      ...dm,
+      actor: { externalId: "U-PAT" },
+      conversation: { kind: "dm", threadRef: "dm:U-PAT:t1" },
+    });
+    await s.built.admin.users.link({
+      principalId: "U-PAT",
+      canonicalId: "pat@example.com",
+      evidence: "qa",
+      linkedBy: "",
+      createdAt: Date.now(),
+    });
+    const headers = { "x-admin-actor": "admin-alice@default-org" };
+    const d: any = await (await fetch(`${s.base}/v1/admin/users`, { headers })).json();
+    const rows = d.users.filter((u: any) => u.aliases.includes("U-PAT") || u.principalId === "U-PAT");
+    assert.deepEqual(
+      rows.map((u: any) => [u.principalId, u.aliases, u.sessionCount, u.turnCount]),
+      [["pat@example.com", ["pat@example.com", "U-PAT"], 2, 2]],
+    );
+    assert.match(rows[0].userId, /^[0-9a-f-]{36}$/);
+
+    const detail: any = await (await fetch(`${s.base}/v1/admin/users/${rows[0].userId}`, { headers })).json();
+    assert.deepEqual(
+      [detail.userId, detail.principalId, detail.scopeId, detail.user.aliases],
+      [rows[0].userId, "pat@example.com", "personal:pat@example.com", ["pat@example.com", "U-PAT"]],
+    );
+    const viaSignIn: any = await (await fetch(`${s.base}/v1/admin/users/U-PAT`, { headers })).json();
+    assert.equal(viaSignIn.userId, rows[0].userId, "any sign-in opens the same user");
+  } finally {
+    await s.close();
+  }
+});
