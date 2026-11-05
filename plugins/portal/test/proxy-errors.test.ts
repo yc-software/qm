@@ -48,7 +48,7 @@ await new Promise<void>((r) => upstream.listen(0, r));
 const upstreamUrl = `http://localhost:${(upstream.address() as AddressInfo).port}`;
 
 const PUBLIC = "http://portal.test";
-process.env.PORTAL_PUBLIC_URL = PUBLIC;
+process.env.PUBLIC_WEB_URL = PUBLIC;
 process.env.PORTAL_SESSION_SECRET = "proxy-errors-test-portal-secret";
 process.env.CORE_SIGNING_SECRET = "proxy-errors-test-core-secret";
 process.env.PORTAL_IDENTITY_SECRET = "proxy-errors-test-identity-secret";

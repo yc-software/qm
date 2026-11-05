@@ -86,7 +86,7 @@ export interface AgentTurnInput {
   }>;
   documents?: DocumentInput[];
   runtime?: Partial<RuntimeChoice>;
-  runtimePurpose?: import("../resolution/config-store.ts").RuntimePurpose;
+  runtimePurpose?: import("../resolution/config-store.ts").TurnRuntimePurpose;
   runtimeControl?: RuntimeControl;
   runtimeActorId?: string;
   readOnly?: boolean;

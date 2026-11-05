@@ -17,7 +17,7 @@ test(
   },
   async (t) => {
     assert.ok(env);
-    const publicUrl = env.PORTAL_PUBLIC_URL!;
+    const publicUrl = env.PUBLIC_WEB_URL!;
     const secret = env.PORTAL_SESSION_SECRET!;
     const configuredAdmin = env.ADMIN_GRANTS!.split(":")[0]!.toLowerCase();
     const cli = () => {

@@ -62,7 +62,6 @@ const flyServiceCtx = (config: QmConfig, appPrefix: string, deployAppPrefix: str
       : {}),
     ...(brand ? { brand } : {}),
     coreUrl: `http://${appPrefix}-core.internal:8080`,
-    authUrl: `http://${appPrefix}-auth.flycast`,
   };
 };
 
@@ -661,13 +660,6 @@ export function mpgDirectUrl(statusOutput: string, clusterId: string): string {
   return url.toString();
 }
 
-function ensureFlycast(app: string): void {
-  const ips = fly(["ips", "list", "-a", app]);
-  if (/private/i.test(ips)) return;
-  fly(["ips", "allocate-v6", "--private", "-a", app]);
-  note(`flycast: allocated private v6 for ${app}`);
-}
-
 function ensurePublicIngress(app: string): void {
   let ips: Array<{ Type?: string }>;
   try {
@@ -761,24 +753,6 @@ function imageSourceFor(ctx: FlyCtx, opts: FlyUpOpts): ImageSource | undefined {
   return { kind: "manifest" };
 }
 
-const SAFE_AFTER_CORE = new Set<ServiceName>(["web-ui", "auth"]);
-
-export function flyDeployPhases(services: ServiceName[]): ServiceName[][] {
-  const phases: ServiceName[][] = [];
-  const remaining = [...services];
-  const coreIndex = remaining.indexOf("core");
-  if (coreIndex !== -1) {
-    phases.push(["core"]);
-    remaining.splice(coreIndex, 1);
-  }
-  const parallel = remaining.filter((s) => SAFE_AFTER_CORE.has(s));
-  if (parallel.length) phases.push(parallel);
-  for (const s of remaining) {
-    if (!SAFE_AFTER_CORE.has(s)) phases.push([s]);
-  }
-  return phases;
-}
-
 function resolveServices(config: QmConfig, only?: ServiceName[]): ServiceName[] {
   const runnable = runnableServices(config.services);
   for (const s of runnable) {
@@ -864,7 +838,6 @@ async function deployService(
   const spec = serviceDef(service).fly!;
   note(`\n=== deploying ${app} ===`);
   if (service === "core") timing.time(service, "Postgres ensure", () => ensurePostgres(ctx));
-  if (spec.flycast) timing.time(service, "Flycast ensure", () => ensureFlycast(app));
   if (spec.publicIngress) timing.time(service, "public ingress ensure", () => ensurePublicIngress(app));
   const cfgPath = serviceCfgPath(ctx, service);
   const args = ["deploy", "--yes", "-c", cfgPath, ...spec.deployFlags];
@@ -883,17 +856,6 @@ async function deployService(
   step(`fly ${args.join(" ")}`);
 
   await timing.timeAsync(service, "fly deploy", () => runFlyDeploy(args, ctx.commandCwd));
-}
-
-async function deployPhase(
-  ctx: FlyCtx,
-  phase: ServiceName[],
-  imageSource: ImageSource | undefined,
-  timing: ReturnType<typeof createTimingRecorder>,
-): Promise<void> {
-  if (phase.length > 1)
-    note(`\n=== deploying in parallel: ${phase.map((s) => `${ctx.appPrefix}-${s}`).join(", ")} ===`);
-  await settleAll(phase.map((s) => deployService(ctx, s, imageSource, timing)));
 }
 
 async function buildServiceImage(
@@ -1261,7 +1223,7 @@ export async function flyUp(config: QmConfig, configDir: string, opts: FlyUpOpts
     }
     unsetCorelessPluginCoreSecrets(plugins, ctx.appPrefix);
 
-    for (const phase of flyDeployPhases(services)) await deployPhase(ctx, phase, imageSource, timing);
+    for (const service of services) await deployService(ctx, service, imageSource, timing);
     await deployPlugins(ctx, plugins, imageSource, timing);
     if (ctx.sourceRoot) recordServiceImages(ctx, services, opts.configPath);
 

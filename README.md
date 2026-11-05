@@ -91,9 +91,10 @@ Every turn runs through a central core, which can use a variety of models
 to generate the response. A Postgres persistence layer holds user data, session history,
 and other durable state. The agent has a small, fixed tool surface; one of those tools is
 `execute`, which runs commands in the scope's own isolated sandbox — its durable computer,
-where installed tools stay installed. The web UI, including its administrator settings, is one service; the portal and optional built-in
-auth broker share another. These modules communicate with core over its HTTP API.
-See [combined services](docs/combined-services.md) for configuration and migration;
+where installed tools stay installed. Core also serves the public front door: sign-in, the optional built-in
+auth broker, and the web UI, whose browser bundle ships as a static release that `qm ui publish` can update
+without restarting core. These modules communicate with core over its HTTP API.
+See [the core-hosted front door](docs/combined-services.md) for configuration and migration;
 Slack is an optional in-process plugin that core starts
 and supervises through a direct service client.
 
@@ -246,7 +247,7 @@ upstream source history to merge.
 - [`.env.example`](./.env.example) — every knob, documented in place
 - [`docs/swarms.md`](./docs/swarms.md) — durable agent pools, scoped messages, and blank Modal workers
 - [`docs/model-gateway.md`](./docs/model-gateway.md) — discover and route models through a gateway
-- [`plugins/`](./plugins) — the surfaces (Slack, web UI, portal)
+- [`plugins/`](./plugins) — the surfaces core hosts (web UI, portal, auth broker)
 
 ## License
 
