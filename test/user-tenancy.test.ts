@@ -23,7 +23,7 @@ async function upgrade(owner: PgPool): Promise<void> {
 }
 
 async function beforeUsers(owner: PgPool, linksTenanted: boolean): Promise<void> {
-  await owner.q(`DROP TABLE users, user_links CASCADE`);
+  await owner.q(`DROP TABLE users, user_links, personas, persona_access CASCADE`);
   await owner.q(`DELETE FROM qm_schema_migrations WHERE id LIKE 'users/%'`);
   await owner.q(
     linksTenanted
@@ -145,17 +145,17 @@ test("a tenanted database builds each tenant's users from that tenant's own link
 
 const SHAPE = `
   SELECT 'constraint' AS kind, c.conrelid::regclass::text AS tbl, c.conname AS name, pg_get_constraintdef(c.oid) AS def
-    FROM pg_constraint c WHERE c.conrelid IN ('users'::regclass, 'user_links'::regclass)
+    FROM pg_constraint c WHERE c.conrelid IN ('users'::regclass, 'user_links'::regclass, 'personas'::regclass, 'persona_access'::regclass)
   UNION ALL
   SELECT 'index', i.tablename, i.indexname, i.indexdef FROM pg_indexes i
-   WHERE i.schemaname = current_schema() AND i.tablename IN ('users', 'user_links')
+   WHERE i.schemaname = current_schema() AND i.tablename IN ('users', 'user_links', 'personas', 'persona_access')
   UNION ALL
   SELECT 'policy', p.tablename, p.policyname, p.qual || ' / ' || coalesce(p.with_check, '') FROM pg_policies p
-   WHERE p.tablename IN ('users', 'user_links')
+   WHERE p.tablename IN ('users', 'user_links', 'personas', 'persona_access')
   UNION ALL
   SELECT 'column', c.table_name, c.column_name, c.data_type || ' ' || c.is_nullable || ' ' || coalesce(c.column_default, '')
     FROM information_schema.columns c
-   WHERE c.table_schema = current_schema() AND c.table_name IN ('users', 'user_links')
+   WHERE c.table_schema = current_schema() AND c.table_name IN ('users', 'user_links', 'personas', 'persona_access')
   ORDER BY 1, 2, 3`;
 
 test("a database that ran the single-tenant users tables gets the same tenant-first schema, its rows kept in its one tenant", async () => {
@@ -172,7 +172,7 @@ test("a database that ran the single-tenant users tables gets the same tenant-fi
     const shape = await tenanted.owner.q(SHAPE);
     assert.deepEqual(
       shape.filter((row) => row.kind === "policy").map((row) => row.tbl),
-      ["user_links", "users"],
+      ["persona_access", "personas", "user_links", "users"],
     );
     assert.deepEqual(await owner.q(SHAPE), shape);
     const [only] = await owner.q(`SELECT id FROM tenants`);

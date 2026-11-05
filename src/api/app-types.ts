@@ -1,3 +1,4 @@
+import type { PersonaService } from "../personas/persona-service.ts";
 import type { TeamStore } from "../teams/teams.ts";
 import type { CronScriptTrial } from "../cron/script.ts";
 import type { ExternalSlackPolicies } from "../resolution/external-slack.ts";
@@ -281,6 +282,7 @@ export interface App {
   readBootTenant(): Promise<string | undefined>;
   tenantFor: import("../tenants/lookup.ts").TenantLookup["tenantFor"];
   swarms?: SwarmService;
+  personas?: PersonaService;
   turn(req: TurnRequest, replay?: { signalDedupKey: string }): Promise<TurnResult>;
   getApproval(requestId: string, viewer?: string): Promise<(PendingApprovalRecord & { requestId: string }) | null>;
   subscribeSessionStates(cb: (event: SessionStateEvent) => void, opts?: SubscribeOptions): () => void;
@@ -547,6 +549,7 @@ export interface App {
   ambientJudge?(systemPrompt: string, prompt: string): Promise<string | undefined>;
   directoryMembers(): Promise<DirectoryMember[]>;
   directoryChannels(): Promise<DirectoryChannel[]>;
+  directoryChannelsFor(principalId: string): Promise<DirectoryChannel[]>;
   channelMember(channelId: string, principalId: string): Promise<boolean>;
   channelVisibleTo(actorId: string, channelId: string, isPrivate?: boolean): Promise<boolean>;
   recordPrincipalDelivery(deliveryId: string, recipientThreadRef: string): Promise<void>;
@@ -650,6 +653,7 @@ interface DeploymentGitPrincipals {
 }
 
 export interface AppDeps {
+  personas?: PersonaService;
   externalSlackPolicies?: ExternalSlackPolicies;
   admittedWork?: AdmittedWork;
   shutdown?: () => AbortSignal;

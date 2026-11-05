@@ -189,6 +189,13 @@ test("destructive annotations mark MCP tools for approval unless the server over
   assert.deepEqual(await approvals({}), { read: false, drop: true, plain: false });
   assert.deepEqual(await approvals({ approval: "all" }), { read: true, drop: true, plain: true });
   assert.deepEqual(await approvals({ approval: "none" }), { read: false, drop: false, plain: false });
+  const readOnly = async (partial: Partial<McpServer>) => {
+    await store.put(server({ url: mcp.url, ...partial }));
+    await service.refresh();
+    return Object.fromEntries((await service.toolDefs()).map((d) => [d.remoteName, d.readOnly]));
+  };
+  assert.deepEqual(await readOnly({ readOnly: false }), { read: true, drop: false, plain: false });
+  assert.deepEqual(await readOnly({ readOnly: true }), { read: true, drop: true, plain: true });
   service.close();
 });
 

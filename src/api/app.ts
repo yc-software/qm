@@ -22,6 +22,7 @@ export function createApp(deps: AppDeps): App {
     swarms: deps.swarms,
     readBootTenant: () => deps.sessions.readBootTenant(),
     tenantFor: (...args: Parameters<App["tenantFor"]>) => deps.sessions.tenantLookup.tenantFor(...args),
+    personas: deps.personas,
     ...createTurnMethods(deps, helpers, ambient),
     ...createSessionMethods(deps, helpers),
     ...createMessagingMethods(deps, helpers, ambient),

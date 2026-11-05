@@ -4,6 +4,7 @@ import { DIRECTORY_MIGRATIONS } from "../directory/postgres-directory-store.ts";
 import { SESSION_MIGRATIONS } from "../sessions/session-schema.ts";
 import { msOf } from "../sessions/items.ts";
 import { foldPrincipalId } from "../directory/person.ts";
+import { PERSONA_MIGRATIONS } from "../personas/persona-schema.ts";
 import { fold, tenantedUsers, ts, USERS_SCHEMA } from "./user-tenancy.ts";
 
 export { fold };
@@ -207,9 +208,10 @@ export const USER_MIGRATIONS: PgMigrationDefinition[] = [
        END $$`,
     ],
   },
+  ...PERSONA_MIGRATIONS,
 ];
 
-const TENANTED = tenantedUsers(USER_MIGRATIONS);
+const TENANTED = tenantedUsers(USER_MIGRATIONS.filter((migration) => !PERSONA_MIGRATIONS.includes(migration)));
 
 export const USER_SCHEMA_MIGRATIONS: PgMigrationDefinition[] = [
   ...TENANTED.before,
@@ -257,7 +259,7 @@ async function findUser(q: Query, alias: string): Promise<string | undefined> {
   return (await q(`SELECT user_id FROM user_links WHERE alias_id = $1`, [alias]))[0]?.user_id as string | undefined;
 }
 
-async function ensureUserIn(client: PoolClient, alias: string): Promise<string> {
+export async function ensureUserIn(client: PoolClient, alias: string): Promise<string> {
   const q = onClient(client);
   const found = await findUser(q, alias);
   if (found) return found;
@@ -311,6 +313,8 @@ async function linkInTransaction(client: PoolClient, link: UserLink): Promise<Us
     );
     await q(`UPDATE users SET offboarded_by = $1 WHERE offboarded_by = $2`, [target, source]);
     await q(`UPDATE user_links SET linked_by = $1 WHERE linked_by = $2`, [target, source]);
+    await q(`UPDATE personas SET created_by = $1 WHERE created_by = $2`, [target, source]);
+    await q(`UPDATE persona_access SET granted_by = $1 WHERE granted_by = $2`, [target, source]);
     await q(`DELETE FROM users WHERE id = $1`, [source]);
   }
   const linkedBy = link.linkedBy ? await ensureUserIn(client, foldPrincipalId(link.linkedBy)) : null;

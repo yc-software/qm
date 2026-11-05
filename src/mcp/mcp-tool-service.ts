@@ -348,7 +348,7 @@ export function createMcpToolService(opts: {
           remoteName: tool.name,
           description: tool.description || `${tool.name} on ${server.name}`,
           inputSchema: modelInputSchema(tool.inputSchema),
-          readOnly: server.readOnly,
+          readOnly: server.readOnly || tool.annotations?.readOnlyHint === true,
           needsApproval: mcpToolNeedsApproval(server, tool.annotations),
         });
       }

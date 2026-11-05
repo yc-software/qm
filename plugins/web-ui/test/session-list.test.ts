@@ -446,6 +446,22 @@ test("empty projects appear in Recents", () => {
   ]);
 });
 
+test("conversations with a persona you can use group under that persona instead of their home", () => {
+  const seeds = [
+    { scopeId: "personal:alice", name: "Personal", kind: "personal" as const },
+    { scopeId: "persona:ada", name: "Ada", kind: "persona" as const },
+    { scopeId: "persona:idle", name: "Idle", kind: "persona" as const },
+  ];
+  const withAda = { ...saved("1", "web:alice:ada"), scopeId: "personal:alice", personaId: "ada" };
+  const plain = { ...saved("2", "web:alice:plain"), scopeId: "personal:alice" };
+  const unknown = { ...saved("3", "web:alice:gone"), scopeId: "personal:alice", personaId: "deleted" };
+  const items = groupProjectSessions([withAda, plain, unknown], seeds);
+  const groups = Object.fromEntries(
+    items.flatMap((item) => (item.kind === "project" ? [[item.scopeId, item.sessions.map((s) => s.id)]] : [])),
+  );
+  assert.deepEqual(groups, { "persona:ada": ["1"], "personal:alice": ["2", "3"], "persona:idle": [] });
+});
+
 test("a pending (not-yet-sent) chat in a project scope nests under its project", () => {
   const seeds = [{ scopeId: "group:web-project-p1", name: "P1" }];
   const fresh = { ...pending("web:alice:new"), type: "group" as const, scopeId: seeds[0]!.scopeId };

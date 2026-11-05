@@ -13,9 +13,13 @@ function advertised(): Array<{ method: string; path: string }> {
     renderAgentApis(
       { ...base, liveAuthor: true, memory: { read: ["personal:U1"], write: "personal:U1" } },
       { isAdmin: true },
-      { swarmsEnabled: true },
+      { swarmsEnabled: true, personasEnabled: true },
     ),
-    renderAgentApis({ ...base, grants: [...UNATTENDED_ADMIN_GRANTS] }, { isAdmin: false }, { swarmsEnabled: false }),
+    renderAgentApis(
+      { ...base, grants: [...UNATTENDED_ADMIN_GRANTS] },
+      { isAdmin: false },
+      { swarmsEnabled: false, personasEnabled: false },
+    ),
   ];
   return listings.flatMap((listing) =>
     listing.endpoints.flatMap(({ method, path }) => {

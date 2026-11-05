@@ -118,6 +118,15 @@ async function cancelSessionGoal(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, out);
 }
 
+async function spawnWebSession(ctx: ApiCtx): Promise<void> {
+  const b = (isObj(ctx.body) ? ctx.body : {}) as { principalId?: unknown; scopeId?: unknown };
+  if (typeof b.principalId !== "string" || !b.principalId || typeof b.scopeId !== "string" || !b.scopeId)
+    return sendJson(ctx.res, 400, { error: "bad_request", message: "principalId and scopeId required" });
+  const out = await ctx.app.spawnSession(b.principalId, { scopeId: b.scopeId });
+  if (!out) return sendJson(ctx.res, 403, { error: "forbidden", message: "you can't start a conversation there" });
+  return sendJson(ctx.res, 201, out);
+}
+
 async function forkSession(ctx: ApiCtx): Promise<void> {
   const { res, app, body } = ctx;
   const id = ctx.params.id!;
@@ -782,7 +791,10 @@ async function listAgentApis(ctx: ApiCtx): Promise<void> {
     renderAgentApis(
       capability,
       { isAdmin: admin.isAdmin, ...(admin.role ? { role: admin.role } : {}) },
-      { swarmsEnabled: Boolean(await ctx.app.swarms?.enabledFor(capability.actorId)) },
+      {
+        swarmsEnabled: Boolean(await ctx.app.swarms?.enabledFor(capability.actorId)),
+        personasEnabled: Boolean(await ctx.app.personas?.enabledFor(capability.actorId)),
+      },
     ),
   );
 }
@@ -1131,6 +1143,12 @@ async function createSkill(ctx: ApiCtx): Promise<void> {
   if (capability) {
     principalId = capability.actorId;
     homeScope = capability.scopeId;
+    if (typeof b.scopeId === "string" && b.scopeId !== homeScope) {
+      if (!(await app.managesScope(principalId, b.scopeId as ScopeId))) {
+        return sendJson(res, 403, { error: "forbidden", message: "you cannot create a skill in that context" });
+      }
+      homeScope = b.scopeId as ScopeId;
+    }
   } else {
     if (typeof b.principalId !== "string" || !b.principalId) {
       return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
@@ -1539,6 +1557,7 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...withActor("body.principalId", [
     { method: "POST", path: "/v1/sessions/:id/title", auth: "source", handle: regenerateSessionTitle },
     { method: "POST", path: "/v1/sessions/:id/expand", auth: "source", handle: expandSideChat },
+    { method: "POST", path: "/v1/sessions", auth: "source", handle: spawnWebSession },
     { method: "POST", path: "/v1/sessions/:id/fork", auth: "source", handle: forkSession },
     { method: "POST", path: "/v1/sessions/:id/detach", auth: "source", handle: detachSession },
     { method: "POST", path: "/v1/sessions/:id/goal/cancel", auth: "source", handle: cancelSessionGoal },

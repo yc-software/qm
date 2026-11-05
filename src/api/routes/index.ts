@@ -46,6 +46,7 @@ import { loopItemRoutes } from "./loop-items.ts";
 import { searchRoutes } from "./search.ts";
 import { userModelAuthRoutes } from "./user-model-auth.ts";
 import { swarmRoutes } from "./swarms.ts";
+import { personaRoutes } from "./personas.ts";
 
 export const rawRoutes: ReadonlyArray<Route<BaseCtx>> = [
   {
@@ -96,6 +97,7 @@ export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...browserModelRoutes,
   ...sandboxModelRoutes,
   ...swarmRoutes,
+  ...personaRoutes,
   ...searchRoutes,
   ...deploymentLayerRoutes,
   ...deploymentLiveSmokeRoutes,

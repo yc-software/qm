@@ -996,6 +996,12 @@ interface WebCtx {
   params: Record<string, string>;
 }
 
+async function relayWithPrincipal(c: WebCtx, method: HttpMethod, path: string): Promise<void> {
+  const body = await readJson<Record<string, unknown>>(c.req, c.res);
+  if (!body) return;
+  return relayCore(c.res, method, path, JSON.stringify({ ...body, principalId: c.user }));
+}
+
 type WebRoute = { handle: (c: WebCtx) => unknown } & (
   { method: string; path: string } | { match: (method: string, pathname: string) => boolean }
 );
@@ -1587,6 +1593,69 @@ const apiRoutes: readonly WebRoute[] = [
         "DELETE",
         `/v1/projects/${encodeURIComponent(id)}/members/${encodeURIComponent(memberId)}`,
         JSON.stringify({ principalId: user }),
+      );
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/personas",
+    handle: (c) => relayCore(c.res, "GET", `/v1/personas?principalId=${encodeURIComponent(c.user)}`),
+  },
+  {
+    method: "GET",
+    path: "/api/personas/:id",
+    handle: (c) =>
+      relayCore(
+        c.res,
+        "GET",
+        `/v1/personas/${encodeURIComponent(c.params.id!)}?principalId=${encodeURIComponent(c.user)}`,
+      ),
+  },
+  {
+    method: "POST",
+    path: "/api/personas",
+    handle: (c) => relayWithPrincipal(c, "POST", "/v1/personas"),
+  },
+  {
+    method: "PATCH",
+    path: "/api/personas/:id",
+    handle: (c) => relayWithPrincipal(c, "PATCH", `/v1/personas/${encodeURIComponent(c.params.id!)}`),
+  },
+  {
+    method: "DELETE",
+    path: "/api/personas/:id",
+    handle: (c) =>
+      relayCore(
+        c.res,
+        "DELETE",
+        `/v1/personas/${encodeURIComponent(c.params.id!)}`,
+        JSON.stringify({ principalId: c.user }),
+      ),
+  },
+  {
+    method: "PUT",
+    path: "/api/personas/:id/access",
+    handle: (c) => relayWithPrincipal(c, "PUT", `/v1/personas/${encodeURIComponent(c.params.id!)}/access`),
+  },
+  {
+    method: "POST",
+    path: "/api/sessions",
+    handle: (c) => relayWithPrincipal(c, "POST", "/v1/sessions"),
+  },
+  {
+    method: "PUT",
+    path: "/api/sessions/:id/persona",
+    handle: (c) => relayWithPrincipal(c, "PUT", `/v1/sessions/${encodeURIComponent(c.params.id!)}/persona`),
+  },
+  {
+    method: "GET",
+    path: "/api/directory/channels",
+    handle: (c) => {
+      const q = (c.url.searchParams.get("q") ?? "").trim();
+      return relayCore(
+        c.res,
+        "GET",
+        `/v1/directory/channels?principalId=${encodeURIComponent(c.user)}&q=${encodeURIComponent(q)}`,
       );
     },
   },

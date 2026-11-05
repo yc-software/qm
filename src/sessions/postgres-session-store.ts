@@ -170,6 +170,10 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       ]);
     },
 
+    async setPersona(sessionId, personaId): Promise<void> {
+      await q("UPDATE sessions SET persona_id = $2 WHERE id = $1", [sessionId, personaId]);
+    },
+
     async endedInFailure(sessionIds): Promise<Set<string>> {
       if (!sessionIds.length) return new Set();
       const rows = await q(

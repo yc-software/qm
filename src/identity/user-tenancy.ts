@@ -180,6 +180,8 @@ const USERS_TENANT_KEYS = tenantTables(
       primaryKey: "alias_id",
       unique: [{ name: "user_links_user_id_alias_id_key", columns: "user_id, alias_id", constraint: true }],
     },
+    { table: "personas", primaryKey: "id" },
+    { table: "persona_access", primaryKey: "persona_id, grantee_scope_id" },
   ],
   {
     references: [
@@ -210,6 +212,25 @@ const USERS_TENANT_KEYS = tenantTables(
         columns: "linked_by",
         references: "users(tenant_id, id)",
         onDelete: "SET NULL",
+      },
+      {
+        table: "personas",
+        name: "personas_created_by_fkey",
+        columns: "created_by",
+        references: "users(tenant_id, id)",
+      },
+      {
+        table: "persona_access",
+        name: "persona_access_persona_id_fkey",
+        columns: "persona_id",
+        references: "personas(tenant_id, id)",
+        onDelete: "CASCADE",
+      },
+      {
+        table: "persona_access",
+        name: "persona_access_granted_by_fkey",
+        columns: "granted_by",
+        references: "users(tenant_id, id)",
       },
     ],
   },
