@@ -19,7 +19,7 @@ function baseDatabaseUrl(): URL {
 
 let databaseWorker: { worker: Worker; signal: Int32Array; port: MessagePort } | undefined;
 
-function createDatabaseSync(request: { template?: string }): string {
+function createDatabaseSync(request: { template?: string; bare?: boolean }): string {
   if (!databaseWorker) {
     const signal = new Int32Array(new SharedArrayBuffer(4));
     const { port1, port2 } = new MessageChannel();
@@ -52,6 +52,10 @@ function databaseUrl(name: string): string {
 
 export function testDatabaseUrl(): string {
   return boundUrl(databaseUrl(createDatabaseSync({})));
+}
+
+export function testBareDatabaseUrl(): string {
+  return databaseUrl(createDatabaseSync({ bare: true }));
 }
 
 export function testMigratedDatabaseUrl(): string {

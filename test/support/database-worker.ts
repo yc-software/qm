@@ -21,10 +21,15 @@ function quoted(name: string): string {
   return `"${name.replaceAll('"', '""')}"`;
 }
 
-async function createDatabase(template: string): Promise<string> {
+interface Request {
+  template?: string;
+  bare?: boolean;
+}
+
+async function createDatabase({ template = "", bare = false }: Request): Promise<string> {
   const name = `${prefix}_${randomBytes(6).toString("hex")}`;
   await (await admin()).query(`CREATE DATABASE ${quoted(name)}${template ? ` TEMPLATE ${quoted(template)}` : ""}`);
-  if (!template) {
+  if (!template && !bare) {
     const url = new URL(baseUrl);
     url.pathname = `/${name}`;
     await seedTestTenant(url.toString());
@@ -32,21 +37,21 @@ async function createDatabase(template: string): Promise<string> {
   return name;
 }
 
-function prepare(template: string): void {
-  const next = createDatabase(template);
+function prepare(request: Request): void {
+  const next = createDatabase(request);
   next.catch(() => {});
-  prepared.set(template, next);
+  prepared.set(JSON.stringify(request), next);
 }
 
-async function take(template: string): Promise<string> {
-  const name = await (prepared.get(template) ?? createDatabase(template));
-  prepare(template);
+async function take(request: Request): Promise<string> {
+  const name = await (prepared.get(JSON.stringify(request)) ?? createDatabase(request));
+  prepare(request);
   return name;
 }
 
-parentPort!.on("message", async (request: { template?: string }) => {
+parentPort!.on("message", async (request: Request) => {
   try {
-    const name = await take(request.template ?? "");
+    const name = await take(request);
     port.postMessage({ ok: true, name });
   } catch (error) {
     port.postMessage({ ok: false, message: error instanceof Error ? error.message : String(error) });
