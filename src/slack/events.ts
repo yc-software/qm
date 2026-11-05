@@ -8,6 +8,8 @@ import {
   onBotJoinedChannel,
   type SurfaceHeaderClient,
   shouldProcessMessage,
+  slackEphemeralArgs,
+  slackReplyArgs,
 } from "./lib.ts";
 import {
   isDirectChannelType,
@@ -92,15 +94,11 @@ export function registerSlackEvents(
     if (!denyResponder.shouldSend(`${opts.channel}:${opts.userId}`)) return;
     if (opts.kind === "channel") {
       await client.chat
-        .postEphemeral({ channel: opts.channel, user: opts.userId, text: denyResponder.message })
+        .postEphemeral(slackEphemeralArgs(opts.channel, opts.userId, denyResponder.message))
         .catch(swallowAs("slack: deny ephemeral", undefined));
     } else {
       await client.chat
-        .postMessage({
-          channel: opts.channel,
-          text: denyResponder.message,
-          ...(opts.threadTs ? { thread_ts: opts.threadTs } : {}),
-        })
+        .postMessage(slackReplyArgs(opts.channel, denyResponder.message, opts.threadTs))
         .catch(swallowAs("slack: deny reply", undefined));
     }
   };

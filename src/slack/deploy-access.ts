@@ -6,6 +6,7 @@ import { parseScopeId, scopeId, type ActorAssertion, type Destination } from "..
 import type { Directory } from "./directory.ts";
 import { parseBlockAction, parseInteractionBody } from "./payloads.ts";
 import { updateSlackMessage } from "./messaging.ts";
+import { slackEphemeralArgs } from "./delivery.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { uuidSchema } from "../util/ids.ts";
 
@@ -112,11 +113,13 @@ export function registerDeployAccessActions(
       ]);
     } catch (error) {
       await client.chat
-        .postEphemeral({
-          channel,
-          user: clickerId,
-          text: `Couldn't complete that: ${errMessage(error)} You can try the button again.`,
-        })
+        .postEphemeral(
+          slackEphemeralArgs(
+            channel,
+            clickerId,
+            `Couldn't complete that: ${errMessage(error)} You can try the button again.`,
+          ),
+        )
         .catch(swallowAs("slack: app access decision failure", undefined));
     }
   });
