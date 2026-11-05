@@ -547,6 +547,10 @@ const feeds = createTenantFeeds({
   giveupMs: 60_000,
 });
 
+export function drainWebDeliveries(): Promise<void> {
+  return feeds.drain();
+}
+
 async function coreFetch(
   method: HttpMethod,
   pathWithQuery: string,
@@ -3458,7 +3462,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
           console.warn("[web-ui] dist-web/ not built, run `npm run build`");
         if (ALLOW.length === 0)
           console.warn("[web-ui] WEB_UI_PRINCIPALS unset, any principal id may sign in (dev only)");
-        const t = setInterval(() => void feeds.drain(), WEB_DELIVERY_POLL_MS);
+        const t = setInterval(() => void drainWebDeliveries(), WEB_DELIVERY_POLL_MS);
         t.unref?.();
         feeds.start();
         void sweepDictationSpool();

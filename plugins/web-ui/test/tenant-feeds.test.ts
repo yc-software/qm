@@ -97,9 +97,9 @@ test("deliveries are polled per tenant and only reach that tenant's browsers", a
   assert.deepEqual(
     h.calls
       .filter((c) => c.path.startsWith("GET /v1/deliveries"))
-      .map((c) => c.tenant)
+      .map((c) => c.tenant ?? "untenanted")
       .sort(),
-    [alpha, beta],
+    [alpha, beta, "untenanted"],
   );
 });
 

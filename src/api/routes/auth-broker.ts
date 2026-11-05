@@ -8,6 +8,7 @@ import { externalMemberActive, validEmail } from "../../identity/external-member
 import { isObj, authorizeAdmin, orgScope, audit, activePrincipal } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 import { loadTenant } from "../../tenants/cache.ts";
+import { tenantAllowsEmail } from "../../tenants/settings.ts";
 import { boundTenant, withTenant } from "../../tenants/context.ts";
 
 const NAMESPACE = "authbroker:";
@@ -64,8 +65,9 @@ async function admission(ctx: ApiCtx, email: string): Promise<Admission> {
   if (deps.identity.deactivationSource(email) === "manual") return { allowed: false };
   const member = deps.identity.externalMember(email);
   const configured =
-    deps.emailAuthPrincipals?.includes(email) ||
-    Boolean(deps.emailAuthDomain && email.endsWith(`@${deps.emailAuthDomain}`));
+    (boundTenant() ? await tenantAllowsEmail(email) : undefined) ??
+    (deps.emailAuthPrincipals?.includes(email) ||
+      Boolean(deps.emailAuthDomain && email.endsWith(`@${deps.emailAuthDomain}`)));
   const allowed =
     deps.identity.classify(email).type === "internal" && (member ? externalMemberActive(member) : configured);
   if (allowed) return { allowed: true, expiresAt: member?.expiresAt };

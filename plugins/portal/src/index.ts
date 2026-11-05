@@ -5,6 +5,7 @@ import {
   mintDesktopLogin,
   openDesktopLogin,
 } from "./desktop-login.ts";
+import { createSurfaceConfigs } from "./surface-config.ts";
 import { INVITE_LOGIN_SCRIPT, INVITE_LOGIN_SCRIPT_HASH } from "./invite-login.ts";
 import { reportBackendError } from "../../chassis/src/error-reporting.ts";
 import { drainOnSigterm } from "../../chassis/src/drain.ts";
@@ -124,37 +125,21 @@ function playgroundIntEnv(name: string, fallback: number): number {
 const PLAYGROUND_MINTS_PER_IP = playgroundIntEnv("PORTAL_PLAYGROUND_MINTS_PER_IP", 30);
 const PLAYGROUND_MINT_WINDOW_S = playgroundIntEnv("PORTAL_PLAYGROUND_MINT_WINDOW_S", 3600);
 const NEUTRAL_ACCENT = "#4f46e5";
-let brandAccent = NEUTRAL_ACCENT;
-let modelProviderConfigured: boolean | undefined;
-let surfaceConfigNextAt = 0;
-let surfaceConfigInflight: Promise<void> | null = null;
-function refreshSurfaceConfig(): Promise<void> {
-  if (Date.now() >= surfaceConfigNextAt) {
-    surfaceConfigNextAt = Date.now() + 5_000;
-    surfaceConfigInflight = fetchSurfaceConfig().finally(() => {
-      surfaceConfigInflight = null;
-    });
-  }
-  return surfaceConfigInflight ?? Promise.resolve();
-}
-async function fetchSurfaceConfig(): Promise<void> {
-  try {
-    const path = withSourceAuthNonce("/v1/surface-config", CORE_SIGNING_SECRET);
-    const r = await fetch(`${CORE}${path}`, {
-      headers: signedHeaders(CORE_SIGNING_SECRET, "GET", path),
-      signal: AbortSignal.timeout(2_000),
-    });
-    if (r.ok) {
-      const body = (await r.json()) as { branding?: { accent?: unknown }; modelProviderConfigured?: unknown };
-      brandAccent = typeof body.branding?.accent === "string" ? body.branding.accent : NEUTRAL_ACCENT;
-      modelProviderConfigured =
-        typeof body.modelProviderConfigured === "boolean" ? body.modelProviderConfigured : undefined;
-      surfaceConfigNextAt = Date.now() + (modelProviderConfigured === false ? 5_000 : 30_000);
-    }
-  } catch {
-    void 0;
-  }
-}
+const surfaceConfigs = createSurfaceConfigs(NEUTRAL_ACCENT, async (tenant, sub) => {
+  const path = withSourceAuthNonce("/v1/surface-config", CORE_SIGNING_SECRET);
+  const r = await fetch(`${CORE}${path}`, {
+    headers: { ...signedHeaders(CORE_SIGNING_SECRET, "GET", path), ...(sub ? portalIdentityHeaders(sub, tenant) : {}) },
+    signal: AbortSignal.timeout(2_000),
+  });
+  if (!r.ok) return null;
+  const body = (await r.json()) as { branding?: { accent?: unknown }; modelProviderConfigured?: unknown };
+  return {
+    ...(typeof body.branding?.accent === "string" ? { accent: body.branding.accent } : {}),
+    ...(typeof body.modelProviderConfigured === "boolean"
+      ? { modelProviderConfigured: body.modelProviderConfigured }
+      : {}),
+  };
+});
 
 const WEB_UI_UPSTREAM = (process.env.WEB_UI_UPSTREAM ?? "http://localhost:8096").replace(/\/$/, "");
 
@@ -277,7 +262,7 @@ function portalIdentityHeaders(sub: string, t?: string): Record<string, string> 
     : {};
 }
 
-async function adminProbeAttempt(sub: string): Promise<boolean | null> {
+async function adminProbeAttempt(sub: string, tenant?: string): Promise<boolean | null> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), ADMIN_PROBE_TIMEOUT_MS);
   try {
@@ -285,7 +270,7 @@ async function adminProbeAttempt(sub: string): Promise<boolean | null> {
     const headers = {
       ...signedHeaders(CORE_SIGNING_SECRET, "GET", path),
       "x-admin-actor": `${sub}@${ORG}`,
-      ...portalIdentityHeaders(sub),
+      ...portalIdentityHeaders(sub, tenant),
     };
     const r = await fetch(`${CORE}${path}`, { headers, signal: ctrl.signal });
     if (!r.ok) {
@@ -306,17 +291,18 @@ async function adminProbeAttempt(sub: string): Promise<boolean | null> {
   }
 }
 
-async function isAdmin(sub: string): Promise<boolean> {
-  const hit = adminCache.get(sub);
+async function isAdmin(sub: string, tenant?: string): Promise<boolean> {
+  const key = `${tenant ?? ""}|${sub}`;
+  const hit = adminCache.get(key);
   if (hit !== undefined) return hit;
   for (let attempt = 0; attempt < ADMIN_PROBE_ATTEMPTS; attempt++) {
-    const isAdmin = await adminProbeAttempt(sub);
+    const isAdmin = await adminProbeAttempt(sub, tenant);
     if (isAdmin === null) {
       if (attempt + 1 < ADMIN_PROBE_ATTEMPTS)
         await new Promise((resolve) => setTimeout(resolve, ADMIN_PROBE_RETRY_DELAY_MS));
       continue;
     }
-    adminCache.set(sub, isAdmin);
+    adminCache.set(key, isAdmin);
     return isAdmin;
   }
   return false;
@@ -581,8 +567,8 @@ export function notConfiguredHtml(): string {
   });
 }
 
-const connectStyle = (): string => `<style>
-  :root{ --bg:#0a0a0a; --text:#fafafa; --muted:#a3a3a3; --border:#2a2a2a; --brand:${brandAccent}; --radius-md:10px; }
+const connectStyle = (accent: string): string => `<style>
+  :root{ --bg:#0a0a0a; --text:#fafafa; --muted:#a3a3a3; --border:#2a2a2a; --brand:${accent}; --radius-md:10px; }
   html,body{ height:100%; margin:0; }
   body{ background:var(--bg); color:var(--text); display:grid; place-items:center; padding:40px 20px;
     font:14px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; -webkit-font-smoothing:antialiased; }
@@ -594,9 +580,9 @@ const connectStyle = (): string => `<style>
   a.muted{ color:var(--muted); display:inline-block; margin-top:14px; }
 </style>`;
 
-function connectPage(o: { title: string; body: string; action?: string }): string {
+function connectPage(o: { title: string; body: string; action?: string; accent?: string }): string {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(o.title)} · Portal</title>${connectStyle()}</head>
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(o.title)} · Portal</title>${connectStyle(o.accent ?? surfaceConfigs.accent())}</head>
 <body><div class="card"><h1>${escapeHtml(o.title)}</h1><p>${escapeHtml(o.body)}</p>${o.action ?? ""}</div></body></html>`;
 }
 
@@ -605,23 +591,25 @@ function providerLabel(provider: string): string {
   return provider ? provider.charAt(0).toUpperCase() + provider.slice(1) : "this app";
 }
 
-export function connectErrorHtml(detail: string): string {
-  return connectPage({ title: "Can't connect", body: detail });
+export function connectErrorHtml(detail: string, accent?: string): string {
+  return connectPage({ title: "Can't connect", body: detail, ...(accent ? { accent } : {}) });
 }
 
-export function connectWrongRecipientHtml(o: { provider: string; alreadyConnected: boolean }): string {
+export function connectWrongRecipientHtml(o: { provider: string; alreadyConnected: boolean; accent?: string }): string {
   const prov = providerLabel(o.provider);
   if (o.alreadyConnected) {
     return connectPage({
       title: `You've already connected ${prov}`,
       body: `This link was meant for a different teammate, and your ${prov} is already connected, so there's nothing to do here.`,
       action: `<a class="muted" href="/connectors">Manage your connections</a>`,
+      ...(o.accent ? { accent: o.accent } : {}),
     });
   }
   return connectPage({
     title: "This link was for someone else",
     body: `This connect link was created for a different teammate. Want to connect your own ${prov} instead?`,
     action: `<a class="btn" href="/connect/${encodeURIComponent(o.provider)}/self-connect">Connect my ${escapeHtml(prov)}</a>`,
+    ...(o.accent ? { accent: o.accent } : {}),
   });
 }
 
@@ -634,7 +622,10 @@ async function handleConsentRedeem(
     ...signedHeaders(CORE_SIGNING_SECRET, "GET", path),
     "x-consent-clicker": o.session.sub,
     "x-consent-clicker-org": o.session.org,
+    ...portalIdentityHeaders(o.session.sub, o.session.t),
   };
+  const accent = surfaceConfigs.accent(o.session.t);
+  const errorPage = (detail: string) => connectErrorHtml(detail, accent);
   let data: { status?: string; authorizeUrl?: string; provider?: string; clickerConnected?: boolean };
   try {
     const r = await fetch(`${CORE}${path}`, { headers });
@@ -643,28 +634,28 @@ async function handleConsentRedeem(
     return sendHtml(
       res,
       502,
-      connectErrorHtml("We couldn't reach the connection service. Please try the link again in a moment."),
+      errorPage("We couldn't reach the connection service. Please try the link again in a moment."),
     );
   }
   switch (data.status) {
     case "authorize":
       if (!data.authorizeUrl)
-        return sendHtml(res, 502, connectErrorHtml("The connection service returned an unexpected response."));
+        return sendHtml(res, 502, errorPage("The connection service returned an unexpected response."));
       res.writeHead(302, { location: data.authorizeUrl, "cache-control": "no-store" });
       return void res.end();
     case "wrong_recipient":
       return sendHtml(
         res,
         200,
-        connectWrongRecipientHtml({ provider: data.provider ?? "", alreadyConnected: !!data.clickerConnected }),
+        connectWrongRecipientHtml({ provider: data.provider ?? "", alreadyConnected: !!data.clickerConnected, accent }),
       );
     case "expired":
-      return sendHtml(res, 200, connectErrorHtml("This connect link has expired. Ask the agent for a fresh one."));
+      return sendHtml(res, 200, errorPage("This connect link has expired. Ask the agent for a fresh one."));
     default:
       return sendHtml(
         res,
         200,
-        connectErrorHtml("This connect link is invalid or was already used. Ask the agent for a fresh one."),
+        errorPage("This connect link is invalid or was already used. Ask the agent for a fresh one."),
       );
   }
 }
@@ -705,6 +696,7 @@ async function handleSecretDrop(
     ...signedHeaders(CORE_SIGNING_SECRET, isPost ? "POST" : "GET", path, rawBody),
     "x-drop-owner": o.session.sub,
     "x-drop-owner-org": o.session.org,
+    ...portalIdentityHeaders(o.session.sub, o.session.t),
   };
   let r: Response;
   try {
@@ -732,6 +724,7 @@ async function handleSecretDrop(
 }
 
 async function handleSelfConnect(res: ServerResponse, o: { provider: string; session: SessionClaims }): Promise<void> {
+  const errorPage = (detail: string) => connectErrorHtml(detail, surfaceConfigs.accent(o.session.t));
   const redirectUri = `${PUBLIC_URL}/v1/connectors/oauth/${encodeURIComponent(o.provider)}/callback`;
   const qs = new URLSearchParams({ principalId: o.session.sub, redirectUri, returnTo: "/connectors" });
   const path = withSourceAuthNonce(
@@ -754,15 +747,11 @@ async function handleSelfConnect(res: ServerResponse, o: { provider: string; ses
     return sendHtml(
       res,
       200,
-      connectErrorHtml(data.message ?? "We couldn't start the connection. This app may not be configured."),
+      errorPage(data.message ?? "We couldn't start the connection. This app may not be configured."),
     );
   } catch (error) {
     console.warn(`[portal] self-connect start failed: ${errMessage(error)}`);
-    return sendHtml(
-      res,
-      502,
-      connectErrorHtml("We couldn't reach the connection service. Please try again in a moment."),
-    );
+    return sendHtml(res, 502, errorPage("We couldn't reach the connection service. Please try again in a moment."));
   }
 }
 
@@ -770,13 +759,14 @@ async function coreImpersonate(
   action: "start" | "stop",
   admin: string,
   target: string,
+  tenant?: string,
 ): Promise<{ ok: boolean; status: number; displayName?: string; message?: string }> {
   const path = withSourceAuthNonce(`/v1/admin/impersonate${action === "stop" ? "/stop" : ""}`, CORE_SIGNING_SECRET);
   const body = JSON.stringify({ target });
   const headers = {
     ...signedHeaders(CORE_SIGNING_SECRET, "POST", path, body),
     "x-admin-actor": `${admin}@${ORG}`,
-    ...portalIdentityHeaders(admin),
+    ...portalIdentityHeaders(admin, tenant),
   };
   try {
     const r = await fetch(`${CORE}${path}`, { method: "POST", headers, body });
@@ -977,7 +967,8 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     return json(res, 403, { error: "app_only_session", message: "this sign-in only permits access to shared apps" });
   }
 
-  void refreshSurfaceConfig();
+  const surfaceViewer = currentSession(req);
+  void surfaceConfigs.refresh(surfaceViewer?.t, surfaceViewer?.sub);
 
   if (method === "GET" && pathname === "/healthz") return json(res, 200, { ok: true });
 
@@ -1099,12 +1090,13 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   if (pathname === "/auth/impersonate" && method === "POST") {
     if (!session) return staleSession ? identityUnavailable(req, res) : json(res, 401, { error: "sign in" });
     if (!sameOriginRequest(req)) return json(res, 403, { error: "forbidden", message: "cross-origin request refused" });
-    if (!(await isAdmin(session.sub))) return json(res, 403, { error: "forbidden", message: "admin access required" });
+    if (!(await isAdmin(session.sub, session.t)))
+      return json(res, 403, { error: "forbidden", message: "admin access required" });
     const target = (url.searchParams.get("target") ?? "").trim();
     if (!target) return json(res, 400, { error: "bad_request", message: "target required" });
     if (target === session.sub || (await canonicalPrincipal(target, session.t))?.id === session.sub)
       return json(res, 400, { error: "bad_request", message: "cannot impersonate yourself" });
-    const result = await coreImpersonate("start", session.sub, target);
+    const result = await coreImpersonate("start", session.sub, target, session.t);
     if (!result.ok) {
       const status = result.status === 403 || result.status === 400 ? result.status : 502;
       return json(res, status, {
@@ -1136,7 +1128,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     const imp = openImpersonation(readCookie(req.headers.cookie, "portal_impersonate"), impersonateKey, Date.now());
     setSession(res, [clearCookie("portal_impersonate", "/", SECURE_COOKIES)]);
     const actor = session ?? staleSession;
-    if (actor && imp && imp.actor === actor.sub) await coreImpersonate("stop", actor.sub, imp.target);
+    if (actor && imp && imp.actor === actor.sub) await coreImpersonate("stop", actor.sub, imp.target, actor.t);
     if (wantsHtml(req)) {
       res.writeHead(303, { location: "/", "cache-control": "no-store" });
       return void res.end();
@@ -1316,9 +1308,9 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 
   const settingsPath = pathname === "/settings" || pathname.startsWith("/settings/");
   if (method === "GET" && wantsHtml(req) && !settingsPath) {
-    await refreshSurfaceConfig();
-    if (modelProviderConfigured === false) {
-      if (await isAdmin(session.sub)) {
+    await surfaceConfigs.refresh(session.t, session.sub);
+    if (surfaceConfigs.modelProviderConfigured(session.t) === false) {
+      if (await isAdmin(session.sub, session.t)) {
         res.writeHead(302, { location: "/settings/onboarding", "cache-control": "no-store" });
         return void res.end();
       }
@@ -1330,7 +1322,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   let impersonator: string | undefined;
   if (!crossOrigin) {
     const imp = openImpersonation(readCookie(req.headers.cookie, "portal_impersonate"), impersonateKey, Date.now());
-    if (imp && imp.actor === session.sub && imp.org === session.org && (await isAdmin(session.sub))) {
+    if (imp && imp.actor === session.sub && imp.org === session.org && (await isAdmin(session.sub, session.t))) {
       principal = imp.target;
       impersonator = session.sub;
     }
@@ -1590,7 +1582,7 @@ async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL):
         },
         identity.subject,
       );
-      adminCache.delete(identity.sub);
+      for (const key of adminCache.keys()) if (key.endsWith(`|${identity.sub}`)) adminCache.delete(key);
     }
     setAuthenticatedSession(res, identity.sub, identity.name);
     res.writeHead(302, {
