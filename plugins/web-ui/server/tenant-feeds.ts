@@ -1,5 +1,5 @@
 import type { ServerResponse } from "node:http";
-import { mintPortalIdentity, verifyPortalIdentity } from "../../chassis/src/portal-identity.ts";
+import { mintPortalIdentity, portalIdentityTenant } from "../../chassis/src/portal-identity.ts";
 
 type CoreText = { status: number; text: string };
 
@@ -38,11 +38,6 @@ interface PendingWebDelivery {
 
 export function createTenantFeeds(deps: TenantFeedDeps) {
   const lanes = new Map<string, Lane>();
-
-  function tenantOf(token: string | undefined): string | undefined {
-    if (!token || !deps.identitySecret) return undefined;
-    return verifyPortalIdentity(token, deps.identitySecret, Date.now())?.t;
-  }
 
   function laneToken(lane: Lane): string | undefined | null {
     if (!lane.tenant) return undefined;
@@ -203,7 +198,7 @@ export function createTenantFeeds(deps: TenantFeedDeps) {
   }
 
   return {
-    requestTenant: (): string | undefined => tenantOf(deps.currentToken()),
+    requestTenant: (): string | undefined => portalIdentityTenant(deps.currentToken(), deps.identitySecret),
     start: () => {
       const lane = lanes.get("") ?? openLane(undefined);
       if (!lane.running) runLane(lane);
@@ -214,7 +209,7 @@ export function createTenantFeeds(deps: TenantFeedDeps) {
       deps.noteDeliveries(failures.find((f) => f !== undefined));
     },
     attach(user: string, res: ServerResponse): () => void {
-      const tenant = tenantOf(deps.currentToken());
+      const tenant = portalIdentityTenant(deps.currentToken(), deps.identitySecret);
       const lane = lanes.get(tenant ?? "") ?? openLane(tenant);
       let set = lane.clients.get(user);
       if (!set) lane.clients.set(user, (set = new Set()));
