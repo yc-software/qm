@@ -90,6 +90,8 @@ const IMPERSONATE = "impersonating a user is portal-only — the agent cannot ac
 const MCP_SERVERS =
   "registering or changing an MCP server is portal-only — the agent cannot change which tools it can call or which calls need approval";
 const LINKS = "identity links are portal-only — the agent cannot decide which sign-ins belong to one person";
+const MEMORY_REGISTRY_DELETE =
+  "deleting a memory brain or binding never goes through the agent — an org admin deletes it through the admin API outside chat";
 
 const routes: Route<ApiCtx>[] = [
   { method: "POST", path: "/v1/slack/managed/installation", auth: "public", handle: managedSlackRequest },
@@ -343,7 +345,13 @@ const routes: Route<ApiCtx>[] = [
       handle: getMemoryBrain,
     },
     { method: "PUT", path: "/v1/admin/memory-registry/brains/:id", auth: "either", handle: putMemoryBrain },
-    { method: "DELETE", path: "/v1/admin/memory-registry/brains/:id", auth: "either", handle: deleteMemoryBrain },
+    {
+      method: "DELETE",
+      path: "/v1/admin/memory-registry/brains/:id",
+      auth: "either",
+      admin: { agent: { portalOnly: MEMORY_REGISTRY_DELETE } },
+      handle: deleteMemoryBrain,
+    },
     {
       method: "GET",
       path: "/v1/admin/memory-registry/bindings/:id",
@@ -356,6 +364,7 @@ const routes: Route<ApiCtx>[] = [
       method: "DELETE",
       path: "/v1/admin/memory-registry/bindings/:id",
       auth: "either",
+      admin: { agent: { portalOnly: MEMORY_REGISTRY_DELETE } },
       handle: deleteMemoryBinding,
     },
     { method: "POST", path: "/v1/admin/memory", auth: "either", handle: adminMemory },
