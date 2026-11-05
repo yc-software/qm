@@ -52,7 +52,7 @@ import { icon } from "./icons";
 import { isPhone, markDesktopEmbed, onPhoneChange, trackVisualViewport } from "./viewport";
 import { markConnectorConnected } from "./chat";
 import { clearSkillsCache, resyncModelSelection } from "./composer";
-import { ensureDeliveryStream, mainConversation, onExitCanvas } from "./conversations";
+import { ensureDeliveryStream, mainConversation, onExitCanvas, reloadIntoServedRelease } from "./conversations";
 import { clearAllDrafts, newChatDraftKey, saveDraft, storedDraft } from "./drafts";
 import { deepLinkPath, isPlainLeftClick, parseDeepLink, sessionLinkTarget, UI_BASE } from "./deep-link";
 import {
@@ -1028,8 +1028,10 @@ window.addEventListener("popstate", () => {
   else void restoreChatsEntry(session);
 });
 
+document.addEventListener("visibilitychange", reloadIntoServedRelease);
+
 window.addEventListener("focus", () => {
-  if (!appState.me) return;
+  if (!appState.me || reloadIntoServedRelease()) return;
   if (appState.currentView === "contexts") void renderContexts();
   else if (appState.currentView === "chats") {
     void refreshSessions({ silent: true, refreshContexts: true });

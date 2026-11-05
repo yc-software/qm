@@ -58,18 +58,9 @@ test("a transient fetch failure mid-poll is retried — the turn still completes
   globalThis.fetch = (async () => {
     i++;
     clock += 1_000;
-    if (i === 1)
-      return {
-        ok: true,
-        status: 200,
-        text: async () => JSON.stringify({ status: "running", result: null, partial: "he" }),
-      } as unknown as Response;
+    if (i === 1) return Response.json({ status: "running", result: null, partial: "he" });
     if (i <= 3) throw new TypeError("network error");
-    return {
-      ok: true,
-      status: 200,
-      text: async () => JSON.stringify({ status: "done", result: { status: "ok", reply: "hello" }, partial: "hello" }),
-    } as unknown as Response;
+    return Response.json({ status: "done", result: { status: "ok", reply: "hello" }, partial: "hello" });
   }) as typeof fetch;
 
   const stream = createAssistantMessageEventStream();
@@ -91,17 +82,8 @@ test("a transient 5xx mid-poll is retried — the turn still completes", async (
   globalThis.fetch = (async () => {
     i++;
     clock += 1_000;
-    if (i <= 2)
-      return {
-        ok: false,
-        status: 502,
-        text: async () => JSON.stringify({ error: "bad_gateway" }),
-      } as unknown as Response;
-    return {
-      ok: true,
-      status: 200,
-      text: async () => JSON.stringify({ status: "done", result: { status: "ok", reply: "ok!" }, partial: "ok!" }),
-    } as unknown as Response;
+    if (i <= 2) return Response.json({ error: "bad_gateway" }, { status: 502 });
+    return Response.json({ status: "done", result: { status: "ok", reply: "ok!" }, partial: "ok!" });
   }) as typeof fetch;
 
   const stream = createAssistantMessageEventStream();
@@ -121,7 +103,7 @@ test("a 4xx is definitive — the poll fails immediately without retrying", asyn
   let i = 0;
   globalThis.fetch = (async () => {
     i++;
-    return { ok: false, status: 404, text: async () => JSON.stringify({ error: "not_found" }) } as unknown as Response;
+    return Response.json({ error: "not_found" }, { status: 404 });
   }) as typeof fetch;
 
   const stream = createAssistantMessageEventStream();
@@ -160,11 +142,7 @@ test("poll requests never put bearer credentials in the URL", async () => {
   globalThis.fetch = (async (input: Parameters<typeof fetch>[0]) => {
     urls.push(String(input));
     clock += 1_000;
-    return {
-      ok: true,
-      status: 200,
-      text: async () => JSON.stringify({ status: "done", result: { status: "ok", reply: "x" }, partial: "x" }),
-    } as unknown as Response;
+    return Response.json({ status: "done", result: { status: "ok", reply: "x" }, partial: "x" });
   }) as typeof fetch;
 
   const stream = createAssistantMessageEventStream();

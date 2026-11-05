@@ -18,6 +18,7 @@ await new Promise<void>((r) => core.listen(0, r));
 process.env.CORE_API_URL = `http://localhost:${(core.address() as AddressInfo).port}`;
 process.env.CORE_SIGNING_SECRET = "web-ui-branding-test";
 process.env.WEB_UI_PRINCIPALS = "alice";
+process.env.GIT_SHA = "abc1234";
 
 const { handler, serveReleasesFrom } = await import("../server/index.ts");
 serveReleasesFrom(
@@ -33,6 +34,16 @@ const base = `http://localhost:${(surface.address() as AddressInfo).port}`;
 test.after(() => {
   surface.close();
   core.close();
+});
+
+test("the shell page and signed-in responses name the release the server runs", async () => {
+  const page = new JSDOM(await (await fetch(`${base}/`, { headers: { cookie: "webuiuser=alice" } })).text());
+  assert.equal(page.window.document.querySelector('meta[name="qm-release"]')?.getAttribute("content"), "abc1234");
+  const anonymous = await fetch(`${base}/me`);
+  assert.equal(anonymous.status, 401);
+  assert.equal(anonymous.headers.get("x-qm-release"), null);
+  const signedIn = await fetch(`${base}/api/contexts`, { headers: { cookie: "webuiuser=alice" } });
+  assert.equal(signedIn.headers.get("x-qm-release"), "abc1234");
 });
 
 test("cold start: the FIRST shell render already carries accent, mark, and self-label", async () => {
