@@ -10,8 +10,7 @@ const trusted = "oidc:issuer-hash:c3ViamVjdA";
 test("a trusted sign-in principal is named through its linked email, falling back to the email itself", async (t) => {
   installPrincipalLinks({
     canonical: () => undefined,
-    aliases: (key) =>
-      key === trusted ? ["founder@company.test"] : key === "oidc:other" ? ["unlisted@company.test"] : [],
+    aliases: (key) => ({ [trusted]: ["founder@company.test"], "oidc:other": ["unlisted@company.test"] })[key] ?? [],
   });
   t.after(() => installPrincipalLinks(null));
   const app = {
