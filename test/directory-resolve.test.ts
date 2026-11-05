@@ -70,6 +70,32 @@ describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", a
     }
   });
 
+  it("channel lookup offers public channels and private ones the person is in, exact name first, then prefix matches", async () => {
+    await built.app.upsertChannels(
+      [
+        { channelId: "CPUBLIC", name: "public", isPrivate: false },
+        { channelId: "CPUB", name: "pub", isPrivate: false },
+        { channelId: "CLAUNCH", name: "launch-pub", isPrivate: false },
+        { channelId: "CSECRET", name: "pub-secret", isPrivate: true },
+        { channelId: "COTHER", name: "pub-other-team", isPrivate: true },
+      ],
+      [
+        { channelId: "CSECRET", principalId: "carol@acme.com" },
+        { channelId: "COTHER", principalId: "alice@acme.com" },
+      ],
+    );
+    const path = `/v1/directory/channels?principalId=${encodeURIComponent("carol@acme.com")}&q=%23pub`;
+    assert.equal((await fetch(`${base}${path}`)).status, 401);
+    const response = await fetch(`${base}${path}`, { headers: signedRequestHeaders(SECRET, "GET", path) });
+    assert.equal(response.status, 200);
+    const { channels } = (await response.json()) as { channels: Array<{ scopeId: string; isPrivate: boolean }> };
+    assert.deepEqual(
+      channels.map((channel) => channel.scopeId),
+      ["channel:CPUB", "channel:CSECRET", "channel:CPUBLIC", "channel:CLAUNCH"],
+    );
+    assert.equal(channels.find((channel) => channel.scopeId === "channel:CSECRET")?.isPrivate, true);
+  });
+
   it("resolves a name to a single match carrying the slackId needed to @-mention", async () => {
     const res = await get("/v1/directory/resolve?q=carol");
     assert.equal(res.status, 200);

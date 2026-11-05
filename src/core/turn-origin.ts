@@ -13,6 +13,11 @@ export function isSessionTurn(input: Pick<TurnRequest, "sessionSenderId" | "dele
   return !!input.sessionSenderId || !!input.delegatingRunId;
 }
 
+export function midTurnSessionMessage(message: string, fromParent: boolean): string {
+  const sender = fromParent ? "your parent session" : "another session";
+  return `A message from ${sender} arrived while you were working. Address it as you continue this turn; it is not a new task.\n${message}`;
+}
+
 export function sessionTurnOrigin(origin: TurnOrigin | undefined, text: string): TurnOrigin {
   if (!origin || origin.kind === "automation") return { ...origin, kind: "automation", screenData: text };
   if (origin.kind === "human") return { kind: "human" };

@@ -219,6 +219,15 @@ test("bumpActivity is a no-op when no row matches the threadRef", () => {
   assert.deepEqual(bumpActivity(list, "web:u:missing", 999), list);
 });
 
+test("bumpActivity sets the sent text as the last message only on rows that carry previews", () => {
+  const list = [saved("1", "web:u:x"), { ...saved("2", "web:u:y"), lastUserPreview: null }];
+  const plain = bumpActivity(list, "web:u:x", 5, "hello");
+  assert.equal("lastUserPreview" in plain.find((s) => s.id === "1")!, false);
+  const flagged = bumpActivity(list, "web:u:y", 5, "hello there");
+  assert.equal(flagged.find((s) => s.id === "2")!.lastUserPreview, "hello there");
+  assert.equal(bumpActivity(list, "web:u:y", 5, "   ").find((s) => s.id === "2")!.lastUserPreview, null);
+});
+
 test("activityOf prefers lastActivityAt, falling back to createdAt", () => {
   assert.equal(activityOf(saved("1", "web:u:x")), 1, "no lastActivityAt -> createdAt (createdAt is 1 here)");
   assert.equal(activityOf({ ...saved("2", "web:u:y"), lastActivityAt: 999 }), 999, "lastActivityAt wins when present");
@@ -435,6 +444,22 @@ test("empty projects appear in Recents", () => {
   assert.deepEqual(items, [
     { kind: "project", scopeId: "group:web-project-empty", name: "Empty", groupKind: "project", sessions: [] },
   ]);
+});
+
+test("conversations with a persona you can use group under that persona instead of their home", () => {
+  const seeds = [
+    { scopeId: "personal:alice", name: "Personal", kind: "personal" as const },
+    { scopeId: "persona:ada", name: "Ada", kind: "persona" as const },
+    { scopeId: "persona:idle", name: "Idle", kind: "persona" as const },
+  ];
+  const withAda = { ...saved("1", "web:alice:ada"), scopeId: "personal:alice", personaId: "ada" };
+  const plain = { ...saved("2", "web:alice:plain"), scopeId: "personal:alice" };
+  const unknown = { ...saved("3", "web:alice:gone"), scopeId: "personal:alice", personaId: "deleted" };
+  const items = groupProjectSessions([withAda, plain, unknown], seeds);
+  const groups = Object.fromEntries(
+    items.flatMap((item) => (item.kind === "project" ? [[item.scopeId, item.sessions.map((s) => s.id)]] : [])),
+  );
+  assert.deepEqual(groups, { "persona:ada": ["1"], "personal:alice": ["2", "3"], "persona:idle": [] });
 });
 
 test("a pending (not-yet-sent) chat in a project scope nests under its project", () => {

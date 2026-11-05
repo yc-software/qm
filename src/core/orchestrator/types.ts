@@ -1,3 +1,4 @@
+import type { PersonaService } from "../../personas/persona-service.ts";
 import type { AdmittedWork } from "../../util/admitted-work.ts";
 import type { NamedAgents } from "../../named-agents/named-agents.ts";
 import type { TraceCarrier } from "../../../plugins/chassis/src/error-reporting.ts";
@@ -181,6 +182,7 @@ export interface OrchestratorDeps {
   directory?: DirectoryStore;
   projects?: Pick<ProjectStore, "recognizes" | "name">;
   namedAgents?: NamedAgents;
+  personas?: Pick<PersonaService, "forTurn">;
   isCurrentSharedScopeMember?: IsCurrentSharedScopeMember;
   currentScopeMembers?: import("../../resolution/scope-membership.ts").CurrentScopeMembers;
   managedGroups?: Pick<ManagedGroupDirectory, "recognizes" | "members" | "version" | "withVersion" | "slackChannel">;

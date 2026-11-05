@@ -1,3 +1,4 @@
+import type { PersonaService } from "../personas/persona-service.ts";
 import type { TeamStore } from "../teams/teams.ts";
 import type { NamedAgents } from "../named-agents/named-agents.ts";
 import type { CronScriptTrial } from "../cron/script.ts";
@@ -282,6 +283,7 @@ export interface SessionSearchHit {
 export interface App {
   swarms?: SwarmService;
   namedAgents?: NamedAgents;
+  personas?: PersonaService;
   turn(req: TurnRequest, replay?: { signalDedupKey: string }): Promise<TurnResult>;
   getApproval(requestId: string, viewer?: string): Promise<(PendingApprovalRecord & { requestId: string }) | null>;
   subscribeSessionStates(cb: (event: SessionStateEvent) => void, opts?: SubscribeOptions): () => void;
@@ -338,6 +340,10 @@ export interface App {
     viewer?: string,
   ): Promise<{ accepted: boolean; reason?: string; why?: string; queuedRunId?: string; replayed?: boolean }>;
   replayOrphanedRunSignals(runId: string): Promise<void>;
+  steerRun(
+    run: Run,
+    signal: RunSignal,
+  ): Promise<{ sent: boolean; terminal?: boolean; drained?: boolean; replayRunId?: string }>;
   getSession(
     sessionId: string,
     window?: TranscriptWindow,
@@ -556,6 +562,7 @@ export interface App {
   ambientJudge?(systemPrompt: string, prompt: string): Promise<string | undefined>;
   directoryMembers(): Promise<DirectoryMember[]>;
   directoryChannels(): Promise<DirectoryChannel[]>;
+  directoryChannelsFor(principalId: string): Promise<DirectoryChannel[]>;
   channelMember(channelId: string, principalId: string): Promise<boolean>;
   channelVisibleTo(actorId: string, channelId: string, isPrivate?: boolean): Promise<boolean>;
   recordPrincipalDelivery(deliveryId: string, recipientThreadRef: string): Promise<void>;
@@ -660,6 +667,7 @@ interface DeploymentGitPrincipals {
 }
 
 export interface AppDeps {
+  personas?: PersonaService;
   externalSlackPolicies?: ExternalSlackPolicies;
   admittedWork?: AdmittedWork;
   shutdown?: () => AbortSignal;

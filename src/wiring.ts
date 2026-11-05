@@ -363,6 +363,8 @@ import { createProjectStore, type Project, type ProjectStore } from "./projects/
 import { createAgentStore, type NamedAgent } from "./named-agents/agent-store.ts";
 import { createNamedAgents } from "./named-agents/named-agents.ts";
 import { resolveBranding } from "./resolution/branding.ts";
+import { createPersonaService } from "./personas/persona-service.ts";
+import { createPostgresPersonaStore } from "./personas/persona-store.ts";
 import { withErrorReporting, type ErrorLog } from "./admin/error-log.ts";
 import { createPostgresReplayDedupe, type ReplayDedupe } from "./auth/replay-dedupe.ts";
 import {
@@ -1774,11 +1776,19 @@ export function buildApp(
     auditLog,
     botNames: async () => [(await resolveBranding(configStore, orgScope, config.brandingDefault)).selfLabel ?? "QM"],
   });
-  const canReadScope = createCanReadScope({ managedGroups: projects, directory, identity, teams, sessions });
-  const canWriteScope = createCanWriteScope({ managedGroups: projects, directory, identity, teams });
-  const canManageScope = createCanManageScope({ managedGroups: projects, directory, identity, sessions });
+  const personas = createPersonaService({
+    store: createPostgresPersonaStore(databaseUrl),
+    flags: featureFlags,
+    orgScope: scopeId("org", config.orgId),
+    teams,
+    sessions,
+    ...(keychain ? { keychain } : {}),
+  });
+  const canReadScope = createCanReadScope({ managedGroups: projects, directory, identity, teams, sessions, personas });
+  const canWriteScope = createCanWriteScope({ managedGroups: projects, directory, identity, teams, personas });
+  const canManageScope = createCanManageScope({ managedGroups: projects, directory, identity, sessions, personas });
   const managesArtifactHome = createManagesArtifactHome(
-    { managedGroups: projects, directory, identity, teams },
+    { managedGroups: projects, directory, identity, teams, personas },
     canManageScope,
   );
   const currentScopeMembers = createCurrentScopeMembers({ managedGroups: projects, directory, identity });
@@ -2020,6 +2030,7 @@ export function buildApp(
     sessions,
     runs,
     signals: runSignals,
+    steerRun: (run, signal) => app.steerRun(run, signal),
     maxAttempts,
     advisoryLock,
     prepareRequest: prepareSessionRequest,
@@ -2151,6 +2162,7 @@ export function buildApp(
     managedGroups: projects,
     projects,
     namedAgents,
+    personas,
     ...(config.surfaceDebugFooter ? { surfaceDebugFooter: true } : {}),
     ...(decisions ? { replyCheck: createReplyCheck(decisions, decide) } : {}),
     environments,
@@ -2311,6 +2323,7 @@ export function buildApp(
       : {}),
     projects,
     namedAgents,
+    personas,
     environments,
     deploy: deployService,
     deployAppsDomain: config.awsDeploy.appsDomain,
