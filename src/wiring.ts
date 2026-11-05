@@ -22,7 +22,7 @@ import {
   type StoredRenderScratch,
 } from "./sandbox/render-sandbox.ts";
 import { createSdkRenderClient } from "./sandbox/render-client.ts";
-import { createRenderBase, type StoredRenderBase } from "./sandbox/render-base.ts";
+import { createRenderBase, renderBaseStore } from "./sandbox/render-base.ts";
 import { createKeychainApprovals, type KeychainApprovals } from "./credentials/keychain-approval.ts";
 import { flushErrorReporting, tracePhase } from "../plugins/chassis/src/error-reporting.ts";
 import { createProductAnalytics } from "./util/product-analytics.ts";
@@ -540,7 +540,6 @@ const MEMORY_CAPTURE_ENTRY_WINDOW = 2_000;
 
 const CONFIGURED_MAPS = [
   "sprites_initialization",
-  "render_sandbox_bases",
   "sandbox_resource_rollout",
   "sandbox_routing",
   "render_deploy_credentials",
@@ -908,7 +907,7 @@ export function buildApp(
     renderClient && config.renderSandbox.image
       ? createRenderBase({
           client: renderClient,
-          store: artifactMap<StoredRenderBase>("render_sandbox_bases"),
+          store: renderBaseStore(pgArtifactMap.pool),
           image: config.renderSandbox.image,
           hold: (work) => leaderLease.hold(`render:sandbox-base:${config.renderSandbox.image}`, work),
           onError: sandboxOnError,

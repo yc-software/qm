@@ -1,6 +1,7 @@
 import { SandboxSnapshotNotFoundError } from "@renderinc/sdk";
 import { setTimeout as wait } from "node:timers/promises";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { createPostgresMap, processLevelMap, type DurableMap } from "../persistence/durable-map.ts";
+import type { PgPool } from "../persistence/pg-pool.ts";
 import { sleep } from "../util/async.ts";
 import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 import type { RenderClient, RenderSnapshot } from "./render-client.ts";
@@ -42,6 +43,9 @@ export interface RenderBaseOptions {
   retryMs?: number;
   onError?: (e: { category: string; code: string; message: string }) => void;
 }
+
+export const renderBaseStore = (pg: PgPool): DurableMap<StoredRenderBase> =>
+  createPostgresMap<StoredRenderBase>(pg, "render_sandbox_bases", [], [], [processLevelMap("render_sandbox_bases")]);
 
 const isReady = (record: StoredRenderBase): boolean =>
   record.readyAtMs !== undefined && record.snapshot !== undefined && record.snapshot.expiresAtMs > Date.now();
