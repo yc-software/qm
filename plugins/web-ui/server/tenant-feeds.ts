@@ -21,6 +21,7 @@ interface Lane {
   clients: Map<string, Set<ServerResponse>>;
   stop: AbortController;
   polling: boolean;
+  running: boolean;
 }
 
 interface SessionStateFrame {
@@ -145,12 +146,13 @@ export function createTenantFeeds(deps: TenantFeedDeps) {
   }
 
   function openLane(tenant: string | undefined): Lane {
-    const lane: Lane = { tenant, clients: new Map(), stop: new AbortController(), polling: false };
+    const lane: Lane = { tenant, clients: new Map(), stop: new AbortController(), polling: false, running: false };
     lanes.set(tenant ?? "", lane);
     return lane;
   }
 
   function runLane(lane: Lane): void {
+    lane.running = true;
     void consume(lane, "/v1/session-state/events", "session_state", (data) =>
       forwardSessionState(lane, data as SessionStateFrame),
     );
@@ -203,20 +205,21 @@ export function createTenantFeeds(deps: TenantFeedDeps) {
   return {
     requestTenant: (): string | undefined => tenantOf(deps.currentToken()),
     start: () => {
-      if (!lanes.has("")) runLane(openLane(undefined));
+      const lane = lanes.get("") ?? openLane(undefined);
+      if (!lane.running) runLane(lane);
     },
     async drain(): Promise<void> {
+      if (!lanes.has("")) openLane(undefined);
       const failures = await Promise.all([...lanes.values()].map(drainLane));
       deps.noteDeliveries(failures.find((f) => f !== undefined));
     },
     attach(user: string, res: ServerResponse): () => void {
       const tenant = tenantOf(deps.currentToken());
-      const existing = lanes.get(tenant ?? "");
-      const lane = existing ?? openLane(tenant);
+      const lane = lanes.get(tenant ?? "") ?? openLane(tenant);
       let set = lane.clients.get(user);
       if (!set) lane.clients.set(user, (set = new Set()));
       set.add(res);
-      if (!existing && lane.tenant) runLane(lane);
+      if (!lane.running && lane.tenant) runLane(lane);
       return () => {
         set.delete(res);
         if (!set.size) lane.clients.delete(user);
