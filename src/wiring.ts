@@ -1835,7 +1835,13 @@ export function buildApp(
   membership.managesArtifactHome = managesArtifactHome;
   const deployGitSecret = config.signingSecret;
   const deployGitBase = config.apiBaseUrl;
-  const deliveries = withWebTranscriptDeliveries(createPostgresDeliveryStore(databaseUrl), sessions, runs);
+  const deliveries = withWebTranscriptDeliveries(
+    createPostgresDeliveryStore(databaseUrl),
+    sessions,
+    runs,
+    sessionStateBus,
+  );
+
   const deployService = createDeployService({
     deliveries,
     deployAppsDomain: config.awsDeploy.appsDomain,

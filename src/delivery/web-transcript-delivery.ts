@@ -7,6 +7,7 @@ import { turnFailureItem } from "../core/turn-error.ts";
 import { reportFailure, swallow } from "../util/errors.ts";
 import { withTenant } from "../tenants/context.ts";
 import { claimThenBind } from "../tenants/claim.ts";
+import type { SessionStateBus } from "../runs/session-state-bus.ts";
 
 const DEDUPE_SCAN_LIMIT = 200;
 const RECORDED_CACHE_CAP = 1000;
@@ -44,6 +45,7 @@ export function withWebTranscriptDeliveries(
   store: DeliveryStore,
   sessions: WebTranscriptSessions,
   runs: Pick<RunStore, "inFlightForThread">,
+  states?: Pick<SessionStateBus, "emit">,
 ): DeliveryStore & { transcribeUndelivered(type: string): Promise<void> } {
   const recorded = new Set<string>();
   const remember = (key: string): void => {
@@ -86,6 +88,7 @@ export function withWebTranscriptDeliveries(
       item = { kind: "AgentMessage", text: d.text, body: via ? { via } : {} };
     }
     await sessions.appendMany({ sessionId: session.id, turnId }, [item]);
+    states?.emit({ threadRef: session.threadRef, sessionId: session.id, state: "idle", at: Date.now() });
     return true;
   };
 
