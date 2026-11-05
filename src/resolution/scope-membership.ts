@@ -175,8 +175,7 @@ export function createCurrentScopeMembers(deps: ScopeMembershipDeps, requireComp
   };
 }
 
-export type ScopeRole = "read" | "write" | "manage";
-export type ScopeRoleLookup = (principalId: string, scope: ScopeId) => Promise<ScopeRole | null>;
+type ScopeRole = "read" | "write" | "manage";
 
 const ROLE_RANK: Record<ScopeRole, number> = { read: 1, write: 2, manage: 3 };
 const roleAtLeast = (role: ScopeRole | null, floor: ScopeRole): boolean =>
@@ -188,15 +187,17 @@ async function sharedScopeRole(
   ref: string,
   principalId: string,
   active: boolean,
+  floor: ScopeRole,
 ): Promise<ScopeRole | null> {
   if (active && (await currentSharedScopeMember(deps, kind, ref, principalId)))
     return kind === "group" || (await channelPrivacy(deps, ref)) === true ? "manage" : "write";
+  if (floor !== "read") return null;
   if (await memberOfSharedScope(deps, kind, ref, principalId, scopeId(kind, ref))) return "read";
   return kind === "channel" && active && (await channelPrivacy(deps, ref)) === false ? "read" : null;
 }
 
-export function createScopeRole(deps: ScopeMembershipDeps): ScopeRoleLookup {
-  return async function scopeRole(principalId, scope) {
+function createScopeRole(deps: ScopeMembershipDeps) {
+  return async function scopeRole(principalId: string, scope: ScopeId, floor: ScopeRole): Promise<ScopeRole | null> {
     if (!principalId) return null;
     const { kind, ref } = parseScopeId(scope);
     const active = activePrincipal(deps, principalId);
@@ -215,7 +216,7 @@ export function createScopeRole(deps: ScopeMembershipDeps): ScopeRoleLookup {
       }
       case "channel":
       case "group":
-        return sharedScopeRole(deps, kind, ref, principalId, active);
+        return sharedScopeRole(deps, kind, ref, principalId, active, floor);
       default:
         return null;
     }
@@ -225,7 +226,7 @@ export function createScopeRole(deps: ScopeMembershipDeps): ScopeRoleLookup {
 function roleCheck(deps: ScopeMembershipDeps, floor: ScopeRole) {
   const role = createScopeRole(deps);
   return async (principalId: string, scope: ScopeId): Promise<boolean> =>
-    roleAtLeast(await role(principalId, scope), floor);
+    roleAtLeast(await role(principalId, scope, floor), floor);
 }
 
 export const createCanReadScope = (deps: ScopeMembershipDeps): CanReadScope => roleCheck(deps, "read");
@@ -249,7 +250,8 @@ export function createManagesArtifactHome(deps: ScopeMembershipDeps): ManagesArt
   return async function managesArtifactHome(homeScopeId, createdBy, principalId): Promise<boolean> {
     if (!principalId || !activePrincipal(deps, principalId)) return false;
     const { kind, ref } = parseScopeId(homeScopeId);
-    if (roleAtLeast(await role(principalId, homeScopeId), kind === "team" ? "write" : "manage")) return true;
+    const floor = kind === "team" ? "write" : "manage";
+    if (roleAtLeast(await role(principalId, homeScopeId, floor), floor)) return true;
     if (!samePerson(createdBy, principalId)) return false;
     return kind === "personal" || (kind === "channel" && (await channelPrivacy(deps, ref)) === false);
   };
