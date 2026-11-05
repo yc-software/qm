@@ -1,3 +1,4 @@
+import type { PersonaService } from "../personas/persona-service.ts";
 import type { TeamStore } from "../teams/teams.ts";
 import type { CronScriptTrial } from "../cron/script.ts";
 import type { ExternalSlackPolicies } from "../resolution/external-slack.ts";
@@ -280,6 +281,7 @@ export interface SessionSearchHit {
 
 export interface App {
   swarms?: SwarmService;
+  personas?: PersonaService;
   turn(req: TurnRequest, replay?: { signalDedupKey: string }): Promise<TurnResult>;
   getApproval(requestId: string, viewer?: string): Promise<(PendingApprovalRecord & { requestId: string }) | null>;
   subscribeSessionStates(cb: (event: SessionStateEvent) => void, opts?: SubscribeOptions): () => void;
@@ -645,6 +647,7 @@ interface DeploymentGitPrincipals {
 }
 
 export interface AppDeps {
+  personas?: PersonaService;
   externalSlackPolicies?: ExternalSlackPolicies;
   admittedWork?: AdmittedWork;
   shutdown?: () => AbortSignal;
