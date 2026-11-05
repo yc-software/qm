@@ -23,7 +23,7 @@ import { coreHostTenant, createHostSessions, createHostTenants, mappedHost, runO
 import { createHostRoutes } from "./host-routes.ts";
 import {
   coreEmailTenants,
-  corePrincipalTenants,
+  coreSignInTenants,
   openChoice,
   tenantChoiceForms,
   verifiedEmail,
@@ -1564,10 +1564,11 @@ async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL):
       );
       adminCache.delete(identity.sub);
     }
-    const found = identity.email
-      ? await coreEmailTenants(CORE, CORE_SIGNING_SECRET, identity.email)
-      : await corePrincipalTenants(CORE, CORE_SIGNING_SECRET, identity.sub);
-    if (found.shared && !found.tenants.length) return sendHtml(res, 400, signInErrorHtml("account is not permitted"));
+    const found = await coreSignInTenants(CORE, CORE_SIGNING_SECRET, {
+      email: identity.email,
+      principal: identity.sub,
+    });
+    if (found.shared && !found.tenants.length) return sendHtml(res, 403, noAccessHtml());
     const who = { sub: identity.sub, name: identity.name };
     const pin = await hostRoutes.pin(identity.returnTo);
     if (pin !== undefined && !found.tenants.some(({ id }) => id === pin)) return sendHtml(res, 403, noAccessHtml());

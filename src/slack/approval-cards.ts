@@ -41,6 +41,18 @@ function button(
   };
 }
 
+export interface ApprovalRequester {
+  actor?: { externalId?: string };
+  surfaceOrigin?: { author?: { surface?: string; id?: string } };
+}
+
+export function approvalDeliveryRecipient(request: ApprovalRequester | undefined): string | undefined {
+  const id = request?.actor?.externalId;
+  if (!id || id.startsWith("system:")) return undefined;
+  const author = request?.surfaceOrigin?.author;
+  return author?.surface === "slack" && author.id ? author.id : id;
+}
+
 export interface ApprovalCardDestination {
   toDm: boolean;
   channelPointer: string;
@@ -280,7 +292,7 @@ export function recoveredApprovalContext(
       ? parseDeliveryTarget(req.deliveryTarget)
       : { channel: click.channel, ...(click.threadTs ? { threadTs: click.threadTs } : {}) };
   return {
-    requesterId: req.actor.externalId,
+    requesterId: approvalDeliveryRecipient(req as ApprovalRequester) ?? req.actor.externalId,
     channel: origin.channel,
     ...(origin.threadTs ? { replyThreadTs: origin.threadTs } : {}),
     threadOnly: kind === "channel",
