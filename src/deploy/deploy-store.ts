@@ -3,7 +3,6 @@ import type { ScopeId } from "../types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { PgPool } from "../persistence/pg-pool.ts";
 import type { ClaimedRow } from "../tenants/claim.ts";
-import { swallow } from "../util/errors.ts";
 import { DEPLOYMENT_TABLES, NAME_INDEX } from "./page-views.ts";
 import {
   createDeployGitStore,
@@ -155,17 +154,6 @@ function createPgDeployAccess(pg: PgPool): DeployAccess {
     if (!readyP) {
       readyP = (async () => {
         for (const migration of DEPLOYMENT_TABLES) await pg.migrate(migration);
-        await pg
-          .q(
-            `CREATE UNIQUE INDEX IF NOT EXISTS ${NAME_INDEX}
-             ON deployments (tenant_id, (json->>'name')) WHERE json->>'name' IS NOT NULL`,
-          )
-          .catch((e) =>
-            swallow(
-              "deploy-store: could not create unique name index on deployments (concurrent boot, or duplicate names)",
-              e,
-            ),
-          );
       })().catch((e) => {
         readyP = null;
         throw e;

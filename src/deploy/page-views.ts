@@ -59,6 +59,22 @@ export const DEPLOYMENT_TABLES: PgMigrationDefinition[] = [
     ],
     after: [`DROP INDEX IF EXISTS ${NAME_INDEX}`],
   }),
+  {
+    id: "durable-map/deployments/0020-name-index",
+    statements: [
+      `DO $name_index$ BEGIN
+        IF EXISTS (
+          SELECT 1 FROM deployments WHERE json->>'name' IS NOT NULL
+           GROUP BY tenant_id, json->>'name' HAVING count(*) > 1
+        ) THEN
+          RAISE WARNING 'deployments has duplicate names within a tenant; ${NAME_INDEX} was not created';
+        ELSE
+          CREATE UNIQUE INDEX IF NOT EXISTS ${NAME_INDEX}
+            ON deployments (tenant_id, (json->>'name')) WHERE json->>'name' IS NOT NULL;
+        END IF;
+      END $name_index$`,
+    ],
+  },
 ];
 
 export type AppViewAuthMode = "signed_in" | "public" | "app_only";

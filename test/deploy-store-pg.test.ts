@@ -6,7 +6,8 @@ import { join } from "node:path";
 import { createPostgresMapFactory, type PostgresArtifactMaps } from "../src/persistence/durable-map.ts";
 import { createDeployStore, type Deployment, type DeployStore } from "../src/deploy/deploy-store.ts";
 import { scopeId } from "../src/types.ts";
-import { testDeployBackings } from "./support/test-database.ts";
+import { testBareDatabaseUrl, testDeployBackings } from "./support/test-database.ts";
+import { applyPgMigrations, definePgMigration } from "../src/persistence/pg-pool.ts";
 import { DEPLOYMENT_TABLES } from "../src/deploy/page-views.ts";
 
 const URL = process.env.DATABASE_URL;
@@ -169,4 +170,29 @@ test("pre-existing duplicate names degrade gracefully: no index, deterministic g
   assert.equal((await store.getByName("doubled"))!.id, "dup-a", "lowest id wins, matching the old all().find order");
   const created = await store.create(createInput("fresh-name"));
   assert.equal((await store.getByName("fresh-name"))!.id, created.id);
+});
+
+test("the name index migration skips a tenant's duplicate names instead of failing", { skip }, async () => {
+  const pg = (await import("pg")).default;
+  for (const duplicated of [true, false]) {
+    const owner = new pg.Pool({ connectionString: testBareDatabaseUrl(), max: 1 });
+    try {
+      const nameIndex = DEPLOYMENT_TABLES.filter((m) => m.id.endsWith("-name-index")).map(definePgMigration);
+      const tables = DEPLOYMENT_TABLES.filter((m) => !m.id.endsWith("-name-index")).map(definePgMigration);
+      await applyPgMigrations(owner, tables);
+      await owner.query("INSERT INTO tenants DEFAULT VALUES");
+      const tenant = (await owner.query("SELECT id FROM tenants LIMIT 1")).rows[0].id;
+      for (const id of duplicated ? ["a", "b"] : ["a"])
+        await owner.query("INSERT INTO deployments (tenant_id, id, json) VALUES ($1, $2, $3)", [
+          tenant,
+          id,
+          { name: "same" },
+        ]);
+      await applyPgMigrations(owner, nameIndex);
+      const index = await owner.query("SELECT to_regclass('deployments_name_unique') AS i");
+      assert.equal(index.rows[0].i === null, duplicated);
+    } finally {
+      await owner.end();
+    }
+  }
 });
