@@ -1,22 +1,20 @@
-import { currentTenant } from "../tenants/context.ts";
-
 export interface EngagedSession {
   tenantId: string;
   threadRef: string;
 }
 
 export interface EngagedRegistry {
-  engage(threadRef: string): void;
-  settle(threadRef: string): void;
+  engage(session: EngagedSession): void;
+  settle(session: EngagedSession): void;
   list(): EngagedSession[];
 }
 
 export function createEngagedRegistry(): EngagedRegistry {
   const engaged = new Map<string, EngagedSession>();
-  const key = (threadRef: string): string => JSON.stringify([currentTenant(), threadRef]);
+  const key = ({ tenantId, threadRef }: EngagedSession): string => JSON.stringify([tenantId, threadRef]);
   return {
-    engage: (threadRef) => void engaged.set(key(threadRef), { tenantId: currentTenant(), threadRef }),
-    settle: (threadRef) => void engaged.delete(key(threadRef)),
+    engage: (session) => void engaged.set(key(session), { ...session }),
+    settle: (session) => void engaged.delete(key(session)),
     list: () => [...engaged.values()],
   };
 }

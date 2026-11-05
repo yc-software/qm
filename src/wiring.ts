@@ -308,7 +308,7 @@ import {
 } from "./auth/capability-token.ts";
 import { createControlService } from "./api/control-service.ts";
 import { createPostgresRunStore } from "./runs/postgres-run-store.ts";
-import { withTenant } from "./tenants/context.ts";
+import { currentTenant, withTenant } from "./tenants/context.ts";
 import { claimThenBind } from "./tenants/claim.ts";
 import type { RunSignalStore } from "./runs/run-signal-store.ts";
 import { createPostgresRunSignalStore } from "./runs/postgres-run-signal-store.ts";
@@ -2372,7 +2372,7 @@ export function buildApp(
     void runs
       .activeForThread(run.sessionId)
       .then((live) => {
-        if (!live) engaged.settle(run.sessionId);
+        if (!live) engaged.settle({ tenantId: run.tenantId, threadRef: run.sessionId });
       })
       .catch(swallowAs("wake: settle on terminal", undefined));
   });
@@ -2492,7 +2492,7 @@ export function buildApp(
         const live = await runs.activeForThread(threadRef);
         if (!live) {
           pokeReaper();
-          engaged.settle(threadRef);
+          engaged.settle({ tenantId: currentTenant(), threadRef });
           return 1;
         }
         return 0;
