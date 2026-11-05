@@ -11,7 +11,6 @@ import { conversationScope } from "../resolution/resolution-service.ts";
 import { conversationWebUrl } from "../util/conversation-links.ts";
 import { createKeyedQueue, sleep } from "../util/async.ts";
 import { swallowAs } from "../util/errors.ts";
-import { claimThenBind } from "../tenants/claim.ts";
 
 export interface SlackSessionStatusState {
   writer?: string;
@@ -197,11 +196,9 @@ export function createSlackSessionStatus(
       }).catch(swallowAs("slack: start session status", undefined));
     },
     async reconcile(client: StatusClient, account: string) {
-      await claimThenBind(store.claimTenants, async () => {
-        for (const [id, state] of await store.entries())
-          if (state.account === account)
-            await sync(client, id).catch(swallowAs("slack: reconcile session status", undefined));
-      });
+      for (const [id, state] of await store.entries())
+        if (state.account === account)
+          await sync(client, id).catch(swallowAs("slack: reconcile session status", undefined));
     },
   };
 }
