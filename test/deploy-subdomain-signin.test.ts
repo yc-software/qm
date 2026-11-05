@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { TEST_TENANT } from "./support/test-config.ts";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -84,7 +85,10 @@ test("forwarded app hosts fail closed before core routes when gateway configurat
     { deployAppsDomain: "apps.example.com" },
     { deployAppsDomain: "apps.example.com", deployGateSecret: "gate" },
   ]) {
-    const server = createInsecureTestServer({} as Parameters<typeof createInsecureTestServer>[0], config);
+    const server = createInsecureTestServer(
+      { readBootTenant: async () => TEST_TENANT } as Parameters<typeof createInsecureTestServer>[0],
+      config,
+    );
     server.listen(0);
     try {
       const result = await httpGet((server.address() as AddressInfo).port, "/healthz", {
@@ -116,7 +120,9 @@ function httpGet(
 
 test("app sign-in uses the configured trusted entry and preserves the app return address", async () => {
   const server = createInsecureTestServer(
-    { getDeployment: async () => null } as unknown as Parameters<typeof createInsecureTestServer>[0],
+    { readBootTenant: async () => TEST_TENANT, getDeployment: async () => null } as unknown as Parameters<
+      typeof createInsecureTestServer
+    >[0],
     {
       deployAppsDomain: "apps.example.com",
       deployGateSecret: "gate",

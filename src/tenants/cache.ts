@@ -38,14 +38,23 @@ export function tenantListeners<A extends unknown[]>(label: string): TenantListe
   };
 }
 
-export function tenantLoader(loaders: ReadonlyArray<() => Promise<unknown>>): () => Promise<void> {
-  const loads = perTenant<{ run?: Promise<void> }>(() => ({}));
-  return () => {
-    const state = loads();
+const tenantLoads = new Set<() => Promise<void>>();
+
+export function onTenantLoad(load: () => Promise<unknown>): () => void {
+  const runs = perTenant<{ run?: Promise<void> }>(() => ({}));
+  const memoized = (): Promise<void> => {
+    const state = runs();
     if (state.run) return state.run;
-    const run = Promise.all(loaders.map((loader) => loader())).then(() => undefined);
+    const run = load().then(() => undefined);
     state.run = run;
     run.catch(() => state.run === run && (state.run = undefined));
     return run;
   };
+  tenantLoads.add(memoized);
+  return () => tenantLoads.delete(memoized);
+}
+
+export function loadTenant(): Promise<void> {
+  currentTenant();
+  return Promise.all([...tenantLoads].map((load) => load())).then(() => undefined);
 }

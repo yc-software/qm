@@ -1,5 +1,5 @@
 import type { MemoryEmbedder } from "./model/embeddings.ts";
-import { tenantLoader } from "./tenants/cache.ts";
+import { onTenantLoad } from "./tenants/cache.ts";
 import { nonDeploymentCredential, withDeploymentCredentials } from "./credentials/deployment-credentials.ts";
 import { resolveEmbeddingModel } from "./model/pi-models.ts";
 import { createPostgresTeamStore, type TeamStore } from "./teams/teams.ts";
@@ -464,7 +464,6 @@ export interface BuiltApp {
   refreshModels: () => Promise<void>;
   customProviders: CustomProviderStore;
   refreshCustomProviders: () => Promise<void>;
-  loadTenant: () => Promise<void>;
   mcpServers: McpServerStore;
   mcpToolService: McpToolService;
   acl: AclStore;
@@ -1316,11 +1315,9 @@ export function buildApp(
   const refreshCustomProviders = async () => {
     setCustomProviders(await customProviders.enabled());
   };
-  const loadTenant = tenantLoader([
-    () => configStore.hydrate?.() ?? Promise.resolve(),
-    refreshCustomProviders,
-    () => identity.refresh(),
-  ]);
+  const stopTenantLoad = onTenantLoad(() =>
+    Promise.all([configStore.hydrate?.(), refreshCustomProviders(), identity.refresh()]),
+  );
   const refreshModels = async () => {
     await gatewayCatalog?.refresh();
     await refreshCustomProviders();
@@ -2915,6 +2912,7 @@ export function buildApp(
     },
     releaseInFlightRuns,
     async stop() {
+      stopTenantLoad();
       renderBasePreparing?.abort();
       const draining = drain.stop();
       await stopBackground();
@@ -2991,7 +2989,6 @@ export function buildApp(
     refreshModels,
     customProviders,
     refreshCustomProviders,
-    loadTenant,
     mcpServers,
     mcpToolService,
     acl,

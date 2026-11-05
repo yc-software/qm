@@ -47,11 +47,18 @@ import { userModelAuthRoutes } from "./user-model-auth.ts";
 import { swarmRoutes } from "./swarms.ts";
 
 export const rawRoutes: ReadonlyArray<Route<BaseCtx>> = [
-  { method: "GET", path: "/healthz", auth: "public", handle: ({ res }) => sendJson(res, 200, { ok: true }) },
+  {
+    method: "GET",
+    path: "/healthz",
+    auth: "public",
+    tenant: "none",
+    handle: ({ res }) => sendJson(res, 200, { ok: true }),
+  },
   {
     method: "GET",
     path: "/readyz",
     auth: "public",
+    tenant: "none",
     handle: async ({ res, deps }) => {
       const controller = new AbortController();
       let timer: ReturnType<typeof setTimeout> | undefined;

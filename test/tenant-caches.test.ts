@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import type { DurableMap } from "../src/persistence/durable-map.ts";
 import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { boundTenant, currentTenant, withTenant } from "../src/tenants/context.ts";
-import { perTenant, tenantListeners, tenantLoader } from "../src/tenants/cache.ts";
+import { loadTenant, onTenantLoad, perTenant, tenantListeners } from "../src/tenants/cache.ts";
 import { customModelCatalog, customProvidersVersion, setCustomProviders } from "../src/model/custom-providers.ts";
 import { overlayUnavailableReason, overlaysVersion, publishModelOverlays } from "../src/model/model-overlay.ts";
 import { gatewayModelCatalog, gatewayModelsVersion, setGatewayModels } from "../src/model/gateway-models.ts";
@@ -200,30 +200,25 @@ test("delivery enqueue listeners hear only their own tenant's deliveries", async
   assert.deepEqual(heard, ["a:slack"]);
 });
 
-test("a tenant loader loads each tenant once and retries a tenant whose load failed", async () => {
+test("loadTenant runs each registered load once per tenant and retries a failed one", async () => {
   const loads: string[] = [];
-  const load = tenantLoader([async () => loads.push(currentTenant())]);
-  await withTenant(A, () => load());
-  await withTenant(A, () => load());
-  await withTenant(B, () => load());
+  let failures = 0;
+  const stopCounting = onTenantLoad(async () => loads.push(currentTenant()));
+  const stopFailing = onTenantLoad(async () => {
+    if (currentTenant() === B && failures++ === 0) throw new Error("load failed");
+  });
+  await withTenant(A, () => loadTenant());
+  await withTenant(A, () => loadTenant());
+  await assert.rejects(
+    withTenant(B, () => loadTenant()),
+    /load failed/,
+  );
+  await withTenant(B, () => loadTenant());
   assert.deepEqual(loads, [A, B]);
-  let attempts = 0;
-  const failing = tenantLoader([
-    async () => {
-      attempts += 1;
-      throw new Error("load failed");
-    },
-  ]);
-  await assert.rejects(
-    withTenant(A, () => failing()),
-    /load failed/,
-  );
-  await assert.rejects(
-    withTenant(A, () => failing()),
-    /load failed/,
-  );
-  assert.equal(attempts, 2);
-  assert.throws(() => load(), /No tenant is bound/);
+  assert.equal(failures, 2);
+  assert.throws(() => loadTenant(), /No tenant is bound/);
+  stopCounting();
+  stopFailing();
 });
 
 test("engaged sessions with the same thread are tracked per tenant", () => {
