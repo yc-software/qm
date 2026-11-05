@@ -18,7 +18,7 @@ export interface Principal {
   displayName?: string;
 }
 
-const SCOPE_KINDS = ["personal", "channel", "team", "org", "group"] as const;
+const SCOPE_KINDS = ["personal", "channel", "team", "org", "group", "persona"] as const;
 export type ScopeKind = (typeof SCOPE_KINDS)[number];
 
 export type ScopeId = string;
@@ -145,6 +145,7 @@ export interface Session {
   spawnMeta?: SpawnMeta;
   surfaceBinding?: TurnSurfaceOrigin;
   runtime?: TurnRuntime;
+  personaId?: string;
   lastActivityAt?: number;
   hasEntries?: boolean;
   working?: boolean;

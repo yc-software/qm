@@ -14,6 +14,7 @@ interface AgentApiView {
   claims: CapabilityClaims;
   isAdmin: boolean;
   swarmsEnabled: boolean;
+  personasEnabled: boolean;
 }
 
 interface AgentApiFamily {
@@ -64,6 +65,52 @@ const FAMILIES: AgentApiFamily[] = [
         path: "/v1/composio/twitter/media",
         summary:
           "{accountId,data} uploads one base64 PNG, JPEG or WebP image (5 MB max) through your own active X connection and returns mediaId for a post's media ids",
+      },
+    ],
+  },
+  {
+    when: (view) => view.personasEnabled,
+    guidance:
+      "Personas are reusable agents (instructions, skills, notes, credentials) living in a persona:<id> scope; people hold owner, write or read on them through people (personal:), teams (team:), the org (org:) or Slack channels (channel:, usable only in that channel). Writers edit instructions with PATCH and add skills by moving them into persona:<id> with the skills tool; only owners share, attach credentials or delete. Use the persona-fork skill to copy one.",
+    routes: [
+      { method: "GET", path: "/v1/personas", summary: "personas you hold a role on, with your role" },
+      {
+        method: "GET",
+        path: "/v1/personas/:id",
+        summary: "one persona: instructions, access list, attached credential names (never secrets), forkedFrom",
+      },
+      {
+        method: "POST",
+        path: "/v1/personas",
+        summary: "{name,description?,instructions?,icon?,forkedFromId?} creates one you own",
+      },
+      {
+        method: "PATCH",
+        path: "/v1/personas/:id",
+        summary: "{name?,description?,instructions?,icon?} edits it (write or owner)",
+      },
+      {
+        method: "PUT",
+        path: "/v1/personas/:id/access",
+        summary:
+          "{access:[{scopeId,role:'owner'|'write'|'read'}]} replaces who holds which role (owner; at least one owner stays)",
+      },
+      {
+        method: "POST",
+        path: "/v1/personas/:id/credentials",
+        summary: "{credentialId} attaches one of your own keychain credentials (owner, on a turn you sent)",
+      },
+      {
+        method: "DELETE",
+        path: "/v1/personas/:id/credentials/:grantId",
+        summary: "detaches an attached credential (owner, on a turn you sent)",
+      },
+      { method: "DELETE", path: "/v1/personas/:id", summary: "deletes it and detaches its credentials (owner)" },
+      {
+        method: "PUT",
+        path: "/v1/sessions/:id/persona",
+        summary:
+          "{personaId|null} switches this conversation (your own session id) to a persona you can use here, from the next turn",
       },
     ],
   },
@@ -721,12 +768,13 @@ export interface AgentApiListing {
 export function renderAgentApis(
   claims: CapabilityClaims,
   admin: { isAdmin: boolean; role?: string },
-  features: { swarmsEnabled: boolean },
+  features: { swarmsEnabled: boolean; personasEnabled: boolean },
 ): AgentApiListing {
   const view: AgentApiView = {
     claims,
     isAdmin: admin.isAdmin,
     swarmsEnabled: features.swarmsEnabled,
+    personasEnabled: features.personasEnabled,
   };
   const visible = [...FAMILIES, ...unattendedFamilies(), WHOAMI_FOR_ALL].filter((f) => f.when?.(view) ?? true);
   return {
