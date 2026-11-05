@@ -3,6 +3,7 @@ import type { LoopItemLedger } from "./item-ledger.ts";
 import { scopeId } from "../types.ts";
 import type { LoopStore } from "./loop-store.ts";
 import { adapterForItem } from "./sources/index.ts";
+import { isObj } from "./sources/adapter.ts";
 import { EVENT_TEXT_CHARS, type LatestEvent } from "./ingress.ts";
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import { text } from "node:stream/consumers";
@@ -56,6 +57,16 @@ const SOURCE_TEXT = {
     images: "url_private; up to 4",
   },
 } as const;
+
+export function inboxItemNeedsRepair(item: LoopItem, source: string): boolean {
+  const payload = item.sourcePayload;
+  return (
+    !item.proposal ||
+    typeof payload?.title !== "string" ||
+    typeof payload.snippet !== "string" ||
+    !isObj(payload[source])
+  );
+}
 
 export const VOICE_JUDGEMENT =
   "The draft must read as the person's own writing: compare it with their voice profile in the work instructions above when one is there (greeting, sign-off, length, register and hard rules), otherwise with their own messages in the transcript. Return continue, naming what to change, when it reads like a generic business reply instead.";

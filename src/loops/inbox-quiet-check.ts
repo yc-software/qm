@@ -1,60 +1,37 @@
 import { LRUCache } from "lru-cache";
+import { WebClient } from "@slack/web-api";
 import type { Loop, LoopItem } from "./types.ts";
 import { isObj, type ConnectorTokenSource } from "./sources/adapter.ts";
 import { isResolved } from "./ledger-view.ts";
-import { inboxSource } from "./inbox-loop.ts";
+import { inboxItemNeedsRepair, inboxSource } from "./inbox-loop.ts";
 import { gmailApi } from "../connectors/gmail-api.ts";
 import { normalizeSlackApiUrl } from "../slack/config.ts";
+import { slackErrorCode } from "../slack/payloads.ts";
 import { errMessage } from "../util/errors.ts";
 
-// Before an inbox loop spends a model turn on its sync pass, prove with plain provider
-// reads that nothing it would act on changed since the last clean pass. Doubt runs the turn.
 export type InboxQuietVerdict = { quiet: true } | { quiet: false; reason: string };
 
 export type InboxQuietCheck = (loop: Loop, items: LoopItem[]) => Promise<InboxQuietVerdict>;
 
+type SlackReader = Pick<WebClient, "apiCall">;
+
 interface QuietCheckDeps {
   tokens: ConnectorTokenSource;
   fetchImpl?: typeof fetch;
+  slackClient?: (token: string) => SlackReader;
   slackApiUrl?: string;
 }
 
-// Mail delivery and Slack's search index trail the clock by seconds to minutes.
 const OVERLAP_MS = 5 * 60 * 1000;
-// Largest page each API returns; a full page of news is too much to prove quiet.
 const GMAIL_PAGE = 500;
 const SLACK_PAGE = 100;
-// The sync pass rereads these same conversations and waits out short rate limits too.
-const SLACK_RETRIES = 3;
-const MAX_RETRY_AFTER_S = 30;
-// Slack's date filter is day-granular and exclusive; widen it and compare timestamps.
-const SEARCH_SLACK_MS = 2 * 24 * 60 * 60 * 1000;
+const SEARCH_WIDEN_MS = 2 * 24 * 60 * 60 * 1000;
 const ACCOUNT_TYPES = ["personal", undefined, "company"] as const;
 const UNREADABLE = new Set(["channel_not_found", "thread_not_found", "not_in_channel"]);
 
 class Overflow extends Error {}
 
-class SlackError extends Error {
-  readonly code: string;
-  constructor(method: string, code: string) {
-    super(`Slack ${method}: ${code}`);
-    this.code = code;
-  }
-}
-
 const run = (reason: string): InboxQuietVerdict => ({ quiet: false, reason });
-
-// The sync pass repairs open items missing any of these before it scans.
-function incomplete(item: LoopItem, source: string): boolean {
-  const payload = item.sourcePayload;
-  return (
-    !item.proposal ||
-    !item.sourceSummary ||
-    typeof payload?.title !== "string" ||
-    typeof payload.snippet !== "string" ||
-    !isObj(payload[source])
-  );
-}
 
 async function connectedTokens(tokens: ConnectorTokenSource, host: string, owner: string): Promise<string[]> {
   const found: string[] = [];
@@ -75,10 +52,8 @@ async function gmailNews(token: string, fetchImpl: typeof fetch, cutoff: number,
     if (page.nextPageToken) throw new Overflow(`more than ${GMAIL_PAGE} Gmail messages since the last pass`);
     return page.messages ?? [];
   };
-  // Closed-loop check: any message, in or out, on a thread the ledger still tracks.
   if ((await list(after)).some((message) => threads.has(message.threadId)))
     return "new message on a tracked Gmail thread";
-  // New candidates: inbound inbox mail naming the user, or a send-as alias, in To or Cc.
   const { sendAs = [] } = await api<{ sendAs?: Array<{ sendAsEmail?: string }> }>("settings/sendAs");
   const addressed = ["me", ...sendAs.flatMap((alias) => (alias.sendAsEmail ? [alias.sendAsEmail] : []))]
     .flatMap((address) => [`to:${address}`, `cc:${address}`])
@@ -120,24 +95,21 @@ function slackConversation(item: LoopItem): SlackConversation | undefined {
 
 export function createInboxQuietCheck(deps: QuietCheckDeps): InboxQuietCheck {
   const fetchImpl = deps.fetchImpl ?? fetch;
-  const slackBase = normalizeSlackApiUrl(deps.slackApiUrl ?? "https://slack.com/api");
   const bots = new LRUCache<string, boolean>({ max: 5000, ttl: 24 * 60 * 60 * 1000 });
 
-  async function slack(token: string, method: string, params: Record<string, string>, tries = SLACK_RETRIES) {
-    const res = await fetchImpl(`${slackBase}${method}?${new URLSearchParams(params)}`, {
-      headers: { authorization: `Bearer ${token}` },
-      signal: AbortSignal.timeout(10_000),
-    });
-    const retryAfter = Number(res.headers.get("retry-after") ?? 1);
-    if (res.status === 429 && tries > 1 && retryAfter <= MAX_RETRY_AFTER_S) {
-      await new Promise((resolve) => setTimeout(resolve, retryAfter * 1000));
-      return slack(token, method, params, tries - 1);
-    }
-    if (!res.ok) throw new Error(`Slack ${method}: HTTP ${res.status}`);
-    const body: unknown = await res.json();
-    if (!isObj(body)) throw new Error(`Slack ${method}: invalid response`);
-    if (body.ok !== true) throw new SlackError(method, typeof body.error === "string" ? body.error : "not ok");
-    return body;
+  const slackClient =
+    deps.slackClient ??
+    ((token: string) =>
+      new WebClient(token, {
+        slackApiUrl: normalizeSlackApiUrl(deps.slackApiUrl ?? "https://slack.com/api"),
+        retryConfig: { retries: 2 },
+        attachOriginalToWebAPIRequestError: false,
+        timeout: 10_000,
+      }));
+
+  async function slack(token: string, method: string, params: Record<string, string>) {
+    const body: unknown = await slackClient(token).apiCall(method, params);
+    return isObj(body) ? body : {};
   }
 
   async function search(token: string, query: string, cutoff: number): Promise<SlackMessage[]> {
@@ -168,14 +140,13 @@ export function createInboxQuietCheck(deps: QuietCheckDeps): InboxQuietCheck {
     const self = typeof auth.user_id === "string" ? auth.user_id : "";
     const team = typeof auth.team_id === "string" ? auth.team_id : "";
     if (!self || !team) throw new Error("Slack auth.test returned no user");
-    const after = `after:${new Date(cutoff - SEARCH_SLACK_MS).toISOString().slice(0, 10)}`;
+    const after = `after:${new Date(cutoff - SEARCH_WIDEN_MS).toISOString().slice(0, 10)}`;
     const tracks = (match: SlackMessage) =>
       tracked.some(
         (c) =>
           c.channelId === match.channel?.id &&
           (!c.threadTs || c.threadTs === threadOf(match) || c.threadTs === match.ts),
       );
-    // DMs, group DMs and threads the user is in, plus @mentions anywhere.
     for (const query of [`with:me -from:me ${after}`, `<@${self}> ${after}`]) {
       for (const match of await search(token, query, cutoff)) {
         if (match.user === self) continue;
@@ -183,14 +154,11 @@ export function createInboxQuietCheck(deps: QuietCheckDeps): InboxQuietCheck {
         if (!match.user || !(await isBot(token, team, match.user))) return "new Slack message for the user";
       }
     }
-    // Closed-loop check, part one: the user's own replies in a tracked conversation.
     if (tracked.length && (await search(token, `from:me ${after}`, cutoff)).some(tracks))
       return "the user replied in a tracked Slack conversation";
     return null;
   }
 
-  // Closed-loop check, part two: other people's replies in tracked threads the user may
-  // never have joined, which Slack's with:me search does not cover.
   async function slackThreadNews(tokens: string[], cutoff: number, threads: SlackConversation[]) {
     const oldest = (cutoff / 1000).toFixed(6);
     for (const thread of threads) {
@@ -205,8 +173,7 @@ export function createInboxQuietCheck(deps: QuietCheckDeps): InboxQuietCheck {
           if (messages.some((message) => slackMs(message.ts) > cutoff)) return "new reply in a tracked Slack thread";
           break;
         } catch (error) {
-          // A conversation no connected account can read is unreadable to the sync pass too.
-          if (!(error instanceof SlackError && UNREADABLE.has(error.code))) throw error;
+          if (!UNREADABLE.has(slackErrorCode(error) ?? "")) throw error;
         }
       }
     }
@@ -254,7 +221,7 @@ export function createInboxQuietCheck(deps: QuietCheckDeps): InboxQuietCheck {
     if (source !== "gmail" && source !== "slack") return run(`unsupported inbox source ${source ?? "none"}`);
     if (!loop.lastScanAt) return run("no previous clean pass");
     const open = items.filter((item) => !isResolved(item));
-    if (open.some((item) => item.source !== source || incomplete(item, source)))
+    if (open.some((item) => item.source !== source || inboxItemNeedsRepair(item, source)))
       return run("an open item needs repair");
     try {
       return await check(source, loop, open, loop.lastScanAt - OVERLAP_MS);

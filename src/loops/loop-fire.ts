@@ -762,18 +762,13 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
             .then((items) => deps.inboxQuiet!(loop, items))
             .catch((error: unknown) => ({ quiet: false as const, reason: `pre-check failed: ${errMessage(error)}` }))
         : undefined;
-      if (quiet?.quiet) {
-        await triage(loop, fireKey, threadRef);
-        await deps.loops.recordScan(loopId, firedAt);
-        await deps.loops.recordFireOutcome(loopId, "ok");
-        await applyGovernor(loopId);
-        return { status: "silent", note: "inbox quiet: nothing new since the last pass" };
-      }
       let failure: unknown;
       try {
-        const outcome = await stageTurn(loop, `${fireKey}:sync`, threadRef, playbookText(loop, await voiceProfile()));
-        if (!outcome.ran && !outcome.authzFailed) return { status: "silent", note: "duplicate fire key" };
-        failure = stageFailure("inbox sync", outcome)?.error;
+        if (!quiet?.quiet) {
+          const outcome = await stageTurn(loop, `${fireKey}:sync`, threadRef, playbookText(loop, await voiceProfile()));
+          if (!outcome.ran && !outcome.authzFailed) return { status: "silent", note: "duplicate fire key" };
+          failure = stageFailure("inbox sync", outcome)?.error;
+        }
         if (failure === undefined) await triage(loop, fireKey, threadRef);
       } catch (error) {
         failure = error;
@@ -782,7 +777,11 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
         await deps.loops.recordScan(loopId, firedAt);
         await deps.loops.recordFireOutcome(loopId, "ok");
         await applyGovernor(loopId);
-        return { status: "silent", ...(quiet ? { note: `inbox sync ran: ${quiet.reason}` } : {}) };
+        if (!quiet) return { status: "silent" };
+        return {
+          status: "silent",
+          note: quiet.quiet ? "inbox quiet: nothing new since the last pass" : `inbox sync ran: ${quiet.reason}`,
+        };
       }
       return recordFailedFire(loopId, failure);
     }

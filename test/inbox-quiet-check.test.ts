@@ -10,7 +10,7 @@ const slackTs = (ms: number) => (ms / 1000).toFixed(6);
 function loop(source: string, over: Partial<Loop> = {}): Loop {
   return {
     id: "l1",
-    owner: "josh",
+    owner: "owner@example.com",
     surface: `inbox:${source}`,
     sources: [source],
     lastScanAt: LAST_SCAN,
@@ -37,30 +37,47 @@ function item(source: "slack" | "gmail", meta: Record<string, unknown>, over: Pa
   } as LoopItem;
 }
 
-type Route = (url: URL) => unknown;
+type Route = (params: URLSearchParams) => unknown;
+
+function slackError(error: string) {
+  return Object.assign(new Error(`An API error occurred: ${error}`), {
+    code: "slack_webapi_platform_error",
+    data: { ok: false, error },
+  });
+}
 
 function harness(routes: Record<string, Route>, tokens: Record<string, string> = { personal: "tok" }) {
   const calls: string[] = [];
+  const route = (key: string) => Object.entries(routes).find(([prefix]) => key.startsWith(prefix))?.[1];
   const fetchImpl = (async (input: string | URL) => {
     const url = new URL(String(input));
-    const key = url.hostname === "slack.com" ? url.pathname.replace("/api/", "") : url.pathname.split("/me/")[1]!;
+    const key = url.pathname.split("/me/")[1]!;
     calls.push(key);
-    const route = Object.entries(routes).find(([prefix]) => key.startsWith(prefix))?.[1];
-    if (!route) return new Response("{}", { status: 404 });
-    const body = route(url);
-    if (body instanceof Response) return body;
-    return Response.json(body);
+    const body = route(key)?.(url.searchParams);
+    if (body === undefined) return new Response("{}", { status: 404 });
+    return body instanceof Response ? body : Response.json(body);
   }) as typeof fetch;
+  const slackClient = () => ({
+    apiCall: async (method: string, params?: Record<string, unknown>) => {
+      calls.push(method);
+      const handler = route(method);
+      if (!handler) throw slackError("unknown_method");
+      const body = handler(new URLSearchParams(params as Record<string, string>)) as { ok?: boolean; error?: string };
+      if (body.ok === false) throw slackError(body.error ?? "not ok");
+      return body as never;
+    },
+  });
   const check = createInboxQuietCheck({
     tokens: { connectorAccessToken: async (_host, _owner, type) => tokens[type ?? "default"] ?? null },
     fetchImpl,
+    slackClient,
   });
   return { check, calls };
 }
 
 function search(matches: Record<string, unknown[]>): Route {
-  return (url) => {
-    const query = url.searchParams.get("query") ?? "";
+  return (params) => {
+    const query = params.get("query") ?? "";
     const key = Object.keys(matches).find((prefix) => query.startsWith(prefix));
     const found = key ? matches[key]! : [];
     return { ok: true, messages: { matches: found, paging: { pages: 1 } } };
@@ -69,9 +86,9 @@ function search(matches: Record<string, unknown[]>): Route {
 
 const slackBase = {
   "auth.test": () => ({ ok: true, user_id: "UME", team_id: "T1" }),
-  "users.info": (url: URL) => ({
+  "users.info": (params: URLSearchParams) => ({
     ok: true,
-    user: { id: url.searchParams.get("user"), is_bot: url.searchParams.get("user") === "UBOT" },
+    user: { id: params.get("user"), is_bot: params.get("user") === "UBOT" },
   }),
 };
 
@@ -125,7 +142,7 @@ test("a new reply in a tracked Slack thread runs the sync turn; unreadable threa
   const { check } = harness({
     ...slackBase,
     "search.messages": search({}),
-    "conversations.replies": (url) => replies.get(url.searchParams.get("channel")!),
+    "conversations.replies": (params) => replies.get(params.get("channel")!),
   });
   const gone = item("slack", { channelId: "C2", ts: "1.000000" });
   assert.deepEqual(await check(loop("slack"), [gone]), { quiet: true });
@@ -137,34 +154,19 @@ test("a new reply in a tracked Slack thread runs the sync turn; unreadable threa
 });
 
 test("a Slack connector error runs the sync turn", async () => {
-  const limited = harness({ ...slackBase, "search.messages": () => new Response("slow down", { status: 429 }) });
-  assert.match(JSON.stringify(await limited.check(loop("slack"), [])), /HTTP 429/);
   const revoked = harness({ "auth.test": () => ({ ok: false, error: "token_revoked" }) });
-  assert.equal((await revoked.check(loop("slack"), [])).quiet, false);
-  const threadError = harness({
+  assert.deepEqual(await revoked.check(loop("slack"), []), {
+    quiet: false,
+    reason: "pre-check failed: An API error occurred: token_revoked",
+  });
+  const limited = harness({
     ...slackBase,
     "search.messages": search({}),
-    "conversations.replies": () => ({ ok: false, error: "ratelimited" }),
+    "conversations.replies": () => {
+      throw Object.assign(new Error("A rate-limit has been reached"), { code: "slack_webapi_rate_limited_error" });
+    },
   });
-  assert.equal((await threadError.check(loop("slack"), [item("slack", { channelId: "C1", ts: "1.0" })])).quiet, false);
-});
-
-test("a short Slack rate limit is waited out, a long one runs the sync turn", async () => {
-  let limited = 1;
-  const brief = harness({
-    ...slackBase,
-    "search.messages": search({}),
-    "conversations.replies": () =>
-      limited-- > 0
-        ? new Response("", { status: 429, headers: { "retry-after": "0" } })
-        : { ok: true, messages: [{ ts: "1.000000" }] },
-  });
-  assert.deepEqual(await brief.check(loop("slack"), [item("slack", { channelId: "C1", ts: "1.0" })]), { quiet: true });
-  const long = harness({
-    ...slackBase,
-    "search.messages": () => new Response("", { status: 429, headers: { "retry-after": "600" } }),
-  });
-  assert.equal((await long.check(loop("slack"), [])).quiet, false);
+  assert.equal((await limited.check(loop("slack"), [item("slack", { channelId: "C1", ts: "1.0" })])).quiet, false);
 });
 
 test("a full page of new Slack matches runs the sync turn", async () => {
@@ -183,9 +185,9 @@ test("a full page of new Slack matches runs the sync turn", async () => {
 function gmail(recent: Array<{ threadId: string }>, addressed: Array<{ threadId: string }> = []) {
   const queries: string[] = [];
   const routes: Record<string, Route> = {
-    "settings/sendAs": () => ({ sendAs: [{ sendAsEmail: "josh@yc.com" }, { sendAsEmail: "j@alias.com" }] }),
-    messages: (url) => {
-      const q = url.searchParams.get("q") ?? "";
+    "settings/sendAs": () => ({ sendAs: [{ sendAsEmail: "user@example.com" }, { sendAsEmail: "alias@example.org" }] }),
+    messages: (params) => {
+      const q = params.get("q") ?? "";
       queries.push(q);
       return { messages: q.startsWith("in:inbox") ? addressed : recent };
     },
@@ -200,7 +202,7 @@ test("a quiet Gmail inbox skips the sync turn", async () => {
   const after = `after:${Math.floor((LAST_SCAN - 5 * 60 * 1000) / 1000)} -in:drafts`;
   assert.deepEqual(queries, [
     after,
-    `in:inbox -from:me {to:me cc:me to:josh@yc.com cc:josh@yc.com to:j@alias.com cc:j@alias.com} ${after}`,
+    `in:inbox -from:me {to:me cc:me to:user@example.com cc:user@example.com to:alias@example.org cc:alias@example.org} ${after}`,
   ]);
 });
 
@@ -233,7 +235,7 @@ test("unsupported loops, first passes, open repairs and missing connections run 
   const { check, calls } = harness({}, {});
   const reasons = [
     await check(loop("linear"), []),
-    await check({ id: "l2", owner: "josh", sources: ["sentry"], lastScanAt: LAST_SCAN } as Loop, []),
+    await check({ id: "l2", owner: "owner@example.com", sources: ["sentry"], lastScanAt: LAST_SCAN } as Loop, []),
     await check(loop("slack", { lastScanAt: undefined }), []),
     await check(loop("slack"), [item("slack", { channelId: "C1", ts: "1.0" }, { proposal: undefined })]),
     await check(loop("slack"), []),
