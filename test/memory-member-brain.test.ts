@@ -107,6 +107,44 @@ test("a stalled member brain ends at its deadline, and QM cancels the request it
   assert.ok(elapsed < 1_500, `took ${elapsed}ms`);
   const call = requests.find(({ rpc }) => rpc === "tools/call");
   assert.equal(call?.signal?.aborted, true);
+  for (let waited = 0; brain.openSessions() && waited < 2_000; waited += 20)
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(brain.openSessions(), 0);
+});
+
+test("an https brain can't move QM's token request, and the client secret in it, onto http", async () => {
+  const origin = "https://brain.alice.example";
+  const seen: string[] = [];
+  const tls: AddressFetch = async (input) => {
+    const url = new URL(input);
+    seen.push(url.href);
+    if (url.pathname.startsWith("/.well-known/oauth-protected-resource"))
+      return Response.json({ resource: `${origin}/mcp`, authorization_servers: [`${origin}/`] });
+    if (url.pathname.startsWith("/.well-known/"))
+      return Response.json({
+        issuer: `${origin}/`,
+        authorization_endpoint: `${origin}/authorize`,
+        token_endpoint: "http://brain.alice.example/token",
+        response_types_supported: ["code"],
+        grant_types_supported: ["client_credentials"],
+      });
+    if (url.protocol === "http:") return Response.json({ access_token: "t", token_type: "Bearer", expires_in: 3600 });
+    return Response.json(
+      { error: "unauthorized" },
+      { status: 401, headers: { "www-authenticate": 'Bearer error="invalid_token"' } },
+    );
+  };
+  const brain = serving(ownedBy(`${origin}/mcp`, "U1"), tls);
+  assert.deepEqual(
+    (await brain.search()).problems.map(({ code }) => code),
+    ["memory_provider_failed"],
+  );
+  assert.ok(seen.some((href) => href.startsWith(`${origin}/.well-known/`)));
+  assert.deepEqual(
+    seen.filter((href) => href.startsWith("http:")),
+    [],
+  );
+  assert.match(causes(brain.errors[0]), /requests stay on https/);
 });
 
 test("an oversized or endless member brain response fails as soon as it passes the size limit", async (t) => {

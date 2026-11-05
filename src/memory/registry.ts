@@ -42,7 +42,7 @@ interface RegistryBinding {
 }
 
 export interface MemoryRegistry {
-  schema: 1;
+  schema: 1 | 2;
   memberBrains?: boolean;
   brains: RegistryBrain[];
   bindings: RegistryBinding[];
@@ -117,7 +117,7 @@ function brainConfig(brain: RegistryBrain, bindings: readonly RegistryBinding[],
 export function readRegistry(value: unknown): MemoryRegistry {
   if (value === null || value === undefined) return EMPTY_MEMORY_REGISTRY;
   const record = value as Partial<MemoryRegistry>;
-  if (record.schema !== 1 || !Array.isArray(record.brains) || !Array.isArray(record.bindings))
+  if ((record.schema !== 1 && record.schema !== 2) || !Array.isArray(record.brains) || !Array.isArray(record.bindings))
     throw new Error("the memory registry record has a shape this QM build doesn't know");
   return record as MemoryRegistry;
 }
@@ -343,6 +343,8 @@ export function setBrainSecret(
 
 const MEMBER_BRAIN_FIELDS = new Set(["url", "clientId", "label"]);
 
+const RFC_9110_URI_LENGTH = 8_000;
+
 export const memberBrainsOn = (record: MemoryRegistry): boolean => record.memberBrains !== false;
 
 export const memberBrainId = (owner: string): string => `member-${hashId([owner])}`;
@@ -365,6 +367,25 @@ export function putMemberBrain(
   const id = memberBrainId(owner);
   const existing = record.brains.find((brain) => brain.id === id);
   if (existing && existing.owner !== owner) throw conflict(`brain id ${id} is taken by another brain`);
+  const stored: Record<string, unknown> = {
+    url: existing?.url,
+    clientId: existing?.auth.clientId,
+    label: existing?.label,
+  };
+  const saved = Object.values({ ...stored, ...body }).reduce<number>(
+    (total, value) => total + String(value ?? "").length,
+    0,
+  );
+  if (saved > RFC_9110_URI_LENGTH)
+    throw invalid(
+      `your brain's ${[...MEMBER_BRAIN_FIELDS].join(", ")} together can be at most ${RFC_9110_URI_LENGTH} characters, the request-target length RFC 9110 asks HTTP software to accept`,
+    );
+  if (
+    existing &&
+    record.bindings.some((binding) => binding.id === id) &&
+    Object.keys(body).every((key) => body[key] === stored[key])
+  )
+    return record;
   const defaults = existing ? {} : { preset: "gbrain-v1", label: "Personal memory" };
   const withBrain = putBrain(record, id, { ...defaults, ...body }, change, owner);
   return withBrain.bindings.some((binding) => binding.id === id)
@@ -405,6 +426,11 @@ export function redactBrain({ auth, ...rest }: RegistryBrain) {
   return { ...rest, auth: { clientId: auth.clientId, hasClientSecret: !!auth.clientSecretEnc } };
 }
 
+const versioned = (record: MemoryRegistry): MemoryRegistry => ({
+  ...record,
+  schema: record.brains.some((brain) => brain.owner) ? 2 : 1,
+});
+
 export interface MemoryRegistryStore extends RegistryContext {
   current(): Promise<{ version: string; record: unknown }>;
   update(change: (record: MemoryRegistry) => MemoryRegistry): Promise<MemoryRegistry>;
@@ -416,16 +442,21 @@ export function createMemoryRegistryStore(opts: {
   overlay?: MemoryProviderConfig;
 }): MemoryRegistryStore {
   let cached: { version: string; record: unknown } | undefined;
+  const current = async () => {
+    const version = await opts.map.version();
+    if (cached?.version !== version) cached = { version, record: await opts.map.get(RECORD_ID) };
+    return cached;
+  };
   return {
     overlayIds: new Set(opts.overlay?.providers.map(({ id }) => id) ?? []),
     key: opts.key,
-    async current() {
-      const version = await opts.map.version();
-      if (cached?.version !== version) cached = { version, record: await opts.map.get(RECORD_ID) };
-      return cached;
-    },
+    current,
     async update(change) {
-      const [next] = await opts.map.mutateMany([{ id: RECORD_ID, apply: (current) => change(readRegistry(current)) }]);
+      const seen = readRegistry((await current()).record);
+      if (change(seen) === seen) return seen;
+      const [next] = await opts.map.mutateMany([
+        { id: RECORD_ID, apply: (stored) => versioned(change(readRegistry(stored))) },
+      ]);
       return next!;
     },
   };

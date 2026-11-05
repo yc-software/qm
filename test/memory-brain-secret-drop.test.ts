@@ -305,3 +305,37 @@ test("a member connects their own brain from chat and sets its secret through th
     assert.ok(rows.includes(`memory-registry.${action}`), action);
   assert.doesNotMatch(rows, /member-secret-/);
 });
+
+test("a member's brain fields are bounded, a repeated save writes nothing, and the record is schema 2 while it holds one", async (t) => {
+  const { built, self } = await setup(t);
+  const own = { url: "https://brain.member.example/mcp", clientId: "member-qm" };
+  const stored = async () => {
+    const { version, record } = await built.memoryRegistry.current();
+    return { version, schema: readRegistry(record).schema };
+  };
+  const long = "x".repeat(8_001);
+  for (const body of [
+    { ...own, url: `${own.url}?${long}` },
+    { ...own, clientId: long },
+    { ...own, label: long },
+  ]) {
+    const refused = await self("U-member", "PUT", body);
+    assert.equal(refused.status, 400);
+    assert.match(refused.json.message, /together can be at most 8000 characters/);
+  }
+  assert.equal((await stored()).schema, 1);
+
+  assert.equal((await self("U-member", "PUT", own)).status, 200);
+  const saved = await stored();
+  assert.equal(saved.schema, 2);
+  const repeated = await self("U-member", "PUT", own);
+  assert.deepEqual(
+    [repeated.status, repeated.json.brain?.auth.clientId, (await stored()).version],
+    [200, "member-qm", saved.version],
+  );
+  assert.equal((await self("U-member", "PUT", { label: "Mine" })).status, 200);
+  assert.notEqual((await stored()).version, saved.version);
+
+  assert.equal((await self("U-member", "DELETE")).status, 200);
+  assert.equal((await stored()).schema, 1);
+});
