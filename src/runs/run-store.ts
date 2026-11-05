@@ -5,6 +5,7 @@ import type { OrchestratorInput } from "../core/orchestrator.ts";
 import { isPersonAuthored } from "../core/turn-origin.ts";
 import { traceCarrier } from "../../plugins/chassis/src/error-reporting.ts";
 import { sleep } from "../util/async.ts";
+import type { ClaimedRow } from "../tenants/claim.ts";
 
 type RunStatus = "pending" | "running" | "done" | "failed";
 
@@ -142,7 +143,7 @@ export interface RunStore {
   activeForThreads(threadRefs: readonly string[]): Promise<Map<string, Run>>;
   lastFinishedForThreads(threadRefs: readonly string[]): Promise<Map<string, Run>>;
   pendingReturns(limit?: number, afterId?: string, threadRefs?: readonly string[]): Promise<Run[]>;
-  terminalFinished(after: TerminalCursor, beforeMs: number, limit: number): Promise<Run[]>;
+  claimTerminalFinished(after: TerminalCursor, beforeMs: number, limit: number): Promise<ClaimedRow[]>;
   markReturned(runId: string): Promise<void>;
   deferReturn(runId: string, delayMs: number): Promise<void>;
 

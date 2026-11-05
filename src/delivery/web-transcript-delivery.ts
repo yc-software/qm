@@ -5,6 +5,7 @@ import { hasRunningRun, type RunStore } from "../runs/run-store.ts";
 import { isAgentReply, isUserItem, type Item, type NewItem } from "../sessions/items.ts";
 import { turnFailureItem } from "../core/turn-error.ts";
 import { reportFailure, swallow } from "../util/errors.ts";
+import { withTenant } from "../tenants/context.ts";
 
 const DEDUPE_SCAN_LIMIT = 200;
 const RECORDED_CACHE_CAP = 1000;
@@ -115,8 +116,8 @@ export function withWebTranscriptDeliveries(
     return false;
   };
 
-  const drained = async (rows: Delivery[]): Promise<Delivery[]> => {
-    const out: Delivery[] = [];
+  const drained = async <D extends Delivery>(rows: D[]): Promise<D[]> => {
+    const out: D[] = [];
     for (const d of rows) {
       try {
         const disposition = classify(d);
@@ -159,9 +160,16 @@ export function withWebTranscriptDeliveries(
       const rows = await store.pending(type);
       return transcribed(type) ? drained(rows) : rows;
     },
-    async claimPending(type, ttlMs, opts) {
-      const rows = await store.claimPending(type, ttlMs, opts);
+    async claimPending(type, ttlMs) {
+      const rows = await store.claimPending(type, ttlMs);
       return transcribed(type) ? drained(rows) : rows;
+    },
+    async claimDue(type, ttlMs) {
+      const rows = await store.claimDue(type, ttlMs);
+      if (!transcribed(type)) return rows;
+      const out: typeof rows = [];
+      for (const d of rows) out.push(...(await withTenant(d.tenantId, () => drained([d]))));
+      return out;
     },
   };
 }

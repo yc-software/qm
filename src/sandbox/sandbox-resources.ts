@@ -6,6 +6,7 @@ import { parseScopeId, type CommandPolicy, type EgressPolicy, type ScopeId } fro
 import type { SandboxBackendName } from "./sandbox-routing.ts";
 import type { Sandbox, AgentComputerSpec, ProvisionOptions, ComputerStatus, EgressEnforcement } from "./sandbox.ts";
 import { JOB_COMPUTER_SCOPE_PREFIX } from "./home-snapshot.ts";
+import { claimThenBind } from "../tenants/claim.ts";
 
 export interface SandboxResource {
   id: string;
@@ -66,7 +67,7 @@ export interface SandboxResources {
     reservationId?: string,
     jobOnly?: boolean,
   ): Promise<SandboxResource>;
-  jobComputers(): Promise<SandboxResource[]>;
+  eachJobComputer(work: (computer: SandboxResource) => Promise<void>): Promise<void>;
   retireJobComputer(id: string, seenState: SandboxResource["state"]): Promise<void>;
   access(actorId: string, id: string): Promise<SandboxResource>;
   status(actorId: string, id: string): Promise<ComputerStatus>;
@@ -228,9 +229,15 @@ export function createSandboxResources(opts: {
         }),
       );
     },
-    async jobComputers() {
+    async eachJobComputer(work) {
       await initialize();
-      return (await opts.records.all()).filter((record) => record.jobOnly);
+      await claimThenBind(
+        () => opts.records.claimIds(),
+        async (id) => {
+          const record = await opts.records.get(id);
+          if (record?.jobOnly) await work(record);
+        },
+      );
     },
     async retireJobComputer(id, seenState) {
       await opts.lock.withLock(`sandbox-resource:${id}`, async () => {

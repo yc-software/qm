@@ -9,6 +9,7 @@ import { conversationScope } from "../resolution/resolution-service.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import { turnRecordedFailure } from "./web-transcript-delivery.ts";
 import { reportFailureAs } from "../util/errors.ts";
+import { claimThenBind } from "../tenants/claim.ts";
 
 export interface RunResultDelivery {
   destination: Destination;
@@ -154,7 +155,7 @@ export interface RunResultRecovery {
 }
 
 export function wireRunResultDeliveries(
-  runs: Pick<RunStore, "onTerminal" | "terminalFinished" | "inFlightForThread">,
+  runs: Pick<RunStore, "onTerminal" | "claimTerminalFinished" | "get" | "inFlightForThread">,
   deliveries: Pick<DeliveryStore, "enqueue" | "existingKeys">,
   adminUrlFor?: AdminUrlFor,
   sessions?: TurnFailureSessions,
@@ -180,14 +181,18 @@ export function wireRunResultDeliveries(
       let cursor = { finishedAt: now - RUN_RESULT_SWEEP_LOOKBACK_MS, id: "" };
       let recovered = 0;
       for (;;) {
-        const batch = await runs.terminalFinished(cursor, before, RUN_RESULT_SWEEP_PAGE);
-        const existing = await deliveries.existingKeys(batch.map((run) => `run:${run.id}`));
-        for (const run of batch) {
-          if (existing.has(`run:${run.id}`) || !(await recover(run))) continue;
-          console.error(`[delivery] terminal run ${run.id} had no outbox row — enqueued its recovery delivery`);
-          recovered += 1;
-        }
-        const last = batch.at(-1);
+        const batch = await claimThenBind(
+          () => runs.claimTerminalFinished(cursor, before, RUN_RESULT_SWEEP_PAGE),
+          async (id) => {
+            const run = await runs.get(id);
+            if (run && !(await deliveries.existingKeys([`run:${id}`])).has(`run:${id}`) && (await recover(run))) {
+              console.error(`[delivery] terminal run ${id} had no outbox row — enqueued its recovery delivery`);
+              recovered += 1;
+            }
+            return run;
+          },
+        );
+        const last = batch.findLast((run) => run !== null);
         if (!last || batch.length < RUN_RESULT_SWEEP_PAGE) return recovered;
         cursor = { finishedAt: last.finishedAt!, id: last.id };
       }

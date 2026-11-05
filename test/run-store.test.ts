@@ -1,10 +1,18 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { RunStore } from "../src/runs/run-store.ts";
+import type { Run, RunStore } from "../src/runs/run-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import type { Principal } from "../src/types.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+
+async function terminalFinished(
+  runs: RunStore,
+  ...args: Parameters<RunStore["claimTerminalFinished"]>
+): Promise<Run[]> {
+  const claimed = await runs.claimTerminalFinished(...args);
+  return Promise.all(claimed.map(async ({ id }) => (await runs.get(id))!));
+}
 
 const actor: Principal = { id: "internal:U1", type: "internal" };
 function turn(text: string, surface?: string): OrchestratorInput {
@@ -35,7 +43,7 @@ for (const backend of backends) {
     ]);
   });
 
-  test(`[${backend.name}] terminalFinished pages finished runs by (finishedAt, id) within the bound`, async () => {
+  test(`[${backend.name}] claimTerminalFinished pages finished runs by (finishedAt, id) within the bound`, async () => {
     const { runs } = backend.make();
     const finished: string[] = [];
     for (const ref of ["a", "b", "c"]) {
@@ -48,7 +56,7 @@ for (const backend of backends) {
     const running = (await runs.enqueue({ sessionId: "running", request: turn("running") })).run;
     await runs.claimById(running.id, "w", 5_000);
     const far = Date.now() + 60_000;
-    const all = await runs.terminalFinished({ finishedAt: 0, id: "" }, far, 10);
+    const all = await terminalFinished(runs, { finishedAt: 0, id: "" }, far, 10);
     assert.deepEqual(new Set(all.map((run) => run.id)), new Set(finished), "only terminal runs are listed");
     assert.ok(!all.some((run) => run.id === running.id));
     for (let i = 1; i < all.length; i++) {
@@ -56,14 +64,14 @@ for (const backend of backends) {
       const next = all[i]!;
       assert.ok(prev.finishedAt! < next.finishedAt! || (prev.finishedAt === next.finishedAt && prev.id < next.id));
     }
-    const first = await runs.terminalFinished({ finishedAt: 0, id: "" }, far, 2);
-    const rest = await runs.terminalFinished({ finishedAt: first[1]!.finishedAt!, id: first[1]!.id }, far, 2);
+    const first = await terminalFinished(runs, { finishedAt: 0, id: "" }, far, 2);
+    const rest = await terminalFinished(runs, { finishedAt: first[1]!.finishedAt!, id: first[1]!.id }, far, 2);
     assert.deepEqual(
       [...first, ...rest].map((run) => run.id),
       all.map((run) => run.id),
       "keyset paging is gapless",
     );
-    assert.deepEqual(await runs.terminalFinished({ finishedAt: 0, id: "" }, all[0]!.finishedAt! - 1, 10), []);
+    assert.deepEqual(await terminalFinished(runs, { finishedAt: 0, id: "" }, all[0]!.finishedAt! - 1, 10), []);
   });
 
   test(`[${backend.name}] enqueue dedups by dedup key`, async () => {

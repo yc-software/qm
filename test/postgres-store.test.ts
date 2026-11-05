@@ -6,12 +6,21 @@ import { PARALLEL_EXCEPTION_QUERY } from "../src/deployment/postdeploy-smoke.ts"
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { rowToSession } from "../src/sessions/session-rows.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
+import type { Run, RunStore } from "../src/runs/run-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 import { scopeId, type Principal, type TurnRequest, type TurnResult } from "../src/types.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { assertLateJoinerScopes, assertLeanListing } from "./support/participant-scopes.ts";
 import { assertParticipantSessionParity } from "./support/participant-session-parity.ts";
 import { assertSpendRollupParity } from "./support/spend-rollup-parity.ts";
+
+async function terminalFinished(
+  runs: RunStore,
+  ...args: Parameters<RunStore["claimTerminalFinished"]>
+): Promise<Run[]> {
+  const claimed = await runs.claimTerminalFinished(...args);
+  return Promise.all(claimed.map(async ({ id }) => (await runs.get(id))!));
+}
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres store tests";
@@ -1540,39 +1549,46 @@ test("pg run store: Unicode stays jsonb-safe through enqueue, edit and both stee
   }
 });
 
-test("pg run store: terminalFinished lists finished runs by (finishedAt, id) up to the bound", { skip }, async () => {
-  const { runs, close } = createPostgresRunStore(URL!);
-  const tag = randomUUID();
-  try {
-    const ids: string[] = [];
-    for (const ref of ["a", "b", "c"]) {
-      const thread = `${tag}-${ref}`;
-      const run = (await runs.enqueue({ sessionId: thread, request: turn(ref) })).run;
-      const claimed = await runs.claimById(run.id, "w", 5_000);
-      await runs.complete(run.id, claimed?.leaseToken ?? "", { status: "ok", reply: ref });
-      ids.push(run.id);
+test(
+  "pg run store: claimTerminalFinished lists finished runs by (finishedAt, id) up to the bound",
+  { skip },
+  async () => {
+    const { runs, close } = createPostgresRunStore(URL!);
+    const tag = randomUUID();
+    try {
+      const ids: string[] = [];
+      for (const ref of ["a", "b", "c"]) {
+        const thread = `${tag}-${ref}`;
+        const run = (await runs.enqueue({ sessionId: thread, request: turn(ref) })).run;
+        const claimed = await runs.claimById(run.id, "w", 5_000);
+        await runs.complete(run.id, claimed?.leaseToken ?? "", { status: "ok", reply: ref });
+        ids.push(run.id);
+      }
+      const open = (await runs.enqueue({ sessionId: `${tag}-open`, request: turn("open") })).run;
+      await runs.claimById(open.id, "w", 5_000);
+      const far = Date.now() + 60_000;
+      const started = (await runs.get(ids[0]!))!.startedAt! - 1;
+      const listed = await terminalFinished(runs, { finishedAt: started, id: "" }, far, 10_000);
+      const mine = listed.filter((run) => run.sessionId.startsWith(tag));
+      assert.deepEqual(new Set(mine.map((run) => run.id)), new Set(ids));
+      assert.ok(!listed.some((run) => run.id === open.id));
+      for (let i = 1; i < listed.length; i++) {
+        const prev = listed[i - 1]!;
+        const next = listed[i]!;
+        assert.ok(prev.finishedAt! < next.finishedAt! || (prev.finishedAt === next.finishedAt && prev.id < next.id));
+      }
+      const first = mine[0]!;
+      const after = await terminalFinished(runs, { finishedAt: first.finishedAt!, id: first.id }, far, 10_000);
+      assert.ok(!after.some((run) => run.id === first.id), "the cursor row itself is excluded");
+      assert.deepEqual(
+        await terminalFinished(runs, { finishedAt: started, id: "" }, first.finishedAt! - 1, 10_000),
+        [],
+      );
+    } finally {
+      await close();
     }
-    const open = (await runs.enqueue({ sessionId: `${tag}-open`, request: turn("open") })).run;
-    await runs.claimById(open.id, "w", 5_000);
-    const far = Date.now() + 60_000;
-    const started = (await runs.get(ids[0]!))!.startedAt! - 1;
-    const listed = await runs.terminalFinished({ finishedAt: started, id: "" }, far, 10_000);
-    const mine = listed.filter((run) => run.sessionId.startsWith(tag));
-    assert.deepEqual(new Set(mine.map((run) => run.id)), new Set(ids));
-    assert.ok(!listed.some((run) => run.id === open.id));
-    for (let i = 1; i < listed.length; i++) {
-      const prev = listed[i - 1]!;
-      const next = listed[i]!;
-      assert.ok(prev.finishedAt! < next.finishedAt! || (prev.finishedAt === next.finishedAt && prev.id < next.id));
-    }
-    const first = mine[0]!;
-    const after = await runs.terminalFinished({ finishedAt: first.finishedAt!, id: first.id }, far, 10_000);
-    assert.ok(!after.some((run) => run.id === first.id), "the cursor row itself is excluded");
-    assert.deepEqual(await runs.terminalFinished({ finishedAt: started, id: "" }, first.finishedAt! - 1, 10_000), []);
-  } finally {
-    await close();
-  }
-});
+  },
+);
 
 test("pg run store: the turn boundary is recorded once and survives a re-claim", { skip }, async () => {
   const { runs, close } = createPostgresRunStore(URL!);

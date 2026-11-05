@@ -27,6 +27,7 @@ import {
 import { swallow } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
 import { tenantTables } from "../tenants/migrations.ts";
+import { claimFunction, claimRows } from "../tenants/claim.ts";
 
 const NOTIFY_SESSION_AVAILABLE =
   "pg_notify('qm_run_available', to_json(encode(sha256(convert_to(session_id, 'UTF8')), 'hex'))::text)";
@@ -77,7 +78,7 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
   const available = createPostgresNotifyBus<string>(connectionString, "qm_run_available", "run availability");
   const maxClaims = opts?.maxClaims ?? Number.POSITIVE_INFINITY;
 
-  const { query: q, close: closePool } = createPgPool(connectionString, [
+  const pg = createPgPool(connectionString, [
     {
       id: "runs/store/0011-base-schema",
       expectedChecksum: "77ca2d1c3ec5253374c0eadbf47d91d53c6d2c3fc7232079b33006bc9233a24e",
@@ -140,7 +141,20 @@ END $base_schema$`,
         ],
       },
     ]),
+    {
+      id: "runs/store/0013-claim-terminal-finished",
+      statements: [
+        claimFunction(
+          "claim_terminal_finished_runs",
+          "bigint, bigint, text, integer",
+          `SELECT tenant_id, id FROM runs WHERE status IN ('done','failed') AND finished_at <= $1
+             AND (finished_at > $2 OR (finished_at = $2 AND id > $3))
+           ORDER BY finished_at, id LIMIT $4`,
+        ),
+      ],
+    },
   ]);
+  const { query: q, close: closePool } = pg;
 
   const availabilityListeners = new Map<() => void, number>();
   let availabilityTimer: ReturnType<typeof setTimeout> | undefined;
@@ -472,14 +486,8 @@ END $base_schema$`,
       const { rows } = await q(text, params);
       return rows.map(rowToRun);
     },
-    async terminalFinished(after, beforeMs, limit) {
-      const { rows } = await q(
-        `SELECT * FROM runs WHERE status IN ('done','failed') AND finished_at <= $1
-           AND (finished_at > $2 OR (finished_at = $2 AND id > $3))
-         ORDER BY finished_at, id LIMIT $4`,
-        [beforeMs, after.finishedAt, after.id, limit],
-      );
-      return rows.map(rowToRun);
+    claimTerminalFinished(after, beforeMs, limit) {
+      return claimRows(pg, "claim_terminal_finished_runs", [beforeMs, after.finishedAt, after.id, limit]);
     },
     async markReturned(runId) {
       await q("UPDATE runs SET returned_at = $2 WHERE id = $1 AND status IN ('done','failed')", [runId, Date.now()]);

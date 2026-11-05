@@ -23,6 +23,8 @@ import { scopeId } from "../src/types.ts";
 import { createPartnerChatNotices, partnerChatRunNotice } from "../src/surfaces/partner-chat/notices.ts";
 import { runResultDelivery, wireRunResultDeliveries } from "../src/delivery/run-result-delivery.ts";
 import type { Run } from "../src/runs/run-store.ts";
+import { withTenant } from "../src/tenants/context.ts";
+import { TEST_TENANT } from "./support/test-tenant.ts";
 
 const SECRET = "partner-chat-test-secret-0123456789abcdef";
 const PROVENANCE = { trigger: "cron", surface: "partner-chat", fireKey: "f", sourceScopeId: "s", sourceThreadRef: "t" };
@@ -307,7 +309,7 @@ async function relayUntil(
   until: () => Promise<boolean>,
 ): Promise<void> {
   const relay = createDeliveryRelay(deliveries, { type: "partner-chat", send, claimMs: PARTNER_CHAT_CLAIM_MS });
-  relay.start();
+  withTenant(TEST_TENANT, () => relay.start());
   try {
     await settle(until);
   } finally {
@@ -825,7 +827,9 @@ test("a run-end notice lost before its enqueue is recovered by the run-result sw
   const recovery = wireRunResultDeliveries(
     {
       onTerminal: () => () => {},
-      terminalFinished: async (cursor: { id: string }) => (cursor.id === "" ? [ended] : []),
+      claimTerminalFinished: async (cursor: { id: string }) =>
+        cursor.id === "" ? [{ tenantId: TEST_TENANT, id: ended.id }] : [],
+      get: async () => ended,
       inFlightForThread: async () => [],
     } as unknown as Parameters<typeof wireRunResultDeliveries>[0],
     deliveries,
