@@ -269,6 +269,24 @@ test("a tree opens subagents past fifty runs in flight", async () => {
   for (let i = 0; i < 51; i++) assert.ok((await r.syscallsFor(r.room).open({ task: `work ${i}` })).ok);
   assert.equal((await sessionTreeRuns(r.sessions, r.runs, r.room)).length, 51);
 });
+test("a subagent's message to a busy sibling steers the sibling's running turn", async () => {
+  const r = await rig();
+  const sender = await runningChild(r, r.room, "review");
+  const target = await runningChild(r, r.room, "build");
+  const out = await r
+    .syscallsFor(sender.session)
+    .write({ wake: true, target: target.session.id, text: "auth is broken" });
+  assert.deepEqual(out.ok && [out.delivered, out.busy], ["steered", true]);
+  const [steer] = await r.signals.takePending(target.run.id);
+  assert.equal(steer?.kind, "steer");
+  assert.equal(steer.text, "auth is broken");
+  assert.equal(steer.request?.sessionSenderId, sender.session.id);
+  assert.deepEqual(
+    (await r.runs.inFlightForThread(target.session.threadRef)).map((run) => run.id),
+    [target.run.id],
+  );
+});
+
 test("write steers a running child's turn and interrupts explicitly", async () => {
   const r = await rig();
   const syscalls = r.syscallsFor(r.room);
