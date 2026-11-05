@@ -8,6 +8,10 @@ export const FEATURES = {
     personalOnly: true,
     hint: "Enables app text comments and annotation tools for the selected people. Applies on the next app page load; app management permission is still required.",
   },
+  personas: {
+    label: "Personas",
+    hint: "Lets the selected people create, share and chat with personas: reusable agents with their own instructions, skills and credentials.",
+  },
   persistent_subagents: {
     label: "Persistent subagents",
     personalOnly: true,

@@ -84,6 +84,7 @@ export interface SessionTopbarOpts {
   toolCount?: ((tool: SessionTool) => number | null) | null;
   parent?: { title: string; onClick: () => void } | null;
   fork?: { title: string; onClick?: (() => void) | null } | null;
+  persona?: TemplateResult | typeof nothing;
   onTitle?: (() => void) | null;
   onCrumb?: (() => void) | null;
   onTool: (tool: SessionTool) => void;
@@ -123,6 +124,7 @@ export function sessionTopbarTpl(o: SessionTopbarOpts): TemplateResult {
           </button>`
         : nothing
     }
+    ${o.persona ?? nothing}
   `;
   const tool = (t: SessionTool, glyph: Parameters<typeof icon>[0], hint: string) => {
     const count = t === "crons" || t === "apps" ? (o.toolCount?.(t) ?? null) : null;

@@ -96,3 +96,41 @@ test("ordinary sessions are not subject to the subagent tree queue limit", async
   }
   assert.equal((await built.runs.inFlightForThread(session.threadRef)).length, 11);
 });
+
+test("a subagent message that missed its running turn replays as a turn from its sender", async () => {
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "session-message-replay-")) }));
+  await built.app.upsertDirectory([{ principalId: "U1", displayName: "User One", type: "internal" }]);
+  const parent = await built.sessions.getOrCreateByThread("web:U1:parent", "dm", "personal:U1");
+  const child = await built.sessions.getOrCreateByThread("agent:main:subagent:late-message", "dm", "personal:U1");
+  for (const session of [parent, child]) await built.sessions.addParticipant(session.id, "U1");
+  await built.sessions.setParentSession(child.id, parent.id);
+  const actor = { id: "U1", type: "internal" as const };
+  const conversation = { kind: "dm" as const, threadRef: child.threadRef, audience: [actor] };
+  await built.sessions.setSpawnMeta(child.id, { surface: "web", actor, conversation });
+  const { run } = await built.runs.enqueue({
+    sessionId: child.threadRef,
+    request: { actor, conversation, text: "task", origin: { kind: "direct" } },
+  });
+  const claimed = await built.runs.claimById(run.id, "worker", 60_000);
+  await built.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+  const stamped = `<subagent-message from="lead" fromSessionId="${parent.id}">\nuse v2\n</subagent-message>`;
+  await built.signals.send(run.id, {
+    kind: "steer",
+    text: "use v2",
+    request: {
+      surface: "web",
+      actor: { externalId: "U1" },
+      conversation: { kind: "dm", threadRef: child.threadRef, audience: [{ externalId: "U1" }] },
+      origin: { kind: "automation", screenData: stamped },
+      text: stamped,
+      displayText: "use v2",
+      sessionSenderId: parent.id,
+      spawned: true,
+    },
+  });
+  await built.app.replayOrphanedRunSignals(run.id);
+  const replay = await built.runs.activeForThread(child.threadRef);
+  assert.equal(replay?.request.text, stamped);
+  assert.equal(replay?.request.sessionSenderId, parent.id);
+  assert.deepEqual(await built.signals.pending(run.id), []);
+});

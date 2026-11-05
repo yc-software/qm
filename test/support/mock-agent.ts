@@ -252,7 +252,10 @@ export function createMockAgent(): Agent {
         );
       } else if (command0 === "!silent") {
         reply = "";
-      } else if (command0.startsWith("[system] You were addressed")) {
+      } else if (
+        command0.startsWith("[system] You were addressed") ||
+        command0.startsWith("[system] Your text above was not delivered")
+      ) {
         if (shedSessions.has(turn.session.id)) {
           reply = "worklog: did the thing but never posted";
         } else {

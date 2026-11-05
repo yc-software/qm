@@ -25,7 +25,8 @@ import { openRuntime, parentRuntime } from "./subagent-runtime.ts";
 import type { RuntimeChoice } from "../agent/agent.ts";
 import type { OrchestratorInput } from "../core/orchestrator/types.ts";
 import type { Run, RunStore } from "../runs/run-store.ts";
-import type { RunSignalStore } from "../runs/run-signal-store.ts";
+import { replayableRequest } from "../core/orchestrator/turn-helpers.ts";
+import type { RunSignal, RunSignalStore } from "../runs/run-signal-store.ts";
 import type { SessionStore } from "./session-store.ts";
 import { xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
 import { isPeerMessage, wakeOwnParent, wakePeer } from "./subagent-mail.ts";
@@ -212,7 +213,7 @@ type SessionWriteResult =
       ok: true;
       sessionId: string;
       title: string;
-      delivered: "queued_turn" | "interrupted" | "queued_message";
+      delivered: "queued_turn" | "steered" | "interrupted" | "queued_message";
       busy?: boolean;
       notWoken?: string;
     }
@@ -337,7 +338,11 @@ export interface SessionSyscallDeps {
     SubagentActivityDeps["sessions"];
   runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "getByDedupKey" | "get" | "withdraw"> &
     SubagentActivityDeps["runs"];
-  signals: Pick<RunSignalStore, "send" | "pending">;
+  signals: Pick<RunSignalStore, "send" | "pending" | "runForDedupeKey">;
+  steerRun(
+    run: Run,
+    signal: RunSignal,
+  ): Promise<{ sent: boolean; terminal?: boolean; drained?: boolean; replayRunId?: string }>;
   maxAttempts: number;
   advisoryLock: AdvisoryLock;
   prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
@@ -598,6 +603,26 @@ async function acceptedFollowup(
     return { ok: false, message: "the requestId was already used for different work" };
   const others = (await runs.inFlightForThread(target.threadRef)).filter((run) => run.id !== existing.id);
   return { ok: true, sessionId: target.id, title, delivered: "queued_turn", busy: others.length > 0 };
+}
+
+async function steerRunningTurn(
+  deps: Pick<SessionSyscallDeps, "signals" | "steerRun">,
+  inFlight: Run[],
+  request: OrchestratorInput,
+  message: { text: string; dedupKey: string | undefined },
+): Promise<"steered" | "replayed" | "refused" | undefined> {
+  if (message.dedupKey && (await deps.signals.runForDedupeKey(message.dedupKey))) return "steered";
+  const live = inFlight.find((run) => run.status === "running");
+  if (!live || (request.readOnly && !live.request.readOnly)) return undefined;
+  const steered = await deps.steerRun(live, {
+    kind: "steer",
+    text: message.text,
+    ts: `${Date.now()}.${randomUUID().slice(0, 8)}`,
+    request: { ...replayableRequest(request), spawned: true },
+    ...(message.dedupKey ? { dedupeKey: message.dedupKey } : {}),
+  });
+  if (!steered.terminal) return "steered";
+  return steered.drained && !steered.replayRunId ? "refused" : "replayed";
 }
 
 export async function stopSessionTree(
@@ -983,6 +1008,26 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               const dedupKey = input.requestId ? `subagent-followup:${messageId}` : undefined;
               const accepted = await acceptedFollowup(deps.runs, dedupKey, target, stamped, title);
               if (accepted) return accepted;
+              request.origin = sessionTurnOrigin(request.origin, stamped);
+              request.sessionSenderId = binding.session.id;
+              request.delegatingRunId = binding.request.runId;
+              const steered =
+                input.interrupt || privateMessage
+                  ? undefined
+                  : await steerRunningTurn(
+                      deps,
+                      inFlight,
+                      { ...request, text: stamped, displayText: text },
+                      {
+                        text,
+                        dedupKey,
+                      },
+                    );
+              if (steered === "steered")
+                return { ok: true, sessionId: target.id, title, delivered: "steered", busy: true };
+              if (steered === "replayed") return { ok: true, sessionId: target.id, title, delivered: "queued_turn" };
+              if (steered === "refused")
+                return { ok: false, message: `subagent "${title}" finished its turn and did not accept this message.` };
               const stopped = input.interrupt
                 ? await stopSessionRuns(
                     deps,
@@ -994,9 +1039,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                     },
                   )
                 : [];
-              request.origin = sessionTurnOrigin(request.origin, stamped);
-              request.sessionSenderId = binding.session.id;
-              request.delegatingRunId = binding.request.runId;
               await deps.runs
                 .enqueue({
                   sessionId: target.threadRef,

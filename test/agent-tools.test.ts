@@ -3421,6 +3421,7 @@ test("subagents send_message wakes by default and says what happened", async () 
   const replies: Array<Awaited<ReturnType<NonNullable<typeof tc.sessionSyscalls>["write"]>>> = [
     { ok: true, sessionId: "child", title: "child", delivered: "queued_turn", busy: false },
     { ok: true, sessionId: "child", title: "child", delivered: "queued_turn", busy: true },
+    { ok: true, sessionId: "child", title: "child", delivered: "steered", busy: true },
     { ok: true, sessionId: "child", title: "child", delivered: "queued_message", busy: false },
     { ok: true, sessionId: "child", title: "child", delivered: "queued_message", busy: true },
     {
@@ -3452,6 +3453,10 @@ test("subagents send_message wakes by default and says what happened", async () 
     /^Queued for "child": it is busy and starts on this when its current turn ends/,
   );
   assert.equal(
+    await send({}),
+    `Delivered into "child"'s running turn; it sees this at its next step. Don't re-send it.`,
+  );
+  assert.equal(
     await send({ wake: false }),
     `Left in "child"'s mailbox. It is idle and won't see this until something wakes it.`,
   );
@@ -3465,6 +3470,7 @@ test("subagents send_message wakes by default and says what happened", async () 
   assert.deepEqual(
     writes.map(({ wake, interrupt }) => [wake, interrupt]),
     [
+      [true, undefined],
       [true, undefined],
       [true, undefined],
       [false, undefined],

@@ -169,6 +169,7 @@ export interface CoreSession {
   subagents?: { running: number; waiting: number };
   workingSince?: number;
   purpose?: string;
+  personaId?: string;
 }
 
 export interface SessionPageQuery {

@@ -21,6 +21,7 @@ import {
   USER_STOP_ALL,
   runStopped,
   ANCESTOR_STOP,
+  type SessionSyscallDeps,
 } from "../src/sessions/session-syscalls.ts";
 import {
   deliverSubagentMail,
@@ -38,7 +39,12 @@ import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
+import type { RunSignal } from "../src/runs/run-signal-store.ts";
 import { liveSubagentsNote } from "../src/sessions/subagent-status.ts";
+
+const unexpectedSteer: SessionSyscallDeps["steerRun"] = async () => {
+  throw new Error("unexpected steer");
+};
 
 const actor: Principal = { id: "U1", type: "internal", displayName: "Alex" };
 const scope: ScopeId = scopeId("personal", "U1");
@@ -50,6 +56,7 @@ interface Rig {
   runs: RunStore;
   signals: ReturnType<typeof createPostgresRunSignalStore>;
   advisoryLock: AdvisoryLock;
+  steerRun: SessionSyscallDeps["steerRun"];
   room: Session;
   syscallsFor(session: Session): ReturnType<ReturnType<typeof createSessionSyscalls>["forTurn"]>;
 }
@@ -62,11 +69,15 @@ async function rig(opts?: {
   const signals = createPostgresRunSignalStore(testDatabaseUrl());
   const mailbox = createSessionMailbox(testMap<SessionMessage>());
   const advisoryLock = testAdvisoryLock();
+  const steerRun: SessionSyscallDeps["steerRun"] = async (run, signal) => ({
+    sent: await signals.send(run.id, signal),
+  });
   const factory = createSessionSyscalls({
     mailbox,
     sessions,
     runs,
     signals,
+    steerRun,
     advisoryLock,
     maxAttempts: 3,
     ...(opts?.prepareRequest ? { prepareRequest: opts.prepareRequest } : {}),
@@ -95,6 +106,7 @@ async function rig(opts?: {
     runs,
     signals,
     advisoryLock,
+    steerRun,
     room,
     syscallsFor: (session) => factory.forTurn(binding(session)),
   };
@@ -213,7 +225,7 @@ test("a wake never turns an ordinary session into a child and only leaves mail w
   assert.equal((await r.runs.inFlightForThread(ordinary.threadRef)).length, 1);
 });
 
-test("a wake starts an idle child's turn or queues one behind busy work; wake:false only leaves mail", async () => {
+test("a wake steers a busy child's running turn or starts an idle child's turn; wake:false only leaves mail", async () => {
   const r = await rig();
   const opened = await r.syscallsFor(r.room).open({ task: "work" });
   assert.ok(opened.ok);
@@ -222,12 +234,13 @@ test("a wake starts an idle child's turn or queues one behind busy work; wake:fa
   const claimed = await r.runs.claimById(first!.id, "worker", 60_000);
   const busy = await r.syscallsFor(r.room).write({ wake: true, target: child.id, text: "review again" });
   assert.ok(busy.ok);
-  assert.deepEqual([busy.delivered, busy.busy], ["queued_turn", true]);
-  assert.equal((await r.runs.inFlightForThread(child.threadRef)).length, 2);
+  assert.deepEqual([busy.delivered, busy.busy], ["steered", true]);
+  assert.equal((await r.runs.inFlightForThread(child.threadRef)).length, 1);
+  assert.deepEqual(
+    (await r.signals.takePending(first!.id)).map((signal) => [signal.kind, signal.text]),
+    [["steer", "review again"]],
+  );
   await r.runs.complete(first!.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
-  const [second] = await r.runs.inFlightForThread(child.threadRef);
-  const next = await r.runs.claimById(second!.id, "worker", 60_000);
-  await r.runs.complete(second!.id, next!.leaseToken!, { status: "ok", reply: "reviewed" });
   const quiet = await r.syscallsFor(r.room).write({ wake: false, target: child.id, text: "fyi" });
   assert.ok(quiet.ok);
   assert.deepEqual([quiet.delivered, quiet.busy], ["queued_message", false]);
@@ -256,7 +269,25 @@ test("a tree opens subagents past fifty runs in flight", async () => {
   for (let i = 0; i < 51; i++) assert.ok((await r.syscallsFor(r.room).open({ task: `work ${i}` })).ok);
   assert.equal((await sessionTreeRuns(r.sessions, r.runs, r.room)).length, 51);
 });
-test("write queues separately from a running child and interrupts explicitly", async () => {
+test("a subagent's message to a busy sibling steers the sibling's running turn", async () => {
+  const r = await rig();
+  const sender = await runningChild(r, r.room, "review");
+  const target = await runningChild(r, r.room, "build");
+  const out = await r
+    .syscallsFor(sender.session)
+    .write({ wake: true, target: target.session.id, text: "auth is broken" });
+  assert.deepEqual(out.ok && [out.delivered, out.busy], ["steered", true]);
+  const [steer] = await r.signals.takePending(target.run.id);
+  assert.equal(steer?.kind, "steer");
+  assert.equal(steer.text, "auth is broken");
+  assert.equal(steer.request?.sessionSenderId, sender.session.id);
+  assert.deepEqual(
+    (await r.runs.inFlightForThread(target.session.threadRef)).map((run) => run.id),
+    [target.run.id],
+  );
+});
+
+test("write steers a running child's turn and interrupts explicitly", async () => {
   const r = await rig();
   const syscalls = r.syscallsFor(r.room);
   const opened = await syscalls.open({ task: "watch the deploy", name: "watch_deploy" });
@@ -268,12 +299,18 @@ test("write queues separately from a running child and interrupts explicitly", a
 
   const steered = await syscalls.write({ wake: true, target: opened.sessionId, text: "focus on the canary" });
   assert.ok(steered.ok);
-  assert.equal(steered.delivered, "queued_turn");
-  const pending = await r.signals.takePending(queued.id);
-  assert.equal(pending.length, 0);
-  const followup = (await r.runs.inFlightForThread(child.threadRef)).find((run) => run.id !== queued.id)!;
-  assert.equal(followup.request.origin.kind, "automation");
-  assert.match(followup.request.text, /focus on the canary/);
+  assert.equal(steered.delivered, "steered");
+  const [steer] = await r.signals.takePending(queued.id);
+  assert.equal(steer?.kind, "steer");
+  assert.equal(steer.text, "focus on the canary");
+  assert.equal(steer.request?.sessionSenderId, r.room.id);
+  assert.equal(steer.request?.displayText, "focus on the canary");
+  assert.match(steer.request?.text ?? "", /^<subagent-message [^>]*>\nfocus on the canary\n<\/subagent-message>$/);
+  assert.ok(steer.request?.text.includes(`fromSessionId="${r.room.id}"`));
+  assert.deepEqual(
+    (await r.runs.inFlightForThread(child.threadRef)).map((run) => run.id),
+    [queued.id],
+  );
 
   const interrupted = await syscalls.write({ target: opened.sessionId, interrupt: true });
   assert.ok(interrupted.ok);
@@ -288,6 +325,75 @@ test("write queues separately from a running child and interrupts explicitly", a
   assert.equal(rerun.length, 1);
   assert.ok(rerun.some((run) => /check it again/.test(run.request.text)));
 });
+
+test("a message whose running turn ended before the steer landed is replayed as a turn instead of being lost", async () => {
+  const r = await rig();
+  const target = await runningChild(r, r.room, "build");
+  const steers: Array<[string, RunSignal]> = [];
+  const api = createSessionSyscalls({
+    ...r,
+    steerRun: async (run, signal) => {
+      steers.push([run.id, signal]);
+      return { sent: true, terminal: true, drained: true, replayRunId: "replayed-run" };
+    },
+    maxAttempts: 3,
+  }).forTurn({ session: r.room, scopeId: scope, request: { surface: "slack", conversation, actor } });
+  const out = await api.write({ target: target.session.id, wake: true, text: "keep going" });
+  assert.equal(out.ok && out.delivered, "queued_turn");
+  assert.deepEqual(
+    steers.map(([runId, signal]) => [runId, signal.text, signal.request?.spawned, signal.request?.sessionSenderId]),
+    [[target.run.id, "keep going", true, r.room.id]],
+  );
+  const refusing = createSessionSyscalls({
+    ...r,
+    steerRun: async () => ({ sent: true, terminal: true, drained: true }),
+    maxAttempts: 3,
+  }).forTurn({ session: r.room, scopeId: scope, request: { surface: "slack", conversation, actor } });
+  const refused = await refusing.write({ target: target.session.id, wake: true, text: "keep going" });
+  assert.equal(refused.ok, false);
+});
+
+test("a retried message with the same requestId steers the running turn once", async () => {
+  const r = await rig();
+  const target = await runningChild(r, r.room, "build");
+  const { api } = await parentRun(r);
+  const first = await api.write({ target: target.session.id, wake: true, text: "use v2", requestId: "k1" });
+  const again = await api.write({ target: target.session.id, wake: true, text: "use v2", requestId: "k1" });
+  assert.deepEqual([first.ok && first.delivered, again.ok && again.delivered], ["steered", "steered"]);
+  assert.deepEqual(
+    (await r.signals.pending(target.run.id)).map(({ signal }) => [signal.kind, signal.text]),
+    [["steer", "use v2"]],
+  );
+  assert.equal((await r.runs.inFlightForThread(target.session.threadRef)).length, 1);
+});
+
+test("an interrupt or a read-only sender's message to a writable running turn starts a turn instead of steering", async () => {
+  const r = await rig();
+  const target = await runningChild(r, r.room, "build");
+  const readOnly = createSessionSyscalls({ ...r, maxAttempts: 3 }).forTurn({
+    session: r.room,
+    scopeId: scope,
+    request: { surface: "slack", conversation, actor, readOnly: true },
+  });
+  const queued = await readOnly.write({ target: target.session.id, wake: true, text: "look again" });
+  assert.deepEqual(queued.ok && [queued.delivered, queued.busy], ["queued_turn", true]);
+  const interrupted = await r
+    .syscallsFor(r.room)
+    .write({ target: target.session.id, wake: true, interrupt: true, text: "new plan" });
+  assert.equal(interrupted.ok && interrupted.delivered, "interrupted");
+  assert.deepEqual(
+    (await r.signals.pending(target.run.id)).map(({ signal }) => signal.kind),
+    ["abort"],
+  );
+});
+
+async function queuedMessage(r: Rig, target: { session: Session; run: Run }, sender: Session, text: string) {
+  const { run } = await r.runs.enqueue({
+    sessionId: target.session.threadRef,
+    request: { ...target.run.request, sessionSenderId: sender.id, text, displayText: text },
+  });
+  return run;
+}
 
 async function runningChild(r: Rig, parent: Session, task: string) {
   const opened = await r.syscallsFor(parent).open({ task });
@@ -897,8 +1003,7 @@ test("a failed enqueue after an interrupt says the run was stopped and the earli
     },
     maxAttempts: 3,
   }).forTurn({ session: roomy.room, scopeId: scope, request: { surface: "slack", conversation, actor } });
-  const earlier = await roomy.syscallsFor(roomy.room).write({ target: target.session.id, wake: true, text: "first" });
-  assert.equal(earlier.ok && earlier.delivered, "queued_turn");
+  await queuedMessage(roomy, target, roomy.room, "first");
   const out = await failing.write({ target: target.session.id, interrupt: true, text: "change" });
   assert.equal(out.ok, false);
   assert.equal((await roomy.signals.pending(target.run.id))[0]!.signal.reason, PARENT_INTERRUPT);
@@ -912,14 +1017,8 @@ test("an interrupt's text runs next; a sibling's queued turn moves to the target
   const r = await rig();
   const target = await runningChild(r, r.room, "build");
   const sibling = await runningChild(r, r.room, "review");
-  const earlier = await r.syscallsFor(r.room).write({ target: target.session.id, wake: true, text: "also add tests" });
-  assert.equal(earlier.ok && earlier.delivered, "queued_turn");
-  const peer = await sibling.api.write({ target: target.session.id, wake: true, text: "found a bug in auth" });
-  assert.equal(peer.ok && peer.delivered, "queued_turn");
-  const peerRun = (await r.runs.inFlightForThread(target.session.threadRef)).find(
-    (run) => run.request.sessionSenderId === sibling.session.id,
-  );
-  assert.ok(peerRun);
+  await queuedMessage(r, target, r.room, "also add tests");
+  const peerRun = await queuedMessage(r, target, sibling.session, "found a bug in auth");
   const out = await r.syscallsFor(r.room).write({ target: target.session.id, interrupt: true, text: "new plan" });
   assert.equal(out.ok && out.delivered, "interrupted");
   assert.equal((await r.signals.pending(target.run.id))[0]!.signal.kind, "abort");
@@ -1478,6 +1577,7 @@ test("child runs retain the managed roster and read-only floor", async () => {
     sessions: r.sessions,
     runs: r.runs,
     signals: r.signals,
+    steerRun: r.steerRun,
     advisoryLock: r.advisoryLock,
     maxAttempts: 3,
   }).forTurn({
@@ -1866,6 +1966,7 @@ test("read-only callers cannot steer writable children and preserve the floor wh
     sessions: r.sessions,
     runs: r.runs,
     signals: r.signals,
+    steerRun: r.steerRun,
     advisoryLock: r.advisoryLock,
     maxAttempts: 3,
   }).forTurn({
@@ -1894,6 +1995,7 @@ test("writes revalidate access even while a target is running", async () => {
     sessions: r.sessions,
     runs: r.runs,
     signals: r.signals,
+    steerRun: r.steerRun,
     advisoryLock: r.advisoryLock,
     maxAttempts: 3,
     authorize: async (session) => session.id !== child.id,
@@ -1971,6 +2073,7 @@ test("private session replies stay read-only, queue behind running work, and do 
     sessions: r.sessions,
     runs: r.runs,
     signals: r.signals,
+    steerRun: r.steerRun,
     advisoryLock: r.advisoryLock,
     maxAttempts: 3,
   });
@@ -2012,6 +2115,7 @@ test("session tools cannot bypass swarm worker admission or message budgets", as
     sessions: r.sessions,
     runs: r.runs,
     signals: r.signals,
+    steerRun: r.steerRun,
     advisoryLock: r.advisoryLock,
     maxAttempts: 3,
   });
@@ -3023,6 +3127,7 @@ test("children of a Slack group turn keep its source so external-workspace polic
     sessions,
     runs,
     signals: createPostgresRunSignalStore(testDatabaseUrl()),
+    steerRun: unexpectedSteer,
     advisoryLock: testAdvisoryLock(),
     maxAttempts: 3,
   });
@@ -3079,6 +3184,7 @@ test("sessions list shows only sidebar sessions the whole audience can see and c
     sessions,
     runs,
     signals: createPostgresRunSignalStore(testDatabaseUrl()),
+    steerRun: unexpectedSteer,
     advisoryLock: testAdvisoryLock(),
     maxAttempts: 3,
     conversations: {
