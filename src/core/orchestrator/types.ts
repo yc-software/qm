@@ -105,7 +105,7 @@ export interface OrchestratorDeps {
   swarms?: SwarmService;
   refreshModels?: () => Promise<void>;
   identity: IdentityService;
-  users: Pick<UserStore, "record">;
+  users: Pick<UserStore, "record" | "markApps">;
   resolution: ResolutionService;
   config?: ScopedConfigStore;
   defaultTurnWallClockMs?: number;

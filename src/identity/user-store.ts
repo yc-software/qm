@@ -7,9 +7,11 @@ import { TENANCY, tenantPolicies } from "../tenants/migrations.ts";
 import { foldPrincipalId } from "../directory/person.ts";
 
 type UserSource = "turn" | "invite" | "admin";
+type UserKind = "person" | "app";
 
 interface UserRecord {
   id: string;
+  kind: UserKind;
   firstSeenAt?: number;
   source?: UserSource;
   offboardedAt?: number;
@@ -42,6 +44,7 @@ export interface UserStore extends UserLinkStore {
   record(person: SeenPerson): Promise<boolean>;
   markOffboarded(id: string, by: string): Promise<UserRecord>;
   markReactivated(id: string): Promise<UserRecord | null>;
+  markApps(ids: readonly string[]): Promise<number>;
 }
 
 export const fold = (expr: string): string =>
@@ -194,13 +197,24 @@ export const USER_MIGRATIONS: PgMigrationDefinition[] = [
        END $$`,
     ],
   },
+  {
+    id: "users/0005-kind",
+    statements: [
+      `DO $$
+       BEGIN
+         IF to_regclass('users') IS NULL THEN RETURN; END IF;
+         ALTER TABLE users ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'person' CHECK (kind IN ('person', 'app'));
+       END $$`,
+    ],
+  },
 ];
 
-const COLUMNS = `id, ${msOf("first_seen_at")} AS first_seen_at, source, ${msOf("offboarded_at")} AS offboarded_at, offboarded_by`;
+const COLUMNS = `id, kind, ${msOf("first_seen_at")} AS first_seen_at, source, ${msOf("offboarded_at")} AS offboarded_at, offboarded_by`;
 const LINK_COLUMNS = `alias_id, user_id, evidence, linked_by, ${msOf("created_at")} AS created_at`;
 function toRecord(r: Record<string, unknown>): UserRecord {
   return {
     id: r.id as string,
+    kind: (r.kind as UserKind | undefined) ?? "person",
     ...(r.first_seen_at != null ? { firstSeenAt: Number(r.first_seen_at), source: r.source as UserSource } : {}),
     ...(r.offboarded_at != null
       ? { offboardedAt: Number(r.offboarded_at), offboardedBy: r.offboarded_by as string }
@@ -273,6 +287,16 @@ export function createPostgresUserStore(connectionString: string): UserStore {
         [foldPrincipalId(id), by],
       );
       return toRecord(rows[0]!);
+    },
+    async markApps(ids) {
+      if (!ids.length) return 0;
+      const rows = await q(
+        `UPDATE users SET kind = 'app'
+          WHERE kind <> 'app' AND id IN (SELECT ${person(fold("t.id"))} FROM unnest($1::text[]) AS t(id))
+          RETURNING id`,
+        [[...ids]],
+      );
+      return rows.length;
     },
     async markReactivated(id) {
       const rows = await q(

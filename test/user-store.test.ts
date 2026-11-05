@@ -23,6 +23,18 @@ test("a person joins the roster once, folded to one row, and keeps their first a
   assert.equal((await roster.list()).filter((u) => u.id === pat).length, 1);
 });
 
+test("a user is a person until marked as an app; marking never creates a row", async () => {
+  const bot = `U-${randomUUID().slice(0, 8)}`;
+  const absent = `U-${randomUUID().slice(0, 8)}`;
+  const roster = store();
+  await roster.record({ id: bot, source: "turn", at: Date.now() });
+  assert.equal((await roster.get(bot))?.kind, "person");
+  assert.equal(await roster.markApps([bot, absent]), 1);
+  assert.equal((await roster.get(bot))?.kind, "app");
+  assert.equal(await roster.markApps([bot]), 0, "marking again changes nothing");
+  assert.equal(await roster.get(absent), null);
+});
+
 test("offboarding sets offboarded_at once; reactivation clears it", async () => {
   const leaver = unique("leaver");
   const roster = store();

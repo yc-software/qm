@@ -46,13 +46,12 @@ export function boundWebhook(
   return { webhook: destination.webhook, target: destination.target };
 }
 
-export function introducesPerson(
+export function introducesUser(
   origin: TurnOrigin,
-  input: Pick<TurnRequest, "sessionSenderId" | "delegatingRunId" | "surfaceOrigin" | "botActor">,
+  input: Pick<TurnRequest, "sessionSenderId" | "delegatingRunId" | "surfaceOrigin">,
 ): boolean {
   return (
     (isPersonAuthored(origin.kind) || spokenByPerson(origin)) &&
-    !input.botActor &&
     !isSessionTurn(input) &&
     input.surfaceOrigin?.audience !== "external"
   );

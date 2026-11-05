@@ -50,6 +50,7 @@ export async function listUsers(ctx: ApiCtx): Promise<void> {
     const record = records.get(u.principalId);
     return {
       ...u,
+      kind: record?.kind ?? "person",
       firstSeenAt: record?.firstSeenAt ?? null,
       source: record?.source ?? null,
       deactivated: deps.identity?.deactivationSource(u.principalId) !== undefined,

@@ -144,6 +144,23 @@ test("/v1/admin/users: org_admin sees the roster + grants; a non-admin is denied
       conversation: { kind: "dm", threadRef: "dm:talker:t1" },
     });
 
+    await s.built.app.turn({
+      ...dm,
+      actor: { externalId: "U-app2" },
+      conversation: { kind: "dm", threadRef: "dm:U-app2:t1" },
+    });
+    assert.equal(
+      await s.built.app.upsertDirectory(
+        [
+          { principalId: "Uno@Example.com", displayName: "Uno", type: "internal", slackId: "U1" },
+          { principalId: "Seven@Example.com", displayName: "Seven", type: "internal", slackId: "U7" },
+          { principalId: "U-bot", displayName: "Some App", type: "internal", isBot: true },
+          { principalId: "U-app2", displayName: "Other App", type: "internal", isBot: true },
+        ],
+        Date.now(),
+      ),
+      true,
+    );
     const r = await fetch(`${s.base}/v1/admin/users`, { headers: { "x-admin-actor": "admin-alice@default-org" } });
     assert.equal(r.status, 200);
     const d: any = await r.json();
@@ -157,10 +174,12 @@ test("/v1/admin/users: org_admin sees the roster + grants; a non-admin is denied
       ["U1", "smoke-test"],
       "any author who isn't a bot counts; a Slack id becomes one person with its email only through a link",
     );
+    assert.deepEqual(["U-preloaded", "U-cron"].filter(listed), [], "not someone only added, or an automation's target");
+    const kindOf = (id: string) => d.users.find((u: { principalId: string }) => u.principalId === id)?.kind;
     assert.deepEqual(
-      ["U-preloaded", "U-cron", "U-bot"].filter(listed),
-      [],
-      "not someone only added, an automation's target, or a turn flagged as a bot",
+      ["U1", "talker@example.com", "U-bot", "U-app2"].map(kindOf),
+      ["person", "person", "app", "app"],
+      "a bot-flagged turn records an app, and directory sync marks a known user whose member is a bot",
     );
     assert.ok(
       Array.isArray(d.grants) && d.grants.some((g: { principalId: string }) => g.principalId === "admin-alice"),
@@ -205,7 +224,7 @@ test("/v1/admin/users: org_admin sees the roster + grants; a non-admin is denied
       createdAt: 5,
       updatedAt: 5,
     });
-    for (const m of USER_MIGRATIONS.filter((m) => /^users\/000[234]/.test(m.id)))
+    for (const m of USER_MIGRATIONS.filter((m) => /^users\/000[2345]/.test(m.id)))
       for (const statement of m.statements) await pg.query(statement);
     assert.deepEqual(
       (await pg.q("SELECT alias_id, user_id, evidence FROM user_links ORDER BY alias_id")).map((r) => [

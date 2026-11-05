@@ -163,7 +163,9 @@ export async function detail(page: AdminPage) {
         )}
         ${offboarding()}`,
       d.displayName || d.principalId || principal,
-      [d.admin?.isAdmin ? labelRole(d.admin.role) : "member", d.scopeId].filter(Boolean).join(" · "),
+      [d.user?.kind === "app" ? "app" : "", d.admin?.isAdmin ? labelRole(d.admin.role) : "member", d.scopeId]
+        .filter(Boolean)
+        .join(" · "),
     );
   }
   draw();
