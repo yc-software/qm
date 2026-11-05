@@ -20,6 +20,7 @@ import { hashId } from "../util/crypto.ts";
 import { utcMinute } from "../util/time.ts";
 import { errMessage, reportFailure, reportFailureAs } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
+import { TransientTurnFailure } from "../core/turn-error.ts";
 
 const TICK_LEASE_KEY = "cron:scheduler:tick";
 const CRON_FIRE_REPLY_MAX_CHARS = 2000;
@@ -314,6 +315,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           fireKey,
           threadRef,
           surface: "cron",
+          redrivesHandOff: true,
           ...(firesAtMostDaily(cron.schedule, scheduledAt ?? t) ? { infrequentCron: true } : {}),
           ...(cron.runtime && !runtimeProblem ? { runtime: cron.runtime } : {}),
           ...(cron.title ? { title: cron.title } : {}),
@@ -332,6 +334,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         },
       );
     } catch (e) {
+      if (e instanceof TransientTurnFailure) throw e;
       await deps.crons.recordFire(cron.id, {
         fireKey,
         threadRef,
@@ -372,6 +375,27 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (swept > 0) console.warn(`[scheduler] closed ${swept} stranded running fire(s) as failed`);
     } catch (e) {
       reportFailure("scheduler: stranded-fire sweep", e);
+    }
+  };
+
+  let lastManualRedrive = 0;
+  const redriveManualFires = async (t: number): Promise<void> => {
+    if (t - lastManualRedrive < REPAIR_INTERVAL_MS) return;
+    lastManualRedrive = t;
+    try {
+      for (const entry of await deps.crons.runningFires(t)) {
+        if (stopped) break;
+        if (entry.scheduledAt !== undefined || (await deps.idempotency.committed(entry.fireKey))) continue;
+        const cron = await deps.crons.get(entry.cronId);
+        if (!cron || cron.loopId) continue;
+        const settled = withWork(() =>
+          deps.advisoryLock.tryWithLock(`cron-lifecycle:${cron.id}`, () => fire(cron, entry.firedAt, entry.fireKey)),
+        ).then(() => undefined, reportFailureAs("scheduler: manual fire re-drive", undefined, `cron=${cron.id}`));
+        pending.add(settled);
+        void settled.finally(() => pending.delete(settled));
+      }
+    } catch (e) {
+      reportFailure("scheduler: manual fire re-drive", e);
     }
   };
 
@@ -424,6 +448,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     await withWork(() =>
       leaderLease.hold(TICK_LEASE_KEY, async () => {
         await fireDue(t, observed);
+        await redriveManualFires(t);
         await sweepStranded(t);
         await gcFires(t);
         await deps.sweepAsks?.(t).catch(reportFailureAs("scheduler: ask sweep", undefined));
@@ -513,6 +538,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   }
 
   async function maintain(): Promise<void> {
+    await redriveManualFires(now());
     await sweepStranded(now());
     await gcFires(now());
     await deps.sweepAsks?.(now()).catch(reportFailureAs("scheduler: ask sweep", undefined));

@@ -1811,3 +1811,48 @@ test("a fire is told when its previous output was refused by the cron's destinat
   await runNowSettled(scheduler, cron.id);
   assert.doesNotMatch(calls[2]?.text ?? "", /was refused/);
 });
+
+test("a manual fire whose wait is cut by shutdown is re-driven onto the same run and delivers its reply once", async () => {
+  let handedOff = false;
+  const { crons, deliveries, calls, scheduler } = agent(async (req) => {
+    if (!handedOff) {
+      handedOff = true;
+      return { status: "queued", sessionId: "s1", runId: "r1" };
+    }
+    return { status: "ok", reply: `finished ${req.idempotencyKey}`, sessionId: "s1" };
+  });
+  const cron = await crons.create({
+    schedule: { everyMs: 3_600_000 },
+    action: "post the standup",
+    title: "Daily standup",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("channel", "C1"),
+    destination: { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") },
+  });
+  const started = await scheduler.runNow(cron.id);
+  assert.ok(started.started);
+  await started.settled;
+  const [handOff] = (await crons.listFires(cron.id)).runs;
+  assert.equal(handOff?.status, "running");
+  assert.deepEqual(await deliveries.pending("slack"), []);
+
+  await scheduler.tick();
+  await scheduler.drained();
+  const { runs } = await crons.listFires(cron.id);
+  assert.equal(runs.length, 1);
+  assert.equal(runs[0]?.status, "ok");
+  assert.equal(runs[0]?.reply, `finished ${started.fireKey}`);
+  assert.deepEqual(
+    calls.map((c) => c.idempotencyKey),
+    [started.fireKey, started.fireKey],
+  );
+  assert.deepEqual(
+    (await deliveries.pending("slack")).map((d) => d.text),
+    [`finished ${started.fireKey}`],
+  );
+
+  await scheduler.tick();
+  await scheduler.drained();
+  assert.equal(calls.length, 2);
+});

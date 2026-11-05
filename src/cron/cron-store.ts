@@ -60,6 +60,7 @@ export interface CronStore {
   setDestination(id: string, destination: Destination | undefined): Promise<void>;
   beginFire(id: string, entry: CronFireLogEntry, opts?: { exclusive?: boolean }): Promise<BeginFireResult>;
   sweepStrandedFires(now: number): Promise<number>;
+  runningFires(now: number): Promise<CronFireRecord[]>;
   pruneFires(now: number): Promise<number>;
   recordFire(id: string, entry: CronFireLogEntry): Promise<void>;
   listFires(id: string, opts?: { limit?: number }): Promise<{ runs: CronFireLogEntry[]; total: number }>;
@@ -177,6 +178,7 @@ export function createCronStore(
     async sweepStrandedFires(now) {
       return fires.sweepStranded(now, staleRunningMs, STRANDED_FIRE_NOTE);
     },
+    runningFires: (now) => fires.listRunning(now - staleRunningMs),
     async pruneFires(now) {
       return fires.pruneEnded({ endedBefore: now - FIRE_RETENTION_MS, keepPerCron: FIRE_RETENTION_KEEP_PER_CRON });
     },
