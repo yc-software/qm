@@ -2,6 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { resolveBranding, sanitizeBranding } from "../src/resolution/branding.ts";
 import { scopeId } from "../src/types.ts";
+import { withTenant } from "../src/tenants/context.ts";
+import { TEST_TENANT } from "./support/test-tenant.ts";
 
 const ORG = scopeId("org", "acme");
 
@@ -37,25 +39,27 @@ test("sanitizeBranding accepts only https mark image urls that cannot break out 
   assert.equal(sanitizeBranding({ markUrl: `https://a/${"x".repeat(500)}` }), undefined);
 });
 
-test("resolveBranding prefers the store per field and fills the rest from the default", async () => {
-  const config = { getBrandingDurable: async () => ({ selfLabel: "storebot" }) };
-  assert.deepEqual(await resolveBranding(config, ORG, { selfLabel: "envbot", orgName: "Env Org" }), {
-    selfLabel: "storebot",
-    orgName: "Env Org",
-  });
-  assert.deepEqual(await resolveBranding(undefined, ORG, { selfLabel: "envbot" }), { selfLabel: "envbot" });
-  assert.deepEqual(await resolveBranding({ getBrandingDurable: async () => null }, ORG), {});
-});
+test("resolveBranding prefers the store per field and fills the rest from the default", () =>
+  withTenant(TEST_TENANT, async () => {
+    const config = { getBrandingDurable: async () => ({ selfLabel: "storebot" }) };
+    assert.deepEqual(await resolveBranding(config, ORG, { selfLabel: "envbot", orgName: "Env Org" }), {
+      selfLabel: "storebot",
+      orgName: "Env Org",
+    });
+    assert.deepEqual(await resolveBranding(undefined, ORG, { selfLabel: "envbot" }), { selfLabel: "envbot" });
+    assert.deepEqual(await resolveBranding({ getBrandingDurable: async () => null }, ORG), {});
+  }));
 
-test("resolveBranding degrades to the default identity when the durable read fails", async () => {
-  const config = {
-    getBrandingDurable: async (): Promise<never> => {
-      throw new Error("postgres hiccup");
-    },
-  };
-  assert.deepEqual(await resolveBranding(config, ORG, { selfLabel: "envbot" }), { selfLabel: "envbot" });
-  assert.deepEqual(await resolveBranding(config, ORG), {});
-});
+test("resolveBranding degrades to the default identity when the durable read fails", () =>
+  withTenant(TEST_TENANT, async () => {
+    const config = {
+      getBrandingDurable: async (): Promise<never> => {
+        throw new Error("postgres hiccup");
+      },
+    };
+    assert.deepEqual(await resolveBranding(config, ORG, { selfLabel: "envbot" }), { selfLabel: "envbot" });
+    assert.deepEqual(await resolveBranding(config, ORG), {});
+  }));
 
 test("resolveBranding sanitizes stored values that predate write-side sanitization", async () => {
   const config = { getBrandingDurable: async () => ({ selfLabel: "{{legacy}}", orgName: "Acme <{Corp}>" }) };

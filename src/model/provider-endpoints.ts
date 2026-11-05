@@ -2,6 +2,7 @@ import { createHmac } from "node:crypto";
 import { isGatewayModelId } from "./gateway-models.ts";
 import { currentModelRequestContext } from "./request-context.ts";
 import { attestableActor } from "../directory/person.ts";
+import { tenantSettings } from "../tenants/settings.ts";
 
 export const PROVIDER_IDS = ["anthropic", "openai", "openrouter"] as const;
 type ProviderId = (typeof PROVIDER_IDS)[number];
@@ -115,6 +116,10 @@ function gatewayScopeId(scopeId: string | undefined, key: string | undefined): s
   return key ? `personal:${gatewayActorId(scopeId.slice("personal:".length), key)}` : undefined;
 }
 
+export function gatewayKey(config: Pick<ModelGatewayTransportConfig, "apiKey">): string {
+  return tenantSettings().modelGatewayKey ?? config.apiKey;
+}
+
 export function modelGatewayHeaders(
   config: Pick<ModelGatewayTransportConfig, "apiKey" | "apiKeyHeader" | "actorKey">,
   purpose?: ModelRequestPurpose,
@@ -127,7 +132,7 @@ export function modelGatewayHeaders(
     scopeId: gatewayScopeId(attestableActor(scopeId), config.actorKey),
     purpose,
   };
-  const headers: Record<string, string> = { [config.apiKeyHeader]: config.apiKey };
+  const headers: Record<string, string> = { [config.apiKeyHeader]: gatewayKey(config) };
   for (const [name, field] of Object.entries(MODEL_REQUEST_CONTEXT_HEADERS)) {
     const value = context[field];
     const attested = attestableActor(value);
@@ -156,7 +161,7 @@ export function modelGatewayRequest<T extends { id: string; baseUrl: string; api
         : config.url,
     },
     target,
-    apiKey: config.apiKey,
+    apiKey: gatewayKey(config),
     headers: modelGatewayHeaders(config, purpose),
   };
 }
