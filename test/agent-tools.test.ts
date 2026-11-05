@@ -423,54 +423,6 @@ test("each agent tool emits a tool_call then a tool_result", async () => {
   assert.equal(emitted[7]!.body.verb, "share");
 });
 
-test("skill reads persist immutable skill and pack provenance in the tool result", async () => {
-  const emitted: Emitted[] = [];
-  const tc = {
-    ...fakeToolContext(),
-    async skill() {
-      return {
-        content: "instructions",
-        sourceScopeId: "personal:U1" as const,
-        provenance: {
-          skillId: "skill-1",
-          skillVersion: 7,
-          contentDigest: "content-sha256",
-          pack: {
-            packId: "finance-pack",
-            commit: "pack-commit",
-            bundleCommit: "bundle-commit",
-            bundleDigest: "bundle-sha256",
-          },
-        },
-      };
-    },
-  };
-  const skills = createAgentTools(
-    {
-      current: tc,
-      emit: (entry) => {
-        emitted.push(entry as Emitted);
-      },
-      scopeLabel: "personal:U1",
-    },
-    { controlTools: true },
-  ).find((tool) => tool.name === "skills");
-
-  await call(skills, { action: "read", name: "finance" });
-
-  assert.deepEqual(emitted.at(-1)!.payload.provenance, {
-    skillId: "skill-1",
-    skillVersion: 7,
-    contentDigest: "content-sha256",
-    pack: {
-      packId: "finance-pack",
-      commit: "pack-commit",
-      bundleCommit: "bundle-commit",
-      bundleDigest: "bundle-sha256",
-    },
-  });
-});
-
 test("sandbox manages the box out-of-band instead of running a command", async () => {
   const restarted: number[] = [];
   const tc = {

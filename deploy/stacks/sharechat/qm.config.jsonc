@@ -1,0 +1,36 @@
+{
+  "contract": 1,
+  "orgId": "sharechat",
+  "publicUrl": "https://agent.sharechat.internal",
+  "target": "fly",
+  "appPrefix": "qm",
+  "region": "bom",
+  "flyOrg": "sharechat",
+  "deployAppPrefix": "qm-d",
+  "sandbox": {
+    "app": "sharechat-sandboxes",
+  },
+  "services": ["core", "slack", "admin", "web-ui", "portal", "egress-proxy"],
+  "env": {
+    "admin": {
+      "ADMIN_BASE_PATH": "/admin",
+    },
+    "core": {
+      "HARNESS": "pi",
+      "SNAPSHOT_STORE": "s3",
+      "TRANSFER_STORE": "s3",
+      "S3_BUCKET": "sharechat-data",
+      "S3_REGION": "auto",
+    },
+    "portal": {
+      "OIDC_ALLOWED_EMAIL_DOMAIN": "*",
+      "OIDC_AUTH_ENDPOINT": "https://accounts.google.com/o/oauth2/v2/auth",
+      "OIDC_TOKEN_ENDPOINT": "https://oauth2.googleapis.com/token",
+      "OIDC_USERINFO_ENDPOINT": "https://openidconnect.googleapis.com/v1/userinfo",
+      "OIDC_ISSUER": "https://accounts.google.com",
+      "OIDC_JWKS_URI": "https://www.googleapis.com/oauth2/v3/certs",
+      "OIDC_SCOPES": "openid email profile",
+      "OIDC_PRINCIPAL_CLAIM": "email",
+    },
+  },
+}

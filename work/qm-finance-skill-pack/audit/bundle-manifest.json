@@ -1,0 +1,111 @@
+[
+  {
+    "name": "finance-reconciliation",
+    "description": "Reconcile GL controls, subledgers, bank records, or operational extracts at a stated cutoff using identical measurement bases, Decimal arithmetic, complete populations, named reconciling items, and independent evidence-bound review. Use for account tie-outs and break tracing; never post adjustments or widen tolerances to force agreement.",
+    "files": [
+      {
+        "path": "SKILL.md",
+        "sha256": "003820481c5f342a0e1a0e6e401b445e544cbb7b1de3f06469e12de83b58397f",
+        "bytes": 6802
+      },
+      {
+        "path": "references/migrated-populations.md",
+        "sha256": "53e73a45090aca12d202e7038fd0521dd0087e1e7688937687116756c7837a04",
+        "bytes": 2301
+      },
+      {
+        "path": "references/review.md",
+        "sha256": "70c2582aefc4fd8bb4aacbda0f75954137a097af74de880728e7e1285c213815",
+        "bytes": 2209
+      },
+      {
+        "path": "scripts/reconcile.py",
+        "sha256": "c00c728e053a77ea3fdfbaaf3a360248bc92845a611f78d39433950d5d67e636",
+        "bytes": 3387
+      }
+    ]
+  },
+  {
+    "name": "finance-router",
+    "description": "Route ShareChat accounts-receivable, receipt-window, collection, aging, customer-outstanding, and migrated-balance requests into a complete QM source plan with authoritative populations, evidence controls, and independent reviews. Use before AR execution; it does not fetch data or perform analysis.",
+    "files": [
+      {
+        "path": "SKILL.md",
+        "sha256": "0d536abc4ed1065366e7471452dee17d42e11dd33025070e66a1cde9a9560518",
+        "bytes": 3610
+      },
+      {
+        "path": "references/finance-routes.yaml",
+        "sha256": "05c22cc916470874f64755c0447eabfe7b789ba53c8ec3018ebc2a9e4fc357bf",
+        "bytes": 1698
+      },
+      {
+        "path": "references/resolver.md",
+        "sha256": "76b4b1601c196b60899d1a96cccfe2af81571158bd3c431ebc272fc3c0a496b8",
+        "bytes": 5173
+      },
+      {
+        "path": "references/runbooks.yaml",
+        "sha256": "677448612a13246f0f434ecf8b92af32962a954317ed4952ed7911fdc4e6df61",
+        "bytes": 1044
+      },
+      {
+        "path": "scripts/atomic_fetch.py",
+        "sha256": "cda602822d8a94e018ca42b44490d7600abbe25679e65f0bf959235a34c18f53",
+        "bytes": 5633
+      },
+      {
+        "path": "tests/test_population_readiness.py",
+        "sha256": "1c86cce34d31dce9950f46015d674cd03d4ead16cf4b6464339ffae9b3d65e3b",
+        "bytes": 4072
+      }
+    ]
+  },
+  {
+    "name": "netsuite-readonly-finance",
+    "description": "Retrieve and interpret read-only NetSuite finance data through the governed netsuite_execute boundary. Use for SuiteQL statements, trial balance, GL, AP, AR, aging, cash, variance, close, and reconciliation work; never for record mutation or direct credential access.",
+    "files": [
+      {
+        "path": "SKILL.md",
+        "sha256": "b75e021739b1147e7ac1edc8ec84f2585e2ac189030877796e439b29a7231645",
+        "bytes": 2545
+      },
+      {
+        "path": "references/analysis.md",
+        "sha256": "c5d43e95acb12e58e08f2e05c7ac71b94c40ff332b1a579d91c7eaa43604c8dc",
+        "bytes": 1661
+      },
+      {
+        "path": "references/finance-populations.md",
+        "sha256": "adc0c2f4bf3bab366e720e277da037c4d898dc0cdf554eaa5fcd51a35a64dfb8",
+        "bytes": 4179
+      },
+      {
+        "path": "references/schema-and-joins.md",
+        "sha256": "c797eb7234f04c0ebd1a4caa3af349088cf33c0aeb66689a6b578f0bcca9405d",
+        "bytes": 3435
+      },
+      {
+        "path": "references/suiteql.md",
+        "sha256": "0e59e30fcdd57d3747a146193fd95d3d64c71539b62315f6e0fe9fce31daebea",
+        "bytes": 3467
+      }
+    ]
+  },
+  {
+    "name": "sharechat-ar-collection",
+    "description": "Build and diagnose evidence-controlled ShareChat accounts-receivable reports, weekly collections, receipt windows, debtor aging, overdue follow-up, and native NetSuite versus migrated SAP reconciliation.",
+    "files": [
+      {
+        "path": "SKILL.md",
+        "sha256": "21e46fcf4c7e5eef08639d610ff5edb9a6635aea0d0060b6feb677d305e08a00",
+        "bytes": 19469
+      },
+      {
+        "path": "references/sap-invoice-detection.md",
+        "sha256": "8ae20d743290af81eb2348ef47ec63d1f3e00e0fe12b168b18b08e002a0ca31f",
+        "bytes": 2884
+      }
+    ]
+  }
+]
