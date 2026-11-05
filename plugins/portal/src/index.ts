@@ -272,7 +272,7 @@ const ADMIN_TTL_MS = 60_000;
 const ADMIN_PROBE_TIMEOUT_MS = 6_500;
 const ADMIN_PROBE_ATTEMPTS = 2;
 const ADMIN_PROBE_RETRY_DELAY_MS = 250;
-const adminCache = new LRUCache<string, boolean>({ max: 10_000, ttl: ADMIN_TTL_MS });
+const adminCache = new LRUCache<string, Map<string, boolean>>({ max: 10_000, ttl: ADMIN_TTL_MS });
 
 function portalIdentityHeaders(sub: string, t?: string): Record<string, string> {
   return PORTAL_IDENTITY_SECRET
@@ -315,8 +315,7 @@ async function adminProbeAttempt(sub: string, tenant?: string): Promise<boolean 
 }
 
 async function isAdmin(sub: string, tenant?: string): Promise<boolean> {
-  const key = `${tenant ?? ""}|${sub}`;
-  const hit = adminCache.get(key);
+  const hit = adminCache.get(sub)?.get(tenant ?? "");
   if (hit !== undefined) return hit;
   for (let attempt = 0; attempt < ADMIN_PROBE_ATTEMPTS; attempt++) {
     const isAdmin = await adminProbeAttempt(sub, tenant);
@@ -325,7 +324,9 @@ async function isAdmin(sub: string, tenant?: string): Promise<boolean> {
         await new Promise((resolve) => setTimeout(resolve, ADMIN_PROBE_RETRY_DELAY_MS));
       continue;
     }
-    adminCache.set(key, isAdmin);
+    const known = adminCache.get(sub);
+    if (known) known.set(tenant ?? "", isAdmin);
+    else adminCache.set(sub, new Map([[tenant ?? "", isAdmin]]));
     return isAdmin;
   }
   return false;
@@ -1596,7 +1597,7 @@ async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL):
         },
         identity.subject,
       );
-      for (const key of adminCache.keys()) if (key.endsWith(`|${identity.sub}`)) adminCache.delete(key);
+      adminCache.delete(identity.sub);
     }
     const found = identity.email
       ? await coreEmailTenants(CORE, CORE_SIGNING_SECRET, identity.email)
