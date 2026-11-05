@@ -7,7 +7,8 @@ import { icon } from "./icons";
 import { listBackLink, listPageTpl } from "./list-page";
 import { appState } from "./shell-state";
 import { contextsState, ensureContexts, personalScopeId, scopeTitle } from "./contexts";
-import { openSession, replacePendingSession, sessionsState } from "./sessions";
+import { openSession, renderList, replacePendingSession, sessionsState } from "./sessions";
+import { switchView } from "./shell";
 import { openProjectIconPicker, projectIconTpl } from "./project-icon";
 import { peopleResults, type DirectoryMatch } from "./people-results";
 import { avatarTpl, closeFormMenus, menuSelect } from "./ui";
@@ -97,6 +98,29 @@ function fromProjectIcon(value: ProjectIcon | null): PersonaIcon | null {
   return value.kind === "custom" ? { kind: "custom", value: value.name } : { kind: "emoji", value: value.value };
 }
 
+function setPersonaList(list: PersonaView[]): void {
+  personasState.list = list;
+  renderList();
+}
+
+export function personaGlyph(personaId: string, size: number): TemplateResult {
+  return personaIconTpl(personasState.list.find((p) => p.id === personaId)?.icon, size);
+}
+
+export function personaSeeds(): Array<{ scopeId: string; name: string; kind: "persona" }> {
+  return personasState.list.map((p) => ({ scopeId: `persona:${p.id}`, name: p.name, kind: "persona" }));
+}
+
+export function viewPersona(personaId: string): void {
+  switchView("personas");
+  void openPersona(personaId);
+}
+
+export async function chatWithPersonaId(personaId: string): Promise<void> {
+  const persona = personasState.list.find((p) => p.id === personaId);
+  if (persona) await chatWithPersona(persona);
+}
+
 function personaIconTpl(value: PersonaIcon | null | undefined, size = 18): TemplateResult {
   return projectIconTpl(toProjectIcon(value), size) ?? icon(Bot, size);
 }
@@ -113,13 +137,13 @@ export async function loadPersonas(): Promise<void> {
     const r = await api<{ personas?: PersonaView[] }>("/api/personas");
     if (seq !== refreshSeq) return;
     personasState.enabled = true;
-    personasState.list = r.personas ?? [];
+    setPersonaList(r.personas ?? []);
     notice = "";
   } catch (e) {
     if (seq !== refreshSeq) return;
     if (isPersonasDisabled(e)) {
       personasState.enabled = false;
-      personasState.list = [];
+      setPersonaList([]);
       notice = "";
       return;
     }
@@ -272,7 +296,7 @@ function forkPersona(persona: PersonaView): Promise<void> {
         method: "POST",
         body: JSON.stringify(forkRequest(persona)),
       });
-      personasState.list = [...personasState.list.filter((p) => p.id !== fork.id), fork];
+      setPersonaList([...personasState.list.filter((p) => p.id !== fork.id), fork]);
       await openPersona(fork.id, `Forked from ${persona.name}. Credentials aren't copied; attach your own.`);
     },
     `Couldn't fork ${persona.name}.`,
@@ -397,7 +421,7 @@ function personaFormTpl(persona: PersonaDetail | null, state: FormState, redraw:
         persona ? `/api/personas/${encodeURIComponent(persona.id)}` : "/api/personas",
         { method: persona ? "PATCH" : "POST", body: JSON.stringify(body) },
       );
-      personasState.list = [...personasState.list.filter((p) => p.id !== saved.persona.id), saved.persona];
+      setPersonaList([...personasState.list.filter((p) => p.id !== saved.persona.id), saved.persona]);
       await openPersona(saved.persona.id, persona ? "Saved." : "");
     } catch (err) {
       state.error = errMessage(err, "Couldn't save this persona.");
@@ -515,7 +539,7 @@ async function deletePersona(persona: PersonaView): Promise<void> {
     persona,
     async () => {
       await api(`/api/personas/${encodeURIComponent(persona.id)}`, { method: "DELETE", body: "{}" });
-      personasState.list = personasState.list.filter((p) => p.id !== persona.id);
+      setPersonaList(personasState.list.filter((p) => p.id !== persona.id));
       notice = "";
       drawPersonasPage();
     },
