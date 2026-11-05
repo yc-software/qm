@@ -77,7 +77,6 @@ export function recentProjectSeeds(contexts: readonly ProjectAwareContext[]): Re
   });
 }
 
-/** Scope groups for the sidebar; none when the user lists conversations by activity. */
 export function sidebarProjectSeeds(
   contexts: readonly ProjectAwareContext[],
   groupByActivity: boolean,

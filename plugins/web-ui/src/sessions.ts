@@ -180,23 +180,26 @@ function visibleRowOrder(): string[] {
     .filter(Boolean);
 }
 
-const WEB_ONLY_KEY = "web-ui:web-only";
-sessionsState.webOnly = ((): boolean => {
+function storedFlag(key: string): boolean {
   try {
-    return localStorage.getItem(WEB_ONLY_KEY) === "1";
+    return localStorage.getItem(key) === "1";
   } catch {
     return false;
   }
-})();
+}
 
-const GROUP_BY_ACTIVITY_KEY = "web-ui:sidebar-group-by-activity";
-sessionsState.groupByActivity = ((): boolean => {
+function storeFlag(key: string, value: boolean): void {
   try {
-    return localStorage.getItem(GROUP_BY_ACTIVITY_KEY) === "1";
+    localStorage.setItem(key, value ? "1" : "0");
   } catch {
-    return false;
+    void 0;
   }
-})();
+}
+
+const WEB_ONLY_KEY = "web-ui:web-only";
+const GROUP_BY_ACTIVITY_KEY = "web-ui:sidebar-group-by-activity";
+sessionsState.webOnly = storedFlag(WEB_ONLY_KEY);
+sessionsState.groupByActivity = storedFlag(GROUP_BY_ACTIVITY_KEY);
 
 let sessionsLoading = false;
 let sessionsNotice = "";
@@ -1502,11 +1505,7 @@ async function loadMoreSessions(kind: "active" | "archived"): Promise<void> {
 export function setWebOnly(webOnly: boolean): void {
   if (sessionsState.webOnly === webOnly) return;
   sessionsState.webOnly = webOnly;
-  try {
-    localStorage.setItem(WEB_ONLY_KEY, webOnly ? "1" : "0");
-  } catch {
-    void 0;
-  }
+  storeFlag(WEB_ONLY_KEY, webOnly);
   activeCursor = null;
   activePaged = false;
   archivedCursor = null;
@@ -1519,11 +1518,7 @@ export function setWebOnly(webOnly: boolean): void {
 export function setGroupByActivity(groupByActivity: boolean): void {
   if (sessionsState.groupByActivity === groupByActivity) return;
   sessionsState.groupByActivity = groupByActivity;
-  try {
-    localStorage.setItem(GROUP_BY_ACTIVITY_KEY, groupByActivity ? "1" : "0");
-  } catch {
-    void 0;
-  }
+  storeFlag(GROUP_BY_ACTIVITY_KEY, groupByActivity);
   renderList();
 }
 
