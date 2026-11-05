@@ -60,7 +60,7 @@ async function rig(opts?: {
   const sessions = createPostgresSessionStore(testDatabaseUrl());
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const signals = createPostgresRunSignalStore(testDatabaseUrl());
-  const mailbox = createSessionMailbox(testMap<SessionMessage>());
+  const mailbox = createSessionMailbox(testMap<SessionMessage>(["recipientId", "wake"]));
   const advisoryLock = testAdvisoryLock();
   const factory = createSessionSyscalls({
     mailbox,
@@ -992,7 +992,7 @@ test("the sweep wakes a top-level parent whose turn ended without waking it for 
     r.room.id,
     (await r.mailbox.pending(r.room.id)).map((mail) => mail.id),
   );
-  assert.deepEqual(await r.mailbox.awaitingWake(), []);
+  assert.deepEqual(await r.mailbox.claimAwaitingWake(), []);
 });
 
 test("a wake that found its parent busy starts one parent turn when that turn ends", async () => {
