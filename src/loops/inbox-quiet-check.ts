@@ -11,7 +11,7 @@ import { normalizeSlackApiUrl } from "../slack/config.ts";
 import { slackErrorCode } from "../slack/payloads.ts";
 import { errMessage } from "../util/errors.ts";
 
-export type InboxQuietVerdict = { quiet: true } | { quiet: false; reason: string };
+type InboxQuietVerdict = { quiet: true } | { quiet: false; reason: string };
 
 export type InboxQuietCheck = (loop: Loop, items: LoopItem[]) => Promise<InboxQuietVerdict>;
 
