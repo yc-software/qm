@@ -1,5 +1,12 @@
-import { createPgPool, withPgTransaction, type PgPool, type PoolClient } from "./pg-pool.ts";
+import {
+  createPgPool,
+  withPgTransaction,
+  type PgMigrationDefinition,
+  type PgPool,
+  type PoolClient,
+} from "./pg-pool.ts";
 import { jsonbStringify } from "../util/text.ts";
+import { tenantTables, type TenantTable, type TenantTableOptions } from "../tenants/migrations.ts";
 
 export interface DurableMapSelect<T, K extends Extract<keyof T, string>> {
   omit?: readonly K[];
@@ -30,11 +37,22 @@ export interface DurableMap<T> {
 
 const VERSIONS_TABLE = "durable_map_versions";
 
-export function createPostgresMap<T>(
-  pg: PgPool,
+const VERSIONS_TENANCY = tenantTables(`durable-map/${VERSIONS_TABLE}/0010-tenants`, [
+  { table: VERSIONS_TABLE, primaryKey: "tbl" },
+]);
+
+export function durableMapTenancy(
   table: string,
-  indexedFields: readonly Extract<keyof T, string>[] = [],
-): DurableMap<T> {
+  { tables = [], ...options }: TenantTableOptions & { tables?: readonly TenantTable[] } = {},
+): PgMigrationDefinition[] {
+  return tenantTables(`durable-map/${table}/0010-tenants`, [{ table, primaryKey: "id" }, ...tables], options);
+}
+
+function mapMigrations(
+  table: string,
+  indexedFields: readonly string[],
+  tenancy: readonly PgMigrationDefinition[],
+): PgMigrationDefinition[] {
   if (!/^[a-z_][a-z0-9_]*$/i.test(table)) throw new Error(`invalid table name: ${table}`);
   const migration = {
     id: `durable-map/${table}/0001`,
@@ -43,8 +61,10 @@ export function createPostgresMap<T>(
       `CREATE TABLE IF NOT EXISTS ${VERSIONS_TABLE} (tbl TEXT PRIMARY KEY, v BIGINT NOT NULL)`,
     ],
   };
-  const migrations = [
+  return [
     migration,
+    ...VERSIONS_TENANCY,
+    ...tenancy,
     ...indexedFields.flatMap((field) => {
       if (!/^[a-z_][a-z0-9_]*$/i.test(field)) throw new Error(`invalid index field: ${field}`);
       return [
@@ -79,6 +99,15 @@ export function createPostgresMap<T>(
       ];
     }),
   ];
+}
+
+export function createPostgresMap<T>(
+  pg: PgPool,
+  table: string,
+  indexedFields: readonly Extract<keyof T, string>[] = [],
+  tenancy: readonly PgMigrationDefinition[] = durableMapTenancy(table),
+): DurableMap<T> {
+  const migrations = mapMigrations(table, indexedFields, tenancy);
   for (const definition of migrations) pg.registerMigration(definition);
   let readyP: Promise<void> | null = null;
   function ready(): Promise<void> {
@@ -93,7 +122,7 @@ export function createPostgresMap<T>(
     return readyP;
   }
   const bumpSql = `INSERT INTO ${VERSIONS_TABLE} (tbl, v) VALUES ('${table}', 1)
-     ON CONFLICT (tbl) DO UPDATE SET v = ${VERSIONS_TABLE}.v + 1`;
+     ON CONFLICT (tenant_id, tbl) DO UPDATE SET v = ${VERSIONS_TABLE}.v + 1`;
   async function withBump<R>(fn: (client: PoolClient) => Promise<R>): Promise<R> {
     await ready();
     return withPgTransaction(await pg.pool(), async (client) => {
@@ -171,7 +200,7 @@ export function createPostgresMap<T>(
       await withBump((client) =>
         client.query(
           `INSERT INTO ${table} (id, json) VALUES ($1, $2)
-           ON CONFLICT (id) DO UPDATE SET json = EXCLUDED.json`,
+           ON CONFLICT (tenant_id, id) DO UPDATE SET json = EXCLUDED.json`,
           [id, jsonbStringify(value)],
         ),
       );
@@ -180,7 +209,7 @@ export function createPostgresMap<T>(
       const res = await withBump((client) =>
         client.query(
           `INSERT INTO ${table} (id, json) VALUES ($1, $2)
-           ON CONFLICT (id) DO UPDATE SET json = ${table}.json
+           ON CONFLICT (tenant_id, id) DO UPDATE SET json = ${table}.json
            RETURNING json`,
           [id, jsonbStringify(value)],
         ),
@@ -191,7 +220,7 @@ export function createPostgresMap<T>(
       const inserted = await withBump((client) =>
         client.query(
           `INSERT INTO ${table} (id, json) VALUES ($1, $2)
-           ON CONFLICT (id) DO NOTHING`,
+           ON CONFLICT (tenant_id, id) DO NOTHING`,
           [id, jsonbStringify(value)],
         ),
       );
@@ -235,7 +264,7 @@ export function createPostgresMap<T>(
         });
         await client.query(
           `INSERT INTO ${table} (id, json) SELECT id, json FROM jsonb_to_recordset($1::jsonb) AS batch(id text, json jsonb)
-           ON CONFLICT (id) DO UPDATE SET json = EXCLUDED.json`,
+           ON CONFLICT (tenant_id, id) DO UPDATE SET json = EXCLUDED.json`,
           [jsonbStringify([...pending].map(([id, json]) => ({ id, json })))],
         );
         return results;
@@ -260,15 +289,22 @@ export function createPostgresMap<T>(
 }
 
 export interface PostgresArtifactMaps {
-  map<T>(table: string, indexedFields?: readonly Extract<keyof T, string>[]): DurableMap<T>;
+  map<T>(
+    table: string,
+    indexedFields?: readonly Extract<keyof T, string>[],
+    tenancy?: readonly PgMigrationDefinition[],
+  ): DurableMap<T>;
   pool: PgPool;
 }
 
 export function createPostgresMapFactory(connectionString: string): PostgresArtifactMaps {
   const pg = createPgPool(connectionString);
   return {
-    map: <T>(table: string, indexedFields?: readonly Extract<keyof T, string>[]): DurableMap<T> =>
-      createPostgresMap<T>(pg, table, indexedFields),
+    map: <T>(
+      table: string,
+      indexedFields?: readonly Extract<keyof T, string>[],
+      tenancy?: readonly PgMigrationDefinition[],
+    ): DurableMap<T> => createPostgresMap<T>(pg, table, indexedFields, tenancy),
     pool: pg,
   };
 }
