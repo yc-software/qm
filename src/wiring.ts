@@ -309,6 +309,7 @@ import {
 import { createControlService } from "./api/control-service.ts";
 import { createPostgresRunStore } from "./runs/postgres-run-store.ts";
 import { withTenant } from "./tenants/context.ts";
+import { claimThenBind } from "./tenants/claim.ts";
 import type { RunSignalStore } from "./runs/run-signal-store.ts";
 import { createPostgresRunSignalStore } from "./runs/postgres-run-signal-store.ts";
 import { isTerminal, type Run, type RunStore } from "./runs/run-store.ts";
@@ -2469,11 +2470,11 @@ export function buildApp(
   );
   const orphanedSignalSweeper = createSweeper(
     async () => {
-      for (const runId of await runSignals.pendingRunIds()) {
+      await claimThenBind(runSignals.pendingRuns, async (runId) => {
         const run = await runs.get(runId);
         if (!run || isTerminal(run.status))
           await app.replayOrphanedRunSignals(runId).catch(swallowAs("sessions: recover signal", undefined));
-      }
+      });
       if (Date.now() - lastSignalPrune > 60 * 60_000) {
         lastSignalPrune = Date.now();
         await runSignals.prune(7 * 24 * 60 * 60_000);
