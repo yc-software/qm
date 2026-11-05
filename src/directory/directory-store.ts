@@ -84,6 +84,7 @@ export interface DirectoryStore {
   meta(): Promise<DirectoryMeta>;
   tenantsForEmail?(email: string): Promise<SignInTenant[]>;
   tenantsForPrincipal?(principal: string): Promise<SignInTenant[]>;
+  tenantForHost?(host: string): Promise<string | undefined>;
 }
 
 export const MAX_CANDIDATES = 10;

@@ -18,6 +18,9 @@ import { ADMIN_LOGIN_SCRIPT, ADMIN_LOGIN_SCRIPT_HASH, openAdminLogin } from "./a
 import { LRUCache } from "lru-cache";
 import { createCanonicalResolver, IdentityRejected } from "./canonical.ts";
 import { createTrustedEntry, trustedEntryConfig } from "./trusted-entry.ts";
+import { CARD_STYLE } from "./card-style.ts";
+import { coreHostTenant, createHostTenants, mappedHost, runOnHost, sessionOnHost } from "./host-tenant.ts";
+import { createHostRoutes } from "./host-routes.ts";
 import {
   coreEmailTenants,
   corePrincipalTenants,
@@ -235,6 +238,24 @@ const trustedEntry = trustedOidc
     )
   : null;
 const IMPERSONATE_TTL_S = Number(process.env.PORTAL_IMPERSONATE_TTL_S ?? 3600);
+const hostRoutes = createHostRoutes({
+  publicUrl: PUBLIC_URL,
+  appsDomain: APPS_DOMAIN,
+  lookup: createHostTenants(coreHostTenant(CORE, CORE_SIGNING_SECRET)),
+  handoffKey: deriveKey(SESSION_SECRET ?? DEV_SECRET, "portal.handoff.v1"),
+  claim: (jti) =>
+    claimOnce(coreClaimStore(CORE, CORE_SIGNING_SECRET, "portal"), `handoff:${jti}`, Date.now() + 120_000),
+  session: (req) => currentSession(req),
+  signOut: (res) => setSession(res, signedOutCookies()),
+  signIn: (res, who) => setAuthenticatedSession(res, who.sub, who.name, false, who.t),
+  page: (res, status, html) => sendHtml(res, status, html),
+  errorHtml: (detail) => signInErrorHtml(detail),
+  unavailable: (res) =>
+    json(res, 503, {
+      error: "unavailable",
+      message: "This workspace's address could not be checked. Try again shortly.",
+    }),
+});
 
 const TMP_TTL_S = 600;
 const LOCAL_LOGOUT_COOKIE = "portal_local_logout";
@@ -355,7 +376,7 @@ function sendHtml(res: ServerResponse, status: number, html: string, csp = PAGE_
   );
 }
 
-const sameOriginRequest = (req: IncomingMessage) => sameOriginFor(req, ORIGIN);
+const sameOriginRequest = (req: IncomingMessage) => sameOriginFor(req, mappedHost()?.origin ?? ORIGIN);
 
 function wantsHtml(req: IncomingMessage): boolean {
   const accept = req.headers.accept;
@@ -443,12 +464,13 @@ function localDevSession(req: IncomingMessage, nowMs = Date.now(), ignoreLogout 
 }
 
 function signedOutCookies(): string[] {
+  const domain = hostCookieDomain();
   return [
     clearCookie("portal_impersonate", "/", SECURE_COOKIES),
     clearCookie("portal_trusted_tmp", "/auth/trusted", SECURE_COOKIES),
-    clearCookie("portal_session", "/", SECURE_COOKIES, COOKIE_DOMAIN),
-    clearCookie(FRAME_SESSION_COOKIE, "/", SECURE_COOKIES, COOKIE_DOMAIN),
-    ...(COOKIE_DOMAIN
+    clearCookie("portal_session", "/", SECURE_COOKIES, domain),
+    clearCookie(FRAME_SESSION_COOKIE, "/", SECURE_COOKIES, domain),
+    ...(domain
       ? [clearCookie("portal_session", "/", SECURE_COOKIES), clearCookie(FRAME_SESSION_COOKIE, "/", SECURE_COOKIES)]
       : []),
   ];
@@ -462,64 +484,16 @@ function withoutSessionCookies(cookie: string | undefined): string | undefined {
 }
 
 function currentSession(req: IncomingMessage): SessionClaims | null {
+  const mapped = mappedHost();
+  if (mapped)
+    return sessionOnHost(req.headers.cookie, mapped.tenant, (value) =>
+      openSession(value, sessionKey, Date.now(), ORG, SESSION_MAX_TTL_S),
+    );
   return (
     openSession(readCookie(req.headers.cookie, "portal_session"), sessionKey, Date.now(), ORG, SESSION_MAX_TTL_S) ??
     localDevSession(req)
   );
 }
-
-const CARD_STYLE = `<style>
-  :root{
-    --bg:#ffffff; --surface:#ffffff; --text:#0a0a0a; --muted:#737373;
-    --border:#e5e5e5; --secondary:#f5f5f5; --warn:#b42318; --warn-bg:#fdeceb;
-    --radius-md:10px; --radius-lg:16px;
-  }
-  @media (prefers-color-scheme:dark){
-    :root{ --bg:#0a0a0a; --surface:#171717; --text:#fafafa; --muted:#a3a3a3;
-      --border:#2a2a2a; --secondary:#262626; --warn:#ff8a80; --warn-bg:#2a1a1a; }
-  }
-  *{ box-sizing:border-box; }
-  html,body{ height:100%; }
-  body{
-    margin:0; background:var(--bg); color:var(--text); display:flex; min-height:100%;
-    font:14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    -webkit-font-smoothing:antialiased;
-  }
-  main{ margin:auto; padding:32px 20px; width:100%; display:grid; place-items:center; }
-  .card{
-    width:100%; max-width:420px; background:var(--surface); border:1px solid var(--border);
-    border-radius:var(--radius-lg); padding:34px 32px 30px; text-align:center;
-  }
-  .card.wide{ max-width:440px; }
-  .icon{ width:52px; height:52px; margin:0 auto 18px; border-radius:var(--radius-md); background:var(--secondary);
-    display:grid; place-items:center; }
-  .icon svg{ width:26px; height:26px; stroke:var(--text); fill:none; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
-  .icon.warn{ background:var(--warn-bg); }
-  .icon.warn svg{ stroke:var(--warn); stroke-width:2; }
-  h1{ font-size:20px; font-weight:600; letter-spacing:0; margin:0 0 8px; }
-  .msg{ color:var(--muted); margin:0 auto 8px; max-width:40ch; font-size:14px; }
-  .reason{ margin:16px auto 26px; font-size:13px; color:var(--text);
-    background:var(--warn-bg); border:1px solid var(--border); border-radius:var(--radius-md); padding:11px 14px;
-    text-align:left; word-break:break-word; }
-  .reason strong{ display:block; color:var(--warn); font-size:11px; margin-bottom:3px; }
-  .note{ margin:18px auto 26px; font-size:13px; color:var(--text); background:var(--secondary);
-    border:1px solid var(--border); border-radius:var(--radius-md); padding:12px 14px; text-align:left; }
-  .note .who{ display:flex; align-items:center; gap:8px; color:var(--muted); }
-  .note .who b{ color:var(--text); }
-  .note p{ margin:8px 0 0; color:var(--muted); }
-  .actions{ display:grid; gap:10px; }
-  .actions form{ display:grid; margin:0; }
-  .btn{ display:flex; align-items:center; justify-content:center; min-height:44px; padding:0 18px;
-    text-decoration:none; font-weight:600; font-size:14px; border-radius:var(--radius-md); cursor:pointer;
-    transition:opacity .12s ease, background .12s ease, color .12s ease; }
-  .btn.primary{ background:var(--text); color:var(--bg); border:1px solid var(--text); }
-  .btn.primary:hover{ opacity:.9; }
-  .btn.ghost{ background:none; color:var(--muted); border:1px solid var(--border); }
-  .btn.ghost:hover{ background:var(--secondary); color:var(--text); }
-  .btn:focus-visible{ outline:2px solid color-mix(in srgb, var(--text) 35%, transparent); outline-offset:2px; }
-  .help{ color:var(--muted); font-size:12.5px; margin:20px 0 0; }
-  @media (prefers-reduced-motion:reduce){ *{ transition:none !important; } }
-</style>`;
 
 const ALERT_ICON = `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5M12 16h.01"/></svg>`;
 const LOCK_ICON = `<svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>`;
@@ -830,13 +804,14 @@ function loginProviderCookie(sub: string): string[] {
 }
 
 const FRAME_SESSION_COOKIE = "portal_session_x";
+const hostCookieDomain = () => (mappedHost() ? undefined : COOKIE_DOMAIN);
 
 function sessionCookieSet(value: string, sub: string): string[] {
   const attrs = {
     path: "/",
     maxAge: SESSION_TTL_S,
     secure: SECURE_COOKIES,
-    ...(COOKIE_DOMAIN ? { domain: COOKIE_DOMAIN } : {}),
+    ...(hostCookieDomain() ? { domain: hostCookieDomain() } : {}),
   };
   return [...sessionCookieHeaders(value, attrs), ...loginProviderCookie(sub)];
 }
@@ -915,13 +890,9 @@ async function mintPlaygroundSession(req: IncomingMessage, res: ServerResponse):
 }
 
 function renewSessionCookie(req: IncomingMessage, res: ServerResponse): SessionClaims | null {
-  const session = openSession(
-    readCookie(req.headers.cookie, "portal_session"),
-    sessionKey,
-    Date.now(),
-    ORG,
-    SESSION_MAX_TTL_S,
-  );
+  const session = mappedHost()
+    ? currentSession(req)
+    : openSession(readCookie(req.headers.cookie, "portal_session"), sessionKey, Date.now(), ORG, SESSION_MAX_TTL_S);
   if (!session) return null;
   if (session.appOnly) return session;
   const now = Math.floor(Date.now() / 1000);
@@ -949,13 +920,16 @@ const server = createServer((req, res) => {
         Math.round(performance.now() - startedAt),
       );
   });
-  void handle(req, res).catch((err: unknown) => {
-    errorLogged = true;
-    reportBackendError(err);
-    console.error("[portal] 500 %s %s: %s", req.method ?? "?", (req.url ?? "?").split("?")[0], String(err));
-    if (!res.headersSent) json(res, 500, { error: "internal_error" });
-    else res.end();
-  });
+  void hostRoutes
+    .resolve(req, res)
+    .then((mapped) => (mapped === null ? undefined : runOnHost(mapped, () => handle(req, res))))
+    .catch((err: unknown) => {
+      errorLogged = true;
+      reportBackendError(err);
+      console.error("[portal] 500 %s %s: %s", req.method ?? "?", (req.url ?? "?").split("?")[0], String(err));
+      if (!res.headersSent) json(res, 500, { error: "internal_error" });
+      else res.end();
+    });
 });
 
 async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -1006,6 +980,14 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     );
   }
 
+  const mapped = mappedHost();
+  if (
+    mapped &&
+    (pathname.startsWith("/auth/") || brokerPath !== null) &&
+    (await hostRoutes.mapped(req, res, url, mapped))
+  )
+    return;
+  if (pathname === "/auth/host" && method === "GET") return hostRoutes.handoff(req, res, url);
   if (pathname === "/auth/login" && method === "GET") return authLogin(req, res, url);
   if (pathname === "/auth/callback" && method === "GET") return authCallback(req, res, url);
   if (pathname === "/auth/tenant" && method === "POST") return authTenant(req, res);
@@ -1614,8 +1596,11 @@ async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL):
       : await corePrincipalTenants(CORE, CORE_SIGNING_SECRET, identity.sub);
     if (found.shared && !found.tenants.length) return sendHtml(res, 400, signInErrorHtml("account is not permitted"));
     const who = { sub: identity.sub, name: identity.name };
-    if (found.tenants.length > 1) return chooseTenant(res, { trusted: who }, identity.returnTo, found.tenants);
-    finishTrustedSignIn(res, who, identity.returnTo, found.tenants[0]?.id);
+    const pin = await hostRoutes.pin(identity.returnTo);
+    if (pin !== undefined && !found.tenants.some(({ id }) => id === pin)) return sendHtml(res, 403, noAccessHtml());
+    if (pin === undefined && found.tenants.length > 1)
+      return chooseTenant(res, { trusted: who }, identity.returnTo, found.tenants);
+    finishTrustedSignIn(res, who, identity.returnTo, pin ?? found.tenants[0]?.id);
   } catch (error) {
     console.warn(`[portal] trusted sign-in failed: ${errMessage(error)}`);
     sendHtml(
@@ -1624,6 +1609,17 @@ async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL):
       signInErrorHtml("Trusted sign-in failed. Please start again from your provider.", "/auth/trusted/login"),
     );
   }
+}
+
+function noAccessHtml(): string {
+  return cardPage({
+    title: "No access",
+    heading: "No access to this workspace",
+    msg: "You signed in, but this account isn't a member of this workspace.",
+    icon: LOCK_ICON,
+    actions: `<a class="btn primary" href="/auth/login">Sign in with a different account</a>`,
+    help: "Ask an admin of this workspace to add you.",
+  });
 }
 
 function setAuthenticatedSession(res: ServerResponse, sub: string, name = "", appOnly = false, tenant?: string): void {
@@ -1727,8 +1723,10 @@ async function authCallback(req: IncomingMessage, res: ServerResponse, url: URL)
   } catch (e) {
     return fail(errMessage(e, "sign-in failed"));
   }
-  if (tenants.length > 1) return chooseTenant(res, { signIn }, tmp.returnTo, tenants);
-  return finishSignIn(res, signIn, tmp.returnTo, tenants[0]?.id);
+  const pin = await hostRoutes.pin(tmp.returnTo);
+  if (pin !== undefined && !tenants.some(({ id }) => id === pin)) return sendHtml(res, 403, noAccessHtml());
+  if (pin === undefined && tenants.length > 1) return chooseTenant(res, { signIn }, tmp.returnTo, tenants);
+  return finishSignIn(res, signIn, tmp.returnTo, pin ?? tenants[0]?.id);
 }
 
 function chooseTenant(

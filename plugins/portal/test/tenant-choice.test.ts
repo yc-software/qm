@@ -1,7 +1,7 @@
 import test from "node:test";
 import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
-import { createServer } from "node:http";
+import { createServer, request } from "node:http";
 import type { AddressInfo } from "node:net";
 import { generateKeyPair, exportJWK, SignJWT } from "jose";
 import { deriveKey, open, seal, readCookie } from "../src/session.ts";
@@ -25,6 +25,7 @@ let email: string | null = "founder@company.test";
 let principalTenants: unknown[] = [];
 let canonicalStatus = 200;
 const principalLookups: string[] = [];
+const claimed = new Set<string>();
 const admissions: Array<string | undefined> = [];
 const surface: Array<string | undefined> = [];
 const coreCalls: Array<{ path: string; tenant: string | undefined }> = [];
@@ -63,9 +64,18 @@ const upstream = createServer((req, res) => {
     if (path === "/v1/auth/broker/claim") {
       let raw = "";
       for await (const chunk of req) raw += String(chunk);
-      return void res.end(JSON.stringify({ claimed: (JSON.parse(raw) as { ids: string[] }).ids[0] }));
+      const id = (JSON.parse(raw) as { ids: string[] }).ids[0]!;
+      const fresh = !claimed.has(id);
+      claimed.add(id);
+      return void res.end(JSON.stringify({ claimed: fresh ? id : null }));
     }
     if (path === "/v1/auth/broker/email-tenants") return void res.end(JSON.stringify({ tenants, shared }));
+    if (path === "/v1/auth/broker/host-tenant") {
+      const host = new URL(req.url!, origin).searchParams.get("host");
+      return void res.end(
+        JSON.stringify({ tenant: ({ "a.test": alpha, "b.test": beta } as Record<string, string>)[host!] ?? null }),
+      );
+    }
     if (path === "/v1/auth/broker/email-allowed") {
       admissions.push(identityTenant(req.headers["x-portal-identity"]));
       return void res.end(JSON.stringify({ allowed: true }));
@@ -368,4 +378,104 @@ test("a trusted callback with a stale login cookie fails, and its retry link sta
   assert.equal(restarted.status, 302);
   assert.match(restarted.headers.get("location") ?? "", /\/authorize\?/);
   assert.ok(cookieFrom(restarted, "portal_trusted_tmp"));
+});
+
+interface HostResponse {
+  status: number;
+  location: string;
+  cookies: string[];
+  body: string;
+}
+
+function onHost(host: string, path: string, cookie = "", accept = "text/html"): Promise<HostResponse> {
+  return new Promise((resolve, reject) => {
+    const { port } = new URL(base);
+    const req = request(
+      { host: "127.0.0.1", port, path, headers: { host, accept, ...(cookie ? { cookie } : {}) } },
+      (res) => {
+        let body = "";
+        res.on("data", (chunk) => (body += String(chunk)));
+        res.on("end", () =>
+          resolve({
+            status: res.statusCode ?? 0,
+            location: String(res.headers.location ?? ""),
+            cookies: res.headers["set-cookie"] ?? [],
+            body,
+          }),
+        );
+      },
+    );
+    req.on("error", reject);
+    req.end();
+  });
+}
+
+function sessionCookie(tenant: string, sub = "founder@company.test"): string {
+  const now = Math.floor(Date.now() / 1000);
+  return `portal_session=${seal({ k: "session", sub, org: "acme", auth: now, iat: now, exp: now + 600, t: tenant }, sessionKey)}`;
+}
+
+const pair = (cookies: string[], name: string) =>
+  cookies.find((c) => c.startsWith(`${name}=`) && !c.startsWith(`${name}=;`))?.split(";")[0];
+
+async function signInThroughSharedHost(to: string): Promise<HostResponse> {
+  const start = await onHost("portal.test", `/auth/host?to=${encodeURIComponent(to)}`);
+  assert.equal(start.status, 302);
+  assert.match(start.location, /^\/auth\/login\?returnTo=%2Fauth%2Fhost/);
+  const login = await onHost("portal.test", start.location);
+  const tmpCookie = pair(login.cookies, "portal_oidc_tmp")!;
+  const tmp = open(readCookie(tmpCookie, "portal_oidc_tmp"), tmpKey)!;
+  nonce = tmp.nonce as string;
+  return onHost("portal.test", `/auth/callback?code=test&state=${tmp.state as string}`, tmpCookie);
+}
+
+test("a company's own hostname signs in to that company only, with no chooser, through a one-time handoff", async () => {
+  tenants = [{ id: alpha }, { id: beta }];
+  const anon = await onHost("a.test", "/");
+  assert.equal(anon.status, 302);
+  const login = await onHost("a.test", anon.location);
+  assert.equal(login.location, `${origin}/auth/host?to=${encodeURIComponent("http://a.test/")}`);
+  const signedIn = await signInThroughSharedHost("http://a.test/inbox?x=1");
+  assert.equal(signedIn.status, 302);
+  const shared = pair(signedIn.cookies, "portal_session")!;
+  assert.equal(open(readCookie(shared, "portal_session"), sessionKey)?.t, alpha);
+  const out = await onHost("portal.test", signedIn.location, shared);
+  assert.equal(out.status, 302);
+  assert.match(out.location, /^http:\/\/a\.test\/auth\/handoff\?token=/);
+  const handoffPath = out.location.slice("http://a.test".length);
+  const elsewhere = await onHost("b.test", handoffPath);
+  assert.equal(elsewhere.status, 400);
+  const landed = await onHost("a.test", handoffPath);
+  assert.equal(landed.status, 302);
+  assert.equal(landed.location, "/inbox?x=1");
+  const hostCookie = landed.cookies.find((c) => c.startsWith("portal_session=") && !c.startsWith("portal_session=;"))!;
+  assert.doesNotMatch(hostCookie, /domain=/i);
+  assert.equal(open(readCookie(hostCookie.split(";")[0], "portal_session"), sessionKey)?.t, alpha);
+  assert.equal((await onHost("a.test", handoffPath)).status, 400);
+  surface.length = 0;
+  const home = await onHost("a.test", "/", hostCookie.split(";")[0]);
+  assert.notEqual(home.status, 302);
+  assert.equal(surface.at(-1), alpha);
+});
+
+test("a company's hostname never accepts another company's session, even alongside its own", async () => {
+  const refused = await onHost("a.test", "/", sessionCookie(beta));
+  assert.equal(refused.status, 302);
+  assert.match(refused.location, /^\/auth\/login/);
+  const api = await onHost("a.test", "/api/sessions", sessionCookie(beta), "application/json");
+  assert.equal(api.status, 401);
+  surface.length = 0;
+  const both = await onHost("b.test", "/", `${sessionCookie(alpha)}; ${sessionCookie(beta)}`);
+  assert.notEqual(both.status, 302);
+  assert.equal(surface.at(-1), beta);
+  for (const path of ["/auth/callback?code=x&state=y", "/auth/trusted/callback?code=x&state=y", "/auth/invite"])
+    assert.equal((await onHost("a.test", path)).status, 404);
+});
+
+test("signing in for a company's hostname with an account outside it shows no access and starts no session", async () => {
+  tenants = [{ id: beta }];
+  const denied = await signInThroughSharedHost("http://a.test/");
+  assert.equal(denied.status, 403);
+  assert.match(denied.body, /No access to this workspace/);
+  assert.equal(pair(denied.cookies, "portal_session"), undefined);
 });

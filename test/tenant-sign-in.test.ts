@@ -92,6 +92,7 @@ function start(identity: IdentityService, tenants: DirectoryStore["tenantsForEma
     directory: {
       tenantsForEmail: tenants,
       tenantsForPrincipal: (principal: string) => directory.tenantsForPrincipal!(principal),
+      tenantForHost: (host: string) => directory.tenantForHost!(host),
     } as unknown as DirectoryStore,
   });
   server.listen(0);
@@ -218,4 +219,28 @@ test("on a shared host the directory, not the install allowlist, permits email s
       IDENTITY_SECRET,
     );
     assert.equal((await srv.get(canonical, { "x-portal-identity": asBeta })).status, 200);
+  }));
+
+test("a company's hostname maps to exactly that company through the broker route, and only its own tenant reads the row", (t) =>
+  withoutTenant(async () => {
+    const srv = start(identityAdmitting(undefined, []), async () => []);
+    t.after(srv.close);
+    await owner.q(
+      "INSERT INTO tenant_hosts(host, tenant_id) VALUES ('alpha.company.test', $1), ('beta.company.test', $2)",
+      [alpha, beta],
+    );
+    await assert.rejects(
+      owner.q("INSERT INTO tenant_hosts(host, tenant_id) VALUES ('alpha.company.test', $1)", [beta]),
+    );
+    await assert.rejects(
+      owner.q("INSERT INTO tenant_hosts(host, tenant_id) VALUES ('Upper.company.test', $1)", [beta]),
+    );
+    const hostOf = async (host: string) =>
+      (await srv.get(`/v1/auth/broker/host-tenant?host=${encodeURIComponent(host)}`)).body.tenant;
+    assert.equal(await hostOf("alpha.company.test"), alpha);
+    assert.equal(await hostOf("BETA.company.test"), beta);
+    assert.equal(await hostOf("gamma.company.test"), null);
+    const app = createPgPool(appUrl(databaseUrl).toString());
+    t.after(() => app.close());
+    await assert.rejects(app.q("SELECT host FROM tenant_hosts"), /No tenant is bound/);
   }));

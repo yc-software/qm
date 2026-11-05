@@ -130,6 +130,13 @@ async function principalTenants(ctx: ApiCtx): Promise<void> {
   });
 }
 
+async function hostTenant(ctx: ApiCtx): Promise<void> {
+  const host = (ctx.url.searchParams.get("host") ?? "").trim().toLowerCase();
+  if (!host || host.length > 253) return sendJson(ctx.res, 400, { error: "bad_request", message: "host required" });
+  const tenant = await ctx.deps.directory?.tenantForHost?.(host);
+  return sendJson(ctx.res, 200, { tenant: tenant ?? null });
+}
+
 async function brokerSession(ctx: ApiCtx): Promise<void> {
   const { res, deps, body } = ctx;
   if (!deps.brokerSessions) return sendJson(res, 503, { error: "not_configured" });
@@ -316,4 +323,5 @@ export const authBrokerRoutes: ReadonlyArray<Route<ApiCtx>> = [
     tenant: "none",
     handle: principalTenants,
   },
+  { method: "GET", path: "/v1/auth/broker/host-tenant", auth: "source", tenant: "none", handle: hostTenant },
 ];

@@ -244,6 +244,11 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       return branded(rows);
     },
 
+    async tenantForHost(host) {
+      const rows = await q("SELECT qm_tenant_for_host($1)::text AS id", [host]);
+      return typeof rows[0]?.id === "string" ? rows[0].id : undefined;
+    },
+
     async channelMember(channelId, principalId) {
       const rows = await q(
         `SELECT 1 FROM directory_channel_members member
