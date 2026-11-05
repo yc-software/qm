@@ -2,13 +2,13 @@ import type { MemoryEmbedder } from "../model/embeddings.ts";
 import type { LeaderLease } from "../persistence/leader-lease.ts";
 import { reportFailure } from "../util/errors.ts";
 import type { createSweeper } from "../util/sweeper.ts";
-import type { MemoryService } from "./memory-service.ts";
+import { createNearDuplicateFinder } from "./near-duplicates.ts";
+import { createPostgresMemoryService } from "./postgres-memory-service.ts";
 import { createPostgresVectorStore, type MemoryVectorStore } from "./postgres-vector-store.ts";
 import { createSemanticMemoryService } from "./semantic-recall.ts";
 import { createMemoryVectorIndexer } from "./vector-indexer.ts";
 
 export function createSemanticMemory(opts: {
-  notebook: MemoryService;
   databaseUrl: string;
   embeddingModel: () => Promise<string | null | undefined>;
   resolveEmbedder: (id: string) => Promise<MemoryEmbedder>;
@@ -24,8 +24,12 @@ export function createSemanticMemory(opts: {
     store ??= createPostgresVectorStore(databaseUrl);
     return { embedder, store };
   };
+  const notebook = createPostgresMemoryService(
+    databaseUrl,
+    createNearDuplicateFinder(resolve, (error) => reportFailure("memory near-duplicate check; storing as new", error)),
+  );
   const memory = createSemanticMemoryService(
-    opts.notebook,
+    notebook,
     async () => (await resolve())?.embedder,
     { search: (input) => store!.search(input) },
     { onError: (error) => reportFailure("memory semantic recall; using recent facts", error) },

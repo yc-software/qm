@@ -1,7 +1,12 @@
 import type { PoolClient } from "pg";
 import type { ScopeId } from "../types.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
-import { createNotebookMemory, type FactStoreTx, type MemoryService } from "./memory-service.ts";
+import {
+  createNotebookMemory,
+  type FactStoreTx,
+  type FindNearDuplicates,
+  type MemoryService,
+} from "./memory-service.ts";
 import { isMemorySensitivity, type MemoryFact } from "./facts.ts";
 
 const SCHEMA = [
@@ -105,18 +110,22 @@ export const MEMORY_FACTS_MIGRATIONS = [
   },
 ];
 
-export function createPostgresMemoryService(connectionString: string): MemoryService {
+export function createPostgresMemoryService(
+  connectionString: string,
+  findNearDuplicates?: FindNearDuplicates,
+): MemoryService {
   const { q, pool } = createPgPool(connectionString, MEMORY_FACTS_MIGRATIONS);
 
   function tx(client: PoolClient, scopeId: ScopeId): FactStoreTx {
     return {
       list: async () => (await client.query(LIVE, [scopeId])).rows.map(fact),
       async insert(f) {
-        await client.query(
+        const { rows } = await client.query(
           `INSERT INTO memory_facts(scope_id, text, sensitivity, sources, source_unknown, author, created_at, updated_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
           [scopeId, f.text, f.sensitivity, f.sources, f.sourceUnknown, f.author ?? null, f.createdAt, f.updatedAt],
         );
+        return String(rows[0].id);
       },
       async update(id, patch, at) {
         await client.query(
@@ -144,6 +153,7 @@ export function createPostgresMemoryService(connectionString: string): MemorySer
   }
 
   return createNotebookMemory({
+    findNearDuplicates,
     list: async (scopeId) => (await q(LIVE, [scopeId])).map(fact),
     transact: async (scopeId, fn) =>
       withPgTransaction(await pool(), async (client) => {

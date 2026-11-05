@@ -187,7 +187,6 @@ import {
 import type { DeployGitArchive } from "./deploy/deploy-git-store.ts";
 import type { MemoryService } from "./memory/memory-service.ts";
 import { createConfiguredMemoryService } from "./memory/provider-factory.ts";
-import { createPostgresMemoryService } from "./memory/postgres-memory-service.ts";
 import { createMcpServerStore, type McpServer, type McpServerStore } from "./mcp/mcp-server-store.ts";
 import { createMcpToolService, type McpToolService } from "./mcp/mcp-tool-service.ts";
 import {
@@ -756,9 +755,7 @@ export function buildApp(
           files,
         })
       : undefined;
-  const notebookMemory: MemoryService = createPostgresMemoryService(databaseUrl);
   const semanticMemory = createSemanticMemory({
-    notebook: notebookMemory,
     databaseUrl,
     embeddingModel: () => configStore.getEmbeddingModelDurable(),
     resolveEmbedder: (id) => resolveMemoryEmbedder(id),

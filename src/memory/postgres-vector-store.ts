@@ -26,6 +26,12 @@ interface MemoryVectorSearch {
 
 export interface MemoryVectorStore {
   search(input: MemoryVectorSearch): Promise<MemoryVectorMatch[]>;
+  nearest(input: {
+    scope: string;
+    model: string;
+    vectors: readonly number[][];
+    minSimilarity: number;
+  }): Promise<(string | undefined)[]>;
   put(rows: readonly MemoryVector[], signal?: AbortSignal): Promise<void>;
   missing(
     model: string,
@@ -98,6 +104,33 @@ export function createPostgresVectorStore(connectionString: string): MemoryVecto
         updatedAt: Number(row.updated_at),
         score: 1 - Number(row.distance),
       }));
+    },
+    async nearest(input) {
+      if (!input.vectors.length) return [];
+      const rows = await db.q(
+        `WITH input AS MATERIALIZED (
+          SELECT ord::int - 1 AS line, value::text::vector AS embedding
+          FROM jsonb_array_elements($3::jsonb) WITH ORDINALITY AS x(value, ord)
+        )
+        SELECT DISTINCT ON (i.line) i.line, v.fact_id
+        FROM memory_fact_vectors v
+        JOIN memory_facts f ON f.scope_id = v.scope_id AND f.id = v.fact_id
+          AND f.deleted_at IS NULL AND f.text_hash = v.fact_hash
+        CROSS JOIN input i
+        WHERE v.scope_id = $1 AND v.model = $2 AND v.dimensions = $4 AND v.embedding <=> i.embedding <= $5
+        ORDER BY i.line, v.embedding <=> i.embedding, v.fact_id DESC`,
+        [
+          input.scope,
+          input.model,
+          JSON.stringify(input.vectors.map(unitVector)),
+          input.vectors[0]!.length,
+          1 - input.minSimilarity,
+        ],
+        { timeoutMs: 5000 },
+      );
+      const nearest: (string | undefined)[] = input.vectors.map(() => undefined);
+      for (const row of rows) nearest[Number(row.line)] = String(row.fact_id);
+      return nearest;
     },
     async put(rows, signal) {
       if (!rows.length) return;

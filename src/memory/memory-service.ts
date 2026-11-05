@@ -102,15 +102,6 @@ function editedText(text: string): string {
     .replace(/^\(\d{4}-\d\d-\d\d\)\s*/, "");
 }
 
-function sameProvenance(a: MemoryProvenance, b: MemoryProvenance): boolean {
-  return (
-    a.sensitivity === b.sensitivity &&
-    a.sourceUnknown === b.sourceUnknown &&
-    a.sources.length === b.sources.length &&
-    a.sources.every((source) => b.sources.includes(source))
-  );
-}
-
 function resolveIds(facts: readonly MemoryFact[], ids: readonly string[]): MemoryFact[] {
   const byId = new Map(facts.map((fact) => [fact.id, fact]));
   const wanted = ids.map(parseFactId);
@@ -119,9 +110,18 @@ function resolveIds(facts: readonly MemoryFact[], ids: readonly string[]): Memor
   return wanted.map((id) => byId.get(id)!);
 }
 
+export type NearDuplicate = { factId: string } | { line: number };
+
+export interface NearDuplicates {
+  matches: readonly (NearDuplicate | undefined)[];
+  index(written: readonly { id: string; line: number }[]): Promise<void>;
+}
+
+export type FindNearDuplicates = (scopeId: ScopeId, texts: readonly string[]) => Promise<NearDuplicates | undefined>;
+
 export interface FactStoreTx {
   list(): Promise<MemoryFact[]>;
-  insert(fact: Omit<MemoryFact, "id">): Promise<void>;
+  insert(fact: Omit<MemoryFact, "id">): Promise<string>;
   update(id: string, patch: Partial<Pick<MemoryFact, "text" | keyof MemoryProvenance>>, at: number): Promise<void>;
   remove(ids: readonly string[], at: number): Promise<void>;
 }
@@ -129,6 +129,7 @@ export interface FactStoreTx {
 export interface FactStore {
   list(scopeId: ScopeId): Promise<MemoryFact[]>;
   transact<T>(scopeId: ScopeId, fn: (tx: FactStoreTx) => Promise<T>): Promise<T>;
+  findNearDuplicates?: FindNearDuplicates;
   metadata?(): Promise<Map<ScopeId, { bytes: number; updatedAt?: number }>>;
 }
 
@@ -142,27 +143,49 @@ export function createNotebookMemory(store: FactStore): MemoryService {
       const lines = cleanCapturedFacts(facts);
       if (!lines.length) return 0;
       const provenance = captureProvenance(scopeId, context);
-      return store.transact(scopeId, async (tx) => {
-        const existing = new Map((await tx.list()).map((fact) => [normalize(fact.text), fact]));
+      const near = await store.findNearDuplicates?.(scopeId, lines);
+      const written: { id: string; line: number }[] = [];
+      let nearHits = 0;
+      const added = await store.transact(scopeId, async (tx) => {
+        const live = await tx.list();
+        const byText = new Map(live.map((fact) => [normalize(fact.text), fact]));
+        const byId = new Map(live.map((fact) => [fact.id, fact]));
         let added = 0;
-        for (const text of lines) {
-          const key = normalize(text);
-          const duplicate = existing.get(key);
+        for (const [line, text] of lines.entries()) {
+          const match = near?.matches[line];
+          const exact = byText.get(normalize(text));
+          const similar = !exact && match && "factId" in match ? byId.get(match.factId) : undefined;
+          if (!exact && !similar && match && "line" in match) {
+            nearHits++;
+            continue;
+          }
+          if (similar) nearHits++;
+          const duplicate = exact ?? similar;
           if (duplicate) {
-            const merged = mergeProvenance([duplicate, provenance], duplicate.sensitivity);
-            if (!sameProvenance(merged, duplicate)) {
-              await tx.update(duplicate.id, merged, at);
-              existing.set(key, { ...duplicate, ...merged });
-            }
+            const patch = {
+              ...mergeProvenance([duplicate, provenance], duplicate.sensitivity),
+              text: similar ? text : duplicate.text,
+            };
+            await tx.update(duplicate.id, patch, at);
+            const kept = { ...duplicate, ...patch };
+            byText.delete(normalize(duplicate.text));
+            byText.set(normalize(text), kept);
+            byId.set(kept.id, kept);
+            if (similar) written.push({ id: kept.id, line });
             continue;
           }
           const fact = { text, ...provenance, ...(author ? { author } : {}), createdAt: at, updatedAt: at };
-          await tx.insert(fact);
-          existing.set(key, { ...fact, id: "" });
+          const id = await tx.insert(fact);
+          byText.set(normalize(text), { ...fact, id });
+          written.push({ id, line });
           added++;
         }
         return added;
       });
+      if (nearHits)
+        console.log(`[memory] near-duplicate facts merged scope=${scopeId} merged=${nearHits} added=${added}`);
+      await near?.index(written);
+      return added;
     },
 
     async query(scopeId, q, limit = 20) {

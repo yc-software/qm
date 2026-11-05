@@ -6,6 +6,7 @@ import { createPostgresMemoryService } from "../src/memory/postgres-memory-servi
 import { createPostgresVectorStore, type MemoryVectorStore } from "../src/memory/postgres-vector-store.ts";
 import { createSemanticMemoryService } from "../src/memory/semantic-recall.ts";
 import { factHash, type MemoryFact } from "../src/memory/facts.ts";
+import { createNearDuplicateFinder } from "../src/memory/near-duplicates.ts";
 
 const url = process.env.DATABASE_URL;
 const ids = (facts: readonly MemoryFact[]) => facts.map((fact) => fact.id);
@@ -262,3 +263,87 @@ test(
     );
   },
 );
+
+test("capture folds near-duplicates into the stored fact and indexes what it wrote", { skip: !url }, async (t) => {
+  const scope = `personal:near-${randomUUID()}`;
+  const model = `near-${randomUUID()}`;
+  const angle: Record<string, number> = {
+    "Works on branch feature/sketch": 0,
+    "Working on the feature/sketch branch": 10,
+    "Prefers dark mode": 90,
+    "Prefers dark mode in the web UI": 95,
+    "Lives in Oakland": 180,
+    "Uses Firefox": 270,
+  };
+  const vector = (text: string) => [Math.cos((angle[text]! * Math.PI) / 180), Math.sin((angle[text]! * Math.PI) / 180)];
+  let up = true;
+  const index = createPostgresVectorStore(url!);
+  const client = new pg.Client({ connectionString: url! });
+  await client.connect();
+  t.after(async () => {
+    await client.end();
+    await index.close();
+  });
+  const errors: unknown[] = [];
+  const base = createPostgresMemoryService(
+    url!,
+    createNearDuplicateFinder(
+      async () => ({
+        store: index,
+        embedder: {
+          id: model,
+          async embed(texts) {
+            if (!up) throw new Error("embedding provider down");
+            return texts.map(vector);
+          },
+        },
+      }),
+      (error) => errors.push(error),
+    ),
+  );
+  const texts = async () => (await base.facts!(scope)).map((fact) => fact.text);
+
+  assert.equal(await base.capture(scope, ["Works on branch feature/sketch", "Lives in Oakland"], 1000), 2);
+  const [branch, home] = await base.facts!(scope);
+  assert.equal((await index.missing(model, 256)).filter((row) => row.scope === scope).length, 0);
+
+  assert.equal(
+    await base.capture(
+      scope,
+      ["Working on the feature/sketch branch", "Prefers dark mode", "Prefers dark mode in the web UI"],
+      2000,
+      undefined,
+      { mode: "automatic", conversationScopeId: "channel:C9", sensitivity: "sensitive", inheritedFacts: [] },
+    ),
+    1,
+  );
+  const facts = await base.facts!(scope);
+  assert.deepEqual(
+    facts.map((fact) => fact.text),
+    ["Working on the feature/sketch branch", "Lives in Oakland", "Prefers dark mode"],
+  );
+  assert.equal(facts[0]!.id, branch!.id);
+  assert.equal(facts[0]!.createdAt, 1000);
+  assert.equal(facts[0]!.updatedAt, 2000);
+  assert.equal(facts[0]!.sensitivity, "sensitive");
+  assert.deepEqual(facts[0]!.sources, [scope, "channel:C9"]);
+  assert.deepEqual(facts[1], home);
+  assert.deepEqual(
+    (await storedVectors(client, scope, model)).map((row) => [row.fact_id, row.fact_hash]),
+    facts.map((fact) => [fact.id, factHash(fact.text)]),
+  );
+
+  await base.delete!(scope, [home!.id]);
+  assert.equal(await base.capture(scope, ["Lives in Oakland"], 3000), 1);
+
+  up = false;
+  assert.equal(await base.capture(scope, ["Prefers dark mode in the web UI", "Uses Firefox"], 4000), 2);
+  assert.equal(errors.length, 1);
+  assert.deepEqual(await texts(), [
+    "Working on the feature/sketch branch",
+    "Prefers dark mode",
+    "Lives in Oakland",
+    "Prefers dark mode in the web UI",
+    "Uses Firefox",
+  ]);
+});
