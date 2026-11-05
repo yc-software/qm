@@ -789,6 +789,13 @@ function reportSigninRequired(detail: SigninRequired): void {
   onSigninRequired?.(detail);
 }
 
+let bootRelease: string | null = null;
+let servedRelease: string | null = null;
+
+export function servedReleaseChanged(): boolean {
+  return servedRelease !== bootRelease;
+}
+
 export async function webFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const startMs = Date.now();
   const request = input instanceof Request ? input : null;
@@ -802,6 +809,11 @@ export async function webFetch(input: RequestInfo | URL, init?: RequestInit): Pr
     throw error;
   }
   reportRequestTiming(url, method, startMs, response.status);
+  const release = response.headers.get("x-qm-release");
+  if (release) {
+    bootRelease ??= release;
+    servedRelease = release;
+  }
   if (response.status !== 401) return response;
   stopBrowserErrors();
   stopAnalytics();

@@ -18,8 +18,8 @@ async function declaredSurface(): Promise<string | null> {
   let declared: string | null = null;
   globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
     declared = new Headers(init?.headers).get("x-qm-client");
-    return { ok: true, status: 202, text: async () => JSON.stringify({ status: "queued", runId: "run-1" }) };
-  }) as unknown as typeof fetch;
+    return Response.json({ status: "queued", runId: "run-1" }, { status: 202 });
+  }) as typeof fetch;
   await queueTurn("web:u:t", "hello", agent);
   return declared;
 }

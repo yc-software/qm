@@ -26,7 +26,7 @@ test("a decision handed to the live run hides its card instead of leaving it cli
     assert.ok(String(input).endsWith("/api/approvals/live-card"));
     assert.equal(init?.method, "POST");
     const body = { status: "queued", runId: "live-run", steered: true };
-    return { ok: true, status: 200, text: async () => JSON.stringify(body) } as unknown as Response;
+    return Response.json(body);
   }) as typeof fetch;
   const cards: PendingApproval[] = [
     { requestId: "live-card", command: "send", blocksInput: false, executesOnApprove: true },
