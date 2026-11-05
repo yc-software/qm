@@ -25,17 +25,15 @@ The only new record is the persona's identity, in a typed table:
 
 ```sql
 CREATE TABLE personas (
-  tenant_id      TEXT        NOT NULL,
-  id             TEXT        NOT NULL,              -- uuid; scope is persona:<id>
+  id             TEXT        PRIMARY KEY,           -- uuid; scope is persona:<id>
   name           TEXT        NOT NULL CHECK (length(name) BETWEEN 1 AND 200),
   description    TEXT        NOT NULL DEFAULT '',
   icon_kind      TEXT        CHECK (icon_kind IN ('emoji', 'custom')),
   icon_value     TEXT,
   forked_from_id TEXT,                              -- no FK: the source may be deleted
-  created_by     TEXT        NOT NULL,
+  created_by     TEXT        NOT NULL REFERENCES users(id),
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-  PRIMARY KEY (tenant_id, id),
   CHECK ((icon_kind IS NULL) = (icon_value IS NULL))
 );
 ```
@@ -118,13 +116,10 @@ description. Row actions: Chat, Fork, and Edit / Share for writers and owners.
 - New table `channel_persona_defaults`:
   ```sql
   CREATE TABLE channel_persona_defaults (
-    tenant_id        TEXT        NOT NULL,
-    channel_scope_id TEXT        NOT NULL,          -- channel:C…
-    persona_id       TEXT        NOT NULL,
-    set_by           TEXT        NOT NULL,
-    set_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (tenant_id, channel_scope_id),
-    FOREIGN KEY (tenant_id, persona_id) REFERENCES personas (tenant_id, id) ON DELETE CASCADE
+    channel_scope_id TEXT        PRIMARY KEY,       -- channel:C…
+    persona_id       TEXT        NOT NULL REFERENCES personas(id) ON DELETE CASCADE,
+    set_by           TEXT        NOT NULL REFERENCES users(id),
+    set_at           TIMESTAMPTZ NOT NULL DEFAULT now()
   );
   ```
 - New scope kind `persona` in existing scope-id text columns; no DDL.
