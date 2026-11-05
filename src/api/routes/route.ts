@@ -9,6 +9,7 @@ import type { SourceAuth } from "../../auth/source-auth.ts";
 import type { CapabilityClaims } from "../../auth/capability-token.ts";
 import type { PortalIdentity } from "../../auth/portal-identity.ts";
 import { withModelRequestContext } from "../../model/request-context.ts";
+import type { TenantKey } from "../../tenants/lookup.ts";
 
 export interface BaseCtx {
   req: IncomingMessage;
@@ -31,6 +32,11 @@ export interface ApiCtx extends BaseCtx {
   actor?: PortalIdentity | null;
 }
 
+export interface KeyedTenant {
+  by: TenantKey;
+  key: (params: Record<string, string>, url: URL) => string | undefined;
+}
+
 export type RouteAuth = "either" | "source" | "public" | { aud: string; bearer?: true };
 
 export type RouteActor = "person" | "system" | `${"query" | "body"}.${string}`;
@@ -47,7 +53,7 @@ export type Route<C extends BaseCtx = ApiCtx> = {
   actor?: RouteActor;
   admin?: AdminAccess;
   allowedInStrict?: true;
-  tenant?: "none" | "optional";
+  tenant?: "none" | "optional" | KeyedTenant;
   maxBodyBytes?: number;
 } & ({ method: string; path: string } | { match: (method: string, pathname: string) => boolean });
 

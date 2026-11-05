@@ -1,4 +1,10 @@
 import { externalAppSharingAllowed } from "../../feature-flags.ts";
+import {
+  deploymentAppTenant,
+  deploymentGitParts,
+  deploymentGitTenant,
+  isDeploymentGitRoute,
+} from "./deployment-paths.ts";
 import { DeployAccessError, type DeployAccessErrorCode } from "../../deploy/deploy-service.ts";
 import { SocksProxyAgent } from "socks-proxy-agent";
 import { request as httpRequest } from "node:http";
@@ -1078,31 +1084,6 @@ function signInFailedHtml(signIn: string): string {
 const deploymentId = async (app: App, idOrName: string): Promise<string | undefined> =>
   (await app.getDeployment(idOrName))?.id;
 
-function deploymentGitParts(pathname: string): { id: string; tail: string } | null {
-  const prefix = "/v1/deployments/";
-  if (!pathname.startsWith(prefix)) return null;
-  const rest = pathname.slice(prefix.length);
-  const marker = "/git/";
-  const markerAt = rest.indexOf(marker);
-  if (markerAt < 0) return null;
-  const tail = rest.slice(markerAt + marker.length);
-  if (!tail) return null;
-  try {
-    return { id: decodeURIComponent(rest.slice(0, markerAt)), tail };
-  } catch {
-    return null;
-  }
-}
-
-function isDeploymentGitRoute(method: string, pathname: string): boolean {
-  const parts = deploymentGitParts(pathname);
-  if (!parts) return false;
-  return (
-    (method === "GET" && parts.tail === "info/refs") ||
-    (method === "POST" && (parts.tail === "git-upload-pack" || parts.tail === "git-receive-pack"))
-  );
-}
-
 function gitServiceOf(tail: string, url: URL): "git-upload-pack" | "git-receive-pack" | null {
   if (tail === "git-upload-pack" || tail === "git-receive-pack") return tail;
   if (tail === "info/refs") {
@@ -1722,7 +1703,7 @@ function sendShareFailure(res: ApiCtx["res"], e: unknown): void {
 }
 
 export const deploymentRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
-  { match: isDeploymentGitRoute, auth: "public", handle: serveDeploymentGit },
+  { match: isDeploymentGitRoute, auth: "public", tenant: deploymentGitTenant, handle: serveDeploymentGit },
   {
     match: (m, p) =>
       p.startsWith("/v1/admin/deployments/") &&
@@ -1731,7 +1712,7 @@ export const deploymentRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
     auth: "source",
     handle: proxyAdminDeployment,
   },
-  { match: (_m, p) => p.startsWith("/d/"), auth: "source", handle: proxyDeployment },
+  { match: (_m, p) => p.startsWith("/d/"), auth: "source", tenant: deploymentAppTenant, handle: proxyDeployment },
 ];
 
 export const deploymentRoutes: ReadonlyArray<Route<ApiCtx>> = [

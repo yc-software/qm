@@ -10,8 +10,7 @@ import type { Server } from "node:http";
 import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createServer, createInsecureTestServer } from "../src/api/server.ts";
-import { createPrincipalLinkService, PrincipalLinkError } from "../src/identity/principal-links.ts";
-import type { UserLink } from "../src/identity/user-store.ts";
+import { createPrincipalLinkService, PrincipalLinkError, type PrincipalLink } from "../src/identity/principal-links.ts";
 import {
   canonicalPerson,
   installPrincipalLinks,
@@ -31,7 +30,7 @@ import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
-import { testAdvisoryLock, testDatabaseUrl, testMap, testUserStore } from "./support/test-database.ts";
+import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 
 const EMAIL = "jordan@acme.test";
@@ -41,7 +40,7 @@ const EVIDENCE = "SSO email jordan@acme.test matched the Slack-verified director
 
 describe("principal link service: one person, several sign-ins", () => {
   it("links a sign-in to a canonical principal and resolves both directions", async () => {
-    const links = createPrincipalLinkService(testUserStore(), testAdvisoryLock());
+    const links = createPrincipalLinkService(testMap(), testAdvisoryLock());
     const row = await links.link({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "admin" });
     assert.equal(row.canonicalId, EMAIL);
     assert.equal(links.canonical(OIDC), EMAIL);
@@ -55,7 +54,7 @@ describe("principal link service: one person, several sign-ins", () => {
   });
 
   it("refuses self-links, chains, reversed links, missing evidence, and conflicting re-links", async () => {
-    const links = createPrincipalLinkService(testUserStore(), testAdvisoryLock());
+    const links = createPrincipalLinkService(testMap(), testAdvisoryLock());
     const reject = async (input: Parameters<typeof links.link>[0], status: number, re: RegExp) => {
       await assert.rejects(links.link(input), (e: unknown) => {
         assert.ok(e instanceof PrincipalLinkError);
@@ -97,11 +96,11 @@ describe("principal link service: one person, several sign-ins", () => {
   });
 
   it("reads links written by another process on refresh", async () => {
-    const backing = testUserStore();
+    const backing = testMap<PrincipalLink>();
     const links = createPrincipalLinkService(backing, testAdvisoryLock());
     await links.refresh(true);
     assert.equal(links.canonical(OIDC), undefined);
-    await backing.link({
+    await backing.put(OIDC, {
       principalId: OIDC,
       canonicalId: EMAIL,
       evidence: EVIDENCE,
@@ -117,7 +116,7 @@ describe("person primitives fold a linked sign-in to its canonical principal", (
   afterEach(() => installPrincipalLinks(null));
 
   async function installed() {
-    const links = createPrincipalLinkService(testUserStore(), testAdvisoryLock());
+    const links = createPrincipalLinkService(testMap(), testAdvisoryLock());
     await links.link({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "admin" });
     installPrincipalLinks(links);
     return links;
@@ -146,7 +145,7 @@ describe("person primitives fold a linked sign-in to its canonical principal", (
   });
 
   it("the identity service classifies a linked sign-in as the canonical principal and deactivates the person", async () => {
-    const links = createPrincipalLinkService(testUserStore(), testAdvisoryLock());
+    const links = createPrincipalLinkService(testMap(), testAdvisoryLock());
     await links.link({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "admin" });
     installPrincipalLinks(links);
     const identity = createIdentityService(testMap(), { externalMembers: testMap(), principalLinks: links });
@@ -162,7 +161,7 @@ describe("person primitives fold a linked sign-in to its canonical principal", (
 
   it("a deactivation recorded before the link is still reversible after it", async () => {
     installPrincipalLinks(null);
-    const links = createPrincipalLinkService(testUserStore(), testAdvisoryLock());
+    const links = createPrincipalLinkService(testMap(), testAdvisoryLock());
     const identity = createIdentityService(testMap(), { externalMembers: testMap(), principalLinks: links });
     await identity.deactivate(OIDC);
     await identity.putExternalMember({
@@ -224,7 +223,6 @@ describe("person primitives fold a linked sign-in to its canonical principal", (
     assert.equal(adminStatusFromGrants(grants, EMAIL).isAdmin, true);
     const users = computeUsers({
       grants,
-      people: [EMAIL],
       participants: [
         { sessionId: "s1", principalId: OIDC },
         { sessionId: "s2", principalId: EMAIL },
@@ -320,7 +318,7 @@ describe("linked sign-ins across the HTTP surface", () => {
     const created = await signed("POST", "/v1/admin/principal-links", body, admin);
     assert.equal(created.status, 200);
     const listed = (await (await signed("GET", "/v1/admin/principal-links", "", admin)).json()) as {
-      links: UserLink[];
+      links: PrincipalLink[];
     };
     assert.equal(listed.links.length, 1);
     assert.equal(listed.links[0]!.linkedBy, "admin-alice");
@@ -425,7 +423,7 @@ describe("the portal identity gate accepts a linked sign-in for the canonical vi
 
 describe("link mutation serialization", () => {
   it("rejects concurrent chains", async () => {
-    const links = createPrincipalLinkService(testUserStore(), testAdvisoryLock());
+    const links = createPrincipalLinkService(testMap(), testAdvisoryLock());
     const results = await Promise.allSettled([
       links.link({ principalId: "A", canonicalId: "B", evidence: "qa", linkedBy: "qa" }),
       links.link({ principalId: "B", canonicalId: "C", evidence: "qa", linkedBy: "qa" }),
@@ -434,7 +432,7 @@ describe("link mutation serialization", () => {
     assert.equal((await links.list()).length, 1);
   });
   it("does not reuse a snapshot begun before the mutation lock", async () => {
-    const backing = testUserStore();
+    const backing = testMap<PrincipalLink>();
     const lock = testAdvisoryLock();
     const delayed = Promise.withResolvers<void>();
     const started = Promise.withResolvers<void>();
@@ -442,8 +440,8 @@ describe("link mutation serialization", () => {
     const a = createPrincipalLinkService(
       {
         ...backing,
-        async links() {
-          const rows = await backing.links();
+        async all() {
+          const rows = await backing.all();
           if (delay) {
             delay = false;
             started.resolve();
@@ -465,7 +463,7 @@ describe("link mutation serialization", () => {
   });
   it("manual blocks win over directory records during hydration and refresh in either order", async () => {
     for (const reverse of [false, true]) {
-      const links = createPrincipalLinkService(testUserStore(), testAdvisoryLock());
+      const links = createPrincipalLinkService(testMap(), testAdvisoryLock());
       await links.link({ principalId: "A", canonicalId: "B", evidence: "qa", linkedBy: "qa" });
       installPrincipalLinks(links);
       try {
@@ -495,14 +493,14 @@ describe("canonical portal claims retain proof of the original sign-in", () => {
   it("verifies a linked sign-in without reloading identity, and reloads once to see a link made elsewhere", async () => {
     const secret = "authenticated-as-test-secret-0123456789";
     const app = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "slack-link-reload-")) }));
-    const backing = testUserStore();
+    const backing = testMap<PrincipalLink>();
     let loads = 0;
     const counted = new Proxy(backing, {
       get: (target, key, receiver) =>
-        key === "links"
+        key === "all"
           ? () => {
               loads++;
-              return target.links();
+              return target.all();
             }
           : Reflect.get(target, key, receiver),
     });
