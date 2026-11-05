@@ -114,7 +114,7 @@ description. Row actions: Chat, Fork, and Edit / Share for writers and owners.
 - `acl_grants`: no DDL; new rows with `path` `persona:<id>` and `permission` `owner`
   in addition to `read`/`write`.
 - New scoped-config durable-map table `channel_persona_defaults`
-  (`id` = channel scope, `json` = `{ "scope": "channel:C…", "personaId": "…" }`).
+  (`id` = channel scope, `json` = `{ "scopeId": "channel:C…", "personaId": "…" }`).
 - New scope kind `persona` in existing scope-id text columns; no DDL.
 - New feature flag `personas`, per person or org, off by default. No env vars.
 
