@@ -3,7 +3,7 @@ import type { MemoryCapturePolicy, MemoryProviderRoute } from "./provider-router
 import { parseMemorableProvider, type MemorableMemoryProviderConfig } from "./memorable/config.ts";
 
 const KINDS = new Set<ScopeKind>(SCOPE_KINDS);
-const ID = /^[a-z][a-z0-9-]{0,62}$/;
+export const MEMORY_PROVIDER_ID = /^[a-z][a-z0-9-]{0,62}$/;
 const ARG = /^[a-zA-Z_][a-zA-Z0-9_]{0,63}$/;
 const ENV = /^[A-Z][A-Z0-9_]*$/;
 export const MAX_PROVIDER_TIMEOUT_MS = 30_000;
@@ -151,7 +151,7 @@ export function parseMemoryProviderConfig(
   const providers = root.providers.map((value, i) => {
     const raw = object(value, `MEMORY_PROVIDER_CONFIG.providers[${i}]`);
     const id = string(raw.id, `MEMORY_PROVIDER_CONFIG.providers[${i}].id`);
-    if (!ID.test(id) || id === "default") throw new Error(`invalid memory provider id: ${id}`);
+    if (!MEMORY_PROVIDER_ID.test(id) || id === "default") throw new Error(`invalid memory provider id: ${id}`);
     if (raw.attestActor !== undefined && (raw.type !== "mcp" || typeof raw.attestActor !== "boolean"))
       throw new Error(`memory provider ${id}.attestActor must be true or false on an mcp provider`);
     if (raw.type === "memorable") return parseMemorableProvider(raw, id, env);
