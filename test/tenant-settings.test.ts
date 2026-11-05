@@ -8,7 +8,8 @@ import { resolveBranding } from "../src/resolution/branding.ts";
 import { loadTenant, onTenantLoad } from "../src/tenants/cache.ts";
 import { withTenant } from "../src/tenants/context.ts";
 import { runTenantCommand, TenantCommandError } from "../src/tenants/operator.ts";
-import { loadTenantSettings, tenantAllowsEmail, tenantSettingsSchema } from "../src/tenants/settings.ts";
+import { loadTenantSettings, tenantAllowsEmail, tenantHost, tenantSettingsSchema } from "../src/tenants/settings.ts";
+import { appUrlOf } from "../src/deploy/deploy-store.ts";
 import { scopeId } from "../src/types.ts";
 import { twoTenants, type TwoTenants } from "./support/two-tenants.ts";
 
@@ -139,5 +140,54 @@ describe("tenant settings and operator commands", () => {
     await assert.rejects(run("delete", "x"), /usage:/);
     await assert.rejects(run("create", "--bogus"), /usage:/);
     await assert.rejects(run("members", "add", db.tenants[0], "not-an-email"), /expected an email address/);
+  });
+});
+
+describe("company app links", () => {
+  let db: TwoTenants;
+  before(async () => {
+    db = await twoTenants();
+  });
+  after(async () => {
+    await db?.close();
+  });
+
+  it("links a company's apps on its own hostname, and other companies' apps on the shared host or their provider URL", async () => {
+    const [a, b] = db.tenants;
+    await db.owner.q(
+      `INSERT INTO tenant_hosts(host, tenant_id) VALUES ('alpha.qm.example.test', $1), ('www.alpha-long.example.test', $1)`,
+      [a],
+    );
+    const stop = onTenantLoad(() => loadTenantSettings(db.app));
+    try {
+      const app = {
+        id: "d1",
+        name: "demo-app",
+        endpoint: { publicUrl: "https://demo-app.apps.example.test/?access=x" },
+      } as never;
+      const urls = (tenant: string) =>
+        withTenant(tenant, async () => {
+          await loadTenant();
+          return [
+            tenantHost(),
+            appUrlOf(app, "https://mt.example.test/"),
+            appUrlOf({ id: "d2" }, "https://mt.example.test/"),
+          ];
+        });
+      assert.deepEqual(await urls(a), [
+        "alpha.qm.example.test",
+        "https://alpha.qm.example.test/d/demo-app/",
+        "https://alpha.qm.example.test/d/d2/",
+      ]);
+      assert.deepEqual(await urls(b), [
+        undefined,
+        "https://demo-app.apps.example.test/",
+        "https://mt.example.test/d/d2/",
+      ]);
+      assert.equal(tenantHost(), undefined);
+    } finally {
+      stop();
+      await db.owner.q(`DELETE FROM tenant_hosts WHERE tenant_id = $1`, [a]);
+    }
   });
 });

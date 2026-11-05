@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { PgPool } from "../persistence/pg-pool.ts";
 import { loadTenant, perTenant } from "./cache.ts";
+import { boundTenant } from "./context.ts";
 
 const text = z.string().min(1).max(4096);
 
@@ -29,11 +30,20 @@ export const TENANT_SETTING_KEYS = Object.keys(tenantSettingsSchema.shape) as (k
 
 export const TENANT_SETTINGS_REFRESH_MS = 30_000;
 
-const loaded = perTenant<{ settings?: TenantSettings }>(() => ({}));
+const loaded = perTenant<{ settings?: TenantSettings; host?: string }>(() => ({}));
 
 export async function loadTenantSettings(db: Pick<PgPool, "q">): Promise<void> {
-  const rows = await db.q("SELECT settings FROM tenants WHERE id = qm_bound_tenant()");
-  loaded().settings = tenantSettingsSchema.parse(rows[0]?.settings ?? {});
+  const rows = await db.q(
+    `SELECT settings, (SELECT host FROM tenant_hosts WHERE tenant_id = qm_bound_tenant()
+      ORDER BY length(host), host LIMIT 1) AS host FROM tenants WHERE id = qm_bound_tenant()`,
+  );
+  const state = loaded();
+  state.settings = tenantSettingsSchema.parse(rows[0]?.settings ?? {});
+  state.host = typeof rows[0]?.host === "string" ? rows[0].host : undefined;
+}
+
+export function tenantHost(): string | undefined {
+  return boundTenant() === undefined ? undefined : loaded().host;
 }
 
 export function tenantSettings(): TenantSettings {

@@ -4,6 +4,7 @@ import type { DurableMap } from "../persistence/durable-map.ts";
 import type { PgPool } from "../persistence/pg-pool.ts";
 import type { ClaimedRow } from "../tenants/claim.ts";
 import { DEPLOYMENT_TABLES, NAME_INDEX } from "./page-views.ts";
+import { tenantHost } from "../tenants/settings.ts";
 import {
   createDeployGitStore,
   type DeployGitDiff,
@@ -33,6 +34,16 @@ export interface DeployEndpoint {
   httpVersion?: "1.1" | "2";
   proxyHeaders?: Record<string, string>;
   socksProxyPort?: number;
+}
+
+export function appUrlOf(
+  d: { id: string; name?: string; endpoint?: DeployEndpoint | null },
+  sharedWebUrl: string | undefined,
+): string | undefined {
+  const path = `/d/${encodeURIComponent(d.name ?? d.id)}/`;
+  const host = tenantHost();
+  if (host) return `https://${host}${path}`;
+  return publicUrlOf(d.endpoint) ?? (sharedWebUrl ? `${sharedWebUrl.replace(/\/+$/, "")}${path}` : undefined);
 }
 
 export function publicUrlOf(endpoint: DeployEndpoint | null | undefined): string | undefined {

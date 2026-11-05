@@ -54,7 +54,7 @@ import type {
 } from "../connectors/background-exec-broker.ts";
 import type { MonitorBroker, BackgroundWatchResult, BackgroundUnwatchResult } from "../monitors/monitor-broker.ts";
 import { deploymentEntrypoint, type DeployService, type DeployFile } from "../deploy/deploy-service.ts";
-import { publicUrlOf } from "../deploy/deploy-store.ts";
+import { appUrlOf } from "../deploy/deploy-store.ts";
 import { carriesGitMetadata } from "../deploy/deploy-fs.ts";
 import type { AclStore } from "../acl/acl-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
@@ -1054,8 +1054,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         grantees.map((g) => g.scope),
         d.createdInScope,
       );
-      const urlBase = deps.publicWebUrl?.replace(/\/$/, "") ?? "";
-      const url = publicUrlOf(d.endpoint) ?? `${urlBase}/d/${ref}/`;
+      const url = appUrlOf(d, deps.publicWebUrl) ?? `/d/${ref}/`;
       const dataDir = effectiveEntrypoint ? deps.deploy.providerProfile?.dataDir : undefined;
       return {
         id: d.id,
