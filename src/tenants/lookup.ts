@@ -1,3 +1,4 @@
+import { durableMapTenancy } from "../persistence/durable-map.ts";
 import type { PgMigrationDefinition, PgPool } from "../persistence/pg-pool.ts";
 import { loadTenant } from "./cache.ts";
 import { withTenant } from "./context.ts";
@@ -14,6 +15,24 @@ const KEYS = {
   share: `SELECT tenant_id FROM session_shares WHERE id = $1`,
   secret_drop: `SELECT tenant_id FROM secret_drops WHERE id = $1`,
 } as const;
+
+export function inboundIndexes(table: string, fields: readonly string[] = []): PgMigrationDefinition {
+  return {
+    id: `tenancy/lookups/${table}-inbound-indexes`,
+    statements: [
+      `CREATE INDEX CONCURRENTLY IF NOT EXISTS ${table}_inbound_id ON ${table} (id)`,
+      ...fields.map(
+        (field) =>
+          `CREATE INDEX CONCURRENTLY IF NOT EXISTS ${table}_inbound_${field.toLowerCase()}
+            ON ${table} ((json->>'${field}')) WHERE json->>'${field}' IS NOT NULL`,
+      ),
+    ],
+  };
+}
+
+export function inboundTenancy(table: string): PgMigrationDefinition[] {
+  return [...durableMapTenancy(table), inboundIndexes(table)];
+}
 
 export type TenantKey = keyof typeof KEYS | "slack_bridge";
 

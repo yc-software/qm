@@ -3,6 +3,7 @@ import { perTenant } from "../tenants/cache.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createTtlRefresh } from "../util/async.ts";
 import { durableMapTenancy, type DurableMap } from "../persistence/durable-map.ts";
+import { inboundIndexes } from "../tenants/lookup.ts";
 import { foldPrincipalId, type PrincipalLinkResolver } from "../directory/person.ts";
 
 export interface PrincipalLink {
@@ -65,6 +66,7 @@ export const PRINCIPAL_LINKS_TENANCY = [
     ],
   },
   PRINCIPAL_LINKS_RESTORE,
+  inboundIndexes("principal_links", ["canonicalId"]),
 ];
 
 interface PrincipalLinkInput {
