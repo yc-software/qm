@@ -35,7 +35,6 @@ export interface MemoryRecallContext extends MemoryOutcomeSink {
   actorId?: string;
   sessionId?: string;
   maxChars?: number;
-  autonomous?: boolean;
 }
 
 export interface MemoryCaptureContext extends MemoryCaptureMetadata, MemoryOutcomeSink {
@@ -43,7 +42,6 @@ export interface MemoryCaptureContext extends MemoryCaptureMetadata, MemoryOutco
   actorId?: string;
   input?: string;
   reply?: string;
-  autonomous?: boolean;
   idempotencyKey?: string;
 }
 
