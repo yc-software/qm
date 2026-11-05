@@ -75,7 +75,9 @@ function identityAdmitting(tenant: string, seen: Array<string | undefined>): Ide
 }
 
 function start(identity: IdentityService, tenants: DirectoryStore["tenantsForEmail"]) {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "tenant-sign-in-")), orgId: "acme" }));
+  const built = buildApp(
+    testConfig({ databaseUrl, dataDir: mkdtempSync(join(tmpdir(), "tenant-sign-in-")), orgId: "acme" }),
+  );
   Object.assign(built.app, { readBootTenant: async () => undefined });
   const server = createInsecureTestServer(built.app, {
     portalIdentitySecret: IDENTITY_SECRET,
