@@ -251,6 +251,8 @@ const hostRoutes = createHostRoutes({
   session: (req) => currentSession(req),
   signOut: (res) => setSession(res, hostSessions.signedOutCookies()),
   signIn: (res, who) => setAuthenticatedSession(res, who.sub, who.name, false, who.t),
+  signInApp: (res, who, host) =>
+    runOnHost({ tenant: who.t, host, origin: "" }, () => setAuthenticatedSession(res, who.sub, who.name, false, who.t)),
   page: (res, status, html) => sendHtml(res, status, html),
   errorHtml: (detail) => signInErrorHtml(detail),
   unavailable: (res) =>
@@ -901,9 +903,11 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 
   const requestHost = (req.headers.host ?? "").toLowerCase().split(":")[0]!;
   const appSuffix = APPS_DOMAIN ? `.${APPS_DOMAIN.toLowerCase()}` : undefined;
-  if (appSuffix && (requestHost.endsWith(appSuffix) || requestHost === APPS_DOMAIN?.toLowerCase())) {
+  const appHost = requestHost.endsWith(appSuffix ?? "\0") || requestHost === APPS_DOMAIN?.toLowerCase();
+  if (appSuffix && appHost && requestHost !== hostOf(PUBLIC_URL) && !mappedHost()) {
     const label = requestHost.slice(0, -appSuffix.length);
     if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label)) return json(res, 404, { error: "not_found" });
+    if (await hostRoutes.app(req, res, url)) return;
     return proxyToAppHost(req, res, CORE, clientIpOf(req));
   }
 
@@ -1845,11 +1849,6 @@ export function bootChecks(): void {
         "PORTAL_PLAYGROUND requires PORTAL_DEPLOYMENTS_ENABLED unset — anonymous visitors must not reach deployed apps",
       );
     }
-  }
-  if (APPS_DOMAIN && !COOKIE_DOMAIN) {
-    problems.push(
-      `the apps domain (${APPS_DOMAIN}) is not a subdomain of the portal host, so the cookie domain cannot be derived — set PORTAL_COOKIE_DOMAIN to the parent domain covering both (app returnTo without a domain-wide session cookie loops sign-in forever)`,
-    );
   }
   if (COOKIE_DOMAIN && !hostIsWithinDomain(hostOf(PUBLIC_URL), COOKIE_DOMAIN)) {
     problems.push(`PORTAL_COOKIE_DOMAIN (${COOKIE_DOMAIN}) must cover PUBLIC_WEB_URL's host`);

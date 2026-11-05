@@ -14,6 +14,7 @@ export interface TrustedClient {
 export interface HostRecord {
   tenant: string;
   trustedClient?: TrustedClient;
+  app?: true;
 }
 
 export interface MappedHost extends HostRecord {
@@ -56,11 +57,17 @@ export function coreHostTenant(coreApiUrl: string, signingSecret: string | undef
       signal: AbortSignal.timeout(4_000),
     });
     if (!r.ok) throw new Error(`host lookup failed: HTTP ${r.status}`);
-    const { tenant, trustedClient: c } = (await r.json()) as {
+    const {
+      tenant,
+      trustedClient: c,
+      app,
+    } = (await r.json()) as {
       tenant?: unknown;
       trustedClient?: Partial<TrustedClient>;
+      app?: unknown;
     };
     if (!isTenantId(tenant)) return null;
+    if (app === true) return { tenant, app: true };
     const usable = typeof c?.clientId === "string" && typeof c.clientSecret === "string" && c.clientSecret.length >= 32;
     return { tenant, ...(usable ? { trustedClient: { clientId: c.clientId!, clientSecret: c.clientSecret! } } : {}) };
   };

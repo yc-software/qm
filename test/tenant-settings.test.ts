@@ -8,8 +8,15 @@ import { resolveBranding } from "../src/resolution/branding.ts";
 import { loadTenant, onTenantLoad } from "../src/tenants/cache.ts";
 import { withTenant } from "../src/tenants/context.ts";
 import { runTenantCommand, TenantCommandError } from "../src/tenants/operator.ts";
-import { loadTenantSettings, tenantAllowsEmail, tenantHost, tenantSettingsSchema } from "../src/tenants/settings.ts";
+import {
+  loadTenantSettings,
+  tenantAllowsEmail,
+  tenantAppHandle,
+  tenantHost,
+  tenantSettingsSchema,
+} from "../src/tenants/settings.ts";
 import { appUrlOf } from "../src/deploy/deploy-store.ts";
+import { appHostLabel, appNameFromLabel } from "../src/tenants/app-handle.ts";
 import { scopeId } from "../src/types.ts";
 import { twoTenants, type TwoTenants } from "./support/two-tenants.ts";
 
@@ -45,6 +52,16 @@ describe("tenant settings schema", () => {
       { oidcClient: { clientSecret: "s" } },
     ])
       assert.equal(tenantSettingsSchema.safeParse(bad).success, false, JSON.stringify(bad));
+  });
+});
+
+describe("app host labels", () => {
+  it("split on the first hyphen, so handles with digits and app names with hyphens both survive", () => {
+    assert.equal(appHostLabel("nitroduck7", "sales-board-v2"), "nitroduck7-sales-board-v2");
+    assert.equal(appNameFromLabel("nitroduck7-sales-board-v2", "nitroduck7"), "sales-board-v2");
+    assert.equal(appNameFromLabel("nitroduck7-", "nitroduck7"), undefined);
+    assert.equal(appNameFromLabel("other-sales", "nitroduck7"), undefined);
+    assert.equal(appNameFromLabel("sales-board", undefined), "sales-board");
   });
 });
 
@@ -170,8 +187,8 @@ describe("company app links", () => {
           await loadTenant();
           return [
             tenantHost(),
-            appUrlOf(app, "https://mt.example.test/"),
-            appUrlOf({ id: "d2" }, "https://mt.example.test/"),
+            appUrlOf(app, { sharedWebUrl: "https://mt.example.test/", appsDomain: undefined }),
+            appUrlOf({ id: "d2" }, { sharedWebUrl: "https://mt.example.test/", appsDomain: undefined }),
           ];
         });
       assert.deepEqual(await urls(a), [
@@ -188,6 +205,63 @@ describe("company app links", () => {
     } finally {
       stop();
       await db.owner.q(`DELETE FROM tenant_hosts WHERE tenant_id = $1`, [a]);
+    }
+  });
+
+  it("links a company's apps as <handle>-<app> on the apps domain, with the handle defaulting from its org slug", async () => {
+    const [a, b] = db.tenants;
+    await db.owner.q(`UPDATE tenants SET settings = '{"orgSlug":"nitro-duck"}' WHERE id = $1`, [a]);
+    await db.owner.q(`UPDATE tenants SET settings = '{"handle":"beta7","orgSlug":"beta-co"}' WHERE id = $1`, [b]);
+    const stop = onTenantLoad(() => loadTenantSettings(db.app));
+    try {
+      const link = (tenant: string, appsDomain?: string) =>
+        withTenant(tenant, async () => {
+          await loadTenant();
+          return [
+            tenantAppHandle(),
+            appUrlOf({ id: "d1", name: "sales-dashboard" }, { sharedWebUrl: "https://mt.example.test", appsDomain }),
+          ];
+        });
+      assert.deepEqual(await link(a, "QM.example.test"), [
+        "nitroduck",
+        "https://nitroduck-sales-dashboard.qm.example.test/",
+      ]);
+      assert.deepEqual(await link(b, "qm.example.test"), ["beta7", "https://beta7-sales-dashboard.qm.example.test/"]);
+      assert.deepEqual(await link(b), ["beta7", "https://mt.example.test/d/sales-dashboard/"]);
+    } finally {
+      stop();
+      await db.owner.q(`UPDATE tenants SET settings = '{}' WHERE id = ANY($1)`, [[a, b]]);
+    }
+  });
+
+  it("refuses a handle that is malformed, reserved or already another company's, including its derived default", async () => {
+    const [a, b] = db.tenants;
+    for (const bad of ["a", "has-hyphen", "UPPER", "x".repeat(31), "admin", "mt", "www"])
+      assert.equal(tenantSettingsSchema.safeParse({ handle: bad }).success, false, bad);
+    assert.equal(tenantSettingsSchema.safeParse({ handle: "nitroduck2" }).success, true);
+    await db.owner.q(`UPDATE tenants SET settings = '{"orgSlug":"nitro-duck"}' WHERE id = $1`, [a]);
+    try {
+      await assert.rejects(
+        db.owner.q(`UPDATE tenants SET settings = '{"handle":"nitroduck"}' WHERE id = $1`, [b]),
+        /tenants_app_handle/,
+      );
+      await assert.rejects(
+        withTenant(b, () => db.app.q(`SELECT qm_set_tenant_handle('nitroduck')`)),
+        /tenants_app_handle/,
+      );
+      await assert.rejects(
+        withTenant(b, () => db.app.q(`SELECT qm_set_tenant_handle('auth')`)),
+        /invalid app handle/,
+      );
+      await withTenant(b, () => db.app.q(`SELECT qm_set_tenant_handle('beta7')`));
+      const rows = await db.owner.q(`SELECT settings->>'handle' AS handle FROM tenants WHERE id = $1`, [b]);
+      assert.equal(rows[0]?.handle, "beta7");
+      const found = await db.app.q(`SELECT qm_tenant_for_app_host('beta7-sales-dash')::text AS id`);
+      assert.equal(found[0]?.id, b);
+      const derived = await db.app.q(`SELECT qm_tenant_for_app_host('nitroduck-x')::text AS id`);
+      assert.equal(derived[0]?.id, a);
+    } finally {
+      await db.owner.q(`UPDATE tenants SET settings = '{}' WHERE id = ANY($1)`, [[a, b]]);
     }
   });
 });

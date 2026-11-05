@@ -6,7 +6,7 @@ import { boundTenant, withoutTenant, withTenant } from "../src/tenants/context.t
 import { tenantLookup, type TenantKey, type TenantLookup } from "../src/tenants/lookup.ts";
 import { twoTenants, type TwoTenants } from "./support/two-tenants.ts";
 
-const TABLES: Record<Exclude<TenantKey, "slack_team" | "slack_bridge" | "deployment">, string> = {
+const TABLES: Record<Exclude<TenantKey, "slack_team" | "slack_bridge" | "deployment" | "app_host">, string> = {
   webhook: "webhooks",
   loop_ingress: "loop_ingress",
   oauth_flow: "oauth_flows",
@@ -106,7 +106,7 @@ describe("inbound tenant lookups", () => {
     assert.deepEqual(await seen("webhooks-shared"), { tenant: EMPTY_TENANT, rows: [] });
 
     const gate = { deployAppsDomain: "apps.test", deployGateSecret: "s" };
-    assert.deepEqual(inboundKey(request("dep-1.apps.test:443"), gate, null, url), { by: "deployment", key: "dep-1" });
+    assert.deepEqual(inboundKey(request("dep-1.apps.test:443"), gate, null, url), { by: "app_host", key: "dep-1" });
     assert.equal(inboundKey(request("dep-1.apps.test"), { deployAppsDomain: "apps.test" }, null, url), undefined);
     assert.equal(inboundKey(request(), gate, { route: { tenant: "none" }, params: {} }, url), undefined);
   });

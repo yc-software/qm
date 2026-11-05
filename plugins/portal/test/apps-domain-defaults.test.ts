@@ -52,13 +52,13 @@ test("DEPLOY_APPS_DOMAIN alone yields a working portal apps setup — cookie dom
   assert.doesNotThrow(() => bootChecks());
 });
 
-test("an apps domain that shares no parent with the portal host refuses to boot with a cookie-domain explanation", () => {
+test("an apps domain that shares no parent with the portal host boots with no domain-wide cookie", () => {
   const command = "import('./src/index.ts').then(m => m.bootChecks())";
   const r = spawnSync(process.execPath, ["--input-type=module", "-e", command], {
     cwd: process.cwd(),
     env: { ...process.env, DEPLOY_APPS_DOMAIN: "apps.unrelated.net" },
     encoding: "utf8",
   });
-  assert.notEqual(r.status, 0);
-  assert.match(r.stderr, /not a subdomain of the portal host/);
+  assert.equal(r.status, 0, r.stderr);
+  assert.doesNotMatch(r.stderr, /cookie domain/);
 });

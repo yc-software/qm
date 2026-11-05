@@ -19,6 +19,7 @@ export interface HostRouteDeps {
   session(req: IncomingMessage): HostSession | null;
   signOut(res: ServerResponse): void;
   signIn(res: ServerResponse, who: { sub: string; name?: string; t: string }): void;
+  signInApp(res: ServerResponse, who: { sub: string; name?: string; t: string }, host: string): void;
   page(res: ServerResponse, status: number, html: string): void;
   errorHtml(detail: string): string;
   unavailable(res: ServerResponse): void;
@@ -58,10 +59,10 @@ export function createHostRoutes(deps: HostRouteDeps) {
       const host = hostName(req.headers.host);
       if (!host || host === hostName(shared.host) || (req.url ?? "").split("?")[0] === "/healthz") return;
       if (host === "localhost" || ipLiteral(req.headers.host ?? "")) return;
-      if (appsDomain && (host === appsDomain || host.endsWith(`.${appsDomain}`))) return;
       try {
         const record = await deps.lookup(host);
-        if (record) return { ...record, host, origin: `${shared.protocol}//${req.headers.host}` };
+        if (record && !record.app) return { ...record, host, origin: `${shared.protocol}//${req.headers.host}` };
+        if (record || (appsDomain && host.endsWith(`.${appsDomain}`))) return undefined;
         if (!siblings || !host.endsWith(siblings)) return undefined;
         deps.page(res, 404, deps.errorHtml("unknown workspace address"));
         return null;
@@ -103,6 +104,22 @@ export function createHostRoutes(deps: HostRouteDeps) {
       if (MAPPED_AUTH_PATHS.includes(url.pathname)) return false;
       res.writeHead(404, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "not_found" }));
+      return true;
+    },
+
+    async app(req: IncomingMessage, res: ServerResponse, url: URL): Promise<boolean> {
+      if (req.method !== "GET" || url.pathname !== "/auth/handoff") return false;
+      const host = hostName(req.headers.host);
+      const record = await deps.lookup(host);
+      const claims = record?.app
+        ? openHandoff(url.searchParams.get("token"), deps.handoffKey, { ...record, host, origin: "" })
+        : null;
+      if (!claims || !(await deps.claim(claims.jti))) {
+        deps.page(res, 400, deps.errorHtml("sign-in link expired or already used"));
+        return true;
+      }
+      deps.signInApp(res, claims, host);
+      redirect(res, hostReturnTo(claims.returnTo));
       return true;
     },
 

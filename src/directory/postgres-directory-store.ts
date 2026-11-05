@@ -275,6 +275,21 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       return typeof rows[0]?.id === "string" ? rows[0].id : undefined;
     },
 
+    async tenantForAppHandle(handle) {
+      const rows = await q("SELECT qm_tenant_for_app_handle($1)::text AS id", [handle]);
+      return typeof rows[0]?.id === "string" ? rows[0].id : undefined;
+    },
+
+    async setAppHandle(handle) {
+      try {
+        await q("SELECT qm_set_tenant_handle($1)", [handle]);
+        return "ok";
+      } catch (error) {
+        if ((error as { code?: string }).code === "23505") return "taken";
+        throw error;
+      }
+    },
+
     async trustedClientFor(tenant) {
       const [row] = await withTenant(tenant, () =>
         q("SELECT settings->'oidcClient' AS client FROM tenants WHERE id = $1", [tenant]),
