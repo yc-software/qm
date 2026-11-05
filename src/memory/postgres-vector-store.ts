@@ -52,6 +52,8 @@ const SCHEMA = [
   )`,
 ];
 
+const SKETCH_CANDIDATES_PER_RESULT = 4;
+
 const batchSize = (limit: number) => Math.max(1, Math.min(256, Math.floor(limit) || 1));
 
 function vectorWidth(dimensions: number | undefined): number | null {
@@ -122,7 +124,7 @@ export function createPostgresVectorStore(connectionString: string): MemoryVecto
         ),
         candidates AS (
           (SELECT id, updated_at, created_at, false AS unindexed FROM visible
-            WHERE approx IS NOT NULL ORDER BY approx, id LIMIT $8::integer * 4)
+            WHERE approx IS NOT NULL ORDER BY approx, id LIMIT $8::integer * $9::integer)
           UNION ALL
           (SELECT id, updated_at, created_at, true FROM visible
             WHERE approx IS NULL ORDER BY created_at DESC, id LIMIT $8)
@@ -145,6 +147,7 @@ export function createPostgresVectorStore(connectionString: string): MemoryVecto
           1 - Math.min(0.2, minSimilarity),
           input.ids,
           input.limit,
+          SKETCH_CANDIDATES_PER_RESULT,
         ],
         { timeoutMs: 5000 },
       );
