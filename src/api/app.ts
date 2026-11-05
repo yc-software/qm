@@ -20,6 +20,8 @@ export function createApp(deps: AppDeps): App {
   const ambient = createAmbientHelpers(deps, app, helpers);
   const methods = {
     swarms: deps.swarms,
+    readBootTenant: () => deps.sessions.readBootTenant(),
+    tenantFor: (...args: Parameters<App["tenantFor"]>) => deps.sessions.tenantLookup.tenantFor(...args),
     ...createTurnMethods(deps, helpers, ambient),
     ...createSessionMethods(deps, helpers),
     ...createMessagingMethods(deps, helpers, ambient),

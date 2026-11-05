@@ -13,6 +13,7 @@ import {
 } from "./directory-store.ts";
 import { createDirectorySync } from "./directory-sync.ts";
 import { tenantTables } from "../tenants/migrations.ts";
+import { withTenant } from "../tenants/context.ts";
 
 const PREVIOUS_SCHEMA = "directory/store/0005";
 
@@ -127,6 +128,21 @@ export const DIRECTORY_MIGRATIONS = [
     { table: "directory_sync", primaryKey: "org_id" },
     { table: "directory_meta", primaryKey: "org_id" },
   ]),
+  {
+    id: "directory/store/0008-tenants-for-email",
+    statements: [
+      `DO $tenants_for_email$
+BEGIN
+  EXECUTE format(
+    $function$CREATE OR REPLACE FUNCTION qm_tenants_for_email(email text) RETURNS TABLE(tenant_id uuid)
+      LANGUAGE sql STABLE SECURITY DEFINER SET search_path = %I, pg_temp AS $body$
+      SELECT DISTINCT m.tenant_id FROM directory_members m
+       WHERE lower(m.principal_id) = lower(email) AND m.type = 'internal'
+    $body$$function$,
+    current_schema());
+END $tenants_for_email$`,
+    ],
+  },
 ];
 
 export function createPostgresDirectoryStore(connectionString: string): DirectoryStore {
@@ -201,6 +217,18 @@ export function createPostgresDirectoryStore(connectionString: string): Director
     async meta() {
       const rows = await q("SELECT workspace_url FROM directory_meta WHERE org_id = $1", [orgId]);
       return { workspaceUrl: (rows[0]?.workspace_url as string | null) ?? null };
+    },
+
+    async tenantsForEmail(email) {
+      const rows = await q("SELECT tenant_id::text AS id FROM qm_tenants_for_email($1) ORDER BY tenant_id", [email]);
+      return Promise.all(
+        rows.map(({ id }) =>
+          withTenant(String(id), async () => {
+            const [tenant] = await q("SELECT settings->>'brandName' AS brand FROM tenants WHERE id = $1", [id]);
+            return { id: String(id), ...(typeof tenant?.brand === "string" ? { brandName: tenant.brand } : {}) };
+          }),
+        ),
+      );
     },
 
     async channelMember(channelId, principalId) {

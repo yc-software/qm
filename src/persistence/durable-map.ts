@@ -1,3 +1,4 @@
+import { perTenant } from "../tenants/cache.ts";
 import {
   createPgPool,
   withPgTransaction,
@@ -59,8 +60,13 @@ function mapMigrations(
   table: string,
   indexedFields: readonly string[],
   tenancy: readonly PgMigrationDefinition[],
+  extraMigrations: readonly PgMigrationDefinition[],
 ): PgMigrationDefinition[] {
   if (!/^[a-z_][a-z0-9_]*$/i.test(table)) throw new Error(`invalid table name: ${table}`);
+  const claim = {
+    id: `durable-map/${table}/0020-claim-ids`,
+    statements: [claimFunction(`claim_${table}`, "", `SELECT tenant_id, id FROM ${table} ORDER BY tenant_id, id`)],
+  };
   const migration = {
     id: `durable-map/${table}/0001`,
     statements: [
@@ -70,12 +76,10 @@ function mapMigrations(
   };
   return [
     migration,
+    ...extraMigrations,
     ...VERSIONS_TENANCY,
     ...tenancy,
-    {
-      id: `durable-map/${table}/0020-claim-ids`,
-      statements: [claimFunction(`claim_${table}`, "", `SELECT tenant_id, id FROM ${table} ORDER BY tenant_id, id`)],
-    },
+    ...(tenancy.length ? [claim] : []),
     ...indexedFields.flatMap((field) => {
       if (!/^[a-z_][a-z0-9_]*$/i.test(field)) throw new Error(`invalid index field: ${field}`);
       return [
@@ -127,41 +131,47 @@ export function createPostgresMap<T>(
   table: string,
   indexedFields: readonly Extract<keyof T, string>[] = [],
   tenancy: readonly PgMigrationDefinition[] = durableMapTenancy(table),
+  extraMigrations: readonly PgMigrationDefinition[] = [],
 ): DurableMap<T> {
-  const migrations = mapMigrations(table, indexedFields, tenancy);
+  const migrations = mapMigrations(table, indexedFields, tenancy, extraMigrations);
   for (const definition of migrations) pg.registerMigration(definition);
   let readyP: Promise<void> | null = null;
   function ready(): Promise<void> {
     if (!readyP) {
-      readyP = (async () => {
-        for (const definition of migrations) await pg.migrate(definition);
-      })().catch((e) => {
+      readyP = pg.migrate(migrations).catch((e) => {
         readyP = null;
         throw e;
       });
     }
     return readyP;
   }
+  const tenanted = tenancy.length > 0;
+  const key = tenanted ? "tenant_id, id" : "id";
   const bumpSql = `INSERT INTO ${VERSIONS_TABLE} (tbl, v) VALUES ('${table}', 1)
      ON CONFLICT (tenant_id, tbl) DO UPDATE SET v = ${VERSIONS_TABLE}.v + 1`;
   async function withBump<R>(fn: (client: PoolClient) => Promise<R>): Promise<R> {
     await ready();
     return withPgTransaction(await pg.pool(), async (client) => {
-      await client.query(bumpSql);
+      if (tenanted) await client.query(bumpSql);
       return fn(client);
     });
   }
   const CACHE_MAX_AGE_MS = 15_000;
-  let cache: { v: string; fetchedAt: number; entries: Array<[string, T]> } | null = null;
+  const caches = perTenant<{ last?: { v: string; fetchedAt: number; entries: Array<[string, T]> } }>(() => ({}));
   async function snapshot(): Promise<Array<[string, T]>> {
     await ready();
+    if (!tenanted) {
+      const rows = await pg.q(`SELECT id, json FROM ${table} ORDER BY id`);
+      return rows.map((row) => [row.id as string, row.json as T]);
+    }
     const vRows = await pg.q(`SELECT v FROM ${VERSIONS_TABLE} WHERE tbl = '${table}'`);
     const v = vRows.length ? String(vRows[0]!.v) : "";
-    if (!cache || cache.v !== v || Date.now() - cache.fetchedAt > CACHE_MAX_AGE_MS) {
+    const cache = caches();
+    if (!cache.last || cache.last.v !== v || Date.now() - cache.last.fetchedAt > CACHE_MAX_AGE_MS) {
       const rows = await pg.q(`SELECT id, json FROM ${table} ORDER BY id`);
-      cache = { v, fetchedAt: Date.now(), entries: rows.map((row) => [row.id as string, row.json as T]) };
+      cache.last = { v, fetchedAt: Date.now(), entries: rows.map((row) => [row.id as string, row.json as T]) };
     }
-    return structuredClone(cache.entries);
+    return structuredClone(cache.last.entries);
   }
   async function selectRows<K extends Extract<keyof T, string>>(
     query: DurableMapSelect<T, K>,
@@ -213,6 +223,7 @@ export function createPostgresMap<T>(
     },
     selectEntries: selectRows,
     async claimIds() {
+      if (!tenanted) throw new Error(`${table} holds no tenant rows to claim`);
       await ready();
       return claimRows(pg, `claim_${table}`);
     },
@@ -230,7 +241,7 @@ export function createPostgresMap<T>(
       await withBump((client) =>
         client.query(
           `INSERT INTO ${table} (id, json) VALUES ($1, $2)
-           ON CONFLICT (tenant_id, id) DO UPDATE SET json = EXCLUDED.json`,
+           ON CONFLICT (${key}) DO UPDATE SET json = EXCLUDED.json`,
           [id, jsonbStringify(value)],
         ),
       );
@@ -239,7 +250,7 @@ export function createPostgresMap<T>(
       const res = await withBump((client) =>
         client.query(
           `INSERT INTO ${table} (id, json) VALUES ($1, $2)
-           ON CONFLICT (tenant_id, id) DO UPDATE SET json = ${table}.json
+           ON CONFLICT (${key}) DO UPDATE SET json = ${table}.json
            RETURNING json`,
           [id, jsonbStringify(value)],
         ),
@@ -250,7 +261,7 @@ export function createPostgresMap<T>(
       const inserted = await withBump((client) =>
         client.query(
           `INSERT INTO ${table} (id, json) VALUES ($1, $2)
-           ON CONFLICT (tenant_id, id) DO NOTHING`,
+           ON CONFLICT (${key}) DO NOTHING`,
           [id, jsonbStringify(value)],
         ),
       );
@@ -294,7 +305,7 @@ export function createPostgresMap<T>(
         });
         await client.query(
           `INSERT INTO ${table} (id, json) SELECT id, json FROM jsonb_to_recordset($1::jsonb) AS batch(id text, json jsonb)
-           ON CONFLICT (tenant_id, id) DO UPDATE SET json = EXCLUDED.json`,
+           ON CONFLICT (${key}) DO UPDATE SET json = EXCLUDED.json`,
           [jsonbStringify([...pending].map(([id, json]) => ({ id, json })))],
         );
         return results;
@@ -315,6 +326,28 @@ export function createPostgresMap<T>(
       const res = await withBump((client) => client.query(`DELETE FROM ${table} WHERE id = $1 RETURNING json`, [id]));
       return res.rows.length ? (res.rows[0]!.json as T) : null;
     },
+  };
+}
+
+export function processLevelMap(table: string): PgMigrationDefinition {
+  return {
+    id: `durable-map/${table}/0030-process-level`,
+    statements: [
+      `DO $process_level$
+       BEGIN
+         IF EXISTS (SELECT 1 FROM pg_attribute
+                     WHERE attrelid = '${table}'::regclass AND attname = 'tenant_id' AND NOT attisdropped) THEN
+           DELETE FROM ${table} a USING ${table} b WHERE a.id = b.id AND a.ctid < b.ctid;
+           DROP POLICY IF EXISTS tenant_isolation ON ${table};
+           ALTER TABLE ${table} DISABLE ROW LEVEL SECURITY;
+           ALTER TABLE ${table} DROP CONSTRAINT ${table}_pkey;
+           ALTER TABLE ${table} DROP COLUMN tenant_id;
+           ALTER TABLE ${table} ADD CONSTRAINT ${table}_pkey PRIMARY KEY (id);
+         END IF;
+       END $process_level$`,
+      `DROP FUNCTION IF EXISTS claim_${table}()`,
+      `DELETE FROM ${VERSIONS_TABLE} WHERE tbl = '${table}'`,
+    ],
   };
 }
 

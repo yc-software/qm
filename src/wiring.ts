@@ -1,4 +1,5 @@
-import type { MemoryEmbedder } from "./model/embeddings.ts";
+import { onTenantLoad } from "./tenants/cache.ts";
+import { loadTenantSettings } from "./tenants/settings.ts";
 import { nonDeploymentCredential, withDeploymentCredentials } from "./credentials/deployment-credentials.ts";
 import { resolveEmbeddingModel } from "./model/pi-models.ts";
 import { createPostgresTeamStore, type TeamStore } from "./teams/teams.ts";
@@ -52,7 +53,7 @@ import {
   sweepUnreadMailWakes,
   wakeForUnreadMail,
 } from "./sessions/subagent-mail.ts";
-import { createMemoryEmbedder } from "./model/embeddings.ts";
+import { createMemoryEmbedder, type MemoryEmbedder } from "./model/embeddings.ts";
 import { configRouteOptions, createModelRoutes, type ModelRoutes } from "./model/model-route.ts";
 import { createSemanticMemory } from "./memory/semantic-memory.ts";
 import { createPostgresBrokerSessions, type BrokerSessionStore } from "./auth/broker-sessions.ts";
@@ -87,8 +88,12 @@ import {
   type DeactivationRecord,
   type IdentityService,
 } from "./identity/identity-service.ts";
-import { createPrincipalLinkService, type PrincipalLinkService } from "./identity/principal-links.ts";
-import { createPostgresUserStore, type UserStore } from "./identity/user-store.ts";
+import {
+  createPrincipalLinkService,
+  PRINCIPAL_LINKS_RESTORE,
+  type PrincipalLink,
+  type PrincipalLinkService,
+} from "./identity/principal-links.ts";
 import type { SlackAccountLink, ComposioReturn } from "./api/routes/composio.ts";
 import { installPrincipalLinks } from "./directory/person.ts";
 import type { ExternalMember } from "./identity/external-members.ts";
@@ -102,7 +107,12 @@ import { createSkillPackStore, type SkillPack } from "./skills/skill-pack-store.
 import { createSkillBundleStore, type SkillBundle, type SkillBundleStore } from "./skills/skill-bundle-store.ts";
 import { createGitFetcher, resolvePackAuth, type SkillPackFetcher } from "./skills/pack-fetcher.ts";
 import { installSeedSkills } from "./skills/seed.ts";
-import { createPostgresMapFactory, type DurableMap } from "./persistence/durable-map.ts";
+import {
+  createPostgresMap,
+  createPostgresMapFactory,
+  type DurableMap,
+  processLevelMap,
+} from "./persistence/durable-map.ts";
 import type { PersistedUiState, UiStateStore } from "./surfaces/ui-state.ts";
 import { slackUserClientFactory } from "./loops/sources/slack.ts";
 import { configurePgCaTrust, configurePgPooling } from "./persistence/pg-pool.ts";
@@ -308,7 +318,7 @@ import {
 } from "./auth/capability-token.ts";
 import { createControlService } from "./api/control-service.ts";
 import { createPostgresRunStore } from "./runs/postgres-run-store.ts";
-import { currentTenant, withTenant } from "./tenants/context.ts";
+import { boundTenant, currentTenant, withTenant } from "./tenants/context.ts";
 import { claimThenBind } from "./tenants/claim.ts";
 import type { RunSignalStore } from "./runs/run-signal-store.ts";
 import { createPostgresRunSignalStore } from "./runs/postgres-run-signal-store.ts";
@@ -354,7 +364,7 @@ import {
   CODEX_SUBSCRIPTION_PROVIDER,
   companyModelId,
   defaultModel,
-  resolveModel,
+  resolveDeploymentModel,
   modelSupported,
 } from "./model/pi-models.ts";
 import { createAdminService, parseAdminGrants, type AdminService } from "./admin/admin-service.ts";
@@ -484,7 +494,6 @@ export interface BuiltApp {
   credentialUsage: CredentialUsageSink;
   egressAudit: EgressAuditSink;
   identity: IdentityService;
-  users: UserStore;
   principalLinks: PrincipalLinkService;
   slackAccounts: DurableMap<SlackAccountLink>;
   composioReturns: DurableMap<ComposioReturn>;
@@ -579,7 +588,9 @@ export function buildApp(
   const artifactMap = <T>(table: string, indexedFields?: readonly Extract<keyof T, string>[]): DurableMap<T> =>
     pgArtifactMap.map<T>(table, indexedFields);
   setProviderBaseUrls(config.providerBaseUrls);
-  const unknownGatewayModels = Object.keys(config.modelGateway?.models ?? {}).filter((id) => !resolveModel(id));
+  const unknownGatewayModels = Object.keys(config.modelGateway?.models ?? {}).filter(
+    (id) => !resolveDeploymentModel(id),
+  );
   if (unknownGatewayModels.length) {
     throw new Error(`MODEL_GATEWAY_MODELS contains unsupported models: ${unknownGatewayModels.join(", ")}`);
   }
@@ -614,15 +625,16 @@ export function buildApp(
     },
   };
   const advisoryLock: AdvisoryLock = createPostgresAdvisoryLock(pgArtifactMap.pool);
-  const users = createPostgresUserStore(databaseUrl);
-  const principalLinks = createPrincipalLinkService(users, advisoryLock);
+  const principalLinks = createPrincipalLinkService(
+    createPostgresMap<PrincipalLink>(pgArtifactMap.pool, "principal_links", [], undefined, [PRINCIPAL_LINKS_RESTORE]),
+    advisoryLock,
+  );
   installPrincipalLinks(principalLinks);
   const identity = createIdentityService(artifactMap<DeactivationRecord>("deactivated_principals"), {
     directorySyncProtected: config.emailAuthPrincipals,
     externalMembers: artifactMap<ExternalMember>("external_members"),
     principalLinks,
   });
-  void identity.refresh().catch(reportFailureAs("startup: hydrate identity", undefined));
   const leaderLease: LeaderLease = createPostgresLeaderLease(pgArtifactMap.pool);
   const configStore = createConfigStore(config.orgId, {
     ...configStoreMaps(artifactMap),
@@ -630,7 +642,6 @@ export function buildApp(
     defaultSharingPosture: config.sharingPosture,
     ...(config.connectorSecretKey ? { connectorSecretKey: config.connectorSecretKey } : {}),
   });
-  void configStore.hydrate?.().catch(reportFailureAs("startup: hydrate configuration", undefined));
   const skills: SkillStore = createSkillStore({
     backing: artifactMap<Skill>("skills", ["scopeId"]),
     advisoryLock,
@@ -655,7 +666,13 @@ export function buildApp(
   const auditLog = createPostgresAuditLog(databaseUrl);
   let ownsSharedState = false;
   const deploymentLayerStore = createDeploymentLayerStore({
-    backing: artifactMap<StoredDeploymentLayer>("deployment_layer"),
+    backing: createPostgresMap<StoredDeploymentLayer>(
+      pgArtifactMap.pool,
+      "deployment_layer",
+      [],
+      [],
+      [processLevelMap("deployment_layer")],
+    ),
     runtime: deploymentLayer,
     skills,
     skillBundles,
@@ -684,8 +701,16 @@ export function buildApp(
         }
       : {}),
   });
-  const deploymentLayerReady = deploymentLayerStore.hydrate();
-  const deploymentLayerRefresh = createUntrackedSweeper(() => deploymentLayerStore.hydrate(), 30_000, {
+  const layerTenants = new Set<string>();
+  const deploymentLayerReady = boundTenant() ? deploymentLayerStore.hydrate() : Promise.resolve(null);
+  const stopLayerLoad = onTenantLoad(async () => {
+    layerTenants.add(currentTenant());
+    await deploymentLayerStore.hydrate();
+  });
+  const refreshLayerTenants = async (): Promise<void> => {
+    for (const tenant of layerTenants) await withTenant(tenant, () => deploymentLayerStore.hydrate());
+  };
+  const deploymentLayerRefresh = createUntrackedSweeper(refreshLayerTenants, 30_000, {
     label: "deployment layer refresh",
   });
   const installCatalogs = async (): Promise<void> => {
@@ -1318,6 +1343,14 @@ export function buildApp(
   const refreshCustomProviders = async () => {
     setCustomProviders(await customProviders.enabled());
   };
+  const stopTenantLoad = onTenantLoad(() =>
+    Promise.all([
+      configStore.hydrate?.(),
+      refreshCustomProviders(),
+      identity.refresh(),
+      loadTenantSettings(pgArtifactMap.pool),
+    ]),
+  );
   const refreshModels = async () => {
     await gatewayCatalog?.refresh();
     await refreshCustomProviders();
@@ -1733,13 +1766,9 @@ export function buildApp(
   }
   const adminGrantStore = createAdminGrantStore(createPostgresAdminGrantStore(databaseUrl), {
     seed: parseAdminGrants(config.adminGrants, config.orgId) ?? [],
-    beforeSeed: (grants) =>
-      Promise.all(grants.map((g) => users.record({ id: g.principalId, source: "admin", at: Date.now() }))),
+    seedTenant: () => sessions.readBootTenant(),
   });
-  const admin = createAdminService(adminGrantStore, {
-    trustedOidcAdminIssuer: config.trustedOidcAdminIssuer,
-    users,
-  });
+  const admin = createAdminService(adminGrantStore, { trustedOidcAdminIssuer: config.trustedOidcAdminIssuer });
   const { strategy: memoryStrategy, memory } = createMemoryStrategy(config.memoryStrategy, {
     agent,
     memory: baseMemory,
@@ -2066,7 +2095,6 @@ export function buildApp(
     sessionSyscalls,
     refreshModels,
     identity,
-    users,
     resolution,
     config: configStore,
     defaultTurnWallClockMs: config.turnWallClockMs,
@@ -2575,6 +2603,7 @@ export function buildApp(
     outputs: loopOutputs,
     fire: loopFire,
     lock: advisoryLock,
+    tenants: sessions.tenantLookup,
     ...(config.gmailPubSub && keychain
       ? { gmailConfig: config.gmailPubSub, gmailClient: createGmailPushClient(keychain, config.gmailPubSub) }
       : {}),
@@ -2911,6 +2940,8 @@ export function buildApp(
     },
     releaseInFlightRuns,
     async stop() {
+      stopTenantLoad();
+      stopLayerLoad();
       renderBasePreparing?.abort();
       const draining = drain.stop();
       await stopBackground();
@@ -3005,7 +3036,6 @@ export function buildApp(
     credentialUsage,
     egressAudit,
     identity,
-    users,
     principalLinks,
     slackAccounts: artifactMap<SlackAccountLink>("slack_accounts"),
     composioReturns,

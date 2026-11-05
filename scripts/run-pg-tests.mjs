@@ -27,6 +27,7 @@ const files = positionals.toSorted((a, b) => statSync(b).size - statSync(a).size
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) throw new Error("Set DATABASE_URL to a Postgres server the tests may create databases on");
+const BOOT_TENANT_ENTRY = "test/support/boot-tenant-entry.ts";
 const runId = `qmt_${process.pid}_${randomBytes(4).toString("hex")}`;
 const children = new Set();
 const admin = new pg.Pool({ connectionString: baseUrl, max: jobs });
@@ -75,9 +76,9 @@ function runFile(file, env) {
       children.delete(child);
       resolve({ file, ok, ms: Date.now() - started, output });
     };
-    const child = spawn(process.execPath, ["--experimental-test-module-mocks", "--test", file], {
+    const child = spawn(process.execPath, ["--experimental-test-module-mocks", "--test", BOOT_TENANT_ENTRY], {
       detached: true,
-      env: { ...process.env, ...env },
+      env: { ...process.env, ...env, QM_BOOT_TENANT_TEST_FILE: file },
     });
     children.add(child);
     child.stdout?.on("data", (chunk) => (output += chunk));
@@ -137,6 +138,8 @@ await migrateTemplate().catch(async (error) => {
   }
   throw error;
 });
+await admin.query(`ALTER DATABASE ${templateName} WITH ALLOW_CONNECTIONS false`);
+await admin.query("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1", [templateName]);
 const results = [];
 let next = 0;
 const work = Promise.all(

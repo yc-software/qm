@@ -63,3 +63,18 @@ test("concurrent stale reads share one background lookup", async () => {
   await Promise.all([resolve("U-alias"), resolve("U-alias"), resolve("U-alias")]);
   assert.equal(calls.length, 2);
 });
+
+test("the same person signed in to two tenants resolves separately in each", async () => {
+  const seen: Array<[string, string | undefined]> = [];
+  const resolve = createCanonicalResolver(async (sub, tenant) => {
+    seen.push([sub, tenant]);
+    return `${sub}@${tenant ?? "none"}`;
+  });
+  assert.deepEqual(await resolve("a", "t1"), { id: "a@t1", stale: false });
+  assert.deepEqual(await resolve("a", "t2"), { id: "a@t2", stale: false });
+  assert.deepEqual(await resolve("a", "t1"), { id: "a@t1", stale: false });
+  assert.deepEqual(seen, [
+    ["a", "t1"],
+    ["a", "t2"],
+  ]);
+});

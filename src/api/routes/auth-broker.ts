@@ -7,6 +7,9 @@ import { deployRef, encodeRef } from "../../acl/resource-ref.ts";
 import { externalMemberActive, validEmail } from "../../identity/external-members.ts";
 import { isObj, authorizeAdmin, orgScope, audit, activePrincipal } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
+import { loadTenant } from "../../tenants/cache.ts";
+import { tenantAllowsEmail } from "../../tenants/settings.ts";
+import { boundTenant, withTenant } from "../../tenants/context.ts";
 
 const NAMESPACE = "authbroker:";
 const MAX_IDS = 64;
@@ -53,20 +56,21 @@ async function claimBrokerNonce(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { claimed: null });
 }
 
-async function emailAllowed(ctx: ApiCtx): Promise<void> {
-  const { res, deps, app, url } = ctx;
-  const email = (url.searchParams.get("email") ?? "").trim().toLowerCase();
-  if (!validEmail(email)) return sendJson(res, 400, { error: "bad_request", message: "email required" });
-  if (!deps.identity) return sendJson(res, 200, { allowed: false });
+type Admission = { allowed: boolean; appOnly?: true; expiresAt?: number | null };
+
+async function admission(ctx: ApiCtx, email: string): Promise<Admission> {
+  const { deps, app } = ctx;
+  if (!deps.identity) return { allowed: false };
   await deps.identity.refresh();
-  if (deps.identity.deactivationSource(email) === "manual") return sendJson(res, 200, { allowed: false });
+  if (deps.identity.deactivationSource(email) === "manual") return { allowed: false };
   const member = deps.identity.externalMember(email);
   const configured =
-    deps.emailAuthPrincipals?.includes(email) ||
-    Boolean(deps.emailAuthDomain && email.endsWith(`@${deps.emailAuthDomain}`));
+    (boundTenant() ? await tenantAllowsEmail(email) : undefined) ??
+    (deps.emailAuthPrincipals?.includes(email) ||
+      Boolean(deps.emailAuthDomain && email.endsWith(`@${deps.emailAuthDomain}`)));
   const allowed =
     deps.identity.classify(email).type === "internal" && (member ? externalMemberActive(member) : configured);
-  if (allowed) return sendJson(res, 200, { allowed: true, expiresAt: member?.expiresAt });
+  if (allowed) return { allowed: true, expiresAt: member?.expiresAt };
   const grants = (await deps.acl?.find({ granteeScopeIds: [`personal:${email}`], kind: "deploy" })) ?? [];
   const deployments = await app.listDeployments();
   const granted = deployments.filter(
@@ -79,8 +83,36 @@ async function emailAllowed(ctx: ApiCtx): Promise<void> {
   const allowedOwners = await Promise.all(
     granted.map((d) => externalAppSharingAllowed(deps.featureFlags, d.ownerScopeId)),
   );
-  const appOnly = allowedOwners.some(Boolean);
-  return sendJson(res, 200, appOnly ? { allowed: true, appOnly: true } : { allowed: false });
+  return allowedOwners.some(Boolean) ? { allowed: true, appOnly: true } : { allowed: false };
+}
+
+function requestedEmail(ctx: ApiCtx): string | null {
+  const email = (ctx.url.searchParams.get("email") ?? "").trim().toLowerCase();
+  if (validEmail(email)) return email;
+  sendJson(ctx.res, 400, { error: "bad_request", message: "email required" });
+  return null;
+}
+
+async function emailAllowed(ctx: ApiCtx): Promise<void> {
+  const email = requestedEmail(ctx);
+  if (!email) return;
+  const tenants = ctx.deps.directory?.tenantsForEmail;
+  if (boundTenant() || !tenants) return sendJson(ctx.res, 200, await admission(ctx, email));
+  for (const { id } of await tenants(email)) {
+    const admitted = await withTenant(id, async () => {
+      await loadTenant();
+      return admission(ctx, email);
+    });
+    if (admitted.allowed) return sendJson(ctx.res, 200, admitted);
+  }
+  return sendJson(ctx.res, 200, { allowed: false });
+}
+
+async function emailTenants(ctx: ApiCtx): Promise<void> {
+  const email = requestedEmail(ctx);
+  if (!email) return;
+  const tenants = ctx.deps.directory?.tenantsForEmail;
+  return sendJson(ctx.res, 200, { tenants: tenants ? await tenants(email) : [] });
 }
 
 async function brokerSession(ctx: ApiCtx): Promise<void> {
@@ -217,9 +249,38 @@ async function redeemInvitation(ctx: ApiCtx): Promise<void> {
 export const authBrokerRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/auth/invitations/redeem", actor: "system", auth: "source", handle: redeemInvitation },
   { method: "POST", path: "/v1/auth/trusted/admin", actor: "system", auth: "source", handle: trustedAdmin },
-  { method: "POST", path: "/v1/auth/broker/sessions", actor: "system", auth: "source", handle: brokerSession },
-  { method: "POST", path: "/v1/auth/broker/sessions/use", actor: "system", auth: "source", handle: brokerSession },
-  { method: "POST", path: "/v1/auth/broker/sessions/revoke", actor: "person", auth: "source", handle: brokerSession },
-  { method: "POST", path: "/v1/auth/broker/claim", actor: "system", auth: "source", handle: claimBrokerNonce },
-  { method: "GET", path: "/v1/auth/broker/email-allowed", auth: "source", handle: emailAllowed },
+  {
+    method: "POST",
+    path: "/v1/auth/broker/sessions",
+    actor: "system",
+    auth: "source",
+    tenant: "optional",
+    handle: brokerSession,
+  },
+  {
+    method: "POST",
+    path: "/v1/auth/broker/sessions/use",
+    actor: "system",
+    auth: "source",
+    tenant: "optional",
+    handle: brokerSession,
+  },
+  {
+    method: "POST",
+    path: "/v1/auth/broker/sessions/revoke",
+    actor: "person",
+    auth: "source",
+    tenant: "optional",
+    handle: brokerSession,
+  },
+  {
+    method: "POST",
+    path: "/v1/auth/broker/claim",
+    actor: "system",
+    auth: "source",
+    tenant: "optional",
+    handle: claimBrokerNonce,
+  },
+  { method: "GET", path: "/v1/auth/broker/email-allowed", auth: "source", tenant: "optional", handle: emailAllowed },
+  { method: "GET", path: "/v1/auth/broker/email-tenants", auth: "source", tenant: "none", handle: emailTenants },
 ];

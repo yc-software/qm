@@ -1,4 +1,5 @@
 import { sendJson } from "../../http.ts";
+import { inTenant } from "../../../tenants/lookup.ts";
 import { audit, authorizeAdmin, orgScope } from "../shared.ts";
 import type { ApiCtx } from "../route.ts";
 import { errMessage } from "../../../util/errors.ts";
@@ -173,4 +174,19 @@ export async function startSlackInstallation(ctx: ApiCtx): Promise<void> {
 export async function managedSlackRequest(ctx: ApiCtx): Promise<void> {
   if (!ctx.deps.managedSlack) return sendJson(ctx.res, 404, { error: "not_configured" });
   await ctx.deps.managedSlack.handle(ctx.req, ctx.res, ctx.body);
+}
+
+function slackTeam(value: unknown): string | undefined {
+  const body = (value as { body?: { team_id?: unknown; team?: { id?: unknown } } } | undefined)?.body;
+  const team = body?.team_id ?? body?.team?.id;
+  return typeof team === "string" ? team : undefined;
+}
+
+export async function managedSlackEvent(ctx: ApiCtx): Promise<void> {
+  const slack = ctx.deps.managedSlack;
+  if (!slack) return sendJson(ctx.res, 404, { error: "not_configured" });
+  if (!slack.authenticated(ctx.req)) return sendJson(ctx.res, 401, { error: "unauthorized" });
+  const tenant = await ctx.app.tenantFor("slack_team", slackTeam(ctx.body));
+  if (!tenant) return sendJson(ctx.res, 409, { error: "installation_mismatch" });
+  return inTenant(tenant, () => slack.handle(ctx.req, ctx.res, ctx.body));
 }

@@ -232,6 +232,7 @@ describe("background sweeps claim across tenants and bind each row's tenant", ()
       });
     const checked = new Set<string>();
     const ingress = createLoopIngress({
+      tenants: { gmailTenants: async () => [] },
       enabledFor: async (owner) => {
         checked.add(`${owner}:${currentTenant()}`);
         return false;

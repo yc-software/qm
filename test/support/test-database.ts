@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { boundTenant } from "../../src/tenants/context.ts";
 import { MessageChannel, receiveMessageOnPort, Worker, type MessagePort } from "node:worker_threads";
 import { createPostgresAdminGrantStore } from "../../src/admin/postgres-admin-grant-store.ts";
 import { createAdminGrantStore, type AdminGrant, type AdminGrantStore } from "../../src/admin/admin-grant-store.ts";
@@ -10,7 +11,6 @@ import { DEPLOYMENT_TABLES } from "../../src/deploy/page-views.ts";
 import { configStoreMaps, createConfigStore } from "../../src/resolution/config-store.ts";
 import { orgId } from "../../src/config.ts";
 import { scopeId } from "../../src/types.ts";
-import { createPostgresUserStore } from "../../src/identity/user-store.ts";
 
 function baseDatabaseUrl(): URL {
   const base = process.env.DATABASE_URL;
@@ -20,7 +20,7 @@ function baseDatabaseUrl(): URL {
 
 let databaseWorker: { worker: Worker; signal: Int32Array; port: MessagePort } | undefined;
 
-function createDatabaseSync(request: { template?: string }): string {
+function createDatabaseSync(request: { template?: string; bare?: boolean }): string {
   if (!databaseWorker) {
     const signal = new Int32Array(new SharedArrayBuffer(4));
     const { port1, port2 } = new MessageChannel();
@@ -53,6 +53,10 @@ function databaseUrl(name: string): string {
 
 export function testDatabaseUrl(): string {
   return boundUrl(databaseUrl(createDatabaseSync({})));
+}
+
+export function testBareDatabaseUrl(): string {
+  return databaseUrl(createDatabaseSync({ bare: true }));
 }
 
 export function testMigratedDatabaseUrl(): string {
@@ -96,7 +100,10 @@ export function testAdminGrantStore(
     role: "org_admin" as const,
   })),
 ): AdminGrantStore {
-  return createAdminGrantStore(createPostgresAdminGrantStore(testDatabaseUrl()), { seed });
+  return createAdminGrantStore(createPostgresAdminGrantStore(testDatabaseUrl()), {
+    seed,
+    seedTenant: async () => boundTenant(),
+  });
 }
 
 export function testDeployBackings(
@@ -113,7 +120,3 @@ export function testDeployBackings(
     ...backings,
   };
 }
-
-export const testUsers = () => createPostgresUserStore(sharedDatabase().url);
-
-export const testUserStore = () => createPostgresUserStore(testMigratedDatabaseUrl());

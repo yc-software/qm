@@ -5,7 +5,7 @@ import { createPostgresAdminGrantStore } from "../src/admin/postgres-admin-grant
 import { createPostgresMap } from "../src/persistence/durable-map.ts";
 import { createPgPool, type PgPool } from "../src/persistence/pg-pool.ts";
 import { createPostgresInstanceRegistry } from "../src/runs/instance-registry.ts";
-import { withTenant } from "../src/tenants/context.ts";
+import { withoutTenant, withTenant } from "../src/tenants/context.ts";
 import { scopeId } from "../src/types.ts";
 import { testMigratedDatabaseUrl } from "./support/test-database.ts";
 import { appUrl, ownerUrl } from "./support/test-tenant.ts";
@@ -16,6 +16,8 @@ const UNTENANTED: Record<string, string> = {
   qm_settings: "holds install-level settings the process reads, no tenant data",
   source_auth_replay: "holds random replay nonces for signed internal calls",
   instance_heartbeats: "records the liveness of core processes",
+  auth_broker_sessions: "holds identity-provider sign-in sessions, which exist before a tenant is chosen",
+  deployment_layer: "describes the installation's deployment layer, which the process reads before any tenant binds",
 };
 
 describe("tenant tables", () => {
@@ -102,8 +104,14 @@ describe("tenant tables", () => {
       ),
       /row-level security/,
     );
-    await assert.rejects(app.q("SELECT id FROM sessions"), /No tenant is bound to this query/);
-    await assert.rejects(app.q("INSERT INTO teams(team_id, name) VALUES ('t', 't')"), /No tenant is bound/);
+    await assert.rejects(
+      withoutTenant(() => app.q("SELECT id FROM sessions")),
+      /No tenant is bound to this query/,
+    );
+    await assert.rejects(
+      withoutTenant(() => app.q("INSERT INTO teams(team_id, name) VALUES ('t', 't')")),
+      /No tenant is bound/,
+    );
   });
 
   it("shows a tenant only its own tenants row and denies the login writes to it", async () => {

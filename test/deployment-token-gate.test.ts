@@ -1,4 +1,5 @@
 import { after, before, describe, it } from "node:test";
+import { TEST_TENANT } from "./support/test-config.ts";
 import assert from "node:assert/strict";
 import { Readable } from "node:stream";
 import type { Server } from "node:http";
@@ -69,6 +70,8 @@ describe("a published app's broker token follows the app it was minted for, on e
 
   before(async () => {
     const app = {
+      readBootTenant: async () => TEST_TENANT,
+      tenantFor: async () => TEST_TENANT,
       authorizesCapabilityScope: async (claims: unknown) => {
         authorized.push(claims);
         return scopeAuthorized;
