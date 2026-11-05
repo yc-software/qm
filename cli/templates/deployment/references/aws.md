@@ -49,11 +49,11 @@ host-header rules straight to core's API port 8080, so machine callers such as
 the egress proxy and sandboxes reach the whole API rather than only the front
 door's pass-through paths. The scaffold renders them as `core_public_hosts` and
 requires `certificate_arn`. Core's ECS service is attached to two target groups:
-the front door on port 8000 (`aws.services.core.targetGroup`) and the API on
-port 8080 (`aws.services.core.apiTargetGroup`, derived when unset). On external
-infrastructure, the listener default forwards to the front-door group, plugin
-`publicPaths` rules come first, and each core host rule has only a host-header
-condition and forwards to the API group. `qm up` and `qm check --live` reject
+the front door on port 8000 (named by `aws.services.core.targetGroup` on
+external infrastructure) and the API, found as core's one attachment on
+container port 8080. On external infrastructure, the listener default forwards
+to the front-door group, plugin `publicPaths` rules come first, and each core
+host rule has only a host-header condition and forwards to the API group. `qm up` and `qm check --live` reject
 any other rule or target group and wait for healthy targets in both groups.
 
 ## Publish the agent computer and deploy

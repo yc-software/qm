@@ -3723,14 +3723,8 @@ function awsIngressRoutes(config: QmConfig): ReadonlyMap<string, AwsIngressRoute
 
 export function awsTargetGroupName(config: QmConfig, route: string): string {
   const aws = requireAws(config);
-  const configured =
-    route === CORE_PUBLIC_PORT_NAME
-      ? aws.services.core?.targetGroup
-      : route === CORE_API_ROUTE
-        ? aws.services.core?.apiTargetGroup
-        : aws.services[route]?.targetGroup;
   return (
-    configured ??
+    aws.services[route === CORE_PUBLIC_PORT_NAME ? "core" : route]?.targetGroup ??
     `${aws.cluster.slice(0, 20)}-${route.replaceAll("-", "").slice(0, 4)}-${createHash("sha1").update(`${aws.cluster}:${route}`).digest("hex").slice(0, 6)}`
   );
 }
@@ -3762,33 +3756,31 @@ export function assertAwsPublicRouting(
   const productionRules = new Map<string, string>();
   const expectedTargetArns = new Set<string>();
   for (const name of ingress) {
+    const owner = routes.get(name)!.service;
+    const attachments = routingServices.get(owner)?.loadBalancers ?? [];
+    const apiPort = serviceDef("core").docker.internalPort;
+    const onApiPort = attachments.filter((item) => item.containerPort === apiPort);
     const expectedName = awsTargetGroupName(config, name);
-    const target = targetGroups.find((group) => group.TargetGroupName === expectedName);
-    if (!target?.TargetGroupArn) {
+    const targetArn =
+      name === CORE_API_ROUTE
+        ? onApiPort.length === 1
+          ? onApiPort[0]!.targetGroupArn
+          : undefined
+        : targetGroups.find((group) => group.TargetGroupName === expectedName)?.TargetGroupArn;
+    if (name === CORE_API_ROUTE && !targetArn) {
       throw new Error(
-        name === CORE_API_ROUTE
-          ? `target group ${expectedName} for core's API host rules (${routes.get(name)!.hosts.join(", ")}) is missing`
-          : `target group for ${name} is missing`,
+        `ECS service core must be attached to one target group on container port ${apiPort} for core's API host rules (${routes.get(name)!.hosts.join(", ")})`,
       );
     }
-    targets.set(name, target.TargetGroupArn);
-    expectedTargetArns.add(target.TargetGroupArn);
-    const owner = routes.get(name)!.service;
-    const attachment = (routingServices.get(owner)?.loadBalancers ?? []).find(
-      (item) => item.targetGroupArn === target.TargetGroupArn,
-    );
+    if (!targetArn || !targetGroups.some((group) => group.TargetGroupArn === targetArn)) {
+      throw new Error(`target group for ${name} is missing`);
+    }
+    const attachment = attachments.find((item) => item.targetGroupArn === targetArn);
     if (!attachment) {
       throw new Error(`ECS service ${owner} is not attached to its ${name} target group`);
     }
-    const port =
-      name === CORE_PUBLIC_PORT_NAME
-        ? PUBLIC_PORT
-        : name === CORE_API_ROUTE
-          ? serviceDef("core").docker.internalPort
-          : undefined;
-    if (port !== undefined && attachment.containerPort !== undefined && attachment.containerPort !== port) {
-      throw new Error(`ECS service core must attach its ${name} target group to container port ${port}`);
-    }
+    targets.set(name, targetArn);
+    expectedTargetArns.add(targetArn);
     const alternate = attachment.advancedConfiguration?.alternateTargetGroupArn;
     const productionRule = attachment.advancedConfiguration?.productionListenerRule;
     if (Boolean(alternate) !== Boolean(productionRule)) {

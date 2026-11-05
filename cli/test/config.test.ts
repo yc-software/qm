@@ -734,38 +734,6 @@ test("AWS validates release labels, unique coordinates, Fargate sizes, and owned
     },
     ({ path }) => assert.throws(() => loadConfigAt(path), /duplicates aws\.services\.core\.targetGroup/),
   );
-  withConfig(
-    { target: "aws", aws: { ...aws, services: { core: { ...service, apiTargetGroup: "legacy-core-api" } } } },
-    ({ path }) => assert.equal(loadConfigAt(path).config.aws!.services.core!.apiTargetGroup, "legacy-core-api"),
-  );
-  for (const apiTargetGroup of ["", "has_underscore", "x".repeat(33)]) {
-    withConfig({ target: "aws", aws: { ...aws, services: { core: { ...service, apiTargetGroup } } } }, ({ path }) => {
-      assert.throws(() => loadConfigAt(path), /aws\.services\.core\.apiTargetGroup/);
-    });
-  }
-  withConfig(
-    {
-      target: "aws",
-      aws: { ...aws, services: { core: { ...service, targetGroup: "core-tg", apiTargetGroup: "core-tg" } } },
-    },
-    ({ path }) =>
-      assert.throws(() => loadConfigAt(path), /apiTargetGroup" duplicates aws\.services\.core\.targetGroup/),
-  );
-  withConfig(
-    {
-      target: "aws",
-      plugins: [{ name: "linear", image: "ghcr.io/acme/linear:1" }],
-      aws: {
-        ...aws,
-        services: {
-          core: service,
-          linear: { ...service, ecrRepository: "linear", ecsService: "acme-linear", apiTargetGroup: "linear-api" },
-        },
-      },
-    },
-    ({ path }) =>
-      assert.throws(() => loadConfigAt(path), /aws\.services\.linear\.apiTargetGroup" is only valid for core/),
-  );
 });
 
 test("AWS rejects coordinates that its Terraform-derived resources cannot accept", () => {

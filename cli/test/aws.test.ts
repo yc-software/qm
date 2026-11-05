@@ -67,6 +67,7 @@ interface FrontDoor {
   blueGreen?: boolean;
   frontDoorTargetGroup?: string;
   apiHosts?: string[];
+  apiTargetGroup?: string;
 }
 
 const coreApiAlternate = "core-api-alternate";
@@ -92,7 +93,7 @@ function frontDoorAttachments(door: FrontDoor): Array<Record<string, unknown>> {
       frontDoorAlternate,
       8000,
     ),
-    ...(door.apiHosts?.length ? [attachment("core", awsTargetGroupName(config, "core"), coreApiAlternate, 8080)] : []),
+    ...(door.apiHosts?.length ? [attachment("core", door.apiTargetGroup ?? "core-api", coreApiAlternate, 8080)] : []),
   ];
 }
 
@@ -101,7 +102,7 @@ function coreApiRoute(door: FrontDoor): {
   rules: Array<Record<string, unknown>>;
 } {
   if (!door.apiHosts?.length) return { groups: [], rules: [] };
-  const name = awsTargetGroupName(config, "core");
+  const name = door.apiTargetGroup ?? "core-api";
   const primary = targetGroupArn(name);
   const alternate = targetGroupArn(coreApiAlternate, 2);
   return {
@@ -1178,7 +1179,6 @@ test("AWS routes a separate apiUrl host and apps domain straight to core's API t
   const hosts = awsCoreHostnames(configured);
   assert.deepEqual(hosts, ["api.agent.acme.example", "*.apps.agent.acme.example"]);
   const front = targetGroupArn(awsTargetGroupName(config, "core-public"));
-  const coreApi = targetGroupArn(awsTargetGroupName(config, "core"));
   for (const blueGreen of [false, true]) {
     const check = (
       door: FrontDoor,
@@ -1193,7 +1193,7 @@ test("AWS routes a separate apiUrl host and apps domain straight to core's API t
         if (expected) assert.throws(() => assertAwsPublicRouting(routed, services), expected);
         else
           assert.deepEqual([...assertAwsPublicRouting(routed, services)].sort(), [
-            ["core", coreApi],
+            ["core", targetGroupArn(door.apiTargetGroup ?? "core-api")],
             ["core-public", front],
           ]);
       } finally {
@@ -1203,19 +1203,19 @@ test("AWS routes a separate apiUrl host and apps domain straight to core's API t
     };
     const door: FrontDoor = { blueGreen, apiHosts: hosts };
     const attached = frontDoorAttachments(door);
+    const unattached =
+      /ECS service core must be attached to one target group on container port 8080 for core's API host rules \(api\.agent\.acme\.example, \*\.apps\.agent\.acme\.example\)/;
+    const legacy = { ...door, apiTargetGroup: "legacy-api-tg" };
     check(door, configured, attached);
-    check(
-      { blueGreen },
-      configured,
-      frontDoorAttachments({ blueGreen }),
-      /target group acme-qm-core-[0-9a-f]{6} for core's API host rules \(api\.agent\.acme\.example, \*\.apps\.agent\.acme\.example\) is missing/,
-    );
-    check(door, configured, attached.slice(0, 1), /ECS service core is not attached to its core target group/);
+    check(legacy, configured, frontDoorAttachments(legacy));
+    check({ blueGreen }, configured, frontDoorAttachments({ blueGreen }), unattached);
+    check(door, configured, attached.slice(0, 1), unattached);
+    check(door, configured, [attached[0]!, { ...attached[1]!, containerPort: 8000 }], unattached);
     check(
       door,
       configured,
-      [attached[0]!, { ...attached[1]!, containerPort: 8000 }],
-      /ECS service core must attach its core target group to container port 8080/,
+      [attached[0]!, { ...attached[1]!, targetGroupArn: targetGroupArn("elsewhere") }],
+      /target group for core is missing/,
     );
     check(
       { blueGreen, apiHosts: ["api.agent.acme.example"] },
@@ -1242,18 +1242,6 @@ test("AWS routes a separate apiUrl host and apps domain straight to core's API t
         /shared ALB requires one blue\/green core front-door ingress without additional public routes/,
       );
   }
-  const named: QmConfig = {
-    ...configured,
-    aws: {
-      ...configured.aws!,
-      services: {
-        ...configured.aws!.services,
-        core: { ...configured.aws!.services.core!, apiTargetGroup: "acme-core-api" },
-      },
-    },
-  };
-  assert.equal(awsTargetGroupName(named, "core"), "acme-core-api");
-  assert.equal(awsTargetGroupName(named, "core-public"), awsTargetGroupName(configured, "core-public"));
 });
 
 test("AWS live routing rejects a core host rule when no separate apiUrl host or apps domain is configured", () => {
