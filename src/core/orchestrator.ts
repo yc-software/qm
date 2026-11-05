@@ -1249,10 +1249,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         (input.proactiveOpener && !input.text.trim()) ||
         ((automatedTurn || (sessionTurn && input.envelopeWrapped)) && !delegatedTask);
       const titleText = input.displayText?.trim() || input.text;
-      let fallbackTitleWrite: Promise<void> | undefined;
+      let firstMessageTitle: ReturnType<typeof titles.titleFromFirstMessage>;
       const assignSessionTitle = () => {
         if (!session.title && !syntheticInput && !input.approval)
-          fallbackTitleWrite = titles.titleFromFirstMessage(session, scopeId, titleText, descriptiveTitles);
+          firstMessageTitle = titles.titleFromFirstMessage(session, scopeId, titleText, descriptiveTitles);
       };
 
       const isRetry = (input.attempt ?? 1) > 1;
@@ -3753,7 +3753,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
         const tail = async (): Promise<void> => {
           try {
-            if (!pausing && turnCompleted && !session.title && !fallbackTitleWrite) {
+            if (
+              !pausing &&
+              turnCompleted &&
+              !session.title &&
+              (!firstMessageTitle || (descriptiveTitles && !(await firstMessageTitle.generated)))
+            ) {
               await titles.generateAndStore(session.id, scopeId, `User:\n${titleText}\n\nAssistant:\n${result.reply}`, {
                 descriptive: descriptiveTitles,
               });
@@ -3847,7 +3852,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (turnRuntime) finalResult = { ...finalResult, runtime: turnRuntime };
         if (cronScript) finalResult = { ...finalResult, scriptVerdict: cronScript.verdict };
         if (turnRuntime) await deps.sessions.setRuntime(session.id, turnRuntime);
-        await fallbackTitleWrite;
+        await firstMessageTitle?.written;
 
         tailOwnsCleanup = true;
         await catchUpMessageRevisions();

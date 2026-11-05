@@ -65,20 +65,23 @@ export function createSessionTitles(deps: {
     scopeId: ScopeId,
     text: string,
     descriptive = false,
-  ): Promise<void> | undefined {
+  ): { written: Promise<void>; generated: Promise<string | undefined> } | undefined {
     const fallback = fallbackSessionTitle(text);
     if (!fallback) return undefined;
-    const write = deps.sessions.updateTitle(session.id, fallback);
-    void write
+    const written = deps.sessions.updateTitle(session.id, fallback);
+    const generated = written
       .then(() => announce(session).catch(swallowAs("session title: sidebar refresh", undefined)))
       .then(async () => {
-        if (!deps.agent.generateTitle) return;
-        if (await generateAndStore(session.id, scopeId, `User:\n${stripTurnBoilerplate(text)}`, { descriptive }))
-          await announce(session);
+        if (!deps.agent.generateTitle) return undefined;
+        const title = await generateAndStore(session.id, scopeId, `User:\n${stripTurnBoilerplate(text)}`, {
+          descriptive,
+        });
+        if (title) await announce(session);
+        return title;
       })
       .finally(() => deps.errors?.flush())
       .catch(swallowAs("session title", undefined));
-    return write;
+    return { written, generated };
   }
 
   return { generateAndStore, titleFromFirstMessage };

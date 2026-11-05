@@ -288,3 +288,34 @@ test("the descriptive_session_titles flag of the person who starts or retitles a
   await built.app.regenerateTitle(on.sessionId!, "U1");
   assert.deepEqual(await titled("board meeting"), [{ descriptive: true }, undefined]);
 });
+
+test("a flagged first message titled NONE is retitled once from the first exchange", async () => {
+  const calls: string[] = [];
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "ap-title-retry-")) }), {
+    agent: {
+      ...createMockAgent(),
+      generateTitle: async (transcript: string) => {
+        calls.push(transcript);
+        if (transcript.includes("this out") && !transcript.includes("Assistant:")) return undefined;
+        return transcript.includes("review") ? "Board review plan" : "Map viewer port plan";
+      },
+    },
+  });
+  const callsFor = (text: string) => calls.filter((call) => call.includes(text));
+  const until = async (done: () => boolean | Promise<boolean>) => {
+    while (!(await done())) await new Promise((r) => setTimeout(r, 5));
+  };
+
+  await built.app.turn(dm("help me sort this out", "web:U1:retry-off"));
+  await until(() => callsFor("sort this out").length > 0);
+  await built.featureFlags.setEnabled("descriptive_session_titles", scopeId("personal", "U1"), true, "test");
+  const found = await built.app.turn(dm("Plan the board review", "web:U1:retry-found"));
+  await until(async () => (await built.app.getSession(found.sessionId!))?.session.title === "Board review plan");
+  const none = await built.app.turn(dm("help me plan this out", "web:U1:retry-none"));
+  await until(async () => (await built.app.getSession(none.sessionId!))?.session.title === "Map viewer port plan");
+
+  assert.equal(callsFor("plan this out").length, 2);
+  assert.match(callsFor("plan this out")[1]!, /\n\nAssistant:\n/);
+  assert.equal(callsFor("board review").length, 1);
+  assert.equal(callsFor("sort this out").length, 1);
+});
