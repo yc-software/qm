@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { after, before, describe, it } from "node:test";
+import { after, before, describe, it } from "./support/unbound-test.ts";
 import { createPostgresAdminGrantStore } from "../src/admin/postgres-admin-grant-store.ts";
 import { createPostgresMap } from "../src/persistence/durable-map.ts";
 import { createPgPool, type PgPool } from "../src/persistence/pg-pool.ts";

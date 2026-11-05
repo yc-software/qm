@@ -8,7 +8,6 @@ import {
 } from "./pi-models.ts";
 import { customModelCatalog } from "./custom-providers.ts";
 import { readBoundedText } from "../util/bytes.ts";
-import { perTenant } from "../tenants/cache.ts";
 
 export interface ModelCatalogEntry {
   id: string;
@@ -30,7 +29,7 @@ interface CacheEntry {
   inFlight?: Promise<ModelCatalogEntry[]>;
 }
 
-const cache = perTenant(() => new WeakMap<typeof fetch, CacheEntry>());
+const cache = new WeakMap<typeof fetch, CacheEntry>();
 
 export function builtInModelCatalog(): ModelCatalogEntry[] {
   const builtIns = selectableBaseModels().flatMap((model) => {
@@ -142,8 +141,8 @@ function withBuiltIns(dynamic: readonly ModelCatalogEntry[]): ModelCatalogEntry[
 }
 
 function openRouterModels(fetcher: typeof fetch): Promise<ModelCatalogEntry[]> {
-  const entry = cache().get(fetcher) ?? { expiresAt: 0 };
-  cache().set(fetcher, entry);
+  const entry = cache.get(fetcher) ?? { expiresAt: 0 };
+  cache.set(fetcher, entry);
   if (entry.expiresAt > Date.now()) return Promise.resolve(entry.dynamic ?? []);
   entry.inFlight ??= fetchOpenRouterModels(fetcher)
     .then((dynamic) => {
@@ -174,6 +173,6 @@ export function cachedModelCatalog(fetcher: typeof fetch = fetch): {
   refreshing: boolean;
 } {
   void openRouterModels(fetcher);
-  const entry = cache().get(fetcher);
+  const entry = cache.get(fetcher);
   return { models: withBuiltIns(entry?.dynamic ?? []), refreshing: !!entry?.inFlight };
 }

@@ -1,7 +1,6 @@
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { safeChunks, safeClip } from "./safe-cut.ts";
 import { sleep } from "./util.ts";
-import { perTenant } from "../tenants/cache.ts";
 import { isExternallyShared, isMpim, type ChannelMeta } from "./identity.ts";
 
 export interface SlackReplyArgs {
@@ -29,13 +28,13 @@ export function botIdentityFromEnv(env: Record<string, string | undefined>): Bot
   };
 }
 
-const defaultIdentity = perTenant(() => ({ identity: {} as BotIdentityOverride }));
+const defaultIdentity: { identity: BotIdentityOverride } = { identity: {} };
 export function setDefaultBotIdentity(identity: BotIdentityOverride | undefined): void {
-  defaultIdentity().identity = identity ?? {};
+  defaultIdentity.identity = identity ?? {};
 }
 
 export function botIdentityArgs(): BotIdentityOverride {
-  const id = defaultIdentity().identity;
+  const id = defaultIdentity.identity;
   return {
     ...(id.username ? { username: id.username } : {}),
     ...(id.icon_emoji ? { icon_emoji: id.icon_emoji } : {}),

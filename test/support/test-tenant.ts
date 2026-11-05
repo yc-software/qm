@@ -1,8 +1,9 @@
 import pg from "pg";
 import { applyPgMigrations, definePgMigration } from "../../src/persistence/pg-pool.ts";
 import { TENANCY } from "../../src/tenants/migrations.ts";
+import { TEST_TENANT } from "./test-tenant-id.ts";
 
-export const TEST_TENANT = "00000000-0000-4000-8000-000000000001";
+export { TEST_TENANT };
 export const APP_ROLE = "qm_app";
 
 const BINDING = /\s*-c (role|qm\.tenant_id)=\S+/g;
