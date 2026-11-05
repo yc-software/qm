@@ -616,11 +616,8 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
     );
   }
 
-  const eachStoredScope = <T>(work: (scope: string) => Promise<T>) => claimThenBind(() => store.claimIds(), work);
-
-  async function reapIdleScope(scope: string, now: number, cutoff: number): Promise<number> {
-    const rec = await store.get(scope);
-    if (!rec || rec.hydrationPending || (rec.orgId && rec.orgId !== configOrgId())) return 0;
+  async function reapIdleScope(scope: string, rec: StoredModalSandbox, now: number, cutoff: number): Promise<number> {
+    if (rec.hydrationPending || (rec.orgId && rec.orgId !== configOrgId())) return 0;
     const name = sandboxScopeName(prefix, scope);
     scopeByName.set(name, scope);
     let session: ModalSession | undefined;
@@ -665,8 +662,7 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
   async function sweepOrphans(now: number): Promise<number> {
     if (!client.listRunning) return 0;
     const tracked = async (): Promise<Set<string>> => {
-      const stored = await eachStoredScope(async (scope) => (await store.get(scope))?.sandboxId);
-      const ids = new Set(stored.filter((id) => id !== undefined));
+      const ids = new Set((await claimThenBind(store.claimTenants, () => store.all())).flat().map((r) => r.sandboxId));
       for (const session of sessionByName.values()) ids.add(session.sandboxId);
       return ids;
     };
@@ -928,7 +924,11 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
       if (!(idleMs > 0)) return { reaped: 0 };
       const now = Date.now();
       const cutoff = now - Math.min(idleMs, reapIdleMs);
-      const idle = await eachStoredScope((scope) => reapIdleScope(scope, now, cutoff));
+      const idle = await claimThenBind(store.claimTenants, async () => {
+        let n = 0;
+        for (const [scope, rec] of await store.entries()) n += await reapIdleScope(scope, rec, now, cutoff);
+        return n;
+      });
       return { reaped: idle.reduce((sum, n) => sum + n, 0) + (await sweepOrphans(now)) };
     },
   };
