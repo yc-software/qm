@@ -1,5 +1,5 @@
 import { onTenantLoad, perTenant } from "./tenants/cache.ts";
-import { loadTenantSettings } from "./tenants/settings.ts";
+import { externalOrgId, loadTenantSettings } from "./tenants/settings.ts";
 import { nonDeploymentCredential, withDeploymentCredentials } from "./credentials/deployment-credentials.ts";
 import { resolveEmbeddingModel } from "./model/pi-models.ts";
 import { createPostgresTeamStore, type TeamStore } from "./teams/teams.ts";
@@ -1629,7 +1629,7 @@ export function buildApp(
           },
         })
       : undefined;
-  const productAnalytics = createProductAnalytics(config.orgId, config.productAnalytics);
+  const productAnalytics = createProductAnalytics(externalOrgId, config.productAnalytics);
   runs.onTerminal((run) => void productAnalytics.responseFinished(run));
 
   let processes: ProcessRegistry | undefined;

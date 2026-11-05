@@ -1,6 +1,9 @@
 import { z } from "zod";
 import type { PgPool } from "../persistence/pg-pool.ts";
+import { orgId } from "../config.ts";
+import { bootTenant } from "./boot.ts";
 import { loadTenant, perTenant } from "./cache.ts";
+import { boundTenant } from "./context.ts";
 
 const text = z.string().min(1).max(4096);
 
@@ -17,6 +20,7 @@ export const tenantSettingsSchema = z
     allowedEmails: z.array(emailOrDomain).max(10_000),
     brandName: z.string().trim().min(1).max(40),
     modelGatewayKey: text,
+    orgSlug: z.string().regex(/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/, "expected a lowercase org slug"),
   })
   .partial()
   .strict();
@@ -34,6 +38,16 @@ export async function loadTenantSettings(db: Pick<PgPool, "q">): Promise<void> {
 
 export function tenantSettings(): TenantSettings {
   return loaded().settings ?? {};
+}
+
+export function externalOrgId(): string {
+  const tenant = boundTenant();
+  const boot = bootTenant();
+  if (tenant === undefined && boot === undefined) throw new Error("no tenant is bound");
+  if (tenant === undefined || tenant === boot) return tenantSettings().orgSlug ?? orgId();
+  const settings = loaded().settings;
+  if (!settings) throw new Error("tenant settings are not loaded");
+  return settings.orgSlug ?? tenant;
 }
 
 export async function tenantAllowsEmail(email: string): Promise<boolean | undefined> {
