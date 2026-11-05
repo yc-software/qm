@@ -9,6 +9,7 @@ import type { App } from "../src/api/app.ts";
 function appWith(endpoint: Record<string, unknown>): App {
   return {
     readBootTenant: async () => TEST_TENANT,
+    tenantFor: async () => TEST_TENANT,
     reachDeployment: async () => ({ status: "ok", endpoint }),
   } as unknown as App;
 }

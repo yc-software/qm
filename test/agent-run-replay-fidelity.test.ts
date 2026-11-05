@@ -1,4 +1,4 @@
-import { mock, test } from "./support/tenant-test.ts";
+import { mock, test } from "node:test";
 import assert from "node:assert/strict";
 import { createAgent, EMPTY_ENDING_NOTE } from "../src/agent/agent-run.ts";
 import { createModelRoutes } from "../src/model/model-route.ts";
@@ -14,7 +14,7 @@ import { createPostgresToolOutputStore, type ToolOutputStore } from "../src/sess
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
-import { schemaUrl, seedSchemaTenant } from "./support/test-tenant.ts";
+import { seedTestTenant } from "./support/test-tenant.ts";
 
 type Body = { messages?: unknown[]; input?: unknown[] };
 type Reply = Array<Record<string, unknown>>;
@@ -540,8 +540,9 @@ async function withPgSession(
   const admin = new pg.Pool({ connectionString: PG_URL });
   const schema = `replay_pg_${randomUUID().replaceAll("-", "")}`;
   await admin.query(`CREATE SCHEMA ${schema}`);
-  const url = new globalThis.URL(schemaUrl(PG_URL!, schema));
-  await seedSchemaTenant(url.toString());
+  const url = new globalThis.URL(PG_URL!);
+  url.searchParams.set("options", `${url.searchParams.get("options") ?? ""} -c search_path=${schema}`.trim());
+  await seedTestTenant(url.toString());
   const store = createPostgresSessionStore(url.toString());
   const raw = new pg.Pool({ connectionString: url.toString() });
   try {

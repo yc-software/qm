@@ -16,6 +16,7 @@ const UNTENANTED: Record<string, string> = {
   qm_settings: "holds install-level settings the process reads, no tenant data",
   source_auth_replay: "holds random replay nonces for signed internal calls",
   instance_heartbeats: "records the liveness of core processes",
+  auth_broker_sessions: "holds identity-provider sign-in sessions, which exist before a tenant is chosen",
 };
 
 describe("tenant tables", () => {
