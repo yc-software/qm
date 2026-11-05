@@ -61,7 +61,6 @@ print("PHASE: image saved diffusion-out.png", flush=True)
 const sb = createSpritesSandbox({
   ...loadConfig().spritesSandbox,
   initializationStore: smokeMap("sprites_initialization"),
-  checkpointStore: smokeMap("sprites_checkpoints"),
   advisoryLock: createNoopAdvisoryLock(),
 });
 if (!supportsProcessSessions(sb)) throw new Error("Sprites sandbox does not advertise process sessions");
