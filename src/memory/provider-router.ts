@@ -1,7 +1,12 @@
 import { disclosedMemory, MemoryRecallWithheld } from "./disclosure.ts";
 import { isSystemActor, parseScopeId, type ScopeId, type ScopeKind } from "../types.ts";
 import type { McpEnvelope } from "../mcp/mcp-client.ts";
-import type { MemoryProviderOutcome, MemoryRecallContext, MemoryService } from "./memory-service.ts";
+import type {
+  MemoryCaptureContext,
+  MemoryProviderOutcome,
+  MemoryRecallContext,
+  MemoryService,
+} from "./memory-service.ts";
 import { failedOutcome, strictFailure, withEnvelope } from "./provider-outcome.ts";
 import { OutsideAudience } from "../directory/person.ts";
 
@@ -25,6 +30,15 @@ export function routeMatches(route: Pick<MemoryProviderRoute, "scopes">, scopeId
 export function captureAllowed(policy: MemoryCapturePolicy | undefined, mode: "explicit" | "automatic"): boolean {
   if (policy === "automatic") return true;
   return policy === "explicit" && mode === "explicit";
+}
+
+export function capturesInto(
+  provider: Pick<MemoryService, "facts" | "attestActor">,
+  scopeId: ScopeId,
+  context: MemoryCaptureContext | undefined,
+): boolean {
+  if (context?.conversationScopeId && context.conversationScopeId !== scopeId && !provider.facts) return false;
+  return !provider.attestActor || (!!context?.actorId && !isSystemActor(context.actorId));
 }
 
 export function createRoutedMemoryService(opts: {
@@ -121,9 +135,7 @@ export function createRoutedMemoryService(opts: {
         await Promise.all(
           routes.map((route) => {
             const provider = providerFor(route);
-            if (context?.conversationScopeId && context.conversationScopeId !== scopeId && !provider.facts)
-              return { value: 0 };
-            if (provider.attestActor && (!context?.actorId || isSystemActor(context.actorId))) return { value: 0 };
+            if (!capturesInto(provider, scopeId, context)) return { value: 0 };
             return attempt(
               route,
               scopeId,
