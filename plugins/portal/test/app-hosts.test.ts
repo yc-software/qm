@@ -41,7 +41,7 @@ await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
 const upstreamUrl = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
 Object.assign(process.env, {
   NODE_ENV: "test",
-  PORTAL_PUBLIC_URL: "http://mt.qm.test",
+  PUBLIC_WEB_URL: "http://mt.qm.test",
   PORTAL_APPS_DOMAIN: "qm.test",
   PORTAL_SESSION_SECRET: secret,
   PORTAL_IDENTITY_SECRET: "app-hosts-identity-secret-0123456789",
