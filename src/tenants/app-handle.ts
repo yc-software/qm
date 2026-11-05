@@ -36,7 +36,7 @@ $f$`,
 ];
 
 export const TENANT_APP_HANDLES: PgMigrationDefinition = {
-  id: "0000-tenancy/app-handles",
+  id: "0000-tenancy/tenant-app-handles",
   statements: [
     `SET LOCAL lock_timeout = '5s'`,
     `CREATE OR REPLACE FUNCTION qm_tenant_handle(settings jsonb) RETURNS text LANGUAGE sql IMMUTABLE PARALLEL SAFE
