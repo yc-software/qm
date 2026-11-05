@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import { createSlackInstallationStore } from "../src/surfaces/slack-installation.ts";
@@ -50,6 +51,33 @@ describe("per-tenant Slack runtimes", () => {
     assert.deepEqual(events.slice(2), [`create ${b} in ${b}`, `start ${b} in ${b}`, `reconcile ${b} in ${b}`]);
     await runtimes.stop();
     assert.deepEqual(events.slice(5).sort(), [`stop ${a}`, `stop ${b}`].sort());
+  });
+
+  it("starts a runtime for a tenant whose Slack install appears after start, without an install notification", async () => {
+    const [a] = db.tenants;
+    const late = randomUUID();
+    await db.owner.q("INSERT INTO tenants(id) VALUES ($1)", [late]);
+    const started: string[] = [];
+    const runtimes = createTenantSlackRuntimes({
+      runtimeFor: (tenant) => ({
+        start: () => void started.push(tenant),
+        reconcile: async () => {},
+        stop: async () => {},
+      }),
+      tenants: () => tenantLookup(db.app).slackTenants(),
+      onError: (error) => assert.fail(String(error)),
+      discoveryIntervalMs: 10,
+    });
+    runtimes.start();
+    for (let i = 0; i < 200 && !started.includes(a!); i++) await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.ok(!started.includes(late));
+    await db.owner.q(`INSERT INTO slack_installation(tenant_id, id, json) VALUES ($1, 'org', $2)`, [
+      late,
+      JSON.stringify({ teamId: "T-late" }),
+    ]);
+    for (let i = 0; i < 200 && !started.includes(late); i++) await new Promise((resolve) => setTimeout(resolve, 10));
+    await runtimes.stop();
+    assert.ok(started.includes(late));
   });
 
   it("tells listeners when an admin saves Slack tokens, in the saving request's tenant", async () => {

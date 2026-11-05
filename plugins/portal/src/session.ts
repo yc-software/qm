@@ -166,6 +166,13 @@ export function readCookie(header: string | undefined, name: string): string | n
   }
 }
 
+export function withoutCookies(header: string | undefined, names: ReadonlySet<string>): string | undefined {
+  return header
+    ?.split(";")
+    .filter((part) => !names.has((part.split("=", 1)[0] ?? "").trim()))
+    .join(";");
+}
+
 export function randomToken(bytes = 32): string {
   return randomBytes(bytes).toString("hex");
 }

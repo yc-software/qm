@@ -18,6 +18,8 @@ function harness() {
   const calls: Array<{ path: string; tenant: string | undefined }> = [];
   const pending = new Map<string | undefined, unknown[]>();
   const sent: Array<{ res: string; event: string; data: unknown }> = [];
+  const rejected = new Set<string | undefined>();
+  const notes: Array<[string | undefined, unknown]> = [];
   const res = (name: string) => ({ name }) as unknown as ServerResponse;
   const tenantFeeds = createTenantFeeds({
     identitySecret: secret,
@@ -26,6 +28,7 @@ function harness() {
     coreFetch: async (method, path, body) => {
       const tenant = tenantOf(store.getStore());
       calls.push({ path: `${method} ${path}`, tenant });
+      if (rejected.has(tenant)) return { status: 401, text: "unauthorized" };
       if (path.startsWith("/v1/deliveries?"))
         return { status: 200, text: JSON.stringify({ deliveries: pending.get(tenant) ?? [] }) };
       if (path === "/v1/inbox/viewers")
@@ -46,13 +49,13 @@ function harness() {
     },
     sseEvent: (r, event, data) => void sent.push({ res: (r as unknown as { name: string }).name, event, data }),
     ownerOfWebThread: (ref) => ref.split(":")[1] ?? null,
-    noteDeliveries: () => undefined,
+    noteDeliveries: (tenant, failure) => void notes.push([tenant, failure]),
     reconnectMs: 10_000,
     giveupMs: 60_000,
   });
   const attach = (user: string, tenant: string | undefined, name: string) =>
     store.run(tenant ? token(user, tenant) : undefined, () => tenantFeeds.attach(user, res(name)));
-  return { tenantFeeds, feeds, calls, pending, sent, attach };
+  return { tenantFeeds, feeds, calls, pending, sent, attach, rejected, notes };
 }
 
 const tick = () => new Promise((r) => setTimeout(r, 20));
@@ -99,27 +102,42 @@ test("deliveries are polled per tenant and only reach that tenant's browsers", a
       .filter((c) => c.path.startsWith("GET /v1/deliveries"))
       .map((c) => c.tenant ?? "untenanted")
       .sort(),
-    [alpha, beta, "untenanted"],
+    [alpha, beta],
   );
 });
 
-test("a browser signed in without a tenant keeps the always-on untenanted feeds", async () => {
+test("no feed is opened or polled until a browser connects, and a tenantless browser's feeds close when it leaves", async () => {
   const h = harness();
-  h.tenantFeeds.start();
+  await h.tenantFeeds.drain();
+  await tick();
+  assert.deepEqual(h.feeds, []);
+  assert.deepEqual(h.calls, []);
   const detach = h.attach("solo@x.test", undefined, "plain");
   await tick();
   assert.deepEqual(
     h.feeds.map((f) => f.tenant),
     [undefined, undefined],
   );
-  detach();
-  assert.equal(
-    h.feeds.every((f) => !f.signal.aborted),
-    true,
-  );
   await h.tenantFeeds.drain();
   assert.deepEqual(
     h.calls.map((c) => c.tenant),
     [undefined],
   );
+  detach();
+  assert.equal(
+    h.feeds.every((f) => f.signal.aborted),
+    true,
+  );
+});
+
+test("each tenant's delivery poll reports its own failure without masking the others", async () => {
+  const h = harness();
+  h.attach("both@x.test", alpha, "inA");
+  h.attach("both@x.test", beta, "inB");
+  h.rejected.add(beta);
+  await h.tenantFeeds.drain();
+  const notes = new Map(h.notes);
+  assert.equal(notes.get(alpha), undefined);
+  assert.match(String(notes.get(beta)), /http 401/);
+  assert.equal(h.notes.length, 2);
 });

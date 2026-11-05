@@ -1,3 +1,5 @@
+import { LRUCache } from "lru-cache";
+
 export interface SurfaceConfig {
   accent?: string;
   modelProviderConfigured?: boolean;
@@ -14,12 +16,11 @@ export function createSurfaceConfigs(
   neutralAccent: string,
   fetchConfig: (tenant?: string, sub?: string) => Promise<SurfaceConfig | null>,
 ) {
-  const entries = new Map<string, Entry>();
+  const entries = new LRUCache<string, Entry>({ max: 1_000 });
   const entry = (tenant?: string): Entry => {
     const key = tenant ?? "";
     let found = entries.get(key);
     if (!found) {
-      if (entries.size >= 1_000) entries.delete(entries.keys().next().value!);
       found = { accent: neutralAccent, modelProviderConfigured: undefined, nextAt: 0, inflight: null };
       entries.set(key, found);
     }

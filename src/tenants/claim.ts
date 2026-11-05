@@ -34,11 +34,13 @@ export async function claimThenBind<T>(
 ): Promise<T[]> {
   const done: T[] = [];
   for (const { tenantId, id } of await claim())
-    done.push(
-      await withTenant(tenantId, async () => {
-        await loadTenant();
-        return work(id);
-      }),
-    );
+    done.push(await inTenant(tenantId, () => work(id)));
   return done;
+}
+
+export function inTenant<T>(tenant: string, fn: () => Promise<T>): Promise<T> {
+  return withTenant(tenant, async () => {
+    await loadTenant();
+    return fn();
+  });
 }

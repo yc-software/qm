@@ -1,8 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { randomBytes } from "node:crypto";
+import { LRUCache } from "lru-cache";
 import { signedHeaders, withSourceAuthNonce } from "../../chassis/src/core-client.ts";
 import { isTenantId } from "../../chassis/src/tenant.ts";
-import { open, seal } from "./session.ts";
+import { clearCookie, open, readCookie, seal, withoutCookies, type SessionClaims } from "./session.ts";
 
 export interface TrustedClient {
   clientId: string;
@@ -65,13 +67,12 @@ export function coreHostTenant(coreApiUrl: string, signingSecret: string | undef
 }
 
 export function createHostTenants(lookup: (host: string) => Promise<HostRecord | null>) {
-  const cache = new Map<string, { record: HostRecord | null; until: number }>();
+  const cache = new LRUCache<string, { record: HostRecord | null }>({ max: 1_000, ttl: CACHE_MS });
   return async (host: string): Promise<HostRecord | null> => {
     const hit = cache.get(host);
-    if (hit && hit.until > Date.now()) return hit.record;
+    if (hit) return hit.record;
     const record = await lookup(host);
-    if (cache.size >= 1_000) cache.delete(cache.keys().next().value!);
-    cache.set(host, { record, until: Date.now() + CACHE_MS });
+    cache.set(host, { record });
     return record;
   };
 }
@@ -98,6 +99,44 @@ export function sessionOnHost<T extends { t?: string; h?: string }>(
     if (session?.t === tenant && session.h === host) return session;
   }
   return null;
+}
+
+const SESSION_COOKIES = new Set(["portal_session", "portal_impersonate"]);
+
+export function createHostSessions(config: {
+  cookieDomain: string | undefined;
+  secure: boolean;
+  openSession: (value: string | null) => SessionClaims | null;
+}) {
+  const cookieDomain = (): string | undefined => (mappedHost() ? undefined : config.cookieDomain);
+  const signedOutCookies = (): string[] => {
+    const domain = cookieDomain();
+    const clear = (name: string, path: string, scope?: string) => clearCookie(name, path, config.secure, scope);
+    return [
+      clear("portal_impersonate", "/"),
+      clear("portal_trusted_tmp", "/auth/trusted"),
+      clear("portal_session", "/", domain),
+      clear("portal_session_x", "/", domain),
+      ...(domain ? [clear("portal_session", "/"), clear("portal_session_x", "/")] : []),
+    ];
+  };
+  const shared = (cookieHeader: string | undefined): SessionClaims | null => {
+    const session = config.openSession(readCookie(cookieHeader, "portal_session"));
+    return session?.h === undefined ? session : null;
+  };
+  return {
+    cookieDomain,
+    signedOutCookies,
+    shared,
+    current(cookieHeader: string | undefined): SessionClaims | null {
+      const mapped = mappedHost();
+      return mapped ? sessionOnHost(cookieHeader, mapped, config.openSession) : shared(cookieHeader);
+    },
+    signOutRequest(req: IncomingMessage, res: ServerResponse): void {
+      for (const cookie of signedOutCookies()) res.appendHeader("set-cookie", cookie);
+      req.headers.cookie = withoutCookies(req.headers.cookie, SESSION_COOKIES);
+    },
+  };
 }
 
 export function mintHandoff(

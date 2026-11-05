@@ -46,7 +46,9 @@ test("an expired answer that core now rejects signs the person out at once", asy
   const { resolve } = harness(["U1", new IdentityRejected("HTTP 404")]);
   await resolve("U-alias");
   mock.timers.tick(61_000);
-  assert.equal(await resolve("U-alias"), "rejected");
+  const rejected = await resolve("U-alias");
+  assert.ok(rejected instanceof IdentityRejected);
+  assert.equal(rejected.message, "HTTP 404");
 });
 
 test("a last known answer stops being reused five minutes after core last confirmed it", async () => {

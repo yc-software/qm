@@ -8,7 +8,8 @@ import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createSlackInstallationStore } from "../src/surfaces/slack-installation.ts";
 import { createManagedSlack } from "../src/surfaces/slack-managed.ts";
 import { onTenantLoad } from "../src/tenants/cache.ts";
-import { tenantLookup, inTenant } from "../src/tenants/lookup.ts";
+import { inTenant } from "../src/tenants/claim.ts";
+import { tenantLookup } from "../src/tenants/lookup.ts";
 import { loadTenantSettings } from "../src/tenants/settings.ts";
 import { twoTenants, type TwoTenants } from "./support/two-tenants.ts";
 

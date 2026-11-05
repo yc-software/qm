@@ -139,6 +139,18 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
         ),
       ],
     },
+    {
+      id: "delivery/store/0011-undelivered-uncapped",
+      statements: [
+        claimFunction(
+          "undelivered_deliveries",
+          "text",
+          `SELECT tenant_id, id::text FROM deliveries
+            WHERE delivered_at IS NULL AND expired_at IS NULL AND NOT shadow AND destination->>'type' = $1
+            ORDER BY created_at`,
+        ),
+      ],
+    },
   ]);
   const { q, query } = pg;
 

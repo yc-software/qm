@@ -8,23 +8,23 @@ export class IdentityRejected extends Error {}
 
 export function createCanonicalResolver(
   lookup: (sub: string, tenant?: string) => Promise<string | null>,
-): (sub: string, tenant?: string) => Promise<{ id: string; stale: boolean } | "rejected" | null> {
+): (sub: string, tenant?: string) => Promise<{ id: string; stale: boolean } | IdentityRejected | null> {
   const known = new LRUCache<string, { id: string; at: number }>({ max: 10_000 });
-  const inflight = new Map<string, Promise<string | null | "rejected">>();
-  const refresh = (key: string, sub: string, tenant?: string): Promise<string | null | "rejected"> => {
+  const inflight = new Map<string, Promise<string | null | IdentityRejected>>();
+  const refresh = (key: string, sub: string, tenant?: string): Promise<string | null | IdentityRejected> => {
     const pending = inflight.get(key);
     if (pending) return pending;
     const started = lookup(sub, tenant)
-      .catch((error: unknown): null | "rejected" => {
+      .catch((error: unknown): null | IdentityRejected => {
         if (error instanceof IdentityRejected) {
           known.delete(key);
-          return "rejected";
+          return error;
         }
         console.warn(`[portal] canonical principal lookup failed: ${errMessage(error)}`);
         return null;
       })
       .then((id) => {
-        if (id !== null && id !== "rejected") known.set(key, { id, at: Date.now() });
+        if (typeof id === "string") known.set(key, { id, at: Date.now() });
         return id;
       })
       .finally(() => inflight.delete(key));
@@ -38,6 +38,6 @@ export function createCanonicalResolver(
     if (hit && Date.now() - hit.at < FRESH_MS) return { id: hit.id, stale: false };
     const id = await refresh(key, sub, tenant);
     if (id === null && hit) return { id: hit.id, stale: true };
-    return id === null || id === "rejected" ? id : { id, stale: false };
+    return typeof id === "string" ? { id, stale: false } : id;
   };
 }
