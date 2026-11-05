@@ -1,6 +1,7 @@
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresDeliveryStore } from "../src/delivery/postgres-delivery-store.ts";
+import { currentTenant } from "../src/tenants/context.ts";
 import {
   exerciseDeliveryExpiry,
   exerciseDeliveryExpiryRevive,
@@ -115,7 +116,8 @@ test(
       });
       ids.add(queued.id);
     }
-    const listed = new Set((await store.undeliveredIds("web")).map((row) => row.id));
+    assert.ok((await store.undeliveredTenants("web")).some((row) => row.tenantId === currentTenant()));
+    const listed = new Set((await store.pending("web")).map((row) => row.id));
     for (const id of ids) assert.ok(listed.has(id));
     for (const id of ids) await store.ack(id, Date.now());
   },
