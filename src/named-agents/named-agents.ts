@@ -1,5 +1,5 @@
 import type { AuditLog } from "../audit/audit-log.ts";
-import type { DirectoryStore } from "../directory/directory-store.ts";
+import type { DirectoryChannel, DirectoryStore } from "../directory/directory-store.ts";
 import { canonicalPerson, personIds, samePerson } from "../directory/person.ts";
 import type { FeatureFlagStore } from "../feature-flags.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
@@ -190,7 +190,7 @@ export function createNamedAgents(deps: NamedAgentsDeps): NamedAgents {
       "conflict",
       conflict === "channel"
         ? `#${other.channelName} already has ${other.displayName}; archive it first`
-        : `${other.displayName} (@${other.handle}) already uses that name`,
+        : "another agent already uses that handle or display name",
     );
   }
 
@@ -238,13 +238,19 @@ export function createNamedAgents(deps: NamedAgentsDeps): NamedAgents {
       const title = cleanText(input.title);
       if (!title) return refuse("bad_request", "a title is required");
       const found = await deps.directory.resolveChannel(input.channel);
-      if (found.kind === "none") return refuse("not_found", `no channel matches "${input.channel}"`);
+      const matches: DirectoryChannel[] = found.kind === "one" ? [found.channel] : [];
+      if (found.kind === "ambiguous") matches.push(...found.candidates);
+      const visible: DirectoryChannel[] = [];
+      for (const c of matches)
+        if (c.isPrivate === false || (await deps.directory.channelMembership(c.channelId, actor.id)) === true)
+          visible.push(c);
+      const [channel] = visible;
+      if (!channel) return refuse("not_found", `no channel matches "${input.channel}"`);
       if (found.kind === "ambiguous")
         return refuse(
           "bad_request",
-          `"${input.channel}" matches ${nameList.format(found.candidates.map((c) => `#${c.name}`))}; name one`,
+          `"${input.channel}" matches ${nameList.format(visible.map((c) => `#${c.name}`))}; name one`,
         );
-      const { channel } = found;
       if (!isActive(actor.id) || (await deps.directory.channelMembership(channel.channelId, actor.id)) !== true)
         return refuse("forbidden", `only a member of #${channel.name} can give it an agent`);
       const badName = await nameProblem(handle, displayName);
