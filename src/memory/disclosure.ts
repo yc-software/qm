@@ -107,6 +107,10 @@ export class MemoryDisclosureDenied extends Error {
   }
 }
 
+export function scopeDisclosed(access: MemoryDisclosure, scope: ScopeId): Promise<boolean> {
+  return memoryDisclosurePolicy(access).narrow(scope);
+}
+
 export function disclosedMemory(memory: MemoryService, access: MemoryDisclosure): MemoryService {
   if (memory.withDisclosure) {
     const view = memory.withDisclosure(access);
@@ -114,7 +118,7 @@ export function disclosedMemory(memory: MemoryService, access: MemoryDisclosure)
   }
   const listed = memory.facts?.bind(memory);
   if (!listed) {
-    const narrow = (scope: ScopeId) => memoryDisclosurePolicy(access).narrow(scope);
+    const narrow = (scope: ScopeId) => scopeDisclosed(access, scope);
     const withheld = async (scope: ScopeId) => {
       if (!(await narrow(scope))) throw new MemoryRecallWithheld(scope);
     };
