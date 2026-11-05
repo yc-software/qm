@@ -150,6 +150,7 @@ export interface Session {
   surfaceBinding?: TurnSurfaceOrigin;
   runtime?: TurnRuntime;
   lastActivityAt?: number;
+  lastUserPreview?: string | null;
   hasEntries?: boolean;
   working?: boolean;
   awaitingInput?: boolean;
