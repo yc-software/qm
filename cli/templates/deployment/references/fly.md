@@ -59,7 +59,9 @@ to core once, by hand:
 
 1. In the config, remove `"web-ui"` and `"portal"` from `services`, move their
    `env` and `secretEnv` entries into `core`, and delete their `vms` and
-   `imageOverrides` entries.
+   `imageOverrides` entries. If `imageOverrides.core` pins an image from
+   before the upgrade, delete it too; `qm up` deploys a pinned image instead
+   of the release's.
 2. If `publicUrl` is `https://<app-prefix>-portal.fly.dev`, change it to
    `https://<app-prefix>-core.fly.dev`. Do the same for `PUBLIC_API_URL` if it
    names the old host. If sign-in goes through an external OIDC provider,
@@ -75,14 +77,18 @@ to core once, by hand:
 6. Run `fly apps destroy <app-prefix>-portal`, then
    `fly apps destroy <app-prefix>-web-ui` and
    `fly apps destroy <app-prefix>-auth`; skip any app that does not exist.
+   Deployments that signed in through the portal never had an `-auth` app.
 
 ## Web UI releases
 
 `npm exec qm -- ui publish --dir <built dist-web>` makes a new web UI live in
 seconds without restarting core; `--release <id>` switches back. The bucket is
 Tigris, so export `AWS_ENDPOINT_URL_S3=https://fly.storage.tigris.dev` and an
-`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` pair for `env.core.S3_BUCKET`,
-created in the Tigris dashboard that `fly storage dashboard <bucket>` opens.
+`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` pair for `env.core.S3_BUCKET`.
+Create one in the Tigris dashboard that `fly storage dashboard <bucket>` opens,
+or, without a browser, reuse core's pair from
+`fly ssh console -a <app-prefix>-core -C 'printenv AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY'`.
+The command runs AWS CLI v2, which must be installed.
 
 ## Agent-computer proof
 
