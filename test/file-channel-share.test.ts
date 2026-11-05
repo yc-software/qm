@@ -1,4 +1,4 @@
-import { test } from "./support/tenant-test.ts";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { collectNamedOutbound, type ArtifactRegistration } from "../src/core/attachments.ts";
 import { defaultPublishAudience } from "../src/resolution/publish-audience.ts";

@@ -1,4 +1,4 @@
-import { test } from "./support/tenant-test.ts";
+import test from "node:test";
 import assert from "node:assert/strict";
 import { type PersistedBaseModel } from "../src/resolution/config-store.ts";
 import { resolveRuntimeChoice } from "../src/agent/runtime-choice.ts";

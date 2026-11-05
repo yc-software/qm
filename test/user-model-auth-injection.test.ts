@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "./support/tenant-test.ts";
+import { test } from "node:test";
 import { createKeychain } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { createUserModelCredentialStore } from "../src/model/user-model-credential-store.ts";

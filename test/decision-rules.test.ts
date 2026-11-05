@@ -1,7 +1,7 @@
 import "./support/auto-fake-sprites.ts";
 import { gatewayActorId } from "../src/model/provider-endpoints.ts";
 import assert from "node:assert/strict";
-import { test } from "./support/tenant-test.ts";
+import test from "node:test";
 import {
   checkRuleSet,
   parseDecisionRule,

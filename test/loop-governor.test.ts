@@ -1,4 +1,4 @@
-import { test } from "./support/tenant-test.ts";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createLoopStore } from "../src/loops/loop-store.ts";
 import { collectVitals, evaluateGovernor, healthWorsened, type LoopVitals } from "../src/loops/governor.ts";

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "./support/tenant-test.ts";
+import { test } from "node:test";
 import { inboxRoutes } from "../src/api/routes/inbox.ts";
 import { createLoopStore } from "../src/loops/loop-store.ts";
 import { createLoopItemLedger } from "../src/loops/item-ledger.ts";

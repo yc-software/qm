@@ -1,4 +1,4 @@
-import { test } from "./support/tenant-test.ts";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createSkillPackStore, type NewSkillPack } from "../src/skills/skill-pack-store.ts";
 import { createSkillSyncEngine } from "../src/skills/skill-sync-engine.ts";

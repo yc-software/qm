@@ -1,5 +1,5 @@
 import type { TurnOrigin } from "../src/types.ts";
-import { test } from "./support/tenant-test.ts";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMonitorPoller } from "../src/monitors/monitor-poller.ts";
 import { createMonitorStore } from "../src/monitors/monitor-store.ts";

@@ -1,5 +1,5 @@
 import type { TurnOrigin } from "../src/types.ts";
-import { describe, it } from "./support/tenant-test.ts";
+import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { runTrigger, type TriggerDeps } from "../src/triggers/run-trigger.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";

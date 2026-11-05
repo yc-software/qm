@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "./support/tenant-test.ts";
+import test from "node:test";
 import { createSuggestedActivityService, type SuggestedActivityProfile } from "../src/suggestions/activities.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createScheduler } from "../src/cron/scheduler.ts";

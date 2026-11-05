@@ -1,4 +1,4 @@
-import { test, beforeEach } from "./support/tenant-test.ts";
+import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresDecisionStore } from "../src/decisions/store.ts";
 import type { DecisionRule } from "../src/decisions/decisions.ts";

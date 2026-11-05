@@ -6,7 +6,7 @@ import type { FileArtifact } from "../src/files/file-artifact-store.ts";
 import { createCronStore, type CreateCronInput } from "../src/cron/cron-store.ts";
 import { createScheduler } from "../src/cron/scheduler.ts";
 import assert from "node:assert/strict";
-import { test } from "./support/tenant-test.ts";
+import { test } from "node:test";
 import { createLoopFireService } from "../src/loops/loop-fire.ts";
 import type { TriggerDeps } from "../src/triggers/run-trigger.ts";
 import { createLoopStore } from "../src/loops/loop-store.ts";

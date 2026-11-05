@@ -1,4 +1,4 @@
-import { test, type TestContext } from "./support/tenant-test.ts";
+import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";

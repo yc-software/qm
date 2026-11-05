@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "./support/tenant-test.ts";
+import { test } from "node:test";
 import { applyReasoningMode, createAgent } from "../src/agent/agent-run.ts";
 import { createModelRoutes } from "../src/model/model-route.ts";
 import { getRequiredModel, thinkingLevelsFor, safeModelMetadata } from "../src/model/pi-models.ts";

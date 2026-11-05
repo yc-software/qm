@@ -1,4 +1,4 @@
-import { test } from "./support/tenant-test.ts";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { swarmFixture } from "./support/swarm-fixture.ts";
 import type { Run } from "../src/runs/run-store.ts";

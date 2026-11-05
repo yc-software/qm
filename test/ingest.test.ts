@@ -1,4 +1,4 @@
-import { test } from "./support/tenant-test.ts";
+import test from "node:test";
 import assert from "node:assert/strict";
 import { planIngest, importPack, type FetchedRepo } from "../src/skills/ingest.ts";
 import { createSkillStore } from "../src/skills/skill-store.ts";

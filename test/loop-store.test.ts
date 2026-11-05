@@ -1,4 +1,4 @@
-import { test } from "./support/tenant-test.ts";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createLoopStore, isRunnable, validLoopIcon } from "../src/loops/loop-store.ts";
 import { createLoopItemLedger, loopItemId } from "../src/loops/item-ledger.ts";

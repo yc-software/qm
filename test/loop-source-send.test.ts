@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "./support/tenant-test.ts";
+import { test } from "node:test";
 import type { LoopItem, LoopSourcePayload } from "../src/loops/types.ts";
 import type { ConnectorTokenSource, SlackUserClient } from "../src/loops/sources/adapter.ts";
 import { buildGmailReplyMime, gmailAdapter, replySubject } from "../src/loops/sources/gmail.ts";

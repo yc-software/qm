@@ -1,4 +1,4 @@
-import { test } from "./support/tenant-test.ts";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createWebhookStore } from "../src/webhooks/webhook-store.ts";
 import { scopeId } from "../src/types.ts";

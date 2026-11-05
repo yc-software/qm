@@ -1,4 +1,4 @@
-import { test } from "./support/tenant-test.ts";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createEnvelopeStaging, envelopeKey, type StagedEnvelope } from "../src/slack/envelope-staging.ts";
 import { createDeferredEnvelopeAck, envelopeStageFor } from "../src/slack/deferred-ack.ts";

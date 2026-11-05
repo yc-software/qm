@@ -1,4 +1,4 @@
-import { test } from "./support/tenant-test.ts";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createAwsSandbox } from "../src/sandbox/aws-sandbox.ts";
 import { supportsBlobStaging, supportsProcessSessions } from "../src/sandbox/sandbox.ts";

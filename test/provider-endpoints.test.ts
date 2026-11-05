@@ -1,4 +1,4 @@
-import { test, afterEach } from "./support/tenant-test.ts";
+import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import {
   MODEL_REQUEST_CONTEXT_HEADERS,

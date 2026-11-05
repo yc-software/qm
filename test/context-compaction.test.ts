@@ -1,6 +1,6 @@
 import { swarmFixture } from "./support/swarm-fixture.ts";
 import { withResolvedRuntime, resolveRuntimeChoice } from "../src/agent/runtime-choice.ts";
-import { test } from "./support/tenant-test.ts";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

@@ -1,5 +1,5 @@
 import { setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
-import { test } from "./support/tenant-test.ts";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   auxiliaryModelFor,

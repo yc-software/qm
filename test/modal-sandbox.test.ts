@@ -1,5 +1,5 @@
 import { pollProcess } from "../src/sandbox/process-poll.ts";
-import { test, after, beforeEach } from "./support/tenant-test.ts";
+import { test, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createModalSandbox, type StoredModalSandbox } from "../src/sandbox/modal-sandbox.ts";
 import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";

@@ -2,7 +2,7 @@ import { type DurableMapSelect } from "../src/persistence/durable-map.ts";
 import { createNoopAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import type { LoopItem } from "../src/loops/types.ts";
 import assert from "node:assert/strict";
-import { test } from "./support/tenant-test.ts";
+import { test } from "node:test";
 import { agentDraftOf, createLoopItemLedger, loopItemId, type IngestEntryInput } from "../src/loops/item-ledger.ts";
 import { ledgerItemView, ledgerState, sortLedgerItems } from "../src/loops/ledger-view.ts";
 import { testMap } from "./support/test-database.ts";

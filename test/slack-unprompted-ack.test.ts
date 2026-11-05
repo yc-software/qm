@@ -1,4 +1,4 @@
-import { test } from "./support/tenant-test.ts";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createTurnHandler } from "../src/slack/turn-handler.ts";
 import { createConversationSerializer } from "../src/slack/conversation-view.ts";

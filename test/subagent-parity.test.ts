@@ -2,7 +2,7 @@ import type { NewItem } from "../src/sessions/items.ts";
 import { createRuntimeService } from "../src/agent/runtime-control.ts";
 import type { RuntimeChoice } from "../src/agent/agent.ts";
 import type { RuntimeControl } from "../src/agent/runtime-types.ts";
-import { test } from "./support/tenant-test.ts";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

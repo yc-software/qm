@@ -1,5 +1,5 @@
 import type { TurnOrigin } from "../src/types.ts";
-import { test } from "./support/tenant-test.ts";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createScheduler } from "../src/cron/scheduler.ts";
 import { runNowSettled, settle } from "./support/settle.ts";

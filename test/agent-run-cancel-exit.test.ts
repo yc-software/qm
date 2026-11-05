@@ -1,4 +1,4 @@
-import { test } from "./support/tenant-test.ts";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { findTrailingPartialTurn, reconcile, turnAtSeq } from "../src/core/turn-resume.ts";
 import { createGoalRecord, type GoalRecord } from "../src/agent/goal.ts";

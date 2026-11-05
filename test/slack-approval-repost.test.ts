@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "./support/tenant-test.ts";
+import test from "node:test";
 import { createApprovals } from "../src/slack/approvals.ts";
 import { createTurnFlow } from "../src/slack/turn-flow.ts";
 import { createThreadTracker } from "../src/slack/lib.ts";

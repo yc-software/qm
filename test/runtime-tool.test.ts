@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "./support/tenant-test.ts";
+import { test } from "node:test";
 import { createRuntimeService } from "../src/agent/runtime-control.ts";
 import { recoveredRuntime } from "../src/agent/runtime-recovery.ts";
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";

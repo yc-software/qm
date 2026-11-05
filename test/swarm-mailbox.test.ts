@@ -1,4 +1,4 @@
-import { test } from "./support/tenant-test.ts";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createGoalRecord } from "../src/agent/goal.ts";
 import { createSwarmGoalInbox } from "../src/swarms/swarm-goal-inbox.ts";

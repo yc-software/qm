@@ -1,6 +1,6 @@
 import { authBrokerRoutes } from "../src/api/routes/auth-broker.ts";
 import { createControlService } from "../src/api/control-service.ts";
-import { test } from "./support/tenant-test.ts";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
