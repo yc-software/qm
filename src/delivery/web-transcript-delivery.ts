@@ -13,7 +13,10 @@ const DEDUPE_SCAN_LIMIT = 200;
 const RECORDED_CACHE_CAP = 1000;
 const WRITE_GIVEUP_MS = 10 * 60_000;
 
-type WebTranscriptSessions = Pick<SessionStore, "appendMany" | "hasDeliveryEntry" | "get" | "getByThread" | "getItems">;
+type WebTranscriptSessions = Pick<
+  SessionStore,
+  "appendMany" | "hasDeliveryEntry" | "get" | "getByThread" | "getItems" | "participantsOf"
+>;
 
 export function turnRecordedFailure(tail: readonly Item[], note: { notBefore: number; runId?: string }): boolean {
   return tail.some((item) => {
@@ -88,7 +91,16 @@ export function withWebTranscriptDeliveries(
       item = { kind: "AgentMessage", text: d.text, body: via ? { via } : {} };
     }
     await sessions.appendMany({ sessionId: session.id, turnId }, [item]);
-    states?.emit({ threadRef: session.threadRef, sessionId: session.id, state: "idle", at: Date.now() });
+    if (states) {
+      const participants = await sessions.participantsOf(session.id);
+      states.emit({
+        threadRef: session.threadRef,
+        sessionId: session.id,
+        state: "idle",
+        at: Date.now(),
+        ...(participants.length ? { participants } : {}),
+      });
+    }
     return true;
   };
 
