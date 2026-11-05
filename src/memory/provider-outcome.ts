@@ -31,7 +31,16 @@ export async function withEnvelope<T>(run: () => Promise<T>): Promise<{ value: T
   return { value, envelope };
 }
 
+export class MemoryProviderDisabled extends Error {
+  readonly code: string;
+  constructor(code: string) {
+    super(`memory provider is disabled (${code})`);
+    this.code = code;
+  }
+}
+
 export function failedOutcome(error: unknown): Pick<MemoryProviderOutcome, "outcome" | "code"> {
+  if (error instanceof MemoryProviderDisabled) return { outcome: "disabled", code: error.code };
   if (error instanceof UnattestableActor || error instanceof OutsideAudience)
     return { outcome: "denied", code: error.code };
   if (error instanceof TimeoutError) return { outcome: "timed_out" };
