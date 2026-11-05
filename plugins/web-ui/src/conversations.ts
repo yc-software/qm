@@ -35,7 +35,7 @@ export function allConversations(): Conversation[] {
 
 function editingOutsideComposers(): boolean {
   const active = document.activeElement as HTMLInputElement | null;
-  if (document.querySelector("dialog[open]") || active?.isContentEditable) return true;
+  if (document.querySelector('dialog[open], [aria-modal="true"]') || active?.isContentEditable) return true;
   return Boolean(active?.matches("input, textarea") && active.value);
 }
 

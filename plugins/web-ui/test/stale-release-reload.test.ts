@@ -58,6 +58,13 @@ test("a tab reloads onto a newly deployed release only once it regains focus wit
     assert.equal(reloads, 0);
 
     editor.remove();
+    const form = document.createElement("form");
+    form.setAttribute("aria-modal", "true");
+    document.body.append(form);
+    focus();
+    assert.equal(reloads, 0);
+
+    form.remove();
     focus();
     assert.equal(reloads, 1);
 
