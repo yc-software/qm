@@ -26,7 +26,7 @@ import {
 } from "./sandbox.ts";
 import type { RenderClient, RenderSandboxInfo, RenderSnapshot } from "./render-client.ts";
 import type { RenderBase } from "./render-base.ts";
-import { attemptSnapshot, lastSnapshotAttemptAt } from "./home-snapshot.ts";
+import { lastSnapshotAttemptAt } from "./home-snapshot.ts";
 import { RENDER_COMPUTER_LIFETIME_SEC, RENDER_IDLE_STOP_MS, RENDER_SANDBOX_TTL_SEC } from "./render-limits.ts";
 
 interface RenderSandboxResources {
@@ -117,7 +117,10 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
     return scope;
   };
   const recentlySaved = (stored: StoredRenderSandbox): boolean =>
-    Date.now() - lastSnapshotAttemptAt({ ...stored, lastSnapshotMs: stored.savedAtMs }) < checkpointIntervalMs;
+    stored.savedAtMs !== undefined && Date.now() - stored.savedAtMs < checkpointIntervalMs;
+  const checkpointDue = (stored: StoredRenderSandbox): boolean =>
+    stored.homeDirty !== false &&
+    Date.now() - lastSnapshotAttemptAt({ ...stored, lastSnapshotMs: stored.savedAtMs }) >= checkpointIntervalMs;
   const idFor = async (name: string, homeDirty = false): Promise<string> => {
     if (!base.scopeFor(name)) {
       const temporary = await scratchStore.get(name);
@@ -574,12 +577,8 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
         if (!stored) return;
         if (!options?.homeUnchanged && stored.homeDirty !== true)
           stored = (await store.merge(scope, { homeDirty: true })) ?? stored;
-        if (stored.homeDirty !== false && !recentlySaved(stored))
-          await attemptSnapshot(
-            stored,
-            () => checkpoint(scope, stored).then(() => undefined),
-            (error) => reportError("teardown_checkpoint_failed", error, scope),
-          );
+        if (checkpointDue(stored))
+          await checkpoint(scope, stored).catch(swallowAs("render-sandbox: teardown checkpoint", undefined));
         await store.merge(scope, { lastActivityMs: Date.now() });
       });
     },
@@ -609,9 +608,9 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
         }).catch((error) => reportError("scratch_cleanup_failed", error));
       }
       const cutoff = Date.now() - Math.min(idleMs > 0 ? idleMs : Infinity, RENDER_IDLE_STOP_MS);
-      const stale = (stored: StoredRenderSandbox): boolean => stored.homeDirty !== false && !recentlySaved(stored);
       const due = (stored: StoredRenderSandbox): boolean =>
-        !stored.stopped && (stored.expiresAtMs <= Date.now() || stored.lastActivityMs <= cutoff || stale(stored));
+        !stored.stopped &&
+        (stored.expiresAtMs <= Date.now() || stored.lastActivityMs <= cutoff || checkpointDue(stored));
       for (const [scope] of await cleanupStore.entries())
         await tryLock(lifecycleKey(nameFor(scope)), () => finishCleanup(scope)).catch(
           swallowAs(`render-sandbox: finish cleanup of ${scope}`, undefined),
@@ -636,7 +635,7 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
           }
           if (info.status !== "running") return;
           const active = await hasLiveProcesses(info.id);
-          if (active && !stale(stored)) return;
+          if (active && !checkpointDue(stored)) return;
           const current = stored;
           const stopped =
             !active &&

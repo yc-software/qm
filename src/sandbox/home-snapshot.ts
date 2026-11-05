@@ -8,7 +8,7 @@ import {
   UploadPartCommand,
 } from "@aws-sdk/client-s3";
 import { shq } from "../util/shell.ts";
-import { errMessage, swallowAs } from "../util/errors.ts";
+import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 import { sleep, withTimeout } from "../util/async.ts";
 import { bodyToReadable, isNoSuchKey, s3Client, type S3Send } from "../persistence/s3.ts";
 import { displacedPruneGlobs } from "../credentials/resident-paths.ts";
@@ -73,7 +73,8 @@ export async function attemptSnapshot(
   try {
     await snapshot();
   } catch (error) {
-    if (!alreadyFailing) reportFailure(error);
+    if (alreadyFailing) swallow("home-snapshot: repeat snapshot failure", error);
+    else reportFailure(error);
   }
 }
 
