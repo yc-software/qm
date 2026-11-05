@@ -270,6 +270,8 @@ test("pg cron_fires: older fire history is copied once into the first tenant", {
     ]);
     const sync = await owner.query("SELECT 1 FROM pg_proc WHERE proname = 'qm_sync_legacy_cron_fire'");
     assert.equal(sync.rowCount, 0);
+    const log = await owner.query("SELECT to_regclass('cron_fire_log') AS log");
+    assert.equal(log.rows[0].log, null);
   } finally {
     await owner.end();
   }
