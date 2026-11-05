@@ -898,22 +898,25 @@ function statusMarks(s: CoreSession): TemplateResult {
   const ind = rowIndicators(s, liveThreads());
   return html`${ind.working ? html`<span class="working-mark" ${ref(syncWorkingPulse)}>${workingWave()}</span>` : nothing}${
     ind.awaiting ? html`<span class="awaiting-dot" aria-label="Waiting for your reply"></span>` : nothing
-  }${
-    ind.background
-      ? html`<span
-          class="bg-chip"
-          role="button"
-          tabindex="0"
-          aria-label="${ind.background.label}. Click to inspect"
-          ${tip(`${ind.background.label}. Click to inspect`)}
-          @click=${(e: Event) => openBackgroundInspector(e, s)}
-          @keydown=${(e: KeyboardEvent) => (e.key === "Enter" || e.key === " ") && openBackgroundInspector(e, s)}
-          >${ind.background.jobs > 0 ? icon(Cog, 11) : nothing}${
-            ind.background.watches > 0 ? icon(Binoculars, 11) : nothing
-          }${ind.background.crons > 0 ? icon(Clock3, 11) : nothing}${ind.background.subagents > 0 ? icon(Bot, 11) : nothing}${ind.background.goal ? icon(Target, 11) : nothing}</span
-        >`
-      : nothing
   }`;
+}
+
+/** Background-work chip (jobs, watches, crons, subagents, goal); sits to the right of the title. */
+function backgroundChip(s: CoreSession): TemplateResult | typeof nothing {
+  const background = rowIndicators(s, liveThreads()).background;
+  if (!background) return nothing;
+  return html`<span
+    class="bg-chip"
+    role="button"
+    tabindex="0"
+    aria-label="${background.label}. Click to inspect"
+    ${tip(`${background.label}. Click to inspect`)}
+    @click=${(e: Event) => openBackgroundInspector(e, s)}
+    @keydown=${(e: KeyboardEvent) => (e.key === "Enter" || e.key === " ") && openBackgroundInspector(e, s)}
+    >${background.jobs > 0 ? icon(Cog, 11) : nothing}${background.watches > 0 ? icon(Binoculars, 11) : nothing}${
+      background.crons > 0 ? icon(Clock3, 11) : nothing
+    }${background.subagents > 0 ? icon(Bot, 11) : nothing}${background.goal ? icon(Target, 11) : nothing}</span
+  >`;
 }
 
 function openBackgroundInspector(e: Event, s: CoreSession): void {
@@ -945,7 +948,9 @@ function chatPageRow(s: CoreSession): TemplateResult {
           void openSession(s);
         }}
       >
-        <span class="list-row-title">${statusMarks(s)}<span dir="auto">${groupDmTitle(s)}</span></span>
+        <span class="list-row-title"
+          >${statusMarks(s)}<span dir="auto">${groupDmTitle(s)}</span>${backgroundChip(s)}</span
+        >
         <span class="list-row-meta">
           ${unreadDot(s)} ${scopeChip(s.scopeId, s.channelName ?? null)}
           ${surfaceOf(s) === "slack" ? html`<span class="surface surface-slack">${slackMark(13, true)}</span>` : nothing}
@@ -1198,7 +1203,7 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
       >
         <div class="title" aria-live="polite">
           ${statusMarks(s)}${surfaceGlyph(s)}<span class="tl" dir="auto">${lastMessage ?? titleContent}</span
-          >${context ? html`<span class="row-context" ${tip(context)}>${context}</span>` : nothing}${unreadDot(s)}
+          >${backgroundChip(s)}${context ? html`<span class="row-context" ${tip(context)}>${context}</span>` : nothing}${unreadDot(s)}
         </div>
         ${lastMessage ? html`<div class="row-detail" dir="auto">${titleContent}</div>` : nothing}
       </a>
