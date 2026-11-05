@@ -132,6 +132,10 @@ async function brandIndexHtml(html: string): Promise<string> {
 }
 
 const portalTokenStore = new AsyncLocalStorage<string | undefined>();
+const identityHeader = (): Record<string, string> => {
+  const token = portalTokenStore.getStore();
+  return token ? { [PORTAL_IDENTITY_HEADER]: token } : {};
+};
 
 const runThreadKeys = new Map<string, string>();
 const activeRunsByThread = new Map<string, string[]>();
@@ -529,11 +533,10 @@ const feeds = createTenantFeeds({
   coreFetch: (method, path, body) => coreFetch(method, path, body),
   openFeed: (path, signal) => {
     const signedPath = withSourceAuthNonce(path, CORE_SIGNING_SECRET);
-    const portalTok = portalTokenStore.getStore();
     return fetch(`${CORE}${signedPath}`, {
       headers: {
         ...signedHeaders(CORE_SIGNING_SECRET, "GET", signedPath, ""),
-        ...(portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : {}),
+        ...identityHeader(),
       },
       signal,
     });
@@ -795,6 +798,7 @@ async function stageUploadStream(req: IncomingMessage, sha256: string): Promise<
   const corePath = withSourceAuthNonce("/v1/blobs", CORE_SIGNING_SECRET);
   const headers = {
     ...signedHeaders(CORE_SIGNING_SECRET, "POST", corePath, "", sha256),
+    ...identityHeader(),
     "content-type": "application/octet-stream",
     "x-content-sha256": sha256,
   };
@@ -1002,11 +1006,10 @@ async function serveInboxItemImage(c: WebCtx): Promise<unknown> {
     `/v1/loops/${encodeURIComponent(c.params.id!)}/items/${encodeURIComponent(c.params.itemId!)}/image?${qs.toString()}`,
     CORE_SIGNING_SECRET,
   );
-  const portalTok = portalTokenStore.getStore();
   const r = await fetch(`${CORE}${corePath}`, {
     headers: {
       ...signedHeaders(CORE_SIGNING_SECRET, "GET", corePath, ""),
-      ...(portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : {}),
+      ...identityHeader(),
     },
   });
   if (!r.ok || !r.body) {
@@ -1030,11 +1033,10 @@ async function serveFileContent(c: WebCtx, playground = false): Promise<unknown>
     `/v1/files/${encodeURIComponent(id)}/content?viewer=${encodeURIComponent(user)}`,
     CORE_SIGNING_SECRET,
   );
-  const portalTok = portalTokenStore.getStore();
   const r = await fetch(`${CORE}${corePath}`, {
     headers: {
       ...signedHeaders(CORE_SIGNING_SECRET, "GET", corePath, ""),
-      ...(portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : {}),
+      ...identityHeader(),
     },
     redirect: "manual",
   });
@@ -2770,12 +2772,11 @@ const apiRoutes: readonly WebRoute[] = [
       const controller = new AbortController();
       res.on("close", () => controller.abort());
       const path = withSourceAuthNonce(`/v1/runs/${encodeURIComponent(id)}/events`, CORE_SIGNING_SECRET);
-      const portalTok = portalTokenStore.getStore();
       try {
         const upstream = await fetch(`${CORE}${path}`, {
           headers: {
             ...signedHeaders(CORE_SIGNING_SECRET, "GET", path, ""),
-            ...(portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : {}),
+            ...identityHeader(),
           },
           signal: controller.signal,
           redirect: "manual",
@@ -3390,11 +3391,10 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
     const id = decodeURIComponent(slash === -1 ? rest : rest.slice(0, slash));
     const subPath = slash === -1 ? "/" : rest.slice(slash);
     const corePath = `/d/${encodeURIComponent(id)}${subPath}${url.search}`;
-    const portalTok = portalTokenStore.getStore();
     const headers: Record<string, string> = {
       ...signedHeaders(CORE_SIGNING_SECRET, method, corePath, "", user),
       "x-as-principal": user,
-      ...(portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : {}),
+      ...identityHeader(),
     };
     delete headers["content-type"];
     const up = await fetch(`${CORE}${corePath}`, { method, headers, redirect: "manual" });
