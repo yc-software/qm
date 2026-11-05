@@ -469,13 +469,72 @@ test("ambient (unaddressed) silence → no nudge (silence stays free)", async ()
       conversation: { kind: "channel", threadRef: `ch:C-amb:700.3`, channelRef: "C-amb", audience: [actor] },
       deliveryTarget: `C-amb:700.3`,
       text: "!silent",
-      origin: { kind: "ambient" },
+      origin: { kind: "ambient", live: true },
       async: false,
     });
     assert.equal(res.status, "silent", "an unaddressed silent turn stays silent, no nudge");
     await sleep(300);
     const all = (await built.deliveries.pending("slack")) as any[];
     assert.equal(all.filter((d) => d.text === "nudged reply").length, 0, "no nudge on an unaddressed turn");
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+function threadFollow(text: string, channel: string, root: string, live: boolean): TurnRequest {
+  return {
+    surface: "slack",
+    actor,
+    conversation: { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel, audience: [actor] },
+    deliveryTarget: `slack:${channel}:${root}`,
+    text,
+    origin: { kind: "ambient", entryTs: root, ...(live ? { live: true } : {}) },
+    async: true,
+  };
+}
+
+test("a person's thread follow-up answered in plain text → one nudge → the agent posts", async () => {
+  const built = freshApp();
+  built.runtime.start();
+  try {
+    await built.app.turn(threadFollow("what's with 'someone'? could you add links?", "C-live", "720.1", true));
+    const posted = await pollFor(built.deliveries, (d) => d.text === "nudged reply");
+    assert.ok(posted, "the plain-text answer was not dropped: the agent posted after the nudge");
+    assert.equal(posted.destination.target, "slack:C-live:720.1", "posted in the follow-up's thread");
+    await sleep(300);
+    const all = (await built.deliveries.pending("slack")) as any[];
+    assert.equal(all.length, 1, "only the deliberate post goes out; the first plain text is not auto-posted");
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+test("a person's thread follow-up still in plain text after the nudge → nothing is auto-posted", async () => {
+  const built = freshApp();
+  built.runtime.start();
+  try {
+    await built.app.turn({ ...threadFollow("!shed", "C-live2", "720.2", true), async: false });
+    const session = await built.sessions.getByThread("ch:C-live2:720.2");
+    const requests = await built.sessions.listLlmRequests(session!.id);
+    assert.equal(requests.filter((r) => r.model === "mock").length, 2, "exactly one nudge model call");
+    await sleep(300);
+    assert.equal((await built.deliveries.pending("slack")).length, 0, "an unaddressed follow-up is never force-posted");
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+test("a bot's thread follow-up answered in plain text → no nudge", async () => {
+  const built = freshApp();
+  built.runtime.start();
+  try {
+    const res = await built.app.turn({ ...threadFollow("is the build green?", "C-bot", "720.3", false), async: false });
+    assert.equal(res.status, "silent");
+    const session = await built.sessions.getByThread("ch:C-bot:720.3");
+    const requests = await built.sessions.listLlmRequests(session!.id);
+    assert.equal(requests.filter((r) => r.model === "mock").length, 1, "no nudge model call");
+    await sleep(300);
+    assert.equal((await built.deliveries.pending("slack")).length, 0);
   } finally {
     await built.runtime.stop();
   }

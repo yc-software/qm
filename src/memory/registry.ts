@@ -300,9 +300,12 @@ export function putBinding(record: MemoryRegistry, id: string, input: unknown, c
     throw invalid('automatic capture into a brain isn\'t available yet; use "off" or "explicit"');
   if (capture !== "off" && capture !== "explicit") throw invalid('capture must be "off" or "explicit"');
   const twin = record.bindings.find(
-    (binding) => binding.id !== id && binding.brain === brain.id && binding.scope === scope,
+    (binding) =>
+      binding.id !== id &&
+      binding.brain === brain.id &&
+      (binding.scope === scope || binding.scope === "personal" || scope === "personal"),
   );
-  if (twin) throw conflict(`${scope} is already bound to brain ${brain.id} by binding ${twin.id}`);
+  if (twin) throw conflict(`${twin.scope} is already bound to brain ${brain.id} by binding ${twin.id}`);
   const binding: RegistryBinding = {
     id,
     brain: brain.id,

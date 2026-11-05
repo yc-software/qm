@@ -1,6 +1,6 @@
 # Memory providers
 
-QM keeps its built-in notebook memory unless `MEMORY_PROVIDER_CONFIG` defines a scope-aware provider router. Routes independently select where each scope recalls from, accepts explicit writes, and receives automatic post-turn capture.
+QM keeps its built-in notebook memory unless `MEMORY_PROVIDER_CONFIG` defines a scope-aware provider router. Routes independently select where each scope recalls from, accepts explicit writes, and receives automatic post-turn capture. Org admins can also bind members to personal-memory brains at runtime through the [memory registry](#memory-registry).
 
 ## Prompt memory
 
@@ -294,7 +294,7 @@ The record's `schema` is `2` while it holds a member's brain and `1` otherwise. 
 
 A brain is one MCP endpoint plus one OAuth client-credentials pair, used for reads and writes, and it always attests the member (`attestActor`). Its `preset` names the provider contract; this build knows `gbrain-v1`, gbrain's frozen v1 contract. A binding connects a brain to the kind `personal` (every member) or to one member's personal scope (`personal:<principal id>`). Shared scopes (channels, teams, the org and groups) can't be bound yet: that needs a gbrain contract that reads a shared scope as the scope.
 
-A scope binds to a brain once. Capture is `off` or `explicit`; automatic capture into a brain isn't available yet.
+A scope binds to a brain once, and a binding for the kind `personal` already covers every member's scope, so a brain bound to the kind can't also take a binding for one member, or the reverse. Capture is `off` or `explicit`; automatic capture into a brain isn't available yet.
 
 QM is always an MCP client of gbrain and never gets gbrain's database URL or its owner admin token. The brain's operator provisions the client, the attest right and member links; QM only binds members to what was provisioned.
 
@@ -318,7 +318,7 @@ These routes take only an agent capability from a turn the member sent (never a 
 
 ### API
 
-Every `/v1/admin/memory-registry` route needs an org admin and is audited. Client secrets are write-only and read back as `hasClientSecret`; QM stores them encrypted with a key derived from `CONNECTOR_SECRET_KEY`, exactly as sent, and changing a brain's `url` clears its secret. An admin's agent can register a brain and change bindings, but it never sends a `clientSecret`, changes an existing brain's `url` or deletes a brain or binding; QM refuses each with 400. So a secret is never set in chat, and only an admin outside chat can move or remove an org brain that holds one. A member's own brain is the one exception, described above.
+Every `/v1/admin/memory-registry` route needs an org admin and is audited. Every reply carries registry entries, so an admin's agent reads or changes the registry only in the admin's DM or in a conversation whose sharing is open. Outside chat, an org admin calls these routes from an administrator session in the web UI behind the portal (`/api/admin/memory-registry/...`). Client secrets are write-only and read back as `hasClientSecret`; QM stores them encrypted with a key derived from `CONNECTOR_SECRET_KEY`, exactly as sent, and changing a brain's `url` clears its secret. An admin's agent can register a brain and change bindings, but it never sends a `clientSecret` or changes an existing brain's `url` (QM refuses both with 400), and it can't delete a brain or binding (403). A binding carries memory only once its brain holds a secret, and a secret is never set in chat. So QM calls no brain an agent registered until an admin sets its secret outside chat, and only an admin outside chat can move or remove an org brain that holds one. An agent's binding to a brain that already holds a secret serves on the next memory operation, within the member links the brain's operator provisioned. A member's own brain is the one exception, described above.
 
 An agent can register a brain for an admin, or connect a member's own, but never carries its client secret. On that person's own turn it mints a brain link with `POST /v1/keychain/drops` and body `{"memoryBrain": "<brain id>", "purpose": "…"}`. The single-use form shows the brain, its origin and who is bound to it, and writes the secret straight into the registry, audited as `memory-registry.brain.secret`. It never enters a keychain, can't be granted and never reaches the agent's computer. Only an org admin, or the member who owns the brain while member brains are on, can mint or use one. The link stops working if the brain's `url` changes or the person who minted it can no longer set the secret.
 
@@ -335,13 +335,13 @@ An agent can register a brain for an admin, or connect a member's own, but never
 
 ### Disabled bindings
 
-A binding that QM can't serve contributes nothing, and every recall, search or explicit write for its scope records outcome `disabled` with one of these codes (problem `memory_provider_disabled`). `GET /v1/admin/memory-registry` shows each one, with a `detail` for `invalid_config`.
+A binding that QM can't serve contributes nothing, and every recall, search or explicit write for its scope records outcome `disabled` with one of these codes (problem `memory_provider_disabled`), except `id_taken`, whose id belongs to the env provider. `GET /v1/admin/memory-registry` shows each one, with a `detail` for `invalid_config`.
 
 | Code                | Cause                                                                                                                                                            | Fix                                                                |
 | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
 | `secret_missing`    | The brain has no client secret, for example after its `url` changed.                                                                                             | Set the brain's client secret.                                     |
 | `preset_unknown`    | This QM build doesn't know the brain's preset, for example during a rollback.                                                                                    | Upgrade QM, or change the preset.                                  |
-| `id_taken`          | `MEMORY_PROVIDER_CONFIG` now defines a provider with the brain's id.                                                                                             | Re-register the brain under another id.                            |
+| `id_taken`          | `MEMORY_PROVIDER_CONFIG` now defines a provider with the brain's id. That provider keeps serving its own routes, and the binding records no outcome.             | Re-register the brain under another id.                            |
 | `member_brains_off` | The brain belongs to a member and an org admin turned member brains off.                                                                                         | Turn member brains back on, or leave it off.                       |
 | `invalid_config`    | The entry breaks a provider rule, such as the URL rule under [Troubleshooting](#troubleshooting), or its secret was stored under another `CONNECTOR_SECRET_KEY`. | Read its `detail`, then fix or delete it, or set the secret again. |
 

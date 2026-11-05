@@ -148,9 +148,12 @@ async function setup(
   return { base, built, change, mint, self, servedSecret };
 }
 
-test("an org admin's brain link saves the client secret core-only, from a project and from a DM", async (t) => {
+test("an org admin's brain link saves the client secret core-only, from a project whose members change and from a DM", async (t) => {
   const { built, mint, servedSecret } = await setup(t);
-  await built.app.upsertDirectory([{ principalId: "admin-alice", displayName: "Alice", type: "internal" }]);
+  await built.app.upsertDirectory([
+    { principalId: "admin-alice", displayName: "Alice", type: "internal" },
+    { principalId: "member-bob", displayName: "Bob", type: "internal" },
+  ]);
   const project = await built.app.createProject("admin-alice", "Brain setup");
   assert.ok(project);
   const scopeVersion = await built.projects.version(project.scopeId.slice("group:".length));
@@ -165,6 +168,7 @@ test("an org admin's brain link saves the client secret core-only, from a projec
   assert.equal(form.status, 200);
   assert.match(form.text, /Acme personal memory at https:\/\/brain\.acme\.example/);
   assert.match(form.text, /every member&#39;s personal memory/);
+  assert.equal((await built.app.addProjectMember(project.id, "admin-alice", "member-bob")).status, "ok");
   const saved = await fromProject.redeem("brain-secret-one");
   assert.equal(saved.status, 200);
   assert.deepEqual(JSON.parse(saved.text), { ok: true, brain: "acme-personal" });
@@ -189,6 +193,7 @@ test("a brain link refuses non-admins, other drop fields, unknown and moved brai
   const { built, change, mint, servedSecret } = await setup(t);
   const brainDrop = { memoryBrain: "acme-personal", purpose: "connect it" };
   assert.equal((await mint("U-member", brainDrop)).status, 403);
+  assert.equal((await mint("U-member", { memoryBrain: "nope", purpose: "p" })).status, 403);
   const extra = await mint("admin-alice", { ...brainDrop, service: "stripe", envKey: "STRIPE_KEY" });
   assert.equal(extra.status, 400);
   assert.match(extra.text, /only purpose, not service, envKey/);

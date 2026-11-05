@@ -73,7 +73,7 @@ export function createRegistryMemoryService(opts: {
       const memberFetch = opts.memberFetch ?? publicFetch;
       snapshot = {
         version,
-        disabled: disabled.map(disabledRoute),
+        disabled: disabled.filter(({ code }) => code !== "id_taken").map(disabledRoute),
         service: config.routes.length
           ? routed(
               [...(opts.overlay?.routes ?? [NOTEBOOK_ROUTE]), ...config.routes],

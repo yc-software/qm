@@ -58,43 +58,68 @@ test("a brain binds the kind personal or one member's personal scope, and always
     400,
     /automatic/,
   );
-  const bound = putBinding(
+  const bound = [
     putBinding(record, "everyone", { brain: "acme-personal", scope: "personal", capture: "explicit" }, change),
-    "alice",
-    { brain: "acme-personal", scope: "personal:U1", recall: false, capture: "explicit" },
-    change,
+    putBinding(
+      putBinding(
+        record,
+        "alice",
+        { brain: "acme-personal", scope: "personal:U1", recall: false, capture: "explicit" },
+        change,
+      ),
+      "bob",
+      { brain: "acme-personal", scope: "personal:U2", capture: "explicit" },
+      change,
+    ),
+  ];
+  const resolved = bound.map((entry) => resolveMemoryRegistry(entry, change));
+  assert.deepEqual(
+    resolved.flatMap(({ disabled }) => disabled),
+    [],
   );
-  const { config, disabled } = resolveMemoryRegistry(bound, change);
-  assert.deepEqual(disabled, []);
   assert.doesNotMatch(JSON.stringify(bound), /personal-secret/);
   assert.deepEqual(
-    config.providers.map((provider) => [
-      provider.id,
-      provider.type === "mcp" && provider.attestActor,
-      provider.type === "mcp" && provider.read.auth.clientSecret,
-    ]),
-    [["acme-personal", true, "personal-secret"]],
+    resolved.map(({ config }) =>
+      config.providers.map((provider) => [
+        provider.id,
+        provider.type === "mcp" && provider.attestActor,
+        provider.type === "mcp" && provider.read.auth.clientSecret,
+      ]),
+    ),
+    [[["acme-personal", true, "personal-secret"]], [["acme-personal", true, "personal-secret"]]],
   );
-  assert.deepEqual(config.routes, [
-    {
-      provider: "acme-personal",
-      scopes: ["personal"],
-      capture: "explicit",
-      recall: true,
-      manage: false,
-      label: "Acme personal memory",
-      failOpen: true,
-    },
-    {
-      provider: "acme-personal",
-      scopes: ["personal:U1"],
-      capture: "explicit",
-      recall: false,
-      manage: false,
-      label: "Acme personal memory",
-      failOpen: true,
-    },
-  ]);
+  assert.deepEqual(
+    resolved.flatMap(({ config }) => config.routes),
+    [
+      {
+        provider: "acme-personal",
+        scopes: ["personal"],
+        capture: "explicit",
+        recall: true,
+        manage: false,
+        label: "Acme personal memory",
+        failOpen: true,
+      },
+      {
+        provider: "acme-personal",
+        scopes: ["personal:U1"],
+        capture: "explicit",
+        recall: false,
+        manage: false,
+        label: "Acme personal memory",
+        failOpen: true,
+      },
+      {
+        provider: "acme-personal",
+        scopes: ["personal:U2"],
+        capture: "explicit",
+        recall: true,
+        manage: false,
+        label: "Acme personal memory",
+        failOpen: true,
+      },
+    ],
+  );
 });
 
 test("a scope binds to one brain once, and a binding can move to another brain or scope", () => {
@@ -103,6 +128,17 @@ test("a scope binds to one brain once, and a binding can move to another brain o
     () => putBinding(record, "alice-again", { brain: "acme-personal", scope: "personal:U1" }, change),
     409,
     /already bound to brain acme-personal by binding alice/,
+  );
+  refused(
+    () => putBinding(record, "everyone", { brain: "acme-personal", scope: "personal" }, change),
+    409,
+    /personal:U1 is already bound to brain acme-personal by binding alice/,
+  );
+  const everyone = putBinding(personalBrain(), "everyone", { brain: "acme-personal", scope: "personal" }, change);
+  refused(
+    () => putBinding(everyone, "alice", { brain: "acme-personal", scope: "personal:U1", recall: false }, change),
+    409,
+    /personal is already bound to brain acme-personal by binding everyone/,
   );
   record = putBinding(record, "alice", { scope: "personal:U2" }, change);
   assert.deepEqual(

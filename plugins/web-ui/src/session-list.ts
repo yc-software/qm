@@ -11,7 +11,7 @@ import { relTime } from "./ui.ts";
 
 type ProjectAwareContext = CoreContext & { project?: CoreProject };
 
-type RecentGroupKind = "personal" | "project" | "channel" | "group";
+type RecentGroupKind = "personal" | "project" | "channel" | "group" | "persona";
 
 export interface RecentProjectSeed {
   scopeId: string;
@@ -92,21 +92,23 @@ export function groupProjectSessions(
   const projects = new Map<string, Extract<RecentItem, { kind: "project" }>>();
   const items: RecentItem[] = [];
   for (const session of [...sessions].sort((a, b) => activityOf(b) - activityOf(a))) {
-    const seed = seeds.get(session.scopeId);
+    const personaKey = session.personaId ? `persona:${session.personaId}` : null;
+    const key = personaKey && seeds.has(personaKey) ? personaKey : session.scopeId;
+    const seed = seeds.get(key);
     if (!seed) {
       items.push({ kind: "session", session });
       continue;
     }
-    let project = projects.get(session.scopeId);
+    let project = projects.get(key);
     if (!project) {
       project = {
         kind: "project",
-        scopeId: session.scopeId,
+        scopeId: key,
         name: seed.name,
         groupKind: seed.kind ?? "project",
         sessions: [],
       };
-      projects.set(session.scopeId, project);
+      projects.set(key, project);
       items.push(project);
     }
     project.sessions.push(session);
