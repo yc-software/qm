@@ -112,7 +112,7 @@ async function serve(databaseUrl: string): Promise<{ get: (path: string) => Prom
   };
 }
 
-test("an install with one tenant serves requests bound to it and refuses them once a second exists", () =>
+test("an install with one tenant serves requests bound to it and refuses them once a second exists, without a restart", () =>
   withoutTenant(async () => {
     const databaseUrl = testMigratedDatabaseUrl();
     const db = new pg.Pool({ connectionString: ownerUrl(databaseUrl).toString() });
@@ -122,6 +122,7 @@ test("an install with one tenant serves requests bound to it and refuses them on
       assert.equal(await buildApp(testConfig({ databaseUrl })).app.readBootTenant(), TEST_TENANT);
       assert.notEqual(await single.get("/v1/deliveries"), 401);
       await db.query("INSERT INTO tenants(id) VALUES ($1)", [randomUUID()]);
+      assert.equal(await single.get("/v1/deliveries"), 401);
       const multi = await serve(databaseUrl);
       try {
         assert.equal(await multi.get("/v1/deliveries"), 401);
