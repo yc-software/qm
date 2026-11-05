@@ -27,14 +27,7 @@ function manifestPath(configDir: string, name: "slack-app-manifest.yml" | "slack
 }
 
 export function deploymentOutputs(config: QmConfig, configDir: string): DeploymentOutputs {
-  if (
-    !config.services.includes("slack") ||
-    !config.services.includes("portal") ||
-    !config.services.includes("web-ui") ||
-    !config.services.includes("admin")
-  ) {
-    throw new CliError("outputs requires the slack, web-ui, admin, and portal services");
-  }
+  if (!config.services.includes("slack")) throw new CliError("outputs requires the slack service");
   const botPath = manifestPath(configDir, "slack-app-manifest.yml");
   const bot = readFileSync(botPath, "utf8");
   const expected = renderSlackManifests(config);
@@ -55,8 +48,8 @@ export function deploymentOutputs(config: QmConfig, configDir: string): Deployme
     ...(coordinates.accountOrOrganization ? { providerAccountOrOrganization: coordinates.accountOrOrganization } : {}),
     ...(coordinates.region ? { region: coordinates.region } : {}),
     webUiUrl: base,
-    adminOnboardingUrl: `${base}/admin/onboarding`,
-    adminConnectorsUrl: `${base}/admin/connectors`,
+    adminOnboardingUrl: `${base}/settings/onboarding`,
+    adminConnectorsUrl: `${base}/settings/connectors`,
     userConnectionsUrl: `${base}/keychain`,
     healthUrl: `${base}/healthz`,
     slack: {

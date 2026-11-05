@@ -7,6 +7,8 @@ import { createInsecureTestServer, createServer } from "../src/api/server.ts";
 import type { App } from "../src/api/app.ts";
 import { createAdminService } from "../src/admin/admin-service.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
+import { testAdminGrantStore, testDatabaseUrl, testUsers } from "./support/test-database.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 
 function appWith(endpoint: Record<string, unknown>): App {
   return { reachDeployment: async () => ({ status: "ok", endpoint }) } as unknown as App;
@@ -402,7 +404,7 @@ test("admin deployment proxy bypasses deployment ACL after admin auth and audits
   const auditEvents: Array<{ principalId: string; action: string; resource: string; scopeLabel: string }> = [];
   let bypassAcl: boolean | undefined;
   const app = {
-    listDeployments: async () => [{ id: "d1", ownerScopeId: "personal:U1" }],
+    getDeployment: async (id: string) => (id === "d1" ? { id: "d1", ownerScopeId: "personal:U1" } : null),
     reachDeployment: async (_id: string, _principal: string, opts?: { bypassAcl?: boolean }) => {
       bypassAcl = opts?.bypassAcl;
       return opts?.bypassAcl
@@ -412,7 +414,8 @@ test("admin deployment proxy bypasses deployment ACL after admin auth and audits
   } as unknown as App;
   const SECRET = "admin-deploy-proxy-secret".repeat(3);
   const server = createServer(app, {
-    admin: createAdminService(),
+    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+    admin: createAdminService(testAdminGrantStore(), { users: testUsers() }),
     signingSecret: SECRET,
     auditLog: {
       record: (e) => auditEvents.push(e),

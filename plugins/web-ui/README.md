@@ -3,13 +3,17 @@
 An end-user web surface with a custom chat shell, connected to the
 platform core. It still uses Pi's `Agent` state machine and selected Pi web utilities
 for markdown, attachment loading, and model metadata, but the visible conversation UI is
-owned by this plugin. Two processes:
+owned by this plugin. Two parts:
 
-- **A zero-dep `node:http` server** (`server/index.ts`) — holds the signed-in principal
+- **A zero-dep `node:http` server** (`server/index.ts`) — runs inside core, which starts it on a loopback
+  port behind the portal (`src/web/front-door.ts`). It holds the signed-in principal
   in an `HttpOnly` cookie, injects it as the turn's actor, and proxies a small set of
   `/api/*` routes to the core (chat turns, unified history, and **webhook management** —
   see below). It never imports the core and never sends a model/API key to the browser.
-- **A Vite-bundled front-end** (`src/`) — a custom Lit shell + transcript + composer.
+- **A Vite-bundled front-end** (`src/`) — a custom Lit shell + transcript + composer. The built bundle
+  (`dist-web/`) is not read from disk at runtime: core publishes it as a content-hashed release to its
+  object store and the server serves the live release from there, so `qm ui publish` can replace it
+  without a restart (see [docs/combined-services.md](../../docs/combined-services.md)).
   Pi's `Agent` LLM-call boundary (`streamFn`) is swapped for a bridge to the core.
   It `POST`s the turn (`POST /v1/turns?async=1`), then watches the in-flight reply over
   **SSE** (`GET /api/runs/:id/events`, relayed from the core's `partial`) so tokens are
@@ -22,31 +26,19 @@ owned by this plugin. Two processes:
 is served at the portal root — the default `WEB_UI_BASE=/` build is the one the portal fronts
 (the old `/web-ui/` prefix is gone; the portal 308-redirects `/web-ui/*` to root for stale
 links). The front-end joins its base via `import.meta.env.BASE_URL` (the `withBase()` helper in
-`core-bridge.ts`), so direct/standalone access and `npm run dev` behave identically.
+`core-bridge.ts`), so every base path behaves identically.
 Core binds run reads and signals to the portal-verified actor;
 no run bearer is exposed to browser code or placed in a URL. The active-run resume index
 (`/api/runs/active`) is per-process best-effort with a durable core fallback for personal threads.
 
-```
-npm install --prefix ../admin
-npm install
-npm run build
-npm run serve
-
-npm start
-```
-
-Dev (HMR): run `npm run serve` in one terminal and `npm run dev` in another — Vite serves
-the front-end on :5173 and proxies `/signin`, `/me`, `/api/*` to the node server.
-
-Env (see `.env.example`): `CORE_API_URL` (default `http://localhost:8080`),
-`CORE_ORG_ID` (default `acme`), `PORT` (default 8096), `WEB_UI_PUBLIC_URL`,
-`WEB_UI_PRINCIPALS` (csv allowlist; empty = any id, **dev only**),
-and `CORE_SIGNING_SECRET` (same value as the core when source-auth is enabled).
+Core runs this server in-process and serves the built bundle as a published release; see
+[docs/combined-services.md](../../docs/combined-services.md). Build the bundle with
+`npm install && npm run build`. For development, `scripts/dev-instance.sh up --watch` runs core
+with Vite hot reload for this front-end.
 
 ## Suggested activities
 
-Suggested activity generation is **on by default** when the configured harness supports
+Suggested activity generation is **on by default** when the configured model supports
 it. Set `SUGGESTED_ACTIVITIES_ENABLED=false` on core to disable generation. Optionally
 set `WEB_UI_SUGGESTED_ACTIVITIES` on web to a JSON array for fixed fallback starters;
 unset it as well to hide suggestions entirely. No deployment-specific activity content
@@ -142,7 +134,7 @@ Below 860px the same build behaves like an app rather than a shrunken desktop:
   button's column so nothing renders under it.
 - **Bottom sheets.** Popover menus — composer settings, a session's ⋯, the user menu, the
   per-session tools — render as sheets with a backdrop; tap outside or swipe down to dismiss.
-- **Compact composer.** Attach · input · settings · send on one row; model, harness, effort, and
+- **Compact composer.** Attach · input · settings · send on one row; model, effort, and
   Fast live in the settings sheet. Inputs are 16px so iOS never zooms on focus, and the layout
   tracks the visual viewport so the composer stays above the on-screen keyboard.
 - **Touch targets.** Message actions, file chips, selects, drawer rows, approvals, and back
@@ -159,7 +151,7 @@ the CSS media queries, the composer, and the split canvas.
 
 - **Custom chat UI** — a first-party conversation surface with a left history rail, centered
   transcript, bottom composer, inline **model selector** (the models core reports as
-  serviceable for the approved harnesses),
+  serviceable),
   explicit **effort selector** (`low|medium|high|xhigh|max|ultracode|auto`), **Fast mode**
   toggle, attachments, streaming partials, and a theme picker. Settings → Theme takes
   light, dark, or system, or an imported palette: drop in an iTerm2 `.itermcolors` preset or
@@ -177,8 +169,8 @@ the CSS media queries, the composer, and the split canvas.
   (→ core `GET /v1/skills?principalId=`, resolved by `app.listVisibleSkills`). The skill _body_
   never reaches the browser; only name/description/scope do.
 - **Functional selectors** — the chosen model + effort + Fast mode ride along on each turn
-  (`POST /v1/turns` `model`/`thinkingLevel`/`fastMode`); the Pi harness applies them
-  server-side, bypassing Pi's stale thinking-level clamp for newer effort values and falling
+  (`POST /v1/turns` `model`/`thinkingLevel`/`fastMode`); the agent applies them
+  server-side, bypassing pi-ai's stale thinking-level clamp for newer effort values and falling
   back to its default on any unknown value. Attachments are forwarded as `IncomingAttachment`s
   and materialized into the agent's sandbox inbox (same path as Slack file shares).
 - **Unified history** — every session you participated in (DMs, channels, web), via

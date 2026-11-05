@@ -1,30 +1,27 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
-import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
-import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
-import { createMemoryService } from "../src/memory/memory-service.ts";
-import { createModelGateway } from "../src/model/model-gateway.ts";
-import { createAuditLog } from "../src/audit/audit-log.ts";
-import { createRateLimiter } from "../src/ratelimit/rate-limiter.ts";
-import { defineHarness } from "../src/harness/harness.ts";
+import type { Agent } from "../src/agent/agent.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { scopeId, type Conversation, type Principal } from "../src/types.ts";
-import type { HarnessTurnResult } from "../src/harness/harness.ts";
+import type { AgentTurnResult } from "../src/agent/agent.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
+import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
+import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
+import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 
 const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };
@@ -54,33 +51,23 @@ function fakeSandbox(): Sandbox {
   };
 }
 
-function buildScenario(turnResult?: Partial<HarnessTurnResult>) {
-  const harness = defineHarness(
-    {
-      id: "pi",
-      controlTransport: "in-process",
-      toolTransport: "in-process",
-      transcriptFormat: "pi",
-      capabilities: new Set(),
+function buildScenario(turnResult?: Partial<AgentTurnResult>) {
+  const agent: Agent = {
+    async runTurn(turn) {
+      await turn.emit({ kind: "UserMessage", text: turn.input });
+      await turn.emit({ kind: "AgentMessage", text: "done" });
+      return { reply: "done", modelCalls: 1, ...turnResult };
     },
-    {
-      async runTurn(turn) {
-        await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
-        await turn.emit({ type: "assistant", payload: { text: "done" }, scopeLabel: turn.scopeLabel });
-        return { reply: "done", modelCalls: 1, ...turnResult };
-      },
-      async screenSecurity() {
-        return { decision: "auto" as const };
-      },
+    async screenSecurity() {
+      return { decision: "auto" as const };
     },
-  );
-  const sessions = createMemorySessionStore();
-  const acl = createAclStore();
-  const auditLog = createAuditLog();
-  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "bookkeeping-")));
+  };
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
+  const auditLog = createPostgresAuditLog(testDatabaseUrl());
   const deploy = createDeployService({
     ...singleProcessDeps(),
-    deployStore: createDeployStore(),
+    deployStore: createDeployStore(testDeployBackings()),
     provider: createDockerDeployProvider(),
     deployDir: join(tmpdir(), "bookkeeping-deploy"),
     auditLog,
@@ -89,17 +76,14 @@ function buildScenario(turnResult?: Partial<HarnessTurnResult>) {
   const deliveries = createDeliveryStore();
   const orchestrator = createOrchestrator({
     ...singleProcessDeps(),
-    identity: createIdentityService(),
-    resolution: createResolutionService(ORG, createMemoryConfigStore(ORG), acl),
+    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    resolution: createResolutionService(ORG, testConfigStore(ORG), acl),
     sessions,
-    workspace,
-    files: createMemoryFileArtifactStore(createMemoryDurableByteStore()),
+    files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
     sandbox: fakeSandbox(),
-    modelGateway: createModelGateway(),
     auditLog,
-    rateLimiter: createRateLimiter({ maxPerWindow: 100, windowMs: 60_000 }),
-    harness,
-    memory: createMemoryService(workspace),
+    agent,
+    memory: createPostgresMemoryService(testDatabaseUrl()),
     deploy,
     acl,
     deliveries,
@@ -133,15 +117,10 @@ test("an overheard import failure aborts the batch instead of skipping one messa
   const { orchestrator, sessions, input } = buildScenario();
   await orchestrator.handleTurn(input("prime"));
   const appendMany = sessions.appendMany.bind(sessions);
-  sessions.appendMany = async (lease, entries) => {
-    if (
-      entries.some((entry) => {
-        const payload = entry.payload as { overheard?: unknown; ts?: unknown } | null;
-        return payload?.overheard === true && payload.ts === "200.2";
-      })
-    )
+  sessions.appendMany = async (lease, items) => {
+    if (items.some((item) => item.body?.overheard === true && item.externalId === "200.2"))
       throw new Error("append refused");
-    return appendMany(lease, entries);
+    return appendMany(lease, items);
   };
   const request = input("what did I miss?", {
     overheard: [
@@ -153,16 +132,16 @@ test("an overheard import failure aborts the batch instead of skipping one messa
   const result = await orchestrator.handleTurn(request);
   assert.equal(result.status, "ok");
   const session = (await sessions.getByThread(conversation.threadRef))!;
-  const overheardTexts = (await sessions.getEntries(session.id))
-    .filter((e) => (e.payload as { overheard?: unknown } | null)?.overheard === true)
-    .map((e) => (e.payload as { text?: string }).text);
+  const overheardTexts = (await sessions.getItems(session.id))
+    .filter((item) => item.body.overheard === true)
+    .map((item) => item.text);
   assert.deepEqual(overheardTexts, [], "the atomic batch leaves no partial history on failure");
   sessions.appendMany = appendMany;
   await orchestrator.handleTurn(request);
   await orchestrator.handleTurn(request);
-  const recovered = (await sessions.getEntries(session.id))
-    .filter((e) => (e.payload as { overheard?: unknown } | null)?.overheard === true)
-    .map((e) => (e.payload as { text?: string }).text);
+  const recovered = (await sessions.getItems(session.id))
+    .filter((item) => item.body.overheard === true)
+    .map((item) => item.text);
   assert.deepEqual(
     recovered,
     ["first overheard", "second overheard", "third overheard"],

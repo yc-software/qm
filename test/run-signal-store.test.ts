@@ -1,10 +1,16 @@
-import { test } from "node:test";
+import { after, test } from "node:test";
 import assert from "node:assert/strict";
-import { createMemoryRunSignalStore, startSignalPoll, waitForClientResult } from "../src/runs/run-signal-store.ts";
+import { startSignalPoll, waitForClientResult, type RunSignalStore } from "../src/runs/run-signal-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
-const URL = process.env.DATABASE_URL;
-const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the pg run-signal tests";
+const stores: RunSignalStore[] = [];
+const signalStore = (): RunSignalStore => {
+  const store = createPostgresRunSignalStore(testDatabaseUrl());
+  stores.push(store);
+  return store;
+};
+after(() => Promise.allSettled(stores.map((store) => store.close?.())));
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 const until = async (cond: () => boolean, ms = 3_000): Promise<void> => {
@@ -15,8 +21,8 @@ const until = async (cond: () => boolean, ms = 3_000): Promise<void> => {
   }
 };
 
-test("memory store: send appends, takePending drains in order and consumes", async () => {
-  const store = createMemoryRunSignalStore();
+test("store: send appends, takePending drains in order and consumes", async () => {
+  const store = signalStore();
   await store.send("r1", { kind: "steer", text: "a" });
   await store.send("r1", { kind: "abort" });
   await store.send("other", { kind: "abort" });
@@ -29,33 +35,8 @@ test("memory store: send appends, takePending drains in order and consumes", asy
   assert.equal((await store.takePending("other")).length, 1, "other run unaffected");
 });
 
-test("memory store: pending retains steers until acknowledged and leaves aborts for terminal drain", async () => {
-  const store = createMemoryRunSignalStore();
-  await store.send("r1", { kind: "steer", text: "a" });
-  await store.send("r1", { kind: "abort" });
-  await store.send("r1", { kind: "steer", text: "b" });
-  assert.deepEqual(
-    (await store.pending("r1")).map((s) => s.signal.kind),
-    ["steer", "abort", "steer"],
-    "a live drain sees everything pending, in order",
-  );
-  for (const row of await store.pending("r1")) if (row.signal.kind === "steer") await store.acknowledge("r1", row.id);
-  assert.deepEqual(
-    (await store.pending("r1")).map((s) => s.signal.kind),
-    ["abort"],
-    "steers are consumed exactly once; the abort is never consumed by a live drain",
-  );
-  assert.deepEqual(
-    (await store.takePending("r1")).map((s) => s.kind),
-    ["abort"],
-    "the terminal drain is what consumes the abort",
-  );
-  assert.deepEqual(await store.pending("r1"), []);
-  assert.deepEqual(await store.pendingRunIds(), [], "nothing outlives the terminal drain");
-});
-
 test("startSignalPoll: a user stop outlives a lease-losing poller, is honored by the reclaiming poller, and dies with the terminal drain", async () => {
-  const store = createMemoryRunSignalStore();
+  const store = signalStore();
   await store.send("r1", { kind: "abort" });
   let loserAborts = 0;
   const loser = startSignalPoll(
@@ -88,8 +69,61 @@ test("startSignalPoll: a user stop outlives a lease-losing poller, is honored by
   assert.deepEqual(await store.pendingRunIds(), [], "the stop does not outlive the run's terminal completion");
 });
 
+test("startSignalPoll: a stop waiting behind a slow steer is delivered first", async () => {
+  const store = signalStore();
+  const order: string[] = [];
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  await store.send("r-order", { kind: "steer", text: "screen me slowly" });
+  await store.send("r-order", { kind: "abort" });
+  const stop = startSignalPoll(
+    store,
+    "r-order",
+    {
+      onSteer: async () => {
+        order.push("steer");
+        await gate;
+      },
+      onAbort: async () => void order.push("abort"),
+    },
+    { intervalMs: 60_000 },
+  );
+  try {
+    await until(() => order.length === 2, 500);
+    assert.deepEqual(order, ["abort", "steer"]);
+  } finally {
+    release();
+    await stop();
+  }
+});
+
+test("startSignalPoll: a stop that arrives during a steer's intake goes ahead of the next steer", async () => {
+  const store = signalStore();
+  const order: string[] = [];
+  await store.send("r-late", { kind: "steer", text: "first" });
+  await store.send("r-late", { kind: "steer", text: "second" });
+  const stop = startSignalPoll(
+    store,
+    "r-late",
+    {
+      onSteer: async (text) => {
+        order.push(text);
+        if (text === "first") await store.send("r-late", { kind: "abort" });
+      },
+      onAbort: async () => void order.push("abort"),
+    },
+    { intervalMs: 60_000 },
+  );
+  try {
+    await until(() => order.includes("second"), 500);
+    assert.deepEqual(order.slice(0, 3), ["first", "abort", "second"]);
+  } finally {
+    await stop();
+  }
+});
+
 test("startSignalPoll: repeated stops in one drain collapse to one onAbort; the still-pending stop re-delivers on the next drain", async () => {
-  const store = createMemoryRunSignalStore();
+  const store = signalStore();
   const steered: string[] = [];
   let aborts = 0;
   let releaseFirst!: () => void;
@@ -111,13 +145,14 @@ test("startSignalPoll: repeated stops in one drain collapse to one onAbort; the 
     await until(() => steered.length === 1);
     await store.send("r1", { kind: "abort" });
     await store.send("r1", { kind: "abort" });
-    releaseFirst();
     await until(() => aborts === 1, 500);
     await sleep(50);
-    assert.equal(aborts, 1, "one drain delivers a batch of stops once");
+    assert.equal(aborts, 1, "one drain delivers a batch of stops once, without waiting for the steer in progress");
+    releaseFirst();
+    await until(() => aborts === 2, 500);
     await store.send("r1", { kind: "steer", text: "second" });
     await until(() => steered.length === 2, 500);
-    await until(() => aborts === 2, 500);
+    await until(() => aborts === 3, 500);
     assert.deepEqual(steered, ["first", "second"], "steers still flow while a stop is pending");
   } finally {
     await stop();
@@ -127,7 +162,7 @@ test("startSignalPoll: repeated stops in one drain collapse to one onAbort; the 
 });
 
 test("startSignalPoll: a stop whose delivery throws is retried on the next drain instead of being lost", async () => {
-  const store = createMemoryRunSignalStore();
+  const store = signalStore();
   let attempts = 0;
   const stop = startSignalPoll(
     store,
@@ -154,21 +189,8 @@ test("startSignalPoll: a stop whose delivery throws is retried on the next drain
   );
 });
 
-test("memory store: onSignal doorbell fires on send for that run only; unsubscribe stops it", async () => {
-  const store = createMemoryRunSignalStore();
-  let rings = 0;
-  const off = store.onSignal("r1", () => rings++);
-  await store.send("other", { kind: "abort" });
-  assert.equal(rings, 0, "other run's send does not ring");
-  await store.send("r1", { kind: "steer", text: "x" });
-  assert.equal(rings, 1);
-  off();
-  await store.send("r1", { kind: "steer", text: "y" });
-  assert.equal(rings, 1, "no ring after unsubscribe");
-});
-
 test("startSignalPoll: doorbell dispatches a signal immediately, far before the poll interval", async () => {
-  const store = createMemoryRunSignalStore();
+  const store = signalStore();
   const steered: string[] = [];
   const stop = startSignalPoll(
     store,
@@ -190,8 +212,8 @@ test("startSignalPoll: doorbell dispatches a signal immediately, far before the 
   }
 });
 
-test("startSignalPoll: a steer's ts is dispatched to onSteer (so the harness can persist + dedupe it)", async () => {
-  const store = createMemoryRunSignalStore();
+test("startSignalPoll: a steer's ts is dispatched to onSteer (so the agent can persist + dedupe it)", async () => {
+  const store = signalStore();
   const seen: Array<{ text: string; ts?: string }> = [];
   const stop = startSignalPoll(
     store,
@@ -214,7 +236,7 @@ test("startSignalPoll: a steer's ts is dispatched to onSteer (so the harness can
 });
 
 test("startSignalPoll: a legacy durable followUp row is dispatched as a steer during rolling deploys", async () => {
-  const store = createMemoryRunSignalStore();
+  const store = signalStore();
   const seen: string[] = [];
   const stop = startSignalPoll(
     store,
@@ -237,7 +259,7 @@ test("startSignalPoll: a legacy durable followUp row is dispatched as a steer du
 });
 
 test("startSignalPoll: a doorbell during a slow drain queues one re-drain (no signal stranded)", async () => {
-  const store = createMemoryRunSignalStore();
+  const store = signalStore();
   const seen: string[] = [];
   let releaseFirst!: () => void;
   const firstGate = new Promise<void>((r) => (releaseFirst = r));
@@ -266,7 +288,7 @@ test("startSignalPoll: a doorbell during a slow drain queues one re-drain (no si
 });
 
 test("startSignalPoll: stop consumes nothing more — an undrained signal stays pending for the terminal drain", async () => {
-  const store = createMemoryRunSignalStore();
+  const store = signalStore();
   const seen: string[] = [];
   let releaseFirst!: () => void;
   const firstGate = new Promise<void>((resolve) => {
@@ -298,9 +320,28 @@ test("startSignalPoll: stop consumes nothing more — an undrained signal stays 
   );
 });
 
-test("pg store: NOTIFY doorbell reaches a listener on a different connection", { skip }, async () => {
-  const sender = createPostgresRunSignalStore(URL!);
-  const receiver = createPostgresRunSignalStore(URL!);
+test("store: onSignal doorbell fires on send for that run only; unsubscribe stops it", async () => {
+  const store = signalStore();
+  let rings = 0;
+  const off = store.onSignal("r1", () => rings++);
+  await until(() => rings >= 1);
+  const settled = rings;
+  await store.send("other", { kind: "abort" });
+  await sleep(300);
+  assert.equal(rings, settled, "a signal for another run does not ring this run's doorbell");
+  await store.send("r1", { kind: "steer", text: "a" });
+  await until(() => rings > settled);
+  off();
+  const before = rings;
+  await store.send("r1", { kind: "steer", text: "b" });
+  await sleep(300);
+  assert.equal(rings, before, "an unsubscribed doorbell stays silent");
+});
+
+test("store: NOTIFY doorbell reaches a listener on a different connection", async () => {
+  const url = testDatabaseUrl();
+  const sender = createPostgresRunSignalStore(url);
+  const receiver = createPostgresRunSignalStore(url);
   const runId = `test-run-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   try {
     let rings = 0;
@@ -317,8 +358,8 @@ test("pg store: NOTIFY doorbell reaches a listener on a different connection", {
   }
 });
 
-test("pg store: pending retains steers until acknowledged and leaves aborts for terminal drain", { skip }, async () => {
-  const store = createPostgresRunSignalStore(URL!);
+test("store: pending retains steers until acknowledged and leaves aborts for terminal drain", async () => {
+  const store = signalStore();
   const runId = `test-run-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   try {
     await store.send(runId, { kind: "steer", text: "a" });
@@ -349,22 +390,8 @@ test("pg store: pending retains steers until acknowledged and leaves aborts for 
   }
 });
 
-test("memory store: a signal round-trips ts and request intact", async () => {
-  const store = createMemoryRunSignalStore();
-  const request = {
-    surface: "slack",
-    actor: { externalId: "U1" },
-    conversation: { kind: "channel" as const, threadRef: "ch:C1:1.1" },
-    text: "why did you do it wrong?",
-  };
-  await store.send("r1", { kind: "steer", text: "why did you do it wrong?", ts: "1.2", request });
-  const [taken] = await store.takePending("r1");
-  assert.equal(taken!.ts, "1.2");
-  assert.deepEqual(taken!.request, request);
-});
-
-test("pg store: a signal round-trips ts and request intact", { skip }, async () => {
-  const store = createPostgresRunSignalStore(URL!);
+test("store: a signal round-trips ts and request intact", async () => {
+  const store = signalStore();
   const runId = `test-run-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const request = {
     surface: "slack",
@@ -382,19 +409,8 @@ test("pg store: a signal round-trips ts and request intact", { skip }, async () 
   }
 });
 
-test("memory store: pendingRunIds lists runs with unconsumed signals; prune is a no-op", async () => {
-  const store = createMemoryRunSignalStore();
-  await store.send("r1", { kind: "steer", text: "a" });
-  await store.send("r2", { kind: "abort" });
-  assert.deepEqual((await store.pendingRunIds()).sort(), ["r1", "r2"]);
-  await store.takePending("r1");
-  assert.deepEqual(await store.pendingRunIds(), ["r2"]);
-  await store.prune(0);
-  assert.deepEqual(await store.pendingRunIds(), ["r2"], "prune never touches unconsumed signals");
-});
-
-test("pg store: pendingRunIds lists unconsumed runs; prune deletes only old consumed rows", { skip }, async () => {
-  const store = createPostgresRunSignalStore(URL!);
+test("store: pendingRunIds lists unconsumed runs; prune deletes only old consumed rows", async () => {
+  const store = signalStore();
   const a = `test-run-${Date.now()}-a-${Math.random().toString(36).slice(2)}`;
   const b = `test-run-${Date.now()}-b-${Math.random().toString(36).slice(2)}`;
   try {
@@ -413,16 +429,8 @@ test("pg store: pendingRunIds lists unconsumed runs; prune deletes only old cons
   }
 });
 
-test("memory store: a signal carrying a dedupe key is stored once, and the second send reports the duplicate", async () => {
-  const store = createMemoryRunSignalStore();
-  assert.equal(await store.send("r1", { kind: "steer", text: "go", dedupeKey: "slack:B:C1:1.0:steer" }), true);
-  assert.equal(await store.send("r1", { kind: "steer", text: "go", dedupeKey: "slack:B:C1:1.0:steer" }), false);
-  assert.equal(await store.send("r1", { kind: "steer", text: "again" }), true, "keyless signals never dedupe");
-  assert.equal((await store.takePending("r1")).length, 2);
-});
-
-test("pg store: a dedupe key collapses a redelivered steer to one row", { skip }, async () => {
-  const store = createPostgresRunSignalStore(URL!);
+test("store: a dedupe key collapses a redelivered steer to one row", async () => {
+  const store = signalStore();
   const key = `slack:B:C1:${Date.now()}:steer`;
   try {
     assert.equal(await store.send("r-dedupe", { kind: "steer", text: "go", dedupeKey: key }), true);
@@ -433,46 +441,32 @@ test("pg store: a dedupe key collapses a redelivered steer to one row", { skip }
   }
 });
 
-test("memory store: hasDedupeKey answers for keys already recorded", async () => {
-  const store = createMemoryRunSignalStore();
-  assert.equal(await store.hasDedupeKey("k"), false);
-  await store.send("r1", { kind: "steer", text: "go", dedupeKey: "k" });
-  assert.equal(await store.hasDedupeKey("k"), true);
-});
-
-test("pg store: hasDedupeKey answers for keys already recorded", { skip }, async () => {
-  const store = createPostgresRunSignalStore(URL!);
+test("store: runForDedupeKey names the run a recorded key went to", async () => {
+  const store = signalStore();
   const key = `slack:B:C1:${Date.now()}:has`;
   try {
-    assert.equal(await store.hasDedupeKey(key), false);
+    assert.equal(await store.runForDedupeKey(key), undefined);
     await store.send("r-has", { kind: "steer", text: "go", dedupeKey: key });
-    assert.equal(await store.hasDedupeKey(key), true);
+    assert.equal(await store.runForDedupeKey(key), "r-has");
   } finally {
     await store.close?.();
   }
 });
 
-for (const backend of ["memory", "postgres"] as const) {
-  test(
-    `${backend}: orphan signals survive inspection until explicitly acknowledged`,
-    { skip: backend === "postgres" ? skip : false },
-    async () => {
-      const store = backend === "memory" ? createMemoryRunSignalStore() : createPostgresRunSignalStore(URL!);
-      const runId = `receipt-${crypto.randomUUID()}`;
-      await store.send(runId, { kind: "steer", text: "retry me" });
-      const [receipt] = await store.pending(runId);
-      assert.ok(receipt);
-      assert.deepEqual(await store.pending(runId), [receipt]);
-      await store.acknowledge("another-run", receipt.id);
-      assert.equal((await store.pending(runId)).length, 1);
-      await store.acknowledge(runId, receipt.id);
-      assert.deepEqual(await store.pending(runId), []);
-      await store.close?.();
-    },
-  );
-}
+test("orphan signals survive inspection until explicitly acknowledged", async () => {
+  const store = signalStore();
+  const runId = `receipt-${crypto.randomUUID()}`;
+  await store.send(runId, { kind: "steer", text: "retry me" });
+  const [receipt] = await store.pending(runId);
+  assert.ok(receipt);
+  assert.deepEqual(await store.pending(runId), [receipt]);
+  await store.acknowledge("another-run", receipt.id);
+  assert.equal((await store.pending(runId)).length, 1);
+  await store.acknowledge(runId, receipt.id);
+  assert.deepEqual(await store.pending(runId), []);
+});
 test("startSignalPoll delivers the request and files even when a steer has no caption", async () => {
-  const signals = createMemoryRunSignalStore();
+  const signals = signalStore();
   const request = {
     surface: "web",
     actor: { externalId: "U1" },
@@ -497,7 +491,7 @@ test("startSignalPoll delivers the request and files even when a steer has no ca
 });
 
 test("failed preparation preserves the entire pending batch for retry", async () => {
-  const store = createMemoryRunSignalStore();
+  const store = signalStore();
   await store.send("prepare-failure", { kind: "steer", text: "first" });
   await store.send("prepare-failure", { kind: "steer", text: "second" });
   let failed = false;
@@ -526,7 +520,7 @@ test("failed preparation preserves the entire pending batch for retry", async ()
 });
 
 test("a declined late steer stays durable for terminal replay without spinning", async () => {
-  const store = createMemoryRunSignalStore();
+  const store = signalStore();
   let attempts = 0;
   const stop = startSignalPoll(
     store,
@@ -549,7 +543,7 @@ test("a declined late steer stays durable for terminal replay without spinning",
 });
 
 test("failed attachment preparation does not block Stop", async () => {
-  const store = createMemoryRunSignalStore();
+  const store = signalStore();
   await store.send("stop-after-failure", { kind: "steer", text: "file" });
   await store.send("stop-after-failure", { kind: "abort" });
   let aborted = false;
@@ -575,7 +569,7 @@ test("failed attachment preparation does not block Stop", async () => {
 });
 
 test("waitForClientResult resolves with the matching client_result and consumes it", async () => {
-  const store = createMemoryRunSignalStore();
+  const store = signalStore();
   await store.send("r1", { kind: "client_result", callId: "other", result: { content: "not mine" } });
   const waiting = waitForClientResult(store, "r1", "call-1", { timeoutMs: 5_000 });
   await sleep(10);
@@ -593,7 +587,7 @@ test("waitForClientResult resolves with the matching client_result and consumes 
 });
 
 test("waitForClientResult finds an answer that landed before it subscribed", async () => {
-  const store = createMemoryRunSignalStore();
+  const store = signalStore();
   await store.send("r1", { kind: "client_result", callId: "call-1", result: { content: "early", isError: true } });
   assert.deepEqual(await waitForClientResult(store, "r1", "call-1", { timeoutMs: 5_000 }), {
     content: "early",
@@ -603,7 +597,7 @@ test("waitForClientResult finds an answer that landed before it subscribed", asy
 });
 
 test("waitForClientResult keeps a result whose acknowledge is still in flight when the timeout fires", async () => {
-  const store = createMemoryRunSignalStore();
+  const store = signalStore();
   let acknowledged = false;
   const slowAck = {
     ...store,
@@ -622,14 +616,14 @@ test("waitForClientResult keeps a result whose acknowledge is still in flight wh
 });
 
 test("waitForClientResult times out when the page never answers", async () => {
-  const store = createMemoryRunSignalStore();
+  const store = signalStore();
   const started = Date.now();
   assert.equal(await waitForClientResult(store, "r1", "call-1", { timeoutMs: 50 }), "timeout");
   assert.ok(Date.now() - started >= 45);
 });
 
 test("waitForClientResult stops waiting as soon as the turn is cancelled", async () => {
-  const store = createMemoryRunSignalStore();
+  const store = signalStore();
   const cancel = new AbortController();
   const waiting = waitForClientResult(store, "r1", "call-1", { timeoutMs: 60_000, signal: cancel.signal });
   cancel.abort();
@@ -643,7 +637,7 @@ test("waitForClientResult stops waiting as soon as the turn is cancelled", async
 });
 
 test("a client_result dedupe key lets each call be answered at most once", async () => {
-  const store = createMemoryRunSignalStore();
+  const store = signalStore();
   const answer = (content: string) =>
     store.send("r1", { kind: "client_result", callId: "c1", result: { content }, dedupeKey: "client:r1:c1" });
   assert.equal(await answer("first"), true);
@@ -652,7 +646,7 @@ test("a client_result dedupe key lets each call be answered at most once", async
 });
 
 test("startSignalPoll leaves client_result signals pending for the waiting tool", async () => {
-  const store = createMemoryRunSignalStore();
+  const store = signalStore();
   const steers: string[] = [];
   const stop = startSignalPoll(
     store,
@@ -676,18 +670,8 @@ test("startSignalPoll leaves client_result signals pending for the waiting tool"
   );
 });
 
-test("memory store: a client_result round-trips callId and result intact", async () => {
-  const store = createMemoryRunSignalStore();
-  const result = { content: "ok", structured: { ids: ["a"] }, isError: false };
-  await store.send("r1", { kind: "client_result", callId: "c1", result, dedupeKey: "client:r1:c1" });
-  const [taken] = await store.takePending("r1");
-  assert.equal(taken!.kind, "client_result");
-  assert.equal(taken!.callId, "c1");
-  assert.deepEqual(taken!.result, result);
-});
-
-test("pg store: a client_result round-trips, dedupes, and wakes a waiter", { skip }, async () => {
-  const store = createPostgresRunSignalStore(URL!);
+test("store: a client_result round-trips, dedupes, and wakes a waiter", async () => {
+  const store = signalStore();
   const runId = `test-run-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const result = { content: "ok", structured: { ids: ["a"] }, isError: true };
   try {
@@ -705,7 +689,7 @@ test("pg store: a client_result round-trips, dedupes, and wakes a waiter", { ski
 });
 
 test("a queued steer remains durable until its native intake acknowledges it", async () => {
-  const store = createMemoryRunSignalStore();
+  const store = signalStore();
   let acknowledge: (() => Promise<void>) | undefined;
   let deliveries = 0;
   const stop = startSignalPoll(

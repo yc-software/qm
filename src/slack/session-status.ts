@@ -44,7 +44,6 @@ export function createSlackSessionStatus(
   now = Date.now,
   activity: SlackStatusActivity = {},
 ) {
-  if (!store.update || !store.deleteIf) throw new Error("Slack status requires atomic durable updates");
   const update = store.update.bind(store);
   const deleteIf = store.deleteIf.bind(store);
   const queue = createKeyedQueue<string>();

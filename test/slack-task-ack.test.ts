@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createNoopLeaderLease } from "../src/persistence/leader-lease.ts";
 import { createTaskAcknowledgements, type TaskAckState } from "../src/slack/task-ack.ts";
-import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
+import { testMap, testDatabaseUrl } from "./support/test-database.ts";
+import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 
 function setup() {
-  const store = createMemoryMap<TaskAckState>();
+  const store = testMap<TaskAckState>();
   const events: string[] = [];
   const client = {
     reactions: {
@@ -139,7 +139,7 @@ test("reconciliation retries a persisted move without another incoming message",
 for (const outbound of ["run", "post", "ack", "silent"] as const) {
   test(`restart clears completed task acknowledgement only after delivery, outbound=${outbound}`, async () => {
     const { client, manager, store, events } = setup();
-    const { runs } = createMemoryRunStore();
+    const { runs } = createPostgresRunStore(testDatabaseUrl());
     const deliveries = createDeliveryStore();
     const actor = { id: "person", type: "internal" as const };
     const { run } = await runs.enqueue({

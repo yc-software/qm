@@ -13,6 +13,8 @@ import { createServer } from "../src/api/server.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { CoreClient } from "./live-slack/core.ts";
 import { testConfig } from "./support/test-config.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const SECRET = "directory-resolve-secret".repeat(3);
 
@@ -28,7 +30,11 @@ describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", a
 
   before(async () => {
     built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "dir-resolve-")), signingSecret: SECRET }));
-    server = createServer(built.app, { signingSecret: SECRET, scheduler: built.scheduler });
+    server = createServer(built.app, {
+      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+      signingSecret: SECRET,
+      scheduler: built.scheduler,
+    });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
     await built.app.upsertDirectory([
@@ -177,7 +183,11 @@ describe("a deployment without the Slack surface (the directory store is never p
         emailAuthPrincipals: ["dana@acme.com"],
       }),
     );
-    server = createServer(built.app, { signingSecret: SECRET, scheduler: built.scheduler });
+    server = createServer(built.app, {
+      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+      signingSecret: SECRET,
+      scheduler: built.scheduler,
+    });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
     const session = await built.sessions.getOrCreateByThread("web:1", "dm", "personal:rex@acme.com");
@@ -251,6 +261,7 @@ describe("qualification membership readiness with signed portal identity enforce
       [{ channelId: "CQA", principalId: "qa@example.com" }],
     );
     const server = createServer(app.app, {
+      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
       portalIdentitySecret: portalSecret,
       capabilitySecret: "readiness-capability-key-distinct-from-source",

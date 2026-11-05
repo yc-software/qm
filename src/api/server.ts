@@ -273,14 +273,14 @@ async function gate(
     const token = Array.isArray(rawToken) ? rawToken[0] : rawToken;
     actor = token && psecret ? await verifyPortalIdentity(token, psecret, Date.now()) : null;
     if (actor && deps.identity) {
-      await deps.identity.refresh(Boolean(actor.authenticatedAs));
-      if (
-        deps.identity.classify(actor.p).type !== "internal" ||
-        (actor.authenticatedAs &&
-          (deps.identity.classify(actor.authenticatedAs).type !== "internal" ||
-            !samePerson(actor.authenticatedAs, actor.imp ?? actor.p)))
-      )
-        actor = null;
+      const identity = deps.identity;
+      const verified = ({ p, imp, authenticatedAs }: PortalIdentity) =>
+        identity.classify(p).type === "internal" &&
+        (!authenticatedAs ||
+          (identity.classify(authenticatedAs).type === "internal" && samePerson(authenticatedAs, imp ?? p)));
+      await identity.refresh();
+      if (!verified(actor) && actor.authenticatedAs) await identity.refresh(true);
+      if (!verified(actor)) actor = null;
     }
     if (actor)
       actor = { ...actor, p: canonicalPerson(actor.p), ...(actor.imp ? { imp: canonicalPerson(actor.imp) } : {}) };
@@ -483,12 +483,11 @@ type ServerOptions = Omit<ServerDeps, "control">;
 
 function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boolean): Server {
   const requirePortalIdentity = Boolean(deps.requireSignedPortalIdentity || deps.production);
-  const auth = deps.signingSecret
-    ? createSourceAuth({
-        signingSecret: deps.signingSecret,
-        ...(deps.replayDedupe ? { dedupe: deps.replayDedupe } : {}),
-      })
-    : null;
+  if (deps.signingSecret && !deps.replayDedupe) throw new Error("source auth requires a replay dedupe store");
+  const auth =
+    deps.signingSecret && deps.replayDedupe
+      ? createSourceAuth({ signingSecret: deps.signingSecret, dedupe: deps.replayDedupe })
+      : null;
   const wiring: Wiring = {
     app,
     deps: { ...deps, control: createControlService(app, deps.scheduler, deps.admin) },

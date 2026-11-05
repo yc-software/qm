@@ -1,10 +1,11 @@
+import { item } from "./item-fixture.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { harness, SESSION } from "./deep-link-boot-fixture.ts";
 import type { CoreSession, TranscriptPage } from "../src/core-bridge.ts";
 
 const session: CoreSession = { ...SESSION, threadRef: "dm:sample", type: "dm", createdAt: 1, canContinue: false };
-const entries = [{ seq: 1, type: "assistant", createdAt: 1, payload: { text: "Stored response" } }];
+const items = [item("AgentMessage", { seq: 1, createdAt: 1, text: "Stored response" })];
 async function waitFor(predicate: () => boolean): Promise<void> {
   for (let i = 0; i < 200 && !predicate(); i++) await new Promise((resolve) => setTimeout(resolve, 10));
   assert.ok(predicate());
@@ -25,7 +26,7 @@ function restore(): void {
 }
 
 test("restored transcript failure offers retry in the same pane, distinct from empty success", async () => {
-  const h = await harness({ path: "/", session, entries, transcriptStatus: 500 });
+  const h = await harness({ path: "/", session, items, transcriptStatus: 500 });
   try {
     restore();
     h.releaseSessions();
@@ -49,7 +50,7 @@ test("restored transcript failure offers retry in the same pane, distinct from e
     await waitFor(() => h.mainText().includes("Stored response"));
     assert.equal(document.querySelectorAll(".split-pane-content").length, panes);
     assert.doesNotMatch(h.mainText(), /Couldn't load|No readable messages/);
-    await h.openSession(session, Promise.resolve({ session, entries: [] } as TranscriptPage));
+    await h.openSession(session, Promise.resolve({ session, items: [] } as TranscriptPage));
     assert.match(h.mainText(), /No readable messages/);
     assert.doesNotMatch(h.mainText(), /Couldn't load/);
 

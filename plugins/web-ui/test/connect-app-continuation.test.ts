@@ -1,3 +1,4 @@
+import { item } from "./item-fixture.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { harness, SESSION } from "./deep-link-boot-fixture.ts";
@@ -6,7 +7,7 @@ test("connection continuation waits for scoped runtime settings before submittin
   const h = await harness({
     path: "/s/sess-deep?composioReturn=return-nonce&status=success&connectedAccountId=ca_test",
     session: { ...SESSION, type: "dm", createdAt: 1, scopeId: "context:demo" },
-    entries: [{ seq: 1, type: "assistant", createdAt: 1, payload: { text: '::connect-apps{toolkit="gmail"}' } }],
+    items: [item("AgentMessage", { seq: 1, createdAt: 1, text: '::connect-apps{toolkit="gmail"}' })],
     connectionReturn: true,
     returnWidget: "reply:1:0:0",
   });
@@ -20,8 +21,7 @@ test("connection continuation waits for scoped runtime settings before submittin
       await runtimeHeld;
       return Response.json({
         scopeId: "context:demo",
-        approvedHarnesses: ["pi"],
-        modelsByHarness: { pi: ["alpha"] },
+        models: ["alpha"],
         modelCatalog: {
           alpha: {
             id: "alpha",
@@ -37,8 +37,8 @@ test("connection continuation waits for scoped runtime settings before submittin
             maxTokens: 4096,
           },
         },
-        orgDefault: { harnessId: "pi", modelId: "alpha", revision: 1 },
-        effective: { harnessId: "pi", modelId: "alpha" },
+        orgDefault: { modelId: "alpha", revision: 1 },
+        effective: { modelId: "alpha" },
         scopeOverride: null,
         upgradeAvailable: false,
       });

@@ -23,13 +23,14 @@ export interface Project {
   memberIds: string[];
   channelMemberIds?: string[];
   slackChannel?: ProjectSlackChannel;
+  icon?: ProjectIcon;
   createdAt: number;
   updatedAt: number;
 }
 
 type ProjectMutation =
   | { status: "ok"; project: Project; changed: boolean }
-  | { status: "not_found" | "forbidden" | "invalid_member" | "invalid_name" };
+  | { status: "not_found" | "forbidden" | "invalid_member" | "invalid_name" | "invalid_icon" };
 
 type ProjectMutationEffect = (result: Extract<ProjectMutation, { status: "ok" }>) => Promise<void>;
 
@@ -40,6 +41,12 @@ export interface ProjectStore {
   addMember(id: string, actorId: string, memberId: string, effect?: ProjectMutationEffect): Promise<ProjectMutation>;
   removeMember(id: string, actorId: string, memberId: string, effect?: ProjectMutationEffect): Promise<ProjectMutation>;
   rename(id: string, ownerId: string, name: string, effect?: ProjectMutationEffect): Promise<ProjectMutation>;
+  setIcon(
+    id: string,
+    actorId: string,
+    icon: ProjectIcon | null,
+    effect?: ProjectMutationEffect,
+  ): Promise<ProjectMutation>;
   setSlackChannel(
     id: string,
     actorId: string,
@@ -79,6 +86,29 @@ export function projectIdFromGroupRef(ref: string): string | null {
 
 export function isProjectGroupRef(ref: string): boolean {
   return ref.startsWith(PROJECT_GROUP_PREFIX);
+}
+
+/** A project's sidebar icon: one Unicode emoji, or a workspace custom emoji by name. */
+export type ProjectIcon = { kind: "emoji"; value: string } | { kind: "custom"; name: string };
+
+/** Exactly one emoji from Unicode's recommended (RGI) emoji set. */
+const ONE_EMOJI = /^\p{RGI_Emoji}$/v;
+
+/** Shape check only; whether a custom name exists in the workspace catalog is checked by the caller. */
+export function validProjectIcon(value: unknown): value is ProjectIcon | null {
+  if (value === null) return true;
+  if (typeof value !== "object" || !value) return false;
+  const icon = value as Record<string, unknown>;
+  if (icon.kind === "emoji")
+    return Object.keys(icon).length === 2 && typeof icon.value === "string" && ONE_EMOJI.test(icon.value);
+  if (icon.kind === "custom")
+    return Object.keys(icon).length === 2 && typeof icon.name === "string" && icon.name.length > 0;
+  return false;
+}
+
+function sameIcon(a: ProjectIcon | null | undefined, b: ProjectIcon | null | undefined): boolean {
+  if (!a || !b) return !a && !b;
+  return a.kind === "emoji" ? b.kind === "emoji" && a.value === b.value : b.kind === "custom" && a.name === b.name;
 }
 
 function cleanName(name: string): string {
@@ -131,7 +161,6 @@ export function createProjectStore(
   ): Promise<ProjectMutation> {
     return withLock(id, async () => {
       if (!memberId) return { status: "invalid_member" };
-      if (!backing.update) throw new Error("project store requires DurableMap.update");
       const outcome: { status: ProjectMutation["status"] } = { status: "not_found" };
       let changed = false;
       const updated = await backing.update(id, (project) => {
@@ -205,7 +234,6 @@ export function createProjectStore(
     removeMember: (id, ownerId, memberId, effect) => mutate(id, ownerId, memberId, false, effect),
     async rename(id, ownerId, name, effect) {
       return withLock(id, async () => {
-        if (!backing.update) throw new Error("project store requires DurableMap.update");
         const clean = cleanName(name);
         if (!clean) return { status: "invalid_name" };
         const outcome: { status: ProjectMutation["status"] } = { status: "not_found" };
@@ -227,9 +255,35 @@ export function createProjectStore(
         return result;
       });
     },
+    async setIcon(id, actorId, icon, effect) {
+      if (!validProjectIcon(icon)) return { status: "invalid_icon" };
+      return withLock(id, async () => {
+        const outcome: { status: ProjectMutation["status"] } = { status: "not_found" };
+        let changed = false;
+        const updated = await backing.update(id, (project) => {
+          const isMember = effectiveMemberIds(project).some((member) => samePerson(member, actorId));
+          if (!isMember || !isActiveMember(project.ownerId) || !isActiveMember(actorId)) {
+            outcome.status = "forbidden";
+            return project;
+          }
+          outcome.status = "ok";
+          if (sameIcon(project.icon ?? null, icon)) return project;
+          changed = true;
+          if (icon === null) {
+            const { icon: _dropped, ...rest } = project;
+            return rest;
+          }
+          return { ...project, icon };
+        });
+        if (!updated) return { status: "not_found" };
+        if (outcome.status !== "ok") return { status: outcome.status };
+        const result = { status: "ok" as const, project: visible(updated), changed };
+        await effect?.(result);
+        return result;
+      });
+    },
     async setSlackChannel(id, actorId, link, effect) {
       return withLock(id, async () => {
-        if (!backing.update) throw new Error("project store requires DurableMap.update");
         const outcome: { status: ProjectMutation["status"] } = { status: "not_found" };
         let changed = false;
         const updated = await backing.update(id, (project) => {
@@ -268,7 +322,6 @@ export function createProjectStore(
     },
     async syncChannelMembers(id, memberIds, channelName, effect) {
       return withLock(id, async () => {
-        if (!backing.update) throw new Error("project store requires DurableMap.update");
         const outcome: { status: ProjectMutation["status"] } = { status: "not_found" };
         let changed = false;
         const next = [...new Set(memberIds)].sort();

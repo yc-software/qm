@@ -1,6 +1,7 @@
 import { decryptSecret, deriveConnectorKey, encryptSecret } from "../connectors/connector-client-store.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { MODEL_PROVIDERS, type ModelProvider, type ModelProviderAvailability } from "./pi-models.ts";
+import { validateCustomProviderSpec, type CustomProviderSpec } from "./custom-providers.ts";
 
 export { isModelProvider, type ModelProvider } from "./pi-models.ts";
 
@@ -73,19 +74,10 @@ export function createModelCredentialStore(input: {
       return Promise.all(
         MODEL_PROVIDERS.map(async (provider): Promise<ModelCredentialStatus> => {
           const saved = await record(provider);
-          if (saved && !saved.disabled) {
+          if (saved)
             return {
               provider,
-              configured: true,
-              source: "admin",
-              updatedAt: saved.updatedAt,
-              updatedBy: saved.updatedBy,
-            };
-          }
-          if (saved?.disabled)
-            return {
-              provider,
-              configured: false,
+              configured: !saved.disabled,
               source: "admin",
               updatedAt: saved.updatedAt,
               updatedBy: saved.updatedBy,
@@ -98,12 +90,85 @@ export function createModelCredentialStore(input: {
     },
 
     async availability() {
-      const statuses = await this.statuses();
+      const configured = new Map((await this.statuses()).map((status) => [status.provider, status.configured]));
       return {
-        anthropic: statuses.find((status) => status.provider === "anthropic")!.configured,
-        openai: statuses.find((status) => status.provider === "openai")!.configured,
-        openrouter: statuses.find((status) => status.provider === "openrouter")!.configured,
+        anthropic: configured.get("anthropic") === true,
+        openai: configured.get("openai") === true,
+        openrouter: configured.get("openrouter") === true,
       };
     },
   };
 }
+
+export interface StoredCustomProvider extends CustomProviderSpec {
+  apiKeyEnc?: string;
+  disabled?: boolean;
+  updatedAt: number;
+  updatedBy: string;
+}
+
+function customProviderSpec(saved: StoredCustomProvider): CustomProviderSpec {
+  return { id: saved.id, name: saved.name, protocol: saved.protocol, baseUrl: saved.baseUrl, models: saved.models };
+}
+
+export function createCustomProviderStore(input: {
+  backing: DurableMap<StoredCustomProvider>;
+  keyMaterial: string | Buffer;
+  write?: <T>(fn: () => Promise<T>) => Promise<T>;
+}) {
+  const write = input.write ?? (<T>(fn: () => Promise<T>) => fn());
+  const key = deriveConnectorKey(input.keyMaterial, "custom-model-providers");
+
+  return {
+    async enabled(): Promise<CustomProviderSpec[]> {
+      return (await input.backing.all()).filter((p) => !p.disabled).map(customProviderSpec);
+    },
+
+    async statuses() {
+      return (await input.backing.all())
+        .map((p) => ({
+          ...customProviderSpec(p),
+          disabled: p.disabled ?? false,
+          hasKey: Boolean(p.apiKeyEnc),
+          updatedAt: p.updatedAt,
+          updatedBy: p.updatedBy,
+        }))
+        .sort((a, b) => a.id.localeCompare(b.id));
+    },
+
+    async resolveKey(id: string): Promise<string | null> {
+      const saved = await input.backing.get(id);
+      if (!saved || saved.disabled || !saved.apiKeyEnc) return null;
+      return decryptSecret(saved.apiKeyEnc, key);
+    },
+
+    async upsert(spec: CustomProviderSpec, apiKey: string | undefined, updatedBy: string): Promise<void> {
+      return write(async () => {
+        validateCustomProviderSpec(spec);
+        const actor = updatedBy.trim();
+        if (!actor) throw new Error("updatedBy is required");
+        const existing = await input.backing.get(spec.id);
+        const trimmedKey = apiKey?.trim();
+        const apiKeyEnc = trimmedKey ? encryptSecret(trimmedKey, key) : existing?.apiKeyEnc;
+        await input.backing.put(spec.id, {
+          ...spec,
+          ...(apiKeyEnc ? { apiKeyEnc } : {}),
+          disabled: false,
+          updatedAt: Date.now(),
+          updatedBy: actor,
+        });
+      });
+    },
+
+    async delete(id: string, updatedBy: string): Promise<boolean> {
+      return write(async () => {
+        const existing = await input.backing.get(id);
+        if (!existing || existing.disabled) return false;
+        await input.backing.put(id, { ...existing, disabled: true, updatedAt: Date.now(), updatedBy });
+        return true;
+      });
+    },
+  };
+}
+
+export type CustomProviderStore = ReturnType<typeof createCustomProviderStore>;

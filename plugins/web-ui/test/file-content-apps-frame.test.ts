@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
+import { releaseFiles } from "./release-fixture.ts";
 
 const core = createServer((req: IncomingMessage, res) => {
   if ((req.url ?? "").startsWith("/v1/files/") && (req.url ?? "").includes("/content")) {
@@ -18,7 +19,8 @@ process.env.CORE_SIGNING_SECRET = "apps-frame-test-secret";
 process.env.WEB_UI_PRINCIPALS = "alice";
 process.env.DEPLOY_APPS_DOMAIN = "apps.test";
 
-const { handler } = await import("../server/index.ts");
+const { handler, serveReleasesFrom } = await import("../server/index.ts");
+serveReleasesFrom(releaseFiles({ "index.html": "<!doctype html><html><head></head><body></body></html>" }));
 const surface = createServer((req, res) => void handler(req, res));
 await new Promise<void>((r) => surface.listen(0, r));
 const base = `http://localhost:${(surface.address() as AddressInfo).port}`;

@@ -41,15 +41,16 @@ export function firstAdminPrincipal(raw: string | undefined): string {
 
 type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
-export function deployedHealthUrls(flyAppName: string | undefined, publicWebUrl: string | undefined): string[] {
-  if (!flyAppName?.endsWith("-core")) throw new Error("postdeploy smoke requires FLY_APP_NAME ending in -core");
+export function deployedHealthUrls(
+  port: number,
+  publicPort: number | undefined,
+  publicWebUrl: string | undefined,
+): string[] {
+  if (publicPort === undefined) throw new Error("postdeploy smoke requires PUBLIC_PORT, core's public front door");
   if (!publicWebUrl) throw new Error("postdeploy smoke requires PUBLIC_WEB_URL");
-  const prefix = flyAppName.slice(0, -"-core".length);
   return [
-    "http://127.0.0.1:8080/healthz",
-    `http://${prefix}-admin.internal:8080/healthz`,
-    `http://${prefix}-web-ui.flycast/healthz`,
-    `http://${prefix}-portal.internal:8080/healthz`,
+    `http://127.0.0.1:${port}/healthz`,
+    `http://127.0.0.1:${publicPort}/healthz`,
     new URL("/healthz", publicWebUrl).toString(),
   ];
 }
@@ -189,7 +190,7 @@ export async function checkLiveSession(
     const titleSignal = (timing.timeout ?? AbortSignal.timeout)(60_000);
     let persisted = (await request("GET", sessionPath, undefined, false, titleSignal)) as {
       session?: { title?: string | null };
-      entries?: Array<{ type?: string }>;
+      items?: Array<{ kind?: string; variant?: string | null }>;
     };
     while (!persisted.session?.title?.trim() && timing.now() < titleDeadline && !titleSignal.aborted) {
       await timing.sleep(Math.min(500, titleDeadline - timing.now()));
@@ -198,9 +199,9 @@ export async function checkLiveSession(
     }
     if (timing.now() >= titleDeadline || titleSignal.aborted || !persisted.session?.title?.trim())
       throw new Error("live session has no generated title");
-    if (!persisted.entries?.some((entry) => entry.type === "user"))
+    if (!persisted.items?.some((item) => item.kind === "UserMessage"))
       throw new Error("live session has no persisted user turn");
-    if (!persisted.entries.some((entry) => entry.type === "assistant")) {
+    if (!persisted.items.some((item) => item.kind === "AgentMessage" && !item.variant)) {
       throw new Error("live session has no persisted assistant turn");
     }
 
@@ -270,10 +271,10 @@ type PostdeployConfig = Pick<
   | "databaseUrl"
   | "databaseCaCert"
   | "databaseCaCertFile"
-  | "flyAppName"
   | "orgId"
   | "port"
   | "portalIdentitySecret"
+  | "publicPort"
   | "publicWebUrl"
   | "signingSecret"
   | "slack"
@@ -320,7 +321,7 @@ async function runPostdeploySmoke(config: PostdeployConfig): Promise<void> {
     portalIdentitySecret,
     String(config.port),
   );
-  await checkDeployedHealth(deployedHealthUrls(config.flyAppName, config.publicWebUrl));
+  await checkDeployedHealth(deployedHealthUrls(config.port, config.publicPort, config.publicWebUrl));
   await checkSlackCredentials(config.slack?.botToken, config.slack?.appToken, config.slack?.apiUrl);
   console.log("deployed staging database, API, services, public route, and Slack smoke passed");
 }

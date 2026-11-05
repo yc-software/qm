@@ -1,15 +1,16 @@
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createSessionMailbox, type SessionMailbox, type SessionMessage } from "../src/sessions/session-mailbox.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
-import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
-import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
 import { createSessionSyscalls } from "../src/sessions/session-syscalls.ts";
 import { scopeId, type Conversation, type Principal, type ScopeId, type Session } from "../src/types.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import type { RunStore } from "../src/runs/run-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
+import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 
 const actor: Principal = { id: "U1", type: "internal", displayName: "Alex" };
 const scope: ScopeId = scopeId("personal", "U1");
@@ -19,23 +20,25 @@ interface Rig {
   mailbox: SessionMailbox;
   sessions: SessionStore;
   runs: RunStore;
-  signals: ReturnType<typeof createMemoryRunSignalStore>;
+  signals: ReturnType<typeof createPostgresRunSignalStore>;
+  advisoryLock: AdvisoryLock;
   room: Session;
   syscallsFor(session: Session): ReturnType<ReturnType<typeof createSessionSyscalls>["forTurn"]>;
 }
 
-async function rig(opts?: { treeRunCap?: number }): Promise<Rig> {
-  const sessions = createMemorySessionStore();
-  const { runs } = createMemoryRunStore();
-  const signals = createMemoryRunSignalStore();
-  const mailbox = createSessionMailbox(createMemoryMap<SessionMessage>());
+async function rig(): Promise<Rig> {
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const signals = createPostgresRunSignalStore(testDatabaseUrl());
+  const mailbox = createSessionMailbox(testMap<SessionMessage>());
+  const advisoryLock = testAdvisoryLock();
   const factory = createSessionSyscalls({
     mailbox,
     sessions,
     runs,
     signals,
+    advisoryLock,
     maxAttempts: 3,
-    ...(opts?.treeRunCap !== undefined ? { treeRunCap: opts.treeRunCap } : {}),
   });
   const room = await sessions.getOrCreateByThread("slack:dm:D1", "dm", scope, undefined, "slack");
   await sessions.updateTitle(room.id, "dm with alex");
@@ -57,6 +60,7 @@ async function rig(opts?: { treeRunCap?: number }): Promise<Rig> {
     sessions,
     runs,
     signals,
+    advisoryLock,
     room,
     syscallsFor: (session) => factory.forTurn(binding(session)),
   };
@@ -68,13 +72,11 @@ test("participant can read child history and title across memory checkpoints", a
   await r.sessions.setParentSession(child.id, r.room.id);
   await r.sessions.addParticipant(child.id, actor.id);
   await r.sessions.updateTitle(child.id, "PRIVATE_SENTINEL");
-  const { lease } = await r.sessions.acquireLease(child.id);
-  assert.ok(lease);
-  await r.sessions.append(lease, {
-    type: "user",
-    scopeLabel: scope,
-    payload: {
-      text: "PRIVATE_SENTINEL",
+  const writer = { sessionId: child.id };
+  await r.sessions.append(writer, {
+    kind: "UserMessage",
+    text: "PRIVATE_SENTINEL",
+    body: {
       memoryContext: {
         kind: "memory_context",
         fingerprint: "old",
@@ -83,8 +85,7 @@ test("participant can read child history and title across memory checkpoints", a
       },
     },
   });
-  await r.sessions.append(lease, { type: "assistant", scopeLabel: scope, payload: { text: "PRIVATE_SENTINEL" } });
-  await r.sessions.releaseLease(lease);
+  await r.sessions.append(writer, { kind: "AgentMessage", text: "PRIVATE_SENTINEL" });
   const result = await r.syscallsFor(r.room).read({ target: child.id });
   assert.ok(result.ok && result.mode === "transcript");
   assert.equal(result.title, "PRIVATE_SENTINEL");
@@ -98,22 +99,13 @@ test("participant can read child history and title across memory checkpoints", a
 test("explicit source title changes reach fresh child tasks without copying history", async () => {
   const r = await rig();
   await r.sessions.updateTitle(r.room.id, "PRIVATE_SENTINEL");
-  const { lease } = await r.sessions.acquireLease(r.room.id);
-  assert.ok(lease);
-  const old = await r.sessions.append(lease, {
-    type: "assistant",
-    scopeLabel: scope,
-    payload: { text: "PRIVATE_SENTINEL" },
+  const writer = { sessionId: r.room.id };
+  const old = await r.sessions.append(writer, { kind: "AgentMessage", text: "PRIVATE_SENTINEL" });
+  await r.sessions.append(writer, {
+    kind: "UserMessage",
+    text: "new audience turn",
+    body: { memoryContext: { kind: "memory_context", snapshot: { audience: "safe-audience" }, throughSeq: old.seq } },
   });
-  await r.sessions.append(lease, {
-    type: "user",
-    scopeLabel: scope,
-    payload: {
-      text: "new audience turn",
-      memoryContext: { kind: "memory_context", snapshot: { audience: "safe-audience" }, throughSeq: old.seq },
-    },
-  });
-  await r.sessions.releaseLease(lease);
   await r.sessions.updateTitle(r.room.id, "Current parent");
   const opened = await r.syscallsFor((await r.sessions.get(r.room.id))!).open({ task: "safe task", name: "safe name" });
   assert.ok(opened.ok);
@@ -130,13 +122,11 @@ test("participant sees child title in session write response", async () => {
   await r.sessions.setParentSession(child.id, r.room.id);
   await r.sessions.addParticipant(child.id, actor.id);
   await r.sessions.updateTitle(child.id, "PRIVATE_SENTINEL");
-  const { lease } = await r.sessions.acquireLease(child.id);
-  assert.ok(lease);
-  await r.sessions.append(lease, {
-    type: "user",
-    scopeLabel: scope,
-    payload: {
-      text: "PRIVATE_SENTINEL",
+  const writer = { sessionId: child.id };
+  await r.sessions.append(writer, {
+    kind: "UserMessage",
+    text: "PRIVATE_SENTINEL",
+    body: {
       memoryContext: {
         kind: "memory_context",
         fingerprint: "old",
@@ -145,8 +135,7 @@ test("participant sees child title in session write response", async () => {
       },
     },
   });
-  await r.sessions.append(lease, { type: "assistant", scopeLabel: scope, payload: { text: "PRIVATE_SENTINEL" } });
-  await r.sessions.releaseLease(lease);
+  await r.sessions.append(writer, { kind: "AgentMessage", text: "PRIVATE_SENTINEL" });
   const result = await r.syscallsFor(r.room).write({ target: child.id, text: "generic message" });
   assert.match(JSON.stringify(result), /PRIVATE_SENTINEL/);
 });

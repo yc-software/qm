@@ -17,14 +17,13 @@ const core = createServer(async (req, res) => {
   res.end('{"ready":false}');
 });
 await new Promise<void>((resolve) => core.listen(0, "127.0.0.1", resolve));
-process.env.PORTAL_PUBLIC_URL = "http://portal.test";
+process.env.PUBLIC_WEB_URL = "http://portal.test";
 process.env.PORTAL_SESSION_SECRET = "managed-test-session-secret";
 process.env.PORTAL_IDENTITY_SECRET = "managed-test-identity-secret";
 process.env.CORE_SIGNING_SECRET = "managed-test-core-secret";
 process.env.CORE_ORG_ID = "test";
 process.env.CORE_API_URL = `http://127.0.0.1:${(core.address() as AddressInfo).port}`;
 process.env.WEB_UI_UPSTREAM = process.env.CORE_API_URL;
-process.env.ADMIN_UPSTREAM = process.env.CORE_API_URL;
 const { server } = await import("../src/index.ts");
 await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;

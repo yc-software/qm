@@ -33,6 +33,11 @@ Set these keys in `qm.config.jsonc`:
   `render.appRegion` optionally selects the region for new published apps; it
   defaults to `render.region`, and each app keeps the region selected at
   creation.
+- `sandbox.baseImage`: optional. Names the QM sandbox base image that Render
+  computers start from, as `<repository>:<tag>@sha256:<digest>`; without it
+  `qm up` uses the package's pinned sandbox base. A CLI built from source pins
+  none, so set it there. Core imports the image and snapshots it once per
+  release, and new computers start from that snapshot.
 - `render.corePlan`, `render.servicePlan`, and `render.storage.plan`: Render
   compute plan IDs such as `2c-4g`. Retired names such as `standard` are
   rejected with the current ID. `render.corePlan` defaults to `2c-4g`, which fits the
@@ -40,15 +45,16 @@ Set these keys in `qm.config.jsonc`:
 - `render.postgresPlan` and `render.postgresDiskSizeGB`: passed through to
   Render Postgres for QM core. `render.storage.diskSizeGB` sizes the MinIO disk.
   Each published app starts with a separate 1 GB disk mounted at `/data`.
-- `env.core.SHUTDOWN_DRAIN_MS` (default 10000): how long a previous core
+- `env.core.SHUTDOWN_DRAIN_MS` (default 30000): how long a previous core
   instance gives in-flight turns after SIGTERM. Render ends that instance 300
   seconds after SIGTERM, so keep the value below 290000.
-- `publicUrl` and `apiUrl`: the assigned `onrender.com` URLs work without DNS
-  changes. To use custom domains, set both to HTTPS origins with different
-  hostnames and run `qm up`. The CLI adds each hostname to the portal (or the web
-  UI when there is no portal) and to core, and prints the DNS record to create.
-  Until both domains are verified, sandboxes and published apps cannot reach
-  core and `qm check --live` fails. Run `qm slack render` after changing
+- `publicUrl` and `apiUrl`: core serves both from one Render web service, so
+  both start as its assigned `onrender.com` URL and work without DNS changes.
+  To use custom domains, set them to HTTPS origins and run `qm up`. The CLI adds
+  each hostname to core and prints the DNS record to create. They may share one
+  hostname, but not an apex domain and its `www` subdomain. Until the domains are
+  verified, sandboxes and published apps cannot reach core and
+  `qm check --live` fails. Run `qm slack render` after changing
   `publicUrl`. A hostname removed from the config stays on its service until it
   is removed in the Render dashboard.
 
@@ -65,9 +71,10 @@ npm exec qm -- doctor
 npm exec qm -- check --live
 ```
 
-`qm up` creates one project with one production environment for core, web UI,
-portal, Render Postgres, and bundled MinIO, initializes MinIO before it deploys
-core, applies registered database migrations, and uploads the deployment layer.
+`qm up` creates one project with one production environment for core (which
+also serves the web UI and sign-in), Render Postgres, and bundled MinIO,
+initializes MinIO before it deploys core, applies registered database
+migrations, and uploads the deployment layer.
 Each published app gets a network-isolated environment and one persistent disk
 in the same project. Apps use SQLite at `/data/app.db`, with `DATA_DIR=/data`.
 Litestream 0.3.13 backs up this SQLite database to `S3_PREFIX + "litestream"` in MinIO,
@@ -92,6 +99,33 @@ when storage settings change, when a service resumes, and when a deployment
 is retried. The first deployment builds MinIO from the selected QM source.
 `check --live` proves service health and durable object storage.
 
+To upgrade a deployment that has separate `web-ui` and `portal` services, once:
+
+1. Use a CLI version that includes this change, and set `render.source.branch`
+   to a branch that contains it. In `qm.config.jsonc`,
+   remove `"web-ui"` and `"portal"` from `services`. `qm plan` does not list
+   the services this leaves behind; `qm up` reports them.
+2. Run `qm up`. Core takes over `publicUrl`. An assigned `onrender.com` URL
+   changes from the portal's (`…-portal.onrender.com`) to core's
+   (`…-core.onrender.com`), so bookmarks, Slack links and OAuth redirect URLs
+   that name the portal's URL stop working once the portal is deleted. For a
+   custom domain, `qm up` adds it to core and prints the DNS record. If Render
+   reports that the portal still holds the domain, remove it from the portal
+   service (Settings, Custom Domains) and run `qm up` again; the site is down
+   until the next step finishes. Render can take about a minute after `qm up`
+   returns to route core's URL to its new port; until then that URL answers
+   with the API instead of the sign-in page.
+3. For a custom domain, point its DNS record at core's host and wait until
+   `qm check --live` passes.
+4. Delete the `web-ui` and `portal` services in the Render dashboard or through
+   the Render API. Until then `qm up` lists them as retained services;
+   afterwards it drops them from `render.resources.json`.
+5. Run `qm slack render` and update OAuth redirect URLs if `publicUrl` changed.
+
+A rollback to a release from before the upgrade fails because those services
+are gone. Web UI changes ship with `qm up`, which rebuilds core;
+`qm ui publish` does not support Render.
+
 After the first successful deployment, rerun `npm exec qm -- up` and confirm it
 reconciles the same resources.
 
@@ -110,9 +144,11 @@ snapshots have a provider expiry time. If the sandbox and its snapshot are no
 longer available, QM refuses an empty replacement. Keep durable work in Git or
 Files.
 
-QM creates every sandbox with Render's idle suspension disabled, so files and
-background processes stay in place between turns until the 24-hour lifetime
-ends; a suspended sandbox would otherwise be replaced from its last checkpoint.
+QM creates every computer with Render's idle suspension disabled and a 30-day
+lifetime, so files and background processes stay in place between turns. After
+an hour without use and with no running process, QM checkpoints and stops the
+computer; the next use restores its files from that checkpoint, but not its
+processes. Disposable sandboxes keep a 24-hour lifetime.
 
 Render sandbox recovery does not require `S3_BUCKET` or `SNAPSHOT_STORE=s3`.
 The hosted stack still sets these values for durable files, tool output, app

@@ -1,6 +1,5 @@
-import { isObj } from "../util/objects.ts";
-import type { SessionEntry } from "../types.ts";
-import { contextSummaryPayload } from "./session-store.ts";
+import { isOverheard, itemFields, type Item, proseText } from "./items.ts";
+import { itemSearchAuthor } from "./entry-search.ts";
 import { headSlice, tailSlice } from "../util/text.ts";
 
 const MAX_HIT_CHARS = 500;
@@ -17,62 +16,47 @@ function clipHit(text: string, terms: string[]): string {
   return `…${text.slice(start, end)}${end < text.length ? "…" : ""}`;
 }
 
-function entryText(entry: SessionEntry): string {
-  const summary = contextSummaryPayload(entry);
-  if (summary) return summary.text;
-  const text = (entry.payload as { text?: string } | null)?.text;
-  if (typeof text === "string" && text.trim()) return text;
-  if (!isObj(entry.payload)) return JSON.stringify(entry.payload ?? {});
-  const { step: _step, wire: _wire, ...rest } = entry.payload as Record<string, unknown>;
-  return JSON.stringify(rest);
-}
-
-function entryAuthor(entry: SessionEntry): string | undefined {
-  if (entry.type !== "user") return undefined;
-  const name = (entry.payload as { name?: unknown } | null)?.name;
-  return typeof name === "string" && name.trim() ? name.trim() : undefined;
+function itemText(item: Item): string {
+  const text = proseText(item);
+  return text?.trim() ? text : JSON.stringify(itemFields(item));
 }
 
 const MAX_OPEN_CHARS = 20_000;
 const OPEN_TAIL_CHARS = 2_000;
 
-function isOverheard(entry: SessionEntry): boolean {
-  return entry.type === "user" && (entry.payload as { overheard?: unknown } | null)?.overheard === true;
-}
-
-function entryLabel(entry: SessionEntry): string {
-  const stamp = `(${new Date(entry.createdAt).toISOString()})`;
-  if (isOverheard(entry)) {
-    const author = entryAuthor(entry) ?? "someone";
-    return `overheard#${entry.seq} ${stamp} ${author} (untrusted, SAID — not established fact):`;
+function itemLabel(item: Item): string {
+  const stamp = `(${new Date(item.createdAt).toISOString()})`;
+  if (isOverheard(item)) {
+    const author = itemSearchAuthor(item) ?? "someone";
+    return `overheard#${item.seq} ${stamp} ${author} (untrusted, SAID — not established fact):`;
   }
-  const author = entryAuthor(entry);
-  return `${entry.type}#${entry.seq} ${stamp}${author ? ` ${author}:` : ":"}`;
+  const author = itemSearchAuthor(item);
+  return `${item.kind}#${item.seq} ${stamp}${author ? ` ${author}:` : ":"}`;
 }
 
-export function openSessionEntry(entries: SessionEntry[], seq: number): string | null {
-  const entry = entries.find((e) => e.seq === seq);
-  if (!entry) return null;
-  const text = entryText(entry).trim();
+export function openSessionItem(items: Item[], seq: number): string | null {
+  const item = items.find((e) => e.seq === seq);
+  if (!item) return null;
+  const text = itemText(item).trim();
   const body =
     text.length <= MAX_OPEN_CHARS
       ? text
       : `${headSlice(text, MAX_OPEN_CHARS - OPEN_TAIL_CHARS)}\n… [${text.length} chars total; middle elided] …\n${tailSlice(text, OPEN_TAIL_CHARS)}`;
-  return `${entryLabel(entry)} ${body}`;
+  return `${itemLabel(item)} ${body}`;
 }
 
-export function searchSessionEntries(entries: SessionEntry[], query: string, limit = 20): string[] {
+export function searchSessionItems(items: Item[], query: string, limit = 20): string[] {
   const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
   if (!terms.length) return [];
   const hits: string[] = [];
-  for (let i = entries.length - 1; i >= 0 && hits.length < limit; i--) {
-    const entry = entries[i]!;
-    const text = entryText(entry).trim();
-    const author = entryAuthor(entry);
+  for (let i = items.length - 1; i >= 0 && hits.length < limit; i--) {
+    const item = items[i]!;
+    const text = itemText(item).trim();
+    const author = itemSearchAuthor(item);
     const haystack = `${author ? `${author} ` : ""}${text}`.toLowerCase();
     if (!terms.every((t) => haystack.includes(t))) continue;
     const clipped = clipHit(text, terms);
-    hits.push(`${entryLabel(entry)} ${clipped}`);
+    hits.push(`${itemLabel(item)} ${clipped}`);
   }
   return hits;
 }

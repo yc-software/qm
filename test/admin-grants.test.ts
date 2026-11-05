@@ -9,6 +9,8 @@ import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { testAdminGrantStore, testDatabaseUrl, testUsers } from "./support/test-database.ts";
+import { createPostgresUserStore } from "../src/identity/user-store.ts";
 
 function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-grants-")) }));
@@ -171,7 +173,7 @@ test("the last-admin guard counts one person's case-variant grants as ONE admin"
 
 test("canAdminister agrees with adminStatusOf: a cased grant admits the canonical actor", async () => {
   const { createAdminService } = await import("../src/admin/admin-service.ts");
-  const svc = createAdminService();
+  const svc = createAdminService(testAdminGrantStore(), { users: testUsers() });
   await svc.createGrant(
     { id: "admin-alice", type: "internal" },
     { principalId: "Jordan@Acme.test", role: "org_admin", scopeId: "org:default-org" },
@@ -213,64 +215,28 @@ test("the last org admin cannot be revoked (400 lock-out guard)", async () => {
   }
 });
 
-test("without DATABASE_URL grants are in-memory: the seed re-applies each boot; a runtime promotion is NOT durable", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "admin-grants-mem-"));
-  const boot = () => {
-    const built = buildApp(testConfig({ dataDir }));
-    const server = createInsecureTestServer(built.app, {
-      admin: built.admin,
-      sessions: built.sessions,
-      auditLog: built.auditLog,
-    });
-    server.listen(0);
-    const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-    return { base, close: () => new Promise<void>((r) => server.close(() => r())) };
-  };
-  const b1 = boot();
-  try {
-    assert.equal(
-      (await post(b1.base, ALICE, { principalId: "U-durable", role: "org_admin", scopeId: "org:default-org" })).status,
-      200,
-    );
-    assert.deepEqual(await whoami(b1.base, "U-durable@default-org"), {
-      isAdmin: true,
-      role: "org_admin",
-      scopeId: "org:default-org",
-      permissions: ["admin"],
-    });
-  } finally {
-    await b1.close();
-  }
-  const b2 = boot();
-  try {
-    assert.deepEqual(await whoami(b2.base, "U-durable@default-org"), { isAdmin: false, permissions: [] });
-    assert.deepEqual(await whoami(b2.base, ALICE), {
-      isAdmin: true,
-      role: "org_admin",
-      scopeId: "org:default-org",
-      permissions: ["admin"],
-    });
-  } finally {
-    await b2.close();
-  }
-});
+test("granting admin puts the person on the roster first, so a failed roster write grants nothing", async () => {
+  const { createAdminService } = await import("../src/admin/admin-service.ts");
+  const svc = createAdminService(testAdminGrantStore(), { users: testUsers() });
+  const admin = { id: "admin-alice", type: "internal" as const };
+  await svc.createGrant(admin, { principalId: "new-admin", role: "org_admin", scopeId: "org:default-org" });
+  assert.equal((await svc.users.get("new-admin"))?.source, "admin");
 
-test("boot seed: durable mode never seeds the fictional admin-alice/admin-bob defaults", async () => {
-  const { bootAdminGrantSeed } = await import("../src/admin/admin-service.ts");
-  assert.deepEqual(bootAdminGrantSeed(undefined, "acme", true), [], "durable + no ADMIN_GRANTS → no fictional admins");
-  assert.deepEqual(
-    bootAdminGrantSeed(undefined, "acme", false).map((g) => g.principalId),
-    ["admin-alice", "admin-bob"],
-    "memory mode keeps the dev/test convenience defaults",
+  const failing = createAdminService(testAdminGrantStore(), {
+    users: {
+      ...createPostgresUserStore(testDatabaseUrl()),
+      record: async () => {
+        throw new Error("store down");
+      },
+    },
+  });
+  await assert.rejects(
+    failing.createGrant(admin, { principalId: "other-admin", role: "org_admin", scopeId: "org:default-org" }),
+    /store down/,
   );
-  assert.deepEqual(
-    bootAdminGrantSeed("alice:org_admin", "acme", true).map((g) => g.principalId),
-    ["alice"],
-    "ADMIN_GRANTS names the real admins in either mode",
-  );
-  assert.deepEqual(
-    bootAdminGrantSeed("slack:U123:org_admin", "acme", true).map((g) => g.principalId),
-    ["slack:U123"],
-    "principal ids may contain colons",
+  assert.equal(
+    (await failing.adminStatusOf({ id: "other-admin", type: "internal" })).isAdmin,
+    false,
+    "the person is recorded first, so a failed record grants nothing",
   );
 });

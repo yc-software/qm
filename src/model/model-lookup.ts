@@ -4,6 +4,7 @@ import { modelSupportsFastMode, resolveBuiltinModel } from "./pi-models.ts";
 import type { ModelOverlay } from "./model-overlay.ts";
 import type { ModelCredentialStore } from "./model-credential-store.ts";
 import { providerBaseUrl } from "./provider-endpoints.ts";
+import { readBoundedText } from "../util/bytes.ts";
 
 export const modelLookupInput = z.strictObject({
   provider: z.enum(["openai", "anthropic"]),
@@ -32,24 +33,6 @@ export function builtinModelSpec({ provider, id }: ModelLookupInput): ModelOverl
   };
 }
 
-async function providerJson(response: Response): Promise<unknown> {
-  if (!response.body) throw new Error("Empty response");
-  const reader = response.body.getReader();
-  let bytes = 0;
-  const chunks: Uint8Array[] = [];
-  try {
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      bytes += value.byteLength;
-      if (bytes > 64 * 1024) throw new Error("Metadata too large");
-      chunks.push(value);
-    }
-    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
-  } finally {
-    await reader.cancel();
-  }
-}
 const providerMetadata = z.object({
   id: z.string(),
   display_name: z.string().trim().min(1).max(200).optional(),
@@ -94,7 +77,9 @@ export async function lookupModel(
         redirect: "error",
       });
       if (response.ok) {
-        const metadata = providerMetadata.parse(await providerJson(response));
+        const metadata = providerMetadata.parse(
+          JSON.parse(await readBoundedText(response, 64 * 1024, () => new Error("Metadata too large"))),
+        );
         if (metadata.id !== input.id) throw new Error("Model ID mismatch");
         source = `${input.provider === "anthropic" ? "Anthropic" : "OpenAI"} model API`;
         spec.name = metadata.display_name ?? input.id;

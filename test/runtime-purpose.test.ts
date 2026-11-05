@@ -1,22 +1,22 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createMemoryConfigStore, type PersistedBaseModel } from "../src/resolution/config-store.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import { resolveRuntimeChoice, resolveRuntimeChoiceDurable } from "../src/harness/harness-router.ts";
-import { createRuntimeService } from "../src/harness/runtime-control.ts";
-import { recoveredRuntime } from "../src/harness/runtime-recovery.ts";
-import { turnModelOptions } from "../src/core/turn-options.ts";
-import type { RuntimeChoice } from "../src/harness/harness.ts";
-import type { SessionEntry } from "../src/types.ts";
+import { type PersistedBaseModel } from "../src/resolution/config-store.ts";
+import { resolveRuntimeChoice } from "../src/agent/runtime-choice.ts";
+import { createRuntimeService } from "../src/agent/runtime-control.ts";
+import { recoveredRuntime } from "../src/agent/runtime-recovery.ts";
+import { turnModelOptions } from "../src/agent/runtime-choice.ts";
+import type { RuntimeChoice } from "../src/agent/agent.ts";
+import { randomUUID } from "node:crypto";
+import { storedItem } from "../src/sessions/items.ts";
+import { testConfigStore, testMap } from "./support/test-database.ts";
 
 const ORG = "org:default-org";
 const SCOPE = "personal:alice";
-const fallback: RuntimeChoice = { harnessId: "pi", modelId: "claude-opus-5" };
-const category: RuntimeChoice = { harnessId: "pi", modelId: "gpt-6-astra", effortLevel: "low", fastMode: true };
+const fallback: RuntimeChoice = { modelId: "claude-opus-5" };
+const category: RuntimeChoice = { modelId: "gpt-6-astra", effortLevel: "low", fastMode: true };
 
 async function setup() {
-  const config = createMemoryConfigStore("default-org");
-  await config.setApprovedHarnesses(["pi", "claude"]);
+  const config = testConfigStore("default-org");
   await config.setRuntimeSelection(ORG, { ...fallback, effortLevel: "high", fastMode: true });
   await config.setRuntimeSelection(SCOPE, { ...fallback, modelId: "claude-sonnet-5", effortLevel: "medium" });
   return config;
@@ -24,11 +24,11 @@ async function setup() {
 
 test("unset categories preserve legacy conversation, child, and cron behavior", async () => {
   const config = await setup();
-  const legacy = resolveRuntimeChoice(config, ORG, SCOPE, fallback);
-  assert.deepEqual(resolveRuntimeChoice(config, ORG, SCOPE, fallback, undefined, "subagent"), legacy);
+  const legacy = await resolveRuntimeChoice(config, ORG, SCOPE, fallback);
+  assert.deepEqual(await resolveRuntimeChoice(config, ORG, SCOPE, fallback, undefined, undefined, "subagent"), legacy);
   assert.deepEqual(
-    resolveRuntimeChoice(config, ORG, SCOPE, fallback, undefined, "cron"),
-    resolveRuntimeChoice(config, ORG, SCOPE, fallback, { effortLevel: "xhigh", fastMode: false }),
+    await resolveRuntimeChoice(config, ORG, SCOPE, fallback, undefined, undefined, "cron"),
+    await resolveRuntimeChoice(config, ORG, SCOPE, fallback, { effortLevel: "xhigh", fastMode: false }),
   );
   assert.deepEqual(turnModelOptions({ triggered: true }), { thinkingLevel: "xhigh", fastMode: false });
 });
@@ -45,44 +45,66 @@ test("cron and loop entry points defer legacy injections until runtime resolutio
 
 test("each purpose ignores conversation overrides and explicit fields including false win", async () => {
   const config = await setup();
-  const conversation = resolveRuntimeChoice(config, ORG, SCOPE, fallback);
+  const conversation = await resolveRuntimeChoice(config, ORG, SCOPE, fallback);
   for (const purpose of ["cron", "subagent", "fallback"] as const) {
     await config.setPurposeRuntime(purpose, category);
-    assert.deepEqual(resolveRuntimeChoice(config, ORG, SCOPE, fallback, undefined, purpose), category);
+    assert.deepEqual(await resolveRuntimeChoice(config, ORG, SCOPE, fallback, undefined, undefined, purpose), category);
     assert.deepEqual(
-      resolveRuntimeChoice(config, ORG, SCOPE, fallback, { effortLevel: undefined, fastMode: undefined }, purpose),
+      await resolveRuntimeChoice(
+        config,
+        ORG,
+        SCOPE,
+        fallback,
+        { effortLevel: undefined, fastMode: undefined },
+        undefined,
+        purpose,
+      ),
       category,
     );
-    assert.deepEqual(resolveRuntimeChoice(config, ORG, SCOPE, fallback, { fastMode: false }, purpose), {
-      ...category,
-      fastMode: false,
-    });
     assert.deepEqual(
-      resolveRuntimeChoice(config, ORG, SCOPE, fallback, { modelId: "gpt-6-sol", effortLevel: "high" }, purpose),
+      await resolveRuntimeChoice(config, ORG, SCOPE, fallback, { fastMode: false }, undefined, purpose),
+      {
+        ...category,
+        fastMode: false,
+      },
+    );
+    assert.deepEqual(
+      await resolveRuntimeChoice(
+        config,
+        ORG,
+        SCOPE,
+        fallback,
+        { modelId: "gpt-6-sol", effortLevel: "high" },
+        undefined,
+        purpose,
+      ),
       {
         ...category,
         modelId: "gpt-6-sol",
         effortLevel: "high",
       },
     );
-    assert.deepEqual(resolveRuntimeChoice(config, ORG, SCOPE, fallback), conversation);
+    assert.deepEqual(await resolveRuntimeChoice(config, ORG, SCOPE, fallback), conversation);
   }
   await config.clearPurposeRuntime("cron");
-  assert.deepEqual(resolveRuntimeChoice(config, ORG, SCOPE, fallback, undefined, "subagent"), category);
+  assert.deepEqual(
+    await resolveRuntimeChoice(config, ORG, SCOPE, fallback, undefined, undefined, "subagent"),
+    category,
+  );
 });
 
 test("durable purpose defaults refresh between child followups", async () => {
-  const baseModels = createMemoryMap<PersistedBaseModel>();
-  const writer = createMemoryConfigStore("default-org", { baseModels });
-  const reader = createMemoryConfigStore("default-org", { baseModels });
+  const baseModels = testMap<PersistedBaseModel>();
+  const writer = testConfigStore("default-org", { baseModels });
+  const reader = testConfigStore("default-org", { baseModels });
   await writer.setPurposeRuntime("subagent", category);
   assert.deepEqual(
-    await resolveRuntimeChoiceDurable(reader, ORG, SCOPE, fallback, undefined, undefined, "subagent"),
+    await resolveRuntimeChoice(reader, ORG, SCOPE, fallback, undefined, undefined, "subagent"),
     category,
   );
   await writer.setPurposeRuntime("subagent", { ...category, modelId: "gpt-6-sol" });
   assert.deepEqual(
-    await resolveRuntimeChoiceDurable(reader, ORG, SCOPE, fallback, { fastMode: false }, undefined, "subagent"),
+    await resolveRuntimeChoice(reader, ORG, SCOPE, fallback, { fastMode: false }, undefined, "subagent"),
     {
       ...category,
       modelId: "gpt-6-sol",
@@ -94,23 +116,28 @@ test("durable purpose defaults refresh between child followups", async () => {
 test("configured purpose fails closed for unapproved or incompatible merged choices", async () => {
   const config = await setup();
   await config.setPurposeRuntime("cron", category);
-  assert.throws(
-    () => resolveRuntimeChoice(config, ORG, SCOPE, fallback, { effortLevel: "nonsense" }, "cron"),
+  await assert.rejects(
+    async () =>
+      await resolveRuntimeChoice(config, ORG, SCOPE, fallback, { effortLevel: "nonsense" }, undefined, "cron"),
     /not supported/,
   );
-  assert.throws(
-    () => resolveRuntimeChoice(config, ORG, SCOPE, fallback, { modelId: "claude-sonnet-5" }, "cron"),
+  await assert.rejects(
+    async () =>
+      await resolveRuntimeChoice(config, ORG, SCOPE, fallback, { modelId: "claude-sonnet-5" }, undefined, "cron"),
     /fast mode is not supported/,
   );
-  await config.setApprovedHarnesses(["claude"]);
-  assert.throws(() => resolveRuntimeChoice(config, ORG, SCOPE, fallback, undefined, "cron"), /not approved/);
+  await assert.rejects(
+    async () =>
+      await resolveRuntimeChoice(config, ORG, SCOPE, fallback, { modelId: "no-such-model" }, undefined, "cron"),
+    /not approved/,
+  );
 });
 
-test("runtime get and inherit use job execution defaults, and handoffs survive retries", async () => {
+test("runtime get uses job execution defaults, and handoffs survive retries", async () => {
   const config = await setup();
   await config.setPurposeRuntime("cron", category);
   const service = createRuntimeService(
-    { config, harnessId: "pi", baseModelDefault: fallback.modelId },
+    { config, baseModelDefault: fallback.modelId },
     {
       authorizesCapabilityScope: async () => true,
     },
@@ -120,19 +147,6 @@ test("runtime get and inherit use job execution defaults, and handoffs survive r
   const get = await service(claims, fallback, { action: "get" }, undefined, false, undefined, true, "cron", explicit);
   assert.ok(get.ok);
   assert.deepEqual(get.effective, { ...category, ...explicit });
-  const inherit = await service(
-    claims,
-    fallback,
-    { action: "inherit" },
-    undefined,
-    false,
-    undefined,
-    true,
-    "cron",
-    explicit,
-  );
-  assert.ok(inherit.ok);
-  assert.deepEqual(inherit.handoff, { choice: { ...category, ...explicit }, lifetime: "task" });
   const handoff = await service(
     claims,
     { ...category, ...explicit },
@@ -145,56 +159,37 @@ test("runtime get and inherit use job execution defaults, and handoffs survive r
     explicit,
   );
   assert.ok(handoff.ok && handoff.handoff);
-  const entries = [
-    {
-      type: "tool_result",
-      payload: { tool: "runtime", runId: "run", actorId: "alice", runtimeHandoff: handoff.handoff },
-    },
-  ] as SessionEntry[];
-  const restored = recoveredRuntime(entries, "run", "alice");
-  assert.deepEqual(resolveRuntimeChoice(config, ORG, SCOPE, fallback, restored?.choice, "cron"), {
+  const run = randomUUID();
+  const items = [
+    storedItem(
+      {
+        kind: "ToolResult",
+        tool: "runtime",
+        callId: "c",
+        body: { actorId: "alice", runtimeHandoff: handoff.handoff },
+      },
+      { sessionId: "s", seq: 1, createdAt: 1, turnId: run },
+    ),
+  ];
+  const restored = recoveredRuntime(items, run, "alice");
+  assert.deepEqual(await resolveRuntimeChoice(config, ORG, SCOPE, fallback, restored?.choice, undefined, "cron"), {
     ...category,
     ...explicit,
     modelId: "gpt-6-sol",
   });
-  assert.equal(recoveredRuntime(entries, "another-run", "alice"), undefined);
-  assert.deepEqual(resolveRuntimeChoice(config, ORG, SCOPE, fallback, undefined, "cron"), category);
+  assert.equal(recoveredRuntime(items, randomUUID(), "alice"), undefined);
+  assert.deepEqual(await resolveRuntimeChoice(config, ORG, SCOPE, fallback, undefined, undefined, "cron"), category);
 });
 
-test("scope inheritance in a human child continuation retains its configured purpose", async () => {
-  const config = await setup();
-  await config.setPurposeRuntime("subagent", category);
-  const service = createRuntimeService(
-    { config, harnessId: "pi", baseModelDefault: fallback.modelId },
-    { authorizesCapabilityScope: async () => true },
-  );
-  const result = await service(
-    { actorId: "alice", scopeId: SCOPE, exp: Date.now() + 60_000, liveActor: true },
-    category,
-    { action: "inherit", lifetime: "scope" },
-    undefined,
-    false,
-    undefined,
-    false,
-    "subagent",
-  );
-  assert.ok(result.ok);
-  assert.deepEqual(result.handoff, { choice: category, lifetime: "scope" });
-  assert.equal(await config.getRuntimeSelectionDurable(SCOPE), null);
-});
-
-test("configured categories remain selectable outside the conversation picker without weakening explicit restrictions", async () => {
+test("explicit choices outside the conversation picker stay restricted for configured categories", async () => {
   const config = await setup();
   await config.setPurposeRuntime("cron", category);
   await config.setWebuiModels(ORG, ["claude-sonnet-5"]);
   const service = createRuntimeService(
-    { config, harnessId: "pi", baseModelDefault: fallback.modelId },
+    { config, baseModelDefault: fallback.modelId },
     { authorizesCapabilityScope: async () => true },
   );
   const claims = { actorId: "alice", scopeId: SCOPE, exp: Date.now() + 60_000, triggered: true } as const;
-  const result = await service(claims, category, { action: "inherit" }, undefined, false, undefined, true);
-  assert.ok(result.ok);
-  assert.deepEqual(result.handoff, { choice: category, lifetime: "task" });
   const denied = await service(
     claims,
     category,
@@ -203,42 +198,6 @@ test("configured categories remain selectable outside the conversation picker wi
     false,
     undefined,
     true,
-  );
-  assert.equal(denied.ok, false);
-  config.getWebuiModelsDurable = async () => [];
-  assert.equal((await service(claims, category, { action: "inherit" }, undefined, false, undefined, true)).ok, false);
-});
-
-test("personal-account human child inheritance recognizes a configured purpose outside the chat picker", async () => {
-  const config = await setup();
-  await config.setPurposeRuntime("subagent", category);
-  await config.setWebuiModels(ORG, ["claude-sonnet-5"]);
-  const service = createRuntimeService(
-    { config, harnessId: "pi", baseModelDefault: fallback.modelId },
-    { authorizesCapabilityScope: async () => true },
-  );
-  const claims = { actorId: "alice", scopeId: SCOPE, exp: Date.now() + 60_000, liveActor: true } as const;
-  const result = await service(
-    claims,
-    category,
-    { action: "inherit" },
-    async () => null,
-    true,
-    undefined,
-    false,
-    "subagent",
-  );
-  assert.ok(result.ok);
-  assert.deepEqual(result.handoff, { choice: category, lifetime: "task" });
-  const denied = await service(
-    claims,
-    category,
-    { action: "inherit" },
-    async () => "account denied",
-    true,
-    undefined,
-    false,
-    "subagent",
   );
   assert.equal(denied.ok, false);
 });

@@ -7,6 +7,7 @@ import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts"
 import { encodeRef, serviceCredRef } from "../src/acl/resource-ref.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { testMap } from "./support/test-database.ts";
 
 for (const checkResult of ["passed", "failed", "missing"] as const) {
   test(`loop intake executes with granted credentials and ${checkResult} checks gate held outputs`, async () => {
@@ -37,10 +38,11 @@ for (const checkResult of ["passed", "failed", "missing"] as const) {
       items,
       outputs,
       grants,
+      files: built.files,
       trigger: {
         identity: built.identity,
         deliveries: built.deliveries,
-        idempotency: createIdempotencyStore(),
+        idempotency: createIdempotencyStore(testMap()),
         run: async (req) => {
           const stage = /^\[Loop (\w+)\]/.exec(req.text ?? "")?.[1];
           assert.ok(stage);

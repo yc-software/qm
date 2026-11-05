@@ -153,7 +153,7 @@ test("a body read avoids sandbox work and a file request materializes that skill
         },
       },
       sandbox: {
-        provision: async (_layers: unknown, options?: { sandboxId?: string }) => {
+        provision: async (_owner: unknown, options?: { sandboxId?: string }) => {
           sandboxIds.push(options?.sandboxId);
           provisions++;
           return { ...handle, id: options?.sandboxId ?? handle.id };
@@ -175,7 +175,7 @@ test("a body read avoids sandbox work and a file request materializes that skill
     input: { origin: { kind: "human" } },
     actor: { id: "U1" },
     session: { id: "s" },
-    resolution: { layers: [{ scopeId: "personal:U1", mountPath: "", mode: "rw" }] },
+    resolution: { writableScopeId: "personal:U1", readOnlyScopeIds: [] },
     scopeId: "personal:U1",
     memoryScopeId: "personal:U1",
     turnSessionDir: "turn/s",

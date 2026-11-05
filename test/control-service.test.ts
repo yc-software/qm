@@ -1,3 +1,4 @@
+import type { TurnOrigin } from "../src/types.ts";
 import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
@@ -12,6 +13,7 @@ import { scopeId, type ScopeId } from "../src/types.ts";
 import { CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
 import { runNowSettled } from "./support/settle.ts";
+import { failedTurnError } from "./support/failed-turn.ts";
 
 const SECRET = "control-service-test";
 
@@ -140,7 +142,7 @@ test("every unattended read grant type is accepted on create", async () => {
   assert.deepEqual(created.ok ? created.cron.unattendedGrants : undefined, grants);
 });
 
-test("a grant-carrying cron delivers only to its owner: shared or third-party destinations are refused at create and retarget", async () => {
+test("a grant-carrying cron lives in its owner's DM, and only the live owner chooses where its output goes", async () => {
   const { built, control } = setup();
   await built.app.upsertDirectory([
     { principalId: "admin-alice", displayName: "Alice", type: "internal" },
@@ -157,25 +159,23 @@ test("a grant-carrying cron delivers only to its owner: shared or third-party de
     unattendedGrants: ["admin.spend.read"],
   };
 
-  for (const elsewhere of [{ channel: "spend" }, { recipient: "User Two" }, { destinationKey: ROOM.key }]) {
-    const refused = await control.createCron({ ...request, ...elsewhere }, live);
-    assert.equal(refused.ok, false, JSON.stringify(elsewhere));
-    assert.match(refused.ok ? "" : refused.message, /delivers only to them/);
+  const homedInRoom = await control.createCron({ ...request, channel: "spend" }, live);
+  assert.equal(homedInRoom.ok, false);
+  assert.match(homedInRoom.ok ? "" : homedInRoom.message, /lives in its owner's own DM/);
+
+  for (const elsewhere of [{ recipient: "User Two" }, { destinationKey: ROOM.key }]) {
+    const created = await control.createCron({ ...request, ...elsewhere }, live);
+    assert.ok(created.ok, JSON.stringify(elsewhere));
+    assert.equal(created.cron.ownerScopeId, scopeId("personal", "admin-alice"));
   }
 
   const own = await control.createCron(request, live);
   assert.ok(own.ok, JSON.stringify(own));
-  assert.equal(own.cron.ownerScopeId, scopeId("personal", "admin-alice"));
-
-  const retarget = await control.retargetCron(own.cron.id, ROOM.key, live);
-  assert.equal(retarget.ok, false);
-  assert.match(retarget.ok ? "" : retarget.message, /delivers only to them/);
-
-  const cleared = await control.patchCron(own.cron.id, { unattendedGrants: [] }, claims("admin-alice"));
-  assert.ok(cleared.ok, "removing grants only narrows access, so it needs no live admin turn");
-  assert.deepEqual(cleared.ok ? cleared.cron.unattendedGrants : undefined, []);
+  const unattended = await control.retargetCron(own.cron.id, ROOM.key, claims("admin-alice"));
+  assert.equal(unattended.ok, false, "an autonomous turn cannot move a grant-carrying cron");
   const moved = await control.retargetCron(own.cron.id, ROOM.key, live);
-  assert.ok(moved.ok, "once grants are gone the cron can deliver anywhere");
+  assert.ok(moved.ok, JSON.stringify(moved));
+  assert.deepEqual(moved.ok ? moved.cron.unattendedGrants : undefined, ["admin.spend.read"]);
 });
 
 test("a raw unreaffirmed cron patch strips unattended grants; a live-owner patch reaffirms them", async () => {
@@ -612,7 +612,7 @@ test("a channel cron belongs to its creator: members see it, only the owner or a
   assert.equal(viaOldGrant.ok ? "" : viaOldGrant.code, "forbidden", "an older write grant can't steer a personal cron");
 });
 
-test("app.turn forwards ownerKeychainUnion onto the persisted run request (else scheduled fires lose the union)", async () => {
+test("app.turn forwards origin.useOwnerKeychain onto the persisted run request (else scheduled fires lose the union)", async () => {
   const { built } = setup();
   const base = {
     surface: "cron",
@@ -624,10 +624,10 @@ test("app.turn forwards ownerKeychainUnion onto the persisted run request (else 
       audience: [{ externalId: "U1" }],
     },
     text: "compute digest",
-    triggered: true,
+    origin: { kind: "automation" } as TurnOrigin,
     async: true,
   };
-  const withUnion = await built.app.turn({ ...base, ownerKeychainUnion: true });
+  const withUnion = await built.app.turn({ ...base, origin: { kind: "automation", useOwnerKeychain: true } });
   assert.equal(withUnion.status, "queued");
   const runU = await built.runs.get((withUnion as { runId?: string }).runId!);
   assert.deepEqual(
@@ -643,20 +643,10 @@ test("app.turn forwards ownerKeychainUnion onto the persisted run request (else 
   const typed = await built.app.turn({
     ...base,
     conversation: { ...base.conversation, threadRef: "t-typed-origin" },
-    triggered: undefined,
     origin: { kind: "automation", screenData: "external event" },
   });
   const runT = await built.runs.get((typed as { runId?: string }).runId!);
   assert.deepEqual(runT?.request.origin, { kind: "automation", screenData: "external event" });
-
-  const conflicted = await built.app.turn({
-    ...base,
-    conversation: { ...base.conversation, threadRef: "t-conflicting-origin" },
-    origin: { kind: "human" },
-    securityScreenData: "external event",
-  });
-  const runC = await built.runs.get((conflicted as { runId?: string }).runId!);
-  assert.deepEqual(runC?.request.origin, { kind: "automation", screenData: "external event" });
 });
 
 test("cron list / get / patch / delete / run round-trip with owner authz", async () => {
@@ -1027,8 +1017,7 @@ test("a privileged cron's note is writable by its own fire (grants intact) but r
 
 test("cron runtime create and patch retain ownership gates and refuse unavailable choices", async () => {
   const { built, control } = setup();
-  await built.config.setApprovedHarnesses(["pi"]);
-  const runtime = { harnessId: "pi" as const, modelId: "claude-sonnet-5" };
+  const runtime = { modelId: "claude-sonnet-5" };
   const created = await control.createCron(
     { title: "runtime", schedule: { everyMs: 60_000 }, action: "check", runtime },
     claims("U1"),
@@ -1052,16 +1041,14 @@ test("cron runtime create and patch retain ownership gates and refuse unavailabl
 
 test("scheduled runtime is refused before execution when its model is no longer enabled, including credential resumes", async () => {
   const { built } = setup();
-  await built.config.setApprovedHarnesses(["pi"]);
   await built.config.setWebuiModels("org:default-org", ["gpt-6-astra"]);
   for (const surface of ["cron", "keychain-ask"]) {
     const result = await built.app.turn({
       surface,
-      triggered: true,
+      origin: { kind: "automation" },
       actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef: `cron-runtime-${surface}` },
       text: "must not execute",
-      harness: "pi",
       model: "claude-sonnet-5",
     });
     assert.equal(result.status, "refused", JSON.stringify(result));
@@ -1071,27 +1058,51 @@ test("scheduled runtime is refused before execution when its model is no longer 
 
 test("queued cron rechecks its runtime after admission and preserves the override in durable work", async (t) => {
   const { built } = setup();
-  await built.config.setApprovedHarnesses(["pi"]);
   const original = built.runs.enqueue.bind(built.runs);
   t.mock.method(built.runs, "enqueue", async (input: Parameters<typeof original>[0]) => {
     const result = await original(input);
     assert.equal(result.run.request.model, "claude-sonnet-5");
-    assert.equal(result.run.request.harness, "pi");
     assert.equal(result.run.request.fastMode, false);
     await built.config.setWebuiModels("org:default-org", ["gpt-6-astra"]);
     return result;
   });
-  await assert.rejects(
-    built.app.turn({
+  assert.match(
+    await failedTurnError(built, {
       surface: "cron",
-      triggered: true,
+      origin: { kind: "automation" },
       actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef: "cron-runtime-revoked-after-enqueue" },
       text: "must not execute",
-      harness: "pi",
       model: "claude-sonnet-5",
       fastMode: false,
     }),
     /runtime is no longer available/,
   );
+});
+
+test("a cron created and retargeted through capabilities preserves webhook routing when fired", async () => {
+  const { built, control } = setup();
+  const candidate = {
+    key: "webhook",
+    label: "this conversation",
+    type: "webhook",
+    target: "web:U1:conversation",
+    audienceScopeId: scopeId("personal", "U1"),
+    webhook: { binding: "00000000-0000-4000-8000-000000000001", url: "https://receiver.example/qm" },
+  };
+  const capability = claims("U1", scopeId("personal", "U1"), {
+    destinations: [candidate],
+    defaultDestinationKey: candidate.key,
+  });
+  const created = await control.createCron({ schedule: { everyMs: 300_000 }, text: "five-minute update" }, capability);
+  assert.ok(created.ok, JSON.stringify(created));
+  assert.deepEqual(created.cron.destination?.webhook, candidate.webhook);
+  const retargeted = await control.retargetCron(created.cron.id, candidate.key, capability);
+  assert.ok(retargeted.ok, JSON.stringify(retargeted));
+  await runNowSettled(built.scheduler, created.cron.id);
+  const delivery = (await built.deliveries.pending("webhook"))[0]!;
+  assert.ok(delivery);
+  assert.equal(delivery.text, "five-minute update");
+  assert.deepEqual(delivery.destination.webhook, candidate.webhook);
+  assert.equal(delivery.destination.target, candidate.target);
 });

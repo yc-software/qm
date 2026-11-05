@@ -1,9 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createMemorySurfaceCache } from "../src/surface-cache/surface-cache.ts";
 import { createSlackHistoryReader } from "../src/slack/history.ts";
 import type { BotIdentity } from "../src/slack/directory.ts";
 import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
+import { createPostgresSurfaceCache } from "../src/surface-cache/surface-cache.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const ids: BotIdentity = {
   botUserId: "UBOT",
@@ -17,7 +18,7 @@ const ts = (n: number) => `1000.${String(n).padStart(6, "0")}`;
 
 for (const size of [199, 200, 201]) {
   test(`thread pagination includes parent in the ${size}-message boundary`, async () => {
-    const cache = createMemorySurfaceCache();
+    const cache = createPostgresSurfaceCache(testDatabaseUrl());
     await cache.ingest(
       Array.from({ length: size }, (_, i) => ({
         container: "C1",
@@ -38,7 +39,7 @@ for (const size of [199, 200, 201]) {
 }
 
 test("before excludes future replies and a parent outside the requested window", async () => {
-  const cache = createMemorySurfaceCache();
+  const cache = createPostgresSurfaceCache(testDatabaseUrl());
   await cache.ingest(
     Array.from({ length: 205 }, (_, i) => ({
       container: "C1",
@@ -59,7 +60,7 @@ test("before excludes future replies and a parent outside the requested window",
 });
 
 test("missing parent does not consume a reply slot when a bounded read permits mirror use", async () => {
-  const cache = createMemorySurfaceCache();
+  const cache = createPostgresSurfaceCache(testDatabaseUrl());
   await cache.ingest(
     Array.from({ length: 201 }, (_, i) => ({ container: "C1", ts: ts(i + 1), sub: ts(0), text: "reply" })),
   );
@@ -73,7 +74,7 @@ test("missing parent does not consume a reply slot when a bounded read permits m
 });
 
 test("channel pagination counts roots before expanding a truncated thread", async () => {
-  const cache = createMemorySurfaceCache();
+  const cache = createPostgresSurfaceCache(testDatabaseUrl());
   await cache.ingest([{ container: "C1", ts: ts(0), text: "root" }]);
   await cache.ingest(
     Array.from({ length: 201 }, (_, i) => ({ container: "C1", ts: ts(i + 1), sub: ts(0), text: "reply" })),
@@ -87,7 +88,7 @@ test("channel pagination counts roots before expanding a truncated thread", asyn
 });
 
 test("channel overflow keeps newest roots, excludes deletions and preserves visible system entries", async () => {
-  const cache = createMemorySurfaceCache();
+  const cache = createPostgresSurfaceCache(testDatabaseUrl());
   await cache.ingest(
     Array.from({ length: 202 }, (_, i) => ({
       container: "C1",

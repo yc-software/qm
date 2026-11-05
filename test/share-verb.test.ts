@@ -10,12 +10,17 @@ import type { ArtifactHome, ArtifactType } from "../src/api/artifact-share.ts";
 import type { RecipientResolution } from "../src/directory/directory-store.ts";
 import { shareArtifact as shareRoute } from "../src/api/routes/surface.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
-import { createSkillStore } from "../src/skills/skill-store.ts";
+import { createSkillStore, type Skill } from "../src/skills/skill-store.ts";
+import { sleep } from "../src/util/async.ts";
 import { splitToScope, triggerBlocksSharedSkill } from "../src/api/artifact-share.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
-import { createMemoryFileArtifactStore, type FileArtifactStore } from "../src/files/file-artifact-store.ts";
+import { type FileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import type { ManagesArtifactHome } from "../src/resolution/scope-membership.ts";
+import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
+import { testDatabaseUrl, testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { allGrants } from "./support/acl-grants.ts";
 
 const ORG = "default-org";
 
@@ -28,6 +33,7 @@ interface FakeState {
   recipients: Record<string, RecipientResolution>;
   privateChannels: Set<string>;
   acl: ReturnType<typeof createAclStore>;
+  aclDatabaseUrl: string;
   files: FileArtifactStore;
 }
 
@@ -107,7 +113,8 @@ const cap = (actorId: string, scope?: ScopeId, liveActor = true): CapabilityClai
   }) as CapabilityClaims;
 
 function baseState(over: Partial<FakeState> = {}): FakeState {
-  const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
+  const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
+  const aclDatabaseUrl = testDatabaseUrl();
   const state: FakeState = {
     artifacts: {},
     scopesByPrincipal: {},
@@ -117,7 +124,8 @@ function baseState(over: Partial<FakeState> = {}): FakeState {
     recipients: {},
     privateChannels: new Set(),
     files,
-    acl: createAclStore(undefined, {
+    aclDatabaseUrl,
+    acl: createAclStore(createPostgresGrantStore(aclDatabaseUrl), {
       manages: (p, s, a) => manages(s, a ?? "", p),
       resolveFiles: (refs) => files.resolveByIds(refs),
     }),
@@ -127,9 +135,7 @@ function baseState(over: Partial<FakeState> = {}): FakeState {
   return state;
 }
 
-async function grantsOf(state: FakeState): Promise<Grant[]> {
-  return [...(await state.acl.list())];
-}
+const grantsOf = (state: FakeState) => allGrants(state.aclDatabaseUrl);
 
 async function ownerState(): Promise<FakeState> {
   const home = (type: ArtifactType, id: string): ArtifactHome & { type: ArtifactType } => ({
@@ -680,7 +686,7 @@ test("splitToScope: tool and route classify identically — a real scope id vs a
 });
 
 test("SkillStore.move changes the home scope in place; org move is refused (use promote)", async () => {
-  const store = createSkillStore();
+  const store = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
   const created = await store.create({
     scopeId: scopeId("personal", "U1"),
     manifest: { name: "tidy", description: "d", requiredCapabilities: [], body: "b" },
@@ -694,8 +700,75 @@ test("SkillStore.move changes the home scope in place; org move is refused (use 
   await assert.rejects(() => store.move(created.id, scopeId("org", ORG)), /admin-gated/);
 });
 
+test("SkillStore.move refuses a scope that already has a live skill of that name", async () => {
+  const store = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
+  const manifest = { name: "tidy", description: "d", requiredCapabilities: [], body: "b" };
+  const resident = await store.create({ scopeId: scopeId("channel", "C1"), manifest, createdBy: "U2" });
+  const incoming = await store.create({ scopeId: scopeId("personal", "U1"), manifest, createdBy: "U1" });
+  await assert.rejects(() => store.move(incoming.id, scopeId("channel", "C1")), /already exists/);
+  const inChannel = (await store.list()).filter((x) => x.scopeId === scopeId("channel", "C1"));
+  assert.deepEqual(
+    inChannel.map((x) => x.id),
+    [resident.id],
+  );
+});
+
+test("SkillStore.promote of two same-name skills at once leaves one org record", async () => {
+  const backing = testMap<Skill>();
+  const store = createSkillStore({
+    advisoryLock: testAdvisoryLock(),
+    backing: {
+      ...backing,
+      async all() {
+        const rows = await backing.all();
+        await sleep(50);
+        return rows;
+      },
+      async select(query) {
+        const rows = await backing.select(query);
+        await sleep(50);
+        return rows;
+      },
+    },
+  });
+  const sources: string[] = [];
+  for (const user of ["U1", "U2"]) {
+    const src = await store.create({
+      scopeId: scopeId("personal", user),
+      manifest: { name: "tidy", description: "d", requiredCapabilities: [], body: "b" },
+      createdBy: user,
+    });
+    await store.review(src.id, "R1", []);
+    await store.publish(src.id);
+    sources.push(src.id);
+  }
+  const promoted = await Promise.all(sources.map((id) => store.promote(id, scopeId("org", ORG))));
+  assert.deepEqual(
+    promoted.map((p) => p.version).toSorted((a, b) => a - b),
+    [1, 2],
+  );
+  const orgRecords = (await store.list()).filter((x) => x.scopeId === scopeId("org", ORG) && x.status === "published");
+  assert.equal(orgRecords.length, 1);
+});
+
+test("SkillStore.promote supersedes a draft org record of the same name instead of adding a second", async () => {
+  const store = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
+  const manifest = { name: "tidy", description: "d", requiredCapabilities: [], body: "b" };
+  const draft = await store.create({ scopeId: scopeId("org", ORG), manifest, createdBy: "U2" });
+  const src = await store.create({ scopeId: scopeId("personal", "U1"), manifest, createdBy: "U1" });
+  await store.review(src.id, "R1", []);
+  await store.publish(src.id);
+  const promoted = await store.promote(src.id, scopeId("org", ORG));
+  const live = (await store.list()).filter((x) => x.scopeId === scopeId("org", ORG) && x.status !== "archived");
+  assert.deepEqual(
+    live.map((x) => [x.id, x.status]),
+    [[draft.id, "published"]],
+  );
+  assert.equal(promoted.version, draft.version + 1);
+});
+
 test("SkillStore.promote supersedes an existing same-name org record instead of duplicating it", async () => {
-  const store = createSkillStore();
+  const store = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
   const src = await store.create({
     scopeId: scopeId("personal", "U1"),
     manifest: { name: "tidy", description: "d", requiredCapabilities: [], body: "b" },

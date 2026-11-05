@@ -15,7 +15,7 @@ Slow probes run outside the registry write lock. Before saving, the store rechec
 - The timestamp records a successful check at that time, not permanent provider access. Entitlements, quota, or provider behavior can subsequently change.
 - Organization verification does not certify any user's personal API key or subscription. Existing credential boundaries still apply.
 - A small probe does not certify prices, the maximum advertised context/output limits, image support, every reasoning level, or correct tool execution. Check provider documentation for those fields.
-- Configuring a model does not add support for a new protocol or native harness. Admin-managed API models remain Pi-only in normal use.
+- Configuring a model does not add support for a new protocol.
 - Live provider compatibility requires running the check against that provider. Development tests use local streaming provider fixtures.
 
 ## Find a model before entering metadata

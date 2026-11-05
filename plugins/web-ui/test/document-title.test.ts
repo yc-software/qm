@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { JSDOM } from "jsdom";
-import { createServer } from "vite";
+import { testViteServer } from "./vite-server.ts";
 import { activeSessionForDocumentTitle, documentTitle, PRODUCT_TITLE } from "../src/document-title.ts";
 
 test("page titles retain the static product title", () => {
@@ -72,7 +72,7 @@ test("document title follows session switches, split-pane focus, and sign-out", 
   Object.defineProperty(dom.window, "matchMedia", {
     value: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
   });
-  const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  const vite = await testViteServer();
   try {
     const { appState, signOut, syncDocumentTitle } = await vite.ssrLoadModule("/src/shell.ts");
     const { mainConversation } = await vite.ssrLoadModule("/src/conversations.ts");
@@ -111,12 +111,11 @@ test("document title follows session switches, split-pane focus, and sign-out", 
       const session = String(input).includes("/sessions/new") ? newSession : oldSession;
       return Response.json({
         scopeId: "personal:tester",
-        approvedHarnesses: [],
-        modelsByHarness: {},
+        models: [],
         modelCatalog: {},
-        effective: { harnessId: "pi", modelId: "" },
+        effective: { modelId: "" },
         session,
-        entries: [],
+        items: [],
         sessions: sessionsState.list,
         contexts: [],
       });

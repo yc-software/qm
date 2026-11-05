@@ -2,9 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { retryDelay } from "../src/runs/retry-delay.ts";
 import { processRun } from "../src/runs/worker.ts";
-import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import { NonRetryableTurnError } from "../src/core/turn-error.ts";
 import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.ts";
+import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const request: OrchestratorInput = {
   actor: { id: "retry-test", type: "internal" },
@@ -30,7 +31,7 @@ test("retry delays grow with bounded jitter and stay capped", (t) => {
 
 test("workers delay all failed-turn retries and respect terminal budgets", async (t) => {
   t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
-  const { runs } = createMemoryRunStore();
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
   const run = (await runs.enqueue({ sessionId: "retry-test", request })).run;
   const error = new Error("dependency unavailable");
   const orchestrator = {
@@ -39,12 +40,12 @@ test("workers delay all failed-turn retries and respect terminal budgets", async
     },
   } as unknown as Orchestrator;
   for (let i = 0; i < 3; i++) {
-    const claimed = await runs.claim("worker", 60_000);
+    const claimed = (await runs.claim("worker", 60_000))[0] ?? null;
     assert.ok(claimed);
     await assert.rejects(processRun({ runs, orchestrator, leaseTtlMs: 60_000 }, claimed), error);
     if (i < 2) {
       assert.equal((await runs.get(run.id))?.status, "pending");
-      assert.equal(await runs.claim("other-worker", 60_000), null);
+      assert.equal((await runs.claim("other-worker", 60_000))[0] ?? null, null);
       t.mock.timers.tick(60_000);
     }
   }
@@ -52,7 +53,7 @@ test("workers delay all failed-turn retries and respect terminal budgets", async
   assert.equal((await runs.get(run.id))?.errorAttempts, 3);
   for (const error of [new Error("ordinary"), new NonRetryableTurnError("permanent")]) {
     const { run } = await runs.enqueue({ sessionId: "other", request });
-    const lease = await runs.claim("worker", 60_000);
+    const lease = (await runs.claim("worker", 60_000))[0] ?? null;
     assert.ok(lease);
     const orchestrator = {
       handleTurn: async () => {

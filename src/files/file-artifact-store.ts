@@ -1,13 +1,7 @@
 import { createHash } from "node:crypto";
 import type { Readable } from "node:stream";
 import type { ScopeId } from "../types.ts";
-import type { ByteSource, DurableByteStore } from "./durable-byte-store.ts";
-
-function idOrderDesc(a: string, b: string): number {
-  if (a < b) return 1;
-  if (a > b) return -1;
-  return 0;
-}
+import type { ByteSource } from "./durable-byte-store.ts";
 
 export type FileDirection = "in" | "out";
 export type FileSource = "live" | "backfill";
@@ -120,136 +114,7 @@ export function decodeCursor(cursor: string): { createdAt: number; id: string } 
   }
 }
 
-function afterCursor(a: FileArtifact, c: { createdAt: number; id: string }): boolean {
-  return a.createdAt < c.createdAt || (a.createdAt === c.createdAt && a.id < c.id);
-}
-
 export function clampLimit(limit?: number): number {
   if (limit == null || !Number.isFinite(limit) || limit <= 0) return DEFAULT_LIMIT;
   return Math.min(Math.floor(limit), MAX_LIMIT);
-}
-
-export function createMemoryFileArtifactStore(byteStore: DurableByteStore): FileArtifactStore {
-  const rows = new Map<string, FileArtifact>();
-  const deleted = new Set<string>();
-
-  async function listFiles(
-    scopes: readonly ScopeId[],
-    opts?: ListOwnedOptions,
-    sharedRefs?: readonly FileArtifactRef[],
-  ): Promise<FilePage> {
-    const owners = new Set(scopes);
-    const shared = new Set(sharedRefs?.map((r) => JSON.stringify([r.ownerScopeId, r.id])));
-    const limit = clampLimit(opts?.limit);
-    const cursor = opts?.cursor ? decodeCursor(opts.cursor) : null;
-    const nameQuery = opts?.nameQuery?.toLowerCase();
-    let all = [...rows.values()]
-      .filter(
-        (r) =>
-          (owners.has(r.ownerScopeId) && (opts?.includeDisabled || r.enabled)) ||
-          (r.enabled && shared.has(JSON.stringify([r.ownerScopeId, r.id]))),
-      )
-      .filter((r) => opts?.createdInScope == null || r.createdInScope === opts.createdInScope)
-      .filter((r) => nameQuery == null || r.name.toLowerCase().includes(nameQuery));
-    if (sharedRefs !== undefined) {
-      all.sort(
-        (a, b) =>
-          Number(owners.has(b.ownerScopeId)) - Number(owners.has(a.ownerScopeId)) ||
-          a.createdAt - b.createdAt ||
-          idOrderDesc(b.id, a.id),
-      );
-      const documents = new Map<string, FileArtifact>();
-      for (const row of all) {
-        const key = JSON.stringify([row.createdInScope ?? row.ownerScopeId, row.sha256 ?? "id:" + row.id]);
-        if (!documents.has(key)) documents.set(key, row);
-      }
-      all = [...documents.values()];
-    }
-    all = all
-      .filter((r) => !cursor || afterCursor(r, cursor))
-      .sort((a, b) => b.createdAt - a.createdAt || idOrderDesc(a.id, b.id));
-    const files = all.slice(0, limit);
-    const nextCursor = all.length > limit && files.length > 0 ? encodeCursor(files[files.length - 1]!) : undefined;
-    return { files, ...(nextCursor ? { nextCursor } : {}) };
-  }
-
-  return {
-    async put(input) {
-      const existing = rows.get(input.id);
-      if (existing) return { artifact: existing, created: false };
-      const { blobKey, sizeBytes, sha256 } = await byteStore.put(
-        input.data,
-        input.maxBytes != null ? { maxBytes: input.maxBytes } : {},
-      );
-      return this.publish({ ...input, blobKey, sizeBytes, sha256 });
-    },
-
-    async publish(input) {
-      if (input.reuseExistingPath) {
-        const existing = [...rows.values()].find(
-          (row) => row.enabled && row.ownerScopeId === input.ownerScopeId && row.path === input.path,
-        );
-        if (existing) return { artifact: existing, created: false };
-      }
-      if (deleted.has(input.id)) throw new FileArtifactDeletedError();
-      const existing = rows.get(input.id);
-      if (existing) return { artifact: existing, created: false };
-      const { blobKey, sizeBytes, sha256 } = input;
-      const at = input.createdAt ?? Date.now();
-      const artifact: FileArtifact = {
-        id: input.id,
-        ownerScopeId: input.ownerScopeId,
-        createdBy: input.createdBy,
-        name: input.name,
-        path: input.path,
-        mimetype: input.mimetype,
-        sizeBytes,
-        blobKey,
-        sha256,
-        direction: input.direction,
-        source: "live",
-        ...(input.createdInScope ? { createdInScope: input.createdInScope } : {}),
-        createdAt: at,
-        updatedAt: at,
-        enabled: true,
-      };
-      rows.set(artifact.id, artifact);
-      return { artifact, created: true };
-    },
-
-    async get(id, opts) {
-      const r = rows.get(id);
-      if (!r) return null;
-      if (!r.enabled && !opts?.includeDisabled) return null;
-      return r;
-    },
-
-    async open(id) {
-      const r = rows.get(id);
-      if (!r || !r.enabled || !r.blobKey) return null;
-      const bytes = await byteStore.open(r.blobKey);
-      if (!bytes) return null;
-      return { artifact: r, sizeBytes: bytes.sizeBytes, stream: bytes.stream };
-    },
-
-    listOwnedByScopes: (scopes, opts) => listFiles(scopes, opts),
-
-    listDocuments: (scopes, sharedRefs, opts) => listFiles(scopes, opts, sharedRefs),
-
-    async resolveByIds(refs) {
-      if (refs.length === 0) return [];
-      const want = new Set(refs.map((r) => `${r.ownerScopeId}\0${r.id}`));
-      return [...rows.values()].filter((r) => r.enabled && want.has(`${r.ownerScopeId}\0${r.id}`));
-    },
-
-    async setEnabled(id, enabled) {
-      const r = rows.get(id);
-      if (r) rows.set(id, { ...r, enabled, updatedAt: Date.now() });
-    },
-
-    async delete(id) {
-      deleted.add(id);
-      rows.delete(id);
-    },
-  };
 }

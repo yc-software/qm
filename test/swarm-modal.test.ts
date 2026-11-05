@@ -1,16 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { createModalSandbox } from "../src/sandbox/modal-sandbox.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import type { ModalClient, ModalSession } from "../src/sandbox/modal-client.ts";
 import { installFakeModal } from "./support/fake-modal.ts";
 import { instrumentedSnapshotStore } from "./support/snapshot-stores.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { testMap } from "./support/test-database.ts";
 
 test("real Modal adapter creates blank worker computers without snapshot or restore calls", async () => {
   const fake = installFakeModal();
@@ -37,8 +33,8 @@ test("real Modal adapter creates blank worker computers without snapshot or rest
       return session ? guard(session) : null;
     },
   };
-  const backend = createModalSandbox(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "swarm-modal-"))), {
-    store: createMemoryMap(),
+  const backend = createModalSandbox({
+    store: testMap(),
     ...singleProcessDeps(),
     client,
     snapshots: snapshotStore.store,
@@ -48,15 +44,14 @@ test("real Modal adapter creates blank worker computers without snapshot or rest
   try {
     const parent = await fixture.sandboxes.create("alice", fixture.root.scopeId, "modal", "Parent");
     await fixture.sandboxes.setDefault("alice", fixture.root.scopeId, parent.id);
-    const layers = [{ scopeId: fixture.root.scopeId, mountPath: "/", mode: "rw" as const }];
-    const parentHandle = await fixture.sandbox.provision(layers);
+    const parentHandle = await fixture.sandbox.provision(fixture.root.scopeId);
     await fixture.sandbox.writeFile(parentHandle, "private", "parent disk only");
     await fixture.service.spawn(fixture.caller, { requestId: "pool", count: 2, text: "Work" });
     await fixture.service.sweep();
     const peers = (await fixture.service.inspect(fixture.caller)).peers.slice(1);
     assert.ok(peers.every((peer) => peer.state === "ready"));
     const handles = await Promise.all(
-      peers.map((peer) => fixture.sandbox.provision(layers, { sandboxId: peer.sandboxId })),
+      peers.map((peer) => fixture.sandbox.provision(fixture.root.scopeId, { sandboxId: peer.sandboxId })),
     );
     assert.equal(new Set(handles.map((handle) => handle.id)).size, 2);
     for (const handle of handles) {

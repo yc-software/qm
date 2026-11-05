@@ -8,9 +8,12 @@ import { join } from "node:path";
 import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
+import { createControlService } from "../src/api/control-service.ts";
 import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const SECRET = "route-test-secret".repeat(3);
 
@@ -71,6 +74,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
       ["admin-alice", "U1", "U2", "U8"].map((principalId) => ({ channelId: "C", principalId })),
     );
     server = createServer(built.app, {
+      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
       scheduler: built.scheduler,
       config: built.config,
@@ -663,7 +667,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     assert.equal((await get(`/v1/crons/${id}`, { "x-agent-capability": await capFor("U1") })).status, 404);
   });
 
-  it("the runs endpoint reads the fire table and strips the legacy fireLog from the cron", async () => {
+  it("the runs endpoint reads the fire table", async () => {
     const created = (await (
       await post(
         "/v1/crons",
@@ -696,7 +700,6 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     assert.equal(body.runs.length, 1);
     assert.equal(body.runs[0].fireKey, "k2");
     assert.equal(body.runs[0].reply, "second");
-    assert.equal("fireLog" in body.cron, false);
   });
 
   it("another public-channel user can read an OWNER cron but cannot patch, run, or delete it", async () => {
@@ -760,6 +763,31 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     assert.equal(patched.status, 200);
     assert.equal(((await patched.json()) as any).cron.owner, "U1");
     assert.equal((await post(`/v1/crons/${cron.id}/disable`, {}, teammate)).status, 200);
+    const channelClaims = (actorId: string): CapabilityClaims => ({
+      actorId,
+      scopeId: scopeId("channel", "C"),
+      destination: { type: ROOT.type, target: ROOT.target, audienceScopeId: ROOT.audienceScopeId },
+      destinations: [THREAD, ROOT],
+      defaultDestinationKey: ROOT.key,
+      members: MEMBERS,
+      exp: Date.now() + CAPABILITY_TTL_MS,
+    });
+    const control = createControlService(built.app, built.scheduler, built.admin);
+    const script = { command: "./standup.sh" };
+    const passes = async () => undefined;
+    const byTeammate = await control.patchCron(cron.id, { script }, channelClaims("U2"), passes);
+    assert.equal(byTeammate.ok ? "" : byTeammate.code, "forbidden");
+    const byOwner = await control.patchCron(cron.id, { script }, channelClaims("U1"), passes);
+    assert.deepEqual(byOwner.ok && byOwner.cron.script, script);
+    const removed = await control.patchCron(cron.id, { script: null }, channelClaims("U2"));
+    assert.equal(removed.ok ? "" : removed.code, "forbidden");
+    const overHttp = await patch(
+      `/v1/crons/${cron.id}`,
+      { script },
+      { "x-agent-capability": await capChannelMembers("U1") },
+    );
+    assert.equal(overHttp.status, 400);
+    assert.match(((await overHttp.json()) as any).message, /cron tool/);
   });
 
   it("a channel cron is readable by a member but never administrable by them (your boss's channel cron stays out of your DM's control)", async () => {
@@ -789,7 +817,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
 
   it("refuses webhook registration without a live person in personal and channel scopes", async () => {
     const webhooksBefore = await built.app.listWebhooks();
-    const auditBefore = await built.auditLog.events();
+    const auditBefore = (await built.auditLog.events()).filter((e) => e.action !== "turn");
     for (const scope of [scopeId("personal", "U1"), scopeId("channel", "C")]) {
       for (const extra of [
         {},
@@ -806,7 +834,10 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
         assert.equal(res.status, 403, JSON.stringify({ scope, extra }));
         assert.equal(((await res.json()) as { error: string }).error, "forbidden");
         assert.deepEqual(await built.app.listWebhooks(), webhooksBefore);
-        assert.deepEqual(await built.auditLog.events(), auditBefore);
+        assert.deepEqual(
+          (await built.auditLog.events()).filter((e) => e.action !== "turn"),
+          auditBefore,
+        );
       }
     }
   });

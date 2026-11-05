@@ -1,5 +1,6 @@
 import type { App } from "../../app.ts";
-import { parseScopeId, type Cron, type Delivery, type Session } from "../../../types.ts";
+import { parseScopeId, type Delivery, type Session } from "../../../types.ts";
+import type { Cron } from "../../../triggers/types.ts";
 import type { SessionSummary } from "../../../sessions/session-store.ts";
 import { parseWakeFireKey, wakeTriggerLabel } from "../../../triggers/provenance.ts";
 

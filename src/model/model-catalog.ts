@@ -1,6 +1,6 @@
 import { gatewayModelCatalog } from "./gateway-models.ts";
 import {
-  modelSupportedByHarness,
+  modelSupported,
   registerOpenRouterCatalogModel,
   resolveModel,
   selectableBaseModels,
@@ -8,11 +8,11 @@ import {
   overlayModelCatalog,
 } from "./pi-models.ts";
 import { customModelCatalog, customProvidersVersion } from "./custom-providers.ts";
+import { readBoundedText } from "../util/bytes.ts";
 
 export interface ModelCatalogEntry {
   id: string;
   name: string;
-  /** A built-in provider or the slug of an admin-registered custom provider. */
   provider: string;
 }
 
@@ -49,29 +49,6 @@ export function builtInModelCatalog(): ModelCatalogEntry[] {
       (model) => !known.has(model.id),
     ),
   ];
-}
-
-async function boundedJson(response: Response): Promise<unknown> {
-  const contentLength = Number(response.headers.get("content-length"));
-  if (Number.isFinite(contentLength) && contentLength > MAX_CATALOG_BYTES)
-    throw new Error("OpenRouter catalog is too large");
-  if (!response.body) throw new Error("OpenRouter catalog has no body");
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let bytes = 0;
-  let text = "";
-  while (true) {
-    const chunk = await reader.read();
-    if (chunk.done) break;
-    bytes += chunk.value.byteLength;
-    if (bytes > MAX_CATALOG_BYTES) {
-      await reader.cancel();
-      throw new Error("OpenRouter catalog is too large");
-    }
-    text += decoder.decode(chunk.value, { stream: true });
-  }
-  text += decoder.decode();
-  return JSON.parse(text) as unknown;
 }
 
 function finiteNumber(value: unknown): number | undefined {
@@ -151,7 +128,9 @@ function parseOpenRouterModel(candidate: unknown): ModelCatalogEntry | undefined
 async function fetchOpenRouterModels(fetcher: typeof fetch): Promise<ModelCatalogEntry[]> {
   const response = await fetcher(OPENROUTER_MODELS_URL, { signal: AbortSignal.timeout(5_000) });
   if (!response.ok) throw new Error(`OpenRouter catalog returned ${response.status}`);
-  const body = (await boundedJson(response)) as { data?: unknown };
+  const body = JSON.parse(
+    await readBoundedText(response, MAX_CATALOG_BYTES, () => new Error("OpenRouter catalog is too large")),
+  ) as { data?: unknown };
   if (!Array.isArray(body.data)) throw new Error("OpenRouter catalog is invalid");
   return body.data.slice(0, MAX_CATALOG_MODELS).flatMap((candidate) => {
     const model = parseOpenRouterModel(candidate);
@@ -198,13 +177,8 @@ export async function selectableModelCatalog(fetcher: typeof fetch = fetch): Pro
   return entry.inFlight;
 }
 
-export function selectableCatalogForHarness(
-  catalog: readonly ModelCatalogEntry[],
-  harness: string,
-): ModelCatalogEntry[] {
-  return catalog.filter(
-    (model) => (model.provider !== "openrouter" || harness === "pi") && modelSupportedByHarness(model.id, harness),
-  );
+export function selectableCatalog(catalog: readonly ModelCatalogEntry[]): ModelCatalogEntry[] {
+  return catalog.filter((model) => modelSupported(model.id));
 }
 
 export function cachedModelCatalog(fetcher: typeof fetch = fetch): {

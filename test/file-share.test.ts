@@ -1,19 +1,18 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { carriedFileHandles } from "../src/resolution/sharing-access.ts";
 import { createToolContext } from "../src/tools/primitives.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
-import { createMemoryFileArtifactStore, fileArtifactId } from "../src/files/file-artifact-store.ts";
+import { fileArtifactId, type FileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
-import { principalEntitledToScope } from "../src/resolution/context-filter.ts";
+import { entitledScopes } from "../src/resolution/context-filter.ts";
 import { scopeId, type Principal } from "../src/types.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { createAttachStaging } from "../src/core/orchestrator/attach-tool.ts";
 import { createMemoryBlobTransferStore, collectBlob } from "../src/persistence/blob-transfer.ts";
+import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
+import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 
 const person = (id: string, teamIds?: string[]): Principal => ({
   id,
@@ -25,16 +24,16 @@ const owner = scopeId("personal", "U1");
 const grantee = scopeId("personal", "U2");
 
 function fixture() {
-  const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
-  return { files, acl: createAclStore(undefined, { resolveFiles: (refs) => files.resolveByIds(refs) }) };
+  const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
+  return {
+    files,
+    acl: createAclStore(createPostgresGrantStore(testDatabaseUrl()), {
+      resolveFiles: (refs) => files.resolveByIds(refs),
+    }),
+  };
 }
 
-async function put(
-  files: ReturnType<typeof createMemoryFileArtifactStore>,
-  ownerScopeId: string,
-  name: string,
-  data: Uint8Array,
-) {
+async function put(files: FileArtifactStore, ownerScopeId: string, name: string, data: Uint8Array) {
   const id = fileArtifactId(`${ownerScopeId}:${name}`, "in", 0);
   return (
     await files.put({
@@ -70,11 +69,11 @@ for (const carried of [false, true]) {
     const ctx = createToolContext({
       sandbox: {} as Sandbox,
       provision: noComputer,
-      layers: [{ scopeId: grantee, mountPath: "", mode: "rw" }],
+      writableScopeId: grantee,
+      readOnlyScopeIds: [],
       commandPolicy: () => ({}) as never,
       authorizeCommand: () => false,
       grantedHandles: handles,
-      workspace: createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "fshare-"))),
       files,
       deploy: {} as never,
       acl,
@@ -118,7 +117,7 @@ test("workspace paths cannot be granted even when a Files record has that path",
     acl.grant({ ownerScopeId: owner, ref: file.path, granteeScopeId: grantee, permission: "read", grantedBy: "U1" }),
     /Files record ID/,
   );
-  assert.deepEqual(await acl.list(), []);
+  assert.deepEqual(await acl.find({ ownerScopeId: owner }), []);
   await acl.grant({ ownerScopeId: owner, ref: file.id, granteeScopeId: grantee, permission: "read", grantedBy: "U1" });
   assert.deepEqual(await acl.handlesFor([grantee]), [
     { handlePath: "shared/notes.txt", ownerScopeId: owner, fileId: file.id, permission: "read" },
@@ -140,7 +139,7 @@ test("a person-grant resolves in a shared room of {owner, grantee} — but never
     grantedBy: "U1",
   });
 
-  const inRoom = await acl.handlesForAudience([person("U1"), person("U2")], channel, org, principalEntitledToScope);
+  const inRoom = await acl.handlesForAudience([person("U1"), person("U2")], channel, org, entitledScopes);
   assert.deepEqual(
     inRoom.map((h) => h.handlePath),
     ["shared/orange.jpg"],
@@ -151,12 +150,12 @@ test("a person-grant resolves in a shared room of {owner, grantee} — but never
     [person("U1"), person("U2"), person("U3")],
     channel,
     org,
-    principalEntitledToScope,
+    entitledScopes,
   );
   assert.deepEqual(withAlicePresent, []);
 
-  assert.equal((await acl.handlesForAudience([person("U2")], carol, org, principalEntitledToScope)).length, 1);
-  assert.equal((await acl.handlesForAudience([person("U1")], alice, org, principalEntitledToScope)).length, 0);
+  assert.equal((await acl.handlesForAudience([person("U2")], carol, org, entitledScopes)).length, 1);
+  assert.equal((await acl.handlesForAudience([person("U1")], alice, org, entitledScopes)).length, 0);
 });
 
 test("an org grant surfaces for the whole audience; a team grant only when every member is in the team", async () => {
@@ -175,19 +174,14 @@ test("an org grant surfaces for the whole audience; a team grant only when every
     grantedBy: "U1",
   });
 
-  const mixed = await acl.handlesForAudience(
-    [person("U1", ["T1"]), person("U2")],
-    channel,
-    org,
-    principalEntitledToScope,
-  );
+  const mixed = await acl.handlesForAudience([person("U1", ["T1"]), person("U2")], channel, org, entitledScopes);
   assert.deepEqual(mixed.map((h) => h.handlePath).sort(), ["shared/poster.png"]);
 
   const allInTeam = await acl.handlesForAudience(
     [person("U1", ["T1"]), person("U2", ["T1"])],
     channel,
     org,
-    principalEntitledToScope,
+    entitledScopes,
   );
   assert.deepEqual(allInTeam.map((h) => h.handlePath).sort(), ["shared/playbook.md", "shared/poster.png"]);
 });

@@ -1,7 +1,5 @@
 import { cleanupFailedProvision } from "./sandbox.ts";
 import { randomUUID } from "node:crypto";
-import type { WorkspaceLayer } from "../types.ts";
-import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue } from "../util/async.ts";
@@ -9,7 +7,6 @@ import { swallowAs, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import { nonInteractiveShellPrefix, DROPPED_PROXY_ENV, forceThroughProxyEnv } from "./sandbox-env.ts";
 import { createExecProcessSessions, type ExecProcessIo } from "./exec-process-session.ts";
-import { materializeRoLayers } from "./ro-layers.ts";
 import { createLayerToolInstaller } from "./layer-tool-install.ts";
 import type { LayerInstallFile } from "../deployment/load-layer.ts";
 import {
@@ -55,8 +52,6 @@ import type {
 
 const HOME_DIR = "/home/user";
 const WORKSPACE_BASENAME = "workspace";
-const RO_LAYERS_TAR = ".ro-layers.tar";
-const RO_LAYERS_MANIFEST = ".ro-layers.manifest";
 const HOME_TAR = `${HOME_DIR}/.qm-home.tar`;
 
 const SNAPSHOT_PRUNE = HOME_SNAPSHOT_PRUNE;
@@ -95,7 +90,7 @@ export interface E2bSandboxOptions extends BlobStagingOptions {
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
 }
 
-export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOptions): Sandbox {
+export function createE2bSandbox(opts: E2bSandboxOptions): Sandbox {
   const client = opts.client;
   const prefix = opts.namePrefix ?? "qm";
   const defaultTimeoutSec = opts.defaultTimeoutSec ?? 600;
@@ -409,10 +404,8 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
     ...execFileOps,
     ...blobStaging,
 
-    async provision(layers: WorkspaceLayer[], provOpts?: ProvisionOptions): Promise<SandboxHandle> {
+    async provision(scope: string, provOpts?: ProvisionOptions): Promise<SandboxHandle> {
       const scratch = provOpts?.scratch;
-      const writable = layers.find((l) => l.mode === "rw") ?? layers[0];
-      const scope = writable?.scopeId ?? "default";
       let name: string;
       let coldStart: boolean;
       if (scratch) {
@@ -443,17 +436,6 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
         if (prep.code !== 0)
           throw new Error(`e2b provision prep failed: ${(prep.stderr || prep.stdout).slice(0, 200)}`);
 
-        await materializeRoLayers(
-          workspace,
-          layers,
-          handle,
-          {
-            readFile: (h, rel) => sandbox.readFile(h, rel),
-            writeFileBytes: (h, rel, data) => sandbox.writeFileBytes(h, rel, data),
-            exec: (script, t) => execRaw(name, script, t),
-          },
-          { manifest: RO_LAYERS_MANIFEST, tar: RO_LAYERS_TAR, label: "e2b" },
-        );
         await installLayerTools?.({
           exec: (script, t) => execRaw(name, script, t),
           writeAbs: (abs, data) => writeAbsBytes(name, abs, data),

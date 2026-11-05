@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { createPgPool } from "../persistence/pg-pool.ts";
+import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import type { Delivery, DeliveryProvenance, Destination, OutgoingAttachment } from "../types.ts";
 import { DELIVERY_MAX_AGE_MS, logDeliveryExpiry, type DeliveryStore } from "./delivery-store.ts";
 import { pgTextSafe } from "../util/text.ts";
@@ -16,6 +16,7 @@ function rowToDelivery(r: Record<string, unknown>): Delivery {
     createdAt: Number(r.created_at),
     deliveredAt: r.delivered_at === null ? null : Number(r.delivered_at),
     ...(r.expired_at != null ? { expiredAt: Number(r.expired_at) } : {}),
+    ...(r.failed_reason != null ? { failedReason: r.failed_reason as string } : {}),
     ...(r.shadow === true ? { shadow: true } : {}),
     ...(r.recipient_thread_ref != null ? { recipientThreadRef: r.recipient_thread_ref as string } : {}),
     ...(r.deliver_latency_ms != null ? { deliverLatencyMs: Number(r.deliver_latency_ms) } : {}),
@@ -25,7 +26,7 @@ function rowToDelivery(r: Record<string, unknown>): Delivery {
 
 export function createPostgresDeliveryStore(connectionString: string, opts?: { maxAgeMs?: number }): DeliveryStore {
   const maxAgeMs = opts?.maxAgeMs ?? DELIVERY_MAX_AGE_MS;
-  const { q, query } = createPgPool(connectionString, [
+  const { q, query, pool } = createPgPool(connectionString, [
     {
       id: "delivery/store/0001",
       statements: [
@@ -74,9 +75,16 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
         `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS source_cron_id TEXT`,
       ],
     },
+    {
+      id: "delivery/store/0007",
+      statements: [
+        `SET LOCAL lock_timeout = '3s'`,
+        `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS failed_reason TEXT`,
+      ],
+    },
   ]);
 
-  const enqueueListeners = new Set<() => void>();
+  const enqueueListeners = new Set<(type: string) => void>();
 
   async function expireOveraged(): Promise<void> {
     const rows = await q(
@@ -115,6 +123,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
                expired_at = NULL,
                claim_expires_at = NULL
            WHERE deliveries.delivered_at IS NULL AND deliveries.expired_at IS NOT NULL
+             AND deliveries.failed_reason IS NULL
          RETURNING *`,
         [
           randomUUID(),
@@ -128,7 +137,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
         ],
       );
       if (inserted[0]) {
-        if (input.shadow !== true) for (const l of enqueueListeners) l();
+        if (input.shadow !== true) for (const l of enqueueListeners) l(input.destination.type);
         return rowToDelivery(inserted[0]);
       }
       const existing = await q("SELECT * FROM deliveries WHERE idempotency_key = $1", [input.idempotencyKey]);
@@ -144,22 +153,34 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
       );
       return rows.map(rowToDelivery);
     },
-    async claimPending(type, ttlMs) {
+    async claimPending(type, ttlMs, opts) {
       await expireOveraged();
-      const rows = await q(
-        `UPDATE deliveries
+      const claim = `UPDATE deliveries
             SET claim_expires_at = ${NOW_MS_SQL} + $2
           WHERE id IN (
-            SELECT id FROM deliveries
+            SELECT id FROM deliveries d
              WHERE delivered_at IS NULL AND expired_at IS NULL AND NOT shadow AND destination->>'type' = $1
                AND (claim_expires_at IS NULL
                  OR claim_expires_at <= ${NOW_MS_SQL})
+               ${
+                 opts?.oldestPerConversation
+                   ? `AND NOT EXISTS (
+                 SELECT 1 FROM deliveries o
+                  WHERE o.destination->>'type' = $1 AND o.destination->>'target' = d.destination->>'target'
+                    AND o.delivered_at IS NULL AND o.expired_at IS NULL AND NOT o.shadow
+                    AND (o.claim_expires_at > ${NOW_MS_SQL} OR (o.created_at, o.id) < (d.created_at, d.id)))`
+                   : ""
+               }
              ORDER BY created_at
                FOR UPDATE SKIP LOCKED
           )
-          RETURNING *`,
-        [type, ttlMs],
-      );
+          RETURNING *`;
+      const rows = opts?.oldestPerConversation
+        ? await withPgTransaction(await pool(), async (client) => {
+            await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`deliveries:claim:${type}`]);
+            return (await client.query(claim, [type, ttlMs])).rows;
+          })
+        : await q(claim, [type, ttlMs]);
       return rows.map(rowToDelivery).sort((a, b) => a.createdAt - b.createdAt);
     },
     async listShadow(opts) {
@@ -180,6 +201,16 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
           WHERE id = $1 AND delivered_at IS NULL`,
         [id, at, slackApiMs ?? null],
       );
+    },
+    async fail(id, reason, at) {
+      const rows = await q(
+        `UPDATE deliveries
+            SET expired_at = $3, failed_reason = $2, claim_expires_at = NULL
+          WHERE id = $1 AND delivered_at IS NULL AND expired_at IS NULL
+          RETURNING *`,
+        [id, reason, at],
+      );
+      return rows[0] ? rowToDelivery(rows[0]) : null;
     },
     async ackByKey(idempotencyKey, at) {
       await query(

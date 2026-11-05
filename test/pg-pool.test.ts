@@ -11,7 +11,7 @@ import {
 } from "../src/persistence/pg-pool.ts";
 
 test("createPgPool is lazy: building it neither connects nor throws (no DB needed)", async () => {
-  const pg = createPgPool("postgres://does-not-exist:0/none", "test/lazy/0001", ["SELECT 1"]);
+  const pg = createPgPool("postgres://does-not-exist:0/none", [{ id: "test/lazy/0001", statements: ["SELECT 1"] }]);
   await assert.doesNotReject(pg.close());
 });
 
@@ -31,7 +31,7 @@ test("importing pg-pool does NOT pull `pg` into the runtime import graph (zero-d
     import { register } from "node:module";
     register(${JSON.stringify(loader)});
     const { createPgPool } = await import(${JSON.stringify(poolUrl)});
-    const p = createPgPool("postgres://x/y", "test/invalid/0001", ["SELECT 1"]);
+    const p = createPgPool("postgres://x/y", [{ id: "test/invalid/0001", statements: ["SELECT 1"] }]);
     await p.close();
     console.log("OK");
   `;
@@ -79,17 +79,24 @@ test("migration checksums are stable and sensitive to statement changes", () => 
 });
 
 test("released migrations can pin their source checksum", () => {
-  const migration = definePgMigration("test/pinned/0001", ["SELECT 1"]);
-  assert.equal(definePgMigration("test/pinned/0001", ["SELECT 1"], migration.checksum).checksum, migration.checksum);
+  const migration = definePgMigration({ id: "test/pinned/0001", statements: ["SELECT 1"] });
+  assert.equal(
+    definePgMigration({ id: "test/pinned/0001", statements: ["SELECT 1"], expectedChecksum: migration.checksum })
+      .checksum,
+    migration.checksum,
+  );
   assert.throws(
-    () => definePgMigration("test/pinned/0001", ["SELECT 2"], migration.checksum),
+    () => definePgMigration({ id: "test/pinned/0001", statements: ["SELECT 2"], expectedChecksum: migration.checksum }),
     /source checksum mismatch/,
   );
 });
 
 test("migration definitions reject invalid ids and multi-statement elements", () => {
-  assert.throws(() => definePgMigration("../bad", ["SELECT 1"]), /migration id/);
-  assert.throws(() => definePgMigration("test/good/0001", ["SELECT 1; SELECT 2"]), /single statement/);
+  assert.throws(() => definePgMigration({ id: "../bad", statements: ["SELECT 1"] }), /migration id/);
+  assert.throws(
+    () => definePgMigration({ id: "test/good/0001", statements: ["SELECT 1; SELECT 2"] }),
+    /single statement/,
+  );
 });
 
 test("concurrentIndexName recognizes retryable concurrent index creation", () => {

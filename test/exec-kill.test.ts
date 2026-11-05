@@ -1,16 +1,11 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { killableScript, killScript, pgidMarkerPath } from "../src/sandbox/exec-kill.ts";
 import { createSpritesSandbox } from "../src/sandbox/sprites-sandbox.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { scopeId } from "../src/types.ts";
 import { installFakeSprites, type FakeSprites } from "./support/fake-sprites.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { testAdvisoryLock, testMap } from "./support/test-database.ts";
 
 test("killableScript: records its PGID to the per-exec marker first, runs under setsid, preserves rc", () => {
   const s = killableScript("do_work", "abc");
@@ -36,19 +31,18 @@ before(() => {
 after(() => ff.cleanup());
 
 function sprites(): Sandbox {
-  const dir = mkdtempSync(join(tmpdir(), "sprites-kill-ws-"));
-  return createSpritesSandbox(createLocalWorkspaceStore(dir), {
-    initializationStore: createMemoryMap(),
-    advisoryLock: createMemoryAdvisoryLock(),
+  return createSpritesSandbox({
+    initializationStore: testMap(),
+    advisoryLock: testAdvisoryLock(),
     token: "test-token",
     baseUrl: ff.baseUrl,
   });
 }
-const rw = [{ scopeId: scopeId("personal", "U1"), mountPath: "", mode: "rw" as const }];
+const scope = scopeId("personal", "U1");
 
 test("run() with a signal wraps the command in the killable process group; without a signal it does not", async () => {
   const sb = sprites();
-  const h = await sb.provision(rw);
+  const h = await sb.provision(scope);
 
   let mark = ff.execScripts().length;
   await sb.run(h, "true");
@@ -61,7 +55,7 @@ test("run() with a signal wraps the command in the killable process group; witho
 
 test("run(): an already-aborted signal never starts the command", async () => {
   const sb = sprites();
-  const h = await sb.provision(rw);
+  const h = await sb.provision(scope);
 
   const before = ff.execScripts().length;
   const ctrl = new AbortController();

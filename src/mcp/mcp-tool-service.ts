@@ -14,6 +14,8 @@ import { LRUCache } from "lru-cache";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { createMcpClient, mcpResultText, type McpAuth, type McpClient, type McpListing } from "./mcp-client.ts";
 import type { McpServer, McpServerStore } from "./mcp-server-store.ts";
+import { attestedPerson } from "../directory/person.ts";
+import type { AddressFetch } from "../util/network.ts";
 
 const REFRESH_INTERVAL_MS = 5 * 60_000;
 const CATALOG_TTL_MS = 60_000;
@@ -138,8 +140,8 @@ function callResource(def: McpToolDescriptor, args: Record<string, unknown>): st
 
 function headersFor(server: McpServer, principalId: string | undefined, approval?: string): Record<string, string> {
   if (!server.attestActor || server.credentialScope === "per-user") return {};
-  if (!principalId) throw new Error(`MCP server ${server.id} needs a signed-in person`);
-  return { "x-qm-actor": principalId, ...(approval ? { "x-qm-approval": approval } : {}) };
+  const actor = attestedPerson(principalId, `MCP server ${server.id}`);
+  return { "x-qm-actor": actor, ...(approval ? { "x-qm-approval": approval } : {}) };
 }
 
 function catalogSearch(server: McpServer, tools: RemoteTool[], query: string): string {
@@ -172,6 +174,7 @@ export function createMcpToolService(opts: {
   now?: () => number;
   refreshIntervalMs?: number;
   signInUrl?: (serverId: string) => string;
+  fetch?: AddressFetch;
 }): McpToolService {
   const now = opts.now ?? (() => Date.now());
   const clients = new Map<string, { client: McpClient; server: McpServer }>();
@@ -201,7 +204,7 @@ export function createMcpToolService(opts: {
   function clientFor(server: McpServer): McpClient {
     const cached = clients.get(server.id);
     if (cached && JSON.stringify(cached.server) === JSON.stringify(server)) return cached.client;
-    const client = createMcpClient({ url: server.url, auth: authOf(server) });
+    const client = createMcpClient({ url: server.url, auth: authOf(server), fetch: opts.fetch });
     clients.set(server.id, { client, server });
     return client;
   }
@@ -221,7 +224,7 @@ export function createMcpToolService(opts: {
       if (server.auth === "oauth-user") throw new SignInRequired(signInMessage(server));
       throw new Error(`Connect your account for MCP server ${server.id} before using this tool`);
     }
-    return createMcpClient({ url: server.url, auth: { mode: "bearer", token } });
+    return createMcpClient({ url: server.url, auth: { mode: "bearer", token }, fetch: opts.fetch });
   }
 
   async function catalogTools(server: McpServer, principalId?: string): Promise<RemoteTool[]> {
@@ -417,7 +420,7 @@ export function createMcpToolService(opts: {
     },
     refresh,
     async probe(server, principalId) {
-      return createMcpClient({ url: server.url, auth: authOf(server) }).listTools({
+      return createMcpClient({ url: server.url, auth: authOf(server), fetch: opts.fetch }).listTools({
         headers: headersFor(server, principalId),
         ...(server.catalog ? { maxTools: CATALOG_MAX_TOOLS } : {}),
       });

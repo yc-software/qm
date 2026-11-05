@@ -16,9 +16,8 @@ afterEach(() => {
 test("a web turn submits the fetched OpenRouter model selected by runtime config", async () => {
   await applyRuntimeOptions(
     null,
-    ["pi"],
-    { pi: ["anthropic/claude-sonnet-4.5"] },
-    { harnessId: "pi", modelId: "anthropic/claude-sonnet-4.5" },
+    ["anthropic/claude-sonnet-4.5"],
+    { modelId: "anthropic/claude-sonnet-4.5" },
     {
       "anthropic/claude-sonnet-4.5": metadata(
         "anthropic/claude-sonnet-4.5",
@@ -37,10 +36,9 @@ test("a web turn submits the fetched OpenRouter model selected by runtime config
   const stream = await makeOpenerStreamFn(
     "web:alice:new",
     agent,
-    () => ({ harness: "pi" }),
+    () => ({ effortLevel: "high" }),
     undefined,
   )(model, {} as Context);
   await stream.result();
   assert.equal(submitted[0]?.model, "anthropic/claude-sonnet-4.5");
-  assert.equal(submitted[0]?.harness, "pi");
 });

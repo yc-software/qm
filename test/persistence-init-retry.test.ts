@@ -65,7 +65,9 @@ test("admin grants: a failed seed is retried on the next call (rejection not cac
 });
 
 test("pg pool: a failed init is retried with a fresh attempt (rejection not cached)", async () => {
-  const pg = createPgPool("postgres://127.0.0.1:9/nope", "test/retry/unreachable/0001", ["SELECT 1"]);
+  const pg = createPgPool("postgres://127.0.0.1:9/nope", [
+    { id: "test/retry/unreachable/0001", statements: ["SELECT 1"] },
+  ]);
   const first = await pg.q("SELECT 1").catch((e: unknown) => e);
   const second = await pg.q("SELECT 1").catch((e: unknown) => e);
   assert.ok(first instanceof Error);
@@ -75,7 +77,7 @@ test("pg pool: a failed init is retried with a fresh attempt (rejection not cach
 });
 
 test("pg pool: an idle-client 'error' is logged, not fatal", { skip }, async () => {
-  const pg = createPgPool(URL!, "test/retry/live/0001", ["SELECT 1"]);
+  const pg = createPgPool(URL!, [{ id: "test/retry/live/0001", statements: ["SELECT 1"] }]);
   const pool = await pg.pool();
   assert.doesNotThrow(() => pool.emit("error", new Error("backend died")));
   assert.deepEqual((await pg.query("SELECT 1 AS one")).rows, [{ one: 1 }], "pool keeps serving queries");
@@ -83,7 +85,7 @@ test("pg pool: an idle-client 'error' is logged, not fatal", { skip }, async () 
 });
 
 test("pg pool: a timeoutMs query gives the connection back usable, not poisoned", { skip }, async () => {
-  const pg = createPgPool(URL!, "test/retry/timeout/0001", ["SELECT 1"]);
+  const pg = createPgPool(URL!, [{ id: "test/retry/timeout/0001", statements: ["SELECT 1"] }]);
   await assert.rejects(
     () => pg.q("SELECT pg_sleep(5)", [], { timeoutMs: 150 }),
     /statement timeout/i,

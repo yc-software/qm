@@ -1,9 +1,5 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import {
   createLocalSandbox,
   localContainerName,
@@ -20,15 +16,12 @@ import { installFakeSprites } from "./support/fake-sprites.ts";
 import { installFakeAgent37 } from "./support/fake-agent37.ts";
 import { installFakeDocker } from "./support/fake-docker.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
-
-const workspace = () => createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "destroy-scope-")));
+import { testAdvisoryLock, testMap } from "./support/test-database.ts";
 
 test("Local scope deletion removes deterministic resources without provisioning, tolerates absence and propagates failures", async () => {
   const calls: string[][] = [];
   let fail = false;
-  const sandbox = createLocalSandbox(workspace(), {
+  const sandbox = createLocalSandbox({
     dockerExec: async (args) => {
       calls.push(args);
       return fail ? { code: 1, stdout: "", stderr: "daemon unavailable" } : { code: 0, stdout: "", stderr: "" };
@@ -48,7 +41,7 @@ test("Local scope deletion removes deterministic resources without provisioning,
 test("Local scope deletion fails a refused core disconnect only while the core is still attached", async () => {
   const fake = installFakeDocker(0);
   const network = localNetworkName(localContainerName("scope"));
-  const sandbox = createLocalSandbox(workspace(), {
+  const sandbox = createLocalSandbox({
     coreContainer: "qm-core",
     dockerExec: async (args) =>
       args[1] === "disconnect" ? { code: 1, stdout: "", stderr: "is not connected" } : fake.dockerExec(args),
@@ -64,13 +57,13 @@ test("Local scope deletion fails a refused core disconnect only while the core i
 test("Sprites scope deletion sends only DELETE, retries provider errors, and accepts missing bodies", async () => {
   const fake = installFakeSprites();
   try {
-    const sandbox = createSpritesSandbox(workspace(), {
-      initializationStore: createMemoryMap(),
-      advisoryLock: createMemoryAdvisoryLock(),
+    const sandbox = createSpritesSandbox({
+      initializationStore: testMap(),
+      advisoryLock: testAdvisoryLock(),
       token: "test",
       baseUrl: fake.baseUrl,
     });
-    await sandbox.provision([{ scopeId: "scope", mountPath: "", mode: "rw" }]);
+    await sandbox.provision("scope");
     fake.calls.length = 0;
     fake.refuseDelete(503);
     await assert.rejects(sandbox.destroyScope!("scope"), /503/);
@@ -96,9 +89,9 @@ for (const [name, create, resource] of [
     const calls: string[] = [];
     let status = 503;
     let exists = true;
-    const sandbox = create(workspace(), {
+    const sandbox = create({
       ...singleProcessDeps(),
-      store: createMemoryMap(),
+      store: testMap(),
       token: "test",
       fetchImpl: async (input, init) => {
         const path = new URL(String(input)).pathname;
@@ -128,7 +121,7 @@ for (const [name, create, resource] of [
 test("Local deletion retries remaining disk cleanup after partial failure without creating a container", async () => {
   const calls: string[][] = [];
   let volumeBusy = true;
-  const sandbox = createLocalSandbox(workspace(), {
+  const sandbox = createLocalSandbox({
     dockerExec: async (args) => {
       calls.push(args);
       return args[0] === "volume" && volumeBusy
@@ -152,12 +145,11 @@ for (const [name, create, install] of [
     const fake = install();
     try {
       const options = { ...singleProcessDeps(), token: "test-token", fetchImpl: fake.fetchImpl };
-      const a = create(workspace(), { ...options, store: createMemoryMap() });
-      const b = create(workspace(), { ...options, store: createMemoryMap() });
-      const layers = [{ scopeId: "replaced", mountPath: "", mode: "rw" as const }];
-      await a.provision(layers);
+      const a = create({ ...options, store: testMap() });
+      const b = create({ ...options, store: testMap() });
+      await a.provision("replaced");
       await b.destroyScope!("replaced");
-      await b.provision(layers);
+      await b.provision("replaced");
       assert.equal(fake.names().length, 1);
       const callsBefore = fake.calls.length;
       await a.destroyScope!("replaced");

@@ -236,8 +236,6 @@ class FakeCore implements SlackCoreClient {
   externalParticipants = false;
   result: TurnResult = { status: "ok", reply: "agent reply" };
   submitError: Error | undefined;
-  activeRun: string | undefined;
-  abortedRuns: string[] = [];
   queuedRunId: string | undefined;
   engageRun = false;
   sessionStatus?: SlackCoreClient["sessionStatus"];
@@ -317,17 +315,6 @@ class FakeCore implements SlackCoreClient {
     this.result = result;
     this.releaseRun?.();
   }
-  async activeRunForThread(): Promise<string | undefined> {
-    return this.activeRun;
-  }
-  async stopConversation(): Promise<boolean> {
-    if (!this.activeRun) return false;
-    await this.signalRunAbort(this.activeRun);
-    return true;
-  }
-  async signalRunAbort(runId: string): Promise<void> {
-    this.abortedRuns.push(runId);
-  }
   async ackRunDelivery(): Promise<void> {}
   async reportRunEditRef(): Promise<void> {}
   async getApproval(): Promise<null> {
@@ -353,6 +340,7 @@ class FakeCore implements SlackCoreClient {
     return [];
   }
   async ackDelivery(): Promise<void> {}
+  async failDelivery(): Promise<void> {}
   deliverySubscriptions = 0;
   onDeliveryEnqueued(): () => void {
     this.deliverySubscriptions++;
@@ -608,9 +596,8 @@ test("a DM becomes one scoped live turn and one Slack reply", async () => {
     assert.match(f.core.turns[0].redeliveryKey, /^slack:[^:]+:D1:100\.1$/);
     assert.equal(f.core.turns[0].conversation.audience[0].externalId, "U1");
     assert.equal(f.core.turns[0].deliveryTarget, "D1");
-    assert.equal(f.core.turns[0].slackSource.replyThreadTs, undefined);
-    assert.equal(f.core.turns[0].liveActor, true);
-    assert.equal(f.core.turns[0].triggerTs, "100.1");
+    assert.equal(f.core.turns[0].surfaceOrigin.replyThread, undefined);
+    assert.deepEqual(f.core.turns[0].origin, { kind: "human", messageTs: "100.1" });
     assert.equal(f.core.turns[0].gatewayContext.botHandle, "qmbot");
     assert.equal(f.core.ackPicks.length, 1);
     assert.equal(f.core.ackPicks[0]?.text, "hello agent");
@@ -1106,42 +1093,12 @@ test("a verified legacy bot without a user principal can become a turn", async (
   }
 });
 
-test("a bot-authored stop can abort a live run", async () => {
-  const f = await fixture();
-  try {
-    f.client.usersById.set("B1", {
-      id: "B1",
-      team_id: "T1",
-      is_bot: true,
-      name: "peerbot",
-      profile: { display_name: "Peer Bot" },
-    });
-    f.core.activeRun = "run-active";
-    await f.app.emitMessage({
-      channel: "D1",
-      channel_type: "im",
-      subtype: "bot_message",
-      user: "B1",
-      bot_id: "B-PEER",
-      text: "stop",
-      ts: "102.3",
-    });
-    assert.deepEqual(f.core.abortedRuns, ["run-active"]);
-    assert.equal(f.core.turns.length, 0);
-    assert.equal(f.core.ackPicks.length, 0);
-  } finally {
-    await f.stop();
-  }
-});
-
 test("a Slack Connect mention is refused ephemerally and never mirrored", async () => {
   const f = await fixture();
   try {
-    f.core.activeRun = "run-active";
     const event = { channel: "CX", channel_type: "channel", user: "U1", text: "<@UBOT> stop", ts: "103.1" };
     await f.app.emitEvent("app_mention", event);
     assert.equal(f.core.turns.length, 0);
-    assert.equal(f.core.abortedRuns.length, 0);
     assert.equal(f.core.ackPicks.length, 0);
     assert.equal(f.core.ingests.length, 0);
     assert.equal(f.client.posts.length, 0);
@@ -1242,7 +1199,7 @@ test("a DM thread reply carries its reply thread as a typed Slack source field",
     });
     assert.equal(f.core.turns.length, 1);
     assert.equal(f.core.turns[0].conversation.kind, "dm");
-    assert.equal(f.core.turns[0].slackSource.replyThreadTs, "100.1");
+    assert.equal(f.core.turns[0].surfaceOrigin.replyThread, "100.1");
   } finally {
     await f.stop();
   }
@@ -1309,9 +1266,11 @@ test("a group-DM thread-follow runs unprompted yet attests its author's liveness
       thread_ts: "300.1",
     });
     assert.equal(f.core.turns.length, 1);
-    assert.equal(f.core.turns[0].unprompted, true);
-    assert.equal(f.core.turns[0].entryTs, "300.3");
-    assert.equal(f.core.turns[0].liveActor, true, "a member's own verbatim follow-up is a live act");
+    assert.deepEqual(
+      f.core.turns[0].origin,
+      { kind: "ambient", entryTs: "300.3", live: true },
+      "a member's own verbatim follow-up is a live act",
+    );
     assert.equal(f.core.turns[0].conversation.kind, "group");
     assert.equal(f.core.turns[0].conversation.threadRef, "grp:G1:300.1");
   } finally {
@@ -1455,9 +1414,11 @@ test("a peer bot's thread reply dispatches without attesting liveness", async ()
       thread_ts: "301.1",
     });
     assert.equal(f.core.turns.length, 1);
-    assert.equal(f.core.turns[0].unprompted, true);
-    assert.equal(f.core.turns[0].entryTs, "301.3");
-    assert.equal(f.core.turns[0].liveActor, undefined, "a bot author is automation, never a live act");
+    assert.deepEqual(
+      f.core.turns[0].origin,
+      { kind: "ambient", entryTs: "301.3" },
+      "a bot author is automation, never a live act",
+    );
   } finally {
     await f.stop();
   }
@@ -1565,19 +1526,6 @@ test("raw core failures never leak through Slack", async () => {
     assert.equal(f.client.posts.length, 1);
     assert.match(f.client.posts[0].text, /Something went wrong on my end/);
     assert.doesNotMatch(f.client.posts[0].text, /super-secret|postgres|run\/abc/);
-  } finally {
-    await f.stop();
-  }
-});
-
-test("stop aborts the active run without enqueuing a second turn", async () => {
-  const f = await fixture();
-  try {
-    f.core.activeRun = "run-active";
-    await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "stop", ts: "107.1" });
-    assert.deepEqual(f.core.abortedRuns, ["run-active"]);
-    assert.equal(f.core.turns.length, 0);
-    assert.equal(f.client.posts.length, 0);
   } finally {
     await f.stop();
   }

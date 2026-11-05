@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { setImmediate } from "node:timers/promises";
 import { test, type TestContext } from "node:test";
-import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { createDirectory } from "../src/slack/directory.ts";
 import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
+import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
+import { settle } from "./support/settle.ts";
 
 const channel = (id: string, isPrivate = false) => ({
   id,
@@ -18,7 +20,7 @@ function fixture(t: TestContext) {
   const advance = (ms = 301_000) => {
     now += ms;
   };
-  const store = createDirectoryStore();
+  const store = createPostgresDirectoryStore(testDatabaseUrl());
   function core(channels = [channel("C_ONE")]) {
     const state = {
       channels,
@@ -27,12 +29,13 @@ function fixture(t: TestContext) {
       failList: false,
       memberCalls: 0,
       rejectPush: false,
+      apps: [] as Array<{ id: string; team_id: string; is_bot: true }>,
     };
     const pushes: Parameters<SlackCoreClient["pushDirectory"]>[0][] = [];
     const user = { id: "U_ONE", team_id: "T_TEST" };
     const client = {
       async *paginate(method: string, args: { types?: string }) {
-        if (method === "users.list") yield { members: [user] };
+        if (method === "users.list") yield { members: [user, ...state.apps] };
         else if (method === "conversations.list") {
           if (state.failList) throw Error("list unavailable");
           yield { channels: args.types === "mpim" ? [] : state.channels };
@@ -81,7 +84,7 @@ function fixture(t: TestContext) {
     async function refresh() {
       const count = pushes.length;
       await directory.getUserSnapshot(client);
-      for (let i = 0; i < 100 && pushes.length === count; i++) await setImmediate();
+      await settle(async () => pushes.length > count);
       assert.equal(pushes.length, count + 1);
       await setImmediate();
       return pushes.at(-1)!;
@@ -206,4 +209,18 @@ test("a rejected full crawl is retried instead of throttling unpublished rosters
   await a.refresh();
   assert.equal(await store.channelMember("C_ONE", "U_ONE"), true);
   assert.equal(a.state.memberCalls, 2);
+});
+
+test("a Slack app in users.list is pushed with the bot flag", async (t) => {
+  const { core } = fixture(t);
+  const a = core();
+  a.state.apps = [{ id: "U_APP", team_id: "T_TEST", is_bot: true }];
+  const push = await a.refresh();
+  assert.deepEqual(
+    push.members?.map((m) => [m.principalId, m.isBot === true]),
+    [
+      ["U_ONE", false],
+      ["U_APP", true],
+    ],
+  );
 });

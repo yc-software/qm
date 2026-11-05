@@ -3,9 +3,9 @@ import { createServer, type IncomingHttpHeaders } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, test } from "node:test";
 import type { Api, AssistantMessage, Context, Model } from "@earendil-works/pi-ai";
-import { buildModelRuntime } from "../src/harness/pi-harness.ts";
 import { resolveModel } from "../src/model/pi-models.ts";
 import { setCustomProviders } from "../src/model/custom-providers.ts";
+import { buildModelRuntime } from "../src/model/model-runtime.ts";
 
 const BINDING_BETA = "thinking-binding-controls-2026-08-01";
 const DROP_BLOCK = { prefix_mismatch_behavior: "drop_block" };

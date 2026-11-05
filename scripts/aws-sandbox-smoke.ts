@@ -1,15 +1,16 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { createAwsSandbox } from "../src/sandbox/aws-sandbox.ts";
 import { createMicrovmApi } from "../src/sandbox/aws-microvm-api.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { scopeId } from "../src/types.ts";
 import { scopeStorageKey } from "../cli/src/scope-storage-key.ts";
 import { createNoopAdvisoryLock } from "../src/persistence/advisory-lock.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
+
+const databaseUrl = process.env.DATABASE_URL;
+if (!databaseUrl) throw new Error("DATABASE_URL is required");
+const maps = createPostgresMapFactory(databaseUrl);
+const smokeMap = <T>(name: string) => maps.map<T>(`smoke_${name}_${Date.now()}`);
 
 const region = process.env.AWS_SANDBOX_REGION ?? "us-west-2";
 const profile = process.env.AWS_SANDBOX_PROFILE ?? "dev";
@@ -21,9 +22,8 @@ const log = (...a: unknown[]) => console.log("[aws-smoke]", ...a);
 
 async function main(): Promise<void> {
   if (!s3Bucket) throw new Error("AWS_SANDBOX_S3_BUCKET is required");
-  const ws = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "aws-smoke-ws-")));
-  const sandbox = createAwsSandbox(ws, {
-    store: createMemoryMap(),
+  const sandbox = createAwsSandbox({
+    store: smokeMap("aws_sandbox"),
     advisoryLock: createNoopAdvisoryLock(),
     region,
     profile,
@@ -35,12 +35,11 @@ async function main(): Promise<void> {
   });
   const api = createMicrovmApi({ region, profile });
   const scope = scopeId("personal", `smoke-${Date.now()}`);
-  const layers = [{ scopeId: scope, mountPath: "", mode: "rw" as const }];
   let bodyId = "";
 
   try {
     log("provision #1 (fresh launch)...");
-    const h1 = await sandbox.provision(layers);
+    const h1 = await sandbox.provision(scope);
     bodyId = h1.id;
     log("body", h1.id, "coldStart", h1.coldStart, "endpoint reachable");
     assert.equal(h1.coldStart, true, "first ever provision should be cold");
@@ -61,7 +60,7 @@ async function main(): Promise<void> {
     await sandbox.teardown(h1);
 
     log("provision #2 (should resume the same body, warm)...");
-    const h2 = await sandbox.provision(layers);
+    const h2 = await sandbox.provision(scope);
     assert.equal(h2.id, bodyId, "warm resume reuses the same body");
     assert.equal(h2.coldStart, false, "resumed body is not cold");
     assert.equal(await sandbox.readFile(h2, "notes/marker.txt"), marker, "file present after resume");
@@ -73,7 +72,7 @@ async function main(): Promise<void> {
     await api.waitForState(bodyId, "TERMINATED", { timeoutMs: 60_000 }).catch(() => {});
 
     log("provision #3 (fresh body, rehydrate $HOME from S3)...");
-    const h3 = await sandbox.provision(layers);
+    const h3 = await sandbox.provision(scope);
     assert.notEqual(h3.id, bodyId, "a new body was launched");
     bodyId = h3.id;
     assert.equal(h3.coldStart, false, "rehydrated from S3, not cold");

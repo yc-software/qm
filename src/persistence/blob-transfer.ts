@@ -50,7 +50,6 @@ export interface BlobTransferStore {
   delete(blobId: string): Promise<void>;
   sweep(maxAgeMs: number): Promise<number>;
   ensureExpiry?(maxAgeDays: number): Promise<boolean>;
-  s3Ref?(blobId: string): { bucket: string; key: string } | null;
 }
 
 export class BlobTooLargeError extends Error {
@@ -175,7 +174,6 @@ export function createS3BlobTransferStore(options: S3BlobTransferOptions): BlobT
   const client = options._client ?? s3Client(options.region);
 
   return {
-    s3Ref: (blobId) => (/^[0-9a-f]{32}$/.test(blobId) ? { bucket, key: keyFor(blobId) } : null),
     async put(source, opts) {
       const blobId = newBlobId();
       const Key = keyFor(blobId);

@@ -6,9 +6,10 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
-import type { SurfaceContextResult, TurnRequest } from "../src/types.ts";
+import type { TurnRequest } from "../src/types.ts";
+import type { SurfaceContextResult } from "../src/reach/reach.ts";
 import { testConfig } from "./support/test-config.ts";
-import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tools.ts";
+import { createAgentTools, type ToolContextRef } from "../src/agent/agent-tools.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -27,7 +28,7 @@ function mention(text: string, channel: string, root: string): TurnRequest {
     conversation: { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel, audience: [actor, mate] },
     deliveryTarget: `${channel}:${root}`,
     text,
-    liveActor: true,
+    origin: { kind: "human" },
     async: true,
   };
 }
@@ -52,9 +53,9 @@ async function subToolResult(built: any, root: string, tool: string, deadlineMs 
   while (Date.now() < deadline) {
     const sub = await built.sessions.getByThread(`ch:${root}`);
     if (sub) {
-      const entries = await built.sessions.getEntries(sub.id);
-      const hit = entries.find((e: any) => e.type === "assistant" && typeof e.payload?.text === "string");
-      if (hit) return hit.payload.text as string;
+      const items = await built.sessions.getItems(sub.id);
+      const hit = items.find((item: any) => item.kind === "AgentMessage" && item.variant === null && item.text);
+      if (hit) return hit.text as string;
     }
     await sleep(50);
   }
@@ -129,55 +130,6 @@ test("enabled mirror search uses the current channel and returns author/snippet 
     assert.match(reply, /search\(cache\) 1 hit/);
     assert.deepEqual(await built.app.pendingContextRequests("slack"), []);
     assert.match(reply, /first=Bob:the budget doc/);
-  } finally {
-    await built.runtime.stop();
-  }
-});
-
-test("read_members lists the current container's roster (its resolved audience), by display name", async () => {
-  const built = freshApp();
-  built.runtime.start();
-  const root = "C12:1200.1";
-  try {
-    await built.app.turn(mention("!read_members", "C12", "1200.1"));
-    const reply = await subToolResult(built, root, "read_members");
-    assert.match(reply, /members: /);
-    assert.match(reply, /Ada/);
-    assert.match(reply, /Bob/);
-  } finally {
-    await built.runtime.stop();
-  }
-});
-
-test("read_file returns text content for a text blob and a POINTER (never bytes) for a binary blob", async () => {
-  const built = freshApp();
-  built.runtime.start();
-  try {
-    const textBlob = await built.blobTransfer.put(Buffer.from("hello from the shared file"));
-    const binBlob = await built.blobTransfer.put(Buffer.from([0x00, 0x01, 0x02, 0x00, 0xff]));
-    const jpegLike = await built.blobTransfer.put(
-      Buffer.from([
-        0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0xff, 0xdb, 0xc0, 0xa1, 0xb2, 0xc3, 0xd4, 0xe5,
-        0xf6, 0x87,
-      ]),
-    );
-
-    await built.app.turn(mention(`!read_file ${textBlob.blobId}`, "C13", "1300.1"));
-    const txt = await subToolResult(built, "C13:1300.1", "read_file");
-    assert.match(txt, /file: hello from the shared file/);
-
-    await built.app.turn(mention(`!read_file ${binBlob.blobId}`, "C14", "1400.1"));
-    const bin = await subToolResult(built, "C14:1400.1", "read_file");
-    assert.match(bin, /file-pointer:/);
-    assert.doesNotMatch(bin, /hello from the shared file/);
-
-    await built.app.turn(mention(`!read_file ${jpegLike.blobId}`, "C16", "1600.1"));
-    const jpg = await subToolResult(built, "C16:1600.1", "read_file");
-    assert.match(jpg, /file-pointer:/);
-
-    await built.app.turn(mention("!read_file deadbeefdeadbeefdeadbeefdeadbeef", "C15", "1500.1"));
-    const gone = await subToolResult(built, "C15:1500.1", "read_file");
-    assert.match(gone, /couldn't read file/);
   } finally {
     await built.runtime.stop();
   }

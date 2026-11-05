@@ -2,7 +2,7 @@
 
 Post-merge live scenarios against example.slack.com. The workflow
 (`.github/workflows/live-e2e.yml`) boots the merged commit as a real instance on the GHA
-runner — core (`SESSION_STORE=memory`) + Slack plugin in Socket Mode on a **CI-reserved
+runner — core (with `DATABASE_URL` set) + Slack plugin in Socket Mode on a **CI-reserved
 pool app** (`qm dev --ci`) — then `run.ts` drives the catalog in
 `scenarios.ts` posting as a real example **user** (the "QA Human" account), so every
 message takes the exact path a teammate's would: classification, lazy directory push,
@@ -240,6 +240,9 @@ ECR and checks its embedded source SHA against the checkout. The runner builds
 the local sandbox from that source, then invokes the candidate's real application,
 Pi harness, model, and sandbox tools. Only the probe and transcript assertion are
 mounted into the core container; application code comes from the candidate image.
+The probe keeps its state in a disposable Postgres container that the script
+starts beside it and removes afterwards. The probe streams its output and has eight
+minutes to finish before the script fails.
 Provide AWS ECR access and `ANTHROPIC_API_KEY`. Require this job alongside cloud
 qualification before promotion. If capturing output through a pipe, use a shell
 with `pipefail` so a failed probe cannot become a successful job.

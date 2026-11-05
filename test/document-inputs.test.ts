@@ -3,19 +3,20 @@ import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
-import { documentBlocks, nativeDocumentFormat, withDocumentInputs } from "../src/harness/document-inputs.ts";
-import { isDocumentAttachment } from "../src/core/document-kinds.ts";
+import { documentBlocks, nativeDocumentFormat, withDocumentInputs } from "../src/agent/document-inputs.ts";
 import {
+  isDocumentAttachment,
   documentFallbackText,
   documentText,
   historicalDocumentMetas,
   loadDocumentInputs,
   type DocumentInput,
-} from "../src/core/document-inputs.ts";
-import { guardOutputBudget, sanitizeLlmPayload, trimPayloadToByteBudget } from "../src/harness/pi-harness.ts";
+} from "../src/core/documents.ts";
 import { mimeFromName } from "../src/core/attachments.ts";
-import type { AttachmentMeta, SessionEntry } from "../src/types.ts";
+import type { AttachmentMeta } from "../src/types.ts";
+import { storedItem } from "../src/sessions/items.ts";
 import type { FileArtifact, FileArtifactStore } from "../src/files/file-artifact-store.ts";
+import { guardOutputBudget, sanitizeLlmPayload, trimPayloadToByteBudget } from "../src/agent/provider-payload.ts";
 
 const openai = { api: "openai-responses", provider: "openai", input: ["text", "image"] };
 const anthropic = { api: "anthropic-messages", provider: "anthropic", input: ["text", "image"] };
@@ -193,6 +194,24 @@ test("requests clearly under the byte budget are sent without serializing them",
   assert.equal(stringify.mock.callCount(), 0);
 });
 
+test("chat-completions image URLs over the byte budget are shed like other inline images", () => {
+  const payload = {
+    messages: [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "describe" },
+          { type: "image_url", image_url: { url: `data:image/png;base64,${"A".repeat(400_000)}` } },
+        ],
+      },
+    ],
+  };
+  const trimmed = JSON.stringify(trimPayloadToByteBudget(payload, 100_000));
+  assert.doesNotMatch(trimmed, /AAAA/);
+  assert.match(trimmed, /image removed/);
+  assert.match(trimmed, /describe/);
+});
+
 test("escape-heavy text near the byte budget still sheds inline images", () => {
   const payload = {
     messages: [
@@ -256,9 +275,9 @@ function storeFor(data = Buffer.from("QUARTZ-731")) {
 test("restores stopped/restarted turns from durable document metadata and deduplicates retries", async () => {
   const { store, meta, opens } = storeFor();
   const history = [
-    { type: "user", payload: { attachments: [meta] } },
-    { type: "assistant", payload: { text: "stopped" } },
-  ] as SessionEntry[];
+    storedItem({ kind: "UserMessage", body: { attachments: [meta] } }, { sessionId: "s", seq: 0, createdAt: 0 }),
+    storedItem({ kind: "AgentMessage", text: "stopped" }, { sessionId: "s", seq: 1, createdAt: 0 }),
+  ];
   const inputs = await loadDocumentInputs(store, [...historicalDocumentMetas(history), meta], () => true);
   assert.equal(inputs.documents.length, 1);
   assert.equal(opens(), 1);
@@ -281,7 +300,7 @@ test("reuploaded identical documents consume the input budget once and retain th
       checked.push(file.id);
       return true;
     },
-    artifact.sizeBytes,
+    { maxBytes: artifact.sizeBytes },
   );
   assert.equal(inputs.documents.length, 1);
   assert.equal(inputs.documents[0]!.artifactId, "new-upload");
@@ -303,10 +322,7 @@ test("steered reuploads already in the turn do not consume another document slot
       checked.push(file.id);
       return true;
     },
-    0,
-    undefined,
-    0,
-    initial.documents,
+    { maxBytes: 0, maxDocuments: 0, existingDocuments: initial.documents },
   );
   assert.deepEqual(steered, { documents: [], notices: [], tokens: 0 });
   assert.deepEqual(checked, ["steered-upload"]);
@@ -335,20 +351,21 @@ test("later turns reuse verified document bytes but still check current access",
 test("document replay follows compaction boundaries", () => {
   const { meta } = storeFor();
   const recent = { ...meta, artifactId: "recent" };
+  const at = (seq: number) => ({ sessionId: "s", seq, createdAt: 0 });
   const history = [
-    { seq: 0, type: "user", payload: { attachments: [meta] } },
-    { seq: 1, type: "user", payload: { attachments: [recent] } },
-    { seq: 2, type: "system", payload: { kind: "context_summary", text: "Prior upload", throughSeq: 0 } },
-  ] as SessionEntry[];
+    storedItem({ kind: "UserMessage", body: { attachments: [meta] } }, at(0)),
+    storedItem({ kind: "UserMessage", body: { attachments: [recent] } }, at(1)),
+    storedItem({ kind: "ContextCompaction", text: "Prior upload", throughSeq: 0 }, at(2)),
+  ];
   assert.deepEqual(historicalDocumentMetas(history), [recent]);
-  assert.deepEqual((history[0]!.payload as { attachments: AttachmentMeta[] }).attachments, [meta]);
+  assert.deepEqual(history[0]!.body.attachments, [meta]);
 });
 
 test("document restoration checks current access and budgets before opening bytes", async () => {
   const { store, meta, opens } = storeFor();
   assert.equal((await loadDocumentInputs(store, [meta], () => false)).documents.length, 0);
   assert.equal(opens(), 0);
-  const result = await loadDocumentInputs(store, [meta], () => true, 1);
+  const result = await loadDocumentInputs(store, [meta], () => true, { maxBytes: 1 });
   assert.equal(result.documents.length, 0);
   assert.match(result.notices[0]!, /not included inline/);
   assert.equal(opens(), 0);
@@ -393,14 +410,8 @@ test("document text reports truncation as a flag, not from the extracted wording
   assert.match(office.text, /\[Document text truncated at 200000 characters\.\]$/);
 });
 
-test("Pi proxy and Bedrock fallback use their actual provider request shapes", async () => {
+test("Bedrock fallback uses its actual provider request shape", async () => {
   const documents = [await fixture("txt")];
-  const proxy = await withDocumentInputs(
-    { context: { messages: [{ role: "user", content: "Summarize" }] } },
-    { api: "pi-messages" },
-    documents,
-  );
-  assert.match(JSON.stringify(proxy), /QUARTZ-731/);
   const bedrock = (await withDocumentInputs(
     { messages: [{ role: "user", content: [{ text: "Summarize" }] }] },
     { api: "bedrock-converse-stream" },
@@ -427,7 +438,7 @@ test("document loading aborts active streams promptly", async () => {
   const stream = new Readable({ read() {} });
   store.open = async () => ({ artifact, sizeBytes: artifact.sizeBytes, stream });
   const controller = new AbortController();
-  const pending = loadDocumentInputs(store, [meta], () => true, undefined, controller.signal);
+  const pending = loadDocumentInputs(store, [meta], () => true, { signal: controller.signal });
   setTimeout(() => controller.abort(new Error("cancelled")), 10);
   await assert.rejects(pending, /cancelled/);
   assert.equal(stream.destroyed, true);

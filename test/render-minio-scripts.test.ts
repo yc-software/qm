@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { testMap } from "./support/test-database.ts";
 import { execFile, execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -8,7 +9,6 @@ import { promisify } from "node:util";
 import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { renderMinioCommand, renderMinioInitCommand } from "../cli/src/render-minio.ts";
 import { createRenderAppStorage, type StoredRenderAppStorage } from "../src/deploy/render-app-storage.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createFakeRenderApi } from "./support/fake-render.ts";
 
 const execute = promisify(execFile);
@@ -130,7 +130,7 @@ test(
           .then((result) => ({ id: job[1], status: result.status === 0 ? "succeeded" : "failed" }));
       throw new Error(`Unexpected ${method} ${path}`);
     });
-    const store = createMemoryMap<StoredRenderAppStorage>();
+    const store = testMap<StoredRenderAppStorage>();
     const storage = createRenderAppStorage({
       apiKey: "key",
       workspaceId: "tea-test",

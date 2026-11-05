@@ -1,6 +1,5 @@
 import { finishProcessCredentials, prepareExecutionFiles } from "../src/credentials/execute-files.ts";
 import { createBackgroundBroker } from "../src/connectors/background-exec-broker.ts";
-import { createMemoryProcessRegistry } from "../src/processes/process-registry.ts";
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
@@ -10,12 +9,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createKeychain, type CredentialFile, type Keychain } from "../src/credentials/keychain.ts";
 import { reconcileProcesses } from "../src/processes/reconcile.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { createToolContext, type ToolContextDeps } from "../src/tools/primitives.ts";
 import type { ProcessSandbox, ProcessState, Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { scopeId } from "../src/types.ts";
-import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
+import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
 
 const run = promisify(execFile);
 const SECRET_TOKEN = "synthetic-background-token-123";
@@ -29,10 +28,10 @@ async function fixture(t: TestContext) {
   const root = await mkdtemp(join(tmpdir(), "qm-file-execution-test-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const keychain = createKeychain({
-    lock: createMemoryAdvisoryLock(),
-    creds: createMemoryMap(),
-    grants: createMemoryMap(),
-    asks: createMemoryMap(),
+    lock: testAdvisoryLock(),
+    creds: testMap(),
+    grants: testMap(),
+    asks: testMap(),
     key: deriveConnectorKey("synthetic-test-key"),
   });
   const credential = await keychain.save({
@@ -80,7 +79,8 @@ async function fixture(t: TestContext) {
       sandbox,
       provision: async () => handle,
       provisionScratch: async () => ({ ...handle, id: "scratch" }),
-      layers: [{ scopeId: scope, mountPath: "", mode: "rw" }],
+      writableScopeId: scope,
+      readOnlyScopeIds: [],
       commandPolicy: () => ({ mode: "denylist", rules: [] }),
       authorizeCommand: () => false,
       commandCredentials: [
@@ -96,8 +96,9 @@ async function fixture(t: TestContext) {
               env: [],
               files: {
                 files: materialized.files,
-                save: (updated: CredentialFile[]) => keychain.updateFiles(materialized, updated),
-                source: { credentialId: materialized.credentialId, ownerId: owner, service: "aws" },
+                save: (updated: CredentialFile[]) =>
+                  keychain.updateFiles({ ...materialized, writeback: true }, updated),
+                source: { credentialId: materialized.credentialId, ownerId: owner, service: "aws", writeback: true },
               },
             };
           },
@@ -110,7 +111,6 @@ async function fixture(t: TestContext) {
         },
       ],
       grantedHandles: [],
-      workspace: {} as never,
       deploy: {} as never,
       acl: {} as never,
       createdBy: owner,
@@ -189,8 +189,8 @@ test("concurrent file updates cannot overwrite a newer credential or its grants"
   const a = await f.keychain.materializeOwnById(owner, f.credential.id, scope);
   const b = await f.keychain.materializeOwnById(owner, f.credential.id, scope);
   if (a.kind !== "file" || b.kind !== "file") throw new Error("Expected files");
-  await f.keychain.updateFiles(a, files("newer"));
-  await assert.rejects(f.keychain.updateFiles(b, files("stale")), /changed during execution/);
+  await f.keychain.updateFiles({ ...a, writeback: true }, files("newer"));
+  await assert.rejects(f.keychain.updateFiles({ ...b, writeback: true }, files("stale")), /changed during execution/);
   assert.equal((await f.keychain.getGrant(grant.id))?.status, "active");
 });
 
@@ -274,7 +274,7 @@ function background(
     startFailure?: boolean;
   } = {},
 ) {
-  const registry = createMemoryProcessRegistry();
+  const registry = createPostgresProcessRegistry(testDatabaseUrl());
   const jobs = new Map<string, { output: string; code?: number; child: ChildProcess }>();
   let readFailures = opts.readFailures ?? 0;
   const sandbox = {

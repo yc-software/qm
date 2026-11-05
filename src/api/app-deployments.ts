@@ -1,5 +1,4 @@
 import { validEmail } from "../identity/external-members.ts";
-import { createMemoryAdvisoryLock } from "../persistence/advisory-lock.ts";
 import { INVITE_EMAIL_NOT_CONFIGURED, renderInviteEmail } from "../admin/invite-email.ts";
 import { deploymentShareScope } from "../deploy/email-access.ts";
 import { errMessage } from "../util/errors.ts";
@@ -49,7 +48,7 @@ export function createDeploymentMethods(
   | "attachScope"
 > {
   const { effectiveDeploymentPermission, principalCanReadDeployment, principalGitPermission } = h;
-  const invitationLock = deps.advisoryLock ?? createMemoryAdvisoryLock();
+  const invitationLock = deps.advisoryLock;
   return {
     deploy(input) {
       return deps.deploy.deploy(input);
@@ -135,7 +134,7 @@ export function createDeploymentMethods(
       return effectiveDeploymentPermission(d, principalId);
     },
     async deploymentGitPermissionFor(idOrName, principalId) {
-      const deployment = (await deps.deploy.listDeployments()).find((d) => d.id === idOrName || d.name === idOrName);
+      const deployment = await deps.deploy.getDeployment(idOrName);
       return deployment ? principalGitPermission(deployment, principalId) : null;
     },
     rollbackDeployment(id, version, actor) {

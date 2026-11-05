@@ -5,7 +5,7 @@ import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { Check } from "typebox/value";
 import { createAdminCall } from "../src/tools/admin.ts";
-import { createAgentTools } from "../src/harness/agent-tools.ts";
+import { createAgentTools } from "../src/agent/agent-tools.ts";
 import type { ToolContext } from "../src/tools/primitives.ts";
 
 test("admin sends only fixed routes with encoded identifiers and preserves HTTP failures", async () => {
@@ -134,8 +134,11 @@ test("cancelled admin calls never reach HTTP", async () => {
     },
     { controlTools: true },
   ).find((t) => t.name === "admin")!;
-  await native.execute("stopped", { action: "whoami" }, undefined, undefined, {} as never);
-  assert.equal(received, signal);
+  await assert.rejects(
+    native.execute("stopped", { action: "whoami" }, undefined, undefined, {} as never),
+    /synthetic stop/,
+  );
+  assert.equal(received, undefined);
 });
 
 test("admin error diagnostics retain request evidence and redact secrets", async () => {
@@ -191,4 +194,31 @@ test("strict approval of an admin read cannot authorize an admin mutation", asyn
   assert.deepEqual(calls, ["whoami"]);
   assert.equal(approvals[0]?.approvalKey, "tool:admin:delete_memory");
   assert.match((blocked.content[0] as { text: string }).text, /needs human approval/);
+});
+
+test("admin session reads hand the model items without null columns", async () => {
+  const server = createServer((_req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(
+      JSON.stringify({
+        session: { id: "s1" },
+        items: [{ kind: "UserMessage", seq: 0, text: "hi", callId: null, hidden: null, body: { name: "Ada" } }],
+        hasMore: false,
+      }),
+    );
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  try {
+    const call = createAdminCall(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, "synthetic-capability");
+    const result = await call({ action: "session", scope: "org:test", id: "s1" });
+    assert.deepEqual(result.body, {
+      session: { id: "s1" },
+      items: [{ kind: "UserMessage", seq: 0, text: "hi", body: { name: "Ada" } }],
+      hasMore: false,
+    });
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 });

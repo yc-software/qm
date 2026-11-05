@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { setTimeout as sleep } from "node:timers/promises";
-import { createMemoryMap, type DurableMap } from "../src/persistence/durable-map.ts";
-import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
+import { type DurableMap } from "../src/persistence/durable-map.ts";
 import { scopeId, type ScopeId } from "../src/types.ts";
+import { testConfigStore, testMap } from "./support/test-database.ts";
 
 const channel = scopeId("channel", "C1");
 
@@ -12,13 +12,13 @@ function withPut<T>(map: DurableMap<T>, put: DurableMap<T>["put"]): DurableMap<T
 }
 
 test("a config write resolves only after another instance can read it from the store", async () => {
-  const orgAmbient = createMemoryMap<{ scopeId: ScopeId; on: boolean }>();
+  const orgAmbient = testMap<{ scopeId: ScopeId; on: boolean }>();
   const slow = withPut(orgAmbient, async (key, value) => {
     await sleep(20);
     return orgAmbient.put(key, value);
   });
-  const writer = createMemoryConfigStore("default-org", { orgAmbient: slow });
-  const reader = createMemoryConfigStore("default-org", { orgAmbient });
+  const writer = testConfigStore("default-org", { orgAmbient: slow });
+  const reader = testConfigStore("default-org", { orgAmbient });
 
   await writer.setOrgAmbient(false);
 
@@ -26,11 +26,11 @@ test("a config write resolves only after another instance can read it from the s
 });
 
 test("a failed config write rejects and leaves this instance's cache on the stored value", async () => {
-  const egressPolicies = createMemoryMap<{ scopeId: ScopeId; policy: { allowedHosts: string[] } }>();
+  const egressPolicies = testMap<{ scopeId: ScopeId; policy: { allowedHosts: string[] } }>();
   const failing = withPut(egressPolicies, async () => {
     throw new Error("database unavailable");
   });
-  const config = createMemoryConfigStore("default-org", { egressPolicies: failing });
+  const config = testConfigStore("default-org", { egressPolicies: failing });
 
   await assert.rejects(config.setEgress(channel, { allowedHosts: ["api.example.com"] }), /database unavailable/);
 

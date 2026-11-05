@@ -13,7 +13,7 @@ function makeDeployment(config: Record<string, unknown>, setup: (dir: string) =>
     JSON.stringify({
       contract: 1,
       orgId: "wiretest",
-      publicUrl: "http://localhost:8080",
+      publicUrl: "http://localhost:8082",
       target: "docker",
       services: ["core"],
       sandbox: {
@@ -143,22 +143,21 @@ test("a missing secretEnv value is warned, not invented", async () => {
   }
 });
 
-test("model → PI_MODEL and host ports follow the offset map (core+0, portal+1, combined web-ui+2)", async () => {
-  const dir = makeDeployment({ model: "claude-opus-4-8", services: ["core", "portal", "web-ui", "admin"] });
+test("model → PI_MODEL and host ports follow the offset map (core API+0, core front door+2, egress proxy+4)", async () => {
+  const dir = makeDeployment({ model: "claude-opus-4-8", services: ["core", "egress-proxy"] });
   try {
     const out = await plan(dir);
     assert.match(out, /PI_MODEL/);
-    assert.match(out, /host :8080/);
-    assert.match(out, /host :8081/);
-    assert.match(out, /host :8082/);
-    assert.doesNotMatch(out, /host :8083/);
+    assert.match(out, /host :8080, public :8082/);
+    assert.match(out, /host :8084/);
+    assert.doesNotMatch(out, /:8081|:8083/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
 test("QM_BASE_PORT overrides the host port base for one run", async () => {
-  const dir = makeDeployment({ services: ["core"] });
+  const dir = makeDeployment({ services: ["core"], publicUrl: "http://localhost:9002" });
   const prev = process.env.QM_BASE_PORT;
   process.env.QM_BASE_PORT = "9000";
   try {

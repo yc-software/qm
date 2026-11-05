@@ -6,9 +6,10 @@ import { once } from "node:events";
 import { gunzipSync } from "node:zlib";
 import * as Sentry from "@sentry/node";
 import { flushErrorReporting, initializeErrorReporting, traceQueued } from "../plugins/chassis/src/error-reporting.ts";
-import { createPiHarness } from "../src/harness/pi-harness.ts";
-import type { HarnessTurnInput } from "../src/harness/harness.ts";
-import type { SessionEntry } from "../src/types.ts";
+import { createAgent } from "../src/agent/agent-run.ts";
+import { createModelRoutes } from "../src/model/model-route.ts";
+import type { AgentTurnInput } from "../src/agent/agent.ts";
+import { storedItem } from "../src/sessions/items.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 
@@ -82,12 +83,12 @@ test("a Pi tool step is traced as model requests, first tokens, and a step gap t
   t.after(() => {
     globalThis.fetch = realFetch;
   });
-  const harness = createPiHarness({ apiKey: "sk-test" });
-  t.after(() => harness.turns.close?.());
+  const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }) });
+  t.after(() => agent.close?.());
   let seq = 0;
   const result = await traceQueued(undefined, "run", { "qm.origin": "human" }, () =>
-    harness.turns.runTurn({
-      session: { id: "traced-tool-step" } as HarnessTurnInput["session"],
+    agent.runTurn({
+      session: { id: "traced-tool-step" } as AgentTurnInput["session"],
       input: "read my memory",
       systemPrompt: "BASE",
       history: [],
@@ -96,10 +97,10 @@ test("a Pi tool step is traced as model requests, first tokens, and a step gap t
           await new Promise((resolve) => setTimeout(resolve, 40));
           return "saved facts";
         },
-      } as HarnessTurnInput["tools"],
-      scopeLabel: "personal:tester" as HarnessTurnInput["scopeLabel"],
-      orgScopeId: "org:test" as HarnessTurnInput["orgScopeId"],
-      emit: async (entry) => ({ ...entry, seq: seq++, createdAt: Date.now() }) as unknown as SessionEntry,
+      } as AgentTurnInput["tools"],
+      scopeLabel: "personal:tester" as AgentTurnInput["scopeLabel"],
+      orgScopeId: "org:test" as AgentTurnInput["orgScopeId"],
+      emit: async (item) => storedItem(item, { sessionId: "traced-tool-step", seq: seq++, createdAt: Date.now() }),
       recordModelCall: () => {},
       cancel: AbortSignal.timeout(10_000),
     }),
@@ -159,18 +160,16 @@ test("a human web turn persists its entries inside step.persist spans of the run
   assert.ok(persisted.length >= 2, "the user entry and the reply are each persisted in a span");
 });
 
-test("a turn whose harness fails still sends its dispatch span", async () => {
+test("a turn whose agent fails still sends its dispatch span", async () => {
   transactions.length = 0;
-  const built = buildApp(testConfig());
-  await assert.rejects(
-    built.app.turn({
-      surface: "web",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "web:U1:trace-fail" },
-      text: "!boom-always",
-    }),
-    /boom/,
-  );
+  const built = buildApp(testConfig({ maxAttempts: 1 }));
+  const failed = await built.app.turn({
+    surface: "web",
+    actor: { externalId: "U1" },
+    conversation: { kind: "dm", threadRef: "web:U1:trace-fail" },
+    text: "!boom-always",
+  });
+  assert.equal(failed.status, "failed");
   for (let i = 0; i < 40 && !transactions.some((event) => event.contexts?.trace?.op === "queue.process"); i++) {
     await flushErrorReporting();
     await new Promise((resolve) => setTimeout(resolve, 50));

@@ -5,12 +5,11 @@ import { metadata } from "./model-metadata.ts";
 export function runtimeConfig(scopeId: string, changes: Partial<RuntimeConfig> = {}): RuntimeConfig {
   return {
     scopeId,
-    approvedHarnesses: ["pi"],
-    modelsByHarness: { pi: ["model"] },
+    models: ["model"],
     modelCatalog: { model: metadata("model") },
-    orgDefault: { harnessId: "pi", modelId: "model", revision: 2 },
-    scopeOverride: { harnessId: "pi", modelId: "model", orgRevision: 1 },
-    effective: { harnessId: "pi", modelId: "model" },
+    orgDefault: { modelId: "model", revision: 2 },
+    scopeOverride: { modelId: "model", orgRevision: 1 },
+    effective: { modelId: "model" },
     upgradeAvailable: true,
     ...changes,
   };
@@ -18,14 +17,12 @@ export function runtimeConfig(scopeId: string, changes: Partial<RuntimeConfig> =
 
 export async function applyRuntimeOptions(
   scopeId: string | null,
-  approvedHarnesses: RuntimeConfig["approvedHarnesses"],
-  modelsByHarness: RuntimeConfig["modelsByHarness"],
+  models: RuntimeConfig["models"],
   effective: RuntimeConfig["effective"],
   modelCatalog: RuntimeConfig["modelCatalog"],
 ): Promise<void> {
   const config = runtimeConfig(scopeId ?? "personal:test", {
-    approvedHarnesses,
-    modelsByHarness,
+    models,
     effective,
     modelCatalog,
   });

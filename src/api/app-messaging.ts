@@ -2,28 +2,30 @@ import type { ScopeId } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { personKey, personKeys, samePersonInDirectory, samePersonMatcher } from "../directory/person.ts";
-import type { Destination, SurfaceContextRequest, SurfaceContextResult } from "../types.ts";
+import type { Destination } from "../types.ts";
+import type { SurfaceContextRequest, SurfaceContextResult } from "../reach/reach.ts";
 import { reportFailureAs } from "../util/errors.ts";
 import { adminCronHistoryUrl } from "../util/admin-links.ts";
-import { createMemoryMap } from "../persistence/durable-map.ts";
 import { randomUUID } from "node:crypto";
 import {
   reachEnqueue,
   withSlackUnfurlOption,
   withReact,
   withDelete,
+  withEdit,
   withThread,
   type ReachResolution,
 } from "../reach/reach.ts";
 import { isVisible } from "../directory/visibility.ts";
 import { pickMatch, type DirectoryMember } from "../directory/directory-store.ts";
 import { externalMemberActive } from "../identity/external-members.ts";
-import { hasRevisionEvents, recordMessageRevisions } from "../core/message-revisions.ts";
+import { hasRevisionEvents, recordMessageRevisions } from "../slack/message-revisions.ts";
 import { answerWebContextRequest } from "./web-context.ts";
 import { availableRuntimeError, validateRuntimeChoice } from "./runtime-config.ts";
 import { assertCronRuntime } from "../cron/runtime.ts";
-import type { Cron } from "../types.ts";
+import type { Cron } from "../triggers/types.ts";
 import { validateUserSchedule } from "../cron/schedule.ts";
+import { trialBeforeSave } from "../cron/script.ts";
 
 import type { App, AppDeps, ReachNowResult } from "./app-types.ts";
 import { CONTEXT_REQUEST_EXPIRY_MS } from "./app-types.ts";
@@ -47,7 +49,7 @@ export async function cronVisibility(deps: AppDeps, h: AppHelpers, principalId: 
   return {
     viewersOwn,
     scopeNames,
-    canSee: (c: Pick<import("../types.ts").Cron, "ownerScopeId" | "owner" | "destination">): boolean =>
+    canSee: (c: Pick<Cron, "ownerScopeId" | "owner" | "destination">): boolean =>
       allowed(c.ownerScopeId) &&
       (viewersOwn(c.owner) ||
         scopeNames.has(c.ownerScopeId) ||
@@ -83,6 +85,7 @@ export function createMessagingMethods(
   | "pendingDeliveries"
   | "enqueueDelivery"
   | "ingestSurfaceEvents"
+  | "surfaceMirrored"
   | "searchSurface"
   | "readSurfaceMessages"
   | "activeSurfaceThreads"
@@ -97,6 +100,7 @@ export function createMessagingMethods(
   | "pendingContextRequests"
   | "fulfillContextRequest"
   | "ackDelivery"
+  | "failDelivery"
   | "ackDeliveryByKey"
   | "setRunDeliveryState"
   | "upsertDirectory"
@@ -122,7 +126,7 @@ export function createMessagingMethods(
 > {
   const { adminBase, resolveReachTargetFor } = h;
   const { judgeAmbientContainer, ambientSelf } = ambient;
-  const contextRequests = deps.contextRequests ?? createMemoryMap<SurfaceContextRequest>();
+  const contextRequests = deps.contextRequests;
   const contextRequestListeners = new Set<(request: SurfaceContextRequest) => void>();
   const contextRequestTokens = new Map<string, string>();
   // Principals identity knows about that the Slack directory never sees: the email
@@ -165,9 +169,10 @@ export function createMessagingMethods(
   };
 
   return {
-    async createCron(input) {
+    async createCron(input, trial) {
       await validateRuntime(input);
       validateUserSchedule(input.schedule);
+      await trialBeforeSave(input.script, input.schedule, trial);
       const cron = await deps.crons.create(input);
       deps.auditLog.record({
         at: Date.now(),
@@ -206,11 +211,12 @@ export function createMessagingMethods(
         });
       return { owned, visible };
     },
-    async updateCron(id, patch) {
+    async updateCron(id, patch, trial) {
       const before = await deps.crons.get(id);
       if (!before) return null;
       if (patch.runtime !== undefined) await validateRuntime({ ...before, ...patch });
       if (patch.schedule) validateUserSchedule(patch.schedule);
+      await trialBeforeSave(patch.script, patch.schedule, trial);
       const grantsReaffirmed = patch.unattendedGrants !== undefined;
       const guardedPatch =
         (before.unattendedGrants?.length ?? 0) > 0 && !grantsReaffirmed ? { ...patch, unattendedGrants: [] } : patch;
@@ -312,12 +318,15 @@ export function createMessagingMethods(
     async enqueueDelivery(input) {
       await deps.deliveries.enqueue(input);
     },
+    surfaceMirrored(kind) {
+      return deps.surfaces.get(kind)?.capabilities.mirrored === true;
+    },
     async ingestSurfaceEvents(events, surface = "slack", self) {
       if (!deps.surfaceCache || !events.length) return { upserted: 0 };
       if (self && (self.name || self.mentionId)) ambientSelf.set(`${orgIdOf()}:${surface}`, self);
       const out = await deps.surfaceCache.ingest(events);
       if (surface === "slack" && hasRevisionEvents(events)) {
-        void recordMessageRevisions(deps.sessions, events).catch(
+        void recordMessageRevisions(deps.sessions, deps.runs, events).catch(
           reportFailureAs("revisions: surface revision record", undefined),
         );
       }
@@ -416,6 +425,9 @@ export function createMessagingMethods(
     async ackDelivery(id, slackApiMs) {
       await deps.deliveries.ack(id, Date.now(), slackApiMs);
     },
+    failDelivery(id, reason) {
+      return deps.deliveries.fail(id, reason, Date.now());
+    },
     async ackDeliveryByKey(idempotencyKey) {
       await deps.deliveries.ackByKey(idempotencyKey, Date.now());
     },
@@ -428,6 +440,9 @@ export function createMessagingMethods(
     async upsertDirectory(members, syncedAt) {
       const previous = await deps.directory.list();
       if (!(await deps.directory.replace(members, syncedAt))) return false;
+      const apps = members.filter((m) => m.isBot).map((m) => m.principalId);
+      if (apps.length && deps.admin)
+        await deps.admin.users.markApps(apps).catch(reportFailureAs("users: mark apps", 0));
       const present = members.filter((m) => m.type === "internal").map((m) => m.principalId);
       const presentSet = new Set(present);
       const removed = previous.map((m) => m.principalId).filter((id) => !presentSet.has(id));
@@ -552,14 +567,14 @@ export function createMessagingMethods(
         channel?: { channelId: string; name: string };
         group?: { groupId: string };
       } = {};
-      if (input.delete && !hasNamedTarget) {
+      if ((input.delete || input.edit) && !hasNamedTarget) {
         const dest = input.currentDestination;
         if (!dest?.target)
           return {
             ok: false,
             status: 400,
             error: "no_conversation",
-            message: "this conversation has no message surface to delete from — name a channel or its participants",
+            message: `this conversation has no message surface to ${input.edit ? "edit in" : "delete from"} — name a channel or its participants`,
           };
         baseDestination = dest;
       } else {
@@ -570,13 +585,21 @@ export function createMessagingMethods(
             ...(input.participants !== undefined ? { participants: input.participants } : {}),
           },
           input.senderId,
-          { mayOpenGroup: !input.react && !input.delete },
+          { mayOpenGroup: !input.react && !input.delete && !input.edit },
         );
         if (!r.ok) return r;
         baseDestination = r.destination;
         if (r.recipient) extra.recipient = r.recipient;
         if (r.channel) extra.channel = r.channel;
         if (r.group) extra.group = r.group;
+      }
+      if (input.edit && baseDestination.type !== "slack" && baseDestination.type !== "group") {
+        return {
+          ok: false,
+          status: 400,
+          error: "bad_request",
+          message: "edit rewrites a Slack message in a channel, group DM, or this Slack conversation",
+        };
       }
       if (input.threadTs) {
         if (
@@ -596,9 +619,9 @@ export function createMessagingMethods(
       const sender = await deps.directory.get(input.senderId).catch(() => null);
       const delivery = await reachEnqueue({
         deliveries: deps.deliveries,
-        destination: withDelete(
-          withReact(withSlackUnfurlOption(baseDestination, input.unfurlLinks), input.react),
-          input.delete,
+        destination: withEdit(
+          withDelete(withReact(withSlackUnfurlOption(baseDestination, input.unfurlLinks), input.react), input.delete),
+          input.edit?.messageTs,
         ),
         text: input.text ?? "",
         idempotencyKey: `reach:${randomUUID()}`,

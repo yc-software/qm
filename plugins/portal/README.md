@@ -1,15 +1,14 @@
 # Portal — the public SSO front door
 
-The portal is the **one** publicly-reachable app in the stack. It replaces the per-surface
-`fly proxy` tunnels (one per app, each on its own local port) with a single signed-in URL that
-fronts every surface. It does provider-neutral **OIDC** sign-in (Google Workspace
-is the email-first deployment default) and reverse-proxies — over Fly's private 6PN — to the
-surfaces, which all stay **private** (no public `[http_service]` of their own):
+The portal is the public front door of a QM deployment. Core runs it in-process on its public port
+(`PUBLIC_PORT`, see `src/web/front-door.ts`); it does provider-neutral **OIDC** sign-in (Google
+Workspace is the email-first deployment default) and reverse-proxies signed-in requests to the web UI
+server, which core runs on a loopback port:
 
-| Path        | → upstream        | Notes                                                                         |
-| ----------- | ----------------- | ----------------------------------------------------------------------------- |
-| `/*` (root) | `<prefix>-web-ui` | Pi web UI SPA, root-mounted (`/web-ui/*` 308-redirects to root for old links) |
-| `/admin/*`  | `<prefix>-admin`  | governance — admin access derived from the core (`canAdminister`)             |
+| Path        | → upstream    | Notes                                                                         |
+| ----------- | ------------- | ----------------------------------------------------------------------------- |
+| `/*` (root) | web UI server | Pi web UI SPA, root-mounted (`/web-ui/*` 308-redirects to root for old links) |
+| `/settings` | web UI server | Administrator settings; core checks admin                                     |
 
 User deployments are never served on this authenticated origin; they use the dedicated apps domain.
 
@@ -25,7 +24,7 @@ For companies using the additional trusted OIDC entry, set core
 provider. The default remains `/auth/login`.
 
 It is a thin `node:http` server (native TS type-stripping), like the other
-surfaces, and it does **not** import the core.
+surfaces. Core imports it; it does **not** import the core and talks to core only over core's HTTP API.
 
 ## How a request flows
 
@@ -53,7 +52,7 @@ An optional OIDC entry route at `/auth/trusted/login` operates alongside the
 existing `/auth/login` provider. Configure `PORTAL_TRUSTED_OIDC` as JSON with
 `issuer`, `authEndpoint`, `tokenEndpoint`, `userinfoEndpoint`, `jwksUri`, and
 `clientId`; supply its distinct `PORTAL_TRUSTED_OIDC_CLIENT_SECRET` separately.
-Register the exact `${PORTAL_PUBLIC_URL}/auth/trusted/callback` URL at that provider.
+Register the exact `${PUBLIC_WEB_URL}/auth/trusted/callback` URL at that provider.
 Endpoints must use HTTPS in production. This is an operator-configured trust
 relationship: the additional provider must enforce the destination company's
 admission policy before issuing tokens. Primary-provider email and workspace
@@ -92,7 +91,7 @@ Run `qm admin-login` with the deployment's configuration and secrets to generate
 a private admin login URL. Open it and confirm the displayed email. The URL
 expires after five minutes and works once. With multiple email-based
 `ADMIN_GRANTS` administrators, use `qm admin-login --email admin@example.com`.
-The command can also run with `PORTAL_PUBLIC_URL`, `PORTAL_SESSION_SECRET`, and
+The command can also run with `PUBLIC_WEB_URL`, `PORTAL_SESSION_SECRET`, and
 `ADMIN_GRANTS` in its environment, without a deployment config file.
 
 `GET /auth/admin-login` only renders the confirmation page. Its script moves the
@@ -101,7 +100,8 @@ signs in until the user submits that same-origin form. `POST /auth/admin-login`
 verifies the token's purpose, portal origin, signature and lifetime, checks the
 account's current admin status, and consumes its unique ID through core's
 durable Postgres replay store. It then issues the ordinary portal session and
-clears any old impersonation cookie. No account or role is created.
+clears any old impersonation cookie, then redirects to `/settings/history`. No
+account or role is created.
 
 This is an operator capability: keep deployment secrets and generated URLs
 private. It does not prove an email inbox, replace another user's login, or
@@ -109,7 +109,7 @@ depend on a hosting provider. Leave the built-in broker's sender and selected
 email credentials unset to run without email; configure them later and restart
 to enable ordinary email sign-in. Existing external OIDC login is unchanged.
 
-Live integration checks require a running core, Postgres, admin, portal and
+Live integration checks require a running core, Postgres, web-ui, portal and
 built-in auth broker with email unset. Set `QM_ADMIN_LOGIN_ENV_FILE` to a private
 JSON file containing that deployment's environment and run
 `node --test test/integration/admin-login.test.ts` from the repository root. Use a
@@ -121,18 +121,21 @@ disposable test deployment: the test redeems real links for its configured admin
   upstream request is built **from scratch** — an _allowlist_ of safe headers
   (`content-type`/`accept`/`user-agent`/…) plus the one synthesized cookie. The client's
   headers and cookies are **never** forwarded, so a browser can't smuggle a forged
-  `admin=`/`x-as-principal` into a 6PN-trusting upstream, and there's no CL/TE desync surface
-  (`node:http` frames the piped body itself).
+  `webuiuser=`/`x-as-principal` into a 6PN-trusting upstream. Body framing is the one exception: the
+  relay copies the client's `content-length` (or sends chunked encoding), which Node's parser has already
+  validated, so the upstream framing matches the bytes piped and there's no CL/TE desync surface.
 - **Routing decides once.** The router rejects pathologically-encoded targets (`%2f`, `%5c`,
-  `%2e%2e`, `\`, `//`, NUL → 400), selects the upstream by exact segment, and derives the
-  `/admin` gate from that _selected_ key — never a second `startsWith` that could disagree
-  (tier-escape guard).
-- **Admin is derived from ONE source — the core's `admin_grants`.** The portal asks the admin
-  surface (`GET /api/whoami` over 6PN, **no signing secret**), which asks the core
-  (`GET /v1/admin/whoami` → `canAdminister`). The portal caches the boolean ~60s and **fails
-  closed** (admin surface down ⇒ no Admin link on the landing, `/admin` 403). `canAdminister` is
-  re-checked **per action** at the core — the live boundary. There is **no portal/admin id list**
-  anymore; the only place an admin is named is the core's `ADMIN_GRANTS`.
+  `%2e%2e`, `\`, `//`, NUL → 400) and selects the upstream by exact segment. Every path that is
+  not a deployment, auth or core passthrough goes to web-ui as the signed-in user, so no path
+  spelling reaches a more privileged upstream.
+- **Admin is derived from ONE source — the core's `admin_grants`.** Settings pages live in web-ui
+  under `/settings`, and every admin action is checked **per action** at the core — the live
+  boundary. The portal itself needs admin status only for impersonation, operator admin login
+  and the unconfigured-deployment redirect to `/settings/onboarding`. For those it calls core
+  `GET /v1/admin/whoami` with source-auth signed headers, `x-admin-actor: <sub>@<org>` and the
+  signed portal identity. It caches the answer ~60s, retries once, and **fails closed**: an
+  outage or malformed answer counts as not-admin and is not cached. There is **no portal id
+  list**; the only place an admin is named is the core's `ADMIN_GRANTS`.
 - **Non-admin users need no per-id config.** `PORTAL_EXPECTED_TEAM_ID` pins the workspace, so any
   verified member is a valid user (`WEB_UI_PRINCIPALS` empty = any verified principal).
 - **CSRF / open-redirect.** Every non-GET requires a same-origin `Origin`; `returnTo` is reduced
@@ -156,7 +159,7 @@ disposable test deployment: the test redeems real links for its configured admin
 
 - **Surface isolation.** The private surface hop carries a signed portal identity; core verifies
   it independently, so a synthesized cookie alone confers no user authority. User deployments
-  stay on a dedicated apps hostname and are never proxied through the portal or admin origin.
+  stay on a dedicated apps hostname and are never proxied through the portal origin.
 - **Local logout.** `POST /auth/logout` clears the portal cookies and returns
   `redirectTo`; browsers follow it to `/auth/signed-out`, a terminal page that
   never redirects to the provider. Sign-out is local to this portal: it does not
@@ -181,7 +184,7 @@ the cookie from the first page load and bare `curl` never mints.
 
 What playground mode does **not** change: `/auth/login` still runs the full OIDC
 flow (that's how the one admin signs in — production still demands the usual OIDC
-config), `/admin` refuses anonymous sessions outright, and admin identity remains
+config), anonymous sessions never pass the core's admin checks, and admin identity remains
 the core's `ADMIN_GRANTS`. Signing out of an anonymous session just clears the
 cookie; the next visit starts a fresh playground identity.
 
@@ -224,14 +227,14 @@ the playground org — so a playground must be its own deployment with nothing
 sensitive at org scope: no org-wide credential grants, no real connector
 credentials, no company data. A cleared cookie mints a fresh principal, so pair
 this with the core's real brakes: `BUDGET_USD_PER_WINDOW`,
-`ORG_BUDGET_USD_PER_WINDOW`, `RATE_LIMIT_PER_WINDOW`, and a single pinned model
+`ORG_BUDGET_USD_PER_WINDOW`, and a single pinned model
 via the admin `base-model` / `webui-models` resources. Nothing
 garbage-collects an abandoned visitor's scope yet.
 
 ## Env
 
-Non-secret (`[env]`): `PORT` (8097 local / 8080 image), `PORTAL_PUBLIC_URL`, `CORE_API_URL`,
-`CORE_ORG_ID`, `WEB_UI_UPSTREAM`, `ADMIN_UPSTREAM`,
+Non-secret (`[env]`): `PORT` (8097 local / 8080 image), `PUBLIC_WEB_URL`, `CORE_API_URL`,
+`CORE_ORG_ID`, `WEB_UI_UPSTREAM`,
 `OIDC_AUTH_ENDPOINT` / `OIDC_TOKEN_ENDPOINT` / `OIDC_USERINFO_ENDPOINT` / `OIDC_ISSUER` /
 `OIDC_JWKS_URI` / `OIDC_SCOPES` / `OIDC_CLIENT_ID`, `PORTAL_EXPECTED_TEAM_ID`,
 `PORTAL_SESSION_TTL_S`, `PORTAL_SESSION_MAX_TTL_S`. `PORTAL_SESSION_MAX_TTL_S` caps a session's total life from authentication; it defaults to the larger of 30 days and `PORTAL_SESSION_TTL_S`, and boot fails if it is set below the TTL.
@@ -241,7 +244,7 @@ access is derived from the core (see the security model above).
 see the security model. Boot fails on an entry that is not a bare https origin (plain http only for localhost).
 For local development only, `PORTAL_LOCAL_AUTH_BYPASS=1` mints a local session as
 `PORTAL_DEV_PRINCIPAL` without contacting OIDC. The portal refuses this in production
-and only accepts it when `PORTAL_PUBLIC_URL` is loopback.
+and only accepts it when `PUBLIC_WEB_URL` is loopback.
 
 Identity: `OIDC_PRINCIPAL_CLAIM` — `email` (default; the org-canonical id: the
 verified work email, lowercased; sign-in fails unless the IdP marks the email verified) or `sub`
@@ -286,14 +289,15 @@ distinct from `CORE_SIGNING_SECRET`.
 
 ## Run / test
 
+Core starts the portal in-process on `PUBLIC_PORT`.
+
 ```bash
-npm start
 npm run typecheck
 npm test
 ```
 
 See **`deploy/README.md` → Portal** for the public bring-up (IPs + cert, DNS, the Slack OIDC
-app, and secrets) and `cli/templates/fly/portal.toml`.
+app, and secrets) and the public `[http_service]` in `cli/templates/fly/core.toml`.
 
 With embedded auth, trusted OIDC, and `PORTAL_TRUSTED_OIDC_LABEL` explicitly set,
 all email sign-in pages offer a link

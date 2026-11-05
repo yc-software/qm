@@ -1,4 +1,4 @@
-import type { SurfaceContextQuery, SurfaceContextResult } from "../../types.ts";
+import type { SurfaceContextQuery, SurfaceContextResult } from "../../reach/reach.ts";
 import { BLOB_TRANSFER_AUD, mintCapabilityToken } from "../../auth/capability-token.ts";
 import { CAPABILITY_HEADER } from "../contract.ts";
 import { sendJson } from "../http.ts";
@@ -52,7 +52,7 @@ async function resolveSurfaceTarget(
     return { source: "slack", target: { channelId: r.channel.channelId, channelName: r.channel.name } };
   }
   const dest = cap.destination;
-  if (!dest?.target || dest.type !== "slack") {
+  if (!dest?.target || !app.surfaceMirrored(dest.type)) {
     sendJson(res, 400, {
       error: "no_conversation",
       message: "this conversation has no surface history to pull — name a channel instead",

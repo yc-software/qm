@@ -1,15 +1,10 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { createSpritesSandbox } from "../src/sandbox/sprites-sandbox.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { scopeId } from "../src/types.ts";
 import { nonInteractiveShellPrefix, NONINTERACTIVE_ENV } from "../src/sandbox/sandbox-env.ts";
 import { installFakeSprites, type FakeSprites } from "./support/fake-sprites.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { testAdvisoryLock, testMap } from "./support/test-database.ts";
 
 let ff: FakeSprites;
 before(() => {
@@ -18,15 +13,14 @@ before(() => {
 after(() => ff.cleanup());
 
 function spritesHandle(env?: Record<string, string>) {
-  const dir = mkdtempSync(join(tmpdir(), "noninteractive-"));
-  const sandbox = createSpritesSandbox(createLocalWorkspaceStore(dir), {
-    initializationStore: createMemoryMap(),
-    advisoryLock: createMemoryAdvisoryLock(),
+  const sandbox = createSpritesSandbox({
+    initializationStore: testMap(),
+    advisoryLock: testAdvisoryLock(),
     token: "test-token",
     baseUrl: ff.baseUrl,
   });
-  const layers = [{ scopeId: scopeId("personal", "U1"), mountPath: "", mode: "rw" as const }];
-  return { sandbox, layers, ...(env ? { env } : {}) };
+  const scope = scopeId("personal", "U1");
+  return { sandbox, scope, ...(env ? { env } : {}) };
 }
 
 test("the shell prefix detaches stdin and exports every non-interactive default", () => {
@@ -39,8 +33,8 @@ test("the shell prefix detaches stdin and exports every non-interactive default"
 });
 
 test("a command reading stdin gets EOF instead of burning the timeout", async () => {
-  const { sandbox, layers } = spritesHandle();
-  const handle = await sandbox.provision(layers);
+  const { sandbox, scope } = spritesHandle();
+  const handle = await sandbox.provision(scope);
   const r = await sandbox.run(handle, "cat", { timeoutMs: 3000 });
   assert.equal(r.timedOut, false);
   assert.equal(r.code, 0);
@@ -48,8 +42,8 @@ test("a command reading stdin gets EOF instead of burning the timeout", async ()
 });
 
 test("pager/frontend/terminal-prompt defaults are present in the command environment", async () => {
-  const { sandbox, layers } = spritesHandle();
-  const handle = await sandbox.provision(layers);
+  const { sandbox, scope } = spritesHandle();
+  const handle = await sandbox.provision(scope);
   const r = await sandbox.run(
     handle,
     'printf "%s|%s|%s|%s|[%s]" "$PAGER" "$GIT_PAGER" "$GIT_TERMINAL_PROMPT" "$DEBIAN_FRONTEND" "$AWS_PAGER"',
@@ -58,8 +52,8 @@ test("pager/frontend/terminal-prompt defaults are present in the command environ
 });
 
 test("an explicit per-turn env value wins over the non-interactive default", async () => {
-  const { sandbox, layers, env } = spritesHandle({ PAGER: "less" });
-  const handle = await sandbox.provision(layers, env ? { env } : undefined);
+  const { sandbox, scope, env } = spritesHandle({ PAGER: "less" });
+  const handle = await sandbox.provision(scope, env ? { env } : undefined);
   const r = await sandbox.run(handle, 'printf "%s" "$PAGER"');
   assert.equal(r.stdout, "less");
 });

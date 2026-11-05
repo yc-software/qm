@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { appPrefixOf, renderPlanId, updateConfigUrls, type QmConfig } from "../config.ts";
+import { appPrefixOf, isDigestPinned, renderPlanId, updateConfigUrls, type QmConfig } from "../config.ts";
 import {
   deploymentLayerRequest,
   httpDeploymentLayerTransport,
@@ -7,6 +7,7 @@ import {
   type DeploymentLayerTransport,
 } from "../deployment-layer.ts";
 import { CliError, errMessage, note, ok, step } from "../log.ts";
+import { isPlaceholderRef } from "../manifest.ts";
 import type { ResolvedPlugin } from "../plugins.ts";
 import {
   list,
@@ -19,7 +20,15 @@ import {
   type RenderService,
   type ServiceType,
 } from "../render-api.ts";
-import { bindUrl, customDomains, httpsOrigin, publicUrl, renderInternalUrl, verifiedUrl } from "../render-domains.ts";
+import {
+  bindUrl,
+  customDomains,
+  httpsOrigin,
+  publicUrl,
+  renderInternalUrl,
+  serviceOrigin,
+  verifiedUrl,
+} from "../render-domains.ts";
 import {
   renderMinioEnv,
   renderMinioInitCommand,
@@ -155,13 +164,12 @@ function workloads(ctx: DeployContext): RenderWorkload[] {
   const render = coordinates(ctx.config);
   const out: RenderWorkload[] = [renderMinioWorkload(render)];
   for (const item of renderWorkloads(ctx.config, ctx.configDir)) {
-    const privateService = !!item.plugin || (item.name === "web-ui" && ctx.config.services.includes("portal"));
-    const type: ServiceType = privateService ? "private_service" : "web_service";
+    const type: ServiceType = item.plugin ? "private_service" : "web_service";
     out.push({
       ...item,
       type,
       plan: item.name === "core" ? render.corePlan : render.servicePlan,
-      ...(item.name === "core" ? { command: "node src/render/start.ts" } : {}),
+      ...(item.name === "core" ? { command: `${CORE_API_PORT} node src/render/start.ts` } : {}),
       ...(type === "web_service" ? { health: "/healthz" } : {}),
     });
   }
@@ -333,6 +341,8 @@ async function deploy(request: RenderRequest, service: RenderService, commit: st
   await waitDeploy(request, service, result?.id, previousId, commit);
 }
 
+const CORE_API_PORT = "env PORT=8080";
+
 async function runJob(
   request: RenderRequest,
   service: RenderService,
@@ -386,7 +396,7 @@ async function liveSession(
     request,
     core,
     workspaceId,
-    `timeout -s TERM -k 30 1200 node src/deployment/postdeploy-smoke.ts session ${renderInternalUrl(core)}`,
+    `${CORE_API_PORT} timeout -s TERM -k 30 1200 node src/deployment/postdeploy-smoke.ts session ${renderInternalUrl(core)}`,
     "live session",
     report,
   );
@@ -482,7 +492,6 @@ function serviceEnv(
     if (stored !== undefined) resolved.set(secret.name, stored);
   }
   const core = services.get("core");
-  const web = services.get("web-ui");
   return renderServiceEnv(
     ctx.config,
     workload.name,
@@ -490,7 +499,6 @@ function serviceEnv(
     {
       ...connections,
       coreUrl: core ? renderInternalUrl(core) : "http://127.0.0.1:8080",
-      ...(web ? { webUiUrl: web.type === "private_service" ? renderInternalUrl(web) : publicUrl(web) } : {}),
       projectId: state.projectId,
       environmentId: state.environmentId,
       minioServiceId: state.services.minio?.id,
@@ -576,21 +584,13 @@ export function renderConfigErrors(
     if (url && !origins[index]) add("Render publicUrl and apiUrl must be HTTPS origin URLs on port 443");
   }
   const [web, api] = origins.map((origin) => (origin ? new URL(origin).hostname : undefined));
-  if (web && api) {
-    if (web === api) add("Render publicUrl and apiUrl must use different hostnames");
-    else if (web === `www.${api}` || api === `www.${web}`)
-      add(
-        "Render publicUrl and apiUrl cannot be an apex domain and its www subdomain; Render pairs them as a redirect",
-      );
-  }
+  if (web && api && (web === `www.${api}` || api === `www.${web}`))
+    add("Render publicUrl and apiUrl cannot be an apex domain and its www subdomain; Render pairs them as a redirect");
   if (plugins.some((plugin) => plugin.name === "minio"))
     add("Render plugin minio conflicts with the bundled Render minio service");
-  if (!config.services.includes("web-ui")) add("Render hosting requires web-ui");
   for (const service of runnableServices(config.services)) {
     if (serviceDef(service).tcpIngress) add(`Render hosting does not support TCP ingress for ${service}`);
   }
-  if (config.services.includes("admin") && !config.services.includes("portal"))
-    add("Render admin requires the authenticated portal");
   if (plugins.some((plugin) => plugin.kind === "image")) add("Render plugins require Git source Dockerfiles");
   if (Object.keys(config.imageOverrides).length || config.imageFrom)
     add("Render builds from Git; remove imageOverrides and imageFrom");
@@ -601,7 +601,21 @@ export function renderConfigErrors(
   if (config.skills.length) add("Place extra Render deployment skills in sandbox/skills instead of skills[]");
   if (config.vms && Object.keys(config.vms).length)
     add("Use render.corePlan and render.servicePlan instead of vms for Render");
-  const managed = config.render ? renderManagedCoreEnv(config.render) : {};
+  const managed = config.render ? renderManagedCoreEnv(config.render, config.sandbox?.baseImage) : {};
+  if (managed.RENDER_SANDBOX_IMAGE && isPlaceholderRef(managed.RENDER_SANDBOX_IMAGE))
+    add(
+      "This qm build pins no published sandbox base image; set sandbox.baseImage to <repository>:<commit>@sha256:<digest>",
+    );
+  const sandbox = config.sandbox ?? {};
+  const ignored = (["app", "env", "secretEnv"] as const).filter((key) => sandbox[key] !== undefined);
+  if (ignored.length) add(`Render sandboxes ignore ${ignored.map((key) => `sandbox.${key}`).join(", ")}; remove them`);
+  const base = sandbox.baseImage;
+  if (base) {
+    const source = base.slice(0, base.lastIndexOf("@"));
+    const colon = source.lastIndexOf(":");
+    if (colon <= source.lastIndexOf("/") || colon === source.length - 1 || !isDigestPinned(base))
+      add("Render sandbox.baseImage must be <repository>:<tag>@sha256:<64 hex digits>");
+  }
   for (const [key, value] of Object.entries(managed)) {
     if (config.env.core?.[key] !== undefined && config.env.core[key] !== value)
       add(`Render requires env.core.${key}=${value}`);
@@ -728,12 +742,8 @@ export function createRenderBackend(ctx: DeployContext): Backend {
         }
         const coreOrigin = publicUrl(services.get("core")!);
         const urls = {
-          apiUrl: await bindUrl(request, services.get("core")!, ctx.config.apiUrl),
-          publicUrl: await bindUrl(
-            request,
-            services.get(ctx.config.services.includes("portal") ? "portal" : "web-ui")!,
-            ctx.config.publicUrl,
-          ),
+          apiUrl: serviceOrigin(services.get("core")!, ctx.config.apiUrl),
+          publicUrl: serviceOrigin(services.get("core")!, ctx.config.publicUrl),
         };
         const current = readFileSync(ctx.configPath, "utf8");
         const updated = updateConfigUrls(current, urls);
@@ -824,6 +834,7 @@ export function createRenderBackend(ctx: DeployContext): Backend {
         recordRelease(state, commit, release);
         delete state.updateInProgress;
         saveState(ctx, state);
+        for (const url of new Set([urls.apiUrl, urls.publicUrl])) await bindUrl(request, services.get("core")!, url);
         const retained = Object.keys(state.services).filter((name) => !desired.some((item) => item.name === name));
         if (retained.length)
           note(
@@ -1064,13 +1075,12 @@ export function createRenderBackend(ctx: DeployContext): Backend {
       const state = readState(ctx);
       const bound = await inventory(ctx, request, state);
       const core = bound.services.get("core");
-      const web = bound.services.get(ctx.config.services.includes("portal") ? "portal" : "web-ui");
-      if (!core || !web) throw new CliError("The Render deployment has no core or web service; run qm up");
-      for (const [name, service, configured] of [
-        ["core", core, ctx.config.apiUrl],
-        ["web", web, ctx.config.publicUrl],
+      if (!core) throw new CliError("The Render deployment has no core service; run qm up");
+      for (const [name, configured] of [
+        ["core", ctx.config.apiUrl],
+        ["web", ctx.config.publicUrl],
       ] as const) {
-        const url = await verifiedUrl(request, service, configured);
+        const url = await verifiedUrl(request, core, configured);
         const response = await fetch(`${url}/healthz`, {
           signal: AbortSignal.timeout(30_000),
           redirect: "error",

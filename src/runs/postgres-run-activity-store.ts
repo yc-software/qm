@@ -1,4 +1,5 @@
 import { createPgPool } from "../persistence/pg-pool.ts";
+import type { Item } from "../sessions/items.ts";
 import { RUN_ACTIVITY_TTL_MS, type RunActivityEntry, type RunActivityStore } from "./run-activity-store.ts";
 
 const SCHEMA = [
@@ -18,7 +19,7 @@ const SCHEMA = [
 const PRUNE_INTERVAL_MS = 60_000;
 
 export function createPostgresRunActivityStore(connectionString: string): RunActivityStore {
-  const pg = createPgPool(connectionString, "runs/activity/0001", SCHEMA);
+  const pg = createPgPool(connectionString, [{ id: "runs/activity/0001", statements: SCHEMA }]);
   const q = pg.query;
   let nextPruneAt = Number.NEGATIVE_INFINITY;
 
@@ -29,25 +30,30 @@ export function createPostgresRunActivityStore(connectionString: string): RunAct
         nextPruneAt = t + PRUNE_INTERVAL_MS;
         await q("DELETE FROM run_activity WHERE created_at < $1", [t - RUN_ACTIVITY_TTL_MS]);
       }
-      await q(
-        `INSERT INTO run_activity(run_id, seq, parent_seq, type, payload, created_at)
-         VALUES ($1,$2,$3,$4,$5,$6)`,
-        [runId, entry.seq, entry.parentSeq, entry.type, JSON.stringify(entry.payload ?? null), entry.createdAt],
-      );
+      const [type, seq, createdAt, payload] =
+        "item" in entry
+          ? ["item", entry.item.seq, entry.item.createdAt, entry.item]
+          : [entry.marker, entry.seq, entry.createdAt, { phase: entry.phase, streamOffset: entry.streamOffset }];
+      await q(`INSERT INTO run_activity(run_id, seq, type, payload, created_at) VALUES ($1,$2,$3,$4,$5)`, [
+        runId,
+        seq,
+        type,
+        JSON.stringify(payload),
+        createdAt,
+      ]);
     },
 
     async list(runId) {
       const { rows } = await q(
-        `SELECT seq, parent_seq, type, payload, created_at FROM run_activity WHERE run_id=$1 ORDER BY id`,
+        `SELECT seq, type, payload, created_at FROM run_activity
+         WHERE run_id=$1 AND type IN ('item', 'text_start') ORDER BY id`,
         [runId],
       );
-      return rows.map((r): RunActivityEntry => ({
-        seq: Number(r.seq),
-        parentSeq: r.parent_seq == null ? null : Number(r.parent_seq),
-        type: r.type as string,
-        payload: r.payload,
-        createdAt: Number(r.created_at),
-      }));
+      return rows.map((r): RunActivityEntry =>
+        r.type === "item"
+          ? { item: r.payload as Item }
+          : { marker: "text_start", seq: Number(r.seq), createdAt: Number(r.created_at), ...(r.payload as object) },
+      );
     },
 
     async close() {

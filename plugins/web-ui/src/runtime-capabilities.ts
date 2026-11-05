@@ -18,18 +18,6 @@ export function effortLabel(level: EffortLevel): string {
   return EFFORT_LEVELS.find((option) => option.value === level)?.label ?? level;
 }
 
-export function harnessSupportsEffort(harnessId: string): boolean {
-  return harnessId === "pi" || harnessId === "claude";
-}
-
-export function harnessSupportsFastMode(harnessId: string): boolean {
-  return harnessId === "pi" || harnessId === "claude";
-}
-
-export function harnessSupportsSteer(harnessId: string): boolean {
-  return harnessId === "pi" || harnessId === "claude";
-}
-
 export function defaultEffortForModel(model: Model<Api> | undefined): EffortLevel {
   const provider = String(model?.provider ?? model?.api ?? "").toLowerCase();
   return provider.includes("anthropic") ? "low" : "auto";

@@ -1,8 +1,9 @@
 # Skill registry (Phase A)
 
 Import skills from a **git repo of `SKILL.md` files** into the governed skill store — no code change,
-no image rebuild. An admin registers a _pack_, browses it, and imports skills **org-wide**; the
-skills then show on the admin Skills page and materialize onto boxes through the normal path.
+no image rebuild. An admin registers a _pack_, browses it, and imports skills into the scopes they
+pick (org-wide by default); the skills then show on the admin Skills page and materialize onto boxes
+through the normal path.
 
 ## How it works
 
@@ -11,20 +12,21 @@ git pack ──fetch(pinned ref)──▶ general normalizer ──▶ planInges
                                                                                       │
                                                           create→review→publish (shared upsert)
                                                                                       ▼
-                                                          org-scope SkillStore ──▶ materialize ──▶ box
+                                                          scoped SkillStore ──▶ materialize ──▶ box
 ```
 
 - **One general normalizer** (`src/skills/normalize.ts`) maps any repo's frontmatter dialect onto the
   canonical manifest via an alias table + ignore-unknowns + safe defaults. **No per-repo code** — a
   repo's specifics are declarative `config` on the pack (`skillGlobs` / `exclude` / `fieldOverrides`).
-- **Eligibility** (org import): a skill is imported only if its scope hint is org-shareable
-  (`company` / `both` / `org` / `shared` / …). Excluded with a visible reason: `scope` (personal/missing),
+- **Eligibility**: a skill is imported unless its scope hint is personal
+  (`personal` / `private` / `owner` / `me` / …); a skill with no scope hint is eligible. Excluded with a visible reason: `scope` (personal),
   `private` (owner-only flags or a `THE-AGENT-ONLY` body), `collision` (name already owned by a
   different pack / native seed), `binary-asset`, `malformed`.
 - **Pinned** in Phase A: an install is frozen at the pack's `ref`. "Update" = bump the ref + re-import
   (idempotent; unchanged skills are skipped, changed ones re-published, upstream-removed ones archived
   on `remove`). The sync engine (tracked mode) is Phase B.
-- **Org scope only** in Phase A (team scope needs resolution work — Phase D). Authz: any `org_admin`.
+- **Any scope**: an import goes to every scope in `scopeIds` (Admin UI: **Add to scopes**), such as the
+  org, a team, a channel or a project; with none it goes to the org. Authz: any `org_admin`.
 
 ## Admin API (`/v1/admin/skill-packs*`, org_admin, audited)
 
@@ -32,7 +34,7 @@ git pack ──fetch(pinned ref)──▶ general normalizer ──▶ planInges
 POST   /v1/admin/skill-packs              register { url, ref, config?, authCredentialSlug?, trustTier? }
 GET    /v1/admin/skill-packs              list packs + last-import status
 GET    /v1/admin/skill-packs/:id/catalog  browse (planIngest: candidates + eligibility + counts)
-POST   /v1/admin/skill-packs/:id/import   { selected: "all" | string[] }
+POST   /v1/admin/skill-packs/:id/import   { selected: "all" | string[], scopeIds?: string[] }
 PATCH  /v1/admin/skill-packs/:id          edit ref / subset / trustTier / config
 DELETE /v1/admin/skill-packs/:id          remove pack + archive its imported skills
 ```
@@ -44,11 +46,11 @@ Or use the **Admin UI → Skill packs** tab (register form, browse with select-a
 First vend a read-only deploy token as an org service credential, then register the pack at a pinned
 commit.
 
-1. **Vend the deploy token** (Admin UI → Governance → Shared service credentials, or
+1. **Vend the deploy token** (Settings → Governance → Shared service credentials, or
    `PUT /v1/admin/scopes/org:<org>/service-credentials`): create a credential with a slug like
    `skills-repo-token` whose secret is a GitHub token with read access to the repository.
 
-2. **Register the pack** (Admin UI → Skill packs → Register, or `POST /v1/admin/skill-packs`):
+2. **Register the pack** (Settings → Skill packs → Register, or `POST /v1/admin/skill-packs`):
 
    ```json
    {
@@ -59,7 +61,7 @@ commit.
    }
    ```
 
-   Personal/missing-scope/private skills and any name colliding with a native skill are excluded
+   Personal-scope/private skills and any name colliding with a native skill are excluded
    automatically and shown with their reason in the catalog.
 
 3. **Browse + import**: open the pack, review the candidate list (≈ the company/both skills, minus
@@ -86,3 +88,9 @@ overwrites it with the published version. When a turn first prepares the compute
 removes every copy of a skill that turn's speaker cannot see, so archived, revoked, blocked,
 or another person's skills do not linger on a shared computer. Publish changes through the
 skill API to update the source.
+
+An agent saves or edits a skill from a conversation with the `skills` tool's `save` and `edit`
+actions, which call `POST /v1/skills` and `PUT /v1/skills/:id`. They are offered only when the turn
+has control tools and a self API, so read-only and strict-posture turns do not get them. A skill
+saved from a conversation or the Skills page keeps only its instructions, so put its scripts
+in this scope's Files and have the instructions point to them there.

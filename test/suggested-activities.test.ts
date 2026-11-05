@@ -1,8 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createSuggestedActivityService, type SuggestedActivityProfile } from "../src/suggestions/activities.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createScheduler } from "../src/cron/scheduler.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
@@ -10,6 +8,9 @@ import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts"
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 
 const activities = ["app", "brief", "deck", "hire", "plan"].map((id) => ({
   id,
@@ -21,9 +22,9 @@ const activities = ["app", "brief", "deck", "hire", "plan"].map((id) => ({
 function fixture() {
   let time = Date.now();
   let output = JSON.stringify(activities);
-  const store = createMemoryMap<SuggestedActivityProfile>();
-  const sessions = createMemorySessionStore();
-  const crons = createCronStore();
+  const store = testMap<SuggestedActivityProfile>();
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const deliveries = createDeliveryStore();
   const calls: TurnRequest[] = [];
   const settled: Promise<void>[] = [];
@@ -32,8 +33,8 @@ function fixture() {
     now: () => time,
     crons,
     deliveries,
-    identity: createIdentityService(),
-    idempotency: createIdempotencyStore(),
+    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    idempotency: createIdempotencyStore(testMap()),
     run: async (request) => {
       calls.push(request);
       const scope = scopeId("personal", request.actor.externalId);
@@ -44,11 +45,7 @@ function fixture() {
         undefined,
         "cron",
       );
-      const acquired = await sessions.acquireLease(session.id);
-      assert.ok(acquired.lease);
-      if (!acquired.lease) throw new Error("lease unavailable");
-      await sessions.append(acquired.lease, { type: "assistant", scopeLabel: scope, payload: { text: output } });
-      await sessions.releaseLease(acquired.lease);
+      await sessions.append({ sessionId: session.id }, { kind: "AgentMessage", text: output });
       return { status: "ok", reply: output, sessionId: session.id };
     },
   });
@@ -98,7 +95,7 @@ test("normal personal cron produces durable suggestions without a notification d
   assert.match(cron.schedule.cron!, /^\d+ 2 \* \* \*$/);
   assert.equal(f.calls[0]?.readOnly, undefined);
   assert.equal(f.calls[0]?.actor.externalId, "alice");
-  assert.equal(f.calls[0]?.triggered, true);
+  assert.equal(f.calls[0]?.origin?.kind, "automation");
   assert.match(f.calls[0]!.text, /past conversations and unfinished work/);
   assert.deepEqual(await f.service.get("alice", []), { activities, pending: false });
   assert.equal(f.calls.length, 1);
@@ -245,14 +242,8 @@ test("fire results cannot point at another personal scope or an unrelated thread
     const original = (await f.crons.listFires(cron.id)).runs[0]!;
     const scope = scopeId("personal", foreignScope ? "bob" : "alice");
     const session = await f.sessions.getOrCreateByThread("other-thread", "dm", scope, undefined, "cron");
-    const { lease } = await f.sessions.acquireLease(session.id);
-    assert.ok(lease);
-    await f.sessions.append(lease, {
-      type: "assistant",
-      scopeLabel: scope,
-      payload: { text: JSON.stringify(activities) },
-    });
-    await f.sessions.releaseLease(lease);
+    const writer = { sessionId: session.id };
+    await f.sessions.append(writer, { kind: "AgentMessage", text: JSON.stringify(activities) });
     await f.crons.recordFire(cron.id, {
       ...original,
       firedAt: original.firedAt + 1000,

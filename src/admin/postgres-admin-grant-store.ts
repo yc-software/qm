@@ -24,7 +24,7 @@ const SCHEMA_SQL = [
 ];
 
 export function createPostgresAdminGrantStore(connectionString: string): AdminGrantPersistence {
-  const pg = createPgPool(connectionString, "admin/grants/0001", SCHEMA_SQL);
+  const pg = createPgPool(connectionString, [{ id: "admin/grants/0001", statements: SCHEMA_SQL }]);
 
   return {
     async all() {

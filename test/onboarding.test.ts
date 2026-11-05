@@ -10,27 +10,21 @@ import type { Config } from "../src/config.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { detectOnboardingStatus, setOnboardingStatus, PROACTIVE_OPENER_PROMPT } from "../src/onboarding/onboarding.ts";
 import { testConfig } from "./support/test-config.ts";
-import { createMemoryService } from "../src/memory/memory-service.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
+import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const actor = { externalId: "U1" };
 const onboardingSkillDir = join(process.cwd(), "plugins/onboarding/skills");
 
-function freshApp(overrides: Partial<Config> = {}) {
+async function freshApp(overrides: Partial<Config> = {}) {
   const config: Config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "ap-onboarding-")),
     pluginSkillDirs: [onboardingSkillDir],
     ...overrides,
   });
-  return buildApp(config);
-}
-
-async function waitForOnboardingSkill(skills: ReturnType<typeof buildApp>["skills"]): Promise<void> {
-  for (let i = 0; i < 20; i++) {
-    if ((await skills.list()).some((s) => s.manifest.name === "onboarding" && s.status === "published")) return;
-    await new Promise((r) => setTimeout(r, 0));
-  }
-  assert.fail("onboarding skill was not seeded");
+  const built = buildApp(config);
+  await built.ownSharedState();
+  return built;
 }
 
 test("onboarding memory markers are detected from readable memory bullets", () => {
@@ -41,7 +35,7 @@ test("onboarding memory markers are detected from readable memory bullets", () =
 });
 
 test("setOnboardingStatus replaces the marker fact and round-trips through detect", async () => {
-  const memory = createMemoryService(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "onboarding-mem-"))));
+  const memory = createPostgresMemoryService(testDatabaseUrl());
   const scope = scopeId("personal", "U1");
   await memory.capture(scope, ["some prefs", "onboarding:  Pending v2."], Date.UTC(2026, 5, 1));
 
@@ -57,8 +51,7 @@ test("setOnboardingStatus replaces the marker fact and round-trips through detec
 });
 
 test("a new personal DM offers onboarding through the skills index", async () => {
-  const { app, skills } = freshApp();
-  await waitForOnboardingSkill(skills);
+  const { app } = await freshApp();
 
   const sys = await app.turn({
     surface: "test",
@@ -79,8 +72,7 @@ test("the opener defers Slack setup until status can be checked without requirin
 });
 
 test("ideas web conversations bypass onboarding on every turn without completing it", async () => {
-  const { app, skills, memory } = freshApp();
-  await waitForOnboardingSkill(skills);
+  const { app, memory } = await freshApp();
   const threadRef = "web:U1:ideas:12345678-1234-4123-8123-123456789abc";
   for (let i = 0; i < 2; i++) {
     const sys = await app.turn({

@@ -5,15 +5,11 @@ import { liveEnvPath } from "./pool.ts";
 import { readEnvFile } from "../../../cli/src/util.ts";
 import { bestEffort, sha256Hex } from "./util.ts";
 import { run } from "./proc.ts";
-import { codexAuthFileForEnv, readCodexOAuthAuthFile } from "../../../src/model/chatgpt-auth-file.ts";
-import { modelRequestOverrides, resolveModel, selectableBaseModels } from "../../../src/model/pi-models.ts";
 
 export interface AssembledEnv {
   env: Record<string, string>;
   anthropicKeySource: string;
   openaiKeySource: string;
-  codexAuthSource: string;
-  harness: "pi" | "claude" | "ultimate";
   liveEnvFile: string;
   warnings: string[];
 }
@@ -24,7 +20,6 @@ const DEV_SECURITY_SECRET_KEYS = [
   "PORTAL_IDENTITY_SECRET",
   "CONNECTOR_SECRET_KEY",
   "PORTAL_SESSION_SECRET",
-  "SKILL_SIGNING_SECRET",
 ] as const;
 
 export function completeDevSecuritySecrets(env: Record<string, string>, seed: string): void {
@@ -129,52 +124,12 @@ export async function assembleEnv(opts: {
     openaiKeySource = "the worktree .env";
   }
 
-  if (!env.CODEX_AUTH_FILE && wtEnv.CODEX_AUTH_FILE) env.CODEX_AUTH_FILE = wtEnv.CODEX_AUTH_FILE;
-  let codexAuthSource = "";
-  const codexAuthCandidate = codexAuthFileForEnv({ ...env, ...opts.callerEnv });
-  const codexOAuthConfigured = Boolean(codexAuthCandidate && readCodexOAuthAuthFile(codexAuthCandidate));
-  if (codexOAuthConfigured && codexAuthCandidate) {
-    env.CODEX_AUTH_FILE = codexAuthCandidate;
-    codexAuthSource = codexAuthCandidate;
-  }
-
-  const requestedHarness = env.HARNESS || wtEnv.HARNESS;
-  let harness: "pi" | "claude" | "ultimate";
-  if (requestedHarness === "claude" || requestedHarness === "ultimate") {
-    harness = requestedHarness;
-    env.HARNESS = harness;
-    if (harness === "ultimate") {
-      for (const key of [
-        "MODEL_GATEWAY_URL",
-        "MODEL_GATEWAY_API_KEY",
-        "MODEL_GATEWAY_API_KEY_HEADER",
-        "MODEL_GATEWAY_MODELS",
-      ]) {
-        if (!env[key] && wtEnv[key]) env[key] = wtEnv[key];
-      }
-      if (!env.MODEL_GATEWAY_URL) {
-        if (!env.OPENAI_API_KEY)
-          throw new Error("HARNESS=ultimate requires a model gateway or OPENAI_API_KEY for QM brokerage");
-        env.MODEL_GATEWAY_URL = "https://api.openai.com/v1";
-        env.MODEL_GATEWAY_API_KEY = `Bearer ${env.OPENAI_API_KEY}`;
-        env.MODEL_GATEWAY_API_KEY_HEADER = "Authorization";
-        env.MODEL_GATEWAY_MODELS ||= selectableBaseModels()
-          .flatMap(({ id }) => {
-            if (resolveModel(id)?.provider !== "openai") return [];
-            return [`${id}=${modelRequestOverrides(id)?.model ?? id}`];
-          })
-          .join(",");
-      }
-      env.ULTIMATE_URL = env.ULTIMATE_URL || wtEnv.ULTIMATE_URL || "http://127.0.0.1:4747";
-    }
-  } else if (env.ANTHROPIC_API_KEY || env.OPENAI_API_KEY || codexOAuthConfigured) {
-    harness = "pi";
-    env.HARNESS = harness;
+  if (env.ANTHROPIC_API_KEY || env.OPENAI_API_KEY) {
     if (!env.ANTHROPIC_API_KEY && env.OPENAI_API_KEY && !env.MODEL_PROVIDER) env.MODEL_PROVIDER = "openai";
     if (!env.PI_CAPTURE_REQUESTS) env.PI_CAPTURE_REQUESTS = "1";
   } else {
     throw new Error(
-      `ANTHROPIC_API_KEY, OPENAI_API_KEY, or a ChatGPT login (CODEX_AUTH_FILE) is required: dev instances exercise real LLM calls by default. Export a key or add one to ${liveEnvFile}.`,
+      `ANTHROPIC_API_KEY or OPENAI_API_KEY is required: dev instances exercise real LLM calls by default. Export a key or add one to ${liveEnvFile}.`,
     );
   }
 
@@ -185,7 +140,7 @@ export async function assembleEnv(opts: {
     if (!env[k] && wtEnv[k]) env[k] = wtEnv[k];
   }
 
-  return { env, anthropicKeySource, openaiKeySource, codexAuthSource, harness, liveEnvFile, warnings };
+  return { env, anthropicKeySource, openaiKeySource, liveEnvFile, warnings };
 }
 
 export function envFileGet(path: string, key: string): string {

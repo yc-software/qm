@@ -49,6 +49,12 @@ const FAMILIES: AgentApiFamily[] = [
       },
       {
         method: "POST",
+        path: "/v1/composio/proxy",
+        summary:
+          "{url,method?,query?,headers?,body?|bodyBase64?,accountId?} sends one raw request to a connected app's own API (Google, Dropbox, Linear, Zoom) through your own connection; replies with the provider's status and body. Used by native app skills when no direct token is present",
+      },
+      {
+        method: "POST",
         path: "/v1/composio/disconnect",
         summary:
           "{accountId} permanently removes one of your own connections on a human-started turn; use when asked to remove or reset one, or to retire the old account after a reconnect",
@@ -76,13 +82,13 @@ const FAMILIES: AgentApiFamily[] = [
         method: "GET",
         path: "/v1/swarm",
         summary:
-          "own identity and all peers with editable JSON context, session IDs and sandbox IDs; ?read=1&after=0&waitMs=0&replyTo=... reads scoped messages, not only intended audience",
+          "own identity and all peers with editable JSON context, session IDs and sandbox IDs; ?read=1&after=0&waitMs=0&replyTo=... reads scoped messages, not only intended audience; replies read with replyTo count as handed to you",
       },
       {
         method: "POST",
         path: "/v1/swarm",
         summary:
-          "{action:'spawn',requestId,text,count?,context?,contexts?,forumSandboxId?,settings?,backend?,goal?} spawns one or an initial pool; {action:'context',context} updates own JSON; {action:'send',requestId,text,audience,replyTo?,notify?,goal?} sends to explicit peer ids or all, leaving each recipient's copy in its mailbox for its next turn unless notify:true or a goal wakes them (notify:false records only); {action:'control',memberId,state:'active'|'paused'|'stopped'} controls a descendant worker. Retry the same requestId and payload for idempotency.",
+          "{action:'spawn',requestId,text,count?,context?,contexts?,forumSandboxId?,settings?,backend?,goal?} spawns one or an initial pool; {action:'context',context} updates own JSON; {action:'send',requestId,text,audience,replyTo?,wake?,goal?} sends to explicit peer ids or all and wakes each recipient (wake:false leaves it in their mailboxes for their next turn); {action:'control',memberId,state:'active'|'paused'|'stopped'} controls a descendant worker. Retry the same requestId and payload for idempotency.",
       },
     ],
   },
@@ -171,7 +177,8 @@ const FAMILIES: AgentApiFamily[] = [
       {
         method: "PATCH",
         path: "/v1/projects/:id",
-        summary: "rename a project the asking person owns — body {name}",
+        summary:
+          'update a project — body {name} renames it (owner only); body {icon} sets its sidebar icon — {kind:"emoji",value} with one emoji or {kind:"custom",name} with a workspace custom emoji, or null to clear (any member)',
       },
       {
         method: "POST",
@@ -329,7 +336,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "GET",
         path: "/v1/files",
         summary:
-          "list files the asking person can reach across their contexts, split into owned and shared files; use limit and cursor query parameters to page owned files",
+          "list files the asking person can reach across their contexts, split into owned and shared files, newest first; q=<text> matches file names, and limit and cursor page owned files",
       },
       {
         method: "GET",
@@ -344,7 +351,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST",
         path: "/v1/reach",
         summary:
-          "send a teammate a DM, post to a channel, or post to a group DM RIGHT NOW — `text` plus `recipient`, `channel`, or `participants` (the group DM's other members — the group is opened for you if it doesn't exist yet, so never ask someone to create one), optionally with `files` (workspace paths or {file_id: \"stored Files ID\"}, sent all-or-nothing); `sandbox_id` selects the sandbox for paths, omitted means default, ignored for stored IDs. EXTREMELY IMPORTANT: a `channel` post broadcasts to everyone there — pick the narrowest audience that can act; a question or errand for one person goes to their DM (`recipient`), NEVER a public channel, unless the person you're helping explicitly named that channel as the destination or the message genuinely concerns the whole room; pass `threadTs` (the parent message's ts) with a `recipient`/`channel`/`participants` post to reply inside that thread instead of top-level; or react to a message instead of posting with `react:{ts,emoji}` plus a `channel`/`participants`; or retract one of your own messages with `delete:{ts}` (no target = this conversation, or name a `channel`/`participants` to delete elsewhere) — find a message's `ts` via /v1/surface-context; pass `unfurlLinks:false` to suppress Slack previews (no schedule; for later/recurring use /v1/crons)",
+          "send a teammate a DM, post to a channel, or post to a group DM RIGHT NOW — `text` plus `recipient`, `channel`, or `participants` (the group DM's other members — the group is opened for you if it doesn't exist yet, so never ask someone to create one), optionally with `files` (workspace paths or {file_id: \"stored Files ID\"}, sent all-or-nothing); `sandbox_id` selects the sandbox for paths, omitted means default, ignored for stored IDs. EXTREMELY IMPORTANT: a `channel` post broadcasts to everyone there — pick the narrowest audience that can act; a question or errand for one person goes to their DM (`recipient`), NEVER a public channel, unless the person you're helping explicitly named that channel as the destination or the message genuinely concerns the whole room; pass `threadTs` (the parent message's ts) with a `recipient`/`channel`/`participants` post to reply inside that thread instead of top-level; or react to a message instead of posting with `react:{ts,emoji}` plus a `channel`/`participants`; or retract one of your own messages with `delete:{ts}` (no target = this conversation, or name a `channel`/`participants` to delete elsewhere); or rewrite one of your own Slack messages in place with `edit:{ts}` plus `text` (the complete new message) — find a message's `ts` via /v1/surface-context; pass `unfurlLinks:false` to suppress Slack previews (no schedule; for later/recurring use /v1/crons)",
       },
     ],
   },
@@ -530,7 +537,7 @@ const FAMILIES: AgentApiFamily[] = [
   },
   {
     guidance:
-      "Save a skill when you've worked out a repeatable procedure worth keeping (a checklist, a multi-step flow, a house style) — it is advertised in the skill index and loaded with the skills tool on future turns. The skill homes in THIS conversation's scope: in a 1:1 DM it's yours alone; in a private channel or group DM it's owned by that room and every member can edit or delete it (the audit trail records who changed what); a public channel stays owner-only. Write the `body` as a plain-step recipe addressed to your future self; edit or delete it as it goes stale.",
+      "Save a skill when you've worked out a repeatable procedure worth keeping (a checklist, a multi-step flow, a house style) — it is advertised in the skill index and loaded with the skills tool on future turns. The skill homes in THIS conversation's scope: in a 1:1 DM it's yours alone; in a private channel or group DM it's owned by that room and every member can edit or delete it (the audit trail records who changed what); a public channel stays owner-only. Write the `body` as a plain-step recipe addressed to your future self; edit or delete it as it goes stale. The skills tool's save and edit actions make the POST and PUT calls for you.",
     routes: [
       {
         method: "POST",
@@ -628,7 +635,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "PUT",
         path: "/v1/admin/scopes/:scopeId/:resource",
         summary:
-          "govern a scope: soul | security-posture | command-policy | egress | connectors | service-credentials | runtime ({ harnessId, modelId }) | approved-harnesses ({ ids })",
+          "govern a scope: soul | security-posture | command-policy | egress | connectors | service-credentials | runtime ({ modelId })",
       },
       {
         method: "GET|POST|PATCH|DELETE",
@@ -641,11 +648,6 @@ const FAMILIES: AgentApiFamily[] = [
         path: "/v1/admin/sessions?scope=",
         summary:
           "conversation metadata; /v1/admin/sessions/:id for a transcript and /:id/llm for captured prompts (DM or effective Open sharing)",
-      },
-      {
-        method: "GET",
-        path: "/v1/admin/runs?scope=",
-        summary: "queued / in-flight / recent runs (DM or effective Open sharing)",
       },
       {
         method: "GET",

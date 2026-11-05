@@ -12,12 +12,18 @@ import { testConfig } from "./support/test-config.ts";
 import { mintCapabilityToken, BLOB_TRANSFER_AUD } from "../src/auth/capability-token.ts";
 import { CAPABILITY_HEADER } from "../src/api/contract.ts";
 import { scopeId } from "../src/types.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const SECRET = "blob-auth-secret".repeat(3);
 
 function start(): { base: string; close: () => Promise<void> } {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "blobauth-")), signingSecret: SECRET }));
-  const server = createServer(built.app, { signingSecret: SECRET, blobTransfer: built.blobTransfer });
+  const server = createServer(built.app, {
+    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+    signingSecret: SECRET,
+    blobTransfer: built.blobTransfer,
+  });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   return { base, close: () => new Promise<void>((r) => server.close(() => r())) };

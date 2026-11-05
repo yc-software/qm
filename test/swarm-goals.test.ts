@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { assignedGoal, createGoalRecord } from "../src/harness/goal.ts";
+import { assignedGoal, createGoalRecord } from "../src/agent/goal.ts";
 import { createSwarmGoalInbox } from "../src/swarms/swarm-goal-inbox.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
 
@@ -30,8 +30,8 @@ test("goals are validated, and any member can give any worker, itself included, 
     /invalid goal/,
   );
   await assert.rejects(
-    f.service.send(f.caller, { requestId: "silent", audience: [first!.id], text: "go", notify: false, goal }),
-    /needs notify/,
+    f.service.send(f.caller, { requestId: "silent", audience: [first!.id], text: "go", wake: false, goal }),
+    /must wake/,
   );
   await assert.rejects(
     f.service.send(f.caller, { requestId: "root", audience: [f.root.id], text: "go", goal }),
@@ -85,7 +85,7 @@ test("a running goal turn takes its worker's queued messages once, under its lea
     attempt: claimed.attempts,
   };
   const send = (requestId: string, text: string, extra = {}) =>
-    f.service.send(f.caller, { requestId, audience: [worker!.id], text, notify: true, ...extra });
+    f.service.send(f.caller, { requestId, audience: [worker!.id], text, wake: true, ...extra });
   const earlier = await send("earlier", "already handled in its own turn");
   await f.service.sweep();
   const earlierRun = (await f.runs.list()).find((run) => run.request.swarm?.messageId === earlier.id)!;
@@ -141,7 +141,7 @@ test("the goal inbox holds a blocked message and everything after it, and settle
     attempt: claimed.attempts,
   };
   const send = (requestId: string, text: string) =>
-    f.service.send(f.caller, { requestId, audience: [worker!.id], text, notify: true });
+    f.service.send(f.caller, { requestId, audience: [worker!.id], text, wake: true });
   const ok = await send("ok", "first note");
   const blocked = await send("blocked", "BLOCK this one");
   const after = await send("after", "after the blocked one");
@@ -229,7 +229,7 @@ test("pausing a worker withdraws its unstarted deliveries and resuming delivers 
   const f = await swarmFixture();
   const [worker] = await f.service.spawn(f.caller, { requestId: "initial", text: "lane A" });
   await f.service.sweep();
-  const note = await f.service.send(f.caller, { requestId: "n", audience: [worker!.id], text: "next", notify: true });
+  const note = await f.service.send(f.caller, { requestId: "n", audience: [worker!.id], text: "next", wake: true });
   await f.service.sweep();
   const runFor = async () => (await f.runs.list()).find((run) => run.request.swarm?.messageId === note.id);
   assert.ok(await runFor());
@@ -254,7 +254,7 @@ test("a message a paused goal turn already saw is handed over, not delivered aga
     runLeaseToken: claimed.leaseToken!,
     attempt: claimed.attempts,
   };
-  const note = await f.service.send(f.caller, { requestId: "n", audience: [worker!.id], text: "next", notify: true });
+  const note = await f.service.send(f.caller, { requestId: "n", audience: [worker!.id], text: "next", wake: true });
   await f.service.sweep();
   assert.deepEqual(
     (await f.service.queuedMessages(input)).map((message) => message.id),
@@ -285,7 +285,7 @@ test("a message handed over while its run is being withdrawn by a pause stays ha
     runLeaseToken: claimed.leaseToken!,
     attempt: claimed.attempts,
   };
-  const note = await f.service.send(f.caller, { requestId: "n", audience: [worker!.id], text: "next", notify: true });
+  const note = await f.service.send(f.caller, { requestId: "n", audience: [worker!.id], text: "next", wake: true });
   await f.service.sweep();
   const withdraw = f.runs.withdraw.bind(f.runs);
   f.runs.withdraw = async (runId, options) => {
@@ -307,7 +307,7 @@ test("a pause that loses its process mid-withdraw still delivers the message on 
   const f = await swarmFixture();
   const [worker] = await f.service.spawn(f.caller, { requestId: "initial", text: "lane A" });
   await f.service.sweep();
-  const note = await f.service.send(f.caller, { requestId: "n", audience: [worker!.id], text: "next", notify: true });
+  const note = await f.service.send(f.caller, { requestId: "n", audience: [worker!.id], text: "next", wake: true });
   await f.service.sweep();
   const runFor = async () => (await f.runs.list()).find((run) => run.request.swarm?.messageId === note.id);
   assert.ok(await runFor());

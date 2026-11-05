@@ -20,12 +20,6 @@ export async function storeUiState(
   id: string,
   next: PersistedUiState,
 ): Promise<{ ok: boolean; updatedAt: number }> {
-  if (!store.update || !store.insertIfAbsent) {
-    const existing = await store.get(id);
-    if (existing && existing.updatedAt > next.updatedAt) return { ok: false, updatedAt: existing.updatedAt };
-    await store.put(id, next);
-    return { ok: true, updatedAt: next.updatedAt };
-  }
   for (;;) {
     let refusedAt = 0;
     const updated = await store.update(id, (existing) => {

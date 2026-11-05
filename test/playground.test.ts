@@ -1,17 +1,18 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
-import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
 import {
   createPlaygroundArtifact,
   normalizePlaygroundTitle,
   validatePlaygroundHtml,
 } from "../src/playgrounds/playground.ts";
+import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const HTML = "<!doctype html><button id='go'>Go</button><script>go.onclick=()=>go.textContent='Done'</script>";
 
 test("playgrounds are stored unchanged as ordinary scoped file artifacts", async () => {
-  const store = createMemoryFileArtifactStore(createMemoryDurableByteStore());
+  const store = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
   const result = await createPlaygroundArtifact(store, {
     title: "  Tiny   demo  ",
     html: HTML,

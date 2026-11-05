@@ -1,6 +1,8 @@
-import { errMessage } from "../util/errors.ts";
+import { createSelfApiCall, type SelfApiResponse } from "./self-api.ts";
 import { Type, type TSchema } from "typebox";
 import { Check } from "typebox/value";
+import { isObj } from "../util/objects.ts";
+import { compactItem, type Item } from "../sessions/items.ts";
 
 const string = Type.String();
 const optionalString = Type.Optional(string);
@@ -87,7 +89,6 @@ export const adminOperations = {
     "/sessions/:id/llm",
     scopedId,
   ),
-  runs: operation("Read run history.", "GET", "/runs", scope),
   files: operation("List stored files, optionally matching q.", "GET", "/files", { ...scope, q: optionalString }),
   file: operation("Read a stored text file.", "GET", "/files/read", scopedId),
   upload_file: operation("Register a staged blob as a scope file.", "POST", "/files/upload", {
@@ -120,7 +121,6 @@ export const adminOperations = {
     offset: Type.Optional(Type.Integer({ minimum: 0 })),
   }),
   egress: operation("Read outbound-destination audit.", "GET", "/egress", scope),
-  retention: operation("Read usage and retention.", "GET", "/retention"),
   spend: operation("Read spend for a date range.", "GET", "/spend", {
     from: optionalString,
     to: optionalString,
@@ -152,6 +152,15 @@ export const adminOperations = {
     value: object,
   }),
   reset_user: operation("Reset a user's onboarding data (destructive).", "POST", "/users/:id/reset", { id: string }),
+  offboard_user: operation(
+    "Offboard a departed person: preview by default, value.apply true to act. See the admin skill.",
+    "POST",
+    "/users/:id/offboard",
+    { id: string, value: Type.Optional(Type.Object({ apply: Type.Boolean() }, { additionalProperties: false })) },
+  ),
+  reactivate_user: operation("Turn a deactivated person's sign-in back on.", "POST", "/users/:id/reactivate", {
+    id: string,
+  }),
   sandboxes: operation("List a scope's sandboxes.", "GET", "/sandboxes/:scope", scope),
   create_sandbox: operation("Create a sandbox in a scope.", "POST", "/sandboxes/:scope", {
     ...scope,
@@ -179,7 +188,6 @@ export const adminOperations = {
       { additionalProperties: false },
     ),
   }),
-  slack_emoji: operation("List Slack emoji.", "GET", "/slack-emoji"),
   model_providers: operation("Read model-provider metadata.", "GET", "/model-providers"),
   custom_providers: operation("Read custom model-provider metadata.", "GET", "/custom-providers"),
   mcp_servers: operation("Read MCP-server metadata.", "GET", "/mcp-servers"),
@@ -218,13 +226,6 @@ export const adminOperations = {
     "/model-registry/:id",
     { id: string, value: object },
   ),
-  auto_flagger_test: operation(
-    "Test a candidate security screener on recent samples (billable).",
-    "POST",
-    "/scopes/:scope/auto-flagger/test",
-    { ...scope, value: object },
-  ),
-  shadow_deliveries: operation("Read shadow-delivery diagnostics.", "GET", "/deliveries/shadow", scope),
   slack_mirror: operation("List mirrored Slack containers.", "GET", "/slack-mirror", scope),
   slack_messages: operation("Read mirrored Slack messages.", "GET", "/slack-mirror/messages", {
     ...scope,
@@ -241,14 +242,6 @@ export const adminOperations = {
     beforeId: Type.Optional(Type.Integer()),
     limit,
   }),
-  ack_emoji_picks: operation("Read acknowledgment emoji decisions.", "GET", "/ack-emoji-picks", {
-    ...scope,
-    container: optionalString,
-    outcome: optionalString,
-    before: Type.Optional(Type.Integer()),
-    beforeId: Type.Optional(Type.Integer()),
-    limit,
-  }),
 } satisfies Record<string, Operation>;
 
 export interface AdminToolAccess {
@@ -256,25 +249,16 @@ export interface AdminToolAccess {
   operationsAvailable: boolean;
 }
 
-type AdminCall = (
-  input: Record<string, unknown>,
-  signal?: AbortSignal,
-) => Promise<{ status: number; body: unknown; requestId?: string }>;
+type AdminCall = (input: Record<string, unknown>, signal?: AbortSignal) => Promise<SelfApiResponse>;
 
-export function createAdminCall(
-  baseUrl: string,
-  capability: string,
-  authorizeAction: (action: string) => boolean = () => true,
-): AdminCall {
-  while (baseUrl.endsWith("/")) baseUrl = baseUrl.slice(0, -1);
+export function createAdminCall(baseUrl: string, capability: string): AdminCall {
+  const request = createSelfApiCall(baseUrl, capability);
   return async (input, signal) => {
     const { action, retrySafe: _retrySafe, ...params } = input;
     const op = Object.hasOwn(adminOperations, String(action))
       ? adminOperations[action as keyof typeof adminOperations]
       : undefined;
     if (!op || !Check(op.parameters, params)) throw new Error("Invalid admin action or arguments");
-    if (!authorizeAction(String(action)))
-      throw new Error(`Admin action ${String(action)} is not available on this turn`);
     if (action === "configure" && (params.resource === "service-credentials" || params.resource === "connectors"))
       throw new Error("Secret-bearing configuration uses the existing admin self-API, not native tool arguments");
     if (action === "session" && params.limit === undefined) params.limit = 50;
@@ -285,32 +269,13 @@ export function createAdminCall(
       if (key === "value") continue;
       if (path.includes(`:${key}`)) {
         const segment = String(value);
-        if (!segment || segment === "." || segment === "..") throw new Error("Invalid admin resource identifier");
+        if (!segment) throw new Error("Invalid admin resource identifier");
         path = path.replace(`:${key}`, encodeURIComponent(segment));
       } else query.set(key === "auditAction" ? "action" : key, String(value));
     }
-    const response = await fetch(`${baseUrl}/v1/admin${path}?${query}`, {
-      method: op.method,
-      headers: { "x-agent-capability": capability, "content-type": "application/json" },
-      ...(params.value !== undefined ? { body: JSON.stringify(params.value) } : {}),
-      redirect: "error",
-      signal,
-    });
-    const requestId = response.headers.get("x-request-id") ?? response.headers.get("request-id") ?? undefined;
-    const result = { status: response.status, ...(requestId ? { requestId } : {}) };
-    let raw: string;
-    try {
-      raw = await response.text();
-    } catch (error) {
-      throw new Error(
-        `Admin HTTP ${response.status}${requestId ? ` request ${requestId}` : ""}: ${errMessage(error)}`,
-        { cause: error },
-      );
-    }
-    try {
-      return { ...result, body: JSON.parse(raw) as unknown };
-    } catch {
-      return { ...result, body: raw };
-    }
+    const response = await request(op.method, `/v1/admin${path}?${query}`, params.value, signal);
+    if (action === "session" && isObj(response.body) && Array.isArray(response.body.items))
+      return { ...response, body: { ...response.body, items: (response.body.items as Item[]).map(compactItem) } };
+    return response;
   };
 }

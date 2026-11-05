@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { renderGatewayContext } from "../src/core/gateway-context.ts";
+import { renderGatewayContext } from "../src/core/orchestrator/prompt-blocks.ts";
 import { buildApp } from "./support/build-app.ts";
 import type { Config } from "../src/config.ts";
 import { scopeId } from "../src/types.ts";
@@ -61,7 +61,7 @@ function freshApp() {
   return buildApp(config);
 }
 
-test("gateway context flows into the system prompt the harness sees", async () => {
+test("gateway context flows into the system prompt the agent sees", async () => {
   const { app } = freshApp();
   const res = await app.turn({
     surface: "slack",
@@ -109,12 +109,14 @@ test("triggered destination turns tell the agent to return the deliverable, not 
     actor: { externalId: "U1" },
     conversation: { kind: "dm", threadRef: "cron:c1:slot" },
     text: "!sysprompt",
-    triggered: true,
-    triggerDestination: {
-      type: "principal",
-      target: "U1",
-      audienceScopeId: scopeId("personal", "U1"),
-      onBehalfOf: "U1",
+    origin: {
+      kind: "automation",
+      destination: {
+        type: "principal",
+        target: "U1",
+        audienceScopeId: scopeId("personal", "U1"),
+        onBehalfOf: "U1",
+      },
     },
   });
   assert.equal(res.status, "ok");
@@ -125,7 +127,10 @@ test("triggered destination turns tell the agent to return the deliverable, not 
 
 test("a web turn's default delivery destination is its own web session", async () => {
   const { deliveryCandidatesFor } = await import("../src/core/orchestrator/turn-helpers.ts");
-  const delivery = deliveryCandidatesFor("web", "web:session-1", undefined, scopeId("personal", "a@example.com"));
+  const delivery = deliveryCandidatesFor(
+    { surface: "web", deliveryTarget: "web:session-1" },
+    scopeId("personal", "a@example.com"),
+  );
   const chosen = delivery.candidates.find((c) => c.key === delivery.defaultKey);
   assert.equal(chosen?.type, "web");
   assert.equal(chosen?.target, "web:session-1");

@@ -54,20 +54,20 @@ test("compaction stops automatic document replay while preserving the original f
     text: "summarize",
     attachments: [{ name: "notes.txt", mimetype: "text/plain", sizeBytes: blob.sizeBytes, blobId: blob.blobId }],
   });
-  const entries = await built.sessions.getEntries(first.sessionId!);
+  const items = await built.sessions.getItems(first.sessionId!);
   const attachment = (
-    entries.find((entry) => entry.type === "user")!.payload as {
+    items.find((item) => item.kind === "UserMessage")!.body as {
       attachments: Array<{ artifactId: string }>;
     }
   ).attachments[0]!;
-  const { lease } = await built.sessions.acquireLease(first.sessionId!, "compaction");
-  assert.ok(lease);
-  await built.sessions.append(lease, {
-    type: "system",
-    payload: { kind: "context_summary", text: "Earlier user supplied a document.", throughSeq: entries.at(-1)!.seq },
-    scopeLabel: entries[0]!.scopeLabel,
-  });
-  await built.sessions.releaseLease(lease);
+  await built.sessions.append(
+    { sessionId: first.sessionId! },
+    {
+      kind: "ContextCompaction",
+      text: "Earlier user supplied a document.",
+      throughSeq: items.at(-1)!.seq,
+    },
+  );
   const result = await built.app.turn({ ...request, text: "what was in the document?" });
   assert.equal(result.status, "ok");
   const calls = (await built.sessions.listLlmRequests(result.sessionId!)).filter((record) => record.model === "mock");
@@ -79,8 +79,8 @@ test("compaction stops automatic document replay while preserving the original f
   const chunks = [];
   for await (const chunk of opened.stream) chunks.push(Buffer.from(chunk));
   assert.equal(Buffer.concat(chunks).toString(), "QUARTZ-731");
-  const original = await built.sessions.getEntry(first.sessionId!, entries[0]!.seq);
-  assert.deepEqual(original, entries[0]);
+  const original = await built.sessions.getItem(first.sessionId!, items[0]!.seq);
+  assert.deepEqual(original, items[0]);
 });
 
 test("compaction during a turn stops document replay immediately", async () => {
@@ -96,30 +96,23 @@ test("compaction during a turn stops document replay immediately", async () => {
     text: "summarize",
     attachments: [{ name: "notes.txt", mimetype: "text/plain", sizeBytes: blob.sizeBytes, blobId: blob.blobId }],
   });
-  const entries = await built.sessions.getEntries(first.sessionId!);
+  const items = await built.sessions.getItems(first.sessionId!);
   const attachment = (
-    entries.find((entry) => entry.type === "user")!.payload as {
+    items.find((item) => item.kind === "UserMessage")!.body as {
       attachments: Array<{ artifactId: string }>;
     }
   ).attachments[0]!;
-  const { lease } = await built.sessions.acquireLease(first.sessionId!, "compaction");
-  assert.ok(lease);
+  const writer = { sessionId: first.sessionId! };
   for (let i = 0; i < 8; i++) {
-    await built.sessions.append(lease, {
-      type: i % 2 === 0 ? "user" : "assistant",
-      payload: { text: "Synthetic conversation context. ".repeat(2000) },
-      scopeLabel: entries[0]!.scopeLabel,
+    await built.sessions.append(writer, {
+      kind: i % 2 === 0 ? "UserMessage" : "AgentMessage",
+      text: "Synthetic conversation context. ".repeat(2000),
     });
   }
-  await built.sessions.releaseLease(lease);
   const result = await built.app.turn({ ...request, text: "what was in the document?" });
   assert.equal(result.status, "ok");
-  const compacted = await built.sessions.getEntries(first.sessionId!);
-  assert.ok(
-    compacted.some(
-      (entry) => entry.type === "system" && (entry.payload as { kind?: string }).kind === "context_summary",
-    ),
-  );
+  const compacted = await built.sessions.getItems(first.sessionId!);
+  assert.ok(compacted.some((item) => item.kind === "ContextCompaction"));
   const calls = (await built.sessions.listLlmRequests(result.sessionId!)).filter((record) => record.model === "mock");
   assert.doesNotMatch(JSON.stringify(calls.at(-1)?.promptEnvelope), /"documents":/);
   const artifact = await built.files.get(attachment.artifactId);
@@ -129,8 +122,8 @@ test("compaction during a turn stops document replay immediately", async () => {
   const chunks = [];
   for await (const chunk of opened.stream) chunks.push(Buffer.from(chunk));
   assert.equal(Buffer.concat(chunks).toString(), "QUARTZ-731");
-  const original = await built.sessions.getEntry(first.sessionId!, entries[0]!.seq);
-  assert.deepEqual(original, entries[0]);
+  const original = await built.sessions.getItem(first.sessionId!, items[0]!.seq);
+  assert.deepEqual(original, items[0]);
 });
 
 for (const extension of ["docx", "pdf"]) {

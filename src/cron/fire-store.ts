@@ -1,4 +1,4 @@
-import type { CronFireLogEntry } from "../types.ts";
+import type { CronFireLogEntry } from "../triggers/types.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { pgTextSafe } from "../util/text.ts";
 
@@ -14,104 +14,12 @@ export interface CronFireStore {
   beginExclusive(cronId: string, entry: CronFireLogEntry, staleRunningMs: number): Promise<BeginFireResult>;
 
   sweepStranded(now: number, staleRunningMs: number, note: string): Promise<number>;
+  listRunning(firedAfter: number): Promise<CronFireRecord[]>;
 
   pruneEnded(opts: { endedBefore: number; keepPerCron: number }): Promise<number>;
-  backfill(cronId: string, entries: readonly CronFireLogEntry[]): Promise<void>;
   listByCron(cronId: string, opts?: { limit?: number }): Promise<{ runs: CronFireLogEntry[]; total: number }>;
   listByThreadRefs(threadRefs: readonly string[]): Promise<CronFireRecord[]>;
   latestForThread(cronId: string, threadRef: string): Promise<CronFireLogEntry | undefined>;
-}
-
-function fireOrder(a: CronFireLogEntry, b: CronFireLogEntry): number {
-  if (a.firedAt !== b.firedAt) return a.firedAt - b.firedAt;
-  if (a.fireKey < b.fireKey) return -1;
-  if (a.fireKey > b.fireKey) return 1;
-  return 0;
-}
-
-function backfillMayReplace(existing: CronFireLogEntry, incoming: CronFireLogEntry): boolean {
-  if (incoming.firedAt < existing.firedAt) return false;
-  return existing.endedAt === undefined || incoming.endedAt !== undefined;
-}
-
-export function createMemoryCronFireStore(): CronFireStore {
-  const byCron = new Map<string, Map<string, CronFireLogEntry>>();
-  const firesOf = (cronId: string): Map<string, CronFireLogEntry> => {
-    let fires = byCron.get(cronId);
-    if (!fires) {
-      fires = new Map();
-      byCron.set(cronId, fires);
-    }
-    return fires;
-  };
-  return {
-    async record(cronId, entry) {
-      firesOf(cronId).set(entry.fireKey, { ...entry });
-    },
-    async beginExclusive(cronId, entry, staleRunningMs) {
-      const fires = firesOf(cronId);
-      const running = [...fires.values()]
-        .sort(fireOrder)
-        .findLast(
-          (e) => e.fireKey !== entry.fireKey && e.status === "running" && entry.firedAt - e.firedAt < staleRunningMs,
-        );
-      if (running) return { begun: false, running: { ...running } };
-      fires.set(entry.fireKey, { ...entry });
-      return { begun: true };
-    },
-    async sweepStranded(now, staleRunningMs, note) {
-      let swept = 0;
-      for (const fires of byCron.values()) {
-        for (const [fireKey, entry] of fires) {
-          if (entry.status !== "running" || now - entry.firedAt < staleRunningMs) continue;
-          fires.set(fireKey, { ...entry, status: "failed", endedAt: now, note });
-          swept += 1;
-        }
-      }
-      return swept;
-    },
-    async pruneEnded({ endedBefore, keepPerCron }) {
-      let pruned = 0;
-      for (const fires of byCron.values()) {
-        const newestFirst = [...fires.values()].sort(fireOrder).reverse();
-        for (const entry of newestFirst.slice(Math.max(keepPerCron, 0))) {
-          if (entry.endedAt === undefined || entry.endedAt >= endedBefore) continue;
-          fires.delete(entry.fireKey);
-          pruned += 1;
-        }
-      }
-      return pruned;
-    },
-    async backfill(cronId, entries) {
-      const fires = firesOf(cronId);
-      for (const entry of entries) {
-        const existing = fires.get(entry.fireKey);
-        if (existing && !backfillMayReplace(existing, entry)) continue;
-        fires.set(entry.fireKey, { ...entry });
-      }
-    },
-    async listByCron(cronId, opts) {
-      const all = [...(byCron.get(cronId)?.values() ?? [])].sort(fireOrder).map((entry) => ({ ...entry }));
-      let runs = all;
-      if (opts?.limit !== undefined) runs = opts.limit > 0 ? all.slice(-opts.limit) : [];
-      return { runs, total: all.length };
-    },
-    async listByThreadRefs(threadRefs) {
-      const wanted = new Set(threadRefs);
-      const records: CronFireRecord[] = [];
-      for (const [cronId, fires] of byCron) {
-        for (const entry of fires.values()) {
-          if (wanted.has(entry.threadRef)) records.push({ ...entry, cronId });
-        }
-      }
-      return records.sort(fireOrder);
-    },
-    async latestForThread(cronId, threadRef) {
-      const matches = [...(byCron.get(cronId)?.values() ?? [])].filter((e) => e.threadRef === threadRef);
-      const latest = matches.sort(fireOrder).at(-1);
-      return latest ? { ...latest } : undefined;
-    },
-  };
 }
 
 interface FireColumn {
@@ -143,10 +51,12 @@ const UPSERT_FIRE = `INSERT INTO cron_fires (${FIRE_COLUMNS})
    ON CONFLICT (cron_id, fire_key) DO UPDATE
      SET ${UPSERT_SET}`;
 
-const BACKFILL_CHUNK = 500;
-
 function fireParams(cronId: string, entry: CronFireLogEntry): unknown[] {
   return FIRE_COLUMN_DEFS.map((c) => c.value(cronId, entry));
+}
+
+function rowToRecord(r: Record<string, unknown>): CronFireRecord {
+  return { ...rowToEntry(r), cronId: String(r.cron_id) };
 }
 
 function rowToEntry(r: Record<string, unknown>): CronFireLogEntry {
@@ -267,6 +177,15 @@ export function createPostgresCronFireStore(connectionString: string): CronFireS
       );
       return result.rowCount;
     },
+    async listRunning(firedAfter) {
+      const rows = await q(
+        `SELECT ${FIRE_COLUMNS} FROM cron_fires
+          WHERE status = 'running' AND fired_at > $1
+          ORDER BY fired_at, fire_key`,
+        [firedAfter],
+      );
+      return rows.map(rowToRecord);
+    },
     async pruneEnded({ endedBefore, keepPerCron }) {
       return withPgTransaction(await pool(), async (client) => {
         const legacy = await client.query("SELECT to_regclass('cron_fire_log') IS NOT NULL AS present");
@@ -292,21 +211,6 @@ export function createPostgresCronFireStore(connectionString: string): CronFireS
         }
         return result.rowCount ?? 0;
       });
-    },
-    async backfill(cronId, entries) {
-      for (let start = 0; start < entries.length; start += BACKFILL_CHUNK) {
-        const chunk = entries.slice(start, start + BACKFILL_CHUNK);
-        await query(
-          `INSERT INTO cron_fires (${FIRE_COLUMNS})
-           SELECT * FROM unnest(${FIRE_COLUMN_DEFS.map((c, i) => `$${i + 1}::${c.cast}[]`).join(", ")})
-           ON CONFLICT (cron_id, fire_key) DO UPDATE
-             SET ${UPSERT_SET}
-           WHERE EXCLUDED.fired_at >= cron_fires.fired_at
-             AND (cron_fires.ended_at IS NULL OR EXCLUDED.ended_at IS NOT NULL)
-             AND ${ROW_OF("cron_fires")} IS DISTINCT FROM ${ROW_OF("EXCLUDED")}`,
-          FIRE_COLUMN_DEFS.map((c) => chunk.map((entry) => c.value(cronId, entry))),
-        );
-      }
     },
     async listByCron(cronId, opts) {
       if (opts?.limit !== undefined && opts.limit <= 0) {
@@ -340,7 +244,7 @@ export function createPostgresCronFireStore(connectionString: string): CronFireS
           ORDER BY fired_at, fire_key`,
         [[...threadRefs]],
       );
-      return rows.map((r) => ({ ...rowToEntry(r), cronId: r.cron_id as string }));
+      return rows.map(rowToRecord);
     },
     async latestForThread(cronId, threadRef) {
       const rows = await q(

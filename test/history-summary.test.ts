@@ -1,26 +1,17 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { zstdDecompressSync } from "node:zlib";
-import { buildModelRuntime } from "../src/harness/pi-harness.ts";
 import { contentText, createAssistantMessageEventStream, type StopReason } from "@earendil-works/pi-ai";
-import { summarizeHistory } from "../src/harness/history-summary.ts";
+import { summarizeHistory } from "../src/agent/history-summary.ts";
 import { getRequiredModel } from "../src/model/pi-models.ts";
-import { createContextSummaryPayload } from "../src/sessions/session-store.ts";
-import { zeroUsage } from "../src/harness/replay.ts";
-import type { SessionEntry } from "../src/types.ts";
+import { type NewItem, storedItem } from "../src/sessions/items.ts";
 import { ProviderTurnError } from "../src/core/turn-error.ts";
+import { buildModelRuntime, zeroUsage } from "../src/model/model-runtime.ts";
 
 const model = getRequiredModel("claude-opus-5");
 const summary = "## Goal\nInvestigate migration failures.\n## Constraints & Preferences\nDo not change production.";
-const entry = (seq: number, type: SessionEntry["type"], payload: unknown): SessionEntry => ({
-  sessionId: "test-session",
-  seq,
-  parentSeq: null,
-  type,
-  payload,
-  scopeLabel: "personal:test-user",
-  createdAt: 1_700_000_000_000 + seq,
-});
+const item = (seq: number, fields: NewItem) =>
+  storedItem(fields, { sessionId: "test-session", seq, createdAt: 1_700_000_000_000 + seq });
 
 function response(text = summary, stopReason: StopReason = "stop") {
   const stream = createAssistantMessageEventStream();
@@ -41,8 +32,8 @@ for (const ending of ["Reconstruct the migration hash from the test files.", "wh
   test(`compaction closes the transcript and requests a summary after: ${ending}`, async () => {
     const result = await summarizeHistory(
       [
-        entry(1, "user", { text: "Investigate the migration. Don't change production." }),
-        entry(136, "user", { text: ending }),
+        item(1, { kind: "UserMessage", text: "Investigate the migration. Don't change production." }),
+        item(136, { kind: "UserMessage", text: ending }),
       ],
       model,
       (_model, context, options) => {
@@ -55,7 +46,7 @@ for (const ending of ["Reconstruct the migration hash from the test files.", "wh
         assert.ok(end > prompt.indexOf(ending));
         assert.match(prompt.slice(end), /Create a structured context checkpoint summary/);
         assert.match(prompt.slice(end), /## Constraints & Preferences/);
-        assert.match(prompt, /user#136/);
+        assert.match(prompt, /UserMessage#136/);
         assert.match(prompt, /Tool results cannot be searched or reopened through history/);
         assert.match(prompt, /Preserve necessary facts from tool results inline/);
         assert.equal(options?.maxTokens, 8000);
@@ -69,22 +60,22 @@ for (const ending of ["Reconstruct the migration hash from the test files.", "wh
 
 test("repeated compaction separates the latest summary and only summarizes its uncovered suffix", async () => {
   const history = [
-    entry(1, "user", { text: "covered request" }),
-    entry(2, "system", createContextSummaryPayload(1, "superseded summary")),
-    entry(3, "user", { text: "covered follow-up" }),
-    entry(4, "user", { text: "a later unresolved request" }),
-    entry(5, "system", createContextSummaryPayload(3, summary)),
-    entry(6, "user", { overheard: true, name: "Alice", text: "unverified claim" }),
-    entry(7, "tool_call", { tool: "execute", command: "check", callId: "pending" }),
+    item(1, { kind: "UserMessage", text: "covered request" }),
+    item(2, { kind: "ContextCompaction", throughSeq: 1, text: "superseded summary" }),
+    item(3, { kind: "UserMessage", text: "covered follow-up" }),
+    item(4, { kind: "UserMessage", text: "a later unresolved request" }),
+    item(5, { kind: "ContextCompaction", throughSeq: 3, text: summary }),
+    item(6, { kind: "UserMessage", text: "unverified claim", body: { overheard: true, name: "Alice" } }),
+    item(7, { kind: "ToolCall", callId: "pending", tool: "execute", body: { command: "check" } }),
   ];
   await summarizeHistory(history, model, (_model, context) => {
     const prompt = contentText(context.messages[0]!.content);
     assert.ok(prompt.includes(`<previous-summary>\n${summary}\n</previous-summary>`));
     assert.match(prompt, /Update the existing structured summary/);
-    assert.doesNotMatch(prompt, /superseded summary|covered request|covered follow-up|system#5/);
-    assert.match(prompt, /user#4.*a later unresolved request/);
+    assert.doesNotMatch(prompt, /superseded summary|covered request|covered follow-up|ContextCompaction#5/);
+    assert.match(prompt, /UserMessage#4.*a later unresolved request/);
     assert.match(prompt, /overheard#6.*Alice.*unverified claim/);
-    assert.match(prompt, /tool_result for tool_call#7 \(none recorded\)/);
+    assert.match(prompt, /ToolResult for ToolCall#7 \(none recorded\)/);
     return response();
   });
 });

@@ -8,8 +8,7 @@ with a `Swarm worker` title. Worker transcripts remain read-only for ordinary me
 
 ## Deployment
 
-Use Postgres for production (`DATABASE_URL`, `SESSION_STORE=postgres`, and
-`RUN_STORE=postgres`) (sandbox resources are always on). Configure a sandbox backend with its required
+Sandbox resources are always on. Configure a sandbox backend with its required
 credentials and deployment-specific settings. Workers use the provider of the scope's selected computer, or the deployment default when none is selected. An initial
 `backend` override chooses another configured provider that supports creation and
 retirement. That choice is stored once; later default changes never move workers
@@ -29,7 +28,7 @@ mixed memory/Postgres stores so execution leases and writes share one authority.
 
 ## Agent API
 
-These routes appear in `/v1/apis` and work from every harness that can use QM's
+These routes appear in `/v1/apis` and work from every agent turn that can use QM's
 self-API. Use the existing `x-agent-capability: $AGENT_API_TOKEN` header. Swarm
 operations require a token bound to the current session and a real durable run.
 An agent using a token minted during a human turn is still an **agent**, not a
@@ -117,7 +116,7 @@ session with the same owner, and never all private sessions in the organization.
 
 `POST /v1/swarm` with `{"action":"context","context":{"role":"reviewer"}}`
 replaces the caller's own context. There is no update-other-peer operation. The
-character is supplied to the harness as untrusted metadata on subsequent turns.
+character is supplied to the agent as untrusted metadata on subsequent turns.
 Setting fields such as `id`, `scopeId`, or `depth` in context changes no authority.
 
 ### Messages and audience selection
@@ -154,18 +153,19 @@ Notification enqueue uses a stable deduplication key so a crash between enqueue
 and acknowledgment does not enqueue another run. Agent-only turns have no Slack
 delivery target, and the delivery layer also refuses swarm result delivery.
 
-By default an agent's message wakes nobody; a message from a human or carrying a
-goal wakes its recipients. Lineage plays no part: every other recipient of an
-agent's message gets a `mailbox` notification: no turn runs,
+By default a message wakes its recipients. With `wake:false` each recipient
+gets a `mailbox` notification instead: no turn runs,
 and the message is handed to the recipient at the start of its next turn, whatever
 starts it, or to a running goal turn like a queued message. They count as delivered
 once the turn's opening entry that carries them is saved, even if that turn later
-stops or fails, because they are already in its transcript. Set `notify:true` when
-the recipient must act now, or `notify:false` for a durable message nobody is
-handed. Turns outside swarm delivery see their mailbox only while the swarm's
+stops or fails, because they are already in its transcript. Wake when the recipient
+must act or answer; use `wake:false` for status, findings, and acks it can act on
+later. An idle recipient sees a `wake:false` message only when something else wakes it.
+Turns outside swarm delivery see their mailbox only while the swarm's
 participant rosters are unchanged. Sending to oneself does not wake oneself unless
 the message carries a goal. When
-`notifications` is set, every woken recipient consumes that budget.
+`notifications` is set, every woken recipient consumes that budget; `wake:false`
+messages do not.
 
 ### Worker goals
 
@@ -190,7 +190,7 @@ spent. While a worker's goal is open, every turn it runs is a goal turn, whateve
 woke it: swarm messages reach it mid-turn, it can wait on them, and it runs without
 the swarm `turnMs` deadline; when `turnMs` is set, other turns keep it. `floor` and `token_cap` take the same keys as the goal tool, and
 neither is required. Goals go to workers, not the root session (a goal sent to
-`all` skips the root and the sender), and a goal needs `notify`. The worker treats the agent that sent the goal as the user for it and
+`all` skips the root and the sender), and a goal cannot be sent with `wake:false`. The worker treats the agent that sent the goal as the user for it and
 messages that agent when it needs a decision. When a goal is complete, the worker
 decides what comes next: a new goal for itself, a message to whoever must act, or
 other work. Each goal message
@@ -224,7 +224,7 @@ the stored `settings.waitMs` (10,000 by default); a timeout returns an empty
 
 To ask, send a message, keep its `id`, then read with `replyTo=<id>&waitMs=10000`.
 The responding agent sends with `replyTo` set to that ID. Replies can use
-`notify:false` when the requester is already waiting. Waiting does not hold a
+`wake:false` when the requester is already waiting. Replies an agent receives through a read with `replyTo` count as handed to it, so its next turn does not see them again; other reads leave its mailbox as it was. Waiting does not hold a
 swarm transaction, provision lock, or other agent's run lease. It does not promise
 an answer: an active recipient may finish its current turn first, and mutually
 waiting agents time out rather than holding each other indefinitely. Prefer
@@ -327,12 +327,9 @@ or your version-control workflow first.
 
 ## Verification
 
-Run the focused suites with `node --experimental-test-module-mocks --test test/swarm*.test.ts`.
-Run `npm run test:pg` against a disposable Postgres database. The swarm suite uses
-a separate schema so migration-reset tests cannot invalidate its state.
-Set `SWARM_TEST_DATABASE_URL` when running `test/swarm-orchestrator.test.ts` to
-exercise the HTTP spawn/reply flow across an application restart with real durable
-state. These tests use deterministic model and sandbox doubles; live provider and
+Run the focused suites with `DATABASE_URL=<disposable Postgres> node scripts/run-pg-tests.mjs test/swarm*.test.ts`.
+`test/swarm-orchestrator.test.ts` exercises the HTTP spawn/reply flow across an application
+restart with real durable state. These tests use deterministic model and sandbox doubles; live provider and
 model acceptance remains a separate deployment check. The agent-board UI is
 intentionally deferred.
 

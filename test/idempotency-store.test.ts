@@ -1,10 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createIdempotencyStore, type IdempotencyRecord } from "../src/idempotency/idempotency-store.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { testMap } from "./support/test-database.ts";
 
-test("once runs fn the first time and skips on replay (in-memory)", async () => {
-  const store = createIdempotencyStore();
+test("once runs fn the first time and skips on replay", async () => {
+  const store = createIdempotencyStore(testMap());
   let runs = 0;
   assert.equal(await store.once("k", async () => void runs++), true);
   assert.equal(await store.once("k", async () => void runs++), false);
@@ -13,7 +13,7 @@ test("once runs fn the first time and skips on replay (in-memory)", async () => 
 });
 
 test("a failed fn stays retryable (not committed)", async () => {
-  const store = createIdempotencyStore();
+  const store = createIdempotencyStore(testMap());
   await assert.rejects(
     store.once("k", async () => {
       throw new Error("boom");
@@ -26,7 +26,7 @@ test("a failed fn stays retryable (not committed)", async () => {
 });
 
 test("durable backing: a committed key survives a restart (new store over the same map)", async () => {
-  const backing = createMemoryMap<IdempotencyRecord>();
+  const backing = testMap<IdempotencyRecord>();
   const before = createIdempotencyStore(backing);
   let runs = 0;
   await before.once("webhook:w1:d1", async () => void runs++);
@@ -39,7 +39,7 @@ test("durable backing: a committed key survives a restart (new store over the sa
 });
 
 test("lookups are point reads — committed() never scans the whole table into RAM", async () => {
-  const inner = createMemoryMap<IdempotencyRecord>();
+  const inner = testMap<IdempotencyRecord>();
   let allCalls = 0;
   const backing = {
     ...inner,
@@ -59,7 +59,7 @@ test("lookups are point reads — committed() never scans the whole table into R
 });
 
 test("retention: records older than retentionMs are pruned from memory and the backing", async () => {
-  const backing = createMemoryMap<IdempotencyRecord>();
+  const backing = testMap<IdempotencyRecord>();
   let t = 0;
   const store = createIdempotencyStore(backing, { retentionMs: 100, pruneIntervalMs: 1, now: () => t });
   t = 10;
@@ -76,7 +76,7 @@ test("retention: records older than retentionMs are pruned from memory and the b
 });
 
 test("retention: an expired record stops deduping even before the sweep runs", async () => {
-  const backing = createMemoryMap<IdempotencyRecord>();
+  const backing = testMap<IdempotencyRecord>();
   let t = 0;
   const store = createIdempotencyStore(backing, { retentionMs: 100, pruneIntervalMs: 10_000, now: () => t });
   t = 10;

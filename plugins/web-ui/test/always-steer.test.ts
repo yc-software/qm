@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { Agent } from "@earendil-works/pi-agent-core";
 import { JSDOM } from "jsdom";
-import { createServer } from "vite";
+import { testViteServer } from "./vite-server.ts";
 import type { ComposerSurface, ConvCtx } from "../src/conv-types.ts";
 
-test("a mid-run send with the steer preference steers at once and queues only when it cannot", async (t) => {
+test("a mid-run send with the steer preference asks core to steer and queues only when core says so", async (t) => {
   const dom = new JSDOM('<!doctype html><div id="app"></div><div id="composer"></div>', {
     url: "http://localhost/",
     pretendToBeVisual: true,
@@ -14,7 +14,8 @@ test("a mid-run send with the steer preference steers at once and queues only wh
     value: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
   });
   let turnId = 0;
-  const turns: string[] = [];
+  const turns: Array<{ text: string; midTurn: string }> = [];
+  let coreSteers = true;
   const globals = {
     window: dom.window,
     document: dom.window.document,
@@ -36,7 +37,10 @@ test("a mid-run send with the steer preference steers at once and queues only wh
     fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/api/turn")) {
-        turns.push(JSON.parse(String(init?.body)).text);
+        const body = JSON.parse(String(init?.body)) as { text: string; midTurn: string };
+        turns.push({ text: body.text, midTurn: body.midTurn });
+        if (body.midTurn === "steer" && coreSteers)
+          return Response.json({ status: "queued", runId: "live", steered: true, steerTs: `ts${++turnId}` });
         return Response.json({ status: "queued", runId: `q${++turnId}` });
       }
       if (url.includes("/api/ui-state")) return Response.json({ ok: true, updatedAt: 1 });
@@ -48,7 +52,7 @@ test("a mid-run send with the steer preference steers at once and queues only wh
     descriptors.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
     Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
   }
-  const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  const vite = await testViteServer();
   let composer: ComposerSurface | undefined;
   try {
     const { appState } = await vite.ssrLoadModule("/src/shell-state.ts");
@@ -70,26 +74,21 @@ test("a mid-run send with the steer preference steers at once and queues only wh
       contextWindow: 100_000,
       maxTokens: 4096,
     };
-    const seed = (harness: string): void => {
-      invalidateRuntimeConfigs();
-      seedRuntimeConfig("personal:tester", {
-        scopeId: "personal:tester",
-        approvedHarnesses: [harness],
-        modelsByHarness: { [harness]: ["alpha"] },
-        modelCatalog: { alpha: model },
-        orgDefault: { harnessId: harness, modelId: "alpha", revision: 1 },
-        effective: { harnessId: harness, modelId: "alpha" },
-        scopeOverride: null,
-        upgradeAvailable: false,
-      });
-    };
-    seed("pi");
+    invalidateRuntimeConfigs();
+    seedRuntimeConfig("personal:tester", {
+      scopeId: "personal:tester",
+      models: ["alpha"],
+      modelCatalog: { alpha: model },
+      orgDefault: { modelId: "alpha", revision: 1 },
+      effective: { modelId: "alpha" },
+      scopeOverride: null,
+      upgradeAvailable: false,
+    });
     const threadRef = "web:tester:always-steer";
     const host = document.querySelector<HTMLElement>("#composer")!;
     const agentState = { isStreaming: true, model, messages: [] as unknown[] };
     const agent = { state: agentState } as unknown as Agent;
     let live = true;
-    let outcome: Record<string, unknown> = { ok: true };
     const signalled: string[] = [];
     const seenTags = new Set<string>();
     const chips = () =>
@@ -115,7 +114,7 @@ test("a mid-run send with the steer preference steers at once and queues only wh
         currentTurnOptions: () => ({}),
         signalLiveRun: async (_kind: string, _text: string, queuedRunId: string) => {
           signalled.push(queuedRunId);
-          return outcome;
+          return { ok: true };
         },
         drawActiveChat: draw,
         resumeIfIdle() {},
@@ -137,22 +136,22 @@ test("a mid-run send with the steer preference steers at once and queues only wh
       draw();
       agentState.isStreaming = true;
       live = true;
-      outcome = { ok: true };
+      coreSteers = true;
       signalled.length = 0;
     };
 
     await t.test("with the preference off a mid-run send still queues", async () => {
       await send("first");
-      assert.deepEqual(signalled, []);
+      assert.deepEqual(turns.at(-1), { text: "first", midTurn: "queue" });
       assert.deepEqual(chips(), ["Queued"]);
       reset();
     });
 
-    await t.test("with the preference on a mid-run send steers without ever showing as queued", async () => {
+    await t.test("with the preference on a mid-run send is one steer request and never shows as queued", async () => {
       setAlwaysSteer(true);
       await send("second");
-      assert.equal(turns.at(-1), "second");
-      assert.deepEqual(signalled, [`q${turnId}`]);
+      assert.deepEqual(turns.at(-1), { text: "second", midTurn: "steer" });
+      assert.deepEqual(signalled, []);
       assert.deepEqual(composer!.queuedRunsFor(threadRef), []);
       assert.deepEqual(chips(), []);
       assert.deepEqual(
@@ -163,34 +162,18 @@ test("a mid-run send with the steer preference steers at once and queues only wh
       reset();
     });
 
-    await t.test("a harness that cannot steer falls back to the queue", async () => {
-      seed("codex");
-      ctx.chat.state.threadRef = "web:tester:codex-thread";
-      assert.equal(composer!.currentModelOption()?.harnessId, "codex");
-      try {
-        await send("third");
-        assert.deepEqual(signalled, []);
-        assert.deepEqual(chips(), ["Queued"]);
-      } finally {
-        seed("pi");
-        composer!.setQueuedRuns(ctx.chat.state.threadRef!, []);
-        ctx.chat.state.threadRef = threadRef;
-        reset();
-      }
-    });
-
-    await t.test("a run that has no live handle falls back to the queue", async () => {
+    await t.test("a run that has no live handle asks core to queue", async () => {
       live = false;
       await send("fourth");
-      assert.deepEqual(signalled, []);
+      assert.deepEqual(turns.at(-1), { text: "fourth", midTurn: "queue" });
       assert.deepEqual(chips(), ["Queued"]);
       reset();
     });
 
-    await t.test("a steer the run refuses lands in the queue instead of vanishing", async () => {
-      outcome = { ok: false, reason: "terminal" };
+    await t.test("a steer core runs as its own turn lands in the queue instead of vanishing", async () => {
+      coreSteers = false;
       await send("fifth");
-      assert.deepEqual(signalled, [`q${turnId}`]);
+      assert.deepEqual(turns.at(-1), { text: "fifth", midTurn: "steer" });
       assert.deepEqual(composer!.queuedRunsFor(threadRef), [{ runId: `q${turnId}`, text: "fifth" }]);
       reset();
     });

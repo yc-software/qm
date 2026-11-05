@@ -1,5 +1,5 @@
 import { SWARM_DEFAULTS } from "../src/swarms/swarm-settings.ts";
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { createSwarmService, type SwarmCaller } from "../src/swarms/swarm-service.ts";
 import { SWARM_LIMITS } from "../src/swarms/swarm-store.ts";
@@ -8,6 +8,33 @@ import { createTurnSandboxes, type TurnSandboxContext } from "../src/core/orches
 import { processRun } from "../src/runs/worker.ts";
 import type { Orchestrator } from "../src/core/orchestrator.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
+import { testPgPool } from "./support/test-database.ts";
+import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";
+
+const sharedPool = testPgPool();
+
+async function enableMockTimers(
+  context: TestContext,
+  options: Parameters<TestContext["mock"]["timers"]["enable"]>[0],
+): Promise<void> {
+  for (const pool of [await sharedPool.pool(), await sharedPool.sessionPool()]) {
+    const idle = await Promise.all(Array.from({ length: pool.idleCount }, () => pool.connect()));
+    for (const client of idle) client.release(true);
+  }
+  context.mock.timers.enable(options);
+}
+
+async function until(check: () => boolean | Promise<boolean>): Promise<void> {
+  const deadline = performance.now() + 10_000;
+  while (!(await check())) {
+    if (performance.now() > deadline) throw new Error("condition never held");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+}
+
+async function unlocked(lock: AdvisoryLock, key: string): Promise<void> {
+  await until(async () => (await lock.tryWithLock!(key, async () => true)) !== null);
+}
 
 test("delayed ready acknowledgment cannot roll back a delivered worker across phase locks", async (context) => {
   const fixture = await swarmFixture();
@@ -27,7 +54,7 @@ test("delayed ready acknowledgment cannot roll back a delivered worker across ph
     }
     return updated;
   };
-  context.mock.timers.enable({ apis: ["Date", "setTimeout"], now: Date.now() });
+  await enableMockTimers(context, { apis: ["Date", "setTimeout"], now: Date.now() });
   try {
     const firstSweep = fixture.service.sweep();
     await readyWritten.promise;
@@ -43,7 +70,7 @@ test("delayed ready acknowledgment cannot roll back a delivered worker across ph
     await firstSweep;
     assert.equal(await fixture.serviceOptions.lock.tryWithLock!(resourceLock, async () => true), null);
     acknowledgment.resolve();
-    await fixture.serviceOptions.lock.withLock(resourceLock, async () => undefined);
+    await unlocked(fixture.serviceOptions.lock, resourceLock);
     await second.sweep();
     const final = (await fixture.store.get(fixture.root.id))!;
     const member = final.members.find((peer) => peer.id === worker!.id)!;
@@ -174,14 +201,14 @@ test("provisioning deadlines isolate healthy swarms and retire late private reso
     reached();
     return late;
   };
-  context.mock.timers.enable({ apis: ["Date", "setTimeout"], now: Date.now() });
+  await enableMockTimers(context, { apis: ["Date", "setTimeout"], now: Date.now() });
   try {
     const sweep = first.service.sweep();
     await entered;
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.equal((await first.store.get(second.root.id))!.members[1]!.state, "ready");
+    await until(async () => (await first.store.get(second.root.id))!.members[1]!.state === "ready");
+    await unlocked(first.serviceOptions.lock, `swarm-reconcile:${second.root.id}`);
     context.mock.timers.tick((SWARM_LIMITS.provisionMs ?? 10_000) + 1);
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await until(async () => (await first.store.get(first.root.id))!.members[1]!.state === "failed");
     context.mock.timers.tick(SWARM_LIMITS.reconcileMs);
     await sweep;
     assert.equal(inventoryReads, 0);
@@ -192,7 +219,7 @@ test("provisioning deadlines isolate healthy swarms and retire late private reso
     assert.equal((await first.store.get(first.root.id))!.members[1]!.attempts, 1);
     release();
     await late;
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await unlocked(first.serviceOptions.lock, `swarm-reconcile:${first.root.id}`);
     await createSwarmService(first.serviceOptions).sweep();
     assert.equal((await first.records.get(slow!.id))!.state, "retired");
     assert.equal((await first.records.get(forum.id))!.state, "ready");
@@ -224,27 +251,35 @@ test("timed-out provider calls retain bounded execution slots across repeated sw
   let active = 0;
   let maximum = 0;
   const provision = first.backend.provision;
-  first.backend.provision = async (layers, options) => {
-    entered.push(layers.find((layer) => layer.mode === "rw")!.scopeId);
+  first.backend.provision = async (owner, options) => {
+    entered.push(owner);
     maximum = Math.max(maximum, ++active);
     try {
       if (entered.length <= SWARM_LIMITS.sweepConcurrency) await new Promise<void>((resolve) => releases.push(resolve));
-      return await provision(layers, options);
+      return await provision(owner, options);
     } finally {
       active--;
     }
   };
-  context.mock.timers.enable({ apis: ["Date", "setTimeout"], now: Date.now() });
+  const unlocked = async () =>
+    (
+      await Promise.all(
+        fixtures.map((fixture) =>
+          first.serviceOptions.lock.tryWithLock!(`swarm-reconcile:${fixture.root.id}`, async () => true),
+        ),
+      )
+    ).filter((free) => free !== null).length;
+  await enableMockTimers(context, { apis: ["Date", "setTimeout"], now: Date.now() });
   try {
     const sweep = first.service.sweep();
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await until(() => entered.length >= SWARM_LIMITS.sweepConcurrency);
     assert.equal(entered.length, SWARM_LIMITS.sweepConcurrency);
     context.mock.timers.tick(SWARM_LIMITS.reconcileMs + 1);
     await sweep;
     await first.service.sweep();
     assert.equal(entered.length, SWARM_LIMITS.sweepConcurrency);
     for (const release of releases.slice(1)) release();
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await until(async () => active === 1 && (await unlocked()) === fixtures.length - 1);
     await first.service.sweep();
     assert.equal(entered.length, fixtures.length * 4 - SWARM_LIMITS.sweepConcurrency - 2);
     assert.equal(maximum, SWARM_LIMITS.sweepConcurrency);
@@ -269,7 +304,7 @@ test("ready notifications progress while every provider slot remains fenced afte
     requestId: "follow-up",
     audience: [worker!.id],
     text: "Continue",
-    notify: true,
+    wake: true,
   });
   for (const fixture of fixtures.slice(0, -1))
     await fixture.service.spawn(fixture.caller, { requestId: "stalled", text: "Work" });
@@ -279,13 +314,17 @@ test("ready notifications progress while every provider slot remains fenced afte
     await new Promise<void>((resolve) => releases.push(resolve));
     return create(...args);
   };
-  context.mock.timers.enable({ apis: ["Date", "setTimeout"], now: Date.now() });
+  await enableMockTimers(context, { apis: ["Date", "setTimeout"], now: Date.now() });
   try {
     const sweep = first.service.sweep();
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await until(() => releases.length >= SWARM_LIMITS.sweepConcurrency);
     assert.equal(releases.length, SWARM_LIMITS.sweepConcurrency);
     context.mock.timers.tick(SWARM_LIMITS.provisionMs + 1);
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await until(async () => {
+      for (const fixture of fixtures.slice(0, -1))
+        if ((await first.store.get(fixture.root.id))!.members[1]!.state !== "failed") return false;
+      return true;
+    });
     context.mock.timers.tick(SWARM_LIMITS.reconcileMs + 1);
     await sweep;
     for (let iteration = 0; iteration < 10; iteration++) await first.service.sweep();
@@ -314,12 +353,17 @@ test("timed-out pending selection stays single-flight until the query settles", 
   });
   const pending = store.pending.bind(store);
   let selections = 0;
+  let settled = 0;
   store.pending = async (afterId) => {
     selections++;
     await gate;
-    return pending(afterId);
+    try {
+      return await pending(afterId);
+    } finally {
+      settled++;
+    }
   };
-  context.mock.timers.enable({ apis: ["Date", "setTimeout"], now: Date.now() });
+  await enableMockTimers(context, { apis: ["Date", "setTimeout"], now: Date.now() });
   try {
     for (let iteration = 0; iteration < 6; iteration++) {
       const sweep = assert.rejects(service.sweep(), /swarm pending batch timed out/);
@@ -328,7 +372,7 @@ test("timed-out pending selection stays single-flight until the query settles", 
     }
     assert.equal(selections, 1);
     release();
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await until(() => settled === 1);
     await service.sweep();
     assert.equal(selections, 2);
   } finally {
@@ -367,14 +411,16 @@ test("late session creation remains fenced from cleanup until its side effect se
     reached = resolve;
   });
   const createSession = fixture.sessions.getOrCreateByThread.bind(fixture.sessions);
+  let late: Promise<unknown> | undefined;
   fixture.sessions.getOrCreateByThread = async (...args) => {
-    if (args[0] === member!.threadRef) {
-      reached();
-      await gate;
-    }
-    return createSession(...args);
+    if (args[0] !== member!.threadRef) return createSession(...args);
+    reached();
+    await gate;
+    const created = createSession(...args);
+    late = created;
+    return created;
   };
-  context.mock.timers.enable({ apis: ["Date", "setTimeout"], now: Date.now() });
+  await enableMockTimers(context, { apis: ["Date", "setTimeout"], now: Date.now() });
   try {
     const sweep = fixture.service.sweep();
     await entered;
@@ -384,7 +430,9 @@ test("late session creation remains fenced from cleanup until its side effect se
     assert.equal((await fixture.store.get(fixture.root.id))!.members[1]!.cleanupPending, true);
     assert.equal((await fixture.records.get(member!.id))!.state, "ready");
     release();
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await until(() => late !== undefined);
+    await late;
+    await unlocked(fixture.serviceOptions.lock, `swarm-reconcile:${fixture.root.id}`);
     await createSwarmService(fixture.serviceOptions).sweep();
     assert.equal(await fixture.sessions.getByThread(member!.threadRef), null);
     assert.equal((await fixture.records.get(member!.id))!.state, "retired");
@@ -443,8 +491,7 @@ test("initial pool creates durable ordinary sessions with distinct blank Modal d
   const { service, caller, sandbox, root, sessions, store, runs } = fixture;
   const parent = await fixture.sandboxes.create("alice", root.scopeId, "modal", "Parent");
   await fixture.sandboxes.setDefault("alice", root.scopeId, parent.id);
-  const layers = [{ scopeId: root.scopeId, mode: "rw" as const, mountPath: "/" }];
-  const parentHandle = await sandbox.provision(layers);
+  const parentHandle = await sandbox.provision(root.scopeId);
   await sandbox.writeFile(parentHandle, "private-file", "do not copy");
   const workers = await service.spawn(caller, {
     requestId: "pool",
@@ -463,7 +510,7 @@ test("initial pool creates durable ordinary sessions with distinct blank Modal d
     assert.equal(session?.scopeId, root.scopeId);
     assert.equal(session?.surface, "swarm");
     assert.match(session!.title!, /Swarm worker/);
-    const handle = await sandbox.provision(layers, { sandboxId: peer.sandboxId });
+    const handle = await sandbox.provision(root.scopeId, { sandboxId: peer.sandboxId });
     handles.push(handle);
     assert.equal(handle.scopeId, root.scopeId);
     assert.equal(await sandbox.readFile(handle, "private-file"), null);
@@ -471,7 +518,7 @@ test("initial pool creates durable ordinary sessions with distinct blank Modal d
   assert.equal(new Set(handles.map((handle) => handle.id)).size, 3);
   await sandbox.writeFile(handles[0]!, "result", "worker only");
   assert.equal(await sandbox.readFile(handles[1]!, "result"), null);
-  assert.equal((await sandbox.provision(layers)).id, parentHandle.id);
+  assert.equal((await sandbox.provision(root.scopeId)).id, parentHandle.id);
   const message = (await store.get(root.id))!.messages[0]!;
   assert.equal(message.author, "agent");
   for (const notification of Object.values(message.notifications)) {
@@ -650,15 +697,15 @@ test("notification and message budgets include initial work and prevent recursio
     swarm.notificationCount = settings.notifications;
   });
   await assert.rejects(
-    service.send(caller, { requestId: "notify", audience: "all", text: "Work", notify: true }),
+    service.send(caller, { requestId: "notify", audience: "all", text: "Work", wake: true }),
     /notification budget/,
   );
-  await service.send(caller, { requestId: "quiet", audience: "all", text: "No wake", notify: false });
+  await service.send(caller, { requestId: "quiet", audience: "all", text: "No wake", wake: false });
   for (let index = 2; index < settings.messages; index++) {
-    await service.send(caller, { requestId: `quiet-${index}`, audience: "all", text: "Archive", notify: false });
+    await service.send(caller, { requestId: `quiet-${index}`, audience: "all", text: "Archive", wake: false });
   }
   await assert.rejects(
-    service.send(caller, { requestId: "excess", audience: [], text: "Archive", notify: false }),
+    service.send(caller, { requestId: "excess", audience: [], text: "Archive", wake: false }),
     /message budget/,
   );
   assert.equal((await service.read(caller, {})).length, 32);
@@ -676,7 +723,7 @@ test("without caps, message, notification and spawn counts are unlimited", async
   await service.spawn(caller, { requestId: "one", count: 2, text: "Work", settings: { agents: 64 } });
   await service.sweep();
   for (let index = 0; index < 130; index++)
-    await service.send(caller, { requestId: `notify-${index}`, audience: "all", text: "Work", notify: true });
+    await service.send(caller, { requestId: `notify-${index}`, audience: "all", text: "Work", wake: true });
   await service.sweep();
   assert.equal((await runs.list({ limit: 1_000 })).filter((run) => run.request.swarm).length, 262);
   for (let index = 0; index < 33; index++) await service.spawn(caller, { requestId: `spawn-${index}`, text: "Work" });
@@ -719,9 +766,9 @@ test("slow provisioning does not accumulate overlapping outbox sweeps", async ()
     release = resolve;
   });
   const provision = backend.provision;
-  backend.provision = async (layers, options) => {
+  backend.provision = async (owner, options) => {
     await gate;
-    return provision(layers, options);
+    return provision(owner, options);
   };
   await service.spawn(caller, { requestId: "one", text: "Work" });
   const first = service.sweep();
@@ -765,19 +812,18 @@ test("explicit forum supplements private worker disks and remains scope-authoriz
   const peers = (await service.inspect(caller)).peers.slice(1);
   assert.ok(peers.every((member) => member.forumSandboxId === forum.id && member.sandboxId !== forum.id));
   assert.equal(new Set(peers.map((member) => member.sandboxId)).size, 2);
-  const layers = [{ scopeId: root.scopeId, mode: "rw" as const, mountPath: "/" }];
-  const shared = await sandbox.provision(layers, { sandboxId: forum.id });
+  const shared = await sandbox.provision(root.scopeId, { sandboxId: forum.id });
   await sandbox.writeFile(shared, "shared-result", "for peers");
   for (const peer of peers) {
-    const own = await sandbox.provision(layers, { sandboxId: peer.sandboxId });
+    const own = await sandbox.provision(root.scopeId, { sandboxId: peer.sandboxId });
     assert.equal(await sandbox.readFile(own, "shared-result"), null);
-    const selected = await sandbox.provision(layers, { sandboxId: peer.forumSandboxId });
+    const selected = await sandbox.provision(root.scopeId, { sandboxId: peer.forumSandboxId });
     assert.equal(await sandbox.readFile(selected, "shared-result"), "for peers");
   }
 });
 
-test("correlated bounded waits observe replies without creating extra notifications", async () => {
-  const { service, caller, workerCaller } = await swarmFixture();
+test("correlated bounded waits observe wake:false replies without waking anyone or handing them over twice", async () => {
+  const { service, caller, workerCaller, store, root } = await swarmFixture();
   const [worker] = await service.spawn(caller, { requestId: "one", text: "Work" });
   await service.sweep();
   const question = await service.send(caller, {
@@ -791,10 +837,12 @@ test("correlated bounded waits observe replies without creating extra notificati
     text: "Finished",
     audience: [caller.claims.sessionId!],
     replyTo: question.id,
-    notify: false,
+    wake: false,
   });
   assert.equal((await waiting)[0]!.id, answer.id);
-  assert.deepEqual(answer.notifications, {});
+  assert.deepEqual(answer.notifications, { [caller.claims.sessionId!]: { state: "mailbox" } });
+  const stored = (await store.get(root.id))!.messages.find((message) => message.id === answer.id)!;
+  assert.deepEqual(stored.notifications, { [caller.claims.sessionId!]: { state: "handed" } });
   assert.deepEqual(await service.read(caller, { after: 100, waitMs: 20 }), []);
   for (const waitMs of [-1, 10_001, Number.NaN, Infinity])
     await assert.rejects(service.read(caller, { waitMs }), /bounds/);
@@ -811,7 +859,7 @@ test("active recipients receive durable queued unattended work rather than human
   const initial = (await runs.list()).find((run) => run.request.swarm)!;
   const claimed = await runs.claimById(initial.id, "worker", 60_000);
   assert.equal(claimed!.status, "running");
-  await service.send(caller, { requestId: "queue", text: "More work", audience: "all", notify: true });
+  await service.send(caller, { requestId: "queue", text: "More work", audience: "all", wake: true });
   await service.sweep();
   const pending = (await runs.inFlightForThread(initial.sessionId)).find((run) => run.id !== initial.id)!;
   assert.equal(pending.status, "pending");
@@ -882,7 +930,7 @@ test("the root can extend an expired work window", async () => {
   await service.send(caller, { requestId: "message", text: "Work", audience: "all" });
 });
 
-test("memory store has transaction rollback and detached read parity", async () => {
+test("swarm store has transaction rollback and detached read parity", async () => {
   const { service, caller, root, store } = await swarmFixture();
   await service.spawn(caller, { requestId: "one", text: "Work" });
   const original = (await store.get(root.id))!;
@@ -898,20 +946,19 @@ test("memory store has transaction rollback and detached read parity", async () 
   assert.equal((await store.get(root.id))!.notificationCount, 1);
 });
 
-test("the orchestrator sandbox path selects worker storage without changing authorization layers", async () => {
+test("the orchestrator sandbox path selects worker storage without changing the authorized scope", async () => {
   const { service, caller, sandbox, sandboxes, runs, root } = await swarmFixture();
   await service.spawn(caller, { requestId: "one", text: "Work" });
   await service.sweep();
   const run = (await runs.list()).find((item) => item.request.swarm)!;
   const binding = (await service.binding({ ...run.request, runId: run.id }))!;
   const storageScopeId = "environment:shared";
-  const layers = [{ scopeId: storageScopeId, mountPath: "/", mode: "rw" as const }];
   const turn = createTurnSandboxes({
     deps: { sandbox, sandboxResources: sandboxes, swarms: service },
     input: { ...run.request, runId: run.id },
     actor: run.request.actor,
     session: { id: binding.member.sessionId },
-    resolution: { layers, egress: { allowedHosts: [] } },
+    resolution: { writableScopeId: storageScopeId, readOnlyScopeIds: [], egress: { allowedHosts: [] } },
     scopeId: root.scopeId,
     memoryScopeId: storageScopeId,
     transferId: "transfer",
@@ -929,14 +976,13 @@ test("the orchestrator sandbox path selects worker storage without changing auth
   const handle = await turn.provision();
   assert.equal(handle.resourceId, binding.sandboxId);
   assert.equal(handle.scopeId, root.scopeId);
-  assert.equal(layers[0]!.scopeId, storageScopeId);
   const forum = await sandboxes.create("alice", root.scopeId, "modal", "Forum");
   assert.equal((await turn.provisionResource(forum.id)).resourceId, forum.id);
   const foreign = await sandboxes.create("bob", "personal:bob", "modal", "Other scope");
   await assert.rejects(turn.provisionResource(foreign.id), /requires permission to use its owning scope/);
 });
 
-test("durable worker rejects excessive swarm claims before calling the harness", async () => {
+test("durable worker rejects excessive swarm claims before calling the agent", async () => {
   const { service, caller, runs } = await swarmFixture();
   await service.spawn(caller, { requestId: "one", text: "Work" });
   await service.sweep();

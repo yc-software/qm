@@ -1,4 +1,5 @@
 import { headSlice } from "../util/text.ts";
+import type { NewItem } from "../sessions/items.ts";
 
 export class NonRetryableTurnError extends Error {
   constructor(message: string) {
@@ -63,7 +64,18 @@ export class TitleRejected extends Error {
   }
 }
 
-export type TurnFailurePayload = { kind: "turn_failure"; message: string; runId?: string };
+export const turnFailureItem = (message: string, runId?: string): NewItem<"Error"> => ({
+  kind: "Error",
+  errorCode: "turn_failure",
+  text: message,
+  turnId: runId ?? null,
+});
+
+export const steerWithheldItem = (sender: string): NewItem<"Error"> => ({
+  kind: "Error",
+  errorCode: "steer_withheld",
+  text: `A message from ${sender} arrived mid-turn and was withheld: security screening did not clear it.`,
+});
 
 const GENERIC_TURN_FAILURE = "That turn failed and couldn't be completed. The details are in the operator error log.";
 

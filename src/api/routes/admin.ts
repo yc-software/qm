@@ -9,8 +9,7 @@ import {
   retention,
   whoami,
 } from "./admin/scope-config.ts";
-import { testAutoFlagger } from "./admin/auto-flagger-test.ts";
-import { egress, listAdminAudit, listAdminErrors, listAdminRuns } from "./admin/observability.ts";
+import { egress, listAdminAudit, listAdminErrors } from "./admin/observability.ts";
 import { getAdminSession, getAdminSessionLlm, listAdminSessions, listAdminShadowDeliveries } from "./admin/sessions.ts";
 import { downloadAdminFile, listAdminFiles, readAdminFile, uploadAdminFile } from "./admin/files.ts";
 import {
@@ -57,6 +56,7 @@ import { deleteMcpServer, getMcpServers, putMcpServer } from "./admin/mcp-server
 import { listSecurityFlags } from "./admin/security.ts";
 import { spend } from "./admin/spend.ts";
 import { listUnattendedGrants } from "./admin/unattended-grants.ts";
+import { offboardUser, reactivateUser } from "./admin/offboard.ts";
 import { createPrincipalLink, deletePrincipalLink, listPrincipalLinks } from "./admin/principal-links.ts";
 
 const timed =
@@ -112,12 +112,6 @@ const routes: Route<ApiCtx>[] = [
     { method: "GET", path: "/v1/admin/custom-providers", auth: "either", handle: getCustomProviders },
     { method: "PUT", path: "/v1/admin/custom-providers/:provider", auth: "either", handle: putCustomProvider },
     { method: "DELETE", path: "/v1/admin/custom-providers/:provider", auth: "either", handle: deleteCustomProvider },
-    {
-      method: "POST",
-      path: "/v1/admin/scopes/:scope/auto-flagger/test",
-      auth: "either",
-      handle: testAutoFlagger,
-    },
     { method: "PUT", path: "/v1/admin/scopes/:scope/:resource", auth: "either", handle: putScopeConfig },
     { method: "GET", path: "/v1/admin/whoami", auth: "either", admin: { agent: "anyone" }, handle: whoami },
     {
@@ -195,16 +189,6 @@ const routes: Route<ApiCtx>[] = [
         unattended: { grant: "admin.sessions.read", summary: "read a conversation transcript" },
       },
       handle: getAdminSession,
-    },
-    {
-      method: "GET",
-      path: "/v1/admin/runs",
-      auth: "either",
-      admin: {
-        privateRead: "always",
-        unattended: { grant: "admin.sessions.read", summary: "read queued, in-flight, and recent runs" },
-      },
-      handle: listAdminRuns,
     },
     {
       method: "GET",
@@ -358,6 +342,14 @@ const routes: Route<ApiCtx>[] = [
     },
     { method: "PUT", path: "/v1/admin/users/:principalId/onboarding", auth: "either", handle: setUserOnboarding },
     { method: "POST", path: "/v1/admin/users/:principalId/reset", auth: "either", handle: resetUserToBrandNew },
+    {
+      method: "POST",
+      path: "/v1/admin/users/:principalId/offboard",
+      auth: "either",
+      admin: { privateRead: "always" },
+      handle: offboardUser,
+    },
+    { method: "POST", path: "/v1/admin/users/:principalId/reactivate", auth: "either", handle: reactivateUser },
     {
       method: "GET",
       path: "/v1/admin/principal-links",

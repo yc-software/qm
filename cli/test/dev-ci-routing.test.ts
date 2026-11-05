@@ -84,6 +84,8 @@ test("CI startup builds the connector SDK and stops before spawning services if 
           SLACK_APP_TOKEN: "xapp-test",
           ANTHROPIC_API_KEY: "test",
           CORE_SIGNING_SECRET: "test",
+          CONNECTOR_SECRET_KEY: "test",
+          DATABASE_URL: "postgres://localhost/test",
           CI_INSTANCE_READY_TIMEOUT: "1",
         },
       }),

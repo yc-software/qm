@@ -2,9 +2,9 @@ import type * as Sentry from "@sentry/node";
 import { parseSampleRate, SPAN_STATUS_ERROR } from "./timing.ts";
 import { swallow } from "./errors.ts";
 
-const FLUSH_MS = 2_000;
+export const FLUSH_MS = 2_000;
 const UNTRACED_PATHS = new Set(["/healthz", "/readyz"]);
-const INTERNAL_SERVICE_URLS = ["CORE_API_URL", "WEB_UI_UPSTREAM", "ADMIN_UPSTREAM", "AUTH_BROKER_UPSTREAM"];
+const INTERNAL_SERVICE_URLS = ["CORE_API_URL", "WEB_UI_UPSTREAM", "AUTH_BROKER_UPSTREAM"];
 const KEPT_TRACE_DATA = new Set([
   "sentry.op",
   "sentry.origin",

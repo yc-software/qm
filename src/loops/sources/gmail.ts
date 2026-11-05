@@ -1,5 +1,5 @@
 import MailComposer from "nodemailer/lib/mail-composer";
-import type { LoopItem, LoopSourcePayload } from "../../types.ts";
+import type { LoopItem, LoopSourcePayload } from "../types.ts";
 import { isAccountType } from "../../connectors/oauth.ts";
 import { GmailApiError, gmailApi } from "../../connectors/gmail-api.ts";
 import { errMessage } from "../../util/errors.ts";
@@ -52,6 +52,10 @@ function parseGmailMeta(v: unknown): GmailMeta | undefined {
     ...(cc ? { cc } : {}),
     ...(subject ? { subject } : {}),
   };
+}
+
+export function gmailThreadOf(item: LoopItem): string | undefined {
+  return metaOf(item)?.threadId;
 }
 
 function metaOf(item: LoopItem): GmailMeta | undefined {
@@ -133,7 +137,7 @@ export const gmailAdapter: LoopSourceAdapter = {
       dedupeKey,
       summary: common.snippet,
       sourceAt: common.receivedAt,
-      sourcePayload: { source: "gmail", ...common, gmail } as LoopSourcePayload,
+      sourcePayload: { ...common, gmail } as LoopSourcePayload,
       ...(draft ? { proposal: { data: draft as unknown as LoopSourcePayload } } : {}),
     };
     return entry;

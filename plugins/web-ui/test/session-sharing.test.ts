@@ -1,20 +1,11 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
+import { readFileSync } from "node:fs";
+import { releaseFiles } from "./release-fixture.ts";
 import { sharedSessionHtml } from "../server/shared-session.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
-
-const sharedTemplate = new URL("../dist-web/shared.html", import.meta.url);
-const createdTemplate = !existsSync(sharedTemplate);
-if (createdTemplate) {
-  mkdirSync(new URL("../dist-web", import.meta.url), { recursive: true });
-  writeFileSync(sharedTemplate, readFileSync(new URL("../shared.html", import.meta.url), "utf8"));
-}
-test.after(() => {
-  if (createdTemplate) unlinkSync(sharedTemplate);
-});
 
 const calls: Array<{ path: string; method: string; body: string; actor: string | undefined }> = [];
 const core = createServer(async (req, res) => {
@@ -43,7 +34,8 @@ const core = createServer(async (req, res) => {
 await new Promise<void>((resolve) => core.listen(0, resolve));
 process.env.CORE_API_URL = `http://localhost:${(core.address() as AddressInfo).port}`;
 process.env.CORE_SIGNING_SECRET = "sharing-route-test-secret";
-const { handler } = await import("../server/index.ts");
+const { handler, serveReleasesFrom } = await import("../server/index.ts");
+serveReleasesFrom(releaseFiles({ "shared.html": readFileSync(new URL("../shared.html", import.meta.url), "utf8") }));
 const web = createServer(handler);
 await new Promise<void>((resolve) => web.listen(0, resolve));
 const base = `http://localhost:${(web.address() as AddressInfo).port}`;

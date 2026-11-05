@@ -104,9 +104,10 @@ async function putApiKey(ctx: ApiCtx): Promise<void> {
 const codexDeviceLogin = createCodexDeviceLogin();
 
 async function chatgptStart(ctx: ApiCtx): Promise<void> {
-  if (!caller(ctx)) return sendJson(ctx.res, 401, { error: "unauthorized" });
+  const principal = caller(ctx);
+  if (!principal) return sendJson(ctx.res, 401, { error: "unauthorized" });
   try {
-    const prompt = await codexDeviceLogin.start();
+    const prompt = await codexDeviceLogin.start(principal);
     return sendJson(ctx.res, 200, prompt);
   } catch (e) {
     return sendJson(ctx.res, 502, { error: "oauth_start_failed", message: errMessage(e) });
@@ -121,7 +122,9 @@ async function chatgptPoll(ctx: ApiCtx): Promise<void> {
   const deviceAuthId = typeof body.deviceAuthId === "string" ? body.deviceAuthId : "";
   if (!deviceAuthId) return sendJson(ctx.res, 400, { error: "bad_request" });
   try {
-    const result = await codexDeviceLogin.poll(deviceAuthId);
+    const result = await codexDeviceLogin.poll(deviceAuthId, principal);
+    if (result === "unknown")
+      return sendJson(ctx.res, 404, { error: "oauth_poll_failed", message: "login expired or unknown — start again" });
     if (result === "pending") return sendJson(ctx.res, 200, { status: "pending" });
     await ctx.deps.userModelCredentials.setOAuth(principal, "openai", result);
     audit(ctx.deps, {

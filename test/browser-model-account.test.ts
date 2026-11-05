@@ -1,323 +1,199 @@
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
 import "./support/auto-fake-sprites.ts";
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { buildApp } from "../src/wiring.ts";
-import { testConfig } from "./support/test-config.ts";
-import { resolveBrowserModel } from "../src/model/browser-model.ts";
-import { BrowserCompletionError, nativeBrowserCompletion } from "../src/model/browser-completion.ts";
-import { zeroUsage } from "../src/harness/replay.ts";
-import type { Context, ModelsSimpleStreamOptions } from "@earendil-works/pi-ai";
+import type { AddressInfo } from "node:net";
+import { buildApp, serverDeps } from "../src/wiring.ts";
+import { createServer } from "../src/api/server.ts";
+import { BROWSER_MODEL_AUD, mintCapabilityToken, type CapabilityClaims } from "../src/auth/capability-token.ts";
+import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
+import { stopAtEnd } from "./support/build-app.ts";
+import { COMPANY_CHATGPT_CREDENTIAL, saveCompanyChatGPTLogin } from "./support/company-chatgpt-login.ts";
 
-test("browser follows durable user AI access and personal model defaults", async () => {
-  const built = buildApp(testConfig());
-  const input = {
-    actorId: "U1",
-    config: built.config,
-    credentials: built.userModelCredentials,
-    companyModel: "claude-opus-5",
-  };
-  assert.deepEqual(await resolveBrowserModel(input), { account: "company", model: "claude-opus-5", routing: null });
-  await built.userModelCredentials.setApiKey("U1", "openai", "personal-openai-key");
-  await built.userModelCredentials.setApiKey("U1", "anthropic", "personal-claude-key");
-  await built.config.setPersonalModelAuth("U1", true, "openai");
-  let selected = await resolveBrowserModel(input);
-  assert.equal(selected.account, "openai");
-  assert.equal(selected.routing?.provider, "openai");
-  assert.equal(selected.routing?.kind, "apikey");
-  await built.config.setBaseModel("personal:U1", "gpt-5.6-terra");
-  assert.equal((await resolveBrowserModel(input)).model, "gpt-5.6-terra");
-  await built.config.setPersonalModelAuth("U1", true, "anthropic");
-  selected = await resolveBrowserModel(input);
-  assert.equal(selected.routing?.provider, "anthropic");
-  assert.equal(selected.model, "claude-opus-5");
-  await built.userModelCredentials.delete("U1", "anthropic");
-  selected = await resolveBrowserModel(input);
-  assert.equal(selected.account, "anthropic");
-  assert.equal(selected.routing, null);
-  assert.equal(selected.model, undefined);
-});
+type Upstream = { host: string; headers: Headers; body: Record<string, unknown> };
 
-test("ChatGPT browser inference uses refreshed subscription auth and native structured output", async () => {
-  const built = buildApp(testConfig());
-  await built.userModelCredentials.setOAuth("U1", "openai", {
-    accessToken: "original-access",
-    refreshToken: "never-forward-refresh",
-    expiresAt: Date.now() + 3600_000,
-  });
-  await built.config.setPersonalModelAuth("U1", true, "openai");
-  await built.config.setBaseModel("personal:U1", "gpt-6-astra");
-  const selection = await resolveBrowserModel({
-    actorId: "U1",
-    config: built.config,
-    credentials: built.userModelCredentials,
-    companyModel: "gpt-6-astra",
-  });
-  assert.equal(selection.model, "codex/gpt-6-astra");
-  let derived = 0;
-  let context: Context | undefined;
-  let options: ModelsSimpleStreamOptions | undefined;
-  const factory: NonNullable<Parameters<typeof nativeBrowserCompletion>[1]> = async (keys) => {
-    assert.deepEqual(keys, { "openai-codex": "fresh-access" });
-    return {
-      completeSimple: async (model, suppliedContext, suppliedOptions) => {
-        assert.equal(model.provider, "openai-codex");
-        context = suppliedContext;
-        options = suppliedOptions;
-        return {
-          role: "assistant",
-          api: model.api,
-          provider: model.provider,
-          model: model.id,
-          usage: zeroUsage(),
-          timestamp: Date.now(),
-          stopReason: "toolUse",
-          content: [{ type: "toolCall", id: "result", name: "browser_result", arguments: { done: true } }],
-        };
-      },
-    };
-  };
-  const result = await nativeBrowserCompletion(
-    {
-      selection,
-      credentials: {
-        ...built.userModelCredentials,
-        derivedOAuth: async (actor, provider) => {
-          assert.equal(actor, "U1");
-          assert.equal(provider, "openai");
-          derived++;
-          return { accessToken: "fresh-access" };
-        },
-      },
-      actorId: "U1",
-      signal: new AbortController().signal,
-      body: {
-        messages: [
-          { role: "system", content: "Browse safely" },
-          {
-            role: "user",
-            content: [
-              { type: "text", text: "Inspect" },
-              { type: "image_url", image_url: { url: "data:image/png;base64,aGVsbG8=" } },
-            ],
-          },
-        ],
-        response_format: {
-          type: "json_schema",
-          json_schema: { schema: { type: "object", properties: { done: { type: "boolean" } }, required: ["done"] } },
-        },
-      },
-    },
-    factory,
-  );
-  assert.equal(derived, 1);
-  assert.equal(result.choices[0]?.message.content, '{"done":true}');
-  assert.ok(context?.systemPrompt?.includes("Browse safely"));
-  assert.deepEqual(context?.messages[0]?.content, [
-    { type: "text", text: "Inspect" },
-    { type: "image", mimeType: "image/png", data: "aGVsbG8=" },
-  ]);
-  const model = { api: "openai-codex-responses" } as Parameters<NonNullable<ModelsSimpleStreamOptions["onPayload"]>>[1];
-  assert.deepEqual(await options?.onPayload?.({ model: "gpt-6-astra" }, model), {
-    model: "gpt-6-astra",
-    tool_choice: { type: "function", name: "browser_result" },
-  });
-});
-
-test("Claude subscription browser requests fail without deriving or sending credentials", async () => {
-  const built = buildApp(testConfig());
-  await built.userModelCredentials.setOAuth("U1", "anthropic", {
-    accessToken: "claude-subscription",
-    expiresAt: Date.now() + 3600_000,
-  });
-  await built.config.setPersonalModelAuth("U1", true, "anthropic");
-  const selection = await resolveBrowserModel({
-    actorId: "U1",
-    config: built.config,
-    credentials: built.userModelCredentials,
-  });
-  await assert.rejects(
-    nativeBrowserCompletion(
-      {
-        selection,
-        credentials: {
-          ...built.userModelCredentials,
-          derivedOAuth: async () => {
-            throw new Error("must not derive");
-          },
-        },
-        actorId: "U1",
-        body: {},
-        signal: new AbortController().signal,
-      },
-      async () => {
-        throw new Error("must not call provider");
-      },
-    ),
-    (error: unknown) => error instanceof BrowserCompletionError && error.status === 422,
-  );
-});
-
-test("personal API keys bypass organization provider endpoint overrides", async (t) => {
-  const built = buildApp(testConfig());
-  setProviderBaseUrls({ openai: "https://organization.invalid/v1", anthropic: "https://organization.invalid" });
-  t.after(() => setProviderBaseUrls({}));
-  for (const provider of ["openai", "anthropic"] as const) {
-    await built.userModelCredentials.setApiKey("U1", provider, `personal-${provider}`);
-    await built.config.setPersonalModelAuth("U1", true, provider);
-    const selection = await resolveBrowserModel({
-      actorId: "U1",
-      config: built.config,
-      credentials: built.userModelCredentials,
-      companyModel: "gateway/unavailable-company-model",
-    });
-    assert.equal(selection.routing?.provider, provider);
-    const result = await nativeBrowserCompletion(
-      {
-        selection,
-        actorId: "U1",
-        credentials: built.userModelCredentials,
-        body: { messages: [{ role: "user", content: "browser test" }] },
-        signal: new AbortController().signal,
-      },
-      async (keys) => {
-        assert.deepEqual(keys, { [provider]: `personal-${provider}` });
-        return {
-          completeSimple: async (model) => {
-            assert.ok(!model.baseUrl.includes("organization.invalid"));
-            return {
-              role: "assistant",
-              api: model.api,
-              provider: model.provider,
-              model: model.id,
-              content: [{ type: "text", text: "done" }],
-              usage: zeroUsage(),
-              timestamp: Date.now(),
-              stopReason: "stop",
-            };
-          },
-        };
-      },
-    );
-    assert.equal(result.choices[0]?.message.content, "done");
-  }
-});
-
-test("company ChatGPT subscription auth uses the native subscription transport without API-key fallback", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "company-chatgpt-test-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const authFile = join(dir, "auth.json");
-  const claims = Buffer.from(
-    JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "company" } }),
-  ).toString("base64url");
-  writeFileSync(
-    authFile,
-    JSON.stringify({
-      auth_mode: "chatgpt",
-      tokens: { access_token: "company-access", refresh_token: "company-refresh", id_token: `header.${claims}.sig` },
-    }),
-    { mode: 0o600 },
-  );
-  const built = buildApp(
-    testConfig({
-      harness: "pi",
-      codexAuthFile: authFile,
-      openaiApiKey: "must-not-fallback",
-    }),
-  );
-  const selection = { account: "company" as const, model: "gpt-5.6-sol", routing: null };
-  const keys = await built.resolveBrowserCompanyKeys();
-  assert.equal(keys["openai-codex"], "company-access");
-  assert.equal((await built.resolveBrowserCompanyKeys(false))["openai-codex"], undefined);
-  const input = {
-    selection,
-    actorId: "U1",
-    companyProviderKeys: keys,
-    companySubscriptionProvider: "openai" as const,
-    body: { messages: [{ role: "user", content: "test" }] },
-    signal: new AbortController().signal,
-  };
-  const result = await nativeBrowserCompletion(input, async (auth) => {
-    assert.deepEqual(auth, { "openai-codex": "company-access" });
-    return {
-      completeSimple: async (model) => {
-        assert.equal(model.provider, "openai-codex");
-        return {
-          role: "assistant",
-          api: model.api,
-          provider: model.provider,
-          model: model.id,
-          usage: zeroUsage(),
-          timestamp: Date.now(),
-          stopReason: "stop",
-          content: [{ type: "text", text: "done" }],
-        };
-      },
-    };
-  });
-  assert.equal(result.choices[0]?.message.content, "done");
-  await assert.rejects(
-    nativeBrowserCompletion({ ...input, companyProviderKeys: { openai: "must-not-fallback" } }),
-    (error: unknown) => error instanceof BrowserCompletionError && error.status === 503,
-  );
-  await assert.rejects(
-    nativeBrowserCompletion({
-      ...input,
-      selection: { ...selection, model: "claude-opus-5" },
-      companySubscriptionProvider: "anthropic",
-    }),
-    (error: unknown) => error instanceof BrowserCompletionError && error.status === 422,
-  );
-});
-
-for (const mapped of [true, false]) {
-  test(`Ultrafast browser inference retains native routing with ${mapped ? "mapped" : "unrelated"} gateway`, async () => {
-    const id = "gpt-6-astra-ultrafast";
-    const gateway: NonNullable<Parameters<typeof nativeBrowserCompletion>[0]["modelGateway"]> = {
-      url: "https://gateway.example.test/v1",
-      apiKey: "gateway-key",
-      apiKeyHeader: "api-key",
-      models: mapped ? { [id]: "router/astra" } : { "claude-opus-5": "router/opus" },
-    };
-    const input = {
-      selection: { account: "company" as const, model: id, routing: null },
-      actorId: "U1",
-      modelGateway: gateway,
-      companyProviderKeys: mapped ? {} : { openai: "direct-key" },
-      body: { messages: [{ role: "user", content: "test" }] },
-      signal: new AbortController().signal,
-    };
-    const result = await nativeBrowserCompletion(input, async (keys, transport) => {
-      assert.deepEqual(keys, input.companyProviderKeys);
-      assert.equal(transport, gateway);
-      return {
-        completeSimple: async (model) => {
-          assert.equal(model.id, id);
-          assert.equal(model.api, "openai-responses");
-          return {
-            role: "assistant",
-            api: model.api,
-            provider: model.provider,
-            model: model.id,
-            usage: zeroUsage(),
-            timestamp: Date.now(),
-            stopReason: "stop",
-            content: [{ type: "text", text: "done" }],
-          };
-        },
-      };
-    });
-    assert.equal(result.choices[0]?.message.content, "done");
-    await assert.rejects(
-      nativeBrowserCompletion({
-        ...input,
-        modelGateway: { ...gateway, models: {}, reservedModelIds: new Set([id]) },
-        companyProviderKeys: { openai: "must-not-fallback" },
-      }),
-      /Gateway model is unavailable/,
-    );
-  });
+function sse(events: Array<Record<string, unknown>>): Response {
+  const body = events.map((e) => `event: ${e.type as string}\ndata: ${JSON.stringify(e)}\n\n`).join("");
+  return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
 }
+
+function anthropicToolResult(input: Record<string, unknown>): Response {
+  const usage = { input_tokens: 10, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+  return sse([
+    { type: "message_start", message: { id: "m", type: "message", role: "assistant", content: [], model: "c", usage } },
+    {
+      type: "content_block_start",
+      index: 0,
+      content_block: { type: "tool_use", id: "t", name: "browser_result", input: {} },
+    },
+    { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: JSON.stringify(input) } },
+    { type: "content_block_stop", index: 0 },
+    { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 1 } },
+    { type: "message_stop" },
+  ]);
+}
+
+async function browserEndpoint(
+  t: TestContext,
+  respond: (upstream: Upstream) => Response,
+  overrides: Parameters<typeof testConfig>[0] = {},
+) {
+  const config = testConfig({ signingSecret: "ingress-secret".repeat(3), ...overrides });
+  const built = stopAtEnd(buildApp(config));
+  const server = createServer(built.app, serverDeps(config, built));
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  const calls: Upstream[] = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(String(input instanceof Request ? input.url : input));
+    if (url.hostname === "127.0.0.1") return realFetch(input, init);
+    const raw = input instanceof Request ? await input.text() : init?.body;
+    const call = {
+      host: url.host,
+      headers: new Headers(input instanceof Request ? input.headers : init?.headers),
+      body: (typeof raw === "string" ? JSON.parse(raw) : {}) as Record<string, unknown>,
+    };
+    calls.push(call);
+    return respond(call);
+  }) as typeof globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = realFetch;
+  });
+  const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/browser-model/chat/completions`;
+  const post = async (claims: Partial<CapabilityClaims>, body: Record<string, unknown>) =>
+    realFetch(url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-agent-capability": await mintCapabilityToken(
+          {
+            actorId: "U1",
+            scopeId: "personal:U1",
+            aud: BROWSER_MODEL_AUD,
+            sessionId: "browser-session",
+            exp: Date.now() + 60_000,
+            ...claims,
+          },
+          TEST_CAPABILITY_SECRET,
+        ),
+      },
+      body: JSON.stringify(body),
+    });
+  return { built, calls, post };
+}
+
+const structuredRequest = {
+  model: "claude-opus-5",
+  messages: [
+    { role: "system", content: "Browse safely" },
+    {
+      role: "user",
+      content: [
+        { type: "text", text: "Inspect" },
+        { type: "image_url", image_url: { url: "data:image/png;base64,aGVsbG8=" } },
+      ],
+    },
+  ],
+  response_format: {
+    type: "json_schema",
+    json_schema: { schema: { type: "object", properties: { done: { type: "boolean" } }, required: ["done"] } },
+  },
+};
+
+test("browser requests run on the person's own Claude key, as their session does", async (t) => {
+  const { built, calls, post } = await browserEndpoint(t, () => anthropicToolResult({ done: true }));
+  await built.config.setPersonalModelAuth("U1", true, "anthropic");
+  const claims = { browserAccount: "anthropic" as const, browserModel: "claude-opus-5" };
+
+  await built.userModelCredentials.setApiKey("U1", "anthropic", "personal-claude-key");
+  const keyed = await post(claims, structuredRequest);
+  assert.equal(keyed.status, 200, await keyed.clone().text());
+  assert.equal(
+    ((await keyed.json()) as { choices: Array<{ message: { content: string } }> }).choices[0]?.message.content,
+    '{"done":true}',
+  );
+  assert.equal(calls[0]?.host, "api.anthropic.com");
+  assert.equal(calls[0]?.headers.get("x-api-key"), "personal-claude-key");
+  assert.deepEqual(calls[0]?.body.tool_choice, { type: "tool", name: "browser_result" });
+  assert.match(JSON.stringify(calls[0]?.body.system), /Browse safely/);
+  assert.match(JSON.stringify(calls[0]?.body.messages), /"media_type":"image\/png"/);
+
+  await built.userModelCredentials.delete("U1", "anthropic");
+  await built.userModelCredentials.setOAuth("U1", "anthropic", {
+    accessToken: "sk-ant-oat01-subscription",
+    expiresAt: Date.now() + 3600_000,
+  });
+  const subscribed = await post(claims, structuredRequest);
+  assert.equal(subscribed.status, 422);
+  assert.match(await subscribed.text(), /Claude subscription/);
+  assert.equal(calls.length, 1);
+
+  await built.userModelCredentials.delete("U1", "anthropic");
+  assert.equal((await post(claims, structuredRequest)).status, 409);
+  assert.equal(calls.length, 1);
+});
+
+test("a failed browser request names the model and the account it billed", async (t) => {
+  const { built, post } = await browserEndpoint(
+    t,
+    () =>
+      new Response(JSON.stringify({ type: "error", error: { type: "rate_limit_error", message: "slow down" } }), {
+        status: 429,
+        headers: { "content-type": "application/json" },
+      }),
+  );
+  await built.config.setPersonalModelAuth("U1", true, "anthropic");
+  await built.userModelCredentials.setApiKey("U1", "anthropic", "personal-claude-key");
+  const failed = await post({ browserAccount: "anthropic", browserModel: "claude-opus-5" }, structuredRequest);
+  assert.equal(failed.status, 502);
+  const { error } = (await failed.json()) as { error: string };
+  assert.match(error, /Claude Opus 5 \(billed to the person's own account\) could not complete the browser request/);
+  assert.match(error, /slow down/);
+  assert.ok(!error.includes("personal-claude-key"));
+});
+
+const chatgptToken = `header.${Buffer.from(
+  JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "account" } }),
+).toString("base64url")}.sig`;
+
+const rejected = () =>
+  new Response(JSON.stringify({ error: { message: "subscription test stop" } }), {
+    status: 400,
+    headers: { "content-type": "application/json" },
+  });
+
+test("a ChatGPT login serves the browser on the person's subscription", async (t) => {
+  const { built, calls, post } = await browserEndpoint(t, rejected);
+  await built.userModelCredentials.setOAuth("U1", "openai", {
+    accessToken: chatgptToken,
+    expiresAt: Date.now() + 3600_000,
+  });
+  await built.config.setPersonalModelAuth("U1", true, "openai");
+  const response = await post(
+    { browserAccount: "openai", browserModel: "codex/gpt-6.1-sol" },
+    { ...structuredRequest, model: "codex/gpt-6.1-sol" },
+  );
+  assert.equal(response.status, 502);
+  assert.match(await response.text(), /billed to the person's own account/);
+  assert.equal(calls[0]?.host, "chatgpt.com");
+  assert.equal(calls[0]?.headers.get("authorization"), `Bearer ${chatgptToken}`);
+});
+
+test("a company ChatGPT subscription serves company browsing without an API-key fallback", async (t) => {
+  const { built, calls, post } = await browserEndpoint(t, rejected, {
+    codexAuthCredential: COMPANY_CHATGPT_CREDENTIAL,
+    openaiApiKey: "must-not-fallback",
+  });
+  await saveCompanyChatGPTLogin(built.keychain, {
+    auth_mode: "chatgpt",
+    tokens: { access_token: chatgptToken, refresh_token: "company-refresh", id_token: chatgptToken },
+  });
+  const response = await post(
+    { browserAccount: "company", browserModel: "gpt-5.6-sol" },
+    { ...structuredRequest, model: "gpt-5.6-sol" },
+  );
+  assert.equal(response.status, 502);
+  assert.match(await response.text(), /billed to the organization's own provider key/);
+  assert.equal(calls[0]?.host, "chatgpt.com");
+  assert.equal(calls[0]?.headers.get("authorization"), `Bearer ${chatgptToken}`);
+});

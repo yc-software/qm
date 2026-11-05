@@ -10,12 +10,17 @@ import { createServer } from "../src/api/server.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const SECRET = "test-signing-secret".repeat(3);
 
 function start(): { base: string; app: ReturnType<typeof buildApp>["app"]; close: () => Promise<void> } {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "claim-")) }));
-  const server = createServer(built.app, { signingSecret: SECRET });
+  const server = createServer(built.app, {
+    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+    signingSecret: SECRET,
+  });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   return { base, app: built.app, close: () => new Promise<void>((r) => server.close(() => r())) };
@@ -78,13 +83,13 @@ test("an expired claim re-surfaces the row to a later poll (drainer died mid-pos
       text: "claimed then abandoned",
       idempotencyKey: "post:sess-3:one",
     });
-    assert.equal((await fetchPending(srv.base, "type=group&claimMs=50")).length, 1);
+    assert.equal((await fetchPending(srv.base, "type=group&claimMs=2000")).length, 1);
     assert.equal(
-      (await fetchPending(srv.base, "type=group&claimMs=50")).length,
+      (await fetchPending(srv.base, "type=group&claimMs=2000")).length,
       0,
       "claimed rows are invisible before the TTL",
     );
-    await new Promise((r) => setTimeout(r, 80));
+    await new Promise((r) => setTimeout(r, 2100));
     assert.equal((await fetchPending(srv.base, "type=group&claimMs=15000")).length, 1, "the abandoned row comes back");
   } finally {
     await srv.close();

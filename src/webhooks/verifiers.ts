@@ -1,5 +1,5 @@
 import { createHash, createHmac } from "node:crypto";
-import type { Webhook } from "../types.ts";
+import type { Webhook } from "../triggers/types.ts";
 import { constantTimeEqual } from "../util/crypto.ts";
 
 export interface VerifierInput {
@@ -19,7 +19,7 @@ function header(headers: VerifierInput["headers"], name: string): string | undef
   return Array.isArray(v) ? v[0] : v;
 }
 
-function hmacHex(secret: string, body: string): string {
+export function hmacHex(secret: string, body: string): string {
   return createHmac("sha256", secret).update(body).digest("hex");
 }
 

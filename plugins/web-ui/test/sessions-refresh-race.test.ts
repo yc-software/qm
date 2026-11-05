@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { JSDOM } from "jsdom";
-import { createServer } from "vite";
+import { testViteServer } from "./vite-server.ts";
 test("session refresh bursts share one trailing read and observe its fresh list", async () => {
   const dom = new JSDOM('<!doctype html><div id="app"></div><main id="main"></main>', {
     url: "http://localhost/web-ui/",
@@ -41,7 +41,7 @@ test("session refresh bursts share one trailing read and observe its fresh list"
     throw new Error(`Unexpected request: ${path}`);
   };
 
-  const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  const vite = await testViteServer();
   try {
     const { appState } = await vite.ssrLoadModule("/src/shell-state.ts");
     const { sessionsState, sessionsReady, refreshSessions } = await vite.ssrLoadModule("/src/sessions.ts");
@@ -103,7 +103,7 @@ test("a failed lone refresh still settles sessionsReady and reports the error pa
     if (String(input) === "/api/contexts") return Response.json({ contexts: [] });
     throw new Error("network down");
   };
-  const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  const vite = await testViteServer();
   try {
     const { sessionsReady, refreshSessions } = await vite.ssrLoadModule("/src/sessions.ts");
     assert.equal(await refreshSessions({ silent: true }), false);
@@ -149,7 +149,7 @@ test("opening a conversation joins the first list load and leaves a current list
     throw new Error(`Unexpected request: ${path}`);
   };
 
-  const vite = await createServer({ server: { middlewareMode: true, hmr: false, ws: false }, appType: "custom" });
+  const vite = await testViteServer();
   try {
     const { refreshSessions, refreshSessionsOnOpen, sessionsReady } = await vite.ssrLoadModule("/src/sessions.ts");
     const first = refreshSessions({ showLoading: true });
@@ -185,7 +185,7 @@ test("a failed list load does not lock out the next conversation open", async ()
     throw new Error("network down");
   };
 
-  const vite = await createServer({ server: { middlewareMode: true, hmr: false, ws: false }, appType: "custom" });
+  const vite = await testViteServer();
   try {
     const { refreshSessions, refreshSessionsOnOpen, sessionsState } = await vite.ssrLoadModule("/src/sessions.ts");
     assert.equal(await refreshSessions({ showLoading: true }), false);
@@ -212,7 +212,7 @@ test("after a background refresh fails, the next open refetches the loaded list"
     return Response.json({ sessions });
   };
 
-  const vite = await createServer({ server: { middlewareMode: true, hmr: false, ws: false }, appType: "custom" });
+  const vite = await testViteServer();
   try {
     const { refreshSessions, refreshSessionsOnOpen, sessionsState } = await vite.ssrLoadModule("/src/sessions.ts");
     assert.equal(await refreshSessions({ showLoading: true }), true);
@@ -244,7 +244,7 @@ test("an open that joined a refresh whose answer was discarded asks again itself
     throw new Error(`Unexpected request: ${path}`);
   };
 
-  const vite = await createServer({ server: { middlewareMode: true, hmr: false, ws: false }, appType: "custom" });
+  const vite = await testViteServer();
   try {
     const { refreshSessions, refreshSessionsOnOpen, sessionsState } = await vite.ssrLoadModule("/src/sessions.ts");
     const stale = refreshSessions({ silent: true, patchEpoch: -1 });
@@ -278,7 +278,7 @@ test("an open that joined a refresh that simply failed does not double the load"
     throw new Error("network down");
   };
 
-  const vite = await createServer({ server: { middlewareMode: true, hmr: false, ws: false }, appType: "custom" });
+  const vite = await testViteServer();
   try {
     const { refreshSessions, refreshSessionsOnOpen } = await vite.ssrLoadModule("/src/sessions.ts");
     const doomed = refreshSessions({ silent: true });
@@ -301,7 +301,7 @@ test("queued refreshes recover a failed read and retain the latest patch epoch",
     if (String(input) === "/api/contexts") return Response.json({ contexts: [] });
     return new Promise<Response>((resolve) => pending.push(resolve));
   };
-  const vite = await createServer({ server: { middlewareMode: true, hmr: false, ws: false }, appType: "custom" });
+  const vite = await testViteServer();
   try {
     const { refreshSessions, sessionsState } = await vite.ssrLoadModule("/src/sessions.ts");
     const first = refreshSessions({ silent: true });
@@ -336,7 +336,7 @@ test("a stalled refresh can be replaced without old requests trapping later refr
     if (String(input) === "/api/contexts") return Response.json({ contexts: [] });
     return new Promise<Response>((resolve) => pending.push(resolve));
   };
-  const vite = await createServer({ server: { middlewareMode: true, hmr: false, ws: false }, appType: "custom" });
+  const vite = await testViteServer();
   try {
     const { refreshSessions, sessionsState } = await vite.ssrLoadModule("/src/sessions.ts");
     let now = Date.now();

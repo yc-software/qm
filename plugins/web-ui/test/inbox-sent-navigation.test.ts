@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { JSDOM, VirtualConsole } from "jsdom";
-import { createServer } from "vite";
+import { testViteServer } from "./vite-server.ts";
 import { inboxRuntime } from "./inbox-composer-fixture.ts";
 import type { LedgerItem } from "../src/inbox.ts";
 
@@ -44,7 +44,7 @@ test("Sent opens from a split pane and retains drafts and queued sends after nav
   });
   Object.defineProperty(globalThis, "cancelAnimationFrame", { configurable: true, value: clearTimeout });
   const originalFetch = globalThis.fetch;
-  const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  const vite = await testViteServer();
   const waitFor = async (condition: () => boolean): Promise<void> => {
     for (let i = 0; i < 100 && !condition(); i++) await new Promise((resolve) => setTimeout(resolve, 0));
     assert.ok(condition());

@@ -1,13 +1,18 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { createMemoryEnvironmentStore, resolveEnvironmentId } from "../src/environments/environment-store.ts";
+import {
+  createPostgresEnvironmentStore,
+  resolveEnvironmentId,
+  type EnvironmentStore,
+} from "../src/environments/environment-store.ts";
 import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
 import { scopeId } from "../src/types.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 describe("environments (the computer a conversation points at)", () => {
   let t = 1_000;
   const now = (): number => ++t;
-  const store = (): ReturnType<typeof createMemoryEnvironmentStore> => createMemoryEnvironmentStore({ now });
+  const store = (): EnvironmentStore => createPostgresEnvironmentStore(testDatabaseUrl(), { now });
 
   it("an unattached scope resolves to its own default environment (id == scopeId)", async () => {
     const s = store();

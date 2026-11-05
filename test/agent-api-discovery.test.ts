@@ -11,6 +11,8 @@ import { buildApp } from "./support/build-app.ts";
 import { scopeId, type ScopeId } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const SECRET = "discovery-test-secret".repeat(3);
 const ORG = scopeId("org", "default-org");
@@ -24,6 +26,7 @@ async function start(swarmsEnabled = true) {
     }),
   );
   const server = createServer(built.app, {
+    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     admin: built.admin,
     memory: built.memory,
     auditLog: built.auditLog,
@@ -153,7 +156,6 @@ test("a granted autonomous turn discovers only the unattended read family", asyn
       "/v1/admin/scopes",
       "/v1/admin/sessions",
       "/v1/admin/sessions/:id",
-      "/v1/admin/runs",
       "/v1/admin/errors",
       "/v1/admin/whoami",
     ]);

@@ -345,7 +345,7 @@ test("observed screening returns immediately and audits each verdict once it set
         return { verdict: { decision: "strict", reason: "example-screen:injection" }, score: 0.9, threshold: 0.5 };
       },
     },
-    harness: { models: {} },
+    agent: { models: {} },
     auditLog: { record: (event: AuditEvent) => events.push(event) },
   } as unknown as OrchestratorDeps);
   const verdicts = await Promise.all(

@@ -1,3 +1,4 @@
+import { item } from "./item-fixture.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { harness } from "./deep-link-boot-fixture.ts";
@@ -21,8 +22,8 @@ test("fork feedback survives delayed success, failure, and navigation", async ()
     createdAt: Date.now(),
     title: "Source conversation",
   };
-  const entries = [{ seq: 0, type: "user", createdAt: Date.now(), payload: { text: "Fork this message" } }];
-  const h = await harness({ path: "/s/source", session: source, listSessions: [source], entries });
+  const items = [item("UserMessage", { seq: 0, createdAt: Date.now(), text: "Fork this message" })];
+  const h = await harness({ path: "/s/source", session: source, listSessions: [source], items });
   let finish: (response: Response) => void = () => {};
   const anchorDescriptor = Object.getOwnPropertyDescriptor(globalThis, "HTMLAnchorElement");
   try {
@@ -73,7 +74,7 @@ test("fork feedback survives delayed success, failure, and navigation", async ()
       finish(
         outcome === "failure"
           ? Response.json({ error: "Could not copy history" }, { status: 500 })
-          : Response.json({ session: fork, entries }),
+          : Response.json({ session: fork, items }),
       );
       await until(() => !document.querySelector(".session[aria-busy=true]"));
       assert.equal(requests, 1);

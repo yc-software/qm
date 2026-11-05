@@ -4,7 +4,6 @@ import type { PgPool } from "../persistence/pg-pool.ts";
 import { headSlice, tailSlice } from "../util/text.ts";
 import { collectBytes } from "../util/bytes.ts";
 import { swallowAs } from "../util/errors.ts";
-import type { SessionEntry } from "../types.ts";
 
 const TOOL_OUTPUT_SETTING = "tool_result_inline_tokens";
 export const DEFAULT_INLINE_TOKENS = 4096;
@@ -49,20 +48,36 @@ export function parkedOutputKey(path: string): ParkedOutputKey | null {
   return name && !name.includes("/") ? { digest: md5Hex(name), callId: name } : null;
 }
 
-export function cutToolOutput(
+export function cutToInline(
   text: string,
   inlineTokens: number,
-  callId: string,
+  where = "",
 ): { text: string; shownChars: number } | null {
   if (inlineTokens <= 0) return null;
   const budget = inlineTokens * CHARS_PER_TOKEN;
   if (text.length <= budget) return null;
   const head = headSlice(text, Math.floor(budget / 2));
   const tail = tailSlice(text, Math.floor(budget / 2));
-  const marker =
-    `\n…[output cut: showing the first ${head.length} and last ${tail.length} of ${text.length} chars. ` +
-    `The full output is in ${TOOL_OUTPUT_PATH}${DIGEST_DIR}${md5Hex(callId)}; reading it with the files tool copies it onto the computer (kept 30 days)]…\n`;
+  const marker = `\n…[output cut: showing the first ${head.length} and last ${tail.length} of ${text.length} chars.${where}]…\n`;
   return { text: head + marker + tail, shownChars: head.length + tail.length };
+}
+
+export function cutToolOutput(
+  text: string,
+  inlineTokens: number,
+  callId: string,
+): { text: string; shownChars: number } | null {
+  return cutToInline(
+    text,
+    inlineTokens,
+    ` The full output is in ${TOOL_OUTPUT_PATH}${DIGEST_DIR}${md5Hex(callId)}; reading it with the files tool copies it onto the computer (kept 30 days)`,
+  );
+}
+
+export async function inlineTokensOf(store: Pick<ToolOutputStore, "inlineTokens"> | undefined): Promise<number> {
+  return store
+    ? store.inlineTokens().catch(swallowAs("tool output: inline cap", DEFAULT_INLINE_TOKENS))
+    : DEFAULT_INLINE_TOKENS;
 }
 
 export async function parkIfOverCap(
@@ -70,14 +85,12 @@ export async function parkIfOverCap(
   text: string,
   callId: string,
 ): Promise<{ text: string; output: ToolOutputRef } | null> {
-  const inlineTokens = await store.inlineTokens().catch(swallowAs("tool output: inline cap", DEFAULT_INLINE_TOKENS));
+  const inlineTokens = await inlineTokensOf(store);
   const cut = cutToolOutput(text, inlineTokens, callId);
   if (!cut) return null;
   const blob = await store.save(text).catch(swallowAs("tool output: park full text", null));
   return blob ? { text: cut.text, output: { blob, chars: text.length, shownChars: cut.shownChars } } : null;
 }
-
-const sha256Hex = (text: string): string => createHash("sha256").update(text, "utf8").digest("hex");
 
 async function readText(bytes: DurableByteStore, blobKey: string): Promise<string | null> {
   const opened = await bytes.open(blobKey);
@@ -148,45 +161,6 @@ export function createPostgresToolOutputStore(opts: {
       const text = await readText(bytes, key);
       if (text === null)
         throw new Error(`tool output ${ref.digest}: parked bytes ${row.storage_key} are missing from storage`);
-      return { text };
-    },
-  };
-}
-
-export function createMemoryToolOutputStore(
-  opts: { inlineTokens?: number; sessions?: { getEntries(sessionId: string): Promise<SessionEntry[]> } } = {},
-): ToolOutputStore & { setInlineTokens(n: number): void; parked: Map<string, string> } {
-  let cap = opts.inlineTokens ?? DEFAULT_INLINE_TOKENS;
-  const parked = new Map<string, string>();
-  return {
-    parked,
-    setInlineTokens(n) {
-      cap = n;
-    },
-    async inlineTokens() {
-      return cap;
-    },
-    async save(text) {
-      const sha = sha256Hex(text);
-      parked.set(sha, text);
-      return sha;
-    },
-    async read(sessionId, ref) {
-      const entries = (await opts.sessions?.getEntries(sessionId)) ?? [];
-      const results = entries.filter((e) => {
-        const callId = (e.payload as { callId?: unknown } | null)?.callId;
-        return (
-          e.type === "tool_result" &&
-          typeof callId === "string" &&
-          md5Hex(callId) === ref.digest &&
-          (ref.callId === undefined || callId === ref.callId)
-        );
-      });
-      if (results.length > 1) throw new Error(`tool output ${ref.digest}: more than one call matches`);
-      const blob = (results[0]?.payload as { output?: { blob?: unknown } } | undefined)?.output?.blob;
-      if (typeof blob !== "string") return null;
-      const text = parked.get(blob);
-      if (text === undefined) throw new Error(`tool output ${ref.digest}: parked blob ${blob} is missing`);
       return { text };
     },
   };

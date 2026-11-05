@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createSlackRateLimitNotice } from "../src/slack/rate-limit-notice.ts";
 import { slackAccountConfigsFromEnv, slackPluginConfigFromEnv } from "../src/slack/config.ts";
+import { testSurfaces } from "./support/single-process.ts";
 
 const rateLimit = { code: "slack_webapi_rate_limited_error", retryAfter: 59.1 };
 const setupUrl = "https://qm.example/admin/?setup=slack";
@@ -103,11 +104,12 @@ test("shared URL propagates for managed and own-app accounts without installatio
 });
 
 test("explicit read tools notify only for human Slack turns, using their original destination", async () => {
-  const { createSurfaceToolDeps } = await import("../src/core/orchestrator/surface-tools.ts");
+  const { createSurfaceToolDeps } = await import("../src/surfaces/surface-tools.ts");
   for (const kind of ["human", "ambient", "automation"] as const) {
     const queries: any[] = [];
     const tools = createSurfaceToolDeps({
       deps: {
+        surfaces: testSurfaces(),
         deliveries: {},
         surfaceContext: {
           pull: async (_source: string, query: any) => {
@@ -116,7 +118,7 @@ test("explicit read tools notify only for human Slack turns, using their origina
           },
         },
       },
-      input: { surface: "slack", surfaceTools: true, origin: { kind }, background: true },
+      input: { surface: "slack", surfaceTools: true, origin: { kind } },
       actor: { id: "reader@example.com" },
       conversation: { kind: "channel" },
       defaultDestination: { type: "slack", target: "C1:1700.1" },

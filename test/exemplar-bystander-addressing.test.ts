@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
+import type { Item } from "../src/sessions/items.ts";
 import { testConfig } from "./support/test-config.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -56,26 +57,24 @@ test("exemplar: a thread reply addressed to a teammate arrives author-attributed
       },
       deliveryTarget: `slack:${channel}:${root}`,
       text: REQUEST,
-      unprompted: true,
+      origin: { kind: "ambient" },
       async: true,
     };
     await built.app.turn(req);
 
     const deadline = Date.now() + 5_000;
-    let trigger: any;
+    let trigger: Item | undefined;
     while (Date.now() < deadline && !trigger) {
       const sub = await built.sessions.getByThread(`ch:${channel}:${root}`);
       if (sub) {
-        const entries = await built.sessions.getEntries(sub.id);
-        trigger = entries.find(
-          (e: any) => e.type === "user" && String((e.payload as any)?.text ?? "").includes("review these drafts"),
-        );
+        const items = await built.sessions.getItems(sub.id);
+        trigger = items.find((e) => e.kind === "UserMessage" && (e.text ?? "").includes("review these drafts"));
       }
       if (!trigger) await sleep(50);
     }
     assert.ok(trigger, "the message reached the turn's session");
-    assert.equal((trigger.payload as any).name, "Alice", "the trigger is author-attributed");
-    assert.equal((trigger.payload as any).text, REQUEST, "the message text is preserved");
+    assert.equal(trigger.body.name, "Alice", "the trigger is author-attributed");
+    assert.equal(trigger.text, REQUEST, "the message text is preserved");
 
     await sleep(500);
     assert.deepEqual(

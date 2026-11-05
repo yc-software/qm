@@ -5,10 +5,11 @@ import { createInboxRealtime } from "../src/loops/inbox-realtime.ts";
 import { renderSourceInboxTask } from "../src/loops/inbox-loop.ts";
 import { slackConversationRef } from "../src/loops/sources/slack.ts";
 import type { LedgerEvent } from "../src/loops/ledger-events.ts";
-import type { Loop } from "../src/types.ts";
+import type { Loop } from "../src/loops/types.ts";
 import type { IngressEntry } from "../src/loops/ingress.ts";
+import { testMap } from "./support/test-database.ts";
 
-const LOOP = { id: "loop-inbox", owner: "owner@example.com", surface: "inbox" } as unknown as Loop;
+const LOOP = { id: "loop-inbox", owner: "owner@example.com", surface: "inbox:slack" } as unknown as Loop;
 
 function slackEntry(over: Partial<IngestEntryInput> = {}): IngestEntryInput {
   return {
@@ -17,7 +18,6 @@ function slackEntry(over: Partial<IngestEntryInput> = {}): IngestEntryInput {
     source: "slack",
     summary: "any update?",
     sourcePayload: {
-      source: "slack",
       title: "DM with Sam",
       from: "Sam",
       snippet: "any update?",
@@ -35,7 +35,6 @@ function gmailEntry(over: Partial<IngestEntryInput> = {}): IngestEntryInput {
     source: "gmail",
     summary: "contract question",
     sourcePayload: {
-      source: "gmail",
       title: "Contract question",
       from: "Ada",
       snippet: "contract question",
@@ -62,7 +61,7 @@ const latest = (entries: IngressEntry[] | undefined) =>
   entries?.map((entry) => [entry.dedupeKey, entry.sourcePayload?.latestEvent]);
 
 test("the owner's own reply is queued as an owner event for the card's conversation", async () => {
-  const items = createLoopItemLedger();
+  const items = createLoopItemLedger(testMap());
   await items.ingest([slackEntry()]);
   const rt = realtime(items);
   await rt.onConversationEvent({
@@ -78,7 +77,7 @@ test("the owner's own reply is queued as an owner event for the card's conversat
 });
 
 test("someone else's messages are queued as other events with their sender", async () => {
-  const items = createLoopItemLedger();
+  const items = createLoopItemLedger(testMap());
   await items.ingest([slackEntry(), gmailEntry()]);
   const rt = realtime(items);
   await rt.onConversationEvent({
@@ -123,12 +122,11 @@ test("someone else's messages are queued as other events with their sender", asy
 });
 
 test("events in unrelated conversations or other sources queue nothing", async () => {
-  const items = createLoopItemLedger();
+  const items = createLoopItemLedger(testMap());
   await items.ingest([
     slackEntry({
       dedupeKey: "C9:100.1",
       sourcePayload: {
-        source: "slack",
         title: "#eng",
         from: "Ada",
         snippet: "thread ask",
@@ -159,12 +157,11 @@ test("events in unrelated conversations or other sources queue nothing", async (
 });
 
 test("a thread reply reaches a channel card anchored at the thread root", async () => {
-  const items = createLoopItemLedger();
+  const items = createLoopItemLedger(testMap());
   await items.ingest([
     slackEntry({
       dedupeKey: "C9:100.1",
       sourcePayload: {
-        source: "slack",
         title: "#eng",
         from: "Ada",
         snippet: "thread ask",
@@ -193,7 +190,7 @@ test("slack conversation refs key DMs by channel and channel asks by thread root
 
 test("ledger mutations emit change events", async () => {
   const events: LedgerEvent[] = [];
-  const items = createLoopItemLedger(undefined, (e) => events.push(e));
+  const items = createLoopItemLedger(testMap(), (e) => events.push(e));
   await items.ingest([slackEntry()]);
   const [item] = await items.byLoop(LOOP.id);
   await items.setProposal(item!.id, { data: { body: "draft" }, by: "agent" });

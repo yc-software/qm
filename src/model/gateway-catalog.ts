@@ -2,6 +2,7 @@ import { isEmbeddingModel, type EmbeddingModel } from "./model-overlay.ts";
 import { gatewayRoot, type ModelGatewayTransportConfig } from "./provider-endpoints.ts";
 import { GATEWAY_MODEL_PREFIX, GATEWAY_PROVIDER, setGatewayModels, type GatewayModel } from "./gateway-models.ts";
 import { modelOfferedInWebui, selectableBaseModels } from "./pi-models.ts";
+import { readBoundedText } from "../util/bytes.ts";
 
 const MAX_BYTES = 2 * 1024 * 1024;
 const MAX_MODELS = 1_000;
@@ -115,25 +116,7 @@ async function readCatalog(
   });
   if (!response.ok)
     throw Object.assign(new Error(`Gateway catalog returned HTTP ${response.status}`), { status: response.status });
-  if (!response.body || Number(response.headers.get("content-length")) > MAX_BYTES)
-    throw new Error("Gateway catalog exceeds size limit");
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let bytes = 0;
-  let body = "";
-  try {
-    while (true) {
-      const chunk = await reader.read();
-      if (chunk.done) break;
-      bytes += chunk.value.byteLength;
-      if (bytes > MAX_BYTES) throw new Error("Gateway catalog exceeds size limit");
-      body += decoder.decode(chunk.value, { stream: true });
-    }
-    body += decoder.decode();
-  } finally {
-    void reader.cancel().catch(() => {});
-    reader.releaseLock();
-  }
+  const body = await readBoundedText(response, MAX_BYTES, () => new Error("Gateway catalog exceeds size limit"));
   const data = record(JSON.parse(body))?.data;
   if (!Array.isArray(data) || data.length > MAX_MODELS) throw new Error("Invalid gateway catalog");
   return data;

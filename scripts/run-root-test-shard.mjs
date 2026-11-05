@@ -136,7 +136,7 @@ async function main() {
   }
 
   printFiles(`Running root test shard ${shard.index}/${shard.total}`, files);
-  const child = spawn(process.execPath, ["--experimental-test-module-mocks", "--test", ...files], {
+  const child = spawn(process.execPath, ["scripts/run-pg-tests.mjs", ...files], {
     cwd: new URL("../", import.meta.url),
     stdio: "inherit",
   });

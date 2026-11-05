@@ -1,18 +1,19 @@
 import "./instrument.ts";
 import { handleVoiceRoute, sweepDictationSpool } from "./voice-routes.ts";
 import { browserErrorConfig } from "./browser-error-config.ts";
-import { flushErrorReporting, reportBackendError } from "../../chassis/src/error-reporting.ts";
-import { swallow } from "../../chassis/src/errors.ts";
+import { reportBackendError } from "../../chassis/src/error-reporting.ts";
+import { errChain, swallow } from "../../chassis/src/errors.ts";
 import { appEditSlug } from "../src/app-edit.ts";
 import { composioCallbackUrl } from "./composio-return.ts";
 import { sharedSessionHtml } from "./shared-session.ts";
 import { uiCanvasRoutes } from "./ui-canvas-routes.ts";
+import { adminRoutes } from "./admin-routes.ts";
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { Readable } from "node:stream";
-import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { dirname, extname, join, normalize } from "node:path";
+import { dirname, extname, join, posix } from "node:path";
 import { randomBytes } from "node:crypto";
 import { LRUCache } from "lru-cache";
 import {
@@ -21,6 +22,7 @@ import {
   signedHeaders,
   withSourceAuthNonce,
   CAPABILITY_HEADER,
+  relayCoreDownload,
   type HttpMethod,
 } from "../../chassis/src/core-client.ts";
 import { findRoute } from "../../chassis/src/router.ts";
@@ -43,14 +45,12 @@ import {
   CORE_ORG_ID as ORG,
   CORE_SIGNING_SECRET,
   PORTAL_IDENTITY_SECRET,
-  portFromEnv,
 } from "../../chassis/src/env.ts";
 
 const SUBAGENT_THREAD_PREFIX = "agent:main:subagent:";
-const PORT = portFromEnv(8096);
 const welcomeCohort = process.env.WEB_UI_WELCOME_COHORT?.trim().slice(0, 40) || undefined;
 const suggestedActivities = parseSuggestedActivities(process.env.WEB_UI_SUGGESTED_ACTIVITIES);
-const PUBLIC_URL = (process.env.WEB_UI_PUBLIC_URL ?? `http://localhost:${PORT}`).replace(/\/$/, "");
+const PUBLIC_URL = (process.env.PUBLIC_WEB_URL ?? "http://localhost:8096").replace(/\/$/, "");
 const WEB_UI_DEV = process.env.WEB_UI_DEV === "1";
 const ALLOW_UNSIGNED_TEST_IDENTITY =
   process.env.NODE_ENV === "test" && process.env.ALLOW_UNSIGNED_TEST_IDENTITY === "1";
@@ -84,7 +84,6 @@ async function hasInboxLoopPreview(user: string): Promise<boolean> {
 }
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const DIST = join(ROOT, "dist-web");
 
 const brandingCache = createBrandingCache(async () => {
   const r = await coreFetch("GET", "/v1/surface-config", "", 2_000);
@@ -131,7 +130,6 @@ async function brandIndexHtml(html: string): Promise<string> {
 
 const portalTokenStore = new AsyncLocalStorage<string | undefined>();
 
-const runOwners = new Map<string, string>();
 const runThreadKeys = new Map<string, string>();
 const activeRunsByThread = new Map<string, string[]>();
 
@@ -140,7 +138,6 @@ function threadKey(user: string, threadRef: string): string {
 }
 
 function forgetRun(runId: string): void {
-  runOwners.delete(runId);
   const key = runThreadKeys.get(runId);
   if (key) {
     const remaining = (activeRunsByThread.get(key) ?? []).filter((id) => id !== runId);
@@ -151,11 +148,10 @@ function forgetRun(runId: string): void {
 }
 
 function rememberRun(runId: string, user: string, threadRef: string): void {
-  if (runOwners.size > 5000) {
-    const oldest = runOwners.keys().next().value;
+  if (runThreadKeys.size > 5000) {
+    const oldest = runThreadKeys.keys().next().value;
     if (oldest !== undefined) forgetRun(oldest);
   }
-  runOwners.set(runId, user);
   const key = threadKey(user, threadRef);
   runThreadKeys.set(runId, key);
   activeRunsByThread.set(key, [...(activeRunsByThread.get(key) ?? []), runId]);
@@ -428,7 +424,7 @@ async function webTurnBase(
     surface: "web",
     actor: { externalId: user, ...(displayName ? { displayName } : {}) },
     conversation,
-    liveActor: true,
+    origin: { kind: "human" },
     deliveryTarget: threadRef,
     ...(inboxContext ? { conversationHeader: inboxContext } : {}),
     ...(appSlug
@@ -643,7 +639,7 @@ async function consumeCoreFeed(
     } catch {
       dropped = true;
     }
-    await new Promise((resolve) => setTimeout(resolve, STATE_FEED_RECONNECT_MS));
+    await new Promise((resolve) => setTimeout(resolve, STATE_FEED_RECONNECT_MS).unref());
   }
 }
 
@@ -964,10 +960,9 @@ async function uploadBlobFromRequest(req: IncomingMessage, res: ServerResponse, 
 async function uploadFileFromRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  user: string,
-  scope: string | null,
   sha256: string,
   name: string,
+  register: { path: string; fields: Record<string, string>; headers?: Record<string, string> },
 ): Promise<void> {
   if (!/^[0-9a-f]{64}$/.test(sha256)) {
     req.resume();
@@ -981,55 +976,79 @@ async function uploadFileFromRequest(
   }
   const stagedBody = JSON.parse(stagedText) as { blobId: string };
   const body = JSON.stringify({
-    principalId: user,
-    ...(scope ? { scopeId: scope } : {}),
+    ...register.fields,
     name,
     mimetype:
       typeof req.headers["content-type"] === "string" ? req.headers["content-type"] : "application/octet-stream",
     blobId: stagedBody.blobId,
   });
-  const registered = await coreFetch("POST", "/v1/files/upload", body);
+  const portalTok = portalTokenStore.getStore();
+  const registered = await fetchCoreText({
+    origin: CORE,
+    secret: CORE_SIGNING_SECRET,
+    method: "POST",
+    path: register.path,
+    body,
+    headers: register.headers ?? (portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : undefined),
+  });
   return sendBuffered(res, registered.status, { "content-type": "application/json" }, registered.text);
 }
 
-async function serveStatic(res: ServerResponse, urlPath: string): Promise<void> {
-  const rel = normalize(decodeURIComponent(urlPath)).replace(/^(\.\.[/\\])+/, "");
-  let filePath = join(DIST, rel);
-  if (!filePath.startsWith(DIST)) return void json(res, 403, { error: "forbidden" });
-
-  const isFile = existsSync(filePath) && statSync(filePath).isFile();
-  const immutable = isFile && /(?:^|[/\\])assets[/\\]/.test(rel);
-  if (!isFile) {
-    if (extname(rel)) return void json(res, 404, { error: "not_found" });
-    filePath = join(DIST, "index.html");
-    if (!existsSync(filePath)) {
-      return void json(res, 503, { error: "not_built", message: "run `npm run build` to produce dist-web/" });
-    }
-  }
-  if (filePath.endsWith("index.html")) {
-    const branded = await brandIndexHtml(readFileSync(filePath, "utf8"));
-    const headers = withSecurityHeaders({ "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" });
-    return sendBuffered(res, 200, headers, branded);
-  }
-  const headers = withSecurityHeaders({
-    "content-type": CONTENT_TYPES[extname(filePath)] ?? "application/octet-stream",
-    "cache-control": immutable ? "public, max-age=31536000, immutable" : "no-cache",
-    vary: "accept-encoding",
-  });
-  const packed = `${filePath}.gz`;
-  if (gzipAccepted(res.req) && existsSync(packed)) {
-    res.writeHead(200, { ...headers, "content-encoding": "gzip" });
-    return void pipeFile(res, packed);
-  }
-  res.writeHead(200, headers);
-  pipeFile(res, filePath);
+export interface WebReleases {
+  document(name: string): Promise<string>;
+  file(path: string, gzip: boolean): Promise<{ body: Readable; gzip: boolean } | null>;
 }
 
-function pipeFile(res: ServerResponse, filePath: string): void {
-  const stream = createReadStream(filePath);
-  stream.on("error", () => res.destroy());
-  res.on("close", () => stream.destroy());
-  stream.pipe(res);
+let releases: WebReleases | undefined;
+
+export function serveReleasesFrom(source: WebReleases): void {
+  releases = source;
+}
+
+function liveReleases(): WebReleases {
+  if (!releases) throw new Error("the web UI server was started without a release source");
+  return releases;
+}
+
+function releaseUnavailable(res: ServerResponse, what: string, error: unknown): void {
+  console.error(`[web-ui] ${what} unavailable: ${errChain(error)}`);
+  reportBackendError(error);
+  if (!res.headersSent) json(res, 503, { error: "web_ui_unavailable", message: "The web UI release is unavailable." });
+  else res.destroy();
+}
+
+async function serveStatic(res: ServerResponse, urlPath: string): Promise<void> {
+  const rel = posix.normalize(decodeURIComponent(urlPath)).replace(/^\/+/, "");
+  if (rel === ".." || rel.startsWith("../") || rel.includes("\\")) return void json(res, 403, { error: "forbidden" });
+  if (!extname(rel) || rel === "index.html") {
+    let html: string;
+    try {
+      html = await liveReleases().document("index.html");
+    } catch (error) {
+      return releaseUnavailable(res, "index.html", error);
+    }
+    const headers = withSecurityHeaders({ "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" });
+    return sendBuffered(res, 200, headers, await brandIndexHtml(html));
+  }
+  let found: Awaited<ReturnType<WebReleases["file"]>>;
+  try {
+    found = await liveReleases().file(rel, gzipAccepted(res.req));
+  } catch (error) {
+    return releaseUnavailable(res, rel, error);
+  }
+  if (!found) return void json(res, 404, { error: "not_found" });
+  const headers = withSecurityHeaders({
+    "content-type": CONTENT_TYPES[extname(rel)] ?? "application/octet-stream",
+    "cache-control": rel.startsWith("assets/") ? "public, max-age=31536000, immutable" : "no-cache",
+    vary: "accept-encoding",
+  });
+  res.writeHead(200, found.gzip ? { ...headers, "content-encoding": "gzip" } : headers);
+  found.body.on("error", (error) => {
+    console.error(`[web-ui] streaming ${rel} failed: ${errChain(error)}`);
+    res.destroy();
+  });
+  res.on("close", () => found.body.destroy());
+  found.body.pipe(res);
 }
 
 async function serveAppEditHtml(req: IncomingMessage, res: ServerResponse, url: URL): Promise<boolean> {
@@ -1040,9 +1059,12 @@ async function serveAppEditHtml(req: IncomingMessage, res: ServerResponse, url: 
     const raw = readFileSync(join(ROOT, "index.html"), "utf8").replace("%BASE_URL%favicon.svg", "favicon.svg");
     html = await vite.transformIndexHtml(req.url ?? "/", raw);
   } else {
-    const filePath = join(DIST, "index.html");
-    if (!existsSync(filePath)) return false;
-    html = readFileSync(filePath, "utf8");
+    try {
+      html = await liveReleases().document("index.html");
+    } catch (error) {
+      releaseUnavailable(res, "index.html", error);
+      return true;
+    }
   }
   const headers = withSecurityHeaders({ "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" });
   const csp = SPA_CSP.replace("frame-ancestors 'self'", `frame-ancestors 'self' ${slug}.${APPS_FRAME_DOMAIN}`);
@@ -1493,14 +1515,11 @@ const apiRoutes: readonly WebRoute[] = [
     path: "/api/files/upload",
     handle: async (c) => {
       const { req, res, url, user } = c;
-      return uploadFileFromRequest(
-        req,
-        res,
-        user,
-        url.searchParams.get("scope"),
-        declaredSha(url),
-        uploadFileName(url),
-      );
+      const scope = url.searchParams.get("scope");
+      return uploadFileFromRequest(req, res, declaredSha(url), uploadFileName(url), {
+        path: "/v1/files/upload",
+        fields: { principalId: user, ...(scope ? { scopeId: scope } : {}) },
+      });
     },
   },
   {
@@ -1630,15 +1649,16 @@ const apiRoutes: readonly WebRoute[] = [
     handle: async (c) => {
       const { req, res, user } = c;
       const id = c.params.id!;
-      const p = await readJson<{ name?: unknown }>(req, res);
+      const p = await readJson<{ name?: unknown; icon?: unknown }>(req, res);
       if (!p) return;
       const name = typeof p.name === "string" ? p.name.trim().slice(0, 200) : "";
-      if (!name) return json(res, 400, { error: "bad_request", message: "name required" });
+      const hasIcon = Object.hasOwn(p, "icon");
+      if (!name && !hasIcon) return json(res, 400, { error: "bad_request", message: "name or icon required" });
       return relayCore(
         res,
         "PATCH",
         `/v1/projects/${encodeURIComponent(id)}`,
-        JSON.stringify({ principalId: user, name }),
+        JSON.stringify({ principalId: user, ...(name ? { name } : {}), ...(hasIcon ? { icon: p.icon } : {}) }),
       );
     },
   },
@@ -1765,6 +1785,11 @@ const apiRoutes: readonly WebRoute[] = [
   },
   {
     method: "GET",
+    path: "/api/custom-emoji",
+    handle: async (c) => relayCore(c.res, "GET", "/v1/custom-emoji"),
+  },
+  {
+    method: "GET",
     path: "/api/ui-state",
     handle: async (c) => {
       const { res, url, user } = c;
@@ -1783,6 +1808,20 @@ const apiRoutes: readonly WebRoute[] = [
       return relayCore(res, "PUT", "/v1/ui-state", JSON.stringify({ ...body, principalId: user }));
     },
   },
+  ...adminRoutes({
+    origin: CORE,
+    secret: CORE_SIGNING_SECRET,
+    org: ORG,
+    portalHeaders: (): Record<string, string> => {
+      const token = portalTokenStore.getStore();
+      return token ? { [PORTAL_IDENTITY_HEADER]: token } : {};
+    },
+    impersonated: (req) => Boolean(resolveIdentity(req)?.impersonator),
+    readBody,
+    uploadFile: uploadFileFromRequest,
+    refreshBranding: () => brandingCache.refreshNow(),
+    json,
+  }),
   ...uiCanvasRoutes({
     impersonated: (req) => Boolean(resolveIdentity(req)?.impersonator),
     coreFetch,
@@ -2157,7 +2196,7 @@ const apiRoutes: readonly WebRoute[] = [
   },
   {
     method: "GET",
-    path: "/api/sessions/:id/entries/:seq",
+    path: "/api/sessions/:id/items/:seq",
     handle: async (c) => {
       const { res, user } = c;
       const { id, seq } = c.params as { id: string; seq: string };
@@ -2165,7 +2204,7 @@ const apiRoutes: readonly WebRoute[] = [
       return relayCore(
         res,
         "GET",
-        `/v1/sessions/${encodeURIComponent(id)}/entries/${seq}?viewer=${encodeURIComponent(user)}`,
+        `/v1/sessions/${encodeURIComponent(id)}/items/${seq}?viewer=${encodeURIComponent(user)}`,
       );
     },
   },
@@ -2235,6 +2274,19 @@ const apiRoutes: readonly WebRoute[] = [
     handle: async (c) => {
       const { res, user } = c;
       return relayCore(res, "GET", `/v1/memory?principalId=${encodeURIComponent(user)}`);
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/spend",
+    handle: async (c) => {
+      const { res, url, user } = c;
+      const qs = new URLSearchParams({ principalId: user });
+      for (const key of ["from", "to", "bucket"]) {
+        const value = url.searchParams.get(key);
+        if (value) qs.set(key, value);
+      }
+      return relayCore(res, "GET", `/v1/spend?${qs.toString()}`);
     },
   },
   {
@@ -2629,7 +2681,6 @@ const apiRoutes: readonly WebRoute[] = [
       let text = "";
       let threadRef = `${ownPrefix}default`;
       let model: string | undefined;
-      let harness: string | undefined;
       let thinkingLevel: string | undefined;
       let fastMode: boolean | undefined;
       let timezone: string | undefined;
@@ -2642,8 +2693,10 @@ const apiRoutes: readonly WebRoute[] = [
       let idempotencyKey: string | undefined;
       let clientTools: unknown[] | undefined;
       let surfaceBriefing: Record<string, unknown> | undefined;
+      let midTurn: unknown;
       try {
         const p = JSON.parse(await readBody(req));
+        midTurn = p.midTurn;
         text = String(p.text ?? "");
         if (typeof p.desktopClientId === "string" && p.desktopClientId.length === 36)
           desktopClientId = p.desktopClientId;
@@ -2672,7 +2725,6 @@ const apiRoutes: readonly WebRoute[] = [
         if (typeof p.scopeId === "string" && p.scopeId) scope = p.scopeId;
         if (typeof p.channelName === "string" && p.channelName.trim()) channelName = p.channelName.trim().slice(0, 200);
         if (typeof p.model === "string" && p.model) model = p.model;
-        if (typeof p.harness === "string") harness = p.harness;
         if (typeof p.thinkingLevel === "string") thinkingLevel = p.thinkingLevel;
         if (typeof p.fastMode === "boolean") fastMode = p.fastMode;
         if (typeof p.timezone === "string" && p.timezone.trim()) timezone = p.timezone.trim().slice(0, 64);
@@ -2705,7 +2757,6 @@ const apiRoutes: readonly WebRoute[] = [
 
       const turn = {
         ...(await webTurnBase(req, user, resolved.conversation, threadRef, text)),
-        ...(harness ? { harness } : {}),
         ...(model ? { model } : {}),
         ...(thinkingLevel ? { thinkingLevel } : {}),
         ...(typeof fastMode === "boolean" ? { fastMode } : {}),
@@ -2717,6 +2768,7 @@ const apiRoutes: readonly WebRoute[] = [
         ...(proactiveOpener ? { proactiveOpener: true } : {}),
         ...(desktopClientId && !proactiveOpener ? { desktopClientId } : {}),
         ...(idempotencyKey ? { idempotencyKey } : {}),
+        ...(midTurn ? { midTurn } : {}),
       };
       return postTurnAndMint(req, res, turn, user, threadRef);
     },
@@ -2818,6 +2870,7 @@ const apiRoutes: readonly WebRoute[] = [
         callId?: unknown;
         result?: unknown;
         desktopClientId?: unknown;
+        tree?: unknown;
       }>(req, res, false, 6_000_000);
       if (!p) return;
       const kind = typeof p.kind === "string" ? p.kind : "";
@@ -2848,6 +2901,7 @@ const apiRoutes: readonly WebRoute[] = [
           ...(text !== undefined ? { text } : {}),
           ...steerFields,
           ...(typeof p.queuedRunId === "string" ? { queuedRunId: p.queuedRunId } : {}),
+          ...(kind === "abort" && p.tree === true ? { tree: true } : {}),
         }),
       );
     },
@@ -3365,7 +3419,7 @@ const apiRoutes: readonly WebRoute[] = [
 ];
 
 const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
-  const url = new URL(req.url ?? "/", `http://localhost:${PORT}`);
+  const url = new URL(req.url ?? "/", "http://localhost");
   const path = url.pathname;
   const method = req.method ?? "GET";
 
@@ -3435,37 +3489,31 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (!external && !user) return json(res, 401, { error: "sign in" });
     const corePath = `/v1/${external ? "public-shares" : "shared-sessions"}/${match[2]}${match[3] ? `/files/${match[3]}` : ""}?${external ? "" : `viewer=${encodeURIComponent(user!)}&`}inline=${url.searchParams.get("inline") === "1" ? "1" : "0"}`;
     if (match[3]) {
-      const signedPath = withSourceAuthNonce(corePath, CORE_SIGNING_SECRET);
       const portalTok = external ? null : portalTokenStore.getStore();
-      const response = await fetch(`${CORE}${signedPath}`, {
-        headers: {
-          ...signedHeaders(CORE_SIGNING_SECRET, "GET", signedPath, ""),
-          ...(portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : {}),
+      return relayCoreDownload(res, {
+        origin: CORE,
+        secret: CORE_SIGNING_SECRET,
+        path: corePath,
+        headers: portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : {},
+        copyHeaders: ["content-type", "content-length", "content-disposition"],
+        responseHeaders: {
+          "cache-control": "no-store",
+          "referrer-policy": "no-referrer",
+          "x-content-type-options": "nosniff",
+          "content-security-policy": "default-src 'none'; sandbox",
         },
-        redirect: "manual",
       });
-      const headers: Record<string, string> = {
-        "cache-control": "no-store",
-        "referrer-policy": "no-referrer",
-        "x-content-type-options": "nosniff",
-        "content-security-policy": "default-src 'none'; sandbox",
-      };
-      for (const name of ["content-type", "content-length", "content-disposition"]) {
-        const value = response.headers.get(name);
-        if (value) headers[name] = value;
-      }
-      res.writeHead(response.status, headers);
-      if (!response.body) return res.end();
-      const stream = Readable.fromWeb(response.body as Parameters<typeof Readable.fromWeb>[0]);
-      res.on("close", () => stream.destroy());
-      stream.on("error", () => res.destroy());
-      return stream.pipe(res);
     }
     const result = await coreFetch("GET", corePath);
     const dev = vite && !external;
-    const template = dev
-      ? await vite!.transformIndexHtml("/shared.html", readFileSync(join(ROOT, "shared.html"), "utf8"))
-      : readFileSync(join(DIST, "shared.html"), "utf8");
+    let template: string;
+    try {
+      template = dev
+        ? await vite!.transformIndexHtml("/shared.html", readFileSync(join(ROOT, "shared.html"), "utf8"))
+        : await liveReleases().document("shared.html");
+    } catch (error) {
+      return releaseUnavailable(res, "shared.html", error);
+    }
     res.writeHead(result.status, {
       "Content-Type": "text/html; charset=utf-8",
       "Cache-Control": "no-store",
@@ -3542,23 +3590,7 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
   json(res, 404, { error: "not found" });
 };
 
-let adminModule: Promise<typeof import("../../admin/src/index.ts")> | undefined;
-
 export const handler = async (req: IncomingMessage, res: ServerResponse) => {
-  const originalUrl = req.url ?? "/";
-  const path = originalUrl.split("?")[0]!;
-  if (process.env.ADMIN_ENABLED !== "0" && (path === "/admin" || path.startsWith("/admin/"))) {
-    req.url = originalUrl.slice("/admin".length) || "/";
-    if (req.url.startsWith("?")) req.url = `/${req.url}`;
-    try {
-      process.env.ADMIN_BASE_PATH ??= "/admin";
-      adminModule ??= import("../../admin/src/index.ts");
-      await (await adminModule).handler(req, res);
-    } finally {
-      req.url = originalUrl;
-    }
-    return;
-  }
   res.setHeader("strict-transport-security", "max-age=63072000; includeSubDomains");
   res.setHeader("referrer-policy", "no-referrer");
   res.setHeader("x-content-type-options", "nosniff");
@@ -3586,29 +3618,27 @@ const server = createServer((req, res) => {
   });
 });
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  createVite(server)
-    .then((v) => {
-      vite = v;
-      server.listen(PORT, () => {
-        console.log(
-          `[web-ui] surface on http://localhost:${PORT} → core ${CORE} (org ${ORG})${WEB_UI_DEV ? " [vite hmr]" : ""}`,
-        );
-        if (!WEB_UI_DEV && !existsSync(join(DIST, "index.html")))
-          console.warn("[web-ui] dist-web/ not built, run `npm run build`");
-        if (ALLOW.length === 0)
-          console.warn("[web-ui] WEB_UI_PRINCIPALS unset, any principal id may sign in (dev only)");
-        const t = setInterval(() => void drainWebDeliveries(), WEB_DELIVERY_POLL_MS);
-        t.unref?.();
-        void runStateFeed();
-        void runInboxFeed();
-        void sweepDictationSpool();
-      });
-    })
-    .catch(async (err: unknown) => {
-      reportBackendError(err);
-      console.error("[web-ui] failed to start:", String(err));
-      await flushErrorReporting();
-      process.exit(1);
+export async function startServer(options: { port: number; host: string; releases: WebReleases }): Promise<Server> {
+  serveReleasesFrom(options.releases);
+  vite = await createVite(server);
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(options.port, options.host, () => {
+      server.off("error", reject);
+      resolve();
     });
+  });
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : options.port;
+  console.log(
+    `[web-ui] surface on http://${options.host}:${port} → core ${CORE} (org ${ORG})${WEB_UI_DEV ? " [vite hmr]" : ""}`,
+  );
+  if (ALLOW.length === 0) console.warn("[web-ui] WEB_UI_PRINCIPALS unset, any principal id may sign in (dev only)");
+  const t = setInterval(() => void drainWebDeliveries(), WEB_DELIVERY_POLL_MS);
+  t.unref?.();
+  server.once("close", () => clearInterval(t));
+  void runStateFeed();
+  void runInboxFeed();
+  void sweepDictationSpool();
+  return server;
 }

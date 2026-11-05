@@ -4,11 +4,8 @@ import { createPostgresMap } from "../src/persistence/durable-map.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
-import {
-  createPostgresAdvisoryLock,
-  createNoopAdvisoryLock,
-  createMemoryAdvisoryLock,
-} from "../src/persistence/advisory-lock.ts";
+import { createPostgresAdvisoryLock, createNoopAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { testAdvisoryLock } from "./support/test-database.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the advisory-lock tests";
@@ -112,10 +109,12 @@ test("pg mutex: waiting beyond timeoutMs throws a clear error", { skip }, async 
     const held = new Promise<void>((r) => {
       release = r;
     });
+    const acquired = Promise.withResolvers<void>();
     const holding = holder.withLock("deploy:slow", async () => {
+      acquired.resolve();
       await held;
     });
-    await sleep(30);
+    await acquired.promise;
     await assert.rejects(
       () => waiter.withLock("deploy:slow", async () => "never"),
       /timeout acquiring advisory lock for deploy:slow/,
@@ -377,7 +376,7 @@ test("pg multi-key locks reuse one session for nested held keys and release the 
 });
 
 test("multi-key locks retain unawaited nested work until it finishes", async () => {
-  const lock = createMemoryAdvisoryLock();
+  const lock = testAdvisoryLock();
   const entered = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
   const outer = lock.tryWithLocks!(["nested"], async () => {

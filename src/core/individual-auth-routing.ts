@@ -3,7 +3,7 @@ import {
   CODEX_SUBSCRIPTION_PROVIDER,
   DEFAULT_AGENT_MODEL_ID,
   DEFAULT_CODEX_MODEL_ID,
-  defaultModelForHarness,
+  defaultModel,
   defaultModelForProvider,
   resolveModel,
   isOverlayModel,
@@ -11,12 +11,12 @@ import {
   modelRequestOverrides,
   type ModelProvider,
 } from "../model/pi-models.ts";
-import type { UserModelCredential } from "../model/user-model-credential-store.ts";
+import type { UserModelCredential, UserModelCredentialStore } from "../model/user-model-credential-store.ts";
+import type { ProviderKeys } from "../model/model-runtime.ts";
 
 export type IndividualAuthRouting =
-  | { kind: "apikey"; provider: ModelProvider; harness: "pi"; model: string | undefined; apiKey: string }
-  | { kind: "oauth"; provider: "anthropic"; harness: "claude"; model: string }
-  | { kind: "oauth"; provider: "openai"; harness: "pi"; model: string }
+  | { kind: "apikey"; provider: ModelProvider; model: string | undefined; apiKey: string }
+  | { kind: "oauth"; provider: "anthropic" | "openai"; model: string }
   | null;
 
 export function resolveIndividualAuthRouting(
@@ -52,12 +52,9 @@ export function resolveIndividualAuthRouting(
     return {
       kind: "apikey",
       provider: pick.provider,
-      harness: "pi",
       apiKey: pick.cred.apiKey,
       model:
-        requestedModel && requestedProvider === pick.provider
-          ? requestedModel
-          : defaultModelForProvider("pi", pick.provider),
+        requestedModel && requestedProvider === pick.provider ? requestedModel : defaultModelForProvider(pick.provider),
     };
   }
   if (pick.cred.kind === "oauth" && pick.cred.oauth) {
@@ -65,21 +62,45 @@ export function resolveIndividualAuthRouting(
       return {
         kind: "oauth",
         provider: "anthropic",
-        harness: "claude",
         model:
-          requestedModel && requestedProvider === "anthropic"
-            ? requestedModel
-            : defaultModelForHarness("claude", DEFAULT_AGENT_MODEL_ID),
+          requestedModel && requestedProvider === "anthropic" ? requestedModel : defaultModel(DEFAULT_AGENT_MODEL_ID),
       };
     }
     return {
       kind: "oauth",
       provider: "openai",
-      harness: "pi",
       model: codexSubscriptionModelId(
         requestedModel && requestedProvider === "openai" ? requestedModel : DEFAULT_CODEX_MODEL_ID,
       ),
     };
   }
   return null;
+}
+
+export async function loadPersonalModelAuth(
+  credentials: UserModelCredentialStore,
+  actorId: string,
+  account: string,
+  requestedModel: string | undefined,
+): Promise<{ keys: ProviderKeys; modelId: string | undefined; subscription?: "anthropic" | "openai" } | undefined> {
+  const [anthCred, oaiCred] = await Promise.all([
+    account === "openai" ? null : credentials.get(actorId, "anthropic"),
+    account === "anthropic" ? null : credentials.get(actorId, "openai"),
+  ]);
+  const routing = resolveIndividualAuthRouting(anthCred ?? null, oaiCred ?? null, requestedModel);
+  if (routing?.kind === "apikey") return { keys: { [routing.provider]: routing.apiKey }, modelId: routing.model };
+  if (routing?.kind !== "oauth") return undefined;
+  const derived = await credentials.derivedOAuth(actorId, routing.provider);
+  if (!derived) return undefined;
+  return routing.provider === "anthropic"
+    ? {
+        keys: { anthropic: derived.accessToken },
+        modelId: routing.model,
+        subscription: "anthropic",
+      }
+    : {
+        keys: { [CODEX_SUBSCRIPTION_PROVIDER]: derived.accessToken },
+        modelId: routing.model,
+        subscription: "openai",
+      };
 }

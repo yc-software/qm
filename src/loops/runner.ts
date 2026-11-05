@@ -1,11 +1,10 @@
-import type { Loop, LoopItem, LoopOutput } from "../types.ts";
+import type { Loop, LoopItem, LoopOutput, ShipGrant } from "./types.ts";
 import type { LoopItemLedger } from "./item-ledger.ts";
 import { unresolvedOutput, type CaptureOutputInput, type LoopOutputStore } from "./output-store.ts";
 import type { FireOutcome, LoopStore } from "./loop-store.ts";
 import { isRunnable } from "./loop-store.ts";
 import { decideShip, outputCandidate, undeclaredShipActions } from "./ship-gate.ts";
 import type { SuccessVerdict } from "./success-evaluation.ts";
-import type { ShipGrant } from "../types.ts";
 import { workOrder } from "./triage.ts";
 import { isTransientFailure } from "../core/turn-error.ts";
 

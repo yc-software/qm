@@ -13,8 +13,8 @@ import { runTrigger, type TriggerDeps } from "../src/triggers/run-trigger.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { scopeId, type Destination, type Principal, type TurnRequest, type TurnResult } from "../src/types.ts";
+import { testMap } from "./support/test-database.ts";
 
 function fakeDirectory(): ReachDirectory & {
   get(id: string): Promise<{ displayName: string } | null>;
@@ -299,7 +299,7 @@ describe("Reach: verbatim relay attribution", () => {
     assert.deepEqual(d.destination.delete, { messageTs: "1782340476.7" });
   });
 
-  it("an edit carries new text via editRef, delivered verbatim", async () => {
+  it("an edit carries the target message and its new text, delivered verbatim", async () => {
     const deliveries = createDeliveryStore();
     const editDest = withEdit(
       { type: "slack", target: "C-eng", audienceScopeId: scopeId("channel", "C-eng") },
@@ -311,7 +311,7 @@ describe("Reach: verbatim relay attribution", () => {
       text: "the corrected summary",
       idempotencyKey: "ke1",
     });
-    assert.equal(ok.destination.editRef, "1782340476.7");
+    assert.deepEqual(ok.destination.edit, { messageTs: "1782340476.7" });
     assert.equal(ok.text, "the corrected summary");
   });
 });
@@ -319,8 +319,8 @@ describe("Reach: verbatim relay attribution", () => {
 function triggerDeps(run: (req: TurnRequest) => Promise<TurnResult>): TriggerDeps {
   return {
     deliveries: createDeliveryStore(),
-    idempotency: createIdempotencyStore(createMemoryMap()),
-    identity: createIdentityService(),
+    idempotency: createIdempotencyStore(testMap()),
+    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     run,
     directory: fakeDirectory(),
   };

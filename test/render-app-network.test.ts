@@ -3,8 +3,8 @@ import { test } from "node:test";
 import { createRenderAppNetwork } from "../src/deploy/render-app-network.ts";
 import { RenderApiError } from "../src/deploy/render-api.ts";
 import type { StoredRenderDeploy } from "../src/deploy/render-deploy-provider.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createFakeRenderApi, fakeDeployment, type FakeRenderApiCall } from "./support/fake-render.ts";
+import { testMap } from "./support/test-database.ts";
 
 interface Environment {
   id: string;
@@ -15,7 +15,7 @@ interface Environment {
 
 function fixture(handle: (call: FakeRenderApiCall, environment: Environment) => unknown) {
   const deployment = fakeDeployment();
-  const store = createMemoryMap<StoredRenderDeploy>();
+  const store = testMap<StoredRenderDeploy>();
   const initial: StoredRenderDeploy = {
     deploymentId: deployment.id,
     appRegion: "oregon",
