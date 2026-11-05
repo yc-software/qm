@@ -10,6 +10,8 @@ import {
   type PgPool,
 } from "../src/persistence/pg-pool.ts";
 import { withTenant } from "../src/tenants/context.ts";
+import { createPostgresPersonaStore } from "../src/personas/persona-store.ts";
+import { scopeId } from "../src/types.ts";
 import { testBareDatabaseUrl, testMigratedDatabaseUrl } from "./support/test-database.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -253,5 +255,27 @@ test("a bare database migrates in the order the server applies every registered 
     );
   } finally {
     await owner.close();
+  }
+});
+
+test("a persona and its access list belong to the tenant that made them", async () => {
+  const { databaseUrl, owner, close } = await fixture();
+  try {
+    const [a, b] = [randomUUID(), randomUUID()];
+    await owner.q(`INSERT INTO tenants(id) VALUES ($1), ($2)`, [a, b]);
+    const personas = createPostgresPersonaStore(appUrl(databaseUrl));
+    const team = scopeId("org", "o");
+    const made = await withTenant(a, () => personas.create({ name: "Reviewer" }, team, "pat@a.test"));
+    await withTenant(b, () => personas.create({ name: "Reviewer" }, team, "pat@a.test"));
+    assert.equal((await withTenant(a, () => personas.get(made.id)))?.name, "Reviewer");
+    assert.equal(await withTenant(b, () => personas.get(made.id)), null);
+    assert.deepEqual(
+      (await withTenant(b, () => personas.listFor([team]))).map((p) => p.id === made.id),
+      [false],
+    );
+    await withTenant(a, () => personas.replaceAccess(made.id, [{ scopeId: team, role: "owner" }], "pat@a.test"));
+    assert.deepEqual(await withTenant(b, () => personas.access(made.id)), []);
+  } finally {
+    await close();
   }
 });
