@@ -384,7 +384,14 @@ export function createNamedAgents(deps: NamedAgentsDeps): NamedAgents {
               ),
             };
           return {
-            next: { ...current, handle, displayName, title, ...(avatar ? { avatar } : {}), owners },
+            next: {
+              ...current,
+              handle: input.handle === undefined ? current.handle : handle,
+              displayName: input.displayName === undefined ? current.displayName : displayName,
+              title: input.title === undefined ? current.title : title,
+              ...(input.avatar ? { avatar: input.avatar } : {}),
+              owners,
+            },
             result: { added: addedOwners, removed },
           };
         },

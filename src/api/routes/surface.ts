@@ -1189,9 +1189,10 @@ async function revokeGrant(ctx: ApiCtx): Promise<void> {
     });
   }
   try {
-    await app.revokeGrant(b.ownerScopeId, b.ref, b.granteeScopeId, b.revokedBy);
+    await app.revokeGrant(b.ownerScopeId, b.ref, b.granteeScopeId, b.revokedBy, { liveActor: true });
     return sendJson(res, 200, { ok: true });
   } catch (e) {
+    if (e instanceof AgentLocked) throw e;
     return sendJson(res, 400, { error: "revoke_failed", message: errMessage(e) });
   }
 }

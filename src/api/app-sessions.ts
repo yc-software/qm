@@ -1194,11 +1194,12 @@ export function createSessionMethods(
         };
         await deps.deploy.assertShareAllowed(g.ownerScopeId, g.granteeScopeId, g.permission);
       }
-      if (parseRef(g.ref).kind === "skill")
-        await deps.namedAgents?.assertMayInstruct(g.granteeScopeId, {
-          id: g.grantedBy,
-          live: opts?.liveActor === true,
-        });
+      const ref = parseRef(g.ref);
+      if (ref.kind === "skill")
+        await h.assertMayInstructSkill(
+          { id: ref.id, homes: [g.ownerScopeId], grantee: g.granteeScopeId },
+          { id: g.grantedBy, live: opts?.liveActor === true },
+        );
       await deps.acl.grant(g, await artifactAuthor(g.ownerScopeId, g.ref));
       deps.auditLog.record({
         at: Date.now(),
@@ -1207,7 +1208,6 @@ export function createSessionMethods(
         resource: g.ref,
         scopeLabel: g.granteeScopeId,
       });
-      const ref = parseRef(g.ref);
       if (ref.kind === "deploy" && opts?.notify !== false)
         await notifyDeploymentShared(
           deps,
@@ -1217,7 +1217,13 @@ export function createSessionMethods(
           g.grantedBy,
         );
     },
-    async revokeGrant(ownerScopeId, ref, granteeScopeId, revokedBy) {
+    async revokeGrant(ownerScopeId, ref, granteeScopeId, revokedBy, opts) {
+      const parsed = parseRef(ref);
+      if (parsed.kind === "skill")
+        await h.assertMayInstructSkill(
+          { id: parsed.id, homes: [ownerScopeId], grantee: granteeScopeId },
+          { id: revokedBy, live: opts?.liveActor === true },
+        );
       await deps.acl.revoke(ownerScopeId, ref, granteeScopeId, revokedBy, await artifactAuthor(ownerScopeId, ref));
       deps.auditLog.record({
         at: Date.now(),
@@ -1291,10 +1297,11 @@ export function createSessionMethods(
       if (type !== "skill") {
         throw new Error(`moving a ${type}'s home isn't supported — share it instead (add a grant)`);
       }
-      const mover = { id: movedBy, live: opts?.liveActor === true };
       const from = (await deps.skills.get(id))?.scopeId;
-      if (from) await deps.namedAgents?.assertMayInstruct(from, mover);
-      await deps.namedAgents?.assertMayInstruct(toScope, mover);
+      await h.assertMayInstructSkill(
+        { id, homes: from ? [from, toScope] : [toScope] },
+        { id: movedBy, live: opts?.liveActor === true },
+      );
       await deps.skills.move(id, toScope);
       deps.auditLog.record({
         at: Date.now(),

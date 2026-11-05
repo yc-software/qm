@@ -243,7 +243,7 @@ export function createSkillMethods(
   | "createOwnedSkill"
   | "deleteOwnedSkill"
 > {
-  const { canManageSkill, republishIfShared } = h;
+  const { canManageSkill, assertMayInstructSkill, republishIfShared } = h;
   return {
     listSkills() {
       return deps.skills.list();
@@ -271,7 +271,7 @@ export function createSkillMethods(
       if (!skill || !(await canManageSkill(skill, principalId))) return null;
       if (triggerBlocksSharedSkill(skill.scopeId, opts?.liveActor === true)) return "trigger_blocked";
       if (skill.status === "archived") return null;
-      await deps.namedAgents?.assertMayInstruct(skill.scopeId, { id: principalId, live: opts?.liveActor === true });
+      await assertMayInstructSkill({ id, homes: [skill.scopeId] }, { id: principalId, live: opts?.liveActor === true });
       const manifest = {
         ...skill.manifest,
         description: patch.description ?? skill.manifest.description,
@@ -291,7 +291,7 @@ export function createSkillMethods(
     async restoreOwnedSkill(id, principalId, opts) {
       const skill = await deps.skills.get(id);
       if (!skill || skill.status !== "archived" || !(await canManageSkill(skill, principalId))) return null;
-      await deps.namedAgents?.assertMayInstruct(skill.scopeId, { id: principalId, live: opts?.liveActor === true });
+      await assertMayInstructSkill({ id, homes: [skill.scopeId] }, { id: principalId, live: opts?.liveActor === true });
       return deps.skills.withNameLock(skill.scopeId, skill.manifest.name, async () => {
         const current = await deps.skills.get(id);
         if (!current || current.status !== "archived") return null;
@@ -409,7 +409,7 @@ export function createSkillMethods(
           "a skill cannot be created directly in an org or team scope — promote a published skill instead",
         );
       }
-      await deps.namedAgents?.assertMayInstruct(homeScope, { id: input.principalId, live: input.liveActor === true });
+      await assertMayInstructSkill({ homes: [homeScope] }, { id: input.principalId, live: input.liveActor === true });
       return deps.skills.withNameLock(homeScope, name, async () => {
         const sameName = (await deps.skills.list()).filter((s) => s.scopeId === homeScope && s.manifest.name === name);
         if (sameName.some((s) => s.status !== "archived")) return null;
@@ -438,7 +438,7 @@ export function createSkillMethods(
       if (!skill) return "missing";
       if (!(await canManageSkill(skill, principalId))) return "forbidden";
       if (triggerBlocksSharedSkill(skill.scopeId, liveActor === true)) return "trigger_blocked";
-      await deps.namedAgents?.assertMayInstruct(skill.scopeId, { id: principalId, live: liveActor === true });
+      await assertMayInstructSkill({ id, homes: [skill.scopeId] }, { id: principalId, live: liveActor === true });
       await deps.skills.archive(id);
       deps.auditLog.record({
         at: Date.now(),
