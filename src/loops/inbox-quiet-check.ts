@@ -3,7 +3,9 @@ import { WebClient } from "@slack/web-api";
 import type { Loop, LoopItem } from "./types.ts";
 import { isObj, type ConnectorTokenSource } from "./sources/adapter.ts";
 import { isResolved } from "./ledger-view.ts";
-import { inboxItemNeedsRepair, inboxSource } from "./inbox-loop.ts";
+import { INBOX_PRECHECK_QUERIES, inboxItemNeedsRepair, inboxSource } from "./inbox-loop.ts";
+import { gmailThreadOf } from "./sources/gmail.ts";
+import { slackConversationOf } from "./sources/slack.ts";
 import { gmailApi } from "../connectors/gmail-api.ts";
 import { normalizeSlackApiUrl } from "../slack/config.ts";
 import { slackErrorCode } from "../slack/payloads.ts";
@@ -58,7 +60,7 @@ async function gmailNews(token: string, fetchImpl: typeof fetch, cutoff: number,
   const addressed = ["me", ...sendAs.flatMap((alias) => (alias.sendAsEmail ? [alias.sendAsEmail] : []))]
     .flatMap((address) => [`to:${address}`, `cc:${address}`])
     .join(" ");
-  if ((await list(`in:inbox -from:me {${addressed}} ${after}`)).length)
+  if ((await list(`${INBOX_PRECHECK_QUERIES.gmail.addressed} {${addressed}} ${after}`)).length)
     return "new inbound Gmail message addressed to the user";
   return null;
 }
@@ -83,14 +85,6 @@ function threadOf(match: SlackMessage): string | undefined {
   } catch {
     return undefined;
   }
-}
-
-function slackConversation(item: LoopItem): SlackConversation | undefined {
-  const meta = item.sourcePayload?.slack;
-  if (!isObj(meta) || typeof meta.channelId !== "string" || typeof meta.ts !== "string") return undefined;
-  const threadTs = typeof meta.threadTs === "string" ? meta.threadTs : undefined;
-  if (meta.isDirectMessage === true && !threadTs) return { channelId: meta.channelId };
-  return { channelId: meta.channelId, threadTs: threadTs ?? meta.ts };
 }
 
 export function createInboxQuietCheck(deps: QuietCheckDeps): InboxQuietCheck {
@@ -147,14 +141,18 @@ export function createInboxQuietCheck(deps: QuietCheckDeps): InboxQuietCheck {
           c.channelId === match.channel?.id &&
           (!c.threadTs || c.threadTs === threadOf(match) || c.threadTs === match.ts),
       );
-    for (const query of [`with:me -from:me ${after}`, `<@${self}> ${after}`]) {
+    for (const waiting of INBOX_PRECHECK_QUERIES.slack.waiting) {
+      const query = `${waiting.replace("USER", self)} ${after}`;
       for (const match of await search(token, query, cutoff)) {
         if (match.user === self) continue;
         if (tracks(match)) return "new Slack message in a tracked conversation";
         if (!match.user || !(await isBot(token, team, match.user))) return "new Slack message for the user";
       }
     }
-    if (tracked.length && (await search(token, `from:me ${after}`, cutoff)).some(tracks))
+    if (
+      tracked.length &&
+      (await search(token, `${INBOX_PRECHECK_QUERIES.slack.ownReplies} ${after}`, cutoff)).some(tracks)
+    )
       return "the user replied in a tracked Slack conversation";
     return null;
   }
@@ -186,9 +184,9 @@ export function createInboxQuietCheck(deps: QuietCheckDeps): InboxQuietCheck {
       if (!tokens.length) return run("Gmail not connected");
       const threads = new Set<string>();
       for (const item of open) {
-        const gmail = item.sourcePayload?.gmail;
-        if (!isObj(gmail) || typeof gmail.threadId !== "string") return run("an open item has no Gmail thread");
-        threads.add(gmail.threadId);
+        const thread = gmailThreadOf(item);
+        if (!thread) return run("an open item has no Gmail thread");
+        threads.add(thread);
       }
       for (const token of tokens) {
         const news = await gmailNews(token, fetchImpl, cutoff, threads);
@@ -200,7 +198,7 @@ export function createInboxQuietCheck(deps: QuietCheckDeps): InboxQuietCheck {
     if (!tokens.length) return run("Slack not connected");
     const tracked: SlackConversation[] = [];
     for (const item of open) {
-      const conversation = slackConversation(item);
+      const conversation = slackConversationOf(item);
       if (!conversation) return run("an open item has no Slack conversation");
       tracked.push(conversation);
     }

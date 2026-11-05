@@ -58,6 +58,11 @@ const SOURCE_TEXT = {
   },
 } as const;
 
+export const INBOX_PRECHECK_QUERIES = {
+  gmail: { addressed: "in:inbox -from:me" },
+  slack: { waiting: ["with:me -from:me", "<@USER>"], ownReplies: "from:me" },
+} as const;
+
 export function inboxItemNeedsRepair(item: LoopItem, source: string): boolean {
   const payload = item.sourcePayload;
   return (
