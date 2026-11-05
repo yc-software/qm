@@ -48,12 +48,11 @@ export function durableMapTenancy(
   return tenantTables(`durable-map/${table}/0010-tenants`, [{ table, primaryKey: "id" }, ...tables], options);
 }
 
-export function createPostgresMap<T>(
-  pg: PgPool,
+function mapMigrations(
   table: string,
-  indexedFields: readonly Extract<keyof T, string>[] = [],
-  tenancy: readonly PgMigrationDefinition[] = durableMapTenancy(table),
-): DurableMap<T> {
+  indexedFields: readonly string[],
+  tenancy: readonly PgMigrationDefinition[],
+): PgMigrationDefinition[] {
   if (!/^[a-z_][a-z0-9_]*$/i.test(table)) throw new Error(`invalid table name: ${table}`);
   const migration = {
     id: `durable-map/${table}/0001`,
@@ -62,7 +61,7 @@ export function createPostgresMap<T>(
       `CREATE TABLE IF NOT EXISTS ${VERSIONS_TABLE} (tbl TEXT PRIMARY KEY, v BIGINT NOT NULL)`,
     ],
   };
-  const migrations = [
+  return [
     migration,
     ...VERSIONS_TENANCY,
     ...tenancy,
@@ -100,6 +99,15 @@ export function createPostgresMap<T>(
       ];
     }),
   ];
+}
+
+export function createPostgresMap<T>(
+  pg: PgPool,
+  table: string,
+  indexedFields: readonly Extract<keyof T, string>[] = [],
+  tenancy: readonly PgMigrationDefinition[] = durableMapTenancy(table),
+): DurableMap<T> {
+  const migrations = mapMigrations(table, indexedFields, tenancy);
   for (const definition of migrations) pg.registerMigration(definition);
   let readyP: Promise<void> | null = null;
   function ready(): Promise<void> {

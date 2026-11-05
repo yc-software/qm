@@ -3,7 +3,7 @@ import type { ScopeId } from "../types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { PgPool } from "../persistence/pg-pool.ts";
 import { swallow } from "../util/errors.ts";
-import { DEPLOYMENT_TABLES, NAME_INDEX } from "./deployment-tables.ts";
+import { DEPLOYMENT_TABLES, NAME_INDEX } from "./page-views.ts";
 import {
   createDeployGitStore,
   type DeployGitDiff,
