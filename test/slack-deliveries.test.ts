@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createDeliveryPoller } from "../src/slack/deliveries.ts";
 import { SLACK_POST_SPLIT_LIMIT } from "../src/slack/lib.ts";
-import { refreshPersonas, type SlackPersona } from "../src/slack/delivery.ts";
+import { refreshPersonas, setDefaultBotIdentity, type SlackPersona } from "../src/slack/delivery.ts";
 import { deliverKeychainCard } from "../src/slack/keychain-approvals.ts";
 
 const mixedFiles = [
@@ -503,7 +503,9 @@ test("a queued delivery into an unbound channel keeps the default identity after
   assert.deepEqual(identityOf(posts[0]!), { username: undefined, icon_url: undefined, icon_emoji: undefined });
 });
 
-test("edits in a bound channel send no identity, so Slack keeps the first post's author", async () => {
+test("edits in a bound channel carry its agent's persona, and edits elsewhere carry the default identity", async (t) => {
+  setDefaultBotIdentity({ username: "QM", icon_emoji: ":robot_face:" });
+  t.after(() => setDefaultBotIdentity(undefined));
   const explicit = await deliver({ target: "C1", edit: { messageTs: "99.100" } }, undefined, undefined, "fixed", {
     personas: { C1: ADA },
   });
@@ -512,9 +514,17 @@ test("edits in a bound channel send no identity, so Slack keeps the first post's
   });
   const updates = [...explicit.updates, ...finalized.updates];
   assert.equal(updates.length, 2);
-  for (const update of updates)
-    assert.deepEqual(identityOf(update), { username: undefined, icon_url: undefined, icon_emoji: undefined });
+  for (const update of updates) assert.deepEqual(identityOf(update), { ...ADA, icon_emoji: undefined });
   assert.deepEqual([...explicit.posts, ...finalized.posts], []);
+  const unbound = await deliver({ target: "C1", edit: { messageTs: "99.300" } }, undefined, undefined, "fixed again", {
+    personas: { C2: ADA },
+  });
+  assert.equal(unbound.updates.length, 1);
+  assert.deepEqual(identityOf(unbound.updates[0]!), {
+    username: "QM",
+    icon_url: undefined,
+    icon_emoji: ":robot_face:",
+  });
 });
 
 test("a keychain approval card delivered into a bound channel carries the agent's persona", async () => {

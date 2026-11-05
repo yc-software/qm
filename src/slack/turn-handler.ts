@@ -52,6 +52,7 @@ import {
   resolveMentions,
   resolveReactionTargets,
   shouldSurfaceReaction,
+  personaFor,
   refreshPersonas,
   slackReplyArgs,
   slackEphemeralArgs,
@@ -405,7 +406,8 @@ export function createTurnHandler(deps: {
     if (!inc.unprompted) {
       goalNotice = createGoalNoticePresenter({
         post: (text, blocks) => postReply(text, blocks),
-        update: (ts, text, blocks) => client.chat.update({ channel: inc.channel, ts, text, blocks }).then(() => {}),
+        update: (ts, text, blocks) =>
+          client.chat.update({ channel: inc.channel, ts, text, blocks, ...personaFor(inc.channel) }).then(() => {}),
         onError: (error) => console.error("[slack-plugin] goal notice update failed:", (error as Error).message),
       });
     }

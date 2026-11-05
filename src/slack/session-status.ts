@@ -140,9 +140,8 @@ export function createSlackSessionStatus(
             if (state.cardContent !== content && (state.cardTs || optedIn)) {
               const result = (await client.apiCall(state.cardTs ? "chat.update" : "chat.postMessage", {
                 channel: state.channel,
-                ...(state.cardTs
-                  ? { ts: state.cardTs }
-                  : { thread_ts: state.threadTs, client_msg_id: state.cardId, ...personaFor(state.channel) }),
+                ...(state.cardTs ? { ts: state.cardTs } : { thread_ts: state.threadTs, client_msg_id: state.cardId }),
+                ...personaFor(state.channel),
                 text: title,
                 blocks,
                 unfurl_links: false,

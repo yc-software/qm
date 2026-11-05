@@ -1800,7 +1800,7 @@ const expectedIdentity = (persona: { username?: string; icon_url?: string; icon_
   icon_emoji: persona.icon_emoji,
 });
 
-test("a bound channel's ack, goal notice and every part of a split reply post as its agent; edits send no identity", async () => {
+test("a bound channel's ack, goal notice and every part of a split reply post as its agent, and its edits keep it", async () => {
   const f = await fixture({ botIdentity: QM_IDENTITY });
   try {
     f.core.personas.set("C1", ADA);
@@ -1827,7 +1827,26 @@ test("a bound channel's ack, goal notice and every part of a split reply post as
     for (const post of posts) assert.deepEqual(identityOf(post), expectedIdentity(ADA));
     const updates = f.client.updates.filter((u) => u.channel === "C1");
     assert.ok(updates.length >= 1, "the goal notice was edited in place");
-    for (const update of updates) assert.deepEqual(identityOf(update), expectedIdentity({}));
+    for (const update of updates) assert.deepEqual(identityOf(update), expectedIdentity(ADA));
+  } finally {
+    await f.stop();
+  }
+});
+
+test("an edit in an unbound channel carries the env identity", async () => {
+  const f = await fixture({ botIdentity: QM_IDENTITY });
+  try {
+    f.core.queuedRunId = "r-unbound-edit";
+    f.core.onWait = async (hooks) => {
+      await hooks.onGoal?.({ objective: "ship the fix", status: "active" });
+      await hooks.onGoal?.({ objective: "ship the fix", status: "complete" });
+    };
+    const event = { channel: "C1", channel_type: "channel", user: "U1", text: "<@UBOT> write it up", ts: "804.1" };
+    f.client.messagesByChannel.set("C1", [event]);
+    await f.app.emitEvent("app_mention", event);
+    const updates = f.client.updates.filter((u) => u.channel === "C1");
+    assert.ok(updates.length >= 1, "the goal notice was edited in place");
+    for (const update of updates) assert.deepEqual(identityOf(update), expectedIdentity(QM_IDENTITY));
   } finally {
     await f.stop();
   }

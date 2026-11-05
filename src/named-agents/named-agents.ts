@@ -346,7 +346,11 @@ export function createNamedAgents(deps: NamedAgentsDeps): NamedAgents {
           return { query, principalId: found.kind === "one" ? found.member.principalId : undefined };
         }),
       );
-      const detailsChange = renamed || title !== agent.title || JSON.stringify(avatar) !== JSON.stringify(agent.avatar);
+      const detailsChange =
+        renamed ||
+        title !== agent.title ||
+        avatar?.kind !== agent.avatar?.kind ||
+        avatar?.value !== agent.avatar?.value;
       const onlyAddsOwners = !detailsChange && !removals.length;
       if (onlyAddsOwners && !added.ids.length) return refuse("bad_request", "nothing to change");
       const admin = actor.live && (await deps.isOrgAdmin(actor.id));

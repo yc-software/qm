@@ -16,6 +16,7 @@ import {
   openConversationFor,
   findPostedByKey,
   parseDeliveryTarget,
+  personaFor,
   refreshPersonas,
   statusPlaceholderKey,
   postWithVerify,
@@ -316,6 +317,7 @@ export function createDeliveryPoller(deps: {
                       ...slackSectionBlocks(text),
                       ...(footer.length ? [{ type: "context", elements: footer }] : []),
                     ],
+                    ...personaFor(channel),
                     ...(unfurlLinks !== undefined ? { unfurl_links: unfurlLinks, unfurl_media: unfurlLinks } : {}),
                   })
                   .catch((err: unknown) => {
@@ -392,6 +394,7 @@ export function createDeliveryPoller(deps: {
                     ts: editRef,
                     text,
                     ...(footerBlocks ? { blocks: footerBlocks } : {}),
+                    ...personaFor(channel),
                     metadata: deliveryMetadata(d.idempotencyKey ?? d.id),
                     ...(unfurlLinks !== undefined ? { unfurl_links: unfurlLinks, unfurl_media: unfurlLinks } : {}),
                   });

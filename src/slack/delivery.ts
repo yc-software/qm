@@ -221,7 +221,7 @@ export function createSurfaceHeaderEnsurer(opts: {
             }
           } else if (pinned) {
             if (unwrapSlackLinks(pinned.text) !== unwrapSlackLinks(desired))
-              await client.chat.update({ channel, ts: pinned.ts, text: desired });
+              await client.chat.update({ channel, ts: pinned.ts, text: desired, ...personaFor(channel) });
           } else if (ensureOpts?.pinNew) {
             const posted = await client.chat.postMessage(
               slackReplyArgs(channel, desired, undefined, { unfurlLinks: false }),

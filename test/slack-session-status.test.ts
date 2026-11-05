@@ -372,7 +372,7 @@ test("core engagement is signaled once for local or durable replies, never quiet
   }
 });
 
-test("a bound channel's status card posts as its agent and its later edits send no identity", async (t) => {
+test("a bound channel's status card posts and edits as its agent", async (t) => {
   await refreshPersonas({ agentPersonas: async () => new Map([["C1", { username: "Bolt", icon_emoji: ":art:" }]]) });
   t.after(() => refreshPersonas({ agentPersonas: async () => new Map() }));
   const f = fixture();
@@ -388,7 +388,7 @@ test("a bound channel's status card posts as its agent and its later edits send 
   assert.ok(edits.length >= 1);
   for (const edit of edits) {
     assert.equal(edit.method, "chat.update");
-    assert.equal(edit.args.username, undefined);
-    assert.equal(edit.args.icon_emoji, undefined);
+    assert.equal(edit.args.username, "Bolt");
+    assert.equal(edit.args.icon_emoji, ":art:");
   }
 });
