@@ -118,8 +118,7 @@ async function emailTenants(ctx: ApiCtx): Promise<void> {
 
 async function principalTenants(ctx: ApiCtx): Promise<void> {
   const principal = (ctx.url.searchParams.get("principal") ?? "").trim();
-  if (!principal || principal.length > 512)
-    return sendJson(ctx.res, 400, { error: "bad_request", message: "principal required" });
+  if (!principal) return sendJson(ctx.res, 400, { error: "bad_request", message: "principal required" });
   const tenants = ctx.deps.directory?.tenantsForPrincipal;
   return sendJson(ctx.res, 200, {
     tenants: tenants ? await tenants(principal) : [],
