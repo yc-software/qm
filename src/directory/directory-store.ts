@@ -31,6 +31,11 @@ export function groupParticipantsKey(participants: readonly string[]): string {
   return [...new Set(participants.filter((p) => p))].sort().join(",");
 }
 
+export interface SignInTenant {
+  id: string;
+  brandName?: string;
+}
+
 export interface DirectoryMeta {
   workspaceUrl: string | null;
 }
@@ -77,6 +82,7 @@ export interface DirectoryStore {
   listChannelsFor(principalId: string): Promise<DirectoryChannel[]>;
   setWorkspaceUrl(url: string): Promise<void>;
   meta(): Promise<DirectoryMeta>;
+  tenantsForEmail?(email: string): Promise<SignInTenant[]>;
 }
 
 export const MAX_CANDIDATES = 10;

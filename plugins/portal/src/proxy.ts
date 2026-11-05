@@ -112,6 +112,7 @@ export interface SurfaceTarget {
   impersonator?: string;
   identitySecret?: string;
   authenticatedPrincipal?: string;
+  tenant?: string;
   nowMs?: number;
 }
 
@@ -130,6 +131,7 @@ export function proxyToSurface(req: IncomingMessage, res: ServerResponse, t: Sur
         ...(t.authenticatedPrincipal ? { authenticatedAs: t.authenticatedPrincipal } : {}),
         ...(t.displayName ? { n: t.displayName } : {}),
         ...(t.impersonator ? { imp: t.impersonator } : {}),
+        ...(t.tenant ? { t: t.tenant } : {}),
         exp: now + IDENTITY_TTL_MS,
       },
       t.identitySecret,
@@ -181,6 +183,7 @@ export interface DeploymentTarget {
   principal: string;
   signingSecret: string | undefined;
   identitySecret?: string;
+  tenant?: string;
 }
 
 export function proxyToDeployment(req: IncomingMessage, res: ServerResponse, t: DeploymentTarget): void {
@@ -191,7 +194,7 @@ export function proxyToDeployment(req: IncomingMessage, res: ServerResponse, t: 
   const base: Record<string, string> = { host: core.host, "x-as-principal": t.principal, ...signed };
   if (t.identitySecret)
     base[PORTAL_IDENTITY_HEADER] = mintPortalIdentity(
-      { p: t.principal, exp: Date.now() + IDENTITY_TTL_MS },
+      { p: t.principal, ...(t.tenant ? { t: t.tenant } : {}), exp: Date.now() + IDENTITY_TTL_MS },
       t.identitySecret,
     );
   const headers = safeForwardHeaders(req, base);

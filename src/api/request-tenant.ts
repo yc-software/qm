@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { verifyCapabilityToken, type CapabilityClaims } from "../auth/capability-token.ts";
+import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../auth/portal-identity.ts";
 import { withTenant } from "../tenants/context.ts";
 import { CAPABILITY_HEADER } from "./contract.ts";
 import { sendJson } from "./http.ts";
@@ -28,6 +29,12 @@ export function requestCapability(
   return claims;
 }
 
+async function identityTenant(req: IncomingMessage, secret: string | undefined): Promise<string | undefined> {
+  const raw = req.headers[PORTAL_IDENTITY_HEADER];
+  const token = Array.isArray(raw) ? raw[0] : raw;
+  return token && secret ? (await verifyPortalIdentity(token, secret, Date.now()))?.t : undefined;
+}
+
 export async function withRequestTenant(
   req: IncomingMessage,
   res: ServerResponse,
@@ -36,16 +43,18 @@ export async function withRequestTenant(
   readBootTenant: () => Promise<string | undefined>,
   next: () => Promise<void> | void,
   ready?: () => Promise<void>,
+  identitySecret?: string,
 ): Promise<void> {
   if (route?.tenant === "none") return next();
   const token = capabilityToken(req, typeof route?.auth === "object" && route.auth.bearer === true);
   const claims = token ? await requestCapability(req, token, capabilitySecret) : null;
-  const tenant = claims?.tenant ?? (await readBootTenant());
+  const tenant = claims?.tenant ?? (await identityTenant(req, identitySecret)) ?? (await readBootTenant());
   if (tenant)
     return withTenant(tenant, async () => {
       await ready?.();
       return next();
     });
+  if (route?.tenant === "optional") return next();
   sendJson(res, 401, { error: "unauthorized", message: "this request does not name a tenant" });
   req.resume();
 }

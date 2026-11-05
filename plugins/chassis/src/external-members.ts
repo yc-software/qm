@@ -14,11 +14,12 @@ export async function coreEmailAdmission(
   signingSecret: string | undefined,
   email: string,
   label = "chassis",
+  headers: Record<string, string> = {},
 ): Promise<EmailAdmission> {
   const path = withSourceAuthNonce(`${EMAIL_ALLOWED_PATH}?email=${encodeURIComponent(email)}`, signingSecret);
   try {
     const r = await fetch(`${coreApiUrl}${path}`, {
-      headers: signedHeaders(signingSecret, "GET", path),
+      headers: { ...signedHeaders(signingSecret, "GET", path), ...headers },
       signal: AbortSignal.timeout(EMAIL_ALLOWED_TIMEOUT_MS),
     });
     if (!r.ok) {
