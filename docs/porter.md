@@ -388,8 +388,6 @@ grep for that line rather than assuming the container's own metadata block is in
 | `PORTER_SANDBOX_NAME_PREFIX`                       | Prefix for sandbox and app names on the cluster                                                                |
 | `PORTER_DEPLOY_VISIBILITY`                         | `internal` (default) serves apps in-cluster only; `private`/`public` put them on sandbox ingress               |
 | `PORTER_DEPLOY_TTL_SEC` / `PORTER_SANDBOX_TTL_SEC` | Reap bodies after this long                                                                                    |
-| `PORTER_SANDBOX_MEMORY_GB`                         | Memory for computers that don't pass `memory_gib` to the `sandbox` tool; unset uses the cluster default        |
-| `PORTER_SANDBOX_MAX_MEMORY_GB`                     | Largest `memory_gib` (default 8); keep it under the largest sandbox node. Porter bills the requested size      |
 
 To QA a branch against a real Porter cluster before deploying it, the dev instance takes
 the same backend:

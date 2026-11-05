@@ -43,6 +43,7 @@ interface SandboxProviderProfile {
   name: SandboxBackendName;
   spec?: AgentComputerSpec;
   egressEnforcement?: EgressEnforcement;
+  sizesMemory?: boolean;
   actions: string[];
 }
 
@@ -179,13 +180,12 @@ export function createSandboxResources(opts: {
         name,
         ...(backend.profile.spec ? { spec: backend.profile.spec } : {}),
         ...(backend.profile.egressEnforcement ? { egressEnforcement: backend.profile.egressEnforcement } : {}),
+        ...(backend.profile.sizesMemory ? { sizesMemory: true } : {}),
         actions: actionsFor(backend),
       }));
   const checkMemory = (backend: Sandbox, memoryGb: number | undefined): void => {
     if (memoryGb === undefined) return;
-    const max = backend.profile.maxMemoryGb;
-    if (!max) throw new Error(`${backend.profile.backend} computers take no memory size`);
-    if (memoryGb > max) throw new Error(`memory must be at most ${max} GiB`);
+    if (!backend.profile.sizesMemory) throw new Error(`${backend.profile.backend} computers take no memory size`);
   };
   return {
     profiles,

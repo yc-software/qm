@@ -69,8 +69,7 @@ export interface AgentComputerProfile {
   parksOnTeardown?: boolean;
   egressEnforcement?: EgressEnforcement;
   spec?: AgentComputerSpec;
-  /** Set only by backends that take a per-computer memory size. */
-  maxMemoryGb?: number;
+  sizesMemory?: boolean;
 }
 
 export function effectiveEgressEnforcement(

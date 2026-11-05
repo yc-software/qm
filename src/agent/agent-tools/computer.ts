@@ -220,7 +220,7 @@ export function computerTools(kit: ToolKit) {
         Type.Integer({
           minimum: 1,
           description:
-            "create/restart: memory for work that holds large files in memory. Omit for the default size; restart keeps the computer's size.",
+            "create/restart: GiB of memory, on providers whose list entry has sizesMemory. Omit for the default size; restart keeps the computer's size.",
         }),
       ),
       purpose: Type.String({ description: "As for execute." }),

@@ -58,8 +58,6 @@ export interface PorterSandboxOptions {
   namePrefix?: string;
   homeDir?: string;
   ttlSec?: number;
-  memoryGb?: number;
-  maxMemoryGb?: number;
   defaultTimeoutSec?: number;
   egressProxyUrl?: string;
   blobTransfer?: BlobTransferStore;
@@ -126,7 +124,7 @@ export function createPorterSandbox(opts: PorterSandboxOptions): Sandbox {
     egressMode: "proxy" | "open",
     volume?: { mountPath: string; id: string },
     kind: "scope" | "scratch" = "scope",
-    memoryGb = opts.memoryGb,
+    memoryGb?: number,
   ): Promise<BodyEntry> {
     const name = bodyName(slug);
     const sb = await client.sandboxes
@@ -232,7 +230,7 @@ export function createPorterSandbox(opts: PorterSandboxOptions): Sandbox {
     writablePersistence: "resident_disk",
     processSessions: true,
     egressEnforcement: opts.egressProxyUrl ? "domain" : "none",
-    maxMemoryGb: opts.maxMemoryGb ?? 8,
+    sizesMemory: true,
     spec: {
       os: "Debian 12 container on Porter Sandboxes — $HOME persists on a volume; paths outside $HOME reset when the sandbox rotates",
       runtimes: ["Node 24", "Python 3"],
