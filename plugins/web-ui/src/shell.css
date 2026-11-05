@@ -3609,7 +3609,7 @@ qm-markdown .tok-in {
   align-items: center;
   gap: 3px;
   flex: 0 0 auto;
-  margin-right: 6px;
+  margin-left: 6px;
   padding: 0 5px;
   height: 15px;
   border-radius: 8px;
@@ -3624,6 +3624,9 @@ qm-markdown .tok-in {
 .bg-chip[role="button"]:hover {
   color: var(--foreground);
   background: color-mix(in srgb, var(--muted-foreground) 24%, transparent);
+}
+.split-pane-title-text + .bg-chip {
+  margin-left: 0;
 }
 .list-row-title .bg-chip {
   margin-bottom: 1px;
@@ -7970,7 +7973,7 @@ h3.ambient-field-label {
 }
 
 .dv-tab .split-pane-title-text {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-width: 0;
 }
 
