@@ -1503,7 +1503,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           connectorEnv.BROWSE_LAB_MAX_STEPS = String(browseSteps);
       }
       const runtimePurpose = turnRuntimePurpose(
-        { surface: input.surface, triggered: automatedTurn },
+        { surface: input.surface, triggered: automatedTurn, infrequentCron: input.infrequentCron },
         !!session.parentSessionId || !!swarmBinding?.member.parentId,
       );
       const purposeDefault = runtimePurpose ? await deps.config?.getPurposeRuntimeDurable(runtimePurpose) : undefined;

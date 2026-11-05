@@ -14,7 +14,7 @@ import type { VisibilityDirectory } from "../directory/visibility.ts";
 import type { DirectoryMember } from "../directory/directory-store.ts";
 import type { LeaderLease } from "../persistence/leader-lease.ts";
 import { createSweeper } from "../util/sweeper.ts";
-import { recoverNextFireAt } from "./schedule.ts";
+import { firesAtMostDaily, recoverNextFireAt } from "./schedule.ts";
 import { fireJobStartsAt, type CronFireJob, type CronJobQueue } from "./job-queue.ts";
 import { hashId } from "../util/crypto.ts";
 import { utcMinute } from "../util/time.ts";
@@ -313,6 +313,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           fireKey,
           threadRef,
           surface: "cron",
+          ...(firesAtMostDaily(cron.schedule, scheduledAt ?? t) ? { infrequentCron: true } : {}),
           ...(cron.runtime && !runtimeProblem ? { runtime: cron.runtime } : {}),
           ...(cron.title ? { title: cron.title } : {}),
           ...(cron.script ? { cronScript: cron.script } : {}),
