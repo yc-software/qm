@@ -18,6 +18,7 @@ RUN npm ci --omit=dev && rm package-lock.json \
   && rm -rf /root/.npm /tmp/node-compile-cache
 COPY plugins/web-ui/server ./server
 COPY plugins/web-ui/src/app-edit.ts ./src/app-edit.ts
+COPY plugins/web-ui/src/web-build-wire.ts ./src/web-build-wire.ts
 COPY plugins/chassis/src /chassis/src
 COPY plugins/web-ui/src /web-ui/src
 COPY --from=build /app/dist-web ./dist-web
