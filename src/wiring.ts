@@ -107,7 +107,12 @@ import { createSkillPackStore, type SkillPack } from "./skills/skill-pack-store.
 import { createSkillBundleStore, type SkillBundle, type SkillBundleStore } from "./skills/skill-bundle-store.ts";
 import { createGitFetcher, resolvePackAuth, type SkillPackFetcher } from "./skills/pack-fetcher.ts";
 import { installSeedSkills } from "./skills/seed.ts";
-import { createPostgresMap, createPostgresMapFactory, type DurableMap } from "./persistence/durable-map.ts";
+import {
+  createPostgresMap,
+  createPostgresMapFactory,
+  type DurableMap,
+  processLevelMap,
+} from "./persistence/durable-map.ts";
 import type { PersistedUiState, UiStateStore } from "./surfaces/ui-state.ts";
 import { slackUserClientFactory } from "./loops/sources/slack.ts";
 import { configurePgCaTrust, configurePgPooling } from "./persistence/pg-pool.ts";
@@ -582,7 +587,9 @@ export function buildApp(
   const artifactMap = <T>(table: string, indexedFields?: readonly Extract<keyof T, string>[]): DurableMap<T> =>
     pgArtifactMap.map<T>(table, indexedFields);
   setProviderBaseUrls(config.providerBaseUrls);
-  const unknownGatewayModels = Object.keys(config.modelGateway?.models ?? {}).filter((id) => !resolveDeploymentModel(id));
+  const unknownGatewayModels = Object.keys(config.modelGateway?.models ?? {}).filter(
+    (id) => !resolveDeploymentModel(id),
+  );
   if (unknownGatewayModels.length) {
     throw new Error(`MODEL_GATEWAY_MODELS contains unsupported models: ${unknownGatewayModels.join(", ")}`);
   }
@@ -658,7 +665,13 @@ export function buildApp(
   const auditLog = createPostgresAuditLog(databaseUrl);
   let ownsSharedState = false;
   const deploymentLayerStore = createDeploymentLayerStore({
-    backing: artifactMap<StoredDeploymentLayer>("deployment_layer"),
+    backing: createPostgresMap<StoredDeploymentLayer>(
+      pgArtifactMap.pool,
+      "deployment_layer",
+      [],
+      [],
+      [processLevelMap("deployment_layer")],
+    ),
     runtime: deploymentLayer,
     skills,
     skillBundles,
