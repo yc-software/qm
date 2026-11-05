@@ -406,7 +406,10 @@ test("E2B sends explicit pause lifecycle, reads state without connect, and surfa
   assert.equal(info.cpuCount, 2);
   assert.equal(info.memoryMb, 512);
   await session.pause();
-  assert.deepEqual(e2bCalls.at(-1), ["pause", { keepMemory: true }]);
+  const [kind, pauseOpts] = e2bCalls.at(-1)!;
+  assert.equal(kind, "pause");
+  assert.equal((pauseOpts as { keepMemory: boolean }).keepMemory, true);
+  assert.ok((pauseOpts as { signal: unknown }).signal instanceof AbortSignal, "the retry deadline can cancel a pause");
   pauseError = new Error("snapshot backlog");
   await assert.rejects(session.pause(), /snapshot backlog/);
   pauseError = undefined;
