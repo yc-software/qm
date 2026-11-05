@@ -338,7 +338,8 @@ export interface SessionSyscallDeps {
     SubagentActivityDeps["sessions"];
   runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "getByDedupKey" | "get" | "withdraw"> &
     SubagentActivityDeps["runs"];
-  signals: Pick<RunSignalStore, "send" | "pending" | "acknowledge" | "runForDedupeKey">;
+  signals: Pick<RunSignalStore, "send" | "pending" | "runForDedupeKey">;
+  replayOrphanedRunSignals?: (runId: string) => Promise<void>;
   maxAttempts: number;
   advisoryLock: AdvisoryLock;
   prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
@@ -601,37 +602,26 @@ async function acceptedFollowup(
   return { ok: true, sessionId: target.id, title, delivered: "queued_turn", busy: others.length > 0 };
 }
 
-/**
- * Delivers a message into the target's running turn as a steer, the same signal a person's mid-turn message
- * uses. Returns false when there is no running turn to steer, or when the signal landed after that turn ended
- * and was withdrawn here so the caller can start a turn instead.
- */
 async function steerRunningTurn(
-  deps: Pick<SessionSyscallDeps, "runs" | "signals" | "advisoryLock">,
-  target: Session,
+  deps: Pick<SessionSyscallDeps, "signals" | "replayOrphanedRunSignals"> & { runs: Pick<RunStore, "get"> },
+  inFlight: Run[],
   request: OrchestratorInput,
   message: { text: string; dedupKey: string | undefined },
-): Promise<boolean> {
-  if (message.dedupKey && (await deps.signals.runForDedupeKey(message.dedupKey))) return true;
-  const live = (await deps.runs.inFlightForThread(target.threadRef)).find((run) => run.status === "running");
-  if (!live || (request.readOnly && !live.request.readOnly)) return false;
-  const ts = `${Date.now()}.${randomUUID().slice(0, 8)}`;
+): Promise<"steered" | "replayed" | undefined> {
+  if (message.dedupKey && (await deps.signals.runForDedupeKey(message.dedupKey))) return "steered";
+  const live = inFlight.find((run) => run.status === "running");
+  if (!live || (request.readOnly && !live.request.readOnly)) return undefined;
   const sent = await deps.signals.send(live.id, {
     kind: "steer",
     text: message.text,
-    ts,
-    request: replayableRequest(request),
+    ts: `${Date.now()}.${randomUUID().slice(0, 8)}`,
+    request: { ...replayableRequest(request), spawned: true },
     ...(message.dedupKey ? { dedupeKey: message.dedupKey } : {}),
   });
-  if (!sent) return true;
-  const after = await deps.runs.get(live.id);
-  if (after && !isTerminal(after.status)) return true;
-  return deps.advisoryLock.withLock(`run-signal-replay:${live.id}`, async () => {
-    const orphan = (await deps.signals.pending(live.id)).find(({ signal }) => signal.ts === ts);
-    if (!orphan) return true;
-    await deps.signals.acknowledge(live.id, orphan.id);
-    return false;
-  });
+  const after = sent && (await deps.runs.get(live.id));
+  if (!after || !isTerminal(after.status)) return "steered";
+  await deps.replayOrphanedRunSignals?.(live.id);
+  return "replayed";
 }
 
 export async function stopSessionTree(
@@ -1020,11 +1010,21 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               request.origin = sessionTurnOrigin(request.origin, stamped);
               request.sessionSenderId = binding.session.id;
               request.delegatingRunId = binding.request.runId;
-              if (!input.interrupt && !privateMessage) {
-                const steerRequest = { ...request, text: stamped, displayText: text };
-                const steered = await steerRunningTurn(deps, target, steerRequest, { text, dedupKey });
-                if (steered) return { ok: true, sessionId: target.id, title, delivered: "steered", busy: true };
-              }
+              const steered =
+                input.interrupt || privateMessage
+                  ? undefined
+                  : await steerRunningTurn(
+                      deps,
+                      inFlight,
+                      { ...request, text: stamped, displayText: text },
+                      {
+                        text,
+                        dedupKey,
+                      },
+                    );
+              if (steered === "steered")
+                return { ok: true, sessionId: target.id, title, delivered: "steered", busy: true };
+              if (steered === "replayed") return { ok: true, sessionId: target.id, title, delivered: "queued_turn" };
               const stopped = input.interrupt
                 ? await stopSessionRuns(
                     deps,

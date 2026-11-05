@@ -2007,6 +2007,7 @@ export function buildApp(
     sessions,
     runs,
     signals: runSignals,
+    replayOrphanedRunSignals: (runId) => app.replayOrphanedRunSignals(runId),
     maxAttempts,
     advisoryLock,
     prepareRequest: prepareSessionRequest,

@@ -296,29 +296,31 @@ test("write steers a running child's turn and interrupts explicitly", async () =
   assert.ok(rerun.some((run) => /check it again/.test(run.request.text)));
 });
 
-test("a message whose running turn ended before the steer landed starts a turn instead of being lost", async () => {
+test("a message whose running turn ended before the steer landed is replayed as a turn instead of being lost", async () => {
   const r = await rig();
   const target = await runningChild(r, r.room, "build");
   await r.runs.complete(target.run.id, target.leaseToken, { status: "ok", reply: "done" });
   const stale = { ...target.run, status: "running" as const };
+  const replayed: string[] = [];
   const api = createSessionSyscalls({
     ...r,
     runs: {
       ...r.runs,
       inFlightForThread: async (threadRef) =>
-        threadRef === target.session.threadRef
-          ? [stale, ...(await r.runs.inFlightForThread(threadRef))]
-          : r.runs.inFlightForThread(threadRef),
+        threadRef === target.session.threadRef ? [stale] : r.runs.inFlightForThread(threadRef),
+    },
+    replayOrphanedRunSignals: async (runId) => {
+      replayed.push(runId);
     },
     maxAttempts: 3,
   }).forTurn({ session: r.room, scopeId: scope, request: { surface: "slack", conversation, actor } });
   const out = await api.write({ target: target.session.id, wake: true, text: "keep going" });
   assert.equal(out.ok && out.delivered, "queued_turn");
-  assert.deepEqual(await r.signals.pending(target.run.id), []);
-  assert.deepEqual(
-    (await r.runs.inFlightForThread(target.session.threadRef)).map((run) => run.request.displayText),
-    ["keep going"],
-  );
+  assert.deepEqual(replayed, [target.run.id]);
+  const [orphan] = await r.signals.pending(target.run.id);
+  assert.equal(orphan?.signal.text, "keep going");
+  assert.equal(orphan.signal.request?.spawned, true);
+  assert.equal(orphan.signal.request?.sessionSenderId, r.room.id);
 });
 
 test("a retried message with the same requestId steers the running turn once", async () => {

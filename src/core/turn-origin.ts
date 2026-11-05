@@ -13,7 +13,6 @@ export function isSessionTurn(input: Pick<TurnRequest, "sessionSenderId" | "dele
   return !!input.sessionSenderId || !!input.delegatingRunId;
 }
 
-/** Prompt for another session's message that is steered into this session's running turn. */
 export function midTurnSessionMessage(message: string, fromParent: boolean): string {
   const sender = fromParent ? "your parent session" : "another session";
   return `A message from ${sender} arrived while you were working. Address it as you continue this turn; it is not a new task.\n${message}`;
