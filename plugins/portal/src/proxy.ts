@@ -176,6 +176,7 @@ export const FORWARD_SANDBOX_MODEL_HEADERS = [
   "accept",
   "authorization",
   "x-api-key",
+  "x-agent-capability",
   "anthropic-version",
   "anthropic-beta",
 ];

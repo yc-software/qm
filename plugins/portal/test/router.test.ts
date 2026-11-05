@@ -764,11 +764,15 @@ test("sandbox model gateway calls reach core with their bearer token and no brow
   assert.equal(body.headers["x-as-principal"], undefined);
   assert.equal(body.headers.cookie, undefined);
 
-  const models = await fetch(`${base}/v1/sandbox-model/v1/models`, { headers: { "x-api-key": "sandbox-model-token" } });
-  assert.equal(
-    ((await models.json()) as { headers: Record<string, string> }).headers["x-api-key"],
-    "sandbox-model-token",
-  );
+  for (const credential of ["x-api-key", "x-agent-capability"]) {
+    const models = await fetch(`${base}/v1/sandbox-model/v1/models`, {
+      headers: { [credential]: "sandbox-model-token" },
+    });
+    assert.equal(
+      ((await models.json()) as { headers: Record<string, string> }).headers[credential],
+      "sandbox-model-token",
+    );
+  }
   assert.equal((await fetch(`${base}/v1/sandbox-model`)).status, 404);
 });
 
