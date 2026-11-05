@@ -262,7 +262,20 @@ END $base_schema$`,
     return rows[0] ? rowToRun(rows[0]) : null;
   }
   async function loaded(claim: () => Promise<ClaimedRow[]>): Promise<Run[]> {
-    return (await claimThenBind(claim, getRun)).filter((run) => run !== null);
+    const claimed = await claim();
+    const tenants = [...new Set(claimed.map(({ tenantId }) => tenantId))].map((tenantId) => ({
+      tenantId,
+      id: tenantId,
+    }));
+    const loadedRuns = await claimThenBind(
+      async () => tenants,
+      async (tenantId) => {
+        const ids = claimed.filter((row) => row.tenantId === tenantId).map(({ id }) => id);
+        return (await q("SELECT * FROM runs WHERE id = ANY($1)", [ids])).rows.map(rowToRun);
+      },
+    );
+    const byKey = new Map(loadedRuns.flat().map((run) => [`${run.tenantId} ${run.id}`, run]));
+    return claimed.flatMap(({ tenantId, id }) => byKey.get(`${tenantId} ${id}`) ?? []);
   }
   function watchSession(sessionId: string): SessionWatch {
     let changed = true;
