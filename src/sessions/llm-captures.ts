@@ -31,7 +31,7 @@ export function createLlmCaptures(deps: {
   now: () => number;
 }): Pick<SessionStore, "recordLlmRequest" | "listLlmRequests" | "purgeLlmCaptures"> {
   const { db, now } = deps;
-  const { q, query } = db;
+  const { q } = db;
   return {
     async recordLlmRequest(sessionId, rec: NewLlmRequest): Promise<LlmRequestRecord> {
       const envelope = promptEnvelopeBody(rec.promptEnvelope);

@@ -187,11 +187,14 @@ test("reaper re-checks alwaysOn under the deploy lock (no stale-snapshot destroy
   });
   const d = await deploy.deploy({ ...owner, entrypoint: "x", files: [] });
 
-  const realList = deployStore.list.bind(deployStore);
-  deployStore.list = async () => {
-    const snapshot = (await realList()).map((x) => ({ ...x, alwaysOn: undefined }));
+  const realGet = deployStore.get.bind(deployStore);
+  let stale = true;
+  deployStore.get = async (id) => {
+    const current = await realGet(id);
+    if (!stale || !current) return current;
+    stale = false;
     await deployStore.setAlwaysOn(d.id, true);
-    return snapshot;
+    return { ...current, alwaysOn: undefined };
   };
   const stopped = await deploy.reapIdleDeployments(1, Date.now() + 1_000_000);
   assert.equal(stopped, 0);
@@ -213,16 +216,16 @@ test("maintainDeployments re-ensures a live endpoint only for running always-on 
   assert.ok(cold.id !== warm.id);
 });
 
-test("maintainDeployments skips a deployment whose flag was turned off after the list snapshot", async () => {
+test("maintainDeployments skips a deployment whose flag was turned off after it was claimed", async () => {
   const ctx = svc({ resolve: async () => null });
   const { deploy, deployStore } = ctx;
   const d = await deploy.deploy({ ...owner, entrypoint: "x", files: [] });
   await deploy.setDeploymentAlwaysOn(d.id, true);
-  const realList = deployStore.list.bind(deployStore);
-  deployStore.list = async () => {
-    const snapshot = await realList();
+  const realClaim = deployStore.claimIds.bind(deployStore);
+  deployStore.claimIds = async () => {
+    const claimed = await realClaim();
     await deployStore.setAlwaysOn(d.id, false);
-    return snapshot;
+    return claimed;
   };
   const appliesBefore = ctx.applies;
   const warmed = await deploy.maintainDeployments();
