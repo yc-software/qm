@@ -3,6 +3,8 @@ import { OAuthMetadataSchema, type OAuthMetadata } from "@modelcontextprotocol/s
 import { errMessage } from "../util/errors.ts";
 import { publicFetch, type AddressFetch } from "../util/network.ts";
 
+const OAUTH_REQUEST_TIMEOUT_MS = 5_000;
+
 export function httpsUrl(v: unknown): string | undefined {
   if (typeof v !== "string") return undefined;
   try {
@@ -35,7 +37,7 @@ async function fetchMeta(
 ): Promise<Record<string, unknown> | undefined> {
   let r: Response;
   try {
-    r = await fetchFn(url, { redirect: "error", signal: AbortSignal.timeout(5_000) });
+    r = await fetchFn(url, { redirect: "error", signal: AbortSignal.timeout(OAUTH_REQUEST_TIMEOUT_MS) });
   } catch (e) {
     errors.push(`${url}: ${errMessage(e)}`);
     return undefined;
@@ -96,7 +98,8 @@ export async function registerPublicClient(
       response_types: ["code"],
       token_endpoint_auth_method: "none",
     },
-    fetchFn: (url, init) => fetchFn(url, { ...init, redirect: "error", signal: AbortSignal.timeout(10_000) }),
+    fetchFn: (url, init) =>
+      fetchFn(url, { ...init, redirect: "error", signal: AbortSignal.timeout(OAUTH_REQUEST_TIMEOUT_MS) }),
   });
   return client.client_id;
 }
