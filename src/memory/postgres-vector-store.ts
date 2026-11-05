@@ -37,7 +37,7 @@ export interface MemoryVectorStore {
     afterId?: string,
   ): Promise<Array<{ scope: string; factId: string; hash: string; text: string }>>;
   prune(model: string, limit: number, dimensions?: number, signal?: AbortSignal): Promise<number>;
-  claimTenants(model: string, dimensions?: number): Promise<ClaimedRow[]>;
+  claimTenants(): Promise<ClaimedRow[]>;
   close(): Promise<void>;
 }
 
@@ -98,6 +98,18 @@ export const VECTOR_MIGRATIONS: PgMigrationDefinition[] = [
                 WHERE f.tenant_id = s.tenant_id AND f.scope_id = s.scope_id AND f.id = s.fact_id
                   AND f.deleted_at IS NULL AND f.text_hash = s.fact_hash)
              GROUP BY s.tenant_id`,
+      ),
+    ],
+  },
+  {
+    id: "memory/vectors/0005-claim-tenants",
+    statements: [
+      "DROP FUNCTION IF EXISTS claim_memory_index(text, integer)",
+      claimFunction(
+        "claim_memory_tenants",
+        "",
+        `SELECT tenant_id, 'memory'::text FROM memory_facts WHERE deleted_at IS NULL
+           UNION SELECT tenant_id, 'memory'::text FROM memory_fact_vectors`,
       ),
     ],
   },
@@ -200,7 +212,7 @@ export function createPostgresVectorStore(connectionString: string): MemoryVecto
       );
       return rowCount;
     },
-    claimTenants: (model, dimensions) => claimRows(db, "claim_memory_index", [model, vectorWidth(dimensions)]),
+    claimTenants: () => claimRows(db, "claim_memory_tenants"),
     close: () => db.close(),
   };
 }

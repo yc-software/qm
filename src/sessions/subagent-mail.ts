@@ -11,6 +11,8 @@ import type { SessionStore } from "./session-store.ts";
 import type { SessionMailbox, SessionMessage } from "./session-mailbox.ts";
 import { xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
 import { swallowAs } from "../util/errors.ts";
+import { claimThenBind } from "../tenants/claim.ts";
+import { currentTenant } from "../tenants/context.ts";
 import { type Item, proseText } from "./items.ts";
 import {
   ANCESTOR_STOP,
@@ -314,14 +316,15 @@ export async function wakeForUnreadMail(
 }
 
 export async function sweepUnreadMailWakes(deps: UnreadMailDeps): Promise<void> {
-  for (let page = await deps.mailbox.awaitingWake(); page.length;) {
-    for (const recipientId of new Set(page.map((message) => message.recipientId))) {
-      const parent = await deps.sessions.get(recipientId);
-      if (parent && !(await deps.runs.inFlightForThread(parent.threadRef)).length)
-        await wakeParentForMail(deps, parent).catch(swallowAs("sessions: recover unread mail wake", undefined));
-    }
-    page = await deps.mailbox.awaitingWake(page.at(-1)?.id);
-  }
+  const swept = new Set<string>();
+  await claimThenBind(deps.mailbox.claimAwaitingWake, async (id) => {
+    const recipientId = (await deps.mailbox.get(id))?.recipientId;
+    if (!recipientId || swept.has(`${currentTenant()} ${recipientId}`)) return;
+    swept.add(`${currentTenant()} ${recipientId}`);
+    const parent = await deps.sessions.get(recipientId);
+    if (parent && !(await deps.runs.inFlightForThread(parent.threadRef)).length)
+      await wakeParentForMail(deps, parent).catch(swallowAs("sessions: recover unread mail wake", undefined));
+  });
 }
 
 async function wakeParentForMail(
