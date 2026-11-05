@@ -54,7 +54,9 @@ function claimReload(build: string): boolean {
 
 function reloadIfStale(): void {
   settleTimer = null;
-  if (stale() && pageIsIdle() && claimReload(servedBuild!)) location.reload();
+  if (!stale()) return;
+  if (!pageIsIdle()) return settle();
+  if (claimReload(servedBuild!)) location.reload();
 }
 
 function settle(restart = false): void {
@@ -75,5 +77,3 @@ export async function trackWebBuild(request: Promise<Response>, method: string):
     settle(write);
   }
 }
-
-if (typeof document !== "undefined") document.addEventListener("visibilitychange", () => settle());

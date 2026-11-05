@@ -105,12 +105,10 @@ test("a write in flight, typed text or an unsafe composer defers the reload to t
   draft.value = "";
   const staged = (event: Event) => event.preventDefault();
   tab.dom.window.addEventListener("qm:prepare-update", staged);
-  tab.dom.window.document.dispatchEvent(new tab.dom.window.Event("visibilitychange"));
   t.mock.timers.tick(10_000);
   assert.equal(tab.reloads(), 0, "composer reports staged work");
 
   tab.dom.window.removeEventListener("qm:prepare-update", staged);
-  tab.dom.window.document.dispatchEvent(new tab.dom.window.Event("visibilitychange"));
   t.mock.timers.tick(10_000);
   assert.equal(tab.reloads(), 1);
 });
