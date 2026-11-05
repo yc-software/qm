@@ -43,8 +43,13 @@ export function cacheRuntimeConfig(scopeId: string, config: RuntimeConfig | null
 }
 
 export function checkedRuntimeConfig(config: RuntimeConfig): RuntimeConfig {
-  if (!Array.isArray(config.models) || typeof config.effective !== "object" || config.effective === null) {
-    throw new Error("Model settings came back in a form this page can't read. Reload the page to continue.");
-  }
-  return config;
+  const missing = [
+    Array.isArray(config.models) ? null : "models list",
+    typeof config.effective === "object" && config.effective !== null ? null : "effective selection",
+  ].filter(Boolean);
+  if (!missing.length) return config;
+  const shape = new Error(`runtime config lacks ${missing.join(" and ")}; keys: ${Object.keys(config).join(", ")}`);
+  throw new Error("Model settings came back in a form this page can't read. Reload the page to continue.", {
+    cause: shape,
+  });
 }
