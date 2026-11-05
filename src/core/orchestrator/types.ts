@@ -165,7 +165,7 @@ export interface OrchestratorDeps {
   validateScheduledRuntime?: (
     scope: import("../../types.ts").ScopeId,
     choice: import("../../agent/agent.ts").RuntimeChoice,
-    purpose?: import("../../resolution/config-store.ts").RuntimePurpose,
+    purpose?: import("../../resolution/config-store.ts").TurnRuntimePurpose,
   ) => Promise<string | null>;
   connectorTokens?: ConnectorTokenStore;
   resolveConnectorClient?: OAuthClientResolver;

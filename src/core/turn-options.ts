@@ -1,4 +1,4 @@
-import type { RuntimePurpose } from "../resolution/config-store.ts";
+import type { TurnRuntimePurpose } from "../resolution/config-store.ts";
 
 export function infrequentCronTurn(input: { surface?: string; triggered: boolean; infrequentCron?: boolean }): boolean {
   return input.triggered && input.surface === "cron" && input.infrequentCron === true;
@@ -7,9 +7,9 @@ export function infrequentCronTurn(input: { surface?: string; triggered: boolean
 export function turnRuntimePurpose(
   input: { surface?: string; triggered: boolean; infrequentCron?: boolean },
   subagent = false,
-): RuntimePurpose | undefined {
+): TurnRuntimePurpose | undefined {
   if (subagent) return "subagent";
-  if (infrequentCronTurn(input)) return undefined;
+  if (infrequentCronTurn(input)) return "infrequentCron";
   if (input.triggered && (input.surface === "cron" || input.surface === "loop")) return "cron";
   return undefined;
 }

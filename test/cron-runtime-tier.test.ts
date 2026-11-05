@@ -72,14 +72,14 @@ test("infrequent crons run on the chat default with fast mode off", async () => 
     assert.deepEqual(await cronTurnRuntime(config, schedule), { ...chat, fastMode: false });
 });
 
-test("infrequent crons follow the owner scope's chat setting", async () => {
+test("crons ignore the owner scope's chat settings", async () => {
   const config = await setup();
-  await config.setRuntimeSelection(SCOPE, { modelId: "claude-sonnet-5", effortLevel: "medium" });
-  assert.deepEqual(await cronTurnRuntime(config, daily), {
-    modelId: "claude-sonnet-5",
-    effortLevel: "medium",
-    fastMode: false,
-  });
+  await config.setRuntimeSelection(SCOPE, { modelId: "gpt-6-luna", effortLevel: "medium" });
+  assert.deepEqual(await cronTurnRuntime(config, daily), { ...chat, fastMode: false });
+  assert.deepEqual(await cronTurnRuntime(config, twiceDaily), cronSetting);
+  const legacy = await setup();
+  await legacy.setBaseModel(SCOPE, "gpt-6-luna");
+  assert.deepEqual(await cronTurnRuntime(legacy, daily), { ...chat, fastMode: false });
 });
 
 test("frequent crons keep the org cron setting", async () => {
@@ -95,6 +95,7 @@ test("a pinned cron runtime wins in both tiers", async () => {
 
 test("loops and cron-spawned subagents keep their purposes", () => {
   assert.equal(turnRuntimePurpose({ triggered: true, surface: "loop", infrequentCron: true }), "cron");
+  assert.equal(turnRuntimePurpose({ triggered: true, surface: "cron", infrequentCron: true }), "infrequentCron");
   assert.equal(turnRuntimePurpose({ triggered: true, surface: "cron", infrequentCron: true }, true), "subagent");
   assert.equal(turnRuntimePurpose({ triggered: false, surface: "cron", infrequentCron: true }), undefined);
   assert.deepEqual(turnModelOptions({ triggered: true, surface: "loop", infrequentCron: true }), {});

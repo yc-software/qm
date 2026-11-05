@@ -1,4 +1,4 @@
-import type { ScopedConfigStore, RuntimePurpose } from "../resolution/config-store.ts";
+import type { ScopedConfigStore, TurnRuntimePurpose } from "../resolution/config-store.ts";
 import {
   defaultModel,
   fastModeModelIds,
@@ -71,8 +71,9 @@ export async function resolveRuntimeChoice(
   fallback: RuntimeChoice,
   requested?: Partial<RuntimeChoice>,
   hydrateModelCatalog?: () => Promise<unknown>,
-  purpose?: RuntimePurpose,
+  purpose?: TurnRuntimePurpose,
 ): Promise<RuntimeChoice> {
+  if (purpose === "infrequentCron") scope = orgScopeId;
   const [orgStored, scopedStored, orgLegacy, scopedLegacy, purposeRuntime] = await Promise.all([
     config.getRuntimeSelectionDurable(orgScopeId),
     scope === orgScopeId ? null : config.getRuntimeSelectionDurable(scope),
