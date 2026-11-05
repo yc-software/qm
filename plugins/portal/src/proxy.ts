@@ -171,6 +171,15 @@ export const FORWARD_AGENT_API_HEADERS = [
 
 export const FORWARD_DEPLOYMENT_LAYER_HEADERS = ["content-type", "accept", "x-timestamp", "x-signature"];
 
+export const FORWARD_DEPLOYMENT_GIT_HEADERS = [
+  "authorization",
+  "content-type",
+  "content-length",
+  "content-encoding",
+  "accept",
+  "git-protocol",
+];
+
 export const FORWARD_OAUTH_HEADERS = ["accept", "accept-language", "user-agent", "content-type"];
 
 export interface DeploymentTarget {

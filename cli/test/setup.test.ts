@@ -26,7 +26,7 @@ function configFor(services: string[], extra = "", env = `{}`): ReturnType<typeo
 }
 
 test("pendingSecrets collects required deployment secrets and leaves optional integrations to Admin", () => {
-  const config = configFor(["core", "slack", "web-ui"]);
+  const config = configFor(["core", "slack"]);
   const env = new Map([
     ["ANTHROPIC_API_KEY", "sk-ant-real-value"],
     ["CORE_SIGNING_SECRET", "short"],
@@ -52,7 +52,7 @@ test("pendingSecrets excludes terraform-managed secrets", () => {
 
 test("pendingSecrets keeps a malformed administrator seed pending", () => {
   const config = configFor(
-    ["core", "portal"],
+    ["core"],
     `,
       "secretEnv": { "core": { "ADMIN_GRANTS": "ADMIN_GRANTS" } }`,
   );
@@ -128,20 +128,16 @@ test("the broker signing key is a fresh P-256 private JWK", () => {
 });
 
 test("the broker's operator secrets replace the external-IdP ones", () => {
-  const external = configFor(["core", "web-ui", "portal"]);
+  const external = configFor(["core"]);
   const externalNames = pendingSecrets(external, new Map()).todo.map((secret) => secret.name);
   assert.ok(externalNames.includes("OIDC_CLIENT_SECRET"));
   for (const name of ["AUTH_EMAIL_FROM", "RESEND_API_KEY"]) {
     assert.ok(!externalNames.includes(name), `${name} is core's optional invitation sender, never a setup prompt`);
   }
 
-  const broker = configFor(
-    ["core", "web-ui", "portal", "auth"],
-    "",
-    `{ "auth": { "AUTH_EMAIL_TRANSPORT": "resend" } }`,
-  );
+  const broker = configFor(["core", "auth"], "", `{ "auth": { "AUTH_EMAIL_TRANSPORT": "resend" } }`);
   const brokerNames = pendingSecrets(broker, new Map()).todo.map((secret) => secret.name);
-  assert.ok(!brokerNames.includes("OIDC_CLIENT_SECRET"), "the broker mints the portal's client secret");
+  assert.ok(!brokerNames.includes("OIDC_CLIENT_SECRET"), "the broker mints the sign-in client's secret");
   assert.ok(!brokerNames.includes("OIDC_CLIENT_ID"));
   assert.ok(!brokerNames.includes("PORTAL_EXPECTED_TEAM_ID"));
   for (const name of ["AUTH_ALLOWED_EMAILS", "AUTH_SIGNING_JWK", "AUTH_TOKEN_SECRET", "AUTH_CLIENT_SECRET"]) {
@@ -168,7 +164,7 @@ test("runSetup refuses to run without a TTY", async () => {
 
 test("email setup uses declared secret names and does not reprompt for direct config values", () => {
   const aliased = configFor(
-    ["core", "web-ui", "portal", "auth"],
+    ["core", "auth"],
     `, "secretEnv": { "auth": { "AUTH_EMAIL_FROM": "AUTH_SENDER", "RESEND_API_KEY": "MAIL_KEY" } }`,
     `{ "auth": { "AUTH_EMAIL_TRANSPORT": "resend" } }`,
   );
