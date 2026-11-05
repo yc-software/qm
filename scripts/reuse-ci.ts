@@ -13,8 +13,8 @@ export const CI_JOBS = [
   "Web UI plugin",
   "Auth plugin",
   "Portal plugin",
-  "Co-author trailers",
 ];
+export const PR_JOBS = [...CI_JOBS, "Co-author trailers", "Certify tested tree"];
 const success = (item: any) => item?.status === "completed" && item.conclusion === "success";
 const sha = (value: unknown) => assert.match(String(value), /^[a-f0-9]{40}$/);
 const workflow = ".github/workflows/cicd.yml";
@@ -32,25 +32,69 @@ export function readReceipt(log: string) {
   return proof;
 }
 
+async function passed(api: Api, run: any, names: string[]) {
+  const jobs = await api(`actions/runs/${run.id}/attempts/${run.run_attempt}/jobs?per_page=100`);
+  if (jobs.total_count > 100) return;
+  for (const name of names) {
+    const matches = jobs.jobs.filter((job: any) => job.name === name);
+    if (
+      matches.length !== 1 ||
+      !success(matches[0]) ||
+      matches[0].run_id !== run.id ||
+      matches[0].run_attempt !== run.run_attempt ||
+      matches[0].head_sha !== run.head_sha
+    )
+      return;
+  }
+  return jobs.jobs;
+}
+
+export async function mergeQueueCi(api: Api, repository: string, release: string) {
+  sha(release);
+  const page = await api(`actions/workflows/cicd.yml/runs?event=merge_group&head_sha=${release}&per_page=100`);
+  if (page.total_count > 100) return;
+  const run = page.workflow_runs.sort(
+    (a: any, b: any) => b.run_number - a.run_number || b.run_attempt - a.run_attempt,
+  )[0];
+  if (
+    !run ||
+    (run.status === "completed" && run.conclusion !== "success") ||
+    run.event !== "merge_group" ||
+    run.path !== workflow ||
+    run.head_sha !== release ||
+    !run.head_branch?.startsWith("gh-readonly-queue/main/") ||
+    run.head_repository?.full_name !== repository ||
+    run.repository?.full_name !== repository ||
+    !Number.isSafeInteger(run.id) ||
+    !Number.isSafeInteger(run.run_attempt) ||
+    run.run_attempt < 1
+  )
+    return;
+  if (!(await passed(api, run, CI_JOBS))) return;
+  return { sha: release, ci: { runId: run.id, attempt: run.run_attempt } };
+}
+
+export function queuedPull(ref: string) {
+  const match = ref.match(/^refs\/heads\/gh-readonly-queue\/main\/pr-(\d+)-[a-f0-9]{40}$/);
+  return match ? Number(match[1]) : undefined;
+}
+
 export async function reusableCi(
   api: Api,
   log: (id: number) => Promise<string>,
   repository: string,
   release: string,
+  number: number | undefined,
   now = Date.now(),
 ) {
   sha(release);
+  if (number === undefined) return;
   const commit = await api(`commits/${release}`);
   if (commit.parents.length !== 1) return;
   const base = commit.parents[0].sha;
-  const pulls = await api(`commits/${release}/pulls?per_page=100`);
-  const matches = pulls.filter((pull: any) => pull.merged_at && pull.merge_commit_sha === release);
-  if (matches.length !== 1) return;
-  const pull = await api(`pulls/${matches[0].number}`);
+  const pull = await api(`pulls/${number}`);
   if (
-    !pull.merged ||
-    pull.state !== "closed" ||
-    pull.merge_commit_sha !== release ||
+    pull.state !== "open" ||
     pull.base.ref !== "main" ||
     pull.head.repo?.full_name !== repository ||
     pull.base.repo?.full_name !== repository
@@ -81,20 +125,9 @@ export async function reusableCi(
     return;
   const age = now - Date.parse(run.created_at);
   if (!Number.isFinite(age) || age < 0 || age > 24 * 60 * 60_000) return;
-  const jobs = await api(`actions/runs/${run.id}/attempts/${run.run_attempt}/jobs?per_page=100`);
-  if (jobs.total_count > 100) return;
-  for (const name of [...CI_JOBS, "Certify tested tree"]) {
-    const matches = jobs.jobs.filter((job: any) => job.name === name);
-    if (
-      matches.length !== 1 ||
-      !success(matches[0]) ||
-      matches[0].run_id !== run.id ||
-      matches[0].run_attempt !== run.run_attempt ||
-      matches[0].head_sha !== run.head_sha
-    )
-      return;
-  }
-  const receiptJob = jobs.jobs.find((job: any) => job.name === "Certify tested tree");
+  const jobs = await passed(api, run, PR_JOBS);
+  if (!jobs) return;
+  const receiptJob = jobs.find((job: any) => job.name === "Certify tested tree");
   for (const name of ["Validate receipt eligibility", "Checkout tested commit", "Record the immutable tested tree"]) {
     const steps = receiptJob.steps.filter((step: any) => step.name === name);
     if (steps.length !== 1 || !success(steps[0])) return;
@@ -139,46 +172,58 @@ export async function reusableCi(
 }
 
 async function main() {
-  const { GITHUB_TOKEN, GITHUB_REPOSITORY, GITHUB_SHA, GITHUB_OUTPUT, GITHUB_STEP_SUMMARY } = process.env;
-  assert.ok(GITHUB_REPOSITORY && GITHUB_SHA && GITHUB_TOKEN && GITHUB_OUTPUT);
+  const {
+    GITHUB_TOKEN,
+    GITHUB_REPOSITORY,
+    GITHUB_SHA,
+    GITHUB_OUTPUT,
+    GITHUB_STEP_SUMMARY,
+    GITHUB_EVENT_NAME,
+    GITHUB_REF,
+  } = process.env;
+  assert.ok(GITHUB_REPOSITORY && GITHUB_SHA && GITHUB_TOKEN && GITHUB_OUTPUT && GITHUB_REF);
   const headers = {
     Authorization: `Bearer ${GITHUB_TOKEN}`,
     Accept: "application/vnd.github+json",
     "X-GitHub-Api-Version": "2022-11-28",
   };
   const url = (path: string) => `https://api.github.com/repos/${GITHUB_REPOSITORY}/${path}`;
+  const api = async (path: string) => {
+    const response = await fetch(url(path), {
+      headers,
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!response.ok) throw new Error(`CI provenance unavailable (${response.status})`);
+    return response.json();
+  };
   let proof;
   try {
-    proof = await reusableCi(
-      async (path) => {
-        const response = await fetch(url(path), {
-          headers,
-          signal: AbortSignal.timeout(15_000),
-        });
-        if (!response.ok) throw new Error(`CI provenance unavailable (${response.status})`);
-        return response.json();
-      },
-      async (id) => {
-        const redirect = await fetch(url(`actions/jobs/${id}/logs`), {
-          headers,
-          redirect: "manual",
-          signal: AbortSignal.timeout(15_000),
-        });
-        assert.equal(redirect.status, 302);
-        const location = new URL(redirect.headers.get("location")!);
-        assert.equal(location.protocol, "https:");
-        const response = await fetch(location, { redirect: "error", signal: AbortSignal.timeout(15_000) });
-        assert.ok(response.ok && response.body);
-        let text = "";
-        for await (const chunk of response.body) {
-          text += Buffer.from(chunk).toString("utf8");
-          assert.ok(text.length < 128 * 1024);
-        }
-        return text;
-      },
-      GITHUB_REPOSITORY,
-      GITHUB_SHA,
-    );
+    if (GITHUB_EVENT_NAME === "push") proof = await mergeQueueCi(api, GITHUB_REPOSITORY, GITHUB_SHA);
+    else
+      proof = await reusableCi(
+        api,
+        async (id) => {
+          const redirect = await fetch(url(`actions/jobs/${id}/logs`), {
+            headers,
+            redirect: "manual",
+            signal: AbortSignal.timeout(15_000),
+          });
+          assert.equal(redirect.status, 302);
+          const location = new URL(redirect.headers.get("location")!);
+          assert.equal(location.protocol, "https:");
+          const response = await fetch(location, { redirect: "error", signal: AbortSignal.timeout(15_000) });
+          assert.ok(response.ok && response.body);
+          let text = "";
+          for await (const chunk of response.body) {
+            text += Buffer.from(chunk).toString("utf8");
+            assert.ok(text.length < 128 * 1024);
+          }
+          return text;
+        },
+        GITHUB_REPOSITORY,
+        GITHUB_SHA,
+        queuedPull(GITHUB_REF),
+      );
   } catch (error) {
     console.log(`No reusable CI proof: ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -188,8 +233,8 @@ async function main() {
     appendFileSync(
       GITHUB_STEP_SUMMARY,
       proof
-        ? `Reusing full CI from https://github.com/${GITHUB_REPOSITORY}/actions/runs/${proof.ci.runId}/attempts/${proof.ci.attempt} for identical tree ${proof.tree}.\n`
-        : "No exact trusted PR tree proof; running full CI.\n",
+        ? `Reusing full CI from https://github.com/${GITHUB_REPOSITORY}/actions/runs/${proof.ci.runId}/attempts/${proof.ci.attempt}.\n`
+        : "No exact tested tree proof; running full CI.\n",
     );
 }
 

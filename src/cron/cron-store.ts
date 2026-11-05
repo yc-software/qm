@@ -60,12 +60,12 @@ export interface CronStore {
   setDestination(id: string, destination: Destination | undefined): Promise<void>;
   beginFire(id: string, entry: CronFireLogEntry, opts?: { exclusive?: boolean }): Promise<BeginFireResult>;
   sweepStrandedFires(now: number): Promise<number>;
+  runningFires(now: number): Promise<CronFireRecord[]>;
   pruneFires(now: number): Promise<number>;
   recordFire(id: string, entry: CronFireLogEntry): Promise<void>;
   listFires(id: string, opts?: { limit?: number }): Promise<{ runs: CronFireLogEntry[]; total: number }>;
   firesByThreadRefs(threadRefs: readonly string[]): Promise<CronFireRecord[]>;
   latestFireForThread(id: string, threadRef: string): Promise<CronFireLogEntry | undefined>;
-  backfillFires(): Promise<number>;
   setFireNote(id: string, note: CronFireNote): Promise<"applied" | "superseded" | "missing">;
   markFired(id: string, at: number, scheduledAt?: number): Promise<void>;
   markAttempted(id: string, at: number): Promise<void>;
@@ -178,6 +178,7 @@ export function createCronStore(
     async sweepStrandedFires(now) {
       return fires.sweepStranded(now, staleRunningMs, STRANDED_FIRE_NOTE);
     },
+    runningFires: (now) => fires.listRunning(now - staleRunningMs),
     async pruneFires(now) {
       return fires.pruneEnded({ endedBefore: now - FIRE_RETENTION_MS, keepPerCron: FIRE_RETENTION_KEEP_PER_CRON });
     },
@@ -187,22 +188,6 @@ export function createCronStore(
     listFires: (id, opts) => fires.listByCron(id, opts),
     firesByThreadRefs: (threadRefs) => fires.listByThreadRefs(threadRefs),
     latestFireForThread: (id, threadRef) => fires.latestForThread(id, threadRef),
-    async backfillFires() {
-      let backfilled = 0;
-      for (const [id, cron] of await backing.entries()) {
-        const log = cron.fireLog;
-        if (log === undefined) continue;
-        if (log.length) {
-          await fires.backfill(id, log);
-          backfilled += log.length;
-        }
-        await backing.update(id, (current) => {
-          const { fireLog: _legacy, ...rest } = current;
-          return rest;
-        });
-      }
-      return backfilled;
-    },
     async setFireNote(id, note) {
       let applied = false;
       const apply = (cron: Cron): Cron => {

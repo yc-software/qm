@@ -12,7 +12,6 @@ import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import type { Agent } from "../src/agent/agent.ts";
-import { turnToolOptions } from "../src/agent/turn-support.ts";
 import { createAgentTools, type AgentToolsOptions } from "../src/agent/agent-tools.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
@@ -103,7 +102,16 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
         screenToolResult: turn.screenToolResult,
         pendingApprovals: [],
       };
-      const options = turnToolOptions({}, turn);
+      const options: AgentToolsOptions = {
+        ...(turn.mcpTools?.length ? { mcpTools: turn.mcpTools } : {}),
+        readOnly: turn.readOnly,
+        sessionTools: Boolean(turn.tools.sessionSyscalls),
+        surfaceTools: turn.surfaceTools,
+        delegateWork: turn.delegateWork,
+        surfaceName: turn.surfaceName,
+        ...(turn.surfacePrompt ? { surfacePrompt: turn.surfacePrompt } : {}),
+        ...(turn.clientTools?.length ? { clientTools: turn.clientTools } : {}),
+      };
       const tools = createAgentTools(ref, options);
       const record: Turn = {
         ref,

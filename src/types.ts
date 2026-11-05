@@ -84,6 +84,23 @@ export interface SurfaceBriefing {
   instructions?: string;
 }
 
+export type ChildIsolationMode = "shared" | "worktree" | "sandbox";
+
+export interface ChildWorkdir {
+  workdir: string;
+  branch: string;
+  base?: string;
+}
+
+export interface ChildIsolation {
+  mode: ChildIsolationMode;
+  sandboxId?: string;
+  workdir?: string;
+  branch?: string;
+  base?: string;
+  baseChain?: ChildWorkdir[];
+}
+
 export interface SpawnMeta {
   surfaceOrigin?: TurnSurfaceOrigin;
   surfaceTools?: boolean;
@@ -97,11 +114,13 @@ export interface SpawnMeta {
   conversation: Conversation;
   actor: Principal;
   deliveryTarget?: string;
+  deliveryWebhook?: DeliveryWebhook;
   timezone?: string;
   readOnly?: boolean;
   model?: string;
   thinkingLevel?: string;
   fastMode?: boolean;
+  isolation?: ChildIsolation;
 }
 
 export interface Session {
@@ -173,7 +192,13 @@ export interface GrantedHandle {
   permission: Permission;
 }
 
+export interface DeliveryWebhook {
+  binding: string;
+  url: string;
+}
+
 export interface Destination {
+  webhook?: DeliveryWebhook;
   account?: SurfaceAccount;
   keychainAskId?: string;
   deploymentAccess?: { deploymentId: string; requesterId: string };
@@ -207,6 +232,8 @@ export interface CandidateDestination extends Destination {
 export type BackgroundWakeTrigger = "cron" | "webhook" | "monitor" | (string & {});
 
 export interface DeliveryProvenance {
+  sourceRequestId?: string;
+  sourceRunId?: string;
   sourceTitle?: string;
   trigger: BackgroundWakeTrigger;
   surface: string;
@@ -343,6 +370,7 @@ export interface TurnRequest {
   surface: string;
   scopeVersion?: string;
   deliveryTarget?: string;
+  deliveryWebhook?: DeliveryWebhook;
   deliveryCandidates?: { target: string; label: string }[];
   actor: ActorAssertion;
   conversation: {
@@ -360,6 +388,7 @@ export interface TurnRequest {
   gatewayContext?: GatewayContext;
   unattendedGrants?: string[];
   cronScript?: import("./triggers/types.ts").CronScript;
+  infrequentCron?: boolean;
   botActor?: boolean;
   conversationHeader?: string;
   priorTurns?: ConversationTurn[];
@@ -451,6 +480,8 @@ export interface TurnRuntime {
   change?: { rule: string } | { agent: "task" | "scope" };
 }
 
+export type StopScope = "run" | "session" | "tree" | "ancestor";
+
 export interface TurnResult {
   status: "ok" | "refused" | "failed" | "pending_approval" | "queued" | "silent" | "react";
   sessionId?: string;
@@ -464,6 +495,7 @@ export interface TurnResult {
   steered?: true;
   steerTs?: string;
   stopped?: boolean;
+  stopScope?: StopScope;
   pendingApprovals?: PendingApproval[];
   attachments?: OutgoingAttachment[];
   sourceUserSeq?: number;

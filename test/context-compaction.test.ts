@@ -25,6 +25,7 @@ import {
   forModelContext,
   overBudgetFraction,
   planCompaction,
+  compactedSinceLastTurn,
 } from "../src/agent/context-compaction.ts";
 import { countTokens } from "../src/util/tokens.ts";
 import type { Agent, CompactInput } from "../src/agent/agent.ts";
@@ -59,13 +60,7 @@ const PERSONAL = scopeId("personal", "U1");
 function spyAgent(opts: { withSummarizer?: boolean } = {}) {
   const base = createMockAgent();
   const compactCalls: CompactInput[] = [];
-  const resetCalls: string[] = [];
-  const agent: Agent = {
-    ...base,
-    resetSession(sessionId: string) {
-      resetCalls.push(sessionId);
-    },
-  };
+  const agent: Agent = { ...base };
   if (opts.withSummarizer === false) {
     delete agent.compactHistory;
   } else {
@@ -74,7 +69,7 @@ function spyAgent(opts: { withSummarizer?: boolean } = {}) {
       return base.compactHistory!(input);
     };
   }
-  return { agent, compactCalls, resetCalls };
+  return { agent, compactCalls };
 }
 
 function fakeSandbox(): Sandbox {
@@ -194,8 +189,8 @@ async function waitForSummary(sessions: SessionStore, sessionId: string, deadlin
   }
 }
 
-test("overflow over the injected token budget summarizes: compactHistory runs over the oldest entries, a summary is appended, the session resets, the rebuilt context is bounded", async () => {
-  const { agent, compactCalls, resetCalls } = spyAgent();
+test("overflow over the injected token budget summarizes: compactHistory runs over the oldest entries, a summary is appended, the rebuilt context is bounded", async () => {
+  const { agent, compactCalls } = spyAgent();
   const { orch, sessions } = buildOrchestrator(agent, budgetKeepingOnlyNewest("msg 4", "msg 5"));
 
   const sid = await seed(
@@ -217,13 +212,11 @@ test("overflow over the injected token budget summarizes: compactHistory runs ov
   const summaries = await summaryEntries(sessions, sid);
   assert.equal(summaries[0]!.throughSeq, 4, "summary throughSeq must advance to seq 4");
 
-  assert.equal(resetCalls[0], sid, "resetSession must be called with the session id");
-
   assert.equal(res.reply, "history:2", "rebuilt context is [summary, keep-recent…]");
 });
 
 test("token overflow triggers compaction with only a few huge entries", async () => {
-  const { agent, compactCalls, resetCalls } = spyAgent();
+  const { agent, compactCalls } = spyAgent();
   const { orch, sessions } = buildOrchestrator(agent, 50);
 
   const big = "many different tokens here ".repeat(25);
@@ -236,7 +229,6 @@ test("token overflow triggers compaction with only a few huge entries", async ()
   assert.equal(res.status, "ok");
 
   assert.ok(compactCalls.length >= 1, "token overflow must trigger compaction despite the low entry count");
-  assert.equal(resetCalls[0], sid, "compaction resets the agent session");
   const summaries = await summaryEntries(sessions, sid);
   assert.ok(summaries.length >= 1, "a summary entry is written");
   assert.ok(
@@ -273,7 +265,7 @@ test("a prior summary that still fits is reused, not regenerated", async () => {
 });
 
 test("with no agent summarizer, overflow falls back to a plain slice — no summary entry written", async () => {
-  const { agent, compactCalls, resetCalls } = spyAgent({ withSummarizer: false });
+  const { agent, compactCalls } = spyAgent({ withSummarizer: false });
   assert.equal(agent.compactHistory, undefined, "fixture: summarizer is absent");
   const { orch, sessions } = buildOrchestrator(agent, tokensOf("msg 2", "msg 3", "msg 4", "msg 5"));
 
@@ -286,7 +278,6 @@ test("with no agent summarizer, overflow falls back to a plain slice — no summ
   assert.equal(res.status, "ok");
 
   assert.equal(compactCalls.length, 0, "no summarizer → compactHistory never called");
-  assert.deepEqual(resetCalls, [], "no summarizer → no session reset");
   const summaries = await summaryEntries(sessions, sid);
   assert.equal(summaries.length, 0, "fallback must NOT write a summary entry");
   assert.equal(res.reply, "history:4", "fallback returns the newest entries that fit the token budget");
@@ -384,6 +375,24 @@ test("planCompaction chains a prior summary into the batch instead of accumulati
   assert.ok(
     plan.toSummarize.some((e) => contextSummary(e)),
     "the prior summary is folded into the new batch",
+  );
+});
+
+test("compactedSinceLastTurn holds from a new summary until the next turn's message", () => {
+  const summary = (seq: number) => mkItem(seq, { kind: "ContextCompaction", throughSeq: 1, text: "prior" });
+  const agent = (seq: number) => mkItem(seq, { kind: "AgentMessage", text: `reply ${seq}` });
+  assert.equal(compactedSinceLastTurn([mkItem(0), agent(1)]), false, "no summary, no compaction");
+  assert.equal(compactedSinceLastTurn([mkItem(2), agent(3), summary(4)]), true, "summary after the last turn");
+  assert.equal(compactedSinceLastTurn([summary(4), mkItem(5), agent(6)]), false, "a turn has run since");
+  assert.equal(
+    compactedSinceLastTurn([summary(4), mkItem(5, { kind: "UserMessage", text: "aside", body: { overheard: true } })]),
+    true,
+    "an overheard message is not a turn",
+  );
+  assert.equal(
+    compactedSinceLastTurn([mkItem(2), summary(4), mkItem(5, { kind: "SteeringMessage", text: "also check X" })]),
+    true,
+    "a steering message mid-turn is not a new turn",
   );
 });
 
@@ -716,7 +725,7 @@ test("the context window start never regresses as the log grows", () => {
 });
 
 function gatedAgent() {
-  const { agent, compactCalls, resetCalls } = spyAgent();
+  const { agent, compactCalls } = spyAgent();
   let open = (): void => {};
   const gate = new Promise<void>((resolve) => {
     open = () => resolve();
@@ -727,7 +736,7 @@ function gatedAgent() {
     await gate;
     return text;
   };
-  return { agent, compactCalls, resetCalls, open };
+  return { agent, compactCalls, open };
 }
 
 async function untilTrue(what: string, predicate: () => boolean, deadlineMs = 3_000): Promise<void> {
@@ -739,7 +748,7 @@ async function untilTrue(what: string, predicate: () => boolean, deadlineMs = 3_
 }
 
 test("the background pass waits out another live turn rather than throwing its summary away", async () => {
-  const { agent, compactCalls, resetCalls, open } = gatedAgent();
+  const { agent, compactCalls, open } = gatedAgent();
   const { runs, busyThreads } = liveTurnProbe();
   const { orch, sessions } = buildOrchestrator(
     agent,
@@ -761,7 +770,6 @@ test("the background pass waits out another live turn rather than throwing its s
   open();
   await new Promise((r) => setTimeout(r, 300));
   assert.equal((await summaryEntries(sessions, sid)).length, 0, "the pass wrote nothing behind the turn's back");
-  assert.equal(resetCalls.length, 0);
 
   busyThreads.delete(conv.threadRef);
   assert.equal((await waitForSummary(sessions, sid)).length, 1, "the summary lands once the turn is done");
@@ -803,7 +811,7 @@ test("a turn landing mid-summarization does not disturb the fold: it covers a pr
 });
 
 test("a summary that landed while the pass was summarizing makes it drop its own — never two overlapping folds", async () => {
-  const { agent, compactCalls, resetCalls, open } = gatedAgent();
+  const { agent, compactCalls, open } = gatedAgent();
   const { orch, sessions } = buildOrchestrator(agent, budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))));
   const sid = await seed(
     sessions,
@@ -821,7 +829,6 @@ test("a summary that landed while the pass was summarizing makes it drop its own
   const summaries = await summaryEntries(sessions, sid);
   assert.equal(summaries.length, 1, "only the rival fold — the stale one was dropped");
   assert.equal(summaries[0]!.text, "a rival fold");
-  assert.equal(resetCalls.length, 0, "the dropped pass never reached its write");
 });
 
 test("the token estimate counts the environment note persisted on a user entry", () => {
@@ -835,13 +842,9 @@ test("the token estimate counts the environment note persisted on a user entry",
 test("runtime handoff continues once with saved results under the original run and remaining deadline", async () => {
   const base = createMockAgent();
   const seen: import("../src/agent/agent.ts").AgentTurnInput[] = [];
-  let resets = 0;
   const choice = { modelId: "gpt-6-astra", effortLevel: "high", fastMode: false };
   const agent: Agent = {
     ...base,
-    resetSession: async () => {
-      resets++;
-    },
     runTurn: async (input) => {
       seen.push(input);
       if (seen.length === 1) {
@@ -866,7 +869,6 @@ test("runtime handoff continues once with saved results under the original run a
   const { orch, sessions } = buildOrchestrator(agent, undefined, 60000);
   await orch.handleTurn({ ...turn("switch then finish"), runId: "runtime-run", surfaceTools: false });
   assert.equal(seen.length, 2);
-  assert.equal(resets, 1);
   const session = await sessions.getByThread(conv.threadRef);
   const entries = await sessions.getItems(session!.id);
   assert.deepEqual(
@@ -894,15 +896,12 @@ test("runtime handoff cannot restart a stopped task", async () => {
   assert.equal(calls, 1);
 });
 
-test("a retry restores a committed runtime decision after reset crashes, without replaying the selection", async () => {
+test("a retry restores a committed runtime decision after the resumed segment crashes, without replaying the selection", async () => {
   const base = createMockAgent();
   const choice = { modelId: "gpt-6-astra" };
   let calls = 0;
   const agent: Agent = {
     ...base,
-    resetSession: async () => {
-      throw new Error("worker died during reset");
-    },
     runTurn: async (input) => {
       calls++;
       if (calls === 1) {
@@ -916,6 +915,7 @@ test("a retry restores a committed runtime decision after reset crashes, without
         return { reply: "", runtimeHandoff: { choice, lifetime: "task" } };
       }
       assert.deepEqual(input.runtime, choice);
+      if (calls === 2) throw new Error("worker died during resume");
       return { reply: "resumed" };
     },
   };
@@ -923,7 +923,7 @@ test("a retry restores a committed runtime decision after reset crashes, without
   const input = { ...turn("switch and finish"), runId: randomUUID(), surfaceTools: false };
   await assert.rejects(() => orch.handleTurn(input), /worker died/);
   await orch.handleTurn({ ...input, attempt: 2 });
-  assert.equal(calls, 2);
+  assert.equal(calls, 3);
 });
 
 test("only a cron automation receives task-runtime authority and each fire starts fresh", async () => {

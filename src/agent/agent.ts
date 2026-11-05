@@ -9,6 +9,7 @@ import type {
   ConversationTurn,
   ScopeId,
   Session,
+  StopScope,
   TurnRequest,
   TurnRuntime,
 } from "../types.ts";
@@ -85,7 +86,7 @@ export interface AgentTurnInput {
   }>;
   documents?: DocumentInput[];
   runtime?: Partial<RuntimeChoice>;
-  runtimePurpose?: import("../resolution/config-store.ts").RuntimePurpose;
+  runtimePurpose?: import("../resolution/config-store.ts").TurnRuntimePurpose;
   runtimeControl?: RuntimeControl;
   runtimeActorId?: string;
   readOnly?: boolean;
@@ -146,6 +147,7 @@ export interface AgentTurnResult {
   prodded?: string[];
   silent?: boolean;
   stopped?: true;
+  stopScope?: StopScope;
   stoppedByUser?: true;
   pendingApprovals?: Array<{
     command: string;
@@ -209,5 +211,4 @@ export interface ModelUtilities {
 export interface Agent extends ModelUtilities {
   runTurn(input: AgentTurnInput): Promise<AgentTurnResult>;
   close?(): Promise<void> | void;
-  resetSession?(sessionId: string): Promise<void> | void;
 }

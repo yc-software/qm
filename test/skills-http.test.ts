@@ -1312,7 +1312,7 @@ test("the skills tool cannot save or edit where the skill API refuses", async ()
         })
       ).startsWith(`[error] ${SKILL_NAME_RULE} (HTTP 400`),
     );
-    assert.deepEqual(skillsActions(), ["list", "search", "read", "share", "move"]);
+    assert.deepEqual(skillsActions(), ["list", "search", "read", "share"]);
     assert.equal(
       await skillsTool(async () => {
         throw new Error("connect ECONNREFUSED");

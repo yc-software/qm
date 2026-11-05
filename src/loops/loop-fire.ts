@@ -1,5 +1,15 @@
 import { WorkAdmissionClosed, type AdmittedWork } from "../util/admitted-work.ts";
-import { renderSourceInboxTask, isReplyLoop, applyReplyResolution, REPLY_DECISION } from "./inbox-loop.ts";
+import {
+  renderSourceInboxTask,
+  inboxSource,
+  inboxTaskContext,
+  loadInboxVoiceProfile,
+  isReplyLoop,
+  applyReplyResolution,
+  REPLY_DECISION,
+  VOICE_JUDGEMENT,
+} from "./inbox-loop.ts";
+import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import { cronTriggerAuthority } from "../cron/authority.ts";
 import { MAX_SCREEN_CHARS } from "../security/security-posture.ts";
 import type { CronStore } from "../cron/cron-store.ts";
@@ -46,6 +56,7 @@ import {
 } from "./triage.ts";
 import type { TriagePatch } from "./item-ledger.ts";
 import { adapterForItem } from "./sources/index.ts";
+import type { InboxQuietCheck } from "./inbox-quiet-check.ts";
 
 export interface LoopFireDeps {
   admittedWork?: AdmittedWork;
@@ -57,7 +68,9 @@ export interface LoopFireDeps {
   items: LoopItemLedger;
   outputs: LoopOutputStore;
   grants: ShipGrantStore;
+  files: Pick<FileArtifactStore, "listOwnedByScopes" | "open">;
   trigger: TriggerDeps;
+  inboxQuiet?: InboxQuietCheck;
 }
 
 interface LoopFireResult {
@@ -144,7 +157,7 @@ function itemContextFences(item: LoopItem): string[] {
   return ["```untrusted-data", itemSource(item), "```", "```untrusted-data", promptText(review), "```"];
 }
 
-function followUpPrompt(loop: Loop, item: LoopItem, message: string): StageInput {
+function followUpPrompt(loop: Loop, item: LoopItem, message: string, voiceProfile?: string): StageInput {
   const input = [
     "[Loop item chat]",
     `A person is talking to you about ONE held item of the loop "${promptText(loop.name)}". Answer them directly and briefly.`,
@@ -165,12 +178,18 @@ function followUpPrompt(loop: Loop, item: LoopItem, message: string): StageInput
     "[End loop item chat]",
     "",
     "Playbook:",
-    playbookText(loop),
+    playbookText(loop, voiceProfile),
   ].join("\n");
   return { input, securityScreenData: itemSource(item) };
 }
 
-function itemActionPrompt(loop: Loop, item: LoopItem, kind: string, args: Record<string, unknown>): StageInput {
+function itemActionPrompt(
+  loop: Loop,
+  item: LoopItem,
+  kind: string,
+  args: Record<string, unknown>,
+  voiceProfile?: string,
+): StageInput {
   const input = [
     "[Loop item action]",
     `A person approved the action "${promptText(kind)}" on ONE held item of the loop "${promptText(loop.name)}". Execute EXACTLY that action, nothing else.`,
@@ -183,7 +202,7 @@ function itemActionPrompt(loop: Loop, item: LoopItem, kind: string, args: Record
     "[End loop item action]",
     "",
     "Playbook:",
-    playbookText(loop),
+    playbookText(loop, voiceProfile),
   ].join("\n");
   return { input, securityScreenData: itemSource(item) };
 }
@@ -347,7 +366,9 @@ function excerpt(s: string | undefined): string {
   return s.length <= REPLY_EXCERPT_MAX ? s : `${s.slice(0, REPLY_EXCERPT_MAX - 3)}...`;
 }
 
-function playbookText(loop: Loop): string {
+function playbookText(loop: Loop, voiceProfile?: string): string {
+  const source = inboxSource(loop);
+  if (source) return renderSourceInboxTask(loop.id, source, inboxTaskContext(loop, voiceProfile));
   return promptText(loop.playbook.replaceAll("$LOOP_ID", loop.id));
 }
 
@@ -431,7 +452,13 @@ function triagePrompt(loop: Loop, open: LoopItem[], pending: LoopItem[]): StageI
   return { input, securityScreenData: promptText(data) };
 }
 
-function workPrompt(loop: Loop, item: LoopItem, guidance?: string, similar: LoopItem[] = []): StageInput {
+function workPrompt(
+  loop: Loop,
+  item: LoopItem,
+  guidance?: string,
+  similar: LoopItem[] = [],
+  voiceProfile?: string,
+): StageInput {
   const data = JSON.stringify({
     sourceKey: promptText(item.sourceKey),
     loopId: loop.id,
@@ -474,7 +501,7 @@ function workPrompt(loop: Loop, item: LoopItem, guidance?: string, similar: Loop
     "[End loop work]",
     "",
     "Playbook:",
-    playbookText(loop),
+    playbookText(loop, voiceProfile),
   ].join("\n");
   return { input, securityScreenData: screened(data) };
 }
@@ -490,6 +517,7 @@ function judgePrompt(loop: Loop, item: LoopItem): string {
     "```untrusted-data",
     data,
     "```",
+    ...(isReplyLoop(loop, item) ? [VOICE_JUDGEMENT] : []),
     ...(loop.successChecks?.length
       ? [
           `Run every declared check yourself with your tools: ${JSON.stringify(loop.successChecks.map(promptText))}. Report each exact command, whether it passed, and a short detail.`,
@@ -723,28 +751,38 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
       return { status: "silent", note: "duplicate fire key" };
     }
     const threadRef = loopFireThreadRef(loopId, fireKey);
-    if (loop.surface?.startsWith("inbox:") && options?.enumerate !== false) {
+    let profile: Promise<string | undefined> | undefined;
+    const voiceProfile = () => (profile ??= loadInboxVoiceProfile(deps.files, loop));
+    if (inboxSource(loop) && options?.enumerate !== false) {
       if (!isRunnable(loop)) return notRunnable(loop);
+      const firedAt = Date.now();
+      const quiet = deps.inboxQuiet
+        ? await deps.items
+            .byLoop(loopId)
+            .then((items) => deps.inboxQuiet!(loop, items))
+            .catch((error: unknown) => ({ quiet: false as const, reason: `pre-check failed: ${errMessage(error)}` }))
+        : undefined;
+      const quietNote =
+        quiet && (quiet.quiet ? "inbox quiet: nothing new since the last pass" : `inbox sync ran: ${quiet.reason}`);
       let failure: unknown;
       try {
-        const outcome = await stageTurn(
-          loop,
-          `${fireKey}:sync`,
-          threadRef,
-          renderSourceInboxTask(loop.id, loop.sources![0]!),
-        );
-        if (!outcome.ran && !outcome.authzFailed) return { status: "silent", note: "duplicate fire key" };
-        failure = stageFailure("inbox sync", outcome)?.error;
+        if (!quiet?.quiet) {
+          const outcome = await stageTurn(loop, `${fireKey}:sync`, threadRef, playbookText(loop, await voiceProfile()));
+          if (!outcome.ran && !outcome.authzFailed) return { status: "silent", note: "duplicate fire key" };
+          failure = stageFailure("inbox sync", outcome)?.error;
+        }
         if (failure === undefined) await triage(loop, fireKey, threadRef);
       } catch (error) {
         failure = error;
       }
       if (failure === undefined) {
+        await deps.loops.recordScan(loopId, firedAt);
         await deps.loops.recordFireOutcome(loopId, "ok");
         await applyGovernor(loopId);
-        return { status: "silent" };
+        return { status: "silent", ...(quietNote ? { note: quietNote } : {}) };
       }
-      return recordFailedFire(loopId, failure);
+      const failed = await recordFailedFire(loopId, failure);
+      return quietNote ? { ...failed, note: `${failed.note}; ${quietNote}` } : failed;
     }
     const maxAttempts = loop.caps?.maxItemAttempts ?? DEFAULT_MAX_ATTEMPTS;
     const grants = await deps.grants.byLoop(loopId);
@@ -776,7 +814,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
               loop,
               `${fireKey}:work:${item.id}:${item.attempts}`,
               itemThreadRef,
-              workPrompt(loop, item, guidance, similar),
+              workPrompt(loop, item, guidance, similar, await voiceProfile()),
             );
             const failure = stageFailure("work", outcome);
             if (failure) throw failure.error;
@@ -987,7 +1025,8 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     await deps.items.appendThread(item.id, [{ role: "human", text: message, actorId }]);
     const asked = { ...item, thread: (await deps.items.get(item.id))?.thread ?? item.thread };
     const fireKey = `loop:${loop.id}:item:${item.id}:followup:${Date.now()}`;
-    const turn = await itemTurn(loop, asked, followUpPrompt(loop, asked, message), fireKey, actorId, options);
+    const prompt = followUpPrompt(loop, asked, message, await loadInboxVoiceProfile(deps.files, loop));
+    const turn = await itemTurn(loop, asked, prompt, fireKey, actorId, options);
     if (!turn.ok) {
       await deps.items.appendThread(item.id, [
         { role: "system", text: `The agent could not answer: ${turn.userNote ?? "the turn did not run"}` },
@@ -1020,7 +1059,8 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     actorId: string,
   ): Promise<ItemTurnResult> {
     const fireKey = `loop:${loop.id}:item:${item.id}:action:${kind}:${Date.now()}`;
-    return itemTurn(loop, item, itemActionPrompt(loop, item, kind, args), fireKey, actorId);
+    const prompt = itemActionPrompt(loop, item, kind, args, await loadInboxVoiceProfile(deps.files, loop));
+    return itemTurn(loop, item, prompt, fireKey, actorId);
   }
 
   return {

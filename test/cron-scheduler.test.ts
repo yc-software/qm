@@ -1686,6 +1686,32 @@ test("scheduled and manual fires use the saved runtime; clearing it restores inh
   assert.equal(calls[2]?.fastMode, undefined);
 });
 
+test("daily-or-less crons mark their fires infrequent; frequent ones do not", async () => {
+  const { crons, calls, scheduler } = agent();
+  const daily = await crons.create({
+    schedule: { cron: "0 9 * * *", timezone: "America/Los_Angeles" },
+    action: "daily digest",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: "personal:U1",
+  });
+  const polling = await crons.create({
+    schedule: { everyMs: 60_000 },
+    action: "check status",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: "personal:U1",
+  });
+  await runNowSettled(scheduler, daily.id);
+  await runNowSettled(scheduler, polling.id);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0]?.infrequentCron, true);
+  assert.equal(calls[0]?.thinkingLevel, undefined);
+  assert.equal(calls[0]?.fastMode, false);
+  assert.equal(calls[1]?.infrequentCron, undefined);
+  assert.equal(calls[1]?.fastMode, undefined);
+});
+
 test("a failing cron posts one notice to its destination, then stays quiet until a fire succeeds", async () => {
   let result: TurnResult = {
     status: "refused",
@@ -1758,4 +1784,143 @@ test("a cron whose model can't run fires on the default model and is told why", 
   await runNowSettled(scheduler, cron.id);
   assert.equal(calls[1]?.model, "claude-sonnet-5", "the stored model is used again once it can run");
   assert.doesNotMatch(calls[1]?.text ?? "", /default model because/);
+});
+
+test("a fire is told when its previous output was refused by the cron's destination", async () => {
+  const { crons, deliveries, calls, scheduler } = agent("tick");
+  const cron = await crons.create({
+    schedule: { everyMs: 60_000 },
+    action: "post the tick",
+    owner: "U7",
+    createdBy: "U7",
+    ownerScopeId: scopeId("personal", "U7"),
+    destination: { type: "slack", target: "D7", audienceScopeId: scopeId("personal", "U7") },
+  });
+  await crons.setFireNote(cron.id, { text: "cursor 42", at: 1_000 });
+  await runNowSettled(scheduler, cron.id);
+  const [first] = await deliveries.pending("slack");
+  await deliveries.fail(first!.id, "receiver returned HTTP 410: binding revoked", Date.now());
+  await runNowSettled(scheduler, cron.id);
+  assert.match(
+    calls[1]?.text ?? "",
+    /previous fire's output was refused by this cron's destination and not delivered: receiver returned HTTP 410: binding revoked/,
+  );
+  assert.match(calls[1]?.text ?? "", /cursor 42/, "the agent's own note is untouched");
+  const [second] = await deliveries.pending("slack");
+  await deliveries.ack(second!.id, Date.now());
+  await runNowSettled(scheduler, cron.id);
+  assert.doesNotMatch(calls[2]?.text ?? "", /was refused/);
+});
+
+const AFTER_REDRIVE_GRACE_MS = 61_000;
+
+function handOffOnce(reply: (req: TurnRequest) => string) {
+  let handedOff = false;
+  return async (req: TurnRequest): Promise<TurnResult> => {
+    if (!handedOff) {
+      handedOff = true;
+      return { status: "queued", sessionId: "s1", runId: "r1" };
+    }
+    return { status: "ok", reply: reply(req), sessionId: "s1" };
+  };
+}
+
+const standup = {
+  action: "post the standup",
+  owner: "U1",
+  createdBy: "U1",
+  ownerScopeId: scopeId("channel", "C1"),
+  destination: { type: "slack" as const, target: "C1", audienceScopeId: scopeId("channel", "C1") },
+};
+
+test("a manual fire whose wait is cut by shutdown is re-driven onto the same run and delivers its reply once", async () => {
+  const { crons, deliveries, calls, scheduler } = agent(handOffOnce((req) => `finished ${req.idempotencyKey}`));
+  const cron = await crons.create({ ...standup, schedule: { everyMs: 3_600_000 } });
+  const started = await scheduler.runNow(cron.id);
+  assert.ok(started.started);
+  await started.settled;
+  const [handOff] = (await crons.listFires(cron.id)).runs;
+  assert.equal(handOff?.status, "running");
+  assert.deepEqual(await deliveries.pending("slack"), []);
+
+  await scheduler.tick(Date.now() + AFTER_REDRIVE_GRACE_MS);
+  await scheduler.drained();
+  const { runs } = await crons.listFires(cron.id);
+  assert.equal(runs.length, 1);
+  assert.equal(runs[0]?.status, "ok");
+  assert.equal(runs[0]?.reply, `finished ${started.fireKey}`);
+  assert.deepEqual(
+    calls.map((c) => c.idempotencyKey),
+    [started.fireKey, started.fireKey],
+  );
+  assert.deepEqual(
+    (await deliveries.pending("slack")).map((d) => d.text),
+    [`finished ${started.fireKey}`],
+  );
+
+  await scheduler.tick(Date.now() + 2 * AFTER_REDRIVE_GRACE_MS);
+  await scheduler.drained();
+  assert.equal(calls.length, 2);
+});
+
+test("a handed-off fire whose cron lifecycle lock is still held elsewhere is left to its holder", async (t) => {
+  const mutex = testAdvisoryLock();
+  const { crons, calls, scheduler } = agent(
+    handOffOnce(() => "late"),
+    undefined,
+    undefined,
+    undefined,
+    { advisoryLock: mutex },
+  );
+  const cron = await crons.create({ ...standup, schedule: { everyMs: 3_600_000 } });
+  await runNowSettled(scheduler, cron.id);
+  const release = Promise.withResolvers<void>();
+  t.after(() => release.resolve());
+  const entered = Promise.withResolvers<void>();
+  const holding = mutex.withLock(`cron-lifecycle:${cron.id}`, async () => {
+    entered.resolve();
+    await release.promise;
+  });
+  await entered.promise;
+  await scheduler.tick(Date.now() + AFTER_REDRIVE_GRACE_MS);
+  await scheduler.drained();
+  assert.equal(calls.length, 1);
+  assert.equal((await crons.listFires(cron.id)).runs[0]?.status, "running");
+
+  release.resolve();
+  await holding;
+  await scheduler.tick(Date.now() + 2 * AFTER_REDRIVE_GRACE_MS);
+  await scheduler.drained();
+  assert.equal(calls.length, 2);
+  assert.equal((await crons.listFires(cron.id)).runs[0]?.status, "ok");
+});
+
+test("a scheduled fire handed off before its schedule changed is still completed and does not block run-now", async () => {
+  const start = Date.now();
+  let clock = start;
+  const { crons, deliveries, calls, scheduler } = agent(
+    handOffOnce((req) => `finished ${req.idempotencyKey}`),
+    undefined,
+    undefined,
+    () => clock,
+  );
+  const cron = await crons.create({ ...standup, schedule: { everyMs: 60_000 } });
+  clock = cron.nextFireAt! + 1;
+  await scheduler.tick(clock);
+  const [handOff] = (await crons.listFires(cron.id)).runs;
+  assert.equal(handOff?.status, "running");
+  await crons.update(cron.id, { schedule: { everyMs: 3_600_000 } });
+
+  clock += AFTER_REDRIVE_GRACE_MS;
+  await scheduler.tick(clock);
+  await scheduler.drained();
+  const redriven = (await crons.listFires(cron.id)).runs.find((r) => r.fireKey === handOff?.fireKey);
+  assert.equal(redriven?.status, "ok");
+  assert.deepEqual(
+    (await deliveries.pending("slack")).map((d) => d.text),
+    [`finished ${handOff?.fireKey}`],
+  );
+  assert.ok((await scheduler.runNow(cron.id)).started);
+  await scheduler.drained();
+  assert.equal(calls.length, 3);
 });

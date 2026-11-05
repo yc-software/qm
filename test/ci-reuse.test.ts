@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { CI_JOBS, readReceipt, reusableCi } from "../scripts/reuse-ci.ts";
+import { CI_JOBS, PR_JOBS, mergeQueueCi, queuedPull, readReceipt, reusableCi } from "../scripts/reuse-ci.ts";
 
 const repository = "example/qm";
 const release = "a".repeat(40),
@@ -15,10 +15,7 @@ const success = { status: "completed", conclusion: "success" };
 function fixture() {
   const pull = {
     number: 7,
-    merged: true,
-    state: "closed",
-    merged_at: "today",
-    merge_commit_sha: release,
+    state: "open",
     head: { sha: head, ref: "web-fix", repo: { full_name: repository } },
     base: { ref: "main", repo: { full_name: repository } },
   };
@@ -45,7 +42,7 @@ function fixture() {
     path: "dynamic/github-code-scanning/codeql",
     repository: { full_name: repository },
   };
-  const jobs = [...CI_JOBS, "Certify tested tree"].map((name, index) => ({
+  const jobs = PR_JOBS.map((name, index) => ({
     ...success,
     id: index + 100,
     name,
@@ -59,7 +56,6 @@ function fixture() {
   const receipt = { sha: tested, tree, runId: run.id, attempt: run.run_attempt, pr: pull.number };
   const data: Record<string, any> = {
     [`commits/${release}`]: { sha: release, parents: [{ sha: base }], commit: { tree: { sha: tree } } },
-    [`commits/${release}/pulls?per_page=100`]: [pull],
     [`pulls/${pull.number}`]: pull,
     [`contents/.github/workflows/cicd.yml?ref=${base}`]: { type: "file", sha: "f".repeat(40) },
     [`contents/.github/workflows/cicd.yml?ref=${release}`]: { type: "file", sha: "f".repeat(40) },
@@ -93,13 +89,14 @@ function fixture() {
         },
         repository,
         release,
+        pull.number,
         now,
       );
     },
   };
 }
 
-test("reuses the full tested merge tree, not the PR head SHA or an artifact name", async () => {
+test("a merge group reuses the PR run that tested its exact tree, not the PR head SHA or an artifact name", async () => {
   assert.deepEqual(await fixture().resolve(), {
     sha: release,
     tree,
@@ -116,13 +113,13 @@ test("changed bases, trees, workflow, producer identity, attempts and missing ga
       f.data[`commits/${release}`].parents.push({ sha: head });
     },
     (f: any) => {
-      f.data[`commits/${release}/pulls?per_page=100`] = [];
+      f.pull.state = "closed";
     },
     (f: any) => {
-      f.data[`commits/${release}/pulls?per_page=100`].push(f.pull);
-    },
-    (f: any) => {
-      f.pull.merged = false;
+      f.jobs.splice(
+        f.jobs.findIndex((job: any) => job.name === "Co-author trailers"),
+        1,
+      );
     },
     (f: any) => {
       f.pull.head.repo.full_name = "fork/qm";
@@ -273,6 +270,144 @@ test("a newer failed run prevents recycling an older green run", async () => {
   assert.equal(await f.resolve(), undefined);
 });
 
+function mergeGroup() {
+  const run = {
+    ...success,
+    id: 40,
+    run_attempt: 1,
+    run_number: 50,
+    head_sha: release,
+    head_branch: `gh-readonly-queue/main/pr-7-${base}`,
+    repository: { full_name: repository },
+    head_repository: { full_name: repository },
+    path: ".github/workflows/cicd.yml",
+    event: "merge_group",
+  };
+  const jobs = CI_JOBS.map((name, index) => ({
+    ...success,
+    id: index + 200,
+    name,
+    run_id: run.id,
+    run_attempt: run.run_attempt,
+    head_sha: release,
+  }));
+  const data: Record<string, any> = {
+    [`actions/workflows/cicd.yml/runs?event=merge_group&head_sha=${release}&per_page=100`]: {
+      total_count: 1,
+      workflow_runs: [run],
+    },
+    [`actions/runs/40/attempts/1/jobs?per_page=100`]: { total_count: jobs.length, jobs },
+  };
+  return {
+    data,
+    run,
+    jobs,
+    resolve: () =>
+      mergeQueueCi(
+        async (path) => {
+          assert.ok(data[path], path);
+          return data[path];
+        },
+        repository,
+        release,
+      ),
+  };
+}
+
+test("a main push reuses the merge group run that tested its exact commit", async () => {
+  assert.deepEqual(await mergeGroup().resolve(), { sha: release, ci: { runId: 40, attempt: 1 } });
+});
+
+test("a main push reuses a merge group run still settling once every quality job has passed", async () => {
+  const f = mergeGroup();
+  f.run.status = "in_progress";
+  delete (f.run as any).conclusion;
+  assert.deepEqual(await f.resolve(), { sha: release, ci: { runId: 40, attempt: 1 } });
+});
+
+test("a merge group without a queued PR runs full checks", async () => {
+  const api = async (value: unknown) => assert.fail(String(value));
+  assert.equal(await reusableCi(api, api, repository, release, undefined, now), undefined);
+});
+
+test("only a queue ref for main names the queued PR", () => {
+  assert.equal(queuedPull(`refs/heads/gh-readonly-queue/main/pr-7-${base}`), 7);
+  for (const ref of [
+    `refs/heads/gh-readonly-queue/other/pr-7-${base}`,
+    `refs/heads/gh-readonly-queue/main/pr-7-${base.slice(1)}`,
+    `refs/heads/gh-readonly-queue/main/pr--${base}`,
+    "refs/heads/main",
+    `refs/pull/7/merge`,
+  ])
+    assert.equal(queuedPull(ref), undefined, ref);
+});
+
+test("a main push without a green merge group run of its exact commit runs full checks", async () => {
+  for (const change of [
+    (f: any) => {
+      f.data[`actions/workflows/cicd.yml/runs?event=merge_group&head_sha=${release}&per_page=100`].workflow_runs = [];
+    },
+    (f: any) => {
+      f.run.conclusion = "failure";
+    },
+    (f: any) => {
+      f.run.conclusion = "cancelled";
+    },
+    (f: any) => {
+      f.run.event = "pull_request";
+    },
+    (f: any) => {
+      f.run.path = ".github/workflows/fake.yml";
+    },
+    (f: any) => {
+      f.run.head_sha = head;
+      for (const job of f.jobs) job.head_sha = head;
+    },
+    (f: any) => {
+      f.run.head_branch = `gh-readonly-queue/other/pr-7-${base}`;
+    },
+    (f: any) => {
+      f.run.head_repository.full_name = "fork/qm";
+    },
+    (f: any) => {
+      f.run.repository.full_name = "fork/qm";
+    },
+    (f: any) => {
+      f.data[`actions/workflows/cicd.yml/runs?event=merge_group&head_sha=${release}&per_page=100`].workflow_runs.push({
+        ...f.run,
+        id: 41,
+        run_number: 51,
+        conclusion: "failure",
+      });
+    },
+    (f: any) => {
+      f.data[`actions/workflows/cicd.yml/runs?event=merge_group&head_sha=${release}&per_page=100`].total_count = 101;
+    },
+    (f: any) => {
+      f.jobs[0].conclusion = "skipped";
+    },
+    (f: any) => {
+      f.jobs[0].run_attempt = 2;
+    },
+    (f: any) => {
+      f.jobs[0].head_sha = head;
+    },
+    (f: any) => {
+      f.jobs.splice(1, 1);
+    },
+    (f: any) => {
+      f.jobs.push(f.jobs[0]);
+    },
+    (f: any) => {
+      f.jobs[0].status = "in_progress";
+    },
+  ]) {
+    const f = mergeGroup();
+    change(f);
+    assert.equal(await f.resolve(), undefined, change.toString());
+  }
+});
+
 test("receipt parser rejects missing, multiple and malformed job output", () => {
   for (const text of ["", "QM_CI_TREE={}", "timestamp QM_CI_TREE={}", "timestamp QM_CI_TREE=nope"])
     assert.throws(() => readReceipt(text));
@@ -295,11 +430,11 @@ test("all quality jobs keep successful names and missing proof runs full checks"
   assert.ok(jobs.core!.includes('test "$TYPECHECK" = success && test "$TESTS" = success'));
   const names: string[] = [];
   for (const [id, block] of Object.entries(jobs)) {
-    if (["reuse", "certify", "notify-deployments"].includes(id)) continue;
+    if (["reuse", "certify", "notify-deployments", "coauthor-trailers"].includes(id)) continue;
     const name = block.match(/^ {4}name: (.+)$/m)![1]!;
     if (id === "core-tests") names.push(...[1, 2, 3, 4, 5].map((n) => name.replace("${{ matrix.shard }}", String(n))));
     else names.push(name);
-    if (["core", "coauthor-trailers", "dependency-audit"].includes(id)) continue;
+    if (["core", "dependency-audit"].includes(id)) continue;
     assert.ok(block.includes("needs: reuse\n    if: always() && !cancelled()"));
     const steps = block.split(/(?=^ {6}- (?:name|uses):)/m).slice(1);
     assert.ok(steps[0]!.includes("if: needs.reuse.outputs.reusable == 'true'"));
@@ -308,7 +443,11 @@ test("all quality jobs keep successful names and missing proof runs full checks"
   assert.deepEqual(names.sort(), [...CI_JOBS].sort());
   assert.ok(jobs.reuse!.includes("continue-on-error: true"));
   assert.ok(jobs.reuse!.includes("steps.proof.outcome == 'success' && steps.proof.outputs.reusable == 'true'"));
-  assert.ok(jobs.reuse!.includes("if: github.event_name == 'push' && github.ref == 'refs/heads/main'"));
+  assert.ok(
+    jobs.reuse!.includes(
+      "if: github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')",
+    ),
+  );
 });
 
 test("deployment notice fires only for a fully green main push and holds no repository access", () => {

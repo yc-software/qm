@@ -36,7 +36,7 @@ export interface TriggerDeps {
   resolveRecipient?: (query: string) => Promise<RecipientResolution>;
 }
 
-export interface TriggerSpec extends Pick<TurnRequest, "model" | "fastMode" | "attachments"> {
+export interface TriggerSpec extends Pick<TurnRequest, "model" | "fastMode" | "attachments" | "infrequentCron"> {
   runtime?: import("../agent/agent.ts").RuntimeChoice | null;
   title?: string;
   owner: string;
@@ -55,6 +55,7 @@ export interface TriggerSpec extends Pick<TurnRequest, "model" | "fastMode" | "a
   readOnly?: boolean;
   turnWallClockMs?: number;
   errorNotice?: (noteOrStatus: string) => string;
+  redrivesHandOff?: boolean;
   onClaimed?: () => Promise<void>;
 }
 
@@ -239,7 +240,8 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     ? (destinationIsHome && homeAccess.ok) || (await destinationVisible(deps, actorId, spec.destination))
     : true;
   const notVisibleNote = "destination is no longer visible to the cron owner — delivery skipped";
-  const liveDelivery = spec.surface === "monitor" && Boolean(spec.destination) && deliverable;
+  const liveDelivery =
+    spec.surface === "monitor" && spec.destination?.type !== "webhook" && Boolean(spec.destination) && deliverable;
 
   let status: TurnResult["status"] | undefined;
   let errorCode: string | undefined;
@@ -247,6 +249,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
   let userNote: string | undefined;
   let reply: string | undefined;
   let sessionId: string | undefined;
+  let runDelivers = false;
   let scriptVerdict: string | undefined;
   const sendErrorNotice = async (reason: string): Promise<void> => {
     if (!spec.errorNotice || !spec.destination || !deliverable) return;
@@ -297,10 +300,12 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       },
       ...(spec.unattendedGrants && grantsHomedWithOwner(spec) ? { unattendedGrants: spec.unattendedGrants } : {}),
       ...(spec.cronScript ? { cronScript: spec.cronScript } : {}),
+      ...(spec.infrequentCron ? { infrequentCron: true } : {}),
       ...(spec.runtime ? { model: spec.runtime.modelId } : {}),
       ...turnModelOptions({
         triggered: true,
         surface: spec.surface,
+        infrequentCron: spec.infrequentCron,
         thinkingLevel: spec.runtime?.effortLevel ?? spec.thinkingLevel,
         fastMode: spec.fastMode ?? spec.runtime?.fastMode,
       }),
@@ -308,25 +313,31 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       ...(spec.attachments?.length ? { attachments: spec.attachments } : {}),
       ...(spec.readOnly ? { readOnly: true } : {}),
       ...(typeof spec.turnWallClockMs === "number" ? { turnWallClockMs: spec.turnWallClockMs } : {}),
+      ...(spec.destination?.type === "webhook" && deliverable && !spec.shadow
+        ? { deliveryTarget: spec.destination.target }
+        : {}),
       ...(liveDelivery ? { surfaceTools: true, addressed: true } : {}),
       idempotencyKey: spec.fireKey,
     });
     if (res.status === "queued") {
-      await sendErrorNotice(userFacingFailureClause(res));
+      if (!spec.redrivesHandOff) await sendErrorNotice(userFacingFailureClause(res));
       throw new TransientTurnFailure(`turn ${res.runId ?? ""} was still waiting to finish when this process shut down`);
     }
     status = res.status;
     errorCode = res.errorCode;
     reply = res.reply;
     sessionId = res.sessionId;
+    runDelivers = spec.destination?.type === "webhook" && deliverable && !spec.shadow && Boolean(res.runId);
     scriptVerdict = res.scriptVerdict;
     if (res.status === "silent") return;
     if (res.status === "pending_approval") {
+      if (runDelivers) return;
       note = "hit a require_approval command — failed closed (no human at fire/event time)";
       console.warn(`[trigger] ${spec.surface} ${spec.fireKey} ${note}`);
       return;
     }
     if (res.status === "ok" && (res.reply || res.attachments?.length)) {
+      if (runDelivers) return;
       if (!spec.destination) return;
       if (liveDelivery) return;
       if (!deliverable) {
@@ -364,7 +375,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     ...(sessionId ? { sessionId } : {}),
   };
 
-  if (isTriggerFailure(outcome)) await sendErrorNotice(userNote ?? note ?? status!);
+  if (isTriggerFailure(outcome) && !runDelivers) await sendErrorNotice(userNote ?? note ?? status!);
 
   return outcome;
 }

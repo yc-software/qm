@@ -69,6 +69,7 @@ export function createSlackSurface(deps: { deliveries: DeliveryStore }): Surface
       liveReplies: true,
       nativeActor: true,
       externalParticipants: true,
+      textOnly: false,
     },
     promptHints: SLACK_PROMPT_HINTS,
     async post(ref, message, idempotencyKey) {
@@ -92,6 +93,7 @@ export function createSlackSurface(deps: { deliveries: DeliveryStore }): Surface
         provenance: message.provenance,
       });
     },
+    containerOf: (target) => target.split(":")[0]!,
     principalFor: (user) => user.principal,
     mention: (user) => `<@${user.id}>`,
     readableText: (text, mentions) => resolveMentions(text, mentions ? new Map(Object.entries(mentions)) : undefined),

@@ -84,7 +84,7 @@ export async function detail(page: AdminPage) {
     busy = false;
     draw();
   }
-  const offboarding = offboardingCard(page, d.principalId || principal, d.deactivated === true, () => draw());
+  const offboarding = offboardingCard(page, d.principalId || principal, d.deactivated === true, d.user, () => draw());
   const keychainCards = () => {
     if (!kc.ok) return html`<p class="empty">${kc.data?.message || "Failed to load credentials and grants."}</p>`;
     if (kc.data?.enabled === false) return html`<p class="empty">Keychain is not enabled.</p>`;
@@ -163,7 +163,9 @@ export async function detail(page: AdminPage) {
         )}
         ${offboarding()}`,
       d.displayName || d.principalId || principal,
-      [d.admin?.isAdmin ? labelRole(d.admin.role) : "member", d.scopeId].filter(Boolean).join(" · "),
+      [d.user?.kind === "app" ? "app" : "", d.admin?.isAdmin ? labelRole(d.admin.role) : "member", d.scopeId]
+        .filter(Boolean)
+        .join(" · "),
     );
   }
   draw();

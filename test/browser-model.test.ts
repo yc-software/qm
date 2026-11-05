@@ -20,37 +20,67 @@ import type { ProvisionOptions } from "../src/sandbox/sandbox.ts";
 const model = "claude-opus-5";
 const key = "company-gateway-secret";
 
-test("browser inference uses the company gateway with scoped model authorization", async (t) => {
-  const calls: Array<{ url: string; auth: string | undefined; body: Record<string, unknown> }> = [];
-  const contexts: Array<Record<string, unknown>> = [];
+function anthropicStream(text: string): string {
+  const events = [
+    {
+      type: "message_start",
+      message: {
+        id: "test",
+        type: "message",
+        role: "assistant",
+        model,
+        content: [],
+        stop_reason: null,
+        stop_sequence: null,
+        usage: { input_tokens: 1, output_tokens: 0 },
+      },
+    },
+    { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+    { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } },
+    { type: "content_block_stop", index: 0 },
+    { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 1 } },
+    { type: "message_stop" },
+  ];
+  return events.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join("");
+}
+
+test("company browser inference runs on the session route through the gateway", async (t) => {
+  const calls: Array<{ url: string; auth: string | undefined; model: unknown; context: Record<string, unknown> }> = [];
   let status = 200;
   const upstream = httpServer(async (req, res) => {
     let raw = "";
     for await (const chunk of req) raw += chunk;
-    calls.push({ url: req.url!, auth: req.headers.authorization, body: JSON.parse(raw) });
-    contexts.push(Object.fromEntries(Object.entries(req.headers).filter(([name]) => name.startsWith("x-qm-"))));
-    res.writeHead(status, { "content-type": "application/json" });
-    res.end(
-      JSON.stringify(
-        status === 200 ? { choices: [{ message: { role: "assistant", content: "done" } }] } : { error: key },
-      ),
-    );
+    if (req.method === "GET") {
+      res.writeHead(200, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ data: [{ id: "anthropic/claude-opus-5" }] }));
+    }
+    calls.push({
+      url: req.url!,
+      auth: req.headers.authorization,
+      model: JSON.parse(raw).model,
+      context: Object.fromEntries(Object.entries(req.headers).filter(([name]) => name.startsWith("x-qm-"))),
+    });
+    if (status !== 200) {
+      res.writeHead(status, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ type: "error", error: { type: "rate_limit_error", message: "slow down" } }));
+    }
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.end(anthropicStream("done"));
   });
   await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>((resolve) => upstream.close(() => resolve())));
-  const config = testConfig({ signingSecret: "ingress-secret".repeat(3) });
-  const built = buildApp(config);
   const routes: Record<string, string> = { [model]: "anthropic/claude-opus-5" };
-  const server = createServer(built.app, {
-    ...serverDeps(config, built),
-    modelGatewayTransport: {
-      url: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}/v1`,
+  const config = testConfig({
+    signingSecret: "ingress-secret".repeat(3),
+    modelGateway: {
+      url: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`,
       apiKey: `Bearer ${key}`,
       apiKeyHeader: "Authorization",
       models: routes,
-      actorKey: "test-actor-key",
     },
   });
+  const built = buildApp(config);
+  const server = createServer(built.app, serverDeps(config, built));
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
   const endpoint = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/browser-model/chat/completions`;
@@ -71,21 +101,23 @@ test("browser inference uses the company gateway with scoped model authorization
       headers: { "content-type": "application/json", "x-agent-capability": credential },
       body: JSON.stringify(body),
     });
-  const body = { model, messages: [{ role: "user", content: "browse" }], response_format: { type: "json_object" } };
+  const body = { model, messages: [{ role: "user", content: "browse" }] };
   const response = await post(body);
   assert.equal(response.status, 200, await response.clone().text());
-  assert.deepEqual(await response.json(), { choices: [{ message: { role: "assistant", content: "done" } }] });
+  const result = (await response.json()) as { model: string; choices: Array<{ message: { content: string } }> };
+  assert.equal(result.model, model);
+  assert.equal(result.choices[0]?.message.content, "done");
   assert.deepEqual(calls[0], {
-    url: "/v1/chat/completions",
+    url: "/v1/messages",
     auth: `Bearer ${key}`,
-    body: { ...body, model: "anthropic/claude-opus-5", stream: false },
-  });
-  assert.deepEqual(contexts[0], {
-    "x-qm-session-id": "session-browser",
-    "x-qm-actor": gatewayActorId("U1", "test-actor-key"),
-    "x-qm-scope": `personal:${gatewayActorId("U1", "test-actor-key")}`,
-    "x-qm-purpose": "browser",
-    "x-qm-origin": "conversation",
+    model: "anthropic/claude-opus-5",
+    context: {
+      "x-qm-session-id": "session-browser",
+      "x-qm-actor": gatewayActorId("U1", built.modelRoutes.gateway!.actorKey!),
+      "x-qm-scope": `personal:${gatewayActorId("U1", built.modelRoutes.gateway!.actorKey!)}`,
+      "x-qm-purpose": "browser",
+      "x-qm-origin": "conversation",
+    },
   });
   for (const invalid of [
     { ...body, model: "other" },
@@ -119,25 +151,13 @@ test("browser inference uses the company gateway with scoped model authorization
   );
   status = 429;
   const limited = await post(body);
-  assert.equal(limited.status, 429);
-  assert.ok(!(await limited.text()).includes(key));
+  assert.equal(limited.status, 502);
+  const limitedText = await limited.text();
+  assert.match(limitedText, /billed to the shared model gateway/);
+  assert.ok(!limitedText.includes(key));
   await built.config.setSecurityPosture("personal:U1", "strict");
   assert.equal((await post(body)).status, 403);
   await built.config.setSecurityPosture("personal:U1", "auto");
-  await built.config.setPersonalModelAuth("U1", true, "openai");
-  assert.equal((await post(body)).status, 409);
-  await built.userModelCredentials.setOAuth("U1", "anthropic", {
-    accessToken: "subscription-test",
-    expiresAt: Date.now() + 3600_000,
-  });
-  await built.config.setPersonalModelAuth("U1", true, "anthropic");
-  const claudeToken = await mintCapabilityToken({ ...claims, browserAccount: "anthropic" }, TEST_CAPABILITY_SECRET);
-  const unsupported = await post(body, claudeToken);
-  assert.equal(unsupported.status, 422);
-  assert.match(await unsupported.text(), /Claude subscription/);
-  await built.config.setPersonalModelAuth("U1", false);
-  delete routes[model];
-  assert.equal((await post(body)).status, 503);
   assert.equal(calls.length, 3);
 });
 
@@ -178,6 +198,17 @@ test("gateway deployment provisions a browser token without exposing the company
   assert.equal(claims?.sessionId, result.sessionId);
   assert.equal(claims?.origin, "conversation");
   assert.equal((await verifyCapabilityToken(env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET))?.origin, "conversation");
+
+  await built.app.turn({
+    surface: "test",
+    actor: { externalId: "U1" },
+    conversation: { kind: "dm", threadRef: "dm:U1:browser-runtime" },
+    text: "!run echo browser",
+    model: "claude-haiku-5-5",
+  });
+  assert.equal(captured?.env?.BROWSE_LAB_MODEL, "claude-haiku-5-5");
+  const sessionClaims = await verifyCapabilityToken(captured!.env!.BROWSE_LAB_MODEL_TOKEN!, TEST_CAPABILITY_SECRET);
+  assert.equal(sessionClaims?.browserModel, "claude-haiku-5-5");
 });
 
 test("gateway browsing never selects a direct provider when callback signing or URL is missing", async () => {

@@ -1,9 +1,9 @@
 import { browserModelRoutes } from "./browser-model.ts";
 import { sandboxModelRoutes } from "./sandbox-model.ts";
 import { deploymentLiveSmokeRoutes } from "./deployment-live-smoke.ts";
-import { backgroundWorkRoutes } from "./background-work.ts";
 import { composioRoutes } from "./composio.ts";
 import { composioTwitterMediaRoutes } from "./composio-twitter-media.ts";
+import { composioProxyRoutes } from "./composio-proxy.ts";
 import { loopIngressRoutes, loopIngressRawRoutes } from "./loop-ingress.ts";
 import { sendJson } from "../http.ts";
 import { type ApiCtx, type BaseCtx, type Route } from "./route.ts";
@@ -39,6 +39,7 @@ import { contextPolicyRoutes } from "./context-policy.ts";
 import { deploymentLayerRoutes } from "./deployment-layer.ts";
 import { egressAuditRoutes } from "./egress-audit.ts";
 import { slackEventRawRoutes } from "./slack-events.ts";
+import { partnerChatEventRawRoutes } from "./partner-chat-events.ts";
 import { authBrokerRoutes } from "./auth-broker.ts";
 import { inboxRoutes } from "./inbox.ts";
 import { loopItemRoutes } from "./loop-items.ts";
@@ -72,6 +73,7 @@ export const rawRoutes: ReadonlyArray<Route<BaseCtx>> = [
     },
   },
   ...slackEventRawRoutes,
+  ...partnerChatEventRawRoutes,
   { method: "GET", path: "/v1/spend/export", auth: "public", handle: spendExport },
   { match: (_m, p) => p.startsWith(GIT_HTTP_BROKER_PREFIX), auth: { aud: "credential-broker" }, handle: brokerGitHttp },
   ...connectorRawRoutes,
@@ -89,7 +91,6 @@ export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...swarmRoutes,
   ...searchRoutes,
   ...deploymentLayerRoutes,
-  ...backgroundWorkRoutes,
   ...deploymentLiveSmokeRoutes,
   ...turnRoutes,
   ...runEventRoutes,
@@ -99,6 +100,7 @@ export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...connectorRoutes,
   ...composioRoutes,
   ...composioTwitterMediaRoutes,
+  ...composioProxyRoutes,
   ...adminRoutes,
   ...skillPackRoutes,
   ...surfaceRoutes,

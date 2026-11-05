@@ -14,12 +14,13 @@ import type { VisibilityDirectory } from "../directory/visibility.ts";
 import type { DirectoryMember } from "../directory/directory-store.ts";
 import type { LeaderLease } from "../persistence/leader-lease.ts";
 import { createSweeper } from "../util/sweeper.ts";
-import { recoverNextFireAt } from "./schedule.ts";
+import { firesAtMostDaily, recoverNextFireAt } from "./schedule.ts";
 import { fireJobStartsAt, type CronFireJob, type CronJobQueue } from "./job-queue.ts";
 import { hashId } from "../util/crypto.ts";
 import { utcMinute } from "../util/time.ts";
 import { errMessage, reportFailure, reportFailureAs } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
+import { TransientTurnFailure } from "../core/turn-error.ts";
 
 const TICK_LEASE_KEY = "cron:scheduler:tick";
 const CRON_FIRE_REPLY_MAX_CHARS = 2000;
@@ -81,7 +82,6 @@ export interface SchedulerDeps {
   };
   sweepAsks?: (now: number) => Promise<void>;
   jobQueue?: CronJobQueue;
-  requireQueueStart?: boolean;
   sessions?: TriggerDeps["sessions"];
   resolveRecipient?: TriggerDeps["resolveRecipient"];
   skipFire?: (cron: Cron) => Promise<string | undefined>;
@@ -154,7 +154,12 @@ function cronMentionRoster(cron: Cron, homeRoster: DirectoryMember[] | undefined
   return internal.map(mentionable).join(", ");
 }
 
-function renderCronFireInput(cron: Cron, mentionRoster?: string, runtimeProblem?: string | null): string {
+function renderCronFireInput(
+  cron: Cron,
+  mentionRoster?: string,
+  runtimeProblem?: string | null,
+  refusedDelivery?: string,
+): string {
   const task = cron.action ?? "";
   if (!task.trim()) return task;
   if (/^!(run|scratch)\s/.test(task.trimStart())) return task;
@@ -168,6 +173,7 @@ function renderCronFireInput(cron: Cron, mentionRoster?: string, runtimeProblem?
     "Use a cron-specific filename. Never put credentials in published state. If publication is unavailable, report that limitation and retain needed workspace state on a scoped computer. Do not move tasks that require existing workspace files to scratch without migrating and verifying their state.",
     `The retained fire log (cron tool, action="runs", id="${cron.id}") shows how prior fires went — useful when this run hits errors or surprising state.`,
     "If the task produces a briefing someone reads at a set time — a digest, summary, standup, rundown or follow-up list — post it even on a quiet run, as one line saying nothing is new. A task that checks for something and reports only when it finds it, or does upkeep, ends with finish_silently. The task's own posting rules win.",
+    "Report what you verified, not what you started: work launched in this fire and still running is not progress yet. If the counts haven't moved since the last fire, treat that as a blocker to report, not a reason to stay silent.",
     ...(readsNotes ? fireNoteLine(cron.lastFireNote) : []),
     ...(readsNotes
       ? [
@@ -178,6 +184,12 @@ function renderCronFireInput(cron: Cron, mentionRoster?: string, runtimeProblem?
       ? [
           `This fire runs on the default model because the cron's own model can't run: ${runtimeProblem}`,
           `Tell the people this cron reports to, unless the fire log shows they already know. If the cron's model looks stale, you can change it (cron tool, action="patch", id="${cron.id}", runtime); it is used again as soon as it can run.`,
+        ]
+      : []),
+    ...(refusedDelivery
+      ? [
+          `The previous fire's output was refused by this cron's destination and not delivered: ${refusedDelivery}`,
+          `Nobody receives this cron's output while that lasts. Unless the task is worth running for its side effects alone, pause it now (cron tool, action="disable", id="${cron.id}") or retarget it, and say why in your note.`,
         ]
       : []),
     ...(mentionRoster
@@ -279,6 +291,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     let outcome: Awaited<ReturnType<typeof runTrigger>>;
     try {
       const runtimeProblem = cron.runtime ? await deps.runtimeError?.(cron.ownerScopeId, cron.runtime) : null;
+      const refusedDelivery =
+        previous && cron.destination
+          ? (await deps.deliveries.listBySourceSession(previous.sessionId ?? "", previous.threadRef))
+              .filter((d) => d.failedReason && d.destination.target === cron.destination!.target)
+              .at(-1)?.failedReason
+          : undefined;
       outcome = await runTrigger(
         {
           deliveries: deps.deliveries,
@@ -292,10 +310,13 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         },
         {
           ...cronTriggerAuthority(cron),
-          input: (homeRoster) => renderCronFireInput(cron, cronMentionRoster(cron, homeRoster), runtimeProblem),
+          input: (homeRoster) =>
+            renderCronFireInput(cron, cronMentionRoster(cron, homeRoster), runtimeProblem, refusedDelivery),
           fireKey,
           threadRef,
           surface: "cron",
+          redrivesHandOff: true,
+          ...(firesAtMostDaily(cron.schedule, scheduledAt ?? t) ? { infrequentCron: true } : {}),
           ...(cron.runtime && !runtimeProblem ? { runtime: cron.runtime } : {}),
           ...(cron.title ? { title: cron.title } : {}),
           ...(cron.script ? { cronScript: cron.script } : {}),
@@ -313,6 +334,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         },
       );
     } catch (e) {
+      if (e instanceof TransientTurnFailure) throw e;
       await deps.crons.recordFire(cron.id, {
         fireKey,
         threadRef,
@@ -353,6 +375,29 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (swept > 0) console.warn(`[scheduler] closed ${swept} stranded running fire(s) as failed`);
     } catch (e) {
       reportFailure("scheduler: stranded-fire sweep", e);
+    }
+  };
+
+  let lastRedrive = 0;
+  const redriveHandedOffFires = async (t: number): Promise<void> => {
+    if (t - lastRedrive < REPAIR_INTERVAL_MS) return;
+    lastRedrive = t;
+    try {
+      for (const entry of await deps.crons.runningFires(t)) {
+        if (stopped) break;
+        if (entry.firedAt > t - REPAIR_INTERVAL_MS || (await deps.idempotency.committed(entry.fireKey))) continue;
+        const cron = await deps.crons.get(entry.cronId);
+        if (!cron || cron.loopId) continue;
+        track(
+          withWork(() =>
+            deps.advisoryLock.tryWithLock(`cron-lifecycle:${cron.id}`, () =>
+              fire(cron, entry.firedAt, entry.fireKey, entry.scheduledAt),
+            ),
+          ).then(() => undefined, reportFailureAs("scheduler: fire re-drive", undefined, `cron=${cron.id}`)),
+        );
+      }
+    } catch (e) {
+      reportFailure("scheduler: fire re-drive", e);
     }
   };
 
@@ -405,6 +450,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     await withWork(() =>
       leaderLease.hold(TICK_LEASE_KEY, async () => {
         await fireDue(t, observed);
+        await redriveHandedOffFires(t);
         await sweepStranded(t);
         await gcFires(t);
         await deps.sweepAsks?.(t).catch(reportFailureAs("scheduler: ask sweep", undefined));
@@ -494,6 +540,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   }
 
   async function maintain(): Promise<void> {
+    await redriveHandedOffFires(now());
     await sweepStranded(now());
     await gcFires(now());
     await deps.sweepAsks?.(now()).catch(reportFailureAs("scheduler: ask sweep", undefined));
@@ -534,6 +581,11 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     void work.finally(() => oldSweeps.delete(work));
   };
   const pending = new Set<Promise<unknown>>();
+  function track(work: Promise<void>): Promise<void> {
+    pending.add(work);
+    void work.finally(() => pending.delete(work));
+    return work;
+  }
   async function runQueueTask(work: () => Promise<void>): Promise<void> {
     if (stopped) return;
     const task = withWork(work);
@@ -563,12 +615,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
               ? { started: false, reason: "already_running", running: begin.running }
               : { started: false, reason: "unavailable" };
           }
-          const settled = withWork(() => withCronLifecycle(cron.id, false, () => fire(cron, t, fireKey))).then(
-            () => undefined,
-            reportFailureAs("scheduler: manual fire", undefined, `cron=${cronId}`),
+          const settled = track(
+            withWork(() => withCronLifecycle(cron.id, false, () => fire(cron, t, fireKey))).then(
+              () => undefined,
+              reportFailureAs("scheduler: manual fire", undefined, `cron=${cronId}`),
+            ),
           );
-          pending.add(settled);
-          void settled.finally(() => pending.delete(settled));
           return { started: true, fireKey, settled };
         });
         pending.add(preparing);
@@ -605,7 +657,6 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
             if (!stopped) leaseGuard.start();
           },
           (e: unknown) => {
-            if (deps.requireQueueStart) throw e;
             reportFailure("scheduler: cron job queue start (falling back to interval ticks)", e);
             if (!stopped) sweeper.start(intervalMs);
           },

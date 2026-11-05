@@ -95,8 +95,12 @@ export function cronTools(kit: ToolKit) {
       'create: always set `title`, a distinctive 2-5 word label for what the cron is FOR (e.g. "Gmail unread digest"), never the command or a generic word. ' +
       "Give either `task` (a prompt re-evaluated at each fire) or `text` (exact words to relay). " +
       "When a task runs a script, first run that exact command once end to end, including what it posts or writes, without marking the work done by other means, so the first fire is not its first real run. " +
-      "`script` hands a task cron's routine work to a command run first at each fire: exit 0 means it handled the fire and no agent turn runs; exit 1 wakes the agent with its output. " +
+      "`script` hands a task cron's routine work to a command run first at each fire, leaving the agent turn for judgment: exit 0 means it handled the fire and no agent turn runs; exit 1 wakes the agent with its output. " +
       "Setting a script runs it once for real right away, and it is refused unless that run exits 0 or 1. " +
+      "Neither `script` nor `task` may run code from a sandbox disk (no `python3 /home/…/x.py`, no `cd ~/workspace/…`): sandboxes get recreated and are per-conversation. " +
+      'Keep script code inline in the command, or save it to Files and fetch it at run time: `curl -fsS -H "x-agent-capability: $AGENT_API_TOKEN" "$AGENT_API_URL/v1/files/<id>/content"`. ' +
+      "Scripts use only POSIX tools, curl, /proc and the python3 standard library, and never install packages. " +
+      "Name every handle in `script.credentials`; a script gets only the handles this cron's agent turn could use. On any error or doubt, exit 1. " +
       "`schedule`: {cron,timezone} for anything tied to a time of day or calendar (IANA timezone: the user's local one unless they name another; omit for this turn's), {everyMs} for sub-day polling only (first run one interval from now), or {firstFireAt} (epoch ms, one-shot; Date.now() means now). Never compute future epochs for calendar times.\n" +
       "DELIVERY: by default a cron posts back to this conversation; keep that for watches and follow-ups on work started here, and don't pick a DM just because this is one. " +
       'Otherwise set `recipient` (teammate → DM), `channel`, `participants` (member ids → an existing group DM; reach it once first), or `destinationKey` (from the "Where scheduled tasks post" menu); ' +
@@ -105,7 +109,7 @@ export function cronTools(kit: ToolKit) {
       "Before a grant-carrying cron posts anywhere but its owner's DM (create or retarget), tell the owner who will see its unattended admin output and act only on their explicit yes.\n" +
       "ACCESS: a cron belongs to its creator and runs as them; everyone here can see it, only the owner can change it unless shared with permission=write; deleted at its next fire if the owner has left its private channel or group.\n" +
       'list: 25 per page. get: one in full. runs: the fire log (a fire shows as "running" from the moment it starts). ' +
-      "patch: edit in place. `task` is the standing instructions; durable run-state goes in this conversation's Files with the file ID left in the note (recurring non-loop crons only), never only in `task` or on sandbox disk; small progress state can live in the note itself. " +
+      "patch: edit in place; it keeps its destination (after →), so retarget it or create one to post here instead. `task` is the standing instructions; durable run-state goes in this conversation's Files with the file ID left in the note (recurring non-loop crons only), never only in `task` or on sandbox disk; small progress state can live in the note itself. " +
       "delete: remove for good. run: fire once now (refused while a fire is running). disable: pause.\n" +
       `note (inside a fire): a one- or two-sentence shift-change note (max ${CRON_FIRE_NOTE_MAX_CHARS} chars) the next fire reads first; overwrites the previous one; never secret values (credential handles are fine).`,
     parameters: Type.Object({

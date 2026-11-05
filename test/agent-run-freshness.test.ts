@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { countTokens } from "../src/util/tokens.ts";
 import { createAgent, stableCwd } from "../src/agent/agent-run.ts";
+import { createModelRoutes } from "../src/model/model-route.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
 
 function countTempDirs(prefix: string): number {
@@ -83,10 +84,6 @@ test("a squatted shared cwd falls back to a per-turn cwd that is removed afterwa
   rmSync(stableCwd(prefix), { force: true });
 });
 
-test("the agent exposes no session-reset hook after removing session state", () => {
-  assert.equal(createAgent().resetSession, undefined);
-});
-
 function ackStream(text: string): Response {
   const events = [
     {
@@ -121,8 +118,10 @@ async function ackRequest(input: string | URL | Request, init?: RequestInit) {
 
 test("ack emoji runs on the org's utility model, not a fixed provider", async () => {
   const agent = createAgent({
-    defaultModelId: "gpt-5.6-sol",
-    resolveProviderKeys: async () => ({ anthropic: "sk-ant-test", openai: "sk-openai-test" }),
+    routes: createModelRoutes({
+      defaultModelId: "gpt-5.6-sol",
+      resolveProviderKeys: async () => ({ anthropic: "sk-ant-test", openai: "sk-openai-test" }),
+    }),
   });
   const realFetch = globalThis.fetch;
   const calls: Array<{ url: string; model: unknown }> = [];
@@ -146,8 +145,10 @@ test("ack emoji runs on the org's utility model, not a fixed provider", async ()
 
 test("ack emoji stays home when no credential serves the utility model", async () => {
   const agent = createAgent({
-    defaultModelId: "gpt-5.6-sol",
-    resolveProviderKeys: async () => ({ anthropic: "sk-ant-test" }),
+    routes: createModelRoutes({
+      defaultModelId: "gpt-5.6-sol",
+      resolveProviderKeys: async () => ({ anthropic: "sk-ant-test" }),
+    }),
   });
   const realFetch = globalThis.fetch;
   let called = 0;
@@ -166,10 +167,12 @@ test("ack emoji stays home when no credential serves the utility model", async (
 test("model utilities resolve provider credentials for every call", async () => {
   let resolutions = 0;
   const agent = createAgent({
-    resolveProviderKeys: async () => {
-      resolutions += 1;
-      return {};
-    },
+    routes: createModelRoutes({
+      resolveProviderKeys: async () => {
+        resolutions += 1;
+        return {};
+      },
+    }),
   });
 
   assert.equal(await agent.oneShot?.("system", "first"), undefined);
@@ -178,7 +181,7 @@ test("model utilities resolve provider credentials for every call", async () => 
 });
 
 test("prior-turn bootstrap reaches the model before the first prompt", async () => {
-  const agent = createAgent({ apiKey: "sk-test" });
+  const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }) });
   const bodies: string[] = [];
   const realFetch = globalThis.fetch;
   globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
@@ -205,8 +208,10 @@ test("prior-turn bootstrap reaches the model before the first prompt", async () 
 
 test("ack emoji on a Claude subscription token signs the call as a subscription request", async () => {
   const agent = createAgent({
-    defaultModelId: "claude-sonnet-5",
-    resolveProviderKeys: async () => ({ anthropic: "sk-ant-oat01-ack" }),
+    routes: createModelRoutes({
+      defaultModelId: "claude-sonnet-5",
+      resolveProviderKeys: async () => ({ anthropic: "sk-ant-oat01-ack" }),
+    }),
   });
   const realFetch = globalThis.fetch;
   const seen: Array<{ headers: Headers; system: unknown }> = [];
@@ -228,8 +233,10 @@ test("ack emoji on a Claude subscription token signs the call as a subscription 
 
 test("an ack emoji provider failure surfaces its error instead of reading as a declined pick", async () => {
   const agent = createAgent({
-    defaultModelId: "claude-sonnet-5",
-    resolveProviderKeys: async () => ({ anthropic: "sk-ant-oat01-revoked" }),
+    routes: createModelRoutes({
+      defaultModelId: "claude-sonnet-5",
+      resolveProviderKeys: async () => ({ anthropic: "sk-ant-oat01-revoked" }),
+    }),
   });
   const realFetch = globalThis.fetch;
   globalThis.fetch = (async () =>

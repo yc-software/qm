@@ -1,30 +1,11 @@
 import { steerWithheldItem } from "../core/turn-error.ts";
 import type { ReplayImageRef } from "./replay.ts";
-import { randomBytes } from "node:crypto";
-import {
-  parseSecurityScreenVerdict,
-  SECURITY_SCREEN_STEP,
-  SECURITY_SCREEN_SYSTEM_PROMPT,
-} from "../security/security-posture.ts";
-import type { ScopeId } from "../types.ts";
-import { createAgentTools, type AgentToolsOptions, type ToolContextRef } from "./agent-tools.ts";
-import { goalWorkFromItems } from "./goal.ts";
-import type { TurnLlmRequestRecord, ModelUtilities, AgentTurnInput, AgentTurnResult } from "./agent.ts";
-import { sanitizeTitle, TITLE_GENERATION_PROMPT, titleUserPrompt } from "./agent-run.ts";
+import type { ToolContextRef } from "./agent-tools.ts";
+import type { AgentTurnInput } from "./agent.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { INTERRUPTED_TOOL_RESULT } from "./context-compaction.ts";
-import { type Item, storedItem } from "../sessions/items.ts";
+import type { Item } from "../sessions/items.ts";
 import type { StepFields } from "./step-recorder.ts";
-
-export interface ToolPlumbing {
-  controlTools?: boolean;
-  sandboxResources?: boolean;
-  execTimeoutMs?: number;
-  execTimeoutCeilingMs?: number;
-  backgroundJobTtlMs?: number;
-  backgroundJobTtlMaxMs?: number;
-  sandboxCapabilityTtlMs?: number;
-}
 
 export type BridgedTool = {
   name: string;
@@ -100,58 +81,6 @@ export async function recordStoppedTurn(
   return note ?? answer;
 }
 
-export function turnToolContext(turn: AgentTurnInput): ToolContextRef {
-  return {
-    current: turn.tools,
-    runtimeActorId: turn.runtimeActorId,
-    pendingApprovals: [],
-    pausedOnApproval: false,
-    silentRequested: false,
-    pollFire: Boolean(turn.pollFire),
-    goal: turn.goal ?? null,
-    ...(turn.goalMeter ? { goalMeter: turn.goalMeter } : {}),
-    ...(turn.continueTurn ? { goalRound: 1 } : {}),
-    saveGoal: turn.saveGoal,
-    ...(turn.goalInbox ? { goalInbox: turn.goalInbox } : {}),
-    emit: turn.emit,
-    scopeLabel: turn.scopeLabel,
-    orgScopeId: turn.orgScopeId,
-    screenToolResult: turn.screenToolResult,
-    governGoal: turn.governGoal,
-    goalRecentWork: () => goalWorkFromItems(turn.history.slice(-40)),
-    toolApprovalGate: turn.toolApprovalGate,
-    shutdown: turn.shutdown,
-  };
-}
-
-export function turnToolOptions(opts: ToolPlumbing, turn?: AgentTurnInput): AgentToolsOptions {
-  return {
-    ...(turn?.mcpTools?.length ? { mcpTools: turn.mcpTools } : {}),
-    controlTools: opts.controlTools,
-    sandboxResources: opts.sandboxResources,
-    execTimeoutMs: opts.execTimeoutMs,
-    execTimeoutCeilingMs: opts.execTimeoutCeilingMs,
-    backgroundJobTtlMs: opts.backgroundJobTtlMs,
-    backgroundJobTtlMaxMs: opts.backgroundJobTtlMaxMs,
-    sandboxCapabilityTtlMs: opts.sandboxCapabilityTtlMs,
-    ...(turn
-      ? {
-          readOnly: turn.readOnly,
-          sessionTools: Boolean(turn.tools.sessionSyscalls),
-          surfaceTools: turn.surfaceTools,
-          delegateWork: turn.delegateWork,
-          surfaceName: turn.surfaceName,
-          ...(turn.surfacePrompt ? { surfacePrompt: turn.surfacePrompt } : {}),
-          ...(turn.clientTools?.length ? { clientTools: turn.clientTools } : {}),
-        }
-      : { surfaceTools: true, surfaceName: "slack" }),
-  };
-}
-
-export function bridgedTools(ref: ToolContextRef, options: AgentToolsOptions): BridgedTool[] {
-  return createAgentTools(ref, options) as unknown as BridgedTool[];
-}
-
 export interface ResumedToolResult {
   history: Item[];
   message: {
@@ -225,73 +154,5 @@ export async function resumeInterruptedToolCall(
       isError,
       timestamp: recorded.createdAt,
     },
-  };
-}
-
-export type OneShotRunner = (
-  systemPrompt: string,
-  prompt: string,
-  signal?: AbortSignal,
-  observe?: Pick<AgentTurnInput, "recordModelCall" | "recordLlmRequest">,
-  modelOverride?: string,
-) => Promise<string | undefined>;
-
-export function oneShotRunner(runPrompt: (turn: AgentTurnInput) => Promise<AgentTurnResult>): OneShotRunner {
-  return async (systemPrompt, prompt, signal, observe, modelOverride) => {
-    const session = { id: `oneshot-${randomBytes(8).toString("hex")}` } as AgentTurnInput["session"];
-    const scope = { kind: "org", id: "oneshot" } as unknown as ScopeId;
-    const emitted: Item[] = [];
-    const result = await runPrompt({
-      session,
-      input: prompt,
-      systemPrompt,
-      history: [],
-      tools: {} as AgentTurnInput["tools"],
-      scopeLabel: scope,
-      orgScopeId: scope,
-      ...(signal ? { cancel: signal } : {}),
-      ...(modelOverride ? { runtime: { modelId: modelOverride } } : {}),
-      readOnly: true,
-      emit: async (item) => {
-        const saved = storedItem(item, { sessionId: session.id, seq: emitted.length + 1, createdAt: Date.now() });
-        emitted.push(saved);
-        return saved;
-      },
-      recordModelCall: observe?.recordModelCall ?? (() => {}),
-      ...(observe?.recordLlmRequest
-        ? {
-            recordLlmRequest: (rec: TurnLlmRequestRecord) => observe.recordLlmRequest!({ ...rec, turnSeq: null }),
-          }
-        : {}),
-    });
-    return result.reply || undefined;
-  };
-}
-
-export function oneShotModelUtilities(
-  single: OneShotRunner,
-  judgeModelId?: string,
-): Pick<ModelUtilities, "oneShot" | "judge" | "screenSecurity" | "generateTitle" | "summarizeApproval"> {
-  return {
-    oneShot: (system, prompt) => single(system, prompt),
-    judge: (system, prompt, signal) => single(system, prompt, signal, undefined, judgeModelId),
-    screenSecurity: async ({ payload, signal, recordModelCall, recordLlmRequest }) =>
-      parseSecurityScreenVerdict(
-        await single(SECURITY_SCREEN_SYSTEM_PROMPT, payload, signal, {
-          recordModelCall,
-          ...(recordLlmRequest
-            ? {
-                recordLlmRequest: (rec) => recordLlmRequest({ ...rec, step: SECURITY_SCREEN_STEP }),
-              }
-            : {}),
-        }),
-      ),
-    generateTitle: async (transcript) =>
-      sanitizeTitle(await single(TITLE_GENERATION_PROMPT, titleUserPrompt(transcript))),
-    summarizeApproval: (command, reason, purpose) =>
-      single(
-        "Explain this command in one plain-English sentence for an approver.",
-        [command, reason, purpose].filter(Boolean).join("\n"),
-      ),
   };
 }

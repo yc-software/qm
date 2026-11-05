@@ -279,6 +279,63 @@ describe("runTrigger: an autonomous cron does NOT go live (it may be conditional
   });
 });
 
+it("leaves a bound scheduled run's outcome to its own run delivery and keeps the failure note", async () => {
+  const results: TurnResult[] = [
+    {
+      status: "pending_approval",
+      pendingApprovals: [{ requestId: "approve", command: "send", reason: "approval required" }],
+    },
+    { status: "ok", reply: "Update" },
+    { status: "failed", reason: "boom" },
+  ];
+  for (const result of results) {
+    const d = deps(async (request) => {
+      assert.equal(request.deliveryTarget, "web:U1:bound");
+      return { ...result, runId: "scheduled-run" };
+    });
+    const outcome = await runTrigger(d, {
+      owner: "U1",
+      ownerScopeId: scopeId("personal", "U1"),
+      input: "scheduled task",
+      fireKey: "cron:1:fire:1",
+      surface: "cron",
+      destination: {
+        type: "webhook",
+        target: "web:U1:bound",
+        webhook: { binding: "binding", url: "https://receiver.example/qm" },
+      },
+      errorNotice: () => "failed",
+    });
+    assert.deepEqual(await d.deliveries.pending("webhook"), []);
+    if (result.status === "failed") assert.match(outcome.note ?? "", /boom/);
+  }
+});
+
+it("keeps shadow webhook results out of terminal-run recovery", async () => {
+  let request: TurnRequest | undefined;
+  const d = deps(async (submitted) => {
+    request = submitted;
+    return { status: "ok", reply: "Update", runId: "scheduled-run" };
+  });
+  await runTrigger(d, {
+    owner: "U1",
+    ownerScopeId: scopeId("personal", "U1"),
+    input: "scheduled task",
+    fireKey: "cron:shadow",
+    surface: "cron",
+    shadow: true,
+    destination: {
+      type: "webhook",
+      target: "web:U1:bound",
+      webhook: { binding: "binding", url: "https://receiver.example/qm" },
+    },
+  });
+  assert.ok(request);
+  assert.equal(request.deliveryTarget, undefined);
+  assert.deepEqual(await d.deliveries.pending("webhook"), []);
+  assert.equal((await d.deliveries.listShadow()).length, 1);
+});
+
 describe("runTrigger: a turn abandoned while still queued leaves the fire retryable", () => {
   it("sends the error notice and throws without spending the fire key", async () => {
     const d = deps(async () => ({ status: "queued", sessionId: "s1", runId: "r1" }));
@@ -299,5 +356,25 @@ describe("runTrigger: a turn abandoned while still queued leaves the fire retrya
     const pending = await d.deliveries.pending("slack");
     assert.equal(pending.length, 1);
     assert.match(pending[0]!.text, /^⚠️ could not run:/);
+  });
+
+  it("a trigger that re-drives its unspent fire throws without a notice", async () => {
+    const d = deps(async () => ({ status: "queued", sessionId: "s1", runId: "r1" }));
+    await assert.rejects(
+      runTrigger(d, {
+        owner: "U1",
+        ownerScopeId: scopeId("channel", "C1"),
+        input: "report back",
+        fireKey: "cron:c8:manual:1",
+        surface: "cron",
+        threadRef: "cron:c8:manual:1",
+        destination: toChannel,
+        redrivesHandOff: true,
+        errorNotice: (s: string) => `⚠️ could not run: ${s}`,
+      }),
+      /still waiting to finish when this process shut down/,
+    );
+    assert.equal(await d.idempotency.committed("cron:c8:manual:1"), false);
+    assert.deepEqual(await d.deliveries.pending("slack"), []);
   });
 });

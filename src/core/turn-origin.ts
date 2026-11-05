@@ -1,16 +1,5 @@
-import type { TurnOrigin, TurnRequest } from "../types.ts";
+import type { DeliveryWebhook, TurnOrigin, TurnRequest } from "../types.ts";
 export type { TurnOrigin } from "../types.ts";
-
-export const RETIRED_ORIGIN_KEYS = [
-  "triggered",
-  "unprompted",
-  "liveActor",
-  "triggerTs",
-  "entryTs",
-  "securityScreenData",
-  "triggerDestination",
-  "ownerKeychainUnion",
-] as const;
 
 export function isPersonAuthored(kind: TurnOrigin["kind"]): boolean {
   return kind === "human" || kind === "direct";
@@ -44,4 +33,26 @@ export function desktopClientForTurn(
     (input.attempt ?? 1) <= 1
     ? input.desktopClientId
     : undefined;
+}
+
+export function boundWebhook(
+  request: Pick<Partial<TurnRequest>, "deliveryWebhook" | "deliveryTarget" | "approval" | "origin">,
+): { webhook: DeliveryWebhook; target: string } | undefined {
+  if (request.deliveryWebhook && request.deliveryTarget)
+    return { webhook: request.deliveryWebhook, target: request.deliveryTarget };
+  const destination = request.origin?.kind === "automation" ? request.origin.destination : undefined;
+  if (destination?.type !== "webhook" || !destination.webhook) return undefined;
+  if (!request.approval && request.deliveryTarget !== destination.target) return undefined;
+  return { webhook: destination.webhook, target: destination.target };
+}
+
+export function introducesUser(
+  origin: TurnOrigin,
+  input: Pick<TurnRequest, "sessionSenderId" | "delegatingRunId" | "surfaceOrigin">,
+): boolean {
+  return (
+    (isPersonAuthored(origin.kind) || spokenByPerson(origin)) &&
+    !isSessionTurn(input) &&
+    input.surfaceOrigin?.audience !== "external"
+  );
 }

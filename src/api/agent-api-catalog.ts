@@ -49,6 +49,12 @@ const FAMILIES: AgentApiFamily[] = [
       },
       {
         method: "POST",
+        path: "/v1/composio/proxy",
+        summary:
+          "{url,method?,query?,headers?,body?|bodyBase64?,accountId?} sends one raw request to a connected app's own API (Google, Dropbox, Linear, Zoom) through your own connection; replies with the provider's status and body. Used by native app skills when no direct token is present",
+      },
+      {
+        method: "POST",
         path: "/v1/composio/disconnect",
         summary:
           "{accountId} permanently removes one of your own connections on a human-started turn; use when asked to remove or reset one, or to retire the old account after a reconnect",
@@ -330,7 +336,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "GET",
         path: "/v1/files",
         summary:
-          "list files the asking person can reach across their contexts, split into owned and shared files; use limit and cursor query parameters to page owned files",
+          "list files the asking person can reach across their contexts, split into owned and shared files, newest first; q=<text> matches file names, and limit and cursor page owned files",
       },
       {
         method: "GET",

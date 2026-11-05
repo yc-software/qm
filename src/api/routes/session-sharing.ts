@@ -88,15 +88,6 @@ async function createShare(ctx: ApiCtx): Promise<void> {
     audience,
     createdBy: viewer,
     createdAt: Date.now(),
-    visibility: source.items.reduce(
-      (bounds, item) => ({
-        minSeq: Math.min(bounds.minSeq, item.seq),
-        maxSeq: Math.max(bounds.maxSeq, item.seq),
-        minCreatedAt: Math.min(bounds.minCreatedAt, item.createdAt),
-        maxCreatedAt: Math.max(bounds.maxCreatedAt, item.createdAt),
-      }),
-      { minSeq: Infinity, maxSeq: -Infinity, minCreatedAt: Infinity, maxCreatedAt: -Infinity },
-    ),
     messages,
     files,
   };
@@ -126,7 +117,7 @@ async function readShare(ctx: ApiCtx): Promise<void> {
   }
   if (!deps.identity?.isInternal(deps.identity.classify(share.createdBy)))
     return sendJson(res, 404, { error: "not_found" });
-  if (!(await app.canViewSessionSnapshot(share.sessionId, share.createdBy, share.visibility)))
+  if (!(await app.canViewSessionSnapshot(share.sessionId, share.createdBy)))
     return sendJson(res, 404, { error: "not_found" });
   if (params.fileId) {
     const file = share.files.find((file) => file.id === params.fileId);

@@ -19,7 +19,7 @@ import {
   preexistingServiceImages,
 } from "./harness.ts";
 
-const SERVICES = ["core", "web-ui", "portal"] as const;
+const SERVICES = ["core"] as const;
 const suffix = (names: string[], end: string): string | undefined => names.find((n) => n.endsWith(`-${end}`));
 
 function lifecycleSkip(): string | false {
@@ -71,10 +71,11 @@ test(
       runCli(["up", "--build-from", checkout], { cwd: dep, env: { CORE_SIGNING_SECRET: undefined } });
 
     try {
-      await t.test("up builds + starts every service, the source plugin, and Postgres", () => {
+      await t.test("up builds + starts core, the source plugin, and Postgres", () => {
         const r = up();
         assert.equal(r.code, 0, r.out);
         assert.match(r.out, /stack up/);
+        assert.match(r.out, new RegExp(`web    : http://localhost:${basePort + 2}\\b`));
         assert.match(r.out, new RegExp(`core   : http://localhost:${basePort}\\b`));
         assert.match(r.out, /plugin widget running/);
 
@@ -87,7 +88,7 @@ test(
       await t.test("local sandbox mode gives only core the host Docker socket", () => {
         const names = deploymentContainers(org);
         const core = suffix(names, "core")!;
-        const portal = suffix(names, "portal")!;
+        const widget = suffix(names, "widget")!;
         const inspect = (container: string) =>
           JSON.parse(execFileSync("docker", ["inspect", container], { encoding: "utf8" }))[0] as {
             Config: { Env: string[] };
@@ -97,21 +98,21 @@ test(
         assert.ok(coreInfo.Config.Env.includes("DOCKER_HOST=unix:///var/run/docker.sock"));
         assert.ok(coreInfo.Config.Env.includes(`QM_CORE_CONTAINER=${core}`));
         assert.ok(coreInfo.Mounts.some((mount) => mount.Destination === "/var/run/docker.sock"));
-        assert.ok(!inspect(portal).Mounts.some((mount) => mount.Destination === "/var/run/docker.sock"));
+        assert.ok(!inspect(widget).Mounts.some((mount) => mount.Destination === "/var/run/docker.sock"));
       });
 
       await t.test("services receive their private-network aliases", () => {
-        const portal = suffix(deploymentContainers(org), "portal")!;
+        const core = suffix(deploymentContainers(org), "core")!;
         const aliases = JSON.parse(
           execFileSync(
             "docker",
-            ["inspect", "-f", `{{json (index .NetworkSettings.Networks "qm-${org}").Aliases}}`, portal],
+            ["inspect", "-f", `{{json (index .NetworkSettings.Networks "qm-${org}").Aliases}}`, core],
             {
               encoding: "utf8",
             },
           ),
         ) as string[];
-        assert.ok(aliases.includes(`qm-${org}-portal.internal`), aliases.join(", "));
+        assert.ok(aliases.includes(`qm-${org}-core.internal`), aliases.join(", "));
       });
 
       await t.test("computed secrets from the deployment ./.env reach the core container", () => {
@@ -133,7 +134,7 @@ test(
         const core = suffix(names, "core")!;
         assert.equal(printenv(core, "ORG_BRAND_SELF_LABEL"), "straylight");
         assert.equal(printenv(core, "ORG_BRAND_ORG_NAME"), "Straylight Industries");
-        assert.throws(() => printenv(suffix(names, "web-ui")!, "ORG_BRAND_SELF_LABEL"));
+        assert.throws(() => printenv(suffix(names, "widget")!, "ORG_BRAND_SELF_LABEL"));
       });
 
       await t.test("status enumerates exactly this deployment's containers with ports", () => {
@@ -143,6 +144,7 @@ test(
         assert.match(r.out, new RegExp(`qm-${org}-core\\b`));
         assert.match(r.out, /Up\b/);
         assert.match(r.out, new RegExp(`${basePort}->8080`));
+        assert.match(r.out, new RegExp(`${basePort + 2}->8000`));
       });
 
       await t.test("logs <service> tails one container; logs (all) interleaves with prefixes", () => {
