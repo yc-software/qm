@@ -2,12 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 import pg from "pg";
-import {
-  applyPgMigrations,
-  createPgPool,
-  definePgMigration,
-  PG_MIGRATIONS_TABLE,
-} from "../src/persistence/pg-pool.ts";
+import { applyPgMigrations, createPgPool, definePgMigration, PG_MIGRATIONS_TABLE } from "../src/persistence/pg-pool.ts";
 import { settle } from "./support/settle.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
