@@ -514,6 +514,7 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
       () => app.readBootTenant(),
       () => serve(req, res, base, raw, matched),
       loadTenant,
+      deps.portalIdentitySecret ?? deps.signingSecret,
     );
   }
 

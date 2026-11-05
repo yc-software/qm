@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { boundTenant } from "../../src/tenants/context.ts";
 import { MessageChannel, receiveMessageOnPort, Worker, type MessagePort } from "node:worker_threads";
 import { createPostgresAdminGrantStore } from "../../src/admin/postgres-admin-grant-store.ts";
 import { createAdminGrantStore, type AdminGrant, type AdminGrantStore } from "../../src/admin/admin-grant-store.ts";
@@ -10,7 +11,6 @@ import { DEPLOYMENT_TABLES } from "../../src/deploy/page-views.ts";
 import { configStoreMaps, createConfigStore } from "../../src/resolution/config-store.ts";
 import { orgId } from "../../src/config.ts";
 import { scopeId } from "../../src/types.ts";
-import { createPostgresUserStore } from "../../src/identity/user-store.ts";
 
 function baseDatabaseUrl(): URL {
   const base = process.env.DATABASE_URL;
@@ -96,7 +96,10 @@ export function testAdminGrantStore(
     role: "org_admin" as const,
   })),
 ): AdminGrantStore {
-  return createAdminGrantStore(createPostgresAdminGrantStore(testDatabaseUrl()), { seed });
+  return createAdminGrantStore(createPostgresAdminGrantStore(testDatabaseUrl()), {
+    seed,
+    seedTenant: async () => boundTenant(),
+  });
 }
 
 export function testDeployBackings(
@@ -113,7 +116,3 @@ export function testDeployBackings(
     ...backings,
   };
 }
-
-export const testUsers = () => createPostgresUserStore(sharedDatabase().url);
-
-export const testUserStore = () => createPostgresUserStore(testMigratedDatabaseUrl());
