@@ -2,7 +2,7 @@ import type { MemoryEmbedder } from "../model/embeddings.ts";
 import { factHash } from "./facts.ts";
 import type { FindNearDuplicates, NearDuplicate } from "./memory-service.ts";
 import type { MemoryVectorStore } from "./postgres-vector-store.ts";
-import { embedFacts } from "./vector-indexer.ts";
+import { EMBED_TIMEOUT_MS, embedFacts } from "./vector-indexer.ts";
 
 const NEAR_DUPLICATE_SIMILARITY = 0.92;
 
@@ -29,7 +29,7 @@ export function createNearDuplicateFinder(
       const current = await resolve();
       if (!current) return undefined;
       const { embedder, store } = current;
-      const vectors = await embedFacts(embedder, texts, AbortSignal.timeout(8000));
+      const vectors = await embedFacts(embedder, texts, AbortSignal.timeout(EMBED_TIMEOUT_MS));
       const model = embedder.id;
       const stored = await store.nearest({ scope, model, vectors, minSimilarity: NEAR_DUPLICATE_SIMILARITY });
       return {

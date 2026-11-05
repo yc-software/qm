@@ -3,6 +3,8 @@ import type { LeaderLease } from "../persistence/leader-lease.ts";
 import { reportFailure } from "../util/errors.ts";
 import type { MemoryVectorStore } from "./postgres-vector-store.ts";
 
+export const EMBED_TIMEOUT_MS = 60_000;
+
 export async function embedFacts(embedder: MemoryEmbedder, texts: readonly string[], signal: AbortSignal) {
   const vectors = await embedder.embed(
     texts.map((text) => text.slice(0, 8000)),
@@ -33,7 +35,7 @@ export function createMemoryVectorIndexer(opts: {
       const current = await opts.resolve();
       if (!current) return;
       void lost.then(() => controller.abort());
-      const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(60_000)]);
+      const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(EMBED_TIMEOUT_MS)]);
       signal.throwIfAborted();
       const { embedder, store } = current;
       const now = (opts.now ?? Date.now)();
