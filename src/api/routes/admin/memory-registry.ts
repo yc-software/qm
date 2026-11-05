@@ -133,14 +133,26 @@ export const putMemoryBrain = (ctx: ApiCtx) =>
     (ctx.capability ? putAgentBrain : putBrain)(record, ctx.params.id ?? "", ctx.body, c),
   );
 
+const agentDelete = (entry: "brain" | "binding") =>
+  new MemoryRegistryError(
+    400,
+    `deleting a ${entry} never goes through the agent: delete it through the admin API outside chat`,
+  );
+
 export const deleteMemoryBrain = (ctx: ApiCtx) =>
-  change(ctx, "memory-registry.brain.delete", (record) => deleteBrain(record, ctx.params.id ?? ""));
+  change(ctx, "memory-registry.brain.delete", (record) => {
+    if (ctx.capability) throw agentDelete("brain");
+    return deleteBrain(record, ctx.params.id ?? "");
+  });
 
 export const putMemoryBinding = (ctx: ApiCtx) =>
   change(ctx, "memory-registry.binding.update", (record, c) => putBinding(record, ctx.params.id ?? "", ctx.body, c));
 
 export const deleteMemoryBinding = (ctx: ApiCtx) =>
-  change(ctx, "memory-registry.binding.delete", (record) => deleteBinding(record, ctx.params.id ?? ""));
+  change(ctx, "memory-registry.binding.delete", (record) => {
+    if (ctx.capability) throw agentDelete("binding");
+    return deleteBinding(record, ctx.params.id ?? "");
+  });
 
 export const putMemberBrains = (ctx: ApiCtx) =>
   change(ctx, "memory-registry.member-brains.update", (record) => setMemberBrains(record, ctx.body));
