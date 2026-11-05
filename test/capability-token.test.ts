@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test } from "./support/unbound-test.ts";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { deflateRawSync } from "node:zlib";

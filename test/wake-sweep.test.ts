@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test } from "./support/unbound-test.ts";
 import assert from "node:assert/strict";
 import { createWakeSweep, type SweepSource } from "../src/wake/sweep.ts";
 import { createEngagedRegistry } from "../src/wake/engaged-registry.ts";
