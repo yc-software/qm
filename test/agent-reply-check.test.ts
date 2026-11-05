@@ -106,7 +106,7 @@ function memorySignals(): RunSignalStore & { send(runId: string, signal: RunSign
       return taken.map((s) => s.signal);
     },
     steerAuthors: async () => [],
-    pendingRuns: async () => [...queued.keys()].map((runId) => ({ runId })),
+    pendingRunIds: async () => [...queued.keys()],
     prune: async () => {},
     onSignal(runId, cb) {
       const set = listeners.get(runId) ?? new Set();

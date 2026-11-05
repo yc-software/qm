@@ -3,8 +3,6 @@ import { swallowAs } from "../util/errors.ts";
 import { createMemoryEventBus, type EventBus } from "../util/event-bus.ts";
 
 import { subscribePostgresChannel } from "./postgres-listener.ts";
-import { inTenantOf } from "../tenants/claim.ts";
-import { boundTenant } from "../tenants/context.ts";
 export const MAX_NOTIFY_PAYLOAD_BYTES = 7_500;
 
 function encodeCapped<T>(event: T): string | null {
@@ -56,11 +54,7 @@ export function createPostgresNotifyBus<T>(
     stopListening = subscribePostgresChannel(
       connectionString,
       channel,
-      (payload) => {
-        const split = payload.indexOf("\n");
-        const event = JSON.parse(payload.slice(split + 1)) as T;
-        inTenantOf(split > 0 ? payload.slice(0, split) : undefined, () => local.emit(event));
-      },
+      (payload) => local.emit(JSON.parse(payload) as T),
       () => local.resync(),
     );
   }
@@ -70,8 +64,7 @@ export function createPostgresNotifyBus<T>(
       if (closed) return;
       const payload = encode(event);
       if (payload === null) return;
-      const tenant = boundTenant();
-      pending.push(tenant === undefined ? payload : `${tenant}\n${payload}`);
+      pending.push(payload);
       publishing ??= Promise.resolve().then(flush);
     },
 

@@ -8,7 +8,6 @@ import { createMemoryEventBus } from "../src/util/event-bus.ts";
 import { createWorker } from "../src/runs/worker.ts";
 import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { seedInstallTenant } from "./support/tenant-seed.ts";
 
 const actor = { id: "internal:U1", type: "internal" as const };
 const request: OrchestratorInput = {
@@ -31,7 +30,6 @@ async function isolatedPostgres(): Promise<{ url: string; admin: pg.Pool; cleanu
   await admin.query(`CREATE SCHEMA ${schema}`);
   const url = new URL(process.env.DATABASE_URL!);
   url.searchParams.set("options", `-c search_path=${schema}`);
-  await seedInstallTenant(url.toString());
   url.searchParams.set("application_name", schema);
   return {
     url: url.toString(),

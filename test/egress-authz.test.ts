@@ -11,7 +11,6 @@ import {
   type EgressAuthzDeps,
 } from "../src/egress-authz-main.ts";
 import { verifySignature } from "../src/auth/source-auth.ts";
-import { TENANT_HEADER } from "../plugins/chassis/src/source-auth-sign.ts";
 import { mintCapabilityToken, EGRESS_PROXY_AUD, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import type { EgressAuditRecord } from "../src/admin/egress-audit-sink.ts";
 import { scopeId, type EgressPolicy } from "../src/types.ts";
@@ -457,33 +456,4 @@ test("relay sink: a batch is only dequeued once core acknowledges it", async () 
   );
   await sink.flush();
   assert.equal(calls.length, 2, "acknowledged records are not re-sent");
-});
-
-test("relay sink: one flush drains every tenant's records under its own signed tenant", async () => {
-  const [a, b] = ["3f1c7a52-9d4e-4b8a-a6f0-2c5e8d1b7a93", "8b2e6f14-1c3d-4a5b-9e7f-0a1b2c3d4e5f"];
-  const statuses = [429, 400, 200];
-  const calls: Array<{ tenant: string | undefined; hosts: string[] }> = [];
-  const fakeFetch = (async (_url: any, init: any) => {
-    calls.push({ tenant: init.headers[TENANT_HEADER], hosts: JSON.parse(init.body).records.map((r: any) => r.host) });
-    return new Response("refused", { status: statuses.shift() ?? 200 });
-  }) as typeof fetch;
-  const sink = createRelayAuditSink("http://core.example:4000", SOURCE_SECRET, fakeFetch);
-  const record = (host: string, tenant: string) =>
-    sink.record({ source: "proxy", host, allowed: true, verdict: "ok", scopeLabel: scopeId("personal", "U1") }, tenant);
-  record("a1.com", a);
-  record("b1.com", b);
-  record("a2.com", a);
-  await sink.flush();
-  assert.deepEqual(
-    calls,
-    [
-      { tenant: a, hosts: ["a1.com", "a2.com"] },
-      { tenant: b, hosts: ["b1.com"] },
-    ],
-    "a throttled tenant is held while the others drain",
-  );
-  await sink.flush();
-  assert.deepEqual(calls.slice(2), [{ tenant: a, hosts: ["a1.com", "a2.com"] }], "only the held batch is retried");
-  await sink.flush();
-  assert.equal(calls.length, 3, "nothing is left to send");
 });

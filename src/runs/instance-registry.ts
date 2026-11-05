@@ -41,10 +41,13 @@ export function createPostgresInstanceRegistry(
   let readyP: Promise<void> | null = null;
   function ready(): Promise<void> {
     if (!readyP) {
-      readyP = pg.migrate(migration, runningColumn).catch((e: unknown) => {
-        readyP = null;
-        throw e;
-      });
+      readyP = pg
+        .migrate(migration)
+        .then(() => pg.migrate(runningColumn))
+        .catch((e: unknown) => {
+          readyP = null;
+          throw e;
+        });
     }
     return readyP;
   }

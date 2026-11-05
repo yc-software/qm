@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import { createServer, request, type IncomingMessage } from "node:http";
 import { once } from "node:events";
 import type { AddressInfo } from "node:net";
-import { answeredHostLookup } from "./single-tenant-core.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 
 const secret = "relay-stream-test";
@@ -11,7 +10,6 @@ let releaseTail: (() => void) | undefined;
 let heldClosed: (() => void) | undefined;
 const seen: { method?: string; acceptEncoding?: string; body: string }[] = [];
 const core = createServer((req, res) => {
-  if (answeredHostLookup(req, res)) return;
   let body = "";
   req.on("data", (c: Buffer) => (body += c));
   req.on("end", () => {

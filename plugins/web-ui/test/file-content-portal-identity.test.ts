@@ -2,7 +2,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
-import { answeredHostLookup } from "./single-tenant-core.ts";
 
 interface Call {
   method: string;
@@ -11,7 +10,6 @@ interface Call {
 }
 const calls: Call[] = [];
 const core = createServer((req: IncomingMessage, res) => {
-  if (answeredHostLookup(req, res)) return;
   req.resume();
   req.on("end", () => {
     const pid = req.headers["x-portal-identity"];

@@ -1,4 +1,3 @@
-import { loadedTenantSettings } from "../tenants/settings.ts";
 import { createHmac } from "node:crypto";
 import { isGatewayModelId } from "./gateway-models.ts";
 import { currentModelRequestContext } from "./request-context.ts";
@@ -116,10 +115,6 @@ function gatewayScopeId(scopeId: string | undefined, key: string | undefined): s
   return key ? `personal:${gatewayActorId(scopeId.slice("personal:".length), key)}` : undefined;
 }
 
-export function gatewayKey(config: Pick<ModelGatewayTransportConfig, "apiKey">): string {
-  return loadedTenantSettings().modelGatewayKey ?? config.apiKey;
-}
-
 export function modelGatewayHeaders(
   config: Pick<ModelGatewayTransportConfig, "apiKey" | "apiKeyHeader" | "actorKey">,
   purpose?: ModelRequestPurpose,
@@ -132,7 +127,7 @@ export function modelGatewayHeaders(
     scopeId: gatewayScopeId(attestableActor(scopeId), config.actorKey),
     purpose,
   };
-  const headers: Record<string, string> = { [config.apiKeyHeader]: gatewayKey(config) };
+  const headers: Record<string, string> = { [config.apiKeyHeader]: config.apiKey };
   for (const [name, field] of Object.entries(MODEL_REQUEST_CONTEXT_HEADERS)) {
     const value = context[field];
     const attested = attestableActor(value);
@@ -161,7 +156,7 @@ export function modelGatewayRequest<T extends { id: string; baseUrl: string; api
         : config.url,
     },
     target,
-    apiKey: gatewayKey(config),
+    apiKey: config.apiKey,
     headers: modelGatewayHeaders(config, purpose),
   };
 }

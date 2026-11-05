@@ -307,13 +307,6 @@ async function listDeliveries(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { deliveries: await app.pendingDeliveries(type, claimMs) });
 }
 
-async function listDeliveriesAcrossTenants(ctx: ApiCtx): Promise<void> {
-  const { res, app, url } = ctx;
-  return sendJson(res, 200, {
-    deliveries: await app.pendingDeliveriesAcrossTenants(url.searchParams.get("type") ?? ""),
-  });
-}
-
 async function ackDelivery(ctx: ApiCtx): Promise<void> {
   const { res, app, body } = ctx;
   const id = ctx.params.id!;
@@ -353,13 +346,6 @@ export const turnRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/runs/:id", actor: "person", auth: "source", handle: getRun },
   { method: "GET", path: "/v1/runs", actor: "person", auth: "source", handle: getActiveRunForThread },
   { method: "GET", path: "/v1/deliveries", auth: "source", handle: listDeliveries },
-  {
-    method: "GET",
-    path: "/v1/deliveries/across-tenants",
-    auth: "source",
-    tenant: "none",
-    handle: listDeliveriesAcrossTenants,
-  },
   { method: "POST", path: "/v1/deliveries/:id/ack", actor: "system", auth: "source", handle: ackDelivery },
   { method: "POST", path: "/v1/deliveries/ack-by-key", actor: "system", auth: "source", handle: ackDeliveryByKey },
 ];

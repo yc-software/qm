@@ -4,9 +4,8 @@ import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { createServer as createHttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { singleTenantCore } from "../plugins/web-ui/test/single-tenant-core.ts";
 
-process.env.CORE_API_URL = await singleTenantCore();
+process.env.CORE_API_URL = "http://localhost:1";
 process.env.WEB_UI_PRINCIPALS = "";
 const { handler } = await import("../plugins/web-ui/server/index.ts");
 const web = createHttpServer(handler);

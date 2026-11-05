@@ -4,7 +4,6 @@ import {
   DeploymentLayerValidationError,
   type DeploymentLayerBundle,
 } from "../../deployment/deployment-layer-store.ts";
-import { withInstallTenant } from "../../tenants/context.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
@@ -81,19 +80,6 @@ async function putDeploymentLayer(ctx: ApiCtx): Promise<void> {
 }
 
 export const deploymentLayerRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  {
-    method: "GET",
-    path: "/v1/deployment-layer",
-    auth: "source",
-    tenant: "none",
-    handle: (ctx) => withInstallTenant(() => getDeploymentLayer(ctx)),
-  },
-  {
-    method: "PUT",
-    path: "/v1/deployment-layer",
-    actor: "system",
-    auth: "source",
-    tenant: "none",
-    handle: (ctx) => withInstallTenant(() => putDeploymentLayer(ctx)),
-  },
+  { method: "GET", path: "/v1/deployment-layer", auth: "source", handle: getDeploymentLayer },
+  { method: "PUT", path: "/v1/deployment-layer", actor: "system", auth: "source", handle: putDeploymentLayer },
 ];

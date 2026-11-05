@@ -1,6 +1,5 @@
 import test, { mock } from "node:test";
 import assert from "node:assert/strict";
-import { boundTenant, withTenant } from "../../chassis/src/tenant.ts";
 import { createCanonicalResolver } from "../src/canonical.ts";
 
 function harness(answers: Array<string | null | Error>) {
@@ -63,26 +62,4 @@ test("concurrent stale reads share one background lookup", async () => {
   mock.timers.tick(61_000);
   await Promise.all([resolve("U-alias"), resolve("U-alias"), resolve("U-alias")]);
   assert.equal(calls.length, 2);
-});
-
-test("canonical ids are cached per tenant, so one tenant's alias never renames another tenant's login", async () => {
-  const tenantA = "00000000-0000-4000-8000-00000000000a";
-  const tenantB = "00000000-0000-4000-8000-00000000000b";
-  const calls: Array<[string | undefined, string]> = [];
-  const resolve = createCanonicalResolver((sub) => {
-    const tenant = boundTenant();
-    calls.push([tenant, sub]);
-    return Promise.resolve(tenant === tenantA ? "alias-in-a" : sub);
-  });
-  const [inA, inB] = await Promise.all([
-    withTenant(tenantA, () => resolve("login")),
-    withTenant(tenantB, () => resolve("login")),
-  ]);
-  assert.deepEqual(inA, { id: "alias-in-a", stale: false });
-  assert.deepEqual(inB, { id: "login", stale: false });
-  assert.deepEqual(await withTenant(tenantB, () => resolve("login")), { id: "login", stale: false });
-  assert.deepEqual(calls, [
-    [tenantA, "login"],
-    [tenantB, "login"],
-  ]);
 });
