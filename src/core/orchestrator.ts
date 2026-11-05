@@ -139,7 +139,7 @@ import { commandApprovalId, inputApprovalId } from "./approval-id.ts";
 import {
   APPROVED_CALL_RAN_NOTE,
   approvalRefusal,
-  approvedCallOnEarlierAttempt,
+  approvedCallsOnEarlierAttempt,
   approvalView,
   approvedToolCall,
   grantModesWithin,
@@ -2015,7 +2015,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           author: string,
           call?: ApprovedToolCall,
         ): Promise<boolean> => {
-          if (!(await pending.take(requestId))) return false;
           const decisionEntry = await withManagedRosterVersion(() =>
             deps.sessions.append(writer, {
               kind: "ElicitationResponse",
@@ -2025,10 +2024,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               body: {
                 command: record.command,
                 ...(decided.scope ? { scope: decided.scope } : {}),
-                ...(call ? { call } : {}),
+                ...(call ? { call, approvalKey: record.approvalKey ?? record.command } : {}),
               },
             }),
           );
+          if (!(await pending.take(requestId))) return false;
           await mirrorRunActivity(decisionEntry);
           return true;
         };
@@ -2045,18 +2045,24 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             reason: "that approval request expired — ask again if you still want it to run",
           };
         };
-        const recovered =
-          input.approval?.approved && input.runId && !(await pending.get(input.approval.requestId))
-            ? approvedCallOnEarlierAttempt(
-                await deps.sessions.getItems(session.id, { turnId: input.runId }),
-                input.approval.requestId,
-                actor.id,
-              )
+        const earlier =
+          input.runId && (input.attempt ?? 1) > 1
+            ? approvedCallsOnEarlierAttempt(await deps.sessions.getItems(session.id, { turnId: input.runId }), actor.id)
             : null;
-        if (recovered) {
-          approvedCall = recovered.call;
-          turnEvents.push(APPROVED_CALL_RAN_NOTE);
+        if (earlier?.unstarted) {
+          const { call, approvalKey } = earlier.unstarted;
+          await pending.delete(call.requestId);
+          commandUses.set(approvalKey, (commandUses.get(approvalKey) ?? 0) + 1);
+          approvedCall = call;
+          audit({
+            action: "command_approval.recovered",
+            resource: approvalKey,
+            status: "ok",
+            detail: JSON.stringify({ requestId: call.requestId, attempt: input.attempt }),
+          });
         }
+        const recovered = !!input.approval && earlier?.decided.has(input.approval.requestId) === true;
+        if (earlier?.unstarted || recovered) turnEvents.push(APPROVED_CALL_RAN_NOTE);
         if (input.approval && !recovered) {
           const p = await pending.get(input.approval.requestId);
           const decision = input.approval.approved ? "approve" : "deny";

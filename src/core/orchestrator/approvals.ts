@@ -149,20 +149,26 @@ export async function withdrawCallApprovals(
   return { withdrawn };
 }
 
-export function approvedCallOnEarlierAttempt(
-  items: readonly Item[],
-  requestId: string,
-  actorId: string,
-): { call?: ApprovedToolCall } | null {
-  const decided = items.find(
-    (item) =>
-      item.kind === "ElicitationResponse" &&
-      item.elicitId === requestId &&
-      item.approved === true &&
-      samePerson(item.author ?? undefined, actorId),
+export interface EarlierApprovals {
+  decided: Set<string>;
+  unstarted?: { call: ApprovedToolCall; approvalKey: string };
+}
+
+export function approvedCallsOnEarlierAttempt(items: readonly Item[], actorId: string): EarlierApprovals {
+  const started = new Set(
+    items.flatMap((item) =>
+      item.kind === "ToolCall" && typeof item.body.approvedRequestId === "string" ? [item.body.approvedRequestId] : [],
+    ),
   );
-  const call = decided?.body.call as ApprovedToolCall | undefined;
-  if (call?.requestId !== requestId) return null;
-  const started = items.some((item) => item.kind === "ToolCall" && item.body.approvedRequestId === requestId);
-  return started ? {} : { call };
+  const earlier: EarlierApprovals = { decided: new Set() };
+  for (const item of items) {
+    if (item.kind !== "ElicitationResponse" || item.approved !== true) continue;
+    if (!samePerson(item.author ?? undefined, actorId)) continue;
+    const call = item.body.call as ApprovedToolCall | undefined;
+    const approvalKey = item.body.approvalKey;
+    if (!call || call.requestId !== item.elicitId || typeof approvalKey !== "string") continue;
+    earlier.decided.add(call.requestId);
+    if (!earlier.unstarted && !started.has(call.requestId)) earlier.unstarted = { call, approvalKey };
+  }
+  return earlier;
 }

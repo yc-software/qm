@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createAgent } from "../src/agent/agent-run.ts";
-import { approvedCallOnEarlierAttempt } from "../src/core/orchestrator/approvals.ts";
+import { approvedCallsOnEarlierAttempt } from "../src/core/orchestrator/approvals.ts";
 import { createModelRoutes } from "../src/model/model-route.ts";
 import type { AgentTurnInput, SteeredApproval } from "../src/agent/agent.ts";
 import type { Item, NewItem } from "../src/sessions/items.ts";
@@ -244,7 +244,7 @@ for (const approved of [true, false]) {
   });
 }
 
-test("a retried approval turn re-runs the approved call only if it never started", () => {
+test("a retried turn finds the approver's own unstarted approved call", () => {
   const call = { callId: "approved_req3_ef01", requestId: "req3", tool: "history", input: { query: "noon" } };
   const at = { sessionId: "s", createdAt: 1 };
   const decided = {
@@ -254,7 +254,7 @@ test("a retried approval turn re-runs the approved call only if it never started
     elicitId: "req3",
     approved: true,
     author: "U1",
-    body: { command: "history", scope: "once", call },
+    body: { command: "history", scope: "once", call, approvalKey: "tool-call:abc" },
   } as unknown as Item;
   const started = {
     ...at,
@@ -263,8 +263,15 @@ test("a retried approval turn re-runs the approved call only if it never started
     callId: call.callId,
     body: { approvedRequestId: "req3" },
   } as unknown as Item;
-  assert.deepEqual(approvedCallOnEarlierAttempt([decided], "req3", "U1"), { call });
-  assert.deepEqual(approvedCallOnEarlierAttempt([decided, started], "req3", "U1"), {});
-  assert.equal(approvedCallOnEarlierAttempt([decided], "req3", "U2"), null, "only the approver's own decision counts");
-  assert.equal(approvedCallOnEarlierAttempt([], "req3", "U1"), null);
+  const first = approvedCallsOnEarlierAttempt([decided], "U1");
+  assert.deepEqual(first.unstarted, { call, approvalKey: "tool-call:abc" });
+  assert.ok(first.decided.has("req3"));
+  const ran = approvedCallsOnEarlierAttempt([decided, started], "U1");
+  assert.equal(ran.unstarted, undefined, "a call whose ToolCall was written is never run again");
+  assert.ok(ran.decided.has("req3"));
+  assert.equal(
+    approvedCallsOnEarlierAttempt([decided], "U2").decided.size,
+    0,
+    "only the approver's own decision counts",
+  );
 });

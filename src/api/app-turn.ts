@@ -188,6 +188,7 @@ export function createTurnMethods(
         if (!live || live.status !== "running" || leaseLapsed(live, Date.now())) return null;
         if (
           !samePerson(live.request.actor.id, actorId) ||
+          isSessionTurn(live.request) ||
           !(isPersonAuthored(live.request.origin.kind) || spokenByPerson(live.request.origin))
         )
           return null;

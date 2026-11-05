@@ -66,7 +66,7 @@ import {
   titleUserPrompt,
 } from "./session-title-prompt.ts";
 import { providerTurnError } from "../model/provider-error.ts";
-import { asError, swallow, swallowAs } from "../util/errors.ts";
+import { asError, reportFailure, swallow, swallowAs } from "../util/errors.ts";
 import { startPhase } from "../../plugins/chassis/src/error-reporting.ts";
 import {
   defaultInteractiveThinkingLevel,
@@ -1189,7 +1189,7 @@ export function createAgent(opts?: AgentOptions): Agent {
                             steerWake.abort();
                           } else await entry.ref.emit?.({ kind: "UserMessage", hidden: true, text: note(false) });
                         })
-                        .catch(swallowAs("pi: live approval outcome", undefined));
+                        .catch((error: unknown) => reportFailure("pi: live approval outcome", error, decided.kind));
                       liveApprovalTail = settled;
                       return;
                     }
