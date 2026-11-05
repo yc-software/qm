@@ -378,24 +378,26 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     }
   };
 
-  let lastManualRedrive = 0;
-  const redriveManualFires = async (t: number): Promise<void> => {
-    if (t - lastManualRedrive < REPAIR_INTERVAL_MS) return;
-    lastManualRedrive = t;
+  let lastRedrive = 0;
+  const redriveHandedOffFires = async (t: number): Promise<void> => {
+    if (t - lastRedrive < REPAIR_INTERVAL_MS) return;
+    lastRedrive = t;
     try {
       for (const entry of await deps.crons.runningFires(t)) {
         if (stopped) break;
-        if (entry.scheduledAt !== undefined || (await deps.idempotency.committed(entry.fireKey))) continue;
+        if (entry.firedAt > t - REPAIR_INTERVAL_MS || (await deps.idempotency.committed(entry.fireKey))) continue;
         const cron = await deps.crons.get(entry.cronId);
         if (!cron || cron.loopId) continue;
-        const settled = withWork(() =>
-          deps.advisoryLock.tryWithLock(`cron-lifecycle:${cron.id}`, () => fire(cron, entry.firedAt, entry.fireKey)),
-        ).then(() => undefined, reportFailureAs("scheduler: manual fire re-drive", undefined, `cron=${cron.id}`));
-        pending.add(settled);
-        void settled.finally(() => pending.delete(settled));
+        track(
+          withWork(() =>
+            deps.advisoryLock.tryWithLock(`cron-lifecycle:${cron.id}`, () =>
+              fire(cron, entry.firedAt, entry.fireKey, entry.scheduledAt),
+            ),
+          ).then(() => undefined, reportFailureAs("scheduler: fire re-drive", undefined, `cron=${cron.id}`)),
+        );
       }
     } catch (e) {
-      reportFailure("scheduler: manual fire re-drive", e);
+      reportFailure("scheduler: fire re-drive", e);
     }
   };
 
@@ -448,7 +450,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     await withWork(() =>
       leaderLease.hold(TICK_LEASE_KEY, async () => {
         await fireDue(t, observed);
-        await redriveManualFires(t);
+        await redriveHandedOffFires(t);
         await sweepStranded(t);
         await gcFires(t);
         await deps.sweepAsks?.(t).catch(reportFailureAs("scheduler: ask sweep", undefined));
@@ -538,7 +540,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   }
 
   async function maintain(): Promise<void> {
-    await redriveManualFires(now());
+    await redriveHandedOffFires(now());
     await sweepStranded(now());
     await gcFires(now());
     await deps.sweepAsks?.(now()).catch(reportFailureAs("scheduler: ask sweep", undefined));
@@ -579,6 +581,11 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     void work.finally(() => oldSweeps.delete(work));
   };
   const pending = new Set<Promise<unknown>>();
+  function track(work: Promise<void>): Promise<void> {
+    pending.add(work);
+    void work.finally(() => pending.delete(work));
+    return work;
+  }
   async function runQueueTask(work: () => Promise<void>): Promise<void> {
     if (stopped) return;
     const task = withWork(work);
@@ -608,12 +615,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
               ? { started: false, reason: "already_running", running: begin.running }
               : { started: false, reason: "unavailable" };
           }
-          const settled = withWork(() => withCronLifecycle(cron.id, false, () => fire(cron, t, fireKey))).then(
-            () => undefined,
-            reportFailureAs("scheduler: manual fire", undefined, `cron=${cronId}`),
+          const settled = track(
+            withWork(() => withCronLifecycle(cron.id, false, () => fire(cron, t, fireKey))).then(
+              () => undefined,
+              reportFailureAs("scheduler: manual fire", undefined, `cron=${cronId}`),
+            ),
           );
-          pending.add(settled);
-          void settled.finally(() => pending.delete(settled));
           return { started: true, fireKey, settled };
         });
         pending.add(preparing);

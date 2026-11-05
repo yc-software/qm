@@ -1812,24 +1812,30 @@ test("a fire is told when its previous output was refused by the cron's destinat
   assert.doesNotMatch(calls[2]?.text ?? "", /was refused/);
 });
 
-test("a manual fire whose wait is cut by shutdown is re-driven onto the same run and delivers its reply once", async () => {
+const AFTER_REDRIVE_GRACE_MS = 61_000;
+
+function handOffOnce(reply: (req: TurnRequest) => string) {
   let handedOff = false;
-  const { crons, deliveries, calls, scheduler } = agent(async (req) => {
+  return async (req: TurnRequest): Promise<TurnResult> => {
     if (!handedOff) {
       handedOff = true;
       return { status: "queued", sessionId: "s1", runId: "r1" };
     }
-    return { status: "ok", reply: `finished ${req.idempotencyKey}`, sessionId: "s1" };
-  });
-  const cron = await crons.create({
-    schedule: { everyMs: 3_600_000 },
-    action: "post the standup",
-    title: "Daily standup",
-    owner: "U1",
-    createdBy: "U1",
-    ownerScopeId: scopeId("channel", "C1"),
-    destination: { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") },
-  });
+    return { status: "ok", reply: reply(req), sessionId: "s1" };
+  };
+}
+
+const standup = {
+  action: "post the standup",
+  owner: "U1",
+  createdBy: "U1",
+  ownerScopeId: scopeId("channel", "C1"),
+  destination: { type: "slack" as const, target: "C1", audienceScopeId: scopeId("channel", "C1") },
+};
+
+test("a manual fire whose wait is cut by shutdown is re-driven onto the same run and delivers its reply once", async () => {
+  const { crons, deliveries, calls, scheduler } = agent(handOffOnce((req) => `finished ${req.idempotencyKey}`));
+  const cron = await crons.create({ ...standup, schedule: { everyMs: 3_600_000 } });
   const started = await scheduler.runNow(cron.id);
   assert.ok(started.started);
   await started.settled;
@@ -1837,7 +1843,7 @@ test("a manual fire whose wait is cut by shutdown is re-driven onto the same run
   assert.equal(handOff?.status, "running");
   assert.deepEqual(await deliveries.pending("slack"), []);
 
-  await scheduler.tick();
+  await scheduler.tick(Date.now() + AFTER_REDRIVE_GRACE_MS);
   await scheduler.drained();
   const { runs } = await crons.listFires(cron.id);
   assert.equal(runs.length, 1);
@@ -1852,7 +1858,69 @@ test("a manual fire whose wait is cut by shutdown is re-driven onto the same run
     [`finished ${started.fireKey}`],
   );
 
-  await scheduler.tick();
+  await scheduler.tick(Date.now() + 2 * AFTER_REDRIVE_GRACE_MS);
   await scheduler.drained();
   assert.equal(calls.length, 2);
+});
+
+test("a handed-off fire whose cron lifecycle lock is still held elsewhere is left to its holder", async (t) => {
+  const mutex = testAdvisoryLock();
+  const { crons, calls, scheduler } = agent(
+    handOffOnce(() => "late"),
+    undefined,
+    undefined,
+    undefined,
+    { advisoryLock: mutex },
+  );
+  const cron = await crons.create({ ...standup, schedule: { everyMs: 3_600_000 } });
+  await runNowSettled(scheduler, cron.id);
+  const release = Promise.withResolvers<void>();
+  t.after(() => release.resolve());
+  const entered = Promise.withResolvers<void>();
+  const holding = mutex.withLock(`cron-lifecycle:${cron.id}`, async () => {
+    entered.resolve();
+    await release.promise;
+  });
+  await entered.promise;
+  await scheduler.tick(Date.now() + AFTER_REDRIVE_GRACE_MS);
+  await scheduler.drained();
+  assert.equal(calls.length, 1);
+  assert.equal((await crons.listFires(cron.id)).runs[0]?.status, "running");
+
+  release.resolve();
+  await holding;
+  await scheduler.tick(Date.now() + 2 * AFTER_REDRIVE_GRACE_MS);
+  await scheduler.drained();
+  assert.equal(calls.length, 2);
+  assert.equal((await crons.listFires(cron.id)).runs[0]?.status, "ok");
+});
+
+test("a scheduled fire handed off before its schedule changed is still completed and does not block run-now", async () => {
+  const start = Date.now();
+  let clock = start;
+  const { crons, deliveries, calls, scheduler } = agent(
+    handOffOnce((req) => `finished ${req.idempotencyKey}`),
+    undefined,
+    undefined,
+    () => clock,
+  );
+  const cron = await crons.create({ ...standup, schedule: { everyMs: 60_000 } });
+  clock = cron.nextFireAt! + 1;
+  await scheduler.tick(clock);
+  const [handOff] = (await crons.listFires(cron.id)).runs;
+  assert.equal(handOff?.status, "running");
+  await crons.update(cron.id, { schedule: { everyMs: 3_600_000 } });
+
+  clock += AFTER_REDRIVE_GRACE_MS;
+  await scheduler.tick(clock);
+  await scheduler.drained();
+  const redriven = (await crons.listFires(cron.id)).runs.find((r) => r.fireKey === handOff?.fireKey);
+  assert.equal(redriven?.status, "ok");
+  assert.deepEqual(
+    (await deliveries.pending("slack")).map((d) => d.text),
+    [`finished ${handOff?.fireKey}`],
+  );
+  assert.ok((await scheduler.runNow(cron.id)).started);
+  await scheduler.drained();
+  assert.equal(calls.length, 3);
 });
