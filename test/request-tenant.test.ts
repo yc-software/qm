@@ -10,6 +10,7 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import type { Route } from "../src/api/routes/route.ts";
 import { bindBootTenant, bootTenant, inBootTenant } from "../src/tenants/boot.ts";
 import { boundTenant, withoutTenant, withTenant } from "../src/tenants/context.ts";
+import { onTenantLoad } from "../src/tenants/cache.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testMigratedDatabaseUrl } from "./support/test-database.ts";
@@ -143,9 +144,10 @@ test("bindBootTenant records the tenant boot read so bootTenant names it afterwa
     assert.equal(bootTenant(), undefined);
   }));
 
-test("a ready hook runs inside the bound tenant before the route", () =>
+test("the bound tenant's settings load before the route runs", () =>
   withoutTenant(async () => {
     const seen: (string | undefined)[] = [];
+    const stop = onTenantLoad(async () => void seen.push(`ready:${boundTenant()}`));
     await withRequestTenant(
       { headers: {} } as never,
       {} as never,
@@ -153,7 +155,6 @@ test("a ready hook runs inside the bound tenant before the route", () =>
       SECRET,
       async () => b,
       () => void seen.push(`next:${boundTenant()}`),
-      async () => void seen.push(`ready:${boundTenant()}`),
-    );
+    ).finally(stop);
     assert.deepEqual(seen, [`ready:${b}`, `next:${b}`]);
   }));

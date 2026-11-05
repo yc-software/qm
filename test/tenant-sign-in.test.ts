@@ -180,7 +180,6 @@ async function bound(route: { auth: "source"; tenant?: "optional" }, headers: Re
       undefined,
       async () => undefined,
       () => void res.end(JSON.stringify({ tenant: boundTenant() ?? null })),
-      undefined,
       IDENTITY_SECRET,
     );
   });
