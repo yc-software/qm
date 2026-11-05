@@ -344,7 +344,13 @@ const routes: Route<ApiCtx>[] = [
       admin: { privateRead: "always" },
       handle: getMemoryBrain,
     },
-    { method: "PUT", path: "/v1/admin/memory-registry/brains/:id", auth: "either", handle: putMemoryBrain },
+    {
+      method: "PUT",
+      path: "/v1/admin/memory-registry/brains/:id",
+      auth: "either",
+      admin: { privateRead: "always" },
+      handle: putMemoryBrain,
+    },
     {
       method: "DELETE",
       path: "/v1/admin/memory-registry/brains/:id",
@@ -359,7 +365,13 @@ const routes: Route<ApiCtx>[] = [
       admin: { privateRead: "always" },
       handle: getMemoryBinding,
     },
-    { method: "PUT", path: "/v1/admin/memory-registry/bindings/:id", auth: "either", handle: putMemoryBinding },
+    {
+      method: "PUT",
+      path: "/v1/admin/memory-registry/bindings/:id",
+      auth: "either",
+      admin: { privateRead: "always" },
+      handle: putMemoryBinding,
+    },
     {
       method: "DELETE",
       path: "/v1/admin/memory-registry/bindings/:id",

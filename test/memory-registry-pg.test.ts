@@ -249,6 +249,52 @@ test("a disabled binding reports a problem only for writes a served binding woul
   assert.deepEqual(brain.calls, []);
 });
 
+test("a stored brain whose id an env provider took leaves the env provider serving, with no disabled problem", async (t) => {
+  const brain = await startBrain(t);
+  const url = testDatabaseUrl();
+  const credentials = { clientIdEnv: "BRAIN_ID", clientSecretEnv: "BRAIN_SECRET" };
+  const overlay = parseMemoryProviderConfig(
+    JSON.stringify({
+      providers: [
+        {
+          id: "acme-personal",
+          type: "mcp",
+          url: brain.url,
+          attestActor: true,
+          read: { tool: "memory_recall", queryArg: "query", maxCharsArg: "max_chars", ...credentials },
+          write: { tool: "memory_write", factsArg: "facts", idempotencyArg: "idempotency_key", ...credentials },
+        },
+      ],
+      routes: [{ provider: "acme-personal", scopes: ["personal"], capture: "explicit", manage: false }],
+    }),
+    { BRAIN_ID: "qm-personal", BRAIN_SECRET: "personal-secret" },
+  )!;
+  const registry = stores(url, overlay);
+  await registry.update(personalBrain(brain.url));
+  await registry.update((record) =>
+    putBinding(record, "alice", { brain: "acme-personal", scope: "personal:U1", capture: "explicit" }, change),
+  );
+  const memory = createRegistryMemoryService({ defaultMemory: createPostgresMemoryService(url), overlay, registry });
+  const searched = await withProviders("search", (report) =>
+    memory.query("personal:U1", "codename", 5, { actorId: "U1", report }),
+  );
+  assert.deepEqual(searched.problems, []);
+  assert.ok((searched.value ?? []).some((text) => text.includes(BRAIN_FACT)));
+  const written = await writeFacts(
+    memory,
+    "personal:U1",
+    ["Prefers aisle seats"],
+    "U1",
+    { mode: "explicit", actorId: "U1" },
+    undefined,
+  );
+  assert.deepEqual(written.problems, []);
+  assert.deepEqual(
+    written.outcomes.map(({ provider, outcome }) => [provider, outcome]),
+    [["acme-personal", "committed"]],
+  );
+});
+
 function serve(built: ReturnType<typeof buildApp>) {
   const server = createInsecureTestServer(built.app, {
     admin: built.admin,
@@ -447,6 +493,79 @@ test("an admin's agent can register and bind a brain but never carries its secre
     kept.bindings.map((entry) => [entry.id, entry.brain]),
     [["alice", "acme-personal"]],
   );
+});
+
+test("an admin's agent reaches every registry route only where the registry may be shown", async (t) => {
+  const secret = "memory-registry-private-read-secret".repeat(2);
+  const built = buildApp(
+    testConfig({ signingSecret: secret, capabilitySecret: secret, apiBaseUrl: "http://core.example.test" }),
+  );
+  await built.directory.replaceChannels(
+    [{ channelId: "C1", name: "registry-admin", isPrivate: false }],
+    [{ channelId: "C1", principalId: "admin-alice" }],
+  );
+  const server = createServer(built.app, {
+    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+    admin: built.admin,
+    config: built.config,
+    auditLog: built.auditLog,
+    memoryRegistry: built.memoryRegistry,
+    capabilitySecret: secret,
+    signingSecret: secret,
+  });
+  server.listen(0);
+  t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  await built.memoryRegistry.update((record) =>
+    putBinding(
+      personalBrain("https://brain.acme.example/mcp")(record),
+      "alice",
+      { brain: "acme-personal", scope: "personal:U1" },
+      change,
+    ),
+  );
+  const capabilityIn = (scopeId: string) =>
+    mintCapabilityToken(
+      { actorId: "admin-alice", scopeId, aud: CONTROL_PLANE_AUD, liveActor: true, exp: Date.now() + CAPABILITY_TTL_MS },
+      secret,
+    );
+  const call = async (cap: string, method: string, path: string, body: unknown) => {
+    const res = await fetch(
+      `http://localhost:${(server.address() as AddressInfo).port}/v1/admin/memory-registry${path}`,
+      {
+        method,
+        headers: { "x-agent-capability": cap, "content-type": "application/json" },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      },
+    );
+    return { status: res.status, text: await res.text() };
+  };
+  const routes = [
+    ["GET", "", undefined, 200],
+    ["GET", "/brains/acme-personal", undefined, 200],
+    ["GET", "/bindings/alice", undefined, 200],
+    ["PUT", "/brains/acme-personal", { label: "Acme memory" }, 200],
+    ["PUT", "/bindings/alice", {}, 200],
+    ["PUT", "/bindings/everyone", { brain: "acme-personal", scope: "personal" }, 409],
+    ["DELETE", "/bindings/alice", undefined, 403],
+    ["DELETE", "/brains/acme-personal", undefined, 403],
+  ] as const;
+  const record = async () => JSON.stringify((await built.memoryRegistry.current()).record);
+  const before = await record();
+  const channel = await capabilityIn("channel:C1");
+  for (const [method, path, body] of routes) {
+    const refused = await call(channel, method, path, body);
+    assert.equal(refused.status, 403, `${method} ${path}`);
+    assert.match(
+      refused.text,
+      method === "DELETE" ? /never goes through the agent/ : /ask the agent in a DM/,
+      `${method} ${path}`,
+    );
+    assert.doesNotMatch(refused.text, /personal:U1|brain\.acme\.example|qm-personal|alice/, `${method} ${path}`);
+  }
+  assert.equal(await record(), before);
+  const dm = await capabilityIn("personal:admin-alice");
+  for (const [method, path, body, status] of routes)
+    assert.equal((await call(dm, method, path, body)).status, status, `${method} ${path}`);
 });
 
 test("blue-green: a binding written through one instance serves turns on the other, in both directions", async (t) => {

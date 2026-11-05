@@ -68,7 +68,7 @@ export function createRegistryMemoryService(opts: {
       const { config, disabled } = resolveMemoryRegistry(readRegistry(record), opts.registry);
       snapshot = {
         version,
-        disabled: disabled.map(disabledRoute),
+        disabled: disabled.filter(({ code }) => code !== "id_taken").map(disabledRoute),
         service: config.routes.length
           ? routed(
               [...(opts.overlay?.routes ?? [NOTEBOOK_ROUTE]), ...config.routes],

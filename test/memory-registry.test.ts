@@ -56,9 +56,14 @@ test("a brain binds the kind personal or one member's personal scope, and always
   const bound = [
     putBinding(record, "everyone", { brain: "acme-personal", scope: "personal", capture: "explicit" }, change),
     putBinding(
-      record,
-      "alice",
-      { brain: "acme-personal", scope: "personal:U1", recall: false, capture: "explicit" },
+      putBinding(
+        record,
+        "alice",
+        { brain: "acme-personal", scope: "personal:U1", recall: false, capture: "explicit" },
+        change,
+      ),
+      "bob",
+      { brain: "acme-personal", scope: "personal:U2", capture: "explicit" },
       change,
     ),
   ];
@@ -69,12 +74,14 @@ test("a brain binds the kind personal or one member's personal scope, and always
   );
   assert.doesNotMatch(JSON.stringify(bound), /personal-secret/);
   assert.deepEqual(
-    resolved[0]!.config.providers.map((provider) => [
-      provider.id,
-      provider.type === "mcp" && provider.attestActor,
-      provider.type === "mcp" && provider.read.auth.clientSecret,
-    ]),
-    [["acme-personal", true, "personal-secret"]],
+    resolved.map(({ config }) =>
+      config.providers.map((provider) => [
+        provider.id,
+        provider.type === "mcp" && provider.attestActor,
+        provider.type === "mcp" && provider.read.auth.clientSecret,
+      ]),
+    ),
+    [[["acme-personal", true, "personal-secret"]], [["acme-personal", true, "personal-secret"]]],
   );
   assert.deepEqual(
     resolved.flatMap(({ config }) => config.routes),
@@ -93,6 +100,15 @@ test("a brain binds the kind personal or one member's personal scope, and always
         scopes: ["personal:U1"],
         capture: "explicit",
         recall: false,
+        manage: false,
+        label: "Acme personal memory",
+        failOpen: true,
+      },
+      {
+        provider: "acme-personal",
+        scopes: ["personal:U2"],
+        capture: "explicit",
+        recall: true,
         manage: false,
         label: "Acme personal memory",
         failOpen: true,
