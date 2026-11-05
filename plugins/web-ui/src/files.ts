@@ -16,6 +16,7 @@ import {
   type IconNode,
 } from "lucide";
 import { api, fileContentUrl, webFetch, withBase } from "./core-bridge";
+import { holdUpdates } from "./web-build.ts";
 import { errMessage } from "../../chassis/src/errors";
 import { browserRenderableImage, fieldSelect, formatBytes, relTime } from "./ui";
 import { icon } from "./icons";
@@ -356,10 +357,12 @@ async function uploadFiles(files: globalThis.File[]): Promise<void> {
   drawFiles();
   let uploaded = 0;
   try {
-    for (const file of picked) {
-      await uploadOne(file);
-      uploaded++;
-    }
+    await holdUpdates(async () => {
+      for (const file of picked) {
+        await uploadOne(file);
+        uploaded++;
+      }
+    });
     filesNotice = `Uploaded ${picked.length} ${picked.length === 1 ? "file" : "files"}.`;
     await loadFiles(appState.viewRenderSeq);
   } catch (e) {

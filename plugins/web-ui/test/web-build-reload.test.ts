@@ -44,7 +44,7 @@ function page(): Page {
 }
 
 test("a changed build reloads the page once it settles; the booted build never does", async (t) => {
-  t.mock.timers.enable({ apis: ["setTimeout"] });
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1_000_000 });
   const tab = page();
   const loaded = await tab.load("a");
   await loaded.respond("a");
@@ -60,8 +60,8 @@ test("a changed build reloads the page once it settles; the booted build never d
   assert.equal(tab.reloads(), 1);
 });
 
-test("instances answering with alternating builds reload at most once per build", async (t) => {
-  t.mock.timers.enable({ apis: ["setTimeout"] });
+test("instances answering with alternating builds reload at most once per build until a cool-off passes", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1_000_000 });
   const tab = page();
   for (const [booted, served, reloads] of [
     ["a", "b", 1],
@@ -74,10 +74,15 @@ test("instances answering with alternating builds reload at most once per build"
     t.mock.timers.tick(10_000);
     assert.equal(tab.reloads(), reloads, `booted ${booted}, served ${served}`);
   }
+  t.mock.timers.tick(5 * 60_000);
+  const stranded = await tab.load("a");
+  await stranded.respond("b");
+  t.mock.timers.tick(10_000);
+  assert.equal(tab.reloads(), 3, "a tab stranded on the old build retries once the cool-off passes");
 });
 
 test("a write in flight, typed text or an unsafe composer defers the reload to the next quiet moment", async (t) => {
-  t.mock.timers.enable({ apis: ["setTimeout"] });
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1_000_000 });
   const tab = page();
   const { trackWebBuild } = (await import(
     `../src/web-build.ts?load=${++loads}`

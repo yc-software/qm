@@ -1,4 +1,5 @@
 import { html, nothing, render } from "lit";
+import { holdUpdates } from "../web-build.ts";
 import { formatBytes, relTime } from "../ui.ts";
 import { cronScheduleDetail, cronScheduleSummary } from "../cron-format.ts";
 import { bareCard, card, denseList as dense, empty, pageHeader, type Header } from "./shared.ts";
@@ -106,18 +107,20 @@ async function upload(page: AdminPage, e: Event, status: Row, paint: () => void)
   paint();
   let uploaded = 0;
   try {
-    for (const file of picked) {
-      const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
-      const sha = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
-      const query = new URLSearchParams({ scope: page.scope, sha, name: file.name || "file" });
-      const response = await fetch(page.apiBase + "/files/upload?" + query, {
-        method: "POST",
-        headers: { "content-type": file.type || "application/octet-stream" },
-        body: file,
-      });
-      if (!response.ok) throw new Error(uploadError(await response.text()) || `Upload failed (${response.status}).`);
-      uploaded++;
-    }
+    await holdUpdates(async () => {
+      for (const file of picked) {
+        const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+        const sha = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+        const query = new URLSearchParams({ scope: page.scope, sha, name: file.name || "file" });
+        const response = await fetch(page.apiBase + "/files/upload?" + query, {
+          method: "POST",
+          headers: { "content-type": file.type || "application/octet-stream" },
+          body: file,
+        });
+        if (!response.ok) throw new Error(uploadError(await response.text()) || `Upload failed (${response.status}).`);
+        uploaded++;
+      }
+    });
     return void (await mount(page));
   } catch (error) {
     const done = uploaded ? `Uploaded ${uploaded} of ${picked.length} before failure. ` : "";
