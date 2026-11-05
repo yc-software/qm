@@ -1,6 +1,7 @@
 import { outermostJsonObject } from "../util/text.ts";
+import { errMessage } from "../util/errors.ts";
 import { recentMessagesBlock, type WakeMessage } from "../wake/wake-envelope.ts";
-import type { CachedMessage } from "./surface-cache.ts";
+import type { CachedMessage, SurfaceSource } from "./surface-cache.ts";
 
 const AMBIENT_JUDGE_SYSTEM = `You are the ambient mind for a chat container — a thin, cheap observer that decides whether the
 assistant should engage with what was just said. You are given the ASSISTANT'S IDENTITY (its name and
@@ -38,12 +39,14 @@ export interface AmbientDecision {
   act: boolean;
   reason?: string;
   askedBy?: string;
+  startError?: string;
 }
 
 export interface AmbientBatch {
   container: string;
   surface: string;
   kind?: "channel" | "dm" | "group";
+  source?: SurfaceSource;
   orders: string;
   self?: { name?: string; mentionId?: string };
   messages: CachedMessage[];
@@ -114,13 +117,14 @@ export function parseAmbientDecision(raw: string | undefined): AmbientDecision {
 
 export interface AmbientJudgeDeps {
   judge?(systemPrompt: string, prompt: string): Promise<string | undefined>;
-  spawnWorker(batch: AmbientBatch, decision: AmbientDecision): Promise<void>;
+  spawnWorker(batch: AmbientBatch, decision: AmbientDecision): Promise<string | undefined>;
 }
 
 export async function judgeAmbientBatch(deps: AmbientJudgeDeps, batch: AmbientBatch): Promise<AmbientDecision> {
   if (!deps.judge) return { act: false };
   const raw = await deps.judge(AMBIENT_JUDGE_SYSTEM, renderAmbientPrompt(batch));
   const decision = parseAmbientDecision(raw);
-  if (decision.act) await deps.spawnWorker(batch, decision);
-  return decision;
+  if (!decision.act) return decision;
+  const startError = await deps.spawnWorker(batch, decision).catch((e: unknown) => `failed: ${errMessage(e)}`);
+  return startError ? { ...decision, startError } : decision;
 }

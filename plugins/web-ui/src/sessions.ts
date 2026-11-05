@@ -72,8 +72,8 @@ import {
   bumpActivity,
   sidebarSessions,
   groupProjectSessions,
+  sidebarProjectSeeds,
   recencyGroup,
-  recentProjectSeeds,
   mergeChildren,
   mergeFirstPage,
   rowIndicators,
@@ -101,6 +101,7 @@ import {
   scopeChip,
 } from "./contexts";
 import { groupDmLabel, groupDmText } from "./group-dm-label";
+import { groupAvatarStackTpl } from "./group-avatars";
 import { transcriptModel } from "./model-options";
 import { appState, closeSidebarOnNarrowView, renderSidebarTop, syncDocumentTitle, syncUrlFromState } from "./shell";
 import { beginNavigation, endNavigation } from "./url-history";
@@ -132,6 +133,7 @@ export const sessionsState = {
   renamingId: null as string | null,
   openingKey: null as string | null,
   webOnly: false,
+  groupByActivity: false,
   hasArchived: false,
   collapsedProjectScopes: new Set<string>(),
   expandedProjectScopes: new Set<string>(),
@@ -179,14 +181,26 @@ function visibleRowOrder(): string[] {
     .filter(Boolean);
 }
 
-const WEB_ONLY_KEY = "web-ui:web-only";
-sessionsState.webOnly = ((): boolean => {
+function storedFlag(key: string): boolean {
   try {
-    return localStorage.getItem(WEB_ONLY_KEY) === "1";
+    return localStorage.getItem(key) === "1";
   } catch {
     return false;
   }
-})();
+}
+
+function storeFlag(key: string, value: boolean): void {
+  try {
+    localStorage.setItem(key, value ? "1" : "0");
+  } catch {
+    void 0;
+  }
+}
+
+const WEB_ONLY_KEY = "web-ui:web-only";
+const GROUP_BY_ACTIVITY_KEY = "web-ui:sidebar-group-by-activity";
+sessionsState.webOnly = storedFlag(WEB_ONLY_KEY);
+sessionsState.groupByActivity = storedFlag(GROUP_BY_ACTIVITY_KEY);
 
 let sessionsLoading = false;
 let sessionsNotice = "";
@@ -261,7 +275,7 @@ export function resetSessionsState(): void {
 }
 
 function projectSeedsForRecents() {
-  return recentProjectSeeds(contextsState.list);
+  return sidebarProjectSeeds(contextsState.list, sessionsState.groupByActivity);
 }
 
 function recentItemActivity(item: RecentItem): number {
@@ -458,21 +472,7 @@ function newChatHint(name: string): string {
 function groupAvatars(item: Extract<RecentItem, { kind: "project" }>): TemplateResult | typeof nothing {
   if (item.groupKind !== "group") return nothing;
   const context = contextsState.list.find((candidate) => candidate.scopeId === item.scopeId);
-  const members = context && !context.project ? (context.groupMembers ?? []) : [];
-  if (!members.length) return nothing;
-  const shown = members.length > 3 ? members.slice(0, 2) : members;
-  const overflow = members.length - shown.length;
-  const everyone = members.map((member) => member.displayName).join(", ");
-  return html`<span class="group-avatar-stack" role="img" aria-label=${`With ${everyone}`}>
-    ${shown.map((member) =>
-      member.avatarUrl
-        ? html`<img class="group-avatar" src=${member.avatarUrl} alt="" loading="lazy" referrerpolicy="no-referrer" />`
-        : html`<span class="group-avatar initial" aria-hidden="true"
-            >${[...member.displayName.trim()][0]?.toUpperCase() ?? "?"}</span
-          >`,
-    )}
-    ${overflow ? html`<span class="group-avatar more" aria-hidden="true">+${overflow}</span>` : nothing}
-  </span>`;
+  return groupAvatarStackTpl(context && !context.project ? (context.groupMembers ?? []) : []);
 }
 
 function recentItem(item: RecentItem, shownThreads: ReadonlySet<string>): TemplateResult {
@@ -1094,7 +1094,7 @@ function surfaceGlyph(s: CoreSession): TemplateResult | typeof nothing {
 }
 
 function rowContext(s: CoreSession): string | null {
-  let label = sharedContextLabel(s.scopeId, s.channelName ?? null);
+  let label = projectName(s.scopeId) ?? sharedContextLabel(s.scopeId, s.channelName ?? null);
   if (surfaceOf(s) === "slack") label = s.type === "group" ? groupDmText(s.channelName) : channelLabel(s);
   return label && label !== sessionTitle(s) ? label : null;
 }
@@ -1492,11 +1492,7 @@ async function loadMoreSessions(kind: "active" | "archived"): Promise<void> {
 export function setWebOnly(webOnly: boolean): void {
   if (sessionsState.webOnly === webOnly) return;
   sessionsState.webOnly = webOnly;
-  try {
-    localStorage.setItem(WEB_ONLY_KEY, webOnly ? "1" : "0");
-  } catch {
-    void 0;
-  }
+  storeFlag(WEB_ONLY_KEY, webOnly);
   activeCursor = null;
   activePaged = false;
   archivedCursor = null;
@@ -1504,6 +1500,13 @@ export function setWebOnly(webOnly: boolean): void {
   if (showArchived) void loadMoreSessions("archived");
   renderList();
   void refreshSessions({ silent: true });
+}
+
+export function setGroupByActivity(groupByActivity: boolean): void {
+  if (sessionsState.groupByActivity === groupByActivity) return;
+  sessionsState.groupByActivity = groupByActivity;
+  storeFlag(GROUP_BY_ACTIVITY_KEY, groupByActivity);
+  renderList();
 }
 
 export function revealSessionSurface(s: CoreSession): void {

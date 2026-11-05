@@ -208,6 +208,7 @@ test("ambient judge: engage decision spawns the smart-model worker", async () =>
       judge: async () => JSON.stringify({ act: true, reason: "someone asked about the Q3 launch" }),
       spawnWorker: async (b, d) => {
         spawned.push({ batch: b, decision: d });
+        return undefined;
       },
     },
     batch,
@@ -224,6 +225,7 @@ test("ambient judge: a silence decision spawns NO worker (silence is the default
       judge: async () => JSON.stringify({ act: false }),
       spawnWorker: async () => {
         spawns++;
+        return undefined;
       },
     },
     {
@@ -249,6 +251,7 @@ test("ambient judge: empty standing orders no longer short-circuits — the judg
       },
       spawnWorker: async () => {
         spawns++;
+        return undefined;
       },
     },
     {
