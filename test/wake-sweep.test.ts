@@ -3,16 +3,12 @@ import assert from "node:assert/strict";
 import { createWakeSweep, type SweepSource } from "../src/wake/sweep.ts";
 import { createEngagedRegistry } from "../src/wake/engaged-registry.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { boundTenant, withTenant } from "../src/tenants/context.ts";
-
-const A = "00000000-0000-4000-8000-0000000000a1";
-const B = "00000000-0000-4000-8000-0000000000b2";
 
 function recordingSource(over: Partial<SweepSource> = {}): { source: SweepSource; swept: string[] } {
   const swept: string[] = [];
   const source: SweepSource = {
     async engagedSessions() {
-      return [{ threadRef: "A" }];
+      return ["A"];
     },
     async sweepSession(threadRef) {
       swept.push(threadRef);
@@ -47,43 +43,9 @@ test("the engaged registry: engage adds, settle removes, list reflects current (
   reg.engage("ch:C1:1");
   reg.engage("ch:C1:1");
   reg.engage("ch:C2:2");
-  assert.deepEqual(
-    reg
-      .list()
-      .map((s) => s.threadRef)
-      .sort(),
-    ["ch:C1:1", "ch:C2:2"],
-  );
+  assert.deepEqual(reg.list().sort(), ["ch:C1:1", "ch:C2:2"]);
   reg.settle("ch:C1:1");
-  assert.deepEqual(reg.list(), [{ threadRef: "ch:C2:2" }]);
-});
-
-test("engaged sessions remember their tenant and each is swept under it", async () => {
-  const reg = createEngagedRegistry();
-  withTenant(A, () => reg.engage("ch:C1:1"));
-  withTenant(B, () => reg.engage("ch:C1:1"));
-  assert.deepEqual(
-    reg.list().map((s) => s.tenantId),
-    [A, B],
-  );
-  const seen: Array<[string | undefined, string]> = [];
-  const sweep = createWakeSweep(
-    {
-      engagedSessions: async () => reg.list(),
-      async sweepSession(threadRef) {
-        seen.push([boundTenant(), threadRef]);
-        reg.settle(threadRef);
-        return 1;
-      },
-    },
-    { ...singleProcessDeps(), intervalMs: 10_000 },
-  );
-  await sweep.sweep();
-  assert.deepEqual(seen, [
-    [A, "ch:C1:1"],
-    [B, "ch:C1:1"],
-  ]);
-  assert.deepEqual(reg.list(), []);
+  assert.deepEqual(reg.list(), ["ch:C2:2"]);
 });
 
 test("nothing engaged ⇒ a pass does no work", async () => {

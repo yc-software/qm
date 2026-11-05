@@ -2,6 +2,7 @@ import {
   resolveGatewayEmbeddingModel,
   gatewayEmbeddingModelIds,
   gatewayModelCatalog,
+  gatewayModelsVersion,
   isGatewayModelId,
   resolveGatewayModel,
 } from "./gateway-models.ts";
@@ -11,6 +12,7 @@ import {
   isEmbeddingModel,
   overlayModel,
   overlayModels,
+  overlaysVersion,
   overlayUnavailableReason,
   type EmbeddingModel,
   type EmbeddingModelDefinition,
@@ -96,6 +98,10 @@ export function isModelProvider(value: unknown): value is ModelProvider {
 }
 
 type PiModel = Model<Api>;
+
+export function modelOverlayVersion(): number {
+  return overlaysVersion() + gatewayModelsVersion();
+}
 
 export function isOverlayModel(id: string): boolean {
   return overlayModel(id) !== undefined;

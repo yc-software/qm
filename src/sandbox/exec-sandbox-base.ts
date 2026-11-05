@@ -4,7 +4,6 @@ import { createKeyedQueue } from "../util/async.ts";
 import { swallowAs, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import { shortHash } from "../util/crypto.ts";
-import { tenantScopedId } from "../tenants/context.ts";
 import { DROPPED_PROXY_ENV, forceThroughProxyEnv, nonInteractiveShellPrefix } from "./sandbox-env.ts";
 import type { LayerToolInstaller } from "./layer-tool-install.ts";
 import { posixJoin } from "./exec-file-ops.ts";
@@ -20,8 +19,7 @@ const PREP_TIMEOUT_SEC = 60;
 const MAX_SANDBOX_NAME = 63;
 const HASH_LEN = 6;
 
-export const sandboxScopeName = (prefix: string, scopeId: string): string => {
-  const id = tenantScopedId(scopeId);
+export const sandboxScopeName = (prefix: string, id: string): string => {
   const cleaned = id
     .toLowerCase()
     .replace(/[^a-z0-9-]+/g, "-")

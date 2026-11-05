@@ -241,9 +241,8 @@ test("a heartbeat landing between SELECT and retire leaves the run untouched", a
 });
 
 test("shutdown cancels before handback and holds the run until the turn unwinds", async () => {
-  const url = testDatabaseUrl();
-  const { runs } = createPostgresRunStore(url);
-  const sessions = createPostgresSessionStore(url);
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
   const session = await sessions.getOrCreateByThread("t1", "dm", "personal:U1");
   const enq = (await runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 1 })).run;
   let started!: () => void;

@@ -3,9 +3,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
-import { singleTenantCore } from "./single-tenant-core.ts";
 
-process.env.CORE_API_URL = await singleTenantCore();
 process.env.CORE_SIGNING_SECRET = "voice-route-test";
 process.env.WEB_UI_PUBLIC_URL = "https://qm.example.test";
 process.env.WEB_UI_VOICE_USERS = "alice";

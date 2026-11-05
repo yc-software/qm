@@ -1,5 +1,3 @@
-import { coreHostTenants, inHostTenant } from "../../chassis/src/host-tenant.ts";
-import { coreTenantSignIn } from "../../chassis/src/tenant-sign-in.ts";
 import { reportBackendError } from "../../chassis/src/error-reporting.ts";
 import "./instrument.ts";
 import { coreRememberedSessions } from "./sessions.ts";
@@ -15,7 +13,7 @@ import { createBrandingCache } from "../../chassis/src/branding.ts";
 import { mailerFor } from "./email.ts";
 import { loadSigningKey } from "./keys.ts";
 import { TokenSigner } from "./tokens.ts";
-import { brokerHostTenants, createAuthHandler } from "./server.ts";
+import { createAuthHandler } from "./server.ts";
 
 const PORT = portFromEnv(8099);
 const IS_PROD = process.env.NODE_ENV === "production";
@@ -52,22 +50,18 @@ export async function startServer(
     sessions: coreRememberedSessions(CFG.coreApiUrl, CFG.coreSigningSecret),
     claims: coreClaimStore(CFG.coreApiUrl, CFG.coreSigningSecret, "auth"),
     mailer,
-    signIn: coreTenantSignIn(CFG.coreApiUrl, CFG.coreSigningSecret),
     brandName: () => {
       void branding.forRender();
       return branding.current().selfLabel || CFG.brandName;
     },
   });
-  const hostTenants = coreHostTenants(CFG.coreApiUrl, CFG.coreSigningSecret);
   const server = createServer((req, res) => {
-    void inHostTenant(brokerHostTenants(hostTenants, req), req, res, () => handle(req, res), false).catch(
-      (err: unknown) => {
-        reportBackendError(err);
-        console.error("[auth] 500 %s %s: %s", req.method ?? "?", (req.url ?? "?").split("?")[0], String(err));
-        if (!res.headersSent) json(res, 500, { error: "internal_error" });
-        else res.end();
-      },
-    );
+    void handle(req, res).catch((err: unknown) => {
+      reportBackendError(err);
+      console.error("[auth] 500 %s %s: %s", req.method ?? "?", (req.url ?? "?").split("?")[0], String(err));
+      if (!res.headersSent) json(res, 500, { error: "internal_error" });
+      else res.end();
+    });
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);

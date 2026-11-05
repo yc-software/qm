@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import type { AuditEvent } from "../src/audit/audit-log.ts";
 import { scopeId } from "../src/types.ts";
-import { seedReleasedInstall } from "./support/tenant-seed.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres audit-log tests";
@@ -22,10 +21,7 @@ function ev(at: number, action: string, scope = scopeId("personal", "U1")): Audi
   return { at, principalId: "U1", action, resource: `r-${action}`, scopeLabel: scope };
 }
 
-before(async () => {
-  await reset(true);
-  if (URL) await seedReleasedInstall(URL);
-});
+before(() => reset(true));
 
 test("pg audit log: tail returns newest `limit`, scoped, and reads-its-writes", { skip }, async () => {
   await reset(true);

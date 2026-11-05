@@ -4,11 +4,11 @@ import {
   registerOpenRouterCatalogModel,
   resolveModel,
   selectableBaseModels,
+  modelOverlayVersion,
   overlayModelCatalog,
 } from "./pi-models.ts";
-import { customModelCatalog } from "./custom-providers.ts";
+import { customModelCatalog, customProvidersVersion } from "./custom-providers.ts";
 import { readBoundedText } from "../util/bytes.ts";
-import { perTenant } from "../tenants/context.ts";
 
 export interface ModelCatalogEntry {
   id: string;
@@ -25,12 +25,15 @@ const CACHE_TTL_MS = 5 * 60_000;
 const FAILURE_TTL_MS = 30_000;
 
 interface CacheEntry {
+  customVersion?: number;
+  overlayVersion?: number;
   dynamic?: ModelCatalogEntry[];
   expiresAt: number;
+  models: ModelCatalogEntry[];
   inFlight?: Promise<ModelCatalogEntry[]>;
 }
 
-const cache = perTenant(() => new WeakMap<typeof fetch, CacheEntry>());
+const cache = new WeakMap<typeof fetch, CacheEntry>();
 
 export function builtInModelCatalog(): ModelCatalogEntry[] {
   const builtIns = selectableBaseModels().flatMap((model) => {
@@ -135,34 +138,43 @@ async function fetchOpenRouterModels(fetcher: typeof fetch): Promise<ModelCatalo
   });
 }
 
-function withBuiltIns(dynamic: readonly ModelCatalogEntry[]): ModelCatalogEntry[] {
-  const models = builtInModelCatalog();
-  const known = new Set(models.map((model) => model.id));
-  return [...models, ...dynamic.filter((model) => !known.has(model.id))];
-}
-
-function openRouterModels(fetcher: typeof fetch): Promise<ModelCatalogEntry[]> {
-  const entry = cache().get(fetcher) ?? { expiresAt: 0 };
-  cache().set(fetcher, entry);
-  if (entry.expiresAt > Date.now()) return Promise.resolve(entry.dynamic ?? []);
-  entry.inFlight ??= fetchOpenRouterModels(fetcher)
+export async function selectableModelCatalog(fetcher: typeof fetch = fetch): Promise<ModelCatalogEntry[]> {
+  const now = Date.now();
+  const existing = cache.get(fetcher);
+  if (
+    existing &&
+    existing.expiresAt > now &&
+    existing.customVersion === customProvidersVersion() &&
+    existing.overlayVersion === modelOverlayVersion()
+  )
+    return existing.models;
+  if (existing?.inFlight) return existing.inFlight;
+  const entry = existing ?? { expiresAt: 0, models: [] };
+  entry.inFlight = fetchOpenRouterModels(fetcher)
     .then((dynamic) => {
       entry.dynamic = dynamic;
+      const models = builtInModelCatalog();
+      const known = new Set(models.map((model) => model.id));
+      entry.models = [...models, ...dynamic.filter((model) => !known.has(model.id))];
       entry.expiresAt = Date.now() + CACHE_TTL_MS;
-      return dynamic;
+      entry.customVersion = customProvidersVersion();
+      entry.overlayVersion = modelOverlayVersion();
+      return entry.models;
     })
     .catch(() => {
+      const models = builtInModelCatalog();
+      const known = new Set(models.map((model) => model.id));
+      entry.models = [...models, ...(entry.dynamic ?? []).filter((model) => !known.has(model.id))];
       entry.expiresAt = Date.now() + FAILURE_TTL_MS;
-      return entry.dynamic ?? [];
+      entry.customVersion = customProvidersVersion();
+      entry.overlayVersion = modelOverlayVersion();
+      return entry.models;
     })
     .finally(() => {
       delete entry.inFlight;
     });
+  cache.set(fetcher, entry);
   return entry.inFlight;
-}
-
-export async function selectableModelCatalog(fetcher: typeof fetch = fetch): Promise<ModelCatalogEntry[]> {
-  return withBuiltIns(await openRouterModels(fetcher));
 }
 
 export function selectableCatalog(catalog: readonly ModelCatalogEntry[]): ModelCatalogEntry[] {
@@ -173,7 +185,12 @@ export function cachedModelCatalog(fetcher: typeof fetch = fetch): {
   models: ModelCatalogEntry[];
   refreshing: boolean;
 } {
-  void openRouterModels(fetcher);
-  const entry = cache().get(fetcher);
-  return { models: withBuiltIns(entry?.dynamic ?? []), refreshing: !!entry?.inFlight };
+  void selectableModelCatalog(fetcher);
+  const models = builtInModelCatalog();
+  const known = new Set(models.map((model) => model.id));
+  const entry = cache.get(fetcher);
+  return {
+    models: [...models, ...(entry?.dynamic ?? []).filter((model) => !known.has(model.id))],
+    refreshing: !!entry?.inFlight,
+  };
 }

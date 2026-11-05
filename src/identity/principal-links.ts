@@ -1,4 +1,3 @@
-import { perTenant } from "../tenants/context.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createTtlRefresh } from "../util/async.ts";
 import { foldPrincipalId, type PrincipalLinkResolver } from "../directory/person.ts";
@@ -35,14 +34,10 @@ function validId(value: unknown): value is string {
 }
 
 export function createPrincipalLinkService(store: UserLinkStore, lock: AdvisoryLock): PrincipalLinkService {
-  const links = perTenant(() => ({
-    byAlias: new Map<string, UserLink>(),
-    byCanonical: new Map<string, UserLink[]>(),
-    refresh: createTtlRefresh(REFRESH_TTL_MS, async () => index(await store.links())),
-  }));
+  const byAlias = new Map<string, UserLink>();
+  const byCanonical = new Map<string, UserLink[]>();
 
   function index(rows: UserLink[]): void {
-    const { byAlias, byCanonical } = links();
     byAlias.clear();
     byCanonical.clear();
     for (const row of rows) {
@@ -54,19 +49,19 @@ export function createPrincipalLinkService(store: UserLinkStore, lock: AdvisoryL
     }
   }
 
-  const refresh = (force?: boolean): Promise<void> => links().refresh(force);
+  const refresh = createTtlRefresh(REFRESH_TTL_MS, async () => index(await store.links()));
 
   return {
     canonical(key) {
-      return links().byAlias.get(key)?.canonicalId;
+      return byAlias.get(key)?.canonicalId;
     },
     aliases(key) {
-      return (links().byCanonical.get(key) ?? []).map((row) => row.principalId);
+      return (byCanonical.get(key) ?? []).map((row) => row.principalId);
     },
     refresh,
     async list() {
       await refresh(true);
-      return [...links().byAlias.values()].sort(
+      return [...byAlias.values()].sort(
         (a, b) => a.createdAt - b.createdAt || a.principalId.localeCompare(b.principalId),
       );
     },
@@ -86,18 +81,18 @@ export function createPrincipalLinkService(store: UserLinkStore, lock: AdvisoryL
         const canonicalKey = foldPrincipalId(canonicalId);
         if (aliasKey === canonicalKey) throw new PrincipalLinkError(400, "a principal cannot be linked to itself");
         await refresh(true);
-        const existing = links().byAlias.get(aliasKey);
+        const existing = byAlias.get(aliasKey);
         if (existing) {
           if (foldPrincipalId(existing.canonicalId) === canonicalKey) return existing;
           throw new PrincipalLinkError(409, `${principalId} is already linked to ${existing.canonicalId}`);
         }
-        const canonicalIsAlias = links().byAlias.get(canonicalKey);
+        const canonicalIsAlias = byAlias.get(canonicalKey);
         if (canonicalIsAlias)
           throw new PrincipalLinkError(
             400,
             `${canonicalId} is itself linked to ${canonicalIsAlias.canonicalId}; link to that principal instead`,
           );
-        if (links().byCanonical.has(aliasKey))
+        if (byCanonical.has(aliasKey))
           throw new PrincipalLinkError(
             400,
             `${principalId} is the canonical principal of other links; unlink those first`,
