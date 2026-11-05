@@ -1,4 +1,5 @@
-import { buildDiscoveryUrls } from "@modelcontextprotocol/sdk/client/auth.js";
+import { buildDiscoveryUrls, registerClient } from "@modelcontextprotocol/sdk/client/auth.js";
+import { OAuthMetadataSchema, type OAuthMetadata } from "@modelcontextprotocol/sdk/shared/auth.js";
 import { errMessage } from "../util/errors.ts";
 import { publicFetch, type AddressFetch } from "../util/network.ts";
 
@@ -23,6 +24,7 @@ export interface DiscoveredOAuth {
   authorize?: string;
   token?: string;
   scopes?: string[];
+  registrable?: OAuthMetadata;
   errors: string[];
 }
 
@@ -70,9 +72,31 @@ export async function discoverOAuth(resource: URL, fetchFn: AddressFetch = publi
       const authorize = httpsUrl(server.authorization_endpoint);
       const token = httpsUrl(server.token_endpoint);
       if (!authorize || !token) errors.push(`${candidate}: missing or non-HTTPS authorization/token endpoint`);
-      return { authorize, token, scopes, errors };
+      const registrable = httpsUrl(server.registration_endpoint)
+        ? OAuthMetadataSchema.safeParse(server).data
+        : undefined;
+      return { authorize, token, scopes, ...(registrable ? { registrable } : {}), errors };
     }
     return { scopes, errors };
   }
   return { errors };
+}
+
+export async function registerPublicClient(
+  metadata: OAuthMetadata,
+  redirectUris: string[],
+  fetchFn: AddressFetch = publicFetch,
+): Promise<string> {
+  const client = await registerClient(metadata.issuer, {
+    metadata,
+    clientMetadata: {
+      client_name: "QM",
+      redirect_uris: redirectUris,
+      grant_types: ["authorization_code", "refresh_token"],
+      response_types: ["code"],
+      token_endpoint_auth_method: "none",
+    },
+    fetchFn: (url, init) => fetchFn(url, { ...init, redirect: "error", signal: AbortSignal.timeout(10_000) }),
+  });
+  return client.client_id;
 }
