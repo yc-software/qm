@@ -5,6 +5,7 @@ import { createAdminGrantStore, type AdminGrant, type AdminGrantStore } from "..
 import { createPostgresAdvisoryLock, type AdvisoryLock } from "../../src/persistence/advisory-lock.ts";
 import { createPostgresMapFactory, type DurableMap } from "../../src/persistence/durable-map.ts";
 import { createPgPool, type PgPool } from "../../src/persistence/pg-pool.ts";
+import { DEPLOYMENT_TABLES } from "../../src/deploy/deployment-tables.ts";
 import { configStoreMaps, createConfigStore } from "../../src/resolution/config-store.ts";
 import { orgId } from "../../src/config.ts";
 import { scopeId } from "../../src/types.ts";
@@ -102,7 +103,11 @@ export function testDeployBackings(
 ) {
   const maps = createPostgresMapFactory(testDatabaseUrl());
   return {
-    deployments: maps.map<import("../../src/deploy/deploy-store.ts").Deployment>("deployments"),
+    deployments: maps.map<import("../../src/deploy/deploy-store.ts").Deployment>(
+      "deployments",
+      undefined,
+      DEPLOYMENT_TABLES,
+    ),
     pg: maps.pool,
     ...backings,
   };

@@ -109,7 +109,7 @@ export function createSessionSpend(deps: {
           const rows = await client.query(spendSql, [Number(day) * 86_400_000, (Number(day) + 1) * 86_400_000]);
           await client.query(
             `INSERT INTO session_spend_days(day, rows, updated_at) VALUES ($1, $2, $3)
-             ON CONFLICT (day) DO UPDATE SET rows = EXCLUDED.rows, updated_at = EXCLUDED.updated_at`,
+             ON CONFLICT (tenant_id, day) DO UPDATE SET rows = EXCLUDED.rows, updated_at = EXCLUDED.updated_at`,
             [day, jsonbStringify(rows.rows), updatedAt],
           );
         });

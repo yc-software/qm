@@ -7,6 +7,7 @@ import { createPostgresMapFactory, type PostgresArtifactMaps } from "../src/pers
 import { createDeployStore, type Deployment, type DeployStore } from "../src/deploy/deploy-store.ts";
 import { scopeId } from "../src/types.ts";
 import { testDeployBackings } from "./support/test-database.ts";
+import { DEPLOYMENT_TABLES } from "../src/deploy/deployment-tables.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the deploy access tests";
@@ -48,7 +49,7 @@ function makeStore(opts: { touchDebounceMs?: number } = {}): { store: DeployStor
   const factory = makeFactory();
   const store = createDeployStore(
     testDeployBackings({
-      deployments: factory.map<Deployment>("deployments"),
+      deployments: factory.map<Deployment>("deployments", undefined, DEPLOYMENT_TABLES),
       pg: factory.pool,
       git: { repoRoot: mkdtempSync(join(tmpdir(), "deploy-pg-")) },
       ...opts,
@@ -140,7 +141,9 @@ test("renaming onto a taken name is rejected by the unique index", { skip }, asy
 test("rows never touched since the split fall back to the blob's legacy lastAccessAt", { skip }, async () => {
   const { store, factory } = makeStore({ touchDebounceMs: 0 });
   const d = await store.create(createInput());
-  await factory.map<Deployment>("deployments").merge(d.id, { lastAccessAt: 777 } as Partial<Deployment>);
+  await factory
+    .map<Deployment>("deployments", undefined, DEPLOYMENT_TABLES)
+    .merge(d.id, { lastAccessAt: 777 } as Partial<Deployment>);
   assert.equal((await store.get(d.id))!.lastAccessAt, 777);
   await store.touch(d.id, 9_999);
   assert.equal((await store.get(d.id))!.lastAccessAt, 9_999, "the access table wins once a touch lands");
@@ -148,7 +151,7 @@ test("rows never touched since the split fall back to the blob's legacy lastAcce
 
 test("pre-existing duplicate names degrade gracefully: no index, deterministic getByName", { skip }, async () => {
   await raw("DROP INDEX IF EXISTS deployments_name_unique");
-  const seed = makeFactory().map<Deployment>("deployments");
+  const seed = makeFactory().map<Deployment>("deployments", undefined, DEPLOYMENT_TABLES);
   const dup = (id: string): Deployment => ({
     id,
     ownerScopeId: scopeId("personal", "U1"),

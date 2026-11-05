@@ -1,6 +1,7 @@
 import type { CronFireLogEntry } from "../triggers/types.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { pgTextSafe } from "../util/text.ts";
+import { tenantTables } from "../tenants/migrations.ts";
 
 export interface CronFireRecord extends CronFireLogEntry {
   cronId: string;
@@ -47,7 +48,7 @@ const ROW_OF = (prefix: string): string => `(${VALUE_COLUMN_DEFS.map((c) => `${p
 
 const UPSERT_FIRE = `INSERT INTO cron_fires (${FIRE_COLUMNS})
    VALUES (${FIRE_COLUMN_DEFS.map((_c, i) => `$${i + 1}`).join(", ")})
-   ON CONFLICT (cron_id, fire_key) DO UPDATE
+   ON CONFLICT (tenant_id, cron_id, fire_key) DO UPDATE
      SET ${UPSERT_SET}`;
 
 function fireParams(cronId: string, entry: CronFireLogEntry): unknown[] {
@@ -81,7 +82,7 @@ const LEGACY_FIRE_FIELDS = [
   "source.json->>'reply'",
 ].join(", ");
 
-const LEGACY_FIRE_UPSERT = `ON CONFLICT (cron_id, fire_key) DO UPDATE SET ${UPSERT_SET}
+const LEGACY_FIRE_UPSERT = `ON CONFLICT (tenant_id, cron_id, fire_key) DO UPDATE SET ${UPSERT_SET}
   WHERE EXCLUDED.fired_at >= cron_fires.fired_at
     AND (cron_fires.ended_at IS NULL OR EXCLUDED.ended_at IS NOT NULL)
     AND ${ROW_OF("cron_fires")} IS DISTINCT FROM ${ROW_OF("EXCLUDED")}`;
@@ -139,6 +140,7 @@ export function createPostgresCronFireStore(connectionString: string): CronFireS
           `CREATE INDEX IF NOT EXISTS idx_cron_fires_cron_fired_at ON cron_fires (cron_id, fired_at DESC)`,
         ],
       },
+      ...tenantTables("cron/fires/0002-tenants", [{ table: "cron_fires", primaryKey: "cron_id, fire_key" }]),
     ],
     [LEGACY_FIRE_MAINTENANCE],
   );

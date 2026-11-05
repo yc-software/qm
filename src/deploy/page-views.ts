@@ -1,4 +1,5 @@
 import { createPgPool } from "../persistence/pg-pool.ts";
+import { DEPLOYMENT_TABLES } from "./deployment-tables.ts";
 
 export type AppViewAuthMode = "signed_in" | "public" | "app_only";
 
@@ -26,27 +27,7 @@ const DROP_REPORT_INTERVAL_MS = 60_000;
 const clip = (value: string | null, max: number): string | null => (value === null ? null : value.slice(0, max));
 
 export function createPostgresAppPageViewLog(connectionString: string): AppPageViewLog {
-  const { q } = createPgPool(connectionString, [
-    {
-      id: "deploy/app-page-views/0001",
-      statements: [
-        "CREATE TABLE IF NOT EXISTS deployments (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
-        `CREATE TABLE IF NOT EXISTS app_page_views(
-      id BIGSERIAL PRIMARY KEY,
-      deployment_id TEXT NOT NULL REFERENCES deployments(id),
-      version INTEGER,
-      viewer TEXT,
-      auth_mode TEXT NOT NULL,
-      at BIGINT NOT NULL,
-      path TEXT NOT NULL,
-      ip TEXT,
-      user_agent TEXT
-    )`,
-        `CREATE INDEX IF NOT EXISTS app_page_views_by_deployment_at ON app_page_views(deployment_id, at DESC)`,
-        `CREATE INDEX IF NOT EXISTS app_page_views_by_at ON app_page_views(at)`,
-      ],
-    },
-  ]);
+  const { q } = createPgPool(connectionString, DEPLOYMENT_TABLES);
   let inFlight = 0;
   let dropped = 0;
   let lastDropReport = 0;

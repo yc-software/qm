@@ -18,3 +18,124 @@ BEGIN
 END $qm_bound_tenant$`,
   ],
 };
+
+export const TENANT_SETTINGS: PgMigrationDefinition = {
+  id: "0000-tenancy/settings",
+  statements: [
+    `SET LOCAL lock_timeout = '5s'`,
+    `ALTER TABLE tenants ADD COLUMN IF NOT EXISTS settings JSONB NOT NULL DEFAULT '{}'::jsonb
+      CHECK (jsonb_typeof(settings) = 'object')`,
+  ],
+};
+
+export const TENANCY: readonly PgMigrationDefinition[] = [TENANCY_BASE, TENANT_SETTINGS];
+
+export interface TenantKey {
+  name: string;
+  columns: string;
+  where?: string;
+  constraint?: boolean;
+}
+
+export interface TenantTable {
+  table: string;
+  primaryKey?: string;
+  unique?: readonly TenantKey[];
+}
+
+export interface TenantReference {
+  table: string;
+  name: string;
+  columns: string;
+  references: string;
+  onDelete?: "CASCADE";
+}
+
+export interface TenantTableOptions {
+  references?: readonly TenantReference[];
+  before?: readonly string[];
+  after?: readonly string[];
+}
+
+const LOCK_TIMEOUT = `SET LOCAL lock_timeout = '5s'`;
+
+function tenantColumn(table: string): string {
+  return `DO $tenant_column$
+DECLARE
+  existing uuid;
+BEGIN
+  IF EXISTS (SELECT 1 FROM ${table}) THEN
+    IF NOT EXISTS (SELECT 1 FROM tenants) THEN
+      INSERT INTO tenants DEFAULT VALUES;
+    END IF;
+    SELECT id INTO STRICT existing FROM tenants;
+  END IF;
+  EXECUTE format('ALTER TABLE ${table} ADD COLUMN tenant_id UUID NOT NULL DEFAULT %L', existing);
+END $tenant_column$`;
+}
+
+export function tenantRowSecurity(table: string): string[] {
+  return [
+    `ALTER TABLE ${table} ALTER COLUMN tenant_id SET DEFAULT qm_bound_tenant()`,
+    `ALTER TABLE ${table} ADD CONSTRAINT ${table}_tenant FOREIGN KEY (tenant_id) REFERENCES tenants(id)`,
+    `ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY`,
+    `CREATE POLICY tenant_isolation ON ${table}
+       USING (tenant_id = qm_bound_tenant()) WITH CHECK (tenant_id = qm_bound_tenant())`,
+  ];
+}
+
+function tenantKeys({ table, primaryKey, unique = [] }: TenantTable): string[] {
+  const keys = unique.map(({ name, columns, where }) => ({ name: `${name}_tenant`, columns, where }));
+  if (primaryKey !== undefined) keys.unshift({ name: `${table}_tenant_pkey`, columns: primaryKey, where: undefined });
+  return keys.map(
+    ({ name, columns, where }) =>
+      `CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS ${name} ON ${table}(tenant_id, ${columns})${where ? ` WHERE ${where}` : ""}`,
+  );
+}
+
+function swapKeys({ table, primaryKey, unique = [] }: TenantTable): string[] {
+  const primary =
+    primaryKey === undefined
+      ? []
+      : [
+          `ALTER TABLE ${table} DROP CONSTRAINT ${table}_pkey,
+             ADD CONSTRAINT ${table}_pkey PRIMARY KEY USING INDEX ${table}_tenant_pkey`,
+        ];
+  return [
+    ...primary,
+    ...unique.flatMap(({ name, constraint }) =>
+      constraint
+        ? [`ALTER TABLE ${table} DROP CONSTRAINT ${name}, ADD CONSTRAINT ${name} UNIQUE USING INDEX ${name}_tenant`]
+        : [`DROP INDEX ${name}`, `ALTER INDEX ${name}_tenant RENAME TO ${name}`],
+    ),
+  ];
+}
+
+function tenantReference({ table, name, columns, references, onDelete }: TenantReference): string {
+  return `ALTER TABLE ${table} ADD CONSTRAINT ${name}
+    FOREIGN KEY (tenant_id, ${columns}) REFERENCES ${references}${onDelete ? ` ON DELETE ${onDelete}` : ""}`;
+}
+
+export function tenantTables(
+  id: string,
+  tables: readonly TenantTable[],
+  { references = [], before = [], after = [] }: TenantTableOptions = {},
+): PgMigrationDefinition[] {
+  const keys = tables.flatMap(tenantKeys);
+  return [
+    ...TENANCY,
+    { id: `${id}/1-column`, statements: [LOCK_TIMEOUT, ...before, ...tables.map(({ table }) => tenantColumn(table))] },
+    ...(keys.length ? [{ id: `${id}/2-keys`, statements: keys }] : []),
+    {
+      id: `${id}/3-policy`,
+      statements: [
+        LOCK_TIMEOUT,
+        ...references.map(({ table, name }) => `ALTER TABLE ${table} DROP CONSTRAINT ${name}`),
+        ...tables.flatMap(swapKeys),
+        ...references.map(tenantReference),
+        ...tables.flatMap(({ table }) => tenantRowSecurity(table)),
+        ...after,
+      ],
+    },
+  ];
+}
