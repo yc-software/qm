@@ -2371,9 +2371,7 @@ export function buildApp(
   runs.onTerminal((run) => {
     void runs
       .activeForThread(run.sessionId)
-      .then((live) => {
-        if (!live) engaged.settle({ tenantId: run.tenantId, threadRef: run.sessionId });
-      })
+      .then((live) => void (live ?? engaged.settle({ tenantId: run.tenantId, threadRef: run.sessionId })))
       .catch(swallowAs("wake: settle on terminal", undefined));
   });
   runs.onTerminal((run) => {
@@ -2420,10 +2418,8 @@ export function buildApp(
     for (;;) {
       const batch = await runs.pendingReturns(100, afterId);
       if (!batch.length) return sweepUnreadMailWakes(subagentMail);
-      for (const run of batch)
-        await withTenant(run.tenantId, () => returnSessionRun(run)).catch(
-          swallowAs("sessions: recover return", undefined),
-        );
+      const recover = swallowAs("sessions: recover return", undefined);
+      for (const run of batch) await withTenant(run.tenantId, () => returnSessionRun(run)).catch(recover);
       afterId = batch.at(-1)!.id;
     }
   };
