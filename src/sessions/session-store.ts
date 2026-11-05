@@ -398,6 +398,7 @@ interface SessionFacts {
 }
 
 export interface SessionStore {
+  bootTenant(): Promise<string | undefined>;
   getOrCreateByThread(
     threadRef: string,
     type: SessionType,

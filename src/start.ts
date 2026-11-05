@@ -10,6 +10,7 @@ import { errMessage, reportFailureAs } from "./util/errors.ts";
 import { slackAccountConfigsFromEnv, slackPluginConfigFromEnv, startSlackPlugin } from "./slack/index.ts";
 import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
 import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
+import { inBootTenant } from "./tenants/boot.ts";
 
 export async function startQm(
   config: Config,
@@ -17,7 +18,8 @@ export async function startQm(
 ) {
   const built = buildApp(config, overrides);
   await migrateRegisteredPgSchemas(config.databaseUrl);
-  if (config.backgroundWorkEnabled) await built.ownSharedState();
+  const tenant = await built.app.bootTenant();
+  if (config.backgroundWorkEnabled) await inBootTenant(tenant, () => built.ownSharedState());
   const slackConfig = slackPluginConfigFromEnv(env);
   let slackEnvironmentState: "absent" | "configured" | "partial" =
     env.SLACK_BOT_TOKEN || env.SLACK_APP_TOKEN ? "partial" : "absent";
@@ -36,11 +38,13 @@ export async function startQm(
     managedSlack,
   });
 
-  await built.config.hydrate?.();
-  await built.refreshCustomProviders();
-  await built.identity.refresh();
-  await built.deploymentLayerReady;
-  built.deploymentLayerRefresh.start();
+  await inBootTenant(tenant, async () => {
+    await built.config.hydrate?.();
+    await built.refreshCustomProviders();
+    await built.identity.refresh();
+    await built.deploymentLayerReady;
+    built.deploymentLayerRefresh.start();
+  });
   server.listen(config.port);
   await once(server, "listening");
 
@@ -115,20 +119,22 @@ export async function startQm(
   );
 
   const slackRuntimes = [slackRuntime, ...slackAccountRuntimes];
-  built.runtime.start({
-    resume() {
-      built.scheduler.start(1000);
-      for (const runtime of slackRuntimes) runtime.start();
-    },
-    async standDown() {
-      const stopped = await Promise.allSettled([
-        built.scheduler.stopClaims(),
-        ...slackRuntimes.map((runtime) => runtime.stop()),
-      ]);
-      const failures = stopped.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
-      if (failures.length) throw new AggregateError(failures, "background stand-down failed");
-    },
-  });
+  inBootTenant(tenant, () =>
+    built.runtime.start({
+      resume() {
+        built.scheduler.start(1000);
+        for (const runtime of slackRuntimes) runtime.start();
+      },
+      async standDown() {
+        const stopped = await Promise.allSettled([
+          built.scheduler.stopClaims(),
+          ...slackRuntimes.map((runtime) => runtime.stop()),
+        ]);
+        const failures = stopped.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
+        if (failures.length) throw new AggregateError(failures, "background stand-down failed");
+      },
+    }),
+  );
 
   return {
     built,

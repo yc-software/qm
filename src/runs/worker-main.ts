@@ -3,15 +3,19 @@ import { loadConfig } from "../config.ts";
 import { buildApp, stopWithBackstop } from "../wiring.ts";
 import { shutdownOnUncaught } from "../util/process-guard.ts";
 import { migrateRegisteredPgSchemas } from "../persistence/pg-pool.ts";
+import { inBootTenant } from "../tenants/boot.ts";
 
 const config = loadConfig();
 const built = buildApp(config);
 await migrateRegisteredPgSchemas(config.databaseUrl);
-if (config.backgroundWorkEnabled) await built.ownSharedState();
-await built.config.hydrate?.();
-await built.identity.refresh();
+const tenant = await built.app.bootTenant();
+if (config.backgroundWorkEnabled) await inBootTenant(tenant, () => built.ownSharedState());
+await inBootTenant(tenant, async () => {
+  await built.config.hydrate?.();
+  await built.identity.refresh();
+});
 const { runtime } = built;
-runtime.start();
+inBootTenant(tenant, () => runtime.start());
 console.log(`[qm:worker] draining runs (org=${config.orgId}, workers=${config.workers})`);
 
 let shuttingDown = false;

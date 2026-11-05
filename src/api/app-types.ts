@@ -278,6 +278,7 @@ export interface SessionSearchHit {
 }
 
 export interface App {
+  bootTenant(): Promise<string | undefined>;
   swarms?: SwarmService;
   turn(req: TurnRequest, replay?: { signalDedupKey: string }): Promise<TurnResult>;
   getApproval(requestId: string, viewer?: string): Promise<(PendingApprovalRecord & { requestId: string }) | null>;

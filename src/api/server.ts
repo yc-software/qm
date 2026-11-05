@@ -20,7 +20,8 @@ import {
   SOURCE_AUTH_REPLAY_WINDOW_MS,
   type SourceAuth,
 } from "../auth/source-auth.ts";
-import { verifyCapabilityToken, CONTROL_PLANE_AUD, type CapabilityClaims } from "../auth/capability-token.ts";
+import { CONTROL_PLANE_AUD, type CapabilityClaims } from "../auth/capability-token.ts";
+import { capabilityToken, requestCapability, withRequestTenant } from "./request-tenant.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER, type PortalIdentity } from "../auth/portal-identity.ts";
 import { errMessage } from "../util/errors.ts";
 import { parseScopeId, scopeId } from "../types.ts";
@@ -73,18 +74,6 @@ function canonicalPath(req: IncomingMessage, pathname: string): boolean {
   return (req.url ?? "/").split("?", 1)[0] === pathname && !pathname.split("%").slice(1).some(needlessEscape);
 }
 
-function capabilityFromHeaders(req: IncomingMessage): string | null {
-  const h = req.headers[CAPABILITY_HEADER];
-  return typeof h === "string" && h ? h : null;
-}
-
-function bearerFromHeaders(req: IncomingMessage): string | null {
-  const apiKey = req.headers["x-api-key"];
-  if (typeof apiKey === "string" && apiKey) return apiKey;
-  const bearer = /^Bearer\s+(\S+)$/i.exec(req.headers.authorization ?? "");
-  return bearer?.[1] ?? null;
-}
-
 interface GateResult {
   body: unknown;
   capability: CapabilityClaims | null;
@@ -120,13 +109,12 @@ async function verifyCapability(
   required: { aud: string; bearer?: true } | null,
 ): Promise<CapabilityClaims | null> {
   const requiredAud = required?.aud ?? null;
-  const capToken = capabilityFromHeaders(req) ?? (required?.bearer ? bearerFromHeaders(req) : null);
+  const capToken = capabilityToken(req, required?.bearer === true);
   if (!capToken) {
     sendJson(res, 401, { error: "unauthorized", message: `${requiredAud} capability token required` });
     return null;
   }
-  const capSecret = deps.capabilitySecret ?? secret;
-  const capability = capSecret ? await verifyCapabilityToken(capToken, capSecret) : null;
+  const capability = await requestCapability(req, capToken, deps.capabilitySecret ?? secret);
   if (!capability) {
     sendJson(res, 401, { error: "unauthorized", message: "invalid or expired capability token" });
     return null;
@@ -206,7 +194,7 @@ async function gate(
   const requiredAuth = typeof routeAuth === "object" ? routeAuth : null;
   const requiredAud = requiredAuth?.aud ?? null;
   let capability: CapabilityClaims | null = null;
-  const capToken = capabilityFromHeaders(req);
+  const capToken = capabilityToken(req, false);
   if (isPublicRoute) {
     void isPublicRoute;
   } else if (requiredAud || capToken) {
@@ -477,6 +465,8 @@ function buildFastify(wiring: Wiring, server: Server): { fastify: FastifyInstanc
 
 type ServerOptions = Omit<ServerDeps, "control">;
 
+type Matched<C extends BaseCtx> = { route: Route<C>; params: Record<string, string> } | null;
+
 function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boolean): Server {
   const requirePortalIdentity = Boolean(deps.requireSignedPortalIdentity || deps.production);
   if (deps.signingSecret && !deps.replayDedupe) throw new Error("source auth requires a replay dedupe store");
@@ -505,9 +495,30 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
   server.keepAliveTimeout = 5_000;
   server.maxConnections = 1024;
 
+  const capabilitySecret = deps.capabilitySecret ?? deps.signingSecret;
   async function front(req: IncomingMessage, res: ServerResponse): Promise<void> {
     armBodyDeadline(req, deps.requestBodyDeadlineMs ?? 30_000);
     const base = baseCtx(req, res, wiring);
+    const raw = findRoute(rawRoutes, base.method, base.pathname);
+    const matched = raw ? null : findRoute(apiRoutes, base.method, base.pathname);
+    const route = (raw ?? matched)?.route;
+    await withRequestTenant(
+      req,
+      res,
+      route,
+      capabilitySecret,
+      () => app.bootTenant(),
+      () => serve(req, res, base, raw, matched),
+    );
+  }
+
+  async function serve(
+    req: IncomingMessage,
+    res: ServerResponse,
+    base: BaseCtx,
+    raw: Matched<BaseCtx>,
+    matched: Matched<ApiCtx>,
+  ): Promise<void> {
     if (await proxyDeploymentSubdomain(base)) {
       nameRequest(base.method, "/deployment-proxy/*");
       return;
@@ -516,7 +527,6 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
       sendJson(res, 404, { error: "not_found", message: `${base.method} ${base.pathname}` });
       return void req.resume();
     }
-    const raw = findRoute(rawRoutes, base.method, base.pathname);
     if (raw) {
       if ("path" in raw.route) nameRequest(base.method, raw.route.path);
       const routeAuth = raw.route.auth;
@@ -527,11 +537,10 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
       await run(raw.route, raw.params, base);
       return;
     }
-    const matched = findRoute(apiRoutes, base.method, base.pathname);
     if (matched && "path" in matched.route) nameRequest(base.method, matched.route.path);
     const routeAuth = matched?.route.auth;
     const acceptsSourceAuth = !matched || routeAuth === "source" || routeAuth === "either";
-    if (wiring.secret && !capabilityFromHeaders(req) && routeAuth !== "public" && acceptsSourceAuth) {
+    if (wiring.secret && !capabilityToken(req, false) && routeAuth !== "public" && acceptsSourceAuth) {
       const timestamp = Number(req.headers["x-timestamp"] ?? 0);
       if (
         !Number.isFinite(timestamp) ||
