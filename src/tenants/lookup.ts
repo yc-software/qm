@@ -1,6 +1,4 @@
 import type { PgMigrationDefinition, PgPool } from "../persistence/pg-pool.ts";
-import { loadTenant } from "./cache.ts";
-import { withTenant } from "./context.ts";
 
 const ACTIVE = `json->>'disabled' IS DISTINCT FROM 'true'`;
 
@@ -98,11 +96,4 @@ export function tenantLookup(pg: Pick<PgPool, "q">): TenantLookup {
       return rows.map((row) => String(row.tenant));
     },
   };
-}
-
-export function inTenant<T>(tenant: string, fn: () => Promise<T>): Promise<T> {
-  return withTenant(tenant, async () => {
-    await loadTenant();
-    return fn();
-  });
 }

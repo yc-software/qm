@@ -1,6 +1,6 @@
 import { sendJson } from "../../http.ts";
 import { bearerToken } from "../../request-tenant.ts";
-import { inTenant } from "../../../tenants/lookup.ts";
+import { inTenant } from "../../../tenants/claim.ts";
 import { audit, authorizeAdmin, orgScope } from "../shared.ts";
 import type { ApiCtx } from "../route.ts";
 import { errMessage } from "../../../util/errors.ts";

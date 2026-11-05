@@ -1,5 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { inTenant, type TenantLookup } from "../tenants/lookup.ts";
+import { inTenant } from "../tenants/claim.ts";
+import type { TenantLookup } from "../tenants/lookup.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { Loop, LoopItem } from "./types.ts";
