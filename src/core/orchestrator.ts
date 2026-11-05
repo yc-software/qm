@@ -59,6 +59,7 @@ import { scopeId as toScopeId, personalScope } from "../types.ts";
 import { desktopClientForTurn, introducesPerson, isSessionTurn } from "./turn-origin.ts";
 import { resolveTurnFastMode, turnRuntimePurpose } from "./turn-options.ts";
 import { orgId } from "../config.ts";
+import { currentTenant } from "../tenants/context.ts";
 import { deriveTurnOutcome, approvalBlocksInput } from "./turn-outcome.ts";
 import { applyPromptVars, loadProtocolFile, type PromptVars } from "../resolution/prompt-vars.ts";
 import { cleanBrandingLabel, resolveBranding } from "../resolution/branding.ts";
@@ -304,11 +305,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     ttl: DIRECTORY_INDEX_TTL_MS,
   });
   async function directoryIndexFor(directory: DirectoryStore): Promise<Map<string, DirectoryMember>> {
-    const cached = directoryIndexCache.get("org");
+    const cached = directoryIndexCache.get(currentTenant());
     if (cached) return cached;
     const byId = new Map<string, DirectoryMember>();
     for (const m of await directory.list()) byId.set(personKey(m.principalId), m);
-    directoryIndexCache.set("org", byId);
+    directoryIndexCache.set(currentTenant(), byId);
     return byId;
   }
 

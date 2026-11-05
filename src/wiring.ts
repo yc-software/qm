@@ -1,4 +1,5 @@
 import type { MemoryEmbedder } from "./model/embeddings.ts";
+import { onTenantLoad } from "./tenants/cache.ts";
 import { nonDeploymentCredential, withDeploymentCredentials } from "./credentials/deployment-credentials.ts";
 import { resolveEmbeddingModel } from "./model/pi-models.ts";
 import { createPostgresTeamStore, type TeamStore } from "./teams/teams.ts";
@@ -308,6 +309,7 @@ import {
 } from "./auth/capability-token.ts";
 import { createControlService } from "./api/control-service.ts";
 import { createPostgresRunStore } from "./runs/postgres-run-store.ts";
+import { withTenant } from "./tenants/context.ts";
 import type { RunSignalStore } from "./runs/run-signal-store.ts";
 import { createPostgresRunSignalStore } from "./runs/postgres-run-signal-store.ts";
 import { isTerminal, type Run, type RunStore } from "./runs/run-store.ts";
@@ -620,7 +622,6 @@ export function buildApp(
     externalMembers: artifactMap<ExternalMember>("external_members"),
     principalLinks,
   });
-  void identity.refresh().catch(reportFailureAs("startup: hydrate identity", undefined));
   const leaderLease: LeaderLease = createPostgresLeaderLease(pgArtifactMap.pool);
   const configStore = createConfigStore(config.orgId, {
     ...configStoreMaps(artifactMap),
@@ -628,7 +629,6 @@ export function buildApp(
     defaultSharingPosture: config.sharingPosture,
     ...(config.connectorSecretKey ? { connectorSecretKey: config.connectorSecretKey } : {}),
   });
-  void configStore.hydrate?.().catch(reportFailureAs("startup: hydrate configuration", undefined));
   const skills: SkillStore = createSkillStore({
     backing: artifactMap<Skill>("skills", ["scopeId"]),
     advisoryLock,
@@ -1316,6 +1316,9 @@ export function buildApp(
   const refreshCustomProviders = async () => {
     setCustomProviders(await customProviders.enabled());
   };
+  const stopTenantLoad = onTenantLoad(() =>
+    Promise.all([configStore.hydrate?.(), refreshCustomProviders(), identity.refresh()]),
+  );
   const refreshModels = async () => {
     await gatewayCatalog?.refresh();
     await refreshCustomProviders();
@@ -1731,6 +1734,7 @@ export function buildApp(
   }
   const adminGrantStore = createAdminGrantStore(createPostgresAdminGrantStore(databaseUrl), {
     seed: parseAdminGrants(config.adminGrants, config.orgId) ?? [],
+    seedTenant: () => sessions.readBootTenant(),
     beforeSeed: (grants) =>
       Promise.all(grants.map((g) => users.record({ id: g.principalId, source: "admin", at: Date.now() }))),
   });
@@ -2418,7 +2422,10 @@ export function buildApp(
     for (;;) {
       const batch = await runs.pendingReturns(100, afterId);
       if (!batch.length) return sweepUnreadMailWakes(subagentMail);
-      for (const run of batch) await returnSessionRun(run).catch(swallowAs("sessions: recover return", undefined));
+      for (const run of batch)
+        await withTenant(run.tenantId, () => returnSessionRun(run)).catch(
+          swallowAs("sessions: recover return", undefined),
+        );
       afterId = batch.at(-1)!.id;
     }
   };
@@ -2910,6 +2917,7 @@ export function buildApp(
     },
     releaseInFlightRuns,
     async stop() {
+      stopTenantLoad();
       renderBasePreparing?.abort();
       const draining = drain.stop();
       await stopBackground();

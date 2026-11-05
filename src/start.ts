@@ -11,6 +11,7 @@ import { slackAccountConfigsFromEnv, slackPluginConfigFromEnv, startSlackPlugin 
 import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
 import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
 import { bindBootTenant, inBootTenant } from "./tenants/boot.ts";
+import { loadTenant } from "./tenants/cache.ts";
 
 export async function startQm(
   config: Config,
@@ -39,9 +40,7 @@ export async function startQm(
   });
 
   await inBootTenant(tenant, async () => {
-    await built.config.hydrate?.();
-    await built.refreshCustomProviders();
-    await built.identity.refresh();
+    if (tenant) await loadTenant();
     await built.deploymentLayerReady;
     built.deploymentLayerRefresh.start();
   });

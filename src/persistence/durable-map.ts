@@ -1,3 +1,4 @@
+import { perTenant } from "../tenants/cache.ts";
 import {
   createPgPool,
   withPgTransaction,
@@ -7,6 +8,7 @@ import {
 } from "./pg-pool.ts";
 import { jsonbStringify } from "../util/text.ts";
 import { tenantTables, type TenantTable, type TenantTableOptions } from "../tenants/migrations.ts";
+import { claimFunction, claimRows, type ClaimedRow } from "../tenants/claim.ts";
 
 export interface DurableMapSelect<T, K extends Extract<keyof T, string>> {
   omit?: readonly K[];
@@ -33,6 +35,7 @@ export interface DurableMap<T> {
   deleteIf(id: string, predicate: (value: T) => boolean): Promise<boolean>;
   delete(id: string): Promise<void>;
   take(id: string): Promise<T | null>;
+  claimIds(): Promise<ClaimedRow[]>;
 }
 
 const VERSIONS_TABLE = "durable_map_versions";
@@ -65,6 +68,10 @@ function mapMigrations(
     migration,
     ...VERSIONS_TENANCY,
     ...tenancy,
+    {
+      id: `durable-map/${table}/0020-claim-ids`,
+      statements: [claimFunction(`claim_${table}`, "", `SELECT tenant_id, id FROM ${table} ORDER BY tenant_id, id`)],
+    },
     ...indexedFields.flatMap((field) => {
       if (!/^[a-z_][a-z0-9_]*$/i.test(field)) throw new Error(`invalid index field: ${field}`);
       return [
@@ -131,16 +138,17 @@ export function createPostgresMap<T>(
     });
   }
   const CACHE_MAX_AGE_MS = 15_000;
-  let cache: { v: string; fetchedAt: number; entries: Array<[string, T]> } | null = null;
+  const caches = perTenant<{ last?: { v: string; fetchedAt: number; entries: Array<[string, T]> } }>(() => ({}));
   async function snapshot(): Promise<Array<[string, T]>> {
     await ready();
     const vRows = await pg.q(`SELECT v FROM ${VERSIONS_TABLE} WHERE tbl = '${table}'`);
     const v = vRows.length ? String(vRows[0]!.v) : "";
-    if (!cache || cache.v !== v || Date.now() - cache.fetchedAt > CACHE_MAX_AGE_MS) {
+    const cache = caches();
+    if (!cache.last || cache.last.v !== v || Date.now() - cache.last.fetchedAt > CACHE_MAX_AGE_MS) {
       const rows = await pg.q(`SELECT id, json FROM ${table} ORDER BY id`);
-      cache = { v, fetchedAt: Date.now(), entries: rows.map((row) => [row.id as string, row.json as T]) };
+      cache.last = { v, fetchedAt: Date.now(), entries: rows.map((row) => [row.id as string, row.json as T]) };
     }
-    return structuredClone(cache.entries);
+    return structuredClone(cache.last.entries);
   }
   async function selectRows<K extends Extract<keyof T, string>>(
     query: DurableMapSelect<T, K>,
@@ -191,6 +199,10 @@ export function createPostgresMap<T>(
       return (await selectRows(query)).map(([, value]) => value);
     },
     selectEntries: selectRows,
+    async claimIds() {
+      await ready();
+      return claimRows(pg, `claim_${table}`);
+    },
     async get(id) {
       await ready();
       const rows = await pg.q(`SELECT json FROM ${table} WHERE id = $1`, [id]);

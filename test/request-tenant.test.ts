@@ -13,6 +13,7 @@ import { boundTenant, withTenant } from "../src/tenants/context.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testMigratedDatabaseUrl } from "./support/test-database.ts";
+import { ownerUrl, TEST_TENANT } from "./support/test-tenant.ts";
 
 const SECRET = "request-tenant-capability-secret".repeat(2);
 const a = randomUUID();
@@ -103,12 +104,11 @@ async function serve(databaseUrl: string): Promise<{ get: (path: string) => Prom
 
 test("an install with one tenant serves requests bound to it and refuses them once a second exists", async () => {
   const databaseUrl = testMigratedDatabaseUrl();
+  const db = new pg.Pool({ connectionString: ownerUrl(databaseUrl).toString() });
+  await db.query("DELETE FROM tenants WHERE id <> $1", [TEST_TENANT]);
   const single = await serve(databaseUrl);
-  const db = new pg.Pool({ connectionString: databaseUrl });
   try {
-    const rows = (await db.query("SELECT id::text AS id FROM tenants")).rows as { id: string }[];
-    assert.equal(rows.length, 1);
-    assert.equal(await buildApp(testConfig({ databaseUrl })).app.readBootTenant(), rows[0]!.id);
+    assert.equal(await buildApp(testConfig({ databaseUrl })).app.readBootTenant(), TEST_TENANT);
     assert.notEqual(await single.get("/v1/deliveries"), 401);
     await db.query("INSERT INTO tenants(id) VALUES ($1)", [randomUUID()]);
     const multi = await serve(databaseUrl);

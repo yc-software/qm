@@ -38,7 +38,23 @@ const TENANT_ROW_SECURITY: PgMigrationDefinition = {
   ],
 };
 
-export const TENANCY: readonly PgMigrationDefinition[] = [TENANCY_BASE, TENANT_SETTINGS, TENANT_ROW_SECURITY];
+const BOOT_TENANT: PgMigrationDefinition = {
+  id: "0000-tenancy/boot-tenant",
+  statements: [
+    `CREATE OR REPLACE FUNCTION qm_boot_tenant() RETURNS uuid LANGUAGE sql STABLE SECURITY DEFINER
+      SET search_path = pg_catalog, public AS $qm_boot_tenant$
+      SELECT CASE WHEN count(*) = 1 THEN (array_agg(id))[1] END FROM (SELECT id FROM public.tenants LIMIT 2) one
+    $qm_boot_tenant$`,
+    `GRANT EXECUTE ON FUNCTION qm_boot_tenant() TO PUBLIC`,
+  ],
+};
+
+export const TENANCY: readonly PgMigrationDefinition[] = [
+  TENANCY_BASE,
+  TENANT_SETTINGS,
+  TENANT_ROW_SECURITY,
+  BOOT_TENANT,
+];
 
 export interface TenantKey {
   name: string;

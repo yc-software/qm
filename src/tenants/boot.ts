@@ -4,8 +4,8 @@ import { withTenant } from "./context.ts";
 export function bootTenantReader(db: Pick<PgPool, "q">): () => Promise<string | undefined> {
   let read: Promise<string | undefined> | undefined;
   return () =>
-    (read ??= db.q("SELECT id::text AS id FROM tenants LIMIT 2").then(
-      (rows) => (rows.length === 1 ? (rows[0]!.id as string) : undefined),
+    (read ??= db.q("SELECT qm_boot_tenant()::text AS id").then(
+      (rows) => (rows[0]?.id as string | null) ?? undefined,
       (error: unknown) => {
         read = undefined;
         throw error;

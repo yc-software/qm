@@ -1,6 +1,7 @@
 import { unitVector, type MemoryEmbedder } from "../model/embeddings.ts";
 import type { LeaderLease } from "../persistence/leader-lease.ts";
 import { reportFailure } from "../util/errors.ts";
+import { perTenant } from "../tenants/cache.ts";
 import type { MemoryVectorStore } from "./postgres-vector-store.ts";
 
 export function createMemoryVectorIndexer(opts: {
@@ -14,10 +15,9 @@ export function createMemoryVectorIndexer(opts: {
   const onError = opts.onError ?? ((error: unknown) => reportFailure("memory vector index", error));
   let pending: Promise<void> | undefined;
   let active: AbortController | undefined;
-  let model: string | undefined;
-  let dimensions: number | undefined;
-  let afterId: string | undefined;
-  let nextProbeAt = 0;
+  const indexState = perTenant<{ model?: string; dimensions?: number; afterId?: string; nextProbeAt: number }>(() => ({
+    nextProbeAt: 0,
+  }));
   async function run(): Promise<void> {
     const controller = (active = new AbortController());
     await opts.leaderLease.hold("memory:vector-index", async (lost) => {
@@ -27,22 +27,23 @@ export function createMemoryVectorIndexer(opts: {
       const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(60_000)]);
       signal.throwIfAborted();
       const { embedder, store } = current;
+      const state = indexState();
       const now = (opts.now ?? Date.now)();
-      if (model !== embedder.id || dimensions === undefined || now >= nextProbeAt) {
+      if (state.model !== embedder.id || state.dimensions === undefined || now >= state.nextProbeAt) {
         const probe = await embedder.embed(["Memory index dimension probe."], signal);
         if (probe.length !== 1) throw new Error("Invalid memory index dimension probe");
         const width = unitVector(probe[0]).length;
         if (width > 16000) throw new Error("Memory embedding exceeds pgvector dimensions");
-        if (model !== embedder.id || dimensions !== width) afterId = undefined;
-        model = embedder.id;
-        dimensions = width;
-        nextProbeAt = now + 10 * 60_000;
+        if (state.model !== embedder.id || state.dimensions !== width) state.afterId = undefined;
+        state.model = embedder.id;
+        state.dimensions = width;
+        state.nextProbeAt = now + 10 * 60_000;
       }
       try {
         do {
           signal.throwIfAborted();
-          const facts = await store.missing(embedder.id, 64, dimensions, signal, afterId);
-          afterId = facts.at(-1)?.factId;
+          const facts = await store.missing(embedder.id, 64, state.dimensions, signal, state.afterId);
+          state.afterId = facts.at(-1)?.factId;
           if (!facts.length) break;
           const vectors = await embedder.embed(
             facts.map((fact) => fact.text.slice(0, 8000)),
@@ -56,10 +57,10 @@ export function createMemoryVectorIndexer(opts: {
             model: embedder.id,
             vector: unitVector(vectors[i]),
           }));
-          if (rows.some((row) => row.vector.length !== dimensions)) {
-            dimensions = undefined;
-            nextProbeAt = 0;
-            afterId = undefined;
+          if (rows.some((row) => row.vector.length !== state.dimensions)) {
+            state.dimensions = undefined;
+            state.nextProbeAt = 0;
+            state.afterId = undefined;
             throw new Error("Memory embedding dimensions changed during indexing");
           }
           signal.throwIfAborted();
@@ -67,7 +68,7 @@ export function createMemoryVectorIndexer(opts: {
           if (facts.length < 64) break;
         } while ((opts.now ?? Date.now)() - now < 20_000);
       } finally {
-        if (!signal.aborted) await store.prune(embedder.id, 200, dimensions, signal).catch(onError);
+        if (!signal.aborted) await store.prune(embedder.id, 200, state.dimensions, signal).catch(onError);
       }
     });
   }
