@@ -55,6 +55,7 @@ export interface TriggerSpec extends Pick<TurnRequest, "model" | "fastMode" | "a
   readOnly?: boolean;
   turnWallClockMs?: number;
   errorNotice?: (noteOrStatus: string) => string;
+  redrivesHandOff?: boolean;
   onClaimed?: () => Promise<void>;
 }
 
@@ -319,7 +320,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       idempotencyKey: spec.fireKey,
     });
     if (res.status === "queued") {
-      await sendErrorNotice(userFacingFailureClause(res));
+      if (!spec.redrivesHandOff) await sendErrorNotice(userFacingFailureClause(res));
       throw new TransientTurnFailure(`turn ${res.runId ?? ""} was still waiting to finish when this process shut down`);
     }
     status = res.status;

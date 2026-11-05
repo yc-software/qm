@@ -1,7 +1,7 @@
 import type { ModelUtilities } from "../../agent/agent.ts";
 import type { MemoryService, MemoryCaptureContext } from "../memory-service.ts";
 import type { MemoryStrategy } from "../strategy.ts";
-import { isSystemActor, type ScopeId } from "../../types.ts";
+import type { ScopeId } from "../../types.ts";
 import { bullets } from "../notebook.ts";
 import { parseSensitivity, SENSITIVITY_PROMPT } from "../classification.ts";
 import { UNTRACKED_PROVENANCE, type MemoryCaptureMetadata } from "../facts.ts";
@@ -72,7 +72,6 @@ type TurnEndCtx = MemoryCaptureMetadata & {
   input: string;
   reply: string;
   actorId?: string;
-  autonomous?: boolean;
   conversationScopeId?: ScopeId;
   sessionId?: string;
   idempotencyKey?: string;
@@ -85,18 +84,7 @@ function createBurstBuffer(
   onError?: (e: unknown, burst: Burst) => void,
 ): (ctx: TurnEndCtx) => Promise<void> {
   const bursts = new Map<string, Burst>();
-  return async ({
-    scopeId,
-    input,
-    reply,
-    actorId,
-    autonomous,
-    conversationScopeId,
-    sessionId,
-    idempotencyKey,
-    inheritedFacts,
-  }) => {
-    if (autonomous === true || isSystemActor(actorId)) return;
+  return async ({ scopeId, input, reply, actorId, conversationScopeId, sessionId, idempotencyKey, inheritedFacts }) => {
     const burst: Burst = {
       scopeId,
       conversationScopeId: conversationScopeId ?? scopeId,

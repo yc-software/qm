@@ -20,6 +20,7 @@ import {
   requiresDelegation,
   delegatedAuthorizationOrigin,
   ownsSessionContext,
+  isSubagentThreadRef,
   sessionContextOf,
 } from "../sessions/session-syscalls.ts";
 import {
@@ -56,7 +57,7 @@ import type {
   PendingApprovalRecord,
 } from "../types.ts";
 import { scopeId as toScopeId, personalScope } from "../types.ts";
-import { desktopClientForTurn, introducesUser, isSessionTurn } from "./turn-origin.ts";
+import { desktopClientForTurn, introducesUser, isPersonAuthored, isSessionTurn } from "./turn-origin.ts";
 import { resolveTurnFastMode, turnRuntimePurpose } from "./turn-options.ts";
 import { orgId } from "../config.ts";
 import { deriveTurnOutcome, approvalBlocksInput } from "./turn-outcome.ts";
@@ -498,6 +499,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const humanTurn = input.origin.kind === "human";
       const sessionTurn = isSessionTurn(input);
       const humanInput = humanTurn && !sessionTurn;
+      const personConversationTurn =
+        isPersonAuthored(input.origin.kind) &&
+        !sessionTurn &&
+        !isSubagentThreadRef(conversation.threadRef) &&
+        !input.botActor &&
+        !input.proactiveOpener;
       const allInternal =
         deps.identity.audienceIsAllInternal(conversation.audience) &&
         (conversation.kind === "dm" ||
@@ -531,10 +538,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           reason: "internal-only: non-internal principals cannot interact",
         };
       }
-      const delegatedSession = conversation.threadRef.startsWith("agent:main:subagent:")
+      const delegatedSession = isSubagentThreadRef(conversation.threadRef)
         ? await deps.sessions.getByThread(conversation.threadRef)
         : null;
-      if (conversation.threadRef.startsWith("agent:main:subagent:")) {
+      if (isSubagentThreadRef(conversation.threadRef)) {
         const canWrite = createCanWriteScope({
           managedGroups: deps.managedGroups
             ? {
@@ -1959,6 +1966,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             memoryRecallQuery(input.text, history),
             loadedFacts,
             (outcome) => void recallOutcomes.push(outcome),
+            isPersonAuthored(input.origin.kind) && !sessionTurn ? titleText : undefined,
           );
         const importsOverheard = (!input.envelopeWrapped || humanInput) && !!input.overheard?.length;
         const earlyRecall =
@@ -3703,7 +3711,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (input.runId && !pausing && reply && reply.trim()) deps.turnStream?.markReplyDone(input.runId);
         const turnUserSeq = partial?.userSeq ?? emittedEntries.find(isUserItem)?.seq;
         const onTurnEnd = memoryStrategy.onTurnEnd?.bind(memoryStrategy);
-        if (!pausing && !cancelStopped && useMemory && memoryPolicy.capture !== "off" && onTurnEnd) {
+        if (
+          !pausing &&
+          !cancelStopped &&
+          personConversationTurn &&
+          useMemory &&
+          memoryPolicy.capture !== "off" &&
+          onTurnEnd
+        ) {
           const prior = pendingCaptures.get(memoryScopeId);
           const capture = (async () => {
             if (prior) await prior.catch(swallowAs("prior memory capture", undefined));
@@ -3715,7 +3730,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 input: turnInput,
                 reply,
                 actorId: actor.id,
-                ...(automatedTurn ? { autonomous: true } : {}),
                 sessionId: session.id,
                 idempotencyKey: input.runId ?? `${session.id}:${spine.turnUserEntrySeq ?? "turn"}`,
               });

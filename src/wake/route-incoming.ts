@@ -34,7 +34,7 @@ export type LiveTurn =
   | { kind: "descendants"; actorIds: string[] };
 
 export interface IncomingPrefs {
-  midTurn: "steer" | "queue";
+  midTurn?: "steer" | "queue";
 }
 
 type TurnReason =
@@ -93,7 +93,8 @@ export function routeIncoming(message: Incoming, live: LiveTurn | null, prefs: I
     (message.modelAccount === "company" || message.actorId === live.actorId);
   if (!sameAccount) return { kind: "turn", reason: "account" };
   if (!live.handlesThisMessage) {
-    if (live.origin === "automation" && message.person) return { kind: "turn", reason: "automation-live" };
+    if (live.origin === "automation" && message.person && prefs.midTurn !== "steer")
+      return { kind: "turn", reason: "automation-live" };
     if (live.origin === "ambient" && message.origin === "human") return { kind: "turn", reason: "unprompted-live" };
     if (prefs.midTurn === "queue") return { kind: "turn", reason: "queue-preference" };
   }

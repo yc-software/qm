@@ -340,7 +340,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
         routed: false,
       },
       liveTurnOf(live),
-      { midTurn: "steer" },
+      {},
     );
     if (route.kind !== "steer") return false;
     await h.steerRun(live, {

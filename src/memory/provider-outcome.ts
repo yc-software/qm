@@ -24,7 +24,10 @@ export const reportEnvelope = (envelope: McpEnvelope) => envelopes.getStore()?.(
 
 export async function withEnvelope<T>(run: () => Promise<T>): Promise<{ value: T; envelope: McpEnvelope }> {
   let envelope: McpEnvelope = {};
-  const value = await envelopes.run((received) => void (envelope = received), run);
+  const value = await envelopes.run(
+    (received) => void (envelope = envelope.status === "pending" ? { ...received, status: "pending" } : received),
+    run,
+  );
   return { value, envelope };
 }
 
@@ -71,7 +74,9 @@ function problemOf(outcome: MemoryProviderOutcome, write: boolean): MemoryProvid
         code: "memory_provider_timeout",
         provider,
         detail: `Memory provider ${provider} timed out after ${ms}ms, so ${lost}.`,
-        fix: `Raise ${provider}'s timeoutMs in MEMORY_PROVIDER_CONFIG or check its latency.`,
+        fix: write
+          ? `Check ${provider}'s latency, and whether it stored the facts before sending them again.`
+          : `Raise ${provider}'s timeoutMs in MEMORY_PROVIDER_CONFIG or check its latency.`,
       };
     case "failed":
       return {

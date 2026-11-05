@@ -342,6 +342,20 @@ test("a wake whose turn didn't complete is reported to the destination, not sile
   assert.match(after?.lastError ?? "", /rate limit/);
 });
 
+test("a wake handed off at shutdown posts no failure notice and re-runs the same event on the next poll", async () => {
+  const h = await agent({ result: { status: "queued", sessionId: "s1", runId: "r1" } });
+  const m = await h.arm();
+  h.append("p-1", "line\n");
+  await h.poller.tick();
+  assert.deepEqual(await h.deliveries.pending("slack"), []);
+  assert.equal((await h.monitors.get(m.id))?.cursor, 0);
+  await h.poller.tick();
+  assert.deepEqual(
+    h.calls.map((c) => c.idempotencyKey),
+    [`monitor:${m.id}:0`, `monitor:${m.id}:0`],
+  );
+});
+
 test("a non-leader instance does not poll", async () => {
   const lease: LeaderLease = {
     async hold() {
