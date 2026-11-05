@@ -456,13 +456,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (items.length === 0) return null;
       const transcript = renderTitleTranscript(items);
       const fallbackEntry = items.find((item) => isUserItem(item) && !isOverheard(item));
-      const title = await titles.generateAndStore(
-        session.id,
-        session.scopeId,
-        transcript,
-        personal ? principalId : undefined,
-        fallbackEntry ? visibleTitleEntryText(fallbackEntry) : undefined,
-      );
+      const title = await titles.generateAndStore(session.id, session.scopeId, transcript, {
+        ...(personal ? { principalId } : {}),
+        ...(fallbackEntry ? { fallbackText: visibleTitleEntryText(fallbackEntry) } : {}),
+        descriptive:
+          (await deps.featureFlags?.enabled("descriptive_session_titles", personalScope(principalId))) === true,
+      });
       return { title: title ?? (personal ? null : (session.title ?? null)) };
     },
 
@@ -513,6 +512,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         input.origin.kind === "ambient" && input.origin.live === true && conversation.kind !== "dm";
       const actorFeatures = (await deps.featureFlags?.enabledFor(personalScope(actor.id))) ?? new Set<FeatureName>();
       const delegationEnabled = !external && actorFeatures.has("responsive_spine");
+      const descriptiveTitles = actorFeatures.has("descriptive_session_titles");
       const delegatedOrigin =
         !external && deps.runs
           ? await delegatedAuthorizationOrigin(input, { runs: deps.runs, sessions: deps.sessions })
@@ -1249,10 +1249,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         (input.proactiveOpener && !input.text.trim()) ||
         ((automatedTurn || (sessionTurn && input.envelopeWrapped)) && !delegatedTask);
       const titleText = input.displayText?.trim() || input.text;
-      let fallbackTitleWrite: Promise<void> | undefined;
+      let firstMessageTitle: ReturnType<typeof titles.titleFromFirstMessage>;
       const assignSessionTitle = () => {
         if (!session.title && !syntheticInput && !input.approval)
-          fallbackTitleWrite = titles.titleFromFirstMessage(session, scopeId, titleText);
+          firstMessageTitle = titles.titleFromFirstMessage(session, scopeId, titleText, descriptiveTitles);
       };
 
       const isRetry = (input.attempt ?? 1) > 1;
@@ -3754,8 +3754,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
         const tail = async (): Promise<void> => {
           try {
-            if (!pausing && turnCompleted && !session.title && !fallbackTitleWrite) {
-              await titles.generateAndStore(session.id, scopeId, `User:\n${titleText}\n\nAssistant:\n${result.reply}`);
+            if (
+              !pausing &&
+              turnCompleted &&
+              !session.title &&
+              (!firstMessageTitle || (descriptiveTitles && !(await firstMessageTitle.generated)))
+            ) {
+              await titles.generateAndStore(session.id, scopeId, `User:\n${titleText}\n\nAssistant:\n${result.reply}`, {
+                descriptive: descriptiveTitles,
+              });
             }
           } finally {
             await reclaimBox();
@@ -3846,7 +3853,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (turnRuntime) finalResult = { ...finalResult, runtime: turnRuntime };
         if (cronScript) finalResult = { ...finalResult, scriptVerdict: cronScript.verdict };
         if (turnRuntime) await deps.sessions.setRuntime(session.id, turnRuntime);
-        await fallbackTitleWrite;
+        await firstMessageTitle?.written;
 
         tailOwnsCleanup = true;
         await catchUpMessageRevisions();
