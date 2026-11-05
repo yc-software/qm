@@ -55,6 +55,7 @@ function mapMigrations(
   table: string,
   indexedFields: readonly string[],
   tenancy: readonly PgMigrationDefinition[],
+  extraMigrations: readonly PgMigrationDefinition[],
 ): PgMigrationDefinition[] {
   if (!/^[a-z_][a-z0-9_]*$/i.test(table)) throw new Error(`invalid table name: ${table}`);
   const migration = {
@@ -66,6 +67,7 @@ function mapMigrations(
   };
   return [
     migration,
+    ...extraMigrations,
     ...VERSIONS_TENANCY,
     ...tenancy,
     {
@@ -113,8 +115,9 @@ export function createPostgresMap<T>(
   table: string,
   indexedFields: readonly Extract<keyof T, string>[] = [],
   tenancy: readonly PgMigrationDefinition[] = durableMapTenancy(table),
+  extraMigrations: readonly PgMigrationDefinition[] = [],
 ): DurableMap<T> {
-  const migrations = mapMigrations(table, indexedFields, tenancy);
+  const migrations = mapMigrations(table, indexedFields, tenancy, extraMigrations);
   for (const definition of migrations) pg.registerMigration(definition);
   let readyP: Promise<void> | null = null;
   function ready(): Promise<void> {

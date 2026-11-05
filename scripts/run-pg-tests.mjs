@@ -141,6 +141,8 @@ await migrateTemplate().catch(async (error) => {
   }
   throw error;
 });
+await admin.query(`ALTER DATABASE ${templateName} WITH ALLOW_CONNECTIONS false`);
+await admin.query("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1", [templateName]);
 const results = [];
 let next = 0;
 const work = Promise.all(

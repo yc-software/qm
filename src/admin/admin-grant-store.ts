@@ -33,7 +33,6 @@ export interface AdminGrantStore {
 export interface AdminGrantStoreOptions {
   seed?: AdminGrant[];
   seedTenant?: () => Promise<string | undefined>;
-  beforeSeed?: (grants: readonly AdminGrant[]) => Promise<unknown>;
 }
 
 export function createAdminGrantStore(
@@ -48,7 +47,6 @@ export function createAdminGrantStore(
       const done = (async () => {
         if (!seeds.length || (await opts.seedTenant?.()) !== currentTenant()) return;
         if ((await persist.all()).length > 0) return;
-        await opts.beforeSeed?.(seeds);
         for (const g of seeds) await persist.put({ grantedBy: "system", createdAt: 0, ...g });
       })().catch((e) => {
         state.done = undefined;
