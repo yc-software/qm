@@ -9,9 +9,16 @@ export function approvalDeliveryKey(id: string, record: Pick<PendingApprovalReco
   return `command-approval:${id}:${record.createdAt ?? 0}`;
 }
 
-export function approvalDeliveryRecipient(actor: { externalId?: string } | undefined): string | undefined {
-  const id = actor?.externalId;
-  return id && !id.startsWith("system:") ? id : undefined;
+export interface ApprovalRequester {
+  actor?: { externalId?: string };
+  surfaceOrigin?: { author?: { surface?: string; id?: string } };
+}
+
+export function approvalDeliveryRecipient(request: ApprovalRequester | undefined): string | undefined {
+  const id = request?.actor?.externalId;
+  if (!id || id.startsWith("system:")) return undefined;
+  const author = request?.surfaceOrigin?.author;
+  return author?.surface === "slack" && author.id ? author.id : id;
 }
 
 export function createApprovalStore(
@@ -20,13 +27,15 @@ export function createApprovalStore(
 ) {
   async function deliver(id: string, record: PendingApprovalRecord): Promise<void> {
     if (record.request?.surface !== "slack") return;
-    const actorId = approvalDeliveryRecipient(record.request.actor);
-    if (!actorId) return;
+    const actorId = record.request.actor.externalId;
+    const recipient = approvalDeliveryRecipient(record.request);
+    if (!actorId || !recipient) return;
     const origin = record.request.surfaceOrigin;
     const threadTs = record.request.conversation?.kind === "dm" ? origin?.replyThread : undefined;
     await deliveries.enqueue({
       destination: {
         ...principalDestination(actorId, actorId),
+        target: recipient,
         commandApprovalId: id,
         ...(threadTs ? { threadTs } : {}),
         ...(origin ? { account: { id: origin.author.account, workspace: origin.workspace } } : {}),
