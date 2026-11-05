@@ -28,7 +28,17 @@ export const TENANT_SETTINGS: PgMigrationDefinition = {
   ],
 };
 
-export const TENANCY: readonly PgMigrationDefinition[] = [TENANCY_BASE, TENANT_SETTINGS];
+const TENANT_ROW_SECURITY: PgMigrationDefinition = {
+  id: "0000-tenancy/tenant-row-security",
+  statements: [
+    `SET LOCAL lock_timeout = '5s'`,
+    `ALTER TABLE tenants ENABLE ROW LEVEL SECURITY`,
+    `DROP POLICY IF EXISTS tenant_isolation ON tenants`,
+    `CREATE POLICY tenant_isolation ON tenants FOR SELECT USING (id = qm_bound_tenant())`,
+  ],
+};
+
+export const TENANCY: readonly PgMigrationDefinition[] = [TENANCY_BASE, TENANT_SETTINGS, TENANT_ROW_SECURITY];
 
 export interface TenantKey {
   name: string;
@@ -68,7 +78,7 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM tenants) THEN
       INSERT INTO tenants DEFAULT VALUES;
     END IF;
-    SELECT id INTO STRICT existing FROM tenants;
+    SELECT id INTO existing FROM tenants ORDER BY created_at, id LIMIT 1;
   END IF;
   EXECUTE format('ALTER TABLE ${table} ADD COLUMN tenant_id UUID NOT NULL DEFAULT %L', existing);
 END $tenant_column$`;

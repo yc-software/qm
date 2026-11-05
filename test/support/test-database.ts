@@ -5,6 +5,7 @@ import { createAdminGrantStore, type AdminGrant, type AdminGrantStore } from "..
 import { createPostgresAdvisoryLock, type AdvisoryLock } from "../../src/persistence/advisory-lock.ts";
 import { createPostgresMapFactory, type DurableMap } from "../../src/persistence/durable-map.ts";
 import { createPgPool, type PgPool } from "../../src/persistence/pg-pool.ts";
+import { APP_ROLE, boundUrl, ownerUrl } from "./test-tenant.ts";
 import { DEPLOYMENT_TABLES } from "../../src/deploy/deployment-tables.ts";
 import { configStoreMaps, createConfigStore } from "../../src/resolution/config-store.ts";
 import { orgId } from "../../src/config.ts";
@@ -14,7 +15,7 @@ import { createPostgresUserStore } from "../../src/identity/user-store.ts";
 function baseDatabaseUrl(): URL {
   const base = process.env.DATABASE_URL;
   if (!base) throw new Error("Set DATABASE_URL to a Postgres server the tests may create databases on");
-  return new URL(base);
+  return ownerUrl(base);
 }
 
 let databaseWorker: { worker: Worker; signal: Int32Array; port: MessagePort } | undefined;
@@ -51,13 +52,13 @@ function databaseUrl(name: string): string {
 }
 
 export function testDatabaseUrl(): string {
-  return databaseUrl(createDatabaseSync({}));
+  return boundUrl(databaseUrl(createDatabaseSync({})));
 }
 
 export function testMigratedDatabaseUrl(): string {
   const template = process.env.QM_TEST_TEMPLATE_DATABASE;
   if (!template) throw new Error("QM_TEST_TEMPLATE_DATABASE is unset: run tests through scripts/run-pg-tests.mjs");
-  return databaseUrl(createDatabaseSync({ template }));
+  return boundUrl(databaseUrl(createDatabaseSync({ template })), APP_ROLE);
 }
 
 let shared: { url: string; maps: ReturnType<typeof createPostgresMapFactory> } | undefined;
