@@ -203,6 +203,33 @@ test("a disabled binding gives a problem line and never calls the brain", async 
   assert.deepEqual(brain.calls, []);
 });
 
+test("a disabled binding stays quiet in a conversation that would withhold its brain", async (t) => {
+  const brain = await startBrain(t);
+  const url = testDatabaseUrl();
+  const registry = stores(url);
+  const memory = createRegistryMemoryService({ defaultMemory: createPostgresMemoryService(url), registry });
+  await registry.update(personalBrain(brain.url, {}));
+  await registry.update((record) =>
+    putBinding(record, "alice", { brain: "acme-personal", scope: "personal:U1" }, change),
+  );
+  const actor = { id: "U1", type: "internal" as const };
+  const problems = async (targetScope: string) =>
+    (
+      await withProviders("search", (report) =>
+        memory.withDisclosure!({
+          actor,
+          targetScope,
+          nativeScopes: [targetScope],
+          audience: [actor],
+          open: true,
+        }).query("personal:U1", "anything", 5, { actorId: "U1", report }),
+      )
+    ).problems.map(({ code }) => code);
+  assert.deepEqual(await problems("personal:U1"), ["memory_provider_disabled"]);
+  assert.deepEqual(await problems("channel:C1"), []);
+  assert.deepEqual(brain.calls, []);
+});
+
 test("a disabled binding reports a problem only for writes a served binding would send", async (t) => {
   const brain = await startBrain(t);
   const url = testDatabaseUrl();

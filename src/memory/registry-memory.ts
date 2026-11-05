@@ -1,7 +1,7 @@
 import type { Item } from "../sessions/items.ts";
 import { SCOPE_KINDS, type ScopeId } from "../types.ts";
 import { reportFailure } from "../util/errors.ts";
-import { disclosedMemory, type MemoryDisclosure } from "./disclosure.ts";
+import { disclosedMemory, scopeDisclosed, type MemoryDisclosure } from "./disclosure.ts";
 import type { MemoryRecallContext, MemoryService } from "./memory-service.ts";
 import type { MemoryProviderConfig } from "./provider-config.ts";
 import { createMemoryProviders, logMemoryProviderError } from "./provider-factory.ts";
@@ -93,17 +93,24 @@ export function createRegistryMemoryService(opts: {
       if (!disclosed) views.set(served.service, (disclosed = disclosedMemory(served.service, access)));
       return { ...served, service: disclosed };
     };
-    const reads = (route: DisabledRegistryRoute) => route.recall !== false;
+    const flagReads = async (
+      disabled: readonly DisabledRegistryRoute[],
+      scopeId: ScopeId,
+      context: Pick<MemoryRecallContext, "report"> | undefined,
+    ) => {
+      if (disabled.length && (!access || (await scopeDisclosed(access, scopeId))))
+        flag(disabled, scopeId, context, (route) => route.recall !== false);
+    };
     return {
       withDisclosure: (next) => view(next),
       async recall(scopeId, context) {
         const { service, disabled } = await serve();
-        flag(disabled, scopeId, context, reads);
+        await flagReads(disabled, scopeId, context);
         return service.recall(scopeId, context);
       },
       async query(scopeId, q, limit, context) {
         const { service, disabled } = await serve();
-        flag(disabled, scopeId, context, reads);
+        await flagReads(disabled, scopeId, context);
         return service.query(scopeId, q, limit, context);
       },
       async capture(scopeId, facts, at, author, context) {
