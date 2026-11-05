@@ -1085,8 +1085,8 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   let staleSession: SessionClaims | null = null;
   if (session && !session.anon && (!pathname.startsWith("/auth/") || pathname.startsWith("/auth/impersonate"))) {
     const canonical = await canonicalPrincipal(session.sub, session.t);
-    if (canonical === "rejected") {
-      console.warn("[portal] core no longer recognises this session; signing it out");
+    if (canonical instanceof IdentityRejected) {
+      console.warn(`[portal] core no longer recognises this session; signing it out: ${canonical.message}`);
       for (const cookie of signedOutCookies()) res.appendHeader("set-cookie", cookie);
       req.headers.cookie = withoutSessionCookies(req.headers.cookie);
       session = null;
