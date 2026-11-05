@@ -4,21 +4,10 @@ import type { DurableMap } from "../persistence/durable-map.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import { principalDestination } from "../reach/reach.ts";
 import { claimThenBind } from "../tenants/claim.ts";
+import { approvalDeliveryRecipient } from "./approval-cards.ts";
 
 export function approvalDeliveryKey(id: string, record: Pick<PendingApprovalRecord, "createdAt">): string {
   return `command-approval:${id}:${record.createdAt ?? 0}`;
-}
-
-export interface ApprovalRequester {
-  actor?: { externalId?: string };
-  surfaceOrigin?: { author?: { surface?: string; id?: string } };
-}
-
-export function approvalDeliveryRecipient(request: ApprovalRequester | undefined): string | undefined {
-  const id = request?.actor?.externalId;
-  if (!id || id.startsWith("system:")) return undefined;
-  const author = request?.surfaceOrigin?.author;
-  return author?.surface === "slack" && author.id ? author.id : id;
 }
 
 export function createApprovalStore(
