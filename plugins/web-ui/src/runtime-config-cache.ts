@@ -41,3 +41,8 @@ export function cacheRuntimeConfig(scopeId: string, config: RuntimeConfig | null
   if (config) configs.set(scopeId, config);
   else configs.delete(scopeId);
 }
+
+export function checkedRuntimeConfig(config: RuntimeConfig): RuntimeConfig {
+  if (!Array.isArray(config.models)) throw new Error("runtime config response has no model list");
+  return config;
+}

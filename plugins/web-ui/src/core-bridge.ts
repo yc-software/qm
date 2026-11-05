@@ -4,7 +4,7 @@ import { captureMessage, stopAnalytics } from "./product-analytics.ts";
 import { streamedAnswer } from "./timeline.ts";
 import { fetchServerSentEvents } from "@tanstack/ai-client";
 import { postCallText, postResultOk } from "./surface-post.ts";
-import type { RuntimeChange, RuntimeConfig } from "./runtime-config-cache.ts";
+import { checkedRuntimeConfig, type RuntimeChange, type RuntimeConfig } from "./runtime-config-cache.ts";
 import type { ChatBrowseStatus } from "./session-list.ts";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import type { Attachment } from "@earendil-works/pi-web-ui";
@@ -948,7 +948,7 @@ export async function fetchRuntimeConfig(scopeId?: string | null, account?: "com
     if (scopeId) params.set("scopeId", scopeId);
     if (account) params.set("account", account);
     const query = params.size ? `?${params}` : "";
-    return await api<RuntimeConfig>(`/api/runtime-config${query}`);
+    return checkedRuntimeConfig(await api<RuntimeConfig>(`/api/runtime-config${query}`));
   } catch (e) {
     swallow("web-ui: fetch runtime config", e);
     return null;
@@ -956,10 +956,11 @@ export async function fetchRuntimeConfig(scopeId?: string | null, account?: "com
 }
 
 export async function updateRuntimeConfig(scopeId: string | null, change: RuntimeChange): Promise<RuntimeConfig> {
-  return api<RuntimeConfig>("/api/runtime-config", {
+  const config = await api<RuntimeConfig>("/api/runtime-config", {
     method: "PUT",
     body: JSON.stringify({ ...change, ...(scopeId ? { scopeId } : {}) }),
   });
+  return checkedRuntimeConfig(config);
 }
 
 export type WorkObserver = (work: WorkBlock) => void;

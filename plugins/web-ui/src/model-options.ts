@@ -97,7 +97,7 @@ function buildOption(id: string, catalog: Readonly<Record<string, ModelMetadata>
 }
 
 export function runtimeModelOptions(
-  ids: readonly string[] = [],
+  ids: readonly string[],
   catalog: Readonly<Record<string, ModelMetadata>> = {},
 ): ModelOption[] {
   const seen = new Set<string>();
@@ -126,7 +126,7 @@ function runtimeFor(scopeKey?: string | null): RuntimeOptions {
   if (!options) {
     options = {
       options: runtimeModelOptions(config.models, config.modelCatalog),
-      defaultValue: config.effective?.modelId ?? null,
+      defaultValue: config.effective.modelId,
     };
     derived.set(config, options);
   }
