@@ -6,13 +6,6 @@ variable "public_url" { type = string }
 variable "core_public_hosts" {
   type    = set(string)
   default = []
-  validation {
-    condition = alltrue([
-      for host in var.core_public_hosts :
-      can(regex("^(\\*\\.)?[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$", host))
-    ])
-    error_message = "core_public_hosts entries must be normalized DNS hostnames with an optional leading wildcard"
-  }
 }
 variable "cloud_map_namespace" { type = string }
 variable "secrets_prefix" { type = string }
