@@ -228,6 +228,22 @@ test("a computer's memory size is stored and reaches every later provision and r
   assert.deepEqual(sizes, [6, 6, 6, 8, 8, 8]);
 });
 
+test("a resize the backend refuses keeps the computer's old size", async () => {
+  const sizes: Array<number | undefined> = [];
+  const { resources, router } = fixture((backend) => {
+    sizedBackend(sizes)(backend);
+    backend.restartComputer = async (_scopeId, memoryGb) => {
+      sizes.push(memoryGb);
+      throw new Error("memory must not exceed 1Ti");
+    };
+  });
+  const computer = await resources.create("alice", "personal:alice", "local", "big", undefined, undefined, 6);
+  await resources.setDefault("alice", "personal:alice", computer.id);
+  await assert.rejects(resources.restart("alice", computer.id, 2000), /must not exceed 1Ti/);
+  await router.provision("personal:alice");
+  assert.deepEqual(sizes, [6, 2000, 6]);
+});
+
 test("a memory size is refused on a backend that takes none", async () => {
   const { resources, records } = fixture();
   await assert.rejects(

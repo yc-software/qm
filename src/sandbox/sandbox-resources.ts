@@ -265,8 +265,8 @@ export function createSandboxResources(opts: {
       await use(
         id,
         async () => {
-          if (memoryGb !== undefined) await opts.records.update(id, (current) => ({ ...current, memoryGb }));
           await backend.restartComputer!(record.backingScopeId, memoryGb ?? record.memoryGb);
+          if (memoryGb !== undefined) await opts.records.update(id, (current) => ({ ...current, memoryGb }));
         },
         true,
       );
