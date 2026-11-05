@@ -172,6 +172,7 @@ function renderCronFireInput(
     "Use a cron-specific filename. Never put credentials in published state. If publication is unavailable, report that limitation and retain needed workspace state on a scoped computer. Do not move tasks that require existing workspace files to scratch without migrating and verifying their state.",
     `The retained fire log (cron tool, action="runs", id="${cron.id}") shows how prior fires went — useful when this run hits errors or surprising state.`,
     "If the task produces a briefing someone reads at a set time — a digest, summary, standup, rundown or follow-up list — post it even on a quiet run, as one line saying nothing is new. A task that checks for something and reports only when it finds it, or does upkeep, ends with finish_silently. The task's own posting rules win.",
+    "Report what you verified, not what you started: work launched in this fire and still running is not progress yet. If the counts haven't moved since the last fire, treat that as a blocker to report, not a reason to stay silent.",
     ...(readsNotes ? fireNoteLine(cron.lastFireNote) : []),
     ...(readsNotes
       ? [
