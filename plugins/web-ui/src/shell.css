@@ -5414,8 +5414,10 @@ a.connector-widget:focus-visible {
   font-size: 12px;
   color: var(--muted-foreground);
 }
+.resource-form input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]),
 .resource-form textarea {
   font: inherit;
+  font-weight: 400;
   font-size: var(--font-13);
   padding: 9px 11px;
   border: 1px solid var(--border);
@@ -5426,6 +5428,7 @@ a.connector-widget:focus-visible {
   box-sizing: border-box;
   resize: vertical;
 }
+.resource-form input:focus,
 .resource-form textarea:focus,
 .signin input:focus {
   outline: 2px solid var(--border);
@@ -13217,6 +13220,10 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
 }
 .persona-role {
   margin-top: 4px;
+}
+.persona-detail .persona-form {
+  max-width: none;
+  margin: 0;
 }
 .persona-form-identity {
   display: flex;
