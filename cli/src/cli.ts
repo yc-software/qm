@@ -180,6 +180,14 @@ ${bold("DEPLOY (operator)")} ${dim("— runs in the deployment directory")}
     --env-file <path>                      path to .env (default: .env in the deploy dir)
     --sandbox-dir <path>                   path to the sandbox layer dir (default: sandbox/ in the deploy dir)
 
+${bold("TENANTS (operator)")} ${dim("— runs in the QM repo with DATABASE_URL set to the database owner login")}
+  tenant create [--brand-name <name>]      create a tenant and print its id
+  tenant list                              list tenants
+  tenant settings set <tenant> <key> <json>
+                                           set one tenant setting (null removes it)
+  tenant members add <tenant> <email> [--admin]
+                                           add a member to the tenant's directory, optionally as org admin
+
 ${bold("DEVELOP (contributor)")} ${dim("— runs in the QM repo")}
   dev up [--surface web|slack|both] [--org <id>] · dev down · dev status · dev restart · dev canary · dev logs · dev doctor [options]
                                            run the supervised contributor engine in scripts/dev/
@@ -337,6 +345,17 @@ async function dispatch(argv: string[]): Promise<void> {
         cwd: root,
         stdio: "inherit",
         env: { ...process.env, DEV_INSTANCE_ORG_ID: orgId },
+      });
+      if (result.error) throw result.error;
+      process.exitCode = result.status ?? 1;
+      return;
+    }
+
+    case "tenant": {
+      const root = gitTopLevel();
+      const result = spawnSync(process.execPath, [join(root, "scripts/tenant.ts"), ...argv.slice(1)], {
+        cwd: root,
+        stdio: "inherit",
       });
       if (result.error) throw result.error;
       process.exitCode = result.status ?? 1;

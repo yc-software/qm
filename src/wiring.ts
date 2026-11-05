@@ -1,4 +1,5 @@
 import { onTenantLoad } from "./tenants/cache.ts";
+import { loadTenantSettings } from "./tenants/settings.ts";
 import { nonDeploymentCredential, withDeploymentCredentials } from "./credentials/deployment-credentials.ts";
 import { resolveEmbeddingModel } from "./model/pi-models.ts";
 import { createPostgresTeamStore, type TeamStore } from "./teams/teams.ts";
@@ -1321,7 +1322,12 @@ export function buildApp(
     setCustomProviders(await customProviders.enabled());
   };
   const stopTenantLoad = onTenantLoad(() =>
-    Promise.all([configStore.hydrate?.(), refreshCustomProviders(), identity.refresh()]),
+    Promise.all([
+      configStore.hydrate?.(),
+      refreshCustomProviders(),
+      identity.refresh(),
+      loadTenantSettings(pgArtifactMap.pool),
+    ]),
   );
   const refreshModels = async () => {
     await gatewayCatalog?.refresh();
