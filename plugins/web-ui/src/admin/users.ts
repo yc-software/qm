@@ -2,7 +2,7 @@ import { html, render } from "lit";
 import { copyText, relTime } from "../ui.ts";
 import { formatMessageTime } from "../message-time.ts";
 import type { AdminPage } from "./sections.ts";
-import { pageHeader, table, card, badge, stacked, subline, matches } from "./shared.ts";
+import { pageHeader, table, card, badge, subline, matches } from "./shared.ts";
 import { keychain } from "./keychain.ts";
 import { detail, labelRole } from "./user-detail.ts";
 
@@ -139,8 +139,8 @@ function users(page: AdminPage, initial: any) {
                 ["Principal", "Role", "Last seen", "Sessions", "Turns", ""],
                 roster.map((u: any) => [
                   {
-                    node: html`<a href=${userHref(u.principalId)}
-                      >${stacked(u.displayName || u.principalId, u.displayName ? u.principalId : "")}</a
+                    node: html`<a href=${userHref(u.principalId)} title=${u.principalId}
+                      >${u.displayName || u.principalId}</a
                     >`,
                     cls: "mono",
                   },
