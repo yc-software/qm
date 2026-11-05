@@ -542,13 +542,17 @@ export function createAppHelpers(deps: AppDeps, app: App) {
   }
 
   async function assertMayInstructSkill(
-    skill: Pick<Skill, "id" | "scopeId">,
+    change: { id?: string; homes: readonly ScopeId[]; grantee?: ScopeId },
     actor: { id: string; live: boolean },
   ): Promise<void> {
     if (!deps.namedAgents) return;
-    const grants = await deps.acl.grantsFor(skill.scopeId, encodeRef(skillRef(skill.id)));
-    for (const scope of new Set([skill.scopeId, ...grants.map((g) => g.granteeScopeId)]))
-      await deps.namedAgents.assertMayInstruct(scope, actor);
+    const reach = new Set<ScopeId>(change.grantee ? [change.grantee] : []);
+    for (const home of change.homes) {
+      reach.add(home);
+      if (change.id)
+        for (const g of await deps.acl.grantsFor(home, encodeRef(skillRef(change.id)))) reach.add(g.granteeScopeId);
+    }
+    for (const scope of reach) await deps.namedAgents.assertMayInstruct(scope, actor);
   }
 
   async function republishIfShared(skill: Skill, editorId: string): Promise<Skill> {

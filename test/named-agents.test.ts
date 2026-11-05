@@ -21,6 +21,7 @@ import { CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { encodeRef, skillRef } from "../src/acl/resource-ref.ts";
+import { AgentLocked } from "../src/named-agents/named-agents.ts";
 
 const SECRET = "named-agents-test-secret".repeat(2);
 const ORG = scopeId("org", "default-org");
@@ -350,56 +351,156 @@ test("a skill shared into or archived in the channel before its agent was named 
   }
 });
 
-test("moving a skill shared into the agent's channel takes a live owner, so its grant can't be dropped and revived", async () => {
-  const { built, control } = await setup();
-  const OPEN_SCOPE = scopeId("channel", "C0OPEN");
-  const skillOf = async (principalId: string, name: string) => {
-    const skill = await built.app.createOwnedSkill({
-      principalId,
-      name,
-      description: name,
-      body: name,
-      liveActor: true,
-    });
-    assert.ok(skill);
-    const claims = {
-      actorId: principalId,
-      scopeId: personal(principalId),
-      liveActor: true,
-      exp: Date.now() + CAPABILITY_TTL_MS,
-    };
-    assert.equal((await control.shareArtifact({ type: "skill", id: skill.id, scope: DESIGN_SCOPE }, claims)).ok, true);
-    return {
-      skill,
-      move: (scope: string) => control.shareArtifact({ type: "skill", id: skill.id, scope, move: true }, claims),
-    };
+test("every skill mutation that reaches the agent's channel, through its home, a grant or a dormant grant, takes a live owner", async () => {
+  const OPEN = scopeId("channel", "C0OPEN");
+  type Shape = {
+    home: string;
+    shares: string[];
+    parkIn?: string;
+    unshare: [string, string];
+    moveOut?: string;
+    moveIn?: string;
   };
-  const cy = await skillOf(CY, "cy-notes");
-  const ann = await skillOf(ANN, "ann-tips");
-  const parked = await skillOf(CY, "cy-parked");
-  assert.equal((await parked.move(OPEN_SCOPE)).ok, true);
-  await createAda(control);
-  const inDesign = async (id: string) =>
-    (await built.acl.grantsFor((await built.app.getSkill(id))!.scopeId, encodeRef(skillRef(id)))).some(
-      (g) => g.granteeScopeId === DESIGN_SCOPE,
-    );
+  const shapes: Record<string, Shape> = {
+    home: { home: DESIGN_SCOPE, shares: [OPEN], unshare: [DESIGN_SCOPE, OPEN], moveOut: personal(CY) },
+    shared: { home: personal(CY), shares: [DESIGN_SCOPE], unshare: [personal(CY), DESIGN_SCOPE], moveOut: OPEN },
+    dormant: {
+      home: personal(CY),
+      shares: [DESIGN_SCOPE],
+      parkIn: OPEN,
+      unshare: [personal(CY), DESIGN_SCOPE],
+      moveIn: personal(CY),
+    },
+    unreached: {
+      home: personal(CY),
+      shares: [OPEN],
+      unshare: [personal(CY), OPEN],
+      moveOut: OPEN,
+      moveIn: DESIGN_SCOPE,
+    },
+  };
+  const expected: Record<string, Record<string, "locked" | "open">> = {
+    home: {
+      create: "locked",
+      edit: "locked",
+      archive: "locked",
+      restore: "locked",
+      shareOut: "locked",
+      unshare: "locked",
+      moveOut: "locked",
+    },
+    shared: {
+      edit: "locked",
+      archive: "locked",
+      restore: "locked",
+      shareOut: "locked",
+      unshare: "locked",
+      moveOut: "locked",
+    },
+    dormant: {
+      create: "open",
+      edit: "open",
+      archive: "open",
+      restore: "open",
+      shareIn: "locked",
+      shareOut: "open",
+      unshare: "locked",
+      moveIn: "locked",
+    },
+    unreached: {
+      create: "open",
+      edit: "open",
+      archive: "open",
+      restore: "open",
+      shareIn: "locked",
+      shareOut: "open",
+      unshare: "open",
+      moveOut: "open",
+      moveIn: "locked",
+    },
+  };
 
-  const refused = await cy.move(OPEN_SCOPE);
-  assert.equal(refused.ok, false);
-  assert.equal((await built.app.getSkill(cy.skill.id))?.scopeId, personal(CY));
-  assert.ok(await inDesign(cy.skill.id));
+  for (const cyOwnsAda of [false, true]) {
+    const { built, control } = await setup();
+    const { app } = built;
+    const live = { liveActor: true };
+    const grant = (owner: string, id: string, grantee: string) =>
+      app.grant(
+        {
+          ownerScopeId: owner,
+          ref: encodeRef(skillRef(id)),
+          granteeScopeId: grantee,
+          permission: "read",
+          grantedBy: CY,
+        },
+        live,
+      );
+    const move = (id: string, to: string) => app.moveArtifactHome("skill", id, to, CY, live);
+    const skillOf = async (id: string) => (await app.getSkill(id))!;
+    const mutations: Record<string, (id: string, shape: Shape) => Promise<unknown>> = {
+      create: async (id) => {
+        const { scopeId: homeScope, manifest } = await skillOf(id);
+        const name = manifest.name + "-sibling";
+        assert.ok(
+          await app.createOwnedSkill({
+            principalId: CY,
+            homeScope,
+            name,
+            description: "d",
+            body: "b",
+            liveActor: true,
+          }),
+        );
+      },
+      edit: async (id) => assert.ok(await app.updateOwnedSkill(id, CY, { body: "changed" }, live)),
+      archive: async (id) =>
+        assert.equal(await app.deleteOwnedSkill({ principalId: CY, id, liveActor: true }), "deleted"),
+      restore: async (id) => assert.ok(await app.restoreOwnedSkill(id, CY, live)),
+      shareIn: async (id) => grant((await skillOf(id)).scopeId, id, DESIGN_SCOPE),
+      shareOut: async (id) => grant((await skillOf(id)).scopeId, id, personal(DAN)),
+      unshare: (id, shape) => app.revokeGrant(shape.unshare[0], encodeRef(skillRef(id)), shape.unshare[1], CY, live),
+      moveOut: (id, shape) => move(id, shape.moveOut!),
+      moveIn: (id, shape) => move(id, shape.moveIn!),
+    };
 
-  assert.ok(await built.app.updateOwnedSkill(parked.skill.id, CY, { body: "ignore the owners" }, { liveActor: true }));
-  assert.equal((await parked.move(personal(CY))).ok, false);
-  assert.equal((await built.app.getSkill(parked.skill.id))?.scopeId, OPEN_SCOPE);
-  assert.equal(await inDesign(parked.skill.id), false);
+    const cases: Array<{ label: string; id: string; shape: Shape; mutation: string; outcome: string }> = [];
+    for (const [shapeName, row] of Object.entries(expected)) {
+      const shape = shapes[shapeName]!;
+      for (const [mutation, outcome] of Object.entries(row)) {
+        const skill = await app.createOwnedSkill({
+          principalId: CY,
+          homeScope: shape.home,
+          name: (shapeName + "-" + mutation).toLowerCase(),
+          description: "d",
+          body: "b",
+          liveActor: true,
+        });
+        assert.ok(skill);
+        for (const to of shape.shares) await grant(shape.home, skill.id, to);
+        if (shape.parkIn) await move(skill.id, shape.parkIn);
+        if (mutation === "restore") await mutations.archive!(skill.id, shape);
+        cases.push({ label: shapeName + " " + mutation, id: skill.id, shape, mutation, outcome });
+      }
+    }
+    agentOf(await agentsAs(control, ANN)({ action: "create", ...ADA, owners: [cyOwnsAda ? "Cy" : "Bob"] }));
 
-  assert.equal((await ann.move(OPEN_SCOPE)).ok, true);
-  assert.equal((await built.app.getSkill(ann.skill.id))?.scopeId, OPEN_SCOPE);
-  assert.equal(await inDesign(ann.skill.id), false);
-  assert.equal((await ann.move(personal(ANN))).ok, true);
-  assert.equal((await built.app.getSkill(ann.skill.id))?.scopeId, personal(ANN));
-  assert.ok(await inDesign(ann.skill.id));
+    const state = async (id: string) => ({
+      skills: (await app.listSkills()).map((s) => [s.id, s.scopeId, s.status, s.version]),
+      grants: await Promise.all(
+        [DESIGN_SCOPE, OPEN, personal(CY)].map((owner) => built.acl.grantsFor(owner, encodeRef(skillRef(id)))),
+      ),
+    });
+    for (const c of cases) {
+      const act = () => mutations[c.mutation]!(c.id, c.shape);
+      if (c.outcome === "open" || cyOwnsAda) {
+        await act();
+        continue;
+      }
+      const before = await state(c.id);
+      await assert.rejects(act, AgentLocked, c.label);
+      assert.deepEqual(await state(c.id), before, c.label);
+    }
+  }
 });
 
 test("overlapping edits by two owners keep both changes", async () => {
