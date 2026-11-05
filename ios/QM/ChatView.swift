@@ -64,8 +64,8 @@ struct ChatView: View {
         followsLatest ? .bottom : nil, for: .sizeChanges
       )
       .defaultScrollAnchor(.top, for: .alignment)
-      .task(id: model.transcriptEntries.count) {
-        guard let initialSequence, !positionedSearch, !model.transcriptEntries.isEmpty else {
+      .task(id: model.transcriptItems.count) {
+        guard let initialSequence, !positionedSearch, !model.transcriptItems.isEmpty else {
           return
         }
         if model.needsEarlierHistory(for: initialSequence) {
@@ -294,9 +294,9 @@ struct ChatView: View {
     return LazyVStack(alignment: .leading, spacing: 24) {
       pinsSection
       forkOrigin
-      if model.earlierEntries > 0,
+      if model.earlierItems > 0,
         inheritedExpanded || model.conversation.forkBoundarySeq == nil
-          || model.earlierEntries > (model.conversation.forkBoundarySeq ?? -1) + 1
+          || model.earlierItems > (model.conversation.forkBoundarySeq ?? -1) + 1
       {
         Button("Load earlier messages") { Task { await model.loadEarlier() } }
           .disabled(model.loadingEarlier)
@@ -304,8 +304,8 @@ struct ChatView: View {
       if !model.hasLoadedTranscript && model.error == nil && model.activeRunID == nil {
         NativeWave().accessibilityLabel("Loading conversation")
           .frame(maxWidth: .infinity).padding(.top, 60)
-      } else if model.hasLoadedTranscript && model.transcriptEntries.isEmpty
-        && model.earlierEntries == 0 && visible.isEmpty && model.displayedPartial.isEmpty
+      } else if model.hasLoadedTranscript && model.transcriptItems.isEmpty
+        && model.earlierItems == 0 && visible.isEmpty && model.displayedPartial.isEmpty
         && model.activeRunID == nil && model.pending == nil
       {
         ContentUnavailableView(

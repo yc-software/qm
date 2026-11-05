@@ -122,7 +122,7 @@ final class ChatReconciliationProtocol: URLProtocol, @unchecked Sendable {
   private static let doneEvent =
     "data: {\"type\":\"CUSTOM\",\"name\":\"run\",\"value\":{\"partial\":\"Answer\",\"status\":\"done\",\"result\":{\"status\":\"ok\",\"reply\":\"Answer\"}}}\n\n"
   private static let questionEntry =
-    #"{"type":"user","seq":1,"createdAt":1,"payload":{"text":"Question","runId":"run"}}"#
+    #"{"kind":"UserMessage","seq":1,"createdAt":1,"text":"Question","turnId":"run","body":{}}"#
 
   private static func reply(host: String, path: String, count: Int, url: URL) -> Reply {
     var reply =
@@ -172,7 +172,7 @@ final class ChatReconciliationProtocol: URLProtocol, @unchecked Sendable {
     if host.hasPrefix("reconnect-stall"), count > 1 { reply.held = true }
     if host.hasPrefix("posted-finish") || host.hasPrefix("posted-lag") {
       reply.body =
-        "data: {\"type\":\"CUSTOM\",\"name\":\"run\",\"value\":{\"partial\":\"Answer\",\"status\":\"done\",\"activity\":[{\"type\":\"tool_call\",\"seq\":4,\"createdAt\":4,\"payload\":{\"tool\":\"execute\",\"callId\":\"after\"}},{\"type\":\"tool_result\",\"seq\":5,\"createdAt\":5,\"payload\":{\"callId\":\"after\",\"ok\":true}}],\"result\":{\"status\":\"ok\",\"reply\":\"Answer\"}}}\n\n"
+        "data: {\"type\":\"CUSTOM\",\"name\":\"run\",\"value\":{\"partial\":\"Answer\",\"status\":\"done\",\"activity\":[{\"item\":{\"kind\":\"ToolCall\",\"seq\":4,\"createdAt\":4,\"callId\":\"after\",\"tool\":\"execute\",\"body\":{}}},{\"item\":{\"kind\":\"ToolResult\",\"seq\":5,\"createdAt\":5,\"callId\":\"after\",\"body\":{\"ok\":true}}}],\"result\":{\"status\":\"ok\",\"reply\":\"Answer\"}}}\n\n"
     }
     if host.hasPrefix("posted-active") {
       reply.body =
@@ -180,7 +180,7 @@ final class ChatReconciliationProtocol: URLProtocol, @unchecked Sendable {
     }
     if host.hasPrefix("activity-lag") {
       reply.body =
-        "data: {\"type\":\"CUSTOM\",\"name\":\"run\",\"value\":{\"partial\":\"Answer\",\"status\":\"done\",\"activity\":[{\"type\":\"thinking\",\"seq\":2,\"createdAt\":2,\"payload\":{\"thinking\":\"Working through it.\"}}],\"result\":{\"status\":\"ok\",\"reply\":\"Answer\"}}}\n\n"
+        "data: {\"type\":\"CUSTOM\",\"name\":\"run\",\"value\":{\"partial\":\"Answer\",\"status\":\"done\",\"activity\":[{\"item\":{\"kind\":\"Reasoning\",\"seq\":2,\"createdAt\":2,\"text\":\"Working through it.\",\"body\":{}}}],\"result\":{\"status\":\"ok\",\"reply\":\"Answer\"}}}\n\n"
     }
     return reply
   }
@@ -190,24 +190,24 @@ final class ChatReconciliationProtocol: URLProtocol, @unchecked Sendable {
       return forkHistoryReply(host: host, count: count, url: url)
     }
     if host.hasPrefix("missing-history") { return Reply(status: 503) }
-    if host.hasPrefix("empty-history") { return Reply(body: #"{"entries":[]}"#) }
+    if host.hasPrefix("empty-history") { return Reply(body: #"{"items":[]}"#) }
     if host.hasPrefix("posted-") {
       return Reply(
         status: host.hasPrefix("posted-finish") && count > 1 ? 503 : 200,
         body:
-          #"{"entries":["# + questionEntry
-          + #",{"type":"tool_call","seq":2,"createdAt":2,"payload":{"action":"post","callId":"post","text":"Answer"}},{"type":"tool_result","seq":3,"createdAt":3,"payload":{"callId":"post","ok":true}}]}"#
+          #"{"items":["# + questionEntry
+          + #",{"kind":"ToolCall","seq":2,"createdAt":2,"callId":"post","body":{"action":"post","text":"Answer"}},{"kind":"ToolResult","seq":3,"createdAt":3,"callId":"post","body":{"ok":true}}]}"#
       )
     }
     if host.hasPrefix("accepted") {
-      return Reply(body: count == 1 ? #"{"entries":[]}"# : #"{"entries":["# + questionEntry + "]}")
+      return Reply(body: count == 1 ? #"{"items":[]}"# : #"{"items":["# + questionEntry + "]}")
     }
     if count == 1 || host.hasPrefix("active-failure") || host.hasPrefix("activity-lag") {
-      return Reply(body: #"{"entries":["# + questionEntry + "]}")
+      return Reply(body: #"{"items":["# + questionEntry + "]}")
     }
     return Reply(
-      body: #"{"entries":["# + questionEntry
-        + #",{"type":"assistant","seq":2,"createdAt":2,"payload":{"text":"Answer"}}]}"#)
+      body: #"{"items":["# + questionEntry
+        + #",{"kind":"AgentMessage","seq":2,"createdAt":2,"text":"Answer","body":{}}]}"#)
   }
 
   private static func forkHistoryReply(host: String, count: Int, url: URL) -> Reply {
@@ -218,7 +218,7 @@ final class ChatReconciliationProtocol: URLProtocol, @unchecked Sendable {
     }
     return Reply(
       body:
-        #"{"entries":[{"type":"user","seq":1,"createdAt":1,"payload":{"text":"Inherited question"}},{"type":"assistant","seq":5,"createdAt":5,"payload":{"text":"Inherited answer"}}],"earlierEntries":0}"#
+        #"{"items":[{"kind":"UserMessage","seq":1,"createdAt":1,"text":"Inherited question","body":{}},{"kind":"AgentMessage","seq":5,"createdAt":5,"text":"Inherited answer","body":{}}],"earlierItems":0}"#
     )
   }
 

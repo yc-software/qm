@@ -13,7 +13,7 @@ struct NativeVoiceFragment: Identifiable {
 }
 enum NativeVoiceTimelineContent {
   case speech(NativeVoiceFragment)
-  case activity(Entry)
+  case activity(Item)
   case status(String)
   case result(String)
 }
@@ -34,8 +34,8 @@ struct NativeVoiceTranscript {
   mutating func appendResult(_ text: String) {
     appendItem(.result(text))
   }
-  mutating func appendActivity(_ entries: [Entry], runID: String) {
-    for entry in entries
+  mutating func appendActivity(_ activity: [Item], runID: String) {
+    for entry in activity
     where NativeWorkItem.supports(entry) && activityIDs.insert("\(runID):\(entry.id)").inserted {
       appendItem(.activity(entry))
     }
@@ -392,7 +392,7 @@ final class NativeVoiceModel: NSObject {
       Log.background.failure("Voice briefing history", error)
       history = nil
     }
-    let messages = chatMessages(history?.entries ?? []).filter {
+    let messages = chatMessages(history?.items ?? []).filter {
       $0.role == "user" || $0.role == "assistant"
     }
     return NativeVoiceBridge.briefing(
@@ -510,9 +510,9 @@ final class NativeVoiceModel: NSObject {
         guard current == revision else { throw CancellationError() }
         guard let run = event.run else { return }
         latest = run
-        transcript.appendActivity(run.activity ?? [], runID: runID)
+        transcript.appendActivity(run.activityItems ?? [], runID: runID)
         if Self.clock - reported >= 4,
-          let item = NativeWorkItem.items(run.activity ?? []).last(where: { !$0.isThinking })
+          let item = NativeWorkItem.items(run.activityItems ?? []).last(where: { !$0.isThinking })
         {
           reported = Self.clock
           bridge.progress(String(item.label(active: true).prefix(160)), run: runID)
@@ -529,7 +529,7 @@ final class NativeVoiceModel: NSObject {
         let run: Run = try await client.fetch("api/runs/\(runID.apiComponent)")
         latest = run
         failures = 0
-        transcript.appendActivity(run.activity ?? [], runID: runID)
+        transcript.appendActivity(run.activityItems ?? [], runID: runID)
       } catch {
         failures += 1
       }

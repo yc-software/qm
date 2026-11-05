@@ -13,12 +13,12 @@ struct NativeConversationTools: View {
           Text("Latest message").tag("all")
           ForEach(
             NativeForkPoint.points(
-              model.transcriptEntries, inheritedBoundary: model.conversation.forkBoundarySeq)
+              model.transcriptItems, inheritedBoundary: model.conversation.forkBoundarySeq)
           ) { point in
             Text(String(point.title.prefix(70))).tag(point.id)
           }
         }
-        if model.earlierEntries > 0 {
+        if model.earlierItems > 0 {
           Button("Load earlier fork points") { Task { await model.loadEarlier() } }
         }
         NavigationLink("Linked conversations") { NativeLinkedConversations(model: model) }
@@ -144,11 +144,11 @@ struct NativeActivityView: View {
   @Bindable var model: ChatModel
   var body: some View {
     QMList {
-      if model.earlierEntries > 0 {
+      if model.earlierItems > 0 {
         Button("Load earlier activity") { Task { await model.loadEarlier() } }.disabled(
           model.loadingEarlier)
       }
-      ForEach(model.entries) { entry in NativeActivityRow(entry: entry, client: model.client) }
+      ForEach(model.items) { entry in NativeActivityRow(entry: entry, client: model.client) }
       if let error = model.error { Text(error).foregroundStyle(.red) }
     }.navigationTitle("Activity").refreshable { _ = await model.refresh() }
   }
@@ -399,21 +399,19 @@ struct NativeForkPoint: Identifiable {
   let id: String
   let title: String
   let cut: String
-  static func points(_ entries: [Entry], inheritedBoundary: Int? = nil) -> [Self] {
-    let entriesByID = Dictionary(
-      entries.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
+  static func points(_ items: [Item], inheritedBoundary: Int? = nil) -> [Self] {
+    let itemsByID = Dictionary(
+      items.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
     var userSeqs: [Int] = []
-    for entry in entries {
-      guard entry.type == "user", let payload = entry.payload, payload.hidden != true,
-        let sequence = entry.seq
-      else { continue }
-      let hasText = payload.text.map { !$0.isEmpty } ?? false
-      let hasAttachments = payload.attachments.map { !$0.isEmpty } ?? false
+    for item in items {
+      guard item.isUserMessage, !item.isHidden, let sequence = item.seq else { continue }
+      let hasText = item.text.map { !$0.isEmpty } ?? false
+      let hasAttachments = item.body?.attachments.map { !$0.isEmpty } ?? false
       if hasText || hasAttachments { userSeqs.append(sequence) }
     }
 
-    return chatMessages(entries).compactMap { message in
-      guard ["user", "assistant"].contains(message.role), let entry = entriesByID[message.id],
+    return chatMessages(items).compactMap { message in
+      guard ["user", "assistant"].contains(message.role), let entry = itemsByID[message.id],
         let seq = entry.seq
       else { return nil }
       var cut =

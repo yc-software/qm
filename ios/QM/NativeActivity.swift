@@ -71,7 +71,7 @@ indirect enum NativeActivityValue: Codable, Equatable {
 }
 
 struct NativeActivityRow: View {
-  let entry: Entry
+  let entry: Item
   var client: APIClient? = nil
   @State private var expanded = false
   var body: some View {
@@ -81,9 +81,9 @@ struct NativeActivityRow: View {
       }
     } label: {
       VStack(alignment: .leading, spacing: 6) {
-        Text(entry.type.replacingOccurrences(of: "_", with: " ").capitalized).font(.headline)
-        if let tool = entry.payload?.tool {
-          Text([tool, entry.payload?.action].compactMap { $0 }.joined(separator: " · "))
+        Text(entry.kindTitle).font(.headline)
+        if let tool = entry.tool {
+          Text([tool, entry.body?.action].compactMap { $0 }.joined(separator: " · "))
             .font(.subheadline).foregroundStyle(.secondary)
         }
         Text(Date(timeIntervalSince1970: entry.createdAt / 1000), style: .time)
@@ -94,13 +94,13 @@ struct NativeActivityRow: View {
 }
 
 struct NativeActivityDetails: View {
-  let entry: Entry
+  let entry: Item
   var client: APIClient? = nil
   @Environment(\.qmSessionID) private var sessionID
-  @State private var fullEntry: Entry?
+  @State private var fullEntry: Item?
   @State private var loading = false
   @State private var error: String?
-  private var displayed: Entry { fullEntry ?? entry }
+  private var displayed: Item { fullEntry ?? entry }
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
@@ -113,7 +113,7 @@ struct NativeActivityDetails: View {
         }
         if let error { Text(error).font(.caption).foregroundStyle(.red) }
       }
-      if let details = displayed.payload?.details {
+      if let details = displayed.details {
         let primary = details.fields.filter {
           [
             "purpose", "command", "path", "query", "text", "stdout", "stderr", "result", "output",
@@ -138,11 +138,11 @@ struct NativeActivityDetails: View {
       let generation = client.generation
       defer { loading = false }
       do {
-        struct Response: Decodable { let entry: Entry }
-        let response: Response = try await client.fetch("api/sessions/\(sessionID)/entries/\(seq)")
+        struct Response: Decodable { let item: Item }
+        let response: Response = try await client.fetch("api/sessions/\(sessionID)/items/\(seq)")
         try Task.checkCancellation()
         guard client.generation == generation else { return }
-        fullEntry = response.entry
+        fullEntry = response.item
         error = nil
       } catch {
         if !Task.isCancelled { self.error = "Could not load full output. Try again." }
@@ -170,24 +170,24 @@ private struct NativeActivityField: View {
 }
 
 struct NativeWorkItem: Identifiable {
-  let entry: Entry
-  var result: Entry?
+  let entry: Item
+  var result: Item?
   var id: String { entry.id }
-  var isThinking: Bool { entry.type == "thinking" }
+  var isThinking: Bool { entry.kind == "Reasoning" }
   enum State { case running, complete, failed, approval, unconfirmed }
 
   func state(active: Bool, turnFailed: Bool = false) -> State {
     guard let result else { return active ? .running : turnFailed ? .failed : .unconfirmed }
-    let payload = result.payload
-    if payload?.blocked == "needs_approval" { return .approval }
-    let data = payload?.details
+    let body = result.body
+    if body?.blocked == "needs_approval" { return .approval }
+    let data = result.details
     let completedNonzero =
-      entry.payload?.tool == "sandbox" && entry.payload?.action == "exec"
+      entry.tool == "sandbox" && entry.body?.action == "exec"
       && data?["code"] != nil && data?["code"] != .number(0)
       && data?["timedOut"] == .bool(false)
       && (data?["stdout"]?.string != nil || data?["stderr"]?.string != nil)
-    return (payload?.isError == true && !completedNonzero) || payload?.error != nil
-      || payload?.denied == true || payload?.ok == false
+    return (result.isError == true && !completedNonzero) || body?.error != nil
+      || body?.denied == true || body?.ok == false
       || data?["timedOut"] == .bool(true) || data?["quarantined"] == .bool(true)
       ? .failed : .complete
   }
@@ -195,7 +195,7 @@ struct NativeWorkItem: Identifiable {
   var failed: Bool { state(active: false) == .failed }
 
   var category: String {
-    switch (entry.payload?.tool, entry.payload?.action) {
+    switch (entry.tool, entry.body?.action) {
     case ("files", "read"), ("skills", "read"): return "files"
     case ("sandbox", "exec"): return "commands"
     default: return "tools"
@@ -204,16 +204,16 @@ struct NativeWorkItem: Identifiable {
 
   func label(active: Bool, turnFailed: Bool = false) -> String {
     let state = state(active: active, turnFailed: turnFailed)
-    let data = entry.payload?.details
+    let data = entry.details
     let purpose = data?["purpose"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines)
     let base: String
     if let purpose, !purpose.isEmpty {
       base = purpose
-    } else if entry.payload?.tool == "files", entry.payload?.action == "read",
+    } else if entry.tool == "files", entry.body?.action == "read",
       let path = data?["path"]?.string
     {
       base = "Read " + URL(fileURLWithPath: path).lastPathComponent
-    } else if entry.payload?.tool == "attach", case .array(let files) = data?["files"] {
+    } else if entry.tool == "attach", case .array(let files) = data?["files"] {
       base = "Attach " + files.compactMap(\.string).joined(separator: ", ")
     } else if let command = data?["command"]?.string {
       base = String(command.split(separator: "\n").first ?? "Command")
@@ -225,8 +225,8 @@ struct NativeWorkItem: Identifiable {
     case .approval: return base + " · Approval needed"
     case .unconfirmed: return isThinking ? base : base + " · Unconfirmed"
     case .complete:
-      if entry.payload?.tool == "sandbox", entry.payload?.action == "exec",
-        case .number(let code) = result?.payload?.details?["code"], code != 0
+      if entry.tool == "sandbox", entry.body?.action == "exec",
+        case .number(let code) = result?.details?["code"], code != 0
       {
         return base + " · exit \(code)"
       }
@@ -236,34 +236,30 @@ struct NativeWorkItem: Identifiable {
   }
   var title: String {
     if isThinking { return "Thinking" }
-    let payload = entry.payload
-    return [payload?.tool, payload?.action]
+    return [entry.tool, entry.body?.action]
       .compactMap { $0?.replacingOccurrences(of: "_", with: " ") }
       .filter { !$0.isEmpty }.joined(separator: " · ")
   }
 
-  static func supports(_ entry: Entry) -> Bool {
-    if entry.payload?.hidden == true || entry.payload?.redacted == true { return false }
-    if entry.type == "thinking" {
-      return entry.payload?.thinking?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        == false
+  static func supports(_ item: Item) -> Bool {
+    if item.isHidden || item.body?.redacted == true { return false }
+    if item.kind == "Reasoning" {
+      return item.text?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
     }
-    return entry.type == "tool_call" || entry.type == "tool_result"
+    return item.kind == "ToolCall" || item.kind == "ToolResult"
   }
 
-  static func items(_ entries: [Entry]) -> [Self] {
+  static func items(_ activity: [Item]) -> [Self] {
     var items: [Self] = []
     var calls: [String: Int] = [:]
-    for entry in entries where supports(entry) {
-      if entry.type == "tool_result", let callID = entry.payload?.callId,
-        let index = calls[callID], items[index].result == nil
+    for item in activity where supports(item) {
+      if item.kind == "ToolResult", let callID = item.callId, let index = calls[callID],
+        items[index].result == nil
       {
-        items[index].result = entry
+        items[index].result = item
       } else {
-        if entry.type == "tool_call", let callID = entry.payload?.callId {
-          calls[callID] = items.count
-        }
-        items.append(Self(entry: entry, result: entry.type == "tool_result" ? entry : nil))
+        if item.kind == "ToolCall", let callID = item.callId { calls[callID] = items.count }
+        items.append(Self(entry: item, result: item.kind == "ToolResult" ? item : nil))
       }
     }
     return items
@@ -271,7 +267,7 @@ struct NativeWorkItem: Identifiable {
 }
 
 struct NativeWorkSummary: View {
-  let activity: [Entry]
+  let activity: [Item]
   let client: APIClient
   var active = false
   var responding = false
@@ -321,7 +317,7 @@ struct NativeWorkSummary: View {
           VStack(alignment: .leading, spacing: 12) {
             ForEach(items) { item in
               DisclosureGroup {
-                if item.isThinking, let thinking = item.entry.payload?.thinking {
+                if item.isThinking, let thinking = item.entry.text {
                   MessageMarkdown(text: thinking, client: client)
                 } else {
                   NativeActivityDetails(entry: item.entry, client: client)

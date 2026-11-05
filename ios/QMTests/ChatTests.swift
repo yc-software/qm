@@ -42,10 +42,10 @@ final class ChatScenarioProtocol: URLProtocol, @unchecked Sendable {
       } else if path == "/api/sessions/chat" {
         if request.url?.query?.contains("beforeSeq") == true {
           body =
-            #"{"entries":[{"type":"user","seq":0,"createdAt":1,"payload":{"text":"Earlier"}},{"type":"assistant","seq":1,"createdAt":2,"payload":{"text":"Answer"}}],"earlierEntries":0}"#
+            #"{"items":[{"kind":"UserMessage","seq":0,"createdAt":1,"text":"Earlier","body":{}},{"kind":"AgentMessage","seq":1,"createdAt":2,"text":"Answer","body":{}}],"earlierItems":0}"#
         } else if request.url!.host!.hasPrefix("history-") {
           body =
-            #"{"entries":[{"type":"user","seq":2,"createdAt":3,"payload":{"text":"Current"}}],"earlierEntries":2}"#
+            #"{"items":[{"kind":"UserMessage","seq":2,"createdAt":3,"text":"Current","body":{}}],"earlierItems":2}"#
         } else {
           status = 503
         }
@@ -138,10 +138,10 @@ final class ChatTests: XCTestCase {
       client: client, user: "test", knownSession: true)
     await chat.refresh()
     await chat.loadEarlier()
-    XCTAssertEqual(chat.entries.compactMap(\.seq), [0, 1, 2])
+    XCTAssertEqual(chat.items.compactMap(\.seq), [0, 1, 2])
     await chat.refresh()
-    XCTAssertEqual(chat.entries.compactMap(\.seq), [0, 1, 2])
-    XCTAssertEqual(chat.earlierEntries, 0)
+    XCTAssertEqual(chat.items.compactMap(\.seq), [0, 1, 2])
+    XCTAssertEqual(chat.earlierItems, 0)
   }
 
   func testQueuedSuccessorResumesAfterPreviousRunFinishes() async throws {
@@ -178,13 +178,14 @@ final class ChatTests: XCTestCase {
 
   func testConcurrentPaginationDoesNotDuplicateMessages() async throws {
     let chat = model()
-    chat.entries = try JSONDecoder().decode(
-      [Entry].self,
-      from: Data(#"[{"type":"user","seq":2,"createdAt":3,"payload":{"text":"Current"}}]"#.utf8))
+    chat.items = try JSONDecoder().decode(
+      [Item].self,
+      from: Data(#"[{"kind":"UserMessage","seq":2,"createdAt":3,"text":"Current","body":{}}]"#.utf8)
+    )
     async let first: Void = chat.loadEarlier()
     async let second: Void = chat.loadEarlier()
     _ = await (first, second)
-    XCTAssertEqual(chat.entries.compactMap(\.seq), [0, 1, 2])
+    XCTAssertEqual(chat.items.compactMap(\.seq), [0, 1, 2])
   }
 
   func testTerminalReplySurvivesFailedTranscriptRefresh() async throws {

@@ -5,12 +5,12 @@ import os
 final class ChatModel {
   let user: String
   var conversation: Conversation { didSet { rebuildForkPoints() } }
-  var entries: [Entry] = [] { didSet { rebuildTranscript() } }
-  private var inheritedEntries: [Entry]? { didSet { rebuildTranscript() } }
+  var items: [Item] = [] { didSet { rebuildTranscript() } }
+  private var inheritedItems: [Item]? { didSet { rebuildTranscript() } }
   var loadingInherited = false
   private(set) var hasLoadedTranscript: Bool
 
-  private(set) var transcriptEntries: [Entry] = []
+  private(set) var transcriptItems: [Item] = []
   private(set) var messages: [ChatMessage] = []
   private(set) var forkableMessageIDs = Set<String>()
   private var partialIsRecorded = false
@@ -18,17 +18,17 @@ final class ChatModel {
   private func rebuildForkPoints() {
     forkableMessageIDs = Set(
       NativeForkPoint.points(
-        transcriptEntries, inheritedBoundary: conversation.forkBoundarySeq
+        transcriptItems, inheritedBoundary: conversation.forkBoundarySeq
       ).map(\.id))
   }
 
   private func rebuildPartialVisibility() {
-    partialIsRecorded = partialRunID.map { hasRecordedRunReply(entries, runID: $0) } ?? false
+    partialIsRecorded = partialRunID.map { hasRecordedRunReply(items, runID: $0) } ?? false
   }
 
   private func rebuildTranscript() {
-    let currentIDs = Set(entries.map(\.id))
-    transcriptEntries = ((inheritedEntries ?? []).filter { !currentIDs.contains($0.id) } + entries)
+    let currentIDs = Set(items.map(\.id))
+    transcriptItems = ((inheritedItems ?? []).filter { !currentIDs.contains($0.id) } + items)
       .sorted { ($0.seq ?? Int.max) < ($1.seq ?? Int.max) }
     rebuildMessages()
     rebuildForkPoints()
@@ -37,7 +37,7 @@ final class ChatModel {
 
   private func rebuildMessages() {
     messages = presentedChatMessages(
-      transcriptEntries, runs: runPresentations, activeRunID: activeRunID,
+      transcriptItems, runs: runPresentations, activeRunID: activeRunID,
       queuedRunIDs: queuedRunIDs)
   }
   var pins: [NativeConversationPin] = []
@@ -45,7 +45,7 @@ final class ChatModel {
   var attachments: [UploadAttachment] = []
   var uploading = false
   var partial = ""
-  private(set) var liveActivity: [Entry] = []
+  private(set) var liveActivity: [Item] = []
   private(set) var partialRunID: String? { didSet { rebuildPartialVisibility() } }
   private(set) var runPresentations: [ChatRunPresentation] = [] { didSet { rebuildMessages() } }
   private var queuedRunIDs = Set<String>() { didSet { rebuildMessages() } }
@@ -61,7 +61,7 @@ final class ChatModel {
   var sending = false
   var runtimeSelection: RuntimeSelection?
   var runtimeConfiguration: RuntimeConfiguration?
-  var earlierEntries = 0
+  var earlierItems = 0
   var loadingEarlier = false
   var forking = false
   private var visible = false
@@ -90,9 +90,9 @@ final class ChatModel {
     self.knownSession = knownSession
     hasLoadedTranscript = transcript != nil || !knownSession
     if let transcript {
-      entries = transcript.entries
+      items = transcript.items
       pins = transcript.pins ?? []
-      earlierEntries = transcript.earlierEntries ?? 0
+      earlierItems = transcript.earlierItems ?? 0
       seededTranscript = true
     }
     drafts = DraftStore(
@@ -167,28 +167,28 @@ final class ChatModel {
           "api/sessions/\(conversation.id)", query: [.init(name: "tailTurns", value: "25")])
         guard current == generation, revision == transcriptRevision else { return false }
         let retained =
-          transcript.entries.first?.seq.map { first in
-            entries.filter { ($0.seq ?? Int.max) < first }
+          transcript.items.first?.seq.map { first in
+            items.filter { ($0.seq ?? Int.max) < first }
           } ?? []
         pins = transcript.pins ?? []
         if let session = transcript.session { conversation = session }
-        entries = retained + transcript.entries
+        items = retained + transcript.items
         hasLoadedTranscript = true
-        if let partialRunID, hasRecordedRunReply(entries, runID: partialRunID) {
+        if let partialRunID, hasRecordedRunReply(items, runID: partialRunID) {
           partial = ""
         }
-        let recordedEntryIDs = Set(entries.map(\.id))
+        let recordedItemIDs = Set(items.map(\.id))
         runPresentations.removeAll { run in
           unassociatedReplies.contains(run.id)
-            || (run.input?.isRecorded(in: entries) ?? true)
+            || (run.input?.isRecorded(in: items) ?? true)
               && (run.reply == nil
-                || run.runID.map { hasRecordedRunReply(entries, runID: $0, includingPosts: false) }
+                || run.runID.map { hasRecordedRunReply(items, runID: $0, includingPosts: false) }
                   == true)
               && run.activity.filter(NativeWorkItem.supports).allSatisfy {
-                recordedEntryIDs.contains($0.id)
+                recordedItemIDs.contains($0.id)
               }
         }
-        earlierEntries = max(0, (transcript.earlierEntries ?? 0) - retained.count)
+        earlierItems = max(0, (transcript.earlierItems ?? 0) - retained.count)
         if conversation.canReply {
           let response: ApprovalList = try await client.fetch(
             "api/sessions/\(conversation.id)/approvals")
@@ -450,7 +450,7 @@ final class ChatModel {
     do {
       struct Result: Decodable { let session: Conversation }
       let point = messageID.flatMap { id in
-        NativeForkPoint.points(transcriptEntries, inheritedBoundary: conversation.forkBoundarySeq)
+        NativeForkPoint.points(transcriptItems, inheritedBoundary: conversation.forkBoundarySeq)
           .first { $0.id == id }
       }
       guard messageID == nil || point != nil else {
@@ -468,9 +468,9 @@ final class ChatModel {
   }
 
   func needsEarlierHistory(for sequence: Int) -> Bool {
-    guard earlierEntries > 0, let first = entries.first?.seq, first > sequence else { return false }
+    guard earlierItems > 0, let first = items.first?.seq, first > sequence else { return false }
     if let boundary = conversation.forkBoundarySeq, sequence <= boundary,
-      transcriptEntries.contains(where: { ($0.seq ?? Int.max) <= sequence })
+      transcriptItems.contains(where: { ($0.seq ?? Int.max) <= sequence })
     {
       return false
     }
@@ -478,14 +478,14 @@ final class ChatModel {
   }
 
   func loadInheritedHistory() async {
-    guard !loadingInherited, inheritedEntries == nil, conversation.forkedFrom != nil,
+    guard !loadingInherited, inheritedItems == nil, conversation.forkedFrom != nil,
       let boundary = conversation.forkBoundarySeq, boundary < Int.max
     else { return }
     loadingInherited = true
     defer { loadingInherited = false }
     let current = generation
     var before = boundary + 1
-    var loaded: [Entry] = []
+    var loaded: [Item] = []
     do {
       while !Task.isCancelled {
         let page: Transcript = try await client.fetch(
@@ -494,15 +494,15 @@ final class ChatModel {
             .init(name: "beforeSeq", value: String(before)), .init(name: "tailTurns", value: "25"),
           ])
         guard current == generation, !Task.isCancelled else { return }
-        let inherited = page.entries.filter { ($0.seq ?? Int.max) <= boundary }
+        let inherited = page.items.filter { ($0.seq ?? Int.max) <= boundary }
         loaded.insert(contentsOf: inherited, at: 0)
-        guard (page.earlierEntries ?? 0) > 0, let first = inherited.first?.seq,
+        guard (page.earlierItems ?? 0) > 0, let first = inherited.first?.seq,
           first > 0, first < before
         else { break }
         before = first
       }
       guard current == generation, !Task.isCancelled else { return }
-      inheritedEntries = loaded
+      inheritedItems = loaded
       error = nil
     } catch {
       if current == generation, !Task.isCancelled { self.error = error.localizedDescription }
@@ -510,7 +510,7 @@ final class ChatModel {
   }
 
   func loadEarlier() async {
-    guard !loadingEarlier, let first = entries.first?.seq else { return }
+    guard !loadingEarlier, let first = items.first?.seq else { return }
     loadingEarlier = true
     defer { loadingEarlier = false }
     let revision = transcriptRevision
@@ -522,9 +522,9 @@ final class ChatModel {
           .init(name: "beforeSeq", value: String(first)), .init(name: "tailTurns", value: "25"),
         ])
       guard current == generation, revision == transcriptRevision else { return }
-      let existing = Set(entries.map(\.id))
-      entries.insert(contentsOf: page.entries.filter { !existing.contains($0.id) }, at: 0)
-      earlierEntries = page.earlierEntries ?? 0
+      let existing = Set(items.map(\.id))
+      items.insert(contentsOf: page.items.filter { !existing.contains($0.id) }, at: 0)
+      earlierItems = page.earlierItems ?? 0
     } catch { self.error = error.localizedDescription }
   }
 
@@ -591,7 +591,7 @@ final class ChatModel {
             guard current == generation, !Task.isCancelled else { throw CancellationError() }
             try text.apply(event)
             if event.name == "delta" || event.name == "run" { textChanged = true }
-            if let activity = event.run?.activity { liveActivity = activity }
+            if let activity = event.run?.activityItems { liveActivity = activity }
             if let input = event.run?.input, input.runId == id {
               updatePresentation(id: id) { $0.input = input }
             }
@@ -612,7 +612,7 @@ final class ChatModel {
           }
           if textChanged { partial = text.text }
           let run: Run = try await client.fetch("api/runs/\(id)")
-          if let activity = run.activity { liveActivity = activity }
+          if let activity = run.activityItems { liveActivity = activity }
           if let input = run.input, input.runId == id {
             updatePresentation(id: id) { $0.input = input }
           }
@@ -630,7 +630,7 @@ final class ChatModel {
         }
         do {
           let run: Run = try await client.fetch("api/runs/\(id)")
-          if let activity = run.activity { liveActivity = activity }
+          if let activity = run.activityItems { liveActivity = activity }
           if let input = run.input, input.runId == id {
             updatePresentation(id: id) { $0.input = input }
           }
