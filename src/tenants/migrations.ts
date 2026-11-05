@@ -160,8 +160,8 @@ function swapKeys({ table, primaryKey, unique = [] }: TenantTable): string[] {
 }
 
 function tenantReference({ table, name, columns, references, onDelete, deferrable }: TenantReference): string {
-  const action =
-    onDelete === "SET NULL" ? ` ON DELETE SET NULL (${columns})` : onDelete ? ` ON DELETE ${onDelete}` : "";
+  const deleted = onDelete === "SET NULL" ? `SET NULL (${columns})` : onDelete;
+  const action = deleted ? ` ON DELETE ${deleted}` : "";
   return `ALTER TABLE ${table} ADD CONSTRAINT ${name}
     FOREIGN KEY (tenant_id, ${columns}) REFERENCES ${references}${action}${deferrable ? " DEFERRABLE INITIALLY DEFERRED" : ""}`;
 }

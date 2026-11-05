@@ -2,9 +2,17 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { USER_SCHEMA_MIGRATIONS, createPostgresUserStore } from "../src/identity/user-store.ts";
-import { applyPgMigrations, createPgPool, definePgMigration, type PgPool } from "../src/persistence/pg-pool.ts";
+import {
+  applyPgMigrations,
+  createPgPool,
+  definePgMigration,
+  migrateRegisteredPgSchemas,
+  type PgPool,
+} from "../src/persistence/pg-pool.ts";
 import { withTenant } from "../src/tenants/context.ts";
-import { testMigratedDatabaseUrl } from "./support/test-database.ts";
+import { testBareDatabaseUrl, testMigratedDatabaseUrl } from "./support/test-database.ts";
+import { buildApp } from "./support/build-app.ts";
+import { testConfig } from "./support/test-config.ts";
 import { appUrl, ownerUrl } from "./support/test-tenant.ts";
 
 type Rows = Record<string, unknown>[];
@@ -223,5 +231,27 @@ test("two tenants keep separate rosters and links under the login that does not 
   } finally {
     await app.close();
     await close();
+  }
+});
+
+test("a bare database migrates in the order the server applies every registered migration", async () => {
+  const databaseUrl = testBareDatabaseUrl();
+  buildApp(testConfig({ databaseUrl }));
+  await migrateRegisteredPgSchemas(databaseUrl);
+  const owner = createPgPool(databaseUrl);
+  try {
+    assert.deepEqual(
+      await owner.q(
+        `SELECT c.relname AS name, c.relrowsecurity AS rls FROM pg_class c
+          WHERE c.relname IN ('users', 'user_links', 'tenants') ORDER BY 1`,
+      ),
+      [
+        { name: "tenants", rls: true },
+        { name: "user_links", rls: true },
+        { name: "users", rls: true },
+      ],
+    );
+  } finally {
+    await owner.close();
   }
 });
