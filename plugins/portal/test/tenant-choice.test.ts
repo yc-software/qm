@@ -72,6 +72,13 @@ const upstream = createServer((req, res) => {
     if (path === "/v1/auth/broker/email-tenants") return void res.end(JSON.stringify({ tenants, shared }));
     if (path === "/v1/auth/broker/host-tenant") {
       const host = new URL(req.url!, origin).searchParams.get("host");
+      if (host === "company.test")
+        return void res.end(
+          JSON.stringify({
+            tenant: beta,
+            trustedClient: { clientId: "company-client", clientSecret: "company-client-secret-0123456789abcdef" },
+          }),
+        );
       return void res.end(
         JSON.stringify({ tenant: ({ "a.test": alpha, "b.test": beta } as Record<string, string>)[host!] ?? null }),
       );
@@ -478,4 +485,38 @@ test("signing in for a company's hostname with an account outside it shows no ac
   assert.equal(denied.status, 403);
   assert.match(denied.body, /No access to this workspace/);
   assert.equal(pair(denied.cookies, "portal_session"), undefined);
+});
+
+test("a company hostname with its own trusted client signs in on that hostname and binds that company without a lookup", async () => {
+  tenants = [{ id: alpha }];
+  const login = await onHost("company.test", "/auth/login?returnTo=%2Finbox");
+  assert.equal(login.location, "/auth/trusted/login?returnTo=%2Finbox");
+  const start = await onHost("company.test", login.location);
+  const authorize = new URL(start.location);
+  assert.equal(authorize.searchParams.get("client_id"), "company-client");
+  assert.equal(authorize.searchParams.get("redirect_uri"), "http://company.test/auth/trusted/callback");
+  const tmpCookie = pair(start.cookies, "portal_trusted_tmp")!;
+  assert.doesNotMatch(
+    start.cookies.find((c) => c.startsWith("portal_trusted_tmp="))!,
+    /domain=/i,
+  );
+  const tmp = open(readCookie(tmpCookie, "portal_trusted_tmp"), deriveKey(secret, "trusted-entry-tmp"))!;
+  nonce = tmp.nonce as string;
+  audience = "company-client";
+  email = null;
+  try {
+    const done = await onHost(
+      "company.test",
+      `/auth/trusted/callback?code=test&state=${tmp.state as string}`,
+      tmpCookie,
+    );
+    assert.equal(done.status, 302);
+    assert.equal(done.location, "/inbox");
+    const session = open(readCookie(pair(done.cookies, "portal_session")!, "portal_session"), sessionKey);
+    assert.deepEqual([session?.sub, session?.t], [trustedPrincipal(upstreamUrl, "idp-subject"), beta]);
+  } finally {
+    audience = "portal-client";
+    email = "founder@company.test";
+  }
+  assert.equal((await onHost("a.test", "/auth/trusted/callback?code=x&state=y")).status, 404);
 });

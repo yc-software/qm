@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { hostName, hostReturnTo, mintHandoff, openHandoff, type MappedHost } from "./host-tenant.ts";
+import { hostName, hostReturnTo, mintHandoff, openHandoff, type HostRecord, type MappedHost } from "./host-tenant.ts";
 
 interface HostSession {
   sub: string;
@@ -12,7 +12,7 @@ interface HostSession {
 export interface HostRouteDeps {
   publicUrl: string;
   appsDomain?: string;
-  lookup(host: string): Promise<string | null>;
+  lookup(host: string): Promise<HostRecord | null>;
   handoffKey: Buffer;
   claim(jti: string): Promise<boolean>;
   session(req: IncomingMessage): HostSession | null;
@@ -42,8 +42,8 @@ export function createHostRoutes(deps: HostRouteDeps) {
       return null;
     }
     if (url.protocol !== shared.protocol || url.username || url.password) return null;
-    const tenant = await deps.lookup(hostName(url.host));
-    return tenant ? { host: hostName(url.host), origin: url.origin, tenant } : null;
+    const record = await deps.lookup(hostName(url.host));
+    return record ? { ...record, host: hostName(url.host), origin: url.origin } : null;
   }
 
   return {
@@ -53,8 +53,8 @@ export function createHostRoutes(deps: HostRouteDeps) {
       if (host === "localhost" || host.startsWith("[") || /^[\d.]+$/.test(host)) return;
       if (appsDomain && (host === appsDomain || host.endsWith(`.${appsDomain}`))) return;
       try {
-        const tenant = await deps.lookup(host);
-        return tenant ? { host, origin: `${shared.protocol}//${req.headers.host}`, tenant } : undefined;
+        const record = await deps.lookup(host);
+        return record ? { ...record, host, origin: `${shared.protocol}//${req.headers.host}` } : undefined;
       } catch (error) {
         console.warn(`[portal] could not resolve the workspace for a host: ${String(error)}`);
         deps.unavailable(res);
@@ -70,9 +70,14 @@ export function createHostRoutes(deps: HostRouteDeps) {
 
     async mapped(req: IncomingMessage, res: ServerResponse, url: URL, mapped: MappedHost): Promise<boolean> {
       const method = req.method ?? "GET";
+      const returnTo = hostReturnTo(url.searchParams.get("returnTo"));
+      if (mapped.trustedClient && url.pathname.startsWith("/auth/trusted/")) return false;
+      if (method === "GET" && mapped.trustedClient && url.pathname === "/auth/login") {
+        redirect(res, `/auth/trusted/login?returnTo=${encodeURIComponent(returnTo)}`);
+        return true;
+      }
       if (method === "GET" && (url.pathname === "/auth/login" || url.pathname === "/auth/trusted/login")) {
-        const to = `${mapped.origin}${hostReturnTo(url.searchParams.get("returnTo"))}`;
-        redirect(res, `${shared.origin}/auth/host?to=${encodeURIComponent(to)}`);
+        redirect(res, `${shared.origin}/auth/host?to=${encodeURIComponent(`${mapped.origin}${returnTo}`)}`);
         return true;
       }
       if (method === "GET" && url.pathname === "/auth/handoff") {

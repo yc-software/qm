@@ -4,10 +4,19 @@ import { signedHeaders, withSourceAuthNonce } from "../../chassis/src/core-clien
 import { isTenantId } from "../../chassis/src/tenant.ts";
 import { open, seal } from "./session.ts";
 
-export interface MappedHost {
+export interface TrustedClient {
+  clientId: string;
+  clientSecret: string;
+}
+
+export interface HostRecord {
+  tenant: string;
+  trustedClient?: TrustedClient;
+}
+
+export interface MappedHost extends HostRecord {
   host: string;
   origin: string;
-  tenant: string;
 }
 
 export interface HandoffClaims {
@@ -38,27 +47,32 @@ export function hostName(value: string | undefined): string {
 }
 
 export function coreHostTenant(coreApiUrl: string, signingSecret: string | undefined) {
-  return async (host: string): Promise<string | null> => {
+  return async (host: string): Promise<HostRecord | null> => {
     const path = withSourceAuthNonce(`/v1/auth/broker/host-tenant?host=${encodeURIComponent(host)}`, signingSecret);
     const r = await fetch(`${coreApiUrl}${path}`, {
       headers: signedHeaders(signingSecret, "GET", path),
       signal: AbortSignal.timeout(4_000),
     });
     if (!r.ok) throw new Error(`host lookup failed: HTTP ${r.status}`);
-    const { tenant } = (await r.json()) as { tenant?: unknown };
-    return isTenantId(tenant) ? tenant : null;
+    const { tenant, trustedClient: c } = (await r.json()) as {
+      tenant?: unknown;
+      trustedClient?: Partial<TrustedClient>;
+    };
+    if (!isTenantId(tenant)) return null;
+    const usable = typeof c?.clientId === "string" && typeof c.clientSecret === "string" && c.clientSecret.length >= 32;
+    return { tenant, ...(usable ? { trustedClient: { clientId: c.clientId!, clientSecret: c.clientSecret! } } : {}) };
   };
 }
 
-export function createHostTenants(lookup: (host: string) => Promise<string | null>) {
-  const cache = new Map<string, { tenant: string | null; until: number }>();
-  return async (host: string): Promise<string | null> => {
+export function createHostTenants(lookup: (host: string) => Promise<HostRecord | null>) {
+  const cache = new Map<string, { record: HostRecord | null; until: number }>();
+  return async (host: string): Promise<HostRecord | null> => {
     const hit = cache.get(host);
-    if (hit && hit.until > Date.now()) return hit.tenant;
-    const tenant = await lookup(host);
+    if (hit && hit.until > Date.now()) return hit.record;
+    const record = await lookup(host);
     if (cache.size >= 1_000) cache.delete(cache.keys().next().value!);
-    cache.set(host, { tenant, until: Date.now() + CACHE_MS });
-    return tenant;
+    cache.set(host, { record, until: Date.now() + CACHE_MS });
+    return record;
   };
 }
 
