@@ -1,5 +1,4 @@
 import { test } from "node:test";
-import { TEST_TENANT } from "./support/test-config.ts";
 import assert from "node:assert/strict";
 import { createApp, type AppDeps } from "../src/api/app.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
@@ -17,7 +16,6 @@ const channel = scopeId("channel", "C1");
 
 function makeApp(files: FileArtifactStore, acl: ReturnType<typeof createAclStore>) {
   return createApp({
-    sessions: { readBootTenant: async () => TEST_TENANT },
     acl,
     files,
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),

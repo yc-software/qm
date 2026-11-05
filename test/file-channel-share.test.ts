@@ -1,5 +1,4 @@
 import { test } from "node:test";
-import { TEST_TENANT } from "./support/test-config.ts";
 import assert from "node:assert/strict";
 import { collectNamedOutbound, type ArtifactRegistration } from "../src/core/attachments.ts";
 import { defaultPublishAudience } from "../src/resolution/publish-audience.ts";
@@ -64,7 +63,6 @@ function registration(
 
 function makeApp(files: FileArtifactStore, acl: ReturnType<typeof createAclStore>) {
   return createApp({
-    sessions: { readBootTenant: async () => TEST_TENANT },
     acl,
     files,
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
