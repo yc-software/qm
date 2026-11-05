@@ -12,7 +12,7 @@ import {
   type DirectoryStore,
 } from "./directory-store.ts";
 import { createDirectorySync } from "./directory-sync.ts";
-import { PRINCIPAL_TENANTS } from "../tenants/lookup.ts";
+import { PRINCIPAL_ADMIN_TENANTS, PRINCIPAL_TENANTS } from "../tenants/lookup.ts";
 import { tenantTables } from "../tenants/migrations.ts";
 import { withTenant } from "../tenants/context.ts";
 
@@ -145,6 +145,25 @@ END $tenants_for_email$`,
     ],
   },
   PRINCIPAL_TENANTS,
+  PRINCIPAL_ADMIN_TENANTS,
+  {
+    id: "directory/store/0009-tenants-for-email-admins",
+    statements: [
+      `DO $tenants_for_email$
+BEGIN
+  EXECUTE format(
+    $function$CREATE OR REPLACE FUNCTION qm_tenants_for_email(email text) RETURNS TABLE(tenant_id uuid)
+      LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = %I, pg_temp AS $body$ BEGIN
+      RETURN QUERY
+        SELECT m.tenant_id FROM directory_members m
+         WHERE lower(m.principal_id) = lower(email) AND m.type = 'internal'
+        UNION
+        SELECT g.tenant_id FROM admin_grants g WHERE lower(g.principal_id) = lower(email);
+    END $body$$function$,
+    current_schema());
+END $tenants_for_email$`,
+    ],
+  },
 ];
 
 export function createPostgresDirectoryStore(connectionString: string): DirectoryStore {
