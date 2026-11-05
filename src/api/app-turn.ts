@@ -61,6 +61,7 @@ export function createTurnMethods(
   | "editQueuedRun"
   | "signalRun"
   | "replayOrphanedRunSignals"
+  | "steerRun"
 > {
   const {
     withAdminLink,
@@ -744,6 +745,10 @@ export function createTurnMethods(
 
     replayOrphanedRunSignals(runId) {
       return replayOrphanedRunSignals(runId).then(() => undefined);
+    },
+
+    steerRun(run, signal) {
+      return steerRun(run, signal);
     },
   };
   return methods;

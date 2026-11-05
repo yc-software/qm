@@ -37,6 +37,7 @@ async function rig(): Promise<Rig> {
     sessions,
     runs,
     signals,
+    steerRun: async (run, signal) => ({ sent: await signals.send(run.id, signal) }),
     advisoryLock,
     maxAttempts: 3,
   });

@@ -892,6 +892,13 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
 
         if (req.move) {
           const deployPersonTransfer = req.type === "deploy" && toKind === "personal" && capability.liveActor === true;
+          if (toKind === "persona" && req.type !== "skill" && req.type !== "file") {
+            return {
+              ok: false,
+              code: "forbidden",
+              message: `a persona holds skills, files and notes; a ${req.type} can't move into one`,
+            };
+          }
           if (!deployPersonTransfer && !(await app.belongsToScope(capability.actorId, toScope))) {
             return {
               ok: false,
