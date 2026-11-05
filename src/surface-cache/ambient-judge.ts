@@ -24,9 +24,9 @@ Judge meaning, not keywords — a message can match without sharing a single wor
 not match.
 
 When you engage because a person was directly asking or addressing the assistant (the ADDRESSED
-case, or a NEEDED that is a direct request to it), also return "asked_by" — the id of the asking
-trigger message. Leave "asked_by" out when the engagement is proactive (a standing order matched,
-or the assistant is volunteering help nobody asked it for).
+case, or a NEEDED that is a direct request to it), also return "asked_by" — the id attribute of the
+asking trigger message (the message id, never an author-id). Leave "asked_by" out when the engagement
+is proactive (a standing order matched, or the assistant is volunteering help nobody asked it for).
 
 Reply with a single JSON object and nothing else:
   {"act": true, "reason": "<one short sentence: what to do and why>", "asked_by": "<id>"}
