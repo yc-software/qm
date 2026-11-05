@@ -830,7 +830,7 @@ export function createMockAgent(): Agent {
     judge(_systemPrompt: string, prompt: string): Promise<string | undefined> {
       const asked = /!engage-asked\b[:\s]*(.*)/i.exec(prompt);
       if (asked) {
-        const id = /^\[([^\]]+)\]/m.exec(prompt)?.[1];
+        const id = /<message id="([^"]+)"[^>]*trigger="true"/.exec(prompt)?.[1];
         return Promise.resolve(
           JSON.stringify({
             act: true,

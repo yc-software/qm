@@ -68,6 +68,5 @@ export interface Surface<Native = unknown> {
   containerOf(target: string): string;
   principalFor(user: SurfaceUser): ActorAssertion;
   mention(user: SurfaceUser): string;
-  readableText(text: string, mentions: Readonly<Record<string, string>> | undefined): string;
   native(kind: string): Native | null;
 }

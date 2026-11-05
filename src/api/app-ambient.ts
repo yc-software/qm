@@ -6,7 +6,9 @@ import type { DirectoryMember } from "../directory/directory-store.ts";
 import type { CachedMessage } from "../surface-cache/surface-cache.ts";
 import { DEFAULT_ROLLUP_HOURS, type BotPolicy } from "../surface-cache/channel-policy-store.ts";
 import {
+  ambientWindow,
   judgeAmbientBatch,
+  recentWakeMessages,
   renderAmbientPrompt,
   type AmbientBatch,
   type AmbientDecision,
@@ -56,16 +58,14 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
     const cursor = deps.ambientCursors ? await deps.ambientCursors.get(cursorKey) : null;
     const after = cursor?.lastJudgedTs;
     const all = await deps.surfaceCache.readMessages(container, { surface, limit: 60, noFallback: true });
-    const backdrop = after ? all.filter((m) => m.ts <= after).slice(-10) : [];
     const rawDelta = (after ? all.filter((m) => m.ts > after) : all).filter((m) => !m.self);
     const ledger = new Map<string, BotPolicy>();
     for (const [name, b] of Object.entries(policy?.bots ?? {})) ledger.set(name.toLowerCase(), b);
     const botModeOf = (m: CachedMessage): BotPolicy["mode"] | undefined =>
       m.bot && m.authorName ? ledger.get(m.authorName.toLowerCase())?.mode : undefined;
-    const delta = rawDelta
-      .filter((m) => !m.handled)
-      .filter((m) => botModeOf(m) !== "ignore")
-      .map((m) => (botModeOf(m) === "user" ? { ...m, bot: false } : m));
+    const asPolicy = (ms: CachedMessage[]): CachedMessage[] =>
+      ms.filter((m) => botModeOf(m) !== "ignore").map((m) => (botModeOf(m) === "user" ? { ...m, bot: false } : m));
+    const delta = asPolicy(rawDelta.filter((m) => !m.handled));
     const rawLatestTs = rawDelta.reduce((max, m) => (m.ts > max ? m.ts : max), after ?? "");
     const advanceCursor = async (): Promise<void> => {
       if (deps.ambientCursors && rawDelta.length && rawLatestTs)
@@ -147,12 +147,10 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
         orders: ordersForJudge,
         ...(self ? { self } : {}),
         messages: forJudge,
-        ...(backdrop.length ? { backdrop } : {}),
+        recent: ambientWindow(asPolicy(all), forJudge),
         ...(scheduled ? { scheduled: true } : {}),
       };
-      const readable = deps.surfaces.get(surface)?.readableText;
-      if (!readable) throw new Error(`ambient: no registered surface ${surface}`);
-      const prompt = renderAmbientPrompt(judgeBatch, readable);
+      const prompt = renderAmbientPrompt(judgeBatch);
       const startedAt = Date.now();
       const judgeModel = deps.judgeModelId?.();
       const botTs = new Set(rawDelta.filter((m) => m.bot).map((m) => m.ts));
@@ -163,7 +161,6 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
               { scopeId: scopeId(judgeBatch.kind === "group" ? "group" : "channel", container) },
               () => deps.ambientJudge!(system, prompt),
             ),
-          readable,
           spawnWorker: (b: AmbientBatch, d: AmbientDecision) =>
             spawnAmbientWorker(
               { ...b, messages: b.messages.map((m) => (botTs.has(m.ts) && !m.bot ? { ...m, bot: true } : m)) },
@@ -299,7 +296,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
             at: new Date(),
             why: decision.reason ?? "The recent messages here may warrant a reply.",
             orders: batch.orders,
-            recentMessages: shown,
+            recentMessages: recentWakeMessages(batch),
             instructions: `You don't need to have been @mentioned. Respond with the \`${batch.surface}\` tool's \`post\` action — set \`ts\` to the triggering message id to reply in its thread, or \`broadcast: true\` to post at the channel top level — or stay silent if nothing is needed. To include an image or file, name its workspace path in \`post\`'s \`files\` (it uploads with your message, in that thread). Use \`reach\` only to send to a DIFFERENT channel or person. Use the \`read_thread\` or \`search\` action if you need more context than shown.`,
           }),
           origin: {
