@@ -623,9 +623,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       starting = deps.jobQueue
         .start({
           onFire: (job) =>
-            observed === epoch
-              ? inTenant(job.tenantId, () => runQueueTask(() => fireJob(job)))
-              : Promise.resolve(),
+            observed === epoch ? inTenant(job.tenantId, () => runQueueTask(() => fireJob(job))) : Promise.resolve(),
         })
         .then(
           () => {
