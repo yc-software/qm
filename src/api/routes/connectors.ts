@@ -1,7 +1,6 @@
-import { bindTenant, withRowTenant } from "../tenant-ingress.ts";
 import { getSentEmail, listSentEmails } from "../../connectors/gmail-sent.ts";
 import { GmailApiError } from "../../connectors/gmail-api.ts";
-import { orgId } from "../../config.ts";
+import { orgId as configOrgId } from "../../config.ts";
 import {
   authorizeUrl,
   exchangeCode,
@@ -27,7 +26,6 @@ import { personKey, samePerson } from "../../directory/person.ts";
 import { errMessage, swallowAs } from "../../util/errors.ts";
 import { normalizeInboundExpiresAt } from "../expiry.ts";
 import { sendJson, sendRedirect } from "../http.ts";
-import { tenantClaim } from "../../tenants/context.ts";
 import { audit } from "./shared.ts";
 import type { ApiCtx, BaseCtx, Route } from "./route.ts";
 
@@ -132,16 +130,9 @@ async function connectorProviderStatus(
   return Object.fromEntries(entries);
 }
 
-function oauthCallback(ctx: BaseCtx): Promise<void> {
-  const state = ctx.url.searchParams.get("state");
-  if (!ctx.deps.oauthFlows || !state) return finishOAuthCallback(ctx);
-  return withRowTenant(ctx.req, ctx.res, ctx.deps.tenancy, { table: "oauth_flows", id: state }, () =>
-    finishOAuthCallback(ctx),
-  );
-}
-
-async function finishOAuthCallback(ctx: BaseCtx): Promise<void> {
-  const { res, deps, secret, url } = ctx;
+async function oauthCallback(ctx: BaseCtx): Promise<void> {
+  const { res, deps, secret, url, pathname } = ctx;
+  const oauthRoute = parseOAuthRoute(pathname)!;
   if (!deps.connectorTokens)
     return sendJson(res, 501, { error: "not_configured", message: "connector token store not wired" });
   const code = url.searchParams.get("code") ?? "";
@@ -149,28 +140,11 @@ async function finishOAuthCallback(ctx: BaseCtx): Promise<void> {
   const providerError = url.searchParams.get("error");
   if (providerError) return sendJson(res, 400, { error: "oauth_denied", message: providerError });
   if (!code || !stateParam) return sendJson(res, 400, { error: "bad_request", message: "code and state required" });
-  const connectorTokens = deps.connectorTokens;
-  let state: OAuthState;
+  let state;
   try {
     state = await resumeOAuthFlow(deps, secret, stateParam);
-  } catch (e) {
-    return sendJson(res, 400, { error: "oauth_callback_failed", message: errMessage(e) });
-  }
-  const complete = () => completeOAuthCallback(ctx, connectorTokens, code, state);
-  return state.tenant ? bindTenant(state.tenant, complete) : complete();
-}
-
-async function completeOAuthCallback(
-  ctx: BaseCtx,
-  connectorTokens: ConnectorTokenStore,
-  code: string,
-  state: OAuthState,
-): Promise<void> {
-  const { res, deps, pathname } = ctx;
-  const oauthRoute = parseOAuthRoute(pathname)!;
-  try {
     if (state.provider !== oauthRoute.provider) throw new Error("OAuth provider mismatch");
-    if (state.orgId !== undefined && state.orgId !== orgId()) {
+    if (state.orgId !== undefined && state.orgId !== configOrgId()) {
       throw new Error("OAuth state is for a different org");
     }
     if (
@@ -188,8 +162,9 @@ async function completeOAuthCallback(
       ...(state.codeVerifier ? { codeVerifier: state.codeVerifier } : {}),
     });
     if (!token.accessToken) throw new Error("oauth exchange returned an empty access token");
-    const stamped = { ...token, clientRef: client.clientRef, accountType, orgId: orgId() };
-    for (const host of hosts) await connectorTokens.setConnectorToken(host, state.principalId, stamped, accountType);
+    const stamped = { ...token, clientRef: client.clientRef, accountType, orgId: configOrgId() };
+    for (const host of hosts)
+      await deps.connectorTokens.setConnectorToken(host, state.principalId, stamped, accountType);
     audit(deps, {
       principalId: state.principalId,
       action: "connector.oauth.connected",
@@ -236,7 +211,7 @@ async function consentRedeem(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 200, { status: peeked.reason === "expired" ? "expired" : "invalid" });
   }
   const rec = peeked.rec;
-  if (rec.orgId !== undefined && rec.orgId !== orgId()) return sendJson(res, 200, { status: "invalid" });
+  if (rec.orgId !== undefined && rec.orgId !== configOrgId()) return sendJson(res, 200, { status: "invalid" });
   if (!oauthProvider(rec.provider)) return sendJson(res, 200, { status: "invalid" });
   if (!samePerson(clicker, rec.principalId)) {
     const clickerConnected = await principalHasProvider(deps, rec.provider, clicker);
@@ -267,8 +242,7 @@ async function consentRedeem(ctx: ApiCtx): Promise<void> {
       provider: rec.provider,
       principalId: rec.principalId,
       redirectUri: rec.redirectUri,
-      orgId: orgId(),
-      ...tenantClaim(),
+      orgId: configOrgId(),
       ...(rec.accountType !== "default" ? { accountType: rec.accountType } : {}),
       clientRef: client.clientRef,
       ...(returnTo ? { returnTo } : {}),
@@ -352,7 +326,7 @@ async function consentMint(ctx: ApiCtx): Promise<void> {
     safeReturnTo(typeof b.returnTo === "string" ? b.returnTo : null) ?? (deps.portalUrl ? "/connectors" : undefined);
   const { linkId } = await deps.consentLinks.mint({
     principalId: capability.actorId,
-    orgId: orgId(),
+    orgId: configOrgId(),
     provider,
     accountType,
     redirectUri,
@@ -399,8 +373,7 @@ async function oauthStart(ctx: ApiCtx): Promise<void> {
       provider: oauthRoute.provider,
       principalId,
       redirectUri,
-      orgId: orgId(),
-      ...tenantClaim(),
+      orgId: configOrgId(),
       ...(accountType !== "default" ? { accountType } : {}),
       clientRef: client.clientRef,
       ...(safeReturnTo(url.searchParams.get("returnTo"))
@@ -522,12 +495,7 @@ async function catalog(ctx: ApiCtx): Promise<void> {
 }
 
 export const connectorRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
-  {
-    match: (m, p) => m === "GET" && parseOAuthRoute(p)?.action === "callback",
-    auth: "public",
-    tenant: "row",
-    handle: oauthCallback,
-  },
+  { match: (m, p) => m === "GET" && parseOAuthRoute(p)?.action === "callback", auth: "public", handle: oauthCallback },
 ];
 
 export async function gmailSent(ctx: ApiCtx): Promise<void> {

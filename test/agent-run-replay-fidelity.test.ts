@@ -14,7 +14,6 @@ import { createPostgresToolOutputStore, type ToolOutputStore } from "../src/sess
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
-import { seedInstallTenant } from "./support/tenant-seed.ts";
 
 type Body = { messages?: unknown[]; input?: unknown[] };
 type Reply = Array<Record<string, unknown>>;
@@ -542,7 +541,6 @@ async function withPgSession(
   await admin.query(`CREATE SCHEMA ${schema}`);
   const url = new globalThis.URL(PG_URL!);
   url.searchParams.set("options", `-c search_path=${schema}`);
-  await seedInstallTenant(url.toString());
   const store = createPostgresSessionStore(url.toString());
   const raw = new pg.Pool({ connectionString: url.toString() });
   try {

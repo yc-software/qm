@@ -1,4 +1,3 @@
-import { TENANT_HEADER } from "../../chassis/src/source-auth-sign.ts";
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
 import { signedHeaders } from "../../chassis/src/core-client.ts";
 import { withVary } from "../../chassis/src/http.ts";
@@ -250,7 +249,6 @@ export function proxyToAppHost(req: IncomingMessage, res: ServerResponse, coreBa
     "x-as-principal",
     "x-admin-actor",
     "x-agent-capability",
-    TENANT_HEADER,
     PORTAL_IDENTITY_HEADER,
     "x-qm-app-host",
     "x-qm-client-ip",

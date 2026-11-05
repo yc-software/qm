@@ -719,9 +719,9 @@ test("Render rechecks activity after it waits for a sandbox operation", async (t
   });
   await held.promise;
   const listed = Promise.withResolvers<void>();
-  const acrossTenants = store.acrossTenants;
-  t.mock.method(store, "acrossTenants", async () => {
-    const result = await acrossTenants();
+  const entries = store.entries;
+  t.mock.method(store, "entries", async () => {
+    const result = await entries();
     listed.resolve();
     return result;
   });

@@ -57,10 +57,9 @@ interface Rig {
 async function rig(opts?: {
   prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
 }): Promise<Rig> {
-  const url = testDatabaseUrl();
-  const sessions = createPostgresSessionStore(url);
-  const { runs } = createPostgresRunStore(url);
-  const signals = createPostgresRunSignalStore(url);
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const signals = createPostgresRunSignalStore(testDatabaseUrl());
   const mailbox = createSessionMailbox(testMap<SessionMessage>());
   const advisoryLock = testAdvisoryLock();
   const factory = createSessionSyscalls({
@@ -2807,14 +2806,13 @@ test("children of a Slack group turn keep its source so external-workspace polic
   const policies = { ext: access };
   const admitted = (request: OrchestratorInput) =>
     externalSlackRequestAllowed({ ...request, surface: request.surface ?? "" }, policies);
-  const url = testDatabaseUrl();
-  const sessions = createPostgresSessionStore(url);
-  const { runs } = createPostgresRunStore(url);
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
   const factory = createSessionSyscalls({
     mailbox: createSessionMailbox(testMap<SessionMessage>()),
     sessions,
     runs,
-    signals: createPostgresRunSignalStore(url),
+    signals: createPostgresRunSignalStore(testDatabaseUrl()),
     advisoryLock: testAdvisoryLock(),
     maxAttempts: 3,
   });
@@ -2854,9 +2852,8 @@ test("children of a Slack group turn keep its source so external-workspace polic
 });
 
 test("sessions list shows only sidebar sessions the whole audience can see and create needs a live turn", async () => {
-  const url = testDatabaseUrl();
-  const sessions = createPostgresSessionStore(url);
-  const { runs } = createPostgresRunStore(url);
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
   const started: Array<{ forkOf?: string; text?: string; title?: string; scopeId: ScopeId }> = [];
   const room = await sessions.getOrCreateByThread("web:U1:room", "dm", scope, undefined, "web");
   await sessions.updateTitle(room.id, "room");
@@ -2871,7 +2868,7 @@ test("sessions list shows only sidebar sessions the whole audience can see and c
     mailbox: createSessionMailbox(testMap<SessionMessage>()),
     sessions,
     runs,
-    signals: createPostgresRunSignalStore(url),
+    signals: createPostgresRunSignalStore(testDatabaseUrl()),
     advisoryLock: testAdvisoryLock(),
     maxAttempts: 3,
     conversations: {

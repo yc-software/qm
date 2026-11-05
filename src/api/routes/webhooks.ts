@@ -1,4 +1,3 @@
-import { withRowTenant } from "../tenant-ingress.ts";
 import type { Webhook } from "../../triggers/types.ts";
 import { WEBHOOK_SCHEMES } from "../../webhooks/verifiers.ts";
 import type { CreateWebhookInput } from "../../webhooks/webhook-store.ts";
@@ -52,13 +51,7 @@ export function redactWebhook(w: Webhook): Webhook {
   return { ...w, verification: { ...w.verification, secret: "***" } };
 }
 
-function incomingWebhook(ctx: BaseCtx): Promise<void> {
-  return withRowTenant(ctx.req, ctx.res, ctx.deps.tenancy, { table: "webhooks", id: ctx.params.id! }, () =>
-    receiveWebhook(ctx),
-  );
-}
-
-async function receiveWebhook(ctx: BaseCtx): Promise<void> {
+async function incomingWebhook(ctx: BaseCtx): Promise<void> {
   const { req, res, deps, params } = ctx;
   if (!deps.webhookReceiver) {
     req.resume();
@@ -196,7 +189,7 @@ const disableWebhook = (ctx: ApiCtx): Promise<void> => setWebhookEnabled(ctx, fa
 const enableWebhook = (ctx: ApiCtx): Promise<void> => setWebhookEnabled(ctx, true);
 
 export const webhookRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
-  { method: "POST", path: "/v1/webhooks/incoming/:id", auth: "public", tenant: "row", handle: incomingWebhook },
+  { method: "POST", path: "/v1/webhooks/incoming/:id", auth: "public", handle: incomingWebhook },
 ];
 
 export const webhookRoutes: ReadonlyArray<Route<ApiCtx>> = [

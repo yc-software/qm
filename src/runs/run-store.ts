@@ -60,7 +60,6 @@ export function handbackStop(shutdown: AbortSignal): RunStop {
 
 export interface Run {
   id: string;
-  tenantId?: string;
   sessionId: string;
   status: RunStatus;
   request: OrchestratorInput;

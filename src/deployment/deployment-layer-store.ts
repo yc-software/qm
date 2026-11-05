@@ -21,7 +21,6 @@ import {
 import type { SkillBundleStore } from "../skills/skill-bundle-store.ts";
 import { createKeyedQueue, sleep } from "../util/async.ts";
 import { errMessage } from "../util/errors.ts";
-import { isInstallTenant } from "../tenants/context.ts";
 import { parseToolDescriptor, type ToolDescriptor } from "./deployment-layer.ts";
 import {
   declaredInstallFiles,
@@ -451,7 +450,7 @@ export function createDeploymentLayerStore(opts: {
     return record;
   };
 
-  const store: DeploymentLayerStore = {
+  return {
     isApplied: async (hash) => {
       if (appliedHash !== hash) return false;
       try {
@@ -602,17 +601,5 @@ export function createDeploymentLayerStore(opts: {
           return record;
         });
       }),
-  };
-  return {
-    isApplied: (hash) => (isInstallTenant() ? store.isApplied(hash) : Promise.resolve(false)),
-    live: () => (isInstallTenant() ? store.live() : { source: "none", contentHash: null, resolved: null }),
-    hydrate: () => (isInstallTenant() ? store.hydrate() : Promise.resolve(null)),
-    get: () => (isInstallTenant() ? store.get() : Promise.resolve(null)),
-    put: (bundle, updatedBy) =>
-      isInstallTenant()
-        ? store.put(bundle, updatedBy)
-        : Promise.reject(
-            new DeploymentLayerValidationError("Only the deployment's own tenant can store a deployment layer"),
-          ),
   };
 }

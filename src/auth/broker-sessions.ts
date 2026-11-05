@@ -1,6 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
 import { createPgPool } from "../persistence/pg-pool.ts";
-import { TENANCY, tenantTables } from "../tenants/migrations.ts";
 
 interface BrokerSession {
   email: string;
@@ -29,11 +28,7 @@ const SCHEMA = [
 ];
 
 export function createPostgresBrokerSessions(connectionString: string): BrokerSessionStore {
-  const pg = createPgPool(connectionString, [
-    ...TENANCY,
-    { id: "auth/broker-sessions/0001", statements: SCHEMA },
-    ...tenantTables("auth/broker-sessions/0002-tenants", [{ table: "auth_broker_sessions", primaryKey: "token_hash" }]),
-  ]);
+  const pg = createPgPool(connectionString, [{ id: "auth/broker-sessions/0001", statements: SCHEMA }]);
   const session = (row: Record<string, unknown>): BrokerSession => ({
     email: String(row.email),
     authTime: Math.floor(new Date(String(row.authenticated_at)).getTime() / 1000),

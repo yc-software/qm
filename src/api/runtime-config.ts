@@ -21,6 +21,7 @@ import {
   thinkingLevelsFor,
   codexProviderModelId,
   codexSubscriptionModelId,
+  companyModelId,
   defaultWebuiModelIds,
   THINKING_LEVELS,
   modelServiceable,
@@ -147,7 +148,8 @@ export async function runtimeConfigBody(
     );
     models = models.filter((_, index) => !allowed[index]);
   }
-  const billing = (id: string) => modelBilling(!!managedKeys.modelIds?.has(id), !!authorizeChoice);
+  const billing = (id: string) =>
+    modelBilling(!!managedKeys.modelIds?.has(companyModelId(id, managedKeys)), !!authorizeChoice);
   const modelCatalog = Object.fromEntries(
     Object.entries(modelCatalogFor(new Set(models))).map(([id, meta]) => [id, { ...meta, billing: billing(id) }]),
   );

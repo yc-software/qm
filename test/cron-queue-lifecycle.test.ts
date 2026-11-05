@@ -40,9 +40,6 @@ mock.module("pg-boss", {
         if (failStart) throw new Error("startup failed");
       }
       async createQueue() {}
-      async getQueue() {
-        return { name: "cron-fire" };
-      }
       async work() {
         if (failWork) throw new Error("polling failed");
       }

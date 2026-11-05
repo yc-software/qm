@@ -1,4 +1,3 @@
-import { inTenantOf } from "../tenants/claim.ts";
 import type { Delivery, ScopeId } from "../types.ts";
 import type { DeliveryStore } from "./delivery-store.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
@@ -142,12 +141,6 @@ export function withWebTranscriptDeliveries(
     }
     return out;
   };
-  const drainedInTenants = async (type: string, rows: Delivery[]): Promise<Delivery[]> => {
-    if (!transcribed(type)) return rows;
-    const out: Delivery[] = [];
-    for (const row of rows) out.push(...(await inTenantOf(row.tenantId, () => drained([row]))));
-    return out;
-  };
 
   return {
     ...store,
@@ -166,15 +159,9 @@ export function withWebTranscriptDeliveries(
       const rows = await store.pending(type);
       return transcribed(type) ? drained(rows) : rows;
     },
-    async pendingAcrossTenants(type) {
-      return drainedInTenants(type, await store.pendingAcrossTenants(type));
-    },
     async claimPending(type, ttlMs, opts) {
       const rows = await store.claimPending(type, ttlMs, opts);
       return transcribed(type) ? drained(rows) : rows;
-    },
-    async claimPendingAcrossTenants(type, ttlMs, opts) {
-      return drainedInTenants(type, await store.claimPendingAcrossTenants(type, ttlMs, opts));
     },
   };
 }

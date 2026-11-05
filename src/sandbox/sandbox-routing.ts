@@ -1,12 +1,5 @@
 import type { SandboxResources } from "./sandbox-resources.ts";
 import type { ScopeId } from "../types.ts";
-import type { TenantEnvSubset } from "../tenants/tenant-instances.ts";
-import {
-  enabledSandboxBackends,
-  MODAL_TENANT_ENV,
-  SPRITES_TENANT_ENV,
-  type SandboxSettings,
-} from "./sandbox-settings.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
 import {
   CapabilityUnsupportedError,
@@ -289,40 +282,3 @@ const swallowReap = swallowAs("sandbox-router: reapDeepIdle on a backend", { rea
 
 const constructed = (backends: Partial<Record<SandboxBackendName, Sandbox>>): Sandbox[] =>
   Object.values(backends).filter((s): s is Sandbox => !!s);
-
-export function liveBackends(
-  current: () => Partial<Record<SandboxBackendName, Sandbox>>,
-): Partial<Record<SandboxBackendName, Sandbox>> {
-  return new Proxy(
-    {},
-    {
-      get: (_target, key) => Reflect.get(current(), key),
-      has: (_target, key) => Reflect.has(current(), key),
-      ownKeys: () => Reflect.ownKeys(current()),
-      getOwnPropertyDescriptor: (_target, key) => {
-        const value: unknown = Reflect.get(current(), key);
-        return value === undefined ? undefined : { value, enumerable: true, configurable: true, writable: false };
-      },
-    },
-  );
-}
-
-export function tenantSandboxBackends(
-  deployment: Partial<Record<SandboxBackendName, Sandbox>>,
-  settings: SandboxSettings,
-  env: TenantEnvSubset,
-  build: Record<"sprites" | "modal", (settings: SandboxSettings) => Sandbox>,
-): Partial<Record<SandboxBackendName, Sandbox>> {
-  const backends = { ...deployment };
-  const enabled = new Set(enabledSandboxBackends(settings));
-  const touched = {
-    sprites: SPRITES_TENANT_ENV.some((name) => env[name] !== undefined),
-    modal: MODAL_TENANT_ENV.some((name) => env[name] !== undefined),
-  };
-  for (const name of ["sprites", "modal"] as const) {
-    if (!touched[name]) continue;
-    delete backends[name];
-    if (enabled.has(name)) backends[name] = build[name](settings);
-  }
-  return backends;
-}
