@@ -1,6 +1,6 @@
 # Core-hosted web front door and web UI releases
 
-Core is the only application workload besides the optional egress proxy. When `PUBLIC_PORT` is set, core serves the public front door on that port: the portal's sign-in and reverse proxy, the built-in auth broker on `127.0.0.1:8099` when `AUTH_EMBEDDED=1`, and the web UI server on a loopback port. Core's API stays on `PORT`. Every CLI target sets `PUBLIC_PORT=8000` and routes public traffic there; the API port stays private. Slack remains in core.
+Core is the only application workload besides the optional egress proxy. When `PUBLIC_PORT` is set, core serves the public front door on that port: the portal's sign-in and reverse proxy, the built-in auth broker on `127.0.0.1:8099` when `AUTH_EMBEDDED=1`, and the web UI server on a loopback port. Core's API stays on `PORT`. Every CLI target sets `PUBLIC_PORT=8000` and routes public traffic there; the API port stays private, except that on AWS a separate `apiUrl` host and the apps domain route by host header straight to core's API port through a second target group (`aws.services.core.apiTargetGroup`). Slack remains in core.
 
 ## Web UI releases
 

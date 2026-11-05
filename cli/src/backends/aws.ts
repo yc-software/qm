@@ -3518,6 +3518,7 @@ interface AwsEcsRoutingService {
   }>;
   loadBalancers?: Array<{
     targetGroupArn?: string;
+    containerPort?: number;
     advancedConfiguration?: {
       alternateTargetGroupArn?: string;
       productionListenerRule?: string;
@@ -3703,21 +3704,33 @@ function assertCloudFrontLayerTarget(config: QmConfig, url: URL, target: string)
 interface AwsIngressRoute {
   service: string;
   paths: readonly string[];
+  hosts: readonly string[];
 }
 
+const CORE_API_ROUTE = "core";
+
 function awsIngressRoutes(config: QmConfig): ReadonlyMap<string, AwsIngressRoute> {
+  const aws = requireAws(config);
   const routes = new Map<string, AwsIngressRoute>();
-  for (const [name, service] of Object.entries(requireAws(config).services)) {
-    if (service?.publicPaths?.length) routes.set(name, { service: name, paths: service.publicPaths });
+  for (const [name, service] of Object.entries(aws.services)) {
+    if (service?.publicPaths?.length) routes.set(name, { service: name, paths: service.publicPaths, hosts: [] });
   }
-  routes.set(CORE_PUBLIC_PORT_NAME, { service: "core", paths: ["/*"] });
+  const coreHosts = awsCoreHostnames(config);
+  if (coreHosts.length && !aws.sharedAlb) routes.set(CORE_API_ROUTE, { service: "core", paths: [], hosts: coreHosts });
+  routes.set(CORE_PUBLIC_PORT_NAME, { service: "core", paths: ["/*"], hosts: [] });
   return routes;
 }
 
 export function awsTargetGroupName(config: QmConfig, route: string): string {
   const aws = requireAws(config);
+  const configured =
+    route === CORE_PUBLIC_PORT_NAME
+      ? aws.services.core?.targetGroup
+      : route === CORE_API_ROUTE
+        ? aws.services.core?.apiTargetGroup
+        : aws.services[route]?.targetGroup;
   return (
-    aws.services[route === CORE_PUBLIC_PORT_NAME ? "core" : route]?.targetGroup ??
+    configured ??
     `${aws.cluster.slice(0, 20)}-${route.replaceAll("-", "").slice(0, 4)}-${createHash("sha1").update(`${aws.cluster}:${route}`).digest("hex").slice(0, 6)}`
   );
 }
@@ -3734,6 +3747,7 @@ export function assertAwsPublicRouting(
       route.service === name && route.paths.length ? [[name, route.paths] as const] : [],
     ),
   );
+  const coreHosts = routes.get(CORE_API_ROUTE)?.hosts ?? [];
   const { loadBalancerArn, listener } = awsPublicFrontDoor(config);
   const targetGroups =
     awsJson<{ TargetGroups?: Array<{ TargetGroupArn?: string; TargetGroupName?: string }> }>(aws, [
@@ -3750,7 +3764,13 @@ export function assertAwsPublicRouting(
   for (const name of ingress) {
     const expectedName = awsTargetGroupName(config, name);
     const target = targetGroups.find((group) => group.TargetGroupName === expectedName);
-    if (!target?.TargetGroupArn) throw new Error(`target group for ${name} is missing`);
+    if (!target?.TargetGroupArn) {
+      throw new Error(
+        name === CORE_API_ROUTE
+          ? `target group ${expectedName} for core's API host rules (${routes.get(name)!.hosts.join(", ")}) is missing`
+          : `target group for ${name} is missing`,
+      );
+    }
     targets.set(name, target.TargetGroupArn);
     expectedTargetArns.add(target.TargetGroupArn);
     const owner = routes.get(name)!.service;
@@ -3759,6 +3779,15 @@ export function assertAwsPublicRouting(
     );
     if (!attachment) {
       throw new Error(`ECS service ${owner} is not attached to its ${name} target group`);
+    }
+    const port =
+      name === CORE_PUBLIC_PORT_NAME
+        ? PUBLIC_PORT
+        : name === CORE_API_ROUTE
+          ? serviceDef("core").docker.internalPort
+          : undefined;
+    if (port !== undefined && attachment.containerPort !== undefined && attachment.containerPort !== port) {
+      throw new Error(`ECS service core must attach its ${name} target group to container port ${port}`);
     }
     const alternate = attachment.advancedConfiguration?.alternateTargetGroupArn;
     const productionRule = attachment.advancedConfiguration?.productionListenerRule;
@@ -3947,10 +3976,18 @@ export function assertAwsPublicRouting(
         throw new Error(`blue/green ALB rule for ${name} must route to exactly one of its two target groups`);
       }
       const condition = rule?.Conditions?.length === 1 ? rule.Conditions[0] : undefined;
-      const pathValues =
-        condition?.Field === "path-pattern" ? (condition.PathPatternConfig?.Values ?? condition.Values ?? []) : [];
-      const expectedPaths = routes.get(name)!.paths;
-      if (pathValues.length !== expectedPaths.length || expectedPaths.some((value) => !pathValues.includes(value))) {
+      const route = routes.get(name)!;
+      const field = route.hosts.length ? "host-header" : "path-pattern";
+      const expectedValues = route.hosts.length ? route.hosts : route.paths;
+      const values =
+        condition?.Field !== field
+          ? []
+          : (
+              (field === "host-header" ? condition.HostHeaderConfig?.Values : condition.PathPatternConfig?.Values) ??
+              condition.Values ??
+              []
+            ).map((value) => (field === "host-header" ? value.toLowerCase() : value));
+      if (values.length !== expectedValues.length || expectedValues.some((value) => !values.includes(value))) {
         throw new Error(`blue/green ALB rule for ${name} does not match its production route`);
       }
       targets.set(name, active[0].TargetGroupArn);
@@ -3958,7 +3995,32 @@ export function assertAwsPublicRouting(
     return targets;
   }
   nonDefault = nonDefault.filter((rule) => !pluginRules.has(rule));
-  if (nonDefault.length) throw new Error("ALB has non-default rules beyond the declared plugin routes");
+  if (coreHosts.length) {
+    const apiTarget = targets.get(CORE_API_ROUTE);
+    const hostRules = nonDefault.filter(
+      (rule) =>
+        rule.Actions?.length === 1 &&
+        rule.Actions[0]?.Type === "forward" &&
+        rule.Actions[0]?.TargetGroupArn === apiTarget,
+    );
+    const routed = new Set<string>();
+    for (const rule of hostRules) {
+      const condition = rule.Conditions?.length === 1 ? rule.Conditions[0] : undefined;
+      const values =
+        condition?.Field === "host-header"
+          ? (condition.HostHeaderConfig?.Values ?? condition.Values ?? []).map((value) => value.toLowerCase())
+          : [];
+      if (!values.length || values.some((value) => !coreHosts.includes(value))) {
+        throw new Error(`core API host rules must match only ${coreHosts.join(", ")} by host header`);
+      }
+      for (const value of values) routed.add(value);
+    }
+    if (routed.size !== coreHosts.length) {
+      throw new Error(`core API host rules must route ${coreHosts.join(", ")} to core's API target group`);
+    }
+    nonDefault = nonDefault.filter((rule) => !hostRules.includes(rule));
+  }
+  if (nonDefault.length) throw new Error("ALB has non-default rules beyond the declared plugin and core API routes");
   return targets;
 }
 
