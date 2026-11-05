@@ -745,6 +745,46 @@ test("list never shows a private channel's agent to a non-member", async () => {
   assert.deepEqual(agentsOf(await agentsAs(control, CY)({ action: "list" })).sort(), ["ada", "opie"]);
 });
 
+test("a lock refusal through a grant, or a lookup by handle, names nothing about a private channel the actor isn't in", async () => {
+  const { built, control } = await setup();
+  assert.ok(
+    await built.app.upsertChannels(
+      [{ channelId: "C0SIDE", name: "side", isPrivate: true }],
+      [CY, DAN].map((principalId) => ({ channelId: "C0SIDE", principalId })),
+      Date.now(),
+      undefined,
+      undefined,
+      true,
+    ),
+  );
+  const skill = await built.app.createOwnedSkill({
+    principalId: CY,
+    homeScope: scopeId("channel", "C0SIDE"),
+    name: "side-notes",
+    description: "notes",
+    body: "take notes",
+    liveActor: true,
+  });
+  assert.ok(skill);
+  const shared = await control.shareArtifact(
+    { type: "skill", id: skill.id, scope: DESIGN_SCOPE },
+    { actorId: CY, scopeId: personal(CY), liveActor: true, exp: Date.now() + CAPABILITY_TTL_MS },
+  );
+  assert.equal(shared.ok, true);
+  await createAda(control);
+  const editAs = (principalId: string) =>
+    built.app.updateOwnedSkill(skill.id, principalId, { body: "changed" }, { liveActor: true });
+  await assert.rejects(editAs(CY), (e: Error) => e instanceof AgentLocked && e.message.includes("#design"));
+  await assert.rejects(editAs(DAN), (e: Error) => e instanceof AgentLocked && !/design|Ada|Ann|Bob/.test(e.message));
+  assert.equal((await built.app.getSkill(skill.id))?.manifest.body, "take notes");
+
+  const probe = await agentsAs(control, DAN)({ action: "edit", agent: "ada", title: "Spy" });
+  assert.equal(codeOf(probe), "not_found");
+  assert.doesNotMatch(JSON.stringify(probe), /Ada/);
+  assert.equal(codeOf(await agentsAs(control, DAN)({ action: "archive", agent: "ada" })), "not_found");
+  assert.equal(codeOf(await agentsAs(control, CY)({ action: "edit", agent: "ada", title: "Spy" })), "forbidden");
+});
+
 const turn = (actor: string, conversation: TurnRequest["conversation"], text: string): TurnRequest => ({
   surface: "slack",
   actor: { externalId: actor },
