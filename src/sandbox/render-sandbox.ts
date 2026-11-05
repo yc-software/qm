@@ -594,17 +594,15 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
       let reaped = 0;
       const scratchDue = (scratch: StoredRenderScratch | null): boolean =>
         !!scratch && (scratch.cleanupPending || scratch.expiresAtMs <= Date.now());
-      await claimThenBind(
-        () => scratchStore.claimIds(),
-        async (name) => {
-          if (!scratchDue(await scratchStore.get(name))) return;
-          await tryLock(lifecycleKey(name), async () => {
-            if (!scratchDue(await scratchStore.get(name))) return;
-            await destroyScratch(name);
-            reaped++;
-          }).catch((error) => reportError("scratch_cleanup_failed", error));
-        },
-      );
+      await claimThenBind(scratchStore.claimTenants, async () => {
+        for (const [name, scratch] of await scratchStore.entries())
+          if (scratchDue(scratch))
+            await tryLock(lifecycleKey(name), async () => {
+              if (!scratchDue(await scratchStore.get(name))) return;
+              await destroyScratch(name);
+              reaped++;
+            }).catch((error) => reportError("scratch_cleanup_failed", error));
+      });
       const cutoff = Date.now() - Math.min(idleMs > 0 ? idleMs : Infinity, RENDER_IDLE_STOP_MS);
       const stale = (stored: StoredRenderSandbox): boolean => stored.homeDirty !== false && !recentlySaved(stored);
       const due = (stored: StoredRenderSandbox): boolean =>
@@ -616,11 +614,9 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
             swallowAs(`render-sandbox: finish cleanup of ${scope}`, undefined),
           ),
       );
-      await claimThenBind(
-        () => store.claimIds(),
-        async (scope) => {
-          const candidate = await store.get(scope);
-          if (!candidate || (!due(candidate) && !candidate.retiredResources?.length)) return;
+      await claimThenBind(store.claimTenants, async () => {
+        for (const [scope, candidate] of await store.entries()) {
+          if (!due(candidate) && !candidate.retiredResources?.length) continue;
           const name = nameFor(scope);
           await tryLock(lifecycleKey(name), async () => {
             let stored = await store.get(scope);
@@ -657,8 +653,8 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
             if (stopped) reaped++;
             else await checkpoint(scope, stored, active || undefined);
           }).catch((error) => reportError("idle_checkpoint_failed", error, scope));
-        },
-      );
+        }
+      });
       return { reaped };
     },
     async computerStatus(scope): Promise<ComputerStatus> {
