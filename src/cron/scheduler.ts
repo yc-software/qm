@@ -505,16 +505,14 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   async function reconcile(): Promise<void> {
     try {
       const horizon = now() + 2 * REPAIR_INTERVAL_MS;
-      await claimThenBind(
-        () => deps.crons.claimIds(),
-        async (id) => {
+      await claimThenBind(deps.crons.claimTenants, async () => {
+        for (const cron of await deps.crons.list()) {
           if (stopped) return;
-          const cron = await deps.crons.get(id);
-          if (!cron || cron.archived || !cron.enabled) return;
+          if (cron.archived || !cron.enabled) continue;
           const job = nextJob(cron);
           if (job && fireJobStartsAt(job) <= horizon) await deps.jobQueue!.enqueueFire(job);
-        },
-      );
+        }
+      });
     } catch (e) {
       reportFailure("scheduler: reconcile", e);
     }

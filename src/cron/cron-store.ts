@@ -55,7 +55,7 @@ export interface CronStore {
   create(input: CreateCronInput): Promise<Cron>;
   get(id: string): Promise<Cron | null>;
   list(): Promise<Cron[]>;
-  claimIds(): Promise<ClaimedRow[]>;
+  claimTenants(): Promise<ClaimedRow[]>;
   ownedBy(scopeId: string): Promise<Cron[]>;
   update(id: string, patch: CronPatch): Promise<Cron | null>;
   delete(id: string): Promise<void>;
@@ -140,7 +140,7 @@ export function createCronStore(
     },
     get: (id) => backing.get(id),
     list: () => backing.all(),
-    claimIds: () => backing.claimIds(),
+    claimTenants: () => backing.claimTenants(),
     ownedBy: (scopeId) => ownedBy(backing, scopeId),
     async update(id, patch) {
       const before = await backing.get(id);
@@ -244,15 +244,13 @@ export function createCronStore(
       await backing.merge(id, { deferUntil: until });
     },
     async due(now) {
-      const due = await claimThenBind(
-        () => backing.claimIds(),
-        async (id) => {
-          const c = await backing.get(id);
-          if (!c || c.archived || !c.enabled || isDeferred(c, now)) return [];
+      const due = await claimThenBind(backing.claimTenants, async () =>
+        (await backing.all()).flatMap((c) => {
+          if (c.archived || !c.enabled || isDeferred(c, now)) return [];
           const scheduledAt = recoverNextFireAt(c.schedule, c.createdAt, c.lastFiredAt, c.nextFireAt);
           if (scheduledAt === undefined || now < scheduledAt) return [];
           return [{ ...c, nextFireAt: scheduledAt, scheduledAt, tenantId: currentTenant() }];
-        },
+        }),
       );
       return due.flat();
     },
