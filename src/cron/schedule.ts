@@ -87,8 +87,6 @@ function nextCalendarFireAfter(schedule: CronSchedule, after: number): number | 
   return next ? next.getTime() : undefined;
 }
 
-// At most one fire per day on average: no more than 7 calendar fires in the week from `from`.
-// One-shots count as infrequent; everyMs is always under 24h, so it never does.
 export function firesAtMostDaily(schedule: CronSchedule, from: number): boolean {
   if (!isCalendarSchedule(schedule)) return schedule.everyMs === undefined;
   const job = calendarJob(schedule);

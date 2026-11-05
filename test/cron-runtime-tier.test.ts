@@ -47,7 +47,6 @@ async function setup() {
   return config;
 }
 
-// Mirrors the fire path: run-trigger's turnModelOptions, then runtime resolution with the turn's purpose.
 async function cronTurnRuntime(
   config: ReturnType<typeof testConfigStore>,
   schedule: CronSchedule,
