@@ -6,7 +6,7 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { createPostgresSessionStateBus } from "../src/runs/postgres-session-state-bus.ts";
 import type { SessionStateEvent } from "../src/runs/session-state-bus.ts";
 import { createTurnMethods } from "../src/api/app-turn.ts";
-import { withTenant, withoutTenant } from "../src/tenants/context.ts";
+import { currentTenant, withTenant, withoutTenant } from "../src/tenants/context.ts";
 import type { ScopeId } from "../src/types.ts";
 import { testRuns } from "./support/live-run.ts";
 import { twoTenants, type TwoTenants } from "./support/two-tenants.ts";
@@ -90,6 +90,37 @@ withoutTenant(() =>
             [text],
           );
         });
+    });
+  }),
+);
+
+withoutTenant(() =>
+  describe("live feeds call each subscriber back under its own tenant", () => {
+    let db: TwoTenants;
+
+    before(async () => {
+      db = await twoTenants();
+    });
+
+    after(async () => {
+      await db?.close();
+    });
+
+    it("a notify from one tenant reaches every tenant's subscriber bound to that subscriber's tenant", async () => {
+      const bus = createPostgresSessionStateBus(db.appDatabaseUrl);
+      const heard: string[] = [];
+      const stops = db.tenants.map((tenant) =>
+        withTenant(tenant, () => bus.subscribe((event) => void heard.push(`${event.threadRef} ${currentTenant()}`))),
+      );
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        withTenant(db.tenants[1], () => bus.emit({ threadRef: "t", state: "idle", at: 1 }));
+        for (let i = 0; i < 200 && heard.length < 2; i++) await new Promise((resolve) => setTimeout(resolve, 10));
+      } finally {
+        for (const stop of stops) stop();
+        await bus.close?.();
+      }
+      assert.deepEqual(heard.sort(), db.tenants.map((tenant) => `t ${tenant}`).sort());
     });
   }),
 );
