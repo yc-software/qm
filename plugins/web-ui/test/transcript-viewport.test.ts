@@ -1146,3 +1146,67 @@ test("a steer rendered inside the running turn is the latest prompt and anchors 
     if (restore) Object.defineProperty(globalThis, "getComputedStyle", restore);
   }
 });
+
+test("a redraw holds the transcript's height until the follow frame so a rebuilt reply cannot clamp the scroll", () => {
+  const f = fixture();
+  const stack = f.s.querySelector<HTMLElement>(".message-stack")!;
+  stack.getBoundingClientRect = () => ({ height: 1000 }) as DOMRect;
+  try {
+    f.viewport.beforeRender();
+    assert.equal(stack.style.minHeight, "1000px");
+    f.viewport.afterRender();
+    assert.equal(stack.style.minHeight, "1000px");
+    f.grow();
+    f.flush();
+    assert.equal(stack.style.minHeight, "");
+    assert.equal(f.s.scrollTop, 900);
+    assert.deepEqual(f.writes, [1100]);
+  } finally {
+    f.close();
+  }
+});
+
+test("a held height waits for in-flight content renders before it is released", async () => {
+  const f = fixture();
+  const stack = f.s.querySelector<HTMLElement>(".message-stack")!;
+  stack.getBoundingClientRect = () => ({ height: 1000 }) as DOMRect;
+  try {
+    const completion = Promise.withResolvers<void>();
+    f.viewport.beforeRender();
+    f.s.dispatchEvent(
+      new f.s.ownerDocument.defaultView!.CustomEvent("qm-content-updating", {
+        bubbles: true,
+        detail: completion.promise,
+      }),
+    );
+    f.viewport.afterRender();
+    f.flush();
+    assert.equal(stack.style.minHeight, "1000px");
+    completion.resolve();
+    await completion.promise;
+    await Promise.resolve();
+    f.grow();
+    f.flush();
+    assert.equal(stack.style.minHeight, "");
+    assert.equal(f.s.scrollTop, 900);
+  } finally {
+    f.close();
+  }
+});
+
+test("readers above the bottom and cancelled followers never carry a held height", () => {
+  const f = fixture();
+  const stack = f.s.querySelector<HTMLElement>(".message-stack")!;
+  stack.getBoundingClientRect = () => ({ height: 1000 }) as DOMRect;
+  try {
+    f.viewport.beforeRender();
+    assert.equal(stack.style.minHeight, "1000px");
+    f.viewport.cancelFollow();
+    assert.equal(stack.style.minHeight, "");
+    f.scroll(600);
+    f.viewport.beforeRender();
+    assert.equal(stack.style.minHeight, "");
+  } finally {
+    f.close();
+  }
+});
