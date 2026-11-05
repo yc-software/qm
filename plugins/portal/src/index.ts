@@ -19,7 +19,7 @@ import { LRUCache } from "lru-cache";
 import { createCanonicalResolver, IdentityRejected } from "./canonical.ts";
 import { createHostTrustedEntries, createTrustedEntry, trustedEntryConfig } from "./trusted-entry.ts";
 import { CARD_STYLE } from "./card-style.ts";
-import { coreHostTenant, createHostTenants, mappedHost, runOnHost, sessionOnHost } from "./host-tenant.ts";
+import { coreHostTenant, createHostSessions, createHostTenants, mappedHost, runOnHost } from "./host-tenant.ts";
 import { createHostRoutes } from "./host-routes.ts";
 import {
   coreEmailTenants,
@@ -43,7 +43,6 @@ import {
   sessionCookieHeaders,
   clearCookie,
   readCookie,
-  withoutCookies,
   randomToken,
   safeEqual,
   sanitizeReturnTo,
@@ -219,6 +218,11 @@ const PRINCIPAL_RULE: PrincipalRule = {
 
 const DEV_SECRET = "dev-only-insecure-portal-session-secret";
 const sessionKey = deriveKey(SESSION_SECRET ?? DEV_SECRET, "portal.session.v1");
+const hostSessions = createHostSessions({
+  cookieDomain: COOKIE_DOMAIN,
+  secure: SECURE_COOKIES,
+  openSession: (value) => openSession(value, sessionKey, Date.now(), ORG, SESSION_MAX_TTL_S),
+});
 const tmpKey = deriveKey(SESSION_SECRET ?? DEV_SECRET, "portal.tmp.v1");
 const impersonateKey = deriveKey(SESSION_SECRET ?? DEV_SECRET, "portal.impersonate.v1");
 const trustedOidc = trustedEntryConfig(process.env, PUBLIC_URL);
@@ -245,7 +249,7 @@ const hostRoutes = createHostRoutes({
   handoffKey: deriveKey(SESSION_SECRET ?? DEV_SECRET, "portal.handoff.v1"),
   claim: (jti) => claimTrusted(`handoff:${jti}`, Date.now() + 120_000),
   session: (req) => currentSession(req),
-  signOut: (res) => setSession(res, signedOutCookies()),
+  signOut: (res) => setSession(res, hostSessions.signedOutCookies()),
   signIn: (res, who) => setAuthenticatedSession(res, who.sub, who.name, false, who.t),
   page: (res, status, html) => sendHtml(res, status, html),
   errorHtml: (detail) => signInErrorHtml(detail),
@@ -463,43 +467,8 @@ function localDevSession(req: IncomingMessage, nowMs = Date.now(), ignoreLogout 
   return { k: "session", sub: LOCAL_AUTH_PRINCIPAL, org: ORG, iat: now, exp: now + SESSION_TTL_S };
 }
 
-function signedOutCookies(): string[] {
-  const domain = hostCookieDomain();
-  return [
-    clearCookie("portal_impersonate", "/", SECURE_COOKIES),
-    clearCookie("portal_trusted_tmp", "/auth/trusted", SECURE_COOKIES),
-    clearCookie("portal_session", "/", SECURE_COOKIES, domain),
-    clearCookie(FRAME_SESSION_COOKIE, "/", SECURE_COOKIES, domain),
-    ...(domain
-      ? [clearCookie("portal_session", "/", SECURE_COOKIES), clearCookie(FRAME_SESSION_COOKIE, "/", SECURE_COOKIES)]
-      : []),
-  ];
-}
-
-const SESSION_COOKIE_NAMES = new Set(["portal_session", "portal_impersonate"]);
-
-function withoutSessionCookies(cookie: string | undefined): string | undefined {
-  return withoutCookies(cookie, SESSION_COOKIE_NAMES);
-}
-
-function sharedHostSession(req: IncomingMessage): SessionClaims | null {
-  const session = openSession(
-    readCookie(req.headers.cookie, "portal_session"),
-    sessionKey,
-    Date.now(),
-    ORG,
-    SESSION_MAX_TTL_S,
-  );
-  return session?.h === undefined ? session : null;
-}
-
 function currentSession(req: IncomingMessage): SessionClaims | null {
-  const mapped = mappedHost();
-  if (mapped)
-    return sessionOnHost(req.headers.cookie, mapped, (value) =>
-      openSession(value, sessionKey, Date.now(), ORG, SESSION_MAX_TTL_S),
-    );
-  return sharedHostSession(req) ?? localDevSession(req);
+  return hostSessions.current(req.headers.cookie) ?? (mappedHost() ? null : localDevSession(req));
 }
 
 const ALERT_ICON = `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5M12 16h.01"/></svg>`;
@@ -810,15 +779,13 @@ function loginProviderCookie(sub: string): string[] {
   ];
 }
 
-const FRAME_SESSION_COOKIE = "portal_session_x";
-const hostCookieDomain = () => (mappedHost() ? undefined : COOKIE_DOMAIN);
 
 function sessionCookieSet(value: string, sub: string): string[] {
   const attrs = {
     path: "/",
     maxAge: SESSION_TTL_S,
     secure: SECURE_COOKIES,
-    ...(hostCookieDomain() ? { domain: hostCookieDomain() } : {}),
+    ...(hostSessions.cookieDomain() ? { domain: hostSessions.cookieDomain() } : {}),
   };
   return [...sessionCookieHeaders(value, attrs), ...loginProviderCookie(sub)];
 }
@@ -897,7 +864,7 @@ async function mintPlaygroundSession(req: IncomingMessage, res: ServerResponse):
 }
 
 function renewSessionCookie(req: IncomingMessage, res: ServerResponse): SessionClaims | null {
-  const session = mappedHost() ? currentSession(req) : sharedHostSession(req);
+  const session = mappedHost() ? currentSession(req) : hostSessions.shared(req.headers.cookie);
   if (!session) return null;
   if (session.appOnly) return session;
   const now = Math.floor(Date.now() / 1000);
@@ -1048,7 +1015,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     const redirectTo = !AUTH_BROKER_UPSTREAM && signedOutSession && !signedOutSession.anon ? "/auth/signed-out" : "/";
     setSession(res, [
       ...(signedOutSession ? loginProviderCookie(signedOutSession.sub) : []),
-      ...signedOutCookies(),
+      ...hostSessions.signedOutCookies(),
       clearCookie("portal_oidc_tmp", "/auth", SECURE_COOKIES),
       ...(AUTH_BROKER_UPSTREAM ? [clearCookie("qm_idp_session", AUTH_BROKER_PREFIX, true)] : []),
       ...(LOCAL_AUTH_BYPASS && isLoopbackAddress(req.socket.remoteAddress)
@@ -1088,8 +1055,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     const canonical = await canonicalPrincipal(session.sub, session.t);
     if (canonical instanceof IdentityRejected) {
       console.warn(`[portal] core no longer recognises this session; signing it out: ${canonical.message}`);
-      for (const cookie of signedOutCookies()) res.appendHeader("set-cookie", cookie);
-      req.headers.cookie = withoutSessionCookies(req.headers.cookie);
+      hostSessions.signOutRequest(req, res);
       session = null;
     } else if (!canonical) return identityUnavailable(req, res);
     else {
