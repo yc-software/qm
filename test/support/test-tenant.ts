@@ -40,6 +40,7 @@ export async function seedTestTenant(databaseUrl: string): Promise<void> {
     await pool.query(`GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE ON ALL TABLES IN SCHEMA public TO ${APP_ROLE}`);
     await pool.query(`GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO ${APP_ROLE}`);
     await pool.query(`REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON tenants FROM ${APP_ROLE}`);
+    await pool.query(`GRANT REFERENCES ON tenants TO ${APP_ROLE}`);
     await pool.query(
       `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE ON TABLES TO ${APP_ROLE}`,
     );
