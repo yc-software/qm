@@ -10,6 +10,8 @@ import { createReaper } from "../src/runs/reaper.ts";
 import { createWorker, SHUTDOWN_EXIT_MS, SHUTDOWN_RELEASE_MS, SHUTDOWN_SETTLE_MS } from "../src/runs/worker.ts";
 import type { Orchestrator } from "../src/core/orchestrator.ts";
 import { buildApp } from "./support/build-app.ts";
+import { createMockAgent } from "./support/mock-agent.ts";
+import type { BuiltApp } from "../src/wiring.ts";
 import type { LeaderLease } from "../src/persistence/leader-lease.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import type { Principal } from "../src/types.ts";
@@ -416,9 +418,9 @@ test("shutdown aborts the blocked step before the handback, and the next worker 
 });
 
 test("shutdown mid-turn through the agent leaves no stop marker, and the resumed attempt finishes the work", async () => {
-  const built = buildApp(
-    testConfig({ dataDir: mkdtempSync(join(tmpdir(), "agent-resume-")), workers: 1, shutdownDrainMs: 30 }),
-  );
+  const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "agent-resume-")), workers: 1, shutdownDrainMs: 30 });
+  const agent = createMockAgent();
+  const built = buildApp(config, { agent });
   const threadRef = "agent-shutdown-resume";
   const queued = await built.app.turn({
     surface: "test",
@@ -427,41 +429,41 @@ test("shutdown mid-turn through the agent leaves no stop marker, and the resumed
     text: "!work-until-shutdown",
     async: true,
   });
-  const entriesNow = async () => {
-    const session = await built.sessions.getByThread(threadRef);
-    return session ? built.sessions.getItems(session.id) : [];
+  const entriesNow = async (app: BuiltApp) => {
+    const session = await app.sessions.getByThread(threadRef);
+    return session ? app.sessions.getItems(session.id) : [];
   };
   built.runtime.start();
+  const deadline = Date.now() + 5_000;
+  while (!(await entriesNow(built)).some((entry) => entry.kind === "ToolResult")) {
+    if (Date.now() > deadline) throw new Error("the first attempt never recorded its tool work");
+    await sleep(10);
+  }
+  await built.runtime.stop();
+  const resumed = buildApp(config, { agent });
   try {
-    const deadline = Date.now() + 5_000;
-    while (!(await entriesNow()).some((entry) => entry.kind === "ToolResult")) {
-      if (Date.now() > deadline) throw new Error("the first attempt never recorded its tool work");
-      await sleep(10);
-    }
-    await built.runtime.stopBackground();
-    await built.runtime.releaseInFlightRuns();
-    const handedBack = (await built.runs.get(queued.runId!))!;
+    const handedBack = (await resumed.runs.get(queued.runId!))!;
     assert.equal(handedBack.status, "pending");
     assert.equal(handedBack.attempts, 1);
     assert.equal(handedBack.leaseToken, null);
-    const interrupted = await entriesNow();
+    const interrupted = await entriesNow(resumed);
     assert.deepEqual(
       interrupted.filter((entry) => entry.kind === "AgentMessage"),
       [],
       "the shutdown-cancelled attempt must not close the turn",
     );
-    built.runtime.start();
-    const done = await built.runs.waitFor(queued.runId!, 5_000);
+    resumed.runtime.start();
+    const done = await resumed.runs.waitFor(queued.runId!, 5_000);
     assert.equal(done.status, "done");
     assert.equal(done.attempts, 2);
     assert.equal(done.result?.reply, "finished after resume");
-    const replies = (await entriesNow()).filter((entry) => entry.kind === "AgentMessage");
+    const replies = (await entriesNow(resumed)).filter((entry) => entry.kind === "AgentMessage");
     assert.deepEqual(
       replies.map((entry) => entry.text),
       ["finished after resume"],
     );
   } finally {
-    await built.runtime.stop();
+    await resumed.runtime.stop();
   }
 });
 
@@ -741,123 +743,6 @@ test("stopClaims waits for an outstanding claim to be handed back before acknowl
   assert.equal((await runs.get(pending.id))?.status, "pending");
 });
 
-test("runtime pauses without closing stores and restores worker capacity after a busy rollback", async () => {
-  const built = buildApp(
-    testConfig({ dataDir: mkdtempSync(join(tmpdir(), "wr-pause-")), workers: 1, leaseTtlMs: 5_000 }),
-  );
-  const completing = Promise.withResolvers<void>();
-  const release = Promise.withResolvers<void>();
-  const complete = built.runs.complete.bind(built.runs);
-  let first = true;
-  built.runs.complete = async (...args) => {
-    if (first) {
-      first = false;
-      completing.resolve();
-      await release.promise;
-    }
-    return complete(...args);
-  };
-  const enqueue = (threadRef: string) =>
-    built.app.turn({
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef },
-      text: "hello",
-      async: true,
-    });
-  try {
-    const a = await enqueue("pause-first");
-    built.runtime.start();
-    await completing.promise;
-    await built.runtime.stopBackground();
-    assert.equal((await built.runs.get(a.runId!))?.status, "running");
-    const b = await enqueue("pause-second");
-    assert.equal((await built.runs.get(b.runId!))?.status, "pending");
-    let drained = false;
-    void built.runtime.backgroundDrained().then(() => {
-      drained = true;
-    });
-    await sleep(10);
-    assert.equal(drained, false);
-    built.runtime.startBackground();
-    release.resolve();
-    const result = await built.runs.waitFor(b.runId!, 5_000);
-    assert.equal(result.status, "done");
-    assert.equal(result.attempts, 1);
-    await built.runtime.stopBackground();
-    await built.runtime.backgroundDrained();
-    built.runtime.startBackground();
-    const c = await enqueue("pause-third");
-    assert.equal((await built.runs.waitFor(c.runId!, 5_000)).status, "done");
-  } finally {
-    release.resolve();
-    await built.runtime.stop();
-  }
-});
-
-test("synchronous turns remain admitted through pause and queued intake survives rollback", async () => {
-  const built = buildApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "inline-drain-")),
-      backgroundDeploymentId: "controlled-test",
-      workers: 1,
-    }),
-  );
-  let admitted = true;
-  built.runtime.setBackgroundAdmission(
-    () => admitted,
-    () => admitted,
-  );
-  built.runtime.startBackground();
-  const completing = Promise.withResolvers<void>();
-  const release = Promise.withResolvers<void>();
-  const complete = built.runs.complete.bind(built.runs);
-  let first = true;
-  built.runs.complete = async (...args) => {
-    if (first) {
-      first = false;
-      completing.resolve();
-      await release.promise;
-    }
-    return complete(...args);
-  };
-  const turn = (threadRef: string, async = false) =>
-    built.app.turn({
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef },
-      text: "hello",
-      async,
-    });
-  const running = turn("sync-before-pause");
-  try {
-    await completing.promise;
-    admitted = false;
-    await built.runtime.stopBackgroundClaims();
-    let drained = false;
-    const draining = built.runtime.backgroundDrained().then(() => {
-      drained = true;
-    });
-    await sleep(10);
-    assert.equal(drained, false);
-    assert.equal((await turn("sync-after-pause")).status, "refused");
-    const queued = await turn("queued-after-pause", true);
-    assert.equal(queued.status, "queued");
-    assert.equal((await built.runs.get(queued.runId!))?.status, "pending");
-    release.resolve();
-    assert.equal((await running).status, "ok");
-    await draining;
-    admitted = true;
-    built.runtime.startBackground();
-    assert.equal((await built.runs.waitFor(queued.runId!, 5000)).status, "done");
-    assert.equal((await turn("sync-after-resume")).status, "ok");
-  } finally {
-    release.resolve();
-    await running;
-    await built.runtime.stop();
-  }
-});
-
 test("final shutdown waits for an already-started completion instead of releasing its lease", async () => {
   const config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "bounded-drain-")),
@@ -883,24 +768,18 @@ test("final shutdown waits for an already-started completion instead of releasin
   built.runtime.start();
   try {
     await completing.promise;
-    let drained = false;
-    const ownershipDrain = built.runtime.backgroundDrained().then(() => {
-      drained = true;
-    });
     let stopped = false;
     const stopping = built.runtime.stop().then(() => {
       stopped = true;
     });
     await sleep(80);
     assert.equal(stopped, false);
-    assert.equal(drained, false);
     assert.equal((await built.runs.get(queued.runId!))?.status, "running");
     release.resolve();
-    await Promise.all([stopping, ownershipDrain]);
+    await stopping;
     assert.equal(await reopened(config.databaseUrl, async (runs) => (await runs.get(queued.runId!))?.status), "done");
   } finally {
     release.resolve();
-    await built.runtime.backgroundDrained();
   }
 });
 

@@ -318,6 +318,11 @@ export function createPostgresSurfaceCache(
         args.push(opts.timestamps);
         conds.push(`ts = ANY($${args.length}::text[])`);
       }
+      if (opts.tsSuffix !== undefined) {
+        if (!opts.tsSuffix) throw new RangeError("tsSuffix must not be empty");
+        args.push(opts.tsSuffix);
+        conds.push(`right(ts, char_length($${args.length}::text)) = $${args.length}`);
+      }
       if (opts.channelHistory) conds.push("(sub IS NULL OR broadcast = TRUE)");
       if (opts.sub === null) conds.push("sub IS NULL");
       else if (opts.sub !== undefined) {
@@ -333,6 +338,10 @@ export function createPostgresSurfaceCache(
         conds.push(`ts < $${args.length}`);
       }
       if (!opts.includeDeleted) conds.push("deleted = FALSE");
+      if (opts.self !== undefined) {
+        args.push(opts.self);
+        conds.push(`self = $${args.length}`);
+      }
       args.push(limit);
       const rows = await q(
         `SELECT ${MESSAGE_COLUMNS}, (SELECT COUNT(*) FROM channel_messages replies WHERE replies.org_id = channel_messages.org_id AND replies.surface = channel_messages.surface AND replies.account = channel_messages.account AND replies.container = channel_messages.container AND replies.sub = channel_messages.ts AND replies.ts <> channel_messages.ts AND replies.deleted = FALSE) AS reply_count, (SELECT json_agg(json_build_object('fileId', f.file_id, 'name', f.name, 'mimetype', f.mimetype, 'title', f.title, 'size', f.size)) FROM channel_files f WHERE f.org_id = channel_messages.org_id AND f.surface = channel_messages.surface AND f.account = channel_messages.account AND f.container = channel_messages.container AND f.ts = channel_messages.ts) AS files FROM channel_messages WHERE ${conds.join(" AND ")} ORDER BY ts ${opts.oldestFirst ? "ASC" : "DESC"} LIMIT $${args.length}`,

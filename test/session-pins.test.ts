@@ -144,16 +144,12 @@ describe("conversation pins self-API", async () => {
     assert.ok(entryPin?.preview, "entry pins are decorated with a preview");
   });
 
-  it("hides entry-pin previews from viewers outside the participant window", async () => {
+  it("shows entry-pin previews to a participant who joined later", async () => {
     await built.sessions.addParticipant(sessionId, "U3");
     const found = await built.app.getSessionForViewer(sessionId, "U3");
     assert.ok(found, "the late joiner can read the session");
     const entryPin = found!.pins!.find((p) => p.entrySeq !== undefined);
-    assert.ok(entryPin, "the pin itself is listed");
-    assert.equal(entryPin!.preview, undefined, "no preview for an entry outside the viewer's window");
-    const mine = await built.app.getSessionForViewer(sessionId, "U1");
-    const minePin = mine!.pins!.find((p) => p.entrySeq !== undefined);
-    assert.ok(minePin?.preview, "the original participant still sees the preview");
+    assert.ok(entryPin?.preview, "the late joiner sees the pinned entry's preview");
   });
 
   it("unpins an item", async () => {

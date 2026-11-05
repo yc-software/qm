@@ -1,11 +1,16 @@
 import { externalSlackRequestAllowed } from "../resolution/external-slack.ts";
-import { requestedRuntimeError, userRuntimeConfigBody, validateWebTurnModelOptions } from "./runtime-config.ts";
+import { turnModelRefusal } from "./runtime-config.ts";
 import type { Run } from "../runs/run-store.ts";
-import { isSubagentThreadRef, sessionTreeRuns, stopSessionTree } from "../sessions/session-syscalls.ts";
+import {
+  USER_STOP,
+  USER_STOP_ALL,
+  isSubagentThreadRef,
+  sessionTreeRuns,
+  stopSessionRuns,
+  stopSessionTree,
+} from "../sessions/session-syscalls.ts";
 import { isUserItem } from "../sessions/items.ts";
 import type { Conversation, Principal, TurnOrigin, TurnRequest, TurnResult } from "../types.ts";
-import { orgId as orgIdOf } from "../config.ts";
-import { scopeId } from "../types.ts";
 import { conversationWriteAccess } from "./conversation-write-access.ts";
 import {
   liveTurnOf,
@@ -17,31 +22,14 @@ import {
 } from "../wake/route-incoming.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
 import { replayableRequest } from "../core/orchestrator/turn-helpers.ts";
-import {
-  RETIRED_ORIGIN_KEYS,
-  desktopClientForTurn,
-  isPersonAuthored,
-  isSessionTurn,
-  spokenByPerson,
-} from "../core/turn-origin.ts";
-import { conversationScope } from "../resolution/resolution-service.ts";
+import { desktopClientForTurn, isPersonAuthored, isSessionTurn, spokenByPerson } from "../core/turn-origin.ts";
 import { isTerminal, leaseLapsed } from "../runs/run-store.ts";
 import type { SessionStateEvent } from "../runs/session-state-bus.ts";
 import { turnRuntimePurpose } from "../core/turn-options.ts";
 import { turnModelOptions } from "../agent/runtime-choice.ts";
 import { samePerson } from "../directory/person.ts";
-import {
-  defaultModel,
-  modelServiceable,
-  modelOfferedInWebui,
-  modelUnavailableReason,
-  resolveModel,
-} from "../model/pi-models.ts";
-import { selectableCatalog, selectableModelCatalog } from "../model/model-catalog.ts";
-import { resolveRuntimeChoice } from "../agent/runtime-choice.ts";
-import { swallow, swallowAs } from "../util/errors.ts";
+import { swallowAs } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
-import { GENERIC_FAILURE_CLAUSE } from "../../plugins/chassis/src/failure-copy.ts";
 
 import type { App, AppDeps } from "./app-types.ts";
 import { STALE_LEASE_GRACE_MS } from "./app-types.ts";
@@ -49,8 +37,6 @@ import { STALE_LEASE_GRACE_MS } from "./app-types.ts";
 const PARTICIPANT_REHYDRATE_TIMEOUT_MS = 5_000;
 import type { AppHelpers } from "./app-helpers.ts";
 import type { AmbientHelpers } from "./app-ambient.ts";
-
-const USER_STOP = "by user";
 
 const freshSteerTs = () => `${Date.now()}.${crypto.randomUUID().slice(0, 8)}`;
 
@@ -126,20 +112,27 @@ export function createTurnMethods(
       live.push({ turn: { kind: "descendants", actorIds: descendants.map((run) => run.request.actor.id) } });
     return live;
   }
-  async function stopThreadTree(threadRef: string, run?: Run): Promise<boolean> {
+  async function stopThread(threadRef: string, run: Run | undefined, tree: boolean): Promise<boolean> {
     if (!deps.signals) return false;
-    const signals = deps.signals;
+    const stopDeps = { sessions: deps.sessions, runs: deps.runs, signals: deps.signals };
+    const scope = tree ? undefined : "session";
+    const reason = tree ? USER_STOP_ALL : USER_STOP;
     const stop = async () => {
       const session = await deps.sessions.getByThread(threadRef);
-      if (session) return stopSessionTree({ sessions: deps.sessions, runs: deps.runs, signals }, session, USER_STOP);
-      if (!run) return false;
-      await signals.send(run.id, { kind: "abort", reason: USER_STOP });
+      if (session && tree) {
+        const stopped = await stopSessionTree(stopDeps, session, reason);
+        await deps.settleTreeWakes?.(session);
+        return stopped;
+      }
+      if (session) return (await stopSessionRuns(stopDeps, session, { reason, scope })).length > 0;
+      if (!run || run.status === "done" || run.status === "failed") return false;
+      await stopDeps.signals.send(run.id, { kind: "abort", reason, ...(scope ? { scope } : {}) });
       if (run.status === "pending") await deps.runs.withdraw(run.id);
       return true;
     };
     return deps.advisoryLock.withLock("session-tree-admission", stop);
   }
-  const stopRunTree = (run: Run) => stopThreadTree(run.sessionId, run);
+  const stopRun = (run: Run, tree: boolean) => stopThread(run.sessionId, run, tree);
   const methods: ReturnType<typeof createTurnMethods> = {
     async turn(req: TurnRequest, replay?: { signalDedupKey: string }): Promise<TurnResult> {
       const historicalSlack = Object.keys(deps.externalSlackPolicies ?? {}).length
@@ -170,22 +163,6 @@ export function createTurnMethods(
         sessionParticipantIds = [actor.id];
       }
 
-      const orgRuntimeScope = scopeId("org", orgIdOf());
-      const turnRuntimeScope =
-        req.conversation.kind === "dm"
-          ? scopeId("personal", actor.id)
-          : scopeId(req.conversation.kind, req.conversation.channelRef ?? req.conversation.threadRef);
-      const [storedOrgRuntime, storedTurnRuntime] = await Promise.all([
-        deps.config.getRuntimeSelectionDurable(orgRuntimeScope),
-        turnRuntimeScope === orgRuntimeScope ? null : deps.config.getRuntimeSelectionDurable(turnRuntimeScope),
-      ]);
-      const needsOpenRouterCatalog = [storedOrgRuntime?.modelId, storedTurnRuntime?.modelId].some(
-        (modelId) => modelId && !resolveModel(modelId),
-      );
-      if (needsOpenRouterCatalog && deps.modelCredentials && (await deps.modelCredentials.availability()).openrouter) {
-        await selectableModelCatalog(deps.modelCredentialFetch);
-      }
-
       async function withCurrentProjectRoster<T>(fn: () => Promise<T>): Promise<T | null> {
         if (!project || !deps.projects) return fn();
         if (!conversationRef) return null;
@@ -200,15 +177,6 @@ export function createTurnMethods(
       let privateRequest = req.privateSessionMessage ? req : undefined;
       if (approvedRequest?.privateSessionMessage) privateRequest = approvedRequest;
       const storedApproval = privateRequest && privateRequest === approvedRequest ? privateRequest : undefined;
-      if (
-        (!req.origin && RETIRED_ORIGIN_KEYS.some((key) => key in req)) ||
-        (storedApproval && !storedApproval.origin)
-      ) {
-        console.warn(
-          `[turn] refused a request with retired origin fields and no origin thread=${req.conversation.threadRef}${storedApproval ? ` approval=${req.approval?.requestId}` : ""}${replay ? ` signal=${replay.signalDedupKey}` : ""}`,
-        );
-        return { status: "refused", reason: "turn request carries retired origin fields but no origin" };
-      }
       const origin: TurnOrigin = storedApproval?.origin ?? req.origin ?? { kind: "direct" };
       const sessionTurn =
         (req.spawned && isSessionTurn(req)) ||
@@ -227,94 +195,8 @@ export function createTurnMethods(
         { surface: req.surface, triggered: automated },
         isSubagentThreadRef(req.conversation.threadRef),
       );
-      if (automated && req.model) {
-        const error = await requestedRuntimeError(
-          { deps },
-          conversationScope(req.conversation, actor.id),
-          {
-            modelId: req.model,
-            ...(req.thinkingLevel ? { effortLevel: req.thinkingLevel } : {}),
-            ...(typeof req.fastMode === "boolean" ? { fastMode: req.fastMode } : {}),
-          },
-          runtimePurpose,
-        );
-        if (error) return { status: "refused", reason: error };
-      }
-      let requestedModel = req.model;
-      if (req.surface === "web") {
-        const org = scopeId("org", orgIdOf());
-        const targetScope = conversationScope(req.conversation, actor.id);
-        const runtimeFallback = deps.runtimeFallback ?? { modelId: defaultModel() };
-        if (individualAuth && req.model) {
-          const available = await userRuntimeConfigBody({ deps }, targetScope, actor.id);
-          const model = req.model;
-          if (!available.models.includes(model))
-            return { status: "refused", reason: "Your connected AI account cannot serve this model." };
-          const invalidModelOption = validateWebTurnModelOptions({ ...req, model }, available.models);
-          if (invalidModelOption) return { status: "refused", reason: invalidModelOption };
-          requestedModel = model;
-        }
-        if (!individualAuth) {
-          const configuredKeys = deps.providerKeys ??
-            deps.modelProviders ?? { anthropic: false, openai: false, openrouter: false };
-          const managedKeys = deps.modelCredentials ? await deps.modelCredentials.availability() : configuredKeys;
-          let orgRuntime;
-          let runtime;
-          try {
-            const orgModel =
-              storedOrgRuntime?.modelId ?? (await deps.config.getBaseModelOwnDurable(org)) ?? runtimeFallback.modelId;
-            orgRuntime = modelUnavailableReason(orgModel)
-              ? { modelId: orgModel }
-              : await resolveRuntimeChoice(deps.config, org, org, runtimeFallback);
-            runtime = await resolveRuntimeChoice(
-              deps.config,
-              org,
-              targetScope,
-              runtimeFallback,
-              {
-                ...(req.model ? { modelId: req.model } : {}),
-                ...(req.thinkingLevel ? { effortLevel: req.thinkingLevel } : {}),
-                ...(typeof req.fastMode === "boolean" ? { fastMode: req.fastMode } : {}),
-              },
-              undefined,
-              runtimePurpose,
-            );
-          } catch (error) {
-            swallow("turn: runtime resolution", error);
-            return { status: "refused", reason: `I couldn't set up that runtime choice — ${GENERIC_FAILURE_CLAUSE}` };
-          }
-          let providers = deps.modelProviders;
-          if (deps.modelCredentials) {
-            providers = managedKeys;
-          } else if (deps.providerKeys) {
-            providers = configuredKeys;
-          }
-          if (providers && !modelServiceable(runtime.modelId, providers)) {
-            return {
-              status: "refused",
-              reason: "that model isn't available on this deployment (its provider isn't configured)",
-            };
-          }
-          const configuredWebuiModels = await deps.config.getWebuiModelsDurable(org);
-          let enabledWebuiModels: string[] | null = null;
-          if (configuredWebuiModels != null) {
-            enabledWebuiModels = configuredWebuiModels.length
-              ? [...new Set([...configuredWebuiModels, orgRuntime.modelId])]
-              : [];
-          } else if (providers?.openrouter) {
-            enabledWebuiModels = [
-              ...new Set([
-                ...selectableCatalog(await selectableModelCatalog(deps.modelCredentialFetch))
-                  .filter((model) => modelOfferedInWebui(model.id))
-                  .map((model) => model.id),
-                orgRuntime.modelId,
-              ]),
-            ];
-          }
-          const invalidModelOption = validateWebTurnModelOptions(req, enabledWebuiModels, providers);
-          if (invalidModelOption) return { status: "refused", reason: invalidModelOption };
-        }
-      }
+      const modelRefusal = await turnModelRefusal(deps, req, actor.id, individualAuth, runtimePurpose);
+      if (modelRefusal) return { status: "refused", reason: modelRefusal };
 
       const rawAudience = req.conversation.audience ?? [req.actor];
       const audience: Principal[] =
@@ -355,6 +237,8 @@ export function createTurnMethods(
           ? { delegatingRunId: approvedRequest.delegatingRunId }
           : {}),
         ...(req.deliveryTarget ? { deliveryTarget: req.deliveryTarget } : {}),
+        ...(req.deliveryWebhook ? { deliveryWebhook: req.deliveryWebhook } : {}),
+        ...(req.idempotencyKey ? { idempotencyKey: req.idempotencyKey } : {}),
         ...(req.deliveryCandidates?.length ? { deliveryCandidates: req.deliveryCandidates } : {}),
         actor,
         conversation,
@@ -373,7 +257,7 @@ export function createTurnMethods(
         ...(req.detectOpener ? { detectOpener: req.detectOpener } : {}),
         ...(req.attachments?.length ? { attachments: req.attachments } : {}),
         ...(req.inboundNotes?.length ? { inboundNotes: req.inboundNotes } : {}),
-        ...((!individualAuth || req.surface === "web") && requestedModel ? { model: requestedModel } : {}),
+        ...((!individualAuth || req.surface === "web") && req.model ? { model: req.model } : {}),
         ...turnModelOptions({ ...req, triggered: automated }),
         ...(req.readOnly ? { readOnly: true } : {}),
         ...(privateRequest
@@ -406,7 +290,7 @@ export function createTurnMethods(
           deps.sessions.getByThread(conversation.threadRef),
         ]);
         if (!approvalSession || (await approvalResumable(approvalSession, actor.id, approval)) !== "ok") {
-          return { status: "refused", reason: "approval isn't visible in your project tenure" };
+          return { status: "refused", reason: "approval isn't visible to you in this project" };
         }
       }
       const sealedByApproval = async (): Promise<TurnResult | undefined> => {
@@ -492,9 +376,9 @@ export function createTurnMethods(
         if (route.kind === "abort") {
           const stopped = await withCurrentProjectRoster(async () => {
             const own = candidates.find(({ run }) => run?.sessionId === conversation.threadRef)?.run;
-            let any = await stopThreadTree(conversation.threadRef, own);
+            let any = await stopThread(conversation.threadRef, own, true);
             for (const { run } of routes.filter((r) => r.route.kind === "abort"))
-              if (run && run.sessionId !== conversation.threadRef) any = (await stopRunTree(run)) || any;
+              if (run && run.sessionId !== conversation.threadRef) any = (await stopRun(run, true)) || any;
             return any;
           });
           if (stopped === null)
@@ -564,9 +448,12 @@ export function createTurnMethods(
       if (deduped && redeliveryKey && run.dedupKey === redeliveryKey) return { status: "silent" };
       if (spineRouted && !deduped) markTriggerHandled(input as OrchestratorInput);
       if (spineRouted) deps.engaged?.engage(conversation.threadRef);
-      if (deduped && run.result && isTerminal(run.status)) return withAdminLink(run.result);
-      if (req.async) return { status: "queued", runId: run.id };
-      return awaitRun(run.id);
+      const terminalResult = deduped && isTerminal(run.status) ? run.result : null;
+      if (req.async && !terminalResult) return { status: "queued", runId: run.id };
+      const result = terminalResult ? await withAdminLink(terminalResult) : await awaitRun(run.id);
+      return req.origin?.kind === "automation" && req.origin.destination?.type === "webhook"
+        ? { ...result, runId: run.id }
+        : result;
     },
 
     subscribeSessionStates(cb, opts) {
@@ -762,11 +649,11 @@ export function createTurnMethods(
         ? `queued-steer:${run.request.conversation.threadRef}:${signal.queuedRunId}`
         : undefined;
       if (queuedKey && (await deps.signals.runForDedupeKey(queuedKey))) return { accepted: true };
+      if (signal.kind === "abort" && (signal.tree || !isTerminal(run.status)))
+        return (await stopRun(run, signal.tree === true))
+          ? { accepted: true }
+          : { accepted: false, reason: "terminal" };
       if (isTerminal(run.status)) return { accepted: false, reason: "terminal" };
-      if (signal.kind === "abort") {
-        const accepted = await stopRunTree(run);
-        return accepted ? { accepted: true } : { accepted: false, reason: "terminal" };
-      }
       if (signal.kind === "client_result") {
         if (viewer && !samePerson(run.request.actor.id, viewer)) return { accepted: false, reason: "not_found" };
         if (!run.request.clientTools?.length && !run.request.desktopClientId)
@@ -818,7 +705,7 @@ export function createTurnMethods(
       );
       if (route.kind === "abort") {
         if (signal.queuedRunId) await deps.runs.withdraw(signal.queuedRunId);
-        return (await stopRunTree(run)) ? { accepted: true } : { accepted: false, reason: "terminal" };
+        return (await stopRun(run, true)) ? { accepted: true } : { accepted: false, reason: "terminal" };
       }
       if (route.kind === "drop") return { accepted: false, reason: "text_required" };
       if (route.kind === "turn") {

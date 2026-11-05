@@ -170,6 +170,7 @@ test("a registered surface supplies its own label, prompt hints and mention synt
       liveReplies: false,
       nativeActor: false,
       externalParticipants: false,
+      textOnly: false,
     },
     promptHints: {
       mentionSyntax: "Mention people as @handle.",
@@ -178,6 +179,7 @@ test("a registered surface supplies its own label, prompt hints and mention synt
       conversationStyle: "Acme replies can run long.",
     },
     post: async () => {},
+    containerOf: (target) => target,
     principalFor: () => ({ externalId: "u" }),
     mention: (user) => `@${user.id}`,
     readableText: (text) => text,

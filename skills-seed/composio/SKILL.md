@@ -86,15 +86,23 @@ async function apps(path, body) {
 
 Large pulls (a month of email, a full channel history) fail when one call asks for too much: an oversized page either times out (`cause: "timeout"`) or is rejected by the provider (`providerStatus: 413`). Page conservatively instead:
 
-- List first, fetch second: request IDs or metadata only (options like `ids_only` or `include_payload: false`), then fetch bodies in batches of about 25 for just the messages you need.
+- List first, fetch second: request IDs or metadata only (for Gmail, `ids_only` or `include_payload: false`), then fetch bodies in batches of about 25 for just the messages you need.
 - On a `502`, read the JSON body (`cause`, `providerStatus`, `providerDetail`, `message`); with curl, use `--fail-with-body` or skip `-f` so the body survives. Back off and shrink the page rather than repeating the same request.
-- For long pulls, write progress (page token, fetched IDs) to a file so the job can resume, and run it in the background.
+- For long pulls, write progress (page token, fetched IDs) to a file so the job can resume in bounded foreground batches.
+
+Connected-app calls work only while the turn that issued the token is running. A background job or detached script that outlives its turn gets `403 inactive_run` on every call after the turn ends. Do the work as foreground `execute` calls within a live turn; for recurring or long work, let a cron fire run each batch in the foreground. Have scripts print the HTTP status and body of a failed call instead of folding it into a generic "lookup failed".
 
 The API checks active account ownership and toolkit on every execution. Personal connections are available only in authorized contexts. Shared conversations require explicit sharing; unattended work needs its existing owner-keychain authorization. A denial is not permission to switch credentials, accounts, identities, or access paths.
 
 Do not call Composio's callback completion API from the computer. Callback identity verification belongs to the signed-in browser and trusted QM backend. If verification setup is missing, ask the operator to fix it.
 
 Tools don't transfer files: a local filename passed as an argument uploads nothing. The one exception is X images, below. When Composio is unavailable, use direct OAuth only if independently configured and authorized; do not use it to bypass a denial.
+
+### Gmail
+
+- Create drafts as HTML (`is_html: true`) with plain `<p>` paragraphs and no styling. Plain-text drafts have reached recipients hard-wrapped at about 70 characters.
+- Only the SENT label (`in:sent`) shows what was sent. Draft timestamps are creation times, not send times.
+- If the user states a fact about their own mail that conflicts with your read, re-check before contradicting them, and say exactly what you misread.
 
 ### Images for X posts
 

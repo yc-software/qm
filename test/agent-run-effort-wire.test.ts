@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { createAgent } from "../src/agent/agent-run.ts";
+import { createModelRoutes } from "../src/model/model-route.ts";
 import { getRequiredModel, modelRequestOverrides } from "../src/model/pi-models.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
 
@@ -118,13 +119,15 @@ for (const [modelId, upper, allowed, off, minimal] of [
     assert(address && typeof address !== "string");
     const originalMap = structuredClone(getRequiredModel(modelId).thinkingLevelMap);
     const agent = createAgent({
-      defaultModelId: modelId,
-      modelGateway: {
-        url: `http://127.0.0.1:${address.port}`,
-        apiKey: "test-key",
-        apiKeyHeader: "api-key",
-        models: { [modelId]: modelRequestOverrides(modelId)?.model ?? modelId },
-      },
+      routes: createModelRoutes({
+        defaultModelId: modelId,
+        modelGateway: {
+          url: `http://127.0.0.1:${address.port}`,
+          apiKey: "test-key",
+          apiKeyHeader: "api-key",
+          models: { [modelId]: modelRequestOverrides(modelId)?.model ?? modelId },
+        },
+      }),
     });
     t.after(() => agent.close?.());
     // Repeat turns in the same conversation with different effort selections.

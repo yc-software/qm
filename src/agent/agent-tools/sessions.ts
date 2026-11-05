@@ -1,6 +1,29 @@
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { text, type ToolKit } from "./kit.ts";
+import { renderSubagentActivity } from "../../sessions/subagent-status.ts";
+import { isolationLabel } from "../../sessions/child-isolation.ts";
+import type { ChildIsolationMode } from "../../types.ts";
+
+function deliveryOutcome(
+  result: { title: string; delivered: string; busy?: boolean; notWoken?: string },
+  withText: boolean,
+): string {
+  const name = `"${result.title}"`;
+  if (result.delivered === "queued_turn")
+    return result.busy
+      ? `Queued for ${name}: it is busy and starts on this when its current turn ends.`
+      : `Woke ${name}; it is working on this now.`;
+  if (result.delivered === "interrupted")
+    return withText
+      ? `Stopped ${name}'s current run; it starts on this message next. Its own subagents keep running.`
+      : `Stopped ${name}'s current run; it is idle until messaged. Its own subagents keep running and wake it when they report back.`;
+  return `Left in ${name}'s mailbox${result.notWoken ? ` without waking it: ${result.notWoken}` : ""}. ${
+    result.busy
+      ? "It has work running or queued and sees this at its next step."
+      : "It is idle and won't see this until something wakes it."
+  }`;
+}
 
 export function sessionTools(kit: ToolKit) {
   const { ref, opts, recordCall, recordResult, recordCoreAuthoredResult } = kit;
@@ -12,7 +35,7 @@ export function sessionTools(kit: ToolKit) {
     description:
       "Spawn and coordinate subagents: background workers that cannot see this conversation. Brief one like a capable colleague (goal, why it matters, what you know, real limits) and leave the approach to them; its final answer arrives as an internal message. " +
       "open: start one with `task`. " +
-      'send_message: message a subagent, sibling or parent (target="parent"); it wakes the recipient unless wake:false. Wake when you need it to act or answer (more work, a re-review, a question); use wake:false for FYI it can act on later (status, a finding, an ack), which an idle recipient won\'t see until something else wakes it. interrupt:true stops its run. ' +
+      'send_message: message a subagent, sibling or parent (target="parent"); it wakes the recipient unless wake:false. Wake when you need it to act or answer (more work, a re-review, a question); use wake:false for FYI it can act on later (status, a finding, an ack), which an idle recipient won\'t see until something else wakes it. interrupt:true stops its current run (not its subagents) and makes any text its next turn. ' +
       "read: list subagents or read one's transcript. " +
       (delegateWork
         ? "Delegate substantial work, then end this turn promptly; a subagent's completion wakes you with the result. Do not wait or poll. "
@@ -40,11 +63,24 @@ export function sessionTools(kit: ToolKit) {
       ),
       model: Type.Optional(
         Type.String({
-          description: "open: model override; use one runtime get lists (unconfigured providers are rejected).",
+          description:
+            "open: model override; use one runtime get lists (unconfigured providers are rejected). Omitted: the model you switched to or were given for this task when it is not the default, else the subagent default (also used when yours cannot run subagents).",
         }),
       ),
-      thinkingLevel: Type.Optional(Type.String({ description: "open: effort override." })),
-      fastMode: Type.Optional(Type.Boolean({ description: "open: fast mode." })),
+      isolation: Type.Optional(
+        Type.Union([Type.Literal("shared"), Type.Literal("worktree"), Type.Literal("sandbox")], {
+          description:
+            "open: where its commands run. shared: your computer and starting directory. worktree: a new directory of its own on your computer (a git worktree on a new branch if your starting directory is a git repository). sandbox: a new computer of its own, created on first use; retire it with the sandbox tool once its work is saved. Default: worktree when your own commands start in a subagent directory, otherwise shared.",
+        }),
+      ),
+      thinkingLevel: Type.Optional(
+        Type.String({
+          description: "open: effort override; omitted: yours when the model is inherited, else the default.",
+        }),
+      ),
+      fastMode: Type.Optional(
+        Type.Boolean({ description: "open: fast mode; omitted: yours when the model is inherited, else the default." }),
+      ),
       target: Type.Optional(
         Type.String({
           description:
@@ -57,7 +93,9 @@ export function sessionTools(kit: ToolKit) {
           description: "send_message: false leaves it in the mailbox without starting a turn.",
         }),
       ),
-      interrupt: Type.Optional(Type.Boolean({ description: "send_message: abort the target's run instead." })),
+      interrupt: Type.Optional(
+        Type.Boolean({ description: "send_message: stop its current run; text becomes its next turn." }),
+      ),
       limit: Type.Optional(Type.Integer({ description: "read: max entries (default 30)." })),
     }),
     async execute(callId, params) {
@@ -72,6 +110,7 @@ export function sessionTools(kit: ToolKit) {
         task?: string;
         name?: string;
         noComputer?: boolean;
+        isolation?: ChildIsolationMode;
         model?: string;
         target?: string;
         text?: string;
@@ -85,6 +124,7 @@ export function sessionTools(kit: ToolKit) {
         ...(p.task ? { task: p.task } : {}),
         ...(p.name ? { name: p.name } : {}),
         ...(p.noComputer !== undefined ? { noComputer: p.noComputer } : {}),
+        ...(p.isolation ? { isolation: p.isolation } : {}),
         ...(p.target ? { target: p.target } : {}),
         ...(p.text ? { text: p.text } : {}),
         ...(p.wake === false ? { wake: false } : {}),
@@ -121,6 +161,7 @@ export function sessionTools(kit: ToolKit) {
           ...(p.fastMode !== undefined ? { fastMode: p.fastMode } : {}),
           ...(p.name ? { name: p.name } : {}),
           ...(p.noComputer !== undefined ? { readOnly: p.noComputer } : {}),
+          ...(p.isolation ? { isolation: p.isolation } : {}),
           ...(p.model ? { model: p.model } : {}),
         });
         if (!result.ok) {
@@ -131,11 +172,12 @@ export function sessionTools(kit: ToolKit) {
             true,
           );
         }
+        const placement = isolationLabel(result.isolation);
         return recordResult(
           callId,
           { tool: "subagents", action: "open", sessionId: result.sessionId, title: result.title },
           text(
-            `Opened subagent "${result.title}" (sessionId ${result.sessionId}). It is working now. Its result will arrive as an internal message. ${delegateWork ? "End this turn promptly; completion will wake you to report the result." : "Continue independent work, then use subagents wait before your final answer if you need its result."} ${result.liveRunsRemaining} of its run slots remain.`,
+            `Opened subagent "${result.title}" (sessionId ${result.sessionId}${placement ? `; ${placement}` : ""}). It is working now. Its result will arrive as an internal message. ${delegateWork ? "End this turn promptly; completion will wake you to report the result." : "Continue independent work, then use subagents wait before your final answer if you need its result."}`,
           ),
         );
       }
@@ -155,18 +197,6 @@ export function sessionTools(kit: ToolKit) {
             true,
           );
         }
-        const name = `"${result.title}"`;
-        let outcome = `Sent ${name} an interrupt request — it stays re-taskable.`;
-        if (result.delivered === "queued_turn")
-          outcome = result.busy
-            ? `Queued for ${name}: it is busy and starts on this when its current turn ends. To change what it is doing now, interrupt it and send again.`
-            : `Woke ${name}; it is working on this now.`;
-        else if (result.delivered !== "interrupted")
-          outcome = `Left in ${name}'s mailbox${result.notWoken ? ` without waking it: ${result.notWoken}` : ""}. ${
-            result.busy
-              ? "It has work running or queued and sees this at its next step."
-              : "It is idle and won't see this until something wakes it."
-          }`;
         return recordResult(
           callId,
           {
@@ -176,7 +206,7 @@ export function sessionTools(kit: ToolKit) {
             title: result.title,
             delivered: result.delivered,
           },
-          text(outcome),
+          text(deliveryOutcome(result, !!p.text?.trim())),
         );
       }
       const result = await syscalls.read({
@@ -193,7 +223,8 @@ export function sessionTools(kit: ToolKit) {
       }
       if (result.mode === "children") {
         const lines = result.children.map(
-          (c) => `- ${c.title} (${c.sessionId}) — ${c.status}${c.lastSaid ? ` — last said: ${c.lastSaid}` : ""}`,
+          (c) =>
+            `- ${c.title} (${c.sessionId}) — ${renderSubagentActivity(c.activity)}${c.isolation ? ` — ${isolationLabel(c.isolation)}` : ""}${c.lastSaid ? ` — last said: ${c.lastSaid}` : ""}`,
         );
         return recordResult(
           callId,
@@ -204,7 +235,9 @@ export function sessionTools(kit: ToolKit) {
       return recordResult(
         callId,
         { tool: "subagents", action: "read", sessionId: result.sessionId, title: result.title, status: result.status },
-        text(`"${result.title}" — ${result.status}\n${result.rendered}`),
+        text(
+          `"${result.title}" — ${result.activity ? renderSubagentActivity(result.activity) : result.status}\n${result.rendered}`,
+        ),
       );
     },
   });
@@ -215,7 +248,7 @@ export function sessionTools(kit: ToolKit) {
     description:
       "Work with sessions, the conversations in the web sidebar (subagents are not sessions). " +
       "search: entries across conversations visible to everyone here, with sessionId/seq references. list: sessions you can see here. read: a session's recent transcript. " +
-      "send_message: a private note delivered to another session as internal context, without starting a turn. " +
+      "send_message: a private note delivered to another session as internal context. wake:true (default) hands over work that needs a turn: it wakes the session if idle, otherwise the session gets it at its next step as a task. Send replies, status reports and completion notes with wake:false, an FYI that wakes nothing. " +
       "new: a clean session starting with `text`. fork: copy this conversation's visible history into a new session, optionally running `text` there. " +
       "Create new/forked sessions only when the attending person asks (they appear under their name); refused on automated turns.",
     parameters: Type.Object({
@@ -235,6 +268,12 @@ export function sessionTools(kit: ToolKit) {
         }),
       ),
       title: Type.Optional(Type.String({ description: "new/fork: optional sidebar title." })),
+      wake: Type.Optional(
+        Type.Boolean({
+          description:
+            "send_message: true (default) for work that needs a turn; false for replies, status and completion notes.",
+        }),
+      ),
       limit: Type.Optional(Type.Integer({ description: "read: default 30. search: default 20, max 100." })),
     }),
     async execute(callId, params) {
@@ -246,6 +285,7 @@ export function sessionTools(kit: ToolKit) {
         text?: string;
         title?: string;
         limit?: number;
+        wake?: boolean;
       };
       await recordCall(callId, {
         tool: "sessions",
@@ -300,7 +340,13 @@ export function sessionTools(kit: ToolKit) {
       if (!p.target?.trim()) return fail(`${p.action} requires \`target\`: a sessionId from list.`);
       if (p.action === "send_message") {
         if (!p.text?.trim()) return fail("send_message requires `text`: the note to deliver.");
-        const result = await syscalls.write({ requestId: callId, peer: true, target: p.target, text: p.text });
+        const result = await syscalls.write({
+          requestId: callId,
+          peer: true,
+          wake: p.wake !== false,
+          target: p.target,
+          text: p.text,
+        });
         if (!result.ok) return fail(result.message);
         return recordResult(
           callId,
@@ -311,7 +357,7 @@ export function sessionTools(kit: ToolKit) {
             title: result.title,
             delivered: result.delivered,
           },
-          text(`Message to "${result.title}" queued internally without starting a turn.`),
+          text(deliveryOutcome(result, true)),
         );
       }
       const result = await syscalls.read({

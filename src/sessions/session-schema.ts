@@ -1,5 +1,6 @@
 import type { PgMigrationDefinition } from "../persistence/pg-pool.ts";
 import { TENANCY_BASE } from "../tenants/migrations.ts";
+import { DROP_TENANT_PREBUILD_INDEXES } from "../tenants/prebuilt-indexes.ts";
 
 export const SPEND_INDEXABLE = `(spend_usage_json(usage_json) IS NOT NULL
   AND octet_length(session_id) + octet_length(model) + octet_length(usage_json) <= 2000)`;
@@ -412,6 +413,15 @@ END $session_facts$`,
   ],
 };
 
+const PARTICIPANT_MEMBERSHIP: PgMigrationDefinition = {
+  id: "sessions/store/0055-participant-membership",
+  statements: [
+    `SET LOCAL lock_timeout = '5s'`,
+    `ALTER TABLE participants ALTER COLUMN valid_from SET DEFAULT 0, ALTER COLUMN valid_from_seq SET DEFAULT 0`,
+    `DELETE FROM participants WHERE valid_to IS NOT NULL OR valid_to_seq IS NOT NULL`,
+  ],
+};
+
 export const SESSION_MIGRATIONS = [
   TENANCY_BASE,
   SESSION_SCHEMA,
@@ -421,4 +431,17 @@ export const SESSION_MIGRATIONS = [
   SPEND_RECOVERY_INDEX,
   SESSION_FACTS,
   SESSION_FACTS_COPY,
+  PARTICIPANT_MEMBERSHIP,
+  DROP_TENANT_PREBUILD_INDEXES,
 ];
+
+export const ancestry = (seed: string): string => `ancestry AS (
+         SELECT s.id AS session_id, s.parent_session_id, s.origin AS origin, s.origin_id AS cron_id,
+                ARRAY[s.id] AS path
+           FROM sessions s
+          WHERE ${seed}
+         UNION ALL
+         SELECT a.session_id, p.parent_session_id, p.origin, p.origin_id, a.path || p.id
+           FROM ancestry a JOIN sessions p ON p.id = a.parent_session_id
+          WHERE a.origin = 'conversation' AND NOT p.id = ANY(a.path) AND cardinality(a.path) < 64
+       )`;

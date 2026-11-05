@@ -53,6 +53,7 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
   let collapseDistance = 0;
   let geometryDistance: number | null = null;
   let filledAtSize: number | null = null;
+  let heldStack: HTMLElement | null = null;
   const contentUpdates = new Set<Promise<void>>();
 
   function setFollowing(value: boolean): void {
@@ -65,6 +66,18 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
     setFollowing(false);
     if (frame !== null) cancelAnimationFrame(frame);
     frame = null;
+    releaseHeight();
+  }
+
+  function holdHeight(): void {
+    if (!following || !stack || heldStack) return;
+    heldStack = stack;
+    heldStack.style.minHeight = `${heldStack.getBoundingClientRect().height}px`;
+  }
+
+  function releaseHeight(): void {
+    heldStack?.style.removeProperty("min-height");
+    heldStack = null;
   }
 
   function clearPrompt(): void {
@@ -281,6 +294,7 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
   function beforeRender(): void {
     if (!scroller || contentUpdates.size > 0) return;
     if (scroller.scrollTop !== lastTop) onScroll();
+    holdHeight();
   }
 
   function onContentUpdating(event: Event): void {
@@ -328,6 +342,7 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
     scroller?.style.removeProperty("--chat-sticky-top");
     scroller?.style.removeProperty("overflow-anchor");
     scroller?.removeAttribute("data-away-from-bottom");
+    releaseHeight();
     clearPrompt();
     scroller = pins = prompt = stack = content = null;
     lastTop = 0;
@@ -416,6 +431,7 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
       if (element !== scroller || !element.isConnected || !following || contentUpdates.size > 0) return;
       if (element.scrollTop < priorTop && element.scrollHeight - element.clientHeight - element.scrollTop > 1)
         return cancelFollow();
+      releaseHeight();
       element.scrollTop = element.scrollHeight;
       lastTop = scroller?.scrollTop ?? 0;
       syncSticky();

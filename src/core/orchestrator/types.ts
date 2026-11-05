@@ -5,6 +5,7 @@ import type { RunStop, TurnPark } from "../../runs/run-store.ts";
 import type { ExternalSlackPolicies } from "../../resolution/external-slack.ts";
 import type { RuntimeService } from "../../agent/runtime-types.ts";
 import type { SandboxResources } from "../../sandbox/sandbox-resources.ts";
+import type { AdvisoryLock } from "../../persistence/advisory-lock.ts";
 import type { AwsRoleBroker } from "../../auth/aws-role-broker.ts";
 import type {
   CommandApprovalGrant,
@@ -41,7 +42,7 @@ import type { AuditLog } from "../../audit/audit-log.ts";
 import type { SecurityScreener } from "../../security/security-screener.ts";
 import type { BudgetTracker } from "../../ratelimit/budget.ts";
 import type { ControlService } from "../../api/control-service.ts";
-import type { Agent } from "../../agent/agent.ts";
+import type { Agent, RuntimeChoice, SessionRoute } from "../../agent/agent.ts";
 import type { AdminService } from "../../admin/admin-service.ts";
 import type { ErrorLog } from "../../admin/error-log.ts";
 import type { RunSignalStore } from "../../runs/run-signal-store.ts";
@@ -69,7 +70,7 @@ import type { SurfaceRegistry } from "../../surfaces/registry.ts";
 
 export interface OrchestratorInput extends Omit<
   TurnRequest,
-  "surface" | "actor" | "conversation" | "idempotencyKey" | "spawned" | "async"
+  "surface" | "actor" | "conversation" | "spawned" | "async"
 > {
   modelAccount?: ModelAccount;
   surface?: string;
@@ -109,7 +110,7 @@ export interface OrchestratorDeps {
   userModelCredentials?: UserModelCredentialStore;
   brandingDefault?: OrgBranding;
   surfaces: SurfaceRegistry;
-  resolveBaseModelId?: () => string | undefined;
+  resolveSessionRuntime?: (route: SessionRoute) => Promise<RuntimeChoice>;
   sessions: SessionStore;
   sessionStateBus?: SessionStateBus;
   sessionSyscalls?: SessionSyscallsFactory;
@@ -117,6 +118,7 @@ export interface OrchestratorDeps {
   toolOutput?: ToolOutputStore;
   sandbox: Sandbox;
   sandboxResources?: SandboxResources;
+  advisoryLock: AdvisoryLock;
   auditLog: AuditLog;
   budget?: BudgetTracker;
   maxContextTokens?: number;
@@ -145,7 +147,7 @@ export interface OrchestratorDeps {
   memoryStrategy?: MemoryStrategy;
   skills?: SkillStore;
   skillBundles?: SkillBundleStore;
-  skillsReady?: Promise<void>;
+  skillsReady?: () => Promise<void>;
   approvals: DurableMap<PendingApprovalRecord>;
   approvalGrants: DurableMap<CommandApprovalGrant>;
   errors?: ErrorLog;
@@ -168,11 +170,6 @@ export interface OrchestratorDeps {
   connectorTokens?: ConnectorTokenStore;
   resolveConnectorClient?: OAuthClientResolver;
   featureFlags?: FeatureFlagStore;
-  installSharedCanvas?: (
-    actorId: string,
-    fileId: string,
-    at: { threadRef: string; sessionId: string },
-  ) => Promise<string | null>;
   teams?: TeamStore;
   credentialUsage?: CredentialUsageSink;
   keychain?: Keychain;
@@ -208,9 +205,5 @@ export interface Orchestrator {
     sessionId?: string;
     verifiedSwarm?: boolean;
   }): Promise<"allow" | "block" | "unscreened">;
-  regenerateTitle(
-    sessionId: string,
-    principalId: string,
-    participantIds?: readonly string[],
-  ): Promise<{ title: string | null } | null>;
+  regenerateTitle(sessionId: string, principalId: string, personal?: boolean): Promise<{ title: string | null } | null>;
 }

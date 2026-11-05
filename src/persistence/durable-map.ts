@@ -1,4 +1,10 @@
-import { createPgPool, withPgTransaction, type PgPool, type PoolClient } from "./pg-pool.ts";
+import {
+  createPgPool,
+  withPgTransaction,
+  type PgMigrationDefinition,
+  type PgPool,
+  type PoolClient,
+} from "./pg-pool.ts";
 import { jsonbStringify } from "../util/text.ts";
 
 export interface DurableMapSelect<T, K extends Extract<keyof T, string>> {
@@ -34,6 +40,7 @@ export function createPostgresMap<T>(
   pg: PgPool,
   table: string,
   indexedFields: readonly Extract<keyof T, string>[] = [],
+  extraMigrations: readonly PgMigrationDefinition[] = [],
 ): DurableMap<T> {
   if (!/^[a-z_][a-z0-9_]*$/i.test(table)) throw new Error(`invalid table name: ${table}`);
   const migration = {
@@ -78,6 +85,7 @@ export function createPostgresMap<T>(
         },
       ];
     }),
+    ...extraMigrations,
   ];
   for (const definition of migrations) pg.registerMigration(definition);
   let readyP: Promise<void> | null = null;

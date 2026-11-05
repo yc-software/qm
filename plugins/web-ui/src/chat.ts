@@ -78,6 +78,7 @@ import {
   withBase,
   type SessionPin,
   activeRunForThread,
+  stopThreadRun,
   api,
   approvalBlocksComposer,
   createRunSlot,
@@ -203,15 +204,7 @@ import {
 } from "./session-list";
 import { liveTurnThreadRef } from "./working-dot";
 import { goalElapsedLabel, goalObjectiveLabel, goalWorkedLabel, type GoalStripState } from "./goal-strip";
-import {
-  ackKey,
-  peekLines,
-  subagentRows,
-  subagentSummary,
-  visibleSubagents,
-  type PeekLine,
-  type SubagentRow,
-} from "./subagent-activity";
+import { ackKey, subagentRows, subagentSummary, visibleSubagents, type SubagentRow } from "./subagent-activity";
 import { createSwarmStrip } from "./swarm-strip.ts";
 import { newChatDraftKey, saveDraft, storedDraft } from "./drafts";
 import { createForkOriginController, forkOriginView } from "./fork-origin";
@@ -230,6 +223,12 @@ import { uiCanvasPanel } from "./ui-canvas";
 installMarkdownSanitizer();
 
 const detachedAgents = new WeakSet<Agent>();
+interface SubagentStop {
+  state: "stopping" | "failed";
+  run: number | undefined;
+  error?: string;
+}
+const SUBAGENT_STOP_LABEL = { idle: "Stop", stopping: "Stopping…", failed: "Couldn't stop" };
 interface SettledRowKey {
   day: string;
   index: number;
@@ -2736,10 +2735,8 @@ export function createChatSurface(
   const SUBAGENT_POLL_MS = 4000;
   const subagentUi = {
     expanded: false,
-    peekId: null as string | null,
-    peek: null as PeekLine[] | null,
+    stops: new Map<string, SubagentStop>(),
     ticking: false,
-    timer: null as ReturnType<typeof setInterval> | null,
     rowsRoot: null as string | null,
     rowsTimer: null as ReturnType<typeof setInterval> | null,
     approvals: new Map<string, PendingApproval[]>(),
@@ -2762,29 +2759,46 @@ export function createChatSurface(
     subagentUi.rowsRoot = rootId;
   }
 
-  function stopSubagentPeek(): void {
-    if (subagentUi.timer) clearInterval(subagentUi.timer);
-    subagentUi.timer = null;
-    subagentUi.peekId = null;
-    subagentUi.peek = null;
-  }
-
-  async function refreshSubagentPeek(id: string): Promise<void> {
-    const page = await fetchTranscript(id, { tailTurns: 1 }).catch(() => null);
-    if (subagentUi.peekId !== id) return;
-    subagentUi.peek = page ? peekLines(page.items) : [];
+  async function stopSubagent(rootId: string, row: SubagentRow): Promise<void> {
+    const { id, threadRef, workingSince } = row.session;
+    if (subagentUi.stops.get(id)?.state === "stopping") return;
+    const stop: SubagentStop = { state: "stopping", run: workingSince };
+    subagentUi.stops.set(id, stop);
+    drawActiveChat();
+    try {
+      if ((await stopThreadRun(threadRef)) === "ended" && subagentUi.stops.get(id) === stop)
+        subagentUi.stops.delete(id);
+      refreshTree(rootId);
+    } catch (err) {
+      swallow("web-ui: subagent stop", err);
+      if (subagentUi.stops.get(id) === stop) {
+        stop.state = "failed";
+        stop.error = errMessage(err, "Could not stop the subagent.");
+      }
+    }
     drawActiveChat();
   }
 
-  function toggleSubagentPeek(row: SubagentRow): void {
-    const id = row.session.id;
-    const same = subagentUi.peekId === id;
-    stopSubagentPeek();
-    if (same) return drawActiveChat();
-    subagentUi.peekId = id;
-    void refreshSubagentPeek(id);
-    if (row.state === "working") subagentUi.timer = setInterval(() => void refreshSubagentPeek(id), SUBAGENT_POLL_MS);
-    drawActiveChat();
+  function pruneSubagentStops(rows: readonly SubagentRow[]): void {
+    for (const [id, stop] of subagentUi.stops) {
+      const row = rows.find((candidate) => candidate.session.id === id && candidate.state === "working");
+      const run = row?.session.workingSince;
+      if (!row || (stop.run !== undefined && run !== undefined && run !== stop.run)) subagentUi.stops.delete(id);
+    }
+  }
+
+  function subagentStopTpl(rootId: string, row: SubagentRow): TemplateResult | typeof nothing {
+    if (row.state !== "working") return nothing;
+    const { state: stop, error } = subagentUi.stops.get(row.session.id) ?? {};
+    return html`<button
+      type="button"
+      class="subagent-row-action"
+      title=${error ?? nothing}
+      ?disabled=${stop === "stopping"}
+      @click=${() => void stopSubagent(rootId, row)}
+    >
+      ${SUBAGENT_STOP_LABEL[stop ?? "idle"]}
+    </button>`;
   }
 
   function acknowledgeSubagent(row: SubagentRow): void {
@@ -2794,7 +2808,6 @@ export function createChatSurface(
     } catch {
       return drawActiveChat();
     }
-    if (subagentUi.peekId === row.session.id) stopSubagentPeek();
     drawActiveChat();
   }
 
@@ -2841,22 +2854,13 @@ export function createChatSurface(
     failed: "failed",
   };
 
-  function subagentRowTpl(row: SubagentRow): TemplateResult {
+  function subagentRowTpl(rootId: string, row: SubagentRow): TemplateResult {
     const now = Date.now();
     const elapsed = goalElapsedLabel(row.startedAt, row.endedAt ?? now);
-    const peeking = subagentUi.peekId === row.session.id;
     const approvals = unresolvedApprovals(subagentUi.approvals.get(row.session.id) ?? []);
     const title = row.session.title?.trim() || "Subagent";
-    return html`<div
-      class="subagent-row ${row.state} ${peeking ? "peeking" : ""}"
-      style=${`--subagent-depth:${row.depth - 1}`}
-    >
-      <button
-        type="button"
-        class="subagent-row-head"
-        aria-expanded=${String(peeking)}
-        @click=${() => toggleSubagentPeek(row)}
-      >
+    return html`<div class="subagent-row ${row.state}" style=${`--subagent-depth:${row.depth - 1}`}>
+      <button type="button" class="subagent-row-head" @click=${() => void openSessionById(row.session.id)}>
         ${row.state === "working" ? html`<span class="working-mark" ${ref(syncWorkingPulse)}>${workingWave()}</span>` : nothing}
         ${row.state === "waiting" ? html`<span class="awaiting-dot" aria-hidden="true"></span>` : nothing}
         ${row.state === "failed" ? html`<span class="subagent-failed-mark">${icon(TriangleAlert, 12)}</span>` : nothing}
@@ -2877,9 +2881,7 @@ export function createChatSurface(
             </button>`
           : nothing
       }
-      <button type="button" class="subagent-row-action" @click=${() => void openSessionById(row.session.id)}>
-        Open
-      </button>
+      ${subagentStopTpl(rootId, row)}
       ${
         approvals.length
           ? ctx.composer.composerApprovalPanel(approvals, (decision) =>
@@ -2887,22 +2889,7 @@ export function createChatSurface(
             )
           : nothing
       }
-      ${peeking ? subagentPeekTpl() : nothing}
     </div>`;
-  }
-
-  function subagentPeekTpl(): TemplateResult {
-    const lines = subagentUi.peek;
-    if (!lines) return html`<div class="subagent-peek bg-panel-note">Loading…</div>`;
-    if (!lines.length) return html`<div class="subagent-peek bg-panel-note">No activity yet</div>`;
-    return html`<ol class="subagent-peek" aria-live="polite">
-      ${lines.map(
-        (line) =>
-          html`<li class="subagent-peek-line ${line.kind}">
-            ${line.kind === "tool" ? icon(Wrench, 11) : nothing}<span dir="auto">${line.text}</span>
-          </li>`,
-      )}
-    </ol>`;
   }
 
   function subagentStrip(): TemplateResult | typeof nothing {
@@ -2913,7 +2900,7 @@ export function createChatSurface(
     }
     const rows = visibleSubagents(subagentRows(sessionsState.list, rootId), subagentUi.acknowledged);
     syncSubagentRowsRefresh(rows.some((row) => row.state === "working") ? rootId : null);
-    if (subagentUi.peekId && !rows.some((row) => row.session.id === subagentUi.peekId)) stopSubagentPeek();
+    pruneSubagentStops(rows);
     syncSubagentApprovals(rows);
     subagentUi.ticking = rows.some((row) => row.state === "working" || row.state === "waiting");
     syncWorkTicker();
@@ -2932,7 +2919,6 @@ export function createChatSurface(
                 aria-expanded=${String(expanded)}
                 @click=${() => {
                   subagentUi.expanded = !subagentUi.expanded;
-                  if (!subagentUi.expanded) stopSubagentPeek();
                   drawActiveChat();
                 }}
               >
@@ -2940,7 +2926,7 @@ export function createChatSurface(
                 <span class="bg-activity-toggle">${icon(ChevronRight, 14)}</span>
               </button>`
         }
-        ${expanded ? html`<div class="subagent-list ${single ? "single" : "bg-panel"}">${rows.map(subagentRowTpl)}</div>` : nothing}
+        ${expanded ? html`<div class="subagent-list ${single ? "single" : "bg-panel"}">${rows.map((row) => subagentRowTpl(rootId, row))}</div>` : nothing}
       </section>
     `;
   }

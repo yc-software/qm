@@ -286,7 +286,9 @@ test("a silent cron source run stays out of normal human chat history", async ()
   await runNowSettled(built.scheduler, cron.id);
 
   assert.equal((await built.deliveries.pending("principal")).length, 0, "finish_silently means no delivery");
-  const source = (await built.sessions.scanAll()).find((s) => s.threadRef.startsWith(`cron:${cron.id}:fire:`));
+  const source = (await built.sessions.listByScope(scopeId("personal", "U1"))).find((s) =>
+    s.threadRef.startsWith(`cron:${cron.id}:fire:`),
+  );
   assert.ok(source, "cron source run is still durably recorded (in its per-fire background thread)");
   const sourceItems = await built.sessions.getItems(source!.id);
   assert.ok(
@@ -987,42 +989,9 @@ test("admin-configured browse step limit rides provision env (BROWSE_LAB_MAX_STE
   assert.equal(captured?.env?.BROWSE_LAB_MODEL_PROVIDER, "managed", "the runner uses core model routing");
 
   await built.config.setBrowseMaxSteps("org:default-org", 120);
-  await built.config.setBrowseModel("org:default-org", "claude-sonnet-4-6");
   const res2 = await app.turn(dm("!run echo steps again"));
   assert.equal(res2.status, "ok");
   assert.equal(captured?.env?.BROWSE_LAB_MAX_STEPS, "120", "the configured limit rides the provision env");
-  assert.equal(
-    captured?.env?.BROWSE_LAB_MODEL,
-    "claude-opus-5",
-    "legacy browse-only overrides cannot replace the default model",
-  );
-});
-
-test("a legacy browse-only model cannot strand managed default-model browsing", async () => {
-  const config = testConfig({
-    dataDir: mkdtempSync(join(tmpdir(), "ap-")),
-    orgId: "acme",
-    signingSecret: "test-secret",
-    apiBaseUrl: "https://core.example.com",
-  });
-  const built = buildApp(config);
-  const { app, sandbox } = built;
-  let captured: ProvisionOptions | undefined;
-  const realProvision = sandbox.provision.bind(sandbox);
-  sandbox.provision = (owner, opts) => {
-    captured = opts;
-    return realProvision(owner, opts);
-  };
-
-  await built.config.setBrowseModel("org:acme", "claude-retired-by-pi-ai");
-  const res = await app.turn(dm("!run echo keys", { conversation: { kind: "dm", threadRef: "dm:U1:stale1" } }));
-  assert.equal(res.status, "ok");
-  assert.equal(
-    captured?.env?.BROWSE_LAB_MODEL,
-    "claude-opus-5",
-    "the unresolvable override is ignored in favour of the base model, not propagated",
-  );
-  assert.equal(captured?.env?.BROWSE_LAB_MODEL_PROVIDER, "managed");
 });
 
 test("browse follows a live org base model change, not the process-start default", async () => {

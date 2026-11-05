@@ -11,6 +11,24 @@ export interface PrincipalLink {
   createdAt: number;
 }
 
+export const PRINCIPAL_LINKS_RESTORE = {
+  id: "durable-map/principal_links/restore-from-user-links",
+  statements: [
+    `DO $$
+     BEGIN
+       IF to_regclass('user_links') IS NULL THEN RETURN; END IF;
+       CREATE TABLE IF NOT EXISTS principal_links (id TEXT PRIMARY KEY, json JSONB NOT NULL);
+       INSERT INTO principal_links (id, json)
+         SELECT alias_id, jsonb_build_object(
+                  'principalId', alias_id, 'canonicalId', user_id, 'evidence', evidence, 'linkedBy', linked_by,
+                  'createdAt', (extract(epoch FROM created_at) * 1000)::bigint)
+           FROM user_links
+          WHERE linked_by <> 'migration'
+       ON CONFLICT (id) DO NOTHING;
+     END $$`,
+  ],
+};
+
 interface PrincipalLinkInput {
   principalId: unknown;
   canonicalId: unknown;

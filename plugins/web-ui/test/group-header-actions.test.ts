@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { JSDOM } from "jsdom";
-import { createServer } from "vite";
+import { testViteServer } from "./vite-server.ts";
 
 async function withTabs(run: (requests: string[]) => Promise<void>): Promise<void> {
   const dom = new JSDOM('<!doctype html><div id="app"></div>', { url: "http://localhost/" });
@@ -63,7 +63,7 @@ async function withTabs(run: (requests: string[]) => Promise<void>): Promise<voi
   dom.window.HTMLDialogElement.prototype.showModal = function () {
     this.open = true;
   };
-  const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  const vite = await testViteServer();
   let split: { exitSplitIfActive(): void } | undefined;
   try {
     const { appState } = await vite.ssrLoadModule("/src/shell.ts");

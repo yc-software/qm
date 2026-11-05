@@ -445,9 +445,8 @@ END $base_schema$`,
         }),
       );
     },
-    async pendingReturns(limit = 100, afterId = "") {
-      const { rows } = await q(
-        `SELECT * FROM (
+    async pendingReturns(limit = 100, afterId = "", threadRefs) {
+      const text = `SELECT * FROM (
            SELECT * FROM runs WHERE status IN ('done','failed') AND returned_at IS NULL
            AND session_id LIKE 'agent:main:subagent:%' AND id > $2
            UNION
@@ -457,9 +456,9 @@ END $base_schema$`,
            AND wake.idempotency_key LIKE 'subagent-return:%'
            AND child.status IN ('done','failed') AND child.session_id LIKE 'agent:main:subagent:%'
            AND child.id > $2
-         ) pending WHERE retry_after <= $3 ORDER BY id LIMIT $1`,
-        [limit, afterId, Date.now()],
-      );
+         ) pending WHERE ${threadRefs ? "session_id = ANY($3)" : "retry_after <= $3"} ORDER BY id LIMIT $1`;
+      const params = [limit, afterId, threadRefs ?? Date.now()];
+      const { rows } = await q(text, params);
       return rows.map(rowToRun);
     },
     async terminalFinished(after, beforeMs, limit) {
@@ -485,6 +484,24 @@ END $base_schema$`,
     },
 
     get: getRun,
+
+    async lastFinishedForThreads(threadRefs) {
+      if (!threadRefs.length) return new Map();
+      const { rows } = await q(
+        `SELECT last.* FROM unnest($1::text[]) AS threads(id)
+         CROSS JOIN LATERAL (
+           SELECT * FROM runs WHERE session_id = threads.id AND status IN ('done', 'failed')
+           ORDER BY created_at DESC, seq DESC LIMIT 1
+         ) last`,
+        [[...new Set(threadRefs)]],
+      );
+      return new Map(
+        rows.map((row) => {
+          const run = rowToRun(row);
+          return [run.sessionId, run];
+        }),
+      );
+    },
 
     async activeForThread(sessionId: string): Promise<Run | null> {
       return (await runs.activeForThreads([sessionId])).get(sessionId) ?? null;

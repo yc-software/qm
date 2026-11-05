@@ -60,7 +60,6 @@ export interface Cron extends TriggerBase {
   sessionRef?: string;
   script?: CronScript;
 
-  fireLog?: CronFireLogEntry[];
   lastFireNote?: CronFireNote;
 }
 

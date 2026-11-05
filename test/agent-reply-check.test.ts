@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createAgent } from "../src/agent/agent-run.ts";
+import { createModelRoutes } from "../src/model/model-route.ts";
 import { REPLY_CHECK_LIMITS, replyCheckPrompt, type AgentTurnInput, type ReplyVerdict } from "../src/agent/agent.ts";
 import { storedItem, type Item } from "../src/sessions/items.ts";
 import type { RunSignal, RunSignalStore } from "../src/runs/run-signal-store.ts";
@@ -117,7 +118,7 @@ function memorySignals(): RunSignalStore & { send(runId: string, signal: RunSign
 }
 
 test("a reply that fails the check streams, is persisted as retracted, and is rewritten as a new reply", async () => {
-  const agent = createAgent({ apiKey: "sk-test" });
+  const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }) });
   const sink: Sink = { entries: [] };
   const model = fakeModel(["Here \u2014 a draft.", "Here is a clean reply."], "let me think");
   const order: string[] = [];
@@ -171,7 +172,7 @@ test("a reply that fails the check streams, is persisted as retracted, and is re
 });
 
 test("later turns replay only the rewrite, never the retracted draft or its thinking", async () => {
-  const agent = createAgent({ apiKey: "sk-test" });
+  const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }) });
   const sink: Sink = { entries: [] };
   const model = fakeModel(["Here \u2014 a draft.", "Here is a clean reply."], "draft thinking");
   try {
@@ -191,7 +192,7 @@ test("later turns replay only the rewrite, never the retracted draft or its thin
 });
 
 test("a passing reply is checked once and nothing else changes", async () => {
-  const agent = createAgent({ apiKey: "sk-test" });
+  const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }) });
   const sink: Sink = { entries: [] };
   const model = fakeModel(["All quiet."]);
   const order: string[] = [];
@@ -216,7 +217,7 @@ test("a passing reply is checked once and nothing else changes", async () => {
 });
 
 test("rewrites are capped; the last draft ships even if the check still objects", async () => {
-  const agent = createAgent({ apiKey: "sk-test" });
+  const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }) });
   const sink: Sink = { entries: [] };
   const model = fakeModel(["one \u2014", "two \u2014", "three \u2014", "four"]);
   try {
@@ -234,7 +235,7 @@ test("rewrites are capped; the last draft ships even if the check still objects"
 });
 
 test("a check that throws never retracts", async () => {
-  const agent = createAgent({ apiKey: "sk-test" });
+  const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }) });
   const sink: Sink = { entries: [] };
   const model = fakeModel(["Fine \u2014 really."]);
   try {
@@ -255,7 +256,7 @@ test("a check that throws never retracts", async () => {
 
 test("a stop pressed while the check runs keeps the finished reply instead of retracting it", async () => {
   const signals = memorySignals();
-  const agent = createAgent({ apiKey: "sk-test", signals });
+  const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }), signals });
   const sink: Sink = { entries: [] };
   const model = fakeModel(["draft \u2014 one", "never requested"]);
   try {
@@ -285,7 +286,7 @@ const unfinishedVerdict: ReplyVerdict = {
 };
 
 test("a prodded reply stays as an interim reply and the agent keeps working to a final answer", async () => {
-  const agent = createAgent({ apiKey: "sk-test" });
+  const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }) });
   const sink: Sink = { entries: [] };
   const model = fakeModel(["Core is busy. I haven't traced why.", "Traced it: the mirror sync loop holds the CPU."]);
   const interim: string[] = [];
@@ -323,7 +324,7 @@ test("a prodded reply stays as an interim reply and the agent keeps working to a
 });
 
 test("later turns replay the prodded reply, the reminder and the final answer in order", async () => {
-  const agent = createAgent({ apiKey: "sk-test" });
+  const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }) });
   const sink: Sink = { entries: [] };
   const model = fakeModel(["Core is busy. I haven't traced why.", "Traced it."]);
   try {
@@ -348,7 +349,7 @@ test("later turns replay the prodded reply, the reminder and the final answer in
 });
 
 test("an agent is prodded at most once per turn", async () => {
-  const agent = createAgent({ apiKey: "sk-test" });
+  const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }) });
   const sink: Sink = { entries: [] };
   const model = fakeModel(["first stop", "second stop", "never requested"]);
   try {
@@ -364,7 +365,7 @@ test("an agent is prodded at most once per turn", async () => {
 });
 
 test("a prodded turn can still have its final answer retracted and rewritten", async () => {
-  const agent = createAgent({ apiKey: "sk-test" });
+  const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }) });
   const sink: Sink = { entries: [] };
   const model = fakeModel(["Not traced yet.", "Traced \u2014 the sync loop.", "Traced: the sync loop."]);
   try {
@@ -390,7 +391,7 @@ test("a prodded turn can still have its final answer retracted and rewritten", a
 });
 
 test("a prod nobody can see is ignored and the reply stands", async () => {
-  const agent = createAgent({ apiKey: "sk-test" });
+  const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }) });
   for (const onInterimReply of [undefined, () => false]) {
     const sink: Sink = { entries: [] };
     const model = fakeModel(["Core is busy. I haven't traced why.", "never requested"]);

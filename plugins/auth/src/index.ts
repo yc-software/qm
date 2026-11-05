@@ -4,6 +4,7 @@ import { coreRememberedSessions } from "./sessions.ts";
 import { createServer } from "node:http";
 import { pathToFileURL } from "node:url";
 import { json } from "../../chassis/src/http.ts";
+import { drainOnSigterm } from "../../chassis/src/drain.ts";
 import { portFromEnv } from "../../chassis/src/env.ts";
 import { bootProblems, readConfig } from "./config.ts";
 import { coreClaimStore } from "../../chassis/src/claims.ts";
@@ -80,5 +81,5 @@ export async function startServer(
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  await startServer();
+  drainOnSigterm(await startServer(), "auth");
 }
