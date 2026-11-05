@@ -184,9 +184,9 @@ test("/v1/admin/users: org_admin sees the roster + grants; a non-admin is denied
     );
     await pg.query(
       `INSERT INTO items(tenant_id, session_id, seq, kind, author, text, body, created_at)
-       VALUES (qm_tenant_id(), 'hist-s', 1, 'UserMessage', 'U7', 'hi', '{}', now() - interval '1 day'),
-              (qm_tenant_id(), 'hist-s', 2, 'UserMessage', 'Seven@Example.com', 'hi', '{}', now()),
-              (qm_tenant_id(), 'hist-s', 3, 'UserMessage', 'U9', 'hi', '{}', now())`,
+       VALUES (qm_bound_tenant(), 'hist-s', 1, 'UserMessage', 'U7', 'hi', '{}', now() - interval '1 day'),
+              (qm_bound_tenant(), 'hist-s', 2, 'UserMessage', 'Seven@Example.com', 'hi', '{}', now()),
+              (qm_bound_tenant(), 'hist-s', 3, 'UserMessage', 'U9', 'hi', '{}', now())`,
     );
     await pg.query(
       `INSERT INTO sessions(id, type, scope_id, thread_ref, created_at, origin, spawn_meta)
@@ -194,7 +194,7 @@ test("/v1/admin/users: org_admin sees the roster + grants; a non-admin is denied
     );
     await pg.query(
       `INSERT INTO items(tenant_id, session_id, seq, kind, author, text, body, created_at)
-       VALUES (qm_tenant_id(), 'ext-s', 1, 'UserMessage', 'U-ext', 'hi', '{}', now())`,
+       VALUES (qm_bound_tenant(), 'ext-s', 1, 'UserMessage', 'U-ext', 'hi', '{}', now())`,
     );
     await s.built.identity.putExternalMember({
       email: "Mate@Example.com",

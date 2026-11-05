@@ -8,11 +8,15 @@ import { createPostgresAdvisoryLock } from "../src/persistence/advisory-lock.ts"
 import { createSwarmStore, SWARM_LIMITS, type SwarmStorage } from "../src/swarms/swarm-store.ts";
 import { createSwarmService } from "../src/swarms/swarm-service.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
+import { seedTestTenant } from "./support/test-tenant.ts";
 
 const baseUrl = process.env.DATABASE_URL;
 const schema = `swarm_test_${process.pid}`;
 const isolatedUrl = baseUrl ? new URL(baseUrl) : undefined;
-isolatedUrl?.searchParams.set("options", `-c search_path=${schema}`);
+isolatedUrl?.searchParams.set(
+  "options",
+  `${isolatedUrl?.searchParams.get("options") ?? ""} -c search_path=${schema}`.trim(),
+);
 const databaseUrl = isolatedUrl?.toString();
 before(async () => {
   if (!baseUrl) return;
@@ -23,6 +27,7 @@ before(async () => {
   } finally {
     await pool.end();
   }
+  await seedTestTenant(databaseUrl!);
 });
 after(async () => {
   if (!baseUrl) return;
