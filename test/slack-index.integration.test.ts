@@ -393,10 +393,14 @@ async function fixture(
     denyMessage?: string;
     coreSingleton?: boolean;
     botIdentity?: { username?: string; icon_emoji?: string };
+    personas?: Record<string, SlackPersona>;
+    sessionStatus?: SlackCoreClient["sessionStatus"];
   } = {},
 ) {
   const core = new FakeCore();
   core.externalParticipants = options.externalParticipants ?? false;
+  for (const [channel, persona] of Object.entries(options.personas ?? {})) core.personas.set(channel, persona);
+  core.sessionStatus = options.sessionStatus;
   const started = startSlackPlugin(
     {
       botToken: "xoxb-test",
@@ -1797,6 +1801,29 @@ const expectedIdentity = (persona: { username?: string; icon_url?: string; icon_
   username: persona.username,
   icon_url: persona.icon_url,
   icon_emoji: persona.icon_emoji,
+});
+
+test("a freshly booted instance refreshes personas before its first status-card sweep", async () => {
+  const { personaFor, refreshPersonas } = await import("../src/slack/delivery.ts");
+  await refreshPersonas({ agentPersonas: async () => new Map() });
+  const seen: unknown[] = [];
+  const f = await fixture({
+    coreSingleton: false,
+    personas: { C1: ADA },
+    sessionStatus: {
+      start: async () => {},
+      reconcile: async () => {
+        seen.push(personaFor("C1"));
+      },
+    },
+  });
+  try {
+    await waitFor(() => seen.length === 1);
+    assert.deepEqual(seen, [ADA]);
+  } finally {
+    await f.stop();
+    await refreshPersonas({ agentPersonas: async () => new Map() });
+  }
 });
 
 test("a bound channel's ack, goal notice and every part of a split reply post as its agent, and its edits keep it", async () => {

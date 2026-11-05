@@ -534,7 +534,6 @@ export function createDeliveryPoller(deps: {
   }
 
   async function pollDeliveries(client: any): Promise<boolean> {
-    await refreshPersonas(core);
     const ran = await core.holdDeliveryDispatch(async (lost) => {
       let lostFlag = false;
       void lost.then(() => {
@@ -542,6 +541,7 @@ export function createDeliveryPoller(deps: {
       });
       const leaseLost = (): boolean => lostFlag;
       const cycleStart = Date.now();
+      await refreshPersonas(core);
       const rowCounts = await Promise.all([
         deliverToConversations(client, leaseLost),
         deliverToPrincipals(client, leaseLost),

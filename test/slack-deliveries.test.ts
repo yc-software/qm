@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { createDeliveryPoller } from "../src/slack/deliveries.ts";
 import { SLACK_POST_SPLIT_LIMIT } from "../src/slack/lib.ts";
 import { refreshPersonas, setDefaultBotIdentity, type SlackPersona } from "../src/slack/delivery.ts";
-import { deliverKeychainCard } from "../src/slack/keychain-approvals.ts";
+import { deliverKeychainCard, registerKeychainApprovalActions } from "../src/slack/keychain-approvals.ts";
 
 const mixedFiles = [
   { name: "first.png", mimetype: "image/png", sizeBytes: 2, blobId: "B1" },
@@ -570,8 +570,9 @@ test("a keychain approval card delivered into a bound channel carries the agent'
   assert.deepEqual(identityOf(posts[0]!), { ...BOLT, icon_url: undefined });
 });
 
-test("a follower that does not hold the delivery lease still refreshes personas, so its card edits post as the agent", async () => {
+test("a follower that does not hold the delivery lease reads no personas, and its card click still edits as the agent", async () => {
   await refreshPersonas({ agentPersonas: async () => new Map() });
+  let personaReads = 0;
   const updates: Record<string, unknown>[] = [];
   const client = {
     chat: {
@@ -580,20 +581,15 @@ test("a follower that does not hold the delivery lease still refreshes personas,
         return { ok: true };
       },
     },
-    conversations: {
-      history: async () => ({
-        messages: [
-          { ts: "5.5", metadata: { event_type: "qm_delivery", event_payload: { idempotency_key: "ask:K1:notice" } } },
-        ],
-      }),
-      replies: async () => ({ messages: [] }),
-    },
   };
   const core = {
-    agentPersonas: async () => new Map([["C1", ADA]]),
+    agentPersonas: async () => {
+      personaReads++;
+      return new Map([["C1", ADA]]);
+    },
     holdDeliveryDispatch: async () => null,
     keychainApprovals: {
-      card: async () => ({
+      decide: async () => ({
         ask: {
           id: "K1",
           status: "approved",
@@ -606,6 +602,15 @@ test("a follower that does not hold the delivery lease still refreshes personas,
       }),
     },
   };
+  let click: (args: unknown) => Promise<void> = async () => {};
+  registerKeychainApprovalActions(
+    {
+      action: (_pattern, handler) => {
+        click = handler;
+      },
+    },
+    { core: core as never, directory: { classifyActor: async () => ({ externalId: "ada@example.com" }) } as never },
+  );
   const poller = createDeliveryPoller({
     core: core as never,
     flow: {} as never,
@@ -614,13 +619,13 @@ test("a follower that does not hold the delivery lease still refreshes personas,
   });
   try {
     assert.equal(await poller.pollDeliveries(client), false, "a follower runs no drain");
-    await deliverKeychainCard(
-      core as never,
+    assert.equal(personaReads, 0, "a follower's lease retry reads no personas");
+    await click({
+      ack: async () => {},
+      body: { user: { id: "U1" }, channel: { id: "C1" }, message: { ts: "5.5" } },
+      action: { action_id: "keychain_allow_once", value: "K1" },
       client,
-      { idempotencyKey: "ask:K1:decided", destination: { keychainAskId: "K1" } },
-      "C1",
-      undefined,
-    );
+    });
   } finally {
     await refreshPersonas({ agentPersonas: async () => new Map() });
   }

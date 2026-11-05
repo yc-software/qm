@@ -176,6 +176,7 @@ const HEADER_PIN_OFF = "<surface-header-off>";
 export function createSurfaceHeaderEnsurer(opts: {
   headerFacts(scope: string): Promise<{ agentLabel?: string; modelName: string }>;
   channelPinEnabled?(scope: string): Promise<boolean>;
+  refreshPersonas?(): Promise<void>;
   webUiPublicUrl: string | undefined;
   ids: { botUserId: string };
   maxTracked?: number;
@@ -213,6 +214,7 @@ export function createSurfaceHeaderEnsurer(opts: {
             await client.conversations.setTopic({ channel, topic: desired });
         } else {
           if (isExternallyShared(info) || isMpim(info)) return;
+          await opts.refreshPersonas?.();
           const pinned = findHeaderPin((await client.pins.list({ channel })).items, opts.ids.botUserId);
           if (!enabled) {
             if (pinned) {
