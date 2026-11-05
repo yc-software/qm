@@ -8,7 +8,6 @@ final class NativeResourcesProtocol: URLProtocol, @unchecked Sendable {
     var requests: [URLRequest] = []
     var repeatCursor = false
     var rejectMutation = false
-    var memoryConflict = false
   }
   static let state = OSAllocatedUnfairLock(initialState: State())
   override class func canInit(with request: URLRequest) -> Bool { true }
@@ -23,14 +22,19 @@ final class NativeResourcesProtocol: URLProtocol, @unchecked Sendable {
     var status = 200
     let project =
       #"{"id":"p1","name":"Launch","ownerId":"alice","memberIds":["alice"],"scopeId":"group:web-project-p1","members":[{"principalId":"alice","displayName":"Alice"}]}"#
-    if url.path == "/api/memory" || url.path == "/api/memory/restore" {
-      if snapshot.memoryConflict && request.httpMethod != "GET" {
-        status = 409
-        body = #"{"error":"conflict","content":"Changed elsewhere","revision":"newer"}"#
-      } else if request.httpMethod == "GET" {
-        body = #"{"content":"Original notebook","revision":"r1"}"#
+    if url.path == "/api/memory" {
+      let first = #"{"id":"f1","text":"Keeps answers short","createdAt":1000}"#
+      let second = #"{"id":"f2","text":"Prefers Swift","createdAt":2000}"#
+      if snapshot.rejectMutation && request.httpMethod != "GET" {
+        status = 403
+        body = #"{"error":"forbidden"}"#
+      } else if request.httpMethod == "PATCH" {
+        let edited = #"{"id":"f1","text":"Keeps answers very short","createdAt":1000}"#
+        body = "{\"facts\":[\(edited),\(second)]}"
+      } else if request.httpMethod == "DELETE" {
+        body = "{\"facts\":[\(second)]}"
       } else {
-        body = #"{"content":"Saved notebook","revision":"r2"}"#
+        body = "{\"facts\":[\(first),\(second)]}"
       }
     } else if url.path == "/api/contexts" {
       body =
@@ -185,43 +189,29 @@ final class NativeResourcesTests: XCTestCase {
     XCTAssertFalse(model.busy)
   }
 
-  func testNotebookConflictPreservesDraftAndOriginalRevision() async {
-    let model = NotebookModel(client: client())
+  func testMemoryEditsAndForgetsFactsThroughTheServerList() async throws {
+    let model = MemoryModel(client: client())
     await model.load()
-    model.draft = "My edits"
-    NativeResourcesProtocol.state.withLock { $0.memoryConflict = true }
-    let saved = await model.save()
-    XCTAssertFalse(saved)
-    XCTAssertEqual(model.draft, "My edits")
-    XCTAssertEqual(model.content, "Original notebook")
-    XCTAssertEqual(model.revision, "r1")
-    XCTAssertNotNil(model.error)
-    await model.load()
-    XCTAssertEqual(model.draft, "My edits")
+    XCTAssertEqual(model.facts.map(\.id), ["f1", "f2"])
+    let edited = await model.edit(model.facts[0], text: "Keeps answers very short")
+    XCTAssertTrue(edited)
+    XCTAssertEqual(model.facts.first?.text, "Keeps answers very short")
+    let patch = try XCTUnwrap(NativeResourcesProtocol.state.withLock { $0.requests.last })
+    XCTAssertEqual(patch.httpMethod, "PATCH")
+    let forgot = await model.forget(model.facts[0])
+    XCTAssertTrue(forgot)
+    XCTAssertEqual(model.facts.map(\.id), ["f2"])
     XCTAssertFalse(model.busy)
   }
 
-  func testNotebookSaveAndRestoreAdoptOnlySuccessfulServerHeads() async {
-    let model = NotebookModel(client: client())
+  func testMemoryKeepsFactsWhenTheServerRejectsAChange() async {
+    let model = MemoryModel(client: client())
     await model.load()
-    model.draft = "My edits"
-    let saved = await model.save()
-    XCTAssertTrue(saved)
-    XCTAssertEqual(model.draft, "Saved notebook")
-    XCTAssertEqual(model.revision, "r2")
-    XCTAssertFalse(model.dirty)
-    NativeResourcesProtocol.state.withLock { $0.memoryConflict = true }
-    let restored = await model.save(restoring: "r0")
-    XCTAssertFalse(restored)
-    XCTAssertEqual(model.revision, "r2")
-    XCTAssertEqual(model.content, "Saved notebook")
-  }
-
-  func testNotebookFactsKeepOriginalLinePositions() {
-    let facts = NotebookFact.parse(
-      "# Preferences\n\n- Keep answers short\nNotes\n* (2026-09-23) Likes Swift\n- ")
-    XCTAssertEqual(facts.map(\.line), [2, 4])
-    XCTAssertEqual(facts.map(\.text), ["Keep answers short", "(2026-09-23) Likes Swift"])
+    NativeResourcesProtocol.state.withLock { $0.rejectMutation = true }
+    let forgot = await model.forget(model.facts[0])
+    XCTAssertFalse(forgot)
+    XCTAssertEqual(model.facts.map(\.id), ["f1", "f2"])
+    XCTAssertNotNil(model.error)
   }
 
   func testAPIComponentsEncodeOnceAndCannotAddAPathOrQuery() {

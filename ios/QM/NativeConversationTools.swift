@@ -301,19 +301,12 @@ struct NativeProcessOutput: View {
 struct NativeLinkedConversations: View {
   @Bindable var model: ChatModel
   @State private var sessions: [Conversation] = []
-  @State private var selected = ""
   @State private var busy = false
   @State private var error: String?
   @State private var confirming = false
   @State private var loader = LoadGuard()
   private var current: Conversation {
     sessions.first { $0.id == model.conversation.id } ?? model.conversation
-  }
-  private var candidates: [Conversation] {
-    sessions.filter {
-      $0.id != current.id && $0.parentSessionId == nil && $0.archived != true
-        && $0.scopeId == current.scopeId && $0.surface != "swarm"
-    }
   }
   var body: some View {
     QMList {
@@ -322,10 +315,7 @@ struct NativeLinkedConversations: View {
           NavigationLink(sessions.first { $0.id == parent }?.label ?? "Parent conversation") {
             NativeConversationDestination(client: model.client, user: model.user, sessionID: parent)
           }
-          Button("Make standalone") {
-            selected = ""
-            confirming = true
-          }
+          Button("Make standalone") { confirming = true }
         }
       }
       Section("Related conversations") {
@@ -337,33 +327,13 @@ struct NativeLinkedConversations: View {
           }
         }
       }
-      if current.surface == "swarm" {
-        Section("Link this conversation") {
-          Text(
-            "Group this conversation under another one in the sidebar. This does not merge messages."
-          ).font(.caption).foregroundStyle(.secondary)
-          Picker("Parent conversation", selection: $selected) {
-            Text("Choose conversation").tag("")
-            ForEach(candidates) { Text($0.label).tag($0.id) }
-          }
-          Button("Link conversation") { confirming = true }.disabled(
-            selected.isEmpty || selected == current.parentSessionId)
-        }
-      }
       if let error { Text(error).foregroundStyle(.red) }
     }.disabled(busy).navigationTitle("Linked conversations")
       .task { await load() }.refreshable { if !busy { await load() } }
-      .confirmationDialog(
-        selected.isEmpty ? "Make this conversation standalone?" : "Link this conversation?",
-        isPresented: $confirming
-      ) {
-        Button(selected.isEmpty ? "Make standalone" : "Link") { Task { await change() } }
+      .confirmationDialog("Make this conversation standalone?", isPresented: $confirming) {
+        Button("Make standalone") { Task { await detach() } }
       } message: {
-        Text(
-          selected.isEmpty
-            ? "It will appear independently in the conversation list."
-            : "It will be grouped under \(candidates.first { $0.id == selected }?.label ?? "the selected conversation")."
-        )
+        Text("It will appear independently in the conversation list.")
       }
   }
   private func load(afterMutation: Bool = false) async {
@@ -380,17 +350,15 @@ struct NativeLinkedConversations: View {
       error = $0.localizedDescription
     }
   }
-  private func change() async {
+  private func detach() async {
     guard !busy else { return }
     busy = true
     loader.cancel()
     defer { busy = false }
     do {
       let _: MutationReceipt = try await model.client.fetch(
-        "api/sessions/\(current.id.apiComponent)/\(selected.isEmpty ? "detach" : "adopt")",
-        body: selected.isEmpty ? [:] : ["parentSessionId": selected])
+        "api/sessions/\(current.id.apiComponent)/detach", body: [:])
       await load(afterMutation: true)
-      selected = ""
     } catch { self.error = error.localizedDescription }
   }
 }
