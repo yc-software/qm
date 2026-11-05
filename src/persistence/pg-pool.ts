@@ -295,10 +295,7 @@ function describePgError(error: unknown): string {
 }
 
 function unmigrated(migration: PgMigration): Error {
-  const table = /\b(?:CREATE|ALTER)\s+(?:UNLOGGED\s+)?TABLE\s+(?:IF\s+(?:NOT\s+)?EXISTS\s+)?([a-z_][a-z0-9_.]*)/i.exec(
-    migration.statements.join("\n"),
-  )?.[1];
-  const message = `misconfiguration: migration ${migration.id}${table ? ` for table ${table}` : ""} has not been applied and this database login does not own the schema; run the migrations as the database owner before starting`;
+  const message = `misconfiguration: migration ${migration.id} has not been applied and this database login does not own the schema; run the migrations as the database owner before starting`;
   console.error(`[pg-pool] ${message}`);
   return new Error(message);
 }
