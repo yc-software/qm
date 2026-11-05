@@ -227,18 +227,18 @@ export function createSwarmStore(
       return decode(updated);
     },
     async pending(afterId) {
-      const due = (await backing.claimIdsWhere("pending", "true"))
-        .filter(({ id }) => afterId === undefined || id > afterId)
+      const query = {
+        where: { field: "pending", anyOfFold: ["true"] },
+        afterId,
+        limit: SWARM_LIMITS.sweepBatch,
+      } as const;
+      const claimed = await claimThenBind(backing.claimTenants, async () =>
+        (await backing.select(query)).map((row) => ({ ...decode(row), tenantId: currentTenant() })),
+      );
+      return claimed
+        .flat()
         .sort((a, b) => (a.id < b.id ? -1 : Number(a.id > b.id)))
         .slice(0, SWARM_LIMITS.sweepBatch);
-      const claimed = await claimThenBind(
-        async () => due,
-        async (id) => {
-          const row = await backing.get(id);
-          return row?.pending ? [{ ...decode(row), tenantId: currentTenant() }] : [];
-        },
-      );
-      return claimed.flat();
     },
   };
 }
