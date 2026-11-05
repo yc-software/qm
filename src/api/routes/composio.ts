@@ -9,7 +9,6 @@ import { PrincipalLinkError } from "../../identity/principal-links.ts";
 import { createHash } from "node:crypto";
 import { scopeId } from "../../types.ts";
 import { parseRef } from "../../acl/resource-ref.ts";
-import { cacheTenant } from "../../tenants/context.ts";
 import { orgId } from "../../config.ts";
 import { entitledScopes } from "../../resolution/context-filter.ts";
 import { sendJson } from "../http.ts";
@@ -47,7 +46,8 @@ export async function activeRun(ctx: ApiCtx): Promise<boolean> {
   ) {
     sendJson(ctx.res, 403, {
       error: "inactive_run",
-      message: "Connected app access requires this run's current capability.",
+      message:
+        "Connected app access requires this run's current capability: the turn that issued this token is no longer running, or the token belongs to another run. A background job or script that outlives its turn loses connected-app access; make these calls from a foreground command in a live turn (a cron fire is one).",
     });
     return false;
   }
@@ -144,12 +144,45 @@ class ComposioHttpError extends Error {
   }
 }
 
-function executeFailureCause(error: unknown, timedOut: boolean): string {
-  if (timedOut) return "timeout";
-  return error instanceof ComposioHttpError ? "provider_error" : "unavailable";
+export interface ComposioAccountRecord {
+  id?: unknown;
+  user_id?: unknown;
+  status?: unknown;
+  is_disabled?: unknown;
+  toolkit?: { slug?: unknown };
 }
 
-const EXECUTE_TIMEOUT_MS = 90_000;
+export function usableAccount<T extends ComposioAccountRecord>(
+  item: T | null | undefined,
+  userIds: readonly string[],
+): item is T & { id: string; toolkit: { slug: string } } {
+  return (
+    !!item &&
+    typeof item.id === "string" &&
+    ACCOUNT_ID.test(item.id) &&
+    userIds.includes(String(item.user_id)) &&
+    item.status === "ACTIVE" &&
+    item.is_disabled !== true &&
+    typeof item.toolkit?.slug === "string" &&
+    /^[a-zA-Z0-9_-]{1,100}$/.test(item.toolkit.slug)
+  );
+}
+
+export function sendExecutionFailure(ctx: ApiCtx, error: unknown, mask: (text: string) => string, code: string): void {
+  const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
+  const provider = error instanceof ComposioHttpError ? error : undefined;
+  sendJson(ctx.res, 502, {
+    error: code,
+    cause: (timedOut && "timeout") || (provider && "provider_error") || "unavailable",
+    ...(provider ? { providerStatus: provider.status, providerDetail: mask(redactSecrets(provider.message)) } : {}),
+    message:
+      timedOut || provider?.status === 413
+        ? "The request was too large or slow to complete. For reads, request less per call (smaller pages, metadata before bodies); for uploads, use the provider's chunked or resumable upload. Do not automatically retry a write."
+        : "The request failed or its outcome is unknown. Do not automatically retry a write.",
+  });
+}
+
+export const EXECUTE_TIMEOUT_MS = 90_000;
 
 export async function request(
   ctx: ApiCtx,
@@ -302,7 +335,7 @@ async function authorize(ctx: ApiCtx, linkSlack = false): Promise<void> {
   }
 }
 
-export async function ownedAccount(
+async function ownedAccount(
   ctx: ApiCtx,
   access: { key: string; principal: string },
   accountId: string,
@@ -318,18 +351,26 @@ export async function ownedAccount(
     : null;
 }
 
+export async function activeOwnedAccount(
+  ctx: ApiCtx,
+  access: { key: string; principal: string },
+  accountId: string,
+): Promise<{ account: Record<string, unknown>; toolkit: string } | null> {
+  const owned = await ownedAccount(ctx, access, accountId);
+  return owned && owned.account.status === "ACTIVE" && owned.account.is_disabled !== true ? owned : null;
+}
+
 const SCOPES_TTL_MS = 5 * 60_000;
 const scopeCache = new Map<string, { scopes: string[]; expiresAt: number }>();
 
 async function configuredScopes(ctx: ApiCtx, key: string, authConfigId: string): Promise<string[]> {
-  const cacheKey = JSON.stringify([cacheTenant(), authConfigId]);
-  const cached = scopeCache.get(cacheKey);
+  const cached = scopeCache.get(authConfigId);
   if (cached && cached.expiresAt > Date.now()) return cached.scopes;
   try {
     const config = await request(ctx, key, `/auth_configs/${encodeURIComponent(authConfigId)}`);
     const listed = (config.credentials as { scopes?: unknown } | undefined)?.scopes;
     const scopes = Array.isArray(listed) ? listed.filter((scope): scope is string => typeof scope === "string") : [];
-    scopeCache.set(cacheKey, { scopes, expiresAt: Date.now() + SCOPES_TTL_MS });
+    scopeCache.set(authConfigId, { scopes, expiresAt: Date.now() + SCOPES_TTL_MS });
     return scopes;
   } catch (error) {
     const mask = createExactSecretValueMasker([key]);
@@ -360,17 +401,7 @@ async function connections(ctx: ApiCtx): Promise<void> {
   try {
     const data = await request(ctx, access.key, `/connected_accounts?${query}`);
     if (!Array.isArray(data.items)) throw new Error("Invalid accounts");
-    const accounts = data.items.filter(
-      (item) =>
-        item &&
-        userIds.includes(item.user_id) &&
-        item.status === "ACTIVE" &&
-        item.is_disabled !== true &&
-        typeof item.id === "string" &&
-        ACCOUNT_ID.test(item.id) &&
-        typeof item.toolkit?.slug === "string" &&
-        /^[a-zA-Z0-9_-]{1,100}$/.test(item.toolkit.slug),
-    );
+    const accounts = data.items.filter((item) => usableAccount(item, userIds));
     const configIds = [
       ...new Set(
         accounts
@@ -490,9 +521,8 @@ async function execute(ctx: ApiCtx): Promise<void> {
     });
   const resource = `${body.accountId}/${body.tool}@${body.version}`;
   try {
-    const owned = await ownedAccount(ctx, access, body.accountId);
-    if (!owned || owned.account.status !== "ACTIVE" || owned.account.is_disabled === true)
-      return sendJson(ctx.res, 403, { error: "connection_not_authorized" });
+    const owned = await activeOwnedAccount(ctx, access, body.accountId);
+    if (!owned) return sendJson(ctx.res, 403, { error: "connection_not_authorized" });
     const { account, toolkit } = owned;
     const tool = await request(
       ctx,
@@ -546,16 +576,7 @@ async function execute(ctx: ApiCtx): Promise<void> {
     });
     const mask = createExactSecretValueMasker([access.key]);
     reportFailure("composio: execute", new Error(mask(redactSecrets(errMessage(error)))), `tool=${body.tool}`);
-    const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
-    return sendJson(ctx.res, 502, {
-      error: "composio_execution_failed",
-      cause: executeFailureCause(error, timedOut),
-      ...(error instanceof ComposioHttpError ? { providerStatus: error.status } : {}),
-      message:
-        timedOut || (error instanceof ComposioHttpError && error.status === 413)
-          ? "The request was too large to complete. For reads, request less per call (smaller pages, metadata before bodies). Do not automatically retry a write."
-          : "Execution failed or its outcome is unknown. Do not automatically retry a write.",
-    });
+    return sendExecutionFailure(ctx, error, mask, "composio_execution_failed");
   }
 }
 

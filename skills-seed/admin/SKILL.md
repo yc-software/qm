@@ -212,10 +212,11 @@ GET /v1/admin/retention
 GET /v1/admin/users            → roster + admin status (org-wide)
 ```
 
-Users lists the `users` table, the people QM has met: someone joins on their own first message
-(not a Slack app or a non-person actor; a Slack id is recorded as the person the directory
-maps it to), when invited as a teammate, or when made an admin. Linking merges a sign-in's
-row into its person's. Rows carry `firstSeenAt` and `source`; activity counts are computed.
+Users lists the `users` table, the people and apps QM has met: someone joins on their own first
+message (not a non-person actor; a Slack id is recorded as the person the directory maps it to),
+when invited as a teammate, or when made an admin. Each row has a generated `userId`; `principalId`
+is the person's main sign-in. Linking merges a sign-in's user into its person's. Rows carry
+`kind` (`person` or `app`, for Slack apps), `firstSeenAt` and `source`; activity counts are computed.
 
 ## External users
 

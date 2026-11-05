@@ -11,7 +11,6 @@ import type { ServerDeps } from "../src/api/deps.ts";
 import { gatewayActorId } from "../src/model/provider-endpoints.ts";
 import { buildApp } from "./support/build-app.ts";
 import { computeUsers } from "../src/admin/users.ts";
-import { USER_MIGRATIONS } from "../src/identity/user-store.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { testMigratedDatabaseUrl } from "./support/test-database.ts";
 import type { TurnRequest } from "../src/types.ts";
@@ -144,6 +143,23 @@ test("/v1/admin/users: org_admin sees the roster + grants; a non-admin is denied
       conversation: { kind: "dm", threadRef: "dm:talker:t1" },
     });
 
+    await s.built.app.turn({
+      ...dm,
+      actor: { externalId: "U-app2" },
+      conversation: { kind: "dm", threadRef: "dm:U-app2:t1" },
+    });
+    assert.equal(
+      await s.built.app.upsertDirectory(
+        [
+          { principalId: "Uno@Example.com", displayName: "Uno", type: "internal", slackId: "U1" },
+          { principalId: "Seven@Example.com", displayName: "Seven", type: "internal", slackId: "U7" },
+          { principalId: "U-bot", displayName: "Some App", type: "internal", isBot: true },
+          { principalId: "U-app2", displayName: "Other App", type: "internal", isBot: true },
+        ],
+        Date.now(),
+      ),
+      true,
+    );
     const r = await fetch(`${s.base}/v1/admin/users`, { headers: { "x-admin-actor": "admin-alice@default-org" } });
     assert.equal(r.status, 200);
     const d: any = await r.json();
@@ -157,88 +173,16 @@ test("/v1/admin/users: org_admin sees the roster + grants; a non-admin is denied
       ["U1", "smoke-test"],
       "any author who isn't a bot counts; a Slack id becomes one person with its email only through a link",
     );
+    assert.deepEqual(["U-preloaded", "U-cron"].filter(listed), [], "not someone only added, or an automation's target");
+    const kindOf = (id: string) => d.users.find((u: { principalId: string }) => u.principalId === id)?.kind;
     assert.deepEqual(
-      ["U-preloaded", "U-cron", "U-bot"].filter(listed),
-      [],
-      "not someone only added, an automation's target, or a turn flagged as a bot",
+      ["U1", "talker@example.com", "U-bot", "U-app2"].map(kindOf),
+      ["person", "person", "app", "app"],
+      "a bot-flagged turn records an app, and directory sync marks a known user whose member is a bot",
     );
     assert.ok(
       Array.isArray(d.grants) && d.grants.some((g: { principalId: string }) => g.principalId === "admin-alice"),
       "authoritative grants present",
-    );
-
-    const migration = USER_MIGRATIONS.find((m) => m.id === "users/0002-copy-principal-links")!.statements[0]!;
-    await pg.query("CREATE TABLE principal_links (id TEXT PRIMARY KEY, json JSONB NOT NULL)");
-    await pg.query(
-      `INSERT INTO principal_links VALUES ('u-self', '{"principalId":"U-Self","canonicalId":"u-self","evidence":"qa","linkedBy":"admin-alice","createdAt":2}')`,
-    );
-    await assert.rejects(pg.query(migration), /cannot be copied.*u-self/, "a bad legacy row stops the migration");
-    await pg.query("DROP TABLE principal_links");
-    await pg.query("DELETE FROM users");
-    await pg.query("CREATE TABLE IF NOT EXISTS principal_links (id TEXT PRIMARY KEY, json JSONB NOT NULL)");
-    await pg.query(
-      `INSERT INTO principal_links VALUES ('U1', '{"principalId":"U1","canonicalId":"Pat@Example.com","evidence":"qa","linkedBy":"admin-alice","createdAt":1}')`,
-    );
-    await pg.query(
-      `INSERT INTO sessions(id, type, scope_id, thread_ref, created_at, origin) VALUES ('hist-s', 'channel', 'org:default-org', 'hist:1', 1, 'conversation')`,
-    );
-    await pg.query(
-      `INSERT INTO items(tenant_id, session_id, seq, kind, author, text, body, created_at)
-       VALUES (qm_tenant_id(), 'hist-s', 1, 'UserMessage', 'U7', 'hi', '{}', now() - interval '1 day'),
-              (qm_tenant_id(), 'hist-s', 2, 'UserMessage', 'Seven@Example.com', 'hi', '{}', now()),
-              (qm_tenant_id(), 'hist-s', 3, 'UserMessage', 'U9', 'hi', '{}', now())`,
-    );
-    await pg.query(
-      `INSERT INTO sessions(id, type, scope_id, thread_ref, created_at, origin, spawn_meta)
-       VALUES ('ext-s', 'channel', 'org:default-org', 'ext:1', 1, 'conversation', '{"surfaceOrigin":{"audience":"external"}}')`,
-    );
-    await pg.query(
-      `INSERT INTO items(tenant_id, session_id, seq, kind, author, text, body, created_at)
-       VALUES (qm_tenant_id(), 'ext-s', 1, 'UserMessage', 'U-ext', 'hi', '{}', now())`,
-    );
-    await s.built.identity.putExternalMember({
-      email: "Mate@Example.com",
-      role: "member",
-      expiresAt: null,
-      kind: "teammate",
-      invitedBy: "admin-alice",
-      createdAt: 5,
-      updatedAt: 5,
-    });
-    for (const m of USER_MIGRATIONS.filter((m) => /^users\/000[234]/.test(m.id)))
-      for (const statement of m.statements) await pg.query(statement);
-    assert.deepEqual(
-      (await pg.q("SELECT alias_id, user_id, evidence FROM user_links ORDER BY alias_id")).map((r) => [
-        r.alias_id,
-        r.user_id,
-        r.evidence,
-      ]),
-      [
-        ["U1", "pat@example.com", "qa"],
-        ["U7", "seven@example.com", "slack directory: slack_id→principal_id"],
-      ],
-      "existing links are copied, and a Slack-id author the directory maps to someone else is linked to them",
-    );
-    assert.equal((await pg.q("SELECT to_regclass('principal_links') AS t"))[0]!.t, null, "and the old map is dropped");
-    const users = new Map((await pg.q("SELECT id, source FROM users")).map((r) => [r.id as string, r.source]));
-    assert.equal(users.get("pat@example.com"), "turn", "a linked writer's history lands on their canonical user");
-    assert.equal(users.has("U1"), false, "with no row for the alias");
-    assert.equal(users.get("seven@example.com"), "turn", "the directory-mapped Slack-id author folds into their email");
-    assert.equal(users.has("U7"), false);
-    const [seven] = await pg.q(
-      "SELECT first_seen_at < now() - interval '12 hours' AS early FROM users WHERE id = 'seven@example.com'",
-    );
-    assert.equal(seven!.early, true, "and the email's first-seen includes the Slack-id messages");
-    assert.equal(users.get("U9"), "turn", "an unmapped Slack id is its own person");
-    assert.equal(users.get("U-bot"), "turn", "history keeps no bot flag, so an app that wrote gets a row");
-    assert.equal(users.get("smoke-test"), "turn");
-    assert.equal(users.get("admin-alice"), "admin", "an existing grant holder gets a row");
-    assert.equal(users.get("mate@example.com"), "invite", "as does an existing teammate");
-    const backfilled = [...users.keys()];
-    assert.deepEqual(
-      ["U1", "U-preloaded", "U-cron", "U-ext"].filter((id) => backfilled.includes(id)),
-      [],
-      "no linked alias, automation target, external member or added-only participant",
     );
 
     const denied = await fetch(`${s.base}/v1/admin/users`, { headers: { "x-admin-actor": "user-uma@default-org" } });

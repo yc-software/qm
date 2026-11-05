@@ -4,7 +4,6 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import pg from "pg";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { seedReleasedInstall } from "./support/tenant-seed.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
 const skip = databaseUrl ? false : "set DATABASE_URL (a Postgres) to run the harness choice migration test";
@@ -42,7 +41,6 @@ const rows = async (pool: pg.Pool, table: string) =>
 
 test("stored harness choices are dropped while their runtime selections stay recognised", { skip }, async () => {
   await withDatabase(async (url, admin) => {
-    await seedReleasedInstall(url);
     for (const table of JSON_TABLES)
       await admin.query(`CREATE TABLE ${table} (id TEXT PRIMARY KEY, json JSONB NOT NULL)`);
     const insert = (table: string, id: string, json: unknown) =>

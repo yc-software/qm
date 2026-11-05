@@ -87,6 +87,19 @@ function nextCalendarFireAfter(schedule: CronSchedule, after: number): number | 
   return next ? next.getTime() : undefined;
 }
 
+export function firesAtMostDaily(schedule: CronSchedule, from: number): boolean {
+  if (!isCalendarSchedule(schedule)) return schedule.everyMs === undefined;
+  const job = calendarJob(schedule);
+  const end = from + 7 * DAY_MS;
+  let cursor = from - 1;
+  for (let fires = 0; fires <= 7; fires++) {
+    const next = job.nextRun(new Date(cursor))?.getTime();
+    if (next === undefined || next >= end) return true;
+    cursor = next;
+  }
+  return false;
+}
+
 export function normalizeSchedule(
   input: CronSchedule,
   now: number,

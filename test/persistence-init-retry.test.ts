@@ -1,19 +1,24 @@
 import { test } from "node:test";
-import { randomUUID } from "node:crypto";
 import assert from "node:assert/strict";
 import { createPgPool, type PgPool, type Rows } from "../src/persistence/pg-pool.ts";
 import { createPostgresMap } from "../src/persistence/durable-map.ts";
 import { createAdminGrantStore, type AdminGrant, type AdminGrantPersistence } from "../src/admin/admin-grant-store.ts";
 import { scopeId } from "../src/types.ts";
-import { withTenant } from "../src/tenants/context.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the live-pool tests";
 
-function flakyMigrationPool(failures: number): PgPool {
+function flakyPgPool(failures: number): PgPool {
   let remaining = failures;
   async function query(_text: string, _params: unknown[] = []): Promise<{ rows: Rows; rowCount: number }> {
-    return { rows: [{ json: { n: 1 } }], rowCount: 1 };
+    if (remaining > 0) {
+      remaining--;
+      throw new Error("transient pg failure");
+    }
+    return {
+      rows: [{ token: "t", json: { n: 1 } }],
+      rowCount: 1,
+    };
   }
   return {
     sessionPool: () => Promise.reject(new Error("not backed by a real pool")),
@@ -21,22 +26,15 @@ function flakyMigrationPool(failures: number): PgPool {
     query,
     q: async (text, params) => (await query(text, params ?? [])).rows,
     registerMigration: () => {},
-    migrate: async () => {
-      if (remaining > 0) {
-        remaining--;
-        throw new Error("transient pg failure");
-      }
-    },
+    migrate: async () => {},
     close: async () => {},
   };
 }
 
 test("pg map: a failed table-create is retried on the next call (rejection not cached)", async () => {
-  const m = createPostgresMap<{ n: number }>(flakyMigrationPool(1), "retry_widgets");
-  await withTenant(randomUUID(), async () => {
-    await assert.rejects(() => m.all(), /transient pg failure/);
-    assert.deepEqual(await m.all(), [{ n: 1 }], "second call re-runs the table create and proceeds to the query");
-  });
+  const m = createPostgresMap<{ n: number }>(flakyPgPool(1), "retry_widgets");
+  await assert.rejects(() => m.all(), /transient pg failure/);
+  assert.deepEqual(await m.all(), [{ n: 1 }], "second call re-runs the table create and proceeds to the query");
 });
 
 test("admin grants: a failed seed is retried on the next call (rejection not cached)", async () => {

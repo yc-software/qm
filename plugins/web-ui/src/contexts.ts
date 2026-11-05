@@ -409,7 +409,7 @@ function contextRow(c: CoreContext): TemplateResult {
     .filter(Boolean)
     .join(" · ");
   return html`
-    <button class="context-row" type="button" ${tip(sub)} @click=${() => selectContext(c.scopeId)}>
+    <button class="context-row" type="button" @click=${() => selectContext(c.scopeId)}>
       <span class="context-glyph">${projectIconTpl(c.project?.icon, 17) ?? icon(glyph, 15)}</span>
       <span class="context-row-title" dir="auto">${title}</span>
       ${c.isPrivate ? html`<span class="context-lock" ${tip("Private channel")}>${icon(Lock, 12)}</span>` : nothing}

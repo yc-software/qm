@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createAgent } from "../src/agent/agent-run.ts";
+import { createModelRoutes } from "../src/model/model-route.ts";
 import type { TurnLlmRequestRecord, AgentTurnInput } from "../src/agent/agent.ts";
 import { promptEnvelopeBody } from "../src/sessions/session-store.ts";
 import { isAgentReply, isUserItem, messageTs, storedItem, type Item } from "../src/sessions/items.ts";
@@ -83,7 +84,7 @@ for (const variant of ["text", "images", "documents", "finished during preparati
   const finishDuringPreparation = variant === "finished during preparation";
   test(`steered input lands in consumption order, including steered ${variant}`, { timeout: 60_000 }, async () => {
     const signals = createPostgresRunSignalStore(testDatabaseUrl());
-    const agent = createAgent({ apiKey: "sk-test", signals });
+    const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }), signals });
     const sink: Sink = { entries: [] };
     const documentBase64 = (await readFile(new URL("./fixtures/documents/sample.pdf", import.meta.url))).toString(
       "base64",
@@ -182,7 +183,7 @@ for (const variant of ["text", "images", "documents", "finished during preparati
 }
 
 test("a session deleted mid-turn fails the turn instead of degrading silently", async () => {
-  const agent = createAgent({ apiKey: "sk-test" });
+  const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }) });
   const sink: Sink = { entries: [] };
   const store = createPostgresSessionStore(testDatabaseUrl());
   const session = await store.getOrCreateByThread("dm:session-deleted", "dm", "personal:tester" as ScopeId);
@@ -214,7 +215,7 @@ test("completed Pi attach results retain openable files in viewer history", asyn
     { name: "phone.png", mimetype: "image/png", sizeBytes: 456, artifactId: "phone" },
     { name: "preview.html", mimetype: "text/html", sizeBytes: 789, artifactId: "preview" },
   ];
-  const agent = createAgent({ apiKey: "sk-test" });
+  const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }) });
   const realFetch = globalThis.fetch;
   let calls = 0;
   globalThis.fetch = (async () => {
@@ -268,18 +269,20 @@ for (const route of ["gateway", "direct", "personal"] as const) {
   test(`native document byte budget respects ${route} routing`, async () => {
     const modelId = "claude-opus-5";
     const agent = createAgent({
-      apiKey: "sk-test",
-      modelId,
-      ...(route !== "direct"
-        ? {
-            modelGateway: {
-              url: "https://gateway.test",
-              apiKey: "gateway-test",
-              apiKeyHeader: "api-key",
-              models: { [modelId]: "router/opus" },
-            },
-          }
-        : {}),
+      routes: createModelRoutes({
+        apiKey: "sk-test",
+        modelId,
+        ...(route !== "direct"
+          ? {
+              modelGateway: {
+                url: "https://gateway.test",
+                apiKey: "gateway-test",
+                apiKeyHeader: "api-key",
+                models: { [modelId]: "router/opus" },
+              },
+            }
+          : {}),
+      }),
     });
     const sink: Sink = { entries: [] };
     const pdf = await readFile(new URL("./fixtures/documents/sample.pdf", import.meta.url));
@@ -314,7 +317,7 @@ for (const route of ["gateway", "direct", "personal"] as const) {
 }
 
 test("native document bytes reach the provider on every step without entering session entries", async () => {
-  const agent = createAgent({ apiKey: "sk-test" });
+  const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }) });
   const sink: Sink = { entries: [] };
   const realFetch = globalThis.fetch;
   const requests: Array<Record<string, unknown>> = [];
@@ -343,7 +346,7 @@ test("native document bytes reach the provider on every step without entering se
 });
 
 test("Pi Responses captures exclude history and document text without changing requests or entries", async () => {
-  const agent = createAgent({ openaiApiKey: "sk-test", modelId: "gpt-5.6-sol" });
+  const agent = createAgent({ routes: createModelRoutes({ openaiApiKey: "sk-test", modelId: "gpt-5.6-sol" }) });
   const sink: Sink = { entries: [] };
   const captures: TurnLlmRequestRecord[] = [];
   const realFetch = globalThis.fetch;
@@ -412,7 +415,7 @@ for (const stopBeforeIntake of [false, true]) {
       if (rows.some((row) => row.signal.kind === "abort")) setTimeout(stopTaken);
       return rows;
     };
-    const agent = createAgent({ apiKey: "sk-test", signals });
+    const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }), signals });
     const store = createPostgresSessionStore(testDatabaseUrl());
     const session = await store.getOrCreateByThread("web:steer-tool", "dm", "personal:tester" as ScopeId);
     const writer = { sessionId: session.id };
@@ -499,7 +502,7 @@ for (const stopBeforeIntake of [false, true]) {
 
 test("a steer wakes a waiting background poll and lands without waiting out the poll", async () => {
   const signals = createPostgresRunSignalStore(testDatabaseUrl());
-  const agent = createAgent({ apiKey: "sk-test", signals });
+  const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }), signals });
   const sink: Sink = { entries: [] };
   const realFetch = globalThis.fetch;
   let calls = 0;
@@ -563,7 +566,7 @@ test("a consumed steer is recorded when its acknowledgement fails", { timeout: 6
   signals.acknowledge = async () => {
     throw new Error("signal store unavailable");
   };
-  const agent = createAgent({ apiKey: "sk-test", signals });
+  const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }), signals });
   const sink: Sink = { entries: [] };
   const realFetch = globalThis.fetch;
   let calls = 0;
@@ -618,7 +621,7 @@ test("a consumed steer is recorded when its acknowledgement fails", { timeout: 6
 
 for (const abort of ["shutdown", "stop"] as const) {
   test(`a tool still running at ${abort === "shutdown" ? "shutdown is recorded interrupted and replays its cause" : "a user Stop is recorded stopped and answered"} without waiting for it`, async () => {
-    const agent = createAgent({ apiKey: "sk-test" });
+    const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }) });
     const store = createPostgresSessionStore(testDatabaseUrl());
     const session = await store.getOrCreateByThread(`web:${abort}-tool`, "dm", "personal:tester" as ScopeId);
     const writer = { sessionId: session.id };
@@ -692,7 +695,7 @@ for (const abort of ["shutdown", "stop"] as const) {
 }
 
 test("a request rejected as too long retries once without its inline documents instead of failing the turn", async () => {
-  const agent = createAgent({ apiKey: "sk-test" });
+  const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }) });
   const sink: Sink = { entries: [] };
   const realFetch = globalThis.fetch;
   const requests: string[] = [];
@@ -727,7 +730,7 @@ test("a request rejected as too long retries once without its inline documents i
 });
 
 test("a park lets the running tool finish, records its real result and stops before the next model step", async () => {
-  const agent = createAgent({ apiKey: "sk-test" });
+  const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }) });
   const store = createPostgresSessionStore(testDatabaseUrl());
   const session = await store.getOrCreateByThread("web:park-tool", "dm", "personal:tester" as ScopeId);
   const writer = { sessionId: session.id };
@@ -803,7 +806,7 @@ test("a park lets the running tool finish, records its real result and stops bef
 });
 
 test("a park requested during the turn's last model step lets the turn finish", async () => {
-  const agent = createAgent({ apiKey: "sk-test" });
+  const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }) });
   const store = createPostgresSessionStore(testDatabaseUrl());
   const session = await store.getOrCreateByThread("web:park-last-step", "dm", "personal:tester" as ScopeId);
   const writer = { sessionId: session.id };

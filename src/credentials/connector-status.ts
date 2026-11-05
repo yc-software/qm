@@ -2,7 +2,6 @@ import type { ConnectorTokenStore, OAuthTokenStatus } from "./keychain.ts";
 import {
   ACCOUNT_TYPES,
   oauthProviderEntries,
-  publicOAuthClientsReady,
   PROVIDERS,
   type OAuthClientResolver,
   type OAuthProviderConfig,
@@ -22,7 +21,6 @@ export async function providerTokenStatuses(
   tokens: ConnectorTokenStore,
   principalId: string,
 ): Promise<Array<{ name: string; provider: OAuthProviderConfig; hosts: HostTokenStatus[] }>> {
-  await publicOAuthClientsReady();
   const all = await Promise.all(
     oauthProviderEntries().map(async ([name, provider]) => {
       const hosts = await Promise.all(

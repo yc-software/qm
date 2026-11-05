@@ -247,7 +247,6 @@ export interface DeliveryProvenance {
 
 export interface Delivery {
   id: string;
-  tenantId?: string;
   destination: Destination;
   text: string;
   attachments?: OutgoingAttachment[];
@@ -389,6 +388,7 @@ export interface TurnRequest {
   gatewayContext?: GatewayContext;
   unattendedGrants?: string[];
   cronScript?: import("./triggers/types.ts").CronScript;
+  infrequentCron?: boolean;
   botActor?: boolean;
   conversationHeader?: string;
   priorTurns?: ConversationTurn[];

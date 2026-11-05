@@ -1,7 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresAppPageViewLog } from "../src/deploy/page-views.ts";
-import { seedReleasedInstall } from "./support/tenant-seed.ts";
 
 const URL = process.env.DATABASE_URL;
 const view = () => ({
@@ -20,7 +19,6 @@ test("pg page-view log stores one row per view with clipped request fields", { s
   const pg = (await import("pg")).default;
   const admin = new pg.Pool({ connectionString: URL });
   try {
-    await seedReleasedInstall(URL!);
     await admin.query("DROP TABLE IF EXISTS app_page_views CASCADE");
     await admin.query("DELETE FROM qm_schema_migrations WHERE id LIKE 'deploy/app-page-views/%'").catch(() => {});
     await admin.query("CREATE TABLE IF NOT EXISTS deployments (id TEXT PRIMARY KEY, json JSONB NOT NULL)");

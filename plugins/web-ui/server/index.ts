@@ -1,10 +1,8 @@
 import "./instrument.ts";
 import { handleVoiceRoute, sweepDictationSpool } from "./voice-routes.ts";
 import { browserErrorConfig } from "./browser-error-config.ts";
-import { flushErrorReporting, reportBackendError } from "../../chassis/src/error-reporting.ts";
-import { swallow } from "../../chassis/src/errors.ts";
-import { drainOnSigterm } from "../../chassis/src/drain.ts";
-import { withoutTenant } from "../../chassis/src/tenant.ts";
+import { reportBackendError } from "../../chassis/src/error-reporting.ts";
+import { errChain, swallow } from "../../chassis/src/errors.ts";
 import { appEditSlug } from "../src/app-edit.ts";
 import { composioCallbackUrl } from "./composio-return.ts";
 import { sharedSessionHtml } from "./shared-session.ts";
@@ -13,9 +11,9 @@ import { adminRoutes } from "./admin-routes.ts";
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { Readable } from "node:stream";
-import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { dirname, extname, join, normalize } from "node:path";
+import { dirname, extname, join, posix } from "node:path";
 import { randomBytes } from "node:crypto";
 import { LRUCache } from "lru-cache";
 import {
@@ -38,8 +36,6 @@ import {
   serveFavicon,
 } from "../../chassis/src/http.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
-import { boundTenant, withTenant } from "../../chassis/src/tenant.ts";
-import { coreHostTenants, inHostTenant, requestHostname } from "../../chassis/src/host-tenant.ts";
 import { createBrandingCache, injectBranding } from "../../chassis/src/branding.ts";
 import { parseSuggestedActivities } from "../../chassis/src/suggested-activities.ts";
 import { principalInAllowlist } from "../../chassis/src/principal-allowlist.ts";
@@ -49,14 +45,12 @@ import {
   CORE_ORG_ID as ORG,
   CORE_SIGNING_SECRET,
   PORTAL_IDENTITY_SECRET,
-  portFromEnv,
 } from "../../chassis/src/env.ts";
 
 const SUBAGENT_THREAD_PREFIX = "agent:main:subagent:";
-const PORT = portFromEnv(8096);
 const welcomeCohort = process.env.WEB_UI_WELCOME_COHORT?.trim().slice(0, 40) || undefined;
 const suggestedActivities = parseSuggestedActivities(process.env.WEB_UI_SUGGESTED_ACTIVITIES);
-const PUBLIC_URL = (process.env.WEB_UI_PUBLIC_URL ?? `http://localhost:${PORT}`).replace(/\/$/, "");
+const PUBLIC_URL = (process.env.PUBLIC_WEB_URL ?? "http://localhost:8096").replace(/\/$/, "");
 const WEB_UI_DEV = process.env.WEB_UI_DEV === "1";
 const ALLOW_UNSIGNED_TEST_IDENTITY =
   process.env.NODE_ENV === "test" && process.env.ALLOW_UNSIGNED_TEST_IDENTITY === "1";
@@ -90,7 +84,6 @@ async function hasInboxLoopPreview(user: string): Promise<boolean> {
 }
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const DIST = join(ROOT, "dist-web");
 
 const brandingCache = createBrandingCache(async () => {
   const r = await coreFetch("GET", "/v1/surface-config", "", 2_000);
@@ -141,7 +134,7 @@ const runThreadKeys = new Map<string, string>();
 const activeRunsByThread = new Map<string, string[]>();
 
 function threadKey(user: string, threadRef: string): string {
-  return `${boundTenant() ?? ""}\0${user}\0${threadRef}`;
+  return `${user}\0${threadRef}`;
 }
 
 function forgetRun(runId: string): void {
@@ -165,9 +158,6 @@ function rememberRun(runId: string, user: string, threadRef: string): void {
 }
 
 const deliveryClients = new Map<string, Set<ServerResponse>>();
-const clientTenants = new WeakMap<ServerResponse, string | undefined>();
-const hostTenants = coreHostTenants(CORE, CORE_SIGNING_SECRET);
-let multiTenant = true;
 
 function ownerOfWebThread(threadRef: string): string | null {
   if (!threadRef.startsWith("web:")) return null;
@@ -502,10 +492,9 @@ function sessionCookie(id: string): string {
 const MAX_BODY_BYTES = 1_000_000;
 const readBody = (req: IncomingMessage): Promise<string> => readBodyCapped(req, MAX_BODY_BYTES);
 
-const slackUrlCache = new LRUCache<string, { url: string | null }>({ max: 1_000, ttl: 5 * 60_000 });
+const slackUrlCache = new LRUCache<string, { url: string | null }>({ max: 1, ttl: 5 * 60_000 });
 async function slackWorkspaceUrl(): Promise<string | null> {
-  const key = boundTenant() ?? "";
-  const hit = slackUrlCache.get(key);
+  const hit = slackUrlCache.get("url");
   if (hit) return hit.url;
   let urlValue: string | null = null;
   try {
@@ -514,7 +503,7 @@ async function slackWorkspaceUrl(): Promise<string | null> {
   } catch {
     void 0;
   }
-  slackUrlCache.set(key, { url: urlValue });
+  slackUrlCache.set("url", { url: urlValue });
   return urlValue;
 }
 
@@ -523,13 +512,8 @@ const WEB_DELIVERY_GIVEUP_MS = 60_000;
 let deliveriesPollInFlight = false;
 let deliveriesPollFailing = false;
 
-function inTenant<T>(tenantId: string | undefined, fn: () => T): T {
-  return tenantId === undefined ? withoutTenant(fn) : withTenant(tenantId, fn);
-}
-
 interface PendingWebDelivery {
   id: string;
-  tenantId?: string;
   createdAt: number;
   destination?: { target?: string };
 }
@@ -557,21 +541,21 @@ function noteDeliveriesPoll(failure: unknown): void {
 }
 
 async function pollWebDeliveries(): Promise<unknown> {
-  const r = await withoutTenant(() => coreFetch("GET", "/v1/deliveries/across-tenants?type=web"));
-  if (r.status !== 200) return new Error(`GET /v1/deliveries/across-tenants http ${r.status}: ${r.text.slice(0, 200)}`);
+  const r = await coreFetch("GET", "/v1/deliveries?type=web");
+  if (r.status !== 200) return new Error(`GET /v1/deliveries http ${r.status}: ${r.text.slice(0, 200)}`);
   const pending = (JSON.parse(r.text) as { deliveries?: PendingWebDelivery[] }).deliveries ?? [];
   const now = Date.now();
   let failure: unknown;
   for (const d of pending) {
     const target = d.destination?.target ?? "";
-    const conns = tenantClients(ownerOfWebThread(target) ?? "", d.tenantId);
-    if (conns.length) {
+    const conns = deliveryClients.get(ownerOfWebThread(target) ?? "");
+    if (conns && conns.size) {
       for (const res of conns) sseEvent(res, "delivery", { threadRef: target });
     } else if (now - (d.createdAt ?? 0) < WEB_DELIVERY_GIVEUP_MS) {
       continue;
     }
     try {
-      const ack = await inTenant(d.tenantId, () => coreFetch("POST", `/v1/deliveries/${encodeURIComponent(d.id)}/ack`));
+      const ack = await coreFetch("POST", `/v1/deliveries/${encodeURIComponent(d.id)}/ack`);
       if (ack.status !== 200)
         failure ??= new Error(`ack delivery ${d.id} http ${ack.status}: ${ack.text.slice(0, 200)}`);
     } catch (e) {
@@ -585,14 +569,13 @@ const SSE_HEARTBEAT_MS = 15_000;
 const STATE_FEED_RECONNECT_MS = Number(process.env.STATE_FEED_RECONNECT_MS ?? 3_000);
 
 interface SessionStateFrame {
-  tenantId?: string;
   threadRef?: string;
   state?: string;
   participants?: string[];
   [k: string]: unknown;
 }
 
-export function forwardSessionState(frame: SessionStateFrame): void {
+function forwardSessionState(frame: SessionStateFrame): void {
   const threadRef = typeof frame.threadRef === "string" ? frame.threadRef : "";
   if (!threadRef) return;
   const targets = new Set<string>(
@@ -602,15 +585,10 @@ export function forwardSessionState(frame: SessionStateFrame): void {
     const owner = ownerOfWebThread(threadRef);
     if (owner) targets.add(owner);
   }
-  const { participants: _participants, tenantId, ...visible } = frame;
-  for (const user of targets) for (const res of tenantClients(user, tenantId)) sseEvent(res, "session_state", visible);
-}
-
-function tenantClients(user: string, tenant: string | undefined): ServerResponse[] {
-  return [...(deliveryClients.get(user) ?? [])].filter((res) => {
-    const own = clientTenants.get(res);
-    return own === undefined ? !multiTenant : own === tenant;
-  });
+  const { participants: _participants, ...visible } = frame;
+  for (const user of targets) {
+    for (const res of deliveryClients.get(user) ?? []) sseEvent(res, "session_state", visible);
+  }
 }
 
 async function consumeCoreFeed(
@@ -661,7 +639,7 @@ async function consumeCoreFeed(
     } catch {
       dropped = true;
     }
-    await new Promise((resolve) => setTimeout(resolve, STATE_FEED_RECONNECT_MS));
+    await new Promise((resolve) => setTimeout(resolve, STATE_FEED_RECONNECT_MS).unref());
   }
 }
 
@@ -680,7 +658,7 @@ function runInboxFeed(): Promise<void> {
   return consumeCoreFeed(
     "/v1/loop-items/events",
     "loop_item",
-    (data) => void forwardInboxItem(data as InboxItemFrame),
+    (data) => void forwardInboxItem(data as { loopId?: string; itemId?: string; op?: string }),
     resyncInbox,
   );
 }
@@ -689,21 +667,13 @@ function resyncInbox(): void {
   for (const conns of deliveryClients.values()) for (const res of conns) sseEvent(res, "inbox_resync", {});
 }
 
-interface InboxItemFrame {
-  tenantId?: string;
-  loopId?: string;
-  itemId?: string;
-  op?: string;
-}
-
-export async function forwardInboxItem(ev: InboxItemFrame): Promise<void> {
-  const { tenantId } = ev;
-  if (!ev.loopId || !ev.itemId) return;
-  const candidates = [...deliveryClients.keys()].filter((user) => tenantClients(user, tenantId).length);
-  if (!candidates.length) return;
-  const body = JSON.stringify({ loopId: ev.loopId, candidates });
-  const viewersFetch = () => coreFetch("POST", "/v1/inbox/viewers", body);
-  const r = await (tenantId ? withTenant(tenantId, viewersFetch) : viewersFetch()).catch(() => null);
+async function forwardInboxItem(ev: { loopId?: string; itemId?: string; op?: string }): Promise<void> {
+  if (!ev.loopId || !ev.itemId || !deliveryClients.size) return;
+  const r = await coreFetch(
+    "POST",
+    "/v1/inbox/viewers",
+    JSON.stringify({ loopId: ev.loopId, candidates: [...deliveryClients.keys()] }),
+  ).catch(() => null);
   if (r?.status === 404) return;
   let viewers: string[] | undefined;
   try {
@@ -713,7 +683,7 @@ export async function forwardInboxItem(ev: InboxItemFrame): Promise<void> {
   }
   if (!viewers) return resyncInbox();
   const frame = { loopId: ev.loopId, itemId: ev.itemId, op: ev.op ?? "" };
-  for (const user of viewers) for (const res of tenantClients(user, tenantId)) sseEvent(res, "inbox_item", frame);
+  for (const user of viewers) for (const res of deliveryClients.get(user) ?? []) sseEvent(res, "inbox_item", frame);
 }
 
 async function coreFetch(
@@ -1024,44 +994,61 @@ async function uploadFileFromRequest(
   return sendBuffered(res, registered.status, { "content-type": "application/json" }, registered.text);
 }
 
-async function serveStatic(res: ServerResponse, urlPath: string): Promise<void> {
-  const rel = normalize(decodeURIComponent(urlPath)).replace(/^(\.\.[/\\])+/, "");
-  let filePath = join(DIST, rel);
-  if (!filePath.startsWith(DIST)) return void json(res, 403, { error: "forbidden" });
-
-  const isFile = existsSync(filePath) && statSync(filePath).isFile();
-  const immutable = isFile && /(?:^|[/\\])assets[/\\]/.test(rel);
-  if (!isFile) {
-    if (extname(rel)) return void json(res, 404, { error: "not_found" });
-    filePath = join(DIST, "index.html");
-    if (!existsSync(filePath)) {
-      return void json(res, 503, { error: "not_built", message: "run `npm run build` to produce dist-web/" });
-    }
-  }
-  if (filePath.endsWith("index.html")) {
-    const branded = await brandIndexHtml(readFileSync(filePath, "utf8"));
-    const headers = withSecurityHeaders({ "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" });
-    return sendBuffered(res, 200, headers, branded);
-  }
-  const headers = withSecurityHeaders({
-    "content-type": CONTENT_TYPES[extname(filePath)] ?? "application/octet-stream",
-    "cache-control": immutable ? "public, max-age=31536000, immutable" : "no-cache",
-    vary: "accept-encoding",
-  });
-  const packed = `${filePath}.gz`;
-  if (gzipAccepted(res.req) && existsSync(packed)) {
-    res.writeHead(200, { ...headers, "content-encoding": "gzip" });
-    return void pipeFile(res, packed);
-  }
-  res.writeHead(200, headers);
-  pipeFile(res, filePath);
+export interface WebReleases {
+  document(name: string): Promise<string>;
+  file(path: string, gzip: boolean): Promise<{ body: Readable; gzip: boolean } | null>;
 }
 
-function pipeFile(res: ServerResponse, filePath: string): void {
-  const stream = createReadStream(filePath);
-  stream.on("error", () => res.destroy());
-  res.on("close", () => stream.destroy());
-  stream.pipe(res);
+let releases: WebReleases | undefined;
+
+export function serveReleasesFrom(source: WebReleases): void {
+  releases = source;
+}
+
+function liveReleases(): WebReleases {
+  if (!releases) throw new Error("the web UI server was started without a release source");
+  return releases;
+}
+
+function releaseUnavailable(res: ServerResponse, what: string, error: unknown): void {
+  console.error(`[web-ui] ${what} unavailable: ${errChain(error)}`);
+  reportBackendError(error);
+  if (!res.headersSent) json(res, 503, { error: "web_ui_unavailable", message: "The web UI release is unavailable." });
+  else res.destroy();
+}
+
+async function serveStatic(res: ServerResponse, urlPath: string): Promise<void> {
+  const rel = posix.normalize(decodeURIComponent(urlPath)).replace(/^\/+/, "");
+  if (rel === ".." || rel.startsWith("../") || rel.includes("\\")) return void json(res, 403, { error: "forbidden" });
+  if (!extname(rel) || rel === "index.html") {
+    let html: string;
+    try {
+      html = await liveReleases().document("index.html");
+    } catch (error) {
+      return releaseUnavailable(res, "index.html", error);
+    }
+    const headers = withSecurityHeaders({ "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" });
+    return sendBuffered(res, 200, headers, await brandIndexHtml(html));
+  }
+  let found: Awaited<ReturnType<WebReleases["file"]>>;
+  try {
+    found = await liveReleases().file(rel, gzipAccepted(res.req));
+  } catch (error) {
+    return releaseUnavailable(res, rel, error);
+  }
+  if (!found) return void json(res, 404, { error: "not_found" });
+  const headers = withSecurityHeaders({
+    "content-type": CONTENT_TYPES[extname(rel)] ?? "application/octet-stream",
+    "cache-control": rel.startsWith("assets/") ? "public, max-age=31536000, immutable" : "no-cache",
+    vary: "accept-encoding",
+  });
+  res.writeHead(200, found.gzip ? { ...headers, "content-encoding": "gzip" } : headers);
+  found.body.on("error", (error) => {
+    console.error(`[web-ui] streaming ${rel} failed: ${errChain(error)}`);
+    res.destroy();
+  });
+  res.on("close", () => found.body.destroy());
+  found.body.pipe(res);
 }
 
 async function serveAppEditHtml(req: IncomingMessage, res: ServerResponse, url: URL): Promise<boolean> {
@@ -1072,9 +1059,12 @@ async function serveAppEditHtml(req: IncomingMessage, res: ServerResponse, url: 
     const raw = readFileSync(join(ROOT, "index.html"), "utf8").replace("%BASE_URL%favicon.svg", "favicon.svg");
     html = await vite.transformIndexHtml(req.url ?? "/", raw);
   } else {
-    const filePath = join(DIST, "index.html");
-    if (!existsSync(filePath)) return false;
-    html = readFileSync(filePath, "utf8");
+    try {
+      html = await liveReleases().document("index.html");
+    } catch (error) {
+      releaseUnavailable(res, "index.html", error);
+      return true;
+    }
   }
   const headers = withSecurityHeaders({ "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" });
   const csp = SPA_CSP.replace("frame-ancestors 'self'", `frame-ancestors 'self' ${slug}.${APPS_FRAME_DOMAIN}`);
@@ -2788,7 +2778,6 @@ const apiRoutes: readonly WebRoute[] = [
     path: "/api/deliveries/events",
     handle: async (c) => {
       const { req, res, user } = c;
-      if (boundTenant() === undefined) multiTenant = (await hostTenants(requestHostname(req))).multi;
       res.writeHead(200, {
         "content-type": "text/event-stream; charset=utf-8",
         "cache-control": "no-cache, no-transform",
@@ -2802,7 +2791,6 @@ const apiRoutes: readonly WebRoute[] = [
         deliveryClients.set(user, set);
       }
       set.add(res);
-      clientTenants.set(res, boundTenant());
       const beat = setInterval(() => res.write(": ping\n\n"), SSE_HEARTBEAT_MS);
       beat.unref?.();
       req.on("close", () => {
@@ -3431,7 +3419,7 @@ const apiRoutes: readonly WebRoute[] = [
 ];
 
 const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
-  const url = new URL(req.url ?? "/", `http://localhost:${PORT}`);
+  const url = new URL(req.url ?? "/", "http://localhost");
   const path = url.pathname;
   const method = req.method ?? "GET";
 
@@ -3518,9 +3506,14 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     const result = await coreFetch("GET", corePath);
     const dev = vite && !external;
-    const template = dev
-      ? await vite!.transformIndexHtml("/shared.html", readFileSync(join(ROOT, "shared.html"), "utf8"))
-      : readFileSync(join(DIST, "shared.html"), "utf8");
+    let template: string;
+    try {
+      template = dev
+        ? await vite!.transformIndexHtml("/shared.html", readFileSync(join(ROOT, "shared.html"), "utf8"))
+        : await liveReleases().document("shared.html");
+    } catch (error) {
+      return releaseUnavailable(res, "shared.html", error);
+    }
     res.writeHead(result.status, {
       "Content-Type": "text/html; charset=utf-8",
       "Cache-Control": "no-store",
@@ -3597,33 +3590,6 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
   json(res, 404, { error: "not found" });
 };
 
-function identityTenant(token: string | undefined): string | undefined {
-  return token && PORTAL_IDENTITY_SECRET
-    ? verifyPortalIdentity(token, PORTAL_IDENTITY_SECRET, Date.now())?.t
-    : undefined;
-}
-
-function inRequestTenant(
-  req: IncomingMessage,
-  res: ServerResponse,
-  token: string | undefined,
-  handle: () => Promise<void>,
-): Promise<void> {
-  const claimed = identityTenant(token);
-  const bound = async (): Promise<void> => {
-    const host = boundTenant();
-    if (claimed && host && claimed !== host) {
-      req.resume();
-      return json(res, 421, {
-        error: "tenant_mismatch",
-        message: "this sign-in belongs to a different tenant than this host",
-      });
-    }
-    return claimed ? withTenant(claimed, handle) : handle();
-  };
-  return inHostTenant(hostTenants, req, res, bound, claimed === undefined);
-}
-
 export const handler = async (req: IncomingMessage, res: ServerResponse) => {
   res.setHeader("strict-transport-security", "max-age=63072000; includeSubDomains");
   res.setHeader("referrer-policy", "no-referrer");
@@ -3632,9 +3598,7 @@ export const handler = async (req: IncomingMessage, res: ServerResponse) => {
   const raw = req.headers[PORTAL_IDENTITY_HEADER];
   const token = Array.isArray(raw) ? raw[0] : raw;
   try {
-    await inRequestTenant(req, res, token, async () => {
-      await portalTokenStore.run(token, () => routeRequest(req, res));
-    });
+    await portalTokenStore.run(token, () => routeRequest(req, res));
   } catch (err) {
     if (err instanceof PayloadTooLargeError) {
       if (!res.headersSent) json(res, 413, { error: "payload_too_large", message: err.message });
@@ -3654,30 +3618,27 @@ const server = createServer((req, res) => {
   });
 });
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  createVite(server)
-    .then((v) => {
-      vite = v;
-      drainOnSigterm(server, "web-ui");
-      server.listen(PORT, () => {
-        console.log(
-          `[web-ui] surface on http://localhost:${PORT} → core ${CORE} (org ${ORG})${WEB_UI_DEV ? " [vite hmr]" : ""}`,
-        );
-        if (!WEB_UI_DEV && !existsSync(join(DIST, "index.html")))
-          console.warn("[web-ui] dist-web/ not built, run `npm run build`");
-        if (ALLOW.length === 0)
-          console.warn("[web-ui] WEB_UI_PRINCIPALS unset, any principal id may sign in (dev only)");
-        const t = setInterval(() => void drainWebDeliveries(), WEB_DELIVERY_POLL_MS);
-        t.unref?.();
-        void runStateFeed();
-        void runInboxFeed();
-        void sweepDictationSpool();
-      });
-    })
-    .catch(async (err: unknown) => {
-      reportBackendError(err);
-      console.error("[web-ui] failed to start:", String(err));
-      await flushErrorReporting();
-      process.exit(1);
+export async function startServer(options: { port: number; host: string; releases: WebReleases }): Promise<Server> {
+  serveReleasesFrom(options.releases);
+  vite = await createVite(server);
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(options.port, options.host, () => {
+      server.off("error", reject);
+      resolve();
     });
+  });
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : options.port;
+  console.log(
+    `[web-ui] surface on http://${options.host}:${port} → core ${CORE} (org ${ORG})${WEB_UI_DEV ? " [vite hmr]" : ""}`,
+  );
+  if (ALLOW.length === 0) console.warn("[web-ui] WEB_UI_PRINCIPALS unset, any principal id may sign in (dev only)");
+  const t = setInterval(() => void drainWebDeliveries(), WEB_DELIVERY_POLL_MS);
+  t.unref?.();
+  server.once("close", () => clearInterval(t));
+  void runStateFeed();
+  void runInboxFeed();
+  void sweepDictationSpool();
+  return server;
 }

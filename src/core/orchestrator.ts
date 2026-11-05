@@ -12,7 +12,6 @@ import { desktopComputerTool } from "../../plugins/chassis/src/desktop-computer.
 import { startDispatchTrace, tracePhase, type DispatchTrace } from "../../plugins/chassis/src/error-reporting.ts";
 import { externalTools } from "./orchestrator/external-tools.ts";
 import { isBackendCredential } from "../credentials/keychain.ts";
-import { resolveBrowserModel } from "../model/browser-model.ts";
 import { memoryRecallDelta } from "../memory/recall-delta.ts";
 import { UNTRACKED_PROVENANCE } from "../memory/facts.ts";
 import type { MemoryProviderOutcome } from "../memory/memory-service.ts";
@@ -21,6 +20,7 @@ import {
   requiresDelegation,
   delegatedAuthorizationOrigin,
   ownsSessionContext,
+  isSubagentThreadRef,
   sessionContextOf,
 } from "../sessions/session-syscalls.ts";
 import {
@@ -57,10 +57,9 @@ import type {
   PendingApprovalRecord,
 } from "../types.ts";
 import { scopeId as toScopeId, personalScope } from "../types.ts";
-import { desktopClientForTurn, introducesPerson, isSessionTurn } from "./turn-origin.ts";
+import { desktopClientForTurn, introducesUser, isPersonAuthored, isSessionTurn } from "./turn-origin.ts";
 import { resolveTurnFastMode, turnRuntimePurpose } from "./turn-options.ts";
 import { orgId } from "../config.ts";
-import { cacheTenant } from "../tenants/context.ts";
 import { deriveTurnOutcome, approvalBlocksInput } from "./turn-outcome.ts";
 import { applyPromptVars, loadProtocolFile, type PromptVars } from "../resolution/prompt-vars.ts";
 import { cleanBrandingLabel, resolveBranding } from "../resolution/branding.ts";
@@ -192,8 +191,8 @@ import { randomUUID } from "node:crypto";
 import { LRUCache } from "lru-cache";
 import type { SkillResolution } from "../skills/skill-store.ts";
 import type { Orchestrator, OrchestratorDeps, OrchestratorInput } from "./orchestrator/types.ts";
-import { CODEX_SUBSCRIPTION_PROVIDER, personalModelId } from "../model/pi-models.ts";
-import { resolveIndividualAuthRouting } from "./individual-auth-routing.ts";
+import { personalModelId } from "../model/pi-models.ts";
+import { loadPersonalModelAuth } from "./individual-auth-routing.ts";
 import { createSessionTitles } from "./session-title.ts";
 import {
   MAX_AUTO_ATTACHMENT_SCREEN_BYTES,
@@ -246,8 +245,13 @@ import { reconcileMessageRevisions, revisionAnchorAt } from "../slack/message-re
 import { type ProviderKeys } from "../model/model-runtime.ts";
 import { surfaceToolPrompt } from "../surfaces/registry.ts";
 
-function recordPerson(users: OrchestratorDeps["users"], id: string): Promise<unknown> {
-  return users.record({ id, source: "turn", at: Date.now() }).catch(reportFailureAs("users: record person", false));
+async function recordUser(users: OrchestratorDeps["users"], id: string, botActor: boolean | undefined): Promise<void> {
+  try {
+    await users.record({ id, source: "turn", at: Date.now() });
+    if (botActor) await users.markApps([id]);
+  } catch (err) {
+    reportFailure("users: record user", err);
+  }
 }
 
 export { egressClaimAllowingControlPlane, filterConnectorSkills } from "./orchestrator/turn-helpers.ts";
@@ -306,11 +310,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     ttl: DIRECTORY_INDEX_TTL_MS,
   });
   async function directoryIndexFor(directory: DirectoryStore): Promise<Map<string, DirectoryMember>> {
-    const cached = directoryIndexCache.get(cacheTenant());
+    const cached = directoryIndexCache.get("org");
     if (cached) return cached;
     const byId = new Map<string, DirectoryMember>();
     for (const m of await directory.list()) byId.set(personKey(m.principalId), m);
-    directoryIndexCache.set(cacheTenant(), byId);
+    directoryIndexCache.set("org", byId);
     return byId;
   }
 
@@ -495,6 +499,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const humanTurn = input.origin.kind === "human";
       const sessionTurn = isSessionTurn(input);
       const humanInput = humanTurn && !sessionTurn;
+      const personConversationTurn =
+        isPersonAuthored(input.origin.kind) &&
+        !sessionTurn &&
+        !isSubagentThreadRef(conversation.threadRef) &&
+        !input.botActor &&
+        !input.proactiveOpener;
       const allInternal =
         deps.identity.audienceIsAllInternal(conversation.audience) &&
         (conversation.kind === "dm" ||
@@ -528,10 +538,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           reason: "internal-only: non-internal principals cannot interact",
         };
       }
-      const delegatedSession = conversation.threadRef.startsWith("agent:main:subagent:")
+      const delegatedSession = isSubagentThreadRef(conversation.threadRef)
         ? await deps.sessions.getByThread(conversation.threadRef)
         : null;
-      if (conversation.threadRef.startsWith("agent:main:subagent:")) {
+      if (isSubagentThreadRef(conversation.threadRef)) {
         const canWrite = createCanWriteScope({
           managedGroups: deps.managedGroups
             ? {
@@ -1057,10 +1067,44 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               swallowAs("orchestrator: configured connector providers", []),
             )
           : [];
+      const orgServiceCreds =
+        !strictReadOnly && deps.serviceCreds
+          ? await deps.serviceCreds.listServiceCredentials(resolution.orgScopeId)
+          : [];
+      const aclGrantedServiceCredSlugs = async (): Promise<Set<string>> =>
+        new Set(
+          (
+            await deps.acl.grantsOfKind(
+              "service-cred",
+              conversation.audience,
+              scopeId,
+              resolution.orgScopeId,
+              entitledScopes,
+            )
+          ).map((g) => parseRef(g.ref).id),
+        );
+      const orgWideAudience =
+        conversation.audience.length > 0 &&
+        conversation.audience.every((p) =>
+          principalEntitledToScope(p, resolution.orgScopeId, scopeId, resolution.orgScopeId),
+        );
+      const grantedServiceCredSlugs = async (records: readonly PublicServiceCredential[]): Promise<Set<string>> => {
+        const granted = await aclGrantedServiceCredSlugs();
+        if (orgWideAudience) for (const record of records) if (record.source === "deployment") granted.add(record.slug);
+        return granted;
+      };
+      const serviceCredRecords: PublicServiceCredential[] = orgServiceCreds.filter((record) =>
+        serviceAllowed(record.slug),
+      );
+      let grantedCredSlugs = new Set<string>();
+      if (serviceCredRecords.length > 0) grantedCredSlugs = await grantedServiceCredSlugs(serviceCredRecords);
+      const appConnections = serviceCredRecords.some(
+        (cred) => isBackendCredential(cred) && cred.enabled && cred.hasSecret && grantedCredSlugs.has(cred.slug),
+      );
       const carriedSkillScreens = new Map<string, Promise<boolean>>();
       const visibleSkillsForTurn = async (sources?: readonly string[]): Promise<SkillResolution[]> => {
         const current = await tracePhase("turn.skills", () => context.listSkills(sources), { counts: countSkills });
-        const resolved = filterConnectorSkills(current.skills, configuredProviders);
+        const resolved = filterConnectorSkills(current.skills, configuredProviders, appConnections);
         const allowed: SkillResolution[] = [];
         for (const entry of resolved) {
           const skill = entry.skill;
@@ -1133,7 +1177,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         .sort();
       if (otherSkillSources.length)
         systemPrompt += `\n\nAdditional skill sources: ${otherSkillSources.join(", ")}. Use skills list/search with source to discover their authorized skills; read with the same source.`;
-      const nativeSkills = filterConnectorSkills(skillSourceContext.skills, configuredProviders);
+      const nativeSkills = filterConnectorSkills(skillSourceContext.skills, configuredProviders, appConnections);
       turnContextBlocks["Skills"] = skillsIndex(nativeSkills);
       const transferId = turnFileId(input.runId, input.attempt);
       const turnSessionDir = `${TURN_FILES_DIR}/${hashId([conversation.threadRef], 24)}`;
@@ -1198,7 +1242,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         (!!input.swarmGoal || !!openGoal((await deps.sessions.goals([session.id])).get(session.id)));
       if (!input.sessionParticipantIds?.length && !automatedTurn)
         await deps.sessions.addParticipant(session.id, actor.id);
-      if (introducesPerson(input.origin, input)) await recordPerson(deps.users, actor.id);
+      if (introducesUser(input.origin, input)) await recordUser(deps.users, actor.id, input.botActor);
 
       const delegatedTask = !!input.sessionSenderId && session.parentSessionId === input.sessionSenderId;
       const syntheticInput =
@@ -1462,36 +1506,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
       };
       await tracePhase("turn.credentials", () => registerConnectorCredentials(addCredentialToCatalog));
-      const aclGrantedServiceCredSlugs = async (): Promise<Set<string>> =>
-        new Set(
-          (
-            await deps.acl.grantsOfKind(
-              "service-cred",
-              conversation.audience,
-              scopeId,
-              resolution.orgScopeId,
-              entitledScopes,
-            )
-          ).map((g) => parseRef(g.ref).id),
-        );
-      const orgWideAudience =
-        conversation.audience.length > 0 &&
-        conversation.audience.every((p) =>
-          principalEntitledToScope(p, resolution.orgScopeId, scopeId, resolution.orgScopeId),
-        );
-      const grantedServiceCredSlugs = async (records: readonly PublicServiceCredential[]): Promise<Set<string>> => {
-        const granted = await aclGrantedServiceCredSlugs();
-        if (orgWideAudience) for (const record of records) if (record.source === "deployment") granted.add(record.slug);
-        return granted;
-      };
-      let serviceCredRecords: PublicServiceCredential[] = [];
-      let grantedCredSlugs = new Set<string>();
-      if (!strictReadOnly && deps.serviceCreds) {
-        serviceCredRecords = (await deps.serviceCreds.listServiceCredentials(resolution.orgScopeId)).filter((record) =>
-          serviceAllowed(record.slug),
-        );
-        if (serviceCredRecords.length > 0) grantedCredSlugs = await grantedServiceCredSlugs(serviceCredRecords);
-      }
       const authorizeServiceCredential = async (slug: string): Promise<void> => {
         if (!serviceAllowed(slug)) throw new Error("Service is not approved for external Slack.");
         if ((await aclGrantedServiceCredSlugs()).has(slug)) return;
@@ -1509,19 +1523,63 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (browseSteps && !("BROWSE_LAB_MAX_STEPS" in connectorEnv))
           connectorEnv.BROWSE_LAB_MAX_STEPS = String(browseSteps);
       }
-      const browserSelection =
-        !strictReadOnly && allInternal
-          ? await resolveBrowserModel({
-              actorId: actor.id,
-              config: deps.config,
-              credentials: deps.userModelCredentials,
-              companyModel: deps.resolveBaseModelId?.(),
-            })
+      const runtimePurpose = turnRuntimePurpose(
+        { surface: input.surface, triggered: automatedTurn, infrequentCron: input.infrequentCron },
+        !!session.parentSessionId || !!swarmBinding?.member.parentId,
+      );
+      const purposeDefault = runtimePurpose ? await deps.config?.getPurposeRuntimeDurable(runtimePurpose) : undefined;
+      const loadRuntimeAuth = async (runtime: Partial<RuntimeChoice>) => {
+        const userCredStore = external ? undefined : deps.userModelCredentials;
+        const account = external
+          ? "company"
+          : (input.modelAccount ?? (await deps.config?.getModelAccountDurable(actor.id)) ?? "company");
+        if (!userCredStore || !humanInput || account === "company")
+          return {
+            userProviderKeys: undefined,
+            userModelOverride: undefined,
+            personalAuth: false,
+            authLabel: "api-key",
+            account: "company" as const,
+          };
+        const personal = await loadPersonalModelAuth(
+          userCredStore,
+          actor.id,
+          account,
+          account === "personal" || input.surface === "web"
+            ? (runtime.modelId ?? input.model ?? purposeDefault?.modelId)
+            : (runtime.modelId ?? purposeDefault?.modelId),
+        );
+        if (!personal)
+          throw new NonRetryableTurnError(
+            "Your personal AI account is unavailable. Open Settings → AI access to reconnect Claude or ChatGPT / Codex, or choose company access. The chat cannot continue on company access.",
+          );
+        return {
+          userProviderKeys: personal.keys,
+          userModelOverride: personal.modelId,
+          personalAuth: true,
+          authLabel: personal.subscription ? `${personal.subscription}-subscription` : "api-key",
+          account,
+        };
+      };
+      const initialRuntimeAuth = loadRuntimeAuth({});
+      const sessionAuth = await initialRuntimeAuth.catch(() => undefined);
+      const sessionModel = sessionAuth?.userModelOverride ?? input.model;
+      const sessionRoute: SessionRoute | undefined = sessionAuth && {
+        ...(sessionModel ? { runtime: { modelId: sessionModel } } : {}),
+        ...(sessionAuth.userProviderKeys ? { providerKeys: sessionAuth.userProviderKeys, runtimePinned: true } : {}),
+        ...(runtimePurpose ? { runtimePurpose } : {}),
+      };
+      const browserModel =
+        !strictReadOnly && allInternal && sessionRoute
+          ? (
+              await deps
+                .resolveSessionRuntime?.({ ...sessionRoute, scopeLabel: scopeId })
+                .catch(reportFailureAs("browser model: session runtime", undefined, scopeId))
+            )?.modelId
           : undefined;
-      const managedBrowse = browserSelection;
-      if (managedBrowse) {
+      if (browserModel) {
         connectorEnv.BROWSE_LAB_MODEL_PROVIDER = "managed";
-        connectorEnv.BROWSE_LAB_MODEL = browserSelection.model ?? "unavailable";
+        connectorEnv.BROWSE_LAB_MODEL = browserModel;
       }
       let actorIsOrgAdmin = false;
       let orgMemoryWrite: ScopeId | undefined;
@@ -1594,14 +1652,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           deps.capabilitySecret ?? deps.signingSecret,
           deps.capabilityTokenCompression,
         );
-        if (managedBrowse) {
+        if (browserModel) {
           connectorEnv.BROWSE_LAB_BASE_URL = `${deps.apiBaseUrl.replace(/\/+$/, "")}/v1/browser-model`;
           connectorEnv.BROWSE_LAB_MODEL_TOKEN = await mintCapabilityToken(
             {
               ...scopeAttestation,
               aud: BROWSER_MODEL_AUD,
-              browserModel: browserSelection.model ?? "unavailable",
-              browserAccount: browserSelection.account,
+              browserModel,
+              browserAccount: sessionAuth?.account ?? "company",
               sessionId: session.id,
               origin,
               exp: Date.now() + CAPABILITY_TTL_MS,
@@ -1898,10 +1956,24 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           await Promise.all(pendingScreenRequests.splice(0).map((rec) => recordScreenRequest(rec)));
           return true;
         });
-        const [memoryWindow, memoryView] = await Promise.all([
-          deps.sessions.getContextWindow(session.id),
-          context.memorySnapshot(),
-        ]);
+        const contextWindow = deps.sessions.getContextWindow(session.id);
+        const snapshot = context.memorySnapshot();
+        const recallOutcomes: MemoryProviderOutcome[] = [];
+        const loadedFacts = snapshot.then((view) => view.loaded);
+        void loadedFacts.catch(() => undefined);
+        const recallFor = (history: Item[]) =>
+          context.recallMemory(
+            memoryRecallQuery(input.text, history),
+            loadedFacts,
+            (outcome) => void recallOutcomes.push(outcome),
+          );
+        const importsOverheard = (!input.envelopeWrapped || humanInput) && !!input.overheard?.length;
+        const earlyRecall =
+          input.approval || importsOverheard || ambientTurn || input.cronScript
+            ? undefined
+            : contextWindow.then((window) => recallFor(filterHistory(forModelContext(window.items))));
+        void earlyRecall?.catch(() => undefined);
+        const [memoryWindow, memoryView] = await Promise.all([contextWindow, snapshot]);
         let historyAppended = input.approval !== undefined;
         const captureDependencies = () => [
           ...memoryView.facts,
@@ -2092,13 +2164,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           }
         }
 
-        if (
-          serviceCredRecords.some(
-            (cred) => isBackendCredential(cred) && cred.enabled && cred.hasSecret && grantedCredSlugs.has(cred.slug),
-          )
-        )
+        if (appConnections)
           systemPrompt +=
-            "\n\n## Connected app access\nComposio is configured in the backend. Load the composio skill and use /v1/composio through the authenticated agent API. No Composio project key is delivered to your computer; the backend checks account ownership and context access.";
+            "\n\n## Connected app access\nComposio is configured in the backend. Load the composio skill and use /v1/composio through the authenticated agent API. Apps that have their own skill work over these connections too; prefer that skill. No Composio project key is delivered to your computer; the backend checks account ownership and context access.";
         if (actorIsOrgAdmin) {
           systemPrompt +=
             "\n\n## Acting for an org admin\n" +
@@ -2678,7 +2746,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         );
 
         const importedOverheard: OverheardEntryPayload[] = [];
-        if ((!input.envelopeWrapped || humanInput) && input.overheard?.length) {
+        if (importsOverheard) {
           const toImport = await transcripts
             .forRender(session.id)
             .then((read) => selectOverheardToImport(input.overheard!, recordedMessageTimestamps(read.items)))
@@ -2699,12 +2767,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const rawEntries = (await turnWindow()).items;
         const priorTurns = input.priorTurns;
         let visibleHistory = filterHistory(forModelContext(rawEntries));
-        const recallOutcomes: MemoryProviderOutcome[] = [];
-        const recalled = await context.recallMemory(
-          memoryRecallQuery(input.text, visibleHistory),
-          memoryView.loaded,
-          (outcome) => void recallOutcomes.push(outcome),
-        );
+        const recalled = await (earlyRecall ?? recallFor(visibleHistory));
         const partial = isRetry ? (recordedTurn ?? findTrailingPartialTurn(visibleHistory, input.runId)) : null;
         const reconciled = partial ? reconcile(visibleHistory, partial, input.resumeCause) : null;
         if (reconciled?.settleItems.length) {
@@ -2714,75 +2777,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           visibleHistory = filterHistory(forModelContext([...rawEntries, ...settled]));
         }
         const resume = reconciled?.resumed ? partial : null;
-        const runtimePurpose = turnRuntimePurpose(
-          { surface: input.surface, triggered: automatedTurn },
-          !!session.parentSessionId || !!swarmBinding?.member.parentId,
-        );
-        const purposeDefault = runtimePurpose ? await deps.config?.getPurposeRuntimeDurable(runtimePurpose) : undefined;
         const wantsOrgFastMode =
           typeof input.fastMode !== "boolean" &&
           !purposeDefault &&
           humanInput &&
           (await deps.config?.getInteractiveFastModeDurable());
         const effectiveFastMode = resolveTurnFastMode(input.fastMode, humanInput, wantsOrgFastMode === true);
-        const loadRuntimeAuth = async (runtime: Partial<RuntimeChoice>) => {
-          let userProviderKeys: ProviderKeys | undefined;
-          let userModelOverride: string | undefined;
-          let personalAuth = false;
-          let authLabel = "api-key";
-          const userCredStore = external ? undefined : deps.userModelCredentials;
-          const account = external
-            ? "company"
-            : (input.modelAccount ?? (await deps.config?.getModelAccountDurable(actor.id)) ?? "company");
-          if (userCredStore && humanInput && account !== "company") {
-            const [anthCred, oaiCred] = await Promise.all([
-              account === "openai" ? null : userCredStore.get(actor.id, "anthropic"),
-              account === "anthropic" ? null : userCredStore.get(actor.id, "openai"),
-            ]);
-            const routing = resolveIndividualAuthRouting(
-              anthCred ?? null,
-              oaiCred ?? null,
-              account === "personal" || input.surface === "web"
-                ? (runtime.modelId ?? input.model ?? purposeDefault?.modelId)
-                : (runtime.modelId ?? purposeDefault?.modelId),
-            );
-            if (routing?.kind === "apikey") {
-              personalAuth = true;
-              userProviderKeys = { [routing.provider]: routing.apiKey };
-              userModelOverride = routing.model;
-            } else if (routing?.kind === "oauth" && routing.provider === "anthropic" && anthCred?.oauth) {
-              const derived = await userCredStore.derivedOAuth(actor.id, "anthropic");
-              if (derived) {
-                userProviderKeys = { anthropic: derived.accessToken };
-                authLabel = "claude-oauth-pi";
-                personalAuth = true;
-                userModelOverride = routing.model;
-              }
-            } else if (routing?.kind === "oauth" && routing.provider === "openai" && oaiCred?.oauth) {
-              const derived = await userCredStore.derivedOAuth(actor.id, "openai");
-              if (derived) {
-                userProviderKeys = { [CODEX_SUBSCRIPTION_PROVIDER]: derived.accessToken };
-                authLabel = "codex-oauth-pi";
-                personalAuth = true;
-                userModelOverride = routing.model;
-              }
-            }
-            if (!personalAuth) {
-              throw new NonRetryableTurnError(
-                "Your personal AI account is unavailable. Open Settings → AI access to reconnect Claude or ChatGPT / Codex, or choose company access. The chat cannot continue on company access.",
-              );
-            }
-          }
-          return { userProviderKeys, userModelOverride, personalAuth, authLabel };
-        };
-        const initialRuntimeAuth = loadRuntimeAuth({});
-        const sessionAuth = await initialRuntimeAuth.catch(() => undefined);
-        const sessionModel = sessionAuth?.userModelOverride ?? input.model;
-        compactionRoute = sessionAuth && {
-          ...(sessionModel ? { runtime: { modelId: sessionModel } } : {}),
-          ...(sessionAuth.userProviderKeys ? { providerKeys: sessionAuth.userProviderKeys, runtimePinned: true } : {}),
-          ...(runtimePurpose ? { runtimePurpose } : {}),
-        };
+        compactionRoute = sessionRoute;
         const preTurnRoute = compactionRoute;
         const documentBudget = documentTokenBudget(sessionModel);
         const history = !preTurnRoute
@@ -3277,7 +3278,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   };
                 if (screen === "unscreened") said = `${unscreenedNotice("mid-turn message")}\n${said}`;
               }
-              if (request && introducesPerson(speaker.origin, request)) await recordPerson(deps.users, author);
+              if (request && introducesUser(speaker.origin, request))
+                await recordUser(deps.users, author, request.botActor);
               const refreshedInbox =
                 input.surface === "web" &&
                 conversation.kind === "dm" &&
@@ -3708,7 +3710,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (input.runId && !pausing && reply && reply.trim()) deps.turnStream?.markReplyDone(input.runId);
         const turnUserSeq = partial?.userSeq ?? emittedEntries.find(isUserItem)?.seq;
         const onTurnEnd = memoryStrategy.onTurnEnd?.bind(memoryStrategy);
-        if (!pausing && !cancelStopped && useMemory && memoryPolicy.capture !== "off" && onTurnEnd) {
+        if (
+          !pausing &&
+          !cancelStopped &&
+          personConversationTurn &&
+          useMemory &&
+          memoryPolicy.capture !== "off" &&
+          onTurnEnd
+        ) {
           const prior = pendingCaptures.get(memoryScopeId);
           const capture = (async () => {
             if (prior) await prior.catch(swallowAs("prior memory capture", undefined));
@@ -3720,7 +3729,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 input: turnInput,
                 reply,
                 actorId: actor.id,
-                ...(automatedTurn ? { autonomous: true } : {}),
                 sessionId: session.id,
                 idempotencyKey: input.runId ?? `${session.id}:${spine.turnUserEntrySeq ?? "turn"}`,
               });

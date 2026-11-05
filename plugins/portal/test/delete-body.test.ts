@@ -14,7 +14,7 @@ await new Promise<void>((r) => upstream.listen(0, r));
 const upstreamUrl = `http://localhost:${(upstream.address() as AddressInfo).port}`;
 
 const origin = "http://localhost:18198";
-process.env.PORTAL_PUBLIC_URL = origin;
+process.env.PUBLIC_WEB_URL = origin;
 process.env.PORTAL_SESSION_SECRET = randomUUID();
 process.env.CORE_SIGNING_SECRET = randomUUID();
 process.env.WEB_UI_UPSTREAM = upstreamUrl;

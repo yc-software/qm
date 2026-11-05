@@ -57,10 +57,9 @@ interface Rig {
 async function rig(opts?: {
   prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
 }): Promise<Rig> {
-  const url = testDatabaseUrl();
-  const sessions = createPostgresSessionStore(url);
-  const { runs } = createPostgresRunStore(url);
-  const signals = createPostgresRunSignalStore(url);
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const signals = createPostgresRunSignalStore(testDatabaseUrl());
   const mailbox = createSessionMailbox(testMap<SessionMessage>());
   const advisoryLock = testAdvisoryLock();
   const factory = createSessionSyscalls({
@@ -198,7 +197,7 @@ test("empty writes name the field the caller must fill", async () => {
   assert.match(self.message, /cannot message itself/);
 });
 
-test("a wake cannot turn an ordinary session into a child or start its turn", async () => {
+test("a wake never turns an ordinary session into a child and only leaves mail while it is busy", async () => {
   const r = await rig();
   const ordinary = await r.sessions.getOrCreateByThread("web:ordinary", "dm", scope, undefined, "web");
   await r.sessions.addParticipant(ordinary.id, actor.id);
@@ -209,8 +208,7 @@ test("a wake cannot turn an ordinary session into a child or start its turn", as
   });
   const out = await r.syscallsFor(r.room).write({ wake: true, target: ordinary.id, text: "new task" });
   assert.ok(out.ok);
-  assert.equal(out.delivered, "queued_message");
-  assert.ok(out.notWoken);
+  assert.deepEqual([out.delivered, out.busy, out.notWoken], ["queued_message", true, undefined]);
   assert.equal((await freshSession(r.sessions, ordinary.id)).parentSessionId, undefined);
   assert.equal((await r.runs.inFlightForThread(ordinary.threadRef)).length, 1);
 });
@@ -1639,10 +1637,221 @@ test("ordinary-session messages queue privately without steering an externally d
   assert.match(mail!.text, /an intermediate update/);
   const woken = await r.syscallsFor(r.room).write({ target: target.id, text: "wake", wake: true });
   assert.ok(woken.ok);
-  assert.equal(woken.delivered, "queued_message");
-  assert.equal(woken.busy, true);
-  assert.match(woken.notWoken ?? "", /top-level conversation/);
+  assert.deepEqual([woken.delivered, woken.busy, woken.notWoken], ["queued_message", true, undefined]);
+  assert.deepEqual(await r.signals.takePending(run.id), []);
   assert.equal((await r.runs.inFlightForThread(target.threadRef)).length, 1);
+});
+
+async function webPeer(r: Rig, name: string, audience: Principal[] = [actor]): Promise<Session> {
+  const peer = await r.sessions.getOrCreateByThread(`web:U1:${name}`, "dm", scope, undefined, "web");
+  await r.sessions.updateTitle(peer.id, name);
+  await r.sessions.addParticipant(peer.id, actor.id);
+  return recordContext(r.sessions, peer, {
+    actor,
+    conversation: { kind: "dm", threadRef: peer.threadRef, audience },
+    surface: "web",
+    deliveryTarget: `web-${name}`,
+  });
+}
+
+function peerApi(r: Rig, session: Session, extra: Partial<OrchestratorInput> = {}) {
+  return createSessionSyscalls({ ...r, maxAttempts: 3 }).forTurn({
+    session,
+    scopeId: scope,
+    request: {
+      surface: "web",
+      actor,
+      conversation: { kind: "dm", threadRef: session.threadRef, audience: [actor] },
+      ...extra,
+    },
+  });
+}
+
+test("a message to an idle peer conversation wakes it once, on the recipient's own context", async () => {
+  const r = await rig();
+  const sender = await webPeer(r, "planner");
+  const target = await webPeer(r, "builder");
+  const sent = await peerApi(r, sender).write({
+    peer: true,
+    wake: true,
+    target: target.id,
+    text: "please pick up the migration",
+    requestId: "handoff",
+  });
+  assert.ok(sent.ok);
+  assert.deepEqual([sent.delivered, sent.busy], ["queued_turn", false]);
+  const [wake] = await r.runs.inFlightForThread(target.threadRef);
+  assert.ok(wake);
+  const [mail] = await r.mailbox.pending(target.id);
+  assert.equal(wake.dedupKey, `subagent-followup:${mail!.id}`);
+  assert.deepEqual([mail!.wake, mail!.peerDepth], [true, 1]);
+  assert.match(mail!.text, /please pick up the migration/);
+  assert.equal(wake.request.conversation.threadRef, target.threadRef);
+  assert.equal(wake.request.deliveryTarget, "web-builder");
+  assert.equal(wake.request.sessionSenderId, sender.id);
+  assert.equal(wake.request.sessionMessageDepth, 1);
+  assert.equal(wake.request.origin.kind, "automation");
+  assert.equal(wake.request.unattendedGrants, undefined);
+
+  const retried = await peerApi(r, sender).write({
+    peer: true,
+    wake: true,
+    target: target.id,
+    text: "please pick up the migration",
+    requestId: "handoff",
+  });
+  assert.ok(retried.ok);
+  assert.equal((await r.runs.inFlightForThread(target.threadRef)).length, 1);
+  assert.equal((await r.mailbox.pending(target.id)).length, 1);
+});
+
+test("a busy peer reads the message at its next step, or is woken once if its turn ends first", async () => {
+  const r = await rig();
+  const sender = await webPeer(r, "planner");
+  const target = await webPeer(r, "builder");
+  const busyTurn = async () => {
+    const { run } = await r.runs.enqueue({
+      sessionId: target.threadRef,
+      request: { actor, conversation, surface: "web", origin: { kind: "human" }, text: "working" },
+    });
+    const claimed = await r.runs.claimById(run.id, "worker", 60_000);
+    return { run, leaseToken: claimed!.leaseToken! };
+  };
+  const first = await busyTurn();
+  const read = await peerApi(r, sender).write({ peer: true, wake: true, target: target.id, text: "fyi one" });
+  assert.ok(read.ok);
+  assert.deepEqual([read.delivered, read.busy, read.notWoken], ["queued_message", true, undefined]);
+  assert.deepEqual(
+    (await r.runs.inFlightForThread(target.threadRef)).map((run) => run.id),
+    [first.run.id],
+  );
+  const delivered = await peerApi(r, target).receive!(0);
+  assert.deepEqual(
+    delivered.map((mail) => mail.peerDepth),
+    [1],
+  );
+  await r.mailbox.acknowledge(
+    target.id,
+    delivered.map((mail) => mail.id),
+  );
+  await r.runs.complete(first.run.id, first.leaseToken, { status: "ok", reply: "done" });
+  assert.equal(await wakeForUnreadMail({ ...r, maxAttempts: 3 }, (await r.runs.get(first.run.id))!), undefined);
+  assert.deepEqual(await r.runs.inFlightForThread(target.threadRef), []);
+
+  const second = await busyTurn();
+  const unread = await peerApi(r, sender).write({ peer: true, wake: true, target: target.id, text: "fyi two" });
+  assert.ok(unread.ok);
+  await r.runs.complete(second.run.id, second.leaseToken, { status: "ok", reply: "done" });
+  assert.equal(await wakeForUnreadMail({ ...r, maxAttempts: 3 }, (await r.runs.get(second.run.id))!), "woken");
+  const [wake] = await r.runs.inFlightForThread(target.threadRef);
+  assert.equal(wake?.request.sessionSenderId, sender.id);
+  assert.equal(wake.request.conversation.threadRef, target.threadRef);
+});
+
+test("wake:false from an untitled conversation leaves attributed FYI mail and starts nothing", async () => {
+  const r = await rig();
+  const untitled = await r.sessions.getOrCreateByThread("web:U1:untitled", "dm", scope, undefined, "web");
+  await r.sessions.addParticipant(untitled.id, actor.id);
+  const sender = await recordContext(r.sessions, untitled, {
+    actor,
+    conversation: { kind: "dm", threadRef: untitled.threadRef, audience: [actor] },
+    surface: "web",
+  });
+  const target = await webPeer(r, "builder");
+  const fyi = await peerApi(r, sender).write({ peer: true, wake: false, target: target.id, text: "fyi" });
+  assert.ok(fyi.ok);
+  assert.deepEqual([fyi.delivered, fyi.busy, fyi.notWoken], ["queued_message", false, undefined]);
+  assert.deepEqual(await r.runs.inFlightForThread(target.threadRef), []);
+  const [mail] = await r.mailbox.pending(target.id);
+  assert.deepEqual([mail!.wake, mail!.peerDepth], [undefined, undefined]);
+  assert.ok(mail!.text.startsWith(`<subagent-message from="Untitled" fromSessionId="${sender.id}">`));
+});
+
+test("the restart sweep recovers a peer wake whose recipient was busy, once", async () => {
+  const r = await rig();
+  const sender = await webPeer(r, "planner");
+  const target = await webPeer(r, "builder");
+  const { run } = await r.runs.enqueue({
+    sessionId: target.threadRef,
+    request: { actor, conversation, surface: "web", origin: { kind: "human" }, text: "working" },
+  });
+  const claimed = await r.runs.claimById(run.id, "worker", 60_000);
+  const sent = await peerApi(r, sender, { sessionMessageDepth: 3 }).write({
+    peer: true,
+    wake: true,
+    target: target.id,
+    text: "handoff",
+  });
+  assert.ok(sent.ok);
+  assert.equal(sent.busy, true);
+  const deps = { ...r, maxAttempts: 3 };
+  await sweepUnreadMailWakes(deps);
+  assert.deepEqual(
+    (await r.runs.inFlightForThread(target.threadRef)).map((queued) => queued.id),
+    [run.id],
+  );
+  await r.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+  await sweepUnreadMailWakes(deps);
+  await sweepUnreadMailWakes(deps);
+  const wakes = await r.runs.inFlightForThread(target.threadRef);
+  assert.equal(wakes.length, 1);
+  const [mail] = await r.mailbox.pending(target.id);
+  assert.equal(wakes[0]!.dedupKey, `subagent-followup:${mail!.id}`);
+  assert.equal(wakes[0]!.request.sessionSenderId, sender.id);
+  assert.equal(wakes[0]!.request.sessionMessageDepth, 4);
+});
+
+test("peer wakes stop after a chain of eight, and read-only or private turns only leave mail", async () => {
+  const r = await rig();
+  const sender = await webPeer(r, "planner");
+  const target = await webPeer(r, "builder");
+  const capped = await peerApi(r, sender, { sessionMessageDepth: 8 }).write({
+    peer: true,
+    wake: true,
+    target: target.id,
+    text: "ping",
+  });
+  assert.ok(capped.ok);
+  assert.equal(capped.delivered, "queued_message");
+  assert.match(capped.notWoken ?? "", /8 conversations already woke each other in a row/);
+  const readOnly = await peerApi(r, sender, { readOnly: true }).write({
+    peer: true,
+    wake: true,
+    target: target.id,
+    text: "ping",
+  });
+  assert.ok(readOnly.ok);
+  assert.match(readOnly.notWoken ?? "", /read-only turn cannot start work/);
+  const privateTurn = await peerApi(r, sender, { privateSessionMessage: true, sessionMessageDepth: 1 }).write({
+    peer: true,
+    wake: true,
+    target: target.id,
+    text: "ping",
+  });
+  assert.ok(privateTurn.ok);
+  assert.match(privateTurn.notWoken ?? "", /private turn/);
+  assert.deepEqual(await r.runs.inFlightForThread(target.threadRef), []);
+  assert.deepEqual(await r.mailbox.awaitingWake(), []);
+  assert.equal((await r.mailbox.pending(target.id)).length, 3);
+  const last = await peerApi(r, sender, { sessionMessageDepth: 7 }).write({
+    peer: true,
+    wake: true,
+    target: target.id,
+    text: "pong",
+  });
+  assert.ok(last.ok);
+  assert.equal(last.delivered, "queued_turn");
+  assert.equal((await r.runs.inFlightForThread(target.threadRef))[0]!.request.sessionMessageDepth, 8);
+});
+
+test("a peer wake cannot reach a conversation whose audience the sender cannot see", async () => {
+  const r = await rig();
+  const sender = await webPeer(r, "planner");
+  const shared = await webPeer(r, "shared", [actor, { id: "U2", type: "internal", displayName: "Blake" }]);
+  const out = await peerApi(r, sender).write({ peer: true, wake: true, target: shared.id, text: "hi" });
+  assert.ok(!out.ok);
+  assert.match(out.message, /outside the sender's authorized audience/);
+  assert.deepEqual(await r.runs.inFlightForThread(shared.threadRef), []);
 });
 
 test("read-only callers cannot steer writable children and preserve the floor when queuing", async () => {
@@ -2807,14 +3016,13 @@ test("children of a Slack group turn keep its source so external-workspace polic
   const policies = { ext: access };
   const admitted = (request: OrchestratorInput) =>
     externalSlackRequestAllowed({ ...request, surface: request.surface ?? "" }, policies);
-  const url = testDatabaseUrl();
-  const sessions = createPostgresSessionStore(url);
-  const { runs } = createPostgresRunStore(url);
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
   const factory = createSessionSyscalls({
     mailbox: createSessionMailbox(testMap<SessionMessage>()),
     sessions,
     runs,
-    signals: createPostgresRunSignalStore(url),
+    signals: createPostgresRunSignalStore(testDatabaseUrl()),
     advisoryLock: testAdvisoryLock(),
     maxAttempts: 3,
   });
@@ -2854,9 +3062,8 @@ test("children of a Slack group turn keep its source so external-workspace polic
 });
 
 test("sessions list shows only sidebar sessions the whole audience can see and create needs a live turn", async () => {
-  const url = testDatabaseUrl();
-  const sessions = createPostgresSessionStore(url);
-  const { runs } = createPostgresRunStore(url);
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
   const started: Array<{ forkOf?: string; text?: string; title?: string; scopeId: ScopeId }> = [];
   const room = await sessions.getOrCreateByThread("web:U1:room", "dm", scope, undefined, "web");
   await sessions.updateTitle(room.id, "room");
@@ -2871,7 +3078,7 @@ test("sessions list shows only sidebar sessions the whole audience can see and c
     mailbox: createSessionMailbox(testMap<SessionMessage>()),
     sessions,
     runs,
-    signals: createPostgresRunSignalStore(url),
+    signals: createPostgresRunSignalStore(testDatabaseUrl()),
     advisoryLock: testAdvisoryLock(),
     maxAttempts: 3,
     conversations: {

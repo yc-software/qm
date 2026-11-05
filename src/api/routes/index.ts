@@ -1,9 +1,9 @@
-import { SPEND_EXPORT_AUD } from "../../auth/capability-token.ts";
 import { browserModelRoutes } from "./browser-model.ts";
 import { sandboxModelRoutes } from "./sandbox-model.ts";
 import { deploymentLiveSmokeRoutes } from "./deployment-live-smoke.ts";
 import { composioRoutes } from "./composio.ts";
 import { composioTwitterMediaRoutes } from "./composio-twitter-media.ts";
+import { composioProxyRoutes } from "./composio-proxy.ts";
 import { loopIngressRoutes, loopIngressRawRoutes } from "./loop-ingress.ts";
 import { sendJson } from "../http.ts";
 import { type ApiCtx, type BaseCtx, type Route } from "./route.ts";
@@ -46,21 +46,13 @@ import { loopItemRoutes } from "./loop-items.ts";
 import { searchRoutes } from "./search.ts";
 import { userModelAuthRoutes } from "./user-model-auth.ts";
 import { swarmRoutes } from "./swarms.ts";
-import { tenancyRoutes } from "./tenancy.ts";
 
 export const rawRoutes: ReadonlyArray<Route<BaseCtx>> = [
-  {
-    method: "GET",
-    path: "/healthz",
-    auth: "public",
-    tenant: "none",
-    handle: ({ res }) => sendJson(res, 200, { ok: true }),
-  },
+  { method: "GET", path: "/healthz", auth: "public", handle: ({ res }) => sendJson(res, 200, { ok: true }) },
   {
     method: "GET",
     path: "/readyz",
     auth: "public",
-    tenant: "none",
     handle: async ({ res, deps }) => {
       const controller = new AbortController();
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -82,7 +74,7 @@ export const rawRoutes: ReadonlyArray<Route<BaseCtx>> = [
   },
   ...slackEventRawRoutes,
   ...partnerChatEventRawRoutes,
-  { method: "GET", path: "/v1/spend/export", auth: { aud: SPEND_EXPORT_AUD, bearer: true }, handle: spendExport },
+  { method: "GET", path: "/v1/spend/export", auth: "public", handle: spendExport },
   { match: (_m, p) => p.startsWith(GIT_HTTP_BROKER_PREFIX), auth: { aud: "credential-broker" }, handle: brokerGitHttp },
   ...connectorRawRoutes,
   ...deploymentRawRoutes,
@@ -94,7 +86,6 @@ export const rawRoutes: ReadonlyArray<Route<BaseCtx>> = [
 ];
 
 export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  ...tenancyRoutes,
   ...browserModelRoutes,
   ...sandboxModelRoutes,
   ...swarmRoutes,
@@ -109,6 +100,7 @@ export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...connectorRoutes,
   ...composioRoutes,
   ...composioTwitterMediaRoutes,
+  ...composioProxyRoutes,
   ...adminRoutes,
   ...skillPackRoutes,
   ...surfaceRoutes,

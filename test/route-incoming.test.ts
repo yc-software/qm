@@ -46,6 +46,13 @@ test("the turn already handling this very message takes it past the origin gates
   });
 });
 
+test("an explicit Steer reaches a live automation turn; a message without that choice still runs as its own turn", () => {
+  const automation = { ...live, origin: "automation" as const };
+  assert.deepEqual(routeIncoming(person, automation, steer), { kind: "steer" });
+  assert.deepEqual(routeIncoming(person, automation, {}), { kind: "turn", reason: "automation-live" });
+  assert.deepEqual(routeIncoming(person, live, {}), { kind: "steer" });
+});
+
 test("when only a conversation's subagents are running, a bare stop stops them and anything else is a new turn", () => {
   const descendants: LiveTurn = { kind: "descendants", actorIds: ["U1"] };
   assert.deepEqual(routeIncoming({ ...person, text: "stop" }, descendants, steer), { kind: "abort" });

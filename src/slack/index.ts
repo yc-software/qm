@@ -1,4 +1,3 @@
-import { inTenantOf } from "../tenants/claim.ts";
 import { continueInPrivate } from "./private-continuation.ts";
 import { externalSlackNamespace, type ExternalSlackAccess } from "./external-access.ts";
 import { registerKeychainApprovalActions } from "./keychain-approvals.ts";
@@ -21,7 +20,6 @@ import {
   normalizeSlackApiUrl,
   slackAccountConfigsFromEnv,
   slackPluginConfigFromEnv,
-  storedSlackEnv,
 } from "./config.ts";
 import { createTurnFlow } from "./turn-flow.ts";
 import { createActorGate, createDenyResponder } from "./allow-from.ts";
@@ -43,7 +41,7 @@ const { App } = bolt;
 
 export type { SlackCoreClient };
 export type { SlackPluginConfig };
-export { normalizeSlackApiUrl, slackAccountConfigsFromEnv, slackPluginConfigFromEnv, storedSlackEnv };
+export { normalizeSlackApiUrl, slackAccountConfigsFromEnv, slackPluginConfigFromEnv };
 
 const slackAccountClients = new Map<
   string,
@@ -331,11 +329,7 @@ export async function startSlackPlugin(
       });
     return statusSync;
   };
-  const inInstallTenant = <T>(fn: () => T): T => inTenantOf(cfg.tenantId, fn);
-  const statusSweep = createSweeper(() => inInstallTenant(reconcileStatus), 60_000, {
-    label: "slack session status",
-    immediate: true,
-  });
+  const statusSweep = createSweeper(reconcileStatus, 60_000, { label: "slack session status", immediate: true });
   const handler = createTurnHandler({
     accountId: ACCOUNT_LABEL,
     ...(cfg.externalAccess ? { externalAccess: cfg.externalAccess } : {}),
@@ -507,7 +501,7 @@ export async function startSlackPlugin(
         for (const [name, url] of Object.entries(res.emoji ?? {})) {
           if (typeof url === "string" && !url.startsWith("alias:")) emoji[name] = url;
         }
-        return inInstallTenant(() => core.publishEmojiCatalog(emoji));
+        return core.publishEmojiCatalog(emoji);
       })
       .catch(swallowAs("slack: emoji catalog publish", undefined));
   };
@@ -527,7 +521,8 @@ export async function startSlackPlugin(
       return;
     }
     deliveriesPollInFlight = true;
-    void inInstallTenant(() => deliveries.pollDeliveries(app.client))
+    void deliveries
+      .pollDeliveries(app.client)
       .then((ranAsLeader) => {
         if (!ranAsLeader && !stopped && !followerRetry) {
           followerRetry = setTimeout(() => {

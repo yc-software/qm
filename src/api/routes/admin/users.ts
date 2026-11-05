@@ -36,7 +36,7 @@ export async function listUsers(ctx: ApiCtx): Promise<void> {
   const turns = (await deps.sessions?.attributedTurns()) ?? [];
   const grants = (await deps.admin?.listGrants()) ?? [];
   const roster = await deps.admin!.users.list();
-  const users = computeUsers({ participants, turns, grants, people: roster.map((r) => r.id) });
+  const users = computeUsers({ participants, turns, grants, people: roster.map((r) => r.principalId) });
   const now = Date.now();
   const externalUsers = ((await deps.identity?.listExternalMembers()) ?? [])
     .map((m) => ({ ...m, status: externalMemberActive(m, now) ? ("active" as const) : ("expired" as const) }))
@@ -45,11 +45,13 @@ export async function listUsers(ctx: ApiCtx): Promise<void> {
         Number(b.status === "active") - Number(a.status === "active") ||
         (a.expiresAt ?? Infinity) - (b.expiresAt ?? Infinity),
     );
-  const records = new Map(roster.map((r) => [r.id, r]));
+  const records = new Map(roster.map((r) => [r.principalId, r]));
   const rows = users.map((u) => {
     const record = records.get(u.principalId);
     return {
       ...u,
+      userId: record?.id ?? null,
+      kind: record?.kind ?? "person",
       firstSeenAt: record?.firstSeenAt ?? null,
       source: record?.source ?? null,
       deactivated: deps.identity?.deactivationSource(u.principalId) !== undefined,

@@ -5,6 +5,7 @@ import {
   AUTH_BROKER_ENV_KEYS,
   SERVICE_NAMES,
   VIRTUAL_SERVICE_NAMES,
+  serviceHost,
   isDeclaredService,
   isServiceName,
   pluginNameError,
@@ -622,11 +623,6 @@ function validate(raw: unknown, path: string): QmConfig {
     if (!services.includes(s)) services.push(s);
   }
   if (!services.includes("core")) throw new CliError(`${path}: "services" must include "core"`);
-  if (services.includes("auth") && !services.includes("portal")) {
-    throw new CliError(
-      `${path}: the "auth" sign-in broker requires "portal" — the portal is the only service that publishes it`,
-    );
-  }
 
   const plugins = validatePlugins(o["plugins"], path);
   const skills = validateStringArray(o["skills"], path, "skills");
@@ -678,23 +674,31 @@ function validate(raw: unknown, path: string): QmConfig {
   if (securityScreen?.classifier !== "proxy" && secretEnv.core?.SECURITY_SCREEN_PROXY_TOKEN !== undefined) {
     throw new CliError(`${path}: secretEnv.core.SECURITY_SCREEN_PROXY_TOKEN requires securityScreen classifier proxy`);
   }
-  for (const [service, values] of Object.entries(env)) {
-    if (!isServiceName(service)) continue;
-    const portEnv = serviceDef(service).docker.portEnv;
-    if (values?.[portEnv] !== undefined) {
-      throw new CliError(
-        `${path}: "env.${service}.${portEnv}" is managed by the deployment target and cannot be overridden`,
-      );
+  const managedPorts = (service: string): string[] => {
+    const host = serviceHost(service);
+    if (!isServiceName(host)) return [];
+    return [serviceDef(host).docker.portEnv, ...(host === "core" ? ["PUBLIC_PORT"] : [])];
+  };
+  for (const [field, map] of [
+    ["env", env],
+    ["secretEnv", secretEnv],
+  ] as const) {
+    for (const [service, values] of Object.entries(map)) {
+      const managed = managedPorts(service).find((name) => values?.[name] !== undefined);
+      if (managed)
+        throw new CliError(
+          `${path}: "${field}.${service}.${managed}" is managed by the deployment target and cannot be overridden`,
+        );
     }
   }
-  for (const [service, entries] of Object.entries(secretEnv)) {
-    if (!isServiceName(service)) continue;
-    const portEnv = serviceDef(service).docker.portEnv;
-    if (entries?.[portEnv] !== undefined) {
+  for (const service of VIRTUAL_SERVICE_NAMES) {
+    const conflict = Object.entries(env[service] ?? {}).find(
+      ([name, value]) => env.core?.[name] !== undefined && env.core[name] !== value,
+    );
+    if (conflict)
       throw new CliError(
-        `${path}: "secretEnv.${service}.${portEnv}" is managed by the deployment target and cannot be overridden`,
+        `${path}: env.${service}.${conflict[0]} and env.core.${conflict[0]} set different values, but core receives both; keep one`,
       );
-    }
   }
   for (const [i, plugin] of plugins.entries()) {
     if (plugin.env?.PORT !== undefined) {
@@ -853,21 +857,21 @@ const validEmailDomain = (value: string): boolean => {
 const DERIVED_AUTH_ENV_KEYS = ["AUTH_ISSUER", "AUTH_CLIENT_ID", "AUTH_REDIRECT_URI"] as const;
 
 function validateBrokerTrust(config: QmConfig, path: string, secrets?: ReadonlyMap<string, string>): void {
-  const portalEnv = config.env.portal ?? {};
+  const coreEnv = config.env.core ?? {};
   const authEnv = config.env.auth ?? {};
-  const overriddenPortal = AUTH_BROKER_ENV_KEYS.find((key) => portalEnv[key] !== undefined);
-  if (overriddenPortal) {
+  const overriddenCore = AUTH_BROKER_ENV_KEYS.find((key) => coreEnv[key] !== undefined);
+  if (overriddenCore) {
     throw new CliError(
-      `${path}: env.portal.${overriddenPortal} is derived from the built-in auth broker — remove it, or drop "auth" from "services" to use an external identity provider`,
+      `${path}: env.core.${overriddenCore} is derived from the built-in auth broker — remove it, or drop "auth" from "services" to use an external identity provider`,
     );
   }
   const overriddenAuth = DERIVED_AUTH_ENV_KEYS.find((key) => authEnv[key] !== undefined);
   if (overriddenAuth) {
     throw new CliError(`${path}: env.auth.${overriddenAuth} is derived from publicUrl and cannot be set`);
   }
-  if (portalEnv.PORTAL_EXPECTED_TEAM_ID !== undefined) {
+  if (coreEnv.PORTAL_EXPECTED_TEAM_ID !== undefined) {
     throw new CliError(
-      `${path}: env.portal.PORTAL_EXPECTED_TEAM_ID belongs to Slack sign-in and has no meaning with the built-in auth broker`,
+      `${path}: env.core.PORTAL_EXPECTED_TEAM_ID belongs to Slack sign-in and has no meaning with the built-in auth broker`,
     );
   }
   const transport = authEnv.AUTH_EMAIL_TRANSPORT?.trim();
@@ -910,27 +914,26 @@ function isSlackIssuer(issuer: string): boolean {
 }
 
 export function validatePortalTrust(config: QmConfig, path = "config", secrets?: ReadonlyMap<string, string>): void {
-  if (!config.services.includes("portal")) return;
   if (config.services.includes("auth")) return validateBrokerTrust(config, path, secrets);
-  const env = config.env.portal ?? {};
+  const env = config.env.core ?? {};
   const issuer = env.OIDC_ISSUER?.trim() || "https://slack.com";
   const jwksUri = env.OIDC_JWKS_URI?.trim();
   if (!isSlackIssuer(issuer) && isMissingOrPlaceholder(jwksUri)) {
-    throw new CliError(`${path}: portal requires env.portal.OIDC_JWKS_URI when using a non-Slack OIDC issuer`);
+    throw new CliError(`${path}: sign-in requires env.core.OIDC_JWKS_URI when using a non-Slack OIDC issuer`);
   }
   if (jwksUri !== undefined) {
     try {
       if (new URL(jwksUri).protocol !== "https:") throw new Error("protocol");
     } catch {
-      throw new CliError(`${path}: env.portal.OIDC_JWKS_URI must be a non-placeholder HTTPS URL`);
+      throw new CliError(`${path}: env.core.OIDC_JWKS_URI must be a non-placeholder HTTPS URL`);
     }
   }
   if (env.OIDC_CLIENT_ID !== undefined && isMissingOrPlaceholder(env.OIDC_CLIENT_ID)) {
-    throw new CliError(`${path}: env.portal.OIDC_CLIENT_ID may not be a placeholder when configured`);
+    throw new CliError(`${path}: env.core.OIDC_CLIENT_ID may not be a placeholder when configured`);
   }
   if (secrets && isMissingOrPlaceholder(env.OIDC_CLIENT_ID ?? secrets.get("OIDC_CLIENT_ID"))) {
     throw new CliError(
-      `${path}: portal requires a non-placeholder OIDC_CLIENT_ID in env.portal or the target secret store`,
+      `${path}: sign-in requires a non-placeholder OIDC_CLIENT_ID in env.core or the target secret store`,
     );
   }
   const domain = env.OIDC_ALLOWED_EMAIL_DOMAIN?.trim();
@@ -941,20 +944,20 @@ export function validatePortalTrust(config: QmConfig, path = "config", secrets?:
   const configuredTeam = env.PORTAL_EXPECTED_TEAM_ID?.trim();
   if (domain !== undefined && (isMissingOrPlaceholder(domain) || !validEmailDomain(domain))) {
     throw new CliError(
-      `${path}: env.portal.OIDC_ALLOWED_EMAIL_DOMAIN must be a valid, non-placeholder email domain when set`,
+      `${path}: env.core.OIDC_ALLOWED_EMAIL_DOMAIN must be a valid, non-placeholder email domain when set`,
     );
   }
   if (allowedEmails.some((email) => isMissingOrPlaceholder(email) || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))) {
-    throw new CliError(`${path}: env.portal.OIDC_ALLOWED_EMAILS must contain valid, non-placeholder email addresses`);
+    throw new CliError(`${path}: env.core.OIDC_ALLOWED_EMAILS must contain valid, non-placeholder email addresses`);
   }
   if ((domain || allowedEmails.length) && (env.OIDC_PRINCIPAL_CLAIM ?? "email") !== "email") {
     throw new CliError(
-      `${path}: portal requires env.portal.OIDC_PRINCIPAL_CLAIM=email when using an email trust boundary`,
+      `${path}: sign-in requires env.core.OIDC_PRINCIPAL_CLAIM=email when using an email trust boundary`,
     );
   }
   if (env.PORTAL_EXPECTED_TEAM_ID !== undefined && isMissingOrPlaceholder(configuredTeam)) {
     throw new CliError(
-      `${path}: env.portal.PORTAL_EXPECTED_TEAM_ID is optional, but may not be a placeholder when configured`,
+      `${path}: env.core.PORTAL_EXPECTED_TEAM_ID is optional, but may not be a placeholder when configured`,
     );
   }
   if (
@@ -964,7 +967,7 @@ export function validatePortalTrust(config: QmConfig, path = "config", secrets?:
     isMissingOrPlaceholder(configuredTeam ?? secrets.get("PORTAL_EXPECTED_TEAM_ID"))
   ) {
     throw new CliError(
-      `${path}: portal requires OIDC_ALLOWED_EMAILS, OIDC_ALLOWED_EMAIL_DOMAIN, or a non-placeholder PORTAL_EXPECTED_TEAM_ID in env.portal or the target secret store`,
+      `${path}: sign-in requires OIDC_ALLOWED_EMAILS, OIDC_ALLOWED_EMAIL_DOMAIN, or a non-placeholder PORTAL_EXPECTED_TEAM_ID in env.core or the target secret store`,
     );
   }
 }
@@ -977,8 +980,6 @@ export function requiresAwsMicrovmImage(config: QmConfig): boolean {
 }
 
 function validateAwsFrontDoor(config: QmConfig, path: string): void {
-  const hasPortal = config.services.includes("portal");
-  const hasWebUi = config.services.includes("web-ui");
   const publicUrl = new URL(config.publicUrl);
   const protocol = publicUrl.protocol;
   if (publicUrl.pathname !== "/" || publicUrl.search || publicUrl.hash || publicUrl.username || publicUrl.password) {
@@ -995,17 +996,6 @@ function validateAwsFrontDoor(config: QmConfig, path: string): void {
     throw new CliError(
       `${path}: AWS requires env.core.AWS_DEPLOY_IMAGE to name a non-placeholder, stack-owned Lambda MicroVM image`,
     );
-  }
-  if (hasWebUi && !hasPortal) {
-    throw new CliError(
-      `${path}: AWS web-ui requires the authenticated portal; a portal-free ALB must never expose the Web UI`,
-    );
-  }
-  if (hasPortal && !hasWebUi) {
-    throw new CliError(`${path}: AWS portal requires web-ui`);
-  }
-  if (hasPortal && protocol !== "https:") {
-    throw new CliError(`${path}: AWS portal requires an HTTPS publicUrl and ACM certificate`);
   }
   if (protocol !== "https:") {
     throw new CliError(

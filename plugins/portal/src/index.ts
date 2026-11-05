@@ -1,5 +1,3 @@
-import { coreHostTenants, inHostTenant, type HostTenant } from "../../chassis/src/host-tenant.ts";
-import { coreTenantSignIn } from "../../chassis/src/tenant-sign-in.ts";
 import {
   DESKTOP_LAUNCH_SCRIPT,
   DESKTOP_LAUNCH_SCRIPT_HASH,
@@ -9,16 +7,14 @@ import {
 } from "./desktop-login.ts";
 import { INVITE_LOGIN_SCRIPT, INVITE_LOGIN_SCRIPT_HASH } from "./invite-login.ts";
 import { reportBackendError } from "../../chassis/src/error-reporting.ts";
-import { drainOnSigterm } from "../../chassis/src/drain.ts";
 import "./instrument.ts";
 import { provisionTrustedAdmin } from "./trusted-admin.ts";
 import { createHash } from "node:crypto";
 import { createServer, METHODS, type IncomingMessage, type ServerResponse } from "node:http";
-import { pathToFileURL } from "node:url";
 import { ADMIN_LOGIN_SCRIPT, ADMIN_LOGIN_SCRIPT_HASH, openAdminLogin } from "./admin-login.ts";
 import { LRUCache } from "lru-cache";
 import { createCanonicalResolver } from "./canonical.ts";
-import { createTrustedEntry, tenantTrustedConfig, trustedEntryConfig } from "./trusted-entry.ts";
+import { createTrustedEntry, trustedEntryConfig } from "./trusted-entry.ts";
 import { answerPreflight, parseAllowedOrigins, prepareCors } from "./cors.ts";
 import {
   deriveKey,
@@ -34,7 +30,6 @@ import {
   safeEqual,
   sanitizeReturnTo,
   type SessionClaims,
-  servesTenant,
   type ImpersonationClaims,
   type TmpClaims,
 } from "./session.ts";
@@ -48,8 +43,6 @@ import {
   type OidcConfig,
   type PrincipalRule,
   hostedDomainHint,
-  tenantOidc,
-  tenantPrincipalRule,
 } from "./oidc.ts";
 import {
   proxyToSurface,
@@ -57,6 +50,7 @@ import {
   proxyToUpstream,
   proxyToAppHost,
   FORWARD_AGENT_API_HEADERS,
+  FORWARD_DEPLOYMENT_GIT_HEADERS,
   FORWARD_DEPLOYMENT_LAYER_HEADERS,
   FORWARD_OAUTH_HEADERS,
   FORWARD_BROKER_HEADERS,
@@ -67,7 +61,6 @@ import { coreClaimStore, claimOnce, withinRateLimit, ClaimStoreUnavailableError 
 import { coreEmailAdmission } from "../../chassis/src/external-members.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { errMessage } from "../../chassis/src/errors.ts";
-import { boundTenant } from "../../chassis/src/tenant.ts";
 import {
   json,
   escapeHtml,
@@ -76,6 +69,8 @@ import {
   readBody,
   PayloadTooLargeError,
   sameOriginRequest as sameOriginFor,
+  isLoopbackUrl,
+  isSecureOrLoopbackUrl,
 } from "../../chassis/src/http.ts";
 import {
   CORE_API_URL as CORE,
@@ -83,11 +78,10 @@ import {
   CORE_SIGNING_SECRET,
   PORTAL_IDENTITY_SECRET,
   isMissingOrPlaceholder,
-  portFromEnv,
 } from "../../chassis/src/env.ts";
+import { isDeploymentGitRoute } from "../../chassis/src/deployment-git.ts";
 
-const PORT = portFromEnv(8097);
-const PUBLIC_URL = (process.env.PORTAL_PUBLIC_URL ?? `http://localhost:${PORT}`).replace(/\/$/, "");
+const PUBLIC_URL = (process.env.PUBLIC_WEB_URL ?? "http://localhost:8097").replace(/\/$/, "");
 const SESSION_SECRET = process.env.PORTAL_SESSION_SECRET;
 const SESSION_TTL_S = Number(process.env.PORTAL_SESSION_TTL_S ?? 604800);
 const SESSION_MAX_TTL_S = Number(process.env.PORTAL_SESSION_MAX_TTL_S ?? Math.max(2592000, SESSION_TTL_S));
@@ -95,7 +89,7 @@ const SESSION_RENEW_AFTER_S = Math.floor(SESSION_TTL_S / 2);
 const APPS_DOMAIN = process.env.PORTAL_APPS_DOMAIN || process.env.DEPLOY_APPS_DOMAIN || undefined;
 const COOKIE_DOMAIN =
   process.env.PORTAL_COOKIE_DOMAIN ||
-  (APPS_DOMAIN ? derivedCookieDomain(hostOf(process.env.PORTAL_PUBLIC_URL ?? ""), APPS_DOMAIN) : undefined);
+  (APPS_DOMAIN ? derivedCookieDomain(hostOf(process.env.PUBLIC_WEB_URL ?? ""), APPS_DOMAIN) : undefined);
 const IS_PROD = process.env.NODE_ENV === "production";
 const SECURE_COOKIES = PUBLIC_URL.startsWith("https://");
 const ORIGIN = (() => {
@@ -107,7 +101,7 @@ const ORIGIN = (() => {
 })();
 const API_ALLOWED_ORIGINS = parseAllowedOrigins(process.env.PORTAL_API_ALLOWED_ORIGINS);
 const LOCAL_AUTH_BYPASS_REQUESTED = process.env.PORTAL_LOCAL_AUTH_BYPASS === "1";
-const LOCAL_AUTH_BYPASS = LOCAL_AUTH_BYPASS_REQUESTED && !IS_PROD && isLocalPortalUrl(PUBLIC_URL);
+const LOCAL_AUTH_BYPASS = LOCAL_AUTH_BYPASS_REQUESTED && !IS_PROD && isLoopbackUrl(PUBLIC_URL);
 const LOCAL_AUTH_PRINCIPAL = process.env.PORTAL_DEV_PRINCIPAL || process.env.USER || "dev-admin";
 const PLAYGROUND = process.env.PORTAL_PLAYGROUND === "1";
 const DEPLOYMENTS_ENABLED = process.env.PORTAL_DEPLOYMENTS_ENABLED
@@ -122,32 +116,20 @@ function playgroundIntEnv(name: string, fallback: number): number {
 const PLAYGROUND_MINTS_PER_IP = playgroundIntEnv("PORTAL_PLAYGROUND_MINTS_PER_IP", 30);
 const PLAYGROUND_MINT_WINDOW_S = playgroundIntEnv("PORTAL_PLAYGROUND_MINT_WINDOW_S", 3600);
 const NEUTRAL_ACCENT = "#4f46e5";
-interface SurfaceConfig {
-  brandAccent: string;
-  modelProviderConfigured?: boolean;
-  nextAt: number;
-  inflight: Promise<void> | null;
-}
-const surfaceConfigs = new Map<string, SurfaceConfig>();
-function surfaceConfig(): SurfaceConfig {
-  const key = boundTenant() ?? "";
-  const existing = surfaceConfigs.get(key);
-  if (existing) return existing;
-  const fresh: SurfaceConfig = { brandAccent: NEUTRAL_ACCENT, nextAt: 0, inflight: null };
-  surfaceConfigs.set(key, fresh);
-  return fresh;
-}
+let brandAccent = NEUTRAL_ACCENT;
+let modelProviderConfigured: boolean | undefined;
+let surfaceConfigNextAt = 0;
+let surfaceConfigInflight: Promise<void> | null = null;
 function refreshSurfaceConfig(): Promise<void> {
-  const config = surfaceConfig();
-  if (Date.now() >= config.nextAt) {
-    config.nextAt = Date.now() + 5_000;
-    config.inflight = fetchSurfaceConfig(config).finally(() => {
-      config.inflight = null;
+  if (Date.now() >= surfaceConfigNextAt) {
+    surfaceConfigNextAt = Date.now() + 5_000;
+    surfaceConfigInflight = fetchSurfaceConfig().finally(() => {
+      surfaceConfigInflight = null;
     });
   }
-  return config.inflight ?? Promise.resolve();
+  return surfaceConfigInflight ?? Promise.resolve();
 }
-async function fetchSurfaceConfig(config: SurfaceConfig): Promise<void> {
+async function fetchSurfaceConfig(): Promise<void> {
   try {
     const path = withSourceAuthNonce("/v1/surface-config", CORE_SIGNING_SECRET);
     const r = await fetch(`${CORE}${path}`, {
@@ -156,10 +138,10 @@ async function fetchSurfaceConfig(config: SurfaceConfig): Promise<void> {
     });
     if (r.ok) {
       const body = (await r.json()) as { branding?: { accent?: unknown }; modelProviderConfigured?: unknown };
-      config.brandAccent = typeof body.branding?.accent === "string" ? body.branding.accent : NEUTRAL_ACCENT;
-      config.modelProviderConfigured =
+      brandAccent = typeof body.branding?.accent === "string" ? body.branding.accent : NEUTRAL_ACCENT;
+      modelProviderConfigured =
         typeof body.modelProviderConfigured === "boolean" ? body.modelProviderConfigured : undefined;
-      config.nextAt = Date.now() + (config.modelProviderConfigured === false ? 5_000 : 30_000);
+      surfaceConfigNextAt = Date.now() + (modelProviderConfigured === false ? 5_000 : 30_000);
     }
   } catch {
     void 0;
@@ -251,7 +233,11 @@ if (
     PORTAL_IDENTITY_SECRET === CORE_SIGNING_SECRET)
 )
   throw new Error("Trusted administrator provisioning requires trusted OIDC and a distinct portal identity secret");
-const trustedEntries = new LRUCache<string, ReturnType<typeof createTrustedEntry>>({ max: 256 });
+const trustedEntry = trustedOidc
+  ? createTrustedEntry(trustedOidc, SESSION_SECRET ?? DEV_SECRET, (key, expiresAt) =>
+      claimOnce(coreClaimStore(CORE, CORE_SIGNING_SECRET, "portal"), key, expiresAt),
+    )
+  : null;
 const IMPERSONATE_TTL_S = Number(process.env.PORTAL_IMPERSONATE_TTL_S ?? 3600);
 
 const TMP_TTL_S = 600;
@@ -307,13 +293,8 @@ async function adminProbeAttempt(sub: string): Promise<boolean | null> {
   }
 }
 
-function adminKey(sub: string): string {
-  return `${boundTenant() ?? ""}\0${sub}`;
-}
-
 async function isAdmin(sub: string): Promise<boolean> {
-  const key = adminKey(sub);
-  const hit = adminCache.get(key);
+  const hit = adminCache.get(sub);
   if (hit !== undefined) return hit;
   for (let attempt = 0; attempt < ADMIN_PROBE_ATTEMPTS; attempt++) {
     const isAdmin = await adminProbeAttempt(sub);
@@ -322,7 +303,7 @@ async function isAdmin(sub: string): Promise<boolean> {
         await new Promise((resolve) => setTimeout(resolve, ADMIN_PROBE_RETRY_DELAY_MS));
       continue;
     }
-    adminCache.set(key, isAdmin);
+    adminCache.set(sub, isAdmin);
     return isAdmin;
   }
   return false;
@@ -397,21 +378,6 @@ export function hostIsWithinDomain(host: string, domain: string): boolean {
   return !!h && !!d && (h === d || h.endsWith(`.${d}`));
 }
 
-function isLocalPortalUrl(raw: string): boolean {
-  try {
-    const hostname = new URL(raw).hostname.toLowerCase();
-    return (
-      hostname === "localhost" ||
-      hostname.endsWith(".localhost") ||
-      hostname === "127.0.0.1" ||
-      hostname === "::1" ||
-      hostname === "[::1]"
-    );
-  } catch {
-    return false;
-  }
-}
-
 function originOf(raw: string): string {
   try {
     return new URL(raw).origin;
@@ -455,43 +421,14 @@ function localDevSession(req: IncomingMessage, nowMs = Date.now(), ignoreLogout 
   if (!isLoopbackAddress(req.socket.remoteAddress)) return null;
   if (!ignoreLogout && readCookie(req.headers.cookie, LOCAL_LOGOUT_COOKIE) === "1") return null;
   const now = Math.floor(nowMs / 1000);
-  return {
-    k: "session",
-    sub: LOCAL_AUTH_PRINCIPAL,
-    org: ORG,
-    ...sessionTenantClaim(),
-    iat: now,
-    exp: now + SESSION_TTL_S,
-  };
-}
-
-const hostTenantOf = new WeakMap<IncomingMessage, HostTenant & { host: string }>();
-
-function tenantHostOf(req: IncomingMessage): string | undefined {
-  const found = hostTenantOf.get(req);
-  return found?.multi && boundTenant() ? found.host : undefined;
-}
-
-function sessionTenantClaim(): { t?: string } {
-  const tenant = boundTenant();
-  return tenant === undefined ? {} : { t: tenant };
-}
-
-function cookieSession(req: IncomingMessage): SessionClaims | null {
-  const session = openSession(
-    readCookie(req.headers.cookie, "portal_session"),
-    sessionKey,
-    Date.now(),
-    ORG,
-    SESSION_MAX_TTL_S,
-  );
-  if (!session) return null;
-  const tenant = { bound: boundTenant(), legacy: hostTenantOf.get(req)?.sole === true };
-  return servesTenant(session, tenant) ? session : null;
+  return { k: "session", sub: LOCAL_AUTH_PRINCIPAL, org: ORG, iat: now, exp: now + SESSION_TTL_S };
 }
 
 function currentSession(req: IncomingMessage): SessionClaims | null {
-  return cookieSession(req) ?? localDevSession(req);
+  return (
+    openSession(readCookie(req.headers.cookie, "portal_session"), sessionKey, Date.now(), ORG, SESSION_MAX_TTL_S) ??
+    localDevSession(req)
+  );
 }
 
 const CARD_STYLE = `<style>
@@ -617,7 +554,7 @@ export function notConfiguredHtml(): string {
 }
 
 const connectStyle = (): string => `<style>
-  :root{ --bg:#0a0a0a; --text:#fafafa; --muted:#a3a3a3; --border:#2a2a2a; --brand:${surfaceConfig().brandAccent}; --radius-md:10px; }
+  :root{ --bg:#0a0a0a; --text:#fafafa; --muted:#a3a3a3; --border:#2a2a2a; --brand:${brandAccent}; --radius-md:10px; }
   html,body{ height:100%; margin:0; }
   body{ background:var(--bg); color:var(--text); display:grid; place-items:center; padding:40px 20px;
     font:14px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; -webkit-font-smoothing:antialiased; }
@@ -923,7 +860,6 @@ async function mintPlaygroundSession(req: IncomingMessage, res: ServerResponse):
     k: "session",
     sub: `playground-${randomToken(8)}`,
     org: ORG,
-    ...sessionTenantClaim(),
     name: "Guest",
     anon: true,
     auth: now,
@@ -935,7 +871,13 @@ async function mintPlaygroundSession(req: IncomingMessage, res: ServerResponse):
 }
 
 function renewSessionCookie(req: IncomingMessage, res: ServerResponse): SessionClaims | null {
-  const session = cookieSession(req);
+  const session = openSession(
+    readCookie(req.headers.cookie, "portal_session"),
+    sessionKey,
+    Date.now(),
+    ORG,
+    SESSION_MAX_TTL_S,
+  );
   if (!session) return null;
   if (session.appOnly) return session;
   const now = Math.floor(Date.now() / 1000);
@@ -943,7 +885,6 @@ function renewSessionCookie(req: IncomingMessage, res: ServerResponse): SessionC
   const authenticatedAt = session.auth ?? session.iat;
   const renewed: SessionClaims = {
     ...session,
-    ...sessionTenantClaim(),
     auth: authenticatedAt,
     iat: now,
     exp: Math.min(now + SESSION_TTL_S, authenticatedAt + SESSION_MAX_TTL_S),
@@ -951,16 +892,6 @@ function renewSessionCookie(req: IncomingMessage, res: ServerResponse): SessionC
   setSession(res, sessionCookieSet(seal(renewed, sessionKey), renewed.sub));
   return renewed;
 }
-
-function isAppHost(req: IncomingMessage): boolean {
-  if (!APPS_DOMAIN) return false;
-  const host = (req.headers.host ?? "").toLowerCase().split(":")[0]!;
-  const apps = APPS_DOMAIN.toLowerCase();
-  return host === apps || host.endsWith(`.${apps}`);
-}
-
-const hostTenants = coreHostTenants(CORE, CORE_SIGNING_SECRET);
-const tenantSignIn = coreTenantSignIn(CORE, CORE_SIGNING_SECRET);
 
 const server = createServer((req, res) => {
   const startedAt = performance.now();
@@ -974,13 +905,7 @@ const server = createServer((req, res) => {
         Math.round(performance.now() - startedAt),
       );
   });
-  const lookup = async (host: string): Promise<HostTenant> => {
-    const found = await hostTenants(host);
-    hostTenantOf.set(req, { ...found, host });
-    return found;
-  };
-  const served = isAppHost(req) ? handle(req, res) : inHostTenant(lookup, req, res, () => handle(req, res));
-  void served.catch((err: unknown) => {
+  void handle(req, res).catch((err: unknown) => {
     errorLogged = true;
     reportBackendError(err);
     console.error("[portal] 500 %s %s: %s", req.method ?? "?", (req.url ?? "?").split("?")[0], String(err));
@@ -1024,6 +949,10 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   void refreshSurfaceConfig();
 
   if (method === "GET" && pathname === "/healthz") return json(res, 200, { ok: true });
+
+  if (method === "GET" && pathname === "/readyz") {
+    return proxyToUpstream(req, res, { baseUrl: CORE, path: pathname, search: "" }, ["accept"]);
+  }
 
   if (method === "GET" && (pathname === "/favicon.ico" || pathname === "/favicon.svg")) {
     return serveFavicon(
@@ -1113,7 +1042,6 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   if (brokerPath) {
     if (method !== "GET" && !sameOriginRequest(req))
       return json(res, 403, { error: "forbidden", message: "cross-origin request refused" });
-    const tenantHost = tenantHostOf(req);
     return proxyToUpstream(
       req,
       res,
@@ -1121,7 +1049,6 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       FORWARD_BROKER_HEADERS,
       {
         "x-qm-client-ip": clientIpOf(req),
-        ...(tenantHost ? { "x-forwarded-host": tenantHost } : {}),
         cookie: (req.headers.cookie ?? "")
           .split(";")
           .map((part) => part.trim())
@@ -1210,6 +1137,22 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     ]);
   }
 
+  if (method === "POST" && pathname === "/slack/events") {
+    return proxyToUpstream(req, res, { baseUrl: CORE, path: pathname, search: url.search }, [
+      ...FORWARD_WEBHOOK_HEADERS,
+      "content-length",
+      "x-slack-retry-num",
+      "x-slack-retry-reason",
+    ]);
+  }
+
+  if (method === "GET" && pathname === "/v1/spend/export") {
+    return proxyToUpstream(req, res, { baseUrl: CORE, path: pathname, search: url.search }, [
+      "authorization",
+      "accept",
+    ]);
+  }
+
   if (
     method === "POST" &&
     (/^\/v1\/webhooks\/incoming\/[^/]+$/.test(pathname) || /^\/v1\/loop-ingress\/[^/]+$/.test(pathname))
@@ -1282,6 +1225,15 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       ...FORWARD_DEPLOYMENT_LAYER_HEADERS,
       "authorization",
     ]);
+  }
+
+  if (isDeploymentGitRoute(method, pathname)) {
+    return proxyToUpstream(
+      req,
+      res,
+      { baseUrl: CORE, path: pathname, search: url.search },
+      FORWARD_DEPLOYMENT_GIT_HEADERS,
+    );
   }
 
   if (isDeploymentLayerPassthrough(method, pathname)) {
@@ -1361,7 +1313,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   const settingsPath = pathname === "/settings" || pathname.startsWith("/settings/");
   if (method === "GET" && wantsHtml(req) && !settingsPath) {
     await refreshSurfaceConfig();
-    if (surfaceConfig().modelProviderConfigured === false) {
+    if (modelProviderConfigured === false) {
       if (await isAdmin(session.sub)) {
         res.writeHead(302, { location: "/settings/onboarding", "cache-control": "no-store" });
         return void res.end();
@@ -1417,7 +1369,6 @@ async function desktopLogin(req: IncomingMessage, res: ServerResponse, url: URL)
       ORIGIN,
       ORG,
       SESSION_MAX_TTL_S,
-      boundTenant(),
     );
     if (!claims) return json(res, 400, { error: "invalid_desktop_login" });
     try {
@@ -1596,23 +1547,8 @@ async function adminLogin(req: IncomingMessage, res: ServerResponse): Promise<vo
   res.end();
 }
 
-async function tenantTrustedEntry() {
-  const oidc = tenantTrustedConfig(process.env, PUBLIC_URL, await tenantSignIn());
-  if (!oidc) return null;
-  const key = JSON.stringify(oidc);
-  const cached = trustedEntries.get(key);
-  if (cached) return { oidc, entry: cached };
-  const entry = createTrustedEntry(oidc, SESSION_SECRET ?? DEV_SECRET, (claimKey, expiresAt) =>
-    claimOnce(coreClaimStore(CORE, CORE_SIGNING_SECRET, "portal"), claimKey, expiresAt),
-  );
-  trustedEntries.set(key, entry);
-  return { oidc, entry };
-}
-
 async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
-  const trusted = await tenantTrustedEntry();
-  if (!trusted) return json(res, 404, { error: "not_found" });
-  const { oidc: trustedConfig, entry: trustedEntry } = trusted;
+  if (!trustedEntry) return json(res, 404, { error: "not_found" });
   const cookieName = "portal_trusted_tmp";
   const path = "/auth/trusted";
   if (url.pathname === `${path}/login`) {
@@ -1621,7 +1557,7 @@ async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL):
       openTmp(readCookie(req.headers.cookie, "portal_oidc_tmp"), tmpKey, Date.now())?.returnTo ??
       null;
     const existing = currentSession(req);
-    const trustedPrefix = `oidc:${createHash("sha256").update(trustedConfig.issuer).digest("hex")}:`;
+    const trustedPrefix = `oidc:${createHash("sha256").update(trustedOidc!.issuer).digest("hex")}:`;
     if (existing && !existing.anon && !existing.appOnly && existing.sub.startsWith(trustedPrefix)) {
       res.writeHead(302, {
         location: sanitizeReturnTo(returnTo, PUBLIC_URL, APPS_DOMAIN),
@@ -1645,11 +1581,11 @@ async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL):
           signingSecret: CORE_SIGNING_SECRET!,
           identitySecret: PORTAL_IDENTITY_SECRET!,
           org: ORG,
-          issuer: trustedConfig.issuer,
+          issuer: trustedOidc!.issuer,
         },
         identity.subject,
       );
-      adminCache.delete(adminKey(identity.sub));
+      adminCache.delete(identity.sub);
     }
     setAuthenticatedSession(res, identity.sub, identity.name);
     res.writeHead(302, {
@@ -1672,7 +1608,6 @@ function setAuthenticatedSession(res: ServerResponse, sub: string, name = "", ap
     k: "session",
     sub,
     org: ORG,
-    ...sessionTenantClaim(),
     auth: now,
     iat: now,
     exp: now + SESSION_TTL_S,
@@ -1687,7 +1622,7 @@ function setAuthenticatedSession(res: ServerResponse, sub: string, name = "", ap
   ]);
 }
 
-async function authLogin(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+function authLogin(req: IncomingMessage, res: ServerResponse, url: URL): void {
   if (
     trustedOidc &&
     trustedSignInLabel &&
@@ -1722,8 +1657,7 @@ async function authLogin(req: IncomingMessage, res: ServerResponse, url: URL): P
   setSession(res, [
     setCookie("portal_oidc_tmp", seal(tmp, tmpKey), { path: "/auth", maxAge: TMP_TTL_S, secure: SECURE_COOKIES }),
   ]);
-  const oidc = tenantOidc(OIDC, await tenantSignIn(), tenantHostOf(req));
-  res.writeHead(302, { location: buildAuthorizeUrl(oidc, { state, nonce, challenge }), "cache-control": "no-store" });
+  res.writeHead(302, { location: buildAuthorizeUrl(OIDC, { state, nonce, challenge }), "cache-control": "no-store" });
   res.end();
 }
 
@@ -1745,22 +1679,18 @@ async function authCallback(req: IncomingMessage, res: ServerResponse, url: URL)
   let principal: { sub: string; appOnly?: true };
   let name = "";
   try {
-    const signIn = await tenantSignIn();
-    const oidc = tenantOidc(OIDC, signIn, tenantHostOf(req));
-    const { accessToken, idToken } = await exchangeCode(oidc, { code, codeVerifier: tmp.pkceVerifier });
-    const claims = await verifyIdToken(oidc, idToken, tmp.nonce);
-    if (oidc.expectedTeamId) {
+    const { accessToken, idToken } = await exchangeCode(OIDC, { code, codeVerifier: tmp.pkceVerifier });
+    const claims = await verifyIdToken(OIDC, idToken, tmp.nonce);
+    if (OIDC.expectedTeamId) {
       const team = claims["https://slack.com/team_id"];
-      if (team !== oidc.expectedTeamId) throw new Error("workspace not permitted");
+      if (team !== OIDC.expectedTeamId) throw new Error("workspace not permitted");
     }
-    const info = await fetchUserinfo(oidc, accessToken);
+    const info = await fetchUserinfo(OIDC, accessToken);
     const infoSub = typeof info.sub === "string" ? info.sub : "";
     if (!infoSub) throw new Error("userinfo missing sub");
     if (typeof claims.sub === "string" && claims.sub !== infoSub) throw new Error("subject mismatch");
-    principal = await resolvePrincipal(
-      tenantPrincipalRule(PRINCIPAL_RULE, signIn),
-      { sub: infoSub, claims, userinfo: info },
-      (email) => coreEmailAdmission(CORE, CORE_SIGNING_SECRET, email, "portal"),
+    principal = await resolvePrincipal(PRINCIPAL_RULE, { sub: infoSub, claims, userinfo: info }, (email) =>
+      coreEmailAdmission(CORE, CORE_SIGNING_SECRET, email, "portal"),
     );
     const rawName = info.name ?? claims.name;
     if (typeof rawName === "string") name = rawName.trim().slice(0, 200);
@@ -1798,8 +1728,8 @@ export function bootChecks(): void {
   if (LOCAL_AUTH_BYPASS_REQUESTED && IS_PROD) {
     problems.push("PORTAL_LOCAL_AUTH_BYPASS may not be enabled in production");
   }
-  if (LOCAL_AUTH_BYPASS_REQUESTED && !isLocalPortalUrl(PUBLIC_URL)) {
-    problems.push("PORTAL_LOCAL_AUTH_BYPASS requires a localhost, 127.0.0.1, or ::1 PORTAL_PUBLIC_URL");
+  if (LOCAL_AUTH_BYPASS_REQUESTED && !isLoopbackUrl(PUBLIC_URL)) {
+    problems.push("PORTAL_LOCAL_AUTH_BYPASS requires a localhost, 127.0.0.1, or ::1 PUBLIC_WEB_URL");
   }
   if (PLAYGROUND) {
     if (!Number.isInteger(PLAYGROUND_MINTS_PER_IP) || PLAYGROUND_MINTS_PER_IP < 1 || PLAYGROUND_MINTS_PER_IP > 64) {
@@ -1833,7 +1763,7 @@ export function bootChecks(): void {
     );
   }
   if (COOKIE_DOMAIN && !hostIsWithinDomain(hostOf(PUBLIC_URL), COOKIE_DOMAIN)) {
-    problems.push(`PORTAL_COOKIE_DOMAIN (${COOKIE_DOMAIN}) must cover PORTAL_PUBLIC_URL's host`);
+    problems.push(`PORTAL_COOKIE_DOMAIN (${COOKIE_DOMAIN}) must cover PUBLIC_WEB_URL's host`);
   }
   if (APPS_DOMAIN && COOKIE_DOMAIN && !hostIsWithinDomain(APPS_DOMAIN, COOKIE_DOMAIN)) {
     problems.push(`PORTAL_COOKIE_DOMAIN (${COOKIE_DOMAIN}) must cover PORTAL_APPS_DOMAIN (${APPS_DOMAIN})`);
@@ -1893,9 +1823,12 @@ export function bootChecks(): void {
     if (SESSION_SECRET && CORE_SIGNING_SECRET && SESSION_SECRET === CORE_SIGNING_SECRET) {
       problems.push("PORTAL_SESSION_SECRET must differ from CORE_SIGNING_SECRET");
     }
-    if (!PUBLIC_URL.startsWith("https://")) problems.push("PORTAL_PUBLIC_URL must be https in production");
-    if (!OIDC.authEndpoint.startsWith("https://")) {
-      problems.push(`OIDC_AUTH_ENDPOINT must be https, since the browser is sent there: ${OIDC.authEndpoint}`);
+    if (!isSecureOrLoopbackUrl(PUBLIC_URL))
+      problems.push("PUBLIC_WEB_URL must be https in production unless it is a loopback address");
+    if (!isSecureOrLoopbackUrl(OIDC.authEndpoint)) {
+      problems.push(
+        `OIDC_AUTH_ENDPOINT must be https unless it is a loopback address, since the browser is sent there: ${OIDC.authEndpoint}`,
+      );
     }
     const brokerOrigin =
       AUTH_BROKER_UPSTREAM && isPrivateNetworkUrl(AUTH_BROKER_UPSTREAM) ? originOf(AUTH_BROKER_UPSTREAM) : "";
@@ -1935,7 +1868,7 @@ function validEmailDomain(value: string): boolean {
     );
 }
 
-export async function startServer(): Promise<void> {
+export async function startServer(options: { port: number; host?: string }): Promise<void> {
   bootChecks();
   if (process.env.AUTH_EMBEDDED === "1") {
     if (AUTH_BROKER_UPSTREAM !== "http://127.0.0.1:8099") {
@@ -1952,14 +1885,13 @@ export async function startServer(): Promise<void> {
   }
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
-    server.listen(PORT, () => {
+    server.listen(options.port, options.host, () => {
       server.off("error", reject);
       resolve();
-      console.log(`[portal] public front door on http://localhost:${PORT} → web-ui over 6PN (org ${ORG})`);
+      console.log(`[portal] public front door on http://localhost:${options.port} (org ${ORG})`);
       if (!SESSION_SECRET)
         console.warn("[portal] PORTAL_SESSION_SECRET unset, using an INSECURE dev key (dev/test only)");
-      if (!SECURE_COOKIES)
-        console.warn("[portal] PORTAL_PUBLIC_URL is not https, cookies are NOT Secure (dev/test only)");
+      if (!SECURE_COOKIES) console.warn("[portal] PUBLIC_WEB_URL is not https, cookies are NOT Secure (dev/test only)");
       if (LOCAL_AUTH_BYPASS)
         console.warn(
           `[portal] PORTAL_LOCAL_AUTH_BYPASS=1 -- using ${LOCAL_AUTH_PRINCIPAL} as the local session principal (dev/test only)`,
@@ -1977,14 +1909,3 @@ export async function startServer(): Promise<void> {
 }
 
 export { handle, server };
-
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  startServer().then(
-    () => drainOnSigterm(server, "portal"),
-    (error: unknown) => {
-      reportBackendError(error);
-      console.error("[portal] failed to start:", errMessage(error));
-      process.exitCode = 1;
-    },
-  );
-}

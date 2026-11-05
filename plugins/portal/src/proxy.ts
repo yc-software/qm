@@ -1,4 +1,3 @@
-import { TENANT_HEADER } from "../../chassis/src/source-auth-sign.ts";
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
 import { signedHeaders } from "../../chassis/src/core-client.ts";
 import { withVary } from "../../chassis/src/http.ts";
@@ -172,6 +171,15 @@ export const FORWARD_AGENT_API_HEADERS = [
 
 export const FORWARD_DEPLOYMENT_LAYER_HEADERS = ["content-type", "accept", "x-timestamp", "x-signature"];
 
+export const FORWARD_DEPLOYMENT_GIT_HEADERS = [
+  "authorization",
+  "content-type",
+  "content-length",
+  "content-encoding",
+  "accept",
+  "git-protocol",
+];
+
 export const FORWARD_OAUTH_HEADERS = ["accept", "accept-language", "user-agent", "content-type"];
 
 export interface DeploymentTarget {
@@ -250,7 +258,6 @@ export function proxyToAppHost(req: IncomingMessage, res: ServerResponse, coreBa
     "x-as-principal",
     "x-admin-actor",
     "x-agent-capability",
-    TENANT_HEADER,
     PORTAL_IDENTITY_HEADER,
     "x-qm-app-host",
     "x-qm-client-ip",

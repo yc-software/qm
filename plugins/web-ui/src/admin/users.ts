@@ -90,7 +90,13 @@ function users(page: AdminPage, initial: any) {
     const roster = (data.users || []).filter(
       (u: any) =>
         (showOffboarded || !u.offboarded) &&
-        matches(filter, u.principalId, u.admin?.role || "", u.admin?.scopeId || "member"),
+        matches(
+          filter,
+          u.principalId,
+          u.admin?.role || "",
+          u.admin?.scopeId || "member",
+          u.kind === "app" ? "app" : "",
+        ),
     );
     const hidden = showOffboarded ? 0 : offboarded;
     const admins = (data.grants || []).filter((g: any) => g.role === "org_admin").length;
@@ -107,7 +113,11 @@ function users(page: AdminPage, initial: any) {
             { label: "Users", href: page.href("users"), active: true },
             { label: "Keychain", href: page.href("keychain") },
           ],
-          search: { value: filter, placeholder: "principal, role, or scope", onInput: (v) => ((filter = v), draw()) },
+          search: {
+            value: filter,
+            placeholder: "principal, role, scope, or app",
+            onInput: (v) => ((filter = v), draw()),
+          },
         })}
         <div class="list-root">
           ${card(
@@ -150,6 +160,7 @@ function users(page: AdminPage, initial: any) {
                 roster.map((u: any) => [
                   {
                     node: html`<a href=${userHref(u.principalId)}>${u.principalId}</a>
+                      ${u.kind === "app" ? badge("app") : ""}
                       ${u.offboarded || u.deactivated ? badge(u.offboarded ? "offboarded" : "deactivated", "warn") : ""}`,
                     cls: "mono",
                   },

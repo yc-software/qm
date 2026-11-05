@@ -1,7 +1,6 @@
 import type { ActorAssertion, Principal } from "../types.ts";
 import { createKeyedQueue, createTtlRefresh } from "../util/async.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
-import { cacheTenant, perTenant } from "../tenants/context.ts";
 import { canonicalPerson, foldPrincipalId, personIds, personKey } from "../directory/person.ts";
 import { externalMemberActive, type ExternalMember } from "./external-members.ts";
 
@@ -53,44 +52,34 @@ export function createIdentityService(
   },
 ): IdentityService {
   const externalStore = opts.externalMembers;
+  const deactivated = new Map<string, DeactivationRecord>();
+  const externals = new Map<string, ExternalMember>();
   const directorySyncProtected = opts.directorySyncProtected ?? [];
-  const queue = createKeyedQueue();
-  const exclusive = <T>(fn: () => Promise<T>): Promise<T> => queue(cacheTenant(), fn);
-
-  const roster = perTenant(() => {
-    const state: {
-      deactivated: Map<string, DeactivationRecord>;
-      externals: Map<string, ExternalMember>;
-      refresh: (force?: boolean) => Promise<void>;
-    } = {
-      deactivated: new Map<string, DeactivationRecord>(),
-      externals: new Map<string, ExternalMember>(),
-      refresh: createTtlRefresh(10_000, () =>
-        exclusive(async () => {
-          await opts.principalLinks?.refresh(true);
-          const [deactivations, members] = await Promise.all([store.all(), externalStore.all()]);
-          state.deactivated.clear();
-          state.externals.clear();
-          for (const r of deactivations) {
-            const key = personKey(r.principalId);
-            if (state.deactivated.get(key)?.source !== "manual") state.deactivated.set(key, r);
-          }
-          for (const m of members) state.externals.set(personKey(m.email), m);
-        }),
-      ),
-    };
-    return state;
-  });
-  const refresh = (force?: boolean): Promise<void> => roster().refresh(force);
 
   const keptByDirectorySync = (key: string): boolean =>
-    directorySyncProtected.some((id) => personKey(id) === key) || roster().externals.has(key);
+    directorySyncProtected.some((id) => personKey(id) === key) || externals.has(key);
   const storeKeys = (externalId: string): string[] => personIds(externalId).map(foldPrincipalId).filter(Boolean);
+
+  const queue = createKeyedQueue();
+  const exclusive = <T>(fn: () => Promise<T>): Promise<T> => queue("identity", fn);
+
+  const refresh = createTtlRefresh(10_000, () =>
+    exclusive(async () => {
+      await opts.principalLinks?.refresh(true);
+      const [deactivations, members] = await Promise.all([store.all(), externalStore.all()]);
+      deactivated.clear();
+      externals.clear();
+      for (const r of deactivations) {
+        const key = personKey(r.principalId);
+        if (deactivated.get(key)?.source !== "manual") deactivated.set(key, r);
+      }
+      for (const m of members) externals.set(personKey(m.email), m);
+    }),
+  );
 
   function classify(externalId: string, isExternalGuest?: boolean): Principal {
     const id = canonicalPerson(externalId);
     const key = personKey(externalId);
-    const { deactivated, externals } = roster();
     const record = deactivated.get(key);
     const external = externals.get(key);
     const inactive =
@@ -103,7 +92,6 @@ export function createIdentityService(
 
   async function deactivateNow(externalId: string, source: DeactivationSource): Promise<void> {
     const key = personKey(externalId);
-    const { deactivated } = roster();
     const existing = deactivated.get(key);
     if (existing && (existing.source === "manual" || existing.source === source)) return;
     const record: DeactivationRecord = { principalId: externalId, source, at: Date.now() };
@@ -112,7 +100,7 @@ export function createIdentityService(
   }
 
   async function reactivateNow(externalId: string): Promise<void> {
-    roster().deactivated.delete(personKey(externalId));
+    deactivated.delete(personKey(externalId));
     for (const key of storeKeys(externalId)) await store.delete(key);
   }
 
@@ -120,13 +108,11 @@ export function createIdentityService(
     classify,
     deactivate: (externalId, source = "manual") => exclusive(() => deactivateNow(externalId, source)),
     deactivationSource(externalId: string): DeactivationSource | undefined {
-      return roster().deactivated.get(personKey(externalId))?.source;
+      return deactivated.get(personKey(externalId))?.source;
     },
     reactivate: (externalId) => exclusive(() => reactivateNow(externalId)),
-    recordDirectorySync: async (removedIds, presentIds) => {
-      await refresh();
-      return exclusive(async () => {
-        const { deactivated } = roster();
+    recordDirectorySync: (removedIds, presentIds) =>
+      exclusive(async () => {
         const outcome: DirectorySyncOutcome = { deactivated: [], reactivated: [] };
         for (const id of removedIds) {
           if (keptByDirectorySync(personKey(id)) || deactivated.has(personKey(id))) continue;
@@ -139,24 +125,23 @@ export function createIdentityService(
           outcome.reactivated.push(id);
         }
         return outcome;
-      });
-    },
+      }),
     async listExternalMembers(): Promise<ExternalMember[]> {
       await refresh();
-      return [...roster().externals.values()];
+      return [...externals.values()];
     },
     externalMember(principalId: string): ExternalMember | undefined {
-      return roster().externals.get(personKey(principalId));
+      return externals.get(personKey(principalId));
     },
     putExternalMember(m: ExternalMember): Promise<void> {
       return exclusive(async () => {
-        roster().externals.set(personKey(m.email), m);
+        externals.set(personKey(m.email), m);
         await externalStore.put(foldPrincipalId(m.email), m);
       });
     },
     removeExternalMember(principalId: string): Promise<void> {
       return exclusive(async () => {
-        roster().externals.delete(personKey(principalId));
+        externals.delete(personKey(principalId));
         for (const key of storeKeys(principalId)) await externalStore.delete(key);
       });
     },

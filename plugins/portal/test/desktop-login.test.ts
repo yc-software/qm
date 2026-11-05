@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { runInNewContext } from "node:vm";
@@ -48,7 +48,7 @@ await new Promise<void>((resolve) => core.listen(0, "127.0.0.1", resolve));
 const coreUrl = `http://127.0.0.1:${(core.address() as AddressInfo).port}`;
 Object.assign(process.env, {
   NODE_ENV: "test",
-  PORTAL_PUBLIC_URL: origin,
+  PUBLIC_WEB_URL: origin,
   PORTAL_SESSION_SECRET: secret,
   CORE_SIGNING_SECRET: "desktop-core-secret",
   CORE_ORG_ID: browser.org,
@@ -169,14 +169,8 @@ test("claim store outages fail closed without issuing a session", async () => {
 test("codes are bounded by signature, audience, organization, state, and browser lifetime", () => {
   const code = mintDesktopLogin(browser, secret, origin, challenge, state);
   const verify = (value = code, target = origin, org = browser.org, when = Date.now(), expectedState = state) =>
-    openDesktopLogin(value, verifier, expectedState, secret, target, org, 86400, undefined, when);
+    openDesktopLogin(value, verifier, expectedState, secret, target, org, 86400, when);
   assert.ok(verify());
-  assert.equal(openDesktopLogin(code, verifier, state, secret, origin, browser.org, 86400, randomUUID()), null);
-  const tenant = randomUUID();
-  const bound = mintDesktopLogin({ ...browser, t: tenant }, secret, origin, challenge, state);
-  assert.equal(openDesktopLogin(bound, verifier, state, secret, origin, browser.org, 86400, tenant)?.session.t, tenant);
-  assert.equal(openDesktopLogin(bound, verifier, state, secret, origin, browser.org, 86400, randomUUID()), null);
-  assert.equal(openDesktopLogin(bound, verifier, state, secret, origin, browser.org, 86400, undefined), null);
   assert.equal(verify(`${code}x`), null);
   assert.equal(verify(code, "https://other.test"), null);
   assert.equal(verify(code, origin, "other-org"), null);
@@ -202,7 +196,6 @@ test("desktop handoff renews a browser session near expiry without resetting its
     origin,
     browser.org,
     2_592_000,
-    undefined,
     (testNow + 31) * 1000,
   );
   assert.equal(effective?.session.auth, oldBrowser.auth);

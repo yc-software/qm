@@ -357,4 +357,24 @@ describe("runTrigger: a turn abandoned while still queued leaves the fire retrya
     assert.equal(pending.length, 1);
     assert.match(pending[0]!.text, /^⚠️ could not run:/);
   });
+
+  it("a trigger that re-drives its unspent fire throws without a notice", async () => {
+    const d = deps(async () => ({ status: "queued", sessionId: "s1", runId: "r1" }));
+    await assert.rejects(
+      runTrigger(d, {
+        owner: "U1",
+        ownerScopeId: scopeId("channel", "C1"),
+        input: "report back",
+        fireKey: "cron:c8:manual:1",
+        surface: "cron",
+        threadRef: "cron:c8:manual:1",
+        destination: toChannel,
+        redrivesHandOff: true,
+        errorNotice: (s: string) => `⚠️ could not run: ${s}`,
+      }),
+      /still waiting to finish when this process shut down/,
+    );
+    assert.equal(await d.idempotency.committed("cron:c8:manual:1"), false);
+    assert.deepEqual(await d.deliveries.pending("slack"), []);
+  });
 });

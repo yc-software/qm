@@ -19,7 +19,6 @@ export interface SlackPluginConfig {
   externalAccess?: ExternalSlackAccess;
   historyLimit?: number;
   installationId?: string;
-  tenantId?: string;
   sharedServiceUrl?: string;
   receiverFactory?: (staging?: EnvelopeStaging) => Receiver;
   botToken: string;
@@ -59,32 +58,6 @@ export function parseAckEmoji(raw: string | undefined): string[] {
   return out;
 }
 
-const DEPLOYMENT_SLACK_KEYS = [
-  "SLACK_USER_TOKEN",
-  "SLACK_COPILOT_BOT_TOKEN",
-  "SLACK_SIGNING_SECRET",
-  "SLACK_ALLOW_FROM",
-  "SLACK_DENY_MESSAGE",
-  "SLACK_IDENTITY_EMAIL",
-  "SLACK_EXTERNAL_ACCESS",
-  "SLACK_EVENTS_PORT",
-];
-
-export function storedSlackEnv(
-  env: Record<string, string | undefined>,
-  stored: { botToken: string; appToken?: string },
-  install: boolean,
-): Record<string, string | undefined> {
-  const out: Record<string, string | undefined> = {
-    ...env,
-    SLACK_BOT_TOKEN: stored.botToken,
-    SLACK_APP_TOKEN: stored.appToken,
-    SLACK_EVENTS_MODE: stored.appToken ? "socket" : env.SLACK_EVENTS_MODE,
-  };
-  if (!install) for (const key of DEPLOYMENT_SLACK_KEYS) delete out[key];
-  return out;
-}
-
 export function slackPluginConfigFromEnv(
   env: Record<string, string | undefined>,
   receiverFactory?: SlackPluginConfig["receiverFactory"],
@@ -117,7 +90,7 @@ export function slackPluginConfigFromEnv(
     ...opt("ackCapMs", num(env.SLACK_ACK_CAP_MS)),
     ...opt("userToken", env.SLACK_USER_TOKEN),
     ...opt("copilotBotToken", env.SLACK_COPILOT_BOT_TOKEN),
-    ...opt("webUiPublicUrl", env.WEB_UI_PUBLIC_URL),
+    ...opt("webUiPublicUrl", env.PUBLIC_WEB_URL),
     ...opt("sharedServiceUrl", env.QM_SLACK_SERVICE_URL),
     ...opt("identityEmail", env.SLACK_IDENTITY_EMAIL),
     ...(() => {
@@ -177,7 +150,7 @@ export function slackAccountConfigsFromEnv(env: Record<string, string | undefine
       SLACK_IDENTITY_EMAIL: str(a.identityEmail) ?? "1",
       SLACK_LOG_LEVEL: env.SLACK_LOG_LEVEL,
       SLACK_HISTORY_LIMIT: env.SLACK_HISTORY_LIMIT,
-      WEB_UI_PUBLIC_URL: env.WEB_UI_PUBLIC_URL,
+      PUBLIC_WEB_URL: env.PUBLIC_WEB_URL,
       QM_SLACK_SERVICE_URL: env.QM_SLACK_SERVICE_URL,
     };
     const config = slackPluginConfigFromEnv(accountEnv);

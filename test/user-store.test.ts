@@ -16,11 +16,24 @@ test("a person joins the roster once, folded to one row, and keeps their first a
   const roster = store();
   await roster.record({ id: pat.toUpperCase(), source: "turn", at: Date.now() });
   const row = (await roster.get(pat))!;
-  assert.deepEqual([row.id, row.source], [pat, "turn"]);
+  assert.deepEqual([row.principalId, row.source], [pat, "turn"]);
+  assert.match(row.id, /^[0-9a-f-]{36}$/, "the user's key is a generated id, not the sign-in");
   assert.equal(typeof row.firstSeenAt, "number");
   await roster.record({ id: pat, source: "admin", at: Date.now() });
   assert.deepEqual([(await roster.get(pat))!.source, (await roster.get(pat))!.firstSeenAt], ["turn", row.firstSeenAt]);
-  assert.equal((await roster.list()).filter((u) => u.id === pat).length, 1);
+  assert.equal((await roster.list()).filter((u) => u.principalId === pat).length, 1);
+});
+
+test("a user is a person until marked as an app; marking never creates a row", async () => {
+  const bot = `U-${randomUUID().slice(0, 8)}`;
+  const absent = `U-${randomUUID().slice(0, 8)}`;
+  const roster = store();
+  await roster.record({ id: bot, source: "turn", at: Date.now() });
+  assert.equal((await roster.get(bot))?.kind, "person");
+  assert.equal(await roster.markApps([bot, absent]), 1);
+  assert.equal((await roster.get(bot))?.kind, "app");
+  assert.equal(await roster.markApps([bot]), 0, "marking again changes nothing");
+  assert.equal(await roster.get(absent), null);
 });
 
 test("offboarding sets offboarded_at once; reactivation clears it", async () => {
@@ -51,7 +64,9 @@ test("linking merges the sign-in's row into its user, and later writes for it la
   const roster = backing;
   const db = createPgPool(url);
   const rowIds = async () =>
-    (await db.q("SELECT id FROM users WHERE id = ANY($1)", [[sam, slack]])).map((r) => r.id as string).sort();
+    (await db.q("SELECT primary_alias FROM users WHERE primary_alias = ANY($1)", [[sam, slack]]))
+      .map((r) => r.primary_alias as string)
+      .sort();
   await roster.record({ id: sam, source: "admin", at: 200 });
   await roster.record({ id: slack, source: "turn", at: 150 });
   const { offboardedAt: slackOffboarded } = await backing.markOffboarded(slack, "admin-bob");
@@ -69,7 +84,8 @@ test("linking merges the sign-in's row into its user, and later writes for it la
       [150, "turn", slackOffboarded, "admin-bob"],
       "earliest arrival and earliest offboarding win",
     );
-    assert.equal((await roster.get(slack))?.id, sam, "the sign-in reads as its user");
+    assert.equal((await roster.get(slack))?.principalId, sam, "the sign-in reads as its user");
+    assert.equal((await roster.get(slack))?.id, (await roster.get(sam))?.id);
 
     await backing.record({ id: slack, source: "turn", at: 1 });
     await backing.markOffboarded(slack, "admin-carol");
@@ -80,21 +96,22 @@ test("linking merges the sign-in's row into its user, and later writes for it la
     const other = `U-${randomUUID().slice(0, 8)}`;
     await links.link({ principalId: other, canonicalId: ghost, evidence: "qa", linkedBy: "admin-alice" });
     assert.ok(
-      (await db.q("SELECT 1 FROM users WHERE id = $1", [ghost])).length,
+      (await db.q("SELECT 1 FROM users WHERE primary_alias = $1", [ghost])).length,
       "linking to someone new creates their user",
     );
     assert.equal(
-      (await roster.list()).some((u) => u.id === ghost),
+      (await roster.list()).some((u) => u.principalId === ghost),
       false,
       "but a user nobody has met is not listed",
     );
 
     await links.unlink(slack);
     assert.deepEqual(await rowIds(), [sam], "unlinking keeps the merged row with the user");
+    assert.equal(await links.unlink(ghost), null, "a user's own primary sign-in is not a link to remove");
     await assert.rejects(
-      db.query("DELETE FROM users WHERE id = $1", [ghost]),
-      /foreign key/,
-      "a user with links cannot be deleted out from under them",
+      db.query("UPDATE users SET primary_alias = $1 WHERE primary_alias = $2", [unique("nobody"), ghost]),
+      /users_primary_alias_link/,
+      "a user's primary sign-in must be one of their own links",
     );
   } finally {
     installPrincipalLinks(null);

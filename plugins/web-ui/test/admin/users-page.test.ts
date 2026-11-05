@@ -173,3 +173,26 @@ test("users: offboarded people are badged and hidden until shown", async () => {
   assert.match(page.host.textContent!, /3 users · 1 admins/, "the toggle reveals exactly the hidden count");
   page.close();
 });
+
+test("users: apps carry an app badge and the search finds them", async () => {
+  const page = await mountPage("/settings/users", {
+    "GET /users": {
+      users: [
+        { principalId: "pat@example.com", kind: "person", sessionCount: 1, turnCount: 1 },
+        { principalId: "U0APP", kind: "app", sessionCount: 1, turnCount: 3 },
+      ],
+      grants: [],
+      externalUsers: [],
+    },
+  });
+  await page.settle();
+  assert.match(page.host.textContent!, /U0APP\s*app/);
+  assert.doesNotMatch(page.host.textContent!, /pat@example\.com\s*app/);
+  const search = page.host.querySelector<HTMLInputElement>("input[type=search], .search input")!;
+  search.value = "app";
+  search.dispatchEvent(new page.window.Event("input"));
+  await page.settle();
+  assert.match(page.host.textContent!, /U0APP/);
+  assert.doesNotMatch(page.host.textContent!, /pat@example\.com/);
+  page.close();
+});

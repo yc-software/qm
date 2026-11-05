@@ -1,8 +1,6 @@
 import type { CronFireLogEntry } from "../triggers/types.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { pgTextSafe } from "../util/text.ts";
-import { claimAcrossTenants } from "../tenants/claim.ts";
-import { TENANCY, tenantTables } from "../tenants/migrations.ts";
 
 export interface CronFireRecord extends CronFireLogEntry {
   cronId: string;
@@ -16,6 +14,7 @@ export interface CronFireStore {
   beginExclusive(cronId: string, entry: CronFireLogEntry, staleRunningMs: number): Promise<BeginFireResult>;
 
   sweepStranded(now: number, staleRunningMs: number, note: string): Promise<number>;
+  listRunning(firedAfter: number): Promise<CronFireRecord[]>;
 
   pruneEnded(opts: { endedBefore: number; keepPerCron: number }): Promise<number>;
   listByCron(cronId: string, opts?: { limit?: number }): Promise<{ runs: CronFireLogEntry[]; total: number }>;
@@ -49,11 +48,15 @@ const ROW_OF = (prefix: string): string => `(${VALUE_COLUMN_DEFS.map((c) => `${p
 
 const UPSERT_FIRE = `INSERT INTO cron_fires (${FIRE_COLUMNS})
    VALUES (${FIRE_COLUMN_DEFS.map((_c, i) => `$${i + 1}`).join(", ")})
-   ON CONFLICT (tenant_id, cron_id, fire_key) DO UPDATE
+   ON CONFLICT (cron_id, fire_key) DO UPDATE
      SET ${UPSERT_SET}`;
 
 function fireParams(cronId: string, entry: CronFireLogEntry): unknown[] {
   return FIRE_COLUMN_DEFS.map((c) => c.value(cronId, entry));
+}
+
+function rowToRecord(r: Record<string, unknown>): CronFireRecord {
+  return { ...rowToEntry(r), cronId: String(r.cron_id) };
 }
 
 function rowToEntry(r: Record<string, unknown>): CronFireLogEntry {
@@ -83,7 +86,7 @@ const LEGACY_FIRE_FIELDS = [
   "source.json->>'reply'",
 ].join(", ");
 
-const LEGACY_FIRE_UPSERT = `ON CONFLICT (tenant_id, cron_id, fire_key) DO UPDATE SET ${UPSERT_SET}
+const LEGACY_FIRE_UPSERT = `ON CONFLICT (cron_id, fire_key) DO UPDATE SET ${UPSERT_SET}
   WHERE EXCLUDED.fired_at >= cron_fires.fired_at
     AND (cron_fires.ended_at IS NULL OR EXCLUDED.ended_at IS NOT NULL)
     AND ${ROW_OF("cron_fires")} IS DISTINCT FROM ${ROW_OF("EXCLUDED")}`;
@@ -94,15 +97,15 @@ const LEGACY_FIRE_MAINTENANCE = {
     `DO $body$ BEGIN
       IF to_regclass('cron_fire_log') IS NOT NULL THEN
         LOCK TABLE cron_fire_log IN SHARE ROW EXCLUSIVE MODE;
-        INSERT INTO cron_fires (tenant_id, ${FIRE_COLUMNS})
-        SELECT qm_bound_tenant(), ${LEGACY_FIRE_FIELDS} FROM cron_fire_log source
+        INSERT INTO cron_fires (${FIRE_COLUMNS})
+        SELECT ${LEGACY_FIRE_FIELDS} FROM cron_fire_log source
         ${LEGACY_FIRE_UPSERT};
       END IF;
     END $body$`,
     `CREATE OR REPLACE FUNCTION qm_sync_legacy_cron_fire() RETURNS trigger LANGUAGE plpgsql AS $body$
       BEGIN
-        INSERT INTO cron_fires (tenant_id, ${FIRE_COLUMNS})
-        SELECT qm_bound_tenant(), ${LEGACY_FIRE_FIELDS} FROM (SELECT NEW.*) source
+        INSERT INTO cron_fires (${FIRE_COLUMNS})
+        SELECT ${LEGACY_FIRE_FIELDS} FROM (SELECT NEW.*) source
         ${LEGACY_FIRE_UPSERT};
         RETURN NEW;
       END
@@ -118,10 +121,9 @@ const LEGACY_FIRE_MAINTENANCE = {
 };
 
 export function createPostgresCronFireStore(connectionString: string): CronFireStore {
-  const pg = createPgPool(
+  const { q, query, pool } = createPgPool(
     connectionString,
     [
-      ...TENANCY,
       {
         id: "cron/fires/0001",
         statements: [
@@ -142,11 +144,9 @@ export function createPostgresCronFireStore(connectionString: string): CronFireS
           `CREATE INDEX IF NOT EXISTS idx_cron_fires_cron_fired_at ON cron_fires (cron_id, fired_at DESC)`,
         ],
       },
-      ...tenantTables("cron/fires/0002-tenants", [{ table: "cron_fires", primaryKey: "cron_id, fire_key" }]),
     ],
     [LEGACY_FIRE_MAINTENANCE],
   );
-  const { q, query, pool } = pg;
 
   return {
     async record(cronId, entry) {
@@ -169,8 +169,7 @@ export function createPostgresCronFireStore(connectionString: string): CronFireS
       });
     },
     async sweepStranded(now, staleRunningMs, note) {
-      const result = await claimAcrossTenants(
-        pg,
+      const result = await query(
         `UPDATE cron_fires
             SET status = 'failed', ended_at = $1, note = $2
           WHERE status = 'running' AND fired_at <= $3`,
@@ -178,27 +177,40 @@ export function createPostgresCronFireStore(connectionString: string): CronFireS
       );
       return result.rowCount;
     },
+    async listRunning(firedAfter) {
+      const rows = await q(
+        `SELECT ${FIRE_COLUMNS} FROM cron_fires
+          WHERE status = 'running' AND fired_at > $1
+          ORDER BY fired_at, fire_key`,
+        [firedAfter],
+      );
+      return rows.map(rowToRecord);
+    },
     async pruneEnded({ endedBefore, keepPerCron }) {
-      const legacy = await claimAcrossTenants(pg, "SELECT to_regclass('cron_fire_log') IS NOT NULL AS present");
-      const prune = `DELETE FROM cron_fires cf
-            USING (SELECT tenant_id, cron_id, fire_key,
-                          ROW_NUMBER() OVER (PARTITION BY tenant_id, cron_id ORDER BY fired_at DESC, fire_key DESC) AS rn
+      return withPgTransaction(await pool(), async (client) => {
+        const legacy = await client.query("SELECT to_regclass('cron_fire_log') IS NOT NULL AS present");
+        if (legacy.rows[0]?.present) await client.query("LOCK TABLE cron_fire_log IN SHARE ROW EXCLUSIVE MODE");
+        const result = await client.query(
+          `DELETE FROM cron_fires cf
+            USING (SELECT cron_id, fire_key,
+                          ROW_NUMBER() OVER (PARTITION BY cron_id ORDER BY fired_at DESC, fire_key DESC) AS rn
                      FROM cron_fires) ranked
-            WHERE cf.tenant_id = ranked.tenant_id AND cf.cron_id = ranked.cron_id AND cf.fire_key = ranked.fire_key
+            WHERE cf.cron_id = ranked.cron_id AND cf.fire_key = ranked.fire_key
               AND ranked.rn > $1
               AND cf.ended_at IS NOT NULL AND cf.ended_at < $2
-            RETURNING cf.tenant_id, cf.cron_id, cf.fire_key`;
-      const result = await claimAcrossTenants(
-        pg,
-        legacy.rows[0]?.present
-          ? `WITH removed AS (${prune}), legacy AS (
-               DELETE FROM cron_fire_log source USING removed
-                WHERE source.cron_id = removed.cron_id AND source.fire_key = removed.fire_key)
-             SELECT 1 FROM removed`
-          : prune,
-        [keepPerCron, endedBefore],
-      );
-      return result.rowCount;
+            RETURNING cf.cron_id, cf.fire_key`,
+          [keepPerCron, endedBefore],
+        );
+        if (result.rows.length && legacy.rows[0]?.present) {
+          await client.query(
+            `DELETE FROM cron_fire_log source
+               USING unnest($1::text[], $2::text[]) removed(cron_id, fire_key)
+               WHERE source.cron_id = removed.cron_id AND source.fire_key = removed.fire_key`,
+            [result.rows.map((row) => row.cron_id), result.rows.map((row) => row.fire_key)],
+          );
+        }
+        return result.rowCount ?? 0;
+      });
     },
     async listByCron(cronId, opts) {
       if (opts?.limit !== undefined && opts.limit <= 0) {
@@ -232,7 +244,7 @@ export function createPostgresCronFireStore(connectionString: string): CronFireS
           ORDER BY fired_at, fire_key`,
         [[...threadRefs]],
       );
-      return rows.map((r) => ({ ...rowToEntry(r), cronId: r.cron_id as string }));
+      return rows.map(rowToRecord);
     },
     async latestForThread(cronId, threadRef) {
       const rows = await q(

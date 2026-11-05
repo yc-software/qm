@@ -1,6 +1,4 @@
 import { createPgPool } from "../persistence/pg-pool.ts";
-import { TENANCY, createIfParentTenantKeyed, tenantTables } from "../tenants/migrations.ts";
-import { durableMapTenancy } from "../persistence/durable-map.ts";
 
 export type AppViewAuthMode = "signed_in" | "public" | "app_only";
 
@@ -29,23 +27,6 @@ const clip = (value: string | null, max: number): string | null => (value === nu
 
 export function createPostgresAppPageViewLog(connectionString: string): AppPageViewLog {
   const { q } = createPgPool(connectionString, [
-    ...TENANCY,
-    createIfParentTenantKeyed(
-      "deploy/app-page-views/0000-tenant-keyed-deployments",
-      "deployments",
-      "app_page_views",
-      `CREATE TABLE app_page_views(
-      id BIGSERIAL PRIMARY KEY,
-      deployment_id TEXT NOT NULL,
-      version INTEGER,
-      viewer TEXT,
-      auth_mode TEXT NOT NULL,
-      at BIGINT NOT NULL,
-      path TEXT NOT NULL,
-      ip TEXT,
-      user_agent TEXT
-    )`,
-    ),
     {
       id: "deploy/app-page-views/0001",
       statements: [
@@ -63,16 +44,6 @@ export function createPostgresAppPageViewLog(connectionString: string): AppPageV
     )`,
         `CREATE INDEX IF NOT EXISTS app_page_views_by_deployment_at ON app_page_views(deployment_id, at DESC)`,
         `CREATE INDEX IF NOT EXISTS app_page_views_by_at ON app_page_views(at)`,
-      ],
-    },
-    ...tenantTables("deploy/app-page-views/0002-tenants", [{ table: "app_page_views", primaryKey: "id" }]),
-    ...durableMapTenancy("deployments"),
-    {
-      id: "durable-map/deployments/0012-page-views-tenants",
-      statements: [
-        `ALTER TABLE app_page_views DROP CONSTRAINT IF EXISTS app_page_views_deployment_id_fkey`,
-        `ALTER TABLE app_page_views ADD CONSTRAINT app_page_views_deployment_id_fkey
-           FOREIGN KEY (tenant_id, deployment_id) REFERENCES deployments(tenant_id, id) NOT VALID`,
       ],
     },
   ]);

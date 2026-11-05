@@ -1,6 +1,7 @@
 import { mock, test } from "node:test";
 import assert from "node:assert/strict";
 import { createAgent, EMPTY_ENDING_NOTE } from "../src/agent/agent-run.ts";
+import { createModelRoutes } from "../src/model/model-route.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { forModelContext } from "../src/agent/context-compaction.ts";
 import { type Item, storedItem } from "../src/sessions/items.ts";
@@ -13,7 +14,6 @@ import { createPostgresToolOutputStore, type ToolOutputStore } from "../src/sess
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
-import { seedInstallTenant } from "./support/tenant-seed.ts";
 
 type Body = { messages?: unknown[]; input?: unknown[] };
 type Reply = Array<Record<string, unknown>>;
@@ -111,7 +111,7 @@ async function runTurn(
   signals?: RunSignalStore,
   onHistory?: () => Promise<void>,
 ) {
-  const agent = createAgent({ apiKey: "sk-test", ...(signals ? { signals } : {}) });
+  const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }), ...(signals ? { signals } : {}) });
   const emitted: Item[] = [];
   const bodies: Body[] = [];
   let seq = (history.at(-1)?.seq ?? 0) + 1;
@@ -541,7 +541,6 @@ async function withPgSession(
   await admin.query(`CREATE SCHEMA ${schema}`);
   const url = new globalThis.URL(PG_URL!);
   url.searchParams.set("options", `-c search_path=${schema}`);
-  await seedInstallTenant(url.toString());
   const store = createPostgresSessionStore(url.toString());
   const raw = new pg.Pool({ connectionString: url.toString() });
   try {

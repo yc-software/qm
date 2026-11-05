@@ -475,7 +475,6 @@ export interface App {
   setWebhookEnabled(id: string, enabled: boolean): Promise<void>;
   updateWebhook(id: string, patch: { action: string }): Promise<Webhook | null>;
   pendingDeliveries(type: string, claimMs?: number): Promise<Delivery[]>;
-  pendingDeliveriesAcrossTenants(type: string): Promise<Delivery[]>;
   enqueueDelivery(input: {
     destination: Destination;
     text: string;

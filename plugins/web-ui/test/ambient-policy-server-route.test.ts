@@ -2,7 +2,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
-import { answeredHostLookup } from "./single-tenant-core.ts";
 
 function isNoncedCoreCall(url: string, pathname: string): boolean {
   const u = new URL(url, "http://core");
@@ -22,7 +21,6 @@ interface Call {
 const calls: Call[] = [];
 const policy = { orders: "flag launches", bots: { "General Agent": { mode: "ignore" } }, updatedAt: 42 };
 const core = createServer((req: IncomingMessage, res) => {
-  if (answeredHostLookup(req, res)) return;
   let raw = "";
   req.on("data", (chunk) => (raw += chunk));
   req.on("end", () => {

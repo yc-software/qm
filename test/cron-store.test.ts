@@ -673,6 +673,7 @@ test("the fire table is the journal of record — a write failure surfaces inste
       sweepStranded: async () => {
         throw new Error("table down");
       },
+      listRunning: async () => [],
       pruneEnded: async () => {
         throw new Error("table down");
       },

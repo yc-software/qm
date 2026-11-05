@@ -192,7 +192,7 @@ export function createTurnMethods(
       const individualAuth = modelAccount !== "company";
       const automated = req.origin?.kind === "automation";
       const runtimePurpose = turnRuntimePurpose(
-        { surface: req.surface, triggered: automated },
+        { surface: req.surface, triggered: automated, infrequentCron: req.infrequentCron },
         isSubagentThreadRef(req.conversation.threadRef),
       );
       const modelRefusal = await turnModelRefusal(deps, req, actor.id, individualAuth, runtimePurpose);
@@ -270,6 +270,7 @@ export function createTurnMethods(
         ...(req.skipMemory ? { skipMemory: true } : {}),
         ...(req.unattendedGrants?.length ? { unattendedGrants: req.unattendedGrants } : {}),
         ...(req.cronScript && origin.kind === "automation" ? { cronScript: req.cronScript } : {}),
+        ...(req.infrequentCron && origin.kind === "automation" ? { infrequentCron: true } : {}),
         ...(req.botActor ? { botActor: true } : {}),
         ...(req.surfaceTools ? { surfaceTools: true } : {}),
         ...(req.clientTools?.length ? { clientTools: req.clientTools } : {}),
@@ -366,7 +367,7 @@ export function createTurnMethods(
             : undefined;
         const candidates = await liveTurnsFor(conversation.threadRef, ambientRef, stopsLiveWork(incoming, true));
         if (redeliveryKey && candidates.some(({ run }) => run?.dedupKey === redeliveryKey)) return { status: "silent" };
-        const prefs = { midTurn: req.midTurn ?? "steer" } as const;
+        const prefs = req.midTurn ? { midTurn: req.midTurn } : {};
         const routes = candidates.map((candidate) => ({
           ...candidate,
           route: routeIncoming(incoming, candidate.turn, prefs),

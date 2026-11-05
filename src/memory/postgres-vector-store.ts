@@ -1,8 +1,6 @@
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { unitVector } from "../model/embeddings.ts";
 import { MEMORY_FACTS_MIGRATIONS } from "./postgres-memory-service.ts";
-import { forEachTenant } from "../tenants/claim.ts";
-import { tenantTables } from "../tenants/migrations.ts";
 
 export interface MemoryVector {
   scope: string;
@@ -23,6 +21,7 @@ interface MemoryVectorSearch {
   model: string;
   vector: number[];
   ids: readonly string[];
+  limit: number;
   minSimilarity?: number;
 }
 
@@ -37,7 +36,6 @@ export interface MemoryVectorStore {
     afterId?: string,
   ): Promise<Array<{ scope: string; factId: string; hash: string; text: string }>>;
   prune(model: string, limit: number, dimensions?: number, signal?: AbortSignal): Promise<number>;
-  eachTenant(fn: () => Promise<unknown>): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -54,6 +52,8 @@ const SCHEMA = [
   )`,
 ];
 
+const SKETCH_CANDIDATES_PER_RESULT = 4;
+
 const batchSize = (limit: number) => Math.max(1, Math.min(256, Math.floor(limit) || 1));
 
 function vectorWidth(dimensions: number | undefined): number | null {
@@ -68,26 +68,76 @@ export function createPostgresVectorStore(connectionString: string): MemoryVecto
     ...MEMORY_FACTS_MIGRATIONS,
     { id: "memory/vectors/0001-extension", statements: ["CREATE EXTENSION IF NOT EXISTS vector"] },
     { id: "memory/vectors/0002", statements: SCHEMA },
-    ...tenantTables("memory/vectors/0003-tenants", [
-      { table: "memory_fact_vectors", primaryKey: "scope_id, model, fact_id" },
-    ]),
+    {
+      id: "memory/vectors/0003-sketch",
+      statements: [
+        "SET LOCAL lock_timeout = '3s'",
+        "ALTER TABLE memory_fact_vectors ADD COLUMN IF NOT EXISTS embedding_bits BIT VARYING",
+        `CREATE OR REPLACE FUNCTION memory_fact_vectors_bits() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+          NEW.embedding_bits := binary_quantize(NEW.embedding);
+          RETURN NEW;
+        END $$`,
+        "DROP TRIGGER IF EXISTS memory_fact_vectors_bits ON memory_fact_vectors",
+        `CREATE TRIGGER memory_fact_vectors_bits BEFORE INSERT OR UPDATE OF embedding ON memory_fact_vectors
+          FOR EACH ROW EXECUTE FUNCTION memory_fact_vectors_bits()`,
+      ],
+    },
+    {
+      id: "memory/vectors/0004-sketch-backfill",
+      autocommit: true,
+      statements: [
+        `DO $memory_sketch_backfill$
+        DECLARE
+          batch tid[];
+        BEGIN
+          LOOP
+            SELECT array_agg(ctid) INTO batch
+              FROM (SELECT ctid FROM memory_fact_vectors WHERE embedding_bits IS NULL LIMIT 1000) pending;
+            EXIT WHEN batch IS NULL;
+            UPDATE memory_fact_vectors SET embedding_bits = binary_quantize(embedding)
+             WHERE ctid = ANY(batch) AND embedding_bits IS NULL;
+            COMMIT;
+          END LOOP;
+        END $memory_sketch_backfill$`,
+      ],
+    },
   ]);
   return {
     async search(input) {
+      if (!Number.isInteger(input.limit) || input.limit < 1)
+        throw new Error(`Memory vector search limit must be a positive integer, got ${input.limit}`);
       if (!input.ids.length) return [];
       const vector = unitVector(input.vector);
       const minSimilarity = input.minSimilarity ?? 0.2;
       const rows = await db.q(
-        `SELECT id, updated_at, distance FROM (
-          SELECT f.id, f.updated_at, f.created_at, v.fact_hash IS DISTINCT FROM f.text_hash AS unindexed,
-            CASE WHEN v.fact_hash = f.text_hash THEN v.embedding <=> $4::vector ELSE $6::double precision END AS distance
+        `WITH sketches AS MATERIALIZED (
+          SELECT fact_id, fact_hash, embedding_bits <~> binary_quantize($4::vector) AS approx
+          FROM memory_fact_vectors
+          WHERE scope_id = $1 AND model = $2 AND dimensions = $3
+        ),
+        visible AS MATERIALIZED (
+          SELECT f.id, f.updated_at, f.created_at, s.approx
           FROM memory_facts f
-          LEFT JOIN memory_fact_vectors v ON v.scope_id = f.scope_id AND v.model = $2 AND v.dimensions = $3
-            AND v.fact_id = f.id
+          LEFT JOIN sketches s ON s.fact_id = f.id AND s.fact_hash = f.text_hash
           WHERE f.scope_id = $1 AND f.deleted_at IS NULL AND f.id = ANY($7::bigint[])
+        ),
+        candidates AS (
+          (SELECT id, updated_at, created_at, false AS unindexed FROM visible
+            WHERE approx IS NOT NULL ORDER BY approx, id LIMIT $8::integer * $9::integer)
+          UNION ALL
+          (SELECT id, updated_at, created_at, true FROM visible
+            WHERE approx IS NULL ORDER BY created_at DESC, id LIMIT $8)
+        )
+        SELECT id, updated_at, distance FROM (
+          SELECT c.id, c.updated_at, c.created_at, c.unindexed,
+            CASE WHEN c.unindexed THEN $6::double precision ELSE v.embedding <=> $4::vector END AS distance
+          FROM candidates c
+          LEFT JOIN memory_fact_vectors v ON NOT c.unindexed AND v.scope_id = $1 AND v.model = $2 AND v.fact_id = c.id
         ) ranked
         WHERE unindexed OR distance <= $5
-        ORDER BY distance, created_at DESC, id`,
+        ORDER BY distance, created_at DESC, id
+        LIMIT $8`,
         [
           input.scope,
           input.model,
@@ -96,6 +146,8 @@ export function createPostgresVectorStore(connectionString: string): MemoryVecto
           1 - minSimilarity,
           1 - Math.min(0.2, minSimilarity),
           input.ids,
+          input.limit,
+          SKETCH_CANDIDATES_PER_RESULT,
         ],
         { timeoutMs: 5000 },
       );
@@ -125,17 +177,17 @@ export function createPostgresVectorStore(connectionString: string): MemoryVecto
         )
         INSERT INTO memory_fact_vectors(scope_id, model, fact_id, fact_hash, dimensions, embedding)
         SELECT scope, model, "factId", hash, jsonb_array_length(vector), vector::text::vector FROM live
-        ON CONFLICT (tenant_id, scope_id, model, fact_id) DO UPDATE
+        ON CONFLICT (scope_id, model, fact_id) DO UPDATE
         SET fact_hash = EXCLUDED.fact_hash, dimensions = EXCLUDED.dimensions, embedding = EXCLUDED.embedding`,
         [JSON.stringify([...latest.values()])],
         { signal, timeoutMs: 5000 },
       );
     },
     async missing(model, limit, dimensions, signal, afterId) {
-      const { rows } = await db.query(
+      const rows = await db.q(
         `SELECT f.scope_id, f.id, f.text, f.text_hash AS hash
          FROM memory_facts f LEFT JOIN memory_fact_vectors v
-           ON v.tenant_id = f.tenant_id AND v.scope_id = f.scope_id AND v.fact_id = f.id AND v.model = $1
+           ON v.scope_id = f.scope_id AND v.fact_id = f.id AND v.model = $1
            AND v.fact_hash = f.text_hash
            AND ($3::integer IS NULL OR v.dimensions = $3)
          WHERE f.deleted_at IS NULL AND v.fact_id IS NULL AND ($4::bigint IS NULL OR f.id > $4)
@@ -153,21 +205,20 @@ export function createPostgresVectorStore(connectionString: string): MemoryVecto
     async prune(model, limit, dimensions, signal) {
       const { rowCount } = await db.query(
         `DELETE FROM memory_fact_vectors v USING (
-          SELECT s.tenant_id, s.scope_id, s.model, s.fact_id FROM memory_fact_vectors s
+          SELECT s.scope_id, s.model, s.fact_id FROM memory_fact_vectors s
           WHERE s.model <> $1 OR ($3::integer IS NOT NULL AND s.dimensions <> $3) OR NOT EXISTS (
             SELECT 1 FROM memory_facts f
-            WHERE f.tenant_id = s.tenant_id AND f.scope_id = s.scope_id AND f.id = s.fact_id
+            WHERE f.scope_id = s.scope_id AND f.id = s.fact_id
               AND f.deleted_at IS NULL AND f.text_hash = s.fact_hash
           )
           LIMIT $2 FOR UPDATE OF s SKIP LOCKED
         ) stale
-        WHERE v.tenant_id = stale.tenant_id AND v.scope_id = stale.scope_id AND v.model = stale.model AND v.fact_id = stale.fact_id`,
+        WHERE v.scope_id = stale.scope_id AND v.model = stale.model AND v.fact_id = stale.fact_id`,
         [model, batchSize(limit), vectorWidth(dimensions)],
         { signal, timeoutMs: 30_000 },
       );
       return rowCount;
     },
-    eachTenant: (fn) => forEachTenant(db, fn),
     close: () => db.close(),
   };
 }

@@ -11,7 +11,7 @@ import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
-import { portalSession, type ViewerTenant } from "../src/deploy/viewer-session.ts";
+import { portalSession } from "../src/deploy/viewer-session.ts";
 import { deriveKey, seal } from "../plugins/portal/src/session.ts";
 import { scopeId } from "../src/types.ts";
 import { deployRef, encodeRef } from "../src/acl/resource-ref.ts";
@@ -23,8 +23,6 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 
-const UNTENANTED: ViewerTenant = { bound: undefined, legacy: true };
-
 const externalSharingOn = { enabled: async () => true } as unknown as FeatureFlagStore;
 
 const secret = "app-only-gateway-test-secret-long-enough";
@@ -35,9 +33,9 @@ function token(appOnly: unknown = true) {
   return seal({ k: "session", sub: guest, org: "acme", iat: now, exp: now + 3600, appOnly }, key);
 }
 test("gateway parser keeps app-only authority and rejects malformed signed markers", () => {
-  assert.deepEqual(portalSession(`portal_session=${token()}`, secret, UNTENANTED), { sub: guest, appOnly: true });
+  assert.deepEqual(portalSession(`portal_session=${token()}`, secret), { sub: guest, appOnly: true });
   for (const marker of ["false", null, 0, {}])
-    assert.equal(portalSession(`portal_session=${token(marker)}`, secret, UNTENANTED), null);
+    assert.equal(portalSession(`portal_session=${token(marker)}`, secret), null);
 });
 
 test("app-only gateway checks exact current personal read grants without inherited or management authority", async () => {

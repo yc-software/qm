@@ -17,7 +17,6 @@ import { boundLoopCron } from "./authority.ts";
 import { samePerson } from "../directory/person.ts";
 import type { TurnRequest, TurnResult } from "../types.ts";
 import type { Loop, LoopItem, LoopOutput } from "./types.ts";
-import { inTenantOf } from "../tenants/claim.ts";
 import { destinationVisible, runTrigger, type TriggerDeps, type TriggerOutcome } from "../triggers/run-trigger.ts";
 import { reachEnqueue } from "../reach/reach.ts";
 import { hashId } from "../util/crypto.ts";
@@ -57,6 +56,7 @@ import {
 } from "./triage.ts";
 import type { TriagePatch } from "./item-ledger.ts";
 import { adapterForItem } from "./sources/index.ts";
+import type { InboxQuietCheck } from "./inbox-quiet-check.ts";
 
 export interface LoopFireDeps {
   admittedWork?: AdmittedWork;
@@ -70,6 +70,7 @@ export interface LoopFireDeps {
   grants: ShipGrantStore;
   files: Pick<FileArtifactStore, "listOwnedByScopes" | "open">;
   trigger: TriggerDeps;
+  inboxQuiet?: InboxQuietCheck;
 }
 
 interface LoopFireResult {
@@ -755,11 +756,21 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     if (inboxSource(loop) && options?.enumerate !== false) {
       if (!isRunnable(loop)) return notRunnable(loop);
       const firedAt = Date.now();
+      const quiet = deps.inboxQuiet
+        ? await deps.items
+            .byLoop(loopId)
+            .then((items) => deps.inboxQuiet!(loop, items))
+            .catch((error: unknown) => ({ quiet: false as const, reason: `pre-check failed: ${errMessage(error)}` }))
+        : undefined;
+      const quietNote =
+        quiet && (quiet.quiet ? "inbox quiet: nothing new since the last pass" : `inbox sync ran: ${quiet.reason}`);
       let failure: unknown;
       try {
-        const outcome = await stageTurn(loop, `${fireKey}:sync`, threadRef, playbookText(loop, await voiceProfile()));
-        if (!outcome.ran && !outcome.authzFailed) return { status: "silent", note: "duplicate fire key" };
-        failure = stageFailure("inbox sync", outcome)?.error;
+        if (!quiet?.quiet) {
+          const outcome = await stageTurn(loop, `${fireKey}:sync`, threadRef, playbookText(loop, await voiceProfile()));
+          if (!outcome.ran && !outcome.authzFailed) return { status: "silent", note: "duplicate fire key" };
+          failure = stageFailure("inbox sync", outcome)?.error;
+        }
         if (failure === undefined) await triage(loop, fireKey, threadRef);
       } catch (error) {
         failure = error;
@@ -768,9 +779,10 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
         await deps.loops.recordScan(loopId, firedAt);
         await deps.loops.recordFireOutcome(loopId, "ok");
         await applyGovernor(loopId);
-        return { status: "silent" };
+        return { status: "silent", ...(quietNote ? { note: quietNote } : {}) };
       }
-      return recordFailedFire(loopId, failure);
+      const failed = await recordFailedFire(loopId, failure);
+      return quietNote ? { ...failed, note: `${failed.note}; ${quietNote}` } : failed;
     }
     const maxAttempts = loop.caps?.maxItemAttempts ?? DEFAULT_MAX_ATTEMPTS;
     const grants = await deps.grants.byLoop(loopId);
@@ -974,14 +986,13 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
   }
 
   async function sweepStale(now: number): Promise<void> {
-    const loops = await deps.loops.listAcrossTenants();
-    for (const loop of loops) {
+    for (const loop of await deps.loops.list()) {
       if (
         loop.state === "enabled" &&
         loop.governor?.staleFireMs !== undefined &&
         now - (loop.lastFiredAt ?? loop.createdAt) > loop.governor.staleFireMs
       ) {
-        await inTenantOf(loop.tenantId, () => applyGovernor(loop.id, undefined, now));
+        await applyGovernor(loop.id, undefined, now);
       }
     }
   }
