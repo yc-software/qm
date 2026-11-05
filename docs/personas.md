@@ -1,131 +1,84 @@
 # Personas
 
-> Status: design, not implemented. Behind the `personas` feature flag (off by default).
+> Behind the `personas` feature flag (per person or org, off by default).
 
-A persona is a reusable agent configuration — a name, a soul, skills, credentials and
-a default runtime — that people can chat with in any context. A project or channel
-decides **who is in the room and what data is shared**; a persona decides **how the
-agent behaves and what it brings**. Today a scope bundles both; a persona is a scope
-the agent *wears* rather than one it *lives in*.
+A persona is a reusable agent — a name, icon, description and instructions, plus skills,
+notes and credentials — that people can use in any conversation. The conversation still
+decides **who is in the room and where writes land**; the persona decides **how the agent
+behaves and what it brings**. A persona is a scope, `persona:<id>`, that a conversation
+_wears_ rather than one it _lives in_.
 
-## Shape
-
-A persona is a new scope kind, `persona:<id>`. Everything it carries already keys off
-scopes, so nothing new is stored for it:
-
-| Part | Where it lives (existing) |
-|---|---|
-| Soul / system prompt | `soul_configs` row for `persona:<id>` |
-| Skills | skills homed in `persona:<id>` |
-| Credentials | keychain grants to `persona:<id>` |
-| Default runtime | scoped runtime setting for `persona:<id>` |
-| Notes / knowledge | memory notebook for `persona:<id>` (read-only in turns, curated by writers) |
-
-The only new record is the persona's identity, in a typed table:
+## Storage
 
 ```sql
 CREATE TABLE personas (
-  id             TEXT        PRIMARY KEY,           -- uuid; scope is persona:<id>
-  name           TEXT        NOT NULL CHECK (length(name) BETWEEN 1 AND 200),
+  id             TEXT        PRIMARY KEY,           -- scope is persona:<id>
+  name           TEXT        NOT NULL CHECK (length(btrim(name)) BETWEEN 1 AND 200),
   description    TEXT        NOT NULL DEFAULT '',
+  instructions   TEXT        NOT NULL DEFAULT '',
   icon_kind      TEXT        CHECK (icon_kind IN ('emoji', 'custom')),
   icon_value     TEXT,
   forked_from_id TEXT,                              -- no FK: the source may be deleted
-  created_by     UUID        NOT NULL REFERENCES users(id),
+  created_by     TEXT        NOT NULL,
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   CHECK ((icon_kind IS NULL) = (icon_value IS NULL))
 );
+
+CREATE TABLE persona_access (
+  persona_id       TEXT        NOT NULL REFERENCES personas(id) ON DELETE CASCADE,
+  grantee_scope_id TEXT        NOT NULL CHECK (grantee_scope_id ~ '^(personal|team|org|channel):.+'),
+  role             TEXT        NOT NULL CHECK (role IN ('owner', 'write', 'read')),
+  granted_by       TEXT        NOT NULL,
+  granted_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (persona_id, grantee_scope_id)
+);
+
+ALTER TABLE sessions ADD COLUMN persona_id TEXT;  -- nullable; no FK, a deleted persona just stops applying
 ```
+
+Everything else already keys off scopes: skills homed in `persona:<id>`, its memory
+notebook, and keychain grants to `persona:<id>`.
 
 ## Access
 
-Three roles. Every holder is a scope — a person (`personal:`), a team (`team:`), the
-whole org (`org:`) or a Slack channel (`channel:`) — and all three are rows in the existing `acl_grants` table, so
-sharing works like skills and apps today:
+| Role  | Can                                                                         |
+| ----- | --------------------------------------------------------------------------- |
+| owner | everything below, plus share, attach credentials, delete                    |
+| write | edit name, description, instructions and icon; add or edit its skills; chat |
+| read  | chat; see its instructions, access list and attached credential names       |
 
-| Role | Can | Row (`owner_scope_id`, `path`, `grantee_scope_id`, `permission`) |
-|---|---|---|
-| Owner | everything below, plus attach credentials, share, delete | `persona:4b0c…`, `persona:4b0c…`, `team:ops`, `owner` |
-| Writer | edit soul, skills, runtime and notes; chat | `persona:4b0c…`, `persona:4b0c…`, `personal:U456`, `write` |
-| Reader | chat; view the config summary (credential names, never secrets) | `persona:4b0c…`, `persona:4b0c…`, `org:acme`, `read` |
+Holders are people (`personal:`), teams (`team:`), the org (`org:`) or Slack channels
+(`channel:`). A channel grant only applies to conversations in that channel. A person's
+role is the highest one reaching them. Every persona keeps at least one owner.
 
-A person's role is the highest granted to them, their teams or the org. A persona always
-keeps at least one owner. `Permission` gains `owner`; only `persona:` refs use it.
+Checks sit where every path already flows: turn resolution (below) and the scope checks
+(`canReadScope` / `canWriteScope` / `canManageScope`), so skill moves into a persona need
+write. Only an owner can attach a credential, only their own, and only on a turn they
+sent; readers use it through the persona but never hold it.
 
-Enforcement sits at the two layers every path already flows through:
+## Turns
 
-1. **Turns** — resolution adds the persona scope only when the person whose message (or
-   cron) drives the turn holds a role. Otherwise the turn runs without it and a note
-   says why.
-2. **Writes** — `canManageScope` / `managesArtifactHome` answer for `persona:` scopes:
-   writer or owner for soul, skills, runtime and notes; owner for credential grants,
-   access and delete.
+A session's `persona_id` is set from the Personas page ("Chat") or by the agent
+(`PUT /v1/sessions/:id/persona`). On each turn, if the sender holds a role on the persona
+(counting the conversation's channel), the turn:
 
-A `channel:` grant (normally `read`) means anyone in that channel can use the persona
-**there** — it confers nothing outside the channel. That is how `acl_grants` already
-matches channel grantees (the session's scope must be the channel), so it needs no new
-check.
+- reads `persona:<id>` as an extra read-only scope (its skills and notes);
+- offers keychain grants to `persona:<id>` alongside the conversation's own;
+- adds a `## Persona` block after the organization and conversation instructions.
 
-Credentials can only be attached by an owner, so readers use them *through* the persona
-without being able to take them elsewhere.
-
-## Using a persona
-
-A session gets an optional `persona_id`. Set it when starting a chat ("Chat with Ada"
-on the personas page) or switch an existing session. When set, resolution:
-
-- adds `persona:<id>` to the turn's read-only scopes (skills, notebook);
-- includes keychain grants to `persona:<id>` alongside the context's;
-- composes the soul as org → persona → context guidance, and uses the persona's runtime
-  unless the session overrides it;
-- adds one context note: you're acting as *Ada* in *this context*; skills and
-  credentials come from Ada, audience and data rules from the context.
-
-### In Slack channels
-
-Owners add channels from the persona's page or by asking the agent ("give Ada
-#finance-ops"), which writes a `channel:` grant and can mark the persona as the
-channel's **default**: new threads there start with `persona_id` set, so people just
-talk to QM and get Ada. The default lives in a new scoped-config table, `channel_persona_defaults`
-(one row per channel); without one, anyone can still say "use Ada" in a thread and the agent
-switches that session. Removing the grant clears the default.
-
-Writes (memory, files, crons) stay in the context's own scope, as now. In a shared
-channel everyone present sees the replies; only the person invoking needs a role.
+If the sender has no role, the persona is skipped and the block says so. Writes (memory,
+files, crons) stay in the conversation's scope.
 
 ## Forking
 
-A `persona-fork` skill, built only from the existing APIs: create a persona owned by
-the forker, copy the soul, runtime and skills (snapshots, not links), record
-`forkedFrom`, then list the credentials the source uses and offer to attach the
-forker's own. Credentials and grants are never copied. Forking needs read access.
+The `persona-fork` skill uses only these APIs: create a persona with `forkedFromId`, copy
+instructions, icon and description, copy skills as snapshots, then offer to attach the
+forker's own credentials. Credentials and access are never copied.
 
-## Personas page
+## API
 
-`/personas` in the web UI, on the same group-by backbone as the other artifact pages:
-every persona you hold a role on, grouped by role, with icon, name, owner(s) and
-description. Row actions: Chat, Fork, and Edit / Share for writers and owners.
-
-## Schema and config changes
-
-- New table `personas` (above).
-- `sessions.persona_id TEXT NULL` — nullable, no backfill.
-- `acl_grants`: no DDL; new rows with `path` `persona:<id>` and `permission` `owner`
-  in addition to `read`/`write`.
-- New table `channel_persona_defaults`:
-  ```sql
-  CREATE TABLE channel_persona_defaults (
-    channel_scope_id TEXT        PRIMARY KEY,       -- channel:C…
-    persona_id       TEXT        NOT NULL REFERENCES personas(id) ON DELETE CASCADE,
-    set_by           UUID        NOT NULL REFERENCES users(id),
-    set_at           TIMESTAMPTZ NOT NULL DEFAULT now()
-  );
-  ```
-- New scope kind `persona` in existing scope-id text columns; no DDL.
-- New feature flag `personas`, per person or org, off by default. No env vars.
-
-## Later, not now
-
-@-mentioning or DMing a persona directly; a project naming a default persona;
-swarm workers spawned as personas.
+`GET|POST /v1/personas`, `GET|PATCH|DELETE /v1/personas/:id`,
+`PUT /v1/personas/:id/access`, `POST /v1/personas/:id/credentials`,
+`DELETE /v1/personas/:id/credentials/:grantId`, `PUT /v1/sessions/:id/persona`. Listed in
+`/v1/apis` when the flag is on.
