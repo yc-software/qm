@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import type { IncomingMessage } from "node:http";
-import { after, before, describe, it } from "node:test";
+import { after, before, describe, it } from "./support/unbound-test.ts";
 import { EMPTY_TENANT, inboundKey, withInboundTenant } from "../src/api/inbound-tenant.ts";
 import { boundTenant, withoutTenant, withTenant } from "../src/tenants/context.ts";
 import { tenantLookup, type TenantKey, type TenantLookup } from "../src/tenants/lookup.ts";

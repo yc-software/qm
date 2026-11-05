@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { after, before, describe, it } from "node:test";
+import { after, before, describe, it } from "./support/unbound-test.ts";
 import { createPostgresMap } from "../src/persistence/durable-map.ts";
 import { claimThenBind } from "../src/tenants/claim.ts";
 import { currentTenant, withTenant, withoutTenant } from "../src/tenants/context.ts";

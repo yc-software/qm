@@ -1,4 +1,4 @@
-import { after, before, test } from "node:test";
+import { after, before, test } from "./support/unbound-test.ts";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import pg from "pg";

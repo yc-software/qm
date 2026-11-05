@@ -126,6 +126,10 @@ function mapMigrations(
   ];
 }
 
+export function durableMapMigrations(table: string): PgMigrationDefinition[] {
+  return mapMigrations(table, [], durableMapTenancy(table), []);
+}
+
 export function createPostgresMap<T>(
   pg: PgPool,
   table: string,

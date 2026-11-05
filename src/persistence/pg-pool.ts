@@ -284,16 +284,36 @@ async function lockSchema(client: PoolClient, name: string): Promise<void> {
   }
 }
 
+function unmigrated(migration: PgMigration): Error {
+  const table = /\b(?:CREATE|ALTER)\s+(?:UNLOGGED\s+)?TABLE\s+(?:IF\s+(?:NOT\s+)?EXISTS\s+)?([a-z_][a-z0-9_.]*)/i.exec(
+    migration.statements.join("\n"),
+  )?.[1];
+  const message = `misconfiguration: migration ${migration.id}${table ? ` for table ${table}` : ""} has not been applied and this database login does not own the schema; run the migrations as the database owner before starting`;
+  console.error(`[pg-pool] ${message}`);
+  return new Error(message);
+}
+
 export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigration[]): Promise<void> {
   if (!migrations.length) return;
   const client = await pool.connect();
   let discard: Error | undefined;
   try {
     await lockSchema(client, "qm:schema-migrations");
+    let owns: boolean | undefined;
+    const mayMigrate = async (migration: PgMigration): Promise<void> => {
+      owns ??=
+        (
+          await client.query<{ owns: boolean }>(
+            "SELECT pg_has_role(current_user, nspowner, 'USAGE') AS owns FROM pg_namespace WHERE nspname = current_schema()",
+          )
+        ).rows[0]?.owns === true;
+      if (!owns) throw unmigrated(migration);
+    };
     const ledger = await client.query<{ present: boolean }>("SELECT to_regclass($1) IS NOT NULL AS present", [
       PG_MIGRATIONS_TABLE,
     ]);
     if (!ledger.rows[0]?.present) {
+      await mayMigrate(migrations[0]!);
       await client.query(
         `CREATE TABLE IF NOT EXISTS ${PG_MIGRATIONS_TABLE}(
         id TEXT PRIMARY KEY,
@@ -315,6 +335,7 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
         }
         continue;
       }
+      await mayMigrate(migration);
       if (migration.autocommit) {
         for (const statement of migration.statements) await client.query(statement);
         await client.query(`INSERT INTO ${PG_MIGRATIONS_TABLE}(id, checksum) VALUES ($1, $2)`, [
