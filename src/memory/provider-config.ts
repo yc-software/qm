@@ -6,6 +6,7 @@ const KINDS = new Set<ScopeKind>(["personal", "channel", "team", "org", "group"]
 const ID = /^[a-z][a-z0-9-]{0,62}$/;
 const ARG = /^[a-zA-Z_][a-zA-Z0-9_]{0,63}$/;
 const ENV = /^[A-Z][A-Z0-9_]*$/;
+export const MAX_PROVIDER_TIMEOUT_MS = 30_000;
 
 interface McpMemoryAuthConfig {
   clientId: string;
@@ -155,7 +156,7 @@ export function parseMemoryProviderConfig(
       throw new Error(`memory provider ${id}.attestActor must be true or false on an mcp provider`);
     if (raw.type === "memorable") return parseMemorableProvider(raw, id, env);
     if (raw.type !== "mcp") throw new Error(`memory provider ${id} has unsupported type; use "mcp" or "memorable"`);
-    const timeoutMs = timeout(raw.timeoutMs, `memory provider ${id}.timeoutMs`, 3_000, 30_000);
+    const timeoutMs = timeout(raw.timeoutMs, `memory provider ${id}.timeoutMs`, 3_000, MAX_PROVIDER_TIMEOUT_MS);
     return {
       id,
       type: "mcp" as const,
@@ -198,5 +199,13 @@ export function parseMemoryProviderConfig(
       ...(typeof raw.failOpen === "boolean" ? { failOpen: raw.failOpen } : {}),
     };
   });
+  for (const [i, route] of routes.entries()) {
+    const target = providerById.get(route.provider);
+    const shared = route.scopes.filter((scope) => scope !== "personal" && parseScopeId(scope).kind !== "personal");
+    if (target?.type === "mcp" && target.attestActor && shared.length)
+      throw new Error(
+        `memory route ${i}: provider ${route.provider} sets attestActor, so it may serve only personal scopes, not ${shared.join(", ")}; an attested read returns that member's private memory, which a shared conversation would show to everyone in it (docs/memory-providers.md#attesting-the-member-attestactor)`,
+      );
+  }
   return { providers, routes };
 }

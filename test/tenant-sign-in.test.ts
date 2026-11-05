@@ -107,6 +107,18 @@ function start(identity: IdentityService, tenants: DirectoryStore["tenantsForEma
   };
 }
 
+const linkPrincipal = (tenant: string, alias: string, canonical: string) =>
+  owner.q(
+    `WITH u AS (
+       INSERT INTO users(tenant_id, primary_alias) VALUES ($1, $3)
+       ON CONFLICT (tenant_id, primary_alias) DO UPDATE SET primary_alias = EXCLUDED.primary_alias RETURNING id
+     )
+     INSERT INTO user_links(tenant_id, alias_id, user_id, evidence, created_at)
+     SELECT $1, $3, id, 'primary', now() FROM u UNION ALL SELECT $1, $2, id, 'test', now() FROM u
+     ON CONFLICT DO NOTHING`,
+    [tenant, alias, canonical],
+  );
+
 test("a company admin is found by email or sign-in principal, directly or through a principal link, with no directory row", () =>
   withoutTenant(async () => {
     const grant = (tenant: string, principal: string) =>
@@ -117,11 +129,8 @@ test("a company admin is found by email or sign-in principal, directly or throug
     await grant(alpha, "Founder@Copied.test");
     await grant(beta, "oidc:issuer:direct");
     await grant(beta, "linked@copied.test");
-    await owner.q(
-      `INSERT INTO principal_links(tenant_id, id, json) VALUES ($1, 'oidc:issuer:linked', '{"canonicalId":"linked@copied.test"}'),
-        ($2, 'oidc:issuer:elsewhere', '{"canonicalId":"linked@copied.test"}')`,
-      [beta, alpha],
-    );
+    await linkPrincipal(beta, "oidc:issuer:linked", "linked@copied.test");
+    await linkPrincipal(alpha, "oidc:issuer:elsewhere", "linked@copied.test");
     try {
       assert.deepEqual(await directory.tenantsForEmail!("founder@copied.test"), [{ id: alpha, brandName: "Alpha" }]);
       assert.deepEqual(await directory.tenantsForPrincipal!("oidc:issuer:direct"), [{ id: beta }]);
@@ -132,7 +141,9 @@ test("a company admin is found by email or sign-in principal, directly or throug
       assert.deepEqual(await directory.tenantsForPrincipal!("oidc:issuer:stranger"), []);
     } finally {
       await owner.q(`DELETE FROM admin_grants WHERE scope_id = 'org:x'`);
-      await owner.q(`DELETE FROM principal_links WHERE id LIKE 'oidc:issuer:%'`);
+      await owner.q(
+        `DELETE FROM users WHERE id IN (SELECT user_id FROM user_links WHERE alias_id LIKE 'oidc:issuer:%')`,
+      );
     }
   }));
 
@@ -215,15 +226,9 @@ test("a trusted principal maps to the tenants whose principal links name it, thr
   withoutTenant(async () => {
     const srv = start(identityAdmitting(undefined, []), async () => []);
     t.after(srv.close);
-    const link = (tenant: string, alias: string, canonical: string) =>
-      owner.q(
-        `INSERT INTO principal_links(tenant_id, id, json) VALUES ($1, $2, jsonb_build_object('principalId', $2::text, 'canonicalId', $3::text))
-         ON CONFLICT DO NOTHING`,
-        [tenant, alias, canonical],
-      );
-    await link(alpha, "oidc:issuer:both", "both@shared.test");
-    await link(beta, "oidc:issuer:both", "both@shared.test");
-    await link(beta, "oidc:issuer:one", "bob@beta.test");
+    await linkPrincipal(alpha, "oidc:issuer:both", "both@shared.test");
+    await linkPrincipal(beta, "oidc:issuer:both", "both@shared.test");
+    await linkPrincipal(beta, "oidc:issuer:one", "bob@beta.test");
     const tenantsOf = async (principal: string) =>
       (await srv.get(`/v1/auth/broker/principal-tenants?principal=${encodeURIComponent(principal)}`)).body;
     const both = await tenantsOf("oidc:issuer:both");

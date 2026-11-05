@@ -98,6 +98,33 @@ export const PRINCIPAL_ADMIN_TENANTS: PgMigrationDefinition = {
   ],
 };
 
+export const PRINCIPAL_USER_TENANTS: PgMigrationDefinition = {
+  id: "tenancy/lookups/0006-principal-user-tenants",
+  statements: [
+    `DO $principal_tenants$
+BEGIN
+  EXECUTE format(
+    $function$CREATE OR REPLACE FUNCTION qm_tenants_for_principal(principal text) RETURNS SETOF uuid
+      LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = %I, pg_temp AS $body$ BEGIN
+      RETURN QUERY
+        WITH linked AS (
+          SELECT l.tenant_id, l.alias_id, u.primary_alias FROM user_links l
+            JOIN users u ON u.tenant_id = l.tenant_id AND u.id = l.user_id
+           WHERE l.alias_id <> u.primary_alias
+        )
+        SELECT k.tenant_id FROM linked k WHERE k.alias_id = principal OR k.primary_alias = principal
+        UNION
+        SELECT g.tenant_id FROM admin_grants g WHERE g.principal_id = principal
+        UNION
+        SELECT g.tenant_id FROM admin_grants g JOIN linked k ON k.tenant_id = g.tenant_id
+          WHERE (k.alias_id = principal AND g.principal_id = k.primary_alias)
+             OR (k.primary_alias = principal AND g.principal_id = k.alias_id);
+    END $body$$function$,
+    current_schema());
+END $principal_tenants$`,
+  ],
+};
+
 export const SLACK_BRIDGE_TENANT: PgMigrationDefinition = {
   id: "tenancy/lookups/0004-slack-bridge",
   statements: [

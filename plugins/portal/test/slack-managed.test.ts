@@ -17,7 +17,7 @@ const core = createServer(async (req, res) => {
   res.end('{"ready":false}');
 });
 await new Promise<void>((resolve) => core.listen(0, "127.0.0.1", resolve));
-process.env.PORTAL_PUBLIC_URL = "http://portal.test";
+process.env.PUBLIC_WEB_URL = "http://portal.test";
 process.env.PORTAL_SESSION_SECRET = "managed-test-session-secret";
 process.env.PORTAL_IDENTITY_SECRET = "managed-test-identity-secret";
 process.env.CORE_SIGNING_SECRET = "managed-test-core-secret";

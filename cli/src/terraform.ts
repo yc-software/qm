@@ -1,11 +1,10 @@
-import { awsCoreHostnames } from "./aws-routing.ts";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { awsWorkloadArchitecture, type QmConfig } from "./config.ts";
 import { CliError, ok } from "./log.ts";
 import { computedSecrets } from "./secrets.ts";
-import { isServiceName, serviceDef } from "./services.ts";
+import { isServiceName, PUBLIC_PORT, serviceDef } from "./services.ts";
 import { canonicalJson } from "./canonical-json.ts";
 
 const DERIVED_VARS = new Set([
@@ -14,7 +13,6 @@ const DERIVED_VARS = new Set([
   "region",
   "cluster_name",
   "public_url",
-  "core_public_hosts",
   "cloud_map_namespace",
   "secrets_prefix",
   "github_oidc_provider_arn",
@@ -147,22 +145,10 @@ function managedTaskRoles(existing: string): Set<string> {
 
 function derivedValues(
   config: QmConfig,
-  declared: readonly string[],
   managedRoles = new Set<string>(),
 ): { strings: Record<string, string>; json: Record<string, unknown> } {
   if (!config.aws) throw new CliError("terraform rendering requires target aws and an aws block");
   const aws = config.aws;
-  if (aws.deployEnvironment && !declared.includes("github_environment")) {
-    throw new CliError(
-      "the vendored AWS scaffold predates aws.deployEnvironment; update infra/variables.tf and infra/main.tf from the current scaffold before configuring it",
-    );
-  }
-  const corePublicHosts = config.services.includes("portal") ? awsCoreHostnames(config) : [];
-  if (corePublicHosts.length && !declared.includes("core_public_hosts")) {
-    throw new CliError(
-      "the vendored AWS scaffold predates split portal/core host routing; update infra/variables.tf and infra/main.tf from the current scaffold before configuring apiUrl or AWS_DEPLOY_APPS_DOMAIN",
-    );
-  }
   const services = Object.fromEntries(
     Object.entries(aws.services).map(([name, service]) => {
       const manageTaskRole =
@@ -177,6 +163,7 @@ function derivedValues(
           memory: service!.memory,
           architecture: awsWorkloadArchitecture(config, name),
           internal_port: isServiceName(name) ? serviceDef(name).docker.internalPort : 8080,
+          ...(name === "core" ? { public_port: PUBLIC_PORT } : {}),
           ...(service!.publicPaths ? { public_paths: service!.publicPaths } : {}),
           ...(service!.taskRoleArn ? { task_role_arn: service!.taskRoleArn } : {}),
           ...(service!.executionRoleArn ? { execution_role_arn: service!.executionRoleArn } : {}),
@@ -197,18 +184,15 @@ function derivedValues(
       cloud_map_namespace: aws.networking.cloudMapNamespace,
       secrets_prefix: aws.secretsPrefix,
       github_oidc_provider_arn: `arn:aws:iam::${aws.accountId}:oidc-provider/token.actions.githubusercontent.com`,
-      ...(declared.includes("github_environment") ? { github_environment: aws.deployEnvironment ?? "" } : {}),
+      github_environment: aws.deployEnvironment ?? "",
       object_store_bucket: awsObjectStoreBucket(config),
       transfer_lifecycle_prefix: `${config.env.core?.S3_PREFIX ?? ""}transfer/`,
       deploy_microvm_image: config.env.core?.AWS_DEPLOY_IMAGE?.trim() || config.orgId,
       deploy_microvm_execution_role_arn:
         config.env.core?.AWS_DEPLOY_EXEC_ROLE_ARN ?? `arn:aws:iam::${aws.accountId}:role/${aws.cluster}-microvm-exec`,
-      ...(declared.includes("db_instance_class") && aws.dbInstanceClass
-        ? { db_instance_class: aws.dbInstanceClass }
-        : {}),
+      ...(aws.dbInstanceClass ? { db_instance_class: aws.dbInstanceClass } : {}),
     },
     json: {
-      ...(declared.includes("core_public_hosts") ? { core_public_hosts: [...new Set(corePublicHosts)].sort() } : {}),
       services,
       secret_names: secrets.map((secret) => secret.name),
     },
@@ -230,13 +214,13 @@ export function awsObjectStoreBucket(config: QmConfig): string {
 export function terraformVars(
   config: QmConfig,
   existing = "",
-  declared: string[] = [...Object.keys(OPERATOR_DEFAULTS), "github_environment"],
+  declared: string[] = Object.keys(OPERATOR_DEFAULTS),
 ): string {
   assertSafeAssumeRoleTransition(config, existing);
-  const { strings, json } = derivedValues(config, declared, managedTaskRoles(existing));
+  const { strings, json } = derivedValues(config, managedTaskRoles(existing));
   const line = (name: string, value: string): string => `${name.padEnd(19)} = ${value}`;
   const lines = Object.entries(strings).map(([name, value]) => line(name, JSON.stringify(value)));
-  if (!config.aws?.dbInstanceClass && declared.includes("db_instance_class")) {
+  if (!config.aws?.dbInstanceClass) {
     const preserved = hclAssignment(existing, "db_instance_class");
     if (preserved !== undefined) lines.push(preserved);
   }
@@ -251,15 +235,8 @@ export function terraformVars(
   return lines.join("\n");
 }
 
-export function terraformVarsDrift(
-  config: QmConfig,
-  existing: string,
-  declared: string[] = [
-    ...(hclAssignment(existing, "github_environment") === undefined ? [] : ["github_environment"]),
-    ...(hclAssignment(existing, "core_public_hosts") === undefined ? [] : ["core_public_hosts"]),
-  ],
-): string[] {
-  const { strings, json } = derivedValues(config, declared, managedTaskRoles(existing));
+export function terraformVarsDrift(config: QmConfig, existing: string): string[] {
+  const { strings, json } = derivedValues(config, managedTaskRoles(existing));
   const drift: string[] = [];
   for (const [name, value] of Object.entries(strings)) {
     if (hclString(existing, name) !== value) drift.push(name);
@@ -276,44 +253,15 @@ function declaredInDir(configDir: string): string[] | undefined {
 }
 
 export function assertTerraformScaffoldSupportsConfig(config: QmConfig, configDir: string): void {
-  const services = Object.values(config.aws?.services ?? {});
-  const hasPublicPaths = services.some((service) => service?.publicPaths?.length);
-  const hasAssumeRoles = services.some((service) => service?.assumeRoleArns !== undefined);
-  const hasDatabaseOverrides = config.aws?.dbInstanceClass !== undefined;
-  const hasEgressProxy = Boolean(config.aws?.services["egress-proxy"]);
-  if (!hasPublicPaths && !hasAssumeRoles && !hasDatabaseOverrides && !hasEgressProxy) return;
-  const tfvarsPath = join(configDir, "infra", "terraform.tfvars");
-  if (!existsSync(tfvarsPath)) return;
-  const variablesPath = join(configDir, "infra", "variables.tf");
-  const mainPath = join(configDir, "infra", "main.tf");
-  const variables = existsSync(variablesPath) ? readFileSync(variablesPath, "utf8") : "";
-  const main = existsSync(mainPath) ? readFileSync(mainPath, "utf8") : "";
-  if (
-    hasDatabaseOverrides &&
-    (!/variable\s+"db_instance_class"/.test(variables) || !/instance_class\s*=\s*var\.db_instance_class/.test(main))
-  ) {
+  if (!config.aws || !existsSync(join(configDir, "infra", "terraform.tfvars"))) return;
+  const read = (name: string): string => {
+    const path = join(configDir, "infra", name);
+    return existsSync(path) ? readFileSync(path, "utf8") : "";
+  };
+  const scaffoldVersion = Number(hclJson(read("main.tf"), "qm_scaffold_version") ?? 0);
+  if (scaffoldVersion < 4) {
     throw new CliError(
-      "the vendored AWS scaffold predates aws.dbInstanceClass; update infra/variables.tf and infra/main.tf from the current scaffold before configuring it",
-    );
-  }
-  if (hasPublicPaths && (!/public_paths\s*=\s*optional/.test(variables) || !/public_path_services\s*=/.test(main))) {
-    throw new CliError(
-      "the vendored AWS scaffold predates aws.services.*.publicPaths; update infra/variables.tf and infra/main.tf before exposing plugins",
-    );
-  }
-  if (hasEgressProxy && !/resource\s+"aws_lb"\s+"egress_proxy"/.test(main)) {
-    throw new CliError(
-      "the vendored AWS scaffold predates the egress-proxy service; update infra/main.tf and infra/outputs.tf from the current scaffold before enabling it",
-    );
-  }
-  if (
-    hasAssumeRoles &&
-    (!/assume_role_arns\s*=\s*optional/.test(variables) ||
-      !/manage_task_role\s*=\s*optional/.test(variables) ||
-      !/qm_scaffold_version\s*=\s*3\b/.test(main))
-  ) {
-    throw new CliError(
-      "the vendored AWS scaffold predates aws.services.*.assumeRoleArns; update infra/variables.tf and infra/main.tf from the current scaffold before configuring it",
+      "the vendored AWS scaffold predates core serving the public front door; follow the AWS upgrade steps in the deployment guide to replace infra/main.tf and infra/variables.tf with the current scaffold",
     );
   }
 }

@@ -68,16 +68,13 @@ export function adminLoginUrl(options: {
 export function runAdminLogin(options: { configPath?: string; envFile?: string; email?: string }): void {
   const configPath = options.configPath ?? configPathInDir(process.cwd());
   const loaded = configPath ? loadConfigAt(configPath) : undefined;
-  if (loaded && (!loaded.config.services.includes("portal") || !loaded.config.services.includes("web-ui"))) {
-    throw new CliError("admin-login requires the portal and web-ui services");
-  }
   const env = readEnvFile(options.envFile ?? join(loaded ? dirname(loaded.path) : process.cwd(), ".env"));
   const secretValue = (name: string): string | undefined => deploymentSecretValue(name, env.get(name));
   const config = loaded?.config;
   note(
     adminLoginUrl({
-      publicUrl: config?.publicUrl ?? secretValue("PORTAL_PUBLIC_URL") ?? "",
-      secret: secretValue(config?.secretEnv?.portal?.PORTAL_SESSION_SECRET ?? "PORTAL_SESSION_SECRET") ?? "",
+      publicUrl: config?.publicUrl ?? secretValue("PUBLIC_WEB_URL") ?? "",
+      secret: secretValue(config?.secretEnv?.core?.PORTAL_SESSION_SECRET ?? "PORTAL_SESSION_SECRET") ?? "",
       adminGrants:
         config?.env.core?.ADMIN_GRANTS ?? secretValue(config?.secretEnv?.core?.ADMIN_GRANTS ?? "ADMIN_GRANTS") ?? "",
       email: options.email,

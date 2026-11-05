@@ -93,7 +93,8 @@ interface TenantReference {
   name: string;
   columns: string;
   references: string;
-  onDelete?: "CASCADE";
+  onDelete?: "CASCADE" | "SET NULL";
+  deferrable?: boolean;
 }
 
 export interface TenantTableOptions {
@@ -156,9 +157,14 @@ function swapKeys({ table, primaryKey, unique = [] }: TenantTable): string[] {
   ];
 }
 
-function tenantReference({ table, name, columns, references, onDelete }: TenantReference): string {
+function deleteAction(columns: string, onDelete: TenantReference["onDelete"]): string {
+  if (!onDelete) return "";
+  return onDelete === "SET NULL" ? ` ON DELETE SET NULL (${columns})` : ` ON DELETE ${onDelete}`;
+}
+
+function tenantReference({ table, name, columns, references, onDelete, deferrable }: TenantReference): string {
   return `ALTER TABLE ${table} ADD CONSTRAINT ${name}
-    FOREIGN KEY (tenant_id, ${columns}) REFERENCES ${references}${onDelete ? ` ON DELETE ${onDelete}` : ""}`;
+    FOREIGN KEY (tenant_id, ${columns}) REFERENCES ${references}${deleteAction(columns, onDelete)}${deferrable ? " DEFERRABLE INITIALLY DEFERRED" : ""}`;
 }
 
 export function tenantTables(

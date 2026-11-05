@@ -16,6 +16,7 @@ export interface CronFireStore {
   beginExclusive(cronId: string, entry: CronFireLogEntry, staleRunningMs: number): Promise<BeginFireResult>;
 
   sweepStranded(now: number, staleRunningMs: number, note: string): Promise<number>;
+  listRunning(firedAfter: number): Promise<CronFireRecord[]>;
 
   pruneEnded(opts: { endedBefore: number; keepPerCron: number }): Promise<number>;
   listByCron(cronId: string, opts?: { limit?: number }): Promise<{ runs: CronFireLogEntry[]; total: number }>;
@@ -66,6 +67,10 @@ const UPSERT_FIRE = `INSERT INTO cron_fires (${FIRE_COLUMNS})
 
 function fireParams(cronId: string, entry: CronFireLogEntry): unknown[] {
   return FIRE_COLUMN_DEFS.map((c) => c.value(cronId, entry));
+}
+
+function rowToRecord(r: Record<string, unknown>): CronFireRecord {
+  return { ...rowToEntry(r), cronId: String(r.cron_id) };
 }
 
 function rowToEntry(r: Record<string, unknown>): CronFireLogEntry {
@@ -190,6 +195,15 @@ export function createPostgresCronFireStore(connectionString: string): CronFireS
       return (await claimRows({ q }, "claim_stranded_cron_fires", [now, pgTextSafe(note), now - staleRunningMs]))
         .length;
     },
+    async listRunning(firedAfter) {
+      const rows = await q(
+        `SELECT ${FIRE_COLUMNS} FROM cron_fires
+          WHERE status = 'running' AND fired_at > $1
+          ORDER BY fired_at, fire_key`,
+        [firedAfter],
+      );
+      return rows.map(rowToRecord);
+    },
     async pruneEnded({ endedBefore, keepPerCron }) {
       return (await claimRows({ q }, "claim_pruned_cron_fires", [keepPerCron, endedBefore])).length;
     },
@@ -225,7 +239,7 @@ export function createPostgresCronFireStore(connectionString: string): CronFireS
           ORDER BY fired_at, fire_key`,
         [[...threadRefs]],
       );
-      return rows.map((r) => ({ ...rowToEntry(r), cronId: r.cron_id as string }));
+      return rows.map(rowToRecord);
     },
     async latestForThread(cronId, threadRef) {
       const rows = await q(

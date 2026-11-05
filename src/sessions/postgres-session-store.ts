@@ -239,6 +239,15 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return rows.map(rowToParticipantSession);
     },
 
+    async lastUserPreviews(sessionIds): Promise<Map<string, string>> {
+      if (!sessionIds.length) return new Map();
+      const rows = await q(
+        "SELECT id, last_user_preview FROM sessions WHERE id = ANY($1::text[]) AND last_user_preview IS NOT NULL",
+        [[...sessionIds]],
+      );
+      return new Map(rows.map((r) => [r.id as string, r.last_user_preview as string]));
+    },
+
     async sameScopeAncestors(threadRefs) {
       const rows = await q(
         `WITH RECURSIVE up(leaf_scope, id, scope_id, parent_id, depth, path) AS (

@@ -11,7 +11,8 @@ import { createMcpToolService } from "../src/mcp/mcp-tool-service.ts";
 import type { McpServer, McpServerStore } from "../src/mcp/mcp-server-store.ts";
 import { createIdentityService, type DeactivationRecord } from "../src/identity/identity-service.ts";
 import type { ExternalMember } from "../src/identity/external-members.ts";
-import { createPrincipalLinkService, type PrincipalLink } from "../src/identity/principal-links.ts";
+import { createPrincipalLinkService } from "../src/identity/principal-links.ts";
+import type { UserLink, UserLinkStore } from "../src/identity/user-store.ts";
 import { configStoreMaps, createConfigStore } from "../src/resolution/config-store.ts";
 import { createSpendLimits } from "../src/ratelimit/spend-limits.ts";
 import { createAdminGrantStore, type AdminGrant } from "../src/admin/admin-grant-store.ts";
@@ -45,6 +46,25 @@ function partition<T>(rows: Map<string, Map<string, T>>): Map<string, T> {
   const fresh = new Map<string, T>();
   rows.set(key, fresh);
   return fresh;
+}
+
+function tenantLinks(): UserLinkStore {
+  const rows = new Map<string, Map<string, UserLink>>();
+  const own = () => partition(rows);
+  return {
+    async links() {
+      return [...own().values()];
+    },
+    async link(link) {
+      own().set(link.principalId, link);
+      return link;
+    },
+    async unlink(aliasId) {
+      const row = own().get(aliasId) ?? null;
+      own().delete(aliasId);
+      return row;
+    },
+  };
 }
 
 function tenantMap<T>(): DurableMap<T> & { reads: string[] } {
@@ -339,7 +359,7 @@ test("MCP tool lists are loaded and refreshed per tenant", async (t) => {
 test("identity rosters and principal links are kept and refreshed per tenant", async () => {
   const deactivations = tenantMap<DeactivationRecord>();
   const externals = tenantMap<ExternalMember>();
-  const links = createPrincipalLinkService(tenantMap<PrincipalLink>(), noLock);
+  const links = createPrincipalLinkService(tenantLinks(), noLock);
   const identity = createIdentityService(deactivations, { externalMembers: externals, principalLinks: links });
   await withTenant(A, async () => {
     await identity.refresh(true);

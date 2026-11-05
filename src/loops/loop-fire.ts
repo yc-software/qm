@@ -57,6 +57,7 @@ import {
 import type { TriagePatch } from "./item-ledger.ts";
 import { adapterForItem } from "./sources/index.ts";
 import { claimThenBind } from "../tenants/claim.ts";
+import type { InboxQuietCheck } from "./inbox-quiet-check.ts";
 
 export interface LoopFireDeps {
   admittedWork?: AdmittedWork;
@@ -70,6 +71,7 @@ export interface LoopFireDeps {
   grants: ShipGrantStore;
   files: Pick<FileArtifactStore, "listOwnedByScopes" | "open">;
   trigger: TriggerDeps;
+  inboxQuiet?: InboxQuietCheck;
 }
 
 interface LoopFireResult {
@@ -755,11 +757,21 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     if (inboxSource(loop) && options?.enumerate !== false) {
       if (!isRunnable(loop)) return notRunnable(loop);
       const firedAt = Date.now();
+      const quiet = deps.inboxQuiet
+        ? await deps.items
+            .byLoop(loopId)
+            .then((items) => deps.inboxQuiet!(loop, items))
+            .catch((error: unknown) => ({ quiet: false as const, reason: `pre-check failed: ${errMessage(error)}` }))
+        : undefined;
+      const quietNote =
+        quiet && (quiet.quiet ? "inbox quiet: nothing new since the last pass" : `inbox sync ran: ${quiet.reason}`);
       let failure: unknown;
       try {
-        const outcome = await stageTurn(loop, `${fireKey}:sync`, threadRef, playbookText(loop, await voiceProfile()));
-        if (!outcome.ran && !outcome.authzFailed) return { status: "silent", note: "duplicate fire key" };
-        failure = stageFailure("inbox sync", outcome)?.error;
+        if (!quiet?.quiet) {
+          const outcome = await stageTurn(loop, `${fireKey}:sync`, threadRef, playbookText(loop, await voiceProfile()));
+          if (!outcome.ran && !outcome.authzFailed) return { status: "silent", note: "duplicate fire key" };
+          failure = stageFailure("inbox sync", outcome)?.error;
+        }
         if (failure === undefined) await triage(loop, fireKey, threadRef);
       } catch (error) {
         failure = error;
@@ -768,9 +780,10 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
         await deps.loops.recordScan(loopId, firedAt);
         await deps.loops.recordFireOutcome(loopId, "ok");
         await applyGovernor(loopId);
-        return { status: "silent" };
+        return { status: "silent", ...(quietNote ? { note: quietNote } : {}) };
       }
-      return recordFailedFire(loopId, failure);
+      const failed = await recordFailedFire(loopId, failure);
+      return quietNote ? { ...failed, note: `${failed.note}; ${quietNote}` } : failed;
     }
     const maxAttempts = loop.caps?.maxItemAttempts ?? DEFAULT_MAX_ATTEMPTS;
     const grants = await deps.grants.byLoop(loopId);

@@ -12,7 +12,7 @@ import {
   type DirectoryStore,
 } from "./directory-store.ts";
 import { createDirectorySync } from "./directory-sync.ts";
-import { PRINCIPAL_ADMIN_TENANTS, PRINCIPAL_TENANTS } from "../tenants/lookup.ts";
+import { PRINCIPAL_ADMIN_TENANTS, PRINCIPAL_TENANTS, PRINCIPAL_USER_TENANTS } from "../tenants/lookup.ts";
 import { tenantTables } from "../tenants/migrations.ts";
 import { withTenant } from "../tenants/context.ts";
 
@@ -164,6 +164,7 @@ BEGIN
 END $tenants_for_email$`,
     ],
   },
+  PRINCIPAL_USER_TENANTS,
 ];
 
 export function createPostgresDirectoryStore(connectionString: string): DirectoryStore {

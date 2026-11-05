@@ -7,8 +7,9 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { perTenant } from "../tenants/cache.ts";
 import { createMcpClient, mcpResultText, type McpAuth, type McpClient, type McpListing } from "./mcp-client.ts";
 import type { McpServer, McpServerStore } from "./mcp-server-store.ts";
-import { attestedPerson } from "../directory/person.ts";
+import { attestableAudience, attestedPerson, OutsideAudience } from "../directory/person.ts";
 import type { AddressFetch } from "../util/network.ts";
+import type { ScopeId } from "../types.ts";
 
 const REFRESH_INTERVAL_MS = 5 * 60_000;
 const COLD_TOOL_WAIT_MS = 1_000;
@@ -76,10 +77,16 @@ export interface McpToolDescriptor {
 export interface McpToolService {
   /** Current snapshot of injectable tools across enabled servers. */
   toolDefs(): Promise<McpToolDescriptor[]>;
-  toolDefsFor(principalId?: string): Promise<McpToolDescriptor[]>;
+  toolDefsFor(principalId?: string, scopeId?: ScopeId): Promise<McpToolDescriptor[]>;
   /** Call a namespaced tool. Returns the tool's text output (clamped). */
-  call(name: string, args: Record<string, unknown>, principalId?: string, approval?: string): Promise<string>;
-  needsApproval(name: string, args: Record<string, unknown>, principalId?: string): Promise<boolean>;
+  call(
+    name: string,
+    args: Record<string, unknown>,
+    principalId?: string,
+    approval?: string,
+    scopeId?: ScopeId,
+  ): Promise<string>;
+  needsApproval(name: string, args: Record<string, unknown>, principalId?: string, scopeId?: ScopeId): Promise<boolean>;
   /** Force a registry re-read + tools/list refresh (admin save path, tests). */
   refresh(): Promise<void>;
   probe(server: McpServer, principalId?: string): Promise<McpListing>;
@@ -132,6 +139,11 @@ function callResource(def: McpToolDescriptor, args: Record<string, unknown>): st
   return `${def.serverId}/${typeof args.tool === "string" ? args.tool : String(args.operation)}`;
 }
 
+function refuseOutsideAudience(server: McpServer, principalId: string | undefined, scopeId: ScopeId | undefined): void {
+  if (server.attestActor && !attestableAudience(principalId, scopeId))
+    throw new OutsideAudience(`MCP server ${server.id}`);
+}
+
 function headersFor(server: McpServer, principalId: string | undefined, approval?: string): Record<string, string> {
   if (!server.attestActor || server.credentialScope === "per-user") return {};
   const actor = attestedPerson(principalId, `MCP server ${server.id}`);
@@ -176,6 +188,7 @@ export function createMcpToolService(opts: {
     clients: Map<string, { client: McpClient; server: McpServer }>;
     snapshot: McpToolDescriptor[];
     perUserServers: Map<string, McpServer>;
+    attestedServers: Set<string>;
     catalogs: LRUCache<string, Promise<RemoteTool[]>>;
     loadedAt?: number;
     pending?: Promise<void>;
@@ -183,6 +196,7 @@ export function createMcpToolService(opts: {
     clients: new Map(),
     snapshot: [],
     perUserServers: new Map(),
+    attestedServers: new Set(),
     catalogs: new LRUCache({ max: CATALOG_CACHE_MAX, ttl: CATALOG_TTL_MS }),
   }));
 
@@ -354,6 +368,7 @@ export function createMcpToolService(opts: {
     const seen = new Set<string>();
     state.snapshot = next.filter((t) => (seen.has(t.name) ? false : (seen.add(t.name), true)));
     state.perUserServers = new Map(servers.filter((s) => !s.catalog && s.auth === "oauth-user").map((s) => [s.id, s]));
+    state.attestedServers = new Set(servers.filter((s) => s.attestActor).map((s) => s.id));
   }
 
   async function connected(server: McpServer, principalId: string | undefined): Promise<boolean> {
@@ -385,8 +400,11 @@ export function createMcpToolService(opts: {
     return state;
   }
 
-  async function toolDefsFor(principalId?: string): Promise<McpToolDescriptor[]> {
-    const { snapshot: current, perUserServers: gated } = await loaded(COLD_TOOL_WAIT_MS);
+  async function toolDefsFor(principalId?: string, scopeId?: ScopeId): Promise<McpToolDescriptor[]> {
+    const { snapshot, perUserServers: gated, attestedServers } = await loaded(COLD_TOOL_WAIT_MS);
+    const current = attestableAudience(principalId, scopeId)
+      ? snapshot
+      : snapshot.filter((t) => !attestedServers.has(t.serverId));
     if (!gated.size) return current;
     const withTools = new Set(current.filter((t) => gated.has(t.serverId) && !t.signIn).map((t) => t.serverId));
     const ready = new Set<string>();
@@ -407,7 +425,7 @@ export function createMcpToolService(opts: {
   return {
     toolDefs: async () => (await loaded()).snapshot,
     toolDefsFor,
-    async needsApproval(name, args, principalId) {
+    async needsApproval(name, args, principalId, scopeId) {
       const def = (await loaded()).snapshot.find((t) => t.name === name);
       if (!def) throw new Error(`unknown MCP tool: ${name}`);
       if (!def.catalog) return def.needsApproval;
@@ -415,18 +433,20 @@ export function createMcpToolService(opts: {
       try {
         const server = await opts.servers.get(def.serverId);
         if (!server || !server.enabled) throw new Error(`MCP server ${def.serverId} is not available`);
+        refuseOutsideAudience(server, principalId, scopeId);
         return mcpToolNeedsApproval(server, (await catalogEntry(server, principalId, args.tool)).annotations);
       } catch (e) {
         record("call", callResource(def, args), `approval check error: ${errMessage(e)}`, principalId);
         throw e;
       }
     },
-    async call(name, args, principalId, approval) {
+    async call(name, args, principalId, approval, scopeId) {
       const def = (await loaded()).snapshot.find((t) => t.name === name);
       if (!def) throw new Error(`unknown MCP tool: ${name}`);
       const server = await opts.servers.get(def.serverId);
       if (!server || !server.enabled) throw new Error(`MCP server ${def.serverId} is not available`);
       try {
+        refuseOutsideAudience(server, principalId, scopeId);
         if (def.catalog) return await callCatalog(server, args, principalId, approval);
         const client = await callerClient(server, principalId);
         if (def.signIn) {

@@ -27,13 +27,7 @@ function manifestPath(configDir: string, name: "slack-app-manifest.yml" | "slack
 }
 
 export function deploymentOutputs(config: QmConfig, configDir: string): DeploymentOutputs {
-  if (
-    !config.services.includes("slack") ||
-    !config.services.includes("portal") ||
-    !config.services.includes("web-ui")
-  ) {
-    throw new CliError("outputs requires the slack, web-ui, and portal services");
-  }
+  if (!config.services.includes("slack")) throw new CliError("outputs requires the slack service");
   const botPath = manifestPath(configDir, "slack-app-manifest.yml");
   const bot = readFileSync(botPath, "utf8");
   const expected = renderSlackManifests(config);

@@ -43,6 +43,10 @@ export function actsAsScope(principalId: string, scope: ScopeId): boolean {
   return principalId === scopeActor(scope);
 }
 
+export function isSystemActor(actorId: string | undefined): boolean {
+  return !!actorId?.startsWith("system:");
+}
+
 export function parseScopeId(id: ScopeId): { kind: ScopeKind | null; ref: string } {
   const sep = id.indexOf(":");
   if (sep < 0) return { kind: null, ref: "" };
@@ -146,6 +150,7 @@ export interface Session {
   surfaceBinding?: TurnSurfaceOrigin;
   runtime?: TurnRuntime;
   lastActivityAt?: number;
+  lastUserPreview?: string | null;
   hasEntries?: boolean;
   working?: boolean;
   awaitingInput?: boolean;
@@ -388,6 +393,7 @@ export interface TurnRequest {
   gatewayContext?: GatewayContext;
   unattendedGrants?: string[];
   cronScript?: import("./triggers/types.ts").CronScript;
+  infrequentCron?: boolean;
   botActor?: boolean;
   conversationHeader?: string;
   priorTurns?: ConversationTurn[];

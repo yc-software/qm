@@ -152,6 +152,7 @@ export interface CoreSession {
   color?: string | null;
   unread?: boolean;
   lastActivityAt?: number;
+  lastUserPreview?: string | null;
   working?: boolean;
   awaitingInput?: boolean;
   lastTurnFailed?: boolean;
