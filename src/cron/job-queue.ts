@@ -65,8 +65,8 @@ export async function installCronQueue(databaseUrl: string, schema: string = "pg
     await boss.createQueue(FIRE_QUEUE, FIRE_QUEUE_OPTIONS);
     await pg.q(grantLikePublic(schema));
   } finally {
-    await boss.stop({ close: true, graceful: false });
-    await pg.close();
+    await boss.stop({ close: true, graceful: false }).catch(swallowAs("cron queue install: cleanup", undefined));
+    await pg.close().catch(swallowAs("cron queue install: cleanup", undefined));
   }
 }
 

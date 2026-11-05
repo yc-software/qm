@@ -6,7 +6,7 @@ import type { Config } from "./config.ts";
 import { buildApp, serverDeps } from "./wiring.ts";
 import { createServer } from "./api/server.ts";
 import { dockerDaemonFailure } from "./deploy/docker-deploy-provider.ts";
-import { errMessage, reportFailureAs } from "./util/errors.ts";
+import { errMessage, reportFailureAs, swallowAs } from "./util/errors.ts";
 import { slackAccountConfigsFromEnv, slackPluginConfigFromEnv, startSlackPlugin } from "./slack/index.ts";
 import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
 import { createTenantSlackRuntimes } from "./surfaces/slack-tenants.ts";
@@ -68,7 +68,7 @@ export async function startQm(
   });
 
   await inBootTenant(tenant, async () => {
-    if (tenant) await loadTenant().catch(() => undefined);
+    if (tenant) await loadTenant().catch(swallowAs("boot tenant load", undefined));
     await built.deploymentLayerReady;
     built.deploymentLayerRefresh.start();
   });
