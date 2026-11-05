@@ -40,8 +40,8 @@ The only new record is the persona's identity:
 
 ## Access
 
-Three roles. Every holder is a scope — a person (`personal:`), a team (`team:`) or the
-whole org (`org:`) — and all three are rows in the existing `acl_grants` table, so
+Three roles. Every holder is a scope — a person (`personal:`), a team (`team:`), the
+whole org (`org:`) or a Slack channel (`channel:`) — and all three are rows in the existing `acl_grants` table, so
 sharing works like skills and apps today:
 
 | Role | Can | Row (`owner_scope_id`, `path`, `grantee_scope_id`, `permission`) |
@@ -62,6 +62,11 @@ Enforcement sits at the two layers every path already flows through:
    writer or owner for soul, skills, runtime and notes; owner for credential grants,
    access and delete.
 
+A `channel:` grant (normally `read`) means anyone in that channel can use the persona
+**there** — it confers nothing outside the channel. That is how `acl_grants` already
+matches channel grantees (the session's scope must be the channel), so it needs no new
+check.
+
 Credentials can only be attached by an owner, so readers use them *through* the persona
 without being able to take them elsewhere.
 
@@ -76,6 +81,15 @@ on the personas page) or switch an existing session. When set, resolution:
   unless the session overrides it;
 - adds one context note: you're acting as *Ada* in *this context*; skills and
   credentials come from Ada, audience and data rules from the context.
+
+### In Slack channels
+
+Owners add channels from the persona's page or by asking the agent ("give Ada
+#finance-ops"), which writes a `channel:` grant and can mark the persona as the
+channel's **default**: new threads there start with `persona_id` set, so people just
+talk to QM and get Ada. The default is the channel scope's existing `persona` setting
+(one per channel); without one, anyone can still say "use Ada" in a thread and the agent
+switches that session. Removing the grant clears the default.
 
 Writes (memory, files, crons) stay in the context's own scope, as now. In a shared
 channel everyone present sees the replies; only the person invoking needs a role.
@@ -99,6 +113,8 @@ description. Row actions: Chat, Fork, and Edit / Share for writers and owners.
 - `sessions.persona_id TEXT NULL` — nullable, no backfill.
 - `acl_grants`: no DDL; new rows with `path` `persona:<id>` and `permission` `owner`
   in addition to `read`/`write`.
+- Channel scopes gain a `persona` setting (default persona id, nullable) in the existing
+  scoped settings; no DDL.
 - New scope kind `persona` in existing scope-id text columns; no DDL.
 - New feature flag `personas`, per person or org, off by default. No env vars.
 
