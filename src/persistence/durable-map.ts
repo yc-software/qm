@@ -249,9 +249,8 @@ export function createPostgresMap<T>(
       return claimRows(pg, `claim_${table}_tenants`);
     },
     async deleteBefore(field, cutoff) {
-      if (!/^[a-z_][a-z0-9_]*$/i.test(field)) throw new Error(`invalid field: ${field}`);
       await withBump((client) =>
-        client.query(`DELETE FROM ${table} WHERE (json->>'${field}')::double precision < $1`, [cutoff]),
+        client.query(`DELETE FROM ${table} WHERE (json->>$2)::double precision < $1`, [cutoff, field]),
       );
     },
     async claimIdsWhere(field, value) {
