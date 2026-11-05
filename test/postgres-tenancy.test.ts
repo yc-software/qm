@@ -7,7 +7,7 @@ import { applyPgMigrations, createPgPool, definePgMigration, withPgTransaction }
 import { SESSION_MIGRATIONS, TENANT_BACKFILL } from "../src/sessions/session-schema.ts";
 import { withoutTenant, withTenant } from "../src/tenants/context.ts";
 import { TENANCY } from "../src/tenants/migrations.ts";
-import { testDatabaseUrl, testMigratedDatabaseUrl } from "./support/test-database.ts";
+import { testBareDatabaseUrl, testMigratedDatabaseUrl } from "./support/test-database.ts";
 import { ownerUrl } from "./support/test-tenant.ts";
 
 const skip = process.env.DATABASE_URL ? false : "set DATABASE_URL (a Postgres) to run the tenancy tests";
@@ -148,15 +148,28 @@ test("an open transaction refuses work for a different tenant until it has ended
 });
 
 test("upgrading copies the existing tenant into tenants", { skip }, async () => {
-  const pool = new pg.Pool({ connectionString: testDatabaseUrl(), max: 1 });
+  const pool = new pg.Pool({ connectionString: testBareDatabaseUrl(), max: 1 });
   try {
     const previous = SESSION_MIGRATIONS.filter(
       (m) => !TENANCY.includes(m) && m !== TENANT_BACKFILL && !m.id.includes("-tenants/"),
     );
     await applyPgMigrations(pool, [...DIRECTORY_MIGRATIONS, ...previous].map(definePgMigration));
     const old = (await pool.query("SELECT qm_tenant_id()::text AS id")).rows[0].id;
+    await pool.query(
+      "INSERT INTO sessions(id, type, scope_id, thread_ref, created_at) VALUES ('s', 'dm', 'personal:u', 's', 0)",
+    );
     await applyPgMigrations(pool, [...DIRECTORY_MIGRATIONS, ...SESSION_MIGRATIONS].map(definePgMigration));
     assert.ok((await pool.query("SELECT id::text FROM tenants")).rows.some((row) => row.id === old));
+  } finally {
+    await pool.end();
+  }
+});
+
+test("migrating an empty database mints no tenant", { skip }, async () => {
+  const pool = new pg.Pool({ connectionString: testBareDatabaseUrl(), max: 1 });
+  try {
+    await applyPgMigrations(pool, [...DIRECTORY_MIGRATIONS, ...SESSION_MIGRATIONS].map(definePgMigration));
+    assert.equal((await pool.query("SELECT count(*)::int AS n FROM tenants")).rows[0].n, 0);
   } finally {
     await pool.end();
   }
