@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { PEER_TASK_BANNER } from "../src/sessions/session-mailbox.ts";
 import { createGoalRecord } from "../src/agent/goal.ts";
 import assert from "node:assert/strict";
 import { Check } from "typebox/value";
@@ -3187,6 +3188,44 @@ test("agent mail is screened separately, logged privately, and delivered once ac
   );
 });
 
+test("a peer task arrives mid-turn as handed-off work while other mail keeps the routine banner", async () => {
+  const tc = fakeToolContext();
+  const mail = (id: string, text: string, peerDepth?: number) => ({
+    id,
+    senderId: "other",
+    recipientId: "here",
+    actor: { id: "U1", type: "internal" as const },
+    audience: [],
+    text,
+    createdAt: 1,
+    ...(peerDepth === undefined ? {} : { peerDepth }),
+  });
+  let pending = [mail("task", "please migrate the table", 1), mail("fyi", "build is green")];
+  tc.sessionSyscalls = {
+    open: async () => ({ ok: false, message: "unused" }),
+    write: async () => ({ ok: false, message: "unused" }),
+    read: async () => ({ ok: false, message: "unused" }),
+    receive: async () => pending,
+    acknowledge: async () => {
+      pending = [];
+    },
+  };
+  tc.read = async () => ({ content: "workspace data", sourceScopeId: "org:default-org" });
+  const ref: ToolContextRef = {
+    current: tc,
+    scopeLabel: "personal:U1",
+    orgScopeId: "org:default-org",
+    emit: sink([]),
+    screenToolResult: async () => ({ outcome: "allow" }),
+  };
+  const read = createAgentTools(ref).find((tool) => tool.name === "files");
+  const result = (await call(read, { action: "read", path: "a.txt" })) as { content: Array<{ text?: string }> };
+  const out = result.content.map((part) => part.text ?? "").join("\n");
+  assert.ok(out.includes(`${PEER_TASK_BANNER}\nplease migrate the table`));
+  assert.ok(out.includes("do not acknowledge routine completions):\nbuild is green"));
+  assert.ok(!out.includes("do not acknowledge routine completions):\nplease migrate the table"));
+});
+
 test("quarantined mail remains pending for release and mailbox failures preserve carrier output", async () => {
   const tc = fakeToolContext();
   let pending = true;
@@ -4012,11 +4051,15 @@ test("subagents and sessions are separate tools with one noun each", async () =>
     textOut(await call(sessions, { action: "send_message", target: "peer", text: "fyi" })),
     /Left in "peer"'s mailbox/,
   );
+  await call(sessions, { action: "send_message", target: "peer", text: "later", wake: false });
   assert.match(textOut(await call(sessions, { action: "read" })), /requires `target`/);
   assert.deepEqual(starts, [{ fork: false, text: "hi", title: "t" }, { fork: true }]);
   assert.deepEqual(
     writes.map(({ wake, target, text }) => ({ wake, target, text })),
-    [{ wake: true, target: "peer", text: "fyi" }],
+    [
+      { wake: true, target: "peer", text: "fyi" },
+      { wake: false, target: "peer", text: "later" },
+    ],
   );
 });
 

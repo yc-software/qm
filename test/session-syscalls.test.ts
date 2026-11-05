@@ -1726,7 +1726,10 @@ test("a busy peer reads the message at its next step, or is woken once if its tu
     [first.run.id],
   );
   const delivered = await peerApi(r, target).receive!(0);
-  assert.equal(delivered.length, 1);
+  assert.deepEqual(
+    delivered.map((mail) => mail.peerDepth),
+    [1],
+  );
   await r.mailbox.acknowledge(
     target.id,
     delivered.map((mail) => mail.id),
@@ -1743,6 +1746,25 @@ test("a busy peer reads the message at its next step, or is woken once if its tu
   const [wake] = await r.runs.inFlightForThread(target.threadRef);
   assert.equal(wake?.request.sessionSenderId, sender.id);
   assert.equal(wake.request.conversation.threadRef, target.threadRef);
+});
+
+test("wake:false from an untitled conversation leaves attributed FYI mail and starts nothing", async () => {
+  const r = await rig();
+  const untitled = await r.sessions.getOrCreateByThread("web:U1:untitled", "dm", scope, undefined, "web");
+  await r.sessions.addParticipant(untitled.id, actor.id);
+  const sender = await recordContext(r.sessions, untitled, {
+    actor,
+    conversation: { kind: "dm", threadRef: untitled.threadRef, audience: [actor] },
+    surface: "web",
+  });
+  const target = await webPeer(r, "builder");
+  const fyi = await peerApi(r, sender).write({ peer: true, wake: false, target: target.id, text: "fyi" });
+  assert.ok(fyi.ok);
+  assert.deepEqual([fyi.delivered, fyi.busy, fyi.notWoken], ["queued_message", false, undefined]);
+  assert.deepEqual(await r.runs.inFlightForThread(target.threadRef), []);
+  const [mail] = await r.mailbox.pending(target.id);
+  assert.deepEqual([mail!.wake, mail!.peerDepth], [undefined, undefined]);
+  assert.ok(mail!.text.startsWith(`<subagent-message from="Untitled" fromSessionId="${sender.id}">`));
 });
 
 test("the restart sweep recovers a peer wake whose recipient was busy, once", async () => {

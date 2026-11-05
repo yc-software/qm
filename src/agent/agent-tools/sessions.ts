@@ -248,7 +248,7 @@ export function sessionTools(kit: ToolKit) {
     description:
       "Work with sessions, the conversations in the web sidebar (subagents are not sessions). " +
       "search: entries across conversations visible to everyone here, with sessionId/seq references. list: sessions you can see here. read: a session's recent transcript. " +
-      "send_message: a private note delivered to another session as internal context; it wakes that session if it is idle, otherwise the session reads it at its next step. " +
+      "send_message: a private note delivered to another session as internal context. By default it is a task: it wakes the session if idle, otherwise the session gets it at its next step as handed-off work. wake:false sends an FYI instead, which wakes nothing and is read whenever that session next runs. " +
       "new: a clean session starting with `text`. fork: copy this conversation's visible history into a new session, optionally running `text` there. " +
       "Create new/forked sessions only when the attending person asks (they appear under their name); refused on automated turns.",
     parameters: Type.Object({
@@ -268,6 +268,11 @@ export function sessionTools(kit: ToolKit) {
         }),
       ),
       title: Type.Optional(Type.String({ description: "new/fork: optional sidebar title." })),
+      wake: Type.Optional(
+        Type.Boolean({
+          description: "send_message: false sends an FYI that wakes nothing; default true sends a task.",
+        }),
+      ),
       limit: Type.Optional(Type.Integer({ description: "read: default 30. search: default 20, max 100." })),
     }),
     async execute(callId, params) {
@@ -279,6 +284,7 @@ export function sessionTools(kit: ToolKit) {
         text?: string;
         title?: string;
         limit?: number;
+        wake?: boolean;
       };
       await recordCall(callId, {
         tool: "sessions",
@@ -336,7 +342,7 @@ export function sessionTools(kit: ToolKit) {
         const result = await syscalls.write({
           requestId: callId,
           peer: true,
-          wake: true,
+          wake: p.wake !== false,
           target: p.target,
           text: p.text,
         });

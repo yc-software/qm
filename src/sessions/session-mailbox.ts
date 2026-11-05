@@ -1,6 +1,8 @@
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { OrchestratorInput } from "../core/orchestrator/types.ts";
 
+export const PEER_TASK_BANNER =
+  "Task handed to you by another conversation (see from/fromSessionId below). Decide whether to do it now, after your current task, or not at all; if you defer or decline it, tell the sender with sessions send_message:";
 export interface SessionMessage {
   id: string;
   recipientId: string;

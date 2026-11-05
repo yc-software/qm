@@ -635,7 +635,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
   return {
     rejectMessage: (sessionId, messageId) => deps.mailbox.acknowledge(sessionId, [messageId]),
     forTurn(binding) {
-      const callerTitle = binding.session.title?.trim() || "this conversation";
+      const callerTitle = binding.session.title?.trim() || "Untitled";
 
       async function resolveTarget(ref: string): Promise<Session | null> {
         const trimmed = ref.trim();
