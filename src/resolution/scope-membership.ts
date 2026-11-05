@@ -36,19 +36,6 @@ interface ScopeMembershipDeps {
   personas?: { role(principalId: string, personaId: string): Promise<PersonaRole | null> };
 }
 
-async function personaRoleAtLeast(
-  deps: ScopeMembershipDeps,
-  principalId: string,
-  personaId: string,
-  floor: PersonaRole,
-): Promise<boolean> {
-  return atLeast(await deps.personas?.role(principalId, personaId), floor);
-}
-
-async function teamMember(deps: ScopeMembershipDeps, principalId: string, teamId: string): Promise<boolean> {
-  return activePrincipal(deps, principalId) && (await deps.teams?.isMember(principalId, teamId)) === true;
-}
-
 function activePrincipal(deps: ScopeMembershipDeps, principalId: string): boolean {
   const type = deps.identity?.classify(principalId).type;
   return type === undefined || type === "internal";
@@ -188,35 +175,62 @@ export function createCurrentScopeMembers(deps: ScopeMembershipDeps, requireComp
   };
 }
 
-export function createCanReadScope(deps: ScopeMembershipDeps): CanReadScope {
-  return async function canReadScope(principalId: string, targetScope: ScopeId): Promise<boolean> {
-    if (!principalId) return false;
-    const { kind, ref } = parseScopeId(targetScope);
-    if (kind === "org") return deps.identity?.classify(principalId).type === "internal";
-    if (kind === "personal") return samePerson(ref, principalId);
-    if (kind === "team") return teamMember(deps, principalId, ref);
-    if (kind === "persona") return personaRoleAtLeast(deps, principalId, ref, "read");
-    if (kind === "group") return memberOfSharedScope(deps, kind, ref, principalId, targetScope);
-    if (kind === "channel") {
-      if (await memberOfSharedScope(deps, kind, ref, principalId, targetScope)) return true;
-      return (await channelPrivacy(deps, ref)) === false && activePrincipal(deps, principalId);
+export type ScopeRole = "read" | "write" | "manage";
+export type ScopeRoleLookup = (principalId: string, scope: ScopeId) => Promise<ScopeRole | null>;
+
+const ROLE_RANK: Record<ScopeRole, number> = { read: 1, write: 2, manage: 3 };
+const roleAtLeast = (role: ScopeRole | null, floor: ScopeRole): boolean =>
+  role !== null && ROLE_RANK[role] >= ROLE_RANK[floor];
+
+async function sharedScopeRole(
+  deps: ScopeMembershipDeps,
+  kind: "channel" | "group",
+  ref: string,
+  principalId: string,
+  active: boolean,
+): Promise<ScopeRole | null> {
+  if (active && (await currentSharedScopeMember(deps, kind, ref, principalId)))
+    return kind === "group" || (await channelPrivacy(deps, ref)) === true ? "manage" : "write";
+  if (await memberOfSharedScope(deps, kind, ref, principalId, scopeId(kind, ref))) return "read";
+  return kind === "channel" && active && (await channelPrivacy(deps, ref)) === false ? "read" : null;
+}
+
+export function createScopeRole(deps: ScopeMembershipDeps): ScopeRoleLookup {
+  return async function scopeRole(principalId, scope) {
+    if (!principalId) return null;
+    const { kind, ref } = parseScopeId(scope);
+    const active = activePrincipal(deps, principalId);
+    switch (kind) {
+      case "org":
+        return active ? "write" : null;
+      case "personal":
+        if (!samePerson(ref, principalId)) return null;
+        return active ? "manage" : "read";
+      case "team":
+        return active && (await deps.teams?.isMember(principalId, ref)) === true ? "write" : null;
+      case "persona": {
+        const grant = await deps.personas?.role(principalId, ref);
+        if (!atLeast(grant, "read")) return null;
+        return active && atLeast(grant, "write") ? "manage" : "read";
+      }
+      case "channel":
+      case "group":
+        return sharedScopeRole(deps, kind, ref, principalId, active);
+      default:
+        return null;
     }
-    return false;
   };
 }
 
-export function createCanWriteScope(deps: ScopeMembershipDeps) {
-  return async function canWriteScope(principalId: string, targetScope: ScopeId): Promise<boolean> {
-    if (!principalId || !activePrincipal(deps, principalId)) return false;
-    const { kind, ref } = parseScopeId(targetScope);
-    if (kind === "org") return true;
-    if (kind === "personal") return samePerson(ref, principalId);
-    if (kind === "team") return teamMember(deps, principalId, ref);
-    if (kind === "persona") return personaRoleAtLeast(deps, principalId, ref, "write");
-    if (kind === "channel" || kind === "group") return currentSharedScopeMember(deps, kind, ref, principalId);
-    return false;
-  };
+function roleCheck(deps: ScopeMembershipDeps, floor: ScopeRole) {
+  const role = createScopeRole(deps);
+  return async (principalId: string, scope: ScopeId): Promise<boolean> =>
+    roleAtLeast(await role(principalId, scope), floor);
 }
+
+export const createCanReadScope = (deps: ScopeMembershipDeps): CanReadScope => roleCheck(deps, "read");
+export const createCanWriteScope = (deps: ScopeMembershipDeps) => roleCheck(deps, "write");
+export const createCanManageScope = (deps: ScopeMembershipDeps): CanManageScope => roleCheck(deps, "manage");
 
 export type CanManageScope = (principalId: string, scope: ScopeId) => Promise<boolean>;
 
@@ -228,34 +242,16 @@ export function createMembershipControlsScope(deps: ScopeMembershipDeps) {
   };
 }
 
-export function createCanManageScope(deps: ScopeMembershipDeps): CanManageScope {
-  return async function canManageScope(principalId: string, scope: ScopeId): Promise<boolean> {
-    if (!principalId || !activePrincipal(deps, principalId)) return false;
-    const { kind, ref } = parseScopeId(scope);
-    if (kind === "personal") return samePerson(ref, principalId);
-    if (kind === "persona") return personaRoleAtLeast(deps, principalId, ref, "write");
-    if (kind === "group") return currentSharedScopeMember(deps, kind, ref, principalId);
-    if (kind === "channel")
-      return (await channelPrivacy(deps, ref)) === true && currentSharedScopeMember(deps, kind, ref, principalId);
-    return false;
-  };
-}
-
 export type ManagesArtifactHome = (homeScopeId: ScopeId, createdBy: string, principalId: string) => Promise<boolean>;
 
-export function createManagesArtifactHome(
-  deps: ScopeMembershipDeps,
-  canManageScope: CanManageScope,
-): ManagesArtifactHome {
+export function createManagesArtifactHome(deps: ScopeMembershipDeps): ManagesArtifactHome {
+  const role = createScopeRole(deps);
   return async function managesArtifactHome(homeScopeId, createdBy, principalId): Promise<boolean> {
     if (!principalId || !activePrincipal(deps, principalId)) return false;
-    if (await canManageScope(principalId, homeScopeId)) return true;
     const { kind, ref } = parseScopeId(homeScopeId);
-    if (kind === "team") return teamMember(deps, principalId, ref);
+    if (roleAtLeast(await role(principalId, homeScopeId), kind === "team" ? "write" : "manage")) return true;
     if (!samePerson(createdBy, principalId)) return false;
-    if (kind === "personal") return true;
-    if (kind === "channel") return (await channelPrivacy(deps, ref)) === false;
-    return false;
+    return kind === "personal" || (kind === "channel" && (await channelPrivacy(deps, ref)) === false);
   };
 }
 

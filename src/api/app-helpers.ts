@@ -524,7 +524,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     );
   }
 
-  const principalManagesArtifactHome = createManagesArtifactHome(scopeMembershipDeps, principalCanManageScope);
+  const principalManagesArtifactHome = createManagesArtifactHome(scopeMembershipDeps);
 
   async function artifactAuthor(ownerScopeId: ScopeId, ref: string): Promise<string | undefined> {
     const { kind } = parseScopeId(ownerScopeId);

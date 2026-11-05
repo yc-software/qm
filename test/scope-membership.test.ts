@@ -100,7 +100,7 @@ async function table() {
   const canWrite = createCanWriteScope(deps);
   const canManage = createCanManageScope(deps);
   const isMember = createIsCurrentSharedScopeMember(deps);
-  const manages = createManagesArtifactHome(deps, canManage);
+  const manages = createManagesArtifactHome(deps);
   const controls = createMembershipControlsScope(deps);
   const rows: string[] = [];
   for (const scope of scopes) {
@@ -174,7 +174,7 @@ const EXPECTED = [
   "channel:priv system:channel:priv rwmcao",
   "channel:priv (none) ------",
   "channel:unknown controls=false",
-  "channel:unknown alice@x.com -w-c--",
+  "channel:unknown alice@x.com rw-c--",
   "channel:unknown U_ALICE ------",
   "channel:unknown bob@x.com r-----",
   "channel:unknown carol@x.com ------",
@@ -190,7 +190,7 @@ const EXPECTED = [
   "channel:missing system:channel:priv ------",
   "channel:missing (none) ------",
   "group:g1 controls=true",
-  "group:g1 alice@x.com -wmcao",
+  "group:g1 alice@x.com rwmcao",
   "group:g1 U_ALICE rwmcao",
   "group:g1 bob@x.com ------",
   "group:g1 carol@x.com ------",
