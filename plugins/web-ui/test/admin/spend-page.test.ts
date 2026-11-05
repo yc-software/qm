@@ -30,7 +30,7 @@ test("spend: custom window query, chart, rows linking to user and cron runs, and
   assert.equal(page.document.querySelectorAll(".spend-column").length, 3);
   const hrefs = [...page.document.querySelectorAll("a")].map((a) => a.getAttribute("href"));
   assert.ok(hrefs.includes("/settings/user?user=u-alex"));
-  assert.ok(hrefs.includes("/settings/user?principal=U0OLD"), "spend from someone with no user row links by sign-in");
+  assert.ok(hrefs.includes("/settings/user?user=U0OLD"), "spend from someone with no user row links by sign-in");
   assert.ok(hrefs.includes("/settings/history?scope=personal%3Aalex%40example.com&kind=cron&cron=cr1"));
   assert.ok(hrefs.includes("/settings/spend?range=7d"));
   const [first, last] = page.document.querySelectorAll<HTMLInputElement>(".spend-custom input");

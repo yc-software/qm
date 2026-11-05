@@ -31,7 +31,7 @@ test("users: make admin confirms before granting, revoke sends the grant target,
   );
   await page.settle();
   const row = page.document.querySelector<HTMLAnchorElement>("td a")!;
-  assert.equal(row.getAttribute("href"), "/settings/user?principal=alex%2Ba%40example.com");
+  assert.equal(row.getAttribute("href"), "/settings/user?user=alex%2Ba%40example.com");
   button(page.host, "Make admin").click();
   await page.settle();
   assert.deepEqual(calls, []);
@@ -57,7 +57,7 @@ test("users: make admin confirms before granting, revoke sends the grant target,
 
 test("user detail: loads profile and keychain, sets onboarding, and links back to the list", async () => {
   const puts: unknown[] = [];
-  const page = await mountPage("/settings/user?principal=alex%40example.com", {
+  const page = await mountPage("/settings/user?user=alex%40example.com", {
     "GET /users/alex@example.com": { principalId: "alex@example.com", onboarding: "pending" },
     "GET /keychain": {
       credentials: [{ id: "c1", service: "github" }],
@@ -89,7 +89,7 @@ test("keychain: lists people with links to their user page", async () => {
   const link = [...page.document.querySelectorAll<HTMLAnchorElement>("a")].find((a) =>
     a.textContent!.includes("alex@"),
   )!;
-  assert.equal(link.getAttribute("href"), "/settings/user?principal=alex%40example.com");
+  assert.equal(link.getAttribute("href"), "/settings/user?user=alex%40example.com");
   page.close();
 });
 
@@ -101,7 +101,7 @@ test("user detail: offboarding previews, applies after confirming, then offers r
     { kind: "cron", id: "cr1", label: "digest", action: "disable_and_archive" },
   ];
   const page = await mountPage(
-    "/settings/user?principal=alex%40example.com",
+    "/settings/user?user=alex%40example.com",
     {
       "GET /users/alex@example.com": { principalId: "alex@example.com", deactivated: false },
       "GET /keychain": { credentials: [], grants: [] },

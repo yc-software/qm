@@ -6,7 +6,7 @@ import { offboardingCard } from "./offboarding.ts";
 import { pageHeader, card, table, badge, stacked, subline } from "./shared.ts";
 
 export const userHref = (page: AdminPage, row: { userId?: string | null; principalId?: string | null }) =>
-  page.href("user", row.userId ? { user: row.userId } : { principal: row.principalId || "" });
+  page.href("user", { user: row.userId || row.principalId });
 
 export const labelRole = (role: string) => (role === "org_admin" ? "admin" : String(role || "").replace(/_/g, " "));
 
@@ -34,9 +34,9 @@ async function openWebUiAs(target: string) {
 }
 
 export async function detail(page: AdminPage) {
-  const requested = page.params.get("user") || page.params.get("principal") || "";
+  const requested = page.params.get("user") || "";
   const back = { label: "Users", href: page.href("users") };
-  const show = (body: unknown, title: unknown = page.params.get("principal") || "User", context?: unknown) =>
+  const show = (body: unknown, title: unknown = "User", context?: unknown) =>
     render(
       html`${pageHeader({ back, title, context })}
         <div class="detail">${body}</div>`,

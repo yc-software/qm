@@ -280,8 +280,6 @@ function toLink(r: Record<string, unknown>): UserLink {
   };
 }
 
-const USER_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 const ACTIVITY = `
   WITH member AS (
     SELECT DISTINCT coalesce(l.user_id::text, ${fold("p.principal_id")}) AS who, l.user_id, p.session_id
@@ -405,10 +403,11 @@ export function createPostgresUserStore(connectionString: string): UserStore {
       return rows.map(toRecord);
     },
     async get(idOrAlias) {
-      const key = idOrAlias.trim();
-      const rows = USER_ID.test(key)
-        ? await q(`SELECT ${COLUMNS} FROM users u WHERE u.id = $1::uuid`, [key])
-        : await q(`SELECT ${COLUMNS} FROM users u WHERE u.id = ${userOf("$1")}`, [foldPrincipalId(key)]);
+      const rows = await q(
+        `SELECT ${COLUMNS} FROM users u WHERE u.id = ${userOf("$1")} OR u.id::text = lower($2)
+          ORDER BY u.id = ${userOf("$1")} DESC LIMIT 1`,
+        [foldPrincipalId(idOrAlias), idOrAlias.trim()],
+      );
       return rows[0] ? toRecord(rows[0]) : null;
     },
     async resolve(aliases) {
