@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createAgent } from "../src/agent/agent-run.ts";
+import { approvedCallOnEarlierAttempt } from "../src/core/orchestrator/approvals.ts";
 import { createModelRoutes } from "../src/model/model-route.ts";
 import type { AgentTurnInput, SteeredApproval } from "../src/agent/agent.ts";
 import type { Item, NewItem } from "../src/sessions/items.ts";
@@ -242,3 +243,28 @@ for (const approved of [true, false]) {
     }
   });
 }
+
+test("a retried approval turn re-runs the approved call only if it never started", () => {
+  const call = { callId: "approved_req3_ef01", requestId: "req3", tool: "history", input: { query: "noon" } };
+  const at = { sessionId: "s", createdAt: 1 };
+  const decided = {
+    ...at,
+    seq: 1,
+    kind: "ElicitationResponse",
+    elicitId: "req3",
+    approved: true,
+    author: "U1",
+    body: { command: "history", scope: "once", call },
+  } as unknown as Item;
+  const started = {
+    ...at,
+    seq: 2,
+    kind: "ToolCall",
+    callId: call.callId,
+    body: { approvedRequestId: "req3" },
+  } as unknown as Item;
+  assert.deepEqual(approvedCallOnEarlierAttempt([decided], "req3", "U1"), { call });
+  assert.deepEqual(approvedCallOnEarlierAttempt([decided, started], "req3", "U1"), {});
+  assert.equal(approvedCallOnEarlierAttempt([decided], "req3", "U2"), null, "only the approver's own decision counts");
+  assert.equal(approvedCallOnEarlierAttempt([], "req3", "U1"), null);
+});

@@ -1,6 +1,7 @@
 import type { ApprovedToolCall, SteeredApproval } from "../../agent/agent.ts";
 import { samePerson } from "../../directory/person.ts";
 import type { DurableMap } from "../../persistence/durable-map.ts";
+import type { Item } from "../../sessions/items.ts";
 import type { ApprovalGrantModes, PendingApproval, PendingApprovalRecord, TurnRequest } from "../../types.ts";
 import { approvalCardId, approvedCallId } from "../approval-id.ts";
 
@@ -66,7 +67,12 @@ export async function resolveLiveApproval(
     clickerId: string;
     runActorId: string;
     audit: ApprovalAudit;
-    recordDecision: (requestId: string, record: PendingApprovalRecord, approved: boolean) => Promise<boolean>;
+    recordDecision: (
+      requestId: string,
+      record: PendingApprovalRecord,
+      approved: boolean,
+      call?: ApprovedToolCall,
+    ) => Promise<boolean>;
     grantOnce: (approvalKey: string) => void;
   },
 ): Promise<SteeredApproval> {
@@ -87,7 +93,8 @@ export async function resolveLiveApproval(
     });
     return { kind: "ignored" };
   }
-  if (!(await ctx.recordDecision(decision.requestId, record, decision.approved))) {
+  const call = decision.approved ? approvedToolCall(decision.requestId, record) : undefined;
+  if (!(await ctx.recordDecision(decision.requestId, record, decision.approved, call))) {
     ctx.audit({
       action: `command_approval.${verdict}`,
       resource: decision.requestId,
@@ -114,7 +121,7 @@ export async function resolveLiveApproval(
     status: "ok",
     detail: JSON.stringify({ delivery: "live_run" }),
   });
-  return { kind: "run", summary, approver, call: approvedToolCall(decision.requestId, record)! };
+  return { kind: "run", summary, approver, call: call! };
 }
 
 export async function withdrawCallApprovals(
@@ -140,4 +147,22 @@ export async function withdrawCallApprovals(
     });
   }
   return { withdrawn };
+}
+
+export function approvedCallOnEarlierAttempt(
+  items: readonly Item[],
+  requestId: string,
+  actorId: string,
+): { call?: ApprovedToolCall } | null {
+  const decided = items.find(
+    (item) =>
+      item.kind === "ElicitationResponse" &&
+      item.elicitId === requestId &&
+      item.approved === true &&
+      samePerson(item.author ?? undefined, actorId),
+  );
+  const call = decided?.body.call as ApprovedToolCall | undefined;
+  if (call?.requestId !== requestId) return null;
+  const started = items.some((item) => item.kind === "ToolCall" && item.body.approvedRequestId === requestId);
+  return started ? {} : { call };
 }

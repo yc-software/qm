@@ -153,9 +153,8 @@ async function runToolCallOnce(
   };
   ref.emit = async (item) => {
     if (item.kind === "ToolCall") {
-      if (!opts.fresh) return undefined;
-      if (item.callId !== call.callId || hasCall()) return emit?.(item);
-      return append({ ...item, body: { ...item.body, ...tag } });
+      if (!opts.fresh || item.callId === call.callId) return undefined;
+      return emit?.(item);
     }
     if (item.kind !== "ToolResult" || result || (opts.fresh && item.callId !== call.callId)) return emit?.(item);
     await recordCall();
@@ -177,6 +176,7 @@ async function runToolCallOnce(
       content = [{ type: "text", text }];
       if (!result) await recordResult(true, text);
     } else {
+      await recordCall();
       content = (await route.tool.execute(call.callId, route.args)).content ?? [];
       text = content.flatMap((block) => (typeof block.text === "string" ? [block.text] : [])).join("\n");
       isError = false;

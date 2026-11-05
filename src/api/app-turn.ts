@@ -186,7 +186,11 @@ export function createTurnMethods(
         if (record.sessionId !== session.id || (await approvalResumable(session, actorId, record)) !== "ok")
           return null;
         if (!live || live.status !== "running" || leaseLapsed(live, Date.now())) return null;
-        if (!samePerson(live.request.actor.id, actorId) || !isPersonAuthored(live.request.origin.kind)) return null;
+        if (
+          !samePerson(live.request.actor.id, actorId) ||
+          !(isPersonAuthored(live.request.origin.kind) || spokenByPerson(live.request.origin))
+        )
+          return null;
         const dedupeKey = `approval:${decision.requestId}:${record.createdAt ?? 0}:${decision.approved}:${live.id}`;
         const routedRunId = await withCurrentProjectRoster(async () => {
           await deps.signals!.send(live.id, {

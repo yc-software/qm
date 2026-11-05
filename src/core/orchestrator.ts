@@ -139,6 +139,7 @@ import { commandApprovalId, inputApprovalId } from "./approval-id.ts";
 import {
   APPROVED_CALL_RAN_NOTE,
   approvalRefusal,
+  approvedCallOnEarlierAttempt,
   approvalView,
   approvedToolCall,
   grantModesWithin,
@@ -2012,6 +2013,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           record: PendingApprovalRecord,
           decided: { approved: boolean; scope?: "once" | "session" | "always" },
           author: string,
+          call?: ApprovedToolCall,
         ): Promise<boolean> => {
           if (!(await pending.take(requestId))) return false;
           const decisionEntry = await withManagedRosterVersion(() =>
@@ -2020,7 +2022,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               elicitId: requestId,
               approved: decided.approved,
               author,
-              body: { command: record.command, ...(decided.scope ? { scope: decided.scope } : {}) },
+              body: {
+                command: record.command,
+                ...(decided.scope ? { scope: decided.scope } : {}),
+                ...(call ? { call } : {}),
+              },
             }),
           );
           await mirrorRunActivity(decisionEntry);
@@ -2039,7 +2045,19 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             reason: "that approval request expired — ask again if you still want it to run",
           };
         };
-        if (input.approval) {
+        const recovered =
+          input.approval?.approved && input.runId && !(await pending.get(input.approval.requestId))
+            ? approvedCallOnEarlierAttempt(
+                await deps.sessions.getItems(session.id, { turnId: input.runId }),
+                input.approval.requestId,
+                actor.id,
+              )
+            : null;
+        if (recovered) {
+          approvedCall = recovered.call;
+          turnEvents.push(APPROVED_CALL_RAN_NOTE);
+        }
+        if (input.approval && !recovered) {
           const p = await pending.get(input.approval.requestId);
           const decision = input.approval.approved ? "approve" : "deny";
           const refusal = approvalRefusal(p, session.id, actor.id);
@@ -2155,7 +2173,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   }),
                 );
             }
-            if (!(await recordApprovalDecision(input.approval.requestId, p, { approved: true, scope }, actor.id)))
+            const call = quarantineRelease ? undefined : approvedToolCall(input.approval.requestId, p);
+            if (!(await recordApprovalDecision(input.approval.requestId, p, { approved: true, scope }, actor.id, call)))
               return alreadyDecided(input.approval.requestId);
             const useKey = p.approvalKey ?? p.command;
             if (p.screenedOutput && quarantineRelease) {
@@ -2189,7 +2208,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               resource: p.command,
               status: "ok",
             });
-            approvedCall = approvedToolCall(input.approval.requestId, p);
+            approvedCall = call;
             if (approvedCall) turnEvents.push(APPROVED_CALL_RAN_NOTE);
             else
               turnEvents.push(
@@ -3281,12 +3300,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 clickerId: deps.identity.resolve(request.actor).id,
                 runActorId: actor.id,
                 audit,
-                recordDecision: (requestId, record, approved) =>
+                recordDecision: (requestId, record, approved, call) =>
                   recordApprovalDecision(
                     requestId,
                     record,
                     approved ? { approved, scope: "once" } : { approved },
                     deps.identity.resolve(request.actor).id,
+                    call,
                   ),
                 grantOnce: (key) => commandUses.set(key, (commandUses.get(key) ?? 0) + 1),
               }),
