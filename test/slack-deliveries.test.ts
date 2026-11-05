@@ -569,3 +569,62 @@ test("a keychain approval card delivered into a bound channel carries the agent'
   assert.ok(Array.isArray(posts[0]!.blocks), "the card carries its buttons");
   assert.deepEqual(identityOf(posts[0]!), { ...BOLT, icon_url: undefined });
 });
+
+test("a follower that does not hold the delivery lease still refreshes personas, so its card edits post as the agent", async () => {
+  await refreshPersonas({ agentPersonas: async () => new Map() });
+  const updates: Record<string, unknown>[] = [];
+  const client = {
+    chat: {
+      update: async (args: Record<string, unknown>) => {
+        updates.push(args);
+        return { ok: true };
+      },
+    },
+    conversations: {
+      history: async () => ({
+        messages: [
+          { ts: "5.5", metadata: { event_type: "qm_delivery", event_payload: { idempotency_key: "ask:K1:notice" } } },
+        ],
+      }),
+      replies: async () => ({ messages: [] }),
+    },
+  };
+  const core = {
+    agentPersonas: async () => new Map([["C1", ADA]]),
+    holdDeliveryDispatch: async () => null,
+    keychainApprovals: {
+      card: async () => ({
+        ask: {
+          id: "K1",
+          status: "approved",
+          requestedMode: "once",
+          requesterScopeId: "channel:C1",
+          createdAt: Date.now(),
+        },
+        service: "github",
+        conversation: "#design",
+      }),
+    },
+  };
+  const poller = createDeliveryPoller({
+    core: core as never,
+    flow: {} as never,
+    threads: {} as never,
+    clientForIdentity: () => client,
+  });
+  try {
+    assert.equal(await poller.pollDeliveries(client), false, "a follower runs no drain");
+    await deliverKeychainCard(
+      core as never,
+      client,
+      { idempotencyKey: "ask:K1:decided", destination: { keychainAskId: "K1" } },
+      "C1",
+      undefined,
+    );
+  } finally {
+    await refreshPersonas({ agentPersonas: async () => new Map() });
+  }
+  assert.equal(updates.length, 1);
+  assert.equal(updates[0]!.ts, "5.5");
+  assert.deepEqual(identityOf(updates[0]!), { ...ADA, icon_emoji: undefined });
+});

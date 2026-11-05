@@ -718,6 +718,7 @@ function headerHarness(
     pinsListed: 0,
     posted: [] as string[],
     updated: [] as string[],
+    updatedWith: [] as Array<Record<string, unknown>>,
     pinned: [] as string[],
     unpinned: [] as string[],
     deleted: [] as string[],
@@ -731,9 +732,10 @@ function headerHarness(
         pinned = { ts: "99.0", user: "U0BOT", text };
         return { ts: "99.0" };
       },
-      update: async ({ ts, text }: { ts: string; text: string }) => {
-        calls.updated.push(text);
-        if (pinned && pinned.ts === ts) pinned = { ...pinned, text };
+      update: async (args: { ts: string; text: string }) => {
+        calls.updated.push(args.text);
+        calls.updatedWith.push(args);
+        if (pinned && pinned.ts === args.ts) pinned = { ...pinned, text: args.text };
         return {};
       },
       delete: async ({ ts }: { ts: string }) => {
@@ -926,6 +928,21 @@ test("surface header ensurer updates an existing pinned header in place instead 
     "Using Claude Haiku 4.5 here. <https://claw.acme.dev/projects/channel/C1|More settings>",
   ]);
   assert.equal(h.readPin()?.text.startsWith("Using Claude Haiku 4.5"), true);
+});
+
+test("a bound channel's pinned header edit carries its agent's persona", async (t) => {
+  await bindPersonas(t, { C1: ADA });
+  const h = headerHarness(
+    undefined,
+    "Claude Haiku 4.5",
+    "channel",
+    "Using Claude Opus 4.8 here. <https://claw.acme.dev/projects/channel/C1|More settings>",
+  );
+  h.ensure(h.client, "C1");
+  await h.flush();
+  assert.equal(h.calls.updatedWith.length, 1);
+  assert.equal(h.calls.updatedWith[0]!.username, "Ada");
+  assert.equal(h.calls.updatedWith[0]!.icon_url, ADA.icon_url);
 });
 
 test("the pinned header is off by default — join creates nothing until the scope opts in", async () => {

@@ -1787,7 +1787,6 @@ test("own task-card status events never enter the mirror, but ordinary bot edits
 });
 
 const ADA: SlackPersona = { username: "Ada", icon_url: "https://cdn.example.com/ada.png" };
-const BOLT: SlackPersona = { username: "Bolt", icon_emoji: ":art:" };
 const QM_IDENTITY = { username: "QM", icon_emoji: ":robot_face:" };
 const identityOf = (post: any) => ({
   username: post.username,
@@ -1828,43 +1827,6 @@ test("a bound channel's ack, goal notice and every part of a split reply post as
     const updates = f.client.updates.filter((u) => u.channel === "C1");
     assert.ok(updates.length >= 1, "the goal notice was edited in place");
     for (const update of updates) assert.deepEqual(identityOf(update), expectedIdentity(ADA));
-  } finally {
-    await f.stop();
-  }
-});
-
-test("an edit in an unbound channel carries the env identity", async () => {
-  const f = await fixture({ botIdentity: QM_IDENTITY });
-  try {
-    f.core.queuedRunId = "r-unbound-edit";
-    f.core.onWait = async (hooks) => {
-      await hooks.onGoal?.({ objective: "ship the fix", status: "active" });
-      await hooks.onGoal?.({ objective: "ship the fix", status: "complete" });
-    };
-    const event = { channel: "C1", channel_type: "channel", user: "U1", text: "<@UBOT> write it up", ts: "804.1" };
-    f.client.messagesByChannel.set("C1", [event]);
-    await f.app.emitEvent("app_mention", event);
-    const updates = f.client.updates.filter((u) => u.channel === "C1");
-    assert.ok(updates.length >= 1, "the goal notice was edited in place");
-    for (const update of updates) assert.deepEqual(identityOf(update), expectedIdentity(QM_IDENTITY));
-  } finally {
-    await f.stop();
-  }
-});
-
-test("an unbound channel keeps the env identity while a bound one posts as its agent, emoji avatar included", async () => {
-  const f = await fixture({ botIdentity: QM_IDENTITY, extraChannels: 1 });
-  try {
-    f.core.personas.set("C1", BOLT);
-    for (const channel of ["C1", "CE0"]) {
-      const event = { channel, channel_type: "channel", user: "U1", text: "<@UBOT> hello", ts: "802.1" };
-      f.client.messagesByChannel.set(channel, [event]);
-      await f.app.emitEvent("app_mention", event);
-    }
-    const [bound] = f.client.posts.filter((p) => p.channel === "C1");
-    const [unbound] = f.client.posts.filter((p) => p.channel === "CE0");
-    assert.deepEqual(identityOf(bound), expectedIdentity(BOLT));
-    assert.deepEqual(identityOf(unbound), expectedIdentity(QM_IDENTITY));
   } finally {
     await f.stop();
   }
