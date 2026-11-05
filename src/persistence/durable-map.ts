@@ -36,6 +36,7 @@ export interface DurableMap<T> {
   delete(id: string): Promise<void>;
   take(id: string): Promise<T | null>;
   claimIds(): Promise<ClaimedRow[]>;
+  claimIdsWhere(field: Extract<keyof T, string>, value: string): Promise<ClaimedRow[]>;
 }
 
 const VERSIONS_TABLE = "durable_map_versions";
@@ -49,6 +50,10 @@ export function durableMapTenancy(
   { tables = [], ...options }: TenantTableOptions & { tables?: readonly TenantTable[] } = {},
 ): PgMigrationDefinition[] {
   return tenantTables(`durable-map/${table}/0010-tenants`, [{ table, primaryKey: "id" }, ...tables], options);
+}
+
+function claimWhereName(table: string, field: string): string {
+  return `claim_${table}_by_${field.toLowerCase()}`;
 }
 
 function mapMigrations(
@@ -78,6 +83,16 @@ function mapMigrations(
     ...indexedFields.flatMap((field) => {
       if (!/^[a-z_][a-z0-9_]*$/i.test(field)) throw new Error(`invalid index field: ${field}`);
       return [
+        {
+          id: `durable-map/${table}/claim-${field.toLowerCase()}`,
+          statements: [
+            claimFunction(
+              claimWhereName(table, field),
+              "value text",
+              `SELECT tenant_id, id FROM ${table} WHERE lower(json->>'${field}') = lower(value) ORDER BY tenant_id, id`,
+            ),
+          ],
+        },
         {
           id: `durable-map/${table}/lookup-${field.toLowerCase()}-drop`,
           statements: [`SET LOCAL lock_timeout = '3s'`, `DROP INDEX IF EXISTS ${table}_${field.toLowerCase()}_fold`],
@@ -211,6 +226,11 @@ export function createPostgresMap<T>(
       if (!tenanted) throw new Error(`${table} holds no tenant rows to claim`);
       await ready();
       return claimRows(pg, `claim_${table}`);
+    },
+    async claimIdsWhere(field, value) {
+      if (!indexedFields.includes(field)) throw new Error(`${table}.${field} is not an indexed field`);
+      await ready();
+      return claimRows(pg, claimWhereName(table, field), [value]);
     },
     async get(id) {
       await ready();

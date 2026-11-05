@@ -2,6 +2,7 @@ import type { CronFireLogEntry } from "../triggers/types.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { pgTextSafe } from "../util/text.ts";
 import { tenantTables } from "../tenants/migrations.ts";
+import { claimFunction, claimRows } from "../tenants/claim.ts";
 
 export interface CronFireRecord extends CronFireLogEntry {
   cronId: string;
@@ -141,6 +142,30 @@ export function createPostgresCronFireStore(connectionString: string): CronFireS
         ],
       },
       ...tenantTables("cron/fires/0002-tenants", [{ table: "cron_fires", primaryKey: "cron_id, fire_key" }]),
+      {
+        id: "cron/fires/0003-claims",
+        statements: [
+          claimFunction(
+            "claim_stranded_cron_fires",
+            "ended bigint, stranded_note text, fired_before bigint",
+            `UPDATE cron_fires SET status = 'failed', ended_at = ended, note = stranded_note
+              WHERE status = 'running' AND fired_at <= fired_before
+              RETURNING tenant_id, jsonb_build_array(cron_id, fire_key)::text`,
+          ),
+          claimFunction(
+            "claim_pruned_cron_fires",
+            "keep_per_cron integer, ended_before bigint",
+            `DELETE FROM cron_fires cf
+              USING (SELECT tenant_id, cron_id, fire_key,
+                            ROW_NUMBER() OVER (PARTITION BY tenant_id, cron_id ORDER BY fired_at DESC, fire_key DESC) AS rn
+                       FROM cron_fires) ranked
+              WHERE cf.tenant_id = ranked.tenant_id AND cf.cron_id = ranked.cron_id AND cf.fire_key = ranked.fire_key
+                AND ranked.rn > keep_per_cron
+                AND cf.ended_at IS NOT NULL AND cf.ended_at < ended_before
+              RETURNING cf.tenant_id, jsonb_build_array(cf.cron_id, cf.fire_key)::text`,
+          ),
+        ],
+      },
     ],
     [LEGACY_FIRE_MAINTENANCE],
   );
@@ -166,38 +191,28 @@ export function createPostgresCronFireStore(connectionString: string): CronFireS
       });
     },
     async sweepStranded(now, staleRunningMs, note) {
-      const result = await query(
-        `UPDATE cron_fires
-            SET status = 'failed', ended_at = $1, note = $2
-          WHERE status = 'running' AND fired_at <= $3`,
-        [now, pgTextSafe(note), now - staleRunningMs],
-      );
-      return result.rowCount;
+      return (await claimRows({ q }, "claim_stranded_cron_fires", [now, pgTextSafe(note), now - staleRunningMs]))
+        .length;
     },
     async pruneEnded({ endedBefore, keepPerCron }) {
       return withPgTransaction(await pool(), async (client) => {
         const legacy = await client.query("SELECT to_regclass('cron_fire_log') IS NOT NULL AS present");
         if (legacy.rows[0]?.present) await client.query("LOCK TABLE cron_fire_log IN SHARE ROW EXCLUSIVE MODE");
-        const result = await client.query(
-          `DELETE FROM cron_fires cf
-            USING (SELECT cron_id, fire_key,
-                          ROW_NUMBER() OVER (PARTITION BY cron_id ORDER BY fired_at DESC, fire_key DESC) AS rn
-                     FROM cron_fires) ranked
-            WHERE cf.cron_id = ranked.cron_id AND cf.fire_key = ranked.fire_key
-              AND ranked.rn > $1
-              AND cf.ended_at IS NOT NULL AND cf.ended_at < $2
-            RETURNING cf.cron_id, cf.fire_key`,
+        const removed = await claimRows(
+          { q: async (text, params) => (await client.query(text, params)).rows },
+          "claim_pruned_cron_fires",
           [keepPerCron, endedBefore],
         );
-        if (result.rows.length && legacy.rows[0]?.present) {
+        const keys = removed.map(({ id }) => JSON.parse(id) as [string, string]);
+        if (keys.length && legacy.rows[0]?.present) {
           await client.query(
             `DELETE FROM cron_fire_log source
                USING unnest($1::text[], $2::text[]) removed(cron_id, fire_key)
                WHERE source.cron_id = removed.cron_id AND source.fire_key = removed.fire_key`,
-            [result.rows.map((row) => row.cron_id), result.rows.map((row) => row.fire_key)],
+            [keys.map(([cronId]) => cronId), keys.map(([, fireKey]) => fireKey)],
           );
         }
-        return result.rowCount ?? 0;
+        return removed.length;
       });
     },
     async listByCron(cronId, opts) {

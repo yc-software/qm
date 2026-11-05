@@ -1,6 +1,7 @@
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import type { ScopeId } from "../types.ts";
 import { tenantTables } from "../tenants/migrations.ts";
+import { claimFunction, claimRows, type ClaimedRow } from "../tenants/claim.ts";
 
 type FileUploadState = "pending" | "completing" | "complete" | "aborting" | "aborted" | "failed";
 
@@ -26,7 +27,8 @@ export interface FileUploadStore {
   transition(id: string, from: FileUploadState[], to: FileUploadState): Promise<boolean>;
   touch(id: string, at: number): Promise<boolean>;
   active(actorId: string, now: number): Promise<FileUpload[]>;
-  expired(now: number): Promise<FileUpload[]>;
+  claimExpired(now: number): Promise<ClaimedRow[]>;
+  claimById(id: string): Promise<ClaimedRow[]>;
 }
 
 export class FileUploadError extends Error {
@@ -70,6 +72,23 @@ export function createPostgresFileUploadStore(connectionString: string): FileUpl
       ],
     },
     ...tenantTables("files/uploads/0003-tenants", [{ table: "file_uploads", primaryKey: "id" }]),
+    {
+      id: "files/uploads/0004-claims",
+      statements: [
+        claimFunction(
+          "claim_expired_file_uploads",
+          "bigint",
+          `WITH due AS (
+             SELECT tenant_id, id FROM file_uploads
+             WHERE expires_at <= $1 AND next_attempt_at <= $1 AND state NOT IN ('complete','aborted','failed')
+             ORDER BY next_attempt_at, expires_at, id FOR UPDATE SKIP LOCKED LIMIT 100
+           ) UPDATE file_uploads SET next_attempt_at=$1+60000 FROM due
+             WHERE file_uploads.tenant_id=due.tenant_id AND file_uploads.id=due.id
+             RETURNING file_uploads.tenant_id, file_uploads.id`,
+        ),
+        claimFunction("claim_file_upload", "text", "SELECT tenant_id, id FROM file_uploads WHERE id = $1"),
+      ],
+    },
   ]);
   const decode = (row: Record<string, unknown>): FileUpload => ({
     ...(row.data as FileUpload),
@@ -123,18 +142,11 @@ export function createPostgresFileUploadStore(connectionString: string): FileUpl
         await db.q(`SELECT data,state FROM file_uploads WHERE ${HOLDS_QUOTA} ORDER BY expires_at`, [actorId, now])
       ).map(decode);
     },
-    async expired(now) {
-      return (
-        await db.q(
-          `WITH due AS (
-             SELECT id FROM file_uploads
-             WHERE expires_at <= $1 AND next_attempt_at <= $1 AND state NOT IN ('complete','aborted','failed')
-             ORDER BY next_attempt_at, expires_at, id FOR UPDATE SKIP LOCKED LIMIT 100
-           ) UPDATE file_uploads SET next_attempt_at=$1+60000 FROM due
-             WHERE file_uploads.id=due.id RETURNING file_uploads.data,file_uploads.state`,
-          [now],
-        )
-      ).map(decode);
+    claimExpired(now) {
+      return claimRows(db, "claim_expired_file_uploads", [now]);
+    },
+    claimById(id) {
+      return claimRows(db, "claim_file_upload", [id]);
     },
   };
 }
