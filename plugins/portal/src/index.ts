@@ -779,7 +779,6 @@ function loginProviderCookie(sub: string): string[] {
   ];
 }
 
-
 function sessionCookieSet(value: string, sub: string): string[] {
   const attrs = {
     path: "/",

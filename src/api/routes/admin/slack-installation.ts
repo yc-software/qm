@@ -173,7 +173,9 @@ export async function startSlackInstallation(ctx: ApiCtx): Promise<void> {
 }
 
 async function managedSlackTenant(ctx: ApiCtx): Promise<string | undefined> {
-  return (await ctx.app.tenantFor("slack_bridge", bearerToken(ctx.req) ?? undefined)) ?? (await ctx.app.readBootTenant());
+  return (
+    (await ctx.app.tenantFor("slack_bridge", bearerToken(ctx.req) ?? undefined)) ?? (await ctx.app.readBootTenant())
+  );
 }
 
 function slackTeam(value: unknown): string | undefined {
