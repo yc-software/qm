@@ -441,15 +441,9 @@ test("admin scope activity counts are kept per tenant", async () => {
   assert.deepEqual(scopes(B), [scopeId("org", "b")]);
 });
 
-test("Slack mention names and bot identity stay with their tenant", () => {
-  withTenant(A, () => {
-    setMentionIndex(new Map([["alice", "UA"]]));
-    setDefaultBotIdentity({ username: "Bot A" });
-  });
-  withTenant(B, () => {
-    setMentionIndex(new Map([["alice", "UB"]]));
-    setDefaultBotIdentity({ username: "Bot B" });
-  });
+test("Slack mention names stay with their tenant; the env bot identity is process-wide", () => {
+  withTenant(A, () => setMentionIndex(new Map([["alice", "UA"]])));
+  withTenant(B, () => setMentionIndex(new Map([["alice", "UB"]])));
   assert.equal(
     withTenant(A, () => toSlackMrkdwn("hi @alice")),
     "hi <@UA>",
@@ -458,12 +452,11 @@ test("Slack mention names and bot identity stay with their tenant", () => {
     withTenant(B, () => toSlackMrkdwn("hi @alice")),
     "hi <@UB>",
   );
-  assert.deepEqual(
-    withTenant(A, () => botIdentityArgs()),
-    { username: "Bot A" },
-  );
+  setDefaultBotIdentity({ username: "Bot" });
+  assert.deepEqual(botIdentityArgs(), { username: "Bot" });
   assert.deepEqual(
     withTenant(B, () => botIdentityArgs()),
-    { username: "Bot B" },
+    { username: "Bot" },
   );
+  setDefaultBotIdentity(undefined);
 });
