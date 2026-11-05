@@ -1,10 +1,11 @@
 import type { SuggestedActivity } from "../../chassis/src/suggested-activities.ts";
+import type { PostHogConfig } from "posthog-js";
 
 export type AuthMode = "portal" | "dev";
 
 export interface Me {
   browserErrors?: { dsn: string; release?: string; tracesSampleRate?: number };
-  analytics?: { apiKey: string; host: string };
+  analytics?: { apiKey: string; host: string; config?: Partial<PostHogConfig> };
   companyName?: string | null;
   welcomeCohort?: string;
   suggestedActivities?: SuggestedActivity[];

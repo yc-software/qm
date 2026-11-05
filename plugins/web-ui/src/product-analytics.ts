@@ -29,6 +29,7 @@ const allowedProperties = new Set([
   "surface",
   "view",
 ]);
+const snapshotProperties = new Set(["$snapshot_data", "$snapshot_bytes", "$snapshot_host"]);
 
 export function stopAnalytics(): void {
   generation++;
@@ -48,7 +49,11 @@ export async function initializeAnalytics(me: Me, view = "chats"): Promise<void>
   lastCapturedView = undefined;
   if (!me.analytics?.apiKey || me.impersonatedBy) return;
   try {
-    const { default: posthog } = await import("posthog-js");
+    const config: Partial<PostHogConfig> = me.analytics.config ?? {};
+    const [{ default: posthog }] = await Promise.all([
+      import("posthog-js"),
+      ...(config.disable_session_recording === false ? [import("posthog-js/dist/posthog-recorder")] : []),
+    ]);
     if (current !== generation) return;
     const options: Partial<PostHogConfig> = {
       api_host: me.analytics.host,
@@ -66,10 +71,12 @@ export async function initializeAnalytics(me: Me, view = "chats"): Promise<void>
       person_profiles: "identified_only",
       save_referrer: false,
       save_campaign_params: false,
+      ...config,
       before_send: (event) => {
         if (!event) return null;
+        const snapshot = event.event === "$snapshot";
         for (const key of Object.keys(event.properties)) {
-          if (!allowedProperties.has(key)) delete event.properties[key];
+          if (!allowedProperties.has(key) && !(snapshot && snapshotProperties.has(key))) delete event.properties[key];
         }
         delete event.properties.$set;
         delete event.properties.$set_once;
