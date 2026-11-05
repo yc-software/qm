@@ -59,6 +59,7 @@ test("Sprites scope deletion sends only DELETE, retries provider errors, and acc
   try {
     const sandbox = createSpritesSandbox({
       initializationStore: testMap(),
+      checkpointStore: testMap(),
       advisoryLock: testAdvisoryLock(),
       token: "test",
       baseUrl: fake.baseUrl,

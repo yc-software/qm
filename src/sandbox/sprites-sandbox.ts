@@ -122,6 +122,7 @@ export interface SpritesSandboxOptions extends BlobStagingOptions {
   checkpointIntervalMs?: number;
   snapshots?: HomeSnapshotStore;
   initializationStore: DurableMap<{ pending: boolean }>;
+  checkpointStore: DurableMap<SnapshotBookkeeping>;
   advisoryLock: AdvisoryLock;
   extraTools?: string[];
   credentialPaths?: CredentialPathSpec[];
@@ -175,7 +176,7 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
   const appliedSize = new Map<string, number>();
   const egressPolicyByName = new Map<string, string>();
   const pressureEpisodes = new Set<string>();
-  const checkpointBooks = new Map<string, SnapshotBookkeeping>();
+  const checkpointStore = opts.checkpointStore;
 
   const reportError = (category: string, code: string, message: string, scopeLabel?: string): void => {
     try {
@@ -368,6 +369,7 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
     } catch (e) {
       if (!isMissing(e)) throw new Error(`sprites delete ${name}: ${spritesErrorDetail(e)}`, { cause: e });
     }
+    await checkpointStore.delete(name);
   }
 
   const homeSnapshots = opts.snapshots
@@ -426,16 +428,16 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
 
   async function checkpointIfDue(name: string, tdOpts?: TeardownOptions): Promise<void> {
     await requireInitialized(name);
-    const book = checkpointBooks.get(name) ?? {};
-    checkpointBooks.set(name, book);
-    if (!tdOpts?.homeUnchanged) book.homeDirty = true;
+    const book = await checkpointStore.putIfAbsent(name, {});
+    const record = (patch: SnapshotBookkeeping) => checkpointStore.merge(name, patch);
+    if (!tdOpts?.homeUnchanged) await record({ homeDirty: true });
     if (!snapshotDue(book, tdOpts, checkpointIntervalMs)) return;
     await attemptSnapshot(
       book,
-      (patch) => Object.assign(book, patch),
+      record,
       async () => {
         await createCheckpoint(name);
-        Object.assign(book, { lastSnapshotMs: Date.now(), homeDirty: false });
+        await record({ lastSnapshotMs: Date.now(), homeDirty: false });
       },
       (message) => reportError("sandbox_snapshot", "checkpoint_failed", message, base.scopeFor(name)),
     );
@@ -446,7 +448,6 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
     appliedSize.delete(name);
     pressureEpisodes.delete(name);
     egressPolicyByName.delete(name);
-    checkpointBooks.delete(name);
   };
 
   const base = createExecSandboxBase({

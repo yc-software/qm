@@ -31,6 +31,7 @@ const scope = scopeId("personal", "qm-skills-smoke");
 const sb = createSpritesSandbox({
   ...loadConfig().spritesSandbox,
   initializationStore: smokeMap("sprites_initialization"),
+  checkpointStore: smokeMap("sprites_checkpoints"),
   advisoryLock: createNoopAdvisoryLock(),
 });
 

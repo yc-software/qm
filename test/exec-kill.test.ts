@@ -33,6 +33,7 @@ after(() => ff.cleanup());
 function sprites(): Sandbox {
   return createSpritesSandbox({
     initializationStore: testMap(),
+    checkpointStore: testMap(),
     advisoryLock: testAdvisoryLock(),
     token: "test-token",
     baseUrl: ff.baseUrl,

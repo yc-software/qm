@@ -8,7 +8,7 @@ import {
   UploadPartCommand,
 } from "@aws-sdk/client-s3";
 import { shq } from "../util/shell.ts";
-import { errMessage, swallowAs } from "../util/errors.ts";
+import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 import { sleep, withTimeout } from "../util/async.ts";
 import { bodyToReadable, isNoSuchKey, s3Client, type S3Send } from "../persistence/s3.ts";
 import { displacedPruneGlobs } from "../credentials/resident-paths.ts";
@@ -51,16 +51,18 @@ export function snapshotDue(
 
 export async function attemptSnapshot(
   stored: SnapshotBookkeeping | null | undefined,
-  recordAttempt: (patch: SnapshotBookkeeping) => unknown,
+  record: (patch: SnapshotBookkeeping) => unknown,
   capture: () => Promise<unknown>,
   report: (message: string) => void,
 ): Promise<void> {
   const failing = (stored?.lastSnapshotAttemptMs ?? 0) > (stored?.lastSnapshotMs ?? 0);
-  await recordAttempt({ lastSnapshotAttemptMs: Date.now() });
   try {
+    await record({ lastSnapshotAttemptMs: Date.now() });
     await capture();
+    await record({ lastSnapshotAttemptMs: undefined });
   } catch (e) {
-    if (!failing) report(errMessage(e));
+    if (failing) swallow("home-snapshot: snapshot still failing", e);
+    else report(errMessage(e));
   }
 }
 

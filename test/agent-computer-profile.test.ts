@@ -25,6 +25,7 @@ function awsSandbox(extraTools: string[]) {
 test("the sprites sandbox declares the Agent Computer contract (persistent per-scope computer)", async () => {
   const sprites = createSpritesSandbox({
     initializationStore: testMap(),
+    checkpointStore: testMap(),
     advisoryLock: testAdvisoryLock(),
     token: "test-token",
   });
@@ -63,6 +64,7 @@ test("a layer that advertises a tool removes it from notInstalled (no install/no
 test("egress enforcement is effective only when core can mint a reachable proxy token", async () => {
   const sprites = createSpritesSandbox({
     initializationStore: testMap(),
+    checkpointStore: testMap(),
     advisoryLock: testAdvisoryLock(),
     token: "test-token",
     egressProxyUrl: "https://egress-proxy.example.com",

@@ -518,6 +518,7 @@ export function createAwsSandbox(opts: AwsSandboxOptions): Sandbox {
           const stored = await store.get(scope);
           if (stored?.microvmId !== handle.id) return;
           if (!tdOpts?.homeUnchanged) await store.merge(scope, { homeDirty: true });
+          await store.merge(scope, { lastActivityMs: Date.now() }).catch(() => {});
           if (snapshotDue(stored, tdOpts, snapshotIntervalMs))
             await attemptSnapshot(
               stored,
@@ -528,7 +529,6 @@ export function createAwsSandbox(opts: AwsSandboxOptions): Sandbox {
               },
               (message) => reportError("sandbox_snapshot", "teardown_snapshot_failed", message, scope),
             );
-          await store.merge(scope, { lastActivityMs: Date.now() }).catch(() => {});
           await api.suspend(handle.id).catch(swallowAs("aws-sandbox: suspend on teardown", undefined));
         });
       }
