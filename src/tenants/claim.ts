@@ -33,7 +33,12 @@ export async function claimThenBind<T>(
   work: (id: string) => Promise<T>,
 ): Promise<T[]> {
   const done: T[] = [];
-  for (const { tenantId, id } of await claim()) done.push(await inTenant(tenantId, () => work(id)));
+  for (const { tenantId, id } of await claim())
+    done.push(
+      await inTenant(tenantId, () => work(id)).catch((e: unknown) => {
+        throw new Error(`tenant ${tenantId}`, { cause: e });
+      }),
+    );
   return done;
 }
 
