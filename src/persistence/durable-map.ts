@@ -36,6 +36,8 @@ export interface DurableMap<T> {
   delete(id: string): Promise<void>;
   take(id: string): Promise<T | null>;
   claimIds(): Promise<ClaimedRow[]>;
+  claimTenants(): Promise<ClaimedRow[]>;
+  deleteBefore(field: Extract<keyof T, string>, cutoff: number): Promise<void>;
   claimIdsWhere(field: Extract<keyof T, string>, value: string): Promise<ClaimedRow[]>;
 }
 
@@ -67,6 +69,12 @@ function mapMigrations(
     id: `durable-map/${table}/0020-claim-ids`,
     statements: [claimFunction(`claim_${table}`, "", `SELECT tenant_id, id FROM ${table} ORDER BY tenant_id, id`)],
   };
+  const claimTenants = {
+    id: `durable-map/${table}/0021-claim-tenants`,
+    statements: [
+      claimFunction(`claim_${table}_tenants`, "", `SELECT DISTINCT tenant_id, '${table}'::text FROM ${table}`),
+    ],
+  };
   const migration = {
     id: `durable-map/${table}/0001`,
     statements: [
@@ -79,7 +87,7 @@ function mapMigrations(
     ...extraMigrations,
     ...VERSIONS_TENANCY,
     ...tenancy,
-    ...(tenancy.length ? [claim] : []),
+    ...(tenancy.length ? [claim, claimTenants] : []),
     ...indexedFields.flatMap((field) => {
       if (!/^[a-z_][a-z0-9_]*$/i.test(field)) throw new Error(`invalid index field: ${field}`);
       return [
@@ -230,6 +238,17 @@ export function createPostgresMap<T>(
       if (!tenanted) throw new Error(`${table} holds no tenant rows to claim`);
       await ready();
       return claimRows(pg, `claim_${table}`);
+    },
+    async claimTenants() {
+      if (!tenanted) throw new Error(`${table} holds no tenant rows to claim`);
+      await ready();
+      return claimRows(pg, `claim_${table}_tenants`);
+    },
+    async deleteBefore(field, cutoff) {
+      if (!/^[a-z_][a-z0-9_]*$/i.test(field)) throw new Error(`invalid field: ${field}`);
+      await withBump((client) =>
+        client.query(`DELETE FROM ${table} WHERE (json->>'${field}')::double precision < $1`, [cutoff]),
+      );
     },
     async claimIdsWhere(field, value) {
       if (!indexedFields.includes(field)) throw new Error(`${table}.${field} is not an indexed field`);

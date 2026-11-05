@@ -68,6 +68,8 @@ function tenantMap<T>(): DurableMap<T> & { reads: string[] } {
     select: unsupported,
     selectEntries: unsupported,
     claimIds: unsupported,
+    claimTenants: unsupported,
+    deleteBefore: unsupported,
     claimIdsWhere: unsupported,
     async get(id) {
       return own().get(id) ?? null;
