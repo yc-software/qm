@@ -898,7 +898,7 @@ test("avatars must be a Slack emoji shortcode or a public https URL, on create a
   for (const avatar of [
     { kind: "emoji" as const, value: "🎨" },
     { kind: "url" as const, value: "http://cdn.example.com/a.png" },
-    { kind: "url" as const, value: "https://user:pass@cdn.example.com/a.png" },
+    { kind: "url" as const, value: "https://ada@cdn.example.com/a.png" },
   ]) {
     assert.equal(codeOf(await ann({ action: "create", ...ADA, avatar })), "bad_request");
   }
