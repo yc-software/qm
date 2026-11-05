@@ -23,7 +23,9 @@ import {
   openChoice,
   tenantChoiceForms,
   verifiedEmail,
+  type ChoiceClaims,
   type SignInTenant,
+  type TrustedSignIn,
   type VerifiedSignIn,
 } from "./tenant-choice.ts";
 import { answerPreflight, parseAllowedOrigins, prepareCors } from "./cors.ts";
@@ -1584,12 +1586,13 @@ async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL):
       );
       for (const key of adminCache.keys()) if (key.endsWith(`|${identity.sub}`)) adminCache.delete(key);
     }
-    setAuthenticatedSession(res, identity.sub, identity.name);
-    res.writeHead(302, {
-      location: sanitizeReturnTo(identity.returnTo, PUBLIC_URL, APPS_DOMAIN),
-      "cache-control": "no-store",
-    });
-    res.end();
+    const found = identity.email
+      ? await coreEmailTenants(CORE, CORE_SIGNING_SECRET, identity.email)
+      : { tenants: [], shared: false };
+    if (found.shared && !found.tenants.length) return sendHtml(res, 400, signInErrorHtml("account is not permitted"));
+    const who = { sub: identity.sub, name: identity.name };
+    if (found.tenants.length > 1) return chooseTenant(res, { trusted: who }, identity.returnTo, found.tenants);
+    finishTrustedSignIn(res, who, identity.returnTo, found.tenants[0]?.id);
   } catch (error) {
     console.warn(`[portal] trusted sign-in failed: ${errMessage(error)}`);
     sendHtml(
@@ -1697,17 +1700,22 @@ async function authCallback(req: IncomingMessage, res: ServerResponse, url: URL)
       userinfo: info,
     };
     const email = verifiedEmail(info);
-    if (email) tenants = await coreEmailTenants(CORE, CORE_SIGNING_SECRET, email);
+    if (email) tenants = (await coreEmailTenants(CORE, CORE_SIGNING_SECRET, email)).tenants;
   } catch (e) {
     return fail(errMessage(e, "sign-in failed"));
   }
-  if (tenants.length > 1) return chooseTenant(res, signIn, tmp.returnTo, tenants);
+  if (tenants.length > 1) return chooseTenant(res, { signIn }, tmp.returnTo, tenants);
   return finishSignIn(res, signIn, tmp.returnTo, tenants[0]?.id);
 }
 
-function chooseTenant(res: ServerResponse, signIn: VerifiedSignIn, returnTo: string, tenants: SignInTenant[]): void {
+function chooseTenant(
+  res: ServerResponse,
+  who: Pick<ChoiceClaims, "signIn" | "trusted">,
+  returnTo: string,
+  tenants: SignInTenant[],
+): void {
   const exp = Math.floor(Date.now() / 1000) + TMP_TTL_S;
-  const choice = { k: "choice", signIn, returnTo, tenants: tenants.map(({ id }) => id), exp };
+  const choice = { k: "choice", ...who, returnTo, tenants: tenants.map(({ id }) => id), exp };
   setSession(res, [
     clearCookie("portal_oidc_tmp", "/auth", SECURE_COOKIES),
     setCookie("portal_tenant_choice", seal(choice, tmpKey), {
@@ -1734,11 +1742,18 @@ async function authTenant(req: IncomingMessage, res: ServerResponse): Promise<vo
   if (!sameOriginRequest(req)) return json(res, 403, { error: "forbidden" });
   const choice = openChoice(readCookie(req.headers.cookie, "portal_tenant_choice"), tmpKey, Date.now());
   const tenant = new URLSearchParams(await readBody(req, 4096)).get("tenant") ?? "";
-  if (!choice || !choice.tenants.includes(tenant)) {
+  if (!choice || !choice.tenants.includes(tenant) || (!choice.signIn && !choice.trusted)) {
     setSession(res, [clearCookie("portal_tenant_choice", "/auth", SECURE_COOKIES)]);
     return sendHtml(res, 400, signInErrorHtml("workspace choice expired, please sign in again"));
   }
-  return finishSignIn(res, choice.signIn, choice.returnTo, tenant);
+  if (choice.trusted) return finishTrustedSignIn(res, choice.trusted, choice.returnTo, tenant);
+  return finishSignIn(res, choice.signIn!, choice.returnTo, tenant);
+}
+
+function finishTrustedSignIn(res: ServerResponse, who: TrustedSignIn, returnTo: string, tenant?: string): void {
+  setAuthenticatedSession(res, who.sub, who.name, false, tenant);
+  res.writeHead(302, { location: sanitizeReturnTo(returnTo, PUBLIC_URL, APPS_DOMAIN), "cache-control": "no-store" });
+  res.end();
 }
 
 async function finishSignIn(

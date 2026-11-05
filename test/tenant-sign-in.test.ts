@@ -108,7 +108,7 @@ test("on a host with two tenants the broker finds an email's tenants and admits 
     const email = "both%40shared.test";
     assert.deepEqual(await srv.get(`/v1/auth/broker/email-tenants?email=${email}`), {
       status: 200,
-      body: { tenants: [{ id: alpha }, { id: beta }] },
+      body: { tenants: [{ id: alpha }, { id: beta }], shared: true },
     });
     assert.deepEqual((await srv.get(`/v1/auth/broker/email-allowed?email=${email}`)).body.allowed, true);
     assert.deepEqual(seen, [alpha, beta]);

@@ -14,9 +14,20 @@ export interface VerifiedSignIn {
   userinfo: Record<string, unknown>;
 }
 
+export interface TrustedSignIn {
+  sub: string;
+  name: string;
+}
+
+export interface EmailTenants {
+  tenants: SignInTenant[];
+  shared: boolean;
+}
+
 export interface ChoiceClaims {
   k: "choice";
-  signIn: VerifiedSignIn;
+  signIn?: VerifiedSignIn;
+  trusted?: TrustedSignIn;
   returnTo: string;
   tenants: string[];
   exp: number;
@@ -33,18 +44,19 @@ export async function coreEmailTenants(
   coreApiUrl: string,
   signingSecret: string | undefined,
   email: string,
-): Promise<SignInTenant[]> {
+): Promise<EmailTenants> {
   const path = withSourceAuthNonce(`/v1/auth/broker/email-tenants?email=${encodeURIComponent(email)}`, signingSecret);
   const r = await fetch(`${coreApiUrl}${path}`, {
     headers: signedHeaders(signingSecret, "GET", path),
     signal: AbortSignal.timeout(4_000),
   });
   if (!r.ok) throw new Error(`workspace lookup failed: HTTP ${r.status}`);
-  const tenants = ((await r.json()) as { tenants?: unknown }).tenants;
-  if (!Array.isArray(tenants)) return [];
-  return tenants.flatMap((t: { id?: unknown; brandName?: unknown }) =>
+  const body = (await r.json()) as { tenants?: unknown; shared?: unknown };
+  const tenants = Array.isArray(body.tenants) ? body.tenants : [];
+  const valid = tenants.flatMap((t: { id?: unknown; brandName?: unknown }) =>
     isTenantId(t?.id) ? [{ id: t.id, ...(typeof t.brandName === "string" ? { brandName: t.brandName } : {}) }] : [],
   );
+  return { tenants: valid, shared: body.shared === true };
 }
 
 export function openChoice(token: string | null, key: Buffer, now: number): ChoiceClaims | null {

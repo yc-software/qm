@@ -112,7 +112,10 @@ async function emailTenants(ctx: ApiCtx): Promise<void> {
   const email = requestedEmail(ctx);
   if (!email) return;
   const tenants = ctx.deps.directory?.tenantsForEmail;
-  return sendJson(ctx.res, 200, { tenants: tenants ? await tenants(email) : [] });
+  return sendJson(ctx.res, 200, {
+    tenants: tenants ? await tenants(email) : [],
+    shared: !(await ctx.app.readBootTenant()),
+  });
 }
 
 async function brokerSession(ctx: ApiCtx): Promise<void> {

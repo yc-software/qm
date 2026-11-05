@@ -87,6 +87,10 @@ export function createTrustedEntry(
         subject: claims.sub,
         sub: trustedPrincipal(cfg.issuer, claims.sub),
         name: typeof info.name === "string" ? info.name.trim().slice(0, 200) : "",
+        email:
+          typeof info.email === "string" && info.email.includes("@") && info.email_verified !== false
+            ? info.email.trim().toLowerCase()
+            : null,
         returnTo: tmp.returnTo,
       };
     },

@@ -6,6 +6,7 @@ import type { AddressInfo } from "node:net";
 import { generateKeyPair, exportJWK, SignJWT } from "jose";
 import { deriveKey, open, seal, readCookie } from "../src/session.ts";
 import { verifyPortalIdentity } from "../../chassis/src/portal-identity.ts";
+import { trustedPrincipal } from "../src/trusted-entry.ts";
 
 const secret = "tenant-choice-session-test-secret";
 const identitySecret = "tenant-choice-identity-secret-0123456789";
@@ -18,7 +19,9 @@ const alpha = "00000000-0000-4000-8000-00000000000a";
 const beta = "00000000-0000-4000-8000-00000000000b";
 let tenants: unknown[] = [];
 let nonce = "";
-const email = "founder@company.test";
+let audience = "portal-client";
+let shared = true;
+let email = "founder@company.test";
 const admissions: Array<string | undefined> = [];
 const surface: Array<string | undefined> = [];
 const coreCalls: Array<{ path: string; tenant: string | undefined }> = [];
@@ -37,7 +40,7 @@ const upstream = createServer((req, res) => {
       const idToken = await new SignJWT({ nonce })
         .setProtectedHeader({ alg: "EdDSA", kid: "test-key" })
         .setIssuer(upstreamUrl)
-        .setAudience("portal-client")
+        .setAudience(audience)
         .setSubject("idp-subject")
         .setIssuedAt()
         .setExpirationTime("2m")
@@ -50,7 +53,7 @@ const upstream = createServer((req, res) => {
       for await (const chunk of req) raw += String(chunk);
       return void res.end(JSON.stringify({ claimed: (JSON.parse(raw) as { ids: string[] }).ids[0] }));
     }
-    if (path === "/v1/auth/broker/email-tenants") return void res.end(JSON.stringify({ tenants }));
+    if (path === "/v1/auth/broker/email-tenants") return void res.end(JSON.stringify({ tenants, shared }));
     if (path === "/v1/auth/broker/email-allowed") {
       admissions.push(identityTenant(req.headers["x-portal-identity"]));
       return void res.end(JSON.stringify({ allowed: true }));
@@ -86,6 +89,15 @@ Object.assign(process.env, {
   AUTH_BROKER_UPSTREAM: upstreamUrl,
   PORTAL_LOCAL_AUTH_BYPASS: "0",
   PORTAL_PLAYGROUND: "0",
+  PORTAL_TRUSTED_OIDC: JSON.stringify({
+    issuer: upstreamUrl,
+    authEndpoint: `${upstreamUrl}/authorize`,
+    tokenEndpoint: `${upstreamUrl}/token`,
+    userinfoEndpoint: `${upstreamUrl}/userinfo`,
+    jwksUri: `${upstreamUrl}/keys`,
+    clientId: "trusted-client",
+  }),
+  PORTAL_TRUSTED_OIDC_CLIENT_SECRET: "trusted-client-secret-0123456789abcdef",
 });
 const { server } = await import("../src/index.ts");
 await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -213,4 +225,61 @@ test("a signed-in person's admin, connect, drop, desktop and branding calls all 
   });
   assert.equal(redeemed.status, 200);
   assert.equal(sessionOf(redeemed)?.t, beta);
+});
+
+async function trustedCallback(as: string): Promise<Response> {
+  email = as;
+  audience = "trusted-client";
+  const login = await fetch(`${base}/auth/trusted/login?returnTo=%2F`, { redirect: "manual" });
+  const tmpCookie = cookieFrom(login, "portal_trusted_tmp")!;
+  const tmp = open(readCookie(tmpCookie, "portal_trusted_tmp"), deriveKey(secret, "trusted-entry-tmp"))!;
+  nonce = tmp.nonce as string;
+  try {
+    return await fetch(`${base}/auth/trusted/callback?code=test&state=${tmp.state as string}`, {
+      headers: { cookie: tmpCookie },
+      redirect: "manual",
+    });
+  } finally {
+    audience = "portal-client";
+    email = "founder@company.test";
+  }
+}
+
+test("a trusted sign-in on a shared host picks the tenant by the provider's email but keeps its own principal", async () => {
+  shared = true;
+  const principal = trustedPrincipal(upstreamUrl, "idp-subject");
+
+  tenants = [{ id: alpha, brandName: "Alpha" }];
+  const one = await trustedCallback("founder@alpha.test");
+  assert.equal(one.status, 302);
+  assert.deepEqual([sessionOf(one)?.sub, sessionOf(one)?.t], [principal, alpha]);
+
+  tenants = [
+    { id: alpha, brandName: "Alpha" },
+    { id: beta, brandName: "Beta" },
+  ];
+  const both = await trustedCallback("partner@both.test");
+  assert.equal(both.status, 200);
+  assert.match(await both.text(), /Choose a workspace[\s\S]*Alpha[\s\S]*Beta/);
+  const chosen = await choose(cookieFrom(both, "portal_tenant_choice")!, beta);
+  assert.equal(chosen.status, 302);
+  assert.deepEqual([sessionOf(chosen)?.sub, sessionOf(chosen)?.t], [principal, beta]);
+  surface.length = 0;
+  await fetch(`${base}/`, { headers: { cookie: cookieFrom(chosen, "portal_session")! }, redirect: "manual" });
+  assert.equal(surface.at(-1), beta);
+
+  tenants = [];
+  const nobody = await trustedCallback("stranger@nowhere.test");
+  assert.equal(nobody.status, 400);
+  assert.match(await nobody.text(), /account is not permitted/);
+  assert.equal(sessionOf(nobody), null);
+});
+
+test("a trusted sign-in on a single-tenant install stays untenanted when the directory does not list the email", async () => {
+  shared = false;
+  tenants = [];
+  const response = await trustedCallback("founder@solo.test");
+  shared = true;
+  assert.equal(response.status, 302);
+  assert.equal(sessionOf(response)?.t, undefined);
 });
