@@ -40,7 +40,7 @@ export async function startQm(
   });
 
   await inBootTenant(tenant, async () => {
-    if (tenant) await loadTenant();
+    if (tenant) await loadTenant().catch(() => undefined);
     await built.deploymentLayerReady;
     built.deploymentLayerRefresh.start();
   });

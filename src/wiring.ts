@@ -381,7 +381,7 @@ import {
   type StoredDeploymentLayer,
 } from "./deployment/deployment-layer-store.ts";
 import { createPostgresErrorLog } from "./admin/postgres-error-log.ts";
-import { errMessage, reportFailureAs, swallowAs } from "./util/errors.ts";
+import { errMessage, reportFailure, reportFailureAs, swallowAs } from "./util/errors.ts";
 import { sleep, withTimeout } from "./util/async.ts";
 import { createSlackInstallationStore, type SlackInstallationStore } from "./surfaces/slack-installation.ts";
 import { createSurfaceRegistry } from "./surfaces/registry.ts";
@@ -1323,12 +1323,18 @@ export function buildApp(
   const refreshCustomProviders = async () => {
     setCustomProviders(await customProviders.enabled());
   };
+  const reported =
+    (context: string) =>
+    (e: unknown): never => {
+      reportFailure(context, e);
+      throw e;
+    };
   const stopTenantLoad = onTenantLoad(() =>
     Promise.all([
-      configStore.hydrate?.(),
-      refreshCustomProviders(),
-      identity.refresh(),
-      loadTenantSettings(pgArtifactMap.pool),
+      configStore.hydrate?.().catch(reported("tenant load: hydrate configuration")),
+      refreshCustomProviders().catch(reported("tenant load: hydrate custom providers")),
+      identity.refresh().catch(reported("tenant load: hydrate identity")),
+      loadTenantSettings(pgArtifactMap.pool).catch(reported("tenant load: hydrate tenant settings")),
     ]),
   );
   const refreshModels = async () => {
