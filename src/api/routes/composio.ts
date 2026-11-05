@@ -172,6 +172,37 @@ export async function request(
   return (await response.json()) as Record<string, unknown>;
 }
 
+/**
+ * Whether a principal already owns Composio connected accounts under any company project key
+ * (plus `extraKeys`). Throws when a project cannot be inspected, so callers fail closed.
+ */
+export async function hasComposioAccounts(
+  ctx: ApiCtx,
+  principalId: string,
+  extraKeys: readonly string[] = [],
+): Promise<boolean> {
+  const { deps } = ctx;
+  const projectKeys = new Set(extraKeys);
+  const companyCredentials = (await deps.serviceCreds?.listServiceCredentials(scopeId("org", orgId()))) ?? [];
+  for (const candidate of companyCredentials) {
+    if (candidate.envKey !== "COMPOSIO_API_KEY" || !candidate.hasSecret) continue;
+    const material = await deps.serviceCreds!.getServiceCredentialSecret(scopeId("org", orgId()), candidate.slug);
+    if (!material?.secret) throw Error("Could not inspect existing connections");
+    projectKeys.add(material.secret);
+  }
+  let found = false;
+  for (const projectKey of projectKeys) {
+    const priorAccounts = await request(
+      ctx,
+      projectKey,
+      `/connected_accounts?${new URLSearchParams({ user_ids: composioUserId(externalOrgId(), principalId), limit: "1" })}`,
+    );
+    if (!Array.isArray(priorAccounts.items)) throw Error("Could not inspect existing connections");
+    found ||= priorAccounts.items.length > 0;
+  }
+  return found;
+}
+
 async function catalog(ctx: ApiCtx): Promise<void> {
   const access = await credential(ctx);
   if (!access) return;
@@ -793,24 +824,7 @@ async function completeSlack(ctx: ApiCtx): Promise<void> {
       });
     if (!samePerson(member.principalId, access.principal)) {
       const existingCredentials = (await deps.keychain?.listByOwner(member.principalId)) ?? [];
-      const projectKeys = new Set([access.key]);
-      const companyCredentials = (await deps.serviceCreds?.listServiceCredentials(scopeId("org", orgId()))) ?? [];
-      for (const candidate of companyCredentials) {
-        if (candidate.envKey !== "COMPOSIO_API_KEY" || !candidate.hasSecret) continue;
-        const material = await deps.serviceCreds!.getServiceCredentialSecret(scopeId("org", orgId()), candidate.slug);
-        if (!material?.secret) throw Error("Could not inspect existing connections");
-        projectKeys.add(material.secret);
-      }
-      let hasPriorAccounts = false;
-      for (const projectKey of projectKeys) {
-        const priorAccounts = await request(
-          ctx,
-          projectKey,
-          `/connected_accounts?${new URLSearchParams({ user_ids: composioUserId(externalOrgId(), member.principalId), limit: "1" })}`,
-        );
-        if (!Array.isArray(priorAccounts.items)) throw Error("Could not inspect existing connections");
-        hasPriorAccounts ||= priorAccounts.items.length > 0;
-      }
+      const hasPriorAccounts = await hasComposioAccounts(ctx, member.principalId, [access.key]);
       if (existingCredentials.length || hasPriorAccounts)
         return sendJson(res, 409, {
           error: "established_account",

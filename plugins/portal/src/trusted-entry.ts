@@ -25,6 +25,9 @@ export function trustedEntryConfig(env: NodeJS.ProcessEnv, publicUrl: string): O
       throw new Error(`Invalid trusted OIDC ${field}`);
   }
   if (typeof obj.clientId !== "string" || !obj.clientId.trim()) throw new Error("Trusted OIDC requires clientId");
+  const emailsClaim = obj.verifiedEmailsClaim;
+  if (emailsClaim !== undefined && (typeof emailsClaim !== "string" || !/^[A-Za-z0-9_.:/-]{1,100}$/.test(emailsClaim)))
+    throw new Error("Invalid trusted OIDC verifiedEmailsClaim");
   return {
     issuer: obj.issuer as string,
     authEndpoint: obj.authEndpoint as string,
@@ -34,9 +37,45 @@ export function trustedEntryConfig(env: NodeJS.ProcessEnv, publicUrl: string): O
     clientId: obj.clientId,
     clientSecret: secret,
     redirectUri: `${publicUrl}/auth/trusted/callback`,
-    scopes: "openid profile",
+    scopes: emailsClaim ? "openid profile email" : "openid profile",
     prompt: "login",
+    ...(emailsClaim ? { verifiedEmailsClaim: emailsClaim } : {}),
   };
+}
+
+const MAX_VERIFIED_EMAILS = 20;
+const EMAIL = /^[^\s@<>()[\],;:"\\]+@[^\s@<>()[\],;:"\\]+\.[^\s@<>()[\],;:"\\]+$/;
+
+function emailValues(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [value];
+}
+
+function isVerified(source: Record<string, unknown>): boolean {
+  return source.email_verified === true || source.email_verified === "true";
+}
+
+/**
+ * The addresses the provider attests belong to this subject: every value of the configured
+ * claim, plus the standard `email` claim when `email_verified` is true. Signed ID token claims
+ * and back-channel userinfo are both trusted sources; an unverified `email` is never included.
+ */
+export function verifiedEmails(
+  claimName: string | undefined,
+  claims: Record<string, unknown>,
+  userinfo: Record<string, unknown>,
+): string[] {
+  if (!claimName) return [];
+  const found = new Set<string>();
+  for (const source of [claims, userinfo]) {
+    const listed = claimName === "email" ? [] : emailValues(source[claimName]);
+    const values = [...listed, ...(isVerified(source) ? [source.email] : [])];
+    for (const value of values) {
+      if (typeof value !== "string") continue;
+      const email = value.trim().toLowerCase();
+      if (email.length <= 254 && EMAIL.test(email)) found.add(email);
+    }
+  }
+  return [...found].slice(0, MAX_VERIFIED_EMAILS);
 }
 
 export function trustedPrincipal(issuer: string, sub: string): string {
@@ -93,6 +132,7 @@ export function createTrustedEntry(
           typeof info.email === "string" && info.email.includes("@") && info.email_verified !== false
             ? info.email.trim().toLowerCase()
             : null,
+        emails: verifiedEmails(cfg.verifiedEmailsClaim, claims, info),
         returnTo: tmp.returnTo,
       };
     },

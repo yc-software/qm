@@ -11,6 +11,7 @@ import { reportBackendError } from "../../chassis/src/error-reporting.ts";
 import { drainOnSigterm } from "../../chassis/src/drain.ts";
 import "./instrument.ts";
 import { provisionTrustedAdmin } from "./trusted-admin.ts";
+import { linkTrustedEmails } from "./trusted-emails.ts";
 import { createHash } from "node:crypto";
 import { createServer, METHODS, type IncomingMessage, type ServerResponse } from "node:http";
 import { pathToFileURL } from "node:url";
@@ -237,6 +238,14 @@ if (
     PORTAL_IDENTITY_SECRET === CORE_SIGNING_SECRET)
 )
   throw new Error("Trusted administrator provisioning requires trusted OIDC and a distinct portal identity secret");
+if (
+  trustedOidc?.verifiedEmailsClaim &&
+  (!CORE_SIGNING_SECRET ||
+    !PORTAL_IDENTITY_SECRET ||
+    PORTAL_IDENTITY_SECRET.length < 32 ||
+    PORTAL_IDENTITY_SECRET === CORE_SIGNING_SECRET)
+)
+  throw new Error("Trusted email linking requires a distinct portal identity secret");
 const claimTrusted = (key: string, expiresAt: number) =>
   claimOnce(coreClaimStore(CORE, CORE_SIGNING_SECRET, "portal"), key, expiresAt);
 const trustedEntry = trustedOidc ? createTrustedEntry(trustedOidc, SESSION_SECRET ?? DEV_SECRET, claimTrusted) : null;
@@ -245,6 +254,7 @@ const IMPERSONATE_TTL_S = Number(process.env.PORTAL_IMPERSONATE_TTL_S ?? 3600);
 const hostRoutes = createHostRoutes({
   publicUrl: PUBLIC_URL,
   appsDomain: APPS_DOMAIN,
+  trustedEntry: Boolean(trustedEntry),
   lookup: createHostTenants(coreHostTenant(CORE, CORE_SIGNING_SECRET)),
   handoffKey: deriveKey(SESSION_SECRET ?? DEV_SECRET, "portal.handoff.v1"),
   claim: (jti) => claimTrusted(`handoff:${jti}`, Date.now() + 120_000),
@@ -767,18 +777,49 @@ function isDeploymentLayerPassthrough(method: string, pathname: string): boolean
   return (method === "GET" || method === "PUT") && pathname === "/v1/deployment-layer";
 }
 
+function trustedProviderPreference(): string[] {
+  if (!trustedOidc || !trustedSignInLabel) return [];
+  return [
+    setCookie("portal_login_provider", createHash("sha256").update(trustedOidc.issuer).digest("hex"), {
+      path: "/",
+      maxAge: 365 * 24 * 60 * 60,
+      secure: SECURE_COOKIES,
+    }),
+  ];
+}
+
+// Joins the provider-verified email identities to the signed-in principal. Linking never blocks
+// sign-in: a refusal or outage leaves the identities separate for an administrator to merge.
+async function joinVerifiedEmails(who: TrustedSignIn, tenant: string | undefined): Promise<void> {
+  if (!trustedOidc?.verifiedEmailsClaim || !who.subject || !who.emails?.length) return;
+  try {
+    const result = await linkTrustedEmails(
+      {
+        core: CORE,
+        signingSecret: CORE_SIGNING_SECRET!,
+        identitySecret: PORTAL_IDENTITY_SECRET!,
+        org: ORG,
+        issuer: trustedOidc.issuer,
+        headers: portalIdentityHeaders(who.sub, tenant),
+      },
+      who.subject,
+      who.emails,
+    );
+    if (result && (result.linked || Object.keys(result.skipped).length))
+      console.info(
+        `[portal] trusted sign-in email join: ${result.linked} linked, ${result.unchanged} unchanged, skipped ${JSON.stringify(result.skipped)}`,
+      );
+  } catch (error) {
+    console.warn(`[portal] trusted sign-in email join failed: ${errMessage(error)}`);
+  }
+}
+
 function loginProviderCookie(sub: string): string[] {
   if (!trustedOidc || !trustedSignInLabel) return [];
   const issuerHash = createHash("sha256").update(trustedOidc.issuer).digest("hex");
-  return [
-    sub.startsWith(`oidc:${issuerHash}:`)
-      ? setCookie("portal_login_provider", issuerHash, {
-          path: "/",
-          maxAge: 365 * 24 * 60 * 60,
-          secure: SECURE_COOKIES,
-        })
-      : clearCookie("portal_login_provider", "/", SECURE_COOKIES),
-  ];
+  return sub.startsWith(`oidc:${issuerHash}:`)
+    ? trustedProviderPreference()
+    : [clearCookie("portal_login_provider", "/", SECURE_COOKIES)];
 }
 
 function sessionCookieSet(value: string, sub: string): string[] {
@@ -1546,7 +1587,10 @@ async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL):
       return void res.end();
     }
     const login = entry.start(sanitizeReturnTo(returnTo, PUBLIC_URL, APPS_DOMAIN));
-    setSession(res, [setCookie(cookieName, login.cookie, { path, maxAge: login.ttl, secure: SECURE_COOKIES })]);
+    setSession(res, [
+      setCookie(cookieName, login.cookie, { path, maxAge: login.ttl, secure: SECURE_COOKIES }),
+      ...trustedProviderPreference(),
+    ]);
     res.writeHead(302, { location: login.location, "cache-control": "no-store" });
     return void res.end();
   }
@@ -1554,7 +1598,7 @@ async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL):
   setSession(res, [clearCookie(cookieName, path, SECURE_COOKIES)]);
   try {
     const identity = await entry.finish(readCookie(req.headers.cookie, cookieName), url);
-    if (mapped) return finishTrustedSignIn(res, identity, identity.returnTo, mapped.tenant);
+    if (mapped) return await finishTrustedSignIn(res, identity, identity.returnTo, mapped.tenant);
     if (trustedAdminEnabled) {
       await provisionTrustedAdmin(
         {
@@ -1573,12 +1617,16 @@ async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL):
       principal: identity.sub,
     });
     if (found.shared && !found.tenants.length) return sendHtml(res, 403, noAccessHtml());
-    const who = { sub: identity.sub, name: identity.name };
+    const who: TrustedSignIn = {
+      sub: identity.sub,
+      name: identity.name,
+      ...(identity.emails.length ? { subject: identity.subject, emails: identity.emails } : {}),
+    };
     const pin = await hostRoutes.pin(identity.returnTo);
     if (pin !== undefined && !found.tenants.some(({ id }) => id === pin)) return sendHtml(res, 403, noAccessHtml());
     if (pin === undefined && found.tenants.length > 1)
       return chooseTenant(res, { trusted: who }, identity.returnTo, found.tenants);
-    finishTrustedSignIn(res, who, identity.returnTo, pin ?? found.tenants[0]?.id);
+    await finishTrustedSignIn(res, who, identity.returnTo, pin ?? found.tenants[0]?.id);
   } catch (error) {
     console.warn(`[portal] trusted sign-in failed: ${errMessage(error)}`);
     sendHtml(
@@ -1750,7 +1798,13 @@ async function authTenant(req: IncomingMessage, res: ServerResponse): Promise<vo
   return finishSignIn(res, choice.signIn!, choice.returnTo, tenant);
 }
 
-function finishTrustedSignIn(res: ServerResponse, who: TrustedSignIn, returnTo: string, tenant?: string): void {
+async function finishTrustedSignIn(
+  res: ServerResponse,
+  who: TrustedSignIn,
+  returnTo: string,
+  tenant?: string,
+): Promise<void> {
+  await joinVerifiedEmails(who, tenant);
   setAuthenticatedSession(res, who.sub, who.name, false, tenant);
   res.writeHead(302, { location: sanitizeReturnTo(returnTo, PUBLIC_URL, APPS_DOMAIN), "cache-control": "no-store" });
   res.end();
