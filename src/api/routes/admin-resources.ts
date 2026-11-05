@@ -42,6 +42,7 @@ import type { ApprovalGrantModes } from "../../types.ts";
 import { parseEgressPolicy } from "../../resolution/egress-policy.ts";
 import { FEATURE_NAMES, FEATURES, type FeatureName } from "../../feature-flags.ts";
 import { parseSharingPosture, SHARING_POSTURES, type SharingPosture } from "../../resolution/sharing-posture.ts";
+import { appHandleResource } from "./admin/app-handle.ts";
 
 type Actor = { id: string };
 
@@ -576,6 +577,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       (deps, scope, names) => deps.config!.setAckEmoji(scope, names),
     ),
   },
+  appHandleResource,
   {
     id: "branding",
     kind: "custom",

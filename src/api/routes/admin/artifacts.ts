@@ -72,7 +72,7 @@ export async function listAdminArtifacts(ctx: ApiCtx): Promise<void> {
         createdByName: named(d.createdBy),
         createdAt: d.versions[0]?.createdAt,
         lastAccessAt: d.lastAccessAt,
-        publicUrl: appUrlOf(d, deps.portalUrl),
+        publicUrl: appUrlOf(d, { sharedWebUrl: deps.portalUrl, appsDomain: deps.deployAppsDomain }),
       }));
     return sendJson(res, 200, { scopeId: scope, deployments });
   }

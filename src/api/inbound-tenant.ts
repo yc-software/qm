@@ -37,7 +37,7 @@ export function inboundKey(
   url: URL,
 ): InboundKey | undefined {
   const slug = gate.deployGateSecret ? appHostSlug(req.headers.host, gate.deployAppsDomain) : undefined;
-  if (slug !== undefined) return { by: "deployment", key: slug };
+  if (slug !== undefined) return { by: "app_host", key: slug };
   const keyed = found?.route.tenant;
   if (typeof keyed !== "object") return undefined;
   const key = { by: keyed.by, key: keyed.key(found!.params, url) };

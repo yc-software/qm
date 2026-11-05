@@ -32,7 +32,7 @@ export function inboundTenancy(table: string): PgMigrationDefinition[] {
   return [...durableMapTenancy(table), inboundIndexes(table)];
 }
 
-export type TenantKey = keyof typeof KEYS | "slack_bridge";
+export type TenantKey = keyof typeof KEYS | "slack_bridge" | "app_host";
 
 const definer = (name: string, returns: string, body: string): string =>
   `CREATE OR REPLACE FUNCTION ${name}(key text) RETURNS ${returns}

@@ -127,11 +127,23 @@ async function principalTenants(ctx: ApiCtx): Promise<void> {
   });
 }
 
+async function appHostTenant(ctx: ApiCtx, host: string): Promise<string | undefined> {
+  const suffix = ctx.deps.deployAppsDomain ? `.${ctx.deps.deployAppsDomain.toLowerCase()}` : undefined;
+  if (!suffix || !host.endsWith(suffix)) return undefined;
+  const label = host.slice(0, -suffix.length);
+  const dash = label.indexOf("-");
+  if (dash < 1 || dash === label.length - 1 || label.includes(".")) return undefined;
+  return ctx.deps.directory?.tenantForAppHandle?.(label.slice(0, dash));
+}
+
 async function hostTenant(ctx: ApiCtx): Promise<void> {
   const host = (ctx.url.searchParams.get("host") ?? "").trim().toLowerCase();
   if (!host || host.length > 253) return sendJson(ctx.res, 400, { error: "bad_request", message: "host required" });
   const tenant = await ctx.deps.directory?.tenantForHost?.(host);
-  if (!tenant) return sendJson(ctx.res, 200, { tenant: null });
+  if (!tenant) {
+    const app = await appHostTenant(ctx, host);
+    return sendJson(ctx.res, 200, app ? { tenant: app, app: true } : { tenant: null });
+  }
   const client = await ctx.deps.directory?.trustedClientFor?.(tenant);
   return sendJson(ctx.res, 200, { tenant, ...(client ? { trustedClient: client } : {}) });
 }
