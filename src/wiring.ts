@@ -1,4 +1,4 @@
-import { onTenantLoad } from "./tenants/cache.ts";
+import { onTenantLoad, perTenant } from "./tenants/cache.ts";
 import { loadTenantSettings } from "./tenants/settings.ts";
 import { nonDeploymentCredential, withDeploymentCredentials } from "./credentials/deployment-credentials.ts";
 import { resolveEmbeddingModel } from "./model/pi-models.ts";
@@ -702,10 +702,6 @@ export function buildApp(
   });
   const layerTenants = new Set<string>();
   const deploymentLayerReady = boundTenant() ? deploymentLayerStore.hydrate() : Promise.resolve(null);
-  const stopLayerLoad = onTenantLoad(async () => {
-    layerTenants.add(currentTenant());
-    await deploymentLayerStore.hydrate();
-  });
   const refreshLayerTenants = async (): Promise<void> => {
     for (const tenant of layerTenants) await withTenant(tenant, () => deploymentLayerStore.hydrate());
   };
@@ -725,6 +721,20 @@ export function buildApp(
       });
     }
   };
+  const seeded = perTenant<{ run?: Promise<void> }>(() => ({}));
+  const seedTenantSkills = (): Promise<void> => {
+    const state = seeded();
+    state.run ??= installCatalogs().catch((e: unknown) => {
+      state.run = undefined;
+      console.error("[seed] failed to install seed skills:", errMessage(e));
+    });
+    return state.run;
+  };
+  const stopLayerLoad = onTenantLoad(async () => {
+    layerTenants.add(currentTenant());
+    await deploymentLayerStore.hydrate();
+    if (config.seedSkills && ownsSharedState) await seedTenantSkills();
+  });
   let skillsReady = deploymentLayerReady.then(
     () => undefined,
     (e) => console.error("[seed] deployment layer not ready:", errMessage(e)),
@@ -2986,15 +2996,12 @@ export function buildApp(
     deploymentLayerRefresh,
     ownSharedState: async () => {
       ownsSharedState = true;
+      if (!boundTenant()) return;
       await deploymentLayerStore.hydrate().catch((error: unknown) => {
         ownsSharedState = false;
         throw error;
       });
-      if (config.seedSkills)
-        skillsReady = Promise.all([
-          skillsReady,
-          installCatalogs().catch((e) => console.error("[seed] failed to install seed skills:", errMessage(e))),
-        ]).then(() => undefined);
+      if (config.seedSkills) skillsReady = Promise.all([skillsReady, seedTenantSkills()]).then(() => undefined);
     },
     sessions,
     runs,

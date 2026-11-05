@@ -1,7 +1,7 @@
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { createScheduler, type Scheduler } from "../src/cron/scheduler.ts";
-import { createPgBossCronQueue, type CronFireJob, type CronJobQueue } from "../src/cron/job-queue.ts";
+import { createPgBossCronQueue, installCronQueue, type CronFireJob, type CronJobQueue } from "../src/cron/job-queue.ts";
 import { createCronStore, type CronStore } from "../src/cron/cron-store.ts";
 import { type CronFireStore, createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
@@ -28,6 +28,7 @@ before(async () => {
   await p.query(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
   await p.query(`DROP TABLE IF EXISTS ${CRONS_TABLE}, ${IDEM_TABLE}`);
   await p.end();
+  await installCronQueue(URL, SCHEMA);
 });
 
 async function until(cond: () => boolean, ms: number): Promise<void> {

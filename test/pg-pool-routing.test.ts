@@ -137,7 +137,8 @@ test(
   "cron queue shares transaction pooling and stopping it preserves other stores",
   { skip, timeout: 30_000 },
   async () => {
-    const { createPgBossCronQueue } = await import("../src/cron/job-queue.ts");
+    const { createPgBossCronQueue, installCronQueue } = await import("../src/cron/job-queue.ts");
+    await installCronQueue(direct!, "pooled_cron_test");
     const store = createPgPool(direct!);
     const queue = createPgBossCronQueue(direct!, "pooled_cron_test");
     let fired = false;
