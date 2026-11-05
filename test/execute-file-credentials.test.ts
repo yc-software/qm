@@ -200,7 +200,7 @@ test("credential files that grow past the limit fail with the reason", async (t)
   const f = await fixture(t);
   await assert.rejects(
     f.context().execute('head -c 12000000 /dev/zero > "$HOME/.aws/sso/cache/session.json"', { credentials: ["aws"] }),
-    /credential files grew past \d+ bytes/,
+    /credential files archive is \d+ bytes, over the \d+-byte cap/,
   );
 });
 
