@@ -22,7 +22,7 @@ import {
   type StoredRenderScratch,
 } from "./sandbox/render-sandbox.ts";
 import { createSdkRenderClient } from "./sandbox/render-client.ts";
-import { createRenderBase, renderBaseStore } from "./sandbox/render-base.ts";
+import { createRenderBase, type StoredRenderBase } from "./sandbox/render-base.ts";
 import { createKeychainApprovals, type KeychainApprovals } from "./credentials/keychain-approval.ts";
 import { flushErrorReporting, tracePhase } from "../plugins/chassis/src/error-reporting.ts";
 import { createProductAnalytics } from "./util/product-analytics.ts";
@@ -546,9 +546,7 @@ const CONFIGURED_MAPS = [
   "render_deploy_credentials",
   "render_app_storage",
   "aws_deploy_bodies",
-  "fly_peer_claims",
   "fly_deploy_configs",
-  "fly_deploy_ports",
   "porter_deploy_bodies",
 ];
 
@@ -604,6 +602,8 @@ export function buildApp(
   const pgArtifactMap = createPostgresMapFactory(databaseUrl);
   const artifactMap = <T>(table: string, indexedFields?: readonly Extract<keyof T, string>[]): DurableMap<T> =>
     pgArtifactMap.map<T>(table, indexedFields);
+  const processMap = <T>(table: string): DurableMap<T> =>
+    createPostgresMap<T>(pgArtifactMap.pool, table, [], [], [processLevelMap(table)]);
   const inboundMap = <T>(table: string, indexedFields?: readonly Extract<keyof T, string>[]): DurableMap<T> =>
     pgArtifactMap.map<T>(table, indexedFields, inboundTenancy(table));
   for (const migration of [
@@ -692,13 +692,7 @@ export function buildApp(
   const auditLog = createPostgresAuditLog(databaseUrl);
   let ownsSharedState = false;
   const deploymentLayerStore = createDeploymentLayerStore({
-    backing: createPostgresMap<StoredDeploymentLayer>(
-      pgArtifactMap.pool,
-      "deployment_layer",
-      [],
-      [],
-      [processLevelMap("deployment_layer")],
-    ),
+    backing: processMap<StoredDeploymentLayer>("deployment_layer"),
     runtime: deploymentLayer,
     skills,
     skillBundles,
@@ -910,7 +904,7 @@ export function buildApp(
     renderClient && config.renderSandbox.image
       ? createRenderBase({
           client: renderClient,
-          store: renderBaseStore(pgArtifactMap.pool),
+          store: processMap<StoredRenderBase>("render_sandbox_bases"),
           image: config.renderSandbox.image,
           hold: (work) => leaderLease.hold(`render:sandbox-base:${config.renderSandbox.image}`, work),
           onError: sandboxOnError,
@@ -1047,7 +1041,7 @@ export function buildApp(
       onError: sandboxOnError,
     });
   const superserveBodies = artifactMap<StoredSuperserveSandbox>("superserve_sandbox_bodies");
-  const superserveEpochs = artifactMap<StoredConfigEpoch>("superserve_config_epochs");
+  const superserveEpochs = processMap<StoredConfigEpoch>("superserve_config_epochs");
   const buildSuperserve = (): Sandbox => {
     const ss = config.superserveSandbox;
     if (!ss.apiKey) throw new Error("SANDBOX_BACKEND=superserve requires SUPERSERVE_API_KEY");
@@ -1755,7 +1749,7 @@ export function buildApp(
     config.deployProvider === "fly" && config.flyDeploy.wireguardPeers
       ? createFlyTunnelManager({
           peers: parseFlyWireguardPeers(config.flyDeploy.wireguardPeers),
-          claims: artifactMap<FlyPeerClaim>("fly_peer_claims"),
+          claims: processMap<FlyPeerClaim>("fly_peer_claims"),
           metadataUri: config.flyDeploy.metadataUri ?? "",
           executable: "wireproxy",
           port: 18096,
@@ -1770,7 +1764,7 @@ export function buildApp(
         ...config.flyDeploy,
         ...(flyTunnel ? { privateTransport: flyTunnel } : {}),
         configStore: artifactMap<FlyMachineConfig>("fly_deploy_configs"),
-        portStore: artifactMap<string>("fly_deploy_ports"),
+        portStore: processMap<string>("fly_deploy_ports"),
         onError: sandboxOnError,
       }),
     porter: () =>

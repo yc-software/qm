@@ -19,6 +19,10 @@ const UNTENANTED: Record<string, string> = {
   instance_heartbeats: "records the liveness of core processes",
   auth_broker_sessions: "holds identity-provider sign-in sessions, which exist before a tenant is chosen",
   deployment_layer: "describes the installation's deployment layer, which the process reads before any tenant binds",
+  render_sandbox_bases: "records the golden snapshot of the release's sandbox image, shared by every tenant",
+  superserve_config_epochs: "numbers the installation's sandbox configuration generations, shared by every tenant",
+  fly_peer_claims: "assigns the installation's WireGuard peers to core processes",
+  fly_deploy_ports: "allocates ports inside the installation's shared Fly app across every tenant's deployments",
 };
 
 describe("tenant tables", () => {
@@ -65,6 +69,12 @@ describe("tenant tables", () => {
       .filter((row) => !(row.has_column && row.rls && row.policy && row.tenant_first))
       .map((row) => String(row.name));
     assert.deepEqual(gaps, []);
+    const tenantedListed = rows
+      .filter((row) => Object.hasOwn(UNTENANTED, String(row.name)) && row.has_column)
+      .filter((row) => !["tenants", "tenant_hosts"].includes(String(row.name)))
+      .map((row) => String(row.name));
+    assert.deepEqual(tenantedListed, []);
+    assert.ok(names.includes("superserve_config_epochs"));
     const tenants = rows.find((row) => row.name === "tenants");
     assert.ok(tenants?.rls && tenants.policy);
   });

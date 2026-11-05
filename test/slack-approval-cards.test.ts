@@ -137,6 +137,23 @@ test("recoveredApprovalContext carries the durable summary through a restart", (
   assert.equal(ctx!.summary, "Deletes the entire build/ directory and everything inside it.");
 });
 
+test("a recovered approval from a linked principal is answerable by the Slack user who asked", () => {
+  const ctx = recoveredApprovalContext(
+    {
+      command: "yc_cli",
+      request: {
+        surface: "slack",
+        actor: { externalId: "oidc:linked-principal" },
+        surfaceOrigin: { author: { surface: "slack", account: "default", id: "U2" }, workspace: "T1" },
+        conversation: { kind: "dm", threadRef: "dm:D1" },
+        text: "run context",
+      },
+    },
+    { channel: "D1" },
+  );
+  assert.equal(ctx?.requesterId, "U2");
+});
+
 test("approvalCardDestination DMs the requester for a channel turn and stays in place for a DM", () => {
   const channel = approvalCardDestination(true);
   assert.equal(channel.toDm, true);

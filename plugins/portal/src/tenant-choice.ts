@@ -56,6 +56,21 @@ export function corePrincipalTenants(
   return coreTenants(coreApiUrl, signingSecret, `principal-tenants?principal=${encodeURIComponent(principal)}`);
 }
 
+export async function coreSignInTenants(
+  coreApiUrl: string,
+  signingSecret: string | undefined,
+  who: { email?: string | null; principal: string },
+): Promise<EmailTenants> {
+  const [byEmail, byPrincipal] = await Promise.all([
+    who.email ? coreEmailTenants(coreApiUrl, signingSecret, who.email) : undefined,
+    corePrincipalTenants(coreApiUrl, signingSecret, who.principal),
+  ]);
+  const tenants = new Map<string, SignInTenant>();
+  for (const tenant of [...(byEmail?.tenants ?? []), ...byPrincipal.tenants])
+    if (!tenants.has(tenant.id)) tenants.set(tenant.id, tenant);
+  return { tenants: [...tenants.values()], shared: byPrincipal.shared || byEmail?.shared === true };
+}
+
 async function coreTenants(
   coreApiUrl: string,
   signingSecret: string | undefined,
