@@ -37,7 +37,7 @@ export function createLlmCaptures(deps: {
       if (envelope) {
         await q(
           `INSERT INTO llm_prompt_envelopes(hash, body, created_at) VALUES ($1,$2,$3)
-           ON CONFLICT (hash) DO UPDATE SET created_at = EXCLUDED.created_at
+           ON CONFLICT (tenant_id, hash) DO UPDATE SET created_at = EXCLUDED.created_at
             WHERE llm_prompt_envelopes.created_at < EXCLUDED.created_at - ${ENVELOPE_TOUCH_MS}`,
           [envelope.hash, envelope.body, now()],
         );

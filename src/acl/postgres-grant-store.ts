@@ -3,6 +3,7 @@ import type { Grant, Permission, ScopeId } from "../types.ts";
 import { sameGrantSet, type GrantPersistence } from "./acl-store.ts";
 import { refPrefix } from "./resource-ref.ts";
 import { likeEscape } from "../persistence/like.ts";
+import { tenantTables } from "../tenants/migrations.ts";
 
 export function rowToGrant(r: Record<string, unknown>): Grant {
   return {
@@ -88,6 +89,25 @@ export function createPostgresGrantStore(connectionString: string): GrantPersist
         `CREATE INDEX CONCURRENTLY IF NOT EXISTS acl_grants_by_grantee ON acl_grants(grantee_scope_id, path text_pattern_ops)`,
       ],
     },
+    ...tenantTables(
+      "acl/grants/0005-tenants",
+      [
+        { table: "acl_grants", primaryKey: "owner_scope_id, path, grantee_scope_id, permission" },
+        { table: "acl_grants_version", primaryKey: "only_row" },
+      ],
+      {
+        before: [`DELETE FROM acl_grants_version`],
+        after: [
+          `CREATE OR REPLACE FUNCTION acl_grants_bump_version() RETURNS trigger LANGUAGE plpgsql AS $fn$
+      BEGIN
+        INSERT INTO acl_grants_version(only_row, v) VALUES (TRUE, 1)
+        ON CONFLICT (tenant_id, only_row) DO UPDATE SET v = acl_grants_version.v + 1;
+        RETURN NULL;
+      END
+      $fn$`,
+        ],
+      },
+    ),
   ]);
   const { q } = db;
 
@@ -115,7 +135,7 @@ export function createPostgresGrantStore(connectionString: string): GrantPersist
         await client.query(
           `INSERT INTO acl_grants (owner_scope_id, path, grantee_scope_id, permission, granted_by)
            VALUES ($1, $2, $3, $4, $5)
-           ON CONFLICT (owner_scope_id, path, grantee_scope_id, permission)
+           ON CONFLICT (tenant_id, owner_scope_id, path, grantee_scope_id, permission)
            DO UPDATE SET granted_by = EXCLUDED.granted_by`,
           [g.ownerScopeId, g.ref, g.granteeScopeId, g.permission, g.grantedBy],
         );
