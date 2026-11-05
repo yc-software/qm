@@ -313,18 +313,6 @@ export const TENANT_BACKFILL: PgMigrationDefinition = {
   ],
 };
 
-const UNSTAMPED_TENANT: PgMigrationDefinition = {
-  id: "sessions/store/0057-unstamped-tenant",
-  statements: [
-    `DO $unstamped$
-     BEGIN
-       IF to_regclass('qm_tenant') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sessions) THEN
-         DELETE FROM tenants WHERE id = (SELECT id FROM qm_tenant) AND settings = '{}'::jsonb;
-       END IF;
-     END $unstamped$`,
-  ],
-};
-
 const SPEND_RECOVERY_INDEX: PgMigrationDefinition = {
   id: "sessions/store/0051-spend-recovery-index",
   statements: [
@@ -501,6 +489,11 @@ const SESSION_TABLES = tenantTables(
     after: [
       ...SPEND_TRIGGERS,
       ...["items", "blobs"].flatMap(tenantRowSecurity),
+      `DO $unstamped$
+       BEGIN
+         DELETE FROM tenants WHERE id = (SELECT id FROM qm_tenant) AND settings = '{}'::jsonb;
+       EXCEPTION WHEN foreign_key_violation THEN NULL;
+       END $unstamped$`,
       `DROP FUNCTION qm_tenant_id()`,
       `DROP TABLE qm_tenant`,
     ],
@@ -513,7 +506,6 @@ export const SESSION_MIGRATIONS = [
   MESSAGE_SEARCH_INDEX,
   DROP_ITEMS_SEARCH,
   TENANT_BACKFILL,
-  UNSTAMPED_TENANT,
   SPEND_RECOVERY_INDEX,
   SESSION_FACTS,
   SESSION_FACTS_COPY,

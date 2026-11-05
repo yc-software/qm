@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { applyPgMigrations, createPgPool, definePgMigration } from "../src/persistence/pg-pool.ts";
 import { bootTenantReader } from "../src/tenants/boot.ts";
-import { boundTenant } from "../src/tenants/context.ts";
+import { boundTenant, withoutTenant } from "../src/tenants/context.ts";
 import { TENANCY } from "../src/tenants/migrations.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { ownerUrl } from "./support/test-tenant.ts";
@@ -36,22 +36,24 @@ after(async () => {
   await owner?.end();
 });
 
-test("an unbound non-owner reads the boot tenant only when exactly one tenant exists", { skip }, async () => {
-  const app = createPgPool(asRole(url));
-  try {
-    assert.equal(boundTenant(), undefined);
-    const [me] = await app.q("SELECT rolbypassrls AS bypass FROM pg_roles WHERE rolname = current_user");
-    assert.equal(me?.bypass, false);
-    await assert.rejects(app.q("SELECT id FROM tenants"), { code: "42501", message: /No tenant is bound/ });
-    const read = bootTenantReader(app);
-    assert.equal(await read(), undefined);
-    const only = randomUUID();
-    await owner.query("INSERT INTO tenants(id) VALUES ($1)", [only]);
-    assert.equal(await read(), only);
-    assert.equal(await bootTenantReader(app)(), only);
-    await owner.query("INSERT INTO tenants(id) VALUES ($1)", [randomUUID()]);
-    assert.equal(await bootTenantReader(app)(), undefined);
-  } finally {
-    await app.close();
-  }
-});
+test("an unbound non-owner reads the boot tenant only when exactly one tenant exists", { skip }, () =>
+  withoutTenant(async () => {
+    const app = createPgPool(asRole(url));
+    try {
+      assert.equal(boundTenant(), undefined);
+      const [me] = await app.q("SELECT rolbypassrls AS bypass FROM pg_roles WHERE rolname = current_user");
+      assert.equal(me?.bypass, false);
+      await assert.rejects(app.q("SELECT id FROM tenants"), { code: "42501", message: /No tenant is bound/ });
+      const read = bootTenantReader(app);
+      assert.equal(await read(), undefined);
+      const only = randomUUID();
+      await owner.query("INSERT INTO tenants(id) VALUES ($1)", [only]);
+      assert.equal(await read(), only);
+      assert.equal(await bootTenantReader(app)(), only);
+      await owner.query("INSERT INTO tenants(id) VALUES ($1)", [randomUUID()]);
+      assert.equal(await bootTenantReader(app)(), undefined);
+    } finally {
+      await app.close();
+    }
+  }),
+);

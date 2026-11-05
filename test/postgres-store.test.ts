@@ -500,10 +500,11 @@ test("pg spend ancestry only visits sessions with usage inside the requested ran
   });
   const pg = (await import("pg")).default;
   const raw = new pg.Pool({ connectionString: URL });
-  const execute = pg.Pool.prototype.query;
+  const execute = pg.Client.prototype.query;
   let query = "";
-  t.mock.method(pg.Pool.prototype, "query", function (this: InstanceType<typeof pg.Pool>, ...args: unknown[]) {
-    if (typeof args[0] === "string" && args[0].startsWith("WITH RECURSIVE")) query = args[0];
+  t.mock.method(pg.Client.prototype, "query", function (this: InstanceType<typeof pg.Client>, ...args: unknown[]) {
+    const text = typeof args[0] === "string" ? args[0] : (args[0] as { text?: unknown } | null)?.text;
+    if (typeof text === "string" && text.startsWith("WITH RECURSIVE")) query = text;
     return Reflect.apply(execute, this, args);
   });
   try {
