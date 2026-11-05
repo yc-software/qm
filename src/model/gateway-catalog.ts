@@ -2,7 +2,6 @@ import { isEmbeddingModel, type EmbeddingModel } from "./model-overlay.ts";
 import { gatewayRoot, type ModelGatewayTransportConfig } from "./provider-endpoints.ts";
 import { GATEWAY_MODEL_PREFIX, GATEWAY_PROVIDER, setGatewayModels, type GatewayModel } from "./gateway-models.ts";
 import { modelOfferedInWebui, selectableBaseModels } from "./pi-models.ts";
-import { perTenant } from "../tenants/cache.ts";
 import { readBoundedText } from "../util/bytes.ts";
 
 const MAX_BYTES = 2 * 1024 * 1024;
@@ -130,23 +129,22 @@ export function createGatewayCatalog(
 ) {
   const root = gatewayRoot(config.url);
   const baseUrl = `${root}/v1`;
-  const discovery = perTenant<{
+  const state: {
     routes: Readonly<Record<string, string>>;
     discovered: boolean;
     retryAt: number;
     lastSuccessAt: number;
     inFlight?: Promise<void>;
-  }>(() => ({ routes: { ...config.models }, discovered: false, retryAt: 0, lastSuccessAt: 0 }));
+  } = { routes: { ...config.models }, discovered: false, retryAt: 0, lastSuccessAt: 0 };
   const transport: ModelGatewayTransportConfig = {
     ...config,
     reservedModelIds: new Set(Object.keys(config.models)),
     refresh,
     get models() {
-      return discovery().routes;
+      return state.routes;
     },
   };
   async function refresh(): Promise<void> {
-    const state = discovery();
     if (state.inFlight) return state.inFlight;
     if (now() < state.retryAt) return;
     state.inFlight = (async () => {
