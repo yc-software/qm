@@ -1,3 +1,4 @@
+import { perTenant } from "../tenants/cache.ts";
 import { withLiveTurnMembership } from "../resolution/scope-membership.ts";
 import { randomUUID } from "node:crypto";
 import type { DurableMap } from "../persistence/durable-map.ts";
@@ -115,14 +116,15 @@ export function createSandboxResources(opts: {
   lock: AdvisoryLock;
   canUseScope(actorId: string, scopeId: ScopeId): Promise<boolean>;
 }): SandboxResources {
-  let upgraded: Promise<void> | undefined;
+  const upgraded = perTenant<{ done?: Promise<void> }>(() => ({}));
   const initialize = async (): Promise<void> => {
     if (!opts.upgrade) return;
-    upgraded ??= opts.upgrade().catch((error: unknown) => {
-      upgraded = undefined;
+    const state = upgraded();
+    state.done ??= opts.upgrade().catch((error: unknown) => {
+      state.done = undefined;
       throw error;
     });
-    await upgraded;
+    await state.done;
   };
   const actionsFor = (backend: Sandbox | undefined): string[] => {
     if (!backend) return [];

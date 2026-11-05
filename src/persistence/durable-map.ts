@@ -1,3 +1,4 @@
+import { perTenant } from "../tenants/cache.ts";
 import { createPgPool, withPgTransaction, type PgPool, type PoolClient } from "./pg-pool.ts";
 import { jsonbStringify } from "../util/text.ts";
 
@@ -102,16 +103,17 @@ export function createPostgresMap<T>(
     });
   }
   const CACHE_MAX_AGE_MS = 15_000;
-  let cache: { v: string; fetchedAt: number; entries: Array<[string, T]> } | null = null;
+  const caches = perTenant<{ last?: { v: string; fetchedAt: number; entries: Array<[string, T]> } }>(() => ({}));
   async function snapshot(): Promise<Array<[string, T]>> {
     await ready();
     const vRows = await pg.q(`SELECT v FROM ${VERSIONS_TABLE} WHERE tbl = '${table}'`);
     const v = vRows.length ? String(vRows[0]!.v) : "";
-    if (!cache || cache.v !== v || Date.now() - cache.fetchedAt > CACHE_MAX_AGE_MS) {
+    const cache = caches();
+    if (!cache.last || cache.last.v !== v || Date.now() - cache.last.fetchedAt > CACHE_MAX_AGE_MS) {
       const rows = await pg.q(`SELECT id, json FROM ${table} ORDER BY id`);
-      cache = { v, fetchedAt: Date.now(), entries: rows.map((row) => [row.id as string, row.json as T]) };
+      cache.last = { v, fetchedAt: Date.now(), entries: rows.map((row) => [row.id as string, row.json as T]) };
     }
-    return structuredClone(cache.entries);
+    return structuredClone(cache.last.entries);
   }
   async function selectRows<K extends Extract<keyof T, string>>(
     query: DurableMapSelect<T, K>,

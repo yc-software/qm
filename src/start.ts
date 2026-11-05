@@ -36,9 +36,7 @@ export async function startQm(
     managedSlack,
   });
 
-  await built.config.hydrate?.();
-  await built.refreshCustomProviders();
-  await built.identity.refresh();
+  await built.loadTenant();
   await built.deploymentLayerReady;
   built.deploymentLayerRefresh.start();
   server.listen(config.port);

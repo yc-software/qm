@@ -1,5 +1,6 @@
 import { LRUCache } from "lru-cache";
 import type { FileArtifact } from "./file-artifact-store.ts";
+import { currentTenant } from "../tenants/context.ts";
 
 const verifiedData = new LRUCache<string, string>({ maxSize: 64_000_000, sizeCalculation: (data) => data.length || 1 });
 
@@ -8,7 +9,7 @@ export async function cachedArtifactData(
   artifact: Pick<FileArtifact, "id" | "sha256">,
   load: () => Promise<string | undefined>,
 ): Promise<string | undefined> {
-  const key = JSON.stringify([use, artifact.id, artifact.sha256]);
+  const key = JSON.stringify([currentTenant(), use, artifact.id, artifact.sha256]);
   const cached = verifiedData.get(key);
   if (cached !== undefined) return cached;
   const data = await load();

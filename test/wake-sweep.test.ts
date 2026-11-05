@@ -3,12 +3,16 @@ import assert from "node:assert/strict";
 import { createWakeSweep, type SweepSource } from "../src/wake/sweep.ts";
 import { createEngagedRegistry } from "../src/wake/engaged-registry.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { boundTenant, withTenant } from "../src/tenants/context.ts";
+
+const TENANT = "00000000-0000-4000-8000-000000000001";
+const OTHER = "00000000-0000-4000-8000-000000000002";
 
 function recordingSource(over: Partial<SweepSource> = {}): { source: SweepSource; swept: string[] } {
   const swept: string[] = [];
   const source: SweepSource = {
     async engagedSessions() {
-      return ["A"];
+      return [{ tenantId: TENANT, threadRef: "A" }];
     },
     async sweepSession(threadRef) {
       swept.push(threadRef);
@@ -39,13 +43,42 @@ test("a per-session sweep error is caught, not thrown (a flaky pull must not kil
 
 test("the engaged registry: engage adds, settle removes, list reflects current (RAM, re-derivable)", () => {
   const reg = createEngagedRegistry();
-  assert.deepEqual(reg.list(), []);
-  reg.engage("ch:C1:1");
-  reg.engage("ch:C1:1");
-  reg.engage("ch:C2:2");
-  assert.deepEqual(reg.list().sort(), ["ch:C1:1", "ch:C2:2"]);
-  reg.settle("ch:C1:1");
-  assert.deepEqual(reg.list(), ["ch:C2:2"]);
+  const refs = () => reg.list().map((session) => session.threadRef);
+  assert.deepEqual(refs(), []);
+  withTenant(TENANT, () => {
+    reg.engage("ch:C1:1");
+    reg.engage("ch:C1:1");
+    reg.engage("ch:C2:2");
+  });
+  assert.deepEqual(refs().sort(), ["ch:C1:1", "ch:C2:2"]);
+  withTenant(TENANT, () => reg.settle("ch:C1:1"));
+  assert.deepEqual(refs(), ["ch:C2:2"]);
+});
+
+test("engaged sessions are kept per tenant and swept under their own tenant", async () => {
+  const reg = createEngagedRegistry();
+  withTenant(TENANT, () => reg.engage("ch:C1:1"));
+  withTenant(OTHER, () => reg.engage("ch:C1:1"));
+  withTenant(OTHER, () => reg.settle("ch:C1:1"));
+  assert.deepEqual(reg.list(), [{ tenantId: TENANT, threadRef: "ch:C1:1" }]);
+  withTenant(OTHER, () => reg.engage("ch:C9:9"));
+  const seen: Array<[string | undefined, string]> = [];
+  const sweep = createWakeSweep(
+    {
+      engagedSessions: async () => reg.list(),
+      async sweepSession(threadRef) {
+        seen.push([boundTenant(), threadRef]);
+        return 0;
+      },
+    },
+    { ...singleProcessDeps(), intervalMs: 10_000 },
+  );
+  await sweep.sweep();
+  assert.deepEqual(seen, [
+    [TENANT, "ch:C1:1"],
+    [OTHER, "ch:C9:9"],
+  ]);
+  assert.throws(() => reg.engage("ch:C1:1"), /No tenant is bound/);
 });
 
 test("nothing engaged ⇒ a pass does no work", async () => {

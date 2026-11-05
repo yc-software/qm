@@ -1,3 +1,4 @@
+import { currentTenant } from "../tenants/context.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { orgId as configOrgId } from "../config.ts";
 import { randomBytes } from "node:crypto";
@@ -916,14 +917,15 @@ export function createKeychain(deps: {
   async function connectorTokenForRecord(rec: KeychainCredential): Promise<string | null> {
     const refresh = deps.refreshConnector;
     if (refresh && rec.refresh?.refreshTokenEnc && rec.host && refreshDue(rec)) {
-      let pending = inflightRefreshes.get(rec.id);
+      const refreshKey = `${currentTenant()}\0${rec.id}`;
+      let pending = inflightRefreshes.get(refreshKey);
       if (!pending) {
         pending = refreshAndStore(rec.id, rec.host, refresh).catch((e) => {
           console.error(`[keychain] connector token refresh could not run for ${rec.host}: ${errMessage(e)}`);
           return unexpiredAccessToken(rec);
         });
-        inflightRefreshes.set(rec.id, pending);
-        void pending.finally(() => inflightRefreshes.delete(rec.id));
+        inflightRefreshes.set(refreshKey, pending);
+        void pending.finally(() => inflightRefreshes.delete(refreshKey));
       }
       return pending;
     }

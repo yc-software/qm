@@ -1,4 +1,5 @@
 import type { MemoryEmbedder } from "./model/embeddings.ts";
+import { tenantLoader } from "./tenants/cache.ts";
 import { nonDeploymentCredential, withDeploymentCredentials } from "./credentials/deployment-credentials.ts";
 import { resolveEmbeddingModel } from "./model/pi-models.ts";
 import { createPostgresTeamStore, type TeamStore } from "./teams/teams.ts";
@@ -463,6 +464,7 @@ export interface BuiltApp {
   refreshModels: () => Promise<void>;
   customProviders: CustomProviderStore;
   refreshCustomProviders: () => Promise<void>;
+  loadTenant: () => Promise<void>;
   mcpServers: McpServerStore;
   mcpToolService: McpToolService;
   acl: AclStore;
@@ -620,7 +622,6 @@ export function buildApp(
     externalMembers: artifactMap<ExternalMember>("external_members"),
     principalLinks,
   });
-  void identity.refresh().catch(reportFailureAs("startup: hydrate identity", undefined));
   const leaderLease: LeaderLease = createPostgresLeaderLease(pgArtifactMap.pool);
   const configStore = createConfigStore(config.orgId, {
     ...configStoreMaps(artifactMap),
@@ -628,7 +629,6 @@ export function buildApp(
     defaultSharingPosture: config.sharingPosture,
     ...(config.connectorSecretKey ? { connectorSecretKey: config.connectorSecretKey } : {}),
   });
-  void configStore.hydrate?.().catch(reportFailureAs("startup: hydrate configuration", undefined));
   const skills: SkillStore = createSkillStore({
     backing: artifactMap<Skill>("skills", ["scopeId"]),
     advisoryLock,
@@ -1316,6 +1316,11 @@ export function buildApp(
   const refreshCustomProviders = async () => {
     setCustomProviders(await customProviders.enabled());
   };
+  const loadTenant = tenantLoader([
+    () => configStore.hydrate?.() ?? Promise.resolve(),
+    refreshCustomProviders,
+    () => identity.refresh(),
+  ]);
   const refreshModels = async () => {
     await gatewayCatalog?.refresh();
     await refreshCustomProviders();
@@ -2986,6 +2991,7 @@ export function buildApp(
     refreshModels,
     customProviders,
     refreshCustomProviders,
+    loadTenant,
     mcpServers,
     mcpToolService,
     acl,

@@ -1,5 +1,6 @@
 import { xmlEscape } from "../util/message-tag.ts";
 import { safeChunks, safeCutIndex } from "./safe-cut.ts";
+import { perTenant } from "../tenants/cache.ts";
 export function escapeSlackText(text: string): string {
   return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
@@ -39,19 +40,20 @@ export function neutralizeMassMentions(text: string): string {
 
 const RESERVED_MENTION_NAMES = new Set(["here", "channel", "everyone"]);
 
-let mentionIdByName: ReadonlyMap<string, string> = new Map();
-let mentionNameById: ReadonlyMap<string, string> = new Map();
+const mentionIndex = perTenant(() => ({
+  idByName: new Map<string, string>() as ReadonlyMap<string, string>,
+  nameById: new Map<string, string>() as ReadonlyMap<string, string>,
+}));
 export function setMentionIndex(index: ReadonlyMap<string, string>): void {
-  mentionIdByName = index;
   const byId = new Map<string, string>();
   for (const [name, id] of index) if (!byId.has(id)) byId.set(id, name);
-  mentionNameById = byId;
+  Object.assign(mentionIndex(), { idByName: index, nameById: byId });
 }
 const WIRE_MENTION = /(?<!<)<+(@[UW]\w+|!(?:here|channel|everyone|subteam\^\w+))(?:\|([^<>]*))?(?:>|(?=<))/gi;
 
 function neutralizedMention(kind: string, label: string | undefined): string {
   const name = label?.trim().replace(/^@/, "") || "";
-  if (kind.startsWith("@")) return `@${name || mentionNameById.get(kind.slice(1)) || kind.slice(1)}`;
+  if (kind.startsWith("@")) return `@${name || mentionIndex().nameById.get(kind.slice(1)) || kind.slice(1)}`;
   const command = kind.slice(1);
   if (command.toLowerCase().startsWith("subteam^")) return `@${name || command.slice("subteam^".length)}`;
   return `@\u200b${command.toLowerCase()}`;
@@ -79,14 +81,15 @@ const PLAIN_MENTION = new RegExp(
 );
 
 function armUserMentions(text: string, wrap: (armed: string) => string = (s) => s): string {
-  if (!mentionIdByName.size || !text.includes("@")) return text;
+  const { idByName } = mentionIndex();
+  if (!idByName.size || !text.includes("@")) return text;
   return text.replace(PLAIN_MENTION, (match, name: string) => {
     const words = name.split(" ");
     for (let n = words.length; n >= 1; n--) {
       const candidate = words.slice(0, n).join(" ");
       const key = candidate.toLowerCase();
       if (RESERVED_MENTION_NAMES.has(key)) continue;
-      const id = mentionIdByName.get(key);
+      const id = idByName.get(key);
       if (!id) continue;
       if (n < words.length && /^\p{Lu}/u.test(words[n] ?? "")) return match;
       return `${wrap(`<@${id}>`)}${name.slice(candidate.length)}`;

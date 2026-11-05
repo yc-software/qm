@@ -6,6 +6,7 @@
 // connector credentials — reachable only through core, never injected into sandboxes.
 
 import type { DurableMap } from "../persistence/durable-map.ts";
+import { tenantListeners } from "../tenants/cache.ts";
 
 export type McpServerAuthMode = "none" | "bearer" | "client-credentials" | "oauth-user";
 
@@ -56,10 +57,7 @@ export interface McpServerStore {
 }
 
 export function createMcpServerStore(backing: DurableMap<McpServer>): McpServerStore {
-  const listeners = new Set<() => void>();
-  const emit = () => {
-    for (const l of listeners) l();
-  };
+  const listeners = tenantListeners<[]>("mcp server change");
   return {
     async list() {
       const entries = await backing.entries();
@@ -68,15 +66,12 @@ export function createMcpServerStore(backing: DurableMap<McpServer>): McpServerS
     get: (id) => backing.get(id),
     put: async (server) => {
       await backing.put(server.id, server);
-      emit();
+      listeners.emit();
     },
     delete: async (id) => {
       await backing.delete(id);
-      emit();
+      listeners.emit();
     },
-    onChange: (listener) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    onChange: (listener) => listeners.add(listener),
   };
 }
