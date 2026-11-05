@@ -17,11 +17,11 @@ interface ScopeMembershipDeps {
   managedGroups?: Pick<ManagedGroupDirectory, "recognizes" | "membership" | "members">;
   directory?: {
     channelMember(channelId: string, principalId: string): Promise<boolean>;
-    liveChannelMember?(channelId: string, principalId: string): Promise<boolean>;
     groupMember(groupId: string, principalId: string): Promise<boolean>;
     channelMembership(channelId: string, principalId: string): Promise<boolean | undefined>;
     groupMembership(groupId: string, principalId: string): Promise<boolean | undefined>;
     channelPrivacy?(channelId: string): Promise<boolean | undefined>;
+    channelShared?(channelId: string): Promise<boolean | undefined>;
     conversationMembers?(
       kind: "channel" | "group",
       id: string,
@@ -70,13 +70,9 @@ async function currentSharedScopeMember(
   const member = await deps.directory?.get?.(principalId).catch(swallowAs("scope membership: directory lookup", null));
   const ids = [...new Set([principalId, member?.principalId, member?.slackId].filter((id): id is string => !!id))];
   const managed = kind === "group" && deps.managedGroups?.recognizes(ref);
-  const membership = async (id: string) => {
+  const membership = (id: string) => {
     if (managed) return deps.managedGroups!.membership(ref, id);
-    if (kind === "group") return deps.directory?.groupMember(ref, id);
-    if (await deps.directory?.channelMember(ref, id)) return true;
-    // Private channels shared with another organization never count from a crawled roster; a live Slack
-    // check recorded at turn admission is the only proof accepted there.
-    return deps.directory?.liveChannelMember?.(ref, id);
+    return kind === "channel" ? deps.directory?.channelMember(ref, id) : deps.directory?.groupMember(ref, id);
   };
   for (const id of ids)
     if (
@@ -177,6 +173,9 @@ export function createCurrentScopeMembers(deps: ScopeMembershipDeps, requireComp
 
     if (!deps.directory?.list) return undefined;
     if (kind === "channel" && (await deps.directory.channelPrivacy?.(ref)) !== true) return undefined;
+    // A shared channel's stored roster lists only our own members, never the other organization's
+    // guests, so it can't stand in for the full audience.
+    if (kind === "channel" && (await deps.directory.channelShared?.(ref)) === true) return [];
 
     const candidates = await deps.directory.list();
     const membership = kind === "channel" ? deps.directory.channelMember : deps.directory.groupMember;

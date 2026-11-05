@@ -59,11 +59,11 @@ export interface DirectoryStore {
   resolve(query: string): Promise<RecipientResolution>;
   resolveChannel(query: string): Promise<ChannelResolution>;
   channelMember(channelId: string, principalId: string): Promise<boolean>;
-  /** Membership recorded by a live Slack check at turn admission (not a background crawl). */
-  liveChannelMember(channelId: string, principalId: string): Promise<boolean>;
   channelMembership(channelId: string, principalId: string): Promise<boolean | undefined>;
   channelMemberIds(channelId: string): Promise<string[] | undefined>;
   channelPrivacy(channelId: string): Promise<boolean | undefined>;
+  /** Whether the channel is shared with another organization (Slack Connect). */
+  channelShared(channelId: string): Promise<boolean | undefined>;
   replaceGroups(
     groupMembers: GroupMembership[],
     syncedAt?: number,

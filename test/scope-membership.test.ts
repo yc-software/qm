@@ -4,6 +4,7 @@ import {
   createCanManageScope,
   createCanReadScope,
   createCanWriteScope,
+  createCurrentScopeMembers,
   createIsCurrentSharedScopeMember,
   createManagesArtifactHome,
   createMembershipControlsScope,
@@ -177,17 +178,20 @@ const EXPECTED = [
   "group:project-1 (none) -----",
 ];
 
-test("a private shared channel admits writes only from a live Slack check", async () => {
-  const live = new Set<string>();
+test("a private shared channel admits its members but never stands in for the full audience", async () => {
   const shared = {
     ...directory,
-    channelMember: async () => false,
-    liveChannelMember: async (channelId: string, principalId: string) => live.has(`${channelId}|${principalId}`),
+    channelPrivacy: async () => true,
+    channelShared: async (channelId: string) => channelId === "priv",
+    list: async () => [{ principalId: "alice@x.com" }],
   };
   const canWrite = createCanWriteScope({ ...deps, directory: shared });
-  assert.equal(await canWrite("alice@x.com", scopeId("channel", "connect")), false);
-  live.add("connect|alice@x.com");
-  assert.equal(await canWrite("alice@x.com", scopeId("channel", "connect")), true);
-  assert.equal(await canWrite("bob@x.com", scopeId("channel", "connect")), false);
-  assert.equal(await canWrite("alice@x.com", scopeId("group", "connect")), false);
+  assert.equal(await canWrite("alice@x.com", scopeId("channel", "priv")), true);
+  assert.equal(await canWrite("bob@x.com", scopeId("channel", "priv")), false);
+  const members = createCurrentScopeMembers({ ...deps, directory: shared });
+  assert.deepEqual(await members(scopeId("channel", "priv")), []);
+  assert.deepEqual(
+    (await members(scopeId("channel", "pub")))?.map((m) => m.id),
+    ["alice@x.com"],
+  );
 });
