@@ -787,6 +787,36 @@ test("a lock refusal through a grant, or a lookup by handle, names nothing about
   assert.equal(codeOf(await agentsAs(control, CY)({ action: "edit", agent: "ada", title: "Spy" })), "forbidden");
 });
 
+test("a private channel's agent can't take an owner from outside the channel, on create or on edit", async () => {
+  const { control } = await setup();
+  const outsider = await agentsAs(control, ANN)({ action: "create", ...ADA, owners: ["Dan"] });
+  assert.equal(codeOf(outsider), "bad_request");
+  assert.match(JSON.stringify(outsider), /Dan isn't in the agent's channel/);
+  await createAda(control);
+  assert.equal(
+    codeOf(await agentsAs(control, ANN)({ action: "edit", agent: "ada", addOwners: ["Dan"] })),
+    "bad_request",
+  );
+  assert.equal(
+    agentOf(await agentsAs(control, ANN)({ action: "edit", agent: "ada", addOwners: ["Cy"] })).owners.length,
+    3,
+  );
+  const crit = agentOf(
+    await agentsAs(
+      control,
+      DAN,
+    )({
+      action: "create",
+      channel: "design-crit",
+      handle: "crit",
+      displayName: "Critter",
+      title: "Critic",
+      owners: ["Ann"],
+    }),
+  );
+  assert.deepEqual(crit.owners, ["Dan", "Ann"]);
+});
+
 const turn = (actor: string, conversation: TurnRequest["conversation"], text: string): TurnRequest => ({
   surface: "slack",
   actor: { externalId: actor },

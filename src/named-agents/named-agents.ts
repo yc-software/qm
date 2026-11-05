@@ -134,11 +134,11 @@ export function createNamedAgents(deps: NamedAgentsDeps): NamedAgents {
   const orphaned = (agent: NamedAgent) => !agent.owners.some(isActive);
   const liveActiveOwner = (agent: NamedAgent, actor: AgentActor) =>
     actor.live && isActive(actor.id) && isOwner(agent, actor.id);
-  const seesChannel = async (agent: NamedAgent, actorId: string) =>
-    isVisible(deps.directory, actorId, {
+  const seesChannel = async (channelId: string, principalId: string) =>
+    isVisible(deps.directory, principalId, {
       kind: "channel",
-      channelId: agent.channelId,
-      isPrivate: await deps.directory.channelPrivacy(agent.channelId),
+      channelId,
+      isPrivate: await deps.directory.channelPrivacy(channelId),
     });
 
   async function displayNameOf(principalId: string): Promise<string> {
@@ -223,7 +223,10 @@ export function createNamedAgents(deps: NamedAgentsDeps): NamedAgents {
     return undefined;
   }
 
-  async function resolvePeople(queries: readonly string[]): Promise<{ ids: string[] } | AgentRefusal> {
+  async function resolvePeople(
+    queries: readonly string[],
+    channelId: string,
+  ): Promise<{ ids: string[] } | AgentRefusal> {
     const ids: string[] = [];
     for (const query of queries) {
       const found = await deps.directory.resolve(query);
@@ -235,6 +238,8 @@ export function createNamedAgents(deps: NamedAgentsDeps): NamedAgents {
         );
       if (found.member.type !== "internal" || !isActive(found.member.principalId))
         return refuse("bad_request", `${found.member.displayName} isn't an active member of the organization`);
+      if (!(await seesChannel(channelId, found.member.principalId)))
+        return refuse("bad_request", `${found.member.displayName} isn't in the agent's channel, so they can't own it`);
       ids.push(canonicalPerson(found.member.principalId));
     }
     return { ids };
@@ -244,7 +249,7 @@ export function createNamedAgents(deps: NamedAgentsDeps): NamedAgents {
     const agent = (await deps.store.list()).find(
       (agent) => agent.state === "active" && (agent.id === ref.trim() || agent.handle === cleanHandle(ref)),
     );
-    if (!agent || admin || isOwner(agent, actor.id) || (await seesChannel(agent, actor.id))) return agent;
+    if (!agent || admin || isOwner(agent, actor.id) || (await seesChannel(agent.channelId, actor.id))) return agent;
     return undefined;
   }
 
@@ -272,7 +277,7 @@ export function createNamedAgents(deps: NamedAgentsDeps): NamedAgents {
       if (!governed || liveActiveOwner(governed.agent, actor)) return;
       const { agent } = governed;
       audit(actor, "agent_lock_refused", agent);
-      if (!(await seesChannel(agent, actor.id)))
+      if (!(await seesChannel(agent.channelId, actor.id)))
         throw new AgentLocked(
           "This change reaches a channel whose named agent's owners alone can change its instructions, standing orders or skills. Org admins can change them in the admin console.",
         );
@@ -333,7 +338,7 @@ export function createNamedAgents(deps: NamedAgentsDeps): NamedAgents {
         return refuse("forbidden", `only a member of #${channel.name} can give it an agent`);
       const badName = await nameProblem(handle, displayName);
       if (badName) return refuse("bad_request", badName);
-      const people = await resolvePeople(input.owners ?? []);
+      const people = await resolvePeople(input.owners ?? [], channel.channelId);
       if ("ok" in people) return people;
       const owners: string[] = [];
       for (const principalId of [canonicalPerson(actor.id), ...people.ids])
@@ -368,7 +373,7 @@ export function createNamedAgents(deps: NamedAgentsDeps): NamedAgents {
       const renamed = handle !== agent.handle || displayName !== agent.displayName;
       const badName = renamed ? await nameProblem(handle, displayName) : undefined;
       if (badName) return refuse("bad_request", badName);
-      const added = await resolvePeople(input.addOwners ?? []);
+      const added = await resolvePeople(input.addOwners ?? [], agent.channelId);
       if ("ok" in added) return added;
       const removals = await Promise.all(
         (input.removeOwners ?? []).map(async (query) => {
