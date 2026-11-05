@@ -98,3 +98,23 @@ export function createTrustedEntry(
     },
   };
 }
+
+export function createHostTrustedEntries(
+  base: OidcConfig | null,
+  sessionSecret: string,
+  claim: (key: string, expiresAt: number) => Promise<boolean>,
+) {
+  const entries = new Map<string, ReturnType<typeof createTrustedEntry>>();
+  return (origin: string, client: { clientId: string; clientSecret: string }) => {
+    if (!base) return null;
+    const key = createHash("sha256").update(`${origin}\n${client.clientId}\n${client.clientSecret}`).digest("hex");
+    let entry = entries.get(key);
+    if (!entry) {
+      if (entries.size >= 1_000) entries.delete(entries.keys().next().value!);
+      const cfg = { ...base, ...client, redirectUri: `${origin}/auth/trusted/callback` };
+      entry = createTrustedEntry(cfg, sessionSecret, claim);
+      entries.set(key, entry);
+    }
+    return entry;
+  };
+}
