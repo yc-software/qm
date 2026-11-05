@@ -5,6 +5,7 @@ import { createTurnFlow } from "../src/slack/turn-flow.ts";
 import { createThreadTracker } from "../src/slack/lib.ts";
 import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
 import type { TurnResult } from "../src/types.ts";
+import type { SlackPersona } from "../src/slack/delivery.ts";
 
 type ActionHandler = (args: any) => Promise<void>;
 
@@ -16,13 +17,16 @@ function fixture() {
     result: TurnResult;
     hold: Promise<void> | null;
     fetchFails: boolean;
+    personas: Map<string, SlackPersona>;
   } = {
     stored: { requesterId: "U2", text: "please run it" },
     result: { status: "ok", reply: "done" },
     hold: null,
     fetchFails: false,
+    personas: new Map(),
   };
   const core = {
+    agentPersonas: async () => new Map(state.personas),
     submitTurn: async (body: any) => {
       submitted.push(body);
       if (state.hold) await state.hold;
@@ -102,7 +106,22 @@ function fixture() {
       },
     });
   };
-  return { state, submitted, ephemerals, updates, posts, click, rememberStale };
+  const rememberRemote = (requesterId: string, text: string): void => {
+    approvals.rememberSlackApprovals([{ requestId: "req-1", command: "rm -rf /tmp/x", reason: "destructive" }], {
+      requesterId,
+      channel: "C1",
+      approvalChannel: "DCARD",
+      replyThreadTs: "1.0",
+      threadOnly: true,
+      turn: {
+        actor: { externalId: requesterId },
+        conversation: { kind: "channel", threadRef: "ch:C1:1.0", channelRef: "C1", audience: [] },
+        deliveryTarget: "C1:1.0",
+        text,
+      },
+    });
+  };
+  return { state, submitted, ephemerals, updates, posts, click, rememberStale, rememberRemote };
 }
 
 test("a click resumes from the stored record, not from whatever the card registry last cached", async () => {
@@ -282,4 +301,31 @@ test("an allow click shows who allowed it while running and keeps that record un
   const decision = final.blocks.at(-1);
   assert.equal(decision.type, "section");
   assert.match(decision.text.text, /^:white_check_mark: Allowed once by <@U2> · `rm -rf \/tmp\/x` · /);
+});
+
+const ADA: SlackPersona = { username: "Ada", icon_url: "https://cdn.example.com/ada.png" };
+const identityOf = (args: Record<string, unknown>) => ({
+  username: args.username,
+  icon_url: args.icon_url,
+  icon_emoji: args.icon_emoji,
+});
+
+test("approval notices and the resumed reply in a bound channel post as its agent; card edits send no identity", async () => {
+  const f = fixture();
+  f.state.personas.set("C1", ADA);
+  f.state.result = { status: "ok", reply: "Removed it." };
+  f.rememberRemote("U2", "please run it");
+
+  await f.click("U1");
+  assert.match(f.ephemerals[0]?.text ?? "", /Only the person who requested/);
+  assert.deepEqual(identityOf(f.ephemerals[0]), { ...ADA, icon_emoji: undefined });
+
+  await f.click("U2");
+  assert.equal(f.submitted.length, 1);
+  const reply = f.posts.find((p) => p.text === "Removed it.");
+  assert.equal(reply?.channel, "C1");
+  assert.deepEqual(identityOf(reply), { ...ADA, icon_emoji: undefined });
+  assert.ok(f.updates.length >= 1, "the card in the requester's DM was edited");
+  for (const update of f.updates)
+    assert.deepEqual(identityOf(update), { username: undefined, icon_url: undefined, icon_emoji: undefined });
 });

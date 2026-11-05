@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { LRUCache } from "lru-cache";
 import { swallow } from "../util/errors.ts";
 import { slackHistoryRateLimitMessage } from "./history-rate-limit.ts";
-import { parseDeliveryTarget } from "./lib.ts";
+import { parseDeliveryTarget, slackEphemeralArgs, slackReplyArgs } from "./lib.ts";
 
 interface Recipient {
   target: string;
@@ -34,15 +34,9 @@ export function createSlackRateLimitNotice(opts: { managed?: boolean; setupUrl?:
         if (recentlyNotified.has(key)) return;
         recentlyNotified.set(key, true);
         if (channel.startsWith("D")) {
-          await client.chat.postMessage({
-            channel,
-            text,
-            ...(threadTs ? { thread_ts: threadTs } : {}),
-            unfurl_links: false,
-            unfurl_media: false,
-          });
+          await client.chat.postMessage(slackReplyArgs(channel, text, threadTs, { unfurlLinks: false }));
         } else {
-          await client.chat.postEphemeral({ channel, user, text });
+          await client.chat.postEphemeral(slackEphemeralArgs(channel, user, text));
         }
       } catch (error) {
         swallow("slack: rate-limit notice", error);

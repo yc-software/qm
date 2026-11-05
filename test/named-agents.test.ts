@@ -14,6 +14,8 @@ import {
   type AgentsResult,
   type ControlService,
 } from "../src/api/control-service.ts";
+import { createSlackCoreClient, type SlackCoreClientDeps } from "../src/api/slack-core-client.ts";
+import { createDeliveryPoller } from "../src/slack/deliveries.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { createToolContext } from "../src/tools/primitives.ts";
 import { createAgentTools } from "../src/agent/agent-tools.ts";
@@ -541,4 +543,141 @@ test("a governed channel's prompt names the agent and its active owners; other c
   const orphan = await prompt(thread("3.3"));
   assert.ok(orphan.includes("Critique kindly."));
   assert.doesNotMatch(orphan, /\bAda\b|\bBob\b/);
+});
+
+const slackCore = (built: Awaited<ReturnType<typeof setup>>["built"]) =>
+  createSlackCoreClient({ app: built.app } as unknown as SlackCoreClientDeps);
+
+test("Slack personas cover only active, owned agents in flagged channels, mapping emoji and picture avatars", async () => {
+  const { built, control } = await setup();
+  const core = slackCore(built);
+  await createAda(control);
+  const ann = fromDm(control, ANN);
+  assert.match(
+    await ann("agents", {
+      action: "create",
+      channel: "open",
+      handle: "opie",
+      displayName: "Opie",
+      title: "Release herald",
+      avatar: { kind: "url", value: "https://cdn.example.com/opie.png" },
+      owners: ["Dan"],
+    }),
+    /^Created Opie/,
+  );
+  assert.deepEqual((await core.agentPersonas!()).get(DESIGN), { username: "Ada" }, "no avatar: the agent's name only");
+  assert.match(
+    await ann("agents", { action: "edit", agent: "ada", avatar: { kind: "emoji", value: ":art:" } }),
+    /^Updated Ada/,
+  );
+  assert.deepEqual(
+    await core.agentPersonas!(),
+    new Map([
+      [DESIGN, { username: "Ada", icon_emoji: ":art:" }],
+      ["C0OPEN", { username: "Opie", icon_url: "https://cdn.example.com/opie.png" }],
+    ]),
+  );
+  await ann("agents", { action: "edit", agent: "ada", displayName: "Adah" });
+  assert.equal((await core.agentPersonas!()).get(DESIGN)?.username, "Adah");
+
+  await built.identity.deactivate(ANN);
+  await built.identity.deactivate(BOB);
+  assert.equal((await core.agentPersonas!()).has(DESIGN), false, "an orphaned agent falls back to QM");
+  assert.match(await fromDm(control, DAN)("agents", { action: "archive", agent: "opie" }), /^Archived Opie/);
+  assert.deepEqual(await core.agentPersonas!(), new Map(), "an archived agent falls back to QM");
+
+  assert.match(
+    await fromDm(control, ADMIN)("agents", { action: "edit", agent: "ada", addOwners: ["Cy"] }),
+    /^Updated Adah/,
+  );
+  assert.equal((await core.agentPersonas!()).get(DESIGN)?.username, "Adah");
+  await built.featureFlags.setEnabled("named_agents", ORG, false, ADMIN);
+  assert.deepEqual(await core.agentPersonas!(), new Map(), "a channel without the flag keeps QM");
+});
+
+test("create, owner changes and archive post one channel notice through the delivery queue, under the persona until archived", async () => {
+  const { built, control } = await setup();
+  const core = slackCore(built);
+  const posts: Array<Record<string, unknown>> = [];
+  const client = {
+    chat: {
+      postMessage: async (args: Record<string, unknown>) => {
+        posts.push(args);
+        return { ts: String(posts.length), channel: args.channel };
+      },
+    },
+    conversations: { replies: async () => ({ messages: [] }), history: async () => ({ messages: [] }) },
+  };
+  const poller = createDeliveryPoller({
+    core: {
+      agentPersonas: () => core.agentPersonas!(),
+      holdDeliveryDispatch: (fn: (lost: Promise<void>) => Promise<unknown>) => fn(new Promise<void>(() => {})),
+      claimDeliveries: (type: string, claimMs: number) => built.app.pendingDeliveries(type, claimMs),
+      ackDelivery: (id: string) => built.app.ackDelivery(id),
+      failDelivery: (id: string, reason: string) => built.app.failDelivery(id, reason),
+    } as never,
+    flow: { inFlightRuns: new Set<string>() } as never,
+    threads: { mark: () => {} } as never,
+    clientForIdentity: () => client,
+  });
+  const drain = async () => {
+    await poller.pollDeliveries(client);
+    return posts.splice(0).map((p) => ({ channel: p.channel, text: p.text, username: p.username, icon: p.icon_emoji }));
+  };
+  const ann = fromDm(control, ANN);
+
+  await createAda(control);
+  assert.deepEqual(await drain(), [
+    {
+      channel: DESIGN,
+      text: "Ada now answers here. Owners: Ann and Bob. Only Ada's owners and org admins can change Ada's instructions or skills.",
+      username: "Ada",
+      icon: undefined,
+    },
+  ]);
+  await ann("agents", { action: "edit", agent: "ada", title: "Chief critic" });
+  assert.deepEqual(await drain(), [], "a change that keeps the owners posts nothing");
+  await ann("agents", { action: "edit", agent: "ada", addOwners: ["Cy"], removeOwners: ["Bob"] });
+  assert.deepEqual(await drain(), [
+    {
+      channel: DESIGN,
+      text: "Ada now answers here. Owners: Ann and Cy. Only Ada's owners and org admins can change Ada's instructions or skills.",
+      username: "Ada",
+      icon: undefined,
+    },
+  ]);
+  await ann("agents", { action: "archive", agent: "ada" });
+  assert.deepEqual(await drain(), [
+    {
+      channel: DESIGN,
+      text: "Ada no longer answers here. This channel's instructions and skills are open to its members again.",
+      username: undefined,
+      icon: undefined,
+    },
+  ]);
+
+  await built.featureFlags.setEnabled("named_agents", ORG, false, ADMIN);
+  await built.featureFlags.setEnabled("named_agents", personal(ANN), true, ADMIN);
+  await createAda(control);
+  assert.deepEqual(await drain(), [], "an agent whose channel lacks the flag announces nothing");
+});
+
+test("avatars must be a Slack emoji shortcode or a public https URL, on create and on edit", async () => {
+  const { control } = await setup();
+  const ann = agentsAs(control, ANN);
+  for (const avatar of [
+    { kind: "emoji" as const, value: "🎨" },
+    { kind: "url" as const, value: "http://cdn.example.com/a.png" },
+    { kind: "url" as const, value: "https://user:pass@cdn.example.com/a.png" },
+  ]) {
+    assert.equal(codeOf(await ann({ action: "create", ...ADA, avatar })), "bad_request");
+  }
+  await createAda(control);
+  assert.equal(
+    codeOf(await ann({ action: "edit", agent: "ada", avatar: { kind: "emoji", value: "art" } })),
+    "bad_request",
+  );
+  agentOf(
+    await ann({ action: "edit", agent: "ada", avatar: { kind: "url", value: "https://cdn.example.com/ada.png" } }),
+  );
 });

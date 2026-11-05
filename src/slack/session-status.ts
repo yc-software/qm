@@ -11,6 +11,7 @@ import { conversationScope } from "../resolution/resolution-service.ts";
 import { conversationWebUrl } from "../util/conversation-links.ts";
 import { createKeyedQueue, sleep } from "../util/async.ts";
 import { swallowAs } from "../util/errors.ts";
+import { personaFor } from "./delivery.ts";
 
 export interface SlackSessionStatusState {
   writer?: string;
@@ -139,7 +140,9 @@ export function createSlackSessionStatus(
             if (state.cardContent !== content && (state.cardTs || optedIn)) {
               const result = (await client.apiCall(state.cardTs ? "chat.update" : "chat.postMessage", {
                 channel: state.channel,
-                ...(state.cardTs ? { ts: state.cardTs } : { thread_ts: state.threadTs, client_msg_id: state.cardId }),
+                ...(state.cardTs
+                  ? { ts: state.cardTs }
+                  : { thread_ts: state.threadTs, client_msg_id: state.cardId, ...personaFor(state.channel) }),
                 text: title,
                 blocks,
                 unfurl_links: false,

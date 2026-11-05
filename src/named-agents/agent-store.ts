@@ -4,12 +4,15 @@ import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { createKeyedQueue } from "../util/async.ts";
 
+export type AgentAvatar = { kind: "emoji"; value: string } | { kind: "url"; value: string };
+
 export interface NamedAgent {
   id: string;
   orgId: string;
   handle: string;
   displayName: string;
   title: string;
+  avatar?: AgentAvatar;
   owners: string[];
   channelId: string;
   channelName: string;

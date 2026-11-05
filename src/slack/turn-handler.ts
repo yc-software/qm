@@ -21,7 +21,6 @@ import {
   DEFAULT_ACK_REACTIONS,
   REACTION_DETECT_GUIDANCE,
   REACTION_INSTRUCTION,
-  botIdentityArgs,
   buildReactionTurnText,
   createAckPresenter,
   createDeduper,
@@ -53,7 +52,9 @@ import {
   resolveMentions,
   resolveReactionTargets,
   shouldSurfaceReaction,
+  refreshPersonas,
   slackReplyArgs,
+  slackEphemeralArgs,
   blocksWithContext,
   plainContext,
   threadHasBotStake,
@@ -217,6 +218,7 @@ export function createTurnHandler(deps: {
       ids.botUserId && ids.botHandle ? new Map([[ids.botUserId, ids.botHandle]]) : undefined,
     );
     if (!hasContent(text, inc.files)) return;
+    await refreshPersonas(core);
 
     let audience: ActorAssertion[] = [actor];
     let channelRef: string | undefined;
@@ -256,7 +258,7 @@ export function createTurnHandler(deps: {
     const ephemeralOrSay = async (msg: string): Promise<void> => {
       if (inc.kind === "channel") {
         await client.chat
-          .postEphemeral({ channel: inc.channel, user: inc.userId, text: msg })
+          .postEphemeral(slackEphemeralArgs(inc.channel, inc.userId, msg))
           .catch(swallowAs("slack: chat.postEphemeral", undefined));
       } else {
         await postReply(msg);
@@ -403,8 +405,7 @@ export function createTurnHandler(deps: {
     if (!inc.unprompted) {
       goalNotice = createGoalNoticePresenter({
         post: (text, blocks) => postReply(text, blocks),
-        update: (ts, text, blocks) =>
-          client.chat.update({ channel: inc.channel, ts, text, blocks, ...botIdentityArgs() }).then(() => {}),
+        update: (ts, text, blocks) => client.chat.update({ channel: inc.channel, ts, text, blocks }).then(() => {}),
         onError: (error) => console.error("[slack-plugin] goal notice update failed:", (error as Error).message),
       });
     }

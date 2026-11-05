@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createDeliveryPoller } from "../src/slack/deliveries.ts";
 import { SLACK_POST_SPLIT_LIMIT } from "../src/slack/lib.ts";
+import { refreshPersonas, type SlackPersona } from "../src/slack/delivery.ts";
+import { deliverKeychainCard } from "../src/slack/keychain-approvals.ts";
 
 const mixedFiles = [
   { name: "first.png", mimetype: "image/png", sizeBytes: 2, blobId: "B1" },
@@ -23,6 +25,7 @@ async function deliver(
     loseAck?: boolean;
     approval?: unknown;
     updateError?: string;
+    personas?: Record<string, SlackPersona>;
   } = {},
 ) {
   const delivery = {
@@ -53,6 +56,7 @@ async function deliver(
     };
   };
   const core = {
+    agentPersonas: async () => new Map(Object.entries(row.personas ?? {})),
     holdDeliveryDispatch: (fn: (lost: Promise<void>) => Promise<unknown>) => fn(new Promise<void>(() => {})),
     getApproval: async () => row.approval ?? null,
     readBlob: async (id: string) => Buffer.from(id),
@@ -473,4 +477,85 @@ test("a reply revised by the reply check carries a plain-text edit note footer",
     type: "context",
     elements: [{ type: "plain_text", text: "Edited after a reply check: em dash", emoji: false }],
   });
+});
+
+const ADA: SlackPersona = { username: "Ada", icon_url: "https://cdn.example.com/ada.png" };
+const BOLT: SlackPersona = { username: "Bolt", icon_emoji: ":art:" };
+const identityOf = (args: Record<string, unknown>) => ({
+  username: args.username,
+  icon_url: args.icon_url,
+  icon_emoji: args.icon_emoji,
+});
+
+test("a queued delivery into a bound channel posts every split part as its agent, while its files stay QM's", async () => {
+  const { posts, uploads } = await deliver({}, undefined, undefined, "word ".repeat(2_000), {
+    personas: { C1: ADA },
+  });
+  assert.ok(posts.length >= 2, "the delivery split into parts");
+  for (const post of posts) assert.deepEqual(identityOf(post), { ...ADA, icon_emoji: undefined });
+  assert.equal(uploads.length, 1);
+  assert.deepEqual(identityOf(uploads[0]!), { username: undefined, icon_url: undefined, icon_emoji: undefined });
+});
+
+test("a queued delivery into an unbound channel keeps the default identity after a bound one", async () => {
+  await deliver({}, undefined, undefined, "first", { personas: { C1: BOLT } });
+  const { posts } = await deliver({}, undefined, undefined, "second", { personas: { C2: ADA } });
+  assert.deepEqual(identityOf(posts[0]!), { username: undefined, icon_url: undefined, icon_emoji: undefined });
+});
+
+test("edits in a bound channel send no identity, so Slack keeps the first post's author", async () => {
+  const explicit = await deliver({ target: "C1", edit: { messageTs: "99.100" } }, undefined, undefined, "fixed", {
+    personas: { C1: ADA },
+  });
+  const finalized = await deliver({ editRef: "99.200" }, undefined, undefined, "final reply", {
+    personas: { C1: ADA },
+  });
+  const updates = [...explicit.updates, ...finalized.updates];
+  assert.equal(updates.length, 2);
+  for (const update of updates)
+    assert.deepEqual(identityOf(update), { username: undefined, icon_url: undefined, icon_emoji: undefined });
+  assert.deepEqual([...explicit.posts, ...finalized.posts], []);
+});
+
+test("a keychain approval card delivered into a bound channel carries the agent's persona", async () => {
+  await refreshPersonas({ agentPersonas: async () => new Map([["C1", BOLT]]) });
+  const posts: Record<string, unknown>[] = [];
+  const client = {
+    chat: {
+      postMessage: async (args: Record<string, unknown>) => {
+        posts.push(args);
+        return { ts: "5.5", channel: args.channel };
+      },
+    },
+    conversations: { replies: async () => ({ messages: [] }), history: async () => ({ messages: [] }) },
+  };
+  const core = {
+    keychainApprovals: {
+      card: async () => ({
+        ask: {
+          id: "K1",
+          status: "pending",
+          requestedMode: "once",
+          requesterScopeId: "channel:C1",
+          createdAt: Date.now(),
+        },
+        service: "github",
+        conversation: "#design",
+      }),
+    },
+  };
+  try {
+    await deliverKeychainCard(
+      core as never,
+      client,
+      { idempotencyKey: "ask:K1:notice", destination: { keychainAskId: "K1" } },
+      "C1",
+      "1.1",
+    );
+  } finally {
+    await refreshPersonas({ agentPersonas: async () => new Map() });
+  }
+  assert.equal(posts.length, 1);
+  assert.ok(Array.isArray(posts[0]!.blocks), "the card carries its buttons");
+  assert.deepEqual(identityOf(posts[0]!), { ...BOLT, icon_url: undefined });
 });

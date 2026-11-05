@@ -1,10 +1,12 @@
 import type { AuditLog } from "../audit/audit-log.ts";
+import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import type { DirectoryStore } from "../directory/directory-store.ts";
 import { canonicalPerson, personIds, samePerson } from "../directory/person.ts";
 import type { FeatureFlagStore } from "../feature-flags.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
+import { swallow } from "../util/errors.ts";
 import { parseScopeId, scopeId, type ScopeId } from "../types.ts";
-import type { AgentDecision, AgentStore, NamedAgent } from "./agent-store.ts";
+import type { AgentAvatar, AgentDecision, AgentStore, NamedAgent } from "./agent-store.ts";
 
 export class AgentLocked extends Error {
   readonly code = "agent_locked";
@@ -41,6 +43,7 @@ export interface AgentCreateInput {
   handle: string;
   displayName: string;
   title: string;
+  avatar?: AgentAvatar;
   owners?: string[];
 }
 
@@ -49,6 +52,7 @@ export interface AgentEditInput {
   handle?: string;
   displayName?: string;
   title?: string;
+  avatar?: AgentAvatar;
   addOwners?: string[];
   removeOwners?: string[];
 }
@@ -58,6 +62,7 @@ export type AgentOutcome<T> = ({ ok: true } & T) | AgentRefusal;
 
 export interface NamedAgents {
   channelAgent(channelId: string): Promise<ChannelAgent | undefined>;
+  governedAgents(): Promise<ChannelAgent[]>;
   assertMayInstruct(scope: ScopeId, actor: AgentActor): Promise<void>;
   promptFor(scope: ScopeId): Promise<AgentPrompt | undefined>;
   toolOffered(actor: AgentActor, scope: ScopeId): Promise<boolean>;
@@ -78,11 +83,13 @@ export interface NamedAgentsDeps {
   >;
   isOrgAdmin: (principalId: string) => Promise<boolean>;
   auditLog: AuditLog;
+  deliveries: Pick<DeliveryStore, "enqueue">;
   botNames: () => Promise<string[]>;
   now?: () => number;
 }
 
 const HANDLE = /^[a-z0-9][a-z0-9._-]*$/;
+const EMOJI_SHORTCODE = /^:[^\s:]+:$/;
 const nameList = new Intl.ListFormat("en", { type: "conjunction" });
 
 const refuse = (code: AgentRefusal["code"], message: string): AgentRefusal => ({ ok: false, code, message });
@@ -93,6 +100,21 @@ function cleanText(value: string): string {
 
 function cleanHandle(value: string): string {
   return value.trim().replace(/^@/, "").toLowerCase();
+}
+
+function avatarProblem(avatar: AgentAvatar | undefined): string | undefined {
+  if (!avatar) return undefined;
+  if (avatar.kind === "emoji")
+    return EMOJI_SHORTCODE.test(avatar.value) ? undefined : 'an emoji avatar is a Slack shortcode like ":art:"';
+  let url: URL;
+  try {
+    url = new URL(avatar.value);
+  } catch {
+    return "a picture avatar needs a public https URL";
+  }
+  return url.protocol === "https:" && !url.username && !url.password
+    ? undefined
+    : "a picture avatar needs a public https URL";
 }
 
 export function createNamedAgents(deps: NamedAgentsDeps): NamedAgents {
@@ -136,10 +158,34 @@ export function createNamedAgents(deps: NamedAgentsDeps): NamedAgents {
     });
   }
 
+  const flagOn = (channelId: string) => deps.featureFlags.enabled("named_agents", scopeId("channel", channelId));
+
   async function channelAgent(channelId: string): Promise<ChannelAgent | undefined> {
-    if (!(await deps.featureFlags.enabled("named_agents", scopeId("channel", channelId)))) return undefined;
+    if (!(await flagOn(channelId))) return undefined;
     const agent = await deps.store.activeInChannel(channelId);
     return agent ? { agent, orphaned: orphaned(agent) } : undefined;
+  }
+
+  function activeOwnerNames(agent: NamedAgent): Promise<string[]> {
+    return Promise.all(agent.owners.filter(isActive).map(displayNameOf));
+  }
+
+  async function announce(agent: NamedAgent, change: "bound" | "archived"): Promise<void> {
+    try {
+      if (!(await flagOn(agent.channelId))) return;
+      const name = agent.displayName;
+      const text =
+        change === "bound"
+          ? `${name} now answers here. Owners: ${nameList.format(await activeOwnerNames(agent))}. Only ${name}'s owners and org admins can change ${name}'s instructions or skills.`
+          : `${name} no longer answers here. This channel's instructions and skills are open to its members again.`;
+      await deps.deliveries.enqueue({
+        destination: { type: "slack", target: agent.channelId, audienceScopeId: scopeId("channel", agent.channelId) },
+        text,
+        idempotencyKey: `agent-notice:${agent.id}:${agent.updatedAt}`,
+      });
+    } catch (error) {
+      swallow("named agents: channel notice", error);
+    }
   }
 
   async function governing(scope: ScopeId): Promise<ChannelAgent | undefined> {
@@ -197,6 +243,13 @@ export function createNamedAgents(deps: NamedAgentsDeps): NamedAgents {
   return {
     channelAgent,
 
+    async governedAgents() {
+      const active = (await deps.store.list()).filter((agent) => agent.state === "active");
+      if (!active.length) return [];
+      const flagged = await Promise.all(active.map((agent) => flagOn(agent.channelId)));
+      return active.filter((_, i) => flagged[i]).map((agent) => ({ agent, orphaned: orphaned(agent) }));
+    },
+
     async assertMayInstruct(scope, actor) {
       const governed = await governing(scope);
       if (!governed || liveActiveOwner(governed.agent, actor)) return;
@@ -215,7 +268,7 @@ export function createNamedAgents(deps: NamedAgentsDeps): NamedAgents {
       const governed = await governing(scope);
       if (!governed || governed.orphaned) return undefined;
       const { agent } = governed;
-      const owners = await Promise.all(agent.owners.filter(isActive).map(displayNameOf));
+      const owners = await activeOwnerNames(agent);
       return {
         displayName: agent.displayName,
         line: `You are ${agent.displayName}, ${agent.title}, in #${agent.channelName}. ${owners.length === 1 ? "Your owner is" : "Your owners are"} ${nameList.format(owners)}. Only your owners can change your instructions or skills from a conversation; org admins use the admin console.`,
@@ -237,6 +290,8 @@ export function createNamedAgents(deps: NamedAgentsDeps): NamedAgents {
       const displayName = cleanText(input.displayName);
       const title = cleanText(input.title);
       if (!title) return refuse("bad_request", "a title is required");
+      const badAvatar = avatarProblem(input.avatar);
+      if (badAvatar) return refuse("bad_request", badAvatar);
       const found = await deps.directory.resolveChannel(input.channel);
       if (found.kind === "none") return refuse("not_found", `no channel matches "${input.channel}"`);
       if (found.kind === "ambiguous")
@@ -258,6 +313,7 @@ export function createNamedAgents(deps: NamedAgentsDeps): NamedAgents {
         handle,
         displayName,
         title,
+        ...(input.avatar ? { avatar: input.avatar } : {}),
         owners,
         channelId: channel.channelId,
         channelName: channel.name,
@@ -265,6 +321,7 @@ export function createNamedAgents(deps: NamedAgentsDeps): NamedAgents {
       });
       if ("conflict" in created) return conflictMessage(created.conflict, created.with);
       audit(actor, "agent_create", created);
+      await announce(created, "bound");
       return { ok: true, agent: await view(created) };
     },
 
@@ -275,6 +332,9 @@ export function createNamedAgents(deps: NamedAgentsDeps): NamedAgents {
       const displayName = input.displayName === undefined ? agent.displayName : cleanText(input.displayName);
       const title = input.title === undefined ? agent.title : cleanText(input.title);
       if (!title) return refuse("bad_request", "a title is required");
+      const badAvatar = avatarProblem(input.avatar);
+      if (badAvatar) return refuse("bad_request", badAvatar);
+      const avatar = input.avatar ?? agent.avatar;
       const renamed = handle !== agent.handle || displayName !== agent.displayName;
       const badName = renamed ? await nameProblem(handle, displayName) : undefined;
       if (badName) return refuse("bad_request", badName);
@@ -286,7 +346,7 @@ export function createNamedAgents(deps: NamedAgentsDeps): NamedAgents {
           return { query, principalId: found.kind === "one" ? found.member.principalId : undefined };
         }),
       );
-      const detailsChange = renamed || title !== agent.title;
+      const detailsChange = renamed || title !== agent.title || JSON.stringify(avatar) !== JSON.stringify(agent.avatar);
       const onlyAddsOwners = !detailsChange && !removals.length;
       if (onlyAddsOwners && !added.ids.length) return refuse("bad_request", "nothing to change");
       const admin = actor.live && (await deps.isOrgAdmin(actor.id));
@@ -324,7 +384,7 @@ export function createNamedAgents(deps: NamedAgentsDeps): NamedAgents {
               ),
             };
           return {
-            next: { ...current, handle, displayName, title, owners },
+            next: { ...current, handle, displayName, title, ...(avatar ? { avatar } : {}), owners },
             result: { added: addedOwners, removed },
           };
         },
@@ -335,6 +395,7 @@ export function createNamedAgents(deps: NamedAgentsDeps): NamedAgents {
       if (detailsChange) audit(actor, "agent_update", outcome.agent);
       for (const owner of outcome.result.added) audit(actor, "agent_owner_add", outcome.agent, owner);
       for (const owner of outcome.result.removed) audit(actor, "agent_owner_remove", outcome.agent, owner);
+      if (outcome.result.added.length || outcome.result.removed.length) await announce(outcome.agent, "bound");
       return { ok: true, agent: await view(outcome.agent) };
     },
 
@@ -357,6 +418,7 @@ export function createNamedAgents(deps: NamedAgentsDeps): NamedAgents {
       if ("conflict" in outcome) return conflictMessage(outcome.conflict, outcome.with);
       if ("refused" in outcome) return outcome.refused;
       audit(actor, "agent_archive", outcome.agent);
+      await announce(outcome.agent, "archived");
       return { ok: true, agent: await view(outcome.agent) };
     },
 

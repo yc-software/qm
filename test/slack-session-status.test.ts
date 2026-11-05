@@ -10,6 +10,7 @@ import type { Session } from "../src/types.ts";
 import type { Monitor } from "../src/triggers/types.ts";
 import { isTerminal, type Run } from "../src/runs/run-store.ts";
 import { testMap } from "./support/test-database.ts";
+import { refreshPersonas } from "../src/slack/delivery.ts";
 
 function deferred() {
   let resolve!: () => void;
@@ -368,5 +369,26 @@ test("core engagement is signaled once for local or durable replies, never quiet
     });
     assert.equal(engaged, mode === "quiet" ? 0 : 1);
     stream.end("r1");
+  }
+});
+
+test("a bound channel's status card posts as its agent and its later edits send no identity", async (t) => {
+  await refreshPersonas({ agentPersonas: async () => new Map([["C1", { username: "Bolt", icon_emoji: ":art:" }]]) });
+  t.after(() => refreshPersonas({ agentPersonas: async () => new Map() }));
+  const f = fixture();
+  await f.enable();
+  const run = f.add("r1");
+  await f.start(run.id);
+  run.status = "done";
+  await f.reconcile();
+  const [post, ...edits] = f.cards;
+  assert.equal(post?.method, "chat.postMessage");
+  assert.equal(post?.args.username, "Bolt");
+  assert.equal(post?.args.icon_emoji, ":art:");
+  assert.ok(edits.length >= 1);
+  for (const edit of edits) {
+    assert.equal(edit.method, "chat.update");
+    assert.equal(edit.args.username, undefined);
+    assert.equal(edit.args.icon_emoji, undefined);
   }
 });

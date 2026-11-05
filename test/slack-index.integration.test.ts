@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mock, test } from "node:test";
 import type { SlackCoreClient } from "../src/slack/index.ts";
 import type { TurnResult } from "../src/types.ts";
+import type { SlackPersona } from "../src/slack/delivery.ts";
 
 type Handler = (args: any) => Promise<void>;
 
@@ -239,6 +240,9 @@ class FakeCore implements SlackCoreClient {
   queuedRunId: string | undefined;
   engageRun = false;
   sessionStatus?: SlackCoreClient["sessionStatus"];
+  readonly personas = new Map<string, SlackPersona>();
+  personaReadFails = false;
+  onWait: ((hooks: any) => Promise<void>) | undefined;
   private heldRunClaimed = false;
   readonly polled: string[] = [];
   private runGate: Promise<void> | undefined;
@@ -252,6 +256,10 @@ class FakeCore implements SlackCoreClient {
   }
   async ackEmojiOverride(): Promise<string[] | null> {
     return null;
+  }
+  async agentPersonas(): Promise<Map<string, SlackPersona>> {
+    if (this.personaReadFails) throw new Error("agents map unavailable");
+    return new Map(this.personas);
   }
   readonly publishedEmojiCatalogs: Array<Record<string, string>> = [];
   async publishEmojiCatalog(emoji: Record<string, string>): Promise<void> {
@@ -301,6 +309,7 @@ class FakeCore implements SlackCoreClient {
   async waitRun(runId: string, hooks?: { onReplying?(): void }): Promise<TurnResult | null> {
     this.polled.push(runId);
     if (this.engageRun) hooks?.onReplying?.();
+    await this.onWait?.(hooks);
     if (this.runGate) await this.runGate;
     return this.result;
   }
@@ -383,6 +392,7 @@ async function fixture(
     allowFrom?: string[];
     denyMessage?: string;
     coreSingleton?: boolean;
+    botIdentity?: { username?: string; icon_emoji?: string };
   } = {},
 ) {
   const core = new FakeCore();
@@ -396,6 +406,7 @@ async function fixture(
       ...(options.denyMessage ? { denyMessage: options.denyMessage } : {}),
       ...(options.coreSingleton === undefined ? {} : { coreSingleton: options.coreSingleton }),
       ...(options.webUiPublicUrl ? { webUiPublicUrl: options.webUiPublicUrl } : {}),
+      ...(options.botIdentity ? { botIdentity: options.botIdentity } : {}),
     },
     core,
   );
@@ -1770,6 +1781,113 @@ test("own task-card status events never enter the mirror, but ordinary bot edits
       ts: "202.1",
     });
     assert.ok(f.core.ingests.flat().some((event: any) => event.ts === "202.1"));
+  } finally {
+    await f.stop();
+  }
+});
+
+const ADA: SlackPersona = { username: "Ada", icon_url: "https://cdn.example.com/ada.png" };
+const BOLT: SlackPersona = { username: "Bolt", icon_emoji: ":art:" };
+const QM_IDENTITY = { username: "QM", icon_emoji: ":robot_face:" };
+const identityOf = (post: any) => ({
+  username: post.username,
+  icon_url: post.icon_url,
+  icon_emoji: post.icon_emoji,
+});
+const expectedIdentity = (persona: { username?: string; icon_url?: string; icon_emoji?: string }) => ({
+  username: persona.username,
+  icon_url: persona.icon_url,
+  icon_emoji: persona.icon_emoji,
+});
+
+test("a bound channel's ack, goal notice and every part of a split reply post as its agent; edits send no identity", async () => {
+  const f = await fixture({ botIdentity: QM_IDENTITY });
+  try {
+    f.core.personas.set("C1", ADA);
+    f.core.queuedRunId = "r-persona";
+    f.core.onWait = async (hooks) => {
+      hooks.onFirstBlock?.("Looking into it.");
+      await hooks.onGoal?.({ objective: "ship the fix", status: "active" });
+      await hooks.onGoal?.({ objective: "ship the fix", status: "complete" });
+    };
+    f.core.result = { status: "ok", reply: "word ".repeat(2_000) };
+    const event = { channel: "C1", channel_type: "channel", user: "U1", text: "<@UBOT> write it up", ts: "801.1" };
+    f.client.messagesByChannel.set("C1", [event]);
+    await f.app.emitEvent("app_mention", event);
+    const posts = f.client.posts.filter((p) => p.channel === "C1");
+    assert.ok(
+      posts.some((p) => p.text === "Looking into it."),
+      "the ack placeholder posted",
+    );
+    assert.ok(
+      posts.some((p) => /ship the fix/.test(p.text)),
+      "the goal notice posted",
+    );
+    assert.ok(posts.filter((p) => p.text.startsWith("word")).length >= 2, "the reply split into parts");
+    for (const post of posts) assert.deepEqual(identityOf(post), expectedIdentity(ADA));
+    const updates = f.client.updates.filter((u) => u.channel === "C1");
+    assert.ok(updates.length >= 1, "the goal notice was edited in place");
+    for (const update of updates) assert.deepEqual(identityOf(update), expectedIdentity({}));
+  } finally {
+    await f.stop();
+  }
+});
+
+test("an unbound channel keeps the env identity while a bound one posts as its agent, emoji avatar included", async () => {
+  const f = await fixture({ botIdentity: QM_IDENTITY, extraChannels: 1 });
+  try {
+    f.core.personas.set("C1", BOLT);
+    for (const channel of ["C1", "CE0"]) {
+      const event = { channel, channel_type: "channel", user: "U1", text: "<@UBOT> hello", ts: "802.1" };
+      f.client.messagesByChannel.set(channel, [event]);
+      await f.app.emitEvent("app_mention", event);
+    }
+    const [bound] = f.client.posts.filter((p) => p.channel === "C1");
+    const [unbound] = f.client.posts.filter((p) => p.channel === "CE0");
+    assert.deepEqual(identityOf(bound), expectedIdentity(BOLT));
+    assert.deepEqual(identityOf(unbound), expectedIdentity(QM_IDENTITY));
+  } finally {
+    await f.stop();
+  }
+});
+
+test("the next turn after a rename posts under the new name, and a failed persona read keeps the last one", async () => {
+  const f = await fixture({ botIdentity: QM_IDENTITY });
+  try {
+    const mention = async (ts: string) => {
+      const event = { channel: "C1", channel_type: "channel", user: "U1", text: "<@UBOT> again", ts };
+      f.client.messagesByChannel.set("C1", [event]);
+      await f.app.emitEvent("app_mention", event);
+      return f.client.posts.at(-1);
+    };
+    f.core.personas.set("C1", ADA);
+    assert.equal((await mention("803.1")).username, "Ada");
+    f.core.personas.set("C1", { ...ADA, username: "Ada Lovelace" });
+    assert.equal((await mention("803.2")).username, "Ada Lovelace");
+    f.core.personaReadFails = true;
+    f.core.personas.delete("C1");
+    const kept = await mention("803.3");
+    assert.equal(kept.text, "agent reply");
+    assert.equal(kept.username, "Ada Lovelace");
+    f.core.personaReadFails = false;
+    assert.deepEqual(identityOf(await mention("803.4")), expectedIdentity(QM_IDENTITY));
+  } finally {
+    await f.stop();
+  }
+});
+
+test("a requester-only refusal in a bound channel is an ephemeral under the agent's persona", async () => {
+  const f = await fixture({ botIdentity: QM_IDENTITY });
+  try {
+    f.core.personas.set("C1", ADA);
+    f.core.result = { status: "refused", reason: "not allowed here" };
+    const event = { channel: "C1", channel_type: "channel", user: "U1", text: "<@UBOT> do it", ts: "804.1" };
+    f.client.messagesByChannel.set("C1", [event]);
+    await f.app.emitEvent("app_mention", event);
+    assert.equal(f.client.posts.length, 0);
+    assert.equal(f.client.ephemerals.length, 1);
+    assert.equal(f.client.ephemerals[0].user, "U1");
+    assert.deepEqual(identityOf(f.client.ephemerals[0]), expectedIdentity(ADA));
   } finally {
     await f.stop();
   }

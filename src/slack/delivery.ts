@@ -2,6 +2,7 @@ import { errMessage, swallowAs } from "../util/errors.ts";
 import { safeChunks, safeClip } from "./safe-cut.ts";
 import { sleep } from "./util.ts";
 import { isExternallyShared, isMpim, type ChannelMeta } from "./identity.ts";
+import type { SlackCoreClient } from "../api/slack-core-client.ts";
 
 export interface SlackReplyArgs {
   channel: string;
@@ -9,15 +10,19 @@ export interface SlackReplyArgs {
   thread_ts?: string;
   reply_broadcast?: false;
   username?: string;
+  icon_url?: string;
   icon_emoji?: string;
   unfurl_links?: boolean;
   unfurl_media?: boolean;
 }
 
-export interface BotIdentityOverride {
-  username?: string;
+export interface SlackPersona {
+  username: string;
+  icon_url?: string;
   icon_emoji?: string;
 }
+
+export type BotIdentityOverride = Partial<SlackPersona>;
 
 export function botIdentityFromEnv(env: Record<string, string | undefined>): BotIdentityOverride {
   const username = (env.SLACK_BOT_DISPLAY_NAME ?? "").trim();
@@ -29,16 +34,42 @@ export function botIdentityFromEnv(env: Record<string, string | undefined>): Bot
 }
 
 let defaultIdentity: BotIdentityOverride = {};
+let personas: ReadonlyMap<string, SlackPersona> = new Map();
+let personaRefresh: Promise<void> | undefined;
+
 export function setDefaultBotIdentity(identity: BotIdentityOverride | undefined): void {
   defaultIdentity = identity ?? {};
 }
 
-export function botIdentityArgs(): BotIdentityOverride {
-  const id = defaultIdentity;
-  return {
-    ...(id.username ? { username: id.username } : {}),
-    ...(id.icon_emoji ? { icon_emoji: id.icon_emoji } : {}),
-  };
+export function personaFor(channel: string): BotIdentityOverride {
+  const persona = personas.get(channel);
+  if (!persona) return defaultIdentity;
+  if (persona.icon_url || persona.icon_emoji || !defaultIdentity.icon_emoji) return persona;
+  return { ...persona, icon_emoji: defaultIdentity.icon_emoji };
+}
+
+export function refreshPersonas(core: Pick<SlackCoreClient, "agentPersonas">): Promise<void> {
+  if (!core.agentPersonas) return Promise.resolve();
+  personaRefresh ??= core
+    .agentPersonas()
+    .then(
+      (next) => {
+        personas = next;
+      },
+      swallowAs("slack: agent persona refresh", undefined),
+    )
+    .finally(() => {
+      personaRefresh = undefined;
+    });
+  return personaRefresh;
+}
+
+export function slackEphemeralArgs(
+  channel: string,
+  user: string | undefined,
+  text: string,
+): { channel: string; user: string | undefined; text: string } & BotIdentityOverride {
+  return { channel, user, text, ...personaFor(channel) };
 }
 
 export function slackReplyArgs(
@@ -53,7 +84,7 @@ export function slackReplyArgs(
     ...(threadTs ? { thread_ts: threadTs } : {}),
     ...(threadTs && opts.threadOnly ? { reply_broadcast: false as const } : {}),
     ...(opts.unfurlLinks !== undefined ? { unfurl_links: opts.unfurlLinks, unfurl_media: opts.unfurlLinks } : {}),
-    ...botIdentityArgs(),
+    ...personaFor(channel),
   };
 }
 

@@ -1765,15 +1765,6 @@ export function buildApp(
     isActiveMember: (principalId) => identity.isInternal(identity.classify(principalId)),
     advisoryLock,
   });
-  const namedAgents = createNamedAgents({
-    store: createAgentStore(artifactMap<NamedAgent>("agents", ["handle", "channelId"]), { advisoryLock }),
-    featureFlags,
-    identity,
-    directory,
-    isOrgAdmin: async (principalId) => (await admin.adminStatusOf({ id: principalId, type: "internal" })).isAdmin,
-    auditLog,
-    botNames: async () => [(await resolveBranding(configStore, orgScope, config.brandingDefault)).selfLabel ?? "QM"],
-  });
   const canReadScope = createCanReadScope({ managedGroups: projects, directory, identity, teams, sessions });
   const canWriteScope = createCanWriteScope({ managedGroups: projects, directory, identity, teams });
   const canManageScope = createCanManageScope({ managedGroups: projects, directory, identity, sessions });
@@ -1792,6 +1783,16 @@ export function buildApp(
   const deployGitSecret = config.signingSecret;
   const deployGitBase = config.apiBaseUrl;
   const deliveries = withWebTranscriptDeliveries(createPostgresDeliveryStore(databaseUrl), sessions, runs);
+  const namedAgents = createNamedAgents({
+    store: createAgentStore(artifactMap<NamedAgent>("agents", ["handle", "channelId"]), { advisoryLock }),
+    featureFlags,
+    identity,
+    directory,
+    isOrgAdmin: async (principalId) => (await admin.adminStatusOf({ id: principalId, type: "internal" })).isAdmin,
+    auditLog,
+    deliveries,
+    botNames: async () => [(await resolveBranding(configStore, orgScope, config.brandingDefault)).selfLabel ?? "QM"],
+  });
   const deployService = createDeployService({
     deliveries,
     deployAppsDomain: config.awsDeploy.appsDomain,
