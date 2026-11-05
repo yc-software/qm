@@ -38,6 +38,15 @@ test("gateway parser keeps app-only authority and rejects malformed signed marke
     assert.equal(portalSession(`portal_session=${token(marker)}`, secret), null);
 });
 
+test("app hosts refuse a session minted for a company's own hostname", () => {
+  const now = Math.floor(Date.now() / 1000);
+  const bound = seal(
+    { k: "session", sub: guest, org: "acme", iat: now, exp: now + 3600, h: "company.qm.example.test" },
+    key,
+  );
+  assert.equal(portalSession(`portal_session=${bound}`, secret), null);
+});
+
 test("app-only gateway checks exact current personal read grants without inherited or management authority", async () => {
   const dir = mkdtempSync(join(tmpdir(), "app-only-gateway-"));
   let upstreamHits = 0;

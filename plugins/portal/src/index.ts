@@ -481,16 +481,24 @@ function withoutSessionCookies(cookie: string | undefined): string | undefined {
     .join(";");
 }
 
+function sharedHostSession(req: IncomingMessage): SessionClaims | null {
+  const session = openSession(
+    readCookie(req.headers.cookie, "portal_session"),
+    sessionKey,
+    Date.now(),
+    ORG,
+    SESSION_MAX_TTL_S,
+  );
+  return session?.h === undefined ? session : null;
+}
+
 function currentSession(req: IncomingMessage): SessionClaims | null {
   const mapped = mappedHost();
   if (mapped)
-    return sessionOnHost(req.headers.cookie, mapped.tenant, (value) =>
+    return sessionOnHost(req.headers.cookie, mapped, (value) =>
       openSession(value, sessionKey, Date.now(), ORG, SESSION_MAX_TTL_S),
     );
-  return (
-    openSession(readCookie(req.headers.cookie, "portal_session"), sessionKey, Date.now(), ORG, SESSION_MAX_TTL_S) ??
-    localDevSession(req)
-  );
+  return sharedHostSession(req) ?? localDevSession(req);
 }
 
 const ALERT_ICON = `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5M12 16h.01"/></svg>`;
@@ -888,9 +896,7 @@ async function mintPlaygroundSession(req: IncomingMessage, res: ServerResponse):
 }
 
 function renewSessionCookie(req: IncomingMessage, res: ServerResponse): SessionClaims | null {
-  const session = mappedHost()
-    ? currentSession(req)
-    : openSession(readCookie(req.headers.cookie, "portal_session"), sessionKey, Date.now(), ORG, SESSION_MAX_TTL_S);
+  const session = mappedHost() ? currentSession(req) : sharedHostSession(req);
   if (!session) return null;
   if (session.appOnly) return session;
   const now = Math.floor(Date.now() / 1000);
@@ -1635,6 +1641,7 @@ function setAuthenticatedSession(res: ServerResponse, sub: string, name = "", ap
     ...(name ? { name } : {}),
     ...(appOnly ? { appOnly: true } : {}),
     ...(tenant ? { t: tenant } : {}),
+    ...(mappedHost() ? { h: mappedHost()!.host } : {}),
   };
   setSession(res, [
     ...sessionCookieSet(seal(session, sessionKey), session.sub),

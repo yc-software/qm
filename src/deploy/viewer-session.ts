@@ -48,6 +48,7 @@ function verifySessionToken(token: string, secret: string, now: number): PortalV
   if (typeof claims.sub !== "string" || !claims.sub) return null;
   if (typeof claims.exp !== "number" || now >= claims.exp * 1000) return null;
   if (claims.appOnly !== undefined && typeof claims.appOnly !== "boolean") return null;
+  if (claims.h !== undefined) return null;
   return { sub: claims.sub, appOnly: claims.appOnly === true };
 }
 

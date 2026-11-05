@@ -80,9 +80,9 @@ export function hostReturnTo(value: string | null): string {
   return value && value.startsWith("/") && !value.startsWith("//") && !/[\\\x00-\x1f]/.test(value) ? value : "/";
 }
 
-export function sessionOnHost<T extends { t?: string }>(
+export function sessionOnHost<T extends { t?: string; h?: string }>(
   cookieHeader: string | undefined,
-  tenant: string,
+  { tenant, host }: { tenant: string; host: string },
   openSession: (value: string) => T | null,
 ): T | null {
   for (const part of (cookieHeader ?? "").split(";")) {
@@ -95,7 +95,7 @@ export function sessionOnHost<T extends { t?: string }>(
       continue;
     }
     const session = openSession(value);
-    if (session?.t === tenant) return session;
+    if (session?.t === tenant && session.h === host) return session;
   }
   return null;
 }

@@ -417,9 +417,19 @@ function onHost(host: string, path: string, cookie = "", accept = "text/html"): 
   });
 }
 
-function sessionCookie(tenant: string, sub = "founder@company.test"): string {
+function sessionCookie(tenant: string, sub = "founder@company.test", host?: string): string {
   const now = Math.floor(Date.now() / 1000);
-  return `portal_session=${seal({ k: "session", sub, org: "acme", auth: now, iat: now, exp: now + 600, t: tenant }, sessionKey)}`;
+  const claims = {
+    k: "session",
+    sub,
+    org: "acme",
+    auth: now,
+    iat: now,
+    exp: now + 600,
+    t: tenant,
+    ...(host ? { h: host } : {}),
+  };
+  return `portal_session=${seal(claims, sessionKey)}`;
 }
 
 const pair = (cookies: string[], name: string) =>
@@ -457,7 +467,8 @@ test("a company's own hostname signs in to that company only, with no chooser, t
   assert.equal(landed.location, "/inbox?x=1");
   const hostCookie = landed.cookies.find((c) => c.startsWith("portal_session=") && !c.startsWith("portal_session=;"))!;
   assert.doesNotMatch(hostCookie, /domain=/i);
-  assert.equal(open(readCookie(hostCookie.split(";")[0], "portal_session"), sessionKey)?.t, alpha);
+  const minted = open(readCookie(hostCookie.split(";")[0], "portal_session"), sessionKey);
+  assert.deepEqual([minted?.t, minted?.h], [alpha, "a.test"]);
   assert.equal((await onHost("a.test", handoffPath)).status, 400);
   surface.length = 0;
   const home = await onHost("a.test", "/", hostCookie.split(";")[0]);
@@ -466,17 +477,32 @@ test("a company's own hostname signs in to that company only, with no chooser, t
 });
 
 test("a company's hostname never accepts another company's session, even alongside its own", async () => {
-  const refused = await onHost("a.test", "/", sessionCookie(beta));
+  const refused = await onHost("a.test", "/", sessionCookie(beta, undefined, "b.test"));
   assert.equal(refused.status, 302);
   assert.match(refused.location, /^\/auth\/login/);
-  const api = await onHost("a.test", "/api/sessions", sessionCookie(beta), "application/json");
+  const api = await onHost("a.test", "/api/sessions", sessionCookie(beta, undefined, "b.test"), "application/json");
   assert.equal(api.status, 401);
   surface.length = 0;
-  const both = await onHost("b.test", "/", `${sessionCookie(alpha)}; ${sessionCookie(beta)}`);
+  const both = await onHost(
+    "b.test",
+    "/",
+    `${sessionCookie(alpha, undefined, "a.test")}; ${sessionCookie(beta, undefined, "b.test")}`,
+  );
   assert.notEqual(both.status, 302);
   assert.equal(surface.at(-1), beta);
   for (const path of ["/auth/callback?code=x&state=y", "/auth/trusted/callback?code=x&state=y", "/auth/invite"])
     assert.equal((await onHost("a.test", path)).status, 404);
+});
+
+test("a session works only on the host it was minted for, in both directions", async () => {
+  const json = "application/json";
+  const companyHost = sessionCookie(alpha, undefined, "a.test");
+  assert.notEqual((await onHost("a.test", "/api/sessions", companyHost, json)).status, 401);
+  assert.equal((await onHost("portal.test", "/api/sessions", companyHost, json)).status, 401);
+  const sharedHost = sessionCookie(alpha);
+  assert.notEqual((await onHost("portal.test", "/api/sessions", sharedHost, json)).status, 401);
+  assert.equal((await onHost("a.test", "/api/sessions", sharedHost, json)).status, 401);
+  assert.equal((await onHost("a.test", "/api/sessions", sessionCookie(alpha, undefined, "b.test"), json)).status, 401);
 });
 
 test("signing in for a company's hostname with an account outside it shows no access and starts no session", async () => {
