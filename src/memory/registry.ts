@@ -2,12 +2,11 @@ import { decryptSecret, encryptSecret, type SecretKey } from "../connectors/conn
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { parseScopeId, type ScopeId } from "../types.ts";
 import { errMessage } from "../util/errors.ts";
-import { parseMemoryProviderConfig, type MemoryProviderConfig } from "./provider-config.ts";
+import { MEMORY_PROVIDER_ID, parseMemoryProviderConfig, type MemoryProviderConfig } from "./provider-config.ts";
 import type { MemoryCapturePolicy, MemoryProviderRoute } from "./provider-router.ts";
 
 export const MEMORY_REGISTRY_TABLE = "memory_registry";
 const RECORD_ID = "org";
-const BINDING_ID = /^[a-z][a-z0-9-]{0,62}$/;
 
 const BRAIN_PRESETS = {
   "gbrain-v1": {
@@ -191,9 +190,8 @@ function object(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function text(value: unknown, field: string, max = 256): string {
-  if (typeof value !== "string" || !value.trim() || value.length > max)
-    throw invalid(`${field} must be a non-empty string of at most ${max} characters`);
+function text(value: unknown, field: string): string {
+  if (typeof value !== "string" || !value.trim()) throw invalid(`${field} must be a non-empty string`);
   return value.trim();
 }
 
@@ -210,8 +208,8 @@ export function putBrain(record: MemoryRegistry, id: string, input: unknown, cha
   const preset = body.preset ?? existing?.preset;
   if (typeof preset !== "string" || !presetOf({ preset }))
     throw invalid(`preset must be one of: ${Object.keys(BRAIN_PRESETS).join(", ")}`);
-  const url = text(body.url ?? existing?.url, "url", 2048);
-  const clientSecret = body.clientSecret === undefined ? undefined : text(body.clientSecret, "clientSecret", 4096);
+  const url = text(body.url ?? existing?.url, "url");
+  const clientSecret = body.clientSecret === undefined ? undefined : text(body.clientSecret, "clientSecret");
   const kept = url === existing?.url ? existing.auth.clientSecretEnc : undefined;
   const clientSecretEnc = clientSecret === undefined ? kept : encryptSecret(clientSecret, change.key);
   const timeoutMs = body.timeoutMs ?? existing?.timeoutMs;
@@ -224,7 +222,7 @@ export function putBrain(record: MemoryRegistry, id: string, input: unknown, cha
       ...(clientSecretEnc ? { clientSecretEnc } : {}),
     },
     ...(timeoutMs === undefined ? {} : { timeoutMs: timeoutMs as number }),
-    label: text(body.label ?? existing?.label, "label", 80),
+    label: text(body.label ?? existing?.label, "label"),
     updatedAt: change.now,
     updatedBy: change.actor,
   };
@@ -247,7 +245,7 @@ export function deleteBrain(record: MemoryRegistry, id: string): MemoryRegistry 
 }
 
 export function putBinding(record: MemoryRegistry, id: string, input: unknown, change: RegistryChange): MemoryRegistry {
-  if (!BINDING_ID.test(id))
+  if (!MEMORY_PROVIDER_ID.test(id))
     throw invalid("binding id must be up to 63 lowercase letters, digits or hyphens, starting with a letter");
   const body = object(input);
   const existing = record.bindings.find((binding) => binding.id === id);
@@ -272,7 +270,7 @@ export function putBinding(record: MemoryRegistry, id: string, input: unknown, c
     capture,
     recall: flag(body.recall, "recall", existing?.recall ?? true),
     failOpen: flag(body.failOpen, "failOpen", existing?.failOpen ?? true),
-    label: text(body.label ?? existing?.label ?? brain.label, "label", 80),
+    label: text(body.label ?? existing?.label ?? brain.label, "label"),
     updatedAt: change.now,
     updatedBy: change.actor,
   };
