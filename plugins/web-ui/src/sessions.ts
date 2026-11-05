@@ -87,6 +87,7 @@ import {
   type ChatBrowseStatus,
 } from "./session-list";
 import { tip } from "./tooltip";
+import { chatWithPersonaId, personaEditable, personaGlyph, personaSeeds, viewPersona } from "./personas";
 import { errMessage, swallow, swallowAs } from "../../chassis/src/errors";
 import { copyText, menuSelect, relTime, sheenLabel, workingWave } from "./ui";
 import { slackMark } from "./slack-mark";
@@ -276,7 +277,7 @@ export function resetSessionsState(): void {
 }
 
 function projectSeedsForRecents() {
-  return sidebarProjectSeeds(contextsState.list, sessionsState.groupByActivity);
+  return [...sidebarProjectSeeds(contextsState.list, sessionsState.groupByActivity), ...personaSeeds()];
 }
 
 function recentItemActivity(item: RecentItem): number {
@@ -487,16 +488,22 @@ function recentItem(item: RecentItem, shownThreads: ReadonlySet<string>): Templa
     glyph = Users;
     glyphSize = 12;
   }
-  let fallbackName = "Project";
+  const personaId = item.groupKind === "persona" ? item.scopeId.slice("persona:".length) : null;
+  if (personaId) glyph = Bot;
+  let fallbackName = personaId ? "Persona" : "Project";
   if (item.groupKind === "channel") fallbackName = "Channel";
   else if (item.groupKind === "group") fallbackName = "Group DM";
   const name = item.name ?? fallbackName;
-  const customGlyph = glyph === Folder ? projectIconTpl(projectOf(item.scopeId)?.icon, 14) : null;
+  let customGlyph = glyph === Folder ? projectIconTpl(projectOf(item.scopeId)?.icon, 14) : null;
+  if (personaId) customGlyph = personaGlyph(personaId, 14);
   const childrenId = `recent-${item.scopeId.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
   const menuKey = projectMenuKey(item.scopeId);
   const menuOpen = sessionsState.openMenuId === menuKey;
   return html`
-    <section class="recent-project ${item.sessions.some(isActiveRow) ? "active" : ""}" aria-label=${`${name} project`}>
+    <section
+      class="recent-project ${item.sessions.some(isActiveRow) ? "active" : ""}"
+      aria-label=${`${name} ${personaId ? "persona" : "project"}`}
+    >
       ${
         sessionsState.renamingId === menuKey
           ? projectRenameRow(item)
@@ -539,7 +546,10 @@ function recentItem(item: RecentItem, shownThreads: ReadonlySet<string>): Templa
                 type="button"
                 aria-label=${newChatHint(name)}
                 ${tip(NEW_CHAT_TOOLTIP)}
-                @click=${(event: Event) => startProjectChat(event, item.scopeId, item.name)}
+                @click=${(event: Event) =>
+                  personaId
+                    ? startPersonaChatFromSidebar(event, personaId)
+                    : startProjectChat(event, item.scopeId, item.name)}
               >
                 ${icon(Plus, 15)}
               </button>
@@ -634,7 +644,46 @@ function startProjectChat(event: Event, scopeId: string, name: string | null): v
   startNewChat(scopeId, name);
 }
 
+function startPersonaChatFromSidebar(event: Event, personaId: string): void {
+  event.stopPropagation();
+  void chatWithPersonaId(personaId);
+}
+
+function personaMenuPopover(personaId: string): TemplateResult {
+  return html`
+    <div class="session-menu-popover" role="menu" ${ref(placeSessionMenu)} @click=${(e: Event) => e.stopPropagation()}>
+      <button
+        class="session-menu-option"
+        type="button"
+        role="menuitem"
+        @click=${() => {
+          sessionsState.openMenuId = null;
+          viewPersona(personaId);
+        }}
+      >
+        ${icon(Bot, 15)}<span>View persona</span>
+      </button>
+      ${
+        personaEditable(personaId)
+          ? html`<button
+              class="session-menu-option"
+              type="button"
+              role="menuitem"
+              @click=${() => {
+                sessionsState.openMenuId = null;
+                viewPersona(personaId, true);
+              }}
+            >
+              ${icon(Pencil, 15)}<span>Edit persona</span>
+            </button>`
+          : nothing
+      }
+    </div>
+  `;
+}
+
 function projectMenuPopover(item: Extract<RecentItem, { kind: "project" }>): TemplateResult {
+  if (item.groupKind === "persona") return personaMenuPopover(item.scopeId.slice("persona:".length));
   const owned = projectOf(item.scopeId)?.ownerId === appState.me?.user;
   return html`
     <div class="session-menu-popover" role="menu" ${ref(placeSessionMenu)} @click=${(e: Event) => e.stopPropagation()}>

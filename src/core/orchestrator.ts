@@ -1,3 +1,4 @@
+import { personaPrompt } from "../personas/persona-service.ts";
 import { isAgentReply, isOverheard, isUserItem, type Item, type NewItem, stepMessage } from "../sessions/items.ts";
 import type { ItemKind } from "../sessions/items-schema.ts";
 import { countTokens } from "../util/tokens.ts";
@@ -935,6 +936,27 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const useMemory = !external && input.skipMemory !== true;
       const environmentId = external ? scopeId : await resolveEnvironmentId(deps.environments, scopeId);
       resolution.writableScopeId = environmentId;
+      const personaTurn =
+        external || !deps.personas
+          ? null
+          : await deps.personas.forTurn(
+              (await deps.sessions.getByThread(conversation.threadRef))?.personaId,
+              actor.id,
+              scopeId,
+            );
+      const persona = personaTurn && typeof personaTurn === "object" ? personaTurn : null;
+      if (persona) resolution.readOnlyScopeIds.push(persona.scope);
+      const credentialScopes = persona ? [scopeId, persona.scope] : [scopeId];
+      const scopeKeychainGrants = async () => {
+        const rows = (
+          await Promise.all(
+            credentialScopes.map(async (grantScope) =>
+              ((await deps.keychain?.grantsForScope(grantScope)) ?? []).map((row) => ({ ...row, grantScope })),
+            ),
+          )
+        ).flat();
+        return rows.filter((row, i) => rows.findIndex((r) => r.credential.id === row.credential.id) === i);
+      };
 
       const context = await resolveTurnContext({
         external,
@@ -1015,7 +1037,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         surfaceLinks: surfaceHints?.linkSyntax ?? "",
         sessions: isWeb && surfaceName === "web" && Boolean(sessionSyscalls) && !input.swarm,
       });
-      let systemPrompt = `${modeFrame}\n\n${resolution.systemPrompt}\n\n${sharedCore}`;
+      let personaBlock = persona ? personaPrompt(persona) : "";
+      if (typeof personaTurn === "string") personaBlock = `## Persona\n${personaTurn}`;
+      let systemPrompt = `${modeFrame}\n\n${[resolution.systemPrompt, personaBlock].filter(Boolean).join("\n\n")}\n\n${sharedCore}`;
       if (external)
         systemPrompt +=
           "\n\nThis conversation has an external Slack audience. Answer and run code here using only the explicitly provided shared service credentials. Personal memory, files, keychains, connected apps, organization data and administrative tools are unavailable. When personal access is needed, say briefly that you are continuing privately, and include [[continue-private: task]] in your final answer. The continuation goes only to the authenticated requester; never put private results in this channel.";
@@ -1429,13 +1453,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const registerKeychainCredentials = async (addCredential: typeof addCredentialToCatalog): Promise<void> => {
         if (external || strictReadOnly || !deps.keychain) return;
         const keychain = deps.keychain;
-        for (const { grant, credential } of await keychain.grantsForScope(scopeId)) {
+        for (const { grant, credential, grantScope } of await scopeKeychainGrants()) {
           if (credential.kind === "broker" || isBackendCredential(credential)) continue;
           addCredential(
             {
               handle: credentialHandle(credential),
               resolve: async () => {
-                const prepared = await keychain.prepareMaterialize(grant.id, scopeId, actor.id);
+                const prepared = await keychain.prepareMaterialize(grant.id, grantScope, actor.id);
                 return {
                   ...resolvedCredential(prepared.materialized, samePerson(credential.ownerId, actor.id)),
                   commit: prepared.commit,
@@ -2251,7 +2275,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           const [entriesByOwner, connectorsByOwner, scopeGrants, scopeAsks] = await Promise.all([
             !external ? (deps.keychain?.listByOwners(members.map((m) => m.id)) ?? new Map()) : new Map(),
             !external ? (deps.keychain?.listConnectorsByOwners(members.map((m) => m.id)) ?? new Map()) : new Map(),
-            !external ? (deps.keychain?.grantsForScope(scopeId) ?? []) : [],
+            !external ? scopeKeychainGrants() : [],
             !external ? (deps.keychain?.listAsks({ requesterScopeId: scopeId }) ?? []) : [],
           ]);
           const keychainBlock = renderKeychainManifest({

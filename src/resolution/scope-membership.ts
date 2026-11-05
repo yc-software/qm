@@ -1,4 +1,5 @@
 import type { Principal, ScopeId } from "../types.ts";
+import { atLeast, type PersonaRole } from "../personas/persona-schema.ts";
 import { actsAsScope, parseScopeId, scopeId } from "../types.ts";
 import { samePerson } from "../directory/person.ts";
 import { swallowAs } from "../util/errors.ts";
@@ -32,6 +33,16 @@ interface ScopeMembershipDeps {
   };
   teams?: { isMember(principalId: string, teamId: string): Promise<boolean> };
   sessions?: { participantScopes(principalId: string): Promise<readonly { scopeId: ScopeId }[]> };
+  personas?: { role(principalId: string, personaId: string): Promise<PersonaRole | null> };
+}
+
+async function personaRoleAtLeast(
+  deps: ScopeMembershipDeps,
+  principalId: string,
+  personaId: string,
+  floor: PersonaRole,
+): Promise<boolean> {
+  return atLeast(await deps.personas?.role(principalId, personaId), floor);
 }
 
 async function teamMember(deps: ScopeMembershipDeps, principalId: string, teamId: string): Promise<boolean> {
@@ -184,6 +195,7 @@ export function createCanReadScope(deps: ScopeMembershipDeps): CanReadScope {
     if (kind === "org") return deps.identity?.classify(principalId).type === "internal";
     if (kind === "personal") return samePerson(ref, principalId);
     if (kind === "team") return teamMember(deps, principalId, ref);
+    if (kind === "persona") return personaRoleAtLeast(deps, principalId, ref, "read");
     if (kind === "group") return memberOfSharedScope(deps, kind, ref, principalId, targetScope);
     if (kind === "channel") {
       if (await memberOfSharedScope(deps, kind, ref, principalId, targetScope)) return true;
@@ -200,6 +212,7 @@ export function createCanWriteScope(deps: ScopeMembershipDeps) {
     if (kind === "org") return true;
     if (kind === "personal") return samePerson(ref, principalId);
     if (kind === "team") return teamMember(deps, principalId, ref);
+    if (kind === "persona") return personaRoleAtLeast(deps, principalId, ref, "write");
     if (kind === "channel" || kind === "group") return currentSharedScopeMember(deps, kind, ref, principalId);
     return false;
   };
@@ -220,6 +233,7 @@ export function createCanManageScope(deps: ScopeMembershipDeps): CanManageScope 
     if (!principalId || !activePrincipal(deps, principalId)) return false;
     const { kind, ref } = parseScopeId(scope);
     if (kind === "personal") return samePerson(ref, principalId);
+    if (kind === "persona") return personaRoleAtLeast(deps, principalId, ref, "write");
     if (kind === "group") return currentSharedScopeMember(deps, kind, ref, principalId);
     if (kind === "channel")
       return (await channelPrivacy(deps, ref)) === true && currentSharedScopeMember(deps, kind, ref, principalId);
