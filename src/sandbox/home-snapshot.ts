@@ -8,7 +8,7 @@ import {
   UploadPartCommand,
 } from "@aws-sdk/client-s3";
 import { shq } from "../util/shell.ts";
-import { swallowAs } from "../util/errors.ts";
+import { errMessage, swallowAs } from "../util/errors.ts";
 import { sleep, withTimeout } from "../util/async.ts";
 import { bodyToReadable, isNoSuchKey, s3Client, type S3Send } from "../persistence/s3.ts";
 import { displacedPruneGlobs } from "../credentials/resident-paths.ts";
@@ -34,6 +34,7 @@ export const HOME_SNAPSHOT_PRUNE = [
 
 export interface SnapshotBookkeeping {
   lastSnapshotMs?: number;
+  lastSnapshotAttemptMs?: number;
   homeDirty?: boolean;
 }
 
@@ -43,9 +44,24 @@ export function snapshotDue(
   intervalMs: number,
   now = Date.now(),
 ): boolean {
-  const throttled = !!stored?.lastSnapshotMs && now - stored.lastSnapshotMs <= intervalMs;
-  if (throttled) return false;
+  const last = Math.max(stored?.lastSnapshotMs ?? 0, stored?.lastSnapshotAttemptMs ?? 0);
+  if (last && now - last <= intervalMs) return false;
   return !tdOpts?.homeUnchanged || stored?.homeDirty !== false;
+}
+
+export async function attemptSnapshot(
+  stored: SnapshotBookkeeping | null | undefined,
+  recordAttempt: (patch: SnapshotBookkeeping) => unknown,
+  capture: () => Promise<unknown>,
+  report: (message: string) => void,
+): Promise<void> {
+  const failing = (stored?.lastSnapshotAttemptMs ?? 0) > (stored?.lastSnapshotMs ?? 0);
+  await recordAttempt({ lastSnapshotAttemptMs: Date.now() });
+  try {
+    await capture();
+  } catch (e) {
+    if (!failing) report(errMessage(e));
+  }
 }
 
 export interface SnapshotUpload {
