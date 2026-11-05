@@ -18,6 +18,7 @@ import { browserSessionCookie, browserSessionDeps } from "./support/browser-sess
 function releaseFiles(files: Record<string, string | Buffer>): WebReleases {
   const read = (name: string) => (files[name] === undefined ? undefined : Buffer.from(files[name]));
   return {
+    live: async () => "release-a1",
     async document(name) {
       const body = read(name);
       if (!body) throw new Error(`fixture release has no ${name}`);
@@ -100,6 +101,15 @@ test("the app document carries the org's branding, the security headers and a CS
   }
   const manifest = JSON.parse((await raw("/manifest.webmanifest")).body.toString()) as { name: string };
   assert.equal(manifest.name, "QM");
+});
+
+test("the app document and signed-in API responses name the live web UI release", async () => {
+  assert.match((await raw("/")).body.toString(), /<meta name="qm-release" content="release-a1" \/>/);
+  const anonymous = await fetch(`${coreBase}/me`);
+  assert.equal(anonymous.status, 401);
+  assert.equal(anonymous.headers.get("x-qm-release"), null);
+  const signedIn = await fetch(`${coreBase}/api/contexts`, { headers: { cookie: browserSessionCookie("alice") } });
+  assert.equal(signedIn.headers.get("x-qm-release"), "release-a1");
 });
 
 test("the app-edit page may be framed by its own app's subdomain only", async () => {

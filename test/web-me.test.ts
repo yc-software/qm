@@ -31,7 +31,7 @@ async function serve(deps: Partial<ServerDeps> = {}): Promise<string> {
   const server = createServer(built.app, {
     ...serverDeps(config, built),
     ...browserSessionDeps,
-    web: { events: {} as never, me: webMe },
+    web: { events: {} as never, me: webMe, shell: { release: async () => undefined } as never },
     suggestedActivities: undefined,
     ...deps,
   } as ServerDeps);

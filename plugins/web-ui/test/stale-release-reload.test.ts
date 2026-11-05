@@ -30,6 +30,7 @@ test("a tab reloads onto a newly deployed release only once it regains focus wit
     ),
   });
   const focus = () => window.dispatchEvent(new Event("focus"));
+  document.head.insertAdjacentHTML("beforeend", '<meta name="qm-release" content="release-a" />');
   try {
     await h.boot();
     await h.refreshSessions();
@@ -49,6 +50,14 @@ test("a tab reloads onto a newly deployed release only once it regains focus wit
     assert.equal(reloads, 0);
 
     conversation.state.pendingSend = null;
+    const editor = document.createElement("textarea");
+    document.body.append(editor);
+    editor.value = "unsaved cron task";
+    editor.focus();
+    focus();
+    assert.equal(reloads, 0);
+
+    editor.remove();
     focus();
     assert.equal(reloads, 1);
 
