@@ -65,7 +65,16 @@ function vectorWidth(dimensions: number | undefined): number | null {
 
 export const VECTOR_MIGRATIONS: PgMigrationDefinition[] = [
   ...MEMORY_FACTS_MIGRATIONS,
-  { id: "memory/vectors/0001-extension", statements: ["CREATE EXTENSION IF NOT EXISTS vector"] },
+  {
+    id: "memory/vectors/0001-vector-extension",
+    statements: [
+      `DO $ext$ BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector') THEN
+          CREATE EXTENSION vector;
+        END IF;
+      END $ext$`,
+    ],
+  },
   { id: "memory/vectors/0002", statements: SCHEMA },
   ...tenantTables("memory/vectors/0003-tenants", [
     { table: "memory_fact_vectors", primaryKey: "scope_id, model, fact_id" },
