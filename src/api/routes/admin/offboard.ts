@@ -85,7 +85,6 @@ export async function offboardUser(ctx: ApiCtx): Promise<void> {
   if (samePerson(principalId, actor.id))
     return sendJson(res, 400, { error: "bad_request", message: "you cannot offboard yourself" });
   const steps = await plan(ctx, actor.id, principalId);
-  const user = input.apply === true ? await deps.admin!.users.markOffboarded(principalId, actor.id) : undefined;
   const changes: Change[] = [];
   for (const { run, ...change } of steps) {
     if (input.apply === true) {
@@ -106,7 +105,7 @@ export async function offboardUser(ctx: ApiCtx): Promise<void> {
     }
     changes.push(change);
   }
-  return sendJson(res, 200, { principalId, applied: input.apply === true, changes, ...(user ? { user } : {}) });
+  return sendJson(res, 200, { principalId, applied: input.apply === true, changes });
 }
 
 export async function reactivateUser(ctx: ApiCtx): Promise<void> {
@@ -115,7 +114,6 @@ export async function reactivateUser(ctx: ApiCtx): Promise<void> {
   if (!actor) return;
   if (!deps.identity) return sendJson(res, 404, { error: "not_found" });
   const { principalId } = await resolveAdminUser(deps, params.principalId!);
-  const user = await deps.admin!.users.markReactivated(principalId);
   await deps.identity.reactivate(principalId);
   audit(deps, {
     principalId: actor.id,
@@ -123,5 +121,5 @@ export async function reactivateUser(ctx: ApiCtx): Promise<void> {
     resource: principalId,
     scopeLabel: orgScope(deps),
   });
-  return sendJson(res, 200, { principalId, active: true, user });
+  return sendJson(res, 200, { principalId, active: true });
 }
