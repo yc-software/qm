@@ -64,7 +64,7 @@ export interface LoopStore {
   create(input: CreateLoopInput): Promise<{ loop: Loop; created: boolean }>;
   get(id: string): Promise<Loop | null>;
   list(): Promise<Loop[]>;
-  claimIds(): Promise<ClaimedRow[]>;
+  claimTenants(): Promise<ClaimedRow[]>;
   byCron(cronId: string): Promise<Loop | null>;
   update(id: string, patch: LoopPatch): Promise<Loop | null>;
   editPlaybook(id: string, edit: PlaybookEdit): Promise<Loop | null>;
@@ -193,7 +193,7 @@ export function createLoopStore(backing: DurableMap<Loop>): LoopStore {
     },
     get: (id) => backing.get(id),
     list: () => backing.all(),
-    claimIds: () => backing.claimIds(),
+    claimTenants: () => backing.claimTenants(),
     async byCron(cronId) {
       return (await backing.all()).find((loop) => loop.cronId === cronId) ?? null;
     },

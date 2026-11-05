@@ -466,30 +466,18 @@ export function createLoopIngress(deps: LoopIngressDeps) {
     },
     async maintain() {
       if (Date.now() >= nextCleanupAt) {
-        await claimThenBind(
-          () => deps.deliveries.claimIds(),
-          async (id) => {
-            const delivery = await deps.deliveries.get(id);
-            if (delivery?.completedAt && delivery.completedAt < Date.now() - 30 * 86_400_000)
-              await deps.deliveries.delete(id);
-          },
+        await claimThenBind(deps.deliveries.claimTenants, () =>
+          deps.deliveries.deleteBefore("completedAt", Date.now() - 30 * 86_400_000),
         );
         nextCleanupAt = Date.now() + 86_400_000;
       }
-      const sources = await claimThenBind(
-        () => deps.sources.claimIds(),
-        async (id) => {
-          const source = await deps.sources.get(id);
-          if (source?.enabled && (await deps.enabledFor(source.owner))) await renew(source);
-          return { tenantId: currentTenant(), id, enabled: Boolean(source?.enabled) };
-        },
-      );
-      for (const source of sources) {
-        if (source.enabled)
-          await withTenant(source.tenantId, () => process(source.id)).catch((error) =>
-            swallow("Loop ingestion", error),
-          );
-      }
+      const sources = await claimThenBind(deps.sources.claimTenants, async () => {
+        const enabled = (await deps.sources.entries()).filter(([, source]) => source.enabled);
+        for (const [, source] of enabled) if (await deps.enabledFor(source.owner)) await renew(source);
+        return enabled.map(([id]) => ({ tenantId: currentTenant(), id }));
+      });
+      for (const source of sources.flat())
+        await withTenant(source.tenantId, () => process(source.id)).catch((error) => swallow("Loop ingestion", error));
     },
     process,
   };
