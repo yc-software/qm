@@ -14,7 +14,7 @@ import { envKey } from "./connector-token.ts";
 import { connectorHostLabel } from "../connectors/oauth.ts";
 import { credentialInjectionError, type CredentialInjection } from "./credential-injection.ts";
 import { claimThenBind } from "../tenants/claim.ts";
-import { currentTenant, withTenant } from "../tenants/context.ts";
+import { currentTenant } from "../tenants/context.ts";
 
 const COMPOSIO_ENV_KEY = "COMPOSIO_API_KEY";
 
@@ -1315,27 +1315,22 @@ export function createKeychain(deps: {
     },
 
     async unnotifiedResolvedAsks(nowAt) {
-      const recs = await claimThenBind(deps.asks.claimTenants, async () =>
-        (await deps.asks.all()).map((rec) => ({ tenantId: currentTenant(), rec })),
-      );
-      const out: Array<KeychainAsk & { tenantId: string }> = [];
-      const taskDecisions = new Set<string>();
-      for (const { tenantId, rec } of recs
-        .flat()
-        .reverse()
-        .sort((a, b) => b.rec.createdAt - a.rec.createdAt))
-        await withTenant(tenantId, async () => {
+      const out = await claimThenBind(deps.asks.claimTenants, async () => {
+        const found: Array<KeychainAsk & { tenantId: string }> = [];
+        const taskDecisions = new Set<string>();
+        for (const rec of (await deps.asks.all()).reverse().sort((a, b) => b.createdAt - a.createdAt)) {
           const a = await freshAsk(rec, nowAt);
           const origin = cronIdOf(a.requesterThreadRef) ?? a.requesterThreadRef;
-          const task = JSON.stringify([tenantId, a.credentialId, a.requesterScopeId, origin]);
-          const retainDecision =
-            origin !== undefined && !taskDecisions.has(task) && !!(await deps.creds.get(a.credentialId));
+          const task = JSON.stringify([a.credentialId, a.requesterScopeId, origin]);
+          const retain = origin !== undefined && !taskDecisions.has(task) && !!(await deps.creds.get(a.credentialId));
           taskDecisions.add(task);
-          if (a.status === "pending") return;
-          if (a.notifiedAt === undefined) out.push({ ...a, tenantId });
-          else if (!retainDecision && a.notifiedAt < nowAt - ASK_PRUNE_AFTER_MS) await deps.asks.delete(a.id);
-        });
-      return out;
+          if (a.status === "pending") continue;
+          if (a.notifiedAt === undefined) found.push({ ...a, tenantId: currentTenant() });
+          else if (!retain && a.notifiedAt < nowAt - ASK_PRUNE_AFTER_MS) await deps.asks.delete(a.id);
+        }
+        return found;
+      });
+      return out.flat().sort((a, b) => b.createdAt - a.createdAt);
     },
 
     async markAskNotified(id, status) {
