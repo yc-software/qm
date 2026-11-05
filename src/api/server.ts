@@ -22,7 +22,7 @@ import {
 } from "../auth/source-auth.ts";
 import { CONTROL_PLANE_AUD, type CapabilityClaims } from "../auth/capability-token.ts";
 import { loadTenant } from "../tenants/cache.ts";
-import { capabilityToken, requestCapability, withRequestTenant } from "./request-tenant.ts";
+import { capabilityToken, identityTenant, requestCapability, withRequestTenant } from "./request-tenant.ts";
 import { inboundKey, withInboundTenant } from "./inbound-tenant.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER, type PortalIdentity } from "../auth/portal-identity.ts";
 import { errMessage } from "../util/errors.ts";
@@ -504,7 +504,13 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
     const matched = raw ? null : findRoute(apiRoutes, base.method, base.pathname);
     const route = (raw ?? matched)?.route;
     const inbound = inboundKey(req, deps, raw ?? matched, base.url);
-    if (inbound) return withInboundTenant(app, inbound, () => serve(req, res, base, raw, matched));
+    if (inbound)
+      return withInboundTenant(
+        app,
+        inbound,
+        () => serve(req, res, base, raw, matched),
+        () => identityTenant(req, deps.portalIdentitySecret ?? deps.signingSecret),
+      );
     await withRequestTenant(
       req,
       res,

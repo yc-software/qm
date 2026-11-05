@@ -29,7 +29,7 @@ export function requestCapability(
   return claims;
 }
 
-async function identityTenant(req: IncomingMessage, secret: string | undefined): Promise<string | undefined> {
+export async function identityTenant(req: IncomingMessage, secret: string | undefined): Promise<string | undefined> {
   const raw = req.headers[PORTAL_IDENTITY_HEADER];
   const token = Array.isArray(raw) ? raw[0] : raw;
   return token && secret ? (await verifyPortalIdentity(token, secret, Date.now()))?.t : undefined;

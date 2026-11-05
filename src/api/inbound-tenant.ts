@@ -8,6 +8,7 @@ export const EMPTY_TENANT = "00000000-0000-0000-0000-000000000000";
 interface InboundKey {
   by: TenantKey;
   key: string | undefined;
+  signedTenantFirst?: true;
 }
 
 export function firstSegment(prefix: string): KeyedTenant["key"] {
@@ -37,14 +38,18 @@ export function inboundKey(
   const slug = gate.deployGateSecret ? appHostSlug(req.headers.host, gate.deployAppsDomain) : undefined;
   if (slug !== undefined) return { by: "deployment", key: slug };
   const keyed = found?.route.tenant;
-  return typeof keyed === "object" ? { by: keyed.by, key: keyed.key(found!.params, url) } : undefined;
+  if (typeof keyed !== "object") return undefined;
+  const key = { by: keyed.by, key: keyed.key(found!.params, url) };
+  return keyed.signedTenantFirst ? { ...key, signedTenantFirst: true } : key;
 }
 
 export async function withInboundTenant(
   lookup: Pick<TenantLookup, "tenantFor">,
   inbound: InboundKey,
   next: () => Promise<void>,
+  signedTenant?: () => Promise<string | undefined>,
 ): Promise<void> {
-  const tenant = await lookup.tenantFor(inbound.by, inbound.key);
+  const signed = inbound.signedTenantFirst ? await signedTenant?.() : undefined;
+  const tenant = signed ?? (await lookup.tenantFor(inbound.by, inbound.key));
   return tenant ? inTenant(tenant, next) : withTenant(EMPTY_TENANT, next);
 }
