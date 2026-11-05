@@ -14,6 +14,8 @@ import { createPostgresDirectoryStore } from "../src/directory/postgres-director
 import type { DirectoryStore } from "../src/directory/directory-store.ts";
 import type { IdentityService } from "../src/identity/identity-service.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
+import { onTenantLoad } from "../src/tenants/cache.ts";
+import { loadTenantSettings } from "../src/tenants/settings.ts";
 import { boundTenant, withoutTenant } from "../src/tenants/context.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -240,6 +242,22 @@ test("a company's hostname maps to exactly that company through the broker route
     assert.equal(await hostOf("alpha.company.test"), alpha);
     assert.equal(await hostOf("BETA.company.test"), beta);
     assert.equal(await hostOf("gamma.company.test"), null);
+    await owner.q(
+      `UPDATE tenants SET settings = settings || '{"oidcClient":{"clientId":"beta-client","clientSecret":"beta-client-secret-0123456789abcdef"}}' WHERE id = $1`,
+      [beta],
+    );
+    const settingsPool = createPgPool(appUrl(databaseUrl).toString());
+    const stopLoad = onTenantLoad(() => loadTenantSettings(settingsPool));
+    t.after(async () => {
+      stopLoad();
+      await settingsPool.close();
+    });
+    const withClient = (await srv.get("/v1/auth/broker/host-tenant?host=beta.company.test")).body;
+    assert.deepEqual(withClient.trustedClient, {
+      clientId: "beta-client",
+      clientSecret: "beta-client-secret-0123456789abcdef",
+    });
+    assert.equal((await srv.get("/v1/auth/broker/host-tenant?host=alpha.company.test")).body.trustedClient, undefined);
     const app = createPgPool(appUrl(databaseUrl).toString());
     t.after(() => app.close());
     await assert.rejects(app.q("SELECT host FROM tenant_hosts"), /No tenant is bound/);

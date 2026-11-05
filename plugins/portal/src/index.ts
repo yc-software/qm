@@ -17,7 +17,7 @@ import { pathToFileURL } from "node:url";
 import { ADMIN_LOGIN_SCRIPT, ADMIN_LOGIN_SCRIPT_HASH, openAdminLogin } from "./admin-login.ts";
 import { LRUCache } from "lru-cache";
 import { createCanonicalResolver, IdentityRejected } from "./canonical.ts";
-import { createTrustedEntry, trustedEntryConfig } from "./trusted-entry.ts";
+import { createHostTrustedEntries, createTrustedEntry, trustedEntryConfig } from "./trusted-entry.ts";
 import { CARD_STYLE } from "./card-style.ts";
 import { coreHostTenant, createHostTenants, mappedHost, runOnHost, sessionOnHost } from "./host-tenant.ts";
 import { createHostRoutes } from "./host-routes.ts";
@@ -232,19 +232,17 @@ if (
     PORTAL_IDENTITY_SECRET === CORE_SIGNING_SECRET)
 )
   throw new Error("Trusted administrator provisioning requires trusted OIDC and a distinct portal identity secret");
-const trustedEntry = trustedOidc
-  ? createTrustedEntry(trustedOidc, SESSION_SECRET ?? DEV_SECRET, (key, expiresAt) =>
-      claimOnce(coreClaimStore(CORE, CORE_SIGNING_SECRET, "portal"), key, expiresAt),
-    )
-  : null;
+const claimTrusted = (key: string, expiresAt: number) =>
+  claimOnce(coreClaimStore(CORE, CORE_SIGNING_SECRET, "portal"), key, expiresAt);
+const trustedEntry = trustedOidc ? createTrustedEntry(trustedOidc, SESSION_SECRET ?? DEV_SECRET, claimTrusted) : null;
+const hostTrustedEntry = createHostTrustedEntries(trustedOidc, SESSION_SECRET ?? DEV_SECRET, claimTrusted);
 const IMPERSONATE_TTL_S = Number(process.env.PORTAL_IMPERSONATE_TTL_S ?? 3600);
 const hostRoutes = createHostRoutes({
   publicUrl: PUBLIC_URL,
   appsDomain: APPS_DOMAIN,
   lookup: createHostTenants(coreHostTenant(CORE, CORE_SIGNING_SECRET)),
   handoffKey: deriveKey(SESSION_SECRET ?? DEV_SECRET, "portal.handoff.v1"),
-  claim: (jti) =>
-    claimOnce(coreClaimStore(CORE, CORE_SIGNING_SECRET, "portal"), `handoff:${jti}`, Date.now() + 120_000),
+  claim: (jti) => claimTrusted(`handoff:${jti}`, Date.now() + 120_000),
   session: (req) => currentSession(req),
   signOut: (res) => setSession(res, signedOutCookies()),
   signIn: (res, who) => setAuthenticatedSession(res, who.sub, who.name, false, who.t),
@@ -1552,7 +1550,9 @@ async function adminLogin(req: IncomingMessage, res: ServerResponse): Promise<vo
 }
 
 async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
-  if (!trustedEntry) return json(res, 404, { error: "not_found" });
+  const mapped = mappedHost();
+  const entry = mapped?.trustedClient ? hostTrustedEntry(mapped.origin, mapped.trustedClient) : trustedEntry;
+  if (!entry) return json(res, 404, { error: "not_found" });
   const cookieName = "portal_trusted_tmp";
   const path = "/auth/trusted";
   if (url.pathname === `${path}/login`) {
@@ -1569,7 +1569,7 @@ async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL):
       });
       return void res.end();
     }
-    const login = trustedEntry.start(sanitizeReturnTo(returnTo, PUBLIC_URL, APPS_DOMAIN));
+    const login = entry.start(sanitizeReturnTo(returnTo, PUBLIC_URL, APPS_DOMAIN));
     setSession(res, [setCookie(cookieName, login.cookie, { path, maxAge: login.ttl, secure: SECURE_COOKIES })]);
     res.writeHead(302, { location: login.location, "cache-control": "no-store" });
     return void res.end();
@@ -1577,7 +1577,8 @@ async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL):
   if (url.pathname !== `${path}/callback`) return json(res, 404, { error: "not_found" });
   setSession(res, [clearCookie(cookieName, path, SECURE_COOKIES)]);
   try {
-    const identity = await trustedEntry.finish(readCookie(req.headers.cookie, cookieName), url);
+    const identity = await entry.finish(readCookie(req.headers.cookie, cookieName), url);
+    if (mapped) return finishTrustedSignIn(res, identity, identity.returnTo, mapped.tenant);
     if (trustedAdminEnabled) {
       await provisionTrustedAdmin(
         {
