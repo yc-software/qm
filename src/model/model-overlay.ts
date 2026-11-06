@@ -63,7 +63,6 @@ export function parseRegisteredModel(value: unknown): RegisteredModel {
 const overlayState = {
   overlays: new Map<string, RegisteredModel>(),
   unavailable: new Map<string, string>(),
-  version: 0,
   snapshot: JSON.stringify([[], [], []]),
 };
 
@@ -79,10 +78,6 @@ export function overlayUnavailableReason(id: string): string | undefined {
   return overlayState.unavailable.get(id);
 }
 
-export function overlaysVersion(): number {
-  return overlayState.version;
-}
-
 export function publishModelOverlays(
   next: Map<string, RegisteredModel>,
   unavailable: Map<string, string>,
@@ -94,5 +89,4 @@ export function publishModelOverlays(
   state.overlays = next;
   state.unavailable = unavailable;
   state.snapshot = nextSnapshot;
-  state.version += 1;
 }

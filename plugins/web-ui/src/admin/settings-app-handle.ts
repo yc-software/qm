@@ -2,7 +2,7 @@ import { html } from "lit";
 import { cardClass, saveFooter } from "./setting-controls.ts";
 import type { SettingsState } from "./settings.ts";
 
-export const APP_HANDLE_RULE = "Use 2–30 lowercase letters or digits, with no hyphens.";
+const APP_HANDLE_RULE = "Use 2–30 lowercase letters or digits, with no hyphens.";
 
 export function appHandleError(handle: string): string | undefined {
   return /^[a-z0-9]{2,30}$/.test(handle) ? undefined : APP_HANDLE_RULE;
