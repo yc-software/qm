@@ -48,6 +48,20 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
   const recordJudgment = (j: Parameters<AmbientJudgmentStore["record"]>[0]): void => {
     void deps.ambientJudgments?.record(j).catch(reportFailureAs("ambient: record judgment", undefined));
   };
+  async function threadAnchors(
+    surface: string,
+    container: string,
+    triggers: CachedMessage[],
+  ): Promise<CachedMessage[]> {
+    const cache = deps.surfaceCache;
+    const roots = [...new Set(triggers.flatMap((m) => (m.sub ? [m.sub] : [])))];
+    if (!cache || !roots.length) return [];
+    const [parents, ...ownReplies] = await Promise.all([
+      cache.readMessages(container, { surface, timestamps: roots, noFallback: true }),
+      ...roots.map((sub) => cache.readMessages(container, { surface, sub, self: true, limit: 1, noFallback: true })),
+    ]);
+    return [...parents!, ...ownReplies.flat()];
+  }
   async function judgeAmbientContainer(
     surface: string,
     container: string,
@@ -151,7 +165,13 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
         orders: ordersForJudge,
         ...(self ? { self } : {}),
         messages: forJudge,
-        recent: ambientWindow(asPolicy(all), forJudge),
+        recent: ambientWindow(
+          asPolicy(all),
+          forJudge,
+          asPolicy(
+            await threadAnchors(surface, container, forJudge).catch(reportFailureAs("ambient: thread anchors", [])),
+          ),
+        ),
         ...(scheduled ? { scheduled: true } : {}),
       };
       const prompt = renderAmbientPrompt(judgeBatch);
@@ -321,7 +341,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
             why: decision.reason ?? "The recent messages here may warrant a reply.",
             orders: batch.orders,
             recentMessages: recentWakeMessages(batch),
-            instructions: `You don't need to have been @mentioned. Respond with the \`${batch.surface}\` tool's \`post\` action — set \`ts\` to the triggering message id to reply in its thread, or \`broadcast: true\` to post at the channel top level — or stay silent if nothing is needed. To include an image or file, name its workspace path in \`post\`'s \`files\` (it uploads with your message, in that thread). Use \`reach\` only to send to a DIFFERENT channel or person. Use the \`read_thread\` or \`search\` action if you need more context than shown.`,
+            instructions: `You don't need to have been @mentioned. Reply about the trigger messages. Messages in other threads are separate conversations: don't carry their facts into your reply unless they are about the same subject. Respond with the \`${batch.surface}\` tool's \`post\` action — set \`ts\` to the triggering message id to reply in its thread, or \`broadcast: true\` to post at the channel top level — or stay silent if nothing is needed. To include an image or file, name its workspace path in \`post\`'s \`files\` (it uploads with your message, in that thread). Use \`reach\` only to send to a DIFFERENT channel or person. Use the \`read_thread\` or \`search\` action if you need more context than shown.`,
           }),
           origin: {
             kind: "automation",

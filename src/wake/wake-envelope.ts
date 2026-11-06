@@ -2,6 +2,7 @@ import { isoFromTs, messageTag, xmlAttrEscape, xmlEscape } from "../util/message
 
 export interface WakeMessage {
   ts: string;
+  thread?: string;
   self?: boolean;
   bot?: boolean;
   authorName?: string;
@@ -39,6 +40,7 @@ function tagMessage(m: WakeMessage, trigger = !!m.trigger): string {
         ...(m.authorName ? { author: m.authorName } : {}),
         ...(m.authorId ? { authorId: m.authorId } : {}),
         ...(isoFromTs(m.ts) ? { sentAt: isoFromTs(m.ts) } : {}),
+        ...(m.thread ? { thread: m.thread } : {}),
         ...(m.mentions && Object.keys(m.mentions).length ? { mentions: m.mentions } : {}),
         ...(trigger ? { trigger: true } : {}),
       },
