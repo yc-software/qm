@@ -45,7 +45,7 @@ export async function withRequestTenant(
   res: ServerResponse,
   route: Pick<Route, "auth" | "tenant"> | undefined,
   capabilitySecret: string | undefined,
-  readBootTenant: () => Promise<string | undefined>,
+  bootTenant: string | undefined,
   next: () => Promise<void> | void,
   ready?: () => Promise<void>,
   identitySecret?: string,
@@ -53,7 +53,7 @@ export async function withRequestTenant(
   if (route?.tenant === "none") return next();
   const token = capabilityToken(req, typeof route?.auth === "object" && route.auth.bearer === true);
   const claims = token ? await requestCapability(req, token, capabilitySecret) : null;
-  const tenant = claims?.tenant ?? (await identityTenant(req, identitySecret)) ?? (await readBootTenant());
+  const tenant = claims?.tenant ?? (await identityTenant(req, identitySecret)) ?? bootTenant;
   if (tenant)
     return withTenant(tenant, async () => {
       await ready?.();

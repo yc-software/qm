@@ -10,6 +10,7 @@ import { type ApiCtx, type Route } from "./route.ts";
 import { inTenant } from "../../tenants/claim.ts";
 import { tenantAllowsEmail } from "../../tenants/settings.ts";
 import { boundTenant } from "../../tenants/context.ts";
+import { bootTenant } from "../../tenants/boot.ts";
 
 const NAMESPACE = "authbroker:";
 const MAX_IDS = 64;
@@ -112,7 +113,7 @@ async function emailTenants(ctx: ApiCtx): Promise<void> {
   const tenants = ctx.deps.directory?.tenantsForEmail;
   return sendJson(ctx.res, 200, {
     tenants: tenants ? await tenants(email) : [],
-    shared: !(await ctx.app.readBootTenant()),
+    shared: !bootTenant(),
   });
 }
 
@@ -123,7 +124,7 @@ async function principalTenants(ctx: ApiCtx): Promise<void> {
   const tenants = ctx.deps.directory?.tenantsForPrincipal;
   return sendJson(ctx.res, 200, {
     tenants: tenants ? await tenants(principal) : [],
-    shared: !(await ctx.app.readBootTenant()),
+    shared: !bootTenant(),
   });
 }
 

@@ -47,7 +47,7 @@ export async function startQm(
       if (!cronQueueMisconfigured(error)) throw error;
       console.error(`[scheduler] misconfiguration: could not install the cron job queue: ${errMessage(error)}`);
     });
-  const tenant = await bindBootTenant(() => built.app.readBootTenant());
+  const tenant = await bindBootTenant(built.bootTenant);
   if (config.backgroundWorkEnabled) await inBootTenant(tenant, () => built.ownSharedState());
   const slackConfig = slackPluginConfigFromEnv(env);
   let slackEnvironmentState: "absent" | "configured" | "partial" =

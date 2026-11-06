@@ -1,5 +1,4 @@
 import { test } from "node:test";
-import { TEST_TENANT } from "./support/test-config.ts";
 import assert from "node:assert/strict";
 import { createControlService } from "../src/api/control-service.ts";
 import { AdminError } from "../src/admin/admin-service.ts";
@@ -60,7 +59,6 @@ function authorOfGrant(state: FakeState, ownerScopeId: ScopeId, ref: string): st
 
 function fakeApp(state: FakeState): App {
   return {
-    readBootTenant: async () => TEST_TENANT,
     async getArtifactHome(type: ArtifactType, idOrName: string) {
       return state.artifacts[`${type}:${idOrName}`] ?? null;
     },

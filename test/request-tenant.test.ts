@@ -23,7 +23,7 @@ const claims = () => ({ actorId: "U1", scopeId: "personal:U1" as const, exp: Dat
 
 async function probe(
   route: Pick<Route, "auth" | "tenant"> | undefined,
-  readBootTenant: string | undefined,
+  bootTenant: string | undefined,
   headers: Record<string, string> = {},
 ): Promise<{ status: number; tenant: string | null }> {
   const server = createHttpServer((req, res) => {
@@ -32,7 +32,7 @@ async function probe(
       res,
       route,
       SECRET,
-      async () => readBootTenant,
+      bootTenant,
       () => void res.end(JSON.stringify({ tenant: boundTenant() ?? null })),
     );
   });
@@ -102,6 +102,7 @@ test("work started in the boot tenant stays bound across timers", () =>
 
 async function serve(databaseUrl: string): Promise<{ get: (path: string) => Promise<number>; close: () => void }> {
   const built = buildApp(testConfig({ databaseUrl }));
+  await bindBootTenant(built.bootTenant);
   const server = createInsecureTestServer(built.app);
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -118,7 +119,7 @@ test("an install with one tenant serves requests bound to it and refuses them on
     await db.query("DELETE FROM tenants WHERE id <> $1", [TEST_TENANT]);
     const single = await serve(databaseUrl);
     try {
-      assert.equal(await buildApp(testConfig({ databaseUrl })).app.readBootTenant(), TEST_TENANT);
+      assert.equal(await buildApp(testConfig({ databaseUrl })).bootTenant(), TEST_TENANT);
       assert.notEqual(await single.get("/v1/deliveries"), 401);
       await db.query("INSERT INTO tenants(id) VALUES ($1)", [randomUUID()]);
       const multi = await serve(databaseUrl);
@@ -151,7 +152,7 @@ test("a ready hook runs inside the bound tenant before the route", () =>
       {} as never,
       { auth: "source" },
       SECRET,
-      async () => b,
+      b,
       () => void seen.push(`next:${boundTenant()}`),
       async () => void seen.push(`ready:${boundTenant()}`),
     );

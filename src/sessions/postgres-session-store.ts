@@ -23,7 +23,6 @@ import { createSessionParticipants, participantSessionsSql } from "./session-par
 import { LIST_COLUMNS, rowToParticipantSession, rowToSession } from "./session-rows.ts";
 import { cronIdOf, sessionOrigin } from "./session-store.ts";
 import { TENANT } from "./items.ts";
-import { bootTenantReader } from "../tenants/boot.ts";
 import { SLACK_TENANTS, SLACK_BRIDGE_TENANT, TENANT_LOOKUPS, tenantLookup } from "../tenants/lookup.ts";
 
 export function createPostgresSessionStore(connectionString: string, opts: StoreOptions = {}): SessionStore {
@@ -54,7 +53,6 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
   const { pool, q } = db;
 
   return {
-    readBootTenant: bootTenantReader(db),
     tenantLookup: tenantLookup(db),
     async getOrCreateByThread(threadRef, type, scopeId, channelName, surface, clientTools, facts): Promise<Session> {
       const heal = async (row: Record<string, unknown>): Promise<Session> => {

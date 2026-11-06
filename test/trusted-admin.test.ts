@@ -7,7 +7,7 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
-import { testConfig } from "./support/test-config.ts";
+import { TEST_TENANT, testConfig } from "./support/test-config.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { trustedPrincipal } from "../plugins/portal/src/trusted-entry.ts";
@@ -15,11 +15,12 @@ import { provisionTrustedAdmin } from "../plugins/portal/src/trusted-admin.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { withoutTenant } from "../src/tenants/context.ts";
+import { bindBootTenant } from "../src/tenants/boot.ts";
 
 const signingSecret = "core-test-secret".repeat(3);
 const identitySecret = "portal-test-secret".repeat(3);
 const issuer = "https://identity.example.test";
-function start(enabled = true, shared = false) {
+function start(enabled = true) {
   const built = buildApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "trusted-admin-")),
@@ -37,7 +38,6 @@ function start(enabled = true, shared = false) {
     identity: built.identity,
     auditLog: built.auditLog,
   });
-  if (shared) Object.assign(built.app, { readBootTenant: async () => undefined });
   server.listen(0);
   return {
     built,
@@ -129,7 +129,9 @@ test("provisioning needs core opt-in and never reactivates a deactivated founder
 });
 
 test("on a shared host with no tenant bound, a trusted sign-in grants admin nowhere", async (t) => {
-  const s = withoutTenant(() => start(true, true));
+  await bindBootTenant(async () => undefined);
+  t.after(() => bindBootTenant(async () => TEST_TENANT));
+  const s = withoutTenant(() => start());
   t.after(s.close);
   const before = await s.built.admin.listGrants();
   const response = await withoutTenant(() => send(s.base, claims({ subject: "founder-shared" })));

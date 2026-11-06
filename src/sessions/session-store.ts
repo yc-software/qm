@@ -399,7 +399,6 @@ interface SessionFacts {
 }
 
 export interface SessionStore {
-  readBootTenant(): Promise<string | undefined>;
   tenantLookup: TenantLookup;
   getOrCreateByThread(
     threadRef: string,

@@ -15,6 +15,7 @@ import type { DirectoryStore } from "../src/directory/directory-store.ts";
 import type { IdentityService } from "../src/identity/identity-service.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { boundTenant, withoutTenant } from "../src/tenants/context.ts";
+import { bindBootTenant } from "../src/tenants/boot.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testMigratedDatabaseUrl } from "./support/test-database.ts";
@@ -36,6 +37,7 @@ async function member(tenant: string, principal: string, type = "internal"): Pro
 }
 
 test.before(async () => {
+  await bindBootTenant(async () => undefined);
   await directory.list().catch(() => undefined);
   await owner.q(
     `INSERT INTO tenants(id, settings) VALUES ($1, '{"brandName":"Alpha","allowedEmails":["@nowhere.test"]}'), ($2, '{}')`,
@@ -84,7 +86,6 @@ function start(identity: IdentityService, tenants: DirectoryStore["tenantsForEma
   const built = buildApp(
     testConfig({ databaseUrl, dataDir: mkdtempSync(join(tmpdir(), "tenant-sign-in-")), orgId: "acme" }),
   );
-  Object.assign(built.app, { readBootTenant: async () => undefined });
   const server = createInsecureTestServer(built.app, {
     portalIdentitySecret: IDENTITY_SECRET,
     identity,
@@ -167,7 +168,7 @@ async function bound(route: { auth: "source"; tenant?: "optional" }, headers: Re
       res,
       route,
       undefined,
-      async () => undefined,
+      undefined,
       () => void res.end(JSON.stringify({ tenant: boundTenant() ?? null })),
       undefined,
       IDENTITY_SECRET,

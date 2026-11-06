@@ -277,7 +277,6 @@ export interface SessionSearchHit {
 }
 
 export interface App {
-  readBootTenant(): Promise<string | undefined>;
   tenantFor: import("../tenants/lookup.ts").TenantLookup["tenantFor"];
   swarms?: SwarmService;
   turn(req: TurnRequest, replay?: { signalDedupKey: string }): Promise<TurnResult>;
