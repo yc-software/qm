@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import type { CoreSession } from "../src/core-bridge.ts";
 import { ackKey, descendantsOf, subagentRows, subagentSummary, visibleSubagents } from "../src/subagent-activity.ts";
-import { backgroundLabel, conversationBackground, rowIndicators } from "../src/session-list.ts";
+import { conversationBackground, rowIndicators } from "../src/session-list.ts";
 
 function row(id: string, parentSessionId?: string, extra: Partial<CoreSession> = {}): CoreSession {
   return {
@@ -57,18 +57,10 @@ test("descendants keep list order across parents and follow a replaced list", ()
   );
 });
 
-test("the server's running and waiting counts feed the sidebar and tab badge", () => {
+test("a waiting subagent lights the parent's awaiting dot but no background chip", () => {
   const rolled = list.map((s) => (s.id === "root" ? { ...s, subagents: { running: 2, waiting: 1 } } : s));
   assert.equal(rowIndicators(rolled[0]!, null).awaiting, true, "a child waiting on approval lights the parent");
-  assert.deepEqual(conversationBackground(rolled, "root", null), {
-    jobs: 0,
-    watches: 0,
-    crons: 0,
-    subagents: 3,
-    goal: false,
-    label: "2 subagents running · 1 subagent needs you",
-  });
-  assert.equal(backgroundLabel(1, 0, 0, 1)?.label, "1 subagent running · 1 background job running");
+  assert.equal(conversationBackground(rolled, "root", null), null, "subagents never light the background chip");
 });
 
 test("rows derive working, waiting, done and failed; done folds away, failed stays until acknowledged", () => {

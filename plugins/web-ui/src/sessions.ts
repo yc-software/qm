@@ -942,7 +942,7 @@ function statusMarks(ind: RowIndicators): TemplateResult {
 export function backgroundIcons(background: NonNullable<RowIndicators["background"]>): TemplateResult {
   return html`${background.jobs > 0 ? icon(Cog, 11) : nothing}${background.watches > 0 ? icon(Binoculars, 11) : nothing}${
     background.crons > 0 ? icon(Clock3, 11) : nothing
-  }${background.subagents > 0 ? icon(Bot, 11) : nothing}${background.goal ? icon(Target, 11) : nothing}`;
+  }${background.goal ? icon(Target, 11) : nothing}`;
 }
 
 function backgroundChip(s: CoreSession, ind: RowIndicators): TemplateResult | typeof nothing {

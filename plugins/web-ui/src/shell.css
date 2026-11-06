@@ -660,14 +660,21 @@ a.chat-row-open {
   white-space: nowrap;
 }
 .session .title .tl {
-  flex: 1 1 auto;
-  min-width: 45%;
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-right: auto;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.session .title .tl:has(+ .bg-chip) {
+  margin-right: 0;
+}
+.session .title .bg-chip {
+  margin-right: auto;
+}
 
 .session .row-context {
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   min-width: 4ch;
   max-width: 45%;
   margin-left: 6px;
