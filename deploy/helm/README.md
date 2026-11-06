@@ -8,6 +8,28 @@ administrator settings at `/settings`, and the agent-facing API. With `auth.enab
 to `false` to sign in through an external OIDC provider configured with `OIDC_*`
 values.
 
+## Resource labels
+
+Set `additionalLabels` to a map of strings to attach labels to the metadata of
+every resource created by the chart: Deployments, Services, Ingress, Secret,
+ServiceAccount and PersistentVolumeClaim. It defaults to `{}`.
+
+```yaml
+additionalLabels:
+  example.com/deployment-revision: "123"
+  example.com/environment: staging
+```
+
+These labels do not change Pod labels, Deployment selectors or Service selectors.
+The chart reserves `helm.sh/chart`, `app.kubernetes.io/name`,
+`app.kubernetes.io/instance`, `app.kubernetes.io/managed-by`,
+`app.kubernetes.io/version` and `app.kubernetes.io/component`; rendering fails if
+`additionalLabels` contains any of these keys or a non-string value.
+
+When the chart-managed Secret renders, changing these labels changes its template
+checksum on every Deployment's Pod template and triggers a rollout. Without that
+Secret, changing these labels does not change the Pod templates.
+
 ## Images
 
 There is deliberately no default image tag. Build both images from the same
