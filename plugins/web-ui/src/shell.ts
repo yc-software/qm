@@ -85,7 +85,6 @@ import {
   sessionsState,
   sessionSelectionBar,
   revealSessionSurface,
-  startNewChatInLastScope,
   startNewChat,
   openNewChat,
 } from "./sessions";
@@ -677,7 +676,7 @@ export function renderSidebarTop(): void {
       <div class="nav new-chat-nav">
         ${actionRow(ICON.newChat, newChatLabel, () => {
           hideTooltip();
-          startNewChatInLastScope();
+          startNewChat();
         })}
       </div>
       ${sessionSelectionBar() ?? nothing}
@@ -1258,7 +1257,7 @@ export async function boot(): Promise<void> {
 window.addEventListener("qm:new-session", () => {
   if (!appState.me) return;
   hideTooltip();
-  startNewChatInLastScope();
+  startNewChat();
 });
 
 window.addEventListener("qm:prepare-update", (event) => {
