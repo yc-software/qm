@@ -210,3 +210,27 @@ test("concurrent finalizers with the same key converge on one receipt", async ()
   ]);
   assert.deepEqual(second, first);
 });
+
+test("finalizer rejects current-generation PASS attestations bound to another artifact", async () => {
+  const connectionString = testDatabaseUrl();
+  const store = createPostgresFinnyStore(connectionString);
+  const job = await createApprovedJob(store);
+  await passChecks(store, job);
+  const { default: pg } = await import("pg");
+  const client = new pg.Client({ connectionString });
+  await client.connect();
+  await client.query("UPDATE finny_jobs SET artifact_digest=$2, provisional_revision=$3 WHERE id=$1", [
+    job.id,
+    "replacement-artifact",
+    "replacement-revision",
+  ]);
+  await client.end();
+  await assert.rejects(
+    createSignedFinnyFinalizer(store, SECRET).finalize({
+      scopeId: job.scopeId,
+      jobId: job.id,
+      idempotencyKey: randomUUID(),
+    }),
+    /stale artifact evidence/i,
+  );
+});

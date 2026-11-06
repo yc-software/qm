@@ -1,10 +1,8 @@
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type, type TSchema } from "typebox";
 import {
-  FINNY_CHANGE_KINDS,
   FINNY_CHECK_IDS,
   type FinnyAuditFinding,
-  type FinnyChangeKind,
   type FinnyCheckId,
   type FinnyMaterialClarification,
   type FinnyPlanPresentation,
@@ -22,15 +20,14 @@ export interface FinnyToolService {
   pass(input: {
     checkId: FinnyCheckId;
     generation: number;
-    evidenceDigest: string;
+    evidenceFileId: string;
     idempotencyKey: string;
   }): Promise<string>;
   block(input: {
     checkId: FinnyCheckId;
     generation: number;
-    evidenceDigest: string;
+    evidenceFileId: string;
     findings: FinnyAuditFinding[];
-    changeKinds: FinnyChangeKind[];
     idempotencyKey: string;
   }): Promise<string>;
   finalize(input: { jobId: string; idempotencyKey: string }): Promise<string>;
@@ -38,7 +35,6 @@ export interface FinnyToolService {
 
 const string = () => Type.String({ minLength: 1 });
 const checkId = Type.Union(FINNY_CHECK_IDS.map((value) => Type.Literal(value)));
-const changeKind = Type.Union(FINNY_CHANGE_KINDS.map((value) => Type.Literal(value)));
 const finding = Type.Object({ code: string(), message: string() }, { additionalProperties: false });
 const clarificationOption = Type.Object(
   { id: string(), label: string(), description: Type.Optional(string()) },
@@ -127,7 +123,7 @@ export function finnyTools(kit: ToolKit) {
     label: "Finny audit pass",
     description: "Submit digest-bound PASS evidence for one current check generation.",
     parameters: Type.Object(
-      { checkId, generation: Type.Integer({ minimum: 1 }), evidenceDigest: string(), idempotencyKey: string() },
+      { checkId, generation: Type.Integer({ minimum: 1 }), evidenceFileId: string(), idempotencyKey: string() },
       { additionalProperties: false },
     ),
     execute: (callId, params) =>
@@ -135,7 +131,7 @@ export function finnyTools(kit: ToolKit) {
         ref.current!.finny!.pass({
           checkId: params.checkId,
           generation: params.generation,
-          evidenceDigest: params.evidenceDigest,
+          evidenceFileId: params.evidenceFileId,
           idempotencyKey: params.idempotencyKey,
         }),
       ),
@@ -148,9 +144,8 @@ export function finnyTools(kit: ToolKit) {
       {
         checkId,
         generation: Type.Integer({ minimum: 1 }),
-        evidenceDigest: string(),
+        evidenceFileId: string(),
         findings: Type.Array(finding, { minItems: 1 }),
-        changeKinds: Type.Array(changeKind, { minItems: 1, uniqueItems: true }),
         idempotencyKey: string(),
       },
       { additionalProperties: false },
@@ -164,9 +159,8 @@ export function finnyTools(kit: ToolKit) {
           ref.current!.finny!.block({
             checkId: params.checkId,
             generation: params.generation,
-            evidenceDigest: params.evidenceDigest,
+            evidenceFileId: params.evidenceFileId,
             findings: params.findings,
-            changeKinds: params.changeKinds,
             idempotencyKey: params.idempotencyKey,
           }),
       ),
@@ -199,17 +193,16 @@ export function finnyTools(kit: ToolKit) {
       idempotencyKey: string(),
       checkId,
       generation: Type.Integer({ minimum: 1 }),
-      evidenceDigest: string(),
+      evidenceFileId: string(),
       findings: Type.Array(finding, { minItems: 1 }),
-      changeKinds: Type.Array(changeKind, { minItems: 1, uniqueItems: true }),
     }).map(([key, schema]) => [key, Type.Optional(schema as TSchema)]),
   );
   const actionFields = {
     create_plan: ["plan"],
     status: ["jobId"],
     artifact_ready: ["artifactDigest", "provisionalRevision", "idempotencyKey"],
-    pass: ["checkId", "generation", "evidenceDigest", "idempotencyKey"],
-    block: ["checkId", "generation", "evidenceDigest", "findings", "changeKinds", "idempotencyKey"],
+    pass: ["checkId", "generation", "evidenceFileId", "idempotencyKey"],
+    block: ["checkId", "generation", "evidenceFileId", "findings", "idempotencyKey"],
     finalize: ["jobId", "idempotencyKey"],
   } as const;
   const contentFields = Object.keys(properties);

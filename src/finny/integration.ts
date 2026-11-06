@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { FinnyToolService } from "../agent/agent-tools/finny.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
@@ -10,7 +10,18 @@ import type { FinnyStore } from "./store.ts";
 import { initialFinnyPolicy } from "./policy.ts";
 import { assertFinnyMaterialClarificationMatchesPlan } from "./plan.ts";
 import type { FinnyArtifactProposal } from "./integration-postgres-store.ts";
-import type { FinnyJob, FinnyMaterialClarification, FinnyPlanPresentation } from "./types.ts";
+import type {
+  FinnyCheckId,
+  FinnyJob,
+  FinnyMaterialClarification,
+  FinnyPlanPresentation,
+  FinnyVerdict,
+} from "./types.ts";
+import {
+  SPREADSHEET_WORKER_CHECK_IDS,
+  SPREADSHEET_WORKER_PRINCIPAL_ID,
+  verifySpreadsheetWorkerEnvelope,
+} from "./deterministic-spreadsheet-worker.ts";
 
 export interface FinnyParentBindingSnapshot {
   schema: "finny-parent-binding.v1";
@@ -77,7 +88,7 @@ interface FinnyCoordinatorPort {
     artifactDigest: string;
     checkId: Parameters<FinnyToolService["pass"]>[0]["checkId"];
     generation: number;
-    evidenceDigest: string;
+    evidenceFileId: string;
     idempotencyKey: string;
   }): Promise<void>;
   auditBlocked(input: {
@@ -88,9 +99,8 @@ interface FinnyCoordinatorPort {
     artifactDigest: string;
     checkId: Parameters<FinnyToolService["block"]>[0]["checkId"];
     generation: number;
-    evidenceDigest: string;
+    evidenceFileId: string;
     findings: Parameters<FinnyToolService["block"]>[0]["findings"];
-    changeKinds: Parameters<FinnyToolService["block"]>[0]["changeKinds"];
     idempotencyKey: string;
   }): Promise<void>;
 }
@@ -294,9 +304,8 @@ export function createFinnyToolServiceFactory(deps: {
             artifactDigest: job.artifactDigest,
             checkId: input.checkId,
             generation: input.generation,
-            evidenceDigest: input.evidenceDigest,
+            evidenceFileId: input.evidenceFileId,
             findings: input.findings,
-            changeKinds: input.changeKinds,
             idempotencyKey: input.idempotencyKey,
           });
           return `BLOCK recorded for ${input.checkId} generation ${input.generation}.`;
@@ -313,6 +322,78 @@ export function createFinnyToolServiceFactory(deps: {
       };
     },
   };
+}
+
+const deterministicChecks = new Set<FinnyCheckId>(SPREADSHEET_WORKER_CHECK_IDS);
+
+async function immutableScopedFileBytes(
+  files: Pick<FileArtifactStore, "open">,
+  scopeId: string,
+  fileId: string,
+  label: string,
+): Promise<{ bytes: Uint8Array; digest: string; createdBy: string }> {
+  const opened = await files.open(fileId);
+  if (
+    !opened ||
+    !opened.artifact.enabled ||
+    opened.artifact.ownerScopeId !== scopeId ||
+    opened.artifact.id !== fileId
+  ) {
+    throw new Error(`Finny ${label} is not an enabled immutable scoped evidence file`);
+  }
+  const chunks: Buffer[] = [];
+  for await (const chunk of opened.stream) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  const bytes = Buffer.concat(chunks);
+  if (bytes.byteLength !== opened.sizeBytes) throw new Error(`Finny ${label} byte length is invalid`);
+  const digest = createHash("sha256").update(bytes).digest("hex");
+  if (opened.artifact.sha256 !== digest) throw new Error(`Finny ${label} immutable digest is invalid`);
+  return { bytes, digest, createdBy: opened.artifact.createdBy };
+}
+
+export async function resolveFinnyEvidenceFile(
+  files: Pick<FileArtifactStore, "open">,
+  input: {
+    job: FinnyJob;
+    evidenceFileId: string;
+    checkId: FinnyCheckId;
+    generation: number;
+    verdict: FinnyVerdict;
+  },
+): Promise<string> {
+  const evidence = await immutableScopedFileBytes(files, input.job.scopeId, input.evidenceFileId, "evidence file");
+  if (!deterministicChecks.has(input.checkId)) return evidence.digest;
+  if (evidence.createdBy !== SPREADSHEET_WORKER_PRINCIPAL_ID) {
+    throw new Error("Finny evidence file lacks deterministic worker provenance");
+  }
+  if (!input.job.artifactDigest || !input.job.provisionalRevision) throw new Error("Finny job has no current artifact");
+  const artifact = await immutableScopedFileBytes(
+    files,
+    input.job.scopeId,
+    input.job.provisionalRevision,
+    "current artifact",
+  );
+  if (artifact.digest !== input.job.artifactDigest) throw new Error("Finny current artifact digest is invalid");
+  let candidate: unknown;
+  try {
+    candidate = JSON.parse(new TextDecoder().decode(evidence.bytes)) as unknown;
+  } catch (error) {
+    throw new Error("Finny deterministic evidence JSON is invalid", { cause: error });
+  }
+  const binding = {
+    artifactDigest: input.job.artifactDigest,
+    policyVersion: input.job.policy.policyVersion,
+    checks: SPREADSHEET_WORKER_CHECK_IDS.map((checkId) => ({
+      checkId,
+      generation: input.job.policy.requiredGenerations[checkId],
+    })),
+  };
+  const envelope = verifySpreadsheetWorkerEnvelope(artifact.bytes, binding, candidate);
+  const result = envelope.results.find((entry) => entry.checkId === input.checkId);
+  if (!result || result.generation !== input.generation) {
+    throw new Error("Finny deterministic evidence does not contain the requested current generation");
+  }
+  if (result.verdict !== input.verdict) throw new Error("Finny deterministic evidence verdict is invalid");
+  return envelope.envelopeDigest;
 }
 
 export async function resolveFinnyFileArtifactProposal(

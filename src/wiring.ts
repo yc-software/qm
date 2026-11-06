@@ -9,6 +9,7 @@ import {
   createFinnyEscalationDecision,
   createFinnyToolServiceFactory,
   finnyFinalDelivery,
+  resolveFinnyEvidenceFile,
   resolveFinnyFileArtifactProposal,
 } from "./finny/integration.ts";
 import { reconstructFinnyParentSyscalls } from "./finny/integration-runtime.ts";
@@ -2147,6 +2148,9 @@ export function buildApp(
             if (!result.ok) throw new Error(`Finny private dispatch failed: ${result.message}`);
           },
         },
+        evidenceAuthority: {
+          resolve: (input) => resolveFinnyEvidenceFile(files, input),
+        },
         artifactBinding: {
           async resolve(input) {
             const proposal = await finnyIntegration.getArtifactProposal(input.idempotencyKey);
@@ -2181,7 +2185,7 @@ export function buildApp(
               instruction:
                 role === "producer"
                   ? "Produce the approved immutable file artifact, then report its file ID as provisionalRevision and SHA-256 as artifactDigest."
-                  : "Independently audit the current artifact against every required policy check and report PASS or BLOCK evidence through Finny.",
+                  : "Independently audit the current artifact against every required policy check, save immutable evidence in Files, and report its evidenceFileId through Finny.",
             });
           },
         },

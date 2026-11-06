@@ -1,8 +1,15 @@
 import { createHash } from "node:crypto";
 import type { SessionOpenInput, SessionSyscalls } from "../sessions/session-syscalls.ts";
 import type { FinnyStore } from "./store.ts";
-import type { FinnyJob } from "./types.ts";
-import type { FinnyAuditFinding, FinnyChangeKind, FinnyCheckId, FinnyWorkerGrant, FinnyWorkerRole } from "./types.ts";
+import type {
+  FinnyAuditFinding,
+  FinnyCheckId,
+  FinnyJob,
+  FinnyVerdict,
+  FinnyWorkerGrant,
+  FinnyWorkerRole,
+} from "./types.ts";
+import { blockedCheckChangeKinds } from "./policy.ts";
 import type { IssueFinnyWorkerInput } from "./worker-grants.ts";
 import type { FinnyRuntimeStore } from "./runtime-postgres-store.ts";
 
@@ -38,7 +45,7 @@ interface AuditPassedRuntimeInput extends RuntimeActorInput {
   artifactDigest: string;
   checkId: FinnyCheckId;
   generation: number;
-  evidenceDigest: string;
+  evidenceFileId: string;
   idempotencyKey: string;
 }
 
@@ -46,9 +53,8 @@ interface AuditBlockedRuntimeInput extends RuntimeActorInput {
   artifactDigest: string;
   checkId: FinnyCheckId;
   generation: number;
-  evidenceDigest: string;
+  evidenceFileId: string;
   findings: FinnyAuditFinding[];
-  changeKinds: FinnyChangeKind[];
   idempotencyKey: string;
 }
 
@@ -83,6 +89,14 @@ function artifactAuthority(value: unknown): { artifactDigest: string; provisiona
   return { artifactDigest: authority.artifactDigest, provisionalRevision: authority.provisionalRevision };
 }
 
+function evidenceDigestAuthority(value: unknown): string {
+  const authority = record(value);
+  if (typeof authority?.evidenceDigest !== "string" || !authority.evidenceDigest) {
+    throw new Error("Finny evidence action authority is invalid");
+  }
+  return authority.evidenceDigest;
+}
+
 function resolutionAuthority(value: unknown): { kind: "rework" } | { kind: "escalate"; reason: string } {
   const authority = record(value);
   const resolution = record(authority?.resolution);
@@ -101,6 +115,15 @@ export function createFinnyRuntimeCoordinator(deps: {
   dispatcher: RuntimeDispatcher;
   artifactBinding: {
     resolve(input: ArtifactReadyRuntimeInput): Promise<{ artifactDigest: string; provisionalRevision: string }>;
+  };
+  evidenceAuthority: {
+    resolve(input: {
+      job: FinnyJob;
+      evidenceFileId: string;
+      checkId: FinnyCheckId;
+      generation: number;
+      verdict: FinnyVerdict;
+    }): Promise<string>;
   };
   workerPolicy: {
     credentials(job: FinnyJob, role: "producer" | "auditor"): { principalId: string; expiresAt: number };
@@ -214,12 +237,28 @@ export function createFinnyRuntimeCoordinator(deps: {
           artifactDigest: input.artifactDigest,
           checkId: input.checkId,
           generation: input.generation,
-          evidenceDigest: input.evidenceDigest,
+          evidenceFileId: input.evidenceFileId,
         }),
       };
       const prepared = await deps.runtime.prepareAction(action);
+      let evidenceDigest: string;
       if (prepared.authorityPayload === undefined) {
-        await deps.runtime.authorizeAction({ ...action, authorityPayload: {} });
+        const job = await deps.jobs.getJob(input.scopeId, input.jobId);
+        if (!job) throw new Error("Finny job is unavailable");
+        const resolved = await deps.evidenceAuthority.resolve({
+          job,
+          evidenceFileId: input.evidenceFileId,
+          checkId: input.checkId,
+          generation: input.generation,
+          verdict: "pass",
+        });
+        const committed = await deps.runtime.authorizeAction({
+          ...action,
+          authorityPayload: { evidenceDigest: resolved },
+        });
+        evidenceDigest = evidenceDigestAuthority(committed.authorityPayload);
+      } else {
+        evidenceDigest = evidenceDigestAuthority(prepared.authorityPayload);
       }
       await deps.jobs.recordAuditPassed({
         scopeId: input.scopeId,
@@ -227,7 +266,7 @@ export function createFinnyRuntimeCoordinator(deps: {
         artifactDigest: input.artifactDigest,
         checkId: input.checkId,
         generation: input.generation,
-        evidenceDigest: input.evidenceDigest,
+        evidenceDigest,
         issuerPrincipalId: prepared.binding.principalId,
         issuerRunId: prepared.binding.runId,
         idempotencyKey: input.idempotencyKey,
@@ -246,20 +285,34 @@ export function createFinnyRuntimeCoordinator(deps: {
           artifactDigest: input.artifactDigest,
           checkId: input.checkId,
           generation: input.generation,
-          evidenceDigest: input.evidenceDigest,
+          evidenceFileId: input.evidenceFileId,
           findings: input.findings,
-          changeKinds: input.changeKinds,
         }),
       };
       const prepared = await deps.runtime.prepareAction(action);
       let resolution: { kind: "rework" } | { kind: "escalate"; reason: string };
+      let evidenceDigest: string;
       if (prepared.authorityPayload === undefined) {
         if (!deps.escalationDecision) throw new Error("Finny escalation decision is unavailable");
-        resolution = await deps.escalationDecision.decide(input);
-        const committed = await deps.runtime.authorizeAction({ ...action, authorityPayload: { resolution } });
+        const job = await deps.jobs.getJob(input.scopeId, input.jobId);
+        if (!job) throw new Error("Finny job is unavailable");
+        const resolvedEvidenceDigest = await deps.evidenceAuthority.resolve({
+          job,
+          evidenceFileId: input.evidenceFileId,
+          checkId: input.checkId,
+          generation: input.generation,
+          verdict: "block",
+        });
+        const decidedResolution = await deps.escalationDecision.decide(input);
+        const committed = await deps.runtime.authorizeAction({
+          ...action,
+          authorityPayload: { resolution: decidedResolution, evidenceDigest: resolvedEvidenceDigest },
+        });
         resolution = resolutionAuthority(committed.authorityPayload);
+        evidenceDigest = evidenceDigestAuthority(committed.authorityPayload);
       } else {
         resolution = resolutionAuthority(prepared.authorityPayload);
+        evidenceDigest = evidenceDigestAuthority(prepared.authorityPayload);
       }
       const auditor = prepared.binding;
       const blocked = await deps.jobs.recordAuditBlock({
@@ -268,11 +321,11 @@ export function createFinnyRuntimeCoordinator(deps: {
         checkId: input.checkId,
         generation: input.generation,
         artifactDigest: input.artifactDigest,
-        evidenceDigest: input.evidenceDigest,
+        evidenceDigest,
         issuerPrincipalId: auditor.principalId,
         issuerRunId: auditor.runId,
         findings: input.findings,
-        changeKinds: input.changeKinds,
+        changeKinds: blockedCheckChangeKinds(input.checkId),
         resolution,
         idempotencyKey: input.idempotencyKey,
       });

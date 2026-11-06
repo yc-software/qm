@@ -1,4 +1,8 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { artifactPath, type FileArtifactStore } from "../files/file-artifact-store.ts";
+import type { ScopeId } from "../types.ts";
+
+export const SPREADSHEET_WORKER_PRINCIPAL_ID = "finny-deterministic-spreadsheet-worker";
 
 export const SPREADSHEET_WORKER_CHECK_IDS = ["formula.recalculate", "summary.crossfoot", "artifact.structure"] as const;
 
@@ -140,7 +144,7 @@ function artifactBytes(value: Uint8Array | readonly number[]): readonly number[]
 export function digestSpreadsheetArtifact(bytes: Uint8Array | readonly number[]): string {
   return createHash("sha256")
     .update(Uint8Array.from(artifactBytes(bytes)))
-    .digest("base64url");
+    .digest("hex");
 }
 
 export function createSpreadsheetWorkerBinding(input: SpreadsheetWorkerBinding): SpreadsheetWorkerBinding {
@@ -356,4 +360,40 @@ export function createDeterministicSpreadsheetWorker(engine: SpreadsheetCalculat
       return verifySpreadsheetWorkerEnvelope(bytes, binding, envelope);
     },
   });
+}
+
+export function createPersistedDeterministicSpreadsheetWorker(deps: {
+  engine: SpreadsheetCalculationEngine;
+  files: Pick<FileArtifactStore, "put">;
+  ids?: () => string;
+}) {
+  const worker = createDeterministicSpreadsheetWorker(deps.engine);
+  const id = deps.ids ?? randomUUID;
+  return {
+    async run(input: SpreadsheetWorkerRunInput & { scopeId: ScopeId; jobId: string }) {
+      const envelope = await worker.run(input);
+      const evidenceFileId = id();
+      const name = "finny-spreadsheet-evidence.json";
+      const stored = await deps.files.put({
+        id: evidenceFileId,
+        ownerScopeId: input.scopeId,
+        createdBy: SPREADSHEET_WORKER_PRINCIPAL_ID,
+        name,
+        path: artifactPath(evidenceFileId, name),
+        mimetype: "application/json",
+        data: new TextEncoder().encode(JSON.stringify(envelope)),
+        direction: "out",
+        createdInScope: input.scopeId,
+      });
+      if (
+        stored.artifact.id !== evidenceFileId ||
+        stored.artifact.ownerScopeId !== input.scopeId ||
+        stored.artifact.createdBy !== SPREADSHEET_WORKER_PRINCIPAL_ID ||
+        !stored.artifact.enabled
+      ) {
+        throw new Error("Spreadsheet worker evidence file authority is invalid");
+      }
+      return { evidenceFileId, envelopeDigest: envelope.envelopeDigest };
+    },
+  };
 }

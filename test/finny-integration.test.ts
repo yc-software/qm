@@ -246,7 +246,7 @@ test("worker service derives job authority from exact current session and run", 
   const artifactReady = calls.find(([name]) => name === "artifactReady")?.[1] as { jobId?: string } | undefined;
   assert.equal(artifactReady?.jobId, "job-1");
   await assert.rejects(
-    () => service.pass({ checkId: "artifact.integrity", generation: 1, evidenceDigest: "e", idempotencyKey: "p" }),
+    () => service.pass({ checkId: "artifact.integrity", generation: 1, evidenceFileId: "e", idempotencyKey: "p" }),
     /Auditor/,
   );
 });
@@ -350,4 +350,165 @@ test("real Slack channel and DM refs derive authority from the exact delivery ta
   });
   assert.equal(finnySlackAuthority("slack", "D1", false), undefined);
   assert.equal(finnySlackAuthority("slack", "C1:100.1", true), undefined);
+});
+
+test("evidence authority derives immutable scoped file digests and verifies deterministic envelopes", async () => {
+  const { Readable } = await import("node:stream");
+  const { createHash } = await import("node:crypto");
+  const { resolveFinnyEvidenceFile } = await import("../src/finny/integration.ts");
+  const { createDeterministicSpreadsheetWorker, digestSpreadsheetArtifact } =
+    await import("../src/finny/deterministic-spreadsheet-worker.ts");
+  const artifactBytes = new TextEncoder().encode("current workbook");
+  const artifactDigest = digestSpreadsheetArtifact(artifactBytes);
+  const policy = {
+    policyVersion: "finny-r5.1",
+    requiredGenerations: {
+      "source.completeness": 1,
+      "financial.reconcile": 1,
+      "formula.recalculate": 2,
+      "summary.crossfoot": 3,
+      "meaning.actionability": 1,
+      "artifact.integrity": 1,
+      "artifact.structure": 4,
+      "lineage.binding": 1,
+    },
+  };
+  const binding = {
+    artifactDigest,
+    policyVersion: policy.policyVersion,
+    checks: [
+      { checkId: "formula.recalculate" as const, generation: 2 },
+      { checkId: "summary.crossfoot" as const, generation: 3 },
+      { checkId: "artifact.structure" as const, generation: 4 },
+    ],
+  };
+  const envelope = await createDeterministicSpreadsheetWorker({
+    name: "test-engine",
+    version: "1",
+    async evaluate() {
+      return [
+        {
+          checkId: "formula.recalculate" as const,
+          generation: 2,
+          verdict: "pass" as const,
+          evidence: { kind: "formula-recalculation" as const, cells: [] },
+        },
+        {
+          checkId: "summary.crossfoot" as const,
+          generation: 3,
+          verdict: "block" as const,
+          evidence: { kind: "cross-foot" as const, comparisons: [] },
+        },
+        {
+          checkId: "artifact.structure" as const,
+          generation: 4,
+          verdict: "pass" as const,
+          evidence: { kind: "structure" as const, sheets: [] },
+        },
+      ];
+    },
+  }).run({ artifactBytes, binding });
+  const evidenceBytes = new TextEncoder().encode(JSON.stringify(envelope));
+  const evidenceSha = createHash("sha256").update(evidenceBytes).digest("hex");
+  const records = new Map([
+    ["artifact-file", { bytes: artifactBytes, sha256: artifactDigest, ownerScopeId: "scope-1", enabled: true }],
+    [
+      "evidence-file",
+      {
+        bytes: evidenceBytes,
+        sha256: evidenceSha,
+        ownerScopeId: "scope-1",
+        enabled: true,
+        createdBy: "finny-deterministic-spreadsheet-worker",
+      },
+    ],
+    [
+      "forged-envelope-file",
+      { bytes: evidenceBytes, sha256: evidenceSha, ownerScopeId: "scope-1", enabled: true, createdBy: "auditor" },
+    ],
+    ["generic-file", { bytes: new TextEncoder().encode("generic evidence"), ownerScopeId: "scope-1", enabled: true }],
+  ]);
+  const files = {
+    async open(id: string) {
+      const value = records.get(id);
+      if (!value) return null;
+      const bytes = value.bytes;
+      const sha256 = value.sha256 ?? createHash("sha256").update(bytes).digest("hex");
+      return {
+        artifact: { id, ...value, sha256 },
+        sizeBytes: bytes.length,
+        stream: Readable.from([bytes]),
+      };
+    },
+  };
+  const job = {
+    id: "job-1",
+    scopeId: "scope-1",
+    artifactDigest,
+    provisionalRevision: "artifact-file",
+    policy,
+  } as FinnyJob;
+  assert.equal(
+    await resolveFinnyEvidenceFile(files as any, {
+      job,
+      evidenceFileId: "evidence-file",
+      checkId: "formula.recalculate",
+      generation: 2,
+      verdict: "pass",
+    }),
+    envelope.envelopeDigest,
+  );
+
+  await assert.rejects(
+    resolveFinnyEvidenceFile(files as any, {
+      job,
+      evidenceFileId: "forged-envelope-file",
+      checkId: "formula.recalculate",
+      generation: 2,
+      verdict: "pass",
+    }),
+    /deterministic worker provenance/i,
+  );
+
+  assert.equal(
+    await resolveFinnyEvidenceFile(files as any, {
+      job,
+      evidenceFileId: "generic-file",
+      checkId: "financial.reconcile",
+      generation: 1,
+      verdict: "pass",
+    }),
+    createHash("sha256").update("generic evidence").digest("hex"),
+  );
+  await assert.rejects(
+    resolveFinnyEvidenceFile(files as any, {
+      job,
+      evidenceFileId: "generic-file",
+      checkId: "formula.recalculate",
+      generation: 2,
+      verdict: "pass",
+    }),
+    /envelope|JSON|deterministic/i,
+  );
+  await assert.rejects(
+    resolveFinnyEvidenceFile(files as any, {
+      job,
+      evidenceFileId: "evidence-file",
+      checkId: "summary.crossfoot",
+      generation: 3,
+      verdict: "pass",
+    }),
+    /verdict/i,
+  );
+  records.set("wrong-owner", { bytes: evidenceBytes, sha256: evidenceSha, ownerScopeId: "scope-2", enabled: true });
+  await assert.rejects(
+    resolveFinnyEvidenceFile(files as any, {
+      job,
+      evidenceFileId: "wrong-owner",
+      checkId: "financial.reconcile",
+      generation: 1,
+      verdict: "pass",
+    }),
+    /immutable scoped evidence file/i,
+  );
 });

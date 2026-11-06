@@ -50,6 +50,11 @@ function coreRuntimeAuthority() {
         return { artifactDigest: "artifact-sha256", provisionalRevision: "revision-1" };
       },
     },
+    evidenceAuthority: {
+      async resolve(input: { evidenceFileId: string }) {
+        return input.evidenceFileId;
+      },
+    },
     workerPolicy: {
       credentials() {
         return { principalId: "U1", expiresAt: Date.now() + 60_000 };
@@ -297,9 +302,8 @@ test("a BLOCK wakes the bound producer with policy-bounded findings", async () =
     artifactDigest: "artifact-sha256",
     checkId: "lineage.binding",
     generation: 1,
-    evidenceDigest: "evidence-sha256-block",
+    evidenceFileId: "evidence-sha256-block",
     findings: [{ code: "LINEAGE", message: "Source lineage is incomplete" }],
-    changeKinds: ["lineage"],
     idempotencyKey: "block-1",
   });
 
@@ -374,9 +378,8 @@ test("the next artifact creates a fresh independent Auditor run and grant", asyn
     artifactDigest: "artifact-v1",
     checkId: "lineage.binding",
     generation: 1,
-    evidenceDigest: "evidence-sha256-block",
+    evidenceFileId: "evidence-sha256-block",
     findings: [{ code: "LINEAGE", message: "Repair lineage" }],
-    changeKinds: ["lineage"],
     idempotencyKey: "block-1",
   });
 
@@ -489,9 +492,8 @@ test("an externally approved escalation stops worker actions instead of reworkin
     artifactDigest: "artifact-sha256",
     checkId: "lineage.binding",
     generation: 1,
-    evidenceDigest: "evidence-sha256-block",
+    evidenceFileId: "evidence-sha256-block",
     findings: [{ code: "LINEAGE", message: "Cannot establish lineage" }],
-    changeKinds: ["lineage"],
     idempotencyKey: "block-stop",
   });
 
@@ -595,7 +597,7 @@ test("rejects audit completion from the producer role", async () => {
       artifactDigest: "artifact-sha256",
       checkId: "lineage.binding",
       generation: 1,
-      evidenceDigest: "evidence-sha256",
+      evidenceFileId: "evidence-sha256",
       idempotencyKey: "pass-1",
     }),
     /current auditor/i,
@@ -658,9 +660,8 @@ test("replaying the same BLOCK is idempotent without duplicate producer wake", a
     artifactDigest: "artifact-sha256",
     checkId: "lineage.binding" as const,
     generation: 1,
-    evidenceDigest: "evidence-sha256-block",
+    evidenceFileId: "evidence-sha256-block",
     findings: [{ code: "LINEAGE", message: "Repair lineage" }],
-    changeKinds: ["lineage" as const],
     idempotencyKey: "block-replay",
   };
 
@@ -752,6 +753,7 @@ test("artifact readiness derives artifact and Auditor grant authority from Core 
         issuedPrincipal = input.principalId;
       },
     },
+    evidenceAuthority: coreRuntimeAuthority().evidenceAuthority,
     artifactBinding: {
       async resolve() {
         return { artifactDigest: "core-artifact", provisionalRevision: "core-revision" };
@@ -815,6 +817,7 @@ test("a completed artifact action replays after the producer binding retires", a
         delivered.add(message.idempotencyKey);
       },
     },
+    evidenceAuthority: coreRuntimeAuthority().evidenceAuthority,
     workerPolicy: coreRuntimeAuthority().workerPolicy,
     artifactBinding: {
       async resolve() {
@@ -887,7 +890,7 @@ test("audit outcomes derive issuer provenance from the authorized runtime bindin
     artifactDigest: "artifact-sha256",
     checkId: "lineage.binding" as const,
     generation: 1,
-    evidenceDigest: "evidence-sha256",
+    evidenceFileId: "evidence-sha256",
     issuerPrincipalId: "model-supplied-principal",
     issuerRunId: "model-supplied-run",
     idempotencyKey: "pass-authority",
@@ -898,4 +901,81 @@ test("audit outcomes derive issuer provenance from the authorized runtime bindin
   const event = (await jobs.listEvents(job.scopeId, job.id)).find((item) => item.type === "audit_passed");
   assert.equal(event?.payload.issuerPrincipalId, "authorized-auditor-principal");
   assert.equal(event?.payload.issuerRunId, "authorized-auditor-run");
+});
+
+test("BLOCK retry reuses verified evidence after policy advances before dispatch", async () => {
+  const { jobs, job, connectionString } = await approvedJob();
+  await jobs.recordArtifactReady({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    artifactDigest: "artifact-sha256",
+    provisionalRevision: "revision-1",
+    idempotencyKey: "artifact-replay-block",
+  });
+  const runtime = createPostgresFinnyRuntimeStore(connectionString);
+  await runtime.bindInitial({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    parentSessionId: "parent-session",
+    parentRunId: "parent-run",
+    parentPrincipalId: "U1",
+    producerExpiresAt: Date.now() + 60_000,
+    auditorExpiresAt: Date.now() + 60_000,
+    producerSessionId: "producer-session",
+    producerRunId: "producer-run",
+    auditorSessionId: "auditor-session",
+    auditorRunId: "auditor-run",
+    producerPrincipalId: "U1",
+    auditorPrincipalId: "U1",
+  });
+  let evidenceResolutions = 0;
+  let dispatches = 0;
+  const coordinator = createFinnyRuntimeCoordinator({
+    jobs,
+    runtime,
+    grants: createFinnyWorkerGrants(jobs, "runtime-test-secret"),
+    sessions: {
+      async open() {
+        throw new Error("unexpected open");
+      },
+    },
+    dispatcher: {
+      async dispatchPrivateIdempotent() {
+        dispatches += 1;
+        if (dispatches === 1) throw new Error("producer dispatch crashed");
+      },
+    },
+    artifactBinding: coreRuntimeAuthority().artifactBinding,
+    workerPolicy: coreRuntimeAuthority().workerPolicy,
+    evidenceAuthority: {
+      async resolve(input) {
+        evidenceResolutions += 1;
+        if (input.job.policy.requiredGenerations[input.checkId] !== input.generation) {
+          throw new Error("deterministic envelope generation advanced");
+        }
+        return "verified-envelope-digest";
+      },
+    },
+    escalationDecision: {
+      async decide() {
+        return { kind: "rework" as const };
+      },
+    },
+  });
+  const input = {
+    sessionId: "auditor-session",
+    runId: "auditor-run",
+    scopeId: job.scopeId,
+    jobId: job.id,
+    artifactDigest: "artifact-sha256",
+    checkId: "formula.recalculate" as const,
+    generation: 1,
+    evidenceFileId: "deterministic-envelope-file",
+    findings: [{ code: "FORMULA", message: "Formula failed" }],
+    idempotencyKey: "block-crash-replay",
+  };
+  await assert.rejects(coordinator.auditBlocked(input), /dispatch crashed/i);
+  await coordinator.auditBlocked(input);
+  assert.equal(evidenceResolutions, 1);
+  assert.equal(dispatches, 2);
 });

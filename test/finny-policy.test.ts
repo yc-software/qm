@@ -5,6 +5,7 @@ import {
   FINNY_CHECK_IDS,
   FINNY_POLICY_VERSION,
   initialFinnyPolicy,
+  blockedCheckChangeKinds,
   reviseFinnyPolicy,
 } from "../src/finny/policy.ts";
 import type { FinnyChangeKind, FinnyPolicySnapshot } from "../src/finny/types.ts";
@@ -81,4 +82,11 @@ test("malformed policy snapshots fail closed", () => {
   for (const candidate of cases) {
     assert.throws(() => reviseFinnyPolicy(candidate as FinnyPolicySnapshot, ["lineage"]), /policy/i);
   }
+});
+
+test("blocked check invalidation is selected by Core", () => {
+  assert.deepEqual(blockedCheckChangeKinds("formula.recalculate"), ["formula"]);
+  assert.deepEqual(blockedCheckChangeKinds("artifact.structure"), ["presentation"]);
+  assert.deepEqual(blockedCheckChangeKinds("lineage.binding"), ["lineage"]);
+  assert.deepEqual(blockedCheckChangeKinds("source.completeness"), ["source_or_logic"]);
 });

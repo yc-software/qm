@@ -223,3 +223,41 @@ test("Core verification returns a deeply frozen canonical copy without caller al
   assert(Object.isFrozen(verifiedFormula.evidence.cells));
   assert(Object.isFrozen(verifiedFormula.evidence.cells[0]!));
 });
+
+test("Core worker persists deterministic evidence with reserved immutable Files provenance", async () => {
+  const { createPersistedDeterministicSpreadsheetWorker, SPREADSHEET_WORKER_PRINCIPAL_ID } =
+    await import("../src/finny/deterministic-spreadsheet-worker.ts");
+  const puts: any[] = [];
+  const persisted = createPersistedDeterministicSpreadsheetWorker({
+    engine: engine(),
+    files: {
+      async put(input: any) {
+        puts.push(input);
+        return {
+          created: true,
+          artifact: {
+            id: input.id,
+            ownerScopeId: input.ownerScopeId,
+            createdBy: input.createdBy,
+            enabled: true,
+            sha256: "server-derived",
+          },
+        };
+      },
+    } as any,
+    ids: () => "deterministic-evidence-file",
+  });
+  const output = await persisted.run({
+    scopeId: "personal:U1" as any,
+    jobId: "job-1",
+    artifactBytes: artifact,
+    binding: binding(),
+  });
+  assert.equal(output.evidenceFileId, "deterministic-evidence-file");
+  assert.equal(output.envelopeDigest, (await validEnvelope()).envelopeDigest);
+  assert.equal(puts.length, 1);
+  assert.equal(puts[0].ownerScopeId, "personal:U1");
+  assert.equal(puts[0].createdBy, SPREADSHEET_WORKER_PRINCIPAL_ID);
+  assert.equal(puts[0].direction, "out");
+  assert.deepEqual(JSON.parse(new TextDecoder().decode(puts[0].data)), await validEnvelope());
+});

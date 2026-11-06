@@ -146,7 +146,7 @@ test("duplicate BLOCK submissions return the original transition without advanci
   await store.recordAuditBlock({
     ...auditAuthority,
     ...firstSubmission,
-    generation: 2,
+    generation: 3,
     artifactDigest: "artifact-sha256-v2",
     findings: [{ code: "LINEAGE_2", message: "Source binding remains incomplete" }],
     idempotencyKey: randomUUID(),
@@ -156,8 +156,8 @@ test("duplicate BLOCK submissions return the original transition without advanci
 
   assert.equal(duplicate.deduped, true);
   assert.deepEqual(duplicate.events, first.events);
-  assert.equal(duplicate.job.policy.requiredGenerations["lineage.binding"], 3);
-  assert.equal((await store.getJob(input.scopeId, input.id))?.policy.requiredGenerations["lineage.binding"], 3);
+  assert.equal(duplicate.job.policy.requiredGenerations["lineage.binding"], 4);
+  assert.equal((await store.getJob(input.scopeId, input.id))?.policy.requiredGenerations["lineage.binding"], 4);
 });
 
 test("stale and wrong-scope audit events fail without changing authoritative state", async () => {
@@ -462,7 +462,7 @@ test("artifact replacement requires an authoritative rework request", async () =
       scopeId: input.scopeId,
       jobId: input.id,
       checkId: "lineage.binding",
-      generation: 2,
+      generation: 3,
       verdict: "pass",
       evidenceDigest: "lineage-evidence-old-artifact",
       artifactDigest: input.artifactDigest,
@@ -477,12 +477,12 @@ test("artifact replacement requires an authoritative rework request", async () =
     scopeId: input.scopeId,
     jobId: input.id,
     checkId: "lineage.binding",
-    generation: 2,
+    generation: 3,
     artifactDigest: "artifact-sha256-v2",
     evidenceDigest: "lineage-evidence-v2",
     idempotencyKey: randomUUID(),
   });
-  assert.equal(passed.events[0]?.payload.generation, 2);
+  assert.equal(passed.events[0]?.payload.generation, 3);
 });
 
 test("re-audit waits for a new artifact to consume the rework request", async () => {
@@ -717,4 +717,79 @@ test("BLOCK atomically records evidence-bound attestation and rejects replay sub
   assert.equal(attestations.rows[0]?.issuer_principal_id, "auditor-principal");
   assert.equal(attestations.rows[0]?.issuer_run_id, "auditor-run");
   assert.equal(blocked.job.ledgerHead, Number(attestations.rows[0]?.seq));
+});
+
+test("replacement artifact bytes invalidate every required check before finalization", async () => {
+  const store = createPostgresFinnyStore(testDatabaseUrl());
+  const input = createInput();
+  await createReadyJob(store, input);
+  for (const checkId of FINNY_CHECK_IDS) {
+    await store.recordAuditPassed({
+      ...auditAuthority,
+      scopeId: input.scopeId,
+      jobId: input.id,
+      checkId,
+      generation: 1,
+      artifactDigest: input.artifactDigest,
+      evidenceDigest: `old-${checkId}`,
+      idempotencyKey: randomUUID(),
+    });
+  }
+  await store.recordAuditBlock({
+    ...auditAuthority,
+    scopeId: input.scopeId,
+    jobId: input.id,
+    checkId: "lineage.binding",
+    generation: 1,
+    artifactDigest: input.artifactDigest,
+    findings: [{ code: "LINEAGE", message: "Replace the artifact" }],
+    changeKinds: ["lineage"],
+    resolution: { kind: "rework" },
+    idempotencyKey: randomUUID(),
+  });
+  const replacement = await store.recordArtifactReady({
+    scopeId: input.scopeId,
+    jobId: input.id,
+    artifactDigest: "artifact-sha256-v2",
+    provisionalRevision: "delivery-revision-2",
+    idempotencyKey: randomUUID(),
+  });
+  assert.deepEqual(
+    replacement.job.policy.requiredGenerations,
+    Object.fromEntries(FINNY_CHECK_IDS.map((checkId) => [checkId, checkId === "lineage.binding" ? 3 : 2])),
+  );
+  await assert.rejects(
+    store.finalize(
+      { scopeId: input.scopeId, jobId: input.id, idempotencyKey: randomUUID() },
+      async () => "must-not-sign",
+    ),
+    /stale generation|missing/i,
+  );
+});
+
+test("byte-identical rework preserves selective check invalidation", async () => {
+  const store = createPostgresFinnyStore(testDatabaseUrl());
+  const input = createInput();
+  await createReadyJob(store, input);
+  await store.recordAuditBlock({
+    ...auditAuthority,
+    scopeId: input.scopeId,
+    jobId: input.id,
+    checkId: "lineage.binding",
+    generation: 1,
+    artifactDigest: input.artifactDigest,
+    findings: [{ code: "LINEAGE", message: "Repair file lineage metadata" }],
+    changeKinds: ["lineage"],
+    resolution: { kind: "rework" },
+    idempotencyKey: randomUUID(),
+  });
+  const replacement = await store.recordArtifactReady({
+    scopeId: input.scopeId,
+    jobId: input.id,
+    artifactDigest: input.artifactDigest,
+    provisionalRevision: "delivery-revision-identical",
+    idempotencyKey: randomUUID(),
+  });
+  assert.equal(replacement.job.policy.requiredGenerations["source.completeness"], 1);
+  assert.equal(replacement.job.policy.requiredGenerations["lineage.binding"], 2);
 });

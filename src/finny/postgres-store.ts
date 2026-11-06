@@ -779,12 +779,27 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
         } else if (artifactWasBound && Number(row.event_head) !== 0) {
           throw new Error("Finny artifact readiness was already recorded");
         }
+        const currentPolicy: FinnyPolicySnapshot = {
+          policyVersion: row.policy_version as string,
+          requiredGenerations: row.required_generations as Record<FinnyCheckId, number>,
+        };
+        const nextPolicy =
+          artifactWasBound && row.artifact_digest !== input.artifactDigest
+            ? reviseFinnyPolicy(currentPolicy, ["source_or_logic"])
+            : currentPolicy;
         const now = Date.now();
         const event = await insertEvent(db, input.jobId, "artifact_ready", payload, input.idempotencyKey, 0, now);
         const updated = await db.query(
           `UPDATE finny_jobs SET artifact_digest=$2, provisional_revision=$3, event_head=$4,
-             pending_rework_seq=NULL, updated_at=$5 WHERE id=$1 RETURNING *`,
-          [input.jobId, input.artifactDigest, input.provisionalRevision, event.seq, now],
+             required_generations=$5, pending_rework_seq=NULL, updated_at=$6 WHERE id=$1 RETURNING *`,
+          [
+            input.jobId,
+            input.artifactDigest,
+            input.provisionalRevision,
+            event.seq,
+            JSON.stringify(nextPolicy.requiredGenerations),
+            now,
+          ],
         );
         return { events: [event], job: rowToJob(updated.rows[0]), deduped: false };
       });
@@ -1004,6 +1019,9 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
             throw new Error(`Finny finalization has a stale generation for ${checkId}`);
           }
           if (attestation.verdict === "block") throw new Error(`Finny finalization has a BLOCK for ${checkId}`);
+          if (attestation.artifactDigest !== row.artifact_digest) {
+            throw new Error(`Finny finalization has stale artifact evidence for ${checkId}`);
+          }
         }
         if (observedHead !== Number(row.ledger_head)) throw new Error("Finny attestation ledger head is inconsistent");
         const issuedAt = Date.now();
