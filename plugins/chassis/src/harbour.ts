@@ -1,9 +1,5 @@
 import { escapeHtml } from "./http.ts";
 
-// The harbour look of the server-rendered sign-in and portal pages, shared by the auth and portal plugins.
-// It matches the QM Desktop connect page (desktop/setup.html, setup.css). The painting, Fitz Henry Lane's
-// "Becalmed off Halfway Rock" (1860), is public domain; the National Gallery of Art releases its image as CC0.
-// The portal serves it at HARBOUR_SCENE_PATH from desktop/assets.
 export const HARBOUR_SCENE_PATH = "/auth/assets/becalmed-off-halfway-rock.webp";
 
 export const HARBOUR_STYLE = `<style>

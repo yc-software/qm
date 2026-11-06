@@ -26,7 +26,6 @@ export const CONFIRM_PAGE_CSP = PAGE_CSP.replace(
   `default-src 'none'; script-src '${CONFIRM_SCRIPT_HASH}';`,
 );
 
-// Form pieces the auth pages add to the shared harbour card style.
 const STYLE = `${HARBOUR_STYLE}
 <style>
   .card form{ display:grid; gap:10px; margin:0; }
@@ -53,7 +52,6 @@ const SENT_ICON = `<svg viewBox="0 0 24 24"><path d="M21 4 3 11l7 3 3 7z"/><path
 const ALERT_ICON = `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5M12 16h.01"/></svg>`;
 const LOCK_ICON = `<svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>`;
 
-// The default product name is set as a wordmark the way QM Desktop and the portal pages show it.
 const wordmark = (brandName: string): string => (brandName === "qm" ? "QM" : brandName);
 
 function page(o: {
