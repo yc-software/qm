@@ -166,6 +166,12 @@ test("onboarding composes existing access skills without a provider-setup prereq
   assert.match(onboarding, /never ask regular users to provision it/);
   assert.match(admin, /GET \/v1\/admin\/slack-installation/);
   assert.match(admin, /installAvailable: true/);
+  assert.match(admin, /\*\*\[Add to Slack\]\(installUrl\)\*\*/);
+  assert.match(
+    admin,
+    /Do not name a workspace, mention unavailable setup,\s+offer creating their own app, or use `createUrl`/,
+  );
+  assert.doesNotMatch(admin, /Give its known entry link/);
   assert.match(admin, /App Configuration Tokens/);
   assert.match(admin, /not the refresh token/);
   assert.match(admin, /manage other apps they own/);

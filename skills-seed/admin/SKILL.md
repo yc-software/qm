@@ -147,9 +147,10 @@ Require a real reply before claiming the bot works, not as an onboarding prerequ
 A failed status read or `setupUnavailable` means unknown, not absent. Do not restart
 provisioning or create a duplicate. Retry the existing links or follow recovery guidance.
 
-Older services may return `installAvailable: true` without `setup`. That only promises
-the authenticated dashboard **Add to Slack** action. Give its known entry link and
-instructions together instead of promising a checklist or fabricating a token-drop.
+`installAvailable: true` without `setup` means the shared QM Slack app. Reply with one
+short message containing **[Add to Slack](installUrl)**, using the returned `installUrl`,
+and say they approve it in Slack. Do not name a workspace, mention unavailable setup,
+offer creating their own app, or use `createUrl`; they can choose a custom app in settings.
 
 Without managed installation, use the returned `createUrl` and the known dashboard's
 workspace app guide. Do not ask for a configuration token this flow cannot consume.

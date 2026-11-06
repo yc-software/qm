@@ -45,17 +45,18 @@ export async function getSlackInstallation(ctx: ApiCtx): Promise<void> {
       return sendJson(ctx.res, 200, { configured: true, managed: false, source: "environment", createUrl });
     }
     const installation = await ctx.deps.slackInstallation.get();
+    const origin = ctx.deps.portalUrl ?? ctx.deps.publicUrl;
+    const installUrl = origin ? new URL("/settings/slack-settings?slack=install", origin).href : undefined;
     let setup;
     let setupUnavailable = false;
     try {
       const progress = await ctx.deps.managedSlack.setupStatus();
-      const origin = ctx.deps.portalUrl ?? ctx.deps.publicUrl;
       if (progress?.companyOwned && origin) {
         setup = {
           ...progress,
           tokenUrl: "https://api.slack.com/apps",
           submitUrl: new URL("/settings/slack-settings?slack=setup", origin).href,
-          installUrl: new URL("/settings/slack-settings?slack=install", origin).href,
+          installUrl,
           statusUrl: new URL("/api/admin/slack-installation", origin).href,
         };
       }
@@ -68,6 +69,7 @@ export async function getSlackInstallation(ctx: ApiCtx): Promise<void> {
       setupUnavailable,
       source: installation?.appToken ? "admin" : "service",
       installAvailable: true,
+      installUrl,
       createUrl,
     });
   }
