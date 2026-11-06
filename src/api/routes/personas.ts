@@ -136,16 +136,6 @@ async function listPersonaVersions(ctx: ApiCtx): Promise<void> {
   );
 }
 
-async function getPersonaVersion(ctx: ApiCtx): Promise<void> {
-  const personas = service(ctx);
-  const principalId = personas && principalOf(ctx, "query");
-  if (!personas || !principalId) return;
-  const version = positiveInt(ctx.params.version);
-  if (version === undefined)
-    return sendJson(ctx.res, 400, { error: "bad_request", message: "version must be a positive integer" });
-  respond(ctx, await personas.version(principalId, ctx.params.id!, version), "version");
-}
-
 async function restorePersonaVersion(ctx: ApiCtx): Promise<void> {
   const personas = service(ctx);
   const principalId = personas && principalOf(ctx, "body");
@@ -221,7 +211,6 @@ export const personaRoutes: ReadonlyArray<Route<ApiCtx>> = [
     { method: "GET", path: "/v1/personas", auth: "either", handle: listPersonas },
     { method: "GET", path: "/v1/personas/:id", auth: "either", handle: getPersona },
     { method: "GET", path: "/v1/personas/:id/versions", auth: "either", handle: listPersonaVersions },
-    { method: "GET", path: "/v1/personas/:id/versions/:version", auth: "either", handle: getPersonaVersion },
   ]),
   ...withActor("body.principalId", [
     { method: "POST", path: "/v1/personas", auth: "either", handle: createPersona },

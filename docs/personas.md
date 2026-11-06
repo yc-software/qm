@@ -90,11 +90,9 @@ add control for people whose role allows it:
 - **Credentials** (owner): attach one of your own credentials or detach one.
 - **Slack channels** (owner): "Add channel" opens the share dialog, whose one search covers
   people and channels you are in; a channel can only be given read.
-- **History**: loads on first open, 20 versions a page (what the section shows before "Show
-  older"; a summary row is about 100 bytes, and paging by `before` never drops a version), each saying who saved it, when and
-  which fields changed. Opening one shows it as it was, with its changed fields marked.
-  Writers can roll back to any of them; a rollback is saved as a new version, so nothing is
-  lost.
+- **History**: loads on first open, 20 versions at a time with "Show older" for the rest,
+  each saying who saved it and when. Opening one shows it as it was. Writers can roll back to
+  any of them; a rollback is saved as a new version, so nothing is lost.
 
 ## Forking
 
@@ -107,7 +105,7 @@ access are never copied.
 
 `GET|POST /v1/personas`, `GET|PATCH|DELETE /v1/personas/:id`,
 `PUT /v1/personas/:id/access`, `POST /v1/personas/:id/credentials`,
-`DELETE /v1/personas/:id/credentials/:grantId`, `GET /v1/personas/:id/versions` (summaries,
-`?before=&limit=`, limit 20 by default), `GET /v1/personas/:id/versions/:version`,
+`DELETE /v1/personas/:id/credentials/:grantId`, `GET /v1/personas/:id/versions` (newest first,
+`?before=&limit=`, limit 20 by default),
 `POST /v1/personas/:id/versions/:version/restore`, `PUT /v1/sessions/:id/persona`. Listed in
 `/v1/apis` when the flag is on.

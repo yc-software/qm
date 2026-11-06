@@ -30,13 +30,7 @@ const versions = [
   { version: 3, name: "Ada", description: "", instructions: "Count.\nShow work.", editedBy: "bo", editedAt: 3 },
   { version: 2, name: "Ada", description: "", instructions: "Count.", editedBy: "tester", editedAt: 2 },
   { version: 1, name: "Ada", description: "", instructions: "Ada instructions", editedBy: "tester", editedAt: 1 },
-].map((v) => ({ ...v, changed: v.version === 1 ? [] : ["instructions"] }));
-const summary = ({ version, changed, editedBy, editedAt }: (typeof versions)[number]) => ({
-  version,
-  changed,
-  editedBy,
-  editedAt,
-});
+];
 
 let calls: Call[] = [];
 let disabled = false;
@@ -68,12 +62,7 @@ const { vite, dom, close } = await browserEnv({
     if (versionsPath && method === "GET") {
       const before = Number(versionsPath[1] ?? Infinity);
       const page = versions.filter((v) => v.version < before);
-      return json({ versions: page.slice(0, 2).map(summary), more: page.length > 2 });
-    }
-    const versionPath = /\/versions\/(\d+)$/.exec(path);
-    if (versionPath && method === "GET") {
-      const n = Number(versionPath[1]);
-      return json({ version: versions.find((v) => v.version === n) });
+      return json({ versions: page.slice(0, 2), more: page.length > 2 });
     }
     if (path.includes("/versions/") && method === "POST")
       return json({ persona: { ...personas[0], instructions: "Ada instructions", version: 4 } });
@@ -362,36 +351,28 @@ test("history lists versions on demand, shows what changed, and rolls back as a 
   assert.deepEqual(
     rows.map((row) => [
       row.querySelector("strong")?.textContent,
-      row.querySelector(".persona-version-open")?.textContent?.includes("changed instructions"),
+      row.querySelector(".persona-version-open")?.textContent?.includes("created"),
       [...row.querySelectorAll("button.persona-action")].map((b) => b.textContent?.trim()),
     ]),
     [
-      ["v3", true, []],
-      ["v2", true, ["Roll back"]],
-      ["v1", false, ["Roll back"]],
+      ["v3", false, []],
+      ["v2", false, ["Roll back"]],
+      ["v1", true, ["Roll back"]],
     ],
   );
   assert.equal(
     [...main.querySelectorAll("button")].some((b) => b.textContent?.trim() === "Show older"),
     false,
   );
-  assert.equal(
-    calls.some((c) => /\/versions\/\d+$/.test(c.path)),
-    false,
+  assert.deepEqual(
+    calls.filter((c) => c.path.includes("/versions")).map((c) => c.path),
+    ["/api/personas/p-ada/versions?limit=20", "/api/personas/p-ada/versions?limit=20&before=2"],
   );
   rows[0]!.querySelector<HTMLButtonElement>(".persona-version-open")!.click();
   await settle();
   assert.deepEqual(
-    [...main.querySelectorAll(".persona-version-field")].map((field) => [
-      field.querySelector("b")?.textContent,
-      Boolean(field.querySelector(".badge")),
-    ]),
-    [
-      ["Name", false],
-      ["Icon", false],
-      ["Description", false],
-      ["Instructions", true],
-    ],
+    [...main.querySelectorAll(".persona-version-field b")].map((label) => label.textContent),
+    ["Name", "Icon", "Description", "Instructions"],
   );
   assert.equal(main.querySelector(".persona-version-text")?.textContent, "Count.\nShow work.");
   calls = [];

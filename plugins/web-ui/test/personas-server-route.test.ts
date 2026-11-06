@@ -75,10 +75,6 @@ test("persona reads are asked of core as the signed-in person", async () => {
     (await send("GET", "/api/personas/p%201/versions?before=5&limit=20&principalId=mallory")).url,
     "/v1/personas/p%201/versions?principalId=alice&before=5&limit=20",
   );
-  assert.equal(
-    (await send("GET", "/api/personas/p%201/versions/3")).url,
-    "/v1/personas/p%201/versions/3?principalId=alice",
-  );
 });
 
 test("persona writes carry the signed-in person, never one the browser names", async () => {

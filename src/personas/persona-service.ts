@@ -12,7 +12,6 @@ import {
   type PersonaAccess,
   type PersonaFields,
   type PersonaStore,
-  type PersonaVersion,
   type PersonaVersionPage,
 } from "./persona-store.ts";
 
@@ -50,7 +49,6 @@ export interface PersonaService {
     id: string,
     page: { before?: number; limit: number },
   ): Promise<PersonaResult<PersonaVersionPage>>;
-  version(principalId: string, id: string, version: number): Promise<PersonaResult<PersonaVersion>>;
   restore(principalId: string, id: string, version: number): Promise<PersonaResult<PersonaView>>;
   setAccess(principalId: string, id: string, access: unknown): Promise<PersonaResult<PersonaAccess[]>>;
   attachCredential(principalId: string, id: string, credentialId: unknown): Promise<PersonaResult<{ grantId: string }>>;
@@ -172,12 +170,6 @@ export function createPersonaService(deps: {
         status: "ok",
         value: await store.versions(id, page),
       }));
-    },
-    version(principalId, id, version) {
-      return guarded<PersonaVersion>(principalId, id, "read", async () => {
-        const found = await store.version(id, version);
-        return found ? { status: "ok", value: found } : { status: "not_found" };
-      });
     },
     restore(principalId, id, version) {
       return guarded<PersonaView>(principalId, id, "write", async (_persona, held) => {

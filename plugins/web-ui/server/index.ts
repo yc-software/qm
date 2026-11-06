@@ -1779,16 +1779,6 @@ const apiRoutes: readonly WebRoute[] = [
     },
   },
   {
-    method: "GET",
-    path: "/api/personas/:id/versions/:version",
-    handle: (c) =>
-      relayCore(
-        c.res,
-        "GET",
-        `/v1/personas/${encodeURIComponent(c.params.id!)}/versions/${encodeURIComponent(c.params.version!)}?principalId=${encodeURIComponent(c.user)}`,
-      ),
-  },
-  {
     method: "POST",
     path: "/api/personas/:id/versions/:version/restore",
     handle: (c) =>
