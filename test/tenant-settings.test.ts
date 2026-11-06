@@ -12,7 +12,6 @@ import {
   loadTenantSettings,
   tenantAllowsEmail,
   tenantAppHandle,
-  tenantHost,
   tenantSettingsSchema,
 } from "../src/tenants/settings.ts";
 import { appUrlOf } from "../src/deploy/deploy-store.ts";
@@ -169,12 +168,8 @@ describe("company app links", () => {
     await db?.close();
   });
 
-  it("links a company's apps on its own hostname, and other companies' apps on the shared host or their provider URL", async () => {
+  it("links apps of a company with no handle on the shared host or their provider URL", async () => {
     const [a, b] = db.tenants;
-    await db.owner.q(
-      `INSERT INTO tenant_hosts(host, tenant_id) VALUES ('alpha.qm.example.test', $1), ('www.alpha-long.example.test', $1)`,
-      [a],
-    );
     const stop = onTenantLoad(() => loadTenantSettings(db.app));
     try {
       const app = {
@@ -186,25 +181,14 @@ describe("company app links", () => {
         withTenant(tenant, async () => {
           await loadTenant();
           return [
-            tenantHost(),
             appUrlOf(app, { sharedWebUrl: "https://mt.example.test/", appsDomain: undefined }),
             appUrlOf({ id: "d2" }, { sharedWebUrl: "https://mt.example.test/", appsDomain: undefined }),
           ];
         });
-      assert.deepEqual(await urls(a), [
-        "alpha.qm.example.test",
-        "https://alpha.qm.example.test/d/demo-app/",
-        "https://alpha.qm.example.test/d/d2/",
-      ]);
-      assert.deepEqual(await urls(b), [
-        undefined,
-        "https://demo-app.apps.example.test/",
-        "https://mt.example.test/d/d2/",
-      ]);
-      assert.equal(tenantHost(), undefined);
+      for (const tenant of [a, b])
+        assert.deepEqual(await urls(tenant), ["https://demo-app.apps.example.test/", "https://mt.example.test/d/d2/"]);
     } finally {
       stop();
-      await db.owner.q(`DELETE FROM tenant_hosts WHERE tenant_id = $1`, [a]);
     }
   });
 

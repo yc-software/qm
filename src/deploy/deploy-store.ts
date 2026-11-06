@@ -4,7 +4,7 @@ import type { DurableMap } from "../persistence/durable-map.ts";
 import type { PgPool } from "../persistence/pg-pool.ts";
 import type { ClaimedRow } from "../tenants/claim.ts";
 import { DEPLOYMENT_TABLES, NAME_INDEX } from "./page-views.ts";
-import { tenantAppHandle, tenantHost } from "../tenants/settings.ts";
+import { tenantAppHandle } from "../tenants/settings.ts";
 import { appHostLabel } from "../tenants/app-handle.ts";
 import {
   createDeployGitStore,
@@ -45,8 +45,6 @@ export function appUrlOf(
   const handle = tenantAppHandle();
   if (appsDomain && handle) return `https://${appHostLabel(handle, ref)}.${appsDomain.toLowerCase()}/`;
   const path = `/d/${encodeURIComponent(ref)}/`;
-  const host = tenantHost();
-  if (host) return `https://${host}${path}`;
   return publicUrlOf(d.endpoint) ?? (sharedWebUrl ? `${sharedWebUrl.replace(/\/+$/, "")}${path}` : undefined);
 }
 

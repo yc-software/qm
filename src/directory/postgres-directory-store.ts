@@ -263,11 +263,6 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       return branded(rows);
     },
 
-    async tenantForHost(host) {
-      const rows = await q("SELECT qm_tenant_for_host($1)::text AS id", [host]);
-      return typeof rows[0]?.id === "string" ? rows[0].id : undefined;
-    },
-
     async tenantForAppHandle(handle) {
       const rows = await q("SELECT qm_tenant_for_app_handle($1)::text AS id", [handle]);
       return typeof rows[0]?.id === "string" ? rows[0].id : undefined;
