@@ -18,6 +18,8 @@ test("a migrated database already has every configured store's tables", { skip }
       "budget_spend",
       "instance_heartbeats",
       "fly_deploy_ports",
+      "fly_peer_claims",
+      "render_sandbox_bases",
     ])
       assert.ok(tables.has(table), `${table} is missing after migration`);
   } finally {
