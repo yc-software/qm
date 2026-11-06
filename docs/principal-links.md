@@ -89,12 +89,18 @@ scope, and never for a QM system actor (`system:…`). A memory route to an
 `attestActor` provider may list only `personal` or `personal:<id>` selectors, and
 QM refuses any other at startup. Attested MCP connectors are offered and called
 only in the person's direct conversation with QM, not in channels, group
-conversations or projects. A scheduled turn (a cron, monitor, loop or webhook)
-counts as that conversation only when it runs there and its answer goes back
-there; one that delivers to a teammate or a channel attests nobody. The
-credential broker refuses an actor-attested credential anywhere else with
-`private_only`; a published app's token belongs to its publisher's
-personal scope, so apps attest their publisher.
+conversations or projects, unless an administrator sets the connector's
+`attestAudience` to `any` ([mcp-connectors.md](./mcp-connectors.md)): the answer
+then reaches everyone in the conversation, so set it only for a connector whose
+answers its people may share there. Without `any`, a scheduled turn (a cron,
+monitor, loop or webhook) counts as that conversation only when it runs there
+and its answer goes back there; one that delivers to a teammate or a channel
+attests nobody. The credential broker refuses an actor-attested credential anywhere
+else with `private_only`, unless the credential's `injection.audience` is `any`
+(which requires `injection.actor`). It then follows the same rule as such a
+connector: the person who asked QM, or the owner of scheduled work. A published
+app's token belongs to its publisher's personal scope, so apps attest their
+publisher.
 
 ## Self-service Slack linking
 

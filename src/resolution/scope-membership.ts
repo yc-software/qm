@@ -21,6 +21,7 @@ interface ScopeMembershipDeps {
     channelMembership(channelId: string, principalId: string): Promise<boolean | undefined>;
     groupMembership(groupId: string, principalId: string): Promise<boolean | undefined>;
     channelPrivacy?(channelId: string): Promise<boolean | undefined>;
+    rosterCoversAudience?(channelId: string): Promise<boolean | undefined>;
     conversationMembers?(
       kind: "channel" | "group",
       id: string,
@@ -172,6 +173,7 @@ export function createCurrentScopeMembers(deps: ScopeMembershipDeps, requireComp
 
     if (!deps.directory?.list) return undefined;
     if (kind === "channel" && (await deps.directory.channelPrivacy?.(ref)) !== true) return undefined;
+    if (kind === "channel" && (await deps.directory.rosterCoversAudience?.(ref)) === false) return [];
 
     const candidates = await deps.directory.list();
     const membership = kind === "channel" ? deps.directory.channelMember : deps.directory.groupMember;

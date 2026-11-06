@@ -71,6 +71,7 @@ export interface CapabilityClaims {
   deployment?: string;
   botActor?: boolean;
   liveAuthor?: boolean;
+  actAsActor?: boolean;
   triggered?: boolean;
   grants?: string[];
   threadRef?: string;
@@ -158,6 +159,7 @@ export async function verifyCapabilityToken(
   if (claims.liveActor !== undefined && typeof claims.liveActor !== "boolean") return null;
   if (claims.botActor !== undefined && typeof claims.botActor !== "boolean") return null;
   if (claims.liveAuthor !== undefined && typeof claims.liveAuthor !== "boolean") return null;
+  if (claims.actAsActor !== undefined && typeof claims.actAsActor !== "boolean") return null;
   if (claims.blob !== undefined && claims.blob?.dir !== "read" && claims.blob?.dir !== "write") return null;
   if (claims.drop !== undefined && typeof claims.drop !== "string") return null;
   if (claims.runId !== undefined && typeof claims.runId !== "string") return null;

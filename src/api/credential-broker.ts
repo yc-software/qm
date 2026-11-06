@@ -1,6 +1,6 @@
 import { isComposioHost } from "../credentials/keychain.ts";
 import { errMessage } from "../util/errors.ts";
-import { attestableActor, attestableAudience, OutsideAudience, UNATTESTABLE_ACTOR_FIX } from "../directory/person.ts";
+import { attestableActor, attestsInAudience, OutsideAudience, UNATTESTABLE_ACTOR_FIX } from "../directory/person.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { ScopeId } from "../types.ts";
 import type { CredentialUsageSink } from "../admin/credential-usage-sink.ts";
@@ -209,7 +209,15 @@ export async function brokerCredentialCall(opts: {
   if (rec.injection?.actor && !actor) {
     return deny(403, "invalid_actor", `actor identity cannot be attested. ${UNATTESTABLE_ACTOR_FIX}`, rec.host);
   }
-  if (rec.injection?.actor && !attestableAudience(actor, claims.deployment ? claims.scopeId : claims.audienceScopeId)) {
+  if (
+    rec.injection?.actor &&
+    !attestsInAudience(
+      rec.injection.audience,
+      actor,
+      claims.deployment ? claims.scopeId : claims.audienceScopeId,
+      claims.actAsActor,
+    )
+  ) {
     const refusal = new OutsideAudience("this credential");
     return deny(403, refusal.code, refusal.message, rec.host);
   }
