@@ -31,6 +31,9 @@ export const HARBOUR_STYLE = `<style>
   .reason{ margin:0 0 16px; font-size:12px; line-height:1.5; color:var(--ink); background:var(--warn-bg);
     border:1px solid #e8cfc8; border-radius:7px; padding:10px 12px; word-break:break-word; }
   .reason strong{ display:block; color:var(--warn); font-size:11px; font-weight:600; margin-bottom:3px; }
+  .account{ margin:0 0 16px; font-size:12px; line-height:1.5; color:var(--ink); background:#fdfdfb;
+    border:1px solid var(--line); border-radius:7px; padding:10px 12px; word-break:break-word; }
+  .account strong{ display:block; color:var(--muted); font-size:11px; font-weight:600; margin-bottom:3px; }
   #invite-status, #admin-email{ font-size:12px; color:var(--ink); margin:0 0 16px; }
   #invite-status:empty, #admin-email:empty{ display:none; }
   .actions{ display:grid; gap:10px; }

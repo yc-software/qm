@@ -24,6 +24,7 @@ let shared = true;
 let email: string | null = "founder@company.test";
 let principalTenants: unknown[] = [];
 let canonicalStatus = 200;
+let admitted = true;
 const principalLookups: string[] = [];
 const claimed = new Set<string>();
 const admissions: Array<string | undefined> = [];
@@ -89,7 +90,7 @@ const upstream = createServer((req, res) => {
     }
     if (path === "/v1/auth/broker/email-allowed") {
       admissions.push(identityTenant(req.headers["x-portal-identity"]));
-      return void res.end(JSON.stringify({ allowed: true }));
+      return void res.end(JSON.stringify({ allowed: admitted }));
     }
     surface.push(identityTenant(req.headers["x-portal-identity"]));
     res.end(JSON.stringify({ path }));
@@ -190,6 +191,28 @@ test("an email in no tenant keeps today's untenanted sign-in", async () => {
   assert.equal(response.status, 302);
   assert.equal(sessionOf(response)?.t, undefined);
   assert.deepEqual(admissions, [undefined]);
+});
+
+test("on a shared host, an email no workspace admits gets the no-workspace page instead of a sign-in failure", async () => {
+  tenants = [];
+  admitted = false;
+  email = "moved@company.test";
+  try {
+    const response = await callback();
+    assert.equal(response.status, 403);
+    assert.equal(sessionOf(response), null);
+    const html = await response.text();
+    assert.match(html, /<h1 id="t">No QM workspace for this account yet<\/h1>/);
+    assert.match(html, /Signed in as<\/strong>moved@company\.test/);
+    shared = false;
+    const single = await callback();
+    assert.equal(single.status, 400);
+    assert.match(await single.text(), /account is not permitted/);
+  } finally {
+    admitted = true;
+    shared = true;
+    email = "founder@company.test";
+  }
 });
 
 test("an email in two tenants picks one on the chooser and signs in under it", async () => {
@@ -305,7 +328,14 @@ test("a trusted sign-in on a shared host picks the tenant by the provider's emai
   tenants = [];
   const nobody = await trustedCallback("stranger@nowhere.test");
   assert.equal(nobody.status, 403);
-  assert.match(await nobody.text(), /No access to this workspace/);
+  const nobodyHtml = await nobody.text();
+  assert.match(nobodyHtml, /<h1 id="t">No QM workspace for this account yet<\/h1>/);
+  assert.match(nobodyHtml, /<p class="account"><strong>Signed in as<\/strong>stranger@nowhere\.test<\/p>/);
+  assert.match(nobodyHtml, /<p class="msg">This account isn&#39;t in a QM workspace yet\.<\/p>/);
+  assert.match(
+    nobodyHtml,
+    /<div class="actions">\s*<a class="btn ghost workspace" href="\/auth\/login">Sign in with a different account<\/a>\s*<\/div>/,
+  );
   assert.equal(sessionOf(nobody), null);
 });
 
@@ -341,7 +371,10 @@ test("a trusted provider that sends no email picks the tenant from the principal
   principalTenants = [];
   const unlinked = await trustedCallback(null);
   assert.equal(unlinked.status, 403);
-  assert.match(await unlinked.text(), /No access to this workspace/);
+  assert.match(
+    await unlinked.text(),
+    /No QM workspace for this account yet[\s\S]*Signed in as<\/strong>an account without an email address/,
+  );
   assert.equal(sessionOf(unlinked), null);
 
   shared = false;

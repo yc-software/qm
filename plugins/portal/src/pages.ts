@@ -69,6 +69,20 @@ ${HARBOUR_STYLE}
 </html>`;
 }
 
+/** Signed in on the shared host, but the account belongs to no workspace here. */
+export function noWorkspaceHtml(email: string | null): string {
+  const brand = brandLabel();
+  return cardPage({
+    title: "No workspace",
+    heading: `No ${brand} workspace for this account yet`,
+    msg: `This account isn't in a ${brand} workspace yet.`,
+    icon: LOCK_ICON,
+    extra: `<p class="account"><strong>Signed in as</strong>${escapeHtml(email ?? "an account without an email address")}</p>`,
+    actions: `<a class="btn ghost workspace" href="/auth/login">Sign in with a different account</a>`,
+    help: "If you expected access, ask someone on your team to add this email address to your workspace.",
+  });
+}
+
 export function signInErrorHtml(
   detail: string,
   retryPath: "/auth/login" | "/auth/trusted/login" = "/auth/login",
