@@ -385,19 +385,21 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     if (t - lastRedrive < REPAIR_INTERVAL_MS) return;
     lastRedrive = t;
     try {
-      for (const entry of await deps.crons.runningFires(t)) {
-        if (stopped) break;
-        if (entry.firedAt > t - REPAIR_INTERVAL_MS || (await deps.idempotency.committed(entry.fireKey))) continue;
-        const cron = await deps.crons.get(entry.cronId);
-        if (!cron || cron.loopId) continue;
-        track(
-          withWork(() =>
-            deps.advisoryLock.tryWithLock(`cron-lifecycle:${cron.id}`, () =>
-              fire(cron, entry.firedAt, entry.fireKey, entry.scheduledAt),
-            ),
-          ).then(() => undefined, reportFailureAs("scheduler: fire re-drive", undefined, `cron=${cron.id}`)),
-        );
-      }
+      await claimThenBind(deps.crons.claimTenants, async () => {
+        for (const entry of await deps.crons.runningFires(t)) {
+          if (stopped) return;
+          if (entry.firedAt > t - REPAIR_INTERVAL_MS || (await deps.idempotency.committed(entry.fireKey))) continue;
+          const cron = await deps.crons.get(entry.cronId);
+          if (!cron || cron.loopId) continue;
+          track(
+            withWork(() =>
+              deps.advisoryLock.tryWithLock(`cron-lifecycle:${cron.id}`, () =>
+                fire(cron, entry.firedAt, entry.fireKey, entry.scheduledAt),
+              ),
+            ).then(() => undefined, reportFailureAs("scheduler: fire re-drive", undefined, `cron=${cron.id}`)),
+          );
+        }
+      });
     } catch (e) {
       reportFailure("scheduler: fire re-drive", e);
     }

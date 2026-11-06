@@ -1,6 +1,6 @@
+import { perTenant } from "../tenants/cache.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createTtlRefresh } from "../util/async.ts";
-import { perTenant } from "../tenants/cache.ts";
 import { foldPrincipalId, type PrincipalLinkResolver } from "../directory/person.ts";
 import { isSystemActor } from "../types.ts";
 import type { UserLink, UserLinkStore } from "./user-store.ts";

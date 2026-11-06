@@ -5,8 +5,8 @@ import pg from "pg";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { createPostgresVectorStore, type MemoryVectorStore } from "../src/memory/postgres-vector-store.ts";
 import { createSemanticMemoryService } from "../src/memory/semantic-recall.ts";
-import { factHash, type MemoryFact } from "../src/memory/facts.ts";
 import { seedTestTenant } from "./support/test-tenant.ts";
+import { factHash, type MemoryFact } from "../src/memory/facts.ts";
 
 const url = process.env.DATABASE_URL;
 const ids = (facts: readonly MemoryFact[]) => facts.map((fact) => fact.id);

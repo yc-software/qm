@@ -41,8 +41,10 @@ export function createSessionMailbox(backing: DurableMap<SessionMessage>) {
         .filter((row) => recipients.has(row.recipientId) && !row.consumed)
         .sort((a, b) => a.createdAt - b.createdAt);
     },
-    claimAwaitingWake: (): Promise<ClaimedRow[]> => backing.claimIdsWhere("wake", "true"),
-    get: (id: string): Promise<SessionMessage | null> => backing.get(id),
+    claimTenants: (): Promise<ClaimedRow[]> => backing.claimTenants(),
+    async awaitingWake(afterId?: string): Promise<SessionMessage[]> {
+      return backing.select({ where: { field: "wake", anyOfFold: ["true"] }, limit: 100, afterId });
+    },
     async settle(recipientId: string, id: string): Promise<void> {
       const row = await backing.get(id);
       if (row?.recipientId === recipientId) await backing.merge(id, { wake: undefined });

@@ -15,6 +15,7 @@ import { cronQueueMisconfigured, installCronQueue } from "./cron/job-queue.ts";
 import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
 import { bindBootTenant, inBootTenant } from "./tenants/boot.ts";
 import { loadTenant } from "./tenants/cache.ts";
+import { startFrontDoor } from "./web/front-door.ts";
 
 function envSlackAccountRuntimes(
   env: NodeJS.ProcessEnv,
@@ -35,7 +36,6 @@ function envSlackAccountRuntimes(
     }),
   );
 }
-import { startFrontDoor } from "./web/front-door.ts";
 
 export async function startQm(
   config: Config,

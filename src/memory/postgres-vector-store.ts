@@ -79,6 +79,40 @@ export const VECTOR_MIGRATIONS: PgMigrationDefinition[] = [
     ],
   },
   { id: "memory/vectors/0002", statements: SCHEMA },
+  {
+    id: "memory/vectors/0003-sketch",
+    statements: [
+      "SET LOCAL lock_timeout = '3s'",
+      "ALTER TABLE memory_fact_vectors ADD COLUMN IF NOT EXISTS embedding_bits BIT VARYING",
+      `CREATE OR REPLACE FUNCTION memory_fact_vectors_bits() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN
+        NEW.embedding_bits := binary_quantize(NEW.embedding);
+        RETURN NEW;
+      END $$`,
+      "DROP TRIGGER IF EXISTS memory_fact_vectors_bits ON memory_fact_vectors",
+      `CREATE TRIGGER memory_fact_vectors_bits BEFORE INSERT OR UPDATE OF embedding ON memory_fact_vectors
+        FOR EACH ROW EXECUTE FUNCTION memory_fact_vectors_bits()`,
+    ],
+  },
+  {
+    id: "memory/vectors/0004-sketch-backfill",
+    autocommit: true,
+    statements: [
+      `DO $memory_sketch_backfill$
+      DECLARE
+        batch tid[];
+      BEGIN
+        LOOP
+          SELECT array_agg(ctid) INTO batch
+            FROM (SELECT ctid FROM memory_fact_vectors WHERE embedding_bits IS NULL LIMIT 1000) pending;
+          EXIT WHEN batch IS NULL;
+          UPDATE memory_fact_vectors SET embedding_bits = binary_quantize(embedding)
+           WHERE ctid = ANY(batch) AND embedding_bits IS NULL;
+          COMMIT;
+        END LOOP;
+      END $memory_sketch_backfill$`,
+    ],
+  },
   ...tenantTables("memory/vectors/0003-tenants", [
     { table: "memory_fact_vectors", primaryKey: "scope_id, model, fact_id" },
   ]),
@@ -114,40 +148,6 @@ export const VECTOR_MIGRATIONS: PgMigrationDefinition[] = [
         `SELECT tenant_id, 'memory'::text FROM memory_facts WHERE deleted_at IS NULL
            UNION SELECT tenant_id, 'memory'::text FROM memory_fact_vectors`,
       ),
-    ],
-  },
-  {
-    id: "memory/vectors/0003-sketch",
-    statements: [
-      "SET LOCAL lock_timeout = '3s'",
-      "ALTER TABLE memory_fact_vectors ADD COLUMN IF NOT EXISTS embedding_bits BIT VARYING",
-      `CREATE OR REPLACE FUNCTION memory_fact_vectors_bits() RETURNS trigger LANGUAGE plpgsql AS $$
-        BEGIN
-          NEW.embedding_bits := binary_quantize(NEW.embedding);
-          RETURN NEW;
-        END $$`,
-      "DROP TRIGGER IF EXISTS memory_fact_vectors_bits ON memory_fact_vectors",
-      `CREATE TRIGGER memory_fact_vectors_bits BEFORE INSERT OR UPDATE OF embedding ON memory_fact_vectors
-          FOR EACH ROW EXECUTE FUNCTION memory_fact_vectors_bits()`,
-    ],
-  },
-  {
-    id: "memory/vectors/0004-sketch-backfill",
-    autocommit: true,
-    statements: [
-      `DO $memory_sketch_backfill$
-        DECLARE
-          batch tid[];
-        BEGIN
-          LOOP
-            SELECT array_agg(ctid) INTO batch
-              FROM (SELECT ctid FROM memory_fact_vectors WHERE embedding_bits IS NULL LIMIT 1000) pending;
-            EXIT WHEN batch IS NULL;
-            UPDATE memory_fact_vectors SET embedding_bits = binary_quantize(embedding)
-             WHERE ctid = ANY(batch) AND embedding_bits IS NULL;
-            COMMIT;
-          END LOOP;
-        END $memory_sketch_backfill$`,
     ],
   },
 ];
