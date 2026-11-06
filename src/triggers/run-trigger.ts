@@ -296,7 +296,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
         kind: "automation",
         ...(spec.securityScreenData !== undefined ? { screenData: spec.securityScreenData } : {}),
         ...(spec.destination ? { destination: spec.destination } : {}),
-        ...(scheduled && !runsAsScope && conversation.kind !== "dm" ? { useOwnerKeychain: true } : {}),
+        ...(scheduled && !runsAsScope ? { useOwnerKeychain: true } : {}),
       },
       ...(spec.unattendedGrants && grantsHomedWithOwner(spec) ? { unattendedGrants: spec.unattendedGrants } : {}),
       ...(spec.cronScript ? { cronScript: spec.cronScript } : {}),

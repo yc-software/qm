@@ -68,7 +68,7 @@ describe("runTrigger: a cron runs as whoever owns it", () => {
     assert.equal(automationOrigin(seen[0]!)?.useOwnerKeychain, undefined);
   });
 
-  it("a personal cron does not need the union flag", async () => {
+  it("a personal cron carries the owner flag too", async () => {
     const { deps, seen } = captureDeps();
     await runTrigger(deps, {
       owner: "U-carol",
@@ -77,7 +77,7 @@ describe("runTrigger: a cron runs as whoever owns it", () => {
       fireKey: "o1",
       surface: "cron",
     });
-    assert.equal(automationOrigin(seen[0]!)?.useOwnerKeychain, undefined);
+    assert.equal(automationOrigin(seen[0]!)?.useOwnerKeychain, true);
   });
 
   it("reports the owner as gone when a project's current roster no longer has them", async () => {

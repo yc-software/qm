@@ -955,8 +955,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         !input.botActor &&
         !input.proactiveOpener &&
         (isPersonAuthored(authorizationOrigin.kind) ||
-          (input.origin.kind === "automation" &&
-            (input.origin.useOwnerKeychain === true || attestableAudience(actor.id, scopeId))));
+          (input.origin.kind === "automation" && input.origin.useOwnerKeychain === true));
       const mcpToolsReady =
         !external && deps.mcp ? deps.mcp.toolDefsFor(actor.id, audienceScopeId, actAsActor) : undefined;
       const useMemory = !external && input.skipMemory !== true;

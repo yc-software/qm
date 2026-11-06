@@ -593,7 +593,12 @@ test("a scheduled turn attests its owner only when the answer goes back to the o
     return run(handle, command, opts);
   };
   const idempotency = createIdempotencyStore(testMap());
-  const fire = async (cron: string, destination: Destination, ownerScopeId = scopeId("personal", "U1")) => {
+  const fire = async (
+    name: string,
+    destination: Destination,
+    ownerScopeId = scopeId("personal", "U1"),
+    surface = "cron",
+  ) => {
     turn = undefined;
     credentialToken = undefined;
     const before = knowledge.requests.length;
@@ -603,8 +608,8 @@ test("a scheduled turn attests its owner only when the answer goes back to the o
         owner: "U1",
         ownerScopeId,
         input: "how is the launch going?",
-        fireKey: `cron:${cron}:1`,
-        surface: "cron",
+        fireKey: `${surface}:${name}:1`,
+        surface,
         destination,
       },
     );
@@ -666,6 +671,7 @@ test("a scheduled turn attests its owner only when the answer goes back to the o
         ...principalDestination("U1", "U1"),
         audienceScopeId: scopeId("personal", "u1@example.test"),
       }),
+      dmWebhookToTeammate: await fire("dm-webhook-to-teammate", principalDestination("U2", "U1"), undefined, "webhook"),
     },
     {
       dmToTeammate: refused,
@@ -673,6 +679,7 @@ test("a scheduled turn attests its owner only when the answer goes back to the o
       channelToOwner: refused,
       dmToOwner: attested,
       dmToOwnerAlias: attested,
+      dmWebhookToTeammate: { ...refused, offered: ["wiki"], calledAny: "refused", brokerAny: "private_only" },
     },
   );
 });
