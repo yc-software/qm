@@ -3,11 +3,20 @@ import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { assertFinnyPolicy } from "./policy.ts";
 import type {
   CreateFinnyJobInput,
+  FinalizeFinnyInput,
+  FinnyReceiptSigner,
   FinnyStore,
   RecordFinnyApprovalInput,
   RecordFinnyAttestationInput,
 } from "./store.ts";
-import type { FinnyAttestation, FinnyCheckId, FinnyJob, FinnyPolicySnapshot } from "./types.ts";
+import type {
+  FinnyAttestation,
+  FinnyCheckId,
+  FinnyFinalReceipt,
+  FinnyFinalReceiptPayload,
+  FinnyJob,
+  FinnyPolicySnapshot,
+} from "./types.ts";
 
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS finny_jobs(
@@ -189,6 +198,7 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
     async recordAttestation(input: RecordFinnyAttestationInput) {
       return withPgTransaction(await pool(), async (db) => {
         const job = await lockedJob(db, input.scopeId, input.jobId);
+        if (job.finalized_at !== null) throw new Error("Finny job is already finalized");
         const policy: FinnyPolicySnapshot = {
           policyVersion: job.policy_version as string,
           requiredGenerations: job.required_generations as Record<FinnyCheckId, number>,
@@ -233,6 +243,76 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
           now,
         ]);
         return { attestation, deduped: false };
+      });
+    },
+    async finalize(input: FinalizeFinnyInput, sign: FinnyReceiptSigner): Promise<FinnyFinalReceipt> {
+      return withPgTransaction(await pool(), async (db) => {
+        const row = await lockedJob(db, input.scopeId, input.jobId);
+        if (row.final_receipt !== null) {
+          if (row.finalization_key !== input.idempotencyKey) {
+            throw new Error("Finny job was finalized with a different idempotency key");
+          }
+          return row.final_receipt as FinnyFinalReceipt;
+        }
+        if (
+          row.approval_action !== "approve" ||
+          row.approval_decided_at === null ||
+          row.approval_consumed_at !== null ||
+          row.approval_plan_digest !== row.plan_digest ||
+          row.approval_origin_thread_ref !== row.origin_thread_ref
+        ) {
+          throw new Error("Finny job does not have an unconsumed bound approved decision");
+        }
+        const policy: FinnyPolicySnapshot = {
+          policyVersion: row.policy_version as string,
+          requiredGenerations: row.required_generations as Record<FinnyCheckId, number>,
+        };
+        assertFinnyPolicy(policy);
+        const attestations = await db.query(
+          `SELECT DISTINCT ON (check_id) * FROM finny_attestations
+           WHERE job_id=$1 ORDER BY check_id, seq DESC`,
+          [input.jobId],
+        );
+        const latest = new Map<FinnyCheckId, FinnyAttestation>();
+        let observedHead = 0;
+        for (const attestationRow of attestations.rows) {
+          const attestation = rowToAttestation(attestationRow);
+          latest.set(attestation.checkId, attestation);
+          observedHead = Math.max(observedHead, attestation.seq);
+        }
+        for (const checkId of Object.keys(policy.requiredGenerations) as FinnyCheckId[]) {
+          const attestation = latest.get(checkId);
+          if (!attestation) throw new Error(`Finny finalization is missing ${checkId}`);
+          if (attestation.generation !== policy.requiredGenerations[checkId]) {
+            throw new Error(`Finny finalization has a stale generation for ${checkId}`);
+          }
+          if (attestation.verdict === "block") throw new Error(`Finny finalization has a BLOCK for ${checkId}`);
+        }
+        if (observedHead !== Number(row.ledger_head)) throw new Error("Finny attestation ledger head is inconsistent");
+        const issuedAt = Date.now();
+        const payload: FinnyFinalReceiptPayload = {
+          aud: "finny.final.delivery",
+          jobId: input.jobId,
+          scopeId: input.scopeId,
+          planDigest: row.plan_digest as string,
+          artifactDigest: row.artifact_digest as string,
+          policyVersion: policy.policyVersion,
+          requiredGenerations: policy.requiredGenerations,
+          ledgerHead: observedHead,
+          approvalRequestId: row.approval_request_id as string,
+          approvalActorId: row.approval_actor_id as string,
+          originThreadRef: row.origin_thread_ref as string,
+          provisionalRevision: row.provisional_revision as string,
+          issuedAt,
+        };
+        const receipt: FinnyFinalReceipt = { payload, token: await sign(payload) };
+        await db.query(
+          `UPDATE finny_jobs SET finalization_key=$2, final_receipt=$3,
+             finalized_at=$4, approval_consumed_at=$4, updated_at=$4
+           WHERE id=$1`,
+          [input.jobId, input.idempotencyKey, JSON.stringify(receipt), issuedAt],
+        );
+        return receipt;
       });
     },
   };

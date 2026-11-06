@@ -67,7 +67,23 @@ export interface FinnyAttestation {
   createdAt: number;
 }
 
+export interface FinnyFinalReceiptPayload {
+  aud: "finny.final.delivery";
+  jobId: string;
+  scopeId: string;
+  planDigest: string;
+  artifactDigest: string;
+  policyVersion: string;
+  requiredGenerations: Record<FinnyCheckId, number>;
+  ledgerHead: number;
+  approvalRequestId: string;
+  approvalActorId: string;
+  originThreadRef: string;
+  provisionalRevision: string;
+  issuedAt: number;
+}
+
 export interface FinnyFinalReceipt {
   token: string;
-  payload: Record<string, unknown>;
+  payload: FinnyFinalReceiptPayload;
 }
