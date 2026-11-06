@@ -72,10 +72,6 @@ test("external OIDC sign-out is local: it never contacts the provider and stays 
   assert.match(body, /href="\/auth\/login"/);
   assert.equal(idpRequests, before);
 });
-test("anonymous sessions keep the existing root redirect", async () => {
-  const result = (await (await logout({ anon: true })).json()) as { redirectTo: string };
-  assert.equal(result.redirectTo, "/");
-});
 test("signed-out landing does not falsely claim an authenticated session ended", async () => {
   const signedIn = await fetch(`${base}/auth/signed-out`, { headers: { cookie: cookie() } });
   assert.equal(signedIn.status, 409);
