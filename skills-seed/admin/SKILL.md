@@ -147,10 +147,10 @@ Require a real reply before claiming the bot works, not as an onboarding prerequ
 A failed status read or `setupUnavailable` means unknown, not absent. Do not restart
 provisioning or create a duplicate. Retry the existing links or follow recovery guidance.
 
-`installAvailable: true` without `setup` means the shared QM Slack app. Reply with one
-short message containing **[Add to Slack](installUrl)**, using the returned `installUrl`,
-and say they approve it in Slack. Do not name a workspace, mention unavailable setup,
-offer creating their own app, or use `createUrl`; they can choose a custom app in settings.
+`installAvailable: true` without `setup` means the shared QM Slack app. In web chat, reply
+with one short line and `::add-to-slack{}` as its own paragraph. On other surfaces, link
+**[Add to Slack](installUrl)** using the returned `installUrl`. Do not name a workspace,
+mention unavailable setup, offer creating their own app, or use `createUrl`.
 
 Without managed installation, use the returned `createUrl` and the known dashboard's
 workspace app guide. Do not ask for a configuration token this flow cannot consume.
