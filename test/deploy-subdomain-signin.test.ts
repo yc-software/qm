@@ -1,5 +1,8 @@
 import { test } from "node:test";
-import { TEST_TENANT } from "./support/test-tenant.ts";
+import { ownerUrl, TEST_TENANT } from "./support/test-tenant.ts";
+import { createPgPool } from "../src/persistence/pg-pool.ts";
+import { onTenantLoad } from "../src/tenants/cache.ts";
+import { loadTenantSettings } from "../src/tenants/settings.ts";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -420,13 +423,19 @@ test("org-wide app access admits only signed-in org members", async () => {
   });
   server.listen(0);
   const port = (server.address() as AddressInfo).port;
+  const owner = createPgPool(ownerUrl(backings.databaseUrl).toString());
+  const appPool = createPgPool(backings.databaseUrl);
+  const stopLoad = onTenantLoad(() => loadTenantSettings(appPool));
   const visit = (cookieFor?: string, appOnly?: true) =>
     httpGet(port, "/", {
-      Host: "teamsite.apps.example.com",
+      Host: "orgsite-teamsite.apps.example.com",
       Accept: "application/json",
       ...(cookieFor ? { Cookie: `portal_session=${mintPortalSession(cookieFor, 3600, SESSION_SECRET, appOnly)}` } : {}),
     });
   try {
+    await owner.q(`UPDATE tenants SET settings = settings || '{"handle":"orgsite"}'::jsonb WHERE id = $1`, [
+      TEST_TENANT,
+    ]);
     assert.equal((await visit("bob@example.com")).status, 403, "restricted: a signed-in member without a grant");
     await app.shareDeployment(d.id, scopeId("org", "acme"), "read", { createdBy: "alice@example.com" });
     assert.equal((await visit()).status, 401, "org access still requires sign-in");
@@ -436,7 +445,21 @@ test("org-wide app access admits only signed-in org members", async () => {
     assert.equal((await visit("carol@example.com")).status, 403, "someone who left the org is not the org");
     await app.shareDeployment(d.id, scopeId("org", "acme"), null, { createdBy: "alice@example.com" });
     assert.equal((await visit("bob@example.com")).status, 403, "back to restricted closes it");
+    const hostTenant = `SELECT qm_tenant_for_app_host($1)::text AS tenant`;
+    assert.deepEqual(await owner.q(hostTenant, ["orgsite-teamsite"]), [{ tenant: TEST_TENANT }]);
+    assert.deepEqual(await owner.q(hostTenant, ["teamsite"]), [{ tenant: null }]);
+    await owner.q(`UPDATE tenants SET settings = settings - 'handle' WHERE id = $1`, [TEST_TENANT]);
+    assert.deepEqual(
+      await owner.q(hostTenant, ["teamsite"]),
+      [{ tenant: null }],
+      "a company without a handle has no app host",
+    );
+    assert.deepEqual(await owner.q(hostTenant, ["orgsite-teamsite"]), [{ tenant: null }]);
   } finally {
+    await owner.q(`UPDATE tenants SET settings = settings - 'handle' WHERE id = $1`, [TEST_TENANT]);
+    stopLoad();
+    await owner.close();
+    await appPool.close();
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await new Promise<void>((resolve) => upstream.close(() => resolve()));
   }

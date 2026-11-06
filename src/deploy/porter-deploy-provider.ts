@@ -104,10 +104,12 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
 
   const baseName = (d: Deployment): string => `${prefix}-app-${d.id.slice(0, 12).toLowerCase()}`;
   const volumeName = (d: Deployment): string => `${baseName(d)}-data`;
-  const domainOf = (d: Deployment): string | undefined =>
-    appsDomain && visibility !== "internal"
-      ? `${porterDnsLabel(appHostLabel(tenantAppHandle(), d.name ?? d.id))}.${appsDomain.toLowerCase()}`
+  const domainOf = (d: Deployment): string | undefined => {
+    const handle = tenantAppHandle();
+    return appsDomain && handle && visibility !== "internal"
+      ? `${porterDnsLabel(appHostLabel(handle, d.name ?? d.id))}.${appsDomain.toLowerCase()}`
       : undefined;
+  };
   const endpointOf = (body: { host: string; port?: number }): DeployEndpoint =>
     body.port
       ? { host: body.host, port: body.port }

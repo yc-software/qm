@@ -73,8 +73,19 @@ export const TENANT_APP_HANDLE_DNS_BOUND: PgMigrationDefinition = {
   ],
 };
 
-export function appHostLabel(handle: string | undefined, name: string): string {
-  return handle ? `${handle}-${name}` : name;
+export const TENANT_APP_HOSTS_BY_HANDLE: PgMigrationDefinition = {
+  id: "0000-tenancy/tenant-app-hosts-by-handle",
+  statements: [
+    `SET LOCAL lock_timeout = '5s'`,
+    `DO $app_hosts$ BEGIN EXECUTE format($sql$CREATE OR REPLACE FUNCTION qm_tenant_for_app_host(label text) RETURNS uuid LANGUAGE sql STABLE SECURITY DEFINER
+  SET search_path = %1$I, pg_temp AS $f$
+  SELECT CASE WHEN strpos(label, '-') > 1 THEN qm_tenant_for_app_handle(split_part(label, '-', 1)) END
+$f$$sql$, current_schema()); END $app_hosts$`,
+  ],
+};
+
+export function appHostLabel(handle: string, name: string): string {
+  return `${handle}-${name}`;
 }
 
 export function splitAppLabel(label: string): { handle: string; name: string } | undefined {

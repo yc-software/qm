@@ -84,9 +84,11 @@ export function createDeploymentMethods(
         const grantees = previous.some((g) => g.scope === grantee && g.permission === "read")
           ? previous
           : await deps.deploy.shareDeployment(deployment.id, grantee, "read", { createdBy: actorId }, opts);
-        const appUrl = deps.deployAppsDomain
-          ? `https://${appHostLabel(tenantAppHandle(), deployment.name ?? deployment.id)}.${deps.deployAppsDomain}/`
-          : undefined;
+        const handle = tenantAppHandle();
+        const appUrl =
+          deps.deployAppsDomain && handle
+            ? `https://${appHostLabel(handle, deployment.name ?? deployment.id)}.${deps.deployAppsDomain}/`
+            : undefined;
         if (alreadyShared)
           return { grantees, invitation: { emailSent: false, alreadyShared: true, ...(appUrl ? { appUrl } : {}) } };
         let emailSent = false;

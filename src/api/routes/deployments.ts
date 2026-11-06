@@ -107,7 +107,7 @@ async function proxyDeployment(ctx: BaseCtx): Promise<void> {
     const d = await app.getDeployment(id).catch(swallowAs("deployments: load deployment", null));
     const slug = d?.name ?? d?.id;
     const handle = tenantAppHandle();
-    if (d && slug && isDnsLabel(appHostLabel(handle, slug))) {
+    if (d && slug && handle && isDnsLabel(appHostLabel(handle, slug))) {
       res.writeHead(302, {
         location: `https://${appHostLabel(handle, slug)}.${deps.deployAppsDomain}${subPath}${url.search}`,
         "cache-control": "no-store",
