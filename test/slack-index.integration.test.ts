@@ -1825,9 +1825,8 @@ test("a freshly booted instance refreshes personas before its first status-card 
 });
 
 test("a bound channel's ack, goal notice and every part of a split reply post as its persona, and its edits keep it", async () => {
-  const f = await fixture({ botIdentity: QM_IDENTITY });
+  const f = await fixture({ botIdentity: QM_IDENTITY, personas: { C1: ADA } });
   try {
-    f.core.personas.set("C1", ADA);
     f.core.queuedRunId = "r-persona";
     f.core.onWait = async (hooks) => {
       hooks.onFirstBlock?.("Looking into it.");
@@ -1857,35 +1856,9 @@ test("a bound channel's ack, goal notice and every part of a split reply post as
   }
 });
 
-test("the next turn after a rename posts under the new name, and a failed persona read keeps the last one", async () => {
-  const f = await fixture({ botIdentity: QM_IDENTITY });
-  try {
-    const mention = async (ts: string) => {
-      const event = { channel: "C1", channel_type: "channel", user: "U1", text: "<@UBOT> again", ts };
-      f.client.messagesByChannel.set("C1", [event]);
-      await f.app.emitEvent("app_mention", event);
-      return f.client.posts.at(-1);
-    };
-    f.core.personas.set("C1", ADA);
-    assert.equal((await mention("803.1")).username, "Ada");
-    f.core.personas.set("C1", { ...ADA, username: "Ada Lovelace" });
-    assert.equal((await mention("803.2")).username, "Ada Lovelace");
-    f.core.personaReadFails = true;
-    f.core.personas.delete("C1");
-    const kept = await mention("803.3");
-    assert.equal(kept.text, "agent reply");
-    assert.equal(kept.username, "Ada Lovelace");
-    f.core.personaReadFails = false;
-    assert.deepEqual(identityOf(await mention("803.4")), expectedIdentity(QM_IDENTITY));
-  } finally {
-    await f.stop();
-  }
-});
-
 test("a requester-only refusal in a bound channel is an ephemeral under the persona", async () => {
-  const f = await fixture({ botIdentity: QM_IDENTITY });
+  const f = await fixture({ botIdentity: QM_IDENTITY, personas: { C1: ADA } });
   try {
-    f.core.personas.set("C1", ADA);
     f.core.result = { status: "refused", reason: "not allowed here" };
     const event = { channel: "C1", channel_type: "channel", user: "U1", text: "<@UBOT> do it", ts: "804.1" };
     f.client.messagesByChannel.set("C1", [event]);

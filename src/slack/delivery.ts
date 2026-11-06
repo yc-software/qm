@@ -1,3 +1,4 @@
+import { createTtlRefresh } from "../util/async.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { safeChunks, safeClip } from "./safe-cut.ts";
 import { sleep } from "./util.ts";
@@ -30,9 +31,12 @@ export function botIdentityFromEnv(env: Record<string, string | undefined>): Bot
   };
 }
 
+type PersonaCore = { channelPersonas?(): Promise<Map<string, SlackPersona>> };
+
+const PERSONA_REFRESH_TTL_MS = 10_000;
 let defaultIdentity: BotIdentityOverride = {};
 let personas: ReadonlyMap<string, SlackPersona> = new Map();
-let personaRefresh: Promise<void> | undefined;
+let personaSource: { core: PersonaCore; refresh: (force?: boolean) => Promise<void> } | undefined;
 
 export function setDefaultBotIdentity(identity: BotIdentityOverride | undefined): void {
   defaultIdentity = identity ?? {};
@@ -43,20 +47,17 @@ export function personaFor(channel: string): BotIdentityOverride {
   return persona ? { ...defaultIdentity, ...persona } : defaultIdentity;
 }
 
-export function refreshPersonas(core: { channelPersonas?(): Promise<Map<string, SlackPersona>> }): Promise<void> {
+export function refreshPersonas(core: PersonaCore, force = false): Promise<void> {
   if (!core.channelPersonas) return Promise.resolve();
-  personaRefresh ??= core
-    .channelPersonas()
-    .then(
-      (next) => {
-        personas = next;
-      },
-      swallowAs("slack: channel persona refresh", undefined),
-    )
-    .finally(() => {
-      personaRefresh = undefined;
-    });
-  return personaRefresh;
+  if (personaSource?.core !== core)
+    personaSource = {
+      core,
+      refresh: createTtlRefresh(PERSONA_REFRESH_TTL_MS, async () => {
+        personas =
+          (await core.channelPersonas?.().catch(swallowAs("slack: channel persona refresh", undefined))) ?? personas;
+      }),
+    };
+  return personaSource.refresh(force);
 }
 
 export function slackEphemeralArgs(

@@ -639,6 +639,8 @@ test("Slack posts in a channel carry its persona's name and icon: a unicode emoj
   });
   ok(await personas.update(BOB, ada.id, { name: "Ada Lovelace", icon: { kind: "emoji", value: "❤️" } }));
   assert.deepEqual((await worn())[DESIGN], { username: "Ada Lovelace", icon_emoji: ":heart:" });
+  ok(await wear("plain", ada.id));
+  assert.deepEqual((await worn()).C0PLAIN, { username: "Ada Lovelace", icon_emoji: ":heart:" });
   await built.featureFlags.setEnabled("personas", ORG, false, ADMIN);
   assert.deepEqual(await worn(), {});
 });

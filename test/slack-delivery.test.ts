@@ -129,24 +129,35 @@ test("a persona refresh picks up a rename, and a failed refresh keeps the last p
   const source = await bindPersonas(t, { CADA: ADA });
   assert.equal(slackReplyArgs("CADA", "hi", undefined).username, "Ada");
   source.personas.set("CADA", { ...ADA, username: "Ada Lovelace" });
-  await refreshPersonas(source);
+  await refreshPersonas(source, true);
   assert.equal(slackReplyArgs("CADA", "hi", undefined).username, "Ada Lovelace");
   source.fail = true;
-  await refreshPersonas(source);
+  await refreshPersonas(source, true);
   assert.equal(slackReplyArgs("CADA", "hi", undefined).username, "Ada Lovelace");
   source.fail = false;
   source.personas.delete("CADA");
-  await refreshPersonas(source);
+  await refreshPersonas(source, true);
   assert.deepEqual(personaFor("CADA"), QM_DEFAULT);
   await refreshPersonas({});
   assert.deepEqual(personaFor("CADA"), QM_DEFAULT);
 });
 
-test("concurrent persona refreshes share one core read", async (t) => {
-  const source = await bindPersonas(t, { CADA: ADA });
-  const before = source.reads;
+test("concurrent persona refreshes share one core read, and later ones inside the freshness window read nothing unless forced", async (t) => {
+  setDefaultBotIdentity(QM_DEFAULT);
+  t.after(async () => {
+    setDefaultBotIdentity(undefined);
+    await refreshPersonas({ channelPersonas: async () => new Map() });
+  });
+  const source = personaSource({ CADA: ADA });
   await Promise.all([refreshPersonas(source), refreshPersonas(source), refreshPersonas(source)]);
-  assert.equal(source.reads - before, 1);
+  assert.equal(source.reads, 1);
+  source.personas.set("CADA", BOLT);
+  await refreshPersonas(source);
+  assert.equal(source.reads, 1);
+  assert.equal(personaFor("CADA").username, "Ada");
+  await refreshPersonas(source, true);
+  assert.equal(source.reads, 2);
+  assert.equal(personaFor("CADA").username, "Bolt");
 });
 
 test("slackReplyArgs can suppress Slack link and media unfurls per message", () => {

@@ -26,6 +26,7 @@ async function deliver(
     approval?: unknown;
     updateError?: string;
     personas?: Record<string, SlackPersona>;
+    personasBefore?: Record<string, SlackPersona>;
   } = {},
 ) {
   const delivery = {
@@ -55,8 +56,9 @@ async function deliver(
       messages: history,
     };
   };
+  let personas = row.personasBefore ?? row.personas;
   const core = {
-    channelPersonas: async () => new Map(Object.entries(row.personas ?? {})),
+    channelPersonas: async () => new Map(Object.entries(personas ?? {})),
     holdDeliveryDispatch: (fn: (lost: Promise<void>) => Promise<unknown>) => fn(new Promise<void>(() => {})),
     getApproval: async () => row.approval ?? null,
     readBlob: async (id: string) => Buffer.from(id),
@@ -109,6 +111,10 @@ async function deliver(
     clientForIdentity: () => client,
   });
 
+  if (row.personasBefore) {
+    await refreshPersonas(core);
+    personas = row.personas;
+  }
   await poller.pollDeliveries(client);
   return { acknowledgements, uploads, posts, updates, failures, marks, probes, conversationsOpened };
 }
@@ -523,6 +529,21 @@ test("edits in a bound channel carry its persona, and edits elsewhere carry the 
     username: "QM",
     icon_emoji: ":robot_face:",
   });
+});
+
+test("a delivery drain posts under a persona set moments earlier, inside the refresh window", async () => {
+  setDefaultBotIdentity({ username: "QM", icon_emoji: ":robot_face:" });
+  try {
+    const { posts } = await deliver({ target: "C1" }, undefined, undefined, "This channel now wears the persona Ada.", {
+      personasBefore: {},
+      personas: { C1: ADA },
+    });
+    assert.equal(posts.length, 1);
+    assert.deepEqual(identityOf(posts[0]!), ADA);
+  } finally {
+    setDefaultBotIdentity(undefined);
+    await refreshPersonas({ channelPersonas: async () => new Map() });
+  }
 });
 
 test("a keychain approval card delivered into a bound channel carries the persona", async () => {

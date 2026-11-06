@@ -15,7 +15,7 @@ import { createTaskAcknowledgements, type TaskAckState, type TaskAcknowledgement
 import { orgId as configOrgId } from "../config.ts";
 import type { StagedEnvelope } from "../slack/envelope-staging.ts";
 import type { SlackPersona } from "../slack/delivery.ts";
-import { EMOJI_NAME_BY_CHAR } from "../slack/emoji-map.ts";
+import { normalizeReaction } from "../slack/reactions.ts";
 import { resolveBranding } from "../resolution/branding.ts";
 import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
@@ -212,9 +212,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
       const personas = new Map<string, SlackPersona>();
       for (const { channelId, persona } of (await deps.app.channelPersonas?.all()) ?? []) {
         const emoji =
-          persona.icon?.kind === "emoji"
-            ? EMOJI_NAME_BY_CHAR[persona.icon.value.replaceAll("\uFE0F", "")]
-            : persona.icon?.name;
+          persona.icon && normalizeReaction(persona.icon.kind === "emoji" ? persona.icon.value : persona.icon.name);
         personas.set(channelId, { username: persona.name, ...(emoji ? { icon_emoji: `:${emoji}:` } : {}) });
       }
       return personas;

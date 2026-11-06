@@ -541,7 +541,7 @@ export function createDeliveryPoller(deps: {
       });
       const leaseLost = (): boolean => lostFlag;
       const cycleStart = Date.now();
-      await refreshPersonas(core);
+      await refreshPersonas(core, true);
       const rowCounts = await Promise.all([
         deliverToConversations(client, leaseLost),
         deliverToPrincipals(client, leaseLost),
