@@ -165,7 +165,13 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
         orders: ordersForJudge,
         ...(self ? { self } : {}),
         messages: forJudge,
-        recent: ambientWindow(asPolicy(all), forJudge, asPolicy(await threadAnchors(surface, container, forJudge))),
+        recent: ambientWindow(
+          asPolicy(all),
+          forJudge,
+          asPolicy(
+            await threadAnchors(surface, container, forJudge).catch(reportFailureAs("ambient: thread anchors", [])),
+          ),
+        ),
         ...(scheduled ? { scheduled: true } : {}),
       };
       const prompt = renderAmbientPrompt(judgeBatch);

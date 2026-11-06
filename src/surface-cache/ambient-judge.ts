@@ -69,9 +69,7 @@ export function ambientWindow(
   const first = all.findIndex((m) => triggerTs.has(m.ts));
   const window = all.slice(Math.max(0, (first < 0 ? all.length : first) - EARLIER_CONTEXT));
   const shown = new Set(window.map((m) => m.ts));
-  const missing = threadAnchors.filter(
-    (m, i) => !shown.has(m.ts) && threadAnchors.findIndex((o) => o.ts === m.ts) === i,
-  );
+  const missing = [...new Map(threadAnchors.filter((m) => !shown.has(m.ts)).map((m) => [m.ts, m])).values()];
   return missing.length ? [...missing, ...window].sort((x, y) => (x.ts < y.ts ? -1 : 1)) : window;
 }
 
