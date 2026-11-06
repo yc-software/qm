@@ -117,7 +117,6 @@ export interface SpritesSandboxOptions extends BlobStagingOptions {
   defaultTimeoutSec?: number;
   egressProxyUrl?: string;
   egressProxyAdditionalUrls?: string[];
-  memoryMb?: number;
   checkpointIntervalMs?: number;
   snapshots?: HomeSnapshotStore;
   initializationStore: DurableMap<{ pending: boolean }>;

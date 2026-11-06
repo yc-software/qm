@@ -70,7 +70,6 @@ export interface SmolmachinesSandboxOptions extends BlobStagingOptions {
   namePrefix?: string;
   image?: string;
   cpus?: number;
-  memoryMb?: number;
   diskGb?: number;
   autoStopSec?: number;
   defaultTimeoutSec?: number;
