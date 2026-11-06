@@ -11,7 +11,7 @@ import { FolderDropError, folderToZipFile, isFolderReadError, splitDropItems, ty
 import { html, nothing, render, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
 import { repeat } from "lit/directives/repeat.js";
-import { ArrowUp, Box, CornerDownRight, FileText, Paperclip, Square, X } from "lucide";
+import { ArrowUp, Box, CornerDownRight, FileText, ListEnd, Paperclip, Square, X, type IconNode } from "lucide";
 import {
   api,
   ApiError,
@@ -786,7 +786,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     });
   }
 
-  function sendButton(label: string): TemplateResult {
+  function sendButton(label: string, glyph: IconNode = ArrowUp): TemplateResult {
     return html`<button
       class="send-btn"
       type="submit"
@@ -794,7 +794,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       ${tip(label)}
       ?disabled=${!composerCanSend()}
     >
-      ${icon(ArrowUp, 16)}
+      ${icon(glyph, 16)}
     </button>`;
   }
 
@@ -805,21 +805,37 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
         <button class="stop-btn" type="button" aria-label="Stopping…" disabled>${icon(Square, 16)}</button>
         ${sendButton("Send")}
       `;
-    const label = sendWhileWorkingLabel(agent);
+    const steer = willSteer(agent, flipHeld);
     return html`
       <button class="stop-btn" type="button" aria-label="Stop" ${tip("Stop")} @click=${() => stopStreaming(agent)}>
         ${icon(Square, 16)}
       </button>
-      ${sendButton(label)}
+      ${sendButton(sendWhileWorkingLabel(agent, steer), steer ? CornerDownRight : ListEnd)}
     `;
   }
 
-  function sendWhileWorkingLabel(agent: Agent): string {
-    if (!canSteer(agent)) return "Queue for after this turn";
-    const flipKey = ["Mac", "iPhone", "iPad", "iPod"].some((p) => navigator.platform.startsWith(p)) ? "⌘↵" : "Ctrl+↵";
-    if (alwaysSteer()) return `Steer the running task (${flipKey} to queue)`;
-    return `Queue for after this turn (${flipKey} to steer)`;
+  function willSteer(agent: Agent, flip: boolean): boolean {
+    return alwaysSteer() !== flip && canSteer(agent);
   }
+
+  function sendWhileWorkingLabel(agent: Agent, steer: boolean): string {
+    const action = steer ? "Steer the running task" : "Queue for after this turn";
+    if (!canSteer(agent) || flipHeld) return action;
+    const flipKey = ["Mac", "iPhone", "iPad", "iPod"].some((p) => navigator.platform.startsWith(p)) ? "⌘" : "Ctrl+";
+    return `${action} (${flipKey}↵ to ${steer ? "queue" : "steer"})`;
+  }
+
+  let flipHeld = false;
+  const trackFlipKey = (e: KeyboardEvent | FocusEvent): void => {
+    const held = e instanceof KeyboardEvent && (e.metaKey || e.ctrlKey);
+    if (held === flipHeld) return;
+    flipHeld = held;
+    const agent = ctx.chat.state.agent;
+    if (agent && canSteer(agent)) ctx.chat.drawActiveChat(agent);
+  };
+  window.addEventListener("keydown", trackFlipKey);
+  window.addEventListener("keyup", trackFlipKey);
+  window.addEventListener("blur", trackFlipKey);
 
   function canSteer(agent: Agent): boolean {
     return agent.state.isStreaming && !ctx.chat.isStopping() && ctx.chat.hasLiveRun();
@@ -1231,7 +1247,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
 
   function submitComposer(e: Event, agent: Agent): void {
     e.preventDefault();
-    void sendPrompt(agent);
+    void sendPrompt(agent, flipHeld);
   }
 
   function onDraftInput(e: InputEvent, agent: Agent): void {
@@ -1372,7 +1388,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       if (stillHere()) restoreStagedOnFailure(text, sendable, composerState.error || "Could not queue the files.");
       return ctx.chat.drawActiveChat(agent);
     }
-    const steer = alwaysSteer() !== flipSteer && canSteer(agent);
+    const steer = willSteer(agent, flipSteer);
     if (!(await enqueueTurn(agent, threadRef, text, uploaded, queuedFilesKey(sendable), steer))) {
       if (stillHere()) restoreStagedOnFailure(text, sendable, composerState.error);
     }
@@ -2016,6 +2032,9 @@ ${draft}`
 
   function dispose(): void {
     disposed = true;
+    window.removeEventListener("keydown", trackFlipKey);
+    window.removeEventListener("keyup", trackFlipKey);
+    window.removeEventListener("blur", trackFlipKey);
     if (!pendingSubmissions) window.removeEventListener("qm:prepare-update", preventUnsafeUpdate);
     window.removeEventListener("model-account-changed", refreshAccount);
     document.removeEventListener("visibilitychange", revalidateRuntime);
