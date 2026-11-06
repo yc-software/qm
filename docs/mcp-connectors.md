@@ -14,11 +14,10 @@ that omits `approval` keeps the current policy.
 auth only) sends the calling person's canonical id in the `x-qm-actor` header; see
 [principal-links.md](./principal-links.md#attested-actors). `attestAudience` sets where
 such a server may be used: `personal` (the default) only in the person's own private
-conversation with QM; `any` also in channels, group conversations and projects, for
-the internal person who asked QM (including the sessions and subagents they start),
-and in scheduled work (crons, loops) for its owner. Elsewhere it is refused: QM system
-actors, guests, bots, unprompted replies to channel chatter, swarms and other
-automation, and webhook or watch fires outside their owner's private conversation.
+conversation with QM; `any` in every conversation, for the internal person the turn
+acts for: whoever asked QM or wrote the message it answers unprompted, the person who
+started a session or subagent, and the owner of scheduled work. It is refused for QM
+system actors, guests and bots.
 `any` requires `attestActor`; an update that omits `attestAudience` keeps it, and
 turning `attestActor` off resets it to `personal`.
 
