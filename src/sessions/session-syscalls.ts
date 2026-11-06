@@ -654,11 +654,8 @@ export async function sessionTreeRuns(
   return live;
 }
 
-export const HELPER_ACCESS_REFUSED =
-  "helpers can't run from this conversation right now: the requester's membership here can't be confirmed " +
-  "from what QM has recorded (common in private Slack channels shared with another organization, and in " +
-  "brand-new group DMs before they sync). Nothing was started or sent. Do the work yourself in this turn " +
-  "with your own tools instead; only if that isn't possible, tell the person plainly what you couldn't do.";
+export const HELPER_WORK_NOTE =
+  "Nothing was started or sent. If you can do this work yourself in this turn, do it; otherwise tell the person plainly what you couldn't do.";
 
 export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscallsFactory {
   const lock = deps.advisoryLock;
@@ -714,12 +711,12 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
         if (deps.enabled && !(await deps.enabled(binding.request.actor.id)))
           throw new Error("persistent subagents are not enabled for this user");
         const current = await deps.sessions.get(binding.session.id);
-        if (
-          !current ||
-          current.scopeId !== binding.scopeId ||
-          (deps.authorize && !(await deps.authorize(current, binding.request.actor.id)))
-        )
-          throw new Error(HELPER_ACCESS_REFUSED);
+        if (!current || current.scopeId !== binding.scopeId)
+          throw new Error(`this session no longer belongs to ${binding.scopeId}. ${HELPER_WORK_NOTE}`);
+        if (deps.authorize && !(await deps.authorize(current, binding.request.actor.id)))
+          throw new Error(
+            `${binding.request.actor.id} can't currently be confirmed as a member of ${binding.scopeId}, so helpers can't run here. ${HELPER_WORK_NOTE}`,
+          );
         const request: OrchestratorInput = {
           ...binding.request,
           origin: binding.request.origin ?? { kind: "automation" },

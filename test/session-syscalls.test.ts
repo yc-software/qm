@@ -9,7 +9,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   createSessionSyscalls,
-  HELPER_ACCESS_REFUSED,
+  HELPER_WORK_NOTE,
   isSubagentThreadRef,
   requiresDelegation,
   sessionTreeRuns,
@@ -2019,8 +2019,9 @@ test("a refused helper start tells the model it can do the work itself", async (
   }).forTurn({ session: r.room, scopeId: scope, request: { actor, conversation } });
   const opened = await api.open({ task: "work" });
   assert.equal(opened.ok, false);
-  assert.equal(opened.ok ? "" : opened.message, HELPER_ACCESS_REFUSED);
-  assert.match(HELPER_ACCESS_REFUSED, /Do the work yourself in this turn/);
+  const message = opened.ok ? "" : opened.message;
+  assert.ok(message.includes(actor.id) && message.includes(scope), message);
+  assert.ok(message.endsWith(HELPER_WORK_NOTE), message);
 });
 
 test("completion cannot expand the finished run's audience and retries after its return delay", async (t) => {
