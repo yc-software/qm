@@ -1,7 +1,6 @@
 import type { PgPool } from "../persistence/pg-pool.ts";
 import type { ScopeId, Session } from "../types.ts";
 import type {
-  AttributedTurn,
   ScopeActivity,
   SessionOrigin,
   SessionOriginFilter,
@@ -9,7 +8,6 @@ import type {
   SessionStore,
   SessionSummary,
 } from "./session-store.ts";
-import { msOf, TENANT, userTurn } from "./items.ts";
 
 const ADMIN_READ_TIMEOUT_MS = 10_000;
 const lastActivityExpr = (col: string): string => `COALESCE(${col}.last_activity, ${col}.created_at)`;
@@ -20,10 +18,7 @@ const originFilterClause = (alias: string, origin: SessionOriginFilter): string 
 
 export function createSessionAdminReads(
   q: PgPool["q"],
-): Pick<
-  SessionStore,
-  "countSessions" | "scopeSessionSummaries" | "scopeConversationCount" | "scopeActivity" | "attributedTurns"
-> {
+): Pick<SessionStore, "countSessions" | "scopeSessionSummaries" | "scopeConversationCount" | "scopeActivity"> {
   return {
     async countSessions(): Promise<number> {
       const rows = await q("SELECT COUNT(*) AS n FROM sessions");
@@ -98,25 +93,6 @@ export function createSessionAdminReads(
         crons: Number(r.crons),
         background: Number(r.background),
         lastActivity: Number(r.last_activity),
-      }));
-    },
-
-    async attributedTurns(): Promise<AttributedTurn[]> {
-      const rows = await q(
-        `SELECT p.principal_id, e.session_id, (${msOf("e.created_at")} / 86400000)::bigint AS day,
-                COUNT(*) AS turns, ${msOf("MIN(e.created_at)")} AS first_at, ${msOf("MAX(e.created_at)")} AS last_at
-           FROM participants p
-           JOIN items e ON e.tenant_id = ${TENANT} AND e.session_id = p.session_id
-          WHERE ${userTurn("e")}
-          GROUP BY p.principal_id, e.session_id, day`,
-      );
-      return rows.map((r) => ({
-        principalId: r.principal_id as string,
-        sessionId: r.session_id as string,
-        day: Number(r.day),
-        turns: Number(r.turns),
-        firstAt: Number(r.first_at),
-        lastAt: Number(r.last_at),
       }));
     },
   };

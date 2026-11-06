@@ -9,7 +9,7 @@ export const atLeast = (role: PersonaRole | null | undefined, floor: PersonaRole
   roleRank(role) >= roleRank(floor);
 export const activeHolder = (holder: ScopeId, isActive: (principalId: string) => boolean): boolean => {
   const { kind, ref } = parseScopeId(holder);
-  return kind !== "personal" || isActive(ref!);
+  return kind !== "channel" && (kind !== "personal" || isActive(ref!));
 };
 
 export const PERSONA_MIGRATIONS: PgMigrationDefinition[] = [

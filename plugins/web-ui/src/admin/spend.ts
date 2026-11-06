@@ -2,6 +2,7 @@ import { html, render } from "lit";
 import type { AdminPage } from "./sections.ts";
 import { spendChart } from "./spend-chart.ts";
 import { pageHeader, table, card } from "./shared.ts";
+import { userHref } from "./user-detail.ts";
 
 const DAY = 86400000;
 const PRESETS = new Map(Object.entries({ "7d": 7, "30d": 30, "90d": 90 }));
@@ -116,9 +117,7 @@ export async function mount(page: AdminPage) {
         ["Person", ...COLUMNS],
         (d.people || []).map((row: any) => [
           {
-            node: html`<a href=${page.href("user", { principal: row.principalId })}
-              >${row.displayName || row.principalId}</a
-            >`,
+            node: html`<a href=${userHref(page, row)}>${row.displayName || row.principalId}</a>`,
             cls: "mono",
           },
           ...amounts(row),

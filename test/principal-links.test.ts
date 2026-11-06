@@ -230,12 +230,10 @@ describe("person primitives fold a linked sign-in to its canonical principal", (
     assert.equal(adminStatusFromGrants(grants, EMAIL).isAdmin, true);
     const users = computeUsers({
       grants,
-      people: [EMAIL],
-      participants: [
-        { sessionId: "s1", principalId: OIDC },
-        { sessionId: "s2", principalId: EMAIL },
+      roster: [{ id: "u-1", principalId: EMAIL, aliases: [EMAIL, OIDC], kind: "person" }],
+      activity: [
+        { userId: "u-1", principalId: EMAIL, kind: "person", sessions: 2, turns: 0, lastSeenAt: null, days: [] },
       ],
-      turns: [],
     });
     assert.equal(users.length, 1);
     assert.equal(users[0]!.principalId, EMAIL);

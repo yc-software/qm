@@ -93,8 +93,10 @@ default admin becomes an owner: the active org admin with the oldest grant, so t
 in `ADMIN_GRANTS` at first boot come first. Offboarding someone lists each persona their
 departure leaves with no active owner, and the admin it goes to; other deactivations, and personas
 already left without one, are picked up within five minutes. The departed owner's row stays, so
-reactivating them restores their role. Access changes that would leave a persona with no active
-owner are refused.
+reactivating them restores their role.
+An access change is refused unless at least one owner grant remains on a person QM doesn't list as
+inactive, on a team, or on an org. Channel owner grants never count, and team and org owner grants
+count whether or not they reach anyone.
 
 ## Forking
 
