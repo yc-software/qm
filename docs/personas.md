@@ -90,7 +90,8 @@ add control for people whose role allows it:
 - **Credentials** (owner): attach one of your own credentials or detach one.
 - **Slack channels** (owner): "Add channel" opens the share dialog, whose one search covers
   people and channels you are in; a channel can only be given read.
-- **History**: loads on first open, 20 versions a page, each saying who saved it, when and
+- **History**: loads on first open, 20 versions a page (what the section shows before "Show
+  older"; a summary row is about 100 bytes, and paging by `before` never drops a version), each saying who saved it, when and
   which fields changed. Opening one shows it as it was, with its changed fields marked.
   Writers can roll back to any of them; a rollback is saved as a new version, so nothing is
   lost.

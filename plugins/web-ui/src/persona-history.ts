@@ -33,7 +33,7 @@ interface HistoryEntry {
   error: string;
 }
 
-export interface HistoryPersona {
+interface HistoryPersona {
   id: string;
   name: string;
   version: number;
@@ -115,7 +115,7 @@ function fieldTpl(label: string, changed: boolean, value: TemplateResult | strin
 }
 
 function versionTpl(version: Version): TemplateResult {
-  const changed = new Set(version.version === 1 ? [] : version.changed);
+  const changed = new Set(version.changed);
   return html`<div class="persona-version-changes">
     ${fieldTpl("Name", changed.has("name"), version.name)}
     ${fieldTpl("Icon", changed.has("icon"), projectIconTpl(version.icon, 16) ?? "Default")}

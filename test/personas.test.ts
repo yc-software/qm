@@ -299,10 +299,7 @@ test("every edit that changes a persona is a version anyone with a role can read
     ],
   );
   const older = ok(await personas.versions(CAROL, ada.id, { before: 2, limit: 2 }));
-  assert.deepEqual(
-    [older.more, older.versions.map((v) => [v.version, v.changed])],
-    [false, [[1, ["name", "description", "instructions", "icon"]]]],
-  );
+  assert.deepEqual([older.more, older.versions.map((v) => [v.version, v.changed])], [false, [[1, []]]]);
   const second = ok(await personas.version(CAROL, ada.id, 2));
   assert.deepEqual([second.instructions, second.changed], ["Answer in limericks.", ["instructions"]]);
   assert.equal((await personas.version(CAROL, ada.id, 9)).status, "not_found");

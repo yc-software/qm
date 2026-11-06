@@ -20,10 +20,9 @@ export interface Persona {
   updatedAt: number;
 }
 
-export const PERSONA_VERSION_FIELDS = ["name", "description", "instructions", "icon"] as const;
-export type PersonaVersionField = (typeof PERSONA_VERSION_FIELDS)[number];
+type PersonaVersionField = "name" | "description" | "instructions" | "icon";
 
-export interface PersonaVersionSummary {
+interface PersonaVersionSummary {
   version: number;
   changed: PersonaVersionField[];
   restoredFrom?: number;
@@ -78,10 +77,10 @@ const PERSONA_SELECT = `SELECT p.*, u.primary_alias AS created_by_alias,
 
 const VERSION_SELECT = (columns: string) => `SELECT ${columns}, u.primary_alias AS edited_by_alias,
     ARRAY_REMOVE(ARRAY[
-      CASE WHEN prev.version IS NULL OR prev.name IS DISTINCT FROM v.name THEN 'name' END,
-      CASE WHEN prev.version IS NULL OR prev.description IS DISTINCT FROM v.description THEN 'description' END,
-      CASE WHEN prev.version IS NULL OR prev.instructions IS DISTINCT FROM v.instructions THEN 'instructions' END,
-      CASE WHEN prev.version IS NULL OR prev.icon::text IS DISTINCT FROM v.icon::text THEN 'icon' END
+      CASE WHEN prev.version IS NOT NULL AND prev.name IS DISTINCT FROM v.name THEN 'name' END,
+      CASE WHEN prev.version IS NOT NULL AND prev.description IS DISTINCT FROM v.description THEN 'description' END,
+      CASE WHEN prev.version IS NOT NULL AND prev.instructions IS DISTINCT FROM v.instructions THEN 'instructions' END,
+      CASE WHEN prev.version IS NOT NULL AND prev.icon::text IS DISTINCT FROM v.icon::text THEN 'icon' END
     ], NULL) AS changed
   FROM persona_versions v
   JOIN users u ON u.id = v.edited_by

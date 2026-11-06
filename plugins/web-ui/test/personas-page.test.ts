@@ -30,7 +30,7 @@ const versions = [
   { version: 3, name: "Ada", description: "", instructions: "Count.\nShow work.", editedBy: "bo", editedAt: 3 },
   { version: 2, name: "Ada", description: "", instructions: "Count.", editedBy: "tester", editedAt: 2 },
   { version: 1, name: "Ada", description: "", instructions: "Ada instructions", editedBy: "tester", editedAt: 1 },
-].map((v) => ({ ...v, changed: v.version === 1 ? ["name", "description", "instructions"] : ["instructions"] }));
+].map((v) => ({ ...v, changed: v.version === 1 ? [] : ["instructions"] }));
 const summary = ({ version, changed, editedBy, editedAt }: (typeof versions)[number]) => ({
   version,
   changed,
