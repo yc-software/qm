@@ -100,7 +100,7 @@ test("equal fact ids from two brains and the notebook stay separate copies, and 
   assert.equal(next.text, "personal:a: 1 earlier fact was consolidated or removed; rely only on the current list.");
 });
 
-test("one claim in two notebooks prints once, in the scope whose turn reached it, with that scope's own id", async () => {
+test("one claim in two notebooks prints once, as the first notebook's copy with that scope's own id", async () => {
   const notebook = createPostgresMemoryService(testDatabaseUrl());
   await notebook.capture("personal:a", ["Dana prefers email"], AT);
   await notebook.capture("org:acme", ["dana prefers email ", "Offsite is in May"], AT);
@@ -166,6 +166,61 @@ test("a dual-written duplicate prints once as the notebook copy and gains no ran
   const hits = await searchAcrossScopes(memory, ["personal:a"], "alpha", 20);
   assert.equal(hits.filter(({ fact }) => fact.includes("alpha duplicate")).length, 1);
   assert.equal(hits[0]?.fact, `#${duplicate!.id} (2026-10-01) alpha duplicate (also acme:77)`);
+});
+
+test("a duplicate the brain ranks first keeps the notebook copy's own place, and the brain's next fact takes its turn", async () => {
+  const notebook = createPostgresMemoryService(testDatabaseUrl());
+  for (const [i, text] of ["alpha duplicate", "alpha one", "alpha two"].entries())
+    await notebook.capture("personal:a", [text], AT + i);
+  const memory = routed(notebook, {
+    acme: gbrain(() => [
+      { id: "77", text: "alpha duplicate" },
+      { id: "1", text: "alpha brain one" },
+      { id: "2", text: "alpha brain two" },
+    ]),
+  });
+  const recalled = await recallAcrossScopes(memory, ["personal:a"], { query: "alpha" });
+  assert.deepEqual(
+    recalled.map(({ text, source }) => [text, source?.provider]),
+    [
+      ["- (2026-10-01) alpha two", undefined],
+      ["- (2026-10-30; fact) alpha brain one", "acme"],
+      ["- (2026-10-01) alpha one", undefined],
+      ["- (2026-10-30; fact) alpha brain two", "acme"],
+      ["- (2026-10-01) alpha duplicate", undefined],
+    ],
+  );
+  const [duplicate, one, two] = await notebook.facts!("personal:a");
+  const hits = await searchAcrossScopes(memory, ["personal:a"], "alpha", 20);
+  assert.deepEqual(
+    hits.map(({ fact }) => fact),
+    [
+      `#${duplicate!.id} (2026-10-01) alpha duplicate (also acme:77)`,
+      "acme:1 (2026-10-30; fact) alpha brain one",
+      `#${one!.id} (2026-10-01) alpha one`,
+      "acme:2 (2026-10-30; fact) alpha brain two",
+      `#${two!.id} (2026-10-01) alpha two`,
+    ],
+  );
+});
+
+test("a claim in two notebooks keeps the first notebook copy's own place, and the other notebook's next fact takes its turn", async () => {
+  const notebook = createPostgresMemoryService(testDatabaseUrl());
+  await notebook.capture("personal:a", ["Shared claim X"], AT);
+  for (let i = 0; i < 3; i++) await notebook.capture("personal:a", [`filler ${i}`], AT + 1 + i);
+  await notebook.capture("org:acme", ["Offsite is in May"], AT + 5);
+  await notebook.capture("org:acme", ["shared claim x"], AT + 10);
+  const recalled = await recallAcrossScopes(notebook, ["personal:a", "org:acme"], { query: "q" });
+  assert.deepEqual(
+    recalled.map(({ scope, text }) => [scope, text]),
+    [
+      ["personal:a", "- (2026-10-01) filler 2"],
+      ["org:acme", "- (2026-10-01) Offsite is in May"],
+      ["personal:a", "- (2026-10-01) filler 1"],
+      ["personal:a", "- (2026-10-01) filler 0"],
+      ["personal:a", "- (2026-10-01) Shared claim X"],
+    ],
+  );
 });
 
 test("every scope gets a turn and the 6,000 character budget holds, headings and fences included, as scope counts vary", async () => {

@@ -21,8 +21,9 @@ search shows it as `<provider id>:<fact id>`. A `facts` value that isn't such a 
 `structuredContent.facts`, the answer becomes one row per line, so it should return one
 self-contained fact per line; a `memorable` procedure block stays one row. A claim held by several
 sources (compared ignoring case and surrounding spaces) is shown once, as the first notebook's copy
-when there is one; search ends that line with the other provider copies' addresses, such as
-`(also acme-company:4821)`. Only new rows are added, a row already shown stays counted while its provider keeps
+when there is one, at that copy's own place in its list. The lists holding the other copies skip
+them, so a second copy neither moves the claim up nor costs its list a turn. Search ends that line
+with the other provider copies' addresses, such as `(also acme-company:4821)`. Only new rows are added, a row already shown stays counted while its provider keeps
 answering (at most as many earlier rows as its latest answer showed, and at least one, so a later
 refusal is still noted), and a row that drops out is never announced as removed. When a provider
 that showed rows earlier refuses the member, is withheld from the conversation or is no longer
