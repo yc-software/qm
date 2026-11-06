@@ -130,7 +130,7 @@ async function listPersonaVersions(ctx: ApiCtx): Promise<void> {
     ctx,
     await personas.versions(principalId, ctx.params.id!, {
       ...(before ? { before: Number(before) } : {}),
-      limit: limit ? Number(limit) : VERSION_PAGE,
+      limit: Math.min(limit ? Number(limit) : VERSION_PAGE, 100),
     }),
     null,
   );

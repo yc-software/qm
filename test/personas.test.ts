@@ -339,6 +339,7 @@ test("the versions API pages full versions newest first", async () => {
     assert.deepEqual([rest.more, rest.versions.map((v: { version: number }) => v.version)], [true, [2]]);
     assert.equal((await get("?limit=0"))[0], 400);
     assert.equal((await get("?limit=1e30"))[0], 400);
+    assert.equal((await get("?limit=1000"))[1].versions.length, 3);
     assert.equal((await get("?before=zero"))[0], 400);
   } finally {
     await new Promise<void>((r) => server.close(() => r()));

@@ -100,7 +100,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "GET",
         path: "/v1/personas/:id/versions",
         summary:
-          "?before=&limit= its versions newest first (limit defaults to 20): name, description, instructions, icon, who and when; {versions, more}",
+          "?before=&limit= its versions newest first (limit 20 by default, at most 100): name, description, instructions, icon, who and when; {versions, more}",
       },
       {
         method: "POST",
