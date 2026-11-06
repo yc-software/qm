@@ -20,12 +20,9 @@ import { CARD_STYLE } from "./card-style.ts";
 import { coreAppHostTenant, createAppHandoff } from "./app-handoff.ts";
 import {
   coreEmailTenants,
-  coreSignInTenants,
   coreWorkspace,
-  openChoice,
-  tenantChoiceForms,
+  createTenantChoice,
   verifiedEmail,
-  type ChoiceClaims,
   type SignInTenant,
   type TrustedSignIn,
   type VerifiedSignIn,
@@ -937,7 +934,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   if (pathname === "/auth/host" && method === "GET") return appHandoff.start(req, res, url);
   if (pathname === "/auth/login" && method === "GET") return authLogin(req, res, url);
   if (pathname === "/auth/callback" && method === "GET") return authCallback(req, res, url);
-  if (pathname === "/auth/tenant" && method === "POST") return authTenant(req, res);
+  if (pathname === "/auth/tenant" && method === "POST") return tenantChoice.choose(req, res);
   if (pathname.startsWith("/auth/trusted/") && method === "GET") return trustedAuth(req, res, url);
   if (pathname === "/auth/desktop" || pathname === "/auth/desktop/redeem") return desktopLogin(req, res, url);
   if (pathname === "/auth/invite") return inviteLogin(req, res);
@@ -1546,17 +1543,7 @@ async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL):
       );
       adminCache.delete(identity.sub);
     }
-    const found = await coreSignInTenants(CORE, CORE_SIGNING_SECRET, {
-      email: identity.email,
-      principal: identity.sub,
-    });
-    if (found.shared && !found.tenants.length) return sendHtml(res, 403, noAccessHtml());
-    const who = { sub: identity.sub, name: identity.name };
-    const pin = identity.tenant ?? (await appHandoff.pin(identity.returnTo));
-    if (pin !== undefined && !found.tenants.some(({ id }) => id === pin)) return sendHtml(res, 403, noAccessHtml());
-    if (pin === undefined && found.tenants.length > 1)
-      return chooseTenant(res, { trusted: who }, identity.returnTo, found.tenants);
-    finishTrustedSignIn(res, who, identity.returnTo, pin ?? found.tenants[0]?.id);
+    await tenantChoice.settleTrusted(res, identity);
   } catch (error) {
     console.warn(`[portal] trusted sign-in failed: ${errMessage(error)}`);
     sendHtml(
@@ -1593,16 +1580,21 @@ async function trustedLogin(
   res.end();
 }
 
-function noAccessHtml(): string {
-  return cardPage({
-    title: "No access",
-    heading: "No access to this workspace",
-    msg: "You signed in, but this account isn't a member of this workspace.",
-    icon: LOCK_ICON,
-    actions: `<a class="btn primary" href="/auth/login">Sign in with a different account</a>`,
-    help: "Ask an admin of this workspace to add you.",
-  });
-}
+const tenantChoice = createTenantChoice({
+  core: CORE,
+  signingSecret: CORE_SIGNING_SECRET,
+  key: tmpKey,
+  ttlS: TMP_TTL_S,
+  secureCookies: SECURE_COOKIES,
+  lockIcon: LOCK_ICON,
+  sameOrigin: sameOriginRequest,
+  pin: (returnTo) => appHandoff.pin(returnTo),
+  cardPage,
+  signInErrorHtml,
+  sendHtml,
+  finishSignIn,
+  finishTrustedSignIn,
+});
 
 function setAuthenticatedSession(
   res: ServerResponse,
@@ -1712,52 +1704,7 @@ async function authCallback(req: IncomingMessage, res: ServerResponse, url: URL)
   } catch (e) {
     return fail(errMessage(e, "sign-in failed"));
   }
-  const pin = await appHandoff.pin(tmp.returnTo);
-  if (pin !== undefined && !tenants.some(({ id }) => id === pin)) return sendHtml(res, 403, noAccessHtml());
-  if (pin === undefined && tenants.length > 1) return chooseTenant(res, { signIn }, tmp.returnTo, tenants);
-  return finishSignIn(res, signIn, tmp.returnTo, pin ?? tenants[0]?.id);
-}
-
-function chooseTenant(
-  res: ServerResponse,
-  who: Pick<ChoiceClaims, "signIn" | "trusted">,
-  returnTo: string,
-  tenants: SignInTenant[],
-): void {
-  const exp = Math.floor(Date.now() / 1000) + TMP_TTL_S;
-  const choice = { k: "choice", ...who, returnTo, tenants: tenants.map(({ id }) => id), exp };
-  setSession(res, [
-    clearCookie("portal_oidc_tmp", "/auth", SECURE_COOKIES),
-    setCookie("portal_tenant_choice", seal(choice, tmpKey), {
-      path: "/auth",
-      maxAge: TMP_TTL_S,
-      secure: SECURE_COOKIES,
-    }),
-  ]);
-  sendHtml(
-    res,
-    200,
-    cardPage({
-      title: "Choose a workspace",
-      heading: "Choose a workspace",
-      icon: LOCK_ICON,
-      msg: "Your account belongs to more than one workspace. Pick the one to sign in to.",
-      actions: tenantChoiceForms(tenants, escapeHtml),
-      help: "To switch later, sign out and sign in again.",
-    }),
-  );
-}
-
-async function authTenant(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  if (!sameOriginRequest(req)) return json(res, 403, { error: "forbidden" });
-  const choice = openChoice(readCookie(req.headers.cookie, "portal_tenant_choice"), tmpKey, Date.now());
-  const tenant = new URLSearchParams(await readBody(req, 4096)).get("tenant") ?? "";
-  if (!choice || !choice.tenants.includes(tenant) || (!choice.signIn && !choice.trusted)) {
-    setSession(res, [clearCookie("portal_tenant_choice", "/auth", SECURE_COOKIES)]);
-    return sendHtml(res, 400, signInErrorHtml("workspace choice expired, please sign in again"));
-  }
-  if (choice.trusted) return finishTrustedSignIn(res, choice.trusted, choice.returnTo, tenant);
-  return finishSignIn(res, choice.signIn!, choice.returnTo, tenant);
+  return tenantChoice.settle(res, { signIn }, tmp.returnTo, tenants, await appHandoff.pin(tmp.returnTo));
 }
 
 function finishTrustedSignIn(res: ServerResponse, who: TrustedSignIn, returnTo: string, tenant?: string): void {
