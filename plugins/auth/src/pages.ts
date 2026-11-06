@@ -30,6 +30,7 @@ export const CONFIRM_PAGE_CSP = PAGE_CSP.replace(
 const STYLE = `${HARBOUR_STYLE}
 <style>
   .card form{ display:grid; gap:10px; margin:0; }
+  .card h1 + .actions{ margin-top:16px; }
   .card label{ font-size:11px; font-weight:600; color:var(--muted); }
   .card input[type=email],.card input[type=password]{ width:100%; padding:11px 14px; font:inherit; font-size:12px;
     color:var(--ink); background:#fdfdfb; border:1px solid var(--line); border-radius:7px; }
@@ -110,7 +111,6 @@ export function signInPage(o: {
       title: "Sign in",
       brandName: o.brandName,
       heading: `Sign in to ${wordmark(o.brandName)}`,
-      msg: `Use your ${o.trustedSignInLabel} account to continue.`,
       body: `<div class="actions">${trustedButton}</div>`,
     });
   }

@@ -225,7 +225,7 @@ test("a remembered browser from a password sign-in silently reauthorizes like an
   assert.equal(new URL(again.headers.get("location")!).searchParams.get("state"), "again");
 });
 
-test("with email sign-in off, a trusted provider gets the product name, one line and its button, with no icon", async (t) => {
+test("with email sign-in off, a trusted provider gets only the product-name heading and its button, with no icon", async (t) => {
   const trustedOnly = await startHarness({ env: { AUTH_EMAIL_SIGN_IN: "off" }, trustedSignInLabel: "Acme SSO" });
   t.after(() => trustedOnly.close());
   const page = await fetch(`${trustedOnly.base}/authorize?${authorizeQuery({ code_challenge: pkcePair().challenge })}`);
@@ -233,12 +233,11 @@ test("with email sign-in off, a trusted provider gets the product name, one line
   const html = await page.text();
   const card = html.slice(html.indexOf('<section class="card"'), html.indexOf("</section>"));
   assert.match(card, /<h1 id="t">Sign in to QM<\/h1>/);
-  assert.match(card, /<p class="msg">Use your Acme SSO account to continue\.<\/p>/);
   assert.match(
     card,
     /<div class="actions"><a class="btn" href="\/auth\/trusted\/login">Sign in with Acme SSO<\/a><\/div>/,
   );
-  assert.doesNotMatch(card, /class="icon|<p class="help">|divider|<form|<input|Email/);
+  assert.doesNotMatch(card, /class="icon|<p class="msg">|<p class="help">|divider|<form|<input|Email/);
 
   const refused = await fetch(
     `${trustedOnly.base}/authorize`,
