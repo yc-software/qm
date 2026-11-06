@@ -1,4 +1,5 @@
 import type { Me } from "./shell-state";
+import { reportHandledError } from "./browser-errors";
 import type { PostHog, PostHogConfig } from "posthog-js";
 
 let client: PostHog | undefined;
@@ -49,10 +50,11 @@ export async function initializeAnalytics(me: Me, view = "chats"): Promise<void>
   lastCapturedView = undefined;
   if (!me.analytics?.apiKey || me.impersonatedBy) return;
   try {
-    const [{ default: posthog }] = await Promise.all([
-      import("posthog-js"),
-      import("posthog-js/dist/posthog-recorder"),
-    ]);
+    const recorder = import("posthog-js/dist/posthog-recorder").catch((error: unknown) =>
+      reportHandledError("analytics: session recorder load", error),
+    );
+    const { default: posthog } = await import("posthog-js");
+    await recorder;
     if (current !== generation) return;
     const options: Partial<PostHogConfig> = {
       api_host: me.analytics.host,
@@ -93,7 +95,8 @@ export async function initializeAnalytics(me: Me, view = "chats"): Promise<void>
     posthog.register({ company_id: me.org, surface: "web" });
     client = posthog;
     capturePageview(currentView);
-  } catch {
+  } catch (error) {
+    reportHandledError("analytics: initialization", error);
     client = undefined;
   }
 }
