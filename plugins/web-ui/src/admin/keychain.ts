@@ -2,6 +2,7 @@ import { html, render } from "lit";
 import { formatMessageTime } from "../message-time.ts";
 import type { AdminPage } from "./sections.ts";
 import { pageHeader, card, table, stacked, subline, matches } from "./shared.ts";
+import { userHref } from "./user-detail.ts";
 
 export function keychain(page: AdminPage, d: any) {
   const tabs = [
@@ -47,7 +48,7 @@ export function keychain(page: AdminPage, d: any) {
         <div class="list-root">
           ${card(
             "People",
-            "Everyone known through sessions, admin grants, keychain records, grants, or asks.",
+            "Everyone on the Users roster, plus anyone named in admin grants, keychain records, grants, or asks.",
             table(
               ["Person", "Keychain", "Active grants", "Pending asks"],
               rows(
@@ -55,7 +56,7 @@ export function keychain(page: AdminPage, d: any) {
                 (p) => [p.principalId, p.displayName || ""],
                 (p) => [
                   {
-                    node: html`<a href=${page.href("user", { principal: p.principalId })}
+                    node: html`<a href=${userHref(page, p)}
                       >${stacked(p.displayName || p.principalId, p.displayName ? p.principalId : "")}</a
                     >`,
                     cls: "mono",

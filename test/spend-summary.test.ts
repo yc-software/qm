@@ -1,9 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { installPrincipalLinks } from "../src/directory/person.ts";
 import { cacheHitRatio } from "../src/api/routes/admin/spend.ts";
 import type { SpendRow } from "../src/sessions/session-store.ts";
-import { spendCsv, spendExportRows, summarizeSpend, type SpendReport } from "../src/api/routes/admin/spend.ts";
+import {
+  spendCsv,
+  spendExportRows,
+  summarizeSpend,
+  type PersonOf,
+  type SpendReport,
+} from "../src/api/routes/admin/spend.ts";
 
 const DAY = 86_400_000;
 const MON = 20353;
@@ -87,6 +92,12 @@ const ROWS: SpendRow[] = [
   }),
 ];
 
+const asIs: PersonOf = (ref) => ({ userId: null, principalId: ref });
+const linked =
+  (alias: string, principalId: string, userId: string): PersonOf =>
+  (ref) =>
+    ref === alias || ref === principalId ? { userId, principalId } : asIs(ref);
+
 const summarize = (rows: SpendRow[], over: Partial<Parameters<typeof summarizeSpend>[1]> = {}): SpendReport =>
   summarizeSpend(rows, {
     from: MON * DAY,
@@ -94,6 +105,7 @@ const summarize = (rows: SpendRow[], over: Partial<Parameters<typeof summarizeSp
     bucket: "day",
     label: () => "",
     cron: () => null,
+    person: asIs,
     ...over,
   });
 
@@ -209,7 +221,7 @@ test("summarizeSpend: the series is sparse, UTC-keyed, and restricted to [from, 
 
   const narrowed = summarizeSpend(
     ROWS.filter((r) => r.day >= TUE && r.day < WED),
-    { from: TUE * DAY, to: WED * DAY, bucket: "day", label: () => "", cron: () => null },
+    { from: TUE * DAY, to: WED * DAY, bucket: "day", label: () => "", cron: () => null, person: asIs },
   );
   assert.deepEqual(narrowed.window, { from: "2025-09-23", to: "2025-09-24", bucket: "day" });
   assert.deepEqual(
@@ -392,9 +404,8 @@ for (const bucket of ["day", "week"] as const) {
 }
 
 for (const bucket of ["day", "week"] as const) {
-  test(`summarizeSpend: ${bucket} person series merges aliases and conserves shared spend`, (t) => {
-    installPrincipalLinks({ canonical: (id) => (id === "slack-alice" ? "alice" : undefined), aliases: () => [] });
-    t.after(() => installPrincipalLinks(null));
+  test(`summarizeSpend: ${bucket} person series merges a user's sign-ins and conserves shared spend`, () => {
+    const person = linked("slack-alice", "alice", "user-alice");
     const rows = [
       row({ day: MON, scopeId: "personal:alice", origin: "conversation", costUsd: 1 }),
       row({ day: MON, scopeId: "personal:slack-alice", origin: "cron", costUsd: 2 }),
@@ -405,7 +416,15 @@ for (const bucket of ["day", "week"] as const) {
       row({ day: MON + 7, scopeId: "org:default", origin: "webhook", costUsd: 64 }),
       row({ day: MON + 7, scopeId: "personal:free", origin: "conversation", costUsd: 0 }),
     ];
-    const report = summarize(rows, { bucket, to: (MON + 8) * DAY });
+    const report = summarize(rows, { bucket, to: (MON + 8) * DAY, person });
+    assert.deepEqual(
+      report.people.map((p) => [p.principalId, p.userId]),
+      [
+        ["bob", null],
+        ["alice", "user-alice"],
+        ["free", null],
+      ],
+    );
     assert.deepEqual(report.series[0]!.people, [
       { principalId: "alice", costUsd: bucket === "day" ? 3 : 7 },
       { principalId: null, costUsd: bucket === "day" ? 8 : 24 },
@@ -436,13 +455,12 @@ for (const bucket of ["day", "week"] as const) {
       [...totals.values()].reduce((sum, cost) => sum + cost, 0),
       report.org.costUsd,
     );
-    assert.deepEqual(summarize(rows.toReversed(), { bucket, to: (MON + 8) * DAY }).series, report.series);
+    assert.deepEqual(summarize(rows.toReversed(), { bucket, to: (MON + 8) * DAY, person }).series, report.series);
   });
 }
 
-test("spendExportRows keeps the ledger grain, merging principal aliases into one person per day, source and model", (t) => {
-  installPrincipalLinks({ canonical: (id) => (id === "slack-alice" ? "alice" : undefined), aliases: () => [] });
-  t.after(() => installPrincipalLinks(null));
+test("spendExportRows keeps the ledger grain, merging a user's sign-ins into one person per day, source and model", () => {
+  const person = linked("slack-alice", "alice", "user-alice");
   const labels = new Map([
     ["personal:slack-alice", "Alice"],
     ["personal:alice", "alice@example.com"],
@@ -458,7 +476,7 @@ test("spendExportRows keeps the ledger grain, merging principal aliases into one
     row({ day: MON, scopeId: "personal:alice", origin: "loop", model: "m1", costUsd: 64 }),
     row({ day: MON, scopeId: "personal:alice", origin: "swarm", model: "m1", costUsd: 128 }),
   ];
-  const rows = spendExportRows(ledger, (id) => labels.get(id) ?? "");
+  const rows = spendExportRows(ledger, (id) => labels.get(id) ?? "", person);
   assert.deepEqual(
     rows.map((r) => [r.day, r.scopeId, r.kind, r.principalId, r.displayName, r.source, r.model, r.costUsd, r.calls]),
     [
@@ -473,7 +491,7 @@ test("spendExportRows keeps the ledger grain, merging principal aliases into one
     "each row names its exact source, live first, then background kinds in report order",
   );
   assert.equal(rows[1]!.input, 8);
-  const report = summarize(ledger, { bucket: "day", to: (TUE + 1) * DAY, label: (id) => labels.get(id) ?? "" });
+  const report = summarize(ledger, { bucket: "day", to: (TUE + 1) * DAY, label: (id) => labels.get(id) ?? "", person });
   assert.equal(
     rows.reduce((sum, r) => sum + r.costUsd, 0),
     report.org.costUsd,
@@ -490,9 +508,7 @@ test("spendExportRows keeps the ledger grain, merging principal aliases into one
   );
 });
 
-test("summarizeSpend: crons group each cron's spend under the scope it ran in, and deleted crons keep theirs", (t) => {
-  installPrincipalLinks({ canonical: (id) => (id === "slack-bob" ? "bob" : undefined), aliases: () => [] });
-  t.after(() => installPrincipalLinks(null));
+test("summarizeSpend: crons group each cron's spend under the scope it ran in, and deleted crons keep theirs", () => {
   const nightly = {
     id: "nightly",
     title: "Nightly report",
@@ -517,6 +533,7 @@ test("summarizeSpend: crons group each cron's spend under the scope it ran in, a
   const report = summarize(rows, {
     cron: (id) => infos.get(id) ?? null,
     label: (id) => (id === "channel:C1" ? "#general" : ""),
+    person: linked("slack-bob", "bob", "user-bob"),
   });
   assert.deepEqual(
     report.crons.map((c) => [c.cronId, c.scopeId, c.scopeName, c.info?.title ?? null, c.costUsd, c.calls]),
@@ -571,6 +588,7 @@ test("spendExportRows keeps two crons in the same scope, day and model apart", (
       row({ day: MON, scopeId: "personal:alice", origin: "conversation", model: "m1", costUsd: 4 }),
     ],
     () => "",
+    asIs,
   );
   assert.deepEqual(
     rows.map((r) => [r.source, r.cronId, r.costUsd]),

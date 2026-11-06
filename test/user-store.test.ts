@@ -5,6 +5,8 @@ import { foldPrincipalId, installPrincipalLinks } from "../src/directory/person.
 import { createPrincipalLinkService } from "../src/identity/principal-links.ts";
 import { createPostgresUserStore, fold, type UserStore } from "../src/identity/user-store.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { scopeId } from "../src/types.ts";
 import { testAdvisoryLock, testDatabaseUrl } from "./support/test-database.ts";
 
 const url = testDatabaseUrl();
@@ -124,4 +126,83 @@ test("the SQL fold matches foldPrincipalId", async () => {
     const [row] = await db.q(`SELECT ${fold("$1::text")} AS folded`, [id]);
     assert.equal(row!.folded, foldPrincipalId(id), id);
   }
+});
+
+test("activity is one row per user across every linked sign-in, counting only real user turns", async () => {
+  const sessions = createPostgresSessionStore(url);
+  const roster = store();
+  const pat = unique("pat");
+  const slack = `U-${randomUUID().slice(0, 8)}`;
+  const quiet = `U-${randomUUID().slice(0, 8)}`;
+  const stranger = `U-${randomUUID().slice(0, 8)}`;
+  await roster.record({ id: pat, source: "turn", at: 1 });
+  await roster.record({ id: slack, source: "turn", at: 2 });
+  await roster.link({ principalId: slack, canonicalId: pat, evidence: "qa", linkedBy: "", createdAt: Date.now() });
+  await roster.record({ id: quiet, source: "turn", at: 3 });
+  await roster.markApps([quiet]);
+
+  const dm = await sessions.getOrCreateByThread(`dm:${randomUUID()}`, "dm", scopeId("personal", pat));
+  const channel = await sessions.getOrCreateByThread(`ch:${randomUUID()}`, "channel", scopeId("channel", "C1"));
+  await sessions.addParticipant(dm.id, pat.toUpperCase());
+  await sessions.addParticipant(channel.id, pat);
+  await sessions.addParticipant(channel.id, slack);
+  await sessions.addParticipant(channel.id, quiet);
+  const first = await sessions.append({ sessionId: dm.id }, { kind: "UserMessage", text: "hi" });
+  await sessions.append({ sessionId: dm.id }, { kind: "AgentMessage", text: "hello" });
+  await sessions.append({ sessionId: channel.id }, { kind: "UserMessage", text: "chatter", body: { overheard: true } });
+  await sessions.addParticipant(channel.id, stranger);
+  const last = await sessions.append({ sessionId: channel.id }, { kind: "SteeringMessage", text: "also" });
+  await sessions.removeParticipant(channel.id, quiet);
+
+  const rows = await roster.activity();
+  const user = (await roster.get(pat))!;
+  const mine = rows.filter((r) => r.principalId === pat);
+  assert.equal(mine.length, 1, "the email and Slack sign-ins are one row");
+  assert.deepEqual(
+    { ...mine[0]!, days: undefined },
+    {
+      userId: user.id,
+      principalId: pat,
+      kind: "person",
+      sessions: 2,
+      turns: 2,
+      lastSeenAt: last.createdAt,
+      days: undefined,
+    },
+    "both sessions once; the channel's turn is credited once, not once per sign-in; agent and overheard excluded",
+  );
+  assert.deepEqual(mine[0]!.days, [
+    ...new Set([first.createdAt, last.createdAt].map((t) => Math.floor(t / 86_400_000))),
+  ]);
+  assert.equal(
+    rows.some((r) => r.principalId === quiet),
+    false,
+    "a participant who left is not credited",
+  );
+  assert.deepEqual(
+    rows.filter((r) => r.principalId === stranger).map((r) => [r.userId, r.kind, r.sessions, r.turns]),
+    [[null, "person", 1, 1]],
+    "a participant with no user row still counts, under their own sign-in",
+  );
+});
+
+test("resolve and get find a user by any sign-in or by its id, with every sign-in listed primary first", async () => {
+  const roster = store();
+  const pat = unique("pat");
+  const slack = `U-${randomUUID().slice(0, 8)}`;
+  await roster.record({ id: pat, source: "turn", at: 1 });
+  await roster.link({ principalId: slack, canonicalId: pat, evidence: "qa", linkedBy: "", createdAt: Date.now() });
+  const user = (await roster.get(pat))!;
+  assert.deepEqual(user.aliases, [pat, slack]);
+  assert.deepEqual(await roster.get(user.id), user);
+  assert.deepEqual(await roster.get(` ${pat.toUpperCase()} `), user);
+  const resolved = await roster.resolve([slack, pat.toUpperCase(), "nobody@example.com", ""]);
+  assert.deepEqual(
+    [...resolved].map(([alias, u]) => [alias, u.id]).sort(),
+    [
+      [pat.toUpperCase(), user.id],
+      [slack, user.id],
+    ].sort(),
+  );
+  assert.equal(await roster.get(randomUUID()), null);
 });
