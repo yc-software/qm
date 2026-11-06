@@ -769,7 +769,8 @@ function sessionCookieSet(value: string, sub: string, domainWide = true): string
 
 function setSession(res: ServerResponse, headers: string[]): void {
   const earlier = res.getHeader("set-cookie");
-  res.setHeader("set-cookie", [...(Array.isArray(earlier) ? earlier : earlier ? [String(earlier)] : []), ...headers]);
+  const prior = earlier ? [earlier].flat().map(String) : [];
+  res.setHeader("set-cookie", [...prior, ...headers]);
 }
 
 const playgroundClaims = PLAYGROUND ? coreClaimStore(CORE, CORE_SIGNING_SECRET, "portal") : null;

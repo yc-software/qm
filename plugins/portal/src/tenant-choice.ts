@@ -218,12 +218,9 @@ export function workspacePicker(
     if (show) shown++;
     return button(t, !show);
   });
-  const note =
-    matched === 0
-      ? "No workspace matches that search."
-      : matched > shown
-        ? `Showing ${shown} of ${matched}. Type to narrow the list.`
-        : "";
+  let note = "";
+  if (matched === 0) note = "No workspace matches that search.";
+  else if (matched > shown) note = `Showing ${shown} of ${matched}. Type to narrow the list.`;
   const search =
     `<form method="get" action="/auth/tenant" role="search">` +
     `<input id="workspace-search" class="search" name="q" type="search" value="${escapeHtml(o.query ?? "")}" ` +
