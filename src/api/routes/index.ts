@@ -87,6 +87,19 @@ export const rawRoutes: ReadonlyArray<Route<BaseCtx>> = [
   ...loopIngressRawRoutes,
 ];
 
+function closedToNotebookOnly(routes: ReadonlyArray<Route<ApiCtx>>): Route<ApiCtx>[] {
+  return routes.map((route) => ({
+    ...route,
+    handle: (ctx) =>
+      ctx.method !== "GET" && ctx.capability?.memory?.notebookOnly
+        ? sendJson(ctx.res, 403, {
+            error: "forbidden",
+            message: "a notebook-only turn can't create or change crons, loops or webhooks",
+          })
+        : route.handle(ctx),
+  }));
+}
+
 export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...browserModelRoutes,
   ...sandboxModelRoutes,
@@ -111,12 +124,8 @@ export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...fileUploadRoutes,
   ...projectRoutes,
   ...contextPolicyRoutes,
-  ...cronRoutes,
-  ...loopItemRoutes,
-  ...loopRoutes,
   ...reachRoutes,
-  ...webhookRoutes,
-  ...loopIngressRoutes,
+  ...closedToNotebookOnly([...cronRoutes, ...loopItemRoutes, ...loopRoutes, ...webhookRoutes, ...loopIngressRoutes]),
   ...directoryRoutes,
   ...contextRoutes,
   ...pinRoutes,

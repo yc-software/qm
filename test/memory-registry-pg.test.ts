@@ -23,6 +23,7 @@ import {
 } from "../src/memory/registry.ts";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import type { Agent } from "../src/agent/agent.ts";
+import { createAgentTools } from "../src/agent/agent-tools.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { buildApp } from "./support/build-app.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
@@ -750,13 +751,17 @@ test("only Alice's own conversation writes to her brain; admin, onboarding and s
 
 test("the nightly tidy changes the notebook alone, through its tools and its agent API token, with a brain bound", async (t) => {
   const mock = createMockAgent();
-  const seen: { prompt: string; search: string[] } = { prompt: "", search: [] };
+  const seen: { prompt: string; search: string[]; tools: string[] } = { prompt: "", search: [], tools: [] };
   let ids: Record<string, string> = {};
   const agent: Agent = {
     ...mock,
     async runTurn(input) {
       if (!input.input.includes("Stored cron task:")) return mock.runTurn(input);
       seen.prompt = [input.systemPrompt, input.environment, input.input].join("\n");
+      seen.tools = createAgentTools(
+        { current: input.tools },
+        { controlTools: true, ...(input.memoryNotebookOnly ? { memoryNotebookOnly: true } : {}) },
+      ).map(({ name }) => name);
       seen.search = (await input.tools.memorySearch("Alice"))?.hits ?? [];
       await input.tools.memoryEdit([{ id: ids.tea!, text: "Alice drinks tea every morning." }]);
       await input.tools.memoryDelete([ids.daily!, ids.desk!]);
@@ -811,6 +816,16 @@ test("the nightly tidy changes the notebook alone, through its tools and its age
   assert.doesNotMatch(searched.text, /BLACKBEARD-42/);
   assert.equal((await agentApi("POST", "/v1/memory/facts", { facts: ["Alice parks in bay 7."] })).status, 200);
   assert.ok((await notebook(built)).includes("Alice parks in bay 7."));
+  assert.ok(seen.tools.includes("memory"));
+  assert.deepEqual(
+    seen.tools.filter((name) => ["cron", "webhook", "goal"].includes(name)),
+    [],
+  );
+  for (const path of ["/v1/crons", "/v1/loops", "/v1/webhooks"]) {
+    const refused = await agentApi("POST", path, {});
+    assert.equal(refused.status, 403, path);
+    assert.match(refused.text, /notebook-only turn/, path);
+  }
   assert.equal(brain.calls.length, before);
 });
 

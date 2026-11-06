@@ -91,6 +91,7 @@ export interface AgentToolsOptions {
   controlTools?: boolean;
   sandboxResources?: boolean;
   readOnly?: boolean;
+  memoryNotebookOnly?: boolean;
   surfaceTools?: boolean;
   delegateWork?: boolean;
   surfaceName?: string;
@@ -100,7 +101,7 @@ export interface AgentToolsOptions {
 
 export type CoreToolOptions = Omit<
   AgentToolsOptions,
-  "readOnly" | "surfaceTools" | "surfaceName" | "surfacePrompt" | "delegateWork" | "clientTools"
+  "readOnly" | "memoryNotebookOnly" | "surfaceTools" | "surfaceName" | "surfacePrompt" | "delegateWork" | "clientTools"
 >;
 
 export function coreToolOptions(config: Config): CoreToolOptions {
@@ -116,6 +117,7 @@ export function coreToolOptions(config: Config): CoreToolOptions {
 }
 
 const READ_ONLY_TOOL_NAMES = new Set(["memory", "history", "finish_silently", "runtime", "sessions", "subagents"]);
+const SCHEDULING_TOOL_NAMES = new Set(["cron", "webhook", "goal"]);
 
 export function endedOnPurpose(ref: {
   runtimeHandoff?: unknown;
@@ -196,9 +198,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   ];
   const { inline, inlineTools, connectorTools } = mcpTools(kit, new Set(tools.map((t) => t.name)));
   tools.push(...inlineTools, ...connectorTools);
-  const active = opts?.readOnly
-    ? tools.filter((t) => READ_ONLY_TOOL_NAMES.has(t.name) || inline.has(t.name) || connectorTools.includes(t))
-    : tools;
+  const active = tools.filter((t) =>
+    opts?.readOnly
+      ? READ_ONLY_TOOL_NAMES.has(t.name) || inline.has(t.name) || connectorTools.includes(t)
+      : !(opts?.memoryNotebookOnly && SCHEDULING_TOOL_NAMES.has(t.name)),
+  );
   const clientNames = new Set(clientTools.map((tool) => tool.name));
   return active.map((tool) => {
     const wrapped = withRuntimeBarrier(

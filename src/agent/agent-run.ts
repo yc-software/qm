@@ -793,6 +793,7 @@ export function createAgent(opts?: AgentOptions): Agent {
       ...(turn.surfacePrompt ? { surfacePrompt: turn.surfacePrompt } : {}),
       ...(turn.clientTools?.length ? { clientTools: turn.clientTools } : {}),
       ...(turn.readOnly ? { readOnly: true } : {}),
+      ...(turn.memoryNotebookOnly ? { memoryNotebookOnly: true } : {}),
       ...(opts?.execTimeoutMs !== undefined ? { execTimeoutMs: opts.execTimeoutMs } : {}),
       ...(opts?.execTimeoutCeilingMs !== undefined ? { execTimeoutCeilingMs: opts.execTimeoutCeilingMs } : {}),
       ...(opts?.backgroundJobTtlMs !== undefined ? { backgroundJobTtlMs: opts.backgroundJobTtlMs } : {}),
