@@ -54,7 +54,6 @@ Object.assign(process.env, {
   CORE_ORG_ID: browser.org,
   CORE_API_URL: coreUrl,
   PORTAL_LOCAL_AUTH_BYPASS: "0",
-  PORTAL_PLAYGROUND: "0",
 });
 const { server } = await import("../src/index.ts");
 await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
