@@ -1,10 +1,12 @@
 import { validateHeaderName, validateHeaderValue } from "node:http";
 import { HOP_BY_HOP } from "../util/http-proxy.ts";
+import type { AttestAudience } from "../directory/person.ts";
 
 export interface CredentialInjection {
   header?: string;
   scheme?: string;
   actor?: boolean;
+  audience?: AttestAudience;
   headers?: Record<string, string>;
 }
 
@@ -62,6 +64,10 @@ export function credentialInjectionError(value: unknown): string | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return "injection must be an object";
   const injection = value as CredentialInjection;
   if (injection.actor !== undefined && typeof injection.actor !== "boolean") return "injection.actor must be boolean";
+  if (injection.audience !== undefined && injection.audience !== "personal" && injection.audience !== "any")
+    return "injection.audience must be personal or any";
+  if (injection.audience === "any" && injection.actor !== true)
+    return "injection.audience any requires injection.actor";
   if (
     injection.header !== undefined &&
     (typeof injection.header !== "string" || headerError(() => validateHeaderName(injection.header!)))
