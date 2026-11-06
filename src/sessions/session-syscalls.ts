@@ -171,6 +171,7 @@ export function sessionContextOf(input: OrchestratorInput): SpawnMeta {
     ...(input.deliveryWebhook ? { deliveryWebhook: input.deliveryWebhook } : {}),
     ...(input.timezone ? { timezone: input.timezone } : {}),
     ...(input.readOnly ? { readOnly: true } : {}),
+    ...(input.memoryNotebookOnly ? { memoryNotebookOnly: true } : {}),
     ...(input.model ? { model: input.model } : {}),
     ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
     ...(input.fastMode !== undefined ? { fastMode: input.fastMode } : {}),
@@ -288,6 +289,7 @@ export interface SessionSyscallBinding {
     | "deliveryWebhook"
     | "timezone"
     | "readOnly"
+    | "memoryNotebookOnly"
     | "scopeVersion"
     | "sessionParticipantIds"
     | "surfaceOrigin"
@@ -431,6 +433,7 @@ function childRunRequest(child: Session, meta: SpawnMeta, text: string, displayT
     displayText,
     envelopeWrapped: true,
     ...(meta.readOnly ? { readOnly: true } : {}),
+    ...(meta.memoryNotebookOnly ? { memoryNotebookOnly: true } : {}),
     ...(meta.model ? { model: meta.model } : {}),
     ...(meta.thinkingLevel ? { thinkingLevel: meta.thinkingLevel } : {}),
     ...(meta.fastMode !== undefined ? { fastMode: meta.fastMode } : {}),
@@ -920,6 +923,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   origin: caller.origin,
                   unattendedGrants: caller.unattendedGrants,
                   readOnly: privateMessage || caller.readOnly || meta.readOnly || target.spawnMeta?.readOnly,
+                  memoryNotebookOnly: caller.memoryNotebookOnly || meta.memoryNotebookOnly,
                 },
                 "",
                 "",

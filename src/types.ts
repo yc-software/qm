@@ -121,6 +121,7 @@ export interface SpawnMeta {
   deliveryWebhook?: DeliveryWebhook;
   timezone?: string;
   readOnly?: boolean;
+  memoryNotebookOnly?: boolean;
   model?: string;
   thinkingLevel?: string;
   fastMode?: boolean;

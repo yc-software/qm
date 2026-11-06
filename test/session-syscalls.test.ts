@@ -1601,6 +1601,40 @@ test("child runs retain the managed roster and read-only floor", async () => {
   assert.deepEqual(run!.request.sessionParticipantIds, [actor.id]);
 });
 
+test("a notebook-only turn's subagent stays notebook-only, and so do later turns woken into it", async () => {
+  const r = await rig();
+  const deps = {
+    mailbox: r.mailbox,
+    sessions: r.sessions,
+    runs: r.runs,
+    signals: r.signals,
+    steerRun: r.steerRun,
+    advisoryLock: r.advisoryLock,
+    maxAttempts: 3,
+  };
+  const tidy = createSessionSyscalls(deps).forTurn({
+    session: r.room,
+    scopeId: scope,
+    request: { surface: "cron", actor, conversation, memoryNotebookOnly: true },
+  });
+  const out = await tidy.open({ task: "check the notebook" });
+  assert.ok(out.ok);
+  const child = await freshSession(r.sessions, out.sessionId);
+  assert.equal(child.spawnMeta?.memoryNotebookOnly, true);
+  const [run] = await r.runs.inFlightForThread(child.threadRef);
+  assert.equal(run!.request.memoryNotebookOnly, true);
+  const claimed = await r.runs.claimById(run!.id, "worker", 60_000);
+  await r.runs.complete(run!.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+  const conversationTurn = createSessionSyscalls(deps).forTurn({
+    session: r.room,
+    scopeId: scope,
+    request: { surface: "web", actor, conversation },
+  });
+  const queued = await conversationTurn.write({ wake: true, target: child.id, text: "check again" });
+  assert.ok(queued.ok);
+  assert.equal((await r.runs.inFlightForThread(child.threadRef))[0]!.request.memoryNotebookOnly, true);
+});
+
 test("terminal children remain recoverable until their return is acknowledged", async () => {
   const r = await rig();
   const out = await r.syscallsFor(r.room).open({ task: "finish" });
