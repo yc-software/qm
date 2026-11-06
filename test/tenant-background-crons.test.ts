@@ -124,6 +124,40 @@ withoutTenant(() =>
       await db.owner.q("DELETE FROM cron_fires");
     });
 
+    it("re-drives each tenant's handed-off fires under that tenant", async () => {
+      const { crons, deps } = cronWorld();
+      const ids = await createCrons(crons, "redrive");
+      const [a, b] = db.tenants;
+      await createScheduler(deps).tick(5000);
+      for (const [action, tenant] of Object.entries(names()))
+        await withTenant(tenant, () => crons.update(ids[action]!, { schedule: { everyMs: 3_600_000 } }));
+      const t = Date.now();
+      await db.owner.q("UPDATE cron_fires SET status = 'running', ended_at = NULL, fired_at = $1", [t - 120_000]);
+      await db.owner.q("DELETE FROM idempotency");
+      const handedOff = await db.owner.q("SELECT fire_key, tenant_id::text AS tenant_id FROM cron_fires");
+      const redriven: Array<[string | undefined, string | undefined]> = [];
+      const scheduler = createScheduler({
+        ...deps,
+        idempotency: createIdempotencyStore(maps.map("idempotency")),
+        run: async (req) => {
+          redriven.push([req.idempotencyKey, boundTenant()]);
+          return { status: "ok", reply: "OUT" };
+        },
+      });
+      try {
+        await scheduler.tick(t);
+        await scheduler.drained();
+        assert.deepEqual(
+          redriven.filter(([key]) => handedOff.some((row) => row.fire_key === key)).sort(),
+          handedOff.map((row) => [row.fire_key, row.tenant_id]).sort(),
+        );
+        assert.deepEqual(handedOff.map((row) => row.tenant_id).sort(), [a, b].sort());
+      } finally {
+        await db.owner.q("DELETE FROM crons");
+        await db.owner.q("DELETE FROM cron_fires");
+      }
+    });
+
     it("queues each tenant's next slot with its tenant and fires a queued job under that tenant", async () => {
       const { crons, seen, deps } = cronWorld();
       const ids = await createCrons(crons, "queued");
