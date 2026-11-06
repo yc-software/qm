@@ -103,7 +103,7 @@ test("produces a deterministic unsigned evidence envelope through a replaceable 
   );
   assert.equal("token" in first, false);
   assert.equal("signature" in first, false);
-  assert.equal(verifySpreadsheetWorkerEnvelope(artifact, binding(), first), first);
+  assert.deepEqual(verifySpreadsheetWorkerEnvelope(artifact, binding(), first), first);
 });
 
 test("rejects artifact, check and generation substitution", async () => {
@@ -179,4 +179,47 @@ test("worker fails closed on malformed engine output", async () => {
     createDeterministicSpreadsheetWorker(engine(malformed)).run({ artifactBytes: artifact, binding: binding() }),
     /finite|evidence/i,
   );
+});
+
+test("worker output does not alias mutable engine results", async () => {
+  const engineResults = structuredClone(results);
+  const envelope = await createDeterministicSpreadsheetWorker(engine(engineResults)).run({
+    artifactBytes: artifact,
+    binding: binding(),
+  });
+  const engineFormula = engineResults[0];
+  assert.equal(engineFormula?.checkId, "formula.recalculate");
+  if (engineFormula?.checkId !== "formula.recalculate") throw new Error("Expected formula result");
+  engineFormula.evidence.cells[0]!.calculatedValue = 999;
+  const returnedFormula = envelope.results[0];
+  assert.equal(returnedFormula?.checkId, "formula.recalculate");
+  if (returnedFormula?.checkId !== "formula.recalculate") throw new Error("Expected formula result");
+  assert.equal(returnedFormula.evidence.cells[0]!.calculatedValue, 42);
+  assert(Object.isFrozen(envelope));
+  assert(Object.isFrozen(envelope.results));
+  assert(Object.isFrozen(returnedFormula));
+  assert(Object.isFrozen(returnedFormula.evidence));
+  assert(Object.isFrozen(returnedFormula.evidence.cells));
+  assert(Object.isFrozen(returnedFormula.evidence.cells[0]!));
+});
+
+test("Core verification returns a deeply frozen canonical copy without caller aliases", async () => {
+  const candidate = structuredClone(await validEnvelope());
+  const verified = verifySpreadsheetWorkerEnvelope(artifact, binding(), candidate);
+  const candidateFormula = candidate.results[0];
+  assert.equal(candidateFormula?.checkId, "formula.recalculate");
+  if (candidateFormula?.checkId !== "formula.recalculate") throw new Error("Expected formula result");
+  (candidateFormula.evidence.cells[0] as { calculatedValue: number }).calculatedValue = 999;
+  const verifiedFormula = verified.results[0];
+  assert.equal(verifiedFormula?.checkId, "formula.recalculate");
+  if (verifiedFormula?.checkId !== "formula.recalculate") throw new Error("Expected formula result");
+  assert.equal(verifiedFormula.evidence.cells[0]!.calculatedValue, 42);
+  assert.notEqual(verified, candidate);
+  assert(Object.isFrozen(verified));
+  assert(Object.isFrozen(verified.engine));
+  assert(Object.isFrozen(verified.results));
+  assert(Object.isFrozen(verifiedFormula));
+  assert(Object.isFrozen(verifiedFormula.evidence));
+  assert(Object.isFrozen(verifiedFormula.evidence.cells));
+  assert(Object.isFrozen(verifiedFormula.evidence.cells[0]!));
 });

@@ -252,6 +252,16 @@ function canonical(value: unknown): string {
     .join(",")}}`;
 }
 
+function canonicalClone(value: unknown): unknown {
+  return JSON.parse(canonical(value)) as unknown;
+}
+
+function deepFreeze<T>(value: T): T {
+  if (typeof value !== "object" || value === null || Object.isFrozen(value)) return value;
+  for (const child of Object.values(value)) deepFreeze(child);
+  return Object.freeze(value);
+}
+
 function envelopePayload(envelope: Omit<SpreadsheetWorkerEnvelope, "envelopeDigest">): string {
   return canonical(envelope);
 }
@@ -260,7 +270,7 @@ function digestEnvelope(envelope: Omit<SpreadsheetWorkerEnvelope, "envelopeDiges
   return createHash("sha256").update(envelopePayload(envelope)).digest("base64url");
 }
 
-function validateEnvelopeShape(value: unknown): SpreadsheetWorkerEnvelope {
+function validateEnvelopeShape(value: unknown): void {
   const envelope = record(value, "Spreadsheet worker envelope");
   exactKeys(
     envelope,
@@ -277,7 +287,6 @@ function validateEnvelopeShape(value: unknown): SpreadsheetWorkerEnvelope {
   nonEmptyString(engine.version, "Spreadsheet worker engine version");
   if (!Array.isArray(envelope.results)) throw new Error("Spreadsheet worker result checks are invalid");
   envelope.results.forEach(validateResult);
-  return envelope as unknown as SpreadsheetWorkerEnvelope;
 }
 
 export function verifySpreadsheetWorkerEnvelope(
@@ -289,7 +298,9 @@ export function verifySpreadsheetWorkerEnvelope(
   const actualArtifactDigest = digestSpreadsheetArtifact(artifact);
   if (actualArtifactDigest !== binding.artifactDigest)
     throw new Error("Spreadsheet artifact does not match its binding");
-  const envelope = validateEnvelopeShape(candidate);
+  const cloned = canonicalClone(candidate);
+  validateEnvelopeShape(cloned);
+  const envelope = cloned as SpreadsheetWorkerEnvelope;
   if (envelope.artifactDigest !== binding.artifactDigest) throw new Error("Spreadsheet envelope artifact is invalid");
   if (envelope.policyVersion !== binding.policyVersion) throw new Error("Spreadsheet envelope policy is invalid");
   const expected = new Map(binding.checks.map((check) => [check.checkId, check.generation]));
@@ -304,12 +315,14 @@ export function verifySpreadsheetWorkerEnvelope(
   if (seen.size !== expected.size) throw new Error("Spreadsheet envelope is missing a required check");
   const { envelopeDigest, ...payload } = envelope;
   if (digestEnvelope(payload) !== envelopeDigest) throw new Error("Spreadsheet envelope digest is invalid");
-  return envelope;
+  return deepFreeze(envelope);
 }
 
 export function createDeterministicSpreadsheetWorker(engine: SpreadsheetCalculationEngine) {
   nonEmptyString(engine.name, "Spreadsheet engine name");
   nonEmptyString(engine.version, "Spreadsheet engine version");
+  const engineName = engine.name;
+  const engineVersion = engine.version;
   return Object.freeze({
     async run(input: SpreadsheetWorkerRunInput): Promise<SpreadsheetWorkerEnvelope> {
       const binding = createSpreadsheetWorkerBinding(input.binding);
@@ -319,16 +332,21 @@ export function createDeterministicSpreadsheetWorker(engine: SpreadsheetCalculat
       }
       const rawResults = await engine.evaluate(Object.freeze({ artifactBytes: bytes, binding }));
       if (!Array.isArray(rawResults)) throw new Error("Spreadsheet engine results are invalid");
-      const results = rawResults.map(validateResult).sort((left, right) => {
-        const leftIndex = binding.checks.findIndex((check) => check.checkId === left.checkId);
-        const rightIndex = binding.checks.findIndex((check) => check.checkId === right.checkId);
-        return leftIndex - rightIndex;
-      });
+      const results = rawResults
+        .map((result) => {
+          const cloned = canonicalClone(result);
+          return validateResult(cloned);
+        })
+        .sort((left, right) => {
+          const leftIndex = binding.checks.findIndex((check) => check.checkId === left.checkId);
+          const rightIndex = binding.checks.findIndex((check) => check.checkId === right.checkId);
+          return leftIndex - rightIndex;
+        });
       const payload = {
         contractVersion,
         artifactDigest: binding.artifactDigest,
         policyVersion: binding.policyVersion,
-        engine: Object.freeze({ name: engine.name, version: engine.version }),
+        engine: Object.freeze({ name: engineName, version: engineVersion }),
         results: Object.freeze(results),
       } satisfies Omit<SpreadsheetWorkerEnvelope, "envelopeDigest">;
       const envelope: SpreadsheetWorkerEnvelope = Object.freeze({
