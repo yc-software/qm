@@ -7,6 +7,7 @@ import {
 } from "./desktop-login.ts";
 import { createSurfaceConfigs } from "./surface-config.ts";
 import { INVITE_LOGIN_SCRIPT, INVITE_LOGIN_SCRIPT_HASH } from "./invite-login.ts";
+import { isDnsLabel } from "../../chassis/src/dns-label.ts";
 import { reportBackendError } from "../../chassis/src/error-reporting.ts";
 import "./instrument.ts";
 import { provisionTrustedAdmin } from "./trusted-admin.ts";
@@ -893,7 +894,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   const appHost = requestHost.endsWith(appSuffix ?? "\0") || requestHost === APPS_DOMAIN?.toLowerCase();
   if (appSuffix && appHost && requestHost !== hostOf(PUBLIC_URL)) {
     const label = requestHost.slice(0, -appSuffix.length);
-    if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label)) return json(res, 404, { error: "not_found" });
+    if (!isDnsLabel(label)) return json(res, 404, { error: "not_found" });
     if (await appHandoff.redeem(req, res, url)) return;
     return proxyToAppHost(req, res, CORE, clientIpOf(req));
   }

@@ -31,6 +31,7 @@ import type { AppViewAuthMode } from "../../deploy/page-views.ts";
 import { principalDestination } from "../../reach/reach.ts";
 import { FRAME_SESSION_COOKIE, portalSession, portalSessionFrom } from "../../deploy/viewer-session.ts";
 import { appHostLabel, appNameFromLabel, labelOfAppHost } from "../../tenants/app-handle.ts";
+import { isDnsLabel } from "../../../plugins/chassis/src/dns-label.ts";
 import { tenantAppHandle } from "../../tenants/settings.ts";
 import { boundTenant } from "../../tenants/context.ts";
 import { EMBED_ANCESTORS_HINT, parseEmbedAncestors } from "../../deploy/embed-ancestors.ts";
@@ -106,7 +107,7 @@ async function proxyDeployment(ctx: BaseCtx): Promise<void> {
     const d = await app.getDeployment(id).catch(swallowAs("deployments: load deployment", null));
     const slug = d?.name ?? d?.id;
     const handle = tenantAppHandle();
-    if (d && slug && /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(handle ? appHostLabel(handle, slug) : slug)) {
+    if (d && slug && isDnsLabel(handle ? appHostLabel(handle, slug) : slug)) {
       res.writeHead(302, {
         location: `https://${handle ? appHostLabel(handle, slug) : slug}.${deps.deployAppsDomain}${subPath}${url.search}`,
         "cache-control": "no-store",
@@ -823,7 +824,7 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
   const rawHost = `${label}.${appsDomain.toLowerCase()}`;
   const handle = tenantAppHandle();
   const slug = appNameFromLabel(label, handle);
-  if (!slug || !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label)) {
+  if (!slug || !isDnsLabel(label)) {
     sendJson(res, 404, { error: "not_found" });
     return true;
   }

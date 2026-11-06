@@ -3,6 +3,7 @@ import type { PgPool } from "../persistence/pg-pool.ts";
 import { loadTenant, perTenant } from "./cache.ts";
 import { boundTenant } from "./context.ts";
 import { appHandleSchema } from "./app-handle.ts";
+import { isDnsLabel } from "../../plugins/chassis/src/dns-label.ts";
 
 const text = z.string().min(1);
 
@@ -19,7 +20,7 @@ export const tenantSettingsSchema = z
     allowedEmails: z.array(emailOrDomain),
     brandName: z.string().trim().min(1),
     modelGatewayKey: text,
-    orgSlug: z.string().regex(/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/, "expected a lowercase org slug"),
+    orgSlug: z.string().refine(isDnsLabel, "expected a lowercase org slug"),
     handle: appHandleSchema,
     slackBridgeToken: z.string().regex(/^[\x21-\x7e]{16,}$/, "expected a Slack service bridge token"),
   })
