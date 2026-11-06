@@ -70,8 +70,6 @@ import {
 
 import { createModelPicker } from "./model-picker";
 
-const flipKey = /Mac|iP(hone|ad|od)/.test(navigator.platform) ? "⌘↵" : "Ctrl+↵";
-
 export type ComposerMenu = "effort" | "model" | "settings" | "loadout";
 
 const LEGACY_MODEL_STORAGE_KEY = "web-ui:model";
@@ -818,6 +816,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
 
   function sendWhileWorkingLabel(agent: Agent): string {
     if (!canSteer(agent)) return "Queue for after this turn";
+    const flipKey = ["Mac", "iPhone", "iPad", "iPod"].some((p) => navigator.platform.startsWith(p)) ? "⌘↵" : "Ctrl+↵";
     if (alwaysSteer()) return `Steer the running task (${flipKey} to queue)`;
     return `Queue for after this turn (${flipKey} to steer)`;
   }
@@ -1352,7 +1351,6 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       : mintSendKey();
   }
 
-  /** flipSteer: Cmd/Ctrl+Enter sends the opposite of the "Sending while QM is working" setting. */
   async function queueDraft(agent: Agent, flipSteer = false): Promise<void> {
     const threadRef = ctx.chat.state.threadRef;
     const text = composerState.draft.trim();
