@@ -35,6 +35,7 @@ async function approvedJob() {
     requestId,
     actorId: "U1",
     action: "approve",
+    originThreadRef: job.originThreadRef,
     decidedAt: Date.now(),
   });
   return { store, job };

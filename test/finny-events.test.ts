@@ -45,6 +45,7 @@ async function approveJob(store: ReturnType<typeof createPostgresFinnyStore>, in
     requestId,
     actorId: "U1",
     action: "approve",
+    originThreadRef: input.originThreadRef,
     decidedAt: Date.now(),
   });
 }

@@ -46,6 +46,7 @@ async function createApprovedJob(store: FinnyStore, action: FinnyApprovalAction 
     requestId,
     actorId: "U1",
     action,
+    originThreadRef: input.originThreadRef,
     decidedAt: Date.now(),
   });
   const artifactDigest = `artifact-${randomUUID()}`;

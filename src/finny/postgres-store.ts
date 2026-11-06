@@ -8,11 +8,14 @@ import { assertFinnyPolicy, reviseFinnyPolicy } from "./policy.ts";
 import type {
   ClaimFinnyWorkerRunInput,
   CreateFinnyApprovalRequestInput,
+  CreateFinnyClarificationRequestInput,
   CreateFinnyJobInput,
   FinalizeFinnyInput,
+  FinnyApprovalRequest,
   FinnyReceiptSigner,
   FinnyStore,
   RecordFinnyApprovalInput,
+  RecordFinnyClarificationDecisionInput,
   RecordFinnyArtifactReadyInput,
   RecordFinnyAuditBlockInput,
   RecordFinnyAuditPassedInput,
@@ -21,6 +24,7 @@ import type {
 import type {
   FinnyAttestation,
   FinnyCheckId,
+  FinnyClarificationRequest,
   FinnyFinalReceipt,
   FinnyFinalReceiptPayload,
   FinnyJob,
@@ -128,6 +132,79 @@ const PLAN_FIRST_SCHEMA = [
     PRIMARY KEY(job_id, run_id)
   )`,
 ];
+
+const FINNY_CLARIFICATION_OPTION_MAX = 24;
+const FINNY_CLARIFICATION_OPTION_ID_MAX = 228;
+const FINNY_REQUEST_ID_MAX = 2_000;
+
+const CLARIFICATION_SCHEMA = [
+  `CREATE UNIQUE INDEX IF NOT EXISTS finny_approval_requests_one_pending_job
+     ON finny_approval_requests(job_id) WHERE decided_at IS NULL`,
+  `CREATE TABLE IF NOT EXISTS finny_clarification_requests(
+    request_id TEXT PRIMARY KEY,
+    scope_id TEXT NOT NULL CHECK (scope_id <> ''),
+    job_id TEXT NOT NULL REFERENCES finny_jobs(id) ON DELETE CASCADE,
+    question TEXT NOT NULL CHECK (question <> ''),
+    options JSONB NOT NULL CHECK (jsonb_typeof(options) = 'array' AND jsonb_array_length(options) > 0),
+    recommended_option_id TEXT NOT NULL CHECK (recommended_option_id <> ''),
+    origin_thread_ref TEXT NOT NULL CHECK (origin_thread_ref <> ''),
+    authorized_actor_id TEXT NOT NULL CHECK (authorized_actor_id <> ''),
+    idempotency_key TEXT NOT NULL UNIQUE CHECK (idempotency_key <> ''),
+    decision JSONB CHECK (
+      decision IS NULL OR
+      (jsonb_typeof(decision) = 'object' AND (
+        decision->>'kind' = 'other' OR
+        (decision->>'kind' = 'option' AND COALESCE(decision->>'optionId', '') <> '')
+      ))
+    ),
+    decided_at BIGINT,
+    created_at BIGINT NOT NULL,
+    CHECK ((decision IS NULL) = (decided_at IS NULL))
+  )`,
+  `CREATE INDEX IF NOT EXISTS finny_clarification_requests_job ON finny_clarification_requests(job_id)`,
+];
+
+function rowToClarification(row: Record<string, unknown>): FinnyClarificationRequest {
+  return {
+    requestId: row.request_id as string,
+    scopeId: row.scope_id as string,
+    jobId: row.job_id as string,
+    question: row.question as string,
+    options: row.options as FinnyClarificationRequest["options"],
+    recommendedOptionId: row.recommended_option_id as string,
+    originThreadRef: row.origin_thread_ref as string,
+    authorizedActorId: row.authorized_actor_id as string,
+    idempotencyKey: row.idempotency_key as string,
+    ...(row.decision !== null ? { decision: row.decision as FinnyClarificationRequest["decision"] } : {}),
+    ...(row.decided_at !== null ? { decidedAt: Number(row.decided_at) } : {}),
+    createdAt: Number(row.created_at),
+  };
+}
+
+function validateClarification(input: CreateFinnyClarificationRequestInput): void {
+  assertNonEmpty(input.requestId, "clarification request ID");
+  assertNonEmpty(input.authorizedActorId, "clarification actor ID");
+  if (input.requestId.length > FINNY_REQUEST_ID_MAX)
+    throw new Error("Finny clarification request ID exceeds Slack limits");
+  assertNonEmpty(input.question, "clarification question");
+  assertNonEmpty(input.idempotencyKey, "clarification idempotency key");
+  if (
+    !Array.isArray(input.options) ||
+    input.options.length === 0 ||
+    input.options.length > FINNY_CLARIFICATION_OPTION_MAX
+  )
+    throw new Error("Finny clarification options exceed Slack limits");
+  const optionIds = new Set<string>();
+  for (const option of input.options) {
+    assertNonEmpty(option.id, "clarification option ID");
+    assertNonEmpty(option.label, "clarification option label");
+    if (option.id.length > FINNY_CLARIFICATION_OPTION_ID_MAX)
+      throw new Error("Finny clarification option ID exceeds Slack limits");
+    if (optionIds.has(option.id)) throw new Error("Finny clarification option IDs must be unique");
+    optionIds.add(option.id);
+  }
+  if (!optionIds.has(input.recommendedOptionId)) throw new Error("Finny recommended clarification option is invalid");
+}
 
 function rowToJob(row: Record<string, unknown>): FinnyJob {
   const policy: FinnyPolicySnapshot = {
@@ -273,6 +350,7 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
     { id: "finny/store/0001", statements: SCHEMA },
     { id: "finny/store/0002-events", statements: EVENT_SCHEMA },
     { id: "finny/store/0003-plan-first", statements: PLAN_FIRST_SCHEMA },
+    { id: "finny/store/0004-clarifications", statements: CLARIFICATION_SCHEMA },
   ]);
   return {
     async createJob(input: CreateFinnyJobInput) {
@@ -306,6 +384,31 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
       const rows = await q("SELECT * FROM finny_jobs WHERE id = $1 AND scope_id = $2", [jobId, scopeId]);
       return rows[0] ? rowToJob(rows[0]) : null;
     },
+    async getApprovalRequest(requestId) {
+      const rows = await q(
+        `SELECT r.*, to_jsonb(j) AS job_row
+           FROM finny_approval_requests r
+           JOIN finny_jobs j ON j.id = r.job_id
+          WHERE r.request_id = $1`,
+        [requestId],
+      );
+      const row = rows[0];
+      if (!row) return null;
+      return {
+        requestId: row.request_id as string,
+        scopeId: row.scope_id as string,
+        jobId: row.job_id as string,
+        planDigest: row.plan_digest as string,
+        originThreadRef: row.origin_thread_ref as string,
+        authorizedActorId: row.authorized_actor_id as string,
+        ...(row.decided_at !== null ? { decidedAt: Number(row.decided_at) } : {}),
+        job: rowToJob(row.job_row as Record<string, unknown>),
+      } satisfies FinnyApprovalRequest;
+    },
+    async getClarificationRequest(requestId) {
+      const rows = await q("SELECT * FROM finny_clarification_requests WHERE request_id=$1", [requestId]);
+      return rows[0] ? rowToClarification(rows[0]) : null;
+    },
     async claimWorkerRun(input: ClaimFinnyWorkerRunInput) {
       assertNonEmpty(input.runId, "worker run ID");
       await withPgTransaction(await pool(), async (db) => {
@@ -332,6 +435,10 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
       await withPgTransaction(await pool(), async (db) => {
         const job = await lockedJob(db, input.scopeId, input.jobId);
         if (job.approval_decided_at !== null) throw new Error("Finny approval was already decided");
+        const pending = await db.query("SELECT 1 FROM finny_approval_requests WHERE job_id=$1 AND decided_at IS NULL", [
+          input.jobId,
+        ]);
+        if (pending.rows[0]) throw new Error("Finny approval request is already pending");
         await db.query(
           `INSERT INTO finny_approval_requests(
              request_id, scope_id, job_id, plan_digest, origin_thread_ref, authorized_actor_id, created_at
@@ -348,6 +455,74 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
         );
       });
     },
+    async createClarificationRequest(input: CreateFinnyClarificationRequestInput) {
+      validateClarification(input);
+      return withPgTransaction(await pool(), async (db) => {
+        const job = await lockedJob(db, input.scopeId, input.jobId);
+        const replay = await db.query("SELECT * FROM finny_clarification_requests WHERE idempotency_key=$1", [
+          input.idempotencyKey,
+        ]);
+        if (replay.rows[0]) {
+          const existing = rowToClarification(replay.rows[0]);
+          if (
+            existing.requestId !== input.requestId ||
+            existing.scopeId !== input.scopeId ||
+            existing.jobId !== input.jobId ||
+            existing.authorizedActorId !== input.authorizedActorId ||
+            existing.question !== input.question ||
+            !isDeepStrictEqual(existing.options, input.options) ||
+            existing.recommendedOptionId !== input.recommendedOptionId ||
+            existing.originThreadRef !== job.origin_thread_ref
+          )
+            throw new Error("Finny clarification idempotency key was reused");
+          return existing;
+        }
+        const now = Date.now();
+        const inserted = await db.query(
+          `INSERT INTO finny_clarification_requests(
+             request_id, scope_id, job_id, question, options, recommended_option_id,
+             origin_thread_ref, authorized_actor_id, idempotency_key, created_at
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+          [
+            input.requestId,
+            input.scopeId,
+            input.jobId,
+            input.question,
+            JSON.stringify(input.options),
+            input.recommendedOptionId,
+            job.origin_thread_ref,
+            input.authorizedActorId,
+            input.idempotencyKey,
+            now,
+          ],
+        );
+        return rowToClarification(inserted.rows[0]);
+      });
+    },
+    async recordClarificationDecision(input: RecordFinnyClarificationDecisionInput) {
+      return withPgTransaction(await pool(), async (db) => {
+        const selected = await db.query("SELECT * FROM finny_clarification_requests WHERE request_id=$1 FOR UPDATE", [
+          input.requestId,
+        ]);
+        const row = selected.rows[0];
+        if (!row) throw new Error("Finny clarification request was not found");
+        if (row.decided_at !== null) throw new Error("Finny clarification request was already decided");
+        if (row.authorized_actor_id !== input.actorId) throw new Error("Finny clarification actor is not authorized");
+        if (row.origin_thread_ref !== input.originThreadRef)
+          throw new Error("Finny clarification must be decided in its origin thread");
+        if (input.decision.kind === "option") {
+          const optionId = input.decision.optionId;
+          if (!(row.options as FinnyClarificationRequest["options"]).some((option) => option.id === optionId))
+            throw new Error("Finny clarification option is not available");
+        }
+        const updated = await db.query(
+          `UPDATE finny_clarification_requests SET decision=$2, decided_at=$3
+            WHERE request_id=$1 RETURNING *`,
+          [input.requestId, JSON.stringify(input.decision), input.decidedAt],
+        );
+        return rowToClarification(updated.rows[0]);
+      });
+    },
     async recordApproval(input: RecordFinnyApprovalInput) {
       return withPgTransaction(await pool(), async (db) => {
         const job = await lockedJob(db, input.scopeId, input.jobId);
@@ -361,6 +536,8 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
         if (!binding) throw new Error("Finny approval request binding does not match the job");
         if (binding.decided_at !== null) throw new Error("Finny approval request was already decided");
         if (binding.authorized_actor_id !== input.actorId) throw new Error("Finny approval actor is not authorized");
+        if (binding.origin_thread_ref !== input.originThreadRef)
+          throw new Error("Finny approval must be decided in its origin thread");
         if (binding.plan_digest !== job.plan_digest || binding.origin_thread_ref !== job.origin_thread_ref) {
           throw new Error("Finny approval request binding does not match the job");
         }

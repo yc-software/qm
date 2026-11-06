@@ -4,6 +4,9 @@ import type {
   FinnyAuditFinding,
   FinnyChangeKind,
   FinnyCheckId,
+  FinnyClarificationDecision,
+  FinnyClarificationOption,
+  FinnyClarificationRequest,
   FinnyJob,
   FinnyJobEvent,
   FinnyFindingPolicy,
@@ -31,12 +34,43 @@ export interface CreateFinnyApprovalRequestInput {
   authorizedActorId: string;
 }
 
+export interface FinnyApprovalRequest {
+  requestId: string;
+  scopeId: string;
+  jobId: string;
+  planDigest: string;
+  originThreadRef: string;
+  authorizedActorId: string;
+  decidedAt?: number;
+  job: FinnyJob;
+}
+
+export interface CreateFinnyClarificationRequestInput {
+  scopeId: string;
+  jobId: string;
+  requestId: string;
+  authorizedActorId: string;
+  question: string;
+  options: FinnyClarificationOption[];
+  recommendedOptionId: string;
+  idempotencyKey: string;
+}
+
+export interface RecordFinnyClarificationDecisionInput {
+  requestId: string;
+  actorId: string;
+  originThreadRef: string;
+  decision: FinnyClarificationDecision;
+  decidedAt: number;
+}
+
 export interface RecordFinnyApprovalInput {
   scopeId: string;
   jobId: string;
   requestId: string;
   actorId: string;
   action: FinnyApprovalAction;
+  originThreadRef: string;
   decidedAt: number;
 }
 
@@ -108,9 +142,13 @@ export interface ClaimFinnyWorkerRunInput {
 export interface FinnyStore {
   createJob(input: CreateFinnyJobInput): Promise<FinnyJob>;
   createApprovalRequest(input: CreateFinnyApprovalRequestInput): Promise<void>;
+  createClarificationRequest(input: CreateFinnyClarificationRequestInput): Promise<FinnyClarificationRequest>;
   getJob(scopeId: string, jobId: string): Promise<FinnyJob | null>;
+  getApprovalRequest(requestId: string): Promise<FinnyApprovalRequest | null>;
+  getClarificationRequest(requestId: string): Promise<FinnyClarificationRequest | null>;
   claimWorkerRun(input: ClaimFinnyWorkerRunInput): Promise<void>;
   recordApproval(input: RecordFinnyApprovalInput): Promise<FinnyJob>;
+  recordClarificationDecision(input: RecordFinnyClarificationDecisionInput): Promise<FinnyClarificationRequest>;
   recordAttestation(input: RecordFinnyAttestationInput): Promise<{ attestation: FinnyAttestation; deduped: boolean }>;
   recordArtifactReady(input: RecordFinnyArtifactReadyInput): Promise<FinnyEventResult<FinnyJobEvent<"artifact_ready">>>;
   recordAuditPassed(input: RecordFinnyAuditPassedInput): Promise<FinnyEventResult<FinnyJobEvent<"audit_passed">>>;

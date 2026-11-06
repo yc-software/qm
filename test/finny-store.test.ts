@@ -46,6 +46,7 @@ async function approve(store: ReturnType<typeof createPostgresFinnyStore>, input
     requestId,
     actorId: "U1",
     action: "approve",
+    originThreadRef: input.originThreadRef,
     decidedAt: Date.now(),
   });
 }
@@ -79,6 +80,7 @@ test("approval decision derives exact bindings from an opaque pre-bound request"
     requestId,
     actorId: "U1",
     action: "approve",
+    originThreadRef: input.originThreadRef,
     decidedAt: Date.now(),
   });
   assert.equal(approved.approval?.planDigest, approved.planDigest);
@@ -90,6 +92,7 @@ test("approval decision derives exact bindings from an opaque pre-bound request"
       requestId,
       actorId: "U2",
       action: "reject",
+      originThreadRef: input.originThreadRef,
       decidedAt: Date.now(),
     }),
     /actor|decided/i,
@@ -104,6 +107,7 @@ test("approval decision derives exact bindings from an opaque pre-bound request"
       requestId,
       actorId: "U1",
       action: "approve",
+      originThreadRef: other.originThreadRef,
       decidedAt: Date.now(),
     }),
     /binding|request/i,

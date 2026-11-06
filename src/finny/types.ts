@@ -199,3 +199,26 @@ export interface FinnyPlanPresentation {
   destination: string;
   clarifications: FinnyPlanClarification[];
 }
+
+export interface FinnyClarificationOption {
+  id: string;
+  label: string;
+  description?: string;
+}
+
+export type FinnyClarificationDecision = { kind: "option"; optionId: string } | { kind: "other" };
+
+export interface FinnyClarificationRequest {
+  requestId: string;
+  scopeId: string;
+  jobId: string;
+  question: string;
+  options: FinnyClarificationOption[];
+  recommendedOptionId: string;
+  originThreadRef: string;
+  authorizedActorId: string;
+  idempotencyKey: string;
+  decision?: FinnyClarificationDecision;
+  decidedAt?: number;
+  createdAt: number;
+}
