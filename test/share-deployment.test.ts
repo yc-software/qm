@@ -736,6 +736,7 @@ test("exact email read grants admit app-only login and guest reach without membe
     directory,
     auditLog: { record() {} },
   } as unknown as Parameters<typeof createApp>[0]);
+  Object.assign(app, { readBootTenant: async () => undefined });
   const d = await app.deploy({
     ownerScopeId: "personal:U1",
     createdBy: "U1",

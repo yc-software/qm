@@ -80,11 +80,11 @@ function identityAdmitting(tenant: string | undefined, seen: Array<string | unde
   } as unknown as IdentityService;
 }
 
-function start(identity: IdentityService, tenants: DirectoryStore["tenantsForEmail"]) {
+function start(identity: IdentityService, tenants: DirectoryStore["tenantsForEmail"], boot?: string) {
   const built = buildApp(
     testConfig({ databaseUrl, dataDir: mkdtempSync(join(tmpdir(), "tenant-sign-in-")), orgId: "acme" }),
   );
-  Object.assign(built.app, { readBootTenant: async () => undefined });
+  Object.assign(built.app, { readBootTenant: async () => boot });
   const server = createInsecureTestServer(built.app, {
     portalIdentitySecret: IDENTITY_SECRET,
     identity,
@@ -193,22 +193,35 @@ test("a signed-in person's portal identity binds the tenant chosen at sign-in", 
     assert.deepEqual(await bound({ auth: "source", tenant: "optional" }, {}), { status: 200, tenant: null });
   }));
 
-test("a tenant's own allowed-emails list decides admission under it, and the install list covers tenants without one", (t) =>
+test("under a company the directory is the roster, its allowed-emails list admits more, and the install list does not apply", (t) =>
   withoutTenant(async () => {
-    const seen: Array<string | undefined> = [];
-    const srv = start(identityAdmitting(undefined, seen), async () => [{ id: alpha }, { id: beta }]);
+    const srv = start(identityAdmitting(undefined, []), (email) => directory.tenantsForEmail!(email));
     t.after(srv.close);
-    const as = async (tenant: string) =>
+    const allowed = async (tenant: string, email: string) =>
       (
-        await srv.get("/v1/auth/broker/email-allowed?email=both%40shared.test", {
+        await srv.get(`/v1/auth/broker/email-allowed?email=${encodeURIComponent(email)}`, {
           "x-portal-identity": await mintPortalIdentity(
-            { p: "both@shared.test", t: tenant, exp: Date.now() + 60_000 },
+            { p: email, t: tenant, exp: Date.now() + 60_000 },
             IDENTITY_SECRET,
           ),
         })
       ).body.allowed;
-    assert.equal(await as(alpha), false);
-    assert.equal(await as(beta), true);
+    assert.equal(await allowed(alpha, "both@shared.test"), true);
+    assert.equal(await allowed(alpha, "visitor@nowhere.test"), true);
+    assert.equal(await allowed(alpha, "outsider@shared.test"), false);
+    assert.equal(await allowed(beta, "bob@beta.test"), true);
+    assert.equal(await allowed(beta, "alice@alpha.test"), false);
+    assert.equal(await allowed(beta, "outsider@shared.test"), false);
+  }));
+
+test("a single-company install keeps admitting by the install list", (t) =>
+  withoutTenant(async () => {
+    const srv = start(identityAdmitting(undefined, []), (email) => directory.tenantsForEmail!(email), beta);
+    t.after(srv.close);
+    const allowed = async (email: string) =>
+      (await srv.get(`/v1/auth/broker/email-allowed?email=${encodeURIComponent(email)}`)).body.allowed;
+    assert.equal(await allowed("outsider@shared.test"), true);
+    assert.equal(await allowed("stranger@elsewhere.test"), false);
   }));
 
 test("a trusted principal maps to the tenants whose principal links name it, through the broker route", (t) =>
@@ -240,7 +253,7 @@ test("on a shared host the directory, not the install allowlist, permits email s
     const allowed = async (email: string) =>
       (await srv.get(`/v1/auth/broker/email-allowed?email=${encodeURIComponent(email)}`)).body.allowed;
     assert.equal(await allowed("carol@elsewhere.test"), true);
-    assert.equal(await allowed("dan@elsewhere.test"), false);
+    assert.equal(await allowed("dan@elsewhere.test"), true);
     assert.equal(await allowed("stranger@elsewhere.test"), false);
     const canonical = "/v1/principals/carol%40elsewhere.test/canonical";
     assert.equal((await srv.get(canonical)).status, 401);

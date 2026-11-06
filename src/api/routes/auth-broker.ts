@@ -56,6 +56,25 @@ async function claimBrokerNonce(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { claimed: null });
 }
 
+async function multitenant(ctx: ApiCtx): Promise<boolean> {
+  return !(await ctx.app.readBootTenant());
+}
+
+async function rosterAdmits(ctx: ApiCtx, email: string, listed: boolean): Promise<boolean> {
+  const { deps } = ctx;
+  const tenant = boundTenant();
+  if (tenant && (await multitenant(ctx))) {
+    if (listed || (await tenantAllowsEmail(email)) === true) return true;
+    return Boolean((await deps.directory?.tenantsForEmail?.(email))?.some(({ id }) => id === tenant));
+  }
+  return (
+    (tenant ? await tenantAllowsEmail(email) : undefined) ??
+    (listed ||
+      deps.emailAuthPrincipals?.includes(email) ||
+      Boolean(deps.emailAuthDomain && email.endsWith(`@${deps.emailAuthDomain}`)))
+  );
+}
+
 type Admission = { allowed: boolean; appOnly?: true; expiresAt?: number | null };
 
 async function admission(ctx: ApiCtx, email: string, listed = false): Promise<Admission> {
@@ -64,11 +83,7 @@ async function admission(ctx: ApiCtx, email: string, listed = false): Promise<Ad
   await deps.identity.refresh();
   if (deps.identity.deactivationSource(email) === "manual") return { allowed: false };
   const member = deps.identity.externalMember(email);
-  const configured =
-    (boundTenant() ? await tenantAllowsEmail(email) : undefined) ??
-    (listed ||
-      deps.emailAuthPrincipals?.includes(email) ||
-      Boolean(deps.emailAuthDomain && email.endsWith(`@${deps.emailAuthDomain}`)));
+  const configured = await rosterAdmits(ctx, email, listed);
   const allowed =
     deps.identity.classify(email).type === "internal" && (member ? externalMemberActive(member) : configured);
   if (allowed) return { allowed: true, expiresAt: member?.expiresAt };
@@ -112,7 +127,7 @@ async function emailTenants(ctx: ApiCtx): Promise<void> {
   const tenants = ctx.deps.directory?.tenantsForEmail;
   return sendJson(ctx.res, 200, {
     tenants: tenants ? await tenants(email) : [],
-    shared: !(await ctx.app.readBootTenant()),
+    shared: await multitenant(ctx),
   });
 }
 
@@ -123,7 +138,7 @@ async function principalTenants(ctx: ApiCtx): Promise<void> {
   const tenants = ctx.deps.directory?.tenantsForPrincipal;
   return sendJson(ctx.res, 200, {
     tenants: tenants ? await tenants(principal) : [],
-    shared: !(await ctx.app.readBootTenant()),
+    shared: await multitenant(ctx),
   });
 }
 
