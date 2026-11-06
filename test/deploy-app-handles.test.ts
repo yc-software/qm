@@ -20,7 +20,7 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
-import { onTenantLoad } from "../src/tenants/cache.ts";
+import { loadTenant, onTenantLoad } from "../src/tenants/cache.ts";
 import { loadTenantSettings } from "../src/tenants/settings.ts";
 import { ownerUrl, TEST_TENANT } from "./support/test-tenant.ts";
 
@@ -58,7 +58,7 @@ test("a <handle>-<app> host serves the handle's own app, refuses other companies
   const upstream = createHttpServer((_req, res) => res.end("UPSTREAM OK"));
   upstream.listen(0);
   const upstreamPort = (upstream.address() as AddressInfo).port;
-  const handle = `gw${randomUUID().replace(/-/g, "").slice(0, 10)}`;
+  const handle = `gw${randomUUID().replace(/-/g, "")}${randomUUID().replace(/-/g, "").slice(0, 16)}`;
   const backings = testDeployBackings();
   const owner = createPgPool(ownerUrl(backings.databaseUrl).toString());
   const appPool = createPgPool(backings.databaseUrl);
@@ -103,6 +103,18 @@ test("a <handle>-<app> host serves the handle's own app, refuses other companies
       files: [],
       name: "sales-board",
     });
+    await loadTenant();
+    for (const name of ["sales-board-q2", undefined])
+      await assert.rejects(
+        app.deploy({
+          ownerScopeId: scopeId("personal", "alice@example.com"),
+          createdBy: "alice@example.com",
+          entrypoint: "x",
+          files: [],
+          ...(name ? { name } : {}),
+        }),
+        /over the 63-character DNS label limit/,
+      );
     server.listen(0);
     const port = (server.address() as AddressInfo).port;
     const host = `${handle}-sales-board.apps.example.com`;
