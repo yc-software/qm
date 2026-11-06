@@ -357,10 +357,11 @@ const canonicalPrincipal = createCanonicalResolver(async (sub, tenant) => {
     console.warn(`[portal] canonical principal lookup returned HTTP ${r.status}`);
     return null;
   }
-  const body = (await r.json()) as { canonicalId?: unknown; displayName?: unknown };
+  const body = (await r.json()) as { canonicalId?: unknown; displayName?: unknown; storedName?: unknown };
   const id = typeof body.canonicalId === "string" && body.canonicalId ? body.canonicalId : sub;
   const name = typeof body.displayName === "string" ? body.displayName.trim().slice(0, 200) : "";
-  return name ? { id, name } : id;
+  const stored = typeof body.storedName === "string" && body.storedName.trim() !== "";
+  return { id, ...(name ? { name } : {}), ...(stored ? { stored: true as const } : {}) };
 });
 
 const signedInNames = createSignedInNames({
@@ -924,7 +925,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       session = null;
     } else if (!canonical) return identityUnavailable(req, res);
     else {
-      if (session.name && !canonical.name && !canonical.stale)
+      if (session.name && !canonical.stored && !canonical.stale)
         signedInNames.backfill(session.sub, session.name, session.t);
       const known = {
         ...session,

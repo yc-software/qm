@@ -79,10 +79,6 @@ export function cleanDisplayName(raw: unknown): string | undefined {
   return name || undefined;
 }
 
-export function userLabel(user: Pick<UserRecord, "displayName" | "aliases"> | null | undefined): string | undefined {
-  return user?.displayName || user?.aliases.find((alias) => alias.includes("@"));
-}
-
 const userOf = (expr: string): string => `(SELECT l.user_id FROM user_links l WHERE l.alias_id = ${expr})`;
 
 const ensureUsers = (aliases: string): string => `

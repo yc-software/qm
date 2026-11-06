@@ -32,7 +32,7 @@ import type { App, AppDeps, ReachNowResult } from "./app-types.ts";
 import { CONTEXT_REQUEST_EXPIRY_MS } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 import type { AmbientHelpers } from "./app-ambient.ts";
-import { userLabel } from "../identity/user-store.ts";
+import { personLabel } from "../identity/person-names.ts";
 
 export async function cronVisibility(deps: AppDeps, h: AppHelpers, principalId: string) {
   const viewerKeys = personKeys(await deps.directory.get(principalId).catch(() => null), principalId);
@@ -150,7 +150,7 @@ export function createMessagingMethods(
         .filter((principalId) => deps.identity.classify(principalId).type === "internal")
         .map((principalId) => ({
           principalId,
-          displayName: userLabel(users?.get(principalId)) ?? principalId,
+          displayName: personLabel(principalId, { user: users?.get(principalId) }),
           type: "internal" as const,
         })),
     ];

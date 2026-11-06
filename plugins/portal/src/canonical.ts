@@ -9,6 +9,7 @@ export class IdentityRejected extends Error {}
 export interface CanonicalPerson {
   id: string;
   name?: string;
+  stored?: true;
 }
 
 export function createCanonicalResolver(
@@ -41,7 +42,12 @@ export function createCanonicalResolver(
     const key = `${tenant ?? ""}|${sub}`;
     const found = known.get(key);
     const hit = found && Date.now() - found.at < STALE_MS ? found : undefined;
-    const answer = ({ id, name }: CanonicalPerson, stale: boolean) => ({ id, ...(name ? { name } : {}), stale });
+    const answer = ({ id, name, stored }: CanonicalPerson, stale: boolean) => ({
+      id,
+      ...(name ? { name } : {}),
+      ...(stored ? { stored } : {}),
+      stale,
+    });
     if (hit && Date.now() - hit.at < FRESH_MS) return answer(hit, false);
     const person = await refresh(key, sub, tenant);
     if (person === null && hit) return answer(hit, true);

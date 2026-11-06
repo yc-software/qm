@@ -65,7 +65,8 @@ const upstream = createServer((req, res) => {
       return res.end(
         JSON.stringify({
           canonicalId: decodeURIComponent(canonical[1]!),
-          ...(storedName ? { displayName: storedName } : {}),
+          displayName: storedName ?? "Unknown person",
+          ...(storedName ? { storedName } : {}),
         }),
       );
     if (url.pathname === "/api/me") {

@@ -72,7 +72,7 @@ test("gateway context flows into the system prompt the agent sees", async () => 
   });
   assert.equal(res.status, "ok");
   assert.match(res.reply ?? "", /## Where you are/);
-  assert.match(res.reply ?? "", /^Slack DM with U1\.$/m);
+  assert.match(res.reply ?? "", /^Slack DM with Unknown person\.$/m);
   assert.match(res.reply ?? "", /- channel: D9/);
 });
 
@@ -85,8 +85,28 @@ test("no gateway context: prompt names the surface but adds no identifier lines"
     text: "!sysprompt",
   });
   assert.equal(res.status, "ok");
-  assert.match(res.reply ?? "", /^Slack DM with U2\.$/m);
+  assert.match(res.reply ?? "", /^Slack DM with Unknown person\.$/m);
   assert.doesNotMatch(res.reply ?? "", /Identifiers for this conversation/);
+});
+
+test("a DM names the person by the name stored at sign-in, then by email, never by the raw sign-in id", async () => {
+  const { app, users } = freshApp();
+  const dmWith = async (externalId: string) => {
+    const res = await app.turn({
+      surface: "web",
+      actor: { externalId },
+      conversation: { kind: "dm", threadRef: `web:${externalId}:t1` },
+      text: "!sysprompt",
+    });
+    assert.equal(res.status, "ok", JSON.stringify(res));
+    return res.reply ?? "";
+  };
+  await users.setDisplayName("oidc:issuer:ada", "Ada Founder");
+  const named = await dmWith("oidc:issuer:ada");
+  assert.match(named, /^Web DM with Ada Founder\.$/m);
+  assert.doesNotMatch(named, /oidc:issuer:ada\./);
+  assert.match(await dmWith("grace@example.com"), /^Web DM with grace@example\.com\.$/m);
+  assert.match(await dmWith("oidc:issuer:nobody"), /^Web DM with Unknown person\.$/m);
 });
 
 test("web prompt tells cron creators to use a real notification destination", async () => {

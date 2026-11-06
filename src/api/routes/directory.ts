@@ -1,7 +1,8 @@
 import { isPrincipalType, PRINCIPAL_TYPES } from "../../types.ts";
 import type { DirectoryMember } from "../../directory/directory-store.ts";
 import { canonicalPerson } from "../../directory/person.ts";
-import { cleanDisplayName, userLabel } from "../../identity/user-store.ts";
+import { cleanDisplayName } from "../../identity/user-store.ts";
+import { personLabel } from "../../identity/person-names.ts";
 import { sendJson } from "../http.ts";
 import { audit, isObj, orgScope } from "./shared.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
@@ -34,8 +35,13 @@ async function canonicalPrincipal(ctx: ApiCtx): Promise<void> {
   if (!id) return sendJson(res, 404, { error: "not_found" });
   await deps.identity?.refresh();
   const canonicalId = canonicalPerson(id);
-  const displayName = userLabel(await deps.users?.get(canonicalId));
-  return sendJson(res, 200, { principalId: id, canonicalId, ...(displayName ? { displayName } : {}) });
+  const user = await deps.users?.get(canonicalId);
+  return sendJson(res, 200, {
+    principalId: id,
+    canonicalId,
+    displayName: personLabel(canonicalId, { user }),
+    ...(user?.displayName ? { storedName: user.displayName } : {}),
+  });
 }
 
 async function recordProfile(ctx: ApiCtx): Promise<void> {

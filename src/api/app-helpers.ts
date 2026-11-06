@@ -52,7 +52,7 @@ import {
 import type { ParticipantScope } from "../sessions/session-store.ts";
 import type { App, AppDeps, ContextSummary, ProjectView, FileListPage } from "./app-types.ts";
 import { toFileItem } from "./app-types.ts";
-import { userLabel } from "../identity/user-store.ts";
+import { personLabel } from "../identity/person-names.ts";
 
 export function createAppHelpers(deps: AppDeps, app: App) {
   const adminBase = deps.publicWebUrl?.replace(/\/$/, "");
@@ -253,7 +253,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
         const member = await deps.directory.get(principalId).catch(() => null);
         return {
           principalId,
-          displayName: member?.displayName?.trim() || userLabel(users?.get(principalId)) || principalId,
+          displayName: personLabel(principalId, { displayName: member?.displayName, user: users?.get(principalId) }),
           ...(member?.avatarUrl ? { avatarUrl: member.avatarUrl } : {}),
           ...(manual.has(principalId) ? {} : { viaChannel: true }),
         };

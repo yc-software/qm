@@ -200,7 +200,7 @@ export interface ServerDeps {
   loopIngress?: LoopIngressService;
   identity?: IdentityService;
   principalLinks?: PrincipalLinkService;
-  users?: Pick<UserStore, "get" | "setDisplayName">;
+  users?: Pick<UserStore, "get" | "resolve" | "setDisplayName">;
   keychain?: Keychain;
   serviceCreds?: ServiceCredentialStore;
   deliveries?: DeliveryStore;
