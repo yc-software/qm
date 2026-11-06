@@ -82,7 +82,9 @@ on a turn they sent themselves, can change the channel's instructions, standing 
 skills, including sharing a skill into the channel. Everyone else is refused with an owner
 named; a refusal never names a private channel, or its persona, to someone outside it.
 
-Access changes that would leave a persona with no active owner are refused.
+An access change is refused unless at least one owner grant remains on a person QM doesn't list as
+inactive, on a team, or on an org. Channel owner grants never count, and team and org owner grants
+count whether or not they reach anyone.
 
 ## Forking
 
