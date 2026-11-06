@@ -225,7 +225,7 @@ test("a remembered browser from a password sign-in silently reauthorizes like an
   assert.equal(new URL(again.headers.get("location")!).searchParams.get("state"), "again");
 });
 
-test("with email sign-in off, a trusted provider gets only the product-name heading and its button, with no icon", async (t) => {
+test("with email sign-in off, a trusted provider gets the product-name heading, one line of detail and a light button, with no icon", async (t) => {
   const trustedOnly = await startHarness({ env: { AUTH_EMAIL_SIGN_IN: "off" }, trustedSignInLabel: "Acme SSO" });
   t.after(() => trustedOnly.close());
   const page = await fetch(`${trustedOnly.base}/authorize?${authorizeQuery({ code_challenge: pkcePair().challenge })}`);
@@ -233,11 +233,12 @@ test("with email sign-in off, a trusted provider gets only the product-name head
   const html = await page.text();
   const card = html.slice(html.indexOf('<section class="card"'), html.indexOf("</section>"));
   assert.match(card, /<h1 id="t">Sign in to QM<\/h1>/);
+  assert.match(card, /<p class="msg">Your team&#39;s conversations, connections and scheduled work are waiting\.<\/p>/);
   assert.match(
     card,
-    /<div class="actions"><a class="btn" href="\/auth\/trusted\/login">Sign in with Acme SSO<\/a><\/div>/,
+    /<div class="actions"><a class="btn alternative" href="\/auth\/trusted\/login">Sign in with Acme SSO<\/a><\/div>/,
   );
-  assert.doesNotMatch(card, /class="icon|<p class="msg">|<p class="help">|divider|<form|<input|Email/);
+  assert.doesNotMatch(card, /class="icon|<p class="help">|divider|<form|<input|Email/);
 
   const refused = await fetch(
     `${trustedOnly.base}/authorize`,
@@ -261,5 +262,5 @@ test("the sign-in page shows the harbour scene with the deployment's wordmark an
   const html = await page.text();
   assert.match(html, /<img src="\/auth\/assets\/becalmed-off-halfway-rock\.webp"/);
   assert.match(html, /<span class="wordmark">QM<\/span>/);
-  assert.match(html, /<a class="btn" href="\/auth\/trusted\/login">Sign in with Acme SSO<\/a>/);
+  assert.match(html, /<a class="btn alternative" href="\/auth\/trusted\/login">Sign in with Acme SSO<\/a>/);
 });
