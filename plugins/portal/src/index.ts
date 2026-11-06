@@ -18,6 +18,7 @@ import { LRUCache } from "lru-cache";
 import { createCanonicalResolver, IdentityRejected } from "./canonical.ts";
 import { createTrustedEntry, trustedEntryConfig } from "./trusted-entry.ts";
 import { CARD_STYLE } from "./card-style.ts";
+import { brandAccent, brandAccentStyle, brandMark } from "../../chassis/src/brand.ts";
 import { coreAppHostTenant, createAppHandoff } from "./app-handoff.ts";
 import {
   coreEmailTenants,
@@ -450,6 +451,8 @@ function storedSession(req: IncomingMessage): SessionClaims | null {
 }
 
 const ALERT_ICON = `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5M12 16h.01"/></svg>`;
+const BRAND_ACCENT = brandAccent(process.env.ORG_BRAND_ACCENT);
+const BRAND_MARK = brandMark(process.env.PORTAL_FAVICON_SVG);
 const LOCK_ICON = `<svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>`;
 
 function cardPage(o: {
@@ -458,6 +461,7 @@ function cardPage(o: {
   msg: string;
   icon: string;
   warn?: boolean;
+  mark?: boolean;
   wide?: boolean;
   extra?: string;
   actions: string;
@@ -470,11 +474,12 @@ function cardPage(o: {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeHtml(o.title)} · Portal</title>
 ${CARD_STYLE}
+${brandAccentStyle(BRAND_ACCENT)}
 </head>
 <body>
   <main>
     <section class="card${o.wide ? " wide" : ""}" aria-labelledby="t">
-      <div class="icon${o.warn ? " warn" : ""}" aria-hidden="true">
+      <div class="icon${o.warn ? " warn" : o.mark ? " mark" : ""}" aria-hidden="true">
         ${o.icon}
       </div>
       <h1 id="t">${escapeHtml(o.heading)}</h1>
@@ -1590,6 +1595,7 @@ const tenantChoice = createTenantChoice({
   ttlS: TMP_TTL_S,
   secureCookies: SECURE_COOKIES,
   lockIcon: LOCK_ICON,
+  markIcon: BRAND_MARK,
   sameOrigin: sameOriginRequest,
   pin: (returnTo) => appHandoff.pin(returnTo),
   cardPage,

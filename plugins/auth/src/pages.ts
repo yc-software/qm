@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { brandAccentStyle } from "../../chassis/src/brand.ts";
 import { escapeHtml } from "../../chassis/src/http.ts";
 
 const CONFIRM_SCRIPT = `(function () {
@@ -52,6 +53,8 @@ const STYLE = `<style>
   .icon svg{ width:26px; height:26px; stroke:var(--text); fill:none; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
   .icon.warn{ background:var(--warn-bg); }
   .icon.warn svg{ stroke:var(--warn); stroke-width:2; }
+  .icon.mark{ background:none; }
+  .icon.mark svg{ width:52px; height:52px; stroke:none; border-radius:var(--radius-md); }
   h1{ font-size:20px; font-weight:600; margin:0 0 8px; }
   .msg{ color:var(--muted); margin:0 auto 22px; max-width:40ch; font-size:14px; }
   .reason{ margin:0 auto 22px; font-size:13px; color:var(--text);
@@ -65,7 +68,7 @@ const STYLE = `<style>
   input[type=email]:focus-visible,input[type=password]:focus-visible{ outline:2px solid color-mix(in srgb, var(--text) 35%, transparent); outline-offset:1px; }
   .btn{ display:flex; align-items:center; justify-content:center; min-height:44px; padding:0 18px; width:100%;
     text-decoration:none; font:inherit; font-weight:600; border-radius:var(--radius-md); cursor:pointer;
-    background:var(--text); color:var(--bg); border:1px solid var(--text); }
+    background:var(--accent, var(--text)); color:var(--on-accent, var(--bg)); border:1px solid var(--accent, var(--text)); }
   .btn:hover{ opacity:.9; }
   .alternative{ background:var(--surface); color:var(--text); border-color:var(--border); }
   .divider{ display:flex; align-items:center; gap:16px; margin:24px 0; color:var(--muted); font-size:11px; font-weight:600; letter-spacing:.08em; }
@@ -91,6 +94,8 @@ function page(o: {
   msg?: string;
   body?: string;
   help?: string;
+  accent?: string | undefined;
+  mark?: string | undefined;
 }): string {
   return `<!doctype html>
 <html lang="en">
@@ -100,11 +105,12 @@ function page(o: {
 <meta name="referrer" content="no-referrer">
 <title>${escapeHtml(o.title)} · ${escapeHtml(o.brandName)}</title>
 ${STYLE}
+${brandAccentStyle(o.accent)}
 </head>
 <body>
   <main>
     <section class="card" aria-labelledby="t">
-      <div class="icon${o.warn ? " warn" : ""}" aria-hidden="true">${o.icon}</div>
+      <div class="icon${o.warn ? " warn" : o.mark ? " mark" : ""}" aria-hidden="true">${o.mark && !o.warn ? o.mark : o.icon}</div>
       <h1 id="t">${escapeHtml(o.heading)}</h1>
       ${o.msg ? `<p class="msg">${escapeHtml(o.msg)}</p>` : ""}
       ${o.body ?? ""}
@@ -126,6 +132,8 @@ export function signInPage(o: {
   email?: string;
   problem?: string;
   passwordProblem?: string;
+  accent?: string | undefined;
+  mark?: string | undefined;
 }): string {
   const hidden = `<input type="hidden" name="request" value="${escapeHtml(o.requestToken)}">`;
   const trustedButton = o.trustedSignInLabel
@@ -138,6 +146,8 @@ export function signInPage(o: {
       icon: LOCK_ICON,
       heading: `Sign in to ${o.brandName}`,
       body: trustedButton,
+      accent: o.accent,
+      mark: o.mark,
     });
   }
   const trusted = trustedButton ? `${trustedButton}<div class="divider">OR</div>` : "";
@@ -179,6 +189,8 @@ export function signInPage(o: {
     help: o.emailLink
       ? "For email sign-in, use an address your administrator has allowed."
       : "Use the account your administrator has allowed.",
+    accent: o.accent,
+    mark: o.mark,
   });
 }
 

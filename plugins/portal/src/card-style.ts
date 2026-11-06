@@ -26,6 +26,8 @@ export const CARD_STYLE = `<style>
   .icon svg{ width:26px; height:26px; stroke:var(--text); fill:none; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
   .icon.warn{ background:var(--warn-bg); }
   .icon.warn svg{ stroke:var(--warn); stroke-width:2; }
+  .icon.mark{ background:none; }
+  .icon.mark svg{ width:52px; height:52px; stroke:none; border-radius:var(--radius-md); }
   h1{ font-size:20px; font-weight:600; letter-spacing:0; margin:0 0 8px; }
   .msg{ color:var(--muted); margin:0 auto 8px; max-width:40ch; font-size:14px; }
   .reason{ margin:16px auto 26px; font-size:13px; color:var(--text);
@@ -42,7 +44,7 @@ export const CARD_STYLE = `<style>
   .btn{ display:flex; align-items:center; justify-content:center; min-height:44px; padding:0 18px;
     text-decoration:none; font-weight:600; font-size:14px; border-radius:var(--radius-md); cursor:pointer;
     transition:opacity .12s ease, background .12s ease, color .12s ease; }
-  .btn.primary{ background:var(--text); color:var(--bg); border:1px solid var(--text); }
+  .btn.primary{ background:var(--accent, var(--text)); color:var(--on-accent, var(--bg)); border:1px solid var(--accent, var(--text)); }
   .btn.primary:hover{ opacity:.9; }
   .btn.ghost{ background:none; color:var(--muted); border:1px solid var(--border); }
   .btn.ghost:hover{ background:var(--secondary); color:var(--text); }
@@ -51,7 +53,7 @@ export const CARD_STYLE = `<style>
   [hidden]{ display:none !important; }
   .search{ width:100%; min-height:44px; padding:0 14px; font:inherit; color:var(--text); background:var(--surface);
     border:1px solid var(--border); border-radius:var(--radius-md); }
-  .search:focus-visible{ outline:2px solid color-mix(in srgb, var(--text) 35%, transparent); outline-offset:2px; }
+  .search:focus-visible{ outline:2px solid color-mix(in srgb, var(--accent, var(--text)) 45%, transparent); outline-offset:2px; }
   .picker-note{ color:var(--muted); font-size:12.5px; margin:2px 0 0; min-height:1em; }
   @media (prefers-reduced-motion:reduce){ *{ transition:none !important; } }
 </style>`;

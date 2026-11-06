@@ -242,6 +242,7 @@ interface CardPage {
   heading: string;
   msg: string;
   icon: string;
+  mark?: boolean;
   actions: string;
   help: string;
 }
@@ -253,6 +254,8 @@ export interface TenantChoiceDeps {
   ttlS: number;
   secureCookies: boolean;
   lockIcon: string;
+  /** The deployment's own mark, shown on the picker in place of the lock when configured. */
+  markIcon?: string | undefined;
   sameOrigin: (req: IncomingMessage) => boolean;
   pin: (returnTo: string) => Promise<string | undefined>;
   cardPage: (o: CardPage) => string;
@@ -290,7 +293,8 @@ export function createTenantChoice(deps: TenantChoiceDeps) {
       deps.cardPage({
         title: "Choose a workspace",
         heading: "Choose a workspace",
-        icon: deps.lockIcon,
+        icon: deps.markIcon ?? deps.lockIcon,
+        mark: deps.markIcon !== undefined,
         msg: "Your account belongs to more than one workspace. Pick the one to sign in to.",
         actions: picker.script ? `${picker.actions}<script>${PICKER_SCRIPT}</script>` : picker.actions,
         help: "To switch later, sign out and sign in again.",

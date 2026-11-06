@@ -249,3 +249,35 @@ test("with email sign-in off, a trusted provider gets a page with only the headi
   assert.match(bothHtml, /Sign in with Acme SSO/);
   assert.match(bothHtml, /Email me a sign-in link/);
 });
+
+test("the deployment's accent colour and mark brand the sign-in page; a malformed mark is ignored", async (t) => {
+  const mark =
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect width="24" height="24" fill="#123456"/></svg>';
+  const branded = await startHarness({
+    env: { AUTH_EMAIL_SIGN_IN: "off", ORG_BRAND_ACCENT: "#ff6600", AUTH_FAVICON_SVG: mark },
+    trustedSignInLabel: "Acme SSO",
+  });
+  t.after(() => branded.close());
+  const html = await (
+    await fetch(`${branded.base}/authorize?${authorizeQuery({ code_challenge: pkcePair().challenge })}`)
+  ).text();
+  assert.match(html, /--accent:#ff6600;/);
+  assert.match(
+    html,
+    /<div class="icon mark" aria-hidden="true"><svg[^>]*><rect width="24" height="24" fill="#123456"\/><\/svg><\/div>/,
+  );
+
+  const plain = await startHarness({
+    env: {
+      AUTH_EMAIL_SIGN_IN: "off",
+      ORG_BRAND_ACCENT: "orange; } body { display:none",
+      AUTH_FAVICON_SVG: '<svg onload="x()"></svg>',
+    },
+    trustedSignInLabel: "Acme SSO",
+  });
+  t.after(() => plain.close());
+  const plainHtml = await (
+    await fetch(`${plain.base}/authorize?${authorizeQuery({ code_challenge: pkcePair().challenge })}`)
+  ).text();
+  assert.doesNotMatch(plainHtml, /--accent:|icon mark|onload/);
+});

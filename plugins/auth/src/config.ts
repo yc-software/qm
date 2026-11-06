@@ -1,3 +1,4 @@
+import { brandAccent } from "../../chassis/src/brand.ts";
 import { isMissingOrPlaceholder } from "../../chassis/src/env.ts";
 import { isSecureOrLoopbackUrl } from "../../chassis/src/http.ts";
 import { parsePasswordHash } from "./password.ts";
@@ -33,6 +34,7 @@ export interface AuthConfig {
   emailSignIn: boolean;
   brandName: string;
   faviconSvg: string | undefined;
+  brandAccent: string | undefined;
   transport: EmailTransportKind;
   resendApiKey: string;
   smtp: SmtpSettings;
@@ -110,6 +112,7 @@ export function readConfig(env: NodeJS.ProcessEnv): AuthConfig {
     emailSignIn: !/^(off|false|0|no)$/i.test(env.AUTH_EMAIL_SIGN_IN?.trim() ?? ""),
     brandName: env.AUTH_BRAND_NAME?.trim() || "qm",
     faviconSvg: env.AUTH_FAVICON_SVG?.trim() || undefined,
+    brandAccent: brandAccent(env.ORG_BRAND_ACCENT),
     transport,
     resendApiKey: env.RESEND_API_KEY ?? "",
     smtp: {

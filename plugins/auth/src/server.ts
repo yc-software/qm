@@ -3,6 +3,7 @@ import { createHmac } from "node:crypto";
 import { coreRememberedSessions, type RememberedSessions, type RememberedSession } from "./sessions.ts";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { readBody, PayloadTooLargeError, sendBuffered, serveFavicon } from "../../chassis/src/http.ts";
+import { brandMark } from "../../chassis/src/brand.ts";
 import { errMessage } from "../../chassis/src/errors.ts";
 import type { AuthConfig } from "./config.ts";
 import { passwordConfigured, validEmail } from "./config.ts";
@@ -139,6 +140,8 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
       requestToken,
       emailLink: mailer !== null,
       password: passwords,
+      accent: cfg.brandAccent,
+      mark: brandMark(cfg.faviconSvg),
       ...extra,
     });
   const linkTtlMinutes = Math.max(1, Math.round(cfg.linkTtlS / 60));
