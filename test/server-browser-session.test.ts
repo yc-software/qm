@@ -46,6 +46,7 @@ const testRoutes: Route[] = [
     handle: echo,
   },
   { method: "GET", path: "/v1/test/browser-person", auth: "source", actor: "person", browser: true, handle: echo },
+  { method: "GET", path: "/v1/test/browser-undeclared", auth: "source", browser: true, handle: echo },
   { method: "GET", path: "/v1/test/service-read", auth: "source", actor: "query.principalId", handle: echo },
 ];
 (apiRoutes as Route[]).push(...testRoutes);
@@ -302,6 +303,10 @@ test("deactivated people and relay-only identity headers get nothing from a cook
       const gone = await fetch(`${base}/v1/test/browser-read`, { headers: { cookie: sessionCookie({ sub: "gone" }) } });
       assert.equal(gone.status, 401);
       assert.equal((await errorOf(gone)).message, "principal is no longer active");
+      const undeclared = await fetch(`${base}/v1/test/browser-undeclared`, {
+        headers: { cookie: sessionCookie({ sub: "gone" }) },
+      });
+      assert.equal(undeclared.status, 401);
       seen.length = 0;
       const smuggled = await fetch(`${base}/v1/test/browser-read`, {
         headers: { cookie: sessionCookie(), "x-drop-owner": "bob" },
