@@ -140,6 +140,7 @@ import {
   APPROVED_CALL_RAN_NOTE,
   approvalRefusal,
   approvedCallsOnEarlierAttempt,
+  approvedRequestsStarted,
   approvalView,
   approvedToolCall,
   grantModesWithin,
@@ -2032,7 +2033,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             }),
           ).catch(async (error: unknown) => {
             reportFailure("orchestrator: record approval decision", error, requestId);
-            await pending.put(requestId, claimed).catch(swallowAs("orchestrator: restore approval card", undefined));
+            const recorded = (await deps.sessions.getItems(session.id).catch(() => null))?.some(
+              (item) => item.kind === "ElicitationResponse" && item.elicitId === requestId,
+            );
+            if (recorded === false)
+              await pending
+                .put(requestId, claimed)
+                .catch((restoreError: unknown) =>
+                  reportFailure("orchestrator: restore approval card", restoreError, requestId),
+                );
             audit({
               action: `command_approval.${decided.approved ? "approve" : "deny"}`,
               resource: requestId,
@@ -2061,7 +2070,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           input.runId && (input.attempt ?? 1) > 1
             ? approvedCallsOnEarlierAttempt(await deps.sessions.getItems(session.id, { turnId: input.runId }), actor.id)
             : null;
-        for (const { call, approvalKey } of earlier?.unstarted ?? []) {
+        const startedElsewhere = earlier?.unstarted.length
+          ? approvedRequestsStarted(await deps.sessions.getItems(session.id))
+          : new Set<string>();
+        for (const { call, approvalKey } of earlier?.unstarted.filter(
+          ({ call }) => !startedElsewhere.has(call.requestId),
+        ) ?? []) {
           grantOnce(approvalKey);
           approvedCalls.push(call);
           audit({

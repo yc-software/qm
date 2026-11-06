@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { tmpdir } from "node:os";
@@ -439,12 +440,15 @@ test("a retried turn runs an approved call its first attempt recorded but never 
   assert.equal(turn.toolApprovalGate?.(call.tool, approvalKey), true, "the retry carries the once-use approval");
   assert.equal(turn.toolApprovalGate?.(call.tool, approvalKey), false, "and only once");
 
-  await sessions.append(writer, {
-    kind: "ToolCall",
-    tool: call.tool,
-    callId: call.callId,
-    body: { approvedRequestId: "req7" },
-  });
+  await sessions.append(
+    { sessionId: session.id, turnId: randomUUID() },
+    {
+      kind: "ToolCall",
+      tool: call.tool,
+      callId: call.callId,
+      body: { approvedRequestId: "req7" },
+    },
+  );
   await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 3 }));
-  assert.equal(received.at(-1)!.approvedToolCalls, undefined, "a call that started is never run again");
+  assert.equal(received.at(-1)!.approvedToolCalls, undefined, "a call that started in any run is never run again");
 });

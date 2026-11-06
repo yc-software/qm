@@ -154,12 +154,16 @@ export interface EarlierApprovals {
   unstarted: Array<{ call: ApprovedToolCall; approvalKey: string }>;
 }
 
-export function approvedCallsOnEarlierAttempt(items: readonly Item[], actorId: string): EarlierApprovals {
-  const started = new Set(
+export function approvedRequestsStarted(items: readonly Item[]): Set<string> {
+  return new Set(
     items.flatMap((item) =>
       item.kind === "ToolCall" && typeof item.body.approvedRequestId === "string" ? [item.body.approvedRequestId] : [],
     ),
   );
+}
+
+export function approvedCallsOnEarlierAttempt(items: readonly Item[], actorId: string): EarlierApprovals {
+  const started = approvedRequestsStarted(items);
   const earlier: EarlierApprovals = { decided: new Set(), unstarted: [] };
   for (const item of items) {
     if (item.kind !== "ElicitationResponse" || item.approved !== true) continue;
