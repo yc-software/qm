@@ -298,8 +298,6 @@ export function createTenantChoice(deps: TenantChoiceDeps) {
     );
   }
 
-  // The choice cookie carries who signed in, not the workspace list: a person can belong to
-  // hundreds of workspaces, far past what a cookie holds, so the list is looked up again on use.
   function offerChoice(
     req: IncomingMessage | undefined,
     res: ServerResponse,
