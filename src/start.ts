@@ -13,7 +13,7 @@ import { createTenantSlackRuntimes } from "./surfaces/slack-tenants.ts";
 import type { SlackPluginConfig } from "./slack/config.ts";
 import { cronQueueMisconfigured, installCronQueue } from "./cron/job-queue.ts";
 import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
-import { bindBootTenant, inBootTenant } from "./tenants/boot.ts";
+import { bindBootTenant, inBootTenant, readBootTenant } from "./tenants/boot.ts";
 import { loadTenant } from "./tenants/cache.ts";
 
 function envSlackAccountRuntimes(
@@ -47,7 +47,7 @@ export async function startQm(
       if (!cronQueueMisconfigured(error)) throw error;
       console.error(`[scheduler] misconfiguration: could not install the cron job queue: ${errMessage(error)}`);
     });
-  const tenant = await bindBootTenant(built.bootTenant);
+  const tenant = await bindBootTenant(() => readBootTenant(config.databaseUrl!));
   if (config.backgroundWorkEnabled) await inBootTenant(tenant, () => built.ownSharedState());
   const slackConfig = slackPluginConfigFromEnv(env);
   let slackEnvironmentState: "absent" | "configured" | "partial" =

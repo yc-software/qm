@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { applyPgMigrations, createPgPool, definePgMigration } from "../src/persistence/pg-pool.ts";
-import { bootTenantReader } from "../src/tenants/boot.ts";
+import { readBootTenant } from "../src/tenants/boot.ts";
 import { boundTenant, withoutTenant } from "../src/tenants/context.ts";
 import { TENANCY } from "../src/tenants/migrations.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
@@ -44,14 +44,12 @@ test("an unbound non-owner reads the boot tenant only when exactly one tenant ex
       const [me] = await app.q("SELECT rolbypassrls AS bypass FROM pg_roles WHERE rolname = current_user");
       assert.equal(me?.bypass, false);
       await assert.rejects(app.q("SELECT id FROM tenants"), { code: "42501", message: /No tenant is bound/ });
-      const read = bootTenantReader(app);
-      assert.equal(await read(), undefined);
+      assert.equal(await readBootTenant(asRole(url)), undefined);
       const only = randomUUID();
       await owner.query("INSERT INTO tenants(id) VALUES ($1)", [only]);
-      assert.equal(await read(), only);
-      assert.equal(await bootTenantReader(app)(), only);
+      assert.equal(await readBootTenant(asRole(url)), only);
       await owner.query("INSERT INTO tenants(id) VALUES ($1)", [randomUUID()]);
-      assert.equal(await bootTenantReader(app)(), undefined);
+      assert.equal(await readBootTenant(asRole(url)), undefined);
     } finally {
       await app.close();
     }
