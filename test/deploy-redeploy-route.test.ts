@@ -1,5 +1,4 @@
 import { after, before, describe, it } from "node:test";
-import { TEST_TENANT } from "./support/test-tenant.ts";
 import assert from "node:assert/strict";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -43,7 +42,6 @@ describe("deployment redeploy route", () => {
       versions: [{ version: 1, createdAt: 1, entrypoint: "x", snapshotDir: "/tmp" }],
     };
     const app = {
-      readBootTenant: async () => TEST_TENANT,
       getDeployment: async (id: string) => (id === deployment.id || id === deployment.name ? deployment : null),
       canManageDeployment: async () => true,
       redeploy: async (_id: string, input: RedeployInput) => {

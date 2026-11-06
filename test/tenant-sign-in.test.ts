@@ -15,6 +15,7 @@ import type { DirectoryStore } from "../src/directory/directory-store.ts";
 import type { IdentityService } from "../src/identity/identity-service.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { boundTenant, withoutTenant } from "../src/tenants/context.ts";
+import { bindBootTenant } from "../src/tenants/boot.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testMigratedDatabaseUrl } from "./support/test-database.ts";
@@ -36,6 +37,7 @@ async function member(tenant: string, principal: string, type = "internal"): Pro
 }
 
 test.before(async () => {
+  await bindBootTenant(async () => undefined);
   await directory.list().catch(() => undefined);
   await owner.q(
     `INSERT INTO tenants(id, settings) VALUES ($1, '{"brandName":"Alpha","allowedEmails":["@nowhere.test"]}'), ($2, '{}')`,
@@ -80,11 +82,10 @@ function identityAdmitting(tenant: string | undefined, seen: Array<string | unde
   } as unknown as IdentityService;
 }
 
-function start(identity: IdentityService, tenants: DirectoryStore["tenantsForEmail"], boot?: string) {
+function start(identity: IdentityService, tenants: DirectoryStore["tenantsForEmail"]) {
   const built = buildApp(
     testConfig({ databaseUrl, dataDir: mkdtempSync(join(tmpdir(), "tenant-sign-in-")), orgId: "acme" }),
   );
-  Object.assign(built.app, { readBootTenant: async () => boot });
   const server = createInsecureTestServer(built.app, {
     portalIdentitySecret: IDENTITY_SECRET,
     identity,
@@ -167,7 +168,7 @@ async function bound(route: { auth: "source"; tenant?: "optional" }, headers: Re
       res,
       route,
       undefined,
-      async () => undefined,
+      undefined,
       () => void res.end(JSON.stringify({ tenant: boundTenant() ?? null })),
       undefined,
       IDENTITY_SECRET,
@@ -216,7 +217,9 @@ test("under a company the directory is the roster, its allowed-emails list admit
 
 test("a single-company install keeps admitting by the install list", (t) =>
   withoutTenant(async () => {
-    const srv = start(identityAdmitting(undefined, []), (email) => directory.tenantsForEmail!(email), beta);
+    await bindBootTenant(async () => beta);
+    t.after(() => bindBootTenant(async () => undefined));
+    const srv = start(identityAdmitting(undefined, []), (email) => directory.tenantsForEmail!(email));
     t.after(srv.close);
     const allowed = async (email: string) =>
       (await srv.get(`/v1/auth/broker/email-allowed?email=${encodeURIComponent(email)}`)).body.allowed;

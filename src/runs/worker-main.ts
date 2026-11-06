@@ -9,7 +9,7 @@ import { loadTenant } from "../tenants/cache.ts";
 const config = loadConfig();
 const built = buildApp(config);
 await migrateRegisteredPgSchemas(config.databaseUrl);
-const tenant = await bindBootTenant(() => built.app.readBootTenant());
+const tenant = await bindBootTenant(built.bootTenant);
 if (config.backgroundWorkEnabled) await inBootTenant(tenant, () => built.ownSharedState());
 if (tenant) await inBootTenant(tenant, loadTenant);
 const { runtime } = built;

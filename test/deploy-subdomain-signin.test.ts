@@ -85,10 +85,7 @@ test("forwarded app hosts fail closed before core routes when gateway configurat
     { deployAppsDomain: "apps.example.com" },
     { deployAppsDomain: "apps.example.com", deployGateSecret: "gate" },
   ]) {
-    const server = createInsecureTestServer(
-      { readBootTenant: async () => TEST_TENANT } as Parameters<typeof createInsecureTestServer>[0],
-      config,
-    );
+    const server = createInsecureTestServer({} as Parameters<typeof createInsecureTestServer>[0], config);
     server.listen(0);
     try {
       const result = await httpGet((server.address() as AddressInfo).port, "/healthz", {
@@ -121,7 +118,6 @@ function httpGet(
 test("app sign-in uses the configured trusted entry and preserves the app return address", async () => {
   const server = createInsecureTestServer(
     {
-      readBootTenant: async () => TEST_TENANT,
       tenantFor: async () => TEST_TENANT,
       getDeployment: async () => null,
     } as unknown as Parameters<typeof createInsecureTestServer>[0],

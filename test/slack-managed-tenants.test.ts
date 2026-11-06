@@ -7,6 +7,7 @@ import type { ApiCtx } from "../src/api/routes/route.ts";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createSlackInstallationStore } from "../src/surfaces/slack-installation.ts";
 import { createManagedSlack } from "../src/surfaces/slack-managed.ts";
+import { bindBootTenant } from "../src/tenants/boot.ts";
 import { onTenantLoad } from "../src/tenants/cache.ts";
 import { inTenant } from "../src/tenants/claim.ts";
 import { tenantLookup } from "../src/tenants/lookup.ts";
@@ -40,6 +41,7 @@ describe("managed Slack on a shared host", () => {
   let close: () => Promise<void> = async () => {};
 
   before(async () => {
+    await bindBootTenant(async () => undefined);
     db = await twoTenants();
     stopLoad = onTenantLoad(() => loadTenantSettings(db.app));
     for (const [i, tenant] of db.tenants.entries())
@@ -63,7 +65,7 @@ describe("managed Slack on a shared host", () => {
       }) as typeof fetch,
     });
     const deps = { managedSlack: slack, slackInstallation: store };
-    const app = { tenantFor: lookup.tenantFor, readBootTenant: async () => undefined };
+    const app = { tenantFor: lookup.tenantFor };
     const server = createServer(async (req, res) => {
       let raw = "";
       for await (const chunk of req) raw += String(chunk);
