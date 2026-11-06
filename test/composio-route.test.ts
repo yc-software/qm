@@ -1118,11 +1118,12 @@ test("Slack replies use only the viewer's verified user connection and server-si
   });
 });
 
-test("Slack reply status verifies personal access without posting", async () => {
+test("Slack reply status verifies personal access without posting or checking the conversation", async () => {
   const f = await slackReplyFixture();
-  f.replies.push(f.account, f.identity, { data: { ok: true } });
+  f.replies.push(f.account, f.identity);
   assert.equal((await f.invoke("/v1/composio/slack/reply-status", f.message)).data.connected, true);
-  assert.equal(f.calls.length, 3);
+  assert.equal(f.calls.length, 2);
+  assert.doesNotMatch(f.calls.map((c) => String(c.init?.body)).join("\n"), /conversations\.info|chat\.postMessage/);
 });
 
 test("Slack replies cannot target hidden sessions or accept blank messages", async () => {
