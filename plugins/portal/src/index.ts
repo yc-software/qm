@@ -11,7 +11,6 @@ import { isDnsLabel } from "../../chassis/src/dns-label.ts";
 import { reportBackendError } from "../../chassis/src/error-reporting.ts";
 import "./instrument.ts";
 import { provisionTrustedAdmin } from "./trusted-admin.ts";
-import { noWorkspaceLinksFor, parseNoWorkspaceLinks } from "./no-workspace.ts";
 import {
   CARD_SCENE_PATH,
   cardPage,
@@ -1465,8 +1464,6 @@ async function trustedLogin(
   res.end();
 }
 
-const NO_WORKSPACE = parseNoWorkspaceLinks(process.env.PORTAL_NO_WORKSPACE_LINKS);
-const NO_WORKSPACE_LINKS = NO_WORKSPACE.config;
 const tenantChoice = createTenantChoice({
   core: CORE,
   signingSecret: CORE_SIGNING_SECRET,
@@ -1478,8 +1475,7 @@ const tenantChoice = createTenantChoice({
   pin: (returnTo) => appHandoff.pin(returnTo),
   cardPage,
   signInErrorHtml,
-  noWorkspaceHtml: (email, profile) =>
-    noWorkspaceHtml({ email, links: noWorkspaceLinksFor(NO_WORKSPACE_LINKS, profile) }),
+  noWorkspaceHtml,
   sendHtml: (res, status, html, scriptHash) =>
     sendHtml(res, status, html, scriptHash ? `${PAGE_CSP}; script-src '${scriptHash}'` : PAGE_CSP),
   finishSignIn,
@@ -1632,12 +1628,7 @@ async function finishSignIn(
       const shared = email
         ? (await coreEmailTenants(CORE, CORE_SIGNING_SECRET, email).catch(() => null))?.shared
         : false;
-      if (shared)
-        return sendHtml(
-          res,
-          403,
-          noWorkspaceHtml({ email, links: noWorkspaceLinksFor(NO_WORKSPACE_LINKS, { ...claims, ...userinfo }) }),
-        );
+      if (shared) return sendHtml(res, 403, noWorkspaceHtml(email));
     }
     return sendHtml(res, 400, signInErrorHtml(errMessage(e, "sign-in failed")));
   }
@@ -1651,7 +1642,6 @@ async function finishSignIn(
 
 export function bootChecks(): void {
   const problems: string[] = [...API_ALLOWED_ORIGINS.problems];
-  if (NO_WORKSPACE.problem) problems.push(NO_WORKSPACE.problem);
   for (const origin of API_ALLOWED_ORIGINS.origins) {
     const host = hostOf(origin);
     if (IS_PROD && !origin.startsWith("https://")) {

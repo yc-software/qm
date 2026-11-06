@@ -70,23 +70,15 @@ ${HARBOUR_STYLE}
 }
 
 /** Signed in on the shared host, but the account belongs to no workspace here. */
-export function noWorkspaceHtml(o: { email: string | null; links: readonly string[] }): string {
+export function noWorkspaceHtml(email: string | null): string {
   const brand = brandLabel();
-  const others = o.links
-    .map(
-      (url, i) =>
-        `<a class="btn ${i === 0 ? "primary" : "ghost"}" href="${escapeHtml(url)}">Open ${escapeHtml(new URL(url).host)}</a>`,
-    )
-    .join("");
   return cardPage({
     title: "No workspace",
     heading: `No ${brand} workspace for this account yet`,
-    msg: o.links.length
-      ? `This account isn't in a ${brand} workspace here. Your team's ${brand} may still be at its own address.`
-      : `This account isn't in a ${brand} workspace yet.`,
+    msg: `This account isn't in a ${brand} workspace yet.`,
     icon: LOCK_ICON,
-    extra: `<p class="account"><strong>Signed in as</strong>${escapeHtml(o.email ?? "an account without an email address")}</p>`,
-    actions: `${others}<a class="btn ${o.links.length ? "ghost" : "primary"}" href="/auth/login">Sign in with a different account</a>`,
+    extra: `<p class="account"><strong>Signed in as</strong>${escapeHtml(email ?? "an account without an email address")}</p>`,
+    actions: `<a class="btn ghost workspace" href="/auth/login">Sign in with a different account</a>`,
     help: "If you expected access, ask someone on your team to add this email address to your workspace.",
   });
 }

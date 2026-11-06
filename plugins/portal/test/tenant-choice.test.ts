@@ -132,10 +132,6 @@ Object.assign(process.env, {
     clientId: "trusted-client",
   }),
   PORTAL_TRUSTED_OIDC_CLIENT_SECRET: "trusted-client-secret-0123456789abcdef",
-  PORTAL_NO_WORKSPACE_LINKS: JSON.stringify({
-    claim: "email",
-    links: { "moved@company.test": "https://old.example.com/" },
-  }),
 });
 const { server } = await import("../src/index.ts");
 await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -208,7 +204,6 @@ test("on a shared host, an email no workspace admits gets the no-workspace page 
     const html = await response.text();
     assert.match(html, /<h1 id="t">No QM workspace for this account yet<\/h1>/);
     assert.match(html, /Signed in as<\/strong>moved@company\.test/);
-    assert.match(html, /href="https:\/\/old\.example\.com\/">Open old\.example\.com</);
     shared = false;
     const single = await callback();
     assert.equal(single.status, 400);
@@ -336,13 +331,10 @@ test("a trusted sign-in on a shared host picks the tenant by the provider's emai
   const nobodyHtml = await nobody.text();
   assert.match(nobodyHtml, /<h1 id="t">No QM workspace for this account yet<\/h1>/);
   assert.match(nobodyHtml, /<p class="account"><strong>Signed in as<\/strong>stranger@nowhere\.test<\/p>/);
-  assert.match(nobodyHtml, /<a class="btn primary" href="\/auth\/login">Sign in with a different account<\/a>/);
-  assert.doesNotMatch(nobodyHtml, /old\.example\.com/);
-  const moved = await trustedCallback("moved@company.test");
-  assert.equal(moved.status, 403);
+  assert.match(nobodyHtml, /<p class="msg">This account isn&#39;t in a QM workspace yet\.<\/p>/);
   assert.match(
-    await moved.text(),
-    /<a class="btn primary" href="https:\/\/old\.example\.com\/">Open old\.example\.com<\/a><a class="btn ghost" href="\/auth\/login">Sign in with a different account<\/a>/,
+    nobodyHtml,
+    /<div class="actions">\s*<a class="btn ghost workspace" href="\/auth\/login">Sign in with a different account<\/a>\s*<\/div>/,
   );
   assert.equal(sessionOf(nobody), null);
 });

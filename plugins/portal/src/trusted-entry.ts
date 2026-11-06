@@ -98,7 +98,6 @@ export function createTrustedEntry(
         sub: trustedPrincipal(cfg.issuer, claims.sub),
         name: typeof info.name === "string" ? info.name.trim().slice(0, 200) : "",
         email: verifiedEmail(info),
-        profile: { ...claims, ...info } as Record<string, unknown>,
         returnTo: tmp.returnTo,
         tenant: workspace?.tenant,
       };
