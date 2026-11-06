@@ -12,6 +12,7 @@ import { adminRoutes } from "./admin-routes.ts";
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, extname, join, posix } from "node:path";
@@ -1203,7 +1204,7 @@ async function serveFileContent(c: WebCtx, playground = false): Promise<unknown>
       "x-frame-options": "SAMEORIGIN",
       "x-content-type-options": "nosniff",
     });
-    return Readable.fromWeb(r.body as Parameters<typeof Readable.fromWeb>[0]).pipe(res);
+    return pipeUpstreamFile(res, id, r.body);
   }
 
   const csp = scriptCapableContentType(contentType)
@@ -1216,7 +1217,21 @@ async function serveFileContent(c: WebCtx, playground = false): Promise<unknown>
     "x-content-type-options": "nosniff",
   };
   res.writeHead(200, framedByOwnSurfaces(res, headers, csp));
-  return Readable.fromWeb(r.body as Parameters<typeof Readable.fromWeb>[0]).pipe(res);
+  return pipeUpstreamFile(res, id, r.body);
+}
+
+// Relays a file body from core. A raw .pipe() leaves the source stream's
+// asynchronous "error" (core closing mid-body, e.g. `TypeError: terminated`)
+// unhandled, which crashes the whole process. pipeline() owns both ends: an
+// upstream failure destroys only this response, and a client disconnect
+// destroys the source, which cancels the upstream fetch.
+async function pipeUpstreamFile(res: ServerResponse, id: string, body: ReadableStream<Uint8Array>): Promise<void> {
+  try {
+    await pipeline(Readable.fromWeb(body as Parameters<typeof Readable.fromWeb>[0]), res);
+  } catch (error) {
+    if (!res.destroyed) res.destroy();
+    if (!res.writableFinished) console.warn(`[web-ui] file ${id} stream ended early: ${errChain(error)}`);
+  }
 }
 
 const apiRoutes: readonly WebRoute[] = [
