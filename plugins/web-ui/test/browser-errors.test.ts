@@ -64,13 +64,19 @@ test("browser errors keep HTTP failures, their context and uncaught page errors 
       "web:approvals_fetch",
       Object.assign(new ApiError("approvals 500", 500, body), { cause: new Error("db down") }),
     );
-    const onerror = globalThis.onerror as OnErrorEventHandlerNonNull;
+    const onerror = globalThis.onerror as (
+      message: string,
+      url: string,
+      line: number,
+      column: number,
+      error: Error | null,
+    ) => void;
     for (const message of [
       "ResizeObserver loop completed with undelivered notifications.",
       "ResizeObserver loop limit exceeded",
     ])
-      onerror(message, `${origin}/app.js`, 0, 0, undefined);
-    onerror("Script error.", `${origin}/app.js`, 0, 0, undefined);
+      onerror(message, `${origin}/app.js`, 0, 0, null);
+    onerror("Script error.", `${origin}/app.js`, 0, 0, null);
     await sdk.flush(1000);
     assert.equal(sent.length, 2);
     const pageError = JSON.parse(sent[1]!.split("\n")[2]!);
