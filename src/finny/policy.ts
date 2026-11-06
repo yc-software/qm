@@ -27,7 +27,7 @@ const invalidatedChecks: Record<FinnyChangeKind, readonly FinnyCheckId[]> = {
 const checkIds = new Set<string>(FINNY_CHECK_IDS);
 const changeKinds = new Set<string>(FINNY_CHANGE_KINDS);
 
-function validatePolicy(policy: FinnyPolicySnapshot): void {
+export function assertFinnyPolicy(policy: FinnyPolicySnapshot): void {
   if (policy.policyVersion !== FINNY_POLICY_VERSION) throw new Error("Finny policy version is invalid");
   const entries = Object.entries(policy.requiredGenerations);
   if (entries.length !== FINNY_CHECK_IDS.length) throw new Error("Finny policy check set is invalid");
@@ -52,7 +52,7 @@ export function reviseFinnyPolicy(
   current: FinnyPolicySnapshot,
   requestedChangeKinds: readonly FinnyChangeKind[],
 ): FinnyPolicySnapshot {
-  validatePolicy(current);
+  assertFinnyPolicy(current);
   if (!requestedChangeKinds.length || requestedChangeKinds.some((changeKind) => !changeKinds.has(changeKind))) {
     throw new Error("Finny change kind is invalid");
   }

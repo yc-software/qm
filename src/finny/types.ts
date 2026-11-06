@@ -19,3 +19,55 @@ export interface FinnyPolicySnapshot {
   policyVersion: string;
   requiredGenerations: Record<FinnyCheckId, number>;
 }
+
+export const FINNY_APPROVAL_ACTIONS = ["approve", "reject", "request_change"] as const;
+export type FinnyApprovalAction = (typeof FINNY_APPROVAL_ACTIONS)[number];
+
+export const FINNY_VERDICTS = ["pass", "block"] as const;
+export type FinnyVerdict = (typeof FINNY_VERDICTS)[number];
+
+export interface FinnyApproval {
+  requestId: string;
+  actorId: string;
+  action: FinnyApprovalAction;
+  planDigest: string;
+  originThreadRef: string;
+  decidedAt: number;
+  consumedAt?: number;
+}
+
+export interface FinnyJob {
+  id: string;
+  scopeId: string;
+  planDigest: string;
+  artifactDigest: string;
+  policy: FinnyPolicySnapshot;
+  originThreadRef: string;
+  provisionalRevision: string;
+  approval?: FinnyApproval;
+  ledgerHead: number;
+  finalizationKey?: string;
+  finalReceipt?: FinnyFinalReceipt;
+  finalizedAt?: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface FinnyAttestation {
+  seq: number;
+  id: string;
+  jobId: string;
+  checkId: FinnyCheckId;
+  generation: number;
+  verdict: FinnyVerdict;
+  evidenceDigest: string;
+  issuerPrincipalId: string;
+  issuerRunId: string;
+  idempotencyKey: string;
+  createdAt: number;
+}
+
+export interface FinnyFinalReceipt {
+  token: string;
+  payload: Record<string, unknown>;
+}
