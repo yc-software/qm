@@ -3671,7 +3671,7 @@ test("approvals collected during an approval re-run are still surfaced (multi-st
 });
 
 test("'allow once' authorizes exactly one execution — a sibling approval for the same command stays pending", async () => {
-  const { app } = freshApp();
+  const { app } = await withCommandRules(freshApp());
   const command = "git push --force origin main";
   const first = await app.turn(dm(`!double-exec ${command}`));
   assert.equal(first.status, "ok");
@@ -3690,7 +3690,7 @@ test("'allow once' authorizes exactly one execution — a sibling approval for t
 });
 
 test("'allow for session' approves every same-command invocation in the same turn", async () => {
-  const { app } = freshApp();
+  const { app } = await withCommandRules(freshApp());
   const command = "git push --force origin main";
   const first = await app.turn(dm(`!double-exec ${command}`));
   assert.equal(first.status, "ok");
@@ -3706,7 +3706,7 @@ test("'allow for session' approves every same-command invocation in the same tur
 
 test("accepted approval decisions are durably recorded in the conversation", async () => {
   for (const approved of [false, true]) {
-    const { app, sessions, runs } = freshApp();
+    const { app, sessions, runs } = await withCommandRules(freshApp());
     const command = "git push --force origin main";
     const first = await app.turn(dm(`!run ${command}`));
     const requestId = first.pendingApprovals![0]!.requestId;
