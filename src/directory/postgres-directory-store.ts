@@ -119,6 +119,8 @@ export const DIRECTORY_MIGRATIONS = [
   },
 ];
 
+const rosterCoversAudience = (channel: { is_external?: unknown }) => channel.is_external !== true;
+
 export function createPostgresDirectoryStore(connectionString: string): DirectoryStore {
   const orgId = configOrgId();
   const { q, pool } = createPgPool(connectionString, DIRECTORY_MIGRATIONS);
@@ -202,12 +204,12 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       return rows.length > 0;
     },
 
-    async channelShared(channelId) {
+    async rosterCoversAudience(channelId) {
       const rows = await q("SELECT is_external FROM directory_channels WHERE org_id = $1 AND channel_id = $2", [
         orgId,
         channelId,
       ]);
-      return rows.length ? rows[0]!.is_external === true : undefined;
+      return rows.length ? rosterCoversAudience(rows[0]!) : undefined;
     },
 
     async channelMemberIds(channelId) {
@@ -312,7 +314,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
          ORDER BY roster.principal_id`,
         [orgId, id],
       );
-      if (!rows.length || rows[0]?.roster_known !== true || rows[0]?.is_external === true) return undefined;
+      if (!rows.length || rows[0]?.roster_known !== true || !rosterCoversAudience(rows[0])) return undefined;
       if (rows.some((row) => !row.roster_principal_id || !row.principal_id)) return undefined;
       return rows.map(memberRow);
     },

@@ -182,7 +182,7 @@ test("a private shared channel admits its members but never stands in for the fu
   const shared = {
     ...directory,
     channelPrivacy: async () => true,
-    channelShared: async (channelId: string) => channelId === "priv",
+    rosterCoversAudience: async (channelId: string) => channelId !== "priv",
     list: async () => [{ principalId: "alice@x.com" }],
   };
   const canWrite = createCanWriteScope({ ...deps, directory: shared });

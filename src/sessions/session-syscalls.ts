@@ -655,7 +655,7 @@ export async function sessionTreeRuns(
 }
 
 export const HELPER_WORK_NOTE =
-  "Nothing was started or sent. If you can do this work yourself in this turn, do it; otherwise tell the person plainly what you couldn't do.";
+  "Nothing was started or sent. Tell the person helpers were refused here, and do the work yourself in this turn if you can.";
 
 export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscallsFactory {
   const lock = deps.advisoryLock;
@@ -711,8 +711,9 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
         if (deps.enabled && !(await deps.enabled(binding.request.actor.id)))
           throw new Error("persistent subagents are not enabled for this user");
         const current = await deps.sessions.get(binding.session.id);
-        if (!current || current.scopeId !== binding.scopeId)
-          throw new Error(`this session no longer belongs to ${binding.scopeId}. ${HELPER_WORK_NOTE}`);
+        if (!current) throw new Error(`this session no longer exists. ${HELPER_WORK_NOTE}`);
+        if (current.scopeId !== binding.scopeId)
+          throw new Error(`this session moved from ${binding.scopeId} to ${current.scopeId}. ${HELPER_WORK_NOTE}`);
         if (deps.authorize && !(await deps.authorize(current, binding.request.actor.id)))
           throw new Error(
             `${binding.request.actor.id} can't currently be confirmed as a member of ${binding.scopeId}, so helpers can't run here. ${HELPER_WORK_NOTE}`,

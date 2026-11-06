@@ -442,7 +442,7 @@ test(
     assert.equal(await store.channelMembership("C-connect", "U-member"), true);
     assert.equal(await store.channelMember("C-connect", "U-member"), true);
     assert.equal(await store.channelMember("C-connect", "U-outsider"), false);
-    assert.equal(await store.channelShared("C-connect"), true);
+    assert.equal(await store.rosterCoversAudience("C-connect"), false);
     assert.equal(await store.conversationMembers("channel", "C-connect"), undefined);
     assert.deepEqual(
       (await store.listChannelsFor("U-member")).map((c) => c.channelId),
