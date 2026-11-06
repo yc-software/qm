@@ -33,13 +33,14 @@ export type ChannelPersonaResult =
 
 export interface ChannelPersonas {
   current(scope: ScopeId): Promise<Persona | undefined>;
+  all(): Promise<Array<{ channelId: string; persona: Persona }>>;
   get(actorId: string, channel: string): Promise<ChannelPersonaResult>;
   set(actor: Actor, channel: string, personaId: string | null): Promise<ChannelPersonaResult>;
   assertMayInstruct(scope: ScopeId, actor: Actor): Promise<void>;
 }
 
 export interface ChannelPersonasDeps {
-  defaults: Pick<DurableMap<ChannelPersonaDefault>, "get" | "put" | "delete">;
+  defaults: Pick<DurableMap<ChannelPersonaDefault>, "get" | "all" | "put" | "delete">;
   store: Pick<PersonaStore, "get" | "access">;
   personas: Pick<PersonaService, "role">;
   flags: Pick<FeatureFlagStore, "enabled">;
@@ -141,6 +142,18 @@ export function createChannelPersonas(deps: ChannelPersonasDeps): ChannelPersona
 
   return {
     current,
+
+    async all() {
+      const rows = await deps.defaults.all();
+      if (!rows.length || !(await orgOn())) return [];
+      const ids = [...new Set(rows.map((row) => row.personaId))];
+      const found = new Map(await Promise.all(ids.map(async (id) => [id, await deps.store.get(id)] as const)));
+      return rows.flatMap((row) => {
+        const persona = found.get(row.personaId);
+        const { ref } = parseScopeId(row.scopeId);
+        return persona && ref ? [{ channelId: ref, persona }] : [];
+      });
+    },
 
     async get(actorId, query) {
       if (!(await orgOn())) return refuse("disabled", "channel personas need personas on for the whole organization");

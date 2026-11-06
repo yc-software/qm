@@ -8,7 +8,6 @@ import { deliverKeychainCard } from "./keychain-approvals.ts";
 import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 import { performance } from "node:perf_hooks";
 import {
-  botIdentityArgs,
   createDeliveryTracker,
   createThreadTracker,
   deliverWithRetry,
@@ -17,6 +16,8 @@ import {
   openConversationFor,
   findPostedByKey,
   parseDeliveryTarget,
+  personaFor,
+  refreshPersonas,
   statusPlaceholderKey,
   postWithVerify,
   recoveryVerifyOldest,
@@ -316,7 +317,7 @@ export function createDeliveryPoller(deps: {
                       ...slackSectionBlocks(text),
                       ...(footer.length ? [{ type: "context", elements: footer }] : []),
                     ],
-                    ...botIdentityArgs(),
+                    ...personaFor(channel),
                     ...(unfurlLinks !== undefined ? { unfurl_links: unfurlLinks, unfurl_media: unfurlLinks } : {}),
                   })
                   .catch((err: unknown) => {
@@ -393,7 +394,7 @@ export function createDeliveryPoller(deps: {
                     ts: editRef,
                     text,
                     ...(footerBlocks ? { blocks: footerBlocks } : {}),
-                    ...botIdentityArgs(),
+                    ...personaFor(channel),
                     metadata: deliveryMetadata(d.idempotencyKey ?? d.id),
                     ...(unfurlLinks !== undefined ? { unfurl_links: unfurlLinks, unfurl_media: unfurlLinks } : {}),
                   });
@@ -540,6 +541,7 @@ export function createDeliveryPoller(deps: {
       });
       const leaseLost = (): boolean => lostFlag;
       const cycleStart = Date.now();
+      await refreshPersonas(core, true);
       const rowCounts = await Promise.all([
         deliverToConversations(client, leaseLost),
         deliverToPrincipals(client, leaseLost),

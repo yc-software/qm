@@ -109,8 +109,10 @@ export {
 } from "./conversation.ts";
 export {
   botIdentityFromEnv,
-  botIdentityArgs,
+  personaFor,
+  refreshPersonas,
   slackReplyArgs,
+  slackEphemeralArgs,
   channelSurfaceUrl,
   channelWelcomeMessage,
   surfaceHeaderText,

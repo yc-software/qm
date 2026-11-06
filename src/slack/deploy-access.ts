@@ -6,6 +6,7 @@ import { parseScopeId, scopeId, type ActorAssertion, type Destination } from "..
 import type { Directory } from "./directory.ts";
 import { parseBlockAction, parseInteractionBody } from "./payloads.ts";
 import { updateSlackMessage } from "./messaging.ts";
+import { refreshPersonas, slackEphemeralArgs } from "./delivery.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { uuidSchema } from "../util/ids.ts";
 
@@ -104,6 +105,7 @@ export function registerDeployAccessActions(
     const parsed = parseBlockAction(action, ACTIONS);
     const { clickerId, channel, messageTs } = parseInteractionBody(body);
     if (!parsed || !clickerId || !channel || !messageTs) return;
+    await refreshPersonas(deps.core);
     try {
       const actor = await deps.directory.classifyActor(client, clickerId);
       const text = await deps.core.decideDeploymentAccess(parsed.value, actor, parsed.actionId === ACTIONS[0]);
@@ -112,11 +114,13 @@ export function registerDeployAccessActions(
       ]);
     } catch (error) {
       await client.chat
-        .postEphemeral({
-          channel,
-          user: clickerId,
-          text: `Couldn't complete that: ${errMessage(error)} You can try the button again.`,
-        })
+        .postEphemeral(
+          slackEphemeralArgs(
+            channel,
+            clickerId,
+            `Couldn't complete that: ${errMessage(error)} You can try the button again.`,
+          ),
+        )
         .catch(swallowAs("slack: app access decision failure", undefined));
     }
   });
