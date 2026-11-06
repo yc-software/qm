@@ -16,7 +16,14 @@ const findingPolicy = {
 const createInput = () => ({
   id: randomUUID(),
   scopeId: "personal:U1",
-  planDigest: "plan-sha256",
+  plan: {
+    title: "Finance pack",
+    phases: [{ name: "Prepare", owner: "MIS Expert", dependencies: [] }],
+    certification: "Independent checks",
+    deliverable: "Workbook",
+    destination: "Origin thread",
+    clarifications: [],
+  },
   artifactDigest: "artifact-sha256-v1",
   policy: initialFinnyPolicy(),
   originThreadRef: "slack:C1:100.1",
@@ -24,10 +31,52 @@ const createInput = () => ({
   findingPolicy,
 });
 
+async function approveJob(store: ReturnType<typeof createPostgresFinnyStore>, input: ReturnType<typeof createInput>) {
+  const requestId = randomUUID();
+  await store.createApprovalRequest({
+    scopeId: input.scopeId,
+    jobId: input.id,
+    requestId,
+    authorizedActorId: "U1",
+  });
+  return store.recordApproval({
+    scopeId: input.scopeId,
+    jobId: input.id,
+    requestId,
+    actorId: "U1",
+    action: "approve",
+    decidedAt: Date.now(),
+  });
+}
+
+async function createApprovedPlan(
+  store: ReturnType<typeof createPostgresFinnyStore>,
+  input: ReturnType<typeof createInput>,
+) {
+  const created = await store.createJob(input);
+  await approveJob(store, input);
+  return created;
+}
+
+async function createReadyJob(
+  store: ReturnType<typeof createPostgresFinnyStore>,
+  input: ReturnType<typeof createInput>,
+) {
+  await createApprovedPlan(store, input);
+  const ready = await store.recordArtifactReady({
+    scopeId: input.scopeId,
+    jobId: input.id,
+    artifactDigest: input.artifactDigest,
+    provisionalRevision: input.provisionalRevision,
+    idempotencyKey: randomUUID(),
+  });
+  return ready.job;
+}
+
 test("BLOCK requests rework and advances only invalidated check generations", async () => {
   const store = createPostgresFinnyStore(testDatabaseUrl());
   const input = createInput();
-  const original = await store.createJob(input);
+  const original = await createReadyJob(store, input);
 
   const result = await store.recordAuditBlock({
     scopeId: input.scopeId,
@@ -65,7 +114,7 @@ test("BLOCK requests rework and advances only invalidated check generations", as
 test("duplicate BLOCK submissions return the original transition without advancing policy again", async () => {
   const store = createPostgresFinnyStore(testDatabaseUrl());
   const input = createInput();
-  await store.createJob(input);
+  await createReadyJob(store, input);
   const firstSubmission = {
     scopeId: input.scopeId,
     jobId: input.id,
@@ -104,7 +153,7 @@ test("duplicate BLOCK submissions return the original transition without advanci
 test("stale and wrong-scope audit events fail without changing authoritative state", async () => {
   const store = createPostgresFinnyStore(testDatabaseUrl());
   const input = createInput();
-  await store.createJob(input);
+  await createReadyJob(store, input);
   const submission = {
     scopeId: input.scopeId,
     jobId: input.id,
@@ -122,14 +171,17 @@ test("stale and wrong-scope audit events fail without changing authoritative sta
     store.recordAuditBlock({ ...submission, scopeId: "personal:U2", generation: 1 }),
     /not found in this scope/i,
   );
-  assert.deepEqual(await store.listEvents(input.scopeId, input.id), []);
-  assert.equal((await store.getJob(input.scopeId, input.id))?.eventHead, 0);
+  assert.deepEqual(
+    (await store.listEvents(input.scopeId, input.id)).filter((event) => event.type !== "artifact_ready"),
+    [],
+  );
+  assert.ok(((await store.getJob(input.scopeId, input.id))?.eventHead ?? 0) > 0);
 });
 
 test("artifact and audit events expose the latest server sequence", async () => {
   const store = createPostgresFinnyStore(testDatabaseUrl());
   const input = createInput();
-  await store.createJob(input);
+  await createApprovedPlan(store, input);
   const artifact = await store.recordArtifactReady({
     scopeId: input.scopeId,
     jobId: input.id,
@@ -159,7 +211,7 @@ test("artifact and audit events expose the latest server sequence", async () => 
 test("external escalation decisions are recorded without an internal retry cap", async () => {
   const store = createPostgresFinnyStore(testDatabaseUrl());
   const input = createInput();
-  await store.createJob(input);
+  await createReadyJob(store, input);
   const result = await store.recordAuditBlock({
     scopeId: input.scopeId,
     jobId: input.id,
@@ -184,7 +236,7 @@ test("external escalation decisions are recorded without an internal retry cap",
 test("BLOCK rejects findings beyond the bounded event contract", async () => {
   const store = createPostgresFinnyStore(testDatabaseUrl());
   const input = { ...createInput(), findingPolicy: { ...findingPolicy, maxFindings: 20 } };
-  await store.createJob(input);
+  await createReadyJob(store, input);
 
   await assert.rejects(
     store.recordAuditBlock({
@@ -200,15 +252,18 @@ test("BLOCK rejects findings beyond the bounded event contract", async () => {
     }),
     /findings count is invalid/i,
   );
-  assert.deepEqual(await store.listEvents(input.scopeId, input.id), []);
+  assert.deepEqual(
+    (await store.listEvents(input.scopeId, input.id)).filter((event) => event.type !== "artifact_ready"),
+    [],
+  );
 });
 
 test("an idempotency key cannot replay events from another job or scope", async () => {
   const store = createPostgresFinnyStore(testDatabaseUrl());
   const first = createInput();
   const second = { ...createInput(), scopeId: "personal:U2" };
-  await store.createJob(first);
-  await store.createJob(second);
+  await createApprovedPlan(store, first);
+  await createApprovedPlan(store, second);
   const idempotencyKey = randomUUID();
   await store.recordArtifactReady({
     scopeId: first.scopeId,
@@ -234,7 +289,7 @@ test("an idempotency key cannot replay events from another job or scope", async 
 test("runtime event validation rejects unknown checks and malformed generations", async () => {
   const store = createPostgresFinnyStore(testDatabaseUrl());
   const input = createInput();
-  await store.createJob(input);
+  await createReadyJob(store, input);
   const base = {
     scopeId: input.scopeId,
     jobId: input.id,
@@ -247,23 +302,17 @@ test("runtime event validation rejects unknown checks and malformed generations"
 
   await assert.rejects(store.recordAuditPassed(base), /required check|generation is invalid/i);
   await assert.rejects(store.recordAuditPassed({ ...base, checkId: "lineage.binding", generation: 0 }), /generation/i);
-  assert.deepEqual(await store.listEvents(input.scopeId, input.id), []);
+  assert.deepEqual(
+    (await store.listEvents(input.scopeId, input.id)).filter((event) => event.type !== "artifact_ready"),
+    [],
+  );
 });
 
 test("finalized jobs reject new event transitions", async () => {
   const store = createPostgresFinnyStore(testDatabaseUrl());
   const input = createInput();
-  await store.createJob(input);
-  await store.recordApproval({
-    scopeId: input.scopeId,
-    jobId: input.id,
-    requestId: randomUUID(),
-    actorId: "U1",
-    action: "approve",
-    planDigest: input.planDigest,
-    originThreadRef: input.originThreadRef,
-    decidedAt: Date.now(),
-  });
+  await createReadyJob(store, input);
+
   for (const checkId of FINNY_CHECK_IDS) {
     await store.recordAttestation({
       id: randomUUID(),
@@ -328,7 +377,7 @@ test("the external finding policy supplies the BLOCK finding bound", async () =>
     ...createInput(),
     findingPolicy: { ...findingPolicy, id: "controller-review-v1", maxFindings: 1 },
   };
-  await store.createJob(input);
+  await createReadyJob(store, input);
   const submission = {
     scopeId: input.scopeId,
     jobId: input.id,
@@ -346,13 +395,16 @@ test("the external finding policy supplies the BLOCK finding bound", async () =>
   };
 
   await assert.rejects(store.recordAuditBlock(submission), /findings count is invalid/i);
-  assert.deepEqual(await store.listEvents(input.scopeId, input.id), []);
+  assert.deepEqual(
+    (await store.listEvents(input.scopeId, input.id)).filter((event) => event.type !== "artifact_ready"),
+    [],
+  );
 });
 
 test("artifact replacement requires an authoritative rework request", async () => {
   const store = createPostgresFinnyStore(testDatabaseUrl());
   const input = createInput();
-  await store.createJob(input);
+  await createReadyJob(store, input);
 
   await assert.rejects(
     store.recordArtifactReady({
@@ -416,7 +468,7 @@ test("artifact replacement requires an authoritative rework request", async () =
 test("re-audit waits for a new artifact to consume the rework request", async () => {
   const store = createPostgresFinnyStore(testDatabaseUrl());
   const input = createInput();
-  await store.createJob(input);
+  await createReadyJob(store, input);
   await store.recordAuditBlock({
     scopeId: input.scopeId,
     jobId: input.id,
@@ -462,17 +514,8 @@ test("re-audit waits for a new artifact to consume the rework request", async ()
 test("unresolved escalation blocks final delivery", async () => {
   const store = createPostgresFinnyStore(testDatabaseUrl());
   const input = createInput();
-  await store.createJob(input);
-  await store.recordApproval({
-    scopeId: input.scopeId,
-    jobId: input.id,
-    requestId: randomUUID(),
-    actorId: "U1",
-    action: "approve",
-    planDigest: input.planDigest,
-    originThreadRef: input.originThreadRef,
-    decidedAt: Date.now(),
-  });
+  await createReadyJob(store, input);
+
   for (const checkId of FINNY_CHECK_IDS) {
     await store.recordAttestation({
       id: randomUUID(),
@@ -512,7 +555,7 @@ test("unresolved escalation blocks final delivery", async () => {
 test("authoritative finding policy rejects oversized finding text", async () => {
   const store = createPostgresFinnyStore(testDatabaseUrl());
   const input = { ...createInput(), findingPolicy: { ...findingPolicy, maxMessageLength: 10 } };
-  await store.createJob(input);
+  await createReadyJob(store, input);
 
   await assert.rejects(
     store.recordAuditBlock({
@@ -532,18 +575,8 @@ test("authoritative finding policy rejects oversized finding text", async () => 
 
 test("artifact_ready authoritatively binds a job created before its artifact", async () => {
   const store = createPostgresFinnyStore(testDatabaseUrl());
-  const { artifactDigest: _artifactDigest, provisionalRevision: _provisionalRevision, ...input } = createInput();
-  await store.createJob(input);
-  await store.recordApproval({
-    scopeId: input.scopeId,
-    jobId: input.id,
-    requestId: randomUUID(),
-    actorId: "U1",
-    action: "approve",
-    planDigest: input.planDigest,
-    originThreadRef: input.originThreadRef,
-    decidedAt: Date.now(),
-  });
+  const input = createInput();
+  await createApprovedPlan(store, input);
 
   const ready = await store.recordArtifactReady({
     scopeId: input.scopeId,
@@ -577,13 +610,4 @@ test("artifact_ready authoritatively binds a job created before its artifact", a
   );
   assert.equal(receipt.payload.artifactDigest, "artifact-created-after-approval");
   assert.equal(receipt.payload.provisionalRevision, "revision-created-after-approval");
-});
-
-test("job creation rejects a partial artifact binding", async () => {
-  const store = createPostgresFinnyStore(testDatabaseUrl());
-  const { provisionalRevision: _provisionalRevision, ...input } = createInput();
-
-  await assert.rejects(store.createJob(input), /artifact binding must include both digest and revision/i);
-  const { artifactDigest: _artifactDigest, ...revisionOnly } = createInput();
-  await assert.rejects(store.createJob(revisionOnly), /artifact binding must include both digest and revision/i);
 });

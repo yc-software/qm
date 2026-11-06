@@ -15,8 +15,14 @@ async function createApprovedJob(store: FinnyStore, action: FinnyApprovalAction 
   const input = {
     id: randomUUID(),
     scopeId: "personal:U1",
-    planDigest: `plan-${randomUUID()}`,
-    artifactDigest: `artifact-${randomUUID()}`,
+    plan: {
+      title: "Finance pack",
+      phases: [{ name: "Prepare", owner: "MIS Expert", dependencies: [] }],
+      certification: "Independent checks",
+      deliverable: "Workbook",
+      destination: "Origin thread",
+      clarifications: [],
+    },
     policy: initialFinnyPolicy(),
     originThreadRef: `slack:C1:${randomUUID()}`,
     findingPolicy: {
@@ -25,20 +31,35 @@ async function createApprovedJob(store: FinnyStore, action: FinnyApprovalAction 
       maxCodeLength: 80,
       maxMessageLength: 2_000,
     },
-    provisionalRevision: `revision-${randomUUID()}`,
   };
-  await store.createJob(input);
+  const created = await store.createJob(input);
+  const requestId = randomUUID();
+  await store.createApprovalRequest({
+    scopeId: input.scopeId,
+    jobId: input.id,
+    requestId,
+    authorizedActorId: "U1",
+  });
   await store.recordApproval({
     scopeId: input.scopeId,
     jobId: input.id,
-    requestId: randomUUID(),
+    requestId,
     actorId: "U1",
     action,
-    planDigest: input.planDigest,
-    originThreadRef: input.originThreadRef,
     decidedAt: Date.now(),
   });
-  return input;
+  const artifactDigest = `artifact-${randomUUID()}`;
+  const provisionalRevision = `revision-${randomUUID()}`;
+  if (action === "approve") {
+    await store.recordArtifactReady({
+      scopeId: input.scopeId,
+      jobId: input.id,
+      artifactDigest,
+      provisionalRevision,
+      idempotencyKey: randomUUID(),
+    });
+  }
+  return { ...created, artifactDigest, provisionalRevision };
 }
 
 async function attest(
@@ -112,10 +133,9 @@ test("finalizer rejects missing evidence and the latest BLOCK", async () => {
   );
 });
 
-test("finalizer rejects scope mismatch and non-approval", async () => {
+test("finalizer rejects scope mismatch and a rejected artifact-free job", async () => {
   const store = createPostgresFinnyStore(testDatabaseUrl());
   const rejected = await createApprovedJob(store, "reject");
-  await passChecks(store, rejected);
   const finalizer = createSignedFinnyFinalizer(store, SECRET);
   await assert.rejects(
     finalizer.finalize({ scopeId: "personal:U2", jobId: rejected.id, idempotencyKey: randomUUID() }),
@@ -123,7 +143,7 @@ test("finalizer rejects scope mismatch and non-approval", async () => {
   );
   await assert.rejects(
     finalizer.finalize({ scopeId: rejected.scopeId, jobId: rejected.id, idempotencyKey: randomUUID() }),
-    /approved/i,
+    /artifact/i,
   );
 });
 

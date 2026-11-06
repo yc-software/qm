@@ -39,6 +39,7 @@ export interface FinnyApproval {
 export interface FinnyJob {
   id: string;
   scopeId: string;
+  plan: FinnyPlanPresentation;
   planDigest: string;
   artifactDigest?: string;
   policy: FinnyPolicySnapshot;
@@ -103,7 +104,7 @@ export interface FinnyWorkerGrantPayload {
   principalId: string;
   role: FinnyWorkerRole;
   runId: string;
-  artifactDigest: string;
+  artifactDigest?: string;
   policyDigest: string;
   allowedChecks: FinnyCheckId[];
   issuedAt: number;
@@ -177,3 +178,24 @@ export type FinnyJobEvent<T extends FinnyJobEventType = FinnyJobEventType> = {
     createdAt: number;
   };
 }[T];
+
+export interface FinnyPlanPhase {
+  name: string;
+  owner: string;
+  dependencies: string[];
+}
+
+export interface FinnyPlanClarification {
+  question: string;
+  answer: string;
+}
+
+export interface FinnyPlanPresentation {
+  title: string;
+  summary?: string;
+  phases: FinnyPlanPhase[];
+  certification: string;
+  deliverable: string;
+  destination: string;
+  clarifications: FinnyPlanClarification[];
+}

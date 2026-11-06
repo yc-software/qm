@@ -3,8 +3,11 @@ import { isDeepStrictEqual } from "node:util";
 import type { PoolClient } from "pg";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { assertFinnyAuditFindings, assertFinnyEscalationReason, assertFinnyFindingPolicy } from "./coordinator.ts";
+import { canonicalFinnyPlanDigest, validateFinnyPlanPresentation } from "./plan.ts";
 import { assertFinnyPolicy, reviseFinnyPolicy } from "./policy.ts";
 import type {
+  ClaimFinnyWorkerRunInput,
+  CreateFinnyApprovalRequestInput,
   CreateFinnyJobInput,
   FinalizeFinnyInput,
   FinnyReceiptSigner,
@@ -25,6 +28,7 @@ import type {
   FinnyJobEventPayloads,
   FinnyJobEventType,
   FinnyFindingPolicy,
+  FinnyPlanPresentation,
   FinnyPolicySnapshot,
 } from "./types.ts";
 
@@ -32,12 +36,13 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS finny_jobs(
     id TEXT PRIMARY KEY,
     scope_id TEXT NOT NULL CHECK (scope_id <> ''),
+    plan_presentation JSONB NOT NULL CHECK (jsonb_typeof(plan_presentation) = 'object'),
     plan_digest TEXT NOT NULL CHECK (plan_digest <> ''),
-    artifact_digest TEXT NOT NULL CHECK (artifact_digest <> ''),
+    artifact_digest TEXT CHECK (artifact_digest IS NULL OR artifact_digest <> ''),
     policy_version TEXT NOT NULL CHECK (policy_version <> ''),
     required_generations JSONB NOT NULL CHECK (jsonb_typeof(required_generations) = 'object'),
     origin_thread_ref TEXT NOT NULL CHECK (origin_thread_ref <> ''),
-    provisional_revision TEXT NOT NULL CHECK (provisional_revision <> ''),
+    provisional_revision TEXT CHECK (provisional_revision IS NULL OR provisional_revision <> ''),
     approval_request_id TEXT,
     approval_actor_id TEXT,
     approval_action TEXT CHECK (approval_action IN ('approve', 'reject', 'request_change')),
@@ -97,6 +102,33 @@ const EVENT_SCHEMA = [
   `CREATE INDEX IF NOT EXISTS finny_job_events_job_sequence ON finny_job_events(job_id, seq)`,
 ];
 
+const PLAN_FIRST_SCHEMA = [
+  `ALTER TABLE finny_jobs ADD COLUMN IF NOT EXISTS plan_presentation JSONB`,
+  `ALTER TABLE finny_jobs ALTER COLUMN plan_presentation SET NOT NULL`,
+  `ALTER TABLE finny_jobs ADD CONSTRAINT finny_jobs_plan_presentation_object
+     CHECK (jsonb_typeof(plan_presentation) = 'object')`,
+  `ALTER TABLE finny_jobs ALTER COLUMN artifact_digest DROP NOT NULL`,
+  `ALTER TABLE finny_jobs ALTER COLUMN provisional_revision DROP NOT NULL`,
+  `CREATE TABLE IF NOT EXISTS finny_approval_requests(
+    request_id TEXT PRIMARY KEY,
+    scope_id TEXT NOT NULL CHECK (scope_id <> ''),
+    job_id TEXT NOT NULL REFERENCES finny_jobs(id) ON DELETE CASCADE,
+    plan_digest TEXT NOT NULL CHECK (plan_digest <> ''),
+    origin_thread_ref TEXT NOT NULL CHECK (origin_thread_ref <> ''),
+    authorized_actor_id TEXT NOT NULL CHECK (authorized_actor_id <> ''),
+    decided_at BIGINT,
+    created_at BIGINT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS finny_approval_requests_job ON finny_approval_requests(job_id)`,
+  `CREATE TABLE IF NOT EXISTS finny_worker_runs(
+    job_id TEXT NOT NULL REFERENCES finny_jobs(id) ON DELETE CASCADE,
+    run_id TEXT NOT NULL,
+    role TEXT NOT NULL CHECK (role IN ('producer','auditor')),
+    created_at BIGINT NOT NULL,
+    PRIMARY KEY(job_id, run_id)
+  )`,
+];
+
 function rowToJob(row: Record<string, unknown>): FinnyJob {
   const policy: FinnyPolicySnapshot = {
     policyVersion: row.policy_version as string,
@@ -106,6 +138,7 @@ function rowToJob(row: Record<string, unknown>): FinnyJob {
   return {
     id: row.id as string,
     scopeId: row.scope_id as string,
+    plan: row.plan_presentation as FinnyPlanPresentation,
     planDigest: row.plan_digest as string,
     ...(row.artifact_digest !== null ? { artifactDigest: row.artifact_digest as string } : {}),
     policy,
@@ -239,37 +272,30 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
   const { q, pool } = createPgPool(connectionString, [
     { id: "finny/store/0001", statements: SCHEMA },
     { id: "finny/store/0002-events", statements: EVENT_SCHEMA },
+    { id: "finny/store/0003-plan-first", statements: PLAN_FIRST_SCHEMA },
   ]);
   return {
     async createJob(input: CreateFinnyJobInput) {
       assertFinnyPolicy(input.policy);
       assertFinnyFindingPolicy(input.findingPolicy);
-      const hasArtifactDigest = input.artifactDigest !== undefined;
-      const hasProvisionalRevision = input.provisionalRevision !== undefined;
-      if (hasArtifactDigest !== hasProvisionalRevision) {
-        throw new Error("Finny artifact binding must include both digest and revision");
-      }
-      if (hasArtifactDigest) {
-        assertNonEmpty(input.artifactDigest as string, "artifact digest");
-        assertNonEmpty(input.provisionalRevision as string, "provisional revision");
-      }
+      const plan = validateFinnyPlanPresentation(input.plan);
+      const planDigest = canonicalFinnyPlanDigest(plan);
       const now = Date.now();
       const rows = await q(
         `INSERT INTO finny_jobs(
-          id, scope_id, plan_digest, artifact_digest, policy_version, required_generations,
-          finding_policy, origin_thread_ref, provisional_revision, created_at, updated_at
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10)
+          id, scope_id, plan_presentation, plan_digest, policy_version, required_generations,
+          finding_policy, origin_thread_ref, created_at, updated_at
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9)
         RETURNING *`,
         [
           input.id,
           input.scopeId,
-          input.planDigest,
-          input.artifactDigest,
+          JSON.stringify(plan),
+          planDigest,
           input.policy.policyVersion,
           JSON.stringify(input.policy.requiredGenerations),
           JSON.stringify(input.findingPolicy),
           input.originThreadRef,
-          input.provisionalRevision,
           now,
         ],
       );
@@ -280,32 +306,85 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
       const rows = await q("SELECT * FROM finny_jobs WHERE id = $1 AND scope_id = $2", [jobId, scopeId]);
       return rows[0] ? rowToJob(rows[0]) : null;
     },
-    async recordApproval(input: RecordFinnyApprovalInput) {
-      const rows = await q(
-        `UPDATE finny_jobs SET
-          approval_request_id=$3, approval_actor_id=$4, approval_action=$5,
-          approval_plan_digest=$6, approval_origin_thread_ref=$7, approval_decided_at=$8, updated_at=$8
-        WHERE id=$1 AND scope_id=$2 AND plan_digest=$6 AND origin_thread_ref=$7 AND approval_decided_at IS NULL
-        RETURNING *`,
-        [
+    async claimWorkerRun(input: ClaimFinnyWorkerRunInput) {
+      assertNonEmpty(input.runId, "worker run ID");
+      await withPgTransaction(await pool(), async (db) => {
+        await lockedJob(db, input.scopeId, input.jobId);
+        const existing = await db.query("SELECT role FROM finny_worker_runs WHERE job_id=$1 AND run_id=$2", [
           input.jobId,
-          input.scopeId,
+          input.runId,
+        ]);
+        if (existing.rows[0]) {
+          if (existing.rows[0].role !== input.role) throw new Error("Finny producer and Auditor runs must be distinct");
+          return;
+        }
+        await db.query("INSERT INTO finny_worker_runs(job_id, run_id, role, created_at) VALUES ($1,$2,$3,$4)", [
+          input.jobId,
+          input.runId,
+          input.role,
+          Date.now(),
+        ]);
+      });
+    },
+    async createApprovalRequest(input: CreateFinnyApprovalRequestInput) {
+      assertNonEmpty(input.requestId, "approval request ID");
+      assertNonEmpty(input.authorizedActorId, "approval actor ID");
+      await withPgTransaction(await pool(), async (db) => {
+        const job = await lockedJob(db, input.scopeId, input.jobId);
+        if (job.approval_decided_at !== null) throw new Error("Finny approval was already decided");
+        await db.query(
+          `INSERT INTO finny_approval_requests(
+             request_id, scope_id, job_id, plan_digest, origin_thread_ref, authorized_actor_id, created_at
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+          [
+            input.requestId,
+            input.scopeId,
+            input.jobId,
+            job.plan_digest,
+            job.origin_thread_ref,
+            input.authorizedActorId,
+            Date.now(),
+          ],
+        );
+      });
+    },
+    async recordApproval(input: RecordFinnyApprovalInput) {
+      return withPgTransaction(await pool(), async (db) => {
+        const job = await lockedJob(db, input.scopeId, input.jobId);
+        if (job.approval_decided_at !== null) throw new Error("Finny approval was already decided");
+        const request = await db.query(
+          `SELECT * FROM finny_approval_requests
+           WHERE request_id=$1 AND scope_id=$2 AND job_id=$3 FOR UPDATE`,
+          [input.requestId, input.scopeId, input.jobId],
+        );
+        const binding = request.rows[0];
+        if (!binding) throw new Error("Finny approval request binding does not match the job");
+        if (binding.decided_at !== null) throw new Error("Finny approval request was already decided");
+        if (binding.authorized_actor_id !== input.actorId) throw new Error("Finny approval actor is not authorized");
+        if (binding.plan_digest !== job.plan_digest || binding.origin_thread_ref !== job.origin_thread_ref) {
+          throw new Error("Finny approval request binding does not match the job");
+        }
+        const updated = await db.query(
+          `UPDATE finny_jobs SET
+             approval_request_id=$2, approval_actor_id=$3, approval_action=$4,
+             approval_plan_digest=$5, approval_origin_thread_ref=$6, approval_decided_at=$7, updated_at=$7
+           WHERE id=$1 RETURNING *`,
+          [
+            input.jobId,
+            input.requestId,
+            input.actorId,
+            input.action,
+            binding.plan_digest,
+            binding.origin_thread_ref,
+            input.decidedAt,
+          ],
+        );
+        await db.query("UPDATE finny_approval_requests SET decided_at=$2 WHERE request_id=$1", [
           input.requestId,
-          input.actorId,
-          input.action,
-          input.planDigest,
-          input.originThreadRef,
           input.decidedAt,
-        ],
-      );
-      if (rows[0]) return rowToJob(rows[0]);
-      const existing = await q("SELECT * FROM finny_jobs WHERE id = $1 AND scope_id = $2", [
-        input.jobId,
-        input.scopeId,
-      ]);
-      if (!existing[0]) throw new Error("Finny job was not found in this scope");
-      if (existing[0].approval_decided_at !== null) throw new Error("Finny approval was already decided");
-      throw new Error("Finny approval binding does not match the job");
+        ]);
+        return rowToJob(updated.rows[0]);
+      });
     },
     async recordAttestation(input: RecordFinnyAttestationInput) {
       return withPgTransaction(await pool(), async (db) => {
@@ -392,6 +471,9 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
           return { events: existing as FinnyJobEvent<"artifact_ready">[], job: rowToJob(row), deduped: true };
         }
         if (row.finalized_at !== null) throw new Error("Finny job is already finalized");
+        if (row.approval_action !== "approve" || row.approval_decided_at === null) {
+          throw new Error("Finny job must be approved before artifact readiness");
+        }
         if (row.unresolved_escalation_seq !== null) throw new Error("Finny job has an unresolved escalation");
         const artifactWasBound = row.artifact_digest !== null || row.provisional_revision !== null;
         if ((row.artifact_digest === null) !== (row.provisional_revision === null)) {

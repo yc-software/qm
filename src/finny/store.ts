@@ -9,19 +9,26 @@ import type {
   FinnyFindingPolicy,
   FinnyFinalReceipt,
   FinnyFinalReceiptPayload,
+  FinnyPlanPresentation,
   FinnyPolicySnapshot,
   FinnyVerdict,
+  FinnyWorkerRole,
 } from "./types.ts";
 
 export interface CreateFinnyJobInput {
   id: string;
   scopeId: string;
-  planDigest: string;
-  artifactDigest?: string;
+  plan: FinnyPlanPresentation;
   policy: FinnyPolicySnapshot;
   findingPolicy: FinnyFindingPolicy;
   originThreadRef: string;
-  provisionalRevision?: string;
+}
+
+export interface CreateFinnyApprovalRequestInput {
+  scopeId: string;
+  jobId: string;
+  requestId: string;
+  authorizedActorId: string;
 }
 
 export interface RecordFinnyApprovalInput {
@@ -30,8 +37,6 @@ export interface RecordFinnyApprovalInput {
   requestId: string;
   actorId: string;
   action: FinnyApprovalAction;
-  planDigest: string;
-  originThreadRef: string;
   decidedAt: number;
 }
 
@@ -93,9 +98,18 @@ export interface FinalizeFinnyInput {
 
 export type FinnyReceiptSigner = (payload: FinnyFinalReceiptPayload) => Promise<string>;
 
+export interface ClaimFinnyWorkerRunInput {
+  scopeId: string;
+  jobId: string;
+  runId: string;
+  role: FinnyWorkerRole;
+}
+
 export interface FinnyStore {
   createJob(input: CreateFinnyJobInput): Promise<FinnyJob>;
+  createApprovalRequest(input: CreateFinnyApprovalRequestInput): Promise<void>;
   getJob(scopeId: string, jobId: string): Promise<FinnyJob | null>;
+  claimWorkerRun(input: ClaimFinnyWorkerRunInput): Promise<void>;
   recordApproval(input: RecordFinnyApprovalInput): Promise<FinnyJob>;
   recordAttestation(input: RecordFinnyAttestationInput): Promise<{ attestation: FinnyAttestation; deduped: boolean }>;
   recordArtifactReady(input: RecordFinnyArtifactReadyInput): Promise<FinnyEventResult<FinnyJobEvent<"artifact_ready">>>;
