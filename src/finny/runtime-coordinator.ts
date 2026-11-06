@@ -44,6 +44,7 @@ interface AuditBlockedRuntimeInput extends RuntimeActorInput {
   artifactDigest: string;
   checkId: FinnyCheckId;
   generation: number;
+  evidenceDigest: string;
   findings: FinnyAuditFinding[];
   changeKinds: FinnyChangeKind[];
   idempotencyKey: string;
@@ -216,6 +217,8 @@ export function createFinnyRuntimeCoordinator(deps: {
         checkId: input.checkId,
         generation: input.generation,
         evidenceDigest: input.evidenceDigest,
+        issuerPrincipalId: prepared.binding.principalId,
+        issuerRunId: prepared.binding.runId,
         idempotencyKey: input.idempotencyKey,
       });
     },
@@ -232,6 +235,7 @@ export function createFinnyRuntimeCoordinator(deps: {
           artifactDigest: input.artifactDigest,
           checkId: input.checkId,
           generation: input.generation,
+          evidenceDigest: input.evidenceDigest,
           findings: input.findings,
           changeKinds: input.changeKinds,
         }),
@@ -253,6 +257,9 @@ export function createFinnyRuntimeCoordinator(deps: {
         checkId: input.checkId,
         generation: input.generation,
         artifactDigest: input.artifactDigest,
+        evidenceDigest: input.evidenceDigest,
+        issuerPrincipalId: auditor.principalId,
+        issuerRunId: auditor.runId,
         findings: input.findings,
         changeKinds: input.changeKinds,
         resolution,

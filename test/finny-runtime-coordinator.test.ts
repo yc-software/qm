@@ -34,6 +34,7 @@ async function approvedJob() {
     requestId,
     actorId: "U1",
     action: "approve",
+    originThreadRef: job.originThreadRef,
     decidedAt: Date.now(),
   });
   return { jobs, job, connectionString };
@@ -281,6 +282,7 @@ test("a BLOCK wakes the bound producer with policy-bounded findings", async () =
     artifactDigest: "artifact-sha256",
     checkId: "lineage.binding",
     generation: 1,
+    evidenceDigest: "evidence-sha256-block",
     findings: [{ code: "LINEAGE", message: "Source lineage is incomplete" }],
     changeKinds: ["lineage"],
     idempotencyKey: "block-1",
@@ -352,6 +354,7 @@ test("the next artifact creates a fresh independent Auditor run and grant", asyn
     artifactDigest: "artifact-v1",
     checkId: "lineage.binding",
     generation: 1,
+    evidenceDigest: "evidence-sha256-block",
     findings: [{ code: "LINEAGE", message: "Repair lineage" }],
     changeKinds: ["lineage"],
     idempotencyKey: "block-1",
@@ -460,6 +463,7 @@ test("an externally approved escalation stops worker actions instead of reworkin
     artifactDigest: "artifact-sha256",
     checkId: "lineage.binding",
     generation: 1,
+    evidenceDigest: "evidence-sha256-block",
     findings: [{ code: "LINEAGE", message: "Cannot establish lineage" }],
     changeKinds: ["lineage"],
     idempotencyKey: "block-stop",
@@ -619,6 +623,7 @@ test("replaying the same BLOCK is idempotent without duplicate producer wake", a
     artifactDigest: "artifact-sha256",
     checkId: "lineage.binding" as const,
     generation: 1,
+    evidenceDigest: "evidence-sha256-block",
     findings: [{ code: "LINEAGE", message: "Repair lineage" }],
     changeKinds: ["lineage" as const],
     idempotencyKey: "block-replay",
@@ -783,4 +788,63 @@ test("a completed artifact action replays after the producer binding retires", a
   await coordinator.artifactReady(input);
 
   assert.deepEqual([...delivered], ["artifact-replay-retired:auditor-grant"]);
+});
+
+test("audit outcomes derive issuer provenance from the authorized runtime binding", async () => {
+  const { jobs, job, connectionString } = await approvedJob();
+  await jobs.recordArtifactReady({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    artifactDigest: "artifact-sha256",
+    provisionalRevision: "revision-1",
+    idempotencyKey: "artifact-authority",
+  });
+  const runtime = createPostgresFinnyRuntimeStore(connectionString);
+  await runtime.bindInitial({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    parentSessionId: "parent-session",
+    parentRunId: "parent-run",
+    producerSessionId: "producer-session",
+    producerRunId: "producer-run",
+    auditorSessionId: "auditor-session",
+    auditorRunId: "authorized-auditor-run",
+    producerPrincipalId: "producer-principal",
+    auditorPrincipalId: "authorized-auditor-principal",
+  });
+  const coordinator = createFinnyRuntimeCoordinator({
+    jobs,
+    runtime,
+    grants: createFinnyWorkerGrants(jobs, "runtime-test-secret"),
+    sessions: {
+      async open() {
+        throw new Error("unexpected open");
+      },
+    },
+    dispatcher: {
+      async dispatchPrivateIdempotent() {
+        throw new Error("unexpected dispatch");
+      },
+    },
+    ...coreRuntimeAuthority(),
+  });
+  const supplied = {
+    sessionId: "auditor-session",
+    runId: "authorized-auditor-run",
+    scopeId: job.scopeId,
+    jobId: job.id,
+    artifactDigest: "artifact-sha256",
+    checkId: "lineage.binding" as const,
+    generation: 1,
+    evidenceDigest: "evidence-sha256",
+    issuerPrincipalId: "model-supplied-principal",
+    issuerRunId: "model-supplied-run",
+    idempotencyKey: "pass-authority",
+  };
+
+  await coordinator.auditPassed(supplied);
+
+  const event = (await jobs.listEvents(job.scopeId, job.id)).find((item) => item.type === "audit_passed");
+  assert.equal(event?.payload.issuerPrincipalId, "authorized-auditor-principal");
+  assert.equal(event?.payload.issuerRunId, "authorized-auditor-run");
 });

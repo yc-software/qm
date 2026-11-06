@@ -147,6 +147,9 @@ export interface FinnyJobEventPayloads {
     artifactDigest: string;
     checkId: FinnyCheckId;
     generation: number;
+    evidenceDigest: string;
+    issuerPrincipalId: string;
+    issuerRunId: string;
     findings: FinnyAuditFinding[];
     findingPolicy: FinnyFindingPolicy;
     changeKinds: FinnyChangeKind[];
@@ -156,6 +159,8 @@ export interface FinnyJobEventPayloads {
     checkId: FinnyCheckId;
     generation: number;
     evidenceDigest: string;
+    issuerPrincipalId: string;
+    issuerRunId: string;
   };
   rework_requested: {
     blockedEventSequence: number;

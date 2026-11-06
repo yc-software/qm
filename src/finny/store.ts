@@ -94,6 +94,9 @@ export interface RecordFinnyAuditBlockInput {
   checkId: FinnyCheckId;
   generation: number;
   artifactDigest: string;
+  evidenceDigest: string;
+  issuerPrincipalId: string;
+  issuerRunId: string;
   findings: FinnyAuditFinding[];
   changeKinds: FinnyChangeKind[];
   resolution: { kind: "rework" } | { kind: "escalate"; reason: string };
@@ -115,6 +118,8 @@ export interface RecordFinnyAuditPassedInput {
   generation: number;
   artifactDigest: string;
   evidenceDigest: string;
+  issuerPrincipalId: string;
+  issuerRunId: string;
   idempotencyKey: string;
 }
 

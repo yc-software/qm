@@ -13,6 +13,12 @@ const findingPolicy = {
   maxMessageLength: 2_000,
 };
 
+const auditAuthority = {
+  evidenceDigest: "evidence-sha256",
+  issuerPrincipalId: "auditor-principal",
+  issuerRunId: "auditor-run",
+};
+
 const createInput = () => ({
   id: randomUUID(),
   scopeId: "personal:U1",
@@ -80,6 +86,7 @@ test("BLOCK requests rework and advances only invalidated check generations", as
   const original = await createReadyJob(store, input);
 
   const result = await store.recordAuditBlock({
+    ...auditAuthority,
     scopeId: input.scopeId,
     jobId: input.id,
     checkId: "formula.recalculate",
@@ -117,6 +124,7 @@ test("duplicate BLOCK submissions return the original transition without advanci
   const input = createInput();
   await createReadyJob(store, input);
   const firstSubmission = {
+    ...auditAuthority,
     scopeId: input.scopeId,
     jobId: input.id,
     checkId: "lineage.binding" as const,
@@ -136,6 +144,7 @@ test("duplicate BLOCK submissions return the original transition without advanci
     idempotencyKey: randomUUID(),
   });
   await store.recordAuditBlock({
+    ...auditAuthority,
     ...firstSubmission,
     generation: 2,
     artifactDigest: "artifact-sha256-v2",
@@ -156,6 +165,7 @@ test("stale and wrong-scope audit events fail without changing authoritative sta
   const input = createInput();
   await createReadyJob(store, input);
   const submission = {
+    ...auditAuthority,
     scopeId: input.scopeId,
     jobId: input.id,
     checkId: "lineage.binding" as const,
@@ -191,6 +201,7 @@ test("artifact and audit events expose the latest server sequence", async () => 
     idempotencyKey: randomUUID(),
   });
   const passed = await store.recordAuditPassed({
+    ...auditAuthority,
     scopeId: input.scopeId,
     jobId: input.id,
     checkId: "lineage.binding",
@@ -214,6 +225,7 @@ test("external escalation decisions are recorded without an internal retry cap",
   const input = createInput();
   await createReadyJob(store, input);
   const result = await store.recordAuditBlock({
+    ...auditAuthority,
     scopeId: input.scopeId,
     jobId: input.id,
     checkId: "meaning.actionability",
@@ -241,6 +253,7 @@ test("BLOCK rejects findings beyond the bounded event contract", async () => {
 
   await assert.rejects(
     store.recordAuditBlock({
+      ...auditAuthority,
       scopeId: input.scopeId,
       jobId: input.id,
       checkId: "lineage.binding",
@@ -292,6 +305,7 @@ test("runtime event validation rejects unknown checks and malformed generations"
   const input = createInput();
   await createReadyJob(store, input);
   const base = {
+    ...auditAuthority,
     scopeId: input.scopeId,
     jobId: input.id,
     checkId: "unknown.check" as never,
@@ -346,6 +360,7 @@ test("finalized jobs reject new event transitions", async () => {
   );
   await assert.rejects(
     store.recordAuditPassed({
+      ...auditAuthority,
       scopeId: input.scopeId,
       jobId: input.id,
       checkId: "lineage.binding",
@@ -358,6 +373,7 @@ test("finalized jobs reject new event transitions", async () => {
   );
   await assert.rejects(
     store.recordAuditBlock({
+      ...auditAuthority,
       scopeId: input.scopeId,
       jobId: input.id,
       checkId: "lineage.binding",
@@ -380,6 +396,7 @@ test("the external finding policy supplies the BLOCK finding bound", async () =>
   };
   await createReadyJob(store, input);
   const submission = {
+    ...auditAuthority,
     scopeId: input.scopeId,
     jobId: input.id,
     checkId: "lineage.binding" as const,
@@ -420,6 +437,7 @@ test("artifact replacement requires an authoritative rework request", async () =
   assert.equal((await store.getJob(input.scopeId, input.id))?.artifactDigest, input.artifactDigest);
 
   await store.recordAuditBlock({
+    ...auditAuthority,
     scopeId: input.scopeId,
     jobId: input.id,
     checkId: "lineage.binding",
@@ -455,6 +473,7 @@ test("artifact replacement requires an authoritative rework request", async () =
     /artifact is not current/i,
   );
   const passed = await store.recordAuditPassed({
+    ...auditAuthority,
     scopeId: input.scopeId,
     jobId: input.id,
     checkId: "lineage.binding",
@@ -471,6 +490,7 @@ test("re-audit waits for a new artifact to consume the rework request", async ()
   const input = createInput();
   await createReadyJob(store, input);
   await store.recordAuditBlock({
+    ...auditAuthority,
     scopeId: input.scopeId,
     jobId: input.id,
     checkId: "lineage.binding",
@@ -484,6 +504,7 @@ test("re-audit waits for a new artifact to consume the rework request", async ()
 
   await assert.rejects(
     store.recordAuditPassed({
+      ...auditAuthority,
       scopeId: input.scopeId,
       jobId: input.id,
       checkId: "lineage.binding",
@@ -533,6 +554,7 @@ test("unresolved escalation blocks final delivery", async () => {
     });
   }
   await store.recordAuditBlock({
+    ...auditAuthority,
     scopeId: input.scopeId,
     jobId: input.id,
     checkId: "meaning.actionability",
@@ -560,6 +582,7 @@ test("authoritative finding policy rejects oversized finding text", async () => 
 
   await assert.rejects(
     store.recordAuditBlock({
+      ...auditAuthority,
       scopeId: input.scopeId,
       jobId: input.id,
       checkId: "lineage.binding",
@@ -611,4 +634,87 @@ test("artifact_ready authoritatively binds a job created before its artifact", a
   );
   assert.equal(receipt.payload.artifactDigest, "artifact-created-after-approval");
   assert.equal(receipt.payload.provisionalRevision, "revision-created-after-approval");
+});
+
+test("PASS atomically records a current artifact-bound attestation and provenance event", async () => {
+  const connectionString = testDatabaseUrl();
+  const store = createPostgresFinnyStore(connectionString);
+  const input = createInput();
+  await createReadyJob(store, input);
+  const idempotencyKey = randomUUID();
+
+  const passed = await store.recordAuditPassed({
+    ...auditAuthority,
+    scopeId: input.scopeId,
+    jobId: input.id,
+    checkId: "lineage.binding",
+    generation: 1,
+    artifactDigest: input.artifactDigest,
+    evidenceDigest: "evidence-sha256-pass",
+    issuerPrincipalId: "auditor-principal",
+    issuerRunId: "auditor-run",
+    idempotencyKey,
+  });
+
+  const { default: pg } = await import("pg");
+  const client = new pg.Client({ connectionString });
+  await client.connect();
+  const attestations = await client.query("SELECT * FROM finny_attestations WHERE job_id=$1", [input.id]);
+  await client.end();
+  assert.equal(attestations.rowCount, 1);
+  assert.equal(attestations.rows[0]?.verdict, "pass");
+  assert.equal(attestations.rows[0]?.evidence_digest, "evidence-sha256-pass");
+  assert.equal(attestations.rows[0]?.artifact_digest, input.artifactDigest);
+  assert.equal(attestations.rows[0]?.issuer_principal_id, "auditor-principal");
+  assert.equal(attestations.rows[0]?.issuer_run_id, "auditor-run");
+  assert.equal(passed.job.ledgerHead, Number(attestations.rows[0]?.seq));
+  assert.equal(passed.events[0]?.payload.issuerPrincipalId, "auditor-principal");
+  assert.equal(passed.events[0]?.payload.issuerRunId, "auditor-run");
+});
+
+test("BLOCK atomically records evidence-bound attestation and rejects replay substitution", async () => {
+  const connectionString = testDatabaseUrl();
+  const store = createPostgresFinnyStore(connectionString);
+  const input = createInput();
+  await createReadyJob(store, input);
+  const submission = {
+    ...auditAuthority,
+    scopeId: input.scopeId,
+    jobId: input.id,
+    checkId: "lineage.binding" as const,
+    generation: 1,
+    artifactDigest: input.artifactDigest,
+    evidenceDigest: "evidence-sha256-block",
+    issuerPrincipalId: "auditor-principal",
+    issuerRunId: "auditor-run",
+    findings: [{ code: "LINEAGE", message: "Missing source binding" }],
+    changeKinds: ["lineage" as const],
+    resolution: { kind: "rework" as const },
+    idempotencyKey: randomUUID(),
+  };
+
+  const blocked = await store.recordAuditBlock(submission);
+  const blockedEvent = blocked.events.find(
+    (event): event is FinnyJobEvent<"audit_blocked"> => event.type === "audit_blocked",
+  );
+  assert.equal(blockedEvent?.payload.evidenceDigest, "evidence-sha256-block");
+  assert.equal(blockedEvent?.payload.issuerPrincipalId, "auditor-principal");
+  assert.equal(blockedEvent?.payload.issuerRunId, "auditor-run");
+  assert.ok(blocked.job.ledgerHead > 0);
+  await assert.rejects(
+    store.recordAuditBlock({ ...submission, evidenceDigest: "substituted-evidence" }),
+    /idempotency key was reused/i,
+  );
+
+  const { default: pg } = await import("pg");
+  const client = new pg.Client({ connectionString });
+  await client.connect();
+  const attestations = await client.query("SELECT * FROM finny_attestations WHERE job_id=$1", [input.id]);
+  await client.end();
+  assert.equal(attestations.rowCount, 1);
+  assert.equal(attestations.rows[0]?.verdict, "block");
+  assert.equal(attestations.rows[0]?.evidence_digest, "evidence-sha256-block");
+  assert.equal(attestations.rows[0]?.issuer_principal_id, "auditor-principal");
+  assert.equal(attestations.rows[0]?.issuer_run_id, "auditor-run");
+  assert.equal(blocked.job.ledgerHead, Number(attestations.rows[0]?.seq));
 });
