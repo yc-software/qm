@@ -32,6 +32,7 @@ import {
   type SessionClaims,
   type ImpersonationClaims,
   type TmpClaims,
+  sessionLifetime,
 } from "./session.ts";
 import {
   pkcePair,
@@ -83,8 +84,7 @@ import { isDeploymentGitRoute } from "../../chassis/src/deployment-git.ts";
 
 const PUBLIC_URL = (process.env.PUBLIC_WEB_URL ?? "http://localhost:8097").replace(/\/$/, "");
 const SESSION_SECRET = process.env.PORTAL_SESSION_SECRET;
-const SESSION_TTL_S = Number(process.env.PORTAL_SESSION_TTL_S ?? 604800);
-const SESSION_MAX_TTL_S = Number(process.env.PORTAL_SESSION_MAX_TTL_S ?? Math.max(2592000, SESSION_TTL_S));
+const { ttl: SESSION_TTL_S, max: SESSION_MAX_TTL_S } = sessionLifetime();
 const SESSION_RENEW_AFTER_S = Math.floor(SESSION_TTL_S / 2);
 const APPS_DOMAIN = process.env.PORTAL_APPS_DOMAIN || process.env.DEPLOY_APPS_DOMAIN || undefined;
 const COOKIE_DOMAIN =

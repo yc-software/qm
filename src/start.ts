@@ -35,6 +35,7 @@ export async function startQm(
   const server = createServer(built.app, {
     ...serverDeps(config, built, slackEnvironmentState, slackConfig?.botToken),
     managedSlack,
+    ...(env.PORTAL_SESSION_SECRET ? { portalSessionSecret: env.PORTAL_SESSION_SECRET } : {}),
   });
 
   await built.config.hydrate?.();

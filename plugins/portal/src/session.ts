@@ -26,6 +26,11 @@ export function open(token: string | null | undefined, key: Buffer): Record<stri
   }
 }
 
+export function sessionLifetime(env: NodeJS.ProcessEnv = process.env): { ttl: number; max: number } {
+  const ttl = Number(env.PORTAL_SESSION_TTL_S ?? 604800);
+  return { ttl, max: Number(env.PORTAL_SESSION_MAX_TTL_S ?? Math.max(2592000, ttl)) };
+}
+
 export interface SessionClaims {
   k: "session";
   sub: string;

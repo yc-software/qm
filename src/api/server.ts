@@ -32,6 +32,7 @@ import { proxyDeploymentSubdomain } from "./routes/deployments.ts";
 import { CAPABILITY_HEADER } from "./contract.ts";
 import { livePersonCapability } from "./artifact-share.ts";
 import { canonicalPerson, samePerson } from "../directory/person.ts";
+import { browserIdentity, usesBrowserSession } from "./browser-session.ts";
 
 async function capabilityAdminDenied(
   access: AdminAccess,
@@ -197,12 +198,13 @@ async function gate(
   pathname: string,
   url: URL,
   raw: string,
-  route: Pick<Route, "auth" | "actor" | "admin" | "allowedInStrict"> | undefined,
+  route: Pick<Route, "auth" | "actor" | "admin" | "allowedInStrict" | "browser"> | undefined,
   params: Record<string, string>,
 ): Promise<GateResult | null> {
   const routeAuth = route?.auth;
   const { deps, secret, auth, requirePortalIdentity, allowUnsignedSourceAuth } = wiring;
   const isPublicRoute = routeAuth === "public";
+  const browser = !isPublicRoute && usesBrowserSession(req, route);
   const requiredAuth = typeof routeAuth === "object" ? routeAuth : null;
   const requiredAud = requiredAuth?.aud ?? null;
   let capability: CapabilityClaims | null = null;
@@ -229,6 +231,7 @@ async function gate(
       return null;
     }
   } else if (
+    !browser &&
     !(await verifyOrReject(
       req,
       res,
@@ -267,7 +270,14 @@ async function gate(
     const psecret = deps.portalIdentitySecret ?? secret;
     const rawToken = req.headers[PORTAL_IDENTITY_HEADER];
     const token = Array.isArray(rawToken) ? rawToken[0] : rawToken;
-    actor = token && psecret ? await verifyPortalIdentity(token, psecret, Date.now()) : null;
+    if (browser) {
+      const signedIn = await browserIdentity(req, method, deps);
+      if ("status" in signedIn) {
+        sendJson(res, signedIn.status, { error: signedIn.error, message: signedIn.message });
+        return null;
+      }
+      actor = signedIn;
+    } else actor = token && psecret ? await verifyPortalIdentity(token, psecret, Date.now()) : null;
     if (actor && deps.identity) {
       const identity = deps.identity;
       const verified = ({ p, imp, authenticatedAs }: PortalIdentity) =>
@@ -280,7 +290,14 @@ async function gate(
     }
     if (actor)
       actor = { ...actor, p: canonicalPerson(actor.p), ...(actor.imp ? { imp: canonicalPerson(actor.imp) } : {}) };
-    if (!isPublicRoute && requirePortalIdentity) {
+    if (browser) {
+      if (!actor) {
+        sendJson(res, 401, { error: "unauthorized", message: "principal is no longer active" });
+        return null;
+      }
+      body = withBrowserActor(route?.actor, req, url, body, actor.p);
+    }
+    if (!isPublicRoute && (requirePortalIdentity || browser)) {
       const webTurn =
         method === "POST" &&
         pathname === "/v1/turns" &&
@@ -290,7 +307,7 @@ async function gate(
       const routeActor = route?.actor ?? (WRITE_METHODS.has(method) ? "person" : undefined);
       const needsActor = webTurn || (routeActor !== undefined && routeActor !== "system");
       if (needsActor) {
-        if (!psecret || !actor) {
+        if (!actor) {
           sendJson(res, 401, { error: "unauthorized", message: "portal identity required" });
           return null;
         }
@@ -308,6 +325,24 @@ async function gate(
     }
   }
   return { body, capability, actor };
+}
+
+function withBrowserActor(
+  field: Route["actor"],
+  req: IncomingMessage,
+  url: URL,
+  body: unknown,
+  principalId: string,
+): unknown {
+  const [where, name] = (field ?? "").split(".", 2);
+  if (!name) return body;
+  if (where === "query" && !url.searchParams.has(name)) {
+    url.searchParams.set(name, principalId);
+    req.url = `${url.pathname}${url.search}`;
+  }
+  if (where === "body" && body && typeof body === "object" && !Array.isArray(body) && !(name in body))
+    return { ...body, [name]: principalId };
+  return body;
 }
 
 function assertedActorField(field: string, url: URL, body: unknown): unknown {
@@ -531,7 +566,13 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
     const matched = findRoute(apiRoutes, base.method, base.pathname);
     const routeAuth = matched?.route.auth;
     const acceptsSourceAuth = !matched || routeAuth === "source" || routeAuth === "either";
-    if (wiring.secret && !capabilityFromHeaders(req) && routeAuth !== "public" && acceptsSourceAuth) {
+    if (
+      wiring.secret &&
+      !capabilityFromHeaders(req) &&
+      routeAuth !== "public" &&
+      acceptsSourceAuth &&
+      !usesBrowserSession(req, matched?.route)
+    ) {
       const timestamp = Number(req.headers["x-timestamp"] ?? 0);
       if (
         !Number.isFinite(timestamp) ||
