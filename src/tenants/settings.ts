@@ -23,7 +23,7 @@ export const tenantSettingsSchema = z
     orgSlug: z.string().refine(isDnsLabel, "expected a lowercase org slug"),
     handle: appHandleSchema,
     slackBridgeToken: z.string().regex(/^[\x21-\x7e]{16,}$/, "expected a Slack service bridge token"),
-    /** True once this deployment serves the tenant; sign-in offers only serving tenants on a shared install. */
+    /** False while this deployment is not serving the tenant (mid-copy or rolled back); sign-in then hides it. */
     serving: z.boolean(),
   })
   .partial()

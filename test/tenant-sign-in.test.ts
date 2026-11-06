@@ -49,9 +49,9 @@ test.before(async () => {
   await directory.list().catch(() => undefined);
   await owner.q(
     `INSERT INTO tenants(id, settings) VALUES
-       ($1, '{"brandName":"Alpha","allowedEmails":["@nowhere.test"],"serving":true}'),
+       ($1, '{"brandName":"Alpha","allowedEmails":["@nowhere.test"]}'),
        ($2, '{"serving":true}'),
-       ($3, '{"brandName":"Copied","orgSlug":"copied-co"}')`,
+       ($3, '{"brandName":"Copied","orgSlug":"copied-co","serving":false}')`,
     [alpha, beta, copied],
   );
   await member(copied, "alice@alpha.test");

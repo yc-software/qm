@@ -242,16 +242,16 @@ export function createPostgresDirectoryStore(connectionString: string): Director
     return rosters;
   }
 
-  // A tenant is offered for sign-in only once it is serving here: settings.serving = true, which the
-  // deployment's cutover sets when it moves a company in (and clears on rollback). A single-tenant
-  // install always serves its one tenant.
+  // A tenant is offered for sign-in unless settings.serving is false: a deployment's cutover writes
+  // false when it starts copying a company in, true once it serves it, and false again on rollback.
+  // A single-tenant install always serves its one tenant.
   async function branded(rows: Record<string, unknown>[]) {
     const found = await Promise.all(
       rows.map(({ id }) =>
         withTenant(String(id), async () => {
           const [tenant] = await q(
             `SELECT settings->>'brandName' AS brand, qm_tenant_handle(settings) AS handle,
-                    settings->>'serving' = 'true' OR qm_boot_tenant() IS NOT NULL AS serving
+                    settings->>'serving' IS DISTINCT FROM 'false' OR qm_boot_tenant() IS NOT NULL AS serving
                FROM tenants WHERE id = $1`,
             [id],
           );
