@@ -304,11 +304,7 @@ test("every edit that changes a persona is a version anyone with a role can read
     [false, [[1, ["name", "description", "instructions", "icon"]]]],
   );
   const second = ok(await personas.version(CAROL, ada.id, 2));
-  assert.deepEqual(
-    [second.version.instructions, second.previous?.instructions],
-    ["Answer in limericks.", "Answer in haiku."],
-  );
-  assert.equal(ok(await personas.version(CAROL, ada.id, 1)).previous, null);
+  assert.deepEqual([second.instructions, second.changed], ["Answer in limericks.", ["instructions"]]);
   assert.equal((await personas.version(CAROL, ada.id, 9)).status, "not_found");
   assert.equal((await personas.restore(CAROL, ada.id, 1)).status, "forbidden");
   assert.equal((await personas.restore(BOB, ada.id, 9)).status, "not_found");
@@ -336,15 +332,15 @@ test("the versions API pages summaries and reads one version with the one before
       const r = await fetch(`${base}${path}${path.includes("?") ? "&" : "?"}principalId=${ALICE}`);
       return [r.status, (await r.json()) as any] as const;
     };
-    const [, first] = await get("?limit=2");
+    const [, first] = await get("");
     assert.deepEqual(
       [first.more, first.versions.map((v: { version: number }) => v.version), "instructions" in first.versions[0]],
-      [true, [3, 2], false],
+      [false, [3, 2, 1], false],
     );
-    const [, rest] = await get("?before=2&limit=2");
+    const [, rest] = await get("?before=2");
     assert.deepEqual([rest.more, rest.versions.map((v: { version: number }) => v.version)], [false, [1]]);
     const [, one] = await get("/3");
-    assert.deepEqual([one.version.instructions, one.previous.instructions], ["three", "two"]);
+    assert.deepEqual([one.version.instructions, one.version.changed], ["three", ["instructions"]]);
     assert.equal((await get("?before=zero"))[0], 400);
     assert.equal((await get("/0"))[0], 400);
   } finally {

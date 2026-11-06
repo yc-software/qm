@@ -50,11 +50,7 @@ export interface PersonaService {
     id: string,
     page: { before?: number; limit: number },
   ): Promise<PersonaResult<PersonaVersionPage>>;
-  version(
-    principalId: string,
-    id: string,
-    version: number,
-  ): Promise<PersonaResult<{ version: PersonaVersion; previous: PersonaVersion | null }>>;
+  version(principalId: string, id: string, version: number): Promise<PersonaResult<PersonaVersion>>;
   restore(principalId: string, id: string, version: number): Promise<PersonaResult<PersonaView>>;
   setAccess(principalId: string, id: string, access: unknown): Promise<PersonaResult<PersonaAccess[]>>;
   attachCredential(principalId: string, id: string, credentialId: unknown): Promise<PersonaResult<{ grantId: string }>>;
@@ -178,18 +174,10 @@ export function createPersonaService(deps: {
       }));
     },
     version(principalId, id, version) {
-      return guarded<{ version: PersonaVersion; previous: PersonaVersion | null }>(
-        principalId,
-        id,
-        "read",
-        async () => {
-          const [found, previous] = await Promise.all([
-            store.version(id, version),
-            version > 1 ? store.version(id, version - 1) : null,
-          ]);
-          return found ? { status: "ok", value: { version: found, previous } } : { status: "not_found" };
-        },
-      );
+      return guarded<PersonaVersion>(principalId, id, "read", async () => {
+        const found = await store.version(id, version);
+        return found ? { status: "ok", value: found } : { status: "not_found" };
+      });
     },
     restore(principalId, id, version) {
       return guarded<PersonaView>(principalId, id, "write", async (_persona, held) => {

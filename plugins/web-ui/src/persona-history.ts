@@ -29,7 +29,7 @@ interface HistoryEntry {
   more: boolean;
   loading: boolean;
   viewing: number | null;
-  details: Map<number, { version: Version; previous: Version | null } | "loading">;
+  details: Map<number, Version | "loading">;
   error: string;
 }
 
@@ -99,10 +99,7 @@ async function loadDetail(persona: HistoryPersona, version: number, redraw: () =
   const entry = historyFor(persona.id);
   entry.details.set(version, "loading");
   try {
-    entry.details.set(
-      version,
-      await api<{ version: Version; previous: Version | null }>(`${base(persona.id)}/${version}`),
-    );
+    entry.details.set(version, (await api<{ version: Version }>(`${base(persona.id)}/${version}`)).version);
   } catch (e) {
     entry.details.delete(version);
     entry.error = errMessage(e, "Couldn't load that version.");
@@ -110,64 +107,30 @@ async function loadDetail(persona: HistoryPersona, version: number, redraw: () =
   redraw();
 }
 
-type DiffLine = { kind: "same" | "add" | "del"; text: string };
-
-export function lineDiff(before: string, after: string): DiffLine[] {
-  const a = before.split("\n");
-  const b = after.split("\n");
-  const lcs: number[][] = Array.from({ length: a.length + 1 }, () => Array.from({ length: b.length + 1 }, () => 0));
-  for (let i = a.length - 1; i >= 0; i--)
-    for (let j = b.length - 1; j >= 0; j--)
-      lcs[i]![j] = a[i] === b[j] ? lcs[i + 1]![j + 1]! + 1 : Math.max(lcs[i + 1]![j]!, lcs[i]![j + 1]!);
-  const out: DiffLine[] = [];
-  let i = 0;
-  let j = 0;
-  while (i < a.length || j < b.length) {
-    if (i < a.length && j < b.length && a[i] === b[j]) {
-      out.push({ kind: "same", text: a[i++]! });
-      j++;
-    } else if (i < a.length && (j >= b.length || lcs[i + 1]![j]! >= lcs[i]![j + 1]!))
-      out.push({ kind: "del", text: a[i++]! });
-    else out.push({ kind: "add", text: b[j++]! });
-  }
-  return out;
-}
-
-const DIFF_MARK = { add: "+ ", del: "- ", same: "  " } as const;
-
-function instructionsTpl(version: Version, previous: Version | null): TemplateResult | typeof nothing {
-  if (!previous) return html`<pre class="persona-diff" dir="auto">${version.instructions || "No instructions."}</pre>`;
-  if (previous.instructions === version.instructions) return nothing;
-  const lines = lineDiff(previous.instructions, version.instructions);
-  const near = (index: number) => lines.slice(Math.max(0, index - 2), index + 3).some((l) => l.kind !== "same");
-  return html`<pre class="persona-diff" aria-label="Instruction changes">
-${lines
-  .filter((line, index) => line.kind !== "same" || near(index))
-  .map((line) => html`<span class="persona-diff-${line.kind}">${DIFF_MARK[line.kind]}${line.text}</span>`)}</pre>`;
-}
-
-function changesTpl(detail: { version: Version; previous: Version | null }): TemplateResult {
-  const { version, previous } = detail;
-  const changed = new Set(version.changed);
-  return html`<div class="persona-version-changes">
-    ${changed.has("name") ? html`<div><b>Name</b> <span dir="auto">${version.name}</span></div>` : nothing}
-    ${
-      previous && changed.has("icon")
-        ? html`<div><b>Icon</b> ${projectIconTpl(version.icon, 16) ?? html`<span class="hint">default</span>`}</div>`
-        : nothing
-    }
-    ${
-      changed.has("description")
-        ? html`<div><b>Description</b> <span dir="auto">${version.description || "—"}</span></div>`
-        : nothing
-    }
-    ${instructionsTpl(version, previous)}
+function fieldTpl(label: string, changed: boolean, value: TemplateResult | string): TemplateResult {
+  return html`<div class="persona-version-field">
+    <b>${label}</b>${changed ? html` <span class="badge">changed</span>` : nothing}
+    <div dir="auto">${value}</div>
   </div>`;
 }
 
-function detailTpl(detail: { version: Version; previous: Version | null } | "loading" | undefined): TemplateResult {
+function versionTpl(version: Version): TemplateResult {
+  const changed = new Set(version.version === 1 ? [] : version.changed);
+  return html`<div class="persona-version-changes">
+    ${fieldTpl("Name", changed.has("name"), version.name)}
+    ${fieldTpl("Icon", changed.has("icon"), projectIconTpl(version.icon, 16) ?? "Default")}
+    ${fieldTpl("Description", changed.has("description"), version.description || "—")}
+    ${fieldTpl(
+      "Instructions",
+      changed.has("instructions"),
+      html`<pre class="persona-version-text">${version.instructions || "No instructions."}</pre>`,
+    )}
+  </div>`;
+}
+
+function detailTpl(detail: Version | "loading" | undefined): TemplateResult {
   if (!detail || detail === "loading") return html`<p class="hint" role="status">Loading…</p>`;
-  return changesTpl(detail);
+  return versionTpl(detail);
 }
 
 function summaryLine(version: VersionSummary): string {

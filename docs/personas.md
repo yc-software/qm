@@ -91,9 +91,9 @@ add control for people whose role allows it:
 - **Slack channels** (owner): "Add channel" opens the share dialog, whose one search covers
   people and channels you are in; a channel can only be given read.
 - **History**: loads on first open, 20 versions a page, each saying who saved it, when and
-  which fields changed. Opening one fetches it with the version before it and shows the
-  change (instructions as a line diff). Writers can roll back to any of them; a rollback is
-  saved as a new version, so nothing is lost.
+  which fields changed. Opening one shows it as it was, with its changed fields marked.
+  Writers can roll back to any of them; a rollback is saved as a new version, so nothing is
+  lost.
 
 ## Forking
 
@@ -107,6 +107,6 @@ access are never copied.
 `GET|POST /v1/personas`, `GET|PATCH|DELETE /v1/personas/:id`,
 `PUT /v1/personas/:id/access`, `POST /v1/personas/:id/credentials`,
 `DELETE /v1/personas/:id/credentials/:grantId`, `GET /v1/personas/:id/versions` (summaries,
-`?before=&limit=`), `GET /v1/personas/:id/versions/:version` (that version and the one before),
+`?before=`), `GET /v1/personas/:id/versions/:version`,
 `POST /v1/personas/:id/versions/:version/restore`, `PUT /v1/sessions/:id/persona`. Listed in
 `/v1/apis` when the flag is on.

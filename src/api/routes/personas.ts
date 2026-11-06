@@ -123,10 +123,12 @@ async function listPersonaVersions(ctx: ApiCtx): Promise<void> {
   const before = ctx.url.searchParams.get("before");
   if (before !== null && positiveInt(before) === undefined)
     return sendJson(ctx.res, 400, { error: "bad_request", message: "before must be a positive integer" });
-  const limit = positiveInt(ctx.url.searchParams.get("limit")) ?? VERSION_PAGE;
   respond(
     ctx,
-    await personas.versions(principalId, ctx.params.id!, { ...(before ? { before: Number(before) } : {}), limit }),
+    await personas.versions(principalId, ctx.params.id!, {
+      ...(before ? { before: Number(before) } : {}),
+      limit: VERSION_PAGE,
+    }),
     null,
   );
 }
@@ -138,7 +140,7 @@ async function getPersonaVersion(ctx: ApiCtx): Promise<void> {
   const version = positiveInt(ctx.params.version);
   if (version === undefined)
     return sendJson(ctx.res, 400, { error: "bad_request", message: "version must be a positive integer" });
-  respond(ctx, await personas.version(principalId, ctx.params.id!, version), null);
+  respond(ctx, await personas.version(principalId, ctx.params.id!, version), "version");
 }
 
 async function restorePersonaVersion(ctx: ApiCtx): Promise<void> {

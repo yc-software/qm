@@ -13456,7 +13456,7 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   padding: 0 12px 12px;
   font-size: var(--font-12-5);
 }
-.persona-diff {
+.persona-version-text {
   margin: 0;
   max-height: 360px;
   overflow: auto;
@@ -13466,16 +13466,8 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   white-space: pre-wrap;
   font-size: var(--font-12-5);
 }
-.persona-diff span {
-  display: block;
-  min-height: 1lh;
-}
-.persona-diff-add {
-  color: var(--success);
-}
-.persona-diff-del {
-  color: var(--muted-foreground);
-  text-decoration: line-through;
+.persona-version-field > div {
+  margin-top: 2px;
 }
 .persona-share-org {
   display: inline-flex;

@@ -76,7 +76,7 @@ const PERSONA_SELECT = `SELECT p.*, u.primary_alias AS created_by_alias,
     (SELECT MAX(v.version) FROM persona_versions v WHERE v.persona_id = p.id) AS version
   FROM personas p JOIN users u ON u.id = p.created_by`;
 
-const VERSION_SELECT = `SELECT v.*, u.primary_alias AS edited_by_alias,
+const VERSION_SELECT = (columns: string) => `SELECT ${columns}, u.primary_alias AS edited_by_alias,
     ARRAY_REMOVE(ARRAY[
       CASE WHEN prev.version IS NULL OR prev.name IS DISTINCT FROM v.name THEN 'name' END,
       CASE WHEN prev.version IS NULL OR prev.description IS DISTINCT FROM v.description THEN 'description' END,
@@ -195,14 +195,15 @@ export function createPostgresPersonaStore(connectionString: string, opts: { id?
     },
     async versions(id, page) {
       const rows = await q(
-        `${VERSION_SELECT} WHERE v.persona_id = $1 AND ($2::int IS NULL OR v.version < $2)
+        `${VERSION_SELECT("v.version, v.restored_from, v.edited_at")}
+         WHERE v.persona_id = $1 AND ($2::int IS NULL OR v.version < $2)
          ORDER BY v.version DESC LIMIT $3`,
         [id, page.before ?? null, page.limit + 1],
       );
       return { versions: rows.slice(0, page.limit).map(toVersionSummary), more: rows.length > page.limit };
     },
     async version(id, version) {
-      const rows = await q(`${VERSION_SELECT} WHERE v.persona_id = $1 AND v.version = $2`, [id, version]);
+      const rows = await q(`${VERSION_SELECT("v.*")} WHERE v.persona_id = $1 AND v.version = $2`, [id, version]);
       return rows[0] ? toVersion(rows[0]) : null;
     },
     async remove(id) {

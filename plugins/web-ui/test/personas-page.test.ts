@@ -73,10 +73,7 @@ const { vite, dom, close } = await browserEnv({
     const versionPath = /\/versions\/(\d+)$/.exec(path);
     if (versionPath && method === "GET") {
       const n = Number(versionPath[1]);
-      return json({
-        version: versions.find((v) => v.version === n),
-        previous: versions.find((v) => v.version === n - 1) ?? null,
-      });
+      return json({ version: versions.find((v) => v.version === n) });
     }
     if (path.includes("/versions/") && method === "POST")
       return json({ persona: { ...personas[0], instructions: "Ada instructions", version: 4 } });
@@ -385,12 +382,18 @@ test("history lists versions on demand, shows what changed, and rolls back as a 
   rows[0]!.querySelector<HTMLButtonElement>(".persona-version-open")!.click();
   await settle();
   assert.deepEqual(
-    [...main.querySelectorAll(".persona-diff span")].map((line) => [line.className, line.textContent]),
+    [...main.querySelectorAll(".persona-version-field")].map((field) => [
+      field.querySelector("b")?.textContent,
+      Boolean(field.querySelector(".badge")),
+    ]),
     [
-      ["persona-diff-same", "  Count."],
-      ["persona-diff-add", "+ Show work."],
+      ["Name", false],
+      ["Icon", false],
+      ["Description", false],
+      ["Instructions", true],
     ],
   );
+  assert.equal(main.querySelector(".persona-version-text")?.textContent, "Count.\nShow work.");
   calls = [];
   button(rows[2]!, "Roll back").click();
   await settle();
@@ -540,13 +543,4 @@ test("New skill opens the skill editor already set to the persona", async () => 
   assert.ok(select, "the skill editor opened");
   assert.equal(select.selectedOptions[0]?.textContent, "Ada");
   assert.equal(select.value, "persona:p-ada");
-});
-
-test("a changed line shows as the old line removed, then the new one added", async () => {
-  const { lineDiff } = await vite.ssrLoadModule("/src/persona-history.ts");
-  assert.deepEqual(lineDiff("Rev 19\nKeep it short.", "Rev 20\nKeep it short."), [
-    { kind: "del", text: "Rev 19" },
-    { kind: "add", text: "Rev 20" },
-    { kind: "same", text: "Keep it short." },
-  ]);
 });

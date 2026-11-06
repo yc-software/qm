@@ -72,8 +72,8 @@ test("persona reads are asked of core as the signed-in person", async () => {
   assert.equal((await send("GET", "/api/personas")).url, "/v1/personas?principalId=alice");
   assert.equal((await send("GET", "/api/personas/p%201")).url, "/v1/personas/p%201?principalId=alice");
   assert.equal(
-    (await send("GET", "/api/personas/p%201/versions?before=5&limit=10&principalId=mallory")).url,
-    "/v1/personas/p%201/versions?principalId=alice&before=5&limit=10",
+    (await send("GET", "/api/personas/p%201/versions?before=5&principalId=mallory")).url,
+    "/v1/personas/p%201/versions?principalId=alice&before=5",
   );
   assert.equal(
     (await send("GET", "/api/personas/p%201/versions/3")).url,

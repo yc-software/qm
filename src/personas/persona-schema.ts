@@ -50,10 +50,13 @@ export const PERSONA_MIGRATIONS: PgMigrationDefinition[] = [
       `INSERT INTO persona_versions (persona_id, version, name, description, instructions, icon, edited_by, edited_at)
        SELECT id, 1, name, description, instructions, icon, created_by, updated_at FROM personas
        ON CONFLICT DO NOTHING`,
-      `UPDATE persona_access a SET role = 'read'
-        WHERE a.grantee_scope_id LIKE 'channel:%' AND a.role <> 'read'
-          AND EXISTS (SELECT 1 FROM persona_access o
-                       WHERE o.persona_id = a.persona_id AND o.role = 'owner' AND o.grantee_scope_id NOT LIKE 'channel:%')`,
+      `INSERT INTO persona_access (persona_id, grantee_scope_id, role, granted_by)
+       SELECT p.id, 'personal:' || u.primary_alias, 'owner', p.created_by
+         FROM personas p JOIN users u ON u.id = p.created_by
+        WHERE NOT EXISTS (SELECT 1 FROM persona_access o
+                           WHERE o.persona_id = p.id AND o.role = 'owner' AND o.grantee_scope_id NOT LIKE 'channel:%')
+       ON CONFLICT (persona_id, grantee_scope_id) DO UPDATE SET role = 'owner'`,
+      `UPDATE persona_access SET role = 'read' WHERE grantee_scope_id LIKE 'channel:%' AND role <> 'read'`,
     ],
   },
 ];
