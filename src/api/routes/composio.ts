@@ -9,7 +9,9 @@ import { PrincipalLinkError } from "../../identity/principal-links.ts";
 import { createHash } from "node:crypto";
 import { scopeId } from "../../types.ts";
 import { parseRef } from "../../acl/resource-ref.ts";
+import { currentTenant } from "../../tenants/context.ts";
 import { orgId } from "../../config.ts";
+import { externalOrgId } from "../../tenants/external-org.ts";
 import { entitledScopes } from "../../resolution/context-filter.ts";
 import { sendJson } from "../http.ts";
 import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
@@ -27,7 +29,7 @@ export function composioUserId(org: string, principal: string): string {
 }
 
 export function composioUserIds(principal: string): string[] {
-  return [...new Set(personIds(principal).map((id) => composioUserId(orgId(), id)))];
+  return [...new Set(personIds(principal).map((id) => composioUserId(externalOrgId(), id)))];
 }
 
 export async function activeRun(ctx: ApiCtx): Promise<boolean> {
@@ -270,7 +272,7 @@ async function authorize(ctx: ApiCtx, linkSlack = false): Promise<void> {
       return sendJson(ctx.res, 400, { error: "invalid_callback" });
     }
   }
-  const userId = composioUserId(orgId(), canonicalPerson(access.principal));
+  const userId = composioUserId(externalOrgId(), canonicalPerson(access.principal));
   try {
     const session = await request(ctx, access.key, "/tool_router/session", {
       user_id: userId,
@@ -364,13 +366,14 @@ const SCOPES_TTL_MS = 5 * 60_000;
 const scopeCache = new Map<string, { scopes: string[]; expiresAt: number }>();
 
 async function configuredScopes(ctx: ApiCtx, key: string, authConfigId: string): Promise<string[]> {
-  const cached = scopeCache.get(authConfigId);
+  const cacheKey = JSON.stringify([currentTenant(), authConfigId]);
+  const cached = scopeCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return cached.scopes;
   try {
     const config = await request(ctx, key, `/auth_configs/${encodeURIComponent(authConfigId)}`);
     const listed = (config.credentials as { scopes?: unknown } | undefined)?.scopes;
     const scopes = Array.isArray(listed) ? listed.filter((scope): scope is string => typeof scope === "string") : [];
-    scopeCache.set(authConfigId, { scopes, expiresAt: Date.now() + SCOPES_TTL_MS });
+    scopeCache.set(cacheKey, { scopes, expiresAt: Date.now() + SCOPES_TTL_MS });
     return scopes;
   } catch (error) {
     const mask = createExactSecretValueMasker([key]);
@@ -597,7 +600,7 @@ async function completeAuth(ctx: ApiCtx): Promise<void> {
     connectFailed();
     return sendJson(ctx.res, 400, { error: "invalid_session" });
   }
-  const userId = composioUserId(orgId(), canonicalPerson(access.principal));
+  const userId = composioUserId(externalOrgId(), canonicalPerson(access.principal));
   let accountId: string;
   try {
     const result = await request(ctx, access.key, "/connected_accounts/complete_auth", {
@@ -826,7 +829,7 @@ async function completeSlack(ctx: ApiCtx): Promise<void> {
         const priorAccounts = await request(
           ctx,
           projectKey,
-          `/connected_accounts?${new URLSearchParams({ user_ids: composioUserId(orgId(), member.principalId), limit: "1" })}`,
+          `/connected_accounts?${new URLSearchParams({ user_ids: composioUserId(externalOrgId(), member.principalId), limit: "1" })}`,
         );
         if (!Array.isArray(priorAccounts.items)) throw Error("Could not inspect existing connections");
         hasPriorAccounts ||= priorAccounts.items.length > 0;

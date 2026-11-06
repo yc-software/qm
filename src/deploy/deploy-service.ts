@@ -15,6 +15,7 @@ import { samePerson } from "../directory/person.ts";
 import { CONNECTOR_HOSTS } from "../connectors/oauth.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import {
+  appUrlOf,
   currentVersionOf,
   deployCurrentGitRef,
   type DeployStore,
@@ -28,6 +29,8 @@ import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { errMessage, reportFailure, swallow, swallowAs } from "../util/errors.ts";
 import { uuidSchema } from "../util/ids.ts";
+import { claimThenBind } from "../tenants/claim.ts";
+import { assertAppLabelFits } from "../tenants/settings.ts";
 
 export interface DeployFile {
   path: string;
@@ -79,6 +82,7 @@ export interface DeployService {
   deploy(input: DeployInput): Promise<Deployment>;
   redeploy(id: string, input: RedeployInput): Promise<Deployment>;
   getDeployment(idOrName: string): Promise<Deployment | null>;
+  appUrl?(d: Deployment): string | undefined;
   listDeployments(): Promise<Deployment[]>;
   rollbackDeployment(id: string, version: number, options?: { alwaysOn?: boolean; actor?: string }): Promise<void>;
   archiveDeployment(id: string): Promise<void>;
@@ -178,6 +182,7 @@ function validateName(name: string): void {
       `invalid deployment name "${name}": use 2-40 chars, lowercase letters/digits/hyphens, no leading/trailing hyphen`,
     );
   }
+  assertAppLabelFits(name);
 }
 
 const DISPLAY_NAME_MAX = 60;
@@ -221,6 +226,10 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     });
   }
 
+  const eachRunning = (work: (d: Deployment) => Promise<void>) =>
+    claimThenBind(deps.deployStore.claimTenants, async () => {
+      for (const d of await deps.deployStore.list()) if (d.status === "running") await work(d);
+    });
   function withDeployLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
     return deployQueue(id, () => advisoryLock.withLock(`deploy:${id}`, fn));
   }
@@ -353,6 +362,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
   }
 
   return {
+    appUrl: (d) => appUrlOf(d, { sharedWebUrl: deps.publicWebUrl, appsDomain: deps.deployAppsDomain }),
     providerProfile: deps.provider.profile,
     assertShareAllowed,
 
@@ -361,11 +371,12 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         validateName(input.name);
         if (await deps.deployStore.getByName(input.name)) throw new Error(`deployment name taken: ${input.name}`);
       }
+      const id = randomUUID();
+      if (input.name === undefined) assertAppLabelFits(id);
       assertAppSize(fileSizes(input.files), deps.provider.profile.maxAppBytes);
       const snapshotDir = await snapshotFiles(deps.deployDir, input.files);
       const homeDir = input.homeFiles?.length ? await snapshotFiles(deps.deployDir, input.homeFiles) : undefined;
       const env = input.stampEnv ? { ...input.env, ...input.stampEnv } : input.env;
-      const id = randomUUID();
       if (input.createdInScope && parseScopeId(input.createdInScope).kind === "channel") {
         await deps.acl.grant({
           ownerScopeId: input.ownerScopeId,
@@ -636,21 +647,17 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     async maintainDeployments() {
       const result = await leaderLease.hold("deployments:keep-warm", async () => {
         let maintained = 0;
-        for (const d of await deps.deployStore.list()) {
-          if (d.status !== "running") continue;
+        await eachRunning(async (listed) => {
           try {
-            const cur = await deps.deployStore.get(d.id);
-            if (!cur || cur.status !== "running") continue;
-            if (await deps.provider.rotationDue?.(cur)) {
-              await rotateDeployment(cur.id);
-              maintained++;
-            } else if (cur.alwaysOn && (await liveEndpoint(cur))) {
-              maintained++;
-            }
+            const rotate = await deps.provider.rotationDue?.(listed);
+            const cur = rotate || listed.alwaysOn ? await deps.deployStore.get(listed.id) : null;
+            if (cur?.status !== "running") return;
+            if (rotate) await rotateDeployment(cur.id);
+            if (rotate || (cur.alwaysOn && (await liveEndpoint(cur)))) maintained++;
           } catch (e) {
-            console.error("%s", `[deploy] maintenance failed for ${d.name ?? d.id}:`, errMessage(e));
+            console.error("%s", `[deploy] maintenance failed for ${listed.id}:`, errMessage(e));
           }
-        }
+        });
         return maintained;
       });
       return result ?? 0;
@@ -728,20 +735,17 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       const result = await leaderLease.hold("deployments:reaper", async () => {
         if (deps.provider.profile.managedScaleToZero) return 0;
         let stopped = 0;
-        for (const d of await deps.deployStore.list()) {
-          if (d.status !== "running") continue;
-          if (d.alwaysOn) continue;
-          const last = d.lastAccessAt ?? d.versions[d.versions.length - 1]?.createdAt ?? 0;
-          if (now - last < ttlMs) continue;
-          await withDeployLock(d.id, async () => {
-            const cur = await deps.deployStore.get(d.id);
+        await eachRunning(async ({ id, alwaysOn, lastAccessAt, versions }) => {
+          if (alwaysOn || now - (lastAccessAt ?? versions.at(-1)?.createdAt ?? 0) < ttlMs) return;
+          await withDeployLock(id, async () => {
+            const cur = await deps.deployStore.get(id);
             if (!cur || cur.status !== "running" || cur.alwaysOn) return;
             await deps.provider.destroy(cur);
-            await deps.deployStore.setStatus(d.id, "stopped");
-            await deps.deployStore.setEndpoint(d.id, null);
+            await deps.deployStore.setStatus(id, "stopped");
+            await deps.deployStore.setEndpoint(id, null);
             stopped++;
           });
-        }
+        });
         return stopped;
       });
       return result ?? 0;

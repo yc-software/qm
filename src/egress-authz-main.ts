@@ -153,6 +153,7 @@ export function buildEgressAuthzServer(deps: EgressAuthzDeps): Server {
         verdict: d.verdict,
         scopeLabel: (claims?.scopeId ?? "unknown") as ScopeId,
         principalId: claims?.actorId ?? "unknown",
+        ...(claims?.tenant ? { tenant: claims.tenant } : {}),
       });
     } catch (error) {
       swallow("egress-authz: audit record", error);

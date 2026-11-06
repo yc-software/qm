@@ -3,6 +3,7 @@ import "./slack-reply";
 import type { SlackReply } from "./slack-reply";
 import { assistantSidebar, assistantMessage } from "./assistant-sidebar";
 import { formatMessageTime } from "./message-time.ts";
+import { assistantSpeakerText } from "./via-label.ts";
 import { messageEntrySeqs, highlightMessage } from "./message-link.ts";
 import { appEditSlug } from "./app-edit";
 import { isConnectionReturn } from "./connection-return";
@@ -2197,17 +2198,21 @@ export function createChatSurface(
           ${msg.stopReason === "error" && msg.errorMessage ? html`<div class="composer-error inline">${msg.errorMessage}</div>` : nothing}`,
           meta: isStreaming ? nothing : messageMeta(msg, index),
         });
+      const via = (msg as AssistantWork).via;
+      const labeled = chatState.labelSpeakers || Boolean(via);
       return html`
         <article
-          class="message-row assistant-row ${chatState.labelSpeakers ? "named-assistant-row" : ""} ${isStreaming ? "streaming" : ""}"
+          class="message-row assistant-row ${labeled ? "named-assistant-row" : ""} ${isStreaming ? "streaming" : ""}"
           data-index=${index}
           data-entry-seqs=${messageEntrySeqs(message)
             .filter((seq) => !inlineSteers.has(seq))
             .join(" ")}
         >
           ${
-            chatState.labelSpeakers
-              ? html`<div class="speaker-label">${brandMark()}<span>${chatState.assistantSpeakerLabel}</span></div>`
+            labeled
+              ? html`<div class="speaker-label">
+                  ${brandMark()}<span>${assistantSpeakerText(brandName(), via)}</span>
+                </div>`
               : nothing
           }
           <div class="assistant-body">

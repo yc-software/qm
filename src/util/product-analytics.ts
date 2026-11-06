@@ -1,8 +1,9 @@
 import { isSessionTurn } from "../core/turn-origin.ts";
 import type { Run } from "../runs/run-store.ts";
+import { swallowAs } from "./errors.ts";
 
 export function createProductAnalytics(
-  companyId: string,
+  companyOf: () => string,
   config: { apiKey?: string; host?: string } = {},
   send: typeof fetch = fetch,
 ): {
@@ -12,12 +13,20 @@ export function createProductAnalytics(
   const apiKey = config.apiKey?.trim();
   const host = (config.host?.trim() || "https://us.i.posthog.com").replace(/\/$/, "");
   let inFlight = 0;
+  const company = (): string | undefined => {
+    try {
+      return companyOf();
+    } catch (e) {
+      return swallowAs("product analytics: resolve company", undefined)(e);
+    }
+  };
   async function capture(
     event: string,
     principal: string,
     insertId: string,
     properties: Record<string, string> = {},
   ): Promise<void> {
+    const companyId = company();
     if (!apiKey || !companyId || !principal || inFlight >= 16) return;
     inFlight++;
     try {
@@ -67,7 +76,7 @@ export function createProductAnalytics(
       if (run.status === "failed" || status === "failed") event = "response_failed";
       else if (status === "ok" || status === "silent" || status === "react") event = "response_completed";
       if (!event) return;
-      await capture(event, run.request.actor.id, `${companyId}:${run.id}:${event}`, {
+      await capture(event, run.request.actor.id, `${company()}:${run.id}:${event}`, {
         surface: run.request.surface === "web" || run.request.surface === "slack" ? run.request.surface : "core",
         completion_boundary: "run",
         result_status: status ?? "failed",

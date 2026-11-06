@@ -68,6 +68,7 @@ import {
 } from "./turn-origin.ts";
 import { resolveTurnFastMode, turnRuntimePurpose } from "./turn-options.ts";
 import { orgId } from "../config.ts";
+import { currentTenant } from "../tenants/context.ts";
 import { deriveTurnOutcome, approvalBlocksInput } from "./turn-outcome.ts";
 import { applyPromptVars, loadProtocolFile, type PromptVars } from "../resolution/prompt-vars.ts";
 import { cleanBrandingLabel, resolveBranding } from "../resolution/branding.ts";
@@ -329,11 +330,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     ttl: DIRECTORY_INDEX_TTL_MS,
   });
   async function directoryIndexFor(directory: DirectoryStore): Promise<Map<string, DirectoryMember>> {
-    const cached = directoryIndexCache.get("org");
+    const cached = directoryIndexCache.get(currentTenant());
     if (cached) return cached;
     const byId = new Map<string, DirectoryMember>();
     for (const m of await directory.list()) byId.set(personKey(m.principalId), m);
-    directoryIndexCache.set("org", byId);
+    directoryIndexCache.set(currentTenant(), byId);
     return byId;
   }
 
@@ -1352,11 +1353,21 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         return true;
       };
       const authorizeToolCall = (tool: string): boolean => consumeApproval(`tool:${tool}`);
+      const consumedCommandKeys = new Map<string, string>();
       const authorizeCommand = (command: string, approvalKey?: string, exactApprovalKey = false): boolean => {
         let key = approvalKey ?? command;
         if (approvalKey !== undefined && commandUses.has(approvalKey)) key = approvalKey;
         else if (!exactApprovalKey && commandUses.has(command)) key = command;
-        return consumeApproval(key);
+        if (!consumeApproval(key)) return false;
+        consumedCommandKeys.set(command, key);
+        return true;
+      };
+      const restoreCommand = (command: string): void => {
+        const key = consumedCommandKeys.get(command);
+        if (key === undefined) return;
+        consumedCommandKeys.delete(command);
+        const uses = commandUses.get(key);
+        if (uses !== undefined && uses !== Infinity) commandUses.set(key, uses + 1);
       };
       const quarantineReleaseApprovals: Array<{
         command: string;
@@ -2711,6 +2722,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           commandPolicy: () => commandPolicy,
           layerCommandRules: () => layerCommandRules,
           authorizeCommand,
+          restoreCommand,
           grantedHandles: resolution.grantedHandles,
           context,
           deploy: deps.deploy,
@@ -3805,7 +3817,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               reportFailure("orchestrator: direct reply delivery", e, `session=${session.id}`);
             }
           }
-          if (spine.surfaceOutboundCount === 0 && (primaryReply || (input.addressed && !isPollFire))) {
+          if (
+            spine.surfaceOutboundCount === 0 &&
+            !result.pendingApprovals?.length &&
+            (primaryReply || (input.addressed && !isPollFire))
+          ) {
             const nudgeHistory = filterHistory(forModelContext((await historyWindow()).items));
             result = await runAgentTurn(
               input.addressed

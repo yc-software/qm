@@ -38,6 +38,7 @@ import { STALE_LEASE_GRACE_MS } from "./app-types.ts";
 const PARTICIPANT_REHYDRATE_TIMEOUT_MS = 5_000;
 import type { AppHelpers } from "./app-helpers.ts";
 import type { AmbientHelpers } from "./app-ambient.ts";
+import { boundTenant, withTenant } from "../tenants/context.ts";
 
 const freshSteerTs = () => `${Date.now()}.${crypto.randomUUID().slice(0, 8)}`;
 
@@ -498,7 +499,7 @@ export function createTurnMethods(
       const { run, deduped } = enqueued;
       if (deduped && redeliveryKey && run.dedupKey === redeliveryKey) return { status: "silent" };
       if (spineRouted && !deduped) markTriggerHandled(input as OrchestratorInput);
-      if (spineRouted) deps.engaged?.engage(conversation.threadRef);
+      if (spineRouted) deps.engaged?.engage({ tenantId: run.tenantId, threadRef: conversation.threadRef });
       const terminalResult = deduped && isTerminal(run.status) ? run.result : null;
       if (req.async && !terminalResult) return { status: "queued", runId: run.id };
       const result = terminalResult ? await withAdminLink(terminalResult) : await awaitRun(run.id);
@@ -527,8 +528,13 @@ export function createTurnMethods(
         tail = tail.then(step).catch(swallowAs("session-state: subscriber", undefined));
       };
       const onResync = opts?.onResync;
+      const tenant = boundTenant();
       return deps.sessionStateBus.subscribe(
-        (event) => queue(async () => cb(await rehydrate(event))),
+        ({ tenantId, ...event }) => {
+          if (tenant && tenantId && tenantId !== tenant) return;
+          const owner = tenantId ?? tenant;
+          queue(async () => cb(await (owner ? withTenant(owner, () => rehydrate(event)) : rehydrate(event))));
+        },
         onResync ? { onResync: () => queue(onResync) } : undefined,
       );
     },

@@ -8,6 +8,7 @@ import { createHash } from "node:crypto";
 interface RecordedBlob {
   sha: string;
   bytes: number;
+  identity?: string;
 }
 const blobUploads: RecordedBlob[] = [];
 type TurnBody = {
@@ -27,7 +28,7 @@ const core = createServer((req: IncomingMessage, res) => {
     let size = 0;
     req.on("data", (c: Buffer) => (size += c.length));
     return void req.on("end", () => {
-      blobUploads.push({ sha, bytes: size });
+      blobUploads.push({ sha, bytes: size, identity: req.headers[PORTAL_IDENTITY_HEADER] as string | undefined });
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ blobId: `blob-${sha.slice(0, 8)}`, sizeBytes: size }));
     });
@@ -89,6 +90,11 @@ test("POST /api/blobs streams the body to core with the declared sha and relays 
   assert.equal(recorded.length, 1, "exactly one blob reached core");
   assert.equal(recorded[0]!.sha, sha, "the declared sha is forwarded to core (source-auth signs over it)");
   assert.equal(recorded[0]!.bytes, bytes.length, "all bytes streamed through, not capped");
+  assert.equal(
+    recorded[0]!.identity,
+    IDENTITY[PORTAL_IDENTITY_HEADER],
+    "the signed-in identity, and so its tenant, reaches core",
+  );
 });
 
 test("POST /api/blobs rejects a missing/invalid sha with 400 (never reaches core)", async () => {

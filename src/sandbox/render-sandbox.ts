@@ -27,6 +27,7 @@ import {
 import type { RenderClient, RenderSandboxInfo, RenderSnapshot } from "./render-client.ts";
 import type { RenderBase } from "./render-base.ts";
 import { RENDER_COMPUTER_LIFETIME_SEC, RENDER_IDLE_STOP_MS, RENDER_SANDBOX_TTL_SEC } from "./render-limits.ts";
+import { claimThenBind } from "../tenants/claim.ts";
 
 interface RenderSandboxResources {
   sandboxId?: string;
@@ -591,62 +592,69 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
     },
     async reapDeepIdle(idleMs) {
       let reaped = 0;
-      for (const [name, candidate] of await scratchStore.entries()) {
-        if (!candidate.cleanupPending && candidate.expiresAtMs > Date.now()) continue;
-        await tryLock(lifecycleKey(name), async () => {
-          const temporary = await scratchStore.get(name);
-          if (!temporary || (!temporary.cleanupPending && temporary.expiresAtMs > Date.now())) return;
-          await destroyScratch(name);
-          reaped++;
-        }).catch((error) => reportError("scratch_cleanup_failed", error));
-      }
+      const scratchDue = (scratch: StoredRenderScratch | null): boolean =>
+        !!scratch && (scratch.cleanupPending || scratch.expiresAtMs <= Date.now());
+      await claimThenBind(scratchStore.claimTenants, async () => {
+        for (const [name, scratch] of await scratchStore.entries())
+          if (scratchDue(scratch))
+            await tryLock(lifecycleKey(name), async () => {
+              if (!scratchDue(await scratchStore.get(name))) return;
+              await destroyScratch(name);
+              reaped++;
+            }).catch((error) => reportError("scratch_cleanup_failed", error));
+      });
       const cutoff = Date.now() - Math.min(idleMs > 0 ? idleMs : Infinity, RENDER_IDLE_STOP_MS);
       const stale = (stored: StoredRenderSandbox): boolean => stored.homeDirty !== false && !recentlySaved(stored);
       const due = (stored: StoredRenderSandbox): boolean =>
         !stored.stopped && (stored.expiresAtMs <= Date.now() || stored.lastActivityMs <= cutoff || stale(stored));
-      for (const [scope] of await cleanupStore.entries())
-        await tryLock(lifecycleKey(nameFor(scope)), () => finishCleanup(scope)).catch(
-          swallowAs(`render-sandbox: finish cleanup of ${scope}`, undefined),
-        );
-      for (const [scope, candidate] of await store.entries()) {
-        if (!due(candidate) && !candidate.retiredResources?.length) continue;
-        const name = nameFor(scope);
-        await tryLock(lifecycleKey(name), async () => {
-          let stored = await store.get(scope);
-          if (stored) stored = await cleanupRetired(scope, stored);
-          if (!stored || !due(stored)) return;
-          const info = await client.get(stored.sandboxId);
-          if (!info || info.status === "terminated" || info.status === "errored") {
-            if (stored.expiresAtMs > Date.now())
-              reportError(
-                "computer_ended",
-                new Error(`Render sandbox ${stored.sandboxId} is ${info?.status ?? "missing"}`),
-                scope,
-              );
-            await store.merge(scope, { stopped: true });
-            return;
-          }
-          if (info.status !== "running") return;
-          const active = await hasLiveProcesses(info.id);
-          if (active && !stale(stored)) return;
-          const current = stored;
-          const stopped =
-            !active &&
-            stored.lastActivityMs <= cutoff &&
-            (await tryUse(name, async () => {
-              if (await hasLiveProcesses(info.id)) return false;
-              await clearCredentials(info.id).catch((error: unknown) =>
-                reportError("credential_clear_failed", error, scope),
-              );
-              await checkpoint(scope, current, false);
-              await client.terminate(info.id);
+      await claimThenBind(
+        () => cleanupStore.claimIds(),
+        (scope) =>
+          tryLock(lifecycleKey(nameFor(scope)), () => finishCleanup(scope)).catch(
+            swallowAs(`render-sandbox: finish cleanup of ${scope}`, undefined),
+          ),
+      );
+      await claimThenBind(store.claimTenants, async () => {
+        for (const [scope, candidate] of await store.entries()) {
+          if (!due(candidate) && !candidate.retiredResources?.length) continue;
+          const name = nameFor(scope);
+          await tryLock(lifecycleKey(name), async () => {
+            let stored = await store.get(scope);
+            if (stored) stored = await cleanupRetired(scope, stored);
+            if (!stored || !due(stored)) return;
+            const info = await client.get(stored.sandboxId);
+            if (!info || info.status === "terminated" || info.status === "errored") {
+              if (stored.expiresAtMs > Date.now())
+                reportError(
+                  "computer_ended",
+                  new Error(`Render sandbox ${stored.sandboxId} is ${info?.status ?? "missing"}`),
+                  scope,
+                );
               await store.merge(scope, { stopped: true });
-              return true;
-            }));
-          if (stopped) reaped++;
-          else await checkpoint(scope, stored, active || undefined);
-        }).catch((error) => reportError("idle_checkpoint_failed", error, scope));
-      }
+              return;
+            }
+            if (info.status !== "running") return;
+            const active = await hasLiveProcesses(info.id);
+            if (active && !stale(stored)) return;
+            const current = stored;
+            const stopped =
+              !active &&
+              stored.lastActivityMs <= cutoff &&
+              (await tryUse(name, async () => {
+                if (await hasLiveProcesses(info.id)) return false;
+                await clearCredentials(info.id).catch((error: unknown) =>
+                  reportError("credential_clear_failed", error, scope),
+                );
+                await checkpoint(scope, current, false);
+                await client.terminate(info.id);
+                await store.merge(scope, { stopped: true });
+                return true;
+              }));
+            if (stopped) reaped++;
+            else await checkpoint(scope, stored, active || undefined);
+          }).catch((error) => reportError("idle_checkpoint_failed", error, scope));
+        }
+      });
       return { reaped };
     },
     async computerStatus(scope): Promise<ComputerStatus> {

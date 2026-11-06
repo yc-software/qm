@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { createPgPool, withPgTransaction, type Rows } from "../persistence/pg-pool.ts";
 import { DIRECTORY_MIGRATIONS } from "../directory/postgres-directory-store.ts";
 import { foldPrincipalId } from "../directory/person.ts";
-import { ensureUserIn, USER_MIGRATIONS } from "../identity/user-store.ts";
+import { ensureUserIn, USER_SCHEMA_MIGRATIONS } from "../identity/user-store.ts";
 import { SESSION_MIGRATIONS } from "../sessions/session-schema.ts";
 import type { ScopeId } from "../types.ts";
 import type { ProjectIcon } from "../projects/project-store.ts";
@@ -73,7 +73,7 @@ export function createPostgresPersonaStore(connectionString: string, opts: { id?
   const { q, pool } = createPgPool(connectionString, [
     ...DIRECTORY_MIGRATIONS,
     ...SESSION_MIGRATIONS,
-    ...USER_MIGRATIONS,
+    ...USER_SCHEMA_MIGRATIONS,
   ]);
   const nextId = opts.id ?? randomUUID;
   return {
@@ -147,7 +147,7 @@ export function createPostgresPersonaStore(connectionString: string, opts: { id?
         for (const entry of access)
           await db.query(
             `INSERT INTO persona_access (persona_id, grantee_scope_id, role, granted_by) VALUES ($1, $2, $3, $4)
-             ON CONFLICT (persona_id, grantee_scope_id) DO UPDATE
+             ON CONFLICT (tenant_id, persona_id, grantee_scope_id) DO UPDATE
                SET role = EXCLUDED.role, granted_by = EXCLUDED.granted_by, granted_at = now()
                WHERE persona_access.role IS DISTINCT FROM EXCLUDED.role`,
             [id, entry.scopeId, entry.role, user],

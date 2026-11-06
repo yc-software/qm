@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { TenantLookup } from "../tenants/lookup.ts";
 import type { ScopeId, Session, SessionType, SpawnMeta } from "../types.ts";
 import type { GoalRecord } from "../agent/goal.ts";
 import { isUserItem, type Item, type NewItem } from "./items.ts";
@@ -389,6 +390,7 @@ interface SessionFacts {
 }
 
 export interface SessionStore {
+  tenantLookup: TenantLookup;
   getOrCreateByThread(
     threadRef: string,
     type: SessionType,

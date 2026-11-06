@@ -48,6 +48,7 @@ import {
   getSlackInstallation,
   putSlackInstallation,
   startSlackInstallation,
+  managedSlackEvent,
   managedSlackRequest,
 } from "./admin/slack-installation.ts";
 import { deleteModelProvider, getModelProviders, putModelProvider } from "./admin/model-providers.ts";
@@ -83,9 +84,21 @@ const MCP_SERVERS =
 const LINKS = "identity links are portal-only — the agent cannot decide which sign-ins belong to one person";
 
 const routes: Route<ApiCtx>[] = [
-  { method: "POST", path: "/v1/slack/managed/installation", auth: "public", handle: managedSlackRequest },
-  { method: "DELETE", path: "/v1/slack/managed/installation", auth: "public", handle: managedSlackRequest },
-  { method: "POST", path: "/v1/slack/managed/events", auth: "public", handle: managedSlackRequest },
+  {
+    method: "POST",
+    path: "/v1/slack/managed/installation",
+    auth: "public",
+    tenant: "none",
+    handle: managedSlackRequest,
+  },
+  {
+    method: "DELETE",
+    path: "/v1/slack/managed/installation",
+    auth: "public",
+    tenant: "none",
+    handle: managedSlackRequest,
+  },
+  { method: "POST", path: "/v1/slack/managed/events", auth: "public", tenant: "none", handle: managedSlackEvent },
   ...withAdmin([
     { method: "POST", path: "/v1/admin/slack-installation/start", auth: "either", handle: startSlackInstallation },
     { method: "GET", path: "/v1/admin/slack-installation", auth: "either", handle: getSlackInstallation },

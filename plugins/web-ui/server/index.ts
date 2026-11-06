@@ -37,7 +37,9 @@ import {
   serveFavicon,
 } from "../../chassis/src/http.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
-import { createBrandingCache, injectBranding } from "../../chassis/src/branding.ts";
+import { createTenantFeeds } from "./tenant-feeds.ts";
+import { injectBranding } from "../../chassis/src/branding.ts";
+import { brandingFrom, createTenantBranding } from "./tenant-branding.ts";
 import { parseSuggestedActivities } from "../../chassis/src/suggested-activities.ts";
 import { principalInAllowlist } from "../../chassis/src/principal-allowlist.ts";
 import { clientSurfaceOf } from "../../chassis/src/client-surface.ts";
@@ -87,18 +89,15 @@ async function hasInboxLoopPreview(user: string): Promise<boolean> {
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-const brandingCache = createBrandingCache(async () => {
-  const r = await coreFetch("GET", "/v1/surface-config", "", 2_000);
-  if (r.status !== 200) throw new Error(`surface-config ${r.status}`);
-  const b = (JSON.parse(r.text) as { branding?: Record<string, unknown> }).branding;
-  return {
-    ...(typeof b?.orgName === "string" ? { orgName: b.orgName } : {}),
-    ...(typeof b?.accent === "string" ? { accent: b.accent } : {}),
-    ...(typeof b?.mark === "string" ? { mark: b.mark } : {}),
-    ...(typeof b?.markUrl === "string" ? { markUrl: b.markUrl } : {}),
-    ...(typeof b?.selfLabel === "string" ? { selfLabel: b.selfLabel } : {}),
-  };
-});
+const brandingCache = createTenantBranding(
+  async () => {
+    const r = await coreFetch("GET", "/v1/surface-config", "", 2_000);
+    if (r.status !== 200) throw new Error(`surface-config ${r.status}`);
+    return brandingFrom(r.text);
+  },
+  () => portalTokenStore.getStore(),
+  PORTAL_IDENTITY_SECRET,
+);
 
 async function serveWebManifest(res: ServerResponse): Promise<void> {
   const branding = await brandingCache.forRender();
@@ -131,12 +130,16 @@ async function brandIndexHtml(html: string): Promise<string> {
 }
 
 const portalTokenStore = new AsyncLocalStorage<string | undefined>();
+const identityHeader = (): Record<string, string> => {
+  const token = portalTokenStore.getStore();
+  return token ? { [PORTAL_IDENTITY_HEADER]: token } : {};
+};
 
 const runThreadKeys = new Map<string, string>();
 const activeRunsByThread = new Map<string, string[]>();
 
 function threadKey(user: string, threadRef: string): string {
-  return `${user}\0${threadRef}`;
+  return `${feeds.requestTenant() ?? ""}\0${user}\0${threadRef}`;
 }
 
 function forgetRun(runId: string): void {
@@ -158,8 +161,6 @@ function rememberRun(runId: string, user: string, threadRef: string): void {
   runThreadKeys.set(runId, key);
   activeRunsByThread.set(key, [...(activeRunsByThread.get(key) ?? []), runId]);
 }
-
-const deliveryClients = new Map<string, Set<ServerResponse>>();
 
 function ownerOfWebThread(threadRef: string): string | null {
   if (!threadRef.startsWith("web:")) return null;
@@ -495,182 +496,44 @@ async function slackWorkspaceUrl(): Promise<string | null> {
 }
 
 const WEB_DELIVERY_POLL_MS = Number(process.env.WEB_DELIVERY_POLL_MS ?? 2500);
-const WEB_DELIVERY_GIVEUP_MS = 60_000;
-let deliveriesPollInFlight = false;
-let deliveriesPollFailing = false;
+const SSE_HEARTBEAT_MS = 15_000;
+const failingDeliveryPolls = new Set<string>();
 
-interface PendingWebDelivery {
-  id: string;
-  createdAt: number;
-  destination?: { target?: string };
-}
-
-export async function drainWebDeliveries(): Promise<void> {
-  if (deliveriesPollInFlight) return;
-  deliveriesPollInFlight = true;
-  try {
-    noteDeliveriesPoll(await pollWebDeliveries());
-  } catch (e) {
-    noteDeliveriesPoll(e);
-  } finally {
-    deliveriesPollInFlight = false;
-  }
-}
-
-function noteDeliveriesPoll(failure: unknown): void {
+function noteDeliveriesPoll(tenant: string | undefined, failure: unknown): void {
+  const lane = tenant ? ` for tenant ${tenant}` : "";
   if (failure === undefined) {
-    if (deliveriesPollFailing) console.log("[web-ui] web delivery poll recovered");
-    deliveriesPollFailing = false;
+    if (failingDeliveryPolls.delete(tenant ?? "")) console.log(`[web-ui] web delivery poll${lane} recovered`);
     return;
   }
-  if (!deliveriesPollFailing) swallow("web-ui: web delivery poll (further failures quiet until recovery)", failure);
-  deliveriesPollFailing = true;
+  if (!failingDeliveryPolls.has(tenant ?? ""))
+    swallow(`web-ui: web delivery poll${lane} (further failures quiet until recovery)`, failure);
+  failingDeliveryPolls.add(tenant ?? "");
 }
 
-async function pollWebDeliveries(): Promise<unknown> {
-  const r = await coreFetch("GET", "/v1/deliveries?type=web");
-  if (r.status !== 200) return new Error(`GET /v1/deliveries http ${r.status}: ${r.text.slice(0, 200)}`);
-  const pending = (JSON.parse(r.text) as { deliveries?: PendingWebDelivery[] }).deliveries ?? [];
-  const now = Date.now();
-  let failure: unknown;
-  for (const d of pending) {
-    const target = d.destination?.target ?? "";
-    const conns = deliveryClients.get(ownerOfWebThread(target) ?? "");
-    if (conns && conns.size) {
-      for (const res of conns) sseEvent(res, "delivery", { threadRef: target });
-    } else if (now - (d.createdAt ?? 0) < WEB_DELIVERY_GIVEUP_MS) {
-      continue;
-    }
-    try {
-      const ack = await coreFetch("POST", `/v1/deliveries/${encodeURIComponent(d.id)}/ack`);
-      if (ack.status !== 200)
-        failure ??= new Error(`ack delivery ${d.id} http ${ack.status}: ${ack.text.slice(0, 200)}`);
-    } catch (e) {
-      failure ??= e;
-    }
-  }
-  return failure;
-}
+const feeds = createTenantFeeds({
+  identitySecret: PORTAL_IDENTITY_SECRET,
+  currentToken: () => portalTokenStore.getStore(),
+  asToken: (token, fn) => portalTokenStore.run(token, fn),
+  coreFetch: (method, path, body) => coreFetch(method, path, body),
+  openFeed: (path, signal) => {
+    const signedPath = withSourceAuthNonce(path, CORE_SIGNING_SECRET);
+    return fetch(`${CORE}${signedPath}`, {
+      headers: {
+        ...signedHeaders(CORE_SIGNING_SECRET, "GET", signedPath, ""),
+        ...identityHeader(),
+      },
+      signal,
+    });
+  },
+  sseEvent,
+  ownerOfWebThread,
+  noteDeliveries: noteDeliveriesPoll,
+  reconnectMs: Number(process.env.STATE_FEED_RECONNECT_MS ?? 3_000),
+  giveupMs: 60_000,
+});
 
-const SSE_HEARTBEAT_MS = 15_000;
-const STATE_FEED_RECONNECT_MS = Number(process.env.STATE_FEED_RECONNECT_MS ?? 3_000);
-
-interface SessionStateFrame {
-  threadRef?: string;
-  state?: string;
-  participants?: string[];
-  [k: string]: unknown;
-}
-
-function forwardSessionState(frame: SessionStateFrame): void {
-  const threadRef = typeof frame.threadRef === "string" ? frame.threadRef : "";
-  if (!threadRef) return;
-  const targets = new Set<string>(
-    Array.isArray(frame.participants) ? frame.participants.filter((p): p is string => typeof p === "string") : [],
-  );
-  if (targets.size === 0) {
-    const owner = ownerOfWebThread(threadRef);
-    if (owner) targets.add(owner);
-  }
-  const { participants: _participants, ...visible } = frame;
-  for (const user of targets) {
-    for (const res of deliveryClients.get(user) ?? []) sseEvent(res, "session_state", visible);
-  }
-}
-
-async function consumeCoreFeed(
-  path: string,
-  eventName: string,
-  onEvent: (data: unknown) => void,
-  onReconnect?: () => void,
-): Promise<void> {
-  let dropped = false;
-  for (;;) {
-    try {
-      const signedPath = withSourceAuthNonce(path, CORE_SIGNING_SECRET);
-      const r = await fetch(`${CORE}${signedPath}`, {
-        headers: signedHeaders(CORE_SIGNING_SECRET, "GET", signedPath, ""),
-      });
-      if (r.status === 200 && r.body) {
-        if (dropped) {
-          dropped = false;
-          onReconnect?.();
-        }
-        const reader = r.body.getReader();
-        const decoder = new TextDecoder();
-        let buf = "";
-        for (;;) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          buf += decoder.decode(value, { stream: true });
-          const frames = buf.split("\n\n");
-          buf = frames.pop() ?? "";
-          for (const frame of frames) {
-            const lines = frame.split("\n");
-            if (lines.some((l) => l === `event: ${eventName}_resync`)) {
-              onReconnect?.();
-              continue;
-            }
-            if (!lines.some((l) => l === `event: ${eventName}`)) continue;
-            const data = lines.find((l) => l.startsWith("data: "))?.slice("data: ".length);
-            if (!data) continue;
-            try {
-              onEvent(JSON.parse(data));
-            } catch {
-              void 0;
-            }
-          }
-        }
-      }
-      dropped = true;
-    } catch {
-      dropped = true;
-    }
-    await new Promise((resolve) => setTimeout(resolve, STATE_FEED_RECONNECT_MS).unref());
-  }
-}
-
-function runStateFeed(): Promise<void> {
-  return consumeCoreFeed(
-    "/v1/session-state/events",
-    "session_state",
-    (data) => forwardSessionState(data as SessionStateFrame),
-    () => {
-      for (const conns of deliveryClients.values()) for (const res of conns) sseEvent(res, "session_state_resync", {});
-    },
-  );
-}
-
-function runInboxFeed(): Promise<void> {
-  return consumeCoreFeed(
-    "/v1/loop-items/events",
-    "loop_item",
-    (data) => void forwardInboxItem(data as { loopId?: string; itemId?: string; op?: string }),
-    resyncInbox,
-  );
-}
-
-function resyncInbox(): void {
-  for (const conns of deliveryClients.values()) for (const res of conns) sseEvent(res, "inbox_resync", {});
-}
-
-async function forwardInboxItem(ev: { loopId?: string; itemId?: string; op?: string }): Promise<void> {
-  if (!ev.loopId || !ev.itemId || !deliveryClients.size) return;
-  const r = await coreFetch(
-    "POST",
-    "/v1/inbox/viewers",
-    JSON.stringify({ loopId: ev.loopId, candidates: [...deliveryClients.keys()] }),
-  ).catch(() => null);
-  if (r?.status === 404) return;
-  let viewers: string[] | undefined;
-  try {
-    viewers = r?.status === 200 ? (JSON.parse(r.text) as { viewers?: string[] }).viewers : undefined;
-  } catch {
-    viewers = undefined;
-  }
-  if (!viewers) return resyncInbox();
-  const frame = { loopId: ev.loopId, itemId: ev.itemId, op: ev.op ?? "" };
-  for (const user of viewers) for (const res of deliveryClients.get(user) ?? []) sseEvent(res, "inbox_item", frame);
+export function drainWebDeliveries(): Promise<void> {
+  return feeds.drain();
 }
 
 async function coreFetch(
@@ -919,6 +782,7 @@ async function stageUploadStream(req: IncomingMessage, sha256: string): Promise<
   const corePath = withSourceAuthNonce("/v1/blobs", CORE_SIGNING_SECRET);
   const headers = {
     ...signedHeaders(CORE_SIGNING_SECRET, "POST", corePath, "", sha256),
+    ...identityHeader(),
     "content-type": "application/octet-stream",
     "x-content-sha256": sha256,
   };
@@ -1152,11 +1016,10 @@ async function serveInboxItemImage(c: WebCtx): Promise<unknown> {
     `/v1/loops/${encodeURIComponent(c.params.id!)}/items/${encodeURIComponent(c.params.itemId!)}/image?${qs.toString()}`,
     CORE_SIGNING_SECRET,
   );
-  const portalTok = portalTokenStore.getStore();
   const r = await fetch(`${CORE}${corePath}`, {
     headers: {
       ...signedHeaders(CORE_SIGNING_SECRET, "GET", corePath, ""),
-      ...(portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : {}),
+      ...identityHeader(),
     },
   });
   if (!r.ok || !r.body) {
@@ -1180,11 +1043,10 @@ async function serveFileContent(c: WebCtx, playground = false): Promise<unknown>
     `/v1/files/${encodeURIComponent(id)}/content?viewer=${encodeURIComponent(user)}`,
     CORE_SIGNING_SECRET,
   );
-  const portalTok = portalTokenStore.getStore();
   const r = await fetch(`${CORE}${corePath}`, {
     headers: {
       ...signedHeaders(CORE_SIGNING_SECRET, "GET", corePath, ""),
-      ...(portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : {}),
+      ...identityHeader(),
     },
     redirect: "manual",
   });
@@ -1477,6 +1339,7 @@ const apiRoutes: readonly WebRoute[] = [
         user,
         org: ORG,
         companyName: companyBranding.orgName?.trim() || null,
+        workspace: brandingCache.tenant() ? companyBranding.orgName?.trim() || null : null,
         ...(analyticsConfig && !resolveIdentity(req)?.impersonator ? { analytics: analyticsConfig } : {}),
         ...(browserErrors && !resolveIdentity(req)?.impersonator ? { browserErrors } : {}),
         mode: AUTH_MODE,
@@ -2845,21 +2708,12 @@ const apiRoutes: readonly WebRoute[] = [
         "x-accel-buffering": "no",
       });
       res.write(": open\n\n");
-      let set = deliveryClients.get(user);
-      if (!set) {
-        set = new Set();
-        deliveryClients.set(user, set);
-      }
-      set.add(res);
+      const detach = feeds.attach(user, res);
       const beat = setInterval(() => res.write(": ping\n\n"), SSE_HEARTBEAT_MS);
       beat.unref?.();
       req.on("close", () => {
         clearInterval(beat);
-        const s = deliveryClients.get(user);
-        if (s) {
-          s.delete(res);
-          if (!s.size) deliveryClients.delete(user);
-        }
+        detach();
       });
       return;
     },
@@ -2995,12 +2849,11 @@ const apiRoutes: readonly WebRoute[] = [
       const controller = new AbortController();
       res.on("close", () => controller.abort());
       const path = withSourceAuthNonce(`/v1/runs/${encodeURIComponent(id)}/events`, CORE_SIGNING_SECRET);
-      const portalTok = portalTokenStore.getStore();
       try {
         const upstream = await fetch(`${CORE}${path}`, {
           headers: {
             ...signedHeaders(CORE_SIGNING_SECRET, "GET", path, ""),
-            ...(portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : {}),
+            ...identityHeader(),
           },
           signal: controller.signal,
           redirect: "manual",
@@ -3620,11 +3473,10 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
     const id = decodeURIComponent(slash === -1 ? rest : rest.slice(0, slash));
     const subPath = slash === -1 ? "/" : rest.slice(slash);
     const corePath = `/d/${encodeURIComponent(id)}${subPath}${url.search}`;
-    const portalTok = portalTokenStore.getStore();
     const headers: Record<string, string> = {
       ...signedHeaders(CORE_SIGNING_SECRET, method, corePath, "", user),
       "x-as-principal": user,
-      ...(portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : {}),
+      ...identityHeader(),
     };
     delete headers["content-type"];
     const up = await fetch(`${CORE}${corePath}`, { method, headers, redirect: "manual" });
@@ -3697,8 +3549,6 @@ export async function startServer(options: { port: number; host: string; release
   const t = setInterval(() => void drainWebDeliveries(), WEB_DELIVERY_POLL_MS);
   t.unref?.();
   server.once("close", () => clearInterval(t));
-  void runStateFeed();
-  void runInboxFeed();
   void sweepDictationSpool();
   return server;
 }

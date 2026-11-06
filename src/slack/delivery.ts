@@ -28,13 +28,13 @@ export function botIdentityFromEnv(env: Record<string, string | undefined>): Bot
   };
 }
 
-let defaultIdentity: BotIdentityOverride = {};
+const defaultIdentity: { identity: BotIdentityOverride } = { identity: {} };
 export function setDefaultBotIdentity(identity: BotIdentityOverride | undefined): void {
-  defaultIdentity = identity ?? {};
+  defaultIdentity.identity = identity ?? {};
 }
 
 export function botIdentityArgs(): BotIdentityOverride {
-  const id = defaultIdentity;
+  const id = defaultIdentity.identity;
   return {
     ...(id.username ? { username: id.username } : {}),
     ...(id.icon_emoji ? { icon_emoji: id.icon_emoji } : {}),
