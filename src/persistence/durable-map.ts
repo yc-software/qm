@@ -38,7 +38,7 @@ export interface DurableMap<T> {
   claimIds(): Promise<ClaimedRow[]>;
   claimTenants(): Promise<ClaimedRow[]>;
   deleteBefore(field: Extract<keyof T, string>, cutoff: number): Promise<void>;
-  claimIdsWhere(field: Extract<keyof T, string>, value: string): Promise<ClaimedRow[]>;
+  claimTenantsWhere(field: Extract<keyof T, string>, value: string): Promise<ClaimedRow[]>;
 }
 
 const VERSIONS_TABLE = "durable_map_versions";
@@ -56,6 +56,10 @@ export function durableMapTenancy(
 
 function claimWhereName(table: string, field: string): string {
   return `claim_${table}_by_${field.toLowerCase()}`;
+}
+
+function claimTenantsWhereName(table: string, field: string): string {
+  return `claim_${table}_tenants_by_${field.toLowerCase()}`;
 }
 
 function mapMigrations(
@@ -99,6 +103,17 @@ function mapMigrations(
               "value text",
               `SELECT tenant_id, id FROM ${table} WHERE lower(json->>'${field}') = lower(value) ORDER BY tenant_id, id`,
             ),
+          ],
+        },
+        {
+          id: `durable-map/${table}/claim-tenants-${field.toLowerCase()}`,
+          statements: [
+            claimFunction(
+              claimTenantsWhereName(table, field),
+              "value text",
+              `SELECT DISTINCT tenant_id, '${table}'::text FROM ${table} WHERE lower(json->>'${field}') = lower(value)`,
+            ),
+            `DROP FUNCTION IF EXISTS ${claimWhereName(table, field)}(text)`,
           ],
         },
         {
@@ -253,10 +268,10 @@ export function createPostgresMap<T>(
         client.query(`DELETE FROM ${table} WHERE (json->>$2)::double precision < $1`, [cutoff, field]),
       );
     },
-    async claimIdsWhere(field, value) {
+    async claimTenantsWhere(field, value) {
       if (!indexedFields.includes(field)) throw new Error(`${table}.${field} is not an indexed field`);
       await ready();
-      return claimRows(pg, claimWhereName(table, field), [value]);
+      return claimRows(pg, claimTenantsWhereName(table, field), [value]);
     },
     async get(id) {
       await ready();
