@@ -25,6 +25,7 @@ import { appUrl, ownerUrl } from "./support/test-tenant.ts";
 const IDENTITY_SECRET = "tenant-sign-in-identity-secret".repeat(2);
 const alpha = randomUUID();
 const beta = randomUUID();
+const copied = randomUUID();
 const databaseUrl = testMigratedDatabaseUrl();
 const owner = createPgPool(ownerUrl(databaseUrl).toString());
 const directory = createPostgresDirectoryStore(appUrl(databaseUrl));
@@ -47,9 +48,13 @@ test.before(async () => {
   await bindBootTenant(async () => undefined);
   await directory.list().catch(() => undefined);
   await owner.q(
-    `INSERT INTO tenants(id, settings) VALUES ($1, '{"brandName":"Alpha","allowedEmails":["@nowhere.test"]}'), ($2, '{}')`,
-    [alpha, beta],
+    `INSERT INTO tenants(id, settings) VALUES
+       ($1, '{"brandName":"Alpha","allowedEmails":["@nowhere.test"],"serving":true}'),
+       ($2, '{"serving":true}'),
+       ($3, '{"brandName":"Copied","orgSlug":"copied-co"}')`,
+    [alpha, beta, copied],
   );
+  await member(copied, "alice@alpha.test");
   await member(alpha, "alice@alpha.test");
   await member(beta, "bob@beta.test");
   await member(alpha, "both@shared.test");
@@ -61,7 +66,7 @@ test.before(async () => {
 
 test.after(() => owner.close());
 
-test("an email maps to the tenants whose directory lists it, readable by the RLS-bound app login", () =>
+test("an email maps to the serving tenants whose directory lists it, readable by the RLS-bound app login", () =>
   withoutTenant(async () => {
     assert.deepEqual(await directory.tenantsForEmail!("alice@alpha.test"), [{ id: alpha, brandName: "Alpha" }]);
     assert.deepEqual(await directory.tenantsForEmail!("bob@beta.test"), [{ id: beta }]);
@@ -69,6 +74,8 @@ test("an email maps to the tenants whose directory lists it, readable by the RLS
     assert.deepEqual(both.map(({ id }) => id).sort(), [alpha, beta].sort());
     assert.deepEqual(await directory.tenantsForEmail!("guest@alpha.test"), []);
     assert.deepEqual(await directory.tenantsForEmail!("nobody@nowhere.test"), []);
+    await signIn(copied, "oidc:issuer:alice", "alice@alpha.test");
+    assert.deepEqual(await directory.tenantsForPrincipal!("oidc:issuer:alice"), []);
     const app = createPgPool(appUrl(databaseUrl));
     try {
       await assert.rejects(app.q("SELECT principal_id FROM directory_members"), /No tenant is bound/);

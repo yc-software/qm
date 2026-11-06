@@ -48,5 +48,10 @@ export const CARD_STYLE = `<style>
   .btn.ghost:hover{ background:var(--secondary); color:var(--text); }
   .btn:focus-visible{ outline:2px solid color-mix(in srgb, var(--text) 35%, transparent); outline-offset:2px; }
   .help{ color:var(--muted); font-size:12.5px; margin:20px 0 0; }
+  [hidden]{ display:none !important; }
+  .search{ width:100%; min-height:44px; padding:0 14px; font:inherit; color:var(--text); background:var(--surface);
+    border:1px solid var(--border); border-radius:var(--radius-md); }
+  .search:focus-visible{ outline:2px solid color-mix(in srgb, var(--text) 35%, transparent); outline-offset:2px; }
+  .picker-note{ color:var(--muted); font-size:12.5px; margin:2px 0 0; min-height:1em; }
   @media (prefers-reduced-motion:reduce){ *{ transition:none !important; } }
 </style>`;

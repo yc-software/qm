@@ -242,15 +242,31 @@ export function createPostgresDirectoryStore(connectionString: string): Director
     return rosters;
   }
 
-  function branded(rows: Record<string, unknown>[]) {
-    return Promise.all(
+  // A tenant is offered for sign-in only once it is serving here: settings.serving = true, which the
+  // deployment's cutover sets when it moves a company in (and clears on rollback). A single-tenant
+  // install always serves its one tenant.
+  async function branded(rows: Record<string, unknown>[]) {
+    const found = await Promise.all(
       rows.map(({ id }) =>
         withTenant(String(id), async () => {
-          const [tenant] = await q("SELECT settings->>'brandName' AS brand FROM tenants WHERE id = $1", [id]);
-          return { id: String(id), ...(typeof tenant?.brand === "string" ? { brandName: tenant.brand } : {}) };
+          const [tenant] = await q(
+            `SELECT settings->>'brandName' AS brand, qm_tenant_handle(settings) AS handle,
+                    settings->>'serving' = 'true' OR qm_boot_tenant() IS NOT NULL AS serving
+               FROM tenants WHERE id = $1`,
+            [id],
+          );
+          if (tenant?.serving !== true) return [];
+          return [
+            {
+              id: String(id),
+              ...(typeof tenant.brand === "string" ? { brandName: tenant.brand } : {}),
+              ...(typeof tenant.handle === "string" ? { handle: tenant.handle } : {}),
+            },
+          ];
         }),
       ),
     );
+    return found.flat();
   }
 
   return {

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { LRUCache } from "lru-cache";
 import { signedHeaders, withSourceAuthNonce } from "../../chassis/src/core-client.ts";
@@ -9,6 +10,7 @@ import { clearCookie, open, readCookie, seal, setCookie } from "./session.ts";
 export interface SignInTenant {
   id: string;
   brandName?: string;
+  handle?: string;
 }
 
 export interface VerifiedSignIn {
@@ -38,7 +40,7 @@ interface ChoiceClaims {
   signIn?: VerifiedSignIn;
   trusted?: TrustedSignIn;
   returnTo: string;
-  tenants: string[];
+  email?: string | null;
   exp: number;
 }
 
@@ -93,8 +95,16 @@ async function coreTenants(
   if (!r.ok) throw new Error(`workspace lookup failed: HTTP ${r.status}`);
   const body = (await r.json()) as { tenants?: unknown; shared?: unknown };
   const tenants = Array.isArray(body.tenants) ? body.tenants : [];
-  const valid = tenants.flatMap((t: { id?: unknown; brandName?: unknown }) =>
-    isTenantId(t?.id) ? [{ id: t.id, ...(typeof t.brandName === "string" ? { brandName: t.brandName } : {}) }] : [],
+  const valid = tenants.flatMap((t: { id?: unknown; brandName?: unknown; handle?: unknown }) =>
+    isTenantId(t?.id)
+      ? [
+          {
+            id: t.id,
+            ...(typeof t.brandName === "string" ? { brandName: t.brandName } : {}),
+            ...(typeof t.handle === "string" ? { handle: t.handle } : {}),
+          },
+        ]
+      : [],
   );
   return { tenants: valid, shared: body.shared === true };
 }
@@ -128,18 +138,101 @@ export function coreWorkspace(coreApiUrl: string, signingSecret: string | undefi
 function openChoice(token: string | null, key: Buffer, now: number): ChoiceClaims | null {
   const p = open(token, key);
   if (!p || p.k !== "choice" || typeof p.exp !== "number" || now >= p.exp * 1000) return null;
-  if (!Array.isArray(p.tenants) || !p.tenants.every(isTenantId) || typeof p.returnTo !== "string") return null;
+  if (typeof p.returnTo !== "string") return null;
   return p as unknown as ChoiceClaims;
 }
 
-function tenantChoiceForms(tenants: readonly SignInTenant[], escape: (s: string) => string): string {
-  return tenants
-    .map(
-      ({ id, brandName }) =>
-        `<form method="post" action="/auth/tenant"><input type="hidden" name="tenant" value="${escape(id)}">` +
-        `<button class="btn primary" type="submit">${escape(brandName?.trim() || id.slice(0, 8))}</button></form>`,
-    )
-    .join("");
+/** Up to this many workspaces show as plain buttons; more get a search field. */
+export const PICKER_BUTTONS_MAX = 6;
+/** With a search field, at most this many workspaces show at once. */
+export const PICKER_RESULTS_MAX = 8;
+const RECENT_MAX = 8;
+const RECENT_COOKIE = "portal_recent_workspaces";
+
+export const PICKER_SCRIPT = `(() => {
+  const input = document.getElementById("workspace-search");
+  if (!input) return;
+  const items = [...document.querySelectorAll("[data-workspace]")];
+  const note = document.getElementById("workspace-note");
+  const cap = Number(input.dataset.cap);
+  const filter = () => {
+    const q = input.value.trim().toLowerCase();
+    let shown = 0, matched = 0;
+    for (const item of items) {
+      const hit = !q || item.dataset.workspace.includes(q);
+      if (hit) matched++;
+      item.hidden = !(hit && shown < cap);
+      if (!item.hidden) shown++;
+    }
+    note.textContent = matched === 0 ? "No workspace matches that search."
+      : matched > shown ? "Showing " + shown + " of " + matched + ". Type to narrow the list." : "";
+  };
+  input.addEventListener("input", filter);
+  input.form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const first = items.find((item) => !item.hidden);
+    if (first) first.requestSubmit();
+  });
+})();`;
+export const PICKER_SCRIPT_HASH = `sha256-${createHash("sha256").update(PICKER_SCRIPT).digest("base64")}`;
+
+const workspaceLabel = ({ id, brandName, handle }: SignInTenant): string =>
+  brandName?.trim() || handle || id.slice(0, 8);
+
+function readRecent(cookieHeader: string | undefined): string[] {
+  return (readCookie(cookieHeader, RECENT_COOKIE) ?? "").split(".").filter(isTenantId).slice(0, RECENT_MAX);
+}
+
+/** Recently chosen workspaces first (most recent first), then the rest by name. */
+export function orderWorkspaces(tenants: readonly SignInTenant[], recent: readonly string[]): SignInTenant[] {
+  const rank = (id: string): number => {
+    const i = recent.indexOf(id);
+    return i < 0 ? recent.length : i;
+  };
+  return [...tenants].sort(
+    (a, b) =>
+      rank(a.id) - rank(b.id) || workspaceLabel(a).localeCompare(workspaceLabel(b), "en", { sensitivity: "base" }),
+  );
+}
+
+export function workspacePicker(
+  tenants: readonly SignInTenant[],
+  o: { recent?: readonly string[]; query?: string } = {},
+): { actions: string; script: boolean } {
+  const ordered = orderWorkspaces(tenants, o.recent ?? []);
+  const button = (t: SignInTenant, hidden = false): string =>
+    `<form method="post" action="/auth/tenant"${hidden ? " hidden" : ""} data-workspace="${escapeHtml(
+      `${workspaceLabel(t)} ${t.handle ?? ""}`.trim().toLowerCase(),
+    )}"><input type="hidden" name="tenant" value="${escapeHtml(t.id)}">` +
+    `<button class="btn primary" type="submit">${escapeHtml(workspaceLabel(t))}</button></form>`;
+  if (ordered.length <= PICKER_BUTTONS_MAX) return { actions: ordered.map((t) => button(t)).join(""), script: false };
+  const query = (o.query ?? "").trim().toLowerCase();
+  const matches = (t: SignInTenant): boolean =>
+    !query || `${workspaceLabel(t)} ${t.handle ?? ""}`.toLowerCase().includes(query);
+  let shown = 0;
+  let matched = 0;
+  const items = ordered.map((t) => {
+    const hit = matches(t);
+    if (hit) matched++;
+    const show = hit && shown < PICKER_RESULTS_MAX;
+    if (show) shown++;
+    return button(t, !show);
+  });
+  const note =
+    matched === 0
+      ? "No workspace matches that search."
+      : matched > shown
+        ? `Showing ${shown} of ${matched}. Type to narrow the list.`
+        : "";
+  const search =
+    `<form method="get" action="/auth/tenant" role="search">` +
+    `<input id="workspace-search" class="search" name="q" type="search" value="${escapeHtml(o.query ?? "")}" ` +
+    `placeholder="Search workspaces" aria-label="Search workspaces" autocomplete="off" autofocus data-cap="${PICKER_RESULTS_MAX}">` +
+    `</form>`;
+  return {
+    actions: `${search}${items.join("")}<p id="workspace-note" class="picker-note" aria-live="polite">${escapeHtml(note)}</p>`,
+    script: true,
+  };
 }
 
 type Who = Pick<ChoiceClaims, "signIn" | "trusted">;
@@ -164,7 +257,7 @@ export interface TenantChoiceDeps {
   pin: (returnTo: string) => Promise<string | undefined>;
   cardPage: (o: CardPage) => string;
   signInErrorHtml: (detail: string) => string;
-  sendHtml: (res: ServerResponse, status: number, html: string) => void;
+  sendHtml: (res: ServerResponse, status: number, html: string, scriptHash?: string) => void;
   finishSignIn: (res: ServerResponse, signIn: VerifiedSignIn, returnTo: string, tenant?: string) => Promise<void>;
   finishTrustedSignIn: (res: ServerResponse, who: TrustedSignIn, returnTo: string, tenant?: string) => void;
 }
@@ -185,17 +278,12 @@ export function createTenantChoice(deps: TenantChoiceDeps) {
       ? deps.finishTrustedSignIn(res, who.trusted, returnTo, tenant)
       : deps.finishSignIn(res, who.signIn!, returnTo, tenant);
 
-  function offerChoice(res: ServerResponse, who: Who, returnTo: string, tenants: SignInTenant[]): void {
-    const exp = Math.floor(Date.now() / 1000) + deps.ttlS;
-    const choice = { k: "choice", ...who, returnTo, tenants: tenants.map(({ id }) => id), exp };
-    res.setHeader("set-cookie", [
-      clearCookie("portal_oidc_tmp", "/auth", deps.secureCookies),
-      setCookie("portal_tenant_choice", seal(choice, deps.key), {
-        path: "/auth",
-        maxAge: deps.ttlS,
-        secure: deps.secureCookies,
-      }),
-    ]);
+  function pickerPage(
+    res: ServerResponse,
+    tenants: readonly SignInTenant[],
+    o: { recent: readonly string[]; query?: string },
+  ): void {
+    const picker = workspacePicker(tenants, o);
     deps.sendHtml(
       res,
       200,
@@ -204,10 +292,34 @@ export function createTenantChoice(deps: TenantChoiceDeps) {
         heading: "Choose a workspace",
         icon: deps.lockIcon,
         msg: "Your account belongs to more than one workspace. Pick the one to sign in to.",
-        actions: tenantChoiceForms(tenants, escapeHtml),
+        actions: picker.script ? `${picker.actions}<script>${PICKER_SCRIPT}</script>` : picker.actions,
         help: "To switch later, sign out and sign in again.",
       }),
+      picker.script ? PICKER_SCRIPT_HASH : undefined,
     );
+  }
+
+  // The choice cookie carries who signed in, not the workspace list: a person can belong to
+  // hundreds of workspaces, far past what a cookie holds, so the list is looked up again on use.
+  function offerChoice(
+    req: IncomingMessage | undefined,
+    res: ServerResponse,
+    who: Who,
+    returnTo: string,
+    tenants: SignInTenant[],
+    email: string | null | undefined,
+  ): void {
+    const exp = Math.floor(Date.now() / 1000) + deps.ttlS;
+    const choice = { k: "choice", ...who, returnTo, ...(email !== undefined ? { email } : {}), exp };
+    res.setHeader("set-cookie", [
+      clearCookie("portal_oidc_tmp", "/auth", deps.secureCookies),
+      setCookie("portal_tenant_choice", seal(choice, deps.key), {
+        path: "/auth",
+        maxAge: deps.ttlS,
+        secure: deps.secureCookies,
+      }),
+    ]);
+    pickerPage(res, tenants, { recent: readRecent(req?.headers.cookie) });
   }
 
   function settle(
@@ -216,13 +328,28 @@ export function createTenantChoice(deps: TenantChoiceDeps) {
     returnTo: string,
     tenants: SignInTenant[],
     pin: string | undefined,
+    req?: IncomingMessage,
+    email?: string | null,
   ): void | Promise<void> {
     if (pin !== undefined && !tenants.some(({ id }) => id === pin)) return deps.sendHtml(res, 403, noAccessHtml());
-    if (pin === undefined && tenants.length > 1) return offerChoice(res, who, returnTo, tenants);
+    if (pin === undefined && tenants.length > 1) return offerChoice(req, res, who, returnTo, tenants, email);
     return finish(res, who, returnTo, pin ?? tenants[0]?.id);
   }
 
+  function lookupTenants(choice: ChoiceClaims): Promise<EmailTenants> {
+    if (choice.trusted)
+      return coreSignInTenants(deps.core, deps.signingSecret, {
+        email: choice.email ?? null,
+        principal: choice.trusted.sub,
+      });
+    const email = choice.signIn ? verifiedEmail(choice.signIn.userinfo) : null;
+    return email
+      ? coreEmailTenants(deps.core, deps.signingSecret, email)
+      : Promise.resolve({ tenants: [], shared: false });
+  }
+
   async function settleTrusted(
+    req: IncomingMessage | undefined,
     res: ServerResponse,
     identity: TrustedSignIn & { email: string | null; returnTo: string; tenant?: string | undefined },
   ): Promise<void> {
@@ -233,19 +360,39 @@ export function createTenantChoice(deps: TenantChoiceDeps) {
     if (found.shared && !found.tenants.length) return deps.sendHtml(res, 403, noAccessHtml());
     const who = { sub: identity.sub, name: identity.name };
     const pin = identity.tenant ?? (await deps.pin(identity.returnTo));
-    await settle(res, { trusted: who }, identity.returnTo, found.tenants, pin);
+    await settle(res, { trusted: who }, identity.returnTo, found.tenants, pin, req, identity.email);
   }
+
+  const expired = (res: ServerResponse): void => {
+    res.setHeader("set-cookie", [clearCookie("portal_tenant_choice", "/auth", deps.secureCookies)]);
+    deps.sendHtml(res, 400, deps.signInErrorHtml("workspace choice expired, please sign in again"));
+  };
 
   async function choose(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (!deps.sameOrigin(req)) return json(res, 403, { error: "forbidden" });
     const choice = openChoice(readCookie(req.headers.cookie, "portal_tenant_choice"), deps.key, Date.now());
     const tenant = new URLSearchParams(await readBody(req, 4096)).get("tenant") ?? "";
-    if (!choice || !choice.tenants.includes(tenant) || (!choice.signIn && !choice.trusted)) {
-      res.setHeader("set-cookie", [clearCookie("portal_tenant_choice", "/auth", deps.secureCookies)]);
-      return deps.sendHtml(res, 400, deps.signInErrorHtml("workspace choice expired, please sign in again"));
-    }
+    if (!choice || !isTenantId(tenant) || (!choice.signIn && !choice.trusted)) return expired(res);
+    const { tenants } = await lookupTenants(choice);
+    if (!tenants.some(({ id }) => id === tenant)) return expired(res);
+    const recent = [tenant, ...readRecent(req.headers.cookie).filter((id) => id !== tenant)].slice(0, RECENT_MAX);
+    res.setHeader("set-cookie", [
+      setCookie(RECENT_COOKIE, recent.join("."), {
+        path: "/auth",
+        maxAge: 400 * 86400,
+        secure: deps.secureCookies,
+      }),
+    ]);
     return finish(res, choice, choice.returnTo, tenant);
   }
 
-  return { settle, settleTrusted, choose };
+  /** The picker's search without JavaScript: GET /auth/tenant?q=… re-renders the filtered list. */
+  async function search(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+    const choice = openChoice(readCookie(req.headers.cookie, "portal_tenant_choice"), deps.key, Date.now());
+    if (!choice || (!choice.signIn && !choice.trusted)) return expired(res);
+    const { tenants } = await lookupTenants(choice);
+    pickerPage(res, tenants, { recent: readRecent(req.headers.cookie), query: url.searchParams.get("q") ?? "" });
+  }
+
+  return { settle, settleTrusted, choose, search };
 }

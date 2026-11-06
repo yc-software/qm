@@ -768,7 +768,8 @@ function sessionCookieSet(value: string, sub: string, domainWide = true): string
 }
 
 function setSession(res: ServerResponse, headers: string[]): void {
-  res.setHeader("set-cookie", headers);
+  const earlier = res.getHeader("set-cookie");
+  res.setHeader("set-cookie", [...(Array.isArray(earlier) ? earlier : earlier ? [String(earlier)] : []), ...headers]);
 }
 
 const playgroundClaims = PLAYGROUND ? coreClaimStore(CORE, CORE_SIGNING_SECRET, "portal") : null;
@@ -936,6 +937,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   if (pathname === "/auth/login" && method === "GET") return authLogin(req, res, url);
   if (pathname === "/auth/callback" && method === "GET") return authCallback(req, res, url);
   if (pathname === "/auth/tenant" && method === "POST") return tenantChoice.choose(req, res);
+  if (pathname === "/auth/tenant" && method === "GET") return tenantChoice.search(req, res, url);
   if (pathname.startsWith("/auth/trusted/") && method === "GET") return trustedAuth(req, res, url);
   if (pathname === "/auth/desktop" || pathname === "/auth/desktop/redeem") return desktopLogin(req, res, url);
   if (pathname === "/auth/invite") return inviteLogin(req, res);
@@ -1544,7 +1546,7 @@ async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL):
       );
       adminCache.delete(identity.sub);
     }
-    await tenantChoice.settleTrusted(res, identity);
+    await tenantChoice.settleTrusted(req, res, identity);
   } catch (error) {
     console.warn(`[portal] trusted sign-in failed: ${errMessage(error)}`);
     sendHtml(
@@ -1592,7 +1594,8 @@ const tenantChoice = createTenantChoice({
   pin: (returnTo) => appHandoff.pin(returnTo),
   cardPage,
   signInErrorHtml,
-  sendHtml,
+  sendHtml: (res, status, html, scriptHash) =>
+    sendHtml(res, status, html, scriptHash ? `${PAGE_CSP}; script-src '${scriptHash}'` : PAGE_CSP),
   finishSignIn,
   finishTrustedSignIn,
 });
@@ -1705,7 +1708,15 @@ async function authCallback(req: IncomingMessage, res: ServerResponse, url: URL)
   } catch (e) {
     return fail(errMessage(e, "sign-in failed"));
   }
-  return tenantChoice.settle(res, { signIn }, tmp.returnTo, tenants, await appHandoff.pin(tmp.returnTo));
+  return tenantChoice.settle(
+    res,
+    { signIn },
+    tmp.returnTo,
+    tenants,
+    await appHandoff.pin(tmp.returnTo),
+    req,
+    verifiedEmail(signIn.userinfo),
+  );
 }
 
 function finishTrustedSignIn(res: ServerResponse, who: TrustedSignIn, returnTo: string, tenant?: string): void {

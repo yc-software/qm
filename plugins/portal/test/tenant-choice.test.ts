@@ -535,3 +535,63 @@ test("a workspace link refuses an identity that company has not admitted, and an
     assert.equal(pair(unknown.cookies, "portal_trusted_tmp"), undefined);
   }
 });
+
+test("a staff account in hundreds of workspaces gets a searchable picker, a small cookie, and its recent choice first", async () => {
+  shared = true;
+  principalTenants = [];
+  const many = Array.from({ length: 250 }, (_, i) => ({
+    id: `00000000-0000-4000-8000-${String(1000 + i).padStart(12, "0")}`,
+    brandName: `Company ${String(i).padStart(3, "0")}`,
+    handle: `company${i}`,
+  }));
+  tenants = many;
+  const page = await trustedCallback("partner@staff.test");
+  assert.equal(page.status, 200);
+  const choice = cookieFrom(page, "portal_tenant_choice")!;
+  assert.ok(choice.length < 2048, `choice cookie is ${choice.length} bytes`);
+  assert.match(page.headers.get("content-security-policy") ?? "", /script-src 'sha256-/);
+  const html = await page.text();
+  assert.match(html, /id="workspace-search"/);
+  const visible = [...html.matchAll(/<form method="post" action="\/auth\/tenant" data-workspace/g)].length;
+  assert.equal(visible, 8);
+  assert.match(html, /Showing 8 of 250\. Type to narrow the list\./);
+
+  const searched = await fetch(`${base}/auth/tenant?q=company%20249`, { headers: { cookie: choice } });
+  const found = await searched.text();
+  assert.match(found, /<form method="post" action="\/auth\/tenant" data-workspace="company 249 company249">/);
+  assert.equal([...found.matchAll(/<form method="post" action="\/auth\/tenant" data-workspace/g)].length, 1);
+  const none = await (await fetch(`${base}/auth/tenant?q=zzz`, { headers: { cookie: choice } })).text();
+  assert.match(none, /No workspace matches that search\./);
+
+  const chosen = await choose(choice, many[249]!.id);
+  assert.equal(chosen.status, 302);
+  assert.equal(sessionOf(chosen)?.t, many[249]!.id);
+  const recent = cookieFrom(chosen, "portal_recent_workspaces")!;
+  assert.ok(recent);
+
+  tenants = many.slice(0, 249);
+  const gone = await choose(choice, many[249]!.id);
+  assert.equal(gone.status, 400);
+  assert.equal(cookieFrom(gone, "portal_session"), undefined);
+
+  tenants = many;
+  const again = await fetch(`${base}/auth/tenant`, { headers: { cookie: `${choice}; ${recent}` } });
+  const first = (await again.text()).match(/data-workspace="([^"]+)"/)?.[1];
+  assert.equal(first, "company 249 company249");
+});
+
+test("six or fewer workspaces stay plain buttons, labelled by handle when unnamed", async () => {
+  shared = true;
+  principalTenants = [];
+  tenants = Array.from({ length: 6 }, (_, i) => ({
+    id: `00000000-0000-4000-8000-${String(2000 + i).padStart(12, "0")}`,
+    ...(i === 0 ? { handle: "unnamedco" } : { brandName: `Small ${i}` }),
+  }));
+  const page = await trustedCallback("partner@staff.test");
+  assert.equal(page.status, 200);
+  assert.doesNotMatch(page.headers.get("content-security-policy") ?? "", /script-src/);
+  const html = await page.text();
+  assert.doesNotMatch(html, /workspace-search|<script/);
+  assert.equal([...html.matchAll(/<form method="post" action="\/auth\/tenant"/g)].length, 6);
+  assert.match(html, />unnamedco<\/button>/);
+});

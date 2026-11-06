@@ -35,6 +35,7 @@ export function groupParticipantsKey(participants: readonly string[]): string {
 interface SignInTenant {
   id: string;
   brandName?: string;
+  handle?: string;
 }
 
 export interface DirectoryMeta {
