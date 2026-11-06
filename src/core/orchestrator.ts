@@ -1352,11 +1352,21 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         return true;
       };
       const authorizeToolCall = (tool: string): boolean => consumeApproval(`tool:${tool}`);
+      const consumedCommandKeys = new Map<string, string>();
       const authorizeCommand = (command: string, approvalKey?: string, exactApprovalKey = false): boolean => {
         let key = approvalKey ?? command;
         if (approvalKey !== undefined && commandUses.has(approvalKey)) key = approvalKey;
         else if (!exactApprovalKey && commandUses.has(command)) key = command;
-        return consumeApproval(key);
+        if (!consumeApproval(key)) return false;
+        consumedCommandKeys.set(command, key);
+        return true;
+      };
+      const restoreCommand = (command: string): void => {
+        const key = consumedCommandKeys.get(command);
+        if (key === undefined) return;
+        consumedCommandKeys.delete(command);
+        const uses = commandUses.get(key);
+        if (uses !== undefined && uses !== Infinity) commandUses.set(key, uses + 1);
       };
       const quarantineReleaseApprovals: Array<{
         command: string;
@@ -2710,6 +2720,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           commandPolicy: () => commandPolicy,
           layerCommandRules: () => layerCommandRules,
           authorizeCommand,
+          restoreCommand,
           grantedHandles: resolution.grantedHandles,
           context,
           deploy: deps.deploy,
