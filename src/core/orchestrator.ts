@@ -3804,7 +3804,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               reportFailure("orchestrator: direct reply delivery", e, `session=${session.id}`);
             }
           }
-          if (spine.surfaceOutboundCount === 0 && (primaryReply || (input.addressed && !isPollFire))) {
+          if (
+            spine.surfaceOutboundCount === 0 &&
+            !result.pendingApprovals?.length &&
+            (primaryReply || (input.addressed && !isPollFire))
+          ) {
             const nudgeHistory = filterHistory(forModelContext((await historyWindow()).items));
             result = await runAgentTurn(
               input.addressed
