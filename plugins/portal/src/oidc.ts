@@ -17,6 +17,7 @@ export interface OidcConfig {
   expectedTeamId?: string;
   prompt?: string;
   hostedDomain?: string;
+  verifiedEmailsClaim?: string;
 }
 
 const GOOGLE_ISSUER = "https://accounts.google.com";

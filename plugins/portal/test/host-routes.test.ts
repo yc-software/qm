@@ -39,3 +39,36 @@ test("the shared host, app hosts, other domains and health checks stay unmapped,
   assert.equal((await resolve("alpha.qm.example.test"))?.tenant, alpha);
   assert.deepEqual(pages, []);
 });
+
+test("a trusted launch on a company host without its own client stays on the trusted provider", async () => {
+  const redirects: string[] = [];
+  const build = (trustedEntry: boolean) =>
+    createHostRoutes({
+      publicUrl: "https://mt.qm.example.test",
+      lookup: async () => ({ tenant: alpha }),
+      handoffKey: Buffer.alloc(32, 1),
+      claim: async () => true,
+      session: () => null,
+      signOut: () => undefined,
+      signIn: () => undefined,
+      signInApp: () => undefined,
+      page: () => undefined,
+      errorHtml: (detail) => detail,
+      unavailable: () => undefined,
+      trustedEntry,
+    });
+  const res = {
+    writeHead: (_status: number, headers: { location: string }) => void redirects.push(headers.location),
+    end: () => undefined,
+  } as unknown as ServerResponse;
+  const mapped = { tenant: alpha, host: "alpha.qm.example.test", origin: "https://alpha.qm.example.test" };
+  const launch = (routes: ReturnType<typeof build>, path: string) =>
+    routes.mapped({ method: "GET" } as IncomingMessage, res, new URL(path, mapped.origin), mapped);
+  await launch(build(true), "/auth/trusted/login?returnTo=%2Fs%2Fabc");
+  const back = `/auth/host?to=${encodeURIComponent("https://alpha.qm.example.test/s/abc")}`;
+  assert.equal(redirects[0], `https://mt.qm.example.test/auth/trusted/login?returnTo=${encodeURIComponent(back)}`);
+  await launch(build(true), "/auth/login?returnTo=%2Fs%2Fabc");
+  assert.equal(redirects[1], `https://mt.qm.example.test${back}`);
+  await launch(build(false), "/auth/trusted/login?returnTo=%2Fs%2Fabc");
+  assert.equal(redirects[2], `https://mt.qm.example.test${back}`);
+});

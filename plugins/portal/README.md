@@ -61,7 +61,8 @@ restrictions do not apply to this separate route.
 
 The route verifies OIDC signature, issuer, audience, nonce, PKCE and subject binding,
 and consumes login state through core's durable replay store. Principals are scoped
-to the issuer and subject, without automatic linking to email or Slack identities.
+to the issuer and subject. They are linked to email or Slack identities only through
+the opt-in `verifiedEmailsClaim` described below.
 No administrator role is assigned by default. To provision administrators on this
 entry path, set `PORTAL_TRUSTED_OIDC_ADMIN=1` on portal and set core's
 `TRUSTED_OIDC_ADMIN_ISSUER` to the exact trusted issuer. This requires a distinct
@@ -85,6 +86,17 @@ preference only selects a provider; it grants no identity or administrator acces
 A new browser or cleared cookies still uses the primary provider by default.
 Use `/auth/login?provider=primary` to explicitly select the primary provider; the
 trusted sign-in error page offers this alternative.
+Starting `/auth/trusted/login` also records this preference (with the label set),
+so a browser that entered through the trusted provider returns to it from later
+sign-in prompts even if that first sign-in did not complete. On a company host
+without its own trusted client, `/auth/trusted/login` continues on the shared
+origin's trusted route rather than the primary provider.
+
+Set `verifiedEmailsClaim` in `PORTAL_TRUSTED_OIDC` to the claim that carries the
+provider's verified addresses to request the `email` scope and join those email
+identities to the signed-in person at each trusted sign-in. This requires a
+distinct `PORTAL_IDENTITY_SECRET`. See
+[`docs/principal-links.md`](../../docs/principal-links.md).
 
 ## Operator admin login without email
 

@@ -13,6 +13,8 @@ interface HostSession {
 export interface HostRouteDeps {
   publicUrl: string;
   appsDomain?: string;
+  /** The deployment-wide trusted provider, used by mapped hosts without a client of their own. */
+  trustedEntry?: boolean;
   lookup(host: string): Promise<HostRecord | null>;
   handoffKey: Buffer;
   claim(jti: string): Promise<boolean>;
@@ -85,6 +87,12 @@ export function createHostRoutes(deps: HostRouteDeps) {
       if (mapped.trustedClient && url.pathname.startsWith("/auth/trusted/")) return false;
       if (method === "GET" && mapped.trustedClient && url.pathname === "/auth/login") {
         redirect(res, `/auth/trusted/login?returnTo=${encodeURIComponent(returnTo)}`);
+        return true;
+      }
+      if (method === "GET" && url.pathname === "/auth/trusted/login" && deps.trustedEntry) {
+        // A trusted-provider launch stays on that provider through the shared-origin sign-in.
+        const back = `/auth/host?to=${encodeURIComponent(`${mapped.origin}${returnTo}`)}`;
+        redirect(res, `${shared.origin}/auth/trusted/login?returnTo=${encodeURIComponent(back)}`);
         return true;
       }
       if (method === "GET" && (url.pathname === "/auth/login" || url.pathname === "/auth/trusted/login")) {

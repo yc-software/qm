@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createTrustedEntry, trustedEntryConfig, trustedPrincipal } from "../src/trusted-entry.ts";
+import { createTrustedEntry, trustedEntryConfig, trustedPrincipal, verifiedEmails } from "../src/trusted-entry.ts";
 
 const config = {
   issuer: "https://identity.example.com",
@@ -75,4 +75,28 @@ test("state and cookie binding are checked before claims or network access", asy
   );
   await assert.rejects(other.finish(start.cookie, url), /Trusted login cookie missing or expired/);
   assert.equal(claims, 0);
+});
+
+test("a verified-emails claim opts into the email scope and only verified addresses are read", () => {
+  const withClaim = (claim: unknown) => ({
+    ...env,
+    PORTAL_TRUSTED_OIDC: JSON.stringify({ ...config, verifiedEmailsClaim: claim }),
+  });
+  const parsed = trustedEntryConfig(withClaim("verified_addresses"), "https://portal.example.com")!;
+  assert.equal(parsed.scopes, "openid profile email");
+  assert.equal(parsed.verifiedEmailsClaim, "verified_addresses");
+  for (const invalid of ["", 7, "has space", "x".repeat(101)])
+    assert.throws(() => trustedEntryConfig(withClaim(invalid), "https://portal.example.com"));
+  assert.deepEqual(verifiedEmails(undefined, { email: "a@example.com", email_verified: true }, {}), []);
+  assert.deepEqual(
+    verifiedEmails(
+      "verified_addresses",
+      { verified_addresses: ["B@Example.com", "bad"], email: "a@example.com", email_verified: "true" },
+      { email: "unverified@example.com", email_verified: false, verified_addresses: "c@example.com" },
+    ),
+    ["b@example.com", "a@example.com", "c@example.com"],
+  );
+  assert.deepEqual(verifiedEmails("email", { email: "a@example.com" }, { email: "b@example.com" }), []);
+  const many = Array.from({ length: 30 }, (_, i) => `p${i}@example.com`);
+  assert.equal(verifiedEmails("verified_addresses", { verified_addresses: many }, {}).length, 20);
 });

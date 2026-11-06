@@ -17,6 +17,8 @@ export interface VerifiedSignIn {
 export interface TrustedSignIn {
   sub: string;
   name: string;
+  subject?: string;
+  emails?: string[];
 }
 
 export interface EmailTenants {

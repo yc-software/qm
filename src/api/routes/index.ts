@@ -40,6 +40,7 @@ import { egressAuditRoutes } from "./egress-audit.ts";
 import { slackEventRawRoutes } from "./slack-events.ts";
 import { partnerChatEventRawRoutes } from "./partner-chat-events.ts";
 import { authBrokerRoutes } from "./auth-broker.ts";
+import { trustedEmailRoutes } from "./trusted-emails.ts";
 import { inboxRoutes } from "./inbox.ts";
 import { loopItemRoutes } from "./loop-items.ts";
 import { searchRoutes } from "./search.ts";
@@ -129,5 +130,6 @@ export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...deploymentRoutes,
   ...egressAuditRoutes,
   ...authBrokerRoutes,
+  ...trustedEmailRoutes,
   ...userModelAuthRoutes,
 ];
