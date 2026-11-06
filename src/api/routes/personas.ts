@@ -123,7 +123,7 @@ async function listPersonaVersions(ctx: ApiCtx): Promise<void> {
   const before = ctx.url.searchParams.get("before");
   if (before !== null && positiveInt(before) === undefined)
     return sendJson(ctx.res, 400, { error: "bad_request", message: "before must be a positive integer" });
-  const limit = Math.min(positiveInt(ctx.url.searchParams.get("limit")) ?? VERSION_PAGE, 100);
+  const limit = positiveInt(ctx.url.searchParams.get("limit")) ?? VERSION_PAGE;
   respond(
     ctx,
     await personas.versions(principalId, ctx.params.id!, { ...(before ? { before: Number(before) } : {}), limit }),
