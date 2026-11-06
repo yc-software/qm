@@ -259,3 +259,77 @@ test("authoritative context carries exact required check generations", async () 
     /requiredGenerations=formula-integrity@3,source-lineage@5/,
   );
 });
+
+test("session restart fails closed on a well-formed prior identity mismatch", async () => {
+  const pi = new FakePi();
+  createFinnyLoopExtension({ readCurrentJob: async () => job })(asPi(pi));
+  const context = {
+    sessionManager: {
+      getSessionId: () => "session-1",
+      getEntries: () => [
+        {
+          type: "custom",
+          customType: "finny-job-state.v1",
+          data: {
+            schema: "finny-job-state.v1",
+            scopeId: "scope-1",
+            jobId: "other-job",
+            runId: "run-1",
+            role: "producer",
+            eventSeq: 7,
+            status: "producing",
+            policyVersion: "finny-policy.v1",
+            planDigest: "plan-sha256",
+            artifactDigest: null,
+            requiredGenerations: { "formula-integrity": 1 },
+          },
+        },
+      ],
+    },
+  };
+  const sessionStart = pi.handlers.get("session_start");
+  assert.ok(sessionStart);
+
+  await assert.rejects(sessionStart({}, context), /continuity violation/);
+  const result = await pi.handlers.get("before_agent_start")?.({}, context);
+
+  assert.equal((result as { message?: { customType?: string } }).message?.customType, "finny-authority-unavailable.v1");
+  assert.deepEqual(pi.entries, []);
+});
+
+test("session restart fails closed on a well-formed prior event sequence regression", async () => {
+  const pi = new FakePi();
+  createFinnyLoopExtension({ readCurrentJob: async () => ({ ...job, eventSeq: 7 }) })(asPi(pi));
+  const context = {
+    sessionManager: {
+      getSessionId: () => "session-1",
+      getEntries: () => [
+        {
+          type: "custom",
+          customType: "finny-job-state.v1",
+          data: {
+            schema: "finny-job-state.v1",
+            scopeId: "scope-1",
+            jobId: "job-1",
+            runId: "run-1",
+            role: "producer",
+            eventSeq: 8,
+            status: "auditing",
+            policyVersion: "finny-policy.v1",
+            planDigest: "plan-sha256",
+            artifactDigest: null,
+            requiredGenerations: { "formula-integrity": 1 },
+          },
+        },
+      ],
+    },
+  };
+  const sessionStart = pi.handlers.get("session_start");
+  assert.ok(sessionStart);
+
+  await assert.rejects(sessionStart({}, context), /continuity violation/);
+  const result = await pi.handlers.get("before_agent_start")?.({}, context);
+
+  assert.equal((result as { message?: { customType?: string } }).message?.customType, "finny-authority-unavailable.v1");
+  assert.deepEqual(pi.entries, []);
+});

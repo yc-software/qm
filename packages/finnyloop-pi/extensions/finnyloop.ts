@@ -45,16 +45,26 @@ function nonempty(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+function record(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function validGenerations(value: unknown): value is Record<string, number> {
+  if (!record(value)) return false;
+  const entries = Object.entries(value);
+  return (
+    entries.length > 0 &&
+    entries.every(
+      ([checkId, generation]) =>
+        nonempty(checkId) && typeof generation === "number" && Number.isSafeInteger(generation) && generation > 0,
+    )
+  );
+}
+
 function validateAuthoritative(job: AuthoritativeFinnyJob): AuthoritativeFinnyJob {
   const requiredStrings = [job.scopeId, job.jobId, job.runId, job.status, job.policyVersion, job.planDigest];
   const validRole = job.role === "producer" || job.role === "auditor";
   const validArtifact = job.artifactDigest === null || nonempty(job.artifactDigest);
-  const generationEntries = Object.entries(job.requiredGenerations);
-  const validGenerations =
-    generationEntries.length > 0 &&
-    generationEntries.every(
-      ([checkId, generation]) => nonempty(checkId) && Number.isSafeInteger(generation) && generation > 0,
-    );
   if (
     job.schema !== "finny-authoritative-job.v1" ||
     !requiredStrings.every(nonempty) ||
@@ -62,7 +72,7 @@ function validateAuthoritative(job: AuthoritativeFinnyJob): AuthoritativeFinnyJo
     !Number.isSafeInteger(job.eventSeq) ||
     job.eventSeq < 0 ||
     !validArtifact ||
-    !validGenerations
+    !validGenerations(job.requiredGenerations)
   ) {
     throw new Error("Malformed authoritative Finny job");
   }
@@ -87,6 +97,42 @@ function project(job: AuthoritativeFinnyJob): FinnyJobProjection {
   };
 }
 
+function parseProjection(value: unknown): FinnyJobProjection | undefined {
+  if (!record(value)) return undefined;
+  const candidate = value as Partial<FinnyJobProjection>;
+  const requiredStrings = [
+    candidate.scopeId,
+    candidate.jobId,
+    candidate.runId,
+    candidate.status,
+    candidate.policyVersion,
+    candidate.planDigest,
+  ];
+  const validRole = candidate.role === "producer" || candidate.role === "auditor";
+  const validArtifact = candidate.artifactDigest === null || nonempty(candidate.artifactDigest);
+  if (
+    candidate.schema !== projectionType ||
+    !requiredStrings.every(nonempty) ||
+    !validRole ||
+    !Number.isSafeInteger(candidate.eventSeq) ||
+    (candidate.eventSeq ?? -1) < 0 ||
+    !validArtifact ||
+    !validGenerations(candidate.requiredGenerations)
+  ) {
+    return undefined;
+  }
+  return candidate as FinnyJobProjection;
+}
+
+function sameIdentity(left: FinnyJobProjection, right: FinnyJobProjection): boolean {
+  return (
+    left.scopeId === right.scopeId &&
+    left.jobId === right.jobId &&
+    left.runId === right.runId &&
+    left.role === right.role
+  );
+}
+
 function sameProjection(left: unknown, right: FinnyJobProjection): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
 }
@@ -103,19 +149,16 @@ function formatContext(job: AuthoritativeFinnyJob): string {
 export function createFinnyLoopExtension(reader: FinnyJobReader) {
   return (pi: FinnyPiApi): void => {
     let verifiedProjection: FinnyJobProjection | undefined;
+    let continuityFailed = false;
 
     const refresh = async (context: FinnyContext): Promise<AuthoritativeFinnyJob | null> => {
+      if (continuityFailed) throw new Error("Authoritative Finny job continuity violation");
       const response = await reader.readCurrentJob({ sessionId: context.sessionManager.getSessionId() });
       if (!response) return null;
       const authoritative = validateAuthoritative(response);
       const projection = project(authoritative);
       if (verifiedProjection) {
-        const sameIdentity =
-          verifiedProjection.scopeId === projection.scopeId &&
-          verifiedProjection.jobId === projection.jobId &&
-          verifiedProjection.runId === projection.runId &&
-          verifiedProjection.role === projection.role;
-        if (!sameIdentity || projection.eventSeq < verifiedProjection.eventSeq) {
+        if (!sameIdentity(verifiedProjection, projection) || projection.eventSeq < verifiedProjection.eventSeq) {
           throw new Error("Authoritative Finny job continuity violation");
         }
       }
@@ -130,10 +173,15 @@ export function createFinnyLoopExtension(reader: FinnyJobReader) {
       if (!response) return;
       const authoritative = validateAuthoritative(response);
       const projection = project(authoritative);
-      const prior = context.sessionManager
+      const priorData = context.sessionManager
         .getEntries()
         .findLast((entry) => entry.type === "custom" && entry.customType === projectionType)?.data;
-      if (!sameProjection(prior, projection)) pi.appendEntry(projectionType, projection);
+      const prior = parseProjection(priorData);
+      if (prior && (!sameIdentity(prior, projection) || projection.eventSeq < prior.eventSeq)) {
+        continuityFailed = true;
+        throw new Error("Authoritative Finny job continuity violation");
+      }
+      if (!sameProjection(priorData, projection)) pi.appendEntry(projectionType, projection);
       verifiedProjection = projection;
     });
 
