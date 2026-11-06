@@ -5,7 +5,7 @@ export function shutdownOnUncaught(label: string, shutdown: (reason: string) => 
   const onFatal = (kind: string) => (e: unknown) => {
     const request = describeActiveRequest();
     console.error(
-      `[${label}] ${kind}${request ? ` during ${request}` : ""}; draining and exiting:`,
+      `[${label}] ${kind}${request ? ` ${request}` : ""}; draining and exiting:`,
       e instanceof Error && e.stack ? e.stack : errMessage(e),
     );
     process.exitCode = 1;

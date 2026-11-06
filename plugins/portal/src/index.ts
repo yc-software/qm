@@ -905,7 +905,7 @@ const server = createServer((req, res) => {
         Math.round(performance.now() - startedAt),
       );
   });
-  void withRequestContext("portal", req, () => handle(req, res)).catch((err: unknown) => {
+  void withRequestContext("portal", req, res, () => handle(req, res)).catch((err: unknown) => {
     errorLogged = true;
     reportBackendError(err);
     console.error("[portal] 500 %s %s: %s", req.method ?? "?", (req.url ?? "?").split("?")[0], String(err));

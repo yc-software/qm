@@ -1,6 +1,6 @@
 import type * as Sentry from "@sentry/node";
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { IncomingMessage } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { parseSampleRate, SPAN_STATUS_ERROR } from "./timing.ts";
 import { swallow } from "./errors.ts";
 
@@ -49,15 +49,15 @@ const MAX_SENT_SPANS = 500;
 const IDLE_CHECKOUT_SECONDS = 0.001;
 const HTTP_METHODS = new Set("GET HEAD POST PUT PATCH DELETE OPTIONS CONNECT TRACE".split(" "));
 type SamplingContext = Parameters<NonNullable<Sentry.NodeOptions["tracesSampler"]>>[0];
-export const REQUEST_ID_HEADERS = ["x-request-id", "x-amzn-requestid", "fly-request-id", "render-request-id"];
-const ROUTE_WORD = /^[a-z][a-z_.-]{0,39}$/;
+export const REQUEST_ID_HEADERS = ["fly-request-id", "render-request-id", "x-amzn-requestid", "x-request-id"];
 let client: typeof Sentry | undefined;
 let tracing = false;
 
 interface RequestContext {
   surface: string;
   method: string;
-  route: string;
+  finished: boolean;
+  route?: string;
   requestId?: string;
 }
 
@@ -284,37 +284,32 @@ export function reportBackendError(error: unknown, code?: string, extra?: Record
 function requestIdOf(req: IncomingMessage): string | undefined {
   for (const name of REQUEST_ID_HEADERS) {
     const value = req.headers[name];
-    if (typeof value === "string" && value) return value.replace(/[^\w.:-]/g, "_").slice(0, 128);
+    if (typeof value === "string" && value) return value;
   }
   return undefined;
 }
 
-function routeShape(url: string | undefined): string {
-  const path = (url ?? "/").split("?", 1)[0]!;
-  return path
-    .split("/")
-    .map((segment) => (segment === "" || ROUTE_WORD.test(segment) ? segment : ":id"))
-    .join("/");
-}
-
-export function withRequestContext<T>(surface: string, req: IncomingMessage, work: () => T): T {
+export function withRequestContext<T>(surface: string, req: IncomingMessage, res: ServerResponse, work: () => T): T {
   const requestId = requestIdOf(req);
-  return activeRequest.run(
-    {
-      surface,
-      method: firstWord(req.method, HTTP_METHODS) ?? "HTTP",
-      route: routeShape(req.url),
-      ...(requestId ? { requestId } : {}),
-    },
-    work,
-  );
+  const request: RequestContext = {
+    surface,
+    method: firstWord(req.method, HTTP_METHODS) ?? "HTTP",
+    finished: false,
+    ...(requestId ? { requestId } : {}),
+  };
+  res.once("close", () => {
+    request.finished = true;
+  });
+  return activeRequest.run(request, work);
 }
 
 export function describeActiveRequest(): string | undefined {
   const request = activeRequest.getStore();
   if (!request) return undefined;
+  const route = request.route ? ` ${request.route}` : "";
   const id = request.requestId ? ` (request id ${request.requestId})` : "";
-  return `${request.surface} ${request.method} ${request.route}${id}`;
+  const target = `${request.surface} ${request.method}${route}${id}`;
+  return request.finished ? `after ${target} finished` : `during ${target}`;
 }
 
 function tagActiveRequest<T extends { type?: string; tags?: Record<string, unknown> }>(event: T): T {
@@ -324,7 +319,8 @@ function tagActiveRequest<T extends { type?: string; tags?: Record<string, unkno
     ...event.tags,
     "request.surface": request.surface,
     "request.method": request.method,
-    "request.route": request.route,
+    "request.finished": request.finished,
+    ...(request.route ? { "request.route": request.route } : {}),
     ...(request.requestId ? { "request.id": request.requestId } : {}),
   };
   return event;

@@ -3658,7 +3658,7 @@ export const handler = async (req: IncomingMessage, res: ServerResponse) => {
   const raw = req.headers[PORTAL_IDENTITY_HEADER];
   const token = Array.isArray(raw) ? raw[0] : raw;
   try {
-    await portalTokenStore.run(token, () => withRequestContext("web-ui", req, () => routeRequest(req, res)));
+    await portalTokenStore.run(token, () => withRequestContext("web-ui", req, res, () => routeRequest(req, res)));
   } catch (err) {
     if (err instanceof PayloadTooLargeError) {
       if (!res.headersSent) json(res, 413, { error: "payload_too_large", message: err.message });
