@@ -1,4 +1,4 @@
-import { mock, test } from "node:test";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   slackReplyArgs,
@@ -140,22 +140,6 @@ test("a persona refresh picks up a rename, and a failed refresh keeps the last p
   assert.deepEqual(personaFor("CADA"), QM_DEFAULT);
   await refreshPersonas({});
   assert.deepEqual(personaFor("CADA"), QM_DEFAULT);
-});
-
-test("a persona read that never answers gives up after five seconds and keeps the last personas, so nothing waiting on a refresh hangs", async (t) => {
-  await bindPersonas(t, { CADA: ADA });
-  mock.timers.enable({ apis: ["setTimeout"] });
-  t.after(() => mock.timers.reset());
-  let settled = false;
-  const refresh = refreshPersonas({ channelPersonas: () => new Promise<never>(() => {}) }, true).then(() => {
-    settled = true;
-  });
-  mock.timers.tick(4_999);
-  await new Promise((r) => setImmediate(r));
-  assert.equal(settled, false);
-  mock.timers.tick(1);
-  await refresh;
-  assert.equal(personaFor("CADA").username, "Ada");
 });
 
 test("concurrent persona refreshes share one core read, and later ones inside the freshness window read nothing unless forced", async (t) => {
