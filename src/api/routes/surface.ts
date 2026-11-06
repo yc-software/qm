@@ -32,7 +32,8 @@ import { isSafeSkillName, SKILL_NAME_RULE } from "../../skills/skill-name.ts";
 import { SideChatAnchorError, SoulUpdateDeniedError, type SessionPageStatus } from "../app-types.ts";
 import { renderAgentApis } from "../agent-api-catalog.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../../auth/capability-token.ts";
-import { contentTypeWithUtf8Charset, pipeToResponse, sendJson, sendProblem } from "../http.ts";
+import { contentTypeWithUtf8Charset, sendJson, sendProblem } from "../http.ts";
+import { relayStream } from "../../../plugins/chassis/src/http.ts";
 import { resolveBranding } from "../../resolution/branding.ts";
 import { audit, isObj, orgScope } from "./shared.ts";
 import {
@@ -343,7 +344,7 @@ async function getFileContent(ctx: ApiCtx): Promise<void> {
     "content-length": String(opened.sizeBytes),
     "content-disposition": `inline; filename*=UTF-8''${encodeURIComponent(opened.name)}`,
   });
-  pipeToResponse(res, opened.stream, "file read failed");
+  relayStream(opened.stream, res);
   return;
 }
 
