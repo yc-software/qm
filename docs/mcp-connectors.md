@@ -38,9 +38,20 @@ Connect the user's account using an existing QM OAuth connector, or have a trust
 integration save its token through the source-authenticated
 `POST /v1/connectors/token` endpoint with `host`, `principalId`, `accessToken`, and
 optional `expiresAt` (Unix milliseconds). Supported OAuth providers can also store
-and refresh a `refreshToken`. This change does not add OAuth provider discovery or
-an interactive MCP login flow. An unsupported provider must manage token renewal
+and refresh a `refreshToken`. An unsupported provider must manage token renewal
 in its integration; do not store a refresh token that QM cannot refresh.
+
+`auth: "oauth-user"` gives each person their own sign-in, and the URL is usually
+enough. A new registration that omits `auth` is probed: if the server publishes
+protected-resource metadata (RFC 9728, then RFC 8414), it becomes `oauth-user`;
+otherwise it is `none`. With no `clientId`, core registers a public PKCE client
+through the server's `registration_endpoint` (RFC 7591) for its own OAuth callback
+URLs. Pass `clientId` (and the authorize/token URLs if discovery fails) only for
+servers without dynamic registration. People sign in on first use through the
+`<id>_sign_in` tool.
+
+`readOnly: true` marks every tool on the server as safe for read-only turns. Without
+it, only tools annotated `readOnlyHint: true` are.
 
 Missing, expired, revoked, or unrefreshable user credentials fail the call with a
 connection-required message. Per-user MCP calls do not use operator environment

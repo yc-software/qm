@@ -1,3 +1,4 @@
+import { personaPrompt } from "../personas/persona-service.ts";
 import { isAgentReply, isOverheard, isUserItem, type Item, type NewItem, stepMessage } from "../sessions/items.ts";
 import type { ItemKind } from "../sessions/items-schema.ts";
 import { countTokens } from "../util/tokens.ts";
@@ -57,7 +58,14 @@ import type {
   PendingApprovalRecord,
 } from "../types.ts";
 import { scopeId as toScopeId, personalScope } from "../types.ts";
-import { desktopClientForTurn, introducesUser, isPersonAuthored, isSessionTurn } from "./turn-origin.ts";
+import {
+  desktopClientForTurn,
+  introducesUser,
+  isPersonAuthored,
+  isSessionTurn,
+  midTurnSessionMessage,
+  spokenByPerson,
+} from "./turn-origin.ts";
 import { resolveTurnFastMode, turnRuntimePurpose } from "./turn-options.ts";
 import { orgId } from "../config.ts";
 import { deriveTurnOutcome, approvalBlocksInput } from "./turn-outcome.ts";
@@ -457,13 +465,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (items.length === 0) return null;
       const transcript = renderTitleTranscript(items);
       const fallbackEntry = items.find((item) => isUserItem(item) && !isOverheard(item));
-      const title = await titles.generateAndStore(
-        session.id,
-        session.scopeId,
-        transcript,
-        personal ? principalId : undefined,
-        fallbackEntry ? visibleTitleEntryText(fallbackEntry) : undefined,
-      );
+      const title = await titles.generateAndStore(session.id, session.scopeId, transcript, {
+        ...(personal ? { principalId } : {}),
+        ...(fallbackEntry ? { fallbackText: visibleTitleEntryText(fallbackEntry) } : {}),
+        descriptive:
+          (await deps.featureFlags?.enabled("descriptive_session_titles", personalScope(principalId))) === true,
+      });
       return { title: title ?? (personal ? null : (session.title ?? null)) };
     },
 
@@ -514,6 +521,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         input.origin.kind === "ambient" && input.origin.live === true && conversation.kind !== "dm";
       const actorFeatures = (await deps.featureFlags?.enabledFor(personalScope(actor.id))) ?? new Set<FeatureName>();
       const delegationEnabled = !external && actorFeatures.has("responsive_spine");
+      const descriptiveTitles = actorFeatures.has("descriptive_session_titles");
       const delegatedOrigin =
         !external && deps.runs
           ? await delegatedAuthorizationOrigin(input, { runs: deps.runs, sessions: deps.sessions })
@@ -929,6 +937,27 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const useMemory = !external && input.skipMemory !== true;
       const environmentId = external ? scopeId : await resolveEnvironmentId(deps.environments, scopeId);
       resolution.writableScopeId = environmentId;
+      const personaTurn =
+        external || !deps.personas
+          ? null
+          : await deps.personas.forTurn(
+              (await deps.sessions.getByThread(conversation.threadRef))?.personaId,
+              actor.id,
+              scopeId,
+            );
+      const persona = personaTurn && typeof personaTurn === "object" ? personaTurn : null;
+      if (persona) resolution.readOnlyScopeIds.push(persona.scope);
+      const credentialScopes = persona ? [scopeId, persona.scope] : [scopeId];
+      const scopeKeychainGrants = async () => {
+        const rows = (
+          await Promise.all(
+            credentialScopes.map(async (grantScope) =>
+              ((await deps.keychain?.grantsForScope(grantScope)) ?? []).map((row) => ({ ...row, grantScope })),
+            ),
+          )
+        ).flat();
+        return rows.filter((row, i) => rows.findIndex((r) => r.credential.id === row.credential.id) === i);
+      };
 
       const context = await resolveTurnContext({
         external,
@@ -1009,7 +1038,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         surfaceLinks: surfaceHints?.linkSyntax ?? "",
         sessions: isWeb && surfaceName === "web" && Boolean(sessionSyscalls) && !input.swarm,
       });
-      let systemPrompt = `${modeFrame}\n\n${resolution.systemPrompt}\n\n${sharedCore}`;
+      let personaBlock = persona ? personaPrompt(persona) : "";
+      if (typeof personaTurn === "string") personaBlock = `## Persona\n${personaTurn}`;
+      let systemPrompt = `${modeFrame}\n\n${[resolution.systemPrompt, personaBlock].filter(Boolean).join("\n\n")}\n\n${sharedCore}`;
       if (external)
         systemPrompt +=
           "\n\nThis conversation has an external Slack audience. Answer and run code here using only the explicitly provided shared service credentials. Personal memory, files, keychains, connected apps, organization data and administrative tools are unavailable. When personal access is needed, say briefly that you are continuing privately, and include [[continue-private: task]] in your final answer. The continuation goes only to the authenticated requester; never put private results in this channel.";
@@ -1250,10 +1281,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         (input.proactiveOpener && !input.text.trim()) ||
         ((automatedTurn || (sessionTurn && input.envelopeWrapped)) && !delegatedTask);
       const titleText = input.displayText?.trim() || input.text;
-      let fallbackTitleWrite: Promise<void> | undefined;
+      let firstMessageTitle: ReturnType<typeof titles.titleFromFirstMessage>;
       const assignSessionTitle = () => {
         if (!session.title && !syntheticInput && !input.approval)
-          fallbackTitleWrite = titles.titleFromFirstMessage(session, scopeId, titleText);
+          firstMessageTitle = titles.titleFromFirstMessage(session, scopeId, titleText, descriptiveTitles);
       };
 
       const isRetry = (input.attempt ?? 1) > 1;
@@ -1423,13 +1454,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const registerKeychainCredentials = async (addCredential: typeof addCredentialToCatalog): Promise<void> => {
         if (external || strictReadOnly || !deps.keychain) return;
         const keychain = deps.keychain;
-        for (const { grant, credential } of await keychain.grantsForScope(scopeId)) {
+        for (const { grant, credential, grantScope } of await scopeKeychainGrants()) {
           if (credential.kind === "broker" || isBackendCredential(credential)) continue;
           addCredential(
             {
               handle: credentialHandle(credential),
               resolve: async () => {
-                const prepared = await keychain.prepareMaterialize(grant.id, scopeId, actor.id);
+                const prepared = await keychain.prepareMaterialize(grant.id, grantScope, actor.id);
                 return {
                   ...resolvedCredential(prepared.materialized, samePerson(credential.ownerId, actor.id)),
                   commit: prepared.commit,
@@ -2245,7 +2276,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           const [entriesByOwner, connectorsByOwner, scopeGrants, scopeAsks] = await Promise.all([
             !external ? (deps.keychain?.listByOwners(members.map((m) => m.id)) ?? new Map()) : new Map(),
             !external ? (deps.keychain?.listConnectorsByOwners(members.map((m) => m.id)) ?? new Map()) : new Map(),
-            !external ? (deps.keychain?.grantsForScope(scopeId) ?? []) : [],
+            !external ? scopeKeychainGrants() : [],
             !external ? (deps.keychain?.listAsks({ requesterScopeId: scopeId }) ?? []) : [],
           ]);
           const keychainBlock = renderKeychainManifest({
@@ -3266,7 +3297,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 author,
                 ...(samePerson(author, actor.id) ? {} : { authorName: speakerName(speaker, nameOf) }),
               };
-              let said = [text.trim() ? speakerLine(speaker) : "", text].filter(Boolean).join("\n");
+              let said =
+                request?.sessionSenderId && request.text.trim()
+                  ? midTurnSessionMessage(request.text, request.sessionSenderId === session.parentSessionId)
+                  : [text.trim() ? speakerLine(speaker) : "", text].filter(Boolean).join("\n");
               const screened = [wordsToScreen(said, speaker, actor.id), ...(request?.inboundNotes ?? [])]
                 .filter(Boolean)
                 .join("\n\n");
@@ -3637,8 +3671,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         });
         if (replyCheck && !replyCheck.enforce && result.reply.trim() && !result.silent && !result.stopped)
           void replyCheck.check(result.reply).catch(swallowAs("orchestrator: observed reply check", undefined));
+        const followedUpByPerson = !input.addressed && spokenByPerson(input.origin) && !sessionTurn;
         if (
-          input.addressed &&
+          (input.addressed || followedUpByPerson) &&
           !strictReadOnly &&
           input.surfaceTools &&
           surfaceToolDeps &&
@@ -3648,7 +3683,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           !result.stopped
         ) {
           const primaryReply = stripAckPrefix(result.reply ?? "", spineAckText).trim();
-          if (primaryReply && defaultDestination && deps.deliveries) {
+          if (input.addressed && primaryReply && defaultDestination && deps.deliveries) {
             try {
               const directKey = postKeys.key(defaultDestination, postKeys.take());
               const editNote = replyEditNote(result.retracted);
@@ -3665,14 +3700,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               reportFailure("orchestrator: direct reply delivery", e, `session=${session.id}`);
             }
           }
-          if (spine.surfaceOutboundCount === 0 && (!isPollFire || primaryReply)) {
+          if (spine.surfaceOutboundCount === 0 && (primaryReply || (input.addressed && !isPollFire))) {
             const nudgeHistory = filterHistory(forModelContext((await historyWindow()).items));
             result = await runAgentTurn(
-              `[system] You were addressed directly. Reply with the \`${surfaceName}\` tool's \`post\` action, or decline explicitly with finish_silently — ending the turn without either is not allowed here.`,
+              input.addressed
+                ? `[system] You were addressed directly. Reply with the \`${surfaceName}\` tool's \`post\` action, or decline explicitly with finish_silently — ending the turn without either is not allowed here.`
+                : `[system] Your text above was not delivered: in this thread only the \`${surfaceName}\` tool's \`post\` action reaches people. Post your reply with \`post\`, or decline explicitly with finish_silently.`,
               inbound.images.length ? { images: inbound.images } : {},
               { history: nudgeHistory },
             );
-            if (spine.surfaceOutboundCount === 0 && !result.silent && !result.stopped) {
+            if (input.addressed && spine.surfaceOutboundCount === 0 && !result.silent && !result.stopped) {
               const fallback = stripAckPrefix(result.reply ?? "", spineAckText).trim();
               if (fallback && defaultDestination && deps.deliveries) {
                 try {
@@ -3763,8 +3800,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
         const tail = async (): Promise<void> => {
           try {
-            if (!pausing && turnCompleted && !session.title && !fallbackTitleWrite) {
-              await titles.generateAndStore(session.id, scopeId, `User:\n${titleText}\n\nAssistant:\n${result.reply}`);
+            if (
+              !pausing &&
+              turnCompleted &&
+              !session.title &&
+              (!firstMessageTitle || (descriptiveTitles && !(await firstMessageTitle.generated)))
+            ) {
+              await titles.generateAndStore(session.id, scopeId, `User:\n${titleText}\n\nAssistant:\n${result.reply}`, {
+                descriptive: descriptiveTitles,
+              });
             }
           } finally {
             await reclaimBox();
@@ -3855,7 +3899,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (turnRuntime) finalResult = { ...finalResult, runtime: turnRuntime };
         if (cronScript) finalResult = { ...finalResult, scriptVerdict: cronScript.verdict };
         if (turnRuntime) await deps.sessions.setRuntime(session.id, turnRuntime);
-        await fallbackTitleWrite;
+        await firstMessageTitle?.written;
 
         tailOwnsCleanup = true;
         await catchUpMessageRevisions();
