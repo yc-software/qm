@@ -66,6 +66,7 @@ final class SameOriginRedirects: NSObject, URLSessionTaskDelegate, Sendable {
   {
     var request = URLRequest(url: url(path, query: query))
     request.setValue("application/json", forHTTPHeaderField: "Accept")
+    request.setValue("ios", forHTTPHeaderField: "X-QM-Client")
     request.setValue(
       baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")),
       forHTTPHeaderField: "Origin")

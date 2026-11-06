@@ -15,6 +15,7 @@ const storedRequest = {
   actor: { externalId: "alice" },
   conversation: { threadRef: "web:alice:default" },
   text: "run the flagged command",
+  clientSurface: "desktop",
   attachments: [{ name: "notes.txt", mimetype: "text/plain", sizeBytes: 4, blobId: "blob-original" }],
   idempotencyKey: "web:alice:original-send",
 };
@@ -208,6 +209,17 @@ test("a visible worker approval replays its stored request without granting ordi
   assert.equal(posts[0]!.body.surface, "swarm");
   assert.deepEqual(posts[0]!.body.attachments, storedRequest.attachments);
 });
+test("an approval replay records the client the approver used, not the original sender's", async () => {
+  const before = calls.length;
+  const r = await fetch(`${base}/api/approvals/a-swarm`, {
+    method: "POST",
+    headers: { ...headers, "x-qm-client": "ios" },
+    body: JSON.stringify({ approved: true, scope: "once" }),
+  });
+  assert.equal(r.status, 200);
+  assert.equal(turnPosts(before)[0]!.body.clientSurface, "ios");
+});
+
 test("worker approvals still require session visibility", async () => {
   const before = calls.length;
   const r = await fetch(`${base}/api/approvals/a-swarm-hidden`, {

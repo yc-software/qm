@@ -1,3 +1,4 @@
+import type { ClientSurface } from "../plugins/chassis/src/client-surface.ts";
 import type { ResolvedSecurityPolicy } from "./security/security-posture.ts";
 import type { SharingPosture } from "./resolution/sharing-posture.ts";
 import type { SurfaceAccount, TurnSurfaceOrigin } from "./surfaces/contract.ts";
@@ -367,6 +368,7 @@ export interface ClientToolResult {
 
 export interface TurnRequest {
   desktopClientId?: string;
+  clientSurface?: ClientSurface;
   midTurn?: "steer" | "queue";
   surfaceOrigin?: TurnSurfaceOrigin;
   sessionSenderId?: string;

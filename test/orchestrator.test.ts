@@ -679,12 +679,12 @@ test("a scheduled turn attests its owner only when the answer goes back to the o
       channelToOwner: refused,
       dmToOwner: attested,
       dmToOwnerAlias: attested,
-      dmWebhookToTeammate: { ...refused, offered: ["wiki"], calledAny: "refused", brokerAny: "private_only" },
+      dmWebhookToTeammate: refused,
     },
   );
 });
 
-test("a connector set to attest in any audience serves the channel asker and a channel cron's owner, not unprompted, unowned or bot turns", async () => {
+test("a connector set to attest in any audience serves every person's channel turn, including unprompted and automated ones, but not bot turns", async () => {
   const offered: string[][] = [];
   const called: string[] = [];
   const mock = createMockAgent();
@@ -744,15 +744,15 @@ test("a connector set to attest in any audience serves the channel asker and a c
     { botActor: true },
   ])
     assert.equal((await built.app.turn(channel("hello", extra))).status, "ok");
-  assert.deepEqual(offered, [["records"], ["records"], [], [], []]);
+  assert.deepEqual(offered, [["records"], ["records"], ["records"], ["records"], []]);
   assert.deepEqual(called, [
     "records sent",
     "strict refused",
     "records sent",
     "strict refused",
-    "records refused",
+    "records sent",
     "strict refused",
-    "records refused",
+    "records sent",
     "strict refused",
     "records refused",
     "strict refused",
@@ -761,7 +761,7 @@ test("a connector set to attest in any audience serves the channel asker and a c
     (await built.auditLog.tail({ limit: 20, action: "mcp.call", resourceContains: "records/search" }))
       .filter((event) => !/answers only to them/.test(event.status ?? ""))
       .map((event) => event.principalId),
-    ["U1", "U1"],
+    ["U1", "U1", "U1", "U1"],
   );
 });
 
@@ -1456,6 +1456,8 @@ test("a turn's credential token says whether it may act as its actor in a shared
     return (await verifyCapabilityToken(executed!.AGENT_CREDENTIAL_TOKEN!, TEST_CAPABILITY_SECRET))!.actAsActor;
   };
   assert.equal(await actAsActor(channel(ask)), true);
+  assert.equal(await actAsActor(channel(ask, { origin: { kind: "ambient", live: true } })), true);
+  assert.equal(await actAsActor(channel(ask, { origin: { kind: "automation" } })), true);
   assert.equal(await actAsActor(channel(ask, { botActor: true })), undefined);
 });
 
