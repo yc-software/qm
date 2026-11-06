@@ -932,6 +932,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       }
       const childFloor = delegatedSession?.spawnMeta?.readOnly === true;
       const strictReadOnly = input.readOnly === true || input.privateSessionMessage === true || childFloor;
+      const notebookOnly =
+        input.memoryNotebookOnly === true || delegatedSession?.spawnMeta?.memoryNotebookOnly === true;
       const mcpToolsReady = !external && deps.mcp ? deps.mcp.toolDefsFor(actor.id, scopeId) : undefined;
       const useMemory = !external && input.skipMemory !== true;
       const environmentId = external ? scopeId : await resolveEnvironmentId(deps.environments, scopeId);
@@ -973,7 +975,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         resolution,
         memoryPolicy,
         useMemory,
-        notebookOnly: input.memoryNotebookOnly === true,
+        notebookOnly,
         memory: deps.memory,
         files: deps.files,
         skills: deps.skills,
@@ -2594,7 +2596,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           scopeId: scopeId as ScopeId,
           orgScopeId: resolution.orgScopeId,
           liveTurn,
-          request: { ...input, readOnly: strictReadOnly, cancel: turnAbort.signal },
+          request: { ...input, readOnly: strictReadOnly, memoryNotebookOnly: notebookOnly, cancel: turnAbort.signal },
           switchedRuntime: () => switchedRuntime,
         });
         const liveNote = async () =>

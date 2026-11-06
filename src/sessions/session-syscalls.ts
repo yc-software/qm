@@ -616,7 +616,12 @@ async function steerRunningTurn(
 ): Promise<"steered" | "replayed" | "refused" | undefined> {
   if (message.dedupKey && (await deps.signals.runForDedupeKey(message.dedupKey))) return "steered";
   const live = inFlight.find((run) => run.status === "running");
-  if (!live || (request.readOnly && !live.request.readOnly)) return undefined;
+  if (
+    !live ||
+    (request.readOnly && !live.request.readOnly) ||
+    (request.memoryNotebookOnly && !live.request.memoryNotebookOnly)
+  )
+    return undefined;
   const steered = await deps.steerRun(live, {
     kind: "steer",
     text: message.text,

@@ -813,3 +813,43 @@ test("the nightly tidy changes the notebook alone, through its tools and its age
   assert.ok((await notebook(built)).includes("Alice parks in bay 7."));
   assert.equal(brain.calls.length, before);
 });
+
+test("Alice's own turn into a notebook-only subagent leaves her brain alone, and so does the subagent it opens", async (t) => {
+  const mock = createMockAgent();
+  const subagent = "agent:main:subagent:tidy-follow-up";
+  const agent: Agent = {
+    ...mock,
+    async runTurn(input) {
+      if (input.session.threadRef === subagent) await input.tools.sessionSyscalls!.open({ task: "check the notebook" });
+      return mock.runTurn(input);
+    },
+  };
+  const { brain, built, bind } = await boundToBrain(t, agent);
+  await bind();
+  await built.featureFlags.setEnabled("persistent_subagents", ALICE_SCOPE, true, "admin");
+  const alice = { id: "U1", type: "internal" as const };
+  const session = await built.sessions.getOrCreateByThread(subagent, "dm", ALICE_SCOPE);
+  await built.sessions.addParticipant(session.id, alice.id);
+  await built.sessions.setSpawnMeta(session.id, {
+    surface: "test",
+    actor: alice,
+    conversation: { kind: "dm", threadRef: "dm:U1:tidy", audience: [alice] },
+    memoryNotebookOnly: true,
+  });
+  const prompt = async (threadRef: string) =>
+    (
+      await built.app.turn({
+        surface: "test",
+        actor: { externalId: "U1" },
+        conversation: { kind: "dm", threadRef },
+        text: "!sysprompt",
+      })
+    ).reply ?? "";
+  assert.match(await prompt("dm:U1:ordinary"), /BLACKBEARD-42/);
+  const before = brain.calls.length;
+
+  assert.doesNotMatch(await prompt(subagent), /BLACKBEARD-42/);
+  const [helper] = await built.sessions.childrenOf(session.id);
+  assert.equal(helper?.spawnMeta?.memoryNotebookOnly, true);
+  assert.equal(brain.calls.length, before);
+});

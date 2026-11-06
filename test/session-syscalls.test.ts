@@ -1988,34 +1988,38 @@ test("a peer wake cannot reach a conversation whose audience the sender cannot s
   assert.deepEqual(await r.runs.inFlightForThread(shared.threadRef), []);
 });
 
-test("read-only callers cannot steer writable children and preserve the floor when queuing", async () => {
-  const r = await rig();
-  const opened = await r.syscallsFor(r.room).open({ task: "work" });
-  assert.ok(opened.ok);
-  const child = await freshSession(r.sessions, opened.sessionId);
-  const [run] = await r.runs.inFlightForThread(child.threadRef);
-  const claimed = await r.runs.claimById(run!.id, "worker", 60_000);
-  const api = createSessionSyscalls({
-    mailbox: r.mailbox,
-    sessions: r.sessions,
-    runs: r.runs,
-    signals: r.signals,
-    steerRun: r.steerRun,
-    advisoryLock: r.advisoryLock,
-    maxAttempts: 3,
-  }).forTurn({
-    session: r.room,
-    scopeId: scope,
-    request: { actor, conversation, readOnly: true },
+for (const [label, floor] of [
+  ["read-only", "readOnly"],
+  ["notebook-only", "memoryNotebookOnly"],
+] as const)
+  test(`${label} callers cannot steer writable children and preserve the floor when queuing`, async () => {
+    const r = await rig();
+    const opened = await r.syscallsFor(r.room).open({ task: "work" });
+    assert.ok(opened.ok);
+    const child = await freshSession(r.sessions, opened.sessionId);
+    const [run] = await r.runs.inFlightForThread(child.threadRef);
+    const claimed = await r.runs.claimById(run!.id, "worker", 60_000);
+    const api = createSessionSyscalls({
+      mailbox: r.mailbox,
+      sessions: r.sessions,
+      runs: r.runs,
+      signals: r.signals,
+      steerRun: r.steerRun,
+      advisoryLock: r.advisoryLock,
+      maxAttempts: 3,
+    }).forTurn({
+      session: r.room,
+      scopeId: scope,
+      request: { actor, conversation, [floor]: true },
+    });
+    const refused = await api.write({ wake: true, target: child.id, text: "change things" });
+    assert.ok(refused.ok);
+    assert.deepEqual(await r.signals.takePending(run!.id), []);
+    await r.runs.complete(run!.id, claimed!.leaseToken!, { status: "ok", reply: "finished" });
+    const queued = await api.write({ wake: true, target: child.id, text: "inspect only" });
+    assert.ok(queued.ok);
+    assert.equal((await r.runs.inFlightForThread(child.threadRef))[0]!.request[floor], true);
   });
-  const refused = await api.write({ wake: true, target: child.id, text: "change things" });
-  assert.ok(refused.ok);
-  assert.deepEqual(await r.signals.takePending(run!.id), []);
-  await r.runs.complete(run!.id, claimed!.leaseToken!, { status: "ok", reply: "finished" });
-  const queued = await api.write({ wake: true, target: child.id, text: "inspect only" });
-  assert.ok(queued.ok);
-  assert.equal((await r.runs.inFlightForThread(child.threadRef))[0]!.request.readOnly, true);
-});
 
 test("writes revalidate access even while a target is running", async () => {
   const r = await rig();

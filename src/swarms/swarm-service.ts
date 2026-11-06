@@ -329,7 +329,7 @@ export function createSwarmService(deps: {
       ...(source.unattendedGrants ? { unattendedGrants: source.unattendedGrants } : {}),
       ...(source.readOnly ? { readOnly: true } : {}),
       ...(source.skipMemory ? { skipMemory: true } : {}),
-      ...(source.memoryNotebookOnly ? { memoryNotebookOnly: true } : {}),
+      ...(source.memoryNotebookOnly || session.spawnMeta?.memoryNotebookOnly ? { memoryNotebookOnly: true } : {}),
       ...(settings.turnMs === undefined ? {} : { turnWallClockMs: settings.turnMs }),
     };
     const createdAt = Date.now();
