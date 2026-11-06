@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { foldPrincipalId, installPrincipalLinks } from "../src/directory/person.ts";
 import { createPrincipalLinkService } from "../src/identity/principal-links.ts";
-import { createPostgresUserStore, fold, type UserStore } from "../src/identity/user-store.ts";
+import { createPostgresUserStore, fold, userLabel, type UserStore } from "../src/identity/user-store.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { scopeId } from "../src/types.ts";
@@ -235,4 +235,40 @@ test("resolve and get find a user by any sign-in or by its id, with every sign-i
     ].sort(),
   );
   assert.equal(await roster.get(randomUUID()), null);
+});
+
+test("a person's display name is stored once per user, refreshed when it changes, and shared by every linked sign-in", async () => {
+  const email = unique("named");
+  const oidc = `oidc:issuer:${randomUUID().slice(0, 8)}`;
+  const roster = store();
+  await roster.link({ principalId: oidc, canonicalId: email, evidence: "sso", linkedBy: "", createdAt: 0 });
+  assert.equal((await roster.get(oidc))?.displayName, undefined);
+  assert.equal(await roster.setDisplayName(oidc, "  Ada\u0000 \n Lovelace  "), true);
+  assert.equal((await roster.get(email))?.displayName, "Ada Lovelace");
+  assert.equal(
+    await roster.setDisplayName(email.toUpperCase(), "Ada Lovelace"),
+    false,
+    "an unchanged name is not rewritten",
+  );
+  assert.equal(await roster.setDisplayName(oidc, "   "), false, "a blank name never clears a stored one");
+  assert.equal(await roster.setDisplayName(oidc, "Ada King"), true);
+  assert.equal((await roster.resolve([oidc])).get(oidc)?.displayName, "Ada King");
+  await roster.setDisplayName(oidc, "x".repeat(500));
+  assert.equal((await roster.get(oidc))?.displayName?.length, 200);
+});
+
+test("linking keeps the name a sign-in already had, and labels fall back to an email, never to a raw sign-in", async () => {
+  const email = unique("label");
+  const oidc = `oidc:issuer:${randomUUID().slice(0, 8)}`;
+  const roster = store();
+  await roster.setDisplayName(oidc, "Grace Hopper");
+  await roster.record({ id: email, source: "turn", at: Date.now() });
+  await roster.link({ principalId: oidc, canonicalId: email, evidence: "sso", linkedBy: "", createdAt: 0 });
+  assert.equal(userLabel(await roster.get(email)), "Grace Hopper");
+  const bare = `oidc:issuer:${randomUUID().slice(0, 8)}`;
+  await roster.record({ id: bare, source: "turn", at: Date.now() });
+  assert.equal(userLabel(await roster.get(bare)), undefined);
+  const mailOnly = unique("mail");
+  await roster.link({ principalId: bare, canonicalId: mailOnly, evidence: "sso", linkedBy: "", createdAt: 0 });
+  assert.equal(userLabel(await roster.get(bare)), mailOnly);
 });

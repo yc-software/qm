@@ -32,6 +32,7 @@ import type { App, AppDeps, ReachNowResult } from "./app-types.ts";
 import { CONTEXT_REQUEST_EXPIRY_MS } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 import type { AmbientHelpers } from "./app-ambient.ts";
+import { userLabel } from "../identity/user-store.ts";
 
 export async function cronVisibility(deps: AppDeps, h: AppHelpers, principalId: string) {
   const viewerKeys = personKeys(await deps.directory.get(principalId).catch(() => null), principalId);
@@ -139,6 +140,7 @@ export function createMessagingMethods(
       deps.identity.listExternalMembers(),
       deps.sessions?.distinctParticipants() ?? [],
     ]);
+    const users = await deps.users?.resolve(participants).catch(() => undefined);
     const candidates: DirectoryMember[] = [
       ...(deps.emailAuthMembers ?? []),
       ...externals
@@ -146,7 +148,11 @@ export function createMessagingMethods(
         .map((member) => ({ principalId: member.email, displayName: member.email, type: "internal" as const })),
       ...participants
         .filter((principalId) => deps.identity.classify(principalId).type === "internal")
-        .map((principalId) => ({ principalId, displayName: principalId, type: "internal" as const })),
+        .map((principalId) => ({
+          principalId,
+          displayName: userLabel(users?.get(principalId)) ?? principalId,
+          type: "internal" as const,
+        })),
     ];
     const byKey = new Map<string, DirectoryMember>();
     for (const member of candidates) {

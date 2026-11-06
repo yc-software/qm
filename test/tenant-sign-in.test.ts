@@ -96,13 +96,19 @@ function identityAdmitting(tenant: string | undefined, seen: Array<string | unde
   } as unknown as IdentityService;
 }
 
-function start(identity: IdentityService, tenants: DirectoryStore["tenantsForEmail"]) {
+function start(
+  identity: IdentityService,
+  tenants: DirectoryStore["tenantsForEmail"],
+  requireSignedPortalIdentity = false,
+) {
   const built = buildApp(
     testConfig({ databaseUrl, dataDir: mkdtempSync(join(tmpdir(), "tenant-sign-in-")), orgId: "acme" }),
   );
   const server = createInsecureTestServer(built.app, {
     portalIdentitySecret: IDENTITY_SECRET,
     identity,
+    users,
+    requireSignedPortalIdentity,
     emailAuthDomain: "shared.test",
     deployAppsDomain: "apps.shared.test",
     directory: {
@@ -117,6 +123,14 @@ function start(identity: IdentityService, tenants: DirectoryStore["tenantsForEma
   return {
     get: async (path: string, headers: Record<string, string> = {}) => {
       const r = await fetch(`${base}${path}`, { headers });
+      return { status: r.status, body: (await r.json()) as Record<string, unknown> };
+    },
+    post: async (path: string, body: unknown, headers: Record<string, string> = {}) => {
+      const r = await fetch(`${base}${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...headers },
+        body: JSON.stringify(body),
+      });
       return { status: r.status, body: (await r.json()) as Record<string, unknown> };
     },
     close: () => new Promise<void>((resolve) => server.close(() => resolve())),
@@ -304,4 +318,42 @@ test("a workspace handle names exactly one company and its own trusted client, a
     assert.deepEqual(await appHost(`${handle}-sales-dash.apps.shared.test`), { tenant: beta, app: true });
     for (const miss of [`${handle}.apps.shared.test`, `${handle}-.apps.shared.test`, `x.${handle}-a.apps.shared.test`])
       assert.deepEqual(await appHost(miss), { tenant: null }, miss);
+  }));
+
+test("the portal stores a signed-in person's name in their own tenant, and the canonical lookup returns it", (t) =>
+  withoutTenant(async () => {
+    const srv = start(identityAdmitting(undefined, []), async () => [], true);
+    t.after(srv.close);
+    const oidc = `oidc:issuer:${randomUUID().slice(0, 8)}`;
+    await signIn(beta, oidc, "named@beta.test");
+    const as = (p: string, tenant: string) =>
+      mintPortalIdentity({ p, t: tenant, exp: Date.now() + 60_000 }, IDENTITY_SECRET);
+    const canonical = `/v1/principals/${encodeURIComponent(oidc)}/canonical`;
+    const before = await srv.get(canonical, { "x-portal-identity": await as(oidc, beta) });
+    assert.deepEqual(before.body, {
+      principalId: oidc,
+      canonicalId: "named@beta.test",
+      displayName: "named@beta.test",
+    });
+    const forged = await srv.post(
+      "/v1/principals/profile",
+      { principalId: oidc, displayName: "Mallory" },
+      { "x-portal-identity": await as("someone@beta.test", beta) },
+    );
+    assert.equal(forged.status, 403);
+    const saved = await srv.post(
+      "/v1/principals/profile",
+      { principalId: oidc, displayName: " Named  Founder " },
+      { "x-portal-identity": await as(oidc, beta) },
+    );
+    assert.deepEqual(saved, { status: 200, body: { ok: true, changed: true } });
+    const after = await srv.get(canonical, { "x-portal-identity": await as(oidc, beta) });
+    assert.equal(after.body.displayName, "Named Founder");
+    const blank = await srv.post(
+      "/v1/principals/profile",
+      { principalId: oidc, displayName: "" },
+      { "x-portal-identity": await as(oidc, beta) },
+    );
+    assert.equal(blank.status, 400);
+    assert.equal(await withTenant(alpha, async () => (await users.get(oidc))?.displayName), undefined);
   }));
