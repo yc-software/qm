@@ -27,11 +27,6 @@ interface Actor {
   live: boolean;
 }
 
-interface OwnerHandover {
-  persona: Persona;
-  to: string;
-}
-
 export type ChannelPersonaResult =
   | { status: "ok"; value: { channelId: string; channelName: string; persona: Persona | null } }
   | { status: "not_found" | "forbidden" | "disabled" | "invalid"; message: string };
@@ -41,14 +36,11 @@ export interface ChannelPersonas {
   get(actorId: string, channel: string): Promise<ChannelPersonaResult>;
   set(actor: Actor, channel: string, personaId: string | null): Promise<ChannelPersonaResult>;
   assertMayInstruct(scope: ScopeId, actor: Actor): Promise<void>;
-  handovers(leaving: (principalId: string) => Promise<boolean>): Promise<OwnerHandover[]>;
-  handOver(handover: OwnerHandover, by: string): Promise<void>;
-  adoptOrphans(): Promise<OwnerHandover[]>;
 }
 
 export interface ChannelPersonasDeps {
   defaults: Pick<DurableMap<ChannelPersonaDefault>, "get" | "put" | "delete">;
-  store: Pick<PersonaStore, "get" | "access" | "ownerGrants" | "addOwner">;
+  store: Pick<PersonaStore, "get" | "access">;
   personas: Pick<PersonaService, "role">;
   flags: Pick<FeatureFlagStore, "enabled">;
   orgScope: ScopeId;
@@ -58,7 +50,6 @@ export interface ChannelPersonasDeps {
   >;
   isActive: (principalId: string) => boolean;
   isOrgAdmin: (principalId: string) => Promise<boolean>;
-  orgAdmins: () => Promise<ReadonlyArray<{ principalId: string; createdAt?: number }>>;
   auditLog: Pick<AuditLog, "record">;
   deliveries: Pick<DeliveryStore, "enqueue">;
   now?: () => number;
@@ -148,45 +139,6 @@ export function createChannelPersonas(deps: ChannelPersonasDeps): ChannelPersona
     }
   }
 
-  async function defaultAdmin(leaving: (principalId: string) => Promise<boolean>): Promise<string | undefined> {
-    const admins = [...(await deps.orgAdmins())].sort(
-      (a, b) =>
-        (a.createdAt ?? Number.MAX_SAFE_INTEGER) - (b.createdAt ?? Number.MAX_SAFE_INTEGER) ||
-        a.principalId.localeCompare(b.principalId),
-    );
-    for (const admin of admins)
-      if (deps.isActive(admin.principalId) && !(await leaving(admin.principalId))) return admin.principalId;
-    return undefined;
-  }
-
-  async function handovers(leaving: (principalId: string) => Promise<boolean>): Promise<OwnerHandover[]> {
-    const owners = new Map<string, ScopeId[]>();
-    for (const { personaId, scopeId: owner } of await deps.store.ownerGrants())
-      owners.set(personaId, [...(owners.get(personaId) ?? []), owner]);
-    const stays = async (owner: ScopeId) => {
-      const { kind, ref } = parseScopeId(owner);
-      return kind !== "personal" || (!!ref && deps.isActive(ref) && !(await leaving(ref)));
-    };
-    const orphaned: string[] = [];
-    for (const [personaId, grants] of owners) {
-      const kept = await Promise.all(grants.map(stays));
-      if (!kept.includes(true)) orphaned.push(personaId);
-    }
-    const to = orphaned.length ? await defaultAdmin(leaving) : undefined;
-    if (!to) return [];
-    const result: OwnerHandover[] = [];
-    for (const personaId of orphaned) {
-      const persona = await deps.store.get(personaId);
-      if (persona) result.push({ persona, to });
-    }
-    return result;
-  }
-
-  async function handOver({ persona, to }: OwnerHandover, by: string): Promise<void> {
-    await deps.store.addOwner(persona.id, scopeId("personal", canonicalPerson(to)), by);
-    audit(by, "persona_owner_handover", persona.id, scopeId("persona", persona.id), canonicalPerson(to));
-  }
-
   return {
     current,
 
@@ -274,15 +226,6 @@ export function createChannelPersonas(deps: ChannelPersonasDeps): ChannelPersona
       throw new PersonaLocked(
         `#${channel.name} wears the persona ${persona.name}. Only ${persona.name}'s owners and writers, or an org admin, can change its instructions, standing orders or skills; ${owner ? `ask ${owner}` : "ask an org admin"}.`,
       );
-    },
-
-    handovers,
-    handOver,
-
-    async adoptOrphans() {
-      const found = await handovers(async () => false);
-      for (const handover of found) await handOver(handover, handover.to);
-      return found;
     },
   };
 }
