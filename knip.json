@@ -29,7 +29,6 @@
         "scripts/skills-materialize-smoke.ts",
         "scripts/slack-user-token.ts",
         "scripts/tenant.ts",
-        "scripts/db.ts",
         "superserve/templates/qm-agent.ts",
         "superserve/templates/verify-qm-agent.ts",
         "docs/qa/resource-search-demo.mjs",
