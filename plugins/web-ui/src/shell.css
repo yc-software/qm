@@ -13283,6 +13283,24 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
 .session-persona-open:hover {
   text-decoration: underline;
 }
+.dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .session-persona-badge {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .session-persona-open {
+  min-width: 0;
+}
+.dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .session-persona-open > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dv-tab:not(.dv-active-tab) .session-persona-badge {
+  pointer-events: none;
+}
+.dv-tab:not(.dv-active-tab) .session-persona-clear {
+  display: none;
+}
 .persona-skill-list {
   display: flex;
   flex-direction: column;
