@@ -144,7 +144,9 @@ export function createMcpClient(opts: {
         const response = await fetchFn(url, {
           ...init,
           redirect: "error",
-          signal: AbortSignal.any([init?.signal, detached ? undefined : stop].filter((s): s is AbortSignal => !!s)),
+          signal: AbortSignal.any(
+            [init?.signal, detached ? AbortSignal.timeout(CALL_TIMEOUT_MS) : stop].filter((s): s is AbortSignal => !!s),
+          ),
         });
         if (maxResponseBytes === undefined) return response;
         return boundedResponse(response, maxResponseBytes, () => {
