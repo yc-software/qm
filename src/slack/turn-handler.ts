@@ -785,8 +785,8 @@ export function createTurnHandler(deps: {
         reactions: reactionTallies(m.reactions),
         ...(m.user ? { authorId: String(m.user) } : {}),
       };
-    } catch {
-      return undefined;
+    } catch (error) {
+      return swallowAs("slack: reacted message read", undefined)(error);
     }
   }
 

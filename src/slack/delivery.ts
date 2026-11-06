@@ -1,4 +1,4 @@
-import { createTtlRefresh, withTimeout } from "../util/async.ts";
+import { createTtlRefresh } from "../util/async.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { safeChunks, safeClip } from "./safe-cut.ts";
 import { sleep } from "./util.ts";
@@ -34,7 +34,6 @@ export function botIdentityFromEnv(env: Record<string, string | undefined>): Bot
 type PersonaCore = { channelPersonas?(): Promise<Map<string, SlackPersona>> };
 
 const PERSONA_REFRESH_TTL_MS = 10_000;
-const PERSONA_READ_TIMEOUT_MS = 5_000;
 let defaultIdentity: BotIdentityOverride = {};
 let personas: ReadonlyMap<string, SlackPersona> = new Map();
 let personaSource: { core: PersonaCore; refresh: (force?: boolean) => Promise<void> } | undefined;
@@ -55,11 +54,7 @@ export function refreshPersonas(core: PersonaCore, force = false): Promise<void>
       core,
       refresh: createTtlRefresh(PERSONA_REFRESH_TTL_MS, async () => {
         personas =
-          (await withTimeout(
-            async () => core.channelPersonas?.(),
-            PERSONA_READ_TIMEOUT_MS,
-            "slack: channel persona read",
-          ).catch(swallowAs("slack: channel persona refresh", undefined))) ?? personas;
+          (await core.channelPersonas?.().catch(swallowAs("slack: channel persona refresh", undefined))) ?? personas;
       }),
     };
   return personaSource.refresh(force);
