@@ -1552,7 +1552,7 @@ export function createAgent(opts?: AgentOptions): Agent {
           const partial = lastFreshAssistant
             ? textFromContent((lastFreshAssistant as { content?: unknown }).content)
             : "";
-          const reply = partial.trim() ? partial : "(stopped)";
+          const reply = partial.trim() ? partial : "";
           await settleGoal(userAborted);
           await recordStoppedTurn(
             turn,
