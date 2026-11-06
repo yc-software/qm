@@ -1,5 +1,5 @@
 import { swallowAs } from "../util/errors.ts";
-import type { PendingApprovalRecord } from "../types.ts";
+import { isSystemActor, type PendingApprovalRecord } from "../types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import { principalDestination } from "../reach/reach.ts";
@@ -11,7 +11,7 @@ export function approvalDeliveryKey(id: string, record: Pick<PendingApprovalReco
 
 export function approvalDeliveryRecipient(actor: { externalId?: string } | undefined): string | undefined {
   const id = actor?.externalId;
-  return id && !id.startsWith("system:") ? id : undefined;
+  return id && !isSystemActor(id) ? id : undefined;
 }
 
 export function createApprovalStore(

@@ -312,7 +312,12 @@ test("an attested gbrain write never speaks for anyone but the turn's member", a
 
 test("a gbrain write's provenance stays within the contract's limit for a long sign-in", async (t) => {
   const { calls, memory } = await gbrain(t, () => committed(1, "8c1f7a0e-0000-5000-8000-000000000007"));
-  const scope = `personal:${"x".repeat(250)}@acme.example` as const;
+  const signIn = `${"x".repeat(250)}@acme.example`;
+  installPrincipalLinks({
+    canonical: (key) => (key === signIn || key === "U0JORDAN" ? "U0JORDAN" : undefined),
+    aliases: () => [],
+  });
+  const scope = `personal:${signIn}` as const;
   const { outcomes } = await writeFacts(
     memory,
     scope,

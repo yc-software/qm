@@ -26,6 +26,8 @@ before proxying, and the keychain stores credentials under the canonical owner.
   can only be linked to a canonical principal that is already an admin.
 - **Links are flat.** A canonical principal is never itself linked onward, and
   a linked sign-in cannot become canonical for others.
+- **Only people are linked.** A QM system actor (`system:…`) is QM itself, not
+  a person, so the admin API refuses a link with one on either side (400).
 - **Evidence is required.** Every link records how the two identities were
   verified as one person and which admin created it.
 - **Linking merges the users row.** If the linked sign-in already has its own
@@ -73,6 +75,17 @@ ids and OIDC principals (`oidc:<issuer hash>:<subject>`) are ASCII; an email
 principal with non-ASCII characters, or any id over 256 characters, is not
 attested. QM makes no call for such a member and reports `invalid_actor`;
 link them to a conforming canonical id.
+
+An attested call reads as that person, so its answer can hold what only they may
+see. QM therefore attests a person only to that person, in their own personal
+scope: never where others read the answer, never in someone else's personal
+scope, and never for a QM system actor (`system:…`). A memory route to an
+`attestActor` provider may list only `personal` or `personal:<id>` selectors, and
+QM refuses any other at startup. Attested MCP connectors are offered and called
+only in the person's direct conversation with QM, not in channels, group
+conversations or projects. The credential broker refuses an actor-attested credential anywhere
+else with `private_only`; a published app's token belongs to its publisher's
+personal scope, so apps attest their publisher.
 
 ## Self-service Slack linking
 

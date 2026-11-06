@@ -198,5 +198,13 @@ export function parseMemoryProviderConfig(
       ...(typeof raw.failOpen === "boolean" ? { failOpen: raw.failOpen } : {}),
     };
   });
+  for (const [i, route] of routes.entries()) {
+    const target = providerById.get(route.provider);
+    const shared = route.scopes.filter((scope) => scope !== "personal" && parseScopeId(scope).kind !== "personal");
+    if (target?.type === "mcp" && target.attestActor && shared.length)
+      throw new Error(
+        `memory route ${i}: provider ${route.provider} sets attestActor, so it may serve only personal scopes, not ${shared.join(", ")}; an attested read returns that member's private memory, which a shared conversation would show to everyone in it (docs/memory-providers.md#attesting-the-member-attestactor)`,
+      );
+  }
   return { providers, routes };
 }

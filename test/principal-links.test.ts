@@ -71,6 +71,12 @@ describe("principal link service: one person, several sign-ins", () => {
     );
     await reject({ principalId: OIDC, canonicalId: EMAIL, evidence: "", linkedBy: "a" }, 400, /evidence/);
     await reject({ principalId: "", canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "a" }, 400, /non-empty/);
+    for (const [principalId, canonicalId] of [
+      ["system:digest", EMAIL],
+      [SLACK, "system:digest"],
+      [`SYSTEM:personal:${EMAIL}`, SLACK],
+    ])
+      await reject({ principalId, canonicalId, evidence: EVIDENCE, linkedBy: "a" }, 400, /system actor/);
     await links.link({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "a" });
     const again = await links.link({
       principalId: OIDC,

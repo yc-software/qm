@@ -152,9 +152,16 @@ const withProvider = (fields: Record<string, unknown>) => {
   return JSON.stringify(parsed);
 };
 
+const withRoute = (config: string, fields: Record<string, unknown>) => {
+  const parsed = JSON.parse(config) as { routes: Array<Record<string, unknown>> };
+  parsed.routes[1] = { ...parsed.routes[1], ...fields };
+  return JSON.stringify(parsed);
+};
+
 test("attestActor is an opt-in boolean on mcp providers only", () => {
   const mcp = (fields: Record<string, unknown>) => {
-    const provider = parseMemoryProviderConfig(withProvider(fields), ENV)?.providers[0];
+    const provider = parseMemoryProviderConfig(withRoute(withProvider(fields), { scopes: ["personal"] }), ENV)
+      ?.providers[0];
     return provider?.type === "mcp" ? provider.attestActor : undefined;
   };
   assert.equal(mcp({}), false);
@@ -170,6 +177,22 @@ test("attestActor is an opt-in boolean on mcp providers only", () => {
       ),
     /procedures\.attestActor must be true or false on an mcp provider/,
   );
+});
+
+test("an attested provider serves only personal scopes, so a shared conversation never sees one member's private memory", () => {
+  const scopes = (selectors: string[], provider = withProvider({ attestActor: true })) =>
+    parseMemoryProviderConfig(withRoute(provider, { scopes: selectors }), ENV)?.routes[1]?.scopes;
+  assert.deepEqual(scopes(["personal"]), ["personal"]);
+  assert.deepEqual(scopes(["personal", "personal:U1"]), ["personal", "personal:U1"]);
+  for (const shared of ["org", "channel", "group", "team", "org:acme", "channel:C1", "group:G1", "team:T1"]) {
+    assert.throws(
+      () => scopes(["personal", shared]),
+      new RegExp(
+        `memory route 1: provider knowledge sets attestActor, so it may serve only personal scopes, not ${shared}; an attested read returns that member's private memory`,
+      ),
+    );
+    assert.deepEqual(scopes([shared], value), [shared]);
+  }
 });
 
 test("a write operation maps its facts with factsArg or contentArg, not both", () => {
@@ -190,7 +213,7 @@ test("a write operation maps its facts with factsArg or contentArg, not both", (
 test("an attested provider cannot manage a notebook, because notebook reads carry no member", () => {
   const route = (fields: Record<string, unknown>) => {
     const parsed = JSON.parse(withProvider({ attestActor: true })) as { routes: Array<Record<string, unknown>> };
-    parsed.routes[1] = { ...parsed.routes[1], ...fields };
+    parsed.routes[1] = { ...parsed.routes[1], scopes: ["personal"], ...fields };
     return parseMemoryProviderConfig(JSON.stringify(parsed), ENV)?.routes[1]?.manage;
   };
   assert.equal(route({ manage: false }), false);
