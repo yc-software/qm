@@ -865,13 +865,13 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
   const sessionSecret = deps.deployAppsSessionSecret;
   const loginUrl = deps.deployAppsLoginUrl;
   const wantsHtml = ctx.method === "GET" && String(req.headers.accept ?? "").includes("text/html");
-  let session = sessionSecret ? portalSession(req.headers.cookie, sessionSecret, Date.now(), rawHost) : null;
+  let session = sessionSecret ? portalSession(req.headers.cookie, sessionSecret, Date.now()) : null;
   const dest = req.headers["sec-fetch-dest"];
   const site = req.headers["sec-fetch-site"];
   const framed = dest === "iframe" || site === "same-origin";
   const embedAncestors = framed ? (deployment?.embedAncestors ?? []) : [];
   if (!session && sessionSecret && embedAncestors.length) {
-    session = portalSessionFrom(req.headers.cookie, FRAME_SESSION_COOKIE, sessionSecret, Date.now(), rawHost);
+    session = portalSessionFrom(req.headers.cookie, FRAME_SESSION_COOKIE, sessionSecret, Date.now());
   }
   if (session?.t !== undefined && session.t !== boundTenant()) {
     sendJson(res, 404, { error: "not_found" });

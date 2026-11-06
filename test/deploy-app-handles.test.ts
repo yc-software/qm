@@ -28,7 +28,7 @@ const SESSION_SECRET = "portal-session-secret";
 const LOGIN_URL = "https://portal.example.com";
 const auditLog = { record() {}, events: async () => [], tail: async () => [] };
 
-function portalSession(claims: { t?: string; h?: string }): string {
+function portalSession(claims: { t?: string }): string {
   const key = createHmac("sha256", SESSION_SECRET).update("portal.session.v1").digest();
   const now = Math.floor(Date.now() / 1000);
   const body = Buffer.from(
@@ -113,15 +113,9 @@ test("a <handle>-<app> host serves the handle's own app, refuses other companies
       signedOut.location,
       `${LOGIN_URL}/auth/host?to=${encodeURIComponent(`https://${host}/reports?x=1&dpl_signin=1`)}`,
     );
-    for (const claims of [{ t: TEST_TENANT }, { t: TEST_TENANT, h: host }]) {
-      const own = await get(port, host, "/reports", portalSession(claims));
-      assert.equal(own.status, 200, JSON.stringify(claims));
-      assert.equal(own.body, "UPSTREAM OK");
-    }
-    assert.equal(
-      (await get(port, host, "/reports", portalSession({ t: TEST_TENANT, h: "other.example.com" }))).status,
-      302,
-    );
+    const own = await get(port, host, "/reports", portalSession({ t: TEST_TENANT }));
+    assert.equal(own.status, 200);
+    assert.equal(own.body, "UPSTREAM OK");
     assert.equal((await get(port, host, "/reports", portalSession({ t: randomUUID() }))).status, 404);
     assert.equal((await get(port, "sales-board.apps.example.com", "/", portalSession({ t: TEST_TENANT }))).status, 404);
   } finally {

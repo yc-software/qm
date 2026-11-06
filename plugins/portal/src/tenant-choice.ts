@@ -1,3 +1,4 @@
+import { LRUCache } from "lru-cache";
 import { signedHeaders, withSourceAuthNonce } from "../../chassis/src/core-client.ts";
 import { isTenantId } from "../../chassis/src/tenant.ts";
 import { open } from "./session.ts";
@@ -22,6 +23,11 @@ export interface TrustedSignIn {
 export interface EmailTenants {
   tenants: SignInTenant[];
   shared: boolean;
+}
+
+export interface Workspace {
+  tenant: string;
+  trustedClient?: { clientId: string; clientSecret: string };
 }
 
 export interface ChoiceClaims {
@@ -88,6 +94,32 @@ async function coreTenants(
     isTenantId(t?.id) ? [{ id: t.id, ...(typeof t.brandName === "string" ? { brandName: t.brandName } : {}) }] : [],
   );
   return { tenants: valid, shared: body.shared === true };
+}
+
+export function coreWorkspace(coreApiUrl: string, signingSecret: string | undefined) {
+  const cache = new LRUCache<string, { found: Workspace | null }>({ max: 1_000, ttl: 60_000 });
+  return async (handle: string): Promise<Workspace | null> => {
+    if (!/^[a-z0-9]{2,30}$/.test(handle)) return null;
+    const hit = cache.get(handle);
+    if (hit) return hit.found;
+    const path = withSourceAuthNonce(`/v1/auth/broker/workspace?handle=${encodeURIComponent(handle)}`, signingSecret);
+    const r = await fetch(`${coreApiUrl}${path}`, {
+      headers: signedHeaders(signingSecret, "GET", path),
+      signal: AbortSignal.timeout(4_000),
+    });
+    if (!r.ok) throw new Error(`workspace lookup failed: HTTP ${r.status}`);
+    const { tenant, trustedClient: c } = (await r.json()) as {
+      tenant?: unknown;
+      trustedClient?: { clientId?: unknown; clientSecret?: unknown };
+    };
+    const trustedClient =
+      typeof c?.clientId === "string" && typeof c.clientSecret === "string" && c.clientSecret.length >= 32
+        ? { clientId: c.clientId, clientSecret: c.clientSecret }
+        : undefined;
+    const found = isTenantId(tenant) ? { tenant, ...(trustedClient ? { trustedClient } : {}) } : null;
+    cache.set(handle, { found });
+    return found;
+  };
 }
 
 export function openChoice(token: string | null, key: Buffer, now: number): ChoiceClaims | null {
