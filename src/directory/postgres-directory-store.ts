@@ -173,6 +173,8 @@ END $tenants_for_email$`,
   EMAIL_USER_TENANTS,
 ];
 
+const rosterCoversAudience = (channel: { is_external?: unknown }) => channel.is_external !== true;
+
 export function createPostgresDirectoryStore(connectionString: string): DirectoryStore {
   const orgId = configOrgId();
   const { q, pool } = createPgPool(connectionString, DIRECTORY_MIGRATIONS);
@@ -297,13 +299,19 @@ export function createPostgresDirectoryStore(connectionString: string): Director
 
     async channelMember(channelId, principalId) {
       const rows = await q(
-        `SELECT 1 FROM directory_channel_members member
-         JOIN directory_channels channel USING (org_id, channel_id)
-         WHERE member.org_id = $1 AND member.channel_id = $2 AND member.principal_id = ANY($3::text[])
-           AND NOT (channel.is_private AND channel.is_external) LIMIT 1`,
+        `SELECT 1 FROM directory_channel_members
+         WHERE org_id = $1 AND channel_id = $2 AND principal_id = ANY($3::text[]) LIMIT 1`,
         [orgId, channelId, rosterIds(principalId)],
       );
       return rows.length > 0;
+    },
+
+    async rosterCoversAudience(channelId) {
+      const rows = await q("SELECT is_external FROM directory_channels WHERE org_id = $1 AND channel_id = $2", [
+        orgId,
+        channelId,
+      ]);
+      return rows.length ? rosterCoversAudience(rows[0]!) : undefined;
     },
 
     async channelMemberIds(channelId) {
@@ -408,7 +416,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
          ORDER BY roster.principal_id`,
         [orgId, id],
       );
-      if (!rows.length || rows[0]?.roster_known !== true || rows[0]?.is_external === true) return undefined;
+      if (!rows.length || rows[0]?.roster_known !== true || !rosterCoversAudience(rows[0])) return undefined;
       if (rows.some((row) => !row.roster_principal_id || !row.principal_id)) return undefined;
       return rows.map(memberRow);
     },
@@ -418,9 +426,9 @@ export function createPostgresDirectoryStore(connectionString: string): Director
     async listChannelsFor(principalId) {
       const rows = await q(
         `SELECT channel_id, name, is_private, is_external FROM directory_channels c
-         WHERE org_id = $1 AND (is_private = FALSE OR (is_external = FALSE AND EXISTS (
+         WHERE org_id = $1 AND (is_private = FALSE OR EXISTS (
            SELECT 1 FROM directory_channel_members m
-           WHERE m.org_id = c.org_id AND m.channel_id = c.channel_id AND m.principal_id = ANY($2::text[]))))
+           WHERE m.org_id = c.org_id AND m.channel_id = c.channel_id AND m.principal_id = ANY($2::text[])))
          ORDER BY name_lc`,
         [orgId, rosterIds(principalId)],
       );

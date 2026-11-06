@@ -155,15 +155,6 @@ export interface Participant {
   principalId: string;
 }
 
-export interface AttributedTurn {
-  principalId: string;
-  sessionId: string;
-  day: number;
-  turns: number;
-  firstAt: number;
-  lastAt: number;
-}
-
 export type SessionOrigin = "conversation" | "cron" | "webhook" | "monitor" | "loop" | "swarm";
 
 const ORIGINS = "(cron|webhook|monitor|loop|swarm)";
@@ -488,8 +479,6 @@ export interface SessionStore {
   scopeActivity(): Promise<ScopeActivity[]>;
 
   scopeConversationCount(scope: ScopeId): Promise<number>;
-
-  attributedTurns(): Promise<AttributedTurn[]>;
 
   spendRollup(range: { from: number; to: number }): Promise<SpendRow[]>;
 
