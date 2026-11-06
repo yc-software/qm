@@ -161,11 +161,10 @@ function users(page: AdminPage, initial: any) {
                 roster.map((u: any) => [
                   {
                     node: html`<a href=${userHref(u.principalId)} title=${u.principalId}
-                        >${u.displayName || u.principalId}</a
+                        >${u.displayName || html`<span class="mono">${u.principalId}</span>`}</a
                       >
                       ${u.kind === "app" ? badge("app") : ""}
                       ${u.offboarded || u.deactivated ? badge(u.offboarded ? "offboarded" : "deactivated", "warn") : ""}`,
-                    cls: "mono",
                   },
                   { node: subline(u.admin?.isAdmin ? labelRole(u.admin.role) : "member") },
                   { text: u.lastSeenAt ? relTime(u.lastSeenAt) : "-", cls: "num" },
