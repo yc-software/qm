@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { TEST_TENANT } from "./support/test-config.ts";
+import { TEST_TENANT } from "./support/test-tenant.ts";
 import { mkdtempSync } from "node:fs";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";

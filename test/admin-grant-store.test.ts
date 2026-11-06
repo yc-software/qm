@@ -1,4 +1,5 @@
-import { TEST_TENANT, tenantTest as test } from "./support/tenant-test.ts";
+import { tenantTest as test } from "./support/tenant-test.ts";
+import { TEST_TENANT } from "./support/test-tenant.ts";
 import assert from "node:assert/strict";
 import { createAdminGrantStore, grantKey } from "../src/admin/admin-grant-store.ts";
 import { createPostgresAdminGrantStore } from "../src/admin/postgres-admin-grant-store.ts";

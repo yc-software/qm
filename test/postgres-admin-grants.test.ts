@@ -1,6 +1,6 @@
 import { test, beforeEach } from "node:test";
 import { withTenant } from "../src/tenants/context.ts";
-import { TEST_TENANT } from "./support/tenant-test.ts";
+import { TEST_TENANT } from "./support/test-tenant.ts";
 import assert from "node:assert/strict";
 import { createPostgresAdminGrantStore } from "../src/admin/postgres-admin-grant-store.ts";
 import { createAdminGrantStore, type AdminGrant } from "../src/admin/admin-grant-store.ts";
