@@ -243,34 +243,42 @@ function themeRow(): TemplateResult {
 }
 
 const OPEN_NEW_CHAT_KEY = "open-new-chat";
-let openNewChat = false;
+let storedOpenNewChat: boolean | null = null;
+let deploymentOpenNewChat = false;
 let openNewChatTouched = false;
 
-export async function loadOpenNewChat(timeoutMs = 2000): Promise<boolean> {
+export function opensNewChat(): boolean {
+  return storedOpenNewChat ?? deploymentOpenNewChat;
+}
+
+export function setDeploymentOpenNewChat(value: boolean): void {
+  deploymentOpenNewChat = value;
+  drawSettings();
+}
+
+export async function loadOpenNewChat(timeoutMs = 2000): Promise<void> {
   const fetched = fetchUiState(OPEN_NEW_CHAT_KEY).then(
     (rec) => {
       if (!openNewChatTouched) {
-        openNewChat = rec.value === true;
+        storedOpenNewChat = typeof rec.value === "boolean" ? rec.value : null;
         drawSettings();
       }
-      return openNewChat;
     },
-    () => null,
+    () => undefined,
   );
   let timer = 0;
-  const value = await Promise.race([
+  await Promise.race([
     fetched,
-    new Promise<null>((resolve) => {
-      timer = window.setTimeout(() => resolve(null), timeoutMs);
+    new Promise<void>((resolve) => {
+      timer = window.setTimeout(resolve, timeoutMs);
     }),
   ]);
   window.clearTimeout(timer);
-  return value ?? false;
 }
 
 function setOpenNewChat(value: boolean): void {
   openNewChatTouched = true;
-  openNewChat = value;
+  storedOpenNewChat = value;
   drawSettings();
   void putUiState(OPEN_NEW_CHAT_KEY, value, Date.now()).catch(
     swallowAs("web-ui: save open-new-chat setting", undefined),
@@ -293,10 +301,10 @@ function openBehaviorRow(): TemplateResult {
         ${OPEN_OPTIONS.map(
           (option) => html`
             <button
-              class="settings-choice-option ${openNewChat === option.newChat ? "selected" : ""}"
+              class="settings-choice-option ${opensNewChat() === option.newChat ? "selected" : ""}"
               type="button"
               role="radio"
-              aria-checked=${openNewChat === option.newChat ? "true" : "false"}
+              aria-checked=${opensNewChat() === option.newChat ? "true" : "false"}
               @click=${() => setOpenNewChat(option.newChat)}
             >
               <span>${option.label}</span>

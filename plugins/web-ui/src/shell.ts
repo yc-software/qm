@@ -112,7 +112,14 @@ import {
 } from "./inbox";
 import { openSkillById, renderSkills, resetActiveSkill, routeSkillsHistory } from "./skills";
 import { watchAppAnnotations } from "./app-annotations";
-import { applyTheme, renderSettings, loadOpenNewChat, watchSystemTheme } from "./settings";
+import {
+  applyTheme,
+  renderSettings,
+  loadOpenNewChat,
+  opensNewChat,
+  setDeploymentOpenNewChat,
+  watchSystemTheme,
+} from "./settings";
 import { contextsState, ensureContexts, renderContexts, resetContextsState, resolveProjectScope } from "./contexts";
 import { appState, can, canView, isView, type AuthMode, type Me, type View } from "./shell-state";
 import { trapDialogFocus } from "./dialog-focus";
@@ -1117,7 +1124,7 @@ export async function boot(): Promise<void> {
   const approvalsPrefetch = linkedId ? fetchSessionApprovals(linkedId) : null;
   const runtimeConfigFetch = fetchRuntimeConfig();
   const remoteSplitFetch = fetchRemoteSplit();
-  const openNewChatFetch = loadOpenNewChat();
+  const openNewChatLoad = loadOpenNewChat();
   void loadChatPrefs();
 
   let r: Response;
@@ -1139,6 +1146,7 @@ export async function boot(): Promise<void> {
   }
   resetKeychainState();
   appState.me = (await r.json()) as Me;
+  setDeploymentOpenNewChat(appState.me.openNewChatByDefault === true);
   void initializeBrowserErrors(appState.me);
   void initializeAnalytics(appState.me, isView(wanted) && canView(wanted) ? wanted : "chats");
   void loadPersonas().then(() => {
@@ -1170,7 +1178,8 @@ export async function boot(): Promise<void> {
   const connectedProvider = params.get("status") === "connected" ? params.get("connector") : null;
   if (connectedProvider) markConnectorConnected(connectedProvider);
   const viewIntent = isView(wanted) && canView(wanted) && wanted !== "chats";
-  const restoreLast = viewIntent || !(await openNewChatFetch);
+  await openNewChatLoad;
+  const restoreLast = viewIntent || !opensNewChat();
   if (restoreLast) loadPersistedSplit();
   if (restoreLast && !wantedSession && wanted !== "app-edit" && prefill === null) {
     const restore = adoptRemoteSplit(remoteSplitFetch).then(async () => {

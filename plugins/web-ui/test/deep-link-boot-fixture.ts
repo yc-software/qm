@@ -51,6 +51,7 @@ interface HarnessOptions {
   returnWidget?: string;
   returnReplaces?: string;
   openNewChat?: boolean;
+  openNewChatByDefault?: boolean;
 }
 
 export const SESSION = {
@@ -143,6 +144,7 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
         org: "test",
         permissions: [],
         ...(opts.welcome ? { welcomeCohort: "F26" } : {}),
+        ...(opts.openNewChatByDefault ? { openNewChatByDefault: true } : {}),
       });
     if (path === "/api/composio/slack/complete")
       return Response.json({ connected: true, user: "Alice", workspace: "Acme" });
