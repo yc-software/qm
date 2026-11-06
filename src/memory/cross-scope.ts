@@ -21,15 +21,12 @@ const claimOf = (row: ScopedRow) => normalizeClaim(row.claim ?? row.text);
 
 function copiesInTurn(rows: readonly ScopedRow[]): ScopedRow[][] {
   const copies = Map.groupBy(rows, claimOf);
-  const lists = [...Map.groupBy(rows, blockKey).values()];
+  const kept = new Set([...copies.values()].map((same) => same.find((row) => row.id !== undefined) ?? same[0]!));
+  const keptRows = rows.filter((row) => kept.has(row));
+  const lists = [...Map.groupBy(keptRows, blockKey).values()];
   const rounds = Math.max(0, ...lists.map((list) => list.length));
   const turns = Array.from({ length: rounds }, (_, i) => lists.flatMap((list) => list.slice(i, i + 1)));
-  const claims = new Set(turns.flat().map(claimOf));
-  return [...claims].map((claim) => {
-    const same = copies.get(claim)!;
-    const kept = same.find((row) => row.id !== undefined) ?? same[0]!;
-    return [kept, ...same.filter((row) => row !== kept)];
-  });
+  return turns.flat().map((row) => [row, ...copies.get(claimOf(row))!.filter((copy) => copy !== row)]);
 }
 
 export const recallLabel = (text: string) => untrustedText(text).replace(/\s+/g, " ");
