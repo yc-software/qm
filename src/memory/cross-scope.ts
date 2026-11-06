@@ -103,7 +103,9 @@ export async function searchAcrossScopes(
   return copiesInTurn(rows)
     .slice(0, count)
     .map(([kept, ...others]) => {
-      const also = [...new Set(others.flatMap(({ ref }) => (ref === undefined ? [] : [ref])))];
+      const also = [
+        ...new Set(others.flatMap(({ ref, id, scope }) => ref ?? (id === undefined ? [] : [`[${scope}] #${id}`]))),
+      ];
       const address = kept!.ref === undefined ? "" : `${kept!.ref} `;
       return {
         scopeId: kept!.scope,
