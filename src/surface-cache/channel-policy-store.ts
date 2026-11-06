@@ -1,5 +1,6 @@
 import { orgId as configOrgId } from "../config.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
+import { tenantExpansion } from "../tenants/migrations.ts";
 
 export const BOT_MODES = ["ignore", "rollup", "action", "user"] as const;
 export const DEFAULT_ROLLUP_HOURS = 24;
@@ -104,6 +105,10 @@ export function createPostgresChannelPolicyStore(connectionString: string): Chan
         ON channel_policy_history(org_id, container, id DESC)`,
       ],
     },
+    ...tenantExpansion("surface-cache/channel-policy/0002-tenants", [
+      { table: "channel_policy", primaryKey: "org_id, container" },
+      { table: "channel_policy_history", primaryKey: "id" },
+    ]),
   ]);
   const row = (r: Record<string, unknown>): ChannelPolicy => ({
     container: r.container as string,

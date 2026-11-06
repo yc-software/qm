@@ -22,6 +22,7 @@ export type {
   SurfaceCache,
   SurfaceSource,
 } from "./types.ts";
+import { tenantExpansion } from "../tenants/migrations.ts";
 
 const DEFAULT_READ_LIMIT = 100;
 const MAX_READ_LIMIT = 500;
@@ -160,6 +161,23 @@ export function createPostgresSurfaceCache(
       id: "surface-cache/store/0011-source",
       statements: [`ALTER TABLE channel_state ADD COLUMN IF NOT EXISTS source JSONB`],
     },
+    ...tenantExpansion("surface-cache/store/0010-tenants", [
+      {
+        table: "channel_messages",
+        primaryKey: "org_id, container, ts",
+        unique: [{ name: "channel_messages_surface_key", columns: "org_id, surface, account, container, ts" }],
+      },
+      {
+        table: "channel_state",
+        primaryKey: "org_id, container",
+        unique: [{ name: "channel_state_surface_key", columns: "org_id, surface, account, container" }],
+      },
+      {
+        table: "channel_files",
+        primaryKey: "org_id, container, ts, file_id",
+        unique: [{ name: "channel_files_surface_key", columns: "org_id, surface, account, container, ts, file_id" }],
+      },
+    ]),
   ]);
 
   const liveFallback = opts.liveFallback;

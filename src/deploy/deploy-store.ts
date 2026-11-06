@@ -3,6 +3,7 @@ import type { ScopeId } from "../types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { PgPool } from "../persistence/pg-pool.ts";
 import { swallow } from "../util/errors.ts";
+import { ACCESS_TABLE } from "./page-views.ts";
 import {
   createDeployGitStore,
   type DeployGitDiff,
@@ -147,16 +148,7 @@ interface DeployAccess {
 }
 
 function createPgDeployAccess(pg: PgPool): DeployAccess {
-  const migration = {
-    id: "deploy/access/0001",
-    statements: [
-      "CREATE TABLE IF NOT EXISTS deployments (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
-      `CREATE TABLE IF NOT EXISTS deployment_access (
-        id TEXT PRIMARY KEY REFERENCES deployments(id) ON DELETE CASCADE,
-        last_access_at BIGINT NOT NULL
-      )`,
-    ],
-  };
+  const migration = ACCESS_TABLE;
   pg.registerMigration(migration);
   let readyP: Promise<void> | null = null;
   function ready(): Promise<void> {

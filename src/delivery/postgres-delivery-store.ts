@@ -3,6 +3,7 @@ import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import type { Delivery, DeliveryProvenance, Destination, OutgoingAttachment } from "../types.ts";
 import { DELIVERY_MAX_AGE_MS, logDeliveryExpiry, type DeliveryStore } from "./delivery-store.ts";
 import { pgTextSafe } from "../util/text.ts";
+import { tenantExpansion } from "../tenants/migrations.ts";
 
 const NOW_MS_SQL = "(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT";
 function rowToDelivery(r: Record<string, unknown>): Delivery {
@@ -82,6 +83,13 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
         `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS failed_reason TEXT`,
       ],
     },
+    ...tenantExpansion("delivery/store/0008-tenants", [
+      {
+        table: "deliveries",
+        primaryKey: "id",
+        unique: [{ name: "deliveries_idempotency_key_key", columns: "idempotency_key", constraint: true }],
+      },
+    ]),
   ]);
 
   const enqueueListeners = new Set<(type: string) => void>();

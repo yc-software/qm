@@ -1,6 +1,7 @@
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { unitVector } from "../model/embeddings.ts";
 import { MEMORY_FACTS_MIGRATIONS } from "./postgres-memory-service.ts";
+import { tenantExpansion } from "../tenants/migrations.ts";
 
 export interface MemoryVector {
   scope: string;
@@ -102,6 +103,9 @@ export function createPostgresVectorStore(connectionString: string): MemoryVecto
         END $memory_sketch_backfill$`,
       ],
     },
+    ...tenantExpansion("memory/vectors/0003-tenants", [
+      { table: "memory_fact_vectors", primaryKey: "scope_id, model, fact_id" },
+    ]),
   ]);
   return {
     async search(input) {

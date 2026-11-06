@@ -122,7 +122,7 @@ import type { SurfaceContextRequest } from "./reach/reach.ts";
 import { personalScope, scopeId } from "./types.ts";
 import type { AuditLog } from "./audit/audit-log.ts";
 import { createPostgresAuditLog } from "./admin/postgres-audit-log.ts";
-import { createPostgresAppPageViewLog, type AppPageViewLog } from "./deploy/page-views.ts";
+import { createPostgresAppPageViewLog, DEPLOYMENT_EXPANSION, type AppPageViewLog } from "./deploy/page-views.ts";
 import type { BudgetTracker } from "./ratelimit/budget.ts";
 import { createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
 import { createCronStore, DROP_RUN_AS_MIGRATION, type CronStore } from "./cron/cron-store.ts";
@@ -656,7 +656,7 @@ export function buildApp(
   const auditLog = createPostgresAuditLog(databaseUrl);
   let ownsSharedState = false;
   const deploymentLayerStore = createDeploymentLayerStore({
-    backing: artifactMap<StoredDeploymentLayer>("deployment_layer"),
+    backing: pgArtifactMap.process<StoredDeploymentLayer>("deployment_layer"),
     runtime: deploymentLayer,
     skills,
     skillBundles,
@@ -850,7 +850,7 @@ export function buildApp(
     renderClient && config.renderSandbox.image
       ? createRenderBase({
           client: renderClient,
-          store: artifactMap<StoredRenderBase>("render_sandbox_bases"),
+          store: pgArtifactMap.process<StoredRenderBase>("render_sandbox_bases"),
           image: config.renderSandbox.image,
           hold: (work) => leaderLease.hold(`render:sandbox-base:${config.renderSandbox.image}`, work),
           onError: sandboxOnError,
@@ -987,7 +987,7 @@ export function buildApp(
       onError: sandboxOnError,
     });
   const superserveBodies = artifactMap<StoredSuperserveSandbox>("superserve_sandbox_bodies");
-  const superserveEpochs = artifactMap<StoredConfigEpoch>("superserve_config_epochs");
+  const superserveEpochs = pgArtifactMap.process<StoredConfigEpoch>("superserve_config_epochs");
   const buildSuperserve = (): Sandbox => {
     const ss = config.superserveSandbox;
     if (!ss.apiKey) throw new Error("SANDBOX_BACKEND=superserve requires SUPERSERVE_API_KEY");
@@ -1279,9 +1279,9 @@ export function buildApp(
     ? createBrowserSessionStore({ sessions: artifactMap<StoredBrowserSession>("browser_sessions"), key: credentialKey })
     : undefined;
   const connectorTokens = withOperatorTokenFallback(credentialStore, config.egressServiceHosts ?? [], secretSource);
-  const consentLinks: ConsentLinkStore = createConsentLinkStore(artifactMap<ConsentLinkRecord>("consent_links"));
-  const oauthFlows: OAuthFlowStore = createOAuthFlowStore(artifactMap<OAuthState>("oauth_flows"));
-  const secretDrops: SecretDropStore = createSecretDropStore(artifactMap<SecretDropRecord>("secret_drops"));
+  const consentLinks = createConsentLinkStore(pgArtifactMap.inbound<ConsentLinkRecord>("consent_links"));
+  const oauthFlows: OAuthFlowStore = createOAuthFlowStore(pgArtifactMap.inbound<OAuthState>("oauth_flows"));
+  const secretDrops = createSecretDropStore(pgArtifactMap.inbound<SecretDropRecord>("secret_drops"));
 
   const sessions: SessionStore = createPostgresSessionStore(databaseUrl);
   memorySessions.store = sessions;
@@ -1613,7 +1613,7 @@ export function buildApp(
     },
   };
   const deployStore = createDeployStore({
-    deployments: artifactMap<Deployment>("deployments"),
+    deployments: pgArtifactMap.map<Deployment>("deployments", undefined, DEPLOYMENT_EXPANSION),
     pg: pgArtifactMap.pool,
     touchDebounceMs: deployTouchDebounceMs(config.deployIdleTtlMs),
     git: {
@@ -1690,7 +1690,7 @@ export function buildApp(
     config.deployProvider === "fly" && config.flyDeploy.wireguardPeers
       ? createFlyTunnelManager({
           peers: parseFlyWireguardPeers(config.flyDeploy.wireguardPeers),
-          claims: artifactMap<FlyPeerClaim>("fly_peer_claims"),
+          claims: pgArtifactMap.process<FlyPeerClaim>("fly_peer_claims"),
           metadataUri: config.flyDeploy.metadataUri ?? "",
           executable: "wireproxy",
           port: 18096,
@@ -1705,7 +1705,7 @@ export function buildApp(
         ...config.flyDeploy,
         ...(flyTunnel ? { privateTransport: flyTunnel } : {}),
         configStore: artifactMap<FlyMachineConfig>("fly_deploy_configs"),
-        portStore: artifactMap<string>("fly_deploy_ports"),
+        portStore: pgArtifactMap.process<string>("fly_deploy_ports"),
         onError: sandboxOnError,
       }),
     porter: () =>
@@ -1936,7 +1936,7 @@ export function buildApp(
     ],
   });
   const webhooks = createWebhookStore(
-    artifactMap<Webhook>("webhooks", ["ownerScopeId"]),
+    pgArtifactMap.inbound<Webhook>("webhooks", ["ownerScopeId"]),
     artifactMap<WebhookHistory>("webhook_history"),
   );
   pgArtifactMap.pool.registerMigration({
@@ -2590,7 +2590,7 @@ export function buildApp(
   });
   const loopIngress = createLoopIngress({
     enabledFor: (owner) => featureFlags.enabled("inbox_loops", scopeId("personal", owner)),
-    sources: artifactMap<LoopIngress>("loop_ingress", ["loopId"]),
+    sources: pgArtifactMap.inbound<LoopIngress>("loop_ingress", ["loopId"]),
     deliveries: artifactMap<IngressDelivery>("loop_ingress_deliveries", ["queueKey"]),
     loops: loopStore,
     items: loopItems,
@@ -3063,7 +3063,7 @@ export function buildApp(
     ...(config.suggestedActivitiesEnabled && config.backgroundWorkEnabled ? { suggestedActivities } : {}),
     drain,
     uiState,
-    sessionShares: artifactMap<SessionShare>("session_shares"),
+    sessionShares: pgArtifactMap.inbound<SessionShare>("session_shares"),
     sessionShareBytes:
       config.snapshotStore === "s3" && config.s3Bucket
         ? createS3DurableByteStore({

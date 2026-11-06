@@ -3,6 +3,7 @@ import type { Grant, Permission, ScopeId } from "../types.ts";
 import { sameGrantSet, type GrantPersistence } from "./acl-store.ts";
 import { refPrefix } from "./resource-ref.ts";
 import { likeEscape } from "../persistence/like.ts";
+import { tenantExpansion } from "../tenants/migrations.ts";
 
 export function rowToGrant(r: Record<string, unknown>): Grant {
   return {
@@ -88,6 +89,10 @@ export function createPostgresGrantStore(connectionString: string): GrantPersist
         `CREATE INDEX CONCURRENTLY IF NOT EXISTS acl_grants_by_grantee ON acl_grants(grantee_scope_id, path text_pattern_ops)`,
       ],
     },
+    ...tenantExpansion("acl/grants/0005-tenants", [
+      { table: "acl_grants", primaryKey: "owner_scope_id, path, grantee_scope_id, permission" },
+      { table: "acl_grants_version", primaryKey: "only_row" },
+    ]),
   ]);
   const { q } = db;
 

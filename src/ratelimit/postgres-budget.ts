@@ -2,6 +2,7 @@ import { createPgPool } from "../persistence/pg-pool.ts";
 import type { BudgetTracker } from "./budget.ts";
 import { DEFAULT_BUDGET_WINDOW_MS } from "./budget.ts";
 import { reportFailure } from "../util/errors.ts";
+import { tenantExpansion } from "../tenants/migrations.ts";
 
 export function createPostgresBudgetTracker(
   connectionString: string,
@@ -24,6 +25,7 @@ export function createPostgresBudgetTracker(
         `CREATE INDEX IF NOT EXISTS budget_spend_by_principal_at ON budget_spend(principal_id, at)`,
       ],
     },
+    ...tenantExpansion("ratelimit/budget/0002-tenants", [{ table: "budget_spend", primaryKey: "id" }]),
   ]);
 
   return {

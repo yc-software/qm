@@ -1,5 +1,17 @@
-import { createPgPool, withPgTransaction, type PgPool, type PoolClient } from "./pg-pool.ts";
+import {
+  createPgPool,
+  withPgTransaction,
+  type PgMigrationDefinition,
+  type PgPool,
+  type PoolClient,
+} from "./pg-pool.ts";
 import { jsonbStringify } from "../util/text.ts";
+import {
+  inboundIndexes,
+  tenantExpansion,
+  type TenantExpansionOptions,
+  type TenantTable,
+} from "../tenants/migrations.ts";
 
 export interface DurableMapSelect<T, K extends Extract<keyof T, string>> {
   omit?: readonly K[];
@@ -30,10 +42,22 @@ export interface DurableMap<T> {
 
 const VERSIONS_TABLE = "durable_map_versions";
 
+const VERSIONS_EXPANSION = tenantExpansion(`durable-map/${VERSIONS_TABLE}/0010-tenants`, [
+  { table: VERSIONS_TABLE, primaryKey: "tbl" },
+]);
+
+export function durableMapExpansion(
+  table: string,
+  { tables = [], ...options }: TenantExpansionOptions & { tables?: readonly TenantTable[] } = {},
+): PgMigrationDefinition[] {
+  return tenantExpansion(`durable-map/${table}/0010-tenants`, [{ table, primaryKey: "id" }, ...tables], options);
+}
+
 export function createPostgresMap<T>(
   pg: PgPool,
   table: string,
   indexedFields: readonly Extract<keyof T, string>[] = [],
+  tenancy: readonly PgMigrationDefinition[] = durableMapExpansion(table),
 ): DurableMap<T> {
   if (!/^[a-z_][a-z0-9_]*$/i.test(table)) throw new Error(`invalid table name: ${table}`);
   const migration = {
@@ -45,6 +69,8 @@ export function createPostgresMap<T>(
   };
   const migrations = [
     migration,
+    ...VERSIONS_EXPANSION,
+    ...tenancy,
     ...indexedFields.flatMap((field) => {
       if (!/^[a-z_][a-z0-9_]*$/i.test(field)) throw new Error(`invalid index field: ${field}`);
       return [
@@ -260,15 +286,27 @@ export function createPostgresMap<T>(
 }
 
 export interface PostgresArtifactMaps {
-  map<T>(table: string, indexedFields?: readonly Extract<keyof T, string>[]): DurableMap<T>;
+  map<T>(
+    table: string,
+    indexedFields?: readonly Extract<keyof T, string>[],
+    tenancy?: readonly PgMigrationDefinition[],
+  ): DurableMap<T>;
+  inbound<T>(table: string, indexedFields?: readonly Extract<keyof T, string>[]): DurableMap<T>;
+  process<T>(table: string): DurableMap<T>;
   pool: PgPool;
 }
 
 export function createPostgresMapFactory(connectionString: string): PostgresArtifactMaps {
   const pg = createPgPool(connectionString);
   return {
-    map: <T>(table: string, indexedFields?: readonly Extract<keyof T, string>[]): DurableMap<T> =>
-      createPostgresMap<T>(pg, table, indexedFields),
+    map: <T>(
+      table: string,
+      indexedFields?: readonly Extract<keyof T, string>[],
+      tenancy?: readonly PgMigrationDefinition[],
+    ): DurableMap<T> => createPostgresMap<T>(pg, table, indexedFields, tenancy),
+    inbound: <T>(table: string, indexedFields?: readonly Extract<keyof T, string>[]): DurableMap<T> =>
+      createPostgresMap<T>(pg, table, indexedFields, [...durableMapExpansion(table), inboundIndexes(table)]),
+    process: <T>(table: string): DurableMap<T> => createPostgresMap<T>(pg, table, [], []),
     pool: pg,
   };
 }

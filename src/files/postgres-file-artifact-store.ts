@@ -15,6 +15,7 @@ import {
   type FileSource,
   type ListOwnedOptions,
 } from "./file-artifact-store.ts";
+import { tenantExpansion } from "../tenants/migrations.ts";
 
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS file_artifacts(
@@ -75,6 +76,10 @@ export function createPostgresFileArtifactStore(
         "CREATE TABLE IF NOT EXISTS file_artifact_deletions(id TEXT PRIMARY KEY, deleted_at BIGINT NOT NULL)",
       ],
     },
+    ...tenantExpansion("files/artifacts/0003-tenants", [
+      { table: "file_artifacts", primaryKey: "id" },
+      { table: "file_artifact_deletions", primaryKey: "id" },
+    ]),
   ]);
 
   async function getRow(id: string): Promise<FileArtifact | null> {

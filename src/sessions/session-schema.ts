@@ -1,5 +1,5 @@
 import type { PgMigrationDefinition } from "../persistence/pg-pool.ts";
-import { TENANCY_BASE } from "../tenants/migrations.ts";
+import { TENANCY_BASE, tenantExpansion } from "../tenants/migrations.ts";
 import { DROP_TENANT_PREBUILD_INDEXES } from "../tenants/prebuilt-indexes.ts";
 
 export const SPEND_INDEXABLE = `(spend_usage_json(usage_json) IS NOT NULL
@@ -427,6 +427,47 @@ const SESSION_PERSONA: PgMigrationDefinition = {
   statements: [`SET LOCAL lock_timeout = '5s'`, `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS persona_id TEXT`],
 };
 
+const SESSION_TABLES = tenantExpansion(
+  "sessions/store/0056-tenants",
+  [
+    {
+      table: "sessions",
+      primaryKey: "id",
+      unique: [{ name: "sessions_thread_ref_key", columns: "thread_ref", constraint: true }],
+    },
+    { table: "participants", primaryKey: "session_id, principal_id" },
+    { table: "session_goals", primaryKey: "session_id" },
+    { table: "session_leases", primaryKey: "session_id" },
+    { table: "session_llm_requests", primaryKey: "id" },
+    { table: "session_pins", primaryKey: "id" },
+    { table: "session_spend_days", primaryKey: "day" },
+    {
+      table: "session_spend_dirty",
+      unique: [{ name: "session_spend_dirty_day_writer_key", columns: "day, writer", constraint: true }],
+    },
+    { table: "llm_prompt_envelopes", primaryKey: "hash" },
+  ],
+  {
+    tenanted: ["items", "blobs"],
+    references: [
+      {
+        table: "items",
+        name: "items_session_id_fkey",
+        columns: "session_id",
+        references: "sessions(tenant_id, id)",
+        onDelete: "CASCADE",
+      },
+      {
+        table: "session_goals",
+        name: "session_goals_session_id_fkey",
+        columns: "session_id",
+        references: "sessions(tenant_id, id)",
+        onDelete: "CASCADE",
+      },
+    ],
+  },
+);
+
 export const SESSION_MIGRATIONS = [
   TENANCY_BASE,
   SESSION_SCHEMA,
@@ -438,6 +479,7 @@ export const SESSION_MIGRATIONS = [
   SESSION_FACTS_COPY,
   PARTICIPANT_MEMBERSHIP,
   DROP_TENANT_PREBUILD_INDEXES,
+  ...SESSION_TABLES,
   SESSION_PERSONA,
 ];
 

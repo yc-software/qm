@@ -12,6 +12,7 @@ import {
   type DirectoryStore,
 } from "./directory-store.ts";
 import { createDirectorySync } from "./directory-sync.ts";
+import { tenantExpansion } from "../tenants/migrations.ts";
 
 const PREVIOUS_SCHEMA = "directory/store/0005";
 
@@ -117,6 +118,15 @@ export const DIRECTORY_MIGRATIONS = [
     expectedChecksum: "e8dcd5c2a3a8fcba7b1c14db1d1aceb57ca7ef6e1c7366ace6df65043f731198",
     statements: [BASE_SCHEMA],
   },
+  ...tenantExpansion("directory/store/0007-tenants", [
+    { table: "directory_members", primaryKey: "org_id, principal_id" },
+    { table: "directory_channels", primaryKey: "org_id, channel_id" },
+    { table: "directory_channel_members", primaryKey: "org_id, channel_id, principal_id" },
+    { table: "directory_group_members", primaryKey: "org_id, group_id, principal_id" },
+    { table: "directory_groups", primaryKey: "org_id, group_id" },
+    { table: "directory_sync", primaryKey: "org_id" },
+    { table: "directory_meta", primaryKey: "org_id" },
+  ]),
 ];
 
 const rosterCoversAudience = (channel: { is_external?: unknown }) => channel.is_external !== true;

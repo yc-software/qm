@@ -27,6 +27,7 @@
         "scripts/mine-slack-scenarios.ts",
         "scripts/skills-materialize-smoke.ts",
         "scripts/slack-user-token.ts",
+        "scripts/validate-tenant-references.ts",
         "superserve/templates/qm-agent.ts",
         "superserve/templates/verify-qm-agent.ts",
         "docs/qa/resource-search-demo.mjs",

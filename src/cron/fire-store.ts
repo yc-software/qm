@@ -1,6 +1,7 @@
 import type { CronFireLogEntry } from "../triggers/types.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { pgTextSafe } from "../util/text.ts";
+import { tenantExpansion } from "../tenants/migrations.ts";
 
 export interface CronFireRecord extends CronFireLogEntry {
   cronId: string;
@@ -144,6 +145,7 @@ export function createPostgresCronFireStore(connectionString: string): CronFireS
           `CREATE INDEX IF NOT EXISTS idx_cron_fires_cron_fired_at ON cron_fires (cron_id, fired_at DESC)`,
         ],
       },
+      ...tenantExpansion("cron/fires/0002-tenants", [{ table: "cron_fires", primaryKey: "cron_id, fire_key" }]),
     ],
     [LEGACY_FIRE_MAINTENANCE],
   );

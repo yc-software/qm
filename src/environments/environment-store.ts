@@ -1,6 +1,7 @@
 import { orgId as configOrgId } from "../config.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import type { ScopeId } from "../types.ts";
+import { tenantExpansion } from "../tenants/migrations.ts";
 
 export interface Environment {
   id: string;
@@ -81,6 +82,23 @@ export function createPostgresEnvironmentStore(
         ON environment_attachments(environment_id)`,
       ],
     },
+    ...tenantExpansion(
+      "environments/store/0002-tenants",
+      [
+        { table: "environments", primaryKey: "id" },
+        { table: "environment_attachments", primaryKey: "scope_id" },
+      ],
+      {
+        references: [
+          {
+            table: "environment_attachments",
+            name: "environment_attachments_environment_id_fkey",
+            columns: "environment_id",
+            references: "environments(tenant_id, id)",
+          },
+        ],
+      },
+    ),
   ]);
   return {
     async create(input): Promise<Environment> {

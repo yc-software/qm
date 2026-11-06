@@ -26,6 +26,7 @@ import {
 } from "./run-store.ts";
 import { swallow } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
+import { tenantExpansion } from "../tenants/migrations.ts";
 
 const NOTIFY_SESSION_AVAILABLE =
   "pg_notify('qm_run_available', to_json(encode(sha256(convert_to(session_id, 'UTF8')), 'hex'))::text)";
@@ -129,6 +130,16 @@ END $base_schema$`,
         `DROP TABLE IF EXISTS tool_calls`,
       ],
     },
+    ...tenantExpansion("runs/store/0012-tenants", [
+      {
+        table: "runs",
+        primaryKey: "id",
+        unique: [
+          { name: "runs_idempotency_key_key", columns: "idempotency_key", constraint: true },
+          { name: "idx_runs_one_running_per_session", columns: "session_id", where: "status = 'running'" },
+        ],
+      },
+    ]),
   ]);
 
   const availabilityListeners = new Map<() => void, number>();

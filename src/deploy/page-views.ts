@@ -1,4 +1,6 @@
-import { createPgPool } from "../persistence/pg-pool.ts";
+import { durableMapExpansion } from "../persistence/durable-map.ts";
+import { createPgPool, type PgMigrationDefinition } from "../persistence/pg-pool.ts";
+import { inboundIndexes } from "../tenants/migrations.ts";
 
 export type AppViewAuthMode = "signed_in" | "public" | "app_only";
 
@@ -17,21 +19,22 @@ export interface AppPageViewLog {
   record(view: AppPageView): Promise<void>;
 }
 
-const MAX_PATH = 2048;
-const MAX_USER_AGENT = 512;
-const MAX_IP = 64;
-const MAX_IN_FLIGHT = 32;
-const DROP_REPORT_INTERVAL_MS = 60_000;
+export const ACCESS_TABLE: PgMigrationDefinition = {
+  id: "deploy/access/0001",
+  statements: [
+    "CREATE TABLE IF NOT EXISTS deployments (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
+    `CREATE TABLE IF NOT EXISTS deployment_access (
+        id TEXT PRIMARY KEY REFERENCES deployments(id) ON DELETE CASCADE,
+        last_access_at BIGINT NOT NULL
+      )`,
+  ],
+};
 
-const clip = (value: string | null, max: number): string | null => (value === null ? null : value.slice(0, max));
-
-export function createPostgresAppPageViewLog(connectionString: string): AppPageViewLog {
-  const { q } = createPgPool(connectionString, [
-    {
-      id: "deploy/app-page-views/0001",
-      statements: [
-        "CREATE TABLE IF NOT EXISTS deployments (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
-        `CREATE TABLE IF NOT EXISTS app_page_views(
+const APP_PAGE_VIEWS_TABLE: PgMigrationDefinition = {
+  id: "deploy/app-page-views/0001",
+  statements: [
+    "CREATE TABLE IF NOT EXISTS deployments (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
+    `CREATE TABLE IF NOT EXISTS app_page_views(
       id BIGSERIAL PRIMARY KEY,
       deployment_id TEXT NOT NULL REFERENCES deployments(id),
       version INTEGER,
@@ -42,11 +45,48 @@ export function createPostgresAppPageViewLog(connectionString: string): AppPageV
       ip TEXT,
       user_agent TEXT
     )`,
-        `CREATE INDEX IF NOT EXISTS app_page_views_by_deployment_at ON app_page_views(deployment_id, at DESC)`,
-        `CREATE INDEX IF NOT EXISTS app_page_views_by_at ON app_page_views(at)`,
-      ],
-    },
-  ]);
+    `CREATE INDEX IF NOT EXISTS app_page_views_by_deployment_at ON app_page_views(deployment_id, at DESC)`,
+    `CREATE INDEX IF NOT EXISTS app_page_views_by_at ON app_page_views(at)`,
+  ],
+};
+
+export const DEPLOYMENT_EXPANSION: PgMigrationDefinition[] = [
+  ACCESS_TABLE,
+  APP_PAGE_VIEWS_TABLE,
+  ...durableMapExpansion("deployments", {
+    tables: [
+      { table: "deployment_access", primaryKey: "id" },
+      { table: "app_page_views", primaryKey: "id" },
+    ],
+    references: [
+      {
+        table: "deployment_access",
+        name: "deployment_access_id_fkey",
+        columns: "id",
+        references: "deployments(tenant_id, id)",
+        onDelete: "CASCADE",
+      },
+      {
+        table: "app_page_views",
+        name: "app_page_views_deployment_id_fkey",
+        columns: "deployment_id",
+        references: "deployments(tenant_id, id)",
+      },
+    ],
+  }),
+  inboundIndexes("deployments", ["name"]),
+];
+
+const MAX_PATH = 2048;
+const MAX_USER_AGENT = 512;
+const MAX_IP = 64;
+const MAX_IN_FLIGHT = 32;
+const DROP_REPORT_INTERVAL_MS = 60_000;
+
+const clip = (value: string | null, max: number): string | null => (value === null ? null : value.slice(0, max));
+
+export function createPostgresAppPageViewLog(connectionString: string): AppPageViewLog {
+  const { q } = createPgPool(connectionString, DEPLOYMENT_EXPANSION);
   let inFlight = 0;
   let dropped = 0;
   let lastDropReport = 0;
