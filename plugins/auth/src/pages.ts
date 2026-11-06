@@ -41,6 +41,7 @@ const STYLE = `${HARBOUR_STYLE}
   .card .btn.alternative{ border:1px solid var(--line); background:#fdfdfb; color:var(--ink); }
   .card .btn.alternative::after{ color:var(--muted); }
   .card .btn.alternative:hover{ background:#fff; }
+  .card .btn.alternative:hover::after{ color:var(--ink); }
   .divider{ display:flex; align-items:center; gap:12px; margin:16px 0; color:var(--muted); font-size:10px; font-weight:600; letter-spacing:.08em; }
   .divider::before,.divider::after{ content:""; flex:1; height:1px; background:var(--line); }
   .note{ color:var(--muted); font-size:11px; line-height:1.5; margin:4px 0 0; }
@@ -111,7 +112,8 @@ export function signInPage(o: {
       title: "Sign in",
       brandName: o.brandName,
       heading: `Sign in to ${wordmark(o.brandName)}`,
-      body: `<div class="actions">${trustedButton}</div>`,
+      msg: "Your team's conversations, connections and scheduled work are waiting.",
+      body: `<div class="actions">${trustedButton.replace('class="btn"', 'class="btn alternative"')}</div>`,
     });
   }
   const trusted = trustedButton ? `${trustedButton}<div class="divider">OR</div>` : "";
