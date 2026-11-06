@@ -28,6 +28,7 @@ import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER, type PortalIdentity } fro
 import { errMessage } from "../util/errors.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { canonicalPayload } from "../../plugins/chassis/src/source-auth-sign.ts";
+import { KEEP_ALIVE_TIMEOUT_MS } from "../../plugins/chassis/src/http.ts";
 import { armBodyDeadline, PayloadTooLargeError, readRawBody, sendJson, verifyOrReject } from "./http.ts";
 import {
   findRoute,
@@ -80,7 +81,6 @@ async function capabilityAdminDenied(
   return null;
 }
 
-const ALB_IDLE_TIMEOUT_MS = 60_000;
 const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 function needlessEscape(escaped: string): boolean {
@@ -530,7 +530,7 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
   ready.catch((err: unknown) => console.error("[server] fastify initialization failed:", errMessage(err)));
   server.requestTimeout = 0;
   server.headersTimeout = 10_000;
-  server.keepAliveTimeout = ALB_IDLE_TIMEOUT_MS + 5_000;
+  server.keepAliveTimeout = KEEP_ALIVE_TIMEOUT_MS;
   server.maxConnections = 1024;
 
   const capabilitySecret = deps.capabilitySecret ?? deps.signingSecret;

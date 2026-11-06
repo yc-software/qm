@@ -102,6 +102,7 @@ import {
   originOf,
   isLoopbackUrl,
   isSecureOrLoopbackUrl,
+  KEEP_ALIVE_TIMEOUT_MS,
 } from "../../chassis/src/http.ts";
 import {
   CORE_API_URL as CORE,
@@ -112,7 +113,6 @@ import {
 } from "../../chassis/src/env.ts";
 import { isDeploymentGitRoute } from "../../chassis/src/deployment-git.ts";
 
-const ALB_IDLE_TIMEOUT_MS = 60_000;
 const PUBLIC_URL = (process.env.PUBLIC_WEB_URL ?? "http://localhost:8097").replace(/\/$/, "");
 const SESSION_SECRET = process.env.PORTAL_SESSION_SECRET;
 const { ttl: SESSION_TTL_S, max: SESSION_MAX_TTL_S } = sessionLifetime();
@@ -1717,7 +1717,7 @@ function validEmailDomain(value: string): boolean {
 export async function startServer(options: { port: number; host?: string; core?: CoreHandoff }): Promise<void> {
   bootChecks();
   core = options.core;
-  server.keepAliveTimeout = ALB_IDLE_TIMEOUT_MS + 5_000;
+  server.keepAliveTimeout = KEEP_ALIVE_TIMEOUT_MS;
   if (process.env.AUTH_EMBEDDED === "1") {
     if (AUTH_BROKER_UPSTREAM !== "http://127.0.0.1:8099") {
       throw new Error("Embedded auth requires the loopback broker upstream");
