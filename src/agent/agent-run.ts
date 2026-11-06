@@ -11,6 +11,9 @@ import {
   recordStoppedTurn,
   imageRefs,
   resumeInterruptedToolCall,
+  runApprovedToolCall,
+  approvedCallSteerNote,
+  deniedCallSteerNote,
   type BridgedTool,
   type SteerIntake,
 } from "./turn-support.ts";
@@ -63,7 +66,7 @@ import {
   titleUserPrompt,
 } from "./session-title-prompt.ts";
 import { providerTurnError } from "../model/provider-error.ts";
-import { asError, swallow, swallowAs } from "../util/errors.ts";
+import { asError, reportFailure, swallow, swallowAs } from "../util/errors.ts";
 import { startPhase } from "../../plugins/chassis/src/error-reporting.ts";
 import {
   defaultInteractiveThinkingLevel,
@@ -927,8 +930,23 @@ export function createAgent(opts?: AgentOptions): Agent {
       };
       let activeSteps: StepRecorder | undefined;
       const tools = recordingTools(createTurnTools(ref, dispatched), () => activeSteps);
-      const resumed = await resumeInterruptedToolCall(dispatched, ref, tools as unknown as BridgedTool[]);
-      const turn = resumed ? { ...dispatched, history: resumed.history } : dispatched;
+      const approvedItems: Item[] = [];
+      for (const call of dispatched.approvedToolCalls ?? [])
+        approvedItems.push(
+          ...(
+            await runApprovedToolCall(
+              call,
+              ref,
+              tools as unknown as BridgedTool[],
+              dispatched.cancel ? { cancel: dispatched.cancel } : {},
+            )
+          ).items,
+        );
+      const approvedTurn = approvedItems.length
+        ? { ...dispatched, history: [...dispatched.history, ...approvedItems] }
+        : dispatched;
+      const resumed = await resumeInterruptedToolCall(approvedTurn, ref, tools as unknown as BridgedTool[]);
+      const turn = resumed ? { ...approvedTurn, history: resumed.history } : approvedTurn;
       const { entry } = await createTurnSession(
         withRequestHeaders(route.model, route.billing !== "model_gateway", wantFast),
         turn.session.id,
@@ -1017,6 +1035,7 @@ export function createAgent(opts?: AgentOptions): Agent {
         const unrecordedPrompts = new Set<string>();
         const retractedMessages = new Set<unknown>();
         const checked = { retry: [] as string[], prod: [] as string[] };
+        const approvalSteers = new Map<string, string>();
         let persistError: Error | undefined;
         const persist = (write: () => Promise<unknown>): void => {
           thinkTail = thinkTail.then(async () => {
@@ -1048,8 +1067,12 @@ export function createAgent(opts?: AgentOptions): Agent {
               steerWake = new AbortController();
               entry.ref.steered = steerWake.signal;
             }
+            const recorded = approvalSteers.get(text) ?? text;
+            approvalSteers.delete(text);
             persist(() =>
-              steer ? recordSteerIntake(turn, steer) : turn.emit({ kind: "Wake", wakeCause: "system", body: { text } }),
+              steer
+                ? recordSteerIntake(turn, steer)
+                : turn.emit({ kind: "Wake", wakeCause: "system", body: { text: recorded } }),
             );
           }
           await thinkTail;
@@ -1139,6 +1162,7 @@ export function createAgent(opts?: AgentOptions): Agent {
           else turn.cancel.addEventListener("abort", onCancel, { once: true });
         }
         const steeredSeen = recordedMessageTimestamps(turn.history);
+        let liveApprovalTail: Promise<void> = Promise.resolve();
         const stopSignalPoll =
           signals && turn.runId
             ? startSignalPoll(
@@ -1146,6 +1170,33 @@ export function createAgent(opts?: AgentOptions): Agent {
                 turn.runId,
                 {
                   onSteer: async (text, ts, request, acknowledge) => {
+                    if (request?.approval) {
+                      if (!turn.resolveSteeredApproval) return false;
+                      if (!entry.agentSession.isStreaming || toolAbort.signal.aborted) return false;
+                      const decided = await turn.resolveSteeredApproval(request);
+                      if (decided.kind === "ignored") return;
+                      const settled = liveApprovalTail
+                        .then(async () => {
+                          const ran =
+                            decided.kind === "run"
+                              ? await runApprovedToolCall(decided.call, entry.ref, tools as unknown as BridgedTool[], {
+                                  cancel: toolAbort.signal,
+                                })
+                              : null;
+                          const note = (withResult: boolean) =>
+                            decided.kind === "run" && ran
+                              ? approvedCallSteerNote(decided, ran, withResult)
+                              : deniedCallSteerNote(decided);
+                          if (entry.agentSession.isStreaming) {
+                            approvalSteers.set(note(true), note(false));
+                            await entry.agentSession.steer(note(true));
+                            steerWake.abort();
+                          } else await entry.ref.emit?.({ kind: "UserMessage", hidden: true, text: note(false) });
+                        })
+                        .catch((error: unknown) => reportFailure("pi: live approval outcome", error, decided.kind));
+                      liveApprovalTail = settled;
+                      return;
+                    }
                     if (ts && steeredSeen.has(ts)) return;
                     if (!entry.agentSession.isStreaming || toolAbort.signal.aborted) return false;
                     const prepared = await turn.prepareSteer?.(text, request);
@@ -1431,6 +1482,7 @@ export function createAgent(opts?: AgentOptions): Agent {
         } finally {
           turn.cancel?.removeEventListener("abort", onCancel);
           await stopSignalPoll?.();
+          await liveApprovalTail;
           if (pendingSteers.length) entry.agentSession.clearQueue();
           unsubscribeMessageEnd?.();
           unsubscribe?.();

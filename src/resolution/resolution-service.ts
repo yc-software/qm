@@ -6,7 +6,6 @@ import type { AclStore } from "../acl/acl-store.ts";
 import { audienceEgressFloor, audienceDeniedFloor } from "./audience-floor.ts";
 import { entitledScopes } from "./context-filter.ts";
 import { resolveSecurityPolicy, type SecurityScreenMode } from "../security/security-posture.ts";
-import type { AgentPrompt } from "../named-agents/named-agents.ts";
 
 export interface ResolutionService {
   scopeFor(conversation: Conversation, actor: Principal): ScopeId;
@@ -23,16 +22,14 @@ export function conversationScope(
   return scopeId("channel", ref);
 }
 
-export function composeSoul(orgSoul: string | null, scopeSoul: string | null, agent?: AgentPrompt): string {
+export function composeSoul(orgSoul: string | null, scopeSoul: string | null): string {
   const parts: string[] = [];
   if (orgSoul?.trim()) parts.push(`## Organization instructions\n${orgSoul}`);
-  const precedence = orgSoul?.trim() ? " (organization instructions take precedence)" : "";
-  const ownSoul = scopeSoul?.trim() && scopeSoul.trim() !== orgSoul?.trim() ? scopeSoul : undefined;
-  if (agent)
+  if (scopeSoul?.trim() && scopeSoul.trim() !== orgSoul?.trim()) {
     parts.push(
-      [`## Who you are: ${agent.displayName}${precedence}`, agent.line, ...(ownSoul ? ["", ownSoul] : [])].join("\n"),
+      `## Conversation instructions${orgSoul?.trim() ? " (organization instructions take precedence)" : ""}\n${scopeSoul}`,
     );
-  else if (ownSoul) parts.push(`## Conversation instructions${precedence}\n${ownSoul}`);
+  }
   return parts.join("\n\n");
 }
 
@@ -41,7 +38,6 @@ export function createResolutionService(
   config: ScopedConfigStore,
   acl: AclStore,
   screening: SecurityScreenMode = "enforce",
-  agentPrompt?: (scope: ScopeId) => Promise<AgentPrompt | undefined>,
 ): ResolutionService {
   const orgScope = scopeId("org", orgId);
 
@@ -67,7 +63,7 @@ export function createResolutionService(
 
       const orgSoul = external ? "" : (config.getSoul(orgScope) ?? "");
       const scopeSoul = external ? null : config.getSoul(scope);
-      const systemPrompt = composeSoul(orgSoul, scopeSoul, external ? undefined : await agentPrompt?.(scope));
+      const systemPrompt = composeSoul(orgSoul, scopeSoul);
 
       const orgPolicy = config.getCommandPolicy(orgScope) ?? defaultOrgPolicy();
       const scopePolicy = config.getCommandPolicy(scope) ?? undefined;

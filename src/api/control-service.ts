@@ -32,13 +32,7 @@ import {
 import { actsAsScope, parseScopeId, type Permission, type ScopeId } from "../types.ts";
 import { cronRef, encodeRef } from "../acl/resource-ref.ts";
 import type { App, VisibleCron } from "./app.ts";
-import {
-  AgentLocked,
-  type AgentCreateInput,
-  type AgentEditInput,
-  type AgentOutcome,
-  type AgentView,
-} from "../named-agents/named-agents.ts";
+import { PersonaLocked } from "../personas/channel-personas.ts";
 
 export interface CronCreateRequest {
   runtime?: Cron["runtime"];
@@ -195,21 +189,12 @@ export interface ControlService {
     expectedVersion?: number,
   ): Promise<ControlOk<{ version: number }> | ControlErr<SoulWriteFailureCode>>;
   shareArtifact(req: ShareArtifactRequest, claims: CapabilityClaims): Promise<ShareArtifactResult>;
-  agents(req: AgentsRequest, claims: CapabilityClaims): Promise<AgentsResult>;
 }
-
-export type AgentsRequest =
-  | ({ action: "create" } & AgentCreateInput)
-  | ({ action: "edit" } & AgentEditInput)
-  | { action: "archive"; agent: string }
-  | { action: "list" };
-
-export type AgentsResult = AgentOutcome<{ agent: AgentView }> | AgentOutcome<{ agents: AgentView[] }>;
 
 type SoulWriteFailureCode = "soul_update_denied" | "soul_version_conflict" | "soul_update_failed";
 
 function soulWriteFailureCode(e: unknown): SoulWriteFailureCode {
-  if (e instanceof SoulUpdateDeniedError || e instanceof AgentLocked) return "soul_update_denied";
+  if (e instanceof SoulUpdateDeniedError || e instanceof PersonaLocked) return "soul_update_denied";
   if (e instanceof SoulVersionConflictError) return "soul_version_conflict";
   return "soul_update_failed";
 }
@@ -968,26 +953,11 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
           permission,
         };
       } catch (e) {
-        if (e instanceof AdminError || e instanceof AgentLocked) {
+        if (e instanceof AdminError || e instanceof PersonaLocked) {
           return { ok: false, code: "forbidden", message: errMessage(e) };
         }
         return { ok: false, code: "share_failed", message: errMessage(e) };
       }
-    },
-
-    async agents(req, capability) {
-      const actor = { id: capability.actorId, live: livePersonCapability(capability) && !capability.triggered };
-      const agents = app.namedAgents;
-      if (!agents || !(await agents.toolOffered(actor, capability.scopeId)))
-        return {
-          ok: false,
-          code: "forbidden",
-          message: "named agents are managed only by a person, live, in their own DM with the named_agents flag on",
-        };
-      if (req.action === "create") return agents.create(actor, req);
-      if (req.action === "edit") return agents.edit(actor, req);
-      if (req.action === "archive") return agents.archive(actor, req.agent);
-      return { ok: true, agents: await agents.list(actor) };
     },
   };
 }

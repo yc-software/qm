@@ -16,7 +16,7 @@ interface Change {
   error?: string;
 }
 
-type Step = Change & { run?: () => Promise<unknown> };
+type Step = Change & { run: () => Promise<unknown> };
 
 async function plan(ctx: ApiCtx, actorId: string, principalId: string): Promise<Step[]> {
   const { app, deps } = ctx;
@@ -29,8 +29,8 @@ async function plan(ctx: ApiCtx, actorId: string, principalId: string): Promise<
   };
   const owns = async (owner: string, scope: ScopeId) => (await isThem(owner)) || (await personal(scope));
   const steps: Step[] = [];
-  const step = (kind: string, id: string, label: string | undefined, action: string, run?: () => Promise<unknown>) =>
-    steps.push({ kind, id, label: label || id, action, ...(run ? { run } : {}) });
+  const step = (kind: string, id: string, label: string | undefined, action: string, run: () => Promise<unknown>) =>
+    steps.push({ kind, id, label: label || id, action, run });
 
   if (deps.identity && deps.identity.deactivationSource(principalId) !== "manual")
     step("principal", principalId, "sign-in", "deactivate", () => deps.identity!.deactivate(principalId));
@@ -67,8 +67,13 @@ async function plan(ctx: ApiCtx, actorId: string, principalId: string): Promise<
           await computers!.setDefault(actorId, c.ownerScopeId, null);
         await computers!.retire(actorId, c.id);
       });
-  for (const agent of (await app.namedAgents?.lastActiveOwnerOf(isThem)) ?? [])
-    step("agent", agent.id, agent.displayName, "orphan_notice");
+  const personas = app.channelPersonas;
+  for (const handover of (await personas?.handovers(isThem)) ?? []) {
+    const to = (await deps.directory?.get(handover.to))?.displayName || handover.to;
+    step("persona", handover.persona.id, `${handover.persona.name} → ${to}`, "transfer_owner", () =>
+      personas!.handOver(handover, actorId),
+    );
+  }
   return steps;
 }
 
@@ -90,7 +95,7 @@ export async function offboardUser(ctx: ApiCtx): Promise<void> {
   const user = input.apply === true ? await deps.admin!.users.markOffboarded(principalId, actor.id) : undefined;
   const changes: Change[] = [];
   for (const { run, ...change } of steps) {
-    if (input.apply === true && run) {
+    if (input.apply === true) {
       try {
         await run();
         change.result = "done";

@@ -20,7 +20,7 @@ export function createApp(deps: AppDeps): App {
   const ambient = createAmbientHelpers(deps, app, helpers);
   const methods = {
     swarms: deps.swarms,
-    namedAgents: deps.namedAgents,
+    channelPersonas: deps.channelPersonas,
     personas: deps.personas,
     ...createTurnMethods(deps, helpers, ambient),
     ...createSessionMethods(deps, helpers),

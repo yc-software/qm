@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { executesOnApprove } from "../core/orchestrator/approvals.ts";
 import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
 import type {
   PendingApproval,
@@ -167,6 +168,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
       ...(r.grantModes ? { grantModes: r.grantModes } : {}),
       blocksInput: r.blocksInput !== false,
       ...(r.kind === "approval" ? { kind: r.kind } : {}),
+      ...executesOnApprove(r),
     }));
   }
 
@@ -548,14 +550,14 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     change: { id?: string; homes: readonly ScopeId[]; grantee?: ScopeId },
     actor: { id: string; live: boolean },
   ): Promise<void> {
-    if (!deps.namedAgents) return;
+    if (!deps.channelPersonas) return;
     const reach = new Set<ScopeId>(change.grantee ? [change.grantee] : []);
     for (const home of change.homes) {
       reach.add(home);
       if (change.id)
         for (const g of await deps.acl.grantsFor(home, encodeRef(skillRef(change.id)))) reach.add(g.granteeScopeId);
     }
-    for (const scope of reach) await deps.namedAgents.assertMayInstruct(scope, actor);
+    for (const scope of reach) await deps.channelPersonas.assertMayInstruct(scope, actor);
   }
 
   async function republishIfShared(skill: Skill, editorId: string): Promise<Skill> {
@@ -768,6 +770,17 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     }
     for (const signal of await deps.signals.takePending(runId)) {
       if (signal.kind === "abort" || signal.kind === "client_result") continue;
+      if (signal.request?.approval) {
+        let replayRunId: string | undefined;
+        try {
+          const { redeliveryKey: _redeliveryKey, clientTools: _clientTools, ...decision } = signal.request;
+          replayRunId = (await app.turn({ ...decision, async: true })).runId;
+        } catch (err) {
+          swallow(`signals: approval-decision replay for run ${runId}`, err);
+        }
+        drained.push({ signal, ...(replayRunId ? { replayRunId } : {}) });
+        continue;
+      }
       let replayRunId: string | undefined;
       let replayOutcomeKnown = true;
       if (signal.request) {

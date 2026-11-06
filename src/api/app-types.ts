@@ -1,6 +1,6 @@
 import type { PersonaService } from "../personas/persona-service.ts";
 import type { TeamStore } from "../teams/teams.ts";
-import type { NamedAgents } from "../named-agents/named-agents.ts";
+import type { ChannelPersonas } from "../personas/channel-personas.ts";
 import type { CronScriptTrial } from "../cron/script.ts";
 import type { ExternalSlackPolicies } from "../resolution/external-slack.ts";
 import type { Mailer } from "../../plugins/chassis/src/resend.ts";
@@ -282,10 +282,13 @@ export interface SessionSearchHit {
 
 export interface App {
   swarms?: SwarmService;
-  namedAgents?: NamedAgents;
+  channelPersonas?: ChannelPersonas;
   personas?: PersonaService;
   turn(req: TurnRequest, replay?: { signalDedupKey: string }): Promise<TurnResult>;
-  getApproval(requestId: string, viewer?: string): Promise<(PendingApprovalRecord & { requestId: string }) | null>;
+  getApproval(
+    requestId: string,
+    viewer?: string,
+  ): Promise<(Omit<PendingApprovalRecord, "call"> & { requestId: string; executesOnApprove?: boolean }) | null>;
   subscribeSessionStates(cb: (event: SessionStateEvent) => void, opts?: SubscribeOptions): () => void;
   subscribeLedgerEvents(cb: (event: OwnedLedgerEvent) => void, opts?: SubscribeOptions): () => void;
   listSessionApprovals(sessionId: string, viewer: string): Promise<PendingApproval[]>;
@@ -711,7 +714,7 @@ export interface AppDeps {
   teams?: Pick<TeamStore, "isMember">;
   emailAuthMembers?: DirectoryMember[];
   projects?: ProjectStore;
-  namedAgents?: NamedAgents;
+  channelPersonas?: ChannelPersonas;
   deploy: DeployService;
   deployAppsDomain?: string;
   deploymentGitPrincipals?: DeploymentGitPrincipals;

@@ -8,7 +8,6 @@ import {
 } from "../../src/agent/agent.ts";
 import { NonRetryableTurnError, ProviderTurnError, TitleRejected } from "../../src/core/turn-error.ts";
 import { NeedsApproval } from "../../src/tools/primitives.ts";
-import { createAgentTools } from "../../src/agent/agent-tools.ts";
 import { toolCallApprovalKey } from "../../src/core/approval-id.ts";
 import { deterministicCompactSummary, estimateHistoryTokens } from "../../src/agent/context-compaction.ts";
 import { countTokens } from "../../src/util/tokens.ts";
@@ -93,6 +92,18 @@ function withCallIds(emit: (item: NewItem) => Promise<Item>): RecordItem {
   };
 }
 
+const heldTurns = new Map<string, { turn: AgentTurnInput; release: () => void }>();
+
+export const mockHeldTurns = {
+  get(name: string): AgentTurnInput | undefined {
+    return heldTurns.get(name)?.turn;
+  },
+  release(name: string): void {
+    heldTurns.get(name)?.release();
+    heldTurns.delete(name);
+  },
+};
+
 export function createMockAgent(): Agent {
   const shedSessions = new Set<string>();
   const boomAlwaysSessions = new Set<string>();
@@ -170,6 +181,7 @@ export function createMockAgent(): Agent {
         approvalKey?: string;
         grantModes?: { session: boolean; always: boolean };
         summary?: string;
+        call?: { tool: string; input: Record<string, unknown> };
       }> = [];
       let pausedOnApproval = false;
       const gateTool = (tool: string): boolean => {
@@ -184,7 +196,37 @@ export function createMockAgent(): Agent {
         return true;
       };
 
-      if (turn.readOnly && READ_ONLY_BLOCKED_PREFIXES.some((prefix) => command0.startsWith(prefix))) {
+      if (turn.approvedToolCalls?.length) {
+        reply = "";
+        for (const approved of turn.approvedToolCalls) {
+          const allowed = turn.toolApprovalGate?.(approved.tool, toolCallApprovalKey(approved.tool, approved.input));
+          await turn.emit({
+            kind: "ToolCall",
+            tool: approved.tool,
+            callId: approved.callId,
+            body: { approvedRequestId: approved.requestId },
+          });
+          await turn.emit({
+            kind: "ToolResult",
+            tool: approved.tool,
+            callId: approved.callId,
+            isError: !allowed,
+            text: allowed ? `sent ${JSON.stringify(approved.input)}` : "[blocked: needs human approval]",
+            body: { approvedRequestId: approved.requestId },
+          });
+          usedTool = true;
+          reply = allowed ? `sent ${JSON.stringify(approved.input)}` : "[approved call blocked]";
+        }
+      } else if (command0.startsWith("!hold ")) {
+        const name = command0.slice("!hold ".length).trim();
+        await new Promise<void>((release) => heldTurns.set(name, { turn, release }));
+        reply = `released ${name}`;
+      } else if (command0.startsWith("!withdraw ")) {
+        const card = command0.slice("!withdraw ".length).trim();
+        const outcome = await turn.tools.withdrawApproval?.(card);
+        usedTool = true;
+        reply = outcome?.withdrawn.length ? `withdrew ${outcome.withdrawn.join("; ")}` : "nothing withdrawn";
+      } else if (turn.readOnly && READ_ONLY_BLOCKED_PREFIXES.some((prefix) => command0.startsWith(prefix))) {
         reply = "[strict/read-only posture: that tool is unavailable]";
       } else if (command0 === "!boom") {
         throw new Error("boom: simulated turn fault");
@@ -328,10 +370,6 @@ export function createMockAgent(): Agent {
         reply = [turn.systemPrompt, turn.environment].filter((s) => s && s.trim()).join("\n\n");
       } else if (command0 === "!wallclock") {
         reply = `wallclock:${turn.turnWallClockMs ?? 0}`;
-      } else if (command0 === "!toolnames") {
-        reply = createAgentTools({ current: turn.tools }, { controlTools: true })
-          .map((tool) => tool.name)
-          .join(",");
       } else if (command0 === "!surfacename") {
         reply = `surface:${turn.surfaceName ?? "none"}`;
       } else if (command0.startsWith("!think ")) {
@@ -469,8 +507,9 @@ export function createMockAgent(): Agent {
         }
         usedTool = true;
         reply = `ran ${ran}`;
-      } else if (command0.startsWith("!declared ")) {
-        const args = JSON.parse(command0.slice("!declared ".length)) as Record<string, unknown>;
+      } else if (command0.startsWith("!declared ") || command0.startsWith("!declared-noted ")) {
+        const noted = command0.startsWith("!declared-noted ");
+        const args = JSON.parse(command0.slice(command0.indexOf(" ") + 1)) as Record<string, unknown>;
         const callKey = toolCallApprovalKey("example_send", args);
         usedTool = true;
         if (turn.toolApprovalGate?.("example_send", callKey)) reply = `sent ${JSON.stringify(args)}`;
@@ -482,9 +521,10 @@ export function createMockAgent(): Agent {
             approvalKey: callKey,
             summary: "example_send",
             grantModes: { session: false, always: false },
+            call: { tool: "example_send", input: args },
           });
-          pausedOnApproval = true;
-          reply = "";
+          pausedOnApproval = !noted;
+          reply = noted ? "waiting on the approval card" : "";
         }
       } else if (command0.startsWith("!read ") && gateTool("read")) {
         usedTool = true;
