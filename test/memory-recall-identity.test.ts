@@ -105,16 +105,19 @@ test("one claim in two notebooks prints once, as the first notebook's copy with 
   await notebook.capture("personal:a", ["Dana prefers email"], AT);
   await notebook.capture("org:acme", ["dana prefers email ", "Offsite is in May"], AT);
   const [mine] = await notebook.facts!("personal:a");
+  const [theirs, offsite] = await notebook.facts!("org:acme");
   const recalled = await recallAcrossScopes(notebook, ["personal:a", "org:acme"], { query: "dana" });
   assert.deepEqual(
     recalled.map(({ scope, id, text }) => [scope, id, text]),
     [
       ["personal:a", mine!.id, "- (2026-10-01) Dana prefers email"],
-      ["org:acme", (await notebook.facts!("org:acme"))[1]!.id, "- (2026-10-01) Offsite is in May"],
+      ["org:acme", offsite!.id, "- (2026-10-01) Offsite is in May"],
     ],
   );
   const hits = await searchAcrossScopes(notebook, ["personal:a", "org:acme"], "dana", 20);
-  assert.deepEqual(hits, [{ scopeId: "personal:a", fact: `#${mine!.id} (2026-10-01) Dana prefers email` }]);
+  assert.deepEqual(hits, [
+    { scopeId: "personal:a", fact: `#${mine!.id} (2026-10-01) Dana prefers email (also [org:acme] #${theirs!.id})` },
+  ]);
 });
 
 test("an id-less provider keeps its own lines and order, and an exact copy of a notebook claim prints once", async () => {
@@ -219,6 +222,22 @@ test("a claim in two notebooks keeps the first notebook copy's own place, and th
       ["personal:a", "- (2026-10-01) filler 1"],
       ["personal:a", "- (2026-10-01) filler 0"],
       ["personal:a", "- (2026-10-01) Shared claim X"],
+    ],
+  );
+});
+
+test("a kept copy that no longer fits the budget gives way to a copy in a block already open", async () => {
+  const notebook = createPostgresMemoryService(testDatabaseUrl());
+  await notebook.capture("personal:a", ["Shared claim X"], AT);
+  await notebook.capture("personal:a", ["x".repeat(400)], AT + 1);
+  await notebook.capture("org:acme", ["shared claim x"], AT);
+  await notebook.capture("org:acme", ["Offsite is in May"], AT + 1);
+  const recalled = await recallAcrossScopes(notebook, ["personal:a", "org:acme"], { query: "q", maxChars: 110 });
+  assert.deepEqual(
+    recalled.map(({ scope, text }) => [scope, text]),
+    [
+      ["org:acme", "- (2026-10-01) Offsite is in May"],
+      ["org:acme", "- (2026-10-01) shared claim x"],
     ],
   );
 });

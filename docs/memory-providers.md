@@ -17,13 +17,14 @@ full; scores are never compared across sources. Later turns add only newly selec
 Provider rows without fact ids are compared by content hash. An MCP provider whose answer carries
 `structuredContent.facts`, a list of `{ id, text, date?, kind? }` with string `id` and `text`
 (gbrain's `memory_recall` returns `id`, `text`, `date` and `kind`), gives one row per fact, and
-search shows it as `<provider id>:<fact id>`. A `facts` value that isn't such a list fails the read with `malformed_fact`. Without
+search shows it as `<provider id>:<fact id>`. A `facts` value that isn't such a list, or a fact id that is empty or holds whitespace, fails the read with `malformed_fact`. Whitespace runs in a fact's text, line breaks included, become one space, and a blank fact is skipped. Without
 `structuredContent.facts`, the answer becomes one row per line, so it should return one
 self-contained fact per line; a `memorable` procedure block stays one row. A claim held by several
 sources (compared ignoring case and surrounding spaces) is shown once, as the first notebook's copy
 when there is one, at that copy's own place in its list. The lists holding the other copies skip
 them, so a second copy neither moves the claim up nor costs its list a turn. Search ends that line
-with the other provider copies' addresses, such as `(also acme-company:4821)`. Only new rows are added, a row already shown stays counted while its provider keeps
+with the other copies' addresses, such as `(also acme-company:4821)`, or `[org:acme] #12` for a copy
+in another notebook. Only new rows are added, a row already shown stays counted while its provider keeps
 answering (at most as many earlier rows as its latest answer showed, and at least one, so a later
 refusal is still noted), and a row that drops out is never announced as removed. When a provider
 that showed rows earlier refuses the member, is withheld from the conversation or is no longer
@@ -251,7 +252,7 @@ What this does:
 | Outcome `timed_out`                                                                              | A read took longer than `timeoutMs`.                                                                                                                                | Raise `timeoutMs` (up to 30000) or fix the provider's latency.                                                                                  |
 | Write outcome `unknown`                                                                          | A write took longer than 30 seconds.                                                                                                                                | Fix the provider's latency, and check whether the write landed before repeating it.                                                             |
 | Outcome `failed`, including `server_error` from the provider's token endpoint                    | Wrong tool name, schema mismatch, a provider error, or its OAuth server failing.                                                                                    | Check the provider's logs and the `tool` and `*Arg` mappings.                                                                                   |
-| Outcome `failed` with `malformed_fact`                                                           | The answer's `structuredContent.facts` is not a list, or an entry lacks a string `id` or `text`.                                                                    | Fix the provider's `facts`; QM uses none of that answer.                                                                                        |
+| Outcome `failed` with `malformed_fact`                                                           | The answer's `structuredContent.facts` is not a list, or an entry lacks a string `id` or `text`, or its `id` is empty or holds whitespace.                          | Fix the provider's `facts`; QM uses none of that answer.                                                                                        |
 | New facts reach the provider minutes late                                                        | Automatic capture waits `MEMORY_CAPTURE_QUIET_MS`.                                                                                                                  | Lower `MEMORY_CAPTURE_QUIET_MS`, or use explicit writes.                                                                                        |
 
 ## Migrating from the retired `BRAIN_*` variables

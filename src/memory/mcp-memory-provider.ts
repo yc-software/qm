@@ -38,8 +38,14 @@ function providerFacts(result: CallToolResult): ProviderFact[] | undefined {
         `memory provider returned fact ${index} with id ${typeof fact?.id} and text ${typeof fact?.text}; both must be strings`,
         { code: "malformed_fact" },
       );
+    if (!fact.id || /\s/.test(fact.id))
+      throw new McpCallError(`memory provider returned fact ${index} with an id that is empty or holds whitespace`, {
+        code: "malformed_fact",
+      });
   });
-  return facts as ProviderFact[];
+  return (facts as ProviderFact[])
+    .map((fact) => ({ ...fact, text: fact.text.replace(/\s+/g, " ").trim() }))
+    .filter((fact) => fact.text);
 }
 
 const stamped = (fact: ProviderFact) => {
