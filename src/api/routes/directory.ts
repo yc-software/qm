@@ -31,7 +31,7 @@ async function canonicalPrincipal(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
   const id = ctx.params.id!;
   if (!id) return sendJson(res, 404, { error: "not_found" });
-  await deps.identity?.refresh(true);
+  await deps.identity?.refresh();
   return sendJson(res, 200, { principalId: id, canonicalId: canonicalPerson(id) });
 }
 
@@ -93,6 +93,7 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
         type: m.type,
         ...(typeof m.slackId === "string" && m.slackId ? { slackId: m.slackId } : {}),
         ...(typeof m.avatarUrl === "string" && m.avatarUrl.startsWith("https://") ? { avatarUrl: m.avatarUrl } : {}),
+        ...(m.isBot === true ? { isBot: true } : {}),
       }));
     await app.upsertDirectory(members, numOrUndef(b.membersSyncedAt));
     memberCount = members.length;

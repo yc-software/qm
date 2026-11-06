@@ -1,0 +1,58 @@
+workflows:
+  - id: receipts_and_outstanding_ar
+    runbook_id: ar_receipts_and_outstanding
+    aliases:
+      - ar report
+      - accounts receivable report
+      - ar aging
+      - collection report
+      - collection tracker
+      - open ar
+      - outstanding ar
+      - outstanding receivables
+      - customer outstanding
+      - receipts and outstanding
+      - receipts from
+      - receipts for
+      - sap migrated invoices
+    populations:
+      - id: native_outstanding
+        required_assets:
+          - skill: netsuite-readonly-finance
+            file: SKILL.md
+          - skill: sharechat-ar-collection
+            file: SKILL.md
+      - id: sap_migrated_pending
+        required_assets:
+          - skill: netsuite-readonly-finance
+            file: references/suiteql.md
+          - skill: sharechat-ar-collection
+            file: SKILL.md
+      - id: receipts
+        required_assets:
+          - skill: netsuite-readonly-finance
+            file: SKILL.md
+          - skill: sharechat-ar-collection
+            file: SKILL.md
+      - id: unapplied_receipts
+        required_assets:
+          - skill: finance-reconciliation
+            file: references/review.md
+          - skill: sharechat-ar-collection
+            file: SKILL.md
+      - id: customer_advances
+        required_assets:
+          - skill: finance-reconciliation
+            file: SKILL.md
+          - skill: sharechat-ar-collection
+            file: SKILL.md
+    reviewers:
+      evidence:
+        - netsuite-readonly-finance
+      calculation:
+        - finance-reconciliation
+      report:
+        - financial-statement-audit
+    report_contract:
+      skill: sharechat-ar-collection
+      file: SKILL.md

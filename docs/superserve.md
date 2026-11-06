@@ -96,7 +96,7 @@ changes during rollback have the same replacement behavior described above.
 Backend tests run without an account:
 
 ```sh
-node --experimental-test-module-mocks --test test/superserve-*.test.ts
+DATABASE_URL=<disposable Postgres> node scripts/run-pg-tests.mjs test/superserve-*.test.ts
 ```
 
 The template verifier requires an API key and creates a temporary sandbox.

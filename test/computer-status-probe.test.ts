@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createToolContext, type ToolContextDeps } from "../src/tools/primitives.ts";
-import { scopeId, type WorkspaceLayer } from "../src/types.ts";
+import { scopeId } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 
 const handle: SandboxHandle = { id: "h", rootDir: "/workspace" };
@@ -9,15 +9,14 @@ const healthy = { machine: "healthy", listed: "warm", provisioned: true, guestRe
 
 function ctxFor(sandbox: Partial<Sandbox>, provision: ToolContextDeps["provision"]) {
   const scope = scopeId("channel", "C1");
-  const layers: WorkspaceLayer[] = [{ scopeId: scope, mountPath: "", mode: "rw" }];
   return createToolContext({
     sandbox: { profile: { backend: "sprites" }, ...sandbox } as unknown as Sandbox,
     provision,
-    layers,
+    writableScopeId: scope,
+    readOnlyScopeIds: [],
     commandPolicy: () => ({ mode: "denylist", rules: [] }),
     authorizeCommand: () => false,
     grantedHandles: [],
-    workspace: {} as never,
     deploy: {} as never,
     acl: {} as never,
     createdBy: "U1",
@@ -90,7 +89,6 @@ test("a probe that hangs on the real exec path reports NOT answering within the 
 
 test("status for an explicit sandbox probes its exec path instead of trusting the provider", async () => {
   const scope = scopeId("channel", "C1");
-  const layers: WorkspaceLayer[] = [{ scopeId: scope, mountPath: "", mode: "rw" }];
   const access = { resource: { id: "sb1", ownerScopeId: scope }, crossScope: false } as never;
   const ctx = createToolContext({
     sandbox: {
@@ -101,11 +99,11 @@ test("status for an explicit sandbox probes its exec path instead of trusting th
     provisionResource: async () => handle,
     accessSandboxResource: async () => access,
     sandboxResources: { status: async () => healthy } as never,
-    layers,
+    writableScopeId: scope,
+    readOnlyScopeIds: [],
     commandPolicy: () => ({ mode: "denylist", rules: [] }),
     authorizeCommand: () => false,
     grantedHandles: [],
-    workspace: {} as never,
     deploy: {} as never,
     acl: {} as never,
     createdBy: "U1",

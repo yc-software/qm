@@ -3,6 +3,7 @@ import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import {
   exerciseDeliveryExpiry,
   exerciseDeliveryExpiryRevive,
+  exerciseDeliveryFail,
   exerciseDeliveryStore,
 } from "./delivery-store-contract.ts";
 
@@ -16,4 +17,8 @@ test("memory delivery store: undelivered rows expire after the TTL instead of cl
 
 test("memory delivery store: once-ever keys revive after a TTL drop instead of deadlocking", async () => {
   await exerciseDeliveryExpiryRevive((opts) => createDeliveryStore(opts));
+});
+
+test("memory delivery store: a permanently refused row fails once and never revives", async () => {
+  await exerciseDeliveryFail((opts) => createDeliveryStore(opts));
 });

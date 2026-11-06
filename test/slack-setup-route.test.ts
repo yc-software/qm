@@ -3,9 +3,9 @@ import { createServer } from "node:http";
 import test from "node:test";
 import { getSlackInstallation, startSlackInstallation } from "../src/api/routes/admin/slack-installation.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createSlackInstallationStore } from "../src/surfaces/slack-installation.ts";
 import { createManagedSlack } from "../src/surfaces/slack-managed.ts";
+import { testMap } from "./support/test-database.ts";
 
 type SlackSetupStatus = {
   configured: boolean;
@@ -21,7 +21,7 @@ type SlackSetupStatus = {
 };
 
 async function fixture(t: test.TestContext) {
-  const map = createMemoryMap();
+  const map = testMap();
   const store = createSlackInstallationStore(
     "test",
     map as Parameters<typeof createSlackInstallationStore>[1],
@@ -83,8 +83,8 @@ test("admin status supplies stable links before creation without enabling instal
   assert.ok(first.setup);
   assert.ok(second.setup);
   assert.deepEqual(first.setup, second.setup);
-  assert.equal(first.setup.submitUrl, "https://agent.example/admin?slack=setup");
-  assert.equal(first.setup.installUrl, "https://agent.example/admin?slack=install");
+  assert.equal(first.setup.submitUrl, "https://agent.example/settings/slack-settings?slack=setup");
+  assert.equal(first.setup.installUrl, "https://agent.example/settings/slack-settings?slack=install");
   assert.equal(first.setup.tokenUrl, "https://api.slack.com/apps");
   assert.equal(first.setup.connected, false);
   assert.equal((await f.store.status()).managed, false);

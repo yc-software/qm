@@ -1,16 +1,18 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { renderSandboxProviders } from "../src/core/environment-facts.ts";
-import { renderGatewayContext } from "../src/core/gateway-context.ts";
-import { sharedFilesSystemSection } from "../src/core/attachments.ts";
+import {
+  renderGatewayContext,
+  renderSandboxProviders,
+  sharedFilesSystemSection,
+} from "../src/core/orchestrator/prompt-blocks.ts";
 import {
   deliveryMenu,
   renderConversationRoster,
-  renderReachRoster,
   renderStandingObligations,
 } from "../src/core/orchestrator/prompt-blocks.ts";
-import type { Cron, Webhook, Monitor, GrantedHandle, CandidateDestination } from "../src/types.ts";
-import type { DirectoryMember, DirectoryChannel } from "../src/directory/directory-store.ts";
+import type { GrantedHandle, CandidateDestination } from "../src/types.ts";
+import type { Cron, Webhook, Monitor } from "../src/triggers/types.ts";
+import type { DirectoryMember } from "../src/directory/directory-store.ts";
 
 function checkOrder<T>(items: T[], render: (items: T[]) => string | null): void {
   const before = structuredClone(items);
@@ -25,10 +27,6 @@ test("prompt inventories keep identical bytes across permutations, including cap
   checkOrder<DirectoryMember>(
     ids.map((id) => ({ principalId: id, displayName: "Same name", type: "internal" })),
     renderConversationRoster,
-  );
-  checkOrder<DirectoryChannel>(
-    ids.map((id) => ({ channelId: id, name: id })),
-    (items) => renderReachRoster(items, "Alex"),
   );
   checkOrder<CandidateDestination>(
     ids.map((id) => ({ key: id, label: id, type: "slack", target: id })),

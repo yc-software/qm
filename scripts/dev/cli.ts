@@ -23,7 +23,6 @@ import {
   listLeases,
   lockDir,
   myLease,
-  readMeta,
   readPidFile,
   releaseSlotLock,
   supervisorAlive,
@@ -86,7 +85,7 @@ const commandOptions: Record<string, readonly string[]> = {
   doctor: ["json", "fix", "no-slack"],
 };
 
-const devServiceNames = [...CHILD_ORDER, "web-ui"];
+const devServiceNames = [...CHILD_ORDER];
 
 const allowedOptions = commandOptions[command];
 if (allowedOptions) {
@@ -133,7 +132,7 @@ let withWeb = requestedSurface !== "slack";
 const devCallerEnv = (): Record<string, string> => ({ ...callerEnvSnapshot(), DEV_INSTANCE_ORG_ID: orgId });
 
 async function legacyTeardown(lease: LeaseInfo): Promise<void> {
-  for (const name of ["portal", "admin", "web", "web-build", "slack", "core", "tunnel", "supervisor"]) {
+  for (const name of ["portal", "web", "web-build", "slack", "core", "tunnel", "supervisor"]) {
     const pid = readPidFile(lease.lockDir, `${name}.pid`);
     if (pid) await killTree(pid, 5000);
   }
@@ -220,8 +219,6 @@ async function bootOnSlot(slot: string, worktree: string, branch: string): Promi
       `worktree=${worktree}`,
       `branch=${branch}`,
       `port=${ports.core}`,
-      `web_port=${ports.web}`,
-      `admin_port=${ports.admin}`,
       `portal_port=${ports.portal}`,
       `slack=${withSlack ? "1" : "0"}`,
       `web=${withWeb ? "1" : "0"}`,
@@ -303,7 +300,6 @@ async function bootOnSlot(slot: string, worktree: string, branch: string): Promi
 function printSuccess(result: BootResult, branch: string): void {
   const ports = slotPorts(result.slot);
   const lock = lockDir(result.slot, store);
-  const meta = readMeta(lock);
   out("");
   const slackLive = result.slackEnabled !== false;
   out(
@@ -313,15 +309,12 @@ function printSuccess(result: BootResult, branch: string): void {
   );
   out(`   branch : ${branch}`);
   if (result.webEnabled !== false)
-    out(`   portal : http://localhost:${ports.portal}  -> prod-style front door: the assistant at / and /admin`);
-  out(
-    `   core   : http://localhost:${ports.core}  (org=${orgId}, session_store=${meta.session_store}, run_store=${meta.run_store})`,
-  );
+    out(
+      `   portal : http://localhost:${ports.portal}  -> prod-style front door: the assistant at / and settings at /settings`,
+    );
+  out(`   core   : http://localhost:${ports.core}  (org=${orgId})`);
   if (slackLive) out(`   slack  : @${result.handle}  -> mention it in example.slack.com to test`);
-  if (result.webEnabled !== false)
-    out(`   web    : http://localhost:${ports.portal}/  (direct: http://localhost:${ports.web})`);
-  if (result.webEnabled !== false)
-    out(`   admin  : http://localhost:${ports.portal}/admin/   (direct: http://localhost:${ports.web}/admin/)`);
+  if (result.webEnabled !== false) out(`   web    : http://localhost:${ports.portal}/`);
   out(`   logs   : ${lock}`);
   out(`   status : dev status   |   diagnose: dev doctor   |   apply env/code changes: dev up (reloads in place)`);
   out(`   down   : dev down   (auto-reaped if this worktree is removed)`);
@@ -568,7 +561,7 @@ async function cmdStatus(): Promise<number> {
       [
         String(r.slot).padEnd(7),
         state.padEnd(18),
-        (ports ? `${ports.core}/${ports.web}/${ports.admin}/${ports.portal}` : "-").padEnd(21),
+        (ports ? `${ports.core}/${ports.portal}` : "-").padEnd(21),
         age.padEnd(8),
         (r.mine ? "this" : "").padEnd(5),
         String(r.branch ?? "-").padEnd(28),
@@ -596,9 +589,7 @@ async function withMySupervisor<T>(fn: (sock: string, lease: LeaseInfo) => Promi
   return await fn(sock, mine);
 }
 
-const supervisorChildNames = (names: string[]): string[] => [
-  ...new Set(names.map((name) => (name === "web-ui" ? "web" : name))),
-];
+const supervisorChildNames = (names: string[]): string[] => [...new Set(names)];
 
 async function cmdRestart(): Promise<number> {
   const children = supervisorChildNames(positionals.slice(1));
@@ -673,7 +664,7 @@ async function main(): Promise<number> {
       });
     default:
       console.error(
-        "usage: dev [up|down|status|restart|canary|logs|doctor] [--json] [--force] [--rotate] [--strict] [--sandbox local|sprites|smolmachines|e2b|porter|agent37|superserve|do-managed-agents|auto] [--surface web|slack|both] [--no-slack] [--no-watch] [--org id] [--fix]",
+        "usage: dev [up|down|status|restart|canary|logs|doctor] [--json] [--force] [--rotate] [--strict] [--sandbox local|sprites|smolmachines|e2b|porter|agent37|superserve|do-managed-agents|render|auto] [--surface web|slack|both] [--no-slack] [--no-watch] [--org id] [--fix]",
       );
       return EXIT.usage;
   }

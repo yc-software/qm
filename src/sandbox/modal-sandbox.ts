@@ -1,7 +1,5 @@
 import { cleanupFailedProvision } from "./sandbox.ts";
 import { randomUUID } from "node:crypto";
-import type { WorkspaceLayer } from "../types.ts";
-import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { orgId as configOrgId } from "../config.ts";
@@ -10,7 +8,6 @@ import { swallowAs, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import { nonInteractiveShellPrefix, DROPPED_PROXY_ENV, forceThroughProxyEnv } from "./sandbox-env.ts";
 import { createExecProcessSessions, type ExecProcessIo } from "./exec-process-session.ts";
-import { materializeRoLayers } from "./ro-layers.ts";
 import { withConnectorSdk, type ConnectorSdkBundle } from "./connector-sdk.ts";
 import { createLayerToolInstaller } from "./layer-tool-install.ts";
 import type { LayerInstallFile } from "../deployment/load-layer.ts";
@@ -50,8 +47,6 @@ import type {
 
 const HOME_DIR = "/root";
 const WORKSPACE_BASENAME = "workspace";
-const RO_LAYERS_TAR = ".ro-layers.tar";
-const RO_LAYERS_MANIFEST = ".ro-layers.manifest";
 const HOME_TAR = `${HOME_DIR}/.qm-home.tar`;
 const HYDRATED_MARKER = `${HOME_DIR}/.qm-hydrated`;
 const ACTIVITY_TOUCH_INTERVAL_MS = 10 * 60_000;
@@ -99,7 +94,7 @@ export interface ModalSandboxOptions extends BlobStagingOptions {
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
 }
 
-export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandboxOptions): Sandbox {
+export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
   const client = opts.client;
   const prefix = opts.namePrefix ?? "qm";
   const defaultTimeoutSec = opts.defaultTimeoutSec ?? 600;
@@ -166,7 +161,6 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
   async function snapshotHome(scope: string, session: ModalSession): Promise<void> {
     if (isJobComputerScope(scope)) return;
     await assertHydrated(session);
-    if (!store.update) throw new Error("native Modal checkpoints require an atomic durable store");
     const requested = await store.update(scope, (current) => {
       if (current.sandboxId !== session.sandboxId) throw new Error("Modal checkpoint source has been replaced");
       return {
@@ -420,8 +414,8 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
 
   function withSession<T>(name: string, action: (session: ModalSession) => Promise<T>): Promise<T> {
     if (scratchKeyByName.has(name)) return withSessionUnlocked(name, action);
-    const shared = advisoryLock.withSharedLock ?? advisoryLock.withLock;
-    return shared(`modal-use:${scopeByName.get(name) ?? "default"}`, () => withSessionUnlocked(name, action));
+    const key = `modal-use:${scopeByName.get(name) ?? "default"}`;
+    return advisoryLock.withSharedLock(key, () => withSessionUnlocked(name, action));
   }
 
   const lastTouchMs = new Map<string, number>();
@@ -676,10 +670,8 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
     ...execFileOps,
     ...blobStaging,
 
-    async provision(layers: WorkspaceLayer[], provOpts?: ProvisionOptions): Promise<SandboxHandle> {
+    async provision(scope: string, provOpts?: ProvisionOptions): Promise<SandboxHandle> {
       const scratch = provOpts?.scratch;
-      const writable = layers.find((l) => l.mode === "rw") ?? layers[0];
-      const scope = writable?.scopeId ?? "default";
       let name: string;
       let coldStart: boolean;
       if (scratch) {
@@ -712,18 +704,6 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
             writeAbs: (abs, data) => writeAbsBytes(name, abs, data),
           },
           `mkdir -p ${shq(workspaceDir)}${credLinks}`,
-        );
-
-        await materializeRoLayers(
-          workspace,
-          layers,
-          handle,
-          {
-            readFile: (h, rel) => sandbox.readFile(h, rel),
-            writeFileBytes: (h, rel, data) => sandbox.writeFileBytes(h, rel, data),
-            exec: (script, t) => execRaw(name, script, t),
-          },
-          { manifest: RO_LAYERS_MANIFEST, tar: RO_LAYERS_TAR, label: "modal" },
         );
 
         return handle;

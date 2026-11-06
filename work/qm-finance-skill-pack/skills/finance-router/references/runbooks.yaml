@@ -1,0 +1,23 @@
+runbooks:
+  - id: ar_receipts_and_outstanding
+    intents:
+      - receipts_and_outstanding_ar
+    skill: sharechat-ar-collection
+    description: >
+      Receipts for an approved inclusive window plus outstanding receivables at an approved cutoff, with native and migrated populations separated and reconciled to the applicable control.
+    requires_slots:
+      - receipt_start
+      - receipt_end
+      - as_of
+      - entity
+      - subsidiary_scope
+      - currency_basis
+      - accounting_book
+      - comparison_basis
+      - reporting_timezone
+    scope_defaults: {}
+    source_boundary: netsuite_execute
+    calculation_boundary: deployment-owned-ar-calculation-tool
+    report_contract: sharechat-ar-collection
+    note: >
+      After QM accepts the exact human-approved source plan, use the stage-scoped read-only source boundary. After independent raw-evidence review, use the stage-scoped pinned calculation and workbook tool with accepted artifact IDs and digests. No bundled script owns source compilation or report generation.

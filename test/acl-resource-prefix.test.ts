@@ -1,17 +1,19 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { cronRef, deployRef, encodeRef, parseRef, serviceCredRef, skillRef } from "../src/acl/resource-ref.ts";
-import { principalEntitledToScope } from "../src/resolution/context-filter.ts";
+import { entitledScopes } from "../src/resolution/context-filter.ts";
 import { scopeId, type Principal } from "../src/types.ts";
+import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
+import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 
 const ORG = scopeId("org", "default-org");
 const P = (id: string, teamIds: string[] = []): Principal => ({ id, type: "internal", teamIds });
 
 function aclWith(grantees: string[]) {
-  const acl = createAclStore();
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   return Promise.all(
     grantees.map((g) =>
       acl.grant({
@@ -29,40 +31,28 @@ const slugs = (grants: { ref: string }[]) => grants.map((g) => g.ref.slice("serv
 
 test("org-wide grant is usable by any audience (DM and channel)", async () => {
   const acl = await aclWith([ORG]);
-  const dm = await acl.grantsOfKind(
-    "service-cred",
-    [P("U1")],
-    scopeId("personal", "U1"),
-    ORG,
-    principalEntitledToScope,
-  );
+  const dm = await acl.grantsOfKind("service-cred", [P("U1")], scopeId("personal", "U1"), ORG, entitledScopes);
   assert.deepEqual(slugs(dm), ["x"]);
   const channel = await acl.grantsOfKind(
     "service-cred",
     [P("U1"), P("U2"), P("U3")],
     scopeId("channel", "C"),
     ORG,
-    principalEntitledToScope,
+    entitledScopes,
   );
   assert.deepEqual(slugs(channel), ["x"]);
 });
 
 test("personal grant: usable in the grantee's DM, FAILS CLOSED in a mixed channel", async () => {
   const acl = await aclWith([scopeId("personal", "bob")]);
-  const bobDm = await acl.grantsOfKind(
-    "service-cred",
-    [P("bob")],
-    scopeId("personal", "bob"),
-    ORG,
-    principalEntitledToScope,
-  );
+  const bobDm = await acl.grantsOfKind("service-cred", [P("bob")], scopeId("personal", "bob"), ORG, entitledScopes);
   assert.deepEqual(slugs(bobDm), ["x"]);
   const mixed = await acl.grantsOfKind(
     "service-cred",
     [P("bob"), P("alice")],
     scopeId("channel", "C"),
     ORG,
-    principalEntitledToScope,
+    entitledScopes,
   );
   assert.deepEqual(slugs(mixed), []);
   const aliceDm = await acl.grantsOfKind(
@@ -70,7 +60,7 @@ test("personal grant: usable in the grantee's DM, FAILS CLOSED in a mixed channe
     [P("alice")],
     scopeId("personal", "alice"),
     ORG,
-    principalEntitledToScope,
+    entitledScopes,
   );
   assert.deepEqual(slugs(aliceDm), []);
 });
@@ -82,7 +72,7 @@ test("team grant: usable when every member is on the team, fails closed otherwis
     [P("U1", ["eng"]), P("U2", ["eng"])],
     scopeId("channel", "C"),
     ORG,
-    principalEntitledToScope,
+    entitledScopes,
   );
   assert.deepEqual(slugs(allEng), ["x"]);
   const oneOutsider = await acl.grantsOfKind(
@@ -90,7 +80,7 @@ test("team grant: usable when every member is on the team, fails closed otherwis
     [P("U1", ["eng"]), P("U2", ["sales"])],
     scopeId("channel", "C"),
     ORG,
-    principalEntitledToScope,
+    entitledScopes,
   );
   assert.deepEqual(slugs(oneOutsider), []);
 });
@@ -102,7 +92,7 @@ test("channel grant: usable in that channel's conversations regardless of who is
     [P("U1"), P("U2"), P("U3")],
     scopeId("channel", "C1"),
     ORG,
-    principalEntitledToScope,
+    entitledScopes,
   );
   assert.deepEqual(slugs(inChannel), ["x"]);
   const otherChannel = await acl.grantsOfKind(
@@ -110,29 +100,20 @@ test("channel grant: usable in that channel's conversations regardless of who is
     [P("U1"), P("U2")],
     scopeId("channel", "C2"),
     ORG,
-    principalEntitledToScope,
+    entitledScopes,
   );
   assert.deepEqual(slugs(otherChannel), []);
-  const memberDm = await acl.grantsOfKind(
-    "service-cred",
-    [P("U1")],
-    scopeId("personal", "U1"),
-    ORG,
-    principalEntitledToScope,
-  );
+  const memberDm = await acl.grantsOfKind("service-cred", [P("U1")], scopeId("personal", "U1"), ORG, entitledScopes);
   assert.deepEqual(slugs(memberDm), []);
 });
 
 test("empty audience is entitled to nothing (fail closed)", async () => {
   const acl = await aclWith([ORG]);
-  assert.deepEqual(
-    await acl.grantsOfKind("service-cred", [], scopeId("personal", "U1"), ORG, principalEntitledToScope),
-    [],
-  );
+  assert.deepEqual(await acl.grantsOfKind("service-cred", [], scopeId("personal", "U1"), ORG, entitledScopes), []);
 });
 
 test("a service-cred grant owned by a NON-org scope is ignored (anti self-grant via the open /v1/grants route)", async () => {
-  const acl = createAclStore();
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   await acl.grant({
     ownerScopeId: scopeId("personal", "attacker"),
     ref: "service-cred:foo",
@@ -140,13 +121,7 @@ test("a service-cred grant owned by a NON-org scope is ignored (anti self-grant 
     permission: "read",
     grantedBy: "attacker",
   });
-  const sneaky = await acl.grantsOfKind(
-    "service-cred",
-    [P("U1")],
-    scopeId("personal", "U1"),
-    ORG,
-    principalEntitledToScope,
-  );
+  const sneaky = await acl.grantsOfKind("service-cred", [P("U1")], scopeId("personal", "U1"), ORG, entitledScopes);
   assert.deepEqual(slugs(sneaky), []);
   await acl.grant({
     ownerScopeId: ORG,
@@ -155,18 +130,12 @@ test("a service-cred grant owned by a NON-org scope is ignored (anti self-grant 
     permission: "read",
     grantedBy: "admin",
   });
-  const legit = await acl.grantsOfKind(
-    "service-cred",
-    [P("U1")],
-    scopeId("personal", "U1"),
-    ORG,
-    principalEntitledToScope,
-  );
+  const legit = await acl.grantsOfKind("service-cred", [P("U1")], scopeId("personal", "U1"), ORG, entitledScopes);
   assert.deepEqual(slugs(legit), ["foo"]);
 });
 
 test("the prefix filters: a deployment grant is never returned for the service-cred prefix", async () => {
-  const acl = createAclStore();
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   await acl.grant({
     ownerScopeId: ORG,
     ref: "deployment:d1",
@@ -181,18 +150,12 @@ test("the prefix filters: a deployment grant is never returned for the service-c
     permission: "read",
     grantedBy: "admin",
   });
-  const got = await acl.grantsOfKind(
-    "service-cred",
-    [P("U1")],
-    scopeId("personal", "U1"),
-    ORG,
-    principalEntitledToScope,
-  );
+  const got = await acl.grantsOfKind("service-cred", [P("U1")], scopeId("personal", "U1"), ORG, entitledScopes);
   assert.deepEqual(slugs(got), ["x"]);
 });
 
 test("file handles exclude non-file grants — a skill/cron/deploy grant never becomes a bogus shared/ file", async () => {
-  const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
+  const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
   await files.put({
     id: "F1",
     ownerScopeId: ORG,
@@ -203,7 +166,9 @@ test("file handles exclude non-file grants — a skill/cron/deploy grant never b
     data: Buffer.from("hello"),
     direction: "out",
   });
-  const acl = createAclStore(undefined, { resolveFiles: (refs) => files.resolveByIds(refs) });
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()), {
+    resolveFiles: (refs) => files.resolveByIds(refs),
+  });
   const grantee = scopeId("channel", "C");
   await acl.grant({
     ownerScopeId: ORG,
@@ -227,7 +192,7 @@ test("file handles exclude non-file grants — a skill/cron/deploy grant never b
     ["F1"],
     "only the file grant materializes as a handle",
   );
-  const audienceHandles = await acl.handlesForAudience([P("U1")], grantee, ORG, principalEntitledToScope);
+  const audienceHandles = await acl.handlesForAudience([P("U1")], grantee, ORG, entitledScopes);
   assert.deepEqual(
     audienceHandles.map((h) => h.fileId),
     ["F1"],
@@ -236,7 +201,7 @@ test("file handles exclude non-file grants — a skill/cron/deploy grant never b
 });
 
 test("grantsOfKind selects by kind across all artifact families (one store, four kinds)", async () => {
-  const acl = createAclStore();
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   await acl.grant({
     ownerScopeId: ORG,
     ref: encodeRef(skillRef("s1")),
@@ -267,7 +232,7 @@ test("grantsOfKind selects by kind across all artifact families (one store, four
   });
   const kinds = ["skill", "deploy", "cron", "service-cred"] as const;
   for (const kind of kinds) {
-    const got = await acl.grantsOfKind(kind, [P("U1")], scopeId("personal", "U1"), ORG, principalEntitledToScope);
+    const got = await acl.grantsOfKind(kind, [P("U1")], scopeId("personal", "U1"), ORG, entitledScopes);
     assert.deepEqual(
       got.map((g) => parseRef(g.ref).kind),
       [kind],

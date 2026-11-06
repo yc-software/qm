@@ -84,7 +84,6 @@ test("draft stays outside AI chat and Send it submits the combined instruction",
           message: instruction ? `${instruction}\n\nSend it` : "Send it",
           expectedProposalAt: 101,
           model: "gpt-5.6-sol",
-          harness: "pi",
           thinkingLevel: "medium",
           fastMode: false,
         });
@@ -194,9 +193,9 @@ test("draft stays outside AI chat and Send it submits the combined instruction",
     invalidateRuntimeConfigs();
     unavailable = true;
     render(embedded("test-inbox-deleted-model"), host);
-    await until(() => Boolean(host.querySelector('select option[value="pi:gpt-5.6-sol"]')));
+    await until(() => Boolean(host.querySelector('select option[value="gpt-5.6-sol"]')));
     const replacement = host.querySelector<HTMLSelectElement>("select")!;
-    replacement.value = "pi:gpt-5.6-sol";
+    replacement.value = "gpt-5.6-sol";
     replacement.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
     await until(() => Boolean(host.querySelector(".composer-input:not(:disabled)")));
     unavailable = false;

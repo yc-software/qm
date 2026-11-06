@@ -1,14 +1,10 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { NoDefaultSandboxError } from "../src/sandbox/sandbox-routing.ts";
 import { scopeId, type GrantedHandle, type IncomingAttachment } from "../src/types.ts";
 import { createToolContext } from "../src/tools/primitives.ts";
 import { createSpritesSandbox } from "../src/sandbox/sprites-sandbox.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { installFakeSprites } from "./support/fake-sprites.ts";
 import {
   createMemoryBlobTransferStore,
@@ -19,7 +15,6 @@ import {
   MAX_OUTBOUND_FILES,
   MAX_INBOUND_FILES,
   MAX_ATTACHMENT_BYTES,
-  environmentNote,
   inboundIssueList,
   inboundIssuesNote,
   inboundManifest,
@@ -27,13 +22,12 @@ import {
   withoutAlreadyIngested,
   mimeFromName,
   safeAttachmentName,
-  senderNote,
-  sharedFilesSystemSection,
   turnFileId,
 } from "../src/core/attachments.ts";
+import { environmentNote, senderNote, sharedFilesSystemSection } from "../src/core/orchestrator/prompt-blocks.ts";
 import { createAttachStaging } from "../src/core/orchestrator/attach-tool.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { storedItem } from "../src/sessions/items.ts";
+import { testAdvisoryLock, testMap } from "./support/test-database.ts";
 
 test("turn file ids are stable within one attempt and fenced across retries", () => {
   assert.equal(turnFileId("run-1", 1, 123), turnFileId("run-1", 1, 123));
@@ -155,11 +149,11 @@ test("reading shared/ lists the files shared with you without touching a compute
     provision: async () => {
       throw new Error("must not provision");
     },
-    layers: [{ scopeId: scopeId("personal", "U1"), mountPath: "", mode: "rw" }],
+    writableScopeId: scopeId("personal", "U1"),
+    readOnlyScopeIds: [],
     commandPolicy: () => ({ mode: "denylist", rules: [] }),
     authorizeCommand: () => false,
     grantedHandles: [handle("shared/report.txt"), handle("shared/budget.xlsx"), handle("shared/report.txt")],
-    workspace: {} as never,
     deploy: {} as never,
     acl: {} as never,
     createdBy: "U1",
@@ -208,27 +202,28 @@ test("materializeInbound records the surface file id so a later turn can tell th
 });
 
 test("withoutAlreadyIngested drops images this context already holds and keeps everything else", () => {
-  const entry = (type: string, payload: unknown) => ({
-    sessionId: "s",
-    seq: 1,
-    parentSeq: null,
-    type: type as never,
-    payload,
-    scopeLabel: "org:test" as never,
-    createdAt: 0,
-  });
-  const entries = [
-    entry("user", {
-      text: "here",
-      attachments: [
-        { name: "shot.png", mimetype: "image/png", sizeBytes: 3, direction: "in", sourceId: "Fseen" },
-        { name: "plan.pdf", mimetype: "application/pdf", sizeBytes: 3, direction: "in", sourceId: "Fpdf" },
-        { name: "huge.png", mimetype: "image/png", sizeBytes: 6_000_000, direction: "in", sourceId: "Fhuge" },
-        { name: "old.png", mimetype: "image/png", sizeBytes: 3, direction: "in" },
-      ],
-    }),
-    entry("assistant", { attachments: [{ name: "out.png", direction: "out", sourceId: "Fout" }] }),
-    entry("user", { text: "no files" }),
+  const at = { sessionId: "s", seq: 1, createdAt: 0 };
+  const items = [
+    storedItem(
+      {
+        kind: "UserMessage",
+        text: "here",
+        body: {
+          attachments: [
+            { name: "shot.png", mimetype: "image/png", sizeBytes: 3, direction: "in", sourceId: "Fseen" },
+            { name: "plan.pdf", mimetype: "application/pdf", sizeBytes: 3, direction: "in", sourceId: "Fpdf" },
+            { name: "huge.png", mimetype: "image/png", sizeBytes: 6_000_000, direction: "in", sourceId: "Fhuge" },
+            { name: "old.png", mimetype: "image/png", sizeBytes: 3, direction: "in" },
+          ],
+        },
+      },
+      at,
+    ),
+    storedItem(
+      { kind: "AgentMessage", body: { attachments: [{ name: "out.png", direction: "out", sourceId: "Fout" }] } },
+      at,
+    ),
+    storedItem({ kind: "UserMessage", text: "no files" }, at),
   ];
   const seen = { name: "shot.png", mimetype: "image/png", sizeBytes: 3, blobId: "b1", sourceId: "Fseen" };
   const fresh = { name: "new.png", mimetype: "image/png", sizeBytes: 3, blobId: "b2", sourceId: "Fnew" };
@@ -236,7 +231,7 @@ test("withoutAlreadyIngested drops images this context already holds and keeps e
   const outbound = { name: "out.png", mimetype: "image/png", sizeBytes: 3, blobId: "b4", sourceId: "Fout" };
   const pdf = { name: "plan.pdf", mimetype: "application/pdf", sizeBytes: 3, blobId: "b5", sourceId: "Fpdf" };
   const huge = { name: "huge.png", mimetype: "image/png", sizeBytes: 6_000_000, blobId: "b6", sourceId: "Fhuge" };
-  assert.deepEqual(withoutAlreadyIngested([seen, fresh, anonymous, outbound, pdf, huge], entries), [
+  assert.deepEqual(withoutAlreadyIngested([seen, fresh, anonymous, outbound, pdf, huge], items), [
     fresh,
     anonymous,
     outbound,
@@ -502,14 +497,13 @@ test("attach needs at least one path", async () => {
 test("removeDir wipes a per-turn spool dir (and only it), tolerating an absent dir and refusing root", async () => {
   const ff = installFakeSprites();
   after(() => ff.cleanup());
-  const ws = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "fs-rm-")));
-  const sandbox = createSpritesSandbox(ws, {
-    initializationStore: createMemoryMap(),
-    advisoryLock: createMemoryAdvisoryLock(),
+  const sandbox = createSpritesSandbox({
+    initializationStore: testMap(),
+    advisoryLock: testAdvisoryLock(),
     token: "test-token",
     baseUrl: ff.baseUrl,
   });
-  const handle = await sandbox.provision([{ scopeId: "personal:U1", mountPath: "", mode: "rw" }]);
+  const handle = await sandbox.provision("personal:U1");
   await sandbox.writeFileBytes(handle, "spool/one.txt", new Uint8Array(Buffer.from("1")));
   await sandbox.writeFileBytes(handle, "spool/two.txt", new Uint8Array(Buffer.from("2")));
   await sandbox.writeFileBytes(handle, "keep.txt", new Uint8Array(Buffer.from("keep")));
@@ -527,14 +521,13 @@ test("removeDir wipes a per-turn spool dir (and only it), tolerating an absent d
 test("a binary file round-trips through the sandbox (base64-over-exec) without utf8 corruption", async () => {
   const ff = installFakeSprites();
   after(() => ff.cleanup());
-  const ws = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "fs-bin-")));
-  const sandbox = createSpritesSandbox(ws, {
-    initializationStore: createMemoryMap(),
-    advisoryLock: createMemoryAdvisoryLock(),
+  const sandbox = createSpritesSandbox({
+    initializationStore: testMap(),
+    advisoryLock: testAdvisoryLock(),
     token: "test-token",
     baseUrl: ff.baseUrl,
   });
-  const handle = await sandbox.provision([{ scopeId: "personal:U1", mountPath: "", mode: "rw" }]);
+  const handle = await sandbox.provision("personal:U1");
   const raw = new Uint8Array([0x00, 0x9f, 0x92, 0x96, 0xff, 0xfe]);
   await sandbox.writeFileBytes(handle, "keep.bin", raw);
   const read = await sandbox.readFileBytes(handle, "keep.bin");

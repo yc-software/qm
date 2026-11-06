@@ -1,5 +1,4 @@
 import { isDeepStrictEqual } from "node:util";
-import { createHash } from "node:crypto";
 import { isCronRuntime } from "../../../cron/runtime.ts";
 import { errMessage } from "../../../util/errors.ts";
 import { parseScopeId, type Destination } from "../../../types.ts";
@@ -9,6 +8,7 @@ import { audit, requireScopedAdmin } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
 import { notifyOwnerOfCronEdit } from "../../../triggers/edit-notice.ts";
 import { requireScopedResource } from "./common.ts";
+import { unattendedGrantRefusal } from "../../../cron/authority.ts";
 
 function isAdminCronDestination(v: unknown): v is Destination {
   if (typeof v !== "object" || v === null) return false;
@@ -138,11 +138,15 @@ export async function putAdminCronDestination(ctx: ApiCtx): Promise<void> {
   if (typeof body !== "object" || body === null || !("destination" in body)) {
     return sendJson(res, 400, { error: "bad_request", message: "destination is required; use null to clear" });
   }
-  if ((cron.unattendedGrants?.length ?? 0) > 0)
-    return sendJson(res, 409, {
-      error: "conflict",
-      message: "this cron carries unattended admin read grants, so only its owner can change where it delivers",
-    });
+  if ((cron.unattendedGrants?.length ?? 0) > 0) {
+    const refusal = await unattendedGrantRefusal(
+      app,
+      deps.admin,
+      cron,
+      ctx.capability ?? { actorId: actor.id, liveActor: true },
+    );
+    if (refusal) return sendJson(res, 409, { error: "conflict", message: refusal.message });
+  }
   const destination = (body as { destination: unknown }).destination;
   if (destination !== null && !isAdminCronDestination(destination)) {
     return sendJson(res, 400, {
@@ -180,16 +184,6 @@ export async function getAdminSkill(ctx: ApiCtx): Promise<void> {
   );
   if (!scoped) return;
   const { actor, record: skill } = scoped;
-  if (
-    ctx.capability?.sessionId &&
-    (await app.authorizeWorkflowSkillRead(ctx.capability.sessionId, {
-      name: skill.manifest.name,
-      skillId: skill.id,
-      skillVersion: skill.version,
-      contentDigest: createHash("sha256").update(skill.manifest.body).digest("hex"),
-    })) === false
-  )
-    return sendJson(res, 404, { error: "not_found" });
   const provenance = skill.pack;
   const provenancePack = provenance ? ((await app.getSkillPack(provenance.packId)) ?? undefined) : undefined;
   audit(deps, { principalId: actor.id, action: "skill.read", resource: id, scopeLabel: skill.scopeId });

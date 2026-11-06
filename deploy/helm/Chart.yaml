@@ -1,5 +1,5 @@
 apiVersion: v2
 name: qm
-description: Deploys qm core, web-ui (with admin), portal (with auth), and egress-proxy.
+description: Deploys qm core, which serves the public front door, and the egress proxy.
 type: application
-version: 0.2.8
+version: 0.4.0

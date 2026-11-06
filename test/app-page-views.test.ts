@@ -11,13 +11,15 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
-import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
-import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { scopeId } from "../src/types.ts";
 import type { FeatureFlagStore } from "../src/feature-flags.ts";
 import type { AppPageView, AppPageViewLog } from "../src/deploy/page-views.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
+import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 
 const SESSION_SECRET = "portal-session-secret";
 const LOGIN_URL = "https://portal.example.com";
@@ -48,18 +50,18 @@ function get(port: number, path: string, headers: Record<string, string>): Promi
   });
 }
 
-async function harness(log: AppPageViewLog) {
+async function agent(log: AppPageViewLog) {
   const upstream = createHttpServer((_req, res) => {
     res.writeHead(200, { "content-type": "text/html" });
     res.end("UPSTREAM OK");
   });
   upstream.listen(0);
   const upstreamPort = (upstream.address() as AddressInfo).port;
-  const acl = createAclStore();
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const deploy = createDeployService({
     ...singleProcessDeps(),
     externalSharingAllowed: async () => true,
-    deployStore: createDeployStore(),
+    deployStore: createDeployStore(testDeployBackings()),
     provider: {
       profile: { managedScaleToZero: false },
       apply: async () => ({ host: "127.0.0.1", port: upstreamPort }),
@@ -72,9 +74,9 @@ async function harness(log: AppPageViewLog) {
   const app = createApp({
     deploy,
     acl,
-    directory: createDirectoryStore(),
-    sessions: createMemorySessionStore(),
-    identity: createIdentityService(),
+    directory: createPostgresDirectoryStore(testDatabaseUrl()),
+    sessions: createPostgresSessionStore(testDatabaseUrl()),
+    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
   } as unknown as Parameters<typeof createApp>[0]);
   const deployed = await app.deploy({
     ownerScopeId: scopeId("personal", "alice@example.com"),
@@ -107,7 +109,7 @@ const settle = () => new Promise((resolve) => setImmediate(resolve));
 
 test("page loads of a published app are recorded with viewer, auth mode and request basics", async () => {
   const views: AppPageView[] = [];
-  const h = await harness({ record: async (view) => void views.push(view) });
+  const h = await agent({ record: async (view) => void views.push(view) });
   try {
     const owner = await get(h.port, "/reports?token=secret", {
       Accept: "text/html",
@@ -167,7 +169,7 @@ test("page loads of a published app are recorded with viewer, auth mode and requ
 
 test("the owner's framed shell counts once, not again for the inner app frame", async () => {
   const views: AppPageView[] = [];
-  const h = await harness({ record: async (view) => void views.push(view) });
+  const h = await agent({ record: async (view) => void views.push(view) });
   try {
     const shell = await get(h.port, "/", {
       Accept: "text/html",
@@ -194,7 +196,7 @@ test("a failing page-view log never blocks the page and is reported", async () =
   const errors: string[] = [];
   const original = console.error;
   console.error = (...args: unknown[]) => void errors.push(args.map(String).join(" "));
-  const h = await harness({ record: async () => Promise.reject(new Error("db down")) });
+  const h = await agent({ record: async () => Promise.reject(new Error("db down")) });
   try {
     const page = await get(h.port, "/", { Accept: "text/html", Cookie: session("alice@example.com") });
     assert.equal(page.status, 200);

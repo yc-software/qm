@@ -6,6 +6,8 @@ import { createServer } from "../src/api/server.ts";
 import type { App } from "../src/api/app.ts";
 import { CAPABILITY_TTL_MS, CONTROL_PLANE_AUD, mintCapabilityToken } from "../src/auth/capability-token.ts";
 import { scopeId } from "../src/types.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const SECRET = "deploy-always-on-route-secret".repeat(2);
 
@@ -45,14 +47,14 @@ describe("deployment always-on route", () => {
     };
     const app = {
       authorizesCapabilityScope: async () => true,
-      listDeployments: async () => [deployment],
+      getDeployment: async (id: string) => (id === deployment.id || id === deployment.name ? deployment : null),
       canManageDeployment: async (_id: string, principalId: string) => principalId === "U1",
       setDeploymentAlwaysOn: async (_id: string, alwaysOn: boolean) => {
         flag = alwaysOn;
         return { ...deployment, ...(alwaysOn ? { alwaysOn: true } : {}) };
       },
     } as unknown as App;
-    server = createServer(app, { signingSecret: SECRET });
+    server = createServer(app, { replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()), signingSecret: SECRET });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
   });

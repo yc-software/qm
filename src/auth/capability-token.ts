@@ -2,6 +2,7 @@ import { promisify } from "node:util";
 import { deflateRaw, inflateRaw } from "node:zlib";
 import { orgId as configOrgId } from "../config.ts";
 import type { CandidateDestination, Destination, EgressPolicy, Principal, ScopeId } from "../types.ts";
+import type { SessionOrigin } from "../sessions/session-store.ts";
 import { mintSignedPayload, verifySignedPayload } from "./signed-token.ts";
 
 export const CAPABILITY_TTL_MS = 60 * 60_000;
@@ -64,6 +65,7 @@ export interface CapabilityClaims {
   liveActor?: boolean;
   runId?: string;
   sessionId?: string;
+  origin?: SessionOrigin;
   runAttempt?: number;
   runLeaseToken?: string;
   deployment?: string;
@@ -167,9 +169,14 @@ export async function verifyCapabilityToken(
   if (claims.deployment !== undefined && (typeof claims.deployment !== "string" || !claims.deployment)) return null;
   if (claims.exp === 0) {
     if (
-      ![CONTROL_PLANE_AUD, OAUTH_CONSENT_AUD, CREDENTIAL_BROKER_AUD, TOOL_BROKER_AUD, EGRESS_PROXY_AUD, SANDBOX_MODEL_AUD].includes(
-        claims.aud ?? "",
-      )
+      ![
+        CONTROL_PLANE_AUD,
+        OAUTH_CONSENT_AUD,
+        CREDENTIAL_BROKER_AUD,
+        TOOL_BROKER_AUD,
+        EGRESS_PROXY_AUD,
+        SANDBOX_MODEL_AUD,
+      ].includes(claims.aud ?? "")
     )
       return null;
   } else if (!Number.isSafeInteger(claims.exp) || now >= claims.exp) return null;

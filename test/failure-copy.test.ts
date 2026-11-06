@@ -1,14 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import {
-  SESSION_BUSY_FIRE_TEXT,
-  SESSION_BUSY_USER_TEXT,
-  standaloneFailureText,
-  userFacingFailureClause,
-  userFacingFailureText,
-} from "../src/core/failure-copy.ts";
+import { standaloneFailureText, userFacingFailureClause } from "../src/core/failure-copy.ts";
 import { SECURITY_QUARANTINE_REFUSAL_TEXT } from "../plugins/chassis/src/security-quarantine.ts";
-import { GENERIC_FAILURE_TEXT } from "../plugins/chassis/src/failure-copy.ts";
+import { GENERIC_FAILURE_TEXT, userFacingFailureText } from "../plugins/chassis/src/failure-copy.ts";
 
 test("the shared failure policy renders quarantine canned, refused reasons verbatim, everything else generic", () => {
   const quarantine = {
@@ -21,14 +15,10 @@ test("the shared failure policy renders quarantine canned, refused reasons verba
   assert.equal(userFacingFailureClause(quarantine), SECURITY_QUARANTINE_REFUSAL_TEXT);
   assert.equal(standaloneFailureText(quarantine), SECURITY_QUARANTINE_REFUSAL_TEXT);
 
-  const busy = { status: "refused", refusalKind: "session_busy", reason: SESSION_BUSY_USER_TEXT } as const;
-  assert.equal(userFacingFailureText(busy), SESSION_BUSY_USER_TEXT);
-  assert.equal(standaloneFailureText(busy), SESSION_BUSY_USER_TEXT);
-  assert.equal(userFacingFailureClause(busy), "the conversation was busy with another task");
-
-  const busyFire = { status: "refused", refusalKind: "session_busy", reason: SESSION_BUSY_FIRE_TEXT } as const;
-  assert.equal(userFacingFailureText(busyFire), SESSION_BUSY_FIRE_TEXT);
-  assert.doesNotMatch(userFacingFailureText(busyFire), /send that again/i);
+  const budget = { status: "refused", refusalKind: "model_budget", reason: "the model budget is spent" } as const;
+  assert.equal(userFacingFailureText(budget), "the model budget is spent");
+  assert.equal(standaloneFailureText(budget), "the model budget is spent");
+  assert.equal(userFacingFailureClause(budget), "the model budget is spent");
 
   const authored = { status: "refused", reason: "you're not a member of that context" };
   assert.equal(userFacingFailureText(authored), "you're not a member of that context");

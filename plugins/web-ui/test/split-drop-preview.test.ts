@@ -56,17 +56,26 @@ for (const layout of ["single", "column", "nested"])
     }
     const preview = new SplitDropPreview(document.body);
     const before = source.toJSON();
-    const sizes = (api: typeof source) =>
-      api.panels
-        .map((p) => ({ title: p.title, width: p.api.width, height: p.api.height }))
-        .sort((a, b) => a.title!.localeCompare(b.title!));
-    const shape = (api: typeof source) =>
-      JSON.stringify(api.toJSON().grid, (key, value) => {
-        if (key === "id" || key === "size") return undefined;
-        if (key === "views") return (value as string[]).map((id) => api.getPanel(id)?.title);
-        if (key === "activeView") return api.getPanel(value as string)?.title;
-        return value;
-      });
+    // dockview positions each split view inline, relative to its parent split.
+    const offset = (el: HTMLElement | null) => {
+      let x = 0;
+      let y = 0;
+      for (; el && el !== host; el = el.parentElement) {
+        x += parseFloat(el.style.left) || 0;
+        y += parseFloat(el.style.top) || 0;
+      }
+      return { x, y };
+    };
+    const groups = (api: typeof source) =>
+      api.groups
+        .map((g) => ({
+          titles: g.panels.map((p) => (p.title === "Incoming" ? "Incoming" : "")).join("|"),
+          active: g.activePanel?.title === "Incoming" ? "Incoming" : "",
+          width: g.width,
+          height: g.height,
+          ...offset(g.element),
+        }))
+        .sort((a, b) => a.y - b.y || a.x - b.x);
     try {
       for (const [edge, direction] of [
         ["right", "right"],
@@ -79,8 +88,14 @@ for (const layout of ["single", "column", "nested"])
         source.fromJSON(before);
         source.layout(1200, 800, true);
         const restored = source.toJSON();
+        const plan = preview.plan(source, "a", edge, "Incoming");
         preview.show(source, "a", edge, "Incoming");
         assert.deepEqual(source.toJSON(), restored, "hover leaves the live layout untouched");
+        assert.equal(
+          preview.plan(source, "a", edge, "Incoming"),
+          plan,
+          `${edge} plan is reused while the layout holds`,
+        );
         source.addPanel({
           id: "new",
           component: "pane",
@@ -89,20 +104,30 @@ for (const layout of ["single", "column", "nested"])
         });
         if (edge === "center") source.removePanel(source.getPanel("a")!);
         if (layout === "single" && edge !== "center") source.layout(1188, 788, true);
-        const actual = sizes(source);
-        assert.equal(preview.api.panels.length, actual.length);
-        for (const [index, panel] of sizes(preview.api).entries()) {
-          assert.equal(panel.title, actual[index]!.title);
-          assert.ok(Math.abs(panel.width - actual[index]!.width) <= 1, `${edge} preview matches the drop width`);
-          assert.ok(Math.abs(panel.height - actual[index]!.height) <= 1, `${edge} preview matches the drop height`);
+        const actual = groups(source);
+        const boxes = plan.boxes
+          .map((b) => ({ ...b, titles: b.titles.join("|"), active: b.titles[b.active] }))
+          .sort((a, b) => a.y - b.y || a.x - b.x);
+        assert.equal(boxes.length, actual.length, `${edge} preview has one box per resulting pane`);
+        for (const [index, box] of boxes.entries()) {
+          const want = actual[index]!;
+          assert.equal(box.titles, want.titles, `${edge} preview keeps tab order`);
+          assert.equal(box.active, want.active, `${edge} preview shows the active tab`);
+          assert.ok(Math.abs(box.width - want.width) <= 1, `${edge} preview matches the drop width`);
+          assert.ok(Math.abs(box.height - want.height) <= 1, `${edge} preview matches the drop height`);
+          assert.ok(Math.abs(box.x - want.x) <= 1 && Math.abs(box.y - want.y) <= 1, `${edge} preview places the pane`);
         }
-        assert.equal(preview.api.groups.length, source.groups.length);
-        assert.equal(shape(preview.api), shape(source), `${edge} preview matches the pane order and geometry`);
+        const destination = plan.boxes.filter((b) => b.destination);
+        assert.equal(destination.length, 1);
+        assert.equal(destination[0]!.titles[destination[0]!.active], "Incoming");
+        const area = plan.boxes.reduce((sum, b) => sum + b.width * b.height, 0);
+        const total = source.width * source.height;
+        assert.ok(area <= total && area > total * 0.95, `${edge} preview boxes tile the canvas`);
+        assert.equal(preview.element.querySelectorAll(".split-preview-box").length, plan.boxes.length);
         assert.match(preview.element.textContent!, /Drop to/);
         if (edge === "right" && layout === "column") {
-          assert.equal(preview.api.groups.length, 3);
           const third = (source.width - 2 * splitTheme.gap) / 3;
-          assert.ok(preview.api.panels.every((p) => Math.abs(p.api.width - third) < 2));
+          assert.ok(plan.boxes.every((b) => Math.abs(b.width - third) < 2));
         }
       }
       preview.hide();

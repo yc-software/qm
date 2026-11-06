@@ -35,8 +35,7 @@ const uploadRoute =
   async (ctx: ApiCtx): Promise<void> => {
     const { res, deps, capability, actor } = ctx;
     const uploads = deps.fileUploads;
-    if (!uploads)
-      return sendJson(res, 501, { error: "not_configured", message: "direct uploads require S3 and Postgres" });
+    if (!uploads) return sendJson(res, 501, { error: "not_configured", message: "direct uploads require S3" });
     const actorId = capability?.actorId ?? actor?.p;
     if (!actorId) return sendJson(res, 401, { error: "actor_required" });
     try {
@@ -84,8 +83,6 @@ const beginUpload = uploadRoute(async (ctx, uploads, actorId) => {
     (body.mimetype != null && (typeof body.mimetype !== "string" || body.mimetype.length > 256))
   )
     throw new FileUploadError("name and optional mimetype must be valid strings");
-  const rate = await deps.rateLimiter?.check(`file-uploads:${actorId}`);
-  if (rate && !rate.allowed) return sendJson(res, 429, { error: "rate_limited" });
   const upload = await uploads.begin({
     actorId,
     scopeId: targetScope,

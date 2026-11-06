@@ -7,13 +7,15 @@ export const sleep = (ms: number, opts?: { unref?: boolean }): Promise<void> =>
     if (opts?.unref) t.unref?.();
   });
 
+export class TimeoutError extends Error {}
+
 export async function withTimeout<T>(start: () => Promise<T>, ms: number, label: string): Promise<T> {
   const p = start();
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
       p.catch(() => undefined);
-      reject(new Error(`${label} timed out after ${ms}ms`));
+      reject(new TimeoutError(`${label} timed out after ${ms}ms`));
     }, ms);
     timer.unref?.();
   });
@@ -41,6 +43,33 @@ export function createKeyedQueue<K = string>(): <T>(key: K, fn: () => Promise<T>
   };
 }
 
+export function createTtlRefresh(ttlMs: number, load: () => Promise<void>): (force?: boolean) => Promise<void> {
+  let refreshedAt = 0;
+  let pending: Promise<void> | null = null;
+  let next: Promise<void> | null = null;
+  const start = (): Promise<void> =>
+    (pending = load()
+      .then(() => {
+        refreshedAt = Date.now();
+      })
+      .finally(() => {
+        pending = null;
+      }));
+  return (force = false) => {
+    if (next) return force ? next : (pending ?? next);
+    if (pending && !force) return pending;
+    if (pending)
+      return (next = pending
+        .catch(() => undefined)
+        .then(() => {
+          next = null;
+          return start();
+        }));
+    if (!force && Date.now() - refreshedAt < ttlMs) return Promise.resolve();
+    return start();
+  };
+}
+
 export async function withAbort<T>(start: () => Promise<T>, signal?: AbortSignal): Promise<T> {
   if (!signal) return start();
   signal.throwIfAborted();
@@ -62,7 +91,7 @@ export async function withAbort<T>(start: () => Promise<T>, signal?: AbortSignal
   }
 }
 
-export interface BackoffOptions {
+interface BackoffOptions {
   attempts?: number;
   baseDelayMs?: number;
   maxDelayMs?: number;
@@ -92,7 +121,7 @@ export function retryAfterMs(headers: Headers, now = Date.now()): number | undef
   return Math.min(Math.max(0, at - now), RETRY_AFTER_CAP_MS);
 }
 
-export type RetryClass = "idempotent" | "refused";
+type RetryClass = "idempotent" | "refused";
 
 function retryableStatus(retry: RetryClass, status: number): boolean {
   return (retry === "idempotent" ? TRANSIENT_STATUSES : REFUSED_STATUSES).has(status);
@@ -107,12 +136,12 @@ function isNetworkError(e: unknown): boolean {
   return e instanceof TypeError && (e.message === "fetch failed" || e.message === "terminated");
 }
 
-export interface RetryOptions extends BackoffOptions {
+interface RetryOptions extends BackoffOptions {
   signal?: AbortSignal;
   timeoutMs?: number;
 }
 
-export interface RetryOperationOptions<T> extends RetryOptions {
+interface RetryOperationOptions<T> extends RetryOptions {
   statusOf: (error: unknown) => number | undefined;
   networkError?: (error: unknown) => boolean;
   retryAfterMsOf?: (error: unknown) => number | undefined;
@@ -120,7 +149,7 @@ export interface RetryOperationOptions<T> extends RetryOptions {
 }
 
 export async function retryOperation<T>(
-  operation: (signal: AbortSignal) => Promise<T>,
+  operation: (signal: AbortSignal, last: boolean) => Promise<T>,
   retry: RetryClass,
   opts: RetryOperationOptions<T>,
 ): Promise<T> {
@@ -130,7 +159,7 @@ export async function retryOperation<T>(
   for (let attempt = 1; ; attempt++) {
     const pending: { attempt?: Promise<T> } = {};
     try {
-      return await withAbort(() => (pending.attempt = operation(signal)), signal);
+      return await withAbort(() => (pending.attempt = operation(signal, attempt >= attempts)), signal);
     } catch (error) {
       if (signal.aborted && pending.attempt && opts.onLate)
         void pending.attempt
@@ -153,34 +182,33 @@ export async function retryOperation<T>(
   }
 }
 
-export async function fetchWithRetry(
+class RetryableResponse extends Error {
+  readonly response: Response;
+  constructor(response: Response) {
+    super(`HTTP ${response.status}`);
+    this.response = response;
+  }
+}
+
+export function fetchWithRetry(
   send: (signal: AbortSignal) => Promise<Response>,
   retry: RetryClass,
   opts: RetryOptions = {},
 ): Promise<Response> {
-  const attempts = opts.attempts ?? DEFAULT_ATTEMPTS;
-  const deadline = AbortSignal.timeout(opts.timeoutMs ?? 60_000);
-  const signal = opts.signal ? AbortSignal.any([opts.signal, deadline]) : deadline;
-  const wait = async (ms: number): Promise<void> => {
-    try {
-      await delay(ms, undefined, { signal });
-    } catch (error) {
-      signal.throwIfAborted();
-      throw error;
-    }
-  };
-  for (let attempt = 1; ; attempt++) {
-    let res: Response;
-    try {
-      res = await withAbort(() => send(signal), signal);
-    } catch (e) {
-      signal.throwIfAborted();
-      if (retry !== "idempotent" || attempt >= attempts || isAbortError(e)) throw e;
-      await wait(jitteredBackoffMs(attempt, opts));
-      continue;
-    }
-    if (!retryableStatus(retry, res.status) || attempt >= attempts) return res;
-    await withAbort(() => res.body?.cancel().catch(() => undefined) ?? Promise.resolve(), signal);
-    await wait(retryAfterMs(res.headers) ?? jitteredBackoffMs(attempt, opts));
-  }
+  return retryOperation(
+    async (signal, last) => {
+      const res = await send(signal);
+      if (last || !retryableStatus(retry, res.status)) return res;
+      await res.body?.cancel().catch(() => undefined);
+      throw new RetryableResponse(res);
+    },
+    retry,
+    {
+      ...opts,
+      statusOf: (error) => (error instanceof RetryableResponse ? error.response.status : undefined),
+      networkError: (error) => !isAbortError(error),
+      retryAfterMsOf: (error) =>
+        error instanceof RetryableResponse ? retryAfterMs(error.response.headers) : undefined,
+    },
+  );
 }

@@ -10,6 +10,8 @@ import { buildApp } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import { mintCapabilityToken, CONTROL_PLANE_AUD, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const SOURCE = "shared-source-auth-secret-for-tests-0001";
 const CAP = "core-only-capability-secret-for-tests-01";
@@ -27,7 +29,12 @@ describe("capability tokens verify under the core-only capability secret, not th
 
   before(async () => {
     built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "cap-iso-")), signingSecret: SOURCE }));
-    server = createServer(built.app, { signingSecret: SOURCE, capabilitySecret: CAP, scheduler: built.scheduler });
+    server = createServer(built.app, {
+      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+      signingSecret: SOURCE,
+      capabilitySecret: CAP,
+      scheduler: built.scheduler,
+    });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
   });
@@ -55,6 +62,7 @@ describe("createServer refuses to boot enforcement that a surface could bypass",
 
   const boot = (extra: Record<string, unknown>) =>
     createServer(built.app, {
+      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SOURCE,
       scheduler: built.scheduler,
       requireSignedPortalIdentity: true,
@@ -97,7 +105,11 @@ describe("createServer refuses to boot enforcement that a surface could bypass",
   });
 
   it("does not gate when enforcement is off, even with shared secrets", () => {
-    const server = createServer(built.app, { signingSecret: SOURCE, scheduler: built.scheduler });
+    const server = createServer(built.app, {
+      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+      signingSecret: SOURCE,
+      scheduler: built.scheduler,
+    });
     assert.ok(server);
     server.close();
   });
@@ -117,7 +129,13 @@ describe("createServer refuses to boot enforcement that a surface could bypass",
 
   it("production enables signed-identity enforcement without a separate opt-in", () => {
     assert.throws(
-      () => createServer(built.app, { production: true, signingSecret: SOURCE, scheduler: built.scheduler }),
+      () =>
+        createServer(built.app, {
+          replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+          production: true,
+          signingSecret: SOURCE,
+          scheduler: built.scheduler,
+        }),
       /CAPABILITY_SECRET is not set/,
     );
   });

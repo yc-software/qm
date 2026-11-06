@@ -1,0 +1,4 @@
+{
+  "skillGlobs": ["skills/*"],
+  "exclude": ["archive/**", "source-hermes/**", "**/*.bak", "**/__pycache__/**", "**/.DS_Store"]
+}

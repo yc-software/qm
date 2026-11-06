@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  merge_group:
   workflow_dispatch:
 
 permissions:
@@ -11,14 +12,14 @@ permissions:
 
 concurrency:
   group: cicd-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
 
 jobs:
   reuse:
     name: Resolve exact tested tree
     timeout-minutes: 3
     continue-on-error: true
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -33,7 +34,7 @@ jobs:
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
           node-version-file: .node-version
-      - name: Verify exact successful PR tree
+      - name: Verify the exact tested tree
         id: proof
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -41,11 +42,12 @@ jobs:
 
   core-typecheck:
     name: Core typecheck
+    timeout-minutes: 3
     needs: reuse
     if: always() && !cancelled()
     runs-on: ubuntu-latest
     steps:
-      - name: Reuse the exact successful PR tree
+      - name: Reuse the exact tested tree
         if: needs.reuse.outputs.reusable == 'true'
         run: echo "Full checks already passed for this exact tree; see Resolve exact tested tree."
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
@@ -69,6 +71,7 @@ jobs:
 
   core-tests:
     name: Core tests (${{ matrix.shard }}/5)
+    timeout-minutes: 25
     needs: reuse
     if: always() && !cancelled()
     runs-on: ubuntu-latest
@@ -76,8 +79,21 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4, 5]
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.1-pg16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: qm
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
-      - name: Reuse the exact successful PR tree
+      - name: Reuse the exact tested tree
         if: needs.reuse.outputs.reusable == 'true'
         run: echo "Full checks already passed for this exact tree; see Resolve exact tested tree."
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
@@ -103,6 +119,14 @@ jobs:
           sha256sum -c helm-v3.19.0-linux-amd64.tar.gz.sha256sum
           tar -xzf helm-v3.19.0-linux-amd64.tar.gz
           sudo install linux-amd64/helm /usr/local/bin/helm
+      - name: Configure test Postgres
+        if: needs.reuse.outputs.reusable != 'true'
+        run: |
+          for setting in "max_connections = 1000" "fsync = off" "synchronous_commit = off" "full_page_writes = off"; do
+            docker exec ${{ job.services.postgres.id }} psql -U postgres -c "ALTER SYSTEM SET $setting"
+          done
+          docker restart ${{ job.services.postgres.id }}
+          until docker exec ${{ job.services.postgres.id }} pg_isready -U postgres; do sleep 1; done
       - name: Verify root test shard plan
         if: needs.reuse.outputs.reusable != 'true' && matrix.shard == 1
         run: npm run test:root:shard:check
@@ -110,13 +134,17 @@ jobs:
         if: needs.reuse.outputs.reusable != 'true'
         env:
           CORE_TEST_SHARD: ${{ matrix.shard }}/5
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/qm
         run: npm run test:root:shard
       - name: Render runner tests as root
         if: needs.reuse.outputs.reusable != 'true' && matrix.shard == 1
-        run: sudo env "PATH=$PATH" node --experimental-test-module-mocks --test test/render-deploy-runner.test.ts
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/qm
+        run: sudo env "PATH=$PATH" "DATABASE_URL=$DATABASE_URL" node scripts/run-pg-tests.mjs test/render-deploy-runner.test.ts
 
   core:
     name: Core
+    timeout-minutes: 3
     if: always() && !cancelled()
     runs-on: ubuntu-latest
     needs:
@@ -131,11 +159,12 @@ jobs:
 
   cli:
     name: CLI
+    timeout-minutes: 15
     needs: reuse
     if: always() && !cancelled()
     runs-on: ubuntu-latest
     steps:
-      - name: Reuse the exact successful PR tree
+      - name: Reuse the exact tested tree
         if: needs.reuse.outputs.reusable == 'true'
         run: echo "Full checks already passed for this exact tree; see Resolve exact tested tree."
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
@@ -148,7 +177,7 @@ jobs:
           cache-dependency-path: |
             cli/package-lock.json
             package-lock.json
-      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e
         if: needs.reuse.outputs.reusable != 'true'
         with:
           terraform_version: 1.15.8
@@ -179,6 +208,7 @@ jobs:
 
   coauthor-trailers:
     name: Co-author trailers
+    timeout-minutes: 7
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
@@ -228,11 +258,12 @@ jobs:
 
   lint:
     name: Lint
+    timeout-minutes: 5
     needs: reuse
     if: always() && !cancelled()
     runs-on: ubuntu-latest
     steps:
-      - name: Reuse the exact successful PR tree
+      - name: Reuse the exact tested tree
         if: needs.reuse.outputs.reusable == 'true'
         run: echo "Full checks already passed for this exact tree; see Resolve exact tested tree."
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
@@ -266,6 +297,7 @@ jobs:
 
   core-postgres:
     name: Core Postgres tests
+    timeout-minutes: 3
     needs: reuse
     if: always() && !cancelled()
     runs-on: ubuntu-latest
@@ -283,7 +315,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
-      - name: Reuse the exact successful PR tree
+      - name: Reuse the exact tested tree
         if: needs.reuse.outputs.reusable == 'true'
         run: echo "Full checks already passed for this exact tree; see Resolve exact tested tree."
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
@@ -300,16 +332,6 @@ jobs:
       - name: Build connector SDK
         if: needs.reuse.outputs.reusable != 'true'
         run: npm run build:connector-sdk
-      - name: Postgres-backed tests (durability + cross-process)
-        if: needs.reuse.outputs.reusable != 'true'
-        env:
-          DATABASE_URL: postgres://postgres:postgres@localhost:5432/qm
-        run: npm run test:pg
-      - name: Swarm HTTP runtime tests
-        if: needs.reuse.outputs.reusable != 'true'
-        env:
-          SWARM_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/qm
-        run: node --experimental-test-module-mocks --test test/swarm-orchestrator.test.ts
       - name: Model registry cross-process tests
         if: needs.reuse.outputs.reusable != 'true'
         env:
@@ -325,44 +347,14 @@ jobs:
           npm i --no-save --no-audit --no-fund --min-release-age=0 memorable-cli@0.5.15
           node --test test/e2e/memorable-cli.e2e.test.ts
 
-  admin-plugin:
-    name: Admin plugin
-    needs: reuse
-    if: always() && !cancelled()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Reuse the exact successful PR tree
-        if: needs.reuse.outputs.reusable == 'true'
-        run: echo "Full checks already passed for this exact tree; see Resolve exact tested tree."
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
-        if: needs.reuse.outputs.reusable != 'true'
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
-        if: needs.reuse.outputs.reusable != 'true'
-        with:
-          node-version-file: .node-version
-          cache: npm
-          cache-dependency-path: |
-            plugins/admin/package-lock.json
-            plugins/web-ui/package-lock.json
-      - name: Install, typecheck, test
-        if: needs.reuse.outputs.reusable != 'true'
-        working-directory: plugins/admin
-        run: |
-          npm ci
-          npm ci --prefix ../web-ui
-          npm run typecheck
-          npm test
-      - name: Build and boot production image
-        if: needs.reuse.outputs.reusable != 'true'
-        run: bash scripts/smoke-surface-image.sh admin
-
   web-ui-plugin:
     name: Web UI plugin
+    timeout-minutes: 20
     needs: reuse
     if: always() && !cancelled()
     runs-on: ubuntu-latest
     steps:
-      - name: Reuse the exact successful PR tree
+      - name: Reuse the exact tested tree
         if: needs.reuse.outputs.reusable == 'true'
         run: echo "Full checks already passed for this exact tree; see Resolve exact tested tree."
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
@@ -375,12 +367,9 @@ jobs:
           cache-dependency-path: |
             package-lock.json
             plugins/web-ui/package-lock.json
-            plugins/admin/package-lock.json
-      - name: Install core and mounted admin dependencies
+      - name: Install core dependencies
         if: needs.reuse.outputs.reusable != 'true'
-        run: |
-          npm ci
-          npm ci --prefix plugins/admin
+        run: npm ci
       - name: Install, typecheck, test, build
         if: needs.reuse.outputs.reusable != 'true'
         working-directory: plugins/web-ui
@@ -389,17 +378,18 @@ jobs:
           npm run typecheck
           npm test
           npm run build
-      - name: Build and boot production image
+      - name: Build and boot the core image's web front door
         if: needs.reuse.outputs.reusable != 'true'
-        run: bash scripts/smoke-surface-image.sh web-ui
+        run: bash scripts/smoke-core-image.sh
 
   auth-plugin:
     name: Auth plugin
+    timeout-minutes: 3
     needs: reuse
     if: always() && !cancelled()
     runs-on: ubuntu-latest
     steps:
-      - name: Reuse the exact successful PR tree
+      - name: Reuse the exact tested tree
         if: needs.reuse.outputs.reusable == 'true'
         run: echo "Full checks already passed for this exact tree; see Resolve exact tested tree."
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
@@ -417,17 +407,15 @@ jobs:
           npm ci
           npm run typecheck
           npm test
-      - name: Build and boot production image
-        if: needs.reuse.outputs.reusable != 'true'
-        run: bash scripts/smoke-surface-image.sh auth
 
   portal-plugin:
     name: Portal plugin
+    timeout-minutes: 3
     needs: reuse
     if: always() && !cancelled()
     runs-on: ubuntu-latest
     steps:
-      - name: Reuse the exact successful PR tree
+      - name: Reuse the exact tested tree
         if: needs.reuse.outputs.reusable == 'true'
         run: echo "Full checks already passed for this exact tree; see Resolve exact tested tree."
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
@@ -448,16 +436,13 @@ jobs:
           npm ci
           npm run typecheck
           npm test
-      - name: Build and boot production image
-        if: needs.reuse.outputs.reusable != 'true'
-        run: bash scripts/smoke-surface-image.sh portal
 
   certify:
     name: Certify tested tree
     timeout-minutes: 3
     continue-on-error: true
     if: always() && !cancelled() && github.event_name == 'pull_request'
-    needs: [core, cli, lint, core-postgres, admin-plugin, web-ui-plugin, auth-plugin, portal-plugin, coauthor-trailers]
+    needs: [core, cli, lint, core-postgres, web-ui-plugin, auth-plugin, portal-plugin, coauthor-trailers]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -469,7 +454,7 @@ jobs:
         run: |
           test -n "$PR_REPOSITORY_ID"
           test "$PR_REPOSITORY_ID" = "$GITHUB_REPOSITORY_ID"
-          node -e 'const checks = JSON.parse(process.env.CHECKS); for (const id of ["core", "cli", "lint", "core-postgres", "admin-plugin", "web-ui-plugin", "auth-plugin", "portal-plugin", "coauthor-trailers"]) { if (checks[id]?.result !== "success") throw new Error(`${id} did not pass`); }'
+          node -e 'const checks = JSON.parse(process.env.CHECKS); for (const id of ["core", "cli", "lint", "core-postgres", "web-ui-plugin", "auth-plugin", "portal-plugin", "coauthor-trailers"]) { if (checks[id]?.result !== "success") throw new Error(`${id} did not pass`); }'
       - name: Checkout tested commit
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         with:
@@ -487,7 +472,7 @@ jobs:
     timeout-minutes: 3
     continue-on-error: true
     if: always() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [core, cli, lint, dependency-audit, core-postgres, admin-plugin, web-ui-plugin, auth-plugin, portal-plugin]
+    needs: [core, cli, lint, dependency-audit, core-postgres, web-ui-plugin, auth-plugin, portal-plugin]
     runs-on: ubuntu-latest
     permissions: {}
     steps:

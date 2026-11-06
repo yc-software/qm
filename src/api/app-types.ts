@@ -1,4 +1,5 @@
 import type { TeamStore } from "../teams/teams.ts";
+import type { CronScriptTrial } from "../cron/script.ts";
 import type { ExternalSlackPolicies } from "../resolution/external-slack.ts";
 import type { Mailer } from "../../plugins/chassis/src/resend.ts";
 import type { DeploymentInvitation } from "../deploy/email-access.ts";
@@ -17,17 +18,16 @@ import type {
   Principal,
   ScopeId,
   Session,
-  SessionEntry,
   TurnRequest,
   TurnResult,
   TurnRuntime,
 } from "../types.ts";
 import type { OutgoingAttachment } from "../types.ts";
-import type { SecurityScreenProbe } from "../security/security-screener.ts";
 import type { Readable } from "node:stream";
 import { type FileArtifact, type FileArtifactStore, type ListOwnedOptions } from "../files/file-artifact-store.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
-import type { SessionStore, TranscriptEntry } from "../sessions/session-store.ts";
+import type { SessionStore, TranscriptItem } from "../sessions/session-store.ts";
+import type { Item } from "../sessions/items.ts";
 import { type Sandbox } from "../sandbox/sandbox.ts";
 import type { ProcessRegistry } from "../processes/process-registry.ts";
 import type { MonitorStore } from "../monitors/monitor-store.ts";
@@ -40,10 +40,8 @@ import type { LedgerEventBus, OwnedLedgerEvent } from "../loops/ledger-events.ts
 import type { SubscribeOptions } from "../util/event-bus.ts";
 import type { RunActivityEntry, RunActivityStore } from "../runs/run-activity-store.ts";
 import type { RunSignal, RunSignalStore } from "../runs/run-signal-store.ts";
-import type { ModelGateway } from "../model/model-gateway.ts";
-import type { ModelCredentialStore } from "../model/model-credential-store.ts";
+import type { CustomProviderStore, ModelCredentialStore } from "../model/model-credential-store.ts";
 import type { UserModelCredentialStore } from "../model/user-model-credential-store.ts";
-import type { CustomProviderStore } from "../model/custom-provider-store.ts";
 import type { McpServerStore } from "../mcp/mcp-server-store.ts";
 import type { McpToolService } from "../mcp/mcp-tool-service.ts";
 import type { AclStore } from "../acl/acl-store.ts";
@@ -70,17 +68,9 @@ import type {
   GroupMembership,
   RecipientResolution,
 } from "../directory/directory-store.ts";
-import type {
-  Cron,
-  CronFireLogEntry,
-  CronFireNote,
-  Delivery,
-  Destination,
-  SurfaceContextQuery,
-  SurfaceContextRequest,
-  SurfaceContextResult,
-  Webhook,
-} from "../types.ts";
+import type { Delivery, Destination } from "../types.ts";
+import type { Cron, CronFireLogEntry, CronFireNote, Webhook } from "../triggers/types.ts";
+import type { SurfaceContextQuery, SurfaceContextRequest, SurfaceContextResult } from "../reach/reach.ts";
 import type {
   ActiveThread,
   CachedMessage,
@@ -92,6 +82,7 @@ import type {
 } from "../surface-cache/surface-cache.ts";
 import { type BotPolicy, type ChannelPolicy, type ChannelPolicyStore } from "../surface-cache/channel-policy-store.ts";
 import { type AmbientDecision } from "../surface-cache/ambient-judge.ts";
+import type { SurfaceRegistry } from "../surfaces/registry.ts";
 import type { AmbientJudgmentStore } from "../surface-cache/ambient-judgment-store.ts";
 import type { AckEmojiPickStore } from "../surface-cache/ack-emoji-pick-store.ts";
 import type { Deployment } from "../deploy/deploy-store.ts";
@@ -109,9 +100,9 @@ import { type DurableMap } from "../persistence/durable-map.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { Environment, EnvironmentAttachment, EnvironmentStore } from "../environments/environment-store.ts";
 import type { ModelProviderAvailability } from "../model/pi-models.ts";
-import type { RuntimeChoice } from "../harness/harness.ts";
+import type { RuntimeChoice } from "../agent/agent.ts";
 import { type ReachOpts, type ReachResolution, type ReachTarget } from "../reach/reach.ts";
-import { type Project, type ProjectStore } from "../projects/project-store.ts";
+import { type Project, type ProjectIcon, type ProjectStore } from "../projects/project-store.ts";
 import type { SearchHit } from "../search/core-search.ts";
 
 interface DeploymentVersionView {
@@ -184,6 +175,7 @@ interface ReachNowInput {
   attachments?: OutgoingAttachment[];
   react?: { messageTs: string; emoji: string };
   delete?: { messageTs: string };
+  edit?: { messageTs: string };
   currentDestination?: Destination;
 }
 export type ReachNowResult =
@@ -211,7 +203,16 @@ export type ProjectView = Project & {
 
 type ProjectViewMutation =
   | { status: "ok"; project: ProjectView; changed: boolean }
-  | { status: "not_found" | "forbidden" | "invalid_member" | "invalid_name" | "invalid_channel" | "channel_in_use" };
+  | {
+      status:
+        | "not_found"
+        | "forbidden"
+        | "invalid_member"
+        | "invalid_name"
+        | "invalid_icon"
+        | "invalid_channel"
+        | "channel_in_use";
+    };
 
 interface DeploymentGitUrl {
   url: string;
@@ -316,8 +317,7 @@ export interface App {
     startedAt: number | null;
     finishedAt: number | null;
   } | null>;
-  getRunToolEntries(runId: string, viewer?: string, afterSeq?: number): Promise<SessionEntry[]>;
-  stopConversation(threadRef: string, viewer?: string): Promise<boolean>;
+  getRunToolItems(runId: string, viewer?: string, afterSeq?: number): Promise<Item[]>;
   activeRunForThread(
     threadRef: string,
     viewer?: string,
@@ -331,40 +331,28 @@ export interface App {
   withdrawRun(runId: string, viewer?: string): Promise<{ withdrawn: boolean; reason?: string }>;
   signalRun(
     runId: string,
-    signal: RunSignal,
+    signal: RunSignal & { tree?: boolean },
     viewer?: string,
-  ): Promise<{ accepted: boolean; reason?: string; replayed?: boolean }>;
+  ): Promise<{ accepted: boolean; reason?: string; why?: string; queuedRunId?: string; replayed?: boolean }>;
   replayOrphanedRunSignals(runId: string): Promise<void>;
   getSession(
     sessionId: string,
     window?: TranscriptWindow,
-  ): Promise<{ session: Session; entries: TranscriptEntry[]; earlierEntries?: number; pins?: SessionPinView[] } | null>;
-  authorizeWorkflowSkillRead(
-    sessionId: string,
-    skill: { name: string; skillId: string; skillVersion: number; contentDigest: string },
-  ): Promise<boolean | undefined>;
+  ): Promise<{ session: Session; items: TranscriptItem[]; earlierItems?: number; pins?: SessionPinView[] } | null>;
   getSessionForViewer(
     sessionId: string,
     principalId: string,
     window?: TranscriptWindow,
   ): Promise<{
     session: Session;
-    entries: TranscriptEntry[];
-    earlierEntries?: number;
+    items: TranscriptItem[];
+    earlierItems?: number;
     pins?: SessionPinView[];
     goal?: GoalView;
     runtime?: TurnRuntime;
   } | null>;
-  canViewSessionSnapshot(
-    sessionId: string,
-    principalId: string,
-    visibility: { minSeq: number; maxSeq: number; minCreatedAt: number; maxCreatedAt: number },
-  ): Promise<boolean>;
-  getSessionEntryForViewer(
-    sessionId: string,
-    principalId: string,
-    seq: number,
-  ): Promise<{ entry: SessionEntry } | null>;
+  canViewSessionSnapshot(sessionId: string, principalId: string): Promise<boolean>;
+  getSessionItemForViewer(sessionId: string, principalId: string, seq: number): Promise<{ item: Item } | null>;
   pinConversationItem(
     threadRef: string,
     addedBy: string,
@@ -403,6 +391,7 @@ export interface App {
   removeProjectMember(id: string, principalId: string, memberId: string): Promise<ProjectViewMutation>;
   setProjectSlackChannel(id: string, principalId: string, channel: string | null): Promise<ProjectViewMutation>;
   renameProject(id: string, principalId: string, name: string): Promise<ProjectViewMutation>;
+  setProjectIcon(id: string, principalId: string, icon: ProjectIcon | null): Promise<ProjectViewMutation>;
   updateSession(
     sessionId: string,
     principalId: string,
@@ -426,7 +415,7 @@ export interface App {
     sessionId: string,
     principalId: string,
     opts?: { upToSeq?: number; sideChat?: { entrySeq: number; quote: string; occurrence: number } },
-  ): Promise<{ session: Session; entries: SessionEntry[] } | null>;
+  ): Promise<{ session: Session; items: Item[] } | null>;
   listFilesForViewer(principalId: string, opts?: ListOwnedOptions, inScope?: ScopeId): Promise<FileListPage>;
   uploadFileForViewer(
     principalId: string,
@@ -463,13 +452,13 @@ export interface App {
     scopeId: ScopeId,
     content: string,
     actorId: string,
-    opts?: { allowSharedScope?: boolean; expectedVersion?: number },
+    opts?: { allowSharedScope?: boolean; expectedVersion?: number; sessionId?: string },
   ): Promise<number>;
-  createCron(input: CreateCronInput): Promise<Cron>;
+  createCron(input: CreateCronInput, trial?: CronScriptTrial): Promise<Cron>;
   getCron(id: string): Promise<Cron | null>;
   listCrons(): Promise<Cron[]>;
   listCronsForViewer(principalId: string): Promise<{ owned: Cron[]; visible: VisibleCron[] }>;
-  updateCron(id: string, patch: CronPatch): Promise<Cron | null>;
+  updateCron(id: string, patch: CronPatch, trial?: CronScriptTrial): Promise<Cron | null>;
   deleteCron(id: string): Promise<void>;
   setCronEnabled(id: string, enabled: boolean): Promise<void>;
   setCronFireNote(id: string, note: CronFireNote): Promise<"applied" | "superseded" | "missing">;
@@ -497,6 +486,7 @@ export interface App {
   pendingContextRequests(source: string): Promise<SurfaceContextRequest[]>;
   fulfillContextRequest(id: string, outcome: { result?: SurfaceContextResult; error?: string }): Promise<boolean>;
   onContextRequestCreated(listener: (request: SurfaceContextRequest) => void): () => void;
+  surfaceMirrored(kind: string): boolean;
   ingestSurfaceEvents(
     events: IngestEvent[],
     surface?: string,
@@ -521,6 +511,7 @@ export interface App {
     opts?: { reason?: "messages" | "scheduled" },
   ): Promise<AmbientDecision>;
   ackDelivery(id: string, slackApiMs?: number): Promise<void>;
+  failDelivery(id: string, reason: string): Promise<Delivery | null>;
   ackDeliveryByKey(idempotencyKey: string): Promise<void>;
   setRunDeliveryState(runId: string, state: RunDeliveryState): Promise<boolean>;
   upsertDirectory(members: DirectoryMember[], syncedAt?: number): Promise<boolean>;
@@ -573,7 +564,7 @@ export interface App {
     patch: { description?: string; body?: string },
     opts?: { liveActor?: boolean },
   ): Promise<Skill | "trigger_blocked" | null>;
-  restoreOwnedSkill(id: string, principalId: string): Promise<Skill | null>;
+  restoreOwnedSkill(id: string, principalId: string): Promise<Skill | "exists" | null>;
   listSkillPacks(): Promise<SkillPack[]>;
   getSkillPack(id: string): Promise<SkillPack | null>;
   registerSkillPack(input: NewSkillPack): Promise<SkillPack>;
@@ -656,23 +647,21 @@ export interface AppDeps {
   externalSlackPolicies?: ExternalSlackPolicies;
   admittedWork?: AdmittedWork;
   shutdown?: () => AbortSignal;
-  resourceSearch?: ResourceSearchStore;
+  resourceSearch: ResourceSearchStore;
   swarms?: SwarmService;
   identity: IdentityService;
   publicWebUrl?: string;
   inviteMailer?: Mailer;
   sessions: SessionStore;
-  screenSecurity?: SecurityScreenProbe;
   orchestrator: Orchestrator;
   runs: RunStore;
-  leaseTtlMs: number;
   maxAttempts: number;
   runWaitMs?: number;
   turnStream?: TurnStream;
   runStreamEvents?: EventBus<RunStreamEvent>;
   runActivity?: RunActivityStore;
   signals?: RunSignalStore;
-  modelGateway: ModelGateway;
+  settleTreeWakes?: (root: Session) => Promise<void>;
   modelCredentials?: ModelCredentialStore;
   userModelCredentials?: UserModelCredentialStore;
   mcpServers?: McpServerStore;
@@ -688,7 +677,7 @@ export interface AppDeps {
   skillPacks?: SkillPackStore;
   skillFetcher?: SkillPackFetcher;
   skillBundles?: SkillBundleStore;
-  advisoryLock?: AdvisoryLock;
+  advisoryLock: AdvisoryLock;
   auditLog: AuditLog;
   config: ScopedConfigStore;
   crons: CronStore;
@@ -706,7 +695,7 @@ export interface AppDeps {
   approvals?: DurableMap<PendingApprovalRecord>;
   sessionStateBus?: SessionStateBus;
   ledgerEventBus?: LedgerEventBus;
-  contextRequests?: DurableMap<SurfaceContextRequest>;
+  contextRequests: DurableMap<SurfaceContextRequest>;
   environments?: EnvironmentStore;
   processes?: ProcessRegistry;
   monitors?: MonitorStore;
@@ -714,13 +703,13 @@ export interface AppDeps {
   reaperPoke?: () => void;
   engaged?: EngagedRegistry;
   surfaceCache?: SurfaceCache;
+  surfaces: SurfaceRegistry;
   channelPolicy?: ChannelPolicyStore;
   ambientJudge?: (systemPrompt: string, prompt: string, signal?: AbortSignal) => Promise<string | undefined>;
   ambientCursors?: DurableMap<{ lastJudgedTs: string; lastJudgedAt?: number }>;
   ambientJudgments?: AmbientJudgmentStore;
   ackEmojiPicks?: AckEmojiPickStore;
   judgeModelId?: () => string;
-  harnessId?: string;
   modelProviders?: ModelProviderAvailability;
   providerKeys?: ModelProviderAvailability;
   runtimeFallback?: RuntimeChoice;
@@ -734,6 +723,7 @@ export interface ContextSummary {
   sessionCount: number;
   lastActivityAt: number | null;
   project?: ProjectView;
+  groupMembers?: Array<{ principalId: string; displayName: string; avatarUrl?: string }>;
 }
 
 interface FileListItem {

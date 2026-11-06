@@ -127,8 +127,8 @@ test("role broker sessions in a shared conversation reach only the turn's scratc
   await selectDefaultSandbox(built, actor.externalId, scopeId("channel", "C_BROKER"));
   const scratchBoxes = new Set<string>();
   const provision = built.sandbox.provision.bind(built.sandbox);
-  built.sandbox.provision = async (layers, opts) => {
-    const handle = await provision(layers, opts);
+  built.sandbox.provision = async (owner, opts) => {
+    const handle = await provision(owner, opts);
     if (opts?.scratch) scratchBoxes.add(handle.id);
     return handle;
   };
@@ -220,7 +220,7 @@ test("selected broker execute honors deployment approval rules before vending cr
   assert.equal(unrelated.status, "ok", "subcommands without approval rules run without a grant");
   assert.equal(assumes, 1, "the broker's per-actor credential cache is reused within its TTL");
   assert.match(unrelated.reply ?? "", /<redacted:credential>/);
-  const durable = JSON.stringify(await built.sessions.getEntries(unrelated.sessionId!));
+  const durable = JSON.stringify(await built.sessions.getItems(unrelated.sessionId!));
   for (const value of ["AKIA_APPROVAL_GATE", "approval_gate_secret_value", "approval_gate_session_token"]) {
     assert.ok(!(unrelated.reply ?? "").includes(value));
     assert.ok(!durable.includes(value));

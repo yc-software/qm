@@ -1,24 +1,45 @@
+import { isAgentReply, type Item, proseText } from "./items.ts";
 import { isSessionTurn, sessionTurnOrigin } from "../core/turn-origin.ts";
-import { TURN_STOPPED_KIND } from "../harness/replay.ts";
-import { principalDestination } from "../reach/reach.ts";
-import type { DeliveryStore } from "../delivery/delivery-store.ts";
-import { deliveryCandidatesFor } from "../core/orchestrator/turn-helpers.ts";
 import type { SessionMailbox, SessionMessage } from "./session-mailbox.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import { sleep } from "../util/async.ts";
-import { pgTextSafe } from "../util/text.ts";
-import { createMemoryAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
-import { errMessage, swallowAs } from "../util/errors.ts";
+import { pgTextSafe, snippet } from "../util/text.ts";
+import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
+import { errMessage } from "../util/errors.ts";
 import { randomUUID } from "node:crypto";
 import { hashId } from "../util/crypto.ts";
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import type { CoreSearch } from "../search/core-search.ts";
-import type { ScopeId, Session, SessionEntry, SpawnMeta } from "../types.ts";
+import type {
+  ChildIsolation,
+  ChildIsolationMode,
+  Principal,
+  ScopeId,
+  Session,
+  SpawnMeta,
+  StopScope,
+  TurnOrigin,
+} from "../types.ts";
+import { childIsolation } from "./child-isolation.ts";
+import { openRuntime, parentRuntime } from "./subagent-runtime.ts";
+import type { RuntimeChoice } from "../agent/agent.ts";
 import type { OrchestratorInput } from "../core/orchestrator/types.ts";
 import type { Run, RunStore } from "../runs/run-store.ts";
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
 import type { SessionStore } from "./session-store.ts";
 import { xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
+import { isPeerMessage, wakeOwnParent, wakePeer } from "./subagent-mail.ts";
+import {
+  liveSubagentsNote,
+  openChildren,
+  runState,
+  sessionActivity,
+  subagentActivity,
+  visibleChildren,
+  type SessionStatus,
+  type SubagentActivity,
+  type SubagentActivityDeps,
+} from "./subagent-status.ts";
 
 const SUBAGENT_THREAD_PREFIX = "agent:main:subagent:";
 
@@ -104,14 +125,63 @@ export async function delegatedAuthorizationOrigin(
   }
 }
 
-export const SUBAGENT_TREE_RUN_CAP = 50;
+export function ownsSessionContext(
+  threadRef: string,
+  input: Pick<OrchestratorInput, "sessionSenderId" | "delegatingRunId" | "privateSessionMessage" | "swarm">,
+): boolean {
+  return (
+    !isSessionTurn(input) &&
+    !input.privateSessionMessage &&
+    !input.swarm &&
+    !isSubagentThreadRef(threadRef) &&
+    !threadRef.startsWith("swarm:")
+  );
+}
+
+export const isSidebarSession = (session: Session): boolean =>
+  !session.parentSessionId && !isSubagentThreadRef(session.threadRef) && !session.threadRef.startsWith("swarm:");
+
+export function storedContext(session: Session): SpawnMeta | undefined {
+  return (
+    session.spawnMeta && {
+      ...session.spawnMeta,
+      ...(session.surfaceBinding && !session.spawnMeta.surfaceOrigin ? { surfaceOrigin: session.surfaceBinding } : {}),
+    }
+  );
+}
+
+export function sessionContextOf(input: OrchestratorInput): SpawnMeta {
+  const origin: TurnOrigin =
+    input.origin.kind === "automation"
+      ? { kind: "automation", ...(input.origin.destination ? { destination: input.origin.destination } : {}) }
+      : sessionTurnOrigin(input.origin, "");
+  return {
+    origin,
+    ...(input.surfaceTools ? { surfaceTools: true } : {}),
+    ...(input.deliveryCandidates ? { deliveryCandidates: input.deliveryCandidates } : {}),
+    ...(input.unattendedGrants ? { unattendedGrants: [...input.unattendedGrants] } : {}),
+    ...(input.surfaceOrigin?.audience === "external" ? { surfaceOrigin: input.surfaceOrigin } : {}),
+    ...(input.scopeVersion ? { scopeVersion: input.scopeVersion } : {}),
+    ...(input.sessionParticipantIds ? { sessionParticipantIds: input.sessionParticipantIds } : {}),
+    surface: input.surface ?? "web",
+    conversation: input.conversation,
+    actor: input.actor,
+    ...(input.deliveryTarget ? { deliveryTarget: input.deliveryTarget } : {}),
+    ...(input.deliveryWebhook ? { deliveryWebhook: input.deliveryWebhook } : {}),
+    ...(input.timezone ? { timezone: input.timezone } : {}),
+    ...(input.readOnly ? { readOnly: true } : {}),
+    ...(input.model ? { model: input.model } : {}),
+    ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
+    ...(input.fastMode !== undefined ? { fastMode: input.fastMode } : {}),
+  };
+}
+
 const SESSION_MESSAGE_DEPTH_CAP = 8;
 const READ_DEFAULT_LIMIT = 30;
 const SESSION_LIST_LIMIT = 50;
 const WEB_ONLY = "sessions are a web UI feature and aren't available here.";
 const READ_DEFAULT_MAX_CHARS = 4_000;
 const READ_MAX_CHARS_CEILING = 20_000;
-const MAIL_ERROR_CAP = 1_000;
 const LAST_SAID_SCAN = 40;
 
 export interface SessionOpenInput {
@@ -120,20 +190,20 @@ export interface SessionOpenInput {
   name?: string;
   readOnly?: boolean;
   model?: string;
-  harness?: string;
   thinkingLevel?: string;
   fastMode?: boolean;
+  isolation?: ChildIsolationMode;
 }
 
-export type SessionOpenResult =
-  { ok: true; sessionId: string; title: string; liveRunsRemaining: number } | { ok: false; message: string };
+type SessionOpenResult =
+  { ok: true; sessionId: string; title: string; isolation?: ChildIsolation } | { ok: false; message: string };
 
 interface SessionWriteInput {
   target: string;
   peer?: boolean;
   text?: string;
   interrupt?: boolean;
-  followup?: boolean;
+  wake?: boolean;
   requestId?: string;
 }
 
@@ -142,7 +212,9 @@ type SessionWriteResult =
       ok: true;
       sessionId: string;
       title: string;
-      delivered: "steered" | "queued_turn" | "interrupted" | "queued_message";
+      delivered: "queued_turn" | "interrupted" | "queued_message";
+      busy?: boolean;
+      notWoken?: string;
     }
   | { ok: false; message: string };
 
@@ -156,8 +228,9 @@ interface SessionReadInput {
 interface SessionChildSummary {
   sessionId: string;
   title: string;
-  status: "running" | "pending" | "idle";
+  activity: SubagentActivity;
   lastSaid?: string;
+  isolation?: ChildIsolation;
 }
 
 interface SessionStartInput {
@@ -172,7 +245,7 @@ type SessionStartResult =
 interface SessionSummary {
   sessionId: string;
   title: string;
-  status: "running" | "pending" | "idle";
+  status: SessionStatus;
   current: boolean;
 }
 
@@ -180,10 +253,18 @@ type SessionListResult = { ok: true; sessions: SessionSummary[] } | { ok: false;
 
 type SessionReadResult =
   | { ok: true; mode: "children"; children: SessionChildSummary[] }
-  | { ok: true; mode: "transcript"; sessionId: string; title: string; status: string; rendered: string }
+  | {
+      ok: true;
+      mode: "transcript";
+      sessionId: string;
+      title: string;
+      status: SessionStatus;
+      activity?: SubagentActivity;
+      rendered: string;
+    }
   | { ok: false; message: string };
 
-interface SessionSyscallBinding {
+export interface SessionSyscallBinding {
   session: Session;
   scopeId: ScopeId;
   orgScopeId?: ScopeId;
@@ -199,29 +280,30 @@ interface SessionSyscallBinding {
     | "sessionMessageDepth"
     | "swarm"
     | "runId"
+    | "delegatingRunId"
     | "conversation"
     | "actor"
     | "deliveryTarget"
+    | "deliveryWebhook"
     | "timezone"
     | "readOnly"
     | "scopeVersion"
     | "sessionParticipantIds"
-    | "slackSource"
-    | "externalSlack"
+    | "surfaceOrigin"
+    | "model"
+    | "thinkingLevel"
+    | "fastMode"
   > & { origin?: OrchestratorInput["origin"] };
+  switchedRuntime?: () => RuntimeChoice | undefined;
 }
 
 export interface SessionSyscalls {
-  receive?(timeoutMs?: number): Promise<SessionMessage[]>;
+  receive?(timeoutMs?: number, signal?: AbortSignal): Promise<SessionMessage[]>;
   acknowledge?(ids: string[]): Promise<void>;
   open(input: SessionOpenInput): Promise<SessionOpenResult>;
-  openWithAdmission?(
-    input: SessionOpenInput,
-    admission: (sessionId: string) => Promise<void>,
-    options?: { requireEnabled?: boolean },
-  ): Promise<SessionOpenResult>;
   write(input: SessionWriteInput): Promise<SessionWriteResult>;
   read(input: SessionReadInput): Promise<SessionReadResult>;
+  liveSubagents?(): Promise<string>;
   search?(input: { query: string; limit?: number }): ReturnType<CoreSearch["search"]>;
   list?(): Promise<SessionListResult>;
   start?(input: SessionStartInput): Promise<SessionStartResult>;
@@ -235,6 +317,7 @@ export interface SessionSyscallsFactory {
 export interface SessionSyscallDeps {
   mailbox: SessionMailbox;
   enabled?: (actorId: string) => Promise<boolean>;
+  delegationEnabled?: (actorId: string) => Promise<boolean>;
   sessions: Pick<
     SessionStore,
     | "get"
@@ -245,19 +328,22 @@ export interface SessionSyscallDeps {
     | "childrenOf"
     | "addParticipant"
     | "updateTitle"
-    | "getEntries"
-    | "latestEntrySeq"
-    | "visibleEntries"
+    | "latestItemSeq"
+    | "visibleItems"
+    | "participantsOf"
     | "getForParticipant"
-  >;
-  runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "latestForThread" | "getByDedupKey" | "get" | "withdraw">;
+    | "descendantsOf"
+  > &
+    SubagentActivityDeps["sessions"];
+  runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "getByDedupKey" | "get" | "withdraw"> &
+    SubagentActivityDeps["runs"];
   signals: Pick<RunSignalStore, "send" | "pending">;
   maxAttempts: number;
-  treeRunCap?: number;
-  advisoryLock?: AdvisoryLock;
+  advisoryLock: AdvisoryLock;
   prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
   authorize?: (session: Session, actorId: string) => Promise<boolean>;
   validateRuntime?: (input: SessionOpenInput, scopeId: ScopeId) => Promise<void>;
+  defaultModel?: (scopeId: ScopeId) => Promise<string>;
   conversations?: {
     search?: CoreSearch["search"];
     list(actorId: string): Promise<Session[]>;
@@ -281,34 +367,26 @@ function autoTitle(task: string): string {
   return line.length <= 60 ? line : `${line.slice(0, 57).trimEnd()}…`;
 }
 
-function entryText(entry: SessionEntry): string | undefined {
-  const payload = entry.payload as { text?: unknown; tool?: unknown; aside?: unknown } | null;
-  if (typeof payload?.text === "string" && payload.text.trim()) return payload.text;
-  if (typeof payload?.tool === "string") return `[${payload.tool}]`;
-  return undefined;
+function itemText(item: Item): string | undefined {
+  const text = proseText(item);
+  if (text?.trim()) return text;
+  return item.tool === null ? undefined : `[${item.tool}]`;
 }
 
-function lastAssistantText(entries: readonly SessionEntry[]): string | undefined {
-  for (let i = entries.length - 1; i >= 0; i--) {
-    const e = entries[i]!;
-    const stop = e.type === "system" ? (e.payload as { kind?: unknown; reason?: unknown } | null) : null;
-    if (stop?.kind === TURN_STOPPED_KIND) {
-      const before = entries[i - 1];
-      const partial = before?.type === "assistant" ? entryText(before) : "";
-      return (
-        partial || `[system] Subagent stopped${typeof stop.reason === "string" ? ` ${stop.reason}` : ""}. No reply.`
-      );
+function lastAssistantText(items: readonly Item[]): string | undefined {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const e = items[i]!;
+    if (e.kind === "Stop") {
+      const before = items[i - 1];
+      const partial = before && isAgentReply(before) ? itemText(before) : "";
+      const reason = e.body.reason;
+      return partial || `[system] Subagent stopped${typeof reason === "string" ? ` ${reason}` : ""}. No reply.`;
     }
-    if (e.type !== "assistant" && e.type !== "text") continue;
-    const text = entryText(e);
+    if (e.kind !== "AgentMessage" || e.variant === "files_delivered") continue;
+    const text = itemText(e);
     if (text) return text;
   }
   return undefined;
-}
-
-function snippet(text: string, max: number): string {
-  const oneLine = text.replace(/\s+/g, " ").trim();
-  return oneLine.length <= max ? oneLine : `${oneLine.slice(0, max - 1).trimEnd()}…`;
 }
 
 function renderSubagentTask(input: { title: string; parentTitle: string; task: string }): string {
@@ -331,38 +409,14 @@ function renderSubagentMessage(sender: { title: string; sessionId: string }, tex
   ].join("\n");
 }
 
-export type SubagentMailKind = "final_answer" | "no_reply" | "awaiting_input" | "errored" | "refused";
-
-export function renderSubagentMail(input: {
-  title: string;
-  sessionId: string;
-  kind: SubagentMailKind;
-  body: string;
-}): string {
-  const why: Record<SubagentMailKind, string> = {
-    final_answer: "finished a turn and sent back its result",
-    no_reply: "finished a turn without sending a reply",
-    awaiting_input: "is blocked waiting for a human approval",
-    errored: "failed",
-    refused: "was refused",
-  };
-  return [
-    `<wake reason="subagent" name="${xmlAttrEscape(input.title)}" sessionId="${input.sessionId}" kind="${input.kind}" at="${new Date().toISOString()}">`,
-    `  <why>Your subagent session "${xmlEscape(input.title)}" ${why[input.kind]}.</why>`,
-    `  <content>${xmlEscape(input.body)}</content>`,
-    `  <instructions>If the person who asked for this work is waiting on it, relay what matters in your own words. Otherwise act on it internally without acknowledging it. Never repeat a result already reported or send a no-action-needed update. The subagent's full transcript is kept with it; use the subagents tool to read it or give it another task.</instructions>`,
-    "</wake>",
-  ].join("\n");
-}
-
 function childRunRequest(child: Session, meta: SpawnMeta, text: string, displayText: string): OrchestratorInput {
   return {
     ...(meta.scopeVersion ? { scopeVersion: meta.scopeVersion } : {}),
     ...(meta.sessionParticipantIds ? { sessionParticipantIds: meta.sessionParticipantIds } : {}),
     surface: meta.surface,
-    ...(meta.slackSource ? { slackSource: meta.slackSource } : {}),
-    ...(meta.externalSlack ? { externalSlack: meta.externalSlack } : {}),
+    ...(meta.surfaceOrigin ? { surfaceOrigin: meta.surfaceOrigin } : {}),
     ...(meta.deliveryTarget ? { deliveryTarget: meta.deliveryTarget } : {}),
+    ...(meta.deliveryWebhook ? { deliveryWebhook: meta.deliveryWebhook } : {}),
     ...(meta.deliveryCandidates ? { deliveryCandidates: meta.deliveryCandidates } : {}),
     actor: meta.actor,
     conversation: { ...meta.conversation, threadRef: child.threadRef },
@@ -373,15 +427,14 @@ function childRunRequest(child: Session, meta: SpawnMeta, text: string, displayT
     envelopeWrapped: true,
     ...(meta.readOnly ? { readOnly: true } : {}),
     ...(meta.model ? { model: meta.model } : {}),
-    ...(meta.harness ? { harness: meta.harness } : {}),
     ...(meta.thinkingLevel ? { thinkingLevel: meta.thinkingLevel } : {}),
     ...(meta.fastMode !== undefined ? { fastMode: meta.fastMode } : {}),
     ...(meta.timezone ? { timezone: meta.timezone } : {}),
   };
 }
 
-function assertAudienceCompatible(
-  source: Pick<OrchestratorInput, "actor" | "conversation">,
+export function assertAudienceCompatible(
+  source: { actor: Pick<Principal, "id">; conversation: Pick<OrchestratorInput["conversation"], "audience"> },
   target: Pick<OrchestratorInput, "actor" | "conversation">,
 ): void {
   const allowed = new Set([source.actor.id, ...source.conversation.audience.map((person) => person.id)]);
@@ -408,8 +461,12 @@ export async function sessionTreeRoot(sessions: Pick<SessionStore, "get">, sessi
   return (await sessionAncestors(sessions, session)).at(-1) ?? session;
 }
 
-export async function stoppableAncestors(sessions: Pick<SessionStore, "get">, session: Session): Promise<Session[]> {
-  return (await sessionAncestors(sessions, session)).filter((ancestor) => ancestor.scopeId === session.scopeId);
+export async function stoppableRoot(
+  sessions: Pick<SessionStore, "sameScopeAncestors">,
+  session: Session,
+): Promise<Session | undefined> {
+  if (!session.parentSessionId) return undefined;
+  return (await sessions.sameScopeAncestors([session.threadRef])).find((ancestor) => !ancestor.parentSessionId);
 }
 
 export async function sessionTreeWorking(
@@ -424,26 +481,18 @@ export async function sessionTreeWorking(
 }
 
 export async function workingSessionThreadRefs(
-  sessions: Pick<SessionStore, "get" | "getByThread">,
+  sessions: Pick<SessionStore, "sameScopeAncestors">,
   runs: Pick<RunStore, "activeSessionIds">,
   awaitingSessionIds: ReadonlySet<string>,
 ): Promise<Set<string>> {
   const active = await runs.activeSessionIds();
   const working = new Set(active);
-  await Promise.all(
-    active
-      .map(async (threadRef) => {
-        const session = await sessions.getByThread(threadRef);
-        if (!session?.parentSessionId) return;
-        for (const ancestor of await stoppableAncestors(sessions, session))
-          if (!awaitingSessionIds.has(ancestor.id)) working.add(ancestor.threadRef);
-      })
-      .map((lookup) => lookup.catch(swallowAs("session list: working ancestors", undefined))),
-  );
+  for (const ancestor of await sessions.sameScopeAncestors(active))
+    if (!ancestor.parentSessionId && !awaitingSessionIds.has(ancestor.id)) working.add(ancestor.threadRef);
   return working;
 }
 
-async function treeSessions(sessions: Pick<SessionStore, "childrenOf">, root: Session): Promise<Session[]> {
+export async function treeSessions(sessions: Pick<SessionStore, "childrenOf">, root: Session): Promise<Session[]> {
   const all: Session[] = [root];
   const queue = [root];
   const seen = new Set([root.id]);
@@ -460,22 +509,95 @@ async function treeSessions(sessions: Pick<SessionStore, "childrenOf">, root: Se
   return all;
 }
 
-async function sessionRunCancelled(
+export const PARENT_INTERRUPT = "by the parent agent";
+export const ANCESTOR_STOP = "because the parent session was stopped";
+export const USER_STOP = "by user";
+export const USER_STOP_ALL = "by user (subagents too)";
+
+type StopRequest = { reason?: string | undefined; scope?: StopScope };
+
+export const sparesDescendants = (scope: StopScope | undefined): boolean => scope === "run" || scope === "session";
+
+async function stopOf(
+  signals: Pick<RunSignalStore, "pending">,
+  run: Run,
+): Promise<{ scope: StopScope | undefined } | undefined> {
+  if (run.result?.stopped) return { scope: run.result.stopScope };
+  const abort = (await signals.pending(run.id)).find(({ signal }) => signal.kind === "abort");
+  return abort && { scope: abort.signal.scope };
+}
+
+export async function runStopped(
   runs: Pick<RunStore, "get">,
   signals: Pick<RunSignalStore, "pending">,
   runId: string | undefined,
-): Promise<boolean> {
+): Promise<"self" | "ancestor" | undefined> {
   const seen = new Set<string>();
-  while (runId) {
-    if (seen.has(runId)) return true;
-    seen.add(runId);
-    const run = await runs.get(runId);
-    if (!run) return true;
-    if (run.result?.stopped || (await signals.pending(runId)).some(({ signal }) => signal.kind === "abort"))
-      return true;
-    runId = run.request.delegatingRunId;
+  let self = false;
+  for (let current = runId; current;) {
+    if (seen.has(current)) return "ancestor";
+    seen.add(current);
+    const run = await runs.get(current);
+    const stop = run && (await stopOf(signals, run));
+    if (current === runId) self = !run || stop !== undefined;
+    else if (!run || (stop && !sparesDescendants(stop.scope))) return "ancestor";
+    current = run?.request.delegatingRunId;
   }
-  return false;
+  return self ? "self" : undefined;
+}
+
+const unstarted = (run: Run): boolean => run.status === "pending" && run.attempts === 0 && run.turnUserSeq === null;
+const interruptible = (run: Run): boolean => !unstarted(run) || Boolean(run.request.sessionSenderId);
+
+export async function stopSessionRuns(
+  deps: { runs: Pick<RunStore, "inFlightForThread" | "withdraw">; signals: Pick<RunSignalStore, "send"> },
+  session: Session,
+  stop: StopRequest,
+  interrupt?: { by: string; mailbox: Pick<SessionMailbox, "send"> },
+): Promise<{ id: string; withdrawn: boolean }[]> {
+  const stopped: { id: string; withdrawn: boolean }[] = [];
+  for (const run of await deps.runs.inFlightForThread(session.threadRef)) {
+    if (interrupt && !interruptible(run)) continue;
+    const sender = interrupt && unstarted(run) ? run.request.sessionSenderId : undefined;
+    const foreign = interrupt && sender && sender !== interrupt.by ? { mailbox: interrupt.mailbox, sender } : undefined;
+    if (foreign)
+      await foreign.mailbox.send({
+        id: `interrupted-${run.id}`,
+        recipientId: session.id,
+        senderId: foreign.sender,
+        actor: run.request.actor,
+        audience: run.request.conversation.audience,
+        text: run.request.text,
+        createdAt: run.createdAt,
+      });
+    await deps.signals.send(run.id, {
+      kind: "abort",
+      ...(stop.reason ? { reason: stop.reason } : {}),
+      ...(stop.scope ? { scope: stop.scope } : {}),
+    });
+    const withdrawn =
+      run.status === "pending" && (await deps.runs.withdraw(run.id, { unstartedOnly: sparesDescendants(stop.scope) }));
+    stopped.push({ id: run.id, withdrawn: withdrawn && !foreign });
+  }
+  return stopped;
+}
+
+async function acceptedFollowup(
+  runs: Pick<RunStore, "getByDedupKey" | "inFlightForThread">,
+  dedupKey: string | undefined,
+  target: Session,
+  stamped: string,
+  title: string,
+): Promise<SessionWriteResult | undefined> {
+  const existing = dedupKey ? await runs.getByDedupKey(dedupKey) : null;
+  if (!existing) return undefined;
+  if (
+    existing.sessionId !== target.threadRef ||
+    (existing.request.text !== stamped && existing.request.text !== pgTextSafe(stamped))
+  )
+    return { ok: false, message: "the requestId was already used for different work" };
+  const others = (await runs.inFlightForThread(target.threadRef)).filter((run) => run.id !== existing.id);
+  return { ok: true, sessionId: target.id, title, delivered: "queued_turn", busy: others.length > 0 };
 }
 
 export async function stopSessionTree(
@@ -489,36 +611,31 @@ export async function stopSessionTree(
 ): Promise<boolean> {
   let stopped = false;
   for (const session of await treeSessions(deps.sessions, root)) {
-    if (session.scopeId !== root.scopeId) continue;
-    for (const run of await deps.runs.inFlightForThread(session.threadRef)) {
-      await deps.signals.send(run.id, { kind: "abort", ...(reason ? { reason } : {}) });
-      if (run.status === "pending") await deps.runs.withdraw(run.id);
-      stopped = true;
-    }
+    const stop: StopRequest = session.id === root.id ? { reason } : { reason: ANCESTOR_STOP, scope: "ancestor" };
+    if (session.scopeId === root.scopeId && (await stopSessionRuns(deps, session, stop)).length) stopped = true;
   }
   return stopped;
 }
 
-export async function sessionTreeRunCount(
+export async function sessionTreeRuns(
   sessions: Pick<SessionStore, "childrenOf">,
   runs: Pick<RunStore, "inFlightForThread">,
   root: Session,
-): Promise<number> {
-  let live = 0;
+): Promise<Run[]> {
+  const live: Run[] = [];
   for (const session of await treeSessions(sessions, root)) {
-    live += (await runs.inFlightForThread(session.threadRef)).length;
+    live.push(...(await runs.inFlightForThread(session.threadRef)));
   }
   return live;
 }
 
 export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscallsFactory {
-  const lock = deps.advisoryLock ?? createMemoryAdvisoryLock();
-  const cap = deps.treeRunCap ?? SUBAGENT_TREE_RUN_CAP;
+  const lock = deps.advisoryLock;
 
   return {
     rejectMessage: (sessionId, messageId) => deps.mailbox.acknowledge(sessionId, [messageId]),
     forTurn(binding) {
-      const callerTitle = binding.session.title?.trim() || "this conversation";
+      const callerTitle = binding.session.title?.trim() || "Untitled";
 
       async function resolveTarget(ref: string): Promise<Session | null> {
         const trimmed = ref.trim();
@@ -544,36 +661,26 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
       function peerRefusal(target: Session): string | null {
         const refusal = sidebarRefusal();
         if (refusal) return refusal;
-        if (target.parentSessionId || isSubagentThreadRef(target.threadRef) || target.threadRef.startsWith("swarm:"))
+        if (!isSidebarSession(target))
           return `"${target.title?.trim() || target.id}" is a subagent, not a session — use the subagents tool for it.`;
         return null;
       }
 
-      async function statusOf(session: Session): Promise<"running" | "pending" | "idle"> {
-        const inFlight = await deps.runs.inFlightForThread(session.threadRef);
-        if (inFlight.some((r) => r.status === "running")) return "running";
-        return inFlight.length ? "pending" : "idle";
-      }
-
       const visibleTitle = (target: Session) => target.title?.trim() || target.id;
-      async function visibleHistory(target: Session): Promise<SessionEntry[]> {
+      async function visibleHistory(target: Session): Promise<Item[]> {
         const audience = binding.request.conversation.audience.length
           ? binding.request.conversation.audience
           : [binding.request.actor];
-        const views = await Promise.all(
-          [...new Set([binding.request.actor.id, ...audience.map((p) => p.id)])].map((id) =>
-            deps.sessions.visibleEntries(target.id, id),
-          ),
-        );
-        const allowed = views.slice(1).map((view) => new Set(view.map((entry) => entry.seq)));
-        return (views[0] ?? []).filter((entry) => allowed.every((seqs) => seqs.has(entry.seq)));
+        const members = await deps.sessions.participantsOf(target.id);
+        if (!audience.every((p) => members.includes(p.id))) return [];
+        return deps.sessions.visibleItems(target.id, binding.request.actor.id);
       }
 
-      async function currentCaller(requireEnabled = true): Promise<OrchestratorInput> {
+      async function currentCaller(): Promise<OrchestratorInput> {
         binding.request.cancel?.throwIfAborted();
-        if (await sessionRunCancelled(deps.runs, deps.signals, binding.request.runId))
+        if (await runStopped(deps.runs, deps.signals, binding.request.runId))
           throw new Error("this delegated task was stopped");
-        if (requireEnabled && deps.enabled && !(await deps.enabled(binding.request.actor.id)))
+        if (deps.enabled && !(await deps.enabled(binding.request.actor.id)))
           throw new Error("persistent subagents are not enabled for this user");
         const current = await deps.sessions.get(binding.session.id);
         if (
@@ -591,7 +698,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
       }
 
       return {
-        async receive(timeoutMs = 0) {
+        async receive(timeoutMs = 0, signal) {
           const deadline = Date.now() + Math.min(60_000, Math.max(0, timeoutMs));
           do {
             binding.request.cancel?.throwIfAborted();
@@ -615,8 +722,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   ]);
                   const readable = await Promise.all(
                     [...viewers].map(async (id) =>
-                      (await deps.sessions.visibleEntries(sender.id, id)).some(
-                        (entry) => entry.seq === message.sourceEntrySeq && entry.scopeLabel === binding.scopeId,
+                      (await deps.sessions.visibleItems(sender.id, id)).some(
+                        (item) => item.seq === message.sourceEntrySeq,
                       ),
                     ),
                   );
@@ -628,7 +735,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 continue;
               }
             }
-            if (visible.length || Date.now() >= deadline) return visible;
+            if (visible.length || Date.now() >= deadline || signal?.aborted) return visible;
             await sleep(Math.min(250, deadline - Date.now()));
           } while (Date.now() <= deadline);
           return [];
@@ -637,21 +744,17 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           await deps.mailbox?.acknowledge(binding.session.id, ids);
         },
         async open(input) {
-          return this.openWithAdmission!(input, async () => {});
-        },
-        async openWithAdmission(input, admission, options) {
           return lock
             .withLock("session-tree-admission", async (): Promise<SessionOpenResult> => {
               if (binding.request.swarm || binding.session.threadRef.startsWith("swarm:"))
                 throw new Error("swarm workers coordinate through the swarm API");
-              const caller = await currentCaller(options?.requireEnabled !== false);
+              const caller = await currentCaller();
               assertAudienceCompatible(binding.request, caller);
               if (binding.request.privateSessionMessage)
                 throw new Error("private session messages cannot delegate new work");
               const task = input.task?.trim();
               if (!task)
                 return { ok: false, message: "open requires a task: the full instruction the subagent works from." };
-              await deps.validateRuntime?.(input, binding.scopeId);
               const threadRef = `${SUBAGENT_THREAD_PREFIX}${
                 input.requestId
                   ? hashId([binding.session.id, binding.request.runId ?? "", input.requestId], 40)
@@ -659,11 +762,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               }`;
               const fingerprint = hashId([canonicalJson(input)], 40);
               const existing = await deps.sessions.getByThread(threadRef);
-              const root = await sessionTreeRoot(
-                deps.sessions,
-                existing ?? (await deps.sessions.get(binding.session.id))!,
-              );
-              const live = await sessionTreeRunCount(deps.sessions, deps.runs, root);
               if (existing?.spawnMeta?.openFingerprint && existing.spawnMeta.openFingerprint !== fingerprint)
                 throw new Error("the requestId was already used for different work");
               const initialRun = await deps.runs.getByDedupKey(`subagent-open:${threadRef}`);
@@ -672,14 +770,18 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   ok: true,
                   sessionId: existing.id,
                   title: visibleTitle(existing),
-                  liveRunsRemaining: Math.max(0, cap - live),
+                  ...(existing.spawnMeta?.isolation ? { isolation: existing.spawnMeta.isolation } : {}),
                 };
-              if (live >= cap) {
-                return {
-                  ok: false,
-                  message: `all ${cap} subagent run slots for this conversation are in use — wait for one to finish, read their sessions, or interrupt one you no longer need.`,
-                };
-              }
+              const runtime =
+                existing?.spawnMeta ??
+                (await openRuntime(
+                  input,
+                  parentRuntime(binding.request, binding.switchedRuntime?.()),
+                  async (choice) => {
+                    await deps.validateRuntime?.({ ...input, ...choice }, binding.scopeId);
+                  },
+                  async () => deps.defaultModel?.(binding.scopeId),
+                ));
               const child = await deps.sessions.getOrCreateByThread(
                 threadRef,
                 binding.session.type,
@@ -688,30 +790,32 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 binding.session.surface ?? binding.request.surface,
               );
               const title = existing ? visibleTitle(existing) : input.name?.trim() || autoTitle(task);
+              const readOnly = input.readOnly || binding.request.readOnly;
+              const isolation = existing?.spawnMeta
+                ? existing.spawnMeta.isolation
+                : childIsolation({
+                    requested: input.isolation,
+                    parent: binding.session.spawnMeta?.isolation,
+                    childId: child.id,
+                    title,
+                    readOnly,
+                  });
               const meta: SpawnMeta = {
+                ...sessionContextOf({
+                  ...binding.request,
+                  surface: binding.request.surface ?? binding.session.surface ?? "web",
+                  origin: caller.origin,
+                  unattendedGrants: caller.unattendedGrants,
+                  readOnly,
+                  model: runtime.model,
+                  thinkingLevel: runtime.thinkingLevel,
+                  fastMode: runtime.fastMode,
+                  text: "",
+                }),
                 origin: caller.origin,
-                ...(binding.request.surfaceTools ? { surfaceTools: true } : {}),
-                ...(binding.request.deliveryCandidates
-                  ? { deliveryCandidates: binding.request.deliveryCandidates }
-                  : {}),
-                ...(caller.unattendedGrants ? { unattendedGrants: [...caller.unattendedGrants] } : {}),
                 openFingerprint: fingerprint,
-                ...(binding.request.slackSource ? { slackSource: binding.request.slackSource } : {}),
-                ...(binding.request.externalSlack ? { externalSlack: binding.request.externalSlack } : {}),
-                ...(binding.request.scopeVersion ? { scopeVersion: binding.request.scopeVersion } : {}),
-                ...(binding.request.sessionParticipantIds
-                  ? { sessionParticipantIds: binding.request.sessionParticipantIds }
-                  : {}),
-                surface: binding.request.surface ?? binding.session.surface ?? "web",
-                conversation: binding.request.conversation,
-                actor: binding.request.actor,
-                ...(binding.request.deliveryTarget ? { deliveryTarget: binding.request.deliveryTarget } : {}),
-                ...(binding.request.timezone ? { timezone: binding.request.timezone } : {}),
-                ...(input.readOnly || binding.request.readOnly ? { readOnly: true } : {}),
-                ...(input.model ? { model: input.model } : {}),
-                ...(input.harness ? { harness: input.harness } : {}),
-                ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
-                ...(input.fastMode !== undefined ? { fastMode: input.fastMode } : {}),
+                ...(binding.request.surfaceOrigin ? { surfaceOrigin: binding.request.surfaceOrigin } : {}),
+                ...(isolation ? { isolation } : {}),
               };
               if (!existing?.spawnMeta) {
                 await deps.sessions.setParentSession(child.id, binding.session.id);
@@ -723,7 +827,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               ]))
                 await deps.sessions.addParticipant(child.id, id);
               await deps.sessions.updateTitle(child.id, title);
-              await admission(child.id);
               const text = renderSubagentTask({ title, parentTitle: callerTitle, task });
               const request = {
                 ...childRunRequest(child, meta, text, task),
@@ -736,7 +839,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 request: deps.prepareRequest ? await deps.prepareRequest(request) : request,
                 maxAttempts: deps.maxAttempts,
               });
-              return { ok: true, sessionId: child.id, title, liveRunsRemaining: Math.max(0, cap - live - 1) };
+              return { ok: true, sessionId: child.id, title, ...(isolation ? { isolation } : {}) };
             })
             .catch((error): SessionOpenResult => ({ ok: false, message: errMessage(error) }));
         },
@@ -769,13 +872,12 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 return { ok: false, message: "you are not a participant in that session." };
               if (deps.authorize && !(await deps.authorize(target, caller.actor.id)))
                 return { ok: false, message: "you no longer have access to the target session" };
-              const previous = await deps.runs.latestForThread(target.threadRef, { excludePrivateMessages: true });
-              const meta = previous?.request ?? target.spawnMeta;
+              const meta = storedContext(target);
               if (!meta) return { ok: false, message: "the target has no verified runtime context yet" };
               const privateChild = isSubagentThreadRef(target.threadRef);
               const privateMessage = binding.request.privateSessionMessage === true || !privateChild;
               const messageDepth = (binding.request.sessionMessageDepth ?? 0) + 1;
-              if (privateMessage && messageDepth > SESSION_MESSAGE_DEPTH_CAP)
+              if (binding.request.privateSessionMessage && messageDepth > SESSION_MESSAGE_DEPTH_CAP)
                 throw new Error("private session message reply limit reached");
               const prepared = childRunRequest(
                 target,
@@ -784,7 +886,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   ...(target.parentSessionId
                     ? {
                         model: target.spawnMeta?.model,
-                        harness: target.spawnMeta?.harness,
                         thinkingLevel: target.spawnMeta?.thinkingLevel,
                         fastMode: target.spawnMeta?.fastMode,
                       }
@@ -806,81 +907,125 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   return { ok: false, message: "ordinary sessions accept private messages, not interrupts" };
                 if (caller.readOnly && !target.spawnMeta?.readOnly)
                   return { ok: false, message: "a read-only session cannot interrupt a writable task" };
-                const stopped = await stopSessionTree(deps, target, "by the parent agent");
-                return stopped
+              }
+              const text = input.text?.trim();
+              if (!text) {
+                if (!input.interrupt)
+                  return { ok: false, message: "send_message requires `text` (or interrupt: true)." };
+                return (
+                  await stopSessionRuns(
+                    deps,
+                    target,
+                    { reason: PARENT_INTERRUPT, scope: "run" },
+                    {
+                      by: binding.session.id,
+                      mailbox: deps.mailbox,
+                    },
+                  )
+                ).length
                   ? { ok: true, sessionId: target.id, title, delivered: "interrupted" }
                   : { ok: false, message: `subagent "${title}" is not running — nothing to interrupt.` };
               }
-              const text = input.text?.trim();
-              if (!text)
-                return {
-                  ok: false,
-                  message: input.followup
-                    ? "followup_task requires `task`: the full instruction the subagent works from."
-                    : "send_message requires `text` (or interrupt: true).",
-                };
               if (text.length > 16_000) return { ok: false, message: "message exceeds 16000 characters" };
               const stamped = renderSubagentMessage({ title: callerTitle, sessionId: binding.session.id }, text);
-              if (!input.followup) {
-                const sourceEntrySeq = await deps.sessions.latestEntrySeq(binding.session.id);
+              const messageId = input.requestId
+                ? hashId([binding.session.id, binding.request.runId ?? "", input.requestId], 40)
+                : randomUUID();
+              const sourceEntrySeq = await deps.sessions.latestItemSeq(binding.session.id);
+              const mail = { id: messageId, text: stamped, ...(sourceEntrySeq >= 0 ? { sourceEntrySeq } : {}) };
+              const inFlight = await deps.runs.inFlightForThread(target.threadRef);
+              const busy = inFlight.length > 0;
+              const leaveMail = async (notWoken?: string): Promise<SessionWriteResult> => {
                 await deps.mailbox.send({
-                  id: input.requestId
-                    ? hashId([binding.session.id, binding.request.runId ?? "", input.requestId], 40)
-                    : randomUUID(),
+                  ...mail,
                   recipientId: target.id,
                   senderId: binding.session.id,
                   actor: caller.actor,
-                  text: stamped,
-                  ...(sourceEntrySeq >= 0 ? { sourceEntrySeq } : {}),
                   audience: caller.conversation.audience,
                   createdAt: Date.now(),
                 });
-                return { ok: true, sessionId: target.id, title, delivered: "queued_message" };
+                const reason = notWoken ? { notWoken } : {};
+                return { ok: true, sessionId: target.id, title, delivered: "queued_message", busy, ...reason };
+              };
+              if (!input.wake && !input.interrupt) return leaveMail();
+              if (binding.request.privateSessionMessage)
+                return leaveMail("a private turn cannot start work in another session");
+              if (isPeerMessage(binding.session, target)) {
+                if (caller.readOnly) return leaveMail("a read-only turn cannot start work in another conversation");
+                if (messageDepth > SESSION_MESSAGE_DEPTH_CAP)
+                  return leaveMail(
+                    `${SESSION_MESSAGE_DEPTH_CAP} conversations already woke each other in a row, so this one stops the chain`,
+                  );
+                const woken = await wakePeer(
+                  deps,
+                  binding.session,
+                  target,
+                  { ...binding.request, peerDepth: messageDepth },
+                  mail,
+                ).catch((error: unknown) => ({ failed: errMessage(error) }));
+                if (typeof woken === "object") return leaveMail(woken.failed);
+                const delivered = woken === "woken" ? "queued_turn" : "queued_message";
+                return { ok: true, sessionId: target.id, title, delivered, busy: woken === "busy" };
               }
-              if (input.followup && binding.request.privateSessionMessage)
-                return { ok: false, message: "private turns cannot assign follow-up work" };
-              if (input.followup && !target.parentSessionId)
-                return {
-                  ok: false,
-                  message: "follow-up tasks can only target an attached subagent; use a message for the root",
-                };
-
-              const dedupKey = input.requestId
-                ? `subagent-followup:${hashId([binding.session.id, binding.request.runId ?? "", input.requestId], 40)}`
-                : undefined;
-              if (dedupKey) {
-                const existing = await deps.runs.getByDedupKey(dedupKey);
-                if (existing) {
-                  if (
-                    existing.sessionId !== target.threadRef ||
-                    (existing.request.text !== stamped && existing.request.text !== pgTextSafe(stamped))
+              if (!target.parentSessionId || (target.id === binding.session.parentSessionId && !input.interrupt)) {
+                if (caller.readOnly) return leaveMail("a read-only subagent cannot start a turn in its parent");
+                const woken = await wakeOwnParent(deps, binding.session.id, target, binding.request, mail).catch(
+                  (error: unknown) => ({ failed: errMessage(error) }),
+                );
+                if (typeof woken === "object") return leaveMail(woken.failed);
+                if (!woken)
+                  return leaveMail(
+                    "a message can start a turn in a top-level conversation only when it is the sender's own parent",
+                  );
+                const delivered = woken === "woken" ? "queued_turn" : "queued_message";
+                return { ok: true, sessionId: target.id, title, delivered, busy: woken === "busy" };
+              }
+              const dedupKey = input.requestId ? `subagent-followup:${messageId}` : undefined;
+              const accepted = await acceptedFollowup(deps.runs, dedupKey, target, stamped, title);
+              if (accepted) return accepted;
+              const stopped = input.interrupt
+                ? await stopSessionRuns(
+                    deps,
+                    target,
+                    { reason: PARENT_INTERRUPT, scope: "run" },
+                    {
+                      by: binding.session.id,
+                      mailbox: deps.mailbox,
+                    },
                   )
-                    return { ok: false, message: "the requestId was already used for different work" };
-                  return { ok: true, sessionId: target.id, title, delivered: "queued_turn" };
-                }
-              }
+                : [];
               request.origin = sessionTurnOrigin(request.origin, stamped);
               request.sessionSenderId = binding.session.id;
               request.delegatingRunId = binding.request.runId;
-              if (
-                (await sessionTreeRunCount(deps.sessions, deps.runs, await sessionTreeRoot(deps.sessions, target))) >=
-                cap
-              )
-                return { ok: false, message: `all ${cap} session run slots are in use.` };
-              await deps.runs.enqueue({
-                sessionId: target.threadRef,
-                dedupKey,
-                request: {
-                  ...request,
-                  ...(privateMessage
-                    ? { privateSessionMessage: true as const, sessionMessageDepth: messageDepth }
-                    : {}),
-                  text: stamped,
-                  displayText: text,
-                },
-                maxAttempts: deps.maxAttempts,
-              });
-              return { ok: true, sessionId: target.id, title, delivered: "queued_turn" };
+              await deps.runs
+                .enqueue({
+                  sessionId: target.threadRef,
+                  dedupKey,
+                  request: {
+                    ...request,
+                    ...(privateMessage
+                      ? { privateSessionMessage: true as const, sessionMessageDepth: messageDepth }
+                      : {}),
+                    text: stamped,
+                    displayText: text,
+                  },
+                  maxAttempts: deps.maxAttempts,
+                })
+                .catch((error: unknown) => {
+                  if (!stopped.length) throw error;
+                  const withdrawn = stopped.filter((run) => run.withdrawn).length;
+                  const done = [
+                    ...(stopped.length > withdrawn ? ["stopped its current run"] : []),
+                    ...(withdrawn
+                      ? [
+                          `withdrew ${withdrawn === 1 ? "your queued message" : `your ${withdrawn} queued messages`} to it`,
+                        ]
+                      : []),
+                  ].join(" and ");
+                  throw new Error(`${done}, but this message was not queued: ${errMessage(error)}`);
+                });
+              if (stopped.length) return { ok: true, sessionId: target.id, title, delivered: "interrupted" };
+              return { ok: true, sessionId: target.id, title, delivered: "queued_turn", busy };
             })
             .catch((error): SessionWriteResult => ({ ok: false, message: errMessage(error) }));
         },
@@ -888,21 +1033,18 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
         async read(input) {
           await currentCaller();
           if (!input.target?.trim()) {
-            const children = await deps.sessions.childrenOf(binding.session.id);
             const summaries: SessionChildSummary[] = [];
-            for (const child of children) {
-              if (
-                child.scopeId !== binding.scopeId ||
-                !(await deps.sessions.getForParticipant(child.id, binding.request.actor.id))
-              )
-                continue;
-              const entries = (await visibleHistory(child)).slice(-LAST_SAID_SCAN);
-              const said = lastAssistantText(entries);
+            for (const { session: child, activity } of await subagentActivity(
+              deps,
+              await visibleChildren(deps, binding, await deps.sessions.childrenOf(binding.session.id)),
+            )) {
+              const said = lastAssistantText((await visibleHistory(child)).slice(-LAST_SAID_SCAN));
               summaries.push({
                 sessionId: child.id,
                 title: visibleTitle(child),
-                status: await statusOf(child),
+                activity,
                 ...(said ? { lastSaid: snippet(said, 200) } : {}),
+                ...(child.spawnMeta?.isolation ? { isolation: child.spawnMeta.isolation } : {}),
               });
             }
             return { ok: true, mode: "children", children: summaries };
@@ -921,23 +1063,31 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           const maxChars = Math.min(Math.max(200, input.maxChars ?? READ_DEFAULT_MAX_CHARS), READ_MAX_CHARS_CEILING);
           if (!(await deps.sessions.getForParticipant(target.id, binding.request.actor.id)))
             return { ok: false, message: "you are not a participant in that session." };
-          const entries = await visibleHistory(target);
+          const items = await visibleHistory(target);
           const lines: string[] = [];
-          for (const entry of entries.slice(-limit)) {
-            const text = entryText(entry);
+          for (const item of items.slice(-limit)) {
+            const text = itemText(item);
             if (!text) continue;
-            lines.push(`${entry.type}#${entry.seq} ${snippet(text, 300)}`);
+            lines.push(`${item.kind}#${item.seq} ${snippet(text, 300)}`);
           }
           let rendered = lines.join("\n");
           if (rendered.length > maxChars) rendered = `…${rendered.slice(rendered.length - maxChars)}`;
+          const activity = await sessionActivity(deps, target);
           return {
             ok: true,
             mode: "transcript",
             sessionId: target.id,
             title: visibleTitle(target),
-            status: await statusOf(target),
+            status: activity?.status ?? "idle",
+            ...(activity && !input.peer ? { activity } : {}),
             rendered: rendered || "[no readable entries yet]",
           };
+        },
+        async liveSubagents() {
+          return liveSubagentsNote(
+            await openChildren(deps, binding, await deps.sessions.childrenOf(binding.session.id)),
+            visibleTitle,
+          );
         },
         async search(input) {
           const caller = await currentCaller();
@@ -965,12 +1115,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
             ? binding.request.conversation.audience
             : [binding.request.actor];
           const candidates = (await conversations.list(binding.request.actor.id)).filter(
-            (s) =>
-              s.scopeId === binding.scopeId &&
-              !s.parentSessionId &&
-              !isSubagentThreadRef(s.threadRef) &&
-              !s.threadRef.startsWith("swarm:") &&
-              !s.archived,
+            (s) => s.scopeId === binding.scopeId && isSidebarSession(s) && !s.archived,
           );
           const visible: Session[] = [];
           for (const session of candidates) {
@@ -982,14 +1127,13 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           const recent = visible
             .sort((a, b) => (b.lastActivityAt ?? b.createdAt) - (a.lastActivityAt ?? a.createdAt))
             .slice(0, SESSION_LIST_LIMIT);
-          const sessions: SessionSummary[] = [];
-          for (const session of recent)
-            sessions.push({
-              sessionId: session.id,
-              title: session.title?.trim() || "Untitled",
-              status: await statusOf(session),
-              current: session.id === binding.session.id,
-            });
+          const active = await deps.runs.activeForThreads(recent.map((session) => session.threadRef));
+          const sessions: SessionSummary[] = recent.map((session) => ({
+            sessionId: session.id,
+            title: session.title?.trim() || "Untitled",
+            status: runState(active.get(session.threadRef)),
+            current: session.id === binding.session.id,
+          }));
           return { ok: true, sessions };
         },
         async start(input) {
@@ -1035,198 +1179,4 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
       };
     },
   };
-}
-
-export interface SubagentMailDeps {
-  signals?: Pick<RunSignalStore, "pending">;
-  deliveries?: Pick<DeliveryStore, "enqueue">;
-  delegationEnabled?: (actorId: string) => Promise<boolean>;
-  mailbox: SessionMailbox;
-  sessions: Pick<SessionStore, "get" | "getByThread" | "getEntries" | "latestEntrySeq" | "visibleEntries">;
-  runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "getByDedupKey" | "withdraw"> &
-    Partial<Pick<RunStore, "latestForThread" | "get">>;
-  maxAttempts: number;
-  prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
-}
-
-export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Promise<boolean> {
-  if (!isSubagentThreadRef(run.sessionId) || run.request.privateSessionMessage) return true;
-  if (
-    run.result?.stopped ||
-    (deps.signals && deps.runs.get && (await sessionRunCancelled({ get: deps.runs.get }, deps.signals, run.id)))
-  )
-    return true;
-  const child = await deps.sessions.getByThread(run.sessionId);
-  if (!child?.parentSessionId || !child.spawnMeta) return true;
-  const parent = await deps.sessions.get(child.parentSessionId);
-  if (!parent) return true;
-  if (parent.threadRef.startsWith("swarm:")) throw new Error("subagent returns cannot enter swarm workers");
-  const latestParent = await deps.runs.latestForThread?.(parent.threadRef, { excludePrivateMessages: true });
-  if (parent.scopeId !== child.scopeId) throw new Error("parent and child contexts no longer match");
-  const initiatingRun = run.request.delegatingRunId ? await deps.runs.get?.(run.request.delegatingRunId) : undefined;
-  if (run.request.delegatingRunId && !initiatingRun) throw new Error("the delegation's originating run is unavailable");
-  const initiatingContext = initiatingRun?.request ?? child.spawnMeta;
-  const currentContext = latestParent?.request ?? parent.spawnMeta;
-  const originalParent = parent.threadRef === initiatingContext.conversation.threadRef;
-  if (!originalParent && !currentContext) throw new Error("the current parent has no verified runtime context yet");
-  const meta = originalParent
-    ? initiatingContext
-    : {
-        ...currentContext!,
-        actor: run.request.actor,
-        origin: {
-          kind: "automation" as const,
-          ...(currentContext!.origin?.kind === "automation" && currentContext!.origin.destination
-            ? { destination: currentContext!.origin.destination }
-            : {}),
-        },
-        unattendedGrants: undefined,
-      };
-  const title = child.title?.trim() || child.id;
-  const result = run.result;
-  let kind: SubagentMailKind;
-  let body: string;
-  if (run.status === "failed" || result?.status === "failed") {
-    kind = "errored";
-    body = snippet(result?.reason ?? "the turn failed", MAIL_ERROR_CAP);
-  } else if (result?.pendingApprovals?.length || result?.status === "pending_approval") {
-    kind = "awaiting_input";
-    body = snippet(
-      result.pendingApprovals?.map((a) => a.command).join("; ") ?? "a command needs human approval",
-      MAIL_ERROR_CAP,
-    );
-  } else if (result?.status === "refused") {
-    kind = "refused";
-    body = snippet(result.reason ?? "the turn was refused", MAIL_ERROR_CAP);
-  } else if (result?.status === "ok" && (result.reply?.trim() || result.attachments?.length)) {
-    kind = "final_answer";
-    body = result.reply?.trim() || `Produced ${result.attachments!.map((file) => file.name).join(", ")}.`;
-  } else {
-    kind = "no_reply";
-    body = "completed without sending a reply.";
-  }
-  const text = renderSubagentMail({
-    title,
-    sessionId: child.id,
-    kind,
-    body:
-      body.length > 16_000 ? `${body.slice(0, 16_000)}\n[truncated; read the child session for the full result]` : body,
-  });
-  const inherited = { ...meta };
-  delete (inherited as Partial<SpawnMeta>).openFingerprint;
-  const request: OrchestratorInput = {
-    ...inherited,
-    sessionSenderId: child.id,
-    conversation: {
-      ...meta.conversation,
-      ...(currentContext
-        ? { audience: currentContext.conversation.audience, publishMembers: currentContext.conversation.publishMembers }
-        : {}),
-      threadRef: parent.threadRef,
-    },
-    origin: sessionTurnOrigin(meta.origin, text),
-    text,
-    displayText: `[subagent ${title}: ${kind.replace("_", " ")}]`,
-    envelopeWrapped: true,
-  };
-  for (const key of [
-    "runId",
-    "attempt",
-    "runLeaseToken",
-    "runStartedAt",
-    "finalAttempt",
-    "background",
-    "cancel",
-    "shutdown",
-    "modelAccount",
-    "privateSessionMessage",
-    "sessionMessageDepth",
-    "delegatingRunId",
-    "swarm",
-    "approval",
-    "proactiveOpener",
-    "redeliveryKey",
-    "attachments",
-    "inboundNotes",
-    "priorTurns",
-    "overheard",
-    "detectContext",
-    "detectOpener",
-    "conversationHeader",
-  ] as const)
-    delete request[key];
-  if (!originalParent) request.addressed = false;
-  const prepared = deps.prepareRequest ? await deps.prepareRequest(request) : request;
-  assertAudienceCompatible(run.request, prepared);
-  const outputSeq = run.result?.sourceAssistantEntrySeq ?? run.turnUserSeq ?? run.result?.sourceUserSeq;
-  if (outputSeq !== undefined && outputSeq !== null) {
-    for (const id of new Set([prepared.actor.id, ...prepared.conversation.audience.map((person) => person.id)])) {
-      const visible = await deps.sessions.visibleEntries(child.id, id);
-      if (!visible.some((entry) => entry.seq === outputSeq))
-        throw new Error("the current parent audience cannot read this child result");
-    }
-  }
-  if (result?.attachments?.length && deps.deliveries) {
-    const delivery = deliveryCandidatesFor(meta.surface, meta.deliveryTarget, meta.deliveryCandidates, parent.scopeId);
-    const candidate = delivery.candidates.find((item) => item.key === delivery.defaultKey);
-    const destination =
-      candidate ??
-      (meta.origin?.kind === "automation" ? meta.origin.destination : undefined) ??
-      principalDestination(meta.actor.id, meta.actor.id);
-    await deps.deliveries.enqueue({
-      destination,
-      text: "",
-      attachments: result.attachments,
-      idempotencyKey: `subagent-files:${run.id}`,
-      provenance: {
-        trigger: "subagent",
-        surface: meta.surface ?? "unknown",
-        fireKey: `subagent-files:${run.id}`,
-        sourceScopeId: child.scopeId,
-        sourceThreadRef: child.threadRef,
-        sourceSessionId: child.id,
-      },
-    });
-  }
-  await deps.mailbox.send({
-    id: `subagent-mail-${run.id}`,
-    recipientId: parent.id,
-    senderId: child.id,
-    actor: prepared.actor,
-    text,
-    ...(outputSeq !== undefined && outputSeq !== null ? { sourceEntrySeq: outputSeq } : {}),
-    audience: prepared.conversation.audience,
-    createdAt: Date.now(),
-  });
-  if (!isSubagentThreadRef(parent.threadRef)) {
-    const surfaceTools =
-      meta.surfaceTools === true ||
-      requiresDelegation(prepared, (await deps.delegationEnabled?.(prepared.actor.id)) === true);
-    const dedupKey = `subagent-return:${run.id}`;
-    const existing = await deps.runs.getByDedupKey(dedupKey);
-    const unread = (await deps.mailbox.pending(parent.id)).some((message) => message.id === `subagent-mail-${run.id}`);
-    if (!unread) {
-      if (existing?.status === "pending") await deps.runs.withdraw(existing.id, { unstartedOnly: true });
-      return true;
-    }
-    if (existing && (existing.status === "done" || existing.status === "failed")) return true;
-    if ((await deps.runs.inFlightForThread(parent.threadRef)).length) return false;
-    const wake =
-      "A delegated task finished. Check internal messages with subagents wait (timeoutMs: 0), then report any new result or blocker relevant to the user's request. If it was already handled or no message is available, end without posting.";
-    await deps.runs.enqueue({
-      sessionId: parent.threadRef,
-      dedupKey,
-      request: {
-        ...prepared,
-        ...(surfaceTools ? { surfaceTools } : {}),
-        ...(originalParent && initiatingRun ? { delegatingRunId: initiatingRun.id } : {}),
-        origin: sessionTurnOrigin(prepared.origin, wake),
-        text: wake,
-        displayText: "Delegated task completed",
-      },
-      maxAttempts: deps.maxAttempts,
-    });
-    return false;
-  }
-  return true;
 }

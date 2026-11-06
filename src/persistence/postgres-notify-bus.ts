@@ -17,7 +17,7 @@ export function createPostgresNotifyBus<T>(
   encode: (event: T) => string | null = encodeCapped,
 ): EventBus<T> {
   if (!/^[a-z][a-z0-9_]*$/.test(channel)) throw new Error(`invalid NOTIFY channel name: ${channel}`);
-  const pg = createPgPool(connectionString, []);
+  const pg = createPgPool(connectionString);
   const local = createMemoryEventBus<T>(label);
 
   let stopListening: (() => Promise<void>) | null = null;

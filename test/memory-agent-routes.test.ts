@@ -11,6 +11,12 @@ import { createServer } from "../src/api/server.ts";
 import { scopeId, type ScopeId } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CREDENTIAL_BROKER_AUD } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
+import type { MemoryService } from "../src/memory/memory-service.ts";
+import { createRoutedMemoryService } from "../src/memory/provider-router.ts";
+import { McpCallError } from "../src/mcp/mcp-client.ts";
+import { TimeoutError } from "../src/util/async.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const SECRET = "memory-route-test-secret".repeat(3);
 
@@ -37,7 +43,11 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
         signingSecret: SECRET,
       }),
     );
-    server = createServer(built.app, { signingSecret: SECRET, memory: built.memory });
+    server = createServer(built.app, {
+      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+      signingSecret: SECRET,
+      memory: built.memory,
+    });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
   });
@@ -375,7 +385,11 @@ describe("agent memory: cross-conversation writes are refused", () => {
       { groupId: GROUP, principalId: "U-carol" },
       { groupId: GROUP, principalId: "U-sam" },
     ]);
-    server = createServer(built.app, { signingSecret: SECRET, memory: built.memory });
+    server = createServer(built.app, {
+      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+      signingSecret: SECRET,
+      memory: built.memory,
+    });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
   });
@@ -488,5 +502,99 @@ describe("agent memory: cross-conversation writes are refused", () => {
     assert.doesNotMatch(await built.memory.read(scopeId("personal", "U1")), /should not land/);
     assert.equal((await post({ participants: [], facts: ["x"] }, cap)).status, 400);
     assert.equal((await post({ channel: 42, facts: ["x"] }, cap)).status, 400);
+  });
+});
+
+describe("agent memory routes report provider failures as problem+json", () => {
+  it("answers 502 with stable codes, partial search results and the write's outcomes", async () => {
+    const built = buildApp(
+      testConfig({ dataDir: mkdtempSync(join(tmpdir(), "memory-routes-problem-")), signingSecret: SECRET }),
+    );
+    const failing: MemoryService = {
+      async recall() {
+        return [];
+      },
+      async query() {
+        throw new McpCallError("mcp tools/call failed (HTTP 503)", { status: 503 });
+      },
+      async capture() {
+        throw new TimeoutError("memory provider timed out after 3000ms");
+      },
+      async read() {
+        return "";
+      },
+    };
+    const memory = createRoutedMemoryService({
+      providers: { default: built.memory, knowledge: failing },
+      routes: [
+        { provider: "default", scopes: ["personal"], capture: "automatic" },
+        { provider: "knowledge", scopes: ["personal"], capture: "explicit", manage: false, failOpen: true },
+      ],
+    });
+    const server = createServer(built.app, {
+      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+      signingSecret: SECRET,
+      memory,
+    });
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+    const url = `http://localhost:${(server.address() as AddressInfo).port}`;
+    const U1 = scopeId("personal", "U1");
+    await built.memory.capture(U1, ["launch checklist lives in docs/launch.md"], Date.parse("2026-10-01T12:00:00Z"));
+    const headers = {
+      "content-type": "application/json",
+      "x-agent-capability": await mintCapabilityToken(
+        { actorId: "U1", scopeId: U1, exp: Date.now() + CAPABILITY_TTL_MS, memory: { write: U1, read: [U1] } },
+        SECRET,
+      ),
+    };
+
+    const search = await fetch(`${url}/v1/memory/search`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ query: "launch" }),
+    });
+    assert.equal(search.status, 502);
+    assert.equal(search.headers.get("content-type"), "application/problem+json");
+    const found = (await search.json()) as {
+      status: number;
+      problems: Array<{ code: string; provider: string }>;
+      results: Array<{ fact: string }>;
+    };
+    assert.equal(found.status, 502);
+    assert.deepEqual(
+      found.problems.map(({ code, provider }) => ({ code, provider })),
+      [{ code: "memory_provider_failed", provider: "knowledge" }],
+    );
+    assert.match(found.results.map((result) => result.fact).join("\n"), /launch checklist/);
+
+    const write = await fetch(`${url}/v1/memory/facts`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ facts: ["prefers terse replies"] }),
+    });
+    assert.equal(write.status, 502);
+    assert.equal(write.headers.get("content-type"), "application/problem+json");
+    const written = (await write.json()) as {
+      added: number;
+      problems: Array<{ code: string; detail: string; fix: string }>;
+      outcomes: Array<{ provider: string; outcome: string }>;
+    };
+    assert.equal(written.added, 1);
+    assert.deepEqual(
+      written.problems.map(({ code }) => code),
+      ["memory_provider_timeout"],
+    );
+    assert.match(written.problems[0]?.detail ?? "", /whether it stored the facts is unknown; QM did not retry/);
+    assert.deepEqual(
+      written.outcomes
+        .map(({ provider, outcome }) => ({ provider, outcome }))
+        .sort((a, b) => a.provider.localeCompare(b.provider)),
+      [
+        { provider: "default", outcome: "committed" },
+        { provider: "knowledge", outcome: "unknown" },
+      ],
+    );
+    assert.match(await built.memory.read(U1), /prefers terse replies/);
   });
 });

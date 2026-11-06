@@ -1,22 +1,24 @@
+import type { AdmittedWork } from "../../util/admitted-work.ts";
 import type { TraceCarrier } from "../../../plugins/chassis/src/error-reporting.ts";
-import type { GoalCreateInput } from "../../harness/goal.ts";
-import type { RunStop } from "../../runs/run-store.ts";
+import type { GoalCreateInput } from "../../agent/goal.ts";
+import type { RunStop, TurnPark } from "../../runs/run-store.ts";
 import type { ExternalSlackPolicies } from "../../resolution/external-slack.ts";
-import type { RuntimeService } from "../../harness/runtime-types.ts";
+import type { RuntimeService } from "../../agent/runtime-types.ts";
 import type { SandboxResources } from "../../sandbox/sandbox-resources.ts";
+import type { AdvisoryLock } from "../../persistence/advisory-lock.ts";
 import type { AwsRoleBroker } from "../../auth/aws-role-broker.ts";
 import type {
   CommandApprovalGrant,
   Conversation,
   Principal,
   PendingApprovalRecord,
-  SurfaceContextQuery,
-  SurfaceContextResult,
   TurnRequest,
   TurnResult,
 } from "../../types.ts";
+import type { SurfaceContextQuery, SurfaceContextResult } from "../../reach/reach.ts";
 import type { TurnOrigin } from "../turn-origin.ts";
 import type { IdentityService } from "../../identity/identity-service.ts";
+import type { UserStore } from "../../identity/user-store.ts";
 import type { ResolutionService } from "../../resolution/resolution-service.ts";
 import type { ModelAccount, OrgBranding, ScopedConfigStore } from "../../resolution/config-store.ts";
 import type { UserModelCredentialStore } from "../../model/user-model-credential-store.ts";
@@ -28,7 +30,6 @@ import type { SessionStore } from "../../sessions/session-store.ts";
 import type { SessionStateBus } from "../../runs/session-state-bus.ts";
 import type { SessionSyscallsFactory } from "../../sessions/session-syscalls.ts";
 import type { DeliveryStore } from "../../delivery/delivery-store.ts";
-import type { WorkspaceStore } from "../../workspace/workspace-store.ts";
 import type { Sandbox } from "../../sandbox/sandbox.ts";
 import type { ProcessRegistry } from "../../processes/process-registry.ts";
 import type { MonitorStore } from "../../monitors/monitor-store.ts";
@@ -38,13 +39,11 @@ import type { ConnectorTokenStore, Keychain, ServiceCredentialStore } from "../.
 import type { FeatureFlagStore } from "../../feature-flags.ts";
 import type { TeamStore } from "../../teams/teams.ts";
 import type { CredentialUsageSink } from "../../admin/credential-usage-sink.ts";
-import type { ModelGateway } from "../../model/model-gateway.ts";
 import type { AuditLog } from "../../audit/audit-log.ts";
 import type { SecurityScreener } from "../../security/security-screener.ts";
-import type { RateLimiter } from "../../ratelimit/rate-limiter.ts";
 import type { BudgetTracker } from "../../ratelimit/budget.ts";
 import type { ControlService } from "../../api/control-service.ts";
-import type { Harness } from "../../harness/harness.ts";
+import type { Agent, RuntimeChoice, SessionRoute } from "../../agent/agent.ts";
 import type { AdminService } from "../../admin/admin-service.ts";
 import type { ErrorLog } from "../../admin/error-log.ts";
 import type { RunSignalStore } from "../../runs/run-signal-store.ts";
@@ -57,7 +56,6 @@ import type { MemoryStrategy } from "../../memory/strategy.ts";
 import type { MemoryPolicy } from "../../memory/policy.ts";
 import type { DurableMap } from "../../persistence/durable-map.ts";
 import type { BlobTransferStore } from "../../persistence/blob-transfer.ts";
-import type { AdvisoryLock } from "../../persistence/advisory-lock.ts";
 import type { SkillStore } from "../../skills/skill-store.ts";
 import type { OAuthClientResolver } from "../../connectors/oauth.ts";
 import type { SkillBundleStore } from "../../skills/skill-bundle-store.ts";
@@ -69,24 +67,11 @@ import type { AclStore } from "../../acl/acl-store.ts";
 import type { SwarmService, SwarmTurn } from "../../swarms/swarm-service.ts";
 import type { ChannelPolicyStore } from "../../surface-cache/channel-policy-store.ts";
 import type { SurfaceCache } from "../../surface-cache/types.ts";
-import type { WorkflowDefinition } from "../../sessions/workflow-gate.ts";
+import type { SurfaceRegistry } from "../../surfaces/registry.ts";
 
 export interface OrchestratorInput extends Omit<
   TurnRequest,
-  | "surface"
-  | "actor"
-  | "conversation"
-  | "idempotencyKey"
-  | "spawned"
-  | "async"
-  | "triggerTs"
-  | "entryTs"
-  | "triggered"
-  | "securityScreenData"
-  | "triggerDestination"
-  | "ownerKeychainUnion"
-  | "unprompted"
-  | "liveActor"
+  "surface" | "actor" | "conversation" | "spawned" | "async"
 > {
   modelAccount?: ModelAccount;
   surface?: string;
@@ -103,9 +88,9 @@ export interface OrchestratorInput extends Omit<
 
   runStartedAt?: number;
   finalAttempt?: boolean;
-  background?: boolean;
   cancel?: AbortSignal;
   shutdown?: AbortSignal;
+  park?: TurnPark;
   sessionParticipantIds?: readonly string[];
   scopeVersion?: string;
   swarm?: SwarmTurn;
@@ -114,50 +99,46 @@ export interface OrchestratorInput extends Omit<
 }
 
 export interface OrchestratorDeps {
+  /** Tracks each turn's detached tail so shutdown drains it (box reclaim, fallback title). */
+  admittedWork?: AdmittedWork;
   externalSlackPolicies?: ExternalSlackPolicies;
   swarms?: SwarmService;
   refreshModels?: () => Promise<void>;
   identity: IdentityService;
+  users: Pick<UserStore, "record" | "markApps">;
   resolution: ResolutionService;
   config?: ScopedConfigStore;
-  /** The deployment's fallback harness (wiring's config.harness) — used when no org runtime selection exists. */
-  defaultHarness?: string;
   defaultTurnWallClockMs?: number;
   userModelCredentials?: UserModelCredentialStore;
   brandingDefault?: OrgBranding;
-  resolveBaseModelId?: () => string | undefined;
+  surfaces: SurfaceRegistry;
+  resolveSessionRuntime?: (route: SessionRoute) => Promise<RuntimeChoice>;
   sessions: SessionStore;
-  workflowDefinitions?: readonly WorkflowDefinition[];
   sessionStateBus?: SessionStateBus;
   sessionSyscalls?: SessionSyscallsFactory;
-  workspace: WorkspaceStore;
   files: FileArtifactStore;
   toolOutput?: ToolOutputStore;
   sandbox: Sandbox;
   sandboxResources?: SandboxResources;
-  modelGateway: ModelGateway;
+  advisoryLock: AdvisoryLock;
   auditLog: AuditLog;
-  rateLimiter: RateLimiter;
   budget?: BudgetTracker;
   maxContextTokens?: number;
   execTimeoutMs?: number;
   execTimeoutCeilingMs?: number;
   approvalSummaryTimeoutMs?: number;
-  turnLeaseWaitMs?: number;
   securityScreenTimeoutMs?: number;
   securityScreener?: SecurityScreener;
   backgroundJobTtlMs?: number;
   sandboxCapabilityTtlMs?: number;
   backgroundJobTtlMaxMs?: number;
-  harness: Harness;
+  agent: Agent;
   signingSecret?: string;
   capabilitySecret?: string;
   capabilityTokenCompression?: boolean;
   apiBaseUrl?: string;
   sandboxModels?: boolean;
   publicWebUrl?: string;
-  /** The public base for an inbound webhook URL (PUBLIC_WEB_URL ?? api url) — what the webhook
-   *  tool hands the user to point the sender at; matches the HTTP webhook route's base exactly. */
   webhookPublicUrl?: string;
   deploy: DeployService;
   acl: AclStore;
@@ -168,8 +149,7 @@ export interface OrchestratorDeps {
   memoryStrategy?: MemoryStrategy;
   skills?: SkillStore;
   skillBundles?: SkillBundleStore;
-  skillsReady?: Promise<void>;
-  advisoryLock?: AdvisoryLock;
+  skillsReady?: () => Promise<void>;
   approvals: DurableMap<PendingApprovalRecord>;
   approvalGrants: DurableMap<CommandApprovalGrant>;
   errors?: ErrorLog;
@@ -186,17 +166,12 @@ export interface OrchestratorDeps {
   runtime?: RuntimeService;
   validateScheduledRuntime?: (
     scope: import("../../types.ts").ScopeId,
-    choice: import("../../harness/harness.ts").RuntimeChoice,
-    purpose?: import("../../resolution/config-store.ts").RuntimePurpose,
+    choice: import("../../agent/agent.ts").RuntimeChoice,
+    purpose?: import("../../resolution/config-store.ts").TurnRuntimePurpose,
   ) => Promise<string | null>;
   connectorTokens?: ConnectorTokenStore;
   resolveConnectorClient?: OAuthClientResolver;
   featureFlags?: FeatureFlagStore;
-  installSharedCanvas?: (
-    actorId: string,
-    fileId: string,
-    at: { threadRef: string; sessionId: string },
-  ) => Promise<string | null>;
   teams?: TeamStore;
   credentialUsage?: CredentialUsageSink;
   keychain?: Keychain;
@@ -207,37 +182,20 @@ export interface OrchestratorDeps {
   isCurrentSharedScopeMember?: IsCurrentSharedScopeMember;
   currentScopeMembers?: import("../../resolution/scope-membership.ts").CurrentScopeMembers;
   managedGroups?: Pick<ManagedGroupDirectory, "recognizes" | "members" | "version" | "withVersion" | "slackChannel">;
-  reachExec?: boolean;
   environments?: EnvironmentStore;
   layerBrokerFor?: (tool: BrokeredLayerTool) => AwsRoleBroker | undefined;
   brokeredTools?: readonly BrokeredLayerTool[];
   deploymentLayer?: DeploymentLayerRuntime;
   surfaceContext?: SurfaceContextPuller;
-  surfaceSearch?: SurfaceSearchStore;
   surfaceCache?: SurfaceCache;
   channelPolicy?: ChannelPolicyStore;
+  replyCheck?: import("../../decisions/hooks.ts").ReplyCheckFactory;
   surfaceDebugFooter?: boolean;
 }
 
 export interface SurfaceContextPuller {
   pull(source: string, query: SurfaceContextQuery): Promise<SurfaceContextResult | null>;
   searchLive?(source: string, query: SurfaceContextQuery): Promise<SurfaceContextResult | null>;
-}
-
-interface SurfaceSearchStore {
-  search(query: SurfaceSearchQuery): Promise<SurfaceSearchStoreHit[]>;
-}
-interface SurfaceSearchQuery {
-  surface: string;
-  container: string;
-  query: string;
-  limit: number;
-}
-interface SurfaceSearchStoreHit {
-  ref?: string;
-  author?: string;
-  when?: string;
-  snippet: string;
 }
 
 export interface Orchestrator {
@@ -249,9 +207,5 @@ export interface Orchestrator {
     sessionId?: string;
     verifiedSwarm?: boolean;
   }): Promise<"allow" | "block" | "unscreened">;
-  regenerateTitle(
-    sessionId: string,
-    principalId: string,
-    participantIds?: readonly string[],
-  ): Promise<{ title: string | null } | null>;
+  regenerateTitle(sessionId: string, principalId: string, personal?: boolean): Promise<{ title: string | null } | null>;
 }

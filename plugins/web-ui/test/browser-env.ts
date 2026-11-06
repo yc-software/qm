@@ -1,5 +1,6 @@
 import { JSDOM, type ConstructorOptions } from "jsdom";
-import { createServer, type PluginOption, type ViteDevServer } from "vite";
+import type { PluginOption, ViteDevServer } from "vite";
+import { testViteServer } from "./vite-server.ts";
 
 export interface BrowserEnv {
   dom: JSDOM;
@@ -77,9 +78,7 @@ export async function browserEnv(
   };
   let vite: ViteDevServer;
   try {
-    vite = await createServer({
-      server: { middlewareMode: true, hmr: false, ws: false },
-      appType: "custom",
+    vite = await testViteServer({
       plugins: options.plugins,
     });
   } catch (error) {

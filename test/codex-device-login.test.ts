@@ -55,13 +55,13 @@ test("device login: start returns the prompt, poll is pending then yields subscr
   const server = fakeAuthServer(t);
   const login = createCodexDeviceLogin();
   t.after(() => login.close());
-  const prompt = await login.start();
+  const prompt = await login.start("alice");
   assert.equal(prompt.userCode, "ABCD-1234");
   assert.equal(prompt.verificationUrl, "https://auth.openai.com/codex/device");
   assert.equal(prompt.intervalMs, 1000);
-  assert.equal(await login.poll(prompt.deviceAuthId), "pending");
+  assert.equal(await login.poll(prompt.deviceAuthId, "alice"), "pending");
   server.approve();
-  const tokens = await settle(() => login.poll(prompt.deviceAuthId));
+  const tokens = await settle(() => login.poll(prompt.deviceAuthId, "alice"));
   assert.ok(tokens && typeof tokens === "object" && "accessToken" in tokens);
   assert.equal(tokens.accessToken, accessToken("acct_9"));
   assert.equal((tokens as { refreshToken?: string }).refreshToken, "ref-1");
@@ -69,23 +69,38 @@ test("device login: start returns the prompt, poll is pending then yields subscr
   const exchange = server.calls.find((call) => call.url.endsWith("/oauth/token"));
   assert.match(exchange?.body ?? "", /code_verifier=verifier-1/);
   assert.match(exchange?.body ?? "", /deviceauth%2Fcallback/);
-  await assert.rejects(() => login.poll(prompt.deviceAuthId), /expired or unknown/);
+  assert.equal(await login.poll(prompt.deviceAuthId, "alice"), "unknown");
+});
+
+test("device login: only the principal who started a login can poll it", async (t) => {
+  const server = fakeAuthServer(t);
+  const login = createCodexDeviceLogin();
+  t.after(() => login.close());
+  const prompt = await login.start("alice");
+  assert.equal(await login.poll(prompt.deviceAuthId, "mallory"), "unknown");
+  server.approve();
+  for (let i = 0; i < 60 && !server.calls.some((call) => call.url.endsWith("/oauth/token")); i += 1)
+    await new Promise((r) => setTimeout(r, 100));
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(await login.poll(prompt.deviceAuthId, "mallory"), "unknown");
+  const tokens = await settle(() => login.poll(prompt.deviceAuthId, "alice"));
+  assert.equal((tokens as { accountId?: string }).accountId, "acct_9");
 });
 
 test("device login: a denied login surfaces the provider error and cleans up", async (t) => {
   const server = fakeAuthServer(t);
   const login = createCodexDeviceLogin();
   t.after(() => login.close());
-  const prompt = await login.start();
+  const prompt = await login.start("alice");
   server.deny();
-  const error = await settle(() => login.poll(prompt.deviceAuthId));
+  const error = await settle(() => login.poll(prompt.deviceAuthId, "alice"));
   assert.match(String(error), /denied by user/);
-  await assert.rejects(() => login.poll(prompt.deviceAuthId), /expired or unknown/);
+  assert.equal(await login.poll(prompt.deviceAuthId, "alice"), "unknown");
 });
 
 test("device login: a provider failure before the prompt rejects start", async (t) => {
   fakeAuthServer(t, { userCodeStatus: 500 });
   const login = createCodexDeviceLogin();
   t.after(() => login.close());
-  await assert.rejects(() => login.start(), /device code request failed with status 500/);
+  await assert.rejects(() => login.start("alice"), /device code request failed with status 500/);
 });

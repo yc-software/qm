@@ -12,7 +12,12 @@ import { projectRoutes } from "../src/api/routes/projects.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
-import { createProjectStore, projectGroupRef, projectScopeId } from "../src/projects/project-store.ts";
+import {
+  createProjectStore,
+  projectGroupRef,
+  projectScopeId,
+  validProjectIcon,
+} from "../src/projects/project-store.ts";
 import {
   createCanManageScope,
   createCanReadScope,
@@ -24,11 +29,13 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { runNowSettled } from "./support/settle.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { testMap, testDeployBackings, testDatabaseUrl } from "./support/test-database.ts";
+import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { isAgentReply } from "../src/sessions/items.ts";
 
 test("ProjectStore atomically maintains a managed-group roster", async () => {
   let at = 10;
-  const projects = createProjectStore(createMemoryMap(), { ...singleProcessDeps(), id: () => "p1", now: () => at++ });
+  const projects = createProjectStore(testMap(), { ...singleProcessDeps(), id: () => "p1", now: () => at++ });
   const project = await projects.create({ name: "  Launch Cohort  ", ownerId: "owner" });
   const initialVersion = await projects.version(projectGroupRef(project.id));
   assert.equal(project.name, "Launch Cohort");
@@ -57,7 +64,7 @@ test("session lists check each project once per request and observe membership c
         "group",
         projectScopeId(project.id),
       );
-      await built.sessions.addParticipant(session.id, "member", undefined, { includeHistory: true });
+      await built.sessions.addParticipant(session.id, "member");
       await built.sessions.updateTitle(session.id, `History ${i}`);
     }
     const get = built.projects.get.bind(built.projects);
@@ -86,7 +93,7 @@ test("session lists check each project once per request and observe membership c
 
 test("ProjectStore rename is owner-only and cleans the name", async () => {
   let at = 100;
-  const projects = createProjectStore(createMemoryMap(), { ...singleProcessDeps(), id: () => "pr", now: () => at++ });
+  const projects = createProjectStore(testMap(), { ...singleProcessDeps(), id: () => "pr", now: () => at++ });
   const project = await projects.create({ name: "Before", ownerId: "owner" });
   const versionBefore = await projects.version(projectGroupRef(project.id));
   assert.equal((await projects.rename(project.id, "mallory", "Hijacked")).status, "forbidden");
@@ -106,9 +113,50 @@ test("ProjectStore rename is owner-only and cleans the name", async () => {
   assert.ok(same.status === "ok" && !same.changed);
 });
 
+test("validProjectIcon accepts exactly one emoji or a named custom emoji", () => {
+  const emoji = (value: string) => ({ kind: "emoji", value });
+  for (const ok of [...["🚢", "👩🏽‍💻", "🏳️‍🌈", "🇺🇸", "❤️"].map(emoji), { kind: "custom", name: "party_parrot" }])
+    assert.ok(validProjectIcon(ok), `accepts ${JSON.stringify(ok)}`);
+  assert.ok(validProjectIcon(null));
+  for (const bad of [
+    ...["", "abc", "🚢 ship", "🚢🚢", "©️🚢", "<img>"].map(emoji),
+    { kind: "custom", name: "" },
+    { kind: "custom", name: "x", extra: 1 },
+    "🚢",
+    ":shipit:",
+    42,
+  ])
+    assert.ok(!validProjectIcon(bad), `rejects ${JSON.stringify(bad)}`);
+});
+
+test("ProjectStore icon is member-managed, validated, and not a roster change", async () => {
+  let at = 900;
+  const projects = createProjectStore(testMap(), { ...singleProcessDeps(), id: () => "ic", now: () => at++ });
+  const project = await projects.create({ name: "Iconic", ownerId: "owner" });
+  await projects.addMember(project.id, "owner", "member");
+  const groupRef = projectGroupRef(project.id);
+  const versionBefore = await projects.version(groupRef);
+  assert.equal((await projects.setIcon(project.id, "mallory", { kind: "emoji", value: "🚢" })).status, "forbidden");
+  assert.equal((await projects.setIcon("missing", "owner", { kind: "emoji", value: "🚢" })).status, "not_found");
+  assert.equal(
+    (await projects.setIcon(project.id, "owner", { kind: "emoji", value: "not an emoji" })).status,
+    "invalid_icon",
+  );
+  const shipit = { kind: "custom", name: "shipit" } as const;
+  const set = await projects.setIcon(project.id, "member", shipit);
+  assert.ok(set.status === "ok" && set.changed);
+  assert.deepEqual(set.project.icon, shipit);
+  assert.deepEqual((await projects.get(project.id))?.icon, shipit);
+  const same = await projects.setIcon(project.id, "owner", { ...shipit });
+  assert.ok(same.status === "ok" && !same.changed);
+  const cleared = await projects.setIcon(project.id, "owner", null);
+  assert.ok(cleared.status === "ok" && cleared.changed && !("icon" in cleared.project));
+  assert.equal(await projects.version(groupRef), versionBefore, "icon is not a roster change");
+});
+
 test("ProjectStore slack-channel link is member-managed and not a roster change", async () => {
   let at = 500;
-  const projects = createProjectStore(createMemoryMap(), { ...singleProcessDeps(), id: () => "sl", now: () => at++ });
+  const projects = createProjectStore(testMap(), { ...singleProcessDeps(), id: () => "sl", now: () => at++ });
   const project = await projects.create({ name: "Linked", ownerId: "owner" });
   await projects.addMember(project.id, "owner", "member");
   const groupRef = projectGroupRef(project.id);
@@ -151,7 +199,7 @@ test("ProjectStore slack-channel link is member-managed and not a roster change"
 
 test("ProjectStore derives membership from the linked channel roster", async () => {
   let at = 900;
-  const projects = createProjectStore(createMemoryMap(), { ...singleProcessDeps(), id: () => "dr", now: () => at++ });
+  const projects = createProjectStore(testMap(), { ...singleProcessDeps(), id: () => "dr", now: () => at++ });
   const project = await projects.create({ name: "Derived", ownerId: "owner" });
   const groupRef = projectGroupRef(project.id);
 
@@ -188,7 +236,7 @@ test("ProjectStore derives membership from the linked channel roster", async () 
 });
 
 test("managed groups override Slack membership and historical sessions grant no access", async () => {
-  const projects = createProjectStore(createMemoryMap(), { ...singleProcessDeps(), id: () => "managed" });
+  const projects = createProjectStore(testMap(), { ...singleProcessDeps(), id: () => "managed" });
   const project = await projects.create({ name: "Managed", ownerId: "owner" });
   const managedScope = projectScopeId(project.id);
   const deps = {
@@ -367,7 +415,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
 
   assert.equal((await turn("owner", "web:owner:first", "secret-before-join")).status, "ok");
   assert.equal((await built.runs.list())[0]?.request.scopeVersion, await built.projects.version(groupRef));
-  const [first] = (await built.sessions.scanAll()).filter((session) => session.scopeId === scope);
+  const [first] = await built.sessions.listByScope(scope);
   assert.ok(first);
   assert.equal(first.channelName, "Launch Cohort");
   assert.ok(!(await built.sessions.listByParticipant("outsider")).some((session) => session.id === first.id));
@@ -428,10 +476,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
     (await built.sessions.listByParticipant("member")).find((session) => session.id === first.id)?.title,
     (await built.sessions.get(first.id))?.title,
   );
-  assert.match(
-    JSON.stringify((await built.app.getSessionForViewer(first.id, "member"))?.entries),
-    /secret-before-join/,
-  );
+  assert.match(JSON.stringify((await built.app.getSessionForViewer(first.id, "member"))?.items), /secret-before-join/);
   assert.equal(await built.app.managesScope("member", scope), true);
   assert.ok(await built.app.listScopeResources("member", scope));
   assert.deepEqual(await built.app.listSessionApprovals(pendingBeforeJoin.sessionId!, "member"), []);
@@ -449,10 +494,10 @@ test("Project routes use ordinary group sessions with the durable roster as auth
     approval: { requestId: pendingApproval.requestId, approved: true },
   });
   assert.equal(forgedApproval.status, "refused");
-  const deployAcl = createAclStore();
+  const deployAcl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const deploy = createDeployService({
     ...singleProcessDeps(),
-    deployStore: createDeployStore(),
+    deployStore: createDeployStore(testDeployBackings()),
     provider: {
       profile: { managedScaleToZero: false },
       apply: async () => ({ host: "127.0.0.1", port: 19999 }),
@@ -528,8 +573,8 @@ test("Project routes use ordinary group sessions with the durable roster as auth
 
   const forked = await built.app.forkSession(first.id, "owner");
   assert.ok(forked);
-  assert.match(JSON.stringify(forked.entries), /secret-before-join/);
-  assert.match(JSON.stringify(forked.entries), /after joining/);
+  assert.match(JSON.stringify(forked.items), /secret-before-join/);
+  assert.match(JSON.stringify(forked.items), /after joining/);
   assert.equal((await built.sessions.get(forked.session.id))?.title ?? null, null);
 
   const appendForFork = built.sessions.appendMany.bind(built.sessions);
@@ -542,13 +587,13 @@ test("Project routes use ordinary group sessions with the durable roster as auth
     forkCopyStarted = resolve;
   });
   let copyingSessionId: string | undefined;
-  built.sessions.appendMany = async (lease, entries) => {
-    if (!copyingSessionId && lease.sessionId !== first.id && lease.sessionId !== forked.session.id) {
-      copyingSessionId = lease.sessionId;
+  built.sessions.appendMany = async (writer, items) => {
+    if (!copyingSessionId && writer.sessionId !== first.id && writer.sessionId !== forked.session.id) {
+      copyingSessionId = writer.sessionId;
       forkCopyStarted();
       await forkCopyReleased;
     }
-    return appendForFork(lease, entries);
+    return appendForFork(writer, items);
   };
   const racingForkPromise = built.app.forkSession(first.id, "owner");
   await forkCopyStart;
@@ -566,10 +611,10 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   assert.equal(racingFork.session.id, copyingSessionId);
   const ownerForkView = await built.app.getSessionForViewer(racingFork.session.id, "owner");
   const memberForkView = await built.app.getSessionForViewer(racingFork.session.id, "member");
-  assert.match(JSON.stringify(ownerForkView?.entries), /after joining/);
-  assert.match(JSON.stringify(memberForkView?.entries), /after joining/);
+  assert.match(JSON.stringify(ownerForkView?.items), /after joining/);
+  assert.match(JSON.stringify(memberForkView?.items), /after joining/);
   assert.match(
-    JSON.stringify((await built.app.getSessionForViewer(racingFork.session.id, "outsider"))?.entries),
+    JSON.stringify((await built.app.getSessionForViewer(racingFork.session.id, "outsider"))?.items),
     /after joining/,
   );
   assert.equal((await built.app.removeProjectMember(project.id, "owner", "outsider")).status, "ok");
@@ -577,31 +622,8 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   const continuedForkRequest = (await built.sessions.listLlmRequests(racingFork.session.id)).at(-1)!;
   assert.match(JSON.stringify(continuedForkRequest.promptEnvelope), /after joining/);
 
-  const participantOrder: string[] = [];
-  const acquireLease = built.sessions.acquireLease.bind(built.sessions);
-  const addParticipantForOrder = built.sessions.addParticipant.bind(built.sessions);
-  built.sessions.acquireLease = async (sessionId, holder) => {
-    const attempt = await acquireLease(sessionId, holder);
-    participantOrder.push(`lease:${sessionId}`);
-    return attempt;
-  };
-  built.sessions.addParticipant = async (sessionId, principalId, title) => {
-    participantOrder.push(`participant:${sessionId}:${principalId}`);
-    return addParticipantForOrder(sessionId, principalId, title);
-  };
-  try {
-    assert.equal((await turn("owner", "web:owner:second")).status, "ok");
-  } finally {
-    built.sessions.acquireLease = acquireLease;
-    built.sessions.addParticipant = addParticipantForOrder;
-  }
-  const leaseIndex = participantOrder.findIndex((event) => event.startsWith("lease:"));
-  const participantIndex = participantOrder.findIndex((event) => event.startsWith("participant:"));
-  assert.ok(
-    leaseIndex >= 0 && participantIndex > leaseIndex,
-    "Project participant reconciliation happens only after the lease",
-  );
-  const projectSessions = (await built.sessions.scanAll()).filter((session) => session.scopeId === scope);
+  assert.equal((await turn("owner", "web:owner:second")).status, "ok");
+  const projectSessions = await built.sessions.listByScope(scope);
   assert.equal(projectSessions.length, 6);
   for (const session of projectSessions) {
     assert.ok((await built.sessions.listByParticipant("member")).some((candidate) => candidate.id === session.id));
@@ -617,7 +639,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
         audience: [{ externalId: "outsider" }],
       },
       text: "background project work",
-      triggered: true,
+      origin: { kind: "automation" },
     });
   assert.equal((await background()).status, "ok");
   const removableApprovalThread = "web:member:approval-to-cancel";
@@ -635,7 +657,6 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   await built.identity.reactivate("member");
   assert.equal((await turn("owner", "web:owner:first", "after-reactivation")).status, "ok");
   const reactivatedRequest = (await built.sessions.listLlmRequests(first.id)).at(-1)!;
-  assert.doesNotMatch(JSON.stringify(reactivatedRequest.promptEnvelope), /inactive-gap-secret/);
   assert.match(JSON.stringify(reactivatedRequest.promptEnvelope), /after-reactivation/);
   await built.identity.deactivate("owner");
   assert.deepEqual(await built.app.listProjects("member"), []);
@@ -646,12 +667,12 @@ test("Project routes use ordinary group sessions with the durable roster as auth
 
   const addParticipant = built.sessions.addParticipant.bind(built.sessions);
   let failReconcile = true;
-  built.sessions.addParticipant = async (sessionId, principalId, title, opts) => {
+  built.sessions.addParticipant = async (sessionId, principalId, title) => {
     if (principalId === "outsider" && failReconcile) {
       failReconcile = false;
       throw new Error("injected participant failure");
     }
-    return addParticipant(sessionId, principalId, title, opts);
+    return addParticipant(sessionId, principalId, title);
   };
   await assert.rejects(built.app.addProjectMember(project.id, "owner", "outsider"), /injected participant failure/);
   assert.ok((await built.projects.get(project.id))?.memberIds.includes("outsider"));
@@ -661,8 +682,9 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   assert.equal(healed.status === "ok" && healed.changed, false);
   const outsiderSessions = await built.sessions.listByParticipant("outsider");
   assert.ok(projectSessions.every((session) => outsiderSessions.some((candidate) => candidate.id === session.id)));
-  const globalTitles = new Map((await built.sessions.scanAll()).map((session) => [session.id, session.title ?? null]));
-  assert.ok(outsiderSessions.every((session) => (session.title ?? null) === globalTitles.get(session.id)));
+  for (const session of outsiderSessions) {
+    assert.equal(session.title ?? null, (await built.sessions.get(session.id))?.title ?? null);
+  }
   assert.equal((await built.app.removeProjectMember(project.id, "owner", "outsider")).status, "ok");
 
   const removed = await fetch(`${base}/v1/projects/${project.id}/members/member`, {
@@ -679,19 +701,14 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   assert.equal(await built.app.getSessionForViewer(first.id, "member"), null);
   assert.equal((await turn("member", "web:owner:first")).status, "refused");
   assert.equal(await built.app.pendingApprovalForThread(removableApprovalThread), null);
-  const closed = (await built.sessions.listParticipants()).filter(
-    (window) => window.principalId === "member" && projectSessions.some((session) => session.id === window.sessionId),
-  );
-  assert.equal(closed.length, projectSessions.length);
-  assert.ok(closed.every((window) => window.validTo !== null));
-  const closedAt = Math.max(...closed.map((window) => window.validTo!));
+  const memberRows = async () =>
+    (await built.sessions.listParticipants()).filter(
+      (p) => p.principalId === "member" && projectSessions.some((session) => session.id === p.sessionId),
+    );
+  assert.equal((await memberRows()).length, 0);
 
   assert.equal((await built.app.addProjectMember(project.id, "owner", "member")).status, "ok");
-  const reopened = (await built.sessions.listParticipants()).filter(
-    (window) => window.principalId === "member" && projectSessions.some((session) => session.id === window.sessionId),
-  );
-  assert.ok(closedAt > 0);
-  assert.ok(reopened.every((window) => window.validTo === null && window.validFrom === 0));
+  assert.equal((await memberRows()).length, projectSessions.length);
   assert.equal((await turn("member", removableApprovalThread, "continue after rejoining")).status, "ok");
 
   const queued = await built.app.turn({
@@ -761,7 +778,7 @@ test("a member added mid-turn sees the thread but never the prior roster's outpu
     await turnPaused;
     const session = await built.sessions.getByThread(threadRef);
     assert.ok(session);
-    assert.match(JSON.stringify(await built.sessions.getEntries(session.id)), /old-roster-prompt/);
+    assert.match(JSON.stringify(await built.sessions.getItems(session.id)), /old-roster-prompt/);
 
     const added = await built.app.addProjectMember(project.id, "owner", "late-member");
     assert.equal(added.status, "ok");
@@ -772,13 +789,10 @@ test("a member added mid-turn sees the thread but never the prior roster's outpu
     assert.match(result.reason ?? "", /membership changed/);
     const lateView = await built.app.getSessionForViewer(session.id, "late-member");
     assert.ok(lateView);
-    assert.match(JSON.stringify(lateView.entries), /old-roster-prompt/);
+    assert.match(JSON.stringify(lateView.items), /old-roster-prompt/);
+    assert.equal(lateView.items.some(isAgentReply), false);
     assert.equal(
-      lateView.entries.some((entry) => entry.type === "assistant"),
-      false,
-    );
-    assert.equal(
-      (await built.sessions.getEntries(session.id)).some((entry) => entry.type === "assistant"),
+      (await built.sessions.getItems(session.id)).some((entry) => entry.kind === "AgentMessage"),
       false,
     );
   } finally {
@@ -845,7 +859,7 @@ test("Auto quarantine honors the current Project roster epoch", async () => {
         audience: [],
       },
       text: `!security-risk ${marker}`,
-      unprompted: true,
+      origin: { kind: "ambient" },
       ...(overheard
         ? {
             overheard: [
@@ -868,26 +882,25 @@ test("Auto quarantine honors the current Project roster epoch", async () => {
       audience: [],
     },
     text: "!security-risk initial-marker",
-    unprompted: true,
+    origin: { kind: "ambient" },
     approval: { requestId: quarantined.pendingApprovals![0]!.requestId, approved: false },
   });
   assert.equal(denied.status, "refused");
   const session = await built.sessions.getByThread(threadRef);
   assert.ok(session);
   assert.deepEqual(new Set(await built.sessions.participantsOf(session.id)), new Set(["owner", "member"]));
-  const entriesBeforeRace = await built.sessions.getEntries(session.id);
+  const entriesBeforeRace = await built.sessions.getItems(session.id);
   const llmRequestsBeforeRace = await built.sessions.listLlmRequests(session.id);
 
-  const originalAcquireLease = built.sessions.acquireLease.bind(built.sessions);
+  const originalGetOrCreate = built.sessions.getOrCreateByThread.bind(built.sessions);
   let changed = false;
-  built.sessions.acquireLease = async (sessionId, holder) => {
-    const attempt = await originalAcquireLease(sessionId, holder);
-    if (!changed && sessionId === session.id) {
-      assert.ok(attempt.lease);
+  built.sessions.getOrCreateByThread = async (...args) => {
+    const opened = await originalGetOrCreate(...args);
+    if (!changed && opened.id === session.id) {
       changed = true;
       assert.equal((await built.app.addProjectMember(project.id, "owner", "late-member")).status, "ok");
     }
-    return attempt;
+    return opened;
   };
 
   try {
@@ -895,15 +908,15 @@ test("Auto quarantine honors the current Project roster epoch", async () => {
     assert.equal(raced.status, "refused");
     assert.match(raced.reason ?? "", /membership changed/);
     assert.equal(changed, true);
-    assert.deepEqual(await built.sessions.getEntries(session.id), entriesBeforeRace);
+    assert.deepEqual(await built.sessions.getItems(session.id), entriesBeforeRace);
     assert.deepEqual(await built.sessions.listLlmRequests(session.id), llmRequestsBeforeRace);
-    assert.doesNotMatch(JSON.stringify(await built.sessions.visibleEntries(session.id, "late-member")), /race-marker/);
+    assert.doesNotMatch(JSON.stringify(await built.sessions.visibleItems(session.id, "late-member")), /race-marker/);
     assert.deepEqual(
       new Set(await built.sessions.participantsOf(session.id)),
       new Set(["owner", "member", "late-member"]),
     );
   } finally {
-    built.sessions.acquireLease = originalAcquireLease;
+    built.sessions.getOrCreateByThread = originalGetOrCreate;
   }
 });
 
@@ -933,7 +946,7 @@ test("a member added to a Project inherits the chats that predate them", async (
   assert.ok(row, "a chat that predates the member must appear in their conversation list");
   assert.equal(row.title, "Pre-join chat", "the joiner sees the chat's real title, not a blanked one");
   const view = await built.app.getSessionForViewer(session.id, "member");
-  assert.match(JSON.stringify(view?.entries), /BEFORE_JOIN_TOPIC/, "pre-join transcript must be readable");
+  assert.match(JSON.stringify(view?.items), /BEFORE_JOIN_TOPIC/, "pre-join transcript must be readable");
 
   assert.equal(
     (

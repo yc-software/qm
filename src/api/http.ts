@@ -1,9 +1,13 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { verifySignature, type SourceAuth, SOURCE_AUTH_REPLAY_WINDOW_MS } from "../auth/source-auth.ts";
 
-import { json as sendJson } from "../../plugins/chassis/src/http.ts";
+import { json as sendJson, sendBuffered } from "../../plugins/chassis/src/http.ts";
 
 export { sendJson };
+
+export function sendProblem(res: ServerResponse, status: number, problem: Record<string, unknown>): void {
+  sendBuffered(res, status, { "content-type": "application/problem+json" }, JSON.stringify({ status, ...problem }));
+}
 
 const BODY_DEADLINE = Symbol.for("qm.bodyDeadline");
 type DeadlineCarrier = IncomingMessage & { [BODY_DEADLINE]?: { rearm: (ms: number) => void } };

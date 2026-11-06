@@ -48,13 +48,12 @@ await new Promise<void>((resolve) => core.listen(0, "127.0.0.1", resolve));
 const coreUrl = `http://127.0.0.1:${(core.address() as AddressInfo).port}`;
 Object.assign(process.env, {
   NODE_ENV: "test",
-  PORTAL_PUBLIC_URL: origin,
+  PUBLIC_WEB_URL: origin,
   PORTAL_SESSION_SECRET: secret,
   CORE_SIGNING_SECRET: "desktop-core-secret",
   CORE_ORG_ID: browser.org,
   CORE_API_URL: coreUrl,
   WEB_UI_UPSTREAM: coreUrl,
-  ADMIN_UPSTREAM: coreUrl,
   PORTAL_LOCAL_AUTH_BYPASS: "0",
   PORTAL_PLAYGROUND: "0",
 });

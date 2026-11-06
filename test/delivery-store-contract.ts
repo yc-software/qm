@@ -367,3 +367,25 @@ export async function exerciseDeliveryExpiryRevive(
   assert.equal(raced.length, 1, "exactly one copy joins the queue");
   await store.ack(raced[0]!.id, Date.now());
 }
+
+export async function exerciseDeliveryFail(makeStore: (opts: { maxAgeMs: number }) => DeliveryStore): Promise<void> {
+  const store = makeStore({ maxAgeMs: 60_000 });
+  const card = await store.enqueue({
+    destination: { type: "principal", target: "U-bot" },
+    text: "Approval needed",
+    idempotencyKey: "command-approval:a1:1",
+  });
+  const failed = await store.fail(card.id, "cannot_dm_bot", Date.now());
+  assert.equal(failed?.failedReason, "cannot_dm_bot");
+  assert.ok((failed?.expiredAt ?? 0) > 0, "a failed row leaves the live queue");
+  assert.equal(await store.fail(card.id, "cannot_dm_bot", Date.now()), null, "failing twice reports nothing new");
+  assert.deepEqual(await store.claimPending("principal", 60_000), [], "a failed row is never handed out");
+  const again = await store.enqueue({
+    destination: { type: "principal", target: "U-bot" },
+    text: "Approval needed",
+    idempotencyKey: "command-approval:a1:1",
+  });
+  assert.equal(again.id, card.id);
+  assert.equal(again.failedReason, "cannot_dm_bot", "re-enqueuing the same key does not revive a failed row");
+  assert.deepEqual(await store.claimPending("principal", 60_000), []);
+}

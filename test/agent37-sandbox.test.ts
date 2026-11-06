@@ -1,28 +1,23 @@
 import { pollProcess } from "../src/sandbox/process-poll.ts";
 import { test, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { createAgent37Sandbox } from "../src/sandbox/agent37-sandbox.ts";
 import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
 import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, EGRESS_PROXY_AUD } from "../src/auth/capability-token.ts";
-import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { installFakeAgent37, FAKE_AGENT37_API_KEY, type FakeAgent37 } from "./support/fake-agent37.ts";
 import { NonRetryableTurnError } from "../src/core/turn-error.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { testAdvisoryLock } from "./support/test-database.ts";
 
 let fake: FakeAgent37;
 let sandbox: Sandbox;
 const scope = scopeId("personal", "tester");
-const layers = [{ scopeId: scope, mountPath: "/", mode: "rw" as const }];
 
 function make(extra: Record<string, unknown> = {}): Sandbox {
-  return createAgent37Sandbox(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "a37-ws-"))), {
+  return createAgent37Sandbox({
     ...singleProcessDeps(),
     apiKey: FAKE_AGENT37_API_KEY,
     namePrefix: "qmt",
@@ -38,7 +33,7 @@ beforeEach(() => {
 after(() => fake?.cleanup());
 
 test("provision runs commands with env and cwd", async () => {
-  const h = await sandbox.provision(layers, { env: { MY_VAR: "v1" } });
+  const h = await sandbox.provision(scope, { env: { MY_VAR: "v1" } });
   assert.equal(h.coldStart, true);
   const r = await sandbox.run(h, "pwd; echo VAR=$MY_VAR");
   assert.equal(r.code, 0);
@@ -47,7 +42,7 @@ test("provision runs commands with env and cwd", async () => {
 });
 
 test("streams and exit codes are exact", async () => {
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   const r = await sandbox.run(h, "echo out; echo err >&2; exit 3");
   assert.equal(r.code, 3);
   assert.equal(r.stdout.trim(), "out");
@@ -55,7 +50,7 @@ test("streams and exit codes are exact", async () => {
 });
 
 test("file roundtrip incl. large binary and missing file", async () => {
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   await sandbox.writeFile(h, "a/b.txt", "hello\n");
   assert.equal(await sandbox.readFile(h, "a/b.txt"), "hello\n");
   assert.equal(await sandbox.readFile(h, "nope.txt"), null);
@@ -72,14 +67,14 @@ test("file roundtrip incl. large binary and missing file", async () => {
 });
 
 test("every exec request stays under the single-argument limit of the host", async () => {
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   await sandbox.writeFileBytes(h, "wide.bin", Buffer.alloc(600 * 1024, 7));
   const longest = Math.max(...fake.execScripts().map((s) => Buffer.byteLength(s)));
   assert.ok(longest < 100 * 1024, `longest exec command was ${longest} bytes`);
 });
 
 test("empty file roundtrip", async () => {
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   await sandbox.writeFileBytes(h, "empty.bin", Buffer.alloc(0));
   const back = await sandbox.readFileBytes(h, "empty.bin");
   assert.ok(back);
@@ -89,7 +84,7 @@ test("empty file roundtrip", async () => {
 test("process sessions capability works end to end", async () => {
   assert.ok(supportsProcessSessions(sandbox));
   if (!supportsProcessSessions(sandbox)) return;
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   const { processId } = await sandbox.startProcess(h, "echo one; echo two");
   const { output, status } = await pollProcess(sandbox, h, processId, { deadlineMs: 5_000, waitMs: 100 });
   assert.equal(status.state, "exited");
@@ -103,36 +98,33 @@ test("force-through proxy env is set when a proxy url and token are present", as
     { actorId: "tester", scopeId: scope, aud: EGRESS_PROXY_AUD, exp: Date.now() + 600_000 },
     "secret",
   );
-  const h = await s.provision(layers, { egressToken: token });
+  const h = await s.provision(scope, { egressToken: token });
   const r = await s.run(h, "echo PROXY=$HTTPS_PROXY");
   assert.match(r.stdout, /PROXY=https?:\/\/[^ ]*proxy\.example\.com/);
 });
 
 test("no proxy env without a proxy url", async () => {
-  const h = await sandbox.provision(layers, { egressToken: "ignored" });
+  const h = await sandbox.provision(scope, { egressToken: "ignored" });
   assert.equal(h.env?.HTTPS_PROXY, undefined);
 });
 
 test("instance is reused across provisions and warm start is reported", async () => {
-  const a = await sandbox.provision(layers);
-  const b = await sandbox.provision(layers);
+  const a = await sandbox.provision(scope);
+  const b = await sandbox.provision(scope);
   assert.equal(a.id, b.id);
   assert.equal(b.coldStart, false);
   assert.equal(fake.names().filter((n) => n === a.id).length, 1);
 });
 
 test("a shared advisory lock prevents duplicate instances across core replicas", async () => {
-  const advisoryLock = createMemoryAdvisoryLock();
-  const [a, b] = await Promise.all([
-    make({ advisoryLock }).provision(layers),
-    make({ advisoryLock }).provision(layers),
-  ]);
+  const advisoryLock = testAdvisoryLock();
+  const [a, b] = await Promise.all([make({ advisoryLock }).provision(scope), make({ advisoryLock }).provision(scope)]);
   assert.equal(a.id, b.id);
   assert.equal(fake.names().filter((name) => name === a.id).length, 1);
 });
 
 test("exec on a sleeping instance wakes it without a separate start", async () => {
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   await sandbox.writeFile(h, "keep.txt", "still here\n");
   fake.sleep(h.id);
   const r = await sandbox.run(h, "cat keep.txt");
@@ -143,7 +135,7 @@ test("exec on a sleeping instance wakes it without a separate start", async () =
 });
 
 test("exec during the sleep checkpoint retries until the freeze clears", async () => {
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   fake.sleep(h.id, { freezing: 2 });
   const r = await sandbox.run(h, "echo woke");
   assert.equal(r.stdout.trim(), "woke");
@@ -151,7 +143,7 @@ test("exec during the sleep checkpoint retries until the freeze clears", async (
 });
 
 test("exec on a stopping instance waits for it to stop, then starts it", async () => {
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   await sandbox.writeFile(h, "keep.txt", "still here\n");
   fake.stop(h.id);
   const r = await sandbox.run(h, "cat keep.txt");
@@ -161,17 +153,17 @@ test("exec on a stopping instance waits for it to stop, then starts it", async (
 });
 
 test("a failed instance is surfaced, not replaced, and destroy deletes it", async () => {
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   fake.fail(h.id);
   const fresh = make();
-  await assert.rejects(fresh.provision(layers), /failed/);
+  await assert.rejects(fresh.provision(scope), /failed/);
   assert.equal(fake.names().filter((n) => n === h.id).length, 1);
   await fresh.teardown(h, { destroy: true });
   assert.equal(fake.instance(h.id), null);
 });
 
 test("every timed exec carries a kill-after so a TERM-ignoring command cannot outlive the API's ceiling", async () => {
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   await sandbox.run(h, "true", { timeoutMs: 60_000 });
   await sandbox.run(h, "true", { timeoutMs: 400_000 });
   const timed = fake.execScripts().filter((s) => /\btimeout /.test(s));
@@ -180,7 +172,7 @@ test("every timed exec carries a kill-after so a TERM-ignoring command cannot ou
 });
 
 test("scratch instances are created on demand and deleted at release", async () => {
-  const h = await sandbox.provision(layers, { scratch: { key: "job-1" } });
+  const h = await sandbox.provision(scope, { scratch: { key: "job-1" } });
   assert.equal(h.scratch, true);
   assert.ok(fake.instance(h.id));
   await sandbox.teardown(h);
@@ -188,7 +180,7 @@ test("scratch instances are created on demand and deleted at release", async () 
 });
 
 test("teardown without destroy keeps the instance; destroy deletes it", async () => {
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   await sandbox.teardown(h);
   assert.ok(fake.instance(h.id));
   await sandbox.teardown(h, { destroy: true });
@@ -196,7 +188,7 @@ test("teardown without destroy keeps the instance; destroy deletes it", async ()
 });
 
 test("large command output survives the API's output cap exactly", async () => {
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   const r = await sandbox.run(h, "python3 -c \"print('x' * (900 * 1024), end='')\"");
   assert.equal(r.code, 0);
   assert.equal(r.stdout.length, 900 * 1024);
@@ -204,7 +196,7 @@ test("large command output survives the API's output cap exactly", async () => {
 });
 
 test("command output is bounded and spool files are removed on rejection", async () => {
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   await assert.rejects(
     sandbox.run(h, `python3 -c "print('x' * (${17 * 1024 * 1024}), end='')"`),
     /output exceeds 16777216 bytes/,
@@ -214,7 +206,7 @@ test("command output is bounded and spool files are removed on rejection", async
 });
 
 test("an already-aborted command is never executed", async () => {
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   const before = fake.execScripts().length;
   const controller = new AbortController();
   controller.abort();
@@ -227,7 +219,7 @@ test("an instance already named after the scope is adopted instead of duplicated
     method: "POST",
     body: JSON.stringify({ name: sandboxScopeName("qmt", scope) }),
   });
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   assert.equal(h.coldStart, false);
   const r = await sandbox.run(h, "echo alive");
   assert.equal(r.stdout.trim(), "alive");
@@ -235,7 +227,7 @@ test("an instance already named after the scope is adopted instead of duplicated
 });
 
 test("timeouts beyond the API's sync exec ceiling run detached and poll to completion", async () => {
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   const r = await sandbox.run(h, "echo long-path-ok; echo warn >&2; exit 9", { timeoutMs: 400_000 });
   assert.equal(r.code, 9);
   assert.equal(r.stdout.trim(), "long-path-ok");
@@ -245,7 +237,7 @@ test("timeouts beyond the API's sync exec ceiling run detached and poll to compl
 });
 
 test("create requests the template, the default shape and auto sleep", async () => {
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   const created = fake.instance(h.id);
   assert.equal(created?.template, "agent37-codex");
   assert.equal(created?.autoSleep, true);
@@ -254,7 +246,7 @@ test("create requests the template, the default shape and auto sleep", async () 
 
 test("configured resources are requested at create and advertised in the profile", async () => {
   const s = make({ template: "my-computer", cpus: 4, memoryGb: 8, diskGb: 20 });
-  const h = await s.provision(layers);
+  const h = await s.provision(scope);
   assert.equal(fake.instance(h.id)?.template, "my-computer");
   assert.deepEqual(fake.instance(h.id)?.resources, { cpu: 4, memory: 8, disk: 20 });
   assert.equal(s.profile.spec?.cpus, 4);
@@ -274,7 +266,7 @@ test("instance create retries 429 refusals but not an ambiguous 5xx", async () =
     headers: { "retry-after": "0" },
     match: (c) => c.method === "POST" && c.path === "/v1/instances",
   });
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   assert.equal(h.coldStart, true);
   assert.equal(fake.calls.filter((c) => c.method === "POST" && c.path === "/v1/instances").length, 2);
 
@@ -284,10 +276,7 @@ test("instance create retries 429 refusals but not an ambiguous 5xx", async () =
     match: (c) => c.method === "POST" && c.path === "/v1/instances",
   });
   const posts = fake.calls.filter((c) => c.method === "POST" && c.path === "/v1/instances").length;
-  await assert.rejects(
-    sandbox.provision([{ scopeId: otherScope, mountPath: "/", mode: "rw" }]),
-    /agent37 create .*: http 500 .*\[request id req-create\]/,
-  );
+  await assert.rejects(sandbox.provision(otherScope), /agent37 create .*: http 500 .*\[request id req-create\]/);
   assert.equal(fake.calls.filter((c) => c.method === "POST" && c.path === "/v1/instances").length, posts + 1);
 });
 
@@ -305,9 +294,9 @@ for (const failure of ["disconnect", "503"]) {
         return response;
       },
     });
-    await assert.rejects(adapter.provision(layers), /connection lost after create|http 503/);
+    await assert.rejects(adapter.provision(scope), /connection lost after create|http 503/);
     assert.equal(fake.names().length, 1);
-    const recovered = await adapter.provision(layers);
+    const recovered = await adapter.provision(scope);
     assert.equal(fake.names().length, 1);
     assert.equal((await adapter.run(recovered, "echo recovered")).stdout.trim(), "recovered");
     assert.equal(fake.calls.filter((c) => c.method === "POST" && c.path === "/v1/instances").length, 1);
@@ -319,7 +308,7 @@ test("instance listing retries 429 with Retry-After; exec is never retried and n
     headers: { "retry-after": "0" },
     match: (c) => c.method === "GET" && c.path === "/v1/instances",
   });
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   assert.equal(fake.calls.filter((c) => c.method === "GET" && c.path === "/v1/instances").length, 2);
 
   const before = fake.calls.filter((c) => c.path.endsWith("/exec")).length;
@@ -337,7 +326,7 @@ test("a workspace refusal reaches the user; an unrecognised failure stays retrya
     body: JSON.stringify({ error: { code: "insufficient_balance", message } }),
     match: (c) => c.method === "POST" && c.path === "/v1/instances",
   });
-  await assert.rejects(sandbox.provision(layers), (e: Error) => {
+  await assert.rejects(sandbox.provision(scope), (e: Error) => {
     assert.ok(e instanceof NonRetryableTurnError);
     assert.match(e.message, /add a card to unlock \$5 of free credit/);
     return true;
@@ -347,7 +336,7 @@ test("a workspace refusal reaches the user; an unrecognised failure stays retrya
     body: JSON.stringify({ error: { code: "provisioning_failed", message: "Failed to create the instance." } }),
     match: (c) => c.method === "POST" && c.path === "/v1/instances",
   });
-  await assert.rejects(sandbox.provision(layers), (e: Error) => {
+  await assert.rejects(sandbox.provision(scope), (e: Error) => {
     assert.ok(!(e instanceof NonRetryableTurnError));
     assert.match(e.message, /agent37 create .*: http 402 /);
     return true;
@@ -355,7 +344,7 @@ test("a workspace refusal reaches the user; an unrecognised failure stays retrya
 });
 
 test("a refusal on exec parks the turn instead of failing it generically", async () => {
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   fake.failNext(402, {
     body: JSON.stringify({
       error: { code: "insufficient_balance", message: "This instance is suspended for non-payment." },

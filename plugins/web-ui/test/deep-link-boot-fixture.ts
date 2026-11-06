@@ -1,3 +1,4 @@
+import { item } from "./item-fixture.ts";
 import { browserEnv } from "./browser-env.ts";
 import type { Conversation } from "../src/conv-types.ts";
 import type { CoreContext, CoreSession, TranscriptPage } from "../src/core-bridge.ts";
@@ -15,6 +16,7 @@ export interface Harness {
   sessionsReady: () => Promise<void>;
   refreshSessions: () => Promise<boolean>;
   boot: () => Promise<void>;
+  openChatSearch: () => void;
   switchView: (view: "chats" | "settings") => void;
   renderList: () => void;
   drawChatsPage: () => void;
@@ -41,7 +43,7 @@ interface HarnessOptions {
   remoteCanvas?: unknown;
   listSessions?: unknown[];
   contexts?: CoreContext[];
-  entries?: unknown[];
+  items?: unknown[];
   savedCanvas?: boolean;
   welcome?: boolean;
   connectionReturn?: boolean;
@@ -153,12 +155,11 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
       if (opts.holdRuntimeConfig) await runtimeHeld;
       return Response.json({
         scopeId: new URL(path, "http://localhost").searchParams.get("scopeId") ?? "personal:tester",
-        approvedHarnesses: [],
-        modelsByHarness: {},
+        models: [],
         modelCatalog: {},
-        orgDefault: { harnessId: "pi", modelId: "m", revision: 1 },
+        orgDefault: { modelId: "m", revision: 1 },
         scopeOverride: null,
-        effective: { harnessId: "pi", modelId: "m" },
+        effective: { modelId: "m" },
         upgradeAvailable: false,
       });
     }
@@ -210,16 +211,17 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
         const seqs = older ? [10, 11] : [80, 81];
         return Response.json({
           session,
-          entries: seqs.map((seq) => ({
-            seq,
-            type: seq % 2 ? "assistant" : "user",
-            createdAt: Date.now(),
-            payload: { text: `Linked QA message ${seq}` },
-          })),
-          earlierEntries: older ? 0 : 80,
+          items: seqs.map((seq) =>
+            item(seq % 2 ? "AgentMessage" : "UserMessage", {
+              seq,
+              createdAt: Date.now(),
+              text: `Linked QA message ${seq}`,
+            }),
+          ),
+          earlierItems: older ? 0 : 80,
         });
       }
-      return Response.json({ session, entries: opts.entries ?? [] });
+      return Response.json({ session, items: opts.items ?? [] });
     }
     if (path.startsWith("/api/sessions?")) {
       await sessionsHeld;
@@ -234,6 +236,7 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
   const sessions = await vite.ssrLoadModule("/src/sessions.ts");
   const conversations = await vite.ssrLoadModule("/src/conversations.ts");
   const split = await vite.ssrLoadModule("/src/split.ts");
+  const search = await vite.ssrLoadModule("/src/search.ts");
   return {
     requests,
     setTranscriptStatus: (status) => {
@@ -253,6 +256,7 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
     sessionsReady: sessions.sessionsReady as () => Promise<void>,
     refreshSessions: sessions.refreshSessions as () => Promise<boolean>,
     boot: shell.boot as () => Promise<void>,
+    openChatSearch: search.openChatSearch as () => void,
     switchView: shell.switchView as Harness["switchView"],
     renderList: sessions.renderList as () => void,
     drawChatsPage: sessions.drawChatsPage as () => void,

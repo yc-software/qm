@@ -3,11 +3,11 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import pg from "pg";
-import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createMemoryEventBus } from "../src/util/event-bus.ts";
 import { createWorker } from "../src/runs/worker.ts";
 import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const actor = { id: "internal:U1", type: "internal" as const };
 const request: OrchestratorInput = {
@@ -43,7 +43,7 @@ async function isolatedPostgres(): Promise<{ url: string; admin: pg.Pool; cleanu
 
 for (const duringClaim of [false, true]) {
   test(`notification wakes idle worker without a lost wakeup (during claim: ${duringClaim})`, async () => {
-    const { runs } = createMemoryRunStore();
+    const { runs } = createPostgresRunStore(testDatabaseUrl());
     const bus = createMemoryEventBus<null>("availability test");
     runs.subscribeAvailable = (listener, options) => {
       const off = bus.subscribe(listener, options);
@@ -92,7 +92,7 @@ for (const duringClaim of [false, true]) {
 }
 
 test("missed notifications recover and reconnect checks immediately", async () => {
-  const { runs } = createMemoryRunStore();
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
   const bus = createMemoryEventBus<null>("availability test");
   runs.subscribeAvailable = (listener, options) => {
     const off = bus.subscribe(listener, options);
@@ -102,7 +102,7 @@ test("missed notifications recover and reconnect checks immediately", async () =
   let claims = 0;
   runs.claim = async () => {
     claims++;
-    return null;
+    return [];
   };
   const worker = createWorker({
     runs,
@@ -195,25 +195,28 @@ test(
 );
 
 test(
-  "Postgres workers pick up new runs promptly and preserve single claims under contention",
+  "Postgres workers pick up new runs promptly, preserve single claims under contention, and claim once per process per wakeup",
   { skip: !process.env.DATABASE_URL },
   async (t) => {
     const { url, cleanup } = await isolatedPostgres();
     const writer = createPostgresRunStore(url);
-    const reader = createPostgresRunStore(url);
+    const readers = [createPostgresRunStore(url), createPostgresRunStore(url)];
     const prefix = randomUUID();
     const observed = new Map<string, number>();
     const enqueueTimes = new Map<string, number>();
     const latencies: number[] = [];
-    const claim = reader.runs.claim.bind(reader.runs);
     let claims = 0;
-    reader.runs.claim = async (...args) => {
-      claims++;
-      return claim(...args);
-    };
-    const workers = Array.from({ length: 2 }, () =>
+    for (const reader of readers) {
+      const claim = reader.runs.claim.bind(reader.runs);
+      reader.runs.claim = async (...args) => {
+        claims++;
+        return claim(...args);
+      };
+    }
+    const workers = readers.map((reader) =>
       createWorker({
         runs: reader.runs,
+        slots: 16,
         orchestrator: {
           handleTurn: async (input: OrchestratorInput) => {
             const id = input.conversation.threadRef;
@@ -250,9 +253,11 @@ test(
         `enqueue-to-handler latency, local Postgres: p50=${latencies[9]!.toFixed(1)}ms, p95=${latencies[18]!.toFixed(1)}ms, max=${latencies[19]!.toFixed(1)}ms`,
       );
       assert.ok(latencies[19]! < 1_000, "pickup does not wait for the five-second recovery poll");
+      t.diagnostic(`claim queries per run with two processes of 16 slots: ${((claims - before) / 20).toFixed(1)}`);
+      assert.ok(claims - before <= 20 * 6, "each wakeup costs a claim per process, not one per slot");
     } finally {
       await Promise.all(workers.map((worker) => worker.stop()));
-      await reader.close();
+      await Promise.all(readers.map((reader) => reader.close()));
       await writer.close();
       await cleanup();
     }
@@ -268,19 +273,18 @@ test(
     const reader = createPostgresRunStore(url);
     const direct = new pg.Pool({ connectionString: url });
     const observed: Array<{ id: string; at: number }> = [];
-    const workers = Array.from({ length: 16 }, () =>
-      createWorker({
-        runs: reader.runs,
-        orchestrator: {
-          handleTurn: async (input: OrchestratorInput) => {
-            observed.push({ id: input.text, at: Date.now() });
-            return { status: "ok", sessionId: "scheduled" };
-          },
-        } as unknown as Orchestrator,
-        leaseTtlMs: 5_000,
-        pollMs: 250,
-      }),
-    );
+    const worker = createWorker({
+      runs: reader.runs,
+      slots: 16,
+      orchestrator: {
+        handleTurn: async (input: OrchestratorInput) => {
+          observed.push({ id: input.text, at: Date.now() });
+          return { status: "ok", sessionId: "scheduled" };
+        },
+      } as unknown as Orchestrator,
+      leaseTtlMs: 5_000,
+      pollMs: 250,
+    });
     try {
       const first = (await writer.runs.enqueue({ sessionId: "scheduled", request: { ...request, text: "first" } })).run;
       const claimed = await writer.runs.claimById(first.id, "setup", 5_000);
@@ -288,7 +292,7 @@ test(
       const { rows } = await direct.query("SELECT retry_after FROM runs WHERE id=$1", [first.id]);
       const deadline = Number(rows[0].retry_after);
       await writer.runs.enqueue({ sessionId: "scheduled", request: { ...request, text: "second" } });
-      for (const worker of workers) worker.start();
+      worker.start();
       await until(() => observed.length === 2);
       assert.deepEqual(
         observed.map(({ id }) => id),
@@ -308,7 +312,7 @@ test(
       assert.equal(observed[2]!.id, "missed");
       assert.ok(observed[2]!.at - insertedAt < 750, "missing NOTIFY retains the original polling cadence");
     } finally {
-      await Promise.all(workers.map((worker) => worker.stop()));
+      await worker.stop();
       await reader.close();
       await writer.close();
       await direct.end();
@@ -332,17 +336,16 @@ test(
       await pool.query("UPDATE runs SET created_at = 1 WHERE session_id = 'ordered'");
       await holder.query("BEGIN");
       await holder.query("SELECT id FROM runs WHERE id = $1 FOR UPDATE", [first.id]);
-      const claimedOther = await runtime.runs.claim("other-worker", 5_000);
+      const claimedOther = (await runtime.runs.claim("other-worker", 5_000))[0] ?? null;
       assert.equal(claimedOther?.id, other.id, "a locked head blocks its siblings without blocking another session");
-      assert.equal(await runtime.runs.claim("waiting-worker", 5_000), null);
-      assert.equal(await runtime.runs.claimById(second.id, "inline-worker", 5_000), null);
-      assert.equal(await runtime.runs.claimForSession("ordered", "inline-worker", 5_000), null);
+      assert.equal((await runtime.runs.claim("waiting-worker", 5_000))[0] ?? null, null);
+      assert.equal(await runtime.runs.claimById(second.id, "targeted-worker", 5_000), null);
       await holder.query("ROLLBACK");
-      const claimedFirst = await runtime.runs.claimForSession("ordered", "head-worker", 5_000);
+      const claimedFirst = await runtime.runs.claimById(first.id, "head-worker", 5_000);
       assert.equal(claimedFirst?.id, first.id);
-      assert.equal(await runtime.runs.claimById(second.id, "inline-worker", 5_000), null);
+      assert.equal(await runtime.runs.claimById(second.id, "targeted-worker", 5_000), null);
       await runtime.runs.complete(first.id, claimedFirst!.leaseToken!, { status: "ok" });
-      const claimedSecond = await runtime.runs.claimById(second.id, "inline-worker", 5_000);
+      const claimedSecond = await runtime.runs.claimById(second.id, "targeted-worker", 5_000);
       assert.equal(claimedSecond?.id, second.id);
     } finally {
       await holder.query("ROLLBACK");
@@ -353,3 +356,147 @@ test(
     }
   },
 );
+
+test("one claim fills every free slot, and a freed slot claims the backlog", async () => {
+  const { runs, close } = createPostgresRunStore(testDatabaseUrl());
+  const batches: number[] = [];
+  const claim = runs.claim.bind(runs);
+  runs.claim = async (...args) => {
+    const claimed = await claim(...args);
+    batches.push(claimed.length);
+    return claimed;
+  };
+  const release: Array<() => void> = [];
+  let running = 0;
+  let peak = 0;
+  const worker = createWorker({
+    runs,
+    slots: 3,
+    orchestrator: {
+      handleTurn: async (input: OrchestratorInput) => {
+        peak = Math.max(peak, ++running);
+        await new Promise<void>((resolve) => release.push(resolve));
+        running--;
+        return { status: "ok", sessionId: input.conversation.threadRef };
+      },
+    } as unknown as Orchestrator,
+    leaseTtlMs: 5_000,
+    pollMs: 10,
+  });
+  try {
+    for (let i = 0; i < 5; i++)
+      await runs.enqueue({
+        sessionId: `slots-${i}`,
+        request: { ...request, conversation: { ...request.conversation, threadRef: `slots-${i}` } },
+      });
+    worker.start();
+    await until(() => release.length === 3);
+    assert.equal(batches[0], 3, "the first claim takes a run for every free slot");
+    assert.equal(worker.held().length, 3);
+    release.shift()!();
+    release.shift()!();
+    await until(() => release.length === 3);
+    release.splice(0).forEach((resolve) => resolve());
+    await until(() => worker.held().length === 0);
+    assert.equal(peak, 3, "never more turns than slots");
+    assert.deepEqual(
+      (await runs.list()).map((run) => run.status),
+      Array.from({ length: 5 }, () => "done"),
+    );
+  } finally {
+    await worker.stop();
+    await close();
+  }
+});
+
+test("a batch claimed as claiming pauses is handed back, and claiming resumes", async () => {
+  const { runs, close } = createPostgresRunStore(testDatabaseUrl());
+  let open = true;
+  let claims = 0;
+  const claim = runs.claim.bind(runs);
+  runs.claim = async (...args) => {
+    const claimed = await claim(...args);
+    if (++claims === 1) open = false;
+    return claimed;
+  };
+  const handled: string[] = [];
+  const worker = createWorker({
+    runs,
+    slots: 3,
+    canClaim: () => open,
+    orchestrator: {
+      handleTurn: async (input: OrchestratorInput) => {
+        handled.push(input.conversation.threadRef);
+        return { status: "ok", sessionId: input.conversation.threadRef };
+      },
+    } as unknown as Orchestrator,
+    leaseTtlMs: 5_000,
+    pollMs: 10,
+  });
+  try {
+    for (let i = 0; i < 3; i++)
+      await runs.enqueue({
+        sessionId: `paused-${i}`,
+        request: { ...request, conversation: { ...request.conversation, threadRef: `paused-${i}` } },
+      });
+    worker.start();
+    await until(() => claims === 1);
+    await sleep(50);
+    assert.deepEqual(
+      (await runs.list()).map((run) => run.status),
+      ["pending", "pending", "pending"],
+    );
+    assert.equal(handled.length, 0);
+    open = true;
+    await until(() => handled.length === 3);
+  } finally {
+    await worker.stop();
+    await close();
+  }
+});
+
+test("a full worker answers wakeups without claim queries and claims again once a slot frees", async () => {
+  const { runs, close } = createPostgresRunStore(testDatabaseUrl());
+  const bus = createMemoryEventBus<null>("availability test");
+  runs.subscribeAvailable = (listener, options) => bus.subscribe(listener, options);
+  let claims = 0;
+  const claim = runs.claim.bind(runs);
+  runs.claim = async (...args) => {
+    claims++;
+    return claim(...args);
+  };
+  const release: Array<() => void> = [];
+  const worker = createWorker({
+    runs,
+    slots: 1,
+    orchestrator: {
+      handleTurn: (input: OrchestratorInput) =>
+        new Promise((resolve) =>
+          release.push(() => resolve({ status: "ok", sessionId: input.conversation.threadRef })),
+        ),
+    } as unknown as Orchestrator,
+    leaseTtlMs: 5_000,
+    pollMs: 10,
+    recoveryPollMs: 10_000,
+  });
+  try {
+    for (const threadRef of ["full-a", "full-b"])
+      await runs.enqueue({
+        sessionId: threadRef,
+        request: { ...request, conversation: { ...request.conversation, threadRef } },
+      });
+    worker.start();
+    await until(() => release.length === 1);
+    const held = claims;
+    for (let i = 0; i < 20; i++) bus.emit(null);
+    await sleep(50);
+    assert.equal(claims, held, "no claim queries while every slot is busy");
+    release.shift()!();
+    await until(() => release.length === 1);
+    release.shift()!();
+    await until(() => worker.held().length === 0);
+  } finally {
+    await worker.stop();
+    await close();
+  }
+});

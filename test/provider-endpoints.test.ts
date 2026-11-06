@@ -1,6 +1,7 @@
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import {
+  MODEL_REQUEST_CONTEXT_HEADERS,
   parseProviderBaseUrl,
   providerBaseUrl,
   providerBaseUrlsFromEnv,
@@ -58,7 +59,7 @@ test("a cloned model follows its template's override", () => {
   assert.equal(clone?.id, "claude-opus-5");
 });
 
-test("loadConfig parses provider base URLs and feeds the child harness envs", () => {
+test("loadConfig parses provider base URLs", () => {
   const config = loadConfig({
     ...BASE_ENV,
     ANTHROPIC_BASE_URL: "https://a.example.com/",
@@ -68,17 +69,14 @@ test("loadConfig parses provider base URLs and feeds the child harness envs", ()
     anthropic: "https://a.example.com",
     openai: "https://o.example.com/v1",
   });
-  assert.equal(config.claudeProcessEnv.ANTHROPIC_BASE_URL, "https://a.example.com");
 });
 
 test("loadConfig rejects an invalid provider base URL", () => {
   assert.throws(() => loadConfig({ ...BASE_ENV, OPENAI_BASE_URL: "nope" } as NodeJS.ProcessEnv));
 });
 
-test("loadConfig leaves child envs untouched when no override is set", () => {
-  const config = loadConfig(BASE_ENV);
-  assert.deepEqual(config.providerBaseUrls, {});
-  assert.equal(config.claudeProcessEnv.ANTHROPIC_BASE_URL, undefined);
+test("loadConfig leaves provider base URLs empty when no override is set", () => {
+  assert.deepEqual(loadConfig(BASE_ENV).providerBaseUrls, {});
 });
 
 test("loadConfig accepts a complete model gateway and rejects partial or malformed routing", () => {
@@ -118,6 +116,21 @@ test("loadConfig accepts a complete model gateway and rejects partial or malform
       }),
     /invalid MODEL_GATEWAY_MODELS/,
   );
+});
+
+test("the gateway key header cannot share a name with a request context header", () => {
+  for (const header of [...Object.keys(MODEL_REQUEST_CONTEXT_HEADERS), "X-QM-Purpose"])
+    assert.throws(
+      () =>
+        loadConfig({
+          ...BASE_ENV,
+          MODEL_GATEWAY_URL: "http://gateway.internal",
+          MODEL_GATEWAY_API_KEY: "secret",
+          MODEL_GATEWAY_API_KEY_HEADER: header,
+        }),
+      /request context header/,
+      header,
+    );
 });
 
 test("gateway-mapped built-in models send session-affinity headers", () => {

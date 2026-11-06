@@ -199,8 +199,7 @@
   font-weight: 400;
   line-height: 13px;
 }
-.loadout-name,
-.loadout-harness {
+.loadout-name {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -439,15 +438,11 @@
 }
 .loadout-add:hover,
 .loadout-add.open,
-.loadout-setting:not([role="menuitemcheckbox"]):not(.loadout-setting-static):hover,
+.loadout-setting:not([role="menuitemcheckbox"]):hover,
 .loadout-setting.open,
-.loadout-effort:not([aria-disabled="true"]):hover,
+.loadout-effort:hover,
 .loadout-back:hover {
   background: var(--secondary);
-}
-.loadout-effort[aria-disabled="true"] {
-  opacity: 0.45;
-  cursor: not-allowed;
 }
 .loadout-setting[role="menuitemcheckbox"]:disabled {
   opacity: 1;
@@ -471,9 +466,6 @@
 }
 .loadout-setting-label {
   font-weight: 400;
-}
-.loadout-setting-static {
-  cursor: default;
 }
 .loadout-setting-value {
   display: inline-flex;
@@ -560,20 +552,6 @@
 .loadout-effort > svg {
   margin-left: auto;
   color: var(--foreground);
-}
-.loadout-harness-option {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-.loadout-harness-option .model-mark {
-  flex: none;
-}
-.loadout-harness-option > span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .loadout-toggle {
   position: relative;
@@ -677,30 +655,30 @@
   cursor: not-allowed;
 }
 @media (max-width: 860px) {
-  .menu-control .menu-popover.loadout-popover {
+  :where(html:not(.desktop-embed)) .menu-control .menu-popover.loadout-popover {
     padding: 18px 10px calc(10px + env(safe-area-inset-bottom));
     border-radius: 20px 20px 0 0;
     border-bottom: 0;
   }
-  .loadout-control .loadout-button {
+  :where(html:not(.desktop-embed)) .loadout-control .loadout-button {
     max-width: min(360px, calc(100vw - 150px));
   }
-  .loadout-panel {
+  :where(html:not(.desktop-embed)) .loadout-panel {
     overflow-y: auto;
     overscroll-behavior: contain;
   }
-  .loadout-list {
+  :where(html:not(.desktop-embed)) .loadout-list {
     flex: none;
     max-height: none;
     overflow: visible;
   }
-  .loadout-row,
-  .loadout-pick,
-  .loadout-add,
-  .loadout-setting,
-  .loadout-effort,
-  .loadout-back,
-  .loadout-submenu .menu-option {
+  :where(html:not(.desktop-embed)) .loadout-row,
+  :where(html:not(.desktop-embed)) .loadout-pick,
+  :where(html:not(.desktop-embed)) .loadout-add,
+  :where(html:not(.desktop-embed)) .loadout-setting,
+  :where(html:not(.desktop-embed)) .loadout-effort,
+  :where(html:not(.desktop-embed)) .loadout-back,
+  :where(html:not(.desktop-embed)) .loadout-submenu .menu-option {
     min-height: 44px;
   }
 }

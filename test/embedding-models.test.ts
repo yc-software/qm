@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import { gatewayActorId } from "../src/model/provider-endpoints.ts";
 import { serverDeps } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
@@ -9,21 +10,22 @@ import { afterEach, test } from "node:test";
 import { createGatewayCatalog } from "../src/model/gateway-catalog.ts";
 import { gatewayModelsJson, setGatewayModels } from "../src/model/gateway-models.ts";
 import { createMemoryEmbedder } from "../src/model/embeddings.ts";
+import { withModelRequestContext } from "../src/model/request-context.ts";
 import { createModelVerifier } from "../src/model/model-verification.ts";
 import { createModelOverlayStore } from "../src/model/model-overlay-store.ts";
 import { createModelCredentialStore } from "../src/model/model-credential-store.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import { createMemoryConfigStore, type PersistedBaseModel } from "../src/resolution/config-store.ts";
+import { type PersistedBaseModel } from "../src/resolution/config-store.ts";
 import {
-  setModelOverlays,
   resolveModel,
   resolveEmbeddingModel,
   embeddingModelCatalog,
   selectableBaseModels,
   defaultWebuiModelIds,
-  modelSupportedByHarness,
+  modelSupported,
 } from "../src/model/pi-models.ts";
+import { setModelOverlays } from "../src/model/model-overlay-store.ts";
 import { recallText } from "./support/recall-text.ts";
+import { testConfigStore, testMap } from "./support/test-database.ts";
 
 const definition = {
   kind: "embedding",
@@ -38,7 +40,7 @@ afterEach(() => {
 
 test("verified embedding definitions survive registry reload but never become chat models", async () => {
   const credentials = createModelCredentialStore({
-    backing: createMemoryMap(),
+    backing: testMap(),
     keyMaterial: "test-key",
     fallback: { openai: "test-key" },
   });
@@ -51,7 +53,7 @@ test("verified embedding definitions survive registry reload but never become ch
       return Response.json({ data: [{ index: 0, embedding: [3, 4] }] });
     },
   });
-  const backing = createMemoryMap<import("../src/model/model-overlay-store.ts").StoredModelOverlay>();
+  const backing = testMap<import("../src/model/model-overlay-store.ts").StoredModelOverlay>();
   const writer = createModelOverlayStore(backing, undefined, verifier);
   await writer.upsert(definition, "admin");
   await assert.rejects(
@@ -75,7 +77,7 @@ test("verified embedding definitions survive registry reload but never become ch
   assert.equal(resolveModel("embed-small"), undefined);
   assert.ok(!selectableBaseModels().some((m) => m.id === "embed-small"));
   assert.ok(!defaultWebuiModelIds().includes("embed-small"));
-  for (const harness of ["pi", "claude"]) assert.equal(modelSupportedByHarness("embed-small", harness), false);
+  assert.equal(modelSupported("embed-small"), false);
   await writer.delete("embed-small", "admin");
   await writer.refresh();
   assert.equal(resolveEmbeddingModel("embed-small"), undefined);
@@ -89,6 +91,7 @@ test("key-scoped gateway embeddings need no chat capabilities and use gateway cr
       apiKey: "gateway-key",
       apiKeyHeader: "x-gateway-key",
       models: { "gpt-5.5": "embed" },
+      actorKey: "test-actor-key",
     },
     async (url, init) => {
       calls.push({ url: String(url), init });
@@ -110,31 +113,41 @@ test("key-scoped gateway embeddings need no chat capabilities and use gateway cr
   assert.equal(resolveModel("gateway/embed"), undefined);
   assert.equal(catalog.transport.models["gpt-5.5"], undefined);
   assert.deepEqual(gatewayModelsJson(), {});
-  const embedder = createMemoryEmbedder(
-    resolveEmbeddingModel("gateway/embed")!,
-    "must-not-leak",
-    catalog.transport,
-    async (url, init) => {
-      calls.push({ url: String(url), init });
-      return Response.json({ data: [{ index: 0, embedding: [3, 4] }] });
-    },
+  const embedder = withModelRequestContext({ actorId: "U1" }, () =>
+    createMemoryEmbedder(
+      resolveEmbeddingModel("gateway/embed")!,
+      "must-not-leak",
+      catalog.transport,
+      async (url, init) => {
+        calls.push({ url: String(url), init });
+        return Response.json({ data: [{ index: 0, embedding: [3, 4] }] });
+      },
+    ),
   );
-  assert.deepEqual(await embedder.embed(["query"], AbortSignal.timeout(1000)), [[0.6, 0.8]]);
+  assert.deepEqual(
+    await withModelRequestContext({ actorId: "U2" }, () => embedder.embed(["query"], AbortSignal.timeout(1000))),
+    [[0.6, 0.8]],
+  );
   const request = calls.at(-1)!;
   assert.equal(request.url, "https://gateway.example/v1/embeddings");
-  assert.deepEqual(request.init?.headers, { "content-type": "application/json", "x-gateway-key": "gateway-key" });
+  assert.deepEqual(request.init?.headers, {
+    "content-type": "application/json",
+    "x-gateway-key": "gateway-key",
+    "x-qm-actor": gatewayActorId("U2", "test-actor-key"),
+    "x-qm-purpose": "embedding",
+  });
   assert.equal(JSON.parse(String(request.init?.body)).model, "embed");
   setGatewayModels([]);
   assert.equal(resolveEmbeddingModel("gateway/embed"), undefined);
 });
 
 test("org embedding selection is durable and survives chat runtime replacement and clearing", async () => {
-  const baseModels = createMemoryMap<PersistedBaseModel>();
-  const first = createMemoryConfigStore("test", { baseModels });
+  const baseModels = testMap<PersistedBaseModel>();
+  const first = testConfigStore("test", { baseModels });
   await first.setEmbeddingModel("gateway/embed");
-  await first.setRuntimeSelection("org:test", { harnessId: "pi", modelId: "gpt-5.5" });
+  await first.setRuntimeSelection("org:test", { modelId: "gpt-5.5" });
   await first.setRuntimeSelection("org:test", null);
-  const restarted = createMemoryConfigStore("test", { baseModels });
+  const restarted = testConfigStore("test", { baseModels });
   assert.equal(await restarted.getEmbeddingModelDurable(), "gateway/embed");
   await restarted.setEmbeddingModel(null);
   assert.equal(await first.getEmbeddingModelDurable(), null);

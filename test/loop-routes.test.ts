@@ -7,10 +7,12 @@ import { createLoopOutputStore } from "../src/loops/output-store.ts";
 import { createShipGrantStore } from "../src/loops/ship-grant-store.ts";
 import { decideShip } from "../src/loops/ship-gate.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
-import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { findRoute } from "../src/api/routes/route.ts";
 import type { ApiCtx, Route } from "../src/api/routes/route.ts";
-import { scopeId, type Loop, type ShipGrant } from "../src/types.ts";
+import { scopeId } from "../src/types.ts";
+import type { Loop, ShipGrant } from "../src/loops/types.ts";
+import { testConfigStore, testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 
 function fakeRes() {
   const out = { status: 0, body: undefined as unknown };
@@ -31,12 +33,12 @@ function fakeRes() {
 
 function services(): LoopServiceDeps {
   return {
-    store: createLoopStore(),
-    items: createLoopItemLedger(),
-    outputs: createLoopOutputStore(),
-    grants: createShipGrantStore(),
-    crons: createCronStore(),
-    config: createMemoryConfigStore("org"),
+    store: createLoopStore(testMap()),
+    items: createLoopItemLedger(testMap()),
+    outputs: createLoopOutputStore(testMap()),
+    grants: createShipGrantStore(testMap()),
+    crons: createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) }),
+    config: testConfigStore("org"),
   };
 }
 
@@ -775,33 +777,6 @@ test("privileged loop config and manual fires use the cron live-owner-admin gate
   );
 });
 
-test("a legacy inbox sync cron cannot be re-enabled through an autonomous Loop patch", async () => {
-  const deps = services();
-  const { loop } = await deps.store.create({
-    owner: "josh",
-    createdBy: "josh",
-    ownerScopeId: scopeId("personal", "josh"),
-    ...CREATE,
-    surface: "inbox",
-    shipActions: [],
-  });
-  const cron = await deps.crons!.create({
-    owner: loop.owner,
-    createdBy: loop.owner,
-    ownerScopeId: loop.ownerScopeId,
-    schedule: { everyMs: 60_000 },
-    action: "Inbox sync v3.",
-    unattendedGrants: ["admin.sessions.read"],
-  });
-  await deps.store.update(loop.id, { cronId: cron.id, state: "paused" });
-  await deps.crons!.setEnabled(cron.id, false);
-  const refused = await call(deps, "PATCH", `/v1/loops/${loop.id}`, { state: "enabled" }, "josh", "capability", false);
-  assert.equal(refused.status, 403);
-  assert.equal((await deps.crons!.get(cron.id))?.enabled, false);
-  assert.equal((await call(deps, "PATCH", `/v1/loops/${loop.id}`, { state: "enabled" })).status, 200);
-  assert.equal((await deps.crons!.get(cron.id))?.enabled, true);
-});
-
 test("loop icons can be set and reset by their owner, reject invalid input and retain authorization", async () => {
   const deps = services();
   const created = await call(deps, "POST", "/v1/loops", {
@@ -841,7 +816,7 @@ test("loop icons can be set and reset by their owner, reject invalid input and r
   assert.equal((await call(deps, "PATCH", `/v1/loops/${loop.id}`, { icon: "shield" }, "mallory")).status, 403);
 });
 
-test("agent loop reads omit avatar metadata even when source is only in the payload", async () => {
+test("agent loop reads omit Slack avatar metadata", async () => {
   const deps = services();
   const created = await call(deps, "POST", "/v1/loops", CREATE);
   const loop = (created.body as { loop: Loop }).loop;
@@ -850,7 +825,7 @@ test("agent loop reads omit avatar metadata even when source is only in the payl
     participants: [{ id: "U1", name: "Alex", avatarUrl: "https://example.com/avatar.png" }],
     slackAvatarsRefreshAt: 12345,
   };
-  await deps.items.ingest([{ loopId: loop.id, dedupeKey: "D1", sourcePayload: payload }]);
+  await deps.items.ingest([{ loopId: loop.id, dedupeKey: "D1", source: "slack", sourcePayload: payload }]);
   for (const mode of ["source", "capability"] as const) {
     const response = await call(deps, "GET", `/v1/loops/${loop.id}`, undefined, "josh", mode);
     assert.equal(response.status, 200);

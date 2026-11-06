@@ -1,3 +1,4 @@
+import type { Destination } from "../types.ts";
 import type {
   Loop,
   LoopCaps,
@@ -5,10 +6,9 @@ import type {
   LoopHealth,
   LoopState,
   LoopTriageConfig,
-  Destination,
   ShipActionPolicy,
-} from "../types.ts";
-import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
+} from "./types.ts";
+import type { DurableMap } from "../persistence/durable-map.ts";
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import {
   assertNoEscalation,
@@ -69,6 +69,7 @@ export interface LoopStore {
   setState(id: string, state: LoopState): Promise<Loop | null>;
   setHealth(id: string, health: LoopHealth, reason?: string, throttle?: boolean): Promise<Loop | null>;
   recordFireOutcome(id: string, outcome: FireOutcome): Promise<Loop | null>;
+  recordScan(id: string, startedAt: number): Promise<Loop | null>;
   delete(id: string): Promise<void>;
 }
 
@@ -138,8 +139,7 @@ function mergeTriage(current: LoopTriageConfig | undefined, patch: LoopTriageCon
   return next;
 }
 
-export function createLoopStore(backing: DurableMap<Loop> = createMemoryMap<Loop>()): LoopStore {
-  if (!backing.update) throw new Error("loops need atomic durable updates");
+export function createLoopStore(backing: DurableMap<Loop>): LoopStore {
   const atomicUpdate = backing.update.bind(backing);
   const merge = (id: string, fields: Partial<Loop>) => atomicUpdate(id, (loop) => ({ ...loop, ...fields }));
 
@@ -186,12 +186,8 @@ export function createLoopStore(backing: DurableMap<Loop> = createMemoryMap<Loop
         ...(input.governor ? { governor: input.governor } : {}),
         ...(input.cronId ? { cronId: input.cronId } : {}),
       };
-      if (backing.insertIfAbsent) {
-        const created = await backing.insertIfAbsent(contentId, candidate);
-        return { loop: created ? candidate : ((await backing.get(contentId)) ?? candidate), created };
-      }
-      const loop = await backing.putIfAbsent(contentId, candidate);
-      return { loop, created: loop.createdAt === candidate.createdAt };
+      const created = await backing.insertIfAbsent(contentId, candidate);
+      return { loop: created ? candidate : ((await backing.get(contentId)) ?? candidate), created };
     },
     get: (id) => backing.get(id),
     list: () => backing.all(),
@@ -258,6 +254,7 @@ export function createLoopStore(backing: DurableMap<Loop> = createMemoryMap<Loop
         lastFiredAt: Date.now(),
       }));
     },
+    recordScan: (id, startedAt) => merge(id, { lastScanAt: startedAt }),
     delete: (id) => backing.delete(id),
   };
 }

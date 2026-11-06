@@ -10,15 +10,18 @@ import { createServer as createApiServer } from "../src/api/server.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
-import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
-import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { portalSession } from "../src/deploy/viewer-session.ts";
 import { deriveKey, seal } from "../plugins/portal/src/session.ts";
 import { scopeId } from "../src/types.ts";
 import { deployRef, encodeRef } from "../src/acl/resource-ref.ts";
 import type { FeatureFlagStore } from "../src/feature-flags.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
+import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 
 const externalSharingOn = { enabled: async () => true } as unknown as FeatureFlagStore;
 
@@ -44,11 +47,11 @@ test("app-only gateway checks exact current personal read grants without inherit
     res.end(JSON.stringify(req.headers));
   });
   await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
-  const acl = createAclStore();
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const deploy = createDeployService({
     ...singleProcessDeps(),
     externalSharingAllowed: async () => true,
-    deployStore: createDeployStore({ git: { repoRoot: join(dir, "repos") } }),
+    deployStore: createDeployStore(testDeployBackings({ git: { repoRoot: join(dir, "repos") } })),
     provider: {
       profile: { managedScaleToZero: false },
       apply: async () => ({ host: "127.0.0.1", port: (upstream.address() as AddressInfo).port }),
@@ -58,12 +61,12 @@ test("app-only gateway checks exact current personal read grants without inherit
     acl,
     deployDir: join(dir, "deploy"),
   });
-  const identity = createIdentityService();
+  const identity = createIdentityService(testMap(), { externalMembers: testMap() });
   const app = createApp({
     deploy,
     acl,
-    directory: createDirectoryStore(),
-    sessions: createMemorySessionStore(),
+    directory: createPostgresDirectoryStore(testDatabaseUrl()),
+    sessions: createPostgresSessionStore(testDatabaseUrl()),
     identity,
   } as unknown as Parameters<typeof createApp>[0]);
   const ownerScopeId = scopeId("personal", "owner@example.test");
@@ -91,6 +94,7 @@ test("app-only gateway checks exact current personal read grants without inherit
     featureFlags: externalSharingOn,
     identity,
     signingSecret: secret,
+    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     deployAppsDomain: "apps.example.test",
     deployGateSecret: "gate",
     deployAppsSessionSecret: secret,

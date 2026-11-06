@@ -1,16 +1,16 @@
-import { effortLevelsForHarness } from "./composer-loadout.ts";
+import { effortLevelsForModel } from "./composer-loadout.ts";
 
 const COLORS = ["#e8843a", "#e45d79", "#a78bfa", "#60a5fa", "#5cc074", "#f6cc46"];
 let activeBurst: HTMLElement | null = null;
 let activeAnchor: Element | null = null;
 
-function isHighestEffort(level: string, harnessId: string): boolean {
-  const levels = effortLevelsForHarness(harnessId);
+function isHighestEffort(level: string): boolean {
+  const levels = effortLevelsForModel();
   return levels.length > 1 && levels.at(-1)?.value === level;
 }
 
-export function burstEffortConfetti(event: Event, level: string, harnessId: string): void {
-  if (!isHighestEffort(level, harnessId) || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+export function burstEffortConfetti(event: Event, level: string): void {
+  if (!isHighestEffort(level) || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
   const target = event.currentTarget as HTMLElement | null;
   if (!target?.isConnected || typeof target.animate !== "function") return;
   const anchor = target.querySelector<HTMLElement>(".effort-peak") ?? target;

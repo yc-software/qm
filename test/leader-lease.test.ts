@@ -6,6 +6,9 @@ import { createPostgresLeaderLease, createNoopLeaderLease } from "../src/persist
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the leader-lease tests";
 
+const warnings: string[] = [];
+process.on("warning", (warning) => warnings.push(warning.message));
+
 function deferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve!: () => void;
   const promise = new Promise<void>((r) => (resolve = r));
@@ -176,6 +179,27 @@ test(
     } finally {
       await holderPool.close();
       await standbyPool.close();
+    }
+  },
+);
+
+test(
+  "pg lease: concurrent holds on one lease share its connection without pg's concurrent-query deprecation",
+  { skip },
+  async () => {
+    const pg = createPgPool(URL!);
+    try {
+      const lease = createPostgresLeaderLease(pg);
+      const keys = ["concurrent:a", "concurrent:b", "concurrent:c"];
+      const out = await Promise.all(keys.map((key) => lease.hold(key, async () => key)));
+      assert.deepEqual(out, keys);
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.deepEqual(
+        warnings.filter((message) => message.includes("already executing a query")),
+        [],
+      );
+    } finally {
+      await pg.close();
     }
   },
 );

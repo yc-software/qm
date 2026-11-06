@@ -1,3 +1,5 @@
+import { marked } from "marked";
+import type { ReplyVerdict } from "../agent/agent.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import {
   classifierKey,
@@ -16,14 +18,12 @@ export function turnStartState(turn: {
   input: string;
   surfaceName?: string;
   runtimePurpose?: string;
-  runtime?: { harnessId?: string; modelId?: string };
+  runtime?: { modelId?: string };
   runtimePinned?: boolean;
   continueTurn?: boolean;
   scopeLabel: string;
 }): string {
-  const requested = turn.runtime?.modelId
-    ? [turn.runtime.harnessId, turn.runtime.modelId].filter(Boolean).join("/")
-    : "none (org default applies)";
+  const requested = turn.runtime?.modelId ? turn.runtime.modelId : "none (org default applies)";
   return [
     "Turn context:",
     `- surface: ${turn.surfaceName ?? "unknown"}`,
@@ -35,6 +35,46 @@ export function turnStartState(turn: {
     "",
     "Latest message:",
     turn.input,
+  ].join("\n");
+}
+
+export function replyFacts(reply: string): string[] {
+  const blocks = marked.lexer(reply);
+  const paragraphs = blocks.filter((block) => block.type === "paragraph").length;
+  const tables = blocks.filter((block) => block.type === "table").length;
+  const emDashes = reply.split("\u2014").length - 1;
+  return [
+    `- paragraphs: ${paragraphs}`,
+    `- markdown tables: ${tables}`,
+    `- em dashes: ${emDashes}`,
+    `- characters: ${reply.length}`,
+  ];
+}
+
+export function turnEndState(turn: {
+  surfaceName?: string;
+  runtimePurpose?: string;
+  guidance?: string;
+  input: string;
+  reply: string;
+}): string {
+  const guidance = turn.guidance?.trim();
+  return [
+    "Turn context:",
+    `- surface: ${turn.surfaceName ?? "unknown"}`,
+    `- purpose: ${turn.runtimePurpose ?? "interactive"}`,
+    "",
+    "Guidance for this conversation:",
+    guidance || "(none)",
+    "",
+    "Latest message from the user:",
+    turn.input,
+    "",
+    "Measured in the draft reply:",
+    ...replyFacts(turn.reply),
+    "",
+    "Draft reply:",
+    turn.reply,
   ].join("\n");
 }
 
@@ -82,7 +122,40 @@ export function createDecisionHooks(store: DecisionStore | undefined, backend: D
   };
 }
 
-export async function routeTurnRuntime<C extends { harnessId: string; modelId: string }>(
+type ReplyCheck = (draft: string) => Promise<ReplyVerdict | undefined>;
+export type ReplyCheckFactory = (context: {
+  surfaceName?: string;
+  runtimePurpose?: string;
+  guidance: () => Promise<string>;
+  input: string;
+  turn: DecisionTurn;
+}) => Promise<{ enforce: boolean; check: ReplyCheck } | undefined>;
+
+export function createReplyCheck(
+  store: Pick<DecisionStore, "rules"> | undefined,
+  decide: ReturnType<typeof createDecisionHooks>,
+): ReplyCheckFactory {
+  return async (context) => {
+    const rules = (await store?.rules("turn_end")) ?? [];
+    if (!rules.length) return undefined;
+    const guidance = await context.guidance();
+    return {
+      enforce: rules.some((rule) => rule.mode === "enforce"),
+      check: async (draft) => {
+        const verdict = await decide("turn_end", turnEndState({ ...context, guidance, reply: draft }), context.turn);
+        return (verdict?.action === "retry" || verdict?.action === "prod") && verdict.message
+          ? {
+              action: verdict.action,
+              reason: verdict.option.replaceAll("_", " ").replaceAll("-", " "),
+              message: verdict.message,
+            }
+          : undefined;
+      },
+    };
+  };
+}
+
+export async function routeTurnRuntime<C extends { modelId: string }>(
   decision: DecisionResult | undefined,
   route: (runtime: NonNullable<DecisionResult["runtime"]>) => Promise<C>,
   requested: () => Promise<C>,
@@ -92,6 +165,6 @@ export async function routeTurnRuntime<C extends { harnessId: string; modelId: s
     route(decision.runtime),
     requested().catch(swallowAs("decisions: requested runtime", undefined)),
   ]);
-  const changed = !!otherwise && (otherwise.harnessId !== choice.harnessId || otherwise.modelId !== choice.modelId);
+  const changed = !!otherwise && otherwise.modelId !== choice.modelId;
   return changed ? { choice, routedBy: decision.ruleId } : { choice };
 }

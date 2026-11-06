@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createE2bSandbox } from "../src/sandbox/e2b-sandbox.ts";
 import { createModalSandbox } from "../src/sandbox/modal-sandbox.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -23,8 +22,8 @@ import {
   E2bSandboxGoneError,
 } from "../src/sandbox/e2b-client.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createMemorySnapshotStore } from "../src/sandbox/home-snapshot.ts";
+import { testMap } from "./support/test-database.ts";
 
 const modalCalls: unknown[][] = [];
 const modalCreateParams: Record<string, unknown>[] = [];
@@ -508,13 +507,13 @@ test("E2B does not dispatch twice when execution occurs before its start acknowl
     onDispatch = undefined;
     rmSync(root, { recursive: true, force: true });
   });
-  const sandbox = createE2bSandbox(createLocalWorkspaceStore(root), {
+  const sandbox = createE2bSandbox({
     snapshots: createMemorySnapshotStore(),
-    store: createMemoryMap(),
+    store: testMap(),
     ...singleProcessDeps(),
     client: createSdkE2bClient({ apiKey: "test" }),
   });
-  const handle = await sandbox.provision([{ scopeId: "lost-start", mountPath: "", mode: "rw" }]);
+  const handle = await sandbox.provision("lost-start");
   let effects = 0;
   onDispatch = (command) => {
     if (command.includes("perform-side-effect")) effects++;
@@ -561,9 +560,9 @@ test("Modal executes a one-megabyte payload through the sandbox and SDK without 
   };
   const client = createSdkModalClient({ tokenId: "id", tokenSecret: "secret", appName: "test", image: "ubuntu" });
   const session = await client.create({});
-  const sandbox = createModalSandbox(createLocalWorkspaceStore(join(root, "workspace")), {
+  const sandbox = createModalSandbox({
     snapshots: createMemorySnapshotStore(),
-    store: createMemoryMap(),
+    store: testMap(),
     ...singleProcessDeps(),
     client: {
       create: async () => session,
@@ -572,7 +571,7 @@ test("Modal executes a one-megabyte payload through the sandbox and SDK without 
       terminate: async () => {},
     },
   });
-  const handle = await sandbox.provision([{ scopeId: "large-command", mountPath: "", mode: "rw" }]);
+  const handle = await sandbox.provision("large-command");
   const size = 1024 * 1024;
   const result = await sandbox.run(handle, `payload='${"x".repeat(size)}'; printf '%s' "${"${#payload}"}"`);
   assert.equal(result.code, 0, result.stderr);

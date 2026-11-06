@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
 import { readFileSync } from "node:fs";
-import { readdirSync, renameSync, existsSync, lstatSync, rmdirSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -15,7 +14,6 @@ const argValue = (flag) => {
   return i >= 0 ? args[i + 1] : undefined;
 };
 const MAPPING_FILE = argValue("--mapping");
-const DATA_DIR = argValue("--data-dir");
 
 const BATCH_SIZE = 100;
 
@@ -63,23 +61,6 @@ export function makeRewriter(mapping) {
   return { rewriteString, rewriteJson };
 }
 
-export function mergeDirs(src, dst) {
-  const conflicts = [];
-  for (const entry of readdirSync(src)) {
-    const s = join(src, entry);
-    const d = join(dst, entry);
-    if (!existsSync(d)) {
-      renameSync(s, d);
-    } else if (lstatSync(s).isDirectory() && lstatSync(d).isDirectory()) {
-      for (const c of mergeDirs(s, d)) conflicts.push(join(entry, c));
-    } else {
-      conflicts.push(entry);
-    }
-  }
-  if (readdirSync(src).length === 0) rmdirSync(src);
-  return conflicts;
-}
-
 const LIVE_COLUMNS = [
   ["participants", ["principal_id"]],
   ["sessions", ["scope_id"]],
@@ -93,7 +74,6 @@ const LIVE_COLUMNS = [
 const HISTORY_COLUMNS = [
   ["session_llm_requests", ["scope_label"]],
   ["runs", ["request", "result"]],
-  ["tool_calls", ["output"]],
   ["egress_events", ["scope_label", "principal_id"]],
   ["credential_usage", ["scope_label", "principal_id"]],
   ["error_events", ["scope_label"]],
@@ -105,7 +85,6 @@ export async function runMigration({
   mapping,
   apply,
   rewriteHistory = false,
-  dataDir,
   allowLive = false,
   log = console.log,
 }) {
@@ -269,36 +248,6 @@ export async function runMigration({
   log("durable-map tables:");
   await rewriteKvTables();
 
-  const wsRoot = dataDir ? join(dataDir, "workspaces") : null;
-  if (wsRoot && existsSync(wsRoot)) {
-    const safeScope = (scopeId) => scopeId.replace(/[^a-zA-Z0-9_.-]/g, "__");
-    log("workspace dirs:");
-    for (const dir of readdirSync(wsRoot)) {
-      for (const id of Object.keys(mapping)) {
-        if (dir !== safeScope(`personal:${id}`)) continue;
-        const next = safeScope(`personal:${mapping[id]}`);
-        const from = join(wsRoot, dir);
-        const to = join(wsRoot, next);
-        if (!apply) {
-          log(`  ${dir} -> ${next}`);
-          continue;
-        }
-        if (!existsSync(to)) {
-          renameSync(from, to);
-          log(`  ${dir} -> ${next}`);
-          continue;
-        }
-        const conflicts = mergeDirs(from, to);
-        log(`  ${dir} -> ${next} (merged into existing dir)`);
-        if (conflicts.length) {
-          problems.push(
-            `workspace dir ${dir}: ${conflicts.length} entr${conflicts.length === 1 ? "y" : "ies"} already exist under ${next} and were kept in place — reconcile manually: ${conflicts.join(", ")}`,
-          );
-        }
-      }
-    }
-  }
-
   if (problems.length) {
     log(`${problems.length} problem(s) need manual attention:`);
     for (const p of problems) log(`  - ${p}`);
@@ -327,7 +276,6 @@ async function main() {
       mapping,
       apply: APPLY,
       rewriteHistory: REWRITE_HISTORY,
-      dataDir: DATA_DIR,
       allowLive: ALLOW_LIVE,
     }));
   } finally {

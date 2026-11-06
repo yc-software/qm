@@ -12,15 +12,6 @@ async function regrant(acl: ReturnType<typeof createAclStore>, ref: string): Pro
   return acl.grantsFor(base.ownerScopeId, ref);
 }
 
-test("re-granting the same access records the latest granter (in-memory store)", async () => {
-  const acl = createAclStore(undefined, { manages: async () => true });
-  const grants = await regrant(acl, "service-cred:regrant-memory");
-  assert.deepEqual(
-    grants.map((g) => g.grantedBy),
-    ["second-admin"],
-  );
-});
-
 test(
   "re-granting the same access records the latest granter (Postgres store)",
   { skip: !process.env.DATABASE_URL && "requires Postgres" },

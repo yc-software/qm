@@ -14,12 +14,11 @@ const sessions = ["old", "document", "first", "second", "chat", "chat1"].map((id
 }));
 const runtimeConfig = {
   scopeId: "personal:tester",
-  approvedHarnesses: [],
-  modelsByHarness: {},
+  models: [],
   modelCatalog: {},
-  orgDefault: { harnessId: "pi", modelId: "m", revision: 1 },
+  orgDefault: { modelId: "m", revision: 1 },
   scopeOverride: null,
-  effective: { harnessId: "pi", modelId: "m" },
+  effective: { modelId: "m" },
   upgradeAvailable: false,
 };
 const env = await browserEnv({
@@ -39,7 +38,7 @@ const env = await browserEnv({
     if (path.startsWith("/api/runtime-config")) return Promise.resolve(Response.json(runtimeConfig));
     if (path.endsWith("/approvals")) return Promise.resolve(Response.json({ approvals: [] }));
     if (path.startsWith("/api/sessions?")) return Promise.resolve(Response.json({ sessions }));
-    if (id) return Promise.resolve(Response.json({ session: sessions.find((s) => s.id === id), entries: [] }));
+    if (id) return Promise.resolve(Response.json({ session: sessions.find((s) => s.id === id), items: [] }));
     return Promise.resolve(Response.json({}));
   },
 });

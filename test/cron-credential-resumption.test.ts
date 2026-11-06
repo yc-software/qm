@@ -1,3 +1,4 @@
+import type { TurnOrigin } from "../src/types.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createCronStore } from "../src/cron/cron-store.ts";
@@ -6,7 +7,13 @@ import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts"
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { fireAskResolution, type AskResolutionDeps } from "../src/triggers/keychain-ask.ts";
 import type { KeychainAsk } from "../src/credentials/keychain.ts";
-import type { Cron, Destination, TurnRequest } from "../src/types.ts";
+import type { Destination, TurnRequest } from "../src/types.ts";
+import type { Cron } from "../src/triggers/types.ts";
+import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
+import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+
+const automationOrigin = (request?: { origin?: TurnOrigin }) =>
+  request?.origin?.kind === "automation" ? request.origin : undefined;
 
 const recipient: Destination = {
   type: "principal",
@@ -16,7 +23,7 @@ const recipient: Destination = {
 };
 
 async function fixture() {
-  const crons = createCronStore();
+  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const cron = await crons.create({
     owner: "U_ALICE",
     createdBy: "U_ALICE",
@@ -29,8 +36,8 @@ async function fixture() {
   const requests: TurnRequest[] = [];
   const deps: AskResolutionDeps = {
     deliveries,
-    idempotency: createIdempotencyStore(),
-    identity: createIdentityService(),
+    idempotency: createIdempotencyStore(testMap()),
+    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     getCron: (id) => crons.get(id),
     run: async (request) => {
       requests.push(request);
@@ -71,11 +78,15 @@ test("cron credential approval resumes the original fire once and delivers to th
 
   assert.equal(f.requests.length, 1);
   const request = f.requests[0]!;
-  assert.equal(request.triggered, true);
+  assert.equal(request.origin?.kind, "automation");
   assert.equal(request.actor.externalId, "U_ALICE");
   assert.equal(request.conversation.threadRef, f.ask.requesterThreadRef);
-  assert.deepEqual(request.triggerDestination, destination);
-  assert.equal(request.unattendedGrants, undefined, "grants never ride a fire that delivers to another person");
+  assert.deepEqual(automationOrigin(request)?.destination, destination);
+  assert.deepEqual(
+    request.unattendedGrants,
+    ["allowed-job-grant"],
+    "grants stay with the owner's home cron wherever its output goes",
+  );
   assert.match(request.text, /approved access until revoked/);
   assert.ok(!request.text.includes(f.ask.id) && !request.text.includes(f.ask.purpose));
   const pending = await f.deliveries.pending("principal");
@@ -124,7 +135,7 @@ test("cron credential approval does not restore a removed delivery destination",
   await fireAskResolution(f.deps, f.ask);
 
   assert.equal(f.requests.length, 1);
-  assert.equal(f.requests[0]!.triggerDestination, undefined);
+  assert.equal(automationOrigin(f.requests[0]!)?.destination, undefined);
   assert.equal((await f.deliveries.pending("principal")).length, 0);
 });
 

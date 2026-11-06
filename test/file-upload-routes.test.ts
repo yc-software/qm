@@ -10,6 +10,8 @@ import type { DirectFileUploads } from "../src/files/direct-file-upload.ts";
 import { FileUploadError, type FileUpload } from "../src/files/file-upload-store.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const secret = "file-upload-test-secret".repeat(3);
 const personal = scopeId("personal", "U1");
@@ -70,7 +72,11 @@ before(async () => {
   const built = buildApp(testConfig({ signingSecret: secret }));
   built.app.belongsToScope = async () => true;
   built.app.authorizesCapabilityScope = async () => true;
-  server = createServer(built.app, { signingSecret: secret, fileUploads: fake });
+  server = createServer(built.app, {
+    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+    signingSecret: secret,
+    fileUploads: fake,
+  });
   await new Promise<void>((resolve) => server.listen(0, resolve));
   base = `http://localhost:${(server.address() as AddressInfo).port}`;
 });
@@ -151,6 +157,7 @@ test("a quota refusal tells the caller which of its uploads hold the quota", asy
   built.app.belongsToScope = async () => true;
   built.app.authorizesCapabilityScope = async () => true;
   const full = createServer(built.app, {
+    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: secret,
     fileUploads: {
       ...fake,

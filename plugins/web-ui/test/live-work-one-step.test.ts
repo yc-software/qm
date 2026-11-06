@@ -1,3 +1,5 @@
+import type { RunActivityEntry } from "../src/items.ts";
+import { item } from "./item-fixture.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { harness, SESSION } from "./deep-link-boot-fixture.ts";
@@ -12,34 +14,40 @@ async function until(check: () => boolean): Promise<void> {
 
 test("a live turn shows only the current step in a closed fold that remembers being opened", async () => {
   const startedAt = Date.now() - 12_000;
-  const activity: unknown[] = [
+  const activity: RunActivityEntry[] = [
     {
-      seq: 2,
-      parentSeq: null,
-      type: "tool_call",
-      createdAt: startedAt,
-      payload: { tool: "files", action: "read", callId: "c1", path: "docs/plan.md" },
+      item: item("ToolCall", {
+        seq: 2,
+        createdAt: startedAt,
+        tool: "files",
+        callId: "c1",
+        body: { action: "read", path: "docs/plan.md" },
+      }),
     },
     {
-      seq: 3,
-      parentSeq: null,
-      type: "tool_result",
-      createdAt: startedAt + 1000,
-      payload: { tool: "files", action: "read", callId: "c1", path: "docs/plan.md", bytes: 10 },
+      item: item("ToolResult", {
+        seq: 3,
+        createdAt: startedAt + 1000,
+        tool: "files",
+        callId: "c1",
+        body: { action: "read", path: "docs/plan.md", bytes: 10 },
+      }),
     },
     {
-      seq: 4,
-      parentSeq: null,
-      type: "tool_call",
-      createdAt: startedAt + 2000,
-      payload: { tool: "execute", callId: "c2", command: "npm test", purpose: "Run the test suite" },
+      item: item("ToolCall", {
+        seq: 4,
+        createdAt: startedAt + 2000,
+        tool: "execute",
+        callId: "c2",
+        body: { command: "npm test", purpose: "Run the test suite" },
+      }),
     },
   ];
   const run = () => ({ status: "running", alive: true, startedAt, attempt: 1, activity, result: null });
   const h = await harness({
     path: `/s/${SESSION.id}`,
     listSessions: [SESSION],
-    entries: [{ seq: 1, type: "user", createdAt: startedAt - 1000, payload: { text: "run the tests" } }],
+    items: [item("UserMessage", { seq: 1, createdAt: startedAt - 1000, text: "run the tests" })],
     api: (path) => {
       if (path.includes("/api/runs/active")) return Response.json({ runId: "r1", run: run(), queued: [] });
       if (path.startsWith("/api/runs/r1/events")) throw new TypeError("no sse");
@@ -56,7 +64,7 @@ test("a live turn shows only the current step in a closed fold that remembers be
     const fold = head()!.parentElement as HTMLDetailsElement;
     assert.equal(fold.open, false, "live fold starts closed");
     assert.match(head()!.textContent!, /Run the test suite/);
-    assert.doesNotMatch(head()!.textContent!, /Working for|Read files|Running commands/);
+    assert.doesNotMatch(head()!.textContent!, /Working for|Reading files|Running commands/);
     assert.match(head()!.querySelector(".work-elapsed")?.textContent ?? "", /\d+s/);
     assert.ok(head()!.querySelector(".work-step .tool-icon svg"), "the step's icon sits left of the label");
 
@@ -68,25 +76,59 @@ test("a live turn shows only the current step in a closed fold that remembers be
 
     activity.push(
       {
-        seq: 5,
-        parentSeq: null,
-        type: "tool_result",
-        createdAt: startedAt + 3000,
-        payload: { tool: "execute", callId: "c2", code: 0, result: "ok" },
+        item: item("ToolResult", {
+          seq: 5,
+          createdAt: startedAt + 3000,
+          tool: "execute",
+          callId: "c2",
+          text: "ok",
+          body: { code: 0 },
+        }),
       },
       {
-        seq: 6,
-        parentSeq: null,
-        type: "tool_call",
-        createdAt: startedAt + 4000,
-        payload: { tool: "execute", callId: "c3", command: "git diff --stat", purpose: "Measure the diff" },
+        item: item("ToolCall", {
+          seq: 6,
+          createdAt: startedAt + 4000,
+          tool: "execute",
+          callId: "c3",
+          body: { command: "git diff --stat", purpose: "Measure the diff" },
+        }),
       },
     );
     await until(() => /Measure the diff/.test(head()?.textContent ?? ""));
-    const fading = head()!.querySelector(".work-step-out");
-    assert.match(fading?.textContent ?? "", /Run the test suite/, "the previous step fades out on top of the new one");
+    const fading = head()!.querySelector(".work-step-label .work-step-out");
+    assert.match(fading?.textContent ?? "", /Run the test suite/, "the previous label fades out on top of the new one");
+    assert.equal(head()!.querySelector(".work-step-icon .work-step-out"), null, "an unchanged icon does not roll");
+    assert.ok(head()!.querySelector(".work-step.work-step-enter-still"));
     await until(() => !head()!.querySelector(".work-step-out"));
     assert.doesNotMatch(head()!.textContent!, /Run the test suite/);
+
+    activity.push(
+      {
+        item: item("ToolResult", {
+          seq: 7,
+          createdAt: startedAt + 5000,
+          tool: "execute",
+          callId: "c3",
+          text: "ok",
+          body: { code: 0 },
+        }),
+      },
+      {
+        item: item("ToolCall", {
+          seq: 8,
+          createdAt: startedAt + 6000,
+          tool: "files",
+          callId: "c4",
+          body: { action: "read", path: "docs/notes.md" },
+        }),
+      },
+    );
+    await until(() => /notes\.md/.test(head()?.textContent ?? ""));
+    assert.ok(head()!.querySelector(".work-step.work-step-enter-roll"), "a new icon rolls in");
+    assert.ok(head()!.querySelector(".work-step-icon .work-step-out svg"), "the old icon rolls out beside it");
+    assert.match(head()!.querySelector(".work-step-label .work-step-out")?.textContent ?? "", /Measure the diff/);
+    await until(() => !head()!.querySelector(".work-step-out"));
   } finally {
     await h.close();
   }
@@ -98,39 +140,45 @@ test("a step-less live turn draws one Thinking line that redraws of earlier work
   const h = await harness({
     path: `/s/${SESSION.id}`,
     listSessions: [SESSION],
-    entries: [
-      { seq: 1, type: "user", createdAt: startedAt - 60_000, payload: { text: "check the tests" } },
-      {
+    items: [
+      item("UserMessage", { seq: 1, createdAt: startedAt - 60_000, text: "check the tests" }),
+      item("ToolCall", {
         seq: 2,
-        type: "tool_call",
         createdAt: startedAt - 59_000,
-        payload: { tool: "execute", callId: "p1", command: "npm test", purpose: "Run the test suite" },
-      },
-      {
+        tool: "execute",
+        callId: "p1",
+        body: { command: "npm test", purpose: "Run the test suite" },
+      }),
+      item("ToolResult", {
         seq: 3,
-        type: "tool_result",
         createdAt: startedAt - 50_000,
-        payload: { tool: "execute", callId: "p1", code: 0, result: "ok" },
-      },
-      {
+        tool: "execute",
+        callId: "p1",
+        text: "ok",
+        body: { code: 0 },
+      }),
+      item("ToolCall", {
         seq: 31,
-        type: "tool_call",
         createdAt: startedAt - 50_000,
-        payload: { tool: "files", action: "read", callId: "p2", path: "docs/plan.md" },
-      },
-      {
+        tool: "files",
+        callId: "p2",
+        body: { action: "read", path: "docs/plan.md" },
+      }),
+      item("ToolResult", {
         seq: 32,
-        type: "tool_result",
         createdAt: startedAt - 49_500,
-        payload: { tool: "files", action: "read", callId: "p2", path: "docs/plan.md", bytes: 10 },
-      },
-      {
+        tool: "files",
+        callId: "p2",
+        body: { action: "read", path: "docs/plan.md", bytes: 10 },
+      }),
+      item("AgentMessage", {
         seq: 4,
-        type: "text",
         createdAt: startedAt - 49_000,
-        payload: { text: "All green.", step: { stopReason: "stop" } },
-      },
-      { seq: 5, type: "user", createdAt: startedAt - 1000, payload: { text: "testing" } },
+        variant: "narration",
+        text: "All green.",
+        body: { wire: { message: { stopReason: "stop" } } },
+      }),
+      item("UserMessage", { seq: 5, createdAt: startedAt - 1000, text: "testing" }),
     ],
     api: (path) => {
       if (path.includes("/api/runs/active")) return Response.json({ runId: "r1", run: run(), queued: [] });
@@ -160,6 +208,85 @@ test("a step-less live turn draws one Thinking line that redraws of earlier work
     assert.equal(animations, 0, "redraws with an earlier finished work head do not animate the live line");
   } finally {
     Element.prototype.animate = animateBefore;
+    await h.close();
+  }
+});
+
+test("text the agent says mid-turn stays visible between work folds while the live fold is closed", async () => {
+  const startedAt = Date.now() - 12_000;
+  const activity: RunActivityEntry[] = [
+    {
+      item: item("ToolCall", {
+        seq: 2,
+        createdAt: startedAt,
+        tool: "files",
+        callId: "c1",
+        body: { action: "read", path: "docs/plan.md" },
+      }),
+    },
+    {
+      item: item("ToolResult", {
+        seq: 3,
+        createdAt: startedAt + 1000,
+        tool: "files",
+        callId: "c1",
+        body: { action: "read", path: "docs/plan.md", bytes: 10 },
+      }),
+    },
+    {
+      item: item("AgentMessage", {
+        seq: 4,
+        createdAt: startedAt + 1500,
+        variant: "narration",
+        text: "Understood, fanning out.",
+        body: { phase: "commentary" },
+      }),
+    },
+    {
+      item: item("ToolCall", {
+        seq: 5,
+        createdAt: startedAt + 2000,
+        tool: "execute",
+        callId: "c2",
+        body: { command: "npm test", purpose: "Run the test suite" },
+      }),
+    },
+  ];
+  const run = () => ({ status: "running", alive: true, startedAt, attempt: 1, activity, result: null });
+  const h = await harness({
+    path: `/s/${SESSION.id}`,
+    listSessions: [SESSION],
+    items: [item("UserMessage", { seq: 1, createdAt: startedAt - 1000, text: "find bugs" })],
+    api: (path) => {
+      if (path.includes("/api/runs/active")) return Response.json({ runId: "r1", run: run(), queued: [] });
+      if (path.startsWith("/api/runs/r1/events")) throw new TypeError("no sse");
+      if (path === "/api/runs/r1") return Response.json(run());
+      return undefined;
+    },
+  });
+  try {
+    h.releaseSessions();
+    await h.boot();
+    await h.sessionsReady();
+    const folds = () => [...document.querySelectorAll<HTMLDetailsElement>("details.work")];
+    await until(() =>
+      folds().some((fold) => /Run the test suite/.test(fold.querySelector("summary")?.textContent ?? "")),
+    );
+    const said = [...document.querySelectorAll<HTMLElement>(".streaming-text")].find((el) =>
+      /Understood, fanning out\./.test(
+        el.querySelector<HTMLElement & { content: string }>("qm-markdown")?.content ?? "",
+      ),
+    );
+    assert.ok(said, "the mid-turn text is drawn");
+    assert.equal(said.closest("details"), null, "the mid-turn text sits outside every fold");
+    const live = folds().at(-1)!;
+    assert.equal(live.open, false, "the live fold stays closed");
+    assert.equal(live.querySelector("qm-markdown, .work-said"), null, "the live fold does not repeat the text");
+    assert.ok(
+      said.compareDocumentPosition(live) & Node.DOCUMENT_POSITION_FOLLOWING,
+      "the text sits above the step that came after it",
+    );
+  } finally {
     await h.close();
   }
 });

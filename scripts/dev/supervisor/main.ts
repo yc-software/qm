@@ -18,7 +18,6 @@ import { assembleEnv, completeDevSecuritySecrets, currentBranch, gitHead, seedEn
 import { ensureDeps } from "../lib/deps.ts";
 import { destroyLocalDevSandboxes, resolveSandbox, type SandboxResolution } from "../lib/sandbox.ts";
 import { adminGrantCount, checkPostgres, ensureLocalPostgres, firstAdminPrincipal } from "../lib/postgres.ts";
-import { ensureLocalObjectStorage } from "../lib/object-storage.ts";
 import { killTree } from "../lib/proc.ts";
 import { envFileGet } from "../lib/envctx.ts";
 import { envSha as computeEnvSha, errMessage, nowEpoch, sleep } from "../lib/util.ts";
@@ -83,8 +82,7 @@ let currentEnvSha = "";
 let currentGitSha = "";
 let handle = "";
 let sandbox: SandboxResolution | null = null;
-let durability = { sessionStore: "memory", runStore: "memory", databaseUrl: "" };
-let harness = "pi";
+let durability = { databaseUrl: "" };
 let watch = true;
 let bootId = "";
 let bootedAt: number | null = null;
@@ -273,13 +271,9 @@ function writeLegacyMeta(booting: boolean): void {
     worktree,
     branch,
     port: String(ports.core),
-    web_port: String(ports.web),
-    admin_port: String(ports.admin),
     portal_port: String(ports.portal),
     handle,
     supervisor_pid: String(process.pid),
-    session_store: durability.sessionStore,
-    run_store: durability.runStore,
     watch: watch ? "1" : "0",
     slack: slackOn(readBootSpec()) ? "1" : "0",
     web: readBootSpec().web === false ? "0" : "1",
@@ -307,7 +301,6 @@ function persistState(): void {
     envSha: currentEnvSha,
     gitSha: currentGitSha,
     sandbox: sandbox ? { backend: sandbox.backend, detail: sandbox.detail } : null,
-    harness,
   });
 }
 
@@ -320,11 +313,7 @@ async function assembleAndPrepare(spec: BootSpec): Promise<SpecInputs> {
     log,
   });
   for (const w of assembled.warnings) phase("env", "warn", w);
-  harness = assembled.harness;
-  let harnessDetail = `live ${assembled.harness} turns (anthropic key from ${assembled.anthropicKeySource})`;
-  if (assembled.harness === "claude") harnessDetail = "live claude turns (native CLI authentication)";
-  if (assembled.codexAuthSource) harnessDetail += `; company ChatGPT subscription from ${assembled.codexAuthSource}`;
-  phase("env", "ok", harnessDetail);
+  phase("env", "ok", `live turns (anthropic key from ${assembled.anthropicKeySource})`);
 
   phase("deps", "start");
   await ensureDeps(
@@ -349,63 +338,39 @@ async function assembleAndPrepare(spec: BootSpec): Promise<SpecInputs> {
   phase("durability", "start");
   let databaseUrl = assembled.env.DATABASE_URL || envFileGet(join(worktree, ".env"), "DATABASE_URL");
   let adminGrantsSeed = assembled.env.ADMIN_GRANTS || envFileGet(join(worktree, ".env"), "ADMIN_GRANTS");
-  let sessionStore = "memory";
-  let runStore = "memory";
   let localPg = false;
-  let durableAdminPrincipal = "";
   if (!databaseUrl) {
     try {
       const pg = await ensureLocalPostgres(worktree, log);
       databaseUrl = pg.url;
       localPg = true;
     } catch (err) {
-      if (assembled.env.DEV_INSTANCE_ALLOW_MEMORY === "1") {
-        phase("durability", "warn", "memory stores explicitly allowed by DEV_INSTANCE_ALLOW_MEMORY=1");
-      } else {
-        throw new Error(
-          `DATABASE_URL is required and local Docker Postgres could not be started (${errMessage(err)}). Export DATABASE_URL, add it to ${assembled.liveEnvFile} or .env, or set DEV_INSTANCE_ALLOW_MEMORY=1 for a deliberate ephemeral wiring check.`,
-          { cause: err },
-        );
-      }
+      throw new Error(
+        `DATABASE_URL is required and local Docker Postgres could not be started (${errMessage(err)}). Export DATABASE_URL or add it to ${assembled.liveEnvFile} or .env.`,
+        { cause: err },
+      );
     }
   }
-  if (databaseUrl) {
-    sessionStore = "postgres";
-    runStore = "postgres";
-    await checkPostgres(worktree, databaseUrl).catch((err) => {
-      throw new Error(`could not connect to DATABASE_URL: ${errMessage(err)}`, { cause: err });
-    });
-    const grants = await adminGrantCount(worktree, databaseUrl);
-    if (grants === 0 && !adminGrantsSeed) {
-      if (localPg) {
-        const principal = assembled.env.DEV_INSTANCE_ADMIN_PRINCIPAL || assembled.env.USER || "dev-admin";
-        adminGrantsSeed = `${principal}:org_admin`;
-        log(`admin grants: local Postgres will seed ${principal}:org_admin if the store is empty`);
-      } else {
-        throw new Error(
-          "Postgres has no existing admin grants and ADMIN_GRANTS is unset. Set ADMIN_GRANTS=<principal>:org_admin for the first boot of this dev DB, or point DATABASE_URL at a DB that already has admin_grants.",
-        );
-      }
+  await checkPostgres(worktree, databaseUrl).catch((err) => {
+    throw new Error(`could not connect to DATABASE_URL: ${errMessage(err)}`, { cause: err });
+  });
+  const grants = await adminGrantCount(worktree, databaseUrl);
+  if (grants === 0 && !adminGrantsSeed) {
+    if (localPg) {
+      const principal = assembled.env.DEV_INSTANCE_ADMIN_PRINCIPAL || assembled.env.USER || "dev-admin";
+      adminGrantsSeed = `${principal}:org_admin`;
+      log(`admin grants: local Postgres will seed ${principal}:org_admin if the store is empty`);
+    } else {
+      throw new Error(
+        "Postgres has no existing admin grants and ADMIN_GRANTS is unset. Set ADMIN_GRANTS=<principal>:org_admin for the first boot of this dev DB, or point DATABASE_URL at a DB that already has admin_grants.",
+      );
     }
-    durableAdminPrincipal = await firstAdminPrincipal(worktree, databaseUrl).catch(() => "");
-    phase("durability", "ok", `SESSION_STORE=postgres RUN_STORE=postgres (${grants} durable grant(s))`);
-  } else {
-    phase("durability", "ok", "memory stores");
   }
-  durability = { sessionStore, runStore, databaseUrl };
-  const externalStorage = ["SNAPSHOT_STORE", "S3_BUCKET", "AWS_ENDPOINT_URL_S3"].filter(
-    (key) => assembled.env[key],
-  );
-  if (databaseUrl && externalStorage.length === 0 && sandbox.backend === "local") {
-    const storage = await ensureLocalObjectStorage(worktree, log);
-    Object.assign(assembled.env, storage.env);
-  } else if (externalStorage.length > 0 && externalStorage.length < 3) {
-    throw new Error(
-      "Direct file storage is partially configured. Set SNAPSHOT_STORE=s3, S3_BUCKET, and AWS_ENDPOINT_URL_S3 together, or unset all three so a local Docker dev instance can provision MinIO.",
-    );
-  }
+  const durableAdminPrincipal = await firstAdminPrincipal(worktree, databaseUrl).catch(() => "");
+  phase("durability", "ok", `Postgres (${grants} durable grant(s))`);
+  durability = { databaseUrl };
 
-  completeDevSecuritySecrets(assembled.env, databaseUrl || worktree);
+  completeDevSecuritySecrets(assembled.env, databaseUrl);
   const portalSessionSecret = assembled.env.PORTAL_SESSION_SECRET!;
   let portalDevPrincipal = assembled.env.DEV_INSTANCE_ADMIN_PRINCIPAL || "";
   if (!portalDevPrincipal && adminGrantsSeed) portalDevPrincipal = adminGrantsSeed.split(":")[0] ?? "";
@@ -427,8 +392,6 @@ async function assembleAndPrepare(spec: BootSpec): Promise<SpecInputs> {
     web: spec.web,
     webUiBasePath: spec.callerEnv.DEV_INSTANCE_WEB_UI_BASE || "/",
     ...(tokens ? { slack: { botToken: tokens.botToken, appToken: tokens.appToken } } : {}),
-    sessionStore,
-    runStore,
     databaseUrl,
     adminGrantsSeed,
     coreSigningSecret: assembled.env.CORE_SIGNING_SECRET || "",
@@ -727,8 +690,7 @@ async function reload(body: Record<string, unknown>): Promise<Record<string, unk
     });
     const dryEnvSha = computeEnvSha(assembled.env);
     const allHealthy =
-      children.size === (spec.web === false ? 1 : CHILD_ORDER.length) &&
-      [...children.values()].every((c) => c.state === "healthy");
+      children.size === CHILD_ORDER.length && [...children.values()].every((c) => c.state === "healthy");
     return {
       ok: true,
       noop: dryEnvSha === currentEnvSha && allHealthy,
@@ -744,7 +706,7 @@ async function reload(body: Record<string, unknown>): Promise<Record<string, unk
   const newGitSha = gitHead(worktree);
   const noopEligible =
     newEnvSha === currentEnvSha &&
-    children.size === (spec.web === false ? 1 : CHILD_ORDER.length) &&
+    children.size === CHILD_ORDER.length &&
     [...children.values()].every((c) => c.state === "healthy");
   if (!force && noopEligible) {
     return {
@@ -816,11 +778,8 @@ async function statusReport(): Promise<StatusReport> {
     gitSha: currentGitSha,
     sandbox: sandbox ? { backend: sandbox.backend, detail: sandbox.detail } : { backend: "none", detail: "" },
     durability: {
-      sessionStore: durability.sessionStore,
-      runStore: durability.runStore,
       databaseUrl: Boolean(durability.databaseUrl),
     },
-    harness,
     slackEnabled,
     webEnabled: readBootSpec().web !== false,
     watch,

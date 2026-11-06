@@ -29,7 +29,6 @@ import { createCronStore } from "../src/cron/cron-store.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createIdempotencyStore, type IdempotencyRecord } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
@@ -38,17 +37,20 @@ import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
+import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { USER_ITEM_KINDS } from "../src/sessions/items.ts";
 
 const KEY = deriveConnectorKey("keychain-ask-test-key");
 const SECRET = "keychain-ask-route-secret".repeat(3);
 
 function kcAt(now: () => number): Keychain {
   return createKeychain({
-    lock: createMemoryAdvisoryLock(),
-    creds: createMemoryMap(),
-    grants: createMemoryMap(),
-    asks: createMemoryMap(),
+    lock: testAdvisoryLock(),
+    creds: testMap(),
+    grants: testMap(),
+    asks: testMap(),
     key: KEY,
     now,
   });
@@ -305,13 +307,13 @@ test("expiry sweep fires the resolution once and rides the scheduler tick", asyn
   assert.equal(fired[0]!.status, "expired");
 
   const swept: number[] = [];
-  const idStore = createIdempotencyStore(createMemoryMap<IdempotencyRecord>());
+  const idStore = createIdempotencyStore(testMap<IdempotencyRecord>());
   const scheduler = createScheduler({
     ...singleProcessDeps(),
-    crons: createCronStore(createMemoryMap()),
+    crons: createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) }),
     deliveries: createDeliveryStore(),
     idempotency: idStore,
-    identity: createIdentityService(createMemoryMap()),
+    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     run: async () => ({ status: "ok" }) as TurnResult,
     sweepAsks: async (now) => void swept.push(now),
   });
@@ -379,8 +381,8 @@ test("runTrigger marks every trigger-fired turn `triggered` (the consent-gate cl
   const outcome = await runTrigger(
     {
       deliveries: createDeliveryStore(),
-      idempotency: createIdempotencyStore(createMemoryMap<IdempotencyRecord>()),
-      identity: createIdentityService(createMemoryMap()),
+      idempotency: createIdempotencyStore(testMap<IdempotencyRecord>()),
+      identity: createIdentityService(testMap(), { externalMembers: testMap() }),
       run: async (req) => ((seen = req), { status: "ok" } as TurnResult),
     },
     {
@@ -393,7 +395,7 @@ test("runTrigger marks every trigger-fired turn `triggered` (the consent-gate cl
     },
   );
   assert.equal(outcome.ran, true);
-  assert.equal(seen?.triggered, true);
+  assert.equal(seen?.origin?.kind, "automation");
   assert.equal(seen?.thinkingLevel, undefined);
   assert.equal(seen?.fastMode, undefined);
   assert.equal(seen?.conversation.threadRef, "ch:C1-t1", "an explicit threadRef overrides the per-fire fireKey thread");
@@ -404,8 +406,8 @@ test("runTrigger: silent markers never silence a notification-shaped fire (keych
   const outcome = await runTrigger(
     {
       deliveries,
-      idempotency: createIdempotencyStore(createMemoryMap<IdempotencyRecord>()),
-      identity: createIdentityService(createMemoryMap()),
+      idempotency: createIdempotencyStore(testMap<IdempotencyRecord>()),
+      identity: createIdentityService(testMap(), { externalMembers: testMap() }),
       run: async () => ({ status: "ok", reply: "The keychain ask was approved." }) as TurnResult,
     },
     {
@@ -440,8 +442,8 @@ test("fireAskResolution: a turn that fires but doesn't land falls back to a plai
     const deliveries = createDeliveryStore();
     return {
       deliveries,
-      idempotency: createIdempotencyStore(createMemoryMap<IdempotencyRecord>()),
-      identity: createIdentityService(createMemoryMap()),
+      idempotency: createIdempotencyStore(testMap<IdempotencyRecord>()),
+      identity: createIdentityService(testMap(), { externalMembers: testMap() }),
       run,
       getAsk: async () => current,
     };
@@ -557,8 +559,8 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
   const decide = (askId: string, actorId: string, decision: "once" | "standing" | "deny") =>
     approvals.decide(askId, { externalId: actorId }, decision);
   const resumeTurns = async (sessionId: string, pattern: RegExp) =>
-    (await built.sessions.getEntries(sessionId)).filter(
-      (e) => e.type === "user" && pattern.test((e.payload as { text: string }).text),
+    (await built.sessions.getItems(sessionId)).filter(
+      (item) => USER_ITEM_KINDS.includes(item.kind) && pattern.test(item.text ?? ""),
     );
 
   const capFor = (actorId: string, scope = scopeId("personal", actorId), extra: Partial<CapabilityClaims> = {}) =>
@@ -613,12 +615,12 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
       resume: (ask, grant) => built.fireAskResolution!(ask, grant),
     });
     server = createServer(built.app, {
+      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
       keychain: built.keychain,
       keychainApprovals: approvals,
       deliveries: built.deliveries,
       ...(built.fireAskResolution ? { fireAskResolution: built.fireAskResolution } : {}),
-      workspace: built.workspace,
       auditLog: built.auditLog,
       credentialUsage: built.credentialUsage,
     });
@@ -868,10 +870,12 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
 
     const resolution = await waitFor(() => resumeTurns(session!.id, /The credential owner approved access/));
     assert.equal(resolution.length, 1, "exactly one resolution turn, in the original thread's session");
-    const { text: prompt, environment } = resolution[0]!.payload as { text: string; environment: string };
-    const systems = (await built.sessions.listLlmRequests(session!.id)).map(
-      (r) => (r.promptEnvelope as { system: string }).system,
-    );
+    const prompt = resolution[0]!.text ?? "";
+    const environment = String(resolution[0]!.body.environment);
+    const listSystems = async () =>
+      (await built.sessions.listLlmRequests(session!.id)).map((r) => (r.promptEnvelope as { system: string }).system);
+    await waitFor(async () => ((await listSystems()).at(-1)?.includes(`\`github:${gh.id}\``) ? [true] : []));
+    const systems = await listSystems();
     assert.ok(
       !prompt.includes(ask.id) && !prompt.includes(grant.id) && !prompt.includes(gh.id),
       "no ids in the resume text",
@@ -989,7 +993,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
         });
         const seed = await built.app.turn({
           surface: "cron",
-          triggered: true,
+          origin: { kind: "automation" },
           actor: { externalId: requesterId },
           conversation: {
             kind: kind === "channel" ? "channel" : "group",
@@ -1208,7 +1212,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
     await built.scheduler.tick(Date.now());
     const resolved = await waitFor(() => resumeTurns(session!.id, /did not answer the access request/));
     assert.equal(resolved.length, 1, "exactly one expired-resolution turn in the asking thread");
-    assert.ok(!(resolved[0]!.payload as { text: string }).text.includes(made.ask.id));
+    assert.ok(!resolved[0]!.text!.includes(made.ask.id));
 
     await built.scheduler.tick(Date.now());
     assert.equal(
@@ -1247,7 +1251,7 @@ test("turn e2e: trigger-fired turns mint `triggered` into the capability token; 
       actor: { externalId: "U_ALICE" },
       conversation: { kind: "channel", threadRef: "ch:C9-t", channelRef: "C9", audience: [{ externalId: "U_ALICE" }] },
       text: "!run true",
-      ...(triggered ? { triggered: true } : {}),
+      ...(triggered ? { origin: { kind: "automation" } } : {}),
     }) as TurnRequest;
 
   assert.equal((await built.app.turn(turn(false))).status, "ok");

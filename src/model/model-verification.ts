@@ -1,12 +1,12 @@
 import { createHmac, scrypt } from "node:crypto";
 import { reportFailure } from "../util/errors.ts";
-import { probeModel } from "../harness/pi-harness.ts";
 import { ProviderTurnError, type ProviderErrorCode } from "../core/turn-error.ts";
 import { embeddingModelFromDefinition, modelFromOverlay } from "./pi-models.ts";
 import { isEmbeddingModel, type RegisteredModel } from "./model-overlay.ts";
 import { createMemoryEmbedder } from "./embeddings.ts";
 import type { ModelCredentialStore } from "./model-credential-store.ts";
 import { ModelUnavailableError, type ModelGatewayTransportConfig } from "./provider-endpoints.ts";
+import { probeModel } from "./model-runtime.ts";
 
 export class ModelVerificationError extends Error {
   readonly code: string;
@@ -44,7 +44,6 @@ const VERIFICATION_CODES: Record<ProviderErrorCode, keyof typeof VERIFICATION_FA
   unknown: "provider_failure",
 };
 
-/** Maps a probe failure from structured signals only: ProviderTurnError.code or an abort/timeout error's name. */
 export function verificationFailure(error: unknown): ModelVerificationError {
   if (error instanceof ModelVerificationError) return error;
   let code = "provider_failure";

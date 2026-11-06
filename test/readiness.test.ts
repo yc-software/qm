@@ -27,7 +27,7 @@ async function fixture(checkReadiness?: (signal: AbortSignal) => Promise<void>) 
   };
 }
 
-test("readiness is public and ready without a configured database", async () => {
+test("readiness is public and ready", async () => {
   const srv = await fixture();
   try {
     const response = await srv.get("/readyz");

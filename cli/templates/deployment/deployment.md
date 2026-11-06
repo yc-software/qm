@@ -133,7 +133,7 @@ early. Configure services, model, and the final public origin in the same pass.
 A workspace that already runs on Slack can sign in with it and skip email
 altogether. Drop `"auth"` from `services` and follow
 `.codex/skills/deploy-qm/references/slack.md`, which covers the SSO app, the
-`env.portal` endpoints, the workspace trust boundary, and the client
+`env.core` endpoints, the workspace trust boundary, and the client
 credentials. The bot app in that same reference is a separate decision — Slack
 sign-in does not require the agent in the workspace, and the agent does not
 require Slack sign-in.
@@ -142,7 +142,7 @@ require Slack sign-in.
 
 To use a different work-email OIDC provider, drop `"auth"` from
 `services`, register `<publicUrl>/auth/callback` with the provider, and put its
-endpoints and the email gate in `env.portal`. For Google Workspace:
+endpoints and the email gate in `env.core`. For Google Workspace:
 
 ```json
 {
@@ -165,7 +165,7 @@ administrator still signs in through whichever route above the deployment
 configured. Enable it in `qm.config.jsonc`:
 
 ```json
-"env": { "portal": { "PORTAL_PLAYGROUND": "1" } }
+"env": { "core": { "PORTAL_PLAYGROUND": "1" } }
 ```
 
 A playground must be its **own deployment**, never a flag on a working org's
@@ -196,9 +196,7 @@ administrator and then fails their first message.
 deploy time: Anthropic serves `claude-opus-5`, OpenAI `gpt-6.1-sol`, OpenRouter
 `openrouter/auto`. Set `model` in `qm.config.jsonc` only to override that, and
 only with a model the chosen provider can bill — a mismatch is refused at
-startup rather than at the first message. The same rule covers the harness:
-`HARNESS` `claude` runs Anthropic models alone, and `openai` and `openrouter`
-need the default `pi` harness.
+startup rather than at the first message.
 
 An operator may still prefer to hold the key centrally and rotate it from the
 Admin page. That is a deliberate choice, not the default: drop `modelProvider`

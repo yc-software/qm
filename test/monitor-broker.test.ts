@@ -3,8 +3,9 @@ import assert from "node:assert/strict";
 import { createMonitorBroker, readBackgroundOutputTail } from "../src/monitors/monitor-broker.ts";
 import type { BackgroundWatchArmedResult, BackgroundWatchResult } from "../src/monitors/monitor-broker.ts";
 import { createMonitorStore } from "../src/monitors/monitor-store.ts";
-import { createMemoryProcessRegistry } from "../src/processes/process-registry.ts";
 import { scopeId } from "../src/types.ts";
+import { createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
+import { testDatabaseUrl, testMap } from "./support/test-database.ts";
 
 const SCOPE = "personal:U1";
 type ReadOutputTail = Parameters<typeof createMonitorBroker>[0]["readOutputTail"];
@@ -14,9 +15,9 @@ function armed(r: BackgroundWatchResult): BackgroundWatchArmedResult {
   return r;
 }
 
-async function harness(readOutputTail: ReadOutputTail = async () => ({ outputTail: "" })) {
-  const store = createMonitorStore();
-  const registry = createMemoryProcessRegistry();
+async function agent(readOutputTail: ReadOutputTail = async () => ({ outputTail: "" })) {
+  const store = createMonitorStore(testMap());
+  const registry = createPostgresProcessRegistry(testDatabaseUrl());
   const rec = await registry.register({
     processId: "p-1",
     scopeId: SCOPE,
@@ -41,7 +42,7 @@ async function harness(readOutputTail: ReadOutputTail = async () => ({ outputTai
 }
 
 test("watch arms a monitor inheriting the turn's owner, scope, thread, and destination", async () => {
-  const { broker, store, rec } = await harness();
+  const { broker, store, rec } = await agent();
   const r = armed(await broker.watch("p-1", { instructions: "summarize failures", pattern: "FAIL", sinceCursor: 7 }));
   assert.equal(r.reattached, false);
   assert.equal(r.expiresAt, rec.expiresAt + 1000);
@@ -58,7 +59,7 @@ test("watch arms a monitor inheriting the turn's owner, scope, thread, and desti
 });
 
 test("watching the same job in the same thread twice reattaches instead of double-arming", async () => {
-  const { broker, store } = await harness();
+  const { broker, store } = await agent();
   const first = armed(await broker.watch("p-1"));
   const second = armed(await broker.watch("p-1"));
   assert.equal(second.reattached, true);
@@ -67,7 +68,7 @@ test("watching the same job in the same thread twice reattaches instead of doubl
 });
 
 test("a repeat watch re-arms with the new settings instead of silently keeping stale ones", async () => {
-  const { broker, store } = await harness();
+  const { broker, store } = await agent();
   const first = armed(await broker.watch("p-1", { pattern: "FAIL", instructions: "old", sinceCursor: 5 }));
   await store.advance(first.monitorId, { cursor: 9, tail: "partial" });
   const second = armed(await broker.watch("p-1", { pattern: "ERROR", instructions: "new", sinceCursor: 20 }));
@@ -86,7 +87,7 @@ test("a repeat watch re-arms with the new settings instead of silently keeping s
 });
 
 test("watch refuses a job from another scope and an unknown job", async () => {
-  const { broker, registry } = await harness();
+  const { broker, registry } = await agent();
   await registry.register({
     processId: "p-other",
     scopeId: "personal:U2",
@@ -101,7 +102,7 @@ test("watch refuses a job from another scope and an unknown job", async () => {
 
 test("watch on an exited job with output returns its final tail without arming a monitor", async () => {
   const calls: Array<{ processId: string; maxBytes: number }> = [];
-  const { broker, registry, store } = await harness(async (processId, maxBytes) => {
+  const { broker, registry, store } = await agent(async (processId, maxBytes) => {
     calls.push({ processId, maxBytes });
     return { outputTail: "last lines\nfinished\n", cursor: 8192, exitCode: 0 };
   });
@@ -122,7 +123,7 @@ test("watch on an exited job with output returns its final tail without arming a
 });
 
 test("watch on an exited job with no output returns success without arming a monitor", async () => {
-  const { broker, registry, store } = await harness(async () => ({ outputTail: "", cursor: 0 }));
+  const { broker, registry, store } = await agent(async () => ({ outputTail: "", cursor: 0 }));
   await registry.markStatus("p-1", "exited");
 
   const r = await broker.watch("p-1");
@@ -153,7 +154,7 @@ test("readBackgroundOutputTail scans output and keeps the final bytes", async ()
 });
 
 test("watch rejects an invalid regex pattern up front", async () => {
-  const { broker } = await harness();
+  const { broker } = await agent();
   await assert.rejects(() => broker.watch("p-1", { pattern: "(" }), /literal alternatives/);
   await assert.rejects(() => broker.watch("p-1", { pattern: "(a+)+$" }), /literal alternatives/);
   await assert.rejects(() => broker.watch("p-1", { pattern: "(a|aa)+$" }), /literal alternatives/);
@@ -161,7 +162,7 @@ test("watch rejects an invalid regex pattern up front", async () => {
 });
 
 test("unwatch removes own monitors only", async () => {
-  const { broker, store } = await harness();
+  const { broker, store } = await agent();
   const r = armed(await broker.watch("p-1"));
   const other = await store.create({
     owner: "U2",

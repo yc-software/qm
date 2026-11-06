@@ -2,9 +2,9 @@ import { createHmac, randomUUID } from "node:crypto";
 import type { SkillBundle } from "./skill-bundle-store.ts";
 import type { ScopeId } from "../types.ts";
 import { parseScopeId } from "../types.ts";
-import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
+import type { DurableMap } from "../persistence/durable-map.ts";
 import { assertSafeSkillName, isSafeSkillName } from "./skill-name.ts";
-import { createMemoryAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
+import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 
 type SkillStatus = "draft" | "reviewed" | "published" | "archived";
 
@@ -77,14 +77,14 @@ export interface SkillResolution {
 
 export interface SkillStoreOptions {
   signingSecret?: string;
-  backing?: DurableMap<Skill>;
-  advisoryLock?: AdvisoryLock;
+  backing: DurableMap<Skill>;
+  advisoryLock: AdvisoryLock;
 }
 
 export interface SkillStore {
   create(input: { scopeId: ScopeId; manifest: SkillManifest; createdBy: string; pack?: Skill["pack"] }): Promise<Skill>;
   update(id: string, manifest: SkillManifest): Promise<Skill>;
-  withNameLock?<T>(scopeId: ScopeId, name: string, fn: () => Promise<T>): Promise<T>;
+  withNameLock<T>(scopeId: ScopeId, name: string, fn: () => Promise<T>): Promise<T>;
   get(id: string): Promise<Skill | null>;
   list(): Promise<Skill[]>;
   verify(skill: Skill): boolean;
@@ -98,6 +98,15 @@ export interface SkillStore {
   visibleFor(orderedScopes: ScopeId[], granted?: readonly GrantedSkillRef[]): Promise<SkillResolution[]>;
   promote(id: string, targetScopeId: ScopeId): Promise<Skill>;
   move(id: string, toScopeId: ScopeId): Promise<Skill>;
+}
+
+export function foreignSkillCollision(
+  all: Skill[],
+  scopeId: ScopeId,
+  name: string,
+  isOwn: (skill: Skill) => boolean,
+): Skill | undefined {
+  return all.find((s) => s.scopeId === scopeId && s.manifest.name === name && !isOwn(s) && s.status !== "archived");
 }
 
 function scopeKind(scopeId: ScopeId): string {
@@ -167,15 +176,15 @@ export function visibleSkillRows<T extends SkillSummary>(
   return visible;
 }
 
-export function createSkillStore(opts: SkillStoreOptions = {}): SkillStore {
-  const skills = opts.backing ?? createMemoryMap<Skill>();
+export function createSkillStore(opts: SkillStoreOptions): SkillStore {
+  const skills = opts.backing;
   const inScopes = async (scopes: readonly ScopeId[]): Promise<Skill[]> => {
     const wanted = new Set<string>(scopes);
     const rows = await skills.select({ where: { field: "scopeId", anyOfFold: [...wanted] } });
     return rows.filter((skill) => wanted.has(skill.scopeId));
   };
   const secret = opts.signingSecret ?? randomUUID();
-  const advisoryLock = opts.advisoryLock ?? createMemoryAdvisoryLock();
+  const advisoryLock = opts.advisoryLock;
   const withNameLock = <T>(scopeId: ScopeId, name: string, fn: () => Promise<T>) =>
     advisoryLock.withLock(`skill-name:${scopeId}:${name}`, fn);
 
@@ -302,25 +311,30 @@ export function createSkillStore(opts: SkillStoreOptions = {}): SkillStore {
       assertSafeSkillName(s.manifest.name);
       if (s.status !== "published") throw new Error("only a published skill can be promoted");
       if (sign(s.manifest) !== s.signature) throw new Error("skill signature invalid — cannot promote");
-      const existing = (await skills.all()).find(
-        (x) => x.status === "published" && x.scopeId === targetScopeId && x.manifest.name === s.manifest.name,
-      );
-      const at = Date.now();
-      const promoted: Skill = {
-        id: existing?.id ?? randomUUID(),
-        scopeId: targetScopeId,
-        manifest: s.manifest,
-        signature: sign(s.manifest),
-        status: "published",
-        createdBy: s.createdBy,
-        version: (existing?.version ?? 0) + 1,
-        grantedCapabilities: [...s.grantedCapabilities],
-        approvals: [...s.approvals],
-        createdAt: at,
-        updatedAt: at,
-      };
-      await skills.put(promoted.id, promoted);
-      return promoted;
+      return withNameLock(targetScopeId, s.manifest.name, async () => {
+        const existing = foreignSkillCollision(
+          await inScopes([targetScopeId]),
+          targetScopeId,
+          s.manifest.name,
+          () => false,
+        );
+        const at = Date.now();
+        const promoted: Skill = {
+          id: existing?.id ?? randomUUID(),
+          scopeId: targetScopeId,
+          manifest: s.manifest,
+          signature: sign(s.manifest),
+          status: "published",
+          createdBy: s.createdBy,
+          version: (existing?.version ?? 0) + 1,
+          grantedCapabilities: [...s.grantedCapabilities],
+          approvals: [...s.approvals],
+          createdAt: at,
+          updatedAt: at,
+        };
+        await skills.put(promoted.id, promoted);
+        return promoted;
+      });
     },
 
     async move(id, toScopeId) {
@@ -330,10 +344,16 @@ export function createSkillStore(opts: SkillStoreOptions = {}): SkillStore {
       if (scopeKind(toScopeId) === "org") {
         throw new Error("ceding a skill to the org goes through promote (admin-gated), not move");
       }
-      s.scopeId = toScopeId;
-      s.updatedAt = Date.now();
-      await skills.put(s.id, s);
-      return s;
+      return withNameLock(toScopeId, s.manifest.name, async () => {
+        if (foreignSkillCollision(await inScopes([toScopeId]), toScopeId, s.manifest.name, (x) => x.id === id))
+          throw new Error(`a skill named ${s.manifest.name} already exists there`);
+        const current = await skills.get(id);
+        if (!current) throw new Error(`unknown skill: ${id}`);
+        current.scopeId = toScopeId;
+        current.updatedAt = Date.now();
+        await skills.put(current.id, current);
+        return current;
+      });
     },
   };
 }

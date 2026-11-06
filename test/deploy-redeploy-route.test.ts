@@ -6,6 +6,8 @@ import { createServer } from "../src/api/server.ts";
 import type { App, RedeployInput } from "../src/api/app.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { scopeId } from "../src/types.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const SECRET = "deploy-redeploy-route-secret".repeat(2);
 
@@ -40,14 +42,14 @@ describe("deployment redeploy route", () => {
       versions: [{ version: 1, createdAt: 1, entrypoint: "x", snapshotDir: "/tmp" }],
     };
     const app = {
-      listDeployments: async () => [deployment],
+      getDeployment: async (id: string) => (id === deployment.id || id === deployment.name ? deployment : null),
       canManageDeployment: async () => true,
       redeploy: async (_id: string, input: RedeployInput) => {
         received = input;
         return deployment;
       },
     } as unknown as App;
-    server = createServer(app, { signingSecret: SECRET });
+    server = createServer(app, { replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()), signingSecret: SECRET });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
   });

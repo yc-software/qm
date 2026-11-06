@@ -1,10 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { type QmConfig } from "../src/config.ts";
-import { ENV_DEFAULTS } from "../src/target-env-defaults.ts";
 import {
   computedSecrets,
   missingRequiredSecrets,
@@ -82,7 +78,7 @@ test("a sandbox-only secret lands on core ONLY as FLY_RESIDENT_ENV_<NAME>", () =
 
 test("a core + sandbox secret needs both the plain and renamed forms on core", () => {
   const config = makeConfig({
-    env: { core: { HARNESS: "pi" } },
+    env: {},
     sandbox: { app: "acme-sb", secretEnv: ["ANTHROPIC_API_KEY"] },
   });
   const names = runtimeSecretNames("core", secretByName(config, "ANTHROPIC_API_KEY"));
@@ -97,7 +93,7 @@ test("a virtual-only secret keeps its plain name on core (the virtual service ru
 });
 
 test("split security keys are required and routed only to their trust boundary", () => {
-  const config = makeConfig({ services: ["core", "portal"] });
+  const config = makeConfig({ services: ["core", "auth"] });
   for (const name of ["CAPABILITY_SECRET", "CONNECTOR_SECRET_KEY"] as const) {
     const secret = secretByName(config, name);
     assert.equal(secret.required, true);
@@ -105,32 +101,31 @@ test("split security keys are required and routed only to their trust boundary",
   }
   const identity = secretByName(config, "PORTAL_IDENTITY_SECRET");
   assert.equal(identity.required, true);
-  assert.deepEqual([...secretDestinations(identity).keys()].sort(), ["core", "portal"]);
+  assert.deepEqual([...secretDestinations(identity).keys()], ["core"]);
   const example = renderEnvExample(config);
   for (const name of ["CORE_SIGNING_SECRET", "CAPABILITY_SECRET", "PORTAL_IDENTITY_SECRET", "CONNECTOR_SECRET_KEY"]) {
     assert.match(example, new RegExp(`^${name}=$`, "m"));
   }
 });
 
-test("portal deployment coordinates can come from the target secret store", () => {
-  const secretBacked = makeConfig({ services: ["core", "portal"], env: { portal: { OIDC_PRINCIPAL_CLAIM: "email" } } });
+test("sign-in deployment coordinates can come from the target secret store", () => {
+  const secretBacked = makeConfig({ env: { core: { OIDC_PRINCIPAL_CLAIM: "email" } } });
   for (const name of ["OIDC_CLIENT_ID", "PORTAL_EXPECTED_TEAM_ID"]) {
     const secret = secretByName(secretBacked, name);
     assert.equal(secret.required, true);
-    assert.deepEqual(runtimeSecretNames("portal", secret), [name]);
+    assert.deepEqual(runtimeSecretNames("core", secret), [name]);
   }
 
   const configured = makeConfig({
-    services: ["core", "portal"],
-    env: { portal: { OIDC_CLIENT_ID: "client", OIDC_ALLOWED_EMAIL_DOMAIN: "example.com" } },
+    env: { core: { OIDC_CLIENT_ID: "client", OIDC_ALLOWED_EMAIL_DOMAIN: "example.com" } },
   });
   assert.ok(!computedSecrets(configured).some((secret) => secret.name === "OIDC_CLIENT_ID"));
   assert.ok(!computedSecrets(configured).some((secret) => secret.name === "PORTAL_EXPECTED_TEAM_ID"));
 });
 
-test("portal deployments require a real initial administrator seed", () => {
+test("sign-in deployments require a real initial administrator seed", () => {
   const hosted = makeConfig({
-    services: ["core", "portal"],
+    services: ["core", "auth"],
     secretEnv: { core: { ADMIN_GRANTS: "ADMIN_GRANTS" } },
   });
   const secret = secretByName(hosted, "ADMIN_GRANTS");
@@ -209,10 +204,9 @@ test("the sprites token is a catalog secret when the sandbox backend is sprites"
   );
 });
 
-test("the Agent37 key is required for either sandbox route", () => {
+test("the Agent37 key is required for either way of selecting the agent37 sandbox", () => {
   for (const config of [
     makeConfig({ env: { core: { SANDBOX_BACKEND: "agent37" } } }),
-    makeConfig({ env: { core: { SANDBOX_SECONDARY_BACKEND: "agent37" } } }),
     makeConfig({ sandbox: { backend: "agent37" } }),
   ]) {
     assert.equal(secretByName(config, "AGENT37_API_KEY").required, true);
@@ -248,10 +242,6 @@ test("omitting modelProvider preserves the pre-existing deferred-to-Admin behavi
 });
 
 test("conditional secret values use the runtime's trimmed enum semantics", () => {
-  const pi = makeConfig({ env: { core: { HARNESS: "  pi  " } } });
-  assert.equal(secretByName(pi, "ANTHROPIC_API_KEY").required, false);
-  assert.ok(secretByName(pi, "PUBLIC_API_URL").required);
-
   const slack = makeConfig({ services: ["core", "slack"], env: { slack: { SLACK_EVENTS_MODE: "  http  " } } });
   assert.ok(secretByName(slack, "SLACK_SIGNING_SECRET").required);
 });
@@ -267,25 +257,12 @@ test("AWS public app domains require and route their gate secret to core", () =>
   assert.ok(renderEnvExample(enabled).includes("AWS_DEPLOY_GATE_SECRET="));
 });
 
-test("the default harness requires and routes the sandbox-reachable PUBLIC_API_URL to core", () => {
+test("core requires and routes the sandbox-reachable PUBLIC_API_URL", () => {
   const real = makeConfig();
   const publicApi = secretByName(real, "PUBLIC_API_URL");
   assert.equal(publicApi.required, true);
   assert.deepEqual(runtimeSecretNames("core", publicApi), ["PUBLIC_API_URL"]);
   assert.ok(renderEnvExample(real).includes("PUBLIC_API_URL="));
-});
-
-test("ENV_DEFAULTS stays in sync with the packaged core fly template", () => {
-  const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-  const toml = readFileSync(join(root, "cli", "templates", "fly", "core.toml"), "utf8");
-  for (const [name, value] of Object.entries(ENV_DEFAULTS.core ?? {})) {
-    assert.match(
-      toml,
-      new RegExp(`^\\s*${name}\\s*=\\s*"${value}"`, "m"),
-      `cli/templates/fly/core.toml sets ${name}="${value}"`,
-    );
-  }
-  assert.doesNotMatch(toml, /^\s*DEPLOY_PROVIDER\s*=/m);
 });
 
 test("config secretEnv extras enter the computed set as required operator secrets, virtual services folding onto core", () => {
@@ -308,14 +285,17 @@ test("config secretEnv extras enter the computed set as required operator secret
 
 test("a secretEnv alias delivers the stored secret under its declared env name only", () => {
   const config = makeConfig({
-    services: ["core", "web-ui", "portal"],
-    secretEnv: { core: { DEPLOY_APPS_SESSION_SECRET: "PORTAL_SESSION_SECRET" } },
+    services: ["core", "egress-proxy"],
+    secretEnv: {
+      core: { DEPLOY_APPS_SESSION_SECRET: "PORTAL_SESSION_SECRET" },
+      "egress-proxy": { SESSION_KEY: "PORTAL_SESSION_SECRET" },
+    },
   });
   const secret = secretByName(config, "PORTAL_SESSION_SECRET");
-  assert.deepEqual(secret.services, ["portal"], "the alias adds no plain-name claim");
-  assert.deepEqual(runtimeSecretNames("core", secret), ["DEPLOY_APPS_SESSION_SECRET"]);
-  assert.deepEqual(runtimeSecretNames("portal", secret), ["PORTAL_SESSION_SECRET"]);
-  assert.ok(secretsForService(config, "core").some((s) => s.name === "PORTAL_SESSION_SECRET"));
+  assert.deepEqual(secret.services, ["core"], "the alias adds no plain-name claim");
+  assert.deepEqual(runtimeSecretNames("core", secret), ["PORTAL_SESSION_SECRET", "DEPLOY_APPS_SESSION_SECRET"]);
+  assert.deepEqual(runtimeSecretNames("egress-proxy", secret), ["SESSION_KEY"]);
+  assert.ok(secretsForService(config, "egress-proxy").some((s) => s.name === "PORTAL_SESSION_SECRET"));
   assert.ok(
     !computedSecrets(config).some((s) => s.name === "DEPLOY_APPS_SESSION_SECRET"),
     "the alias env name is delivery, not a second stored secret",
@@ -324,38 +304,34 @@ test("a secretEnv alias delivers the stored secret under its declared env name o
 
 test("secretEnv merges onto an existing computed secret instead of duplicating it", () => {
   const config = makeConfig({
-    services: ["core", "web-ui", "portal"],
-    secretEnv: { "web-ui": { PORTAL_IDENTITY_SECRET: "PORTAL_IDENTITY_SECRET" } },
+    services: ["core", "egress-proxy"],
+    secretEnv: { "egress-proxy": { PORTAL_IDENTITY_SECRET: "PORTAL_IDENTITY_SECRET" } },
   });
   const identity = secretByName(config, "PORTAL_IDENTITY_SECRET");
-  assert.deepEqual(identity.services, ["core", "portal", "web-ui"]);
+  assert.deepEqual(identity.services, ["core", "egress-proxy"]);
   assert.equal(computedSecrets(config).filter((s) => s.name === "PORTAL_IDENTITY_SECRET").length, 1);
 });
 
 test("secretEnv for a service the config does not enable is ignored", () => {
-  const config = makeConfig({ secretEnv: { portal: { EXTRA_TOKEN: "EXTRA_TOKEN" } } });
+  const config = makeConfig({ secretEnv: { auth: { EXTRA_TOKEN: "EXTRA_TOKEN" } } });
   assert.ok(!computedSecrets(config).some((s) => s.name === "EXTRA_TOKEN"));
 });
 
-test("PORTAL_IDENTITY_SECRET reaches every service that signs or verifies a portal identity", () => {
-  const config = makeConfig({ services: ["core", "web-ui", "admin", "portal"] });
+test("PORTAL_IDENTITY_SECRET stays inside core, which both signs and verifies portal identities", () => {
+  const config = makeConfig({ services: ["core", "slack", "auth", "egress-proxy"] });
   const secret = secretByName(config, "PORTAL_IDENTITY_SECRET");
-  assert.deepEqual(
-    [...secretDestinations(secret).keys()].sort(),
-    ["core", "portal", "web-ui"],
-    "core verifies with PORTAL_IDENTITY_SECRET, so a surface left without it signs with a different key and every request it makes is rejected",
-  );
+  assert.equal(secret.required, true);
+  assert.deepEqual([...secretDestinations(secret).keys()], ["core"]);
 });
 
-test("INBOX_USERS is one optional secret shared by web-ui and admin", () => {
-  const config = makeConfig({ services: ["core", "web-ui", "admin"] });
+test("INBOX_USERS is an optional core secret, since core serves the web UI", () => {
+  const config = makeConfig();
   const allowlist = secretByName(config, "INBOX_USERS");
   assert.equal(allowlist.required, false);
-  assert.deepEqual(allowlist.services, ["admin", "web-ui"]);
-  assert.deepEqual([...secretDestinations(allowlist).keys()], ["web-ui"]);
-  assert.deepEqual(runtimeSecretNames("web-ui", allowlist), ["INBOX_USERS"]);
-  assert.deepEqual(runtimeSecretNames("admin", allowlist), ["INBOX_USERS"]);
-  assert.match(renderEnvExample(config), /Inbox, Calendar, and Design System\. \(admin, web-ui\)/);
+  assert.deepEqual(allowlist.services, ["core"]);
+  assert.deepEqual([...secretDestinations(allowlist).keys()], ["core"]);
+  assert.deepEqual(runtimeSecretNames("core", allowlist), ["INBOX_USERS"]);
+  assert.match(renderEnvExample(config), /Inbox, Calendar, and Design System\. \(core\)/);
   assert.match(renderEnvExample(config), /^# INBOX_USERS=\s{2}# optional$/m);
 });
 
@@ -364,21 +340,21 @@ test("the invitation-email pair reaches core as optional secrets on every topolo
     const alone = secretByName(makeConfig(), name);
     assert.equal(alone.required, false);
     assert.deepEqual([...secretDestinations(alone).keys()], ["core"]);
-    assert.match(alone.description, /admin Users tab or by chatting with QM/);
+    assert.match(alone.description, /Users settings page or by chatting with QM/);
     assert.match(renderEnvExample(makeConfig()), new RegExp(`^# ${name}=  # optional$`, "m"));
 
     const broker = makeConfig({
-      services: ["core", "portal", "auth"],
+      services: ["core", "auth"],
       env: { auth: { AUTH_EMAIL_TRANSPORT: "resend" } },
     });
     const shared = secretByName(broker, name);
     assert.equal(shared.required, false);
-    assert.deepEqual([...secretDestinations(shared).keys()].sort(), ["core", "portal"]);
+    assert.deepEqual([...secretDestinations(shared).keys()], ["core"]);
   }
 });
 
 test("the .env.example catalog names every secret exactly once", () => {
-  for (const services of [["core"], ["core", "portal"], ["core", "portal", "auth"], SERVICE_NAMES] as const) {
+  for (const services of [["core"], ["core", "auth"], ["core", "slack", "auth"], SERVICE_NAMES] as const) {
     const rendered = renderEnvExample(makeConfig({ services: [...services] as QmConfig["services"] }));
     const declared = rendered
       .split("\n")
@@ -392,23 +368,23 @@ test("the .env.example catalog names every secret exactly once", () => {
 test("runtime model provider override controls the required billing key", () => {
   const config = makeConfig({
     modelProvider: "anthropic",
-    env: { core: { HARNESS: "pi", MODEL_PROVIDER: " openrouter " } },
+    env: { core: { MODEL_PROVIDER: " openrouter " } },
   });
   assert.equal(secretByName(config, "OPENROUTER_API_KEY").required, true);
   assert.equal(secretByName(config, "ANTHROPIC_API_KEY").required, false);
 });
 
-test("combined auth rejects two source secrets for the same environment name", () => {
+test("auth hosted in core rejects two source secrets for the same environment name", () => {
   const config = makeConfig({
-    services: ["portal", "auth"],
+    services: ["core", "auth"],
     secretEnv: {
-      portal: { RESEND_API_KEY: "PORTAL_RESEND" },
-      auth: { RESEND_API_KEY: "AUTH_RESEND" },
+      core: { EXTRA_API_KEY: "CORE_EXTRA" },
+      auth: { EXTRA_API_KEY: "AUTH_EXTRA" },
     },
   });
   assert.throws(
-    () => serviceSecretValue(config, "auth", "RESEND_API_KEY", new Map()),
-    /would receive env RESEND_API_KEY from both/,
+    () => serviceSecretValue(config, "auth", "EXTRA_API_KEY", new Map()),
+    /core would receive env EXTRA_API_KEY from both/,
   );
 });
 
@@ -470,8 +446,8 @@ test("deployment control credentials are conditional and cannot be delivered to 
     () =>
       computedSecrets({
         ...config,
-        services: ["core", "portal"],
-        secretEnv: { portal: { TOKEN: "DEPLOYMENT_CONTROL_SECRET" } },
+        services: ["core", "egress-proxy"],
+        secretEnv: { "egress-proxy": { TOKEN: "DEPLOYMENT_CONTROL_SECRET" } },
       }),
     /only to core/,
   );

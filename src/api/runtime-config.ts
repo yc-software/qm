@@ -1,54 +1,51 @@
-import { errMessage } from "../util/errors.ts";
+import { errMessage, swallow } from "../util/errors.ts";
+import { GENERIC_FAILURE_CLAUSE } from "../../plugins/chassis/src/failure-copy.ts";
+import { conversationScope } from "../resolution/resolution-service.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
-import type { RuntimePurpose } from "../resolution/config-store.ts";
-import { resolveRuntimeChoiceDurable } from "../harness/harness-router.ts";
+import type { TurnRuntimePurpose } from "../resolution/config-store.ts";
+import { resolveRuntimeChoice } from "../agent/runtime-choice.ts";
 import { resolveIndividualAuthRouting } from "../core/individual-auth-routing.ts";
 import { gatewayModelCatalog } from "../model/gateway-models.ts";
 import type { AppDeps } from "./app-types.ts";
-import type { ScopeId } from "../types.ts";
+import type { ScopeId, TurnRequest } from "../types.ts";
 import { orgScope } from "../config.ts";
 import {
-  defaultModelForHarness,
-  harnessIdOrPi,
-  isHarnessId,
-  modelProviderAvailabilityFor,
-  modelSupportedByHarness,
+  defaultModel,
+  modelSupported,
   serviceableModelIds,
   ALL_PROVIDERS_AVAILABLE,
   fastModeModelIds,
   modelCatalogFor,
   modelOfferedInWebui,
   modelUnavailableReason,
-  thinkingLevelsForHarness,
-  harnessSupportsFastMode,
+  thinkingLevelsFor,
   codexProviderModelId,
   codexSubscriptionModelId,
-  type HarnessId,
+  companyModelId,
+  defaultWebuiModelIds,
+  THINKING_LEVELS,
+  modelServiceable,
+  resolveModel,
+  type ModelProviderAvailability,
 } from "../model/pi-models.ts";
-import { builtInModelCatalog, selectableCatalogForHarness, selectableModelCatalog } from "../model/model-catalog.ts";
-import type { RuntimeChoice } from "../harness/harness.ts";
+import { builtInModelCatalog, selectableCatalog, selectableModelCatalog } from "../model/model-catalog.ts";
+import type { RuntimeChoice } from "../agent/agent.ts";
+import { modelBilling } from "../model/model-route.ts";
 
 export type RuntimeDeps = Partial<
   Pick<
     AppDeps,
-    | "config"
-    | "harnessId"
-    | "providerKeys"
-    | "modelCredentials"
-    | "modelCredentialFetch"
-    | "refreshModels"
-    | "userModelCredentials"
+    "config" | "providerKeys" | "modelCredentials" | "modelCredentialFetch" | "refreshModels" | "userModelCredentials"
   >
 > & { baseModelDefault?: string };
 
-export function runtimeFallback(ctx: { deps: RuntimeDeps }): { harnessId: HarnessId; modelId: string } {
-  const harnessId = harnessIdOrPi(ctx.deps.harnessId);
+export function runtimeFallback(ctx: { deps: RuntimeDeps }): RuntimeChoice {
   const gatewayIds = gatewayModelCatalog(true).map((model) => model.id);
   const providers =
     gatewayIds.length && ctx.deps.providerKeys
       ? { ...ctx.deps.providerKeys, modelIds: new Set(gatewayIds) }
       : undefined;
-  return { harnessId, modelId: ctx.deps.baseModelDefault ?? defaultModelForHarness(harnessId, undefined, providers) };
+  return { modelId: ctx.deps.baseModelDefault ?? defaultModel(undefined, providers) };
 }
 
 export async function userRuntimeConfigBody(ctx: { deps: RuntimeDeps }, scope: ScopeId, actorId: string) {
@@ -61,27 +58,29 @@ export async function userRuntimeConfigBody(ctx: { deps: RuntimeDeps }, scope: S
   ]);
   const snapshot = await runtimeConfigBody(ctx, scope, async (choice) => {
     const route = resolveIndividualAuthRouting(anthropic, openai, choice.modelId);
-    return route?.harness === choice.harnessId && route.model === choice.modelId ? null : "account_runtime_unavailable";
+    return route?.model === choice.modelId ? null : "account_runtime_unavailable";
   });
   const route = resolveIndividualAuthRouting(anthropic, openai, snapshot.effective.modelId);
-  if (!route?.model || !snapshot.modelsByHarness[route.harness]?.includes(route.model)) return snapshot;
+  if (!route?.model || !snapshot.models.includes(route.model)) return snapshot;
   const { unavailableReason: _, ...available } = snapshot;
   return {
     ...available,
     effective: {
       ...snapshot.effective,
-      harnessId: route.harness,
       modelId: route.model,
-      effortLevel: thinkingLevelsForHarness(route.harness, route.model).includes(
-        snapshot.effective.effortLevel ?? "auto",
-      )
+      effortLevel: thinkingLevelsFor(route.model).includes(snapshot.effective.effortLevel ?? "auto")
         ? snapshot.effective.effortLevel
         : "auto",
-      fastMode:
-        snapshot.effective.fastMode === true &&
-        harnessSupportsFastMode(route.harness) &&
-        fastModeModelIds().includes(route.model),
+      fastMode: snapshot.effective.fastMode === true && fastModeModelIds().includes(route.model),
     },
+  };
+}
+
+function storedChoice(stored: RuntimeChoice): RuntimeChoice {
+  return {
+    modelId: stored.modelId,
+    ...(stored.effortLevel ? { effortLevel: stored.effortLevel } : {}),
+    ...(typeof stored.fastMode === "boolean" ? { fastMode: stored.fastMode } : {}),
   };
 }
 
@@ -89,7 +88,7 @@ export async function runtimeConfigBody(
   ctx: { deps: RuntimeDeps },
   scope: ScopeId,
   authorizeChoice?: (choice: RuntimeChoice) => Promise<string | null>,
-  purpose?: RuntimePurpose,
+  purpose?: TurnRuntimePurpose,
   requested?: Partial<RuntimeChoice>,
 ) {
   if (authorizeChoice)
@@ -99,115 +98,70 @@ export async function runtimeConfigBody(
   const managedKeys = ctx.deps.modelCredentials ? await ctx.deps.modelCredentials.availability() : configuredKeys;
   const fallback = runtimeFallback(ctx);
   const org = orgScope();
-  const approvedHarnesses = ((await config.getApprovedHarnessesDurable()) ?? [fallback.harnessId]).filter(isHarnessId);
-  const providersFor = (harnessId: string) => modelProviderAvailabilityFor(harnessId, configuredKeys, managedKeys);
   const catalog =
     ctx.deps.modelCredentials && managedKeys.openrouter
       ? await selectableModelCatalog(ctx.deps.modelCredentialFetch)
       : builtInModelCatalog();
   const orgStored = await config.getRuntimeSelectionDurable(org);
   const orgLegacyModel = orgStored ? null : await config.getBaseModelOwnDurable(org);
-  let orgDefault: {
-    harnessId: HarnessId;
-    modelId: string;
-    effortLevel?: string;
-    fastMode?: boolean;
-    revision: number;
-  } = { ...fallback, revision: orgStored?.revision ?? 0 };
-  if (orgStored && isHarnessId(orgStored.harnessId)) {
-    orgDefault = {
-      harnessId: orgStored.harnessId,
-      modelId: orgStored.modelId,
-      ...(orgStored.effortLevel ? { effortLevel: orgStored.effortLevel } : {}),
-      ...(typeof orgStored.fastMode === "boolean" ? { fastMode: orgStored.fastMode } : {}),
-      revision: orgStored.revision ?? 0,
-    };
-  } else if (orgLegacyModel) {
-    orgDefault = { harnessId: fallback.harnessId, modelId: orgLegacyModel, revision: 0 };
-  }
+  let orgDefault: RuntimeChoice & { revision: number } = { ...fallback, revision: orgStored?.revision ?? 0 };
+  if (orgStored) orgDefault = { ...storedChoice(orgStored), revision: orgStored.revision ?? 0 };
+  else if (orgLegacyModel) orgDefault = { modelId: orgLegacyModel, revision: 0 };
   const stored = scope === org ? orgStored : await config.getRuntimeSelectionDurable(scope);
   const legacyModel = scope === org ? null : await config.getBaseModelOwnDurable(scope);
-  let scopeOverride: {
-    harnessId: HarnessId;
-    modelId: string;
-    effortLevel?: string;
-    fastMode?: boolean;
-    orgRevision?: number;
-  } | null = null;
-  if (stored && isHarnessId(stored.harnessId)) {
-    scopeOverride = {
-      harnessId: stored.harnessId,
-      modelId: stored.modelId,
-      ...(stored.effortLevel ? { effortLevel: stored.effortLevel } : {}),
-      ...(typeof stored.fastMode === "boolean" ? { fastMode: stored.fastMode } : {}),
-      orgRevision: stored.orgRevision,
-    };
-  } else if (legacyModel) {
-    scopeOverride = { harnessId: fallback.harnessId, modelId: legacyModel, orgRevision: 0 };
-  }
+  let scopeOverride: (RuntimeChoice & { orgRevision?: number }) | null = null;
+  if (stored) scopeOverride = { ...storedChoice(stored), orgRevision: stored.orgRevision };
+  else if (legacyModel) scopeOverride = { modelId: legacyModel, orgRevision: 0 };
   const effective = purpose
-    ? await resolveRuntimeChoiceDurable(config, org, scope, fallback, requested, undefined, purpose)
+    ? await resolveRuntimeChoice(config, org, scope, fallback, requested, undefined, purpose)
     : (scopeOverride ?? orgDefault);
   const purposeDefault = purpose ? await config.getPurposeRuntimeDurable(purpose) : undefined;
   const selected = [orgDefault, scopeOverride, effective, purposeDefault].filter((choice) => choice != null);
   const allowlist = await config.getWebuiModelsDurable(org);
-  const modelsByHarness = Object.fromEntries(
-    approvedHarnesses.map((harnessId) => {
-      const ids =
-        allowlist != null
-          ? allowlist.filter((id) => modelSupportedByHarness(id, harnessId))
-          : selectableCatalogForHarness(catalog, harnessId)
-              .filter((model) => modelOfferedInWebui(model.id))
-              .map((model) => model.id);
-      for (const choice of selected) {
-        if (
-          allowlist?.length !== 0 &&
-          (!authorizeChoice ||
-            !allowlist ||
-            choice.modelId === orgDefault.modelId ||
-            choice.modelId === purposeDefault?.modelId ||
-            allowlist.includes(codexProviderModelId(choice.modelId))) &&
-          choice.harnessId === harnessId &&
-          modelSupportedByHarness(choice.modelId, harnessId) &&
-          !ids.includes(choice.modelId)
-        )
-          ids.push(choice.modelId);
-      }
-      return [harnessId, serviceableModelIds(ids, providersFor(harnessId))];
-    }),
-  );
-  if (authorizeChoice) {
-    const piModels = modelsByHarness.pi ?? [];
-    for (const id of piModels) {
-      const subscriptionId = codexSubscriptionModelId(id);
-      if (modelSupportedByHarness(subscriptionId, "pi") && !piModels.includes(subscriptionId))
-        piModels.push(subscriptionId);
-    }
-    for (const harnessId of approvedHarnesses) {
-      const candidates = modelsByHarness[harnessId] ?? [];
-      const allowed = await Promise.all(
-        candidates.map((modelId) => authorizeChoice({ harnessId, modelId, effortLevel: "auto", fastMode: false })),
-      );
-      modelsByHarness[harnessId] = candidates.filter((_, index) => !allowed[index]);
-    }
+  const offered =
+    allowlist != null
+      ? allowlist.filter((id) => modelSupported(id))
+      : selectableCatalog(catalog)
+          .filter((model) => modelOfferedInWebui(model.id))
+          .map((model) => model.id);
+  for (const choice of selected) {
+    if (
+      allowlist?.length !== 0 &&
+      (!authorizeChoice ||
+        !allowlist ||
+        choice.modelId === orgDefault.modelId ||
+        choice.modelId === purposeDefault?.modelId ||
+        allowlist.includes(codexProviderModelId(choice.modelId))) &&
+      modelSupported(choice.modelId) &&
+      !offered.includes(choice.modelId)
+    )
+      offered.push(choice.modelId);
   }
-  const advertisedModelIds = new Set(Object.values(modelsByHarness).flat());
-  const modelCatalog = modelCatalogFor(advertisedModelIds);
+  let models = serviceableModelIds(offered, managedKeys);
+  if (authorizeChoice) {
+    for (const id of models.slice()) {
+      const subscriptionId = codexSubscriptionModelId(id);
+      if (modelSupported(subscriptionId) && !models.includes(subscriptionId)) models.push(subscriptionId);
+    }
+    const allowed = await Promise.all(
+      models.map((modelId) => authorizeChoice({ modelId, effortLevel: "auto", fastMode: false })),
+    );
+    models = models.filter((_, index) => !allowed[index]);
+  }
+  const billing = (id: string) =>
+    modelBilling(!!managedKeys.modelIds?.has(companyModelId(id, managedKeys)), !!authorizeChoice);
+  const modelCatalog = Object.fromEntries(
+    Object.entries(modelCatalogFor(new Set(models))).map(([id, meta]) => [id, { ...meta, billing: billing(id) }]),
+  );
   return {
     scopeId: scope,
     ...(purpose ? { executionPurpose: purpose } : {}),
-    approvedHarnesses,
-    modelsByHarness,
+    models,
     modelCatalog,
     orgDefault,
     scopeOverride,
-    effective: {
-      harnessId: effective.harnessId,
-      modelId: effective.modelId,
-      ...(effective.effortLevel ? { effortLevel: effective.effortLevel } : {}),
-      ...(typeof effective.fastMode === "boolean" ? { fastMode: effective.fastMode } : {}),
-    },
-    ...(!modelsByHarness[effective.harnessId]?.includes(effective.modelId)
+    effective: storedChoice(effective),
+    ...(!models.includes(effective.modelId)
       ? {
           unavailableReason:
             modelUnavailableReason(effective.modelId) ?? "Selected model is unavailable; choose another model",
@@ -220,22 +174,18 @@ export async function runtimeConfigBody(
 }
 
 export function validateRuntimeChoice(choice: RuntimeChoice): string | null {
-  if (!modelSupportedByHarness(choice.modelId, choice.harnessId)) return "model_not_supported";
-  if (
-    choice.effortLevel !== undefined &&
-    !thinkingLevelsForHarness(choice.harnessId, choice.modelId).includes(choice.effortLevel)
-  )
+  if (!modelSupported(choice.modelId)) return "model_not_supported";
+  if (choice.effortLevel !== undefined && !thinkingLevelsFor(choice.modelId).includes(choice.effortLevel))
     return "effort_not_supported";
   if (choice.fastMode !== undefined && typeof choice.fastMode !== "boolean") return "fast_mode_invalid";
-  if (choice.fastMode && (!harnessSupportsFastMode(choice.harnessId) || !fastModeModelIds().includes(choice.modelId)))
-    return "fast_mode_not_supported";
+  if (choice.fastMode && !fastModeModelIds().includes(choice.modelId)) return "fast_mode_not_supported";
   return null;
 }
 
 export async function webuiModelEnabled(
   ctx: { deps: RuntimeDeps },
   modelId: string,
-  purpose?: RuntimePurpose,
+  purpose?: TurnRuntimePurpose,
 ): Promise<boolean> {
   modelId = codexProviderModelId(modelId);
   const config = ctx.deps.config!;
@@ -253,16 +203,13 @@ export async function availableRuntimeError(
   ctx: { deps: RuntimeDeps },
   scope: ScopeId,
   choice: RuntimeChoice,
-  purpose?: RuntimePurpose,
+  purpose?: TurnRuntimePurpose,
 ): Promise<string | null> {
   await ctx.deps.refreshModels?.();
   let reason: string;
   try {
     const choices = await runtimeConfigBody(ctx, scope, undefined, purpose, choice);
-    if (
-      choices.modelsByHarness[choice.harnessId]?.includes(choice.modelId) &&
-      (await webuiModelEnabled(ctx, choice.modelId, purpose))
-    )
+    if (choices.models.includes(choice.modelId) && (await webuiModelEnabled(ctx, choice.modelId, purpose)))
       return validateRuntimeChoice({
         ...choice,
         effortLevel:
@@ -273,14 +220,12 @@ export async function availableRuntimeError(
     if (!(error instanceof NonRetryableTurnError)) throw error;
     reason = `${error.message}; it may be an unknown model ID`;
   }
-  const head = `${choice.harnessId}/${choice.modelId} can't run here (${reason}). Pick from this list rather than guessing another model: the default`;
+  const head = `${choice.modelId} can't run here (${reason}). Pick from this list rather than guessing another model: the default`;
   try {
-    const { effective, approvedHarnesses, modelsByHarness } = await runtimeConfigBody(ctx, scope, undefined, purpose);
+    const { effective, models } = await runtimeConfigBody(ctx, scope, undefined, purpose);
     const usable: string[] = [];
-    for (const harnessId of approvedHarnesses)
-      for (const modelId of modelsByHarness[harnessId] ?? [])
-        if (await webuiModelEnabled(ctx, modelId, purpose)) usable.push(`${harnessId}/${modelId}`);
-    return `${head}, ${effective.harnessId}/${effective.modelId}${usable.length ? `, or one of: ${usable.join(", ")}` : ""}.`;
+    for (const modelId of models) if (await webuiModelEnabled(ctx, modelId, purpose)) usable.push(modelId);
+    return `${head}, ${effective.modelId}${usable.length ? `, or one of: ${usable.join(", ")}` : ""}.`;
   } catch (listError) {
     return `${head} (listing usable models failed: ${errMessage(listError)}).`;
   }
@@ -290,7 +235,7 @@ export async function requestedRuntimeError(
   ctx: { deps: RuntimeDeps },
   scope: ScopeId,
   requested: Partial<RuntimeChoice>,
-  purpose?: RuntimePurpose,
+  purpose?: TurnRuntimePurpose,
 ): Promise<string | null> {
   const { effective } = await runtimeConfigBody(ctx, scope, undefined, purpose, requested).catch((error: unknown) => {
     if (!(error instanceof NonRetryableTurnError)) throw error;
@@ -301,9 +246,88 @@ export async function requestedRuntimeError(
     scope,
     {
       ...requested,
-      harnessId: requested.harnessId ?? effective.harnessId,
       modelId: requested.modelId ?? effective.modelId,
     },
     purpose,
   );
+}
+
+export function validateWebTurnModelOptions(
+  input: { model?: string; thinkingLevel?: string },
+  enabledModels: readonly string[] | null,
+  providers: ModelProviderAvailability = ALL_PROVIDERS_AVAILABLE,
+): string | null {
+  const enabled = enabledModels ?? defaultWebuiModelIds();
+  const allowedModels = serviceableModelIds(enabled, providers);
+  if (input.model && !allowedModels.includes(input.model)) {
+    return resolveModel(input.model) && !modelServiceable(input.model, providers)
+      ? "that model isn't available on this deployment (its provider isn't configured)"
+      : "that model is not enabled for the web UI";
+  }
+  if (input.thinkingLevel && !(THINKING_LEVELS as readonly string[]).includes(input.thinkingLevel))
+    return "unsupported thinking level";
+  return null;
+}
+
+async function webuiModels(
+  deps: AppDeps,
+  orgModelId: string,
+  providers: ModelProviderAvailability | undefined,
+): Promise<string[] | null> {
+  const configured = await deps.config.getWebuiModelsDurable(orgScope());
+  if (configured != null) return configured.length ? [...new Set([...configured, orgModelId])] : [];
+  if (!providers?.openrouter) return null;
+  const offered = selectableCatalog(await selectableModelCatalog(deps.modelCredentialFetch))
+    .filter((model) => modelOfferedInWebui(model.id))
+    .map((model) => model.id);
+  return [...new Set([...offered, orgModelId])];
+}
+
+export async function turnModelRefusal(
+  deps: AppDeps,
+  req: TurnRequest,
+  actorId: string,
+  individualAuth: boolean,
+  purpose: TurnRuntimePurpose | undefined,
+): Promise<string | null> {
+  const org = orgScope();
+  const scope = conversationScope(req.conversation, actorId);
+  const requested: Partial<RuntimeChoice> = {
+    ...(req.model ? { modelId: req.model } : {}),
+    ...(req.thinkingLevel ? { effortLevel: req.thinkingLevel } : {}),
+    ...(typeof req.fastMode === "boolean" ? { fastMode: req.fastMode } : {}),
+  };
+  if (req.origin?.kind === "automation" && req.model) {
+    const error = await requestedRuntimeError({ deps }, scope, requested, purpose);
+    if (error) return error;
+  }
+  if (req.surface !== "web") return null;
+  if (individualAuth) {
+    if (!req.model) return null;
+    const available = await userRuntimeConfigBody({ deps }, scope, actorId);
+    if (!available.models.includes(req.model)) return "Your connected AI account cannot serve this model.";
+    return validateWebTurnModelOptions(req, available.models);
+  }
+  const fallback = deps.runtimeFallback ?? { modelId: defaultModel() };
+  const providers = deps.modelCredentials
+    ? await deps.modelCredentials.availability()
+    : (deps.providerKeys ?? deps.modelProviders);
+  const hydrate = async () =>
+    deps.modelCredentials && providers?.openrouter ? selectableModelCatalog(deps.modelCredentialFetch) : undefined;
+  const storedOrg = await deps.config.getRuntimeSelectionDurable(org);
+  let orgModelId: string;
+  let runtime: RuntimeChoice;
+  try {
+    const orgModel = storedOrg?.modelId ?? (await deps.config.getBaseModelOwnDurable(org)) ?? fallback.modelId;
+    orgModelId = modelUnavailableReason(orgModel)
+      ? orgModel
+      : (await resolveRuntimeChoice(deps.config, org, org, fallback, undefined, hydrate)).modelId;
+    runtime = await resolveRuntimeChoice(deps.config, org, scope, fallback, requested, hydrate, purpose);
+  } catch (error) {
+    swallow("turn: runtime resolution", error);
+    return `I couldn't set up that runtime choice — ${GENERIC_FAILURE_CLAUSE}`;
+  }
+  if (providers && !modelServiceable(runtime.modelId, providers))
+    return "that model isn't available on this deployment (its provider isn't configured)";
+  return validateWebTurnModelOptions(req, await webuiModels(deps, orgModelId, providers), providers);
 }

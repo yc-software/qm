@@ -11,6 +11,7 @@ import type { AddressInfo } from "node:net";
 import { createInsecureTestServer, createServer } from "../src/api/server.ts";
 import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
+import { failedTurnError } from "./support/failed-turn.ts";
 import { type TurnRequest } from "../src/types.ts";
 import {
   mintCapabilityToken,
@@ -23,6 +24,9 @@ import type { BrokerFetch } from "../src/api/credential-broker.ts";
 import type { GitHttpFetch } from "../src/api/git-http-broker.ts";
 import { TEST_CAPABILITY_SECRET, testConfig } from "./support/test-config.ts";
 import type { AclStore } from "../src/acl/acl-store.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
+import { settle } from "./support/settle.ts";
 
 const SECRET = "svc-cred-route-secret".repeat(3);
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
@@ -48,6 +52,7 @@ function startBroker(brokerFetch: BrokerFetch): { base: string; built: BuiltApp;
     testConfig({ dataDir: mkdtempSync(join(tmpdir(), "svc-cred-broker-")), signingSecret: SECRET }),
   );
   const server = createServer(built.app, {
+    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: SECRET,
     config: built.config,
     serviceCreds: built.serviceCreds,
@@ -66,6 +71,7 @@ function startGitBroker(gitHttpFetch: GitHttpFetch): { base: string; built: Buil
     testConfig({ dataDir: mkdtempSync(join(tmpdir(), "svc-cred-git-broker-")), signingSecret: SECRET }),
   );
   const server = createServer(built.app, {
+    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: SECRET,
     config: built.config,
     serviceCreds: built.serviceCreds,
@@ -1025,9 +1031,9 @@ function buildWithCapture() {
   );
   let captured: Record<string, string> | undefined;
   const realProvision = built.sandbox.provision.bind(built.sandbox);
-  built.sandbox.provision = async (layers, opts) => {
+  built.sandbox.provision = async (owner, opts) => {
     captured = opts?.env;
-    return realProvision(layers, opts);
+    return realProvision(owner, opts);
   };
   let executed: Record<string, string> | undefined;
   const realRun = built.sandbox.run.bind(built.sandbox);
@@ -1086,7 +1092,7 @@ test("orchestrator vends a capability for only the requested org credential", as
     surface: "slack",
     actor,
     botActor: true,
-    liveActor: true,
+    origin: { kind: "human" },
     conversation: {
       kind: "channel",
       threadRef: "ch:C1:bot",
@@ -1120,8 +1126,8 @@ test("orchestrator does NOT stamp a credential granted only to someone else", as
   });
   await selectDefaultSandbox(built, "U1", "personal:U1");
 
-  await assert.rejects(
-    built.app.turn(dm(`!execute ${JSON.stringify({ command: "echo hi", credentials: ["x-firehose"] })}`)),
+  assert.match(
+    await failedTurnError(built, dm(`!execute ${JSON.stringify({ command: "echo hi", credentials: ["x-firehose"] })}`)),
     /not available/,
   );
   const res = await built.app.turn(dm("!run echo hi"));
@@ -1172,8 +1178,8 @@ test("a channel grantee stamps the credential in that channel's conversations an
   const claims = await verifyCapabilityToken(token!, TEST_CAPABILITY_SECRET);
   assert.deepEqual(claims?.credentials, ["x-firehose"]);
 
-  await assert.rejects(
-    built.app.turn({
+  assert.match(
+    await failedTurnError(built, {
       ...channelTurn("C2"),
       text: `!execute ${JSON.stringify({ command: "echo hi", credentials: ["x-firehose"] })}`,
     }),
@@ -1183,8 +1189,8 @@ test("a channel grantee stamps the credential in that channel's conversations an
   assert.equal(res.status, "ok", res.reason);
   assert.equal(env()?.AGENT_CREDENTIAL_TOKEN, undefined, "another channel must not get the credential");
 
-  await assert.rejects(
-    built.app.turn(dm(`!execute ${JSON.stringify({ command: "echo hi", credentials: ["x-firehose"] })}`)),
+  assert.match(
+    await failedTurnError(built, dm(`!execute ${JSON.stringify({ command: "echo hi", credentials: ["x-firehose"] })}`)),
     /not available/,
   );
   res = await built.app.turn(dm("!run echo hi"));
@@ -1300,7 +1306,7 @@ test("credential lists batch grants and finish without usage reads", async (t) =
       200,
     );
   }
-  const listGrants = t.mock.method(srv.built.acl, "list");
+  const listGrants = t.mock.method(srv.built.acl, "find");
   t.mock.method(srv.built.acl, "grantsFor", () => {
     throw new Error("per-credential grant read");
   });
@@ -1342,6 +1348,7 @@ test("usage summaries authorize before reads and include only the requested scop
     scopeLabel: "personal:U2",
     principalId: "U2",
   });
+  await settle(async () => (await srv.built.credentialUsage.list()).length >= 2);
   const read = t.mock.method(srv.built.serviceCreds, "listServiceCredentials");
   const summarize = t.mock.method(srv.built.credentialUsage, "summary");
   const path = `${srv.base}/v1/admin/scopes/org:default-org/credential-usage`;

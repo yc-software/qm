@@ -15,8 +15,6 @@ async function readGrantedArtifactBytes(
     opened.stream.destroy();
     return null;
   }
-  // The advertised size can be absent on some backends (fails open at 0), so
-  // the collector enforces the cap on actual bytes read.
   if (opened.sizeBytes > MAX_SHARED_ARTIFACT_BYTES) {
     opened.stream.destroy();
     throw new Error(

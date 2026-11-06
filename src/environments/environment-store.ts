@@ -59,62 +59,28 @@ function rowToAttachment(r: Record<string, unknown>): EnvironmentAttachment {
   };
 }
 
-export function createMemoryEnvironmentStore(opts: { now?: () => number } = {}): EnvironmentStore {
-  const now = opts.now ?? (() => Date.now());
-  const environments = new Map<string, Environment>();
-  const attachments = new Map<ScopeId, EnvironmentAttachment>();
-  return {
-    async create(input): Promise<Environment> {
-      const existing = environments.get(input.id);
-      if (existing) return existing;
-      const env: Environment = {
-        id: input.id,
-        orgId: configOrgId(),
-        name: input.name ?? null,
-        ownerActorId: input.ownerActorId ?? null,
-        createdAt: now(),
-        updatedAt: now(),
-      };
-      environments.set(env.id, env);
-      return env;
-    },
-    async get(id): Promise<Environment | null> {
-      return environments.get(id) ?? null;
-    },
-    async list(): Promise<Environment[]> {
-      return [...environments.values()]
-        .filter((e) => e.orgId === configOrgId())
-        .sort((a, b) => b.updatedAt - a.updatedAt);
-    },
-    async attach(scopeId, environmentId, attachedBy): Promise<void> {
-      attachments.set(scopeId, { scopeId, environmentId, attachedBy, attachedAt: now() });
-    },
-    async getAttachment(scopeId): Promise<EnvironmentAttachment | null> {
-      return attachments.get(scopeId) ?? null;
-    },
-    async attachmentsFor(environmentId): Promise<EnvironmentAttachment[]> {
-      return [...attachments.values()].filter((a) => a.environmentId === environmentId);
-    },
-  };
-}
-
 export function createPostgresEnvironmentStore(
   connectionString: string,
   opts: { now?: () => number } = {},
 ): EnvironmentStore {
   const now = opts.now ?? (() => Date.now());
-  const { q } = createPgPool(connectionString, "environments/store/0001", [
-    `CREATE TABLE IF NOT EXISTS environments(
+  const { q } = createPgPool(connectionString, [
+    {
+      id: "environments/store/0001",
+      statements: [
+        `CREATE TABLE IF NOT EXISTS environments(
         id TEXT PRIMARY KEY, org_id TEXT NOT NULL, name TEXT, owner_actor_id TEXT,
         created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL
       )`,
-    `CREATE TABLE IF NOT EXISTS environment_attachments(
+        `CREATE TABLE IF NOT EXISTS environment_attachments(
         scope_id TEXT PRIMARY KEY,
         environment_id TEXT NOT NULL REFERENCES environments(id),
         attached_by TEXT NOT NULL, attached_at BIGINT NOT NULL
       )`,
-    `CREATE INDEX IF NOT EXISTS environment_attachments_by_env
+        `CREATE INDEX IF NOT EXISTS environment_attachments_by_env
         ON environment_attachments(environment_id)`,
+      ],
+    },
   ]);
   return {
     async create(input): Promise<Environment> {

@@ -1,10 +1,10 @@
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import {
-  createMemoryAmbientJudgmentStore,
   createPostgresAmbientJudgmentStore,
   type AmbientJudgmentStore,
 } from "../src/surface-cache/ambient-judgment-store.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const URL = process.env.DATABASE_URL;
 const pgSkip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres ambient-judgment tests";
@@ -89,13 +89,13 @@ async function contract(store: AmbientJudgmentStore): Promise<void> {
 }
 
 test("memory ambient-judgment store: record + list contract", async () => {
-  const store = createMemoryAmbientJudgmentStore();
+  const store = createPostgresAmbientJudgmentStore(testDatabaseUrl());
   await contract(store);
   await store.close();
 });
 
 test("memory ambient-judgment store: bounded at 5000 rows", async () => {
-  const store = createMemoryAmbientJudgmentStore();
+  const store = createPostgresAmbientJudgmentStore(testDatabaseUrl());
   for (let i = 0; i < 5010; i++)
     await store.record({ surface: "slack", container: "C1", decision: "ignore", createdAt: i });
   const all = await store.list({ limit: 1000 });

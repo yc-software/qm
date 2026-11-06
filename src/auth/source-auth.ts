@@ -1,5 +1,5 @@
 import { signRequest as signCanonical } from "../../plugins/chassis/src/source-auth-sign.ts";
-import { createMemoryReplayDedupe, type ReplayDedupe } from "./replay-dedupe.ts";
+import type { ReplayDedupe } from "./replay-dedupe.ts";
 import { constantTimeEqual } from "../util/crypto.ts";
 
 export const SOURCE_AUTH_REPLAY_WINDOW_MS = 5 * 60_000;
@@ -26,7 +26,7 @@ export interface SourceAuthOptions {
   signingSecret: string;
   now?: () => number;
   replayWindowMs?: number;
-  dedupe?: ReplayDedupe;
+  dedupe: ReplayDedupe;
 }
 
 export interface SourceAuth {
@@ -61,7 +61,7 @@ export function verifySignature(
 export function createSourceAuth(opts: SourceAuthOptions): SourceAuth {
   const now = opts.now ?? (() => Date.now());
   const replayWindowMs = opts.replayWindowMs ?? SOURCE_AUTH_REPLAY_WINDOW_MS;
-  const dedupe = opts.dedupe ?? createMemoryReplayDedupe(now);
+  const dedupe = opts.dedupe;
 
   return {
     async verify(req) {

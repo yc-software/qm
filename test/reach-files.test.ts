@@ -14,6 +14,8 @@ import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const SECRET = "reach-files-secret".repeat(3);
 
@@ -40,9 +42,7 @@ describe("POST /v1/reach with files", () => {
     });
 
   const seedFile = async (actorId: string, relPath: string, data: string) => {
-    const handle = await built.sandbox.provision([
-      { scopeId: scopeId("personal", actorId), mountPath: "", mode: "rw" },
-    ]);
+    const handle = await built.sandbox.provision(scopeId("personal", actorId));
     await built.sandbox.writeFile(handle, relPath, data);
     await built.sandbox.teardown(handle, { keepWarm: true });
   };
@@ -56,6 +56,7 @@ describe("POST /v1/reach with files", () => {
     ]);
     await selectDefaultSandbox(built, "U-carol", scopeId("personal", "U-carol"));
     server = createServer(built.app, {
+      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
       sandbox: built.sandbox,
       blobTransfer: built.blobTransfer,
@@ -64,8 +65,12 @@ describe("POST /v1/reach with files", () => {
       auditLog: built.auditLog,
       sandboxResources: built.sandboxResources,
     });
-    bare = createServer(built.app, { signingSecret: SECRET });
+    bare = createServer(built.app, {
+      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+      signingSecret: SECRET,
+    });
     noSandbox = createServer(built.app, {
+      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
       blobTransfer: built.blobTransfer,
       files: built.files,
@@ -186,10 +191,7 @@ describe("POST /v1/reach with files", () => {
 
   it("reads workspace paths from an explicitly named sandbox_id instead of the default", async () => {
     const extra = await secondSandbox("U-carol");
-    const handle = await built.sandbox.provision(
-      [{ scopeId: scopeId("personal", "U-carol"), mountPath: "", mode: "rw" }],
-      { sandboxId: extra.id },
-    );
+    const handle = await built.sandbox.provision(scopeId("personal", "U-carol"), { sandboxId: extra.id });
     await built.sandbox.writeFile(handle, "only-here.md", "second box\n");
     await built.sandbox.teardown(handle, { keepWarm: true });
     const viaDefault = await post(

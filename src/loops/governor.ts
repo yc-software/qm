@@ -1,4 +1,4 @@
-import type { Loop, LoopGovernorConfig, LoopHealth } from "../types.ts";
+import type { Loop, LoopGovernorConfig, LoopHealth } from "./types.ts";
 import { heldMembers } from "./triage.ts";
 import type { LoopItemLedger, LoopQueueStats } from "./item-ledger.ts";
 import { isDecided, unresolvedOutput, type LoopOutputStore } from "./output-store.ts";

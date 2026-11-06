@@ -5,12 +5,13 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createE2bDeployProvider, type StoredE2bDeployBody } from "../src/deploy/e2b-deploy-provider.ts";
-import { createMemoryMap, type DurableMap } from "../src/persistence/durable-map.ts";
+import { type DurableMap } from "../src/persistence/durable-map.ts";
 import type { Deployment, DeploymentVersion } from "../src/deploy/deploy-store.ts";
 import type { DeployProvider } from "../src/deploy/deploy-provider.ts";
 import { scopeId } from "../src/types.ts";
 import { installFakeE2b, type FakeE2b } from "./support/fake-e2b.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { testMap } from "./support/test-database.ts";
 
 const SERVER = [
   "const fs = require('fs');",
@@ -59,7 +60,7 @@ function version(appVersion: string, entrypoint = "node server.js"): DeploymentV
 async function make(): Promise<{ provider: DeployProvider; store: DurableMap<StoredE2bDeployBody>; fake: FakeE2b }> {
   appPort = await freePort();
   fake = installFakeE2b({ info: true });
-  const store = createMemoryMap<StoredE2bDeployBody>();
+  const store = testMap<StoredE2bDeployBody>();
   const provider = createE2bDeployProvider({
     ...singleProcessDeps(),
     client: fake.client,

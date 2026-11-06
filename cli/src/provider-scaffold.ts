@@ -63,21 +63,22 @@ function renderConfig(orgId: string, values: ConfigValues): string {
   // deployment secret and points the base model at that vendor: \`qm setup\`
   // collects the key, \`qm doctor\` proves the provider accepts it, and \`qm up\`
   // refuses a stack that cannot serve an agent turn. Delete this line to leave
-  // the base model unset and have an administrator add the key from the Admin
-  // page after deploy instead.
+  // the base model unset and have an administrator add the key from the web UI
+  // settings after deploy instead.
   "modelProvider": ${JSON.stringify(values.modelProvider)},
 
-  // Optional base model id, passed to the harness (e.g. "claude-opus-4-6").
+  // Optional base model id (e.g. "claude-opus-4-6").
   // Omit it and the deployment uses the default model for the provider above.
   // It must be a model that provider can bill.
   // "model": "",
 ${values.providerFields}
   // First-party services to run. The full set: "core" (the agent runtime and API,
-  // always required), "slack" (the Slack surface, runs inside the core process),
-  // "web-ui" (a browser chat UI), "admin" (the operator dashboard), "portal"
-  // (the public sign-in front door), "auth" (the built-in sign-in broker that
-  // emails one-time links; drop it to sign in through an external OIDC provider),
-  // and "egress-proxy" (the TLS proxy that enforces sandbox egress policy).
+  // always required, which also serves the public sign-in front door and the
+  // browser web UI with the operator settings at /settings), "slack" (the Slack
+  // surface, runs inside the core process), "auth" (the built-in sign-in broker
+  // inside core that emails one-time links; drop it to sign in through an
+  // external OIDC provider), and "egress-proxy" (the TLS proxy that enforces
+  // sandbox egress policy).
   "services": [${values.services.map((service) => JSON.stringify(service)).join(", ")}],
 
   // Extra plugins to run alongside the services. A prebuilt image runs with
@@ -88,8 +89,7 @@ ${values.providerFields}
   // Extra directories of SKILL.md files, mounted into the agent.
   "skills": [],
 
-  // Non-secret env overrides, per service. HARNESS "pi" runs real agent turns
-  // against the base model selected by "modelProvider" above.
+  // Non-secret env overrides, per service.
   "env": ${values.env}${values.secretEnv}${values.sandbox}
 }
 `;
@@ -130,9 +130,9 @@ const AWS_AGENTS_APPENDIX = `
    \`env.auth.AUTH_ALLOWED_EMAIL_DOMAIN\` (or leave it out and supply
    \`AUTH_ALLOWED_EMAILS\`), then run \`npm exec qm -- setup\` for the sender address
    and the Resend or SMTP credentials; the CLI generates the broker's keys and the
-   portal's client credentials and wires \`OIDC_*\` itself. To use an external
+   sign-in client credentials and wires \`OIDC_*\` into core itself. To use an external
    identity provider instead, drop \`"auth"\` from \`services\`, configure
-   \`env.portal\` with the provider's OIDC endpoints and an \`OIDC_ALLOWED_EMAILS\`
+   \`env.core\` with the provider's OIDC endpoints and an \`OIDC_ALLOWED_EMAILS\`
    or \`OIDC_ALLOWED_EMAIL_DOMAIN\` tenant gate, and register
    \`<publicUrl>/auth/callback\` with the provider. Add optional services and their
    ECS/ECR entries now, then render and apply once more.
@@ -163,15 +163,18 @@ cannot deregister or delete task definitions.
 const noFiles = (): ScaffoldFile[] => [];
 
 export const dockerScaffold: ProviderScaffold = {
-  renderConfig: (orgId, modelProvider) =>
+  renderConfig: (orgId, modelProvider, emailTransport) =>
     renderConfig(orgId, {
       target: "docker",
       modelProvider,
       publicUrl: "http://localhost:8082",
       providerFields: "",
-      services: ["core", "web-ui"],
-      env: `{ "core": { "HARNESS": "pi" } }`,
-      secretEnv: "",
+      services: ["core", "auth"],
+      env: `{ "auth": { "AUTH_EMAIL_TRANSPORT": ${JSON.stringify(emailTransport)} } }`,
+      secretEnv: `,
+
+  // The initial admin seed is kept in .env, never in config; \`qm admin-login\` prints its sign-in link.
+  "secretEnv": { "core": { "ADMIN_GRANTS": "ADMIN_GRANTS" } }`,
       sandbox: "",
     }),
   ignores: [".env", "node_modules/", ".generated/"],
@@ -187,7 +190,7 @@ export const flyScaffold: ProviderScaffold = {
     renderConfig(orgId, {
       target: "fly",
       modelProvider,
-      publicUrl: `https://${orgId}-portal.fly.dev`,
+      publicUrl: `https://${orgId}-core.fly.dev`,
       providerFields: `
   // Globally unique prefix for every Fly app in this deployment.
   "appPrefix": ${JSON.stringify(orgId)},
@@ -196,8 +199,8 @@ export const flyScaffold: ProviderScaffold = {
   "region": "sjc",
   "flyOrg": "personal",
 `,
-      services: ["core", "slack", "web-ui", "admin", "portal", "auth"],
-      env: `{ "core": { "HARNESS": "pi", "SNAPSHOT_STORE": "s3", "TRANSFER_STORE": "s3", "S3_BUCKET": ${JSON.stringify(`${orgId}-data`)}, "S3_REGION": "auto" }, "slack": { "SLACK_IDENTITY_EMAIL": "1" }, "auth": { "AUTH_EMAIL_TRANSPORT": ${JSON.stringify(emailTransport)} } }`,
+      services: ["core", "slack", "auth"],
+      env: `{ "core": { "SNAPSHOT_STORE": "s3", "TRANSFER_STORE": "s3", "S3_BUCKET": ${JSON.stringify(`${orgId}-data`)}, "S3_REGION": "auto" }, "slack": { "SLACK_IDENTITY_EMAIL": "1" }, "auth": { "AUTH_EMAIL_TRANSPORT": ${JSON.stringify(emailTransport)} } }`,
       secretEnv: `,
 
   // The initial admin seed is kept in the provider secret store, never in config.
@@ -216,11 +219,7 @@ export const awsScaffold: ProviderScaffold = {
   renderConfig: (orgId, modelProvider, emailTransport) => {
     const cluster = clusterName(orgId);
     const services = Object.fromEntries(
-      [
-        ["core", 2048, 4096],
-        ["web-ui", 512, 1024],
-        ["portal", 512, 1024],
-      ].map(([name, cpu, memory]) => [
+      [["core", 2048, 4096]].map(([name, cpu, memory]) => [
         name,
         {
           ecrRepository: `${orgId}-qm-${name}`,
@@ -248,8 +247,8 @@ export const awsScaffold: ProviderScaffold = {
     "services": ${JSON.stringify(services, null, 6).replace(/^/gm, "    ").trimStart()}
   },
 `,
-      services: ["core", "slack", "web-ui", "admin", "portal", "auth"],
-      env: `{ "core": { "HARNESS": "pi", "AWS_DEPLOY_IMAGE": ${JSON.stringify(`${cluster}-sandbox`)}, "AWS_PUBLIC_ORIGIN_URL": "http://replace-with-alb-hostname" }, "slack": { "SLACK_IDENTITY_EMAIL": "1" }, "auth": { "AUTH_EMAIL_TRANSPORT": ${JSON.stringify(emailTransport)} } }`,
+      services: ["core", "slack", "auth"],
+      env: `{ "core": { "AWS_DEPLOY_IMAGE": ${JSON.stringify(`${cluster}-sandbox`)}, "AWS_PUBLIC_ORIGIN_URL": "http://replace-with-alb-hostname" }, "slack": { "SLACK_IDENTITY_EMAIL": "1" }, "auth": { "AUTH_EMAIL_TRANSPORT": ${JSON.stringify(emailTransport)} } }`,
       secretEnv: `,
 
   // The initial admin seed is kept in the provider secret store, never in config.
@@ -288,7 +287,7 @@ export const awsScaffold: ProviderScaffold = {
   },
   configurationHint: "aws: finish the account, region, public edge, GitHub OIDC, and identity gate fields before setup",
   finalCommand: "terraform -chdir=infra init && terraform -chdir=infra apply",
-  finalWhy: "create inert infrastructure; finish the edge + portal steps in AGENTS.md before up",
+  finalWhy: "create inert infrastructure; finish the edge + sign-in steps in AGENTS.md before up",
 };
 
 export const renderScaffold: ProviderScaffold = {
@@ -296,10 +295,11 @@ export const renderScaffold: ProviderScaffold = {
     renderConfig(orgId, {
       target: "render",
       modelProvider,
-      publicUrl: `https://${orgId}-portal.onrender.com`,
+      publicUrl: `https://${orgId}-core.onrender.com`,
       providerFields: `
-  // The core API address. Render assigns both URLs and qm up rewrites them here.
-  // Set your own HTTPS origins instead to use custom domains; see the Render reference.
+  // The core API address. Core serves it and publicUrl from one Render service,
+  // whose assigned URL qm up writes to both. Set your own HTTPS origins instead to
+  // use custom domains; see the Render reference.
   "apiUrl": ${JSON.stringify(`https://${orgId}-core.onrender.com`)},
 
   "render": {
@@ -313,8 +313,8 @@ export const renderScaffold: ProviderScaffold = {
     "storage": { "plan": "0.5c-512mb", "diskSizeGB": 10 }
   },
 `,
-      services: ["core", "slack", "web-ui", "admin", "portal", "auth"],
-      env: `{ "core": { "HARNESS": "pi", "SANDBOX_BACKEND": "render", "DEPLOY_PROVIDER": "render", "SNAPSHOT_STORE": "s3", "TRANSFER_STORE": "s3" }, "slack": { "SLACK_IDENTITY_EMAIL": "1" }, "auth": { "AUTH_EMAIL_TRANSPORT": ${JSON.stringify(emailTransport)} } }`,
+      services: ["core", "slack", "auth"],
+      env: `{ "core": { "SANDBOX_BACKEND": "render", "DEPLOY_PROVIDER": "render", "SNAPSHOT_STORE": "s3", "TRANSFER_STORE": "s3" }, "slack": { "SLACK_IDENTITY_EMAIL": "1" }, "auth": { "AUTH_EMAIL_TRANSPORT": ${JSON.stringify(emailTransport)} } }`,
       secretEnv: `,
 
   // The initial admin seed is kept in the provider secret store, never in config.
@@ -338,8 +338,8 @@ export const renderScaffold: ProviderScaffold = {
 
 Render builds QM services from render.source in Git; no local Docker or image
 publication is involved. qm up creates one project with a production environment
-for core, web UI, portal, Render Postgres, and bundled MinIO, then
-uploads the deployment layer. Later qm up runs retain the selected MinIO
+for core (which also serves the web UI and sign-in), Render Postgres, and
+bundled MinIO, then uploads the deployment layer. Later qm up runs retain the selected MinIO
 source commit. Use qm up --upgrade-minio to upgrade MinIO explicitly.
 Native Render Sandboxes are workspace resources.
 Each published app has a persistent disk at /data and uses SQLite at

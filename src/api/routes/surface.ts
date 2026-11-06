@@ -1,30 +1,38 @@
 import { isSideChatAnchor } from "../../sessions/side-chat.ts";
-import { createHash } from "node:crypto";
 import type { CapabilityClaims } from "../../auth/capability-token.ts";
 import { memoryForRequest } from "./memory-access.ts";
 import type { MemoryEdit, MemoryService } from "../../memory/memory-service.ts";
+import {
+  MAX_FACTS_PER_WRITE,
+  problemLine,
+  withProviders,
+  writeFacts,
+  type MemoryProviderProblem,
+} from "../../memory/provider-outcome.ts";
 import { suggestedActivityRoutes } from "./suggested-activities.ts";
-import { runtimeFallback, runtimeConfigBody, userRuntimeConfigBody, webuiModelEnabled } from "../runtime-config.ts";
+import { runtimeConfigBody, userRuntimeConfigBody, webuiModelEnabled } from "../runtime-config.ts";
 import { canReadNotebook, searchAcrossScopes } from "../../memory/cross-scope.ts";
 import { sessionSharingRoutes } from "./session-sharing.ts";
 import type { Grant, PendingApproval, ScopeId, Session } from "../../types.ts";
 import { parseScopeId, scopeId as makeScopeId } from "../../types.ts";
 import type { Skill, SkillResolution } from "../../skills/skill-store.ts";
+import type { ItemKind } from "../../sessions/items-schema.ts";
+import { compactItem } from "../../sessions/items.ts";
 import { ByteSourceTooLargeError } from "../../files/durable-byte-store.ts";
 import {
-  defaultModelForHarness,
-  isHarnessId,
-  modelSupportedByHarness,
+  defaultModel,
+  modelSupported,
   modelOfferedInWebui,
-  thinkingLevelsForHarness,
+  thinkingLevelsFor,
   fastModeModelIds,
 } from "../../model/pi-models.ts";
-import { builtInModelCatalog, selectableCatalogForHarness, selectableModelCatalog } from "../../model/model-catalog.ts";
+import { builtInModelCatalog, selectableCatalog, selectableModelCatalog } from "../../model/model-catalog.ts";
 import { errMessage } from "../../util/errors.ts";
+import { isSafeSkillName, SKILL_NAME_RULE } from "../../skills/skill-name.ts";
 import { SideChatAnchorError, SoulUpdateDeniedError, type SessionPageStatus } from "../app-types.ts";
 import { renderAgentApis } from "../agent-api-catalog.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../../auth/capability-token.ts";
-import { contentTypeWithUtf8Charset, pipeToResponse, sendJson } from "../http.ts";
+import { contentTypeWithUtf8Charset, pipeToResponse, sendJson, sendProblem } from "../http.ts";
 import { resolveBranding } from "../../resolution/branding.ts";
 import { audit, isObj, orgScope } from "./shared.ts";
 import {
@@ -35,6 +43,7 @@ import {
   uiStateId,
 } from "../../surfaces/ui-state.ts";
 import { redactWebhook } from "./webhooks.ts";
+import { selfSpend } from "./admin/spend.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
 import {
   ARTIFACT_TYPES,
@@ -208,6 +217,17 @@ async function getSession(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, found);
 }
 
+const AGENT_TRANSCRIPT_KINDS: ReadonlySet<ItemKind> = new Set<ItemKind>([
+  "UserMessage",
+  "SteeringMessage",
+  "AgentMessage",
+  "Reasoning",
+  "ToolCall",
+  "ToolResult",
+  "Elicitation",
+  "ElicitationResponse",
+]);
+
 async function getAgentConversation(ctx: ApiCtx): Promise<void> {
   const { res, app, url, capability } = ctx;
   if (!capability) {
@@ -230,12 +250,12 @@ async function getAgentConversation(ctx: ApiCtx): Promise<void> {
   if (!found) return sendJson(res, 404, { error: "not_found", message: "not a conversation you can see" });
   return sendJson(res, 200, {
     session: agentConversation(found.session),
-    entries: found.entries.filter((entry) => entry.type !== "system"),
-    ...(found.earlierEntries ? { earlierEntries: found.earlierEntries } : {}),
+    items: found.items.filter((item) => AGENT_TRANSCRIPT_KINDS.has(item.kind)).map(compactItem),
+    ...(found.earlierItems ? { earlierItems: found.earlierItems } : {}),
   });
 }
 
-async function getSessionEntry(ctx: ApiCtx): Promise<void> {
+async function getSessionItem(ctx: ApiCtx): Promise<void> {
   const { res, app, url } = ctx;
   const id = ctx.params.id!;
   const viewer = url.searchParams.get("viewer");
@@ -244,7 +264,7 @@ async function getSessionEntry(ctx: ApiCtx): Promise<void> {
   if (!Number.isInteger(seq) || seq < 0) {
     return sendJson(res, 400, { error: "bad_request", message: "seq must be a non-negative integer" });
   }
-  const found = await app.getSessionEntryForViewer(id, viewer, seq);
+  const found = await app.getSessionItemForViewer(id, viewer, seq);
   if (!found) return sendJson(res, 404, { error: "not_found" });
   return sendJson(res, 200, found);
 }
@@ -325,11 +345,13 @@ async function listFiles(ctx: ApiCtx): Promise<void> {
   const limitRaw = url.searchParams.get("limit");
   const cursor = url.searchParams.get("cursor");
   const scope = url.searchParams.get("scope");
+  const nameQuery = (url.searchParams.get("q") ?? "").trim();
   const page = await app.listFilesForViewer(
     viewer,
     {
       ...(limitRaw ? { limit: Number(limitRaw) } : {}),
       ...(cursor ? { cursor } : {}),
+      ...(nameQuery ? { nameQuery } : {}),
     },
     scope ? (scope as ScopeId) : undefined,
   );
@@ -751,7 +773,7 @@ export function parseFacts(body: unknown): string[] | string {
     ? b.facts.filter((f): f is string => typeof f === "string" && f.trim() !== "")
     : [];
   if (facts.length === 0) return "facts (non-empty string array) required";
-  if (facts.length > 20) return "at most 20 facts per call";
+  if (facts.length > MAX_FACTS_PER_WRITE) return `at most ${MAX_FACTS_PER_WRITE} facts per call`;
   return facts;
 }
 
@@ -777,6 +799,15 @@ const agentMemory =
     return handle(ctx, memory, capability);
   };
 
+function sendProviderProblem(res: ApiCtx["res"], problems: MemoryProviderProblem[], partial: Record<string, unknown>) {
+  return sendProblem(res, 502, {
+    title: "Memory provider failed",
+    detail: problems.map(problemLine).join(" "),
+    problems,
+    ...partial,
+  });
+}
+
 const searchMemory = agentMemory(async (ctx, memory, capability) => {
   const { res, deps, body } = ctx;
   const b = body as { query?: unknown; limit?: unknown; scope?: unknown };
@@ -792,15 +823,20 @@ const searchMemory = agentMemory(async (ctx, memory, capability) => {
   if (scopes.length === 0) {
     return sendJson(res, 403, { error: "forbidden", message: "memory recall is not enabled for this conversation" });
   }
-  const results = await searchAcrossScopes(memory, scopes, b.query, typeof b.limit === "number" ? b.limit : 20, {
-    actorId: capability.actorId,
-  });
+  const query = b.query;
+  const { value: results, problems } = await withProviders("search", (report) =>
+    searchAcrossScopes(memory, scopes, query, typeof b.limit === "number" ? b.limit : 20, {
+      actorId: capability.actorId,
+      report,
+    }),
+  );
   audit(deps, {
     principalId: capability.actorId,
     action: "memory.agent.search",
     resource: "memory",
     scopeLabel: scopes.join(","),
   });
+  if (problems.length) return sendProviderProblem(res, problems, results ? { results } : {});
   return sendJson(res, 200, { results });
 });
 
@@ -846,19 +882,27 @@ const writeMemory = (handle: (...args: [...Parameters<AgentMemoryHandler>, write
 const captureFacts = writeMemory(async ({ res, deps, body }, memory, capability, write) => {
   const facts = parseFacts(body);
   if (typeof facts === "string") return sendJson(res, 400, { error: "bad_request", message: facts });
-  const added = await memory.capture(write, facts, Date.now(), capability.actorId, {
-    mode: "explicit",
-    actorId: capability.actorId,
-    conversationScopeId: capability.scopeId,
-    ...(capability.sessionId ? { sessionId: capability.sessionId } : {}),
-  });
+  const { added, outcomes, problems } = await writeFacts(
+    memory,
+    write,
+    facts,
+    capability.actorId,
+    {
+      mode: "explicit",
+      actorId: capability.actorId,
+      conversationScopeId: capability.scopeId,
+      ...(capability.sessionId ? { sessionId: capability.sessionId } : {}),
+    },
+    capability.runId,
+  );
   audit(deps, {
     principalId: capability.actorId,
     action: "memory.agent.capture",
     resource: "memory",
     scopeLabel: write,
   });
-  return sendJson(res, 200, { ok: true, added, scopeId: write });
+  if (problems.length) return sendProviderProblem(res, problems, { added, scopeId: write, outcomes });
+  return sendJson(res, 200, { ok: true, added, scopeId: write, ...(outcomes.length ? { outcomes } : {}) });
 });
 
 const editFacts = writeMemory(async ({ res, deps, body }, memory, capability, write) => {
@@ -940,16 +984,6 @@ async function getSkillDetail(ctx: ApiCtx): Promise<void> {
   ) {
     return sendJson(res, 404, { error: "not_found" });
   }
-  if (
-    capability?.sessionId &&
-    (await app.authorizeWorkflowSkillRead(capability.sessionId, {
-      name: skill.manifest.name,
-      skillId: skill.id,
-      skillVersion: skill.version,
-      contentDigest: createHash("sha256").update(skill.manifest.body).digest("hex"),
-    })) === false
-  )
-    return sendJson(res, 404, { error: "not_found" });
   return sendJson(res, 200, {
     skill: {
       id: skill.id,
@@ -981,6 +1015,11 @@ async function restoreSkill(ctx: ApiCtx): Promise<void> {
   }
   if (!principalId) return sendJson(ctx.res, 400, { error: "bad_request", message: "principalId required" });
   const restored = await ctx.app.restoreOwnedSkill(ctx.params.id!, principalId);
+  if (restored === "exists")
+    return sendJson(ctx.res, 409, {
+      error: "exists",
+      message: "a live skill of that name already exists here — archive it first",
+    });
   return restored ? sendJson(ctx.res, 200, { ok: true }) : sendJson(ctx.res, 404, { error: "not_found" });
 }
 
@@ -1007,6 +1046,12 @@ async function updateSkill(ctx: ApiCtx): Promise<void> {
   const patch: { description?: string; body?: string } = {};
   if (typeof b.description === "string") patch.description = b.description;
   if (typeof b.body === "string") patch.body = b.body;
+  if (patch.description === undefined && patch.body === undefined) {
+    return sendJson(res, 400, { error: "bad_request", message: "description or body required" });
+  }
+  if (patch.description?.trim() === "" || patch.body?.trim() === "") {
+    return sendJson(res, 400, { error: "bad_request", message: "description and body can't be blank" });
+  }
   const liveActor = capability ? livePersonCapability(capability) : true;
   const updated = await app.updateOwnedSkill(id, principalId, patch, { liveActor });
   if (updated === "trigger_blocked")
@@ -1087,6 +1132,7 @@ async function createSkill(ctx: ApiCtx): Promise<void> {
   if (typeof b.name !== "string" || !b.name.trim()) {
     return sendJson(res, 400, { error: "bad_request", message: "name required" });
   }
+  if (!isSafeSkillName(b.name.trim())) return sendJson(res, 400, { error: "bad_request", message: SKILL_NAME_RULE });
   if (typeof b.description !== "string" || !b.description.trim()) {
     return sendJson(res, 400, { error: "bad_request", message: "description required" });
   }
@@ -1221,6 +1267,19 @@ export async function shareArtifact(ctx: ApiCtx): Promise<void> {
   });
 }
 
+/** Workspace custom emoji (name → image URL, aliases resolved), from the catalog the Slack surface publishes. */
+async function getCustomEmoji(ctx: ApiCtx): Promise<void> {
+  const catalog = await ctx.deps.config?.getSlackEmojiCatalogDurable(orgScope(ctx.deps));
+  const raw = catalog?.emoji ?? {};
+  const emoji: Record<string, string> = {};
+  for (const [name, value] of Object.entries(raw)) {
+    const url = value.startsWith("alias:") ? raw[value.slice("alias:".length)] : value;
+    if (url?.startsWith("https://")) emoji[name] = url;
+  }
+  ctx.res.setHeader("cache-control", "private, max-age=300");
+  return sendJson(ctx.res, 200, { emoji });
+}
+
 async function getSurfaceConfig(ctx: ApiCtx): Promise<void> {
   await ctx.deps.refreshModels?.();
   const { res, deps } = ctx;
@@ -1231,20 +1290,16 @@ async function getSurfaceConfig(ctx: ApiCtx): Promise<void> {
     deps.config.getExternalSlackParticipantsDurable(orgScope(deps)),
     resolveBranding(deps.config, orgScope(deps), deps.brandingDefault),
   ]);
-  const harnessId = deps.harnessId ?? "pi";
   const managedKeys = deps.modelCredentials ? await deps.modelCredentials.availability() : null;
-  const configuredKeys = deps.providerKeys ?? managedKeys;
-  const providerStatus = harnessId === "pi" && managedKeys ? managedKeys : configuredKeys;
+  const providerStatus = managedKeys ?? deps.providerKeys;
   const catalog = managedKeys?.openrouter
     ? await selectableModelCatalog(deps.modelCredentialFetch)
     : builtInModelCatalog();
-  const allowed = selectableCatalogForHarness(catalog, harnessId)
+  const allowed = selectableCatalog(catalog)
     .filter((model) => modelOfferedInWebui(model.id))
     .map((model) => model.id);
-  const configuredPicker = webuiModels?.filter((id) => modelSupportedByHarness(id, harnessId)) ?? [];
-  const resolvedBase = modelSupportedByHarness(baseModel ?? undefined, harnessId)
-    ? baseModel!
-    : defaultModelForHarness(harnessId, deps.baseModelDefault);
+  const configuredPicker = webuiModels?.filter((id) => modelSupported(id)) ?? [];
+  const resolvedBase = modelSupported(baseModel ?? undefined) ? baseModel! : defaultModel(deps.baseModelDefault);
   const resolvedBranding = {
     ...(branding.orgName ? { orgName: branding.orgName } : {}),
     ...(branding.accent ? { accent: branding.accent } : {}),
@@ -1255,14 +1310,13 @@ async function getSurfaceConfig(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, {
     webuiModels: webuiModels != null ? configuredPicker : allowed,
     baseModel: resolvedBase,
-    harnessId,
     ...(providerStatus && {
       modelProviderConfigured: Boolean(
         providerStatus.anthropic ||
         providerStatus.openai ||
         providerStatus.openrouter ||
         providerStatus.modelIds?.size ||
-        deps.harnessCarriedModelAuth,
+        deps.companySubscriptionAuth,
       ),
     }),
     externalSlackParticipants,
@@ -1318,37 +1372,24 @@ async function putRuntimeConfig(ctx: ApiCtx): Promise<void> {
     if (runtime) await config.acknowledgeRuntimeSelection(target.scope);
     else {
       const legacyModel = await config.getBaseModelOwnDurable(target.scope);
-      const fallback = runtimeFallback(ctx);
-      const approved = (await config.getApprovedHarnessesDurable()) ?? [fallback.harnessId];
-      if (
-        legacyModel &&
-        approved.includes(fallback.harnessId) &&
-        modelSupportedByHarness(legacyModel, fallback.harnessId) &&
-        (await webuiModelEnabled(ctx, legacyModel))
-      ) {
-        await config.setRuntimeSelection(target.scope, { harnessId: fallback.harnessId, modelId: legacyModel });
+      if (legacyModel && modelSupported(legacyModel) && (await webuiModelEnabled(ctx, legacyModel))) {
+        await config.setRuntimeSelection(target.scope, { modelId: legacyModel });
       }
     }
   } else {
-    const harnessId = ctx.body.harnessId;
     const modelId = ctx.body.modelId;
-    const fallback = runtimeFallback(ctx);
-    const approved = (await config.getApprovedHarnessesDurable()) ?? [fallback.harnessId];
-    if (!isHarnessId(harnessId) || !approved.includes(harnessId))
-      return sendJson(ctx.res, 400, { error: "harness_not_approved" });
-    if (typeof modelId !== "string" || !modelSupportedByHarness(modelId, harnessId))
+    if (typeof modelId !== "string" || !modelSupported(modelId))
       return sendJson(ctx.res, 400, { error: "model_not_supported" });
     if (!(await webuiModelEnabled(ctx, modelId))) return sendJson(ctx.res, 400, { error: "model_not_enabled" });
     const effortLevel = ctx.body.effortLevel ?? "auto";
-    if (typeof effortLevel !== "string" || !thinkingLevelsForHarness(harnessId, modelId).includes(effortLevel))
+    if (typeof effortLevel !== "string" || !thinkingLevelsFor(modelId).includes(effortLevel))
       return sendJson(ctx.res, 400, { error: "effort_not_supported" });
     const fastMode = ctx.body.fastMode ?? false;
     if (typeof fastMode !== "boolean") return sendJson(ctx.res, 400, { error: "fast_mode_invalid" });
-    const choice = { harnessId, modelId, effortLevel, fastMode: fastMode && fastModeModelIds().includes(modelId) };
+    const choice = { modelId, effortLevel, fastMode: fastMode && fastModeModelIds().includes(modelId) };
     if ((await config.getModelAccountDurable(target.actorId)) !== "company") {
       const available = await userRuntimeConfigBody(ctx, target.scope, target.actorId);
-      if (!available.modelsByHarness[harnessId]?.includes(modelId))
-        return sendJson(ctx.res, 400, { error: "account_runtime_unavailable" });
+      if (!available.models.includes(modelId)) return sendJson(ctx.res, 400, { error: "account_runtime_unavailable" });
     }
     await config.setRuntimeSelection(target.scope, choice);
   }
@@ -1398,11 +1439,16 @@ async function putChannelHeaderPin(ctx: ApiCtx): Promise<void> {
   });
 }
 
-function getSoul(ctx: ApiCtx): void {
+async function getSoul(ctx: ApiCtx): Promise<void> {
   const { res, app, url, capability } = ctx;
-  const scopeIdVal = capability?.scopeId ?? url.searchParams.get("scopeId");
-  if (!scopeIdVal) return sendJson(res, 400, { error: "bad_request", message: "scopeId required" });
-  return sendJson(res, 200, app.getSoul(scopeIdVal));
+  if (capability) return sendJson(res, 200, app.getSoul(capability.scopeId));
+  const scopeIdVal = url.searchParams.get("scopeId");
+  const principalId = url.searchParams.get("principalId");
+  if (!scopeIdVal || !principalId)
+    return sendJson(res, 400, { error: "bad_request", message: "scopeId and principalId required" });
+  if (!(await app.belongsToScope(principalId, scopeIdVal as ScopeId)))
+    return sendJson(res, 403, { error: "forbidden" });
+  return sendJson(res, 200, app.getSoul(scopeIdVal as ScopeId));
 }
 
 export async function postSoul(ctx: ApiCtx): Promise<void> {
@@ -1463,11 +1509,12 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/grants/revoke", actor: "system", auth: "source", handle: revokeGrant },
   { method: "POST", path: "/v1/share", auth: "either", handle: shareArtifact },
   { method: "GET", path: "/v1/surface-config", auth: "source", handle: getSurfaceConfig },
+  { method: "GET", path: "/v1/custom-emoji", auth: "source", handle: getCustomEmoji },
   { method: "GET", path: "/v1/runtime-config", auth: "either", handle: getRuntimeConfig },
   { method: "PUT", path: "/v1/runtime-config", auth: "either", handle: putRuntimeConfig },
   { method: "GET", path: "/v1/channel-header-pin", auth: "either", handle: getChannelHeaderPin },
   { method: "PUT", path: "/v1/channel-header-pin", auth: "either", handle: putChannelHeaderPin },
-  { method: "GET", path: "/v1/soul", auth: "either", handle: getSoul },
+  { method: "GET", path: "/v1/soul", actor: "query.principalId", auth: "either", handle: getSoul },
   { method: "POST", path: "/v1/soul", actor: "body.actorId", auth: "either", handle: postSoul },
   ...withActor("body.principalId", [
     { method: "POST", path: "/v1/sessions/:id/title", auth: "source", handle: regenerateSessionTitle },
@@ -1494,6 +1541,7 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
     { method: "GET", path: "/v1/contexts", auth: "source", handle: listContexts },
     { method: "GET", path: "/v1/scope-resources", auth: "source", handle: listScopeResources },
     { method: "GET", path: "/v1/memory", auth: "source", handle: selfMemory },
+    { method: "GET", path: "/v1/spend", auth: "source", handle: selfSpend },
     { method: "GET", path: "/v1/skills", auth: "source", handle: listSkills },
     { method: "GET", path: "/v1/skills/:id", auth: "either", handle: getSkillDetail },
   ]),
@@ -1506,7 +1554,7 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
       auth: "source",
       handle: getSessionBackgroundOutput,
     },
-    { method: "GET", path: "/v1/sessions/:id/entries/:seq", auth: "source", handle: getSessionEntry },
+    { method: "GET", path: "/v1/sessions/:id/items/:seq", auth: "source", handle: getSessionItem },
     { method: "GET", path: "/v1/sessions/:id", auth: "source", handle: getSession },
     { method: "GET", path: "/v1/files/:id/content", auth: "either", handle: getFileContent },
     { method: "GET", path: "/v1/files", auth: "either", handle: listFiles },

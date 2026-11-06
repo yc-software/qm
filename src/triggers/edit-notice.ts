@@ -1,4 +1,5 @@
-import { actsAsScope, type Cron, type CronSchedule, type Destination } from "../types.ts";
+import { actsAsScope, type Destination } from "../types.ts";
+import type { Cron, CronSchedule } from "./types.ts";
 import { principalDestination } from "../reach/reach.ts";
 import { personKeys } from "../directory/person.ts";
 import { errMessage, reportFailure, reportFailureAs } from "../util/errors.ts";

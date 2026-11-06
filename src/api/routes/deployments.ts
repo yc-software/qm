@@ -31,6 +31,7 @@ import { principalDestination } from "../../reach/reach.ts";
 import { FRAME_SESSION_COOKIE, portalSession, portalSessionFrom } from "../../deploy/viewer-session.ts";
 import { EMBED_ANCESTORS_HINT, parseEmbedAncestors } from "../../deploy/embed-ancestors.ts";
 import { proxyHeaders } from "../../util/http-proxy.ts";
+import { deploymentGitParts, isDeploymentGitRoute } from "../../../plugins/chassis/src/deployment-git.ts";
 
 function deploymentProxyAgent(port?: number): { agent?: SocksProxyAgent } {
   if (port === undefined) return {};
@@ -146,7 +147,8 @@ async function proxyAdminDeployment(ctx: BaseCtx): Promise<void> {
     ))
   )
     return;
-  const deployment = (await app.listDeployments()).find((d) => d.id === parts.id);
+  const found = await app.getDeployment(parts.id);
+  const deployment = found?.id === parts.id ? found : undefined;
   const actor = await authorizeAdmin({ req, res, deps, capability: null }, deployment?.ownerScopeId ?? orgScope(deps));
   if (!actor) return;
   if (!deployment) return sendJson(res, 404, { error: "not_found" });
@@ -1075,32 +1077,7 @@ function signInFailedHtml(signIn: string): string {
 }
 
 const deploymentId = async (app: App, idOrName: string): Promise<string | undefined> =>
-  (await app.listDeployments()).find((d) => d.id === idOrName || d.name === idOrName)?.id;
-
-function deploymentGitParts(pathname: string): { id: string; tail: string } | null {
-  const prefix = "/v1/deployments/";
-  if (!pathname.startsWith(prefix)) return null;
-  const rest = pathname.slice(prefix.length);
-  const marker = "/git/";
-  const markerAt = rest.indexOf(marker);
-  if (markerAt < 0) return null;
-  const tail = rest.slice(markerAt + marker.length);
-  if (!tail) return null;
-  try {
-    return { id: decodeURIComponent(rest.slice(0, markerAt)), tail };
-  } catch {
-    return null;
-  }
-}
-
-function isDeploymentGitRoute(method: string, pathname: string): boolean {
-  const parts = deploymentGitParts(pathname);
-  if (!parts) return false;
-  return (
-    (method === "GET" && parts.tail === "info/refs") ||
-    (method === "POST" && (parts.tail === "git-upload-pack" || parts.tail === "git-receive-pack"))
-  );
-}
+  (await app.getDeployment(idOrName))?.id;
 
 function gitServiceOf(tail: string, url: URL): "git-upload-pack" | "git-receive-pack" | null {
   if (tail === "git-upload-pack" || tail === "git-receive-pack") return tail;
@@ -1412,13 +1389,12 @@ export async function getDeployment(ctx: ApiCtx): Promise<void> {
   const { res, app, url, secret, capability, params } = ctx;
   const principalId = capability ? capability.actorId : url.searchParams.get("principalId");
   const id = params.id!;
-  let deployment;
-  if (principalId) {
-    deployment = (await app.listDeploymentsForViewer(principalId)).find((d) => d.id === id || d.name === id);
-  } else {
-    const stored = (await app.listDeployments()).find((d) => d.id === id || d.name === id);
-    deployment = stored ? deploymentView(stored) : undefined;
-  }
+  const stored = await app.getDeployment(id);
+  const permission = stored && principalId ? await app.deploymentGitPermissionFor(stored.id, principalId) : null;
+  const deployment =
+    stored && (!principalId || permission)
+      ? { ...deploymentView(stored), ...(permission ? { permission } : {}) }
+      : undefined;
   if (!deployment) return sendJson(res, 404, { error: "not_found" });
   if (!principalId || !secret) return sendJson(res, 200, { deployment });
   const git = await app.deploymentGitUrlFor(deployment.id, principalId, { secret, baseUrl: gitUrlBase(ctx) });

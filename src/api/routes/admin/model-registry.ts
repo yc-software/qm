@@ -1,7 +1,8 @@
 import { isEmbeddingModel } from "../../../model/model-overlay.ts";
 import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
 import { ModelVerificationError } from "../../../model/model-verification.ts";
-import { embeddingModelCatalog, MODEL_REGISTRY, safeModelMetadata } from "../../../model/pi-models.ts";
+import { embeddingModelCatalog, safeModelMetadata } from "../../../model/pi-models.ts";
+import { MODEL_REGISTRY } from "../../../model/model-registry.ts";
 import { errMessage } from "../../../util/errors.ts";
 import { sendJson } from "../../http.ts";
 import type { ApiCtx } from "../route.ts";
@@ -147,23 +148,11 @@ export async function enableBuiltinModel(ctx: ApiCtx): Promise<void> {
       error: "not_builtin",
       message: "Use Verify and enable on the model definition instead.",
     });
-  const approved = (await config.getApprovedHarnessesDurable()) ?? [ctx.deps.harnessId ?? "pi"];
-  if (!approved.includes("pi"))
-    return sendJson(ctx.res, 400, {
-      error: "pi_not_approved",
-      message: "Enable the Pi harness in Models settings first.",
-    });
   try {
     const context = await modelVerifier(spec);
     const signal = AbortSignal.timeout(15_000);
     await context.probe(signal);
     const apply = async () => {
-      const stillApproved = (await config.getApprovedHarnessesDurable()) ?? [ctx.deps.harnessId ?? "pi"];
-      if (!stillApproved.includes("pi"))
-        throw new ModelVerificationError(
-          "pi_not_approved",
-          "Pi was disabled during verification. Review Models settings.",
-        );
       if ((await modelVerifier(spec)).fingerprint !== context.fingerprint)
         throw new ModelVerificationError("changed_during_verification", "Serving credentials changed. Verify again.");
       const managed = await ctx.deps.modelCredentials?.availability();

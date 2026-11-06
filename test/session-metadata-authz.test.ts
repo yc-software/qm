@@ -69,16 +69,17 @@ test("the single-session read applies the managed-project check the session list
   assert.ok((await built.app.searchSessions("member", "push")).some((hit) => hit.sessionId === sessionId));
   assert.equal((await built.app.removeProjectMember(project.id, "owner", "member")).status, "ok");
   assert.deepEqual(await built.app.searchSessions("member", "push"), []);
-  assert.ok(
+  assert.equal(
     await built.sessions.getForParticipant(sessionId, "member"),
-    "the participant row outlives the project membership, so the project check is what must reject",
+    null,
+    "removing the member removes their participant row",
   );
   assert.equal(
     await built.app.getSessionForViewer(sessionId, "member"),
     null,
     "a dropped project member cannot read the session one at a time",
   );
-  assert.equal(await built.app.getSessionEntryForViewer(sessionId, "member", 1), null, "nor a single entry");
+  assert.equal(await built.app.getSessionItemForViewer(sessionId, "member", 1), null, "nor a single item");
   assert.equal(await built.app.sessionBackground(sessionId, "member"), null, "nor its background work");
   assert.equal(await built.app.updateSession(sessionId, "member", { title: "stolen" }), null, "nor rename it");
   assert.ok(
@@ -101,9 +102,10 @@ test("a dropped project member cannot discard or retitle a session they can no l
   assert.ok(await built.app.getSessionForViewer(sessionId, "member"), "a project member reads the empty shell");
 
   assert.equal((await built.app.removeProjectMember(project.id, "owner", "member")).status, "ok");
-  assert.ok(
+  assert.equal(
     await built.sessions.getForParticipant(sessionId, "member"),
-    "the participant row outlives the project membership",
+    null,
+    "removing the member removes their participant row",
   );
   assert.equal(await built.app.regenerateTitle(sessionId, "member"), null, "no retitling a session they cannot read");
   assert.equal(await built.app.discardSession(sessionId, "member"), false, "no discarding it either");

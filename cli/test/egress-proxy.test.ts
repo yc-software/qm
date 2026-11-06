@@ -22,7 +22,7 @@ const config: QmConfig = {
   plugins: [],
   skills: [],
   imageOverrides: {},
-  env: { core: { HARNESS: "pi", AWS_DEPLOY_IMAGE: "acme-qm-sandbox" } },
+  env: { core: { AWS_DEPLOY_IMAGE: "acme-qm-sandbox" } },
   aws: {
     accountId: "123456789012",
     region: "us-west-2",
@@ -98,7 +98,7 @@ test("a vendored AWS scaffold without the proxy load balancer refuses the egress
     writeFileSync(join(infra, "terraform.tfvars"), "services = {}\n");
     writeFileSync(join(infra, "variables.tf"), 'variable "services" { type = map(any) }\n');
     writeFileSync(join(infra, "main.tf"), 'resource "aws_lb" "this" {}\n');
-    assert.throws(() => renderTerraformVars(config, dir), /AWS scaffold predates the egress-proxy service/);
+    assert.throws(() => renderTerraformVars(config, dir), /AWS scaffold predates core serving the public front door/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

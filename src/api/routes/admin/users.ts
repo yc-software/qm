@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { gatewayActorId } from "../../../model/provider-endpoints.ts";
 import { mintSignedPayload } from "../../../auth/signed-token.ts";
 import { scopeId as makeScopeId } from "../../../types.ts";
 import { adminStatusFromGrants, AdminError } from "../../../admin/admin-service.ts";
@@ -34,7 +35,8 @@ export async function listUsers(ctx: ApiCtx): Promise<void> {
   const participants = (await deps.sessions?.listParticipants()) ?? [];
   const turns = (await deps.sessions?.attributedTurns()) ?? [];
   const grants = (await deps.admin?.listGrants()) ?? [];
-  const users = computeUsers({ participants, turns, grants });
+  const roster = await deps.admin!.users.list();
+  const users = computeUsers({ participants, turns, grants, people: roster.map((r) => r.principalId) });
   const now = Date.now();
   const externalUsers = ((await deps.identity?.listExternalMembers()) ?? [])
     .map((m) => ({ ...m, status: externalMemberActive(m, now) ? ("active" as const) : ("expired" as const) }))
@@ -43,25 +45,31 @@ export async function listUsers(ctx: ApiCtx): Promise<void> {
         Number(b.status === "active") - Number(a.status === "active") ||
         (a.expiresAt ?? Infinity) - (b.expiresAt ?? Infinity),
     );
-  for (const member of externalUsers.filter((m) => m.kind === "teammate" && m.status === "active")) {
-    if (!users.some((u) => samePerson(u.principalId, member.email)))
-      users.push({
-        principalId: member.email,
-        sessionCount: 0,
-        turnCount: 0,
-        lastSeenAt: null,
-        admin: adminStatusFromGrants(grants, member.email),
-      });
-  }
+  const records = new Map(roster.map((r) => [r.principalId, r]));
+  const rows = users.map((u) => {
+    const record = records.get(u.principalId);
+    return {
+      ...u,
+      userId: record?.id ?? null,
+      kind: record?.kind ?? "person",
+      firstSeenAt: record?.firstSeenAt ?? null,
+      source: record?.source ?? null,
+      deactivated: deps.identity?.deactivationSource(u.principalId) !== undefined,
+      offboarded: record?.offboardedAt !== undefined,
+    };
+  });
   const signInUrl = signInUrlOf(deps);
   const inviteEmail = {
     configured: deps.inviteMailer !== undefined,
     ...(deps.inviteMailer ? {} : { problem: INVITE_EMAIL_NOT_CONFIGURED }),
     ...(signInUrl ? { signInUrl } : {}),
   };
+  const actorKey = deps.modelGatewayTransport?.actorKey;
   return sendJson(res, 200, {
     scopeId: scope,
-    users,
+    users: actorKey
+      ? rows.map((user) => ({ ...user, gatewayActor: gatewayActorId(user.principalId, actorKey) }))
+      : rows,
     grants,
     externalUsers,
     inviteEmail,
@@ -121,7 +129,7 @@ async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<void> {
   if (role !== "member" && role !== "org_admin") return bad("role must be member or org_admin");
   const expiry = normalizeInboundExpiresAt(endOfDayUtc(b.expiresAt));
   if (!expiry.ok) return bad(expiry.message);
-  if (teammate && (!deps.portalUrl || !deps.portalIdentitySecret || !deps.replayDedupe?.durable))
+  if (teammate && (!deps.portalUrl || !deps.portalIdentitySecret || !deps.replayDedupe))
     return sendJson(res, 503, {
       error: "not_configured",
       message: "Invitation sign-in requires a portal and durable token storage.",
@@ -169,6 +177,7 @@ async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<void> {
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
   };
+  if (member.kind === "teammate") await deps.admin!.users.record({ id: email, source: "invite", at: member.createdAt });
   await deps.identity.putExternalMember(member);
   const action = created || readmitted ? "external_user.invite" : "external_user.update";
   audit(deps, {
@@ -362,7 +371,7 @@ export async function listKeychainStatus(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { scopeId: scope, people, credentials, grants, asks, enabled: true });
 }
 
-async function resolveAdminUser(deps: ApiCtx["deps"], requestedPrincipal: string) {
+export async function resolveAdminUser(deps: ApiCtx["deps"], requestedPrincipal: string) {
   const member = await deps.directory?.get(requestedPrincipal);
   return { member, principalId: member?.principalId ?? personKey(requestedPrincipal) };
 }
@@ -398,6 +407,8 @@ export async function getUserDetail(ctx: ApiCtx): Promise<void> {
     scopeId: personal,
     ...(member?.displayName ? { displayName: member.displayName } : {}),
     admin: adminStatusFromGrants(grants, principalId),
+    deactivated: deps.identity?.deactivationSource(principalId) !== undefined,
+    user: await deps.admin!.users.get(principalId),
     stats: { sessions: stats ?? 0 },
     config,
     onboarding,

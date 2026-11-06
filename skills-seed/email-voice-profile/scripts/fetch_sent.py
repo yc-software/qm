@@ -15,10 +15,9 @@ import html
 import json
 import os
 import re
+import subprocess
 import sys
-import urllib.error
 import urllib.parse
-import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from email.utils import getaddresses
 
@@ -50,14 +49,17 @@ def call(method: str, path: str, query: dict | None = None):
     tok = os.environ.get("VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM", "")
     if not tok:
         sys.exit("no Gmail token: ask the user to connect Google")
-    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {tok}"}, method=method)
-    try:
-        with urllib.request.urlopen(req, timeout=60) as res:
-            return json.load(res)
-    except urllib.error.HTTPError as e:
-        raise RuntimeError(f"gmail api {e.code} on {method} {path}: {e.read().decode()[:500]}") from e
-    except urllib.error.URLError as e:
-        raise RuntimeError(f"gmail api unreachable on {method} {path}: {e.reason}") from e
+    res = subprocess.run(
+        ["curl", "-sS", "--max-time", "60", "-X", method, "-H", f"Authorization: Bearer {tok}",
+         "-w", "\n%{http_code}", url],
+        capture_output=True, text=True,
+    )
+    if res.returncode != 0:
+        raise RuntimeError(f"gmail api unreachable on {method} {path}: {res.stderr.strip()[:500]}")
+    text, _, status = res.stdout.rpartition("\n")
+    if not status.startswith("2"):
+        raise RuntimeError(f"gmail api {status} on {method} {path}: {text[:500]}")
+    return json.loads(text)
 
 
 def headers_of(payload: dict) -> dict[str, str]:

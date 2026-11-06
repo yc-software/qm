@@ -51,7 +51,6 @@ export class OnboardingWelcome extends LitElement {
     toolkit: {},
     returnKey: {},
     base: {},
-    adminBase: {},
     loading: { state: true },
     error: { state: true },
     authorizing: { state: true },
@@ -72,7 +71,6 @@ export class OnboardingWelcome extends LitElement {
   declare toolkit: string;
   declare returnKey: string;
   declare base: string;
-  declare adminBase: string;
   declare loading: boolean;
   declare error: string;
   declare authorizing: string;
@@ -111,7 +109,6 @@ export class OnboardingWelcome extends LitElement {
     this.toolkit = "";
     this.returnKey = "welcome";
     this.base = "/";
-    this.adminBase = "/admin";
     this.loading = true;
     this.error = "";
     this.authorizing = "";
@@ -537,7 +534,6 @@ export class OnboardingWelcome extends LitElement {
           ? html`<qm-onboarding-slack
               class="welcome-beat"
               style=${`--welcome-delay:${cohort ? 3050 : 900}ms`}
-              .adminBase=${this.adminBase}
               @slack-installation-status=${(event: CustomEvent<{ connected: boolean }>) => {
                 this.workspaceConnected = event.detail.connected;
               }}

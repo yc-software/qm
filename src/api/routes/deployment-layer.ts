@@ -56,7 +56,7 @@ async function putDeploymentLayer(ctx: ApiCtx): Promise<void> {
       ok: true,
       version: record.version,
       contentHash: record.contentHash,
-      durable: store.durable,
+      durable: true,
       resolved: record.resolved,
     });
   } catch (error) {
@@ -68,7 +68,7 @@ async function putDeploymentLayer(ctx: ApiCtx): Promise<void> {
         message: errMessage(error),
         version: record.version,
         contentHash: record.contentHash,
-        durable: store.durable,
+        durable: true,
         resolved: record.resolved,
       });
     }

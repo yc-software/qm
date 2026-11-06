@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createMemoryTidyService, withMemoryTidy, type MemoryTidyProfile } from "../src/memory/tidy.ts";
 import type { MemoryService } from "../src/memory/memory-service.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createScheduler } from "../src/cron/scheduler.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
@@ -11,12 +10,14 @@ import { createIdentityService } from "../src/identity/identity-service.ts";
 import type { MemoryFact } from "../src/memory/facts.ts";
 import { scopeId, type ScopeId, type TurnRequest } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { testMap, testDatabaseUrl } from "./support/test-database.ts";
+import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 
 function fixture() {
   const notebooks = new Map<ScopeId, MemoryFact[]>();
   const timezones = new Map<string, string>();
-  const store = createMemoryMap<MemoryTidyProfile>();
-  const crons = createCronStore();
+  const store = testMap<MemoryTidyProfile>();
+  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const calls: TurnRequest[] = [];
   const fact = (updatedAt: number): MemoryFact => ({
     id: String(updatedAt),
@@ -39,8 +40,8 @@ function fixture() {
     ...singleProcessDeps(),
     crons,
     deliveries: createDeliveryStore(),
-    identity: createIdentityService(),
-    idempotency: createIdempotencyStore(),
+    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    idempotency: createIdempotencyStore(testMap()),
     skipFire: (cron) => service.skipFire(cron),
     run: async (request) => {
       calls.push(request);

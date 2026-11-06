@@ -1,9 +1,9 @@
-export const SERVICE_NAMES = ["core", "web-ui", "admin", "portal", "auth", "egress-proxy"] as const;
+export const SERVICE_NAMES = ["core", "egress-proxy"] as const;
 export type ServiceName = (typeof SERVICE_NAMES)[number];
 
 export const isServiceName = (s: string): s is ServiceName => (SERVICE_NAMES as readonly string[]).includes(s);
 
-export const VIRTUAL_SERVICE_NAMES = ["slack"] as const;
+export const VIRTUAL_SERVICE_NAMES = ["slack", "auth"] as const;
 export type VirtualServiceName = (typeof VIRTUAL_SERVICE_NAMES)[number];
 export type DeclaredServiceName = ServiceName | VirtualServiceName;
 
@@ -11,11 +11,10 @@ export const isVirtualService = (s: string): s is VirtualServiceName =>
   (VIRTUAL_SERVICE_NAMES as readonly string[]).includes(s);
 export const isDeclaredService = (s: string): s is DeclaredServiceName => isServiceName(s) || isVirtualService(s);
 
+export const PUBLIC_PORT = 8000;
+
 export function serviceHost(name: string): string {
-  if (name === "admin") return "web-ui";
-  if (name === "auth") return "portal";
-  if (name === "slack") return "core";
-  return name;
+  return isVirtualService(name) ? "core" : name;
 }
 
 export const runnableServices = (names: readonly DeclaredServiceName[]): ServiceName[] =>
@@ -27,8 +26,7 @@ export function hostedServiceEnv(
   host: string,
 ): Record<string, string> {
   if (host === "core" || serviceHost(host) !== host) return { ...env[host as DeclaredServiceName] };
-  const out: Record<string, string> =
-    host === "web-ui" ? { ADMIN_ENABLED: services.includes("admin") ? "1" : "0" } : {};
+  const out: Record<string, string> = {};
   for (const service of services.filter((name) => serviceHost(name) === host)) {
     for (const [name, value] of Object.entries(env[service] ?? {})) {
       if (name === "PORT") continue;
@@ -71,21 +69,16 @@ export interface ServiceCtx {
   orgId: string;
   deployAppPrefix: string;
   publicUrl: string;
-  hasPortal: boolean;
   hasAuth: boolean;
   authAllowedEmailDomain?: string;
   brand?: BrandEnv;
-  /** Provider-supplied internal URL other services use to reach core. */
   coreUrl: string;
-  /** Provider-supplied internal base URL of the auth service. */
-  authUrl: string;
 }
 
 interface FlyServiceSpec {
   managed: (s: ServiceCtx) => Record<string, string>;
   stackKeys: string[];
   deployFlags: string[];
-  flycast?: boolean;
   publicIngress?: boolean;
 }
 
@@ -119,30 +112,18 @@ export const brandEnvOf = (c: { botName?: string; orgName?: string }): BrandEnv 
     ? { ...(c.botName ? { botName: c.botName } : {}), ...(c.orgName ? { orgName: c.orgName } : {}) }
     : undefined;
 
-export function orgEnv(
-  service: string,
-  orgId: string,
-  publicUrl: string,
-  hasPortal: boolean,
-  brand?: BrandEnv,
-): Record<string, string> {
+export function orgEnv(service: string, orgId: string, publicUrl: string, brand?: BrandEnv): Record<string, string> {
   const base = publicUrl.replace(/\/$/, "");
   const identity: Record<string, string> = service === "core" ? { ORG_ID: orgId } : { CORE_ORG_ID: orgId };
-  const webUiUrl = base;
   if (service === "core") {
     return {
       ...identity,
+      PUBLIC_PORT: String(PUBLIC_PORT),
       PUBLIC_WEB_URL: base,
-      WEB_UI_PUBLIC_URL: webUiUrl,
-      ...(brand?.botName ? { ORG_BRAND_SELF_LABEL: brand.botName } : {}),
+      ...(brand?.botName ? { ORG_BRAND_SELF_LABEL: brand.botName, AUTH_BRAND_NAME: brand.botName } : {}),
       ...(brand?.orgName ? { ORG_BRAND_ORG_NAME: brand.orgName } : {}),
     };
   }
-  if (service === "web-ui") return { ...identity, WEB_UI_PUBLIC_URL: webUiUrl, ADMIN_BASE_PATH: "/admin" };
-  if (service === "portal")
-    return { ...identity, PORTAL_PUBLIC_URL: base, ...(brand?.botName ? { AUTH_BRAND_NAME: brand.botName } : {}) };
-  if (service === "admin" && hasPortal) return { ...identity, ADMIN_BASE_PATH: "/admin" };
-  if (service === "auth") return { ...identity, ...(brand?.botName ? { AUTH_BRAND_NAME: brand.botName } : {}) };
   return identity;
 }
 
@@ -163,55 +144,41 @@ export const AUTH_BROKER_ENV_KEYS = [
   "OIDC_ALLOWED_EMAIL_DOMAIN",
 ] as const;
 
-export function brokerWiring(
-  service: string,
-  o: { publicUrl: string; authBaseUrl: string; allowedEmailDomain?: string },
-): Record<string, string> {
+export function brokerWiring(o: { publicUrl: string; allowedEmailDomain?: string }): Record<string, string> {
   const base = o.publicUrl.replace(/\/$/, "");
   const issuer = `${base}${AUTH_PATH_PREFIX}`;
-  if (service === "portal") {
-    return {
-      AUTH_BROKER_UPSTREAM: "http://127.0.0.1:8099",
-      AUTH_EMBEDDED: "1",
-      AUTH_ISSUER: issuer,
-      AUTH_CLIENT_ID,
-      AUTH_REDIRECT_URI: `${base}/auth/callback`,
-      AUTH_BROKER_PREFIX: AUTH_PATH_PREFIX,
-      OIDC_CLIENT_ID: AUTH_CLIENT_ID,
-      OIDC_ISSUER: issuer,
-      OIDC_AUTH_ENDPOINT: `${issuer}/authorize`,
-      OIDC_TOKEN_ENDPOINT: "http://127.0.0.1:8099/token",
-      OIDC_USERINFO_ENDPOINT: "http://127.0.0.1:8099/userinfo",
-      OIDC_JWKS_URI: "http://127.0.0.1:8099/.well-known/jwks.json",
-      OIDC_SCOPES: "openid email",
-      OIDC_PRINCIPAL_CLAIM: "email",
-      ...(o.allowedEmailDomain ? { OIDC_ALLOWED_EMAIL_DOMAIN: o.allowedEmailDomain } : {}),
-    };
-  }
-  if (service === "core") return o.allowedEmailDomain ? { AUTH_ALLOWED_EMAIL_DOMAIN: o.allowedEmailDomain } : {};
-  if (service === "auth") {
-    return {
-      AUTH_ISSUER: issuer,
-      AUTH_CLIENT_ID,
-      AUTH_REDIRECT_URI: `${base}/auth/callback`,
-    };
-  }
-  return {};
+  return {
+    AUTH_BROKER_UPSTREAM: "http://127.0.0.1:8099",
+    AUTH_EMBEDDED: "1",
+    AUTH_ISSUER: issuer,
+    AUTH_CLIENT_ID,
+    AUTH_REDIRECT_URI: `${base}/auth/callback`,
+    AUTH_BROKER_PREFIX: AUTH_PATH_PREFIX,
+    OIDC_CLIENT_ID: AUTH_CLIENT_ID,
+    OIDC_ISSUER: issuer,
+    OIDC_AUTH_ENDPOINT: `${issuer}/authorize`,
+    OIDC_TOKEN_ENDPOINT: "http://127.0.0.1:8099/token",
+    OIDC_USERINFO_ENDPOINT: "http://127.0.0.1:8099/userinfo",
+    OIDC_JWKS_URI: "http://127.0.0.1:8099/.well-known/jwks.json",
+    OIDC_SCOPES: "openid email",
+    OIDC_PRINCIPAL_CLAIM: "email",
+    ...(o.allowedEmailDomain
+      ? { OIDC_ALLOWED_EMAIL_DOMAIN: o.allowedEmailDomain, AUTH_ALLOWED_EMAIL_DOMAIN: o.allowedEmailDomain }
+      : {}),
+  };
 }
 
-const brokerEnv = (service: string, s: ServiceCtx): Record<string, string> =>
+const brokerEnv = (s: ServiceCtx): Record<string, string> =>
   s.hasAuth
-    ? brokerWiring(service, {
+    ? brokerWiring({
         publicUrl: s.publicUrl,
-        authBaseUrl: s.authUrl,
         ...(s.authAllowedEmailDomain ? { allowedEmailDomain: s.authAllowedEmailDomain } : {}),
       })
     : {};
 
 const pluginWiring = (service: string, s: ServiceCtx): Record<string, string> => ({
   CORE_API_URL: s.coreUrl,
-  ...orgEnv(service, s.orgId, s.publicUrl, s.hasPortal, s.brand),
-  ...brokerEnv(service, s),
+  ...orgEnv(service, s.orgId, s.publicUrl, s.brand),
 });
 
 const CATALOG: Record<ServiceName, ServiceDef> = {
@@ -223,8 +190,8 @@ const CATALOG: Record<ServiceName, ServiceDef> = {
     docker: { image: "core", internalPort: 8080, portEnv: "PORT", hostPortOffset: 0 },
     fly: {
       managed: (s) => ({
-        ...orgEnv("core", s.orgId, s.publicUrl, s.hasPortal, s.brand),
-        ...brokerEnv("core", s),
+        ...orgEnv("core", s.orgId, s.publicUrl, s.brand),
+        ...brokerEnv(s),
         FLY_DEPLOY_APP_PREFIX: s.deployAppPrefix,
       }),
       stackKeys: [
@@ -235,54 +202,6 @@ const CATALOG: Record<ServiceName, ServiceDef> = {
         "PUBLIC_WEB_URL",
         "FLY_ORG",
         "PI_DETECT_MODEL",
-      ],
-      deployFlags: ["--ha=false"],
-    },
-  },
-  "web-ui": {
-    name: "web-ui",
-    readiness: /surface on http/,
-    order: 20,
-    dev: {
-      cwd: "plugins/web-ui",
-      entry: ["--env-file-if-exists=.env", "server/index.ts"],
-      portEnv: "PORT",
-      portSlotOffset: 16,
-    },
-    docker: { image: "web-ui", internalPort: 8080, portEnv: "PORT", hostPortOffset: 2 },
-    fly: {
-      managed: (s) => pluginWiring("web-ui", s),
-      stackKeys: ["WEB_UI_PUBLIC_URL"],
-      deployFlags: ["--ha=false", "--flycast", "--no-public-ips"],
-      flycast: true,
-    },
-  },
-  admin: {
-    name: "admin",
-    readiness: /\[admin-plugin\] http/,
-    order: 30,
-    dev: { cwd: "plugins/admin", entry: ["src/index.ts"], portEnv: "PORT", portSlotOffset: 32 },
-    docker: { image: "admin", internalPort: 8080, portEnv: "PORT", hostPortOffset: 3 },
-    fly: {
-      managed: (s) => pluginWiring("admin", s),
-      stackKeys: ["ADMIN_BASE_PATH"],
-      deployFlags: ["--ha=false"],
-    },
-  },
-  portal: {
-    name: "portal",
-    readiness: /public front door on/,
-    order: 40,
-    dev: { cwd: "plugins/portal", entry: ["src/index.ts"], portEnv: "PORT", portSlotOffset: 48 },
-    docker: { image: "portal", internalPort: 8080, portEnv: "PORT", hostPortOffset: 1 },
-    fly: {
-      managed: (s) => ({
-        ...pluginWiring("portal", s),
-        WEB_UI_UPSTREAM: `http://${s.appPrefix}-web-ui.flycast`,
-        ADMIN_UPSTREAM: `http://${s.appPrefix}-web-ui.flycast/admin`,
-      }),
-      stackKeys: [
-        "PORTAL_PUBLIC_URL",
         "OIDC_CLIENT_ID",
         "OIDC_ALLOWED_EMAILS",
         "OIDC_ALLOWED_EMAIL_DOMAIN",
@@ -297,19 +216,6 @@ const CATALOG: Record<ServiceName, ServiceDef> = {
         "OIDC_PROMPT",
         "AUTH_BROKER_UPSTREAM",
         "AUTH_BROKER_PREFIX",
-      ],
-      deployFlags: ["--ha=false"],
-    },
-  },
-  auth: {
-    name: "auth",
-    readiness: /sign-in broker on/,
-    order: 35,
-    dev: { cwd: "plugins/auth", entry: ["src/index.ts"], portEnv: "PORT", portSlotOffset: 64 },
-    docker: { image: "auth", internalPort: 8080, portEnv: "PORT" },
-    fly: {
-      managed: (s) => pluginWiring("auth", s),
-      stackKeys: [
         "AUTH_ISSUER",
         "AUTH_CLIENT_ID",
         "AUTH_REDIRECT_URI",
@@ -319,8 +225,8 @@ const CATALOG: Record<ServiceName, ServiceDef> = {
         "SMTP_PORT",
         "SMTP_TLS",
       ],
-      deployFlags: ["--ha=false", "--flycast", "--no-public-ips"],
-      flycast: true,
+      deployFlags: ["--ha=false"],
+      publicIngress: true,
     },
   },
   "egress-proxy": {

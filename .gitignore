@@ -22,3 +22,4 @@ __pycache__/
 docs/master.html
 
 .context/
+.compound-engineering/*.local.yaml

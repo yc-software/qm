@@ -1,4 +1,4 @@
-import type { LoopItem, LoopSourcePayload } from "../../types.ts";
+import type { LoopItem, LoopSourcePayload } from "../types.ts";
 
 export interface ConnectorTokenSource {
   connectorAccessToken(host: string, principalId: string, accountType?: string): Promise<string | null>;

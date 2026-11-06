@@ -12,12 +12,18 @@ import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 
 const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "webui-sse-")) }));
 built.runtime.start();
-const core = createServer(built.app, { signingSecret: SECRET, webhookReceiver: built.webhookReceiver });
+const core = createServer(built.app, {
+  replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+  signingSecret: SECRET,
+  webhookReceiver: built.webhookReceiver,
+});
 core.listen(0);
 const corePort = (core.address() as AddressInfo).port;
 
@@ -116,9 +122,13 @@ test("SSE relays tool activity frames and folds them into the done frame", async
 
   const done = events.find((e) => e.event === "done");
   assert.ok(done, "expected a terminal done frame");
-  const d = done.data as { activity?: Array<{ type?: string }>; startedAt?: number | null; finishedAt?: number | null };
-  const types = (d.activity ?? []).map((a) => a.type);
-  assert.ok(types.includes("tool_call") && types.includes("tool_result"), "done frame carries the tool activity");
+  const d = done.data as {
+    activity?: Array<{ item?: { kind?: string } }>;
+    startedAt?: number | null;
+    finishedAt?: number | null;
+  };
+  const kinds = (d.activity ?? []).map((a) => a.item?.kind);
+  assert.ok(kinds.includes("ToolCall") && kinds.includes("ToolResult"), "done frame carries the tool activity");
   assert.equal(typeof d.startedAt, "number", "done frame carries startedAt");
   assert.equal(typeof d.finishedAt, "number", "done frame carries finishedAt");
 });

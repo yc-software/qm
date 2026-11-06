@@ -12,6 +12,8 @@ import { createInsecureTestServer, createServer } from "../src/api/server.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 const HOOK_SECRET = "hook-secret";
@@ -20,7 +22,7 @@ function start(signingSecret?: string, publicUrl?: string): { base: string; clos
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "wh-")) }));
   const deps = { ...(publicUrl ? { publicUrl } : {}), webhookReceiver: built.webhookReceiver };
   const server = signingSecret
-    ? createServer(built.app, { ...deps, signingSecret })
+    ? createServer(built.app, { replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()), ...deps, signingSecret })
     : createInsecureTestServer(built.app, deps);
   server.listen(0);
   return {
@@ -271,12 +273,11 @@ test("signed webhook history enforces viewer permissions and links to an owner-r
     assert.equal(accepted.status, 202);
     const historyPath = `/v1/webhooks/${webhook.id}/events?viewer=U1`;
     let events: Array<{ sessionId?: string; payload: string }> = [];
-    for (let i = 0; i < 100; i++) {
+    await settle(async () => {
       const history = await fetch(`${srv.base}${historyPath}`, { headers: sign("GET", historyPath, "") });
       ({ events } = (await history.json()) as { events: typeof events });
-      if (events[0]?.sessionId) break;
-      await new Promise((r) => setTimeout(r, 10));
-    }
+      return Boolean(events[0]?.sessionId);
+    });
     assert.equal(events.length, 1);
     assert.ok(events[0]?.sessionId);
     assert.match(events[0]!.payload, /agent message for worklog/);

@@ -22,12 +22,12 @@ import { testConfig } from "./support/test-config.ts";
 const SECRET = "consent-bridge-secret".repeat(3);
 const oauthEnv = { GOOGLE_OAUTH_CLIENT_ID: "gid", GOOGLE_OAUTH_CLIENT_SECRET: "gsecret" } as NodeJS.ProcessEnv;
 
-function start(
+async function start(
   fetchImpl: FetchLike,
   opts: { portalUrl?: string } = { portalUrl: "http://callback.test" },
-): { base: string; built: BuiltApp; close: () => Promise<void> } {
+): Promise<{ base: string; built: BuiltApp; close: () => Promise<void> }> {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "consent-")), signingSecret: SECRET }));
-  void built.directory.replaceChannels(
+  await built.directory.replaceChannels(
     [
       { channelId: "C1", name: "consent", isPrivate: false },
       { channelId: "C9", name: "connectors", isPrivate: false },
@@ -104,7 +104,7 @@ test("mint → intended teammate redeems → callback connects them; the link is
       json: async () => ({ access_token: "at-google", refresh_token: "rt", expires_in: 3600 }),
     };
   };
-  const srv = start(fetchImpl);
+  const srv = await start(fetchImpl);
   try {
     const mintRes = await mint(srv.base, await consentTok("U1"), { provider: "google" });
     assert.equal(mintRes.status, 200);
@@ -149,7 +149,7 @@ test("mint → intended teammate redeems → callback connects them; the link is
 });
 
 test("redeem refuses without a verified clicker (the portal's session gate)", async () => {
-  const srv = start(async () => {
+  const srv = await start(async () => {
     throw new Error("must not exchange");
   });
   try {
@@ -168,7 +168,7 @@ test("a wrong-recipient click is refused, leaves the link usable, and reports wh
     status: 200,
     json: async () => ({ access_token: "at-google", refresh_token: "rt", expires_in: 3600 }),
   });
-  const srv = start(fetchImpl, { portalUrl: "http://callback.test" });
+  const srv = await start(fetchImpl, { portalUrl: "http://callback.test" });
   try {
     const cap = await consentTok("U1", { scopeId: "channel:C1" });
     const mintRes = await mint(srv.base, cap, { provider: "google", intendedPrincipalId: "U1" });
@@ -207,7 +207,7 @@ test("connecting from a channel never re-grants a previously private connector",
     status: 200,
     json: async () => ({ access_token: "at-google", refresh_token: "rt", expires_in: 3600 }),
   });
-  const srv = start(fetchImpl);
+  const srv = await start(fetchImpl);
   try {
     const cap = await consentTok("U1", { scopeId: "channel:C9" });
     const mintRes = await mint(srv.base, cap, { provider: "google" });
@@ -228,7 +228,7 @@ test("connecting from a channel never re-grants a previously private connector",
 });
 
 test("mint refuses naming anyone but the actor, and points at the self-connect page", async () => {
-  const srv = start(async () => {
+  const srv = await start(async () => {
     throw new Error("must not exchange");
   });
   try {
@@ -250,7 +250,7 @@ test("on an API-only host (no PUBLIC_WEB_URL) the callback does NOT default to t
     status: 200,
     json: async () => ({ access_token: "at-google", refresh_token: "rt", expires_in: 3600 }),
   });
-  const srv = start(fetchImpl, {});
+  const srv = await start(fetchImpl, {});
   try {
     const mintRes = await mint(srv.base, await consentTok("U1"), { provider: "google" });
     assert.equal(mintRes.status, 200);
@@ -272,7 +272,7 @@ test("on an API-only host (no PUBLIC_WEB_URL) the callback does NOT default to t
 });
 
 test("the consent-mint route rejects a control-plane / aud-less / missing token (the cross-onramp wall)", async () => {
-  const srv = start(async () => {
+  const srv = await start(async () => {
     throw new Error("must not exchange");
   });
   try {
@@ -311,7 +311,7 @@ test("the consent-mint route rejects a control-plane / aud-less / missing token 
 });
 
 test("an oauth-consent token cannot drive control-plane routes (crons)", async () => {
-  const srv = start(async () => {
+  const srv = await start(async () => {
     throw new Error("must not exchange");
   });
   try {
@@ -327,7 +327,7 @@ test("an oauth-consent token cannot drive control-plane routes (crons)", async (
 });
 
 test("mint refuses an unconfigured provider even when PUBLIC_WEB_URL is set", async () => {
-  const srv = start(async () => {
+  const srv = await start(async () => {
     throw new Error("must not exchange");
   });
   try {
@@ -341,7 +341,7 @@ test("mint refuses an unconfigured provider even when PUBLIC_WEB_URL is set", as
 });
 
 test("an expired consent link reports an expiry status", async () => {
-  const srv = start(async () => {
+  const srv = await start(async () => {
     throw new Error("must not exchange");
   });
   try {

@@ -55,7 +55,7 @@ const MAX_STORED_RULES = 100;
 const MAX_PROVIDERS = 20;
 
 export function createPostgresDecisionStore(connectionString: string): DecisionStore {
-  const { q, pool } = createPgPool(connectionString, "decisions/0001", SCHEMA);
+  const { q, pool } = createPgPool(connectionString, [{ id: "decisions/0001", statements: SCHEMA }]);
   const active = new Map<DecisionHook, { at: number; rules: Promise<DecisionRule[]> }>();
   let known: { at: number; providers: Promise<DecisionProvider[]> } | undefined;
   const write = async (fn: (db: PoolClient) => Promise<unknown>) => {

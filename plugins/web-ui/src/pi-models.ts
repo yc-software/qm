@@ -8,7 +8,7 @@ export type ModelMetadata = Pick<
   label: string;
   buttonLabel: string;
   fastMode: boolean;
-  effortLevelsByHarness?: Record<string, string[]>;
+  effortLevels?: string[];
 };
 
 export function getBaseModel(id: string, metadata?: ModelMetadata): Model<Api> {

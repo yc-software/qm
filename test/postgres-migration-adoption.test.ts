@@ -19,14 +19,14 @@ for (const legacyApplied of [false, true]) {
       await pool.query(`CREATE TABLE ${table} (enabled boolean NOT NULL)`);
       await pool.query(`INSERT INTO ${table} VALUES (true)`);
       if (legacyApplied) await pool.query("INSERT INTO schema_migrations (id) VALUES ($1)", [id]);
-      const migration = definePgMigration(id, [`UPDATE ${table} SET enabled = false`], undefined, id);
+      const migration = definePgMigration({ id, statements: [`UPDATE ${table} SET enabled = false`], legacyId: id });
       await applyPgMigrations(pool, [migration]);
       assert.equal((await pool.query(`SELECT enabled FROM ${table}`)).rows[0].enabled, legacyApplied);
       await pool.query(`UPDATE ${table} SET enabled = true`);
-      await applyPgMigrations(pool, [definePgMigration(id, migration.statements)]);
+      await applyPgMigrations(pool, [definePgMigration({ id, statements: migration.statements })]);
       assert.equal((await pool.query(`SELECT enabled FROM ${table}`)).rows[0].enabled, true);
       await assert.rejects(
-        applyPgMigrations(pool, [definePgMigration(id, ["SELECT 1"], undefined, id)]),
+        applyPgMigrations(pool, [definePgMigration({ id, statements: ["SELECT 1"], legacyId: id })]),
         /checksum mismatch/,
       );
     } finally {

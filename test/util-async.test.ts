@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import {
   sleep,
   createKeyedQueue,
+  createTtlRefresh,
   fetchWithRetry,
   jitteredBackoffMs,
   retryAfterMs,
@@ -106,6 +107,41 @@ test("createKeyedQueue ops queued at drain time are not lost to the cleanup race
   assert.deepEqual(order, ["first", "second"]);
 });
 
+test("createTtlRefresh serves the cache within its TTL and coalesces forced refreshes into one later load", async () => {
+  let loads = 0;
+  let release = () => {};
+  const refresh = createTtlRefresh(60_000, async () => {
+    loads++;
+    await new Promise<void>((resolve) => {
+      release = resolve;
+    });
+  });
+  const first = refresh();
+  const joined = refresh();
+  const forced = [refresh(true), refresh(true), refresh(true)];
+  assert.equal(loads, 1);
+  release();
+  await Promise.all([first, joined]);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(loads, 2, "forced callers during a load share one load that starts after it");
+  release();
+  await Promise.all(forced);
+  await refresh();
+  assert.equal(loads, 2, "a fresh cache is served without loading");
+});
+
+test("createTtlRefresh lets a forced refresh after a failed load start a new one", async () => {
+  let loads = 0;
+  const refresh = createTtlRefresh(60_000, async () => {
+    if (++loads === 1) throw new Error("store unavailable");
+  });
+  const failing = refresh();
+  const forced = refresh(true);
+  await assert.rejects(failing, /store unavailable/);
+  await forced;
+  assert.equal(loads, 2);
+});
+
 test("withAbort cleans listeners after resolution, rejection, and cancellation", async () => {
   const { withAbort } = await import("../src/util/async.ts");
   const { default: EventEmitter } = await import("node:events");
@@ -195,6 +231,21 @@ test("fetchWithRetry returns the last transient response once attempts are exhau
   );
   assert.equal(res.status, 429);
   assert.equal(res.headers.get("x-request-id"), "req-3");
+  assert.equal(calls, 3);
+});
+
+test("fetchWithRetry counts connection failures toward the attempts before returning the last response", async () => {
+  let calls = 0;
+  const res = await fetchWithRetry(
+    async () => {
+      if (++calls === 1) throw new TypeError("fetch failed");
+      return reply(503);
+    },
+    "idempotent",
+    { ...fast, attempts: 3 },
+  );
+  assert.equal(res.status, 503);
+  assert.equal(await res.text(), "status 503");
   assert.equal(calls, 3);
 });
 

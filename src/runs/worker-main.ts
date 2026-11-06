@@ -7,12 +7,12 @@ import { migrateRegisteredPgSchemas } from "../persistence/pg-pool.ts";
 const config = loadConfig();
 const built = buildApp(config);
 await migrateRegisteredPgSchemas(config.databaseUrl);
-await built.sandboxResources.initialize();
+if (config.backgroundWorkEnabled) await built.ownSharedState();
 await built.config.hydrate?.();
-await built.identity.hydrate();
+await built.identity.refresh();
 const { runtime } = built;
 runtime.start();
-console.log(`[qm:worker] draining runs (org=${config.orgId}, runStore=${config.runStore}, workers=${config.workers})`);
+console.log(`[qm:worker] draining runs (org=${config.orgId}, workers=${config.workers})`);
 
 let shuttingDown = false;
 function shutdown(signal: string): void {

@@ -1,11 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { collectNamedOutbound, materializeInbound, type ArtifactRegistration } from "../src/core/attachments.ts";
-import { createMemoryFileArtifactStore, type FileArtifactStore } from "../src/files/file-artifact-store.ts";
+import { type FileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createMemoryBlobTransferStore } from "../src/persistence/blob-transfer.ts";
 import { scopeId } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
+import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const owner = scopeId("channel", "C1");
 const HANDLE = { id: "h", rootDir: "/workspace" } as SandboxHandle;
@@ -51,7 +53,7 @@ async function drain(store: FileArtifactStore, id: string): Promise<Buffer> {
 }
 
 test("collectNamedOutbound registers an 'out' artifact at the registration owner, openable", async () => {
-  const store = createMemoryFileArtifactStore(createMemoryDurableByteStore());
+  const store = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
   const { sandbox } = memSandbox({ "flag.png": PNG });
 
   const out = await collectNamedOutbound(sandbox, HANDLE, ["flag.png"], createMemoryBlobTransferStore(), reg(store));
@@ -69,7 +71,7 @@ test("collectNamedOutbound registers an 'out' artifact at the registration owner
 });
 
 test("collectNamedOutbound is idempotent on re-run with the same seed (G6 requeue: no dup row)", async () => {
-  const store = createMemoryFileArtifactStore(createMemoryDurableByteStore());
+  const store = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
   const { sandbox } = memSandbox({ "a.txt": "one", "b.txt": "two" });
 
   await collectNamedOutbound(sandbox, HANDLE, ["a.txt", "b.txt"], createMemoryBlobTransferStore(), reg(store));
@@ -98,7 +100,7 @@ test("a doc-store fault does NOT break delivery (best-effort registration)", asy
 });
 
 test("materializeInbound registers an 'in' artifact, openable", async () => {
-  const store = createMemoryFileArtifactStore(createMemoryDurableByteStore());
+  const store = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
   const transfer = createMemoryBlobTransferStore();
   const { blobId } = await transfer.put(PNG);
   const { sandbox } = memSandbox();

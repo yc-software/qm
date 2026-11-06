@@ -139,13 +139,17 @@ test("fatal reporting preserves the core drain handler and avoids duplicate cons
 
 test("operator error records send one classified event with the record details", async () => {
   const { events, code, output } = await runReporting(`
-    const { createErrorLog, withErrorReporting } = await import('./src/admin/error-log.ts');
-    const errors = withErrorReporting(createErrorLog());
+    const { withErrorReporting } = await import('./src/admin/error-log.ts');
+    const { createPostgresErrorLog } = await import('./src/admin/postgres-error-log.ts');
+    const { testDatabaseUrl } = await import('./test/support/test-database.ts');
+    const errors = withErrorReporting(createPostgresErrorLog(testDatabaseUrl()));
     const error = new Error('private-job-failure');
     console.error('[worker] private-job-failure');
     errors.record({category:'turn', code:'failed', message:error.message, scopeLabel:'private-scope'}, error);
+    await errors.flush();
     console.log((await errors.list())[0].message);
     await flushErrorReporting();
+    process.exit(0);
   `);
   assert.equal(code, 0);
   assert.equal(output.trim(), "private-job-failure");
@@ -312,8 +316,10 @@ test("reportFailure sends one classified event per distinct failure and skips ca
   const { events, code, output } = await runReporting(`
     console.error = (line) => console.log(line);
     const { reportFailure } = await import('./src/util/errors.ts');
-    const { createErrorLog, withErrorReporting } = await import('./src/admin/error-log.ts');
-    const errors = withErrorReporting(createErrorLog());
+    const { withErrorReporting } = await import('./src/admin/error-log.ts');
+    const { createPostgresErrorLog } = await import('./src/admin/postgres-error-log.ts');
+    const { testDatabaseUrl } = await import('./test/support/test-database.ts');
+    const errors = withErrorReporting(createPostgresErrorLog(testDatabaseUrl()));
     const recorded = new Error('private-turn-failure');
     errors.record({category:'turn', code:'error', message:recorded.message, scopeLabel:'private-scope'}, recorded);
     reportFailure('scheduler: fire', recorded);
@@ -326,6 +332,7 @@ test("reportFailure sends one classified event per distinct failure and skips ca
     reportFailure('tools: persist artifact', reportedFirst);
     errors.record({category:'turn', code:'error', message:reportedFirst.message, scopeLabel:'private-scope'}, reportedFirst);
     await flushErrorReporting();
+    process.exit(0);
   `);
   assert.equal(code, 0);
   assert.deepEqual(

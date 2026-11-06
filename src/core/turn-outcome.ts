@@ -28,7 +28,3 @@ export function deriveTurnOutcome(i: TurnOutcomeInput): TurnOutcome {
 export function approvalBlocksInput(kind: string | undefined, outcome: Pick<TurnOutcome, "approvalsBlock">): boolean {
   return kind !== "input" && outcome.approvalsBlock;
 }
-
-export function sessionStateAfterTurn(o: TurnOutcome): "idle" | "awaiting_approval" {
-  return o.awaitingApproval ? "awaiting_approval" : "idle";
-}

@@ -6,13 +6,13 @@ export function externalTools(tools: ToolContext, authorizeSandbox?: (id: string
       "This operation requires private access. Continue in the requesting person's DM with [[continue-private: task]].",
     );
   };
-  const allowed = new Set(["attach", "history", "historyOpen", "commandCredentialHandles"]);
+  const allowed = new Set(["attach", "history", "historyOpen"]);
   return new Proxy(tools, {
     get(target, property, receiver) {
       if (property === "sessionSyscalls" || property === "runtime") return undefined;
       if (property === "execute")
         return async (command: string, opts?: Parameters<ToolContext["execute"]>[1]) => {
-          if (opts?.scratch || opts?.reachTarget) return denied();
+          if (opts?.scratch) return denied();
           if (opts?.sandboxId) {
             if (!authorizeSandbox) return denied();
             await authorizeSandbox(opts.sandboxId);

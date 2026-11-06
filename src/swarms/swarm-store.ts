@@ -1,10 +1,11 @@
-import type { GoalCreateInput } from "../harness/goal.ts";
+import type { GoalCreateInput } from "../agent/goal.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { withPgTransaction, type PgPool } from "../persistence/pg-pool.ts";
 import type { RunStore, Run } from "../runs/run-store.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import { assertSwarmRun, type SwarmRunFence } from "./swarm-fence.ts";
-import { jsonbStringify, type DurableMap } from "../persistence/durable-map.ts";
+import type { DurableMap } from "../persistence/durable-map.ts";
+import { jsonbStringify } from "../util/text.ts";
 
 import type { SwarmSettings } from "./swarm-settings.ts";
 import type { SandboxBackendName } from "../sandbox/sandbox-routing.ts";
@@ -69,6 +70,32 @@ export interface Swarm {
   pending: boolean;
 }
 
+export type SwarmControlState = "active" | "paused" | "stopped";
+
+const memberIndex = new WeakMap<SwarmMember[], Map<string, SwarmMember>>();
+
+export function memberById(swarm: Swarm, id: string): SwarmMember | undefined {
+  let index = memberIndex.get(swarm.members);
+  if (!index || index.size !== swarm.members.length) {
+    index = new Map(swarm.members.map((member) => [member.id, member]));
+    memberIndex.set(swarm.members, index);
+  }
+  return index.get(id);
+}
+
+export function controlState(swarm: Swarm, memberId: string): SwarmControlState {
+  let state: SwarmControlState = "active";
+  const seen = new Set<string>();
+  for (let id: string | undefined = memberId; id && !seen.has(id);) {
+    seen.add(id);
+    const member = memberById(swarm, id);
+    if (member?.control === "stopped") return "stopped";
+    if (member?.control === "paused") state = "paused";
+    id = member?.parentId;
+  }
+  return state;
+}
+
 export function swarmExpired(swarm: Swarm): boolean {
   return swarm.expiresAt !== undefined && Date.now() >= swarm.expiresAt;
 }
@@ -112,7 +139,6 @@ export function createSwarmStore(
   backing: DurableMap<SwarmStorage>,
   authority?: { runs: Pick<RunStore, "get">; sessions: Pick<SessionStore, "get">; pg?: PgPool },
 ): SwarmStore {
-  if (!backing.update) throw new Error("swarm storage requires atomic updates");
   async function fencedWrite(
     id: string,
     mutate: (value: SwarmStorage | null) => SwarmStorage,
@@ -156,7 +182,7 @@ export function createSwarmStore(
       throw new Error("capability session mismatch");
     const run = await authority.runs.get(fence.runId);
     assertSwarmRun(fence, run);
-    const updated = await backing.update!(id, (current) => {
+    const updated = await backing.update(id, (current) => {
       assertSwarmRun(fence, run);
       return mutate(current);
     });
@@ -186,11 +212,13 @@ export function createSwarmStore(
         next.pending =
           next.members.some((member) => member.state === "reserved" || member.cleanupPending) ||
           next.messages.some((message) =>
-            Object.values(message.notifications).some((item) => item.state === "pending"),
+            Object.entries(message.notifications).some(
+              ([id, item]) => item.state === "pending" && controlState(next, id) !== "paused",
+            ),
           );
         return encode(next);
       };
-      const updated = fence ? await fencedWrite(id, apply, fence) : await backing.update!(id, apply);
+      const updated = fence ? await fencedWrite(id, apply, fence) : await backing.update(id, apply);
       if (!updated) throw new Error("swarm not found");
       return decode(updated);
     },

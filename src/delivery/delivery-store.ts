@@ -43,9 +43,10 @@ export interface DeliveryStore {
     shadow?: boolean;
   }): Promise<Delivery>;
   pending(type: string): Promise<Delivery[]>;
-  claimPending(type: string, ttlMs: number): Promise<Delivery[]>;
+  claimPending(type: string, ttlMs: number, opts?: { oldestPerConversation?: boolean }): Promise<Delivery[]>;
   listShadow(opts?: { limit?: number }): Promise<Delivery[]>;
   ack(id: string, at: number, slackApiMs?: number): Promise<void>;
+  fail(id: string, reason: string, at: number): Promise<Delivery | null>;
   ackByKey(idempotencyKey: string, at: number): Promise<void>;
   setEditRefByKey(idempotencyKey: string, editRef: string): Promise<void>;
   get(id: string): Promise<Delivery | null>;
@@ -53,7 +54,7 @@ export interface DeliveryStore {
   recordRecipientThread(id: string, recipientThreadRef: string, at: number): Promise<void>;
   listByRecipientThread(recipientThreadRef: string, opts?: { limit?: number }): Promise<Delivery[]>;
   listBySourceSession(sourceSessionId: string, sourceThreadRef: string, opts?: { limit?: number }): Promise<Delivery[]>;
-  onEnqueue(listener: () => void): () => void;
+  onEnqueue(listener: (type: string) => void): () => void;
 }
 
 export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore {
@@ -61,7 +62,7 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
   const deliveries = new Map<string, Delivery>();
   const byKey = new Map<string, string>();
   const claimedUntil = new Map<string, number>();
-  const enqueueListeners = new Set<() => void>();
+  const enqueueListeners = new Set<(type: string) => void>();
 
   const expireOveraged = (now: number): void => {
     for (const d of deliveries.values()) {
@@ -84,7 +85,7 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
       const existingId = byKey.get(input.idempotencyKey);
       if (existingId) {
         const existing = deliveries.get(existingId)!;
-        if (existing.deliveredAt === null && existing.expiredAt !== undefined) {
+        if (existing.deliveredAt === null && existing.expiredAt !== undefined && !existing.failedReason) {
           existing.destination = input.destination;
           existing.text = input.text;
           if (input.attachments?.length) existing.attachments = input.attachments;
@@ -96,7 +97,7 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
           claimedUntil.delete(existing.id);
           if (input.shadow) existing.shadow = true;
           else delete existing.shadow;
-          if (!existing.shadow) for (const l of enqueueListeners) l();
+          if (!existing.shadow) for (const l of enqueueListeners) l(existing.destination.type);
         }
         return existing;
       }
@@ -113,7 +114,7 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
       };
       deliveries.set(delivery.id, delivery);
       byKey.set(delivery.idempotencyKey, delivery.id);
-      if (!delivery.shadow) for (const l of enqueueListeners) l();
+      if (!delivery.shadow) for (const l of enqueueListeners) l(delivery.destination.type);
       return delivery;
     },
     async pending(type) {
@@ -121,17 +122,18 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
         (d) => d.deliveredAt === null && d.expiredAt === undefined && !d.shadow && d.destination.type === type,
       );
     },
-    async claimPending(type, ttlMs) {
+    async claimPending(type, ttlMs, opts) {
       const now = Date.now();
       expireOveraged(now);
-      const rows = [...deliveries.values()].filter(
-        (d) =>
-          d.deliveredAt === null &&
-          d.expiredAt === undefined &&
-          !d.shadow &&
-          d.destination.type === type &&
-          (claimedUntil.get(d.id) ?? 0) <= now,
+      const open = [...deliveries.values()].filter(
+        (d) => d.deliveredAt === null && d.expiredAt === undefined && !d.shadow && d.destination.type === type,
       );
+      const seen = new Set<string>();
+      const rows = open.filter((d) => {
+        const first = !seen.has(d.destination.target);
+        seen.add(d.destination.target);
+        return (claimedUntil.get(d.id) ?? 0) <= now && (first || !opts?.oldestPerConversation);
+      });
       for (const d of rows) claimedUntil.set(d.id, now + ttlMs);
       return rows;
     },
@@ -150,6 +152,14 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
         d.deliverLatencyMs = Math.max(0, at - d.createdAt);
         if (slackApiMs !== undefined) d.slackApiMs = slackApiMs;
       }
+    },
+    async fail(id, reason, at) {
+      const d = deliveries.get(id);
+      if (!d || d.deliveredAt !== null || d.expiredAt !== undefined) return null;
+      d.expiredAt = at;
+      d.failedReason = reason;
+      claimedUntil.delete(id);
+      return d;
     },
     async ackByKey(idempotencyKey, at) {
       const existingId = byKey.get(idempotencyKey);

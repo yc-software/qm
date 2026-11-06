@@ -23,6 +23,8 @@ import {
 import type { ServiceCredentialStore } from "../src/credentials/keychain.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const SECRET = "deployment-broker-secret".repeat(3);
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
@@ -206,7 +208,11 @@ function start(fetchImpl: BrokerFetch, admin = false, brokerCredentials = deploy
   };
   const server = admin
     ? createInsecureTestServer(built.app, deps)
-    : createServer(built.app, { ...deps, signingSecret: SECRET });
+    : createServer(built.app, {
+        replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+        ...deps,
+        signingSecret: SECRET,
+      });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };

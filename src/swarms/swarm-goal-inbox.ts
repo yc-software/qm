@@ -1,5 +1,5 @@
 import type { OrchestratorInput } from "../core/orchestrator.ts";
-import { goalAssignedNote, supersedeGoal, type GoalInbox, type GoalRecord } from "../harness/goal.ts";
+import { goalAssignedNote, supersedeGoal, type GoalInbox, type GoalRecord } from "../agent/goal.ts";
 import { reportFailureAs, swallowAs } from "../util/errors.ts";
 import { swarmMessageText, type SwarmService } from "./swarm-service.ts";
 import type { SwarmMessage } from "./swarm-store.ts";

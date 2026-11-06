@@ -57,7 +57,7 @@ import {
 import { SplitDropPreview } from "./split-drop-preview";
 import { paneKindByKey, paneKindEntry } from "./pane-kinds";
 import { focusComposerOnPaneClick, focusPaneComposer, preservingFocus } from "./pane-focus";
-import { attachTooltip, tip } from "./tooltip";
+import { tip } from "./tooltip";
 import { workingWave } from "./ui";
 import { icon } from "./icons";
 import { contextsState, scopeTitle } from "./contexts";
@@ -93,7 +93,7 @@ import {
   type CoreSession,
   type UiStateRecord,
 } from "./core-bridge";
-import { isPhone, onPhoneChange } from "./viewport";
+import { isCompactLayout, onPhoneChange } from "./viewport";
 
 export const splitState = {
   active: false,
@@ -439,7 +439,7 @@ export function exitSplitIfActive(): void {
 function adoptPersisted(raw: unknown): void {
   if (!raw || typeof raw !== "object") return;
 
-  if (isPhone()) {
+  if (isCompactLayout()) {
     if (typeof (raw as { updatedAt?: unknown }).updatedAt === "number")
       persistedUpdatedAt = (raw as { updatedAt: number }).updatedAt;
     pendingSeed = null;
@@ -503,7 +503,7 @@ export function restoredCanvasNeedsSessionList(): boolean {
 }
 
 export function mountRestoredCanvas(restoreOnly = false): boolean {
-  if (isPhone() || (restoreOnly && !splitState.active)) return false;
+  if (isCompactLayout() || (restoreOnly && !splitState.active)) return false;
   splitState.active = true;
   if (!ensureCanvas() || !dockApi) return false;
   if (dockApi.panels.length === 0) addPane({});
@@ -736,8 +736,7 @@ function drawStripDrops(): void {
 }
 
 export function endPaneDrag(): void {
-  dropPreview?.dispose();
-  dropPreview = null;
+  dropPreview?.hide();
   if (!paneDrag) return;
   paneDrag = null;
   canvasHost?.classList.remove("session-dragging");
@@ -994,10 +993,6 @@ class PaneContent implements IContentRenderer {
     this.visible = p.api.isVisible;
     this.params = (p.params ?? {}) as PaneParams;
     this.element.dataset.paneId = this.panelId;
-    attachTooltip(this.element, (target) => {
-      const panel = dockApi?.getPanel(this.panelId);
-      return panel && target.closest(".split-canvas.single-pane") ? paneTitle(panel) : "";
-    });
     focusComposerOnPaneClick(this.element, () => p.api.isActive);
     paneContents.set(this.panelId, this);
     this.resize.observe(this.element);
@@ -1147,16 +1142,18 @@ function sessionActionItems(sessionId: string, panelId: string): SessionAction[]
 }
 
 function sessionActions(sessionId: string, panelId: string, cls: string): TemplateResult {
+  const header = cls === "split-group-session-action";
+  const base = header ? ["session-tool"] : ["icon-btn", "subtle"];
   return html`${sessionActionItems(sessionId, panelId).map(
     (a) =>
       html`<button
         type="button"
-        class=${["icon-btn", "subtle", cls, a.cls].filter(Boolean).join(" ")}
+        class=${[...base, cls, a.cls].filter(Boolean).join(" ")}
         ${tip(a.label)}
         aria-label=${a.aria ?? a.label}
         @click=${a.run}
       >
-        ${icon(a.glyph, 13)}
+        ${icon(a.glyph, header ? 15 : 13)}
       </button>`,
   )}`;
 }
@@ -1209,7 +1206,6 @@ class PaneTab implements ITabRenderer {
     if (entry) {
       const title = entry.kind.title(entry.id);
       const count = entry.kind.badge(entry.id);
-      this.element.title = dockApi?.panels.length === 1 ? title : "";
       render(
         html`
           <span class="pane-kind-glyph">${icon(entry.kind.glyph, 12)}</span>
@@ -1245,11 +1241,6 @@ class PaneTab implements ITabRenderer {
     const background = paneBackground(panel);
     const sessionId = panelParams(panel).sessionId ?? paneSession(panel)?.id;
     const parent = sessionId ? sessionParent(sessionId) : undefined;
-    attachTooltip(this.element, (target) =>
-      target.closest(".split-canvas.single-pane")
-        ? [crumb, parent ? sessionTitle(parent) : null, title].filter(Boolean).join(" / ")
-        : "",
-    );
     render(
       html`
         ${working ? html`<span class="working-mark" ${ref(syncWorkingPulse)}>${workingWave()}</span>` : nothing}
@@ -1282,7 +1273,8 @@ class PaneTab implements ITabRenderer {
                     void openSession(parent);
                   }}
                 >
-                  ${sessionTitle(parent)}</button
+                  <span class="split-pane-parent-icon">${icon(ArrowUpLeft, 13)}</span
+                  ><span class="split-pane-parent-label">${sessionTitle(parent)}</span></button
                 ><span class="split-pane-crumb-sep">/</span>`
             : nothing
         }
@@ -1564,6 +1556,7 @@ class GroupActions implements IHeaderActionsRenderer {
             )}
           </div>`
         : nothing;
+    this.element.classList.toggle("menu-open", this.menuOpen || tabMenuTpl !== nothing);
     render(
       html`${
         single

@@ -1,15 +1,8 @@
 import type { OrchestratorInput } from "../core/orchestrator.ts";
-import {
-  modelSupportedByHarness,
-  modelUnavailableReason,
-  thinkingLevelsForHarness,
-  THINKING_LEVELS,
-} from "../model/pi-models.ts";
+import { modelSupported, modelUnavailableReason, thinkingLevelsFor, THINKING_LEVELS } from "../model/pi-models.ts";
 
 export type SwarmMemberRuntime = Pick<OrchestratorInput, "model" | "thinkingLevel" | "fastMode">;
-export type SwarmTemplate = Omit<OrchestratorInput, keyof SwarmMemberRuntime | "harness">;
-
-const SERVING_HARNESSES = ["pi", "claude"] as const;
+export type SwarmTemplate = Omit<OrchestratorInput, keyof SwarmMemberRuntime>;
 
 export const SPAWN_RUNTIME_FIELDS = ["model", "effort", "fastMode"] as const;
 export type SpawnRuntimeFields = Partial<Record<(typeof SPAWN_RUNTIME_FIELDS)[number], unknown>>;
@@ -40,12 +33,11 @@ export function inheritRuntime(
   const runtime = { ...parent, ...chosen };
   if (runtime.model) {
     const model = runtime.model;
-    const harnesses = SERVING_HARNESSES.filter((harness) => modelSupportedByHarness(model, harness));
-    if (!harnesses.length) throw new Error(`unknown model ${model}`);
+    if (!modelSupported(model)) throw new Error(`unknown model ${model}`);
     const unavailable = modelUnavailableReason(model);
     if (unavailable) throw new Error(`${model}: ${unavailable}`);
     const effort = runtime.thinkingLevel;
-    if (effort && !harnesses.some((harness) => thinkingLevelsForHarness(harness, model).includes(effort)))
+    if (effort && !thinkingLevelsFor(model).includes(effort))
       throw new Error(`${effort} reasoning is not supported by ${model}`);
   }
   return Object.keys(runtime).length ? runtime : undefined;
