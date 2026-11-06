@@ -183,7 +183,6 @@ test("boot refuses allowlist entries that would trust untrusted or downgraded or
   delete baseEnv.PORTAL_COOKIE_DOMAIN;
   delete baseEnv.PORTAL_APPS_DOMAIN;
   delete baseEnv.DEPLOY_APPS_DOMAIN;
-  delete baseEnv.PORTAL_PLAYGROUND;
   const boot = (env: NodeJS.ProcessEnv) =>
     new Promise<{ status: number | null; stderr: string }>((resolve, reject) => {
       const child = spawn(process.execPath, ["--input-type=module", "-e", command], { cwd: process.cwd(), env });

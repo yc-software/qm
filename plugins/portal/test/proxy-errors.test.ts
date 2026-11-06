@@ -52,7 +52,6 @@ process.env.PUBLIC_WEB_URL = PUBLIC;
 process.env.PORTAL_SESSION_SECRET = "proxy-errors-test-portal-secret";
 process.env.CORE_SIGNING_SECRET = "proxy-errors-test-core-secret";
 process.env.PORTAL_IDENTITY_SECRET = "proxy-errors-test-identity-secret";
-process.env.PORTAL_DEPLOYMENTS_ENABLED = "1";
 process.env.WEB_UI_UPSTREAM = upstreamUrl;
 process.env.CORE_API_URL = upstreamUrl;
 
