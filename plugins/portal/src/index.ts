@@ -33,6 +33,7 @@ import {
   type ImpersonationClaims,
   type TmpClaims,
   sessionLifetime,
+  impersonationFor,
 } from "./session.ts";
 import {
   pkcePair,
@@ -70,6 +71,7 @@ import {
   readBody,
   PayloadTooLargeError,
   sameOriginRequest as sameOriginFor,
+  originOf,
   isLoopbackUrl,
   isSecureOrLoopbackUrl,
 } from "../../chassis/src/http.ts";
@@ -92,13 +94,7 @@ const COOKIE_DOMAIN =
   (APPS_DOMAIN ? derivedCookieDomain(hostOf(process.env.PUBLIC_WEB_URL ?? ""), APPS_DOMAIN) : undefined);
 const IS_PROD = process.env.NODE_ENV === "production";
 const SECURE_COOKIES = PUBLIC_URL.startsWith("https://");
-const ORIGIN = (() => {
-  try {
-    return new URL(PUBLIC_URL).origin;
-  } catch {
-    return "";
-  }
-})();
+const ORIGIN = originOf(PUBLIC_URL);
 const API_ALLOWED_ORIGINS = parseAllowedOrigins(process.env.PORTAL_API_ALLOWED_ORIGINS);
 const LOCAL_AUTH_BYPASS_REQUESTED = process.env.PORTAL_LOCAL_AUTH_BYPASS === "1";
 const LOCAL_AUTH_BYPASS = LOCAL_AUTH_BYPASS_REQUESTED && !IS_PROD && isLoopbackUrl(PUBLIC_URL);
@@ -376,14 +372,6 @@ export function hostIsWithinDomain(host: string, domain: string): boolean {
   const h = host.toLowerCase();
   const d = domain.toLowerCase().replace(/^\./, "");
   return !!h && !!d && (h === d || h.endsWith(`.${d}`));
-}
-
-function originOf(raw: string): string {
-  try {
-    return new URL(raw).origin;
-  } catch {
-    return "";
-  }
 }
 
 export function isPrivateNetworkUrl(raw: string): boolean {
@@ -1322,15 +1310,9 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     }
   }
 
-  let principal = session.sub;
-  let impersonator: string | undefined;
-  if (!crossOrigin) {
-    const imp = openImpersonation(readCookie(req.headers.cookie, "portal_impersonate"), impersonateKey, Date.now());
-    if (imp && imp.actor === session.sub && imp.org === session.org && (await isAdmin(session.sub))) {
-      principal = imp.target;
-      impersonator = session.sub;
-    }
-  }
+  const imp = crossOrigin ? null : impersonationFor(session, req.headers.cookie, impersonateKey, Date.now());
+  const impersonator = imp && (await isAdmin(session.sub)) ? session.sub : undefined;
+  const principal = imp && impersonator ? imp.target : session.sub;
 
   return proxyToSurface(req, res, {
     upstreamBase: WEB_UI_UPSTREAM,

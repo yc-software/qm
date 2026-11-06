@@ -39,6 +39,7 @@ const echo = (ctx: ApiCtx): void => {
     browser: true,
     handle: echo,
   },
+  { method: "GET", path: "/v1/test/browser-person", auth: "source", actor: "person", browser: true, handle: echo },
   { method: "GET", path: "/v1/test/service-read", auth: "source", actor: "query.principalId", handle: echo },
 );
 
@@ -61,10 +62,12 @@ function impersonationCookie(actor: string, target: string): string {
   return `portal_impersonate=${encodeURIComponent(seal(imp, deriveKey(SESSION, "portal.impersonate.v1")))}`;
 }
 
-async function withServer(fn: (base: string) => Promise<void>): Promise<void> {
+async function withServer(
+  fn: (base: string) => Promise<void>,
+  overrides: { portalSessionSecret?: string; portalUrl?: string } = {},
+): Promise<void> {
   const server = createServer({} as App, {
     production: true,
-
     signingSecret: SIGNING,
     capabilitySecret: CAPABILITY,
     portalIdentitySecret: PORTAL_IDENTITY,
@@ -72,6 +75,7 @@ async function withServer(fn: (base: string) => Promise<void>): Promise<void> {
     portalUrl: ORIGIN,
     replayDedupe: { claim: async () => true },
     admin,
+    ...overrides,
   });
   server.listen(0);
   try {
@@ -119,6 +123,35 @@ test("a client-supplied principalId for someone else is refused", async () => {
     assert.equal(filled.status, 200);
     assert.deepEqual(seen[0]?.body, { title: "x", principalId: "alice" });
   });
+});
+
+test("a principalId naming someone else is refused on any opted-in route, however it is spelled", async () => {
+  await withServer(async (base) => {
+    const cookie = { headers: { cookie: sessionCookie() } };
+    for (const path of [
+      "/v1/test/browser-read?principalId=alice&principalId=bob",
+      "/v1/test/browser-person?principalId=bob",
+    ]) {
+      const r = await fetch(`${base}${path}`, cookie);
+      assert.equal(r.status, 403, path);
+    }
+    for (const principalId of [["alice"], 7, null]) {
+      const w = await write(base, sessionCookie(), { principalId });
+      assert.equal(w.status, 403, JSON.stringify(principalId));
+    }
+    const person = await fetch(`${base}/v1/test/browser-person?principalId=alice`, cookie);
+    assert.equal(person.status, 200);
+  });
+});
+
+test("an unconfigured browser lane says so instead of blaming the cookie", async () => {
+  for (const overrides of [{ portalSessionSecret: "" }, { portalUrl: "not a url" }]) {
+    await withServer(async (base) => {
+      const r = await fetch(`${base}/v1/test/browser-read`, { headers: { cookie: sessionCookie() } });
+      assert.equal(r.status, 503);
+      assert.equal((await errorOf(r)).message, "browser sign-in is not configured on this server");
+    }, overrides);
+  }
 });
 
 test("a session sealed for another org does not authenticate", async () => {

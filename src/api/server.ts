@@ -32,7 +32,7 @@ import { proxyDeploymentSubdomain } from "./routes/deployments.ts";
 import { CAPABILITY_HEADER } from "./contract.ts";
 import { livePersonCapability } from "./artifact-share.ts";
 import { canonicalPerson, samePerson } from "../directory/person.ts";
-import { browserIdentity, usesBrowserSession } from "./browser-session.ts";
+import { bindBrowserActor, browserIdentity, usesBrowserSession } from "./browser-session.ts";
 
 async function capabilityAdminDenied(
   access: AdminAccess,
@@ -295,7 +295,12 @@ async function gate(
         sendJson(res, 401, { error: "unauthorized", message: "principal is no longer active" });
         return null;
       }
-      body = withBrowserActor(route?.actor, req, url, body, actor.p);
+      const bound = bindBrowserActor(route?.actor, req, url, body, actor.p);
+      if (!bound) {
+        sendJson(res, 403, { error: "forbidden", message: "portal identity does not match the requested actor" });
+        return null;
+      }
+      body = bound.body;
     }
     if (!isPublicRoute && (requirePortalIdentity || browser)) {
       const webTurn =
@@ -325,24 +330,6 @@ async function gate(
     }
   }
   return { body, capability, actor };
-}
-
-function withBrowserActor(
-  field: Route["actor"],
-  req: IncomingMessage,
-  url: URL,
-  body: unknown,
-  principalId: string,
-): unknown {
-  const [where, name] = (field ?? "").split(".", 2);
-  if (!name) return body;
-  if (where === "query" && !url.searchParams.has(name)) {
-    url.searchParams.set(name, principalId);
-    req.url = `${url.pathname}${url.search}`;
-  }
-  if (where === "body" && body && typeof body === "object" && !Array.isArray(body) && !(name in body))
-    return { ...body, [name]: principalId };
-  return body;
 }
 
 function assertedActorField(field: string, url: URL, body: unknown): unknown {

@@ -98,6 +98,16 @@ export function openImpersonation(token: string | null, key: Buffer, now: number
   return p as unknown as ImpersonationClaims;
 }
 
+export function impersonationFor(
+  session: Pick<SessionClaims, "sub" | "org">,
+  cookieHeader: string | undefined,
+  key: Buffer,
+  now: number,
+): ImpersonationClaims | null {
+  const imp = openImpersonation(readCookie(cookieHeader, "portal_impersonate"), key, now);
+  return imp && imp.actor === session.sub && imp.org === session.org ? imp : null;
+}
+
 export function openTmp(token: string | null, key: Buffer, now: number): TmpClaims | null {
   const p = open(token, key);
   if (!p || p.k !== "tmp") return null;
