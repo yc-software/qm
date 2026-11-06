@@ -8,7 +8,7 @@ import { mintCapabilityToken, verifyCapabilityToken } from "../src/auth/capabili
 import { withRequestTenant } from "../src/api/request-tenant.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import type { Route } from "../src/api/routes/route.ts";
-import { bindBootTenant, bootTenant, inBootTenant } from "../src/tenants/boot.ts";
+import { BOOT_TENANT_TTL_MS, bindBootTenant, bootTenant, inBootTenant } from "../src/tenants/boot.ts";
 import { boundTenant, withoutTenant, withTenant } from "../src/tenants/context.ts";
 import { onTenantLoad } from "../src/tenants/cache.ts";
 import { buildApp } from "./support/build-app.ts";
@@ -112,8 +112,9 @@ async function serve(databaseUrl: string): Promise<{ get: (path: string) => Prom
   };
 }
 
-test("an install with one tenant serves requests bound to it and refuses them once a second exists, without a restart", () =>
+test("an install with one tenant serves requests bound to it and refuses them once a second exists, without a restart", (t) =>
   withoutTenant(async () => {
+    t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
     const databaseUrl = testMigratedDatabaseUrl();
     const db = new pg.Pool({ connectionString: ownerUrl(databaseUrl).toString() });
     await db.query("DELETE FROM tenants WHERE id <> $1", [TEST_TENANT]);
@@ -122,6 +123,7 @@ test("an install with one tenant serves requests bound to it and refuses them on
       assert.equal(await buildApp(testConfig({ databaseUrl })).app.readBootTenant(), TEST_TENANT);
       assert.notEqual(await single.get("/v1/deliveries"), 401);
       await db.query("INSERT INTO tenants(id) VALUES ($1)", [randomUUID()]);
+      t.mock.timers.tick(BOOT_TENANT_TTL_MS);
       assert.equal(await single.get("/v1/deliveries"), 401);
       const multi = await serve(databaseUrl);
       try {

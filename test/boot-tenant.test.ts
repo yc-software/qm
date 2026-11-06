@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { applyPgMigrations, createPgPool, definePgMigration } from "../src/persistence/pg-pool.ts";
-import { bootTenantReader } from "../src/tenants/boot.ts";
+import { BOOT_TENANT_TTL_MS, bootTenantReader } from "../src/tenants/boot.ts";
 import { boundTenant, withoutTenant } from "../src/tenants/context.ts";
 import { TENANCY } from "../src/tenants/migrations.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
@@ -36,8 +36,9 @@ after(async () => {
   await owner?.end();
 });
 
-test("an unbound non-owner reads the boot tenant only when exactly one tenant exists", { skip }, () =>
+test("an unbound non-owner reads the boot tenant only when exactly one tenant exists", { skip }, (t) =>
   withoutTenant(async () => {
+    t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
     const app = createPgPool(asRole(url));
     try {
       assert.equal(boundTenant(), undefined);
@@ -48,6 +49,8 @@ test("an unbound non-owner reads the boot tenant only when exactly one tenant ex
       assert.equal(await read(), undefined);
       const only = randomUUID();
       await owner.query("INSERT INTO tenants(id) VALUES ($1)", [only]);
+      assert.equal(await read(), undefined);
+      t.mock.timers.tick(BOOT_TENANT_TTL_MS);
       assert.equal(await read(), only);
       assert.equal(await bootTenantReader(app)(), only);
       await owner.query("INSERT INTO tenants(id) VALUES ($1)", [randomUUID()]);
