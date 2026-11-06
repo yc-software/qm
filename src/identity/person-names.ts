@@ -4,6 +4,8 @@ import type { UserRecord, UserStore } from "./user-store.ts";
 
 export const UNKNOWN_PERSON = "Unknown person";
 
+const isOpaqueSignIn = (value: string): boolean => value.includes(":");
+
 const isEmail = (value: string): boolean => /^[^\s@:]+@[^\s@]+$/.test(value.trim());
 
 function realName(principalId: string, name: string | null | undefined): string | undefined {
@@ -21,7 +23,7 @@ export function personLabel(
     realName(principalId, known.user?.displayName) ??
     (isEmail(principalId) ? principalId.trim() : undefined) ??
     known.user?.aliases.find(isEmail) ??
-    UNKNOWN_PERSON
+    (isOpaqueSignIn(principalId) ? UNKNOWN_PERSON : principalId.trim())
   );
 }
 

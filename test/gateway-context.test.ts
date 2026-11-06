@@ -72,7 +72,7 @@ test("gateway context flows into the system prompt the agent sees", async () => 
   });
   assert.equal(res.status, "ok");
   assert.match(res.reply ?? "", /## Where you are/);
-  assert.match(res.reply ?? "", /^Slack DM with Unknown person\.$/m);
+  assert.match(res.reply ?? "", /^Slack DM with U1\.$/m);
   assert.match(res.reply ?? "", /- channel: D9/);
 });
 
@@ -85,7 +85,7 @@ test("no gateway context: prompt names the surface but adds no identifier lines"
     text: "!sysprompt",
   });
   assert.equal(res.status, "ok");
-  assert.match(res.reply ?? "", /^Slack DM with Unknown person\.$/m);
+  assert.match(res.reply ?? "", /^Slack DM with U2\.$/m);
   assert.doesNotMatch(res.reply ?? "", /Identifiers for this conversation/);
 });
 

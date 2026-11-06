@@ -16,6 +16,7 @@ let adminRequests = 0;
 let signedInName = "Test Founder";
 let subject = "person-7";
 let storedName: string | null = null;
+let linkedEmail: string | null = null;
 const profiles: Array<{ body: Record<string, unknown>; principal: string | undefined }> = [];
 const surfaceNames: Array<string | undefined> = [];
 const identitySecret = "trusted-route-identity-secret-distinct-32";
@@ -63,11 +64,15 @@ const upstream = createServer((req, res) => {
     const canonical = /^\/v1\/principals\/([^/]+)\/canonical$/.exec(url.pathname);
     if (canonical)
       return res.end(
-        JSON.stringify({
-          canonicalId: decodeURIComponent(canonical[1]!),
-          displayName: storedName ?? "Unknown person",
-          ...(storedName ? { storedName } : {}),
-        }),
+        JSON.stringify(
+          linkedEmail
+            ? { canonicalId: linkedEmail }
+            : {
+                canonicalId: decodeURIComponent(canonical[1]!),
+                displayName: storedName ?? "Unknown person",
+                ...(storedName ? { storedName } : {}),
+              },
+        ),
       );
     if (url.pathname === "/api/me") {
       const token = req.headers["x-portal-identity"] as string | undefined;
@@ -356,4 +361,20 @@ test("a named session whose person has no stored name fills it in once", async (
   assert.deepEqual(surfaceNames, ["Test Founder", "Test Founder"]);
   assert.equal(profiles.length, 1);
   assert.equal(profiles[0]!.body.displayName, "Test Founder");
+});
+
+test("a nameless session linked to an email shows the email, not the raw sign-in", async () => {
+  signedInName = "";
+  linkedEmail = "founder@example.com";
+  subject = "person-linked";
+  try {
+    const nameless = await signInSession();
+    surfaceNames.length = 0;
+    await fetch(`${base}/api/me`, { headers: { cookie: nameless } });
+    assert.deepEqual(surfaceNames, ["founder@example.com"]);
+  } finally {
+    signedInName = "Test Founder";
+    linkedEmail = null;
+    subject = "person-7";
+  }
 });

@@ -3069,7 +3069,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ? await askResolutionEvents(
                 scopeAskList,
                 lastUserAt ?? session.createdAt,
-                (ownerId) => nameOf(ownerId) ?? personLabel(ownerId),
+                (ownerId) => nameOf(ownerId) ?? ownerId,
                 deps.keychain.getCredential,
               )
             : "",

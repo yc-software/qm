@@ -36,10 +36,11 @@ async function canonicalPrincipal(ctx: ApiCtx): Promise<void> {
   await deps.identity?.refresh();
   const canonicalId = canonicalPerson(id);
   const user = await deps.users?.get(canonicalId);
+  const label = personLabel(canonicalId, { user });
   return sendJson(res, 200, {
     principalId: id,
     canonicalId,
-    displayName: personLabel(canonicalId, { user }),
+    ...(label !== canonicalId ? { displayName: label } : {}),
     ...(user?.displayName ? { storedName: user.displayName } : {}),
   });
 }

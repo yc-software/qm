@@ -333,7 +333,6 @@ test("the portal stores a signed-in person's name in their own tenant, and the c
     assert.deepEqual(before.body, {
       principalId: oidc,
       canonicalId: "named@beta.test",
-      displayName: "named@beta.test",
     });
     const forged = await srv.post(
       "/v1/principals/profile",

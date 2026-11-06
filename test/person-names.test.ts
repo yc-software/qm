@@ -23,7 +23,8 @@ test("a person's label is their name, then an email, and never a raw sign-in id"
   );
   assert.equal(personLabel("oidc:issuer:ada", { displayName: "oidc:issuer:ada" }), UNKNOWN_PERSON);
   assert.equal(personLabel("oidc:issuer:ada", { displayName: "oidc:other:x" }), UNKNOWN_PERSON);
-  assert.equal(personLabel("U123"), UNKNOWN_PERSON);
+  assert.equal(personLabel("U123"), "U123");
+  assert.equal(personLabel("Organization"), "Organization");
   assert.equal(UNKNOWN_PERSON, "Unknown person");
 });
 

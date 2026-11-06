@@ -361,7 +361,8 @@ const canonicalPrincipal = createCanonicalResolver(async (sub, tenant) => {
   }
   const body = (await r.json()) as { canonicalId?: unknown; displayName?: unknown; storedName?: unknown };
   const id = typeof body.canonicalId === "string" && body.canonicalId ? body.canonicalId : sub;
-  const name = typeof body.displayName === "string" ? body.displayName.trim().slice(0, 200) : "";
+  const label = typeof body.displayName === "string" ? body.displayName.trim().slice(0, 200) : "";
+  const name = label || (id !== sub && id.includes("@") ? id : "");
   const stored = typeof body.storedName === "string" && body.storedName.trim() !== "";
   return { id, ...(name ? { name } : {}), ...(stored ? { stored: true as const } : {}) };
 });

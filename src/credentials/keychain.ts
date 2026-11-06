@@ -1,5 +1,4 @@
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
-import { personLabel } from "../identity/person-names.ts";
 import { orgId as configOrgId } from "../config.ts";
 import { randomBytes } from "node:crypto";
 import { scopeId as toScopeId, parseScopeId, type Destination, type ScopeId } from "../types.ts";
@@ -1708,12 +1707,7 @@ export function renderKeychainManifest(input: KeychainManifestInput, now: number
     if (!rows) groups.set(owner, (rows = new Set()));
     rows.add(text);
     if (!ownerNames.has(owner))
-      ownerNames.set(
-        owner,
-        personLabel(ownerId, {
-          displayName: input.members.find((member) => samePerson(member.id, ownerId))?.displayName,
-        }),
-      );
+      ownerNames.set(owner, input.members.find((member) => samePerson(member.id, ownerId))?.displayName ?? ownerId);
   };
   const execution = input.execution ?? [];
   const handleNames = new Set(execution.map((entry) => entry.handle));
