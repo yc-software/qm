@@ -87,3 +87,17 @@ test("GET /deployments/:id/ requires a signed-in user", async () => {
   const r = await rawGet("/deployments/app1/", {});
   assert.equal(r.status, 401);
 });
+
+for (const path of ["/d/app1/", "/d/app1/style.css"]) {
+  test(`GET ${path} reaches core for the signed-in user (#923)`, async () => {
+    const r = await rawGet(path, { ...IDENTITY, "accept-encoding": "identity" });
+    assert.equal(r.status, 200);
+    assert.equal(lastCoreRequest?.url, path);
+    assert.equal(lastCoreRequest?.principal, "alice");
+  });
+
+  test(`GET ${path} requires a signed-in user`, async () => {
+    const r = await rawGet(path, {});
+    assert.equal(r.status, 401);
+  });
+}
