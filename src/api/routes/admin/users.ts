@@ -356,16 +356,19 @@ export async function listKeychainStatus(ctx: ApiCtx): Promise<void> {
   }
   const now = Date.now();
   const people = [...byKey]
-    .map(([key, { userId, principalId }]) => ({
-      userId,
-      principalId: nameOf.get(key)?.principalId ?? principalId,
-      displayName: nameOf.get(key)?.displayName ?? null,
-      credentialCount: credentials.filter((c) => keyOf(c.ownerId) === key).length,
-      activeGrantCount: grants.filter(
-        (g) => keyOf(g.ownerId) === key && g.status === "active" && (g.expiresAt === undefined || g.expiresAt > now),
-      ).length,
-      pendingAskCount: asks.filter((a) => keyOf(a.ownerId) === key && a.status === "pending").length,
-    }))
+    .map(([key, { userId, principalId }]) => {
+      const member = nameOf.get(key);
+      return {
+        userId,
+        principalId: member && foldPrincipalId(member.principalId) === principalId ? member.principalId : principalId,
+        displayName: member?.displayName ?? null,
+        credentialCount: credentials.filter((c) => keyOf(c.ownerId) === key).length,
+        activeGrantCount: grants.filter(
+          (g) => keyOf(g.ownerId) === key && g.status === "active" && (g.expiresAt === undefined || g.expiresAt > now),
+        ).length,
+        pendingAskCount: asks.filter((a) => keyOf(a.ownerId) === key && a.status === "pending").length,
+      };
+    })
     .sort((a, b) => Number(a.principalId > b.principalId) - Number(a.principalId < b.principalId));
 
   return sendJson(res, 200, { scopeId: scope, people, credentials, grants, asks, enabled: true });

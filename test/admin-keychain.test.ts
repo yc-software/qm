@@ -179,7 +179,7 @@ test("user keychain reads only the selected owner's metadata and grants", async 
   assert.equal(denied.status, 403);
 });
 
-test("/v1/admin/keychain: a person's sign-ins are one row keyed by their user, named from the directory", async () => {
+test("/v1/admin/keychain: a person's sign-ins are one row under their primary sign-in, named from the directory", async () => {
   const s = start();
   try {
     await s.built.app.turn({
@@ -195,7 +195,7 @@ test("/v1/admin/keychain: a person's sign-ins are one row keyed by their user, n
       linkedBy: "",
       createdAt: Date.now(),
     });
-    await s.built.app.upsertDirectory([{ principalId: "Pat@Example.com", displayName: "Pat", type: "internal" }]);
+    await s.built.app.upsertDirectory([{ principalId: "U-PAT", displayName: "Pat", type: "internal" }]);
     await s.keychain.save({ ownerId: "U-PAT", service: "github", secret: "s1", envKey: "GITHUB_TOKEN" });
     await s.keychain.save({ ownerId: "pat@example.com", service: "linear", secret: "s2", envKey: "LINEAR_KEY" });
     const user = (await s.built.admin.users.get("pat@example.com"))!;
@@ -206,7 +206,7 @@ test("/v1/admin/keychain: a person's sign-ins are one row keyed by their user, n
     const pat = d.people.filter((p: any) => p.userId === user.id || /pat/i.test(p.principalId));
     assert.deepEqual(
       pat.map((p: any) => [p.userId, p.principalId, p.displayName, p.credentialCount]),
-      [[user.id, "Pat@Example.com", "Pat", 2]],
+      [[user.id, "pat@example.com", "Pat", 2]],
     );
   } finally {
     await s.close();
