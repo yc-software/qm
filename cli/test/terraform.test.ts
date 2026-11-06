@@ -519,16 +519,45 @@ test("terraform owns secret containers but never creates operator-secret placeho
   assert.match(mainTf, /aws_secretsmanager_secret_version" "database/);
 });
 
-test("terraform renders no core host routing for a separate apiUrl and apps domain and drops a stale host list", () => {
+test("terraform routes a separate apiUrl host and apps domain to core's API port and drops a stale host list", () => {
   const selected: QmConfig = {
     ...config,
     apiUrl: "https://api.agent.acme.example",
-    env: { core: { AWS_DEPLOY_IMAGE: DEPLOY_IMAGE, AWS_DEPLOY_APPS_DOMAIN: "apps.agent.acme.example" } },
+    env: { ...config.env, core: { ...config.env.core, AWS_DEPLOY_APPS_DOMAIN: "apps.agent.acme.example" } },
   };
-  const stale = `${terraformVars(config, "", declared)}core_public_hosts   = [\n  "api.agent.acme.example"\n]\n`;
-  const rendered = terraformVars(selected, stale, declared);
-  assert.doesNotMatch(rendered, /core_public_hosts|api\.agent\.acme\.example|apps\.agent\.acme\.example/);
+  const rendered = terraformVars(selected, "", declared);
+  assert.match(
+    rendered,
+    /core_public_hosts\s*= \[\s*"\*\.apps\.agent\.acme\.example",\s*"api\.agent\.acme\.example"\s*\]/,
+  );
   assert.deepEqual(terraformVarsDrift(selected, rendered), []);
+  assert.ok(terraformVarsDrift(config, rendered).includes("core_public_hosts"));
+  assert.ok(terraformVarsDrift(selected, terraformVars(config, "", declared)).includes("core_public_hosts"));
+  const cleared = terraformVars(config, rendered, declared);
+  assert.doesNotMatch(cleared, /core_public_hosts|api\.agent\.acme\.example|apps\.agent\.acme\.example/);
+  assert.deepEqual(terraformVarsDrift(config, cleared), []);
+});
+
+test("rendering refuses core API host routing on a vendored scaffold without core_public_hosts", () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-core-hosts-terraform-"));
+  const selected: QmConfig = { ...config, apiUrl: "https://api.agent.acme.example" };
+  try {
+    const infra = join(dir, "infra");
+    mkdirSync(infra);
+    writeFileSync(join(infra, "terraform.tfvars"), "services = {}\n");
+    writeFileSync(join(infra, "main.tf"), mainTf);
+    writeFileSync(
+      join(infra, "variables.tf"),
+      variablesTf.replace(/variable "core_public_hosts" \{[\s\S]*?\n\}\n/, ""),
+    );
+    renderTerraformVars(config, dir);
+    assert.throws(() => renderTerraformVars(selected, dir), /predates core API host routing/);
+    writeFileSync(join(infra, "variables.tf"), variablesTf);
+    renderTerraformVars(selected, dir);
+    assert.match(readFileSync(join(infra, "terraform.tfvars"), "utf8"), /"api\.agent\.acme\.example"/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("AWS ALB exposure follows its listener transport", () => {
