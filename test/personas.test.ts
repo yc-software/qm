@@ -14,6 +14,8 @@ import { orgId } from "../src/config.ts";
 import { createPostgresPersonaStore } from "../src/personas/persona-store.ts";
 import { createPostgresUserStore } from "../src/identity/user-store.ts";
 import { testMigratedDatabaseUrl } from "./support/test-database.ts";
+import type { AddressInfo } from "node:net";
+import { createInsecureTestServer } from "../src/api/server.ts";
 
 const ALICE = "U_ALICE";
 const BOB = "U_BOB";
@@ -163,6 +165,49 @@ test("skills written into a persona show for everyone with a role on it, and nob
   assert.equal(await sees(ALICE), true);
   assert.equal(await sees(BOB), true);
   assert.equal(await sees(CAROL), false);
+});
+
+test("a persona's page lists crons from conversations with it, only to people who can see them", async () => {
+  const { built, personas, enable, sysprompt } = setup();
+  for (const who of [ALICE, BOB]) await enable(who);
+  const ada = ok(await personas.create(ALICE, { name: "Ada" }));
+  ok(
+    await personas.setAccess(ALICE, ada.id, [
+      { scopeId: scopeId("personal", ALICE), role: "owner" },
+      { scopeId: scopeId("personal", BOB), role: "read" },
+    ]),
+  );
+  const withAda = await sysprompt(ALICE, { kind: "dm", threadRef: "dm:U_ALICE:with-ada" });
+  ok(await personas.assign(ALICE, (await built.sessions.get(withAda.sessionId))!, ada.id));
+  const plain = await sysprompt(ALICE, { kind: "dm", threadRef: "dm:U_ALICE:plain" });
+  const cron = (title: string, sessionId: string) =>
+    built.sessions.get(sessionId).then((session) =>
+      built.app.createCron({
+        ownerScopeId: scopeId("personal", ALICE),
+        owner: ALICE,
+        createdBy: ALICE,
+        title,
+        schedule: { everyMs: 3_600_000 },
+        action: "summarize",
+        sessionRef: session!.threadRef,
+      }),
+    );
+  await cron("Ada digest", withAda.sessionId);
+  await cron("Unrelated", plain.sessionId);
+  const server = createInsecureTestServer(built.app, { sessions: built.sessions });
+  server.listen(0);
+  try {
+    const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+    const cronsFor = async (who: string) => {
+      const r = await fetch(`${base}/v1/personas/${ada.id}?principalId=${who}`);
+      const body = (await r.json()) as { persona: { crons: Array<{ title: string; enabled: boolean }> } };
+      return body.persona.crons.map((c) => [c.title, c.enabled]);
+    };
+    assert.deepEqual(await cronsFor(ALICE), [["Ada digest", true]]);
+    assert.deepEqual(await cronsFor(BOB), []);
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()));
+  }
 });
 
 test("credentials attached by an owner reach every turn that uses the persona, and leave with it", async () => {

@@ -16,6 +16,8 @@ import { avatarTpl, closeFormMenus, menuSelect } from "./ui";
 import { canvasToast } from "./split";
 import { tip } from "./tooltip";
 import { openSkillById } from "./skills";
+import { cronTitle, openCronById, type CronView } from "./crons";
+import { cronScheduleSummary } from "./cron-format";
 
 type PersonaRole = "owner" | "write" | "read";
 
@@ -43,6 +45,7 @@ interface PersonaDetail extends PersonaView {
   access: PersonaGrant[];
   credentials: Array<{ grantId: string; service: string; ownerId: string }>;
   skills?: Array<{ id: string; name: string; description: string }>;
+  crons?: Array<Pick<CronView, "id" | "title" | "action" | "message" | "schedule" | "enabled">>;
 }
 
 const ROLE_LABELS: Record<PersonaRole, string> = { owner: "Owner", write: "Can edit", read: "Can chat" };
@@ -87,6 +90,11 @@ export function personaSeeds(): Array<{ scopeId: string; name: string; kind: "pe
 function openPersonaSkill(skillId: string): void {
   openSkillById(skillId);
   switchView("skills");
+}
+
+function openPersonaCron(cronId: string): void {
+  openCronById(cronId);
+  switchView("crons");
 }
 
 export function viewPersona(personaId: string, focusEditor = false): void {
@@ -359,6 +367,24 @@ function personaFactsTpl(persona: PersonaDetail): TemplateResult {
         canEditPersona(persona.role)
           ? html`<div class="hint">Ask QM to write a skill for ${persona.name}, or move one of yours into it.</div>`
           : nothing
+      }
+    </div>
+    <div class="field">
+      <label>Crons</label>
+      ${
+        persona.crons?.length
+          ? html`<div class="persona-skill-list">
+              ${persona.crons.map(
+                (cron) =>
+                  html`<button class="persona-skill" type="button" @click=${() => openPersonaCron(cron.id)}>
+                    <span class="persona-skill-name" dir="auto">${cronTitle(cron)}</span>
+                    <span class="persona-skill-description hint"
+                      >${cronScheduleSummary(cron)}${cron.enabled ? "" : " · paused"}</span
+                    >
+                  </button>`,
+              )}
+            </div>`
+          : html`<div class="value"><span class="hint">None yet.</span></div>`
       }
     </div>
     <div class="field">

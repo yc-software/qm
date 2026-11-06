@@ -131,7 +131,7 @@ async function refreshCrons(opts: { showLoading?: boolean } = {}): Promise<boole
   }
 }
 
-function cronText(c: CronView): string {
+function cronText(c: Pick<CronView, "action" | "message">): string {
   return c.message ?? c.action ?? "";
 }
 
@@ -152,7 +152,7 @@ function clipWords(text: string, max = 64): string {
   return `${(wordCut.length >= max * 0.55 ? wordCut : cut).trim()}…`;
 }
 
-function cronTitle(c: CronView): string {
+export function cronTitle(c: Pick<CronView, "title" | "action" | "message">): string {
   return c.title?.trim() || clipWords(cronText(c), 58) || "(untitled cron)";
 }
 
