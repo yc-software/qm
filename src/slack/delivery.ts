@@ -148,7 +148,7 @@ export interface SurfaceHeaderClient {
 }
 
 export interface PinnedItem {
-  message?: { ts?: string; user?: string; text?: string };
+  message?: { ts?: string; user?: string; bot_id?: string; text?: string };
 }
 
 export function isSurfaceHeaderMessage(text: string | undefined): boolean {
@@ -160,10 +160,12 @@ export function isSurfaceHeaderMessage(text: string | undefined): boolean {
 export function findHeaderPin(
   items: PinnedItem[] | undefined,
   botUserId: string,
+  ownBotId = "",
 ): { ts: string; text: string } | undefined {
   for (const item of items ?? []) {
     const m = item.message;
-    if (m?.ts && m.user === botUserId && isSurfaceHeaderMessage(m.text)) return { ts: m.ts, text: m.text ?? "" };
+    const own = m?.user === botUserId || Boolean(ownBotId && m?.bot_id === ownBotId);
+    if (m?.ts && own && isSurfaceHeaderMessage(m.text)) return { ts: m.ts, text: m.text ?? "" };
   }
   return undefined;
 }
@@ -175,7 +177,7 @@ export function createSurfaceHeaderEnsurer(opts: {
   channelPinEnabled?(scope: string): Promise<boolean>;
   refreshPersonas?(): Promise<void>;
   webUiPublicUrl: string | undefined;
-  ids: { botUserId: string };
+  ids: { botUserId: string; ownBotId?: string };
   maxTracked?: number;
 }): (
   client: SurfaceHeaderClient,
@@ -212,7 +214,11 @@ export function createSurfaceHeaderEnsurer(opts: {
         } else {
           if (isExternallyShared(info) || isMpim(info)) return;
           await opts.refreshPersonas?.();
-          const pinned = findHeaderPin((await client.pins.list({ channel })).items, opts.ids.botUserId);
+          const pinned = findHeaderPin(
+            (await client.pins.list({ channel })).items,
+            opts.ids.botUserId,
+            opts.ids.ownBotId,
+          );
           if (!enabled) {
             if (pinned) {
               await client.pins.remove({ channel, timestamp: pinned.ts });

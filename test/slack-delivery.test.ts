@@ -956,6 +956,54 @@ test("a bound channel's pinned header edit carries its persona", async (t) => {
   assert.equal(h.calls.updatedWith[0]!.icon_emoji, ADA.icon_emoji);
 });
 
+test("a header pinned under a persona is still the bot's own, so it is edited in place instead of pinned again", async () => {
+  const calls = { posted: 0, pinned: 0, updated: [] as string[] };
+  const client = {
+    chat: {
+      postMessage: async () => {
+        calls.posted += 1;
+        return { ts: "9.0" };
+      },
+      update: async ({ ts }: { ts: string }) => {
+        calls.updated.push(ts);
+        return {};
+      },
+    },
+    pins: {
+      list: async () => ({
+        items: [
+          {
+            message: {
+              ts: "5.0",
+              subtype: "bot_message",
+              bot_id: "B0BOT",
+              username: "Ada",
+              text: "Using Claude Opus 4.8 here. <https://claw.acme.dev/projects/channel/C1|More settings>",
+            },
+          },
+        ],
+      }),
+      add: async () => {
+        calls.pinned += 1;
+        return {};
+      },
+    },
+    conversations: {
+      info: async () => ({ channel: {} }),
+      setTopic: async () => ({}),
+    },
+  };
+  const ensure = createSurfaceHeaderEnsurer({
+    headerFacts: async () => ({ modelName: "Claude Haiku 4.5" }),
+    channelPinEnabled: async () => true,
+    webUiPublicUrl: "https://claw.acme.dev",
+    ids: { botUserId: "U0BOT", ownBotId: "B0BOT" },
+  });
+  ensure(client as any, "C1", "channel:C1", "channel", { pinNew: true });
+  await new Promise((r) => setTimeout(r, 30));
+  assert.deepEqual(calls, { posted: 0, pinned: 0, updated: ["5.0"] });
+});
+
 test("the pinned header is off by default — join creates nothing until the scope opts in", async () => {
   let wrote = 0;
   const client = {
