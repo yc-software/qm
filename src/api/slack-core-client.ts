@@ -11,6 +11,7 @@ import { decideDeploymentAccess } from "../slack/deploy-access.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
 import type { ActorAssertion } from "../types.ts";
 import type { KeychainApprovals } from "../credentials/keychain-approval.ts";
+import type { FinnyApprovalBridge } from "../slack/finny-approvals.ts";
 import { createTaskAcknowledgements, type TaskAckState, type TaskAcknowledgements } from "../slack/task-ack.ts";
 import { orgId as configOrgId } from "../config.ts";
 import type { StagedEnvelope } from "../slack/envelope-staging.ts";
@@ -84,6 +85,7 @@ export interface SlackCoreClient {
   privateContinuationSource?(runId: string): Promise<TurnRequest | null>;
   decideDeploymentAccess(value: string, actor: ActorAssertion, approve: boolean): Promise<string>;
   keychainApprovals?: KeychainApprovals;
+  finnyApprovals?: FinnyApprovalBridge;
   taskAcknowledgements?: TaskAcknowledgements;
   sessionStatus?: SlackSessionStatus;
   externalSlackParticipants(): Promise<boolean>;
@@ -148,6 +150,7 @@ export type { SurfaceContextRequest };
 export interface SlackCoreClientDeps {
   identity: IdentityService;
   keychainApprovals?: KeychainApprovals;
+  finnyApprovals?: FinnyApprovalBridge;
   taskAcknowledgements?: DurableMap<TaskAckState>;
   sessionStatus?: DurableMap<SlackSessionStatusState>;
   statusActivity?: SlackStatusActivity;
@@ -182,6 +185,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
     decideDeploymentAccess: (value, actor, approve) =>
       decideDeploymentAccess(deps.app, deps.identity, value, actor, approve),
     ...(deps.keychainApprovals ? { keychainApprovals: deps.keychainApprovals } : {}),
+    ...(deps.finnyApprovals ? { finnyApprovals: deps.finnyApprovals } : {}),
     ...(deps.taskAcknowledgements
       ? { taskAcknowledgements: createTaskAcknowledgements(deps.taskAcknowledgements, lease, deps) }
       : {}),

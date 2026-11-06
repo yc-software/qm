@@ -5,6 +5,7 @@ import { approvalDeliveryKey, approvalDeliveryRecipient } from "./approval-store
 import { samePerson } from "../directory/person.ts";
 import { approvalMessage } from "./approval-cards.ts";
 import { deliverKeychainCard } from "./keychain-approvals.ts";
+import { deliverFinnyApprovalCard } from "./finny-approvals.ts";
 import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 import { performance } from "node:perf_hooks";
 import {
@@ -256,6 +257,10 @@ export function createDeliveryPoller(deps: {
               }
               const postClient = d.destination.identity ? clientForIdentity(d.destination.identity) : client;
               const { channel, threadTs } = parseDeliveryTarget(d.destination.target);
+              if (d.destination.finnyPlanRequestId) {
+                await deliverFinnyApprovalCard(core.finnyApprovals, client, d, channel, threadTs, recoveredRow(d));
+                return undefined;
+              }
               if (d.destination.keychainAskId) {
                 await deliverKeychainCard(core, client, d, channel, threadTs, deps.webUiPublicUrl);
                 return undefined;
