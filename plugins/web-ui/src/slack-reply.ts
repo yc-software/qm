@@ -8,7 +8,7 @@ import "./slack-account";
 import "./slack-reply.css";
 
 /** Window focus re-checks the Slack link at most this often; explicit checks always run. */
-export const FOCUS_REFRESH_MS = 60_000;
+const FOCUS_REFRESH_MS = 60_000;
 const KNOWN_KEY = "qm-slack-reply-known";
 type Known = { user: string; connected: boolean; label: string };
 
