@@ -20,6 +20,7 @@ import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
 import { TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
 import type { ProvisionOptions } from "../src/sandbox/sandbox.ts";
 import { runNowSettled } from "./support/settle.ts";
+import { resolveCapabilityDestination } from "../src/api/capability-destination.ts";
 
 const ALICE = "U_ALICE";
 const BOB = "U_BOB";
@@ -337,6 +338,7 @@ test("the versions API pages summaries and reads one version with the one before
     const [, rest] = await get("?before=3&limit=1");
     assert.deepEqual([rest.more, rest.versions.map((v: { version: number }) => v.version)], [true, [2]]);
     assert.equal((await get("?limit=0"))[0], 400);
+    assert.equal((await get("?limit=1e30"))[0], 400);
     const [, one] = await get("/3");
     assert.deepEqual([one.version.instructions, one.version.changed], ["three", ["instructions"]]);
     assert.equal((await get("?before=zero"))[0], 400);
@@ -344,6 +346,15 @@ test("the versions API pages summaries and reads one version with the one before
   } finally {
     await new Promise<void>((r) => server.close(() => r()));
   }
+});
+
+test("a destination stored from a persona turn (a cron, watch or loop) does not freeze the persona", () => {
+  const destination = { type: "slack", target: "C_ADA:t1", persona: { id: "p-ada", name: "Ada" } } as const;
+  const resolved = resolveCapabilityDestination(
+    { actorId: ALICE, scopeId: scopeId("channel", "C_ADA"), destination, exp: Date.now() + 60_000 },
+    undefined,
+  );
+  assert.deepEqual(resolved, { ok: true, destination: { type: "slack", target: "C_ADA:t1" } });
 });
 
 test("a Slack channel can only be given read access to a persona", async () => {

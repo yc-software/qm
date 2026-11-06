@@ -113,7 +113,7 @@ const VERSION_PAGE = 20;
 
 function positiveInt(value: string | null | undefined): number | undefined {
   const n = Number(value);
-  return value && Number.isInteger(n) && n > 0 ? n : undefined;
+  return value && Number.isSafeInteger(n) && n > 0 ? n : undefined;
 }
 
 async function listPersonaVersions(ctx: ApiCtx): Promise<void> {
