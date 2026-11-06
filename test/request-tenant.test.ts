@@ -8,7 +8,7 @@ import { mintCapabilityToken, verifyCapabilityToken } from "../src/auth/capabili
 import { withRequestTenant } from "../src/api/request-tenant.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import type { Route } from "../src/api/routes/route.ts";
-import { bindBootTenant, bootTenant, inBootTenant } from "../src/tenants/boot.ts";
+import { bindBootTenant, bootTenant, inBootTenant, readBootTenant } from "../src/tenants/boot.ts";
 import { boundTenant, withoutTenant, withTenant } from "../src/tenants/context.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -102,7 +102,7 @@ test("work started in the boot tenant stays bound across timers", () =>
 
 async function serve(databaseUrl: string): Promise<{ get: (path: string) => Promise<number>; close: () => void }> {
   const built = buildApp(testConfig({ databaseUrl }));
-  await bindBootTenant(built.bootTenant);
+  await bindBootTenant(() => readBootTenant(databaseUrl));
   const server = createInsecureTestServer(built.app);
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -119,7 +119,7 @@ test("an install with one tenant serves requests bound to it and refuses them on
     await db.query("DELETE FROM tenants WHERE id <> $1", [TEST_TENANT]);
     const single = await serve(databaseUrl);
     try {
-      assert.equal(await buildApp(testConfig({ databaseUrl })).bootTenant(), TEST_TENANT);
+      assert.equal(await readBootTenant(databaseUrl), TEST_TENANT);
       assert.notEqual(await single.get("/v1/deliveries"), 401);
       await db.query("INSERT INTO tenants(id) VALUES ($1)", [randomUUID()]);
       const multi = await serve(databaseUrl);

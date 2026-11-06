@@ -300,7 +300,7 @@ import { createUserModelCredentialStore, type UserModelCredentialStore } from ".
 import { type ModelGatewayTransportConfig, setProviderBaseUrls } from "./model/provider-endpoints.ts";
 import { setCustomProviders } from "./model/custom-providers.ts";
 import { createPostgresSessionStore } from "./sessions/postgres-session-store.ts";
-import { bootTenantReader } from "./tenants/boot.ts";
+import { bootTenant } from "./tenants/boot.ts";
 import { createPostgresToolOutputStore } from "./sessions/tool-output.ts";
 import { LLM_CAPTURE_RETENTION_MS, type SessionStore } from "./sessions/session-store.ts";
 import { keychainCompanyChatGPTAuth, type CompanyChatGPTAuth } from "./model/company-chatgpt-auth.ts";
@@ -451,7 +451,6 @@ export interface BuiltApp {
   ownSharedState: () => Promise<void>;
   suggestedActivities?: ReturnType<typeof createSuggestedActivityService>;
   app: App;
-  bootTenant: () => Promise<string | undefined>;
   deploymentLayer: DeploymentLayerRuntime;
   brokeredTools: readonly BrokeredLayerTool[];
   deploymentLayerStore: DeploymentLayerStore;
@@ -600,7 +599,6 @@ export function buildApp(
     resolveFiles: (refs) => files.resolveByIds(refs),
   });
   const pgArtifactMap = createPostgresMapFactory(databaseUrl);
-  const bootTenant = bootTenantReader(pgArtifactMap.pool);
   const artifactMap = <T>(table: string, indexedFields?: readonly Extract<keyof T, string>[]): DurableMap<T> =>
     pgArtifactMap.map<T>(table, indexedFields);
   const processMap = <T>(table: string): DurableMap<T> =>
@@ -1794,7 +1792,7 @@ export function buildApp(
   }
   const adminGrantStore = createAdminGrantStore(createPostgresAdminGrantStore(databaseUrl), {
     seed: parseAdminGrants(config.adminGrants, config.orgId) ?? [],
-    seedTenant: bootTenant,
+    seedTenant: async () => bootTenant(),
   });
   const admin = createAdminService(adminGrantStore, { trustedOidcAdminIssuer: config.trustedOidcAdminIssuer });
   const { strategy: memoryStrategy, memory } = createMemoryStrategy(config.memoryStrategy, {
@@ -3009,7 +3007,6 @@ export function buildApp(
   };
   return {
     app,
-    bootTenant,
     checkReadiness: async (signal) => {
       await pgArtifactMap.pool.q("SELECT 1", [], { signal });
     },

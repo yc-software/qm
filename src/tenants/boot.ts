@@ -1,8 +1,13 @@
-import type { PgPool } from "../persistence/pg-pool.ts";
+import { createPgPool } from "../persistence/pg-pool.ts";
 import { withTenant } from "./context.ts";
 
-export function bootTenantReader(db: Pick<PgPool, "q">): () => Promise<string | undefined> {
-  return async () => ((await db.q("SELECT qm_boot_tenant()::text AS id"))[0]?.id as string | null) ?? undefined;
+export async function readBootTenant(databaseUrl: string): Promise<string | undefined> {
+  const db = createPgPool(databaseUrl);
+  try {
+    return ((await db.q("SELECT qm_boot_tenant()::text AS id"))[0]?.id as string | null) ?? undefined;
+  } finally {
+    await db.close();
+  }
 }
 
 let booted: string | undefined;
