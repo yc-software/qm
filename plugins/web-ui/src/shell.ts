@@ -91,7 +91,7 @@ import {
 import { openCronById, renderCronsPage, resetActiveCron, routeCronsHistory } from "./crons";
 import { renderLoopsPage, resetActiveLoop } from "./loops";
 import { openWebhookById, renderWebhooksPage, resetActiveWebhook, routeWebhooksHistory } from "./webhooks";
-import { loadPersonas, renderPersonasPage } from "./personas";
+import { loadPersonas, openPersonaById, renderPersonasPage, routePersonasHistory } from "./personas";
 import { renderFiles } from "./files";
 import { setScopedSession } from "./session-scope";
 import { openChatSearch } from "./search";
@@ -177,6 +177,7 @@ function openViewAt(view: View, item: string | null, historyMode: "push" | "repl
   if (view === "crons" && item) openCronById(item);
   if (view === "webhooks" && item) openWebhookById(item);
   if (view === "skills" && item) openSkillById(item);
+  if (view === "personas" && item) openPersonaById(item);
   switchView(view, historyMode);
   if (view === "inbox") routeInboxHistory(item);
 }
@@ -1021,13 +1022,14 @@ export function replacePanePreservingFocus(host: HTMLElement): void {
 window.addEventListener("popstate", () => {
   if (!appState.me) return;
   cancelNavigation();
-  const routed = ["crons", "webhooks", "inbox", "skills"];
+  const routed = ["crons", "webhooks", "inbox", "skills", "personas"];
   const { view: linkedView, session, item } = parseDeepLink(UI_BASE, location.pathname, location.search);
   const view = isView(linkedView) ? linkedView : "chats";
   if (view === appState.currentView && routed.includes(view)) {
     if (view === "crons") routeCronsHistory(item);
     else if (view === "webhooks") routeWebhooksHistory(item);
     else if (view === "skills") routeSkillsHistory(item);
+    else if (view === "personas") routePersonasHistory(item);
     else routeInboxHistory(item);
     return;
   }

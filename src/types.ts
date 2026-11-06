@@ -215,6 +215,7 @@ export interface Destination {
   audienceScopeId?: ScopeId;
   onBehalfOf?: string;
   relaySender?: string;
+  persona?: { id: string; name: string };
   threadTs?: string;
   editRef?: string;
   unfurlLinks?: boolean;
@@ -397,6 +398,7 @@ export interface TurnRequest {
   unattendedGrants?: string[];
   cronScript?: import("./triggers/types.ts").CronScript;
   infrequentCron?: boolean;
+  personaId?: string;
   botActor?: boolean;
   conversationHeader?: string;
   priorTurns?: ConversationTurn[];
@@ -518,4 +520,5 @@ export interface TurnResult {
   runtime?: TurnRuntime;
   scriptVerdict?: string;
   retracted?: string[];
+  persona?: { id: string; name: string };
 }

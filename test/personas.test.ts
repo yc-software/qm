@@ -11,18 +11,29 @@ import { scopeId, type TurnRequest } from "../src/types.ts";
 import { credentialHandle } from "../src/credentials/keychain.ts";
 import type { PersonaResult } from "../src/personas/persona-service.ts";
 import { orgId } from "../src/config.ts";
-import { createPostgresPersonaStore } from "../src/personas/persona-store.ts";
+import { createPostgresPersonaStore, type PersonaVersion } from "../src/personas/persona-store.ts";
 import { createPostgresUserStore } from "../src/identity/user-store.ts";
 import { testMigratedDatabaseUrl } from "./support/test-database.ts";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
+import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
+import { TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
+import type { ProvisionOptions } from "../src/sandbox/sandbox.ts";
+import { runNowSettled } from "./support/settle.ts";
+import { resolveCapabilityDestination } from "../src/api/capability-destination.ts";
 
 const ALICE = "U_ALICE";
 const BOB = "U_BOB";
 const CAROL = "U_CAROL";
 
 function setup() {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "personas-")) }));
+  const built = buildApp(
+    testConfig({
+      dataDir: mkdtempSync(join(tmpdir(), "personas-")),
+      signingSecret: "test-secret",
+      apiBaseUrl: "https://core.example.com",
+    }),
+  );
   const personas = built.app.personas!;
   const enable = (who: string) => built.featureFlags.setEnabled("personas", scopeId("personal", who), true, "admin");
   const sysprompt = async (who: string, conversation: TurnRequest["conversation"]) => {
@@ -33,7 +44,8 @@ function setup() {
       text: "!sysprompt",
     });
     assert.equal(result.status, "ok");
-    return { reply: result.reply ?? "", sessionId: result.sessionId! };
+    const session = await built.sessions.get(result.sessionId!);
+    return { reply: result.reply ?? "", sessionId: result.sessionId!, scopeId: session!.scopeId };
   };
   return { built, personas, enable, sysprompt };
 }
@@ -257,4 +269,181 @@ test("linking a sign-in keeps persona authorship and grants with the person", as
   });
   assert.equal((await store.get(persona.id))?.createdBy, "canon@example.com");
   assert.equal((await store.access(persona.id))[0]?.grantedBy, "canon@example.com");
+  assert.equal((await store.versions(persona.id, { limit: 1 })).versions[0]?.editedBy, "canon@example.com");
+});
+
+test("every edit that changes a persona is a version anyone with a role can read, and writers can roll back", async () => {
+  const { personas, enable } = setup();
+  for (const who of [ALICE, BOB, CAROL]) await enable(who);
+  const ada = ok(await personas.create(ALICE, { name: "Ada", instructions: "Answer in haiku." }));
+  ok(
+    await personas.setAccess(ALICE, ada.id, [
+      { scopeId: scopeId("personal", ALICE), role: "owner" },
+      { scopeId: scopeId("personal", BOB), role: "write" },
+      { scopeId: scopeId("personal", CAROL), role: "read" },
+    ]),
+  );
+  assert.equal(ada.version, 1);
+  assert.equal(ok(await personas.update(BOB, ada.id, { instructions: "Answer in limericks." })).version, 2);
+  assert.equal(ok(await personas.update(BOB, ada.id, { instructions: "Answer in limericks." })).version, 2);
+  assert.equal(ok(await personas.update(ALICE, ada.id, { icon: { kind: "emoji", value: "🎨" } })).version, 3);
+
+  const newest = ok(await personas.versions(CAROL, ada.id, { limit: 2, full: true }));
+  assert.deepEqual(
+    [
+      newest.more,
+      (newest.versions as PersonaVersion[]).map((v) => [v.version, v.editedBy, v.instructions, v.icon?.kind ?? null]),
+    ],
+    [
+      true,
+      [
+        [3, ALICE, "Answer in limericks.", "emoji"],
+        [2, BOB, "Answer in limericks.", null],
+      ],
+    ],
+  );
+  const older = ok(await personas.versions(CAROL, ada.id, { before: 2, limit: 2, full: true }));
+  assert.deepEqual(
+    [older.more, (older.versions as PersonaVersion[]).map((v) => [v.version, v.instructions])],
+    [false, [[1, "Answer in haiku."]]],
+  );
+  assert.equal((await personas.restore(CAROL, ada.id, 1)).status, "forbidden");
+  assert.equal((await personas.restore(BOB, ada.id, 9)).status, "not_found");
+
+  const restored = ok(await personas.restore(BOB, ada.id, 1));
+  assert.deepEqual([restored.version, restored.instructions, restored.icon], [4, "Answer in haiku.", undefined]);
+  const latest = ok(await personas.versions(ALICE, ada.id, { limit: 1, full: true })).versions[0] as PersonaVersion;
+  assert.deepEqual(
+    [latest.version, latest.restoredFrom, latest.editedBy, latest.instructions],
+    [4, 1, BOB, "Answer in haiku."],
+  );
+  assert.equal(ok(await personas.detail(CAROL, ada.id)).instructions, "Answer in haiku.");
+});
+
+test("the versions API pages who and when, with content on request", async () => {
+  const { built, personas, enable } = setup();
+  await enable(ALICE);
+  const ada = ok(await personas.create(ALICE, { name: "Ada", instructions: "one" }));
+  for (const text of ["two", "three"]) ok(await personas.update(ALICE, ada.id, { instructions: text }));
+  const server = createInsecureTestServer(built.app, { sessions: built.sessions });
+  server.listen(0);
+  try {
+    const base = `http://localhost:${(server.address() as AddressInfo).port}/v1/personas/${ada.id}/versions`;
+    const get = async (path: string) => {
+      const r = await fetch(`${base}${path}${path.includes("?") ? "&" : "?"}principalId=${ALICE}`);
+      return [r.status, (await r.json()) as any] as const;
+    };
+    const [, first] = await get("");
+    assert.deepEqual(
+      [first.more, first.versions.map((v: { version: number }) => v.version), "instructions" in first.versions[0]],
+      [false, [3, 2, 1], false],
+    );
+    const [, rest] = await get("?before=3&limit=1&full=1");
+    assert.deepEqual(
+      [rest.more, rest.versions.map((v: { version: number; instructions: string }) => [v.version, v.instructions])],
+      [true, [[2, "two"]]],
+    );
+    assert.equal((await get("?limit=0"))[0], 400);
+    assert.equal((await get("?limit=1e30"))[0], 400);
+    assert.equal((await get("?limit=1000"))[1].versions.length, 3);
+    assert.equal((await get("?before=zero"))[0], 400);
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()));
+  }
+});
+
+test("a destination stored from a persona turn (a cron, watch or loop) does not freeze the persona", () => {
+  const destination = { type: "slack", target: "C_ADA:t1", persona: { id: "p-ada", name: "Ada" } } as const;
+  const resolved = resolveCapabilityDestination(
+    { actorId: ALICE, scopeId: scopeId("channel", "C_ADA"), destination, exp: Date.now() + 60_000 },
+    undefined,
+  );
+  assert.deepEqual(resolved, { ok: true, destination: { type: "slack", target: "C_ADA:t1" } });
+});
+
+test("a Slack channel can only be given read access to a persona", async () => {
+  const { personas, enable } = setup();
+  await enable(ALICE);
+  const ada = ok(await personas.create(ALICE, { name: "Ada" }));
+  const owner = { scopeId: scopeId("personal", ALICE), role: "owner" as const };
+  for (const role of ["write", "owner"] as const)
+    assert.equal((await personas.setAccess(ALICE, ada.id, [owner, { scopeId: "channel:C1", role }])).status, "invalid");
+  ok(await personas.setAccess(ALICE, ada.id, [owner, { scopeId: "channel:C1", role: "read" }]));
+  assert.deepEqual(
+    ok(await personas.detail(ALICE, ada.id)).access.map((a) => [a.scopeId, a.role]),
+    [
+      [scopeId("personal", ALICE), "owner"],
+      ["channel:C1", "read"],
+    ],
+  );
+});
+
+test("what a persona conversation posts carries the persona, so Slack can name it", async () => {
+  const { built, personas, enable, sysprompt } = setup();
+  for (const who of [ALICE, BOB]) await enable(who);
+  const ada = ok(await personas.create(ALICE, { name: "Ada" }));
+  let captured: ProvisionOptions | undefined;
+  const provision = built.sandbox.provision.bind(built.sandbox);
+  built.sandbox.provision = (owner, opts) => {
+    captured = opts;
+    return provision(owner, opts);
+  };
+  const channel = { kind: "channel" as const, channelRef: "C_ADA", threadRef: "channel:C_ADA:t1" };
+  const opened = await sysprompt(ALICE, channel);
+  const computers = built.sandboxResources.forTurn({
+    actorId: ALICE,
+    scopeId: opened.scopeId,
+    isCurrent: async () => true,
+  });
+  const computer = await computers.create(ALICE, opened.scopeId, built.sandboxResources.defaultBackend());
+  await computers.setDefault(ALICE, opened.scopeId, computer.id);
+  const run = async () => {
+    const result = await built.app.turn({
+      surface: "test",
+      actor: { externalId: ALICE },
+      conversation: channel,
+      deliveryTarget: "C_ADA:t1",
+      text: "!run true",
+    });
+    assert.equal(result.status, "ok");
+    return (await verifyCapabilityToken(captured!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET))!;
+  };
+  assert.equal((await run()).destination?.persona, undefined);
+
+  ok(await personas.assign(ALICE, (await built.sessions.get(opened.sessionId))!, ada.id));
+  const claims = await run();
+  assert.deepEqual(claims.destination?.persona, { id: ada.id, name: "Ada" });
+  await built.app.upsertDirectory([{ principalId: BOB, displayName: "Bob", type: "internal" }]);
+  const reached = await built.app.reachNow({
+    senderId: ALICE,
+    senderScope: claims.scopeId,
+    recipient: "Bob",
+    text: "Hello from Ada",
+    currentDestination: claims.destination!,
+  });
+  assert.ok(reached.ok, JSON.stringify(reached));
+  assert.deepEqual(reached.delivery.destination.persona, { id: ada.id, name: "Ada" });
+
+  captured = undefined;
+  const cron = await built.app.createCron({
+    ownerScopeId: opened.scopeId,
+    owner: ALICE,
+    createdBy: ALICE,
+    title: "Ada check-in",
+    schedule: { everyMs: 3_600_000 },
+    action: "!run true",
+    sessionRef: channel.threadRef,
+    destination: { type: "slack", target: "C_ADA:t1", audienceScopeId: scopeId("channel", "C_ADA") },
+  });
+  await runNowSettled(built.scheduler, cron.id);
+  const firedWith = captured as ProvisionOptions | undefined;
+  assert.ok(firedWith, "the cron's turn ran");
+  const fired = (await verifyCapabilityToken(firedWith.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET))!;
+  assert.ok(fired.memory?.read.includes(scopeId("persona", ada.id)), "the cron's turn wears the persona");
+  assert.deepEqual(
+    (await built.deliveries.pending("slack"))
+      .filter((d) => d.provenance?.trigger === "cron")
+      .map((d) => d.destination.persona),
+    [{ id: ada.id, name: "Ada" }],
+  );
 });
