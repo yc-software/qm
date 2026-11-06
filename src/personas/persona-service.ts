@@ -33,7 +33,6 @@ export type PersonaResult<T> =
 export interface PersonaForTurn {
   persona: Persona;
   scope: ScopeId;
-  channelDefault?: true;
 }
 
 export interface PersonaService {
@@ -242,7 +241,7 @@ export function createPersonaService(deps: {
     },
     async forTurn(personaId, actorId, contextScope) {
       const worn = await deps.channelPersona?.(contextScope);
-      if (worn) return { persona: worn, scope: personaScope(worn.id), channelDefault: true };
+      if (worn) return { persona: worn, scope: personaScope(worn.id) };
       if (!personaId) return null;
       if (!(await enabledFor(actorId)))
         return "Personas are turned off for this person, so this turn runs without one.";
@@ -256,15 +255,11 @@ export function createPersonaService(deps: {
   };
 }
 
-export function personaPrompt({ persona, scope, channelDefault }: PersonaForTurn): string {
+export function personaPrompt({ persona, scope }: PersonaForTurn): string {
   const lines = [
     `## Persona: ${persona.name}`,
     `You are acting as the persona "${persona.name}" (${scope}). Its skills, notes and credentials come from that scope; who is in the room and where your writes land still come from this conversation. Organization instructions take precedence over the persona's.`,
   ];
-  if (channelDefault)
-    lines.push(
-      `This channel wears "${persona.name}" for every conversation in it. Only the persona's owners and writers, and org admins, can change this channel's instructions, standing orders or skills.`,
-    );
   if (persona.description.trim()) lines.push(`Purpose: ${persona.description.trim()}`);
   if (persona.instructions.trim()) lines.push("", persona.instructions.trim());
   return lines.join("\n");

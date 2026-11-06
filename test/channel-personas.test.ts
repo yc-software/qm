@@ -207,7 +207,6 @@ test("every conversation in the channel wears its persona, for every sender; a s
   ok(await wear());
   const worn = await prompt(CY, thread(DESIGN, "1.1"));
   assert.match(worn.reply, /## Persona: Ada/);
-  assert.match(worn.reply, /This channel wears "Ada" for every conversation in it/);
   assert.doesNotMatch((await prompt(CY, thread("C0OPEN", "1.1"))).reply, /## Persona/);
 
   const bea = ok(await personas.create(CY, { name: "Bea" }));
@@ -218,7 +217,7 @@ test("every conversation in the channel wears its persona, for every sender; a s
 
   await built.featureFlags.setEnabled("personas", ORG, false, ADMIN);
   await built.featureFlags.setEnabled("personas", personal(CY), true, ADMIN);
-  assert.doesNotMatch((await prompt(CY, thread(DESIGN, "2.2"))).reply, /This channel wears/);
+  assert.doesNotMatch((await prompt(CY, thread(DESIGN, "2.2"))).reply, /## Persona/);
 });
 
 test("the guidance tool, POST /v1/soul and the policy route are locked to the persona's writers, owners and org admins", async () => {
