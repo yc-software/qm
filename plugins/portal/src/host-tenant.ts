@@ -6,7 +6,7 @@ import { signedHeaders, withSourceAuthNonce } from "../../chassis/src/core-clien
 import { isTenantId } from "../../chassis/src/tenant.ts";
 import { clearCookie, open, readCookie, seal, withoutCookies, type SessionClaims } from "./session.ts";
 
-export interface TrustedClient {
+interface TrustedClient {
   clientId: string;
   clientSecret: string;
 }
@@ -88,7 +88,7 @@ export function hostReturnTo(value: string | null): string {
   return value && value.startsWith("/") && !value.startsWith("//") && !/[\\\x00-\x1f]/.test(value) ? value : "/";
 }
 
-export function sessionOnHost<T extends { t?: string; h?: string }>(
+function sessionOnHost<T extends { t?: string; h?: string }>(
   cookieHeader: string | undefined,
   { tenant, host }: { tenant: string; host: string },
   openSession: (value: string) => T | null,

@@ -70,7 +70,7 @@ export async function installCronQueue(databaseUrl: string, schema: string = "pg
   }
 }
 
-export class CronQueueNotInstalled extends Error {}
+class CronQueueNotInstalled extends Error {}
 
 async function assertInstalled(boss: PgBoss, schema: string): Promise<void> {
   const installed = (await boss.isInstalled()) ? await boss.schemaVersion() : null;

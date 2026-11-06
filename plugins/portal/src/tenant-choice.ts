@@ -48,7 +48,7 @@ export function coreEmailTenants(
   return coreTenants(coreApiUrl, signingSecret, `email-tenants?email=${encodeURIComponent(email)}`);
 }
 
-export function corePrincipalTenants(
+function corePrincipalTenants(
   coreApiUrl: string,
   signingSecret: string | undefined,
   principal: string,
