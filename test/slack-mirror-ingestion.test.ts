@@ -627,6 +627,57 @@ test("a reaction on a reply posted under a persona reaches the agent as one on i
   assert.match(turns[0].text, /reacted with :eyes: on your message: "Persona answer"/);
 });
 
+test("a reaction that cannot surface never looks up the reacted message", async () => {
+  let lookups = 0;
+  const client = {
+    reactions: {
+      get: async () => {
+        lookups++;
+        return { message: { text: "Persona answer", bot_id: "BBOT", username: "Ada" } };
+      },
+    },
+  };
+  const turns: any[] = [];
+  const handler = createTurnHandler({
+    core: {},
+    flow: {
+      callCore: async (turn: any) => {
+        turns.push(turn);
+        return { status: "silent" };
+      },
+    },
+    directory: {
+      classifyUserCached: async () => ({ actor: { externalId: "U1", displayName: "Teammate" } }),
+      getChannelInfo: async () => ({ id: "C1" }),
+      channelMembership: async () => ({ audience: [] }),
+    },
+    mirror: fixture().mirror,
+    serializer: {
+      serializeSlackConversation: async () => ({
+        view: { channel: { kind: "channel" }, messages: [], here: { kind: "top-level" }, omittedFiles: [] },
+      }),
+    },
+    ids,
+    threads: createThreadTracker(),
+    deduper: createDeduper(),
+    externalParticipantsEnabled: async () => false,
+  } as any);
+  await handler.handleReactionEvent(
+    { user: ids.botUserId, reaction: "eyes", item: { type: "message", channel: "C1", ts: "300.001" } },
+    "reaction-own",
+    client,
+    true,
+  );
+  await handler.handleReactionEvent(
+    { user: "U1", reaction: "eyes", item: { type: "file", channel: "C1", ts: "300.002" } },
+    "reaction-file",
+    client,
+    true,
+  );
+  assert.equal(lookups, 0);
+  assert.equal(turns.length, 0);
+});
+
 test("synthetic reaction turns preserve the canonical message snapshot", async () => {
   const cache = createPostgresSurfaceCache(testDatabaseUrl());
   const directory = {
