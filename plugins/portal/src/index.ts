@@ -10,6 +10,8 @@ import { reportBackendError } from "../../chassis/src/error-reporting.ts";
 import "./instrument.ts";
 import { provisionTrustedAdmin } from "./trusted-admin.ts";
 import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import { createServer, METHODS, type IncomingMessage, type ServerResponse } from "node:http";
 import { ADMIN_LOGIN_SCRIPT, ADMIN_LOGIN_SCRIPT_HASH, openAdminLogin } from "./admin-login.ts";
 import { LRUCache } from "lru-cache";
@@ -115,8 +117,7 @@ function playgroundIntEnv(name: string, fallback: number): number {
 }
 const PLAYGROUND_MINTS_PER_IP = playgroundIntEnv("PORTAL_PLAYGROUND_MINTS_PER_IP", 30);
 const PLAYGROUND_MINT_WINDOW_S = playgroundIntEnv("PORTAL_PLAYGROUND_MINT_WINDOW_S", 3600);
-const NEUTRAL_ACCENT = "#4f46e5";
-let brandAccent = NEUTRAL_ACCENT;
+let brandLabel = "QM";
 let modelProviderConfigured: boolean | undefined;
 let surfaceConfigNextAt = 0;
 let surfaceConfigInflight: Promise<void> | null = null;
@@ -137,8 +138,9 @@ async function fetchSurfaceConfig(): Promise<void> {
       signal: AbortSignal.timeout(2_000),
     });
     if (r.ok) {
-      const body = (await r.json()) as { branding?: { accent?: unknown }; modelProviderConfigured?: unknown };
-      brandAccent = typeof body.branding?.accent === "string" ? body.branding.accent : NEUTRAL_ACCENT;
+      const body = (await r.json()) as { branding?: { selfLabel?: unknown }; modelProviderConfigured?: unknown };
+      const label = body.branding?.selfLabel;
+      brandLabel = typeof label === "string" && label.trim() ? label.trim() : "QM";
       modelProviderConfigured =
         typeof body.modelProviderConfigured === "boolean" ? body.modelProviderConfigured : undefined;
       surfaceConfigNextAt = Date.now() + (modelProviderConfigured === false ? 5_000 : 30_000);
@@ -330,13 +332,30 @@ function identityUnavailable(req: IncomingMessage, res: ServerResponse): void {
     return sendHtml(
       res,
       503,
-      '<!doctype html><meta charset=utf-8><body style="font-family:system-ui;max-width:32rem;margin:4rem auto"><h2>Service unavailable</h2><p>Could not confirm your identity. Try again in a moment.</p></body>',
+      connectPage({ title: "Service unavailable", body: "Could not confirm your identity. Try again in a moment." }),
     );
   json(res, 503, { error: "identity_unavailable", message: "could not confirm your identity, try again in a moment" });
 }
 
 const PAGE_CSP =
-  "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
+  "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
+
+// The harbour scene and its styling come from the QM Desktop connect page (desktop/setup.html, setup.css).
+export const CARD_SCENE_PATH = "/auth/assets/becalmed-off-halfway-rock.webp";
+const CARD_SCENE_FILE = fileURLToPath(
+  new URL("../../../desktop/assets/becalmed-off-halfway-rock.webp", import.meta.url),
+);
+let cardScene: Buffer | undefined;
+async function serveCardScene(res: ServerResponse): Promise<void> {
+  try {
+    cardScene ??= await readFile(CARD_SCENE_FILE);
+    res.writeHead(200, { "content-type": "image/webp", "cache-control": "public, max-age=86400" });
+    res.end(cardScene);
+  } catch (error) {
+    console.warn(`[portal] page background unavailable: ${errMessage(error)}`);
+    json(res, 404, { error: "not_found" });
+  }
+}
 
 function sendHtml(res: ServerResponse, status: number, html: string, csp = PAGE_CSP): void {
   sendBuffered(
@@ -433,55 +452,53 @@ function currentSession(req: IncomingMessage): SessionClaims | null {
 
 const CARD_STYLE = `<style>
   :root{
-    --bg:#ffffff; --surface:#ffffff; --text:#0a0a0a; --muted:#737373;
-    --border:#e5e5e5; --secondary:#f5f5f5; --warn:#b42318; --warn-bg:#fdeceb;
-    --radius-md:10px; --radius-lg:16px;
-  }
-  @media (prefers-color-scheme:dark){
-    :root{ --bg:#0a0a0a; --surface:#171717; --text:#fafafa; --muted:#a3a3a3;
-      --border:#2a2a2a; --secondary:#262626; --warn:#ff8a80; --warn-bg:#2a1a1a; }
+    color-scheme:light;
+    --paper:#f7f6f2; --ink:#1b3043; --muted:#6b706f; --line:#d6d9d9; --warn:#9d3927; --warn-bg:#f6e7e3;
+    --brand-font:"Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+    font-family:ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    color:var(--ink); background:var(--paper); -webkit-font-smoothing:antialiased;
   }
   *{ box-sizing:border-box; }
-  html,body{ height:100%; }
-  body{
-    margin:0; background:var(--bg); color:var(--text); display:flex; min-height:100%;
-    font:14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    -webkit-font-smoothing:antialiased;
-  }
-  main{ margin:auto; padding:32px 20px; width:100%; display:grid; place-items:center; }
-  .card{
-    width:100%; max-width:420px; background:var(--surface); border:1px solid var(--border);
-    border-radius:var(--radius-lg); padding:34px 32px 30px; text-align:center;
-  }
-  .card.wide{ max-width:440px; }
-  .icon{ width:52px; height:52px; margin:0 auto 18px; border-radius:var(--radius-md); background:var(--secondary);
-    display:grid; place-items:center; }
-  .icon svg{ width:26px; height:26px; stroke:var(--text); fill:none; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
-  .icon.warn{ background:var(--warn-bg); }
-  .icon.warn svg{ stroke:var(--warn); stroke-width:2; }
-  h1{ font-size:20px; font-weight:600; letter-spacing:0; margin:0 0 8px; }
-  .msg{ color:var(--muted); margin:0 auto 8px; max-width:40ch; font-size:14px; }
-  .reason{ margin:16px auto 26px; font-size:13px; color:var(--text);
-    background:var(--warn-bg); border:1px solid var(--border); border-radius:var(--radius-md); padding:11px 14px;
-    text-align:left; word-break:break-word; }
-  .reason strong{ display:block; color:var(--warn); font-size:11px; margin-bottom:3px; }
-  .note{ margin:18px auto 26px; font-size:13px; color:var(--text); background:var(--secondary);
-    border:1px solid var(--border); border-radius:var(--radius-md); padding:12px 14px; text-align:left; }
-  .note .who{ display:flex; align-items:center; gap:8px; color:var(--muted); }
-  .note .who b{ color:var(--text); }
-  .note p{ margin:8px 0 0; color:var(--muted); }
+  body{ margin:0; }
+  main{ position:relative; min-height:100vh; isolation:isolate; padding:155px 24px 220px; }
+  .harbour{ position:absolute; inset:0; z-index:-1; margin:0; overflow:hidden; background:#d8d0bd; }
+  .harbour > img{ position:absolute; width:100%; height:100%; object-fit:cover; object-position:center 62%; }
+  .masthead{ position:relative; padding:62px 52px 26px; }
+  .wordmark{ font-family:var(--brand-font); font-size:40px; letter-spacing:-2px; line-height:1; }
+  figcaption{ position:absolute; bottom:19px; right:28px; display:flex; gap:12px; font-size:9px; letter-spacing:.035em;
+    color:#fffaf0; text-shadow:0 1px 5px #211c14; }
+  figcaption span{ opacity:.85; }
+  .card{ width:min(100%, 420px); margin-inline:auto; padding:28px; border:1px solid #fffaf080; border-radius:12px;
+    background:rgb(247 246 242 / 88%); box-shadow:0 4px 24px rgb(37 38 31 / 5%); backdrop-filter:blur(12px);
+    -webkit-backdrop-filter:blur(12px); }
+  .icon{ display:flex; margin-bottom:12px; }
+  .icon svg{ width:22px; height:22px; stroke:var(--ink); fill:none; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
+  .icon.warn svg{ stroke:var(--warn); }
+  h1{ font-size:15px; font-weight:600; margin:0 0 7px; }
+  .msg{ font-size:12px; line-height:1.6; color:var(--muted); margin:0 0 16px; }
+  .reason{ margin:0 0 16px; font-size:12px; line-height:1.5; color:var(--ink); background:var(--warn-bg);
+    border:1px solid #e8cfc8; border-radius:7px; padding:10px 12px; word-break:break-word; }
+  .reason strong{ display:block; color:var(--warn); font-size:11px; font-weight:600; margin-bottom:3px; }
+  #invite-status, #admin-email{ font-size:12px; color:var(--ink); margin:0 0 16px; }
+  #invite-status:empty, #admin-email:empty{ display:none; }
   .actions{ display:grid; gap:10px; }
   .actions form{ display:grid; margin:0; }
-  .btn{ display:flex; align-items:center; justify-content:center; min-height:44px; padding:0 18px;
-    text-decoration:none; font-weight:600; font-size:14px; border-radius:var(--radius-md); cursor:pointer;
-    transition:opacity .12s ease, background .12s ease, color .12s ease; }
-  .btn.primary{ background:var(--text); color:var(--bg); border:1px solid var(--text); }
-  .btn.primary:hover{ opacity:.9; }
-  .btn.ghost{ background:none; color:var(--muted); border:1px solid var(--border); }
-  .btn.ghost:hover{ background:var(--secondary); color:var(--text); }
-  .btn:focus-visible{ outline:2px solid color-mix(in srgb, var(--text) 35%, transparent); outline-offset:2px; }
-  .help{ color:var(--muted); font-size:12.5px; margin:20px 0 0; }
-  @media (prefers-reduced-motion:reduce){ *{ transition:none !important; } }
+  .btn{ display:flex; justify-content:space-between; align-items:center; width:100%; border-radius:7px; padding:12px 14px;
+    font:inherit; font-size:12px; text-decoration:none; cursor:pointer; }
+  .btn.primary{ border:none; background:var(--ink); color:#fff; }
+  .btn.primary::after{ content:"→"; font-size:19px; line-height:16px; }
+  .btn.primary:hover{ background:#29445b; }
+  .btn.ghost{ border:1px solid var(--line); background:#fdfdfb; color:var(--ink); }
+  .btn.ghost:hover{ background:#fff; }
+  .btn:focus-visible{ outline:2px solid #8394a0; outline-offset:3px; }
+  .btn:disabled{ opacity:.65; cursor:wait; }
+  .help{ color:#78807f; font-size:10px; line-height:1.5; margin:13px 0 0; text-align:center; }
+  @media (max-width:600px){
+    main{ padding-top:130px; }
+    .masthead{ padding-inline:28px; }
+    .card{ padding:24px; }
+    figcaption{ left:20px; right:auto; font-size:8px; }
+  }
 </style>`;
 
 const ALERT_ICON = `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5M12 16h.01"/></svg>`;
@@ -493,7 +510,6 @@ function cardPage(o: {
   msg: string;
   icon: string;
   warn?: boolean;
-  wide?: boolean;
   extra?: string;
   actions: string;
   help: string;
@@ -503,12 +519,17 @@ function cardPage(o: {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${escapeHtml(o.title)} · Portal</title>
+<title>${escapeHtml(o.title)} · ${escapeHtml(brandLabel)}</title>
 ${CARD_STYLE}
 </head>
 <body>
   <main>
-    <section class="card${o.wide ? " wide" : ""}" aria-labelledby="t">
+    <figure class="harbour">
+      <img src="${CARD_SCENE_PATH}" alt="Sailing ships resting on still, sunlit water in Becalmed off Halfway Rock by Fitz Henry Lane.">
+      <header class="masthead"><span class="wordmark">${escapeHtml(brandLabel)}</span></header>
+      <figcaption>Becalmed off Halfway Rock<span>Fitz Henry Lane, 1860</span></figcaption>
+    </figure>
+    <section class="card" aria-labelledby="t">
       <div class="icon${o.warn ? " warn" : ""}" aria-hidden="true">
         ${o.icon}
       </div>
@@ -553,23 +574,16 @@ export function notConfiguredHtml(): string {
   });
 }
 
-const connectStyle = (): string => `<style>
-  :root{ --bg:#0a0a0a; --text:#fafafa; --muted:#a3a3a3; --border:#2a2a2a; --brand:${brandAccent}; --radius-md:10px; }
-  html,body{ height:100%; margin:0; }
-  body{ background:var(--bg); color:var(--text); display:grid; place-items:center; padding:40px 20px;
-    font:14px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; -webkit-font-smoothing:antialiased; }
-  .card{ max-width:440px; text-align:center; }
-  h1{ font-size:19px; margin:0 0 10px; }
-  p{ color:var(--muted); margin:0 0 18px; }
-  .btn{ display:inline-block; font-weight:600; min-height:40px; line-height:40px; padding:0 18px;
-    border:1px solid var(--brand); border-radius:var(--radius-md); background:var(--brand); color:#fff; text-decoration:none; }
-  a.muted{ color:var(--muted); display:inline-block; margin-top:14px; }
-</style>`;
-
-function connectPage(o: { title: string; body: string; action?: string }): string {
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(o.title)} · Portal</title>${connectStyle()}</head>
-<body><div class="card"><h1>${escapeHtml(o.title)}</h1><p>${escapeHtml(o.body)}</p>${o.action ?? ""}</div></body></html>`;
+function connectPage(o: { title: string; body: string; action?: string; icon?: string }): string {
+  return cardPage({
+    title: o.title,
+    heading: o.title,
+    msg: o.body,
+    icon: o.icon ?? ALERT_ICON,
+    warn: !o.icon,
+    actions: o.action ?? "",
+    help: "",
+  });
 }
 
 function providerLabel(provider: string): string {
@@ -587,13 +601,15 @@ export function connectWrongRecipientHtml(o: { provider: string; alreadyConnecte
     return connectPage({
       title: `You've already connected ${prov}`,
       body: `This link was meant for a different teammate, and your ${prov} is already connected, so there's nothing to do here.`,
-      action: `<a class="muted" href="/connectors">Manage your connections</a>`,
+      action: `<a class="btn ghost" href="/connectors">Manage your connections</a>`,
+      icon: LOCK_ICON,
     });
   }
   return connectPage({
     title: "This link was for someone else",
     body: `This connect link was created for a different teammate. Want to connect your own ${prov} instead?`,
-    action: `<a class="btn" href="/connect/${encodeURIComponent(o.provider)}/self-connect">Connect my ${escapeHtml(prov)}</a>`,
+    action: `<a class="btn primary" href="/connect/${encodeURIComponent(o.provider)}/self-connect">Connect my ${escapeHtml(prov)}</a>`,
+    icon: LOCK_ICON,
   });
 }
 
@@ -691,11 +707,7 @@ async function handleSecretDrop(
         error: "unreachable",
         message: "couldn't reach the credential service, try again in a moment",
       });
-    return sendHtml(
-      res,
-      502,
-      '<!doctype html><meta charset=utf-8><body style="font-family:system-ui;max-width:32rem;margin:4rem auto"><h2>Service unavailable</h2><p>Try the link again in a moment.</p></body>',
-    );
+    return sendHtml(res, 502, connectPage({ title: "Service unavailable", body: "Try the link again in a moment." }));
   }
   const bodyText = await r.text();
   const ct = r.headers.get("content-type") ?? (isPost ? "application/json" : "text/html; charset=utf-8");
@@ -949,6 +961,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   void refreshSurfaceConfig();
 
   if (method === "GET" && pathname === "/healthz") return json(res, 200, { ok: true });
+  if (method === "GET" && pathname === CARD_SCENE_PATH) return serveCardScene(res);
 
   if (method === "GET" && pathname === "/readyz") {
     return proxyToUpstream(req, res, { baseUrl: CORE, path: pathname, search: "" }, ["accept"]);
@@ -979,7 +992,8 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         connectPage({
           title: "Still signed in",
           body: "Use Sign out from the account menu to end this session.",
-          action: `<a class="btn" href="/">Back to the portal</a>`,
+          action: `<a class="btn primary" href="/">Back to the portal</a>`,
+          icon: LOCK_ICON,
         }),
       );
     return sendHtml(
@@ -988,7 +1002,8 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       connectPage({
         title: "Signed out",
         body: "You have signed out of this portal.",
-        action: `<a class="btn" href="/auth/login">Sign in</a>`,
+        action: `<a class="btn primary" href="/auth/login">Sign in</a>`,
+        icon: LOCK_ICON,
       }),
     );
   }
