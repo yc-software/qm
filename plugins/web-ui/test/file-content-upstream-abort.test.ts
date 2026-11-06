@@ -51,12 +51,16 @@ async function readCutOff(path: string): Promise<void> {
   await assert.rejects(r.arrayBuffer(), "the truncated body surfaces to the client as a failed download");
 }
 
-test("core dropping a file body mid-stream fails only that response and leaves the server serving", async () => {
-  await readCutOff("/api/files/cut-off/content");
-  await readCutOff("/api/playgrounds/cut-off-html");
-  await new Promise((r) => setTimeout(r, 50));
-  assert.deepEqual(uncaught, [], "no uncaught exception escapes the file relay");
-  const ok = await fetch(`${base}/api/files/whole/content`, { headers });
-  assert.equal(ok.status, 200);
-  assert.equal(await ok.text(), "%PDF-1.4 fine");
-});
+test(
+  "core dropping a file body mid-stream fails only that response and leaves the server serving",
+  { timeout: 10_000 },
+  async () => {
+    await readCutOff("/api/files/cut-off/content");
+    await readCutOff("/api/playgrounds/cut-off-html");
+    await new Promise((r) => setTimeout(r, 50));
+    assert.deepEqual(uncaught, [], "no uncaught exception escapes the file relay");
+    const ok = await fetch(`${base}/api/files/whole/content`, { headers });
+    assert.equal(ok.status, 200);
+    assert.equal(await ok.text(), "%PDF-1.4 fine");
+  },
+);

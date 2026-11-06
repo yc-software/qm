@@ -1224,8 +1224,8 @@ async function pipeUpstreamFile(res: ServerResponse, id: string, body: ReadableS
   try {
     await pipeline(Readable.fromWeb(body as Parameters<typeof Readable.fromWeb>[0]), res);
   } catch (error) {
-    if (!res.destroyed) res.destroy();
-    if (!res.writableFinished) console.warn(`[web-ui] file ${id} stream ended early: ${errChain(error)}`);
+    if ((error as NodeJS.ErrnoException).code !== "ERR_STREAM_PREMATURE_CLOSE")
+      console.warn(`[web-ui] file ${id} stream ended early: ${errChain(error)}`);
   }
 }
 
