@@ -50,24 +50,6 @@ const BOOT_TENANT: PgMigrationDefinition = {
   ],
 };
 
-const TENANT_HOSTS: PgMigrationDefinition = {
-  id: "0000-tenancy/hosts",
-  statements: [
-    `SET LOCAL lock_timeout = '5s'`,
-    `CREATE TABLE IF NOT EXISTS tenant_hosts(
-      host TEXT PRIMARY KEY CHECK (host ~ '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$'),
-      tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE
-    )`,
-    `ALTER TABLE tenant_hosts ENABLE ROW LEVEL SECURITY`,
-    `DROP POLICY IF EXISTS tenant_isolation ON tenant_hosts`,
-    `CREATE POLICY tenant_isolation ON tenant_hosts FOR SELECT USING (tenant_id = qm_bound_tenant())`,
-    `CREATE OR REPLACE FUNCTION qm_tenant_for_host(name text) RETURNS uuid LANGUAGE sql STABLE SECURITY DEFINER
-      SET search_path = pg_catalog, public AS $qm_tenant_for_host$
-      SELECT tenant_id FROM public.tenant_hosts WHERE host = lower(name)
-    $qm_tenant_for_host$`,
-  ],
-};
-
 const DROP_TENANT_HOSTS: PgMigrationDefinition = {
   id: "0000-tenancy/tenant-hosts-drop",
   statements: [
@@ -82,7 +64,6 @@ export const TENANCY: readonly PgMigrationDefinition[] = [
   TENANT_SETTINGS,
   TENANT_ROW_SECURITY,
   BOOT_TENANT,
-  TENANT_HOSTS,
   TENANT_APP_HANDLES,
   DROP_TENANT_HOSTS,
   TENANT_APP_HANDLE_DNS_BOUND,
