@@ -7,7 +7,7 @@ import type { FeatureFlagStore } from "../feature-flags.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { parseScopeId, scopeId, type ScopeId } from "../types.ts";
 import { swallow } from "../util/errors.ts";
-import { atLeast } from "./persona-schema.ts";
+import { activeHolder, atLeast } from "./persona-schema.ts";
 import type { PersonaService } from "./persona-service.ts";
 import type { Persona, PersonaStore } from "./persona-store.ts";
 
@@ -166,11 +166,10 @@ export function createChannelPersonas(deps: ChannelPersonasDeps): ChannelPersona
       owners.set(personaId, [...(owners.get(personaId) ?? []), owner]);
     const orphaned: string[] = [];
     for (const [personaId, grants] of owners) {
-      const held = grants.map(parseScopeId);
-      if (held.some(({ kind }) => kind !== "personal")) continue;
-      const active = held.flatMap(({ ref }) => (ref && deps.isActive(ref) ? [ref] : []));
+      const active = grants.filter((grant) => activeHolder(grant, deps.isActive)).map(parseScopeId);
       const lastOwnersLeave = leaving
-        ? active.length > 0 && (await Promise.all(active.map(leaving))).every(Boolean)
+        ? active.length > 0 &&
+          (await Promise.all(active.map(({ kind, ref }) => kind === "personal" && leaving(ref!)))).every(Boolean)
         : active.length === 0;
       if (lastOwnersLeave) orphaned.push(personaId);
     }

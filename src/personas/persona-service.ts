@@ -5,7 +5,7 @@ import type { TeamStore } from "../teams/teams.ts";
 import type { Keychain } from "../credentials/keychain.ts";
 import { parseScopeId, scopeId, type ScopeId, type Session } from "../types.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
-import { PERSONA_ROLES, atLeast, type PersonaRole } from "./persona-schema.ts";
+import { PERSONA_ROLES, activeHolder, atLeast, type PersonaRole } from "./persona-schema.ts";
 import {
   PersonaOwnerRequired,
   type Persona,
@@ -183,10 +183,8 @@ export function createPersonaService(deps: {
         }
         if (new Set(entries.map((entry) => entry.scopeId)).size !== entries.length)
           return { status: "invalid", message: "each scope may appear once" };
-        const staysOwner = ({ scopeId: holder, role }: { scopeId: ScopeId; role: PersonaRole }) => {
-          const { kind, ref } = parseScopeId(holder);
-          return role === "owner" && (kind !== "personal" || deps.isActive(ref!));
-        };
+        const staysOwner = ({ scopeId: holder, role }: { scopeId: ScopeId; role: PersonaRole }) =>
+          role === "owner" && activeHolder(holder, deps.isActive);
         if (entries.some((entry) => entry.role === "owner") && !entries.some(staysOwner))
           return { status: "invalid", message: "a persona needs at least one active owner" };
         try {
