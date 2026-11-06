@@ -335,15 +335,20 @@ describe("private-channel membership (authorizes private-channel sends, §10)", 
     assert.equal(await d.channelMembership("C-one", "U-keep"), true);
   });
 
-  it("uses one Slack Connect roster without making a private room an ordinary send target", async () => {
+  it("treats a private Slack Connect room like any private room for its own members", async () => {
     const d = createPostgresDirectoryStore(testDatabaseUrl());
     await d.replaceChannels(
       [{ channelId: "C-connect", name: "connect", isPrivate: true, isExternal: true }],
       [{ channelId: "C-connect", principalId: "U-member" }],
     );
     assert.equal(await d.channelMembership("C-connect", "U-member"), true);
-    assert.equal(await d.channelMember("C-connect", "U-member"), false);
-    assert.deepEqual(await d.listChannelsFor("U-member"), []);
+    assert.equal(await d.channelMember("C-connect", "U-member"), true);
+    assert.equal(await d.channelMember("C-connect", "U-other"), false);
+    assert.deepEqual(
+      (await d.listChannelsFor("U-member")).map((c) => c.channelId),
+      ["C-connect"],
+    );
+    assert.equal(await d.conversationMembers("channel", "C-connect"), undefined);
   });
 
   it("partially replaces only the channel rosters known by the source", async () => {
@@ -382,17 +387,6 @@ describe("private-channel membership (authorizes private-channel sends, §10)", 
     );
     assert.equal(await d.channelMembership("C-one", "U-leaving"), false);
     assert.equal(await d.channelMembership("C-one", "U-keep"), true);
-  });
-
-  it("uses one Slack Connect roster without making a private room an ordinary send target", async () => {
-    const d = createPostgresDirectoryStore(testDatabaseUrl());
-    await d.replaceChannels(
-      [{ channelId: "C-connect", name: "connect", isPrivate: true, isExternal: true }],
-      [{ channelId: "C-connect", principalId: "U-member" }],
-    );
-    assert.equal(await d.channelMembership("C-connect", "U-member"), true);
-    assert.equal(await d.channelMember("C-connect", "U-member"), false);
-    assert.deepEqual(await d.listChannelsFor("U-member"), []);
   });
 });
 
