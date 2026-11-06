@@ -16,13 +16,22 @@ import { createPostgresUserStore } from "../src/identity/user-store.ts";
 import { testMigratedDatabaseUrl } from "./support/test-database.ts";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
+import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
+import { TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
+import type { ProvisionOptions } from "../src/sandbox/sandbox.ts";
 
 const ALICE = "U_ALICE";
 const BOB = "U_BOB";
 const CAROL = "U_CAROL";
 
 function setup() {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "personas-")) }));
+  const built = buildApp(
+    testConfig({
+      dataDir: mkdtempSync(join(tmpdir(), "personas-")),
+      signingSecret: "test-secret",
+      apiBaseUrl: "https://core.example.com",
+    }),
+  );
   const personas = built.app.personas!;
   const enable = (who: string) => built.featureFlags.setEnabled("personas", scopeId("personal", who), true, "admin");
   const sysprompt = async (who: string, conversation: TurnRequest["conversation"]) => {
@@ -33,7 +42,8 @@ function setup() {
       text: "!sysprompt",
     });
     assert.equal(result.status, "ok");
-    return { reply: result.reply ?? "", sessionId: result.sessionId! };
+    const session = await built.sessions.get(result.sessionId!);
+    return { reply: result.reply ?? "", sessionId: result.sessionId!, scopeId: session!.scopeId };
   };
   return { built, personas, enable, sysprompt };
 }
@@ -257,4 +267,104 @@ test("linking a sign-in keeps persona authorship and grants with the person", as
   });
   assert.equal((await store.get(persona.id))?.createdBy, "canon@example.com");
   assert.equal((await store.access(persona.id))[0]?.grantedBy, "canon@example.com");
+  assert.equal((await store.versions(persona.id))[0]?.editedBy, "canon@example.com");
+});
+
+test("every edit that changes a persona is a version anyone with a role can read, and writers can roll back", async () => {
+  const { personas, enable } = setup();
+  for (const who of [ALICE, BOB, CAROL]) await enable(who);
+  const ada = ok(await personas.create(ALICE, { name: "Ada", instructions: "Answer in haiku." }));
+  ok(
+    await personas.setAccess(ALICE, ada.id, [
+      { scopeId: scopeId("personal", ALICE), role: "owner" },
+      { scopeId: scopeId("personal", BOB), role: "write" },
+      { scopeId: scopeId("personal", CAROL), role: "read" },
+    ]),
+  );
+  assert.equal(ada.version, 1);
+  assert.equal(ok(await personas.update(BOB, ada.id, { instructions: "Answer in limericks." })).version, 2);
+  assert.equal(ok(await personas.update(BOB, ada.id, { instructions: "Answer in limericks." })).version, 2);
+  assert.equal(ok(await personas.update(ALICE, ada.id, { icon: { kind: "emoji", value: "🎨" } })).version, 3);
+
+  const history = ok(await personas.versions(CAROL, ada.id));
+  assert.deepEqual(
+    history.map((v) => [v.version, v.editedBy, v.instructions, v.icon?.kind ?? null]),
+    [
+      [3, ALICE, "Answer in limericks.", "emoji"],
+      [2, BOB, "Answer in limericks.", null],
+      [1, ALICE, "Answer in haiku.", null],
+    ],
+  );
+  assert.equal((await personas.restore(CAROL, ada.id, 1)).status, "forbidden");
+  assert.equal((await personas.restore(BOB, ada.id, 9)).status, "not_found");
+
+  const restored = ok(await personas.restore(BOB, ada.id, 1));
+  assert.deepEqual([restored.version, restored.instructions, restored.icon], [4, "Answer in haiku.", undefined]);
+  const latest = ok(await personas.versions(ALICE, ada.id))[0]!;
+  assert.deepEqual([latest.version, latest.restoredFrom, latest.editedBy], [4, 1, BOB]);
+  assert.equal(ok(await personas.detail(CAROL, ada.id)).instructions, "Answer in haiku.");
+});
+
+test("a Slack channel can only be given read access to a persona", async () => {
+  const { personas, enable } = setup();
+  await enable(ALICE);
+  const ada = ok(await personas.create(ALICE, { name: "Ada" }));
+  const owner = { scopeId: scopeId("personal", ALICE), role: "owner" as const };
+  for (const role of ["write", "owner"] as const)
+    assert.equal((await personas.setAccess(ALICE, ada.id, [owner, { scopeId: "channel:C1", role }])).status, "invalid");
+  ok(await personas.setAccess(ALICE, ada.id, [owner, { scopeId: "channel:C1", role: "read" }]));
+  assert.deepEqual(
+    ok(await personas.detail(ALICE, ada.id)).access.map((a) => [a.scopeId, a.role]),
+    [
+      [scopeId("personal", ALICE), "owner"],
+      ["channel:C1", "read"],
+    ],
+  );
+});
+
+test("what a persona conversation posts carries the persona, so Slack can name it", async () => {
+  const { built, personas, enable, sysprompt } = setup();
+  for (const who of [ALICE, BOB]) await enable(who);
+  const ada = ok(await personas.create(ALICE, { name: "Ada" }));
+  let captured: ProvisionOptions | undefined;
+  const provision = built.sandbox.provision.bind(built.sandbox);
+  built.sandbox.provision = (owner, opts) => {
+    captured = opts;
+    return provision(owner, opts);
+  };
+  const channel = { kind: "channel" as const, channelRef: "C_ADA", threadRef: "channel:C_ADA:t1" };
+  const opened = await sysprompt(ALICE, channel);
+  const computers = built.sandboxResources.forTurn({
+    actorId: ALICE,
+    scopeId: opened.scopeId,
+    isCurrent: async () => true,
+  });
+  const computer = await computers.create(ALICE, opened.scopeId, built.sandboxResources.defaultBackend());
+  await computers.setDefault(ALICE, opened.scopeId, computer.id);
+  const run = async () => {
+    const result = await built.app.turn({
+      surface: "test",
+      actor: { externalId: ALICE },
+      conversation: channel,
+      deliveryTarget: "C_ADA:t1",
+      text: "!run true",
+    });
+    assert.equal(result.status, "ok");
+    return (await verifyCapabilityToken(captured!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET))!;
+  };
+  assert.equal((await run()).destination?.persona, undefined);
+
+  ok(await personas.assign(ALICE, (await built.sessions.get(opened.sessionId))!, ada.id));
+  const claims = await run();
+  assert.deepEqual(claims.destination?.persona, { id: ada.id, name: "Ada" });
+  await built.app.upsertDirectory([{ principalId: BOB, displayName: "Bob", type: "internal" }]);
+  const reached = await built.app.reachNow({
+    senderId: ALICE,
+    senderScope: claims.scopeId,
+    recipient: "Bob",
+    text: "Hello from Ada",
+    currentDestination: claims.destination!,
+  });
+  assert.ok(reached.ok, JSON.stringify(reached));
+  assert.deepEqual(reached.delivery.destination.persona, { id: ada.id, name: "Ada" });
 });

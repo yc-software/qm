@@ -1098,6 +1098,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       } else if (input.surfaceTools && input.origin.kind === "automation" && input.origin.destination) {
         defaultDestination = input.origin.destination;
       }
+      if (defaultDestination && persona)
+        defaultDestination = { ...defaultDestination, persona: { id: persona.persona.id, name: persona.persona.name } };
       const cronBlock =
         delivery.candidates.length > 1 && deps.signingSecret && deps.apiBaseUrl
           ? `\n\n${deliveryMenu(delivery.candidates, delivery.defaultKey)}`

@@ -215,6 +215,7 @@ export interface Destination {
   audienceScopeId?: ScopeId;
   onBehalfOf?: string;
   relaySender?: string;
+  persona?: { id: string; name: string };
   threadTs?: string;
   editRef?: string;
   unfurlLinks?: boolean;

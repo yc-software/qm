@@ -26,6 +26,12 @@ interface Call {
   body: Record<string, unknown> | null;
 }
 
+const versions = [
+  { version: 3, name: "Ada", description: "", instructions: "Count.\nShow work.", editedBy: "bo", editedAt: 3 },
+  { version: 2, name: "Ada", description: "", instructions: "Count.", editedBy: "tester", editedAt: 2 },
+  { version: 1, name: "Ada", description: "", instructions: "Ada instructions", editedBy: "tester", editedAt: 1 },
+];
+
 let calls: Call[] = [];
 let disabled = false;
 let accessError = false;
@@ -44,6 +50,18 @@ const { vite, dom, close } = await browserEnv({
         : json({ personas });
     if (path === "/api/personas" && method === "POST")
       return json({ persona: { ...persona("p-fork", String(calls.at(-1)!.body!.name), "owner") } }, 201);
+    if (path.startsWith("/api/skills")) return json({ skills: [] });
+    if (path === "/api/keychain/overview")
+      return json({
+        credentials: [
+          { id: "cred-gh", service: "github", accountLabel: "octo" },
+          { id: "cred-lin", service: "linear" },
+        ],
+      });
+    if (path.endsWith("/versions") && method === "GET") return json({ versions });
+    if (path.includes("/versions/") && method === "POST")
+      return json({ persona: { ...personas[0], instructions: "Ada instructions", version: 4 } });
+    if (path.includes("/credentials")) return json({ credential: { grantId: "g-2" } });
     if (path.startsWith("/api/personas/") && path.endsWith("/access"))
       return accessError
         ? json({ error: "invalid", message: "a persona must keep at least one owner" }, 400)
@@ -54,7 +72,11 @@ const { vite, dom, close } = await browserEnv({
       return json({
         persona: {
           ...found,
-          access: [{ scopeId: "personal:tester", role: "owner" }],
+          access: [
+            { scopeId: "personal:tester", role: "owner" },
+            { scopeId: "channel:C9", role: "read", label: "design" },
+          ],
+          version: 3,
           credentials: [{ grantId: "g-1", service: "github", ownerId: "tester" }],
         },
       });
@@ -88,6 +110,7 @@ const { vite, dom, close } = await browserEnv({
     return json({});
   },
 });
+dom.window.confirm = () => true;
 dom.window.HTMLDialogElement.prototype.showModal = function () {
   this.open = true;
 };
@@ -196,17 +219,168 @@ test("Fork hands off to QM in a new chat instead of copying on the page", async 
   );
 });
 
-test("a reader sees a read-only summary with credential names and who has access", async () => {
-  const { main } = await mountPage();
-  main.querySelector<HTMLButtonElement>('button[aria-label="Open Cy"]')!.click();
+const sections = (root: ParentNode) =>
+  Object.fromEntries(
+    [...root.querySelectorAll(".persona-section")].map((section) => [
+      section.querySelector("h3")?.textContent?.trim(),
+      {
+        actions: [...section.querySelectorAll(".persona-section-actions button")].map((b) => b.textContent?.trim()),
+        items: [...section.querySelectorAll(".persona-item .persona-skill-name, .permission-person-label")].map((n) =>
+          n.textContent?.trim(),
+        ),
+      },
+    ]),
+  );
+
+async function openPersonaPage(name: string) {
+  const mounted = await mountPage();
+  mounted.main.querySelector<HTMLButtonElement>(`button[aria-label="Open ${name}"]`)!.click();
   await settle();
+  return mounted;
+}
+
+test("a reader sees each part of the persona with nothing to add or remove", async () => {
+  const { main } = await openPersonaPage("Cy");
   assert.equal(main.querySelector("form.persona-form"), null);
   assert.match(main.textContent ?? "", /Cy instructions/);
+  assert.deepEqual(sections(main), {
+    Skills: { actions: [], items: [] },
+    Crons: { actions: ["New cron"], items: [] },
+    Credentials: { actions: [], items: ["github"] },
+    "Slack channels": { actions: [], items: ["design"] },
+    "Who has access": { actions: [], items: ["You"] },
+    History: { actions: ["Show 3 versions"], items: [] },
+  });
+  assert.equal(main.querySelector(".persona-item-remove"), null);
+});
+
+test("an owner adds a Slack channel as read access straight from the persona page", async () => {
+  const { main } = await openPersonaPage("Ada");
+  button(main, "Add channel").click();
+  const dialog = document.querySelector<HTMLDialogElement>("dialog.persona-picker-dialog")!;
+  const input = dialog.querySelector<HTMLInputElement>('input[aria-label="Search Slack channels"]')!;
+  input.value = "eng";
+  input.dispatchEvent(new window.Event("input"));
+  await new Promise((resolve) => setTimeout(resolve, 260));
+  calls = [];
+  [...dialog.querySelectorAll<HTMLButtonElement>(".project-member-result")].at(0)!.click();
+  await settle();
+  assert.deepEqual(calls.find((c) => c.method === "PUT")?.body, {
+    access: [
+      { scopeId: "personal:tester", role: "owner" },
+      { scopeId: "channel:C9", role: "read" },
+      { scopeId: "channel:C1", role: "read" },
+    ],
+  });
+  assert.equal(dialog.isConnected, false);
+
+  calls = [];
+  main.querySelector<HTMLButtonElement>('button[aria-label="Remove design"]')!.click();
+  await settle();
+  assert.deepEqual(calls.find((c) => c.method === "PUT")?.body, {
+    access: [{ scopeId: "personal:tester", role: "owner" }],
+  });
+});
+
+test("an owner attaches one of their credentials and detaches one", async () => {
+  const { main } = await openPersonaPage("Ada");
+  button(main, "Attach").click();
+  await settle();
+  const dialog = document.querySelector<HTMLDialogElement>("dialog.persona-picker-dialog")!;
+  const choices = [...dialog.querySelectorAll<HTMLButtonElement>(".project-member-result")];
   assert.deepEqual(
-    [...main.querySelectorAll(".persona-credentials .badge")].map((b) => b.textContent),
-    ["github"],
+    choices.map((c) => [c.querySelector(".project-member-name")?.textContent?.replace(/\s+/g, " ").trim(), c.disabled]),
+    [
+      ["github octo", true],
+      ["linear", false],
+    ],
   );
-  assert.match(main.querySelector(".persona-access-list")?.textContent ?? "", /You\s+Owner/);
+  calls = [];
+  choices[1]!.click();
+  await settle();
+  assert.deepEqual(
+    calls.filter((c) => c.method !== "GET").map((c) => [c.method, c.path, c.body]),
+    [["POST", "/api/personas/p-ada/credentials", { credentialId: "cred-lin" }]],
+  );
+  calls = [];
+  main.querySelector<HTMLButtonElement>('button[aria-label="Detach github"]')!.click();
+  await settle();
+  assert.deepEqual(
+    calls.filter((c) => c.method !== "GET").map((c) => [c.method, c.path]),
+    [["DELETE", "/api/personas/p-ada/credentials/g-1"]],
+  );
+});
+
+test("New cron and Ask QM open a chat wearing the persona with the request started", async () => {
+  const { main } = await openPersonaPage("Ada");
+  const { storedDraft } = await vite.ssrLoadModule("/src/drafts.ts");
+  calls = [];
+  button(main, "New cron").click();
+  await settle();
+  assert.deepEqual(
+    calls
+      .filter((c) => c.method !== "GET")
+      .slice(0, 2)
+      .map((c) => [c.method, c.path, c.body]),
+    [
+      ["POST", "/api/sessions", { scopeId: "personal:tester" }],
+      ["PUT", "/api/sessions/s-new/persona", { personaId: "p-ada" }],
+    ],
+  );
+  assert.equal(storedDraft("web:tester:new"), "Set up a cron that ");
+});
+
+test("history lists versions on demand, shows what changed, and rolls back as a new version", async () => {
+  const { main } = await openPersonaPage("Ada");
+  assert.equal(
+    calls.some((c) => c.path.endsWith("/versions")),
+    false,
+  );
+  button(main, "Show 3 versions").click();
+  await settle();
+  const rows = [...main.querySelectorAll(".persona-version-row")];
+  assert.deepEqual(
+    rows.map((row) => [
+      row.querySelector("strong")?.textContent,
+      [...row.querySelectorAll("button.persona-action")].map((b) => b.textContent?.trim()),
+    ]),
+    [
+      ["v3", []],
+      ["v2", ["Roll back"]],
+      ["v1", ["Roll back"]],
+    ],
+  );
+  rows[0]!.querySelector<HTMLButtonElement>(".persona-version-open")!.click();
+  await settle();
+  assert.deepEqual(
+    [...main.querySelectorAll(".persona-diff span")].map((line) => [line.className, line.textContent]),
+    [
+      ["persona-diff-same", "  Count."],
+      ["persona-diff-add", "+ Show work."],
+    ],
+  );
+  calls = [];
+  button(rows[2]!, "Roll back").click();
+  await settle();
+  assert.deepEqual(
+    calls.filter((c) => c.method !== "GET").map((c) => [c.method, c.path]),
+    [["POST", "/api/personas/p-ada/versions/1/restore"]],
+  );
+  assert.match(main.querySelector(".action-notice")?.textContent ?? "", /Rolled back to version 1/);
+});
+
+test("a Slack channel can only be given chat access in the share dialog", async () => {
+  const { main } = await mountPage();
+  button(main, "Share", "Ada").click();
+  await settle();
+  const dialog = document.querySelector<HTMLDialogElement>("dialog.persona-share-dialog")!;
+  const channelRow = dialog.querySelector<HTMLElement>('.permission-row[data-scope="channel:C9"]')!;
+  channelRow.querySelector<HTMLButtonElement>("button")!.click();
+  await settle();
+  assert.deepEqual(
+    [...channelRow.querySelectorAll('[role="menuitemradio"]')].map((o) => o.textContent?.trim()),
+    ["Can chat", "Remove access"],
+  );
 });
 
 test("an editor saves name, description and instructions with PATCH", async () => {
@@ -235,7 +409,7 @@ test("sharing stages grants and shows the server's reason when the last owner is
   button(dialog, "Add everyone at acme").click();
   assert.deepEqual(
     [...dialog.querySelectorAll(".permission-row .permission-person-label")].map((l) => l.textContent?.trim()),
-    ["You", "Everyone at Acme"],
+    ["You", "design", "Everyone at Acme"],
   );
   calls = [];
   button(dialog, "Save").click();
@@ -243,6 +417,7 @@ test("sharing stages grants and shows the server's reason when the last owner is
   assert.deepEqual(calls.find((c) => c.method === "PUT")?.body, {
     access: [
       { scopeId: "personal:tester", role: "owner" },
+      { scopeId: "channel:C9", role: "read" },
       { scopeId: "org:acme", role: "read" },
     ],
   });
@@ -275,7 +450,7 @@ test("one search finds people and Slack channels, and either can be added", asyn
   [...dialog.querySelectorAll<HTMLButtonElement>(".project-member-result")].at(-1)!.click();
   assert.deepEqual(
     [...dialog.querySelectorAll(".permission-row .permission-person-label")].map((l) => l.textContent?.trim()),
-    ["You", "#eng-launch"],
+    ["You", "design", "#eng-launch"],
   );
 });
 
@@ -305,4 +480,32 @@ test("the conversation shows its persona, and clearing it unsets the session's p
   assert.equal(sessionsState.list[0].personaId, undefined);
   assert.equal(redraws, 1);
   assert.equal(host.querySelector(".session-persona-badge"), null);
+});
+
+test("a persona has its own link, so /personas/<id> opens it and its page keeps the address", async () => {
+  const main = document.querySelector("main")!;
+  const { appState } = await vite.ssrLoadModule("/src/shell-state.ts");
+  const personasModule = await vite.ssrLoadModule("/src/personas.ts");
+  appState.currentView = "personas";
+  appState.mainEl = main;
+  appState.me = { user: "tester", org: "acme", companyName: "Acme" };
+  personasModule.openPersonaById("p-bo");
+  await personasModule.renderPersonasPage();
+  await settle();
+  assert.equal(main.querySelector(".persona-heading")?.textContent?.trim(), "Bo");
+  assert.equal(window.location.pathname, "/personas/p-bo");
+  button(main, "Personas").click();
+  await settle();
+  assert.equal(window.location.pathname, "/personas");
+});
+
+test("New skill opens the skill editor already set to the persona", async () => {
+  const { main } = await openPersonaPage("Ada");
+  button(main, "New skill").click();
+  await settle();
+  await settle();
+  const select = document.querySelector<HTMLSelectElement>(".skill-scope-select select")!;
+  assert.ok(select, "the skill editor opened");
+  assert.equal(select.selectedOptions[0]?.textContent, "Ada");
+  assert.equal(select.value, "persona:p-ada");
 });

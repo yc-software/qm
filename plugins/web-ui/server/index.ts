@@ -1767,6 +1767,42 @@ const apiRoutes: readonly WebRoute[] = [
       ),
   },
   {
+    method: "GET",
+    path: "/api/personas/:id/versions",
+    handle: (c) =>
+      relayCore(
+        c.res,
+        "GET",
+        `/v1/personas/${encodeURIComponent(c.params.id!)}/versions?principalId=${encodeURIComponent(c.user)}`,
+      ),
+  },
+  {
+    method: "POST",
+    path: "/api/personas/:id/versions/:version/restore",
+    handle: (c) =>
+      relayWithPrincipal(
+        c,
+        "POST",
+        `/v1/personas/${encodeURIComponent(c.params.id!)}/versions/${encodeURIComponent(c.params.version!)}/restore`,
+      ),
+  },
+  {
+    method: "POST",
+    path: "/api/personas/:id/credentials",
+    handle: (c) => relayWithPrincipal(c, "POST", `/v1/personas/${encodeURIComponent(c.params.id!)}/credentials`),
+  },
+  {
+    method: "DELETE",
+    path: "/api/personas/:id/credentials/:grantId",
+    handle: (c) =>
+      relayCore(
+        c.res,
+        "DELETE",
+        `/v1/personas/${encodeURIComponent(c.params.id!)}/credentials/${encodeURIComponent(c.params.grantId!)}`,
+        JSON.stringify({ principalId: c.user }),
+      ),
+  },
+  {
     method: "PUT",
     path: "/api/personas/:id/access",
     handle: (c) => relayWithPrincipal(c, "PUT", `/v1/personas/${encodeURIComponent(c.params.id!)}/access`),

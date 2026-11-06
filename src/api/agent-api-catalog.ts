@@ -77,7 +77,7 @@ const FAMILIES: AgentApiFamily[] = [
   {
     when: (view) => view.personasEnabled,
     guidance:
-      "Personas are reusable agents (instructions, skills, notes, credentials) living in a persona:<id> scope; people hold owner, write or read on them through people (personal:), teams (team:), the org (org:) or Slack channels (channel:, usable only in that channel). Writers edit instructions with PATCH and add a skill by creating it with scopeId persona:<id> on POST /v1/skills or moving one in with the skills tool; only owners share, attach credentials or delete. Use the persona-fork skill to copy one.",
+      "Personas are reusable agents (instructions, skills, notes, credentials) living in a persona:<id> scope; people hold owner, write or read on them through people (personal:), teams (team:), the org (org:) or Slack channels (channel:, read only, usable only in that channel). Writers edit instructions with PATCH and add a skill by creating it with scopeId persona:<id> on POST /v1/skills or moving one in with the skills tool; only owners share, attach credentials or delete. Use the persona-fork skill to copy one.",
     routes: [
       { method: "GET", path: "/v1/personas", summary: "personas you hold a role on, with your role" },
       {
@@ -93,7 +93,19 @@ const FAMILIES: AgentApiFamily[] = [
       {
         method: "PATCH",
         path: "/v1/personas/:id",
-        summary: "{name?,description?,instructions?,icon?} edits it (write or owner)",
+        summary:
+          "{name?,description?,instructions?,icon?} edits it (write or owner); each change that alters a field records a new version",
+      },
+      {
+        method: "GET",
+        path: "/v1/personas/:id/versions",
+        summary: "its saved versions, newest first: name, description, instructions, icon, who and when",
+      },
+      {
+        method: "POST",
+        path: "/v1/personas/:id/versions/:version/restore",
+        summary:
+          "rolls name, description, instructions and icon back to that version as a new version (write or owner)",
       },
       {
         method: "PUT",

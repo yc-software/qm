@@ -14,9 +14,21 @@ export interface Persona {
   description: string;
   instructions: string;
   icon?: ProjectIcon;
+  version: number;
   createdBy: string;
   createdAt: number;
   updatedAt: number;
+}
+
+export interface PersonaVersion {
+  version: number;
+  name: string;
+  description: string;
+  instructions: string;
+  icon?: ProjectIcon;
+  restoredFrom?: number;
+  editedBy: string;
+  editedAt: number;
 }
 
 export interface PersonaAccess {
@@ -36,7 +48,9 @@ export interface PersonaFields {
 export interface PersonaStore {
   create(input: PersonaFields & { name: string }, owner: ScopeId, by: string): Promise<Persona>;
   get(id: string): Promise<Persona | null>;
-  update(id: string, fields: PersonaFields): Promise<Persona | null>;
+  update(id: string, fields: PersonaFields, by: string, restoredFrom?: number): Promise<Persona | null>;
+  versions(id: string): Promise<PersonaVersion[]>;
+  version(id: string, version: number): Promise<PersonaVersion | null>;
   remove(id: string): Promise<boolean>;
   access(id: string): Promise<PersonaAccess[]>;
   replaceAccess(id: string, access: ReadonlyArray<{ scopeId: ScopeId; role: PersonaRole }>, by: string): Promise<void>;
@@ -46,7 +60,17 @@ export interface PersonaStore {
 
 const BEST_ROLE = `(ARRAY['read','write','owner'])[MAX(array_position(ARRAY['read','write','owner'], role))]`;
 
-const PERSONA_SELECT = `SELECT p.*, u.primary_alias AS created_by_alias FROM personas p JOIN users u ON u.id = p.created_by`;
+const PERSONA_SELECT = `SELECT p.*, u.primary_alias AS created_by_alias,
+    (SELECT MAX(v.version) FROM persona_versions v WHERE v.persona_id = p.id) AS version
+  FROM personas p JOIN users u ON u.id = p.created_by`;
+
+const VERSION_SELECT = `SELECT v.*, u.primary_alias AS edited_by_alias FROM persona_versions v JOIN users u ON u.id = v.edited_by`;
+
+const RECORD_VERSION = `INSERT INTO persona_versions
+    (persona_id, version, name, description, instructions, icon, restored_from, edited_by, edited_at)
+  SELECT p.id, COALESCE((SELECT MAX(version) FROM persona_versions WHERE persona_id = p.id), 0) + 1,
+         p.name, p.description, p.instructions, p.icon, $2, $3, p.updated_at
+    FROM personas p WHERE p.id = $1`;
 
 const ms = (value: unknown): number => new Date(value as string).getTime();
 
@@ -57,9 +81,23 @@ function toPersona(r: Rows[number]): Persona {
     description: r.description as string,
     instructions: r.instructions as string,
     ...(r.icon ? { icon: r.icon as ProjectIcon } : {}),
+    version: Number(r.version ?? 1),
     createdBy: r.created_by_alias as string,
     createdAt: ms(r.created_at),
     updatedAt: ms(r.updated_at),
+  };
+}
+
+function toVersion(r: Rows[number]): PersonaVersion {
+  return {
+    version: Number(r.version),
+    name: r.name as string,
+    description: r.description as string,
+    instructions: r.instructions as string,
+    ...(r.icon ? { icon: r.icon as ProjectIcon } : {}),
+    ...(r.restored_from != null ? { restoredFrom: Number(r.restored_from) } : {}),
+    editedBy: r.edited_by_alias as string,
+    editedAt: ms(r.edited_at),
   };
 }
 
@@ -90,6 +128,7 @@ export function createPostgresPersonaStore(connectionString: string, opts: { id?
           `INSERT INTO persona_access (persona_id, grantee_scope_id, role, granted_by) VALUES ($1, $2, 'owner', $3)`,
           [id, owner, user],
         );
+        await db.query(RECORD_VERSION, [id, null, user]);
         return toPersona((await db.query(`${PERSONA_SELECT} WHERE p.id = $1`, [id])).rows[0]!);
       });
     },
@@ -97,25 +136,41 @@ export function createPostgresPersonaStore(connectionString: string, opts: { id?
       const rows = await q(`${PERSONA_SELECT} WHERE p.id = $1`, [id]);
       return rows[0] ? toPersona(rows[0]) : null;
     },
-    async update(id, fields) {
-      const rows = await q(
-        `UPDATE personas SET
-           name = COALESCE(btrim($2), name),
-           description = COALESCE($3, description),
-           instructions = COALESCE($4, instructions),
-           icon = CASE WHEN $5 THEN $6::jsonb ELSE icon END,
-           updated_at = now()
-         WHERE id = $1 RETURNING id`,
-        [
-          id,
-          fields.name ?? null,
-          fields.description ?? null,
-          fields.instructions ?? null,
-          fields.icon !== undefined,
-          fields.icon ? JSON.stringify(fields.icon) : null,
-        ],
-      );
-      return rows[0] ? toPersona((await q(`${PERSONA_SELECT} WHERE p.id = $1`, [id]))[0]!) : null;
+    async update(id, fields, by, restoredFrom) {
+      return withPgTransaction(await pool(), async (db) => {
+        const user = await ensureUserIn(db, foldPrincipalId(by));
+        const changed = await db.query(
+          `UPDATE personas SET
+             name = COALESCE(btrim($2), name),
+             description = COALESCE($3, description),
+             instructions = COALESCE($4, instructions),
+             icon = CASE WHEN $5 THEN $6::jsonb ELSE icon END,
+             updated_at = now()
+           WHERE id = $1
+             AND (name, description, instructions, icon::text) IS DISTINCT FROM
+                 (COALESCE(btrim($2), name), COALESCE($3, description), COALESCE($4, instructions),
+                  CASE WHEN $5 THEN $6::jsonb ELSE icon END::text)
+           RETURNING id`,
+          [
+            id,
+            fields.name ?? null,
+            fields.description ?? null,
+            fields.instructions ?? null,
+            fields.icon !== undefined,
+            fields.icon ? JSON.stringify(fields.icon) : null,
+          ],
+        );
+        if (changed.rows.length) await db.query(RECORD_VERSION, [id, restoredFrom ?? null, user]);
+        const rows = (await db.query(`${PERSONA_SELECT} WHERE p.id = $1`, [id])).rows;
+        return rows[0] ? toPersona(rows[0]) : null;
+      });
+    },
+    async versions(id) {
+      return (await q(`${VERSION_SELECT} WHERE v.persona_id = $1 ORDER BY v.version DESC`, [id])).map(toVersion);
+    },
+    async version(id, version) {
+      const rows = await q(`${VERSION_SELECT} WHERE v.persona_id = $1 AND v.version = $2`, [id, version]);
+      return rows[0] ? toVersion(rows[0]) : null;
     },
     async remove(id) {
       const rows = await q("DELETE FROM personas WHERE id = $1 RETURNING id", [id]);

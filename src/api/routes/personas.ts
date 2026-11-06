@@ -109,6 +109,23 @@ async function deletePersona(ctx: ApiCtx): Promise<void> {
   respond(ctx, await personas.remove(principalId, ctx.params.id!), "deleted");
 }
 
+async function listPersonaVersions(ctx: ApiCtx): Promise<void> {
+  const personas = service(ctx);
+  const principalId = personas && principalOf(ctx, "query");
+  if (!personas || !principalId) return;
+  respond(ctx, await personas.versions(principalId, ctx.params.id!), "versions");
+}
+
+async function restorePersonaVersion(ctx: ApiCtx): Promise<void> {
+  const personas = service(ctx);
+  const principalId = personas && principalOf(ctx, "body");
+  if (!personas || !principalId) return;
+  const version = Number(ctx.params.version);
+  if (!Number.isInteger(version) || version < 1)
+    return sendJson(ctx.res, 400, { error: "bad_request", message: "version must be a positive integer" });
+  respond(ctx, await personas.restore(principalId, ctx.params.id!, version), "persona");
+}
+
 async function setPersonaAccess(ctx: ApiCtx): Promise<void> {
   const personas = service(ctx);
   const principalId = personas && principalOf(ctx, "body");
@@ -173,11 +190,18 @@ export const personaRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...withActor("query.principalId", [
     { method: "GET", path: "/v1/personas", auth: "either", handle: listPersonas },
     { method: "GET", path: "/v1/personas/:id", auth: "either", handle: getPersona },
+    { method: "GET", path: "/v1/personas/:id/versions", auth: "either", handle: listPersonaVersions },
   ]),
   ...withActor("body.principalId", [
     { method: "POST", path: "/v1/personas", auth: "either", handle: createPersona },
     { method: "PATCH", path: "/v1/personas/:id", auth: "either", handle: updatePersona },
     { method: "DELETE", path: "/v1/personas/:id", auth: "either", handle: deletePersona },
+    {
+      method: "POST",
+      path: "/v1/personas/:id/versions/:version/restore",
+      auth: "either",
+      handle: restorePersonaVersion,
+    },
     { method: "PUT", path: "/v1/personas/:id/access", auth: "either", handle: setPersonaAccess },
     { method: "POST", path: "/v1/personas/:id/credentials", auth: "either", handle: attachCredential },
     { method: "DELETE", path: "/v1/personas/:id/credentials/:grantId", auth: "either", handle: detachCredential },

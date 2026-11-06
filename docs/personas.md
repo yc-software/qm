@@ -19,6 +19,11 @@ foreign keys to `users(id)` exist wherever users are merged. The authoritative s
 - `persona_access`: one row per `(persona_id, grantee_scope_id)` with `role` owner, write
   or read, `granted_by UUID REFERENCES users(id)`, `granted_at`. Deleting the persona
   deletes its rows.
+- `persona_versions` (migration `users/v2/0005-persona-versions`): one row per
+  `(persona_id, version)` holding the name, description, instructions and icon as they
+  were saved, `edited_by UUID REFERENCES users(id)`, `edited_at`, and `restored_from`
+  when the save was a rollback. Creating a persona writes version 1; an edit that changes
+  nothing writes no version. Deleting the persona deletes its versions.
 - `sessions.persona_id`: nullable, no foreign key; a deleted persona just stops applying.
 
 Roles live in their own table rather than in `acl_grants`, whose permissions are only
@@ -36,7 +41,8 @@ notebook, and keychain grants to `persona:<id>`.
 | read  | chat; see its instructions, access list and attached credential names       |
 
 Holders are people (`personal:`), teams (`team:`), the org (`org:`) or Slack channels
-(`channel:`). A channel grant only applies to conversations in that channel. A person's
+(`channel:`). A channel can only hold read, and its grant only applies to conversations in
+that channel. A person's
 role is the highest one reaching them. Every persona keeps at least one owner.
 
 Checks sit where every path already flows: turn resolution (below) and the scope checks
@@ -57,11 +63,30 @@ A session's `persona_id` is set from the Personas page ("Chat") or by the agent
 If the sender has no role, the persona is skipped and the block says so. Writes (memory,
 files, crons) stay in the conversation's scope.
 
+The turn's delivery destination carries the persona's id and name, so anything it posts to
+Slack (replies, `reach` messages, cron output) ends with a `Persona: <name>` context line
+linking to the persona's page, next to the cron settings link when there is one.
+
 Unlike a project, a persona is not a place conversations live. A conversation with a
 persona stays in the scope it started in (your DM, a channel, a group), so only the
 people who could already see that conversation can see it. Holding a role on a persona,
 even owner, shows you nothing of other people's chats with it; the sidebar groups only
 your own conversations under the persona.
+
+## Page
+
+`/personas/<id>` is the persona's page. Under its instructions it has one section each for
+skills, crons, credentials, Slack channels, who has access, and history, each with its own
+add control for people whose role allows it:
+
+- **Skills**: "New skill" opens the skill editor homed in `persona:<id>`; "Ask QM" opens a
+  chat wearing the persona with a request started.
+- **Crons**: "New cron" opens a chat wearing the persona; a cron made there runs as it.
+- **Credentials** (owner): attach one of your own credentials or detach one.
+- **Slack channels** (owner): search channels you are in and add one with read access.
+- **History**: loads the versions on demand, shows what each changed (instructions as a
+  line diff), and rolls back to any of them for writers. A rollback is saved as a new
+  version, so nothing is lost.
 
 ## Forking
 
@@ -74,5 +99,6 @@ access are never copied.
 
 `GET|POST /v1/personas`, `GET|PATCH|DELETE /v1/personas/:id`,
 `PUT /v1/personas/:id/access`, `POST /v1/personas/:id/credentials`,
-`DELETE /v1/personas/:id/credentials/:grantId`, `PUT /v1/sessions/:id/persona`. Listed in
+`DELETE /v1/personas/:id/credentials/:grantId`, `GET /v1/personas/:id/versions`,
+`POST /v1/personas/:id/versions/:version/restore`, `PUT /v1/sessions/:id/persona`. Listed in
 `/v1/apis` when the flag is on.
