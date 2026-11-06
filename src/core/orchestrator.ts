@@ -2033,20 +2033,35 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             }),
           ).catch(async (error: unknown) => {
             reportFailure("orchestrator: record approval decision", error, requestId);
-            const recorded = (await deps.sessions.getItems(session.id).catch(() => null))?.some(
-              (item) => item.kind === "ElicitationResponse" && item.elicitId === requestId,
+            const recheck = await deps.sessions.getItems(session.id).then(
+              (items) =>
+                items.some((item) => item.kind === "ElicitationResponse" && item.elicitId === requestId)
+                  ? "recorded"
+                  : "absent",
+              (recheckError: unknown) => {
+                reportFailure("orchestrator: recheck approval decision", recheckError, requestId);
+                return "failed" as const;
+              },
             );
-            if (recorded === false)
-              await pending
-                .put(requestId, claimed)
-                .catch((restoreError: unknown) =>
-                  reportFailure("orchestrator: restore approval card", restoreError, requestId),
-                );
+            let restored = false;
+            if (recheck === "absent")
+              restored = await pending.put(requestId, claimed).then(
+                () => true,
+                (restoreError: unknown) => {
+                  reportFailure("orchestrator: restore approval card", restoreError, requestId);
+                  return false;
+                },
+              );
             audit({
               action: `command_approval.${decided.approved ? "approve" : "deny"}`,
               resource: requestId,
               status: "refused",
-              detail: JSON.stringify({ approvalOutcome: "decision_unrecorded", error: errMessage(error) }),
+              detail: JSON.stringify({
+                approvalOutcome: "decision_unrecorded",
+                recheck,
+                restored,
+                error: errMessage(error),
+              }),
             });
             throw error;
           });

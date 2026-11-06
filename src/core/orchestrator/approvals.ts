@@ -54,7 +54,9 @@ export function approvalRefusal(
 }
 
 export function approvedToolCall(requestId: string, record: PendingApprovalRecord): ApprovedToolCall | undefined {
-  return record.call ? { callId: approvedCallId(requestId), requestId, ...record.call } : undefined;
+  return record.call
+    ? { callId: approvedCallId(requestId, record.createdAt ?? 0), requestId, ...record.call }
+    : undefined;
 }
 
 type ApprovalAudit = (event: { action: string; resource: string; status: "ok" | "refused"; detail?: string }) => void;

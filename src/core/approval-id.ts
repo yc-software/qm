@@ -1,4 +1,3 @@
-import { randomBytes } from "node:crypto";
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import { hashId } from "../util/crypto.ts";
 
@@ -20,6 +19,6 @@ export function approvalCardId(callKey: string): string {
   return callKey.slice(TOOL_CALL_APPROVAL_PREFIX.length, TOOL_CALL_APPROVAL_PREFIX.length + 12);
 }
 
-export function approvedCallId(requestId: string): string {
-  return `approved_${requestId}_${randomBytes(4).toString("hex")}`;
+export function approvedCallId(requestId: string, issuedAt: number): string {
+  return `approved_${requestId}_${issuedAt}`;
 }

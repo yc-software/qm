@@ -6,6 +6,7 @@ import { approvedCallsOnEarlierAttempt } from "../src/core/orchestrator/approval
 import { createModelRoutes } from "../src/model/model-route.ts";
 import type { AgentTurnInput, SteeredApproval } from "../src/agent/agent.ts";
 import type { Item, NewItem } from "../src/sessions/items.ts";
+import { DuplicateCallError } from "../src/sessions/session-store.ts";
 import type { ToolContext } from "../src/tools/primitives.ts";
 import type { ScopeId, TurnRequest } from "../src/types.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
@@ -154,6 +155,36 @@ test("an approved call whose tool is missing records an error result instead of 
   assert.ok(result);
   assert.equal(result.isError, true);
   assert.match(String(result.text), /not available on this turn/);
+});
+
+test("an approved call whose call id is already recorded does not run again", async () => {
+  const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }) });
+  const sink: Sink = [];
+  const queries: string[] = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => sse(textReplyEvents("noted"))) as typeof globalThis.fetch;
+  const call = { callId: "approved_req5_1700", requestId: "req5", tool: "history", input: { query: "noon" } };
+  try {
+    const base = turnInput("approved-dup", sink, {});
+    await agent.runTurn({
+      ...base,
+      tools: {
+        async history(q: string) {
+          queries.push(q);
+          return ["ran"];
+        },
+      } as unknown as ToolContext,
+      approvedToolCalls: [call],
+      emit: async (item) => {
+        if (item.kind === "ToolCall" && item.callId === call.callId)
+          throw new DuplicateCallError("approved-dup", [call.callId]);
+        return base.emit(item);
+      },
+    });
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  assert.deepEqual(queries, [], "the database's one-call-per-id rule stops a second run before the tool executes");
 });
 
 function approvalRequest(requestId: string, approved: boolean): TurnRequest {

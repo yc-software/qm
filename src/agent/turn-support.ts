@@ -6,6 +6,7 @@ import type { AgentTurnInput, ApprovedToolCall } from "./agent.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { INTERRUPTED_TOOL_RESULT } from "./context-compaction.ts";
 import type { Item, NewItem } from "../sessions/items.ts";
+import { DuplicateCallError } from "../sessions/session-store.ts";
 import type { StepFields } from "./step-recorder.ts";
 
 export type BridgedTool = {
@@ -114,6 +115,8 @@ function toolCallRoute(
   return connector ? { tool: connector, args: { tool: call.tool, args: call.input } } : null;
 }
 
+const ALREADY_RAN = "[error] this approved call was already started earlier, so it was not run again";
+
 async function runToolCallOnce(
   call: ResumableToolCall,
   ref: ToolContextRef,
@@ -176,7 +179,13 @@ async function runToolCallOnce(
       content = [{ type: "text", text }];
       if (!result) await recordResult(true, text);
     } else {
-      await recordCall();
+      try {
+        await recordCall();
+      } catch (error) {
+        if (!(error instanceof DuplicateCallError)) throw error;
+        console.error(`[agent] approved call: ${call.tool} call ${call.callId} was already recorded; not run again`);
+        return { items, text: ALREADY_RAN, content: [{ type: "text", text: ALREADY_RAN }], isError: true };
+      }
       content = (await route.tool.execute(call.callId, route.args)).content ?? [];
       text = content.flatMap((block) => (typeof block.text === "string" ? [block.text] : [])).join("\n");
       isError = false;
