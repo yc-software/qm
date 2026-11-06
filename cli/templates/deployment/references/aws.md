@@ -41,8 +41,20 @@ terraform -chdir=infra apply qm.tfplan
 ```
 
 Set `publicUrl`, `env.core.AWS_PUBLIC_ORIGIN_URL`, and `aws.deployRoleArn` from
-the Terraform outputs. `apiUrl` goes through the front door on every target, so
-only the front door's pass-through paths reach core's API. Finish `npm exec qm -- setup .`, render again, and apply.
+the Terraform outputs. Finish `npm exec qm -- setup .`, render again, and apply.
+
+When `apiUrl` names a host other than `publicUrl`'s, or `env.core.DEPLOY_APPS_DOMAIN`
+is set, the ALB sends those hosts (the `apiUrl` host and `*.<apps domain>`) by
+host-header rules straight to core's API port 8080, so machine callers such as
+the egress proxy and sandboxes reach the whole API rather than only the front
+door's pass-through paths. The scaffold renders them as `core_public_hosts` and
+requires `certificate_arn`. Core's ECS service is attached to two target groups:
+the front door on port 8000 (named by `aws.services.core.targetGroup` on
+external infrastructure) and the API, found as core's one attachment on
+container port 8080. On external infrastructure, the listener default forwards
+to the front-door group, plugin `publicPaths` rules come first, and each core
+host rule has only a host-header condition and forwards to the API group. `qm up` and `qm check --live` reject
+any other rule or target group and wait for healthy targets in both groups.
 
 ## Publish the agent computer and deploy
 

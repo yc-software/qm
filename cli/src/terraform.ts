@@ -1,3 +1,4 @@
+import { awsCoreHostnames } from "./aws-routing.ts";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
@@ -13,6 +14,7 @@ const DERIVED_VARS = new Set([
   "region",
   "cluster_name",
   "public_url",
+  "core_public_hosts",
   "cloud_map_namespace",
   "secrets_prefix",
   "github_oidc_provider_arn",
@@ -174,6 +176,7 @@ function derivedValues(
     }),
   );
   const secrets = computedSecrets(config);
+  const corePublicHosts = aws.sharedAlb ? [] : awsCoreHostnames(config).sort();
   return {
     strings: {
       org_id: config.orgId,
@@ -193,6 +196,7 @@ function derivedValues(
       ...(aws.dbInstanceClass ? { db_instance_class: aws.dbInstanceClass } : {}),
     },
     json: {
+      ...(corePublicHosts.length ? { core_public_hosts: corePublicHosts } : {}),
       services,
       secret_names: secrets.map((secret) => secret.name),
     },
@@ -241,8 +245,9 @@ export function terraformVarsDrift(config: QmConfig, existing: string): string[]
   for (const [name, value] of Object.entries(strings)) {
     if (hclString(existing, name) !== value) drift.push(name);
   }
-  for (const [name, value] of Object.entries(json)) {
-    if (canonicalJson(hclJson(existing, name)) !== canonicalJson(value)) drift.push(name);
+  for (const [name, value] of Object.entries({ core_public_hosts: [], ...json })) {
+    const live = hclJson(existing, name) ?? (name === "core_public_hosts" ? [] : undefined);
+    if (canonicalJson(live) !== canonicalJson(value)) drift.push(name);
   }
   return drift;
 }
@@ -272,6 +277,11 @@ export function renderTerraformVars(config: QmConfig, configDir: string): void {
   assertTerraformScaffoldSupportsConfig(config, configDir);
   const existing = readFileSync(path, "utf8");
   const declared = declaredInDir(configDir);
+  if (declared && !declared.includes("core_public_hosts") && derivedValues(config).json["core_public_hosts"]) {
+    throw new CliError(
+      "the vendored AWS scaffold predates core API host routing; update infra/variables.tf and infra/main.tf from the current scaffold before configuring apiUrl or the apps domain",
+    );
+  }
   writeFileSync(path, terraformVars(config, existing, ...(declared ? [declared] : [])));
   ok("rendered infra/terraform.tfvars from the QM deployment config");
 }

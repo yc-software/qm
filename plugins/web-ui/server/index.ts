@@ -1,6 +1,7 @@
 import "./instrument.ts";
 import { handleVoiceRoute, sweepDictationSpool } from "./voice-routes.ts";
 import { browserErrorConfig } from "./browser-error-config.ts";
+import { productAnalyticsConfig } from "./analytics-config.ts";
 import { reportBackendError } from "../../chassis/src/error-reporting.ts";
 import { errChain, swallow } from "../../chassis/src/errors.ts";
 import { appEditSlug } from "../src/app-edit.ts";
@@ -187,23 +188,7 @@ const CONTENT_TYPES: Record<string, string> = {
   ".wasm": "application/wasm",
 };
 
-const analyticsKey = process.env.POSTHOG_API_KEY?.trim();
-if (analyticsKey && !/^phc_[A-Za-z0-9]+$/.test(analyticsKey))
-  throw new Error("POSTHOG_API_KEY must be a public project ingestion token");
-const analyticsHost = new URL((analyticsKey && process.env.POSTHOG_HOST?.trim()) || "https://us.i.posthog.com");
-if (
-  analyticsKey &&
-  (analyticsHost.protocol !== "https:" ||
-    analyticsHost.username ||
-    analyticsHost.password ||
-    analyticsHost.search ||
-    analyticsHost.hash ||
-    analyticsHost.pathname !== "/")
-) {
-  throw new Error("POSTHOG_HOST must be an HTTPS origin");
-}
-const analyticsConfig = analyticsKey ? { apiKey: analyticsKey, host: analyticsHost.origin } : undefined;
-
+const { analytics: analyticsConfig, origins: analyticsOrigins } = productAnalyticsConfig(process.env);
 const browserErrors = browserErrorConfig(process.env);
 const browserErrorOrigin = browserErrors ? new URL(browserErrors.dsn).origin : undefined;
 
@@ -213,7 +198,7 @@ const SPA_CSP = [
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https:",
   "font-src 'self' data:",
-  `connect-src 'self'${analyticsConfig ? ` ${analyticsConfig.host}` : ""}${browserErrorOrigin ? ` ${browserErrorOrigin}` : ""}`,
+  `connect-src 'self'${analyticsOrigins.map((origin) => ` ${origin}`).join("")}${browserErrorOrigin ? ` ${browserErrorOrigin}` : ""}`,
   "frame-src 'self' data: https:",
   "worker-src 'self' blob:",
   "frame-ancestors 'self'",

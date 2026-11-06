@@ -472,8 +472,7 @@ export async function retention(ctx: ApiCtx): Promise<void> {
   if (!actor) return;
   audit(deps, { principalId: actor.id, action: "retention.read", resource: "retention", scopeLabel: scope });
   const sessionCount = (await deps.sessions?.countSessions()) ?? 0;
-  const participants = (await deps.sessions?.listParticipants()) ?? [];
-  const turns = (await deps.sessions?.attributedTurns()) ?? [];
-  const report = computeRetention({ sessionCount, participants, turns, nowMs: Date.now() });
+  const activity = (await deps.admin?.users.activity()) ?? [];
+  const report = computeRetention({ sessionCount, activity, nowMs: Date.now() });
   return sendJson(res, 200, { scopeId: scope, ...report });
 }
