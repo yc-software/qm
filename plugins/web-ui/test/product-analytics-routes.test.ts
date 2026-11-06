@@ -60,6 +60,14 @@ test("analytics config is authenticated, company-scoped and omitted during imper
   const response = await fetch(`${base}/me`, { headers: headers() });
   const body = await response.json();
   assert.deepEqual(body.analytics, { apiKey: "phc_test", host: "https://us.i.posthog.com" });
+  const csp = (await fetch(`${base}/connectors/oauth/test/callback`)).headers.get("content-security-policy")!;
+  assert.deepEqual(
+    csp
+      .split(";")
+      .map((directive) => directive.trim().split(/\s+/))
+      .find(([name]) => name === "connect-src"),
+    ["connect-src", "'self'", "https://us.i.posthog.com", "https://us-assets.i.posthog.com"],
+  );
   assert.equal(body.org, "acme");
   assert.equal(body.user, "alice@example.com");
   assert.equal((await (await fetch(`${base}/me`, { headers: headers("admin") })).json()).analytics, undefined);
