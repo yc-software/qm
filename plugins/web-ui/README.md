@@ -302,18 +302,18 @@ the portal serves the same web application, so it needs no separate SDK.
 Events are explicit pageviews by navigation view, accepted `message_sent` events,
 and `session_started` for the first user message in a chat. Company grouping uses
 `CORE_ORG_ID`; user identities combine company and authenticated principal. Browser
-analytics is disabled during impersonation. Autocapture, replay, exception capture,
+analytics is disabled during impersonation. Autocapture, exception capture,
 performance capture and feature flags are disabled. Event properties exclude chat
 content, URLs, query strings, titles and referrers. Delivery is best effort.
 
-Set `POSTHOG_SESSION_RECORDING` to a JSON object of PostHog
-[`session_recording` options](https://posthog.com/docs/session-replay/privacy) to
-enable session replay with the deployment's own masking. Recording then follows the
-PostHog project's replay setting. Console logs, network headers and bodies are never
-recorded, feature flags stay off, the recorder is bundled rather than loaded from
-PostHog's CDN, and the event property filter still applies; replay snapshots keep their
-payload. On PostHog Cloud the regional assets host that serves project remote config
-is allowed in the content security policy.
+Session replay follows the PostHog project's own settings: recording runs only when
+the project enables it, and masking comes from the project's privacy and masking
+settings, so both are managed in PostHog rather than in deployment config. Console
+logs and network headers and bodies are never recorded, feature flags stay off, the
+recorder is bundled rather than loaded from PostHog's CDN, and the event property
+filter still applies; replay snapshots keep their payload. On PostHog Cloud the
+regional assets host that serves project remote config is allowed in the content
+security policy.
 
 Set the same variables on core to capture `app_published` after a successful new
 application or version deployment. Publications use the application's creator and

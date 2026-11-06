@@ -49,10 +49,9 @@ export async function initializeAnalytics(me: Me, view = "chats"): Promise<void>
   lastCapturedView = undefined;
   if (!me.analytics?.apiKey || me.impersonatedBy) return;
   try {
-    const sessionRecording = me.analytics.sessionRecording;
     const [{ default: posthog }] = await Promise.all([
       import("posthog-js"),
-      ...(sessionRecording ? [import("posthog-js/dist/posthog-recorder")] : []),
+      import("posthog-js/dist/posthog-recorder"),
     ]);
     if (current !== generation) return;
     const options: Partial<PostHogConfig> = {
@@ -64,22 +63,14 @@ export async function initializeAnalytics(me: Me, view = "chats"): Promise<void>
       capture_pageleave: false,
       capture_exceptions: false,
       capture_performance: false,
-      disable_session_recording: true,
+      enable_recording_console_log: false,
+      session_recording: { recordHeaders: false, recordBody: false },
       disable_surveys: true,
       disable_external_dependency_loading: true,
-      advanced_disable_flags: true,
+      advanced_disable_feature_flags: true,
       person_profiles: "identified_only",
       save_referrer: false,
       save_campaign_params: false,
-      ...(sessionRecording
-        ? {
-            disable_session_recording: false,
-            advanced_disable_flags: false,
-            advanced_disable_feature_flags: true,
-            enable_recording_console_log: false,
-            session_recording: { ...sessionRecording, recordHeaders: false, recordBody: false },
-          }
-        : {}),
       before_send: (event) => {
         if (!event) return null;
         const snapshot = event.event === "$snapshot";
