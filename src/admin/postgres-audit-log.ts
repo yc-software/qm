@@ -58,10 +58,16 @@ export function createPostgresAuditLog(connectionString: string): AuditLog {
       id: "admin/audit-log/0002",
       statements: [`CREATE INDEX IF NOT EXISTS audit_log_by_action ON audit_log(action, at DESC)`],
     },
+    {
+      id: "admin/audit-log/0003",
+      statements: [
+        `CREATE INDEX CONCURRENTLY IF NOT EXISTS audit_log_by_action_at_id ON audit_log(action, at DESC, id DESC)`,
+      ],
+    },
   ]);
 
   const pendingWrites = new Set<Promise<void>>();
-  return {
+  const log: AuditLog = {
     record(e) {
       const write = q(`INSERT INTO audit_log(${COLS}) VALUES ($1,$2,$3,$4,$5,$6,$7)`, [
         e.at,
@@ -91,6 +97,17 @@ export function createPostgresAuditLog(connectionString: string): AuditLog {
     },
     async tail({ limit, scopeLabel, action, since, resourceContains }) {
       await Promise.allSettled(pendingWrites);
+      // One indexed walk per action, merged here: `action = ANY(...)` let the planner walk the whole
+      // log newest-first looking for rare actions (Security flags timed out on prod).
+      if (Array.isArray(action) && action.length !== 1) {
+        const batches = await Promise.all(
+          action.map((a) => log.tail({ limit, scopeLabel, action: a, since, resourceContains })),
+        );
+        return batches
+          .flat()
+          .sort((a, b) => b.at - a.at)
+          .slice(0, limit);
+      }
       const params: unknown[] = [];
       const conds: string[] = [];
       if (scopeLabel !== undefined) {
@@ -98,8 +115,8 @@ export function createPostgresAuditLog(connectionString: string): AuditLog {
         conds.push(`scope_label = $${params.length}`);
       }
       if (action !== undefined) {
-        params.push(action);
-        conds.push(typeof action === "string" ? `action = $${params.length}` : `action = ANY($${params.length})`);
+        params.push(typeof action === "string" ? action : action[0]);
+        conds.push(`action = $${params.length}`);
       }
       if (since !== undefined) {
         params.push(since);
@@ -118,4 +135,5 @@ export function createPostgresAuditLog(connectionString: string): AuditLog {
       return rows.map(rowToEvent);
     },
   };
+  return log;
 }

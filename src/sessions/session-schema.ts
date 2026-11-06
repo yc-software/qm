@@ -427,6 +427,14 @@ const SESSION_PERSONA: PgMigrationDefinition = {
   statements: [`SET LOCAL lock_timeout = '5s'`, `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS persona_id TEXT`],
 };
 
+const USER_TURNS_BY_AUTHOR: PgMigrationDefinition = {
+  id: "sessions/store/0057-user-turns-by-author",
+  statements: [
+    `CREATE INDEX CONCURRENTLY IF NOT EXISTS items_user_turns_by_author ON items(tenant_id, author, created_at)
+      WHERE author IS NOT NULL AND kind IN ('UserMessage', 'SteeringMessage') AND NOT (body @> '{"overheard":true}')`,
+  ],
+};
+
 export const SESSION_MIGRATIONS = [
   TENANCY_BASE,
   SESSION_SCHEMA,
@@ -439,6 +447,7 @@ export const SESSION_MIGRATIONS = [
   PARTICIPANT_MEMBERSHIP,
   DROP_TENANT_PREBUILD_INDEXES,
   SESSION_PERSONA,
+  USER_TURNS_BY_AUTHOR,
 ];
 
 export const ancestry = (seed: string): string => `ancestry AS (
