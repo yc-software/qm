@@ -88,9 +88,9 @@ function page(o: {
   icon: string;
   warn?: boolean;
   heading: string;
-  msg: string;
+  msg?: string;
   body?: string;
-  help: string;
+  help?: string;
 }): string {
   return `<!doctype html>
 <html lang="en">
@@ -106,9 +106,9 @@ ${STYLE}
     <section class="card" aria-labelledby="t">
       <div class="icon${o.warn ? " warn" : ""}" aria-hidden="true">${o.icon}</div>
       <h1 id="t">${escapeHtml(o.heading)}</h1>
-      <p class="msg">${escapeHtml(o.msg)}</p>
+      ${o.msg ? `<p class="msg">${escapeHtml(o.msg)}</p>` : ""}
       ${o.body ?? ""}
-      <p class="help">${escapeHtml(o.help)}</p>
+      ${o.help ? `<p class="help">${escapeHtml(o.help)}</p>` : ""}
       ${o.trustedSignInLabel ? `<div class="divider">OR</div><a class="btn alternative" href="/auth/trusted/login">Sign in with ${escapeHtml(o.trustedSignInLabel)}</a>` : ""}
     </section>
   </main>
@@ -128,9 +128,19 @@ export function signInPage(o: {
   passwordProblem?: string;
 }): string {
   const hidden = `<input type="hidden" name="request" value="${escapeHtml(o.requestToken)}">`;
-  const trusted = o.trustedSignInLabel
-    ? `<a class="btn" href="/auth/trusted/login">Sign in with ${escapeHtml(o.trustedSignInLabel)}</a><div class="divider">OR</div>`
+  const trustedButton = o.trustedSignInLabel
+    ? `<a class="btn" href="/auth/trusted/login">Sign in with ${escapeHtml(o.trustedSignInLabel)}</a>`
     : "";
+  if (trustedButton && !o.emailLink && !o.password) {
+    return page({
+      title: "Sign in",
+      brandName: o.brandName,
+      icon: LOCK_ICON,
+      heading: `Sign in to ${o.brandName}`,
+      body: trustedButton,
+    });
+  }
+  const trusted = trustedButton ? `${trustedButton}<div class="divider">OR</div>` : "";
   const secondary = Boolean(o.trustedSignInLabel) || (o.emailLink && o.password);
   const emailForm = o.emailLink
     ? `${o.problem ? `<p class="reason"><strong>Try again</strong>${escapeHtml(o.problem)}</p>` : ""}<form method="post" action="${escapeHtml(o.action)}">

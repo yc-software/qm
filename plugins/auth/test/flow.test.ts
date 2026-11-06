@@ -781,8 +781,10 @@ test("trusted sign-in remains available when email is unavailable", async () => 
   const h = await startHarness({ trustedSignInLabel: "Company SSO", env: { RESEND_API_KEY: undefined } });
   try {
     const response = await fetch(`${h.base}/authorize?${authorizeQuery()}`);
-    assert.equal(response.status, 503);
-    assert.match(await response.text(), /href="\/auth\/trusted\/login"/);
+    assert.equal(response.status, 200);
+    const html = await response.text();
+    assert.match(html, /href="\/auth\/trusted\/login"/);
+    assert.doesNotMatch(html, /Email delivery isn't configured|<form/);
   } finally {
     await h.close();
   }

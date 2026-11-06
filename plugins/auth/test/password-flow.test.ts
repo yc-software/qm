@@ -224,3 +224,28 @@ test("a remembered browser from a password sign-in silently reauthorizes like an
   assert.equal(again.status, 302);
   assert.equal(new URL(again.headers.get("location")!).searchParams.get("state"), "again");
 });
+
+test("with email sign-in off, a trusted provider gets a page with only the heading and its button", async (t) => {
+  const trustedOnly = await startHarness({ env: { AUTH_EMAIL_SIGN_IN: "off" }, trustedSignInLabel: "Acme SSO" });
+  t.after(() => trustedOnly.close());
+  const page = await fetch(`${trustedOnly.base}/authorize?${authorizeQuery({ code_challenge: pkcePair().challenge })}`);
+  assert.equal(page.status, 200);
+  const html = await page.text();
+  const card = html.slice(html.indexOf('<section class="card"'), html.indexOf("</section>"));
+  assert.match(card, /<h1 id="t">Sign in to qm<\/h1>/);
+  assert.match(card, /<a class="btn" href="\/auth\/trusted\/login">Sign in with Acme SSO<\/a>/);
+  assert.doesNotMatch(card, /<p class="msg">|<p class="help">|divider|<form|<input|Email/);
+
+  const refused = await fetch(
+    `${trustedOnly.base}/authorize`,
+    form({ request: "x", method: "email", email: "admin@example.com" }),
+  );
+  assert.equal(refused.status, 503);
+  assert.deepEqual(trustedOnly.mailer.sent, []);
+
+  const both = await startHarness({ trustedSignInLabel: "Acme SSO" });
+  t.after(() => both.close());
+  const bothHtml = (await signInPage(both, pkcePair().challenge)).html;
+  assert.match(bothHtml, /Sign in with Acme SSO/);
+  assert.match(bothHtml, /Email me a sign-in link/);
+});
