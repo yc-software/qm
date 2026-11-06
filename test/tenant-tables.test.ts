@@ -13,7 +13,6 @@ import { appUrl, ownerUrl } from "./support/test-tenant.ts";
 const UNTENANTED: Record<string, string> = {
   qm_schema_migrations: "records which migrations the whole database has applied",
   tenants: "is the tenant registry, keyed by the tenant id itself and read through its own policy",
-  tenant_hosts: "maps each hostname to exactly one tenant, so the hostname alone is its key",
   qm_settings: "holds install-level settings the process reads, no tenant data",
   source_auth_replay: "holds random replay nonces for signed internal calls",
   instance_heartbeats: "records the liveness of core processes",
@@ -71,7 +70,7 @@ describe("tenant tables", () => {
     assert.deepEqual(gaps, []);
     const tenantedListed = rows
       .filter((row) => Object.hasOwn(UNTENANTED, String(row.name)) && row.has_column)
-      .filter((row) => !["tenants", "tenant_hosts"].includes(String(row.name)))
+      .filter((row) => String(row.name) !== "tenants")
       .map((row) => String(row.name));
     assert.deepEqual(tenantedListed, []);
     assert.ok(names.includes("superserve_config_epochs"));
