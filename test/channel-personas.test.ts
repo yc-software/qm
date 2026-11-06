@@ -572,6 +572,38 @@ test("a persona's last active owner leaving hands it to the default admin, and o
   );
 });
 
+test("offboarding skips a leaving default admin, and a persona with an owner who stays is not handed over", async () => {
+  const { built, personas } = await setup();
+  await built.app.upsertDirectory([
+    ...(await built.directory.list()),
+    { principalId: "admin-bob", displayName: "Bob Admin", type: "internal" },
+  ]);
+  const solo = ok(await personas.create(ADMIN, { name: "Solo" }));
+  const shared = ok(await personas.create(CY, { name: "Shared" }));
+  ok(
+    await personas.setAccess(CY, shared.id, [
+      { scopeId: personal(CY), role: "owner" },
+      { scopeId: personal(DAN), role: "owner" },
+    ]),
+  );
+
+  const { call, close } = serve(built);
+  try {
+    const planned = async (who: string, headers: Record<string, string>) =>
+      (
+        (await (await call("POST", `/v1/admin/users/${who}/offboard`, {}, headers)).json()) as {
+          changes: Array<Record<string, unknown>>;
+        }
+      ).changes.filter((c) => c.kind === "persona");
+    assert.deepEqual(await planned(ADMIN, { "x-admin-actor": "admin-bob@default-org" }), [
+      { kind: "persona", id: solo.id, label: "Solo → Bob Admin", action: "transfer_owner" },
+    ]);
+    assert.deepEqual(await planned(CY, ADMIN_HEADER), []);
+  } finally {
+    await close();
+  }
+});
+
 test("standing orders set from a channel turn are locked to the persona's writers", async () => {
   const { built, wear } = await setup();
   ok(await wear());
