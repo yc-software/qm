@@ -1,4 +1,6 @@
 import type * as Sentry from "@sentry/node";
+import { AsyncLocalStorage } from "node:async_hooks";
+import type { IncomingMessage } from "node:http";
 import { parseSampleRate, SPAN_STATUS_ERROR } from "./timing.ts";
 import { swallow } from "./errors.ts";
 
@@ -47,8 +49,19 @@ const MAX_SENT_SPANS = 500;
 const IDLE_CHECKOUT_SECONDS = 0.001;
 const HTTP_METHODS = new Set("GET HEAD POST PUT PATCH DELETE OPTIONS CONNECT TRACE".split(" "));
 type SamplingContext = Parameters<NonNullable<Sentry.NodeOptions["tracesSampler"]>>[0];
+export const REQUEST_ID_HEADERS = ["x-request-id", "x-amzn-requestid", "fly-request-id", "render-request-id"];
+const ROUTE_WORD = /^[a-z][a-z_.-]{0,39}$/;
 let client: typeof Sentry | undefined;
 let tracing = false;
+
+interface RequestContext {
+  surface: string;
+  method: string;
+  route: string;
+  requestId?: string;
+}
+
+const activeRequest = new AsyncLocalStorage<RequestContext>();
 
 export interface TraceCarrier {
   sentryTrace: string;
@@ -246,6 +259,7 @@ export function initializeErrorReporting(
     initialScope: { tags: { service, deployment: env.SENTRY_DEPLOYMENT ?? env.ORG_ID ?? env.CORE_ORG_ID } },
     shutdownTimeout: FLUSH_MS,
   });
+  sdk.addEventProcessor(tagActiveRequest);
   client = sdk;
   tracing = traced;
   process.on("unhandledRejection", (reason: unknown) => {
@@ -267,7 +281,58 @@ export function reportBackendError(error: unknown, code?: string, extra?: Record
   });
 }
 
+function requestIdOf(req: IncomingMessage): string | undefined {
+  for (const name of REQUEST_ID_HEADERS) {
+    const value = req.headers[name];
+    if (typeof value === "string" && value) return value.replace(/[^\w.:-]/g, "_").slice(0, 128);
+  }
+  return undefined;
+}
+
+function routeShape(url: string | undefined): string {
+  const path = (url ?? "/").split("?", 1)[0]!;
+  return path
+    .split("/")
+    .map((segment) => (segment === "" || ROUTE_WORD.test(segment) ? segment : ":id"))
+    .join("/");
+}
+
+export function withRequestContext<T>(surface: string, req: IncomingMessage, work: () => T): T {
+  const requestId = requestIdOf(req);
+  return activeRequest.run(
+    {
+      surface,
+      method: firstWord(req.method, HTTP_METHODS) ?? "HTTP",
+      route: routeShape(req.url),
+      ...(requestId ? { requestId } : {}),
+    },
+    work,
+  );
+}
+
+export function describeActiveRequest(): string | undefined {
+  const request = activeRequest.getStore();
+  if (!request) return undefined;
+  const id = request.requestId ? ` (request id ${request.requestId})` : "";
+  return `${request.surface} ${request.method} ${request.route}${id}`;
+}
+
+function tagActiveRequest<T extends { type?: string; tags?: Record<string, unknown> }>(event: T): T {
+  const request = activeRequest.getStore();
+  if (!request || event.type !== undefined) return event;
+  event.tags = {
+    ...event.tags,
+    "request.surface": request.surface,
+    "request.method": request.method,
+    "request.route": request.route,
+    ...(request.requestId ? { "request.id": request.requestId } : {}),
+  };
+  return event;
+}
+
 export function nameRequest(method: string, route: string): void {
+  const request = activeRequest.getStore();
+  if (request) request.route = route;
   if (!client || !tracing) return;
   try {
     const active = client.getActiveSpan();

@@ -1,7 +1,7 @@
 import { externalSlackCapabilityAllowed } from "./external-slack-capability.ts";
 import { MemoryDisclosureDenied } from "../memory/disclosure.ts";
 import { MemoryFactsMissing } from "../memory/facts.ts";
-import { nameRequest, reportBackendError } from "../../plugins/chassis/src/error-reporting.ts";
+import { nameRequest, reportBackendError, withRequestContext } from "../../plugins/chassis/src/error-reporting.ts";
 import {
   createServer as createHttpServer,
   type IncomingMessage,
@@ -495,7 +495,7 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
   const server = createHttpServer((req, res) => {
     req.on("error", () => res.destroy());
     res.on("error", () => res.destroy());
-    void front(req, res).catch((err: unknown) => respondError(req, res, err));
+    void withRequestContext("core", req, () => front(req, res)).catch((err: unknown) => respondError(req, res, err));
   });
   const { fastify, routing } = buildFastify(wiring, server);
   const ready = Promise.resolve(fastify.ready());
