@@ -16,7 +16,7 @@ import { createMcpClient, mcpResultText, type McpAuth, type McpClient, type McpL
 import type { McpServer, McpServerStore } from "./mcp-server-store.ts";
 import { attestableAudience, attestedPerson, OutsideAudience } from "../directory/person.ts";
 import type { AddressFetch } from "../util/network.ts";
-import { isSystemActor, type PrincipalType, type ScopeId } from "../types.ts";
+import { isSystemActor, type ScopeId } from "../types.ts";
 
 const REFRESH_INTERVAL_MS = 5 * 60_000;
 const CATALOG_TTL_MS = 60_000;
@@ -83,7 +83,7 @@ export interface McpToolDescriptor {
 export interface McpToolService {
   /** Current snapshot of injectable tools across enabled servers. */
   toolDefs(): McpToolDescriptor[];
-  toolDefsFor(principalId?: string, scopeId?: ScopeId, actorType?: PrincipalType): Promise<McpToolDescriptor[]>;
+  toolDefsFor(principalId?: string, scopeId?: ScopeId, actorAsked?: boolean): Promise<McpToolDescriptor[]>;
   /** Call a namespaced tool. Returns the tool's text output (clamped). */
   call(
     name: string,
@@ -91,14 +91,14 @@ export interface McpToolService {
     principalId?: string,
     approval?: string,
     scopeId?: ScopeId,
-    actorType?: PrincipalType,
+    actorAsked?: boolean,
   ): Promise<string>;
   needsApproval(
     name: string,
     args: Record<string, unknown>,
     principalId?: string,
     scopeId?: ScopeId,
-    actorType?: PrincipalType,
+    actorAsked?: boolean,
   ): Promise<boolean>;
   /** Force a registry re-read + tools/list refresh (admin save path, tests). */
   refresh(): Promise<void>;
@@ -156,19 +156,19 @@ function attestsHere(
   server: Pick<McpServer, "attestAudience">,
   principalId: string | undefined,
   scopeId: ScopeId | undefined,
-  actorType: PrincipalType | undefined,
+  actorAsked: boolean | undefined,
 ): boolean {
   if (attestableAudience(principalId, scopeId)) return true;
-  return server.attestAudience === "any" && actorType === "internal" && !!principalId && !isSystemActor(principalId);
+  return server.attestAudience === "any" && actorAsked === true && !!principalId && !isSystemActor(principalId);
 }
 
 function refuseOutsideAudience(
   server: McpServer,
   principalId: string | undefined,
   scopeId: ScopeId | undefined,
-  actorType: PrincipalType | undefined,
+  actorAsked: boolean | undefined,
 ): void {
-  if (server.attestActor && !attestsHere(server, principalId, scopeId, actorType))
+  if (server.attestActor && !attestsHere(server, principalId, scopeId, actorAsked))
     throw new OutsideAudience(`MCP server ${server.id}`);
 }
 
@@ -390,11 +390,11 @@ export function createMcpToolService(opts: {
   async function toolDefsFor(
     principalId?: string,
     scopeId?: ScopeId,
-    actorType?: PrincipalType,
+    actorAsked?: boolean,
   ): Promise<McpToolDescriptor[]> {
     const current = snapshot.filter((t) => {
       const attested = attestedServers.get(t.serverId);
-      return !attested || attestsHere(attested, principalId, scopeId, actorType);
+      return !attested || attestsHere(attested, principalId, scopeId, actorAsked);
     });
     const gated = perUserServers;
     if (!gated.size) return current;
@@ -419,7 +419,7 @@ export function createMcpToolService(opts: {
   return {
     toolDefs: () => snapshot,
     toolDefsFor,
-    async needsApproval(name, args, principalId, scopeId, actorType) {
+    async needsApproval(name, args, principalId, scopeId, actorAsked) {
       const def = snapshot.find((t) => t.name === name);
       if (!def) throw new Error(`unknown MCP tool: ${name}`);
       if (!def.catalog) return def.needsApproval;
@@ -427,20 +427,20 @@ export function createMcpToolService(opts: {
       try {
         const server = await opts.servers.get(def.serverId);
         if (!server || !server.enabled) throw new Error(`MCP server ${def.serverId} is not available`);
-        refuseOutsideAudience(server, principalId, scopeId, actorType);
+        refuseOutsideAudience(server, principalId, scopeId, actorAsked);
         return mcpToolNeedsApproval(server, (await catalogEntry(server, principalId, args.tool)).annotations);
       } catch (e) {
         record("call", callResource(def, args), `approval check error: ${errMessage(e)}`, principalId);
         throw e;
       }
     },
-    async call(name, args, principalId, approval, scopeId, actorType) {
+    async call(name, args, principalId, approval, scopeId, actorAsked) {
       const def = snapshot.find((t) => t.name === name);
       if (!def) throw new Error(`unknown MCP tool: ${name}`);
       const server = await opts.servers.get(def.serverId);
       if (!server || !server.enabled) throw new Error(`MCP server ${def.serverId} is not available`);
       try {
-        refuseOutsideAudience(server, principalId, scopeId, actorType);
+        refuseOutsideAudience(server, principalId, scopeId, actorAsked);
         if (def.catalog) return await callCatalog(server, args, principalId, approval);
         const client = await callerClient(server, principalId);
         if (def.signIn) {

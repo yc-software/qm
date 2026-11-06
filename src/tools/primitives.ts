@@ -35,7 +35,6 @@ import type {
   GrantedHandle,
   Permission,
   Principal,
-  PrincipalType,
   ScopeId,
 } from "../types.ts";
 import { parseScopeId, scopeId } from "../types.ts";
@@ -510,7 +509,7 @@ export interface ToolContextDeps {
   memoryAccess?: { write?: ScopeId; read: ScopeId[] };
   mcp?: McpToolService;
   scopeId?: ScopeId;
-  actorType?: PrincipalType;
+  actorAsked?: boolean;
   sessionHistory?: {
     search(q: string, limit?: number): Promise<string[]>;
     open(seq: number): Promise<string | null>;
@@ -1152,12 +1151,12 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
 
     async callMcpTool(name: string, args: Record<string, unknown>, approval?: string): Promise<string> {
       if (!deps.mcp) throw new Error("no MCP connectors are configured");
-      return deps.mcp.call(name, args, deps.createdBy, approval, deps.scopeId, deps.actorType);
+      return deps.mcp.call(name, args, deps.createdBy, approval, deps.scopeId, deps.actorAsked);
     },
 
     async mcpToolNeedsApproval(name: string, args: Record<string, unknown>): Promise<boolean> {
       if (!deps.mcp) throw new Error("no MCP connectors are configured");
-      return deps.mcp.needsApproval(name, args, deps.createdBy, deps.scopeId, deps.actorType);
+      return deps.mcp.needsApproval(name, args, deps.createdBy, deps.scopeId, deps.actorAsked);
     },
 
     async awaitClientResult(callId, timeoutMs, signal, toolName) {

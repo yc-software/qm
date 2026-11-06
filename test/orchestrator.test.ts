@@ -491,12 +491,13 @@ test("an attested connector is offered and called only in the speaker's own DM, 
   assert.deepEqual(called, { "personal:U1": "sent", "channel:C1": "refused", "group:G1": "refused" });
 });
 
-test("a connector set to attest in any audience serves the channel asker and a channel cron's owner", async () => {
+test("a connector set to attest in any audience serves the channel asker and a channel cron's owner, not unprompted or bot turns", async () => {
   const offered: string[][] = [];
   const called: string[] = [];
   const mock = createMockAgent();
   const agent: Agent = {
     ...mock,
+    shouldRespond: async () => ({ respond: true }),
     runTurn: async (input) => {
       offered.push((input.mcpTools ?? []).map((tool) => tool.name).sort());
       for (const name of ["records", "strict"])
@@ -544,12 +545,23 @@ test("a connector set to attest in any audience serves the channel asker and a c
     destination: { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") },
   });
   await runNowSettled(built.scheduler, cron.id);
-  assert.deepEqual(offered, [["records"], ["records"]]);
-  assert.deepEqual(called, ["records sent", "strict refused", "records sent", "strict refused"]);
+  for (const extra of [{ origin: { kind: "ambient" as const, live: true } }, { botActor: true }])
+    assert.equal((await built.app.turn(channel("hello", extra))).status, "ok");
+  assert.deepEqual(offered, [["records"], ["records"], [], []]);
+  assert.deepEqual(called, [
+    "records sent",
+    "strict refused",
+    "records sent",
+    "strict refused",
+    "records refused",
+    "strict refused",
+    "records refused",
+    "strict refused",
+  ]);
   assert.deepEqual(
-    (await built.auditLog.tail({ limit: 20, action: "mcp.call", resourceContains: "records/search" })).map(
-      (event) => event.principalId,
-    ),
+    (await built.auditLog.tail({ limit: 20, action: "mcp.call", resourceContains: "records/search" }))
+      .filter((event) => !/answers only to them/.test(event.status ?? ""))
+      .map((event) => event.principalId),
     ["U1", "U1"],
   );
 });

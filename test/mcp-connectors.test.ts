@@ -652,7 +652,7 @@ test("optional intent and locale parameters are left out of the schema the model
   assert.deepEqual(sent, [{ query: "tacos" }]);
 });
 
-test("a connector set to attest in any audience acts as the signed-in person who asked, wherever they ask", async (t) => {
+test("a connector set to attest in any audience acts as the signed-in person who asked, wherever they ask, and never for anyone else", async (t) => {
   const mcp = await startMcpTestServer(t, {
     tools: [{ name: "find-record", description: "Find a record", inputSchema: { type: "object" } }],
   });
@@ -662,31 +662,31 @@ test("a connector set to attest in any audience acts as the signed-in person who
   await store.put(server({ id: "records", name: "Records", ...attested, attestAudience: "any" }));
   await store.put(server({ id: "strict", name: "Strict", ...attested }));
   await service.refresh();
-  const offered = async (principalId: string, scopeId: string, actorType?: "internal" | "guest") =>
-    (await service.toolDefsFor(principalId, scopeId, actorType)).map((d) => d.serverId).sort();
+  const offered = async (principalId: string, scopeId: string, actorAsked?: boolean) =>
+    (await service.toolDefsFor(principalId, scopeId, actorAsked)).map((d) => d.serverId).sort();
   assert.deepEqual(await offered("U1", "personal:U1"), ["records", "strict"]);
-  assert.deepEqual(await offered("U1", "channel:C1", "internal"), ["records"]);
-  assert.deepEqual(await offered("U1", "group:G1", "internal"), ["records"]);
-  assert.deepEqual(await offered("G9", "channel:C1", "guest"), []);
+  assert.deepEqual(await offered("U1", "channel:C1", true), ["records"]);
+  assert.deepEqual(await offered("U1", "group:G1", true), ["records"]);
+  assert.deepEqual(await offered("G9", "channel:C1", false), []);
   assert.deepEqual(await offered("U1", "channel:C1"), []);
-  assert.deepEqual(await offered("system:channel:C1", "channel:C1", "internal"), []);
+  assert.deepEqual(await offered("system:channel:C1", "channel:C1", true), []);
 
   const invoke = { operation: "invoke", tool: "find-record", arguments: {} };
   const privateOnly = /answers only to them in their own private conversation/;
-  assert.equal(await service.needsApproval("records", invoke, "U1", "channel:C1", "internal"), false);
-  await service.call("records", invoke, "U1", undefined, "channel:C1", "internal");
-  await service.call("records", invoke, "U2", undefined, "personal:U1", "internal");
-  await assert.rejects(service.call("records", invoke, "G9", undefined, "channel:C1", "guest"), privateOnly);
+  assert.equal(await service.needsApproval("records", invoke, "U1", "channel:C1", true), false);
+  await service.call("records", invoke, "U1", undefined, "channel:C1", true);
+  await service.call("records", invoke, "U2", undefined, "personal:U1", true);
+  await assert.rejects(service.call("records", invoke, "G9", undefined, "channel:C1", false), privateOnly);
   await assert.rejects(service.call("records", invoke, "U1", undefined, "channel:C1"), privateOnly);
   await assert.rejects(
-    service.call("records", invoke, "system:channel:C1", undefined, "channel:C1", "internal"),
+    service.call("records", invoke, "system:channel:C1", undefined, "channel:C1", true),
     privateOnly,
   );
   await assert.rejects(
-    service.call("records", invoke, "jörg@example.com", undefined, "channel:C1", "internal"),
+    service.call("records", invoke, "jörg@example.com", undefined, "channel:C1", true),
     (error: unknown) => error instanceof UnattestableActor,
   );
-  await assert.rejects(service.call("strict", invoke, "U1", undefined, "channel:C1", "internal"), privateOnly);
+  await assert.rejects(service.call("strict", invoke, "U1", undefined, "channel:C1", true), privateOnly);
   assert.deepEqual(
     mcp.requests.filter((r) => r.rpc === "tools/call").map((r) => r.actor),
     ["U1", "U2"],
