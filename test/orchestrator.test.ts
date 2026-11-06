@@ -491,7 +491,7 @@ test("an attested connector is offered and called only in the speaker's own DM, 
   assert.deepEqual(called, { "personal:U1": "sent", "channel:C1": "refused", "group:G1": "refused" });
 });
 
-test("a connector set to attest in any audience serves the channel asker and a channel cron's owner, not unprompted or bot turns", async () => {
+test("a connector set to attest in any audience serves the channel asker and a channel cron's owner, not unprompted, unowned or bot turns", async () => {
   const offered: string[][] = [];
   const called: string[] = [];
   const mock = createMockAgent();
@@ -545,13 +545,19 @@ test("a connector set to attest in any audience serves the channel asker and a c
     destination: { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") },
   });
   await runNowSettled(built.scheduler, cron.id);
-  for (const extra of [{ origin: { kind: "ambient" as const, live: true } }, { botActor: true }])
+  for (const extra of [
+    { origin: { kind: "ambient" as const, live: true } },
+    { origin: { kind: "automation" as const } },
+    { botActor: true },
+  ])
     assert.equal((await built.app.turn(channel("hello", extra))).status, "ok");
-  assert.deepEqual(offered, [["records"], ["records"], [], []]);
+  assert.deepEqual(offered, [["records"], ["records"], [], [], []]);
   assert.deepEqual(called, [
     "records sent",
     "strict refused",
     "records sent",
+    "strict refused",
+    "records refused",
     "strict refused",
     "records refused",
     "strict refused",

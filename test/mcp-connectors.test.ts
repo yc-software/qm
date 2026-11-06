@@ -662,8 +662,8 @@ test("a connector set to attest in any audience acts as the signed-in person who
   await store.put(server({ id: "records", name: "Records", ...attested, attestAudience: "any" }));
   await store.put(server({ id: "strict", name: "Strict", ...attested }));
   await service.refresh();
-  const offered = async (principalId: string, scopeId: string, actorAsked?: boolean) =>
-    (await service.toolDefsFor(principalId, scopeId, actorAsked)).map((d) => d.serverId).sort();
+  const offered = async (principalId: string, scopeId: string, actAsActor?: boolean) =>
+    (await service.toolDefsFor(principalId, scopeId, actAsActor)).map((d) => d.serverId).sort();
   assert.deepEqual(await offered("U1", "personal:U1"), ["records", "strict"]);
   assert.deepEqual(await offered("U1", "channel:C1", true), ["records"]);
   assert.deepEqual(await offered("U1", "group:G1", true), ["records"]);

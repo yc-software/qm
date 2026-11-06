@@ -15,11 +15,12 @@ auth only) sends the calling person's canonical id in the `x-qm-actor` header; s
 [principal-links.md](./principal-links.md#attested-actors). `attestAudience` sets where
 such a server may be used: `personal` (the default) only in the person's own private
 conversation with QM; `any` also in channels, group conversations and projects, for
-the internal person who asked QM, and in triggered work (crons, loops, watches,
-webhooks), for the trigger's owner. QM system actors, guests, bots and unprompted
-replies to channel chatter are refused in every audience. `any` requires
-`attestActor`; an update that omits `attestAudience` keeps it, and turning
-`attestActor` off resets it to `personal`.
+the internal person who asked QM (including the sessions and subagents they start),
+and in scheduled work (crons, loops) for its owner. Elsewhere it is refused: QM system
+actors, guests, bots, unprompted replies to channel chatter, swarms and other
+automation, and webhook or watch fires outside their owner's private conversation.
+`any` requires `attestActor`; an update that omits `attestAudience` keeps it, and
+turning `attestActor` off resets it to `personal`.
 
 `credentialScope` selects the identity used for `tools/call`:
 
