@@ -16,7 +16,7 @@ Every event carries the reporting instance as `server_name`: the ECS task id whe
 
 ## Event loop blocks
 
-With `SENTRY_DSN` set, each service also reports event loop blocks, independent of trace sampling. A watchdog thread from `@sentry/node-native` notices when the main thread has not run for `SENTRY_EVENT_LOOP_BLOCK_MS` milliseconds (default 500; `0` or an invalid value turns it off) and sends an `EventLoopBlocked` error event with the main thread's stack at that moment, so the issue points at the blocking code. The event carries the scope of the blocked request (service, deployment, transaction name, trace id) and a `server_name` tag. Each instance sends at most 10 such events per clock hour. If the native module cannot load, the service logs one `[swallowed] event loop block detection` warning and runs without detection.
+With `SENTRY_DSN` set, each service also reports event loop blocks, independent of trace sampling. A watchdog thread from `@sentry/node-native` notices when the main thread has not run for 500 ms and sends an `EventLoopBlocked` error event with the main thread's stack at that moment, so the issue points at the blocking code. The event carries the scope of the blocked request (service, deployment, transaction name, trace id) and a `server_name` tag. If the native module cannot load, the service logs one `[swallowed] event loop block detection` warning and runs without detection.
 
 ## Optional performance tracing
 
