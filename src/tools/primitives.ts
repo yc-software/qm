@@ -89,6 +89,7 @@ import type { Cron, Webhook } from "../triggers/types.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { VisibleCron } from "../api/app.ts";
 import { createPlaygroundArtifact, type PlaygroundArtifact } from "../playgrounds/playground.ts";
+import type { FinnyToolService } from "../agent/agent-tools/finny.ts";
 
 export interface PublishInput {
   dir?: string;
@@ -196,6 +197,7 @@ export type AttachResult = { ok: true; files: AttachedFileMeta[]; staged: number
 export type AttachFiles = (files: readonly OutboundFile[], sandboxId?: string) => Promise<AttachResult>;
 
 export interface ToolContext extends SurfaceToolDeps {
+  finny?: FinnyToolService;
   admin?: AdminToolAccess;
   selfApi?: SelfApiCall;
   runtime?(request: RuntimeRequest, signal?: AbortSignal): Promise<RuntimeResult>;
@@ -461,6 +463,7 @@ export const CONTROL_UNAVAILABLE: ControlUnavailable = {
 };
 
 export interface ToolContextDeps {
+  finny?: FinnyToolService;
   desktopClientId?: string;
   admin?: AdminToolAccess;
   selfApi?: SelfApiCall;
@@ -719,6 +722,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
   };
 
   return {
+    ...(deps.finny ? { finny: deps.finny } : {}),
     ...(deps.admin ? { admin: deps.admin } : {}),
     ...(deps.selfApi ? { selfApi: deps.selfApi } : {}),
     ...(deps.toolOutput ? { toolOutput: deps.toolOutput } : {}),

@@ -20,6 +20,7 @@ import { controlPlaneTools } from "./agent-tools/control.ts";
 import { surfaceTool } from "./agent-tools/surface.ts";
 import { goalTools } from "./agent-tools/goal.ts";
 import { pageClientTools } from "./agent-tools/client.ts";
+import { finnyTools } from "./agent-tools/finny.ts";
 import { mcpTools } from "./agent-tools/mcp.ts";
 import { withRetrySafety, withRuntimeBarrier, withToolApprovalGate, withToolSpan } from "./agent-tools/wrappers.ts";
 import type { SurfaceToolPrompt } from "../surfaces/registry.ts";
@@ -148,6 +149,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const { createGoal, getGoal, updateGoal } = goalTools(kit);
   const { clientTools } = pageClientTools(kit);
   const { attach, finishSilently, context, runtime } = turnTools(kit);
+  const finny = finnyTools(kit);
 
   const tools = [
     ...(!delegateWork ? [{ ...execute, handlesAbort: true }] : []),
@@ -192,6 +194,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     { ...resourceTool("goal", { create: createGoal, get: getGoal, update: updateGoal }), handlesAbort: true },
     runtime,
     context,
+    ...(ref.current?.finny ? [finny] : []),
     ...clientTools.map((tool) => ({ ...tool, handlesAbort: true })),
   ];
   const { inline, inlineTools, connectorTools } = mcpTools(kit, new Set(tools.map((t) => t.name)));
