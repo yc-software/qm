@@ -1,5 +1,5 @@
 export function productAnalyticsConfig(env: NodeJS.ProcessEnv): {
-  analytics?: { apiKey: string; host: string; config?: Record<string, unknown> };
+  analytics?: { apiKey: string; host: string; sessionRecording?: Record<string, unknown> };
   origins: string[];
 } {
   const apiKey = env.POSTHOG_API_KEY?.trim();
@@ -16,14 +16,23 @@ export function productAnalyticsConfig(env: NodeJS.ProcessEnv): {
   ) {
     throw new Error("POSTHOG_HOST must be an HTTPS origin");
   }
-  const config: unknown = env.POSTHOG_CONFIG ? JSON.parse(env.POSTHOG_CONFIG) : undefined;
-  if (config !== undefined && (!config || typeof config !== "object" || Array.isArray(config)))
-    throw new Error("POSTHOG_CONFIG must be a JSON object");
+  const sessionRecording: unknown = env.POSTHOG_SESSION_RECORDING
+    ? JSON.parse(env.POSTHOG_SESSION_RECORDING)
+    : undefined;
+  if (
+    sessionRecording !== undefined &&
+    (!sessionRecording || typeof sessionRecording !== "object" || Array.isArray(sessionRecording))
+  )
+    throw new Error("POSTHOG_SESSION_RECORDING must be a JSON object");
   const [region, ...domain] = host.hostname.split(".");
   const remoteConfigOrigin =
-    config && domain.join(".") === "i.posthog.com" ? `https://${region}-assets.i.posthog.com` : undefined;
+    sessionRecording && domain.join(".") === "i.posthog.com" ? `https://${region}-assets.i.posthog.com` : undefined;
   return {
-    analytics: { apiKey, host: host.origin, ...(config ? { config: config as Record<string, unknown> } : {}) },
+    analytics: {
+      apiKey,
+      host: host.origin,
+      ...(sessionRecording ? { sessionRecording: sessionRecording as Record<string, unknown> } : {}),
+    },
     origins: [host.origin, ...(remoteConfigOrigin ? [remoteConfigOrigin] : [])],
   };
 }

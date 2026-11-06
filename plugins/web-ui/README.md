@@ -306,13 +306,14 @@ analytics is disabled during impersonation. Autocapture, replay, exception captu
 performance capture and feature flags are disabled. Event properties exclude chat
 content, URLs, query strings, titles and referrers. Delivery is best effort.
 
-`POSTHOG_CONFIG` takes a JSON object of [PostHog JS options](https://posthog.com/docs/libraries/js/config)
-applied over these defaults, for example to enable session replay with
-`"disable_session_recording": false` and masking under `"session_recording"`. The
-event property filter still applies; replay snapshots keep their payload. When replay
-is enabled the recorder is bundled, not loaded from PostHog's CDN, and on PostHog
-Cloud the regional assets host that serves project remote config is allowed in the
-content security policy.
+Set `POSTHOG_SESSION_RECORDING` to a JSON object of PostHog
+[`session_recording` options](https://posthog.com/docs/session-replay/privacy) to
+enable session replay with the deployment's own masking. Recording then follows the
+PostHog project's replay setting. Console logs, network headers and bodies are never
+recorded, feature flags stay off, the recorder is bundled rather than loaded from
+PostHog's CDN, and the event property filter still applies; replay snapshots keep their
+payload. On PostHog Cloud the regional assets host that serves project remote config
+is allowed in the content security policy.
 
 Set the same variables on core to capture `app_published` after a successful new
 application or version deployment. Publications use the application's creator and

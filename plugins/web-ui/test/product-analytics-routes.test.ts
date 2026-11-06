@@ -36,7 +36,7 @@ process.env.PORTAL_IDENTITY_SECRET = secret;
 process.env.ALLOW_UNSIGNED_TEST_IDENTITY = "0";
 process.env.POSTHOG_API_KEY = "phc_test";
 process.env.POSTHOG_HOST = "https://us.i.posthog.com";
-process.env.POSTHOG_CONFIG = '{"disable_session_recording":false}';
+process.env.POSTHOG_SESSION_RECORDING = '{"maskAllInputs":true}';
 const { handler } = await import("../server/index.ts");
 const surface = createServer((req, res) => void handler(req, res));
 await new Promise<void>((resolve) => surface.listen(0, "127.0.0.1", resolve));
@@ -63,7 +63,7 @@ test("analytics config is authenticated, company-scoped and omitted during imper
   assert.deepEqual(body.analytics, {
     apiKey: "phc_test",
     host: "https://us.i.posthog.com",
-    config: { disable_session_recording: false },
+    sessionRecording: { maskAllInputs: true },
   });
   const csp = (await fetch(`${base}/connectors/oauth/test/callback`)).headers.get("content-security-policy")!;
   assert.deepEqual(

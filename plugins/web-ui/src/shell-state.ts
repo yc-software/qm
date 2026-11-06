@@ -5,7 +5,7 @@ export type AuthMode = "portal" | "dev";
 
 export interface Me {
   browserErrors?: { dsn: string; release?: string; tracesSampleRate?: number };
-  analytics?: { apiKey: string; host: string; config?: Partial<PostHogConfig> };
+  analytics?: { apiKey: string; host: string; sessionRecording?: PostHogConfig["session_recording"] };
   companyName?: string | null;
   welcomeCohort?: string;
   suggestedActivities?: SuggestedActivity[];
