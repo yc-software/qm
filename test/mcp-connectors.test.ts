@@ -199,33 +199,34 @@ test("destructive annotations mark MCP tools for approval unless the server over
   service.close();
 });
 
-test("catalog tool names resolve the same aliases the ycli CLI accepts", () => {
+test("a catalog tool answers to its name in any case or separator, or to its closest trailing words", () => {
   const tools = [
-    { name: "agents_meetupsetuptoolservice_create_email_push" },
-    { name: "agents_meetupsetuptoolservice_create_calendar_update_email_push" },
-    { name: "agents_meetupprospectemailtools_send_meetup_invites" },
-    { name: "agents_meetupguestlabels_assign_label_to_meetup_guests" },
-    { name: "agents_otherservice_list_labels" },
-    { name: "agents_meetupguestlabels_list_labels" },
+    { name: "acme_mailservice_create_message" },
+    { name: "acme_mailservice_update_message" },
+    { name: "acme_mailservice_create_draft_update_message" },
+    { name: "acme_invitetools_send_invites" },
+    { name: "acme_contactservice_list_labels" },
+    { name: "acme_guesttools_list_labels" },
   ];
   const resolve = (name: string) => resolveCatalogTool(tools, name).map((t) => t.name);
   for (const alias of [
-    "agents_meetupsetuptoolservice_create_email_push",
-    "agents-meetupsetuptoolservice-create-email-push",
-    "create_email_push",
-    "create-email-push",
-    "Create-Email-Push",
+    "acme_mailservice_create_message",
+    "acme-mailservice-create-message",
+    "create_message",
+    "create-message",
+    "Create-Message",
   ])
-    assert.deepEqual(resolve(alias), ["agents_meetupsetuptoolservice_create_email_push"], alias);
-  assert.deepEqual(resolve("agents-meetupprospectemailtools-send-meetup-invites"), [
-    "agents_meetupprospectemailtools_send_meetup_invites",
+    assert.deepEqual(resolve(alias), ["acme_mailservice_create_message"], alias);
+  assert.deepEqual(resolve("send-invites"), ["acme_invitetools_send_invites"]);
+  assert.deepEqual(resolve("update-message"), ["acme_mailservice_update_message"]);
+  assert.deepEqual(resolve("list-labels"), ["acme_contactservice_list_labels", "acme_guesttools_list_labels"]);
+  assert.deepEqual(resolve("delete_message"), []);
+  assert.deepEqual(resolveCatalogTool([{ name: "Send_Message" }, { name: "send_message" }], "send_message"), [
+    { name: "send_message" },
   ]);
-  assert.deepEqual(resolve("send-meetup-invites"), ["agents_meetupprospectemailtools_send_meetup_invites"]);
-  assert.deepEqual(resolve("assign_label_to_meetup_guests"), [
-    "agents_meetupguestlabels_assign_label_to_meetup_guests",
+  assert.deepEqual(resolveCatalogTool([{ name: "x_send_message" }, { name: "send_message" }], "SEND-MESSAGE"), [
+    { name: "send_message" },
   ]);
-  assert.deepEqual(resolve("list-labels"), ["agents_otherservice_list_labels", "agents_meetupguestlabels_list_labels"]);
-  assert.deepEqual(resolve("delete_email_push"), []);
 });
 
 test("a catalog invoke by alias is approved and sent under the catalog's own name; an ambiguous alias names its candidates", async (t) => {
@@ -253,8 +254,13 @@ test("a catalog invoke by alias is approved and sent under the catalog's own nam
   assert.equal(await service.needsApproval("records", canonical, ...who), true);
   const search = { operation: "search", query: "find" };
   assert.equal(await service.canonicalArgs("records", search, ...who), search);
+  await assert.rejects(
+    service.call("records", aliased, who[0], "tool-call:abc", who[1]),
+    /send-message no longer names a Records tool/,
+    "an approval only ever goes out with the exact name it was keyed to",
+  );
   assert.equal(
-    await service.call("records", aliased, who[0], "tool-call:abc", who[1]),
+    await service.call("records", canonical, who[0], "tool-call:abc", who[1]),
     'agents_messageservice_send_message {"to":"x"}',
   );
   await assert.rejects(

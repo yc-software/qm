@@ -1192,7 +1192,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
 
     async mcpCanonicalArgs(name: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {
       if (!deps.mcp) throw new Error("no MCP connectors are configured");
-      return deps.mcp.canonicalArgs(name, args, deps.createdBy, deps.scopeId);
+      return deps.mcp.canonicalArgs(name, args, deps.createdBy, deps.audienceScopeId, deps.actAsActor);
     },
 
     async awaitClientResult(callId, timeoutMs, signal, toolName) {

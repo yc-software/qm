@@ -93,7 +93,6 @@ export interface McpToolService {
     audienceScopeId?: ScopeId,
     actAsActor?: boolean,
   ): Promise<boolean>;
-  /** Rewrites a catalog call's `tool` alias to the catalog's own name, so approval binds to the exact tool. */
   canonicalArgs(
     name: string,
     args: Record<string, unknown>,
@@ -189,15 +188,16 @@ function aliasKey(name: string): string {
   return name.toLowerCase().replaceAll("-", "_");
 }
 
-// A catalog tool answers to its exact name, to that name in any case with hyphens
-// for underscores, or to its trailing words (`create-email-push` for
-// `x_service_create_email_push`). A name that fits several tools returns them all.
 export function resolveCatalogTool<T extends { name: string }>(tools: readonly T[], name: string): T[] {
   const exact = tools.find((t) => t.name === name);
   if (exact) return [exact];
   const key = aliasKey(name);
   const full = tools.filter((t) => aliasKey(t.name) === key);
-  return full.length ? full : tools.filter((t) => aliasKey(t.name).endsWith(`_${key}`));
+  if (full.length) return full;
+  const words = (t: T) => aliasKey(t.name).split("_").length;
+  const suffixed = tools.filter((t) => aliasKey(t.name).endsWith(`_${key}`));
+  const fewest = Math.min(...suffixed.map(words));
+  return suffixed.filter((t) => words(t) === fewest);
 }
 
 function authOf(server: McpServer): McpAuth {
@@ -301,10 +301,11 @@ export function createMcpToolService(opts: {
     if (typeof name !== "string" || !name) throw new Error("tool is required");
     const matches = resolveCatalogTool(await catalogTools(server, principalId), name);
     if (!matches.length) throw new Error(`Unknown ${server.name} tool: ${name}. Search for it first.`);
-    if (matches.length > 1)
-      throw new Error(
-        `Ambiguous ${server.name} tool: ${name} matches ${matches.map((t) => t.name).join(", ")}. Use the full name.`,
-      );
+    if (matches.length > 1) {
+      const shown = matches.slice(0, CATALOG_SEARCH_LIMIT).map((t) => t.name);
+      const more = matches.length > shown.length ? ` and ${matches.length - shown.length} more` : "";
+      throw new Error(`Ambiguous ${server.name} tool: ${name} matches ${shown.join(", ")}${more}. Use the full name.`);
+    }
     return matches[0]!;
   }
 
@@ -348,6 +349,8 @@ export function createMcpToolService(opts: {
     if (args.operation !== "invoke") throw new Error(`operation must be one of ${CATALOG_OPERATIONS.join(", ")}`);
     const input = args.arguments ?? {};
     if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("arguments must be an object");
+    if (approval && entry.name !== args.tool)
+      throw new Error(`${String(args.tool)} no longer names a ${server.name} tool; search for it and call it again.`);
     if (mcpToolNeedsApproval(server, entry.annotations) && !approval)
       throw new Error(`${entry.name} needs the person's approval; call it again so they get an approval card.`);
     const client = await callerClient(server, principalId);

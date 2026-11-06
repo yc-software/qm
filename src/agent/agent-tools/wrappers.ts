@@ -72,7 +72,6 @@ const APPROVAL_ARGS_MAX_CHARS = 16_000;
 interface ToolApprovalDeclaration {
   needsApproval?: boolean | ((params: unknown) => boolean | Promise<boolean>);
   approvalReason?: string;
-  /** Rewrites the call's arguments to their canonical form before approval is decided and keyed. */
   canonicalParams?: (params: unknown) => Promise<unknown>;
 }
 
