@@ -90,32 +90,38 @@ export function createFinnyApprovalService(deps: {
           decision,
           decidedAt: Date.now(),
         });
-        const decidedChoice = decided.decision;
+        const decidedChoice = decided.request.decision;
         const selectedOption =
           decidedChoice?.kind === "option"
-            ? decided.options.find((option) => option.id === decidedChoice.optionId)
+            ? decided.request.options.find((option) => option.id === decidedChoice.optionId)
             : undefined;
-        const recommended = selectedOption?.id === decided.recommendedOptionId;
+        const recommended = selectedOption?.id === decided.request.recommendedOptionId;
         if (decidedChoice?.kind === "option" && !selectedOption)
           throw new Error("Finny clarification option is not available");
-        if (recommended && deps.onClarificationReady)
+        if (decided.approvalReady && deps.onClarificationReady)
           await afterCommit(
             {
               kind: "clarification_delivery",
-              scopeId: decided.scopeId,
-              jobId: decided.jobId,
-              requestId: decided.requestId,
+              scopeId: decided.request.scopeId,
+              jobId: decided.request.jobId,
+              requestId: decided.request.requestId,
             },
-            () => deps.onClarificationReady!({ scopeId: decided.scopeId, jobId: decided.jobId }),
+            () =>
+              deps.onClarificationReady!({
+                scopeId: decided.request.scopeId,
+                jobId: decided.request.jobId,
+              }),
           );
+        let summary = "Revision is required before this plan can be approved. Submit a revised plan to continue.";
+        if (decided.approvalReady) summary = `${selectedOption?.label}. The plan is ready for approval.`;
+        else if (recommended && !decided.revisionRequired)
+          summary = "Another material clarification remains unresolved.";
         return {
           kind: "result",
           card: {
             title: "Clarification recorded",
-            status: recommended ? "passed" : "blocked",
-            summary: recommended
-              ? `${selectedOption.label}. The plan is ready for approval.`
-              : "Revision is required before this plan can be approved. Submit a revised plan to continue.",
+            status: decided.approvalReady ? "passed" : "blocked",
+            summary,
           },
         };
       }

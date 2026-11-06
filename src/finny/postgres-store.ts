@@ -593,16 +593,34 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
             WHERE request_id=$1 RETURNING *`,
           [input.requestId, JSON.stringify(input.decision), input.decidedAt],
         );
-        if (input.decision.kind === "option" && input.decision.optionId === row.recommended_option_id) {
-          const ready = await db.query(
-            `UPDATE finny_approval_requests SET ready_at=$2
-              WHERE job_id=$1 AND ready_at IS NULL AND decided_at IS NULL
-                AND authorized_actor_id=$3 AND origin_thread_ref=$4 RETURNING request_id`,
-            [row.job_id, input.decidedAt, row.authorized_actor_id, row.origin_thread_ref],
-          );
-          if (ready.rowCount !== 1) throw new Error("Finny clarification approval request is unavailable");
-        }
-        return rowToClarification(updated.rows[0]);
+        const approval = await db.query(
+          `SELECT request_id FROM finny_approval_requests
+            WHERE job_id=$1 AND decided_at IS NULL
+              AND authorized_actor_id=$2 AND origin_thread_ref=$3 FOR UPDATE`,
+          [row.job_id, row.authorized_actor_id, row.origin_thread_ref],
+        );
+        if (approval.rowCount !== 1) throw new Error("Finny clarification approval request is unavailable");
+        const clarificationState = await db.query(
+          `SELECT
+             COALESCE(bool_and(
+               decided_at IS NOT NULL AND decision->>'kind'='option'
+               AND decision->>'optionId'=recommended_option_id
+             ), FALSE) AS all_recommended,
+             COALESCE(bool_or(
+               decided_at IS NOT NULL AND (
+                 decision->>'kind'<>'option' OR decision->>'optionId'<>recommended_option_id
+               )
+             ), FALSE) AS revision_required
+             FROM finny_clarification_requests WHERE job_id=$1`,
+          [row.job_id],
+        );
+        const approvalReady = clarificationState.rows[0]?.all_recommended === true;
+        const revisionRequired = clarificationState.rows[0]?.revision_required === true;
+        await db.query("UPDATE finny_approval_requests SET ready_at=$2 WHERE request_id=$1", [
+          approval.rows[0].request_id,
+          approvalReady ? input.decidedAt : null,
+        ]);
+        return { request: rowToClarification(updated.rows[0]), approvalReady, revisionRequired };
       });
     },
     async recordApproval(input: RecordFinnyApprovalInput) {

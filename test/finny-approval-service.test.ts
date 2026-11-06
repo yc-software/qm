@@ -744,10 +744,11 @@ test("approval readiness migration preserves legacy clarification behavior", asy
     requestId: approvalRequestId,
     authorizedActorId: "approver@example.com",
   });
+  const legacyClarificationRequestId = randomUUID();
   await store.createClarificationRequest({
     scopeId: job.scopeId,
     jobId: job.id,
-    requestId: randomUUID(),
+    requestId: legacyClarificationRequestId,
     authorizedActorId: "approver@example.com",
     question: "Which accounting basis should be used?",
     options: [
@@ -762,6 +763,150 @@ test("approval readiness migration preserves legacy clarification behavior", asy
   await migrationDb.q("DELETE FROM qm_schema_migrations WHERE id='finny/store/0005-approval-readiness'");
   const upgraded = createPostgresFinnyStore(url);
   assert.ok((await upgraded.getApprovalRequest(approvalRequestId))?.readyAt);
+  await upgraded.recordClarificationDecision({
+    requestId: legacyClarificationRequestId,
+    actorId: "approver@example.com",
+    originThreadRef: job.originThreadRef,
+    decision: { kind: "option", optionId: "invoices" },
+    decidedAt: Date.now(),
+  });
+  assert.equal((await upgraded.getApprovalRequest(approvalRequestId))?.readyAt, undefined);
+});
+
+test("concurrent material clarification creation leaves one pending request and approval unready", async () => {
+  const url = testDatabaseUrl();
+  const store = createPostgresFinnyStore(url);
+  const job = await store.createJob({
+    id: randomUUID(),
+    scopeId: "personal:approver@example.com",
+    plan,
+    policy: initialFinnyPolicy(),
+    findingPolicy,
+    originThreadRef: "slack:C-finance:100.200",
+  });
+  await store.createApprovalRequest({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    requestId: randomUUID(),
+    authorizedActorId: "approver@example.com",
+  });
+  const requests = [randomUUID(), randomUUID()].map((requestId, index) => ({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    requestId,
+    authorizedActorId: "approver@example.com",
+    question: "Which accounting basis should be used?",
+    options: [
+      { id: "contracts", label: "Signed contracts" },
+      { id: "invoices", label: "Issued invoices" },
+    ],
+    recommendedOptionId: "contracts",
+    idempotencyKey: `concurrent:${job.id}:${index}`,
+  }));
+  const results = await Promise.allSettled(requests.map((request) => store.createClarificationRequest(request)));
+  assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
+  assert.equal(results.filter((result) => result.status === "rejected").length, 1);
+  assert.match(
+    String(results.find((result) => result.status === "rejected")?.reason),
+    /already has a material clarification/i,
+  );
+  const persisted = await Promise.all(requests.map((request) => store.getClarificationRequest(request.requestId)));
+  assert.equal(persisted.filter(Boolean).length, 1);
+  const approval = await createPgPool(url).q("SELECT ready_at FROM finny_approval_requests WHERE job_id=$1", [job.id]);
+  assert.equal(approval[0]?.ready_at, null);
+});
+
+test("prior nonrecommended decision permanently blocks a later recommendation", async () => {
+  const url = testDatabaseUrl();
+  const store = createPostgresFinnyStore(url);
+  const job = await store.createJob({
+    id: randomUUID(),
+    scopeId: "personal:approver@example.com",
+    plan,
+    policy: initialFinnyPolicy(),
+    findingPolicy,
+    originThreadRef: "slack:C-finance:100.200",
+  });
+  const approvalRequestId = randomUUID();
+  await store.createApprovalRequest({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    requestId: approvalRequestId,
+    authorizedActorId: "approver@example.com",
+  });
+  const firstRequestId = randomUUID();
+  const options = [
+    { id: "contracts", label: "Signed contracts" },
+    { id: "invoices", label: "Issued invoices" },
+  ];
+  await store.createClarificationRequest({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    requestId: firstRequestId,
+    authorizedActorId: "approver@example.com",
+    question: "Which accounting basis should be used?",
+    options,
+    recommendedOptionId: "contracts",
+    idempotencyKey: `first:${job.id}`,
+  });
+  const db = createPgPool(url);
+  const secondRequestId = randomUUID();
+  await db.q(
+    `INSERT INTO finny_clarification_requests(
+       request_id,scope_id,job_id,question,options,recommended_option_id,
+       origin_thread_ref,authorized_actor_id,idempotency_key,created_at
+     ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+    [
+      secondRequestId,
+      job.scopeId,
+      job.id,
+      "Which accounting basis should be used?",
+      JSON.stringify(options),
+      "contracts",
+      job.originThreadRef,
+      "approver@example.com",
+      `second:${job.id}`,
+      Date.now(),
+    ],
+  );
+  await store.recordClarificationDecision({
+    requestId: secondRequestId,
+    actorId: "approver@example.com",
+    originThreadRef: job.originThreadRef,
+    decision: { kind: "option", optionId: "invoices" },
+    decidedAt: Date.now(),
+  });
+  let readyCallbacks = 0;
+  const service = createFinnyApprovalService({
+    store,
+    identity: internalIdentity(),
+    onApproved: async () => undefined,
+    onClarificationReady: async () => {
+      readyCallbacks += 1;
+    },
+  });
+  assert.deepEqual(
+    await service.decide({
+      requestId: firstRequestId,
+      actor: { externalId: "approver@example.com" },
+      slack: { channel: "C-finance", messageTs: "100.300", threadTs: "100.200" },
+      decision: { kind: "clarification", action: "select", optionId: "contracts" },
+    }),
+    {
+      kind: "result",
+      card: {
+        title: "Clarification recorded",
+        status: "blocked",
+        summary: "Revision is required before this plan can be approved. Submit a revised plan to continue.",
+      },
+    },
+  );
+  assert.equal(readyCallbacks, 0);
+  assert.deepEqual((await store.getClarificationRequest(firstRequestId))?.decision, {
+    kind: "option",
+    optionId: "contracts",
+  });
+  assert.equal((await store.getApprovalRequest(approvalRequestId))?.readyAt, undefined);
 });
 
 test("committed decisions survive post-commit dispatch failures for durable recovery", async () => {

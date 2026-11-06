@@ -57,6 +57,12 @@ export interface CreateFinnyClarificationRequestInput {
   idempotencyKey: string;
 }
 
+export interface FinnyClarificationDecisionResult {
+  request: FinnyClarificationRequest;
+  approvalReady: boolean;
+  revisionRequired: boolean;
+}
+
 export interface RecordFinnyClarificationDecisionInput {
   requestId: string;
   actorId: string;
@@ -154,7 +160,7 @@ export interface FinnyStore {
   getClarificationRequest(requestId: string): Promise<FinnyClarificationRequest | null>;
   claimWorkerRun(input: ClaimFinnyWorkerRunInput): Promise<void>;
   recordApproval(input: RecordFinnyApprovalInput): Promise<FinnyJob>;
-  recordClarificationDecision(input: RecordFinnyClarificationDecisionInput): Promise<FinnyClarificationRequest>;
+  recordClarificationDecision(input: RecordFinnyClarificationDecisionInput): Promise<FinnyClarificationDecisionResult>;
   recordAttestation(input: RecordFinnyAttestationInput): Promise<{ attestation: FinnyAttestation; deduped: boolean }>;
   recordArtifactReady(input: RecordFinnyArtifactReadyInput): Promise<FinnyEventResult<FinnyJobEvent<"artifact_ready">>>;
   recordAuditPassed(input: RecordFinnyAuditPassedInput): Promise<FinnyEventResult<FinnyJobEvent<"audit_passed">>>;
