@@ -6,7 +6,7 @@ import {
   openDesktopLogin,
 } from "./desktop-login.ts";
 import { INVITE_LOGIN_SCRIPT, INVITE_LOGIN_SCRIPT_HASH } from "./invite-login.ts";
-import { reportBackendError } from "../../chassis/src/error-reporting.ts";
+import { reportBackendError, withRequestContext } from "../../chassis/src/error-reporting.ts";
 import "./instrument.ts";
 import { provisionTrustedAdmin } from "./trusted-admin.ts";
 import { createHash } from "node:crypto";
@@ -905,7 +905,7 @@ const server = createServer((req, res) => {
         Math.round(performance.now() - startedAt),
       );
   });
-  void handle(req, res).catch((err: unknown) => {
+  void withRequestContext("portal", req, res, () => handle(req, res)).catch((err: unknown) => {
     errorLogged = true;
     reportBackendError(err);
     console.error("[portal] 500 %s %s: %s", req.method ?? "?", (req.url ?? "?").split("?")[0], String(err));

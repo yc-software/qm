@@ -1,7 +1,7 @@
 import { externalSlackCapabilityAllowed } from "./external-slack-capability.ts";
 import { MemoryDisclosureDenied } from "../memory/disclosure.ts";
 import { MemoryFactsMissing } from "../memory/facts.ts";
-import { nameRequest, reportBackendError } from "../../plugins/chassis/src/error-reporting.ts";
+import { nameRequest, reportBackendError, withRequestContext } from "../../plugins/chassis/src/error-reporting.ts";
 import {
   createServer as createHttpServer,
   type IncomingMessage,
@@ -495,7 +495,9 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
   const server = createHttpServer((req, res) => {
     req.on("error", () => res.destroy());
     res.on("error", () => res.destroy());
-    void front(req, res).catch((err: unknown) => respondError(req, res, err));
+    void withRequestContext("core", req, res, () => front(req, res)).catch((err: unknown) =>
+      respondError(req, res, err),
+    );
   });
   const { fastify, routing } = buildFastify(wiring, server);
   const ready = Promise.resolve(fastify.ready());
@@ -518,7 +520,6 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
     }
     const raw = findRoute(rawRoutes, base.method, base.pathname);
     if (raw) {
-      if ("path" in raw.route) nameRequest(base.method, raw.route.path);
       const routeAuth = raw.route.auth;
       if (typeof routeAuth === "object") {
         base.capability = await verifyCapability(req, res, wiring, base.method, base.pathname, routeAuth);
@@ -528,7 +529,6 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
       return;
     }
     const matched = findRoute(apiRoutes, base.method, base.pathname);
-    if (matched && "path" in matched.route) nameRequest(base.method, matched.route.path);
     const routeAuth = matched?.route.auth;
     const acceptsSourceAuth = !matched || routeAuth === "source" || routeAuth === "either";
     if (wiring.secret && !capabilityFromHeaders(req) && routeAuth !== "public" && acceptsSourceAuth) {

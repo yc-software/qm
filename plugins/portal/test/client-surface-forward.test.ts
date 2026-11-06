@@ -47,3 +47,8 @@ test("the web surface receives the client surface the app declared", async () =>
   const forwarded = seen.at(-1)!;
   assert.equal(forwarded["x-qm-client"], "ios");
 });
+
+test("the web surface receives the platform request id", async () => {
+  await post({ "content-type": "application/json", "fly-request-id": "edge-7" });
+  assert.equal(seen.at(-1)!["fly-request-id"], "edge-7");
+});

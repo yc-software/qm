@@ -3,6 +3,7 @@ import { signedHeaders } from "../../chassis/src/core-client.ts";
 import { withVary } from "../../chassis/src/http.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { CLIENT_SURFACE_HEADER } from "../../chassis/src/client-surface.ts";
+import { REQUEST_ID_HEADERS } from "../../chassis/src/error-reporting.ts";
 
 const IDENTITY_TTL_MS = 60_000;
 
@@ -14,6 +15,7 @@ const FORWARD_REQUEST_HEADERS = [
   "accept-encoding",
   "sec-fetch-dest",
   CLIENT_SURFACE_HEADER,
+  ...REQUEST_ID_HEADERS,
 ];
 
 const DROP_RESPONSE_HEADERS = new Set([

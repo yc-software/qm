@@ -2,7 +2,7 @@ import "./instrument.ts";
 import { handleVoiceRoute, sweepDictationSpool } from "./voice-routes.ts";
 import { browserErrorConfig } from "./browser-error-config.ts";
 import { productAnalyticsConfig } from "./analytics-config.ts";
-import { reportBackendError } from "../../chassis/src/error-reporting.ts";
+import { reportBackendError, withRequestContext } from "../../chassis/src/error-reporting.ts";
 import { errChain, swallow } from "../../chassis/src/errors.ts";
 import { appEditSlug } from "../src/app-edit.ts";
 import { composioCallbackUrl } from "./composio-return.ts";
@@ -3668,7 +3668,7 @@ export const handler = async (req: IncomingMessage, res: ServerResponse) => {
   const raw = req.headers[PORTAL_IDENTITY_HEADER];
   const token = Array.isArray(raw) ? raw[0] : raw;
   try {
-    await portalTokenStore.run(token, () => routeRequest(req, res));
+    await portalTokenStore.run(token, () => withRequestContext("web-ui", req, res, () => routeRequest(req, res)));
   } catch (err) {
     if (err instanceof PayloadTooLargeError) {
       if (!res.headersSent) json(res, 413, { error: "payload_too_large", message: err.message });
