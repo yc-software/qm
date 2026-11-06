@@ -483,6 +483,34 @@ test("ambient judge: earlier messages render as context, only the new ones as tr
   }
 });
 
+test("ambient judge: a thread reply carries its thread, so a request inside someone else's thread reads as theirs", async () => {
+  const built = freshApp();
+  built.runtime.start();
+  try {
+    const container = "C-thread";
+    await built.app.setChannelPolicy(container, "watch this channel", "U-admin");
+    await built.app.ingestSurfaceEvents([
+      { container, ts: "1.0", authorId: "Carol", text: "I'll draft the memo tonight", createdAt: 1 },
+    ]);
+    await built.app.judgeAmbientContainer("slack", container);
+    await built.app.ingestSurfaceEvents([
+      { container, ts: "2.0", sub: "1.0", authorId: "Bob", text: "can you add the reference notes too?", createdAt: 2 },
+    ]);
+    await built.app.judgeAmbientContainer("slack", container);
+    const rows = await judged(built.ambientJudgments!, container, (rows) =>
+      rows.some((r: any) => r.prompt?.includes("reference notes")),
+    );
+    const reply = rows.find((r: any) => r.prompt?.includes("reference notes"))!;
+    assert.match(reply.prompt!, /<message id="1\.0"(?:(?!thread=)[^>])*>I'll draft the memo tonight<\/message>/);
+    assert.match(
+      reply.prompt!,
+      /<message id="2\.0"[^>]*thread="1\.0"[^>]*trigger="true">can you add the reference notes too\?<\/message>/,
+    );
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
 test("ambient judge: earlier context is capped at the 10 messages before the new ones (§2.1)", async () => {
   const built = freshApp();
   built.runtime.start();
