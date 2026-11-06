@@ -66,17 +66,12 @@ async function getPersona(ctx: ApiCtx): Promise<void> {
 
 async function personaCrons(ctx: ApiCtx, principalId: string, personaId: string) {
   const { owned, visible } = await ctx.app.listCronsForViewer(principalId);
-  const crons = [...owned, ...visible].filter((c, i, all) => !c.archived && all.findIndex((o) => o.id === c.id) === i);
+  const crons = [...new Map([...owned, ...visible].map((c) => [c.id, c])).values()].filter((c) => !c.archived);
   const refsOf = (c: Cron) => [...new Set([c.destination?.target, c.sessionRef])].filter((ref) => ref !== undefined);
-  const personaOf = new Map(
-    await Promise.all(
-      [...new Set(crons.flatMap(refsOf))].map(
-        async (ref) => [ref, (await ctx.deps.sessions?.getByThread(ref))?.personaId] as const,
-      ),
-    ),
-  );
+  const personaThreads =
+    (await ctx.deps.sessions?.threadsWithPersona(personaId, [...new Set(crons.flatMap(refsOf))])) ?? new Set();
   return crons
-    .filter((c) => refsOf(c).some((ref) => personaOf.get(ref) === personaId))
+    .filter((c) => refsOf(c).some((ref) => personaThreads.has(ref)))
     .map(({ id, title, action, message, schedule, enabled }) => ({ id, title, action, message, schedule, enabled }));
 }
 
