@@ -521,6 +521,11 @@ const SESSION_CLAIMS: PgMigrationDefinition = {
   ],
 };
 
+const SESSION_PERSONA: PgMigrationDefinition = {
+  id: "sessions/store/0056-persona",
+  statements: [`SET LOCAL lock_timeout = '5s'`, `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS persona_id TEXT`],
+};
+
 export const SESSION_MIGRATIONS = [
   ...TENANCY,
   SESSION_SCHEMA,
@@ -534,6 +539,7 @@ export const SESSION_MIGRATIONS = [
   DROP_TENANT_PREBUILD_INDEXES,
   ...SESSION_TABLES,
   SESSION_CLAIMS,
+  SESSION_PERSONA,
 ];
 
 export const ancestry = (seed: string): string => `ancestry AS (

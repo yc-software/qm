@@ -4,7 +4,7 @@ import { orgId } from "../config.ts";
 import { McpCallError, type McpEnvelope } from "../mcp/mcp-client.ts";
 import { TimeoutError } from "../util/async.ts";
 import { reportFailure } from "../util/errors.ts";
-import { UNATTESTABLE_ACTOR_FIX, UnattestableActor } from "../directory/person.ts";
+import { OutsideAudience, UNATTESTABLE_ACTOR_FIX, UnattestableActor } from "../directory/person.ts";
 import type { ScopeId } from "../types.ts";
 import type { MemoryCaptureContext, MemoryProviderOutcome, MemoryService } from "./memory-service.ts";
 
@@ -24,12 +24,16 @@ export const reportEnvelope = (envelope: McpEnvelope) => envelopes.getStore()?.(
 
 export async function withEnvelope<T>(run: () => Promise<T>): Promise<{ value: T; envelope: McpEnvelope }> {
   let envelope: McpEnvelope = {};
-  const value = await envelopes.run((received) => void (envelope = received), run);
+  const value = await envelopes.run(
+    (received) => void (envelope = envelope.status === "pending" ? { ...received, status: "pending" } : received),
+    run,
+  );
   return { value, envelope };
 }
 
 export function failedOutcome(error: unknown): Pick<MemoryProviderOutcome, "outcome" | "code"> {
-  if (error instanceof UnattestableActor) return { outcome: "denied", code: error.code };
+  if (error instanceof UnattestableActor || error instanceof OutsideAudience)
+    return { outcome: "denied", code: error.code };
   if (error instanceof TimeoutError) return { outcome: "timed_out" };
   if (!(error instanceof McpCallError)) return { outcome: "failed" };
   const code = error.code ?? (error.status ? `http_${error.status}` : undefined);
@@ -46,6 +50,8 @@ export interface MemoryProviderProblem {
 
 function deniedFix(provider: string, code: string | undefined): string {
   if (code === "invalid_actor") return UNATTESTABLE_ACTOR_FIX;
+  if (code === "private_only")
+    return `Save it from the member's own private conversation with QM, the only place ${provider} acts as them.`;
   if (code === "actor_unlinked") return `Link this member's QM principal id to their member in ${provider}.`;
   return `Check ${provider}'s OAuth client and its grant, including the attest right when attestActor is set (${TROUBLESHOOTING}).`;
 }
@@ -68,7 +74,9 @@ function problemOf(outcome: MemoryProviderOutcome, write: boolean): MemoryProvid
         code: "memory_provider_timeout",
         provider,
         detail: `Memory provider ${provider} timed out after ${ms}ms, so ${lost}.`,
-        fix: `Raise ${provider}'s timeoutMs in MEMORY_PROVIDER_CONFIG or check its latency.`,
+        fix: write
+          ? `Check ${provider}'s latency, and whether it stored the facts before sending them again.`
+          : `Raise ${provider}'s timeoutMs in MEMORY_PROVIDER_CONFIG or check its latency.`,
       };
     case "failed":
       return {

@@ -11,10 +11,11 @@ import { withRequestTenant } from "../src/api/request-tenant.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { mintPortalIdentity } from "../src/auth/portal-identity.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
+import { createPostgresUserStore } from "../src/identity/user-store.ts";
 import type { DirectoryStore } from "../src/directory/directory-store.ts";
 import type { IdentityService } from "../src/identity/identity-service.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
-import { boundTenant, withoutTenant } from "../src/tenants/context.ts";
+import { boundTenant, withoutTenant, withTenant } from "../src/tenants/context.ts";
 import { bindBootTenant } from "../src/tenants/boot.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -27,6 +28,12 @@ const beta = randomUUID();
 const databaseUrl = testMigratedDatabaseUrl();
 const owner = createPgPool(ownerUrl(databaseUrl).toString());
 const directory = createPostgresDirectoryStore(appUrl(databaseUrl));
+const users = createPostgresUserStore(appUrl(databaseUrl));
+
+const signIn = (tenant: string, alias: string, person: string) =>
+  withTenant(tenant, () =>
+    users.link({ principalId: alias, canonicalId: person, evidence: "sso", linkedBy: "", createdAt: 0 }),
+  );
 
 async function member(tenant: string, principal: string, type = "internal"): Promise<void> {
   await owner.q(
@@ -108,7 +115,7 @@ function start(identity: IdentityService, tenants: DirectoryStore["tenantsForEma
   };
 }
 
-test("a company admin is found by email or sign-in principal, directly or through a principal link, with no directory row", () =>
+test("a company admin or user is found by email or sign-in principal, directly or through a sign-in link, with no directory row", () =>
   withoutTenant(async () => {
     const grant = (tenant: string, principal: string) =>
       owner.q(
@@ -118,22 +125,26 @@ test("a company admin is found by email or sign-in principal, directly or throug
     await grant(alpha, "Founder@Copied.test");
     await grant(beta, "oidc:issuer:direct");
     await grant(beta, "linked@copied.test");
-    await owner.q(
-      `INSERT INTO principal_links(tenant_id, id, json) VALUES ($1, 'oidc:issuer:linked', '{"canonicalId":"linked@copied.test"}'),
-        ($2, 'oidc:issuer:elsewhere', '{"canonicalId":"linked@copied.test"}')`,
-      [beta, alpha],
-    );
+    await signIn(beta, "oidc:issuer:linked", "linked@copied.test");
+    await signIn(alpha, "oidc:issuer:elsewhere", "linked@copied.test");
+    await signIn(beta, "oidc:issuer:user", "user@copied.test");
+    await signIn(alpha, "oidc:issuer:leaver", "leaver@copied.test");
+    await withTenant(alpha, () => users.markOffboarded("leaver@copied.test", "linked@copied.test"));
     try {
       assert.deepEqual(await directory.tenantsForEmail!("founder@copied.test"), [{ id: alpha, brandName: "Alpha" }]);
+      assert.deepEqual(await directory.tenantsForEmail!("User@Copied.test"), [{ id: beta }]);
+      assert.deepEqual(await directory.tenantsForEmail!("leaver@copied.test"), []);
       assert.deepEqual(await directory.tenantsForPrincipal!("oidc:issuer:direct"), [{ id: beta }]);
       assert.deepEqual(await directory.tenantsForPrincipal!("oidc:issuer:linked"), [{ id: beta }]);
       assert.deepEqual(await directory.tenantsForPrincipal!("oidc:issuer:elsewhere"), [
         { id: alpha, brandName: "Alpha" },
       ]);
+      assert.deepEqual(await directory.tenantsForPrincipal!("oidc:issuer:user"), [{ id: beta }]);
+      assert.deepEqual(await directory.tenantsForPrincipal!("oidc:issuer:leaver"), []);
       assert.deepEqual(await directory.tenantsForPrincipal!("oidc:issuer:stranger"), []);
     } finally {
       await owner.q(`DELETE FROM admin_grants WHERE scope_id = 'org:x'`);
-      await owner.q(`DELETE FROM principal_links WHERE id LIKE 'oidc:issuer:%'`);
+      await owner.q(`DELETE FROM users WHERE primary_alias LIKE '%@copied.test'`);
     }
   }));
 
@@ -227,19 +238,13 @@ test("a single-company install keeps admitting by the install list", (t) =>
     assert.equal(await allowed("stranger@elsewhere.test"), false);
   }));
 
-test("a trusted principal maps to the tenants whose principal links name it, through the broker route", (t) =>
+test("a trusted principal maps to the tenants whose sign-in links name it, through the broker route", (t) =>
   withoutTenant(async () => {
     const srv = start(identityAdmitting(undefined, []), async () => []);
     t.after(srv.close);
-    const link = (tenant: string, alias: string, canonical: string) =>
-      owner.q(
-        `INSERT INTO principal_links(tenant_id, id, json) VALUES ($1, $2, jsonb_build_object('principalId', $2::text, 'canonicalId', $3::text))
-         ON CONFLICT DO NOTHING`,
-        [tenant, alias, canonical],
-      );
-    await link(alpha, "oidc:issuer:both", "both@shared.test");
-    await link(beta, "oidc:issuer:both", "both@shared.test");
-    await link(beta, "oidc:issuer:one", "bob@beta.test");
+    await signIn(alpha, "oidc:issuer:both", "both@shared.test");
+    await signIn(beta, "oidc:issuer:both", "both@shared.test");
+    await signIn(beta, "oidc:issuer:one", "bob@beta.test");
     const tenantsOf = async (principal: string) =>
       (await srv.get(`/v1/auth/broker/principal-tenants?principal=${encodeURIComponent(principal)}`)).body;
     const both = await tenantsOf("oidc:issuer:both");

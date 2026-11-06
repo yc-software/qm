@@ -8,8 +8,8 @@ export const validAlbHostname = (value: string): boolean =>
     .every((label) => label.length > 0 && label.length <= 63 && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label));
 
 export function awsPortalAppsDomain(config: QmConfig): string | undefined {
-  if (!config.aws?.services.portal) return undefined;
-  const domain = config.env.portal?.PORTAL_APPS_DOMAIN?.trim().toLowerCase().replace(/\.$/, "");
+  if (!config.aws) return undefined;
+  const domain = config.env.core?.PORTAL_APPS_DOMAIN?.trim().toLowerCase().replace(/\.$/, "");
   if (!domain) return undefined;
   const coreDomain = (config.env.core?.DEPLOY_APPS_DOMAIN || config.env.core?.AWS_DEPLOY_APPS_DOMAIN)
     ?.trim()
@@ -17,7 +17,9 @@ export function awsPortalAppsDomain(config: QmConfig): string | undefined {
     .replace(/\.$/, "");
   const company = new URL(config.publicUrl).hostname.toLowerCase();
   if (!validAlbHostname(domain) || domain !== coreDomain || !domain.endsWith(`.${company}`)) {
-    throw new Error("portal apps domain must match core and remain beneath the company public hostname");
+    throw new Error(
+      "env.core.PORTAL_APPS_DOMAIN must equal the core apps domain and remain beneath the company public hostname",
+    );
   }
   return domain;
 }

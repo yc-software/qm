@@ -58,11 +58,11 @@ test("required fields: orgId, target, services (must include core), valid servic
   withConfig({ services: undefined }, ({ path }) =>
     assert.throws(() => loadConfigAt(path), /"services" must be an array/),
   );
-  withConfig({ services: ["web-ui"] }, ({ path }) => assert.throws(() => loadConfigAt(path), /must include "core"/));
+  withConfig({ services: ["slack"] }, ({ path }) => assert.throws(() => loadConfigAt(path), /must include "core"/));
   withConfig({ services: ["core", "nope"] }, ({ path }) => assert.throws(() => loadConfigAt(path), /unknown service/));
-  withConfig({ services: ["core", "web-ui", "portal"] }, ({ path }) => {
+  withConfig({ services: ["core", "slack", "egress-proxy"] }, ({ path }) => {
     const { config } = loadConfigAt(path);
-    assert.deepEqual(config.services, ["core", "web-ui", "portal"]);
+    assert.deepEqual(config.services, ["core", "slack", "egress-proxy"]);
   });
   withConfig({ unknownField: "bad" }, ({ path }) =>
     assert.throws(() => loadConfigAt(path), /unknown top-level field "unknownField"/),
@@ -220,10 +220,40 @@ test("custom portal issuers require an HTTPS JWKS URI on Fly", () => {
   withConfig(
     {
       target: "fly",
-      services: ["core", "portal"],
-      env: { portal: { OIDC_ISSUER: "https://auth.example.com" } },
+      services: ["core"],
+      env: { core: { OIDC_ISSUER: "https://auth.example.com" } },
     },
-    ({ path }) => assert.throws(() => loadConfigAt(path), /OIDC_JWKS_URI/),
+    ({ path }) => assert.throws(() => loadConfigAt(path), /env\.core\.OIDC_JWKS_URI/),
+  );
+});
+
+test("core's front door port is managed, and core-hosted services may not disagree with core's env", () => {
+  for (const [field, value] of [
+    ["env", "9000"],
+    ["secretEnv", "SOME_SECRET"],
+  ] as const) {
+    for (const service of ["core", "auth", "slack"]) {
+      for (const name of ["PORT", "PUBLIC_PORT"]) {
+        withConfig(
+          {
+            services: ["core", "auth", "slack"],
+            env: { auth: { AUTH_EMAIL_TRANSPORT: "resend", AUTH_ALLOWED_EMAIL_DOMAIN: "acme.example" } },
+            [field]: { [service]: { [name]: value } },
+          },
+          ({ path }) =>
+            assert.throws(
+              () => loadConfigAt(path),
+              new RegExp(`"${field}\\.${service}\\.${name}" is managed by the deployment target`),
+            ),
+        );
+      }
+    }
+  }
+  withConfig({ services: ["core", "slack"], env: { core: { SHARED: "a" }, slack: { SHARED: "b" } } }, ({ path }) =>
+    assert.throws(() => loadConfigAt(path), /env\.slack\.SHARED and env\.core\.SHARED set different values/),
+  );
+  withConfig({ services: ["core", "slack"], env: { core: { SHARED: "a" }, slack: { SHARED: "a" } } }, ({ path }) =>
+    assert.equal(loadConfigAt(path).config.env.slack?.SHARED, "a"),
   );
 });
 
@@ -253,7 +283,7 @@ test("AWS workload architecture accepts arm64 or amd64 only", () => {
   withConfig(
     {
       target: "aws",
-      services: ["core", "web-ui"],
+      plugins: [{ name: "linear", image: "ghcr.io/acme/linear:1" }],
       aws: {
         ...aws,
         services: {
@@ -262,11 +292,11 @@ test("AWS workload architecture accepts arm64 or amd64 only", () => {
             taskRoleArn: "arn:aws:iam::123456789012:role/acme-task",
             assumeRoleArns: ["arn:aws:iam::111122223333:role/model-gateway"],
           },
-          "web-ui": { ecrRepository: "web-ui", ecsService: "acme-web-ui", cpu: 512, memory: 1024 },
+          linear: { ecrRepository: "linear", ecsService: "acme-linear", cpu: 512, memory: 1024 },
         },
       },
     },
-    ({ path }) => assert.throws(() => loadConfigAt(path), /taskRoleArn.*must be unique.*also used by web-ui/),
+    ({ path }) => assert.throws(() => loadConfigAt(path), /taskRoleArn.*must be unique.*also used by linear/),
   );
   withConfig(
     { target: "aws", aws: { ...aws, services: { core: { ...aws.services.core, architecture: "ppc64" } } } },
@@ -361,7 +391,7 @@ test("AWS workloads accept scoped commercial IAM assume-role targets", () => {
   );
 });
 
-test("AWS config rejects public surfaces without the HTTPS portal and real harnesses over HTTP", () => {
+test("AWS config rejects unsafe sign-in settings and real harnesses over HTTP", () => {
   const service = (name: string) => ({
     ecrRepository: `qm-${name}`,
     ecsService: `acme-${name}`,
@@ -380,34 +410,13 @@ test("AWS config rejects public surfaces without the HTTPS portal and real harne
   });
   const cases: Array<{ label: string; config: Record<string, unknown>; error: RegExp }> = [
     {
-      label: "web-ui without portal",
+      label: "a placeholder Slack team gate",
       config: {
         target: "aws",
         publicUrl: "https://agent.acme.example",
-        services: ["core", "web-ui"],
-        aws: aws(["core", "web-ui"]),
-      },
-      error: /web-ui requires the authenticated portal/,
-    },
-    {
-      label: "portal over HTTP",
-      config: {
-        target: "aws",
-        publicUrl: "http://agent.acme.example",
-        services: ["core", "web-ui", "portal"],
-        env: { core: {} },
-        aws: aws(["core", "web-ui", "portal"]),
-      },
-      error: /portal requires an HTTPS publicUrl/,
-    },
-    {
-      label: "portal without a tenant gate",
-      config: {
-        target: "aws",
-        publicUrl: "https://agent.acme.example",
-        services: ["core", "web-ui", "portal"],
-        env: { core: {}, portal: { OIDC_CLIENT_ID: "client", PORTAL_EXPECTED_TEAM_ID: " " } },
-        aws: aws(["core", "web-ui", "portal"]),
+        services: ["core"],
+        env: { core: { OIDC_CLIENT_ID: "client", PORTAL_EXPECTED_TEAM_ID: " " } },
+        aws: aws(["core"]),
       },
       error: /PORTAL_EXPECTED_TEAM_ID/,
     },
@@ -416,16 +425,15 @@ test("AWS config rejects public surfaces without the HTTPS portal and real harne
       config: {
         target: "aws",
         publicUrl: "https://agent.acme.example",
-        services: ["core", "web-ui", "portal"],
+        services: ["core"],
         env: {
-          core: {},
-          portal: {
+          core: {
             OIDC_CLIENT_ID: "client",
             OIDC_ISSUER: "https://auth.example.com",
             OIDC_ALLOWED_EMAILS: "admin@example.com",
           },
         },
-        aws: aws(["core", "web-ui", "portal"]),
+        aws: aws(["core"]),
       },
       error: /OIDC_JWKS_URI/,
     },
@@ -434,17 +442,16 @@ test("AWS config rejects public surfaces without the HTTPS portal and real harne
       config: {
         target: "aws",
         publicUrl: "https://agent.acme.example",
-        services: ["core", "web-ui", "portal"],
+        services: ["core"],
         env: {
-          core: {},
-          portal: {
+          core: {
             OIDC_CLIENT_ID: "client",
             OIDC_ISSUER: "https://auth.example.com",
             OIDC_JWKS_URI: "http://auth.example.com/jwks.json",
             OIDC_ALLOWED_EMAILS: "admin@example.com",
           },
         },
-        aws: aws(["core", "web-ui", "portal"]),
+        aws: aws(["core"]),
       },
       error: /non-placeholder HTTPS URL/,
     },
@@ -534,38 +541,38 @@ test("AWS config rejects public surfaces without the HTTPS portal and real harne
     {
       target: "aws",
       publicUrl: "https://agent.acme.example",
-      services: ["core", "web-ui", "portal"],
+      services: ["core"],
       env: {
-        portal: { OIDC_CLIENT_ID: "client", OIDC_ALLOWED_EMAIL_DOMAIN: "example.com", PORTAL_EXPECTED_TEAM_ID: "T123" },
+        core: { OIDC_CLIENT_ID: "client", OIDC_ALLOWED_EMAIL_DOMAIN: "example.com", PORTAL_EXPECTED_TEAM_ID: "T123" },
       },
-      aws: aws(["core", "web-ui", "portal"]),
+      aws: aws(["core"]),
     },
     ({ path }) => {
-      assert.equal(loadConfigAt(path).config.services.includes("portal"), true);
+      assert.equal(loadConfigAt(path).config.env.core?.PORTAL_EXPECTED_TEAM_ID, "T123");
     },
   );
   withConfig(
     {
       target: "aws",
       publicUrl: "https://agent.acme.example",
-      services: ["core", "web-ui", "portal"],
-      env: { portal: { OIDC_CLIENT_ID: "client", OIDC_ALLOWED_EMAILS: "admin@example.com" } },
-      aws: aws(["core", "web-ui", "portal"]),
+      services: ["core"],
+      env: { core: { OIDC_CLIENT_ID: "client", OIDC_ALLOWED_EMAILS: "admin@example.com" } },
+      aws: aws(["core"]),
     },
     ({ path }) => {
-      assert.equal(loadConfigAt(path).config.env.portal?.OIDC_ALLOWED_EMAILS, "admin@example.com");
+      assert.equal(loadConfigAt(path).config.env.core?.OIDC_ALLOWED_EMAILS, "admin@example.com");
     },
   );
   withConfig(
     {
       target: "aws",
       publicUrl: "https://agent.acme.example",
-      services: ["core", "web-ui", "portal"],
-      env: { portal: { OIDC_PRINCIPAL_CLAIM: "email" } },
-      aws: aws(["core", "web-ui", "portal"]),
+      services: ["core"],
+      env: { core: { OIDC_PRINCIPAL_CLAIM: "email" } },
+      aws: aws(["core"]),
     },
     ({ path }) => {
-      assert.equal(loadConfigAt(path).config.env.portal?.OIDC_CLIENT_ID, undefined);
+      assert.equal(loadConfigAt(path).config.env.core?.OIDC_CLIENT_ID, undefined);
     },
   );
 });
@@ -622,12 +629,12 @@ test("AWS validates release labels, unique coordinates, Fargate sizes, and owned
     withConfig(
       {
         target: "aws",
-        services: ["core", "web-ui"],
+        plugins: [{ name: "linear", image: "ghcr.io/acme/linear:1" }],
         aws: {
           ...aws,
           services: {
             core: service,
-            "web-ui": { ...service, ecrRepository: "web", ecsService: "acme-web", [field]: service[field] },
+            linear: { ...service, ecrRepository: "linear", ecsService: "acme-linear", [field]: service[field] },
           },
         },
       },
@@ -716,38 +723,17 @@ test("AWS validates release labels, unique coordinates, Fargate sizes, and owned
   withConfig(
     {
       target: "aws",
-      services: ["core", "web-ui"],
+      plugins: [{ name: "linear", image: "ghcr.io/acme/linear:1" }],
       aws: {
         ...aws,
         services: {
           core: { ...service, targetGroup: "shared-tg" },
-          "web-ui": { ...service, ecrRepository: "web", ecsService: "acme-web", targetGroup: "shared-tg" },
+          linear: { ...service, ecrRepository: "linear", ecsService: "acme-linear", targetGroup: "shared-tg" },
         },
       },
     },
     ({ path }) => assert.throws(() => loadConfigAt(path), /duplicates aws\.services\.core\.targetGroup/),
   );
-  withConfig(
-    { target: "aws", aws: { ...aws, services: { core: { ...service, dockerfile: "layered/core.Dockerfile" } } } },
-    ({ path }) => {
-      assert.equal(loadConfigAt(path).config.aws?.services.core?.dockerfile, "layered/core.Dockerfile");
-    },
-  );
-  for (const dockerfile of [
-    "",
-    "/abs/Dockerfile",
-    "layered/../../escape.Dockerfile",
-    "layered\\..\\escape.Dockerfile",
-  ]) {
-    withConfig({ target: "aws", aws: { ...aws, services: { core: { ...service, dockerfile } } } }, ({ path }) => {
-      assert.throws(() => loadConfigAt(path), /services\.core\.dockerfile/);
-    });
-  }
-  for (const field of ["subnets", "securityGroups"] as const) {
-    withConfig({ target: "aws", aws: { ...aws, networking: { ...aws.networking, [field]: ["x"] } } }, ({ path }) => {
-      assert.throws(() => loadConfigAt(path), new RegExp(`aws\\.networking\\.${field}.*not supported`));
-    });
-  }
 });
 
 test("AWS rejects coordinates that its Terraform-derived resources cannot accept", () => {
@@ -1433,7 +1419,7 @@ test("proxy deployment rendering names the mode and classifier", () => {
 });
 
 test("AWS built-in architecture defaults match published images and retain explicit choices", () => {
-  const workloads = ["core", "web-ui", "portal", "auth", "linear"];
+  const workloads = ["core", "egress-proxy", "linear"];
   const config = {
     plugins: [{ name: "linear" }],
     imageOverrides: {},

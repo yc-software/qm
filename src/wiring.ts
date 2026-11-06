@@ -89,12 +89,8 @@ import {
   type DeactivationRecord,
   type IdentityService,
 } from "./identity/identity-service.ts";
-import {
-  createPrincipalLinkService,
-  PRINCIPAL_LINKS_TENANCY,
-  type PrincipalLink,
-  type PrincipalLinkService,
-} from "./identity/principal-links.ts";
+import { createPrincipalLinkService, type PrincipalLinkService } from "./identity/principal-links.ts";
+import { createPostgresUserStore, type UserStore } from "./identity/user-store.ts";
 import type { SlackAccountLink, ComposioReturn } from "./api/routes/composio.ts";
 import { installPrincipalLinks } from "./directory/person.ts";
 import type { ExternalMember } from "./identity/external-members.ts";
@@ -149,6 +145,7 @@ import { createInboxRealtime } from "./loops/inbox-realtime.ts";
 import { createLoopOutputStore } from "./loops/output-store.ts";
 import { createShipGrantStore } from "./loops/ship-grant-store.ts";
 import { createLoopFireService, type LoopFireService } from "./loops/loop-fire.ts";
+import { createInboxQuietCheck } from "./loops/inbox-quiet-check.ts";
 import type { LoopServiceDeps } from "./api/routes/loops.ts";
 import type { DeliveryStore } from "./delivery/delivery-store.ts";
 import { createPostgresDeliveryStore } from "./delivery/postgres-delivery-store.ts";
@@ -376,6 +373,8 @@ import { createAdminService, parseAdminGrants, type AdminService } from "./admin
 import { createAdminGrantStore } from "./admin/admin-grant-store.ts";
 import { createPostgresAdminGrantStore } from "./admin/postgres-admin-grant-store.ts";
 import { createProjectStore, type Project, type ProjectStore } from "./projects/project-store.ts";
+import { createPersonaService } from "./personas/persona-service.ts";
+import { createPostgresPersonaStore } from "./personas/persona-store.ts";
 import { withErrorReporting, type ErrorLog } from "./admin/error-log.ts";
 import { createPostgresReplayDedupe, type ReplayDedupe } from "./auth/replay-dedupe.ts";
 import {
@@ -499,6 +498,7 @@ export interface BuiltApp {
   credentialUsage: CredentialUsageSink;
   egressAudit: EgressAuditSink;
   identity: IdentityService;
+  users: UserStore;
   principalLinks: PrincipalLinkService;
   slackAccounts: DurableMap<SlackAccountLink>;
   composioReturns: DurableMap<ComposioReturn>;
@@ -650,10 +650,8 @@ export function buildApp(
     },
   };
   const advisoryLock: AdvisoryLock = createPostgresAdvisoryLock(pgArtifactMap.pool);
-  const principalLinks = createPrincipalLinkService(
-    createPostgresMap<PrincipalLink>(pgArtifactMap.pool, "principal_links", [], PRINCIPAL_LINKS_TENANCY),
-    advisoryLock,
-  );
+  const users = createPostgresUserStore(databaseUrl);
+  const principalLinks = createPrincipalLinkService(users, advisoryLock);
   installPrincipalLinks(principalLinks);
   const identity = createIdentityService(artifactMap<DeactivationRecord>("deactivated_principals"), {
     directorySyncProtected: config.emailAuthPrincipals,
@@ -1793,8 +1791,13 @@ export function buildApp(
   const adminGrantStore = createAdminGrantStore(createPostgresAdminGrantStore(databaseUrl), {
     seed: parseAdminGrants(config.adminGrants, config.orgId) ?? [],
     seedTenant: async () => bootTenant(),
+    beforeSeed: (grants) =>
+      Promise.all(grants.map((g) => users.record({ id: g.principalId, source: "admin", at: Date.now() }))),
   });
-  const admin = createAdminService(adminGrantStore, { trustedOidcAdminIssuer: config.trustedOidcAdminIssuer });
+  const admin = createAdminService(adminGrantStore, {
+    trustedOidcAdminIssuer: config.trustedOidcAdminIssuer,
+    users,
+  });
   const { strategy: memoryStrategy, memory } = createMemoryStrategy(config.memoryStrategy, {
     agent,
     memory: baseMemory,
@@ -1817,11 +1820,19 @@ export function buildApp(
     isActiveMember: (principalId) => identity.isInternal(identity.classify(principalId)),
     advisoryLock,
   });
-  const canReadScope = createCanReadScope({ managedGroups: projects, directory, identity, teams, sessions });
-  const canWriteScope = createCanWriteScope({ managedGroups: projects, directory, identity, teams });
-  const canManageScope = createCanManageScope({ managedGroups: projects, directory, identity, sessions });
+  const personas = createPersonaService({
+    store: createPostgresPersonaStore(databaseUrl),
+    flags: featureFlags,
+    orgScope: scopeId("org", config.orgId),
+    teams,
+    sessions,
+    ...(keychain ? { keychain } : {}),
+  });
+  const canReadScope = createCanReadScope({ managedGroups: projects, directory, identity, teams, sessions, personas });
+  const canWriteScope = createCanWriteScope({ managedGroups: projects, directory, identity, teams, personas });
+  const canManageScope = createCanManageScope({ managedGroups: projects, directory, identity, sessions, personas });
   const managesArtifactHome = createManagesArtifactHome(
-    { managedGroups: projects, directory, identity, teams },
+    { managedGroups: projects, directory, identity, teams, personas },
     canManageScope,
   );
   const currentScopeMembers = createCurrentScopeMembers({ managedGroups: projects, directory, identity });
@@ -2069,6 +2080,7 @@ export function buildApp(
     sessions,
     runs,
     signals: runSignals,
+    steerRun: (run, signal) => app.steerRun(run, signal),
     maxAttempts,
     advisoryLock,
     prepareRequest: prepareSessionRequest,
@@ -2127,6 +2139,7 @@ export function buildApp(
     sessionSyscalls,
     refreshModels,
     identity,
+    users,
     resolution,
     config: configStore,
     defaultTurnWallClockMs: config.turnWallClockMs,
@@ -2198,6 +2211,7 @@ export function buildApp(
     currentScopeMembers: createCurrentScopeMembers({ managedGroups: projects, directory, identity }, true),
     managedGroups: projects,
     projects,
+    personas,
     ...(config.surfaceDebugFooter ? { surfaceDebugFooter: true } : {}),
     ...(decisions ? { replyCheck: createReplyCheck(decisions, decide) } : {}),
     environments,
@@ -2306,6 +2320,7 @@ export function buildApp(
     advisoryLock,
   };
   const app = createApp({
+    errors,
     settleTreeWakes: (root) => settleTreeWakes(subagentMail, root),
     teams,
     externalSlackPolicies: config.externalSlackPolicies,
@@ -2356,6 +2371,7 @@ export function buildApp(
         }
       : {}),
     projects,
+    personas,
     environments,
     deploy: deployService,
     deployAppsDomain: config.awsDeploy.appsDomain,
@@ -2618,6 +2634,14 @@ export function buildApp(
     outputs: loopOutputs,
     grants: loopGrants,
     files,
+    ...(keychain
+      ? {
+          inboxQuiet: createInboxQuietCheck({
+            tokens: keychain,
+            ...(config.slack?.apiUrl ? { slackApiUrl: config.slack.apiUrl } : {}),
+          }),
+        }
+      : {}),
     trigger: {
       deliveries,
       idempotency,
@@ -3067,6 +3091,7 @@ export function buildApp(
     credentialUsage,
     egressAudit,
     identity,
+    users,
     principalLinks,
     slackAccounts: artifactMap<SlackAccountLink>("slack_accounts"),
     composioReturns,

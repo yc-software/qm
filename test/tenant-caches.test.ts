@@ -10,14 +10,15 @@ import { createMcpToolService } from "../src/mcp/mcp-tool-service.ts";
 import type { McpServer, McpServerStore } from "../src/mcp/mcp-server-store.ts";
 import { createIdentityService, type DeactivationRecord } from "../src/identity/identity-service.ts";
 import type { ExternalMember } from "../src/identity/external-members.ts";
-import { createPrincipalLinkService, type PrincipalLink } from "../src/identity/principal-links.ts";
+import { createPrincipalLinkService } from "../src/identity/principal-links.ts";
+import type { UserLink, UserLinkStore } from "../src/identity/user-store.ts";
 import { configStoreMaps, createConfigStore } from "../src/resolution/config-store.ts";
 import { createSpendLimits } from "../src/ratelimit/spend-limits.ts";
 import { createAdminGrantStore, type AdminGrant } from "../src/admin/admin-grant-store.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createEngagedRegistry } from "../src/wake/engaged-registry.ts";
 import { scopeId } from "../src/types.ts";
-import { tenantMap } from "./support/tenant-map.ts";
+import { partition, tenantMap } from "./support/tenant-map.ts";
 import type { ScopeActivity, SessionStore, SpendRow } from "../src/sessions/session-store.ts";
 import { selectableModelCatalog } from "../src/model/model-catalog.ts";
 import { scopeActivity } from "../src/api/routes/admin/scope-activity.ts";
@@ -37,6 +38,25 @@ const noLock: AdvisoryLock = {
 
 const A = randomUUID();
 const B = randomUUID();
+
+function tenantLinks(): UserLinkStore {
+  const rows = new Map<string, Map<string, UserLink>>();
+  const own = () => partition(rows);
+  return {
+    async links() {
+      return [...own().values()];
+    },
+    async link(link) {
+      own().set(link.principalId, link);
+      return link;
+    },
+    async unlink(aliasId) {
+      const row = own().get(aliasId) ?? null;
+      own().delete(aliasId);
+      return row;
+    },
+  };
+}
 
 test("two tenants reading the same cache get their own values", () => {
   const slot = perTenant(() => new Map<string, string>());
@@ -265,7 +285,7 @@ test("MCP tool lists are loaded and refreshed per tenant", async (t) => {
 test("identity rosters and principal links are kept and refreshed per tenant", async () => {
   const deactivations = tenantMap<DeactivationRecord>();
   const externals = tenantMap<ExternalMember>();
-  const links = createPrincipalLinkService(tenantMap<PrincipalLink>(), noLock);
+  const links = createPrincipalLinkService(tenantLinks(), noLock);
   const identity = createIdentityService(deactivations, { externalMembers: externals, principalLinks: links });
   await withTenant(A, async () => {
     await identity.refresh(true);

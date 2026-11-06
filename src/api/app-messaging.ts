@@ -115,6 +115,7 @@ export function createMessagingMethods(
   | "resolveChannel"
   | "directoryMembers"
   | "directoryChannels"
+  | "directoryChannelsFor"
   | "directoryMember"
   | "samePerson"
   | "personMatcher"
@@ -440,6 +441,9 @@ export function createMessagingMethods(
     async upsertDirectory(members, syncedAt) {
       const previous = await deps.directory.list();
       if (!(await deps.directory.replace(members, syncedAt))) return false;
+      const apps = members.filter((m) => m.isBot).map((m) => m.principalId);
+      if (apps.length && deps.admin)
+        await deps.admin.users.markApps(apps).catch(reportFailureAs("users: mark apps", 0));
       const present = members.filter((m) => m.type === "internal").map((m) => m.principalId);
       const presentSet = new Set(present);
       const removed = previous.map((m) => m.principalId).filter((id) => !presentSet.has(id));
@@ -517,6 +521,9 @@ export function createMessagingMethods(
     },
     directoryChannels() {
       return deps.directory.listChannels();
+    },
+    directoryChannelsFor(principalId) {
+      return deps.directory.listChannelsFor(principalId);
     },
     async directoryMember(principalId) {
       const direct = await deps.directory.get(principalId);

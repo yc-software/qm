@@ -28,6 +28,7 @@ import { cliVersion } from "./manifest.ts";
 import { gitTopLevel, promptHidden, writeEnvValue } from "./util.ts";
 import { scopeStorageKey } from "./scope-storage-key.ts";
 import { runAdminLogin } from "./commands/admin-login.ts";
+import { runUiPublish } from "./commands/ui.ts";
 import { syncDeploymentLayer } from "./deployment-layer.ts";
 
 interface Parsed {
@@ -155,6 +156,8 @@ ${bold("DEPLOY (operator)")} ${dim("— runs in the deployment directory")}
   slack render                             render the bot manifest (+ SSO manifest for Slack OIDC)
   outputs [--json]                         print the Web UI, health, and Slack app creation links
   admin-login [--email <admin-email>]      print a single-use admin login link, valid for five minutes
+  ui publish --dir <dist-web>              upload a built web UI and make it live without restarting core
+  ui publish --release <id>                make an earlier web UI release live again (roll back)
   proof scope-key <scope-id>               derive the provider snapshot key for an exact scope
   infra render                             re-derive infra/terraform.tfvars from config
   infra build-image                        build the AWS deploy MicroVM image and record its pin
@@ -473,6 +476,18 @@ async function dispatch(argv: string[]): Promise<void> {
       rejectExtraPositionals(positionals, 0);
       const ctx = deployContext(flags);
       runOutputs(ctx.config, ctx.configDir, boolFlag(flags, "json"));
+      return;
+    }
+
+    case "ui": {
+      rejectUnknownFlags(flags, ["dir", "release", "config", "env-file", "sandbox-dir", "target"]);
+      rejectExtraPositionals(positionals, 1);
+      if (positionals[0] !== "publish")
+        throw new CliError(`usage: ${CLI_NAME} ui publish --dir <built web UI> | --release <id>`, {
+          clause: "cli.invocation",
+        });
+      const ctx = deployContext(flags);
+      runUiPublish(ctx.config, { dir: strFlag(flags, "dir"), release: strFlag(flags, "release") });
       return;
     }
 

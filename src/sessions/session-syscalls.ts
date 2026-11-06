@@ -25,10 +25,11 @@ import { openRuntime, parentRuntime } from "./subagent-runtime.ts";
 import type { RuntimeChoice } from "../agent/agent.ts";
 import type { OrchestratorInput } from "../core/orchestrator/types.ts";
 import type { Run, RunStore } from "../runs/run-store.ts";
-import type { RunSignalStore } from "../runs/run-signal-store.ts";
+import { replayableRequest } from "../core/orchestrator/turn-helpers.ts";
+import type { RunSignal, RunSignalStore } from "../runs/run-signal-store.ts";
 import type { SessionStore } from "./session-store.ts";
 import { xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
-import { wakeOwnParent } from "./subagent-mail.ts";
+import { isPeerMessage, wakeOwnParent, wakePeer } from "./subagent-mail.ts";
 import {
   liveSubagentsNote,
   openChildren,
@@ -138,6 +139,9 @@ export function ownsSessionContext(
   );
 }
 
+export const isSidebarSession = (session: Session): boolean =>
+  !session.parentSessionId && !isSubagentThreadRef(session.threadRef) && !session.threadRef.startsWith("swarm:");
+
 export function storedContext(session: Session): SpawnMeta | undefined {
   return (
     session.spawnMeta && {
@@ -209,7 +213,7 @@ type SessionWriteResult =
       ok: true;
       sessionId: string;
       title: string;
-      delivered: "queued_turn" | "interrupted" | "queued_message";
+      delivered: "queued_turn" | "steered" | "interrupted" | "queued_message";
       busy?: boolean;
       notWoken?: string;
     }
@@ -334,7 +338,11 @@ export interface SessionSyscallDeps {
     SubagentActivityDeps["sessions"];
   runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "getByDedupKey" | "get" | "withdraw"> &
     SubagentActivityDeps["runs"];
-  signals: Pick<RunSignalStore, "send" | "pending">;
+  signals: Pick<RunSignalStore, "send" | "pending" | "runForDedupeKey">;
+  steerRun(
+    run: Run,
+    signal: RunSignal,
+  ): Promise<{ sent: boolean; terminal?: boolean; drained?: boolean; replayRunId?: string }>;
   maxAttempts: number;
   advisoryLock: AdvisoryLock;
   prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
@@ -597,6 +605,26 @@ async function acceptedFollowup(
   return { ok: true, sessionId: target.id, title, delivered: "queued_turn", busy: others.length > 0 };
 }
 
+async function steerRunningTurn(
+  deps: Pick<SessionSyscallDeps, "signals" | "steerRun">,
+  inFlight: Run[],
+  request: OrchestratorInput,
+  message: { text: string; dedupKey: string | undefined },
+): Promise<"steered" | "replayed" | "refused" | undefined> {
+  if (message.dedupKey && (await deps.signals.runForDedupeKey(message.dedupKey))) return "steered";
+  const live = inFlight.find((run) => run.status === "running");
+  if (!live || (request.readOnly && !live.request.readOnly)) return undefined;
+  const steered = await deps.steerRun(live, {
+    kind: "steer",
+    text: message.text,
+    ts: `${Date.now()}.${randomUUID().slice(0, 8)}`,
+    request: { ...replayableRequest(request), spawned: true },
+    ...(message.dedupKey ? { dedupeKey: message.dedupKey } : {}),
+  });
+  if (!steered.terminal) return "steered";
+  return steered.drained && !steered.replayRunId ? "refused" : "replayed";
+}
+
 export async function stopSessionTree(
   deps: {
     sessions: Pick<SessionStore, "childrenOf">;
@@ -632,7 +660,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
   return {
     rejectMessage: (sessionId, messageId) => deps.mailbox.acknowledge(sessionId, [messageId]),
     forTurn(binding) {
-      const callerTitle = binding.session.title?.trim() || "this conversation";
+      const callerTitle = binding.session.title?.trim() || "Untitled";
 
       async function resolveTarget(ref: string): Promise<Session | null> {
         const trimmed = ref.trim();
@@ -658,7 +686,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
       function peerRefusal(target: Session): string | null {
         const refusal = sidebarRefusal();
         if (refusal) return refusal;
-        if (target.parentSessionId || isSubagentThreadRef(target.threadRef) || target.threadRef.startsWith("swarm:"))
+        if (!isSidebarSession(target))
           return `"${target.title?.trim() || target.id}" is a subagent, not a session — use the subagents tool for it.`;
         return null;
       }
@@ -874,7 +902,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               const privateChild = isSubagentThreadRef(target.threadRef);
               const privateMessage = binding.request.privateSessionMessage === true || !privateChild;
               const messageDepth = (binding.request.sessionMessageDepth ?? 0) + 1;
-              if (privateMessage && messageDepth > SESSION_MESSAGE_DEPTH_CAP)
+              if (binding.request.privateSessionMessage && messageDepth > SESSION_MESSAGE_DEPTH_CAP)
                 throw new Error("private session message reply limit reached");
               const prepared = childRunRequest(
                 target,
@@ -947,6 +975,23 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               if (!input.wake && !input.interrupt) return leaveMail();
               if (binding.request.privateSessionMessage)
                 return leaveMail("a private turn cannot start work in another session");
+              if (isPeerMessage(binding.session, target)) {
+                if (caller.readOnly) return leaveMail("a read-only turn cannot start work in another conversation");
+                if (messageDepth > SESSION_MESSAGE_DEPTH_CAP)
+                  return leaveMail(
+                    `${SESSION_MESSAGE_DEPTH_CAP} conversations already woke each other in a row, so this one stops the chain`,
+                  );
+                const woken = await wakePeer(
+                  deps,
+                  binding.session,
+                  target,
+                  { ...binding.request, peerDepth: messageDepth },
+                  mail,
+                ).catch((error: unknown) => ({ failed: errMessage(error) }));
+                if (typeof woken === "object") return leaveMail(woken.failed);
+                const delivered = woken === "woken" ? "queued_turn" : "queued_message";
+                return { ok: true, sessionId: target.id, title, delivered, busy: woken === "busy" };
+              }
               if (!target.parentSessionId || (target.id === binding.session.parentSessionId && !input.interrupt)) {
                 if (caller.readOnly) return leaveMail("a read-only subagent cannot start a turn in its parent");
                 const woken = await wakeOwnParent(deps, binding.session.id, target, binding.request, mail).catch(
@@ -963,6 +1008,26 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               const dedupKey = input.requestId ? `subagent-followup:${messageId}` : undefined;
               const accepted = await acceptedFollowup(deps.runs, dedupKey, target, stamped, title);
               if (accepted) return accepted;
+              request.origin = sessionTurnOrigin(request.origin, stamped);
+              request.sessionSenderId = binding.session.id;
+              request.delegatingRunId = binding.request.runId;
+              const steered =
+                input.interrupt || privateMessage
+                  ? undefined
+                  : await steerRunningTurn(
+                      deps,
+                      inFlight,
+                      { ...request, text: stamped, displayText: text },
+                      {
+                        text,
+                        dedupKey,
+                      },
+                    );
+              if (steered === "steered")
+                return { ok: true, sessionId: target.id, title, delivered: "steered", busy: true };
+              if (steered === "replayed") return { ok: true, sessionId: target.id, title, delivered: "queued_turn" };
+              if (steered === "refused")
+                return { ok: false, message: `subagent "${title}" finished its turn and did not accept this message.` };
               const stopped = input.interrupt
                 ? await stopSessionRuns(
                     deps,
@@ -974,9 +1039,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                     },
                   )
                 : [];
-              request.origin = sessionTurnOrigin(request.origin, stamped);
-              request.sessionSenderId = binding.session.id;
-              request.delegatingRunId = binding.request.runId;
               await deps.runs
                 .enqueue({
                   sessionId: target.threadRef,
@@ -1095,12 +1157,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
             ? binding.request.conversation.audience
             : [binding.request.actor];
           const candidates = (await conversations.list(binding.request.actor.id)).filter(
-            (s) =>
-              s.scopeId === binding.scopeId &&
-              !s.parentSessionId &&
-              !isSubagentThreadRef(s.threadRef) &&
-              !s.threadRef.startsWith("swarm:") &&
-              !s.archived,
+            (s) => s.scopeId === binding.scopeId && isSidebarSession(s) && !s.archived,
           );
           const visible: Session[] = [];
           for (const session of candidates) {

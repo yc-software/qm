@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { randomUUID } from "node:crypto";
 import assert from "node:assert/strict";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,7 +8,7 @@ import { replayableRequest } from "../src/core/orchestrator/turn-helpers.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
-import type { MemoryService } from "../src/memory/memory-service.ts";
+import type { MemoryRecallContext, MemoryService } from "../src/memory/memory-service.ts";
 import type { MemoryStrategy } from "../src/memory/strategy.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
@@ -16,7 +17,7 @@ import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import type { Agent } from "../src/agent/agent.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
-import type { Conversation, Principal } from "../src/types.ts";
+import { scopeId, type Conversation, type Principal } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
@@ -84,7 +85,12 @@ function gatedAgent() {
   };
 }
 
-function buildOrchestrator(agent: Agent, memory?: MemoryService, memoryStrategy?: MemoryStrategy) {
+function buildOrchestrator(
+  agent: Agent,
+  memory?: MemoryService,
+  memoryStrategy?: MemoryStrategy,
+  sessions = createPostgresSessionStore(testDatabaseUrl()),
+) {
   const config = testConfigStore(ORG);
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
@@ -100,7 +106,7 @@ function buildOrchestrator(agent: Agent, memory?: MemoryService, memoryStrategy?
     ...singleProcessDeps(),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     resolution: createResolutionService(ORG, config, acl),
-    sessions: createPostgresSessionStore(testDatabaseUrl()),
+    sessions,
     files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
     sandbox: fakeSandbox(),
     auditLog,
@@ -132,6 +138,61 @@ test("skipMemory turns neither recall nor capture", async () => {
   assert.equal(result.status, "ok");
   assert.equal(recalls, 0);
   assert.equal(captures, 0);
+});
+
+test("memory capture runs only for a person's own turn in a human conversation", async () => {
+  const captured: string[] = [];
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  const orch = buildOrchestrator(
+    createMockAgent(),
+    undefined,
+    {
+      onTurnEnd: async ({ input }) => {
+        captured.push(input);
+      },
+    },
+    sessions,
+  );
+  const personal = scopeId("personal", "U1");
+  const run = randomUUID();
+  const parent = await sessions.getOrCreateByThread(`web:U1:parent:${run}`, "dm", personal);
+  const child = await sessions.getOrCreateByThread(`agent:main:subagent:${run}`, "dm", personal);
+  await sessions.setParentSession(child.id, parent.id);
+  await sessions.addParticipant(child.id, "U1");
+  await sessions.setSpawnMeta(child.id, {
+    surface: "web",
+    actor,
+    conversation: { kind: "dm", threadRef: parent.threadRef, audience: [actor] },
+  });
+  const turn = (surface: string, threadRef: string, origin: OrchestratorInput["origin"], text: string) =>
+    orch.handleTurn({ surface, actor, conversation: { kind: "dm", threadRef, audience: [actor] }, origin, text });
+
+  const subagent = await turn("web", child.threadRef, { kind: "human" }, "brief from the parent session");
+  const cron = await turn("cron", `dm:U1:cron:${run}`, { kind: "automation" }, "scheduled wake");
+  const sent = await orch.handleTurn({
+    surface: "web",
+    actor,
+    conversation: { kind: "dm", threadRef: `web:U1:sent:${run}`, audience: [actor] },
+    origin: { kind: "human" },
+    text: "message from a sibling session",
+    sessionSenderId: parent.id,
+  });
+  const opener = await orch.handleTurn({
+    surface: "web",
+    actor,
+    conversation: { kind: "dm", threadRef: `web:U1:opener:${run}`, audience: [actor] },
+    origin: { kind: "human" },
+    text: "",
+    proactiveOpener: true,
+  });
+  const person = await turn("web", `web:U1:dm:${run}`, { kind: "human" }, "I prefer terse replies");
+  await new Promise((r) => setTimeout(r, 50));
+
+  assert.deepEqual(
+    [subagent.status, cron.status, sent.status, opener.status, person.status],
+    ["ok", "ok", "ok", "ok", "ok"],
+  );
+  assert.deepEqual(captured, ["I prefer terse replies"]);
 });
 
 test("approval replay preserves the memory opt-out", () => {
@@ -177,4 +238,27 @@ test("recall does NOT block on an in-flight capture; continuity is eventually-co
     reply = (await orch.handleTurn(dm(`dm:U1:tC${i}`, "!sysprompt"))).reply ?? "";
   }
   assert.match(reply, /ZULU77/, "the recalled fact appears once the detached capture has settled");
+});
+
+test("an addressed turn asks memory with the message the member sent, not its wake envelope", async () => {
+  const contexts: Array<MemoryRecallContext | undefined> = [];
+  const memory: MemoryService = {
+    recall: async (_scope, context) => (contexts.push(context), []),
+    capture: async () => 0,
+    query: async () => [],
+    read: async () => "",
+  };
+  const orch = buildOrchestrator(createMockAgent(), memory);
+  const message = "Which instrument do I play in my string quartet?";
+
+  const result = await orch.handleTurn({
+    ...dm("dm:U1:addressed", '<wake reason="addressed"><message>Which instrument do I play?</message></wake>'),
+    origin: { kind: "human" },
+    displayText: message,
+    envelopeWrapped: true,
+  });
+
+  assert.equal(result.status, "ok");
+  assert.ok(contexts.length > 0);
+  assert.deepEqual(new Set(contexts.map((context) => context?.input)), new Set([message]));
 });

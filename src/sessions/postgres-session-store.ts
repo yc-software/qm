@@ -168,6 +168,10 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       ]);
     },
 
+    async setPersona(sessionId, personaId): Promise<void> {
+      await q("UPDATE sessions SET persona_id = $2 WHERE id = $1", [sessionId, personaId]);
+    },
+
     async endedInFailure(sessionIds): Promise<Set<string>> {
       if (!sessionIds.length) return new Set();
       const rows = await q(
@@ -235,6 +239,15 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         [principalId, ids],
       );
       return rows.map(rowToParticipantSession);
+    },
+
+    async lastUserPreviews(sessionIds): Promise<Map<string, string>> {
+      if (!sessionIds.length) return new Map();
+      const rows = await q(
+        "SELECT id, last_user_preview FROM sessions WHERE id = ANY($1::text[]) AND last_user_preview IS NOT NULL",
+        [[...sessionIds]],
+      );
+      return new Map(rows.map((r) => [r.id as string, r.last_user_preview as string]));
     },
 
     async sameScopeAncestors(threadRefs) {

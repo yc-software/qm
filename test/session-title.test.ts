@@ -12,6 +12,8 @@ import type { Config } from "../src/config.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
+import { createMockAgent } from "./support/mock-agent.ts";
+import { scopeId } from "../src/types.ts";
 
 function freshApp() {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-title-"));
@@ -213,7 +215,7 @@ test("the title lands even when the turn pauses on approval (early titling off t
 });
 
 test("sanitizeTitle rejects reply-shaped output and names the rule plus a sample of what it rejected", async () => {
-  const { sanitizeTitle, titleUserPrompt } = await import("../src/agent/agent-run.ts");
+  const { sanitizeTitle, titleUserPrompt } = await import("../src/agent/session-title-prompt.ts");
   const rejects = (out: string, rule: string) =>
     assert.throws(() => sanitizeTitle(out), {
       name: "TitleRejected",
@@ -241,4 +243,79 @@ test("sanitizeTitle rejects reply-shaped output and names the rule plus a sample
   assert.ok(p.startsWith("<transcript>"));
   assert.ok(p.includes("</transcript>"));
   assert.ok(p.trimEnd().endsWith("(2–6 words, or exactly NONE)."));
+});
+
+test("descriptive titles keep a trailing question mark and reject titles over eight words", async () => {
+  const { sanitizeTitle } = await import("../src/agent/session-title-prompt.ts");
+  assert.equal(
+    sanitizeTitle("How did Maria sort sessions by activity?", true),
+    "How did Maria sort sessions by activity?",
+  );
+  assert.equal(sanitizeTitle('"Inbox 24 hours behind?!"', true), "Inbox 24 hours behind?");
+  assert.equal(sanitizeTitle("How did Maria sort sessions by activity?"), "How did Maria sort sessions by activity");
+  assert.throws(() => sanitizeTitle("Why did Maria and Priya not see the DM?", true), {
+    rule: "too_many_words",
+  });
+});
+
+test("the descriptive_session_titles flag of the person who starts or retitles a session selects descriptive titles", async () => {
+  const calls: Array<{ transcript: string; opts: unknown }> = [];
+  const mock = createMockAgent();
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "ap-title-flag-")) }), {
+    agent: {
+      ...mock,
+      generateTitle: (transcript: string, opts?: { descriptive?: boolean }) => {
+        calls.push({ transcript, opts });
+        return mock.generateTitle!(transcript, opts);
+      },
+    },
+  });
+  const titled = async (text: string) => {
+    while (!calls.some((call) => call.transcript.includes(text))) await new Promise((r) => setTimeout(r, 5));
+    return calls.filter((call) => call.transcript.includes(text)).map((call) => call.opts);
+  };
+  const flag = (on: boolean) =>
+    built.featureFlags.setEnabled("descriptive_session_titles", scopeId("personal", "U1"), on, "test");
+
+  const off = await built.app.turn(dm("Plan the offsite agenda", "web:U1:title-flag-off"));
+  assert.deepEqual(await titled("offsite"), [undefined]);
+  await flag(true);
+  const on = await built.app.turn(dm("Plan the board meeting agenda", "web:U1:title-flag-on"));
+  assert.deepEqual(await titled("board meeting"), [{ descriptive: true }]);
+  await built.app.regenerateTitle(off.sessionId!, "U1");
+  assert.deepEqual(await titled("offsite"), [undefined, { descriptive: true }]);
+  await flag(false);
+  await built.app.regenerateTitle(on.sessionId!, "U1");
+  assert.deepEqual(await titled("board meeting"), [{ descriptive: true }, undefined]);
+});
+
+test("a flagged first message titled NONE is retitled once from the first exchange", async () => {
+  const calls: string[] = [];
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "ap-title-retry-")) }), {
+    agent: {
+      ...createMockAgent(),
+      generateTitle: async (transcript: string) => {
+        calls.push(transcript);
+        if (transcript.includes("this out") && !transcript.includes("Assistant:")) return undefined;
+        return transcript.includes("review") ? "Board review plan" : "Map viewer port plan";
+      },
+    },
+  });
+  const callsFor = (text: string) => calls.filter((call) => call.includes(text));
+  const until = async (done: () => boolean | Promise<boolean>) => {
+    while (!(await done())) await new Promise((r) => setTimeout(r, 5));
+  };
+
+  await built.app.turn(dm("help me sort this out", "web:U1:retry-off"));
+  await until(() => callsFor("sort this out").length > 0);
+  await built.featureFlags.setEnabled("descriptive_session_titles", scopeId("personal", "U1"), true, "test");
+  const found = await built.app.turn(dm("Plan the board review", "web:U1:retry-found"));
+  await until(async () => (await built.app.getSession(found.sessionId!))?.session.title === "Board review plan");
+  const none = await built.app.turn(dm("help me plan this out", "web:U1:retry-none"));
+  await until(async () => (await built.app.getSession(none.sessionId!))?.session.title === "Map viewer port plan");
+
+  assert.equal(callsFor("plan this out").length, 2);
+  assert.match(callsFor("plan this out")[1]!, /\n\nAssistant:\n/);
+  assert.equal(callsFor("board review").length, 1);
+  assert.equal(callsFor("sort this out").length, 1);
 });

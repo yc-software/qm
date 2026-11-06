@@ -86,7 +86,7 @@ export interface AgentTurnInput {
   }>;
   documents?: DocumentInput[];
   runtime?: Partial<RuntimeChoice>;
-  runtimePurpose?: import("../resolution/config-store.ts").RuntimePurpose;
+  runtimePurpose?: import("../resolution/config-store.ts").TurnRuntimePurpose;
   runtimeControl?: RuntimeControl;
   runtimeActorId?: string;
   readOnly?: boolean;
@@ -204,7 +204,7 @@ export interface ModelUtilities {
   ): Promise<string | undefined>;
   screenSecurity?(input: ScreenSecurityInput): Promise<SecurityScreenVerdict | undefined>;
   pickAckEmoji?(text: string, candidates: readonly string[]): Promise<string | undefined>;
-  generateTitle?(transcript: string): Promise<string | undefined>;
+  generateTitle?(transcript: string, opts?: { descriptive?: boolean }): Promise<string | undefined>;
   summarizeApproval?(command: string, reason: string, purpose?: string): Promise<string | undefined>;
 }
 

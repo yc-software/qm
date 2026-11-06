@@ -1,10 +1,5 @@
 import { externalAppSharingAllowed } from "../../feature-flags.ts";
-import {
-  deploymentAppTenant,
-  deploymentGitParts,
-  deploymentGitTenant,
-  isDeploymentGitRoute,
-} from "./deployment-paths.ts";
+import { deploymentAppTenant, deploymentGitTenant } from "./deployment-paths.ts";
 import { DeployAccessError, type DeployAccessErrorCode } from "../../deploy/deploy-service.ts";
 import { SocksProxyAgent } from "socks-proxy-agent";
 import { request as httpRequest } from "node:http";
@@ -40,6 +35,7 @@ import { tenantAppHandle } from "../../tenants/settings.ts";
 import { boundTenant } from "../../tenants/context.ts";
 import { EMBED_ANCESTORS_HINT, parseEmbedAncestors } from "../../deploy/embed-ancestors.ts";
 import { proxyHeaders } from "../../util/http-proxy.ts";
+import { deploymentGitParts, isDeploymentGitRoute } from "../../../plugins/chassis/src/deployment-git.ts";
 
 function deploymentProxyAgent(port?: number): { agent?: SocksProxyAgent } {
   if (port === undefined) return {};

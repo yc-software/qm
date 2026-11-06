@@ -3,6 +3,16 @@ import { gzip } from "node:zlib";
 
 const COMPRESS_MIN_BYTES = 1024;
 
+export function isLoopbackUrl(raw: string): boolean {
+  const hostname = URL.parse(raw)?.hostname.toLowerCase();
+  return (
+    hostname === "localhost" || !!hostname?.endsWith(".localhost") || hostname === "127.0.0.1" || hostname === "[::1]"
+  );
+}
+
+export const isSecureOrLoopbackUrl = (raw: string): boolean =>
+  raw.startsWith("https://") || (raw.startsWith("http://") && isLoopbackUrl(raw));
+
 export class PayloadTooLargeError extends Error {
   constructor() {
     super("request body too large");

@@ -1,7 +1,7 @@
 import type { DurableMap } from "../../src/persistence/durable-map.ts";
 import { currentTenant } from "../../src/tenants/context.ts";
 
-function partition<T>(rows: Map<string, Map<string, T>>): Map<string, T> {
+export function partition<T>(rows: Map<string, Map<string, T>>): Map<string, T> {
   const key = currentTenant();
   const existing = rows.get(key);
   if (existing) return existing;

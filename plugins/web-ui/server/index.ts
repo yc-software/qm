@@ -1,9 +1,8 @@
 import "./instrument.ts";
 import { handleVoiceRoute, sweepDictationSpool } from "./voice-routes.ts";
 import { browserErrorConfig } from "./browser-error-config.ts";
-import { flushErrorReporting, reportBackendError } from "../../chassis/src/error-reporting.ts";
-import { swallow } from "../../chassis/src/errors.ts";
-import { drainOnSigterm } from "../../chassis/src/drain.ts";
+import { reportBackendError } from "../../chassis/src/error-reporting.ts";
+import { errChain, swallow } from "../../chassis/src/errors.ts";
 import { appEditSlug } from "../src/app-edit.ts";
 import { composioCallbackUrl } from "./composio-return.ts";
 import { sharedSessionHtml } from "./shared-session.ts";
@@ -12,9 +11,9 @@ import { adminRoutes } from "./admin-routes.ts";
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { Readable } from "node:stream";
-import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { dirname, extname, join, normalize } from "node:path";
+import { dirname, extname, join, posix } from "node:path";
 import { randomBytes } from "node:crypto";
 import { LRUCache } from "lru-cache";
 import {
@@ -48,14 +47,12 @@ import {
   CORE_ORG_ID as ORG,
   CORE_SIGNING_SECRET,
   PORTAL_IDENTITY_SECRET,
-  portFromEnv,
 } from "../../chassis/src/env.ts";
 
 const SUBAGENT_THREAD_PREFIX = "agent:main:subagent:";
-const PORT = portFromEnv(8096);
 const welcomeCohort = process.env.WEB_UI_WELCOME_COHORT?.trim().slice(0, 40) || undefined;
 const suggestedActivities = parseSuggestedActivities(process.env.WEB_UI_SUGGESTED_ACTIVITIES);
-const PUBLIC_URL = (process.env.WEB_UI_PUBLIC_URL ?? `http://localhost:${PORT}`).replace(/\/$/, "");
+const PUBLIC_URL = (process.env.PUBLIC_WEB_URL ?? "http://localhost:8096").replace(/\/$/, "");
 const WEB_UI_DEV = process.env.WEB_UI_DEV === "1";
 const ALLOW_UNSIGNED_TEST_IDENTITY =
   process.env.NODE_ENV === "test" && process.env.ALLOW_UNSIGNED_TEST_IDENTITY === "1";
@@ -89,7 +86,6 @@ async function hasInboxLoopPreview(user: string): Promise<boolean> {
 }
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const DIST = join(ROOT, "dist-web");
 
 const brandingCache = createTenantBranding(
   async () => {
@@ -862,44 +858,61 @@ async function uploadFileFromRequest(
   return sendBuffered(res, registered.status, { "content-type": "application/json" }, registered.text);
 }
 
-async function serveStatic(res: ServerResponse, urlPath: string): Promise<void> {
-  const rel = normalize(decodeURIComponent(urlPath)).replace(/^(\.\.[/\\])+/, "");
-  let filePath = join(DIST, rel);
-  if (!filePath.startsWith(DIST)) return void json(res, 403, { error: "forbidden" });
-
-  const isFile = existsSync(filePath) && statSync(filePath).isFile();
-  const immutable = isFile && /(?:^|[/\\])assets[/\\]/.test(rel);
-  if (!isFile) {
-    if (extname(rel)) return void json(res, 404, { error: "not_found" });
-    filePath = join(DIST, "index.html");
-    if (!existsSync(filePath)) {
-      return void json(res, 503, { error: "not_built", message: "run `npm run build` to produce dist-web/" });
-    }
-  }
-  if (filePath.endsWith("index.html")) {
-    const branded = await brandIndexHtml(readFileSync(filePath, "utf8"));
-    const headers = withSecurityHeaders({ "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" });
-    return sendBuffered(res, 200, headers, branded);
-  }
-  const headers = withSecurityHeaders({
-    "content-type": CONTENT_TYPES[extname(filePath)] ?? "application/octet-stream",
-    "cache-control": immutable ? "public, max-age=31536000, immutable" : "no-cache",
-    vary: "accept-encoding",
-  });
-  const packed = `${filePath}.gz`;
-  if (gzipAccepted(res.req) && existsSync(packed)) {
-    res.writeHead(200, { ...headers, "content-encoding": "gzip" });
-    return void pipeFile(res, packed);
-  }
-  res.writeHead(200, headers);
-  pipeFile(res, filePath);
+export interface WebReleases {
+  document(name: string): Promise<string>;
+  file(path: string, gzip: boolean): Promise<{ body: Readable; gzip: boolean } | null>;
 }
 
-function pipeFile(res: ServerResponse, filePath: string): void {
-  const stream = createReadStream(filePath);
-  stream.on("error", () => res.destroy());
-  res.on("close", () => stream.destroy());
-  stream.pipe(res);
+let releases: WebReleases | undefined;
+
+export function serveReleasesFrom(source: WebReleases): void {
+  releases = source;
+}
+
+function liveReleases(): WebReleases {
+  if (!releases) throw new Error("the web UI server was started without a release source");
+  return releases;
+}
+
+function releaseUnavailable(res: ServerResponse, what: string, error: unknown): void {
+  console.error(`[web-ui] ${what} unavailable: ${errChain(error)}`);
+  reportBackendError(error);
+  if (!res.headersSent) json(res, 503, { error: "web_ui_unavailable", message: "The web UI release is unavailable." });
+  else res.destroy();
+}
+
+async function serveStatic(res: ServerResponse, urlPath: string): Promise<void> {
+  const rel = posix.normalize(decodeURIComponent(urlPath)).replace(/^\/+/, "");
+  if (rel === ".." || rel.startsWith("../") || rel.includes("\\")) return void json(res, 403, { error: "forbidden" });
+  if (!extname(rel) || rel === "index.html") {
+    let html: string;
+    try {
+      html = await liveReleases().document("index.html");
+    } catch (error) {
+      return releaseUnavailable(res, "index.html", error);
+    }
+    const headers = withSecurityHeaders({ "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" });
+    return sendBuffered(res, 200, headers, await brandIndexHtml(html));
+  }
+  let found: Awaited<ReturnType<WebReleases["file"]>>;
+  try {
+    found = await liveReleases().file(rel, gzipAccepted(res.req));
+  } catch (error) {
+    return releaseUnavailable(res, rel, error);
+  }
+  if (!found) return void json(res, 404, { error: "not_found" });
+  const headers = withSecurityHeaders({
+    "content-type": CONTENT_TYPES[extname(rel)] ?? "application/octet-stream",
+    "cache-control": rel.startsWith("assets/") ? "public, max-age=31536000, immutable" : "no-cache",
+    vary: "accept-encoding",
+  });
+  res.writeHead(200, found.gzip ? { ...headers, "content-encoding": "gzip" } : headers);
+  found.body.on("error", (error) => {
+    console.error(`[web-ui] streaming ${rel} failed: ${errChain(error)}`);
+    res.destroy();
+  });
+  res.on("close", () => found.body.destroy());
+  found.body.pipe(res);
 }
 
 async function serveAppEditHtml(req: IncomingMessage, res: ServerResponse, url: URL): Promise<boolean> {
@@ -910,9 +923,12 @@ async function serveAppEditHtml(req: IncomingMessage, res: ServerResponse, url: 
     const raw = readFileSync(join(ROOT, "index.html"), "utf8").replace("%BASE_URL%favicon.svg", "favicon.svg");
     html = await vite.transformIndexHtml(req.url ?? "/", raw);
   } else {
-    const filePath = join(DIST, "index.html");
-    if (!existsSync(filePath)) return false;
-    html = readFileSync(filePath, "utf8");
+    try {
+      html = await liveReleases().document("index.html");
+    } catch (error) {
+      releaseUnavailable(res, "index.html", error);
+      return true;
+    }
   }
   const headers = withSecurityHeaders({ "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" });
   const csp = SPA_CSP.replace("frame-ancestors 'self'", `frame-ancestors 'self' ${slug}.${APPS_FRAME_DOMAIN}`);
@@ -978,6 +994,12 @@ interface WebCtx {
   url: URL;
   user: string;
   params: Record<string, string>;
+}
+
+async function relayWithPrincipal(c: WebCtx, method: HttpMethod, path: string): Promise<void> {
+  const body = await readJson<Record<string, unknown>>(c.req, c.res);
+  if (!body) return;
+  return relayCore(c.res, method, path, JSON.stringify({ ...body, principalId: c.user }));
 }
 
 type WebRoute = { handle: (c: WebCtx) => unknown } & (
@@ -1571,6 +1593,69 @@ const apiRoutes: readonly WebRoute[] = [
         "DELETE",
         `/v1/projects/${encodeURIComponent(id)}/members/${encodeURIComponent(memberId)}`,
         JSON.stringify({ principalId: user }),
+      );
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/personas",
+    handle: (c) => relayCore(c.res, "GET", `/v1/personas?principalId=${encodeURIComponent(c.user)}`),
+  },
+  {
+    method: "GET",
+    path: "/api/personas/:id",
+    handle: (c) =>
+      relayCore(
+        c.res,
+        "GET",
+        `/v1/personas/${encodeURIComponent(c.params.id!)}?principalId=${encodeURIComponent(c.user)}`,
+      ),
+  },
+  {
+    method: "POST",
+    path: "/api/personas",
+    handle: (c) => relayWithPrincipal(c, "POST", "/v1/personas"),
+  },
+  {
+    method: "PATCH",
+    path: "/api/personas/:id",
+    handle: (c) => relayWithPrincipal(c, "PATCH", `/v1/personas/${encodeURIComponent(c.params.id!)}`),
+  },
+  {
+    method: "DELETE",
+    path: "/api/personas/:id",
+    handle: (c) =>
+      relayCore(
+        c.res,
+        "DELETE",
+        `/v1/personas/${encodeURIComponent(c.params.id!)}`,
+        JSON.stringify({ principalId: c.user }),
+      ),
+  },
+  {
+    method: "PUT",
+    path: "/api/personas/:id/access",
+    handle: (c) => relayWithPrincipal(c, "PUT", `/v1/personas/${encodeURIComponent(c.params.id!)}/access`),
+  },
+  {
+    method: "POST",
+    path: "/api/sessions",
+    handle: (c) => relayWithPrincipal(c, "POST", "/v1/sessions"),
+  },
+  {
+    method: "PUT",
+    path: "/api/sessions/:id/persona",
+    handle: (c) => relayWithPrincipal(c, "PUT", `/v1/sessions/${encodeURIComponent(c.params.id!)}/persona`),
+  },
+  {
+    method: "GET",
+    path: "/api/directory/channels",
+    handle: (c) => {
+      const q = (c.url.searchParams.get("q") ?? "").trim();
+      return relayCore(
+        c.res,
+        "GET",
+        `/v1/directory/channels?principalId=${encodeURIComponent(c.user)}&q=${encodeURIComponent(q)}`,
       );
     },
   },
@@ -3256,7 +3341,7 @@ const apiRoutes: readonly WebRoute[] = [
 ];
 
 const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
-  const url = new URL(req.url ?? "/", `http://localhost:${PORT}`);
+  const url = new URL(req.url ?? "/", "http://localhost");
   const path = url.pathname;
   const method = req.method ?? "GET";
 
@@ -3343,9 +3428,14 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     const result = await coreFetch("GET", corePath);
     const dev = vite && !external;
-    const template = dev
-      ? await vite!.transformIndexHtml("/shared.html", readFileSync(join(ROOT, "shared.html"), "utf8"))
-      : readFileSync(join(DIST, "shared.html"), "utf8");
+    let template: string;
+    try {
+      template = dev
+        ? await vite!.transformIndexHtml("/shared.html", readFileSync(join(ROOT, "shared.html"), "utf8"))
+        : await liveReleases().document("shared.html");
+    } catch (error) {
+      return releaseUnavailable(res, "shared.html", error);
+    }
     res.writeHead(result.status, {
       "Content-Type": "text/html; charset=utf-8",
       "Cache-Control": "no-store",
@@ -3449,28 +3539,25 @@ const server = createServer((req, res) => {
   });
 });
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  createVite(server)
-    .then((v) => {
-      vite = v;
-      drainOnSigterm(server, "web-ui");
-      server.listen(PORT, () => {
-        console.log(
-          `[web-ui] surface on http://localhost:${PORT} → core ${CORE} (org ${ORG})${WEB_UI_DEV ? " [vite hmr]" : ""}`,
-        );
-        if (!WEB_UI_DEV && !existsSync(join(DIST, "index.html")))
-          console.warn("[web-ui] dist-web/ not built, run `npm run build`");
-        if (ALLOW.length === 0)
-          console.warn("[web-ui] WEB_UI_PRINCIPALS unset, any principal id may sign in (dev only)");
-        const t = setInterval(() => void drainWebDeliveries(), WEB_DELIVERY_POLL_MS);
-        t.unref?.();
-        void sweepDictationSpool();
-      });
-    })
-    .catch(async (err: unknown) => {
-      reportBackendError(err);
-      console.error("[web-ui] failed to start:", String(err));
-      await flushErrorReporting();
-      process.exit(1);
+export async function startServer(options: { port: number; host: string; releases: WebReleases }): Promise<Server> {
+  serveReleasesFrom(options.releases);
+  vite = await createVite(server);
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(options.port, options.host, () => {
+      server.off("error", reject);
+      resolve();
     });
+  });
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : options.port;
+  console.log(
+    `[web-ui] surface on http://${options.host}:${port} → core ${CORE} (org ${ORG})${WEB_UI_DEV ? " [vite hmr]" : ""}`,
+  );
+  if (ALLOW.length === 0) console.warn("[web-ui] WEB_UI_PRINCIPALS unset, any principal id may sign in (dev only)");
+  const t = setInterval(() => void drainWebDeliveries(), WEB_DELIVERY_POLL_MS);
+  t.unref?.();
+  server.once("close", () => clearInterval(t));
+  void sweepDictationSpool();
+  return server;
 }

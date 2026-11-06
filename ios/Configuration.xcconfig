@@ -1,0 +1,3 @@
+QM_BUNDLE_ID = org.qm.ios
+QM_BASE_URL =
+#include? "Local.xcconfig"

@@ -1,5 +1,6 @@
 import { durableMapTenancy } from "../persistence/durable-map.ts";
 import type { PgMigrationDefinition, PgPool } from "../persistence/pg-pool.ts";
+import { fold } from "../identity/user-tenancy.ts";
 
 const ACTIVE = `json->>'disabled' IS DISTINCT FROM 'true'`;
 
@@ -95,6 +96,49 @@ export const PRINCIPAL_ADMIN_TENANTS: PgMigrationDefinition = {
             WHERE (l.id = principal AND g.principal_id = l.json->>'canonicalId')
                OR (l.json->>'canonicalId' = principal AND g.principal_id = l.id);
       END $lookup$`,
+  ],
+};
+
+const ACTIVE_PERSON = `JOIN users u ON u.tenant_id = l.tenant_id AND u.id = l.user_id
+            AND u.kind = 'person' AND u.offboarded_at IS NULL`;
+
+export const PRINCIPAL_USER_TENANTS: PgMigrationDefinition = {
+  id: "tenancy/lookups/0006-principal-user-tenants",
+  statements: [
+    `CREATE OR REPLACE FUNCTION qm_tenants_for_principal(principal text) RETURNS SETOF uuid
+      LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp
+      AS $lookup$ BEGIN
+        RETURN QUERY
+          SELECT l.tenant_id FROM user_links l ${ACTIVE_PERSON} WHERE l.alias_id = ${fold("principal")}
+          UNION
+          SELECT g.tenant_id FROM admin_grants g WHERE g.principal_id = principal
+          UNION
+          SELECT g.tenant_id FROM admin_grants g
+            JOIN user_links o ON o.tenant_id = g.tenant_id AND o.alias_id = ${fold("g.principal_id")}
+            JOIN user_links l ON l.tenant_id = o.tenant_id AND l.user_id = o.user_id
+           WHERE l.alias_id = ${fold("principal")};
+      END $lookup$`,
+  ],
+};
+
+export const EMAIL_USER_TENANTS: PgMigrationDefinition = {
+  id: "directory/store/0010-tenants-for-email-users",
+  statements: [
+    `DO $tenants_for_email$
+BEGIN
+  EXECUTE format(
+    $function$CREATE OR REPLACE FUNCTION qm_tenants_for_email(email text) RETURNS TABLE(tenant_id uuid)
+      LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = %I, pg_temp AS $body$ BEGIN
+      RETURN QUERY
+        SELECT m.tenant_id FROM directory_members m
+         WHERE lower(m.principal_id) = lower(email) AND m.type = 'internal'
+        UNION
+        SELECT g.tenant_id FROM admin_grants g WHERE lower(g.principal_id) = lower(email)
+        UNION
+        SELECT l.tenant_id FROM user_links l ${ACTIVE_PERSON} WHERE l.alias_id = lower(btrim(email));
+    END $body$$function$,
+    current_schema());
+END $tenants_for_email$`,
   ],
 };
 

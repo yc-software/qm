@@ -152,6 +152,7 @@ export interface CoreSession {
   color?: string | null;
   unread?: boolean;
   lastActivityAt?: number;
+  lastUserPreview?: string | null;
   working?: boolean;
   awaitingInput?: boolean;
   lastTurnFailed?: boolean;
@@ -168,6 +169,7 @@ export interface CoreSession {
   subagents?: { running: number; waiting: number };
   workingSince?: number;
   purpose?: string;
+  personaId?: string;
 }
 
 export interface SessionPageQuery {

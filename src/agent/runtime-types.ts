@@ -33,6 +33,6 @@ export type RuntimeService = (
   individualAuth?: boolean,
   signal?: AbortSignal,
   cronFire?: boolean,
-  purpose?: import("../resolution/config-store.ts").RuntimePurpose,
+  purpose?: import("../resolution/config-store.ts").TurnRuntimePurpose,
   defaults?: Partial<RuntimeChoice>,
 ) => Promise<RuntimeResult>;
