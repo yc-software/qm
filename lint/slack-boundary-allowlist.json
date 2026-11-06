@@ -1,0 +1,32 @@
+{
+  "src/agent/replay.ts": ["src/slack/message-revisions.ts"],
+  "src/api/app-messaging.ts": ["src/slack/message-revisions.ts"],
+  "src/api/deps.ts": ["src/slack/web-client.ts"],
+  "src/api/routes/admin-resources.ts": ["src/slack/config.ts"],
+  "src/api/routes/admin/slack-mirror.ts": ["src/slack/mrkdwn.ts"],
+  "src/api/routes/slack-native.ts": ["src/slack/web-client.ts"],
+  "src/api/routes/slack-reply.ts": ["src/slack/message-gating.ts"],
+  "src/api/slack-core-client.ts": [
+    "src/slack/deploy-access.ts",
+    "src/slack/envelope-staging.ts",
+    "src/slack/session-status.ts",
+    "src/slack/task-ack.ts"
+  ],
+  "src/config.ts": ["src/slack/config.ts"],
+  "src/connectors/emoji-upload-service.ts": ["src/slack/payloads.ts"],
+  "src/core/orchestrator.ts": ["src/slack/message-revisions.ts"],
+  "src/loops/inbox-source-refresh.ts": ["src/slack/config.ts", "src/slack/message-content.ts"],
+  "src/loops/ingress.ts": ["src/slack/payloads.ts"],
+  "src/loops/item-ledger.ts": ["src/slack/mrkdwn.ts"],
+  "src/loops/sources/slack.ts": [
+    "src/slack/config.ts",
+    "src/slack/delivery.ts",
+    "src/slack/mrkdwn.ts",
+    "src/slack/payloads.ts",
+    "src/slack/reactions.ts",
+    "src/slack/safe-cut.ts"
+  ],
+  "src/resolution/external-slack.ts": ["src/slack/external-access.ts"],
+  "src/surfaces/slack-installation.ts": ["src/slack/payloads.ts"],
+  "src/surfaces/slack-managed.ts": ["src/slack/deferred-ack.ts", "src/slack/envelope-staging.ts"]
+}
