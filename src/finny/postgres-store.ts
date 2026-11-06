@@ -169,15 +169,23 @@ const CLARIFICATION_SCHEMA = [
 
 const APPROVAL_READINESS_SCHEMA = [
   `ALTER TABLE finny_approval_requests ADD COLUMN IF NOT EXISTS ready_at BIGINT`,
-  `UPDATE finny_approval_requests a SET ready_at=a.created_at WHERE a.ready_at IS NULL
-     AND NOT EXISTS (
-       SELECT 1 FROM finny_clarification_requests c
-       WHERE c.job_id=a.job_id AND (
-         c.decided_at IS NULL OR
-         c.decision->>'kind' <> 'option' OR
-         c.decision->>'optionId' <> c.recommended_option_id
-       )
-     )`,
+  `UPDATE finny_approval_requests SET ready_at=created_at WHERE ready_at IS NULL`,
+];
+
+const APPROVAL_READINESS_REPAIR_SCHEMA = [
+  `UPDATE finny_approval_requests AS approvals
+      SET ready_at=CASE
+        WHEN NOT EXISTS (
+          SELECT 1 FROM finny_clarification_requests AS clarifications
+           WHERE clarifications.job_id=approvals.job_id
+             AND (
+               clarifications.decision IS NULL OR
+               clarifications.decision->>'kind' <> 'option' OR
+               clarifications.decision->>'optionId' <> clarifications.recommended_option_id
+             )
+        ) THEN COALESCE(approvals.ready_at, approvals.created_at)
+        ELSE NULL
+      END`,
 ];
 
 function rowToClarification(row: Record<string, unknown>): FinnyClarificationRequest {
@@ -414,6 +422,7 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
     { id: "finny/store/0003-plan-first", statements: PLAN_FIRST_SCHEMA },
     { id: "finny/store/0004-clarifications", statements: CLARIFICATION_SCHEMA },
     { id: "finny/store/0005-approval-readiness", statements: APPROVAL_READINESS_SCHEMA },
+    { id: "finny/store/0006-approval-readiness-repair", statements: APPROVAL_READINESS_REPAIR_SCHEMA },
   ]);
   return {
     async createJob(input: CreateFinnyJobInput) {

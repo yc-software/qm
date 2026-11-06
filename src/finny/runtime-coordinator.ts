@@ -11,7 +11,7 @@ import type {
 } from "./types.ts";
 import { blockedCheckChangeKinds } from "./policy.ts";
 import type { IssueFinnyWorkerInput } from "./worker-grants.ts";
-import type { FinnyRuntimeStore } from "./runtime-postgres-store.ts";
+import type { FinnyRuntimeRecovery, FinnyRuntimeStore } from "./runtime-postgres-store.ts";
 
 interface RuntimeGrants {
   issueProducer(input: IssueFinnyWorkerInput): Promise<FinnyWorkerGrant>;
@@ -107,6 +107,30 @@ function resolutionAuthority(value: unknown): { kind: "rework" } | { kind: "esca
   throw new Error("Finny escalation action authority is invalid");
 }
 
+export async function reconcileFinnyRuntimeRecoveries(deps: {
+  recoveries(): Promise<FinnyRuntimeRecovery[]>;
+  coordinatorFor(
+    scopeId: string,
+    jobId: string,
+  ): Promise<{
+    artifactReady(input: ArtifactReadyRuntimeInput): Promise<void>;
+    auditPassed(input: AuditPassedRuntimeInput): Promise<void>;
+    auditBlocked(input: AuditBlockedRuntimeInput): Promise<void>;
+  }>;
+  recordError(error: unknown, recovery: FinnyRuntimeRecovery): Promise<void>;
+}): Promise<void> {
+  for (const recovery of await deps.recoveries()) {
+    try {
+      const coordinator = await deps.coordinatorFor(recovery.scopeId, recovery.jobId);
+      if (recovery.kind === "artifact_ready") await coordinator.artifactReady(recovery);
+      else if (recovery.kind === "audit_passed") await coordinator.auditPassed(recovery);
+      else await coordinator.auditBlocked(recovery);
+    } catch (error) {
+      await deps.recordError(error, recovery);
+    }
+  }
+}
+
 export function createFinnyRuntimeCoordinator(deps: {
   jobs: FinnyStore;
   runtime: FinnyRuntimeStore;
@@ -132,6 +156,7 @@ export function createFinnyRuntimeCoordinator(deps: {
   escalationDecision?: {
     decide(input: AuditBlockedRuntimeInput): Promise<{ kind: "rework" } | { kind: "escalate"; reason: string }>;
   };
+  recoveryWake?(recovery: FinnyRuntimeRecovery): void;
 }) {
   async function dispatch(input: {
     idempotencyKey: string;
@@ -254,7 +279,15 @@ export function createFinnyRuntimeCoordinator(deps: {
         });
         const committed = await deps.runtime.authorizeAction({
           ...action,
-          authorityPayload: { evidenceDigest: resolved },
+          authorityPayload: {
+            evidenceDigest: resolved,
+            recovery: {
+              artifactDigest: input.artifactDigest,
+              checkId: input.checkId,
+              generation: input.generation,
+              evidenceFileId: input.evidenceFileId,
+            },
+          },
         });
         evidenceDigest = evidenceDigestAuthority(committed.authorityPayload);
       } else {
@@ -273,6 +306,7 @@ export function createFinnyRuntimeCoordinator(deps: {
       });
     },
     async auditBlocked(input: AuditBlockedRuntimeInput): Promise<void> {
+      const findings = input.findings.map(({ code, message }) => ({ code, message }));
       const action = {
         idempotencyKey: input.idempotencyKey,
         kind: "audit_blocked",
@@ -286,7 +320,7 @@ export function createFinnyRuntimeCoordinator(deps: {
           checkId: input.checkId,
           generation: input.generation,
           evidenceFileId: input.evidenceFileId,
-          findings: input.findings,
+          findings,
         }),
       };
       const prepared = await deps.runtime.prepareAction(action);
@@ -306,7 +340,17 @@ export function createFinnyRuntimeCoordinator(deps: {
         const decidedResolution = await deps.escalationDecision.decide(input);
         const committed = await deps.runtime.authorizeAction({
           ...action,
-          authorityPayload: { resolution: decidedResolution, evidenceDigest: resolvedEvidenceDigest },
+          authorityPayload: {
+            resolution: decidedResolution,
+            evidenceDigest: resolvedEvidenceDigest,
+            recovery: {
+              artifactDigest: input.artifactDigest,
+              checkId: input.checkId,
+              generation: input.generation,
+              evidenceFileId: input.evidenceFileId,
+              findings,
+            },
+          },
         });
         resolution = resolutionAuthority(committed.authorityPayload);
         evidenceDigest = evidenceDigestAuthority(committed.authorityPayload);
@@ -324,11 +368,13 @@ export function createFinnyRuntimeCoordinator(deps: {
         evidenceDigest,
         issuerPrincipalId: auditor.principalId,
         issuerRunId: auditor.runId,
-        findings: input.findings,
+        findings,
         changeKinds: blockedCheckChangeKinds(input.checkId),
         resolution,
         idempotencyKey: input.idempotencyKey,
       });
+      if (resolution.kind === "rework" && !blocked.deduped)
+        deps.recoveryWake?.({ kind: "audit_blocked", ...input, findings });
       await deps.runtime.retireBinding({
         sessionId: auditor.sessionId,
         runId: auditor.runId,
@@ -340,7 +386,7 @@ export function createFinnyRuntimeCoordinator(deps: {
       }
       const producer = await deps.runtime.activeRoleBinding(input.scopeId, input.jobId, "producer");
       if (!producer) throw new Error("Finny runtime has no current producer binding");
-      const message = JSON.stringify({ task: "Rework the blocked artifact", findings: input.findings });
+      const message = JSON.stringify({ task: "Rework the blocked artifact", findings });
       const producerCredentials = deps.workerPolicy.credentials(blocked.job, "producer");
       await dispatch({
         idempotencyKey: `${input.idempotencyKey}:producer-rework`,
@@ -383,6 +429,7 @@ export function createFinnyRuntimeCoordinator(deps: {
         provisionalRevision: artifact.provisionalRevision,
         idempotencyKey: input.idempotencyKey,
       });
+      if (!ready.deduped) deps.recoveryWake?.({ kind: "artifact_ready", ...input });
       const auditorDispatchKey = `${input.idempotencyKey}:auditor-grant`;
       if (await deps.runtime.isDispatched(auditorDispatchKey)) return;
       let auditor = await deps.runtime.currentRoleBinding(input.scopeId, input.jobId, "auditor");

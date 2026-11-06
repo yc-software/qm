@@ -726,63 +726,78 @@ test("generic clarification atomically withdraws ready approval until the persis
   }
 });
 
-test("approval readiness migration keeps unresolved legacy clarification blocked", async () => {
+test("approval readiness migration derives legacy readiness from every clarification decision", async () => {
   const url = testDatabaseUrl();
   const store = createPostgresFinnyStore(url);
-  const job = await store.createJob({
-    id: randomUUID(),
-    scopeId: "personal:approver@example.com",
-    plan,
-    policy: initialFinnyPolicy(),
-    findingPolicy,
-    originThreadRef: "slack:C-finance:100.200",
-  });
-  const approvalRequestId = randomUUID();
-  await store.createApprovalRequest({
-    scopeId: job.scopeId,
-    jobId: job.id,
-    requestId: approvalRequestId,
-    authorizedActorId: "approver@example.com",
-  });
-  const legacyClarificationRequestId = randomUUID();
-  await store.createClarificationRequest({
-    scopeId: job.scopeId,
-    jobId: job.id,
-    requestId: legacyClarificationRequestId,
-    authorizedActorId: "approver@example.com",
-    question: "Which accounting basis should be used?",
-    options: [
-      { id: "contracts", label: "Signed contracts" },
-      { id: "invoices", label: "Issued invoices" },
-    ],
-    recommendedOptionId: "contracts",
-    idempotencyKey: `legacy:${job.id}`,
-  });
-  const migrationDb = createPgPool(url);
-  await migrationDb.q("ALTER TABLE finny_approval_requests DROP COLUMN ready_at");
-  await migrationDb.q("DELETE FROM qm_schema_migrations WHERE id='finny/store/0005-approval-readiness'");
-  const upgraded = createPostgresFinnyStore(url);
-  assert.equal((await upgraded.getApprovalRequest(approvalRequestId))?.readyAt, undefined);
-  await assert.rejects(
-    upgraded.recordApproval({
+  const createLegacy = async (
+    decision: { kind: "option"; optionId: string } | { kind: "other" } | undefined,
+    withClarification = true,
+  ) => {
+    const job = await store.createJob({
+      id: randomUUID(),
+      scopeId: "personal:approver@example.com",
+      plan,
+      policy: initialFinnyPolicy(),
+      findingPolicy,
+      originThreadRef: `slack:C-finance:${randomUUID()}`,
+    });
+    const approvalRequestId = randomUUID();
+    await store.createApprovalRequest({
       scopeId: job.scopeId,
       jobId: job.id,
       requestId: approvalRequestId,
+      authorizedActorId: "approver@example.com",
+    });
+    if (!withClarification) return { approvalRequestId, job };
+    const clarificationRequestId = randomUUID();
+    await store.createClarificationRequest({
+      scopeId: job.scopeId,
+      jobId: job.id,
+      requestId: clarificationRequestId,
+      authorizedActorId: "approver@example.com",
+      question: "Which accounting basis should be used?",
+      options: [
+        { id: "contracts", label: "Signed contracts" },
+        { id: "invoices", label: "Issued invoices" },
+      ],
+      recommendedOptionId: "contracts",
+      idempotencyKey: `legacy:${job.id}`,
+    });
+    if (decision)
+      await store.recordClarificationDecision({
+        requestId: clarificationRequestId,
+        actorId: "approver@example.com",
+        originThreadRef: job.originThreadRef,
+        decision,
+        decidedAt: Date.now(),
+      });
+    return { approvalRequestId, job };
+  };
+  const pending = await createLegacy(undefined);
+  const nonrecommended = await createLegacy({ kind: "option", optionId: "invoices" });
+  const other = await createLegacy({ kind: "other" });
+  const recommended = await createLegacy({ kind: "option", optionId: "contracts" });
+  const noClarification = await createLegacy(undefined, false);
+  const migrationDb = createPgPool(url);
+  await migrationDb.q("UPDATE finny_approval_requests SET ready_at=created_at");
+  await migrationDb.q("DELETE FROM qm_schema_migrations WHERE id='finny/store/0006-approval-readiness-repair'");
+  const upgraded = createPostgresFinnyStore(url);
+  for (const legacy of [pending, nonrecommended, other])
+    assert.equal((await upgraded.getApprovalRequest(legacy.approvalRequestId))?.readyAt, undefined);
+  for (const legacy of [recommended, noClarification])
+    assert.ok((await upgraded.getApprovalRequest(legacy.approvalRequestId))?.readyAt);
+  await assert.rejects(
+    upgraded.recordApproval({
+      scopeId: pending.job.scopeId,
+      jobId: pending.job.id,
+      requestId: pending.approvalRequestId,
       actorId: "approver@example.com",
       action: "approve",
-      originThreadRef: job.originThreadRef,
+      originThreadRef: pending.job.originThreadRef,
       decidedAt: Date.now(),
     }),
     /not ready/,
   );
-  await upgraded.recordClarificationDecision({
-    requestId: legacyClarificationRequestId,
-    actorId: "approver@example.com",
-    originThreadRef: job.originThreadRef,
-    decision: { kind: "option", optionId: "invoices" },
-    decidedAt: Date.now(),
-  });
-  assert.equal((await upgraded.getApprovalRequest(approvalRequestId))?.readyAt, undefined);
 });
 
 test("concurrent material clarification creation leaves one pending request and approval unready", async () => {

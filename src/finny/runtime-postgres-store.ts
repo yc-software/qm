@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
-import type { FinnyWorkerRole } from "./types.ts";
+import type { FinnyAuditFinding, FinnyCheckId, FinnyWorkerRole } from "./types.ts";
 
 export type FinnyRuntimeRole = "parent" | FinnyWorkerRole;
 
@@ -15,6 +15,44 @@ export interface FinnyRuntimeBinding {
   active: boolean;
   expiresAt?: number;
 }
+
+export interface FinnyArtifactReadyRecovery {
+  kind: "artifact_ready";
+  sessionId: string;
+  runId: string;
+  scopeId: string;
+  jobId: string;
+  idempotencyKey: string;
+}
+
+export interface FinnyAuditPassedRecovery {
+  kind: "audit_passed";
+  sessionId: string;
+  runId: string;
+  scopeId: string;
+  jobId: string;
+  artifactDigest: string;
+  checkId: FinnyCheckId;
+  generation: number;
+  evidenceFileId: string;
+  idempotencyKey: string;
+}
+
+export interface FinnyAuditBlockedRecovery {
+  kind: "audit_blocked";
+  sessionId: string;
+  runId: string;
+  scopeId: string;
+  jobId: string;
+  artifactDigest: string;
+  checkId: FinnyCheckId;
+  generation: number;
+  evidenceFileId: string;
+  findings: FinnyAuditFinding[];
+  idempotencyKey: string;
+}
+
+export type FinnyRuntimeRecovery = FinnyArtifactReadyRecovery | FinnyAuditPassedRecovery | FinnyAuditBlockedRecovery;
 
 export interface InitialFinnyRuntimeBindings {
   scopeId: string;
@@ -312,6 +350,25 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
           [input.jobId],
         );
         const epoch = Number(epochs.rows[0]?.epoch) + 1;
+        const prior = await db.query("SELECT * FROM finny_runtime_bindings WHERE session_id=$1", [input.sessionId]);
+        if (prior.rows[0]) {
+          const binding = rowToBinding(prior.rows[0] as Record<string, unknown>);
+          if (
+            binding.scopeId !== input.scopeId ||
+            binding.jobId !== input.jobId ||
+            binding.runId !== input.runId ||
+            binding.role !== "auditor" ||
+            binding.principalId !== input.principalId ||
+            binding.active
+          ) {
+            throw new Error("Finny runtime Auditor binding idempotency conflict");
+          }
+          const renewed = await db.query(
+            "UPDATE finny_runtime_bindings SET active=TRUE,epoch=$2,expires_at=$3 WHERE session_id=$1 RETURNING *",
+            [input.sessionId, epoch, input.expiresAt],
+          );
+          return rowToBinding(renewed.rows[0] as Record<string, unknown>);
+        }
         await db.query(
           `INSERT INTO finny_runtime_bindings(
             session_id,run_id,scope_id,job_id,role,principal_id,epoch,expires_at,created_at
@@ -447,6 +504,27 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
           [input.sessionId, input.runId, input.scopeId, input.jobId, input.role, Date.now()],
         );
         if (!current.rows[0]) throw new Error(`Finny action requires the current ${input.role} session and run`);
+        const concurrent = await db.query("SELECT * FROM finny_runtime_actions WHERE idempotency_key=$1", [
+          input.idempotencyKey,
+        ]);
+        if (concurrent.rows[0]) {
+          const action = concurrent.rows[0] as Record<string, unknown>;
+          if (
+            action.kind !== input.kind ||
+            action.session_id !== input.sessionId ||
+            action.run_id !== input.runId ||
+            action.scope_id !== input.scopeId ||
+            action.job_id !== input.jobId ||
+            action.role !== input.role ||
+            action.request_digest !== input.requestDigest
+          ) {
+            throw new Error("Finny runtime action idempotency conflict");
+          }
+          return {
+            binding: rowToBinding(current.rows[0] as Record<string, unknown>),
+            authorityPayload: action.authority_payload,
+          };
+        }
         await db.query(
           `INSERT INTO finny_runtime_actions(
             idempotency_key,kind,session_id,run_id,scope_id,job_id,role,request_digest,authority_payload,created_at
@@ -467,6 +545,92 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
         return {
           binding: rowToBinding(current.rows[0] as Record<string, unknown>),
           authorityPayload: input.authorityPayload,
+        };
+      });
+    },
+    async pendingRecoveries(): Promise<FinnyRuntimeRecovery[]> {
+      const rows = await q(
+        `SELECT actions.kind,actions.session_id,actions.run_id,actions.scope_id,actions.job_id,
+                actions.idempotency_key,CASE WHEN actions.kind='artifact_ready' THEN events.payload ELSE actions.authority_payload->'recovery' END AS payload
+           FROM finny_runtime_actions AS actions
+      LEFT JOIN finny_job_events AS events
+             ON events.job_id=actions.job_id
+            AND events.idempotency_key=actions.idempotency_key
+            AND events.event_index=0
+            AND events.event_type=actions.kind
+      LEFT JOIN finny_runtime_dispatches AS dispatches
+             ON dispatches.idempotency_key=actions.idempotency_key ||
+                CASE actions.kind WHEN 'artifact_ready' THEN ':auditor-grant' WHEN 'audit_blocked' THEN ':producer-rework' ELSE ':none' END
+            AND dispatches.delivered_at IS NOT NULL
+          WHERE dispatches.idempotency_key IS NULL
+            AND (
+              (
+                actions.kind='artifact_ready' AND (
+                  events.seq IS NULL OR NOT EXISTS (
+                    SELECT 1 FROM finny_job_events AS audit
+                     WHERE audit.job_id=actions.job_id
+                       AND audit.seq>events.seq
+                       AND audit.event_type IN ('audit_passed','audit_blocked')
+                  )
+                )
+              ) OR
+              (actions.kind='audit_passed' AND events.seq IS NULL) OR
+              (
+                actions.kind='audit_blocked' AND (
+                  EXISTS (
+                    SELECT 1 FROM finny_job_events AS transition
+                     WHERE transition.job_id=actions.job_id
+                       AND transition.idempotency_key=actions.idempotency_key
+                       AND transition.event_index=1
+                       AND transition.event_type='rework_requested'
+                       AND NOT EXISTS (
+                         SELECT 1 FROM finny_job_events AS artifact
+                          WHERE artifact.job_id=actions.job_id
+                            AND artifact.seq>transition.seq
+                            AND artifact.event_type='artifact_ready'
+                       )
+                  ) OR (
+                    events.seq IS NULL AND actions.authority_payload->'resolution'->>'kind' IN ('rework','escalate')
+                  )
+                )
+              )
+            )
+          ORDER BY actions.created_at,actions.idempotency_key`,
+      );
+      return rows.map((row) => {
+        const base = {
+          sessionId: row.session_id as string,
+          runId: row.run_id as string,
+          scopeId: row.scope_id as string,
+          jobId: row.job_id as string,
+          idempotencyKey: row.idempotency_key as string,
+        };
+        if (row.kind === "artifact_ready") return { kind: "artifact_ready" as const, ...base };
+        const payload = (row.payload ?? {}) as {
+          artifactDigest: string;
+          checkId: FinnyCheckId;
+          generation: number;
+          evidenceFileId: string;
+          findings: FinnyAuditFinding[];
+        };
+        if (row.kind === "audit_passed") {
+          return {
+            kind: "audit_passed" as const,
+            ...base,
+            artifactDigest: payload.artifactDigest,
+            checkId: payload.checkId,
+            generation: payload.generation,
+            evidenceFileId: payload.evidenceFileId,
+          };
+        }
+        return {
+          kind: "audit_blocked" as const,
+          ...base,
+          artifactDigest: payload.artifactDigest,
+          checkId: payload.checkId,
+          generation: payload.generation,
+          evidenceFileId: payload.evidenceFileId,
+          findings: payload.findings,
         };
       });
     },

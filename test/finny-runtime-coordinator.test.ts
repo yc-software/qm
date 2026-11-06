@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { test } from "node:test";
-import { createFinnyRuntimeCoordinator } from "../src/finny/runtime-coordinator.ts";
-import { createPostgresFinnyRuntimeStore } from "../src/finny/runtime-postgres-store.ts";
+import { createFinnyRuntimeCoordinator, reconcileFinnyRuntimeRecoveries } from "../src/finny/runtime-coordinator.ts";
+import { createPostgresFinnyRuntimeStore, type FinnyRuntimeRecovery } from "../src/finny/runtime-postgres-store.ts";
 import { initialFinnyPolicy } from "../src/finny/policy.ts";
+import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { createPostgresFinnyStore } from "../src/finny/postgres-store.ts";
 import { createFinnyWorkerGrants } from "../src/finny/worker-grants.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
@@ -38,6 +39,10 @@ async function approvedJob() {
     decidedAt: Date.now(),
   });
   return { jobs, job, connectionString };
+}
+
+function runtimeDigest(value: unknown): string {
+  return createHash("sha256").update(JSON.stringify(value)).digest("base64url");
 }
 
 function coreRuntimeAuthority() {
@@ -978,4 +983,516 @@ test("BLOCK retry reuses verified evidence after policy advances before dispatch
   await coordinator.auditBlocked(input);
   assert.equal(evidenceResolutions, 1);
   assert.equal(dispatches, 2);
+});
+test("artifact dispatch recovers from committed action authority without resolving the original proposal", async () => {
+  const { jobs, job, connectionString } = await approvedJob();
+  const runtime = createPostgresFinnyRuntimeStore(connectionString);
+  await runtime.bindInitial({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    parentSessionId: "parent-session",
+    parentRunId: "parent-run",
+    parentPrincipalId: "U1",
+    producerExpiresAt: Date.now() + 60_000,
+    auditorExpiresAt: Date.now() + 60_000,
+    producerSessionId: "producer-session",
+    producerRunId: "producer-run",
+    auditorSessionId: "auditor-session",
+    auditorRunId: "auditor-run",
+    producerPrincipalId: "U1",
+    auditorPrincipalId: "U1",
+  });
+  const wakes: string[] = [];
+  const first = createFinnyRuntimeCoordinator({
+    jobs,
+    runtime,
+    grants: createFinnyWorkerGrants(jobs, "runtime-test-secret"),
+    sessions: {
+      async open() {
+        throw new Error("unexpected open");
+      },
+    },
+    dispatcher: {
+      async dispatchPrivateIdempotent() {
+        throw new Error("dispatch interrupted");
+      },
+    },
+    recoveryWake(recovery) {
+      wakes.push(recovery.idempotencyKey);
+    },
+    ...coreRuntimeAuthority(),
+  });
+  const input = {
+    sessionId: "producer-session",
+    runId: "producer-run",
+    scopeId: job.scopeId,
+    jobId: job.id,
+    idempotencyKey: "artifact-crash-window",
+  };
+  await assert.rejects(first.artifactReady(input), /dispatch interrupted/);
+  assert.deepEqual(wakes, ["artifact-crash-window"]);
+  const pending = await runtime.pendingRecoveries();
+  assert.deepEqual(pending, [{ kind: "artifact_ready", ...input }]);
+  const delivered: string[] = [];
+  const restarted = createFinnyRuntimeCoordinator({
+    jobs,
+    runtime,
+    grants: createFinnyWorkerGrants(jobs, "runtime-test-secret"),
+    sessions: {
+      async open() {
+        throw new Error("unexpected open");
+      },
+    },
+    dispatcher: {
+      async dispatchPrivateIdempotent(message) {
+        delivered.push(message.idempotencyKey);
+      },
+    },
+    artifactBinding: {
+      async resolve() {
+        throw new Error("proposal must not be retried");
+      },
+    },
+    workerPolicy: coreRuntimeAuthority().workerPolicy,
+    evidenceAuthority: coreRuntimeAuthority().evidenceAuthority,
+  });
+  await restarted.artifactReady(pending[0]!);
+  assert.deepEqual(delivered, ["artifact-crash-window:auditor-grant"]);
+  assert.deepEqual(await runtime.pendingRecoveries(), []);
+});
+
+test("producer rework dispatch recovers from the committed BLOCK without repeating escalation judgment", async () => {
+  const { jobs, job, connectionString } = await approvedJob();
+  await jobs.recordArtifactReady({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    artifactDigest: "artifact-sha256",
+    provisionalRevision: "revision-1",
+    idempotencyKey: "artifact-before-block-crash",
+  });
+  const runtime = createPostgresFinnyRuntimeStore(connectionString);
+  await runtime.bindInitial({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    parentSessionId: "parent-session",
+    parentRunId: "parent-run",
+    parentPrincipalId: "U1",
+    producerExpiresAt: Date.now() + 60_000,
+    auditorExpiresAt: Date.now() + 60_000,
+    producerSessionId: "producer-session",
+    producerRunId: "producer-run",
+    auditorSessionId: "auditor-session",
+    auditorRunId: "auditor-run",
+    producerPrincipalId: "U1",
+    auditorPrincipalId: "U1",
+  });
+  const wakes: string[] = [];
+  let acceptedMessage = "";
+  const first = createFinnyRuntimeCoordinator({
+    jobs,
+    runtime,
+    grants: createFinnyWorkerGrants(jobs, "runtime-test-secret"),
+    sessions: {
+      async open() {
+        throw new Error("unexpected open");
+      },
+    },
+    dispatcher: {
+      async dispatchPrivateIdempotent(message) {
+        acceptedMessage = message.message;
+        throw new Error("rework dispatch interrupted");
+      },
+    },
+    escalationDecision: {
+      async decide() {
+        return { kind: "rework" as const };
+      },
+    },
+    recoveryWake(recovery) {
+      wakes.push(recovery.idempotencyKey);
+    },
+    ...coreRuntimeAuthority(),
+  });
+  const input = {
+    sessionId: "auditor-session",
+    runId: "auditor-run",
+    scopeId: job.scopeId,
+    jobId: job.id,
+    artifactDigest: "artifact-sha256",
+    checkId: "lineage.binding" as const,
+    generation: 1,
+    evidenceFileId: "evidence-block-crash",
+    findings: [{ message: "Repair source lineage", code: "LINEAGE" }],
+    idempotencyKey: "block-crash-window",
+  };
+  await assert.rejects(first.auditBlocked(input), /rework dispatch interrupted/);
+  assert.deepEqual(wakes, ["block-crash-window"]);
+  const pending = await runtime.pendingRecoveries();
+  assert.deepEqual(pending, [{ kind: "audit_blocked", ...input }]);
+  const delivered: string[] = [];
+  const restarted = createFinnyRuntimeCoordinator({
+    jobs,
+    runtime,
+    grants: createFinnyWorkerGrants(jobs, "runtime-test-secret"),
+    sessions: {
+      async open() {
+        throw new Error("unexpected open");
+      },
+    },
+    dispatcher: {
+      async dispatchPrivateIdempotent(message) {
+        assert.equal(message.message, acceptedMessage);
+        delivered.push(message.idempotencyKey);
+      },
+    },
+    escalationDecision: {
+      async decide() {
+        throw new Error("judgment must not be retried");
+      },
+    },
+    ...coreRuntimeAuthority(),
+  });
+  await restarted.auditBlocked(pending[0]!);
+  assert.deepEqual(delivered, ["block-crash-window:producer-rework"]);
+  assert.deepEqual(await runtime.pendingRecoveries(), []);
+});
+
+test("runtime reconciliation records a poison recovery and continues with later jobs", async () => {
+  const recoveries = [
+    {
+      kind: "artifact_ready" as const,
+      sessionId: "poison-session",
+      runId: "poison-run",
+      scopeId: "personal:U1",
+      jobId: "poison-job",
+      idempotencyKey: "poison-artifact",
+    },
+    {
+      kind: "artifact_ready" as const,
+      sessionId: "healthy-session",
+      runId: "healthy-run",
+      scopeId: "personal:U1",
+      jobId: "healthy-job",
+      idempotencyKey: "healthy-artifact",
+    },
+  ];
+  const attempted: string[] = [];
+  const errors: Array<{ error: unknown; recovery: FinnyRuntimeRecovery }> = [];
+  await reconcileFinnyRuntimeRecoveries({
+    recoveries: async () => recoveries,
+    coordinatorFor: async (_scopeId, jobId) => ({
+      async artifactReady() {
+        attempted.push(jobId);
+        if (jobId === "poison-job") throw new Error("poison recovery");
+      },
+      async auditPassed() {
+        throw new Error("unexpected PASS recovery");
+      },
+      async auditBlocked() {
+        throw new Error("unexpected BLOCK recovery");
+      },
+    }),
+    recordError: async (error, recovery) => {
+      errors.push({ error, recovery });
+    },
+  });
+  assert.deepEqual(attempted, ["poison-job", "healthy-job"]);
+  assert.equal(errors.length, 1);
+  assert.match(String(errors[0]?.error), /poison recovery/);
+  assert.equal(errors[0]?.recovery.idempotencyKey, "poison-artifact");
+});
+
+test("restart replays artifact authority committed before the job event", async () => {
+  const { jobs, job, connectionString } = await approvedJob();
+  const runtime = createPostgresFinnyRuntimeStore(connectionString);
+  await runtime.bindInitial({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    parentSessionId: "parent-session",
+    parentRunId: "parent-run",
+    parentPrincipalId: "U1",
+    producerExpiresAt: Date.now() + 60_000,
+    auditorExpiresAt: Date.now() + 60_000,
+    producerSessionId: "producer-session",
+    producerRunId: "producer-run",
+    auditorSessionId: "auditor-session",
+    auditorRunId: "auditor-run",
+    producerPrincipalId: "U1",
+    auditorPrincipalId: "U1",
+  });
+  await createPgPool(connectionString).q(
+    "UPDATE finny_runtime_bindings SET expires_at=$2 WHERE session_id=$1 AND role='auditor'",
+    ["auditor-session", Date.now() - 1],
+  );
+  const input = {
+    sessionId: "producer-session",
+    runId: "producer-run",
+    scopeId: job.scopeId,
+    jobId: job.id,
+    idempotencyKey: "artifact-authorized-only",
+  };
+  await runtime.authorizeAction({
+    ...input,
+    kind: "artifact_ready",
+    role: "producer",
+    requestDigest: runtimeDigest({}),
+    authorityPayload: { artifactDigest: "artifact-sha256", provisionalRevision: "revision-1" },
+  });
+  assert.deepEqual(await runtime.pendingRecoveries(), [{ kind: "artifact_ready", ...input }]);
+  const delivered: string[] = [];
+  const coordinator = createFinnyRuntimeCoordinator({
+    jobs,
+    runtime,
+    grants: createFinnyWorkerGrants(jobs, "runtime-test-secret"),
+    sessions: {
+      async open() {
+        return { ok: true as const, sessionId: "auditor-session", runId: "auditor-run", title: "Finny Auditor" };
+      },
+    },
+    dispatcher: {
+      async dispatchPrivateIdempotent(message) {
+        delivered.push(message.idempotencyKey);
+      },
+    },
+    artifactBinding: {
+      async resolve() {
+        throw new Error("proposal must not be retried");
+      },
+    },
+    workerPolicy: coreRuntimeAuthority().workerPolicy,
+    evidenceAuthority: coreRuntimeAuthority().evidenceAuthority,
+  });
+  await coordinator.artifactReady(input);
+  assert.deepEqual(delivered, ["artifact-authorized-only:auditor-grant"]);
+});
+
+test("restart replays BLOCK authority committed before the job event", async () => {
+  const { jobs, job, connectionString } = await approvedJob();
+  await jobs.recordArtifactReady({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    artifactDigest: "artifact-sha256",
+    provisionalRevision: "revision-1",
+    idempotencyKey: "artifact-before-authorized-block",
+  });
+  const runtime = createPostgresFinnyRuntimeStore(connectionString);
+  await runtime.bindInitial({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    parentSessionId: "parent-session",
+    parentRunId: "parent-run",
+    parentPrincipalId: "U1",
+    producerExpiresAt: Date.now() + 60_000,
+    auditorExpiresAt: Date.now() + 60_000,
+    producerSessionId: "producer-session",
+    producerRunId: "producer-run",
+    auditorSessionId: "auditor-session",
+    auditorRunId: "auditor-run",
+    producerPrincipalId: "U1",
+    auditorPrincipalId: "U1",
+  });
+  const input = {
+    sessionId: "auditor-session",
+    runId: "auditor-run",
+    scopeId: job.scopeId,
+    jobId: job.id,
+    artifactDigest: "artifact-sha256",
+    checkId: "lineage.binding" as const,
+    generation: 1,
+    evidenceFileId: "evidence-authorized-only",
+    findings: [{ code: "LINEAGE", message: "Repair lineage" }],
+    idempotencyKey: "block-authorized-only",
+  };
+  const recovery = {
+    artifactDigest: input.artifactDigest,
+    checkId: input.checkId,
+    generation: input.generation,
+    evidenceFileId: input.evidenceFileId,
+    findings: input.findings,
+  };
+  await runtime.authorizeAction({
+    ...input,
+    kind: "audit_blocked",
+    role: "auditor",
+    requestDigest: runtimeDigest(recovery),
+    authorityPayload: { resolution: { kind: "rework" }, evidenceDigest: "verified-block-digest", recovery },
+  });
+  assert.deepEqual(await runtime.pendingRecoveries(), [{ kind: "audit_blocked", ...input }]);
+  const delivered: string[] = [];
+  const coordinator = createFinnyRuntimeCoordinator({
+    jobs,
+    runtime,
+    grants: createFinnyWorkerGrants(jobs, "runtime-test-secret"),
+    sessions: {
+      async open() {
+        throw new Error("unexpected open");
+      },
+    },
+    dispatcher: {
+      async dispatchPrivateIdempotent(message) {
+        delivered.push(message.idempotencyKey);
+      },
+    },
+    escalationDecision: {
+      async decide() {
+        throw new Error("judgment must not be retried");
+      },
+    },
+    ...coreRuntimeAuthority(),
+  });
+  await coordinator.auditBlocked(input);
+  assert.deepEqual(delivered, ["block-authorized-only:producer-rework"]);
+});
+
+test("restart replays PASS authority committed before the job event", async () => {
+  const { jobs, job, connectionString } = await approvedJob();
+  await jobs.recordArtifactReady({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    artifactDigest: "artifact-sha256",
+    provisionalRevision: "revision-1",
+    idempotencyKey: "artifact-before-authorized-pass",
+  });
+  const runtime = createPostgresFinnyRuntimeStore(connectionString);
+  await runtime.bindInitial({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    parentSessionId: "parent-session",
+    parentRunId: "parent-run",
+    parentPrincipalId: "U1",
+    producerExpiresAt: Date.now() + 60_000,
+    auditorExpiresAt: Date.now() + 60_000,
+    producerSessionId: "producer-session",
+    producerRunId: "producer-run",
+    auditorSessionId: "auditor-session",
+    auditorRunId: "auditor-run",
+    producerPrincipalId: "U1",
+    auditorPrincipalId: "U1",
+  });
+  const input = {
+    sessionId: "auditor-session",
+    runId: "auditor-run",
+    scopeId: job.scopeId,
+    jobId: job.id,
+    artifactDigest: "artifact-sha256",
+    checkId: "lineage.binding" as const,
+    generation: 1,
+    evidenceFileId: "evidence-pass-authorized-only",
+    idempotencyKey: "pass-authorized-only",
+  };
+  const recovery = {
+    artifactDigest: input.artifactDigest,
+    checkId: input.checkId,
+    generation: input.generation,
+    evidenceFileId: input.evidenceFileId,
+  };
+  await runtime.authorizeAction({
+    ...input,
+    kind: "audit_passed",
+    role: "auditor",
+    requestDigest: runtimeDigest(recovery),
+    authorityPayload: { evidenceDigest: "verified-pass-digest", recovery },
+  });
+  assert.deepEqual(await runtime.pendingRecoveries(), [{ kind: "audit_passed", ...input }]);
+  const coordinator = createFinnyRuntimeCoordinator({
+    jobs,
+    runtime,
+    grants: createFinnyWorkerGrants(jobs, "runtime-test-secret"),
+    sessions: {
+      async open() {
+        throw new Error("unexpected open");
+      },
+    },
+    dispatcher: {
+      async dispatchPrivateIdempotent() {
+        throw new Error("unexpected dispatch");
+      },
+    },
+    ...coreRuntimeAuthority(),
+  });
+  await coordinator.auditPassed(input);
+  assert.deepEqual(await runtime.pendingRecoveries(), []);
+  assert.equal((await jobs.listEvents(job.scopeId, job.id)).at(-1)?.type, "audit_passed");
+});
+
+test("restart replays escalation authority committed before the BLOCK event", async () => {
+  const { jobs, job, connectionString } = await approvedJob();
+  await jobs.recordArtifactReady({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    artifactDigest: "artifact-sha256",
+    provisionalRevision: "revision-1",
+    idempotencyKey: "artifact-before-authorized-escalation",
+  });
+  const runtime = createPostgresFinnyRuntimeStore(connectionString);
+  await runtime.bindInitial({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    parentSessionId: "parent-session",
+    parentRunId: "parent-run",
+    parentPrincipalId: "U1",
+    producerExpiresAt: Date.now() + 60_000,
+    auditorExpiresAt: Date.now() + 60_000,
+    producerSessionId: "producer-session",
+    producerRunId: "producer-run",
+    auditorSessionId: "auditor-session",
+    auditorRunId: "auditor-run",
+    producerPrincipalId: "U1",
+    auditorPrincipalId: "U1",
+  });
+  const input = {
+    sessionId: "auditor-session",
+    runId: "auditor-run",
+    scopeId: job.scopeId,
+    jobId: job.id,
+    artifactDigest: "artifact-sha256",
+    checkId: "lineage.binding" as const,
+    generation: 1,
+    evidenceFileId: "evidence-escalation-authorized-only",
+    findings: [{ code: "LINEAGE", message: "Escalate lineage" }],
+    idempotencyKey: "escalation-authorized-only",
+  };
+  const recovery = {
+    artifactDigest: input.artifactDigest,
+    checkId: input.checkId,
+    generation: input.generation,
+    evidenceFileId: input.evidenceFileId,
+    findings: input.findings,
+  };
+  await runtime.authorizeAction({
+    ...input,
+    kind: "audit_blocked",
+    role: "auditor",
+    requestDigest: runtimeDigest(recovery),
+    authorityPayload: {
+      resolution: { kind: "escalate", reason: "Human review required" },
+      evidenceDigest: "verified-escalation-digest",
+      recovery,
+    },
+  });
+  assert.deepEqual(await runtime.pendingRecoveries(), [{ kind: "audit_blocked", ...input }]);
+  const coordinator = createFinnyRuntimeCoordinator({
+    jobs,
+    runtime,
+    grants: createFinnyWorkerGrants(jobs, "runtime-test-secret"),
+    sessions: {
+      async open() {
+        throw new Error("unexpected open");
+      },
+    },
+    dispatcher: {
+      async dispatchPrivateIdempotent() {
+        throw new Error("unexpected dispatch");
+      },
+    },
+    escalationDecision: {
+      async decide() {
+        throw new Error("judgment must not be retried");
+      },
+    },
+    ...coreRuntimeAuthority(),
+  });
+  await coordinator.auditBlocked(input);
+  assert.ok((await jobs.getJob(job.scopeId, job.id))?.unresolvedEscalationSequence);
+  assert.deepEqual(await runtime.pendingRecoveries(), []);
 });
