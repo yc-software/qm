@@ -1,5 +1,5 @@
 const TYPED_ORIGIN_RELEASE = "surfaces/0004-settled-runs-rewrite";
-const RETIRED_ORIGIN_KEYS = [
+export const RETIRED_ORIGIN_KEYS = [
   "triggered",
   "unprompted",
   "liveActor",
