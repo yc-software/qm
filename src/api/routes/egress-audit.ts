@@ -49,6 +49,9 @@ async function ingestEgressAudit(ctx: ApiCtx): Promise<void> {
     });
   }
   const fallback = boundTenant();
+  const lookup = deps.sessions?.tenantLookup;
+  const exists = async (tenant: string): Promise<boolean> =>
+    tenant === fallback || ((await lookup?.exists(tenant).catch(() => false)) ?? false);
   const byTenant = new Map<string, Array<Omit<EgressAuditRecord, "ts">>>();
   for (const raw of records) {
     const parsed = parseRecord(raw);
@@ -59,6 +62,7 @@ async function ingestEgressAudit(ctx: ApiCtx): Promise<void> {
   }
   let accepted = 0;
   for (const [tenant, batch] of byTenant) {
+    if (!(await exists(tenant))) continue;
     const sink = deps.egressAudit;
     const ok = await inTenant(tenant, async () => {
       for (const record of batch) sink.record(record);

@@ -88,6 +88,11 @@ describe("inbound tenant lookups", () => {
     assert.deepEqual(await lookup.gmailTenants("nobody@x.test"), []);
   });
 
+  it("knows which tenants exist", async () => {
+    for (const tenant of db.tenants) assert.equal(await lookup.exists(tenant), true);
+    assert.equal(await lookup.exists("7d1f0c52-3b8e-4f6a-9c2d-5e4b3a2f1c0d"), false);
+  });
+
   it("binds keyed routes and app hosts at ingress, and gives unknown keys a tenant that owns no rows", async () => {
     const route = { tenant: { by: "webhook" as const, key: (params: Record<string, string>) => params.id } };
     const url = new URL("http://core.test/v1/webhooks/incoming/x");

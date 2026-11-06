@@ -1,6 +1,7 @@
 import { durableMapTenancy } from "../persistence/durable-map.ts";
 import type { PgMigrationDefinition, PgPool } from "../persistence/pg-pool.ts";
 import { fold } from "../identity/user-tenancy.ts";
+import { withTenant } from "./context.ts";
 
 const ACTIVE = `json->>'disabled' IS DISTINCT FROM 'true'`;
 
@@ -158,6 +159,7 @@ export interface TenantLookup {
   tenantFor(key: TenantKey, value: string | undefined): Promise<string | undefined>;
   gmailTenants(email: string): Promise<string[]>;
   slackTenants(): Promise<string[]>;
+  exists(tenant: string): Promise<boolean>;
 }
 
 export function tenantLookup(pg: Pick<PgPool, "q">): TenantLookup {
@@ -175,6 +177,10 @@ export function tenantLookup(pg: Pick<PgPool, "q">): TenantLookup {
     async slackTenants() {
       const rows = await pg.q("SELECT tenant::text AS tenant FROM qm_tenants_with_slack() tenant");
       return rows.map((row) => String(row.tenant));
+    },
+    async exists(tenant) {
+      const rows = await withTenant(tenant, () => pg.q("SELECT 1 FROM tenants WHERE id = qm_bound_tenant()"));
+      return rows.length === 1;
     },
   };
 }
