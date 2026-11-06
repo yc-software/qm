@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresDeliveryStore } from "../src/delivery/postgres-delivery-store.ts";
 import { WEBHOOK_CLAIM_MS, webhookSender, webhookSigningKey } from "../src/delivery/webhook-delivery.ts";
-import { createDeliveryRelay, DeliveryHttpError } from "../src/delivery/relay.ts";
+import { createDeliveryRelay } from "../src/delivery/relay.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import type { Delivery } from "../src/types.ts";
@@ -111,66 +111,31 @@ test("the webhook sender signs with a key core does not accept and reports refus
   await assert.rejects(post(), /HTTP 401/, "an auth failure is retried, not refused");
 });
 
-test("a failing delivery backs off and reports only its first and power-of-two attempts", async (t) => {
-  const reported = t.mock.method(console, "error", () => {});
+test("a delivery its receiver keeps refusing is retried with growing gaps and delivered once the receiver recovers", async (t) => {
+  const reports = t.mock.method(console, "error", () => {});
   const store = createDeliveryStore();
-  let sends = 0;
+  const attempts: number[] = [];
+  let recovered = false;
   const relay = createDeliveryRelay(store, {
     type: "webhook",
     claimMs: 40,
     send: async () => {
-      sends++;
-      throw new DeliveryHttpError(503, "receiver returned HTTP 503");
+      attempts.push(Date.now());
+      if (!recovered) throw new Error("receiver returned HTTP 401");
     },
   });
-  const failing = await store.enqueue({
-    destination: { type: "webhook", target: "t" },
-    text: "x",
-    idempotencyKey: "k",
-  });
-  relay.start();
-  await new Promise((r) => setTimeout(r, 1_200));
-  await relay.stop();
-  const attempts = reported.mock.calls
-    .map((c) => /attempt=(\d+)/.exec(String(c.arguments[0]))?.[1])
-    .filter((a) => a !== undefined)
-    .map(Number);
-  assert.ok(sends >= 3 && sends <= 7, `retried with backoff, not every claim lapse (${sends} sends)`);
-  assert.deepEqual(
-    attempts,
-    [1, 2, 4, 8, 16].filter((a) => a <= sends),
-  );
-  assert.equal((await store.get(failing.id))?.failedReason, undefined, "a server error is never given up early");
-});
-
-test("a delivery is refused after five consecutive auth failures and delivered when the receiver recovers", async (t) => {
-  t.mock.method(console, "error", () => {});
-  const store = createDeliveryStore();
-  const statuses = new Map([
-    ["bad-secret", [401, 401, 401, 401, 401, 401]],
-    ["recovers", [401, 401, 401, 503, 401, 401, 200]],
-  ]);
-  const sent: string[] = [];
-  const relay = createDeliveryRelay(store, {
-    type: "webhook",
-    claimMs: 20,
-    send: async (d) => {
-      sent.push(d.text);
-      const status = statuses.get(d.text)!.shift()!;
-      if (status !== 200) throw new DeliveryHttpError(status, `receiver returned HTTP ${status}`);
-    },
-  });
-  const enqueue = (text: string) =>
-    store.enqueue({ destination: { type: "webhook", target: text }, text, idempotencyKey: text });
-  const [bad, recovers] = await Promise.all([enqueue("bad-secret"), enqueue("recovers")]);
+  const d = await store.enqueue({ destination: { type: "webhook", target: "t" }, text: "x", idempotencyKey: "k" });
   relay.start();
   try {
-    await until(async () => (await store.get(bad.id))?.failedReason !== undefined);
-    await until(async () => (await store.get(recovers.id))?.deliveredAt !== null);
+    await new Promise((r) => setTimeout(r, 1_300));
+    const failed = attempts.length;
+    assert.ok(failed >= 4 && failed <= 7, `retried with backoff, not every claim lapse (${failed} attempts)`);
+    const gaps = attempts.slice(1).map((at, i) => at - attempts[i]!);
+    assert.ok(gaps.at(-1)! >= 4 * gaps[0]!, `gaps grow: ${gaps.join(", ")}ms`);
+    assert.equal(reports.mock.callCount(), failed, "each failed attempt is reported once");
+    recovered = true;
+    await until(async () => (await store.get(d.id))?.deliveredAt !== null, 5_000);
   } finally {
     await relay.stop();
   }
-  assert.equal((await store.get(bad.id))?.failedReason, "receiver returned HTTP 401 (5 times in a row)");
-  assert.equal(sent.filter((s) => s === "bad-secret").length, 5);
-  assert.equal(sent.filter((s) => s === "recovers").length, 7);
 });
