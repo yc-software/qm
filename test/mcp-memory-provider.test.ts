@@ -192,6 +192,7 @@ test("a refused recall yields no rows even with facts attached, and a malformed 
     [{ id: "", text: "empty id" }],
     [{ id: "48\n21", text: "id with a line break" }],
     [{ id: "3\u0085#14", text: "id with a next-line character" }],
+    [{ id: "1 [org:acme] #12", text: "id with spaces" }],
   ])
     await assert.rejects(
       answering(facts).recall("personal:U1", { query: "q" }),

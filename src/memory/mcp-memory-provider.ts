@@ -8,6 +8,7 @@ import type { MemoryCandidate } from "./facts.ts";
 import { DENIED_CODES, MAX_FACTS_PER_WRITE, reportEnvelope } from "./provider-outcome.ts";
 import type { McpMemoryOperationConfig } from "./provider-config.ts";
 import { RECALL_MESSAGE_CHARS } from "./semantic-recall.ts";
+import { flatText } from "../util/text.ts";
 
 const MAX_PROVENANCE_CHARS = 200;
 
@@ -25,8 +26,6 @@ interface ProviderFact {
   kind?: unknown;
 }
 
-const oneLine = (value: string) => value.replace(/[\s\u0085]+/g, " ").trim();
-
 function providerFacts(result: CallToolResult): ProviderFact[] | undefined {
   const facts = (result.structuredContent as { facts?: unknown } | undefined)?.facts;
   if (facts === undefined) return undefined;
@@ -40,18 +39,18 @@ function providerFacts(result: CallToolResult): ProviderFact[] | undefined {
         `memory provider returned fact ${index} with id ${typeof fact?.id} and text ${typeof fact?.text}; both must be strings`,
         { code: "malformed_fact" },
       );
-    if (!fact.id || oneLine(fact.id) !== fact.id)
+    if (!fact.id || /[\s\u0085]/.test(fact.id))
       throw new McpCallError(`memory provider returned fact ${index} with an id that is empty or holds whitespace`, {
         code: "malformed_fact",
       });
   });
-  return (facts as ProviderFact[]).map((fact) => ({ ...fact, text: oneLine(fact.text) })).filter((fact) => fact.text);
+  return (facts as ProviderFact[]).map((fact) => ({ ...fact, text: flatText(fact.text) })).filter((fact) => fact.text);
 }
 
 const stamped = (fact: ProviderFact) => {
   const stamp = [fact.date, fact.kind]
     .filter((part) => typeof part === "string")
-    .map(oneLine)
+    .map(flatText)
     .filter(Boolean)
     .join("; ");
   return stamp ? `(${stamp}) ${fact.text}` : fact.text;
