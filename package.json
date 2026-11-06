@@ -25,6 +25,7 @@
     "dev-instance:status": "bash scripts/dev-instance.sh status",
     "dev-instance:down": "bash scripts/dev-instance.sh down",
     "worker": "node --env-file-if-exists=.env src/runs/worker-main.ts",
+    "eval:finnyloop-r5": "node evals/finnyloop-r5/run.mjs",
     "test": "node scripts/run-pg-tests.mjs test/*.test.ts",
     "test:root:shard": "node scripts/run-root-test-shard.mjs",
     "test:root:shard:check": "node scripts/run-root-test-shard.mjs --check --shards 5",

@@ -1,0 +1,422 @@
+{
+  "schema": "finnyloop-r5-eval.v1",
+  "liveServices": false,
+  "commands": [
+    {
+      "id": "finny-plan-postgres",
+      "program": "node",
+      "requiresDatabase": true,
+      "args": ["scripts/run-pg-tests.mjs", "test/finny-plan.test.ts"]
+    },
+    {
+      "id": "finny-approval-postgres",
+      "program": "node",
+      "requiresDatabase": true,
+      "args": ["scripts/run-pg-tests.mjs", "test/finny-approval-service.test.ts"]
+    },
+    {
+      "id": "finny-store-postgres",
+      "program": "node",
+      "requiresDatabase": true,
+      "args": ["scripts/run-pg-tests.mjs", "test/finny-store.test.ts"]
+    },
+    {
+      "id": "finny-grants-postgres",
+      "program": "node",
+      "requiresDatabase": true,
+      "args": ["scripts/run-pg-tests.mjs", "test/finny-worker-grants.test.ts"]
+    },
+    {
+      "id": "finny-worker-postgres",
+      "program": "node",
+      "requiresDatabase": true,
+      "args": ["scripts/run-pg-tests.mjs", "test/finny-deterministic-worker.test.ts"]
+    },
+    {
+      "id": "finny-policy-postgres",
+      "program": "node",
+      "requiresDatabase": true,
+      "args": ["scripts/run-pg-tests.mjs", "test/finny-policy.test.ts"]
+    },
+    {
+      "id": "finny-events-postgres",
+      "program": "node",
+      "requiresDatabase": true,
+      "args": ["scripts/run-pg-tests.mjs", "test/finny-events.test.ts"]
+    },
+    {
+      "id": "finny-runtime-postgres",
+      "program": "node",
+      "requiresDatabase": true,
+      "args": ["scripts/run-pg-tests.mjs", "test/finny-runtime-coordinator.test.ts"]
+    },
+    {
+      "id": "finny-finalizer-postgres",
+      "program": "node",
+      "requiresDatabase": true,
+      "args": ["scripts/run-pg-tests.mjs", "test/finny-finalizer.test.ts"]
+    },
+    {
+      "id": "finny-slack-postgres",
+      "program": "node",
+      "requiresDatabase": true,
+      "args": ["scripts/run-pg-tests.mjs", "test/slack-finny-approvals.test.ts"]
+    },
+    {
+      "id": "finny-pi-offline",
+      "program": "node",
+      "requiresDatabase": false,
+      "args": ["--test", "packages/finnyloop-pi/test/extension.test.ts", "packages/finnyloop-pi/test/package.test.ts"]
+    }
+  ],
+  "cases": [
+    {
+      "id": "plan-digest-tampering",
+      "invariant": "Only the canonical digest of the complete persisted plan is approved; a caller cannot substitute a plan digest or authority binding.",
+      "selectors": [
+        {
+          "commandId": "finny-plan-postgres",
+          "file": "test/finny-plan.test.ts",
+          "name": "validates and canonically digests a complete renderable plan"
+        },
+        {
+          "commandId": "finny-store-postgres",
+          "file": "test/finny-store.test.ts",
+          "name": "approval decision derives exact bindings from an opaque pre-bound request"
+        }
+      ]
+    },
+    {
+      "id": "approval-wrong-actor",
+      "invariant": "External, mismatched, or copied-card actors cannot decide a plan and leave the durable approval pending.",
+      "selectors": [
+        {
+          "commandId": "finny-approval-postgres",
+          "file": "test/finny-approval-service.test.ts",
+          "name": "plan decisions reject external, wrong, and copied-card actors without mutating approval"
+        }
+      ]
+    },
+    {
+      "id": "approval-wrong-thread",
+      "invariant": "An approval or clarification from a Slack origin other than the persisted thread is rejected atomically.",
+      "selectors": [
+        {
+          "commandId": "finny-approval-postgres",
+          "file": "test/finny-approval-service.test.ts",
+          "name": "approval store atomically rejects an origin context that does not match its binding"
+        },
+        {
+          "commandId": "finny-approval-postgres",
+          "file": "test/finny-approval-service.test.ts",
+          "name": "clarification delivery rejects a destination outside the persisted origin thread"
+        }
+      ]
+    },
+    {
+      "id": "approval-replay",
+      "invariant": "A decided opaque approval is one-use: replay returns gone and cannot dispatch coordination twice.",
+      "selectors": [
+        {
+          "commandId": "finny-approval-postgres",
+          "file": "test/finny-approval-service.test.ts",
+          "name": "a decided approval returns gone without a duplicate coordinator callback"
+        },
+        {
+          "commandId": "finny-approval-postgres",
+          "file": "test/finny-approval-service.test.ts",
+          "name": "concurrent approval clicks settle once and invoke coordination once"
+        }
+      ]
+    },
+    {
+      "id": "worker-role-run-forgery",
+      "invariant": "Core-issued bindings reject stale producer runs, producer audit completion, and equal producer/Auditor identities.",
+      "selectors": [
+        {
+          "commandId": "finny-runtime-postgres",
+          "file": "test/finny-runtime-coordinator.test.ts",
+          "name": "rejects artifact readiness from a stale producer run"
+        },
+        {
+          "commandId": "finny-runtime-postgres",
+          "file": "test/finny-runtime-coordinator.test.ts",
+          "name": "rejects audit completion from the producer role"
+        },
+        {
+          "commandId": "finny-grants-postgres",
+          "file": "test/finny-worker-grants.test.ts",
+          "name": "producer and Auditor run identities must remain distinct"
+        }
+      ]
+    },
+    {
+      "id": "artifact-replacement-without-rework",
+      "invariant": "Artifact bytes cannot be replaced unless an authoritative rework request is open, and re-audit waits for the replacement artifact.",
+      "selectors": [
+        {
+          "commandId": "finny-events-postgres",
+          "file": "test/finny-events.test.ts",
+          "name": "artifact replacement requires an authoritative rework request"
+        },
+        {
+          "commandId": "finny-events-postgres",
+          "file": "test/finny-events.test.ts",
+          "name": "re-audit waits for a new artifact to consume the rework request"
+        }
+      ]
+    },
+    {
+      "id": "stale-generation",
+      "invariant": "Evidence below the exact Core-required check generation or bound to a substituted artifact/check/generation cannot advance audit state.",
+      "selectors": [
+        {
+          "commandId": "finny-events-postgres",
+          "file": "test/finny-events.test.ts",
+          "name": "stale and wrong-scope audit events fail without changing authoritative state"
+        },
+        {
+          "commandId": "finny-worker-postgres",
+          "file": "test/finny-deterministic-worker.test.ts",
+          "name": "rejects artifact, check and generation substitution"
+        }
+      ]
+    },
+    {
+      "id": "latest-block-after-pass",
+      "invariant": "The authoritative latest BLOCK defeats every earlier PASS and prevents finalization regardless of input ordering.",
+      "selectors": [
+        {
+          "commandId": "finny-finalizer-postgres",
+          "file": "test/finny-finalizer.test.ts",
+          "name": "finalizer rejects missing evidence and the latest BLOCK"
+        },
+        {
+          "commandId": "finny-events-postgres",
+          "file": "test/finny-events.test.ts",
+          "name": "artifact and audit events expose the latest server sequence"
+        }
+      ]
+    },
+    {
+      "id": "incomplete-one-check-certificate",
+      "invariant": "A single passing check or any incomplete result set cannot certify an artifact; every policy-required check must be current and passing.",
+      "selectors": [
+        {
+          "commandId": "finny-finalizer-postgres",
+          "file": "test/finny-finalizer.test.ts",
+          "name": "finalizer rejects missing evidence and the latest BLOCK"
+        },
+        {
+          "commandId": "finny-worker-postgres",
+          "file": "test/finny-deterministic-worker.test.ts",
+          "name": "rejects duplicate, unknown and missing result checks"
+        },
+        {
+          "commandId": "finny-policy-postgres",
+          "file": "test/finny-policy.test.ts",
+          "name": "initial policy requires every check at generation one"
+        }
+      ]
+    },
+    {
+      "id": "lineage-selective-invalidation",
+      "invariant": "A lineage-only change advances only lineage.binding while source/logic changes invalidate the complete check suite.",
+      "selectors": [
+        {
+          "commandId": "finny-policy-postgres",
+          "file": "test/finny-policy.test.ts",
+          "name": "lineage increments only its invalidated checks",
+          "declarationTokens": [
+            "test(`${changeKind} increments only its invalidated checks`",
+            "lineage: [\"lineage.binding\"]"
+          ]
+        },
+        {
+          "commandId": "finny-policy-postgres",
+          "file": "test/finny-policy.test.ts",
+          "name": "combined and duplicate change kinds increment each check once"
+        }
+      ]
+    },
+    {
+      "id": "block-wakes-producer-and-rotates-auditor",
+      "invariant": "A BLOCK automatically wakes the bound producer once; the replacement artifact receives a fresh independent Auditor run and grant.",
+      "selectors": [
+        {
+          "commandId": "finny-runtime-postgres",
+          "file": "test/finny-runtime-coordinator.test.ts",
+          "name": "a BLOCK wakes the bound producer with policy-bounded findings"
+        },
+        {
+          "commandId": "finny-runtime-postgres",
+          "file": "test/finny-runtime-coordinator.test.ts",
+          "name": "the next artifact creates a fresh independent Auditor run and grant"
+        },
+        {
+          "commandId": "finny-runtime-postgres",
+          "file": "test/finny-runtime-coordinator.test.ts",
+          "name": "replaying the same BLOCK is idempotent without duplicate producer wake"
+        }
+      ]
+    },
+    {
+      "id": "configured-escalation-boundary",
+      "invariant": "Core follows the externally configured rework-or-stop decision, records escalation without an internal retry cap, and blocks delivery while escalation is unresolved.",
+      "selectors": [
+        {
+          "commandId": "finny-events-postgres",
+          "file": "test/finny-events.test.ts",
+          "name": "external escalation decisions are recorded without an internal retry cap"
+        },
+        {
+          "commandId": "finny-events-postgres",
+          "file": "test/finny-events.test.ts",
+          "name": "unresolved escalation blocks final delivery"
+        },
+        {
+          "commandId": "finny-runtime-postgres",
+          "file": "test/finny-runtime-coordinator.test.ts",
+          "name": "an externally approved escalation stops worker actions instead of reworking"
+        }
+      ]
+    },
+    {
+      "id": "deterministic-output-mutation",
+      "invariant": "Mutable engine or caller aliases cannot alter the canonical artifact evidence returned for Core verification.",
+      "selectors": [
+        {
+          "commandId": "finny-worker-postgres",
+          "file": "test/finny-deterministic-worker.test.ts",
+          "name": "worker output does not alias mutable engine results"
+        },
+        {
+          "commandId": "finny-worker-postgres",
+          "file": "test/finny-deterministic-worker.test.ts",
+          "name": "Core verification returns a deeply frozen canonical copy without caller aliases"
+        }
+      ]
+    },
+    {
+      "id": "deterministic-output-nondeterminism",
+      "invariant": "Unrecognized or nondeterministic metadata, malformed output, and forged envelope digests fail closed.",
+      "selectors": [
+        {
+          "commandId": "finny-worker-postgres",
+          "file": "test/finny-deterministic-worker.test.ts",
+          "name": "rejects nondeterministic or unrecognized metadata and a forged envelope digest"
+        },
+        {
+          "commandId": "finny-worker-postgres",
+          "file": "test/finny-deterministic-worker.test.ts",
+          "name": "worker fails closed on malformed engine output"
+        }
+      ]
+    },
+    {
+      "id": "pi-restart-checkpoint-mismatch",
+      "invariant": "Pi restart never trusts cached session projections and fails closed when prior job identity or event sequence disagrees with authoritative Core state.",
+      "selectors": [
+        {
+          "commandId": "finny-pi-offline",
+          "file": "packages/finnyloop-pi/test/extension.test.ts",
+          "name": "session restart fails closed on a well-formed prior identity mismatch"
+        },
+        {
+          "commandId": "finny-pi-offline",
+          "file": "packages/finnyloop-pi/test/extension.test.ts",
+          "name": "session restart fails closed on a well-formed prior event sequence regression"
+        },
+        {
+          "commandId": "finny-pi-offline",
+          "file": "packages/finnyloop-pi/test/extension.test.ts",
+          "name": "reader failure never promotes a cached custom entry to authority"
+        }
+      ]
+    },
+    {
+      "id": "slack-opaque-action-tampering-recovery",
+      "invariant": "Slack button values remain opaque request IDs, authenticated clicks preserve exact message context, and recovered delivery verifies durable state before reposting.",
+      "selectors": [
+        {
+          "commandId": "finny-slack-postgres",
+          "file": "test/slack-finny-approvals.test.ts",
+          "name": "Finny plan actions authenticate the clicker and preserve the Slack message context"
+        },
+        {
+          "commandId": "finny-slack-postgres",
+          "file": "test/slack-finny-approvals.test.ts",
+          "name": "Finny clarification actions pass the selected option while button values stay opaque request IDs"
+        },
+        {
+          "commandId": "finny-slack-postgres",
+          "file": "test/slack-finny-approvals.test.ts",
+          "name": "a recovered Finny plan delivery verifies before it posts again"
+        },
+        {
+          "commandId": "finny-slack-postgres",
+          "file": "test/slack-finny-approvals.test.ts",
+          "name": "unavailable, gone, and failed Finny actions show retry or expired copy without updating success"
+        }
+      ]
+    },
+    {
+      "id": "final-receipt-idempotency-binding",
+      "invariant": "Finalization returns one signed receipt per idempotency key bound exactly to scope, job, plan digest, artifact digest, and provisional revision; collisions or scope substitution fail.",
+      "selectors": [
+        {
+          "commandId": "finny-finalizer-postgres",
+          "file": "test/finny-finalizer.test.ts",
+          "name": "finalizer reads authoritative state and returns the same signed receipt for one idempotency key"
+        },
+        {
+          "commandId": "finny-finalizer-postgres",
+          "file": "test/finny-finalizer.test.ts",
+          "name": "finalizer rejects scope mismatch and a rejected artifact-free job"
+        },
+        {
+          "commandId": "finny-finalizer-postgres",
+          "file": "test/finny-finalizer.test.ts",
+          "name": "concurrent finalizers with the same key converge on one receipt"
+        }
+      ]
+    },
+    {
+      "id": "process-death-pending-plan-recovery",
+      "invariant": "A pending plan and its opaque action survive process death in durable storage and recovered Slack delivery verifies before posting again.",
+      "selectors": [
+        {
+          "commandId": "finny-approval-postgres",
+          "file": "test/finny-approval-service.test.ts",
+          "name": "pending loads the persisted plan presentation by opaque request ID"
+        },
+        {
+          "commandId": "finny-slack-postgres",
+          "file": "test/slack-finny-approvals.test.ts",
+          "name": "a recovered Finny plan delivery verifies before it posts again"
+        }
+      ]
+    },
+    {
+      "id": "process-death-approved-dispatch-recovery",
+      "invariant": "Approved producer dispatch and completed artifact actions are replay-safe from durable Core state after process death and do not duplicate private worker delivery.",
+      "selectors": [
+        {
+          "commandId": "finny-runtime-postgres",
+          "file": "test/finny-runtime-coordinator.test.ts",
+          "name": "replaying approved dispatch is idempotent"
+        },
+        {
+          "commandId": "finny-runtime-postgres",
+          "file": "test/finny-runtime-coordinator.test.ts",
+          "name": "concurrent approved callbacks converge through dispatcher idempotency"
+        },
+        {
+          "commandId": "finny-runtime-postgres",
+          "file": "test/finny-runtime-coordinator.test.ts",
+          "name": "a completed artifact action replays after the producer binding retires"
+        }
+      ]
+    }
+  ]
+}
