@@ -105,7 +105,7 @@ access are never copied.
 
 `GET|POST /v1/personas`, `GET|PATCH|DELETE /v1/personas/:id`,
 `PUT /v1/personas/:id/access`, `POST /v1/personas/:id/credentials`,
-`DELETE /v1/personas/:id/credentials/:grantId`, `GET /v1/personas/:id/versions` (newest first,
-`?before=&limit=`, limit 20 by default and at most 100, like session search),
+`DELETE /v1/personas/:id/credentials/:grantId`, `GET /v1/personas/:id/versions` (newest first, 20 a page by default,
+`?before=&limit=`; who and when, with content only on `&full=1`),
 `POST /v1/personas/:id/versions/:version/restore`, `PUT /v1/sessions/:id/persona`. Listed in
 `/v1/apis` when the flag is on.

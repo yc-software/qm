@@ -1771,7 +1771,7 @@ const apiRoutes: readonly WebRoute[] = [
     path: "/api/personas/:id/versions",
     handle: (c) => {
       const query = new URLSearchParams({ principalId: c.user });
-      for (const key of ["before", "limit"]) {
+      for (const key of ["before", "limit", "full"]) {
         const value = c.url.searchParams.get(key);
         if (value) query.set(key, value);
       }

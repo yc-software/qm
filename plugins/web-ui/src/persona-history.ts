@@ -69,7 +69,7 @@ async function loadPage(persona: HistoryPersona, redraw: () => void): Promise<vo
   redraw();
   try {
     const page = await api<{ versions: Version[]; more: boolean }>(
-      `${base(persona.id)}?limit=${PAGE}${before ? `&before=${before}` : ""}`,
+      `${base(persona.id)}?full=1&limit=${PAGE}${before ? `&before=${before}` : ""}`,
     );
     entry.versions = [...(entry.versions ?? []), ...page.versions];
     entry.more = page.more;

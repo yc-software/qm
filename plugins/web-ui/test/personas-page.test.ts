@@ -58,7 +58,7 @@ const { vite, dom, close } = await browserEnv({
           { id: "cred-lin", service: "linear" },
         ],
       });
-    const versionsPath = /\/versions\?limit=20(?:&before=(\d+))?$/.exec(path);
+    const versionsPath = /\/versions\?full=1&limit=20(?:&before=(\d+))?$/.exec(path);
     if (versionsPath && method === "GET") {
       const before = Number(versionsPath[1] ?? Infinity);
       const page = versions.filter((v) => v.version < before);
@@ -366,7 +366,7 @@ test("history lists versions on demand, shows what changed, and rolls back as a 
   );
   assert.deepEqual(
     calls.filter((c) => c.path.includes("/versions")).map((c) => c.path),
-    ["/api/personas/p-ada/versions?limit=20", "/api/personas/p-ada/versions?limit=20&before=2"],
+    ["/api/personas/p-ada/versions?full=1&limit=20", "/api/personas/p-ada/versions?full=1&limit=20&before=2"],
   );
   rows[0]!.querySelector<HTMLButtonElement>(".persona-version-open")!.click();
   await settle();

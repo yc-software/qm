@@ -47,7 +47,7 @@ export interface PersonaService {
   versions(
     principalId: string,
     id: string,
-    page: { before?: number; limit: number },
+    page: { before?: number; limit: number; full?: boolean },
   ): Promise<PersonaResult<PersonaVersionPage>>;
   restore(principalId: string, id: string, version: number): Promise<PersonaResult<PersonaView>>;
   setAccess(principalId: string, id: string, access: unknown): Promise<PersonaResult<PersonaAccess[]>>;

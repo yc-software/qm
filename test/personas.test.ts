@@ -11,7 +11,7 @@ import { scopeId, type TurnRequest } from "../src/types.ts";
 import { credentialHandle } from "../src/credentials/keychain.ts";
 import type { PersonaResult } from "../src/personas/persona-service.ts";
 import { orgId } from "../src/config.ts";
-import { createPostgresPersonaStore } from "../src/personas/persona-store.ts";
+import { createPostgresPersonaStore, type PersonaVersion } from "../src/personas/persona-store.ts";
 import { createPostgresUserStore } from "../src/identity/user-store.ts";
 import { testMigratedDatabaseUrl } from "./support/test-database.ts";
 import type { AddressInfo } from "node:net";
@@ -288,9 +288,12 @@ test("every edit that changes a persona is a version anyone with a role can read
   assert.equal(ok(await personas.update(BOB, ada.id, { instructions: "Answer in limericks." })).version, 2);
   assert.equal(ok(await personas.update(ALICE, ada.id, { icon: { kind: "emoji", value: "🎨" } })).version, 3);
 
-  const newest = ok(await personas.versions(CAROL, ada.id, { limit: 2 }));
+  const newest = ok(await personas.versions(CAROL, ada.id, { limit: 2, full: true }));
   assert.deepEqual(
-    [newest.more, newest.versions.map((v) => [v.version, v.editedBy, v.instructions, v.icon?.kind ?? null])],
+    [
+      newest.more,
+      (newest.versions as PersonaVersion[]).map((v) => [v.version, v.editedBy, v.instructions, v.icon?.kind ?? null]),
+    ],
     [
       true,
       [
@@ -299,9 +302,9 @@ test("every edit that changes a persona is a version anyone with a role can read
       ],
     ],
   );
-  const older = ok(await personas.versions(CAROL, ada.id, { before: 2, limit: 2 }));
+  const older = ok(await personas.versions(CAROL, ada.id, { before: 2, limit: 2, full: true }));
   assert.deepEqual(
-    [older.more, older.versions.map((v) => [v.version, v.instructions])],
+    [older.more, (older.versions as PersonaVersion[]).map((v) => [v.version, v.instructions])],
     [false, [[1, "Answer in haiku."]]],
   );
   assert.equal((await personas.restore(CAROL, ada.id, 1)).status, "forbidden");
@@ -309,7 +312,7 @@ test("every edit that changes a persona is a version anyone with a role can read
 
   const restored = ok(await personas.restore(BOB, ada.id, 1));
   assert.deepEqual([restored.version, restored.instructions, restored.icon], [4, "Answer in haiku.", undefined]);
-  const latest = ok(await personas.versions(ALICE, ada.id, { limit: 1 })).versions[0]!;
+  const latest = ok(await personas.versions(ALICE, ada.id, { limit: 1, full: true })).versions[0] as PersonaVersion;
   assert.deepEqual(
     [latest.version, latest.restoredFrom, latest.editedBy, latest.instructions],
     [4, 1, BOB, "Answer in haiku."],
@@ -317,7 +320,7 @@ test("every edit that changes a persona is a version anyone with a role can read
   assert.equal(ok(await personas.detail(CAROL, ada.id)).instructions, "Answer in haiku.");
 });
 
-test("the versions API pages full versions newest first", async () => {
+test("the versions API pages who and when, with content on request", async () => {
   const { built, personas, enable } = setup();
   await enable(ALICE);
   const ada = ok(await personas.create(ALICE, { name: "Ada", instructions: "one" }));
@@ -332,11 +335,14 @@ test("the versions API pages full versions newest first", async () => {
     };
     const [, first] = await get("");
     assert.deepEqual(
-      [first.more, first.versions.map((v: { version: number }) => v.version), first.versions[0].instructions],
-      [false, [3, 2, 1], "three"],
+      [first.more, first.versions.map((v: { version: number }) => v.version), "instructions" in first.versions[0]],
+      [false, [3, 2, 1], false],
     );
-    const [, rest] = await get("?before=3&limit=1");
-    assert.deepEqual([rest.more, rest.versions.map((v: { version: number }) => v.version)], [true, [2]]);
+    const [, rest] = await get("?before=3&limit=1&full=1");
+    assert.deepEqual(
+      [rest.more, rest.versions.map((v: { version: number; instructions: string }) => [v.version, v.instructions])],
+      [true, [[2, "two"]]],
+    );
     assert.equal((await get("?limit=0"))[0], 400);
     assert.equal((await get("?limit=1e30"))[0], 400);
     assert.equal((await get("?limit=1000"))[1].versions.length, 3);
