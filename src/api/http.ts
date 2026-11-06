@@ -73,19 +73,6 @@ export function contentTypeWithUtf8Charset(contentType: string): string {
   return textual ? `${contentType}; charset=utf-8` : contentType;
 }
 
-export function pipeToResponse(
-  res: ServerResponse,
-  stream: NodeJS.ReadableStream & { destroy?: () => void },
-  errorMessage: string,
-): void {
-  stream.on("error", () => {
-    if (!res.headersSent) sendJson(res, 500, { error: "stream_error", message: errorMessage });
-    else res.destroy();
-  });
-  res.on("close", () => stream.destroy?.());
-  stream.pipe(res);
-}
-
 export function sendRedirect(res: ServerResponse, location: string): void {
   res.writeHead(302, { location });
   res.end();

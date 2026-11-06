@@ -14,7 +14,7 @@ import { spawn } from "node:child_process";
 import { basename, dirname } from "node:path";
 import { deploymentView, type App, type DeployInput, type RedeployInput } from "../app.ts";
 import { errMessage, reportFailureAs, swallowAs } from "../../util/errors.ts";
-import { escapeHtml } from "../../../plugins/chassis/src/http.ts";
+import { escapeHtml, relayStream } from "../../../plugins/chassis/src/http.ts";
 import { canonicalPayload } from "../../../plugins/chassis/src/source-auth-sign.ts";
 import { sendJson, verifyOrReject } from "../http.ts";
 import { mintPortalIdentity, verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../auth/portal-identity.ts";
@@ -437,12 +437,12 @@ function proxyReachHttp2(
       const safeHeaders = gatewaySafeResponseHeaders(responseHeaders, sandbox, frameAncestors);
       if (frameAncestors !== undefined) res.removeHeader("content-security-policy");
       res.writeHead(status, safeHeaders);
-      up.pipe(res, { end: false });
+      relayStream(up, res, { end: false });
     });
     up.on("error", fail);
     if (replaySafe) up.end();
     else if (bufferedBody !== null) up.end(bufferedBody);
-    else req.pipe(up);
+    else relayStream(req, up);
   };
   start(false);
 }
@@ -595,12 +595,11 @@ async function proxyReach(
     (upRes) => {
       up.setTimeout(0);
       markUpstreamUp(upstreamKey);
-      upRes.on("error", () => res.destroy());
       armThrottleShield(upstreamKey, upRes.statusCode ?? 0, upRes);
       const headers = gatewaySafeResponseHeaders(upRes.headers, opts?.sandbox ?? false, opts?.frameAncestors);
       if (opts?.frameAncestors !== undefined) res.removeHeader("content-security-policy");
       res.writeHead(upRes.statusCode ?? 502, headers);
-      upRes.pipe(res);
+      relayStream(upRes, res);
     },
   );
   const dialMs = warmingDialTimeoutMs(
@@ -619,9 +618,8 @@ async function proxyReach(
     else if (!res.headersSent) sendJson(res, 502, { error: "bad_gateway", message: "deployment unreachable" });
     else res.end();
   });
-  req.on("error", () => up.destroy());
   if (bufferedBody !== null) up.end(bufferedBody);
-  else req.pipe(up);
+  else relayStream(req, up);
   return;
 }
 

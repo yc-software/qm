@@ -11,8 +11,7 @@ import { uiCanvasRoutes } from "./ui-canvas-routes.ts";
 import { adminRoutes } from "./admin-routes.ts";
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { Readable } from "node:stream";
-import { pipeline } from "node:stream/promises";
+import type { Readable } from "node:stream";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, extname, join, posix } from "node:path";
@@ -34,6 +33,7 @@ import {
   readBody as readBodyCapped,
   cookie,
   PayloadTooLargeError,
+  relayStream,
   sendBuffered,
   serveFavicon,
 } from "../../chassis/src/http.ts";
@@ -1031,12 +1031,9 @@ async function serveStatic(res: ServerResponse, urlPath: string): Promise<void> 
     vary: "accept-encoding",
   });
   res.writeHead(200, found.gzip ? { ...headers, "content-encoding": "gzip" } : headers);
-  found.body.on("error", (error) => {
-    console.error(`[web-ui] streaming ${rel} failed: ${errChain(error)}`);
-    res.destroy();
+  relayStream(found.body, res, {
+    onError: (error) => console.error(`[web-ui] streaming ${rel} failed: ${errChain(error)}`),
   });
-  res.on("close", () => found.body.destroy());
-  found.body.pipe(res);
 }
 
 async function serveAppEditHtml(req: IncomingMessage, res: ServerResponse, url: URL): Promise<boolean> {
@@ -1206,7 +1203,7 @@ async function serveFileContent(c: WebCtx, playground = false): Promise<unknown>
       "x-frame-options": "SAMEORIGIN",
       "x-content-type-options": "nosniff",
     });
-    return pipeUpstreamFile(res, id, r.body);
+    return relayStream(r.body, res, { onError: fileStreamEnded(id) });
   }
 
   const csp = scriptCapableContentType(contentType)
@@ -1219,17 +1216,11 @@ async function serveFileContent(c: WebCtx, playground = false): Promise<unknown>
     "x-content-type-options": "nosniff",
   };
   res.writeHead(200, framedByOwnSurfaces(res, headers, csp));
-  return pipeUpstreamFile(res, id, r.body);
+  return relayStream(r.body, res, { onError: fileStreamEnded(id) });
 }
 
-async function pipeUpstreamFile(res: ServerResponse, id: string, body: ReadableStream<Uint8Array>): Promise<void> {
-  try {
-    await pipeline(Readable.fromWeb(body as Parameters<typeof Readable.fromWeb>[0]), res);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ERR_STREAM_PREMATURE_CLOSE")
-      console.warn(`[web-ui] file ${id} stream ended early: ${errChain(error)}`);
-  }
-}
+const fileStreamEnded = (id: string) => (error: Error) =>
+  console.warn(`[web-ui] file ${id} stream ended early: ${errChain(error)}`);
 
 const apiRoutes: readonly WebRoute[] = [
   {
@@ -3026,9 +3017,7 @@ const apiRoutes: readonly WebRoute[] = [
           connection: "keep-alive",
           "x-accel-buffering": "no",
         });
-        const source = Readable.fromWeb(upstream.body as Parameters<typeof Readable.fromWeb>[0]);
-        source.on("error", () => res.destroy());
-        source.pipe(res);
+        relayStream(upstream.body, res);
       } catch {
         if (!controller.signal.aborted) {
           if (res.headersSent) res.destroy();

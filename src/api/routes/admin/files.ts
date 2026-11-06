@@ -2,7 +2,8 @@ import { parseScopeId } from "../../../types.ts";
 import { ByteSourceTooLargeError } from "../../../files/durable-byte-store.ts";
 import { fileArtifactId } from "../../../files/file-artifact-store.ts";
 import { MAX_ATTACHMENT_BYTES, mimeFromName, safeAttachmentName } from "../../../core/attachments.ts";
-import { contentDispositionAttachment, contentTypeWithUtf8Charset, pipeToResponse, sendJson } from "../../http.ts";
+import { contentDispositionAttachment, contentTypeWithUtf8Charset, sendJson } from "../../http.ts";
+import { relayStream } from "../../../../plugins/chassis/src/http.ts";
 import { audit, authorizeAdmin, requireScopedAdmin } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
 import { discoverScopes, FILES_PAGE_SIZE } from "./common.ts";
@@ -74,7 +75,7 @@ export async function downloadAdminFile(ctx: ApiCtx): Promise<void> {
     "x-content-type-options": "nosniff",
     ...(inline ? { "cache-control": "private, max-age=300", "content-security-policy": "sandbox" } : {}),
   });
-  pipeToResponse(res, opened.stream, "file read failed");
+  relayStream(opened.stream, res);
   return;
 }
 

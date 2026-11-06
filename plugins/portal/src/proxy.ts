@@ -1,6 +1,6 @@
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
 import { signedHeaders } from "../../chassis/src/core-client.ts";
-import { withVary } from "../../chassis/src/http.ts";
+import { relayStream, withVary } from "../../chassis/src/http.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { CLIENT_SURFACE_HEADER } from "../../chassis/src/client-surface.ts";
 
@@ -85,8 +85,7 @@ function relay(
       if (out.vary !== undefined) out.vary = withVary(res, String(out.vary));
       if (target.honorFramePolicy && declaresFrameAncestors(out)) res.removeHeader("x-frame-options");
       res.writeHead(upRes.statusCode ?? 502, out);
-      upRes.on("error", () => res.destroy());
-      upRes.pipe(res);
+      relayStream(upRes, res);
     },
   );
   up.on("error", () => {
@@ -97,11 +96,10 @@ function relay(
       res.end();
     }
   });
-  req.on("error", () => up.destroy());
   res.on("close", () => {
     if (!res.writableFinished) up.destroy();
   });
-  req.pipe(up);
+  relayStream(req, up);
 }
 
 export interface SurfaceTarget {
