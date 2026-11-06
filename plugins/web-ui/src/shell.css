@@ -4006,11 +4006,19 @@ qm-draft .draft-card-label {
   color: var(--muted-foreground);
   font-size: 0.9em;
 }
-qm-draft copy-button button {
+/* Code-block and draft copy buttons: a quiet icon that swaps to a check, not mini-lit's accent pill.
+   The hover colors come from mini-lit's layered !important utilities, so retint their tokens instead. */
+:is(code-block, qm-draft) copy-button {
+  --accent: var(--secondary);
+  --accent-foreground: var(--foreground);
+}
+:is(code-block, qm-draft) copy-button button {
+  border-color: transparent;
+  box-shadow: none;
   color: var(--muted-foreground);
 }
-qm-draft copy-button button:hover {
-  color: var(--foreground);
+code-block copy-button button > span {
+  display: none;
 }
 qm-draft .draft-card-body {
   white-space: pre-wrap;
