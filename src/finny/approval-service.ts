@@ -3,7 +3,7 @@ import type { FinnyApprovalBridge } from "../slack/finny-approvals.ts";
 import type { FinnyStore } from "./store.ts";
 
 const PLAN_OUTCOMES = {
-  approve: { decision: "approved", detail: "Execution started." },
+  approve: { decision: "approved", detail: "Approval recorded." },
   reject: { decision: "rejected", detail: "The plan will not run." },
   request_change: { decision: "request_change", detail: "The plan must be revised before execution." },
 } as const;

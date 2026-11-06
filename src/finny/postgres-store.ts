@@ -169,7 +169,15 @@ const CLARIFICATION_SCHEMA = [
 
 const APPROVAL_READINESS_SCHEMA = [
   `ALTER TABLE finny_approval_requests ADD COLUMN IF NOT EXISTS ready_at BIGINT`,
-  `UPDATE finny_approval_requests SET ready_at=created_at WHERE ready_at IS NULL`,
+  `UPDATE finny_approval_requests a SET ready_at=a.created_at WHERE a.ready_at IS NULL
+     AND NOT EXISTS (
+       SELECT 1 FROM finny_clarification_requests c
+       WHERE c.job_id=a.job_id AND (
+         c.decided_at IS NULL OR
+         c.decision->>'kind' <> 'option' OR
+         c.decision->>'optionId' <> c.recommended_option_id
+       )
+     )`,
 ];
 
 function rowToClarification(row: Record<string, unknown>): FinnyClarificationRequest {

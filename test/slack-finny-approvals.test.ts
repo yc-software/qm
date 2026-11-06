@@ -168,7 +168,7 @@ test("Finny plan actions authenticate the clicker and preserve the Slack message
       decisions.push(input);
       return {
         kind: "decision",
-        card: { title: "October close", decision: "approved", detail: "Execution started." },
+        card: { title: "October close", decision: "approved", detail: "Approval recorded." },
       };
     },
   };

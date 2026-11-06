@@ -107,7 +107,7 @@ test("approve requires the exact internal actor and origin then invokes coordina
 
   assert.deepEqual(outcome, {
     kind: "decision",
-    card: { title: plan.title, decision: "approved", detail: "Execution started." },
+    card: { title: plan.title, decision: "approved", detail: "Approval recorded." },
   });
   assert.deepEqual(callbacks, [{ scopeId, jobId, requestId }]);
 });
@@ -726,7 +726,7 @@ test("generic clarification atomically withdraws ready approval until the persis
   }
 });
 
-test("approval readiness migration preserves legacy clarification behavior", async () => {
+test("approval readiness migration keeps unresolved legacy clarification blocked", async () => {
   const url = testDatabaseUrl();
   const store = createPostgresFinnyStore(url);
   const job = await store.createJob({
@@ -762,7 +762,19 @@ test("approval readiness migration preserves legacy clarification behavior", asy
   await migrationDb.q("ALTER TABLE finny_approval_requests DROP COLUMN ready_at");
   await migrationDb.q("DELETE FROM qm_schema_migrations WHERE id='finny/store/0005-approval-readiness'");
   const upgraded = createPostgresFinnyStore(url);
-  assert.ok((await upgraded.getApprovalRequest(approvalRequestId))?.readyAt);
+  assert.equal((await upgraded.getApprovalRequest(approvalRequestId))?.readyAt, undefined);
+  await assert.rejects(
+    upgraded.recordApproval({
+      scopeId: job.scopeId,
+      jobId: job.id,
+      requestId: approvalRequestId,
+      actorId: "approver@example.com",
+      action: "approve",
+      originThreadRef: job.originThreadRef,
+      decidedAt: Date.now(),
+    }),
+    /not ready/,
+  );
   await upgraded.recordClarificationDecision({
     requestId: legacyClarificationRequestId,
     actorId: "approver@example.com",
