@@ -356,6 +356,20 @@ test("MCP tool lists are loaded and refreshed per tenant", async (t) => {
   assert.deepEqual(store.lists, [A, B, A]);
 });
 
+test("MCP tool lists start loading when a tenant loads", async (t) => {
+  const store = mcpStore({ [A]: [signInServer("crm-a")] });
+  const service = createMcpToolService({ servers: store, refreshIntervalMs: 3_600_000 });
+  t.after(() => service.close());
+  await withTenant(A, () => loadTenant());
+  for (let i = 0; i < 100 && !store.lists.length; i++) await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.deepEqual(store.lists, [A]);
+  assert.deepEqual(
+    [...new Set((await withTenant(A, () => service.toolDefs())).map((tool) => tool.serverId))],
+    ["crm-a"],
+  );
+  assert.deepEqual(store.lists, [A]);
+});
+
 test("identity rosters and principal links are kept and refreshed per tenant", async () => {
   const deactivations = tenantMap<DeactivationRecord>();
   const externals = tenantMap<ExternalMember>();
