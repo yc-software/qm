@@ -1,6 +1,8 @@
 import { sendJson } from "../http.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import type { EgressAuditRecord } from "../../admin/egress-audit-sink.ts";
+import { boundTenant, isTenantId } from "../../tenants/context.ts";
+import { inTenant } from "../../tenants/claim.ts";
 
 const MAX_BATCH = 500;
 const MAX_FIELD = 512;
@@ -18,6 +20,8 @@ function parseRecord(v: unknown): Omit<EgressAuditRecord, "ts"> | null {
   const via = str(r.via);
   const peerIp = str(r.peerIp);
   const principalId = str(r.principalId);
+  const tenant = str(r.tenant);
+  if (tenant !== undefined && !isTenantId(tenant)) return null;
   return {
     source: "proxy",
     host,
@@ -27,6 +31,7 @@ function parseRecord(v: unknown): Omit<EgressAuditRecord, "ts"> | null {
     ...(via !== undefined ? { via } : {}),
     ...(peerIp !== undefined ? { peerIp } : {}),
     ...(principalId !== undefined ? { principalId } : {}),
+    ...(tenant !== undefined ? { tenant } : {}),
     ...(typeof r.port === "number" && Number.isInteger(r.port) && r.port > 0 && r.port <= 65535
       ? { port: r.port }
       : {}),
@@ -43,16 +48,38 @@ async function ingestEgressAudit(ctx: ApiCtx): Promise<void> {
       message: `records must be a non-empty array of at most ${MAX_BATCH}`,
     });
   }
-  let accepted = 0;
+  const fallback = boundTenant();
+  const lookup = deps.sessions?.tenantLookup;
+  const exists = async (tenant: string): Promise<boolean> =>
+    tenant === fallback || ((await lookup?.exists(tenant).catch(() => false)) ?? false);
+  const byTenant = new Map<string, Array<Omit<EgressAuditRecord, "ts">>>();
   for (const raw of records) {
     const parsed = parseRecord(raw);
-    if (!parsed) continue;
-    deps.egressAudit.record(parsed);
-    accepted++;
+    const tenant = parsed?.tenant ?? fallback;
+    if (!parsed || !tenant) continue;
+    const { tenant: _tenant, ...record } = parsed;
+    byTenant.set(tenant, [...(byTenant.get(tenant) ?? []), record]);
+  }
+  let accepted = 0;
+  for (const [tenant, batch] of byTenant) {
+    if (!(await exists(tenant))) continue;
+    const sink = deps.egressAudit;
+    const ok = await inTenant(tenant, async () => {
+      for (const record of batch) sink.record(record);
+      return true;
+    }).catch(() => false);
+    if (ok) accepted += batch.length;
   }
   return sendJson(res, 200, { accepted, rejected: records.length - accepted });
 }
 
 export const egressAuditRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "POST", path: "/v1/egress-audit", actor: "system", auth: "source", handle: ingestEgressAudit },
+  {
+    method: "POST",
+    path: "/v1/egress-audit",
+    actor: "system",
+    auth: "source",
+    tenant: "optional",
+    handle: ingestEgressAudit,
+  },
 ];

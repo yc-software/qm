@@ -639,8 +639,9 @@ function hasAgentCapability(req: IncomingMessage): boolean {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-function isDeploymentLayerPassthrough(method: string, pathname: string): boolean {
-  return (method === "GET" || method === "PUT") && pathname === "/v1/deployment-layer";
+function isSourceSignedPassthrough(method: string, pathname: string): boolean {
+  if (pathname === "/v1/deployment-layer") return method === "GET" || method === "PUT";
+  return method === "POST" && pathname === "/v1/egress-audit";
 }
 
 function loginProviderCookie(sub: string): string[] {
@@ -1094,7 +1095,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     );
   }
 
-  if (isDeploymentLayerPassthrough(method, pathname)) {
+  if (isSourceSignedPassthrough(method, pathname)) {
     return proxyToUpstream(
       req,
       res,

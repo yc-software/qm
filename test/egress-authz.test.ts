@@ -14,6 +14,7 @@ import { verifySignature } from "../src/auth/source-auth.ts";
 import { mintCapabilityToken, EGRESS_PROXY_AUD, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import type { EgressAuditRecord } from "../src/admin/egress-audit-sink.ts";
 import { scopeId, type EgressPolicy } from "../src/types.ts";
+import { withoutTenant, withTenant } from "../src/tenants/context.ts";
 
 const CAPABILITY_SECRET = "test-egress-capability-secret";
 const SOURCE_SECRET = "test-egress-source-secret";
@@ -148,6 +149,22 @@ test("valid token, open policy => 200 + audited as ok with scope/principal", asy
     assert.equal(records.at(-1)?.host, "example.com");
     assert.equal(records.at(-1)?.scopeLabel, scopeId("personal", "U_actor"));
     assert.equal(records.at(-1)?.principalId, "U_actor");
+  } finally {
+    await close(server);
+  }
+});
+
+test("a decision is audited under the tenant named in the capability token", async () => {
+  const tenant = "0b7e9c7e-6a43-4c55-9a51-3d3c1f2b8e11";
+  const { server, records } = boot();
+  const port = await listen(server);
+  try {
+    const token = await withTenant(tenant, () => egressToken({ allowedHosts: [] }));
+    assert.equal(await check(port, "example.com:443", token), 200);
+    assert.equal(records.at(-1)?.tenant, tenant);
+    const untenanted = await withoutTenant(() => egressToken({ allowedHosts: [] }));
+    assert.equal(await check(port, "example.com:443", untenanted), 200);
+    assert.equal(records.at(-1)?.tenant, undefined);
   } finally {
     await close(server);
   }
