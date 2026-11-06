@@ -75,6 +75,12 @@
       "args": ["--test", "test/finny-integration.test.ts"]
     },
     {
+      "id": "finny-engine-offline",
+      "program": "node",
+      "requiresDatabase": false,
+      "args": ["--test", "test/finny-http-spreadsheet-engine.test.ts", "test/finny-wiring.test.ts"]
+    },
+    {
       "id": "finny-slack-cards-offline",
       "program": "node",
       "requiresDatabase": false,
@@ -295,6 +301,11 @@
           "commandId": "finny-runtime-postgres",
           "file": "test/finny-runtime-coordinator.test.ts",
           "name": "replaying the same BLOCK is idempotent without duplicate producer wake"
+        },
+        {
+          "commandId": "finny-integration-offline",
+          "file": "test/finny-integration.test.ts",
+          "name": "deterministic BLOCK uses Core findings and stops before stale remaining results"
         }
       ]
     },
@@ -337,6 +348,21 @@
           "commandId": "finny-integration-offline",
           "file": "test/finny-integration.test.ts",
           "name": "evidence authority derives immutable scoped file digests and verifies deterministic envelopes"
+        },
+        {
+          "commandId": "finny-integration-offline",
+          "file": "test/finny-integration.test.ts",
+          "name": "bound Auditor runs all current deterministic checks from one trusted evidence envelope"
+        },
+        {
+          "commandId": "finny-engine-offline",
+          "file": "test/finny-http-spreadsheet-engine.test.ts",
+          "name": "HTTP engine sends immutable bytes and binding to the configured endpoint"
+        },
+        {
+          "commandId": "finny-engine-offline",
+          "file": "test/finny-wiring.test.ts",
+          "name": "stock Finny wiring selects the environment-configured HTTP engine"
         }
       ]
     },
@@ -353,6 +379,16 @@
           "commandId": "finny-worker-postgres",
           "file": "test/finny-deterministic-worker.test.ts",
           "name": "worker fails closed on malformed engine output"
+        },
+        {
+          "commandId": "finny-engine-offline",
+          "file": "test/finny-http-spreadsheet-engine.test.ts",
+          "name": "HTTP engine fails closed on provider errors and bounded response violations"
+        },
+        {
+          "commandId": "finny-engine-offline",
+          "file": "test/finny-wiring.test.ts",
+          "name": "Finny-enabled build fails before startup without an approved spreadsheet engine"
         }
       ]
     },
