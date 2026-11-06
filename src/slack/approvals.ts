@@ -393,6 +393,11 @@ export function createApprovals(deps: {
         return;
       }
 
+      if (result.status === "silent") {
+        await updateCard(decisionCard());
+        return;
+      }
+
       if (result.status === "pending_approval") {
         const approvals = result.pendingApprovals ?? [];
         rememberSlackApprovals(approvals, {
