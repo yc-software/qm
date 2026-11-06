@@ -1,7 +1,8 @@
 import { sendJson } from "../http.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import type { EgressAuditRecord } from "../../admin/egress-audit-sink.ts";
-import { boundTenant, isTenantId } from "../../tenants/context.ts";
+import { bootTenant } from "../../tenants/boot.ts";
+import { isTenantId } from "../../tenants/context.ts";
 import { inTenant } from "../../tenants/claim.ts";
 
 const MAX_BATCH = 500;
@@ -20,8 +21,8 @@ function parseRecord(v: unknown): Omit<EgressAuditRecord, "ts"> | null {
   const via = str(r.via);
   const peerIp = str(r.peerIp);
   const principalId = str(r.principalId);
-  const tenant = str(r.tenant);
-  if (tenant !== undefined && !isTenantId(tenant)) return null;
+  const tenant = r.tenant === undefined ? bootTenant() : str(r.tenant);
+  if (tenant === undefined || !isTenantId(tenant)) return null;
   return {
     source: "proxy",
     host,
@@ -31,7 +32,7 @@ function parseRecord(v: unknown): Omit<EgressAuditRecord, "ts"> | null {
     ...(via !== undefined ? { via } : {}),
     ...(peerIp !== undefined ? { peerIp } : {}),
     ...(principalId !== undefined ? { principalId } : {}),
-    ...(tenant !== undefined ? { tenant } : {}),
+    tenant,
     ...(typeof r.port === "number" && Number.isInteger(r.port) && r.port > 0 && r.port <= 65535
       ? { port: r.port }
       : {}),
@@ -48,14 +49,14 @@ async function ingestEgressAudit(ctx: ApiCtx): Promise<void> {
       message: `records must be a non-empty array of at most ${MAX_BATCH}`,
     });
   }
-  const fallback = boundTenant();
+  const boot = bootTenant();
   const lookup = deps.sessions?.tenantLookup;
   const exists = async (tenant: string): Promise<boolean> =>
-    tenant === fallback || ((await lookup?.exists(tenant).catch(() => false)) ?? false);
+    tenant === boot || ((await lookup?.exists(tenant).catch(() => false)) ?? false);
   const byTenant = new Map<string, Array<Omit<EgressAuditRecord, "ts">>>();
   for (const raw of records) {
     const parsed = parseRecord(raw);
-    const tenant = parsed?.tenant ?? fallback;
+    const tenant = parsed?.tenant;
     if (!parsed || !tenant) continue;
     const { tenant: _tenant, ...record } = parsed;
     byTenant.set(tenant, [...(byTenant.get(tenant) ?? []), record]);
@@ -79,7 +80,7 @@ export const egressAuditRoutes: ReadonlyArray<Route<ApiCtx>> = [
     path: "/v1/egress-audit",
     actor: "system",
     auth: "source",
-    tenant: "optional",
+    tenant: "none",
     handle: ingestEgressAudit,
   },
 ];

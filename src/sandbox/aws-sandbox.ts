@@ -27,7 +27,13 @@ import type {
   TeardownOptions,
 } from "./sandbox.ts";
 import { execFailureDetail, visibleNotInstalled, visibleTools } from "./sandbox.ts";
-import { createHomeSnapshotOps, createS3SnapshotStore, HOME_SNAPSHOT_PRUNE, snapshotDue } from "./home-snapshot.ts";
+import {
+  createHomeSnapshotOps,
+  createS3SnapshotStore,
+  HOME_SNAPSHOT_PRUNE,
+  homeSnapshotKeys,
+  snapshotDue,
+} from "./home-snapshot.ts";
 import { claimThenBind } from "../tenants/claim.ts";
 import {
   ephemeralCredLinkPaths,
@@ -134,7 +140,7 @@ export function createAwsSandbox(opts: AwsSandboxOptions): Sandbox {
     onError?.({ category, code, message, ...(scopeLabel ? { scopeLabel } : {}) });
   }
 
-  const s3KeyFor = (scope: string): string => `${s3Prefix}/${scopeStorageKey(scope)}.tar`;
+  const s3LeafFor = (scope: string): string => `${scopeStorageKey(scope)}.tar`;
 
   const client = createMicrovmClient(api, {
     agentPort,
@@ -176,7 +182,7 @@ export function createAwsSandbox(opts: AwsSandboxOptions): Sandbox {
     homeDir: HOME_DIR,
     homeTarPath: HOME_TAR,
     prunePaths: [...SNAPSHOT_PRUNE, ...ephemeralCredLinkPaths(credentialPaths).map(({ rel }) => `./${rel}`)],
-    store: createS3SnapshotStore({ bucket: opts.s3Bucket, prefix: s3Prefix, s3, keyFor: s3KeyFor }),
+    store: createS3SnapshotStore({ bucket: opts.s3Bucket, prefix: s3Prefix, s3, leafFor: s3LeafFor }),
     io: {
       runCommand: async (id, script, timeoutMs) => {
         const r = await execRaw(id, script, Math.ceil(timeoutMs / 1000));
@@ -389,7 +395,9 @@ export function createAwsSandbox(opts: AwsSandboxOptions): Sandbox {
       const id = expectedId ?? stored?.microvmId;
       if (id) await terminateBody(id);
       if (!expectedId || !stored || stored.microvmId === expectedId) {
-        await s3.send(new DeleteObjectCommand({ Bucket: opts.s3Bucket, Key: s3KeyFor(scopeId) }));
+        const { key, legacy } = homeSnapshotKeys(s3Prefix, s3LeafFor(scopeId));
+        for (const Key of legacy === undefined ? [key] : [key, legacy])
+          await s3.send(new DeleteObjectCommand({ Bucket: opts.s3Bucket, Key }));
         await store.delete(scopeId);
       }
       if (id) {
