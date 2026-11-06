@@ -25,6 +25,10 @@ function desktop(): Desk | undefined {
     : undefined;
 }
 
+export function webClientSurface(): "desktop" | "browser" {
+  return (globalThis as { window?: { qmDesktop?: unknown } }).window?.qmDesktop ? "desktop" : "browser";
+}
+
 export function desktopTurnId(): string | undefined {
   return desktop() ? crypto.randomUUID() : undefined;
 }

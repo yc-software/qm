@@ -40,6 +40,7 @@ import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/
 import { createBrandingCache, injectBranding } from "../../chassis/src/branding.ts";
 import { parseSuggestedActivities } from "../../chassis/src/suggested-activities.ts";
 import { principalInAllowlist } from "../../chassis/src/principal-allowlist.ts";
+import { clientSurfaceOf } from "../../chassis/src/client-surface.ts";
 
 import {
   CORE_API_URL as CORE,
@@ -804,7 +805,11 @@ async function postTurnAndMint(
   const r = await coreFetch(
     "POST",
     `/v1/turns?async=1`,
-    JSON.stringify({ ...turn, ...(resolveIdentity(req)?.impersonator ? { analyticsSuppressed: true } : {}) }),
+    JSON.stringify({
+      ...turn,
+      clientSurface: clientSurfaceOf(req.headers),
+      ...(resolveIdentity(req)?.impersonator ? { analyticsSuppressed: true } : {}),
+    }),
   );
   if (r.status >= 200 && r.status < 300) {
     try {

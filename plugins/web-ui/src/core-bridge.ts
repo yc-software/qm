@@ -1,4 +1,5 @@
-import { desktopTurnId, serveDesktopRun } from "./desktop-computer.ts";
+import { desktopTurnId, serveDesktopRun, webClientSurface } from "./desktop-computer.ts";
+import { CLIENT_SURFACE_HEADER } from "../../chassis/src/client-surface.ts";
 import { reportHandledError, reportRequestTiming, stopBrowserErrors } from "./browser-errors.ts";
 import { captureMessage, stopAnalytics } from "./product-analytics.ts";
 import { streamedAnswer } from "./timeline.ts";
@@ -929,7 +930,10 @@ export async function loadChatPrefs(): Promise<void> {
 }
 
 export async function api<T = unknown>(path: string, init?: RequestInit): Promise<T> {
-  const r = await webFetch(withBase(path), { headers: { "content-type": "application/json" }, ...init });
+  const r = await webFetch(withBase(path), {
+    headers: { "content-type": "application/json", [CLIENT_SURFACE_HEADER]: webClientSurface() },
+    ...init,
+  });
   const text = await r.text();
   let body: unknown = {};
   try {
