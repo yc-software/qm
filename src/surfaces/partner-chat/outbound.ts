@@ -1,5 +1,5 @@
 import type { App } from "../../api/app-types.ts";
-import { DeliveryHttpError, refusedStatus, type Send } from "../../delivery/relay.ts";
+import { refusedStatus, type Send } from "../../delivery/relay.ts";
 import type { Delivery } from "../../types.ts";
 import {
   partnerChatMessageId,
@@ -16,6 +16,14 @@ const REQUEST_TIMEOUT_MS = 15_000;
 export const PARTNER_CHAT_CLAIM_MS = 4 * REQUEST_TIMEOUT_MS;
 const MESSAGE_ID = /^\d+$/;
 const SELF_AUTHOR = "self";
+
+class PartnerChatHttpError extends Error {
+  readonly status: number;
+  constructor(status: number, reason: string) {
+    super(`partner-chat ${status}: ${reason}`);
+    this.status = status;
+  }
+}
 
 class UnsupportedDelivery extends Error {}
 
@@ -72,9 +80,9 @@ export function partnerChatSender(deps: {
     const reply = await res.text();
     const parsed = parseJson(reply);
     if (!res.ok)
-      throw new DeliveryHttpError(
+      throw new PartnerChatHttpError(
         res.status,
-        `partner-chat ${res.status}: ${typeof parsed.error === "string" ? parsed.error : reply.slice(0, 200) || res.statusText}`,
+        typeof parsed.error === "string" ? parsed.error : reply.slice(0, 200) || res.statusText,
       );
     const messageId = parsed.message_id;
     if (typeof messageId !== "string" && typeof messageId !== "number") {
@@ -106,7 +114,7 @@ export function partnerChatSender(deps: {
       await deliver(d);
     } catch (e) {
       if (e instanceof UnsupportedDelivery) return { refused: e.message };
-      if (e instanceof DeliveryHttpError && refusedStatus(e.status)) return { refused: e.message };
+      if (e instanceof PartnerChatHttpError && refusedStatus(e.status)) return { refused: e.message };
       throw e;
     }
   };
