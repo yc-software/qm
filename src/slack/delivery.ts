@@ -1,4 +1,4 @@
-import { createTtlRefresh } from "../util/async.ts";
+import { createTtlRefresh, withTimeout } from "../util/async.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { safeChunks, safeClip } from "./safe-cut.ts";
 import { sleep } from "./util.ts";
@@ -34,6 +34,7 @@ export function botIdentityFromEnv(env: Record<string, string | undefined>): Bot
 type PersonaCore = { channelPersonas?(): Promise<Map<string, SlackPersona>> };
 
 const PERSONA_REFRESH_TTL_MS = 10_000;
+const PERSONA_READ_TIMEOUT_MS = 5_000;
 let defaultIdentity: BotIdentityOverride = {};
 let personas: ReadonlyMap<string, SlackPersona> = new Map();
 let personaSource: { core: PersonaCore; refresh: (force?: boolean) => Promise<void> } | undefined;
@@ -54,7 +55,11 @@ export function refreshPersonas(core: PersonaCore, force = false): Promise<void>
       core,
       refresh: createTtlRefresh(PERSONA_REFRESH_TTL_MS, async () => {
         personas =
-          (await core.channelPersonas?.().catch(swallowAs("slack: channel persona refresh", undefined))) ?? personas;
+          (await withTimeout(
+            async () => core.channelPersonas?.(),
+            PERSONA_READ_TIMEOUT_MS,
+            "slack: channel persona read",
+          ).catch(swallowAs("slack: channel persona refresh", undefined))) ?? personas;
       }),
     };
   return personaSource.refresh(force);
@@ -175,7 +180,6 @@ const HEADER_PIN_OFF = "<surface-header-off>";
 export function createSurfaceHeaderEnsurer(opts: {
   headerFacts(scope: string): Promise<{ agentLabel?: string; modelName: string }>;
   channelPinEnabled?(scope: string): Promise<boolean>;
-  refreshPersonas?(): Promise<void>;
   webUiPublicUrl: string | undefined;
   ids: { botUserId: string; ownBotId?: string };
   maxTracked?: number;
@@ -213,7 +217,6 @@ export function createSurfaceHeaderEnsurer(opts: {
             await client.conversations.setTopic({ channel, topic: desired });
         } else {
           if (isExternallyShared(info) || isMpim(info)) return;
-          await opts.refreshPersonas?.();
           const pinned = findHeaderPin(
             (await client.pins.list({ channel })).items,
             opts.ids.botUserId,
@@ -226,11 +229,15 @@ export function createSurfaceHeaderEnsurer(opts: {
             }
           } else if (pinned) {
             if (unwrapSlackLinks(pinned.text) !== unwrapSlackLinks(desired))
-              await client.chat.update({ channel, ts: pinned.ts, text: desired, ...personaFor(channel) });
+              await client.chat.update({ channel, ts: pinned.ts, text: desired, ...defaultIdentity });
           } else if (ensureOpts?.pinNew) {
-            const posted = await client.chat.postMessage(
-              slackReplyArgs(channel, desired, undefined, { unfurlLinks: false }),
-            );
+            const posted = await client.chat.postMessage({
+              channel,
+              text: desired,
+              unfurl_links: false,
+              unfurl_media: false,
+              ...defaultIdentity,
+            });
             if (posted.ts) await client.pins.add({ channel, timestamp: posted.ts });
           }
         }

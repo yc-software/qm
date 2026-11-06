@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { mock, test } from "node:test";
 import assert from "node:assert/strict";
 import {
   slackReplyArgs,
@@ -140,6 +140,22 @@ test("a persona refresh picks up a rename, and a failed refresh keeps the last p
   assert.deepEqual(personaFor("CADA"), QM_DEFAULT);
   await refreshPersonas({});
   assert.deepEqual(personaFor("CADA"), QM_DEFAULT);
+});
+
+test("a persona read that never answers gives up after five seconds and keeps the last personas, so nothing waiting on a refresh hangs", async (t) => {
+  await bindPersonas(t, { CADA: ADA });
+  mock.timers.enable({ apis: ["setTimeout"] });
+  t.after(() => mock.timers.reset());
+  let settled = false;
+  const refresh = refreshPersonas({ channelPersonas: () => new Promise<never>(() => {}) }, true).then(() => {
+    settled = true;
+  });
+  mock.timers.tick(4_999);
+  await new Promise((r) => setImmediate(r));
+  assert.equal(settled, false);
+  mock.timers.tick(1);
+  await refresh;
+  assert.equal(personaFor("CADA").username, "Ada");
 });
 
 test("concurrent persona refreshes share one core read, and later ones inside the freshness window read nothing unless forced", async (t) => {
@@ -941,7 +957,7 @@ test("surface header ensurer updates an existing pinned header in place instead 
   assert.equal(h.readPin()?.text.startsWith("Using Claude Haiku 4.5"), true);
 });
 
-test("a bound channel's pinned header edit carries its persona", async (t) => {
+test("a bound channel's pinned header is edited under QM's own identity, not the channel's persona", async (t) => {
   await bindPersonas(t, { C1: ADA });
   const h = headerHarness(
     undefined,
@@ -952,8 +968,8 @@ test("a bound channel's pinned header edit carries its persona", async (t) => {
   h.ensure(h.client, "C1");
   await h.flush();
   assert.equal(h.calls.updatedWith.length, 1);
-  assert.equal(h.calls.updatedWith[0]!.username, "Ada");
-  assert.equal(h.calls.updatedWith[0]!.icon_emoji, ADA.icon_emoji);
+  assert.equal(h.calls.updatedWith[0]!.username, QM_DEFAULT.username);
+  assert.equal(h.calls.updatedWith[0]!.icon_emoji, QM_DEFAULT.icon_emoji);
 });
 
 test("a header pinned under a persona is still the bot's own, so it is edited in place instead of pinned again", async () => {
@@ -1338,7 +1354,7 @@ test("postWithVerify: a replay of split blocks posts only the missing batch", as
   );
 });
 
-test("every post a bound channel gets from the join welcome, the pinned header and a split reply carries its persona", async (t) => {
+test("the join welcome and every part of a split reply carry a bound channel's persona, while its pinned header stays under QM's own identity", async (t) => {
   await bindPersonas(t, { CADA: ADA });
   const posts: Array<Record<string, any>> = [];
   const client = {
@@ -1376,7 +1392,11 @@ test("every post a bound channel gets from the join welcome, the pinned header a
   for (let i = 0; i < 50 && posts.length < 2; i++) await new Promise((r) => setTimeout(r, 2));
   await postWithVerify(client as any, { ...slackReplyArgs("CADA", "word ".repeat(2_000), "1.1") }, "run:split");
   assert.ok(posts.length >= 5, "welcome, header and at least three reply parts");
-  for (const post of posts) {
+  const headers = posts.filter((post) => isSurfaceHeaderMessage(post.text));
+  assert.equal(headers.length, 1);
+  assert.equal(headers[0]!.username, QM_DEFAULT.username);
+  assert.equal(headers[0]!.icon_emoji, QM_DEFAULT.icon_emoji);
+  for (const post of posts.filter((p) => !isSurfaceHeaderMessage(p.text))) {
     assert.equal(post.username, "Ada");
     assert.equal(post.icon_emoji, ":art:");
   }

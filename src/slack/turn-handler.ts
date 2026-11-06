@@ -771,12 +771,15 @@ export function createTurnHandler(deps: {
     channel: string,
     ts: string,
     full: boolean,
-  ): Promise<{ text: string; threadTs?: string; reactions: ReactionTally[]; authorId?: string } | undefined> {
+  ): Promise<
+    { text: string; threadTs?: string; reactions: ReactionTally[]; authorId?: string; own: boolean } | undefined
+  > {
     try {
       const res = await client.reactions.get({ channel, timestamp: ts, full });
       const m = res?.message;
       if (!m) return undefined;
       return {
+        own: Boolean((ids.botUserId && m.user === ids.botUserId) || (ids.ownBotId && m.bot_id === ids.ownBotId)),
         text: decodeSlackEntities(slackMessageContent(m).text.trim()),
         ...(m.thread_ts && m.thread_ts !== ts ? { threadTs: String(m.thread_ts) } : {}),
         reactions: reactionTallies(m.reactions),
@@ -800,7 +803,10 @@ export function createTurnHandler(deps: {
     if (!reactorId || !channel || !messageTs || !emoji) return;
 
     const isDM = channel.startsWith("D");
-    const onBotMessage = Boolean(ids.botUserId && evt.item_user === ids.botUserId);
+    const reacted = evt.item_user ? undefined : getReactedMessage(client, channel, messageTs, added);
+    const onBotMessage = evt.item_user
+      ? Boolean(ids.botUserId && evt.item_user === ids.botUserId)
+      : Boolean((await reacted)?.own);
     const onFollowedRoot = threads.get(channel, messageTs) === true;
     if (
       !shouldSurfaceReaction({
@@ -849,7 +855,7 @@ export function createTurnHandler(deps: {
           }
           const reactorName = reactor.displayName || "Someone";
 
-          const msg = await getReactedMessage(client, channel, messageTs, added);
+          const msg = await (reacted ?? getReactedMessage(client, channel, messageTs, added));
           let authorName: string | undefined;
           if (!onBotMessage && msg?.authorId && msg.authorId !== reactorId) {
             authorName = (await classifyActor(client, msg.authorId)).displayName;

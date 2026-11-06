@@ -584,6 +584,49 @@ test("reaction turns preserve the reacted message in the mirror", async () => {
   assert.deepEqual(await cache.readMessages("D1", { limit: 10 }), before);
 });
 
+test("a reaction on a reply posted under a persona reaches the agent as one on its own message, though Slack names no item_user", async () => {
+  const messages: Record<string, unknown> = {
+    "200.001": { text: "Persona answer", bot_id: "BBOT", username: "Ada" },
+    "200.002": { text: "Another app's post", bot_id: "BOTHER", username: "Other" },
+  };
+  const client = { reactions: { get: async (args: any) => ({ message: messages[args.timestamp] }) } };
+  const turns: any[] = [];
+  const handler = createTurnHandler({
+    core: {},
+    flow: {
+      callCore: async (turn: any) => {
+        turns.push(turn);
+        return { status: "silent" };
+      },
+    },
+    directory: {
+      classifyUserCached: async () => ({ actor: { externalId: "U1", displayName: "Teammate" } }),
+      getChannelInfo: async () => ({ id: "C1" }),
+      channelMembership: async () => ({ audience: [] }),
+    },
+    mirror: fixture().mirror,
+    serializer: {
+      serializeSlackConversation: async () => ({
+        view: { channel: { kind: "channel" }, messages: [], here: { kind: "top-level" }, omittedFiles: [] },
+      }),
+    },
+    ids,
+    threads: createThreadTracker(),
+    deduper: createDeduper(),
+    externalParticipantsEnabled: async () => false,
+  } as any);
+  for (const ts of ["200.001", "200.002"]) {
+    await handler.handleReactionEvent(
+      { user: "U1", reaction: "eyes", item: { type: "message", channel: "C1", ts } },
+      `reaction-${ts}`,
+      client,
+      true,
+    );
+  }
+  assert.equal(turns.length, 1);
+  assert.match(turns[0].text, /reacted with :eyes: on your message: "Persona answer"/);
+});
+
 test("synthetic reaction turns preserve the canonical message snapshot", async () => {
   const cache = createPostgresSurfaceCache(testDatabaseUrl());
   const directory = {

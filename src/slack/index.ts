@@ -280,7 +280,6 @@ export async function startSlackPlugin(
     headerFacts: (scope) => core.surfaceHeaderFacts(scope as Parameters<typeof core.surfaceHeaderFacts>[0]),
     channelPinEnabled: (scope) =>
       core.channelHeaderPinEnabled(scope as Parameters<typeof core.channelHeaderPinEnabled>[0]),
-    refreshPersonas: () => refreshPersonas(core),
     webUiPublicUrl: cfg.webUiPublicUrl,
     ids,
   });
