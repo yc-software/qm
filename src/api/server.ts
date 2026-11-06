@@ -32,7 +32,7 @@ import { proxyDeploymentSubdomain } from "./routes/deployments.ts";
 import { CAPABILITY_HEADER } from "./contract.ts";
 import { livePersonCapability } from "./artifact-share.ts";
 import { canonicalPerson, samePerson } from "../directory/person.ts";
-import { bindBrowserActor, browserIdentity, usesBrowserSession } from "./browser-session.ts";
+import { browserIdentity, usesBrowserSession, withBrowserActor } from "./browser-session.ts";
 
 async function capabilityAdminDenied(
   access: AdminAccess,
@@ -290,18 +290,6 @@ async function gate(
     }
     if (actor)
       actor = { ...actor, p: canonicalPerson(actor.p), ...(actor.imp ? { imp: canonicalPerson(actor.imp) } : {}) };
-    if (browser) {
-      if (!actor) {
-        sendJson(res, 401, { error: "unauthorized", message: "principal is no longer active" });
-        return null;
-      }
-      const bound = bindBrowserActor(route?.actor, req, url, body, actor.p);
-      if (!bound) {
-        sendJson(res, 403, { error: "forbidden", message: "portal identity does not match the requested actor" });
-        return null;
-      }
-      body = bound.body;
-    }
     if (!isPublicRoute && (requirePortalIdentity || browser)) {
       const webTurn =
         method === "POST" &&
@@ -310,19 +298,24 @@ async function gate(
         typeof body === "object" &&
         (body as { surface?: unknown }).surface === "web";
       const routeActor = route?.actor ?? (WRITE_METHODS.has(method) ? "person" : undefined);
-      const needsActor = webTurn || (routeActor !== undefined && routeActor !== "system");
+      const needsActor = browser || webTurn || (routeActor !== undefined && routeActor !== "system");
       if (needsActor) {
         if (!actor) {
           sendJson(res, 401, { error: "unauthorized", message: "portal identity required" });
           return null;
         }
+        if (browser) body = withBrowserActor(route?.actor, req, url, body, actor.p);
         const field = !webTurn && routeActor?.includes(".") ? routeActor : undefined;
-        let asserted: unknown = null;
-        if (webTurn) asserted = (body as { actor?: { externalId?: unknown } }).actor?.externalId ?? null;
-        else if (field) asserted = assertedActorField(field, url, body);
+        const fields = [field, ...(browser ? ["query.principalId", "body.principalId"] : [])];
+        const claimed = [
+          ...fields.flatMap((f) => (f ? assertedActorValues(f, url, body) : [])),
+          ...(webTurn
+            ? [(body as { actor?: { externalId?: unknown } }).actor?.externalId ?? null].filter((v) => v !== null)
+            : []),
+        ];
         const actorId = actor.p;
         const matchesActor = (value: unknown): boolean => typeof value === "string" && samePerson(value, actorId);
-        if ((field && !matchesActor(asserted)) || (!field && asserted !== null && !matchesActor(asserted))) {
+        if ((field && claimed.length === 0) || !claimed.every(matchesActor)) {
           sendJson(res, 403, { error: "forbidden", message: "portal identity does not match the requested actor" });
           return null;
         }
@@ -332,11 +325,10 @@ async function gate(
   return { body, capability, actor };
 }
 
-function assertedActorField(field: string, url: URL, body: unknown): unknown {
+function assertedActorValues(field: string, url: URL, body: unknown): unknown[] {
   const [where, name] = field.split(".", 2) as [string, string];
-  if (where === "query") return url.searchParams.get(name);
-  const value = body && typeof body === "object" ? (body as Record<string, unknown>)[name] : undefined;
-  return typeof value === "string" ? value : null;
+  if (where === "query") return url.searchParams.getAll(name);
+  return body && typeof body === "object" && Object.hasOwn(body, name) ? [(body as Record<string, unknown>)[name]] : [];
 }
 
 function baseCtx(req: IncomingMessage, res: ServerResponse, wiring: Wiring): BaseCtx {

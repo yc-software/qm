@@ -10,6 +10,7 @@ import { errMessage, reportFailureAs } from "./util/errors.ts";
 import { slackAccountConfigsFromEnv, slackPluginConfigFromEnv, startSlackPlugin } from "./slack/index.ts";
 import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
 import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
+import { sessionLifetime } from "../plugins/portal/src/session.ts";
 import { startFrontDoor } from "./web/front-door.ts";
 
 export async function startQm(
@@ -35,7 +36,9 @@ export async function startQm(
   const server = createServer(built.app, {
     ...serverDeps(config, built, slackEnvironmentState, slackConfig?.botToken),
     managedSlack,
-    ...(env.PORTAL_SESSION_SECRET ? { portalSessionSecret: env.PORTAL_SESSION_SECRET } : {}),
+    ...(env.PORTAL_SESSION_SECRET
+      ? { portalSession: { secret: env.PORTAL_SESSION_SECRET, maxAgeSeconds: sessionLifetime(env).max } }
+      : {}),
   });
 
   await built.config.hydrate?.();

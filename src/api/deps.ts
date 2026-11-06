@@ -95,7 +95,7 @@ export interface ServerDeps {
   capabilitySecret?: string;
   capabilityTokenCompression?: boolean;
   portalIdentitySecret?: string;
-  portalSessionSecret?: string;
+  portalSession?: { secret: string; maxAgeSeconds: number };
   requireSignedPortalIdentity?: boolean;
   control: ControlService;
   replayDedupe?: ReplayDedupe;

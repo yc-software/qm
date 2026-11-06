@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import type { App } from "../src/api/app.ts";
+import type { ServerDeps } from "../src/api/deps.ts";
 import type { AdminService } from "../src/admin/admin-service.ts";
 import { createServer } from "../src/api/server.ts";
 import { apiRoutes } from "../src/api/routes/index.ts";
@@ -17,12 +18,17 @@ const CAPABILITY = "browser-session-capability-secret-0123456789";
 const SESSION = "browser-session-cookie-secret-0123456789abc";
 const ORIGIN = "https://qm.example.com";
 
-const seen: { actor: unknown; principalId: string | null; body: unknown }[] = [];
+const seen: { actor: unknown; principalId: string | null; body: unknown; dropOwner: unknown }[] = [];
 const echo = (ctx: ApiCtx): void => {
-  seen.push({ actor: ctx.actor, principalId: ctx.url.searchParams.get("principalId"), body: ctx.body });
+  seen.push({
+    actor: ctx.actor,
+    principalId: ctx.url.searchParams.get("principalId"),
+    body: ctx.body,
+    dropOwner: ctx.req.headers["x-drop-owner"],
+  });
   sendJson(ctx.res, 200, { ok: true });
 };
-(apiRoutes as Route[]).push(
+const testRoutes: Route[] = [
   {
     method: "GET",
     path: "/v1/test/browser-read",
@@ -41,7 +47,8 @@ const echo = (ctx: ApiCtx): void => {
   },
   { method: "GET", path: "/v1/test/browser-person", auth: "source", actor: "person", browser: true, handle: echo },
   { method: "GET", path: "/v1/test/service-read", auth: "source", actor: "query.principalId", handle: echo },
-);
+];
+(apiRoutes as Route[]).push(...testRoutes);
 
 const admin = {
   adminStatusOf: async ({ id }: { id: string }) => ({ isAdmin: id.startsWith("admin-") }),
@@ -57,21 +64,21 @@ function sessionCookie(claims: Record<string, unknown> = {}): string {
   return `portal_session=${encodeURIComponent(seal(session, deriveKey(SESSION, "portal.session.v1")))}`;
 }
 
-function impersonationCookie(actor: string, target: string): string {
-  const imp = { k: "impersonate", actor, target, org: "default-org", iat: nowS(), exp: nowS() + 600 };
+function impersonationCookie(actor: string, target: string, org = "default-org"): string {
+  const imp = { k: "impersonate", actor, target, org, iat: nowS(), exp: nowS() + 600 };
   return `portal_impersonate=${encodeURIComponent(seal(imp, deriveKey(SESSION, "portal.impersonate.v1")))}`;
 }
 
 async function withServer(
   fn: (base: string) => Promise<void>,
-  overrides: { portalSessionSecret?: string; portalUrl?: string } = {},
+  overrides: Partial<Pick<ServerDeps, "portalSession" | "portalUrl" | "production" | "identity">> = {},
 ): Promise<void> {
   const server = createServer({} as App, {
     production: true,
     signingSecret: SIGNING,
     capabilitySecret: CAPABILITY,
     portalIdentitySecret: PORTAL_IDENTITY,
-    portalSessionSecret: SESSION,
+    portalSession: { secret: SESSION, maxAgeSeconds: 30 * 86400 },
     portalUrl: ORIGIN,
     replayDedupe: { claim: async () => true },
     admin,
@@ -145,7 +152,12 @@ test("a principalId naming someone else is refused on any opted-in route, howeve
 });
 
 test("an unconfigured browser lane says so instead of blaming the cookie", async () => {
-  for (const overrides of [{ portalSessionSecret: "" }, { portalUrl: "not a url" }]) {
+  for (const overrides of [
+    { portalSession: { secret: "short", maxAgeSeconds: 86400 } },
+    { portalSession: { secret: SIGNING, maxAgeSeconds: 86400 } },
+    { portalSession: { secret: SESSION, maxAgeSeconds: Number.NaN } },
+    { portalUrl: "not a url" },
+  ]) {
     await withServer(async (base) => {
       const r = await fetch(`${base}/v1/test/browser-read`, { headers: { cookie: sessionCookie() } });
       assert.equal(r.status, 503);
@@ -228,6 +240,15 @@ test("impersonation is honoured only for an admin's own impersonation cookie", a
     assert.equal(seen[0]?.principalId, "mallory");
     assert.equal(actorOf()?.imp, undefined);
 
+    seen.length = 0;
+    const otherOrg = await fetch(`${base}/v1/test/browser-read`, {
+      headers: {
+        cookie: `${sessionCookie({ sub: "admin-alice" })}; ${impersonationCookie("admin-alice", "carol", "other-org")}`,
+      },
+    });
+    assert.equal(otherOrg.status, 200);
+    assert.equal(seen[0]?.principalId, "admin-alice");
+
     const borrowed = await fetch(`${base}/v1/test/browser-read?principalId=carol`, {
       headers: { cookie: `${sessionCookie({ sub: "admin-bob" })}; ${impersonationCookie("admin-alice", "carol")}` },
     });
@@ -257,9 +278,43 @@ test("routes that have not opted in stay closed to cookies, and signed callers a
   });
 });
 
+test("the browser lane binds the actor even where signed portal identity is not required", async () => {
+  await withServer(
+    async (base) => {
+      const read = await fetch(`${base}/v1/test/browser-read?principalId=bob`, {
+        headers: { cookie: sessionCookie() },
+      });
+      assert.equal(read.status, 403);
+      const w = await write(base, sessionCookie(), { principalId: "bob" });
+      assert.equal(w.status, 403);
+    },
+    { production: false },
+  );
+});
+
+test("deactivated people and relay-only identity headers get nothing from a cookie", async () => {
+  const identity = {
+    refresh: async () => {},
+    classify: (id: string) => ({ type: id === "gone" ? "external" : "internal" }),
+  } as unknown as ServerDeps["identity"];
+  await withServer(
+    async (base) => {
+      const gone = await fetch(`${base}/v1/test/browser-read`, { headers: { cookie: sessionCookie({ sub: "gone" }) } });
+      assert.equal(gone.status, 401);
+      seen.length = 0;
+      const smuggled = await fetch(`${base}/v1/test/browser-read`, {
+        headers: { cookie: sessionCookie(), "x-drop-owner": "bob" },
+      });
+      assert.equal(smuggled.status, 200);
+      assert.equal(seen[0]?.dropOwner, undefined);
+    },
+    { identity },
+  );
+});
+
 test("every opted-in production route binds the caller's identity", () => {
   for (const route of apiRoutes) {
-    if (!route.browser || ("path" in route && route.path.startsWith("/v1/test/"))) continue;
+    if (!route.browser || testRoutes.includes(route)) continue;
     assert.ok(
       route.actor && route.actor !== "system",
       `${"path" in route ? route.path : "match route"} must bind an actor`,
