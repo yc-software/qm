@@ -462,13 +462,12 @@ test("event loop blocks report the blocking stack and the instance", async () =>
   const { events, code } = await runReporting(
     `
     await new Promise((resolve) => setTimeout(resolve, 1500));
-    function blockEventLoop() { const end = Date.now() + 1000; while (Date.now() < end); }
+    function blockEventLoop() { const end = Date.now() + 1500; while (Date.now() < end); }
     blockEventLoop();
     await new Promise((resolve) => setTimeout(resolve, 1500));
   `,
     true,
     {
-      SENTRY_EVENT_LOOP_BLOCK_MS: "200",
       ECS_CONTAINER_METADATA_URI_V4: "http://169.254.170.2/v4/0123456789abcdef0123456789abcdef-1234567890",
     },
   );
@@ -482,21 +481,11 @@ test("event loop blocks report the blocking stack and the instance", async () =>
   assert.equal(blocked.release, "test-release");
 });
 
-test("event loop block detection can be turned off and errors carry the server name", async () => {
-  const { events, code } = await runReporting(
-    `
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    const end = Date.now() + 600; while (Date.now() < end);
-    reportBackendError(new Error('after-block'));
+test("error events carry the instance's host name outside ECS", async () => {
+  const { events, code } = await runReporting(`
+    reportBackendError(new Error('named-server'));
     await flushErrorReporting();
-  `,
-    true,
-    { SENTRY_EVENT_LOOP_BLOCK_MS: "0" },
-  );
+  `);
   assert.equal(code, 0);
-  assert.deepEqual(
-    events.map((event) => event.exception.values[0].value),
-    ["after-block"],
-  );
   assert.equal(events[0]!.server_name, hostname());
 });

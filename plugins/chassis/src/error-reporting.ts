@@ -49,7 +49,6 @@ const POOL_SPANS = new Set(["pg.connect", POOL_CHECKOUT]);
 const MAX_SENT_SPANS = 500;
 const IDLE_CHECKOUT_SECONDS = 0.001;
 const EVENT_LOOP_BLOCK_MS = 500;
-const EVENT_LOOP_BLOCKS_PER_HOUR = 10;
 const HTTP_METHODS = new Set("GET HEAD POST PUT PATCH DELETE OPTIONS CONNECT TRACE".split(" "));
 type SamplingContext = Parameters<NonNullable<Sentry.NodeOptions["tracesSampler"]>>[0];
 export const REQUEST_ID_HEADERS = ["fly-request-id", "render-request-id", "x-amzn-requestid", "x-request-id"];
@@ -212,12 +211,6 @@ function sampler(rate: number) {
     attributes?.["qm.origin"] === "human" ? 1 : inheritOrSampleWith(rate);
 }
 
-function eventLoopBlockMs(value: string | undefined): number {
-  if (!value?.trim()) return EVENT_LOOP_BLOCK_MS;
-  const ms = Number(value);
-  return Number.isFinite(ms) && ms > 0 ? ms : 0;
-}
-
 function serverName(env: NodeJS.ProcessEnv): string {
   const metadata = env.ECS_CONTAINER_METADATA_URI_V4;
   if (!metadata) return hostname();
@@ -225,13 +218,13 @@ function serverName(env: NodeJS.ProcessEnv): string {
   return container?.split("-")[0] || hostname();
 }
 
-async function watchEventLoop(sdk: typeof Sentry, threshold: number, server: string): Promise<void> {
+async function watchEventLoop(sdk: typeof Sentry, server: string): Promise<void> {
   try {
     const { eventLoopBlockIntegration } = await import("@sentry/node-native");
     sdk.getClient()?.addIntegration(
       eventLoopBlockIntegration({
-        threshold,
-        maxEventsPerHour: EVENT_LOOP_BLOCKS_PER_HOUR,
+        threshold: EVENT_LOOP_BLOCK_MS,
+        maxEventsPerHour: Number.POSITIVE_INFINITY,
         staticTags: { server_name: server },
       }),
     );
@@ -294,8 +287,7 @@ export function initializeErrorReporting(
   sdk.addEventProcessor(tagActiveRequest);
   client = sdk;
   tracing = traced;
-  const blockMs = eventLoopBlockMs(env.SENTRY_EVENT_LOOP_BLOCK_MS);
-  if (blockMs) void watchEventLoop(sdk, blockMs, server);
+  void watchEventLoop(sdk, server);
   process.on("unhandledRejection", (reason: unknown) => {
     sdk.captureException(reason, {
       captureContext: { level: "fatal" },
