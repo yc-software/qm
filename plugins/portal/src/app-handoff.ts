@@ -44,7 +44,7 @@ export interface AppHandoffDeps {
 
 const HANDOFF_TTL_S = 60;
 
-export function hostName(value: string | undefined): string {
+function hostName(value: string | undefined): string {
   return (value ?? "").toLowerCase().split(":")[0]!;
 }
 
