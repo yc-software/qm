@@ -1,5 +1,5 @@
 import type { Me } from "./shell-state";
-import { reportHandledError } from "./browser-errors";
+import { reportHandledError } from "./browser-errors.ts";
 import type { PostHog, PostHogConfig } from "posthog-js";
 
 let client: PostHog | undefined;
