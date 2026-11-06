@@ -11,6 +11,7 @@ import { inTenant } from "../../tenants/claim.ts";
 import { tenantAllowsEmail } from "../../tenants/settings.ts";
 import { boundTenant } from "../../tenants/context.ts";
 import { bootTenant } from "../../tenants/boot.ts";
+import { labelOfAppHost, splitAppLabel } from "../../tenants/app-handle.ts";
 
 const NAMESPACE = "authbroker:";
 const MAX_IDS = 64;
@@ -143,12 +144,9 @@ async function principalTenants(ctx: ApiCtx): Promise<void> {
 }
 
 async function appHostTenant(ctx: ApiCtx, host: string): Promise<string | undefined> {
-  const suffix = ctx.deps.deployAppsDomain ? `.${ctx.deps.deployAppsDomain.toLowerCase()}` : undefined;
-  if (!suffix || !host.endsWith(suffix)) return undefined;
-  const label = host.slice(0, -suffix.length);
-  const dash = label.indexOf("-");
-  if (dash < 1 || dash === label.length - 1 || label.includes(".")) return undefined;
-  return ctx.deps.directory?.tenantForAppHandle?.(label.slice(0, dash));
+  const label = labelOfAppHost(host, ctx.deps.deployAppsDomain);
+  const split = label === undefined ? undefined : splitAppLabel(label);
+  return split && ctx.deps.directory?.tenantForAppHandle?.(split.handle);
 }
 
 async function hostTenant(ctx: ApiCtx): Promise<void> {

@@ -56,11 +56,16 @@ export function appHostLabel(handle: string, name: string): string {
   return `${handle}-${name}`;
 }
 
+export function splitAppLabel(label: string): { handle: string; name: string } | undefined {
+  const dash = label.indexOf("-");
+  if (dash < 1 || dash === label.length - 1 || label.includes(".")) return undefined;
+  return { handle: label.slice(0, dash), name: label.slice(dash + 1) };
+}
+
 export function appNameFromLabel(label: string, handle: string | undefined): string | undefined {
   if (!handle) return label;
-  return label.startsWith(`${handle}-`) && label.length > handle.length + 1
-    ? label.slice(handle.length + 1)
-    : undefined;
+  const split = splitAppLabel(label);
+  return split?.handle === handle ? split.name : undefined;
 }
 
 export function labelOfAppHost(host: string | undefined, appsDomain: string | undefined): string | undefined {
