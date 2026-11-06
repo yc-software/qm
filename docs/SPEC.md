@@ -65,7 +65,7 @@ Hiding a symptom while leaving its true cause unfixed. Smells here are special c
 - **[qm#394](https://github.com/yc-software/qm/pull/394)** (2026-08-13): Memory tool silently coerces malformed `remember` calls (content/query/bare string) into facts instead of fixing the tool schema.
 - **[qm#469](https://github.com/yc-software/qm/pull/469)** (2026-08-13): Sandbox status collapses any unanswering shell into a 'wedged' verdict with baked-in 'restart the computer' advice.
 
-### Duplication (always reviewed, 7 examples)
+### Duplication (always reviewed, 9 examples)
 
 Giving the same behavior or fact multiple independent implementations or sources of truth. These copies drift, disagree, and multiply maintenance work; reuse the existing owner or consolidate the competing paths.
 
@@ -76,6 +76,8 @@ Giving the same behavior or fact multiple independent implementations or sources
 - **[qm#1185](https://github.com/yc-software/qm/pull/1185)** (2026-09-15): Each subscriber held its own LISTEN connection and pg-boss kept its own pool; consolidated to one listener per process and the shared query pool. _Status:_ wound back in [qm#1185](https://github.com/yc-software/qm/pull/1185).
 - **[qm#993](https://github.com/yc-software/qm/pull/993)** (2026-09-08): Chat search queried both the dedicated search index and legacy entry history for every visible conversation, causing timeouts. _Status:_ wound back in [qm#993](https://github.com/yc-software/qm/pull/993).
 - **[qm#488](https://github.com/yc-software/qm/pull/488)** (2026-08-13): Web-UI /api router had ~50 hand-copied body-parse/relay/path-decode fragments that drifted (some returned 400 instead of 413). _Status:_ wound back in [qm#488](https://github.com/yc-software/qm/pull/488).
+- **Loop enabled three ways:** A loop's on/off lives in `LoopState`, `loop.enabled`, and its backing cron's `enabled`, synced best-effort by unguarded writers (loops route PATCH, governor quarantine, offboarding). _Status:_ still present on main.
+- **Run outcome in two fields:** `runs.status` becomes `done` even when the turn's own result is failed or refused, so readers of `status` alone report failures as successes and subagent status has to consult both. _Status:_ still present on main.
 
 ### Hand-rolling (always reviewed, 5 examples)
 
@@ -191,6 +193,14 @@ The UI form of a band-aid: if the UI needs a sentence to explain why it didn't d
 Gating behaviour on a category (origin, kind, role, surface) without listing what falls into it. Before adding or moving such a gate, grep every assignment of the category, list the real cases it catches, and say which of them change. A category named for its first use quietly grows to cover unrelated producers.
 
 - **Automation origin in the mid-turn router** (2026-11-03): [qm#2907](https://github.com/yc-software/qm/pull/2907) moved "a person's message never steers into a live automation turn", written for cron posts in shared Slack channels, into the one router for every surface. Automation origin also covers webhooks, job watches, loops, swarms, Slack ambient wakes, orphan-steer replays, and messages handed over from other conversations, so web steers into those turns were refused. _Status:_ [qm#3109](https://github.com/yc-software/qm/pull/3109) applies the gate only to messages that did not explicitly ask to steer.
+
+### Implicit state machines (3 examples)
+
+A lifecycle encoded as a status field, nullable timestamps, or boolean combos, written from many places with no single transition function. Writers overwrite whole records without checking the current state, terminal states quietly come back, and unnamed states (spent, stuck, expired) exist only as field combinations. Name every state, route every write through one guarded `transition(from[], to)` (compare-and-set on the current state), and derive rather than copy (two stored copies of one fact are Duplication). `file_uploads` (`src/files/file-upload-store.ts`) is the model to copy.
+
+- **Spent one-shot crons** (2026-10-22): A fired one-shot stays `enabled` with a past `lastFiredAt`; "spent" is a field combination, not a state, and patched follow-up crons sat paused at a past fire time with nothing reporting it. `setEnabled(true)` also clears `archived`, resurrecting archived crons (`src/cron/cron-store.ts`). _Status:_ still present on main.
+- **Goal cancel race:** `setGoal` overwrites the whole goal row. The goal-bar cancel writes `cancelled` after waiting for running runs; a pending run claimed in the gap still reads the goal as active and writes it back. _Status:_ still present on main.
+- **Sandbox resource records:** `unverified/provisioning/ready/failed/retired` plus `cleanupPending`, `holders` and `jobOnly` are rewritten with whole-record `put` from six writers; `holders` updates skip the record lock, and `provisioning` only times out for job computers (`src/sandbox/sandbox-resources.ts`). _Status:_ still present on main.
 
 ### Historylessness (always reviewed, 5 examples)
 
