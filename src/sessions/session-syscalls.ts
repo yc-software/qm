@@ -654,7 +654,7 @@ export async function sessionTreeRuns(
   return live;
 }
 
-export const HELPER_WORK_NOTE =
+const HELPER_WORK_NOTE =
   "Nothing was started or sent. Tell the person helpers were refused here, and do the work yourself in this turn if you can.";
 
 export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscallsFactory {
@@ -716,7 +716,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           throw new Error(`this session moved from ${binding.scopeId} to ${current.scopeId}. ${HELPER_WORK_NOTE}`);
         if (deps.authorize && !(await deps.authorize(current, binding.request.actor.id)))
           throw new Error(
-            `${binding.request.actor.id} can't currently be confirmed as a member of ${binding.scopeId}, so helpers can't run here. ${HELPER_WORK_NOTE}`,
+            `${binding.request.actor.id} can't currently be confirmed as a member of ${binding.scopeId}, so helpers can't run here; nothing was started or sent.`,
           );
         const request: OrchestratorInput = {
           ...binding.request,
