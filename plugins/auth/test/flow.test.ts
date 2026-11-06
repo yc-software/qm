@@ -627,14 +627,14 @@ test("a live brandName accessor overrides the env default on pages and emails", 
   const { challenge } = pkcePair();
   const query = authorizeQuery({ code_challenge: challenge });
   const before = await (await fetch(`${h.base}/authorize?${query}`)).text();
-  assert.match(before, /Sign in to qm/);
+  assert.match(before, /Sign in to QM/);
 
   live = "straylight";
   const after = await (
     await fetch(`${h.base}/authorize?${authorizeQuery({ code_challenge: pkcePair().challenge })}`)
   ).text();
   assert.match(after, /Sign in to straylight/);
-  assert.doesNotMatch(after, /Sign in to qm/);
+  assert.doesNotMatch(after, /Sign in to QM/);
 
   await requestLink(h);
   assert.match(h.mailer.sent[0]!.subject, /straylight/);

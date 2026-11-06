@@ -11,6 +11,20 @@ import { isDnsLabel } from "../../chassis/src/dns-label.ts";
 import { reportBackendError } from "../../chassis/src/error-reporting.ts";
 import "./instrument.ts";
 import { provisionTrustedAdmin } from "./trusted-admin.ts";
+import {
+  CARD_SCENE_PATH,
+  cardPage,
+  connectErrorHtml,
+  connectPage,
+  connectWrongRecipientHtml,
+  LOCK_ICON,
+  notConfiguredHtml,
+  playgroundBusyHtml,
+  playgroundRestrictedHtml,
+  serveCardScene,
+  setCardBrandSource,
+  signInErrorHtml,
+} from "./pages.ts";
 import { createHash } from "node:crypto";
 import { createServer, METHODS, type IncomingMessage, type ServerResponse } from "node:http";
 import { ADMIN_LOGIN_SCRIPT, ADMIN_LOGIN_SCRIPT_HASH, openAdminLogin } from "./admin-login.ts";
@@ -18,7 +32,6 @@ import { LRUCache } from "lru-cache";
 import { createCanonicalResolver, IdentityRejected } from "./canonical.ts";
 import { createSignedInNames } from "./signed-in-name.ts";
 import { createTrustedEntry, trustedEntryConfig } from "./trusted-entry.ts";
-import { CARD_STYLE } from "./card-style.ts";
 import { coreAppHostTenant, createAppHandoff } from "./app-handoff.ts";
 import {
   coreEmailTenants,
@@ -139,14 +152,19 @@ const surfaceConfigs = createSurfaceConfigs(NEUTRAL_ACCENT, async (tenant, sub) 
     signal: AbortSignal.timeout(2_000),
   });
   if (!r.ok) return null;
-  const body = (await r.json()) as { branding?: { accent?: unknown }; modelProviderConfigured?: unknown };
+  const body = (await r.json()) as {
+    branding?: { accent?: unknown; selfLabel?: unknown };
+    modelProviderConfigured?: unknown;
+  };
   return {
     ...(typeof body.branding?.accent === "string" ? { accent: body.branding.accent } : {}),
+    ...(typeof body.branding?.selfLabel === "string" ? { selfLabel: body.branding.selfLabel } : {}),
     ...(typeof body.modelProviderConfigured === "boolean"
       ? { modelProviderConfigured: body.modelProviderConfigured }
       : {}),
   };
 });
+setCardBrandSource(() => surfaceConfigs.selfLabel());
 
 const WEB_UI_UPSTREAM = (process.env.WEB_UI_UPSTREAM ?? "http://localhost:8096").replace(/\/$/, "");
 
@@ -357,13 +375,13 @@ function identityUnavailable(req: IncomingMessage, res: ServerResponse): void {
     return sendHtml(
       res,
       503,
-      '<!doctype html><meta charset=utf-8><body style="font-family:system-ui;max-width:32rem;margin:4rem auto"><h2>Service unavailable</h2><p>Could not confirm your identity. Try again in a moment.</p></body>',
+      connectPage({ title: "Service unavailable", body: "Could not confirm your identity. Try again in a moment." }),
     );
   json(res, 503, { error: "identity_unavailable", message: "could not confirm your identity, try again in a moment" });
 }
 
 const PAGE_CSP =
-  "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
+  "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 
 function sendHtml(res: ServerResponse, status: number, html: string, csp = PAGE_CSP): void {
   sendBuffered(
@@ -459,121 +477,6 @@ function storedSession(req: IncomingMessage): SessionClaims | null {
   return openSession(readCookie(req.headers.cookie, "portal_session"), sessionKey, Date.now(), ORG, SESSION_MAX_TTL_S);
 }
 
-const ALERT_ICON = `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5M12 16h.01"/></svg>`;
-const LOCK_ICON = `<svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>`;
-
-function cardPage(o: {
-  title: string;
-  heading: string;
-  msg: string;
-  icon: string;
-  warn?: boolean;
-  wide?: boolean;
-  extra?: string;
-  actions: string;
-  help: string;
-}): string {
-  return `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${escapeHtml(o.title)} · Portal</title>
-${CARD_STYLE}
-</head>
-<body>
-  <main>
-    <section class="card${o.wide ? " wide" : ""}" aria-labelledby="t">
-      <div class="icon${o.warn ? " warn" : ""}" aria-hidden="true">
-        ${o.icon}
-      </div>
-      <h1 id="t">${escapeHtml(o.heading)}</h1>
-      ${o.msg ? `<p class="msg">${escapeHtml(o.msg)}</p>` : ""}
-      ${o.extra ?? ""}
-      <div class="actions">
-        ${o.actions}
-      </div>
-      ${o.help ? `<p class="help">${escapeHtml(o.help)}</p>` : ""}
-    </section>
-  </main>
-</body>
-</html>`;
-}
-
-export function signInErrorHtml(
-  detail: string,
-  retryPath: "/auth/login" | "/auth/trusted/login" = "/auth/login",
-): string {
-  return cardPage({
-    title: "Sign-in failed",
-    heading: "We couldn't sign you in",
-    msg: "Your sign-in didn't complete. This is usually temporary. Trying again resolves most cases.",
-    icon: ALERT_ICON,
-    warn: true,
-    extra: `<p class="reason"><strong>Details</strong>${escapeHtml(detail)}</p>`,
-    actions: `<a class="btn primary" href="${retryPath}">Try signing in again</a>`,
-    help: "Still stuck? Check that your account has access, then contact your admin.",
-  });
-}
-
-export function notConfiguredHtml(): string {
-  return cardPage({
-    title: "Not set up yet",
-    heading: "This deployment isn't set up yet",
-    msg: "An admin still needs to finish setup by adding a model API key. Until then the assistant can't answer.",
-    icon: ALERT_ICON,
-    warn: true,
-    actions: `<a class="btn primary" href="/">Try again</a>`,
-    help: "Ask your admin to complete onboarding in Settings.",
-  });
-}
-
-const connectStyle = (accent: string): string => `<style>
-  :root{ --bg:#0a0a0a; --text:#fafafa; --muted:#a3a3a3; --border:#2a2a2a; --brand:${accent}; --radius-md:10px; }
-  html,body{ height:100%; margin:0; }
-  body{ background:var(--bg); color:var(--text); display:grid; place-items:center; padding:40px 20px;
-    font:14px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; -webkit-font-smoothing:antialiased; }
-  .card{ max-width:440px; text-align:center; }
-  h1{ font-size:19px; margin:0 0 10px; }
-  p{ color:var(--muted); margin:0 0 18px; }
-  .btn{ display:inline-block; font-weight:600; min-height:40px; line-height:40px; padding:0 18px;
-    border:1px solid var(--brand); border-radius:var(--radius-md); background:var(--brand); color:#fff; text-decoration:none; }
-  a.muted{ color:var(--muted); display:inline-block; margin-top:14px; }
-</style>`;
-
-function connectPage(o: { title: string; body: string; action?: string; accent?: string }): string {
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(o.title)} · Portal</title>${connectStyle(o.accent ?? surfaceConfigs.accent())}</head>
-<body><div class="card"><h1>${escapeHtml(o.title)}</h1><p>${escapeHtml(o.body)}</p>${o.action ?? ""}</div></body></html>`;
-}
-
-function providerLabel(provider: string): string {
-  if (provider === "google") return "Google";
-  return provider ? provider.charAt(0).toUpperCase() + provider.slice(1) : "this app";
-}
-
-export function connectErrorHtml(detail: string, accent?: string): string {
-  return connectPage({ title: "Can't connect", body: detail, ...(accent ? { accent } : {}) });
-}
-
-export function connectWrongRecipientHtml(o: { provider: string; alreadyConnected: boolean; accent?: string }): string {
-  const prov = providerLabel(o.provider);
-  if (o.alreadyConnected) {
-    return connectPage({
-      title: `You've already connected ${prov}`,
-      body: `This link was meant for a different teammate, and your ${prov} is already connected, so there's nothing to do here.`,
-      action: `<a class="muted" href="/connectors">Manage your connections</a>`,
-      ...(o.accent ? { accent: o.accent } : {}),
-    });
-  }
-  return connectPage({
-    title: "This link was for someone else",
-    body: `This connect link was created for a different teammate. Want to connect your own ${prov} instead?`,
-    action: `<a class="btn" href="/connect/${encodeURIComponent(o.provider)}/self-connect">Connect my ${escapeHtml(prov)}</a>`,
-    ...(o.accent ? { accent: o.accent } : {}),
-  });
-}
-
 async function handleConsentRedeem(
   res: ServerResponse,
   o: { corePath: string; session: SessionClaims },
@@ -585,8 +488,7 @@ async function handleConsentRedeem(
     "x-consent-clicker-org": o.session.org,
     ...portalIdentityHeaders(o.session.sub, o.session.t),
   };
-  const accent = surfaceConfigs.accent(o.session.t);
-  const errorPage = (detail: string) => connectErrorHtml(detail, accent);
+  const errorPage = (detail: string) => connectErrorHtml(detail);
   let data: { status?: string; authorizeUrl?: string; provider?: string; clickerConnected?: boolean };
   try {
     const r = await fetch(`${CORE}${path}`, { headers });
@@ -608,7 +510,7 @@ async function handleConsentRedeem(
       return sendHtml(
         res,
         200,
-        connectWrongRecipientHtml({ provider: data.provider ?? "", alreadyConnected: !!data.clickerConnected, accent }),
+        connectWrongRecipientHtml({ provider: data.provider ?? "", alreadyConnected: !!data.clickerConnected }),
       );
     case "expired":
       return sendHtml(res, 200, errorPage("This connect link has expired. Ask the agent for a fresh one."));
@@ -672,11 +574,7 @@ async function handleSecretDrop(
         error: "unreachable",
         message: "couldn't reach the credential service, try again in a moment",
       });
-    return sendHtml(
-      res,
-      502,
-      '<!doctype html><meta charset=utf-8><body style="font-family:system-ui;max-width:32rem;margin:4rem auto"><h2>Service unavailable</h2><p>Try the link again in a moment.</p></body>',
-    );
+    return sendHtml(res, 502, connectPage({ title: "Service unavailable", body: "Try the link again in a moment." }));
   }
   const bodyText = await r.text();
   const ct = r.headers.get("content-type") ?? (isPost ? "application/json" : "text/html; charset=utf-8");
@@ -685,7 +583,7 @@ async function handleSecretDrop(
 }
 
 async function handleSelfConnect(res: ServerResponse, o: { provider: string; session: SessionClaims }): Promise<void> {
-  const errorPage = (detail: string) => connectErrorHtml(detail, surfaceConfigs.accent(o.session.t));
+  const errorPage = (detail: string) => connectErrorHtml(detail);
   const redirectUri = `${PUBLIC_URL}/v1/connectors/oauth/${encodeURIComponent(o.provider)}/callback`;
   const qs = new URLSearchParams({ principalId: o.session.sub, redirectUri, returnTo: "/connectors" });
   const path = withSourceAuthNonce(
@@ -800,29 +698,6 @@ export function mintBucketOf(ip: string): string {
   return `${prefix}::/64`;
 }
 
-export function playgroundBusyHtml(): string {
-  return cardPage({
-    title: "Playground is busy",
-    heading: "The playground is busy",
-    msg: "We couldn't start a fresh playground session for you right now. Waiting a little while and reloading resolves most cases.",
-    icon: ALERT_ICON,
-    warn: true,
-    actions: `<a class="btn primary" href="/">Try again</a>`,
-    help: "Playground sessions are limited per visitor to keep the demo responsive for everyone.",
-  });
-}
-
-export function playgroundRestrictedHtml(): string {
-  return cardPage({
-    title: "Not available in the playground",
-    heading: "Not available in the playground",
-    msg: "Connecting accounts and dropping secrets are disabled for anonymous playground sessions — clearing your cookie would orphan real credentials.",
-    icon: LOCK_ICON,
-    actions: `<a class="btn primary" href="/">Back to the playground</a>`,
-    help: "Sign in with a real account at /auth/login to use this link.",
-  });
-}
-
 async function mintPlaygroundSession(req: IncomingMessage, res: ServerResponse): Promise<SessionClaims | null> {
   if (!playgroundClaims) return null;
   const allowed = await withinRateLimit(playgroundClaims, {
@@ -928,6 +803,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   void surfaceConfigs.refresh(surfaceViewer?.t, surfaceViewer?.sub);
 
   if (method === "GET" && pathname === "/healthz") return json(res, 200, { ok: true });
+  if (method === "GET" && pathname === CARD_SCENE_PATH) return serveCardScene(res);
 
   if (method === "GET" && pathname === "/readyz") {
     return proxyToUpstream(req, res, { baseUrl: CORE, path: pathname, search: "" }, ["accept"]);
@@ -961,7 +837,8 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         connectPage({
           title: "Still signed in",
           body: "Use Sign out from the account menu to end this session.",
-          action: `<a class="btn" href="/">Back to the portal</a>`,
+          action: `<a class="btn primary" href="/">Back to the portal</a>`,
+          icon: LOCK_ICON,
         }),
       );
     return sendHtml(
@@ -970,7 +847,8 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       connectPage({
         title: "Signed out",
         body: "You have signed out of this portal.",
-        action: `<a class="btn" href="/auth/login">Sign in</a>`,
+        action: `<a class="btn primary" href="/auth/login">Sign in</a>`,
+        icon: LOCK_ICON,
       }),
     );
   }

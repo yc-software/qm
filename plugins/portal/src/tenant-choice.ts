@@ -204,7 +204,7 @@ export function workspacePicker(
     `<form method="post" action="/auth/tenant"${hidden ? " hidden" : ""} data-workspace="${escapeHtml(
       `${workspaceLabel(t)} ${t.handle ?? ""}`.trim().toLowerCase(),
     )}"><input type="hidden" name="tenant" value="${escapeHtml(t.id)}">` +
-    `<button class="btn primary" type="submit">${escapeHtml(workspaceLabel(t))}</button></form>`;
+    `<button class="btn ghost workspace" type="submit">${escapeHtml(workspaceLabel(t))}</button></form>`;
   if (ordered.length <= PICKER_BUTTONS_MAX) return { actions: ordered.map((t) => button(t)).join(""), script: false };
   const query = (o.query ?? "").trim().toLowerCase();
   const matches = (t: SignInTenant): boolean =>

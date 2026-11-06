@@ -2,11 +2,13 @@ import { LRUCache } from "lru-cache";
 
 export interface SurfaceConfig {
   accent?: string;
+  selfLabel?: string;
   modelProviderConfigured?: boolean;
 }
 
 interface Entry {
   accent: string;
+  selfLabel?: string | undefined;
   modelProviderConfigured: boolean | undefined;
   nextAt: number;
   inflight: Promise<void> | null;
@@ -30,6 +32,7 @@ export function createSurfaceConfigs(
     const body = await fetchConfig(tenant, sub).catch(() => null);
     if (!body) return;
     e.accent = body.accent ?? neutralAccent;
+    e.selfLabel = body.selfLabel;
     e.modelProviderConfigured = body.modelProviderConfigured;
     e.nextAt = Date.now() + (e.modelProviderConfigured === false ? 5_000 : 30_000);
   }
@@ -45,6 +48,7 @@ export function createSurfaceConfigs(
       return e.inflight ?? Promise.resolve();
     },
     accent: (tenant?: string): string => entries.get(tenant ?? "")?.accent ?? neutralAccent,
+    selfLabel: (tenant?: string): string | undefined => entries.get(tenant ?? "")?.selfLabel,
     modelProviderConfigured: (tenant?: string): boolean | undefined =>
       entries.get(tenant ?? "")?.modelProviderConfigured,
   };
