@@ -172,7 +172,7 @@ test("the app handle saves only a well-formed handle and shows the server's refu
   await admin.settle();
   assert.equal(
     admin.document.getElementById("st-app-handle")!.textContent,
-    "Use 2–30 lowercase letters or digits, with no hyphens.",
+    "Use 2–61 lowercase letters or digits, with no hyphens.",
   );
   assert.deepEqual(saves, []);
   type(admin, "#app-handle", "taken1");

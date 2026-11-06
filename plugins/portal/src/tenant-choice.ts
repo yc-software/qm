@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { LRUCache } from "lru-cache";
 import { signedHeaders, withSourceAuthNonce } from "../../chassis/src/core-client.ts";
 import { escapeHtml, json, readBody } from "../../chassis/src/http.ts";
+import { isAppHandleShape } from "../../chassis/src/dns-label.ts";
 import { isTenantId } from "../../chassis/src/tenant.ts";
 import { clearCookie, open, readCookie, seal, setCookie } from "./session.ts";
 
@@ -101,7 +102,7 @@ async function coreTenants(
 export function coreWorkspace(coreApiUrl: string, signingSecret: string | undefined) {
   const cache = new LRUCache<string, { found: Workspace | null }>({ max: 1_000, ttl: 60_000 });
   return async (handle: string): Promise<Workspace | null> => {
-    if (!/^[a-z0-9]{2,30}$/.test(handle)) return null;
+    if (!isAppHandleShape(handle)) return null;
     const hit = cache.get(handle);
     if (hit) return hit.found;
     const path = withSourceAuthNonce(`/v1/auth/broker/workspace?handle=${encodeURIComponent(handle)}`, signingSecret);

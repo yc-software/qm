@@ -1,11 +1,12 @@
 import { html } from "lit";
+import { APP_HANDLE_CHARS, APP_HANDLE_MAX, isAppHandleShape } from "../../../chassis/src/dns-label.ts";
 import { cardClass, saveFooter } from "./setting-controls.ts";
 import type { SettingsState } from "./settings.ts";
 
-const APP_HANDLE_RULE = "Use 2–30 lowercase letters or digits, with no hyphens.";
+const APP_HANDLE_RULE = `Use ${APP_HANDLE_CHARS}.`;
 
 export function appHandleError(handle: string): string | undefined {
-  return /^[a-z0-9]{2,30}$/.test(handle) ? undefined : APP_HANDLE_RULE;
+  return isAppHandleShape(handle) ? undefined : APP_HANDLE_RULE;
 }
 
 export function appHandleCard(s: SettingsState) {
@@ -23,7 +24,7 @@ export function appHandleCard(s: SettingsState) {
         type="text"
         id="app-handle"
         style="max-width: 240px"
-        maxlength="30"
+        maxlength=${APP_HANDLE_MAX}
         autocapitalize="off"
         spellcheck="false"
         .value=${s.draft.handle || ""}

@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { PgPool } from "../persistence/pg-pool.ts";
 import { loadTenant, perTenant } from "./cache.ts";
 import { boundTenant } from "./context.ts";
-import { appHandleSchema } from "./app-handle.ts";
+import { appHandleSchema, appLabelLimitError } from "./app-handle.ts";
 import { isDnsLabel } from "../../plugins/chassis/src/dns-label.ts";
 
 const text = z.string().min(1);
@@ -46,6 +46,11 @@ export async function loadTenantSettings(db: Pick<PgPool, "q">): Promise<void> {
 
 export function tenantAppHandle(): string | undefined {
   return boundTenant() === undefined ? undefined : loaded().handle;
+}
+
+export function assertAppLabelFits(ref: string): void {
+  const problem = appLabelLimitError(tenantAppHandle(), ref);
+  if (problem) throw new Error(problem);
 }
 
 export function noteTenantAppHandle(handle: string): void {

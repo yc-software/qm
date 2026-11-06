@@ -15,7 +15,7 @@ import {
   tenantSettingsSchema,
 } from "../src/tenants/settings.ts";
 import { appUrlOf } from "../src/deploy/deploy-store.ts";
-import { appHostLabel, appNameFromLabel } from "../src/tenants/app-handle.ts";
+import { appHostLabel, appLabelLimitError, appNameFromLabel } from "../src/tenants/app-handle.ts";
 import { scopeId } from "../src/types.ts";
 import { twoTenants, type TwoTenants } from "./support/two-tenants.ts";
 
@@ -61,6 +61,12 @@ describe("app host labels", () => {
     assert.equal(appNameFromLabel("nitroduck7-", "nitroduck7"), undefined);
     assert.equal(appNameFromLabel("other-sales", "nitroduck7"), undefined);
     assert.equal(appNameFromLabel("sales-board", undefined), "sales-board");
+  });
+
+  it("refuse an app whose <handle>-<app> label would exceed one DNS label", () => {
+    assert.equal(appLabelLimitError(undefined, "a".repeat(80)), undefined);
+    assert.equal(appLabelLimitError("h".repeat(30), "a".repeat(32)), undefined);
+    assert.match(appLabelLimitError("h".repeat(30), "a".repeat(33)) ?? "", /\(64 characters\), over the 63-character/);
   });
 });
 
@@ -220,9 +226,10 @@ describe("company app links", () => {
 
   it("refuses a handle that is malformed, reserved or already another company's, including its derived default", async () => {
     const [a, b] = db.tenants;
-    for (const bad of ["a", "has-hyphen", "UPPER", "x".repeat(31), "admin", "mt", "www"])
+    for (const bad of ["a", "has-hyphen", "UPPER", "x".repeat(62), "admin", "mt", "www"])
       assert.equal(tenantSettingsSchema.safeParse({ handle: bad }).success, false, bad);
-    assert.equal(tenantSettingsSchema.safeParse({ handle: "nitroduck2" }).success, true);
+    for (const good of ["nitroduck2", "x".repeat(61)])
+      assert.equal(tenantSettingsSchema.safeParse({ handle: good }).success, true, good);
     await db.owner.q(`UPDATE tenants SET settings = '{"orgSlug":"nitro-duck"}' WHERE id = $1`, [a]);
     try {
       await assert.rejects(

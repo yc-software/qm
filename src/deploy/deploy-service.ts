@@ -30,6 +30,7 @@ import { createKeyedQueue } from "../util/async.ts";
 import { errMessage, reportFailure, swallow, swallowAs } from "../util/errors.ts";
 import { uuidSchema } from "../util/ids.ts";
 import { claimThenBind } from "../tenants/claim.ts";
+import { assertAppLabelFits } from "../tenants/settings.ts";
 
 export interface DeployFile {
   path: string;
@@ -181,6 +182,7 @@ function validateName(name: string): void {
       `invalid deployment name "${name}": use 2-40 chars, lowercase letters/digits/hyphens, no leading/trailing hyphen`,
     );
   }
+  assertAppLabelFits(name);
 }
 
 const DISPLAY_NAME_MAX = 60;
@@ -369,11 +371,12 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         validateName(input.name);
         if (await deps.deployStore.getByName(input.name)) throw new Error(`deployment name taken: ${input.name}`);
       }
+      const id = randomUUID();
+      if (input.name === undefined) assertAppLabelFits(id);
       assertAppSize(fileSizes(input.files), deps.provider.profile.maxAppBytes);
       const snapshotDir = await snapshotFiles(deps.deployDir, input.files);
       const homeDir = input.homeFiles?.length ? await snapshotFiles(deps.deployDir, input.homeFiles) : undefined;
       const env = input.stampEnv ? { ...input.env, ...input.stampEnv } : input.env;
-      const id = randomUUID();
       if (input.createdInScope && parseScopeId(input.createdInScope).kind === "channel") {
         await deps.acl.grant({
           ownerScopeId: input.ownerScopeId,

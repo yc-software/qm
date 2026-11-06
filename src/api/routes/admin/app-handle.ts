@@ -1,4 +1,4 @@
-import { appHandleSchema } from "../../../tenants/app-handle.ts";
+import { appHandleSchema, appLabelLimitError } from "../../../tenants/app-handle.ts";
 import { noteTenantAppHandle, tenantAppHandle } from "../../../tenants/settings.ts";
 import { parseScopeId } from "../../../types.ts";
 import type { AdminResource } from "../admin-resources.ts";
@@ -16,6 +16,10 @@ export const appHandleResource: AdminResource = {
     if (!setAppHandle) return { error: "app handles are not available on this install", status: 404 };
     const parsed = appHandleSchema.safeParse(String((ctx.body as { handle?: unknown })?.handle ?? "").trim());
     if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "invalid handle" };
+    for (const d of await ctx.app.listDeployments()) {
+      const problem = appLabelLimitError(parsed.data, d.name ?? d.id);
+      if (problem) return { error: problem };
+    }
     if ((await setAppHandle(parsed.data)) === "taken")
       return { error: "another workspace already uses that handle", status: 409 };
     noteTenantAppHandle(parsed.data);
