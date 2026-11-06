@@ -80,11 +80,11 @@ function identityAdmitting(tenant: string | undefined, seen: Array<string | unde
   } as unknown as IdentityService;
 }
 
-function start(identity: IdentityService, tenants: DirectoryStore["tenantsForEmail"]) {
+function start(identity: IdentityService, tenants: DirectoryStore["tenantsForEmail"], boot?: string) {
   const built = buildApp(
     testConfig({ databaseUrl, dataDir: mkdtempSync(join(tmpdir(), "tenant-sign-in-")), orgId: "acme" }),
   );
-  Object.assign(built.app, { readBootTenant: async () => undefined });
+  Object.assign(built.app, { readBootTenant: async () => boot });
   const server = createInsecureTestServer(built.app, {
     portalIdentitySecret: IDENTITY_SECRET,
     identity,
@@ -92,7 +92,7 @@ function start(identity: IdentityService, tenants: DirectoryStore["tenantsForEma
     directory: {
       tenantsForEmail: tenants,
       tenantsForPrincipal: (principal: string) => directory.tenantsForPrincipal!(principal),
-      tenantForHost: (host: string) => directory.tenantForHost!(host),
+      tenantForAppHandle: (handle: string) => directory.tenantForAppHandle!(handle),
       trustedClientFor: (tenant: string) => directory.trustedClientFor!(tenant),
     } as unknown as DirectoryStore,
   });
@@ -193,22 +193,35 @@ test("a signed-in person's portal identity binds the tenant chosen at sign-in", 
     assert.deepEqual(await bound({ auth: "source", tenant: "optional" }, {}), { status: 200, tenant: null });
   }));
 
-test("a tenant's own allowed-emails list decides admission under it, and the install list covers tenants without one", (t) =>
+test("under a company the directory is the roster, its allowed-emails list admits more, and the install list does not apply", (t) =>
   withoutTenant(async () => {
-    const seen: Array<string | undefined> = [];
-    const srv = start(identityAdmitting(undefined, seen), async () => [{ id: alpha }, { id: beta }]);
+    const srv = start(identityAdmitting(undefined, []), (email) => directory.tenantsForEmail!(email));
     t.after(srv.close);
-    const as = async (tenant: string) =>
+    const allowed = async (tenant: string, email: string) =>
       (
-        await srv.get("/v1/auth/broker/email-allowed?email=both%40shared.test", {
+        await srv.get(`/v1/auth/broker/email-allowed?email=${encodeURIComponent(email)}`, {
           "x-portal-identity": await mintPortalIdentity(
-            { p: "both@shared.test", t: tenant, exp: Date.now() + 60_000 },
+            { p: email, t: tenant, exp: Date.now() + 60_000 },
             IDENTITY_SECRET,
           ),
         })
       ).body.allowed;
-    assert.equal(await as(alpha), false);
-    assert.equal(await as(beta), true);
+    assert.equal(await allowed(alpha, "both@shared.test"), true);
+    assert.equal(await allowed(alpha, "visitor@nowhere.test"), true);
+    assert.equal(await allowed(alpha, "outsider@shared.test"), false);
+    assert.equal(await allowed(beta, "bob@beta.test"), true);
+    assert.equal(await allowed(beta, "alice@alpha.test"), false);
+    assert.equal(await allowed(beta, "outsider@shared.test"), false);
+  }));
+
+test("a single-company install keeps admitting by the install list", (t) =>
+  withoutTenant(async () => {
+    const srv = start(identityAdmitting(undefined, []), (email) => directory.tenantsForEmail!(email), beta);
+    t.after(srv.close);
+    const allowed = async (email: string) =>
+      (await srv.get(`/v1/auth/broker/email-allowed?email=${encodeURIComponent(email)}`)).body.allowed;
+    assert.equal(await allowed("outsider@shared.test"), true);
+    assert.equal(await allowed("stranger@elsewhere.test"), false);
   }));
 
 test("a trusted principal maps to the tenants whose principal links name it, through the broker route", (t) =>
@@ -240,7 +253,7 @@ test("on a shared host the directory, not the install allowlist, permits email s
     const allowed = async (email: string) =>
       (await srv.get(`/v1/auth/broker/email-allowed?email=${encodeURIComponent(email)}`)).body.allowed;
     assert.equal(await allowed("carol@elsewhere.test"), true);
-    assert.equal(await allowed("dan@elsewhere.test"), false);
+    assert.equal(await allowed("dan@elsewhere.test"), true);
     assert.equal(await allowed("stranger@elsewhere.test"), false);
     const canonical = "/v1/principals/carol%40elsewhere.test/canonical";
     assert.equal((await srv.get(canonical)).status, 401);
@@ -251,36 +264,27 @@ test("on a shared host the directory, not the install allowlist, permits email s
     assert.equal((await srv.get(canonical, { "x-portal-identity": asBeta })).status, 200);
   }));
 
-test("a company's hostname maps to exactly that company through the broker route, and only its own tenant reads the row", (t) =>
+test("a workspace handle names exactly one company and its own trusted client, and a company hostname no longer maps", (t) =>
   withoutTenant(async () => {
     const srv = start(identityAdmitting(undefined, []), async () => []);
     t.after(srv.close);
+    const handle = `ws${randomUUID().replace(/-/g, "").slice(0, 12)}`;
     await owner.q(
-      "INSERT INTO tenant_hosts(host, tenant_id) VALUES ('alpha.company.test', $1), ('beta.company.test', $2)",
-      [alpha, beta],
+      `UPDATE tenants SET settings = settings || jsonb_build_object('handle', $2::text,
+        'oidcClient', '{"clientId":"beta-client","clientSecret":"beta-client-secret-0123456789abcdef"}'::jsonb) WHERE id = $1`,
+      [beta, handle],
     );
-    await assert.rejects(
-      owner.q("INSERT INTO tenant_hosts(host, tenant_id) VALUES ('alpha.company.test', $1)", [beta]),
-    );
-    await assert.rejects(
-      owner.q("INSERT INTO tenant_hosts(host, tenant_id) VALUES ('Upper.company.test', $1)", [beta]),
-    );
-    const hostOf = async (host: string) =>
-      (await srv.get(`/v1/auth/broker/host-tenant?host=${encodeURIComponent(host)}`)).body.tenant;
-    assert.equal(await hostOf("alpha.company.test"), alpha);
-    assert.equal(await hostOf("BETA.company.test"), beta);
-    assert.equal(await hostOf("gamma.company.test"), null);
-    await owner.q(
-      `UPDATE tenants SET settings = settings || '{"oidcClient":{"clientId":"beta-client","clientSecret":"beta-client-secret-0123456789abcdef"}}' WHERE id = $1`,
-      [beta],
-    );
-    const withClient = (await srv.get("/v1/auth/broker/host-tenant?host=beta.company.test")).body;
-    assert.deepEqual(withClient.trustedClient, {
-      clientId: "beta-client",
-      clientSecret: "beta-client-secret-0123456789abcdef",
+    t.after(() => owner.q(`UPDATE tenants SET settings = settings - 'handle' - 'oidcClient' WHERE id = $1`, [beta]));
+    const workspace = async (name: string) =>
+      (await srv.get(`/v1/auth/broker/workspace?handle=${encodeURIComponent(name)}`)).body;
+    assert.deepEqual(await workspace(handle), {
+      tenant: beta,
+      trustedClient: { clientId: "beta-client", clientSecret: "beta-client-secret-0123456789abcdef" },
     });
-    assert.equal((await srv.get("/v1/auth/broker/host-tenant?host=alpha.company.test")).body.trustedClient, undefined);
-    const app = createPgPool(appUrl(databaseUrl).toString());
-    t.after(() => app.close());
-    await assert.rejects(app.q("SELECT host FROM tenant_hosts"), /No tenant is bound/);
+    assert.deepEqual(await workspace(handle.toUpperCase()), await workspace(handle));
+    assert.deepEqual(await workspace("nosuchworkspace"), { tenant: null });
+    assert.equal((await srv.get("/v1/auth/broker/workspace")).status, 400);
+    await owner.q("INSERT INTO tenant_hosts(host, tenant_id) VALUES ('beta.company.test', $1)", [beta]);
+    t.after(() => owner.q("DELETE FROM tenant_hosts WHERE tenant_id = $1", [beta]));
+    assert.deepEqual((await srv.get("/v1/auth/broker/host-tenant?host=beta.company.test")).body, { tenant: null });
   }));

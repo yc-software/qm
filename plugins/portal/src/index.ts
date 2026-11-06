@@ -17,13 +17,13 @@ import { pathToFileURL } from "node:url";
 import { ADMIN_LOGIN_SCRIPT, ADMIN_LOGIN_SCRIPT_HASH, openAdminLogin } from "./admin-login.ts";
 import { LRUCache } from "lru-cache";
 import { createCanonicalResolver, IdentityRejected } from "./canonical.ts";
-import { createHostTrustedEntries, createTrustedEntry, trustedEntryConfig } from "./trusted-entry.ts";
+import { createTrustedEntry, trustedEntryConfig } from "./trusted-entry.ts";
 import { CARD_STYLE } from "./card-style.ts";
-import { coreHostTenant, createHostSessions, createHostTenants, mappedHost, runOnHost } from "./host-tenant.ts";
-import { createHostRoutes } from "./host-routes.ts";
+import { coreAppHostTenant, createAppHandoff } from "./app-handoff.ts";
 import {
   coreEmailTenants,
   coreSignInTenants,
+  coreWorkspace,
   openChoice,
   tenantChoiceForms,
   verifiedEmail,
@@ -43,6 +43,8 @@ import {
   sessionCookieHeaders,
   clearCookie,
   readCookie,
+  withoutCookies,
+  signedOutCookies,
   randomToken,
   safeEqual,
   sanitizeReturnTo,
@@ -218,11 +220,6 @@ const PRINCIPAL_RULE: PrincipalRule = {
 
 const DEV_SECRET = "dev-only-insecure-portal-session-secret";
 const sessionKey = deriveKey(SESSION_SECRET ?? DEV_SECRET, "portal.session.v1");
-const hostSessions = createHostSessions({
-  cookieDomain: COOKIE_DOMAIN,
-  secure: SECURE_COOKIES,
-  openSession: (value) => openSession(value, sessionKey, Date.now(), ORG, SESSION_MAX_TTL_S),
-});
 const tmpKey = deriveKey(SESSION_SECRET ?? DEV_SECRET, "portal.tmp.v1");
 const impersonateKey = deriveKey(SESSION_SECRET ?? DEV_SECRET, "portal.impersonate.v1");
 const trustedOidc = trustedEntryConfig(process.env, PUBLIC_URL);
@@ -240,26 +237,18 @@ if (
 const claimTrusted = (key: string, expiresAt: number) =>
   claimOnce(coreClaimStore(CORE, CORE_SIGNING_SECRET, "portal"), key, expiresAt);
 const trustedEntry = trustedOidc ? createTrustedEntry(trustedOidc, SESSION_SECRET ?? DEV_SECRET, claimTrusted) : null;
-const hostTrustedEntry = createHostTrustedEntries(trustedOidc, SESSION_SECRET ?? DEV_SECRET, claimTrusted);
+const workspaceFor = coreWorkspace(CORE, CORE_SIGNING_SECRET);
 const IMPERSONATE_TTL_S = Number(process.env.PORTAL_IMPERSONATE_TTL_S ?? 3600);
-const hostRoutes = createHostRoutes({
+const appHandoff = createAppHandoff({
   publicUrl: PUBLIC_URL,
-  appsDomain: APPS_DOMAIN,
-  lookup: createHostTenants(coreHostTenant(CORE, CORE_SIGNING_SECRET)),
+  lookup: coreAppHostTenant(CORE, CORE_SIGNING_SECRET),
   handoffKey: deriveKey(SESSION_SECRET ?? DEV_SECRET, "portal.handoff.v1"),
   claim: (jti) => claimTrusted(`handoff:${jti}`, Date.now() + 120_000),
   session: (req) => currentSession(req),
-  signOut: (res) => setSession(res, hostSessions.signedOutCookies()),
-  signIn: (res, who) => setAuthenticatedSession(res, who.sub, who.name, false, who.t),
-  signInApp: (res, who, host) =>
-    runOnHost({ tenant: who.t, host, origin: "" }, () => setAuthenticatedSession(res, who.sub, who.name, false, who.t)),
+  signOut: (res) => setSession(res, signedOutCookies(SECURE_COOKIES, COOKIE_DOMAIN)),
+  signInApp: (res, who) => setAuthenticatedSession(res, who.sub, who.name, false, who.t, false),
   page: (res, status, html) => sendHtml(res, status, html),
   errorHtml: (detail) => signInErrorHtml(detail),
-  unavailable: (res) =>
-    json(res, 503, {
-      error: "unavailable",
-      message: "This workspace's address could not be checked. Try again shortly.",
-    }),
 });
 
 const TMP_TTL_S = 600;
@@ -382,7 +371,7 @@ function sendHtml(res: ServerResponse, status: number, html: string, csp = PAGE_
   );
 }
 
-const sameOriginRequest = (req: IncomingMessage) => sameOriginFor(req, mappedHost()?.origin ?? ORIGIN);
+const sameOriginRequest = (req: IncomingMessage) => sameOriginFor(req, ORIGIN);
 
 function wantsHtml(req: IncomingMessage): boolean {
   const accept = req.headers.accept;
@@ -470,7 +459,11 @@ function localDevSession(req: IncomingMessage, nowMs = Date.now(), ignoreLogout 
 }
 
 function currentSession(req: IncomingMessage): SessionClaims | null {
-  return hostSessions.current(req.headers.cookie) ?? (mappedHost() ? null : localDevSession(req));
+  return storedSession(req) ?? localDevSession(req);
+}
+
+function storedSession(req: IncomingMessage): SessionClaims | null {
+  return openSession(readCookie(req.headers.cookie, "portal_session"), sessionKey, Date.now(), ORG, SESSION_MAX_TTL_S);
 }
 
 const ALERT_ICON = `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5M12 16h.01"/></svg>`;
@@ -781,12 +774,12 @@ function loginProviderCookie(sub: string): string[] {
   ];
 }
 
-function sessionCookieSet(value: string, sub: string): string[] {
+function sessionCookieSet(value: string, sub: string, domainWide = true): string[] {
   const attrs = {
     path: "/",
     maxAge: SESSION_TTL_S,
     secure: SECURE_COOKIES,
-    ...(hostSessions.cookieDomain() ? { domain: hostSessions.cookieDomain() } : {}),
+    ...(COOKIE_DOMAIN && domainWide ? { domain: COOKIE_DOMAIN } : {}),
   };
   return [...sessionCookieHeaders(value, attrs), ...loginProviderCookie(sub)];
 }
@@ -865,7 +858,7 @@ async function mintPlaygroundSession(req: IncomingMessage, res: ServerResponse):
 }
 
 function renewSessionCookie(req: IncomingMessage, res: ServerResponse): SessionClaims | null {
-  const session = mappedHost() ? currentSession(req) : hostSessions.shared(req.headers.cookie);
+  const session = storedSession(req);
   if (!session) return null;
   if (session.appOnly) return session;
   const now = Math.floor(Date.now() / 1000);
@@ -893,16 +886,13 @@ const server = createServer((req, res) => {
         Math.round(performance.now() - startedAt),
       );
   });
-  void hostRoutes
-    .resolve(req, res)
-    .then((mapped) => (mapped === null ? undefined : runOnHost(mapped, () => handle(req, res))))
-    .catch((err: unknown) => {
-      errorLogged = true;
-      reportBackendError(err);
-      console.error("[portal] 500 %s %s: %s", req.method ?? "?", (req.url ?? "?").split("?")[0], String(err));
-      if (!res.headersSent) json(res, 500, { error: "internal_error" });
-      else res.end();
-    });
+  void handle(req, res).catch((err: unknown) => {
+    errorLogged = true;
+    reportBackendError(err);
+    console.error("[portal] 500 %s %s: %s", req.method ?? "?", (req.url ?? "?").split("?")[0], String(err));
+    if (!res.headersSent) json(res, 500, { error: "internal_error" });
+    else res.end();
+  });
 });
 
 async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -919,10 +909,10 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   const requestHost = (req.headers.host ?? "").toLowerCase().split(":")[0]!;
   const appSuffix = APPS_DOMAIN ? `.${APPS_DOMAIN.toLowerCase()}` : undefined;
   const appHost = requestHost.endsWith(appSuffix ?? "\0") || requestHost === APPS_DOMAIN?.toLowerCase();
-  if (appSuffix && appHost && requestHost !== hostOf(PUBLIC_URL) && !mappedHost()) {
+  if (appSuffix && appHost && requestHost !== hostOf(PUBLIC_URL)) {
     const label = requestHost.slice(0, -appSuffix.length);
     if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label)) return json(res, 404, { error: "not_found" });
-    if (await hostRoutes.app(req, res, url)) return;
+    if (await appHandoff.redeem(req, res, url)) return;
     return proxyToAppHost(req, res, CORE, clientIpOf(req));
   }
 
@@ -955,14 +945,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     );
   }
 
-  const mapped = mappedHost();
-  if (
-    mapped &&
-    (pathname.startsWith("/auth/") || brokerPath !== null) &&
-    (await hostRoutes.mapped(req, res, url, mapped))
-  )
-    return;
-  if (pathname === "/auth/host" && method === "GET") return hostRoutes.handoff(req, res, url);
+  if (pathname === "/auth/host" && method === "GET") return appHandoff.start(req, res, url);
   if (pathname === "/auth/login" && method === "GET") return authLogin(req, res, url);
   if (pathname === "/auth/callback" && method === "GET") return authCallback(req, res, url);
   if (pathname === "/auth/tenant" && method === "POST") return authTenant(req, res);
@@ -1018,7 +1001,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     const redirectTo = !AUTH_BROKER_UPSTREAM && signedOutSession && !signedOutSession.anon ? "/auth/signed-out" : "/";
     setSession(res, [
       ...(signedOutSession ? loginProviderCookie(signedOutSession.sub) : []),
-      ...hostSessions.signedOutCookies(),
+      ...signedOutCookies(SECURE_COOKIES, COOKIE_DOMAIN),
       clearCookie("portal_oidc_tmp", "/auth", SECURE_COOKIES),
       ...(AUTH_BROKER_UPSTREAM ? [clearCookie("qm_idp_session", AUTH_BROKER_PREFIX, true)] : []),
       ...(LOCAL_AUTH_BYPASS && isLoopbackAddress(req.socket.remoteAddress)
@@ -1058,7 +1041,8 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     const canonical = await canonicalPrincipal(session.sub, session.t);
     if (canonical instanceof IdentityRejected) {
       console.warn(`[portal] core no longer recognises this session; signing it out: ${canonical.message}`);
-      hostSessions.signOutRequest(req, res);
+      for (const cookie of signedOutCookies(SECURE_COOKIES, COOKIE_DOMAIN)) res.appendHeader("set-cookie", cookie);
+      req.headers.cookie = withoutCookies(req.headers.cookie, new Set(["portal_session", "portal_impersonate"]));
       session = null;
     } else if (!canonical) return identityUnavailable(req, res);
     else {
@@ -1526,35 +1510,12 @@ async function adminLogin(req: IncomingMessage, res: ServerResponse): Promise<vo
 }
 
 async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
-  const mapped = mappedHost();
-  const entry = mapped?.trustedClient ? hostTrustedEntry(mapped.origin, mapped.trustedClient) : trustedEntry;
-  if (!entry) return json(res, 404, { error: "not_found" });
-  const cookieName = "portal_trusted_tmp";
-  const path = "/auth/trusted";
-  if (url.pathname === `${path}/login`) {
-    const returnTo =
-      url.searchParams.get("returnTo") ??
-      openTmp(readCookie(req.headers.cookie, "portal_oidc_tmp"), tmpKey, Date.now())?.returnTo ??
-      null;
-    const existing = currentSession(req);
-    const trustedPrefix = `oidc:${createHash("sha256").update(trustedOidc!.issuer).digest("hex")}:`;
-    if (existing && !existing.anon && !existing.appOnly && existing.sub.startsWith(trustedPrefix)) {
-      res.writeHead(302, {
-        location: sanitizeReturnTo(returnTo, PUBLIC_URL, APPS_DOMAIN),
-        "cache-control": "no-store",
-      });
-      return void res.end();
-    }
-    const login = entry.start(sanitizeReturnTo(returnTo, PUBLIC_URL, APPS_DOMAIN));
-    setSession(res, [setCookie(cookieName, login.cookie, { path, maxAge: login.ttl, secure: SECURE_COOKIES })]);
-    res.writeHead(302, { location: login.location, "cache-control": "no-store" });
-    return void res.end();
-  }
-  if (url.pathname !== `${path}/callback`) return json(res, 404, { error: "not_found" });
-  setSession(res, [clearCookie(cookieName, path, SECURE_COOKIES)]);
+  if (!trustedEntry) return json(res, 404, { error: "not_found" });
+  if (url.pathname === "/auth/trusted/login") return trustedLogin(req, res, url, trustedEntry);
+  if (url.pathname !== "/auth/trusted/callback") return json(res, 404, { error: "not_found" });
+  setSession(res, [clearCookie("portal_trusted_tmp", "/auth/trusted", SECURE_COOKIES)]);
   try {
-    const identity = await entry.finish(readCookie(req.headers.cookie, cookieName), url);
-    if (mapped) return finishTrustedSignIn(res, identity, identity.returnTo, mapped.tenant);
+    const identity = await trustedEntry.finish(readCookie(req.headers.cookie, "portal_trusted_tmp"), url, workspaceFor);
     if (trustedAdminEnabled) {
       await provisionTrustedAdmin(
         {
@@ -1574,7 +1535,7 @@ async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL):
     });
     if (found.shared && !found.tenants.length) return sendHtml(res, 403, noAccessHtml());
     const who = { sub: identity.sub, name: identity.name };
-    const pin = await hostRoutes.pin(identity.returnTo);
+    const pin = identity.tenant ?? (await appHandoff.pin(identity.returnTo));
     if (pin !== undefined && !found.tenants.some(({ id }) => id === pin)) return sendHtml(res, 403, noAccessHtml());
     if (pin === undefined && found.tenants.length > 1)
       return chooseTenant(res, { trusted: who }, identity.returnTo, found.tenants);
@@ -1589,6 +1550,32 @@ async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL):
   }
 }
 
+async function trustedLogin(
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+  entry: NonNullable<typeof trustedEntry>,
+): Promise<void> {
+  const handle = url.searchParams.get("workspace");
+  const workspace = handle === null ? undefined : await workspaceFor(handle);
+  if (workspace === null) return sendHtml(res, 404, signInErrorHtml("unknown workspace"));
+  const pending = openTmp(readCookie(req.headers.cookie, "portal_oidc_tmp"), tmpKey, Date.now())?.returnTo;
+  const returnTo = sanitizeReturnTo(url.searchParams.get("returnTo") ?? pending ?? null, PUBLIC_URL, APPS_DOMAIN);
+  const existing = currentSession(req);
+  const trustedPrefix = `oidc:${createHash("sha256").update(trustedOidc!.issuer).digest("hex")}:`;
+  const signedIn = existing && !existing.anon && !existing.appOnly && existing.sub.startsWith(trustedPrefix);
+  if (signedIn && (!workspace || existing.t === workspace.tenant)) {
+    res.writeHead(302, { location: returnTo, "cache-control": "no-store" });
+    return void res.end();
+  }
+  const login = entry.start(returnTo, handle && workspace ? { handle, ...workspace } : undefined);
+  setSession(res, [
+    setCookie("portal_trusted_tmp", login.cookie, { path: "/auth/trusted", maxAge: login.ttl, secure: SECURE_COOKIES }),
+  ]);
+  res.writeHead(302, { location: login.location, "cache-control": "no-store" });
+  res.end();
+}
+
 function noAccessHtml(): string {
   return cardPage({
     title: "No access",
@@ -1600,7 +1587,14 @@ function noAccessHtml(): string {
   });
 }
 
-function setAuthenticatedSession(res: ServerResponse, sub: string, name = "", appOnly = false, tenant?: string): void {
+function setAuthenticatedSession(
+  res: ServerResponse,
+  sub: string,
+  name = "",
+  appOnly = false,
+  tenant?: string,
+  domainWide = true,
+): void {
   const now = Math.floor(Date.now() / 1000);
   const session: SessionClaims = {
     k: "session",
@@ -1612,10 +1606,9 @@ function setAuthenticatedSession(res: ServerResponse, sub: string, name = "", ap
     ...(name ? { name } : {}),
     ...(appOnly ? { appOnly: true } : {}),
     ...(tenant ? { t: tenant } : {}),
-    ...(mappedHost() ? { h: mappedHost()!.host } : {}),
   };
   setSession(res, [
-    ...sessionCookieSet(seal(session, sessionKey), session.sub),
+    ...sessionCookieSet(seal(session, sessionKey), session.sub, domainWide),
     clearCookie("portal_trusted_tmp", "/auth/trusted", SECURE_COOKIES),
     clearCookie("portal_oidc_tmp", "/auth", SECURE_COOKIES),
     clearCookie("portal_tenant_choice", "/auth", SECURE_COOKIES),
@@ -1702,7 +1695,7 @@ async function authCallback(req: IncomingMessage, res: ServerResponse, url: URL)
   } catch (e) {
     return fail(errMessage(e, "sign-in failed"));
   }
-  const pin = await hostRoutes.pin(tmp.returnTo);
+  const pin = await appHandoff.pin(tmp.returnTo);
   if (pin !== undefined && !tenants.some(({ id }) => id === pin)) return sendHtml(res, 403, noAccessHtml());
   if (pin === undefined && tenants.length > 1) return chooseTenant(res, { signIn }, tmp.returnTo, tenants);
   return finishSignIn(res, signIn, tmp.returnTo, pin ?? tenants[0]?.id);

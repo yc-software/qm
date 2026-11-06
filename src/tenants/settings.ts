@@ -32,17 +32,14 @@ export const TENANT_SETTING_KEYS = Object.keys(tenantSettingsSchema.shape) as (k
 
 export const TENANT_SETTINGS_REFRESH_MS = 30_000;
 
-const loaded = perTenant<{ settings?: TenantSettings; host?: string; handle?: string }>(() => ({}));
+const loaded = perTenant<{ settings?: TenantSettings; handle?: string }>(() => ({}));
 
 export async function loadTenantSettings(db: Pick<PgPool, "q">): Promise<void> {
   const rows = await db.q(
-    `SELECT settings, (SELECT host FROM tenant_hosts WHERE tenant_id = qm_bound_tenant()
-      ORDER BY length(host), host LIMIT 1) AS host, qm_tenant_handle(settings) AS handle
-      FROM tenants WHERE id = qm_bound_tenant()`,
+    `SELECT settings, qm_tenant_handle(settings) AS handle FROM tenants WHERE id = qm_bound_tenant()`,
   );
   const state = loaded();
   state.settings = tenantSettingsSchema.parse(rows[0]?.settings ?? {});
-  state.host = typeof rows[0]?.host === "string" ? rows[0].host : undefined;
   state.handle = typeof rows[0]?.handle === "string" ? rows[0].handle : undefined;
 }
 
@@ -52,10 +49,6 @@ export function tenantAppHandle(): string | undefined {
 
 export function noteTenantAppHandle(handle: string): void {
   loaded().handle = handle;
-}
-
-export function tenantHost(): string | undefined {
-  return boundTenant() === undefined ? undefined : loaded().host;
 }
 
 export function tenantSettings(): TenantSettings {

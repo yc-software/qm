@@ -6,16 +6,14 @@ export interface PortalViewerSession {
   sub: string;
   appOnly: boolean;
   t?: string;
-  h?: string;
 }
 
 export function portalSession(
   cookieHeader: string | undefined,
   secret: string,
   now = Date.now(),
-  host?: string,
 ): PortalViewerSession | null {
-  return portalSessionFrom(cookieHeader, "portal_session", secret, now, host);
+  return portalSessionFrom(cookieHeader, "portal_session", secret, now);
 }
 
 export function portalSessionFrom(
@@ -23,11 +21,10 @@ export function portalSessionFrom(
   name: string,
   secret: string,
   now = Date.now(),
-  host?: string,
 ): PortalViewerSession | null {
   for (const token of readCookies(cookieHeader, name)) {
     const session = verifySessionToken(token, secret, now);
-    if (session && (session.h === undefined || session.h === host)) return session;
+    if (session) return session;
   }
   return null;
 }
@@ -52,13 +49,11 @@ function verifySessionToken(token: string, secret: string, now: number): PortalV
   if (typeof claims.sub !== "string" || !claims.sub) return null;
   if (typeof claims.exp !== "number" || now >= claims.exp * 1000) return null;
   if (claims.appOnly !== undefined && typeof claims.appOnly !== "boolean") return null;
-  if (claims.h !== undefined && (typeof claims.h !== "string" || !claims.h)) return null;
   if (claims.t !== undefined && typeof claims.t !== "string") return null;
   return {
     sub: claims.sub,
     appOnly: claims.appOnly === true,
     ...(typeof claims.t === "string" ? { t: claims.t } : {}),
-    ...(typeof claims.h === "string" ? { h: claims.h } : {}),
   };
 }
 

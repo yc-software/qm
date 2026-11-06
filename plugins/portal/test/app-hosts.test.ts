@@ -18,7 +18,6 @@ const upstream = createServer((req, res) => {
     res.setHeader("content-type", "application/json");
     if (url.pathname === "/v1/auth/broker/host-tenant") {
       const host = url.searchParams.get("host")!;
-      if (host === "redoubt.qm.test") return void res.end(JSON.stringify({ tenant: beta }));
       const app = appHosts[host];
       return void res.end(JSON.stringify(app ? { tenant: app, app: true } : { tenant: null }));
     }
@@ -95,7 +94,7 @@ function onHost(host: string, path: string, cookie = ""): Promise<HostResponse> 
   });
 }
 
-function session(tenant: string, host?: string): string {
+function session(tenant: string): string {
   const now = Math.floor(Date.now() / 1000);
   const claims = {
     k: "session",
@@ -106,16 +105,15 @@ function session(tenant: string, host?: string): string {
     exp: now + 600,
     t: tenant,
   };
-  return `portal_session=${seal({ ...claims, ...(host ? { h: host } : {}) }, sessionKey)}`;
+  return `portal_session=${seal(claims, sessionKey)}`;
 }
 
 const minted = (r: HostResponse) =>
   r.cookies.find((c) => c.startsWith("portal_session=") && !c.startsWith("portal_session=;"));
 
-test("the portal host and company hosts under the apps domain stay the portal, while <handle>-<app> hosts go to the app gateway", async () => {
+test("the portal host stays the portal, while <handle>-<app> hosts go to the app gateway", async () => {
   proxied.length = 0;
   await onHost("mt.qm.test", "/");
-  await onHost("redoubt.qm.test", "/");
   assert.equal(
     proxied.some((p) => p.appHost),
     false,
@@ -124,7 +122,7 @@ test("the portal host and company hosts under the apps domain stay the portal, w
   assert.deepEqual(proxied.at(-1), { host: "nitroduck-dash.qm.test", path: "/reports", appHost: true });
 });
 
-test("a shared-host session hands off to its own company's app host as a host-only cookie bound to that host, once", async () => {
+test("a shared-host session hands off to its own company's app host as a host-only cookie, once", async () => {
   const to = "http://nitroduck-dash.qm.test/reports?dpl_signin=1";
   const start = await onHost("mt.qm.test", `/auth/host?to=${encodeURIComponent(to)}`, session(alpha));
   assert.equal(start.status, 302);
@@ -137,19 +135,18 @@ test("a shared-host session hands off to its own company's app host as a host-on
   const cookie = minted(landed)!;
   assert.doesNotMatch(cookie, /domain=/i);
   const claims = open(readCookie(cookie.split(";")[0], "portal_session"), sessionKey);
-  assert.deepEqual([claims?.t, claims?.h], [alpha, "nitroduck-dash.qm.test"]);
+  assert.equal(claims?.t, alpha);
   assert.equal((await onHost("nitroduck-dash.qm.test", handoff)).status, 400);
 });
 
-test("another company's app host, or a session minted for a company host, gets no handoff and is sent to sign in", async () => {
-  for (const [cookie, to] of [
-    [session(alpha), "http://beta7-dash.qm.test/"],
-    [session(alpha, "redoubt.qm.test"), "http://nitroduck-dash.qm.test/"],
-  ] as const) {
-    const refused = await onHost("mt.qm.test", `/auth/host?to=${encodeURIComponent(to)}`, cookie);
-    assert.equal(refused.status, 302);
-    assert.match(refused.location, /^\/auth\/login\?returnTo=/);
-  }
+test("another company's app host gets no handoff and is sent to sign in", async () => {
+  const refused = await onHost(
+    "mt.qm.test",
+    `/auth/host?to=${encodeURIComponent("http://beta7-dash.qm.test/")}`,
+    session(alpha),
+  );
+  assert.equal(refused.status, 302);
+  assert.match(refused.location, /^\/auth\/login\?returnTo=/);
   const unknown = await onHost(
     "mt.qm.test",
     `/auth/host?to=${encodeURIComponent("http://nosuch-dash.qm.test/")}`,
