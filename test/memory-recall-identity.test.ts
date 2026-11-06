@@ -226,6 +226,13 @@ test("a claim in two notebooks keeps the first notebook copy's own place, and th
   );
 });
 
+test("a provider serving two scopes prints its fact once in search, without naming its own address twice", async () => {
+  const notebook = createPostgresMemoryService(testDatabaseUrl());
+  const memory = routed(notebook, { acme: gbrain(() => [{ id: "1", text: "alpha brain one" }]) }, ["personal", "org"]);
+  const hits = await searchAcrossScopes(memory, ["personal:a", "org:acme"], "alpha", 20);
+  assert.deepEqual(hits, [{ scopeId: "personal:a", fact: "acme:1 (2026-10-30; fact) alpha brain one" }]);
+});
+
 test("a kept copy that no longer fits the budget gives way to a copy in a block already open", async () => {
   const notebook = createPostgresMemoryService(testDatabaseUrl());
   await notebook.capture("personal:a", ["Shared claim X"], AT);

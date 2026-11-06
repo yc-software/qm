@@ -17,7 +17,7 @@ full; scores are never compared across sources. Later turns add only newly selec
 Provider rows without fact ids are compared by content hash. An MCP provider whose answer carries
 `structuredContent.facts`, a list of `{ id, text, date?, kind? }` with string `id` and `text`
 (gbrain's `memory_recall` returns `id`, `text`, `date` and `kind`), gives one row per fact, and
-search shows it as `<provider id>:<fact id>`. A `facts` value that isn't such a list, or a fact id that is empty or holds whitespace, fails the read with `malformed_fact`. Whitespace runs in a fact's text, line breaks included, become one space, and a blank fact is skipped. Without
+search shows it as `<provider id>:<fact id>`. A `facts` value that isn't such a list, or a fact id that is empty or holds whitespace, fails the read with `malformed_fact`. Whitespace runs in a fact's text, date and kind, line breaks included, become one space, a blank fact is skipped, and a fact that doesn't fit the provider's `maxChars` is skipped while later ones may still fit. Without
 `structuredContent.facts`, the answer becomes one row per line, so it should return one
 self-contained fact per line; a `memorable` procedure block stays one row. A claim held by several
 sources (compared ignoring case and surrounding spaces) is shown once, as the first notebook's copy

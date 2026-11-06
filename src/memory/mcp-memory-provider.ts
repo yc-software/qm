@@ -25,6 +25,8 @@ interface ProviderFact {
   kind?: unknown;
 }
 
+const oneLine = (value: string) => value.replace(/[\s\u0085]+/g, " ").trim();
+
 function providerFacts(result: CallToolResult): ProviderFact[] | undefined {
   const facts = (result.structuredContent as { facts?: unknown } | undefined)?.facts;
   if (facts === undefined) return undefined;
@@ -38,18 +40,20 @@ function providerFacts(result: CallToolResult): ProviderFact[] | undefined {
         `memory provider returned fact ${index} with id ${typeof fact?.id} and text ${typeof fact?.text}; both must be strings`,
         { code: "malformed_fact" },
       );
-    if (!fact.id || /\s/.test(fact.id))
+    if (!fact.id || oneLine(fact.id) !== fact.id)
       throw new McpCallError(`memory provider returned fact ${index} with an id that is empty or holds whitespace`, {
         code: "malformed_fact",
       });
   });
-  return (facts as ProviderFact[])
-    .map((fact) => ({ ...fact, text: fact.text.replace(/\s+/g, " ").trim() }))
-    .filter((fact) => fact.text);
+  return (facts as ProviderFact[]).map((fact) => ({ ...fact, text: oneLine(fact.text) })).filter((fact) => fact.text);
 }
 
 const stamped = (fact: ProviderFact) => {
-  const stamp = [fact.date, fact.kind].filter((part) => typeof part === "string" && part).join("; ");
+  const stamp = [fact.date, fact.kind]
+    .filter((part) => typeof part === "string")
+    .map(oneLine)
+    .filter(Boolean)
+    .join("; ");
   return stamp ? `(${stamp}) ${fact.text}` : fact.text;
 };
 
@@ -110,8 +114,8 @@ export function createMcpMemoryProvider(opts: {
     let room = (maxChars || Infinity) + 1;
     for (const fact of facts) {
       const text = `${bullet}${stamped(fact)}`;
+      if (text.length + 1 > room) continue;
       room -= text.length + 1;
-      if (room < 0 && fitting.length) break;
       fitting.push({ ref: fact.id, claim: fact.text, text });
     }
     return fitting;
