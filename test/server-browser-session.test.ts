@@ -301,6 +301,7 @@ test("deactivated people and relay-only identity headers get nothing from a cook
     async (base) => {
       const gone = await fetch(`${base}/v1/test/browser-read`, { headers: { cookie: sessionCookie({ sub: "gone" }) } });
       assert.equal(gone.status, 401);
+      assert.equal((await errorOf(gone)).message, "principal is no longer active");
       seen.length = 0;
       const smuggled = await fetch(`${base}/v1/test/browser-read`, {
         headers: { cookie: sessionCookie(), "x-drop-owner": "bob" },

@@ -2,7 +2,7 @@ import type { IncomingMessage } from "node:http";
 import { deriveKey, impersonationFor, openSession, readCookie } from "../../plugins/portal/src/session.ts";
 import { originOf, sameOriginRequest } from "../../plugins/chassis/src/http.ts";
 import type { PortalIdentity } from "../auth/portal-identity.ts";
-import { MIN_SIGNING_SECRET_LENGTH } from "../auth/source-auth.ts";
+import { isStrongSigningSecret, MIN_SIGNING_SECRET_LENGTH } from "../auth/source-auth.ts";
 import { orgId } from "../config.ts";
 import { canonicalPerson } from "../directory/person.ts";
 import { reportFailure } from "../util/errors.ts";
@@ -29,9 +29,11 @@ export function usesBrowserSession(req: IncomingMessage, route: Pick<Route, "bro
 }
 
 function misconfiguration(deps: ServerDeps): string | null {
-  const secret = deps.portalSession?.secret.trim() ?? "";
-  if (secret.length < MIN_SIGNING_SECRET_LENGTH || secret === deps.signingSecret)
-    return `PORTAL_SESSION_SECRET is unset, shorter than ${MIN_SIGNING_SECRET_LENGTH} characters, or equal to CORE_SIGNING_SECRET`;
+  const secret = deps.portalSession?.secret;
+  if (!secret?.trim()) return "PORTAL_SESSION_SECRET is not set";
+  if (!isStrongSigningSecret(secret))
+    return `PORTAL_SESSION_SECRET is shorter than ${MIN_SIGNING_SECRET_LENGTH} characters`;
+  if (secret.trim() === deps.signingSecret) return "PORTAL_SESSION_SECRET must differ from CORE_SIGNING_SECRET";
   if (!originOf(deps.portalUrl ?? ""))
     return `PUBLIC_WEB_URL is not an absolute URL (got ${JSON.stringify(deps.portalUrl ?? "")})`;
   if (!Number.isFinite(deps.portalSession?.maxAgeSeconds))

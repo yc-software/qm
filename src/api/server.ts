@@ -301,7 +301,8 @@ async function gate(
       const needsActor = browser || webTurn || (routeActor !== undefined && routeActor !== "system");
       if (needsActor) {
         if (!actor) {
-          sendJson(res, 401, { error: "unauthorized", message: "portal identity required" });
+          const message = browser ? "principal is no longer active" : "portal identity required";
+          sendJson(res, 401, { error: "unauthorized", message });
           return null;
         }
         if (browser) body = withBrowserActor(route?.actor, req, url, body, actor.p);
