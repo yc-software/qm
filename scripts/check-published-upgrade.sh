@@ -1,7 +1,4 @@
 #!/usr/bin/env bash
-# Upgrade a database from the latest published release to this checkout.
-# Seeds a row into every table the release created so data-dependent migrations run.
-# Usage: DATABASE_URL=postgres://... scripts/check-published-upgrade.sh [base-tag]
 set -euo pipefail
 
 : "${DATABASE_URL:?DATABASE_URL must point at an empty, disposable database}"
@@ -30,8 +27,14 @@ done
 migrate() {
   local label=$1 dir=$2
   echo "::group::migrate with $label"
-  (cd "$dir" && env -i PATH="$PATH" HOME="$HOME" DATABASE_URL="$DATABASE_URL" "${secrets[@]}" node src/migrate-main.ts)
+  local log
+  log=$(mktemp)
+  (cd "$dir" && env -i PATH="$PATH" HOME="$HOME" DATABASE_URL="$DATABASE_URL" "${secrets[@]}" node src/migrate-main.ts) 2>&1 | tee "$log"
   echo "::endgroup::"
+  if grep -q '^\[failed\]' "$log"; then
+    echo "::error::$label reported failures after migrating; see the log above" >&2
+    exit 1
+  fi
 }
 
 echo "Installing published release $base"
