@@ -4,7 +4,7 @@ import { lookup } from "node:dns/promises";
 import { once } from "node:events";
 import type { Config } from "./config.ts";
 import { buildApp, serverDeps } from "./wiring.ts";
-import { createServer } from "./api/server.ts";
+import { closeServer, createServer } from "./api/server.ts";
 import { dockerDaemonFailure } from "./deploy/docker-deploy-provider.ts";
 import { errMessage, reportFailureAs } from "./util/errors.ts";
 import { slackAccountConfigsFromEnv, slackPluginConfigFromEnv, startSlackPlugin } from "./slack/index.ts";
@@ -33,12 +33,14 @@ export async function startQm(
         reconcile: config.backgroundWorkEnabled ? () => slackRuntime.reconcile() : undefined,
       })
     : undefined;
+  const draining = new AbortController();
   const server = createServer(built.app, {
     ...serverDeps(config, built, slackEnvironmentState, slackConfig?.botToken),
     managedSlack,
     ...(env.PORTAL_SESSION_SECRET
       ? { portalSession: { secret: env.PORTAL_SESSION_SECRET, maxAgeSeconds: sessionLifetime(env).max } }
       : {}),
+    draining: draining.signal,
   });
 
   await built.config.hydrate?.();
@@ -51,7 +53,7 @@ export async function startQm(
   const frontDoor =
     config.publicPort === undefined
       ? undefined
-      : await startFrontDoor({ ...config, publicPort: config.publicPort }, env);
+      : await startFrontDoor({ ...config, publicPort: config.publicPort }, env, draining.signal);
 
   console.log(
     `[qm] listening on :${config.port} (org=${config.orgId}, ` +
@@ -142,18 +144,19 @@ export async function startQm(
   return {
     built,
     server,
-    frontDoor,
     releaseInFlightRuns: () => built.runtime.releaseInFlightRuns(),
     async stop() {
+      draining.abort();
+      const deadline = Date.now() + config.shutdownDrainMs;
       void slackRuntime.stop().catch((e: unknown) => console.error("[qm] slack plugin stop failed:", errMessage(e)));
       for (const runtime of slackAccountRuntimes)
         void runtime.stop().catch((e: unknown) => console.error("[qm] slack account stop failed:", errMessage(e)));
       void built.scheduler.stop().catch((e: unknown) => console.error("[qm] scheduler stop failed:", errMessage(e)));
       built.deploymentLayerRefresh.stop();
-      frontDoor?.close();
-      server.close();
-      server.closeIdleConnections();
-      await built.runtime.stop();
+      await built.runtime.stop(async () => {
+        await frontDoor?.close(deadline);
+        await closeServer(server, deadline);
+      });
     },
   };
 }
