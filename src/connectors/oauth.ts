@@ -503,6 +503,10 @@ export const PROVIDERS: Record<string, OAuthProviderConfig> = {
   },
 };
 
+export function oauthCallbackUrl(base: string, provider: string): string {
+  return `${base.replace(/\/$/, "")}/v1/connectors/oauth/${encodeURIComponent(provider)}/callback`;
+}
+
 export const CONNECTOR_HOSTS: readonly string[] = Object.values(PROVIDERS).flatMap((p) => p.hosts);
 
 export interface PublicOAuthClient {

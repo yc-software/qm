@@ -18,7 +18,7 @@ export interface Principal {
   displayName?: string;
 }
 
-const SCOPE_KINDS = ["personal", "channel", "team", "org", "group"] as const;
+const SCOPE_KINDS = ["personal", "channel", "team", "org", "group", "persona"] as const;
 export type ScopeKind = (typeof SCOPE_KINDS)[number];
 
 export type ScopeId = string;
@@ -149,7 +149,9 @@ export interface Session {
   spawnMeta?: SpawnMeta;
   surfaceBinding?: TurnSurfaceOrigin;
   runtime?: TurnRuntime;
+  personaId?: string;
   lastActivityAt?: number;
+  lastUserPreview?: string | null;
   hasEntries?: boolean;
   working?: boolean;
   awaitingInput?: boolean;
@@ -443,6 +445,12 @@ export interface PendingApproval {
   grantModes?: ApprovalGrantModes;
   blocksInput?: boolean;
   kind?: "approval" | "input";
+  executesOnApprove?: boolean;
+}
+
+export interface ApprovedToolCallSpec {
+  tool: string;
+  input: Record<string, unknown>;
 }
 
 export interface PendingApprovalRecord {
@@ -460,6 +468,7 @@ export interface PendingApprovalRecord {
   request?: TurnRequest;
   blocksInput?: boolean;
   kind?: "approval" | "input";
+  call?: ApprovedToolCallSpec;
 }
 
 type ApprovalScope = "once" | "session" | "always";

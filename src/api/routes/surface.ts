@@ -118,6 +118,15 @@ async function cancelSessionGoal(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, out);
 }
 
+async function spawnWebSession(ctx: ApiCtx): Promise<void> {
+  const b = (isObj(ctx.body) ? ctx.body : {}) as { principalId?: unknown; scopeId?: unknown };
+  if (typeof b.principalId !== "string" || !b.principalId || typeof b.scopeId !== "string" || !b.scopeId)
+    return sendJson(ctx.res, 400, { error: "bad_request", message: "principalId and scopeId required" });
+  const out = await ctx.app.spawnSession(b.principalId, { scopeId: b.scopeId });
+  if (!out) return sendJson(ctx.res, 403, { error: "forbidden", message: "you can't start a conversation there" });
+  return sendJson(ctx.res, 201, out);
+}
+
 async function forkSession(ctx: ApiCtx): Promise<void> {
   const { res, app, body } = ctx;
   const id = ctx.params.id!;
@@ -556,12 +565,31 @@ async function listSessions(ctx: ApiCtx): Promise<void> {
     ...(url.searchParams.get("scope") ? { scopeId: url.searchParams.get("scope")! } : {}),
     ...(url.searchParams.get("q")?.trim() ? { titleQuery: url.searchParams.get("q")!.trim() } : {}),
   });
+  const previews = await sidebarPreviews(ctx, principalId, [...page.sessions, ...(page.pinned ?? [])]);
   return sendJson(res, 200, {
-    sessions: page.sessions,
-    ...(page.pinned ? { pinned: page.pinned } : {}),
+    sessions: withPreviews(page.sessions, previews),
+    ...(page.pinned ? { pinned: withPreviews(page.pinned, previews) } : {}),
     ...(page.hasArchived !== undefined ? { hasArchived: page.hasArchived } : {}),
     nextCursor: page.next ? `${page.next.activity}.${page.next.id}` : null,
   });
+}
+
+async function sidebarPreviews(
+  ctx: ApiCtx,
+  principalId: string,
+  rows: readonly Session[],
+): Promise<Map<string, string> | null> {
+  const { featureFlags, sessions } = ctx.deps;
+  if (
+    !sessions ||
+    (await featureFlags?.enabled("sidebar_last_message_titles", makeScopeId("personal", principalId))) !== true
+  )
+    return null;
+  return sessions.lastUserPreviews(rows.map((row) => row.id));
+}
+
+function withPreviews(rows: Session[], previews: Map<string, string> | null): Session[] {
+  return previews ? rows.map((row) => ({ ...row, lastUserPreview: previews.get(row.id) ?? null })) : rows;
 }
 
 function isSessionPageStatus(value: string): value is SessionPageStatus {
@@ -608,7 +636,8 @@ async function getSessionRow(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 400, { error: "bad_request", message: "principalId and id or threadRef required" });
   const session = await app.sessionRow(principalId, id ? { id } : { threadRef });
   if (!session) return sendJson(res, 404, { error: "not_found" });
-  return sendJson(res, 200, { session: session });
+  const [row] = withPreviews([session], await sidebarPreviews(ctx, principalId, [session]));
+  return sendJson(res, 200, { session: row });
 }
 
 async function searchResources(ctx: ApiCtx): Promise<void> {
@@ -762,7 +791,10 @@ async function listAgentApis(ctx: ApiCtx): Promise<void> {
     renderAgentApis(
       capability,
       { isAdmin: admin.isAdmin, ...(admin.role ? { role: admin.role } : {}) },
-      { swarmsEnabled: Boolean(await ctx.app.swarms?.enabledFor(capability.actorId)) },
+      {
+        swarmsEnabled: Boolean(await ctx.app.swarms?.enabledFor(capability.actorId)),
+        personasEnabled: Boolean(await ctx.app.personas?.enabledFor(capability.actorId)),
+      },
     ),
   );
 }
@@ -1113,6 +1145,12 @@ async function createSkill(ctx: ApiCtx): Promise<void> {
   if (capability) {
     principalId = capability.actorId;
     homeScope = capability.scopeId;
+    if (typeof b.scopeId === "string" && b.scopeId !== homeScope) {
+      if (!(await app.managesScope(principalId, b.scopeId as ScopeId))) {
+        return sendJson(res, 403, { error: "forbidden", message: "you cannot create a skill in that context" });
+      }
+      homeScope = b.scopeId as ScopeId;
+    }
   } else {
     if (typeof b.principalId !== "string" || !b.principalId) {
       return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
@@ -1521,6 +1559,7 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...withActor("body.principalId", [
     { method: "POST", path: "/v1/sessions/:id/title", auth: "source", handle: regenerateSessionTitle },
     { method: "POST", path: "/v1/sessions/:id/expand", auth: "source", handle: expandSideChat },
+    { method: "POST", path: "/v1/sessions", auth: "source", handle: spawnWebSession },
     { method: "POST", path: "/v1/sessions/:id/fork", auth: "source", handle: forkSession },
     { method: "POST", path: "/v1/sessions/:id/detach", auth: "source", handle: detachSession },
     { method: "POST", path: "/v1/sessions/:id/goal/cancel", auth: "source", handle: cancelSessionGoal },

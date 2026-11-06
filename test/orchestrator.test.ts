@@ -7,6 +7,8 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp as buildAppRaw } from "./support/build-app.ts";
+import { mockHeldTurns } from "./support/mock-agent.ts";
+import { approvalCardId } from "../src/core/approval-id.ts";
 import { scopeId, type Destination, type TurnRequest } from "../src/types.ts";
 import { TEST_CAPABILITY_SECRET, testConfig } from "./support/test-config.ts";
 import { runNowSettled, settle } from "./support/settle.ts";
@@ -2926,6 +2928,101 @@ test("disabling a grant mode suspends existing grants until it is re-enabled", a
   const restored = await app.turn(dm("!run git push --force origin release"));
   assert.equal(restored.status, "ok", "re-enabling the mode restores the grant without re-approval");
 });
+
+test("approving a declared call runs the stored call, not whatever the agent proposes next", async () => {
+  const { app, sessions } = freshApp();
+  const proposed = { to: "guests@example.com", sends_at: "2026-11-11T12:00:00+08:00" };
+  const drifted = { to: "guests@example.com", sends_at: "2026-11-11T04:00:00+00:00" };
+  const first = await app.turn(dm(`!declared ${JSON.stringify(proposed)}`));
+  assert.equal(first.status, "pending_approval");
+  const { requestId } = first.pendingApprovals![0]!;
+  assert.equal(first.pendingApprovals![0]!.executesOnApprove, true);
+
+  const approved = await app.turn(
+    dm(`!declared ${JSON.stringify(drifted)}`, { approval: { requestId, approved: true } }),
+  );
+  assert.equal(approved.status, "ok");
+  assert.equal(approved.reply, `sent ${JSON.stringify(proposed)}`, "the click ran the exact call the card showed");
+  assert.equal(await app.getApproval(requestId), null, "the card is spent");
+
+  const items = await sessions.getItems(approved.sessionId!);
+  const ran = items.filter((item) => item.body.approvedRequestId === requestId);
+  assert.deepEqual(
+    ran.map((item) => item.kind),
+    ["ToolCall", "ToolResult"],
+    "the approved call is recorded as one call and its result",
+  );
+});
+
+test("a withdrawn approval card can no longer be approved", async () => {
+  const { app } = freshApp();
+  const args = { to: "a@example.com", body: "hi" };
+  const raised = await app.turn(dm(`!declared-noted ${JSON.stringify(args)}`));
+  assert.equal(raised.status, "ok");
+  const card = raised.pendingApprovals![0]!;
+  assert.equal(card.blocksInput, false, "the person can keep talking while the card waits");
+  const cardId = approvalCardId(card.approvalKey!);
+
+  const withdrawn = await app.turn(dm(`!withdraw ${cardId}`));
+  assert.equal(withdrawn.reply, "withdrew example_send");
+  assert.equal(await app.getApproval(card.requestId), null);
+
+  const late = await app.turn(
+    dm(`!declared-noted ${JSON.stringify(args)}`, { approval: { requestId: card.requestId, approved: true } }),
+  );
+  assert.equal(late.status, "refused", "nothing runs for a withdrawn card");
+});
+
+for (const approved of [true, false]) {
+  test(`${approved ? "approving" : "denying"} while the requester's next turn runs hands the decision to that run`, async () => {
+    const { app, signals } = freshApp();
+    const args = { to: "a@example.com", body: approved ? "hi" : "bye" };
+    const raised = await app.turn(dm(`!declared-noted ${JSON.stringify(args)}`));
+    const { requestId } = raised.pendingApprovals![0]!;
+    const hold = `live-${approved}`;
+    const holding = app.turn(dm(`!hold ${hold}`));
+    let live = mockHeldTurns.get(hold);
+    for (let i = 0; !live && i < 200; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      live = mockHeldTurns.get(hold);
+    }
+    assert.ok(live?.resolveSteeredApproval, "the live run exposes the approval hook");
+    try {
+      const routed = await app.turn(
+        dm(`!declared-noted ${JSON.stringify(args)}`, {
+          async: true,
+          approval: { requestId, approved, ...(approved ? { scope: "once" as const } : {}) },
+        }),
+      );
+      assert.equal(routed.status, "queued");
+      assert.equal(routed.steered, true, "the click joins the live run instead of queueing behind it");
+      assert.equal(routed.runId, live.runId);
+
+      const delivered = (await signals.pending(live.runId!)).find(({ signal }) => signal.request?.approval);
+      assert.ok(delivered, "the decision waits on the live run's signal queue");
+      const outcome = await live.resolveSteeredApproval(delivered.signal.request!);
+      assert.equal(await app.getApproval(requestId), null, "the card is spent either way");
+      if (approved) {
+        assert.equal(outcome.kind, "run");
+        assert.deepEqual(outcome.kind === "run" ? outcome.call : null, {
+          ...(outcome.kind === "run" ? { callId: outcome.call.callId } : {}),
+          requestId,
+          tool: "example_send",
+          input: args,
+        });
+      } else assert.equal(outcome.kind, "denied");
+      assert.equal(
+        (await live.resolveSteeredApproval(delivered.signal.request!)).kind,
+        "ignored",
+        "a second delivery of the same click runs nothing",
+      );
+      await signals.acknowledge(live.runId!, delivered.id);
+    } finally {
+      mockHeldTurns.release(hold);
+      await holding;
+    }
+  });
+}
 
 test("a tool that declares approval runs once for the exact approved arguments", async () => {
   const { app, sessions } = freshApp();

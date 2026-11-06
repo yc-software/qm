@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { executesOnApprove } from "../core/orchestrator/approvals.ts";
 import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
 import type {
   PendingApproval,
@@ -168,6 +169,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
       ...(r.grantModes ? { grantModes: r.grantModes } : {}),
       blocksInput: r.blocksInput !== false,
       ...(r.kind === "approval" ? { kind: r.kind } : {}),
+      ...executesOnApprove(r),
     }));
   }
 
@@ -404,11 +406,12 @@ export function createAppHelpers(deps: AppDeps, app: App) {
       scopeId("org", orgIdOf()),
     ]);
     try {
-      const [sessionScopes, channels, groups, projects] = await Promise.all([
+      const [sessionScopes, channels, groups, projects, personas] = await Promise.all([
         deps.sessions ? scopesForViewer(principalId) : Promise.resolve([]),
         deps.directory ? deps.directory.listChannelsFor(principalId) : Promise.resolve([]),
         deps.directory?.listGroupsFor?.(principalId) ?? Promise.resolve([]),
         projectsForViewer(principalId),
+        deps.personas?.list(principalId),
       ]);
       const historical = new Set(sessionScopes.map((scope) => scope.scopeId));
       for (const channel of channels) {
@@ -417,6 +420,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
       }
       for (const groupId of groups) scopes.add(scopeId("group", groupId));
       for (const project of projects) scopes.add(project.scopeId);
+      if (personas?.status === "ok") for (const persona of personas.value) scopes.add(scopeId("persona", persona.id));
     } catch (error) {
       swallow("app: current resource scopes for viewer", error);
     }
@@ -432,6 +436,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     ...(deps.directory ? { directory: deps.directory } : {}),
     ...(deps.identity ? { identity: deps.identity } : {}),
     ...(deps.teams ? { teams: deps.teams } : {}),
+    ...(deps.personas ? { personas: deps.personas } : {}),
   };
 
   const principalCanReadScope = createCanReadScope(scopeMembershipDeps);
@@ -759,6 +764,17 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     }
     for (const signal of await deps.signals.takePending(runId)) {
       if (signal.kind === "abort" || signal.kind === "client_result") continue;
+      if (signal.request?.approval) {
+        let replayRunId: string | undefined;
+        try {
+          const { redeliveryKey: _redeliveryKey, clientTools: _clientTools, ...decision } = signal.request;
+          replayRunId = (await app.turn({ ...decision, async: true })).runId;
+        } catch (err) {
+          swallow(`signals: approval-decision replay for run ${runId}`, err);
+        }
+        drained.push({ signal, ...(replayRunId ? { replayRunId } : {}) });
+        continue;
+      }
       let replayRunId: string | undefined;
       let replayOutcomeKnown = true;
       if (signal.request) {

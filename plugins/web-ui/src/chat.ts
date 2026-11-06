@@ -81,6 +81,7 @@ import {
   stopThreadRun,
   api,
   approvalBlocksComposer,
+  approvalDecidableDuringRun,
   createRunSlot,
   hasLiveRun,
   requestStop,
@@ -208,6 +209,7 @@ import { ackKey, subagentRows, subagentSummary, visibleSubagents, type SubagentR
 import { createSwarmStrip } from "./swarm-strip.ts";
 import { newChatDraftKey, saveDraft, storedDraft } from "./drafts";
 import { createForkOriginController, forkOriginView } from "./fork-origin";
+import { sessionPersonaChip } from "./personas";
 import { base64ToBytes } from "./paste-text";
 import { pageAnchor, storeTranscript } from "./transcript-cache";
 import { tip } from "./tooltip";
@@ -815,8 +817,31 @@ export function createChatSurface(
     teardownActiveChat();
   }
 
+  async function approveDuringRun(agent: Agent, decision: ApprovalDecision): Promise<void> {
+    if (chatState.resolvingApprovals.has(decision.requestId)) return;
+    chatState.resolvingApprovals.add(decision.requestId);
+    ctx.composer.state.error = "";
+    drawActiveChat(agent);
+    try {
+      await resolveApproval(decision);
+    } catch (err) {
+      if (agent === chatState.agent)
+        ctx.composer.state.error = err instanceof Error ? err.message : "Could not send the approval.";
+    } finally {
+      if (agent === chatState.agent) {
+        chatState.resolvingApprovals.delete(decision.requestId);
+        drawActiveChat(agent);
+      }
+    }
+  }
+
   async function approveCommand(agent: Agent, decision: ApprovalDecision): Promise<void> {
-    if (agent !== chatState.agent || !chatState.threadRef || agent.state.isStreaming) return;
+    if (agent !== chatState.agent || !chatState.threadRef) return;
+    if (agent.state.isStreaming) {
+      if (activePendingApprovals().some((approval) => approval.requestId === decision.requestId))
+        await approveDuringRun(agent, decision);
+      return;
+    }
     if (chatState.resolvingApprovals.size > 0) return;
     chatState.resolvingApprovals.add(decision.requestId);
     approvalsEpoch++;
@@ -869,11 +894,13 @@ export function createChatSurface(
 
   function activePendingApprovals(): PendingApproval[] {
     const agent = chatState.agent;
-    if (!agent || agent.state.isStreaming) return [];
+    if (!agent) return [];
+    const streaming = agent.state.isStreaming;
     const byId = new Map<string, PendingApproval>();
     for (const m of agent.state.messages) {
       if ((m as { role?: string }).role !== "assistant") continue;
       for (const approval of (m as AssistantWork).work?.pendingApprovals ?? []) {
+        if (streaming && !approvalDecidableDuringRun(approval)) continue;
         if (!chatState.resolvingApprovals.has(approval.requestId)) byId.set(approval.requestId, approval);
       }
     }
@@ -1838,6 +1865,7 @@ export function createChatSurface(
             onClick: () => void forkOriginController.navigate(),
           }
         : null,
+      persona: sessionPersonaChip(currentSession, () => drawActiveChat()),
       onCrumb: crumb && scope ? () => openProjectPage(scope) : null,
       toolCount: scope ? (t) => scopeToolCount(t, scope, () => drawActiveChat()) : null,
       onTool: (tool) => {

@@ -35,6 +35,7 @@ test("a subagent shows its delegated tasks while the parent's completion wake st
     sessions: built.sessions,
     runs: built.runs,
     signals: built.signals,
+    steerRun: (run, signal) => built.app.steerRun(run, signal),
     mailbox: createSessionMailbox(testMap<SessionMessage>()),
     maxAttempts: 1,
   }).forTurn({
@@ -109,6 +110,7 @@ test("human-origin delegated input is screened before model execution", async (t
     sessions: built.sessions,
     runs: built.runs,
     signals: built.signals,
+    steerRun: (run, signal) => built.app.steerRun(run, signal),
     mailbox: createSessionMailbox(testMap<SessionMessage>()),
     maxAttempts: 1,
   }).forTurn({ session, scopeId: session.scopeId, request: { ...parent.request, runId: parent.id } });

@@ -34,11 +34,13 @@ const lock = testAdvisoryLock();
 async function syscallsRig() {
   const sessions = createPostgresSessionStore(testDatabaseUrl());
   const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const signals = createPostgresRunSignalStore(testDatabaseUrl());
   const factory = createSessionSyscalls({
     mailbox: createSessionMailbox(testMap<SessionMessage>()),
     sessions,
     runs,
-    signals: createPostgresRunSignalStore(testDatabaseUrl()),
+    signals,
+    steerRun: async (run, signal) => ({ sent: await signals.send(run.id, signal) }),
     advisoryLock: testAdvisoryLock(),
     maxAttempts: 3,
   });

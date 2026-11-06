@@ -14,6 +14,8 @@ function deliveryOutcome(
     return result.busy
       ? `Queued for ${name}: it is busy and starts on this when its current turn ends.`
       : `Woke ${name}; it is working on this now.`;
+  if (result.delivered === "steered")
+    return `Delivered into ${name}'s running turn; it sees this at its next step. Don't re-send it.`;
   if (result.delivered === "interrupted")
     return withText
       ? `Stopped ${name}'s current run; it starts on this message next. Its own subagents keep running.`
@@ -35,7 +37,7 @@ export function sessionTools(kit: ToolKit) {
     description:
       "Spawn and coordinate subagents: background workers that cannot see this conversation. Brief one like a capable colleague (goal, why it matters, what you know, real limits) and leave the approach to them; its final answer arrives as an internal message. " +
       "open: start one with `task`. " +
-      'send_message: message a subagent, sibling or parent (target="parent"); it wakes the recipient unless wake:false. Wake when you need it to act or answer (more work, a re-review, a question); use wake:false for FYI it can act on later (status, a finding, an ack), which an idle recipient won\'t see until something else wakes it. interrupt:true stops its current run (not its subagents) and makes any text its next turn. ' +
+      'send_message: message a subagent, sibling or parent (target="parent"); it wakes the recipient unless wake:false, and a subagent already mid-turn gets it at its next step instead of after the turn ends. Wake when you need it to act or answer (more work, a re-review, a question); use wake:false for FYI it can act on later (status, a finding, an ack), which an idle recipient won\'t see until something else wakes it. interrupt:true stops its current run (not its subagents) and makes any text its next turn. ' +
       "read: list subagents or read one's transcript. " +
       (delegateWork
         ? "Delegate substantial work, then end this turn promptly; a subagent's completion wakes you with the result. Do not wait or poll. "

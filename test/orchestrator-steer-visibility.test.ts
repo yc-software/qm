@@ -120,3 +120,35 @@ test("a withheld steer is recorded as a notice naming its sender, never as their
     exercise = undefined;
   }
 });
+
+test("a session's steer reaches the model as its stamped message after a mid-turn note; a plain steer is unchanged", async () => {
+  const built = buildApp(testConfig());
+  const prompts: Array<string | undefined> = [];
+  exercise = async (turn) => {
+    const request: TurnRequest = {
+      surface: "test",
+      actor: { externalId: "U1" },
+      conversation: { kind: "dm", threadRef: "session-steer-note" },
+      origin: { kind: "automation", screenData: "stamped" },
+      sessionSenderId: "S-sender",
+      text: '<subagent-message from="lead" fromSessionId="S-sender">\nuse v2\n</subagent-message>',
+      displayText: "use v2",
+    };
+    prompts.push((await turn.prepareSteer?.("use v2", request))?.text);
+    prompts.push((await turn.prepareSteer?.("plain words"))?.text);
+  };
+  try {
+    const result = await built.app.turn({
+      surface: "test",
+      actor: { externalId: "U1" },
+      conversation: { kind: "dm", threadRef: "session-steer-note" },
+      text: "start",
+    });
+    assert.equal(result.status, "ok");
+    const stamped = '<subagent-message from="lead" fromSessionId="S-sender">\nuse v2\n</subagent-message>';
+    assert.ok(prompts[0]?.endsWith(`\n${stamped}`), "the model reads the stamped message, after a mid-turn note");
+    assert.equal(prompts[1], "plain words");
+  } finally {
+    exercise = undefined;
+  }
+});

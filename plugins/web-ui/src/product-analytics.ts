@@ -1,4 +1,5 @@
 import type { Me } from "./shell-state";
+import { reportHandledError } from "./browser-errors.ts";
 import type { PostHog, PostHogConfig } from "posthog-js";
 
 let client: PostHog | undefined;
@@ -29,6 +30,7 @@ const allowedProperties = new Set([
   "surface",
   "view",
 ]);
+const snapshotProperties = new Set(["$snapshot_data", "$snapshot_bytes", "$snapshot_host"]);
 
 export function stopAnalytics(): void {
   generation++;
@@ -48,7 +50,11 @@ export async function initializeAnalytics(me: Me, view = "chats"): Promise<void>
   lastCapturedView = undefined;
   if (!me.analytics?.apiKey || me.impersonatedBy) return;
   try {
+    const recorder = import("posthog-js/dist/posthog-recorder").catch((error: unknown) =>
+      reportHandledError("analytics: session recorder load", error),
+    );
     const { default: posthog } = await import("posthog-js");
+    await recorder;
     if (current !== generation) return;
     const options: Partial<PostHogConfig> = {
       api_host: me.analytics.host,
@@ -59,17 +65,19 @@ export async function initializeAnalytics(me: Me, view = "chats"): Promise<void>
       capture_pageleave: false,
       capture_exceptions: false,
       capture_performance: false,
-      disable_session_recording: true,
+      enable_recording_console_log: false,
+      session_recording: { recordHeaders: false, recordBody: false },
       disable_surveys: true,
       disable_external_dependency_loading: true,
-      advanced_disable_flags: true,
+      advanced_disable_feature_flags: true,
       person_profiles: "identified_only",
       save_referrer: false,
       save_campaign_params: false,
       before_send: (event) => {
         if (!event) return null;
+        const snapshot = event.event === "$snapshot";
         for (const key of Object.keys(event.properties)) {
-          if (!allowedProperties.has(key)) delete event.properties[key];
+          if (!allowedProperties.has(key) && !(snapshot && snapshotProperties.has(key))) delete event.properties[key];
         }
         delete event.properties.$set;
         delete event.properties.$set_once;
@@ -87,7 +95,8 @@ export async function initializeAnalytics(me: Me, view = "chats"): Promise<void>
     posthog.register({ company_id: me.org, surface: "web" });
     client = posthog;
     capturePageview(currentView);
-  } catch {
+  } catch (error) {
+    reportHandledError("analytics: initialization", error);
     client = undefined;
   }
 }

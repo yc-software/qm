@@ -152,6 +152,7 @@ export interface CoreSession {
   color?: string | null;
   unread?: boolean;
   lastActivityAt?: number;
+  lastUserPreview?: string | null;
   working?: boolean;
   awaitingInput?: boolean;
   lastTurnFailed?: boolean;
@@ -168,6 +169,7 @@ export interface CoreSession {
   subagents?: { running: number; waiting: number };
   workingSince?: number;
   purpose?: string;
+  personaId?: string;
 }
 
 export interface SessionPageQuery {
@@ -442,8 +444,13 @@ function withItems<T extends { items: Item[] }>(page: T): T {
 
 const resolvedCredentialApprovals = new Set<string>();
 
+const decidedDuringRunApprovals = new Set<string>();
+
 export function unresolvedApprovals(approvals: PendingApproval[]): PendingApproval[] {
-  const pending = approvals.filter((approval) => !resolvedCredentialApprovals.has(approval.requestId));
+  const pending = approvals.filter(
+    (approval) =>
+      !resolvedCredentialApprovals.has(approval.requestId) && !decidedDuringRunApprovals.has(approval.requestId),
+  );
   return pending.length === approvals.length ? approvals : pending;
 }
 
@@ -523,6 +530,11 @@ export interface PendingApproval {
   matched?: string;
   grantModes?: { session: boolean; always: boolean };
   blocksInput?: boolean;
+  executesOnApprove?: boolean;
+}
+
+export function approvalDecidableDuringRun(approval: PendingApproval): boolean {
+  return approval.executesOnApprove === true && approval.blocksInput === false;
 }
 
 export function approvalBlocksComposer(approval: PendingApproval): boolean {
@@ -1150,15 +1162,19 @@ export async function resolveApproval(decision: ApprovalDecision): Promise<strin
     resolvedCredentialApprovals.add(decision.requestId);
     return "";
   }
-  const submit = await api<{ runId?: string }>(`/api/approvals/${encodeURIComponent(decision.requestId)}`, {
-    method: "POST",
-    body: JSON.stringify({ approved: decision.approved, ...(decision.scope ? { scope: decision.scope } : {}) }),
-  }).catch((err: unknown) => {
+  const submit = await api<{ runId?: string; steered?: boolean }>(
+    `/api/approvals/${encodeURIComponent(decision.requestId)}`,
+    {
+      method: "POST",
+      body: JSON.stringify({ approved: decision.approved, ...(decision.scope ? { scope: decision.scope } : {}) }),
+    },
+  ).catch((err: unknown) => {
     if (err instanceof ApiError && err.status === 404) return null;
     throw err;
   });
   if (!submit) return null;
   if (!submit.runId) throw new Error("Could not continue after the approval.");
+  if (submit.steered) decidedDuringRunApprovals.add(decision.requestId);
   return submit.runId;
 }
 

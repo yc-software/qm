@@ -273,7 +273,7 @@ function recordedWireArguments(argumentsJson: string, call: Item): ToolCall["arg
 }
 
 export function recordedToolArguments(call: Pick<Item, "body">): Record<string, unknown> {
-  const { rerun, result: _r, ...recorded } = visibleBody(call);
+  const { rerun, result: _r, approvedRequestId: _a, ...recorded } = visibleBody(call);
   const input = (rerun as { input?: unknown } | undefined)?.input;
   if (isObj(input)) return { ...input, retrySafe: true };
   if (typeof recorded.bytes !== "number" || typeof recorded.text === "string") return recorded;

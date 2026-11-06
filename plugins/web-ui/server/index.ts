@@ -1,6 +1,7 @@
 import "./instrument.ts";
 import { handleVoiceRoute, sweepDictationSpool } from "./voice-routes.ts";
 import { browserErrorConfig } from "./browser-error-config.ts";
+import { productAnalyticsConfig } from "./analytics-config.ts";
 import { reportBackendError } from "../../chassis/src/error-reporting.ts";
 import { errChain, swallow } from "../../chassis/src/errors.ts";
 import { appEditSlug } from "../src/app-edit.ts";
@@ -186,23 +187,7 @@ const CONTENT_TYPES: Record<string, string> = {
   ".wasm": "application/wasm",
 };
 
-const analyticsKey = process.env.POSTHOG_API_KEY?.trim();
-if (analyticsKey && !/^phc_[A-Za-z0-9]+$/.test(analyticsKey))
-  throw new Error("POSTHOG_API_KEY must be a public project ingestion token");
-const analyticsHost = new URL((analyticsKey && process.env.POSTHOG_HOST?.trim()) || "https://us.i.posthog.com");
-if (
-  analyticsKey &&
-  (analyticsHost.protocol !== "https:" ||
-    analyticsHost.username ||
-    analyticsHost.password ||
-    analyticsHost.search ||
-    analyticsHost.hash ||
-    analyticsHost.pathname !== "/")
-) {
-  throw new Error("POSTHOG_HOST must be an HTTPS origin");
-}
-const analyticsConfig = analyticsKey ? { apiKey: analyticsKey, host: analyticsHost.origin } : undefined;
-
+const { analytics: analyticsConfig, origins: analyticsOrigins } = productAnalyticsConfig(process.env);
 const browserErrors = browserErrorConfig(process.env);
 const browserErrorOrigin = browserErrors ? new URL(browserErrors.dsn).origin : undefined;
 
@@ -212,7 +197,7 @@ const SPA_CSP = [
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https:",
   "font-src 'self' data:",
-  `connect-src 'self'${analyticsConfig ? ` ${analyticsConfig.host}` : ""}${browserErrorOrigin ? ` ${browserErrorOrigin}` : ""}`,
+  `connect-src 'self'${analyticsOrigins.map((origin) => ` ${origin}`).join("")}${browserErrorOrigin ? ` ${browserErrorOrigin}` : ""}`,
   "frame-src 'self' data: https:",
   "worker-src 'self' blob:",
   "frame-ancestors 'self'",
@@ -1132,6 +1117,12 @@ interface WebCtx {
   params: Record<string, string>;
 }
 
+async function relayWithPrincipal(c: WebCtx, method: HttpMethod, path: string): Promise<void> {
+  const body = await readJson<Record<string, unknown>>(c.req, c.res);
+  if (!body) return;
+  return relayCore(c.res, method, path, JSON.stringify({ ...body, principalId: c.user }));
+}
+
 type WebRoute = { handle: (c: WebCtx) => unknown } & (
   { method: string; path: string } | { match: (method: string, pathname: string) => boolean }
 );
@@ -1724,6 +1715,69 @@ const apiRoutes: readonly WebRoute[] = [
         "DELETE",
         `/v1/projects/${encodeURIComponent(id)}/members/${encodeURIComponent(memberId)}`,
         JSON.stringify({ principalId: user }),
+      );
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/personas",
+    handle: (c) => relayCore(c.res, "GET", `/v1/personas?principalId=${encodeURIComponent(c.user)}`),
+  },
+  {
+    method: "GET",
+    path: "/api/personas/:id",
+    handle: (c) =>
+      relayCore(
+        c.res,
+        "GET",
+        `/v1/personas/${encodeURIComponent(c.params.id!)}?principalId=${encodeURIComponent(c.user)}`,
+      ),
+  },
+  {
+    method: "POST",
+    path: "/api/personas",
+    handle: (c) => relayWithPrincipal(c, "POST", "/v1/personas"),
+  },
+  {
+    method: "PATCH",
+    path: "/api/personas/:id",
+    handle: (c) => relayWithPrincipal(c, "PATCH", `/v1/personas/${encodeURIComponent(c.params.id!)}`),
+  },
+  {
+    method: "DELETE",
+    path: "/api/personas/:id",
+    handle: (c) =>
+      relayCore(
+        c.res,
+        "DELETE",
+        `/v1/personas/${encodeURIComponent(c.params.id!)}`,
+        JSON.stringify({ principalId: c.user }),
+      ),
+  },
+  {
+    method: "PUT",
+    path: "/api/personas/:id/access",
+    handle: (c) => relayWithPrincipal(c, "PUT", `/v1/personas/${encodeURIComponent(c.params.id!)}/access`),
+  },
+  {
+    method: "POST",
+    path: "/api/sessions",
+    handle: (c) => relayWithPrincipal(c, "POST", "/v1/sessions"),
+  },
+  {
+    method: "PUT",
+    path: "/api/sessions/:id/persona",
+    handle: (c) => relayWithPrincipal(c, "PUT", `/v1/sessions/${encodeURIComponent(c.params.id!)}/persona`),
+  },
+  {
+    method: "GET",
+    path: "/api/directory/channels",
+    handle: (c) => {
+      const q = (c.url.searchParams.get("q") ?? "").trim();
+      return relayCore(
+        c.res,
+        "GET",
+        `/v1/directory/channels?principalId=${encodeURIComponent(c.user)}&q=${encodeURIComponent(q)}`,
       );
     },
   },

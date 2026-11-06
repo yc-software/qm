@@ -17,6 +17,7 @@ import {
   type OAuthState,
   ACCOUNT_TYPES,
   isAccountType,
+  oauthCallbackUrl,
 } from "../../connectors/oauth.ts";
 import { providerTokenStatuses } from "../../credentials/connector-status.ts";
 import type { ConnectorTokenStore, DerivedOAuthAuth, OAuthTokenStatus } from "../../credentials/keychain.ts";
@@ -296,7 +297,7 @@ async function consentMint(ctx: ApiCtx): Promise<void> {
     });
   }
   let redirectUri = "";
-  if (base) redirectUri = `${base}/v1/connectors/oauth/${provider}/callback`;
+  if (base) redirectUri = oauthCallbackUrl(base, provider);
   else if (typeof b.redirectUri === "string") redirectUri = b.redirectUri;
   if (!redirectUri)
     return sendJson(res, 400, {
