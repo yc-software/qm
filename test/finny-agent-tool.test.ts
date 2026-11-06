@@ -67,6 +67,18 @@ test("finny schema accepts only narrow content and evidence actions", () => {
   const schema = finnyTool().parameters;
   const valid = [
     { action: "create_plan", plan },
+    {
+      action: "create_plan",
+      plan: { ...plan, clarifications: [{ question: "Basis?", answer: "Contracts" }] },
+      materialClarification: {
+        question: "Basis?",
+        options: [
+          { id: "contracts", label: "Contracts" },
+          { id: "invoices", label: "Invoices", description: "Use issued invoices" },
+        ],
+        recommendedOptionId: "contracts",
+      },
+    },
     { action: "status", jobId: "job-1" },
     {
       action: "artifact_ready",
@@ -115,11 +127,26 @@ test("finny schema rejects model-supplied authority and escalation fields", () =
     "resolution",
     "retryLimit",
     "escalationLimit",
+    "requestId",
+    "originThreadRef",
+    "authorizedActorId",
   ];
   for (const field of forbidden) {
     assert.equal(Check(schema, { ...base, [field]: field === "requiredChecks" ? [] : "forbidden" }), false, field);
   }
   assert.equal(Check(schema, { action: "create_plan", plan: { ...plan, scopeId: "org:acme" } }), false);
+  assert.equal(
+    Check(schema, {
+      action: "create_plan",
+      plan,
+      materialClarification: {
+        question: "Basis?",
+        options: [{ id: "only", label: "Only" }],
+        recommendedOptionId: "only",
+      },
+    }),
+    false,
+  );
 });
 
 const execute = async (tool: ReturnType<typeof finnyTool>, id: string, params: unknown) =>

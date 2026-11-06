@@ -41,6 +41,7 @@ export interface FinnyApprovalRequest {
   planDigest: string;
   originThreadRef: string;
   authorizedActorId: string;
+  readyAt?: number;
   decidedAt?: number;
   job: FinnyJob;
 }

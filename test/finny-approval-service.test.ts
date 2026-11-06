@@ -6,6 +6,7 @@ import { createAndDeliverFinnyClarification } from "../src/finny/clarification-d
 import { createPostgresDeliveryStore } from "../src/delivery/postgres-delivery-store.ts";
 import { initialFinnyPolicy } from "../src/finny/policy.ts";
 import { createPostgresFinnyStore } from "../src/finny/postgres-store.ts";
+import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 
 const plan = {
@@ -18,7 +19,7 @@ const plan = {
   certification: "All required checks pass",
   deliverable: "Certified close pack",
   destination: "Origin thread",
-  clarifications: [],
+  clarifications: [{ question: "Which accounting basis should be used?", answer: "Signed contracts" }],
 };
 
 const findingPolicy = {
@@ -156,6 +157,12 @@ test("pending recovers a durable material clarification with persisted options",
     findingPolicy,
     originThreadRef: "slack:C-finance:100.200",
   });
+  await store.createApprovalRequest({
+    scopeId,
+    jobId,
+    requestId: randomUUID(),
+    authorizedActorId: "approver@example.com",
+  });
   await store.createClarificationRequest({
     scopeId,
     jobId,
@@ -202,6 +209,12 @@ test("clarification selection is bound to the exact actor, origin, and persisted
     findingPolicy,
     originThreadRef: "slack:C-finance:100.200",
   });
+  await store.createApprovalRequest({
+    scopeId,
+    jobId,
+    requestId: randomUUID(),
+    authorizedActorId: "approver@example.com",
+  });
   await store.createClarificationRequest({
     scopeId,
     jobId,
@@ -230,7 +243,11 @@ test("clarification selection is bound to the exact actor, origin, and persisted
 
   assert.deepEqual(outcome, {
     kind: "result",
-    card: { title: "Clarification recorded", status: "passed", summary: "Issued invoices" },
+    card: {
+      title: "Clarification recorded",
+      status: "blocked",
+      summary: "Revision is required before this plan can be approved. Submit a revised plan to continue.",
+    },
   });
   assert.deepEqual((await store.getClarificationRequest(requestId))?.decision, {
     kind: "option",
@@ -272,6 +289,12 @@ test("clarification creation durably enqueues its opaque request to the exact de
     },
   };
 
+  await store.createApprovalRequest({
+    scopeId,
+    jobId,
+    requestId: randomUUID(),
+    authorizedActorId: "approver@example.com",
+  });
   const first = await createAndDeliverFinnyClarification(input);
   const replay = await createAndDeliverFinnyClarification(input);
   const pending = await deliveries.pending("slack");
@@ -300,13 +323,22 @@ test("clarification rejects unauthorized actors, copied cards, and unpersisted b
     findingPolicy,
     originThreadRef: "slack:C-finance:100.200",
   });
+  await store.createApprovalRequest({
+    scopeId,
+    jobId,
+    requestId: randomUUID(),
+    authorizedActorId: "approver@example.com",
+  });
   await store.createClarificationRequest({
     scopeId,
     jobId,
     requestId,
     authorizedActorId: "approver@example.com",
     question: "Which accounting basis should be used?",
-    options: [{ id: "contracts", label: "Signed contracts" }],
+    options: [
+      { id: "contracts", label: "Signed contracts" },
+      { id: "invoices", label: "Issued invoices" },
+    ],
     recommendedOptionId: "contracts",
     idempotencyKey: "clarification:guards",
   });
@@ -337,8 +369,8 @@ test("clarification rejects unauthorized actors, copied cards, and unpersisted b
     kind: "result",
     card: {
       title: "Clarification recorded",
-      status: "passed",
-      summary: "Other selected; follow-up required.",
+      status: "blocked",
+      summary: "Revision is required before this plan can be approved. Submit a revised plan to continue.",
     },
   });
   assert.deepEqual((await store.getClarificationRequest(requestId))?.decision, { kind: "other" });
@@ -407,10 +439,19 @@ test("clarification request idempotency keys cannot be reused for different mate
     requestId: randomUUID(),
     authorizedActorId: "approver@example.com",
     question: "Which accounting basis should be used?",
-    options: [{ id: "contracts", label: "Signed contracts" }],
+    options: [
+      { id: "contracts", label: "Signed contracts" },
+      { id: "invoices", label: "Issued invoices" },
+    ],
     recommendedOptionId: "contracts",
     idempotencyKey: "clarification:collision",
   };
+  await store.createApprovalRequest({
+    scopeId,
+    jobId,
+    requestId: randomUUID(),
+    authorizedActorId: "approver@example.com",
+  });
   await store.createClarificationRequest(input);
 
   await assert.rejects(
@@ -501,6 +542,12 @@ test("clarification delivery rejects a destination outside the persisted origin 
     originThreadRef: "slack:C-finance:100.200",
   });
 
+  await store.createApprovalRequest({
+    scopeId,
+    jobId,
+    requestId: randomUUID(),
+    authorizedActorId: "approver@example.com",
+  });
   await assert.rejects(
     createAndDeliverFinnyClarification({
       store,
@@ -512,7 +559,10 @@ test("clarification delivery rejects a destination outside the persisted origin 
         requestId: randomUUID(),
         authorizedActorId: "approver@example.com",
         question: "Which accounting basis should be used?",
-        options: [{ id: "contracts", label: "Signed contracts" }],
+        options: [
+          { id: "contracts", label: "Signed contracts" },
+          { id: "invoices", label: "Issued invoices" },
+        ],
         recommendedOptionId: "contracts",
         idempotencyKey: "clarification:wrong-destination",
       },
@@ -591,4 +641,125 @@ test("a job cannot expose multiple pending approval requests", async () => {
     }),
     /unique|duplicate|approval/i,
   );
+});
+
+test("generic clarification atomically withdraws ready approval until the persisted recommendation", async () => {
+  const store = createPostgresFinnyStore(testDatabaseUrl());
+  for (const decision of [
+    { kind: "option" as const, optionId: "contracts" },
+    { kind: "option" as const, optionId: "invoices" },
+    { kind: "other" as const },
+  ]) {
+    const job = await store.createJob({
+      id: randomUUID(),
+      scopeId: "personal:approver@example.com",
+      plan: {
+        ...plan,
+        clarifications: [{ question: "Which accounting basis should be used?", answer: "Signed contracts" }],
+      },
+      policy: initialFinnyPolicy(),
+      findingPolicy,
+      originThreadRef: "slack:C-finance:100.200",
+    });
+    const approvalRequestId = randomUUID();
+    await store.createApprovalRequest({
+      scopeId: job.scopeId,
+      jobId: job.id,
+      requestId: approvalRequestId,
+      authorizedActorId: "approver@example.com",
+    });
+    assert.ok((await store.getApprovalRequest(approvalRequestId))?.readyAt);
+    const clarificationRequestId = randomUUID();
+    await store.createClarificationRequest({
+      scopeId: job.scopeId,
+      jobId: job.id,
+      requestId: clarificationRequestId,
+      authorizedActorId: "approver@example.com",
+      question: "Which accounting basis should be used?",
+      options: [
+        { id: "contracts", label: "Signed contracts" },
+        { id: "invoices", label: "Issued invoices" },
+      ],
+      recommendedOptionId: "contracts",
+      idempotencyKey: `clarification:${job.id}`,
+    });
+    assert.equal((await store.getApprovalRequest(approvalRequestId))?.readyAt, undefined);
+    await assert.rejects(
+      store.recordApproval({
+        scopeId: job.scopeId,
+        jobId: job.id,
+        requestId: approvalRequestId,
+        actorId: "approver@example.com",
+        action: "approve",
+        originThreadRef: job.originThreadRef,
+        decidedAt: Date.now(),
+      }),
+      /not ready/i,
+    );
+    await store.recordClarificationDecision({
+      requestId: clarificationRequestId,
+      actorId: "approver@example.com",
+      originThreadRef: job.originThreadRef,
+      decision,
+      decidedAt: Date.now(),
+    });
+    assert.equal(
+      (await store.getApprovalRequest(approvalRequestId))?.readyAt !== undefined,
+      decision.kind === "option" && decision.optionId === "contracts",
+    );
+    await assert.rejects(
+      store.createClarificationRequest({
+        scopeId: job.scopeId,
+        jobId: job.id,
+        requestId: randomUUID(),
+        authorizedActorId: "approver@example.com",
+        question: "Which accounting basis should be used?",
+        options: [
+          { id: "contracts", label: "Signed contracts" },
+          { id: "invoices", label: "Issued invoices" },
+        ],
+        recommendedOptionId: "contracts",
+        idempotencyKey: `replacement:${job.id}`,
+      }),
+      /already has/i,
+    );
+  }
+});
+
+test("approval readiness migration preserves legacy clarification behavior", async () => {
+  const url = testDatabaseUrl();
+  const store = createPostgresFinnyStore(url);
+  const job = await store.createJob({
+    id: randomUUID(),
+    scopeId: "personal:approver@example.com",
+    plan,
+    policy: initialFinnyPolicy(),
+    findingPolicy,
+    originThreadRef: "slack:C-finance:100.200",
+  });
+  const approvalRequestId = randomUUID();
+  await store.createApprovalRequest({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    requestId: approvalRequestId,
+    authorizedActorId: "approver@example.com",
+  });
+  await store.createClarificationRequest({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    requestId: randomUUID(),
+    authorizedActorId: "approver@example.com",
+    question: "Which accounting basis should be used?",
+    options: [
+      { id: "contracts", label: "Signed contracts" },
+      { id: "invoices", label: "Issued invoices" },
+    ],
+    recommendedOptionId: "contracts",
+    idempotencyKey: `legacy:${job.id}`,
+  });
+  const migrationDb = createPgPool(url);
+  await migrationDb.q("ALTER TABLE finny_approval_requests DROP COLUMN ready_at");
+  await migrationDb.q("DELETE FROM qm_schema_migrations WHERE id='finny/store/0005-approval-readiness'");
+  const upgraded = createPostgresFinnyStore(url);
+  assert.ok((await upgraded.getApprovalRequest(approvalRequestId))?.readyAt);
 });

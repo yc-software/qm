@@ -211,6 +211,12 @@ export interface FinnyClarificationOption {
   description?: string;
 }
 
+export interface FinnyMaterialClarification {
+  question: string;
+  options: FinnyClarificationOption[];
+  recommendedOptionId: string;
+}
+
 export type FinnyClarificationDecision = { kind: "option"; optionId: string } | { kind: "other" };
 
 export interface FinnyClarificationRequest {

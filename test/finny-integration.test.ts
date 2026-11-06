@@ -155,6 +155,75 @@ test("parent create_plan persists server authority before idempotent native plan
   assert.equal(delivery.idempotencyKey, "finny-plan:id-2");
 });
 
+test("material clarification is persisted before delivery while the plan card stays withheld", async () => {
+  const { factory, calls } = harness();
+  const service = await factory.forTurn(parent);
+  assert.ok(service);
+  const clarifiedPlan = {
+    ...plan,
+    clarifications: [{ question: "Which basis?", answer: "Signed contracts" }],
+  };
+  assert.equal(
+    await service.createPlan(clarifiedPlan, {
+      question: "Which basis?",
+      options: [
+        { id: "contracts", label: "Signed contracts" },
+        { id: "invoices", label: "Issued invoices" },
+      ],
+      recommendedOptionId: "contracts",
+    }),
+    "Finny plan id-1 is awaiting clarification.",
+  );
+  const intent: any = calls.find(([name]) => name === "createPlanIntent")?.[1];
+  assert.equal(intent.clarification.requestId, "id-3");
+  assert.equal(intent.clarification.authorizedActorId, "actor-1");
+  const delivery: any = calls.find(([name]) => name === "enqueue")?.[1];
+  assert.equal(delivery.destination.finnyPlanRequestId, "id-3");
+  assert.equal(delivery.idempotencyKey, "finny-clarification:id-3");
+  assert.equal(
+    calls.some(([name, value]: any) => name === "enqueue" && value.idempotencyKey === "finny-plan:id-2"),
+    false,
+  );
+});
+
+test("material clarification must match the immutable plan recommendation", async () => {
+  const { factory, calls } = harness();
+  const service = await factory.forTurn(parent);
+  assert.ok(service);
+  await assert.rejects(
+    service.createPlan(plan, {
+      question: "Which basis?",
+      options: [
+        { id: "contracts", label: "Signed contracts" },
+        { id: "invoices", label: "Issued invoices" },
+      ],
+      recommendedOptionId: "contracts",
+    }),
+    /unambiguously match/i,
+  );
+  await assert.rejects(
+    service.createPlan(
+      {
+        ...plan,
+        clarifications: [
+          { question: "Which basis?", answer: "Signed contracts" },
+          { question: "Which basis?", answer: "Issued invoices" },
+        ],
+      },
+      {
+        question: "Which basis?",
+        options: [
+          { id: "contracts", label: "Signed contracts" },
+          { id: "invoices", label: "Issued invoices" },
+        ],
+        recommendedOptionId: "contracts",
+      },
+    ),
+    /unambiguously match/i,
+  );
+  assert.equal(calls.length, 0);
+});
+
 test("worker service derives job authority from exact current session and run", async () => {
   const { factory, calls } = harness({ role: "producer" });
   const service = await factory.forTurn(parent);

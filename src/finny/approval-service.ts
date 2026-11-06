@@ -18,6 +18,7 @@ export function createFinnyApprovalService(deps: {
   store: FinnyStore;
   identity: Pick<IdentityService, "resolve" | "isInternal">;
   onApproved(input: FinnyApprovedPlan): Promise<void>;
+  onClarificationReady?(input: { scopeId: string; jobId: string }): Promise<void>;
 }): FinnyApprovalBridge {
   return {
     async pending(requestId) {
@@ -35,7 +36,8 @@ export function createFinnyApprovalService(deps: {
           },
         };
       }
-      if (request.decidedAt !== undefined || request.job.approval !== undefined) return null;
+      if (request.readyAt === undefined || request.decidedAt !== undefined || request.job.approval !== undefined)
+        return null;
       if (request.planDigest !== request.job.planDigest || request.originThreadRef !== request.job.originThreadRef)
         throw new Error("Finny approval request binding does not match the job");
       const { title, summary, phases, certification, deliverable, destination } = request.job.plan;
@@ -74,14 +76,27 @@ export function createFinnyApprovalService(deps: {
           decidedAt: Date.now(),
         });
         const decidedChoice = decided.decision;
-        const summary =
+        const selectedOption =
           decidedChoice?.kind === "option"
-            ? decided.options.find((option) => option.id === decidedChoice.optionId)?.label
-            : "Other selected; follow-up required.";
-        if (!summary) throw new Error("Finny clarification option is not available");
-        return { kind: "result", card: { title: "Clarification recorded", status: "passed", summary } };
+            ? decided.options.find((option) => option.id === decidedChoice.optionId)
+            : undefined;
+        const recommended = selectedOption?.id === decided.recommendedOptionId;
+        if (decidedChoice?.kind === "option" && !selectedOption)
+          throw new Error("Finny clarification option is not available");
+        if (recommended) await deps.onClarificationReady?.({ scopeId: decided.scopeId, jobId: decided.jobId });
+        return {
+          kind: "result",
+          card: {
+            title: "Clarification recorded",
+            status: recommended ? "passed" : "blocked",
+            summary: recommended
+              ? `${selectedOption.label}. The plan is ready for approval.`
+              : "Revision is required before this plan can be approved. Submit a revised plan to continue.",
+          },
+        };
       }
-      if (request.decidedAt !== undefined || request.job.approval !== undefined) return { kind: "gone" };
+      if (request.readyAt === undefined || request.decidedAt !== undefined || request.job.approval !== undefined)
+        return { kind: "gone" };
       if (input.decision.kind !== "plan") throw new Error("Finny decision does not match the request");
       const actor = deps.identity.resolve(input.actor);
       if (!deps.identity.isInternal(actor) || actor.id !== request.authorizedActorId)

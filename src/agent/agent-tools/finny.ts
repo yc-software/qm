@@ -6,12 +6,13 @@ import {
   type FinnyAuditFinding,
   type FinnyChangeKind,
   type FinnyCheckId,
+  type FinnyMaterialClarification,
   type FinnyPlanPresentation,
 } from "../../finny/types.ts";
 import { text, type ToolKit } from "./kit.ts";
 
 export interface FinnyToolService {
-  createPlan(plan: FinnyPlanPresentation): Promise<string>;
+  createPlan(plan: FinnyPlanPresentation, materialClarification?: FinnyMaterialClarification): Promise<string>;
   status(jobId: string): Promise<string>;
   artifactReady(input: {
     artifactDigest: string;
@@ -39,6 +40,19 @@ const string = () => Type.String({ minLength: 1 });
 const checkId = Type.Union(FINNY_CHECK_IDS.map((value) => Type.Literal(value)));
 const changeKind = Type.Union(FINNY_CHANGE_KINDS.map((value) => Type.Literal(value)));
 const finding = Type.Object({ code: string(), message: string() }, { additionalProperties: false });
+const clarificationOption = Type.Object(
+  { id: string(), label: string(), description: Type.Optional(string()) },
+  { additionalProperties: false },
+);
+const materialClarification = Type.Object(
+  {
+    question: string(),
+    options: Type.Array(clarificationOption, { minItems: 2, maxItems: 5 }),
+    recommendedOptionId: string(),
+  },
+  { additionalProperties: false },
+);
+
 const plan = Type.Object(
   {
     title: string(),
@@ -74,9 +88,14 @@ export function finnyTools(kit: ToolKit) {
     name: "finny_create_plan",
     label: "Create Finny plan",
     description: "Create a plan from presentation content. Core supplies its identity, policy, origin, and approval.",
-    parameters: Type.Object({ plan }, { additionalProperties: false }),
+    parameters: Type.Object(
+      { plan, materialClarification: Type.Optional(materialClarification) },
+      { additionalProperties: false },
+    ),
     execute: (callId, params) =>
-      run(callId, "create_plan", { title: params.plan.title }, () => ref.current!.finny!.createPlan(params.plan)),
+      run(callId, "create_plan", { title: params.plan.title }, () =>
+        ref.current!.finny!.createPlan(params.plan, params.materialClarification),
+      ),
   });
   const status = defineTool({
     name: "finny_status",
@@ -173,6 +192,7 @@ export function finnyTools(kit: ToolKit) {
   const properties = Object.fromEntries(
     Object.entries({
       plan,
+      materialClarification,
       jobId: string(),
       artifactDigest: string(),
       provisionalRevision: string(),
@@ -209,7 +229,10 @@ export function finnyTools(kit: ToolKit) {
       required: ["action", ...required],
       not: {
         anyOf: contentFields
-          .filter((field) => !required.includes(field as never))
+          .filter(
+            (field) =>
+              !required.includes(field as never) && !(action === "create_plan" && field === "materialClarification"),
+          )
           .map((field) => ({ required: [field] })),
       },
     })),

@@ -2,7 +2,8 @@ import { isDeepStrictEqual } from "node:util";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import type { Destination } from "../types.ts";
 import type { FinnyParentBindingSnapshot } from "./integration.ts";
-import type { CreateFinnyJobInput } from "./store.ts";
+import { assertFinnyMaterialClarificationMatchesPlan } from "./plan.ts";
+import type { CreateFinnyClarificationRequestInput, CreateFinnyJobInput } from "./store.ts";
 
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS finny_plan_intents(
@@ -33,6 +34,12 @@ const SCHEMA = [
   )`,
 ];
 
+const PLAN_CLARIFICATION_SCHEMA = [
+  `UPDATE finny_plan_intents
+      SET parent_input=jsonb_build_object('parent', parent_input)
+    WHERE NOT (parent_input ? 'parent')`,
+];
+
 export interface FinnyIntegrationParentRecord {
   scopeId: string;
   jobId: string;
@@ -43,9 +50,15 @@ export interface FinnyIntegrationParentRecord {
   binding: FinnyParentBindingSnapshot;
 }
 
+export interface FinnyPendingClarificationCard extends FinnyIntegrationParentRecord {
+  clarificationRequestId: string;
+  question: string;
+}
+
 export interface FinnyPlanIntent {
   job: CreateFinnyJobInput;
   parent: FinnyIntegrationParentRecord;
+  clarification?: CreateFinnyClarificationRequestInput;
 }
 export interface FinnyArtifactProposal {
   scopeId: string;
@@ -82,30 +95,55 @@ function proposal(row: Record<string, unknown>): FinnyArtifactProposal {
 }
 
 export function createPostgresFinnyIntegrationStore(connectionString: string) {
-  const { q, pool } = createPgPool(connectionString, [{ id: "finny/integration/0001", statements: SCHEMA }]);
+  const { q, pool } = createPgPool(connectionString, [
+    { id: "finny/integration/0001", statements: SCHEMA },
+    { id: "finny/integration/0002-plan-clarification", statements: PLAN_CLARIFICATION_SCHEMA },
+  ]);
   return {
     async createPlanIntent(input: FinnyPlanIntent): Promise<void> {
       await q(
         `INSERT INTO finny_plan_intents(job_id,job_input,parent_input,created_at)
          VALUES($1,$2,$3,$4) ON CONFLICT(job_id) DO NOTHING`,
-        [input.job.id, input.job, input.parent, Date.now()],
+        [input.job.id, input.job, { parent: input.parent, clarification: input.clarification }, Date.now()],
       );
       const rows = await q("SELECT job_input,parent_input FROM finny_plan_intents WHERE job_id=$1", [input.job.id]);
-      const existing = rows[0] ? { job: rows[0].job_input, parent: rows[0].parent_input } : undefined;
+      const persisted = rows[0]?.parent_input as
+        { parent: FinnyIntegrationParentRecord; clarification?: CreateFinnyClarificationRequestInput } | undefined;
+      const existing =
+        rows[0] && persisted
+          ? {
+              job: rows[0].job_input,
+              parent: persisted.parent,
+              ...(persisted.clarification ? { clarification: persisted.clarification } : {}),
+            }
+          : undefined;
       if (!existing || !isDeepStrictEqual(existing, input)) throw new Error("Finny plan intent idempotency conflict");
     },
     async pendingPlanIntents(): Promise<FinnyPlanIntent[]> {
       const rows = await q("SELECT job_input,parent_input FROM finny_plan_intents ORDER BY created_at,job_id");
-      return rows.map((row) => ({
-        job: row.job_input as unknown as CreateFinnyJobInput,
-        parent: row.parent_input as unknown as FinnyIntegrationParentRecord,
-      }));
+      return rows.map((row) => {
+        const persisted = row.parent_input as {
+          parent: FinnyIntegrationParentRecord;
+          clarification?: CreateFinnyClarificationRequestInput;
+        };
+        return {
+          job: row.job_input as unknown as CreateFinnyJobInput,
+          parent: persisted.parent,
+          ...(persisted.clarification ? { clarification: persisted.clarification } : {}),
+        };
+      });
     },
-    async completePlanIntent(input: FinnyIntegrationParentRecord): Promise<void> {
-      await this.createApprovalBoundParent(input);
+    async completePlanIntent(
+      input: FinnyIntegrationParentRecord,
+      clarification?: CreateFinnyClarificationRequestInput,
+    ): Promise<void> {
+      await this.createApprovalBoundParent(input, clarification);
       await q("DELETE FROM finny_plan_intents WHERE job_id=$1", [input.jobId]);
     },
-    async createApprovalBoundParent(input: FinnyIntegrationParentRecord): Promise<void> {
+    async createApprovalBoundParent(
+      input: FinnyIntegrationParentRecord,
+      clarification?: CreateFinnyClarificationRequestInput,
+    ): Promise<void> {
       await withPgTransaction(await pool(), async (db) => {
         const jobResult = await db.query("SELECT * FROM finny_jobs WHERE id=$1 AND scope_id=$2 FOR UPDATE", [
           input.jobId,
@@ -115,8 +153,9 @@ export function createPostgresFinnyIntegrationStore(connectionString: string) {
         if (!job || job.origin_thread_ref !== input.originThreadRef)
           throw new Error("Finny approval parent does not match the job");
         await db.query(
-          `INSERT INTO finny_approval_requests(request_id,scope_id,job_id,plan_digest,origin_thread_ref,authorized_actor_id,created_at)
-           VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(request_id) DO NOTHING`,
+          `INSERT INTO finny_approval_requests(
+             request_id,scope_id,job_id,plan_digest,origin_thread_ref,authorized_actor_id,ready_at,created_at
+           ) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(request_id) DO NOTHING`,
           [
             input.requestId,
             input.scopeId,
@@ -124,9 +163,46 @@ export function createPostgresFinnyIntegrationStore(connectionString: string) {
             job.plan_digest,
             input.originThreadRef,
             input.actorId,
+            clarification ? null : Date.now(),
             Date.now(),
           ],
         );
+        if (clarification) {
+          assertFinnyMaterialClarificationMatchesPlan(
+            job.plan_presentation as CreateFinnyJobInput["plan"],
+            clarification,
+          );
+          const existingClarification = await db.query(
+            "SELECT request_id FROM finny_clarification_requests WHERE job_id=$1",
+            [input.jobId],
+          );
+          if (existingClarification.rows[0] && existingClarification.rows[0].request_id !== clarification.requestId)
+            throw new Error("Finny job already has a material clarification");
+          if (
+            clarification.scopeId !== input.scopeId ||
+            clarification.jobId !== input.jobId ||
+            clarification.authorizedActorId !== input.actorId
+          )
+            throw new Error("Finny clarification does not match its approval parent");
+          await db.query(
+            `INSERT INTO finny_clarification_requests(
+               request_id,scope_id,job_id,question,options,recommended_option_id,
+               origin_thread_ref,authorized_actor_id,idempotency_key,created_at
+             ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(request_id) DO NOTHING`,
+            [
+              clarification.requestId,
+              clarification.scopeId,
+              clarification.jobId,
+              clarification.question,
+              JSON.stringify(clarification.options),
+              clarification.recommendedOptionId,
+              input.originThreadRef,
+              clarification.authorizedActorId,
+              clarification.idempotencyKey,
+              Date.now(),
+            ],
+          );
+        }
         await db.query(
           `INSERT INTO finny_integration_jobs(job_id,scope_id,request_id,actor_id,origin_thread_ref,destination,parent_binding,created_at)
            VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(job_id) DO NOTHING`,
@@ -152,9 +228,28 @@ export function createPostgresFinnyIntegrationStore(connectionString: string) {
           request.scope_id !== input.scopeId ||
           request.job_id !== input.jobId ||
           request.authorized_actor_id !== input.actorId ||
-          request.origin_thread_ref !== input.originThreadRef
+          request.origin_thread_ref !== input.originThreadRef ||
+          (clarification ? request.ready_at !== null : request.ready_at === null)
         )
           throw new Error("Finny approval parent idempotency conflict");
+        if (clarification) {
+          const clarificationRows = await db.query("SELECT * FROM finny_clarification_requests WHERE request_id=$1", [
+            clarification.requestId,
+          ]);
+          const persisted = clarificationRows.rows[0] as Record<string, unknown> | undefined;
+          if (
+            !persisted ||
+            persisted.scope_id !== clarification.scopeId ||
+            persisted.job_id !== clarification.jobId ||
+            persisted.question !== clarification.question ||
+            !isDeepStrictEqual(persisted.options, clarification.options) ||
+            persisted.recommended_option_id !== clarification.recommendedOptionId ||
+            persisted.authorized_actor_id !== clarification.authorizedActorId ||
+            persisted.origin_thread_ref !== input.originThreadRef ||
+            persisted.idempotency_key !== clarification.idempotencyKey
+          )
+            throw new Error("Finny clarification parent idempotency conflict");
+        }
       });
     },
     async getParent(scopeId: string, jobId: string): Promise<FinnyIntegrationParentRecord | null> {
@@ -189,11 +284,26 @@ export function createPostgresFinnyIntegrationStore(connectionString: string) {
       const rows = await q("SELECT * FROM finny_artifact_proposals WHERE idempotency_key=$1", [idempotencyKey]);
       return rows[0] ? proposal(rows[0]) : null;
     },
+    async pendingClarificationCards(): Promise<FinnyPendingClarificationCard[]> {
+      const rows = await q(
+        `SELECT i.*, c.request_id AS clarification_request_id, c.question
+           FROM finny_integration_jobs i
+           JOIN finny_approval_requests a ON a.request_id=i.request_id AND a.job_id=i.job_id
+           JOIN finny_clarification_requests c ON c.job_id=i.job_id
+          WHERE a.ready_at IS NULL AND a.decided_at IS NULL AND c.decided_at IS NULL
+          ORDER BY c.created_at, i.job_id`,
+      );
+      return rows.map((row) => ({
+        ...parent(row),
+        clarificationRequestId: row.clarification_request_id as string,
+        question: row.question as string,
+      }));
+    },
     async pendingApprovalCards(): Promise<FinnyIntegrationParentRecord[]> {
       const rows = await q(
         `SELECT i.* FROM finny_integration_jobs i
          JOIN finny_approval_requests a ON a.request_id=i.request_id AND a.job_id=i.job_id
-         WHERE a.decided_at IS NULL ORDER BY a.created_at, i.job_id`,
+         WHERE a.ready_at IS NOT NULL AND a.decided_at IS NULL ORDER BY a.created_at, i.job_id`,
       );
       return rows.map(parent);
     },

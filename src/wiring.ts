@@ -2201,7 +2201,21 @@ export function buildApp(
         idempotencyKey: `finny:${input.jobId}:${input.requestId}:approved`,
       });
     };
-    finnyApprovals = createFinnyApprovalService({ store: finnyJobs, identity, onApproved: afterApproved });
+    const deliverPlanApproval = async (input: { scopeId: string; jobId: string }) => {
+      const parent = await finnyIntegration.getParent(input.scopeId, input.jobId);
+      if (!parent) throw new Error("Finny plan approval has no bound destination");
+      await deliveries.enqueue({
+        destination: { ...parent.destination, finnyPlanRequestId: parent.requestId },
+        text: "Finny plan approval",
+        idempotencyKey: `finny-plan:${parent.requestId}`,
+      });
+    };
+    finnyApprovals = createFinnyApprovalService({
+      store: finnyJobs,
+      identity,
+      onApproved: afterApproved,
+      onClarificationReady: deliverPlanApproval,
+    });
     const deliverEscalation = async (job: import("./finny/types.ts").FinnyJob) => {
       if (job.unresolvedEscalationSequence === undefined) return;
       const parent = await finnyIntegration.getParent(job.scopeId, job.id);
@@ -2262,14 +2276,16 @@ export function buildApp(
       for (const intent of await finnyIntegration.pendingPlanIntents()) {
         const existing = await finnyJobs.getJob(intent.job.scopeId, intent.job.id);
         if (!existing) await finnyJobs.createJob(intent.job);
-        await finnyIntegration.completePlanIntent(intent.parent);
+        await finnyIntegration.completePlanIntent(intent.parent, intent.clarification);
       }
-      for (const pending of await finnyIntegration.pendingApprovalCards())
+      for (const pending of await finnyIntegration.pendingClarificationCards())
         await deliveries.enqueue({
-          destination: { ...pending.destination, finnyPlanRequestId: pending.requestId },
-          text: "Finny plan approval",
-          idempotencyKey: `finny-plan:${pending.requestId}`,
+          destination: { ...pending.destination, finnyPlanRequestId: pending.clarificationRequestId },
+          text: pending.question,
+          idempotencyKey: `finny-clarification:${pending.clarificationRequestId}`,
         });
+      for (const pending of await finnyIntegration.pendingApprovalCards())
+        await deliverPlanApproval({ scopeId: pending.scopeId, jobId: pending.jobId });
       for (const pending of await finnyIntegration.approvedIncomplete())
         await afterApproved({ scopeId: pending.scopeId, jobId: pending.jobId, requestId: pending.requestId });
       for (const pending of await finnyIntegration.approvedParents()) {

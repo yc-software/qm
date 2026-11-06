@@ -8,8 +8,9 @@ import type { FinnyFinalizer } from "./finalizer.ts";
 import type { FinnyRuntimeStore } from "./runtime-postgres-store.ts";
 import type { FinnyStore } from "./store.ts";
 import { initialFinnyPolicy } from "./policy.ts";
+import { assertFinnyMaterialClarificationMatchesPlan } from "./plan.ts";
 import type { FinnyArtifactProposal } from "./integration-postgres-store.ts";
-import type { FinnyJob, FinnyPlanPresentation } from "./types.ts";
+import type { FinnyJob, FinnyMaterialClarification, FinnyPlanPresentation } from "./types.ts";
 
 export interface FinnyParentBindingSnapshot {
   schema: "finny-parent-binding.v1";
@@ -34,8 +35,12 @@ interface FinnyIntegrationStore {
   createPlanIntent(input: {
     job: import("./store.ts").CreateFinnyJobInput;
     parent: Parameters<FinnyIntegrationStore["createApprovalBoundParent"]>[0];
+    clarification?: import("./store.ts").CreateFinnyClarificationRequestInput;
   }): Promise<void>;
-  completePlanIntent(input: Parameters<FinnyIntegrationStore["createApprovalBoundParent"]>[0]): Promise<void>;
+  completePlanIntent(
+    input: Parameters<FinnyIntegrationStore["createApprovalBoundParent"]>[0],
+    clarification?: import("./store.ts").CreateFinnyClarificationRequestInput,
+  ): Promise<void>;
   createApprovalBoundParent(input: {
     scopeId: string;
     jobId: string;
@@ -180,8 +185,13 @@ export function createFinnyToolServiceFactory(deps: {
         return job;
       };
       return {
-        async createPlan(planPresentation: FinnyPlanPresentation): Promise<string> {
+        async createPlan(
+          planPresentation: FinnyPlanPresentation,
+          materialClarification?: FinnyMaterialClarification,
+        ): Promise<string> {
           if (current) throw new Error("Finny workers cannot create plans");
+          if (materialClarification)
+            assertFinnyMaterialClarificationMatchesPlan(planPresentation, materialClarification);
           const jobId = id();
           const requestId = id();
           const jobInput = {
@@ -201,15 +211,36 @@ export function createFinnyToolServiceFactory(deps: {
             destination: turn.destination,
             binding: turn.parentBinding,
           };
-          await deps.integration.createPlanIntent({ job: jobInput, parent });
-          const job = await deps.jobs.createJob(jobInput);
-          await deps.integration.completePlanIntent(parent);
-          await deps.deliveries.enqueue({
-            destination: { ...turn.destination, finnyPlanRequestId: requestId },
-            text: job.plan.title,
-            idempotencyKey: `finny-plan:${requestId}`,
+          const clarification = materialClarification
+            ? {
+                scopeId: turn.scopeId,
+                jobId,
+                requestId: id(),
+                authorizedActorId: turn.actor.id,
+                ...materialClarification,
+                idempotencyKey: `finny-clarification:${jobId}`,
+              }
+            : undefined;
+          await deps.integration.createPlanIntent({
+            job: jobInput,
+            parent,
+            ...(clarification ? { clarification } : {}),
           });
-          return `Finny plan ${jobId} is awaiting approval.`;
+          const job = await deps.jobs.createJob(jobInput);
+          await deps.integration.completePlanIntent(parent, clarification);
+          await deps.deliveries.enqueue({
+            destination: {
+              ...turn.destination,
+              finnyPlanRequestId: clarification?.requestId ?? requestId,
+            },
+            text: clarification?.question ?? job.plan.title,
+            idempotencyKey: clarification
+              ? `finny-clarification:${clarification.requestId}`
+              : `finny-plan:${requestId}`,
+          });
+          return clarification
+            ? `Finny plan ${jobId} is awaiting clarification.`
+            : `Finny plan ${jobId} is awaiting approval.`;
         },
         async status(jobId: string): Promise<string> {
           if (!current || current.jobId !== jobId) throw new Error("Finny status requires the bound job");
