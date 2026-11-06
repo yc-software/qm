@@ -197,7 +197,7 @@ for (const operation of ["embed", "put"] as const) {
     };
     await f.indexer.tick();
     assert.equal(f.failures.length, 2);
-    assert.ok(f.failures.includes(primary));
+    assert.ok(f.failures.some((e) => e === primary || (e instanceof Error && e.cause === primary)));
     assert.ok(f.failures.includes(cleanup));
   });
 }

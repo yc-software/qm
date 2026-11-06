@@ -1,6 +1,6 @@
+import { deploymentGitParts } from "../../../plugins/chassis/src/deployment-git.ts";
 import { firstSegment } from "../inbound-tenant.ts";
 import type { KeyedTenant } from "./route.ts";
-import { deploymentGitParts } from "../../../plugins/chassis/src/deployment-git.ts";
 
 export const deploymentGitTenant: KeyedTenant = {
   by: "deployment",

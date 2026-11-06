@@ -1090,7 +1090,7 @@ test("the sweep wakes a top-level parent whose turn ended without waking it for 
     r.room.id,
     (await r.mailbox.pending(r.room.id)).map((mail) => mail.id),
   );
-  assert.deepEqual(await r.mailbox.claimAwaitingWake(), []);
+  assert.deepEqual(await r.mailbox.awaitingWake(), []);
 });
 
 test("a wake that found its parent busy starts one parent turn when that turn ends", async () => {
@@ -1931,7 +1931,7 @@ test("peer wakes stop after a chain of eight, and read-only or private turns onl
   assert.ok(privateTurn.ok);
   assert.match(privateTurn.notWoken ?? "", /private turn/);
   assert.deepEqual(await r.runs.inFlightForThread(target.threadRef), []);
-  assert.deepEqual(await r.mailbox.claimAwaitingWake(), []);
+  assert.deepEqual(await r.mailbox.awaitingWake(), []);
   assert.equal((await r.mailbox.pending(target.id)).length, 3);
   const last = await peerApi(r, sender, { sessionMessageDepth: 7 }).write({
     peer: true,

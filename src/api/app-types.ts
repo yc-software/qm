@@ -283,7 +283,10 @@ export interface App {
   swarms?: SwarmService;
   personas?: PersonaService;
   turn(req: TurnRequest, replay?: { signalDedupKey: string }): Promise<TurnResult>;
-  getApproval(requestId: string, viewer?: string): Promise<(PendingApprovalRecord & { requestId: string }) | null>;
+  getApproval(
+    requestId: string,
+    viewer?: string,
+  ): Promise<(Omit<PendingApprovalRecord, "call"> & { requestId: string; executesOnApprove?: boolean }) | null>;
   subscribeSessionStates(cb: (event: SessionStateEvent) => void, opts?: SubscribeOptions): () => void;
   subscribeLedgerEvents(cb: (event: OwnedLedgerEvent) => void, opts?: SubscribeOptions): () => void;
   listSessionApprovals(sessionId: string, viewer: string): Promise<PendingApproval[]>;

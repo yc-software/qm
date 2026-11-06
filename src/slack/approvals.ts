@@ -186,14 +186,14 @@ export function createApprovals(deps: {
           client,
           channel,
           messageTs,
-          "_That approval request expired — let me know when you want to try again._",
+          "_That approval request expired or was withdrawn — let me know when you want to try again._",
         ).catch(swallowAs("slack: update approval message", undefined));
       } else if (channel && clickerId) {
         await client.chat
           .postEphemeral({
             channel,
             user: clickerId,
-            text: "That approval request expired — let me know when you want to try again.",
+            text: "That approval request expired or was withdrawn — let me know when you want to try again.",
           })
           .catch(swallowAs("slack: chat.postEphemeral", undefined));
       }
@@ -227,14 +227,14 @@ export function createApprovals(deps: {
           client,
           channel,
           messageTs,
-          "_That approval request expired — let me know when you want to try again._",
+          "_That approval request expired or was withdrawn — let me know when you want to try again._",
         ).catch(swallowAs("slack: update approval message", undefined));
       } else if (channel && clickerId) {
         await client.chat
           .postEphemeral({
             channel,
             user: clickerId,
-            text: "That approval request expired — let me know when you want to try again.",
+            text: "That approval request expired or was withdrawn — let me know when you want to try again.",
           })
           .catch(swallowAs("slack: chat.postEphemeral", undefined));
       }
@@ -342,6 +342,11 @@ export function createApprovals(deps: {
       settle();
 
       if (await sealedOut(result)) return;
+
+      if (result.steered) {
+        await updateCard(decisionCard());
+        return;
+      }
 
       if (delegated) {
         await updateCard(

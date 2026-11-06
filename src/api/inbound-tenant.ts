@@ -3,6 +3,7 @@ import { withTenant } from "../tenants/context.ts";
 import { inTenant } from "../tenants/claim.ts";
 import type { TenantKey, TenantLookup } from "../tenants/lookup.ts";
 import type { KeyedTenant, Route } from "./routes/route.ts";
+import { labelOfAppHost } from "../tenants/app-handle.ts";
 
 export const EMPTY_TENANT = "00000000-0000-0000-0000-000000000000";
 
@@ -23,20 +24,13 @@ export function firstSegment(prefix: string): KeyedTenant["key"] {
   };
 }
 
-function appHostSlug(host: string | undefined, appsDomain: string | undefined): string | undefined {
-  if (!appsDomain) return undefined;
-  const bare = (host ?? "").split(":")[0]!.toLowerCase();
-  const suffix = `.${appsDomain.toLowerCase()}`;
-  return bare.endsWith(suffix) ? bare.slice(0, -suffix.length) : undefined;
-}
-
 export function inboundKey(
   req: IncomingMessage,
   gate: { deployAppsDomain?: string; deployGateSecret?: string },
   found: { route: Pick<Route, "tenant">; params: Record<string, string> } | null,
   url: URL,
 ): InboundKey | undefined {
-  const slug = gate.deployGateSecret ? appHostSlug(req.headers.host, gate.deployAppsDomain) : undefined;
+  const slug = gate.deployGateSecret ? labelOfAppHost(req.headers.host, gate.deployAppsDomain) : undefined;
   if (slug !== undefined) return { by: "app_host", key: slug };
   const keyed = found?.route.tenant;
   if (typeof keyed !== "object") return undefined;

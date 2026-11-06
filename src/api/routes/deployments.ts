@@ -30,7 +30,7 @@ import { APP_SHELL_PATH_PREFIX, appShellHtml } from "../../deploy/app-shell.ts";
 import type { AppViewAuthMode } from "../../deploy/page-views.ts";
 import { principalDestination } from "../../reach/reach.ts";
 import { FRAME_SESSION_COOKIE, portalSession, portalSessionFrom } from "../../deploy/viewer-session.ts";
-import { appHostLabel, appNameFromLabel } from "../../tenants/app-handle.ts";
+import { appHostLabel, appNameFromLabel, labelOfAppHost } from "../../tenants/app-handle.ts";
 import { tenantAppHandle } from "../../tenants/settings.ts";
 import { boundTenant } from "../../tenants/context.ts";
 import { EMBED_ANCESTORS_HINT, parseEmbedAncestors } from "../../deploy/embed-ancestors.ts";
@@ -814,14 +814,13 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
     sendJson(res, 503, { error: "unavailable", message: "app gateway is not configured" });
     return true;
   }
-  const rawHost = (req.headers.host ?? "").split(":")[0]!.toLowerCase();
-  const suffix = `.${appsDomain.toLowerCase()}`;
-  if (!rawHost || !rawHost.endsWith(suffix)) {
+  const label = labelOfAppHost(req.headers.host, appsDomain);
+  if (label === undefined) {
     if (!fromAppHost) return false;
     sendJson(res, 404, { error: "not_found" });
     return true;
   }
-  const label = rawHost.slice(0, -suffix.length);
+  const rawHost = `${label}.${appsDomain.toLowerCase()}`;
   const handle = tenantAppHandle();
   const slug = appNameFromLabel(label, handle);
   if (!slug || !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label)) {

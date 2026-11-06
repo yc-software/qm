@@ -10,6 +10,7 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import type { Route } from "../src/api/routes/route.ts";
 import { bindBootTenant, bootTenant, inBootTenant, readBootTenant } from "../src/tenants/boot.ts";
 import { boundTenant, withoutTenant, withTenant } from "../src/tenants/context.ts";
+import { onTenantLoad } from "../src/tenants/cache.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testMigratedDatabaseUrl } from "./support/test-database.ts";
@@ -112,7 +113,7 @@ async function serve(databaseUrl: string): Promise<{ get: (path: string) => Prom
   };
 }
 
-test("an install with one tenant serves requests bound to it and refuses them once a second exists", () =>
+test("an install with one tenant serves requests bound to it, and a server started after a second exists refuses them", () =>
   withoutTenant(async () => {
     const databaseUrl = testMigratedDatabaseUrl();
     const db = new pg.Pool({ connectionString: ownerUrl(databaseUrl).toString() });
@@ -122,6 +123,7 @@ test("an install with one tenant serves requests bound to it and refuses them on
       assert.equal(await readBootTenant(databaseUrl), TEST_TENANT);
       assert.notEqual(await single.get("/v1/deliveries"), 401);
       await db.query("INSERT INTO tenants(id) VALUES ($1)", [randomUUID()]);
+      assert.equal(await readBootTenant(databaseUrl), undefined);
       const multi = await serve(databaseUrl);
       try {
         assert.equal(await multi.get("/v1/deliveries"), 401);
@@ -144,9 +146,10 @@ test("bindBootTenant records the tenant boot read so bootTenant names it afterwa
     assert.equal(bootTenant(), undefined);
   }));
 
-test("a ready hook runs inside the bound tenant before the route", () =>
+test("the bound tenant's settings load before the route runs", () =>
   withoutTenant(async () => {
     const seen: (string | undefined)[] = [];
+    const stop = onTenantLoad(async () => void seen.push(`ready:${boundTenant()}`));
     await withRequestTenant(
       { headers: {} } as never,
       {} as never,
@@ -154,7 +157,6 @@ test("a ready hook runs inside the bound tenant before the route", () =>
       SECRET,
       b,
       () => void seen.push(`next:${boundTenant()}`),
-      async () => void seen.push(`ready:${boundTenant()}`),
-    );
+    ).finally(stop);
     assert.deepEqual(seen, [`ready:${b}`, `next:${b}`]);
   }));

@@ -6,6 +6,8 @@ import { createPrincipalLinkService } from "../src/identity/principal-links.ts";
 import { createPostgresUserStore, fold, type UserStore } from "../src/identity/user-store.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { testAdvisoryLock, testDatabaseUrl } from "./support/test-database.ts";
+import { appUrl, ownerUrl } from "./support/test-tenant.ts";
+import { withTenant } from "../src/tenants/context.ts";
 
 const url = testDatabaseUrl();
 const store = (): UserStore => createPostgresUserStore(url);
@@ -123,5 +125,33 @@ test("the SQL fold matches foldPrincipalId", async () => {
   for (const id of ["Pat@Example.COM", "  pat@example.com ", "U01ABC", " U01abc ", "oidc:AbC:dEf", "Mixed@Case"]) {
     const [row] = await db.q(`SELECT ${fold("$1::text")} AS folded`, [id]);
     assert.equal(row!.folded, foldPrincipalId(id), id);
+  }
+});
+
+test("the same sign-in is a separate user in each tenant, and a link stays in its tenant", async () => {
+  const owner = createPgPool(ownerUrl(url).toString());
+  const [a, b] = [randomUUID(), randomUUID()];
+  await owner.q("INSERT INTO tenants(id) VALUES ($1), ($2)", [a, b]);
+  const roster = createPostgresUserStore(appUrl(url));
+  const pat = unique("pat");
+  const alias = `U-${randomUUID().slice(0, 8)}`;
+  try {
+    await withTenant(a, () => roster.record({ id: pat, source: "turn", at: Date.now() }));
+    await withTenant(b, () => roster.record({ id: pat, source: "invite", at: Date.now() }));
+    const inA = (await withTenant(a, () => roster.get(pat)))!;
+    const inB = (await withTenant(b, () => roster.get(pat)))!;
+    assert.notEqual(inA.id, inB.id);
+    assert.deepEqual([inA.source, inB.source], ["turn", "invite"]);
+    await withTenant(a, () =>
+      roster.link({ principalId: alias, canonicalId: pat, evidence: "test", linkedBy: "", createdAt: Date.now() }),
+    );
+    const linked = async (tenant: string) =>
+      (await withTenant(tenant, () => roster.links())).filter((l) => l.principalId === alias).map((l) => l.canonicalId);
+    assert.deepEqual(await linked(a), [pat]);
+    assert.deepEqual(await linked(b), []);
+  } finally {
+    await owner.q("DELETE FROM users WHERE tenant_id = ANY($1::uuid[])", [[a, b]]);
+    await owner.q("DELETE FROM tenants WHERE id = ANY($1::uuid[])", [[a, b]]);
+    await owner.close();
   }
 });

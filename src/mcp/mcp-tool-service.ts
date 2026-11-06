@@ -12,7 +12,6 @@ import type { AddressFetch } from "../util/network.ts";
 import type { ScopeId } from "../types.ts";
 
 const REFRESH_INTERVAL_MS = 5 * 60_000;
-const COLD_TOOL_WAIT_MS = 1_000;
 const CATALOG_TTL_MS = 60_000;
 const CATALOG_CACHE_MAX = 1_000;
 const CATALOG_MAX_TOOLS = 5_000;
@@ -384,24 +383,18 @@ export function createMcpToolService(opts: {
     void refresh().catch(reportFailureAs("mcp: refresh tools", undefined));
   }
 
-  async function loaded(maxWaitMs = Infinity): Promise<ReturnType<typeof tenantState>> {
+  async function loaded(): Promise<ReturnType<typeof tenantState>> {
     const state = tenantState();
     if (state.loadedAt !== undefined || closed) {
       refreshIfStale(state);
       return state;
     }
-    const first = (state.pending ?? refresh()).catch(reportFailureAs("mcp: refresh tools", undefined));
-    let timer: NodeJS.Timeout | undefined;
-    const deadline = new Promise<void>((resolve) => {
-      if (Number.isFinite(maxWaitMs)) timer = setTimeout(resolve, maxWaitMs);
-    });
-    await Promise.race([first, deadline]);
-    clearTimeout(timer);
+    await (state.pending ?? refresh()).catch(reportFailureAs("mcp: refresh tools", undefined));
     return state;
   }
 
   async function toolDefsFor(principalId?: string, scopeId?: ScopeId): Promise<McpToolDescriptor[]> {
-    const { snapshot, perUserServers: gated, attestedServers } = await loaded(COLD_TOOL_WAIT_MS);
+    const { snapshot, perUserServers: gated, attestedServers } = await loaded();
     const current = attestableAudience(principalId, scopeId)
       ? snapshot
       : snapshot.filter((t) => !attestedServers.has(t.serverId));

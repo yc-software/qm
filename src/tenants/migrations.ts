@@ -159,11 +159,14 @@ function swapKeys({ table, primaryKey, unique = [] }: TenantTable): string[] {
   ];
 }
 
+function deleteAction(columns: string, onDelete: TenantReference["onDelete"]): string {
+  if (!onDelete) return "";
+  return onDelete === "SET NULL" ? ` ON DELETE SET NULL (${columns})` : ` ON DELETE ${onDelete}`;
+}
+
 function tenantReference({ table, name, columns, references, onDelete, deferrable }: TenantReference): string {
-  const deleted = onDelete === "SET NULL" ? `SET NULL (${columns})` : onDelete;
-  const action = deleted ? ` ON DELETE ${deleted}` : "";
   return `ALTER TABLE ${table} ADD CONSTRAINT ${name}
-    FOREIGN KEY (tenant_id, ${columns}) REFERENCES ${references}${action}${deferrable ? " DEFERRABLE INITIALLY DEFERRED" : ""}`;
+    FOREIGN KEY (tenant_id, ${columns}) REFERENCES ${references}${deleteAction(columns, onDelete)}${deferrable ? " DEFERRABLE INITIALLY DEFERRED" : ""}`;
 }
 
 export function tenantTables(

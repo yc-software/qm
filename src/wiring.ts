@@ -110,6 +110,7 @@ import {
   type DurableMap,
   processLevelMap,
   durableMapMigrations,
+  processMapMigrations,
 } from "./persistence/durable-map.ts";
 import type { PersistedUiState, UiStateStore } from "./surfaces/ui-state.ts";
 import { slackUserClientFactory } from "./loops/sources/slack.ts";
@@ -549,6 +550,8 @@ const CONFIGURED_MAPS = [
   "porter_deploy_bodies",
 ];
 
+const CONFIGURED_PROCESS_MAPS = ["render_sandbox_bases", "fly_peer_claims", "fly_deploy_ports"];
+
 export function buildApp(
   config: Config,
   overrides: {
@@ -610,6 +613,7 @@ export function buildApp(
     ...BUDGET_MIGRATIONS,
     ...INSTANCE_HEARTBEAT_MIGRATIONS,
     ...CONFIGURED_MAPS.flatMap(durableMapMigrations),
+    ...CONFIGURED_PROCESS_MAPS.flatMap(processMapMigrations),
   ])
     pgArtifactMap.pool.registerMigration(migration);
   setProviderBaseUrls(config.providerBaseUrls);

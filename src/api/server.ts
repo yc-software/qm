@@ -21,7 +21,6 @@ import {
   type SourceAuth,
 } from "../auth/source-auth.ts";
 import { CONTROL_PLANE_AUD, type CapabilityClaims } from "../auth/capability-token.ts";
-import { loadTenant } from "../tenants/cache.ts";
 import { bootTenant } from "../tenants/boot.ts";
 import { capabilityToken, identityTenant, requestCapability, withRequestTenant } from "./request-tenant.ts";
 import { inboundKey, withInboundTenant } from "./inbound-tenant.ts";
@@ -519,7 +518,6 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
       capabilitySecret,
       bootTenant(),
       () => serve(req, res, base, raw, matched),
-      loadTenant,
       deps.portalIdentitySecret ?? deps.signingSecret,
     );
   }
