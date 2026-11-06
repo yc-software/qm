@@ -4,6 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { ServerResponse } from "node:http";
 import { composioRoutes, composioUserId } from "../src/api/routes/composio.ts";
+import { REPLY_STATUS_TTL_MS } from "../src/api/routes/slack-reply.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import type { ServerDeps } from "../src/api/deps.ts";
 import { createKeychain } from "../src/credentials/keychain.ts";
@@ -1118,11 +1119,45 @@ test("Slack replies use only the viewer's verified user connection and server-si
   });
 });
 
-test("Slack reply status verifies personal access without posting", async () => {
+test("Slack reply status verifies personal access without posting and reuses the answer briefly", async (t) => {
   const f = await slackReplyFixture();
-  f.replies.push(f.account, f.identity, { data: { ok: true } });
+  f.replies.push(f.account, f.identity);
   assert.equal((await f.invoke("/v1/composio/slack/reply-status", f.message)).data.connected, true);
-  assert.equal(f.calls.length, 3);
+  assert.equal(f.calls.length, 2);
+  assert.doesNotMatch(f.calls.map((c) => String(c.init?.body)).join("\n"), /conversations\.info|chat\.postMessage/);
+  assert.equal((await f.invoke("/v1/composio/slack/reply-status", f.message)).data.connected, true);
+  assert.equal(f.calls.length, 2);
+  await f.deps.slackAccounts!.delete("alice");
+  assert.equal(
+    (await f.invoke("/v1/composio/slack/reply-status", { ...f.message, refresh: true })).data.connected,
+    false,
+  );
+  await f.deps.slackAccounts!.put("alice", {
+    principalId: "alice",
+    memberId: "alice",
+    accountId: "ca_alice",
+    userId: "U123",
+    teamId: "T123",
+    user: "Alice",
+    workspace: "Test",
+  });
+  assert.equal((await f.invoke("/v1/composio/slack/reply-status", f.message)).data.connected, false);
+  const now = Date.now();
+  t.mock.method(Date, "now", () => now + REPLY_STATUS_TTL_MS + 1);
+  f.replies.push(f.account, f.identity);
+  assert.equal((await f.invoke("/v1/composio/slack/reply-status", f.message)).data.connected, true);
+  assert.equal(f.calls.length, 4);
+});
+
+test("a send that finds the Slack link gone clears the cached reply status", async () => {
+  const f = await slackReplyFixture();
+  f.replies.push(f.account, f.identity);
+  assert.equal((await f.invoke("/v1/composio/slack/reply-status", f.message)).data.connected, true);
+  await f.deps.slackAccounts!.delete("alice");
+  const sent = await f.invoke("/v1/composio/slack/reply", f.message);
+  assert.equal(sent.status, 409);
+  assert.equal(sent.data.connected, false);
+  assert.equal((await f.invoke("/v1/composio/slack/reply-status", f.message)).data.connected, false);
 });
 
 test("Slack replies cannot target hidden sessions or accept blank messages", async () => {

@@ -7,13 +7,33 @@ import { withBase } from "./core-bridge";
 import "./slack-account";
 import "./slack-reply.css";
 
+/** Window focus re-checks the Slack link at most this often; explicit checks always run. */
+export const FOCUS_REFRESH_MS = 60_000;
+const KNOWN_KEY = "qm-slack-reply-known";
+type Known = { user: string; connected: boolean; label: string };
+
+function remembered(user: string): Known | null {
+  try {
+    const known = JSON.parse(localStorage.getItem(KNOWN_KEY) ?? "null") as Known | null;
+    return known?.user === user ? known : null;
+  } catch {
+    return null;
+  }
+}
+function remember(known: Known): void {
+  try {
+    localStorage.setItem(KNOWN_KEY, JSON.stringify(known));
+  } catch {
+    // Storage can be unavailable (private mode); the check still runs on each open.
+  }
+}
+
 export class SlackReply extends LitElement {
   static properties = {
     sessionId: {},
     user: {},
     connected: { state: true },
     linkAvailable: { state: true },
-    loading: { state: true },
     sending: { state: true },
     error: { state: true },
     text: { state: true },
@@ -21,9 +41,10 @@ export class SlackReply extends LitElement {
   };
   sessionId = "";
   user = "";
-  private connected = false;
+  /** Whether the viewer can reply; null until known, during which the composer is shown optimistically. */
+  private connected: boolean | null = null;
   private linkAvailable = false;
-  private loading = true;
+  private checkedAt = 0;
   private sending = false;
   private error = "";
   private text = "";
@@ -36,12 +57,12 @@ export class SlackReply extends LitElement {
   }
   connectedCallback(): void {
     super.connectedCallback();
-    window.addEventListener("focus", this.refresh);
+    window.addEventListener("focus", this.refreshOnFocus);
     this.requestUpdate();
   }
   disconnectedCallback(): void {
     super.disconnectedCallback();
-    window.removeEventListener("focus", this.refresh);
+    window.removeEventListener("focus", this.refreshOnFocus);
     this.inputObserver?.disconnect();
     this.inputObserver = null;
     this.observedInput = null;
@@ -65,28 +86,47 @@ export class SlackReply extends LitElement {
       this.inputObserver.observe(input);
     }
   }
-  protected firstUpdated(): void {
-    void this.refresh();
-  }
-  private refresh = async (): Promise<void> => {
-    try {
-      const response = await this.request("reply-status");
-      const result = await response.json();
-      this.connected = response.ok && result.connected === true;
-      this.linkAvailable = response.ok;
-      this.label = result.user ?? "yourself";
-      this.error = response.ok ? "" : (result.message ?? "Could not check your Slack connection.");
-      if (!response.ok && result.error === "composio_unavailable")
-        this.error = "Slack linking isn’t configured for your account on this deployment.";
-    } catch {
-      this.connected = false;
-      this.linkAvailable = false;
-      this.error = "Could not check your Slack connection.";
-    } finally {
-      this.loading = false;
+  protected willUpdate(changed: Map<string, unknown>): void {
+    if (!changed.has("user") || this.connected !== null) return;
+    const known = remembered(this.user);
+    if (known) {
+      this.connected = known.connected;
+      this.linkAvailable = !known.connected;
+      this.label = known.label;
     }
+  }
+  protected firstUpdated(): void {
+    void this.check(false);
+  }
+  private refreshOnFocus = (): void => {
+    if (Date.now() - this.checkedAt >= FOCUS_REFRESH_MS) void this.check(false);
   };
-  private request(action: string, message?: { text: string; clientMessageId: string }): Promise<Response> {
+  private refresh = (): Promise<void> => this.check(true);
+  /** Checks the Slack link in the background; the composer never waits on it. */
+  private async check(fresh: boolean): Promise<void> {
+    this.checkedAt = Date.now();
+    try {
+      const response = await this.request("reply-status", fresh ? { refresh: true } : undefined);
+      const result = await response.json();
+      if (response.ok) {
+        this.connected = result.connected === true;
+        this.linkAvailable = true;
+        this.label = result.user ?? "yourself";
+        this.error = "";
+        remember({ user: this.user, connected: this.connected, label: this.label });
+      } else if (result.error === "composio_unavailable") {
+        this.connected = false;
+        this.linkAvailable = false;
+        this.error = "Slack linking isn’t configured for your account on this deployment.";
+      } else if (fresh) this.error = result.message ?? "Could not check your Slack connection.";
+    } catch {
+      if (fresh) this.error = "Could not check your Slack connection.";
+    }
+  }
+  private request(
+    action: string,
+    message?: { text: string; clientMessageId: string } | { refresh: true },
+  ): Promise<Response> {
     return fetch(withBase(`/api/composio/slack/${action}`), {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -96,14 +136,18 @@ export class SlackReply extends LitElement {
   }
   private async send(event: Event): Promise<void> {
     event.preventDefault();
-    if (!this.connected || this.sending || !this.text.trim()) return;
+    if (this.connected === false || this.sending || !this.text.trim()) return;
     this.sending = true;
     this.error = "";
     try {
       const response = await this.request("reply", { text: this.text, clientMessageId: crypto.randomUUID() });
       const result = await response.json();
       if (!response.ok || !result.sent) {
-        if (result.connected === false) this.connected = false;
+        if (result.connected === false) {
+          this.connected = false;
+          this.linkAvailable = true;
+          remember({ user: this.user, connected: false, label: this.label });
+        }
         this.error = result.message ?? "Could not send your Slack message.";
         return;
       }
@@ -116,14 +160,12 @@ export class SlackReply extends LitElement {
     }
   }
   protected render() {
-    if (this.loading)
-      return html`<div class="slack-reply-box"><p role="status">Checking your Slack connection…</p></div>`;
-    if (this.connected)
+    if (this.connected !== false)
       return html`<form class="composer-wrap" @submit=${(e: Event) => void this.send(e)}>
         ${composerInput({
           value: this.text,
-          placeholder: `Reply in Slack as ${this.label}`,
-          label: `Reply in Slack as ${this.label}`,
+          placeholder: `Reply in Slack as ${this.label || "yourself"}`,
+          label: `Reply in Slack as ${this.label || "yourself"}`,
           disabled: this.sending,
           maxLength: 4000,
           onInput: (e) => {
