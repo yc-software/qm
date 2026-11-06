@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import { createMcpClient } from "../src/mcp/mcp-client.ts";
 import type { MemoryService } from "../src/memory/memory-service.ts";
 import { withProviders } from "../src/memory/provider-outcome.ts";
 import { createRegistryMemoryService } from "../src/memory/registry-memory.ts";
@@ -110,6 +111,36 @@ test("a stalled member brain ends at its deadline, and QM cancels the request it
   for (let waited = 0; brain.openSessions() && waited < 2_000; waited += 20)
     await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(brain.openSessions(), 0);
+});
+
+test("a brain that never answers its session end can't hold a call past its deadline", async (t) => {
+  for (const [call, expected, endCancelled] of [
+    [() => new Promise(() => {}), "rejected", false],
+    [() => ({ content: [{ type: "text", text: "bees" }] }), "fulfilled", true],
+  ] as const) {
+    const brain = await brainServer(t, call);
+    const ends: Array<AbortSignal | null | undefined> = [];
+    const wedged: AddressFetch = (input, init) => {
+      if (init?.method !== "DELETE") return loopbackFetch(input, init);
+      ends.push(init.signal);
+      return new Promise((_, reject) => init.signal?.addEventListener("abort", () => reject(init.signal?.reason)));
+    };
+    const client = createMcpClient({
+      url: brain.url,
+      auth: { mode: "client-credentials", clientId: "qm-member", clientSecret: "member-secret" },
+      fetch: wedged,
+    });
+    const outcome = await Promise.race([
+      client.callTool("memory_recall", {}, undefined, AbortSignal.timeout(300)).then(
+        () => "fulfilled",
+        () => "rejected",
+      ),
+      new Promise((resolve) => setTimeout(resolve, 1_500, "pending").unref()),
+    ]);
+    assert.equal(outcome, expected);
+    assert.equal(ends.length, 1);
+    assert.equal(ends[0]?.aborted, endCancelled);
+  }
 });
 
 test("an https brain can't move QM's token request, and the client secret in it, onto http", async () => {

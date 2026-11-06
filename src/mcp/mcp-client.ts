@@ -131,7 +131,7 @@ export function createMcpClient(opts: {
     const overflow = new AbortController();
     const stop = signal ? AbortSignal.any([signal, overflow.signal]) : overflow.signal;
     const { maxResponseBytes } = opts;
-    let ending = false;
+    let detached = false;
     const transport = new StreamableHTTPClientTransport(endpoint, {
       ...(authProvider ? { authProvider } : {}),
       ...(Object.keys(headers).length ? { requestInit: { headers } } : {}),
@@ -144,7 +144,7 @@ export function createMcpClient(opts: {
         const response = await fetchFn(url, {
           ...init,
           redirect: "error",
-          signal: AbortSignal.any([init?.signal, ending ? undefined : stop].filter((s): s is AbortSignal => !!s)),
+          signal: AbortSignal.any([init?.signal, detached ? undefined : stop].filter((s): s is AbortSignal => !!s)),
         });
         if (maxResponseBytes === undefined) return response;
         return boundedResponse(response, maxResponseBytes, () => {
@@ -166,9 +166,13 @@ export function createMcpClient(opts: {
         cause: e,
       });
     } finally {
-      ending = true;
-      await transport.terminateSession().catch(swallowAs("mcp: end session", undefined));
-      await client.close();
+      detached = stop.aborted;
+      const end = async () => {
+        await transport.terminateSession().catch(swallowAs("mcp: end session", undefined));
+        await client.close();
+      };
+      if (detached) void end().catch(swallowAs("mcp: close", undefined));
+      else await end();
     }
   }
 
