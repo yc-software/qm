@@ -1,5 +1,11 @@
 import { z } from "zod";
-import { APP_HANDLE_CHARS, DNS_LABEL_MAX, isAppHandleShape } from "../../plugins/chassis/src/dns-label.ts";
+import {
+  APP_HANDLE_CHARS,
+  APP_HANDLE_MAX,
+  APP_HANDLE_MIN,
+  DNS_LABEL_MAX,
+  isAppHandleShape,
+} from "../../plugins/chassis/src/dns-label.ts";
 import type { PgMigrationDefinition } from "../persistence/pg-pool.ts";
 
 const RESERVED_APP_HANDLES = ["auth", "slack", "mt", "www", "api", "docs", "apps", "admin"] as const;
@@ -50,6 +56,20 @@ export const TENANT_APP_HANDLES: PgMigrationDefinition = {
     ...definers.map(
       (definer) => `DO $app_handles$ BEGIN EXECUTE format($sql$${definer}$sql$, current_schema()); END $app_handles$`,
     ),
+  ],
+};
+
+export const TENANT_APP_HANDLE_DNS_BOUND: PgMigrationDefinition = {
+  id: "0000-tenancy/settings/app-handle-dns-bound",
+  statements: [
+    `SET LOCAL lock_timeout = '5s'`,
+    `CREATE OR REPLACE FUNCTION qm_tenant_handle(settings jsonb) RETURNS text LANGUAGE sql IMMUTABLE PARALLEL SAFE
+      AS $qm_tenant_handle$
+      SELECT CASE WHEN h ~ '^[a-z0-9]{${APP_HANDLE_MIN},${APP_HANDLE_MAX}}$' AND h <> ALL (ARRAY[${reserved}]) THEN h END
+        FROM (SELECT coalesce(settings->>'handle',
+          regexp_replace(lower(coalesce(settings->>'orgSlug', '')), '[^a-z0-9]', '', 'g')) AS h) picked
+    $qm_tenant_handle$`,
+    `REINDEX INDEX tenants_app_handle`,
   ],
 };
 

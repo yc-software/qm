@@ -251,6 +251,15 @@ describe("company app links", () => {
       assert.equal(found[0]?.id, b);
       const derived = await db.app.q(`SELECT qm_tenant_for_app_host('nitroduck-x')::text AS id`);
       assert.equal(derived[0]?.id, a);
+      const longSlug = `nitro-${"duck".repeat(10)}`;
+      await db.owner.q(`UPDATE tenants SET settings = jsonb_build_object('orgSlug', $2::text) WHERE id = $1`, [
+        a,
+        longSlug,
+      ]);
+      const longDerived = await db.app.q(`SELECT qm_tenant_for_app_host($1)::text AS id`, [
+        `${longSlug.replace(/-/g, "")}-x`,
+      ]);
+      assert.equal(longDerived[0]?.id, a);
     } finally {
       await db.owner.q(`UPDATE tenants SET settings = '{}' WHERE id = ANY($1)`, [[a, b]]);
     }
