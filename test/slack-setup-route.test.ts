@@ -119,6 +119,6 @@ test("explicit browser start selects setup or installation and rejects arbitrary
   assert.equal(f.calls.length, 0);
   for (const step of ["setup", "install"]) {
     assert.equal((await f.request("POST", { step })).status, 200);
-    assert.equal(f.calls.at(-1)?.body, JSON.stringify({ step }));
+    assert.equal(JSON.parse(String(f.calls.at(-1)?.body)).step, step);
   }
 });

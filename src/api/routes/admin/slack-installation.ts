@@ -166,15 +166,19 @@ export async function startSlackInstallation(ctx: ApiCtx): Promise<void> {
   try {
     const step = (ctx.body as { step?: unknown } | undefined)?.step ?? "install";
     if (step !== "setup" && step !== "install") return sendJson(ctx.res, 400, { error: "invalid_step" });
-    const result = await ctx.deps.managedSlack.start(step);
+    const origin = ctx.req.headers.origin;
+    const result = await ctx.deps.managedSlack.start(step, typeof origin === "string" ? origin : undefined);
     return sendJson(ctx.res, 200, result);
   } catch {
     return sendJson(ctx.res, 502, { error: "slack_installation_unavailable" });
   }
 }
 
-async function managedSlackTenant(ctx: ApiCtx): Promise<string | undefined> {
-  return (await ctx.app.tenantFor("slack_bridge", bearerToken(ctx.req) ?? undefined)) ?? bootTenant();
+async function managedSlackTenant(ctx: ApiCtx, team: string | undefined, named?: unknown): Promise<string | undefined> {
+  const own = await ctx.app.tenantFor("slack_bridge", bearerToken(ctx.req) ?? undefined);
+  if (own || !ctx.deps.managedSlack?.relayed(ctx.req)) return own ?? bootTenant();
+  if (typeof named === "string") return named;
+  return (await ctx.app.tenantFor("slack_team", team)) ?? bootTenant();
 }
 
 function slackTeam(value: unknown): string | undefined {
@@ -186,9 +190,14 @@ function slackTeam(value: unknown): string | undefined {
 export async function managedSlackRequest(ctx: ApiCtx): Promise<void> {
   const slack = ctx.deps.managedSlack;
   if (!slack) return sendJson(ctx.res, 404, { error: "not_configured" });
-  const tenant = await managedSlackTenant(ctx);
+  const input = ctx.body as { teamId?: unknown; tenant?: unknown } | undefined;
+  const teamId = input?.teamId;
+  const tenant = await managedSlackTenant(
+    ctx,
+    typeof teamId === "string" ? teamId : undefined,
+    ctx.req.method === "POST" ? input?.tenant : undefined,
+  );
   if (!tenant) return sendJson(ctx.res, 401, { error: "unauthorized" });
-  const teamId = (ctx.body as { teamId?: unknown } | undefined)?.teamId;
   if (ctx.req.method === "POST" && typeof teamId === "string") {
     const owner = await ctx.app.tenantFor("slack_team", teamId);
     if (owner && owner !== tenant) return sendJson(ctx.res, 409, { error: "installation_conflict" });
@@ -199,7 +208,7 @@ export async function managedSlackRequest(ctx: ApiCtx): Promise<void> {
 export async function managedSlackEvent(ctx: ApiCtx): Promise<void> {
   const slack = ctx.deps.managedSlack;
   if (!slack) return sendJson(ctx.res, 404, { error: "not_configured" });
-  const tenant = await managedSlackTenant(ctx);
+  const tenant = await managedSlackTenant(ctx, slackTeam(ctx.body));
   if (!tenant) return sendJson(ctx.res, 401, { error: "unauthorized" });
   if ((await ctx.app.tenantFor("slack_team", slackTeam(ctx.body))) !== tenant)
     return sendJson(ctx.res, 409, { error: "installation_mismatch" });
