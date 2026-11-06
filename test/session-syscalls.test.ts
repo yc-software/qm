@@ -136,6 +136,7 @@ test("open creates a child session with parent pointer, spawn meta, and a queued
   assert.equal(child.spawnMeta?.surface, "slack");
   const inFlight = await r.runs.inFlightForThread(child.threadRef);
   assert.equal(inFlight.length, 1);
+  assert.equal(out.runId, inFlight[0]!.id);
   const request = inFlight[0]!.request;
   assert.equal(request.conversation.threadRef, child.threadRef);
   assert.equal(request.deliveryTarget, "D1");

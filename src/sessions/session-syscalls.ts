@@ -196,7 +196,8 @@ export interface SessionOpenInput {
 }
 
 type SessionOpenResult =
-  { ok: true; sessionId: string; title: string; isolation?: ChildIsolation } | { ok: false; message: string };
+  | { ok: true; sessionId: string; runId: string; title: string; isolation?: ChildIsolation }
+  | { ok: false; message: string };
 
 interface SessionWriteInput {
   target: string;
@@ -769,6 +770,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 return {
                   ok: true,
                   sessionId: existing.id,
+                  runId: initialRun.id,
                   title: visibleTitle(existing),
                   ...(existing.spawnMeta?.isolation ? { isolation: existing.spawnMeta.isolation } : {}),
                 };
@@ -833,13 +835,19 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 sessionSenderId: binding.session.id,
                 ...(binding.request.runId ? { delegatingRunId: binding.request.runId } : {}),
               };
-              await deps.runs.enqueue({
+              const enqueued = await deps.runs.enqueue({
                 sessionId: child.threadRef,
                 dedupKey: `subagent-open:${threadRef}`,
                 request: deps.prepareRequest ? await deps.prepareRequest(request) : request,
                 maxAttempts: deps.maxAttempts,
               });
-              return { ok: true, sessionId: child.id, title, ...(isolation ? { isolation } : {}) };
+              return {
+                ok: true,
+                sessionId: child.id,
+                runId: enqueued.run.id,
+                title,
+                ...(isolation ? { isolation } : {}),
+              };
             })
             .catch((error): SessionOpenResult => ({ ok: false, message: errMessage(error) }));
         },

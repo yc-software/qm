@@ -3341,7 +3341,7 @@ test("subagents open exposes noComputer and preserves the internal restriction",
   tc.sessionSyscalls = {
     open: async (input) => {
       opened.push(input);
-      return { ok: true, sessionId: "child", title: "child" };
+      return { ok: true, sessionId: "child", runId: "run-child", title: "child" };
     },
     write: async () => ({ ok: false, message: "unused" }),
     read: async () => ({ ok: false, message: "unused" }),
@@ -3368,7 +3368,13 @@ test("subagents open forwards isolation and reports where the child works", asyn
   tc.sessionSyscalls = {
     open: async (input) => {
       opened.push(input);
-      return { ok: true, sessionId: "child", title: "child", ...(input.isolation ? { isolation: placement } : {}) };
+      return {
+        ok: true,
+        sessionId: "child",
+        runId: "run-child",
+        title: "child",
+        ...(input.isolation ? { isolation: placement } : {}),
+      };
     },
     write: async () => ({ ok: false, message: "unused" }),
     read: async () => ({
@@ -3404,7 +3410,7 @@ test("subagents open schema and dispatch preserve an explicit false fast mode", 
   tc.sessionSyscalls = {
     open: async (input) => {
       assert.equal(input.fastMode, false);
-      return { ok: true, sessionId: "child", title: "child" };
+      return { ok: true, sessionId: "child", runId: "run-child", title: "child" };
     },
     write: async () => ({ ok: false, message: "unused" }),
     read: async () => ({ ok: false, message: "unused" }),
