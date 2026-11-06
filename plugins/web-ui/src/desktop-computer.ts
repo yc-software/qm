@@ -25,8 +25,12 @@ function desktop(): Desk | undefined {
     : undefined;
 }
 
+export function inDesktopApp(): boolean {
+  return Boolean((globalThis as { window?: { qmDesktop?: unknown } }).window?.qmDesktop);
+}
+
 export function webClientSurface(): "desktop" | "browser" {
-  return (globalThis as { window?: { qmDesktop?: unknown } }).window?.qmDesktop ? "desktop" : "browser";
+  return inDesktopApp() ? "desktop" : "browser";
 }
 
 export function desktopTurnId(): string | undefined {

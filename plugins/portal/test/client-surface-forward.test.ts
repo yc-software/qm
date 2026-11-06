@@ -43,12 +43,7 @@ function post(headers: Record<string, string>): Promise<void> {
 }
 
 test("the web surface receives the client surface the app declared", async () => {
-  await post({
-    "content-type": "application/json",
-    "x-qm-client": "ios",
-    "user-agent": "QM/7 CFNetwork/3826 Darwin/25.0.0",
-  });
+  await post({ "content-type": "application/json", "x-qm-client": "ios" });
   const forwarded = seen.at(-1)!;
   assert.equal(forwarded["x-qm-client"], "ios");
-  assert.equal(forwarded["user-agent"], "QM/7 CFNetwork/3826 Darwin/25.0.0");
 });

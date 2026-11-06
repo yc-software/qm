@@ -53,17 +53,27 @@ test("a web turn keeps the client surface it came from on its run", async () => 
   assert.equal((await built.runs.get(runId))?.request.clientSurface, "ios");
 });
 
-test("a turn without a client surface stores none", async () => {
-  const response = await postTurn({}, "web:alice:client-surface-none");
+test("a client surface is kept on turns of other surfaces, as approval replays into swarm workers are", async () => {
+  const response = await postTurn(
+    {
+      surface: "cron",
+      actor: { externalId: "internal:owner" },
+      conversation: {
+        kind: "channel",
+        channelRef: "C9",
+        threadRef: "t-client-surface-cron",
+        audience: [{ externalId: "internal:owner" }],
+      },
+      origin: { kind: "automation" },
+      clientSurface: "browser",
+    },
+    "unused",
+  );
   assert.equal(response.status, 202);
   const { runId } = (await response.json()) as { runId: string };
-  assert.equal((await built.runs.get(runId))?.request.clientSurface, undefined);
+  assert.equal((await built.runs.get(runId))?.request.clientSurface, "browser");
 });
 
-test("an unknown client surface, or one on a non-web turn, is refused", async () => {
+test("an unknown client surface is refused", async () => {
   assert.equal((await postTurn({ clientSurface: "watch" }, "web:alice:client-surface-bad")).status, 400);
-  assert.equal(
-    (await postTurn({ surface: "slack", clientSurface: "ios" }, "web:alice:client-surface-slack")).status,
-    400,
-  );
 });

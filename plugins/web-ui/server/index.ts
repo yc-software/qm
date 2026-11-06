@@ -408,6 +408,7 @@ async function webTurnBase(
   }
   return {
     surface: "web",
+    clientSurface: clientSurfaceOf(req.headers),
     actor: { externalId: user, ...(displayName ? { displayName } : {}) },
     conversation,
     origin: { kind: "human" },
@@ -805,11 +806,7 @@ async function postTurnAndMint(
   const r = await coreFetch(
     "POST",
     `/v1/turns?async=1`,
-    JSON.stringify({
-      ...turn,
-      clientSurface: clientSurfaceOf(req.headers),
-      ...(resolveIdentity(req)?.impersonator ? { analyticsSuppressed: true } : {}),
-    }),
+    JSON.stringify({ ...turn, ...(resolveIdentity(req)?.impersonator ? { analyticsSuppressed: true } : {}) }),
   );
   if (r.status >= 200 && r.status < 300) {
     try {
@@ -2725,7 +2722,11 @@ const apiRoutes: readonly WebRoute[] = [
       }
 
       const approval = { requestId, approved, ...(scope ? { scope } : {}) };
-      const replay: Record<string, unknown> = { ...record.request, approval };
+      const replay: Record<string, unknown> = {
+        ...record.request,
+        approval,
+        clientSurface: clientSurfaceOf(req.headers),
+      };
       delete replay.idempotencyKey;
       if (idempotencyKey) replay.idempotencyKey = idempotencyKey;
       return postTurnAndMint(req, res, replay, user, threadRef);

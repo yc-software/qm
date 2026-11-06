@@ -930,10 +930,10 @@ export async function loadChatPrefs(): Promise<void> {
 }
 
 export async function api<T = unknown>(path: string, init?: RequestInit): Promise<T> {
-  const r = await webFetch(withBase(path), {
-    headers: { "content-type": "application/json", [CLIENT_SURFACE_HEADER]: webClientSurface() },
-    ...init,
-  });
+  const headers = new Headers({ "content-type": "application/json" });
+  new Headers(init?.headers).forEach((value, name) => headers.set(name, value));
+  headers.set(CLIENT_SURFACE_HEADER, webClientSurface());
+  const r = await webFetch(withBase(path), { ...init, headers });
   const text = await r.text();
   let body: unknown = {};
   try {

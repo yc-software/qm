@@ -10,7 +10,6 @@ export function clientSurfaceOf(headers: Record<string, string | string[] | unde
   const declared = headers[CLIENT_SURFACE_HEADER];
   if (isClientSurface(declared)) return declared;
   const ua = typeof headers["user-agent"] === "string" ? headers["user-agent"] : "";
-  if (/\bElectron\//.test(ua)) return "desktop";
   if (/\bCFNetwork\//.test(ua) && /\bDarwin\//.test(ua)) return "ios";
   return "browser";
 }
