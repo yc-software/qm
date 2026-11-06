@@ -75,10 +75,16 @@
       "args": ["--test", "test/finny-integration.test.ts"]
     },
     {
-      "id": "finny-engine-offline",
+      "id": "finny-http-engine-offline",
       "program": "node",
       "requiresDatabase": false,
-      "args": ["--test", "test/finny-http-spreadsheet-engine.test.ts", "test/finny-wiring.test.ts"]
+      "args": ["--test", "test/finny-http-spreadsheet-engine.test.ts"]
+    },
+    {
+      "id": "finny-wiring-postgres",
+      "program": "node",
+      "requiresDatabase": true,
+      "args": ["scripts/run-pg-tests.mjs", "test/finny-wiring.test.ts"]
     },
     {
       "id": "finny-slack-cards-offline",
@@ -355,12 +361,12 @@
           "name": "bound Auditor runs all current deterministic checks from one trusted evidence envelope"
         },
         {
-          "commandId": "finny-engine-offline",
+          "commandId": "finny-http-engine-offline",
           "file": "test/finny-http-spreadsheet-engine.test.ts",
           "name": "HTTP engine sends immutable bytes and binding to the configured endpoint"
         },
         {
-          "commandId": "finny-engine-offline",
+          "commandId": "finny-wiring-postgres",
           "file": "test/finny-wiring.test.ts",
           "name": "stock Finny wiring selects the environment-configured HTTP engine"
         }
@@ -381,12 +387,12 @@
           "name": "worker fails closed on malformed engine output"
         },
         {
-          "commandId": "finny-engine-offline",
+          "commandId": "finny-http-engine-offline",
           "file": "test/finny-http-spreadsheet-engine.test.ts",
           "name": "HTTP engine fails closed on provider errors and bounded response violations"
         },
         {
-          "commandId": "finny-engine-offline",
+          "commandId": "finny-wiring-postgres",
           "file": "test/finny-wiring.test.ts",
           "name": "Finny-enabled build fails before startup without an approved spreadsheet engine"
         }
