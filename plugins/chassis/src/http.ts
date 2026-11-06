@@ -114,6 +114,14 @@ export async function readBody(req: IncomingMessage, maxBytes = Infinity): Promi
   return (await readBodyBytes(req, maxBytes)).toString("utf8");
 }
 
+export function originOf(raw: string): string {
+  try {
+    return new URL(raw).origin;
+  } catch {
+    return "";
+  }
+}
+
 export function sameOriginRequest(req: IncomingMessage, expectedOrigin: string): boolean {
   const origin = req.headers.origin;
   const originMatches =

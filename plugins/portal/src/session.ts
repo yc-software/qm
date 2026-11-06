@@ -26,6 +26,11 @@ export function open(token: string | null | undefined, key: Buffer): Record<stri
   }
 }
 
+export function sessionLifetime(env: NodeJS.ProcessEnv = process.env): { ttl: number; max: number } {
+  const ttl = Number(env.PORTAL_SESSION_TTL_S ?? 604800);
+  return { ttl, max: Number(env.PORTAL_SESSION_MAX_TTL_S ?? Math.max(2592000, ttl)) };
+}
+
 export interface SessionClaims {
   k: "session";
   sub: string;
@@ -91,6 +96,16 @@ export function openImpersonation(token: string | null, key: Buffer, now: number
   if (typeof p.org !== "string" || typeof p.exp !== "number") return null;
   if (now >= p.exp * 1000) return null;
   return p as unknown as ImpersonationClaims;
+}
+
+export function impersonationFor(
+  session: Pick<SessionClaims, "sub" | "org">,
+  cookieHeader: string | undefined,
+  key: Buffer,
+  now: number,
+): ImpersonationClaims | null {
+  const imp = openImpersonation(readCookie(cookieHeader, "portal_impersonate"), key, now);
+  return imp && imp.actor === session.sub && imp.org === session.org ? imp : null;
 }
 
 export function openTmp(token: string | null, key: Buffer, now: number): TmpClaims | null {
