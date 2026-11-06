@@ -1703,7 +1703,7 @@ test("granted connector keeps account and refresh semantics when owner is absent
     },
     1000,
   );
-  assert.match(rendered, /### U_OWNER\n- `[^`]+` — Google \(company\); env `VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM`$/);
+  assert.match(rendered, /### Unknown person\n- `[^`]+` — Google \(company\); env `VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM`$/);
   assert.doesNotMatch(rendered, /expired|Not granted|refresh-token|old-token/);
 });
 
