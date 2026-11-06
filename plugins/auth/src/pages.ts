@@ -47,7 +47,6 @@ const STYLE = `${HARBOUR_STYLE}
     border:1px solid var(--line); border-radius:7px; padding:10px 12px; word-break:break-word; }
 </style>`;
 
-const MAIL_ICON = `<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg>`;
 const SENT_ICON = `<svg viewBox="0 0 24 24"><path d="M21 4 3 11l7 3 3 7z"/><path d="M21 4 10 14"/></svg>`;
 const ALERT_ICON = `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5M12 16h.01"/></svg>`;
 const LOCK_ICON = `<svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>`;
@@ -59,7 +58,7 @@ function page(o: {
   title: string;
   brandName: string;
   trustedSignInLabel?: string;
-  icon: string;
+  icon?: string;
   warn?: boolean;
   heading: string;
   msg?: string;
@@ -72,14 +71,14 @@ function page(o: {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
-<title>${escapeHtml(o.title)} · ${escapeHtml(o.brandName)}</title>
+<title>${escapeHtml(o.title)} · ${escapeHtml(wordmark(o.brandName))}</title>
 ${STYLE}
 </head>
 <body>
   <main>
     ${harbourScene(wordmark(o.brandName))}
     <section class="card" aria-labelledby="t">
-      <div class="icon${o.warn ? " warn" : ""}" aria-hidden="true">${o.icon}</div>
+      ${o.icon ? `<div class="icon${o.warn ? " warn" : ""}" aria-hidden="true">${o.icon}</div>` : ""}
       <h1 id="t">${escapeHtml(o.heading)}</h1>
       ${o.msg ? `<p class="msg">${escapeHtml(o.msg)}</p>` : ""}
       ${o.body ?? ""}
@@ -110,9 +109,9 @@ export function signInPage(o: {
     return page({
       title: "Sign in",
       brandName: o.brandName,
-      icon: LOCK_ICON,
-      heading: `Sign in to ${o.brandName}`,
-      body: trustedButton,
+      heading: `Sign in to ${wordmark(o.brandName)}`,
+      msg: `Use your ${o.trustedSignInLabel} account to continue.`,
+      body: `<div class="actions">${trustedButton}</div>`,
     });
   }
   const trusted = trustedButton ? `${trustedButton}<div class="divider">OR</div>` : "";
@@ -137,7 +136,7 @@ export function signInPage(o: {
         <label for="password">Password</label>
         <input id="password" name="password" type="password" autocomplete="current-password" required maxlength="1024">
         <button class="btn${o.trustedSignInLabel ? " alternative" : ""}" type="submit">Sign in with password</button>
-        <p class="note">Password sign-in is meant for getting started. Once ${escapeHtml(o.brandName)} is set up, your administrator should switch to email links or an identity provider.</p>
+        <p class="note">Password sign-in is meant for getting started. Once ${escapeHtml(wordmark(o.brandName))} is set up, your administrator should switch to email links or an identity provider.</p>
       </form>`
     : "";
   let msg = "Enter your work email and we'll send you a one-time sign-in link.";
@@ -147,8 +146,7 @@ export function signInPage(o: {
   return page({
     title: "Sign in",
     brandName: o.brandName,
-    icon: o.trustedSignInLabel || o.password ? LOCK_ICON : MAIL_ICON,
-    heading: `Sign in to ${o.brandName}`,
+    heading: `Sign in to ${wordmark(o.brandName)}`,
     msg,
     body: `${trusted}${passwordForm}${o.password && o.emailLink ? `<div class="divider">OR</div>` : ""}${emailForm}`,
     help: o.emailLink
@@ -181,7 +179,7 @@ export function confirmSignInPage(o: { brandName: string; trustedSignInLabel?: s
     brandName: o.brandName,
     trustedSignInLabel: o.trustedSignInLabel,
     icon: LOCK_ICON,
-    heading: `Finish signing in to ${o.brandName}`,
+    heading: `Finish signing in to ${wordmark(o.brandName)}`,
     msg: "Confirm below to complete sign-in. Your link is spent the moment you confirm, so do it in the browser you want to be signed in to.",
     body: `<p class="reason" id="no-token" hidden><strong>Nothing to confirm</strong>This page did not receive a sign-in link. Open the link from your email directly, in a browser with JavaScript enabled, or ask for a fresh one.</p>
       <noscript><p class="reason"><strong>JavaScript required</strong>The last step of sign-in reads your link out of the page address so it never reaches a server log. Enable JavaScript for this page, then reopen the link.</p></noscript>
