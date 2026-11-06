@@ -69,6 +69,12 @@
       "args": ["scripts/run-pg-tests.mjs", "test/slack-finny-approvals.test.ts"]
     },
     {
+      "id": "finny-integration-offline",
+      "program": "node",
+      "requiresDatabase": false,
+      "args": ["--test", "test/finny-integration.test.ts"]
+    },
+    {
       "id": "finny-slack-cards-offline",
       "program": "node",
       "requiresDatabase": false,
@@ -175,6 +181,16 @@
           "commandId": "finny-events-postgres",
           "file": "test/finny-events.test.ts",
           "name": "re-audit waits for a new artifact to consume the rework request"
+        },
+        {
+          "commandId": "finny-events-postgres",
+          "file": "test/finny-events.test.ts",
+          "name": "replacement artifact bytes invalidate every required check before finalization"
+        },
+        {
+          "commandId": "finny-events-postgres",
+          "file": "test/finny-events.test.ts",
+          "name": "byte-identical rework preserves selective check invalidation"
         }
       ]
     },
@@ -228,6 +244,11 @@
           "commandId": "finny-policy-postgres",
           "file": "test/finny-policy.test.ts",
           "name": "initial policy requires every check at generation one"
+        },
+        {
+          "commandId": "finny-finalizer-postgres",
+          "file": "test/finny-finalizer.test.ts",
+          "name": "finalizer rejects current-generation PASS attestations bound to another artifact"
         }
       ]
     },
@@ -311,6 +332,11 @@
           "commandId": "finny-worker-postgres",
           "file": "test/finny-deterministic-worker.test.ts",
           "name": "Core verification returns a deeply frozen canonical copy without caller aliases"
+        },
+        {
+          "commandId": "finny-integration-offline",
+          "file": "test/finny-integration.test.ts",
+          "name": "evidence authority derives immutable scoped file digests and verifies deterministic envelopes"
         }
       ]
     },
@@ -467,6 +493,41 @@
           "commandId": "finny-runtime-postgres",
           "file": "test/finny-runtime-coordinator.test.ts",
           "name": "a completed artifact action replays after the producer binding retires"
+        },
+        {
+          "commandId": "finny-runtime-postgres",
+          "file": "test/finny-runtime-coordinator.test.ts",
+          "name": "artifact dispatch recovers from committed action authority without resolving the original proposal"
+        },
+        {
+          "commandId": "finny-runtime-postgres",
+          "file": "test/finny-runtime-coordinator.test.ts",
+          "name": "producer rework dispatch recovers from the committed BLOCK without repeating escalation judgment"
+        },
+        {
+          "commandId": "finny-runtime-postgres",
+          "file": "test/finny-runtime-coordinator.test.ts",
+          "name": "runtime reconciliation records a poison recovery and continues with later jobs"
+        },
+        {
+          "commandId": "finny-runtime-postgres",
+          "file": "test/finny-runtime-coordinator.test.ts",
+          "name": "restart replays artifact authority committed before the job event"
+        },
+        {
+          "commandId": "finny-runtime-postgres",
+          "file": "test/finny-runtime-coordinator.test.ts",
+          "name": "restart replays BLOCK authority committed before the job event"
+        },
+        {
+          "commandId": "finny-runtime-postgres",
+          "file": "test/finny-runtime-coordinator.test.ts",
+          "name": "restart replays PASS authority committed before the job event"
+        },
+        {
+          "commandId": "finny-runtime-postgres",
+          "file": "test/finny-runtime-coordinator.test.ts",
+          "name": "restart replays escalation authority committed before the BLOCK event"
         }
       ]
     }
