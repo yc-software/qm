@@ -25,6 +25,7 @@ import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER, type PortalIdentity } fro
 import { errMessage } from "../util/errors.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { canonicalPayload } from "../../plugins/chassis/src/source-auth-sign.ts";
+import { KEEP_ALIVE_TIMEOUT_MS } from "../../plugins/chassis/src/http.ts";
 import { armBodyDeadline, PayloadTooLargeError, readRawBody, sendJson, verifyOrReject } from "./http.ts";
 import { findRoute, run, type AdminAccess, type ApiCtx, type BaseCtx, type Route } from "./routes/route.ts";
 import { apiRoutes, rawRoutes } from "./routes/index.ts";
@@ -502,7 +503,7 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
   ready.catch((err: unknown) => console.error("[server] fastify initialization failed:", errMessage(err)));
   server.requestTimeout = 0;
   server.headersTimeout = 10_000;
-  server.keepAliveTimeout = 5_000;
+  server.keepAliveTimeout = KEEP_ALIVE_TIMEOUT_MS;
   server.maxConnections = 1024;
 
   async function front(req: IncomingMessage, res: ServerResponse): Promise<void> {

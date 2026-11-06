@@ -71,6 +71,7 @@ import {
   sameOriginRequest as sameOriginFor,
   isLoopbackUrl,
   isSecureOrLoopbackUrl,
+  KEEP_ALIVE_TIMEOUT_MS,
 } from "../../chassis/src/http.ts";
 import {
   CORE_API_URL as CORE,
@@ -1870,6 +1871,7 @@ function validEmailDomain(value: string): boolean {
 
 export async function startServer(options: { port: number; host?: string }): Promise<void> {
   bootChecks();
+  server.keepAliveTimeout = KEEP_ALIVE_TIMEOUT_MS;
   if (process.env.AUTH_EMBEDDED === "1") {
     if (AUTH_BROKER_UPSTREAM !== "http://127.0.0.1:8099") {
       throw new Error("Embedded auth requires the loopback broker upstream");
