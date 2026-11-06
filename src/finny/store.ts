@@ -17,11 +17,11 @@ export interface CreateFinnyJobInput {
   id: string;
   scopeId: string;
   planDigest: string;
-  artifactDigest: string;
+  artifactDigest?: string;
   policy: FinnyPolicySnapshot;
   findingPolicy: FinnyFindingPolicy;
   originThreadRef: string;
-  provisionalRevision: string;
+  provisionalRevision?: string;
 }
 
 export interface RecordFinnyApprovalInput {

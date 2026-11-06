@@ -75,6 +75,10 @@ const SCHEMA = [
 ];
 
 const EVENT_SCHEMA = [
+  `ALTER TABLE finny_jobs ALTER COLUMN artifact_digest DROP NOT NULL`,
+  `ALTER TABLE finny_jobs ALTER COLUMN provisional_revision DROP NOT NULL`,
+  `ALTER TABLE finny_jobs ADD CONSTRAINT finny_jobs_artifact_binding_pair
+     CHECK ((artifact_digest IS NULL) = (provisional_revision IS NULL))`,
   `ALTER TABLE finny_jobs ADD COLUMN IF NOT EXISTS event_head BIGINT NOT NULL DEFAULT 0 CHECK (event_head >= 0)`,
   `ALTER TABLE finny_jobs ADD COLUMN IF NOT EXISTS pending_rework_seq BIGINT CHECK (pending_rework_seq > 0)`,
   `ALTER TABLE finny_jobs ADD COLUMN IF NOT EXISTS unresolved_escalation_seq BIGINT CHECK (unresolved_escalation_seq > 0)`,
@@ -103,11 +107,11 @@ function rowToJob(row: Record<string, unknown>): FinnyJob {
     id: row.id as string,
     scopeId: row.scope_id as string,
     planDigest: row.plan_digest as string,
-    artifactDigest: row.artifact_digest as string,
+    ...(row.artifact_digest !== null ? { artifactDigest: row.artifact_digest as string } : {}),
     policy,
     ...(row.finding_policy !== null ? { findingPolicy: row.finding_policy as FinnyFindingPolicy } : {}),
     originThreadRef: row.origin_thread_ref as string,
-    provisionalRevision: row.provisional_revision as string,
+    ...(row.provisional_revision !== null ? { provisionalRevision: row.provisional_revision as string } : {}),
     ...(decidedAt !== null
       ? {
           approval: {
@@ -240,6 +244,15 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
     async createJob(input: CreateFinnyJobInput) {
       assertFinnyPolicy(input.policy);
       assertFinnyFindingPolicy(input.findingPolicy);
+      const hasArtifactDigest = input.artifactDigest !== undefined;
+      const hasProvisionalRevision = input.provisionalRevision !== undefined;
+      if (hasArtifactDigest !== hasProvisionalRevision) {
+        throw new Error("Finny artifact binding must include both digest and revision");
+      }
+      if (hasArtifactDigest) {
+        assertNonEmpty(input.artifactDigest as string, "artifact digest");
+        assertNonEmpty(input.provisionalRevision as string, "provisional revision");
+      }
       const now = Date.now();
       const rows = await q(
         `INSERT INTO finny_jobs(
@@ -380,9 +393,13 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
         }
         if (row.finalized_at !== null) throw new Error("Finny job is already finalized");
         if (row.unresolved_escalation_seq !== null) throw new Error("Finny job has an unresolved escalation");
+        const artifactWasBound = row.artifact_digest !== null || row.provisional_revision !== null;
+        if ((row.artifact_digest === null) !== (row.provisional_revision === null)) {
+          throw new Error("Finny artifact binding is inconsistent");
+        }
         const changesArtifact =
           row.artifact_digest !== input.artifactDigest || row.provisional_revision !== input.provisionalRevision;
-        if (changesArtifact) {
+        if (artifactWasBound && changesArtifact) {
           if (row.pending_rework_seq === null) throw new Error("Finny artifact replacement requires a rework request");
           const latest = await db.query(
             "SELECT event_type FROM finny_job_events WHERE job_id=$1 ORDER BY seq DESC LIMIT 1",
@@ -391,7 +408,7 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
           if (latest.rows[0]?.event_type !== "rework_requested") {
             throw new Error("Finny artifact replacement requires a rework request");
           }
-        } else if (Number(row.event_head) !== 0) {
+        } else if (artifactWasBound && Number(row.event_head) !== 0) {
           throw new Error("Finny artifact readiness was already recorded");
         }
         const now = Date.now();
@@ -555,6 +572,14 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
         }
         if (row.pending_rework_seq !== null) throw new Error("Finny job is awaiting a reworked artifact");
         if (row.unresolved_escalation_seq !== null) throw new Error("Finny job has an unresolved escalation");
+        if (
+          typeof row.artifact_digest !== "string" ||
+          !row.artifact_digest ||
+          typeof row.provisional_revision !== "string" ||
+          !row.provisional_revision
+        ) {
+          throw new Error("Finny job does not have a bound artifact");
+        }
         if (
           row.approval_action !== "approve" ||
           row.approval_decided_at === null ||

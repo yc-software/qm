@@ -125,3 +125,45 @@ test("worker grants cannot cross job, scope, artifact, run, or policy boundaries
     /grant/i,
   );
 });
+
+test("Auditor grants wait for artifact_ready binding", async () => {
+  const store = createPostgresFinnyStore(testDatabaseUrl());
+  const now = Date.now();
+  const grants = createFinnyWorkerGrants(store, SECRET, () => now);
+  const input = {
+    id: randomUUID(),
+    scopeId: "personal:U1",
+    planDigest: `plan-${randomUUID()}`,
+    policy: initialFinnyPolicy(),
+    originThreadRef: `slack:C1:${randomUUID()}`,
+    findingPolicy: {
+      id: "finny-r5-test",
+      maxFindings: 8,
+      maxCodeLength: 80,
+      maxMessageLength: 2_000,
+    },
+  };
+  await store.createJob(input);
+  await store.recordApproval({
+    scopeId: input.scopeId,
+    jobId: input.id,
+    requestId: randomUUID(),
+    actorId: "U1",
+    action: "approve",
+    planDigest: input.planDigest,
+    originThreadRef: input.originThreadRef,
+    decidedAt: now,
+  });
+
+  await assert.rejects(
+    grants.issuePair({
+      scopeId: input.scopeId,
+      jobId: input.id,
+      principalId: "U-core",
+      producerRunId: "run-producer-before-artifact",
+      auditorRunId: "run-auditor-before-artifact",
+      expiresAt: now + 60_000,
+    }),
+    /bound artifact/i,
+  );
+});

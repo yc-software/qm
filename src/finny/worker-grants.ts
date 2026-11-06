@@ -115,6 +115,9 @@ export function createFinnyWorkerGrants(store: FinnyStore, secret: string, now: 
       if (job.approval?.action !== "approve" || job.approval.consumedAt !== undefined) {
         throw new Error("Finny job is not approved for worker dispatch");
       }
+      if (!job.artifactDigest || !job.provisionalRevision) {
+        throw new Error("Finny worker grants require a bound artifact");
+      }
       const [producer, auditor] = await Promise.all([
         mint(input, "producer", input.producerRunId, job.artifactDigest, job.policy),
         mint(input, "auditor", input.auditorRunId, job.artifactDigest, job.policy),

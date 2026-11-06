@@ -529,3 +529,61 @@ test("authoritative finding policy rejects oversized finding text", async () => 
     /finding text exceeds policy/i,
   );
 });
+
+test("artifact_ready authoritatively binds a job created before its artifact", async () => {
+  const store = createPostgresFinnyStore(testDatabaseUrl());
+  const { artifactDigest: _artifactDigest, provisionalRevision: _provisionalRevision, ...input } = createInput();
+  await store.createJob(input);
+  await store.recordApproval({
+    scopeId: input.scopeId,
+    jobId: input.id,
+    requestId: randomUUID(),
+    actorId: "U1",
+    action: "approve",
+    planDigest: input.planDigest,
+    originThreadRef: input.originThreadRef,
+    decidedAt: Date.now(),
+  });
+
+  const ready = await store.recordArtifactReady({
+    scopeId: input.scopeId,
+    jobId: input.id,
+    artifactDigest: "artifact-created-after-approval",
+    provisionalRevision: "revision-created-after-approval",
+    idempotencyKey: randomUUID(),
+  });
+
+  assert.equal(ready.job.artifactDigest, "artifact-created-after-approval");
+  assert.equal(ready.job.provisionalRevision, "revision-created-after-approval");
+  assert.equal(ready.events[0]?.type, "artifact_ready");
+  for (const checkId of FINNY_CHECK_IDS) {
+    await store.recordAttestation({
+      id: randomUUID(),
+      scopeId: input.scopeId,
+      jobId: input.id,
+      checkId,
+      generation: 1,
+      verdict: "pass",
+      evidenceDigest: `post-ready-${checkId}`,
+      artifactDigest: "artifact-created-after-approval",
+      issuerPrincipalId: "U-auditor",
+      issuerRunId: "run-auditor-post-ready",
+      idempotencyKey: randomUUID(),
+    });
+  }
+  const receipt = await store.finalize(
+    { scopeId: input.scopeId, jobId: input.id, idempotencyKey: randomUUID() },
+    async () => "post-ready-receipt",
+  );
+  assert.equal(receipt.payload.artifactDigest, "artifact-created-after-approval");
+  assert.equal(receipt.payload.provisionalRevision, "revision-created-after-approval");
+});
+
+test("job creation rejects a partial artifact binding", async () => {
+  const store = createPostgresFinnyStore(testDatabaseUrl());
+  const { provisionalRevision: _provisionalRevision, ...input } = createInput();
+
+  await assert.rejects(store.createJob(input), /artifact binding must include both digest and revision/i);
+  const { artifactDigest: _artifactDigest, ...revisionOnly } = createInput();
+  await assert.rejects(store.createJob(revisionOnly), /artifact binding must include both digest and revision/i);
+});

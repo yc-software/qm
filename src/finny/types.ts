@@ -40,11 +40,11 @@ export interface FinnyJob {
   id: string;
   scopeId: string;
   planDigest: string;
-  artifactDigest: string;
+  artifactDigest?: string;
   policy: FinnyPolicySnapshot;
   findingPolicy?: FinnyFindingPolicy;
   originThreadRef: string;
-  provisionalRevision: string;
+  provisionalRevision?: string;
   approval?: FinnyApproval;
   ledgerHead: number;
   eventHead: number;
