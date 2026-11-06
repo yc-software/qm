@@ -48,6 +48,20 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
   const recordJudgment = (j: Parameters<AmbientJudgmentStore["record"]>[0]): void => {
     void deps.ambientJudgments?.record(j).catch(reportFailureAs("ambient: record judgment", undefined));
   };
+  async function threadAnchors(
+    surface: string,
+    container: string,
+    triggers: CachedMessage[],
+  ): Promise<CachedMessage[]> {
+    const cache = deps.surfaceCache;
+    const roots = [...new Set(triggers.flatMap((m) => (m.sub ? [m.sub] : [])))];
+    if (!cache || !roots.length) return [];
+    const [parents, ...ownReplies] = await Promise.all([
+      cache.readMessages(container, { surface, timestamps: roots, noFallback: true }),
+      ...roots.map((sub) => cache.readMessages(container, { surface, sub, self: true, limit: 1, noFallback: true })),
+    ]);
+    return [...parents!, ...ownReplies.flat()];
+  }
   async function judgeAmbientContainer(
     surface: string,
     container: string,
@@ -151,7 +165,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
         orders: ordersForJudge,
         ...(self ? { self } : {}),
         messages: forJudge,
-        recent: ambientWindow(asPolicy(all), forJudge),
+        recent: ambientWindow(asPolicy(all), forJudge, asPolicy(await threadAnchors(surface, container, forJudge))),
         ...(scheduled ? { scheduled: true } : {}),
       };
       const prompt = renderAmbientPrompt(judgeBatch);

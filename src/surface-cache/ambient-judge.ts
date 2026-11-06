@@ -60,10 +60,19 @@ export interface AmbientBatch {
 
 const EARLIER_CONTEXT = 10;
 
-export function ambientWindow(all: readonly CachedMessage[], triggers: readonly CachedMessage[]): CachedMessage[] {
+export function ambientWindow(
+  all: readonly CachedMessage[],
+  triggers: readonly CachedMessage[],
+  threadAnchors: readonly CachedMessage[] = [],
+): CachedMessage[] {
   const triggerTs = new Set(triggers.map((m) => m.ts));
   const first = all.findIndex((m) => triggerTs.has(m.ts));
-  return all.slice(Math.max(0, (first < 0 ? all.length : first) - EARLIER_CONTEXT));
+  const window = all.slice(Math.max(0, (first < 0 ? all.length : first) - EARLIER_CONTEXT));
+  const shown = new Set(window.map((m) => m.ts));
+  const missing = threadAnchors.filter(
+    (m, i) => !shown.has(m.ts) && threadAnchors.findIndex((o) => o.ts === m.ts) === i,
+  );
+  return missing.length ? [...missing, ...window].sort((x, y) => (x.ts < y.ts ? -1 : 1)) : window;
 }
 
 export function recentWakeMessages(batch: AmbientBatch): WakeMessage[] {
