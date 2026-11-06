@@ -18,6 +18,12 @@ async function approvedJob() {
     artifactDigest: `artifact-${randomUUID()}`,
     policy: initialFinnyPolicy(),
     originThreadRef: `slack:C1:${randomUUID()}`,
+    findingPolicy: {
+      id: "finny-r5-test",
+      maxFindings: 8,
+      maxCodeLength: 80,
+      maxMessageLength: 2_000,
+    },
     provisionalRevision: `revision-${randomUUID()}`,
   };
   await store.createJob(job);

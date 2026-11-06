@@ -11,6 +11,12 @@ const createInput = () => ({
   planDigest: "plan-sha256",
   artifactDigest: "artifact-sha256",
   policy: initialFinnyPolicy(),
+  findingPolicy: {
+    id: "finny-r5-test",
+    maxFindings: 8,
+    maxCodeLength: 80,
+    maxMessageLength: 2_000,
+  },
   originThreadRef: "slack:C1:100.1",
   provisionalRevision: "delivery-revision-1",
 });
@@ -22,7 +28,9 @@ test("Finny store round-trips a Core policy snapshot", async () => {
   assert.equal(created.id, input.id);
   assert.equal(created.scopeId, input.scopeId);
   assert.deepEqual(created.policy, input.policy);
+  assert.deepEqual(created.findingPolicy, input.findingPolicy);
   assert.equal(created.ledgerHead, 0);
+  assert.equal(created.eventHead, 0);
   assert.equal(created.approval, undefined);
   assert.deepEqual(await store.getJob(input.scopeId, input.id), created);
   assert.equal(await store.getJob("personal:U2", input.id), null);
@@ -99,9 +107,22 @@ test("Finny attestations require the current policy generation and deduplicate e
   assert.deepEqual(duplicate.attestation, first.attestation);
   assert.equal((await store.getJob(input.scopeId, input.id))?.ledgerHead, 1);
 
-  await assert.rejects(store.recordAttestation({ ...submission, id: randomUUID(), generation: 2 }), /generation/i);
   await assert.rejects(
-    store.recordAttestation({ ...submission, id: randomUUID(), checkId: "unknown.check" as never }),
+    store.recordAttestation({
+      ...submission,
+      id: randomUUID(),
+      generation: 2,
+      idempotencyKey: randomUUID(),
+    }),
+    /generation/i,
+  );
+  await assert.rejects(
+    store.recordAttestation({
+      ...submission,
+      id: randomUUID(),
+      checkId: "unknown.check" as never,
+      idempotencyKey: randomUUID(),
+    }),
     /required check/i,
   );
   await assert.rejects(
