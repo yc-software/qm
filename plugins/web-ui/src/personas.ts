@@ -533,7 +533,7 @@ function channelsSection(persona: PersonaDetail, reload: (flash: string) => void
     "Slack channels",
     owner ? rowAction("Add channel", Plus, () => openPersonaShare(persona, () => reload("Access saved."))) : nothing,
     body,
-    `Members of these channels can chat with ${persona.name} there, and only there.`,
+    `People in these channels can ask QM to use ${persona.name} in a thread there. QM stays the default; they can't edit ${persona.name}.`,
   );
 }
 
