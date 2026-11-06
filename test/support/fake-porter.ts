@@ -13,6 +13,7 @@ export interface FakePorterBody {
   egress?: string[];
   env?: Record<string, string>;
   networking?: PorterSandboxSpec["networking"];
+  memory?: string;
 }
 
 export interface FakePorterOptions {
@@ -50,6 +51,7 @@ interface BodyRecord {
   egress?: string[];
   env?: Record<string, string>;
   networking?: PorterSandboxSpec["networking"];
+  memory?: string;
 }
 
 const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -177,6 +179,7 @@ export function installFakePorter(opts: FakePorterOptions = {}): FakePorter {
           ...(spec.egress ? { egress: spec.egress.allowed_destinations } : {}),
           ...(spec.env ? { env: spec.env } : {}),
           ...(spec.networking ? { networking: spec.networking } : {}),
+          ...(spec.resources?.memory ? { memory: spec.resources.memory } : {}),
         });
         return sandboxOf(spec.name!, false);
       },
@@ -279,6 +282,7 @@ export function installFakePorter(opts: FakePorterOptions = {}): FakePorter {
         ...(b.egress ? { egress: b.egress } : {}),
         ...(b.env ? { env: b.env } : {}),
         ...(b.networking ? { networking: b.networking } : {}),
+        ...(b.memory ? { memory: b.memory } : {}),
       })),
     hostOf: (name) => bodies.get(name)?.host ?? "",
     statusReads: () => statusReads,

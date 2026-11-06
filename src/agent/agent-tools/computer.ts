@@ -216,6 +216,13 @@ export function computerTools(kit: ToolKit) {
       ),
       backend: Type.Optional(Type.String({ description: "create: provider from list." })),
       name: Type.Optional(Type.String({ description: "create: display name." })),
+      memory_gib: Type.Optional(
+        Type.Integer({
+          minimum: 1,
+          description:
+            "create/restart: GiB of memory, on providers whose list entry has sizesMemory. Omit for the default size; restart keeps the computer's size.",
+        }),
+      ),
       purpose: Type.String({ description: "As for execute." }),
     }),
     async execute(callId, params) {
@@ -228,6 +235,7 @@ export function computerTools(kit: ToolKit) {
         ...(params.sandbox_id !== undefined ? { sandbox_id: params.sandbox_id } : {}),
         ...(params.backend ? { backend: params.backend } : {}),
         ...(params.name ? { name: params.name } : {}),
+        ...(params.memory_gib !== undefined ? { memory_gib: params.memory_gib } : {}),
       });
       try {
         if (["list", "create", "set_default", "retire"].includes(params.action)) {
@@ -238,13 +246,14 @@ export function computerTools(kit: ToolKit) {
               backend: params.backend,
               name: params.name,
               sandboxId: params.sandbox_id,
+              ...(params.memory_gib !== undefined ? { memoryGb: params.memory_gib } : {}),
             },
           );
           return recordResult(callId, { tool: "sandbox", action: params.action }, text(JSON.stringify(result)));
         }
         if (params.sandbox_id === null) throw new Error("null only clears a default");
         if (params.action === "restart") {
-          await tc.restartComputer(params.sandbox_id);
+          await tc.restartComputer(params.sandbox_id, params.memory_gib);
           return recordResult(
             callId,
             { tool: "sandbox", action: "restart", restarted: true },
@@ -596,9 +605,9 @@ export function computerTools(kit: ToolKit) {
 const operationFields: Record<string, Record<string, string[]>> = {
   sandbox: {
     status: ["sandbox_id"],
-    restart: ["sandbox_id"],
+    restart: ["sandbox_id", "memory_gib"],
     list: [],
-    create: ["backend", "name"],
+    create: ["backend", "name", "memory_gib"],
     set_default: ["sandbox_id"],
     retire: ["sandbox_id"],
   },
