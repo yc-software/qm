@@ -13,12 +13,12 @@ import { NotFoundError } from "porter-sandbox";
 import { scopeId } from "../src/types.ts";
 import { randomUUID } from "node:crypto";
 import { withTenant } from "../src/tenants/context.ts";
-import { loadTenantSettings, noteTenantAppHandle } from "../src/tenants/settings.ts";
+import { noteTenantAppHandle } from "../src/tenants/settings.ts";
+import { asCompany, companyTest } from "./support/app-handle.ts";
 import { installFakePorter, type FakePorter } from "./support/fake-porter.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testMap } from "./support/test-database.ts";
 import { tenantMap } from "./support/tenant-map.ts";
-import { TEST_TENANT } from "./support/test-tenant-id.ts";
 
 const SERVER = [
   "const fs = require('fs');",
@@ -69,20 +69,6 @@ function version(
   }
   return { version: 1, createdAt: Date.now(), entrypoint, snapshotDir, ...extra };
 }
-
-const asCompany = <T>(fn: () => Promise<T>): Promise<T> =>
-  withTenant(TEST_TENANT, async () => {
-    noteTenantAppHandle("acme1");
-    try {
-      return await fn();
-    } finally {
-      await loadTenantSettings({ q: async () => [] });
-    }
-  });
-
-const companyTest = (name: string, fn: () => Promise<void>): void => {
-  void test(name, () => asCompany(fn));
-};
 
 const fetchText = async (path: string): Promise<string> => (await fetch(`http://127.0.0.1:${appPort}${path}`)).text();
 

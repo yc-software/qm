@@ -34,22 +34,7 @@ import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { allGrants } from "./support/acl-grants.ts";
 import { bindBootTenant } from "../src/tenants/boot.ts";
 import { TEST_TENANT } from "./support/test-tenant.ts";
-import { withTenant } from "../src/tenants/context.ts";
-import { loadTenantSettings, noteTenantAppHandle } from "../src/tenants/settings.ts";
-
-const asCompany = <T>(fn: () => Promise<T>): Promise<T> =>
-  withTenant(TEST_TENANT, async () => {
-    noteTenantAppHandle("acme1");
-    try {
-      return await fn();
-    } finally {
-      await loadTenantSettings({ q: async () => [] });
-    }
-  });
-
-const companyTest = (name: string, fn: () => Promise<void>): void => {
-  void test(name, () => asCompany(fn));
-};
+import { companyTest } from "./support/app-handle.ts";
 
 const externalSharingOn = { enabled: async () => true } as unknown as FeatureFlagStore;
 

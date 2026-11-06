@@ -22,6 +22,11 @@ import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { createPgPool } from "../src/persistence/pg-pool.ts";
+import { onTenantLoad } from "../src/tenants/cache.ts";
+import { loadTenantSettings } from "../src/tenants/settings.ts";
+import { TEST_APP_HANDLE } from "./support/app-handle.ts";
+import { ownerUrl, TEST_TENANT } from "./support/test-tenant.ts";
 
 const externalSharingOn = { enabled: async () => true } as unknown as FeatureFlagStore;
 
@@ -49,6 +54,13 @@ test("app-only gateway checks exact current personal read grants without inherit
   await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const backings = testDeployBackings({ git: { repoRoot: join(dir, "repos") } });
+  const owner = createPgPool(ownerUrl(backings.databaseUrl).toString());
+  const appPool = createPgPool(backings.databaseUrl);
+  await owner.q(`UPDATE tenants SET settings = settings || jsonb_build_object('handle', $2::text) WHERE id = $1`, [
+    TEST_TENANT,
+    TEST_APP_HANDLE,
+  ]);
+  const stopLoad = onTenantLoad(() => loadTenantSettings(appPool));
   const deploy = createDeployService({
     ...singleProcessDeps(),
     externalSharingAllowed: async () => true,
@@ -113,7 +125,7 @@ test("app-only gateway checks exact current personal read grants without inherit
           path,
           method,
           headers: {
-            host: `${name}.apps.example.test`,
+            host: `${TEST_APP_HANDLE}-${name}.apps.example.test`,
             cookie,
             "sec-fetch-dest": "document",
             accept: "application/json",
@@ -185,6 +197,10 @@ test("app-only gateway checks exact current personal read grants without inherit
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await new Promise<void>((resolve) => upstream.close(() => resolve()));
+    stopLoad();
+    await owner.q(`UPDATE tenants SET settings = settings - 'handle' WHERE id = $1`, [TEST_TENANT]);
+    await owner.close();
+    await appPool.close();
     rmSync(dir, { recursive: true, force: true });
   }
 });
