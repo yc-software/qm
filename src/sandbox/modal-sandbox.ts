@@ -124,6 +124,7 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
 
   const sessionByName = new Map<string, ModalSession>();
   const scopeByName = new Map<string, string>();
+  const sizeByScope = new Map<string, number>();
   const scratchKeyByName = new Map<string, string>();
   const activeScratch = new Map<string, number>();
 
@@ -208,7 +209,7 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
     }
     let session: ModalSession;
     try {
-      session = await client.create({ name, tags: tags("scope") });
+      session = await client.create({ name, tags: tags("scope"), memoryGb: sizeByScope.get(scope) });
     } catch (err) {
       if (!(err instanceof ModalNameConflictError)) throw err;
       const adopted = await client.fromName(name);
@@ -454,6 +455,7 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
   const profile: AgentComputerProfile = {
     backend: "modal",
     writablePersistence: "provider_managed",
+    sizesMemory: true,
     processSessions: true,
     egressEnforcement: opts.egressProxyUrl ? "domain" : "none",
     spec: {
@@ -679,6 +681,8 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
       } else {
         name = sandboxScopeName(prefix, scope);
         scopeByName.set(name, scope);
+        if (provOpts?.memoryGb) sizeByScope.set(scope, provOpts.memoryGb);
+        else sizeByScope.delete(scope);
         ({ coldStart } = await ensureSession(scope, name, provOpts?.onStatus));
       }
 
@@ -762,7 +766,7 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
         }
       : {}),
 
-    async restartComputer(scopeId: string): Promise<void> {
+    async restartComputer(scopeId: string, memoryGb?: number): Promise<void> {
       await provisionQueue(scopeId, async () => {
         const stored = await store.get(scopeId);
         if (!stored) return;
@@ -780,6 +784,16 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
         sessionByName.delete(name);
         await store.merge(scopeId, { hydrationPending: false, recoveryError: undefined });
       });
+      if (memoryGb === undefined) return;
+      const previous = sizeByScope.get(scopeId);
+      sizeByScope.set(scopeId, memoryGb);
+      try {
+        await ensureSession(scopeId, sandboxScopeName(prefix, scopeId));
+      } catch (error) {
+        if (previous === undefined) sizeByScope.delete(scopeId);
+        else sizeByScope.set(scopeId, previous);
+        throw error;
+      }
     },
 
     async computerStatus(scopeId: string): Promise<ComputerStatus> {
