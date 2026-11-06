@@ -1,3 +1,4 @@
+import { posthogConfig } from "../plugins/chassis/src/posthog-config.ts";
 import { isClaudeSubscriptionToken } from "./model/claude-subscription.ts";
 import {
   deploymentBrokerCredentialsFromEnv,
@@ -492,6 +493,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     throw new Error("SLACK_EVENTS_PORT must be an integer from 1 through 65535");
   }
   const memoryProviderConfig = parseMemoryProviderConfig(env.MEMORY_PROVIDER_CONFIG, env);
+  const analytics = posthogConfig(env.POSTHOG_CONFIG);
   return {
     suggestedActivitiesEnabled: boolEnvStrict("SUGGESTED_ACTIVITIES_ENABLED", env.SUGGESTED_ACTIVITIES_ENABLED) ?? true,
     ...(env.SUGGESTED_ACTIVITIES_CONTEXT
@@ -503,9 +505,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...optNum(env, "PUBLIC_PORT", "publicPort"),
     dataDir,
     orgId: env.ORG_ID ?? DEFAULT_ORG_ID,
-    ...(env.POSTHOG_API_KEY?.trim()
-      ? { productAnalytics: { apiKey: env.POSTHOG_API_KEY.trim(), host: env.POSTHOG_HOST?.trim() } }
-      : {}),
+    ...(analytics ? { productAnalytics: { apiKey: analytics.apiKey, host: analytics.host } } : {}),
     ...(env.DATABASE_URL ? { databaseUrl: env.DATABASE_URL } : {}),
     ...(env.DATABASE_POOL_URL ? { databasePoolUrl: env.DATABASE_POOL_URL } : {}),
     ...(env.DATABASE_POOL_CA_CERT ? { databasePoolCaCert: env.DATABASE_POOL_CA_CERT } : {}),

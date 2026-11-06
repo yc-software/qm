@@ -45,6 +45,17 @@ test("Sprites proxy transition URLs are optional and parsed independently of the
   ]);
 });
 
+test("core reads product analytics from POSTHOG_CONFIG", () => {
+  assert.equal(loadConfig({}).productAnalytics, undefined);
+  assert.deepEqual(
+    loadConfig({
+      POSTHOG_CONFIG: JSON.stringify({ token: "phc_a", api_host: "https://eu.i.posthog.com", autocapture: true }),
+    }).productAnalytics,
+    { apiKey: "phc_a", host: "https://eu.i.posthog.com" },
+  );
+  assert.throws(() => loadConfig({ POSTHOG_CONFIG: JSON.stringify({ token: "secret" }) }), /ingestion token/);
+});
+
 test("capability compression is explicitly enabled after verifier rollout", () => {
   assert.equal(loadConfig({}).capabilityTokenCompression, false);
   assert.equal(loadConfig({ CAPABILITY_TOKEN_COMPRESSION: "0" }).capabilityTokenCompression, false);
