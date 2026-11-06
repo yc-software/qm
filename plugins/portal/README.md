@@ -74,6 +74,14 @@ grants but does not remove existing ones. Company login and Slack integration re
 existing configuration. Deployment CLI secret wiring, account linking, and live
 qualification are pending; this is not a released deployment feature.
 
+On a shared multi-workspace host, a person who signs in but belongs to no
+workspace gets a "no workspace yet" page showing the account they signed in
+with and a link to sign in with a different account. Optionally,
+`PORTAL_NO_WORKSPACE_LINKS` (JSON: `{"claim": "<claim name>", "links":
+{"<claim value>": "https://…"}}`) maps a value of one identity-provider claim to
+the address of that organisation's current assistant; matching addresses (at
+most three) are offered on the page. A malformed value fails boot checks.
+
 When `PORTAL_TRUSTED_OIDC_LABEL` is explicitly set, successful trusted sign-in
 makes the portal remember the configured issuer in a
 host-only, HttpOnly browser preference for one year. Ordinary
