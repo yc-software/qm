@@ -117,6 +117,8 @@ test("connector onboarding is governed by the live admin-configured list", () =>
   assert.match(connectApps, /^description: Link a user's Slack account or add QM to the company Slack/m);
   assert.match(connectApps, /reply with one short line and `::link-slack-account\{\}`/);
   assert.match(connectApps, /add or install QM in their Slack, reply with `::add-to-slack\{\}`/);
+  assert.match(connectApps, /never pair it with `::link-slack-account\{\}`/);
+  assert.doesNotMatch(connectApps, /put `::add-to-slack\{\}` before it/);
   assert.match(onboarding, /complete allowlist|same allowlist/);
   assert.doesNotMatch(onboarding, /machine-local credentials such as|`gh`, `glab`, or AWS/);
 });
