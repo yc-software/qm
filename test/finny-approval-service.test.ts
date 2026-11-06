@@ -763,3 +763,74 @@ test("approval readiness migration preserves legacy clarification behavior", asy
   const upgraded = createPostgresFinnyStore(url);
   assert.ok((await upgraded.getApprovalRequest(approvalRequestId))?.readyAt);
 });
+
+test("committed decisions survive post-commit dispatch failures for durable recovery", async () => {
+  const store = createPostgresFinnyStore(testDatabaseUrl());
+  const scopeId = "personal:approver@example.com";
+  const originThreadRef = "slack:C-finance:100.200";
+  const create = async () => {
+    const jobId = randomUUID();
+    const requestId = randomUUID();
+    await store.createJob({
+      id: jobId,
+      scopeId,
+      plan,
+      policy: initialFinnyPolicy(),
+      findingPolicy,
+      originThreadRef,
+    });
+    await store.createApprovalRequest({ scopeId, jobId, requestId, authorizedActorId: "approver@example.com" });
+    return { jobId, requestId };
+  };
+  const errors: Array<{ kind: string; jobId: string }> = [];
+  const approved = await create();
+  const service = createFinnyApprovalService({
+    store,
+    identity: internalIdentity(),
+    onApproved: async () => {
+      throw new Error("dispatch unavailable");
+    },
+    onClarificationReady: async () => {
+      throw new Error("delivery unavailable");
+    },
+    onPostCommitError: async (_error, input) => {
+      errors.push({ kind: input.kind, jobId: input.jobId });
+    },
+  });
+  const approvalOutcome = await service.decide({
+    requestId: approved.requestId,
+    decision: { kind: "plan", action: "approve" },
+    actor: { externalId: "approver@example.com" },
+    slack: { channel: "C-finance", messageTs: "100.300", threadTs: "100.200" },
+  });
+  assert.equal(approvalOutcome.kind, "decision");
+  assert.equal((await store.getJob(scopeId, approved.jobId))?.approval?.action, "approve");
+
+  const clarified = await create();
+  const clarificationId = randomUUID();
+  await store.createClarificationRequest({
+    scopeId,
+    jobId: clarified.jobId,
+    requestId: clarificationId,
+    authorizedActorId: "approver@example.com",
+    question: "Which accounting basis should be used?",
+    options: [
+      { id: "contracts", label: "Signed contracts" },
+      { id: "invoices", label: "Issued invoices" },
+    ],
+    recommendedOptionId: "contracts",
+    idempotencyKey: `clarification:${clarificationId}`,
+  });
+  const clarificationOutcome = await service.decide({
+    requestId: clarificationId,
+    decision: { kind: "clarification", action: "select", optionId: "contracts" },
+    actor: { externalId: "approver@example.com" },
+    slack: { channel: "C-finance", messageTs: "100.300", threadTs: "100.200" },
+  });
+  assert.equal(clarificationOutcome.kind, "result");
+  assert.equal((await service.pending(clarified.requestId))?.kind, "plan");
+  assert.deepEqual(errors, [
+    { kind: "approval_dispatch", jobId: approved.jobId },
+    { kind: "clarification_delivery", jobId: clarified.jobId },
+  ]);
+});

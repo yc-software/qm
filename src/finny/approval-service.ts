@@ -19,7 +19,22 @@ export function createFinnyApprovalService(deps: {
   identity: Pick<IdentityService, "resolve" | "isInternal">;
   onApproved(input: FinnyApprovedPlan): Promise<void>;
   onClarificationReady?(input: { scopeId: string; jobId: string }): Promise<void>;
+  onPostCommitError?(
+    error: unknown,
+    input: { kind: "approval_dispatch" | "clarification_delivery"; scopeId: string; jobId: string; requestId: string },
+  ): Promise<void>;
 }): FinnyApprovalBridge {
+  const afterCommit = async (
+    input: { kind: "approval_dispatch" | "clarification_delivery"; scopeId: string; jobId: string; requestId: string },
+    action: () => Promise<void>,
+  ): Promise<void> => {
+    try {
+      await action();
+    } catch (error) {
+      if (!deps.onPostCommitError) throw error;
+      await deps.onPostCommitError(error, input).catch(() => undefined);
+    }
+  };
   return {
     async pending(requestId) {
       const request = await deps.store.getApprovalRequest(requestId);
@@ -83,7 +98,16 @@ export function createFinnyApprovalService(deps: {
         const recommended = selectedOption?.id === decided.recommendedOptionId;
         if (decidedChoice?.kind === "option" && !selectedOption)
           throw new Error("Finny clarification option is not available");
-        if (recommended) await deps.onClarificationReady?.({ scopeId: decided.scopeId, jobId: decided.jobId });
+        if (recommended && deps.onClarificationReady)
+          await afterCommit(
+            {
+              kind: "clarification_delivery",
+              scopeId: decided.scopeId,
+              jobId: decided.jobId,
+              requestId: decided.requestId,
+            },
+            () => deps.onClarificationReady!({ scopeId: decided.scopeId, jobId: decided.jobId }),
+          );
         return {
           kind: "result",
           card: {
@@ -114,7 +138,15 @@ export function createFinnyApprovalService(deps: {
         decidedAt: Date.now(),
       });
       if (input.decision.action === "approve")
-        await deps.onApproved({ scopeId: request.scopeId, jobId: request.jobId, requestId: request.requestId });
+        await afterCommit(
+          {
+            kind: "approval_dispatch",
+            scopeId: request.scopeId,
+            jobId: request.jobId,
+            requestId: request.requestId,
+          },
+          () => deps.onApproved({ scopeId: request.scopeId, jobId: request.jobId, requestId: request.requestId }),
+        );
       const outcome = PLAN_OUTCOMES[input.decision.action];
       return { kind: "decision", card: { title: request.job.plan.title, ...outcome } };
     },

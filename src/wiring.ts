@@ -2215,6 +2215,17 @@ export function buildApp(
       identity,
       onApproved: afterApproved,
       onClarificationReady: deliverPlanApproval,
+      onPostCommitError: async (error, input) => {
+        await errors.record(
+          {
+            category: "finny",
+            code: input.kind,
+            message: errMessage(error),
+            scopeLabel: input.scopeId,
+          },
+          error,
+        );
+      },
     });
     const deliverEscalation = async (job: import("./finny/types.ts").FinnyJob) => {
       if (job.unresolvedEscalationSequence === undefined) return;
