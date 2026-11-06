@@ -1,3 +1,4 @@
+import { item } from "./item-fixture.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { goalWorked } from "../src/work-duration.ts";
@@ -21,7 +22,7 @@ const turn = (
   ...extra,
 });
 const strip = { objective: goal.objective, status: "active" as const, createdAt: goal.createdAt };
-const created = [{ type: "tool_result", payload: { tool: "goal", action: "create", goal }, createdAt: 2 * MIN }];
+const created = [item("ToolResult", { createdAt: 2 * MIN, tool: "goal", body: { action: "create", goal } })];
 
 test("worked time counts only running turns: idle and paused intervals are excluded", () => {
   const messages = [

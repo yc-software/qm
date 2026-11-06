@@ -1,5 +1,7 @@
 import type { ResolvedSecurityPolicy } from "./security/security-posture.ts";
 import type { SharingPosture } from "./resolution/sharing-posture.ts";
+import type { SurfaceAccount, TurnSurfaceOrigin } from "./surfaces/contract.ts";
+import type { SessionOrigin } from "./sessions/session-store.ts";
 
 export type PrincipalType = "internal" | "guest";
 
@@ -16,7 +18,7 @@ export interface Principal {
   displayName?: string;
 }
 
-export const SCOPE_KINDS = ["personal", "channel", "team", "org", "group"] as const;
+export const SCOPE_KINDS = ["personal", "channel", "team", "org", "group", "persona"] as const;
 export type ScopeKind = (typeof SCOPE_KINDS)[number];
 
 export type ScopeId = string;
@@ -39,6 +41,10 @@ export function scopeActor(scope: ScopeId): string {
 
 export function actsAsScope(principalId: string, scope: ScopeId): boolean {
   return principalId === scopeActor(scope);
+}
+
+export function isSystemActor(actorId: string | undefined): boolean {
+  return !!actorId?.startsWith("system:");
 }
 
 export function parseScopeId(id: ScopeId): { kind: ScopeKind | null; ref: string } {
@@ -82,9 +88,25 @@ export interface SurfaceBriefing {
   instructions?: string;
 }
 
+export type ChildIsolationMode = "shared" | "worktree" | "sandbox";
+
+export interface ChildWorkdir {
+  workdir: string;
+  branch: string;
+  base?: string;
+}
+
+export interface ChildIsolation {
+  mode: ChildIsolationMode;
+  sandboxId?: string;
+  workdir?: string;
+  branch?: string;
+  base?: string;
+  baseChain?: ChildWorkdir[];
+}
+
 export interface SpawnMeta {
-  slackSource?: TurnRequest["slackSource"];
-  externalSlack?: TurnRequest["externalSlack"];
+  surfaceOrigin?: TurnSurfaceOrigin;
   surfaceTools?: boolean;
   deliveryCandidates?: TurnRequest["deliveryCandidates"];
   origin?: TurnOrigin;
@@ -96,11 +118,13 @@ export interface SpawnMeta {
   conversation: Conversation;
   actor: Principal;
   deliveryTarget?: string;
+  deliveryWebhook?: DeliveryWebhook;
   timezone?: string;
   readOnly?: boolean;
   model?: string;
   thinkingLevel?: string;
   fastMode?: boolean;
+  isolation?: ChildIsolation;
 }
 
 export interface Session {
@@ -121,8 +145,13 @@ export interface Session {
   forkBoundarySeq?: number;
   sideChat?: { entrySeq: number; quote: string; occurrence: number; expanded: boolean };
   parentSessionId?: string;
+  origin?: SessionOrigin;
   spawnMeta?: SpawnMeta;
+  surfaceBinding?: TurnSurfaceOrigin;
+  runtime?: TurnRuntime;
+  personaId?: string;
   lastActivityAt?: number;
+  lastUserPreview?: string | null;
   hasEntries?: boolean;
   working?: boolean;
   awaitingInput?: boolean;
@@ -133,41 +162,13 @@ export interface Session {
   crons?: number;
   goal?: { objective: string; activeMs: number; runningSince?: number; floor?: Record<string, number> };
   subagents?: { running: number; waiting: number };
-}
-
-export type EntryType =
-  | "user"
-  | "assistant"
-  | "thinking"
-  | "text_start"
-  | "text"
-  | "tool_call"
-  | "tool_result"
-  | "system"
-  | "delivery"
-  | "approval_request"
-  | "approval_resolved";
-
-export interface SessionEntry {
-  sessionId: string;
-  seq: number;
-  parentSeq: number | null;
-  type: EntryType;
-  payload: unknown;
-  scopeLabel: ScopeId;
-  createdAt: number;
-}
-
-type LayerMode = "ro" | "rw";
-
-export interface WorkspaceLayer {
-  scopeId: ScopeId;
-  mountPath: string;
-  mode: LayerMode;
+  workingSince?: number;
+  purpose?: string;
 }
 
 export interface Resolution {
-  layers: WorkspaceLayer[];
+  writableScopeId: ScopeId;
+  readOnlyScopeIds: ScopeId[];
   systemPrompt: string;
   egress: EgressPolicy;
   commandPolicy: CommandPolicy;
@@ -176,6 +177,7 @@ export interface Resolution {
   approvalGrantModes: ApprovalGrantModes;
   orgScopeId: ScopeId;
   grantedHandles: GrantedHandle[];
+  guidance?: string;
 }
 
 export type Permission = "read" | "write";
@@ -196,10 +198,14 @@ export interface GrantedHandle {
   permission: Permission;
 }
 
+export interface DeliveryWebhook {
+  binding: string;
+  url: string;
+}
+
 export interface Destination {
-  slackAccountId?: string;
-  slackTeamId?: string;
-  slackPolicyNamespace?: string;
+  webhook?: DeliveryWebhook;
+  account?: SurfaceAccount;
   keychainAskId?: string;
   deploymentAccess?: { deploymentId: string; requesterId: string };
   commandApprovalId?: string;
@@ -213,9 +219,11 @@ export interface Destination {
   unfurlLinks?: boolean;
   react?: { messageTs: string; emoji: string };
   delete?: { messageTs: string };
+  edit?: { messageTs: string };
   pin?: { messageTs: string; remove?: boolean };
   identity?: string;
   debugFooter?: string;
+  editNote?: string;
   webTranscript?:
     | { kind: "reply" }
     | { kind: "slack_reply"; sessionId: string; ts: string; name: string }
@@ -230,6 +238,8 @@ export interface CandidateDestination extends Destination {
 export type BackgroundWakeTrigger = "cron" | "webhook" | "monitor" | (string & {});
 
 export interface DeliveryProvenance {
+  sourceRequestId?: string;
+  sourceRunId?: string;
   sourceTitle?: string;
   trigger: BackgroundWakeTrigger;
   surface: string;
@@ -357,21 +367,8 @@ export interface ClientToolResult {
 
 export interface TurnRequest {
   desktopClientId?: string;
-  slackSource?: {
-    accountId: string;
-    teamId: string;
-    userId: string;
-    externalPolicyNamespace?: string;
-    replyThreadTs?: string;
-  };
-  externalSlack?: {
-    accountId: string;
-    teamId: string;
-    userId: string;
-    companyDomains: string[];
-    companyTeamIds: string[];
-    serviceCredentials: string[];
-  };
+  midTurn?: "steer" | "queue";
+  surfaceOrigin?: TurnSurfaceOrigin;
   sessionSenderId?: string;
   delegatingRunId?: string;
   privateSessionMessage?: true;
@@ -379,6 +376,7 @@ export interface TurnRequest {
   surface: string;
   scopeVersion?: string;
   deliveryTarget?: string;
+  deliveryWebhook?: DeliveryWebhook;
   deliveryCandidates?: { target: string; label: string }[];
   actor: ActorAssertion;
   conversation: {
@@ -393,16 +391,10 @@ export interface TurnRequest {
   };
   text: string;
   origin?: TurnOrigin;
-  triggerTs?: string;
-  entryTs?: string;
   gatewayContext?: GatewayContext;
-  triggered?: boolean;
   unattendedGrants?: string[];
-  securityScreenData?: string;
-  triggerDestination?: Destination;
-  ownerKeychainUnion?: boolean;
-  unprompted?: boolean;
-  liveActor?: boolean;
+  cronScript?: import("./triggers/types.ts").CronScript;
+  infrequentCron?: boolean;
   botActor?: boolean;
   conversationHeader?: string;
   priorTurns?: ConversationTurn[];
@@ -494,21 +486,27 @@ export interface TurnRuntime {
   change?: { rule: string } | { agent: "task" | "scope" };
 }
 
+export type StopScope = "run" | "session" | "tree" | "ancestor";
+
 export interface TurnResult {
   status: "ok" | "refused" | "failed" | "pending_approval" | "queued" | "silent" | "react";
   sessionId?: string;
   reply?: string;
   reactions?: string[];
   reason?: string;
-  refusalKind?: "security_quarantine" | "session_busy" | "model_budget" | "approval_denied" | "internal_only";
+  refusalKind?: "security_quarantine" | "model_budget" | "approval_denied" | "internal_only";
   errorCode?: string;
   adminUrl?: string;
   runId?: string;
   steered?: true;
+  steerTs?: string;
   stopped?: boolean;
+  stopScope?: StopScope;
   pendingApprovals?: PendingApproval[];
   attachments?: OutgoingAttachment[];
   sourceUserSeq?: number;
   sourceAssistantEntrySeq?: number;
   runtime?: TurnRuntime;
+  scriptVerdict?: string;
+  retracted?: string[];
 }

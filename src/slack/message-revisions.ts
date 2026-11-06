@@ -1,12 +1,12 @@
-import type { ScopeId, SessionEntry } from "../types.ts";
-import type { Lease, SessionStore } from "../sessions/session-store.ts";
+import type { SessionStore, SessionWriter } from "../sessions/session-store.ts";
+import { hasRunningRun, type RunStore } from "../runs/run-store.ts";
 import { parseSlackThreadRef, slackThreadRefCandidates } from "./message-gating.ts";
 import type { IngestEvent, SurfaceCache } from "../surface-cache/types.ts";
 import { isoFromTs, xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
 import { sleep } from "../util/async.ts";
+import { isAgentReply, isHidden, isUserItem, type Item, messageTs } from "../sessions/items.ts";
 
 export interface MessageRevisionPayload {
-  kind: "message_revision";
   action: "edited" | "deleted";
   ts: string;
   text?: string;
@@ -21,20 +21,17 @@ interface MessageRevisionSource {
   text?: string;
 }
 
-export type RevisionSessions = Pick<
-  SessionStore,
-  "append" | "sessionsByThreadRefs" | "acquireLease" | "releaseLease" | "getEntries"
->;
+export type RevisionSessions = Pick<SessionStore, "append" | "sessionsByThreadRefs" | "getItems">;
+
+export type RevisionRuns = Pick<RunStore, "inFlightForThread">;
 
 interface RevisionSession {
   id: string;
-  scopeId: ScopeId;
 }
 
-export function messageRevision(e: Pick<SessionEntry, "type" | "payload">): MessageRevisionPayload | null {
-  if (e.type !== "system") return null;
-  const p = e.payload as { kind?: unknown; action?: unknown; ts?: unknown } | null;
-  if (p?.kind !== "message_revision") return null;
+export function messageRevision(e: Pick<Item, "kind" | "body">): MessageRevisionPayload | null {
+  if (e.kind !== "Retraction") return null;
+  const p = e.body;
   if (p.action !== "edited" && p.action !== "deleted") return null;
   if (typeof p.ts !== "string" || !p.ts) return null;
   return p as unknown as MessageRevisionPayload;
@@ -66,32 +63,22 @@ interface OriginalMessage {
   sourceRole?: "agent";
 }
 
-function findOriginal(entries: readonly SessionEntry[], ts: string): OriginalMessage | null {
+function findOriginal(items: readonly Item[], ts: string): OriginalMessage | null {
   let found: OriginalMessage | null = null;
-  for (const e of entries) {
-    if (e.type !== "user") continue;
-    const p = e.payload as {
-      ts?: unknown;
-      text?: unknown;
-      name?: unknown;
-      sourceRole?: unknown;
-      hidden?: unknown;
-    } | null;
-    if (p?.ts !== ts) continue;
-    if (p.hidden === true) return null;
+  for (const e of items) {
+    if (!isUserItem(e) || messageTs(e) !== ts) continue;
+    if (isHidden(e)) return null;
+    const { name, sourceRole } = e.body;
     found = {
-      text: typeof p.text === "string" ? p.text : "",
-      ...(p.sourceRole === "agent" ? { sourceRole: "agent" as const } : {}),
-      ...(typeof p.name === "string" && p.name.trim() ? { name: p.name.trim() } : {}),
+      text: e.text ?? "",
+      ...(sourceRole === "agent" ? { sourceRole: "agent" as const } : {}),
+      ...(typeof name === "string" && name.trim() ? { name: name.trim() } : {}),
     };
   }
   return found;
 }
 
-function revisionToRecord(
-  entries: readonly SessionEntry[],
-  source: MessageRevisionSource,
-): MessageRevisionPayload | null {
+function revisionToRecord(entries: readonly Item[], source: MessageRevisionSource): MessageRevisionPayload | null {
   const original = findOriginal(entries, source.ts);
   if (!original || (source.self && original.sourceRole !== "agent")) return null;
   let last: MessageRevisionPayload | null = null;
@@ -105,24 +92,23 @@ function revisionToRecord(
   };
   if (source.deleted) {
     if (last?.action === "deleted") return null;
-    return { kind: "message_revision", action: "deleted", ts: source.ts, ...named };
+    return { action: "deleted", ts: source.ts, ...named };
   }
   const text = String(source.text ?? "");
   const effective = last?.action === "deleted" ? null : (last?.text ?? original.text);
   if (!text.trim() || text === effective) return null;
-  return { kind: "message_revision", action: "edited", ts: source.ts, text, ...named };
+  return { action: "edited", ts: source.ts, text, ...named };
 }
 
 async function recordRevision(
   sessions: Pick<SessionStore, "append">,
-  lease: Lease,
-  session: RevisionSession,
-  entries: readonly SessionEntry[],
+  writer: SessionWriter,
+  items: readonly Item[],
   source: MessageRevisionSource,
 ): Promise<boolean> {
-  const payload = revisionToRecord(entries, source);
-  if (!payload) return false;
-  await sessions.append(lease, { type: "system", payload, scopeLabel: session.scopeId });
+  const revision = revisionToRecord(items, source);
+  if (!revision) return false;
+  await sessions.append(writer, { kind: "Retraction", body: { ...revision } });
   return true;
 }
 
@@ -135,26 +121,23 @@ const DEFAULT_IDLE_RETRY: IdleRetry = { attempts: 4, retryMs: 3_000 };
 
 async function recordWhenIdle(
   sessions: RevisionSessions,
-  session: RevisionSession,
+  runs: RevisionRuns,
+  session: RevisionSession & { threadRef: string },
   source: MessageRevisionSource,
   retry: IdleRetry,
 ): Promise<void> {
-  if (!revisionToRecord(await sessions.getEntries(session.id), source)) return;
+  if (!revisionToRecord(await sessions.getItems(session.id), source)) return;
   for (let attempt = 0; attempt < retry.attempts; attempt++) {
     if (attempt > 0) await sleep(retry.retryMs, { unref: true });
-    const { lease } = await sessions.acquireLease(session.id, "backfill");
-    if (!lease) continue;
-    try {
-      await recordRevision(sessions, lease, session, await sessions.getEntries(session.id), source);
-      return;
-    } finally {
-      await sessions.releaseLease(lease);
-    }
+    if (await hasRunningRun(runs, session.threadRef)) continue;
+    await recordRevision(sessions, { sessionId: session.id }, await sessions.getItems(session.id), source);
+    return;
   }
 }
 
 export async function recordMessageRevisions(
   sessions: RevisionSessions,
+  runs: RevisionRuns,
   events: readonly IngestEvent[],
   retry: IdleRetry = DEFAULT_IDLE_RETRY,
 ): Promise<void> {
@@ -162,21 +145,21 @@ export async function recordMessageRevisions(
     const refs = await sessions.sessionsByThreadRefs(
       slackThreadRefCandidates(event.container, event.ts, event.sub ?? undefined),
     );
-    for (const ref of refs) await recordWhenIdle(sessions, ref, event, retry);
+    for (const ref of refs) await recordWhenIdle(sessions, runs, ref, event, retry);
   }
 }
 
 const ANCHOR_WALK_BACK = 8;
 
 export async function revisionAnchorAt(
-  sessions: Pick<SessionStore, "latestEntrySeq" | "getEntry">,
+  sessions: Pick<SessionStore, "latestItemSeq" | "getItem">,
   sessionId: string,
 ): Promise<number | undefined> {
-  let seq = await sessions.latestEntrySeq(sessionId);
+  let seq = await sessions.latestItemSeq(sessionId);
   for (let steps = 0; seq >= 0 && steps < ANCHOR_WALK_BACK; steps++, seq--) {
-    const entry = await sessions.getEntry(sessionId, seq);
-    if (!entry) return undefined;
-    if (entry.type === "user" || entry.type === "assistant") return entry.createdAt;
+    const item = await sessions.getItem(sessionId, seq);
+    if (!item) return undefined;
+    if (isUserItem(item) || isAgentReply(item)) return item.createdAt;
   }
   return undefined;
 }
@@ -187,9 +170,9 @@ export function slackTsToMs(ts: string | undefined): number | undefined {
 }
 
 export async function reconcileMessageRevisions(opts: {
-  sessions: Pick<SessionStore, "append" | "getEntries">;
+  sessions: Pick<SessionStore, "append" | "getItems">;
   surfaceCache: Pick<SurfaceCache, "revisedSince">;
-  lease: Lease;
+  writer: SessionWriter;
   session: RevisionSession & { threadRef: string };
   anchorAt: number | undefined;
   fallbackSince: number;
@@ -200,10 +183,10 @@ export async function reconcileMessageRevisions(opts: {
   const since = Math.max(1, Math.min(opts.anchorAt ?? opts.fallbackSince, slackTsToMs(opts.triggerTs) ?? Infinity));
   const revised = await opts.surfaceCache.revisedSince(ref.container, since, ref.root ? { thread: ref.root } : {});
   if (!revised.length) return 0;
-  const entries = await opts.sessions.getEntries(opts.session.id);
+  const items = await opts.sessions.getItems(opts.session.id);
   let recorded = 0;
   for (const row of revised) {
-    if (await recordRevision(opts.sessions, opts.lease, opts.session, entries, row)) recorded++;
+    if (await recordRevision(opts.sessions, opts.writer, items, row)) recorded++;
   }
   return recorded;
 }

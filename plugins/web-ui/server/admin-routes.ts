@@ -39,7 +39,6 @@ const ALLOWED: Record<string, string> = {
   audit: "GET",
   deployments: "GET",
   sessions: "GET",
-  runs: "GET",
   files: "GET",
   retention: "GET",
   directory: "GET",
@@ -61,6 +60,7 @@ const ALLOWED: Record<string, string> = {
   "model-registry": "GET POST PUT DELETE",
   "custom-providers": "GET PUT DELETE",
   "mcp-servers": "GET PUT DELETE",
+  "memory-registry": "GET PUT DELETE",
 };
 
 export function adminRoutes(d: AdminRouteDeps) {
@@ -142,7 +142,7 @@ export function adminRoutes(d: AdminRouteDeps) {
       }
     }
     if (Object.hasOwn(ALLOWED, first) && ALLOWED[first]!.split(" ").includes(method)) {
-      const body = method === "GET" || method === "DELETE" ? "" : await d.readBody(c.req);
+      const body = method === "GET" ? "" : await d.readBody(c.req);
       return relay(c, method as HttpMethod, corePath, body);
     }
     c.req.resume();

@@ -66,6 +66,7 @@ export interface Loop extends TriggerBase {
   healthReason?: string;
   throttle?: boolean;
   cronId?: string;
+  lastScanAt?: number;
   consecutiveFailedFires?: number;
   quarantineClearedBy?: string;
   quarantineClearedAt?: number;
@@ -102,7 +103,6 @@ export interface LoopItemTriage {
 }
 
 export interface LoopItem {
-  previousLoopId?: string;
   triage?: LoopItemTriage;
   inboxPreview?: LoopSourcePayload;
   id: string;

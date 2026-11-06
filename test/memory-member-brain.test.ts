@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
+import { createServer as netServer, type AddressInfo, type Socket } from "node:net";
+import { createMcpClient } from "../src/mcp/mcp-client.ts";
 import type { MemoryService } from "../src/memory/memory-service.ts";
 import { withProviders } from "../src/memory/provider-outcome.ts";
 import { createRegistryMemoryService } from "../src/memory/registry-memory.ts";
@@ -109,6 +110,116 @@ test("a stalled member brain ends at its deadline, and QM cancels the request it
   assert.ok(elapsed < 1_500, `took ${elapsed}ms`);
   const call = requests.find(({ rpc }) => rpc === "tools/call");
   assert.equal(call?.signal?.aborted, true);
+  for (let waited = 0; brain.openSessions() && waited < 2_000; waited += 20)
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(brain.openSessions(), 0);
+});
+
+test("a brain that never answers its session end can't hold a call past its deadline", async (t) => {
+  for (const [call, expected, endCancelled] of [
+    [() => new Promise(() => {}), "rejected", false],
+    [() => ({ content: [{ type: "text", text: "bees" }] }), "fulfilled", true],
+  ] as const) {
+    const brain = await brainServer(t, call);
+    const ends: Array<AbortSignal | null | undefined> = [];
+    const wedged: AddressFetch = (input, init) => {
+      if (init?.method !== "DELETE") return loopbackFetch(input, init);
+      ends.push(init.signal);
+      return new Promise((_, reject) => init.signal?.addEventListener("abort", () => reject(init.signal?.reason)));
+    };
+    const client = createMcpClient({
+      url: brain.url,
+      auth: { mode: "client-credentials", clientId: "qm-member", clientSecret: "member-secret" },
+      fetch: wedged,
+    });
+    const outcome = await Promise.race([
+      client.callTool("memory_recall", {}, undefined, AbortSignal.timeout(300)).then(
+        () => "fulfilled",
+        () => "rejected",
+      ),
+      new Promise((resolve) => setTimeout(resolve, 1_500, "pending").unref()),
+    ]);
+    assert.equal(outcome, expected);
+    assert.equal(ends.length, 1);
+    assert.equal(ends[0]?.aborted, endCancelled);
+  }
+});
+
+test("a session end the brain trickles is cut off by the call timeout, not kept open by each byte", async (t) => {
+  const brain = await startMcpTestServer(t, {
+    tools: [{ name: "memory_recall", inputSchema: { type: "object" } }],
+    call: () => new Promise(() => {}),
+  });
+  const ends: Array<{ socket: Socket; closed: boolean }> = [];
+  const trickle = netServer((socket) => {
+    const end = { socket, closed: false };
+    ends.push(end);
+    socket.on("error", () => {});
+    socket.once("data", () => {
+      socket.write("HTTP/1.1 200 OK\r\nx-trickle: ");
+      const drip = setInterval(() => socket.write("a"), 20);
+      socket.once("close", () => {
+        clearInterval(drip);
+        end.closed = true;
+      });
+    });
+  });
+  trickle.listen(0, "127.0.0.1");
+  await new Promise((resolve) => trickle.once("listening", resolve));
+  t.after(() => {
+    for (const { socket } of ends) socket.destroy();
+    trickle.close();
+  });
+  const endpoint = `http://127.0.0.1:${(trickle.address() as AddressInfo).port}/mcp`;
+  const timeout = AbortSignal.timeout.bind(AbortSignal);
+  t.mock.method(AbortSignal, "timeout", (ms: number) => timeout(ms / 1_000));
+  const client = createMcpClient({
+    url: brain.url,
+    auth: { mode: "bearer", token: "member-token" },
+    fetch: (input, init) => loopbackFetch(init?.method === "DELETE" ? endpoint : input, init),
+  });
+  const stop = new AbortController();
+  setTimeout(() => stop.abort(), 100).unref();
+  await assert.rejects(client.callTool("memory_recall", {}, undefined, stop.signal));
+  for (let waited = 0; !ends[0]?.closed && waited < 3_000; waited += 20)
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(ends.length, 1);
+  assert.equal(ends[0]?.closed, true);
+});
+
+test("an https brain can't move QM's token request, and the client secret in it, onto http", async () => {
+  const origin = "https://brain.alice.example";
+  const seen: string[] = [];
+  const tls: AddressFetch = async (input) => {
+    const url = new URL(input);
+    seen.push(url.href);
+    if (url.pathname.startsWith("/.well-known/oauth-protected-resource"))
+      return Response.json({ resource: `${origin}/mcp`, authorization_servers: [`${origin}/`] });
+    if (url.pathname.startsWith("/.well-known/"))
+      return Response.json({
+        issuer: `${origin}/`,
+        authorization_endpoint: `${origin}/authorize`,
+        token_endpoint: "http://brain.alice.example/token",
+        response_types_supported: ["code"],
+        grant_types_supported: ["client_credentials"],
+      });
+    if (url.protocol === "http:") return Response.json({ access_token: "t", token_type: "Bearer", expires_in: 3600 });
+    return Response.json(
+      { error: "unauthorized" },
+      { status: 401, headers: { "www-authenticate": 'Bearer error="invalid_token"' } },
+    );
+  };
+  const brain = serving(ownedBy(`${origin}/mcp`, "U1"), tls);
+  assert.deepEqual(
+    (await brain.search()).problems.map(({ code }) => code),
+    ["memory_provider_failed"],
+  );
+  assert.ok(seen.some((href) => href.startsWith(`${origin}/.well-known/`)));
+  assert.deepEqual(
+    seen.filter((href) => href.startsWith("http:")),
+    [],
+  );
+  assert.match(causes(brain.errors[0]), /requests stay on https/);
 });
 
 test("an oversized or endless member brain response fails as soon as it passes the size limit", async (t) => {

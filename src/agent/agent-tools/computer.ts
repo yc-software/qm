@@ -5,7 +5,8 @@ import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent
 import { Type, type TSchema } from "typebox";
 import { CONFIG_DEFAULTS } from "../../config.ts";
 import { NeedsApproval, CommandDenied } from "../../tools/primitives.ts";
-import { errMessage } from "../../util/errors.ts";
+import { errMessage, swallow } from "../../util/errors.ts";
+import { withAbort } from "../../util/async.ts";
 import { computerVerdict } from "../../sandbox/sandbox.ts";
 import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
 import { SANDBOX_CAPABILITY_TTL_MS } from "../../auth/capability-token.ts";
@@ -18,8 +19,7 @@ function fmtStatus(s: { state: "running" } | { state: "exited"; code: number }):
 const PRESSURE_WARN_FULL60 = 50;
 
 export function computerTools(kit: ToolKit) {
-  const { ref, opts, log, recordCall, recordResult, blockOnApproval } = kit;
-  const reachExec = !!opts?.reachExec;
+  const { ref, opts, logResult, recordCall, recordResult, blockOnApproval } = kit;
   const execTimeoutSec = Math.round((opts?.execTimeoutMs ?? CONFIG_DEFAULTS.execTimeoutDefaultSec * 1000) / 1000);
   const execCeilingSec = Math.round((opts?.execTimeoutCeilingMs ?? CONFIG_DEFAULTS.execTimeoutMaxSec * 1000) / 1000);
   const bgTtlSec = Math.round((opts?.backgroundJobTtlMs ?? CONFIG_DEFAULTS.backgroundJobTtlSec * 1000) / 1000);
@@ -79,16 +79,11 @@ export function computerTools(kit: ToolKit) {
       purpose?: string;
       credentials?: string[];
     },
-    route?: { scratch?: boolean; reachTarget?: string },
+    route?: { scratch?: boolean },
   ) => {
     const tc = ref.current;
     if (!tc) return text("[error] no active tool context");
-    let scopeNote: { scope?: string } = {};
-    if (route?.reachTarget !== undefined) {
-      scopeNote = { scope: route.reachTarget };
-    } else if (route !== undefined) {
-      scopeNote = { scope: route.scratch ? "scratch" : "scoped" };
-    }
+    const scopeNote: { scope?: string } = route !== undefined ? { scope: route.scratch ? "scratch" : "scoped" } : {};
     await recordCall(callId, {
       tool: "execute",
       command: params.command,
@@ -101,7 +96,6 @@ export function computerTools(kit: ToolKit) {
         ...(params.sandbox_id !== undefined ? { sandboxId: params.sandbox_id } : {}),
         ...(params.timeout_seconds !== undefined ? { timeoutSeconds: params.timeout_seconds } : {}),
         ...(route?.scratch ? { scratch: true } : {}),
-        ...(route?.reachTarget !== undefined ? { reachTarget: route.reachTarget } : {}),
         ...(params.credentials?.length ? { credentials: params.credentials } : {}),
         ...(ref.abortSignal ? { signal: ref.abortSignal } : {}),
       };
@@ -109,12 +103,10 @@ export function computerTools(kit: ToolKit) {
       const { stdout: _stdout, stderr: _stderr, scratchReroute, ...execMeta } = r;
       const resultScope = scratchReroute ? { scope: "scratch" } : scopeNote;
       const parts = [r.stdout, r.stderr ? `[stderr]\n${r.stderr}` : ""].filter(Boolean).join("\n");
-      let placePrefix = "";
-      if (r.reached) placePrefix = `[ran on ${r.reached.label}'s computer]\n`;
-      else if (scratchReroute)
-        placePrefix =
-          "[ran on this turn's scratch computer, not the shared one, because it names a private credential; its files are discarded after the turn]\n";
-      const localExec = !route?.scratch && !scratchReroute && route?.reachTarget === undefined && !r.reached;
+      const placePrefix = scratchReroute
+        ? "[ran on this turn's scratch computer, not the shared one, because it names a private credential; its files are discarded after the turn]\n"
+        : "";
+      const localExec = !route?.scratch && !scratchReroute;
       const pressureNote =
         localExec && r.pressure && r.pressure.ioFull60 >= PRESSURE_WARN_FULL60
           ? `\n[pressure] this computer's disk is saturated (io ${r.pressure.ioFull60}%, load ${r.pressure.load1}) — sequence heavy work, move self-contained runs to scope:"scratch", or check sandbox action=status`
@@ -132,9 +124,6 @@ export function computerTools(kit: ToolKit) {
           details: r,
         },
         r.timedOut,
-        undefined,
-        false,
-        r.reached ? { provenance: "external", source: "reached room" } : undefined,
       );
     } catch (e) {
       if (e instanceof MaskedExecutionError) {
@@ -149,7 +138,7 @@ export function computerTools(kit: ToolKit) {
           true,
         );
       }
-      await log("tool_result", {
+      await logResult({
         tool: "execute",
         ...scopeNote,
         callId,
@@ -163,20 +152,10 @@ export function computerTools(kit: ToolKit) {
   const FILE_SEND_GUIDANCE =
     "execute, files, skills and apps use the default sandbox when sandbox_id is omitted. Send files with the surface `post` action's `files` if present, else `attach` (workspace paths or {file_id}); background jobs cannot deliver files. ";
 
-  const reachScopeDescription =
-    '"scoped" (default) | "scratch" | ' +
-    'a room like "#project-alpha" (a shared channel): runs on that room\'s computer, read-only by etiquette.';
   const scopedLine =
     '- "scoped" (default): this conversation\'s sandbox: its workspace files and $AGENT_API_* tokens; saved credentials only via `credentials`. Working state survives only within provider recovery limits: push code to git, save artifacts to Files.\n';
   const scratchLine =
-    '- "scratch": blank per-turn computer with the same tooling, read-only org-global files and skills, this conversation\'s $AGENT_API_* capabilities and requested credentials; no workspace or cached logins; files discarded after the turn, so publish outputs to Files and verify it worked.\n';
-  const reachDescription =
-    "Run a shell command and return stdout/stderr/exit code. `scope` picks the computer:\n" +
-    scopedLine +
-    scratchLine +
-    "- a room like \"#project-alpha\" (a shared channel): runs on that room's computer. Visit only — read, search, fetch; don't rearrange. It has none of this conversation's logins or tokens; say where anything you bring back came from. Before calling work lost, check the rooms under 'Other computers you can reach'.\n" +
-    FILE_SEND_GUIDANCE +
-    EXECUTE_TIMEOUT_GUIDANCE;
+    '- "scratch": blank per-turn computer with the same tooling and skills, this conversation\'s $AGENT_API_* capabilities and requested credentials; no workspace or cached logins; files discarded after the turn, so publish outputs to Files and verify it worked.\n';
   const scopeDescription =
     "Run a shell command and return stdout/stderr/exit code. `scope` picks the computer:\n" +
     scopedLine +
@@ -194,11 +173,8 @@ export function computerTools(kit: ToolKit) {
       credentials?: string[];
     },
   ) => {
-    const scope = (params.scope ?? "scoped").trim();
-    const keyword = scope.toLowerCase();
-    if (keyword === "scoped") return runExecute(callId, params, { scratch: false });
-    if (keyword === "scratch") return runExecute(callId, params, { scratch: true });
-    return runExecute(callId, params, { reachTarget: scope });
+    const scratch = (params.scope ?? "scoped").trim().toLowerCase() === "scratch";
+    return runExecute(callId, params, { scratch });
   };
 
   const runCommand = (
@@ -209,15 +185,13 @@ export function computerTools(kit: ToolKit) {
   const execute = defineTool({
     name: "execute",
     label: "execute",
-    description: reachExec ? reachDescription : scopeDescription,
+    description: scopeDescription,
     parameters: Type.Object({
       ...executeBaseParams,
       scope: Type.Optional(
-        reachExec
-          ? Type.String({ description: reachScopeDescription })
-          : Type.Union([Type.Literal("scoped"), Type.Literal("scratch")], {
-              description: "Which computer runs this; see the tool description.",
-            }),
+        Type.Union([Type.Literal("scoped"), Type.Literal("scratch")], {
+          description: "Which computer runs this; see the tool description.",
+        }),
       ),
     }),
     execute: (callId, params) => runCommand(callId, params as Parameters<typeof runCommand>[1]),
@@ -390,7 +364,7 @@ export function computerTools(kit: ToolKit) {
       "poll: new output and running/exited state (pass the last cursor as since_cursor; ~64KB per read). send_input: write to stdin. stop: terminate it. list: your jobs. " +
       "watch: wake this conversation as a new turn on new output (optionally only lines matching `pattern`) and once on exit, to keep the user posted on long work; pass since_cursor and `instructions` for your future self. unwatch: disarm by monitor_id. " +
       `Jobs stop after a hard TTL (default ${bgTtlMin} min, max ${bgTtlMaxMin}); anything that finishes within ${execCeilingSec}s should just use execute. ` +
-      `The job has the same environment as foreground execute ($AGENT_API_URL, $AGENT_API_TOKEN, $AGENT_CREDENTIAL_TOKEN). ${capabilityExpiry} It cannot deliver files; attach them from a live turn.\n` +
+      `The job has the same environment as foreground execute ($AGENT_API_URL, $AGENT_API_TOKEN, $AGENT_CREDENTIAL_TOKEN). ${capabilityExpiry} Connected-app (Composio) calls stop working when the launching turn ends, so keep them in foreground execute. It cannot deliver files; attach them from a live turn.\n` +
       "INTERACTIVE LOGINS (`gh auth login` etc., anything printing a URL/code then waiting) must run with background:true: relay the URL/code to the user, then watch or poll until exit; answer prompts with send_input; never run one in the foreground or stop it mid-flight. Read and follow the `interactive-login` skill first.",
     parameters: Type.Object({
       action: Type.Union([
@@ -445,11 +419,24 @@ export function computerTools(kit: ToolKit) {
       try {
         switch (params.action) {
           case "poll": {
-            const r = await tc.backgroundPoll(params.process_id!, {
-              ...(params.since_cursor !== undefined ? { sinceCursor: params.since_cursor } : {}),
-              ...(params.max_bytes !== undefined ? { maxBytes: params.max_bytes } : {}),
-              ...(params.wait_seconds !== undefined ? { waitSeconds: params.wait_seconds } : {}),
-            });
+            const poll = (waitSeconds?: number) =>
+              tc.backgroundPoll(params.process_id!, {
+                ...(params.since_cursor !== undefined ? { sinceCursor: params.since_cursor } : {}),
+                ...(params.max_bytes !== undefined ? { maxBytes: params.max_bytes } : {}),
+                ...(waitSeconds !== undefined ? { waitSeconds } : {}),
+              });
+            const steered = ref.steered;
+            const pollUntilSteered = () => {
+              const waiting = poll(params.wait_seconds);
+              void waiting.catch((error: unknown) => {
+                if (steered?.aborted) swallow("background: poll left behind for a steer", error);
+              });
+              return withAbort(() => waiting, steered).catch(async (error: unknown) => {
+                if (error !== steered?.reason) throw error;
+                return poll();
+              });
+            };
+            const r = steered?.aborted ? await poll() : await pollUntilSteered();
             const { chunks: _chunks, ...pollMeta } = r;
             return recordResult(
               callId,
@@ -639,6 +626,7 @@ export function validateSandboxTool(
       const action = isObj(params) ? String(params.action) : "";
       const operations = operationFields[tool.name];
       const fields = operations && Object.hasOwn(operations, action) ? operations[action] : undefined;
+      const allowed = fields ? new Set(["action", "purpose", ...fields]) : undefined;
       let required: string[];
       if (tool.name === "execute") required = ["command", "purpose"];
       else if (tool.name === "sandbox") {
@@ -656,13 +644,24 @@ export function validateSandboxTool(
           params[key] === undefined ||
           (typeof params[key] === "string" && key !== "data" && !params[key].trim()),
       );
-      if (
-        !Check(schema, params) ||
-        missing ||
-        (operations &&
-          (!fields || Object.keys(params).some((key) => !["action", "purpose", ...fields].includes(key)))) ||
-        (tool.name === "sandbox" && params.sandbox_id === null && action !== "set_default")
-      ) {
+      const keys = isObj(params) ? Object.keys(params) : [];
+      const unknown = keys.filter((key) => !Object.hasOwn(properties, key));
+      const unused = allowed ? keys.filter((key) => Object.hasOwn(properties, key) && !allowed.has(key)) : [];
+      const nullSandbox =
+        tool.name === "sandbox" && isObj(params) && params.sandbox_id === null && action !== "set_default";
+      const named = (list: string[]) => list.map((key) => `\`${key}\``).join(", ");
+      const problem = (() => {
+        if (operations && !fields)
+          return `unknown action \`${action}\` (use one of ${Object.keys(operations).join(", ")})`;
+        if (missing) return `requires \`${missing}\``;
+        if (unknown.length) return `${tool.name} has no ${named(unknown)} field`;
+        if (unused.length) return `${action} doesn't take ${named(unused)}; omit them and retry`;
+        if (nullSandbox)
+          return "`sandbox_id: null` only clears the default with set_default; omit it or pass a sandbox ID";
+        if (!Check(schema, params)) return "a field has the wrong type or value; check the tool schema";
+        return undefined;
+      })();
+      if (problem) {
         await recordCall(callId, {
           tool: tool.name,
           ...(isObj(params) ? { purpose: params.purpose, action: params.action } : {}),
@@ -670,9 +669,7 @@ export function validateSandboxTool(
         return recordResult(
           callId,
           { tool: tool.name, invalid: true },
-          text(
-            `[error] invalid ${tool.name} arguments: ${missing ? `requires \`${missing}\`` : "use only the advertised fields and types for this operation"}.`,
-          ),
+          text(`[error] invalid ${tool.name} arguments: ${problem}.`),
           true,
         );
       }

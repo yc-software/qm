@@ -1,14 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import type { CoreSession, SessionEntry } from "../src/core-bridge.ts";
-import {
-  ackKey,
-  descendantsOf,
-  peekLines,
-  subagentRows,
-  subagentSummary,
-  visibleSubagents,
-} from "../src/subagent-activity.ts";
+import type { CoreSession } from "../src/core-bridge.ts";
+import { ackKey, descendantsOf, subagentRows, subagentSummary, visibleSubagents } from "../src/subagent-activity.ts";
 import { backgroundLabel, conversationBackground, rowIndicators } from "../src/session-list.ts";
 
 function row(id: string, parentSessionId?: string, extra: Partial<CoreSession> = {}): CoreSession {
@@ -107,21 +100,36 @@ test("rows derive working, waiting, done and failed; done folds away, failed sta
   );
 });
 
-test("peek shows the latest tool steps and message", () => {
-  const entry = (type: SessionEntry["type"], payload: unknown): SessionEntry => ({ type, payload, createdAt: 0 });
-  const lines = peekLines(
+test("a working subagent under an idle one moves up to the nearest shown ancestor", () => {
+  const tree = [
+    row("root"),
+    row("a", "root", { working: true }),
+    row("idle", "a"),
+    row("leaf", "idle", { working: true }),
+    row("top-idle", "root"),
+    row("orphan", "top-idle", { working: true }),
+  ];
+  const rows = visibleSubagents(subagentRows(tree, "root"), new Set());
+  assert.deepEqual(
+    rows.map((r) => [r.session.id, r.depth]),
     [
-      entry("user", { text: "go" }),
-      entry("tool_call", { tool: "sandbox", action: "exec", command: "npm test" }),
-      entry("tool_result", { tool: "sandbox", ok: true }),
-      entry("text", { text: "Tests  pass.\nOpening PR" }),
-      entry("tool_call", { tool: "github" }),
+      ["a", 1],
+      ["orphan", 1],
+      ["leaf", 2],
     ],
-    3,
   );
-  assert.deepEqual(lines, [
-    { kind: "tool", text: "sandbox exec · npm test" },
-    { kind: "text", text: "Tests pass. Opening PR" },
-    { kind: "tool", text: "github" },
-  ]);
+  assert.equal(subagentSummary(rows), "3 subagents running");
+});
+
+test("a working subagent's clock starts at its current run, not its creation", () => {
+  const rows = subagentRows(
+    [
+      row("root"),
+      row("a", "root", { working: true, workingSince: 50_000 }),
+      row("b", "root", { workingSince: 50_000 }),
+    ],
+    "root",
+  );
+  assert.equal(rows[0]!.startedAt, 50_000);
+  assert.equal(rows[1]!.startedAt, 1_000);
 });

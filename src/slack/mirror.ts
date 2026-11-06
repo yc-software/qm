@@ -2,7 +2,7 @@ import { isOwnStatusCard } from "./message-gating.ts";
 import { swallow } from "../util/errors.ts";
 import { decodeSlackEntities, mentionsBot } from "./lib.ts";
 import { mentionedUserIds } from "./mrkdwn.ts";
-import { messageWithForwardedContent } from "./forwards.ts";
+import { slackMessageContent } from "./message-content.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
 import type { IngestEvent } from "../surface-cache/surface-cache.ts";
 import type { BotIdentity, Directory } from "./directory.ts";
@@ -29,16 +29,13 @@ export function slackMessageToIngestEvent(
   ids: BotIdentity,
   opts: {
     partial?: boolean;
-    text?: string;
-    mentions?: Record<string, string>;
     editedAt?: number;
     handled?: boolean;
     containerName?: string;
     kind?: "channel" | "dm" | "group";
   } = {},
 ): IngestEvent {
-  const content = messageWithForwardedContent(m);
-  const raw = content.text;
+  const content = slackMessageContent(m);
   return {
     container: m.channel!,
     ts: m.ts!,
@@ -52,7 +49,8 @@ export function slackMessageToIngestEvent(
     ...(m.bot_id ? { botId: String(m.bot_id) } : {}),
     ...(m.user ? { authorId: String(m.user) } : {}),
     ...(m.bot_profile?.name || m.username ? { authorName: String(m.bot_profile?.name || m.username) } : {}),
-    text: opts.text ?? decodeSlackEntities(raw),
+    text: decodeSlackEntities(content.text),
+    raw: { ...m } as Record<string, unknown>,
     ...((ids.botUserId && m.user === ids.botUserId) || (ids.ownBotId && m.bot_id === ids.ownBotId)
       ? { self: true, handled: true }
       : {}),
@@ -65,9 +63,8 @@ export function slackMessageToIngestEvent(
         ...(file.size !== undefined ? { size: file.size } : {}),
         mimetype: file.mimetype,
       })),
-    ...(Object.keys(opts.mentions ?? {}).length ? { mentions: opts.mentions } : {}),
     ...(m.bot_id || m.bot_profile ? { bot: true } : {}),
-    ...(mentionsBot(raw, ids.botUserId) ? { mentionsSelf: true } : {}),
+    ...(mentionsBot(String(m.text ?? ""), ids.botUserId) ? { mentionsSelf: true } : {}),
     ...((opts.editedAt ?? Number(m.edited?.ts) * 1000) > 0
       ? { editedAt: Math.round(opts.editedAt ?? Number(m.edited?.ts) * 1000) }
       : {}),
@@ -78,17 +75,23 @@ export function slackMessageToIngestEvent(
 }
 
 export function createMirror(deps: {
+  account: string;
   core: SlackCoreClient;
   ids: BotIdentity;
   directory: Directory;
   externalParticipantsEnabled(): Promise<boolean>;
 }): Mirror {
-  const { core, ids, directory, externalParticipantsEnabled } = deps;
+  const { account, core, ids, directory, externalParticipantsEnabled } = deps;
   const ambientRoomGate = new Map<string, { allowed: boolean; at: number }>();
 
   async function pushSurfaceEvents(events: IngestEvent[]): Promise<void> {
     if (!events.length) return;
-    await core.ingestSurfaceEvents(events, { name: ids.botHandle, mentionId: ids.botUserId });
+    const source =
+      ids.ownTeamId && ids.botUserId ? { account, workspace: ids.ownTeamId, assistant: ids.botUserId } : undefined;
+    await core.ingestSurfaceEvents(source ? events.map((e) => ({ ...e, source })) : events, {
+      name: ids.botHandle,
+      mentionId: ids.botUserId,
+    });
   }
 
   async function resolveMentionNames(client: any, text: string): Promise<Record<string, string>> {
@@ -141,10 +144,9 @@ export function createMirror(deps: {
       }
       if (!gate.allowed) return;
     }
-    const content = messageWithForwardedContent(m);
-    const raw = content.text;
-    const mentions = await resolveMentionNames(client, decodeSlackEntities(raw));
-    await pushSurfaceEvents([slackMessageToIngestEvent(m, ids, { ...opts, mentions, kind })]);
+    const event = slackMessageToIngestEvent(m, ids, { ...opts, kind });
+    const mentions = await resolveMentionNames(client, event.text ?? "");
+    await pushSurfaceEvents([Object.keys(mentions).length ? { ...event, mentions } : event]);
   }
 
   return { pushSurfaceEvents, mirrorMessageEvent };

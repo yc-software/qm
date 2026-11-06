@@ -1,4 +1,5 @@
 import { openSessionShare } from "./session-share";
+import { onCustomEmojiLoaded, openProjectIconPicker, projectIconTpl } from "./project-icon";
 import { html, nothing, render, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
 import { ref } from "lit/directives/ref.js";
@@ -28,6 +29,7 @@ import {
   PinOff,
   Plus,
   RefreshCw,
+  Smile,
   SquareTerminal,
   Users,
   X,
@@ -42,7 +44,7 @@ import {
   currentEarlierCount,
   detachSession,
   inheritedTranscript,
-  entriesToMessages,
+  itemsToMessages,
   regenerateTitle,
   sharedContextLabel,
   slackThreadUrl,
@@ -68,13 +70,15 @@ import {
   automationRunLabel,
   chatBrowseStatusMatches,
   bumpActivity,
+  lastMessageTitle,
   sidebarSessions,
   groupProjectSessions,
+  sidebarProjectSeeds,
   recencyGroup,
-  recentProjectSeeds,
   mergeChildren,
   mergeFirstPage,
   rowIndicators,
+  type RowIndicators,
   surfaceOf,
   splitPinned,
   upsertSessions,
@@ -84,6 +88,7 @@ import {
   type ChatBrowseStatus,
 } from "./session-list";
 import { tip } from "./tooltip";
+import { chatWithPersonaId, personaEditable, personaGlyph, personaSeeds, viewPersona } from "./personas";
 import { errMessage, swallow, swallowAs } from "../../chassis/src/errors";
 import { copyText, menuSelect, relTime, sheenLabel, workingWave } from "./ui";
 import { slackMark } from "./slack-mark";
@@ -95,9 +100,11 @@ import {
   openProjectDetail,
   personalScopeId,
   renameProject,
+  setProjectIcon,
   scopeChip,
 } from "./contexts";
 import { groupDmLabel, groupDmText } from "./group-dm-label";
+import { groupAvatarStackTpl } from "./group-avatars";
 import { transcriptModel } from "./model-options";
 import { appState, closeSidebarOnNarrowView, renderSidebarTop, syncDocumentTitle, syncUrlFromState } from "./shell";
 import { beginNavigation, endNavigation } from "./url-history";
@@ -129,6 +136,7 @@ export const sessionsState = {
   renamingId: null as string | null,
   openingKey: null as string | null,
   webOnly: false,
+  groupByActivity: false,
   hasArchived: false,
   collapsedProjectScopes: new Set<string>(),
   expandedProjectScopes: new Set<string>(),
@@ -176,14 +184,26 @@ function visibleRowOrder(): string[] {
     .filter(Boolean);
 }
 
-const WEB_ONLY_KEY = "web-ui:web-only";
-sessionsState.webOnly = ((): boolean => {
+function storedFlag(key: string): boolean {
   try {
-    return localStorage.getItem(WEB_ONLY_KEY) === "1";
+    return localStorage.getItem(key) === "1";
   } catch {
     return false;
   }
-})();
+}
+
+function storeFlag(key: string, value: boolean): void {
+  try {
+    localStorage.setItem(key, value ? "1" : "0");
+  } catch {
+    void 0;
+  }
+}
+
+const WEB_ONLY_KEY = "web-ui:web-only";
+const GROUP_BY_ACTIVITY_KEY = "web-ui:sidebar-group-by-activity";
+sessionsState.webOnly = storedFlag(WEB_ONLY_KEY);
+sessionsState.groupByActivity = storedFlag(GROUP_BY_ACTIVITY_KEY);
 
 let sessionsLoading = false;
 let sessionsNotice = "";
@@ -218,6 +238,9 @@ export function resetSessionsState(): void {
   sessionPatchEpoch++;
   sessionPatchTails.clear();
   sessionPatchVersions.clear();
+  for (const t of treeRefreshes.values()) if (t.timer) clearTimeout(t.timer);
+  treeRefreshes.clear();
+  unseenThreadParents.clear();
   sessionsState.list = [];
   sessionsState.loaded = false;
   listCurrent = false;
@@ -255,7 +278,7 @@ export function resetSessionsState(): void {
 }
 
 function projectSeedsForRecents() {
-  return recentProjectSeeds(contextsState.list);
+  return [...sidebarProjectSeeds(contextsState.list, sessionsState.groupByActivity), ...personaSeeds()];
 }
 
 function recentItemActivity(item: RecentItem): number {
@@ -449,6 +472,12 @@ function newChatHint(name: string): string {
   return `Start a new chat in ${name}`;
 }
 
+function groupAvatars(item: Extract<RecentItem, { kind: "project" }>): TemplateResult | typeof nothing {
+  if (item.groupKind !== "group") return nothing;
+  const context = contextsState.list.find((candidate) => candidate.scopeId === item.scopeId);
+  return groupAvatarStackTpl(context && !context.project ? (context.groupMembers ?? []) : []);
+}
+
 function recentItem(item: RecentItem, shownThreads: ReadonlySet<string>): TemplateResult {
   if (item.kind === "session") return sessionRow(item.session);
   const collapsed = sessionsState.collapsedProjectScopes.has(item.scopeId);
@@ -460,15 +489,22 @@ function recentItem(item: RecentItem, shownThreads: ReadonlySet<string>): Templa
     glyph = Users;
     glyphSize = 12;
   }
-  let fallbackName = "Project";
+  const personaId = item.groupKind === "persona" ? item.scopeId.slice("persona:".length) : null;
+  if (personaId) glyph = Bot;
+  let fallbackName = personaId ? "Persona" : "Project";
   if (item.groupKind === "channel") fallbackName = "Channel";
   else if (item.groupKind === "group") fallbackName = "Group DM";
   const name = item.name ?? fallbackName;
+  let customGlyph = glyph === Folder ? projectIconTpl(projectOf(item.scopeId)?.icon, 14) : null;
+  if (personaId) customGlyph = personaGlyph(personaId, 14);
   const childrenId = `recent-${item.scopeId.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
   const menuKey = projectMenuKey(item.scopeId);
   const menuOpen = sessionsState.openMenuId === menuKey;
   return html`
-    <section class="recent-project ${item.sessions.some(isActiveRow) ? "active" : ""}" aria-label=${`${name} project`}>
+    <section
+      class="recent-project ${item.sessions.some(isActiveRow) ? "active" : ""}"
+      aria-label=${`${name} ${personaId ? "persona" : "project"}`}
+    >
       ${
         sessionsState.renamingId === menuKey
           ? projectRenameRow(item)
@@ -481,12 +517,17 @@ function recentItem(item: RecentItem, shownThreads: ReadonlySet<string>): Templa
                 @click=${() => toggleRecentProject(item.scopeId)}
               >
                 <span class="recent-project-glyph">
-                  ${glyph && !collapsed ? html`<span class="glyph">${icon(glyph, glyphSize)}</span>` : nothing}
+                  ${
+                    glyph && !collapsed
+                      ? html`<span class="glyph">${customGlyph ?? icon(glyph, glyphSize)}</span>`
+                      : nothing
+                  }
                   <span class="chev">${icon(collapsed ? ChevronRight : ChevronDown, 13)}</span>
                 </span>
                 <span class="recent-project-name" dir="auto">${name.replace(/^#/, "")}</span>
               </button>
               <div class="session-menu recent-project-menu ${menuOpen ? "menu-open" : ""}">
+                ${groupAvatars(item)}
                 <button
                   class="session-menu-btn"
                   data-menu-id=${menuKey}
@@ -506,7 +547,10 @@ function recentItem(item: RecentItem, shownThreads: ReadonlySet<string>): Templa
                 type="button"
                 aria-label=${newChatHint(name)}
                 ${tip(NEW_CHAT_TOOLTIP)}
-                @click=${(event: Event) => startProjectChat(event, item.scopeId, item.name)}
+                @click=${(event: Event) =>
+                  personaId
+                    ? startPersonaChatFromSidebar(event, personaId)
+                    : startProjectChat(event, item.scopeId, item.name)}
               >
                 ${icon(Plus, 15)}
               </button>
@@ -601,7 +645,46 @@ function startProjectChat(event: Event, scopeId: string, name: string | null): v
   startNewChat(scopeId, name);
 }
 
+function startPersonaChatFromSidebar(event: Event, personaId: string): void {
+  event.stopPropagation();
+  void chatWithPersonaId(personaId);
+}
+
+function personaMenuPopover(personaId: string): TemplateResult {
+  return html`
+    <div class="session-menu-popover" role="menu" ${ref(placeSessionMenu)} @click=${(e: Event) => e.stopPropagation()}>
+      <button
+        class="session-menu-option"
+        type="button"
+        role="menuitem"
+        @click=${() => {
+          sessionsState.openMenuId = null;
+          viewPersona(personaId);
+        }}
+      >
+        ${icon(Bot, 15)}<span>View persona</span>
+      </button>
+      ${
+        personaEditable(personaId)
+          ? html`<button
+              class="session-menu-option"
+              type="button"
+              role="menuitem"
+              @click=${() => {
+                sessionsState.openMenuId = null;
+                viewPersona(personaId, true);
+              }}
+            >
+              ${icon(Pencil, 15)}<span>Edit persona</span>
+            </button>`
+          : nothing
+      }
+    </div>
+  `;
+}
+
 function projectMenuPopover(item: Extract<RecentItem, { kind: "project" }>): TemplateResult {
+  if (item.groupKind === "persona") return personaMenuPopover(item.scopeId.slice("persona:".length));
   const owned = projectOf(item.scopeId)?.ownerId === appState.me?.user;
   return html`
     <div class="session-menu-popover" role="menu" ${ref(placeSessionMenu)} @click=${(e: Event) => e.stopPropagation()}>
@@ -625,9 +708,42 @@ function projectMenuPopover(item: Extract<RecentItem, { kind: "project" }>): Tem
             </button>`
           : nothing
       }
+      ${
+        projectOf(item.scopeId)
+          ? html`<button
+              class="session-menu-option"
+              type="button"
+              role="menuitem"
+              @click=${(event: Event) => changeProjectIcon(event, item.scopeId)}
+            >
+              ${icon(Smile, 15)}<span>${projectOf(item.scopeId)?.icon ? "Change icon" : "Add icon"}</span>
+            </button>`
+          : nothing
+      }
     </div>
   `;
 }
+
+function changeProjectIcon(event: Event, scopeId: string): void {
+  const head = (event.currentTarget as HTMLElement).closest(".recent-project-head");
+  sessionsState.openMenuId = null;
+  renderList();
+  const anchor = head?.querySelector<HTMLElement>(".recent-project-toggle");
+  const project = projectOf(scopeId);
+  if (!anchor || !project) return;
+  openProjectIconPicker({
+    anchor,
+    current: project.icon,
+    onPick: async (value) => {
+      const latest = projectOf(scopeId);
+      const error = latest ? await setProjectIcon(latest, value) : "This project is no longer available.";
+      renderList();
+      return error;
+    },
+  });
+}
+
+onCustomEmojiLoaded(() => renderList());
 
 function openProjectFromMenu(scopeId: string): void {
   sessionsState.openMenuId = null;
@@ -824,30 +940,31 @@ function liveThreads(): ReadonlySet<string> {
   return live;
 }
 
-function sessionWorking(s: CoreSession): boolean {
-  return rowIndicators(s, liveThreads()).working;
-}
-
-function statusMarks(s: CoreSession): TemplateResult {
-  const ind = rowIndicators(s, liveThreads());
+function statusMarks(ind: RowIndicators): TemplateResult {
   return html`${ind.working ? html`<span class="working-mark" ${ref(syncWorkingPulse)}>${workingWave()}</span>` : nothing}${
     ind.awaiting ? html`<span class="awaiting-dot" aria-label="Waiting for your reply"></span>` : nothing
-  }${
-    ind.background
-      ? html`<span
-          class="bg-chip"
-          role="button"
-          tabindex="0"
-          aria-label="${ind.background.label}. Click to inspect"
-          ${tip(`${ind.background.label}. Click to inspect`)}
-          @click=${(e: Event) => openBackgroundInspector(e, s)}
-          @keydown=${(e: KeyboardEvent) => (e.key === "Enter" || e.key === " ") && openBackgroundInspector(e, s)}
-          >${ind.background.jobs > 0 ? icon(Cog, 11) : nothing}${
-            ind.background.watches > 0 ? icon(Binoculars, 11) : nothing
-          }${ind.background.crons > 0 ? icon(Clock3, 11) : nothing}${ind.background.subagents > 0 ? icon(Bot, 11) : nothing}${ind.background.goal ? icon(Target, 11) : nothing}</span
-        >`
-      : nothing
   }`;
+}
+
+export function backgroundIcons(background: NonNullable<RowIndicators["background"]>): TemplateResult {
+  return html`${background.jobs > 0 ? icon(Cog, 11) : nothing}${background.watches > 0 ? icon(Binoculars, 11) : nothing}${
+    background.crons > 0 ? icon(Clock3, 11) : nothing
+  }${background.subagents > 0 ? icon(Bot, 11) : nothing}${background.goal ? icon(Target, 11) : nothing}`;
+}
+
+function backgroundChip(s: CoreSession, ind: RowIndicators): TemplateResult | typeof nothing {
+  const background = ind.background;
+  if (!background) return nothing;
+  return html`<span
+    class="bg-chip"
+    role="button"
+    tabindex="0"
+    aria-label="${background.label}. Click to inspect"
+    ${tip(`${background.label}. Click to inspect`)}
+    @click=${(e: Event) => openBackgroundInspector(e, s)}
+    @keydown=${(e: KeyboardEvent) => (e.key === "Enter" || e.key === " ") && openBackgroundInspector(e, s)}
+    >${backgroundIcons(background)}</span
+  >`;
 }
 
 function openBackgroundInspector(e: Event, s: CoreSession): void {
@@ -866,6 +983,7 @@ function isActiveRow(s: CoreSession): boolean {
 }
 
 function chatPageRow(s: CoreSession): TemplateResult {
+  const ind = rowIndicators(s, liveThreads());
   const readOnly = surfaceOf(s) !== "slack" && !s.canContinue;
   const color = displaySessionColor(s.color);
   return html`
@@ -879,7 +997,9 @@ function chatPageRow(s: CoreSession): TemplateResult {
           void openSession(s);
         }}
       >
-        <span class="list-row-title">${statusMarks(s)}<span dir="auto">${groupDmTitle(s)}</span></span>
+        <span class="list-row-title"
+          >${statusMarks(ind)}<span dir="auto">${groupDmTitle(s)}</span>${backgroundChip(s, ind)}</span
+        >
         <span class="list-row-meta">
           ${unreadDot(s)} ${scopeChip(s.scopeId, s.channelName ?? null)}
           ${surfaceOf(s) === "slack" ? html`<span class="surface surface-slack">${slackMark(13, true)}</span>` : nothing}
@@ -972,8 +1092,8 @@ export function dropPendingSession(threadRef: string): void {
   renderList();
 }
 
-export function bumpSessionActivity(threadRef: string): void {
-  sessionsState.list = bumpActivity(sessionsState.list, threadRef, Date.now());
+export function bumpSessionActivity(threadRef: string, sent?: string): void {
+  sessionsState.list = bumpActivity(sessionsState.list, threadRef, Date.now(), sent);
   renderList();
 }
 
@@ -1029,7 +1149,7 @@ function surfaceGlyph(s: CoreSession): TemplateResult | typeof nothing {
 }
 
 function rowContext(s: CoreSession): string | null {
-  let label = sharedContextLabel(s.scopeId, s.channelName ?? null);
+  let label = projectName(s.scopeId) ?? sharedContextLabel(s.scopeId, s.channelName ?? null);
   if (surfaceOf(s) === "slack") label = s.type === "group" ? groupDmText(s.channelName) : channelLabel(s);
   return label && label !== sessionTitle(s) ? label : null;
 }
@@ -1046,7 +1166,8 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
   const readOnly = surfaceOf(s) !== "slack" && !s.canContinue;
   const surface = surfaceOf(s);
   const context = projectChild ? null : rowContext(s);
-  const working = sessionWorking(s);
+  const ind = rowIndicators(s, liveThreads());
+  const working = ind.working;
   const color = displaySessionColor(s.color);
   let titleContent: string | TemplateResult = groupDmTitle(s);
   if (refreshingTitle || pendingForkThreads.has(s.threadRef)) {
@@ -1054,7 +1175,10 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
   } else if (untitledProjectChild) {
     titleContent = title;
   }
+  const preview = lastMessageTitle(s);
+  const lastMessage = preview !== title ? preview : null;
   const ariaLabel = [
+    lastMessage,
     title,
     surface !== "web" ? surface : null,
     context,
@@ -1071,7 +1195,7 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
   return html`
     <div
       data-session-id=${saved ? s.id : nothing}
-      class="session-row ${active ? "active" : ""} ${saved && selection.ids.has(s.id) ? "selected" : ""} ${menuOpen ? "menu-open" : ""} ${readOnly ? "read-only" : ""} ${refreshingTitle ? "title-refreshing" : ""} ${working ? "working" : ""} ${s.awaitingInput ? "awaiting-input" : ""} ${showsUnread(s) ? "unread" : ""} ${projectChild ? "project-child" : ""} ${color ? "colored" : ""}"
+      class="session-row ${active ? "active" : ""} ${saved && selection.ids.has(s.id) ? "selected" : ""} ${menuOpen ? "menu-open" : ""} ${readOnly ? "read-only" : ""} ${refreshingTitle ? "title-refreshing" : ""} ${working ? "working" : ""} ${s.awaitingInput ? "awaiting-input" : ""} ${showsUnread(s) ? "unread" : ""} ${projectChild ? "project-child" : ""} ${color ? "colored" : ""} ${lastMessage ? "last-message-title" : ""}"
       style=${color ? `--session-color:${color}` : nothing}
     >
       <a
@@ -1128,9 +1252,10 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
         }}
       >
         <div class="title" aria-live="polite">
-          ${statusMarks(s)}${surfaceGlyph(s)}<span class="tl" dir="auto">${titleContent}</span
-          >${context ? html`<span class="row-context" ${tip(context)}>${context}</span>` : nothing}${unreadDot(s)}
+          ${statusMarks(ind)}${surfaceGlyph(s)}<span class="tl" dir="auto">${lastMessage ?? titleContent}</span
+          >${backgroundChip(s, ind)}${context ? html`<span class="row-context" ${tip(context)}>${context}</span>` : nothing}${unreadDot(s)}
         </div>
+        ${lastMessage ? html`<div class="row-detail" dir="auto">${titleContent}</div>` : nothing}
       </a>
       ${
         saved
@@ -1427,11 +1552,7 @@ async function loadMoreSessions(kind: "active" | "archived"): Promise<void> {
 export function setWebOnly(webOnly: boolean): void {
   if (sessionsState.webOnly === webOnly) return;
   sessionsState.webOnly = webOnly;
-  try {
-    localStorage.setItem(WEB_ONLY_KEY, webOnly ? "1" : "0");
-  } catch {
-    void 0;
-  }
+  storeFlag(WEB_ONLY_KEY, webOnly);
   activeCursor = null;
   activePaged = false;
   archivedCursor = null;
@@ -1439,6 +1560,13 @@ export function setWebOnly(webOnly: boolean): void {
   if (showArchived) void loadMoreSessions("archived");
   renderList();
   void refreshSessions({ silent: true });
+}
+
+export function setGroupByActivity(groupByActivity: boolean): void {
+  if (sessionsState.groupByActivity === groupByActivity) return;
+  sessionsState.groupByActivity = groupByActivity;
+  storeFlag(GROUP_BY_ACTIVITY_KEY, groupByActivity);
+  renderList();
 }
 
 export function revealSessionSurface(s: CoreSession): void {
@@ -1861,15 +1989,11 @@ async function runSessionsRefresh(
   listRequestedAt = Date.now();
   try {
     const surface = sessionsState.webOnly ? "web" : undefined;
-    const roots = [...new Set(openConversationIds())];
-    const nested = roots.filter((id) => sessionsState.list.some((row) => row.id === id && row.parentSessionId));
-    const [page, children, nestedRows] = await Promise.all([
+    const nested = [...new Set(openConversationIds())].filter((id) =>
+      sessionsState.list.some((row) => row.id === id && row.parentSessionId),
+    );
+    const [page, nestedRows] = await Promise.all([
       fetchSessionPage({ limit: SESSION_BATCH_SIZE, ...(surface ? { surface } : {}) }),
-      Promise.all(
-        roots.map(
-          async (id) => [id, await fetchSessionChildren(id).catch(swallowAs("web-ui: load subagents", null))] as const,
-        ),
-      ),
       Promise.all(nested.map((id) => fetchSessionRow({ id }).catch(swallowAs("web-ui: refresh subagent", null)))),
     ]);
     if (seq !== sessionRefreshSeq) return sessionsState.loaded || ((await newerRun()) ?? false);
@@ -1878,7 +2002,7 @@ async function runSessionsRefresh(
       return false;
     }
     const last = page.sessions[page.sessions.length - 1];
-    let list = mergeFirstPage(
+    const list = mergeFirstPage(
       sessionsState.list,
       page,
       {
@@ -1888,12 +2012,10 @@ async function runSessionsRefresh(
       },
       openConversationIds(),
     );
-    for (const [id, rows] of children) if (rows) list = mergeChildren(list, id, rows);
-    list = upsertSessions(
+    sessionsState.list = upsertSessions(
       list,
       nestedRows.filter((row) => row !== null),
     );
-    sessionsState.list = list;
     sessionsState.hasArchived = Boolean(page.hasArchived);
     if (!activePaged) activeCursor = page.nextCursor;
     sessionsState.loaded = true;
@@ -1916,6 +2038,103 @@ async function runSessionsRefresh(
   }
 }
 
+const TREE_REFRESH_MS = 2_000;
+const UNSEEN_THREAD_RETRY_MS = 30_000;
+type TreeRefresh = {
+  at: number;
+  timer: ReturnType<typeof setTimeout> | null;
+  running: boolean;
+  again: boolean;
+  fetches: number;
+  applied: number;
+};
+const treeRefreshes = new Map<string, TreeRefresh>();
+const unseenThreadParents = new Map<string, Promise<string | null>>();
+
+export function refreshTreesFor(threadRef: string): void {
+  const row = sessionsState.list.find((s) => s.threadRef === threadRef);
+  if (row) return refreshTreesFrom(row.id);
+  if (!openConversationIds().length) return;
+  let parent = unseenThreadParents.get(threadRef);
+  if (!parent) {
+    const lookup = fetchSessionRow({ threadRef }).then(
+      (found) => {
+        if (!found) forgetUnseenThread(threadRef, lookup);
+        return found?.parentSessionId ?? null;
+      },
+      (e: unknown) => {
+        forgetUnseenThread(threadRef, lookup);
+        swallow("web-ui: look up subagent parent", e);
+        return null;
+      },
+    );
+    parent = lookup;
+    unseenThreadParents.set(threadRef, parent);
+  }
+  void parent.then((id) => id && refreshTreesFrom(id));
+}
+
+function forgetUnseenThread(threadRef: string, lookup: Promise<string | null>): void {
+  setTimeout(() => {
+    if (unseenThreadParents.get(threadRef) === lookup) unseenThreadParents.delete(threadRef);
+  }, UNSEEN_THREAD_RETRY_MS);
+}
+
+export function refreshOpenTrees(): void {
+  for (const id of new Set(openConversationIds())) refreshTree(id);
+}
+
+function refreshTreesFrom(id: string): void {
+  const open = new Set(openConversationIds());
+  const seen = new Set<string>();
+  for (
+    let at: string | undefined = id;
+    at && !seen.has(at);
+    at = sessionsState.list.find((s) => s.id === at)?.parentSessionId
+  ) {
+    seen.add(at);
+    if (open.has(at)) refreshTree(at);
+  }
+}
+
+function treeRefresh(rootId: string): TreeRefresh {
+  let t = treeRefreshes.get(rootId);
+  if (!t) treeRefreshes.set(rootId, (t = { at: 0, timer: null, running: false, again: false, fetches: 0, applied: 0 }));
+  return t;
+}
+
+export function refreshTree(rootId: string): void {
+  const t = treeRefresh(rootId);
+  if (t.running) t.again = true;
+  else if (!t.timer)
+    t.timer = setTimeout(() => void runTreeRefresh(rootId, t), Math.max(0, t.at + TREE_REFRESH_MS - Date.now()));
+}
+
+async function runTreeRefresh(rootId: string, t: TreeRefresh): Promise<void> {
+  t.timer = null;
+  if (!openConversationIds().includes(rootId)) return;
+  t.running = true;
+  t.at = Date.now();
+  const epoch = sessionPatchEpoch;
+  const request = ++t.fetches;
+  try {
+    const children = await fetchSessionChildren(rootId).catch(swallowAs("web-ui: load subagents", null));
+    if (epoch !== sessionPatchEpoch) t.again = true;
+    if (!children || request < t.applied || epoch !== sessionPatchEpoch || !openConversationIds().includes(rootId))
+      return;
+    t.applied = request;
+    sessionsState.list = mergeChildren(sessionsState.list, rootId, children);
+    renderList();
+    for (const conversation of allConversations()) conversation.redraw();
+  } finally {
+    t.running = false;
+    if (t.again) {
+      t.again = false;
+      refreshTree(rootId);
+    }
+  }
+}
+
 export async function loadScopeSessions(scopeId: string): Promise<void> {
   const page = await fetchSessionPage({ limit: SESSION_BATCH_SIZE, scope: scopeId });
   sessionsState.list = upsertSessions(sessionsState.list, page.sessions);
@@ -1924,6 +2143,8 @@ export async function loadScopeSessions(scopeId: string): Promise<void> {
 async function loadSessionNeighbors(s: CoreSession): Promise<void> {
   const parentId = s.parentSessionId;
   const needsParent = Boolean(parentId) && !sessionsState.list.some((row) => row.id === parentId);
+  const tree = treeRefresh(s.id);
+  const request = ++tree.fetches;
   const [children, parent] = await Promise.all([
     fetchSessionChildren(s.id).catch(swallowAs("web-ui: load subagents", null)),
     needsParent && parentId
@@ -1933,7 +2154,10 @@ async function loadSessionNeighbors(s: CoreSession): Promise<void> {
   let list = sessionsState.list.some((row) => row.id === s.id)
     ? sessionsState.list
     : upsertSessions(sessionsState.list, [s]);
-  if (children) list = mergeChildren(list, s.id, children);
+  if (children && request > tree.applied) {
+    tree.applied = request;
+    list = mergeChildren(list, s.id, children);
+  }
   if (parent) list = upsertSessions(list, [parent]);
   if (list === sessionsState.list) return;
   sessionsState.list = list;
@@ -1943,7 +2167,7 @@ async function loadSessionNeighbors(s: CoreSession): Promise<void> {
 
 export async function openSession(
   s: CoreSession,
-  entriesPrefetch?: Promise<TranscriptPage | null>,
+  transcriptPrefetch?: Promise<TranscriptPage | null>,
   approvalsPrefetch?: Promise<{ approvals: PendingApproval[] } | null>,
   historyMode: "push" | "replace" = "push",
 ): Promise<void> {
@@ -1951,7 +2175,7 @@ export async function openSession(
   if (keptUnreadId !== s.id) keptUnreadId = null;
   const navigation = historyMode === "push" ? beginNavigation() : null;
   try {
-    await showSession(s, entriesPrefetch, approvalsPrefetch);
+    await showSession(s, transcriptPrefetch, approvalsPrefetch);
   } finally {
     if (navigation && endNavigation(navigation)) syncUrlFromState(undefined, "push");
   }
@@ -1959,7 +2183,7 @@ export async function openSession(
 
 async function showSession(
   s: CoreSession,
-  entriesPrefetch?: Promise<TranscriptPage | null>,
+  transcriptPrefetch?: Promise<TranscriptPage | null>,
   approvalsPrefetch?: Promise<{ approvals: PendingApproval[] } | null>,
 ): Promise<void> {
   if (appState.currentView !== "chats") {
@@ -1974,13 +2198,13 @@ async function showSession(
   const pane = splitInterceptsOpen(s);
   closeSidebarOnNarrowView();
   if (projectName(s.scopeId) && sessionsState.collapsedProjectScopes.delete(s.scopeId)) renderList();
-  await openSessionInto(pane ?? mainConversation(), s, entriesPrefetch, approvalsPrefetch, true);
+  await openSessionInto(pane ?? mainConversation(), s, transcriptPrefetch, approvalsPrefetch, true);
 }
 
 export async function openSessionInto(
   conv: Conversation,
   s: CoreSession,
-  entriesPrefetch?: Promise<TranscriptPage | null>,
+  transcriptPrefetch?: Promise<TranscriptPage | null>,
   approvalsPrefetch?: Promise<{ approvals: PendingApproval[] } | null>,
   tracked = conv === mainConversation(),
 ): Promise<boolean> {
@@ -1993,13 +2217,13 @@ export async function openSessionInto(
     }
     return true;
   }
-  if (s.id === conv.state.sessionId && !entriesPrefetch) return true;
+  if (s.id === conv.state.sessionId && !transcriptPrefetch) return true;
   const started = Date.now();
 
   refreshSessionsOnOpen();
   void loadSessionNeighbors(s);
 
-  const cached = entriesPrefetch ? undefined : cachedTranscript(s.id);
+  const cached = transcriptPrefetch ? undefined : cachedTranscript(s.id);
   if (cached) {
     if (!isLiveConversation(conv)) return false;
     if (tracked) sessionsState.openingKey = null;
@@ -2013,7 +2237,7 @@ export async function openSessionInto(
       prefetched: false,
       cached: true,
       tracked,
-      entries: cached.entries?.length ?? 0,
+      items: cached.items?.length ?? 0,
     });
     void reconcileCachedTranscript(conv, s, cached, approvals, conv.transcriptAnchor()).catch((error: unknown) =>
       reportHandledError("web:transcript_reconcile", error),
@@ -2029,39 +2253,39 @@ export async function openSessionInto(
   if (!isLiveConversation(conv)) return false;
   const isCurrent = conv.mountLoadingPane();
 
-  const fetchEntries = (): Promise<TranscriptPage | null> =>
+  const fetchPage = (): Promise<TranscriptPage | null> =>
     fetchTranscript(s.id, { tailTurns: TAIL_TURNS }).catch(swallowAs("web-ui: load session transcript", null));
   const continuable = s.canContinue === true;
   const approvals = continuable ? (approvalsPrefetch ?? fetchSessionApprovals(s.id)) : null;
   let prefetched = false;
-  const entriesRes = await (entriesPrefetch
-    ? entriesPrefetch.then((r) => {
+  const transcriptRes = await (transcriptPrefetch
+    ? transcriptPrefetch.then((r) => {
         prefetched = r !== null;
-        return r ?? fetchEntries();
+        return r ?? fetchPage();
       })
-    : fetchEntries());
+    : fetchPage());
   if (!isLiveConversation(conv) || !isCurrent()) return false;
   const fetched = Date.now();
   const reportPainted = () =>
     reportSwitchPainted(started, {
       fetchedMs: fetched,
-      loaded: entriesRes !== null,
+      loaded: transcriptRes !== null,
       prefetched,
       cached: false,
       tracked,
-      entries: entriesRes?.entries?.length ?? 0,
+      items: transcriptRes?.items.length ?? 0,
     });
 
   if (tracked) {
     if (sessionsState.openingKey !== opening) return false;
     sessionsState.openingKey = null;
   }
-  if (!entriesPrefetch && conv.state.sessionId === s.id) {
+  if (!transcriptPrefetch && conv.state.sessionId === s.id) {
     renderList();
     return true;
   }
 
-  if (!entriesRes) {
+  if (!transcriptRes) {
     dropTranscript(s.id);
     conv.mountLoadError(() => void openSessionInto(conv, s, undefined, undefined, tracked));
     renderList();
@@ -2069,8 +2293,8 @@ export async function openSessionInto(
     return false;
   }
 
-  storeTranscript(s.id, entriesRes);
-  mountTranscript(conv, s, entriesRes, approvals);
+  storeTranscript(s.id, transcriptRes);
+  mountTranscript(conv, s, transcriptRes, approvals);
   renderList();
   reportPainted();
   return true;
@@ -2084,7 +2308,7 @@ function reportSwitchPainted(
     prefetched: boolean;
     cached: boolean;
     tracked: boolean;
-    entries: number;
+    items: number;
   },
 ): void {
   if (document.visibilityState !== "visible") return;
@@ -2098,17 +2322,17 @@ function mountTranscript(
   approvals: Promise<{ approvals: PendingApproval[] } | null> | null,
 ): void {
   if (s.canContinue === true) {
-    const split = inheritedTranscript(s, page.entries ?? []);
+    const split = inheritedTranscript(s, page.items);
     conv.mountContinuable(
       s.threadRef,
       s.id,
       s.scopeId,
-      entriesToMessages(split.current, transcriptModel()),
+      itemsToMessages(split.current, transcriptModel()),
       s.channelName ?? null,
       s,
-      entriesToMessages(split.inherited, transcriptModel()),
+      itemsToMessages(split.inherited, transcriptModel()),
     );
-    const rawEarlier = page.earlierEntries ?? 0;
+    const rawEarlier = page.earlierItems ?? 0;
     conv.setTranscriptWindow(pageAnchor(page), currentEarlierCount(s, rawEarlier), rawEarlier > 0);
     if (approvals) conv.attachApprovalsWhenLoaded(s.id, approvals);
     conv.setPins(page.pins ?? []);

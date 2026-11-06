@@ -7,7 +7,7 @@ import { recallAcrossScopes, renderRecall, searchAcrossScopes } from "../src/mem
 import { memoryRecallDelta, shownFacts } from "../src/memory/recall-delta.ts";
 import type { McpClient } from "../src/mcp/mcp-client.ts";
 import type { MemoryProviderOutcome, MemoryService } from "../src/memory/memory-service.ts";
-import type { SessionEntry } from "../src/types.ts";
+import { type Item, storedItem } from "../src/sessions/items.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { structuredRecall, type StructuredFact } from "./support/structured-recall.ts";
 
@@ -38,15 +38,11 @@ function routed(notebook: MemoryService, providers: Record<string, MemoryService
   return createRoutedMemoryService({ providers: { default: notebook, ...providers }, routes });
 }
 
-const entry = (record: unknown, seq: number): SessionEntry => ({
-  sessionId: "s",
-  seq,
-  type: "user",
-  parentSeq: null,
-  createdAt: 1,
-  scopeLabel: "personal:a",
-  payload: { text: "hello", memoryRecall: JSON.parse(JSON.stringify(record)) },
-});
+const entry = (record: unknown, seq: number): Item =>
+  storedItem(
+    { kind: "UserMessage", text: "hello", body: { memoryRecall: JSON.parse(JSON.stringify(record)) } },
+    { sessionId: "s", seq, createdAt: 1 },
+  );
 
 test("a full first-provider batch leaves room for a relevant hit from the next provider", async () => {
   const notebook = createPostgresMemoryService(testDatabaseUrl());

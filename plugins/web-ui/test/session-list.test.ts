@@ -19,6 +19,7 @@ import {
   recencyGroup,
   rowIndicators,
   recentProjectSeeds,
+  sidebarProjectSeeds,
   mergeChildren,
   mergeFirstPage,
   upsertSessions,
@@ -218,6 +219,15 @@ test("bumpActivity is a no-op when no row matches the threadRef", () => {
   assert.deepEqual(bumpActivity(list, "web:u:missing", 999), list);
 });
 
+test("bumpActivity sets the sent text as the last message only on rows that carry previews", () => {
+  const list = [saved("1", "web:u:x"), { ...saved("2", "web:u:y"), lastUserPreview: null }];
+  const plain = bumpActivity(list, "web:u:x", 5, "hello");
+  assert.equal("lastUserPreview" in plain.find((s) => s.id === "1")!, false);
+  const flagged = bumpActivity(list, "web:u:y", 5, "hello there");
+  assert.equal(flagged.find((s) => s.id === "2")!.lastUserPreview, "hello there");
+  assert.equal(bumpActivity(list, "web:u:y", 5, "   ").find((s) => s.id === "2")!.lastUserPreview, null);
+});
+
 test("activityOf prefers lastActivityAt, falling back to createdAt", () => {
   assert.equal(activityOf(saved("1", "web:u:x")), 1, "no lastActivityAt -> createdAt (createdAt is 1 here)");
   assert.equal(activityOf({ ...saved("2", "web:u:y"), lastActivityAt: 999 }), 999, "lastActivityAt wins when present");
@@ -395,12 +405,61 @@ test("project metadata groups only its group scope while ordinary chats stay fla
   assert.equal(items[1]?.kind, "session");
 });
 
+test("grouping by activity lists scoped conversations flat, newest first, without empty project rows", () => {
+  const contexts = [
+    { scopeId: "channel:C1", kind: "channel" as const, name: "launch", sessionCount: 1, lastActivityAt: 30 },
+    { scopeId: "personal:alice", kind: "personal" as const, name: null, sessionCount: 1, lastActivityAt: 20 },
+    {
+      scopeId: "group:web-project-empty",
+      kind: "group" as const,
+      name: "Empty",
+      sessionCount: 0,
+      lastActivityAt: 10,
+      project: {
+        id: "empty",
+        name: "Empty",
+        ownerId: "alice",
+        memberIds: ["alice"],
+        scopeId: "group:web-project-empty",
+        members: [{ principalId: "alice", displayName: "Alice" }],
+      },
+    },
+  ];
+  const channel = { ...saved("1", "ch:C1:1.0"), type: "channel" as const, scopeId: "channel:C1", lastActivityAt: 30 };
+  const plain = { ...saved("2", "web:alice:plain"), scopeId: "personal:alice", lastActivityAt: 20 };
+  const byScope = groupProjectSessions([plain, channel], sidebarProjectSeeds(contexts, false));
+  assert.deepEqual(
+    byScope.map((item) => item.kind),
+    ["project", "project", "project"],
+  );
+  assert.deepEqual(groupProjectSessions([plain, channel], sidebarProjectSeeds(contexts, true)), [
+    { kind: "session", session: channel },
+    { kind: "session", session: plain },
+  ]);
+});
+
 test("empty projects appear in Recents", () => {
   const seeds = [{ scopeId: "group:web-project-empty", name: "Empty" }];
   const items = groupProjectSessions([], seeds);
   assert.deepEqual(items, [
     { kind: "project", scopeId: "group:web-project-empty", name: "Empty", groupKind: "project", sessions: [] },
   ]);
+});
+
+test("conversations with a persona you can use group under that persona instead of their home", () => {
+  const seeds = [
+    { scopeId: "personal:alice", name: "Personal", kind: "personal" as const },
+    { scopeId: "persona:ada", name: "Ada", kind: "persona" as const },
+    { scopeId: "persona:idle", name: "Idle", kind: "persona" as const },
+  ];
+  const withAda = { ...saved("1", "web:alice:ada"), scopeId: "personal:alice", personaId: "ada" };
+  const plain = { ...saved("2", "web:alice:plain"), scopeId: "personal:alice" };
+  const unknown = { ...saved("3", "web:alice:gone"), scopeId: "personal:alice", personaId: "deleted" };
+  const items = groupProjectSessions([withAda, plain, unknown], seeds);
+  const groups = Object.fromEntries(
+    items.flatMap((item) => (item.kind === "project" ? [[item.scopeId, item.sessions.map((s) => s.id)]] : [])),
+  );
+  assert.deepEqual(groups, { "persona:ada": ["1"], "personal:alice": ["2", "3"], "persona:idle": [] });
 });
 
 test("a pending (not-yet-sent) chat in a project scope nests under its project", () => {
@@ -652,6 +711,7 @@ test("sidebar excludes cron, webhook, and loop runs but keeps conversations", ()
 test("cronRowMeta shows the next fire and the last result of a session's cron", () => {
   const now = Date.now();
   assert.equal(cronRowMeta({ id: "c", nextFireAt: now + 10 * 60_000 + 1_000 }), "next fire in 10m");
+  assert.equal(cronRowMeta({ id: "c", nextFireAt: now + 62 * 60_000 + 1_000 }), "next fire in 1h 2m");
   assert.equal(
     cronRowMeta({
       id: "c",

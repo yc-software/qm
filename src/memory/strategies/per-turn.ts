@@ -1,5 +1,5 @@
 import type { ModelUtilities } from "../../agent/agent.ts";
-import { type MemoryService, type MemoryCaptureContext, isSystemActor } from "../memory-service.ts";
+import type { MemoryService, MemoryCaptureContext } from "../memory-service.ts";
 import type { MemoryStrategy } from "../strategy.ts";
 import type { ScopeId } from "../../types.ts";
 import { bullets } from "../notebook.ts";
@@ -47,7 +47,7 @@ async function extractFacts(
   if (!agent.oneShot) return { facts: [], sensitivity: "unknown" };
   try {
     const transcript = turns.map((t) => `User said:\n${t.input}\n\nAssistant replied:\n${t.reply}`).join("\n\n---\n\n");
-    const out = await agent.oneShot(MEMORY_EXTRACTION_PROMPT, transcript);
+    const out = await agent.oneShot(MEMORY_EXTRACTION_PROMPT, transcript, "memory_capture");
     return {
       facts: parseFacts(out ?? ""),
       sensitivity: parseSensitivity(/^SENSITIVITY: (ordinary|unknown|sensitive|restricted)\n/.exec(out ?? "")?.[1]),
@@ -72,7 +72,6 @@ type TurnEndCtx = MemoryCaptureMetadata & {
   input: string;
   reply: string;
   actorId?: string;
-  autonomous?: boolean;
   conversationScopeId?: ScopeId;
   sessionId?: string;
   idempotencyKey?: string;
@@ -85,18 +84,7 @@ function createBurstBuffer(
   onError?: (e: unknown, burst: Burst) => void,
 ): (ctx: TurnEndCtx) => Promise<void> {
   const bursts = new Map<string, Burst>();
-  return async ({
-    scopeId,
-    input,
-    reply,
-    actorId,
-    autonomous,
-    conversationScopeId,
-    sessionId,
-    idempotencyKey,
-    inheritedFacts,
-  }) => {
-    if (autonomous === true || isSystemActor(actorId)) return;
+  return async ({ scopeId, input, reply, actorId, conversationScopeId, sessionId, idempotencyKey, inheritedFacts }) => {
     const burst: Burst = {
       scopeId,
       conversationScopeId: conversationScopeId ?? scopeId,

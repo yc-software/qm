@@ -10,15 +10,19 @@ function capText(t: string): string {
 export function surfaceTool(kit: ToolKit) {
   const { ref, opts, recordCall, recordResult, recordExternalResult } = kit;
   const surfaceName = opts?.surfaceName ?? "slack";
-  const surfaceLabel = surfaceName === "slack" ? "Slack" : surfaceName;
+  const surfaceLabel = opts?.surfacePrompt?.label ?? surfaceName;
+  const mentionSyntax = opts?.surfacePrompt?.mentionSyntax;
+  const textOnly = opts?.surfacePrompt?.textOnly === true;
   const surface = defineTool({
     name: surfaceName,
     label: surfaceName,
     description:
       `Everything you do on ${surfaceLabel} goes through this tool — posting (the ONLY way your words ` +
-      "reach people; end the turn without a post and you stay silent), reacting, editing/deleting your " +
-      "own messages, reading threads, checking what's new, searching, listing members, fetching files. " +
-      "Pick an `action`.",
+      "reach people; end the turn without a post and you stay silent), " +
+      (textOnly ? "" : "reacting, editing/deleting your own messages, ") +
+      "reading threads, checking what's new, searching" +
+      (textOnly ? ". This conversation takes text messages only." : ".") +
+      " Pick an `action`.",
     parameters: Type.Object({
       action: Type.Union(
         [
@@ -30,43 +34,48 @@ export function surfaceTool(kit: ToolKit) {
           Type.Literal("read_thread"),
           Type.Literal("whats_new"),
           Type.Literal("search"),
-          Type.Literal("read_members"),
         ],
         {
           description:
             "What to do: post (reply HERE, in this conversation — the normal way to answer), reach " +
             "(send to a DIFFERENT audience: a teammate DM, another channel, a group — the ONLY way to " +
-            "leave this conversation), react (emoji on a message), edit/delete (revise/retract your " +
-            "OWN message), read_thread (read stored thread messages, with live fallback for missing context), whats_new (pointers to what " +
-            "changed), search (find messages), read_members (the roster).",
+            "leave this conversation), " +
+            (textOnly ? "" : "react (emoji on a message), edit/delete (revise/retract your OWN message), ") +
+            "read_thread (read stored thread messages, with live fallback for missing context), whats_new (pointers to what " +
+            "changed), search (find messages)." +
+            (textOnly ? " There is no way to react, edit, delete, or attach files here." : ""),
         },
       ),
       text: Type.Optional(
         Type.String({
           description:
-            "post/reach: the message to send. edit: the new message content. Use Markdown, including [label](url) links; the surface renders it." +
-            (surfaceName === "slack"
-              ? " To @-mention on Slack, use `<@U…>` for a person or `<!subteam^S…>` for a user group (ids appear in the conversation roster and in read / search results). A typed `@name` is plain text and pings no one; @here/@channel/@everyone never ping."
-              : ""),
+            "post/reach: the message to send." +
+            (textOnly ? "" : " edit: the new message content.") +
+            " Use Markdown, including [label](url) links; the surface renders it." +
+            (mentionSyntax ? ` ${mentionSyntax}` : ""),
         }),
       ),
       channel: Type.Optional(
         Type.String({
           description:
-            "reach: send to THIS named channel (a channel you and the recipient can both see). EXTREMELY IMPORTANT: a channel post is a broadcast to everyone there — pick the narrowest audience that can act. A question or errand for one person (or a few) goes to their DM via `recipient`, NEVER to a public channel; use a channel only when the person you're helping explicitly named it as the destination, or the message genuinely concerns that whole room. react/edit/delete: which channel the target message is in (omit for the current one). NOT valid on post — post only ever replies in the current conversation.",
+            "reach: send to THIS named channel (a channel you and the recipient can both see). EXTREMELY IMPORTANT: a channel post is a broadcast to everyone there — pick the narrowest audience that can act. A question or errand for one person (or a few) goes to their DM via `recipient`, NEVER to a public channel; use a channel only when the person you're helping explicitly named it as the destination, or the message genuinely concerns that whole room." +
+            (textOnly ? "" : " react/edit/delete: which channel the target message is in (omit for the current one).") +
+            " NOT valid on post — post only ever replies in the current conversation.",
         }),
       ),
       recipient: Type.Optional(Type.String({ description: "reach: DM this teammate (by name). NOT valid on post." })),
       participants: Type.Optional(
         Type.Array(Type.String(), {
           description:
-            "reach: send to the group DM whose other members are exactly these (a group DM has no name; it's opened if it doesn't exist yet, so never ask someone to create one). react/edit/delete: the group DM the target message is in.",
+            "reach: send to the group DM whose other members are exactly these (a group DM has no name; it's opened if it doesn't exist yet, so never ask someone to create one)." +
+            (textOnly ? "" : " react/edit/delete: the group DM the target message is in."),
         }),
       ),
       ts: Type.Optional(
         Type.String({
           description:
-            "post: reply under THIS message id (from read_thread/whats_new) — threads off it. You DON'T need it to answer where you were addressed; a plain post already lands in the current thread/DM. Only set it to reply under a DIFFERENT message here. react: the message id to react to.",
+            "post: reply under THIS message id (from read_thread/whats_new) — threads off it. You DON'T need it to answer where you were addressed; a plain post already lands in the current thread/DM. Only set it to reply under a DIFFERENT message here." +
+            (textOnly ? "" : " react: the message id to react to."),
         }),
       ),
       broadcast: Type.Optional(
@@ -374,32 +383,12 @@ export function surfaceTool(kit: ToolKit) {
             "surface search",
           );
         }
-        case "read_members": {
-          await recordCall(callId, { tool: surfaceName, action: "read_members" });
-          const r = await tc.readMembers();
-          if (!r.ok)
-            return recordResult(
-              callId,
-              { tool: surfaceName, action: "read_members", ok: false },
-              text(`[couldn't read the members] ${r.message ?? "unavailable"}`),
-              true,
-            );
-          const members = r.members ?? [];
-          const body = members.length
-            ? members.map((m) => `- ${m.displayName}`).join("\n")
-            : "[no members to show here]";
-          return recordResult(
-            callId,
-            { tool: surfaceName, action: "read_members", ok: true, count: members.length },
-            text(body),
-          );
-        }
         default:
           return recordResult(
             callId,
             { tool: surfaceName, error: "unknown_action" },
             text(
-              `[error] unknown action "${(params as { action?: string }).action}" — valid actions: post, react, edit, delete, read_thread, whats_new, search, read_members.`,
+              `[error] unknown action "${(params as { action?: string }).action}" — valid actions: post, react, edit, delete, read_thread, whats_new, search.`,
             ),
             true,
           );
@@ -407,5 +396,24 @@ export function surfaceTool(kit: ToolKit) {
     },
   });
 
+  if (textOnly) {
+    const {
+      sandbox_id: _s,
+      files: _f,
+      emoji: _e,
+      ref: _r,
+      source: _src,
+      action,
+      ...kept
+    } = surface.parameters.properties;
+    const unsupported = new Set(["react", "edit", "delete"]);
+    surface.parameters = Type.Object({
+      action: Type.Union(
+        action.anyOf.filter((literal: { const: string }) => !unsupported.has(literal.const)),
+        { description: action.description },
+      ),
+      ...kept,
+    }) as unknown as typeof surface.parameters;
+  }
   return { surface };
 }

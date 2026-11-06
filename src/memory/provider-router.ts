@@ -1,9 +1,10 @@
 import { disclosedMemory, MemoryRecallWithheld } from "./disclosure.ts";
-import { parseScopeId, type ScopeId, type ScopeKind } from "../types.ts";
+import { isSystemActor, parseScopeId, type ScopeId, type ScopeKind } from "../types.ts";
 import type { McpEnvelope } from "../mcp/mcp-client.ts";
 import type { MemoryProviderOutcome, MemoryRecallContext, MemoryService } from "./memory-service.ts";
 import type { MemoryCandidate } from "./facts.ts";
 import { failedOutcome, strictFailure, withEnvelope } from "./provider-outcome.ts";
+import { OutsideAudience } from "../directory/person.ts";
 
 export type MemoryCapturePolicy = "off" | "explicit" | "automatic";
 
@@ -17,12 +18,12 @@ export interface MemoryProviderRoute {
   failOpen?: boolean;
 }
 
-export function routeMatches(route: Pick<MemoryProviderRoute, "scopes">, scopeId: ScopeId): boolean {
+function matches(route: MemoryProviderRoute, scopeId: ScopeId): boolean {
   const kind = parseScopeId(scopeId).kind;
   return route.scopes.some((scope) => scope === scopeId || scope === kind);
 }
 
-export function captureAllowed(policy: MemoryCapturePolicy | undefined, mode: "explicit" | "automatic"): boolean {
+function captureAllowed(policy: MemoryCapturePolicy | undefined, mode: "explicit" | "automatic"): boolean {
   if (policy === "automatic") return true;
   return policy === "explicit" && mode === "explicit";
 }
@@ -32,8 +33,7 @@ export function createRoutedMemoryService(opts: {
   routes: readonly MemoryProviderRoute[];
   onError?: (error: unknown, provider: string, operation: "recall" | "query" | "capture") => void;
 }): MemoryService {
-  const routesFor = (scopeId: ScopeId): MemoryProviderRoute[] =>
-    opts.routes.filter((route) => routeMatches(route, scopeId));
+  const routesFor = (scopeId: ScopeId): MemoryProviderRoute[] => opts.routes.filter((route) => matches(route, scopeId));
   const providerFor = (route: MemoryProviderRoute): MemoryService => {
     const provider = opts.providers[route.provider];
     if (!provider) throw new Error(`unknown memory provider: ${route.provider}`);
@@ -70,6 +70,11 @@ export function createRoutedMemoryService(opts: {
     } catch (error) {
       if (error instanceof MemoryRecallWithheld) return { value: fallback };
       const failed = failedOutcome(error);
+      if (error instanceof OutsideAudience) {
+        report(failed);
+        opts.onError?.(error, route.provider, operation);
+        return { value: fallback };
+      }
       report(operation === "capture" && failed.outcome === "timed_out" ? { ...failed, outcome: "unknown" } : failed);
       if (!route.failOpen) return { value: fallback, error };
       opts.onError?.(error, route.provider, operation);
@@ -120,6 +125,7 @@ export function createRoutedMemoryService(opts: {
             const provider = providerFor(route);
             if (context?.conversationScopeId && context.conversationScopeId !== scopeId && !provider.facts)
               return { value: 0 };
+            if (provider.attestActor && (!context?.actorId || isSystemActor(context.actorId))) return { value: 0 };
             return attempt(
               route,
               scopeId,

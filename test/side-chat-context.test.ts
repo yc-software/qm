@@ -18,61 +18,44 @@ function discussions(text: string) {
   return json ? JSON.parse(json) : [];
 }
 
-test("side-chat context excludes copied history, tools, footers, private messages, and promoted sessions", async () => {
+test("side-chat context excludes copied history, tools, footers, private memory, and promoted sessions", async () => {
   const store = createPostgresSessionStore(testDatabaseUrl());
   const parent = await store.getOrCreateByThread("parent", "dm", "personal:alice");
   await store.addParticipant(parent.id, "alice");
   await store.addParticipant(parent.id, "bob");
-  const { lease: parentLease } = await store.acquireLease(parent.id);
-  assert.ok(parentLease);
-  await store.append(parentLease, { type: "user", scopeLabel: parent.scopeId, payload: { text: "selected passage" } });
-  await store.releaseLease(parentLease);
+  const parentWriter = { sessionId: parent.id };
+  await store.append(parentWriter, { kind: "UserMessage", text: "selected passage" });
   const child = await store.getOrCreateByThread("child", "dm", parent.scopeId);
   await store.addParticipant(child.id, "alice");
-  const { lease } = await store.acquireLease(child.id);
-  assert.ok(lease);
-  await store.append(lease, { type: "user", scopeLabel: parent.scopeId, payload: { text: "copied parent message" } });
+  const writer = { sessionId: child.id };
+  await store.append(writer, { kind: "UserMessage", text: "copied parent message" });
   await store.updateForkProvenance(child.id, {
     forkedFrom: { sessionId: parent.id },
     forkBoundarySeq: 0,
     sideChat: { entrySeq: 0, quote: "selected passage", occurrence: 0, expanded: false },
   });
-  await store.append(lease, {
-    type: "user",
-    scopeLabel: parent.scopeId,
-    payload: {
-      text: "private earlier question",
-      speakerId: "alice",
-      environment: "do not copy footer",
-      memoryRecall: "private memory",
-    },
+  await store.append(writer, {
+    kind: "UserMessage",
+    text: "private earlier question",
+    body: { speakerId: "alice", environment: "do not copy footer", memoryRecall: "private memory" },
   });
   await store.addParticipant(child.id, "bob");
-  await store.append(lease, {
-    type: "user",
-    scopeLabel: parent.scopeId,
-    payload: {
-      text: "shared question",
-      speakerId: "bob",
-      environment: "do not copy footer",
-    },
+  await store.append(writer, {
+    kind: "UserMessage",
+    text: "shared question",
+    body: { speakerId: "bob", environment: "do not copy footer" },
   });
-  await store.append(lease, { type: "assistant", scopeLabel: parent.scopeId, payload: { text: "shared answer" } });
-  await store.append(lease, {
-    type: "tool_result",
-    scopeLabel: parent.scopeId,
-    payload: { callId: "side-context-tool", tool: "read", result: "tool secret" },
-  });
-  await store.releaseLease(lease);
+  await store.append(writer, { kind: "AgentMessage", text: "shared answer" });
+  await store.append(writer, { kind: "ToolResult", callId: "side-context-tool", tool: "read", text: "tool secret" });
   const text = await sideChatContext(store, parent, ["alice", "bob"], 10000);
   const [discussion] = discussions(text);
   assert.equal(discussion.passage, "selected passage");
   assert.deepEqual(
     discussion.messages.map((message: { text: string }) => message.text),
-    ["shared question", "shared answer"],
+    ["private earlier question", "shared question", "shared answer"],
   );
-  assert.equal(discussion.messages[0].user, "bob");
-  assert.equal(typeof discussion.messages[0].timestamp, "number");
+  assert.equal(discussion.messages[1].user, "bob");
+  assert.equal(typeof discussion.messages[1].timestamp, "number");
   assert.equal(text.includes("do not copy footer"), false);
   assert.equal(text.includes("private memory"), false);
   assert.equal(await sideChatContext(store, parent, ["outsider"], 10000), "");
@@ -130,10 +113,8 @@ test("side-chat context pages messages and reports exchanges omitted by the mode
   const store = createPostgresSessionStore(testDatabaseUrl());
   const parent = await store.getOrCreateByThread("budget-parent", "dm", "personal:alice");
   await store.addParticipant(parent.id, "alice");
-  const { lease: parentLease } = await store.acquireLease(parent.id);
-  assert.ok(parentLease);
-  await store.append(parentLease, { type: "user", scopeLabel: parent.scopeId, payload: { text: "queue" } });
-  await store.releaseLease(parentLease);
+  const parentWriter = { sessionId: parent.id };
+  await store.append(parentWriter, { kind: "UserMessage", text: "queue" });
   for (let childIndex = 0; childIndex < 2; childIndex++) {
     const child = await store.getOrCreateByThread(`budget-child-${childIndex}`, "dm", parent.scopeId);
     await store.addParticipant(child.id, "alice");
@@ -142,22 +123,17 @@ test("side-chat context pages messages and reports exchanges omitted by the mode
       forkBoundarySeq: 0,
       sideChat: { entrySeq: 0, quote: "queue", occurrence: 0, expanded: false },
     });
-    const { lease } = await store.acquireLease(child.id);
-    assert.ok(lease);
-    await store.append(lease, { type: "user", scopeLabel: parent.scopeId, payload: { text: "copied" } });
+    const writer = { sessionId: child.id };
+    await store.append(writer, { kind: "UserMessage", text: "copied" });
     for (let index = 0; index < 130; index++) {
-      await store.append(lease, {
-        type: "user",
-        scopeLabel: parent.scopeId,
-        payload: { text: `message ${childIndex}/${index}` },
-      });
+      await store.append(writer, { kind: "UserMessage", text: `message ${childIndex}/${index}` });
     }
-    await store.append(lease, {
-      type: "tool_result",
-      scopeLabel: parent.scopeId,
-      payload: { callId: "big-tool", tool: "read", result: "tool data ".repeat(10000) },
+    await store.append(writer, {
+      kind: "ToolResult",
+      callId: "big-tool",
+      tool: "read",
+      text: "tool data ".repeat(10000),
     });
-    await store.releaseLease(lease);
   }
   const full = await sideChatContext(store, parent, ["alice"], 20000);
   assert.equal(discussions(full).flatMap((d: { messages: unknown[] }) => d.messages).length, 260);
@@ -168,14 +144,8 @@ test("side-chat context pages messages and reports exchanges omitted by the mode
   const latest = (await store.sideChatsOf(parent.id)).sort(
     (a, b) => b.createdAt - a.createdAt || b.id.localeCompare(a.id),
   )[0]!;
-  const { lease } = await store.acquireLease(latest.id);
-  assert.ok(lease);
-  await store.append(lease, {
-    type: "assistant",
-    scopeLabel: parent.scopeId,
-    payload: { text: "oversized answer ".repeat(10000) },
-  });
-  await store.releaseLease(lease);
+  const writer = { sessionId: latest.id };
+  await store.append(writer, { kind: "AgentMessage", text: "oversized answer ".repeat(10000) });
   const oversized = await sideChatContext(store, parent, ["alice"], 600);
   assert.ok(countTokens(oversized) <= 600);
   assert.match(oversized, /omitted/);

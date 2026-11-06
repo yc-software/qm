@@ -261,6 +261,17 @@ function reformatTables(text: string, keep: (s: string) => string): string {
   return out.join("\n");
 }
 
+export function plainContext(text: string): Record<string, unknown> {
+  return { type: "plain_text", text, emoji: false };
+}
+
+export function blocksWithContext(
+  text: string,
+  context: Array<Record<string, unknown>>,
+): Array<Record<string, unknown>> {
+  return [...(text.trim() ? slackSectionBlocks(text) : []), { type: "context", elements: context }];
+}
+
 export function slackSectionBlocks(text: string, opts?: { code?: boolean }): Array<Record<string, unknown>> {
   if (!opts?.code)
     return safeChunks(text, 2_900).map((chunk) => ({ type: "section", text: { type: "mrkdwn", text: chunk } }));

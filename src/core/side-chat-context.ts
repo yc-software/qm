@@ -1,5 +1,5 @@
 import { countTokens } from "../util/tokens.ts";
-import { commonEntrySeqs } from "../sessions/transcript-source.ts";
+import { isAgentReply, isOverheard, isUserItem } from "../sessions/items.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import type { Session } from "../types.ts";
 import { visibleTitleEntryText } from "./orchestrator/turn-helpers.ts";
@@ -48,51 +48,37 @@ export async function sideChatContext(
     .filter((session) => !session.sideChat?.expanded && session.scopeId === parent.scopeId)
     .sort((a, b) => b.createdAt - a.createdAt || b.id.localeCompare(a.id));
   if (!sessions.length) return "";
+  const parentMembers = await store.participantsOf(parent.id);
+  if (!audience.every((id) => parentMembers.includes(id))) return "";
   if (countTokens(render(true)) > maxTokens)
     throw new Error("Side-chat context notice exceeds the model context budget");
   for (const session of sessions) {
-    const participants = await store.participantWindowsOf(session.id);
-    if (!audience.every((id) => participants.some((window) => window.principalId === id && window.validTo === null)))
-      continue;
-    const passageViews = await Promise.all(
-      audience.map((id) =>
-        store.visibleEntries(parent.id, id, {
-          sinceSeq: session.sideChat!.entrySeq,
-          beforeSeq: session.sideChat!.entrySeq + 1,
-        }),
-      ),
-    );
-    if (passageViews.some((entries) => !entries.length)) continue;
+    const members = await store.participantsOf(session.id);
+    if (!audience.every((id) => members.includes(id))) continue;
+    const passage = await store.getItems(parent.id, {
+      sinceSeq: session.sideChat!.entrySeq,
+      beforeSeq: session.sideChat!.entrySeq + 1,
+    });
+    if (!passage.length) continue;
     const discussion: Discussion = { sessionId: session.id, passage: session.sideChat!.quote, messages: [] };
     let beforeSeq: number | undefined;
     while (true) {
-      const first = await store.visibleEntries(session.id, audience[0]!, {
+      const page = await store.getItems(session.id, {
         sinceSeq: (session.forkBoundarySeq ?? -1) + 1,
         beforeSeq,
         messagesOnly: true,
         limit: 100,
       });
-      if (!first.length) break;
-      const views = await Promise.all(
-        audience.slice(1).map((id) =>
-          store.visibleEntries(session.id, id, {
-            sinceSeq: first[0]!.seq,
-            beforeSeq: first[first.length - 1]!.seq + 1,
-            messagesOnly: true,
-            limit: 100,
-          }),
-        ),
-      );
-      const common = commonEntrySeqs([first, ...views]);
-      for (const entry of first.slice().reverse()) {
-        if (!common.has(entry.seq) || (entry.type !== "user" && entry.type !== "assistant")) continue;
-        const text = visibleTitleEntryText(entry);
-        const payload = entry.payload as { speakerId?: string; name?: string; overheard?: boolean };
-        if (!text || payload.overheard) continue;
+      if (!page.length) break;
+      for (const item of page.toReversed()) {
+        if (!isUserItem(item) && !isAgentReply(item)) continue;
+        const text = visibleTitleEntryText(item);
+        if (!text || isOverheard(item)) continue;
+        const { speakerId, name } = item.body as { speakerId?: string; name?: string };
         const message: Message = {
-          role: entry.type,
-          ...(entry.type === "user" ? { user: payload.speakerId ?? payload.name } : {}),
-          timestamp: entry.createdAt,
+          role: isUserItem(item) ? "user" : "assistant",
+          ...(isUserItem(item) ? { user: speakerId ?? name } : {}),
+          timestamp: item.createdAt,
           text,
         };
         const tokens =
@@ -103,7 +89,7 @@ export async function sideChatContext(
         if (!discussion.messages.length) discussions.unshift(discussion);
         discussion.messages.unshift(message);
       }
-      beforeSeq = first[0]!.seq;
+      beforeSeq = page[0]!.seq;
     }
   }
   return discussions.length ? finish(false) : "";

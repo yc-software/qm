@@ -1,6 +1,5 @@
 import "./support/auto-fake-sprites.ts";
 import { test, type TestContext } from "node:test";
-import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { migrateRegisteredPgSchemas } from "../src/persistence/pg-pool.ts";
 import { createPostgresVectorStore } from "../src/memory/postgres-vector-store.ts";
@@ -14,6 +13,7 @@ import { buildApp } from "./support/build-app.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const fact = "Prefers validating changes with before-and-after browser tests.";
 const filler = Array.from(
@@ -31,20 +31,9 @@ const close = async (server: Server) => {
 
 const database = process.env.DATABASE_URL;
 const pgTest = database ? test : test.skip;
-async function isolatedDatabase(t: TestContext) {
-  const admin = new pg.Client({ connectionString: database! });
-  await admin.connect();
-  const name = `memory_http_${randomUUID().replaceAll("-", "")}`;
-  await admin.query(`CREATE DATABASE ${name}`);
-  const fixture = { url: "", stop: async () => {} };
-  t.after(async () => {
-    await fixture.stop();
-    await admin.query(`DROP DATABASE ${name} WITH (FORCE)`);
-    await admin.end();
-  });
-  const url = new URL(database!);
-  url.pathname = `/${name}`;
-  fixture.url = url.toString();
+function isolatedDatabase(t: TestContext) {
+  const fixture = { url: testDatabaseUrl(), stop: async () => {} };
+  t.after(() => fixture.stop());
   return fixture;
 }
 
@@ -83,7 +72,7 @@ async function seedVectors(
 }
 
 pgTest("HTTP turn injects semantic matches; grep remains independent", async (t) => {
-  const databaseFixture = await isolatedDatabase(t);
+  const databaseFixture = isolatedDatabase(t);
   const databaseUrl = databaseFixture.url;
   const inputs: string[][] = [];
   const provider = httpServer(async (req, res) => {
@@ -134,7 +123,12 @@ pgTest("HTTP turn injects semantic matches; grep remains independent", async (t)
   const otherFact = "Another user's confidential browser preference";
   await built.memory.capture("personal:U1", [fact, ...filler], Date.now());
   await built.memory.capture("personal:U2", [otherFact], Date.now());
-  await seedVectors(built.memory, databaseUrl, embeddingId, providerUrl, ["org:default-org", "personal:U1"]);
+  await seedVectors(built.memory, databaseUrl, embeddingId, providerUrl, [
+    "org:default-org",
+    "personal:U1",
+    "personal:U2",
+  ]);
+  inputs.length = 0;
   const server = createInsecureTestServer(built.app, {
     memory: built.memory,
     capabilitySecret: TEST_CAPABILITY_SECRET,
@@ -206,7 +200,7 @@ pgTest("HTTP turn injects semantic matches; grep remains independent", async (t)
 });
 
 pgTest("HTTP Open DM combines room and current memory, then blocks reads after membership revocation", async (t) => {
-  const databaseFixture = await isolatedDatabase(t);
+  const databaseFixture = isolatedDatabase(t);
   const databaseUrl = databaseFixture.url;
   const inputs: string[][] = [];
   const provider = httpServer(async (req, res) => {
@@ -264,7 +258,8 @@ pgTest("HTTP Open DM combines room and current memory, then blocks reads after m
   );
   await built.memory.capture(room, ["0.99 REMOTE_BEST", "0.72 REMOTE_NEAR"], Date.now());
   await built.memory.capture(denied, ["1 DENIED_NOTEBOOK"], Date.now());
-  await seedVectors(built.memory, databaseUrl, "test", providerUrl, [personal, room]);
+  await seedVectors(built.memory, databaseUrl, "test", providerUrl, [personal, room, denied]);
+  inputs.length = 0;
   const server = createInsecureTestServer(built.app);
   const base = await listen(server);
   t.after(() => close(server));

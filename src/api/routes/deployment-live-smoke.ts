@@ -1,6 +1,6 @@
+import { timingSafeEqual } from "node:crypto";
+import { isBearerSecret, isStrongSigningSecret } from "../../auth/source-auth.ts";
 import { sendJson } from "../http.ts";
-import type { BackgroundOwnership } from "../../runs/background-ownership.ts";
-import { requireDeploymentControl } from "./background-work.ts";
 import { isObj } from "./shared.ts";
 import { uuidSchema } from "../../util/ids.ts";
 import type { ApiCtx, Route } from "./route.ts";
@@ -8,33 +8,52 @@ import type { ApiCtx, Route } from "./route.ts";
 const running = new WeakSet<object>();
 const REQUEST_EXPIRY = Date.UTC(9999, 0, 1);
 
+function requireDeploymentControl(ctx: ApiCtx): boolean {
+  const secret = ctx.deps.deploymentControlSecret;
+  if (
+    !ctx.deps.deploymentLiveSmoke ||
+    !ctx.secret ||
+    !ctx.auth ||
+    !isStrongSigningSecret(secret) ||
+    !isBearerSecret(secret) ||
+    secret === ctx.secret
+  ) {
+    sendJson(ctx.res, 503, { error: "background_control_unavailable" });
+    return false;
+  }
+  const bearer = ctx.req.headers.authorization;
+  const expected = Buffer.from(`Bearer ${secret}`);
+  const supplied = Buffer.from(typeof bearer === "string" ? bearer : "");
+  if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) {
+    sendJson(ctx.res, 401, { error: "unauthorized" });
+    return false;
+  }
+  return true;
+}
+
 async function deploymentLiveSmoke(ctx: ApiCtx): Promise<void> {
   if (!requireDeploymentControl(ctx)) return;
-  const control = ctx.deps.backgroundOwnership!;
-  const run = ctx.deps.deploymentLiveSmoke;
+  const smoke = ctx.deps.deploymentLiveSmoke!;
   const replay = ctx.deps.replayDedupe;
-  if (!run || !replay) return sendJson(ctx.res, 503, { error: "deployment_smoke_unavailable" });
+  if (!replay) return sendJson(ctx.res, 503, { error: "deployment_smoke_unavailable" });
   const body = ctx.body;
   if (
     !isObj(body) ||
     !Object.keys(body).every((key) => ["requestId", "expectedDeploymentId"].includes(key)) ||
     typeof body.requestId !== "string" ||
     !uuidSchema.safeParse(body.requestId).success ||
-    body.expectedDeploymentId !== control.deploymentId
+    body.expectedDeploymentId !== smoke.deploymentId
   )
     return sendJson(ctx.res, 400, { error: "invalid_deployment_smoke_request" });
-  if (running.has(control)) return sendJson(ctx.res, 409, { error: "deployment_smoke_running" });
-  const valid = (state: BackgroundOwnership): boolean =>
-    state.ownerDeploymentId === control.deploymentId && control.active();
-  running.add(control);
+  if (running.has(smoke)) return sendJson(ctx.res, 409, { error: "deployment_smoke_running" });
+  running.add(smoke);
   let heartbeat: ReturnType<typeof setInterval> | undefined;
   try {
-    if (!valid(await control.store.get()))
-      return sendJson(ctx.res, 409, { error: "deployment_smoke_ownership_conflict" });
+    if (smoke.superseded()) return sendJson(ctx.res, 409, { error: "deployment_smoke_superseded" });
     if (!(await replay.claim(`deployment-live-smoke:${body.requestId.toLowerCase()}`, REQUEST_EXPIRY))) {
       return sendJson(ctx.res, 409, { error: "deployment_smoke_replay" });
     }
-    const identity = { requestId: body.requestId, deploymentId: control.deploymentId, instanceId: control.instanceId };
+    const identity = { requestId: body.requestId, deploymentId: smoke.deploymentId };
     ctx.res.writeHead(200, {
       "content-type": "application/x-ndjson",
       "cache-control": "no-store, no-transform",
@@ -48,8 +67,8 @@ async function deploymentLiveSmoke(ctx: ApiCtx): Promise<void> {
     ctx.res.once("close", () => clearInterval(heartbeat));
     let error: string | undefined;
     try {
-      await run();
-      if (!valid(await control.store.get())) error = "deployment_smoke_ownership_changed";
+      await smoke.run();
+      if (smoke.superseded()) error = "deployment_smoke_superseded";
     } catch {
       error = "deployment_smoke_failed";
     }
@@ -57,7 +76,7 @@ async function deploymentLiveSmoke(ctx: ApiCtx): Promise<void> {
       ctx.res.end(`${JSON.stringify({ ok: !error, ...identity, ...(error ? { error } : {}) })}\n`);
   } finally {
     clearInterval(heartbeat);
-    running.delete(control);
+    running.delete(smoke);
   }
 }
 

@@ -1,11 +1,7 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { createLocalSandbox, localContainerName, localVolumeName } from "../src/sandbox/local-sandbox.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { scopeId } from "../src/types.ts";
 
 const log = (...a: unknown[]) => console.log("[local-smoke]", ...a);
@@ -16,14 +12,12 @@ if (spawnSync("docker", ["version"], { stdio: "ignore" }).status !== 0) {
 }
 
 async function main(): Promise<void> {
-  const ws = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "local-smoke-ws-")));
-  const sandbox = createLocalSandbox(ws, {});
+  const sandbox = createLocalSandbox();
   const scope = scopeId("personal", `smoke-${Date.now()}`);
-  const layers = [{ scopeId: scope, mountPath: "", mode: "rw" as const }];
 
   try {
     log("provision #1 (fresh container + volume)...");
-    const h1 = await sandbox.provision(layers);
+    const h1 = await sandbox.provision(scope);
     log("container", h1.id, "coldStart", h1.coldStart);
     assert.equal(h1.coldStart, true, "first ever provision should be cold");
 
@@ -46,7 +40,7 @@ async function main(): Promise<void> {
     await sandbox.teardown(h1);
 
     log("provision #2 (should docker-start the same container, warm)...");
-    const h2 = await sandbox.provision(layers);
+    const h2 = await sandbox.provision(scope);
     assert.equal(h2.id, h1.id, "warm restart reuses the same container");
     assert.equal(h2.coldStart, false, "restarted container is not cold");
     assert.equal(createdAt(h2.id), created1, "the container body was reused, not recreated");
@@ -54,7 +48,7 @@ async function main(): Promise<void> {
     log("warm restart OK, marker intact");
 
     log("scratch box...");
-    const hs = await sandbox.provision(layers, { scratch: { key: `smoke-${Date.now()}` } });
+    const hs = await sandbox.provision(scope, { scratch: { key: `smoke-${Date.now()}` } });
     assert.equal(hs.scratch, true);
     assert.equal((await sandbox.run(hs, "echo scratch-ok")).stdout.trim(), "scratch-ok");
     await sandbox.teardown(hs);

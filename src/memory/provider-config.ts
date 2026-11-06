@@ -1,11 +1,12 @@
-import { SCOPE_KINDS, parseScopeId, type ScopeId, type ScopeKind } from "../types.ts";
+import { parseScopeId, type ScopeId, type ScopeKind } from "../types.ts";
 import type { MemoryCapturePolicy, MemoryProviderRoute } from "./provider-router.ts";
 import { parseMemorableProvider, type MemorableMemoryProviderConfig } from "./memorable/config.ts";
 
-const KINDS = new Set<ScopeKind>(SCOPE_KINDS);
-const ID = /^[a-z][a-z0-9-]{0,62}$/;
+const KINDS = new Set<ScopeKind>(["personal", "channel", "team", "org", "group"]);
+export const MEMORY_PROVIDER_ID = /^[a-z][a-z0-9-]{0,62}$/;
 const ARG = /^[a-zA-Z_][a-zA-Z0-9_]{0,63}$/;
 const ENV = /^[A-Z][A-Z0-9_]*$/;
+export const MAX_PROVIDER_TIMEOUT_MS = 30_000;
 
 interface McpMemoryAuthConfig {
   clientId: string;
@@ -17,6 +18,7 @@ export interface McpMemoryOperationConfig {
   auth: McpMemoryAuthConfig;
   queryArg?: string;
   contentArg?: string;
+  factsArg?: string;
   actorArg?: string;
   scopeArg?: string;
   maxCharsArg?: string;
@@ -106,6 +108,7 @@ function operation(value: unknown, at: string, env: NodeJS.ProcessEnv): McpMemor
   for (const key of [
     "queryArg",
     "contentArg",
+    "factsArg",
     "actorArg",
     "scopeArg",
     "maxCharsArg",
@@ -120,6 +123,7 @@ function operation(value: unknown, at: string, env: NodeJS.ProcessEnv): McpMemor
     if (!ARG.test(name)) throw new Error(`${at}.${key} is invalid`);
     out[key] = name;
   }
+  if (out.factsArg && out.contentArg) throw new Error(`${at} sets both factsArg and contentArg; keep one`);
   return out;
 }
 
@@ -147,12 +151,12 @@ export function parseMemoryProviderConfig(
   const providers = root.providers.map((value, i) => {
     const raw = object(value, `MEMORY_PROVIDER_CONFIG.providers[${i}]`);
     const id = string(raw.id, `MEMORY_PROVIDER_CONFIG.providers[${i}].id`);
-    if (!ID.test(id) || id === "default") throw new Error(`invalid memory provider id: ${id}`);
+    if (!MEMORY_PROVIDER_ID.test(id) || id === "default") throw new Error(`invalid memory provider id: ${id}`);
     if (raw.attestActor !== undefined && (raw.type !== "mcp" || typeof raw.attestActor !== "boolean"))
       throw new Error(`memory provider ${id}.attestActor must be true or false on an mcp provider`);
     if (raw.type === "memorable") return parseMemorableProvider(raw, id, env);
     if (raw.type !== "mcp") throw new Error(`memory provider ${id} has unsupported type; use "mcp" or "memorable"`);
-    const timeoutMs = timeout(raw.timeoutMs, `memory provider ${id}.timeoutMs`, 3_000, 30_000);
+    const timeoutMs = timeout(raw.timeoutMs, `memory provider ${id}.timeoutMs`, 3_000, MAX_PROVIDER_TIMEOUT_MS);
     return {
       id,
       type: "mcp" as const,
@@ -179,17 +183,29 @@ export function parseMemoryProviderConfig(
       throw new Error(
         `memory route ${i}: provider ${provider} does not support capture "${String(capture)}" (allowed: ${[...capturePoliciesOf(target)].join(", ")})`,
       );
+    const manage = typeof raw.manage === "boolean" ? raw.manage : provider === "default";
+    if (manage && target?.type === "mcp" && target.attestActor)
+      throw new Error(
+        `memory route ${i}: provider ${provider} sets attestActor, so it cannot manage a notebook; set "manage": false (docs/memory-providers.md#troubleshooting)`,
+      );
     return {
       provider,
       scopes: raw.scopes.map((value, j) => scope(value, `memory route ${i}.scopes[${j}]`)),
       capture: capture as MemoryCapturePolicy,
       ...(typeof raw.recall === "boolean" ? { recall: raw.recall } : {}),
-      manage: provider === "default",
-      ...(typeof raw.manage === "boolean" ? { manage: raw.manage } : {}),
+      manage,
       ...(typeof raw.label === "string" && raw.label ? { label: raw.label } : {}),
       failOpen: provider !== "default",
       ...(typeof raw.failOpen === "boolean" ? { failOpen: raw.failOpen } : {}),
     };
   });
+  for (const [i, route] of routes.entries()) {
+    const target = providerById.get(route.provider);
+    const shared = route.scopes.filter((scope) => scope !== "personal" && parseScopeId(scope).kind !== "personal");
+    if (target?.type === "mcp" && target.attestActor && shared.length)
+      throw new Error(
+        `memory route ${i}: provider ${route.provider} sets attestActor, so it may serve only personal scopes, not ${shared.join(", ")}; an attested read returns that member's private memory, which a shared conversation would show to everyone in it (docs/memory-providers.md#attesting-the-member-attestactor)`,
+      );
+  }
   return { providers, routes };
 }

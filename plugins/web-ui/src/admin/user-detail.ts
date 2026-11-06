@@ -2,6 +2,7 @@ import { withBase } from "../core-bridge.ts";
 import { html, render } from "lit";
 import { formatMessageTime } from "../message-time.ts";
 import type { AdminPage } from "./sections.ts";
+import { offboardingCard } from "./offboarding.ts";
 import { pageHeader, card, table, badge, stacked, subline } from "./shared.ts";
 
 export const labelRole = (role: string) => (role === "org_admin" ? "admin" : String(role || "").replace(/_/g, " "));
@@ -83,6 +84,7 @@ export async function detail(page: AdminPage) {
     busy = false;
     draw();
   }
+  const offboarding = offboardingCard(page, d.principalId || principal, d.deactivated === true, d.user, () => draw());
   const keychainCards = () => {
     if (!kc.ok) return html`<p class="empty">${kc.data?.message || "Failed to load credentials and grants."}</p>`;
     if (kc.data?.enabled === false) return html`<p class="empty">Keychain is not enabled.</p>`;
@@ -158,9 +160,12 @@ export async function detail(page: AdminPage) {
               Reset to brand-new (delete this person's DMs) →
             </button>
             <p class="hint">${resetHint}</p>`,
-        )}`,
+        )}
+        ${offboarding()}`,
       d.displayName || d.principalId || principal,
-      [d.admin?.isAdmin ? labelRole(d.admin.role) : "member", d.scopeId].filter(Boolean).join(" · "),
+      [d.user?.kind === "app" ? "app" : "", d.admin?.isAdmin ? labelRole(d.admin.role) : "member", d.scopeId]
+        .filter(Boolean)
+        .join(" · "),
     );
   }
   draw();

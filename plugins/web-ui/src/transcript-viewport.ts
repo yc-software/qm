@@ -28,6 +28,7 @@ export function preserveTranscriptScroll(root: HTMLElement): () => void {
 
 const CONDENSED_LINES = 2;
 const NEAR_TOP = 400;
+const AWAY_FROM_BOTTOM = 160;
 
 export function createTranscriptViewport(options: { pinPrompt?: () => boolean } = {}) {
   let scroller: HTMLElement | null = null;
@@ -52,17 +53,31 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
   let collapseDistance = 0;
   let geometryDistance: number | null = null;
   let filledAtSize: number | null = null;
+  let heldStack: HTMLElement | null = null;
   const contentUpdates = new Set<Promise<void>>();
 
   function setFollowing(value: boolean): void {
     following = value;
     if (scroller) scroller.style.overflowAnchor = value ? "none" : "";
+    syncAway();
   }
 
   function cancelFollow(): void {
     setFollowing(false);
     if (frame !== null) cancelAnimationFrame(frame);
     frame = null;
+    releaseHeight();
+  }
+
+  function holdHeight(): void {
+    if (!following || !stack || heldStack) return;
+    heldStack = stack;
+    heldStack.style.minHeight = `${heldStack.getBoundingClientRect().height}px`;
+  }
+
+  function releaseHeight(): void {
+    heldStack?.style.removeProperty("min-height");
+    heldStack = null;
   }
 
   function clearPrompt(): void {
@@ -108,8 +123,15 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
     syncSticky();
   }
 
+  function syncAway(): void {
+    if (!scroller) return;
+    const away = !following && scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop > AWAY_FROM_BOTTOM;
+    scroller.toggleAttribute("data-away-from-bottom", away);
+  }
+
   function syncSticky(): void {
     if (!scroller) return;
+    syncAway();
     syncPrompt();
     const top = pins?.getBoundingClientRect().height ?? 0;
     scroller.style.setProperty("--chat-sticky-top", `${top}px`);
@@ -272,6 +294,7 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
   function beforeRender(): void {
     if (!scroller || contentUpdates.size > 0) return;
     if (scroller.scrollTop !== lastTop) onScroll();
+    holdHeight();
   }
 
   function onContentUpdating(event: Event): void {
@@ -318,6 +341,8 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
     scroller?.removeEventListener("keydown", onKeyDown);
     scroller?.style.removeProperty("--chat-sticky-top");
     scroller?.style.removeProperty("overflow-anchor");
+    scroller?.removeAttribute("data-away-from-bottom");
+    releaseHeight();
     clearPrompt();
     scroller = pins = prompt = stack = content = null;
     lastTop = 0;
@@ -406,6 +431,7 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
       if (element !== scroller || !element.isConnected || !following || contentUpdates.size > 0) return;
       if (element.scrollTop < priorTop && element.scrollHeight - element.clientHeight - element.scrollTop > 1)
         return cancelFollow();
+      releaseHeight();
       element.scrollTop = element.scrollHeight;
       lastTop = scroller?.scrollTop ?? 0;
       syncSticky();

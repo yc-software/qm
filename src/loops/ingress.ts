@@ -416,7 +416,6 @@ export function createLoopIngress(deps: LoopIngressDeps) {
           summary: event.text.slice(0, 500),
           sourceAt: at,
           sourcePayload: {
-            source: "slack",
             title: event.channel,
             from: event.user,
             snippet: event.text.slice(0, 10_000),

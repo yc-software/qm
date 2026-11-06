@@ -1,13 +1,10 @@
 import { cleanupFailedProvision } from "./sandbox.ts";
 import { randomUUID } from "node:crypto";
-import type { WorkspaceLayer } from "../types.ts";
-import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { swallowAs, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import { shortHash } from "../util/crypto.ts";
 import { DROPPED_PROXY_ENV, forceThroughProxyEnv, nonInteractiveShellPrefix } from "./sandbox-env.ts";
-import { materializeRoLayers } from "./ro-layers.ts";
 import type { LayerToolInstaller } from "./layer-tool-install.ts";
 import { posixJoin } from "./exec-file-ops.ts";
 import { ephemeralCredLinkScript, type CredentialPathSpec } from "../credentials/resident-paths.ts";
@@ -16,8 +13,6 @@ import { execFailureDetail } from "./sandbox.ts";
 import type { ExecOptions, ExecResult, ProvisionOptions, SandboxHandle, TeardownOptions } from "./sandbox.ts";
 
 const WORKSPACE_BASENAME = "workspace";
-const RO_LAYERS_TAR = ".ro-layers.tar";
-const RO_LAYERS_MANIFEST = ".ro-layers.manifest";
 const PREP_TIMEOUT_SEC = 60;
 
 // Provider instance names are DNS-style labels; Sprites rejects anything over 63 chars.
@@ -43,7 +38,6 @@ export const sandboxScopeName = (prefix: string, id: string): string => {
 };
 
 export interface ExecSandboxBaseDeps {
-  workspace: WorkspaceStore;
   label: string;
   prefix: string;
   homeDir: string;
@@ -69,7 +63,7 @@ export interface ExecSandboxBase {
   workspaceDir: string;
   provisionQueue: <T>(key: string, fn: () => Promise<T>) => Promise<T>;
   scopeFor(name: string): string | undefined;
-  provision(layers: WorkspaceLayer[], opts?: ProvisionOptions): Promise<SandboxHandle>;
+  provision(scope: string, opts?: ProvisionOptions): Promise<SandboxHandle>;
   run(handle: SandboxHandle, command: string, opts?: ExecOptions): Promise<ExecResult>;
   writeFileBytes(handle: SandboxHandle, relPath: string, data: Uint8Array): Promise<void>;
   writeFile(handle: SandboxHandle, relPath: string, data: string): Promise<void>;
@@ -79,7 +73,7 @@ export interface ExecSandboxBase {
 }
 
 export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBase {
-  const { workspace, label, prefix, homeDir, defaultTimeoutSec } = deps;
+  const { label, prefix, homeDir, defaultTimeoutSec } = deps;
   if (deps.egressProxyUrl && !new URL(deps.egressProxyUrl).hostname) {
     throw new Error(`${label}-sandbox: egress proxy url has no hostname: ${deps.egressProxyUrl}`);
   }
@@ -159,10 +153,8 @@ export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBas
     });
   }
 
-  async function provision(layers: WorkspaceLayer[], provOpts?: ProvisionOptions): Promise<SandboxHandle> {
+  async function provision(scope: string, provOpts?: ProvisionOptions): Promise<SandboxHandle> {
     const scratch = provOpts?.scratch;
-    const writable = layers.find((l) => l.mode === "rw") ?? layers[0];
-    const scope = writable?.scopeId ?? "default";
     let name: string;
     let coldStart: boolean;
     if (scratch) {
@@ -203,17 +195,6 @@ export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBas
           throw new Error(`${label} provision prep failed: ${execFailureDetail(prep, PREP_TIMEOUT_SEC).slice(0, 200)}`);
       }
 
-      await materializeRoLayers(
-        workspace,
-        layers,
-        handle,
-        {
-          readFile,
-          writeFileBytes,
-          exec: (script, t) => deps.exec(name, script, t),
-        },
-        { manifest: RO_LAYERS_MANIFEST, tar: RO_LAYERS_TAR, label },
-      );
       if (!deps.combineLayerToolPrep) await deps.installLayerTools?.(toolIo);
 
       return handle;

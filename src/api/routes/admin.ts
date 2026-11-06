@@ -9,7 +9,7 @@ import {
   retention,
   whoami,
 } from "./admin/scope-config.ts";
-import { egress, listAdminAudit, listAdminErrors, listAdminRuns } from "./admin/observability.ts";
+import { egress, listAdminAudit, listAdminErrors } from "./admin/observability.ts";
 import { getAdminSession, getAdminSessionLlm, listAdminSessions, listAdminShadowDeliveries } from "./admin/sessions.ts";
 import { downloadAdminFile, listAdminFiles, readAdminFile, uploadAdminFile } from "./admin/files.ts";
 import {
@@ -66,6 +66,7 @@ import {
 import { listSecurityFlags } from "./admin/security.ts";
 import { spend } from "./admin/spend.ts";
 import { listUnattendedGrants } from "./admin/unattended-grants.ts";
+import { offboardUser, reactivateUser } from "./admin/offboard.ts";
 import { createPrincipalLink, deletePrincipalLink, listPrincipalLinks } from "./admin/principal-links.ts";
 
 const timed =
@@ -90,6 +91,8 @@ const IMPERSONATE = "impersonating a user is portal-only — the agent cannot ac
 const MCP_SERVERS =
   "registering or changing an MCP server is portal-only — the agent cannot change which tools it can call or which calls need approval";
 const LINKS = "identity links are portal-only — the agent cannot decide which sign-ins belong to one person";
+const MEMORY_REGISTRY_DELETE =
+  "deleting a memory brain or binding never goes through the agent — an org admin deletes it through the admin API outside chat";
 
 const routes: Route<ApiCtx>[] = [
   { method: "POST", path: "/v1/slack/managed/installation", auth: "public", handle: managedSlackRequest },
@@ -198,16 +201,6 @@ const routes: Route<ApiCtx>[] = [
         unattended: { grant: "admin.sessions.read", summary: "read a conversation transcript" },
       },
       handle: getAdminSession,
-    },
-    {
-      method: "GET",
-      path: "/v1/admin/runs",
-      auth: "either",
-      admin: {
-        privateRead: "always",
-        unattended: { grant: "admin.sessions.read", summary: "read queued, in-flight, and recent runs" },
-      },
-      handle: listAdminRuns,
     },
     {
       method: "GET",
@@ -352,8 +345,20 @@ const routes: Route<ApiCtx>[] = [
       admin: { privateRead: "always" },
       handle: getMemoryBrain,
     },
-    { method: "PUT", path: "/v1/admin/memory-registry/brains/:id", auth: "either", handle: putMemoryBrain },
-    { method: "DELETE", path: "/v1/admin/memory-registry/brains/:id", auth: "either", handle: deleteMemoryBrain },
+    {
+      method: "PUT",
+      path: "/v1/admin/memory-registry/brains/:id",
+      auth: "either",
+      admin: { privateRead: "always" },
+      handle: putMemoryBrain,
+    },
+    {
+      method: "DELETE",
+      path: "/v1/admin/memory-registry/brains/:id",
+      auth: "either",
+      admin: { agent: { portalOnly: MEMORY_REGISTRY_DELETE } },
+      handle: deleteMemoryBrain,
+    },
     {
       method: "GET",
       path: "/v1/admin/memory-registry/bindings/:id",
@@ -361,14 +366,27 @@ const routes: Route<ApiCtx>[] = [
       admin: { privateRead: "always" },
       handle: getMemoryBinding,
     },
-    { method: "PUT", path: "/v1/admin/memory-registry/bindings/:id", auth: "either", handle: putMemoryBinding },
+    {
+      method: "PUT",
+      path: "/v1/admin/memory-registry/bindings/:id",
+      auth: "either",
+      admin: { privateRead: "always" },
+      handle: putMemoryBinding,
+    },
     {
       method: "DELETE",
       path: "/v1/admin/memory-registry/bindings/:id",
       auth: "either",
+      admin: { agent: { portalOnly: MEMORY_REGISTRY_DELETE } },
       handle: deleteMemoryBinding,
     },
-    { method: "PUT", path: "/v1/admin/memory-registry/member-brains", auth: "either", handle: putMemberBrains },
+    {
+      method: "PUT",
+      path: "/v1/admin/memory-registry/member-brains",
+      auth: "either",
+      admin: { privateRead: "always" },
+      handle: putMemberBrains,
+    },
     { method: "POST", path: "/v1/admin/memory", auth: "either", handle: adminMemory },
     { method: "PATCH", path: "/v1/admin/memory", auth: "either", handle: adminMemory },
     { method: "DELETE", path: "/v1/admin/memory", auth: "either", handle: adminMemory },
@@ -392,6 +410,14 @@ const routes: Route<ApiCtx>[] = [
     },
     { method: "PUT", path: "/v1/admin/users/:principalId/onboarding", auth: "either", handle: setUserOnboarding },
     { method: "POST", path: "/v1/admin/users/:principalId/reset", auth: "either", handle: resetUserToBrandNew },
+    {
+      method: "POST",
+      path: "/v1/admin/users/:principalId/offboard",
+      auth: "either",
+      admin: { privateRead: "always" },
+      handle: offboardUser,
+    },
+    { method: "POST", path: "/v1/admin/users/:principalId/reactivate", auth: "either", handle: reactivateUser },
     {
       method: "GET",
       path: "/v1/admin/principal-links",

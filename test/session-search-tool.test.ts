@@ -16,34 +16,32 @@ import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-st
 const alice: Principal = { id: "alice@example.com", type: "internal" };
 const bob: Principal = { id: "bob@example.com", type: "internal" };
 
-test("session search reuses indexed search with participant intersection, tenure windows and bounded references", async () => {
+test("session search reuses indexed search with participant intersection and bounded references", async () => {
   const { app, sessions } = buildApp(
     testConfig({ dataDir: mkdtempSync(join(tmpdir(), "session-search-tool-")), publicWebUrl: "https://qm.example" }),
   );
   const scope = scopeId("group", "room");
   const current = await sessions.getOrCreateByThread("web:room", "group", scope);
   const source = await sessions.getOrCreateByThread("web:source", "group", scopeId("group", "source"));
-  await sessions.addParticipant(source.id, alice.id, undefined, { includeHistory: true });
-  const { lease } = await sessions.acquireLease(source.id);
-  assert.ok(lease);
-  await sessions.append(lease, {
-    type: "user",
-    payload: { text: "memo before Bob joined" },
-    scopeLabel: source.scopeId,
+  await sessions.addParticipant(source.id, alice.id);
+  const writer = { sessionId: source.id };
+  await sessions.append(writer, {
+    kind: "UserMessage",
+    text: "memo before Bob joined",
   });
   await sessions.addParticipant(source.id, bob.id);
-  const shared = await sessions.append(lease, {
-    type: "user",
-    payload: { text: "memo shared" },
-    scopeLabel: source.scopeId,
+  const shared = await sessions.append(writer, {
+    kind: "UserMessage",
+    text: "memo shared",
   });
-  await sessions.releaseLease(lease);
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   let members: Principal[] | undefined;
+  const signals = createPostgresRunSignalStore(testDatabaseUrl());
   const factory = createSessionSyscalls({
     sessions,
     runs,
-    signals: createPostgresRunSignalStore(testDatabaseUrl()),
+    signals,
+    steerRun: async (run, signal) => ({ sent: await signals.send(run.id, signal) }),
     mailbox: createSessionMailbox(testMap<SessionMessage>()),
     maxAttempts: 1,
     advisoryLock: testAdvisoryLock(),
@@ -68,13 +66,13 @@ test("session search reuses indexed search with participant intersection, tenure
   });
   await assert.rejects(() => tools.search!({ query: "memo" }), /complete principal set/);
   members = [bob];
-  const result = await tools.search!({ query: "memo" });
+  const result = await tools.search!({ query: "memo shared" });
   assert.deepEqual(result.failedBackends, []);
-  assert.equal(result.hits.length, 1);
   assert.deepEqual(
     result.hits.map((h) => [h.metadata?.sessionId, h.metadata?.seq, h.snippet, h.url]),
     [[source.id, shared.seq, "memo shared", `https://qm.example/s/${source.id}`]],
   );
+  assert.equal((await tools.search!({ query: "memo" })).hits.length, 2);
   assert.equal((await tools.search!({ query: "memo shared", limit: 1 })).hits.length, 1);
   members = [alice];
   assert.equal((await tools.search!({ query: "memo" })).hits.length, 2);

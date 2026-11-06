@@ -1,5 +1,6 @@
 import { marked } from "marked";
 import { escapeHtml } from "./html-escape.ts";
+import { isGitHubUrl, prependGitHubMark } from "./github-link.ts";
 import DOMPurify, { type Config } from "dompurify";
 
 export const MARKDOWN_SANITIZE_CONFIG: Config = {
@@ -40,6 +41,9 @@ let installed = false;
 export function installMarkdownSanitizer(options: { shared?: boolean } = {}): void {
   if (installed) return;
   installed = true;
+  DOMPurify.addHook("afterSanitizeAttributes", (node) => {
+    if (node.tagName === "A" && isGitHubUrl(node.getAttribute("href") ?? "")) prependGitHubMark(node);
+  });
   marked.use({
     walkTokens(token) {
       if (token.type === "html") token.text = escapeHtml(token.text);

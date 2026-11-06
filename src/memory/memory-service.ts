@@ -33,11 +33,11 @@ interface MemoryOutcomeSink {
 
 export interface MemoryRecallContext extends MemoryOutcomeSink {
   query?: string;
-  disclosedFacts?: ReadonlyMap<ScopeId, readonly MemoryFact[]>;
+  input?: string;
+  disclosedFacts?: Promise<ReadonlyMap<ScopeId, readonly MemoryFact[]>>;
   actorId?: string;
   sessionId?: string;
   maxChars?: number;
-  autonomous?: boolean;
 }
 
 export interface MemoryCaptureContext extends MemoryCaptureMetadata, MemoryOutcomeSink {
@@ -45,7 +45,6 @@ export interface MemoryCaptureContext extends MemoryCaptureMetadata, MemoryOutco
   actorId?: string;
   input?: string;
   reply?: string;
-  autonomous?: boolean;
   idempotencyKey?: string;
 }
 
@@ -55,6 +54,7 @@ export interface MemoryEdit {
 }
 
 export interface MemoryService {
+  attestActor?: boolean;
   withDisclosure?(access: MemoryDisclosure): MemoryService;
   recall(scopeId: ScopeId, context?: MemoryRecallContext): Promise<MemoryCandidate[]>;
   capture(
@@ -205,8 +205,4 @@ export function createNotebookMemory(store: FactStore): MemoryService {
 
     ...(store.metadata ? { metadata: () => store.metadata!() } : {}),
   };
-}
-
-export function isSystemActor(actorId: string | undefined): boolean {
-  return !!actorId?.startsWith("system:");
 }

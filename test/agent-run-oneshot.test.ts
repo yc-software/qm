@@ -14,17 +14,15 @@ import {
   piLastAssistantTextOrThrow,
   piTurnError,
   refusalFallbackNote,
-  refusalFallbackModelId,
-  REFUSAL_FALLBACK_MODEL_IDS,
   renderDetectPrompt,
-  resolveConfiguredModelId,
   seedRawMessagesIntoSession,
   toPiMessage,
 } from "../src/agent/agent-run.ts";
-import { DEFAULT_AGENT_MODEL_ID, auxiliaryModelFor, getRequiredModel, resolveModel } from "../src/model/pi-models.ts";
+import { configRouteOptions, createModelRoutes, resolveConfiguredModelId } from "../src/model/model-route.ts";
+import { DEFAULT_AGENT_MODEL_ID, auxiliaryModelFor, getRequiredModel } from "../src/model/pi-models.ts";
 import { modelGatewayRequest } from "../src/model/provider-endpoints.ts";
 import { reconstructMessagesFromHistory } from "../src/agent/replay.ts";
-import type { SessionEntry } from "../src/types.ts";
+import { storedItem } from "../src/sessions/items.ts";
 import type { DetectInput, TurnLlmRequestRecord } from "../src/agent/agent.ts";
 import { testConfig } from "./support/test-config.ts";
 import { ProviderTurnError, turnFailureMessage } from "../src/core/turn-error.ts";
@@ -54,43 +52,15 @@ test("seedRawMessagesIntoSession pushes the reconstructed tool round (incl. tool
     agent: { state: { messages: liveMessages } },
     sessionManager: { appendMessage: (m: unknown) => persisted.push(m) },
   };
-  const history: SessionEntry[] = [
-    {
-      sessionId: "s",
-      seq: 1,
-      parentSeq: null,
-      type: "user",
-      payload: { text: "sign up" },
-      scopeLabel: "org:default-org",
-      createdAt: 1,
-    },
-    {
-      sessionId: "s",
-      seq: 2,
-      parentSeq: null,
-      type: "tool_call",
-      payload: { tool: "execute", command: "browse", callId: "c1" },
-      scopeLabel: "org:default-org",
-      createdAt: 2,
-    },
-    {
-      sessionId: "s",
-      seq: 3,
-      parentSeq: null,
-      type: "tool_result",
-      payload: { tool: "execute", callId: "c1", result: "user: a / pass: b", isError: false },
-      scopeLabel: "org:default-org",
-      createdAt: 3,
-    },
-    {
-      sessionId: "s",
-      seq: 4,
-      parentSeq: null,
-      type: "assistant",
-      payload: { text: "done" },
-      scopeLabel: "org:default-org",
-      createdAt: 4,
-    },
+  const at = { sessionId: "s", createdAt: 1 };
+  const history = [
+    storedItem({ kind: "UserMessage", text: "sign up" }, { ...at, seq: 1 }),
+    storedItem({ kind: "ToolCall", callId: "c1", tool: "execute", body: { command: "browse" } }, { ...at, seq: 2 }),
+    storedItem(
+      { kind: "ToolResult", callId: "c1", tool: "execute", text: "user: a / pass: b", isError: false },
+      { ...at, seq: 3 },
+    ),
+    storedItem({ kind: "AgentMessage", text: "done" }, { ...at, seq: 4 }),
   ];
   seedRawMessagesIntoSession(stubSession, reconstructMessagesFromHistory(history));
 
@@ -109,36 +79,31 @@ test("seedRawMessagesIntoSession is a no-op for empty input and degrades gracefu
   assert.doesNotThrow(() => seedRawMessagesIntoSession({}, reconstructMessagesFromHistory([])));
 });
 
-test("agentConfigOptions maps every Config knob the agent consumes, field by field", () => {
-  const opts = agentConfigOptions(
-    testConfig({
-      modelId: "model-base",
-      detectModelId: "model-detect",
-      titleModelId: "model-title",
-      anthropicApiKey: "sk-test",
-      modelGateway: {
-        url: "http://gateway.internal:8080",
-        apiKey: "gateway-key",
-        apiKeyHeader: "api-key",
-        models: { "claude-opus-5": "router/opus" },
-      },
-      captureLlmRequests: false,
-
-      reachExecEnabled: true,
-      signingSecret: "sek",
-      apiBaseUrl: "https://core.test",
-      turnWallClockMs: 111_000,
-      execTimeoutDefaultMs: 22_000,
-      execTimeoutMaxMs: 33_000,
-      backgroundJobTtlMs: 44_000,
-      backgroundJobTtlMaxMs: 55_000,
-      sandboxCapabilityTtlMs: 66_000,
-    }),
-  );
-  assert.deepEqual(opts, {
-    defaultModelId: "model-base",
+test("agentConfigOptions and configRouteOptions map every Config knob the agent consumes, field by field", () => {
+  const config = testConfig({
+    modelId: "model-base",
     detectModelId: "model-detect",
     titleModelId: "model-title",
+    anthropicApiKey: "sk-test",
+    modelGateway: {
+      url: "http://gateway.internal:8080",
+      apiKey: "gateway-key",
+      apiKeyHeader: "api-key",
+      models: { "claude-opus-5": "router/opus" },
+    },
+    captureLlmRequests: false,
+
+    signingSecret: "sek",
+    apiBaseUrl: "https://core.test",
+    turnWallClockMs: 111_000,
+    execTimeoutDefaultMs: 22_000,
+    execTimeoutMaxMs: 33_000,
+    backgroundJobTtlMs: 44_000,
+    backgroundJobTtlMaxMs: 55_000,
+    sandboxCapabilityTtlMs: 66_000,
+  });
+  assert.deepEqual(configRouteOptions(config), {
+    defaultModelId: "model-base",
     apiKey: "sk-test",
     modelGateway: {
       url: "http://gateway.internal:8080",
@@ -146,9 +111,12 @@ test("agentConfigOptions maps every Config knob the agent consumes, field by fie
       apiKeyHeader: "api-key",
       models: { "claude-opus-5": "router/opus" },
     },
+  });
+  assert.deepEqual(agentConfigOptions(config), {
+    detectModelId: "model-detect",
+    titleModelId: "model-title",
     captureRequests: false,
     sandboxResources: true,
-    reachExec: true,
     controlTools: true,
     turnWallClockMs: 111_000,
     execTimeoutMs: 22_000,
@@ -177,16 +145,15 @@ test("agentConfigOptions leaves controlTools off unless a self-API (signing secr
   );
 });
 
-test("agentConfigOptions carries the deployment provider into Pi auxiliary model selection", () => {
-  const opts = agentConfigOptions(testConfig({ modelProvider: "openai", openaiApiKey: "sk-openai-test" }));
+test("configRouteOptions carries the deployment provider into Pi auxiliary model selection", () => {
+  const opts = configRouteOptions(testConfig({ modelProvider: "openai", openaiApiKey: "sk-openai-test" }));
   assert.equal(opts.defaultModelId, "gpt-6.1-sol");
   assert.equal(auxiliaryModelFor(opts.defaultModelId!), "gpt-5.6-luna");
 });
 
 test("Pi title generation returns no title without an auxiliary-model credential", async () => {
   const agent = createAgent({
-    defaultModelId: "gpt-5.6-sol",
-    resolveProviderKeys: async () => ({}),
+    routes: createModelRoutes({ defaultModelId: "gpt-5.6-sol", resolveProviderKeys: async () => ({}) }),
   });
   assert.equal(await agent.generateTitle!("User:\nPrioritize the public qm issues"), undefined);
 });
@@ -209,14 +176,16 @@ test("Pi title generation surfaces provider failures to its caller", async (t) =
   const address = server.address();
   assert(address && typeof address !== "string");
   const agent = createAgent({
-    defaultModelId: "claude-opus-4-8",
+    routes: createModelRoutes({
+      defaultModelId: "claude-opus-4-8",
+      modelGateway: {
+        url: `http://127.0.0.1:${address.port}`,
+        apiKey: "gateway-key",
+        apiKeyHeader: "api-key",
+        models: { "claude-haiku-4-5": "title-model" },
+      },
+    }),
     titleModelId: "claude-haiku-4-5",
-    modelGateway: {
-      url: `http://127.0.0.1:${address.port}`,
-      apiKey: "gateway-key",
-      apiKeyHeader: "api-key",
-      models: { "claude-haiku-4-5": "title-model" },
-    },
   });
 
   await assert.rejects(agent.generateTitle!("User:\nInvestigate the deploy"));
@@ -269,14 +238,16 @@ test("Pi title generation rejects a reply-shaped answer with the rule that fired
   const address = server.address();
   assert(address && typeof address !== "string");
   const agent = createAgent({
-    defaultModelId: "claude-opus-4-8",
+    routes: createModelRoutes({
+      defaultModelId: "claude-opus-4-8",
+      modelGateway: {
+        url: `http://127.0.0.1:${address.port}`,
+        apiKey: "gateway-key",
+        apiKeyHeader: "api-key",
+        models: { "claude-haiku-4-5": "title-model" },
+      },
+    }),
     titleModelId: "claude-haiku-4-5",
-    modelGateway: {
-      url: `http://127.0.0.1:${address.port}`,
-      apiKey: "gateway-key",
-      apiKeyHeader: "api-key",
-      models: { "claude-haiku-4-5": "title-model" },
-    },
   });
 
   await assert.rejects(agent.generateTitle!("User:\nInvestigate the deploy"), {
@@ -333,14 +304,16 @@ test("Pi title generation accepts the prompted NONE sentinel without reporting a
   const address = server.address();
   assert(address && typeof address !== "string");
   const agent = createAgent({
-    defaultModelId: "claude-opus-4-8",
+    routes: createModelRoutes({
+      defaultModelId: "claude-opus-4-8",
+      modelGateway: {
+        url: `http://127.0.0.1:${address.port}`,
+        apiKey: "gateway-key",
+        apiKeyHeader: "api-key",
+        models: { "claude-haiku-4-5": "title-model" },
+      },
+    }),
     titleModelId: "claude-haiku-4-5",
-    modelGateway: {
-      url: `http://127.0.0.1:${address.port}`,
-      apiKey: "gateway-key",
-      apiKeyHeader: "api-key",
-      models: { "claude-haiku-4-5": "title-model" },
-    },
   });
 
   assert.equal(await agent.generateTitle!("User:\nHello"), undefined);
@@ -403,14 +376,16 @@ async function detectAgainst(
   const address = server.address();
   assert(address && typeof address !== "string");
   const agent = createAgent({
-    defaultModelId: "claude-opus-4-8",
+    routes: createModelRoutes({
+      defaultModelId: "claude-opus-4-8",
+      modelGateway: {
+        url: `http://127.0.0.1:${address.port}`,
+        apiKey: "gateway-key",
+        apiKeyHeader: "api-key",
+        models: { "claude-haiku-4-5": "detect-model" },
+      },
+    }),
     detectModelId: "claude-haiku-4-5",
-    modelGateway: {
-      url: `http://127.0.0.1:${address.port}`,
-      apiKey: "gateway-key",
-      apiKeyHeader: "api-key",
-      models: { "claude-haiku-4-5": "detect-model" },
-    },
   });
   const rows: TurnLlmRequestRecord[] = [];
   const outcome = await agent.shouldRespond!({
@@ -456,7 +431,7 @@ test(
 );
 
 test("agentConfigOptions omits the optional fields when the config leaves them unset", () => {
-  const opts = agentConfigOptions(testConfig());
+  const opts = { ...agentConfigOptions(testConfig()), ...configRouteOptions(testConfig()) };
   for (const key of ["defaultModelId", "detectModelId", "titleModelId", "apiKey"] as const) {
     assert.equal(key in opts, false, `${key} must be omitted, not undefined`);
   }
@@ -627,20 +602,15 @@ test("oneShot routes configured models through the model gateway without mutatin
     modelId: "claude-haiku-4-5",
     headers: { "x-model-marker": "preserved" },
   });
-  const agent = createAgent({ defaultModelId: "claude-haiku-4-5", modelGateway });
+  const agent = createAgent({ routes: createModelRoutes({ defaultModelId: "claude-haiku-4-5", modelGateway }) });
   const compact = agent.compactHistory!;
   const input: Parameters<typeof compact>[0] = {
     session: { id: "summary-session" } as Parameters<typeof compact>[0]["session"],
     history: [
-      {
-        sessionId: "summary-session",
-        seq: 136,
-        parentSeq: null,
-        type: "user",
-        payload: { text: "what? local recovery what?" },
-        scopeLabel: "personal:test",
-        createdAt: 0,
-      },
+      storedItem(
+        { kind: "UserMessage", text: "what? local recovery what?" },
+        { sessionId: "summary-session", seq: 136, createdAt: 0 },
+      ),
     ],
     recordModelCall: () => {},
   };
@@ -946,15 +916,18 @@ test("renderDetectPrompt uses prior assistant replies, not assembled prior user 
     recentContext: "carol: Can you send the chart?",
     systemPrompt: "You are Agent Prod.",
     history: [
-      {
-        type: "user",
-        payload: { text: "## The conversation right now\nnoisy rendered Slack block\n\nCan you send the chart?" },
-      },
-      {
-        type: "assistant",
-        payload: { text: "I can send the chart if you share it again." },
-      },
-    ] as any,
+      storedItem(
+        {
+          kind: "UserMessage",
+          text: "## The conversation right now\nnoisy rendered Slack block\n\nCan you send the chart?",
+        },
+        { sessionId: "s", seq: 1, createdAt: 1 },
+      ),
+      storedItem(
+        { kind: "AgentMessage", text: "I can send the chart if you share it again." },
+        { sessionId: "s", seq: 2, createdAt: 2 },
+      ),
+    ],
     recordModelCall() {},
   });
 
@@ -1022,22 +995,6 @@ test("refusalFallbackNote names both models, carries the provider's refusal, and
   assert.match(note, /telling the user/);
 });
 
-test("refusal fallback drawdown: Fable -> Opus, Opus -> Sonnet, never the refused model back", () => {
-  assert.equal(refusalFallbackModelId("claude-fable-5-1"), "claude-opus-5");
-  assert.equal(refusalFallbackModelId("claude-fable-5"), "claude-opus-5");
-  assert.equal(refusalFallbackModelId("claude-opus-5"), "claude-sonnet-5");
-  assert.equal(refusalFallbackModelId("claude-opus-5", "gpt-6-sol"), "gpt-6-sol");
-  assert.equal(refusalFallbackModelId("gpt-6-sol", "gpt-6-sol"), "claude-opus-5");
-  assert.equal(
-    refusalFallbackModelId("claude-opus-5", "not-a-pi-model", (id) => id !== "not-a-pi-model"),
-    "claude-sonnet-5",
-  );
-  for (const id of REFUSAL_FALLBACK_MODEL_IDS) {
-    assert.notEqual(refusalFallbackModelId(id), id);
-    assert.equal(resolveModel(id)?.provider, "anthropic");
-  }
-});
-
 test("resolveConfiguredModelId: an unresolvable default is rejected too, so auxiliaries never chase a dead id", () => {
   assert.equal(resolveConfiguredModelId(undefined, "anthropic/claude-sonnet-4-5"), DEFAULT_AGENT_MODEL_ID);
   assert.equal(resolveConfiguredModelId("also-not-real", "anthropic/claude-sonnet-4-5"), DEFAULT_AGENT_MODEL_ID);
@@ -1059,8 +1016,8 @@ test("Pi judge uses supported reasoning effort when configured with Astra", asyn
     return new Response(JSON.stringify({ error: { message: "offline judge test" } }), { status: 400 });
   }) as typeof fetch;
   const agent = createAgent({
+    routes: createModelRoutes({ resolveProviderKeys: async () => ({ openai: "sk-offline-test-key" }) }),
     judgeModelId: "gpt-6-astra",
-    resolveProviderKeys: async () => ({ openai: "sk-offline-test-key" }),
   });
   await assert.rejects(agent.judge!("Judge the answer.", "answer"), /offline judge test/);
   assert.ok(request);

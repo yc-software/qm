@@ -69,6 +69,7 @@ export interface LoopStore {
   setState(id: string, state: LoopState): Promise<Loop | null>;
   setHealth(id: string, health: LoopHealth, reason?: string, throttle?: boolean): Promise<Loop | null>;
   recordFireOutcome(id: string, outcome: FireOutcome): Promise<Loop | null>;
+  recordScan(id: string, startedAt: number): Promise<Loop | null>;
   delete(id: string): Promise<void>;
 }
 
@@ -253,6 +254,7 @@ export function createLoopStore(backing: DurableMap<Loop>): LoopStore {
         lastFiredAt: Date.now(),
       }));
     },
+    recordScan: (id, startedAt) => merge(id, { lastScanAt: startedAt }),
     delete: (id) => backing.delete(id),
   };
 }

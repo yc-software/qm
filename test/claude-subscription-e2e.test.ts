@@ -4,6 +4,7 @@ import { test, type TestContext } from "node:test";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createAgent } from "../src/agent/agent-run.ts";
+import { createModelRoutes } from "../src/model/model-route.ts";
 
 const SUBSCRIPTION_TOKEN = "sk-ant-oat01-personal-e2e";
 
@@ -95,18 +96,19 @@ async function assertSubscriptionTurn(built: ReturnType<typeof buildApp>, seen: 
     assert.match(JSON.stringify(call.body.system), /You are Claude Code/);
   }
   const session = await built.sessions.getByThread(finished.sessionId);
-  const entries = session ? await built.sessions.getEntries(session.id) : [];
+  const items = session ? await built.sessions.getItems(session.id) : [];
   assert.ok(
-    entries.some((e) => e.type === "tool_result" && (e.payload as { tool?: string }).tool === "history"),
+    items.some((item) => item.kind === "ToolResult" && item.tool === "history"),
     "the history tool ran",
   );
   assert.ok(
-    entries.some(
-      (e) =>
-        e.type === "assistant" &&
-        /pong from the Claude subscription/.test(String((e.payload as { text?: string }).text)),
+    items.some(
+      (item) =>
+        item.kind === "AgentMessage" &&
+        item.variant === null &&
+        /pong from the Claude subscription/.test(item.text ?? ""),
     ),
-    JSON.stringify(entries.map((e) => e.type)),
+    JSON.stringify(items.map((item) => item.kind)),
   );
 }
 
@@ -114,7 +116,10 @@ test("a personal Claude subscription turn runs end to end on Pi with OAuth beare
   const seen = fakeAnthropic(t);
 
   const built = buildApp(testConfig({ anthropicApiKey: "sk-ant-api03-company" }), {
-    agent: createAgent({ captureRequests: false, resolveProviderKeys: async () => ({}) }),
+    agent: createAgent({
+      routes: createModelRoutes({ resolveProviderKeys: async () => ({}) }),
+      captureRequests: false,
+    }),
   });
   await built.userModelCredentials.setOAuth("U1", "anthropic", {
     accessToken: SUBSCRIPTION_TOKEN,
@@ -127,7 +132,7 @@ test("a personal Claude subscription turn runs end to end on Pi with OAuth beare
     actor: { externalId: "U1" },
     conversation: { kind: "dm", threadRef: "claude-subscription-e2e" },
     text: "ping",
-    liveActor: true,
+    origin: { kind: "human" },
     async: true,
   });
   built.runtime.start();
@@ -151,7 +156,7 @@ test("a company Claude subscription token in ANTHROPIC_API_KEY serves company tu
     actor: { externalId: "U1" },
     conversation: { kind: "dm", threadRef: "claude-company-subscription-e2e" },
     text: "ping",
-    liveActor: true,
+    origin: { kind: "human" },
     async: true,
   });
   built.runtime.start();

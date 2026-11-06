@@ -29,6 +29,7 @@ import {
   ModelUnavailableError,
   modelGatewayRequest,
   type ModelGatewayTransportConfig,
+  type ModelRequestPurpose,
 } from "./provider-endpoints.ts";
 import {
   CODEX_SUBSCRIPTION_PROVIDER,
@@ -111,6 +112,7 @@ function customModelsPath(): string | null {
 export async function buildModelRuntime(
   keys: ProviderKeys | string,
   modelGateway?: ModelGatewayTransportConfig,
+  purpose?: ModelRequestPurpose,
   cacheRetention?: "long",
 ): Promise<ModelRuntime> {
   await modelGateway?.refresh?.();
@@ -138,10 +140,13 @@ export async function buildModelRuntime(
     );
     const hasConfiguredAuth = runtime.hasConfiguredAuth.bind(runtime);
     runtime.hasConfiguredAuth = (provider) => providers.has(provider) || hasConfiguredAuth(provider);
+    const checkAuth = runtime.checkAuth.bind(runtime);
+    runtime.checkAuth = async (provider) =>
+      providers.has(provider) ? { type: "api_key", source: "model gateway" } : checkAuth(provider);
     const getAuth = runtime.getAuth.bind(runtime);
     runtime.getAuth = (async (model, overrides) => {
       if (typeof model === "string") return getAuth(model, overrides);
-      const request = modelGatewayRequest(modelGateway, model);
+      const request = modelGatewayRequest(modelGateway, model, purpose);
       if (request)
         return {
           auth: { apiKey: request.apiKey, headers: { ...model.headers, ...request.headers } },
@@ -172,7 +177,7 @@ export async function buildModelRuntime(
     model: Model<Api>,
     options: T,
   ): { model: Model<Api>; options: T } => {
-    const request = modelGatewayRequest(modelGateway, model);
+    const request = modelGatewayRequest(modelGateway, model, purpose);
     if (!request) {
       const custom = resolveCustomModel(model.id);
       const providerModelId =
@@ -211,7 +216,7 @@ export async function buildModelRuntime(
       model: request.model,
       options: wireModelId(routed, model, async () => {
         await modelGateway?.refresh?.();
-        const current = modelGatewayRequest(modelGateway, model);
+        const current = modelGatewayRequest(modelGateway, model, purpose);
         if (!current) throw new GatewayModelUnavailableError(model.id);
         return current.target;
       }),
@@ -241,7 +246,7 @@ export async function probeModel(
   fastMode = false,
   modelGateway?: ModelGatewayTransportConfig,
 ): Promise<void> {
-  const runtime = await buildModelRuntime(keys, modelGateway);
+  const runtime = await buildModelRuntime(keys, modelGateway, "probe");
   signal.throwIfAborted();
   const candidate = withRequestHeaders(model, !modelGateway?.models[model.id], fastMode);
   const response = await runtime
