@@ -24,6 +24,9 @@ function runCommand(command) {
     if (command.requiresDatabase && !process.env.DATABASE_URL) {
       resolve({
         id: command.id,
+        program: command.program,
+        args: command.args,
+        requiresDatabase: command.requiresDatabase,
         passed: false,
         exitCode: null,
         signal: null,
@@ -55,6 +58,9 @@ function runCommand(command) {
     child.on("close", (exitCode, signal) => {
       resolve({
         id: command.id,
+        program: command.program,
+        args: command.args,
+        requiresDatabase: command.requiresDatabase,
         passed: exitCode === 0 && signal === null,
         exitCode,
         signal,
@@ -74,13 +80,18 @@ const resultById = new Map(commandResults.map((result) => [result.id, result]));
 const caseResults = manifest.cases.map((candidate) => {
   const commandIds = [...new Set(candidate.selectors.map((selector) => selector.commandId))];
   const failedCommandIds = commandIds.filter((id) => !resultById.get(id)?.passed);
+  const missingSelectors = candidate.selectors.filter((selector) => {
+    const result = resultById.get(selector.commandId);
+    return !`${result?.stdout ?? ""}\n${result?.stderr ?? ""}`.includes(selector.name);
+  });
   return {
     id: candidate.id,
-    passed: failedCommandIds.length === 0,
+    passed: failedCommandIds.length === 0 && missingSelectors.length === 0,
     invariant: candidate.invariant,
     selectors: candidate.selectors,
     commandIds,
     failedCommandIds,
+    missingSelectors,
     durationMs: commandIds.reduce((sum, id) => sum + (resultById.get(id)?.durationMs ?? 0), 0),
   };
 });

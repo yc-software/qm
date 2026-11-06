@@ -116,7 +116,12 @@ test("FinnyLoop r5 runner preserves fail-closed machine evidence without DATABAS
       sourceStateDigest?: string;
       sourceDirty?: boolean;
       commands?: Array<{ id?: string; passed?: boolean; stderr?: string }>;
-      cases?: Array<{ id?: string; passed?: boolean; failedCommandIds?: string[] }>;
+      cases?: Array<{
+        id?: string;
+        passed?: boolean;
+        failedCommandIds?: string[];
+        missingSelectors?: Array<{ commandId?: string; name?: string }>;
+      }>;
     };
     assert.equal(summary.schema, "finnyloop-r5-eval-result.v1");
     assert.equal(summary.passed, false);
@@ -130,7 +135,12 @@ test("FinnyLoop r5 runner preserves fail-closed machine evidence without DATABAS
     assert.ok(summary.commands?.find((command) => command.id === "finny-pi-offline")?.passed);
     assert.equal(summary.cases?.length, requiredCases.length);
     assert.ok(summary.cases?.some((candidate) => candidate.failedCommandIds?.includes("finny-runtime-postgres")));
-    assert.match(await readFile(join(output, "junit.xml"), "utf8"), /failures="[1-9]/);
+    assert.ok(summary.cases?.some((candidate) => candidate.missingSelectors?.length));
+    const junit = await readFile(join(output, "junit.xml"), "utf8");
+    assert.match(junit, /failures="[1-9]/);
+    assert.match(junit, /property name="sourceRevision"/);
+    assert.match(junit, /property name="sourceStateDigest"/);
+    assert.match(junit, /commands/);
     assert.match(result.stdout, /FinnyLoop r5 evidence/);
   } finally {
     await rm(output, { recursive: true, force: true });
@@ -140,6 +150,11 @@ test("FinnyLoop r5 runner preserves fail-closed machine evidence without DATABAS
 test("FinnyLoop r5 JUnit preserves stdout and stderr failure evidence", async () => {
   const { renderJunit } = await import("../evals/finnyloop-r5/evidence.mjs");
   const rendered = renderJunit({
+    sourceRevision: "a".repeat(40),
+    sourceStateDigest: "b".repeat(64),
+    sourceDirty: false,
+    databaseConfigured: true,
+    liveServices: false,
     durationMs: 4,
     commands: [{ id: "command-1", stdout: "assertion from stdout", stderr: "diagnostic from stderr" }],
     cases: [
@@ -155,6 +170,8 @@ test("FinnyLoop r5 JUnit preserves stdout and stderr failure evidence", async ()
   });
   assert.match(rendered, /assertion from stdout/);
   assert.match(rendered, /diagnostic from stderr/);
+  assert.match(rendered, /property name="sourceRevision" value="a{40}"/);
+  assert.match(rendered, /property name="sourceDirty" value="false"/);
 });
 
 test("FinnyLoop r5 default evidence path stays outside the source tree", async () => {

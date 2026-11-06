@@ -69,6 +69,12 @@
       "args": ["scripts/run-pg-tests.mjs", "test/slack-finny-approvals.test.ts"]
     },
     {
+      "id": "finny-slack-cards-offline",
+      "program": "node",
+      "requiresDatabase": false,
+      "args": ["--test", "test/slack-finny-cards.test.ts"]
+    },
+    {
       "id": "finny-pi-offline",
       "program": "node",
       "requiresDatabase": false,
@@ -252,6 +258,11 @@
         {
           "commandId": "finny-runtime-postgres",
           "file": "test/finny-runtime-coordinator.test.ts",
+          "name": "opens producer and Auditor concurrently and dispatches only the producer grant after approval"
+        },
+        {
+          "commandId": "finny-runtime-postgres",
+          "file": "test/finny-runtime-coordinator.test.ts",
           "name": "a BLOCK wakes the bound producer with policy-bounded findings"
         },
         {
@@ -378,6 +389,26 @@
           "commandId": "finny-approval-postgres",
           "file": "test/finny-approval-service.test.ts",
           "name": "committed decisions survive post-commit dispatch failures for durable recovery"
+        },
+        {
+          "commandId": "finny-slack-postgres",
+          "file": "test/slack-finny-approvals.test.ts",
+          "name": "a pending Finny plan delivery uses the durable verified post path"
+        },
+        {
+          "commandId": "finny-slack-postgres",
+          "file": "test/slack-finny-approvals.test.ts",
+          "name": "a pending Finny clarification delivery renders native options and Other"
+        },
+        {
+          "commandId": "finny-slack-cards-offline",
+          "file": "test/slack-finny-cards.test.ts",
+          "name": "finnyPlanCard presents the T2 plan and explicit decisions"
+        },
+        {
+          "commandId": "finny-slack-cards-offline",
+          "file": "test/slack-finny-cards.test.ts",
+          "name": "finnyClarificationCard marks a recommendation without selecting a default"
         }
       ]
     },
