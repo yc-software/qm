@@ -363,6 +363,9 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
     async mcpToolNeedsApproval() {
       return false;
     },
+    async mcpCanonicalArgs(_name, args) {
+      return args;
+    },
     async awaitClientResult() {
       return "timeout" as const;
     },
@@ -4610,6 +4613,35 @@ test("a catalog tool asks per call and forwards the approval only on the approve
   await call(catalog, send);
   assert.equal(calls.length, 2, "the next identical call needs its own approval");
   assert.equal(ref.pendingApprovals!.length, 2);
+});
+
+test("a catalog call by alias is keyed, carded and run under its canonical tool name", async () => {
+  const calls: Array<Record<string, unknown>> = [];
+  const approved = new Set<string>();
+  const ref: ToolContextRef = {
+    current: {
+      ...fakeToolContext(),
+      mcpCanonicalArgs: async (_name, args) =>
+        args.tool === "send-message" ? { ...args, tool: "records_send_message" } : args,
+      mcpToolNeedsApproval: async (_name, args) => args.tool === "records_send_message",
+      callMcpTool: async (_name, args) => {
+        calls.push(args);
+        return "ok";
+      },
+    },
+    pendingApprovals: [],
+    toolApprovalGate: (_tool, callKey) => !callKey || approved.has(callKey),
+  };
+  const catalog = catalogTools(ref).find((t) => t.name === "records");
+  const canonical = { operation: "invoke", tool: "records_send_message", arguments: { to: "x" } };
+  await call(catalog, { ...canonical, tool: "send-message" });
+  const card = ref.pendingApprovals!.at(-1)!;
+  assert.equal(card.command, 'records {"arguments":{"to":"x"},"operation":"invoke","tool":"records_send_message"}');
+  assert.deepEqual(card.call, { tool: "records", input: canonical });
+  approved.add(card.approvalKey!);
+  ref.pausedOnApproval = false;
+  await call(catalog, canonical);
+  assert.deepEqual(calls, [canonical], "the alias and the canonical name share one approval");
 });
 
 test("a failing approval check returns its error to the model and offers no card", async () => {
