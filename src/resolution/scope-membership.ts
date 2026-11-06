@@ -202,7 +202,8 @@ function createRoleLookup(deps: ScopeMembershipDeps) {
     const active = activePrincipal(deps, principalId);
     switch (kind) {
       case "org":
-        return active && role !== "manage";
+        if (role === "manage") return false;
+        return role === "read" ? deps.identity?.classify(principalId).type === "internal" : active;
       case "personal":
         return samePerson(ref, principalId) && (active || role === "read");
       case "team":

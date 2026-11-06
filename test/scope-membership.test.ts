@@ -49,7 +49,12 @@ const directory = {
 
 const deps = {
   directory,
-  identity: { classify: (id: string) => ({ type: id.startsWith("ext") ? "external" : "internal" }) },
+  identity: {
+    classify: (id: string) => {
+      if (id.startsWith("anon")) return {};
+      return { type: id.startsWith("ext") ? "external" : "internal" };
+    },
+  },
   teams: { isMember: async (id: string, team: string) => id === "alice@x.com" && team === "eng" },
   sessions: {
     participantScopes: async (id: string) =>
@@ -76,6 +81,7 @@ const principals = [
   "bob@x.com",
   "carol@x.com",
   "ext@y.com",
+  "anon@x.com",
   scopeActor(scopeId("channel", "priv")),
   "",
 ];
@@ -131,6 +137,7 @@ const EXPECTED = [
   "org:acme bob@x.com rw----",
   "org:acme carol@x.com rw----",
   "org:acme ext@y.com ------",
+  "org:acme anon@x.com -w----",
   "org:acme system:channel:priv rw----",
   "org:acme (none) ------",
   "personal:alice@x.com controls=false",
@@ -139,6 +146,7 @@ const EXPECTED = [
   "personal:alice@x.com bob@x.com -----o",
   "personal:alice@x.com carol@x.com -----o",
   "personal:alice@x.com ext@y.com ------",
+  "personal:alice@x.com anon@x.com -----o",
   "personal:alice@x.com system:channel:priv -----o",
   "personal:alice@x.com (none) ------",
   "personal:ext@y.com controls=false",
@@ -147,6 +155,7 @@ const EXPECTED = [
   "personal:ext@y.com bob@x.com -----o",
   "personal:ext@y.com carol@x.com -----o",
   "personal:ext@y.com ext@y.com r-----",
+  "personal:ext@y.com anon@x.com -----o",
   "personal:ext@y.com system:channel:priv -----o",
   "personal:ext@y.com (none) ------",
   "team:eng controls=false",
@@ -155,6 +164,7 @@ const EXPECTED = [
   "team:eng bob@x.com ------",
   "team:eng carol@x.com ------",
   "team:eng ext@y.com ------",
+  "team:eng anon@x.com ------",
   "team:eng system:channel:priv ------",
   "team:eng (none) ------",
   "channel:pub controls=false",
@@ -163,6 +173,7 @@ const EXPECTED = [
   "channel:pub bob@x.com r----o",
   "channel:pub carol@x.com r----o",
   "channel:pub ext@y.com ------",
+  "channel:pub anon@x.com r----o",
   "channel:pub system:channel:priv r----o",
   "channel:pub (none) ------",
   "channel:priv controls=true",
@@ -171,6 +182,7 @@ const EXPECTED = [
   "channel:priv bob@x.com ------",
   "channel:priv carol@x.com ------",
   "channel:priv ext@y.com ------",
+  "channel:priv anon@x.com ------",
   "channel:priv system:channel:priv rwmcao",
   "channel:priv (none) ------",
   "channel:unknown controls=false",
@@ -179,6 +191,7 @@ const EXPECTED = [
   "channel:unknown bob@x.com r-----",
   "channel:unknown carol@x.com ------",
   "channel:unknown ext@y.com ------",
+  "channel:unknown anon@x.com ------",
   "channel:unknown system:channel:priv ------",
   "channel:unknown (none) ------",
   "channel:missing controls=false",
@@ -187,6 +200,7 @@ const EXPECTED = [
   "channel:missing bob@x.com ------",
   "channel:missing carol@x.com ------",
   "channel:missing ext@y.com ------",
+  "channel:missing anon@x.com ------",
   "channel:missing system:channel:priv ------",
   "channel:missing (none) ------",
   "group:g1 controls=true",
@@ -195,6 +209,7 @@ const EXPECTED = [
   "group:g1 bob@x.com ------",
   "group:g1 carol@x.com ------",
   "group:g1 ext@y.com ------",
+  "group:g1 anon@x.com ------",
   "group:g1 system:channel:priv ------",
   "group:g1 (none) ------",
   "group:gunknown controls=true",
@@ -203,6 +218,7 @@ const EXPECTED = [
   "group:gunknown bob@x.com r-----",
   "group:gunknown carol@x.com ------",
   "group:gunknown ext@y.com ------",
+  "group:gunknown anon@x.com ------",
   "group:gunknown system:channel:priv ------",
   "group:gunknown (none) ------",
   "group:project-1 controls=true",
@@ -211,6 +227,7 @@ const EXPECTED = [
   "group:project-1 bob@x.com ------",
   "group:project-1 carol@x.com ------",
   "group:project-1 ext@y.com ------",
+  "group:project-1 anon@x.com ------",
   "group:project-1 system:channel:priv ------",
   "group:project-1 (none) ------",
   "persona:p1 controls=false",
@@ -219,6 +236,7 @@ const EXPECTED = [
   "persona:p1 bob@x.com rwm-ao",
   "persona:p1 carol@x.com r-----",
   "persona:p1 ext@y.com r-----",
+  "persona:p1 anon@x.com ------",
   "persona:p1 system:channel:priv ------",
   "persona:p1 (none) ------",
   "persona:p2 controls=false",
@@ -227,6 +245,7 @@ const EXPECTED = [
   "persona:p2 bob@x.com ------",
   "persona:p2 carol@x.com ------",
   "persona:p2 ext@y.com ------",
+  "persona:p2 anon@x.com ------",
   "persona:p2 system:channel:priv ------",
   "persona:p2 (none) ------",
 ];
