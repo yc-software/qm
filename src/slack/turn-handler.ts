@@ -803,23 +803,22 @@ export function createTurnHandler(deps: {
     if (!reactorId || !channel || !messageTs || !emoji) return;
 
     const isDM = channel.startsWith("D");
-    const reacted = evt.item_user ? undefined : getReactedMessage(client, channel, messageTs, added);
-    const onBotMessage = evt.item_user
-      ? Boolean(ids.botUserId && evt.item_user === ids.botUserId)
-      : Boolean((await reacted)?.own);
     const onFollowedRoot = threads.get(channel, messageTs) === true;
-    if (
-      !shouldSurfaceReaction({
+    const surfaces = (onBotMessage: boolean) =>
+      shouldSurfaceReaction({
         itemType: evt.item?.type,
         reactorId,
         botUserId: ids.botUserId,
         isDM,
         onBotMessage,
         onFollowedRoot,
-      })
-    ) {
-      return;
-    }
+      });
+    if (!surfaces(true)) return;
+    const reacted = evt.item_user ? undefined : getReactedMessage(client, channel, messageTs, added);
+    const onBotMessage = evt.item_user
+      ? Boolean(ids.botUserId && evt.item_user === ids.botUserId)
+      : Boolean((await reacted)?.own);
+    if (!surfaces(onBotMessage)) return;
 
     const flightKey = `${channel}:${messageTs}:${emoji}:${reactorId}:${added ? "+" : "-"}`;
     if (reactionsInFlight.has(flightKey)) return;
