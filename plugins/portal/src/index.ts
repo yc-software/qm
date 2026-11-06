@@ -81,6 +81,7 @@ import {
 } from "../../chassis/src/env.ts";
 import { isDeploymentGitRoute } from "../../chassis/src/deployment-git.ts";
 
+const ALB_IDLE_TIMEOUT_MS = 60_000;
 const PUBLIC_URL = (process.env.PUBLIC_WEB_URL ?? "http://localhost:8097").replace(/\/$/, "");
 const SESSION_SECRET = process.env.PORTAL_SESSION_SECRET;
 const SESSION_TTL_S = Number(process.env.PORTAL_SESSION_TTL_S ?? 604800);
@@ -1870,6 +1871,7 @@ function validEmailDomain(value: string): boolean {
 
 export async function startServer(options: { port: number; host?: string }): Promise<void> {
   bootChecks();
+  server.keepAliveTimeout = ALB_IDLE_TIMEOUT_MS + 5_000;
   if (process.env.AUTH_EMBEDDED === "1") {
     if (AUTH_BROKER_UPSTREAM !== "http://127.0.0.1:8099") {
       throw new Error("Embedded auth requires the loopback broker upstream");
