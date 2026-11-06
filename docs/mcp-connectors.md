@@ -10,6 +10,16 @@ arguments and good for one call: `annotations` (the default; tools annotated
 `destructiveHint: true` and not `readOnlyHint: true`), `all`, or `none`. An update
 that omits `approval` keeps the current policy.
 
+`attestActor: true` (catalog servers with shared `bearer` or `client-credentials`
+auth only) sends the calling person's canonical id in the `x-qm-actor` header; see
+[principal-links.md](./principal-links.md#attested-actors). `attestAudience` sets where
+such a server may be used: `personal` (the default) only in the person's own private
+conversation with QM; `any` also in channels, group conversations, projects and
+triggered work, attesting the signed-in internal person who asked, or a cron's
+owner. QM system actors and guests are refused in every audience. `any` requires
+`attestActor`; an update that omits `attestAudience` keeps it, and turning
+`attestActor` off resets it to `personal`.
+
 `credentialScope` selects the identity used for `tools/call`:
 
 - `shared` (the default for existing and new registrations): all callers use the

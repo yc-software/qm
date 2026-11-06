@@ -16,7 +16,7 @@ import { createMcpClient, mcpResultText, type McpAuth, type McpClient, type McpL
 import type { McpServer, McpServerStore } from "./mcp-server-store.ts";
 import { attestableAudience, attestedPerson, OutsideAudience } from "../directory/person.ts";
 import type { AddressFetch } from "../util/network.ts";
-import type { ScopeId } from "../types.ts";
+import { isSystemActor, type PrincipalType, type ScopeId } from "../types.ts";
 
 const REFRESH_INTERVAL_MS = 5 * 60_000;
 const CATALOG_TTL_MS = 60_000;
@@ -83,7 +83,7 @@ export interface McpToolDescriptor {
 export interface McpToolService {
   /** Current snapshot of injectable tools across enabled servers. */
   toolDefs(): McpToolDescriptor[];
-  toolDefsFor(principalId?: string, scopeId?: ScopeId): Promise<McpToolDescriptor[]>;
+  toolDefsFor(principalId?: string, scopeId?: ScopeId, actorType?: PrincipalType): Promise<McpToolDescriptor[]>;
   /** Call a namespaced tool. Returns the tool's text output (clamped). */
   call(
     name: string,
@@ -91,8 +91,15 @@ export interface McpToolService {
     principalId?: string,
     approval?: string,
     scopeId?: ScopeId,
+    actorType?: PrincipalType,
   ): Promise<string>;
-  needsApproval(name: string, args: Record<string, unknown>, principalId?: string, scopeId?: ScopeId): Promise<boolean>;
+  needsApproval(
+    name: string,
+    args: Record<string, unknown>,
+    principalId?: string,
+    scopeId?: ScopeId,
+    actorType?: PrincipalType,
+  ): Promise<boolean>;
   /** Force a registry re-read + tools/list refresh (admin save path, tests). */
   refresh(): Promise<void>;
   probe(server: McpServer, principalId?: string): Promise<McpListing>;
@@ -145,8 +152,23 @@ function callResource(def: McpToolDescriptor, args: Record<string, unknown>): st
   return `${def.serverId}/${typeof args.tool === "string" ? args.tool : String(args.operation)}`;
 }
 
-function refuseOutsideAudience(server: McpServer, principalId: string | undefined, scopeId: ScopeId | undefined): void {
-  if (server.attestActor && !attestableAudience(principalId, scopeId))
+function attestsHere(
+  server: Pick<McpServer, "attestAudience">,
+  principalId: string | undefined,
+  scopeId: ScopeId | undefined,
+  actorType: PrincipalType | undefined,
+): boolean {
+  if (attestableAudience(principalId, scopeId)) return true;
+  return server.attestAudience === "any" && actorType === "internal" && !!principalId && !isSystemActor(principalId);
+}
+
+function refuseOutsideAudience(
+  server: McpServer,
+  principalId: string | undefined,
+  scopeId: ScopeId | undefined,
+  actorType: PrincipalType | undefined,
+): void {
+  if (server.attestActor && !attestsHere(server, principalId, scopeId, actorType))
     throw new OutsideAudience(`MCP server ${server.id}`);
 }
 
@@ -192,7 +214,7 @@ export function createMcpToolService(opts: {
   const clients = new Map<string, { client: McpClient; server: McpServer }>();
   let snapshot: McpToolDescriptor[] = [];
   let perUserServers = new Map<string, McpServer>();
-  let attestedServers = new Set<string>();
+  let attestedServers = new Map<string, McpServer>();
   const catalogs = new LRUCache<string, Promise<RemoteTool[]>>({ max: CATALOG_CACHE_MAX, ttl: CATALOG_TTL_MS });
 
   function signInMessage(server: McpServer): string {
@@ -354,7 +376,7 @@ export function createMcpToolService(opts: {
     const seen = new Set<string>();
     snapshot = next.filter((t) => (seen.has(t.name) ? false : (seen.add(t.name), true)));
     perUserServers = nextPerUser;
-    attestedServers = new Set(servers.filter((s) => s.attestActor).map((s) => s.id));
+    attestedServers = new Map(servers.filter((s) => s.attestActor).map((s) => [s.id, s]));
   }
 
   async function connected(server: McpServer, principalId: string | undefined): Promise<boolean> {
@@ -365,10 +387,15 @@ export function createMcpToolService(opts: {
     return Boolean(status?.connected && !status.needsReconnect);
   }
 
-  async function toolDefsFor(principalId?: string, scopeId?: ScopeId): Promise<McpToolDescriptor[]> {
-    const current = attestableAudience(principalId, scopeId)
-      ? snapshot
-      : snapshot.filter((t) => !attestedServers.has(t.serverId));
+  async function toolDefsFor(
+    principalId?: string,
+    scopeId?: ScopeId,
+    actorType?: PrincipalType,
+  ): Promise<McpToolDescriptor[]> {
+    const current = snapshot.filter((t) => {
+      const attested = attestedServers.get(t.serverId);
+      return !attested || attestsHere(attested, principalId, scopeId, actorType);
+    });
     const gated = perUserServers;
     if (!gated.size) return current;
     const withTools = new Set(current.filter((t) => gated.has(t.serverId) && !t.signIn).map((t) => t.serverId));
@@ -392,7 +419,7 @@ export function createMcpToolService(opts: {
   return {
     toolDefs: () => snapshot,
     toolDefsFor,
-    async needsApproval(name, args, principalId, scopeId) {
+    async needsApproval(name, args, principalId, scopeId, actorType) {
       const def = snapshot.find((t) => t.name === name);
       if (!def) throw new Error(`unknown MCP tool: ${name}`);
       if (!def.catalog) return def.needsApproval;
@@ -400,20 +427,20 @@ export function createMcpToolService(opts: {
       try {
         const server = await opts.servers.get(def.serverId);
         if (!server || !server.enabled) throw new Error(`MCP server ${def.serverId} is not available`);
-        refuseOutsideAudience(server, principalId, scopeId);
+        refuseOutsideAudience(server, principalId, scopeId, actorType);
         return mcpToolNeedsApproval(server, (await catalogEntry(server, principalId, args.tool)).annotations);
       } catch (e) {
         record("call", callResource(def, args), `approval check error: ${errMessage(e)}`, principalId);
         throw e;
       }
     },
-    async call(name, args, principalId, approval, scopeId) {
+    async call(name, args, principalId, approval, scopeId, actorType) {
       const def = snapshot.find((t) => t.name === name);
       if (!def) throw new Error(`unknown MCP tool: ${name}`);
       const server = await opts.servers.get(def.serverId);
       if (!server || !server.enabled) throw new Error(`MCP server ${def.serverId} is not available`);
       try {
-        refuseOutsideAudience(server, principalId, scopeId);
+        refuseOutsideAudience(server, principalId, scopeId, actorType);
         if (def.catalog) return await callCatalog(server, args, principalId, approval);
         const client = await callerClient(server, principalId);
         if (def.signIn) {

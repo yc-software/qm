@@ -131,6 +131,13 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
         "attestActor requires catalog, shared credentials, and bearer or client-credentials auth, so only QM can assert the person",
     });
   }
+  const attestAudience = b.attestAudience ?? (attestActor ? existing?.attestAudience : undefined) ?? "personal";
+  if (attestAudience !== "personal" && attestAudience !== "any") {
+    return sendJson(ctx.res, 400, { error: "bad_request", message: "attestAudience must be personal or any" });
+  }
+  if (attestAudience === "any" && !attestActor) {
+    return sendJson(ctx.res, 400, { error: "bad_request", message: "attestAudience any requires attestActor" });
+  }
   const credentialHost = b.credentialHost ?? existing?.credentialHost ?? (oauthUser ? parsed.hostname : undefined);
   if (
     oauthUser &&
@@ -203,6 +210,7 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
     ...(approval === "annotations" ? {} : { approval }),
     ...(catalog ? { catalog } : {}),
     ...(attestActor ? { attestActor } : {}),
+    ...(attestAudience === "any" ? { attestAudience } : {}),
     readOnly: (b.readOnly ?? existing?.readOnly) === true,
     enabled: b.enabled !== false,
     updatedAt: Date.now(),
