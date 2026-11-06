@@ -244,6 +244,7 @@ import { createAttachStaging } from "./orchestrator/attach-tool.ts";
 import { reconcileMessageRevisions, revisionAnchorAt } from "../slack/message-revisions.ts";
 import { type ProviderKeys } from "../model/model-runtime.ts";
 import { surfaceToolPrompt } from "../surfaces/registry.ts";
+import { finnySlackAuthority } from "../finny/integration.ts";
 
 async function recordUser(users: OrchestratorDeps["users"], id: string, botActor: boolean | undefined): Promise<void> {
   try {
@@ -2566,7 +2567,33 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         });
         const liveNote = async () =>
           (await turnSessionSyscalls?.liveSubagents?.().catch(swallowAs("live note", ""))) ?? "";
+        const finnySlack = finnySlackAuthority(
+          input.surface,
+          input.deliveryTarget,
+          external || conversation.audience.some((participant) => participant.type === "guest"),
+          input.origin.kind === "human" ? input.origin.messageTs : undefined,
+        );
+        const finny =
+          deps.finnyTools && input.runId && finnySlack
+            ? await deps.finnyTools.forTurn({
+                actor,
+                scopeId,
+                sessionId: session.id,
+                runId: input.runId,
+                originThreadRef: finnySlack.originThreadRef,
+                destination: finnySlack.destination,
+                parent: !session.parentSessionId,
+                parentBinding: {
+                  schema: "finny-parent-binding.v1",
+                  sessionId: session.id,
+                  runId: input.runId,
+                  scopeId,
+                  context: { actor, conversation, surface: input.surface ?? "slack" },
+                },
+              })
+            : undefined;
         const baseTools = createToolContext({
+          ...(finny ? { finny } : {}),
           desktopClientId: desktopClientForTurn(input),
           sandbox: deps.sandbox,
           sandboxResources: turnSandboxResources,

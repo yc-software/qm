@@ -87,6 +87,7 @@ interface TerminalCursor {
 }
 
 export interface EnqueueInput {
+  id?: string;
   sessionId: string;
   request: OrchestratorInput;
   dedupKey?: string;

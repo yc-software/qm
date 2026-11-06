@@ -26,7 +26,7 @@ function status(job: NonNullable<Awaited<ReturnType<FinnyStore["getJob"]>>>): st
 
 export function createFinnyCurrentJobReader(deps: {
   jobs: Pick<FinnyStore, "getJob">;
-  runtime: Pick<FinnyRuntimeStore, "currentBinding">;
+  runtime: Pick<FinnyRuntimeStore, "currentBinding" | "bindingForSession">;
   authenticateSession(sessionId: string): Promise<boolean>;
 }) {
   return {
@@ -39,7 +39,13 @@ export function createFinnyCurrentJobReader(deps: {
         throw new Error("Finny current-job reader could not authenticate the session");
       }
       const binding = await deps.runtime.currentBinding(input.sessionId);
-      if (!binding || binding.role === "parent") return null;
+      if (!binding) {
+        const historical = await deps.runtime.bindingForSession(input.sessionId);
+        if (historical && historical.role !== "parent")
+          throw new Error("Finny worker authority is unavailable for this session");
+        return null;
+      }
+      if (binding.role === "parent") return null;
       const job = await deps.jobs.getJob(binding.scopeId, binding.jobId);
       if (!job) return null;
       return {

@@ -194,9 +194,6 @@ export function createFinnyLoopExtension(reader: FinnyJobReader) {
       try {
         authoritative = await refresh(rawContext as FinnyContext);
       } catch {
-        authoritative = null;
-      }
-      if (!authoritative) {
         return {
           message: {
             customType: "finny-authority-unavailable.v1",
@@ -206,6 +203,7 @@ export function createFinnyLoopExtension(reader: FinnyJobReader) {
           },
         };
       }
+      if (!authoritative) return;
       return {
         message: {
           customType: "finny-authoritative-context.v1",

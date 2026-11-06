@@ -49,6 +49,7 @@ import {
 } from "./model/pi-models.ts";
 
 import { resolveSwarmSettings, type SwarmSettings } from "./swarms/swarm-settings.ts";
+import { finnyIntegrationConfigFromEnv, type FinnyIntegrationConfig } from "./finny/integration-config.ts";
 
 export interface Config extends SandboxSettings, DeploySettings {
   productAnalytics?: { apiKey: string; host?: string };
@@ -169,6 +170,7 @@ export interface Config extends SandboxSettings, DeploySettings {
     token: string;
   };
   surfaceDebugFooter: boolean;
+  finny?: FinnyIntegrationConfig;
 }
 
 export function configuredModel(config: Config): string | undefined {
@@ -492,7 +494,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     throw new Error("SLACK_EVENTS_PORT must be an integer from 1 through 65535");
   }
   const memoryProviderConfig = parseMemoryProviderConfig(env.MEMORY_PROVIDER_CONFIG, env);
+  const finny = finnyIntegrationConfigFromEnv(env);
+  if (finny && !env.DATABASE_URL?.trim()) throw new Error("DATABASE_URL is required when FINNY_ENABLED=true");
   return {
+    ...(finny ? { finny } : {}),
     suggestedActivitiesEnabled: boolEnvStrict("SUGGESTED_ACTIVITIES_ENABLED", env.SUGGESTED_ACTIVITIES_ENABLED) ?? true,
     ...(env.SUGGESTED_ACTIVITIES_CONTEXT
       ? { suggestedActivitiesContext: env.SUGGESTED_ACTIVITIES_CONTEXT.slice(0, 8000) }

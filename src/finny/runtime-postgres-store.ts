@@ -13,6 +13,7 @@ export interface FinnyRuntimeBinding {
   principalId: string;
   epoch: number;
   active: boolean;
+  expiresAt?: number;
 }
 
 export interface InitialFinnyRuntimeBindings {
@@ -20,6 +21,9 @@ export interface InitialFinnyRuntimeBindings {
   jobId: string;
   parentSessionId: string;
   parentRunId: string;
+  parentPrincipalId: string;
+  producerExpiresAt: number;
+  auditorExpiresAt: number;
   producerSessionId: string;
   producerRunId: string;
   auditorSessionId: string;
@@ -70,6 +74,8 @@ const SCHEMA = [
   )`,
 ];
 
+const EXPIRY_SCHEMA = [`ALTER TABLE finny_runtime_bindings ADD COLUMN IF NOT EXISTS expires_at BIGINT`];
+
 function rowToBinding(row: Record<string, unknown>): FinnyRuntimeBinding {
   return {
     scopeId: row.scope_id as string,
@@ -80,6 +86,7 @@ function rowToBinding(row: Record<string, unknown>): FinnyRuntimeBinding {
     principalId: row.principal_id as string,
     epoch: Number(row.epoch),
     active: row.active as boolean,
+    ...(row.expires_at === null || row.expires_at === undefined ? {} : { expiresAt: Number(row.expires_at) }),
   };
 }
 
@@ -95,22 +102,99 @@ interface FinnyRuntimeActionInput {
 }
 
 export function createPostgresFinnyRuntimeStore(connectionString: string) {
-  const { q, pool } = createPgPool(connectionString, [{ id: "finny/runtime/0001", statements: SCHEMA }]);
+  const { q, pool } = createPgPool(connectionString, [
+    { id: "finny/runtime/0001", statements: SCHEMA },
+    { id: "finny/runtime/0002", statements: EXPIRY_SCHEMA },
+  ]);
   return {
+    async bindParent(input: {
+      scopeId: string;
+      jobId: string;
+      sessionId: string;
+      runId: string;
+      principalId: string;
+    }): Promise<void> {
+      await q(
+        `INSERT INTO finny_runtime_bindings(session_id,run_id,scope_id,job_id,role,principal_id,epoch,created_at)
+         VALUES($1,$2,$3,$4,'parent',$5,0,$6) ON CONFLICT(session_id) DO NOTHING`,
+        [input.sessionId, input.runId, input.scopeId, input.jobId, input.principalId, Date.now()],
+      );
+      const binding = await this.bindingForSession(input.sessionId);
+      if (
+        !binding ||
+        binding.scopeId !== input.scopeId ||
+        binding.jobId !== input.jobId ||
+        binding.runId !== input.runId ||
+        binding.role !== "parent" ||
+        binding.principalId !== input.principalId
+      )
+        throw new Error("Finny parent runtime binding idempotency conflict");
+    },
+    async bindWorker(input: {
+      scopeId: string;
+      jobId: string;
+      sessionId: string;
+      runId: string;
+      role: FinnyWorkerRole;
+      principalId: string;
+      epoch: number;
+      expiresAt: number;
+    }): Promise<void> {
+      if (!Number.isSafeInteger(input.expiresAt) || input.expiresAt <= Date.now())
+        throw new Error("Finny worker binding expiry must be in the future");
+      await q(
+        `INSERT INTO finny_runtime_bindings(session_id,run_id,scope_id,job_id,role,principal_id,epoch,expires_at,created_at)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT DO NOTHING`,
+        [
+          input.sessionId,
+          input.runId,
+          input.scopeId,
+          input.jobId,
+          input.role,
+          input.principalId,
+          input.epoch,
+          input.expiresAt,
+          Date.now(),
+        ],
+      );
+      const binding = await this.bindingForSession(input.sessionId);
+      if (
+        !binding ||
+        binding.scopeId !== input.scopeId ||
+        binding.jobId !== input.jobId ||
+        binding.role !== input.role ||
+        binding.principalId !== input.principalId ||
+        binding.epoch !== input.epoch
+      )
+        throw new Error("Finny worker runtime binding idempotency conflict");
+      await q("UPDATE finny_runtime_bindings SET expires_at=$2,active=TRUE WHERE session_id=$1", [
+        input.sessionId,
+        input.expiresAt,
+      ]);
+    },
     async bindInitial(input: InitialFinnyRuntimeBindings): Promise<void> {
-      const bindings: Array<[string, string, FinnyRuntimeRole, string, number]> = [
-        [input.parentSessionId, input.parentRunId, "parent", input.producerPrincipalId, 0],
-        [input.producerSessionId, input.producerRunId, "producer", input.producerPrincipalId, 0],
-        [input.auditorSessionId, input.auditorRunId, "auditor", input.auditorPrincipalId, 1],
+      if (input.producerExpiresAt <= Date.now() || input.auditorExpiresAt <= Date.now())
+        throw new Error("Finny initial worker binding expiry must be in the future");
+      const bindings: Array<[string, string, FinnyRuntimeRole, string, number, number | null]> = [
+        [input.parentSessionId, input.parentRunId, "parent", input.parentPrincipalId, 0, null],
+        [
+          input.producerSessionId,
+          input.producerRunId,
+          "producer",
+          input.producerPrincipalId,
+          0,
+          input.producerExpiresAt,
+        ],
+        [input.auditorSessionId, input.auditorRunId, "auditor", input.auditorPrincipalId, 1, input.auditorExpiresAt],
       ];
       await withPgTransaction(await pool(), async (db) => {
-        for (const [sessionId, runId, role, principalId, epoch] of bindings) {
+        for (const [sessionId, runId, role, principalId, epoch, expiresAt] of bindings) {
           await db.query(
             `INSERT INTO finny_runtime_bindings(
-              session_id,run_id,scope_id,job_id,role,principal_id,epoch,created_at
-             ) VALUES($1,$2,$3,$4,$5,$6,$7,$8)
+              session_id,run_id,scope_id,job_id,role,principal_id,epoch,expires_at,created_at
+             ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
              ON CONFLICT(session_id) DO NOTHING`,
-            [sessionId, runId, input.scopeId, input.jobId, role, principalId, epoch, Date.now()],
+            [sessionId, runId, input.scopeId, input.jobId, role, principalId, epoch, expiresAt, Date.now()],
           );
           const { rows } = await db.query("SELECT * FROM finny_runtime_bindings WHERE session_id=$1", [sessionId]);
           const binding = rows[0] ? rowToBinding(rows[0] as Record<string, unknown>) : undefined;
@@ -121,18 +205,57 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
             binding.runId !== runId ||
             binding.role !== role ||
             binding.principalId !== principalId ||
-            binding.epoch !== epoch
+            binding.epoch !== epoch ||
+            binding.expiresAt !== (expiresAt ?? undefined)
           ) {
             throw new Error("Finny runtime binding idempotency conflict");
           }
         }
       });
     },
-    async currentBinding(sessionId: string): Promise<FinnyRuntimeBinding | null> {
-      const rows = await q("SELECT * FROM finny_runtime_bindings WHERE session_id=$1 AND active=TRUE", [sessionId]);
+    async claimParentTurn(input: {
+      sessionId: string;
+      runId: string;
+      scopeId: string;
+      principalId: string;
+    }): Promise<FinnyRuntimeBinding | null> {
+      const rows = await q(
+        `UPDATE finny_runtime_bindings SET run_id=$2
+         WHERE session_id=$1 AND scope_id=$3 AND principal_id=$4 AND role='parent' AND active=TRUE
+         RETURNING *`,
+        [input.sessionId, input.runId, input.scopeId, input.principalId],
+      );
       return rows[0] ? rowToBinding(rows[0]) : null;
     },
-    async currentRoleBinding(
+    async advanceWorkerRun(input: {
+      sessionId: string;
+      expectedRunId: string;
+      runId: string;
+      scopeId: string;
+      expiresAt: number;
+    }): Promise<FinnyRuntimeBinding | null> {
+      if (!Number.isSafeInteger(input.expiresAt) || input.expiresAt <= Date.now())
+        throw new Error("Finny worker run expiry must be in the future");
+      const rows = await q(
+        `UPDATE finny_runtime_bindings SET run_id=$3, expires_at=$5
+         WHERE session_id=$1 AND run_id IN ($2,$3) AND scope_id=$4 AND role IN ('producer','auditor') AND active=TRUE
+         RETURNING *`,
+        [input.sessionId, input.expectedRunId, input.runId, input.scopeId, input.expiresAt],
+      );
+      return rows[0] ? rowToBinding(rows[0]) : null;
+    },
+    async bindingForSession(sessionId: string): Promise<FinnyRuntimeBinding | null> {
+      const rows = await q("SELECT * FROM finny_runtime_bindings WHERE session_id=$1", [sessionId]);
+      return rows[0] ? rowToBinding(rows[0]) : null;
+    },
+    async currentBinding(sessionId: string): Promise<FinnyRuntimeBinding | null> {
+      const rows = await q(
+        "SELECT * FROM finny_runtime_bindings WHERE session_id=$1 AND active=TRUE AND (role='parent' OR expires_at>$2)",
+        [sessionId, Date.now()],
+      );
+      return rows[0] ? rowToBinding(rows[0]) : null;
+    },
+    async activeRoleBinding(
       scopeId: string,
       jobId: string,
       role: FinnyRuntimeRole,
@@ -143,18 +266,36 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
       );
       return rows[0] ? rowToBinding(rows[0]) : null;
     },
+    async currentRoleBinding(
+      scopeId: string,
+      jobId: string,
+      role: FinnyRuntimeRole,
+    ): Promise<FinnyRuntimeBinding | null> {
+      const rows = await q(
+        "SELECT * FROM finny_runtime_bindings WHERE scope_id=$1 AND job_id=$2 AND role=$3 AND active=TRUE AND (role='parent' OR expires_at>$4) ORDER BY epoch DESC LIMIT 1",
+        [scopeId, jobId, role, Date.now()],
+      );
+      return rows[0] ? rowToBinding(rows[0]) : null;
+    },
     async bindAuditor(input: {
       scopeId: string;
       jobId: string;
       sessionId: string;
       runId: string;
       principalId: string;
+      expiresAt: number;
     }): Promise<FinnyRuntimeBinding> {
+      if (!Number.isSafeInteger(input.expiresAt) || input.expiresAt <= Date.now())
+        throw new Error("Finny Auditor binding expiry must be in the future");
       return withPgTransaction(await pool(), async (db) => {
         await db.query("SELECT id FROM finny_jobs WHERE id=$1 AND scope_id=$2 FOR UPDATE", [
           input.jobId,
           input.scopeId,
         ]);
+        await db.query(
+          "UPDATE finny_runtime_bindings SET active=FALSE WHERE job_id=$1 AND role='auditor' AND active=TRUE AND expires_at<=$2",
+          [input.jobId, Date.now()],
+        );
         const active = await db.query(
           "SELECT * FROM finny_runtime_bindings WHERE job_id=$1 AND role='auditor' AND active=TRUE",
           [input.jobId],
@@ -173,9 +314,18 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
         const epoch = Number(epochs.rows[0]?.epoch) + 1;
         await db.query(
           `INSERT INTO finny_runtime_bindings(
-            session_id,run_id,scope_id,job_id,role,principal_id,epoch,created_at
-           ) VALUES($1,$2,$3,$4,'auditor',$5,$6,$7) ON CONFLICT(session_id) DO NOTHING`,
-          [input.sessionId, input.runId, input.scopeId, input.jobId, input.principalId, epoch, Date.now()],
+            session_id,run_id,scope_id,job_id,role,principal_id,epoch,expires_at,created_at
+           ) VALUES($1,$2,$3,$4,'auditor',$5,$6,$7,$8) ON CONFLICT(session_id) DO NOTHING`,
+          [
+            input.sessionId,
+            input.runId,
+            input.scopeId,
+            input.jobId,
+            input.principalId,
+            epoch,
+            input.expiresAt,
+            Date.now(),
+          ],
         );
         const inserted = await db.query("SELECT * FROM finny_runtime_bindings WHERE session_id=$1", [input.sessionId]);
         const binding = inserted.rows[0] ? rowToBinding(inserted.rows[0] as Record<string, unknown>) : undefined;
@@ -191,6 +341,18 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
           throw new Error("Finny runtime Auditor binding idempotency conflict");
         }
         return binding;
+      });
+    },
+    async retireJob(scopeId: string, jobId: string): Promise<void> {
+      await withPgTransaction(await pool(), async (db) => {
+        await db.query(
+          "UPDATE finny_runtime_bindings SET active=FALSE WHERE scope_id=$1 AND job_id=$2 AND role IN ('producer','auditor')",
+          [scopeId, jobId],
+        );
+        await db.query("DELETE FROM finny_runtime_bindings WHERE scope_id=$1 AND job_id=$2 AND role='parent'", [
+          scopeId,
+          jobId,
+        ]);
       });
     },
     async retireWorkers(scopeId: string, jobId: string): Promise<void> {
@@ -243,8 +405,8 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
         }
         const current = await db.query(
           `SELECT * FROM finny_runtime_bindings
-           WHERE session_id=$1 AND run_id=$2 AND scope_id=$3 AND job_id=$4 AND role=$5 AND active=TRUE`,
-          [input.sessionId, input.runId, input.scopeId, input.jobId, input.role],
+           WHERE session_id=$1 AND run_id=$2 AND scope_id=$3 AND job_id=$4 AND role=$5 AND active=TRUE AND expires_at>$6`,
+          [input.sessionId, input.runId, input.scopeId, input.jobId, input.role, Date.now()],
         );
         if (!current.rows[0]) throw new Error(`Finny action requires the current ${input.role} session and run`);
         return { binding: rowToBinding(current.rows[0] as Record<string, unknown>) };
@@ -281,8 +443,8 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
         }
         const current = await db.query(
           `SELECT * FROM finny_runtime_bindings
-           WHERE session_id=$1 AND run_id=$2 AND scope_id=$3 AND job_id=$4 AND role=$5 AND active=TRUE FOR UPDATE`,
-          [input.sessionId, input.runId, input.scopeId, input.jobId, input.role],
+           WHERE session_id=$1 AND run_id=$2 AND scope_id=$3 AND job_id=$4 AND role=$5 AND active=TRUE AND expires_at>$6 FOR UPDATE`,
+          [input.sessionId, input.runId, input.scopeId, input.jobId, input.role, Date.now()],
         );
         if (!current.rows[0]) throw new Error(`Finny action requires the current ${input.role} session and run`);
         await db.query(

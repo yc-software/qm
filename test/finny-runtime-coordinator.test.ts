@@ -88,7 +88,9 @@ test("opens producer and Auditor concurrently and dispatches only the producer g
     sessionId: string;
     runId: string;
     message: string;
-    grantToken?: string;
+    role: "producer" | "auditor";
+    principalId: string;
+    expiresAt: number;
   }> = [];
   const coordinator = createFinnyRuntimeCoordinator({
     jobs,
@@ -118,7 +120,7 @@ test("opens producer and Auditor concurrently and dispatches only the producer g
   assert.equal(dispatched[0]?.sessionId, "producer-session");
   assert.equal(dispatched[0]?.runId, "producer-run");
   assert.match(dispatched[0]?.message ?? "", /Create the approved workbook/);
-  assert.ok(dispatched[0]?.grantToken);
+  assert.equal(dispatched[0]?.role, "producer");
   assert.equal((await runtime.currentBinding("parent-session"))?.role, "parent");
   assert.equal((await runtime.currentBinding("producer-session"))?.runId, "producer-run");
   assert.equal((await runtime.currentBinding("auditor-session"))?.role, "auditor");
@@ -132,6 +134,9 @@ test("rejects artifact readiness from a stale producer run", async () => {
     jobId: job.id,
     parentSessionId: "parent-session",
     parentRunId: "parent-run",
+    parentPrincipalId: "U1",
+    producerExpiresAt: Date.now() + 60_000,
+    auditorExpiresAt: Date.now() + 60_000,
     producerSessionId: "producer-session",
     producerRunId: "producer-run",
     auditorSessionId: "auditor-session",
@@ -177,6 +182,9 @@ test("issues and dispatches the Auditor grant only after artifact readiness", as
     jobId: job.id,
     parentSessionId: "parent-session",
     parentRunId: "parent-run",
+    parentPrincipalId: "U1",
+    producerExpiresAt: Date.now() + 60_000,
+    auditorExpiresAt: Date.now() + 60_000,
     producerSessionId: "producer-session",
     producerRunId: "producer-run",
     auditorSessionId: "auditor-session",
@@ -189,7 +197,9 @@ test("issues and dispatches the Auditor grant only after artifact readiness", as
     sessionId: string;
     runId: string;
     message: string;
-    grantToken?: string;
+    role: "producer" | "auditor";
+    principalId: string;
+    expiresAt: number;
   }> = [];
   const coordinator = createFinnyRuntimeCoordinator({
     jobs,
@@ -220,7 +230,7 @@ test("issues and dispatches the Auditor grant only after artifact readiness", as
   assert.equal(dispatched[0]?.sessionId, "auditor-session");
   assert.equal(dispatched[0]?.runId, "auditor-run");
   assert.match(dispatched[0]?.message ?? "", /Audit the current artifact independently/);
-  assert.ok(dispatched[0]?.grantToken);
+  assert.equal(dispatched[0]?.role, "auditor");
 });
 
 test("a BLOCK wakes the bound producer with policy-bounded findings", async () => {
@@ -238,6 +248,9 @@ test("a BLOCK wakes the bound producer with policy-bounded findings", async () =
     jobId: job.id,
     parentSessionId: "parent-session",
     parentRunId: "parent-run",
+    parentPrincipalId: "U1",
+    producerExpiresAt: Date.now() + 60_000,
+    auditorExpiresAt: Date.now() + 60_000,
     producerSessionId: "producer-session",
     producerRunId: "producer-run",
     auditorSessionId: "auditor-session",
@@ -250,7 +263,9 @@ test("a BLOCK wakes the bound producer with policy-bounded findings", async () =
     sessionId: string;
     runId: string;
     message: string;
-    grantToken?: string;
+    role: "producer" | "auditor";
+    principalId: string;
+    expiresAt: number;
   }> = [];
   const coordinator = createFinnyRuntimeCoordinator({
     jobs,
@@ -310,6 +325,9 @@ test("the next artifact creates a fresh independent Auditor run and grant", asyn
     jobId: job.id,
     parentSessionId: "parent-session",
     parentRunId: "parent-run",
+    parentPrincipalId: "U1",
+    producerExpiresAt: Date.now() + 60_000,
+    auditorExpiresAt: Date.now() + 60_000,
     producerSessionId: "producer-session",
     producerRunId: "producer-run",
     auditorSessionId: "auditor-session-1",
@@ -322,7 +340,9 @@ test("the next artifact creates a fresh independent Auditor run and grant", asyn
     sessionId: string;
     runId: string;
     message: string;
-    grantToken?: string;
+    role: "producer" | "auditor";
+    principalId: string;
+    expiresAt: number;
   }> = [];
   const coordinator = createFinnyRuntimeCoordinator({
     jobs,
@@ -400,6 +420,9 @@ test("replaying approved dispatch is idempotent", async () => {
     jobId: job.id,
     parentSessionId: "parent-session",
     parentRunId: "parent-run",
+    parentPrincipalId: "U1",
+    producerExpiresAt: Date.now() + 60_000,
+    auditorExpiresAt: Date.now() + 60_000,
     idempotencyKey: "approved-replay",
   };
 
@@ -425,6 +448,9 @@ test("an externally approved escalation stops worker actions instead of reworkin
     jobId: job.id,
     parentSessionId: "parent-session",
     parentRunId: "parent-run",
+    parentPrincipalId: "U1",
+    producerExpiresAt: Date.now() + 60_000,
+    auditorExpiresAt: Date.now() + 60_000,
     producerSessionId: "producer-session",
     producerRunId: "producer-run",
     auditorSessionId: "auditor-session",
@@ -483,6 +509,9 @@ test("authenticated Pi reader returns the current active worker binding and job 
     jobId: job.id,
     parentSessionId: "parent-session",
     parentRunId: "parent-run",
+    parentPrincipalId: "U1",
+    producerExpiresAt: Date.now() + 60_000,
+    auditorExpiresAt: Date.now() + 60_000,
     producerSessionId: "producer-session",
     producerRunId: "producer-run",
     auditorSessionId: "auditor-session",
@@ -530,6 +559,9 @@ test("rejects audit completion from the producer role", async () => {
     jobId: job.id,
     parentSessionId: "parent-session",
     parentRunId: "parent-run",
+    parentPrincipalId: "U1",
+    producerExpiresAt: Date.now() + 60_000,
+    auditorExpiresAt: Date.now() + 60_000,
     producerSessionId: "producer-session",
     producerRunId: "producer-run",
     auditorSessionId: "auditor-session",
@@ -585,6 +617,9 @@ test("replaying the same BLOCK is idempotent without duplicate producer wake", a
     jobId: job.id,
     parentSessionId: "parent-session",
     parentRunId: "parent-run",
+    parentPrincipalId: "U1",
+    producerExpiresAt: Date.now() + 60_000,
+    auditorExpiresAt: Date.now() + 60_000,
     producerSessionId: "producer-session",
     producerRunId: "producer-run",
     auditorSessionId: "auditor-session",
@@ -664,6 +699,9 @@ test("concurrent approved callbacks converge through dispatcher idempotency", as
     jobId: job.id,
     parentSessionId: "parent-session",
     parentRunId: "parent-run",
+    parentPrincipalId: "U1",
+    producerExpiresAt: Date.now() + 60_000,
+    auditorExpiresAt: Date.now() + 60_000,
     idempotencyKey: "approved-concurrent",
   };
 
@@ -682,6 +720,9 @@ test("artifact readiness derives artifact and Auditor grant authority from Core 
     jobId: job.id,
     parentSessionId: "parent-session",
     parentRunId: "parent-run",
+    parentPrincipalId: "U1",
+    producerExpiresAt: Date.now() + 60_000,
+    auditorExpiresAt: Date.now() + 60_000,
     producerSessionId: "producer-session",
     producerRunId: "producer-run",
     auditorSessionId: "auditor-session",
@@ -706,7 +747,11 @@ test("artifact readiness derives artifact and Auditor grant authority from Core 
         throw new Error("unexpected open");
       },
     },
-    dispatcher: { async dispatchPrivateIdempotent() {} },
+    dispatcher: {
+      async dispatchPrivateIdempotent(input) {
+        issuedPrincipal = input.principalId;
+      },
+    },
     artifactBinding: {
       async resolve() {
         return { artifactDigest: "core-artifact", provisionalRevision: "core-revision" };
@@ -733,7 +778,7 @@ test("artifact readiness derives artifact and Auditor grant authority from Core 
   const current = await jobs.getJob(job.scopeId, job.id);
   assert.equal(current?.artifactDigest, "core-artifact");
   assert.equal(current?.provisionalRevision, "core-revision");
-  assert.equal(issuedPrincipal, "U1");
+  assert.equal(issuedPrincipal, "core-principal");
 });
 
 test("a completed artifact action replays after the producer binding retires", async () => {
@@ -744,6 +789,9 @@ test("a completed artifact action replays after the producer binding retires", a
     jobId: job.id,
     parentSessionId: "parent-session",
     parentRunId: "parent-run",
+    parentPrincipalId: "U1",
+    producerExpiresAt: Date.now() + 60_000,
+    auditorExpiresAt: Date.now() + 60_000,
     producerSessionId: "producer-session",
     producerRunId: "producer-run",
     auditorSessionId: "auditor-session",
@@ -805,6 +853,9 @@ test("audit outcomes derive issuer provenance from the authorized runtime bindin
     jobId: job.id,
     parentSessionId: "parent-session",
     parentRunId: "parent-run",
+    parentPrincipalId: "U1",
+    producerExpiresAt: Date.now() + 60_000,
+    auditorExpiresAt: Date.now() + 60_000,
     producerSessionId: "producer-session",
     producerRunId: "producer-run",
     auditorSessionId: "auditor-session",

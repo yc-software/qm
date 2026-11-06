@@ -333,3 +333,13 @@ test("session restart fails closed on a well-formed prior event sequence regress
   assert.equal((result as { message?: { customType?: string } }).message?.customType, "finny-authority-unavailable.v1");
   assert.deepEqual(pi.entries, []);
 });
+
+test("ordinary sessions receive no Finny authority message", async () => {
+  const pi = new FakePi();
+  createFinnyLoopExtension({ readCurrentJob: async () => null })(asPi(pi));
+  const result = await pi.handlers.get("before_agent_start")?.(
+    {},
+    { sessionManager: { getSessionId: () => "ordinary", getEntries: () => [] } },
+  );
+  assert.equal(result, undefined);
+});
