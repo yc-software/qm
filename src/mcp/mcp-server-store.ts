@@ -6,12 +6,11 @@
 // connector credentials — reachable only through core, never injected into sandboxes.
 
 import type { DurableMap } from "../persistence/durable-map.ts";
+import type { AttestAudience } from "../directory/person.ts";
 
 export type McpServerAuthMode = "none" | "bearer" | "client-credentials" | "oauth-user";
 
 export type McpApprovalPolicy = "annotations" | "all" | "none";
-
-type McpAttestAudience = "personal" | "any";
 
 export interface McpServer {
   id: string;
@@ -37,7 +36,7 @@ export interface McpServer {
   approval?: McpApprovalPolicy;
   catalog?: boolean;
   attestActor?: boolean;
-  attestAudience?: McpAttestAudience;
+  attestAudience?: AttestAudience;
   readOnly: boolean;
   enabled: boolean;
   updatedAt: number;

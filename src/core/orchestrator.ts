@@ -1643,6 +1643,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         ...(conversation.publishMembers ? { members: conversation.publishMembers } : {}),
         ...(liveTurn ? { liveActor: true } : {}),
         ...(input.botActor ? { botActor: true } : {}),
+        ...(actAsActor ? { actAsActor: true } : {}),
       };
       if (!strictReadOnly && deps.signingSecret && deps.apiBaseUrl) {
         const destination = defaultDestination;

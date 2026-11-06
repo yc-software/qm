@@ -14,9 +14,9 @@ import { LRUCache } from "lru-cache";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { createMcpClient, mcpResultText, type McpAuth, type McpClient, type McpListing } from "./mcp-client.ts";
 import type { McpServer, McpServerStore } from "./mcp-server-store.ts";
-import { attestableAudience, attestedPerson, OutsideAudience } from "../directory/person.ts";
+import { attestsInAudience, attestedPerson, OutsideAudience } from "../directory/person.ts";
 import type { AddressFetch } from "../util/network.ts";
-import { isSystemActor, type ScopeId } from "../types.ts";
+import type { ScopeId } from "../types.ts";
 
 const REFRESH_INTERVAL_MS = 5 * 60_000;
 const CATALOG_TTL_MS = 60_000;
@@ -152,23 +152,13 @@ function callResource(def: McpToolDescriptor, args: Record<string, unknown>): st
   return `${def.serverId}/${typeof args.tool === "string" ? args.tool : String(args.operation)}`;
 }
 
-function attestsHere(
-  server: Pick<McpServer, "attestAudience">,
-  principalId: string | undefined,
-  scopeId: ScopeId | undefined,
-  actAsActor: boolean | undefined,
-): boolean {
-  if (attestableAudience(principalId, scopeId)) return true;
-  return server.attestAudience === "any" && actAsActor === true && !!principalId && !isSystemActor(principalId);
-}
-
 function refuseOutsideAudience(
   server: McpServer,
   principalId: string | undefined,
   scopeId: ScopeId | undefined,
   actAsActor: boolean | undefined,
 ): void {
-  if (server.attestActor && !attestsHere(server, principalId, scopeId, actAsActor))
+  if (server.attestActor && !attestsInAudience(server.attestAudience, principalId, scopeId, actAsActor))
     throw new OutsideAudience(`MCP server ${server.id}`);
 }
 
@@ -394,7 +384,7 @@ export function createMcpToolService(opts: {
   ): Promise<McpToolDescriptor[]> {
     const current = snapshot.filter((t) => {
       const attested = attestedServers.get(t.serverId);
-      return !attested || attestsHere(attested, principalId, scopeId, actAsActor);
+      return !attested || attestsInAudience(attested.attestAudience, principalId, scopeId, actAsActor);
     });
     const gated = perUserServers;
     if (!gated.size) return current;

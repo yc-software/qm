@@ -1238,6 +1238,34 @@ test("turn timezone rides the prompt and control-plane capability token", async 
   assert.equal(invalidClaims!.timezone, undefined, "invalid surface timezones are omitted from the token");
 });
 
+test("a turn's credential token says whether it may act as its actor in a shared conversation", async () => {
+  const { app, sandbox, serviceCreds, acl } = freshApp({
+    signingSecret: "test-secret",
+    apiBaseUrl: "https://core.example.com",
+  });
+  await serviceCreds.setServiceCredential("org:default-org", {
+    slug: "test-service",
+    name: "Test service",
+    secret: "synthetic",
+    host: "api.example.com",
+  });
+  await grantCred(acl, "org:default-org", "test-service");
+  let executed: Record<string, string> | undefined;
+  const run = sandbox.run.bind(sandbox);
+  sandbox.run = (handle, command, opts) => {
+    if (command === "echo who") executed = handle.env;
+    return run(handle, command, opts);
+  };
+  const ask = `!execute ${JSON.stringify({ command: "echo who", credentials: ["test-service"] })}`;
+  const actAsActor = async (request: TurnRequest) => {
+    executed = undefined;
+    assert.equal((await app.turn(request)).status, "ok");
+    return (await verifyCapabilityToken(executed!.AGENT_CREDENTIAL_TOKEN!, TEST_CAPABILITY_SECRET))!.actAsActor;
+  };
+  assert.equal(await actAsActor(channel(ask)), true);
+  assert.equal(await actAsActor(channel(ask, { botActor: true })), undefined);
+});
+
 for (const hours of [undefined, "72", "0", "none"]) {
   test(`sandbox-facing turn tokens honor deployment TTL ${hours ?? "default"}`, async () => {
     const ttl = loadConfig({ SANDBOX_CAPABILITY_TTL_HOURS: hours }).sandboxCapabilityTtlMs;

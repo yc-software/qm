@@ -93,8 +93,11 @@ conversations or projects, unless an administrator sets the connector's
 `attestAudience` to `any` ([mcp-connectors.md](./mcp-connectors.md)): the answer
 then reaches everyone in the conversation, so set it only for a connector whose
 answers its people may share there. The credential broker refuses an actor-attested credential anywhere
-else with `private_only`; a published app's token belongs to its publisher's
-personal scope, so apps attest their publisher.
+else with `private_only`, unless the credential's `injection.audience` is `any`
+(which requires `injection.actor`). It then follows the same rule as such a
+connector: the person who asked QM, or the owner of scheduled work. A published
+app's token belongs to its publisher's personal scope, so apps attest their
+publisher.
 
 ## Self-service Slack linking
 
