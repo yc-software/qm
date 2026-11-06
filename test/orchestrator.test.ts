@@ -520,20 +520,23 @@ test("a scheduled turn attests its owner only when the answer goes back to the o
     }),
     { RO_ID: "ro", RO_SECRET: "x", RW_ID: "rw", RW_SECRET: "y" },
   );
-  let turn: { offered: string[]; called: string } | undefined;
+  let turn: { offered: string[]; called: string; calledAny: string } | undefined;
   const mock = createMockAgent();
   const agent: Agent = {
     ...mock,
     runTurn: async (input) => {
-      turn = {
-        offered: (input.mcpTools ?? []).map((tool) => tool.name),
-        called: await input.tools.callMcpTool("records", { operation: "search" }).then(
+      const call = (name: string) =>
+        input.tools.callMcpTool(name, { operation: "search" }).then(
           () => "answered",
           (e: Error) => (/answers only to them/.test(e.message) ? "refused" : "sent"),
-        ),
+        );
+      turn = {
+        offered: (input.mcpTools ?? []).map((tool) => tool.name),
+        called: await call("records"),
+        calledAny: await call("shared"),
       };
       await input.tools.memoryAdd(["the launch moved to Friday"]);
-      await input.tools.execute("echo broker", { credentials: ["attested-api"] });
+      await input.tools.execute("echo broker", { credentials: ["attested-api", "shared-api"] });
       return mock.runTurn(input);
     },
   };
@@ -550,6 +553,7 @@ test("a scheduled turn attests its owner only when the answer goes back to the o
   for (const [id, attestActor] of [
     ["records", true],
     ["wiki", false],
+    ["shared", true],
   ] as const) {
     await mcpServers.put({
       id,
@@ -560,6 +564,7 @@ test("a scheduled turn attests its owner only when the answer goes back to the o
       credentialScope: "shared",
       catalog: true,
       ...(attestActor ? { attestActor } : {}),
+      ...(id === "shared" ? { attestAudience: "any" as const } : {}),
       readOnly: true,
       enabled: true,
       updatedAt: Date.now(),
@@ -568,14 +573,19 @@ test("a scheduled turn attests its owner only when the answer goes back to the o
   }
   await mcpToolService.refresh();
   const org = scopeId("org", "default-org");
-  await serviceCreds.setServiceCredential(org, {
-    slug: "attested-api",
-    name: "Attested API",
-    secret: "synthetic",
-    host: "api.example.com",
-    injection: { actor: true },
-  });
-  await grantCred(acl, org, "attested-api");
+  for (const [slug, injection] of [
+    ["attested-api", { actor: true }],
+    ["shared-api", { actor: true, audience: "any" as const }],
+  ] as const) {
+    await serviceCreds.setServiceCredential(org, {
+      slug,
+      name: slug,
+      secret: "synthetic",
+      host: "api.example.com",
+      injection,
+    });
+    await grantCred(acl, org, slug);
+  }
   let credentialToken: string | undefined;
   const run = sandbox.run.bind(sandbox);
   sandbox.run = (handle, command, opts) => {
@@ -599,16 +609,21 @@ test("a scheduled turn attests its owner only when the answer goes back to the o
       },
     );
     assert.equal(out.status, "ok", out.note);
-    const broker = await brokerCredentialCall({
-      claims: (await verifyCapabilityToken(credentialToken!, TEST_CAPABILITY_SECRET))!,
-      body: { credential: "attested-api", url: "https://api.example.com/v1/me" },
-      orgScopeId: org,
-      reader: serviceCreds,
-      fetchImpl: async () => ({ status: 200, text: async () => "{}" }),
-    });
+    const claims = (await verifyCapabilityToken(credentialToken!, TEST_CAPABILITY_SECRET))!;
+    const broker = async (credential: string) => {
+      const res = await brokerCredentialCall({
+        claims,
+        body: { credential, url: "https://api.example.com/v1/me" },
+        orgScopeId: org,
+        reader: serviceCreds,
+        fetchImpl: async () => ({ status: 200, text: async () => "{}" }),
+      });
+      return (res.json as { error?: string }).error ?? res.status;
+    };
     return {
       ...turn!,
-      broker: (broker.json as { error?: string }).error ?? broker.status,
+      broker: await broker("attested-api"),
+      brokerAny: await broker("shared-api"),
       memory: [
         ...new Set(
           knowledge.requests
@@ -619,8 +634,22 @@ test("a scheduled turn attests its owner only when the answer goes back to the o
       ],
     };
   };
-  const refused = { offered: ["wiki"], called: "refused", broker: "private_only", memory: [] };
-  const attested = { offered: ["records", "wiki"], called: "sent", broker: 200, memory: ["U1"] };
+  const refused = {
+    offered: ["shared", "wiki"],
+    called: "refused",
+    calledAny: "sent",
+    broker: "private_only",
+    brokerAny: 200,
+    memory: [],
+  };
+  const attested = {
+    offered: ["records", "shared", "wiki"],
+    called: "sent",
+    calledAny: "sent",
+    broker: 200,
+    brokerAny: 200,
+    memory: ["U1"],
+  };
   installPrincipalLinks({ canonical: (key) => (key === "u1@example.test" ? "U1" : undefined), aliases: () => [] });
   t.after(() => installPrincipalLinks(null));
   assert.deepEqual(
