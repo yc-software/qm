@@ -106,9 +106,9 @@ async function proxyDeployment(ctx: BaseCtx): Promise<void> {
     const d = await app.getDeployment(id).catch(swallowAs("deployments: load deployment", null));
     const slug = d?.name ?? d?.id;
     const handle = tenantAppHandle();
-    if (d && slug && /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(handle ? appHostLabel(handle, slug) : slug)) {
+    if (d && slug && /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(appHostLabel(handle, slug))) {
       res.writeHead(302, {
-        location: `https://${handle ? appHostLabel(handle, slug) : slug}.${deps.deployAppsDomain}${subPath}${url.search}`,
+        location: `https://${appHostLabel(handle, slug)}.${deps.deployAppsDomain}${subPath}${url.search}`,
         "cache-control": "no-store",
       });
       res.end();

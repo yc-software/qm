@@ -97,6 +97,7 @@ function start(identity: IdentityService, tenants: DirectoryStore["tenantsForEma
     portalIdentitySecret: IDENTITY_SECRET,
     identity,
     emailAuthDomain: "shared.test",
+    deployAppsDomain: "apps.shared.test",
     directory: {
       tenantsForEmail: tenants,
       tenantsForPrincipal: (principal: string) => directory.tenantsForPrincipal!(principal),
@@ -291,7 +292,9 @@ test("a workspace handle names exactly one company and its own trusted client, a
     assert.deepEqual(await workspace(handle.toUpperCase()), await workspace(handle));
     assert.deepEqual(await workspace("nosuchworkspace"), { tenant: null });
     assert.equal((await srv.get("/v1/auth/broker/workspace")).status, 400);
-    await owner.q("INSERT INTO tenant_hosts(host, tenant_id) VALUES ('beta.company.test', $1)", [beta]);
-    t.after(() => owner.q("DELETE FROM tenant_hosts WHERE tenant_id = $1", [beta]));
     assert.deepEqual((await srv.get("/v1/auth/broker/host-tenant?host=beta.company.test")).body, { tenant: null });
+    const appHost = async (host: string) => (await srv.get(`/v1/auth/broker/host-tenant?host=${host}`)).body;
+    assert.deepEqual(await appHost(`${handle}-sales-dash.apps.shared.test`), { tenant: beta, app: true });
+    for (const miss of [`${handle}.apps.shared.test`, `${handle}-.apps.shared.test`, `x.${handle}-a.apps.shared.test`])
+      assert.deepEqual(await appHost(miss), { tenant: null }, miss);
   }));

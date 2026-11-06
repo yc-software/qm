@@ -7,13 +7,17 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createPorterDeployProvider, type StoredPorterDeployBody } from "../src/deploy/porter-deploy-provider.ts";
 import { type DurableMap } from "../src/persistence/durable-map.ts";
-import type { Deployment, DeploymentVersion } from "../src/deploy/deploy-store.ts";
+import { appUrlOf, type Deployment, type DeploymentVersion } from "../src/deploy/deploy-store.ts";
 import type { DeployProvider } from "../src/deploy/deploy-provider.ts";
 import { NotFoundError } from "porter-sandbox";
 import { scopeId } from "../src/types.ts";
+import { randomUUID } from "node:crypto";
+import { withTenant } from "../src/tenants/context.ts";
+import { noteTenantAppHandle } from "../src/tenants/settings.ts";
 import { installFakePorter, type FakePorter } from "./support/fake-porter.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testMap } from "./support/test-database.ts";
+import { tenantMap } from "./support/tenant-map.ts";
 
 const SERVER = [
   "const fs = require('fs');",
@@ -130,6 +134,28 @@ test("apply serves the app on a stable public domain", async () => {
   assert.match(await fetchText("/"), /^hello from .*-app v1$/);
   assert.equal(provider.profile.dataDir, "/data");
   assert.equal(provider.profile.managedScaleToZero, false);
+});
+
+test("a company with an app handle gets the same <handle>-<app> host on Porter that its app links use", async () => {
+  const d = deployment("dep-h", "sales-board");
+  const [endpoint, link] = await withTenant(randomUUID(), async () => {
+    noteTenantAppHandle("nitroduck7");
+    const handled = createPorterDeployProvider({
+      ...singleProcessDeps(),
+      appsDomain: "apps.test",
+      appPort,
+      readyWindowSec: 10,
+      client: fake.client,
+      store: tenantMap<StoredPorterDeployBody>(),
+    });
+    const applied = await handled.apply(d, version({ "server.js": SERVER }, "node server.js"));
+    return [applied, appUrlOf(d, { sharedWebUrl: undefined, appsDomain: "apps.test" })];
+  });
+  assert.equal(link, "https://nitroduck7-sales-board.apps.test/");
+  assert.equal(endpoint.publicUrl, link);
+  assert.deepEqual(fake.bodies()[0]!.networking, [
+    { port: appPort, domains: [{ domain: new URL(link!).host, visibility: "private" }] },
+  ]);
 });
 
 const bulkFiles = (): Record<string, string> =>
