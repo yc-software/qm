@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { test } from "node:test";
 import {
   createSpreadsheetWorkerBinding,
@@ -240,7 +241,7 @@ test("Core worker persists deterministic evidence with reserved immutable Files 
             ownerScopeId: input.ownerScopeId,
             createdBy: input.createdBy,
             enabled: true,
-            sha256: "server-derived",
+            sha256: createHash("sha256").update(input.data).digest("hex"),
           },
         };
       },
@@ -255,6 +256,7 @@ test("Core worker persists deterministic evidence with reserved immutable Files 
   });
   assert.equal(output.evidenceFileId, "deterministic-evidence-file");
   assert.equal(output.envelopeDigest, (await validEnvelope()).envelopeDigest);
+  assert.deepEqual(output.results, (await validEnvelope()).results);
   assert.equal(puts.length, 1);
   assert.equal(puts[0].ownerScopeId, "personal:U1");
   assert.equal(puts[0].createdBy, SPREADSHEET_WORKER_PRINCIPAL_ID);

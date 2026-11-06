@@ -21,6 +21,8 @@ import {
   SPREADSHEET_WORKER_CHECK_IDS,
   SPREADSHEET_WORKER_PRINCIPAL_ID,
   verifySpreadsheetWorkerEnvelope,
+  type SpreadsheetWorkerBinding,
+  type SpreadsheetWorkerResult,
 } from "./deterministic-spreadsheet-worker.ts";
 
 export interface FinnyParentBindingSnapshot {
@@ -156,6 +158,16 @@ export function createFinnyToolServiceFactory(deps: {
   integration: FinnyIntegrationStore;
   deliveries: Pick<DeliveryStore, "enqueue">;
   coordinator: FinnyCoordinatorPort;
+  files: Pick<FileArtifactStore, "open">;
+  deterministicSpreadsheetWorker: {
+    run(input: {
+      scopeId: string;
+      jobId: string;
+      artifactBytes: Uint8Array;
+      evidenceFileId: string;
+      binding: SpreadsheetWorkerBinding;
+    }): Promise<{ evidenceFileId: string; results: readonly SpreadsheetWorkerResult[] }>;
+  };
   finalizer: FinnyFinalizer;
   deliverFinal(input: { job: FinnyJob; receipt: Awaited<ReturnType<FinnyFinalizer["finalize"]>> }): Promise<void>;
   ids?: () => string;
@@ -309,6 +321,85 @@ export function createFinnyToolServiceFactory(deps: {
             idempotencyKey: input.idempotencyKey,
           });
           return `BLOCK recorded for ${input.checkId} generation ${input.generation}.`;
+        },
+        async deterministicAudit(input): Promise<string> {
+          const job = await jobForWorker("auditor");
+          if (!job.artifactDigest || !job.provisionalRevision) throw new Error("Finny job has no current artifact");
+          const artifact = await immutableScopedFileBytes(
+            deps.files,
+            job.scopeId,
+            job.provisionalRevision,
+            "current artifact",
+          );
+          if (artifact.digest !== job.artifactDigest) throw new Error("Finny current artifact digest is invalid");
+          const binding = {
+            artifactDigest: job.artifactDigest,
+            policyVersion: job.policy.policyVersion,
+            checks: SPREADSHEET_WORKER_CHECK_IDS.map((checkId) => ({
+              checkId,
+              generation: job.policy.requiredGenerations[checkId],
+            })),
+          };
+          const evidenceFileId = createHash("sha256")
+            .update(
+              JSON.stringify([
+                "finny-deterministic-evidence",
+                job.scopeId,
+                job.id,
+                job.artifactDigest,
+                job.policy.policyVersion,
+                binding.checks,
+                input.idempotencyKey,
+              ]),
+            )
+            .digest("hex");
+          const result = await deps.deterministicSpreadsheetWorker.run({
+            scopeId: job.scopeId,
+            jobId: job.id,
+            artifactBytes: artifact.bytes,
+            evidenceFileId,
+            binding,
+          });
+          let passes = 0;
+          for (const check of result.results) {
+            const idempotencyKey = `${input.idempotencyKey}:${check.checkId}:${check.generation}`;
+            if (check.verdict === "block") {
+              const policy = job.findingPolicy;
+              if (!policy) throw new Error("Finny job has no finding policy");
+              const findings = [
+                {
+                  code: "DETERMINISTIC_BLOCK".slice(0, policy.maxCodeLength),
+                  message: `${check.checkId} failed deterministic audit`.slice(0, policy.maxMessageLength),
+                },
+              ];
+              await deps.coordinator.auditBlocked({
+                scopeId: current!.scopeId,
+                jobId: job.id,
+                sessionId: turn.sessionId,
+                runId: turn.runId,
+                artifactDigest: job.artifactDigest,
+                checkId: check.checkId,
+                generation: check.generation,
+                evidenceFileId: result.evidenceFileId,
+                findings,
+                idempotencyKey,
+              });
+              return `Deterministic spreadsheet audit recorded BLOCK for ${check.checkId}.`;
+            }
+            await deps.coordinator.auditPassed({
+              scopeId: current!.scopeId,
+              jobId: job.id,
+              sessionId: turn.sessionId,
+              runId: turn.runId,
+              artifactDigest: job.artifactDigest,
+              checkId: check.checkId,
+              generation: check.generation,
+              evidenceFileId: result.evidenceFileId,
+              idempotencyKey,
+            });
+            passes += 1;
+          }
+          return `Deterministic spreadsheet audit recorded ${passes} PASS results.`;
         },
         async finalize(input): Promise<string> {
           if (current?.role !== "parent" || current.jobId !== input.jobId)

@@ -370,10 +370,12 @@ export function createPersistedDeterministicSpreadsheetWorker(deps: {
   const worker = createDeterministicSpreadsheetWorker(deps.engine);
   const id = deps.ids ?? randomUUID;
   return {
-    async run(input: SpreadsheetWorkerRunInput & { scopeId: ScopeId; jobId: string }) {
+    async run(input: SpreadsheetWorkerRunInput & { scopeId: ScopeId; jobId: string; evidenceFileId?: string }) {
       const envelope = await worker.run(input);
-      const evidenceFileId = id();
+      const evidenceFileId = input.evidenceFileId ?? id();
       const name = "finny-spreadsheet-evidence.json";
+      const data = new TextEncoder().encode(JSON.stringify(envelope));
+      const expectedDigest = createHash("sha256").update(data).digest("hex");
       const stored = await deps.files.put({
         id: evidenceFileId,
         ownerScopeId: input.scopeId,
@@ -381,7 +383,7 @@ export function createPersistedDeterministicSpreadsheetWorker(deps: {
         name,
         path: artifactPath(evidenceFileId, name),
         mimetype: "application/json",
-        data: new TextEncoder().encode(JSON.stringify(envelope)),
+        data,
         direction: "out",
         createdInScope: input.scopeId,
       });
@@ -389,11 +391,12 @@ export function createPersistedDeterministicSpreadsheetWorker(deps: {
         stored.artifact.id !== evidenceFileId ||
         stored.artifact.ownerScopeId !== input.scopeId ||
         stored.artifact.createdBy !== SPREADSHEET_WORKER_PRINCIPAL_ID ||
+        stored.artifact.sha256 !== expectedDigest ||
         !stored.artifact.enabled
       ) {
         throw new Error("Spreadsheet worker evidence file authority is invalid");
       }
-      return { evidenceFileId, envelopeDigest: envelope.envelopeDigest };
+      return { evidenceFileId, envelopeDigest: envelope.envelopeDigest, results: envelope.results };
     },
   };
 }

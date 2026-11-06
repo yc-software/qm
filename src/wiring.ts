@@ -1,4 +1,9 @@
 import { createPostgresFinnyStore } from "./finny/postgres-store.ts";
+import {
+  createPersistedDeterministicSpreadsheetWorker,
+  type SpreadsheetCalculationEngine,
+} from "./finny/deterministic-spreadsheet-worker.ts";
+import { createHttpSpreadsheetCalculationEngine } from "./finny/http-spreadsheet-engine.ts";
 import { createPostgresFinnyRuntimeStore } from "./finny/runtime-postgres-store.ts";
 import { createPostgresFinnyIntegrationStore } from "./finny/integration-postgres-store.ts";
 import { createFinnyWorkerGrants } from "./finny/worker-grants.ts";
@@ -554,8 +559,17 @@ export function buildApp(
     modelVerificationProbe?: typeof probeModel;
     agent?: Agent;
     canClaimRuns?: () => boolean;
+    spreadsheetCalculationEngine?: SpreadsheetCalculationEngine;
   } = {},
 ): BuiltApp {
+  const spreadsheetCalculationEngine =
+    overrides.spreadsheetCalculationEngine ??
+    (config.finny?.spreadsheetEngine
+      ? createHttpSpreadsheetCalculationEngine(config.finny.spreadsheetEngine)
+      : undefined);
+  if (config.finny && !spreadsheetCalculationEngine) {
+    throw new Error("FINNY_ENABLED requires an approved spreadsheet calculation engine");
+  }
   const admittedWork = createAdmittedWork();
   let turnWaitShutdown = new AbortController();
   const createSweeper: typeof createUntrackedSweeper = (work, interval, options) =>
@@ -2098,6 +2112,10 @@ export function buildApp(
       "finny-runtime-recovery",
     );
     const finnyGrants = createFinnyWorkerGrants(finnyJobs, config.finny.signingSecret);
+    const deterministicSpreadsheetWorker = createPersistedDeterministicSpreadsheetWorker({
+      engine: spreadsheetCalculationEngine!,
+      files,
+    });
     const finnyFinalizer = createSignedFinnyFinalizer(finnyJobs, config.finny.signingSecret);
     finnyCurrentJobReader = createFinnyCurrentJobReader({
       jobs: finnyJobs,
@@ -2191,7 +2209,7 @@ export function buildApp(
               instruction:
                 role === "producer"
                   ? "Produce the approved immutable file artifact, then report its file ID as provisionalRevision and SHA-256 as artifactDigest."
-                  : "Independently audit the current artifact against every required policy check, save immutable evidence in Files, and report its evidenceFileId through Finny.",
+                  : "Invoke deterministic_audit once for the mandatory spreadsheet checks, then independently audit every remaining required policy check and report immutable Files evidence through Finny.",
             });
           },
         },
@@ -2357,6 +2375,8 @@ export function buildApp(
       runtime: finnyRuntime,
       integration: finnyIntegration,
       deliveries,
+      files,
+      deterministicSpreadsheetWorker,
       coordinator: {
         async artifactReady(input) {
           await (await coordinatorFor(input.scopeId, input.jobId)).artifactReady(input);

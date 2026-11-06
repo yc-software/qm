@@ -23,6 +23,7 @@ export interface FinnyToolService {
     evidenceFileId: string;
     idempotencyKey: string;
   }): Promise<string>;
+  deterministicAudit(input: { idempotencyKey: string }): Promise<string>;
   block(input: {
     checkId: FinnyCheckId;
     generation: number;
@@ -165,6 +166,16 @@ export function finnyTools(kit: ToolKit) {
           }),
       ),
   });
+  const deterministicAudit = defineTool({
+    name: "finny_deterministic_audit",
+    label: "Finny deterministic audit",
+    description: "Run Core-owned deterministic spreadsheet checks against the current bound artifact.",
+    parameters: Type.Object({ idempotencyKey: string() }, { additionalProperties: false }),
+    execute: (callId, params) =>
+      run(callId, "deterministic_audit", {}, () =>
+        ref.current!.finny!.deterministicAudit({ idempotencyKey: params.idempotencyKey }),
+      ),
+  });
   const finalize = defineTool({
     name: "finny_finalize",
     label: "Finalize Finny job",
@@ -181,6 +192,7 @@ export function finnyTools(kit: ToolKit) {
     artifact_ready: artifactReady,
     pass,
     block,
+    deterministic_audit: deterministicAudit,
     finalize,
   });
   const properties = Object.fromEntries(
@@ -203,6 +215,7 @@ export function finnyTools(kit: ToolKit) {
     artifact_ready: ["artifactDigest", "provisionalRevision", "idempotencyKey"],
     pass: ["checkId", "generation", "evidenceFileId", "idempotencyKey"],
     block: ["checkId", "generation", "evidenceFileId", "findings", "idempotencyKey"],
+    deterministic_audit: ["idempotencyKey"],
     finalize: ["jobId", "idempotencyKey"],
   } as const;
   const contentFields = Object.keys(properties);

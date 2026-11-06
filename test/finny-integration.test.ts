@@ -13,13 +13,17 @@ const plan: FinnyPlanPresentation = {
   clarifications: [],
 };
 
-function harness(binding: { role: "parent" | "producer" | "auditor" } | null = null) {
+function harness(
+  binding: { role: "parent" | "producer" | "auditor" } | null = null,
+  options: { job?: Partial<FinnyJob>; artifactBytes?: Uint8Array; deterministicOutput?: unknown } = {},
+) {
   const calls: Array<[string, unknown]> = [];
   const job = {
     id: "job-1",
     scopeId: "scope-1",
     plan,
     policy: { policyVersion: "v1", requiredGenerations: {} },
+    ...options.job,
   } as FinnyJob;
   const factory = createFinnyToolServiceFactory({
     config: {
@@ -95,6 +99,30 @@ function harness(binding: { role: "parent" | "producer" | "auditor" } | null = n
       },
       async auditBlocked(input: any) {
         calls.push(["auditBlocked", input]);
+      },
+    },
+    files: {
+      async open(id: string) {
+        if (id !== job.provisionalRevision || !options.artifactBytes) return null;
+        const { Readable } = await import("node:stream");
+        return {
+          artifact: {
+            id,
+            enabled: true,
+            ownerScopeId: job.scopeId,
+            sha256: job.artifactDigest,
+            createdBy: "producer",
+          },
+          sizeBytes: options.artifactBytes.byteLength,
+          stream: Readable.from([options.artifactBytes]),
+        };
+      },
+    },
+    deterministicSpreadsheetWorker: {
+      async run(input: unknown) {
+        calls.push(["deterministicWorker", input]);
+        if (options.deterministicOutput) return options.deterministicOutput;
+        throw new Error("deterministic worker was not configured for this test");
       },
     },
     finalizer: {
@@ -511,4 +539,128 @@ test("evidence authority derives immutable scoped file digests and verifies dete
     }),
     /immutable scoped evidence file/i,
   );
+});
+
+test("bound Auditor runs all current deterministic checks from one trusted evidence envelope", async () => {
+  const artifactBytes = new TextEncoder().encode("workbook");
+  const { digestSpreadsheetArtifact } = await import("../src/finny/deterministic-spreadsheet-worker.ts");
+  const { initialFinnyPolicy } = await import("../src/finny/policy.ts");
+  const policy = initialFinnyPolicy();
+  const results = [
+    {
+      checkId: "formula.recalculate" as const,
+      generation: 1,
+      verdict: "pass" as const,
+      evidence: { kind: "formula-recalculation" as const, cells: [] },
+    },
+    {
+      checkId: "summary.crossfoot" as const,
+      generation: 1,
+      verdict: "pass" as const,
+      evidence: { kind: "cross-foot" as const, comparisons: [] },
+    },
+    {
+      checkId: "artifact.structure" as const,
+      generation: 1,
+      verdict: "pass" as const,
+      evidence: { kind: "structure" as const, sheets: [] },
+    },
+  ];
+  const { factory, calls } = harness(
+    { role: "auditor" },
+    {
+      artifactBytes,
+      job: {
+        artifactDigest: digestSpreadsheetArtifact(artifactBytes),
+        provisionalRevision: "artifact-file",
+        policy,
+      },
+      deterministicOutput: { evidenceFileId: "trusted-evidence", results },
+    },
+  );
+  const service = await factory.forTurn(parent);
+  assert.ok(service);
+  assert.equal(
+    await service.deterministicAudit({ idempotencyKey: "audit-1" }),
+    "Deterministic spreadsheet audit recorded 3 PASS results.",
+  );
+  const workerInput = calls.find(([name]) => name === "deterministicWorker")?.[1] as any;
+  assert.deepEqual(Array.from(workerInput.artifactBytes), Array.from(artifactBytes));
+  assert.deepEqual(workerInput.binding.checks, [
+    { checkId: "formula.recalculate", generation: 1 },
+    { checkId: "summary.crossfoot", generation: 1 },
+    { checkId: "artifact.structure", generation: 1 },
+  ]);
+  assert.deepEqual(
+    calls.filter(([name]) => name === "auditPassed").map(([, value]) => value),
+    results.map((result) => ({
+      scopeId: "scope-1",
+      jobId: "job-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      artifactDigest: digestSpreadsheetArtifact(artifactBytes),
+      checkId: result.checkId,
+      generation: 1,
+      evidenceFileId: "trusted-evidence",
+      idempotencyKey: `audit-1:${result.checkId}:1`,
+    })),
+  );
+  await service.deterministicAudit({ idempotencyKey: "audit-1" });
+  const workerInputs = calls.filter(([name]) => name === "deterministicWorker").map(([, value]) => value as any);
+  assert.equal(typeof workerInputs[0]?.evidenceFileId, "string");
+  assert.equal(workerInputs[0]?.evidenceFileId, workerInputs[1]?.evidenceFileId);
+});
+
+test("deterministic BLOCK uses Core findings and stops before stale remaining results", async () => {
+  const artifactBytes = new TextEncoder().encode("blocked workbook");
+  const { digestSpreadsheetArtifact } = await import("../src/finny/deterministic-spreadsheet-worker.ts");
+  const { initialFinnyPolicy } = await import("../src/finny/policy.ts");
+  const policy = initialFinnyPolicy();
+  const results = [
+    {
+      checkId: "formula.recalculate" as const,
+      generation: 1,
+      verdict: "block" as const,
+      evidence: { kind: "formula-recalculation" as const, cells: [] },
+    },
+    {
+      checkId: "summary.crossfoot" as const,
+      generation: 1,
+      verdict: "pass" as const,
+      evidence: { kind: "cross-foot" as const, comparisons: [] },
+    },
+    {
+      checkId: "artifact.structure" as const,
+      generation: 1,
+      verdict: "pass" as const,
+      evidence: { kind: "structure" as const, sheets: [] },
+    },
+  ];
+  const { factory, calls } = harness(
+    { role: "auditor" },
+    {
+      artifactBytes,
+      job: {
+        artifactDigest: digestSpreadsheetArtifact(artifactBytes),
+        provisionalRevision: "artifact-file",
+        policy,
+        findingPolicy: { id: "bounds", maxFindings: 1, maxCodeLength: 8, maxMessageLength: 16 },
+      },
+      deterministicOutput: { evidenceFileId: "trusted-evidence", results },
+    },
+  );
+  const service = await factory.forTurn(parent);
+  assert.ok(service);
+  assert.equal(
+    await service.deterministicAudit({ idempotencyKey: "audit-block" }),
+    "Deterministic spreadsheet audit recorded BLOCK for formula.recalculate.",
+  );
+  assert.equal(calls.filter(([name]) => name === "auditPassed").length, 0);
+  const blocked = calls.find(([name]) => name === "auditBlocked")?.[1] as any;
+  assert.equal(blocked.checkId, "formula.recalculate");
+  assert.equal(blocked.evidenceFileId, "trusted-evidence");
+  assert.equal(blocked.idempotencyKey, "audit-block:formula.recalculate:1");
+  assert.equal(blocked.findings.length, 1);
+  assert.ok(blocked.findings[0].code.length <= 8);
+  assert.ok(blocked.findings[0].message.length <= 16);
 });

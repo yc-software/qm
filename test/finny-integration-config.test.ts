@@ -13,6 +13,11 @@ const enabled = {
   FINNY_MAX_FINDING_MESSAGE_LENGTH: "1200",
   FINNY_MAX_REWORKS: "3",
   FINNY_WORKER_GRANT_TTL_MS: "900000",
+  FINNY_SPREADSHEET_ENGINE_URL: "https://spreadsheet-engine.example/evaluate",
+  FINNY_SPREADSHEET_ENGINE_NAME: "libreoffice-service",
+  FINNY_SPREADSHEET_ENGINE_VERSION: "24.2",
+  FINNY_SPREADSHEET_ENGINE_TIMEOUT_MS: "30000",
+  FINNY_SPREADSHEET_ENGINE_MAX_RESPONSE_BYTES: "1048576",
 };
 
 test("Finny integration is disabled by default", () => {
@@ -45,6 +50,13 @@ test("enabled Finny integration preserves configured policy and limits", () => {
     },
     maxReworks: 3,
     workerGrantTtlMs: 900000,
+    spreadsheetEngine: {
+      url: enabled.FINNY_SPREADSHEET_ENGINE_URL,
+      name: enabled.FINNY_SPREADSHEET_ENGINE_NAME,
+      version: enabled.FINNY_SPREADSHEET_ENGINE_VERSION,
+      timeoutMs: 30000,
+      maxResponseBytes: 1048576,
+    },
   });
 });
 
@@ -56,4 +68,20 @@ test("enabled Finny integration rejects invalid settings instead of applying fal
   );
   assert.throws(() => loadConfig({ ...enabled, FINNY_MAX_REWORKS: "0" }), /FINNY_MAX_REWORKS/);
   assert.throws(() => loadConfig({ ...enabled, FINNY_WORKER_GRANT_TTL_MS: "1.5" }), /FINNY_WORKER_GRANT_TTL_MS/);
+  assert.throws(
+    () => loadConfig({ ...enabled, FINNY_SPREADSHEET_ENGINE_URL: "http://spreadsheet-engine.example" }),
+    /FINNY_SPREADSHEET_ENGINE_URL/,
+  );
+  assert.throws(
+    () => loadConfig({ ...enabled, FINNY_SPREADSHEET_ENGINE_URL: "https://user:pass@spreadsheet-engine.example" }),
+    /FINNY_SPREADSHEET_ENGINE_URL/,
+  );
+  assert.throws(
+    () => loadConfig({ ...enabled, FINNY_SPREADSHEET_ENGINE_TIMEOUT_MS: "0" }),
+    /FINNY_SPREADSHEET_ENGINE_TIMEOUT_MS/,
+  );
+  assert.throws(
+    () => loadConfig({ ...enabled, FINNY_SPREADSHEET_ENGINE_MAX_RESPONSE_BYTES: "0" }),
+    /FINNY_SPREADSHEET_ENGINE_MAX_RESPONSE_BYTES/,
+  );
 });

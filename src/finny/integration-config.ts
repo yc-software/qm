@@ -3,11 +3,20 @@ import { boolEnvStrict, numEnvStrict } from "../util/env.ts";
 import { assertFinnyFindingPolicy } from "./coordinator.ts";
 import type { FinnyFindingPolicy } from "./types.ts";
 
+export interface FinnySpreadsheetEngineConfig {
+  url: string;
+  name: string;
+  version: string;
+  timeoutMs: number;
+  maxResponseBytes: number;
+}
+
 export interface FinnyIntegrationConfig {
   signingSecret: string;
   findingPolicy: FinnyFindingPolicy;
   maxReworks: number;
   workerGrantTtlMs: number;
+  spreadsheetEngine: FinnySpreadsheetEngineConfig;
 }
 
 const REQUIRED = [
@@ -18,6 +27,11 @@ const REQUIRED = [
   "FINNY_MAX_FINDING_MESSAGE_LENGTH",
   "FINNY_MAX_REWORKS",
   "FINNY_WORKER_GRANT_TTL_MS",
+  "FINNY_SPREADSHEET_ENGINE_URL",
+  "FINNY_SPREADSHEET_ENGINE_NAME",
+  "FINNY_SPREADSHEET_ENGINE_VERSION",
+  "FINNY_SPREADSHEET_ENGINE_TIMEOUT_MS",
+  "FINNY_SPREADSHEET_ENGINE_MAX_RESPONSE_BYTES",
 ] as const;
 
 function required(env: NodeJS.ProcessEnv, name: (typeof REQUIRED)[number]): string {
@@ -49,10 +63,35 @@ export function finnyIntegrationConfigFromEnv(env: NodeJS.ProcessEnv): FinnyInte
     maxMessageLength: positiveInteger(env, "FINNY_MAX_FINDING_MESSAGE_LENGTH"),
   };
   assertFinnyFindingPolicy(findingPolicy);
+  const spreadsheetEngineUrl = required(env, "FINNY_SPREADSHEET_ENGINE_URL");
+  try {
+    const url = new URL(spreadsheetEngineUrl);
+    if (
+      url.protocol !== "https:" ||
+      !url.hostname ||
+      url.username ||
+      url.password ||
+      url.hash ||
+      url.hostname.endsWith(".")
+    ) {
+      throw new Error("url");
+    }
+  } catch {
+    throw new Error(
+      "FINNY_SPREADSHEET_ENGINE_URL must be an HTTPS URL without credentials, a fragment, or a trailing hostname dot",
+    );
+  }
   return {
     signingSecret,
     findingPolicy,
     maxReworks: positiveInteger(env, "FINNY_MAX_REWORKS"),
     workerGrantTtlMs: positiveInteger(env, "FINNY_WORKER_GRANT_TTL_MS"),
+    spreadsheetEngine: {
+      url: spreadsheetEngineUrl,
+      name: required(env, "FINNY_SPREADSHEET_ENGINE_NAME"),
+      version: required(env, "FINNY_SPREADSHEET_ENGINE_VERSION"),
+      timeoutMs: positiveInteger(env, "FINNY_SPREADSHEET_ENGINE_TIMEOUT_MS"),
+      maxResponseBytes: positiveInteger(env, "FINNY_SPREADSHEET_ENGINE_MAX_RESPONSE_BYTES"),
+    },
   };
 }

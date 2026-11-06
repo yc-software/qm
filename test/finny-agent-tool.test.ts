@@ -23,6 +23,9 @@ const service = {
   async block() {
     return "check blocked";
   },
+  async deterministicAudit() {
+    return "deterministic audit recorded";
+  },
   async finalize() {
     return "job finalized";
   },
@@ -101,6 +104,7 @@ test("finny schema accepts only narrow content and evidence actions", () => {
       findings: [{ code: "FORMULA_ERROR", message: "Formula does not recalculate" }],
       idempotencyKey: "block-1",
     },
+    { action: "deterministic_audit", idempotencyKey: "deterministic-1" },
     { action: "finalize", jobId: "job-1", idempotencyKey: "finalize-1" },
   ];
   for (const input of valid) assert.ok(Check(schema, input), JSON.stringify(input));
@@ -136,6 +140,7 @@ test("finny schema rejects model-supplied authority and escalation fields", () =
     assert.equal(Check(schema, { ...base, [field]: field === "requiredChecks" ? [] : "forbidden" }), false, field);
   }
   assert.equal(Check(schema, { action: "create_plan", plan: { ...plan, scopeId: "org:acme" } }), false);
+  assert.equal(Check(schema, { action: "deterministic_audit", idempotencyKey: "audit-1", verdict: "pass" }), false);
   assert.equal(
     Check(schema, {
       action: "create_plan",
@@ -179,6 +184,10 @@ test("finny forwards only narrow inputs and returns concise bound-service text",
       calls.push(["block", input]);
       return "block accepted; Core selected rework";
     },
+    async deterministicAudit(input: { idempotencyKey: string }) {
+      calls.push(["deterministic_audit", input]);
+      return "deterministic audit accepted";
+    },
     async finalize(input) {
       calls.push(["finalize", input]);
       return "job finalized";
@@ -215,6 +224,7 @@ test("finny forwards only narrow inputs and returns concise bound-service text",
       idempotencyKey: "block-1",
       retrySafe: true,
     },
+    { action: "deterministic_audit", idempotencyKey: "deterministic-1", retrySafe: true },
     { action: "finalize", jobId: "job-1", idempotencyKey: "finalize-1", retrySafe: true },
   ];
   const replies = [];
@@ -227,6 +237,7 @@ test("finny forwards only narrow inputs and returns concise bound-service text",
     "artifact accepted",
     "check accepted",
     "block accepted; Core selected rework",
+    "deterministic audit accepted",
     "job finalized",
   ]);
   assert.deepEqual(calls, [
@@ -255,6 +266,7 @@ test("finny forwards only narrow inputs and returns concise bound-service text",
         idempotencyKey: "block-1",
       },
     ],
+    ["deterministic_audit", { idempotencyKey: "deterministic-1" }],
     ["finalize", { jobId: "job-1", idempotencyKey: "finalize-1" }],
   ]);
 });
