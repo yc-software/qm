@@ -18,6 +18,7 @@ import {
   connectPage,
   connectWrongRecipientHtml,
   LOCK_ICON,
+  noWorkspaceHtml,
   notConfiguredHtml,
   playgroundBusyHtml,
   playgroundRestrictedHtml,
@@ -68,6 +69,7 @@ import {
   exchangeCode,
   fetchUserinfo,
   resolvePrincipal,
+  AdmissionRefusedError,
   verifyIdToken,
   type OidcConfig,
   type PrincipalRule,
@@ -1491,6 +1493,7 @@ const tenantChoice = createTenantChoice({
   pin: (returnTo) => appHandoff.pin(returnTo),
   cardPage,
   signInErrorHtml,
+  noWorkspaceHtml,
   sendHtml: (res, status, html, scriptHash) =>
     sendHtml(res, status, html, scriptHash ? `${PAGE_CSP}; script-src '${scriptHash}'` : PAGE_CSP),
   finishSignIn,
@@ -1644,6 +1647,13 @@ async function finishSignIn(
       clearCookie("portal_oidc_tmp", "/auth", SECURE_COOKIES),
       clearCookie("portal_tenant_choice", "/auth", SECURE_COOKIES),
     ]);
+    if (e instanceof AdmissionRefusedError && tenant === undefined) {
+      const email = verifiedEmail(userinfo);
+      const shared = email
+        ? (await coreEmailTenants(CORE, CORE_SIGNING_SECRET, email).catch(() => null))?.shared
+        : false;
+      if (shared) return sendHtml(res, 403, noWorkspaceHtml(email));
+    }
     return sendHtml(res, 400, signInErrorHtml(errMessage(e, "sign-in failed")));
   }
   if (!principal.appOnly) await signedInNames.record(principal.sub, name, tenant);

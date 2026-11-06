@@ -254,6 +254,8 @@ export interface TenantChoiceDeps {
   pin: (returnTo: string) => Promise<string | undefined>;
   cardPage: (o: CardPage) => string;
   signInErrorHtml: (detail: string) => string;
+  /** The page for an account that belongs to no workspace on the shared host. */
+  noWorkspaceHtml: (email: string | null) => string;
   sendHtml: (res: ServerResponse, status: number, html: string, scriptHash?: string) => void;
   finishSignIn: (res: ServerResponse, signIn: VerifiedSignIn, returnTo: string, tenant?: string) => Promise<void>;
   finishTrustedSignIn: (
@@ -301,8 +303,6 @@ export function createTenantChoice(deps: TenantChoiceDeps) {
     );
   }
 
-  // The choice cookie carries who signed in, not the workspace list: a person can belong to
-  // hundreds of workspaces, far past what a cookie holds, so the list is looked up again on use.
   function offerChoice(
     req: IncomingMessage | undefined,
     res: ServerResponse,
@@ -353,15 +353,20 @@ export function createTenantChoice(deps: TenantChoiceDeps) {
   async function settleTrusted(
     req: IncomingMessage | undefined,
     res: ServerResponse,
-    identity: TrustedSignIn & { email: string | null; returnTo: string; tenant?: string | undefined },
+    identity: TrustedSignIn & {
+      email: string | null;
+      returnTo: string;
+      tenant?: string | undefined;
+    },
   ): Promise<void> {
     const found = await coreSignInTenants(deps.core, deps.signingSecret, {
       email: identity.email,
       principal: identity.sub,
     });
-    if (found.shared && !found.tenants.length) return deps.sendHtml(res, 403, noAccessHtml());
     const who = { sub: identity.sub, name: identity.name };
     const pin = identity.tenant ?? (await deps.pin(identity.returnTo));
+    if (found.shared && !found.tenants.length)
+      return deps.sendHtml(res, 403, pin === undefined ? deps.noWorkspaceHtml(identity.email) : noAccessHtml());
     await settle(res, { trusted: who }, identity.returnTo, found.tenants, pin, req, identity.email);
   }
 

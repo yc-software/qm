@@ -242,9 +242,6 @@ export function createPostgresDirectoryStore(connectionString: string): Director
     return rosters;
   }
 
-  // A tenant is offered for sign-in unless settings.serving is false: a deployment's cutover writes
-  // false when it starts copying a company in, true once it serves it, and false again on rollback.
-  // A single-tenant install always serves its one tenant.
   async function branded(rows: Record<string, unknown>[]) {
     const found = await Promise.all(
       rows.map(({ id }) =>
