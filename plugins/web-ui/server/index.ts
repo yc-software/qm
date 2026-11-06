@@ -1220,11 +1220,6 @@ async function serveFileContent(c: WebCtx, playground = false): Promise<unknown>
   return pipeUpstreamFile(res, id, r.body);
 }
 
-// Relays a file body from core. A raw .pipe() leaves the source stream's
-// asynchronous "error" (core closing mid-body, e.g. `TypeError: terminated`)
-// unhandled, which crashes the whole process. pipeline() owns both ends: an
-// upstream failure destroys only this response, and a client disconnect
-// destroys the source, which cancels the upstream fetch.
 async function pipeUpstreamFile(res: ServerResponse, id: string, body: ReadableStream<Uint8Array>): Promise<void> {
   try {
     await pipeline(Readable.fromWeb(body as Parameters<typeof Readable.fromWeb>[0]), res);

@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 
-// Core sends headers and part of the body, then drops the connection.
 const core = createServer((req: IncomingMessage, res) => {
   const u = req.url ?? "";
   if (u.includes("/v1/files/cut-off/")) {
