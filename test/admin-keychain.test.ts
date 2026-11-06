@@ -116,7 +116,7 @@ test("credentials-page summary avoids unrelated history and exposes counts only"
     throw new Error("Summary must not scan unrelated data");
   };
   t.mock.method(s.keychain, "listAsks", fail);
-  t.mock.method(s.built.sessions, "distinctParticipants", fail);
+  t.mock.method(s.built.admin.users, "list", fail);
   t.mock.method(s.built.app, "directoryMembers", fail);
   const response = await fetch(s.base + "/v1/admin/keychain?summary=1", {
     headers: { "x-admin-actor": "admin-alice@default-org" },
@@ -156,7 +156,7 @@ test("user keychain reads only the selected owner's metadata and grants", async 
   };
   t.mock.method(s.keychain, "listAllMetadata", fail);
   t.mock.method(s.keychain, "listAsks", fail);
-  t.mock.method(s.built.sessions, "distinctParticipants", fail);
+  t.mock.method(s.built.admin.users, "list", fail);
   t.mock.method(s.built.app, "directoryMembers", fail);
   const response = await fetch(s.base + "/v1/admin/keychain?principal=Alice%40example.com", {
     headers: { "x-admin-actor": "admin-alice@default-org" },
@@ -177,4 +177,38 @@ test("user keychain reads only the selected owner's metadata and grants", async 
     headers: { "x-admin-actor": "nobody@default-org" },
   });
   assert.equal(denied.status, 403);
+});
+
+test("/v1/admin/keychain: a person's sign-ins are one row under their primary sign-in, named from the directory", async () => {
+  const s = start();
+  try {
+    await s.built.app.turn({
+      surface: "test",
+      actor: { externalId: "U-PAT" },
+      conversation: { kind: "dm", threadRef: "dm:U-PAT:t1" },
+      text: "hello",
+    });
+    await s.built.admin.users.link({
+      principalId: "U-PAT",
+      canonicalId: "pat@example.com",
+      evidence: "qa",
+      linkedBy: "",
+      createdAt: Date.now(),
+    });
+    await s.built.app.upsertDirectory([{ principalId: "U-PAT", displayName: "Pat", type: "internal" }]);
+    await s.keychain.save({ ownerId: "U-PAT", service: "github", secret: "s1", envKey: "GITHUB_TOKEN" });
+    await s.keychain.save({ ownerId: "pat@example.com", service: "linear", secret: "s2", envKey: "LINEAR_KEY" });
+    const user = (await s.built.admin.users.get("pat@example.com"))!;
+
+    const d: any = await (
+      await fetch(`${s.base}/v1/admin/keychain`, { headers: { "x-admin-actor": "admin-alice@default-org" } })
+    ).json();
+    const pat = d.people.filter((p: any) => p.userId === user.id || /pat/i.test(p.principalId));
+    assert.deepEqual(
+      pat.map((p: any) => [p.userId, p.principalId, p.displayName, p.credentialCount]),
+      [[user.id, "pat@example.com", "Pat", 2]],
+    );
+  } finally {
+    await s.close();
+  }
 });
