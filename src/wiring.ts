@@ -1760,11 +1760,8 @@ export function buildApp(
         (await directory.get(email))?.type === "internal")
     );
   };
-  const projects = createProjectStore(artifactMap<Project>("projects"), {
-    isActiveMember: (principalId) => identity.isInternal(identity.classify(principalId)),
-    advisoryLock,
-  });
   const isActiveMember = (principalId: string) => identity.isInternal(identity.classify(principalId));
+  const projects = createProjectStore(artifactMap<Project>("projects"), { isActiveMember, advisoryLock });
   const personaStore = createPostgresPersonaStore(databaseUrl);
   const personas = createPersonaService({
     store: personaStore,

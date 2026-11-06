@@ -38,7 +38,6 @@ export type ChannelPersonaResult =
 
 export interface ChannelPersonas {
   current(scope: ScopeId): Promise<Persona | undefined>;
-  all(): Promise<Array<{ channelId: string; persona: Persona }>>;
   get(actorId: string, channel: string): Promise<ChannelPersonaResult>;
   set(actor: Actor, channel: string, personaId: string | null): Promise<ChannelPersonaResult>;
   assertMayInstruct(scope: ScopeId, actor: Actor): Promise<void>;
@@ -48,7 +47,7 @@ export interface ChannelPersonas {
 }
 
 export interface ChannelPersonasDeps {
-  defaults: Pick<DurableMap<ChannelPersonaDefault>, "get" | "all" | "put" | "delete">;
+  defaults: Pick<DurableMap<ChannelPersonaDefault>, "get" | "put" | "delete">;
   store: Pick<PersonaStore, "get" | "access" | "ownerGrants" | "addOwner">;
   personas: Pick<PersonaService, "role">;
   flags: Pick<FeatureFlagStore, "enabled">;
@@ -191,18 +190,6 @@ export function createChannelPersonas(deps: ChannelPersonasDeps): ChannelPersona
   return {
     current,
 
-    async all() {
-      const rows = await deps.defaults.all();
-      if (!rows.length || !(await orgOn())) return [];
-      const shown: Array<{ channelId: string; persona: Persona }> = [];
-      for (const row of rows) {
-        const persona = await deps.store.get(row.personaId);
-        const { ref } = parseScopeId(row.scopeId);
-        if (persona && ref) shown.push({ channelId: ref, persona });
-      }
-      return shown;
-    },
-
     async get(actorId, query) {
       if (!(await orgOn())) return refuse("disabled", "channel personas need personas on for the whole organization");
       const found = await visibleChannel(actorId, query);
@@ -279,9 +266,13 @@ export function createChannelPersonas(deps: ChannelPersonasDeps): ChannelPersona
         throw new PersonaLocked(
           "This change reaches a channel that wears a persona, so only that persona's owners and writers, or an org admin, can change its instructions, standing orders or skills.",
         );
+      if (!actor.live)
+        throw new PersonaLocked(
+          `#${channel.name} wears the persona ${persona.name}, so its instructions, standing orders and skills change only on a turn that one of ${persona.name}'s owners or writers, or an org admin, sent themselves, never from an automation, a scheduled run or a forwarded request.`,
+        );
       const owner = await activeOwnerName(persona.id);
       throw new PersonaLocked(
-        `#${channel.name} wears the persona ${persona.name}. Only ${persona.name}'s owners and writers, or an org admin, can change its instructions, standing orders or skills, on a turn they sent themselves; ${owner ? `ask ${owner}` : "ask an org admin"}.`,
+        `#${channel.name} wears the persona ${persona.name}. Only ${persona.name}'s owners and writers, or an org admin, can change its instructions, standing orders or skills; ${owner ? `ask ${owner}` : "ask an org admin"}.`,
       );
     },
 

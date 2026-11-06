@@ -86,7 +86,7 @@ export function createPersonaService(deps: {
   teams?: Pick<TeamStore, "forTurn">;
   sessions: Pick<SessionStore, "setPersona">;
   keychain?: Pick<Keychain, "grantsForScope" | "createGrant" | "revokeGrant">;
-  isActive?: (principalId: string) => boolean;
+  isActive: (principalId: string) => boolean;
   channelPersona?: (scope: ScopeId) => Promise<Persona | undefined>;
 }): PersonaService {
   const { store } = deps;
@@ -186,7 +186,7 @@ export function createPersonaService(deps: {
           return { status: "invalid", message: "each scope may appear once" };
         const staysOwner = ({ scopeId: holder, role }: { scopeId: ScopeId; role: PersonaRole }) => {
           const { kind, ref } = parseScopeId(holder);
-          return role === "owner" && (kind !== "personal" || (deps.isActive?.(ref!) ?? true));
+          return role === "owner" && (kind !== "personal" || deps.isActive(ref!));
         };
         if (entries.some((entry) => entry.role === "owner") && !entries.some(staysOwner))
           return { status: "invalid", message: "a persona needs at least one active owner" };

@@ -5,6 +5,7 @@ import { withActor, type ApiCtx, type Route } from "./route.ts";
 import { KeychainError } from "../../credentials/keychain.ts";
 import type { PersonaResult } from "../../personas/persona-service.ts";
 import type { ChannelPersonaResult } from "../../personas/channel-personas.ts";
+import { livePersonCapability } from "../artifact-share.ts";
 
 function principalOf(ctx: ApiCtx, from: "query" | "body"): string | null {
   const body = isObj(ctx.body) && typeof ctx.body.principalId === "string" ? ctx.body.principalId : "";
@@ -105,8 +106,7 @@ async function setPersonaAccess(ctx: ApiCtx): Promise<void> {
   respond(ctx, await personas.setAccess(principalId, ctx.params.id!, access), "access");
 }
 
-const liveTurn = (ctx: ApiCtx): boolean =>
-  !ctx.capability || ctx.capability.liveAuthor === true || ctx.capability.liveActor === true;
+const liveTurn = (ctx: ApiCtx): boolean => !ctx.capability || livePersonCapability(ctx.capability);
 
 function liveOwnerTurn(ctx: ApiCtx): boolean {
   if (liveTurn(ctx)) return true;
