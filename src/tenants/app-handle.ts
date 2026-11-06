@@ -52,8 +52,8 @@ export const TENANT_APP_HANDLES: PgMigrationDefinition = {
   ],
 };
 
-export function appHostLabel(handle: string, name: string): string {
-  return `${handle}-${name}`;
+export function appHostLabel(handle: string | undefined, name: string): string {
+  return handle ? `${handle}-${name}` : name;
 }
 
 export function splitAppLabel(label: string): { handle: string; name: string } | undefined {

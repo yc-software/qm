@@ -32,6 +32,8 @@ import type { DurableMap } from "../persistence/durable-map.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { shq } from "../util/shell.ts";
+import { appHostLabel } from "../tenants/app-handle.ts";
+import { tenantAppHandle } from "../tenants/settings.ts";
 import { execFailure, swallow, swallowAs } from "../util/errors.ts";
 
 const APP_DIR = "/app";
@@ -102,7 +104,9 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
   const baseName = (d: Deployment): string => `${prefix}-app-${d.id.slice(0, 12).toLowerCase()}`;
   const volumeName = (d: Deployment): string => `${baseName(d)}-data`;
   const domainOf = (d: Deployment): string | undefined =>
-    appsDomain && visibility !== "internal" ? `${porterDnsLabel(d.name ?? d.id)}.${appsDomain}` : undefined;
+    appsDomain && visibility !== "internal"
+      ? `${porterDnsLabel(appHostLabel(tenantAppHandle(), d.name ?? d.id))}.${appsDomain.toLowerCase()}`
+      : undefined;
   const endpointOf = (body: { host: string; port?: number }): DeployEndpoint =>
     body.port
       ? { host: body.host, port: body.port }
