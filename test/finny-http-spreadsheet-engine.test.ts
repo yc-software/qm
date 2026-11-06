@@ -47,6 +47,7 @@ test("HTTP engine sends immutable bytes and binding to the configured endpoint",
       version: "24.2",
       timeoutMs: 30_000,
       maxResponseBytes: 100_000,
+      maxArtifactBytes: 100_000,
     },
     async (url, init) => {
       requests.push({ url: String(url), init: init ?? {}, body: JSON.parse(String(init?.body)) });
@@ -70,6 +71,7 @@ test("HTTP engine fails closed on provider errors and bounded response violation
     version: "1",
     timeoutMs: 30_000,
     maxResponseBytes: 8,
+    maxArtifactBytes: 100_000,
   };
   await assert.rejects(
     () =>
@@ -86,6 +88,13 @@ test("HTTP engine fails closed on provider errors and bounded response violation
         binding,
       }),
     /response.*limit/i,
+  );
+  await assert.rejects(
+    () =>
+      createHttpSpreadsheetCalculationEngine({ ...config, maxArtifactBytes: artifactBytes.byteLength - 1 }, async () =>
+        Response.json({ results }),
+      ).evaluate({ artifactBytes: Array.from(artifactBytes), binding }),
+    /artifact.*byte limit/i,
   );
   await assert.rejects(
     () =>

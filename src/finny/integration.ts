@@ -330,6 +330,7 @@ export function createFinnyToolServiceFactory(deps: {
             job.scopeId,
             job.provisionalRevision,
             "current artifact",
+            deps.config.spreadsheetEngine.maxArtifactBytes,
           );
           if (artifact.digest !== job.artifactDigest) throw new Error("Finny current artifact digest is invalid");
           const binding = {
@@ -422,6 +423,7 @@ async function immutableScopedFileBytes(
   scopeId: string,
   fileId: string,
   label: string,
+  maxBytes: number,
 ): Promise<{ bytes: Uint8Array; digest: string; createdBy: string }> {
   const opened = await files.open(fileId);
   if (
@@ -432,8 +434,21 @@ async function immutableScopedFileBytes(
   ) {
     throw new Error(`Finny ${label} is not an enabled immutable scoped evidence file`);
   }
+  if (opened.sizeBytes > maxBytes) {
+    opened.stream.destroy();
+    throw new Error(`Finny ${label} exceeds the configured byte limit`);
+  }
   const chunks: Buffer[] = [];
-  for await (const chunk of opened.stream) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  let streamedBytes = 0;
+  for await (const chunk of opened.stream) {
+    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    streamedBytes += bytes.byteLength;
+    if (streamedBytes > maxBytes) {
+      opened.stream.destroy();
+      throw new Error(`Finny ${label} exceeds the configured byte limit`);
+    }
+    chunks.push(bytes);
+  }
   const bytes = Buffer.concat(chunks);
   if (bytes.byteLength !== opened.sizeBytes) throw new Error(`Finny ${label} byte length is invalid`);
   const digest = createHash("sha256").update(bytes).digest("hex");
@@ -450,8 +465,15 @@ export async function resolveFinnyEvidenceFile(
     generation: number;
     verdict: FinnyVerdict;
   },
+  limits: { maxArtifactBytes: number; maxEvidenceBytes: number },
 ): Promise<string> {
-  const evidence = await immutableScopedFileBytes(files, input.job.scopeId, input.evidenceFileId, "evidence file");
+  const evidence = await immutableScopedFileBytes(
+    files,
+    input.job.scopeId,
+    input.evidenceFileId,
+    "evidence file",
+    limits.maxEvidenceBytes,
+  );
   if (!deterministicChecks.has(input.checkId)) return evidence.digest;
   if (evidence.createdBy !== SPREADSHEET_WORKER_PRINCIPAL_ID) {
     throw new Error("Finny evidence file lacks deterministic worker provenance");
@@ -462,6 +484,7 @@ export async function resolveFinnyEvidenceFile(
     input.job.scopeId,
     input.job.provisionalRevision,
     "current artifact",
+    limits.maxArtifactBytes,
   );
   if (artifact.digest !== input.job.artifactDigest) throw new Error("Finny current artifact digest is invalid");
   let candidate: unknown;
@@ -490,6 +513,7 @@ export async function resolveFinnyEvidenceFile(
 export async function resolveFinnyFileArtifactProposal(
   files: Pick<FileArtifactStore, "get">,
   proposal: FinnyArtifactProposal,
+  maxArtifactBytes: number,
 ): Promise<{ artifactDigest: string; provisionalRevision: string }> {
   const artifact = await files.get(proposal.provisionalRevision, { includeDisabled: true });
   if (
@@ -499,6 +523,9 @@ export async function resolveFinnyFileArtifactProposal(
     artifact.sha256 !== proposal.artifactDigest
   )
     throw new Error("Finny artifact proposal does not match an immutable file artifact");
+  if (artifact.sizeBytes > maxArtifactBytes) {
+    throw new Error("Finny artifact proposal exceeds the configured byte limit");
+  }
   return { artifactDigest: artifact.sha256, provisionalRevision: artifact.id };
 }
 

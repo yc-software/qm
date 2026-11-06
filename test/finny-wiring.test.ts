@@ -1,10 +1,9 @@
 import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import { loadConfig } from "../src/config.ts";
 import { buildApp } from "../src/wiring.ts";
 import type { SpreadsheetCalculationEngine } from "../src/finny/deterministic-spreadsheet-worker.ts";
-import { stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 
 const finny = {
@@ -30,7 +29,16 @@ const configuredFinny = loadConfig({
   FINNY_SPREADSHEET_ENGINE_VERSION: "24.2",
   FINNY_SPREADSHEET_ENGINE_TIMEOUT_MS: "30000",
   FINNY_SPREADSHEET_ENGINE_MAX_RESPONSE_BYTES: "1048576",
+  FINNY_SPREADSHEET_ENGINE_MAX_ARTIFACT_BYTES: "52428800",
+  FINNY_MAX_EVIDENCE_BYTES: "4194304",
 }).finny!;
+
+function stopAfter(t: TestContext, built: ReturnType<typeof buildApp>) {
+  t.after(async () => {
+    await built.runtime.stop();
+  });
+  return built;
+}
 
 const engine: SpreadsheetCalculationEngine = {
   name: "approved-test-engine",
@@ -47,19 +55,20 @@ test("Finny-enabled build fails before startup without an approved spreadsheet e
   );
 });
 
-test("Finny-enabled build accepts an explicitly injected spreadsheet engine", () => {
-  const built = stopAtEnd(
+test("Finny-enabled build accepts an explicitly injected spreadsheet engine", (t) => {
+  const built = stopAfter(
+    t,
     buildApp(testConfig({ finny: finny as any, shutdownDrainMs: 5_000 }), { spreadsheetCalculationEngine: engine }),
   );
   assert.ok(built.finnyCurrentJobReader);
 });
 
-test("stock Finny wiring selects the environment-configured HTTP engine", () => {
-  const built = stopAtEnd(buildApp(testConfig({ finny: configuredFinny, shutdownDrainMs: 5_000 })));
+test("stock Finny wiring selects the environment-configured HTTP engine", (t) => {
+  const built = stopAfter(t, buildApp(testConfig({ finny: configuredFinny, shutdownDrainMs: 5_000 })));
   assert.ok(built.finnyCurrentJobReader);
 });
 
-test("ordinary builds remain unaffected without a spreadsheet engine", () => {
-  const built = stopAtEnd(buildApp(testConfig({ shutdownDrainMs: 5_000 })));
+test("ordinary builds remain unaffected without a spreadsheet engine", (t) => {
+  const built = stopAfter(t, buildApp(testConfig({ shutdownDrainMs: 5_000 })));
   assert.equal(built.finnyCurrentJobReader, undefined);
 });

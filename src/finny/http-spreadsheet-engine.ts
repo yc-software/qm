@@ -57,6 +57,9 @@ export function createHttpSpreadsheetCalculationEngine(
     name: config.name,
     version: config.version,
     async evaluate(input: SpreadsheetCalculationInput): Promise<readonly SpreadsheetWorkerResult[]> {
+      if (input.artifactBytes.length > config.maxArtifactBytes) {
+        throw new Error("Spreadsheet engine artifact exceeds the configured byte limit");
+      }
       const response = await fetcher(config.url, {
         method: "POST",
         headers: { "content-type": "application/json", accept: "application/json" },

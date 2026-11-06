@@ -2173,7 +2173,11 @@ export function buildApp(
           },
         },
         evidenceAuthority: {
-          resolve: (input) => resolveFinnyEvidenceFile(files, input),
+          resolve: (input) =>
+            resolveFinnyEvidenceFile(files, input, {
+              maxArtifactBytes: config.finny!.spreadsheetEngine.maxArtifactBytes,
+              maxEvidenceBytes: config.finny!.maxEvidenceBytes,
+            }),
         },
         artifactBinding: {
           async resolve(input) {
@@ -2186,7 +2190,7 @@ export function buildApp(
               proposal.runId !== input.runId
             )
               throw new Error("Finny artifact proposal does not match current runtime authority");
-            return resolveFinnyFileArtifactProposal(files, proposal);
+            return resolveFinnyFileArtifactProposal(files, proposal, config.finny!.spreadsheetEngine.maxArtifactBytes);
           },
         },
         workerPolicy: {

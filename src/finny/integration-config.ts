@@ -9,6 +9,7 @@ export interface FinnySpreadsheetEngineConfig {
   version: string;
   timeoutMs: number;
   maxResponseBytes: number;
+  maxArtifactBytes: number;
 }
 
 export interface FinnyIntegrationConfig {
@@ -17,6 +18,7 @@ export interface FinnyIntegrationConfig {
   maxReworks: number;
   workerGrantTtlMs: number;
   spreadsheetEngine: FinnySpreadsheetEngineConfig;
+  maxEvidenceBytes: number;
 }
 
 const REQUIRED = [
@@ -32,6 +34,8 @@ const REQUIRED = [
   "FINNY_SPREADSHEET_ENGINE_VERSION",
   "FINNY_SPREADSHEET_ENGINE_TIMEOUT_MS",
   "FINNY_SPREADSHEET_ENGINE_MAX_RESPONSE_BYTES",
+  "FINNY_SPREADSHEET_ENGINE_MAX_ARTIFACT_BYTES",
+  "FINNY_MAX_EVIDENCE_BYTES",
 ] as const;
 
 function required(env: NodeJS.ProcessEnv, name: (typeof REQUIRED)[number]): string {
@@ -92,6 +96,8 @@ export function finnyIntegrationConfigFromEnv(env: NodeJS.ProcessEnv): FinnyInte
       version: required(env, "FINNY_SPREADSHEET_ENGINE_VERSION"),
       timeoutMs: positiveInteger(env, "FINNY_SPREADSHEET_ENGINE_TIMEOUT_MS"),
       maxResponseBytes: positiveInteger(env, "FINNY_SPREADSHEET_ENGINE_MAX_RESPONSE_BYTES"),
+      maxArtifactBytes: positiveInteger(env, "FINNY_SPREADSHEET_ENGINE_MAX_ARTIFACT_BYTES"),
     },
+    maxEvidenceBytes: positiveInteger(env, "FINNY_MAX_EVIDENCE_BYTES"),
   };
 }

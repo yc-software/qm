@@ -30,6 +30,15 @@ function harness(
       findingPolicy: { id: "bounds.v1", maxFindings: 4, maxCodeLength: 20, maxMessageLength: 200 },
       maxReworks: 2,
       workerGrantTtlMs: 1000,
+      spreadsheetEngine: {
+        url: "https://engine.example",
+        name: "test",
+        version: "1",
+        timeoutMs: 1000,
+        maxResponseBytes: 100_000,
+        maxArtifactBytes: 100_000,
+      },
+      maxEvidenceBytes: 100_000,
     },
     jobs: {
       async createJob(input: any) {
@@ -353,15 +362,24 @@ test("artifact binding resolves immutable bytes from Core file authority", async
     provisionalRevision: "file-1",
     idempotencyKey: "ready-1",
   };
-  const get = async () => ({ id: "file-1", ownerScopeId: "scope-1", sha256: "sha-1", enabled: true });
-  assert.deepEqual(await resolveFinnyFileArtifactProposal({ get } as any, proposal), {
+  const get = async () => ({ id: "file-1", ownerScopeId: "scope-1", sha256: "sha-1", sizeBytes: 5, enabled: true });
+  assert.deepEqual(await resolveFinnyFileArtifactProposal({ get } as any, proposal, 5), {
     artifactDigest: "sha-1",
     provisionalRevision: "file-1",
   });
   await assert.rejects(
     () =>
-      resolveFinnyFileArtifactProposal({ get: async () => ({ ...(await get()), sha256: "other" }) } as any, proposal),
+      resolveFinnyFileArtifactProposal(
+        { get: async () => ({ ...(await get()), sha256: "other" }) } as any,
+        proposal,
+        5,
+      ),
     /does not match/,
+  );
+  await assert.rejects(
+    () =>
+      resolveFinnyFileArtifactProposal({ get: async () => ({ ...(await get()), sizeBytes: 6 }) } as any, proposal, 5),
+    /artifact proposal.*byte limit/i,
   );
 });
 
@@ -438,7 +456,7 @@ test("evidence authority derives immutable scoped file digests and verifies dete
   }).run({ artifactBytes, binding });
   const evidenceBytes = new TextEncoder().encode(JSON.stringify(envelope));
   const evidenceSha = createHash("sha256").update(evidenceBytes).digest("hex");
-  const records = new Map([
+  const records = new Map<string, any>([
     ["artifact-file", { bytes: artifactBytes, sha256: artifactDigest, ownerScopeId: "scope-1", enabled: true }],
     [
       "evidence-file",
@@ -462,13 +480,26 @@ test("evidence authority derives immutable scoped file digests and verifies dete
       if (!value) return null;
       const bytes = value.bytes;
       const sha256 = value.sha256 ?? createHash("sha256").update(bytes).digest("hex");
+      const streamBytes = value.streamBytes ?? bytes;
+      const stream = Readable.from(
+        (async function* () {
+          value.onRead?.();
+          yield streamBytes;
+        })(),
+      );
+      const destroy = stream.destroy.bind(stream);
+      stream.destroy = (error) => {
+        value.onDestroy?.();
+        return destroy(error);
+      };
       return {
         artifact: { id, ...value, sha256 },
-        sizeBytes: bytes.length,
-        stream: Readable.from([bytes]),
+        sizeBytes: value.sizeBytes ?? bytes.length,
+        stream,
       };
     },
   };
+  const limits = { maxArtifactBytes: artifactBytes.length, maxEvidenceBytes: evidenceBytes.length };
   const job = {
     id: "job-1",
     scopeId: "scope-1",
@@ -477,67 +508,164 @@ test("evidence authority derives immutable scoped file digests and verifies dete
     policy,
   } as FinnyJob;
   assert.equal(
-    await resolveFinnyEvidenceFile(files as any, {
-      job,
-      evidenceFileId: "evidence-file",
-      checkId: "formula.recalculate",
-      generation: 2,
-      verdict: "pass",
-    }),
+    await resolveFinnyEvidenceFile(
+      files as any,
+      {
+        job,
+        evidenceFileId: "evidence-file",
+        checkId: "formula.recalculate",
+        generation: 2,
+        verdict: "pass",
+      },
+      limits,
+    ),
     envelope.envelopeDigest,
   );
 
   await assert.rejects(
-    resolveFinnyEvidenceFile(files as any, {
-      job,
-      evidenceFileId: "forged-envelope-file",
-      checkId: "formula.recalculate",
-      generation: 2,
-      verdict: "pass",
-    }),
+    resolveFinnyEvidenceFile(
+      files as any,
+      {
+        job,
+        evidenceFileId: "forged-envelope-file",
+        checkId: "formula.recalculate",
+        generation: 2,
+        verdict: "pass",
+      },
+      limits,
+    ),
     /deterministic worker provenance/i,
   );
 
   assert.equal(
-    await resolveFinnyEvidenceFile(files as any, {
-      job,
-      evidenceFileId: "generic-file",
-      checkId: "financial.reconcile",
-      generation: 1,
-      verdict: "pass",
-    }),
+    await resolveFinnyEvidenceFile(
+      files as any,
+      {
+        job,
+        evidenceFileId: "generic-file",
+        checkId: "financial.reconcile",
+        generation: 1,
+        verdict: "pass",
+      },
+      limits,
+    ),
     createHash("sha256").update("generic evidence").digest("hex"),
   );
   await assert.rejects(
-    resolveFinnyEvidenceFile(files as any, {
-      job,
-      evidenceFileId: "generic-file",
-      checkId: "formula.recalculate",
-      generation: 2,
-      verdict: "pass",
-    }),
+    resolveFinnyEvidenceFile(
+      files as any,
+      {
+        job,
+        evidenceFileId: "generic-file",
+        checkId: "formula.recalculate",
+        generation: 2,
+        verdict: "pass",
+      },
+      limits,
+    ),
     /envelope|JSON|deterministic/i,
   );
   await assert.rejects(
-    resolveFinnyEvidenceFile(files as any, {
-      job,
-      evidenceFileId: "evidence-file",
-      checkId: "summary.crossfoot",
-      generation: 3,
-      verdict: "pass",
-    }),
+    resolveFinnyEvidenceFile(
+      files as any,
+      {
+        job,
+        evidenceFileId: "evidence-file",
+        checkId: "summary.crossfoot",
+        generation: 3,
+        verdict: "pass",
+      },
+      limits,
+    ),
     /verdict/i,
   );
   records.set("wrong-owner", { bytes: evidenceBytes, sha256: evidenceSha, ownerScopeId: "scope-2", enabled: true });
   await assert.rejects(
-    resolveFinnyEvidenceFile(files as any, {
-      job,
-      evidenceFileId: "wrong-owner",
-      checkId: "financial.reconcile",
-      generation: 1,
-      verdict: "pass",
-    }),
+    resolveFinnyEvidenceFile(
+      files as any,
+      {
+        job,
+        evidenceFileId: "wrong-owner",
+        checkId: "financial.reconcile",
+        generation: 1,
+        verdict: "pass",
+      },
+      limits,
+    ),
     /immutable scoped evidence file/i,
+  );
+  let oversizedMetadataRead = false;
+  let oversizedMetadataDestroyed = false;
+  records.set("oversized-evidence-metadata", {
+    bytes: new Uint8Array([1]),
+    onRead: () => {
+      oversizedMetadataRead = true;
+    },
+    onDestroy: () => {
+      oversizedMetadataDestroyed = true;
+    },
+    sizeBytes: limits.maxEvidenceBytes + 1,
+    ownerScopeId: "scope-1",
+    enabled: true,
+  });
+  await assert.rejects(
+    resolveFinnyEvidenceFile(
+      files as any,
+      {
+        job,
+        evidenceFileId: "oversized-evidence-metadata",
+        checkId: "financial.reconcile",
+        generation: 1,
+        verdict: "pass",
+      },
+      limits,
+    ),
+    /evidence file.*byte limit/i,
+  );
+  assert.equal(oversizedMetadataRead, false);
+  assert.equal(oversizedMetadataDestroyed, true);
+  records.set("lying-evidence-stream", {
+    bytes: new Uint8Array([1]),
+    streamBytes: new Uint8Array(limits.maxEvidenceBytes + 1),
+    sizeBytes: 1,
+    ownerScopeId: "scope-1",
+    enabled: true,
+  });
+  await assert.rejects(
+    resolveFinnyEvidenceFile(
+      files as any,
+      {
+        job,
+        evidenceFileId: "lying-evidence-stream",
+        checkId: "financial.reconcile",
+        generation: 1,
+        verdict: "pass",
+      },
+      limits,
+    ),
+    /evidence file.*byte limit/i,
+  );
+  const oversizedArtifactJob = { ...job, provisionalRevision: "oversized-artifact-metadata" };
+  records.set("oversized-artifact-metadata", {
+    bytes: artifactBytes,
+    sizeBytes: limits.maxArtifactBytes + 1,
+    sha256: artifactDigest,
+    ownerScopeId: "scope-1",
+    enabled: true,
+  });
+  await assert.rejects(
+    resolveFinnyEvidenceFile(
+      files as any,
+      {
+        job: oversizedArtifactJob,
+        evidenceFileId: "evidence-file",
+        checkId: "formula.recalculate",
+        generation: 2,
+        verdict: "pass",
+      },
+      limits,
+    ),
+    /current artifact.*byte limit/i,
   );
 });
 

@@ -18,6 +18,8 @@ const enabled = {
   FINNY_SPREADSHEET_ENGINE_VERSION: "24.2",
   FINNY_SPREADSHEET_ENGINE_TIMEOUT_MS: "30000",
   FINNY_SPREADSHEET_ENGINE_MAX_RESPONSE_BYTES: "1048576",
+  FINNY_SPREADSHEET_ENGINE_MAX_ARTIFACT_BYTES: "52428800",
+  FINNY_MAX_EVIDENCE_BYTES: "4194304",
 };
 
 test("Finny integration is disabled by default", () => {
@@ -56,7 +58,9 @@ test("enabled Finny integration preserves configured policy and limits", () => {
       version: enabled.FINNY_SPREADSHEET_ENGINE_VERSION,
       timeoutMs: 30000,
       maxResponseBytes: 1048576,
+      maxArtifactBytes: 52428800,
     },
+    maxEvidenceBytes: 4194304,
   });
 });
 
@@ -84,4 +88,9 @@ test("enabled Finny integration rejects invalid settings instead of applying fal
     () => loadConfig({ ...enabled, FINNY_SPREADSHEET_ENGINE_MAX_RESPONSE_BYTES: "0" }),
     /FINNY_SPREADSHEET_ENGINE_MAX_RESPONSE_BYTES/,
   );
+  assert.throws(
+    () => loadConfig({ ...enabled, FINNY_SPREADSHEET_ENGINE_MAX_ARTIFACT_BYTES: "0" }),
+    /FINNY_SPREADSHEET_ENGINE_MAX_ARTIFACT_BYTES/,
+  );
+  assert.throws(() => loadConfig({ ...enabled, FINNY_MAX_EVIDENCE_BYTES: "0" }), /FINNY_MAX_EVIDENCE_BYTES/);
 });
