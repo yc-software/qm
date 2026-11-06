@@ -6,6 +6,10 @@ import { finishTiming, traceStatus, type TimingResult } from "../../chassis/src/
 import { errDetail, swallow } from "../../chassis/src/errors.ts";
 
 const MAX_TIMINGS_PER_PAGE = 200;
+const BENIGN_BROWSER_NOTICES = [
+  "ResizeObserver loop completed with undelivered notifications.",
+  "ResizeObserver loop limit exceeded",
+];
 const API_RESOURCES = new Set([
   "approvals",
   "blobs",
@@ -201,7 +205,11 @@ export async function initializeBrowserErrors(me: Me): Promise<void> {
               (error.name === "TypeError" &&
                 ["Failed to fetch", "NetworkError when attempting to fetch resource.", "Load failed"].includes(
                   error.message,
-                ))))
+                )))) ||
+          (error === undefined &&
+            BENIGN_BROWSER_NOTICES.some((notice) =>
+              (event.exception?.values?.[0]?.value ?? event.message ?? "").includes(notice),
+            ))
           ? null
           : event;
       },
