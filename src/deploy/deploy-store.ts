@@ -34,6 +34,13 @@ export interface DeployEndpoint {
   socksProxyPort?: number;
 }
 
+export function deploymentAppUrl(
+  d: Pick<Deployment, "id" | "name">,
+  appsDomain: string | undefined,
+): string | undefined {
+  return appsDomain ? `https://${d.name ?? d.id}.${appsDomain}/` : undefined;
+}
+
 export function publicUrlOf(endpoint: DeployEndpoint | null | undefined): string | undefined {
   const raw = endpoint?.publicUrl;
   if (!raw) return raw ?? undefined;

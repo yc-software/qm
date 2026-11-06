@@ -18,13 +18,14 @@ import { escapeHtml } from "../../../plugins/chassis/src/http.ts";
 import { canonicalPayload } from "../../../plugins/chassis/src/source-auth-sign.ts";
 import { sendJson, verifyOrReject } from "../http.ts";
 import { mintPortalIdentity, verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../auth/portal-identity.ts";
-import { audit, authorizeAdmin, isObj, orgScope } from "./shared.ts";
+import { audit, authorizeAdmin, exportTokenAccepted, isObj, orgScope } from "./shared.ts";
 import { parseScopeId, scopeId, type Permission } from "../../types.ts";
 import type { ApiCtx, BaseCtx, Route } from "./route.ts";
 import { CONFIG_DEFAULTS } from "../../config.ts";
 import { livePersonCapability, resolveShareTarget as resolveShareTargetGrammar } from "../artifact-share.ts";
 import { verifyDeployGitAccess, viewerIdentityKey } from "../../deploy/access-token.ts";
 import { appAnnotationAsset } from "../../deploy/app-annotate.ts";
+import { deploymentAppUrl, publicUrlOf } from "../../deploy/deploy-store.ts";
 import { APP_SHELL_PATH_PREFIX, appShellHtml } from "../../deploy/app-shell.ts";
 import type { AppViewAuthMode } from "../../deploy/page-views.ts";
 import { principalDestination } from "../../reach/reach.ts";
@@ -173,6 +174,7 @@ const GATEWAY_AUTH_HEADERS = [
   PORTAL_IDENTITY_HEADER,
 ];
 
+const DEPLOYMENT_EXPORT_PRINCIPAL = "deployment-export";
 const PROXY_BUFFER_MAX_BYTES = 10_000_000;
 const AGENT_FETCH_DEFAULT_MAX_BYTES = 256 * 1024;
 const AGENT_FETCH_MAX_BYTES = 1024 * 1024;
@@ -1697,7 +1699,41 @@ function sendShareFailure(res: ApiCtx["res"], e: unknown): void {
   return sendJson(res, 400, { error: "share_failed", message: errMessage(e) });
 }
 
+async function deploymentExport(ctx: BaseCtx): Promise<void> {
+  const { res, app, deps } = ctx;
+  if (!exportTokenAccepted(ctx, deps.spendExportToken)) return;
+  const deployments = (await app.listDeployments())
+    .filter((d) => d.status !== "archived")
+    .map((d) => {
+      const view = deploymentView(d);
+      const url = deploymentAppUrl(d, deps.deployAppsDomain) ?? publicUrlOf(d.endpoint);
+      return {
+        id: view.id,
+        ...(view.name ? { name: view.name } : {}),
+        ...(view.displayName ? { displayName: view.displayName } : {}),
+        url: url ?? null,
+        createdBy: view.createdBy,
+        ownerScopeId: view.ownerScopeId,
+        status: view.status,
+        public: view.public,
+        ...(view.createdAt !== undefined ? { createdAt: view.createdAt } : {}),
+        ...(view.updatedAt !== undefined ? { updatedAt: view.updatedAt } : {}),
+        ...(view.lastAccessAt !== undefined ? { lastAccessAt: view.lastAccessAt } : {}),
+      };
+    });
+  const scope = orgScope(deps);
+  audit(deps, {
+    principalId: DEPLOYMENT_EXPORT_PRINCIPAL,
+    action: "deployment.export",
+    resource: "deployments",
+    scopeLabel: scope,
+    detail: `deployments=${deployments.length}`,
+  });
+  sendJson(res, 200, { scopeId: scope, deployments });
+}
+
 export const deploymentRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
+  { method: "GET", path: "/v1/deployments/export", auth: "public", handle: deploymentExport },
   { match: isDeploymentGitRoute, auth: "public", handle: serveDeploymentGit },
   {
     match: (m, p) =>

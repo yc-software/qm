@@ -1,7 +1,7 @@
 import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { orgId as configOrgId } from "../config.ts";
 import { AssumeRoleCommand, STSClient } from "@aws-sdk/client-sts";
-import type { Deployment, DeploymentVersion } from "./deploy-store.ts";
+import { deploymentAppUrl, type Deployment, type DeploymentVersion } from "./deploy-store.ts";
 import type { DeployEndpoint, DeployProvider, DeployReconcileInput } from "./deploy-provider.ts";
 import { bytes, normalizeRelPath, posixJoin, readTree } from "./deploy-fs.ts";
 import { AwsApiError, createMicrovmApi, createMicrovmClient, type AwsMicrovmApi } from "../sandbox/aws-microvm-api.ts";
@@ -544,9 +544,8 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
       httpVersion: "2",
       proxyHeaders: { "X-aws-proxy-auth": token, "X-aws-proxy-port": String(appPort) },
     };
-    if (appsDomain) {
-      result.publicUrl = `https://${d.name ?? d.id}.${appsDomain}/`;
-    }
+    const publicUrl = deploymentAppUrl(d, appsDomain);
+    if (publicUrl) result.publicUrl = publicUrl;
     return result;
   }
 
