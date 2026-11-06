@@ -132,6 +132,11 @@ test("a tenanted database builds each tenant's users from that tenant's own link
     );
     assert.equal(linker?.primary_alias, "admin@a.test");
     assert.deepEqual(await owner.q(`SELECT to_regclass('principal_links') AS p`), [{ p: null }]);
+    assert.deepEqual(
+      await owner.q(`SELECT count(*)::int AS n FROM users WHERE tenant_id <> ALL($1::uuid[])`, [[a, b]]),
+      [{ n: 0 }],
+      "no user lands in a tenant whose rows did not name it",
+    );
 
     const users = createPostgresUserStore(appUrl(databaseUrl));
     assert.equal((await withTenant(a, () => users.get("U1")))?.principalId, "pat@a.test");
