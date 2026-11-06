@@ -1,4 +1,5 @@
 import { personaPrompt } from "../personas/persona-service.ts";
+import { personLabel } from "../identity/person-names.ts";
 import { isAgentReply, isOverheard, isUserItem, type Item, type NewItem, stepMessage } from "../sessions/items.ts";
 import type { ItemKind } from "../sessions/items-schema.ts";
 import { countTokens } from "../util/tokens.ts";
@@ -1239,7 +1240,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const gatewayBlock = renderGatewayContext(
         input.surface,
         input.gatewayContext,
-        conversation.kind === "dm" ? (cleanBrandingLabel(actor.displayName, 80) ?? actor.id) : undefined,
+        conversation.kind === "dm" ? (cleanBrandingLabel(actor.displayName, 80) ?? personLabel(actor.id)) : undefined,
       );
       if (gatewayBlock) turnContextBlocks["Where you are"] = gatewayBlock;
       const homeChannel =

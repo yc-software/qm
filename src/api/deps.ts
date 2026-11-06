@@ -46,6 +46,7 @@ import type { Scheduler } from "../cron/scheduler.ts";
 import type { WebhookReceiver } from "../webhooks/webhook-receiver.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
 import type { PrincipalLinkService } from "../identity/principal-links.ts";
+import type { UserStore } from "../identity/user-store.ts";
 import type { FeatureFlagStore } from "../feature-flags.ts";
 import type {
   ConnectorTokenStore,
@@ -199,6 +200,7 @@ export interface ServerDeps {
   loopIngress?: LoopIngressService;
   identity?: IdentityService;
   principalLinks?: PrincipalLinkService;
+  users?: Pick<UserStore, "get" | "resolve" | "setDisplayName">;
   keychain?: Keychain;
   serviceCreds?: ServiceCredentialStore;
   deliveries?: DeliveryStore;

@@ -1,4 +1,5 @@
 import { externalSlackRequestAllowed } from "../resolution/external-slack.ts";
+import { createPersonNames } from "../identity/person-names.ts";
 import { turnModelRefusal } from "./runtime-config.ts";
 import type { Run } from "../runs/run-store.ts";
 import {
@@ -148,7 +149,12 @@ export function createTurnMethods(
         };
       await deps.refreshModels?.();
       await deps.identity.refresh();
-      const actor: Principal = deps.identity.resolve(req.actor);
+      const personNames = createPersonNames({ users: deps.users });
+      const withStoredNames = async (people: Principal[]): Promise<Principal[]> => {
+        const names = await personNames.storedNames(people.filter((p) => !p.displayName?.trim()).map((p) => p.id));
+        return people.map((p) => (names.has(p.id) ? { ...p, displayName: names.get(p.id)! } : p));
+      };
+      const [actor] = (await withStoredNames([deps.identity.resolve(req.actor)])) as [Principal];
       if (!deps.identity.isInternal(actor)) {
         return {
           status: "refused",
@@ -246,11 +252,13 @@ export function createTurnMethods(
       const rawAudience = req.conversation.audience ?? [req.actor];
       const audience: Principal[] =
         project?.audience ??
-        rawAudience.map((a) => {
-          const p = deps.identity.classify(a.externalId, a.isExternalGuest);
-          if (p.id === actor.id) return actor;
-          return a.displayName ? { ...p, displayName: a.displayName } : p;
-        });
+        (await withStoredNames(
+          rawAudience.map((a) => {
+            const p = deps.identity.classify(a.externalId, a.isExternalGuest);
+            if (p.id === actor.id) return actor;
+            return a.displayName ? { ...p, displayName: a.displayName } : p;
+          }),
+        ));
       if (!audience.some((p) => p.id === actor.id)) audience.push(actor);
 
       const publishMembers =

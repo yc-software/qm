@@ -1,4 +1,5 @@
 import { externalAppSharingAllowed } from "../../feature-flags.ts";
+import { createPersonNames } from "../../identity/person-names.ts";
 import { deploymentAppTenant, deploymentGitTenant } from "./deployment-paths.ts";
 import { DeployAccessError, type DeployAccessErrorCode } from "../../deploy/deploy-service.ts";
 import { SocksProxyAgent } from "socks-proxy-agent";
@@ -1319,11 +1320,22 @@ async function listDeployments(ctx: ApiCtx): Promise<void> {
   if (!principalId) return sendJson(res, 200, { deployments: (await app.listDeployments()).map(deploymentView) });
   const visible = await app.listDeploymentsForViewer(principalId);
   const baseUrl = gitUrlBase(ctx);
+  const ownerOf = (d: { ownerScopeId?: string }) =>
+    d.ownerScopeId?.startsWith("personal:") ? d.ownerScopeId.slice("personal:".length) : undefined;
+  const names = await createPersonNames({ users: ctx.deps.users, directory: ctx.deps.directory }).labels(
+    visible.flatMap((d) => [ownerOf(d), d.createdBy].filter((id): id is string => !!id)),
+  );
   const deployments = await Promise.all(
     visible.map(async (d) => {
-      if (!secret) return d;
+      const owner = ownerOf(d);
+      const named = {
+        ...d,
+        ...(owner ? { ownerName: names.get(owner)! } : {}),
+        ...(d.createdBy ? { createdByName: names.get(d.createdBy)! } : {}),
+      };
+      if (!secret) return named;
       const git = await app.deploymentGitUrlFor(d.id, principalId, { secret, baseUrl });
-      return git ? { ...d, gitUrl: git.url } : d;
+      return git ? { ...named, gitUrl: git.url } : named;
     }),
   );
   return sendJson(res, 200, { deployments });

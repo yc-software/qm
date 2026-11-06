@@ -21,6 +21,7 @@ export interface UserRecord {
   source?: UserSource;
   offboardedAt?: number;
   offboardedBy?: string;
+  displayName?: string;
 }
 
 export interface UserLink {
@@ -62,6 +63,20 @@ export interface UserStore extends UserLinkStore {
   markOffboarded(id: string, by: string): Promise<UserRecord>;
   markReactivated(id: string): Promise<UserRecord | null>;
   markApps(ids: readonly string[]): Promise<number>;
+  setDisplayName(alias: string, name: string): Promise<boolean>;
+}
+
+export const DISPLAY_NAME_MAX = 200;
+
+export function cleanDisplayName(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const name = raw
+    .replace(/[\p{Cc}\p{Cf}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, DISPLAY_NAME_MAX)
+    .trim();
+  return name || undefined;
 }
 
 const userOf = (expr: string): string => `(SELECT l.user_id FROM user_links l WHERE l.alias_id = ${expr})`;
@@ -230,13 +245,20 @@ export const USER_SCHEMA_MIGRATIONS: PgMigrationDefinition[] = [
   ...TENANTED.before,
   ...USER_MIGRATIONS,
   ...TENANTED.after,
+  {
+    id: "users/v2/0006-display-name",
+    statements: [
+      `ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name TEXT
+         CHECK (display_name IS NULL OR (display_name <> '' AND char_length(display_name) <= ${DISPLAY_NAME_MAX}))`,
+    ],
+  },
 ];
 
 const COLUMNS = `u.id, u.primary_alias, u.kind,
   ARRAY(SELECT a.alias_id FROM user_links a WHERE a.user_id = u.id
          ORDER BY a.alias_id = u.primary_alias DESC, a.created_at, a.alias_id) AS aliases, ${msOf("u.first_seen_at")} AS first_seen_at, u.source,
   ${msOf("u.offboarded_at")} AS offboarded_at,
-  (SELECT b.primary_alias FROM users b WHERE b.id = u.offboarded_by) AS offboarded_by`;
+  (SELECT b.primary_alias FROM users b WHERE b.id = u.offboarded_by) AS offboarded_by, u.display_name`;
 const LINK_SELECT = `SELECT l.alias_id, u.primary_alias AS canonical_id, l.evidence,
     coalesce((SELECT b.primary_alias FROM users b WHERE b.id = l.linked_by), '') AS linked_by,
     ${msOf("l.created_at")} AS created_at
@@ -251,6 +273,7 @@ function toRecord(r: Record<string, unknown>): UserRecord {
     ...(r.first_seen_at != null ? { firstSeenAt: Number(r.first_seen_at), source: r.source as UserSource } : {}),
     ...(r.offboarded_at != null ? { offboardedAt: Number(r.offboarded_at) } : {}),
     ...(r.offboarded_by != null ? { offboardedBy: r.offboarded_by as string } : {}),
+    ...(r.display_name != null ? { displayName: r.display_name as string } : {}),
   };
 }
 
@@ -357,7 +380,8 @@ async function linkInTransaction(client: PoolClient, link: UserLink): Promise<Us
          source = CASE WHEN a.first_seen_at < c.first_seen_at OR c.first_seen_at IS NULL THEN a.source ELSE c.source END,
          offboarded_at = least(c.offboarded_at, a.offboarded_at),
          offboarded_by = CASE WHEN a.offboarded_at < c.offboarded_at OR c.offboarded_at IS NULL
-                              THEN a.offboarded_by ELSE c.offboarded_by END
+                              THEN a.offboarded_by ELSE c.offboarded_by END,
+         display_name = coalesce(c.display_name, a.display_name)
        FROM users a WHERE c.id = $1 AND a.id = $2`,
       [target, source],
     );
@@ -447,6 +471,16 @@ export function createPostgresUserStore(connectionString: string): UserStore {
         [ids.map((id) => foldPrincipalId(id))],
       );
       return rows.length;
+    },
+    async setDisplayName(alias, raw) {
+      const name = cleanDisplayName(raw);
+      if (!name) return false;
+      const user = await ensureUser(foldPrincipalId(alias));
+      const rows = await q(
+        `UPDATE users SET display_name = $2 WHERE id = $1 AND display_name IS DISTINCT FROM $2 RETURNING id`,
+        [user, name],
+      );
+      return rows.length > 0;
     },
     async markReactivated(id) {
       const rows = await q(

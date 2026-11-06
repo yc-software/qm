@@ -31,6 +31,7 @@ import { createServer, METHODS, type IncomingMessage, type ServerResponse } from
 import { ADMIN_LOGIN_SCRIPT, ADMIN_LOGIN_SCRIPT_HASH, openAdminLogin } from "./admin-login.ts";
 import { LRUCache } from "lru-cache";
 import { createCanonicalResolver, IdentityRejected } from "./canonical.ts";
+import { createSignedInNames } from "./signed-in-name.ts";
 import { createTrustedEntry, trustedEntryConfig } from "./trusted-entry.ts";
 import { coreAppHostTenant, createAppHandoff } from "./app-handoff.ts";
 import {
@@ -358,8 +359,19 @@ const canonicalPrincipal = createCanonicalResolver(async (sub, tenant) => {
     console.warn(`[portal] canonical principal lookup returned HTTP ${r.status}`);
     return null;
   }
-  const body = (await r.json()) as { canonicalId?: unknown };
-  return typeof body.canonicalId === "string" && body.canonicalId ? body.canonicalId : sub;
+  const body = (await r.json()) as { canonicalId?: unknown; displayName?: unknown; storedName?: unknown };
+  const id = typeof body.canonicalId === "string" && body.canonicalId ? body.canonicalId : sub;
+  const label = typeof body.displayName === "string" ? body.displayName.trim().slice(0, 200) : "";
+  const name = label || (id !== sub && id.includes("@") ? id : "");
+  const stored = typeof body.storedName === "string" && body.storedName.trim() !== "";
+  return { id, ...(name ? { name } : {}), ...(stored ? { stored: true as const } : {}) };
+});
+
+const signedInNames = createSignedInNames({
+  core: CORE,
+  signingSecret: CORE_SIGNING_SECRET,
+  identityHeaders: portalIdentityHeaders,
+  timeoutMs: CANONICAL_TIMEOUT_MS,
 });
 
 function identityUnavailable(req: IncomingMessage, res: ServerResponse): void {
@@ -917,8 +929,15 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       session = null;
     } else if (!canonical) return identityUnavailable(req, res);
     else {
-      if (canonical.stale) staleSession = { ...session, sub: canonical.id };
-      session = canonical.stale ? null : { ...session, sub: canonical.id };
+      if (session.name && !canonical.stored && !canonical.stale)
+        signedInNames.backfill(session.sub, session.name, session.t);
+      const known = {
+        ...session,
+        sub: canonical.id,
+        ...(!session.name && canonical.name ? { name: canonical.name } : {}),
+      };
+      if (canonical.stale) staleSession = known;
+      session = canonical.stale ? null : known;
     }
   }
 
@@ -1602,7 +1621,13 @@ async function authCallback(req: IncomingMessage, res: ServerResponse, url: URL)
   );
 }
 
-function finishTrustedSignIn(res: ServerResponse, who: TrustedSignIn, returnTo: string, tenant?: string): void {
+async function finishTrustedSignIn(
+  res: ServerResponse,
+  who: TrustedSignIn,
+  returnTo: string,
+  tenant?: string,
+): Promise<void> {
+  await signedInNames.record(who.sub, who.name, tenant);
   setAuthenticatedSession(res, who.sub, who.name, false, tenant);
   res.writeHead(302, { location: sanitizeReturnTo(returnTo, PUBLIC_URL, APPS_DOMAIN), "cache-control": "no-store" });
   res.end();
@@ -1633,6 +1658,7 @@ async function finishSignIn(
     }
     return sendHtml(res, 400, signInErrorHtml(errMessage(e, "sign-in failed")));
   }
+  if (!principal.appOnly) await signedInNames.record(principal.sub, name, tenant);
   setAuthenticatedSession(res, principal.sub, name, principal.appOnly, tenant);
   res.writeHead(302, {
     location: sanitizeReturnTo(returnTo, PUBLIC_URL, APPS_DOMAIN),

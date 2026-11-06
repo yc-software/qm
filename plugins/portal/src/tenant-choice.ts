@@ -258,7 +258,12 @@ export interface TenantChoiceDeps {
   noWorkspaceHtml: (email: string | null) => string;
   sendHtml: (res: ServerResponse, status: number, html: string, scriptHash?: string) => void;
   finishSignIn: (res: ServerResponse, signIn: VerifiedSignIn, returnTo: string, tenant?: string) => Promise<void>;
-  finishTrustedSignIn: (res: ServerResponse, who: TrustedSignIn, returnTo: string, tenant?: string) => void;
+  finishTrustedSignIn: (
+    res: ServerResponse,
+    who: TrustedSignIn,
+    returnTo: string,
+    tenant?: string,
+  ) => void | Promise<void>;
 }
 
 export function createTenantChoice(deps: TenantChoiceDeps) {

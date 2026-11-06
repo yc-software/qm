@@ -27,6 +27,7 @@ import type { OutgoingAttachment } from "../types.ts";
 import type { Readable } from "node:stream";
 import { type FileArtifact, type FileArtifactStore, type ListOwnedOptions } from "../files/file-artifact-store.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
+import type { UserStore } from "../identity/user-store.ts";
 import type { SessionStore, TranscriptItem } from "../sessions/session-store.ts";
 import type { Item } from "../sessions/items.ts";
 import { type Sandbox } from "../sandbox/sandbox.ts";
@@ -662,6 +663,7 @@ export interface AppDeps {
   resourceSearch: ResourceSearchStore;
   swarms?: SwarmService;
   identity: IdentityService;
+  users?: Pick<UserStore, "resolve">;
   publicWebUrl?: string;
   inviteMailer?: Mailer;
   sessions: SessionStore;

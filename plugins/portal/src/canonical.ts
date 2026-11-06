@@ -6,12 +6,18 @@ const STALE_MS = 5 * 60_000;
 
 export class IdentityRejected extends Error {}
 
+export interface CanonicalPerson {
+  id: string;
+  name?: string;
+  stored?: true;
+}
+
 export function createCanonicalResolver(
-  lookup: (sub: string, tenant?: string) => Promise<string | null>,
-): (sub: string, tenant?: string) => Promise<{ id: string; stale: boolean } | IdentityRejected | null> {
-  const known = new LRUCache<string, { id: string; at: number }>({ max: 10_000 });
-  const inflight = new Map<string, Promise<string | null | IdentityRejected>>();
-  const refresh = (key: string, sub: string, tenant?: string): Promise<string | null | IdentityRejected> => {
+  lookup: (sub: string, tenant?: string) => Promise<string | CanonicalPerson | null>,
+): (sub: string, tenant?: string) => Promise<(CanonicalPerson & { stale: boolean }) | IdentityRejected | null> {
+  const known = new LRUCache<string, CanonicalPerson & { at: number }>({ max: 10_000 });
+  const inflight = new Map<string, Promise<CanonicalPerson | null | IdentityRejected>>();
+  const refresh = (key: string, sub: string, tenant?: string): Promise<CanonicalPerson | null | IdentityRejected> => {
     const pending = inflight.get(key);
     if (pending) return pending;
     const started = lookup(sub, tenant)
@@ -23,9 +29,10 @@ export function createCanonicalResolver(
         console.warn(`[portal] canonical principal lookup failed: ${errMessage(error)}`);
         return null;
       })
-      .then((id) => {
-        if (typeof id === "string") known.set(key, { id, at: Date.now() });
-        return id;
+      .then((found) => {
+        const person = typeof found === "string" ? { id: found } : found;
+        if (person && !(person instanceof IdentityRejected)) known.set(key, { ...person, at: Date.now() });
+        return person;
       })
       .finally(() => inflight.delete(key));
     inflight.set(key, started);
@@ -35,9 +42,15 @@ export function createCanonicalResolver(
     const key = `${tenant ?? ""}|${sub}`;
     const found = known.get(key);
     const hit = found && Date.now() - found.at < STALE_MS ? found : undefined;
-    if (hit && Date.now() - hit.at < FRESH_MS) return { id: hit.id, stale: false };
-    const id = await refresh(key, sub, tenant);
-    if (id === null && hit) return { id: hit.id, stale: true };
-    return typeof id === "string" ? { id, stale: false } : id;
+    const answer = ({ id, name, stored }: CanonicalPerson, stale: boolean) => ({
+      id,
+      ...(name ? { name } : {}),
+      ...(stored ? { stored } : {}),
+      stale,
+    });
+    if (hit && Date.now() - hit.at < FRESH_MS) return answer(hit, false);
+    const person = await refresh(key, sub, tenant);
+    if (person === null && hit) return answer(hit, true);
+    return person === null || person instanceof IdentityRejected ? person : answer(person, false);
   };
 }
