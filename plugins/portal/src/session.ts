@@ -80,7 +80,6 @@ export function openSession(
   )
     return null;
   if (p.appOnly !== undefined && typeof p.appOnly !== "boolean") return null;
-  if (p.anon !== undefined) return null;
   if (expectedOrg !== undefined && p.org !== expectedOrg) return null;
   if (now >= p.exp * 1000) return null;
   const authenticatedAt = typeof p.auth === "number" ? p.auth : p.iat;
