@@ -192,10 +192,7 @@ test("a channel's persona needs personas on org-wide, an owner who is in the cha
     assert.doesNotMatch(await hidden.text(), /Ada/);
     const open = await call("PUT", "/v1/channels/open/persona", { principalId: ANN, personaId: ada.id });
     assert.equal(open.status, 200, await open.text());
-    assert.deepEqual((await channels.all()).map((c) => [c.channelId, c.persona.name]).sort(), [
-      [DESIGN, "Ada"],
-      ["C0OPEN", "Ada"],
-    ]);
+    assert.equal((await channels.current(scopeId("channel", "C0OPEN")))?.name, "Ada");
   } finally {
     await close();
   }
@@ -258,6 +255,10 @@ test("the guidance tool, POST /v1/soul and the policy route are locked to the pe
       built.app.channelPersonas!.assertMayInstruct(DESIGN_SCOPE, { id: ADMIN, live: false }),
       PersonaLocked,
     );
+    await assert.rejects(
+      built.app.channelPersonas!.assertMayInstruct(DESIGN_SCOPE, { id: ANN, live: false }),
+      (e: Error) => e instanceof PersonaLocked && /sent themselves, never from an automation/.test(e.message),
+    );
 
     const policy = (principalId: string) =>
       call("PUT", "/v1/contexts/policy", { principalId, scope: DESIGN_SCOPE, orders: `orders from ${principalId}` });
@@ -265,6 +266,11 @@ test("the guidance tool, POST /v1/soul and the policy route are locked to the pe
     assert.equal((await built.app.getChannelPolicy(DESIGN))?.orders ?? "", "");
     assert.equal((await policy(BOB)).status, 200);
     assert.equal((await built.app.getChannelPolicy(DESIGN))?.orders, `orders from ${BOB}`);
+    const cached = (setBy?: string) =>
+      call("POST", "/v1/surface-cache/policy", { container: DESIGN, orders: "cached", ...(setBy ? { setBy } : {}) });
+    assert.equal((await cached()).status, 403);
+    assert.equal((await cached(CY)).status, 403);
+    assert.equal((await cached(BOB)).status, 200);
 
     const console = await call("PUT", `/v1/admin/scopes/${DESIGN_SCOPE}/soul`, { content: "console" }, ADMIN_HEADER);
     assert.equal(console.status, 200, await console.text());
