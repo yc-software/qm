@@ -70,6 +70,8 @@ import {
 
 import { createModelPicker } from "./model-picker";
 
+const flipKey = /Mac|iP(hone|ad|od)/.test(navigator.platform) ? "⌘↵" : "Ctrl+↵";
+
 export type ComposerMenu = "effort" | "model" | "settings" | "loadout";
 
 const LEGACY_MODEL_STORAGE_KEY = "web-ui:model";
@@ -805,13 +807,19 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
         <button class="stop-btn" type="button" aria-label="Stopping…" disabled>${icon(Square, 16)}</button>
         ${sendButton("Send")}
       `;
-    const label = alwaysSteer() && canSteer(agent) ? "Steer the running task" : "Queue for after this turn";
+    const label = sendWhileWorkingLabel(agent);
     return html`
       <button class="stop-btn" type="button" aria-label="Stop" ${tip("Stop")} @click=${() => stopStreaming(agent)}>
         ${icon(Square, 16)}
       </button>
       ${sendButton(label)}
     `;
+  }
+
+  function sendWhileWorkingLabel(agent: Agent): string {
+    if (!canSteer(agent)) return "Queue for after this turn";
+    if (alwaysSteer()) return `Steer the running task (${flipKey} to queue)`;
+    return `Queue for after this turn (${flipKey} to steer)`;
   }
 
   function canSteer(agent: Agent): boolean {
@@ -1317,7 +1325,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     }
     if (e.key !== "Enter" || e.shiftKey) return;
     e.preventDefault();
-    void sendPrompt(agent);
+    void sendPrompt(agent, e.metaKey || e.ctrlKey);
   }
 
   function stopStreaming(agent: Agent): void {
@@ -1344,7 +1352,8 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       : mintSendKey();
   }
 
-  async function queueDraft(agent: Agent): Promise<void> {
+  /** flipSteer: Cmd/Ctrl+Enter sends the opposite of the "Sending while QM is working" setting. */
+  async function queueDraft(agent: Agent, flipSteer = false): Promise<void> {
     const threadRef = ctx.chat.state.threadRef;
     const text = composerState.draft.trim();
     const staged = composerState.attachments;
@@ -1365,7 +1374,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       if (stillHere()) restoreStagedOnFailure(text, sendable, composerState.error || "Could not queue the files.");
       return ctx.chat.drawActiveChat(agent);
     }
-    const steer = alwaysSteer() && canSteer(agent);
+    const steer = alwaysSteer() !== flipSteer && canSteer(agent);
     if (!(await enqueueTurn(agent, threadRef, text, uploaded, queuedFilesKey(sendable), steer))) {
       if (stillHere()) restoreStagedOnFailure(text, sendable, composerState.error);
     }
@@ -1551,20 +1560,20 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   };
   window.addEventListener("qm:prepare-update", preventUnsafeUpdate);
 
-  async function sendPrompt(agent: Agent): Promise<void> {
+  async function sendPrompt(agent: Agent, flipSteer = false): Promise<void> {
     pendingSubmissions++;
     try {
-      await sendPromptNow(agent);
+      await sendPromptNow(agent, flipSteer);
     } finally {
       pendingSubmissions--;
       if (disposed && !pendingSubmissions) window.removeEventListener("qm:prepare-update", preventUnsafeUpdate);
     }
   }
 
-  async function sendPromptNow(agent: Agent): Promise<void> {
+  async function sendPromptNow(agent: Agent, flipSteer = false): Promise<void> {
     if (!composerCanSend()) return;
     if (composerState.pasteView) closePasteView(agent);
-    if (agent.state.isStreaming) return queueDraft(agent);
+    if (agent.state.isStreaming) return queueDraft(agent, flipSteer);
     const draft = composerState.draft.trim();
     if (!draft && composerState.attachments.length === 0) return;
     const sideChat = ctx.chat.state.forkSession?.sideChat;
