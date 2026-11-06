@@ -86,6 +86,7 @@ test("Finny attestations require the current policy generation and deduplicate e
     generation: 1,
     verdict: "pass" as const,
     evidenceDigest: "evidence-sha256",
+    artifactDigest: input.artifactDigest,
     issuerPrincipalId: "U-auditor",
     issuerRunId: "run-auditor-1",
     idempotencyKey: randomUUID(),

@@ -38,6 +38,7 @@ export interface RecordFinnyAttestationInput {
   generation: number;
   verdict: FinnyVerdict;
   evidenceDigest: string;
+  artifactDigest: string;
   issuerPrincipalId: string;
   issuerRunId: string;
   idempotencyKey: string;

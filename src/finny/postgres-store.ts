@@ -53,6 +53,7 @@ const SCHEMA = [
     generation BIGINT NOT NULL CHECK (generation > 0),
     verdict TEXT NOT NULL CHECK (verdict IN ('pass', 'block')),
     evidence_digest TEXT NOT NULL CHECK (evidence_digest <> ''),
+    artifact_digest TEXT NOT NULL CHECK (artifact_digest <> ''),
     issuer_principal_id TEXT NOT NULL CHECK (issuer_principal_id <> ''),
     issuer_run_id TEXT NOT NULL CHECK (issuer_run_id <> ''),
     idempotency_key TEXT NOT NULL UNIQUE,
@@ -108,6 +109,7 @@ function rowToAttestation(row: Record<string, unknown>): FinnyAttestation {
     generation: Number(row.generation),
     verdict: row.verdict as FinnyAttestation["verdict"],
     evidenceDigest: row.evidence_digest as string,
+    artifactDigest: row.artifact_digest as string,
     issuerPrincipalId: row.issuer_principal_id as string,
     issuerRunId: row.issuer_run_id as string,
     idempotencyKey: row.idempotency_key as string,
@@ -123,6 +125,7 @@ function sameAttestation(row: FinnyAttestation, input: RecordFinnyAttestationInp
     row.generation === input.generation &&
     row.verdict === input.verdict &&
     row.evidenceDigest === input.evidenceDigest &&
+    row.artifactDigest === input.artifactDigest &&
     row.issuerPrincipalId === input.issuerPrincipalId &&
     row.issuerRunId === input.issuerRunId
   );
@@ -210,9 +213,9 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
         const now = Date.now();
         const inserted = await db.query(
           `INSERT INTO finny_attestations(
-            id, job_id, check_id, generation, verdict, evidence_digest,
+            id, job_id, check_id, generation, verdict, evidence_digest, artifact_digest,
             issuer_principal_id, issuer_run_id, idempotency_key, created_at
-          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
           ON CONFLICT (idempotency_key) DO NOTHING
           RETURNING *`,
           [
@@ -222,6 +225,7 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
             input.generation,
             input.verdict,
             input.evidenceDigest,
+            input.artifactDigest,
             input.issuerPrincipalId,
             input.issuerRunId,
             input.idempotencyKey,

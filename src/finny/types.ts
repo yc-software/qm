@@ -61,6 +61,7 @@ export interface FinnyAttestation {
   generation: number;
   verdict: FinnyVerdict;
   evidenceDigest: string;
+  artifactDigest: string;
   issuerPrincipalId: string;
   issuerRunId: string;
   idempotencyKey: string;
@@ -86,4 +87,26 @@ export interface FinnyFinalReceiptPayload {
 export interface FinnyFinalReceipt {
   token: string;
   payload: FinnyFinalReceiptPayload;
+}
+
+export type FinnyWorkerRole = "producer" | "auditor";
+
+export interface FinnyWorkerGrantPayload {
+  aud: "finny.worker";
+  jti: string;
+  scopeId: string;
+  jobId: string;
+  principalId: string;
+  role: FinnyWorkerRole;
+  runId: string;
+  artifactDigest: string;
+  policyDigest: string;
+  allowedChecks: FinnyCheckId[];
+  issuedAt: number;
+  expiresAt: number;
+}
+
+export interface FinnyWorkerGrant {
+  token: string;
+  payload: FinnyWorkerGrantPayload;
 }

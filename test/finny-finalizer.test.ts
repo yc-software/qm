@@ -49,6 +49,7 @@ async function attest(
     generation: job.policy.requiredGenerations[checkId],
     verdict,
     evidenceDigest: `evidence-${randomUUID()}`,
+    artifactDigest: job.artifactDigest,
     issuerPrincipalId: "U-auditor",
     issuerRunId: "run-auditor-1",
     idempotencyKey: randomUUID(),
