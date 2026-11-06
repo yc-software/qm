@@ -18,7 +18,7 @@ import { appState, can, signOut } from "./shell";
 import { isPlainLeftClick, UI_BASE } from "./deep-link";
 import { brandName } from "./ui";
 import { ADMIN_SECTIONS, VIEW_TITLE, adminMounter, settingsRoute } from "./admin/sections";
-import { sessionsState, setWebOnly } from "./sessions";
+import { sessionsState, setGroupByActivity, setWebOnly } from "./sessions";
 import { errMessage, swallowAs } from "../../chassis/src/errors";
 import { importTheme, isPalette, themeCss, themeTokens, type Palette } from "./theme-import";
 
@@ -403,6 +403,19 @@ function sidebarSurfaceRow(): TemplateResult {
   `;
 }
 
+function sidebarGroupingRow(): TemplateResult {
+  return choiceRow(
+    "Sidebar grouping",
+    "By activity lists every conversation newest first instead of under its scope.",
+    [
+      { value: false, label: "By scope" },
+      { value: true, label: "By activity" },
+    ],
+    sessionsState.groupByActivity,
+    setGroupByActivity,
+  );
+}
+
 let aiStatus: StatusResponse | null = null;
 let aiError = "";
 let aiBusy = false;
@@ -549,7 +562,12 @@ const SETTINGS_BASE = `${UI_BASE}/settings`;
 let adminHost: HTMLElement | null = null;
 let adminView = "";
 
-const settingsSection = () => (can("admin") ? settingsRoute(SETTINGS_BASE).view : "general");
+const PERSONAL_SECTIONS = ["general", "my-spend"];
+
+function settingsSection(): string {
+  const view = settingsRoute(SETTINGS_BASE).view;
+  return can("admin") || PERSONAL_SECTIONS.includes(view) ? view : "general";
+}
 
 function settingsGo(url: string, replace = false): void {
   history[replace ? "replaceState" : "pushState"](null, "", url);
@@ -605,8 +623,8 @@ function navItem(view: string, section: string): TemplateResult {
 function settingsNav(section: string): TemplateResult {
   return html`
     <nav class="settings-nav" aria-label="Settings sections">
-      ${navItem("general", section)}
-      ${ADMIN_SECTIONS.map(
+      ${PERSONAL_SECTIONS.map((view) => navItem(view, section))}
+      ${(can("admin") ? ADMIN_SECTIONS : []).map(
         (group) => html`
           <div class="settings-nav-label">${group.label}</div>
           ${group.views.map((view) => navItem(view, section))}
@@ -620,7 +638,7 @@ function generalPane(): TemplateResult {
   return html`
     <div class="settings-group">
       ${aiAccountsRow()} ${themeRow()} ${openBehaviorRow()} ${pinPromptRow()} ${sendWhileWorkingRow()}
-      ${sidebarSurfaceRow()} ${desktopRow()} ${accountRow()}
+      ${sidebarSurfaceRow()} ${sidebarGroupingRow()} ${desktopRow()} ${accountRow()}
       <div class="settings-row settings-slack-account">
         <qm-slack-account .user=${`${appState.me?.org}:${appState.me?.user}`}></qm-slack-account>
       </div>
@@ -650,8 +668,8 @@ function settingsPane(): TemplateResult {
           </p>`
         : nothing
     }
-    <div class="settings-layout ${can("admin") ? "with-nav" : ""}">
-      ${can("admin") ? settingsNav(section) : nothing}
+    <div class="settings-layout with-nav">
+      ${settingsNav(section)}
       <div class="settings-content" @click=${followSettingsLink}>
         ${general ? generalPane() : (adminHost ?? nothing)}
       </div>
@@ -670,8 +688,9 @@ function drawSettings(): void {
 }
 
 export function renderSettings(): void {
-  if (!can("admin") && settingsRoute(SETTINGS_BASE).view !== "general") history.replaceState(null, "", SETTINGS_BASE);
+  const section = settingsSection();
+  if (section !== settingsRoute(SETTINGS_BASE).view) history.replaceState(null, "", SETTINGS_BASE);
   drawSettings();
-  if (settingsSection() !== "general") void mountAdmin();
+  if (section !== "general") void mountAdmin();
   void loadAiStatus();
 }

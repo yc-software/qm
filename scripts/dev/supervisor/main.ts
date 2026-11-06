@@ -271,7 +271,6 @@ function writeLegacyMeta(booting: boolean): void {
     worktree,
     branch,
     port: String(ports.core),
-    web_port: String(ports.web),
     portal_port: String(ports.portal),
     handle,
     supervisor_pid: String(process.pid),
@@ -691,8 +690,7 @@ async function reload(body: Record<string, unknown>): Promise<Record<string, unk
     });
     const dryEnvSha = computeEnvSha(assembled.env);
     const allHealthy =
-      children.size === (spec.web === false ? 1 : CHILD_ORDER.length) &&
-      [...children.values()].every((c) => c.state === "healthy");
+      children.size === CHILD_ORDER.length && [...children.values()].every((c) => c.state === "healthy");
     return {
       ok: true,
       noop: dryEnvSha === currentEnvSha && allHealthy,
@@ -708,7 +706,7 @@ async function reload(body: Record<string, unknown>): Promise<Record<string, unk
   const newGitSha = gitHead(worktree);
   const noopEligible =
     newEnvSha === currentEnvSha &&
-    children.size === (spec.web === false ? 1 : CHILD_ORDER.length) &&
+    children.size === CHILD_ORDER.length &&
     [...children.values()].every((c) => c.state === "healthy");
   if (!force && noopEligible) {
     return {

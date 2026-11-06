@@ -1,10 +1,7 @@
-export interface RunActivityEntry {
-  seq: number;
-  parentSeq: number | null;
-  type: string;
-  payload: unknown;
-  createdAt: number;
-}
+import type { Item } from "../sessions/items.ts";
+
+export type RunActivityEntry =
+  { item: Item } | { marker: "text_start"; seq: number; createdAt: number; phase?: string; streamOffset?: number };
 
 export interface RunActivityStore {
   append(runId: string, entry: RunActivityEntry): Promise<void>;

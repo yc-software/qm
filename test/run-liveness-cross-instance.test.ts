@@ -28,7 +28,7 @@ test("a run executing on another instance still reports alive", async () => {
         origin: { kind: "human" },
       },
     });
-    const claimed = await built.runs.claim("some-other-instance", 60_000);
+    const claimed = (await built.runs.claim("some-other-instance", 60_000))[0] ?? null;
     assert.equal(claimed?.id, run.id, "the foreign worker holds the run");
 
     const view = await built.app.getRun(run.id);

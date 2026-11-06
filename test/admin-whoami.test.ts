@@ -11,7 +11,7 @@ import { signRequest } from "../src/auth/source-auth.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createAdminService } from "../src/admin/admin-service.ts";
 import { testConfig } from "./support/test-config.ts";
-import { testAdminGrantStore, testDatabaseUrl } from "./support/test-database.ts";
+import { testAdminGrantStore, testDatabaseUrl, testUsers } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 
 function start(withAdmin = true, signingSecret?: string) {
@@ -132,7 +132,7 @@ test("with a signing secret set, a whoami GET with a BAD/missing signature is 40
 });
 
 test("adminStatusOf reads the grant list directly (org_admin reported; non-admin otherwise)", async () => {
-  const svc = createAdminService(testAdminGrantStore());
+  const svc = createAdminService(testAdminGrantStore(), { users: testUsers() });
   const alice = svc.resolveActor("admin-alice@default-org")!;
   assert.deepEqual(await svc.adminStatusOf(alice), { isAdmin: true, role: "org_admin", scopeId: "org:default-org" });
   const nobody = svc.resolveActor("U-nobody@default-org")!;

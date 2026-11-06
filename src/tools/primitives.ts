@@ -1,4 +1,6 @@
+import { trialCronScript, type CronScriptTrial } from "../cron/script.ts";
 import type { AdminToolAccess } from "./admin.ts";
+import type { SelfApiCall } from "./self-api.ts";
 import { parkedOutputKey, type ToolOutputStore } from "../sessions/tool-output.ts";
 import { rankedSkills } from "../skills/materialize.ts";
 import type { SkillResolution } from "../skills/skill-store.ts";
@@ -16,8 +18,9 @@ import { readContextFile } from "../resolution/context-files.ts";
 import { type TurnContext } from "../resolution/turn-context.ts";
 import { canReadNotebook, readNotebook, searchNotebooks } from "../memory/cross-scope.ts";
 import type { SandboxAccessPlan, SandboxResource, SandboxResources } from "../sandbox/sandbox-resources.ts";
-import { join, posix } from "node:path";
-import { workspacePathOf } from "../sandbox/exec-file-ops.ts";
+import { posix } from "node:path";
+import { posixJoin, workspacePathOf } from "../sandbox/exec-file-ops.ts";
+import { shq } from "../util/shell.ts";
 import { DROPPED_PROXY_ENV } from "../sandbox/sandbox-env.ts";
 import { interpolateSplitEnv } from "../deployment/deployment-layer.ts";
 import type { CredentialPathSpec } from "../credentials/resident-paths.ts";
@@ -33,11 +36,9 @@ import type {
   Permission,
   Principal,
   ScopeId,
-  WorkspaceLayer,
 } from "../types.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { type PublishAudienceKind } from "../resolution/publish-audience.ts";
-import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import type { BotPolicy } from "../surface-cache/channel-policy-store.ts";
 import type { SessionSyscalls } from "../sessions/session-syscalls.ts";
 import { evaluateCommandWithLayer } from "../policy/command-policy.ts";
@@ -57,7 +58,7 @@ import { publicUrlOf } from "../deploy/deploy-store.ts";
 import { carriesGitMetadata } from "../deploy/deploy-fs.ts";
 import type { AclStore } from "../acl/acl-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
-import { TURN_FILES_DIR, type OutboundFile } from "../core/attachments.ts";
+import type { OutboundFile } from "../core/attachments.ts";
 import { errMessage, withCleanup } from "../util/errors.ts";
 import { quotedData } from "../util/text.ts";
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
@@ -71,7 +72,6 @@ import {
   type OutcomeReport,
 } from "../memory/provider-outcome.ts";
 import type { McpToolService } from "../mcp/mcp-tool-service.ts";
-import type { ReachResolution } from "../resolution/scope-reach.ts";
 import type {
   ControlService,
   CronCreateRequest,
@@ -172,11 +172,6 @@ export interface SkillResult {
   packDir?: string;
 }
 
-interface ReachedProvenance {
-  scopeId: ScopeId;
-  label: string;
-}
-
 export interface CommandCredential {
   handle: string;
   scratchOnly?: boolean;
@@ -201,8 +196,8 @@ export type AttachResult = { ok: true; files: AttachedFileMeta[]; staged: number
 export type AttachFiles = (files: readonly OutboundFile[], sandboxId?: string) => Promise<AttachResult>;
 
 export interface ToolContext extends SurfaceToolDeps {
-  installSharedCanvas?: (fileId: string) => Promise<string | null>;
   admin?: AdminToolAccess;
+  selfApi?: SelfApiCall;
   runtime?(request: RuntimeRequest, signal?: AbortSignal): Promise<RuntimeResult>;
   attach: AttachFiles;
   sessionSyscalls?: SessionSyscalls;
@@ -214,11 +209,10 @@ export interface ToolContext extends SurfaceToolDeps {
       timeoutSeconds?: number;
       sandboxId?: string;
       scratch?: boolean;
-      reachTarget?: string;
       signal?: AbortSignal;
       credentials?: string[];
     },
-  ): Promise<ExecResult & { reached?: ReachedProvenance; scratchReroute?: boolean }>;
+  ): Promise<ExecResult & { scratchReroute?: boolean }>;
   sandboxResources?(
     action: "list" | "create" | "default" | "retire",
     input?: { backend?: string; name?: string; sandboxId?: string | null },
@@ -423,12 +417,6 @@ export interface SurfaceSearchResult {
   message?: string;
 }
 
-interface SurfaceMembersResult {
-  ok: boolean;
-  members?: Array<{ displayName: string }>;
-  message?: string;
-}
-
 type SurfaceStandingOrderResult =
   | { ok: true; orders: string; bots?: Record<string, BotPolicy>; ambientEnabled?: boolean }
   | { ok: false; message: string };
@@ -452,7 +440,6 @@ export interface SurfaceToolDeps {
   readThread(opts?: { limit?: number }): Promise<SurfaceReadResult>;
   whatsNew(opts?: { since?: string }): Promise<SurfaceWhatsNewResult>;
   search(query: string, opts?: SurfaceSearchToolOpts): Promise<SurfaceSearchResult>;
-  readMembers(): Promise<SurfaceMembersResult>;
   getStandingOrder(): Promise<SurfaceStandingOrderResult>;
   setStandingOrder(
     orders: string | undefined,
@@ -476,7 +463,7 @@ export const CONTROL_UNAVAILABLE: ControlUnavailable = {
 export interface ToolContextDeps {
   desktopClientId?: string;
   admin?: AdminToolAccess;
-  installSharedCanvas?: (fileId: string) => Promise<string | null>;
+  selfApi?: SelfApiCall;
   sandbox: Sandbox;
   commandCredentials?: readonly CommandCredential[];
   resolveCommandCredentials?: (handles: readonly string[]) => Promise<readonly CommandCredential[]>;
@@ -488,13 +475,12 @@ export interface ToolContextDeps {
     authorize?: (access: SandboxAccessPlan) => void,
   ) => Promise<SandboxHandle>;
   accessSandboxResource?: (id: string) => Promise<SandboxAccessPlan>;
+  boundSandboxId?: string;
+  workdir?: string;
   listSkills?: (source?: string) => Promise<SkillResolution[]>;
   useSkill?: (name: string, path: string, sandboxId?: string, source?: string) => Promise<SkillResult>;
-  reach?: {
-    resolveChannel(query: string): Promise<ReachResolution>;
-    provisionFor(scopeId: ScopeId): Promise<SandboxHandle>;
-  };
-  layers: WorkspaceLayer[];
+  writableScopeId: ScopeId;
+  readOnlyScopeIds: ScopeId[];
   commandPolicy: () => CommandPolicy;
   layerCommandRules?: () => readonly CommandRule[];
   authorizeCommand: (command: string, approvalKey?: string, exactApprovalKey?: boolean) => boolean;
@@ -502,7 +488,6 @@ export interface ToolContextDeps {
   context?: TurnContext;
   sandboxResources?: SandboxResources;
   invalidateProvision?: () => void;
-  workspace: WorkspaceStore;
   deploy: DeployService;
   acl: AclStore;
   files?: FileArtifactStore;
@@ -522,6 +507,7 @@ export interface ToolContextDeps {
   memoryCaptureMetadata?: () => MemoryCaptureMetadata;
   memoryAccess?: { write?: ScopeId; read: ScopeId[]; notebookOnly?: true };
   mcp?: McpToolService;
+  scopeId?: ScopeId;
   sessionHistory?: {
     search(q: string, limit?: number): Promise<string[]>;
     open(seq: number): Promise<string | null>;
@@ -555,15 +541,18 @@ const scratchOnlyHandles = (credentials: readonly CommandCredential[]): string =
     .join(", ");
 
 export function createToolContext(deps: ToolContextDeps): ToolContext {
-  const writableScopeId = deps.layers.find((l) => l.mode === "rw")?.scopeId ?? null;
+  const inWorkdir = (handle: SandboxHandle, command: string): string =>
+    deps.workdir ? `cd ${shq(posixJoin(handle.rootDir, deps.workdir))} || exit 1\n${command}` : command;
+  const { writableScopeId } = deps;
   const memory =
     deps.context?.memory ??
     (deps.memory
       ? disclosedMemory(deps.memory, {
           actor: { id: deps.createdBy, type: "internal" },
-          targetScope: writableScopeId ?? `personal:${deps.createdBy}`,
+          targetScope: writableScopeId,
           nativeScopes: [
-            ...deps.layers.map((layer) => layer.scopeId),
+            writableScopeId,
+            ...deps.readOnlyScopeIds,
             ...(deps.memoryAccess?.read ?? []).filter((scope) => scope.startsWith("org:")),
           ],
           audience: deps.publishContext?.publishMembers ?? [{ id: deps.createdBy, type: "internal" }],
@@ -571,8 +560,6 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           ...(deps.memoryAccess?.notebookOnly ? { notebookOnly: true } : {}),
         })
       : undefined);
-  const fallbackMounts = deps.layers.filter((l) => l.mode === "ro" && l.mountPath);
-  const persistExclude = [...fallbackMounts.map((mount) => mount.mountPath!), TURN_FILES_DIR];
 
   const accessSandbox = async (id: string): Promise<SandboxAccessPlan> => {
     if (!deps.sandboxResources || !deps.accessSandboxResource) throw new Error("sandbox inventory unavailable");
@@ -586,12 +573,11 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     handle: SandboxHandle;
     resource?: SandboxResource;
     crossScope: boolean;
-    durableRef: (path: string) => string;
   }> => {
     if (id === undefined) {
       const handle = await deps.provision();
       const resource = handle.resourceId ? await deps.sandboxResources?.get(handle.resourceId) : undefined;
-      return { handle, ...(resource ? { resource } : {}), crossScope: false, durableRef: (path) => path };
+      return { handle, ...(resource ? { resource } : {}), crossScope: false };
     }
     let access = await accessSandbox(id);
     if (!deps.provisionResource) throw new Error("sandbox inventory unavailable");
@@ -599,10 +585,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       access = current;
     });
     const resource = access.resource;
-    const fallback = writableScopeId ? await deps.sandboxResources!.resolve(writableScopeId) : null;
-    const durableRef =
-      fallback?.id === resource.id ? (path: string) => path : (path: string) => `sandbox-files/${resource.id}/${path}`;
-    return { handle, resource, crossScope: access.crossScope, durableRef };
+    return { handle, resource, crossScope: access.crossScope };
   };
 
   const authorizeExecution = (command: string, access?: SandboxAccessPlan, policy = deps.commandPolicy()): void => {
@@ -644,6 +627,11 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
   };
 
   const runId = deps.runId;
+
+  const trialOn =
+    (tools: Pick<ToolContext, "execute">): CronScriptTrial =>
+    (script) =>
+      trialCronScript(script, (command, opts) => tools.execute(command, opts), deps.toolOutput);
 
   function controlOp<R>(
     run: (control: ControlService, claims: CapabilityClaims) => Promise<R>,
@@ -701,7 +689,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         principalId: deps.createdBy,
         action: "keychain.materialize",
         resource: `${credential.handle} (${use})`,
-        scopeLabel: writableScopeId!,
+        scopeLabel: writableScopeId,
       });
     }
     signal?.throwIfAborted();
@@ -734,7 +722,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
 
   return {
     ...(deps.admin ? { admin: deps.admin } : {}),
-    ...(deps.installSharedCanvas ? { installSharedCanvas: deps.installSharedCanvas } : {}),
+    ...(deps.selfApi ? { selfApi: deps.selfApi } : {}),
     ...(deps.toolOutput ? { toolOutput: deps.toolOutput } : {}),
     ...(deps.sandboxResources && deps.accessSandboxResource
       ? {
@@ -742,7 +730,6 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
             action: "list" | "create" | "default" | "retire",
             input?: { backend?: string; name?: string; sandboxId?: string | null },
           ): Promise<unknown> {
-            if (!writableScopeId) throw new Error("sandbox management requires an owning scope");
             const resources = deps.sandboxResources!;
             if (action === "list") {
               const listed = await resources.list(deps.createdBy, writableScopeId);
@@ -778,7 +765,8 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           },
         }
       : {}),
-    async computerStatus(sandboxId?: string): Promise<ComputerStatus> {
+    async computerStatus(requested?: string): Promise<ComputerStatus> {
+      const sandboxId = requested ?? deps.boundSandboxId;
       const probe = async (status: ComputerStatus, provision: () => Promise<SandboxHandle>) => {
         if (!status.provisioned || status.lifecycleState === "paused") return status;
         try {
@@ -802,10 +790,10 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       if (!deps.sandbox.computerStatus) {
         throw new CapabilityUnsupportedError(deps.sandbox.profile.backend, "reporting computer status");
       }
-      if (!writableScopeId) throw new Error("this turn has no scoped computer");
       return probe(await deps.sandbox.computerStatus(writableScopeId), deps.provision);
     },
-    async restartComputer(sandboxId?: string): Promise<void> {
+    async restartComputer(requested?: string): Promise<void> {
+      const sandboxId = requested ?? deps.boundSandboxId;
       if (sandboxId !== undefined) {
         const resources = deps.sandboxResources;
         if (!resources) throw new Error("sandbox inventory unavailable");
@@ -815,7 +803,6 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       if (!deps.sandbox.restartComputer) {
         throw new CapabilityUnsupportedError(deps.sandbox.profile.backend, "restarting the computer");
       }
-      if (!writableScopeId) throw new Error("this turn has no scoped computer to restart");
       await deps.sandbox.restartComputer(writableScopeId);
     },
     async execute(
@@ -824,39 +811,24 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         timeoutSeconds?: number;
         sandboxId?: string;
         scratch?: boolean;
-        reachTarget?: string;
         signal?: AbortSignal;
         credentials?: string[];
       },
-    ): Promise<ExecResult & { reached?: ReachedProvenance; scratchReroute?: boolean }> {
+    ): Promise<ExecResult & { scratchReroute?: boolean }> {
       const scratch = execOpts?.scratch === true;
       const requestedCredentials = execOpts?.credentials ?? [];
-      if (requestedCredentials.length && (execOpts?.reachTarget !== undefined || !writableScopeId)) {
-        throw new Error("command credentials are available only on scoped or scratch computers");
-      }
       const requested = await selectCredentials(requestedCredentials);
       const scratchOnly = scratchOnlyHandles(requested);
-      const reachTarget = execOpts?.reachTarget;
-      if ([scratch, reachTarget !== undefined, execOpts?.sandboxId !== undefined].filter(Boolean).length > 1) {
-        throw new Error("a command runs on one computer — choose scoped, scratch, or a reached room");
+      if (scratch && execOpts?.sandboxId !== undefined) {
+        throw new Error('a command runs on one computer — pass `sandbox_id` or `scope: "scratch"`, not both');
       }
       if ((scratch || scratchOnly) && !deps.provisionScratch) {
         throw new Error('scratch execution is not available on this computer — run without scope:"scratch"');
       }
       const scratchReroute = Boolean(scratchOnly) && !scratch;
-      let reached: ReachedProvenance | undefined;
-      if (reachTarget !== undefined) {
-        if (!deps.reach) {
-          throw new Error(
-            "visiting another conversation's computer works from a DM — here, ask in that channel instead",
-          );
-        }
-        const target = await deps.reach.resolveChannel(reachTarget);
-        if (target.kind === "error") throw new Error(target.message);
-        reached = { scopeId: target.scopeId, label: `#${target.channelName}` };
-      }
       const executionPolicy = deps.commandPolicy;
       let handle;
+      let script = command;
       if (execOpts?.sandboxId !== undefined && !scratchOnly) {
         if (!deps.sandboxResources || !deps.provisionResource) throw new Error("sandbox inventory unavailable");
         const access = await accessSandbox(execOpts.sandboxId);
@@ -867,9 +839,11 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         });
       } else {
         authorizeExecution(command, undefined, executionPolicy());
-        if (reached) handle = await deps.reach!.provisionFor(reached.scopeId);
-        else if (scratch || scratchOnly) handle = await deps.provisionScratch!();
-        else handle = await deps.provision();
+        if (scratch || scratchOnly) handle = await deps.provisionScratch!();
+        else {
+          handle = await deps.provision();
+          script = inWorkdir(handle, command);
+        }
       }
       const resolvedMs = execOpts?.timeoutSeconds != null ? execOpts.timeoutSeconds * 1000 : deps.execTimeoutMs;
       const timeoutMs =
@@ -883,15 +857,6 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
               ...(execOpts?.signal ? { signal: execOpts.signal } : {}),
             }
           : undefined;
-      if (reached) {
-        deps.auditLog?.record({
-          at: Date.now(),
-          principalId: deps.createdBy,
-          action: "reach_exec",
-          resource: command,
-          scopeLabel: reached.scopeId,
-        });
-      }
       execOpts?.signal?.throwIfAborted();
       const { commandEnv, secretValues, fileExecution } = await stageCredentials(
         requested,
@@ -907,7 +872,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           const secretEnv = executionSecretEnv(commandHandle.env, secretValues);
           const mask = createExactSecretValueMasker(Object.values(secretEnv));
           try {
-            const result = await deps.sandbox.run(commandHandle, command, opts);
+            const result = await deps.sandbox.run(commandHandle, script, opts);
             return { ...result, stdout: mask(result.stdout), stderr: mask(result.stderr) };
           } catch (error) {
             const message = errMessage(error);
@@ -920,7 +885,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           await fileExecution?.finish();
         },
       );
-      return { ...r, ...(reached ? { reached } : {}), ...(scratchReroute ? { scratchReroute } : {}) };
+      return { ...r, ...(scratchReroute ? { scratchReroute } : {}) };
     },
 
     async read(path: string, signal?: AbortSignal, sandboxId?: string): Promise<ReadResult> {
@@ -970,21 +935,16 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         }
       }
       signal?.throwIfAborted();
-      const { handle, resource, crossScope } = await machine(sandboxId);
-      const mounts = crossScope ? fallbackMounts.filter((mount) => mount.mountPath === "global") : fallbackMounts;
+      const { handle, resource } = await machine(sandboxId);
       const rel = path.startsWith("/") ? workspacePathOf(handle.rootDir, path) : path;
       if (rel === null) return { content: null, sourceScopeId: null, outsideWorkspace: true };
       const direct = await withAbort(() => deps.sandbox.readFile(handle, rel), signal);
       if (direct !== null) return { content: direct, sourceScopeId: resource?.ownerScopeId ?? writableScopeId };
-      for (const mount of mounts) {
-        const v = await withAbort(() => deps.sandbox.readFile(handle, join(mount.mountPath, rel)), signal);
-        if (v !== null) return { content: v, sourceScopeId: mount.scopeId };
-      }
       return { content: null, sourceScopeId: null };
     },
 
     async createPlayground(input: { title: string; html: string }): Promise<PlaygroundArtifact> {
-      if (!deps.files || !writableScopeId) throw new Error("playgrounds require a writable artifact store");
+      if (!deps.files) throw new Error("playgrounds require a writable artifact store");
       return createPlaygroundArtifact(deps.files!, {
         ...input,
         ownerScopeId: writableScopeId,
@@ -1031,21 +991,17 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           `your durable memory isn't a file — use the \`memory\` tool instead (actions "add", "edit" and "delete")`,
         );
       }
-      const { handle, resource, crossScope, durableRef } = await machine(sandboxId);
+      const { handle, crossScope } = await machine(sandboxId);
       if (crossScope) throw new Error("files write needs a computer owned by this conversation");
-      const ownerScopeId = resource?.ownerScopeId ?? writableScopeId;
       const rel = path.startsWith("/") ? workspacePathOf(handle.rootDir, path) : path;
       if (rel === null)
         throw new Error(
           `${path} is not in the computer's workspace; only workspace files can be written, so name it relative to the workspace`,
         );
       await deps.sandbox.writeFile(handle, rel, data);
-      if (ownerScopeId && !isUnderAnyDir(rel, persistExclude))
-        await deps.workspace.write(ownerScopeId, durableRef(rel), data);
     },
 
     async publish(input: PublishInput): Promise<PublishResult> {
-      if (!writableScopeId) throw new Error("publish needs a writable scope to own the app");
       if (input.share !== undefined || input.public !== undefined)
         throw new Error("publish does not accept sharing options; use apps action share to change access");
       const owner: ScopeId = scopeId("personal", deps.createdBy);
@@ -1155,7 +1111,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         {
           ...deps.memoryCaptureMetadata?.(),
           mode: "explicit",
-          conversationScopeId: writableScopeId ?? write,
+          conversationScopeId: writableScopeId,
         },
         deps.runId,
       );
@@ -1166,7 +1122,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       if (!memory?.edit || !write) return null;
       await memory.edit(write, edits, turnAuthority(deps.createdBy, deps.memoryAccess), {
         ...deps.memoryCaptureMetadata?.(),
-        conversationScopeId: writableScopeId ?? write,
+        conversationScopeId: writableScopeId,
       });
       return true;
     },
@@ -1193,12 +1149,12 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
 
     async callMcpTool(name: string, args: Record<string, unknown>, approval?: string): Promise<string> {
       if (!deps.mcp) throw new Error("no MCP connectors are configured");
-      return deps.mcp.call(name, args, deps.createdBy, approval);
+      return deps.mcp.call(name, args, deps.createdBy, approval, deps.scopeId);
     },
 
     async mcpToolNeedsApproval(name: string, args: Record<string, unknown>): Promise<boolean> {
       if (!deps.mcp) throw new Error("no MCP connectors are configured");
-      return deps.mcp.needsApproval(name, args, deps.createdBy);
+      return deps.mcp.needsApproval(name, args, deps.createdBy, deps.scopeId);
     },
 
     async awaitClientResult(callId, timeoutMs, signal, toolName) {
@@ -1214,14 +1170,13 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     ): Promise<BackgroundStartResult & { jobComputer?: boolean }> {
       if (!deps.backgroundBroker) throw new Error(BACKGROUND_UNAVAILABLE_MESSAGE);
       const requestedCredentials = opts.credentials ?? [];
-      if (requestedCredentials.length && !writableScopeId)
-        throw new Error("command credentials are available only on scoped computers");
       const requested = await selectCredentials(requestedCredentials);
       const scratchOnly = scratchOnlyHandles(requested);
       if (scratchOnly && !deps.provisionJobComputer)
         throw new Error(`background jobs here cannot use ${scratchOnly}; run the command in the foreground`);
       const policy = deps.commandPolicy;
       let handle: SandboxHandle;
+      let script = command;
       if (scratchOnly) {
         authorizeExecution(command, undefined, policy());
         handle = await deps.provisionJobComputer!();
@@ -1236,6 +1191,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       } else {
         authorizeExecution(command, undefined, policy());
         handle = await deps.provision();
+        script = inWorkdir(handle, command);
       }
       const staged = requested.length ? await stageCredentials(requested, handle, "background") : undefined;
       const release = async () => {
@@ -1256,7 +1212,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       }
       const started = await deps.backgroundBroker!.start(
         handle,
-        command,
+        script,
         opts.purpose,
         opts?.ttlSeconds ? opts.ttlSeconds * 1000 : undefined,
         credentials,
@@ -1306,11 +1262,15 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       return deps.monitorBroker!.unwatch(monitorId);
     },
 
-    cronCreate: (req) => controlOp((c, cl) => c.createCron(req, cl)),
+    cronCreate(req) {
+      return controlOp((c, cl) => c.createCron(req, cl, trialOn(this)));
+    },
     cronList: () => controlOp((c, cl) => c.listCrons(cl)),
     cronGet: (id) => controlOp((c, cl) => c.getCron(id, cl)),
     cronRuns: (id, req) => controlOp((c, cl) => c.getCronRuns(id, req ?? {}, cl)),
-    cronPatch: (id, req) => controlOp((c, cl) => c.patchCron(id, req, cl)),
+    cronPatch(id, req) {
+      return controlOp((c, cl) => c.patchCron(id, req, cl, trialOn(this)));
+    },
     cronNote: (id, note) => controlOp((c, cl) => c.noteCron(id, note, cl)),
     cronDelete: (id) => controlOp((c, cl) => c.deleteCron(id, cl)),
     cronSetEnabled: (id, enabled) => controlOp((c, cl) => c.setCronEnabled(id, enabled, cl)),
@@ -1335,7 +1295,6 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     readThread: (opts) => surfaceOp((s) => s.readThread(opts)),
     whatsNew: (opts) => surfaceOp((s) => s.whatsNew(opts)),
     search: (query, opts) => surfaceOp((s) => s.search(query, opts)),
-    readMembers: () => surfaceOp((s) => s.readMembers()),
     getStandingOrder: () => surfaceOp((s) => s.getStandingOrder()),
     setStandingOrder: (orders, bots, ambientEnabled, expectedOrders) =>
       surfaceOp((s) => s.setStandingOrder(orders, bots, ambientEnabled, expectedOrders)),

@@ -14,10 +14,13 @@ import {
 } from "../../memory/registry.ts";
 import { sendJson } from "../http.ts";
 import { writeRegistry } from "./admin/memory-registry.ts";
+import { parseScopeId, scopeId } from "../../types.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import { adminStanding, audit, orgScope } from "./shared.ts";
 
 const NOT_LIVE = "a member's memory brain can only be managed on a turn that person sent";
+
+const PRIVATE = "your memory brain's url and client id are private — ask the agent in a DM";
 
 async function member(ctx: ApiCtx) {
   const { res, deps, capability } = ctx;
@@ -31,6 +34,14 @@ async function member(ctx: ApiCtx) {
   }
   if (capability.triggered || !livePersonCapability(capability)) {
     sendJson(res, 403, { error: "forbidden", message: NOT_LIVE });
+    return null;
+  }
+  if (
+    parseScopeId(capability.scopeId).kind !== "personal" &&
+    (await deps.config?.resolveSharingPostureDurable(scopeId("personal", capability.actorId), capability.scopeId)) !==
+      "open"
+  ) {
+    sendJson(res, 403, { error: "forbidden", message: PRIVATE });
     return null;
   }
   const owner = canonicalPerson(capability.actorId);

@@ -4,7 +4,7 @@ import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { ArrowUp, ArrowUpRight, Maximize2, Minimize2, MessageSquare, X } from "lucide";
 import { tip } from "./tooltip";
-import { api, forkCutSeq, forkSession, type CoreSession, type SessionEntry } from "./core-bridge";
+import { api, fetchTranscript, forkCutSeq, forkSession, type CoreSession } from "./core-bridge";
 import { createConversation, disposeConversation, ensureDeliveryStream } from "./conversations";
 import { openSession, openSessionInto, refreshSessions } from "./sessions";
 import type { Conversation, ConvCtx } from "./conv-types";
@@ -414,16 +414,16 @@ export function createSideChatController(ctx: ConvCtx) {
         await show(created, true);
         return;
       }
-      const { entries } = await api<{ entries: SessionEntry[] }>(`/api/sessions/${encodeURIComponent(id)}`);
+      const { items } = await fetchTranscript(id);
       const floor = Math.max(
         ctx.chat.state.forkSession?.forkBoundarySeq ?? -1,
         (ctx.chat.state.transcriptAnchorSeq ?? 0) - 1,
       );
-      const cut = forkCutSeq(entries, messages, anchor.index, floor);
+      const cut = forkCutSeq(items, messages, anchor.index, floor);
       const seq = messageEntrySeqs(messages[anchor.index]!)[0] ?? cut;
       if (cut === undefined || seq === undefined)
         throw new Error("This message is still saving. Try again in a moment.");
-      const result = await forkSession(id, Math.max(cut, ...entries.map((entry) => entry.seq ?? 0)), {
+      const result = await forkSession(id, Math.max(cut, ...items.map((item) => item.seq)), {
         entrySeq: seq,
         quote: anchor.quote,
         occurrence: anchor.occurrence,

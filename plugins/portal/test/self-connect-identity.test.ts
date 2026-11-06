@@ -21,7 +21,7 @@ const core = createServer((req, res) => {
 await new Promise<void>((resolve) => core.listen(0, "127.0.0.1", resolve));
 const sessionSecret = "self-connect-session-secret-at-least-32";
 Object.assign(process.env, {
-  PORTAL_PUBLIC_URL: "http://portal.test",
+  PUBLIC_WEB_URL: "http://portal.test",
   PORTAL_SESSION_SECRET: sessionSecret,
   CORE_SIGNING_SECRET: "self-connect-core-signing-secret-32chars",
   PORTAL_IDENTITY_SECRET: identitySecret,

@@ -1,6 +1,5 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createOrchestrator, type OrchestratorInput, type OrchestratorDeps } from "../src/core/orchestrator.ts";
@@ -8,7 +7,6 @@ import { createIdentityService } from "../src/identity/identity-service.ts";
 import { type OrgBranding } from "../src/resolution/config-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
@@ -23,7 +21,6 @@ import { FEATURE_NAMES } from "../src/feature-flags.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
-import { createPostgresRateLimiter } from "../src/ratelimit/postgres-rate-limiter.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
@@ -75,15 +72,16 @@ async function buildOrchestrator(
     scopeSoulFor?: { conversation: Conversation; soul: string };
     branding?: OrgBranding;
     brandingDefault?: OrgBranding;
+    config?: ReturnType<typeof testConfigStore>;
+    sessions?: OrchestratorDeps["sessions"];
   } = {},
 ) {
-  const config = testConfigStore(ORG);
+  const config = opts.config ?? testConfigStore(ORG);
   if (opts.orgSoul !== undefined) await config.setSoul(scopeId("org", ORG), opts.orgSoul);
   if (opts.branding) await config.setBranding(scopeId("org", ORG), opts.branding);
 
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
-  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "pm-")));
   const memory = createPostgresMemoryService(testDatabaseUrl());
   const deploy = createDeployService({
     ...singleProcessDeps(),
@@ -106,12 +104,10 @@ async function buildOrchestrator(
     sessionSyscalls: opts.sessionSyscalls,
     featureFlags: opts.featureFlags,
     resolution,
-    sessions: createPostgresSessionStore(testDatabaseUrl()),
-    workspace,
+    sessions: opts.sessions ?? createPostgresSessionStore(testDatabaseUrl()),
     files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
     sandbox: fakeSandbox(),
     auditLog,
-    rateLimiter: createPostgresRateLimiter(testDatabaseUrl(), { maxPerWindow: 1000, windowMs: 60_000 }),
     agent: createMockAgent(),
     memory,
     deploy,
@@ -484,4 +480,69 @@ test("web group conversations are not described as private 1:1s", async () => {
   });
   assert.match(prompt, /live group conversation with Alice/);
   assert.doesNotMatch(prompt, /private 1:1/);
+});
+
+test("a guidance change from another session is announced on this session's next turn, once", async () => {
+  const config = testConfigStore(ORG);
+  const orch = await buildOrchestrator({ config, scopeSoulFor: { conversation: dmConversation, soul: "Be brief." } });
+  assert.doesNotMatch(await sysprompt(orch, slackDm("")), /standing guidance/);
+  await config.setSoul(
+    scopeId("personal", "U1"),
+    "Be brief.\nNever cite a PR by bare number.",
+    "U1",
+    "1aedf13a-0000-4000-8000-000000000000",
+  );
+  const next = await sysprompt(orch, slackDm(""));
+  assert.match(next, /Never cite a PR by bare number\./, "the system prompt carries the new guidance");
+  assert.match(
+    next,
+    /<environment>[\s\S]*In a different session \(1aedf13\) the user updated their standing guidance: "Never cite a PR by bare number\."\. Follow it moving forward but no need to directly mention you're doing so\.[\s\S]*<\/environment>/,
+  );
+  assert.doesNotMatch(await sysprompt(orch, slackDm("")), /updated their standing guidance/);
+});
+
+test("the live-subagents note rides wake turns and the first turn after a compaction, never an ordinary turn", async () => {
+  const conversation: Conversation = { kind: "dm", threadRef: "dm:U1:roster", audience: [actor] };
+  let roster = "Subagents opened from this conversation that are still working or blocked:\n- builder (s1) — running";
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  const orchestrator = await buildOrchestrator({
+    sessions,
+    sessionSyscalls: {
+      forTurn: () => ({
+        open: async () => ({ ok: false, message: "unused" }),
+        write: async () => ({ ok: false, message: "unused" }),
+        read: async () => ({ ok: true, mode: "children", children: [] }),
+        liveSubagents: async () => roster,
+      }),
+    },
+    featureFlags: {
+      list: async () => [],
+      get: async () => null,
+      enabled: async () => true,
+      enabledFor: async () => new Set(FEATURE_NAMES),
+      setEnabled: async () => {
+        throw new Error("unused");
+      },
+    },
+  });
+  const destination = {
+    type: "principal" as const,
+    target: "U1",
+    audienceScopeId: scopeId("personal", "U1"),
+    onBehalfOf: "U1",
+  };
+  const wake = slackDm("", { conversation, origin: { kind: "automation", destination } });
+  const ordinary = slackDm("", { conversation });
+  const noted = (prompt: string) => /<environment>[\s\S]*- builder \(s1\) — running[\s\S]*<\/environment>/.test(prompt);
+
+  assert.equal(noted(await sysprompt(orchestrator, ordinary)), false, "an ordinary turn carries no roster");
+  assert.equal(noted(await sysprompt(orchestrator, wake)), true, "a wake turn carries the roster");
+  const session = await sessions.getByThread(conversation.threadRef);
+  assert.ok(session);
+  const throughSeq = (await sessions.latestItemSeq(session.id)) - 1;
+  await sessions.append({ sessionId: session.id }, { kind: "ContextCompaction", throughSeq, text: "summary" });
+  assert.equal(noted(await sysprompt(orchestrator, ordinary)), true, "the first turn after a compaction carries it");
+  assert.equal(noted(await sysprompt(orchestrator, ordinary)), false, "later ordinary turns do not");
+  roster = "";
+  assert.doesNotMatch(await sysprompt(orchestrator, wake), /still working or blocked/, "no note when no child is live");
 });

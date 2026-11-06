@@ -156,7 +156,6 @@ test("a granted autonomous turn discovers only the unattended read family", asyn
       "/v1/admin/scopes",
       "/v1/admin/sessions",
       "/v1/admin/sessions/:id",
-      "/v1/admin/runs",
       "/v1/admin/errors",
       "/v1/admin/whoami",
     ]);

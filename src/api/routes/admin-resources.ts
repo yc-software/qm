@@ -1,3 +1,4 @@
+import { parseSpendLimit, type SpendLimit } from "../../ratelimit/spend-limits.ts";
 import type { TeamChange } from "../../teams/teams.ts";
 import { decisionsResource } from "./decisions-resource.ts";
 import { parseAckEmoji } from "../../slack/config.ts";
@@ -319,13 +320,6 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     },
   },
   {
-    id: "unfulfilled-insights",
-    kind: "boolean",
-    readKey: "unfulfilledInsights",
-    get: (deps, scope) => deps.config!.getUnfulfilledInsights(scope),
-    apply: generic(boolBody, (deps, scope, on) => deps.config!.setUnfulfilledInsights(scope, on)),
-  },
-  {
     id: "external-slack-participants",
     kind: "boolean",
     target: "org",
@@ -614,37 +608,6 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     },
   },
   {
-    id: "browse-model",
-    refreshesModels: true,
-    kind: "enum",
-    target: "org",
-    clearable: true,
-    label:
-      "The model driving the browser agent in the browse skill, org-wide (empty follows the deployment's base model; fast mode applies only on Opus models).",
-    readKey: "browseModel",
-    get enumValues() {
-      return selectableBaseModels();
-    },
-    get: (deps, scope) => deps.config!.getBrowseModel(scope),
-    apply: async (ctx, _actor, scope) => {
-      const bad = orgOnly(scope, "the browse model is org-wide");
-      if (bad) return bad;
-      const raw = (ctx.body as { modelId?: unknown }).modelId;
-      if (raw !== undefined && raw !== null && typeof raw !== "string") {
-        return { error: "browse-model requires { modelId: string } (empty string clears the override)" };
-      }
-      const modelId = typeof raw === "string" ? raw.trim() : "";
-      if (modelId && !resolveModel(modelId)) return { error: `unknown model id: ${modelId}` };
-      const configuredKeys = ctx.deps.providerKeys ?? ALL_PROVIDERS_AVAILABLE;
-      const managedKeys = ctx.deps.modelCredentials ? await ctx.deps.modelCredentials.availability() : configuredKeys;
-      if (modelId && !modelServiceable(modelId, managedKeys)) {
-        return { error: `model ${modelId} isn't serviceable on this deployment: its provider key is not configured` };
-      }
-      await ctx.deps.config!.setBrowseModel(scope, modelId || null);
-      return { ok: true };
-    },
-  },
-  {
     id: "browse-max-steps",
     kind: "string",
     target: "org",
@@ -667,6 +630,19 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         return { value: steps };
       },
       (deps, scope, steps) => deps.config!.setBrowseMaxSteps(scope, steps),
+    ),
+  },
+  {
+    id: "spend-limit",
+    kind: "custom",
+    target: "any",
+    label:
+      "Model spend caps in USD: { dailyUsd?, monthlyUsd? } per UTC day and month. On the org scope it is the default for each person's personal scope; on any other scope it caps that scope and overrides the default. {} means no cap there; { inherit: true } clears it.",
+    readKey: "spendLimit",
+    get: (deps, scope) => deps.config!.getSpendLimitDurable(scope),
+    apply: generic<SpendLimit | null>(
+      (body) => parseSpendLimit(body),
+      (deps, scope, limit) => deps.config!.setSpendLimit(scope, limit),
     ),
   },
   {

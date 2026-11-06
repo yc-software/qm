@@ -1,19 +1,17 @@
+import type { NewItem } from "../src/sessions/items.ts";
 import { createRuntimeService } from "../src/agent/runtime-control.ts";
 import type { RuntimeChoice } from "../src/agent/agent.ts";
 import type { RuntimeControl } from "../src/agent/runtime-types.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import type { Agent } from "../src/agent/agent.ts";
-import { turnToolOptions } from "../src/agent/turn-support.ts";
 import { createAgentTools, type AgentToolsOptions } from "../src/agent/agent-tools.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
@@ -30,7 +28,6 @@ import type { McpToolService } from "../src/mcp/mcp-tool-service.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
-import { createPostgresRateLimiter } from "../src/ratelimit/postgres-rate-limiter.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import {
   testConfigStore,
@@ -69,12 +66,14 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
   const featureFlags = createFeatureFlagStore(testMap());
   for (const flag of flags) await featureFlags.setEnabled(flag, scope, true, "test");
   const sidebar: Session[] = [];
+  const signals = createPostgresRunSignalStore(testDatabaseUrl());
   const sessionSyscalls = createSessionSyscalls({
     advisoryLock: testAdvisoryLock(),
     sessions,
     runs,
     mailbox: createSessionMailbox(testMap<SessionMessage>()),
-    signals: createPostgresRunSignalStore(testDatabaseUrl()),
+    signals,
+    steerRun: async (run, signal) => ({ sent: await signals.send(run.id, signal) }),
     maxAttempts: 1,
     conversations: {
       list: async () => sidebar,
@@ -98,14 +97,23 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
       const ref = {
         current: turn.tools,
         scopeLabel: turn.scopeLabel,
-        emit: async (entry: Parameters<typeof turn.emit>[0]) => {
-          if (entry.type === "tool_result") results.push(entry.payload as Turn["results"][number]);
-          return turn.emit(entry);
+        emit: async (item: NewItem) => {
+          if (item.kind === "ToolResult") results.push({ isError: item.isError });
+          return turn.emit(item);
         },
         screenToolResult: turn.screenToolResult,
         pendingApprovals: [],
       };
-      const options = turnToolOptions({}, turn);
+      const options: AgentToolsOptions = {
+        ...(turn.mcpTools?.length ? { mcpTools: turn.mcpTools } : {}),
+        readOnly: turn.readOnly,
+        sessionTools: Boolean(turn.tools.sessionSyscalls),
+        surfaceTools: turn.surfaceTools,
+        delegateWork: turn.delegateWork,
+        surfaceName: turn.surfaceName,
+        ...(turn.surfacePrompt ? { surfacePrompt: turn.surfacePrompt } : {}),
+        ...(turn.clientTools?.length ? { clientTools: turn.clientTools } : {}),
+      };
       const tools = createAgentTools(ref, options);
       const record: Turn = {
         ref,
@@ -136,7 +144,6 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
   const config = testConfigStore("org");
   await config.setInteractiveFastMode(true);
-  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "subagent-parity-")));
   const orchestrator = createOrchestrator({
     ...singleProcessDeps(),
     config,
@@ -148,11 +155,9 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
     resolution: createResolutionService("org", config, acl),
     sessions,
     runs,
-    workspace,
     files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
     sandbox: { profile: { backend: "fake", writablePersistence: "snapshot_to_workspace" } } as Sandbox,
     auditLog,
-    rateLimiter: createPostgresRateLimiter(testDatabaseUrl(), { maxPerWindow: 100, windowMs: 60_000 }),
     agent,
     memory: createPostgresMemoryService(testDatabaseUrl()),
     deploy: createDeployService({
@@ -195,7 +200,7 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
     const parent = (await sessions.getByThread(threadRef))!;
     const [child] = await sessions.childrenOf(parent.id);
     assert.ok(child, "the parent opened a subagent");
-    await execute((await runs.latestForThread(child.threadRef))!);
+    await execute((await runs.list({ threadRef: child.threadRef, limit: 1 }).then(([run]) => run))!);
     return { parent: turns.get(threadRef)!, child: turns.get(child.threadRef)! };
   };
   return { parentTurn };

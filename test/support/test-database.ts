@@ -8,6 +8,7 @@ import { createPgPool, type PgPool } from "../../src/persistence/pg-pool.ts";
 import { configStoreMaps, createConfigStore } from "../../src/resolution/config-store.ts";
 import { orgId } from "../../src/config.ts";
 import { scopeId } from "../../src/types.ts";
+import { createPostgresUserStore } from "../../src/identity/user-store.ts";
 
 function baseDatabaseUrl(): URL {
   const base = process.env.DATABASE_URL;
@@ -32,7 +33,11 @@ function createDatabaseSync(request: { template?: string }): string {
   const { worker, signal, port } = databaseWorker;
   Atomics.store(signal, 0, 0);
   worker.postMessage(request);
-  if (Atomics.wait(signal, 0, 0, 120_000) === "timed-out") throw new Error("Timed out creating a test database");
+  const deadline = Date.now() + 120_000;
+  while (Atomics.load(signal, 0) === 0) {
+    if (Atomics.wait(signal, 0, 0, Math.max(0, deadline - Date.now())) === "timed-out")
+      throw new Error("Timed out creating a test database");
+  }
   const reply = receiveMessageOnPort(port)?.message as { ok: boolean; name?: string; message?: string } | undefined;
   if (!reply?.ok || !reply.name) throw new Error(`Could not create a test database: ${reply?.message ?? "no reply"}`);
   return reply.name;
@@ -102,3 +107,7 @@ export function testDeployBackings(
     ...backings,
   };
 }
+
+export const testUsers = () => createPostgresUserStore(sharedDatabase().url);
+
+export const testUserStore = () => createPostgresUserStore(testMigratedDatabaseUrl());

@@ -2,8 +2,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMcpMemoryProvider } from "../src/memory/mcp-memory-provider.ts";
 import { createRoutedMemoryService } from "../src/memory/provider-router.ts";
-import type { MemoryProviderOutcome } from "../src/memory/memory-service.ts";
 import { McpCallError, type McpClient } from "../src/mcp/mcp-client.ts";
+import type { MemoryProviderOutcome } from "../src/memory/memory-service.ts";
+import { sleep } from "../src/util/async.ts";
 import { recallText } from "./support/recall-text.ts";
 import { structuredRecall } from "./support/structured-recall.ts";
 
@@ -92,10 +93,15 @@ test("MCP recall returns one row per line of the provider's answer", async () =>
 
 test("a write that carries no member is not sent to an attested provider", async () => {
   const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
-  const memory = createMcpMemoryProvider({
-    read: { client: client(calls), tool: "search_knowledge", timeoutMs: 100 },
-    write: { client: client(calls), tool: "write_knowledge", timeoutMs: 100 },
-    attestActor: true,
+  const memory = createRoutedMemoryService({
+    providers: {
+      knowledge: createMcpMemoryProvider({
+        read: { client: client(calls), tool: "search_knowledge", timeoutMs: 100 },
+        write: { client: client(calls), tool: "write_knowledge", timeoutMs: 100 },
+        attestActor: true,
+      }),
+    },
+    routes: [{ provider: "knowledge", scopes: ["channel"], capture: "explicit", manage: false }],
   });
   assert.equal(
     await memory.capture("channel:C1", ["history before May is unavailable"], 10, undefined, { mode: "explicit" }),
@@ -175,4 +181,116 @@ test("a refused recall yields no rows even with facts attached, and a malformed 
   assert.deepEqual(await routed.recall("personal:U1", { query: "q", report: (o) => void outcomes.push(o) }), []);
   const acme = outcomes.find(({ provider }) => provider === "acme");
   assert.deepEqual({ outcome: acme?.outcome, code: acme?.code }, { outcome: "failed", code: "malformed_fact" });
+});
+
+function answering(answer: () => Promise<Record<string, unknown>>): McpClient {
+  return {
+    async listTools() {
+      return { tools: [] };
+    },
+    async callTool() {
+      return { content: [], structuredContent: await answer() };
+    },
+  };
+}
+
+const facts = (count: number) => Array.from({ length: count }, (_, i) => `fact ${i + 1}`);
+
+test("a write split into batches carries the turn's input and reply once", async () => {
+  const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
+  const memory = createMcpMemoryProvider({
+    read: { client: client(calls), tool: "search_knowledge", timeoutMs: 100 },
+    write: {
+      client: client(calls),
+      tool: "write_knowledge",
+      timeoutMs: 100,
+      factsArg: "facts",
+      inputArg: "input",
+      replyArg: "reply",
+    },
+  });
+  const context = { mode: "automatic" as const, input: "my seats", reply: "noted" };
+  assert.equal(
+    await memory.capture("org:acme", facts(45), 10, { actorId: "u1", context: "conversation" }, context),
+    45,
+  );
+  assert.deepEqual(
+    calls.map(({ args }) => [(args.facts as unknown[]).length, args.input, args.reply]),
+    [
+      [20, "my seats", "noted"],
+      [20, undefined, undefined],
+      [5, undefined, undefined],
+    ],
+  );
+});
+
+test("every batch of a split write shares the write's one deadline", async () => {
+  const slow = answering(async () => {
+    await sleep(100);
+    return { status: "committed" };
+  });
+  const memory = createMcpMemoryProvider({
+    read: { client: slow, tool: "read", timeoutMs: 250 },
+    write: { client: slow, tool: "write", timeoutMs: 250, factsArg: "facts" },
+  });
+  await assert.rejects(
+    memory.capture("org:acme", facts(60), 10, { actorId: "u1", context: "conversation" }, { mode: "automatic" }),
+    /timed out/,
+  );
+});
+
+test("a split write is pending when any of its batches is, with its last batch's code", async () => {
+  let calls = 0;
+  const queued = answering(async () =>
+    ++calls === 1 ? { status: "pending", code: "queued" } : { status: "committed" },
+  );
+  const outcomes: MemoryProviderOutcome[] = [];
+  const memory = createRoutedMemoryService({
+    providers: {
+      knowledge: createMcpMemoryProvider({
+        read: { client: queued, tool: "read", timeoutMs: 100 },
+        write: { client: queued, tool: "write", timeoutMs: 100, factsArg: "facts" },
+      }),
+    },
+    routes: [{ provider: "knowledge", scopes: ["org"], capture: "explicit", manage: false }],
+  });
+  await memory.capture(
+    "org:acme",
+    facts(21),
+    10,
+    { actorId: "u1", context: "conversation" },
+    {
+      mode: "explicit",
+      report: (outcome) => void outcomes.push(outcome),
+    },
+  );
+  assert.equal(calls, 2);
+  assert.deepEqual(
+    outcomes.map(({ outcome, code }) => ({ outcome, code })),
+    [{ outcome: "pending", code: undefined }],
+  );
+});
+
+test("a split write sends no batch once its deadline has passed", async () => {
+  let calls = 0;
+  const blocking: McpClient = {
+    async listTools() {
+      return { tools: [] };
+    },
+    callTool() {
+      calls++;
+      const until = Date.now() + 70;
+      while (Date.now() < until);
+      return Promise.resolve({ content: [], structuredContent: { status: "committed" } });
+    },
+  };
+  const memory = createMcpMemoryProvider({
+    read: { client: blocking, tool: "read", timeoutMs: 100 },
+    write: { client: blocking, tool: "write", timeoutMs: 100, factsArg: "facts" },
+  });
+  await assert.rejects(
+    memory.capture("org:acme", facts(60), 10, { actorId: "u1", context: "conversation" }, { mode: "automatic" }),
+    /timed out after 100ms/,
+  );
+  assert.equal(calls, 2);
 });

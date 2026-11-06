@@ -31,7 +31,7 @@ async function canonicalPrincipal(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
   const id = ctx.params.id!;
   if (!id) return sendJson(res, 404, { error: "not_found" });
-  await deps.identity?.refresh(true);
+  await deps.identity?.refresh();
   return sendJson(res, 200, { principalId: id, canonicalId: canonicalPerson(id) });
 }
 
@@ -93,6 +93,7 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
         type: m.type,
         ...(typeof m.slackId === "string" && m.slackId ? { slackId: m.slackId } : {}),
         ...(typeof m.avatarUrl === "string" && m.avatarUrl.startsWith("https://") ? { avatarUrl: m.avatarUrl } : {}),
+        ...(m.isBot === true ? { isBot: true } : {}),
       }));
     await app.upsertDirectory(members, numOrUndef(b.membersSyncedAt));
     memberCount = members.length;
@@ -173,6 +174,28 @@ async function resolveDirectory(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { matches });
 }
 
+async function channelsFor(ctx: ApiCtx): Promise<void> {
+  const principalId = (ctx.url.searchParams.get("principalId") ?? "").trim();
+  if (!principalId) return sendJson(ctx.res, 400, { error: "bad_request", message: "principalId required" });
+  const typed = (ctx.url.searchParams.get("q") ?? "").trim().toLowerCase();
+  const term = typed.startsWith("#") ? typed.slice(1) : typed;
+  const rank = (name: string) => {
+    const lower = name.toLowerCase();
+    if (lower === term) return 0;
+    return lower.startsWith(term) ? 1 : 2;
+  };
+  const channels = (await ctx.app.directoryChannelsFor(principalId))
+    .filter((channel) => channel.name.toLowerCase().includes(term))
+    .sort((a, b) => rank(a.name) - rank(b.name) || Number(a.name > b.name) - Number(a.name < b.name))
+    .map((channel) => ({
+      scopeId: `channel:${channel.channelId}`,
+      channelId: channel.channelId,
+      name: channel.name,
+      isPrivate: channel.isPrivate === true,
+    }));
+  return sendJson(ctx.res, 200, { channels });
+}
+
 async function channelMembership(ctx: ApiCtx): Promise<void> {
   return sendJson(ctx.res, 200, {
     member: await ctx.app.channelMember(ctx.params.channelId!, ctx.params.principalId!),
@@ -182,6 +205,7 @@ async function channelMembership(ctx: ApiCtx): Promise<void> {
 export const directoryRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/principals/:id/canonical", auth: "source", handle: canonicalPrincipal },
   { method: "GET", path: "/v1/directory/meta", auth: "source", handle: directoryMeta },
+  { method: "GET", path: "/v1/directory/channels", auth: "source", handle: channelsFor },
   {
     method: "GET",
     path: "/v1/directory/channels/:channelId/members/:principalId",

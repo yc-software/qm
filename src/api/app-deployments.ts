@@ -134,7 +134,7 @@ export function createDeploymentMethods(
       return effectiveDeploymentPermission(d, principalId);
     },
     async deploymentGitPermissionFor(idOrName, principalId) {
-      const deployment = (await deps.deploy.listDeployments()).find((d) => d.id === idOrName || d.name === idOrName);
+      const deployment = await deps.deploy.getDeployment(idOrName);
       return deployment ? principalGitPermission(deployment, principalId) : null;
     },
     rollbackDeployment(id, version, actor) {

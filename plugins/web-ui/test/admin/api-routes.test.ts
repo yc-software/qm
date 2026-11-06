@@ -173,6 +173,13 @@ test("allow-listed calls relay their method, query and body", async () => {
     ["GET", "memory?scope=org%3Aacme", undefined],
     ["POST", "grants", { principalId: "U1", role: "org_admin", scopeId: "org:acme" }],
     ["DELETE", "skill-packs/s1", undefined],
+    ["DELETE", "memory?scope=personal%3AU1", { ids: ["3"] }],
+    [
+      "PUT",
+      "memory-registry/brains/b1",
+      { preset: "gbrain-v1", url: "https://brain.example/mcp", clientId: "c", clientSecret: "s", label: "B" },
+    ],
+    ["DELETE", "memory-registry/bindings/x1", undefined],
   ] as const) {
     const { response, hops } = await call(method, `/api/admin/${path}`, body);
     assert.equal(response.status, 200, `${method} ${path}`);
@@ -191,6 +198,7 @@ test("anything outside the allow-lists is a 404 that never reaches core", async 
     ["POST", "audit"],
     ["DELETE", "scopes/org%3Aacme"],
     ["PUT", "scopes/org%3Aacme"],
+    ["POST", "memory-registry"],
   ]) {
     const { response, hops } = await call(method, `/api/admin/${path}`, method === "GET" ? undefined : {});
     assert.equal(response.status, 404, `${method} ${path}`);

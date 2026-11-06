@@ -66,6 +66,13 @@ export function slackConversationRef(
   return isDirectMessage && !threadTs ? channelId : `${channelId}:${threadTs ?? ts}`;
 }
 
+export function slackConversationOf(item: LoopItem): { channelId: string; threadTs?: string } | undefined {
+  const slack = metaOf(item);
+  if (!slack) return undefined;
+  const threadTs = slackReplyThreadTs(item);
+  return { channelId: slack.channelId, ...(threadTs ? { threadTs } : {}) };
+}
+
 export function slackReplyThreadTs(item: LoopItem): string | undefined {
   const slack = metaOf(item);
   if (!slack) return undefined;
@@ -189,7 +196,7 @@ export const slackAdapter: LoopSourceAdapter = {
       dedupeKey,
       summary: common.snippet,
       sourceAt: common.receivedAt,
-      sourcePayload: { source: "slack", ...common, slack } as LoopSourcePayload,
+      sourcePayload: { ...common, slack } as LoopSourcePayload,
       ...(draft ? { proposal: { data: draft as unknown as LoopSourcePayload } } : {}),
     };
     return entry;
@@ -197,8 +204,9 @@ export const slackAdapter: LoopSourceAdapter = {
   matchesEvent(item, conversationRef) {
     const slack = metaOf(item);
     if (!slack) return false;
-    return (slack.isDirectMessage ? [true, false] : [false]).some(
-      (dm) => slackConversationRef(slack.channelId, slack.ts, slack.threadTs, dm) === conversationRef,
+    return (
+      slackConversationRef(slack.channelId, slack.ts, slack.threadTs, slack.isDirectMessage === true) ===
+      conversationRef
     );
   },
   parseProposal(raw) {

@@ -53,7 +53,7 @@ import { appState } from "./shell";
 import { base64ToText, bytesToBase64, insertIntoDraft, pasteChipLabel } from "./paste-text";
 import { clearDraft, newChatDraftKey, saveDraft } from "./drafts";
 import { tip } from "./tooltip";
-import { isPhone } from "./viewport";
+import { isCompactLayout } from "./viewport";
 import {
   LOADOUT_CAP,
   isUltrafastModel,
@@ -247,6 +247,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     draft: "",
     attachments: [] as Attachment[],
     error: "",
+    note: "",
     processingFiles: false,
     dragging: false,
     openMenu: null as ComposerMenu | null,
@@ -336,6 +337,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     composerState.pasteView = null;
     pastedTextIds.clear();
     composerState.error = "";
+    composerState.note = "";
     composerState.processingFiles = false;
     composerState.openMenu = null;
     slashActiveIndex = 0;
@@ -558,9 +560,11 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
         : html`<div class="composer-note">Loading runtime settings…</div>`;
     } else if (composerState.error) {
       composerNotice = html`<div class="composer-error">${composerState.error}</div>`;
+    } else if (composerState.note) {
+      composerNotice = html`<div class="composer-note">${composerState.note}</div>`;
     }
 
-    const compact = Boolean(ctx.pane) || isPhone();
+    const compact = Boolean(ctx.pane) || isCompactLayout();
     const turnRuntime = ctx.chat.turnRuntime();
     const routed =
       turnRuntime?.change && !switchedDefault(turnRuntime) && turnRuntime.modelId !== selectedModel.model.id
@@ -782,26 +786,31 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     });
   }
 
+  function sendButton(label: string): TemplateResult {
+    return html`<button
+      class="send-btn"
+      type="submit"
+      aria-label=${label}
+      ${tip(label)}
+      ?disabled=${!composerCanSend()}
+    >
+      ${icon(ArrowUp, 16)}
+    </button>`;
+  }
+
   function sendControls(agent: Agent): TemplateResult {
-    if (!agent.state.isStreaming || ctx.chat.isStopping()) {
-      return html`<button
-        class="send-btn"
-        type="submit"
-        aria-label="Send"
-        ${tip("Send")}
-        ?disabled=${!composerCanSend()}
-      >
-        ${icon(ArrowUp, 16)}
-      </button>`;
-    }
+    if (!agent.state.isStreaming) return sendButton("Send");
+    if (ctx.chat.isStopping())
+      return html`
+        <button class="stop-btn" type="button" aria-label="Stopping…" disabled>${icon(Square, 16)}</button>
+        ${sendButton("Send")}
+      `;
     const label = alwaysSteer() && canSteer(agent) ? "Steer the running task" : "Queue for after this turn";
     return html`
       <button class="stop-btn" type="button" aria-label="Stop" ${tip("Stop")} @click=${() => stopStreaming(agent)}>
         ${icon(Square, 16)}
       </button>
-      <button class="send-btn" type="submit" ${tip(label)} aria-label=${label} ?disabled=${!composerCanSend()}>
-        ${icon(ArrowUp, 16)}
-      </button>
+      ${sendButton(label)}
     `;
   }
 
@@ -1224,6 +1233,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     persistDraft();
     const hadError = Boolean(composerState.error);
     composerState.error = "";
+    composerState.note = "";
     composerState.slashDismissed = false;
     slashActiveIndex = 0;
     const armed = slashQuery(composerState.draft) !== null;
@@ -1380,11 +1390,19 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   ): Promise<boolean> {
     const idempotencyKey = queueSendKey(threadRef, text, filesKey);
     try {
-      const queued = await queueTurn(threadRef, text, agent, ctx.chat.currentTurnOptions, idempotencyKey, attachments);
+      const { steered, steerTs, ...queued } = await queueTurn(
+        threadRef,
+        text,
+        agent,
+        ctx.chat.currentTurnOptions,
+        idempotencyKey,
+        attachments,
+        steer ? "steer" : "queue",
+      );
       failedQueueSend = null;
-      bumpSessionActivity(threadRef);
-      if (steer && canSteer(agent) && threadRef === ctx.chat.state.threadRef) void steerQueued(agent, queued, true);
-      else addQueuedRun(threadRef, queued);
+      bumpSessionActivity(threadRef, text);
+      if (steerTs) markSteering(threadRef, { ...queued, ts: steerTs });
+      else if (!steered) addQueuedRun(threadRef, queued);
       return true;
     } catch (err) {
       failedQueueSend = { threadRef, text, filesKey, idempotencyKey };
@@ -1433,6 +1451,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     const threadRef = ctx.chat.state.threadRef;
     if (!threadRef) return;
     composerState.error = "";
+    composerState.note = "";
     try {
       await withdrawRun(queued.runId);
     } catch (err) {
@@ -1451,37 +1470,34 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     setQueuedRuns(threadRef, [...queuedRunsFor(threadRef).filter((r) => r.runId !== queued.runId), queued]);
   }
 
-  function markSteering(threadRef: string, queued: QueuedRun): void {
+  function markSteering(threadRef: string, steering: QueuedRun & { ts: string }): void {
     steeringRuns.set(threadRef, [
-      ...(steeringRuns.get(threadRef) ?? []).filter((run) => run.runId !== queued.runId),
-      { ...queued, ts: `queued-steer:${threadRef}:${queued.runId}` },
+      ...(steeringRuns.get(threadRef) ?? []).filter((run) => run.ts !== steering.ts),
+      steering,
     ]);
   }
 
-  function unmarkSteering(threadRef: string, runId: string): void {
-    const rest = (steeringRuns.get(threadRef) ?? []).filter((run) => run.runId !== runId);
+  function unmarkSteering(threadRef: string, ts: string): void {
+    const rest = (steeringRuns.get(threadRef) ?? []).filter((run) => run.ts !== ts);
     if (rest.length) steeringRuns.set(threadRef, rest);
     else steeringRuns.delete(threadRef);
   }
 
-  async function steerQueued(agent: Agent, queued: QueuedRun, fresh = false): Promise<void> {
+  async function steerQueued(agent: Agent, queued: QueuedRun): Promise<void> {
     const threadRef = ctx.chat.state.threadRef;
-    if (!threadRef || !ctx.chat.hasLiveRun() || pendingSteers.has(queued.runId)) {
-      if (fresh && threadRef) addQueuedRun(threadRef, queued);
-      return;
-    }
+    if (!threadRef || !ctx.chat.hasLiveRun() || pendingSteers.has(queued.runId)) return;
     pendingSteers.add(queued.runId);
     composerState.error = "";
-    markSteering(threadRef, queued);
+    composerState.note = "";
+    const ts = `queued-steer:${threadRef}:${queued.runId}`;
+    markSteering(threadRef, { ...queued, ts });
     let steered = false;
-    let fallBackToQueue = fresh;
     try {
       const outcome = await ctx.chat.signalLiveRun("steer", queued.text, queued.runId);
       steered = outcome.ok;
       if (outcome.ok || outcome.replayed) {
-        fallBackToQueue = false;
         forgetQueuedRun(threadRef, queued.runId);
-        bumpSessionActivity(threadRef);
+        bumpSessionActivity(threadRef, queued.text);
         if (
           !outcome.ok &&
           outcome.replayed &&
@@ -1495,16 +1511,18 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
           } as unknown as AgentMessage);
         }
       } else if (outcome.reason === "queued_started" || outcome.reason === "not_found") {
-        fallBackToQueue = false;
         forgetQueuedRun(threadRef, queued.runId);
       } else {
-        reportHandledError("web:steer_refused", new Error(outcome.reason ?? "steer refused"));
-        if (
-          outcome.reason === "queued_changed" &&
-          agent === ctx.chat.state.agent &&
-          threadRef === ctx.chat.state.threadRef
-        )
-          composerState.error = "The queued message changed. Try steering it again.";
+        reportHandledError(
+          "web:steer_refused",
+          new Error([outcome.reason ?? "steer refused", outcome.why].filter(Boolean).join(": ")),
+        );
+        if (agent === ctx.chat.state.agent && threadRef === ctx.chat.state.threadRef) {
+          if (outcome.reason === "queued_changed")
+            composerState.error = "The queued message changed. Try steering it again.";
+          if (outcome.reason === "not_steerable")
+            composerState.note = "This message will run as its own turn after the current one.";
+        }
       }
     } catch (err) {
       reportHandledError("web:steer_queued", err);
@@ -1512,9 +1530,8 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
         composerState.error = errMessage(err, "Could not confirm steering. Try again.");
     } finally {
       pendingSteers.delete(queued.runId);
-      if (!steered) unmarkSteering(threadRef, queued.runId);
+      if (!steered) unmarkSteering(threadRef, ts);
     }
-    if (fallBackToQueue) addQueuedRun(threadRef, queued);
     if (agent !== ctx.chat.state.agent || threadRef !== ctx.chat.state.threadRef) return;
     ctx.chat.drawActiveChat(agent);
     ctx.chat.resumeIfIdle();
@@ -1590,7 +1607,7 @@ ${draft}`
       return;
     }
     if (ctx.chat.state.threadRef) {
-      bumpSessionActivity(ctx.chat.state.threadRef);
+      bumpSessionActivity(ctx.chat.state.threadRef, text);
       ctx.chat.state.pendingSend = ctx.chat.state.threadRef;
       renderList();
     }

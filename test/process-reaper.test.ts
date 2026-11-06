@@ -4,7 +4,6 @@ import { type ProcessRecord, createPostgresProcessRegistry } from "../src/proces
 import { createProcessReaper, createReaperKillHook } from "../src/processes/process-reaper.ts";
 import type { LeaderLease } from "../src/persistence/leader-lease.ts";
 import type { ProcessSandbox, SandboxHandle, ProvisionOptions, TeardownOptions } from "../src/sandbox/sandbox.ts";
-import type { WorkspaceLayer } from "../src/types.ts";
 import { ProcessSessionGoneError } from "../src/sandbox/exec-process-session.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
@@ -17,15 +16,15 @@ const FAST_GRACE = { termGraceMs: 20, killGraceMs: 20 };
 
 function killSpySandbox(opts?: { diesOn?: "TERM" | "KILL" | "never"; vanished?: boolean }) {
   const diesOn = opts?.diesOn ?? "TERM";
-  const provisions: Array<{ layers: WorkspaceLayer[]; opts?: ProvisionOptions }> = [];
+  const provisions: Array<{ owner: string; opts?: ProvisionOptions }> = [];
   const signals: Array<{ processId: string; signal: string }> = [];
   const teardowns: Array<{ opts?: TeardownOptions }> = [];
   const exited = new Set<string>();
   const handle: SandboxHandle = { id: "vm", rootDir: "/workspace" };
   const sandbox = {
     profile: { processSessions: true },
-    async provision(layers: WorkspaceLayer[], opts?: ProvisionOptions) {
-      provisions.push({ layers, ...(opts ? { opts } : {}) });
+    async provision(owner: string, opts?: ProvisionOptions) {
+      provisions.push({ owner, ...(opts ? { opts } : {}) });
       return handle;
     },
     async readProcess(_h: SandboxHandle, processId: string) {
@@ -239,7 +238,7 @@ test("kill hook SIGTERMs every expired kind — background, build, and dev-serve
   );
 
   assert.equal(provisions.length, 3);
-  assert.deepEqual(provisions[0]!.layers, [{ scopeId: "personal:A", mode: "rw", mountPath: "" }]);
+  assert.equal(provisions[0]!.owner, "personal:A");
   assert.deepEqual(provisions[0]!.opts, { sandboxId: "sandbox-1" });
   assert.equal(teardowns.length, 3);
   assert.equal(teardowns[0]!.opts?.keepWarm, true);

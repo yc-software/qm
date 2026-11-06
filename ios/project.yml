@@ -1,0 +1,79 @@
+name: QM
+options:
+  bundleIdPrefix: org.qm
+  deploymentTarget:
+    iOS: "18.0"
+configs:
+  Debug: debug
+  Release: release
+configFiles:
+  Debug: Configuration.xcconfig
+  Release: Configuration.xcconfig
+packages:
+  WebRTC:
+    url: https://github.com/stasel/WebRTC.git
+    exactVersion: 153.0.0
+  MarkdownUI:
+    url: https://github.com/gonzalezreal/swift-markdown-ui
+    exactVersion: 2.4.1
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    TARGETED_DEVICE_FAMILY: "1,2"
+    CURRENT_PROJECT_VERSION: "2"
+    MARKETING_VERSION: "0.1.1"
+    GENERATE_INFOPLIST_FILE: YES
+targets:
+  QM:
+    type: application
+    platform: iOS
+    sources:
+      - QM
+      - path: ../desktop/assets/becalmed-off-halfway-rock.webp
+        buildPhase: resources
+    dependencies:
+      - package: WebRTC
+      - package: MarkdownUI
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(QM_BUNDLE_ID)
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        INFOPLIST_KEY_CFBundleDisplayName: QM
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: Record dictation and talk to QM. Dictation audio is sent to your workspace’s transcription provider when you finish recording; live voice audio is sent while connected.
+    info:
+      path: QM/Info.plist
+      properties:
+        NSCameraUsageDescription: QM’s calling library supports camera access for video calls. This version of QM uses audio-only calls and does not request camera access.
+        QMBaseURL: $(QM_BASE_URL)
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        CFBundleURLTypes:
+          - CFBundleURLName: org.qm.authentication
+            CFBundleURLSchemes: [qm, qm-desktop]
+        UISupportedInterfaceOrientations:
+          [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        UISupportedInterfaceOrientations~ipad:
+          [
+            UIInterfaceOrientationPortrait,
+            UIInterfaceOrientationPortraitUpsideDown,
+            UIInterfaceOrientationLandscapeLeft,
+            UIInterfaceOrientationLandscapeRight,
+          ]
+  QMTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [QMTests]
+    dependencies:
+      - target: QM
+schemes:
+  QM:
+    build:
+      targets:
+        QM: all
+    test:
+      targets: [QMTests]

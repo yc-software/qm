@@ -106,12 +106,6 @@ export async function resolveSandbox(opts: {
       SMOLMACHINES_NAME_PREFIX: opts.baseEnv.SMOLMACHINES_NAME_PREFIX || "qmdev",
     };
     if (opts.baseEnv.SMOLMACHINES_IMAGE) smolEnv.SMOLMACHINES_IMAGE = opts.baseEnv.SMOLMACHINES_IMAGE;
-    if (opts.baseEnv.SMOLMACHINES_EGRESS_PROXY_URL)
-      smolEnv.SMOLMACHINES_EGRESS_PROXY_URL = opts.baseEnv.SMOLMACHINES_EGRESS_PROXY_URL;
-    else
-      warnings.push(
-        "SMOLMACHINES_EGRESS_PROXY_URL unset -- smolmachines sandbox runs with NO egress enforcement; set it to QA the forced-proxy path",
-      );
     if (smolApiUrl) smolEnv.PUBLIC_API_URL = smolApiUrl;
     return {
       backend: "smolmachines",
@@ -143,11 +137,6 @@ export async function resolveSandbox(opts: {
     };
     if (opts.baseEnv.AGENT37_API_BASE_URL) env.AGENT37_API_BASE_URL = opts.baseEnv.AGENT37_API_BASE_URL;
     if (opts.baseEnv.AGENT37_TEMPLATE) env.AGENT37_TEMPLATE = opts.baseEnv.AGENT37_TEMPLATE;
-    if (opts.baseEnv.AGENT37_EGRESS_PROXY_URL) env.AGENT37_EGRESS_PROXY_URL = opts.baseEnv.AGENT37_EGRESS_PROXY_URL;
-    else
-      warnings.push(
-        "AGENT37_EGRESS_PROXY_URL unset -- agent37 sandbox runs with NO egress enforcement; set it to QA the forced-proxy path",
-      );
     if (apiUrl) env.PUBLIC_API_URL = apiUrl;
     return { backend: "agent37", env, detail: "Agent37 (api.agent37.com)", publicApiUrl: apiUrl, warnings };
   }
@@ -190,6 +179,32 @@ export async function resolveSandbox(opts: {
     return { backend: "superserve", env, detail: `Superserve (template ${template})`, publicApiUrl: apiUrl, warnings };
   }
 
+  if (backend === "render") {
+    const apiKey = opts.baseEnv.RENDER_API_KEY?.trim();
+    const workspaceId = opts.baseEnv.RENDER_WORKSPACE_ID?.trim();
+    const image = opts.baseEnv.RENDER_SANDBOX_IMAGE?.trim();
+    if (!apiKey || !workspaceId || !image)
+      throw new Error(
+        "--sandbox render requires RENDER_API_KEY, RENDER_WORKSPACE_ID, and RENDER_SANDBOX_IMAGE (<repository>:<tag>@sha256:<digest>) in the environment",
+      );
+    let apiUrl = opts.baseEnv.PUBLIC_API_URL || null;
+    if (!apiUrl) {
+      apiUrl = await startQuickTunnel(opts.corePort, opts.lock, opts.log);
+      if (!apiUrl)
+        warnings.push(
+          "cloudflared tunnel didn't come up -- agent self-API (crons/sends) won't be reachable from the sandbox",
+        );
+    }
+    const env: Record<string, string> = {
+      SANDBOX_BACKEND: "render",
+      RENDER_API_KEY: apiKey,
+      RENDER_WORKSPACE_ID: workspaceId,
+      RENDER_SANDBOX_IMAGE: image,
+    };
+    if (apiUrl) env.PUBLIC_API_URL = apiUrl;
+    return { backend: "render", env, detail: `Render (image ${image})`, publicApiUrl: apiUrl, warnings };
+  }
+
   if (backend === "do-managed-agents") {
     const managedAgentsToken = opts.baseEnv.DO_AGENTS_API_TOKEN?.trim();
     if (!managedAgentsToken)
@@ -212,12 +227,6 @@ export async function resolveSandbox(opts: {
     if (opts.baseEnv.DO_AGENTS_API_BASE_URL) env.DO_AGENTS_API_BASE_URL = opts.baseEnv.DO_AGENTS_API_BASE_URL;
     if (opts.baseEnv.DO_AGENTS_TEMPLATE) env.DO_AGENTS_TEMPLATE = opts.baseEnv.DO_AGENTS_TEMPLATE;
     if (opts.baseEnv.DO_AGENTS_SIZE_SLUG) env.DO_AGENTS_SIZE_SLUG = opts.baseEnv.DO_AGENTS_SIZE_SLUG;
-    if (opts.baseEnv.DO_AGENTS_EGRESS_PROXY_URL)
-      env.DO_AGENTS_EGRESS_PROXY_URL = opts.baseEnv.DO_AGENTS_EGRESS_PROXY_URL;
-    else
-      warnings.push(
-        "DO_AGENTS_EGRESS_PROXY_URL unset -- do-managed-agents sandbox runs with NO egress enforcement; set it to QA the forced-proxy path",
-      );
     if (managedAgentsApiUrl) env.PUBLIC_API_URL = managedAgentsApiUrl;
     return {
       backend: "do-managed-agents",
@@ -254,12 +263,6 @@ export async function resolveSandbox(opts: {
     };
     if (opts.baseEnv.PORTER_DEPLOY_URL) env.PORTER_DEPLOY_URL = opts.baseEnv.PORTER_DEPLOY_URL;
     if (opts.baseEnv.PORTER_SANDBOX_IMAGE) env.PORTER_SANDBOX_IMAGE = opts.baseEnv.PORTER_SANDBOX_IMAGE;
-    if (opts.baseEnv.PORTER_SANDBOX_EGRESS_PROXY_URL)
-      env.PORTER_SANDBOX_EGRESS_PROXY_URL = opts.baseEnv.PORTER_SANDBOX_EGRESS_PROXY_URL;
-    else
-      warnings.push(
-        "PORTER_SANDBOX_EGRESS_PROXY_URL unset -- porter sandbox runs with NO egress enforcement; set it to QA the forced-proxy path",
-      );
     if (porterApiUrl) env.PUBLIC_API_URL = porterApiUrl;
     return {
       backend: "porter",
@@ -286,13 +289,6 @@ export async function resolveSandbox(opts: {
     SPRITES_TOKEN: token,
     SPRITES_NAME_PREFIX: opts.baseEnv.SPRITES_NAME_PREFIX || "qmdev",
   };
-  // Force-through egress is opt-in in dev: set it only if the caller supplied a proxy URL.
-  // Without it the sandbox has open egress — warn so a "proxy ON" QA run isn't silently toothless.
-  if (opts.baseEnv.SPRITES_EGRESS_PROXY_URL) env.SPRITES_EGRESS_PROXY_URL = opts.baseEnv.SPRITES_EGRESS_PROXY_URL;
-  else
-    warnings.push(
-      "SPRITES_EGRESS_PROXY_URL unset -- sprites sandbox runs with NO egress enforcement; set it to QA the forced-proxy path",
-    );
   if (publicApiUrl) env.PUBLIC_API_URL = publicApiUrl;
   return { backend: "sprites", env, detail: "Fly Sprites (api.sprites.dev)", publicApiUrl, warnings };
 }

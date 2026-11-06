@@ -214,15 +214,15 @@ async function brainTarget(ctx: ApiCtx, b: Record<string, unknown>): Promise<Sec
     return null;
   }
   const record = readRegistry((await deps.memoryRegistry.current()).record);
-  const brain = record.brains.find(({ id }) => id === b.memoryBrain);
-  if (!brain) {
-    sendJson(res, 404, { error: "not_found", message: `no memory brain ${String(b.memoryBrain)}` });
-    return null;
-  }
   const actor = canonicalPerson(capability!.actorId);
-  const refusal = brainRefusal(record, brain, actor, await adminStanding(deps, actor));
+  const brain = record.brains.find(({ id }) => id === b.memoryBrain);
+  const refusal = brainRefusal(record, brain ?? { id: String(b.memoryBrain) }, actor, await adminStanding(deps, actor));
   if (refusal) {
     sendJson(res, 403, { error: "forbidden", message: refusal });
+    return null;
+  }
+  if (!brain) {
+    sendJson(res, 404, { error: "not_found", message: `no memory brain ${String(b.memoryBrain)}` });
     return null;
   }
   return { id: brain.id, url: brain.url };
@@ -355,11 +355,11 @@ async function mintDrop(ctx: ApiCtx): Promise<void> {
     purpose: b.purpose.trim(),
     requestedBy: capability.actorId,
     audienceScopeId: capability.scopeId,
-    ...(wantsGrant && capability.scopeVersion ? { scopeVersion: capability.scopeVersion } : {}),
     ...(brain
       ? { memoryBrain: brain }
       : {
           ...(wantsGrant ? { grantMode: (b.grantMode as GrantMode | undefined) ?? "standing" } : {}),
+          ...(wantsGrant && capability.scopeVersion ? { scopeVersion: capability.scopeVersion } : {}),
           ...(dest.ok && dest.destination ? { destination: dest.destination } : {}),
           ...(capability.threadRef ? { threadRef: capability.threadRef } : {}),
         }),
@@ -435,7 +435,7 @@ async function redeemDrop(ctx: ApiCtx): Promise<void> {
     });
   }
   const attestation = linkClaims === true ? undefined : linkClaims;
-  if (!(await dropScopeAuthorized(ctx, peeked.rec, attestation))) {
+  if (!peeked.rec.memoryBrain && !(await dropScopeAuthorized(ctx, peeked.rec, attestation))) {
     return sendJson(res, 409, {
       error: "scope_changed",
       message: "couldn't confirm you're still in this conversation — try again, or ask the agent for a fresh link",

@@ -60,7 +60,6 @@ async function setup(
     keychain: built.keychain,
     secretDrops: built.secretDrops,
     deliveries: built.deliveries,
-    workspace: built.workspace,
     auditLog: built.auditLog,
     admin: built.admin,
     memoryRegistry: registry,
@@ -149,9 +148,12 @@ async function setup(
   return { base, built, change, mint, self, servedSecret };
 }
 
-test("an org admin's brain link saves the client secret core-only, from a project and from a DM", async (t) => {
+test("an org admin's brain link saves the client secret core-only, from a project whose members change and from a DM", async (t) => {
   const { built, mint, servedSecret } = await setup(t);
-  await built.app.upsertDirectory([{ principalId: "admin-alice", displayName: "Alice", type: "internal" }]);
+  await built.app.upsertDirectory([
+    { principalId: "admin-alice", displayName: "Alice", type: "internal" },
+    { principalId: "member-bob", displayName: "Bob", type: "internal" },
+  ]);
   const project = await built.app.createProject("admin-alice", "Brain setup");
   assert.ok(project);
   const scopeVersion = await built.projects.version(project.scopeId.slice("group:".length));
@@ -166,6 +168,7 @@ test("an org admin's brain link saves the client secret core-only, from a projec
   assert.equal(form.status, 200);
   assert.match(form.text, /Acme personal memory at https:\/\/brain\.acme\.example/);
   assert.match(form.text, /every member&#39;s personal memory/);
+  assert.equal((await built.app.addProjectMember(project.id, "admin-alice", "member-bob")).status, "ok");
   const saved = await fromProject.redeem("brain-secret-one");
   assert.equal(saved.status, 200);
   assert.deepEqual(JSON.parse(saved.text), { ok: true, brain: "acme-personal" });
@@ -190,6 +193,7 @@ test("a brain link refuses non-admins, other drop fields, unknown and moved brai
   const { built, change, mint, servedSecret } = await setup(t);
   const brainDrop = { memoryBrain: "acme-personal", purpose: "connect it" };
   assert.equal((await mint("U-member", brainDrop)).status, 403);
+  assert.equal((await mint("U-member", { memoryBrain: "nope", purpose: "p" })).status, 403);
   const extra = await mint("admin-alice", { ...brainDrop, service: "stripe", envKey: "STRIPE_KEY" });
   assert.equal(extra.status, 400);
   assert.match(extra.text, /only purpose, not service, envKey/);
@@ -246,11 +250,9 @@ test("an unfilled brain link is never a pending sibling of a keychain drop in th
     [{ channelId: "C1", principalId: "admin-alice" }],
   );
   const channel = scopeId("channel", "C1");
-  const brainLink = await mint("admin-alice", { memoryBrain: "acme-personal", purpose: "p" }, channel, {
-    threadRef: "th1",
-  });
+  const brainLink = await mint("admin-alice", { memoryBrain: "acme-personal", purpose: "p" }, channel);
   assert.equal(brainLink.status, 200);
-  const stripe = await mint("admin-alice", { service: "stripe", purpose: "p" }, channel, { threadRef: "th1" });
+  const stripe = await mint("admin-alice", { service: "stripe", purpose: "p" }, channel);
   const waited = new Promise<void>((resolve) => {
     fired = resolve;
   });
@@ -307,4 +309,38 @@ test("a member connects their own brain from chat and sets its secret through th
   for (const action of ["member-brain.update", "member-brain.delete", "brain.secret.refused"])
     assert.ok(rows.includes(`memory-registry.${action}`), action);
   assert.doesNotMatch(rows, /member-secret-/);
+});
+
+test("a member's brain fields are bounded, a repeated save writes nothing, and the record is schema 2 while it holds one", async (t) => {
+  const { built, self } = await setup(t);
+  const own = { url: "https://brain.member.example/mcp", clientId: "member-qm" };
+  const stored = async () => {
+    const { version, record } = await built.memoryRegistry.current();
+    return { version, schema: readRegistry(record).schema };
+  };
+  const long = "x".repeat(8_001);
+  for (const body of [
+    { ...own, url: `${own.url}?${long}` },
+    { ...own, clientId: long },
+    { ...own, label: long },
+  ]) {
+    const refused = await self("U-member", "PUT", body);
+    assert.equal(refused.status, 400);
+    assert.match(refused.json.message, /together can be at most 8000 characters/);
+  }
+  assert.equal((await stored()).schema, 1);
+
+  assert.equal((await self("U-member", "PUT", own)).status, 200);
+  const saved = await stored();
+  assert.equal(saved.schema, 2);
+  const repeated = await self("U-member", "PUT", own);
+  assert.deepEqual(
+    [repeated.status, repeated.json.brain?.auth.clientId, (await stored()).version],
+    [200, "member-qm", saved.version],
+  );
+  assert.equal((await self("U-member", "PUT", { label: "Mine" })).status, 200);
+  assert.notEqual((await stored()).version, saved.version);
+
+  assert.equal((await self("U-member", "DELETE")).status, 200);
+  assert.equal((await stored()).schema, 1);
 });

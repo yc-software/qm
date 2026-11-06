@@ -1,4 +1,4 @@
-import type { CoreSession, SessionEntry } from "./core-bridge.ts";
+import type { CoreSession } from "./core-bridge.ts";
 
 type SubagentState = "working" | "waiting" | "done" | "failed";
 
@@ -61,14 +61,22 @@ export function subagentRows(list: readonly CoreSession[], rootId: string): Suba
       session,
       state,
       depth,
-      startedAt: session.createdAt,
+      startedAt: (live && session.workingSince) || session.createdAt,
       endedAt: live ? null : (session.lastActivityAt ?? session.createdAt),
     };
   });
 }
 
 export function visibleSubagents(rows: readonly SubagentRow[], acknowledged: ReadonlySet<string>): SubagentRow[] {
-  return rows.filter((row) => row.state !== "done" && !(row.state === "failed" && acknowledged.has(ackKey(row))));
+  const depths = new Map<string, number>();
+  const visible: SubagentRow[] = [];
+  for (const row of rows) {
+    const shown = row.state !== "done" && !(row.state === "failed" && acknowledged.has(ackKey(row)));
+    const depth = (depths.get(row.session.parentSessionId ?? "") ?? 0) + (shown ? 1 : 0);
+    depths.set(row.session.id, depth);
+    if (shown) visible.push(depth === row.depth ? row : { ...row, depth });
+  }
+  return visible;
 }
 
 export function ackKey(row: Pick<SubagentRow, "session" | "endedAt">): string {
@@ -85,35 +93,4 @@ export function subagentSummary(rows: readonly SubagentRow[]): string {
   if (waiting) parts.push(`${waiting} need${waiting === 1 ? "s" : ""} you`);
   if (failed) parts.push(`${failed} failed`);
   return parts.join(", ");
-}
-
-export interface PeekLine {
-  kind: "tool" | "text";
-  text: string;
-}
-
-function clip(text: string, max: number): string {
-  const flat = text.replace(/\s+/g, " ").trim();
-  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
-}
-
-function toolLine(payload: { tool?: unknown; action?: unknown; command?: unknown }): string | null {
-  if (typeof payload.tool !== "string" || !payload.tool) return null;
-  const action = typeof payload.action === "string" && payload.action ? ` ${payload.action}` : "";
-  const command = typeof payload.command === "string" && payload.command ? ` · ${payload.command}` : "";
-  return clip(`${payload.tool}${action}${command}`, 120);
-}
-
-export function peekLines(entries: readonly SessionEntry[], max = 4): PeekLine[] {
-  const lines: PeekLine[] = [];
-  for (const entry of entries) {
-    const payload = (entry.payload ?? {}) as { tool?: unknown; action?: unknown; command?: unknown; text?: unknown };
-    const tool = entry.type === "tool_call" ? toolLine(payload) : null;
-    if (tool) lines.push({ kind: "tool", text: tool });
-    else if ((entry.type === "assistant" || entry.type === "text") && typeof payload.text === "string") {
-      const text = clip(payload.text, 240);
-      if (text) lines.push({ kind: "text", text });
-    }
-  }
-  return lines.slice(-max);
 }

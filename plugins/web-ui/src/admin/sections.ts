@@ -12,6 +12,7 @@ export const ADMIN_SECTIONS = [
 
 const ADMIN_VIEWS = new Set([
   ...ADMIN_SECTIONS.flatMap((section) => section.views),
+  "my-spend",
   "onboarding",
   "user",
   "ackemoji",
@@ -20,6 +21,7 @@ const ADMIN_VIEWS = new Set([
 
 export const VIEW_TITLE: Record<string, string> = {
   general: "General",
+  "my-spend": "My spend",
   onboarding: "Onboarding",
   governance: "Governance",
   models: "Models",
@@ -102,6 +104,7 @@ const pages = {
   user: () => import("./users.ts"),
   keychain: () => import("./users.ts"),
   spend: () => import("./spend.ts"),
+  "my-spend": () => import("../spend.ts"),
   history: () => import("./history.ts"),
   judgments: () => import("./slack-activity.ts"),
   ackemoji: () => import("./slack-activity.ts"),

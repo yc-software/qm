@@ -10,7 +10,6 @@ import { createServer as createHttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
-import { attributedSteerText } from "../src/api/app-turn.ts";
 import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import type { Principal, TurnRequest } from "../src/types.ts";
@@ -96,7 +95,7 @@ function steererRequest(externalId: string, threadRef: string, text: string, dis
     surface: "web",
     actor: { externalId, ...(displayName ? { displayName } : {}) },
     conversation: { kind: "dm", threadRef },
-    liveActor: true,
+    origin: { kind: "human" },
     text,
   };
 }
@@ -115,10 +114,10 @@ test("core route: a steer's ts and request thread through to the signal store", 
   assert.ok(signal);
   assert.equal(signal.ts, "1712.001");
   assert.equal(signal.request?.actor.externalId, "internal:U1");
-  assert.equal(signal.text, "go left", "the run owner's own steer is not attributed");
+  assert.equal(signal.text, "go left");
 });
 
-test("core route: another person's steer is attributed with their display name", async () => {
+test("core route: another person's steer keeps their words and identity for the turn's intake", async () => {
   const { run } = await built.runs.enqueue({ sessionId: "t-foreign", request: request("hi", "t-foreign") });
   const r = await coreSignal(run.id, {
     kind: "steer",
@@ -128,8 +127,8 @@ test("core route: another person's steer is attributed with their display name",
   });
   assert.equal(r.status, 200);
   const [signal] = await built.signals.takePending(run.id);
-  assert.equal(signal?.text, "Eve Example: go right");
-  assert.equal(signal?.request?.text, "go right", "the replayable request keeps the steerer's own words");
+  assert.equal(signal?.text, "go right");
+  assert.equal(signal?.request?.actor.displayName, "Eve Example");
 });
 
 test("core route: a malformed request is rejected 400, and privileged fields are stripped", async () => {
@@ -139,7 +138,7 @@ test("core route: a malformed request is rejected 400, and privileged fields are
 
   const smuggled = {
     ...steererRequest("internal:U1", "t-sanitize", "x"),
-    ownerKeychainUnion: true,
+    origin: { kind: "automation", useOwnerKeychain: true },
     spawned: true,
     unattendedGrants: ["admin-read"],
   };
@@ -147,7 +146,7 @@ test("core route: a malformed request is rejected 400, and privileged fields are
   assert.equal(r.status, 200);
   const [signal] = await built.signals.takePending(run.id);
   assert.ok(signal?.request);
-  assert.equal("ownerKeychainUnion" in signal.request, false);
+  assert.deepEqual(signal.request.origin, { kind: "automation" });
   assert.equal("spawned" in signal.request, false);
   assert.equal("unattendedGrants" in signal.request, false);
 });
@@ -160,7 +159,7 @@ test("core route: a bare steer without a ts gets one minted so agents persist it
   assert.ok(signal?.ts, "signalRun mints a ts when the caller sends none");
 });
 
-test("signalRun attributes a bare steer from a shared-scope viewer who is not the run's owner", async () => {
+test("signalRun carries a bare steer from a shared-scope viewer who is not the run's owner as theirs", async () => {
   await built.app.upsertChannels(
     [{ channelId: "C-STEER", name: "steer-room", isPrivate: true }],
     [
@@ -176,7 +175,9 @@ test("signalRun attributes a bare steer from a shared-scope viewer who is not th
     request: {
       modelAccount: "company",
       actor: owner,
-      conversation: { kind: "channel", channelRef: "C-STEER", threadRef, audience: [owner] },
+      surface: "slack",
+      deliveryTarget: "slack:C-STEER:1.0",
+      conversation: { kind: "channel", channelRef: "C-STEER", threadRef, audience: [owner], isPrivate: true },
       origin: { kind: "direct" },
       text: "queued shared work",
     },
@@ -186,7 +187,13 @@ test("signalRun attributes a bare steer from a shared-scope viewer who is not th
   const outcome = await built.app.signalRun(run.id, { kind: "steer", text: "try harder" }, "steer-member");
   assert.equal(outcome.accepted, true);
   const [signal] = await built.signals.takePending(run.id);
-  assert.equal(signal?.text, "Steer Member: try harder");
+  assert.equal(signal?.text, "try harder");
+  assert.equal(signal?.request?.actor.externalId, "steer-member");
+  assert.equal(signal?.request?.actor.displayName, "Steer Member");
+  assert.equal(signal?.request?.deliveryTarget, "slack:C-STEER:1.0", "a replay still delivers where the run did");
+  assert.deepEqual(signal?.request?.conversation.audience, [{ externalId: "steer-owner" }]);
+  assert.equal(signal?.request?.conversation.isPrivate, true);
+  assert.deepEqual(await built.signals.steerAuthors(run.id), ["steer-member"]);
   assert.ok(signal?.ts);
 });
 
@@ -262,7 +269,7 @@ test("an orphaned steer whose own request is refused falls back to replaying on 
       surface: "web",
       actor: { externalId: "web-eve" },
       conversation: { kind: "group", threadRef: `web:web-eve:${crypto.randomUUID()}`, channelRef: "G-NOPE" },
-      liveActor: true,
+      origin: { kind: "human" },
       text: "still matters",
     },
   });
@@ -278,15 +285,6 @@ test("an orphaned steer whose own request is refused falls back to replaying on 
   assert.ok(replayed, "a refused steerer request still replays the text on the run's own request");
   assert.equal(replayed!.request.actor.id, "internal:U1");
   assert.equal(replayed!.request.text, "still matters");
-});
-
-test("attributedSteerText prefixes foreign and ambient steers only", () => {
-  const eve = { id: "web-eve", displayName: "Eve Example" };
-  assert.equal(attributedSteerText(eve, "web-eve", "hello"), "hello");
-  assert.equal(attributedSteerText(eve, "web-alice", "hello"), "Eve Example: hello");
-  assert.equal(attributedSteerText({ id: "web-eve" }, "web-alice", "hello"), "web-eve: hello");
-  assert.equal(attributedSteerText({ id: "web-eve", displayName: "  " }, "web-alice", "hi"), "web-eve: hi");
-  assert.equal(attributedSteerText(eve, null, "hello"), "Eve Example: hello");
 });
 
 test("core route: steer without text is rejected 400", async () => {
@@ -674,7 +672,7 @@ test("run control follows current shared membership while public history require
     }
     assert.ok(
       await built.app.getSessionForViewer(session.id, "shared-member"),
-      "history remains readable through the participant window",
+      "history remains readable to a current participant",
     );
     assert.equal(await built.app.getRun(run.id, "shared-member"), null);
     assert.deepEqual(await built.app.signalRun(run.id, { kind: "abort" }, "shared-member"), {
@@ -713,7 +711,10 @@ test("web proxy: /api/runs/active tracks queued runs — the live one first, the
   const threadRef = `web:carol:${crypto.randomUUID()}`;
   const submitTwice = async (text: string): Promise<string> => {
     const r = (await (
-      await fetch(`${webBase}/api/turn`, asUser("carol", { method: "POST", body: JSON.stringify({ text, threadRef }) }))
+      await fetch(
+        `${webBase}/api/turn`,
+        asUser("carol", { method: "POST", body: JSON.stringify({ text, threadRef, midTurn: "queue" }) }),
+      )
     ).json()) as { runId?: string };
     assert.ok(r.runId);
     return r.runId!;
@@ -745,7 +746,7 @@ test("web steering atomically transfers file-only queues and deduplicates retrie
       `${webBase}/api/turn`,
       asUser("U1", {
         method: "POST",
-        body: JSON.stringify({ text, threadRef, attachments: files }),
+        body: JSON.stringify({ text, threadRef, attachments: files, midTurn: "queue" }),
       }),
     );
     return ((await res.json()) as { runId: string }).runId;
@@ -1105,4 +1106,46 @@ test("subagent orphan replay drops a late client_result instead of starting a tu
   await built.app.replayOrphanedRunSignals(run.id);
   await settleNoReplay(threadRef);
   assert.deepEqual(await built.signals.pending(run.id), [], "the late answer is acknowledged");
+});
+
+test("web proxy: Stop stops only the run's own conversation; tree:true stops its subagents too, even after that run ended", async () => {
+  const alice = { id: "alice", type: "internal" as const };
+  const scope = scopeId("personal", "alice");
+  const parentThread = "web:alice:stop-tree";
+  const childThread = "agent:main:subagent:stop-tree-child";
+  const parent = await built.sessions.getOrCreateByThread(parentThread, "dm", scope, undefined, "web");
+  const child = await built.sessions.getOrCreateByThread(childThread, "dm", scope, undefined, "web");
+  await built.sessions.setParentSession(child.id, parent.id);
+  const running = async (threadRef: string, text: string) => {
+    const { run } = await built.runs.enqueue({
+      sessionId: threadRef,
+      request: {
+        ...request(text, threadRef),
+        surface: "web",
+        actor: alice,
+        conversation: { kind: "dm", threadRef, audience: [alice] },
+      },
+    });
+    const claimed = await built.runs.claimById(run.id, "test-worker", 60_000);
+    return { run, leaseToken: claimed!.leaseToken! };
+  };
+  const lead = await running(parentThread, "lead the work");
+  const lane = await running(childThread, "one lane");
+  const stop = (body: Record<string, unknown>) =>
+    fetch(`${webBase}/api/runs/${lead.run.id}/signal`, asUser("alice", { method: "POST", body: JSON.stringify(body) }));
+  const reasons = async (runId: string) =>
+    (await built.signals.pending(runId)).map(({ signal }) => [signal.kind, signal.reason, signal.scope]);
+
+  assert.equal((await stop({ kind: "abort" })).status, 200);
+  assert.deepEqual(await reasons(lead.run.id), [["abort", "by user", "session"]]);
+  assert.deepEqual(await reasons(lane.run.id), []);
+
+  await built.runs.complete(lead.run.id, lead.leaseToken, { status: "silent", stopped: true, stopScope: "session" });
+  assert.equal((await stop({ kind: "abort" })).status, 409);
+  assert.deepEqual(await reasons(lane.run.id), []);
+
+  assert.equal((await stop({ kind: "abort", tree: true })).status, 200);
+  assert.deepEqual(await reasons(lane.run.id), [["abort", "because the parent session was stopped", "ancestor"]]);
+  await built.runs.complete(lane.run.id, lane.leaseToken, { status: "silent", stopped: true });
+  assert.equal((await stop({ kind: "abort", tree: true })).status, 409);
 });

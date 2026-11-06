@@ -313,7 +313,7 @@ export async function runSetup(opts: { dir: string }): Promise<void> {
     stepLine(n++, "qm check", "validate the config and sandbox layer");
     stepLine(n++, "qm doctor", "verify external prerequisites read-only");
     if (config.target === "aws")
-      stepLine(n++, "see AGENTS.md", "the AWS bootstrap order (Terraform, TLS, portal) before up");
+      stepLine(n++, "see AGENTS.md", "the AWS bootstrap order (Terraform, TLS, sign-in) before up");
     else stepLine(n++, "qm up", "bring the deployment up and print the URLs");
     if (skipped.length > 0 && remainingRequired.length === 0) note(dim(`  (optional skipped: ${skipped.join(", ")})`));
   } finally {

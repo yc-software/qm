@@ -4,12 +4,13 @@ import { createRegistryMemoryService } from "../src/memory/registry-memory.ts";
 import { emptyMemoryRegistry } from "./support/memory-registry.ts";
 import { parseMemoryProviderConfig } from "../src/memory/provider-config.ts";
 import { withProviders, writeFacts } from "../src/memory/provider-outcome.ts";
-import { installPrincipalLinks } from "../src/directory/person.ts";
+import { installPrincipalLinks, OutsideAudience } from "../src/directory/person.ts";
 import type { MemoryProviderOutcome, MemoryService } from "../src/memory/memory-service.ts";
 import { startMcpTestServer } from "./support/mcp-test-server.ts";
 import { createRoutedMemoryService } from "../src/memory/provider-router.ts";
 import { searchNotebooks } from "../src/memory/cross-scope.ts";
-import { McpCallError } from "../src/mcp/mcp-client.ts";
+import { createMcpClient, McpCallError } from "../src/mcp/mcp-client.ts";
+import { createMcpMemoryProvider } from "../src/memory/mcp-memory-provider.ts";
 import { recallText } from "./support/recall-text.ts";
 
 const notebook: MemoryService = {
@@ -69,6 +70,24 @@ function configured(
   });
 }
 
+function routedWithTimeout(url: string, timeoutMs: number) {
+  const client = (clientId: string, clientSecret: string) =>
+    createMcpClient({ url, auth: { mode: "client-credentials", clientId, clientSecret }, fetch });
+  return createRoutedMemoryService({
+    providers: {
+      default: notebook,
+      knowledge: createMcpMemoryProvider({
+        read: { client: client("ro", "x"), tool: "search_knowledge", timeoutMs },
+        write: { client: client("rw", "y"), tool: "write_knowledge", idempotencyArg: "request_id", timeoutMs },
+      }),
+    },
+    routes: [
+      { provider: "default", scopes: ["personal"], capture: "automatic" },
+      { provider: "knowledge", scopes: ["personal"], capture: "explicit", manage: false, failOpen: true },
+    ],
+  });
+}
+
 function sink() {
   const outcomes: MemoryProviderOutcome[] = [];
   return { outcomes, report: (outcome: MemoryProviderOutcome) => void outcomes.push(outcome) };
@@ -123,14 +142,87 @@ test("an actor QM cannot attest makes no provider call and is recorded as denied
   const memory = configured(mcp.url, { attestActor: true });
   const { outcomes, problems } = await withProviders("search", async (report) => {
     for (const actorId of ["jörg@acme.test", "x".repeat(257), "U 1"]) {
-      assert.equal(recallText(await memory.recall("personal:U1", { actorId, report })), "notebook fact");
+      assert.equal(recallText(await memory.recall(`personal:${actorId}`, { actorId, report })), "notebook fact");
     }
+    assert.equal(recallText(await memory.recall("personal:U1", { report })), "notebook fact");
   });
   assert.deepEqual(mcp.requests, []);
-  assert.deepEqual(external(outcomes), Array(3).fill({ outcome: "denied", code: "invalid_actor" }));
+  assert.deepEqual(external(outcomes), Array(4).fill({ outcome: "denied", code: "invalid_actor" }));
   const [problem] = problems;
   assert.equal(problem?.code, "memory_provider_denied");
   assert.match(problem?.fix ?? "", /POST \/v1\/admin\/principal-links/);
+});
+
+test("an attested provider is called only for the person whose private conversation it is", async (t) => {
+  installPrincipalLinks({
+    canonical: (key) => (key === "system:digest" ? "U1" : undefined),
+    aliases: () => [],
+  });
+  t.after(() => installPrincipalLinks(null));
+  const mcp = await startMcpTestServer(t, { tools: TOOLS, clients: { ro: "x", rw: "y" } });
+  const memory = configured(mcp.url, { attestActor: true });
+  for (const actorId of ["U2", "system:personal:U1", "system:digest"])
+    assert.equal(recallText(await memory.recall("personal:U1", { query: "launch", actorId })), "notebook fact");
+  const write = await writeFacts(
+    memory,
+    "personal:U1",
+    ["fact"],
+    { actorId: "U2", context: "conversation" },
+    { mode: "explicit" },
+    undefined,
+  );
+  assert.equal(write.added, 1);
+  assert.deepEqual(external(write.outcomes), [{ outcome: "denied", code: "private_only" }]);
+  assert.match(write.problems[0]?.fix ?? "", /own private conversation/);
+  for (const actorId of ["system:personal:U1", "system:digest"]) {
+    const skipped = await writeFacts(
+      memory,
+      "personal:U1",
+      ["fact"],
+      { actorId, context: "conversation" },
+      { mode: "explicit" },
+      undefined,
+    );
+    assert.equal(skipped.added, 1);
+    assert.deepEqual(external(skipped.outcomes), []);
+  }
+  assert.equal(mcp.requests.length, 0);
+  await memory.recall("personal:U1", { query: "launch", actorId: "U1" });
+  assert.deepEqual(new Set(mcp.requests.map((request) => request.actor)), new Set(["U1"]));
+});
+
+test("a write refused for its audience is recorded and logged without failing the route", async () => {
+  const refusing: MemoryService = {
+    ...notebook,
+    async capture() {
+      throw new OutsideAudience("memory provider");
+    },
+  };
+  for (const failOpen of [false, true]) {
+    const errors: unknown[] = [];
+    const memory = createRoutedMemoryService({
+      providers: { default: notebook, knowledge: refusing },
+      routes: [
+        { provider: "default", scopes: ["personal"], capture: "explicit" },
+        { provider: "knowledge", scopes: ["personal"], capture: "explicit", manage: false, failOpen },
+      ],
+      onError: (error) => void errors.push(error),
+    });
+    const { outcomes, report } = sink();
+    assert.equal(
+      await memory.capture(
+        "personal:U1",
+        ["fact"],
+        1,
+        { actorId: "admin", context: "conversation" },
+        { mode: "explicit", report },
+      ),
+      1,
+    );
+    assert.deepEqual(external(outcomes), [{ outcome: "denied", code: "private_only" }]);
+    assert.equal(errors.length, 1);
+    assert.ok(errors[0] instanceof OutsideAudience);
+  }
 });
 
 test("provider refusals, codes and failures are told apart", async (t) => {
@@ -276,7 +368,7 @@ test("explicit writes record committed, pending and unknown with a stable UUID i
         : { content: [{ type: "text", text: JSON.stringify({ status: "pending" }) }] };
     },
   });
-  const memory = configured(mcp.url, { timeoutMs: 200 });
+  const memory = routedWithTimeout(mcp.url, 200);
   const write = (facts: string[], turn?: string) =>
     writeFacts(memory, "personal:U1", facts, { actorId: "U1", context: "conversation" }, { mode: "explicit" }, turn);
 
@@ -319,9 +411,36 @@ test("explicit writes record committed, pending and unknown with a stable UUID i
   assert.equal(second, first);
   assert.notEqual(third, first);
   assert.notEqual(otherTurn, first);
-  assert.equal(none, undefined);
+  assert.match(String(none), uuid);
+  assert.notEqual(none, first);
   assert.notEqual(otherNotebook, first);
   assert.match(String(slow), uuid);
+});
+
+test("timeoutMs bounds reads, and a write slower than it still commits", async (t) => {
+  const mcp = await startMcpTestServer(t, {
+    tools: TOOLS,
+    clients: { ro: "x", rw: "y" },
+    call: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      return { content: [{ type: "text", text: "stored" }] };
+    },
+  });
+  const memory = configured(mcp.url, { timeoutMs: 100 });
+  const read = await withProviders("search", (report) => memory.recall("personal:U1", { actorId: "U1", report }));
+  const written = await writeFacts(
+    memory,
+    "personal:U1",
+    ["fact"],
+    { actorId: "U1", context: "conversation" },
+    { mode: "explicit" },
+    "run-1",
+  );
+  await settled(mcp, 2);
+
+  assert.deepEqual(external(read.outcomes), [{ outcome: "timed_out", code: undefined }]);
+  assert.deepEqual(external(written.outcomes), [{ outcome: "committed", code: undefined }]);
+  assert.deepEqual(written.problems, []);
 });
 
 test("a failing built-in notebook write stays QM's own error, not a provider problem", async (t) => {

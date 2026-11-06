@@ -1,15 +1,14 @@
-import { createHash } from "node:crypto";
 import { decryptSecret, encryptSecret, type SecretKey } from "../connectors/connector-client-store.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { parseScopeId, scopeId, type ScopeId } from "../types.ts";
+import { hashId } from "../util/crypto.ts";
 import { errMessage } from "../util/errors.ts";
 import { isPrivateNetworkIp } from "../util/network.ts";
-import { parseMemoryProviderConfig, type MemoryProviderConfig } from "./provider-config.ts";
+import { MEMORY_PROVIDER_ID, parseMemoryProviderConfig, type MemoryProviderConfig } from "./provider-config.ts";
 import type { MemoryCapturePolicy, MemoryProviderRoute } from "./provider-router.ts";
 
 export const MEMORY_REGISTRY_TABLE = "memory_registry";
 const RECORD_ID = "org";
-const BINDING_ID = /^[a-z][a-z0-9-]{0,62}$/;
 
 const BRAIN_PRESETS = {
   "gbrain-v1": {
@@ -43,7 +42,7 @@ interface RegistryBinding {
 }
 
 export interface MemoryRegistry {
-  schema: 1;
+  schema: 1 | 2;
   memberBrains?: boolean;
   brains: RegistryBrain[];
   bindings: RegistryBinding[];
@@ -118,7 +117,7 @@ function brainConfig(brain: RegistryBrain, bindings: readonly RegistryBinding[],
 export function readRegistry(value: unknown): MemoryRegistry {
   if (value === null || value === undefined) return EMPTY_MEMORY_REGISTRY;
   const record = value as Partial<MemoryRegistry>;
-  if (record.schema !== 1 || !Array.isArray(record.brains) || !Array.isArray(record.bindings))
+  if ((record.schema !== 1 && record.schema !== 2) || !Array.isArray(record.brains) || !Array.isArray(record.bindings))
     throw new Error("the memory registry record has a shape this QM build doesn't know");
   return record as MemoryRegistry;
 }
@@ -205,11 +204,12 @@ function object(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function text(value: unknown, field: string, max = 256): string {
-  if (typeof value !== "string" || !value.trim() || value.length > max)
-    throw invalid(`${field} must be a non-empty string of at most ${max} characters`);
-  return value.trim();
+function nonBlank(value: unknown, field: string): string {
+  if (typeof value !== "string" || !value.trim()) throw invalid(`${field} must be a non-empty string`);
+  return value;
 }
+
+const text = (value: unknown, field: string): string => nonBlank(value, field).trim();
 
 function flag(value: unknown, field: string, fallback: boolean): boolean {
   if (value === undefined) return fallback;
@@ -244,9 +244,9 @@ export function putBrain(
   const preset = body.preset ?? existing?.preset;
   if (typeof preset !== "string" || !presetOf({ preset }))
     throw invalid(`preset must be one of: ${Object.keys(BRAIN_PRESETS).join(", ")}`);
-  const url = text(body.url ?? existing?.url, "url", 2048);
+  const url = text(body.url ?? existing?.url, "url");
   if (brainOwner) publicUrl(url);
-  const clientSecret = body.clientSecret === undefined ? undefined : text(body.clientSecret, "clientSecret", 4096);
+  const clientSecret = body.clientSecret === undefined ? undefined : nonBlank(body.clientSecret, "clientSecret");
   const kept = url === existing?.url ? existing.auth.clientSecretEnc : undefined;
   const clientSecretEnc = clientSecret === undefined ? kept : encryptSecret(clientSecret, change.key);
   const timeoutMs = body.timeoutMs ?? existing?.timeoutMs;
@@ -255,12 +255,12 @@ export function putBrain(
     preset,
     url,
     auth: {
-      clientId: text(body.clientId ?? existing?.auth.clientId, "clientId"),
+      clientId: nonBlank(body.clientId ?? existing?.auth.clientId, "clientId"),
       ...(clientSecretEnc ? { clientSecretEnc } : {}),
     },
     ...(brainOwner ? { owner: brainOwner } : {}),
     ...(timeoutMs === undefined ? {} : { timeoutMs: timeoutMs as number }),
-    label: text(body.label ?? existing?.label, "label", 80),
+    label: text(body.label ?? existing?.label, "label"),
     updatedAt: change.now,
     updatedBy: change.actor,
   };
@@ -283,7 +283,7 @@ export function deleteBrain(record: MemoryRegistry, id: string): MemoryRegistry 
 }
 
 export function putBinding(record: MemoryRegistry, id: string, input: unknown, change: RegistryChange): MemoryRegistry {
-  if (!BINDING_ID.test(id))
+  if (!MEMORY_PROVIDER_ID.test(id))
     throw invalid("binding id must be up to 63 lowercase letters, digits or hyphens, starting with a letter");
   const body = object(input);
   const existing = record.bindings.find((binding) => binding.id === id);
@@ -300,9 +300,12 @@ export function putBinding(record: MemoryRegistry, id: string, input: unknown, c
     throw invalid('automatic capture into a brain isn\'t available yet; use "off" or "explicit"');
   if (capture !== "off" && capture !== "explicit") throw invalid('capture must be "off" or "explicit"');
   const twin = record.bindings.find(
-    (binding) => binding.id !== id && binding.brain === brain.id && binding.scope === scope,
+    (binding) =>
+      binding.id !== id &&
+      binding.brain === brain.id &&
+      (binding.scope === scope || binding.scope === "personal" || scope === "personal"),
   );
-  if (twin) throw conflict(`${scope} is already bound to brain ${brain.id} by binding ${twin.id}`);
+  if (twin) throw conflict(`${twin.scope} is already bound to brain ${brain.id} by binding ${twin.id}`);
   const binding: RegistryBinding = {
     id,
     brain: brain.id,
@@ -310,7 +313,7 @@ export function putBinding(record: MemoryRegistry, id: string, input: unknown, c
     capture,
     recall: flag(body.recall, "recall", existing?.recall ?? true),
     failOpen: flag(body.failOpen, "failOpen", existing?.failOpen ?? true),
-    label: text(body.label ?? existing?.label ?? brain.label, "label", 80),
+    label: text(body.label ?? existing?.label ?? brain.label, "label"),
     updatedAt: change.now,
     updatedBy: change.actor,
   };
@@ -343,10 +346,11 @@ export function setBrainSecret(
 
 const MEMBER_BRAIN_FIELDS = new Set(["url", "clientId", "label"]);
 
+const RFC_9110_URI_LENGTH = 8_000;
+
 export const memberBrainsOn = (record: MemoryRegistry): boolean => record.memberBrains !== false;
 
-export const memberBrainId = (owner: string): string =>
-  `member-${createHash("sha256").update(owner).digest("hex").slice(0, 16)}`;
+export const memberBrainId = (owner: string): string => `member-${hashId([owner])}`;
 
 const memberBrainsOff = () =>
   new MemoryRegistryError(403, "member brains are turned off for this org; an org admin can turn them back on");
@@ -366,6 +370,25 @@ export function putMemberBrain(
   const id = memberBrainId(owner);
   const existing = record.brains.find((brain) => brain.id === id);
   if (existing && existing.owner !== owner) throw conflict(`brain id ${id} is taken by another brain`);
+  const stored: Record<string, unknown> = {
+    url: existing?.url,
+    clientId: existing?.auth.clientId,
+    label: existing?.label,
+  };
+  const saved = Object.values({ ...stored, ...body }).reduce<number>(
+    (total, value) => total + String(value ?? "").length,
+    0,
+  );
+  if (saved > RFC_9110_URI_LENGTH)
+    throw invalid(
+      `your brain's ${[...MEMBER_BRAIN_FIELDS].join(", ")} together can be at most ${RFC_9110_URI_LENGTH} characters, the request-target length RFC 9110 asks HTTP software to accept`,
+    );
+  if (
+    existing &&
+    record.bindings.some((binding) => binding.id === id) &&
+    Object.keys(body).every((key) => body[key] === stored[key])
+  )
+    return record;
   const defaults = existing ? {} : { preset: "gbrain-v1", label: "Personal memory" };
   const withBrain = putBrain(record, id, { ...defaults, ...body }, change, owner);
   return withBrain.bindings.some((binding) => binding.id === id)
@@ -406,6 +429,11 @@ export function redactBrain({ auth, ...rest }: RegistryBrain) {
   return { ...rest, auth: { clientId: auth.clientId, hasClientSecret: !!auth.clientSecretEnc } };
 }
 
+const versioned = (record: MemoryRegistry): MemoryRegistry => ({
+  ...record,
+  schema: record.brains.some((brain) => brain.owner) ? 2 : 1,
+});
+
 export interface MemoryRegistryStore extends RegistryContext {
   current(): Promise<{ version: string; record: unknown }>;
   update(change: (record: MemoryRegistry) => MemoryRegistry): Promise<MemoryRegistry>;
@@ -417,16 +445,21 @@ export function createMemoryRegistryStore(opts: {
   overlay?: MemoryProviderConfig;
 }): MemoryRegistryStore {
   let cached: { version: string; record: unknown } | undefined;
+  const current = async () => {
+    const version = await opts.map.version();
+    if (cached?.version !== version) cached = { version, record: await opts.map.get(RECORD_ID) };
+    return cached;
+  };
   return {
     overlayIds: new Set(opts.overlay?.providers.map(({ id }) => id) ?? []),
     key: opts.key,
-    async current() {
-      const version = await opts.map.version();
-      if (cached?.version !== version) cached = { version, record: await opts.map.get(RECORD_ID) };
-      return cached;
-    },
+    current,
     async update(change) {
-      const [next] = await opts.map.mutateMany([{ id: RECORD_ID, apply: (current) => change(readRegistry(current)) }]);
+      const seen = readRegistry((await current()).record);
+      if (change(seen) === seen) return seen;
+      const [next] = await opts.map.mutateMany([
+        { id: RECORD_ID, apply: (stored) => versioned(change(readRegistry(stored))) },
+      ]);
       return next!;
     },
   };

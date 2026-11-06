@@ -20,12 +20,12 @@ export function clearTranscriptCache(): void {
 }
 
 export function pageAnchor(page: TranscriptPage): number | null {
-  return (page.earlierEntries ?? 0) > 0 ? (page.entries?.[0]?.seq ?? null) : null;
+  return (page.earlierItems ?? 0) > 0 ? (page.items[0]?.seq ?? null) : null;
 }
 
 export function transcriptChanged(cached: TranscriptPage, fresh: TranscriptPage): boolean {
-  const seen = new Set((cached.entries ?? []).map((entry) => entry.seq));
-  if ((fresh.entries ?? []).some((entry) => !seen.has(entry.seq))) return true;
+  const seen = new Set(cached.items.map((item) => item.seq));
+  if (fresh.items.some((item) => !seen.has(item.seq))) return true;
   const extras = (page: TranscriptPage) => JSON.stringify([page.pins ?? [], page.goal ?? null, page.runtime ?? null]);
   return extras(cached) !== extras(fresh);
 }

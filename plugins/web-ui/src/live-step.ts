@@ -4,9 +4,10 @@ import { keyed } from "lit/directives/keyed.js";
 import { ref } from "lit/directives/ref.js";
 import { activityDescription, activityLabel, sessionPresentation, thinkingPresentation } from "./activity-presentation";
 import type { WorkBlock } from "./core-bridge";
-import { BookOpen, Bot, Brain, ChevronRight, MessageSquare, Search, type IconNode } from "lucide";
+import { BookOpen, Bot, Brain, ChevronRight, MessageSquare, RefreshCw, RotateCcw, Search, type IconNode } from "lucide";
 import { icon } from "./icons";
-import { messageWorkTimeline, postSpeechText, type TimelineItem, type ToolPayload } from "./timeline";
+import { proddedReason, retractedReason } from "./items";
+import { messageWorkTimeline, postSpeechText, rowArgs, rowTool, type TimelineItem, type ToolPayload } from "./timeline";
 import { sheenLabel } from "./ui";
 
 export interface LiveStep {
@@ -26,26 +27,32 @@ export function preStepWork(work: WorkBlock | null | undefined): work is WorkBlo
   );
 }
 
+export function checkedReplyStep(item: TimelineItem | undefined): LiveStep | null {
+  if (item?.kind !== "text") return null;
+  const retracted = retractedReason(item.item);
+  if (retracted) return { icon: RotateCcw, label: `Retrying: ${retracted}` };
+  const prodded = proddedReason(item.item);
+  return prodded ? { icon: RefreshCw, label: `Continuing: ${prodded}` } : null;
+}
+
 export function currentStep(
   timeline: TimelineItem[],
   work: WorkBlock,
-  toolMeta: (payload: ToolPayload) => { icon: IconNode; active: string },
+  toolMeta: (tool: string | null, payload: ToolPayload) => { icon: IconNode; active: string },
 ): LiveStep | null {
   for (let i = timeline.length - 1; i >= 0; i--) {
     const item = timeline[i]!;
     if (item.kind === "thinking") {
-      const title = thinkingPresentation((item.activity.payload as { thinking?: string }).thinking ?? "").title;
+      const title = thinkingPresentation(item.text).title;
       return { icon: Brain, label: title };
     }
     if (item.kind !== "tool") continue;
-    const call = (item.row.call?.payload ?? {}) as ToolPayload;
-    const result = (item.row.result?.payload ?? {}) as ToolPayload;
-    const meta = toolMeta({ ...result, ...call });
+    const meta = toolMeta(rowTool(item.row), rowArgs(item.row));
     const posting = postSpeechText(item.row, true);
     if (posting) return { icon: MessageSquare, label: "Posting message" };
     const session = sessionPresentation(item.row, work.status);
     if (session) return { icon: Bot, label: [session.label, session.target].filter(Boolean).join(" ") };
-    const category = activityDescription(call, result).category;
+    const category = activityDescription(item.row).category;
     const stepIcon = { search: Search, read: BookOpen, execute: meta.icon, other: meta.icon }[category];
     const inFlight = item.row.result ? { ...item.row, result: null } : item.row;
     return { icon: stepIcon, label: activityLabel(inFlight, work.status) ?? meta.active };
@@ -62,6 +69,7 @@ export interface LiveStepLine {
 export function createLiveStepLine(redraw: () => void): LiveStepLine {
   let liveStep: LiveStep | null = null;
   let fadingStep: LiveStep | null = null;
+  let iconEntry: "fade" | "roll" | "still" = "fade";
   let fadingTimer: ReturnType<typeof setTimeout> | null = null;
   let measuredWidth = 0;
   let measuredLabel: string | null = null;
@@ -69,6 +77,7 @@ export function createLiveStepLine(redraw: () => void): LiveStepLine {
   function reset(): void {
     liveStep = null;
     fadingStep = null;
+    iconEntry = "fade";
     measuredWidth = 0;
     measuredLabel = null;
     if (fadingTimer) clearTimeout(fadingTimer);
@@ -82,6 +91,7 @@ export function createLiveStepLine(redraw: () => void): LiveStepLine {
     }
     if (liveStep && liveStep.label !== step.label) {
       fadingStep = liveStep;
+      iconEntry = liveStep.icon === step.icon ? "still" : "roll";
       if (fadingTimer) clearTimeout(fadingTimer);
       fadingTimer = setTimeout(() => {
         fadingStep = null;
@@ -120,20 +130,32 @@ export function createLiveStepLine(redraw: () => void): LiveStepLine {
     animating: boolean,
     elapsed: string | DirectiveResult,
   ): TemplateResult {
+    const out = step && fadingStep ? fadingStep : null;
+    const outIcon = out && iconEntry === "roll" ? out : null;
     return html`<span class="work-step-slot"
-        >${
-          step && fadingStep
-            ? html`<span class="work-step work-step-out" aria-hidden="true"
-                ><span class="tool-icon">${icon(fadingStep.icon, 15)}</span>${fadingStep.label}</span
-              >`
-            : nothing
-        }${keyed(
+        >${keyed(
           label,
-          html`<span class="work-step" data-step=${label} ${ref(step ? easeWidth : undefined)}
-            >${step ? html`<span class="tool-icon">${icon(step.icon, 15)}</span>` : nothing}${sheenLabel(
-              label,
-              animating,
-            )}</span
+          html`<span
+            class="work-step ${step ? `work-step-enter-${iconEntry}` : ""}"
+            data-step=${label}
+            ${ref(step ? easeWidth : undefined)}
+            >${
+              step
+                ? html`<span class="work-step-icon"
+                    >${
+                      outIcon
+                        ? html`<span class="tool-icon work-step-out" aria-hidden="true"
+                            >${icon(outIcon.icon, 15)}</span
+                          >`
+                        : nothing
+                    }<span class="tool-icon">${icon(step.icon, 15)}</span></span
+                  >`
+                : nothing
+            }<span class="work-step-label"
+              >${
+                out ? html`<span class="work-step-out" aria-hidden="true">${out.label}</span>` : nothing
+              }${sheenLabel(label, animating)}</span
+            ></span
           >`,
         )}</span
       >${elapsed ? html`<span class="work-elapsed">${elapsed}</span>` : nothing}<span class="activity-chevron"

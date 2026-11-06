@@ -131,14 +131,22 @@ export function createMcpClient(opts: {
     const overflow = new AbortController();
     const stop = signal ? AbortSignal.any([signal, overflow.signal]) : overflow.signal;
     const { maxResponseBytes } = opts;
+    let detached = false;
     const transport = new StreamableHTTPClientTransport(endpoint, {
       ...(authProvider ? { authProvider } : {}),
       ...(Object.keys(headers).length ? { requestInit: { headers } } : {}),
       fetch: async (url, init) => {
+        const target = new URL(url);
+        if (endpoint.protocol === "https:" && target.protocol !== "https:")
+          throw new Error(
+            `${endpoint.origin} sent QM to ${target.origin}, and an https server's requests stay on https`,
+          );
         const response = await fetchFn(url, {
           ...init,
           redirect: "error",
-          signal: init?.signal ? AbortSignal.any([init.signal, stop]) : stop,
+          signal: AbortSignal.any(
+            [init?.signal, detached ? AbortSignal.timeout(CALL_TIMEOUT_MS) : stop].filter((s): s is AbortSignal => !!s),
+          ),
         });
         if (maxResponseBytes === undefined) return response;
         return boundedResponse(response, maxResponseBytes, () => {
@@ -160,8 +168,13 @@ export function createMcpClient(opts: {
         cause: e,
       });
     } finally {
-      if (!stop.aborted) await transport.terminateSession().catch(swallowAs("mcp: end session", undefined));
-      await client.close();
+      detached = stop.aborted;
+      const end = async () => {
+        await transport.terminateSession().catch(swallowAs("mcp: end session", undefined));
+        await client.close();
+      };
+      if (detached) void end().catch(swallowAs("mcp: close", undefined));
+      else await end();
     }
   }
 

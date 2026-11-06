@@ -1,16 +1,13 @@
-import { SCOPE_KINDS, type SessionEntry, type ScopeId } from "../types.ts";
+import type { Item } from "../sessions/items.ts";
+import { SCOPE_KINDS } from "../types.ts";
 import { reportFailure } from "../util/errors.ts";
 import { publicFetch, type AddressFetch } from "../util/network.ts";
 import { disclosedMemory, type MemoryDisclosure } from "./disclosure.ts";
-import { changesNotebookOnly, type MemoryRecallContext, type MemoryService } from "./memory-service.ts";
+import type { MemoryService } from "./memory-service.ts";
 import type { MemoryProviderConfig } from "./provider-config.ts";
 import { createMemoryProviders, logMemoryProviderError } from "./provider-factory.ts";
-import {
-  captureAllowed,
-  createRoutedMemoryService,
-  routeMatches,
-  type MemoryProviderRoute,
-} from "./provider-router.ts";
+import { MemoryProviderDisabled } from "./provider-outcome.ts";
+import { createRoutedMemoryService, type MemoryProviderRoute } from "./provider-router.ts";
 import {
   readRegistry,
   resolveMemoryRegistry,
@@ -29,14 +26,29 @@ const NOTEBOOK_ROUTE: MemoryProviderRoute = {
 interface Snapshot {
   version?: string;
   service: MemoryService;
-  disabled: DisabledRegistryRoute[];
+  disabled: MemoryService[];
 }
+
+function disabledRoute({ provider, scopes, recall, capture, code }: DisabledRegistryRoute): MemoryService {
+  const refuse = async (): Promise<never> => {
+    throw new MemoryProviderDisabled(code);
+  };
+  return createRoutedMemoryService({
+    providers: {
+      [provider]: { attestActor: true, recall: refuse, query: refuse, capture: refuse, read: async () => "" },
+    },
+    routes: [{ provider, scopes, recall, capture, manage: false, failOpen: true }],
+  });
+}
+
+const alongside = async <T>(served: Promise<T>, disabled: Promise<unknown>[]): Promise<T> =>
+  (await Promise.all([served, Promise.all(disabled)]))[0];
 
 export function createRegistryMemoryService(opts: {
   defaultMemory: MemoryService;
   overlay?: MemoryProviderConfig;
   registry: Pick<MemoryRegistryStore, "current" | "overlayIds" | "key">;
-  sessionEntries?: (sessionId: string) => Promise<SessionEntry[]>;
+  sessionItems?: (sessionId: string) => Promise<Item[]>;
   memberFetch?: AddressFetch;
   onError?: (error: unknown, provider: string, operation: "recall" | "query" | "capture") => void;
 }): MemoryService {
@@ -61,7 +73,7 @@ export function createRegistryMemoryService(opts: {
       const memberFetch = opts.memberFetch ?? publicFetch;
       snapshot = {
         version,
-        disabled,
+        disabled: disabled.filter(({ code }) => code !== "id_taken").map(disabledRoute),
         service: config.routes.length
           ? routed(
               [...(opts.overlay?.routes ?? [NOTEBOOK_ROUTE]), ...config.routes],
@@ -78,44 +90,40 @@ export function createRegistryMemoryService(opts: {
     return snapshot;
   }
 
-  function flag(
-    disabled: readonly DisabledRegistryRoute[],
-    scopeId: ScopeId,
-    context: Pick<MemoryRecallContext, "report"> | undefined,
-    serves: (route: DisabledRegistryRoute) => boolean,
-  ): void {
-    for (const route of disabled)
-      if (serves(route) && routeMatches(route, scopeId))
-        context?.report?.({ provider: route.provider, scope: scopeId, ms: 0, outcome: "disabled", code: route.code });
-  }
-
   function view(access?: MemoryDisclosure): MemoryService {
     const views = new WeakMap<MemoryService, MemoryService>();
-    const serve = async (): Promise<Snapshot> => {
-      const served = await current();
-      if (!access) return served;
-      let disclosed = views.get(served.service);
-      if (!disclosed) views.set(served.service, (disclosed = disclosedMemory(served.service, access)));
-      return { ...served, service: disclosed };
+    const disclose = (service: MemoryService): MemoryService => {
+      if (!access) return service;
+      let disclosed = views.get(service);
+      if (!disclosed) views.set(service, (disclosed = disclosedMemory(service, access)));
+      return disclosed;
     };
-    const reads = (route: DisabledRegistryRoute) => route.recall !== false && !access?.notebookOnly;
+    const serve = async (): Promise<Snapshot> => {
+      const { service, disabled } = await current();
+      return { service: disclose(service), disabled: disabled.map(disclose) };
+    };
     return {
       withDisclosure: (next) => view(next),
       async recall(scopeId, context) {
         const { service, disabled } = await serve();
-        flag(disabled, scopeId, context, reads);
-        return service.recall(scopeId, context);
+        return alongside(
+          service.recall(scopeId, context),
+          disabled.map((route) => route.recall(scopeId, context)),
+        );
       },
       async query(scopeId, q, limit, context) {
         const { service, disabled } = await serve();
-        flag(disabled, scopeId, context, reads);
-        return service.query(scopeId, q, limit, context);
+        return alongside(
+          service.query(scopeId, q, limit, context),
+          disabled.map((route) => route.query(scopeId, q, limit, context)),
+        );
       },
       async capture(scopeId, facts, at, by, context) {
         const { service, disabled } = await serve();
-        if (!changesNotebookOnly(by))
-          flag(disabled, scopeId, context, (route) => captureAllowed(route.capture, context?.mode ?? "explicit"));
-        return service.capture(scopeId, facts, at, by, context);
+        return alongside(
+          service.capture(scopeId, facts, at, by, context),
+          disabled.map((route) => route.capture(scopeId, facts, at, by, context)),
+        );
       },
       read: async (scopeId) => (await serve()).service.read(scopeId),
       facts: async (scopeId) => (await (await serve()).service.facts?.(scopeId)) ?? [],

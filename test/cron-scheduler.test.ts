@@ -1,3 +1,4 @@
+import type { TurnOrigin } from "../src/types.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createScheduler } from "../src/cron/scheduler.ts";
@@ -16,6 +17,9 @@ import { createPostgresDirectoryStore } from "../src/directory/postgres-director
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
+
+const automationOrigin = (request?: { origin?: TurnOrigin }) =>
+  request?.origin?.kind === "automation" ? request.origin : undefined;
 
 function fakeLease(isLeader: () => boolean): LeaderLease {
   return {
@@ -228,7 +232,7 @@ test("a personal cron with a principal destination delivers its real output to t
   });
   await runNowSettled(scheduler, cron.id);
   assert.equal(calls[0]?.conversation.kind, "dm");
-  assert.deepEqual(calls[0]?.triggerDestination, {
+  assert.deepEqual(automationOrigin(calls[0])?.destination, {
     type: "principal",
     target: "U-alice",
     audienceScopeId: scopeId("personal", "U-alice"),
@@ -722,17 +726,14 @@ test("cron fires do not replay prior sessions or inline prior fire context", asy
   const run = async (req: TurnRequest): Promise<TurnResult> => {
     const session = await sessions.getOrCreateByThread(req.conversation.threadRef!, "dm", scope);
     sessionIds.push(session.id);
-    priorAssistantSeen.push((await sessions.getEntries(session.id)).filter((e) => e.type === "assistant").length);
+    priorAssistantSeen.push((await sessions.getItems(session.id)).filter((e) => e.kind === "AgentMessage").length);
     texts.push(req.text);
-    const { lease } = await sessions.acquireLease(session.id);
-    assert.ok(lease, "fires are serial, so the lease is always free");
-    await sessions.append(lease, { type: "user", payload: { text: req.text }, scopeLabel: scope });
-    await sessions.append(lease, {
-      type: "assistant",
-      payload: { text: replies[sessionIds.length - 1] ?? "ok" },
-      scopeLabel: scope,
+    const writer = { sessionId: session.id };
+    await sessions.append(writer, { kind: "UserMessage", text: req.text });
+    await sessions.append(writer, {
+      kind: "AgentMessage",
+      text: replies[sessionIds.length - 1] ?? "ok",
     });
-    await sessions.releaseLease(lease);
     return { status: "ok", reply: replies[sessionIds.length - 1] ?? "ok", sessionId: session.id };
   };
   const scheduler = createScheduler({
@@ -1377,158 +1378,6 @@ test("a note written by someone other than the fire renders attributed, and mult
   assert.doesNotMatch(input, /Notes from last fire agent/);
 });
 
-function busyOnce(calls: TurnRequest[]) {
-  return async (req: TurnRequest): Promise<TurnResult> => {
-    calls.push(req);
-    return calls.length === 1
-      ? { status: "refused", refusalKind: "session_busy", reason: "busy" }
-      : { status: "ok", reply: "OUT" };
-  };
-}
-
-test("a one-shot whose session is busy is deferred, stays enabled, and fires once the deferral passes", async () => {
-  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
-  const calls: TurnRequest[] = [];
-  let clock = 1000;
-  const scheduler = createScheduler({
-    ...singleProcessDeps(),
-    crons,
-    deliveries: createDeliveryStore(),
-    idempotency: createIdempotencyStore(testMap()),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
-    run: busyOnce(calls),
-    now: () => clock,
-  });
-  const cron = await crons.create({
-    schedule: { firstFireAt: 1000 },
-    action: "remind me once",
-    owner: "U1",
-    createdBy: "U1",
-    ownerScopeId: scopeId("personal", "U1"),
-  });
-
-  await scheduler.tick(clock);
-  assert.equal(calls.length, 1);
-  let stored = (await crons.get(cron.id))!;
-  assert.equal(stored.enabled, true, "a deferred one-shot is not disabled");
-  assert.equal(stored.lastFiredAt, undefined, "the slot is not marked fired");
-  assert.equal(stored.deferUntil, 31_000);
-  let fires = (await crons.listFires(cron.id)).runs;
-  assert.equal(fires.length, 1);
-  assert.equal(fires[0]!.status, "deferred");
-  assert.match(fires[0]!.note ?? "", /session busy/);
-
-  clock = 20_000;
-  await scheduler.tick(clock);
-  assert.equal(calls.length, 1, "held back while deferred");
-
-  clock = 31_000;
-  await scheduler.tick(clock);
-  assert.equal(calls.length, 2, "the same fire runs once the deferral passes");
-  stored = (await crons.get(cron.id))!;
-  assert.equal(stored.enabled, false, "the one-shot is disabled only after it actually ran");
-  assert.equal(stored.deferUntil, undefined);
-  fires = (await crons.listFires(cron.id)).runs;
-  assert.equal(fires.length, 1, "one fire key, one history row");
-  assert.equal(fires[0]!.status, "ok");
-
-  clock = 40_000;
-  await scheduler.tick(clock);
-  assert.equal(calls.length, 2);
-});
-
-test("a fire that is still busy ten minutes past its slot gives up: consumed and recorded refused", async () => {
-  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
-  const calls: TurnRequest[] = [];
-  const scheduler = createScheduler({
-    ...singleProcessDeps(),
-    crons,
-    deliveries: createDeliveryStore(),
-    idempotency: createIdempotencyStore(testMap()),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
-    run: async (req) => {
-      calls.push(req);
-      return { status: "refused", refusalKind: "session_busy", reason: "busy" };
-    },
-    now: () => 1000 + 10 * 60_000 + 1,
-  });
-  const cron = await crons.create({
-    schedule: { firstFireAt: 1000 },
-    action: "remind me once",
-    owner: "U1",
-    createdBy: "U1",
-    ownerScopeId: scopeId("personal", "U1"),
-  });
-  await scheduler.tick(1000 + 10 * 60_000 + 1);
-  assert.equal(calls.length, 1);
-  const stored = (await crons.get(cron.id))!;
-  assert.equal(stored.enabled, false);
-  assert.equal(stored.deferUntil, undefined);
-  assert.equal((await crons.listFires(cron.id)).runs[0]!.status, "refused");
-});
-
-test("queue mode: a busy fire releases its slot and is re-queued to run after the deferral", async () => {
-  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
-  const calls: TurnRequest[] = [];
-  let clock = 5000;
-  let onFire: ((job: { cronId: string; scheduledAt: number; notBefore?: number }) => Promise<void>) | undefined;
-  const enqueued: Array<{ cronId: string; scheduledAt: number; notBefore?: number }> = [];
-  const scheduler = createScheduler({
-    ...singleProcessDeps(),
-    crons,
-    deliveries: createDeliveryStore(),
-    idempotency: createIdempotencyStore(testMap()),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
-    run: busyOnce(calls),
-    now: () => clock,
-    jobQueue: {
-      async start(handlers) {
-        onFire = handlers.onFire;
-      },
-      async enqueueFire(job) {
-        enqueued.push(job);
-      },
-      healthy: () => true,
-      async stop() {},
-    },
-  });
-  scheduler.start(1000);
-  const cron = await crons.create({
-    schedule: { everyMs: 1000, firstFireAt: 1 },
-    action: "post the standup",
-    owner: "U1",
-    createdBy: "U1",
-    ownerScopeId: scopeId("channel", "C1"),
-  });
-  await settle(async () => onFire !== undefined);
-  enqueued.length = 0;
-
-  await onFire!({ cronId: cron.id, scheduledAt: 1 });
-  assert.equal(calls.length, 1);
-  let stored = (await crons.get(cron.id))!;
-  assert.equal(stored.lastFiredAt, undefined, "the busy fire gave its slot back");
-  assert.equal(stored.deferUntil, 35_000);
-  assert.deepEqual(
-    enqueued.pop(),
-    { cronId: cron.id, scheduledAt: 1, notBefore: 35_000 },
-    "same slot, held until the deferral",
-  );
-
-  clock = 10_000;
-  await onFire!({ cronId: cron.id, scheduledAt: 1 });
-  assert.equal(calls.length, 1, "a job arriving early is re-queued, not run");
-  assert.deepEqual(enqueued.pop(), { cronId: cron.id, scheduledAt: 1, notBefore: 35_000 });
-
-  clock = 35_000;
-  await onFire!({ cronId: cron.id, scheduledAt: 1 });
-  assert.equal(calls.length, 2, "the deferred slot runs");
-  stored = (await crons.get(cron.id))!;
-  assert.equal(stored.lastFiredAt, 35_000);
-  assert.equal(stored.deferUntil, undefined);
-  assert.deepEqual(enqueued.pop(), { cronId: cron.id, scheduledAt: 36_000 }, "the next slot is chained without a hold");
-  scheduler.stop();
-});
-
 test("scheduler stop waits for delayed queue startup and supports an awaited restart", async () => {
   const gate = Promise.withResolvers<void>();
   let starts = 0;
@@ -1837,6 +1686,32 @@ test("scheduled and manual fires use the saved runtime; clearing it restores inh
   assert.equal(calls[2]?.fastMode, undefined);
 });
 
+test("daily-or-less crons mark their fires infrequent; frequent ones do not", async () => {
+  const { crons, calls, scheduler } = agent();
+  const daily = await crons.create({
+    schedule: { cron: "0 9 * * *", timezone: "America/Los_Angeles" },
+    action: "daily digest",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: "personal:U1",
+  });
+  const polling = await crons.create({
+    schedule: { everyMs: 60_000 },
+    action: "check status",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: "personal:U1",
+  });
+  await runNowSettled(scheduler, daily.id);
+  await runNowSettled(scheduler, polling.id);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0]?.infrequentCron, true);
+  assert.equal(calls[0]?.thinkingLevel, undefined);
+  assert.equal(calls[0]?.fastMode, false);
+  assert.equal(calls[1]?.infrequentCron, undefined);
+  assert.equal(calls[1]?.fastMode, undefined);
+});
+
 test("a failing cron posts one notice to its destination, then stays quiet until a fire succeeds", async () => {
   let result: TurnResult = {
     status: "refused",
@@ -1909,4 +1784,143 @@ test("a cron whose model can't run fires on the default model and is told why", 
   await runNowSettled(scheduler, cron.id);
   assert.equal(calls[1]?.model, "claude-sonnet-5", "the stored model is used again once it can run");
   assert.doesNotMatch(calls[1]?.text ?? "", /default model because/);
+});
+
+test("a fire is told when its previous output was refused by the cron's destination", async () => {
+  const { crons, deliveries, calls, scheduler } = agent("tick");
+  const cron = await crons.create({
+    schedule: { everyMs: 60_000 },
+    action: "post the tick",
+    owner: "U7",
+    createdBy: "U7",
+    ownerScopeId: scopeId("personal", "U7"),
+    destination: { type: "slack", target: "D7", audienceScopeId: scopeId("personal", "U7") },
+  });
+  await crons.setFireNote(cron.id, { text: "cursor 42", at: 1_000 });
+  await runNowSettled(scheduler, cron.id);
+  const [first] = await deliveries.pending("slack");
+  await deliveries.fail(first!.id, "receiver returned HTTP 410: binding revoked", Date.now());
+  await runNowSettled(scheduler, cron.id);
+  assert.match(
+    calls[1]?.text ?? "",
+    /previous fire's output was refused by this cron's destination and not delivered: receiver returned HTTP 410: binding revoked/,
+  );
+  assert.match(calls[1]?.text ?? "", /cursor 42/, "the agent's own note is untouched");
+  const [second] = await deliveries.pending("slack");
+  await deliveries.ack(second!.id, Date.now());
+  await runNowSettled(scheduler, cron.id);
+  assert.doesNotMatch(calls[2]?.text ?? "", /was refused/);
+});
+
+const AFTER_REDRIVE_GRACE_MS = 61_000;
+
+function handOffOnce(reply: (req: TurnRequest) => string) {
+  let handedOff = false;
+  return async (req: TurnRequest): Promise<TurnResult> => {
+    if (!handedOff) {
+      handedOff = true;
+      return { status: "queued", sessionId: "s1", runId: "r1" };
+    }
+    return { status: "ok", reply: reply(req), sessionId: "s1" };
+  };
+}
+
+const standup = {
+  action: "post the standup",
+  owner: "U1",
+  createdBy: "U1",
+  ownerScopeId: scopeId("channel", "C1"),
+  destination: { type: "slack" as const, target: "C1", audienceScopeId: scopeId("channel", "C1") },
+};
+
+test("a manual fire whose wait is cut by shutdown is re-driven onto the same run and delivers its reply once", async () => {
+  const { crons, deliveries, calls, scheduler } = agent(handOffOnce((req) => `finished ${req.idempotencyKey}`));
+  const cron = await crons.create({ ...standup, schedule: { everyMs: 3_600_000 } });
+  const started = await scheduler.runNow(cron.id);
+  assert.ok(started.started);
+  await started.settled;
+  const [handOff] = (await crons.listFires(cron.id)).runs;
+  assert.equal(handOff?.status, "running");
+  assert.deepEqual(await deliveries.pending("slack"), []);
+
+  await scheduler.tick(Date.now() + AFTER_REDRIVE_GRACE_MS);
+  await scheduler.drained();
+  const { runs } = await crons.listFires(cron.id);
+  assert.equal(runs.length, 1);
+  assert.equal(runs[0]?.status, "ok");
+  assert.equal(runs[0]?.reply, `finished ${started.fireKey}`);
+  assert.deepEqual(
+    calls.map((c) => c.idempotencyKey),
+    [started.fireKey, started.fireKey],
+  );
+  assert.deepEqual(
+    (await deliveries.pending("slack")).map((d) => d.text),
+    [`finished ${started.fireKey}`],
+  );
+
+  await scheduler.tick(Date.now() + 2 * AFTER_REDRIVE_GRACE_MS);
+  await scheduler.drained();
+  assert.equal(calls.length, 2);
+});
+
+test("a handed-off fire whose cron lifecycle lock is still held elsewhere is left to its holder", async (t) => {
+  const mutex = testAdvisoryLock();
+  const { crons, calls, scheduler } = agent(
+    handOffOnce(() => "late"),
+    undefined,
+    undefined,
+    undefined,
+    { advisoryLock: mutex },
+  );
+  const cron = await crons.create({ ...standup, schedule: { everyMs: 3_600_000 } });
+  await runNowSettled(scheduler, cron.id);
+  const release = Promise.withResolvers<void>();
+  t.after(() => release.resolve());
+  const entered = Promise.withResolvers<void>();
+  const holding = mutex.withLock(`cron-lifecycle:${cron.id}`, async () => {
+    entered.resolve();
+    await release.promise;
+  });
+  await entered.promise;
+  await scheduler.tick(Date.now() + AFTER_REDRIVE_GRACE_MS);
+  await scheduler.drained();
+  assert.equal(calls.length, 1);
+  assert.equal((await crons.listFires(cron.id)).runs[0]?.status, "running");
+
+  release.resolve();
+  await holding;
+  await scheduler.tick(Date.now() + 2 * AFTER_REDRIVE_GRACE_MS);
+  await scheduler.drained();
+  assert.equal(calls.length, 2);
+  assert.equal((await crons.listFires(cron.id)).runs[0]?.status, "ok");
+});
+
+test("a scheduled fire handed off before its schedule changed is still completed and does not block run-now", async () => {
+  const start = Date.now();
+  let clock = start;
+  const { crons, deliveries, calls, scheduler } = agent(
+    handOffOnce((req) => `finished ${req.idempotencyKey}`),
+    undefined,
+    undefined,
+    () => clock,
+  );
+  const cron = await crons.create({ ...standup, schedule: { everyMs: 60_000 } });
+  clock = cron.nextFireAt! + 1;
+  await scheduler.tick(clock);
+  const [handOff] = (await crons.listFires(cron.id)).runs;
+  assert.equal(handOff?.status, "running");
+  await crons.update(cron.id, { schedule: { everyMs: 3_600_000 } });
+
+  clock += AFTER_REDRIVE_GRACE_MS;
+  await scheduler.tick(clock);
+  await scheduler.drained();
+  const redriven = (await crons.listFires(cron.id)).runs.find((r) => r.fireKey === handOff?.fireKey);
+  assert.equal(redriven?.status, "ok");
+  assert.deepEqual(
+    (await deliveries.pending("slack")).map((d) => d.text),
+    [`finished ${handOff?.fireKey}`],
+  );
+  assert.ok((await scheduler.runNow(cron.id)).started);
+  await scheduler.drained();
+  assert.equal(calls.length, 3);
 });

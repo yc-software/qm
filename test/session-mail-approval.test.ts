@@ -1,13 +1,12 @@
+import type { NewItem } from "../src/sessions/items.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import type { Agent } from "../src/agent/agent.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
@@ -25,7 +24,6 @@ import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
-import { createPostgresRateLimiter } from "../src/ratelimit/postgres-rate-limiter.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import {
   testAdvisoryLock,
@@ -68,21 +66,23 @@ async function scenario() {
   const mailbox = createSessionMailbox(testMap<SessionMessage>());
   const featureFlags = createFeatureFlagStore(testMap());
   await featureFlags.setEnabled("persistent_subagents", "personal:U1", true, "test");
+  const signals = createPostgresRunSignalStore(testDatabaseUrl());
   const sessionSyscalls = createSessionSyscalls({
     sessions,
     runs,
     mailbox,
-    signals: createPostgresRunSignalStore(testDatabaseUrl()),
+    signals,
+    steerRun: async (run, signal) => ({ sent: await signals.send(run.id, signal) }),
     maxAttempts: 3,
     advisoryLock: testAdvisoryLock(),
   });
   const agent: Agent = {
     async runTurn(turn) {
-      await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
+      await turn.emit({ kind: "UserMessage", text: turn.input });
       const ref = {
         current: turn.tools,
         scopeLabel: turn.scopeLabel,
-        emit: turn.emit,
+        emit: (item: NewItem) => turn.emit(item),
         screenToolResult: turn.screenToolResult,
         pendingApprovals: [],
       };
@@ -90,7 +90,7 @@ async function scenario() {
       const execute = tool.execute as unknown as (id: string, input: unknown) => Promise<{ content: unknown[] }>;
       const result = await execute(`wait-call-${++callSeq}`, { action: "wait", timeoutMs: 0 });
       const reply = JSON.stringify(result.content);
-      await turn.emit({ type: "assistant", payload: { text: reply }, scopeLabel: turn.scopeLabel });
+      await turn.emit({ kind: "AgentMessage", text: reply });
       return { reply, modelCalls: 1 };
     },
     async screenSecurity() {
@@ -99,18 +99,15 @@ async function scenario() {
   };
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
-  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "session-mail-")));
   const orchestrator = createOrchestrator({
     ...singleProcessDeps(),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     resolution: createResolutionService(ORG, testConfigStore(ORG), acl),
     sessions,
     runs,
-    workspace,
     files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
     sandbox: fakeSandbox(),
     auditLog,
-    rateLimiter: createPostgresRateLimiter(testDatabaseUrl(), { maxPerWindow: 100, windowMs: 60_000 }),
     agent,
     memory: createPostgresMemoryService(testDatabaseUrl()),
     deploy: createDeployService({

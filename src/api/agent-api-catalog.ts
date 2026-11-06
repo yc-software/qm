@@ -14,6 +14,7 @@ interface AgentApiView {
   claims: CapabilityClaims;
   isAdmin: boolean;
   swarmsEnabled: boolean;
+  personasEnabled: boolean;
 }
 
 interface AgentApiFamily {
@@ -49,6 +50,12 @@ const FAMILIES: AgentApiFamily[] = [
       },
       {
         method: "POST",
+        path: "/v1/composio/proxy",
+        summary:
+          "{url,method?,query?,headers?,body?|bodyBase64?,accountId?} sends one raw request to a connected app's own API (Google, Dropbox, Linear, Zoom) through your own connection; replies with the provider's status and body. Used by native app skills when no direct token is present",
+      },
+      {
+        method: "POST",
         path: "/v1/composio/disconnect",
         summary:
           "{accountId} permanently removes one of your own connections on a human-started turn; use when asked to remove or reset one, or to retire the old account after a reconnect",
@@ -64,6 +71,52 @@ const FAMILIES: AgentApiFamily[] = [
         path: "/v1/composio/twitter/media",
         summary:
           "{accountId,data} uploads one base64 PNG, JPEG or WebP image (5 MB max) through your own active X connection and returns mediaId for a post's media ids",
+      },
+    ],
+  },
+  {
+    when: (view) => view.personasEnabled,
+    guidance:
+      "Personas are reusable agents (instructions, skills, notes, credentials) living in a persona:<id> scope; people hold owner, write or read on them through people (personal:), teams (team:), the org (org:) or Slack channels (channel:, usable only in that channel). Writers edit instructions with PATCH and add a skill by creating it with scopeId persona:<id> on POST /v1/skills or moving one in with the skills tool; only owners share, attach credentials or delete. Use the persona-fork skill to copy one.",
+    routes: [
+      { method: "GET", path: "/v1/personas", summary: "personas you hold a role on, with your role" },
+      {
+        method: "GET",
+        path: "/v1/personas/:id",
+        summary: "one persona: instructions, access list, attached credential names (never secrets), skills",
+      },
+      {
+        method: "POST",
+        path: "/v1/personas",
+        summary: "{name,description?,instructions?,icon?} creates one you own",
+      },
+      {
+        method: "PATCH",
+        path: "/v1/personas/:id",
+        summary: "{name?,description?,instructions?,icon?} edits it (write or owner)",
+      },
+      {
+        method: "PUT",
+        path: "/v1/personas/:id/access",
+        summary:
+          "{access:[{scopeId,role:'owner'|'write'|'read'}]} replaces who holds which role (owner; at least one owner stays)",
+      },
+      {
+        method: "POST",
+        path: "/v1/personas/:id/credentials",
+        summary: "{credentialId} attaches one of your own keychain credentials (owner, on a turn you sent)",
+      },
+      {
+        method: "DELETE",
+        path: "/v1/personas/:id/credentials/:grantId",
+        summary: "detaches an attached credential (owner, on a turn you sent)",
+      },
+      { method: "DELETE", path: "/v1/personas/:id", summary: "deletes it and detaches its credentials (owner)" },
+      {
+        method: "PUT",
+        path: "/v1/sessions/:id/persona",
+        summary:
+          "{personaId|null} switches this conversation (your own session id) to a persona you can use here, from the next turn",
       },
     ],
   },
@@ -171,7 +224,8 @@ const FAMILIES: AgentApiFamily[] = [
       {
         method: "PATCH",
         path: "/v1/projects/:id",
-        summary: "rename a project the asking person owns — body {name}",
+        summary:
+          'update a project — body {name} renames it (owner only); body {icon} sets its sidebar icon — {kind:"emoji",value} with one emoji or {kind:"custom",name} with a workspace custom emoji, or null to clear (any member)',
       },
       {
         method: "POST",
@@ -329,7 +383,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "GET",
         path: "/v1/files",
         summary:
-          "list files the asking person can reach across their contexts, split into owned and shared files; use limit and cursor query parameters to page owned files",
+          "list files the asking person can reach across their contexts, split into owned and shared files, newest first; q=<text> matches file names, and limit and cursor page owned files",
       },
       {
         method: "GET",
@@ -344,7 +398,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST",
         path: "/v1/reach",
         summary:
-          "send a teammate a DM, post to a channel, or post to a group DM RIGHT NOW — `text` plus `recipient`, `channel`, or `participants` (the group DM's other members — the group is opened for you if it doesn't exist yet, so never ask someone to create one), optionally with `files` (workspace paths or {file_id: \"stored Files ID\"}, sent all-or-nothing); `sandbox_id` selects the sandbox for paths, omitted means default, ignored for stored IDs. EXTREMELY IMPORTANT: a `channel` post broadcasts to everyone there — pick the narrowest audience that can act; a question or errand for one person goes to their DM (`recipient`), NEVER a public channel, unless the person you're helping explicitly named that channel as the destination or the message genuinely concerns the whole room; pass `threadTs` (the parent message's ts) with a `recipient`/`channel`/`participants` post to reply inside that thread instead of top-level; or react to a message instead of posting with `react:{ts,emoji}` plus a `channel`/`participants`; or retract one of your own messages with `delete:{ts}` (no target = this conversation, or name a `channel`/`participants` to delete elsewhere) — find a message's `ts` via /v1/surface-context; pass `unfurlLinks:false` to suppress Slack previews (no schedule; for later/recurring use /v1/crons)",
+          "send a teammate a DM, post to a channel, or post to a group DM RIGHT NOW — `text` plus `recipient`, `channel`, or `participants` (the group DM's other members — the group is opened for you if it doesn't exist yet, so never ask someone to create one), optionally with `files` (workspace paths or {file_id: \"stored Files ID\"}, sent all-or-nothing); `sandbox_id` selects the sandbox for paths, omitted means default, ignored for stored IDs. EXTREMELY IMPORTANT: a `channel` post broadcasts to everyone there — pick the narrowest audience that can act; a question or errand for one person goes to their DM (`recipient`), NEVER a public channel, unless the person you're helping explicitly named that channel as the destination or the message genuinely concerns the whole room; pass `threadTs` (the parent message's ts) with a `recipient`/`channel`/`participants` post to reply inside that thread instead of top-level; or react to a message instead of posting with `react:{ts,emoji}` plus a `channel`/`participants`; or retract one of your own messages with `delete:{ts}` (no target = this conversation, or name a `channel`/`participants` to delete elsewhere); or rewrite one of your own Slack messages in place with `edit:{ts}` plus `text` (the complete new message) — find a message's `ts` via /v1/surface-context; pass `unfurlLinks:false` to suppress Slack previews (no schedule; for later/recurring use /v1/crons)",
       },
     ],
   },
@@ -541,7 +595,7 @@ const FAMILIES: AgentApiFamily[] = [
   },
   {
     guidance:
-      "Save a skill when you've worked out a repeatable procedure worth keeping (a checklist, a multi-step flow, a house style) — it is advertised in the skill index and loaded with the skills tool on future turns. The skill homes in THIS conversation's scope: in a 1:1 DM it's yours alone; in a private channel or group DM it's owned by that room and every member can edit or delete it (the audit trail records who changed what); a public channel stays owner-only. Write the `body` as a plain-step recipe addressed to your future self; edit or delete it as it goes stale.",
+      "Save a skill when you've worked out a repeatable procedure worth keeping (a checklist, a multi-step flow, a house style) — it is advertised in the skill index and loaded with the skills tool on future turns. The skill homes in THIS conversation's scope: in a 1:1 DM it's yours alone; in a private channel or group DM it's owned by that room and every member can edit or delete it (the audit trail records who changed what); a public channel stays owner-only. Write the `body` as a plain-step recipe addressed to your future self; edit or delete it as it goes stale. The skills tool's save and edit actions make the POST and PUT calls for you.",
     routes: [
       {
         method: "POST",
@@ -660,11 +714,6 @@ const FAMILIES: AgentApiFamily[] = [
       },
       {
         method: "GET",
-        path: "/v1/admin/runs?scope=",
-        summary: "queued / in-flight / recent runs (DM or effective Open sharing)",
-      },
-      {
-        method: "GET",
         path: "/v1/admin/files?scope=",
         summary:
           "document store listing; files/read?id= and files/download?id= for content (DM or effective Open sharing)",
@@ -741,12 +790,13 @@ export interface AgentApiListing {
 export function renderAgentApis(
   claims: CapabilityClaims,
   admin: { isAdmin: boolean; role?: string },
-  features: { swarmsEnabled: boolean },
+  features: { swarmsEnabled: boolean; personasEnabled: boolean },
 ): AgentApiListing {
   const view: AgentApiView = {
     claims,
     isAdmin: admin.isAdmin,
     swarmsEnabled: features.swarmsEnabled,
+    personasEnabled: features.personasEnabled,
   };
   const visible = [...FAMILIES, ...unattendedFamilies(), WHOAMI_FOR_ALL].filter((f) => f.when?.(view) ?? true);
   return {

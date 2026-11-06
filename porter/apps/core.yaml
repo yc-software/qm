@@ -7,12 +7,14 @@ build:
 services:
   - name: core
     type: web
-    private: true
-    run: node src/index.ts
+    run: env PORT=8080 node src/index.ts
     instances: 1
     cpuCores: 1
     ramMegabytes: 2048
-    port: 8080
-    healthCheck:
+    port: 8000
+    livenessCheck:
       enabled: true
       httpPath: /healthz
+    readinessCheck:
+      enabled: true
+      httpPath: /readyz

@@ -391,6 +391,27 @@ test("resizing a settled transcript updates the prompt expansion control", () =>
   }
 });
 
+test("leaving the bottom by more than a glance marks the transcript until the reader jumps back", () => {
+  const f = fixture();
+  try {
+    assert.equal(f.s.hasAttribute("data-away-from-bottom"), false);
+    f.scroll(700);
+    assert.equal(f.s.hasAttribute("data-away-from-bottom"), false);
+    f.scroll(500);
+    assert.equal(f.s.hasAttribute("data-away-from-bottom"), true);
+    f.viewport.follow(true);
+    assert.equal(f.s.hasAttribute("data-away-from-bottom"), false);
+    f.flush();
+    assert.equal(f.s.scrollTop, 800);
+    f.scroll(300);
+    assert.equal(f.s.hasAttribute("data-away-from-bottom"), true);
+    f.viewport.dispose();
+    assert.equal(f.s.hasAttribute("data-away-from-bottom"), false);
+  } finally {
+    f.close();
+  }
+});
+
 test("even a small upward scroll stops following; returning to the bottom resumes it", () => {
   const f = fixture();
   try {
@@ -1123,5 +1144,69 @@ test("a steer rendered inside the running turn is the latest prompt and anchors 
   } finally {
     viewport.dispose();
     if (restore) Object.defineProperty(globalThis, "getComputedStyle", restore);
+  }
+});
+
+test("a redraw holds the transcript's height until the follow frame so a rebuilt reply cannot clamp the scroll", () => {
+  const f = fixture();
+  const stack = f.s.querySelector<HTMLElement>(".message-stack")!;
+  stack.getBoundingClientRect = () => ({ height: 1000 }) as DOMRect;
+  try {
+    f.viewport.beforeRender();
+    assert.equal(stack.style.minHeight, "1000px");
+    f.viewport.afterRender();
+    assert.equal(stack.style.minHeight, "1000px");
+    f.grow();
+    f.flush();
+    assert.equal(stack.style.minHeight, "");
+    assert.equal(f.s.scrollTop, 900);
+    assert.deepEqual(f.writes, [1100]);
+  } finally {
+    f.close();
+  }
+});
+
+test("a held height waits for in-flight content renders before it is released", async () => {
+  const f = fixture();
+  const stack = f.s.querySelector<HTMLElement>(".message-stack")!;
+  stack.getBoundingClientRect = () => ({ height: 1000 }) as DOMRect;
+  try {
+    const completion = Promise.withResolvers<void>();
+    f.viewport.beforeRender();
+    f.s.dispatchEvent(
+      new f.s.ownerDocument.defaultView!.CustomEvent("qm-content-updating", {
+        bubbles: true,
+        detail: completion.promise,
+      }),
+    );
+    f.viewport.afterRender();
+    f.flush();
+    assert.equal(stack.style.minHeight, "1000px");
+    completion.resolve();
+    await completion.promise;
+    await Promise.resolve();
+    f.grow();
+    f.flush();
+    assert.equal(stack.style.minHeight, "");
+    assert.equal(f.s.scrollTop, 900);
+  } finally {
+    f.close();
+  }
+});
+
+test("readers above the bottom and cancelled followers never carry a held height", () => {
+  const f = fixture();
+  const stack = f.s.querySelector<HTMLElement>(".message-stack")!;
+  stack.getBoundingClientRect = () => ({ height: 1000 }) as DOMRect;
+  try {
+    f.viewport.beforeRender();
+    assert.equal(stack.style.minHeight, "1000px");
+    f.viewport.cancelFollow();
+    assert.equal(stack.style.minHeight, "");
+    f.scroll(600);
+    f.viewport.beforeRender();
+    assert.equal(stack.style.minHeight, "");
+  } finally {
+    f.close();
   }
 });

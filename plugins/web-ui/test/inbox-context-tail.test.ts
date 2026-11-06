@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { JSDOM } from "jsdom";
-import { createServer } from "vite";
+import { testViteServer } from "./vite-server.ts";
 
 test("long Slack conversations show the latest messages and reveal earlier ones on request", async () => {
   const dom = new JSDOM('<!doctype html><div id="app"></div><main id="main"></main>', {
@@ -15,7 +15,7 @@ test("long Slack conversations show the latest messages and reveal earlier ones 
       configurable: true,
       value: key === "window" ? dom.window : dom.window[key as keyof typeof dom.window],
     });
-  const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  const vite = await testViteServer();
   try {
     await vite.ssrLoadModule("/src/shell.ts");
     const { contextTpl, toInboxItem, CONTEXT_TAIL } = await vite.ssrLoadModule("/src/inbox.ts");
@@ -30,7 +30,6 @@ test("long Slack conversations show the latest messages and reveal earlier ones 
         state: "held",
         source: "slack",
         sourcePayload: {
-          source: "slack",
           title: "Conversation",
           from: "Sam",
           snippet: "latest",

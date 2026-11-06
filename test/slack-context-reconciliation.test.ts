@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { TurnRequest } from "../src/types.ts";
+import { isUserItem } from "../src/sessions/items.ts";
 
 function reply(): Response {
   const events = [
@@ -38,6 +39,7 @@ for (const warm of [false, true]) {
       memoryStrategy: "agent-only",
     });
     let built = buildApp(config);
+    built.runtime.start();
     const requests: string[] = [];
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
@@ -81,16 +83,15 @@ for (const warm of [false, true]) {
       assert.match(requestText, /Alex, can you approve/);
       await built.runtime.stop();
       built = buildApp(config);
+      built.runtime.start();
       const second = await built.app.turn({ ...input, text: "yes, go ahead" });
       assert.equal(second.status, "ok", second.reason);
       const next = JSON.stringify(JSON.parse(requests.at(-1)!).messages);
       assert.equal(next.split("Shall I restart the worker?").length - 1, 1);
       const session = await built.app.getSession(first.sessionId!);
-      const imports = session!.entries.filter(
-        (e) => e.type === "user" && (e.payload as { overheard?: boolean }).overheard,
-      );
+      const imports = session!.items.filter((item) => isUserItem(item) && item.body.overheard);
       assert.equal(imports.length, 3);
-      assert.equal((imports[1]!.payload as { sourceRole?: string }).sourceRole, "agent");
+      assert.equal(imports[1]!.body.sourceRole, "agent");
     } finally {
       globalThis.fetch = originalFetch;
       await built.runtime.stop();

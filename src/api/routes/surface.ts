@@ -7,7 +7,13 @@ import {
   type MemoryEdit,
   type MemoryService,
 } from "../../memory/memory-service.ts";
-import { problemLine, withProviders, writeFacts, type MemoryProviderProblem } from "../../memory/provider-outcome.ts";
+import {
+  MAX_FACTS_PER_WRITE,
+  problemLine,
+  withProviders,
+  writeFacts,
+  type MemoryProviderProblem,
+} from "../../memory/provider-outcome.ts";
 import { suggestedActivityRoutes } from "./suggested-activities.ts";
 import { runtimeConfigBody, userRuntimeConfigBody, webuiModelEnabled } from "../runtime-config.ts";
 import { canReadNotebook, searchAcrossScopes } from "../../memory/cross-scope.ts";
@@ -15,6 +21,8 @@ import { sessionSharingRoutes } from "./session-sharing.ts";
 import type { Grant, PendingApproval, ScopeId, Session } from "../../types.ts";
 import { parseScopeId, scopeId as makeScopeId } from "../../types.ts";
 import type { Skill, SkillResolution } from "../../skills/skill-store.ts";
+import type { ItemKind } from "../../sessions/items-schema.ts";
+import { compactItem } from "../../sessions/items.ts";
 import { ByteSourceTooLargeError } from "../../files/durable-byte-store.ts";
 import {
   defaultModel,
@@ -25,6 +33,7 @@ import {
 } from "../../model/pi-models.ts";
 import { builtInModelCatalog, selectableCatalog, selectableModelCatalog } from "../../model/model-catalog.ts";
 import { errMessage } from "../../util/errors.ts";
+import { isSafeSkillName, SKILL_NAME_RULE } from "../../skills/skill-name.ts";
 import { SideChatAnchorError, SoulUpdateDeniedError, type SessionPageStatus } from "../app-types.ts";
 import { renderAgentApis } from "../agent-api-catalog.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../../auth/capability-token.ts";
@@ -39,6 +48,7 @@ import {
   uiStateId,
 } from "../../surfaces/ui-state.ts";
 import { redactWebhook } from "./webhooks.ts";
+import { selfSpend } from "./admin/spend.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
 import {
   ARTIFACT_TYPES,
@@ -111,6 +121,15 @@ async function cancelSessionGoal(ctx: ApiCtx): Promise<void> {
           : "This conversation has no active or paused goal to cancel.",
     });
   return sendJson(res, 200, out);
+}
+
+async function spawnWebSession(ctx: ApiCtx): Promise<void> {
+  const b = (isObj(ctx.body) ? ctx.body : {}) as { principalId?: unknown; scopeId?: unknown };
+  if (typeof b.principalId !== "string" || !b.principalId || typeof b.scopeId !== "string" || !b.scopeId)
+    return sendJson(ctx.res, 400, { error: "bad_request", message: "principalId and scopeId required" });
+  const out = await ctx.app.spawnSession(b.principalId, { scopeId: b.scopeId });
+  if (!out) return sendJson(ctx.res, 403, { error: "forbidden", message: "you can't start a conversation there" });
+  return sendJson(ctx.res, 201, out);
 }
 
 async function forkSession(ctx: ApiCtx): Promise<void> {
@@ -212,6 +231,17 @@ async function getSession(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, found);
 }
 
+const AGENT_TRANSCRIPT_KINDS: ReadonlySet<ItemKind> = new Set<ItemKind>([
+  "UserMessage",
+  "SteeringMessage",
+  "AgentMessage",
+  "Reasoning",
+  "ToolCall",
+  "ToolResult",
+  "Elicitation",
+  "ElicitationResponse",
+]);
+
 async function getAgentConversation(ctx: ApiCtx): Promise<void> {
   const { res, app, url, capability } = ctx;
   if (!capability) {
@@ -234,12 +264,12 @@ async function getAgentConversation(ctx: ApiCtx): Promise<void> {
   if (!found) return sendJson(res, 404, { error: "not_found", message: "not a conversation you can see" });
   return sendJson(res, 200, {
     session: agentConversation(found.session),
-    entries: found.entries.filter((entry) => entry.type !== "system"),
-    ...(found.earlierEntries ? { earlierEntries: found.earlierEntries } : {}),
+    items: found.items.filter((item) => AGENT_TRANSCRIPT_KINDS.has(item.kind)).map(compactItem),
+    ...(found.earlierItems ? { earlierItems: found.earlierItems } : {}),
   });
 }
 
-async function getSessionEntry(ctx: ApiCtx): Promise<void> {
+async function getSessionItem(ctx: ApiCtx): Promise<void> {
   const { res, app, url } = ctx;
   const id = ctx.params.id!;
   const viewer = url.searchParams.get("viewer");
@@ -248,7 +278,7 @@ async function getSessionEntry(ctx: ApiCtx): Promise<void> {
   if (!Number.isInteger(seq) || seq < 0) {
     return sendJson(res, 400, { error: "bad_request", message: "seq must be a non-negative integer" });
   }
-  const found = await app.getSessionEntryForViewer(id, viewer, seq);
+  const found = await app.getSessionItemForViewer(id, viewer, seq);
   if (!found) return sendJson(res, 404, { error: "not_found" });
   return sendJson(res, 200, found);
 }
@@ -329,11 +359,13 @@ async function listFiles(ctx: ApiCtx): Promise<void> {
   const limitRaw = url.searchParams.get("limit");
   const cursor = url.searchParams.get("cursor");
   const scope = url.searchParams.get("scope");
+  const nameQuery = (url.searchParams.get("q") ?? "").trim();
   const page = await app.listFilesForViewer(
     viewer,
     {
       ...(limitRaw ? { limit: Number(limitRaw) } : {}),
       ...(cursor ? { cursor } : {}),
+      ...(nameQuery ? { nameQuery } : {}),
     },
     scope ? (scope as ScopeId) : undefined,
   );
@@ -538,12 +570,31 @@ async function listSessions(ctx: ApiCtx): Promise<void> {
     ...(url.searchParams.get("scope") ? { scopeId: url.searchParams.get("scope")! } : {}),
     ...(url.searchParams.get("q")?.trim() ? { titleQuery: url.searchParams.get("q")!.trim() } : {}),
   });
+  const previews = await sidebarPreviews(ctx, principalId, [...page.sessions, ...(page.pinned ?? [])]);
   return sendJson(res, 200, {
-    sessions: page.sessions,
-    ...(page.pinned ? { pinned: page.pinned } : {}),
+    sessions: withPreviews(page.sessions, previews),
+    ...(page.pinned ? { pinned: withPreviews(page.pinned, previews) } : {}),
     ...(page.hasArchived !== undefined ? { hasArchived: page.hasArchived } : {}),
     nextCursor: page.next ? `${page.next.activity}.${page.next.id}` : null,
   });
+}
+
+async function sidebarPreviews(
+  ctx: ApiCtx,
+  principalId: string,
+  rows: readonly Session[],
+): Promise<Map<string, string> | null> {
+  const { featureFlags, sessions } = ctx.deps;
+  if (
+    !sessions ||
+    (await featureFlags?.enabled("sidebar_last_message_titles", makeScopeId("personal", principalId))) !== true
+  )
+    return null;
+  return sessions.lastUserPreviews(rows.map((row) => row.id));
+}
+
+function withPreviews(rows: Session[], previews: Map<string, string> | null): Session[] {
+  return previews ? rows.map((row) => ({ ...row, lastUserPreview: previews.get(row.id) ?? null })) : rows;
 }
 
 function isSessionPageStatus(value: string): value is SessionPageStatus {
@@ -590,7 +641,8 @@ async function getSessionRow(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 400, { error: "bad_request", message: "principalId and id or threadRef required" });
   const session = await app.sessionRow(principalId, id ? { id } : { threadRef });
   if (!session) return sendJson(res, 404, { error: "not_found" });
-  return sendJson(res, 200, { session: session });
+  const [row] = withPreviews([session], await sidebarPreviews(ctx, principalId, [session]));
+  return sendJson(res, 200, { session: row });
 }
 
 async function searchResources(ctx: ApiCtx): Promise<void> {
@@ -745,7 +797,10 @@ async function listAgentApis(ctx: ApiCtx): Promise<void> {
     renderAgentApis(
       capability,
       { isAdmin: admin.isAdmin, ...(admin.role ? { role: admin.role } : {}) },
-      { swarmsEnabled: Boolean(await ctx.app.swarms?.enabledFor(capability.actorId)) },
+      {
+        swarmsEnabled: Boolean(await ctx.app.swarms?.enabledFor(capability.actorId)),
+        personasEnabled: Boolean(await ctx.app.personas?.enabledFor(capability.actorId)),
+      },
     ),
   );
 }
@@ -756,7 +811,7 @@ export function parseFacts(body: unknown): string[] | string {
     ? b.facts.filter((f): f is string => typeof f === "string" && f.trim() !== "")
     : [];
   if (facts.length === 0) return "facts (non-empty string array) required";
-  if (facts.length > 20) return "at most 20 facts per call";
+  if (facts.length > MAX_FACTS_PER_WRITE) return `at most ${MAX_FACTS_PER_WRITE} facts per call`;
   return facts;
 }
 
@@ -999,6 +1054,11 @@ async function restoreSkill(ctx: ApiCtx): Promise<void> {
   }
   if (!principalId) return sendJson(ctx.res, 400, { error: "bad_request", message: "principalId required" });
   const restored = await ctx.app.restoreOwnedSkill(ctx.params.id!, principalId);
+  if (restored === "exists")
+    return sendJson(ctx.res, 409, {
+      error: "exists",
+      message: "a live skill of that name already exists here — archive it first",
+    });
   return restored ? sendJson(ctx.res, 200, { ok: true }) : sendJson(ctx.res, 404, { error: "not_found" });
 }
 
@@ -1025,6 +1085,12 @@ async function updateSkill(ctx: ApiCtx): Promise<void> {
   const patch: { description?: string; body?: string } = {};
   if (typeof b.description === "string") patch.description = b.description;
   if (typeof b.body === "string") patch.body = b.body;
+  if (patch.description === undefined && patch.body === undefined) {
+    return sendJson(res, 400, { error: "bad_request", message: "description or body required" });
+  }
+  if (patch.description?.trim() === "" || patch.body?.trim() === "") {
+    return sendJson(res, 400, { error: "bad_request", message: "description and body can't be blank" });
+  }
   const liveActor = capability ? livePersonCapability(capability) : true;
   const updated = await app.updateOwnedSkill(id, principalId, patch, { liveActor });
   if (updated === "trigger_blocked")
@@ -1084,6 +1150,12 @@ async function createSkill(ctx: ApiCtx): Promise<void> {
   if (capability) {
     principalId = capability.actorId;
     homeScope = capability.scopeId;
+    if (typeof b.scopeId === "string" && b.scopeId !== homeScope) {
+      if (!(await app.managesScope(principalId, b.scopeId as ScopeId))) {
+        return sendJson(res, 403, { error: "forbidden", message: "you cannot create a skill in that context" });
+      }
+      homeScope = b.scopeId as ScopeId;
+    }
   } else {
     if (typeof b.principalId !== "string" || !b.principalId) {
       return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
@@ -1105,6 +1177,7 @@ async function createSkill(ctx: ApiCtx): Promise<void> {
   if (typeof b.name !== "string" || !b.name.trim()) {
     return sendJson(res, 400, { error: "bad_request", message: "name required" });
   }
+  if (!isSafeSkillName(b.name.trim())) return sendJson(res, 400, { error: "bad_request", message: SKILL_NAME_RULE });
   if (typeof b.description !== "string" || !b.description.trim()) {
     return sendJson(res, 400, { error: "bad_request", message: "description required" });
   }
@@ -1237,6 +1310,19 @@ export async function shareArtifact(ctx: ApiCtx): Promise<void> {
     permission: result.permission,
     ...(result.invitation ? { invitation: result.invitation } : {}),
   });
+}
+
+/** Workspace custom emoji (name → image URL, aliases resolved), from the catalog the Slack surface publishes. */
+async function getCustomEmoji(ctx: ApiCtx): Promise<void> {
+  const catalog = await ctx.deps.config?.getSlackEmojiCatalogDurable(orgScope(ctx.deps));
+  const raw = catalog?.emoji ?? {};
+  const emoji: Record<string, string> = {};
+  for (const [name, value] of Object.entries(raw)) {
+    const url = value.startsWith("alias:") ? raw[value.slice("alias:".length)] : value;
+    if (url?.startsWith("https://")) emoji[name] = url;
+  }
+  ctx.res.setHeader("cache-control", "private, max-age=300");
+  return sendJson(ctx.res, 200, { emoji });
 }
 
 async function getSurfaceConfig(ctx: ApiCtx): Promise<void> {
@@ -1468,6 +1554,7 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/grants/revoke", actor: "system", auth: "source", handle: revokeGrant },
   { method: "POST", path: "/v1/share", auth: "either", handle: shareArtifact },
   { method: "GET", path: "/v1/surface-config", auth: "source", handle: getSurfaceConfig },
+  { method: "GET", path: "/v1/custom-emoji", auth: "source", handle: getCustomEmoji },
   { method: "GET", path: "/v1/runtime-config", auth: "either", handle: getRuntimeConfig },
   { method: "PUT", path: "/v1/runtime-config", auth: "either", handle: putRuntimeConfig },
   { method: "GET", path: "/v1/channel-header-pin", auth: "either", handle: getChannelHeaderPin },
@@ -1477,6 +1564,7 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...withActor("body.principalId", [
     { method: "POST", path: "/v1/sessions/:id/title", auth: "source", handle: regenerateSessionTitle },
     { method: "POST", path: "/v1/sessions/:id/expand", auth: "source", handle: expandSideChat },
+    { method: "POST", path: "/v1/sessions", auth: "source", handle: spawnWebSession },
     { method: "POST", path: "/v1/sessions/:id/fork", auth: "source", handle: forkSession },
     { method: "POST", path: "/v1/sessions/:id/detach", auth: "source", handle: detachSession },
     { method: "POST", path: "/v1/sessions/:id/goal/cancel", auth: "source", handle: cancelSessionGoal },
@@ -1499,6 +1587,7 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
     { method: "GET", path: "/v1/contexts", auth: "source", handle: listContexts },
     { method: "GET", path: "/v1/scope-resources", auth: "source", handle: listScopeResources },
     { method: "GET", path: "/v1/memory", auth: "source", handle: selfMemory },
+    { method: "GET", path: "/v1/spend", auth: "source", handle: selfSpend },
     { method: "GET", path: "/v1/skills", auth: "source", handle: listSkills },
     { method: "GET", path: "/v1/skills/:id", auth: "either", handle: getSkillDetail },
   ]),
@@ -1511,7 +1600,7 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
       auth: "source",
       handle: getSessionBackgroundOutput,
     },
-    { method: "GET", path: "/v1/sessions/:id/entries/:seq", auth: "source", handle: getSessionEntry },
+    { method: "GET", path: "/v1/sessions/:id/items/:seq", auth: "source", handle: getSessionItem },
     { method: "GET", path: "/v1/sessions/:id", auth: "source", handle: getSession },
     { method: "GET", path: "/v1/files/:id/content", auth: "either", handle: getFileContent },
     { method: "GET", path: "/v1/files", auth: "either", handle: listFiles },

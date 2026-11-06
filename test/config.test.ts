@@ -12,6 +12,8 @@ import {
 import { boolEnv, numEnv } from "../src/util/env.ts";
 import { enabledSandboxBackends } from "../src/sandbox/sandbox-settings.ts";
 
+const RENDER_IMAGE = `ghcr.io/yc-software/qm/sandbox-base:${"c".repeat(40)}@sha256:${"d".repeat(64)}`;
+
 const productionEnv = {
   NODE_ENV: "production",
   CORE_SIGNING_SECRET: "core-signing-secret-0123456789abcdef",
@@ -21,12 +23,19 @@ const productionEnv = {
   CONNECTOR_SECRET_KEY: "connector-secret-0123456789abcdef",
   SANDBOX_BACKEND: "local",
   DATABASE_URL: "postgres://qm@localhost/qm",
+  PUBLIC_PORT: "8000",
 } as const;
+
+test("production refuses to boot without the public front door port", () => {
+  const { PUBLIC_PORT: _, ...withoutFrontDoor } = productionEnv;
+  assert.throws(() => loadConfig(withoutFrontDoor), /PUBLIC_PORT is required in production/);
+  assert.equal(loadConfig(productionEnv).publicPort, 8000);
+});
 
 test("Sprites proxy transition URLs are optional and parsed independently of the primary", () => {
   assert.equal(loadConfig({}).spritesSandbox.egressProxyAdditionalUrls, undefined);
   const config = loadConfig({
-    SPRITES_EGRESS_PROXY_URL: "https://primary.example.com",
+    EGRESS_PROXY_URL: "https://primary.example.com",
     SPRITES_EGRESS_PROXY_ADDITIONAL_URLS: " https://old.example.com, ,https://next.example.com ",
   });
   assert.equal(config.spritesSandbox.egressProxyUrl, "https://primary.example.com");
@@ -154,17 +163,74 @@ test("sharing posture defaults to isolated and accepts only isolated or open", (
   );
 });
 
-test("Modal without an egress proxy warns that sandboxes run fail-open", () => {
+test("EGRESS_PROXY_URL forces every proxy-capable provider through the proxy unless exempted", () => {
+  const proxied = loadConfig({ EGRESS_PROXY_URL: "https://egress.test" });
+  for (const provider of [
+    proxied.spritesSandbox,
+    proxied.e2bSandbox,
+    proxied.modalSandbox,
+    proxied.smolmachinesSandbox,
+    proxied.porterSandbox,
+    proxied.agent37Sandbox,
+  ])
+    assert.equal(provider.egressProxyUrl, "https://egress.test");
+  const exempted = loadConfig({
+    EGRESS_PROXY_URL: "https://egress.test",
+    EGRESS_PROXY_EXEMPT_BACKENDS: "e2b, smolmachines",
+  });
+  assert.equal(exempted.e2bSandbox.egressProxyUrl, undefined);
+  assert.equal(exempted.smolmachinesSandbox.egressProxyUrl, undefined);
+  assert.equal(exempted.modalSandbox.egressProxyUrl, "https://egress.test");
+  assert.equal(loadConfig({}).e2bSandbox.egressProxyUrl, undefined);
+});
+
+test("a retired per-provider egress proxy setting stops boot only when EGRESS_PROXY_URL would leave that provider unproxied", () => {
+  assert.throws(
+    () => loadConfig({ MODAL_EGRESS_PROXY_URL: "https://egress.test" }),
+    /No longer read: MODAL_EGRESS_PROXY_URL\..*Set EGRESS_PROXY_URL/,
+  );
+  assert.throws(
+    () =>
+      loadConfig({
+        SMOLMACHINES_EGRESS_PROXY_URL: "https://egress.test",
+        EGRESS_PROXY_URL: "https://egress.test",
+        EGRESS_PROXY_EXEMPT_BACKENDS: "smolmachines",
+      }),
+    /No longer read: SMOLMACHINES_EGRESS_PROXY_URL\./,
+  );
+  assert.throws(
+    () => loadConfig({ DO_AGENTS_EGRESS_PROXY_URL: "https://egress.test", EGRESS_PROXY_URL: "https://egress.test" }),
+    /No longer read: DO_AGENTS_EGRESS_PROXY_URL\. DigitalOcean Managed Agents can't be forced/,
+  );
   const warnings: string[] = [];
   const original = console.warn;
   console.warn = (msg: unknown) => void warnings.push(String(msg));
   try {
-    loadConfig({ MODAL_TOKEN_ID: "id", MODAL_TOKEN_SECRET: "secret" });
-    loadConfig({ MODAL_TOKEN_ID: "id", MODAL_TOKEN_SECRET: "secret", MODAL_EGRESS_PROXY_URL: "https://egress.test" });
+    const config = loadConfig({ MODAL_EGRESS_PROXY_URL: "https://old.test", EGRESS_PROXY_URL: "https://egress.test" });
+    assert.equal(config.modalSandbox.egressProxyUrl, "https://egress.test");
   } finally {
     console.warn = original;
   }
-  assert.equal(warnings.filter((w) => w.includes("MODAL_EGRESS_PROXY_URL")).length, 1);
+  assert.equal(warnings.filter((w) => w.includes("No longer read: MODAL_EGRESS_PROXY_URL.")).length, 1);
+});
+
+test("a default sandbox backend left outside the egress proxy warns that it runs fail-open", () => {
+  const warnings: string[] = [];
+  const original = console.warn;
+  console.warn = (msg: unknown) => void warnings.push(String(msg));
+  try {
+    loadConfig({ SANDBOX_BACKEND: "e2b", E2B_API_KEY: "e2b_test" });
+    loadConfig({ SANDBOX_BACKEND: "e2b", E2B_API_KEY: "e2b_test", EGRESS_PROXY_URL: "https://egress.test" });
+    loadConfig({
+      SANDBOX_BACKEND: "e2b",
+      E2B_API_KEY: "e2b_test",
+      EGRESS_PROXY_URL: "https://egress.test",
+      EGRESS_PROXY_EXEMPT_BACKENDS: "e2b",
+    });
+  } finally {
+    console.warn = original;
+  }
+  assert.equal(warnings.filter((w) => w.includes("SANDBOX_BACKEND=e2b has no egress proxy")).length, 2);
 });
 
 test("a harmless ARTIFACT_STORE=memory (now a dead knob) is ignored, not fatal", () => {
@@ -180,19 +246,19 @@ test("boolEnv: one vocabulary for every boolean env knob", () => {
 test("every boolean knob accepts the shared vocabulary (off means off)", () => {
   const off = loadConfig({
     SEED_SKILLS: "off",
-    REACH_EXEC: "off",
+    SURFACE_DEBUG_FOOTER: "off",
     PI_CAPTURE_REQUESTS: "off",
   });
   assert.equal(off.seedSkills, false);
-  assert.equal(off.reachExecEnabled, false);
+  assert.equal(off.surfaceDebugFooter, false);
   assert.equal(off.captureLlmRequests, false);
 
   const on = loadConfig({
     SEED_SKILLS: "yes",
-    REACH_EXEC: "1",
+    SURFACE_DEBUG_FOOTER: "1",
   });
   assert.equal(on.seedSkills, true);
-  assert.equal(on.reachExecEnabled, true);
+  assert.equal(on.surfaceDebugFooter, true);
 
   const unset = loadConfig({});
   assert.equal(unset.captureLlmRequests, true, "capture defaults on");
@@ -208,10 +274,13 @@ test("numEnv: empty and non-numeric values fall back instead of poisoning config
 test("a set-but-unparseable env value refuses to boot instead of silently taking the default", () => {
   assert.throws(() => loadConfig({ WORKERS: "not-a-number" }), /WORKERS="not-a-number" is not a number/);
   assert.throws(() => loadConfig({ BUDGET_USD_PER_WINDOW: "10$" }), /BUDGET_USD_PER_WINDOW="10\$" is not a number/);
-  assert.throws(() => loadConfig({ REACH_EXEC: "2" }), /REACH_EXEC="2" is not a recognized boolean/);
+  assert.throws(
+    () => loadConfig({ SURFACE_DEBUG_FOOTER: "2" }),
+    /SURFACE_DEBUG_FOOTER="2" is not a recognized boolean/,
+  );
   assert.throws(() => loadConfig({ SANDBOX_BACKEND: "docker" }), /SANDBOX_BACKEND="docker" is not recognized/);
   assert.equal(loadConfig({ WORKERS: "  " }).workers, CONFIG_DEFAULTS.workers);
-  assert.equal(loadConfig({ REACH_EXEC: "" }).reachExecEnabled, false);
+  assert.equal(loadConfig({ SURFACE_DEBUG_FOOTER: "" }).surfaceDebugFooter, false);
 });
 
 test("Slack HTTP ingress exposes only a valid configured receiver port", () => {
@@ -236,9 +305,9 @@ for (const primary of ["render", "local"] as const) {
     const env = {
       ...productionEnv,
       SANDBOX_BACKEND: primary,
-      WORKSPACE_STORE: "postgres",
       RENDER_API_KEY: "test-key",
       RENDER_WORKSPACE_ID: "tea-test",
+      RENDER_SANDBOX_IMAGE: RENDER_IMAGE,
     };
     for (const database of [undefined, "", "  "])
       assert.throws(() => loadConfig({ ...env, DATABASE_URL: database }), /required core secrets: DATABASE_URL/);
@@ -251,9 +320,9 @@ for (const primary of ["render", "local"] as const) {
   test(`Render timeout limits apply when the primary backend is ${primary}`, () => {
     const env = {
       SANDBOX_BACKEND: primary,
-      WORKSPACE_STORE: "postgres",
       RENDER_API_KEY: "test-key",
       RENDER_WORKSPACE_ID: "tea-test",
+      RENDER_SANDBOX_IMAGE: RENDER_IMAGE,
     };
     for (const timeout of ["86340", "86400"])
       assert.throws(() => loadConfig({ ...env, SANDBOX_TIMEOUT_SEC: timeout }), /SANDBOX_TIMEOUT_SEC must stay/);
@@ -301,8 +370,6 @@ test("defaults come from CONFIG_DEFAULTS, set exactly once", () => {
   const def = loadConfig({});
   assert.equal(CONFIG_DEFAULTS.workers, 16);
   assert.equal(def.workers, CONFIG_DEFAULTS.workers);
-  assert.equal(def.rateLimitPerWindow, CONFIG_DEFAULTS.rateLimitPerWindow);
-  assert.equal(def.rateLimitWindowMs, CONFIG_DEFAULTS.rateLimitWindowMs);
   assert.equal(def.monitorPollMs, CONFIG_DEFAULTS.monitorPollMs);
   assert.equal(def.approvalSummaryTimeoutMs, CONFIG_DEFAULTS.approvalSummaryTimeoutMs);
   assert.equal(def.deployDialTimeoutMs, CONFIG_DEFAULTS.deployDialTimeoutMs);
@@ -483,14 +550,12 @@ test("SANDBOX_BACKEND: unset defaults to local (dev only); the retired secondary
   );
 });
 
-test("Fly identity and Slack runtime settings are parsed once into Config", () => {
+test("Slack runtime settings are parsed once into Config", () => {
   const config = loadConfig({
-    FLY_APP_NAME: "qm-core",
     SLACK_BOT_TOKEN: "xoxb-test",
     SLACK_APP_TOKEN: "xapp-test",
     SLACK_API_URL: "https://slack.example/api",
   });
-  assert.equal(config.flyAppName, "qm-core");
   assert.deepEqual(config.slack, {
     botToken: "xoxb-test",
     appToken: "xapp-test",
@@ -774,7 +839,7 @@ test("Smolmachines lifecycle, egress, and snapshot knobs are parsed into Config"
   const config = loadConfig({
     SMOLMACHINES_TOKEN: "smk_test",
     SMOLMACHINES_AUTOSTOP_SEC: "900",
-    SMOLMACHINES_EGRESS_PROXY_URL: "https://proxy.example.com",
+    EGRESS_PROXY_URL: "https://proxy.example.com",
     SMOLMACHINES_SNAPSHOT_S3_BUCKET: "qm-home-snapshots",
     SMOLMACHINES_SNAPSHOT_INTERVAL_SEC: "300",
   });
@@ -829,7 +894,7 @@ test("Fly shared application name is passed to the deployment provider", () => {
   assert.equal(config.flyDeploy.dataVolumeSizeGb, 1);
 });
 
-test("background ownership requires durable storage and an independent deployment authority", () => {
+test("a background deployment id requires an independent deployment control secret", () => {
   const env = {
     BACKGROUND_DEPLOYMENT_ID: "core:release-a",
     DATABASE_URL: "postgres://localhost/test",
@@ -841,7 +906,6 @@ test("background ownership requires durable storage and an independent deploymen
   assert.equal(config.deploymentControlSecret, env.DEPLOYMENT_CONTROL_SECRET);
   assert.equal(config.backgroundWorkEnabled, true);
   assert.equal(loadConfig({ ...env, BACKGROUND_WORK_ENABLED: "false" }).backgroundWorkEnabled, false);
-  assert.throws(() => loadConfig({ ...env, DATABASE_URL: "" }), /DATABASE_URL/);
   assert.throws(() => loadConfig({ ...env, DEPLOYMENT_CONTROL_SECRET: "short" }), /distinct DEPLOYMENT_CONTROL_SECRET/);
   assert.throws(
     () => loadConfig({ ...env, DEPLOYMENT_CONTROL_SECRET: env.CORE_SIGNING_SECRET }),
@@ -923,8 +987,21 @@ test("Render app publishing needs a complete source, project, and environment", 
   assert.throws(() => loadConfig({ ...env, RENDER_ENVIRONMENT_ID: "" }), /requires RENDER_ENVIRONMENT_ID/);
 });
 
-test("The Render sandbox backend needs the Postgres workspace store", () => {
-  const env = { SANDBOX_BACKEND: "render", RENDER_API_KEY: "rnd_key", RENDER_WORKSPACE_ID: "tea-test" };
-  assert.throws(() => loadConfig(env), /SANDBOX_BACKEND=render requires WORKSPACE_STORE=postgres/);
-  assert.equal(loadConfig({ ...env, WORKSPACE_STORE: "postgres" }).sandboxBackend, "render");
+test("The Render sandbox backend needs a tagged, digest-pinned RENDER_SANDBOX_IMAGE", () => {
+  const env = {
+    SANDBOX_BACKEND: "render",
+    RENDER_API_KEY: "rnd_key",
+    RENDER_WORKSPACE_ID: "tea-test",
+  };
+  assert.throws(() => loadConfig(env), /SANDBOX_BACKEND=render requires RENDER_SANDBOX_IMAGE/);
+  assert.equal(loadConfig({ ...env, RENDER_SANDBOX_IMAGE: RENDER_IMAGE }).renderSandbox.image, RENDER_IMAGE);
+  assert.throws(
+    () => loadConfig({ ...env, RENDER_SANDBOX_IMAGE: RENDER_IMAGE.replace(/:[0-9a-f]{40}@/, "@") }),
+    /must be <repository>:<tag>@sha256:<digest>/,
+  );
+  const secondary = { RENDER_API_KEY: "rnd_key", RENDER_WORKSPACE_ID: "tea-test" };
+  assert.ok(!enabledSandboxBackends(loadConfig(secondary)).includes("render"));
+  assert.ok(
+    enabledSandboxBackends(loadConfig({ ...secondary, RENDER_SANDBOX_IMAGE: RENDER_IMAGE })).includes("render"),
+  );
 });

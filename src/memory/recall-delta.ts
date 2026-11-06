@@ -1,5 +1,5 @@
 import { retainedSnapshot } from "../agent/context-snapshot.ts";
-import type { SessionEntry } from "../types.ts";
+import type { Item } from "../sessions/items.ts";
 import { recallLabel, renderRecall, type RecalledFact } from "./cross-scope.ts";
 import { factHash, renderFacts, type MemoryFact } from "./facts.ts";
 import type { MemoryProviderOutcome } from "./memory-service.ts";
@@ -35,13 +35,13 @@ const sourceOf = ({ scope, provider }: Shown) => JSON.stringify([scope, provider
 
 export function memoryRecallDelta(
   recalled: readonly RecalledFact[],
-  history: readonly SessionEntry[],
+  history: readonly Item[],
   held: ReadonlyMap<string, ReadonlyMap<string, MemoryFact>>,
   labels: ReadonlyMap<string, string> = new Map(),
   outcomes: readonly MemoryProviderOutcome[] = [],
 ): { text: string; record: RecallRecord } {
-  const { previous, anchorSeq } = retainedSnapshot(history, (entry) => {
-    const record = (entry.payload as { memoryRecall?: RecallRecord } | null)?.memoryRecall;
+  const { previous, anchorSeq } = retainedSnapshot(history, (item) => {
+    const record = item.body.memoryRecall as RecallRecord | undefined;
     return record?.shown ? record : undefined;
   });
   const current = recalled.map(shownOf);
@@ -67,7 +67,8 @@ export function memoryRecallDelta(
       const outcome = outcomes.find(({ provider, scope }) => provider === shown.provider && scope === shown.scope);
       const source = sourceOf(shown);
       const room = outcome?.outcome === "ok" ? Math.max(1, answered.get(source) ?? 0) : Infinity;
-      if (!outcome || outcome.outcome === "denied" || DENIED_CODES.has(outcome.code ?? "")) unauthorized = true;
+      if (!outcome || ["denied", "disabled"].includes(outcome.outcome) || DENIED_CODES.has(outcome.code ?? ""))
+        unauthorized = true;
       else if ((kept.get(source) ?? 0) < room) {
         record.shown.push(shown);
         kept.set(source, (kept.get(source) ?? 0) + 1);
