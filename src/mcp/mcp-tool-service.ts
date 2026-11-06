@@ -4,7 +4,7 @@ import { errMessage, reportFailureAs } from "../util/errors.ts";
 import { setPublicOAuthClientSource, setPublicOAuthClients, type PublicOAuthClient } from "../connectors/oauth.ts";
 import { LRUCache } from "lru-cache";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { perTenant } from "../tenants/cache.ts";
+import { onTenantLoad, perTenant } from "../tenants/cache.ts";
 import { createMcpClient, mcpResultText, type McpAuth, type McpClient, type McpListing } from "./mcp-client.ts";
 import type { McpServer, McpServerStore } from "./mcp-server-store.ts";
 import { attestableAudience, attestedPerson, OutsideAudience } from "../directory/person.ts";
@@ -414,6 +414,11 @@ export function createMcpToolService(opts: {
   const unsubscribe = opts.servers.onChange(() => {
     if (!closed) void Promise.resolve().then(refresh).catch(reportFailureAs("mcp: refresh tools", undefined));
   });
+  const stopWarming = onTenantLoad(async () => {
+    const state = tenantState();
+    if (!closed && state.loadedAt === undefined)
+      void (state.pending ?? refresh()).catch(reportFailureAs("mcp: refresh tools", undefined));
+  });
 
   return {
     toolDefs: async () => (await loaded()).snapshot,
@@ -472,6 +477,7 @@ export function createMcpToolService(opts: {
     close() {
       closed = true;
       unsubscribe();
+      stopWarming();
     },
   };
 }
