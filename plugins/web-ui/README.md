@@ -240,13 +240,13 @@ the CSS media queries, the composer, and the split canvas.
     per-member grants are sequencing-gated (off until enabled), so those stay owner-only until then.
   - **Connectors** — per-provider OAuth status with Connect / Reconnect / Disconnect. The server
     proxies `GET /api/connectors` → core `/v1/connectors/oauth/status`, `POST /api/connectors/:p/start`
-    → core `/v1/connectors/oauth/:p/start` (redirect URI = this surface's
-    `/connectors/oauth/:p/callback`), and `POST /api/connectors/revoke` → core
+    → core `/v1/connectors/oauth/:p/start` (redirect URI = the portal's
+    `/v1/connectors/oauth/:p/callback`, passed straight to core), and `POST /api/connectors/revoke` → core
     `/v1/connectors/oauth/revoke`. The callback exchanges the code server-side (tokens never reach
     the browser) and bounces back into the SPA via a base-relative redirect.
   - **Deploys** — `GET /api/deployments` → core `/v1/deployments`, grouped into manageable,
     shared, and archived views. Detail and restore routes expose authorized metadata and bring an
-    archived version back online; running apps open through the surface's signed deployment proxy.
+    archived version back online; running apps open through the portal's `/deployments/:id/` proxy to core.
 
 ## Notes
 
