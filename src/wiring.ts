@@ -2219,7 +2219,8 @@ export function buildApp(
     ) => {
       const parent = await finnyIntegration.getParent(job.scopeId, job.id);
       if (!parent) throw new Error("Finny final delivery has no bound destination");
-      await deliveries.enqueue(finnyFinalDelivery(parent, job, receipt));
+      if (!config.publicWebUrl) throw new Error("Finny final delivery requires PUBLIC_WEB_URL");
+      await deliveries.enqueue(finnyFinalDelivery(parent, job, receipt, config.publicWebUrl));
       await finnyRuntime.retireJob(job.scopeId, job.id);
     };
     finnyTools = createFinnyToolServiceFactory({

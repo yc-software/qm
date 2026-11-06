@@ -5,6 +5,7 @@ import { loadConfig } from "../src/config.ts";
 const enabled = {
   FINNY_ENABLED: "true",
   DATABASE_URL: "postgres://qm@localhost/qm",
+  PUBLIC_WEB_URL: "https://qm.example",
   FINNY_SIGNING_SECRET: "finny-signing-secret-0123456789abcdef",
   FINNY_FINDING_POLICY_VERSION: "finance-audit.v1",
   FINNY_MAX_FINDINGS: "12",

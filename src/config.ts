@@ -496,6 +496,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const memoryProviderConfig = parseMemoryProviderConfig(env.MEMORY_PROVIDER_CONFIG, env);
   const finny = finnyIntegrationConfigFromEnv(env);
   if (finny && !env.DATABASE_URL?.trim()) throw new Error("DATABASE_URL is required when FINNY_ENABLED=true");
+  if (finny && !env.PUBLIC_WEB_URL?.trim()) throw new Error("PUBLIC_WEB_URL is required when FINNY_ENABLED=true");
   return {
     ...(finny ? { finny } : {}),
     suggestedActivitiesEnabled: boolEnvStrict("SUGGESTED_ACTIVITIES_ENABLED", env.SUGGESTED_ACTIVITIES_ENABLED) ?? true,

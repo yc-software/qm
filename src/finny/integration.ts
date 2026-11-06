@@ -303,21 +303,25 @@ export function finnyFinalDelivery(
   parent: { originThreadRef: string; destination: Destination },
   job: FinnyJob,
   receipt: Awaited<ReturnType<FinnyFinalizer["finalize"]>>,
+  publicWebUrl: string,
 ) {
   if (
     job.originThreadRef !== parent.originThreadRef ||
     !parentDestinationMatchesOrigin(parent.destination, parent.originThreadRef)
   )
     throw new Error("Finny final delivery destination does not match the origin thread");
+  const artifactUrl = `${publicWebUrl.replace(/\/$/, "")}/v1/files/${encodeURIComponent(
+    receipt.payload.provisionalRevision,
+  )}/content`;
   return {
     destination: parent.destination,
-    text: JSON.stringify({
-      title: job.plan.title,
-      artifactDigest: receipt.payload.artifactDigest,
-      revision: receipt.payload.provisionalRevision,
-      certification: job.plan.certification,
-      receipt: receipt.token,
-    }),
+    text: [
+      `*${job.plan.title} — Finny certification complete*`,
+      `*Artifact:* <${artifactUrl}|Open final artifact>`,
+      `*Artifact digest:* \`${receipt.payload.artifactDigest}\``,
+      `*Certification:* ${job.plan.certification}`,
+      `*Approval receipt:* \`${receipt.token}\``,
+    ].join("\n"),
     idempotencyKey: `finny-final:${job.id}:${receipt.payload.ledgerHead}`,
   };
 }

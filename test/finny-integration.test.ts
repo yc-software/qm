@@ -226,10 +226,12 @@ test("final delivery remains in the exact bound Slack thread with revision and s
     { originThreadRef: job.originThreadRef, destination: { type: "slack", target: "C1:100.1", threadTs: "100.1" } },
     job,
     { token: "signed-receipt", payload: { artifactDigest: "digest", provisionalRevision: "r7", ledgerHead: 9 } } as any,
+    "https://qm.example",
   );
   assert.deepEqual(delivery.destination, { type: "slack", target: "C1:100.1", threadTs: "100.1" });
   assert.match(delivery.text, /signed-receipt/);
-  assert.match(delivery.text, /r7/);
+  assert.match(delivery.text, /<https:\/\/qm\.example\/v1\/files\/r7\/content\|Open final artifact>/);
+  assert.match(delivery.text, /Certified/);
   assert.equal(delivery.idempotencyKey, "finny-final:job-1:9");
   assert.throws(
     () =>
@@ -237,6 +239,7 @@ test("final delivery remains in the exact bound Slack thread with revision and s
         { originThreadRef: job.originThreadRef, destination: { type: "slack", target: "C2:100.1" } },
         job,
         { token: "x", payload: {} } as any,
+        "https://qm.example",
       ),
     /does not match/,
   );
