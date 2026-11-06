@@ -347,7 +347,7 @@ export async function wakeForUnreadMail(
 }
 
 export async function sweepUnreadMailWakes(deps: UnreadMailDeps): Promise<void> {
-  await claimThenBind(deps.mailbox.claimTenants, async () => {
+  await claimThenBind(deps.mailbox.claimWakeTenants, async () => {
     for (let page = await deps.mailbox.awaitingWake(); page.length;) {
       for (const recipientId of new Set(page.map((message) => message.recipientId))) {
         const parent = await deps.sessions.get(recipientId);
