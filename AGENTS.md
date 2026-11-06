@@ -3,6 +3,9 @@
 **Read [`docs/SPEC.md`](./docs/SPEC.md) first.** It is the short source of truth for QM's north stars, subsystems and past mistakes. Where another doc disagrees, the spec wins.
 
 To run and test, see [`README.md`](./README.md).
+Check `docs/solutions/` for documented solutions to past problems (organized by category with YAML frontmatter tags and problem types) when implementing or debugging in a documented area.
+Before writing or reviewing code, read [`CODING_STANDARDS.md`](./CODING_STANDARDS.md) and [`REVIEW.md`](./REVIEW.md). Update them when a change establishes or retires a rule.
+Write every report, summary, or handoff to the user through the `ce-noslop` skill. This applies when you are the top-level agent writing to the user, not when you are a subagent reporting to its caller. Do not apply it to code, config, verbatim quotes, or text the user asked to post as written.
 
 ## Working on the code
 
