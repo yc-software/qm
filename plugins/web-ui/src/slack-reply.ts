@@ -4,10 +4,10 @@ import { icon } from "./icons";
 import { tip } from "./tooltip";
 import { LitElement, html, nothing } from "lit";
 import { withBase } from "./core-bridge";
+import { reportHandledError } from "./browser-errors.ts";
 import "./slack-account";
 import "./slack-reply.css";
 
-/** Window focus re-checks the Slack link at most this often; explicit checks always run. */
 const FOCUS_REFRESH_MS = 60_000;
 const KNOWN_KEY = "qm-slack-reply-known";
 type Known = { user: string; connected: boolean; label: string };
@@ -24,7 +24,7 @@ function remember(known: Known): void {
   try {
     localStorage.setItem(KNOWN_KEY, JSON.stringify(known));
   } catch {
-    // Storage can be unavailable (private mode); the check still runs on each open.
+    return;
   }
 }
 
@@ -41,7 +41,6 @@ export class SlackReply extends LitElement {
   };
   sessionId = "";
   user = "";
-  /** Whether the viewer can reply; null until known, during which the composer is shown optimistically. */
   private connected: boolean | null = null;
   private linkAvailable = false;
   private checkedAt = 0;
@@ -102,7 +101,6 @@ export class SlackReply extends LitElement {
     if (Date.now() - this.checkedAt >= FOCUS_REFRESH_MS) void this.check(false);
   };
   private refresh = (): Promise<void> => this.check(true);
-  /** Checks the Slack link in the background; the composer never waits on it. */
   private async check(fresh: boolean): Promise<void> {
     this.checkedAt = Date.now();
     try {
@@ -119,7 +117,8 @@ export class SlackReply extends LitElement {
         this.linkAvailable = false;
         this.error = "Slack linking isn’t configured for your account on this deployment.";
       } else if (fresh) this.error = result.message ?? "Could not check your Slack connection.";
-    } catch {
+    } catch (error) {
+      reportHandledError("web:slack_reply_status", error);
       if (fresh) this.error = "Could not check your Slack connection.";
     }
   }

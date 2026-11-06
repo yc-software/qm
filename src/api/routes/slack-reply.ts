@@ -7,10 +7,8 @@ import { activePrincipal } from "./shared.ts";
 import type { ApiCtx } from "./route.ts";
 import type { ServerDeps } from "../deps.ts";
 
-/** How long a reply-status answer is reused before Slack is asked again. */
 export const REPLY_STATUS_TTL_MS = 3 * 60_000;
 type ReplyStatus = { connected: boolean; [key: string]: unknown };
-// Keyed by the tenant's deps object so one company's cached answers never reach another.
 const replyStatusCache = new WeakMap<ServerDeps, Map<string, { status: ReplyStatus; expiresAt: number }>>();
 
 function replyStatusEntries(deps: ServerDeps) {
@@ -57,8 +55,6 @@ export async function slackReply(ctx: ApiCtx, send: boolean): Promise<void> {
     if (cached && cached.expiresAt > Date.now() && body.refresh !== true) return sendJson(ctx.res, 200, cached.status);
     cache.delete(principal);
   }
-  // Status answers depend only on the person's Slack link, not the conversation, so they are cached per person.
-  // Sending always re-verifies, and a send that finds the link gone clears the cached answer.
   const status = (code: number, payload: ReplyStatus) => {
     if (send) {
       if (!payload.connected) cache.delete(principal);
