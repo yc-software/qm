@@ -30,7 +30,7 @@ import { builtInModelCatalog, selectableCatalog, selectableModelCatalog } from "
 import { errMessage } from "../../util/errors.ts";
 import { isSafeSkillName, SKILL_NAME_RULE } from "../../skills/skill-name.ts";
 import { SideChatAnchorError, SoulUpdateDeniedError, type SessionPageStatus } from "../app-types.ts";
-import { AgentLocked } from "../../named-agents/named-agents.ts";
+import { PersonaLocked } from "../../personas/channel-personas.ts";
 import { renderAgentApis } from "../agent-api-catalog.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../../auth/capability-token.ts";
 import { contentTypeWithUtf8Charset, pipeToResponse, sendJson, sendProblem } from "../http.ts";
@@ -1212,7 +1212,7 @@ async function createGrant(ctx: ApiCtx): Promise<void> {
     await app.grant(body, { liveActor: true });
     return sendJson(res, 200, { ok: true });
   } catch (e) {
-    if (e instanceof AgentLocked) throw e;
+    if (e instanceof PersonaLocked) throw e;
     return sendJson(res, 400, { error: "grant_failed", message: errMessage(e) });
   }
 }
@@ -1230,7 +1230,7 @@ async function revokeGrant(ctx: ApiCtx): Promise<void> {
     await app.revokeGrant(b.ownerScopeId, b.ref, b.granteeScopeId, b.revokedBy, { liveActor: true });
     return sendJson(res, 200, { ok: true });
   } catch (e) {
-    if (e instanceof AgentLocked) throw e;
+    if (e instanceof PersonaLocked) throw e;
     return sendJson(res, 400, { error: "revoke_failed", message: errMessage(e) });
   }
 }
@@ -1528,7 +1528,7 @@ export async function postSoul(ctx: ApiCtx): Promise<void> {
   } catch (e) {
     if (e instanceof SoulUpdateDeniedError)
       return sendJson(res, 403, { error: "soul_update_denied", message: e.message });
-    if (e instanceof AgentLocked) throw e;
+    if (e instanceof PersonaLocked) throw e;
     return sendJson(res, 500, { error: "soul_update_failed", message: errMessage(e) });
   }
 }

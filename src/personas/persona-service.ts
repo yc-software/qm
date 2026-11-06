@@ -33,6 +33,7 @@ export type PersonaResult<T> =
 export interface PersonaForTurn {
   persona: Persona;
   scope: ScopeId;
+  channelDefault?: true;
 }
 
 export interface PersonaService {
@@ -85,6 +86,8 @@ export function createPersonaService(deps: {
   teams?: Pick<TeamStore, "forTurn">;
   sessions: Pick<SessionStore, "setPersona">;
   keychain?: Pick<Keychain, "grantsForScope" | "createGrant" | "revokeGrant">;
+  isActive?: (principalId: string) => boolean;
+  channelPersona?: (scope: ScopeId) => Promise<Persona | undefined>;
 }): PersonaService {
   const { store } = deps;
   const enabledFor = (principalId: string) => deps.flags.enabled("personas", scopeId("personal", principalId));
@@ -181,6 +184,12 @@ export function createPersonaService(deps: {
         }
         if (new Set(entries.map((entry) => entry.scopeId)).size !== entries.length)
           return { status: "invalid", message: "each scope may appear once" };
+        const staysOwner = ({ scopeId: holder, role }: { scopeId: ScopeId; role: PersonaRole }) => {
+          const { kind, ref } = parseScopeId(holder);
+          return role === "owner" && (kind !== "personal" || (deps.isActive?.(ref!) ?? true));
+        };
+        if (entries.some((entry) => entry.role === "owner") && !entries.some(staysOwner))
+          return { status: "invalid", message: "a persona needs at least one active owner" };
         try {
           await store.replaceAccess(id, entries, principalId);
         } catch (e) {
@@ -215,6 +224,12 @@ export function createPersonaService(deps: {
     },
     async assign(principalId, session, personaId) {
       if (!(await enabledFor(principalId))) return { status: "disabled" };
+      const worn = await deps.channelPersona?.(session.scopeId);
+      if (worn && worn.id !== personaId)
+        return {
+          status: "invalid",
+          message: `this channel wears the persona "${worn.name}" for every conversation in it; its owners and writers can change that`,
+        };
       if (personaId === null) {
         await deps.sessions.setPersona(session.id, null);
         return { status: "ok", value: null };
@@ -226,6 +241,8 @@ export function createPersonaService(deps: {
       return { status: "ok", value: { ...persona, role: held } };
     },
     async forTurn(personaId, actorId, contextScope) {
+      const worn = await deps.channelPersona?.(contextScope);
+      if (worn) return { persona: worn, scope: personaScope(worn.id), channelDefault: true };
       if (!personaId) return null;
       if (!(await enabledFor(actorId)))
         return "Personas are turned off for this person, so this turn runs without one.";
@@ -239,11 +256,15 @@ export function createPersonaService(deps: {
   };
 }
 
-export function personaPrompt({ persona, scope }: PersonaForTurn): string {
+export function personaPrompt({ persona, scope, channelDefault }: PersonaForTurn): string {
   const lines = [
     `## Persona: ${persona.name}`,
     `You are acting as the persona "${persona.name}" (${scope}). Its skills, notes and credentials come from that scope; who is in the room and where your writes land still come from this conversation. Organization instructions take precedence over the persona's.`,
   ];
+  if (channelDefault)
+    lines.push(
+      `This channel wears "${persona.name}" for every conversation in it. Only the persona's owners and writers, and org admins, can change this channel's instructions, standing orders or skills.`,
+    );
   if (persona.description.trim()) lines.push(`Purpose: ${persona.description.trim()}`);
   if (persona.instructions.trim()) lines.push("", persona.instructions.trim());
   return lines.join("\n");

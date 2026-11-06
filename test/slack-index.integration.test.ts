@@ -257,7 +257,7 @@ class FakeCore implements SlackCoreClient {
   async ackEmojiOverride(): Promise<string[] | null> {
     return null;
   }
-  async agentPersonas(): Promise<Map<string, SlackPersona>> {
+  async channelPersonas(): Promise<Map<string, SlackPersona>> {
     if (this.personaReadFails) throw new Error("agents map unavailable");
     return new Map(this.personas);
   }
@@ -1790,22 +1790,20 @@ test("own task-card status events never enter the mirror, but ordinary bot edits
   }
 });
 
-const ADA: SlackPersona = { username: "Ada", icon_url: "https://cdn.example.com/ada.png" };
+const ADA: SlackPersona = { username: "Ada", icon_emoji: ":art:" };
 const QM_IDENTITY = { username: "QM", icon_emoji: ":robot_face:" };
 const identityOf = (post: any) => ({
   username: post.username,
-  icon_url: post.icon_url,
   icon_emoji: post.icon_emoji,
 });
-const expectedIdentity = (persona: { username?: string; icon_url?: string; icon_emoji?: string }) => ({
+const expectedIdentity = (persona: { username?: string; icon_emoji?: string }) => ({
   username: persona.username,
-  icon_url: persona.icon_url,
   icon_emoji: persona.icon_emoji,
 });
 
 test("a freshly booted instance refreshes personas before its first status-card sweep", async () => {
   const { personaFor, refreshPersonas } = await import("../src/slack/delivery.ts");
-  await refreshPersonas({ agentPersonas: async () => new Map() });
+  await refreshPersonas({ channelPersonas: async () => new Map() });
   const seen: unknown[] = [];
   const f = await fixture({
     coreSingleton: false,
@@ -1822,11 +1820,11 @@ test("a freshly booted instance refreshes personas before its first status-card 
     assert.deepEqual(seen, [ADA]);
   } finally {
     await f.stop();
-    await refreshPersonas({ agentPersonas: async () => new Map() });
+    await refreshPersonas({ channelPersonas: async () => new Map() });
   }
 });
 
-test("a bound channel's ack, goal notice and every part of a split reply post as its agent, and its edits keep it", async () => {
+test("a bound channel's ack, goal notice and every part of a split reply post as its persona, and its edits keep it", async () => {
   const f = await fixture({ botIdentity: QM_IDENTITY });
   try {
     f.core.personas.set("C1", ADA);
@@ -1884,7 +1882,7 @@ test("the next turn after a rename posts under the new name, and a failed person
   }
 });
 
-test("a requester-only refusal in a bound channel is an ephemeral under the agent's persona", async () => {
+test("a requester-only refusal in a bound channel is an ephemeral under the persona", async () => {
   const f = await fixture({ botIdentity: QM_IDENTITY });
   try {
     f.core.personas.set("C1", ADA);

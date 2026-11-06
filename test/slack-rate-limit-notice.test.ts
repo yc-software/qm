@@ -153,22 +153,21 @@ test("automatic and tool reads share a cooldown after normalizing the requester,
   assert.equal(ephemeral.length, 4);
 });
 
-test("a rate-limit notice in a bound channel posts as its agent, and a DM notice keeps the default identity", async (t) => {
+test("a rate-limit notice in a bound channel posts as its persona, and a DM notice keeps the default identity", async (t) => {
   setDefaultBotIdentity({ username: "QM", icon_emoji: ":robot_face:" });
   await refreshPersonas({
-    agentPersonas: async () => new Map([["C1", { username: "Ada", icon_url: "https://cdn.example.com/ada.png" }]]),
+    channelPersonas: async () => new Map([["C1", { username: "Ada", icon_emoji: ":art:" }]]),
   });
   t.after(async () => {
     setDefaultBotIdentity(undefined);
-    await refreshPersonas({ agentPersonas: async () => new Map() });
+    await refreshPersonas({ channelPersonas: async () => new Map() });
   });
   const { client, ephemeral, messages } = fixture();
   const notice = createSlackRateLimitNotice(options);
   await notice.run(client, { target: "C1:1700.1", user: "U1" }, () => notice.observe(rateLimit));
   await notice.run(client, { target: "D1:1700.2", user: "U1" }, () => notice.observe(rateLimit));
   assert.equal(ephemeral[0].username, "Ada");
-  assert.equal(ephemeral[0].icon_url, "https://cdn.example.com/ada.png");
-  assert.equal(ephemeral[0].icon_emoji, undefined);
+  assert.equal(ephemeral[0].icon_emoji, ":art:");
   assert.equal(messages[0].channel, "D1");
   assert.equal(messages[0].username, "QM");
   assert.equal(messages[0].icon_emoji, ":robot_face:");

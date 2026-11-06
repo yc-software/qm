@@ -26,7 +26,7 @@ function fixture() {
     personas: new Map(),
   };
   const core = {
-    agentPersonas: async () => new Map(state.personas),
+    channelPersonas: async () => new Map(state.personas),
     submitTurn: async (body: any) => {
       submitted.push(body);
       if (state.hold) await state.hold;
@@ -303,14 +303,13 @@ test("an allow click shows who allowed it while running and keeps that record un
   assert.match(decision.text.text, /^:white_check_mark: Allowed once by <@U2> · `rm -rf \/tmp\/x` · /);
 });
 
-const ADA: SlackPersona = { username: "Ada", icon_url: "https://cdn.example.com/ada.png" };
+const ADA: SlackPersona = { username: "Ada", icon_emoji: ":art:" };
 const identityOf = (args: Record<string, unknown>) => ({
   username: args.username,
-  icon_url: args.icon_url,
   icon_emoji: args.icon_emoji,
 });
 
-test("approval notices and the resumed reply in a bound channel post as its agent; card edits send no identity", async () => {
+test("approval notices and the resumed reply in a bound channel post as its persona; card edits send no identity", async () => {
   const f = fixture();
   f.state.personas.set("C1", ADA);
   f.state.result = { status: "ok", reply: "Removed it." };
@@ -318,14 +317,13 @@ test("approval notices and the resumed reply in a bound channel post as its agen
 
   await f.click("U1");
   assert.match(f.ephemerals[0]?.text ?? "", /Only the person who requested/);
-  assert.deepEqual(identityOf(f.ephemerals[0]), { ...ADA, icon_emoji: undefined });
+  assert.deepEqual(identityOf(f.ephemerals[0]), ADA);
 
   await f.click("U2");
   assert.equal(f.submitted.length, 1);
   const reply = f.posts.find((p) => p.text === "Removed it.");
   assert.equal(reply?.channel, "C1");
-  assert.deepEqual(identityOf(reply), { ...ADA, icon_emoji: undefined });
+  assert.deepEqual(identityOf(reply), ADA);
   assert.ok(f.updates.length >= 1, "the card in the requester's DM was edited");
-  for (const update of f.updates)
-    assert.deepEqual(identityOf(update), { username: undefined, icon_url: undefined, icon_emoji: undefined });
+  for (const update of f.updates) assert.deepEqual(identityOf(update), { username: undefined, icon_emoji: undefined });
 });

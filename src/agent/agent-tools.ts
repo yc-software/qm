@@ -2,7 +2,7 @@ import type { DocumentInput } from "../core/documents.ts";
 import type { TurnHandoff } from "./runtime-types.ts";
 import { type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { type Config } from "../config.ts";
-import type { ClientToolDeclaration, ScopeId } from "../types.ts";
+import type { ApprovedToolCallSpec, ClientToolDeclaration, ScopeId } from "../types.ts";
 import type { Item, NewItem } from "../sessions/items.ts";
 import type { ToolContext } from "../tools/primitives.ts";
 import { type Phase } from "../../plugins/chassis/src/error-reporting.ts";
@@ -41,6 +41,7 @@ export interface ToolContextRef {
     approvalKey?: string;
     summary?: string;
     grantModes?: { session: boolean; always: boolean };
+    call?: ApprovedToolCallSpec;
   }>;
   pausedOnApproval?: boolean;
   emit?: (item: NewItem) => Promise<Item | undefined>;
@@ -143,11 +144,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const { memory, history } = recallTools(kit);
   const { subagentTool, sessionTool, sidebarSessions } = sessionTools(kit);
   const { cron } = cronTools(kit);
-  const { webhook, guidance, sharingTool, admin, agents } = controlPlaneTools(kit);
+  const { webhook, guidance, sharingTool, admin } = controlPlaneTools(kit);
   const { surface } = surfaceTool(kit);
   const { createGoal, getGoal, updateGoal } = goalTools(kit);
   const { clientTools } = pageClientTools(kit);
-  const { attach, finishSilently, context, runtime } = turnTools(kit);
+  const { attach, finishSilently, context, runtime, withdrawApproval } = turnTools(kit);
 
   const tools = [
     ...(!delegateWork ? [{ ...execute, handlesAbort: true }] : []),
@@ -184,12 +185,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           }),
           webhook,
           admin,
-          ...(ref.current?.agents ? [agents] : []),
         ]
       : []),
     ...(controlTools || surfaceTools ? [guidance] : []),
     ...(surfaceTools ? [surface] : [attach]),
     finishSilently,
+    withdrawApproval,
     { ...resourceTool("goal", { create: createGoal, get: getGoal, update: updateGoal }), handlesAbort: true },
     runtime,
     context,

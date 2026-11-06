@@ -1,6 +1,6 @@
 import type { PersonaService } from "../../personas/persona-service.ts";
 import type { AdmittedWork } from "../../util/admitted-work.ts";
-import type { NamedAgents } from "../../named-agents/named-agents.ts";
+import type { ChannelPersonas } from "../../personas/channel-personas.ts";
 import type { TraceCarrier } from "../../../plugins/chassis/src/error-reporting.ts";
 import type { GoalCreateInput } from "../../agent/goal.ts";
 import type { RunStop, TurnPark } from "../../runs/run-store.ts";
@@ -181,7 +181,7 @@ export interface OrchestratorDeps {
   deliveries?: DeliveryStore;
   directory?: DirectoryStore;
   projects?: Pick<ProjectStore, "recognizes" | "name">;
-  namedAgents?: NamedAgents;
+  channelPersonas?: ChannelPersonas;
   personas?: Pick<PersonaService, "forTurn">;
   isCurrentSharedScopeMember?: IsCurrentSharedScopeMember;
   currentScopeMembers?: import("../../resolution/scope-membership.ts").CurrentScopeMembers;

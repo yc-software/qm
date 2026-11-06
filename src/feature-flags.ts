@@ -29,10 +29,6 @@ export const FEATURES = {
     hint: "Titles the selected people's new conversations with a short summary of what they asked, anchored on a name or distinctive word, written by a stronger model. Regenerating a title uses it too.",
   },
   external_app_sharing: { label: "External app sharing (public links, outside emails)" },
-  named_agents: {
-    label: "Named agents",
-    hint: "Lets the selected people name a channel's agent from their DM, and locks that channel's instructions, standing orders and skills to the agent's owners and org admins wherever the flag is on.",
-  },
   loop_triage: { label: "Loop triage (prioritize and consolidate)" },
   sidebar_last_message_titles: {
     label: "Sidebar titles from last message (experimental)",

@@ -9,7 +9,6 @@ export interface SlackReplyArgs {
   thread_ts?: string;
   reply_broadcast?: false;
   username?: string;
-  icon_url?: string;
   icon_emoji?: string;
   unfurl_links?: boolean;
   unfurl_media?: boolean;
@@ -17,7 +16,6 @@ export interface SlackReplyArgs {
 
 export interface SlackPersona {
   username: string;
-  icon_url?: string;
   icon_emoji?: string;
 }
 
@@ -42,20 +40,18 @@ export function setDefaultBotIdentity(identity: BotIdentityOverride | undefined)
 
 export function personaFor(channel: string): BotIdentityOverride {
   const persona = personas.get(channel);
-  if (!persona) return defaultIdentity;
-  if (persona.icon_url || persona.icon_emoji || !defaultIdentity.icon_emoji) return persona;
-  return { ...persona, icon_emoji: defaultIdentity.icon_emoji };
+  return persona ? { ...defaultIdentity, ...persona } : defaultIdentity;
 }
 
-export function refreshPersonas(core: { agentPersonas?(): Promise<Map<string, SlackPersona>> }): Promise<void> {
-  if (!core.agentPersonas) return Promise.resolve();
+export function refreshPersonas(core: { channelPersonas?(): Promise<Map<string, SlackPersona>> }): Promise<void> {
+  if (!core.channelPersonas) return Promise.resolve();
   personaRefresh ??= core
-    .agentPersonas()
+    .channelPersonas()
     .then(
       (next) => {
         personas = next;
       },
-      swallowAs("slack: agent persona refresh", undefined),
+      swallowAs("slack: channel persona refresh", undefined),
     )
     .finally(() => {
       personaRefresh = undefined;

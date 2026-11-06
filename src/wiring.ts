@@ -360,11 +360,9 @@ import { createAdminService, parseAdminGrants, type AdminService } from "./admin
 import { createAdminGrantStore } from "./admin/admin-grant-store.ts";
 import { createPostgresAdminGrantStore } from "./admin/postgres-admin-grant-store.ts";
 import { createProjectStore, type Project, type ProjectStore } from "./projects/project-store.ts";
-import { createAgentStore, type NamedAgent } from "./named-agents/agent-store.ts";
-import { createNamedAgents } from "./named-agents/named-agents.ts";
-import { resolveBranding } from "./resolution/branding.ts";
 import { createPersonaService } from "./personas/persona-service.ts";
 import { createPostgresPersonaStore } from "./personas/persona-store.ts";
+import { createChannelPersonas, type ChannelPersonaDefault } from "./personas/channel-personas.ts";
 import { withErrorReporting, type ErrorLog } from "./admin/error-log.ts";
 import { createPostgresReplayDedupe, type ReplayDedupe } from "./auth/replay-dedupe.ts";
 import {
@@ -723,7 +721,6 @@ export function buildApp(
     configStore,
     acl,
     config.securityScreen === "off" && overrides.securityScreener ? "enforce" : config.securityScreen,
-    (scope) => namedAgents.promptFor(scope),
   );
 
   const s3 = config.s3Endpoint ? s3Client(config.s3Region, { endpoint: config.s3Endpoint }) : undefined;
@@ -1767,13 +1764,17 @@ export function buildApp(
     isActiveMember: (principalId) => identity.isInternal(identity.classify(principalId)),
     advisoryLock,
   });
+  const isActiveMember = (principalId: string) => identity.isInternal(identity.classify(principalId));
+  const personaStore = createPostgresPersonaStore(databaseUrl);
   const personas = createPersonaService({
-    store: createPostgresPersonaStore(databaseUrl),
+    store: personaStore,
     flags: featureFlags,
     orgScope: scopeId("org", config.orgId),
     teams,
     sessions,
     ...(keychain ? { keychain } : {}),
+    isActive: isActiveMember,
+    channelPersona: (scope) => channelPersonas.current(scope),
   });
   const canReadScope = createCanReadScope({ managedGroups: projects, directory, identity, teams, sessions, personas });
   const canWriteScope = createCanWriteScope({ managedGroups: projects, directory, identity, teams, personas });
@@ -1793,15 +1794,18 @@ export function buildApp(
   const deployGitSecret = config.signingSecret;
   const deployGitBase = config.apiBaseUrl;
   const deliveries = withWebTranscriptDeliveries(createPostgresDeliveryStore(databaseUrl), sessions, runs);
-  const namedAgents = createNamedAgents({
-    store: createAgentStore(artifactMap<NamedAgent>("agents", ["handle", "channelId"]), { advisoryLock }),
-    featureFlags,
-    identity,
+  const channelPersonas = createChannelPersonas({
+    defaults: artifactMap<ChannelPersonaDefault>("persona_channel_defaults", ["personaId"]),
+    store: personaStore,
+    personas,
+    flags: featureFlags,
+    orgScope: scopeId("org", config.orgId),
     directory,
+    isActive: isActiveMember,
     isOrgAdmin: async (principalId) => (await admin.adminStatusOf({ id: principalId, type: "internal" })).isAdmin,
+    orgAdmins: async () => (await admin.listGrants()).filter((grant) => grant.role === "org_admin"),
     auditLog,
     deliveries,
-    botNames: async () => [(await resolveBranding(configStore, orgScope, config.brandingDefault)).selfLabel ?? "QM"],
   });
   const deployService = createDeployService({
     deliveries,
@@ -2162,8 +2166,8 @@ export function buildApp(
     currentScopeMembers: createCurrentScopeMembers({ managedGroups: projects, directory, identity }, true),
     managedGroups: projects,
     projects,
-    namedAgents,
     personas,
+    channelPersonas,
     ...(config.surfaceDebugFooter ? { surfaceDebugFooter: true } : {}),
     ...(decisions ? { replyCheck: createReplyCheck(decisions, decide) } : {}),
     environments,
@@ -2323,8 +2327,8 @@ export function buildApp(
         }
       : {}),
     projects,
-    namedAgents,
     personas,
+    channelPersonas,
     environments,
     deploy: deployService,
     deployAppsDomain: config.awsDeploy.appsDomain,
@@ -2794,6 +2798,15 @@ export function buildApp(
         { label: "llm-capture-retention" },
       )
     : null;
+  const personaOwnerSweeper = createSweeper(
+    () =>
+      leaderLease.hold("personas:owner-handover", async () => {
+        await identity.refresh(true);
+        await channelPersonas.adoptOrphans();
+      }),
+    5 * 60_000,
+    { label: "persona-owner-handover" },
+  );
   const monitorRetentionSweeper = createSweeper(
     () => leaderLease.hold("monitor:retention:sweep", () => monitors.deleteDefunct(Date.now())),
     MONITOR_RETENTION_SWEEP_MS,
@@ -2859,6 +2872,7 @@ export function buildApp(
         })
         .catch(swallowAs("wiring: monitor resume failed", undefined));
       monitorRetentionSweeper.start();
+      personaOwnerSweeper.start();
       spendSweeper?.start();
       llmCaptureSweeper?.start();
       semanticMemory.start();
@@ -2894,6 +2908,7 @@ export function buildApp(
       reaper.stop(),
       processReaper?.stop(),
       monitorRetentionSweeper.stop(),
+      personaOwnerSweeper.stop(),
       spendSweeper?.stop(),
       llmCaptureSweeper?.stop(),
       semanticMemory.stop(),

@@ -1,8 +1,6 @@
 import { adminOperations } from "../../tools/admin.ts";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { Type, type TSchema } from "typebox";
-import type { AgentsRequest, AgentsResult } from "../../api/control-service.ts";
-import type { AgentView } from "../../named-agents/named-agents.ts";
+import { Type } from "typebox";
 import { splitToScope } from "../../api/artifact-share.ts";
 import { errMessage } from "../../util/errors.ts";
 import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
@@ -498,77 +496,5 @@ export function controlPlaneTools(kit: ToolKit) {
       "Admin API; authority is rechecked on every call and audited. Private content needs a live admin in a DM or Open conversation; unattended reads need explicit grants. Admin-role changes, impersonation, identity links and teammate invitations are portal-only. Confirm every mutation, report exactly what changed, and disclose only what this conversation needs. Never put secrets in arguments.\n\n" +
       admin.description;
 
-  const avatarSchema = Type.Object(
-    {
-      kind: Type.Union([Type.Literal("emoji"), Type.Literal("url")]),
-      value: Type.String({ description: 'A Slack shortcode like ":art:", or a public https image URL.' }),
-    },
-    { additionalProperties: false },
-  );
-  const agentRef = Type.String({ description: "The agent's handle." });
-  const people = (description: string) => Type.Optional(Type.Array(Type.String(), { description }));
-  const describeAgent = (a: AgentView) =>
-    `${a.displayName} (@${a.handle}), ${a.title}, in #${a.channelName}. Owners: ${a.owners.join(", ")}.${a.orphaned ? " No active owner." : ""}`;
-  const agentAction = (
-    action: AgentsRequest["action"],
-    description: string,
-    parameters: TSchema,
-    done: (r: Extract<AgentsResult, { ok: true }>) => string,
-  ) =>
-    defineTool({
-      name: action,
-      label: action,
-      description,
-      parameters,
-      async execute(callId, params) {
-        const tc = ref.current;
-        if (!tc?.agents) return text("[error] named agents aren't available on this turn");
-        await recordCall(callId, { tool: "agents", action });
-        const r = await tc.agents({ ...(params as object), action } as AgentsRequest);
-        if (isUnavailable(r)) return unavailable(callId, "agents");
-        if (!r.ok)
-          return recordResult(callId, { tool: "agents", action, error: r.code }, text(`[error] ${r.message}`), true);
-        return recordResult(callId, { tool: "agents", action, ok: true }, text(done(r)));
-      },
-    });
-  const agents = resourceTool("agents", {
-    create: agentAction(
-      "create",
-      "Give a Slack channel you belong to a named agent: posts there carry its name and picture, and its owners alone can change the channel's instructions, standing orders and skills from a conversation; org admins use the admin console. You become an owner.",
-      Type.Object({
-        channel: Type.String({ description: "Channel name or id." }),
-        handle: Type.String({ description: "Unique lowercase handle, e.g. ada." }),
-        displayName: Type.String(),
-        title: Type.String({ description: "What it does, e.g. Design critic." }),
-        avatar: Type.Optional(avatarSchema),
-        owners: people("Teammates who also own it."),
-      }),
-      (r) => ("agent" in r ? `Created ${describeAgent(r.agent)}` : ""),
-    ),
-    edit: agentAction(
-      "edit",
-      "Change an agent you own. An org admin may add an owner to an agent that has no active owner.",
-      Type.Object({
-        agent: agentRef,
-        handle: Type.Optional(Type.String()),
-        displayName: Type.Optional(Type.String()),
-        title: Type.Optional(Type.String()),
-        avatar: Type.Optional(avatarSchema),
-        addOwners: people("Teammates to add as owners."),
-        removeOwners: people("Owners to remove."),
-      }),
-      (r) => ("agent" in r ? `Updated ${describeAgent(r.agent)}` : ""),
-    ),
-    archive: agentAction(
-      "archive",
-      "Retire an agent you own, or one with no active owner if you are an org admin; its channel is unlocked and keeps its instructions and skills.",
-      Type.Object({ agent: agentRef }),
-      (r) => ("agent" in r ? `Archived ${r.agent.displayName}; #${r.agent.channelName} is unlocked.` : ""),
-    ),
-    list: agentAction("list", "Agents in your channels and agents you own.", Type.Object({}), (r) =>
-      "agents" in r && r.agents.length ? r.agents.map((a) => `- ${describeAgent(a)}`).join("\n") : "No agents.",
-    ),
-  });
-
-  return { webhook, guidance, sharingTool, admin, agents };
+  return { webhook, guidance, sharingTool, admin };
 }

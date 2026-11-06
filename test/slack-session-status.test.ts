@@ -372,9 +372,9 @@ test("core engagement is signaled once for local or durable replies, never quiet
   }
 });
 
-test("a bound channel's status card posts and edits as its agent", async (t) => {
-  await refreshPersonas({ agentPersonas: async () => new Map([["C1", { username: "Bolt", icon_emoji: ":art:" }]]) });
-  t.after(() => refreshPersonas({ agentPersonas: async () => new Map() }));
+test("a bound channel's status card posts and edits as its persona", async (t) => {
+  await refreshPersonas({ channelPersonas: async () => new Map([["C1", { username: "Bolt", icon_emoji: ":art:" }]]) });
+  t.after(() => refreshPersonas({ channelPersonas: async () => new Map() }));
   const f = fixture();
   await f.enable();
   const run = f.add("r1");

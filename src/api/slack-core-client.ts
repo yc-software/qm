@@ -15,6 +15,7 @@ import { createTaskAcknowledgements, type TaskAckState, type TaskAcknowledgement
 import { orgId as configOrgId } from "../config.ts";
 import type { StagedEnvelope } from "../slack/envelope-staging.ts";
 import type { SlackPersona } from "../slack/delivery.ts";
+import { EMOJI_NAME_BY_CHAR } from "../slack/emoji-map.ts";
 import { resolveBranding } from "../resolution/branding.ts";
 import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
@@ -89,7 +90,7 @@ export interface SlackCoreClient {
   sessionStatus?: SlackSessionStatus;
   externalSlackParticipants(): Promise<boolean>;
   ackEmojiOverride(): Promise<string[] | null>;
-  agentPersonas?(): Promise<Map<string, SlackPersona>>;
+  channelPersonas?(): Promise<Map<string, SlackPersona>>;
   publishEmojiCatalog(emoji: Record<string, string>): Promise<void>;
   surfaceHeaderFacts(scope: ScopeId): Promise<{ agentLabel?: string; modelName: string }>;
   channelHeaderPinEnabled(scope: ScopeId): Promise<boolean>;
@@ -207,15 +208,14 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
       return await deps.config.getAckEmojiDurable(orgScope);
     },
 
-    async agentPersonas() {
+    async channelPersonas() {
       const personas = new Map<string, SlackPersona>();
-      for (const { agent, orphaned } of (await deps.app.namedAgents?.governedAgents()) ?? []) {
-        if (orphaned) continue;
-        personas.set(agent.channelId, {
-          username: agent.displayName,
-          ...(agent.avatar?.kind === "emoji" ? { icon_emoji: agent.avatar.value } : {}),
-          ...(agent.avatar?.kind === "url" ? { icon_url: agent.avatar.value } : {}),
-        });
+      for (const { channelId, persona } of (await deps.app.channelPersonas?.all()) ?? []) {
+        const emoji =
+          persona.icon?.kind === "emoji"
+            ? EMOJI_NAME_BY_CHAR[persona.icon.value.replaceAll("\uFE0F", "")]
+            : persona.icon?.name;
+        personas.set(channelId, { username: persona.name, ...(emoji ? { icon_emoji: `:${emoji}:` } : {}) });
       }
       return personas;
     },

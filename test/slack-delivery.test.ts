@@ -55,7 +55,7 @@ test("botIdentityFromEnv reads the display-name/icon knobs and trims them", () =
   );
 });
 
-test("personaFor/slackReplyArgs stay a no-op without an env override or a bound agent", () => {
+test("personaFor/slackReplyArgs stay a no-op without an env override or a channel persona", () => {
   assert.deepEqual(personaFor("C1"), {});
   assert.deepEqual(slackReplyArgs("C1", "reply", undefined), {
     channel: "C1",
@@ -63,7 +63,7 @@ test("personaFor/slackReplyArgs stay a no-op without an env override or a bound 
   });
 });
 
-const ADA: SlackPersona = { username: "Ada", icon_url: "https://cdn.example.com/ada.png" };
+const ADA: SlackPersona = { username: "Ada", icon_emoji: ":art:" };
 const BOLT: SlackPersona = { username: "Bolt", icon_emoji: ":art:" };
 const QM_DEFAULT = { username: "QM", icon_emoji: ":robot_face:" };
 
@@ -72,7 +72,7 @@ function personaSource(initial: Record<string, SlackPersona>) {
     personas: new Map(Object.entries(initial)),
     fail: false,
     reads: 0,
-    async agentPersonas() {
+    async channelPersonas() {
       source.reads++;
       if (source.fail) throw new Error("core unreachable");
       return new Map(source.personas);
@@ -87,12 +87,12 @@ async function bindPersonas(t: { after(fn: () => Promise<void>): void }, initial
   await refreshPersonas(source);
   t.after(async () => {
     setDefaultBotIdentity(undefined);
-    await refreshPersonas({ agentPersonas: async () => new Map() });
+    await refreshPersonas({ channelPersonas: async () => new Map() });
   });
   return source;
 }
 
-test("a bound channel's persona replaces the env identity on replies and ephemerals; unbound channels keep the env identity, and an agent without a picture keeps the env icon", async (t) => {
+test("a bound channel's persona replaces the env identity on replies and ephemerals; unbound channels keep the env identity, and a persona without an icon keeps the env icon", async (t) => {
   await bindPersonas(t, { CADA: ADA, CBOLT: BOLT, CPLAIN: { username: "Plain" } });
   assert.deepEqual(slackReplyArgs("CADA", "hi", "1.1", { threadOnly: true }), {
     channel: "CADA",
@@ -100,7 +100,7 @@ test("a bound channel's persona replaces the env identity on replies and ephemer
     thread_ts: "1.1",
     reply_broadcast: false,
     username: "Ada",
-    icon_url: "https://cdn.example.com/ada.png",
+    icon_emoji: ":art:",
   });
   assert.deepEqual(slackReplyArgs("CBOLT", "hi", undefined), {
     channel: "CBOLT",
@@ -113,7 +113,7 @@ test("a bound channel's persona replaces the env identity on replies and ephemer
     user: "U1",
     text: "only you",
     username: "Ada",
-    icon_url: "https://cdn.example.com/ada.png",
+    icon_emoji: ":art:",
   });
   assert.deepEqual(slackReplyArgs("CPLAIN", "hi", undefined), {
     channel: "CPLAIN",
@@ -930,7 +930,7 @@ test("surface header ensurer updates an existing pinned header in place instead 
   assert.equal(h.readPin()?.text.startsWith("Using Claude Haiku 4.5"), true);
 });
 
-test("a bound channel's pinned header edit carries its agent's persona", async (t) => {
+test("a bound channel's pinned header edit carries its persona", async (t) => {
   await bindPersonas(t, { C1: ADA });
   const h = headerHarness(
     undefined,
@@ -942,7 +942,7 @@ test("a bound channel's pinned header edit carries its agent's persona", async (
   await h.flush();
   assert.equal(h.calls.updatedWith.length, 1);
   assert.equal(h.calls.updatedWith[0]!.username, "Ada");
-  assert.equal(h.calls.updatedWith[0]!.icon_url, ADA.icon_url);
+  assert.equal(h.calls.updatedWith[0]!.icon_emoji, ADA.icon_emoji);
 });
 
 test("the pinned header is off by default — join creates nothing until the scope opts in", async () => {
@@ -1319,7 +1319,6 @@ test("every post a bound channel gets from the join welcome, the pinned header a
   assert.ok(posts.length >= 5, "welcome, header and at least three reply parts");
   for (const post of posts) {
     assert.equal(post.username, "Ada");
-    assert.equal(post.icon_url, "https://cdn.example.com/ada.png");
-    assert.equal(post.icon_emoji, undefined);
+    assert.equal(post.icon_emoji, ":art:");
   }
 });

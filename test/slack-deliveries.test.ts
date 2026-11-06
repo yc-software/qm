@@ -56,7 +56,7 @@ async function deliver(
     };
   };
   const core = {
-    agentPersonas: async () => new Map(Object.entries(row.personas ?? {})),
+    channelPersonas: async () => new Map(Object.entries(row.personas ?? {})),
     holdDeliveryDispatch: (fn: (lost: Promise<void>) => Promise<unknown>) => fn(new Promise<void>(() => {})),
     getApproval: async () => row.approval ?? null,
     readBlob: async (id: string) => Buffer.from(id),
@@ -479,31 +479,30 @@ test("a reply revised by the reply check carries a plain-text edit note footer",
   });
 });
 
-const ADA: SlackPersona = { username: "Ada", icon_url: "https://cdn.example.com/ada.png" };
+const ADA: SlackPersona = { username: "Ada", icon_emoji: ":art:" };
 const BOLT: SlackPersona = { username: "Bolt", icon_emoji: ":art:" };
 const identityOf = (args: Record<string, unknown>) => ({
   username: args.username,
-  icon_url: args.icon_url,
   icon_emoji: args.icon_emoji,
 });
 
-test("a queued delivery into a bound channel posts every split part as its agent, while its files stay QM's", async () => {
+test("a queued delivery into a bound channel posts every split part as its persona, while its files stay QM's", async () => {
   const { posts, uploads } = await deliver({}, undefined, undefined, "word ".repeat(2_000), {
     personas: { C1: ADA },
   });
   assert.ok(posts.length >= 2, "the delivery split into parts");
-  for (const post of posts) assert.deepEqual(identityOf(post), { ...ADA, icon_emoji: undefined });
+  for (const post of posts) assert.deepEqual(identityOf(post), ADA);
   assert.equal(uploads.length, 1);
-  assert.deepEqual(identityOf(uploads[0]!), { username: undefined, icon_url: undefined, icon_emoji: undefined });
+  assert.deepEqual(identityOf(uploads[0]!), { username: undefined, icon_emoji: undefined });
 });
 
 test("a queued delivery into an unbound channel keeps the default identity after a bound one", async () => {
   await deliver({}, undefined, undefined, "first", { personas: { C1: BOLT } });
   const { posts } = await deliver({}, undefined, undefined, "second", { personas: { C2: ADA } });
-  assert.deepEqual(identityOf(posts[0]!), { username: undefined, icon_url: undefined, icon_emoji: undefined });
+  assert.deepEqual(identityOf(posts[0]!), { username: undefined, icon_emoji: undefined });
 });
 
-test("edits in a bound channel carry its agent's persona, and edits elsewhere carry the default identity", async (t) => {
+test("edits in a bound channel carry its persona, and edits elsewhere carry the default identity", async (t) => {
   setDefaultBotIdentity({ username: "QM", icon_emoji: ":robot_face:" });
   t.after(() => setDefaultBotIdentity(undefined));
   const explicit = await deliver({ target: "C1", edit: { messageTs: "99.100" } }, undefined, undefined, "fixed", {
@@ -514,7 +513,7 @@ test("edits in a bound channel carry its agent's persona, and edits elsewhere ca
   });
   const updates = [...explicit.updates, ...finalized.updates];
   assert.equal(updates.length, 2);
-  for (const update of updates) assert.deepEqual(identityOf(update), { ...ADA, icon_emoji: undefined });
+  for (const update of updates) assert.deepEqual(identityOf(update), ADA);
   assert.deepEqual([...explicit.posts, ...finalized.posts], []);
   const unbound = await deliver({ target: "C1", edit: { messageTs: "99.300" } }, undefined, undefined, "fixed again", {
     personas: { C2: ADA },
@@ -522,13 +521,12 @@ test("edits in a bound channel carry its agent's persona, and edits elsewhere ca
   assert.equal(unbound.updates.length, 1);
   assert.deepEqual(identityOf(unbound.updates[0]!), {
     username: "QM",
-    icon_url: undefined,
     icon_emoji: ":robot_face:",
   });
 });
 
-test("a keychain approval card delivered into a bound channel carries the agent's persona", async () => {
-  await refreshPersonas({ agentPersonas: async () => new Map([["C1", BOLT]]) });
+test("a keychain approval card delivered into a bound channel carries the persona", async () => {
+  await refreshPersonas({ channelPersonas: async () => new Map([["C1", BOLT]]) });
   const posts: Record<string, unknown>[] = [];
   const client = {
     chat: {
@@ -563,15 +561,15 @@ test("a keychain approval card delivered into a bound channel carries the agent'
       "1.1",
     );
   } finally {
-    await refreshPersonas({ agentPersonas: async () => new Map() });
+    await refreshPersonas({ channelPersonas: async () => new Map() });
   }
   assert.equal(posts.length, 1);
   assert.ok(Array.isArray(posts[0]!.blocks), "the card carries its buttons");
-  assert.deepEqual(identityOf(posts[0]!), { ...BOLT, icon_url: undefined });
+  assert.deepEqual(identityOf(posts[0]!), { ...BOLT });
 });
 
-test("a follower that does not hold the delivery lease reads no personas, and its card click still edits as the agent", async () => {
-  await refreshPersonas({ agentPersonas: async () => new Map() });
+test("a follower that does not hold the delivery lease reads no personas, and its card click still edits as the persona", async () => {
+  await refreshPersonas({ channelPersonas: async () => new Map() });
   let personaReads = 0;
   const updates: Record<string, unknown>[] = [];
   const client = {
@@ -583,7 +581,7 @@ test("a follower that does not hold the delivery lease reads no personas, and it
     },
   };
   const core = {
-    agentPersonas: async () => {
+    channelPersonas: async () => {
       personaReads++;
       return new Map([["C1", ADA]]);
     },
@@ -627,9 +625,9 @@ test("a follower that does not hold the delivery lease reads no personas, and it
       client,
     });
   } finally {
-    await refreshPersonas({ agentPersonas: async () => new Map() });
+    await refreshPersonas({ channelPersonas: async () => new Map() });
   }
   assert.equal(updates.length, 1);
   assert.equal(updates[0]!.ts, "5.5");
-  assert.deepEqual(identityOf(updates[0]!), { ...ADA, icon_emoji: undefined });
+  assert.deepEqual(identityOf(updates[0]!), ADA);
 });

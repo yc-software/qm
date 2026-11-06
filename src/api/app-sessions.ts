@@ -1334,7 +1334,7 @@ export function createSessionMethods(
       if (!allowedPersonal && !allowedShared) {
         throw new SoulUpdateDeniedError();
       }
-      await deps.namedAgents?.assertMayInstruct(scopeIdValue, { id: actorId, live: opts?.liveActor === true });
+      await deps.channelPersonas?.assertMayInstruct(scopeIdValue, { id: actorId, live: opts?.liveActor === true });
       const write = async (): Promise<number> => {
         let snapshot: Awaited<ReturnType<typeof deps.config.captureSoulSnapshot>> | undefined;
         try {

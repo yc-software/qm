@@ -496,7 +496,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       }
       let p: ChannelPolicy;
       try {
-        await deps.namedAgents?.assertMayInstruct(scopeId, { id: actor.id, live: liveTurn === true });
+        await deps.channelPersonas?.assertMayInstruct(scopeId, { id: actor.id, live: liveTurn === true });
         p = await deps.channelPolicy.set(conversation.channelRef, orders, {
           setBy: actor.id,
           bots: parsedBots,
