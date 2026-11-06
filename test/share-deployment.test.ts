@@ -32,6 +32,8 @@ import { createPostgresDirectoryStore } from "../src/directory/postgres-director
 import { testAdvisoryLock, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { allGrants } from "./support/acl-grants.ts";
+import { bindBootTenant } from "../src/tenants/boot.ts";
+import { TEST_TENANT } from "./support/test-tenant.ts";
 
 const externalSharingOn = { enabled: async () => true } as unknown as FeatureFlagStore;
 
@@ -724,7 +726,9 @@ test("directory email recipients retain manage access", async () => {
   assert.equal(await deploy.canManageDeployment(d.id, "member@example.com"), true);
 });
 
-test("exact email read grants admit app-only login and guest reach without membership or source access", async () => {
+test("exact email read grants admit app-only login and guest reach without membership or source access", async (t) => {
+  await bindBootTenant(async () => undefined);
+  t.after(() => bindBootTenant(async () => TEST_TENANT));
   const { deploy, acl } = makeDeploy();
   const identity = createIdentityService(testMap(), { externalMembers: testMap() });
   const directory = createPostgresDirectoryStore(testDatabaseUrl());

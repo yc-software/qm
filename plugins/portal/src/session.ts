@@ -36,7 +36,6 @@ export interface SessionClaims {
   anon?: boolean;
   appOnly?: boolean;
   t?: string;
-  h?: string;
   iat: number;
   exp: number;
 }
@@ -56,6 +55,7 @@ export interface TmpClaims {
   nonce: string;
   pkceVerifier: string;
   returnTo: string;
+  workspace?: string;
   iat: number;
   exp: number;
 }
@@ -80,7 +80,6 @@ export function openSession(
     return null;
   if (p.appOnly !== undefined && typeof p.appOnly !== "boolean") return null;
   if (p.t !== undefined && !isTenantId(p.t)) return null;
-  if (p.h !== undefined && (typeof p.h !== "string" || !p.h)) return null;
   if (expectedOrg !== undefined && p.org !== expectedOrg) return null;
   if (now >= p.exp * 1000) return null;
   const authenticatedAt = typeof p.auth === "number" ? p.auth : p.iat;
@@ -105,7 +104,8 @@ export function openTmp(token: string | null, key: Buffer, now: number): TmpClai
     typeof p.state !== "string" ||
     typeof p.nonce !== "string" ||
     typeof p.pkceVerifier !== "string" ||
-    typeof p.exp !== "number"
+    typeof p.exp !== "number" ||
+    (p.workspace !== undefined && typeof p.workspace !== "string")
   )
     return null;
   if (now >= p.exp * 1000) return null;
@@ -164,6 +164,16 @@ export function readCookie(header: string | undefined, name: string): string | n
   } catch {
     return null;
   }
+}
+
+export function signedOutCookies(secure: boolean, domain: string | undefined): string[] {
+  return [
+    clearCookie("portal_impersonate", "/", secure),
+    clearCookie("portal_trusted_tmp", "/auth/trusted", secure),
+    clearCookie("portal_session", "/", secure, domain),
+    clearCookie("portal_session_x", "/", secure, domain),
+    ...(domain ? [clearCookie("portal_session", "/", secure), clearCookie("portal_session_x", "/", secure)] : []),
+  ];
 }
 
 export function withoutCookies(header: string | undefined, names: ReadonlySet<string>): string | undefined {

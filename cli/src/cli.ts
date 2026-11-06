@@ -187,6 +187,8 @@ ${bold("TENANTS (operator)")} ${dim("— runs in the QM repo with DATABASE_URL s
                                            set one tenant setting (null removes it)
   tenant members add <tenant> <email> [--admin]
                                            add a member to the tenant's directory, optionally as org admin
+  db grant <role>                          grant the app login <role> access to the public and pgboss schemas;
+                                           run as the database owner after migrations
 
 ${bold("DEVELOP (contributor)")} ${dim("— runs in the QM repo")}
   dev up [--surface web|slack|both] [--org <id>] · dev down · dev status · dev restart · dev canary · dev logs · dev doctor [options]
@@ -351,9 +353,10 @@ async function dispatch(argv: string[]): Promise<void> {
       return;
     }
 
-    case "tenant": {
+    case "tenant":
+    case "db": {
       const root = gitTopLevel();
-      const result = spawnSync(process.execPath, [join(root, "scripts/tenant.ts"), ...argv.slice(1)], {
+      const result = spawnSync(process.execPath, [join(root, `scripts/${cmd}.ts`), ...argv.slice(1)], {
         cwd: root,
         stdio: "inherit",
       });

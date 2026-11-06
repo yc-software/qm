@@ -4,7 +4,7 @@ import { principalDestination } from "../reach/reach.ts";
 import { parseScopeId, type Permission, type ScopeId } from "../types.ts";
 import { swallow } from "../util/errors.ts";
 import { appUrlOf, type Deployment } from "./deploy-store.ts";
-import { tenantAppHandle, tenantHost } from "../tenants/settings.ts";
+import { tenantAppHandle } from "../tenants/settings.ts";
 
 export async function notifyDeploymentShared(
   deps: { deliveries?: Pick<DeliveryStore, "enqueue">; publicWebUrl?: string; deployAppsDomain?: string },
@@ -27,7 +27,7 @@ export async function notifyDeploymentShared(
       return;
     const slug = d.name ?? d.id;
     const url =
-      deps.deployAppsDomain && !tenantHost() && !tenantAppHandle()
+      deps.deployAppsDomain && !tenantAppHandle()
         ? `https://${slug}.${deps.deployAppsDomain}/`
         : appUrlOf(d, { sharedWebUrl: deps.publicWebUrl, appsDomain: deps.deployAppsDomain });
     await deps.deliveries.enqueue({

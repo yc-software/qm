@@ -1,5 +1,5 @@
 import { test } from "node:test";
-import { TEST_TENANT } from "./support/test-config.ts";
+import { TEST_TENANT } from "./support/test-tenant.ts";
 import assert from "node:assert/strict";
 import { createServer as createHttpServer, request as httpRequest } from "node:http";
 import { constants as http2Constants, createServer as createHttp2Server, type ServerHttp2Session } from "node:http2";

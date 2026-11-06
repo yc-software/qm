@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import { withTenant } from "../src/tenants/context.ts";
-import { TEST_TENANT } from "./support/tenant-test.ts";
+import { TEST_TENANT } from "./support/test-tenant.ts";
 import assert from "node:assert/strict";
 import { createPgPool, type PgPool, type Rows } from "../src/persistence/pg-pool.ts";
 import { createPostgresMap } from "../src/persistence/durable-map.ts";

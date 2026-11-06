@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { before, test } from "node:test";
 import type { StoredDeployBody } from "../src/deploy/aws-deploy-provider.ts";
-import type { DurableMap } from "../src/persistence/durable-map.ts";
 import { bindBootTenant } from "../src/tenants/boot.ts";
 import { boundTenant, withTenant, withoutTenant } from "../src/tenants/context.ts";
 import {
@@ -15,29 +14,10 @@ import {
   provider,
   version,
 } from "./support/aws-deploy-fakes.ts";
+import { tenantMap } from "./support/tenant-map.ts";
 
 const A = randomUUID();
 const B = randomUUID();
-
-function tenantStore(): DurableMap<StoredDeployBody> {
-  const rows = new Map<string, StoredDeployBody>();
-  const key = (id: string): string => {
-    const tenant = boundTenant();
-    if (!tenant) throw new Error("No tenant is bound");
-    return `${tenant}:${id}`;
-  };
-  return {
-    async get(id: string) {
-      return rows.get(key(id)) ?? null;
-    },
-    async put(id: string, value: StoredDeployBody) {
-      rows.set(key(id), value);
-    },
-    async delete(id: string) {
-      return rows.delete(key(id));
-    },
-  } as unknown as DurableMap<StoredDeployBody>;
-}
 
 before(() => bindBootTenant(async () => undefined));
 
@@ -53,7 +33,7 @@ test("app data on a shared host: each tenant reads only its own snapshot, never 
   const { api } = fakeApi();
   const a = fakeDaemon();
   const b = fakeDaemon();
-  const store = tenantStore();
+  const store = tenantMap<StoredDeployBody>();
   const pa = provider(api, a.fetchImpl, store, { dataBucket: "bkt", s3 });
   const pb = provider(api, b.fetchImpl, store, { dataBucket: "bkt", s3 });
   await withTenant(A, () => pa.apply(deployment(ID), version(localSnapshot("a", "1"))));
@@ -68,7 +48,7 @@ test("app data on a shared host: snapshots land under the tenant's own key", asy
     readB64: (p) => (p.startsWith("/tmp/qm-data-") ? Buffer.from(`${boundTenant()}`).toString("base64") : ""),
   });
   const { s3, objects } = fakeS3();
-  const store = tenantStore();
+  const store = tenantMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store, { dataBucket: "bkt", s3 });
   for (const tenant of [A, B]) {
     vms.set(`mvm-${tenant}`, { state: "RUNNING", endpoint: `mvm-${tenant}.lambda-microvm.us-west-2.on.aws` });
@@ -99,7 +79,7 @@ test("app data on a shared host: no bound tenant means no data access", async ()
 test("endpoints on a shared host: one tenant's cached app endpoint never answers for another's", async () => {
   const { api } = fakeApi();
   const { fetchImpl } = fakeDaemon();
-  const store = tenantStore();
+  const store = tenantMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store);
   const d = deployment(ID);
   const first = await withTenant(A, () => p.apply(d, version(localSnapshot("a", "1"))));

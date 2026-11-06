@@ -1,9 +1,9 @@
 import pg from "pg";
 import { applyPgMigrations, definePgMigration } from "../../src/persistence/pg-pool.ts";
 import { TENANCY } from "../../src/tenants/migrations.ts";
-import { TEST_TENANT } from "./test-tenant-id.ts";
+import { grantAppRole } from "../../src/persistence/app-role-grants.ts";
 
-export { TEST_TENANT };
+export const TEST_TENANT = "00000000-0000-4000-8000-000000000001";
 export const APP_ROLE = "qm_app";
 
 const BINDING = /\s*-c (role|qm\.tenant_id)=\S+/g;
@@ -46,17 +46,7 @@ export async function seedTestTenant(databaseUrl: string): Promise<void> {
   try {
     await applyPgMigrations(pool, TENANCY.map(definePgMigration));
     await pool.query("INSERT INTO tenants(id) VALUES ($1) ON CONFLICT (id) DO NOTHING", [TEST_TENANT]);
-    await pool.query(`GRANT USAGE, CREATE ON SCHEMA public TO ${APP_ROLE}`);
-    await pool.query(`GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE ON ALL TABLES IN SCHEMA public TO ${APP_ROLE}`);
-    await pool.query(`GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO ${APP_ROLE}`);
-    await pool.query(`REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON tenants FROM ${APP_ROLE}`);
-    await pool.query(`GRANT REFERENCES ON tenants TO ${APP_ROLE}`);
-    await pool.query(
-      `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE ON TABLES TO ${APP_ROLE}`,
-    );
-    await pool.query(
-      `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO ${APP_ROLE}`,
-    );
+    await grantAppRole(async (text, params) => (await pool.query(text, params)).rows, APP_ROLE, "public");
   } finally {
     await pool.end();
   }

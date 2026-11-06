@@ -1,5 +1,5 @@
 import { test } from "node:test";
-import { TEST_TENANT } from "./support/test-config.ts";
+import { TEST_TENANT } from "./support/test-tenant.ts";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
