@@ -262,7 +262,6 @@ export interface BackgroundCounts {
   jobs: number;
   watches: number;
   crons: number;
-  subagents: number;
   goal: boolean;
   label: string;
 }
@@ -271,8 +270,6 @@ export function backgroundLabel(
   jobs: number,
   watches: number,
   crons: number,
-  subagents = 0,
-  subagentsWaiting = 0,
   goal?: { activeMs: number; runningSince?: number; floor?: Record<string, number> },
   now = Date.now(),
 ): BackgroundCounts | null {
@@ -281,15 +278,10 @@ export function backgroundLabel(
     parts.push(
       `goal · ${goalWorkedLabel(goal.activeMs + (goal.runningSince ? Math.max(0, now - goal.runningSince) : 0), goalFloorLabel(goal.floor ?? null))}`,
     );
-  if (subagents > 0) parts.push(`${subagents} subagent${subagents === 1 ? "" : "s"} running`);
-  if (subagentsWaiting > 0)
-    parts.push(`${subagentsWaiting} subagent${subagentsWaiting === 1 ? " needs" : "s need"} you`);
   if (jobs > 0) parts.push(`${jobs} background job${jobs === 1 ? "" : "s"} running`);
   if (watches > 0) parts.push(`${watches} watch${watches === 1 ? "" : "es"} armed`);
   if (crons > 0) parts.push(`${crons} cron${crons === 1 ? "" : "s"} scheduled here`);
-  return parts.length
-    ? { jobs, watches, crons, subagents: subagents + subagentsWaiting, goal: Boolean(goal), label: parts.join(" · ") }
-    : null;
+  return parts.length ? { jobs, watches, crons, goal: Boolean(goal), label: parts.join(" · ") } : null;
 }
 
 export function watchActivityLabel(w: { lastFiredAt?: number }): string {
@@ -298,18 +290,10 @@ export function watchActivityLabel(w: { lastFiredAt?: number }): string {
 
 export function rowIndicators(s: CoreSession, liveThreads: ReadonlySet<string> | string | null): RowIndicators {
   const live = typeof liveThreads === "string" ? new Set([liveThreads]) : (liveThreads ?? new Set<string>());
-  const children = s.subagents ?? { running: 0, waiting: 0 };
   return {
     working: Boolean(s.working) || (Boolean(s.threadRef) && live.has(s.threadRef)),
-    awaiting: Boolean(s.awaitingInput) || children.waiting > 0,
-    background: backgroundLabel(
-      s.backgroundJobs ?? 0,
-      s.watches ?? 0,
-      s.crons ?? 0,
-      children.running,
-      children.waiting,
-      s.goal,
-    ),
+    awaiting: Boolean(s.awaitingInput) || (s.subagents?.waiting ?? 0) > 0,
+    background: backgroundLabel(s.backgroundJobs ?? 0, s.watches ?? 0, s.crons ?? 0, s.goal),
   };
 }
 
