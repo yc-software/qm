@@ -144,7 +144,7 @@ export async function prepareExecutionFiles(
   sandbox: Sandbox,
   handle: SandboxHandle,
   credentials: ExecutionFileCredential[],
-): Promise<{ env: Record<string, string>; plan: ExecutionFilePlan; finish(): Promise<void> }> {
+): Promise<{ env: Record<string, string>; plan: ExecutionFilePlan; finish(): Promise<string | undefined> }> {
   const files = credentials
     .flatMap((credential) => credential.files)
     .map((file) => ({
@@ -232,7 +232,7 @@ async function finishExecutionFiles(
   saves: ReadonlyArray<(files: CredentialFile[]) => Promise<void>>,
   settle?: (retry: number[]) => Promise<void>,
   opts?: { keepDirectory?: boolean },
-): Promise<void> {
+): Promise<string | undefined> {
   const { directory } = plan;
   const home = `${directory}/home`;
   let retry = settle ? plan.credentials.map((_, index) => index) : [];
@@ -248,6 +248,7 @@ async function finishExecutionFiles(
       `cd ${shq(home)} && [ ! -L ${shq(home)} ] && set -- && ` +
         `for p in ${roots.map((root) => shq(`./${root}`)).join(" ")}; do if [ -e "$p" ] || [ -L "$p" ]; then set -- "$@" "$p"; fi; done && ` +
         `: > ${shq(`${directory}/paths`)} && { [ $# -eq 0 ] || find "$@" -type f -print0 > ${shq(`${directory}/paths`)}; } && ` +
+        `: > ${shq(`${directory}/links`)} && { [ $# -eq 0 ] || find "$@" -type l -print0 > ${shq(`${directory}/links`)}; } && ` +
         `COPYFILE_DISABLE=1 tar --null -T ${shq(`${directory}/paths`)} -cf ${shq(`${directory}/files.tar`)} && ` +
         `size=$(wc -c < ${shq(`${directory}/files.tar`)}) && { [ "$size" -le ${archiveLimit} ] || ` +
         `{ echo "credential files archive is $size bytes, over the ${archiveLimit}-byte cap" >&2; exit 1; }; }`,
@@ -264,12 +265,26 @@ async function finishExecutionFiles(
       contentBase64: entry.data.toString("base64"),
       mode: restoredFileMode(entry.mode),
     }));
-    if (plan.credentials.some(({ paths }) => paths.some((path) => !refreshed.some((entry) => entry.path === path))))
-      throw permanent("Credential files were removed or replaced with symlinks during execution");
+    const linkList = await sandbox.readFileBytes({ ...handle, rootDir: directory }, "links");
+    if (!linkList) throw permanent("Captured credential link list is missing");
+    const links = new Set(Buffer.from(linkList).toString("utf8").split("\0").filter(Boolean).map(homeRelativePath));
+    if (plan.credentials.some(({ paths }) => paths.some((path) => links.has(path))))
+      throw permanent("Credential files were replaced with symlinks during execution");
+    const notes: string[] = [];
     const results = await Promise.allSettled(
-      plan.credentials.map(({ roots }, index) =>
-        saves[index]!(refreshed.filter((file) => belongsTo(file.path, roots))),
-      ),
+      plan.credentials.map(async ({ paths, roots }, index) => {
+        const remaining = refreshed.filter((file) => belongsTo(file.path, roots));
+        const deleted = paths.filter((path) => !refreshed.some((entry) => entry.path === path));
+        if (deleted.length && !remaining.length) {
+          notes.push(`deleted all of its credential files (${deleted.join(", ")}); the saved login was left unchanged`);
+          return;
+        }
+        if (deleted.length)
+          notes.push(
+            `deleted ${deleted.join(", ")}; the saved login no longer includes ${deleted.length === 1 ? "it" : "them"}`,
+          );
+        await saves[index]!(remaining);
+      }),
     );
     const failures = results.flatMap((result, index) =>
       result.status === "rejected" ? [{ index, reason: result.reason as unknown }] : [],
@@ -285,9 +300,10 @@ async function finishExecutionFiles(
         failures.map(({ reason }) => reason),
         `${retry.length ? "Could not persist refreshed credentials; will retry" : "Could not persist refreshed credentials"}: ${failures.map(({ reason }) => errMessage(reason)).join("; ")}`,
       );
+    return notes.length ? `[credentials] This command ${notes.join("; and ")}.` : undefined;
   };
   if (opts?.keepDirectory) return work();
-  await withCleanup(work, async () => {
+  return withCleanup(work, async () => {
     await settle?.(retry);
     if (!retry.length) await removeDirectory(sandbox, handle, directory);
   });
