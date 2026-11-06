@@ -69,7 +69,7 @@ const TENANT_HOSTS: PgMigrationDefinition = {
 };
 
 const DROP_TENANT_HOSTS: PgMigrationDefinition = {
-  id: "0000-tenancy/drop-hosts",
+  id: "0000-tenancy/tenant-hosts-drop",
   statements: [
     `SET LOCAL lock_timeout = '5s'`,
     `DROP FUNCTION IF EXISTS qm_tenant_for_host(text)`,

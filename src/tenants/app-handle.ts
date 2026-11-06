@@ -60,7 +60,7 @@ export const TENANT_APP_HANDLES: PgMigrationDefinition = {
 };
 
 export const TENANT_APP_HANDLE_DNS_BOUND: PgMigrationDefinition = {
-  id: "0000-tenancy/settings/app-handle-dns-bound",
+  id: "0000-tenancy/tenant-app-handles-dns-bound",
   statements: [
     `SET LOCAL lock_timeout = '5s'`,
     `CREATE OR REPLACE FUNCTION qm_tenant_handle(settings jsonb) RETURNS text LANGUAGE sql IMMUTABLE PARALLEL SAFE
