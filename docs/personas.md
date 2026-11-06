@@ -83,10 +83,12 @@ add control for people whose role allows it:
   chat wearing the persona with a request started.
 - **Crons**: "New cron" opens a chat wearing the persona; a cron made there runs as it.
 - **Credentials** (owner): attach one of your own credentials or detach one.
-- **Slack channels** (owner): search channels you are in and add one with read access.
-- **History**: loads the versions on demand, shows what each changed (instructions as a
-  line diff), and rolls back to any of them for writers. A rollback is saved as a new
-  version, so nothing is lost.
+- **Slack channels** (owner): "Add channel" opens the share dialog, whose one search covers
+  people and channels you are in; a channel can only be given read.
+- **History**: loads on first open, 20 versions a page, each saying who saved it, when and
+  which fields changed. Opening one fetches it with the version before it and shows the
+  change (instructions as a line diff). Writers can roll back to any of them; a rollback is
+  saved as a new version, so nothing is lost.
 
 ## Forking
 
@@ -99,6 +101,7 @@ access are never copied.
 
 `GET|POST /v1/personas`, `GET|PATCH|DELETE /v1/personas/:id`,
 `PUT /v1/personas/:id/access`, `POST /v1/personas/:id/credentials`,
-`DELETE /v1/personas/:id/credentials/:grantId`, `GET /v1/personas/:id/versions`,
+`DELETE /v1/personas/:id/credentials/:grantId`, `GET /v1/personas/:id/versions` (summaries,
+`?before=&limit=`), `GET /v1/personas/:id/versions/:version` (that version and the one before),
 `POST /v1/personas/:id/versions/:version/restore`, `PUT /v1/sessions/:id/persona`. Listed in
 `/v1/apis` when the flag is on.

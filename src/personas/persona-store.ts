@@ -20,15 +20,27 @@ export interface Persona {
   updatedAt: number;
 }
 
-export interface PersonaVersion {
+export const PERSONA_VERSION_FIELDS = ["name", "description", "instructions", "icon"] as const;
+export type PersonaVersionField = (typeof PERSONA_VERSION_FIELDS)[number];
+
+export interface PersonaVersionSummary {
   version: number;
+  changed: PersonaVersionField[];
+  restoredFrom?: number;
+  editedBy: string;
+  editedAt: number;
+}
+
+export interface PersonaVersion extends PersonaVersionSummary {
   name: string;
   description: string;
   instructions: string;
   icon?: ProjectIcon;
-  restoredFrom?: number;
-  editedBy: string;
-  editedAt: number;
+}
+
+export interface PersonaVersionPage {
+  versions: PersonaVersionSummary[];
+  more: boolean;
 }
 
 export interface PersonaAccess {
@@ -49,7 +61,7 @@ export interface PersonaStore {
   create(input: PersonaFields & { name: string }, owner: ScopeId, by: string): Promise<Persona>;
   get(id: string): Promise<Persona | null>;
   update(id: string, fields: PersonaFields, by: string, restoredFrom?: number): Promise<Persona | null>;
-  versions(id: string): Promise<PersonaVersion[]>;
+  versions(id: string, page: { before?: number; limit: number }): Promise<PersonaVersionPage>;
   version(id: string, version: number): Promise<PersonaVersion | null>;
   remove(id: string): Promise<boolean>;
   access(id: string): Promise<PersonaAccess[]>;
@@ -64,7 +76,16 @@ const PERSONA_SELECT = `SELECT p.*, u.primary_alias AS created_by_alias,
     (SELECT MAX(v.version) FROM persona_versions v WHERE v.persona_id = p.id) AS version
   FROM personas p JOIN users u ON u.id = p.created_by`;
 
-const VERSION_SELECT = `SELECT v.*, u.primary_alias AS edited_by_alias FROM persona_versions v JOIN users u ON u.id = v.edited_by`;
+const VERSION_SELECT = `SELECT v.*, u.primary_alias AS edited_by_alias,
+    ARRAY_REMOVE(ARRAY[
+      CASE WHEN prev.version IS NULL OR prev.name IS DISTINCT FROM v.name THEN 'name' END,
+      CASE WHEN prev.version IS NULL OR prev.description IS DISTINCT FROM v.description THEN 'description' END,
+      CASE WHEN prev.version IS NULL OR prev.instructions IS DISTINCT FROM v.instructions THEN 'instructions' END,
+      CASE WHEN prev.version IS NULL OR prev.icon::text IS DISTINCT FROM v.icon::text THEN 'icon' END
+    ], NULL) AS changed
+  FROM persona_versions v
+  JOIN users u ON u.id = v.edited_by
+  LEFT JOIN persona_versions prev ON prev.persona_id = v.persona_id AND prev.version = v.version - 1`;
 
 const RECORD_VERSION = `INSERT INTO persona_versions
     (persona_id, version, name, description, instructions, icon, restored_from, edited_by, edited_at)
@@ -81,23 +102,30 @@ function toPersona(r: Rows[number]): Persona {
     description: r.description as string,
     instructions: r.instructions as string,
     ...(r.icon ? { icon: r.icon as ProjectIcon } : {}),
-    version: Number(r.version ?? 1),
+    version: Number(r.version),
     createdBy: r.created_by_alias as string,
     createdAt: ms(r.created_at),
     updatedAt: ms(r.updated_at),
   };
 }
 
-function toVersion(r: Rows[number]): PersonaVersion {
+function toVersionSummary(r: Rows[number]): PersonaVersionSummary {
   return {
     version: Number(r.version),
+    changed: r.changed as PersonaVersionField[],
+    ...(r.restored_from != null ? { restoredFrom: Number(r.restored_from) } : {}),
+    editedBy: r.edited_by_alias as string,
+    editedAt: ms(r.edited_at),
+  };
+}
+
+function toVersion(r: Rows[number]): PersonaVersion {
+  return {
+    ...toVersionSummary(r),
     name: r.name as string,
     description: r.description as string,
     instructions: r.instructions as string,
     ...(r.icon ? { icon: r.icon as ProjectIcon } : {}),
-    ...(r.restored_from != null ? { restoredFrom: Number(r.restored_from) } : {}),
-    editedBy: r.edited_by_alias as string,
-    editedAt: ms(r.edited_at),
   };
 }
 
@@ -165,8 +193,13 @@ export function createPostgresPersonaStore(connectionString: string, opts: { id?
         return rows[0] ? toPersona(rows[0]) : null;
       });
     },
-    async versions(id) {
-      return (await q(`${VERSION_SELECT} WHERE v.persona_id = $1 ORDER BY v.version DESC`, [id])).map(toVersion);
+    async versions(id, page) {
+      const rows = await q(
+        `${VERSION_SELECT} WHERE v.persona_id = $1 AND ($2::int IS NULL OR v.version < $2)
+         ORDER BY v.version DESC LIMIT $3`,
+        [id, page.before ?? null, page.limit + 1],
+      );
+      return { versions: rows.slice(0, page.limit).map(toVersionSummary), more: rows.length > page.limit };
     },
     async version(id, version) {
       const rows = await q(`${VERSION_SELECT} WHERE v.persona_id = $1 AND v.version = $2`, [id, version]);

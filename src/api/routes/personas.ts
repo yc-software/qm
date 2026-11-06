@@ -24,8 +24,8 @@ function principalOf(ctx: ApiCtx, from: "query" | "body"): string | null {
   return requested;
 }
 
-function respond<T>(ctx: ApiCtx, result: PersonaResult<T>, key: string, okStatus = 200): void {
-  if (result.status === "ok") return sendJson(ctx.res, okStatus, { [key]: result.value });
+function respond<T>(ctx: ApiCtx, result: PersonaResult<T>, key: string | null, okStatus = 200): void {
+  if (result.status === "ok") return sendJson(ctx.res, okStatus, key === null ? result.value : { [key]: result.value });
   if (result.status === "invalid") return sendJson(ctx.res, 400, { error: "invalid", message: result.message });
   if (result.status === "disabled")
     return sendJson(ctx.res, 404, { error: "personas_disabled", message: "personas are not enabled for you" });
@@ -109,19 +109,44 @@ async function deletePersona(ctx: ApiCtx): Promise<void> {
   respond(ctx, await personas.remove(principalId, ctx.params.id!), "deleted");
 }
 
+const VERSION_PAGE = 20;
+
+function positiveInt(value: string | null | undefined): number | undefined {
+  const n = Number(value);
+  return value && Number.isInteger(n) && n > 0 ? n : undefined;
+}
+
 async function listPersonaVersions(ctx: ApiCtx): Promise<void> {
   const personas = service(ctx);
   const principalId = personas && principalOf(ctx, "query");
   if (!personas || !principalId) return;
-  respond(ctx, await personas.versions(principalId, ctx.params.id!), "versions");
+  const before = ctx.url.searchParams.get("before");
+  if (before !== null && positiveInt(before) === undefined)
+    return sendJson(ctx.res, 400, { error: "bad_request", message: "before must be a positive integer" });
+  const limit = Math.min(positiveInt(ctx.url.searchParams.get("limit")) ?? VERSION_PAGE, 100);
+  respond(
+    ctx,
+    await personas.versions(principalId, ctx.params.id!, { ...(before ? { before: Number(before) } : {}), limit }),
+    null,
+  );
+}
+
+async function getPersonaVersion(ctx: ApiCtx): Promise<void> {
+  const personas = service(ctx);
+  const principalId = personas && principalOf(ctx, "query");
+  if (!personas || !principalId) return;
+  const version = positiveInt(ctx.params.version);
+  if (version === undefined)
+    return sendJson(ctx.res, 400, { error: "bad_request", message: "version must be a positive integer" });
+  respond(ctx, await personas.version(principalId, ctx.params.id!, version), null);
 }
 
 async function restorePersonaVersion(ctx: ApiCtx): Promise<void> {
   const personas = service(ctx);
   const principalId = personas && principalOf(ctx, "body");
   if (!personas || !principalId) return;
-  const version = Number(ctx.params.version);
-  if (!Number.isInteger(version) || version < 1)
+  const version = positiveInt(ctx.params.version);
+  if (version === undefined)
     return sendJson(ctx.res, 400, { error: "bad_request", message: "version must be a positive integer" });
   respond(ctx, await personas.restore(principalId, ctx.params.id!, version), "persona");
 }
@@ -191,6 +216,7 @@ export const personaRoutes: ReadonlyArray<Route<ApiCtx>> = [
     { method: "GET", path: "/v1/personas", auth: "either", handle: listPersonas },
     { method: "GET", path: "/v1/personas/:id", auth: "either", handle: getPersona },
     { method: "GET", path: "/v1/personas/:id/versions", auth: "either", handle: listPersonaVersions },
+    { method: "GET", path: "/v1/personas/:id/versions/:version", auth: "either", handle: getPersonaVersion },
   ]),
   ...withActor("body.principalId", [
     { method: "POST", path: "/v1/personas", auth: "either", handle: createPersona },

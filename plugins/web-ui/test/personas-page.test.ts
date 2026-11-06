@@ -30,7 +30,13 @@ const versions = [
   { version: 3, name: "Ada", description: "", instructions: "Count.\nShow work.", editedBy: "bo", editedAt: 3 },
   { version: 2, name: "Ada", description: "", instructions: "Count.", editedBy: "tester", editedAt: 2 },
   { version: 1, name: "Ada", description: "", instructions: "Ada instructions", editedBy: "tester", editedAt: 1 },
-];
+].map((v) => ({ ...v, changed: v.version === 1 ? ["name", "description", "instructions"] : ["instructions"] }));
+const summary = ({ version, changed, editedBy, editedAt }: (typeof versions)[number]) => ({
+  version,
+  changed,
+  editedBy,
+  editedAt,
+});
 
 let calls: Call[] = [];
 let disabled = false;
@@ -58,7 +64,20 @@ const { vite, dom, close } = await browserEnv({
           { id: "cred-lin", service: "linear" },
         ],
       });
-    if (path.endsWith("/versions") && method === "GET") return json({ versions });
+    const versionsPath = /\/versions(?:\?before=(\d+))?$/.exec(path);
+    if (versionsPath && method === "GET") {
+      const before = Number(versionsPath[1] ?? Infinity);
+      const page = versions.filter((v) => v.version < before);
+      return json({ versions: page.slice(0, 2).map(summary), more: page.length > 2 });
+    }
+    const versionPath = /\/versions\/(\d+)$/.exec(path);
+    if (versionPath && method === "GET") {
+      const n = Number(versionPath[1]);
+      return json({
+        version: versions.find((v) => v.version === n),
+        previous: versions.find((v) => v.version === n - 1) ?? null,
+      });
+    }
     if (path.includes("/versions/") && method === "POST")
       return json({ persona: { ...personas[0], instructions: "Ada instructions", version: 4 } });
     if (path.includes("/credentials")) return json({ credential: { grantId: "g-2" } });
@@ -254,16 +273,18 @@ test("a reader sees each part of the persona with nothing to add or remove", asy
   assert.equal(main.querySelector(".persona-item-remove"), null);
 });
 
-test("an owner adds a Slack channel as read access straight from the persona page", async () => {
+test("Add channel opens the share dialog, and a channel added there gets read access", async () => {
   const { main } = await openPersonaPage("Ada");
   button(main, "Add channel").click();
-  const dialog = document.querySelector<HTMLDialogElement>("dialog.persona-picker-dialog")!;
-  const input = dialog.querySelector<HTMLInputElement>('input[aria-label="Search Slack channels"]')!;
+  const dialog = document.querySelector<HTMLDialogElement>("dialog.persona-share-dialog")!;
+  const input = dialog.querySelector<HTMLInputElement>('input[aria-label="Add people or Slack channels"]')!;
   input.value = "eng";
   input.dispatchEvent(new window.Event("input"));
-  await new Promise((resolve) => setTimeout(resolve, 260));
+  input.closest("form")!.dispatchEvent(new window.Event("submit", { cancelable: true }));
+  await settle();
+  [...dialog.querySelectorAll<HTMLButtonElement>(".project-member-result")].at(-1)!.click();
   calls = [];
-  [...dialog.querySelectorAll<HTMLButtonElement>(".project-member-result")].at(0)!.click();
+  button(dialog, "Save").click();
   await settle();
   assert.deepEqual(calls.find((c) => c.method === "PUT")?.body, {
     access: [
@@ -338,17 +359,28 @@ test("history lists versions on demand, shows what changed, and rolls back as a 
   );
   button(main, "Show 3 versions").click();
   await settle();
+  button(main, "Show older").click();
+  await settle();
   const rows = [...main.querySelectorAll(".persona-version-row")];
   assert.deepEqual(
     rows.map((row) => [
       row.querySelector("strong")?.textContent,
+      row.querySelector(".persona-version-open")?.textContent?.includes("changed instructions"),
       [...row.querySelectorAll("button.persona-action")].map((b) => b.textContent?.trim()),
     ]),
     [
-      ["v3", []],
-      ["v2", ["Roll back"]],
-      ["v1", ["Roll back"]],
+      ["v3", true, []],
+      ["v2", true, ["Roll back"]],
+      ["v1", false, ["Roll back"]],
     ],
+  );
+  assert.equal(
+    [...main.querySelectorAll("button")].some((b) => b.textContent?.trim() === "Show older"),
+    false,
+  );
+  assert.equal(
+    calls.some((c) => /\/versions\/\d+$/.test(c.path)),
+    false,
   );
   rows[0]!.querySelector<HTMLButtonElement>(".persona-version-open")!.click();
   await settle();

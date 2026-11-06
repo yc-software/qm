@@ -13,6 +13,7 @@ import {
   type PersonaFields,
   type PersonaStore,
   type PersonaVersion,
+  type PersonaVersionPage,
 } from "./persona-store.ts";
 
 const personaScope = (id: string): ScopeId => scopeId("persona", id);
@@ -44,7 +45,12 @@ export interface PersonaService {
   create(principalId: string, input: unknown): Promise<PersonaResult<PersonaView>>;
   update(principalId: string, id: string, input: unknown): Promise<PersonaResult<PersonaView>>;
   remove(principalId: string, id: string): Promise<PersonaResult<true>>;
-  versions(principalId: string, id: string): Promise<PersonaResult<PersonaVersion[]>>;
+  versions(principalId: string, id: string, page: { before?: number; limit: number }): Promise<PersonaResult<PersonaVersionPage>>;
+  version(
+    principalId: string,
+    id: string,
+    version: number,
+  ): Promise<PersonaResult<{ version: PersonaVersion; previous: PersonaVersion | null }>>;
   restore(principalId: string, id: string, version: number): Promise<PersonaResult<PersonaView>>;
   setAccess(principalId: string, id: string, access: unknown): Promise<PersonaResult<PersonaAccess[]>>;
   attachCredential(principalId: string, id: string, credentialId: unknown): Promise<PersonaResult<{ grantId: string }>>;
@@ -161,11 +167,20 @@ export function createPersonaService(deps: {
         return updated ? { status: "ok", value: { ...updated, role: held } } : { status: "not_found" };
       });
     },
-    versions(principalId, id) {
-      return guarded<PersonaVersion[]>(principalId, id, "read", async () => ({
+    versions(principalId, id, page) {
+      return guarded<PersonaVersionPage>(principalId, id, "read", async () => ({
         status: "ok",
-        value: await store.versions(id),
+        value: await store.versions(id, page),
       }));
+    },
+    version(principalId, id, version) {
+      return guarded<{ version: PersonaVersion; previous: PersonaVersion | null }>(principalId, id, "read", async () => {
+        const [found, previous] = await Promise.all([
+          store.version(id, version),
+          version > 1 ? store.version(id, version - 1) : null,
+        ]);
+        return found ? { status: "ok", value: { version: found, previous } } : { status: "not_found" };
+      });
     },
     restore(principalId, id, version) {
       return guarded<PersonaView>(principalId, id, "write", async (_persona, held) => {

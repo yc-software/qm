@@ -267,7 +267,7 @@ test("linking a sign-in keeps persona authorship and grants with the person", as
   });
   assert.equal((await store.get(persona.id))?.createdBy, "canon@example.com");
   assert.equal((await store.access(persona.id))[0]?.grantedBy, "canon@example.com");
-  assert.equal((await store.versions(persona.id))[0]?.editedBy, "canon@example.com");
+  assert.equal((await store.versions(persona.id, { limit: 1 })).versions[0]?.editedBy, "canon@example.com");
 });
 
 test("every edit that changes a persona is a version anyone with a role can read, and writers can roll back", async () => {
@@ -286,23 +286,69 @@ test("every edit that changes a persona is a version anyone with a role can read
   assert.equal(ok(await personas.update(BOB, ada.id, { instructions: "Answer in limericks." })).version, 2);
   assert.equal(ok(await personas.update(ALICE, ada.id, { icon: { kind: "emoji", value: "🎨" } })).version, 3);
 
-  const history = ok(await personas.versions(CAROL, ada.id));
+  const newest = ok(await personas.versions(CAROL, ada.id, { limit: 2 }));
   assert.deepEqual(
-    history.map((v) => [v.version, v.editedBy, v.instructions, v.icon?.kind ?? null]),
+    [newest.more, newest.versions.map((v) => [v.version, v.editedBy, v.changed])],
     [
-      [3, ALICE, "Answer in limericks.", "emoji"],
-      [2, BOB, "Answer in limericks.", null],
-      [1, ALICE, "Answer in haiku.", null],
+      true,
+      [
+        [3, ALICE, ["icon"]],
+        [2, BOB, ["instructions"]],
+      ],
     ],
   );
+  const older = ok(await personas.versions(CAROL, ada.id, { before: 2, limit: 2 }));
+  assert.deepEqual(
+    [older.more, older.versions.map((v) => [v.version, v.changed])],
+    [false, [[1, ["name", "description", "instructions", "icon"]]]],
+  );
+  const second = ok(await personas.version(CAROL, ada.id, 2));
+  assert.deepEqual(
+    [second.version.instructions, second.previous?.instructions],
+    ["Answer in limericks.", "Answer in haiku."],
+  );
+  assert.equal(ok(await personas.version(CAROL, ada.id, 1)).previous, null);
+  assert.equal((await personas.version(CAROL, ada.id, 9)).status, "not_found");
   assert.equal((await personas.restore(CAROL, ada.id, 1)).status, "forbidden");
   assert.equal((await personas.restore(BOB, ada.id, 9)).status, "not_found");
 
   const restored = ok(await personas.restore(BOB, ada.id, 1));
   assert.deepEqual([restored.version, restored.instructions, restored.icon], [4, "Answer in haiku.", undefined]);
-  const latest = ok(await personas.versions(ALICE, ada.id))[0]!;
-  assert.deepEqual([latest.version, latest.restoredFrom, latest.editedBy], [4, 1, BOB]);
+  const latest = ok(await personas.versions(ALICE, ada.id, { limit: 1 })).versions[0]!;
+  assert.deepEqual(
+    [latest.version, latest.restoredFrom, latest.editedBy, latest.changed],
+    [4, 1, BOB, ["instructions", "icon"]],
+  );
   assert.equal(ok(await personas.detail(CAROL, ada.id)).instructions, "Answer in haiku.");
+});
+
+test("the versions API pages summaries and reads one version with the one before it", async () => {
+  const { built, personas, enable } = setup();
+  await enable(ALICE);
+  const ada = ok(await personas.create(ALICE, { name: "Ada", instructions: "one" }));
+  for (const text of ["two", "three"]) ok(await personas.update(ALICE, ada.id, { instructions: text }));
+  const server = createInsecureTestServer(built.app, { sessions: built.sessions });
+  server.listen(0);
+  try {
+    const base = `http://localhost:${(server.address() as AddressInfo).port}/v1/personas/${ada.id}/versions`;
+    const get = async (path: string) => {
+      const r = await fetch(`${base}${path}${path.includes("?") ? "&" : "?"}principalId=${ALICE}`);
+      return [r.status, (await r.json()) as any] as const;
+    };
+    const [, first] = await get("?limit=2");
+    assert.deepEqual(
+      [first.more, first.versions.map((v: { version: number }) => v.version), "instructions" in first.versions[0]],
+      [true, [3, 2], false],
+    );
+    const [, rest] = await get("?before=2&limit=2");
+    assert.deepEqual([rest.more, rest.versions.map((v: { version: number }) => v.version)], [false, [1]]);
+    const [, one] = await get("/3");
+    assert.deepEqual([one.version.instructions, one.previous.instructions], ["three", "two"]);
+    assert.equal((await get("?before=zero"))[0], 400);
+    assert.equal((await get("/0"))[0], 400);
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()));
+  }
 });
 
 test("a Slack channel can only be given read access to a persona", async () => {

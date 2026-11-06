@@ -5,13 +5,11 @@ import {
   Building2,
   GitFork,
   Hash,
-  History,
   KeyRound,
   Lock,
   MessageSquare,
   Pencil,
   Plus,
-  RotateCcw,
   Search,
   Share2,
   Sparkles,
@@ -36,6 +34,7 @@ import { tip } from "./tooltip";
 import { openSkillById, startSkillCreateIn } from "./skills";
 import { cronTitle, openCronById, type CronView } from "./crons";
 import { cronScheduleSummary } from "./cron-format";
+import { historySectionTpl } from "./persona-history";
 
 type PersonaRole = "owner" | "write" | "read";
 
@@ -48,19 +47,8 @@ interface PersonaView {
   createdBy: string;
   createdAt: number | string;
   updatedAt: number | string;
-  version?: number;
-  role: PersonaRole;
-}
-
-interface PersonaVersion {
   version: number;
-  name: string;
-  description: string;
-  instructions: string;
-  icon?: ProjectIcon;
-  restoredFrom?: number;
-  editedBy: string;
-  editedAt: number | string;
+  role: PersonaRole;
 }
 
 interface OwnCredential {
@@ -543,7 +531,7 @@ function channelsSection(persona: PersonaDetail, reload: (flash: string) => void
     : emptyTpl("No channels.");
   return sectionTpl(
     "Slack channels",
-    owner ? rowAction("Add channel", Plus, () => openChannelPicker(persona, reload)) : nothing,
+    owner ? rowAction("Add channel", Plus, () => openPersonaShare(persona, () => reload("Access saved."))) : nothing,
     body,
     `Members of these channels can chat with ${persona.name} there, and only there.`,
   );
@@ -563,7 +551,18 @@ function accessSection(persona: PersonaDetail, reload: (flash: string) => void):
 function personaFactsTpl(persona: PersonaDetail, reload: (flash: string) => void, redraw: () => void): TemplateResult {
   return html`
     ${skillsSection(persona)} ${cronsSection(persona)} ${credentialsSection(persona, reload)}
-    ${channelsSection(persona, reload)} ${accessSection(persona, reload)} ${historySection(persona, reload, redraw)}
+    ${channelsSection(persona, reload)} ${accessSection(persona, reload)}
+    ${historySectionTpl({
+      persona,
+      canEdit: canEditPersona(persona.role),
+      action: rowAction,
+      redraw,
+      restored: (updated, flash) => {
+        const view = updated as PersonaView;
+        setPersonaList([...personasState.list.filter((p) => p.id !== view.id), view]);
+        reload(flash);
+      },
+    })}
   `;
 }
 
@@ -613,7 +612,9 @@ async function detachCredential(
   }
 }
 
-function pickerDialog(heading: string): { dialog: HTMLDialogElement; close: () => void } {
+async function openCredentialPicker(persona: PersonaDetail, reload: (flash: string) => void): Promise<void> {
+  const heading = `Attach a credential to ${persona.name}`;
+  const intro = "Pick one of your own. You can detach it any time.";
   const opener = document.activeElement as HTMLElement | null;
   const dialog = document.createElement("dialog");
   dialog.className = "project-dialog persona-picker-dialog";
@@ -628,23 +629,6 @@ function pickerDialog(heading: string): { dialog: HTMLDialogElement; close: () =
     event.preventDefault();
     close();
   });
-  return { dialog, close };
-}
-
-function pickerHead(heading: string, intro: string, close: () => void): TemplateResult {
-  return html`<div class="project-dialog-head">
-    <div>
-      <h2>${heading}</h2>
-      <p>${intro}</p>
-    </div>
-    <button class="chip-x" type="button" aria-label="Close" @click=${close}>${icon(X, 16)}</button>
-  </div>`;
-}
-
-async function openCredentialPicker(persona: PersonaDetail, reload: (flash: string) => void): Promise<void> {
-  const heading = `Attach a credential to ${persona.name}`;
-  const intro = "Pick one of your own. You can detach it any time.";
-  const { dialog, close } = pickerDialog(heading);
   let credentials: OwnCredential[] | null = null;
   let error = "";
   let busyNow = false;
@@ -686,7 +670,13 @@ async function openCredentialPicker(persona: PersonaDetail, reload: (flash: stri
   };
   const draw = () =>
     render(
-      html`${pickerHead(heading, intro, close)}
+      html`<div class="project-dialog-head">
+          <div>
+            <h2>${heading}</h2>
+            <p>${intro}</p>
+          </div>
+          <button class="chip-x" type="button" aria-label="Close" @click=${close}>${icon(X, 16)}</button>
+        </div>
         <div class="project-member-results persona-picker-list">${credentialChoices()}</div>
         ${error ? html`<p class="composer-error" role="alert">${error}</p>` : nothing}`,
       dialog,
@@ -701,249 +691,6 @@ async function openCredentialPicker(persona: PersonaDetail, reload: (flash: stri
     error = errMessage(e, "Couldn't load your credentials.");
   }
   if (dialog.isConnected) draw();
-}
-
-function openChannelPicker(persona: PersonaDetail, reload: (flash: string) => void): void {
-  const heading = `Add ${persona.name} to a Slack channel`;
-  const intro = "Its members can then chat with it in that channel.";
-  const { dialog, close } = pickerDialog(heading);
-  let search = "";
-  let channels: ChannelMatch[] = [];
-  let searched = false;
-  let seq = 0;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let error = "";
-  const granted = new Set(persona.access.map((grant) => grant.scopeId));
-  const run = async () => {
-    const mine = ++seq;
-    const term = search.trim();
-    if (!term) {
-      channels = [];
-      searched = false;
-      draw();
-      return;
-    }
-    try {
-      const r = await api<{ channels?: ChannelMatch[] }>(`/api/directory/channels?q=${encodeURIComponent(term)}`);
-      if (mine !== seq || !dialog.isConnected) return;
-      channels = r.channels ?? [];
-      searched = true;
-      error = "";
-    } catch (e) {
-      if (mine === seq) error = errMessage(e, "Couldn't search channels.");
-    }
-    if (dialog.isConnected) draw();
-  };
-  const add = (channel: ChannelMatch) => {
-    close();
-    void saveAccess(
-      persona,
-      [...persona.access, { scopeId: channel.scopeId, role: "read" }],
-      reload,
-      `Added #${channel.name}.`,
-    );
-  };
-  const draw = () =>
-    render(
-      html`${pickerHead(heading, intro, close)}
-        <div class="project-member-search-row">
-          ${icon(Search, 16)}<input
-            aria-label="Search Slack channels"
-            placeholder="Search channels you're in"
-            type="search"
-            autocomplete="off"
-            .value=${live(search)}
-            @input=${(e: Event) => {
-              search = (e.currentTarget as HTMLInputElement).value;
-              clearTimeout(timer);
-              timer = setTimeout(() => void run(), 200);
-            }}
-          />
-        </div>
-        <div class="project-member-results persona-picker-list">
-          ${channels.map(
-            (channel) =>
-              html`<button
-                class="project-member-result"
-                type="button"
-                ?disabled=${granted.has(channel.scopeId)}
-                @click=${() => add(channel)}
-              >
-                <span class="persona-channel-glyph">${icon(channel.isPrivate ? Lock : Hash, 15)}</span>
-                <span class="project-member-name" dir="auto">${channel.name}</span>${
-                  granted.has(channel.scopeId) ? html`<span class="hint">Added</span>` : icon(Plus, 15)
-                }
-              </button>`,
-          )}
-          ${searched && !channels.length ? html`<p class="permission-note">No channels you're in match that.</p>` : nothing}
-        </div>
-        ${error ? html`<p class="composer-error" role="alert">${error}</p>` : nothing}`,
-      dialog,
-    );
-  draw();
-  dialog.showModal();
-  dialog.querySelector<HTMLInputElement>("input")?.focus();
-}
-
-interface HistoryEntry {
-  open: boolean;
-  loading: boolean;
-  versions: PersonaVersion[] | null;
-  viewing: number | null;
-  error: string;
-}
-
-const historyState = new Map<string, HistoryEntry>();
-
-function historyFor(id: string): HistoryEntry {
-  let entry = historyState.get(id);
-  if (!entry) {
-    entry = { open: false, loading: false, versions: null, viewing: null, error: "" };
-    historyState.set(id, entry);
-  }
-  return entry;
-}
-
-async function loadHistory(persona: PersonaDetail, redraw: () => void): Promise<void> {
-  const entry = historyFor(persona.id);
-  try {
-    entry.versions =
-      (await api<{ versions?: PersonaVersion[] }>(`/api/personas/${encodeURIComponent(persona.id)}/versions`))
-        .versions ?? [];
-    entry.error = "";
-  } catch (e) {
-    entry.versions = [];
-    entry.error = errMessage(e, "Couldn't load history.");
-  }
-  entry.loading = false;
-  redraw();
-}
-
-function lineDiff(before: string, after: string): Array<{ kind: "same" | "add" | "del"; text: string }> {
-  const a = before.split("\n");
-  const b = after.split("\n");
-  const lcs: number[][] = Array.from({ length: a.length + 1 }, () => Array.from({ length: b.length + 1 }, () => 0));
-  for (let i = a.length - 1; i >= 0; i--)
-    for (let j = b.length - 1; j >= 0; j--)
-      lcs[i]![j] = a[i] === b[j] ? lcs[i + 1]![j + 1]! + 1 : Math.max(lcs[i + 1]![j]!, lcs[i]![j + 1]!);
-  const out: Array<{ kind: "same" | "add" | "del"; text: string }> = [];
-  let i = 0;
-  let j = 0;
-  while (i < a.length || j < b.length) {
-    if (i < a.length && j < b.length && a[i] === b[j]) {
-      out.push({ kind: "same", text: a[i++]! });
-      j++;
-    } else if (j < b.length && (i >= a.length || lcs[i]![j + 1]! >= lcs[i + 1]![j]!))
-      out.push({ kind: "add", text: b[j++]! });
-    else out.push({ kind: "del", text: a[i++]! });
-  }
-  return out;
-}
-
-const DIFF_MARK = { add: "+ ", del: "- ", same: "  " } as const;
-
-function instructionChangesTpl(
-  version: PersonaVersion,
-  previous: PersonaVersion | undefined,
-): TemplateResult | typeof nothing {
-  if (!previous) return html`<pre class="persona-diff" dir="auto">${version.instructions || "No instructions."}</pre>`;
-  if (previous.instructions === version.instructions) return nothing;
-  const lines = lineDiff(previous.instructions, version.instructions);
-  const near = (index: number) => lines.slice(Math.max(0, index - 2), index + 3).some((l) => l.kind !== "same");
-  return html`<pre class="persona-diff" aria-label="Instruction changes">
-${lines
-  .filter((line, index) => line.kind !== "same" || near(index))
-  .map((line) => html`<span class="persona-diff-${line.kind}">${DIFF_MARK[line.kind]}${line.text}</span>`)}</pre>`;
-}
-
-function versionChangesTpl(version: PersonaVersion, previous: PersonaVersion | undefined): TemplateResult {
-  const iconKey = (v: PersonaVersion | undefined) => JSON.stringify(v?.icon ?? null);
-  const fields = [
-    previous?.name !== version.name ? html`<div><b>Name</b> <span dir="auto">${version.name}</span></div>` : nothing,
-    previous && iconKey(previous) !== iconKey(version)
-      ? html`<div><b>Icon</b> ${personaIconTpl(version.icon, 16)}</div>`
-      : nothing,
-    previous?.description !== version.description
-      ? html`<div><b>Description</b> <span dir="auto">${version.description || "—"}</span></div>`
-      : nothing,
-  ];
-  return html`<div class="persona-version-changes">${fields}${instructionChangesTpl(version, previous)}</div>`;
-}
-
-function historySection(persona: PersonaDetail, reload: (flash: string) => void, redraw: () => void): TemplateResult {
-  const entry = historyFor(persona.id);
-  if (entry.open && entry.versions === null && !entry.loading) {
-    entry.loading = true;
-    void loadHistory(persona, redraw);
-  }
-  const toggle = () => {
-    entry.open = !entry.open;
-    entry.versions = null;
-    redraw();
-  };
-  const restore = async (version: PersonaVersion) => {
-    if (!window.confirm(`Roll ${persona.name} back to version ${version.version}? This saves it as a new version.`))
-      return;
-    try {
-      const r = await api<{ persona: PersonaView }>(
-        `/api/personas/${encodeURIComponent(persona.id)}/versions/${version.version}/restore`,
-        { method: "POST", body: "{}" },
-      );
-      setPersonaList([...personasState.list.filter((p) => p.id !== r.persona.id), r.persona]);
-      entry.versions = null;
-      entry.viewing = null;
-      reload(`Rolled back to version ${version.version}.`);
-    } catch (e) {
-      canvasToast(errMessage(e, "Couldn't roll back."));
-    }
-  };
-  const versions = entry.versions ?? [];
-  const current = versions[0]?.version;
-  const body = () => {
-    if (!entry.open) return nothing;
-    if (entry.versions === null) return html`<p class="hint" role="status">Loading history…</p>`;
-    return html`<div class="persona-skill-list persona-version-list">
-        ${versions.map((version, index) => {
-          const viewing = entry.viewing === version.version;
-          return html`<div class="persona-version">
-            <div class="persona-version-row">
-              <button
-                class="persona-version-open"
-                type="button"
-                aria-expanded=${viewing ? "true" : "false"}
-                @click=${() => {
-                    entry.viewing = viewing ? null : version.version;
-                    redraw();
-                  }}
-              >
-                <strong>v${version.version}</strong>
-                ${version.version === current ? html`<span class="badge ok">Current</span>` : nothing}
-                <span class="hint">${new Date(version.editedAt).toLocaleString()} · ${version.editedBy}</span>
-                ${version.restoredFrom ? html`<span class="hint">· rolled back to v${version.restoredFrom}</span>` : nothing}
-              </button>
-              ${
-                  version.version !== current && canEditPersona(persona.role)
-                    ? html`<button class="btn persona-action" type="button" @click=${() => void restore(version)}>
-                        ${icon(RotateCcw, 14)}<span>Roll back</span>
-                      </button>`
-                    : nothing
-                }
-            </div>
-            ${viewing ? versionChangesTpl(version, versions[index + 1]) : nothing}
-          </div>`;
-        })}
-      </div>
-      ${entry.error ? html`<p class="composer-error" role="alert">${entry.error}</p>` : nothing}`;
-  };
-  return html`<section class="persona-section">
-    <div class="persona-section-head">
-      <h3>History</h3>
-      <div class="persona-section-actions">
-        ${rowAction(entry.open ? "Hide" : `Show ${persona.version ? `${persona.version} ` : ""}version${persona.version === 1 ? "" : "s"}`, History, toggle)}
-      </div>
-    </div>
-    ${body()}
-  </section>`;
 }
 
 interface ChannelMatch {
