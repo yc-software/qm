@@ -1843,14 +1843,6 @@ const apiRoutes: readonly WebRoute[] = [
   },
   {
     method: "GET",
-    path: "/api/surface-config",
-    handle: async (c) => {
-      const { res } = c;
-      return relayCore(res, "GET", "/v1/surface-config");
-    },
-  },
-  {
-    method: "GET",
     path: "/api/custom-emoji",
     handle: async (c) => relayCore(c.res, "GET", "/v1/custom-emoji"),
   },
@@ -2460,14 +2452,6 @@ const apiRoutes: readonly WebRoute[] = [
       if (!provider && !host) return json(res, 400, { error: "bad_request", message: "provider or host required" });
       const rawBody = JSON.stringify({ principalId: user, ...(provider ? { provider } : { host }) });
       return relayCore(res, "POST", "/v1/connectors/oauth/revoke", rawBody);
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/keychain/credentials",
-    handle: async (c) => {
-      const { res } = c;
-      return relayCap(res, "GET", "/v1/keychain/credentials");
     },
   },
   {
@@ -3534,11 +3518,8 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
     return res.end(JSON.stringify({ ok: true }));
   }
 
-  let oauthCallbackPrefix: string | null = null;
-  if (path.startsWith("/v1/connectors/oauth/")) oauthCallbackPrefix = "/v1/connectors/oauth/";
-  else if (path.startsWith("/connectors/oauth/")) oauthCallbackPrefix = "/connectors/oauth/";
-  if (method === "GET" && oauthCallbackPrefix && path.endsWith("/callback")) {
-    const provider = path.slice(oauthCallbackPrefix.length, -"/callback".length);
+  if (method === "GET" && path.startsWith("/connectors/oauth/") && path.endsWith("/callback")) {
+    const provider = path.slice("/connectors/oauth/".length, -"/callback".length);
     const corePath = `/v1/connectors/oauth/${encodeURIComponent(provider)}/callback${url.search}`;
     let ok: boolean;
     try {
@@ -3620,33 +3601,6 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
     const found = findRoute(apiRoutes, method, path);
     if (!found) return json(res, 404, { error: "not found" });
     return found.route.handle({ req, res, url, user, params: found.params });
-  }
-
-  if (method === "GET" && path.startsWith("/deployments/")) {
-    const user = cookieUser(req);
-    if (!user) return unauthorized(res, req);
-    const rest = path.slice("/deployments/".length);
-    const slash = rest.indexOf("/");
-    const id = decodeURIComponent(slash === -1 ? rest : rest.slice(0, slash));
-    const subPath = slash === -1 ? "/" : rest.slice(slash);
-    const corePath = `/d/${encodeURIComponent(id)}${subPath}${url.search}`;
-    const portalTok = portalTokenStore.getStore();
-    const headers: Record<string, string> = {
-      ...signedHeaders(CORE_SIGNING_SECRET, method, corePath, "", user),
-      "x-as-principal": user,
-      ...(portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : {}),
-    };
-    delete headers["content-type"];
-    const up = await fetch(`${CORE}${corePath}`, { method, headers, redirect: "manual" });
-    const outHeaders = Object.fromEntries(up.headers.entries());
-    delete outHeaders["content-encoding"];
-    delete outHeaders["content-length"];
-    res.writeHead(up.status, {
-      ...outHeaders,
-      "content-security-policy": UNTRUSTED_CONTENT_SANDBOX_CSP,
-      "x-content-type-options": "nosniff",
-    });
-    return res.end(Buffer.from(await up.arrayBuffer()));
   }
 
   if (method === "GET" && path === "/app-edit" && (await serveAppEditHtml(req, res, url))) return;
