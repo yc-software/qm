@@ -5,6 +5,7 @@ import { createNoopLeaderLease } from "../src/persistence/leader-lease.ts";
 import type { MemoryVectorStore, MemoryVector } from "../src/memory/postgres-vector-store.ts";
 import type { MemoryEmbedder } from "../src/model/embeddings.ts";
 import { TEST_TENANT } from "./support/test-tenant.ts";
+import { currentTenant } from "../src/tenants/context.ts";
 
 function fixture() {
   let now = 1000;
@@ -262,4 +263,40 @@ test("stopping a mid-drain indexer aborts promptly without another put", { timeo
   assert.equal(f.writes.length, 1);
   assert.equal(f.requests.length, 2);
   assert.equal(f.prunes.length, 0);
+});
+
+test("one tenant's failing embedder does not stop later tenants from indexing", async () => {
+  const f = fixture();
+  const broken = "00000000-0000-4000-8000-0000000000b2";
+  const claim = async () => [
+    { tenantId: broken, id: "memory" },
+    { tenantId: TEST_TENANT, id: "memory" },
+  ];
+  const indexer = createMemoryVectorIndexer({
+    claim,
+    resolve: async () => ({
+      store: f.store,
+      embedder:
+        currentTenant() === broken
+          ? {
+              id: "model",
+              async embed() {
+                throw new Error("bad key");
+              },
+            }
+          : f.embedder,
+    }),
+    leaderLease: createNoopLeaderLease(),
+    now: () => 1000,
+    onError: (error) => {
+      f.failures.push(error);
+    },
+  });
+  await indexer.tick();
+  assert.equal(f.writes.length, 1);
+  assert.equal(f.failures.length, 1);
+  assert.equal((f.failures[0] as Error).message, `tenant ${broken}`);
+  await indexer.tick();
+  assert.equal(f.writes.length, 2);
+  assert.equal(f.failures.length, 2);
 });
