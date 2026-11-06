@@ -511,6 +511,7 @@ test("a persona access change that would leave no active owner is refused", asyn
     { scopeId: personal(BOB), role: "write" as const },
   ];
   assert.equal((await personas.setAccess(ANN, ada.id, access(DAN))).status, "invalid");
+  assert.equal((await personas.setAccess(ANN, ada.id, [{ scopeId: DESIGN_SCOPE, role: "owner" }])).status, "invalid");
   assert.equal((await personas.setAccess(ANN, ada.id, access(ANN))).status, "ok");
 });
 

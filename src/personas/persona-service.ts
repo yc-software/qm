@@ -185,7 +185,7 @@ export function createPersonaService(deps: {
           return { status: "invalid", message: "each scope may appear once" };
         const staysOwner = ({ scopeId: holder, role }: { scopeId: ScopeId; role: PersonaRole }) => {
           const { kind, ref } = parseScopeId(holder);
-          return role === "owner" && (kind !== "personal" || deps.isActive(ref!));
+          return role === "owner" && kind !== "channel" && (kind !== "personal" || deps.isActive(ref!));
         };
         if (entries.some((entry) => entry.role === "owner") && !entries.some(staysOwner))
           return { status: "invalid", message: "a persona needs at least one active owner" };
