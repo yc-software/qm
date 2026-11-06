@@ -63,6 +63,29 @@ people who could already see that conversation can see it. Holding a role on a p
 even owner, shows you nothing of other people's chats with it; the sidebar groups only
 your own conversations under the persona.
 
+## Channel personas
+
+When `personas` is on for the whole org (never per person), an owner of a persona who is in a
+Slack channel can make it that channel's persona (`PUT /v1/channels/:channel/persona`). Every
+conversation in the channel then wears it, for every sender, as if the channel held read on it;
+a session's own persona is ignored there and can't be set. Changing or clearing it takes the
+lock below. A channel wears at most one persona; one persona can be worn by several channels.
+
+The setting is one row per channel in the `persona_channel_defaults` durable map, keyed by the
+channel scope: `{ scopeId: "channel:<id>", personaId, setBy, setAt }`, indexed on
+`personaId`. Like `sessions.persona_id` it has no foreign key: a deleted persona just stops
+applying. Setting or clearing it posts a notice in the channel.
+
+**The lock.** While a channel wears a persona, only the persona's writers and owners (held
+through a person, team or the org grant, never through the channel's own grant) or an org admin,
+on a turn they sent themselves, can change the channel's instructions, standing orders or
+skills, including sharing a skill into the channel. Everyone else is refused with an owner
+named; a refusal never names a private channel, or its persona, to someone outside it.
+
+An access change is refused unless at least one owner grant remains on a person QM doesn't list as
+inactive, on a team, or on an org. Channel owner grants never count, and team and org owner grants
+count whether or not they reach anyone.
+
 ## Forking
 
 Forking has one owner, the `persona-fork` skill; the page's Fork button asks QM to run it.
@@ -74,5 +97,6 @@ access are never copied.
 
 `GET|POST /v1/personas`, `GET|PATCH|DELETE /v1/personas/:id`,
 `PUT /v1/personas/:id/access`, `POST /v1/personas/:id/credentials`,
-`DELETE /v1/personas/:id/credentials/:grantId`, `PUT /v1/sessions/:id/persona`. Listed in
+`DELETE /v1/personas/:id/credentials/:grantId`, `PUT /v1/sessions/:id/persona`,
+`GET|PUT /v1/channels/:channel/persona`. Listed in
 `/v1/apis` when the flag is on.

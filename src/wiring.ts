@@ -362,6 +362,7 @@ import { createPostgresAdminGrantStore } from "./admin/postgres-admin-grant-stor
 import { createProjectStore, type Project, type ProjectStore } from "./projects/project-store.ts";
 import { createPersonaService } from "./personas/persona-service.ts";
 import { createPostgresPersonaStore } from "./personas/persona-store.ts";
+import { createChannelPersonas, type ChannelPersonaDefault } from "./personas/channel-personas.ts";
 import { withErrorReporting, type ErrorLog } from "./admin/error-log.ts";
 import { createPostgresReplayDedupe, type ReplayDedupe } from "./auth/replay-dedupe.ts";
 import {
@@ -1759,17 +1760,18 @@ export function buildApp(
         (await directory.get(email))?.type === "internal")
     );
   };
-  const projects = createProjectStore(artifactMap<Project>("projects"), {
-    isActiveMember: (principalId) => identity.isInternal(identity.classify(principalId)),
-    advisoryLock,
-  });
+  const isActiveMember = (principalId: string) => identity.isInternal(identity.classify(principalId));
+  const projects = createProjectStore(artifactMap<Project>("projects"), { isActiveMember, advisoryLock });
+  const personaStore = createPostgresPersonaStore(databaseUrl);
   const personas = createPersonaService({
-    store: createPostgresPersonaStore(databaseUrl),
+    store: personaStore,
     flags: featureFlags,
     orgScope: scopeId("org", config.orgId),
     teams,
     sessions,
     ...(keychain ? { keychain } : {}),
+    isActive: isActiveMember,
+    channelPersona: (scope) => channelPersonas.current(scope),
   });
   const canReadScope = createCanReadScope({ managedGroups: projects, directory, identity, teams, sessions, personas });
   const canWriteScope = createCanWriteScope({ managedGroups: projects, directory, identity, teams, personas });
@@ -1789,6 +1791,18 @@ export function buildApp(
   const deployGitSecret = config.signingSecret;
   const deployGitBase = config.apiBaseUrl;
   const deliveries = withWebTranscriptDeliveries(createPostgresDeliveryStore(databaseUrl), sessions, runs);
+  const channelPersonas = createChannelPersonas({
+    defaults: artifactMap<ChannelPersonaDefault>("persona_channel_defaults", ["personaId"]),
+    store: personaStore,
+    personas,
+    flags: featureFlags,
+    orgScope: scopeId("org", config.orgId),
+    directory,
+    isActive: isActiveMember,
+    isOrgAdmin: async (principalId) => (await admin.adminStatusOf({ id: principalId, type: "internal" })).isAdmin,
+    auditLog,
+    deliveries,
+  });
   const deployService = createDeployService({
     deliveries,
     deployAppsDomain: config.awsDeploy.appsDomain,
@@ -2149,6 +2163,7 @@ export function buildApp(
     managedGroups: projects,
     projects,
     personas,
+    channelPersonas,
     ...(config.surfaceDebugFooter ? { surfaceDebugFooter: true } : {}),
     ...(decisions ? { replyCheck: createReplyCheck(decisions, decide) } : {}),
     environments,
@@ -2309,6 +2324,7 @@ export function buildApp(
       : {}),
     projects,
     personas,
+    channelPersonas,
     environments,
     deploy: deployService,
     deployAppsDomain: config.awsDeploy.appsDomain,

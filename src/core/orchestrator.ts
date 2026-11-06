@@ -2673,6 +2673,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           postProvenance,
           postKeys,
           spine,
+          livePerson: liveAuthorTurn,
         });
         const attachStaging = createAttachStaging({
           sandbox: deps.sandbox,

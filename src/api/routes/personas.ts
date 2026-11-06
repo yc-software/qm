@@ -4,6 +4,8 @@ import { isObj } from "./shared.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
 import { KeychainError } from "../../credentials/keychain.ts";
 import type { PersonaResult } from "../../personas/persona-service.ts";
+import type { ChannelPersonaResult } from "../../personas/channel-personas.ts";
+import { livePersonCapability } from "../artifact-share.ts";
 
 function principalOf(ctx: ApiCtx, from: "query" | "body"): string | null {
   const body = isObj(ctx.body) && typeof ctx.body.principalId === "string" ? ctx.body.principalId : "";
@@ -104,8 +106,10 @@ async function setPersonaAccess(ctx: ApiCtx): Promise<void> {
   respond(ctx, await personas.setAccess(principalId, ctx.params.id!, access), "access");
 }
 
+const liveTurn = (ctx: ApiCtx): boolean => !ctx.capability || livePersonCapability(ctx.capability);
+
 function liveOwnerTurn(ctx: ApiCtx): boolean {
-  if (!ctx.capability || ctx.capability.liveAuthor === true || ctx.capability.liveActor === true) return true;
+  if (liveTurn(ctx)) return true;
   sendJson(ctx.res, 403, {
     error: "forbidden",
     message: "credentials can only be attached or detached on a turn the owner sent themself",
@@ -156,10 +160,39 @@ async function setSessionPersona(ctx: ApiCtx): Promise<void> {
   respond(ctx, await personas.assign(principalId, viewed.session, personaId), "persona");
 }
 
+function respondChannel(ctx: ApiCtx, result: ChannelPersonaResult): void {
+  if (result.status === "ok") return sendJson(ctx.res, 200, { channel: result.value });
+  const status = { not_found: 404, forbidden: 403, disabled: 404, invalid: 400 }[result.status];
+  sendJson(ctx.res, status, {
+    error: result.status === "disabled" ? "personas_disabled" : result.status,
+    message: result.message,
+  });
+}
+
+async function getChannelPersona(ctx: ApiCtx): Promise<void> {
+  const channels = ctx.app.channelPersonas;
+  if (!channels) return sendJson(ctx.res, 503, { error: "personas unavailable" });
+  const principalId = principalOf(ctx, "query");
+  if (!principalId) return;
+  respondChannel(ctx, await channels.get(principalId, ctx.params.channel!));
+}
+
+async function setChannelPersona(ctx: ApiCtx): Promise<void> {
+  const channels = ctx.app.channelPersonas;
+  if (!channels) return sendJson(ctx.res, 503, { error: "personas unavailable" });
+  const principalId = principalOf(ctx, "body");
+  if (!principalId) return;
+  const personaId = isObj(ctx.body) ? ctx.body.personaId : undefined;
+  if (personaId !== null && (typeof personaId !== "string" || !personaId))
+    return sendJson(ctx.res, 400, { error: "bad_request", message: "personaId (string or null) required" });
+  respondChannel(ctx, await channels.set({ id: principalId, live: liveTurn(ctx) }, ctx.params.channel!, personaId));
+}
+
 export const personaRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...withActor("query.principalId", [
     { method: "GET", path: "/v1/personas", auth: "either", handle: listPersonas },
     { method: "GET", path: "/v1/personas/:id", auth: "either", handle: getPersona },
+    { method: "GET", path: "/v1/channels/:channel/persona", auth: "either", handle: getChannelPersona },
   ]),
   ...withActor("body.principalId", [
     { method: "POST", path: "/v1/personas", auth: "either", handle: createPersona },
@@ -169,5 +202,6 @@ export const personaRoutes: ReadonlyArray<Route<ApiCtx>> = [
     { method: "POST", path: "/v1/personas/:id/credentials", auth: "either", handle: attachCredential },
     { method: "DELETE", path: "/v1/personas/:id/credentials/:grantId", auth: "either", handle: detachCredential },
     { method: "PUT", path: "/v1/sessions/:id/persona", auth: "either", handle: setSessionPersona },
+    { method: "PUT", path: "/v1/channels/:channel/persona", auth: "either", handle: setChannelPersona },
   ]),
 ];
