@@ -74,7 +74,14 @@ export async function initializeAnalytics(me: Me, view = "chats"): Promise<void>
       person_profiles: "identified_only",
       save_referrer: false,
       save_campaign_params: false,
-      ...me.analytics.options,
+      ...(me.analytics.sessionRecording
+        ? {
+            disable_session_recording: false,
+            advanced_disable_flags: false,
+            advanced_disable_feature_flags: true,
+            session_recording: { ...me.analytics.sessionRecording, recordHeaders: false, recordBody: false },
+          }
+        : {}),
       before_send: (event) => {
         if (!event) return null;
         const snapshot = event.event === "$snapshot";

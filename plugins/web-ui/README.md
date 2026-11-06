@@ -294,11 +294,12 @@ In web chat, an assistant reply can include `::connect-apps{}` as a standalone p
 
 ## Optional product analytics
 
-Set `POSTHOG_CONFIG` to a JSON object of [PostHog JS options](https://posthog.com/docs/libraries/js/config)
-to enable browser analytics. `token` is required and must be a project ingestion
-token; `api_host` defaults to `https://us.i.posthog.com` and must be an HTTPS origin.
-The authenticated `/me` response supplies this public configuration; the portal
-serves the same web application, so it needs no separate SDK.
+Set `POSTHOG_CONFIG` to a JSON object to enable browser analytics. `token` is
+required and must be a project ingestion token; `api_host` defaults to
+`https://us.i.posthog.com` and must be an HTTPS origin; other keys are rejected
+except `session_recording`. The authenticated `/me` response supplies this public
+configuration; the portal serves the same web application, so it needs no separate
+SDK.
 
 Events are explicit pageviews by navigation view, accepted `message_sent` events,
 and `session_started` for the first user message in a chat. Company grouping uses
@@ -307,12 +308,14 @@ analytics is disabled during impersonation. By default autocapture, session repl
 exception capture, performance capture and feature flags are disabled. Event properties exclude chat
 content, URLs, query strings, titles and referrers. Delivery is best effort.
 
-The other options are applied over the defaults below, so a deployment can, for
-example, enable session replay with `"disable_session_recording": false` and choose
-its masking under `"session_recording"`. The event property filter always applies;
-replay snapshots keep their payload. The recorder is bundled rather than loaded from
-PostHog's CDN, and on PostHog Cloud the regional assets host that serves project
-remote config is allowed in the content security policy.
+Setting `session_recording` to an object of PostHog
+[recorder options](https://posthog.com/docs/session-replay/privacy) enables session
+replay with that deployment's masking; recording then also follows the PostHog
+project's replay setting. Console logs, network headers and bodies, and feature
+flags stay off, the event property filter still applies, and replay snapshots keep
+their payload. The recorder is bundled rather than loaded from PostHog's CDN, and on
+PostHog Cloud the regional assets host that serves project remote config is allowed
+in the content security policy.
 
 Set the same `POSTHOG_CONFIG` on core, which uses its `token` and `api_host`, to capture `app_published` after a successful new
 application or version deployment. Publications use the application's creator and

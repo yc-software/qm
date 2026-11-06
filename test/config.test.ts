@@ -49,11 +49,19 @@ test("core reads product analytics from POSTHOG_CONFIG", () => {
   assert.equal(loadConfig({}).productAnalytics, undefined);
   assert.deepEqual(
     loadConfig({
-      POSTHOG_CONFIG: JSON.stringify({ token: "phc_a", api_host: "https://eu.i.posthog.com", autocapture: true }),
+      POSTHOG_CONFIG: JSON.stringify({
+        token: "phc_a",
+        api_host: "https://eu.i.posthog.com",
+        session_recording: { maskAllInputs: true },
+      }),
     }).productAnalytics,
     { apiKey: "phc_a", host: "https://eu.i.posthog.com" },
   );
   assert.throws(() => loadConfig({ POSTHOG_CONFIG: JSON.stringify({ token: "secret" }) }), /ingestion token/);
+  assert.throws(
+    () => loadConfig({ POSTHOG_CONFIG: JSON.stringify({ token: "phc_a", autocapture: true }) }),
+    /unsupported keys/,
+  );
 });
 
 test("capability compression is explicitly enabled after verifier rollout", () => {
