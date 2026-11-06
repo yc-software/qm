@@ -1,4 +1,4 @@
-import { IncomingMessage, type OutgoingMessage, ServerResponse } from "node:http";
+import { type IncomingMessage, type OutgoingMessage, ServerResponse } from "node:http";
 import { Readable, type Writable } from "node:stream";
 import { gzip } from "node:zlib";
 
@@ -84,13 +84,12 @@ export function relayStream(
       ? Readable.fromWeb(source as Parameters<typeof Readable.fromWeb>[0])
       : (source as Readable);
   const release = (): void => {
-    if (from instanceof IncomingMessage) from.unpipe(dest);
-    else from.destroy();
+    if (dest instanceof ServerResponse) from.destroy();
+    else from.unpipe(dest);
   };
   from.on("error", (error: Error) => {
     options.onError?.(error);
-    if (dest instanceof ServerResponse && !dest.headersSent) json(dest, 502, { error: "upstream_error" });
-    else dest.destroy();
+    dest.destroy();
   });
   dest.on("error", release);
   dest.on("close", () => {

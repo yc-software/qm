@@ -2,9 +2,6 @@ import js from "@eslint/js";
 import globals from "globals";
 import tseslint from "typescript-eslint";
 
-// Never dump a raw error object to the console: an error can carry HTTP
-// response bodies, connection strings, or credential material. Wrap it in
-// errMessage(...) (src/util/errors.ts) so only the message is logged.
 const rawErrorRule = {
   selector: "CallExpression[callee.object.name='console'] > Identifier.arguments[name=/^(e|err|error)$/]",
   message:
@@ -129,8 +126,6 @@ export default tseslint.config(
     },
   },
   {
-    // Same raw-error rule for plugin server code and the src files the env-boundary
-    // block above deliberately skips (local scripts/ and test/ CLIs keep full stacks).
     files: ["plugins/**/*.ts", "src/config.ts", "src/index.ts", "src/runs/worker-main.ts", "src/egress-authz-main.ts"],
     rules: {
       "no-restricted-syntax": ["error", rawErrorRule, rawPipeRule],

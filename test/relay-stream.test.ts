@@ -1,6 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createServer, request, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import {
+  createServer,
+  request,
+  type ClientRequest,
+  type IncomingMessage,
+  type Server,
+  type ServerResponse,
+} from "node:http";
 import type { AddressInfo } from "node:net";
 import { PassThrough, Readable } from "node:stream";
 import { relayStream } from "../plugins/chassis/src/http.ts";
@@ -16,6 +23,13 @@ async function serve(handler: (req: IncomingMessage, res: ServerResponse) => voi
   return Object.assign(server, { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}` });
 }
 
+const stop = (...servers: Server[]): void => {
+  for (const server of servers) {
+    server.closeAllConnections();
+    server.close();
+  }
+};
+
 const settle = (ms = 50): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 test("an upstream web stream that fails mid-body fails only that response", async (t) => {
@@ -30,10 +44,7 @@ test("an upstream web stream that fails mid-body fails only that response", asyn
     res.writeHead(200, { "content-type": "application/octet-stream" });
     relayStream(r.body!, res);
   });
-  t.after(() => {
-    front.close();
-    upstream.close();
-  });
+  t.after(() => stop(front, upstream));
   const cut = await fetch(`${front.url}/cut`);
   await assert.rejects(cut.arrayBuffer());
   await settle();
@@ -41,17 +52,18 @@ test("an upstream web stream that fails mid-body fails only that response", asyn
   assert.equal(await (await fetch(`${front.url}/whole`)).text(), "complete");
 });
 
-test("a source that fails before any byte is sent becomes a 502 and reports the error", async (t) => {
+test("a source that fails mid-body destroys the response and reports the error", async (t) => {
   const reported: Error[] = [];
   const front = await serve((_req, res) => {
     const source = new PassThrough();
+    res.writeHead(200);
     relayStream(source, res, { onError: (error) => reported.push(error) });
-    source.destroy(new Error("disk gone"));
+    source.write("partial");
+    setTimeout(() => source.destroy(new Error("disk gone")), 20);
   });
-  t.after(() => front.close());
+  t.after(() => stop(front));
   const r = await fetch(front.url);
-  assert.equal(r.status, 502);
-  assert.deepEqual(await r.json(), { error: "upstream_error" });
+  await assert.rejects(r.arrayBuffer());
   assert.deepEqual(
     reported.map((e) => e.message),
     ["disk gone"],
@@ -59,7 +71,7 @@ test("a source that fails before any byte is sent becomes a 502 and reports the 
   assert.deepEqual(uncaught, []);
 });
 
-test("a client that disconnects destroys the upstream source", async (t) => {
+test("a client that disconnects destroys a Node readable source", async (t) => {
   const source = new Readable({ read() {} });
   const closed = new Promise<void>((r) => source.once("close", r));
   const front = await serve((_req, res) => {
@@ -67,41 +79,67 @@ test("a client that disconnects destroys the upstream source", async (t) => {
     relayStream(source, res);
     source.push("first chunk");
   });
-  t.after(() => front.close());
+  t.after(() => stop(front));
   const controller = new AbortController();
   const r = await fetch(front.url, { signal: controller.signal });
-  const reader = r.body!.getReader();
-  await reader.read();
+  await r.body!.getReader().read();
   controller.abort();
   await closed;
   assert.equal(source.destroyed, true);
   assert.deepEqual(uncaught, []);
 });
 
-test("an upload whose upstream drops mid-body leaves the server answering", async (t) => {
-  const upstream = await serve((req) => {
-    req.once("data", () => req.socket.destroy());
+test("a client that disconnects closes an upstream HTTP response", async (t) => {
+  let upstreamClosed!: () => void;
+  const closed = new Promise<void>((r) => (upstreamClosed = r));
+  const upstream = await serve((_req, res) => {
+    res.writeHead(200);
+    res.write("first chunk");
+    res.once("close", upstreamClosed);
   });
+  const front = await serve((_req, res) => {
+    request(upstream.url, (upRes) => {
+      res.writeHead(200);
+      relayStream(upRes, res);
+    }).end();
+  });
+  t.after(() => stop(front, upstream));
+  const controller = new AbortController();
+  const r = await fetch(front.url, { signal: controller.signal });
+  await r.body!.getReader().read();
+  controller.abort();
+  await closed;
+  assert.deepEqual(uncaught, []);
+});
+
+test("a client that aborts mid-upload destroys the upstream request", async (t) => {
+  let upstreamGone!: () => void;
+  const gone = new Promise<void>((r) => (upstreamGone = r));
+  const upstream = await serve((req) => {
+    req.on("error", () => undefined);
+    req.once("close", upstreamGone);
+  });
+  let up!: ClientRequest;
   const front = await serve((req, res) => {
-    const up = request(`${upstream.url}/`, { method: "POST" }, (upRes) => relayStream(upRes, res));
-    up.on("error", () => {
-      if (!res.headersSent) res.writeHead(502).end();
-    });
+    up = request(upstream.url, { method: "POST" }, (upRes) => relayStream(upRes, res));
+    up.on("error", () => undefined);
     relayStream(req, up);
   });
-  t.after(() => {
-    front.close();
-    upstream.close();
-  });
+  t.after(() => stop(front, upstream));
+  const controller = new AbortController();
+  let sent = 0;
   const body = new ReadableStream<Uint8Array>({
-    async pull(controller) {
+    async pull(stream) {
       await settle(5);
-      controller.enqueue(new Uint8Array(16 * 1024));
+      if (controller.signal.aborted) return stream.close();
+      if (++sent === 3) controller.abort();
+      stream.enqueue(new Uint8Array(16 * 1024));
     },
   });
-  const r = await fetch(front.url, { method: "POST", body, duplex: "half" } as RequestInit);
-  assert.equal(r.status, 502);
-  await settle();
+  await assert.rejects(
+    fetch(front.url, { method: "POST", body, duplex: "half", signal: controller.signal } as RequestInit),
+  );
+  await gone;
+  assert.equal(up.destroyed, true);
   assert.deepEqual(uncaught, []);
-  assert.equal((await fetch(front.url, { method: "POST", body: "small" })).status, 502);
 });
