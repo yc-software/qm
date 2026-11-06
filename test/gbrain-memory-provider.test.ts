@@ -83,7 +83,7 @@ async function gbrain(
   const notebookWrites: string[] = [];
   const notebook: MemoryService = {
     async recall() {
-      return [{ text: "notebook fact", score: 0.2 }];
+      return [{ text: "notebook fact" }];
     },
     async capture(_scope, facts) {
       notebookWrites.push(...facts);
