@@ -93,6 +93,13 @@ export interface McpToolService {
     scopeId?: ScopeId,
   ): Promise<string>;
   needsApproval(name: string, args: Record<string, unknown>, principalId?: string, scopeId?: ScopeId): Promise<boolean>;
+  /** Rewrites a catalog call's `tool` alias to the catalog's own name, so approval binds to the exact tool. */
+  canonicalArgs(
+    name: string,
+    args: Record<string, unknown>,
+    principalId?: string,
+    scopeId?: ScopeId,
+  ): Promise<Record<string, unknown>>;
   /** Force a registry re-read + tools/list refresh (admin save path, tests). */
   refresh(): Promise<void>;
   probe(server: McpServer, principalId?: string): Promise<McpListing>;
@@ -170,6 +177,21 @@ function catalogSearch(server: McpServer, tools: RemoteTool[], query: string): s
   if (hits.length > CATALOG_SEARCH_LIMIT)
     lines.push(`…and ${hits.length - CATALOG_SEARCH_LIMIT} more; narrow the query.`);
   return lines.join("\n");
+}
+
+function aliasKey(name: string): string {
+  return name.toLowerCase().replaceAll("-", "_");
+}
+
+// A catalog tool answers to its exact name, to that name in any case with hyphens
+// for underscores, or to its trailing words (`create-email-push` for
+// `x_service_create_email_push`). A name that fits several tools returns them all.
+export function resolveCatalogTool<T extends { name: string }>(tools: readonly T[], name: string): T[] {
+  const exact = tools.find((t) => t.name === name);
+  if (exact) return [exact];
+  const key = aliasKey(name);
+  const full = tools.filter((t) => aliasKey(t.name) === key);
+  return full.length ? full : tools.filter((t) => aliasKey(t.name).endsWith(`_${key}`));
 }
 
 function authOf(server: McpServer): McpAuth {
@@ -258,9 +280,30 @@ export function createMcpToolService(opts: {
 
   async function catalogEntry(server: McpServer, principalId: string | undefined, name: unknown): Promise<RemoteTool> {
     if (typeof name !== "string" || !name) throw new Error("tool is required");
-    const entry = (await catalogTools(server, principalId)).find((t) => t.name === name);
-    if (!entry) throw new Error(`Unknown ${server.name} tool: ${name}. Search for it first.`);
-    return entry;
+    const matches = resolveCatalogTool(await catalogTools(server, principalId), name);
+    if (!matches.length) throw new Error(`Unknown ${server.name} tool: ${name}. Search for it first.`);
+    if (matches.length > 1)
+      throw new Error(
+        `Ambiguous ${server.name} tool: ${name} matches ${matches.map((t) => t.name).join(", ")}. Use the full name.`,
+      );
+    return matches[0]!;
+  }
+
+  async function invokedCatalogEntry(
+    def: McpToolDescriptor,
+    args: Record<string, unknown>,
+    principalId: string | undefined,
+    scopeId: ScopeId | undefined,
+  ): Promise<{ server: McpServer; entry: RemoteTool }> {
+    try {
+      const server = await opts.servers.get(def.serverId);
+      if (!server || !server.enabled) throw new Error(`MCP server ${def.serverId} is not available`);
+      refuseOutsideAudience(server, principalId, scopeId);
+      return { server, entry: await catalogEntry(server, principalId, args.tool) };
+    } catch (e) {
+      record("call", callResource(def, args), `approval check error: ${errMessage(e)}`, principalId);
+      throw e;
+    }
   }
 
   async function callCatalog(
@@ -397,15 +440,14 @@ export function createMcpToolService(opts: {
       if (!def) throw new Error(`unknown MCP tool: ${name}`);
       if (!def.catalog) return def.needsApproval;
       if (args.operation !== "invoke") return false;
-      try {
-        const server = await opts.servers.get(def.serverId);
-        if (!server || !server.enabled) throw new Error(`MCP server ${def.serverId} is not available`);
-        refuseOutsideAudience(server, principalId, scopeId);
-        return mcpToolNeedsApproval(server, (await catalogEntry(server, principalId, args.tool)).annotations);
-      } catch (e) {
-        record("call", callResource(def, args), `approval check error: ${errMessage(e)}`, principalId);
-        throw e;
-      }
+      const { server, entry } = await invokedCatalogEntry(def, args, principalId, scopeId);
+      return mcpToolNeedsApproval(server, entry.annotations);
+    },
+    async canonicalArgs(name, args, principalId, scopeId) {
+      const def = snapshot.find((t) => t.name === name);
+      if (!def?.catalog || args.operation !== "invoke") return args;
+      const { entry } = await invokedCatalogEntry(def, args, principalId, scopeId);
+      return entry.name === args.tool ? args : { ...args, tool: entry.name };
     },
     async call(name, args, principalId, approval, scopeId) {
       const def = snapshot.find((t) => t.name === name);

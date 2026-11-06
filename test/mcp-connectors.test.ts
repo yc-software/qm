@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMcpClient, mcpResultText } from "../src/mcp/mcp-client.ts";
 import { createMcpServerStore, isValidMcpServerId, type McpServer } from "../src/mcp/mcp-server-store.ts";
-import { createMcpToolService } from "../src/mcp/mcp-tool-service.ts";
+import { createMcpToolService, resolveCatalogTool } from "../src/mcp/mcp-tool-service.ts";
 import { createKeychain, type KeychainCredential } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { createServer } from "node:http";
@@ -199,6 +199,70 @@ test("destructive annotations mark MCP tools for approval unless the server over
   service.close();
 });
 
+test("catalog tool names resolve the same aliases the ycli CLI accepts", () => {
+  const tools = [
+    { name: "agents_meetupsetuptoolservice_create_email_push" },
+    { name: "agents_meetupsetuptoolservice_create_calendar_update_email_push" },
+    { name: "agents_meetupprospectemailtools_send_meetup_invites" },
+    { name: "agents_meetupguestlabels_assign_label_to_meetup_guests" },
+    { name: "agents_otherservice_list_labels" },
+    { name: "agents_meetupguestlabels_list_labels" },
+  ];
+  const resolve = (name: string) => resolveCatalogTool(tools, name).map((t) => t.name);
+  for (const alias of [
+    "agents_meetupsetuptoolservice_create_email_push",
+    "agents-meetupsetuptoolservice-create-email-push",
+    "create_email_push",
+    "create-email-push",
+    "Create-Email-Push",
+  ])
+    assert.deepEqual(resolve(alias), ["agents_meetupsetuptoolservice_create_email_push"], alias);
+  assert.deepEqual(resolve("agents-meetupprospectemailtools-send-meetup-invites"), [
+    "agents_meetupprospectemailtools_send_meetup_invites",
+  ]);
+  assert.deepEqual(resolve("send-meetup-invites"), ["agents_meetupprospectemailtools_send_meetup_invites"]);
+  assert.deepEqual(resolve("assign_label_to_meetup_guests"), [
+    "agents_meetupguestlabels_assign_label_to_meetup_guests",
+  ]);
+  assert.deepEqual(resolve("list-labels"), ["agents_otherservice_list_labels", "agents_meetupguestlabels_list_labels"]);
+  assert.deepEqual(resolve("delete_email_push"), []);
+});
+
+test("a catalog invoke by alias is approved and sent under the catalog's own name; an ambiguous alias names its candidates", async (t) => {
+  const mcp = await startMcpTestServer(t, {
+    tools: [
+      {
+        name: "agents_messageservice_send_message",
+        description: "Send a message",
+        inputSchema: { type: "object" },
+        annotations: { destructiveHint: true },
+      },
+      { name: "agents_contactservice_find", description: "Find a contact", inputSchema: { type: "object" } },
+      { name: "agents_recordservice_find", description: "Find a record", inputSchema: { type: "object" } },
+    ],
+    call: (name, args) => ({ content: [{ type: "text", text: `${name} ${JSON.stringify(args)}` }] }),
+  });
+  const store = createMcpServerStore(testMap<McpServer>());
+  const service = createMcpToolService({ fetch: loopbackFetch, servers: store, refreshIntervalMs: 3600_000 });
+  await store.put(server({ id: "records", name: "Records", url: mcp.url, catalog: true, attestActor: true }));
+  await service.refresh();
+  const who = ["alice@example.com", "personal:alice@example.com"] as const;
+  const aliased = { operation: "invoke", tool: "send-message", arguments: { to: "x" } };
+  const canonical = await service.canonicalArgs("records", aliased, ...who);
+  assert.deepEqual(canonical, { ...aliased, tool: "agents_messageservice_send_message" });
+  assert.equal(await service.needsApproval("records", canonical, ...who), true);
+  const search = { operation: "search", query: "find" };
+  assert.equal(await service.canonicalArgs("records", search, ...who), search);
+  assert.equal(
+    await service.call("records", aliased, who[0], "tool-call:abc", who[1]),
+    'agents_messageservice_send_message {"to":"x"}',
+  );
+  await assert.rejects(
+    service.canonicalArgs("records", { operation: "invoke", tool: "find" }, ...who),
+    /Ambiguous Records tool: find matches agents_contactservice_find, agents_recordservice_find\. Use the full name\./,
+  );
+});
+
 test("a catalog server is one tool that searches, describes, and invokes as the attested person", async (t) => {
   const mcp = await startMcpTestServer(t, {
     tools: [
@@ -266,11 +330,11 @@ test("a catalog server is one tool that searches, describes, and invokes as the 
   await assert.rejects(
     service.needsApproval(
       "records",
-      { operation: "invoke", tool: "send_message" },
+      { operation: "invoke", tool: "delete_record" },
       "alice@example.com",
       "personal:alice@example.com",
     ),
-    /Unknown Records tool: send_message\. Search for it first/,
+    /Unknown Records tool: delete_record\. Search for it first/,
   );
   await assert.rejects(
     service.call(

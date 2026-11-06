@@ -48,6 +48,15 @@ export function mcpTools(kit: ToolKit, nativeNames: Set<string>) {
           return tc.mcpToolNeedsApproval(d.name, (isObj(params) ? params : {}) as Record<string, unknown>);
         }
       : d.needsApproval === true,
+    ...(d.catalog
+      ? {
+          canonicalParams: async (params: unknown) => {
+            const tc = ref.current;
+            if (!tc || !isObj(params)) return params;
+            return tc.mcpCanonicalArgs(d.name, params as Record<string, unknown>);
+          },
+        }
+      : {}),
   }));
   const toolSearch = defineTool({
     name: "tool_search",
