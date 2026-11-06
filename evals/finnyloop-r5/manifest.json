@@ -57,6 +57,12 @@
       "args": ["scripts/run-pg-tests.mjs", "test/finny-finalizer.test.ts"]
     },
     {
+      "id": "finny-integration-postgres",
+      "program": "node",
+      "requiresDatabase": true,
+      "args": ["scripts/run-pg-tests.mjs", "test/finny-integration-store.test.ts"]
+    },
+    {
       "id": "finny-slack-postgres",
       "program": "node",
       "requiresDatabase": true,
@@ -336,7 +342,7 @@
     },
     {
       "id": "slack-opaque-action-tampering-recovery",
-      "invariant": "Slack button values remain opaque request IDs, authenticated clicks preserve exact message context, and recovered delivery verifies durable state before reposting.",
+      "invariant": "Slack button values remain opaque request IDs; exact actor/thread decisions preserve context; material clarification withholds approval until the persisted recommendation; nonrecommended/Other requires revision; callback and recovered delivery remain idempotent.",
       "selectors": [
         {
           "commandId": "finny-slack-postgres",
@@ -357,6 +363,21 @@
           "commandId": "finny-slack-postgres",
           "file": "test/slack-finny-approvals.test.ts",
           "name": "unavailable, gone, and failed Finny actions show retry or expired copy without updating success"
+        },
+        {
+          "commandId": "finny-integration-postgres",
+          "file": "test/finny-integration-store.test.ts",
+          "name": "material clarification keeps approval fail closed and restart recovery releases only the recommendation"
+        },
+        {
+          "commandId": "finny-integration-postgres",
+          "file": "test/finny-integration-store.test.ts",
+          "name": "nonrecommended and Other clarification decisions permanently withhold the stale plan"
+        },
+        {
+          "commandId": "finny-approval-postgres",
+          "file": "test/finny-approval-service.test.ts",
+          "name": "committed decisions survive post-commit dispatch failures for durable recovery"
         }
       ]
     },
