@@ -40,7 +40,7 @@ async function runReporting(body: string, enabled = true, env: Record<string, st
       `
     import * as Sentry from '@sentry/node';
     import { initializeErrorReporting, reportBackendError, flushErrorReporting, nameRequest, traceCarrier, traceQueued, startDispatchTrace } from './plugins/chassis/src/error-reporting.ts';
-    initializeErrorReporting(Sentry, 'test');
+    initializeErrorReporting(Sentry, 'test', process.env.LOAD_NATIVE ? () => import('@sentry/node-native') : undefined);
     ${body}
   `,
     ],
@@ -468,6 +468,7 @@ test("event loop blocks report the blocking stack and the instance", async () =>
   `,
     true,
     {
+      LOAD_NATIVE: "1",
       ECS_CONTAINER_METADATA_URI_V4: "http://169.254.170.2/v4/0123456789abcdef0123456789abcdef-1234567890",
     },
   );
