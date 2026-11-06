@@ -50,8 +50,10 @@ export async function claimThenLoad<T extends { id: string }>(
   const byKey = new Map<string, T & { tenantId: string }>();
   for (const tenantId of new Set(claimed.map((row) => row.tenantId))) {
     const ids = claimed.filter((row) => row.tenantId === tenantId).map(({ id }) => id);
-    for (const row of await inTenant(tenantId, () => load(ids)))
-      byKey.set(`${tenantId} ${row.id}`, { ...row, tenantId });
+    const rows = await inTenant(tenantId, () => load(ids)).catch((e: unknown) => {
+      throw new Error(`tenant ${tenantId}`, { cause: e });
+    });
+    for (const row of rows) byKey.set(`${tenantId} ${row.id}`, { ...row, tenantId });
   }
   return claimed.flatMap(({ tenantId, id }) => byKey.get(`${tenantId} ${id}`) ?? []);
 }

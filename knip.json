@@ -14,6 +14,7 @@
         "src/render/start.ts",
         "src/sandbox/local-sandbox.ts",
         "scripts/aws-deploy-smoke.ts",
+        "scripts/db.ts",
         "scripts/aws-litestream-smoke.ts",
         "scripts/e2b-live-smoke.mjs",
         "scripts/modal-live-smoke.mjs",

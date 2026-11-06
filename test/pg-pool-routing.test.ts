@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresAdvisoryLock } from "../src/persistence/advisory-lock.ts";
-import { createPostgresMap } from "../src/persistence/durable-map.ts";
+import { createPostgresMap, processLevelMap } from "../src/persistence/durable-map.ts";
 import { createPgPool, configurePgPooling } from "../src/persistence/pg-pool.ts";
 import { TEST_TENANT } from "./support/test-tenant.ts";
 
@@ -76,7 +76,13 @@ test("pooled credentials cannot silently change company identity", { skip }, () 
 test("one session slot can hold a lock while a transaction uses the query pool", { skip }, async () => {
   const a = createPgPool(direct!);
   const lock = createPostgresAdvisoryLock(a);
-  const map = createPostgresMap<{ n: number }>(a, "pgbouncer_lock_write_test");
+  const map = createPostgresMap<{ n: number }>(
+    a,
+    "pgbouncer_lock_write_test",
+    [],
+    [],
+    [processLevelMap("pgbouncer_lock_write_test")],
+  );
   try {
     await lock.withLock("pgbouncer-write", async () => {
       await map.put("one", { n: 42 });

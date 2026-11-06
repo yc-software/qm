@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { PgMigrationDefinition } from "../persistence/pg-pool.ts";
 
-export const RESERVED_APP_HANDLES = ["auth", "slack", "mt", "www", "api", "docs", "apps", "admin"] as const;
+const RESERVED_APP_HANDLES = ["auth", "slack", "mt", "www", "api", "docs", "apps", "admin"] as const;
 
 export const appHandleSchema = z
   .string()
