@@ -4,6 +4,7 @@ import type { PgPool } from "../persistence/pg-pool.ts";
 import { headSlice, tailSlice } from "../util/text.ts";
 import { collectBytes } from "../util/bytes.ts";
 import { swallowAs } from "../util/errors.ts";
+import { currentTenant } from "../tenants/context.ts";
 
 const TOOL_OUTPUT_SETTING = "tool_result_inline_tokens";
 export const DEFAULT_INLINE_TOKENS = 4096;
@@ -115,7 +116,7 @@ export function createPostgresToolOutputStore(opts: {
       return setting.value;
     },
     async save(text) {
-      const [{ id }] = (await opts.pool.q("SELECT qm_bound_tenant()::text AS id")) as [{ id: string }];
+      const id = currentTenant();
       const put = await tenantBytes(id).put(Buffer.from(text, "utf8"));
       await opts.pool.q(
         `INSERT INTO blobs(tenant_id, sha256, size, mime, storage_key, created_at, expires_at)
