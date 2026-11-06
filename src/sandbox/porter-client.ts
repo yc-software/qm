@@ -36,6 +36,7 @@ export interface PorterSandboxSpec {
     internal?: boolean;
     domains?: Array<{ domain?: string; visibility?: "public" | "private" }>;
   }>;
+  resources?: { memory?: string };
   ttl_seconds?: number;
 }
 

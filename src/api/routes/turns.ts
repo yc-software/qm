@@ -4,6 +4,7 @@ import { promptText } from "../../util/text.ts";
 import { samePerson } from "../../directory/person.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
+import { isClientSurface } from "../../../plugins/chassis/src/client-surface.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 
 function renderSurfaceBriefing(surface: SurfaceBriefing): string {
@@ -145,6 +146,8 @@ function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { e
     return { error: "midTurn must be steer or queue" };
   if (rest.desktopClientId !== undefined && !z.uuid().safeParse(rest.desktopClientId).success)
     return { error: "desktopClientId must be a UUID" };
+  if (rest.clientSurface !== undefined && !isClientSurface(rest.clientSurface))
+    return { error: "clientSurface must be browser, desktop or ios" };
   let clientTools: ClientToolDeclaration[] | undefined;
   if (rawClientTools !== undefined) {
     const parsed = clientToolsSchema.safeParse(rawClientTools);

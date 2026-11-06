@@ -42,6 +42,7 @@ import { injectBranding } from "../../chassis/src/branding.ts";
 import { brandingFrom, createTenantBranding } from "./tenant-branding.ts";
 import { parseSuggestedActivities } from "../../chassis/src/suggested-activities.ts";
 import { principalInAllowlist } from "../../chassis/src/principal-allowlist.ts";
+import { clientSurfaceOf } from "../../chassis/src/client-surface.ts";
 
 import {
   CORE_API_URL as CORE,
@@ -408,6 +409,7 @@ async function webTurnBase(
   }
   return {
     surface: "web",
+    clientSurface: clientSurfaceOf(req.headers),
     actor: { externalId: user, ...(displayName ? { displayName } : {}) },
     conversation,
     origin: { kind: "human" },
@@ -2583,7 +2585,11 @@ const apiRoutes: readonly WebRoute[] = [
       }
 
       const approval = { requestId, approved, ...(scope ? { scope } : {}) };
-      const replay: Record<string, unknown> = { ...record.request, approval };
+      const replay: Record<string, unknown> = {
+        ...record.request,
+        approval,
+        clientSurface: clientSurfaceOf(req.headers),
+      };
       delete replay.idempotencyKey;
       if (idempotencyKey) replay.idempotencyKey = idempotencyKey;
       return postTurnAndMint(req, res, replay, user, threadRef);
