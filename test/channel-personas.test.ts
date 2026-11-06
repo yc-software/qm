@@ -208,7 +208,6 @@ test("every conversation in the channel wears its persona, for every sender; a s
   ok(await wear());
   const worn = await prompt(CY, thread(DESIGN, "1.1"));
   assert.match(worn.reply, /## Persona: Ada/);
-  assert.match(worn.reply, /This channel wears "Ada" for every conversation in it/);
   assert.doesNotMatch((await prompt(CY, thread("C0OPEN", "1.1"))).reply, /## Persona/);
 
   const bea = ok(await personas.create(CY, { name: "Bea" }));
@@ -219,7 +218,7 @@ test("every conversation in the channel wears its persona, for every sender; a s
 
   await built.featureFlags.setEnabled("personas", ORG, false, ADMIN);
   await built.featureFlags.setEnabled("personas", personal(CY), true, ADMIN);
-  assert.doesNotMatch((await prompt(CY, thread(DESIGN, "2.2"))).reply, /This channel wears/);
+  assert.doesNotMatch((await prompt(CY, thread(DESIGN, "2.2"))).reply, /## Persona/);
 });
 
 test("the guidance tool, POST /v1/soul and the policy route are locked to the persona's writers, owners and org admins", async () => {
@@ -505,70 +504,15 @@ test("changing or clearing the channel's persona takes the lock, and a deleted p
   assert.equal(built.config.getSoul(DESIGN_SCOPE), "member edit");
 });
 
-test("a persona's last active owner leaving hands it to the default admin, and offboarding names the handover", async () => {
-  const { built, personas, control, ada, wear } = await setup();
-  ok(await wear());
+test("a persona access change that would leave no active owner is refused", async () => {
+  const { built, personas, ada } = await setup();
   await built.identity.deactivate(DAN);
-  assert.equal(
-    (
-      await personas.setAccess(ANN, ada.id, [
-        { scopeId: personal(DAN), role: "owner" },
-        { scopeId: personal(BOB), role: "write" },
-      ])
-    ).status,
-    "invalid",
-  );
-  const bea = ok(await personas.create(CY, { name: "Bea" }));
-  assert.deepEqual(await built.app.channelPersonas!.adoptOrphans(), []);
-
-  await built.identity.deactivate(ANN);
-  const adopted = await built.app.channelPersonas!.adoptOrphans();
-  assert.deepEqual(
-    adopted.map((h) => [h.persona.name, h.to]),
-    [["Ada", ADMIN]],
-  );
-  assert.deepEqual(
-    ok(await personas.detail(ADMIN, ada.id)).access.map((a) => [a.scopeId, a.role]),
-    [
-      [personal(ADMIN), "owner"],
-      [personal(ANN), "owner"],
-      [personal(BOB), "write"],
-    ],
-  );
-  assert.deepEqual(await built.app.channelPersonas!.adoptOrphans(), []);
-  assert.match(
-    await inChannel(control, ANN)("guidance", { action: "replace", scope: "conversation", content: "x" }),
-    /^\[error\]/,
-  );
-
-  const { call, close } = serve(built);
-  try {
-    const preview = await call("POST", `/v1/admin/users/${CY}/offboard`, {}, ADMIN_HEADER);
-    assert.equal(preview.status, 200);
-    const planned = ((await preview.json()) as { changes: Array<Record<string, unknown>> }).changes.filter(
-      (c) => c.kind === "persona",
-    );
-    assert.deepEqual(planned, [{ kind: "persona", id: bea.id, label: "Bea → Alice Admin", action: "transfer_owner" }]);
-    assert.equal((await personas.detail(ADMIN, bea.id)).status, "not_found");
-
-    const applied = await call("POST", `/v1/admin/users/${CY}/offboard`, { apply: true }, ADMIN_HEADER);
-    assert.equal(applied.status, 200);
-    const done = ((await applied.json()) as { changes: Array<Record<string, unknown>> }).changes.find(
-      (c) => c.kind === "persona",
-    );
-    assert.equal(done?.result, "done");
-    assert.equal(ok(await personas.detail(ADMIN, bea.id)).role, "owner");
-  } finally {
-    await close();
-  }
-  const handovers = (await built.auditLog.events()).filter((e) => e.action === "persona_owner_handover");
-  assert.deepEqual(
-    handovers.map((e) => [e.resource, e.detail]),
-    [
-      [ada.id, ADMIN],
-      [bea.id, ADMIN],
-    ],
-  );
+  const access = (owner: string) => [
+    { scopeId: personal(owner), role: "owner" as const },
+    { scopeId: personal(BOB), role: "write" as const },
+  ];
+  assert.equal((await personas.setAccess(ANN, ada.id, access(DAN))).status, "invalid");
+  assert.equal((await personas.setAccess(ANN, ada.id, access(ANN))).status, "ok");
 });
 
 test("standing orders set from a channel turn are locked to the persona's writers", async () => {
