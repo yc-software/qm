@@ -80,6 +80,7 @@ async function capabilityAdminDenied(
   return null;
 }
 
+const ALB_IDLE_TIMEOUT_MS = 60_000;
 const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 function needlessEscape(escaped: string): boolean {
@@ -529,7 +530,7 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
   ready.catch((err: unknown) => console.error("[server] fastify initialization failed:", errMessage(err)));
   server.requestTimeout = 0;
   server.headersTimeout = 10_000;
-  server.keepAliveTimeout = 5_000;
+  server.keepAliveTimeout = ALB_IDLE_TIMEOUT_MS + 5_000;
   server.maxConnections = 1024;
 
   const capabilitySecret = deps.capabilitySecret ?? deps.signingSecret;
