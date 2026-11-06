@@ -10,7 +10,7 @@ import { scopeId as toScopeId, parseScopeId, type Destination, type ScopeId } fr
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { encryptSecret, decryptSecret, type SecretKey } from "../connectors/connector-client-store.ts";
 import { errMessage } from "../util/errors.ts";
-import { canonicalPerson, personIds, personKey, samePerson } from "../directory/person.ts";
+import { canonicalPerson, personIds, personKey, samePerson, type AttestAudience } from "../directory/person.ts";
 import { cronIdOf } from "../sessions/session-store.ts";
 import { hashId } from "../util/crypto.ts";
 import { shq } from "../util/shell.ts";
@@ -35,6 +35,7 @@ export interface CredentialInjection {
   header?: string;
   scheme?: string;
   actor?: boolean;
+  audience?: AttestAudience;
   headers?: Record<string, string>;
 }
 
@@ -92,6 +93,10 @@ export function credentialInjectionError(value: unknown): string | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return "injection must be an object";
   const injection = value as CredentialInjection;
   if (injection.actor !== undefined && typeof injection.actor !== "boolean") return "injection.actor must be boolean";
+  if (injection.audience !== undefined && injection.audience !== "personal" && injection.audience !== "any")
+    return "injection.audience must be personal or any";
+  if (injection.audience === "any" && injection.actor !== true)
+    return "injection.audience any requires injection.actor";
   if (
     injection.header !== undefined &&
     (typeof injection.header !== "string" || headerError(() => validateHeaderName(injection.header!)))

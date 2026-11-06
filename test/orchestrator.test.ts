@@ -489,6 +489,87 @@ test("an attested connector is offered and called only in the speaker's own DM, 
   assert.deepEqual(called, { "personal:U1": "sent", "channel:C1": "refused", "group:G1": "refused" });
 });
 
+test("a connector set to attest in any audience serves the channel asker and a channel cron's owner, not unprompted, unowned or bot turns", async () => {
+  const offered: string[][] = [];
+  const called: string[] = [];
+  const mock = createMockAgent();
+  const agent: Agent = {
+    ...mock,
+    shouldRespond: async () => ({ respond: true }),
+    runTurn: async (input) => {
+      offered.push((input.mcpTools ?? []).map((tool) => tool.name).sort());
+      for (const name of ["records", "strict"])
+        called.push(
+          await input.tools.callMcpTool(name, { operation: "search" }).then(
+            () => `${name} answered`,
+            (e: Error) => `${name} ${/answers only to them/.test(e.message) ? "refused" : "sent"}`,
+          ),
+        );
+      return mock.runTurn(input);
+    },
+  };
+  const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "ap-")) });
+  config.spritesSandbox.namePrefix ??= `test-${hashId([config.dataDir]).slice(0, 10)}`;
+  const built = buildApp(config, { agent });
+  for (const id of ["records", "strict"]) {
+    await built.mcpServers.put({
+      id,
+      name: id,
+      url: `https://127.0.0.1:9/${id}/mcp`,
+      auth: "bearer",
+      bearerToken: "t",
+      credentialScope: "shared",
+      catalog: true,
+      attestActor: true,
+      ...(id === "records" ? { attestAudience: "any" as const } : {}),
+      readOnly: true,
+      enabled: true,
+      updatedAt: Date.now(),
+      updatedBy: "admin",
+    });
+  }
+  await built.mcpToolService.refresh();
+  assert.equal((await built.app.turn(channel("hello"))).status, "ok");
+  await built.directory.replaceChannels(
+    [{ channelId: "C1", name: "c1", isPrivate: false }],
+    [{ channelId: "C1", principalId: "U1" }],
+  );
+  const cron = await built.app.createCron({
+    schedule: { firstFireAt: Date.now() + 3600_000 },
+    action: "check records",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("channel", "C1"),
+    destination: { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") },
+  });
+  await runNowSettled(built.scheduler, cron.id);
+  for (const extra of [
+    { origin: { kind: "ambient" as const, live: true } },
+    { origin: { kind: "automation" as const } },
+    { botActor: true },
+  ])
+    assert.equal((await built.app.turn(channel("hello", extra))).status, "ok");
+  assert.deepEqual(offered, [["records"], ["records"], [], [], []]);
+  assert.deepEqual(called, [
+    "records sent",
+    "strict refused",
+    "records sent",
+    "strict refused",
+    "records refused",
+    "strict refused",
+    "records refused",
+    "strict refused",
+    "records refused",
+    "strict refused",
+  ]);
+  assert.deepEqual(
+    (await built.auditLog.tail({ limit: 20, action: "mcp.call", resourceContains: "records/search" }))
+      .filter((event) => !/answers only to them/.test(event.status ?? ""))
+      .map((event) => event.principalId),
+    ["U1", "U1"],
+  );
+});
+
 test("execute runs in the sandbox via the primitive", async () => {
   const { app } = freshApp();
   const res = await app.turn(dm("!run echo sandbox-works"));
@@ -1154,6 +1235,34 @@ test("turn timezone rides the prompt and control-plane capability token", async 
   assert.equal(invalid.status, "ok");
   const invalidClaims = await verifyCapabilityToken(captured!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
   assert.equal(invalidClaims!.timezone, undefined, "invalid surface timezones are omitted from the token");
+});
+
+test("a turn's credential token says whether it may act as its actor in a shared conversation", async () => {
+  const { app, sandbox, serviceCreds, acl } = freshApp({
+    signingSecret: "test-secret",
+    apiBaseUrl: "https://core.example.com",
+  });
+  await serviceCreds.setServiceCredential("org:default-org", {
+    slug: "test-service",
+    name: "Test service",
+    secret: "synthetic",
+    host: "api.example.com",
+  });
+  await grantCred(acl, "org:default-org", "test-service");
+  let executed: Record<string, string> | undefined;
+  const run = sandbox.run.bind(sandbox);
+  sandbox.run = (handle, command, opts) => {
+    if (command === "echo who") executed = handle.env;
+    return run(handle, command, opts);
+  };
+  const ask = `!execute ${JSON.stringify({ command: "echo who", credentials: ["test-service"] })}`;
+  const actAsActor = async (request: TurnRequest) => {
+    executed = undefined;
+    assert.equal((await app.turn(request)).status, "ok");
+    return (await verifyCapabilityToken(executed!.AGENT_CREDENTIAL_TOKEN!, TEST_CAPABILITY_SECRET))!.actAsActor;
+  };
+  assert.equal(await actAsActor(channel(ask)), true);
+  assert.equal(await actAsActor(channel(ask, { botActor: true })), undefined);
 });
 
 for (const hours of [undefined, "72", "0", "none"]) {

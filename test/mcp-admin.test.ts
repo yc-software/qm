@@ -122,6 +122,22 @@ test("MCP admin validates and preserves credential scope, without returning secr
     200,
   );
   assert.deepEqual([(await store.get("crm"))?.catalog, (await store.get("crm"))?.attestActor], [true, true]);
+  const bearer = { auth: "bearer", bearerToken: "t" };
+  assert.equal((await put({ ...bearer, attestAudience: "everywhere" })).status, 400);
+  assert.equal((await put({ ...bearer, attestAudience: "any" })).status, 200);
+  assert.equal((await store.get("crm"))?.attestAudience, "any");
+  assert.equal((await put(bearer)).status, 200);
+  assert.equal((await store.get("crm"))?.attestAudience, "any", "an update that omits the audience keeps it");
+  assert.equal((await put({ ...bearer, attestAudience: "personal" })).status, 200);
+  assert.equal((await store.get("crm"))?.attestAudience, undefined);
+  assert.equal((await put({ ...bearer, attestActor: false, attestAudience: "any" })).status, 400);
+  assert.equal((await put({ ...bearer, attestAudience: "any" })).status, 200);
+  assert.equal((await put({ ...bearer, attestActor: false })).status, 200);
+  assert.deepEqual(
+    [(await store.get("crm"))?.attestActor, (await store.get("crm"))?.attestAudience],
+    [undefined, undefined],
+    "turning attestation off drops its audience",
+  );
 });
 
 test("production wiring never uses operator fallback tokens for per-user MCP calls and refuses private MCP addresses", async (t) => {

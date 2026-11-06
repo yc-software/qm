@@ -461,6 +461,48 @@ test("an actor-attested credential answers only to its person in their own priva
   assert.equal(unattested.calls[0]!.headers["x-qm-actor"], undefined);
 });
 
+test("an actor-attested credential set to any audience serves the person who asked in shared conversations", async () => {
+  const call = async (injection: object, extra: Partial<CapabilityClaims>) => {
+    const cap = captureFetch();
+    const result = await brokerCredentialCall(
+      base({
+        claims: { ...claims(["x-firehose"]), ...extra },
+        reader: reader({ slug: "x-firehose", injection }),
+        fetchImpl: cap.fetch,
+      }),
+    );
+    return {
+      status: result.status,
+      error: (result.json as { error?: string }).error,
+      actor: cap.calls[0]?.headers["x-qm-actor"],
+    };
+  };
+  const any = { actor: true, audience: "any" };
+  assert.deepEqual(await call(any, { scopeId: "channel:C1", actAsActor: true }), {
+    status: 200,
+    error: undefined,
+    actor: "U1",
+  });
+  assert.deepEqual(await call(any, { scopeId: "group:G1", actAsActor: true }), {
+    status: 200,
+    error: undefined,
+    actor: "U1",
+  });
+  for (const extra of [
+    { scopeId: "channel:C1" },
+    { scopeId: "channel:C1", actAsActor: false },
+    { scopeId: "channel:C1", actorId: "system:channel:C1", actAsActor: true },
+  ])
+    assert.deepEqual(await call(any, extra), { status: 403, error: "private_only", actor: undefined });
+  assert.deepEqual(await call({ actor: true }, { scopeId: "channel:C1", actAsActor: true }), {
+    status: 403,
+    error: "private_only",
+    actor: undefined,
+  });
+  for (const injection of [{ audience: "any" }, { actor: true, audience: "everywhere" }])
+    assert.equal((await call(injection, { scopeId: "channel:C1", actAsActor: true })).status, 503);
+});
+
 test("a deployment token is refused when the credential is switched off for published apps, and audited with the app id when it is on", async () => {
   const cap = captureFetch();
   const audits: Array<{ action: string; detail?: string }> = [];
