@@ -2016,7 +2016,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           author: string,
           call?: ApprovedToolCall,
         ): Promise<boolean> => {
-          if (!(await pending.take(requestId))) return false;
+          const claimed = await pending.take(requestId);
+          if (!claimed) return false;
           const decisionEntry = await withManagedRosterVersion(() =>
             deps.sessions.append(writer, {
               kind: "ElicitationResponse",
@@ -2029,7 +2030,17 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 ...(call && record.approvalKey ? { call, approvalKey: record.approvalKey } : {}),
               },
             }),
-          );
+          ).catch(async (error: unknown) => {
+            reportFailure("orchestrator: record approval decision", error, requestId);
+            await pending.put(requestId, claimed).catch(swallowAs("orchestrator: restore approval card", undefined));
+            audit({
+              action: `command_approval.${decided.approved ? "approve" : "deny"}`,
+              resource: requestId,
+              status: "refused",
+              detail: JSON.stringify({ approvalOutcome: "decision_unrecorded", error: errMessage(error) }),
+            });
+            throw error;
+          });
           await mirrorRunActivity(decisionEntry);
           return true;
         };
