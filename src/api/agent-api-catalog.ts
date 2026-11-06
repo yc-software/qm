@@ -105,7 +105,8 @@ const FAMILIES: AgentApiFamily[] = [
       {
         method: "GET",
         path: "/v1/personas/:id/versions/:version",
-        summary: "{version, previous}: that version's full name, description, instructions and icon, and the one before it",
+        summary:
+          "{version, previous}: that version's full name, description, instructions and icon, and the one before it",
       },
       {
         method: "POST",

@@ -541,3 +541,12 @@ test("New skill opens the skill editor already set to the persona", async () => 
   assert.equal(select.selectedOptions[0]?.textContent, "Ada");
   assert.equal(select.value, "persona:p-ada");
 });
+
+test("a changed line shows as the old line removed, then the new one added", async () => {
+  const { lineDiff } = await vite.ssrLoadModule("/src/persona-history.ts");
+  assert.deepEqual(lineDiff("Rev 19\nKeep it short.", "Rev 20\nKeep it short."), [
+    { kind: "del", text: "Rev 19" },
+    { kind: "add", text: "Rev 20" },
+    { kind: "same", text: "Keep it short." },
+  ]);
+});

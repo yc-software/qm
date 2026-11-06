@@ -63,9 +63,14 @@ A session's `persona_id` is set from the Personas page ("Chat") or by the agent
 If the sender has no role, the persona is skipped and the block says so. Writes (memory,
 files, crons) stay in the conversation's scope.
 
-The turn's delivery destination carries the persona's id and name, so anything it posts to
-Slack (replies, `reach` messages, cron output) ends with a `Persona: <name>` context line
-linking to the persona's page, next to the cron settings link when there is one.
+A cron set up in a conversation with a persona fires as that persona: when it fires, the
+scheduler looks up the persona of the cron's home conversation and the fire's turn wears it
+under the same role check.
+
+Whatever a turn wearing a persona posts carries the persona's id and name on its delivery
+destination: replies, posts to other conversations, and cron output. Slack ends those
+messages with a `Persona: <name>` context line linking to the persona's page, next to the
+cron settings link when there is one.
 
 Unlike a project, a persona is not a place conversations live. A conversation with a
 persona stays in the scope it started in (your DM, a channel, a group), so only the

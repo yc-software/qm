@@ -952,7 +952,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         external || !deps.personas
           ? null
           : await deps.personas.forTurn(
-              (await deps.sessions.getByThread(conversation.threadRef))?.personaId,
+              (await deps.sessions.getByThread(conversation.threadRef))?.personaId ?? input.personaId,
               actor.id,
               scopeId,
             );
@@ -1098,8 +1098,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       } else if (input.surfaceTools && input.origin.kind === "automation" && input.origin.destination) {
         defaultDestination = input.origin.destination;
       }
-      if (defaultDestination && persona)
-        defaultDestination = { ...defaultDestination, persona: { id: persona.persona.id, name: persona.persona.name } };
+      const wornPersona = persona ? { id: persona.persona.id, name: persona.persona.name } : undefined;
+      if (defaultDestination && wornPersona) defaultDestination = { ...defaultDestination, persona: wornPersona };
       const cronBlock =
         delivery.candidates.length > 1 && deps.signingSecret && deps.apiBaseUrl
           ? `\n\n${deliveryMenu(delivery.candidates, delivery.defaultKey)}`
@@ -3997,6 +3997,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             sessionId: session.id,
             reply,
             ...(result.retracted?.length ? { retracted: result.retracted } : {}),
+            ...(wornPersona ? { persona: wornPersona } : {}),
             ...(result.stopped ? { stopped: true, ...stopScope } : {}),
             ...(stagedAttachments.length ? { attachments: stagedAttachments } : {}),
             ...(sourceUserSeq !== undefined ? { sourceUserSeq } : {}),

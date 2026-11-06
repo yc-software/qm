@@ -19,6 +19,7 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
 import { TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
 import type { ProvisionOptions } from "../src/sandbox/sandbox.ts";
+import { runNowSettled } from "./support/settle.ts";
 
 const ALICE = "U_ALICE";
 const BOB = "U_BOB";
@@ -413,4 +414,27 @@ test("what a persona conversation posts carries the persona, so Slack can name i
   });
   assert.ok(reached.ok, JSON.stringify(reached));
   assert.deepEqual(reached.delivery.destination.persona, { id: ada.id, name: "Ada" });
+
+  captured = undefined;
+  const cron = await built.app.createCron({
+    ownerScopeId: opened.scopeId,
+    owner: ALICE,
+    createdBy: ALICE,
+    title: "Ada check-in",
+    schedule: { everyMs: 3_600_000 },
+    action: "!run true",
+    sessionRef: channel.threadRef,
+    destination: { type: "slack", target: "C_ADA:t1", audienceScopeId: scopeId("channel", "C_ADA") },
+  });
+  await runNowSettled(built.scheduler, cron.id);
+  const firedWith = captured as ProvisionOptions | undefined;
+  assert.ok(firedWith, "the cron's turn ran");
+  const fired = (await verifyCapabilityToken(firedWith.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET))!;
+  assert.ok(fired.memory?.read.includes(scopeId("persona", ada.id)), "the cron's turn wears the persona");
+  assert.deepEqual(
+    (await built.deliveries.pending("slack"))
+      .filter((d) => d.provenance?.trigger === "cron")
+      .map((d) => d.destination.persona),
+    [{ id: ada.id, name: "Ada" }],
+  );
 });
