@@ -2154,6 +2154,7 @@ export function buildApp(
     ...(processes ? { processes } : {}),
     monitors,
     crons,
+    notebookOnlyMemory: (threadRef) => memoryTidy.managesThread(threadRef),
     webhooks,
     resolveSessionRuntime,
     directory,

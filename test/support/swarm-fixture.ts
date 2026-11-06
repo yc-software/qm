@@ -9,6 +9,7 @@ import type { RunStore } from "../../src/runs/run-store.ts";
 import type { AdvisoryLock } from "../../src/persistence/advisory-lock.ts";
 import type { OrchestratorInput } from "../../src/core/orchestrator.ts";
 import type { SpawnMeta } from "../../src/types.ts";
+import type { CapabilityClaims } from "../../src/auth/capability-token.ts";
 import { createPostgresSessionStore } from "../../src/sessions/postgres-session-store.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap } from "./test-database.ts";
 import { createPostgresRunStore } from "../../src/runs/postgres-run-store.ts";
@@ -23,6 +24,7 @@ export async function swarmFixture(
     runtime?: Pick<OrchestratorInput, "model" | "thinkingLevel" | "fastMode">;
     request?: Pick<OrchestratorInput, "memoryNotebookOnly">;
     spawnMeta?: Pick<SpawnMeta, "memoryNotebookOnly">;
+    claims?: Pick<CapabilityClaims, "memory">;
   } = {},
 ) {
   const sessions = options.sessions ?? createPostgresSessionStore(testDatabaseUrl());
@@ -112,6 +114,7 @@ export async function swarmFixture(
       threadRef: root.threadRef,
       liveActor: true,
       exp: Date.now() + 60_000,
+      ...options.claims,
     },
   };
   const serviceOptions = { store, sessions, runs, sandboxes, lock, authorize: async () => state.allowed };

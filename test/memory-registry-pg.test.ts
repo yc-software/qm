@@ -826,6 +826,14 @@ test("the nightly tidy changes the notebook alone, through its tools and its age
     assert.equal(refused.status, 403, path);
     assert.match(refused.text, /notebook-only turn/, path);
   }
+  const [fire] = (await built.crons.listFires(tidy.id, { limit: 1 })).runs;
+  const woken = await built.app.turn({
+    surface: "test",
+    actor: { externalId: "U1" },
+    conversation: { kind: "dm", threadRef: fire!.threadRef },
+    text: "!sysprompt",
+  });
+  assert.doesNotMatch(woken.reply ?? "", /BLACKBEARD-42/);
   assert.equal(brain.calls.length, before);
 });
 

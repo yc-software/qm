@@ -933,7 +933,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const childFloor = delegatedSession?.spawnMeta?.readOnly === true;
       const strictReadOnly = input.readOnly === true || input.privateSessionMessage === true || childFloor;
       const notebookOnly =
-        input.memoryNotebookOnly === true || delegatedSession?.spawnMeta?.memoryNotebookOnly === true;
+        input.memoryNotebookOnly === true ||
+        delegatedSession?.spawnMeta?.memoryNotebookOnly === true ||
+        (await deps.notebookOnlyMemory?.(conversation.threadRef)) === true;
       const mcpToolsReady = !external && deps.mcp ? deps.mcp.toolDefsFor(actor.id, scopeId) : undefined;
       const useMemory = !external && input.skipMemory !== true;
       const environmentId = external ? scopeId : await resolveEnvironmentId(deps.environments, scopeId);

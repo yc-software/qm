@@ -893,7 +893,8 @@ test("swarm provenance is bound to the durable run, content, actor, and recipien
 for (const [from, options] of [
   ["a notebook-only turn", { request: { memoryNotebookOnly: true } }],
   ["a person's own turn in a notebook-only subagent", { spawnMeta: { memoryNotebookOnly: true } }],
-] as const)
+  ["a turn whose agent token is notebook-only", { claims: { memory: { read: [], notebookOnly: true } } }],
+] satisfies Array<[string, Parameters<typeof swarmFixture>[0]]>)
   test(`swarm workers started from ${from} stay notebook-only`, async () => {
     const { service, caller, runs } = await swarmFixture(options);
     await service.spawn(caller, { requestId: "one", text: "Work" });
