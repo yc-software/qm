@@ -249,3 +249,14 @@ test("with email sign-in off, a trusted provider gets a page with only the headi
   assert.match(bothHtml, /Sign in with Acme SSO/);
   assert.match(bothHtml, /Email me a sign-in link/);
 });
+
+test("the sign-in page shows the harbour scene with the deployment's wordmark and allows the same-origin painting", async (t) => {
+  const harness = await startHarness({ env: { AUTH_EMAIL_SIGN_IN: "off" }, trustedSignInLabel: "Acme SSO" });
+  t.after(() => harness.close());
+  const page = await fetch(`${harness.base}/authorize?${authorizeQuery({ code_challenge: pkcePair().challenge })}`);
+  assert.match(page.headers.get("content-security-policy") ?? "", /img-src 'self'/);
+  const html = await page.text();
+  assert.match(html, /<img src="\/auth\/assets\/becalmed-off-halfway-rock\.webp"/);
+  assert.match(html, /<span class="wordmark">QM<\/span>/);
+  assert.match(html, /<a class="btn" href="\/auth\/trusted\/login">Sign in with Acme SSO<\/a>/);
+});
