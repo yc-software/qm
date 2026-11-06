@@ -64,7 +64,7 @@ const { vite, dom, close } = await browserEnv({
           { id: "cred-lin", service: "linear" },
         ],
       });
-    const versionsPath = /\/versions(?:\?before=(\d+))?$/.exec(path);
+    const versionsPath = /\/versions\?limit=20(?:&before=(\d+))?$/.exec(path);
     if (versionsPath && method === "GET") {
       const before = Number(versionsPath[1] ?? Infinity);
       const page = versions.filter((v) => v.version < before);

@@ -54,6 +54,8 @@ const FIELD_LABELS: Record<VersionField, string> = {
   icon: "icon",
 };
 
+const PAGE = 20;
+
 const historyState = new Map<string, HistoryEntry>();
 
 function historyFor(id: string): HistoryEntry {
@@ -82,7 +84,7 @@ async function loadPage(persona: HistoryPersona, redraw: () => void): Promise<vo
   redraw();
   try {
     const page = await api<{ versions: VersionSummary[]; more: boolean }>(
-      `${base(persona.id)}${before ? `?before=${before}` : ""}`,
+      `${base(persona.id)}?limit=${PAGE}${before ? `&before=${before}` : ""}`,
     );
     entry.versions = [...(entry.versions ?? []), ...page.versions];
     entry.more = page.more;

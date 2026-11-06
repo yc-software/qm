@@ -334,8 +334,9 @@ test("the versions API pages summaries and reads one version with the one before
       [first.more, first.versions.map((v: { version: number }) => v.version), "instructions" in first.versions[0]],
       [false, [3, 2, 1], false],
     );
-    const [, rest] = await get("?before=2");
-    assert.deepEqual([rest.more, rest.versions.map((v: { version: number }) => v.version)], [false, [1]]);
+    const [, rest] = await get("?before=3&limit=1");
+    assert.deepEqual([rest.more, rest.versions.map((v: { version: number }) => v.version)], [true, [2]]);
+    assert.equal((await get("?limit=0"))[0], 400);
     const [, one] = await get("/3");
     assert.deepEqual([one.version.instructions, one.version.changed], ["three", ["instructions"]]);
     assert.equal((await get("?before=zero"))[0], 400);
