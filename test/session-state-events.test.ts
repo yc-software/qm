@@ -8,10 +8,11 @@ import { join } from "node:path";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import type { AddressInfo } from "node:net";
 import { buildApp } from "./support/build-app.ts";
-import type { TurnRequest } from "../src/types.ts";
+import { scopeId, type TurnRequest } from "../src/types.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { testConfig } from "./support/test-config.ts";
 import { settle } from "./support/settle.ts";
+import { configureCommandRules } from "./support/command-rules.ts";
 import type { SessionStateEvent } from "../src/runs/session-state-bus.ts";
 
 function freshApp() {
@@ -75,6 +76,7 @@ test("a plain turn emits working then idle", async () => {
 
 test("a turn parking a blocking command emits working then awaiting_approval", async () => {
   const built = freshApp();
+  await configureCommandRules(built.config, scopeId("org", "acme"));
   const got = await record(built.sessionStateBus);
   const r = await built.app.turn(dm(`!run ${BLOCKED_CMD}`, "web:U1:park"));
   assert.equal(r.status, "pending_approval");
@@ -83,6 +85,7 @@ test("a turn parking a blocking command emits working then awaiting_approval", a
 
 test("resolving the approval emits working, then idle once the resumed turn settles", async () => {
   const built = freshApp();
+  await configureCommandRules(built.config, scopeId("org", "acme"));
   const parked = await record(built.sessionStateBus);
   const paused = await built.app.turn(dm(`!run ${BLOCKED_CMD}`, "web:U1:resolve"));
   const requestId = paused.pendingApprovals?.[0]?.requestId;
@@ -112,6 +115,7 @@ test("a COLLECTED (non-blocking) approval settles idle — push and snapshot agr
 
 test("the settle event derives from the durable approvals store, exactly what listSessions reads", async () => {
   const built = freshApp();
+  await configureCommandRules(built.config, scopeId("org", "acme"));
   const got = await record(built.sessionStateBus);
   const r = await built.app.turn(dm(`!run ${BLOCKED_CMD}`, "web:U1:agree"));
   assert.equal(r.status, "pending_approval");
@@ -190,6 +194,7 @@ test("a shed event for an unknown thread still reaches subscribers, just without
 
 test("GET /v1/session-state/events streams transitions as SSE frames", async () => {
   const built = freshApp();
+  await configureCommandRules(built.config, scopeId("org", "acme"));
   built.runtime.start();
   const core = createInsecureTestServer(built.app, { webhookReceiver: built.webhookReceiver });
   core.listen(0);
@@ -285,6 +290,7 @@ test("a terminal run with another run still queued on the thread emits no settle
 
 test("a FAILED (parked) run still settles from durable truth: leftover blocking approval wins, UUID intact", async () => {
   const built = freshApp();
+  await configureCommandRules(built.config, scopeId("org", "acme"));
   const thread = "web:U1:failed";
   const parked = await built.app.turn(dm(`!run ${BLOCKED_CMD}`, thread));
   assert.equal(parked.status, "pending_approval");
@@ -365,6 +371,7 @@ test("a parent stays working while a subagent runs after its own turn ends — p
 
 test("a parent parked on a blocking approval keeps awaiting while its subagent runs", async () => {
   const built = freshApp();
+  await configureCommandRules(built.config, scopeId("org", "acme"));
   const parentThread = "web:U1:parked-parent";
   const childThread = "web:U1:parked-child";
   const child = await built.app.turn(dm("hello", childThread));
@@ -386,6 +393,7 @@ test("a parent parked on a blocking approval keeps awaiting while its subagent r
 
 test("a parent whose own turn parks on an approval while its subagent runs settles awaiting at once", async () => {
   const built = freshApp();
+  await configureCommandRules(built.config, scopeId("org", "acme"));
   const parentThread = "web:U1:parks-mid-tree";
   const childThread = "web:U1:parks-mid-tree-child";
   const parent = await built.app.turn(dm("hello", parentThread));
