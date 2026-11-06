@@ -5,29 +5,13 @@ import { sendJson } from "../http.ts";
 import { reportFailure } from "../../util/errors.ts";
 import { activePrincipal } from "./shared.ts";
 import type { ApiCtx } from "./route.ts";
-import type { ServerDeps } from "../deps.ts";
-
-export const REPLY_STATUS_TTL_MS = 3 * 60_000;
-type ReplyStatus = { connected: boolean; [key: string]: unknown };
-const replyStatusCache = new WeakMap<ServerDeps, Map<string, { status: ReplyStatus; expiresAt: number }>>();
-
-function replyStatusEntries(deps: ServerDeps) {
-  let entries = replyStatusCache.get(deps);
-  if (!entries) replyStatusCache.set(deps, (entries = new Map()));
-  return entries;
-}
 
 export async function slackReply(ctx: ApiCtx, send: boolean): Promise<void> {
   if (!ctx.actor || ctx.actor.imp || ctx.capability)
     return sendJson(ctx.res, 403, { error: "browser_identity_required" });
   ctx.res.setHeader("Cache-Control", "no-store");
   if (!(await activePrincipal(ctx.deps, ctx.actor.p))) return sendJson(ctx.res, 403, { error: "forbidden" });
-  const body = ctx.body as {
-    sessionId?: unknown;
-    text?: unknown;
-    clientMessageId?: unknown;
-    refresh?: unknown;
-  } | null;
+  const body = ctx.body as { sessionId?: unknown; text?: unknown; clientMessageId?: unknown } | null;
   if (typeof body?.sessionId !== "string") return sendJson(ctx.res, 400, { error: "invalid_session" });
   const source = await ctx.app.getSessionForViewer(body.sessionId, ctx.actor.p);
   if (!source) return sendJson(ctx.res, 404, { error: "not_found" });
@@ -48,22 +32,6 @@ export async function slackReply(ctx: ApiCtx, send: boolean): Promise<void> {
       error: "slack_unavailable",
       message: "Slack replies are temporarily unavailable.",
     });
-  const principal = ctx.actor.p;
-  const cache = replyStatusEntries(ctx.deps);
-  if (!send) {
-    const cached = cache.get(principal);
-    if (cached && cached.expiresAt > Date.now() && body.refresh !== true) return sendJson(ctx.res, 200, cached.status);
-    cache.delete(principal);
-  }
-  const status = (code: number, payload: ReplyStatus) => {
-    if (send) {
-      if (!payload.connected) cache.delete(principal);
-    } else if (code === 200) {
-      for (const [key, entry] of cache) if (entry.expiresAt <= Date.now()) cache.delete(key);
-      cache.set(principal, { status: payload, expiresAt: Date.now() + REPLY_STATUS_TTL_MS });
-    }
-    return sendJson(ctx.res, code, payload);
-  };
   let slackConfirmed = false;
   const recordReply = async (ts: unknown, name: string) => {
     slackConfirmed = true;
@@ -89,7 +57,8 @@ export async function slackReply(ctx: ApiCtx, send: boolean): Promise<void> {
       payload?: Record<string, unknown>,
     ) => Promise<{ ok?: boolean; ts?: string; error?: string } | undefined>;
   }) => {
-    if (!send) return status(200, { connected: true, user: connection.user, workspace: connection.workspace });
+    if (!send)
+      return sendJson(ctx.res, 200, { connected: true, user: connection.user, workspace: connection.workspace });
     const conversation = await connection.call("conversations.info", { channel: target.container });
     if (!conversation?.ok) {
       reportFailure(
@@ -131,7 +100,7 @@ export async function slackReply(ctx: ApiCtx, send: boolean): Promise<void> {
     if (native) return await replyVia(native);
     const hasComposioLink = await hasSlackAccount(ctx);
     if (!hasComposioLink && (await nativeSlackConfigured(ctx)))
-      return status(send ? 409 : 200, {
+      return sendJson(ctx.res, send ? 409 : 200, {
         connected: false,
         error: "slack_link_required",
         message: "Link your personal Slack account to reply.",
@@ -139,7 +108,7 @@ export async function slackReply(ctx: ApiCtx, send: boolean): Promise<void> {
     const connection = await composioSlackConnection(ctx);
     if (connection === undefined) return;
     if (connection) return await replyVia(connection);
-    return status(send ? 409 : 200, {
+    return sendJson(ctx.res, send ? 409 : 200, {
       connected: false,
       error: "slack_link_required",
       message: "Link your personal Slack account to reply.",

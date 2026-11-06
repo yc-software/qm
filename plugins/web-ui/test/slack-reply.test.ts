@@ -46,7 +46,6 @@ test("Slack chats offer the account link once the check finds no link, recheckin
     window.dispatchEvent(new window.Event("focus"));
     await until(() => !!document.querySelector("qm-slack-reply textarea"));
     assert.equal(bodies.length, 2);
-    assert.equal(bodies[1]!.refresh, undefined);
     assert.match(
       document.querySelector("qm-slack-reply .composer-input")!.getAttribute("placeholder")!,
       /Reply in Slack as Alice/,

@@ -101,10 +101,10 @@ export class SlackReply extends LitElement {
     if (Date.now() - this.checkedAt >= FOCUS_REFRESH_MS) void this.check(false);
   };
   private refresh = (): Promise<void> => this.check(true);
-  private async check(fresh: boolean): Promise<void> {
+  private async check(explicit: boolean): Promise<void> {
     this.checkedAt = Date.now();
     try {
-      const response = await this.request("reply-status", fresh ? { refresh: true } : undefined);
+      const response = await this.request("reply-status");
       const result = await response.json();
       if (response.ok) {
         this.connected = result.connected === true;
@@ -116,16 +116,13 @@ export class SlackReply extends LitElement {
         this.connected = false;
         this.linkAvailable = false;
         this.error = "Slack linking isn’t configured for your account on this deployment.";
-      } else if (fresh) this.error = result.message ?? "Could not check your Slack connection.";
+      } else if (explicit) this.error = result.message ?? "Could not check your Slack connection.";
     } catch (error) {
       reportHandledError("web:slack_reply_status", error);
-      if (fresh) this.error = "Could not check your Slack connection.";
+      if (explicit) this.error = "Could not check your Slack connection.";
     }
   }
-  private request(
-    action: string,
-    message?: { text: string; clientMessageId: string } | { refresh: true },
-  ): Promise<Response> {
+  private request(action: string, message?: { text: string; clientMessageId: string }): Promise<Response> {
     return fetch(withBase(`/api/composio/slack/${action}`), {
       method: "POST",
       headers: { "content-type": "application/json" },
