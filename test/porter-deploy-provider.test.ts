@@ -158,6 +158,42 @@ test("a company with an app handle gets the same <handle>-<app> host on Porter t
   ]);
 });
 
+test("after a company's handle changes, the next resolve hands the app back for a re-apply under the new host", async () => {
+  const d = deployment("dep-r", "sales-board");
+  const hosts = await withTenant(randomUUID(), async () => {
+    noteTenantAppHandle("nitroduck7");
+    const handled = createPorterDeployProvider({
+      ...singleProcessDeps(),
+      appsDomain: "apps.test",
+      appPort,
+      readyWindowSec: 10,
+      resolveCacheMs: 0,
+      client: fake.client,
+      store: tenantMap<StoredPorterDeployBody>(),
+    });
+    const v = version({ "server.js": SERVER }, "node server.js");
+    await handled.apply(d, v);
+    const before = await handled.resolveEndpoint!(d, v);
+    noteTenantAppHandle("beta8");
+    const stale = await handled.resolveEndpoint!(d, v);
+    await handled.apply(d, v);
+    const after = await handled.resolveEndpoint!(d, v);
+    const settled = await handled.resolveEndpoint!(d, v);
+    return [before?.host, stale, after?.host, settled?.host];
+  });
+  assert.deepEqual(hosts, [
+    "nitroduck7-sales-board.apps.test",
+    null,
+    "beta8-sales-board.apps.test",
+    "beta8-sales-board.apps.test",
+  ]);
+  const live = fake.bodies().filter((b) => b.phase === "running");
+  assert.deepEqual(
+    live.map((b) => b.networking),
+    [[{ port: appPort, domains: [{ domain: "beta8-sales-board.apps.test", visibility: "private" }] }]],
+  );
+});
+
 const bulkFiles = (): Record<string, string> =>
   Object.fromEntries(Array.from({ length: 40 }, (_, i) => [`assets/file-${i}.txt`, `x${i}`.repeat(50_000)]));
 

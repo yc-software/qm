@@ -58,6 +58,7 @@ export interface StoredPorterDeployBody {
   name: string;
   host: string;
   port?: number;
+  domain?: string;
   createdAtMs: number;
 }
 
@@ -213,6 +214,7 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
         await retireBodies(d, true);
         await store.delete(d.id).catch((e) => swallow("porter-deploy: clear stale pointer", e));
         const name = `${baseName(d)}-${randomUUID().slice(0, 5)}`;
+        const domain = domainOf(d);
         const sb = await client.sandboxes.create({
           image,
           name,
@@ -223,7 +225,7 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
           networking:
             visibility === "internal"
               ? [{ port: appPort, internal: true }]
-              : [{ port: appPort, ...(domainOf(d) ? { domains: [{ domain: domainOf(d), visibility }] } : {}) }],
+              : [{ port: appPort, ...(domain ? { domains: [{ domain, visibility }] } : {}) }],
           ...(opts.ttlSec ? { ttl_seconds: opts.ttlSec } : {}),
         });
         try {
@@ -231,7 +233,14 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
           const address = await addressOf(d, sb);
           await materialize(sb.id, volumeId, version);
           await startApp(d, sb.id, version);
-          await store.put(d.id, { deploymentId: d.id, sandboxId: sb.id, name, ...address, createdAtMs: Date.now() });
+          await store.put(d.id, {
+            deploymentId: d.id,
+            sandboxId: sb.id,
+            name,
+            ...address,
+            ...(domain ? { domain } : {}),
+            createdAtMs: Date.now(),
+          });
           return endpointOf(address);
         } catch (e) {
           await sb.terminate().catch((err) => swallow("porter-deploy: abandon failed body", err));
@@ -243,7 +252,8 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
       const cached = resolveCache.get(d.id);
       if (cached) return cached;
       const stored = await liveStored(d);
-      if (!stored) {
+      const domain = domainOf(d);
+      if (!stored || (domain && (stored.domain ?? stored.host) !== domain)) {
         resolveCache.delete(d.id);
         return null;
       }
