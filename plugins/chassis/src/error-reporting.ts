@@ -60,6 +60,13 @@ type TransactionEvent = Parameters<NonNullable<Sentry.NodeOptions["beforeSendTra
 type ErrorEvent = Parameters<NonNullable<Sentry.NodeOptions["beforeSend"]>>[0];
 type SpanData = Record<string, unknown>;
 type SpanJSON = NonNullable<TransactionEvent["spans"]>[number];
+type LoadNative = () => Promise<{
+  eventLoopBlockIntegration(options: {
+    threshold: number;
+    maxEventsPerHour: number;
+    staticTags: Record<string, string>;
+  }): Parameters<Sentry.NodeClient["addIntegration"]>[0];
+}>;
 
 function scrubData(data: SpanData | undefined): { statement?: unknown } {
   if (!data) return {};
@@ -205,9 +212,9 @@ function serverName(env: NodeJS.ProcessEnv): string {
   return container?.split("-")[0] || hostname();
 }
 
-async function watchEventLoop(sdk: typeof Sentry, server: string): Promise<void> {
+async function watchEventLoop(sdk: typeof Sentry, loadNative: LoadNative, server: string): Promise<void> {
   try {
-    const { eventLoopBlockIntegration } = await import("@sentry/node-native");
+    const { eventLoopBlockIntegration } = await loadNative();
     sdk.getClient()?.addIntegration(
       eventLoopBlockIntegration({
         threshold: EVENT_LOOP_BLOCK_MS,
@@ -223,6 +230,7 @@ async function watchEventLoop(sdk: typeof Sentry, server: string): Promise<void>
 export function initializeErrorReporting(
   sdk: typeof Sentry,
   service: string,
+  loadNative?: LoadNative,
   env: NodeJS.ProcessEnv = process.env,
 ): void {
   if (!env.SENTRY_DSN || client) return;
@@ -273,7 +281,7 @@ export function initializeErrorReporting(
   });
   client = sdk;
   tracing = traced;
-  void watchEventLoop(sdk, server);
+  if (loadNative) void watchEventLoop(sdk, loadNative, server);
   process.on("unhandledRejection", (reason: unknown) => {
     sdk.captureException(reason, {
       captureContext: { level: "fatal" },
