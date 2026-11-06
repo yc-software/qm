@@ -1800,6 +1800,7 @@ export function buildApp(
     directory,
     isActive: isActiveMember,
     isOrgAdmin: async (principalId) => (await admin.adminStatusOf({ id: principalId, type: "internal" })).isAdmin,
+    orgAdmins: async () => (await admin.listGrants()).filter((grant) => grant.role === "org_admin"),
     auditLog,
     deliveries,
   });
@@ -2794,6 +2795,15 @@ export function buildApp(
         { label: "llm-capture-retention" },
       )
     : null;
+  const personaOwnerSweeper = createSweeper(
+    () =>
+      leaderLease.hold("personas:owner-handover", async () => {
+        await identity.refresh(true);
+        await channelPersonas.adoptOrphans();
+      }),
+    5 * 60_000,
+    { label: "persona-owner-handover" },
+  );
   const monitorRetentionSweeper = createSweeper(
     () => leaderLease.hold("monitor:retention:sweep", () => monitors.deleteDefunct(Date.now())),
     MONITOR_RETENTION_SWEEP_MS,
@@ -2859,6 +2869,7 @@ export function buildApp(
         })
         .catch(swallowAs("wiring: monitor resume failed", undefined));
       monitorRetentionSweeper.start();
+      personaOwnerSweeper.start();
       spendSweeper?.start();
       llmCaptureSweeper?.start();
       semanticMemory.start();
@@ -2894,6 +2905,7 @@ export function buildApp(
       reaper.stop(),
       processReaper?.stop(),
       monitorRetentionSweeper.stop(),
+      personaOwnerSweeper.stop(),
       spendSweeper?.stop(),
       llmCaptureSweeper?.stop(),
       semanticMemory.stop(),

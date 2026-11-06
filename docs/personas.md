@@ -88,7 +88,13 @@ on a turn they sent themselves, can change the channel's instructions, standing 
 skills, including sharing a skill into the channel. Everyone else is refused with an owner
 named; a refusal never names a private channel, or its persona, to someone outside it.
 
-Access changes that would leave a persona with no active owner are refused.
+**Owners leaving.** When a persona's last active owner is deactivated or offboarded, the
+default admin becomes an owner: the active org admin with the oldest grant, so the admins named
+in `ADMIN_GRANTS` at first boot come first. Offboarding someone lists each persona their
+departure leaves with no active owner, and the admin it goes to; other deactivations, and personas
+already left without one, are picked up within five minutes. The departed owner's row stays, so
+reactivating them restores their role. Access changes that would leave a persona with no active
+owner are refused.
 
 ## Forking
 
