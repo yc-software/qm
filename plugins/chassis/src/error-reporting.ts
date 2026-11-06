@@ -1,3 +1,4 @@
+import { hostname } from "node:os";
 import type * as Sentry from "@sentry/node";
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -47,6 +48,8 @@ const POOL_CHECKOUT = "pg-pool.connect";
 const POOL_SPANS = new Set(["pg.connect", POOL_CHECKOUT]);
 const MAX_SENT_SPANS = 500;
 const IDLE_CHECKOUT_SECONDS = 0.001;
+const EVENT_LOOP_BLOCK_MS = 500;
+const EVENT_LOOP_BLOCKS_PER_HOUR = 10;
 const HTTP_METHODS = new Set("GET HEAD POST PUT PATCH DELETE OPTIONS CONNECT TRACE".split(" "));
 type SamplingContext = Parameters<NonNullable<Sentry.NodeOptions["tracesSampler"]>>[0];
 export const REQUEST_ID_HEADERS = ["fly-request-id", "render-request-id", "x-amzn-requestid", "x-request-id"];
@@ -209,6 +212,34 @@ function sampler(rate: number) {
     attributes?.["qm.origin"] === "human" ? 1 : inheritOrSampleWith(rate);
 }
 
+function eventLoopBlockMs(value: string | undefined): number {
+  if (!value?.trim()) return EVENT_LOOP_BLOCK_MS;
+  const ms = Number(value);
+  return Number.isFinite(ms) && ms > 0 ? ms : 0;
+}
+
+function serverName(env: NodeJS.ProcessEnv): string {
+  const metadata = env.ECS_CONTAINER_METADATA_URI_V4;
+  if (!metadata) return hostname();
+  const container = URL.parse(metadata)?.pathname.split("/").at(-1);
+  return container?.split("-")[0] || hostname();
+}
+
+async function watchEventLoop(sdk: typeof Sentry, threshold: number, server: string): Promise<void> {
+  try {
+    const { eventLoopBlockIntegration } = await import("@sentry/node-native");
+    sdk.getClient()?.addIntegration(
+      eventLoopBlockIntegration({
+        threshold,
+        maxEventsPerHour: EVENT_LOOP_BLOCKS_PER_HOUR,
+        staticTags: { server_name: server },
+      }),
+    );
+  } catch (error) {
+    swallow("event loop block detection", error);
+  }
+}
+
 export function initializeErrorReporting(
   sdk: typeof Sentry,
   service: string,
@@ -217,11 +248,12 @@ export function initializeErrorReporting(
   if (!env.SENTRY_DSN || client) return;
   const tracesSampleRate = parseSampleRate(env.SENTRY_TRACES_SAMPLE_RATE);
   const traced = tracesSampleRate > 0;
+  const server = serverName(env);
   sdk.init({
     dsn: env.SENTRY_DSN,
     environment: env.SENTRY_ENVIRONMENT ?? env.NODE_ENV ?? "development",
     release: env.SENTRY_RELEASE ?? env.GIT_SHA,
-    serverName: "",
+    serverName: server,
     defaultIntegrations: false,
     integrations: [
       sdk.onUncaughtExceptionIntegration(),
@@ -262,6 +294,8 @@ export function initializeErrorReporting(
   sdk.addEventProcessor(tagActiveRequest);
   client = sdk;
   tracing = traced;
+  const blockMs = eventLoopBlockMs(env.SENTRY_EVENT_LOOP_BLOCK_MS);
+  if (blockMs) void watchEventLoop(sdk, blockMs, server);
   process.on("unhandledRejection", (reason: unknown) => {
     sdk.captureException(reason, {
       captureContext: { level: "fatal" },
