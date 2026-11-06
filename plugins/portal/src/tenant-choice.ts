@@ -143,13 +143,13 @@ function openChoice(token: string | null, key: Buffer, now: number): ChoiceClaim
 }
 
 /** Up to this many workspaces show as plain buttons; more get a search field. */
-export const PICKER_BUTTONS_MAX = 6;
+const PICKER_BUTTONS_MAX = 6;
 /** With a search field, at most this many workspaces show at once. */
-export const PICKER_RESULTS_MAX = 8;
+const PICKER_RESULTS_MAX = 8;
 const RECENT_MAX = 8;
 const RECENT_COOKIE = "portal_recent_workspaces";
 
-export const PICKER_SCRIPT = `(() => {
+const PICKER_SCRIPT = `(() => {
   const input = document.getElementById("workspace-search");
   if (!input) return;
   const items = [...document.querySelectorAll("[data-workspace]")];
@@ -174,7 +174,7 @@ export const PICKER_SCRIPT = `(() => {
     if (first) first.requestSubmit();
   });
 })();`;
-export const PICKER_SCRIPT_HASH = `sha256-${createHash("sha256").update(PICKER_SCRIPT).digest("base64")}`;
+const PICKER_SCRIPT_HASH = `sha256-${createHash("sha256").update(PICKER_SCRIPT).digest("base64")}`;
 
 const workspaceLabel = ({ id, brandName, handle }: SignInTenant): string =>
   brandName?.trim() || handle || id.slice(0, 8);
@@ -184,7 +184,7 @@ function readRecent(cookieHeader: string | undefined): string[] {
 }
 
 /** Recently chosen workspaces first (most recent first), then the rest by name. */
-export function orderWorkspaces(tenants: readonly SignInTenant[], recent: readonly string[]): SignInTenant[] {
+function orderWorkspaces(tenants: readonly SignInTenant[], recent: readonly string[]): SignInTenant[] {
   const rank = (id: string): number => {
     const i = recent.indexOf(id);
     return i < 0 ? recent.length : i;
@@ -195,7 +195,7 @@ export function orderWorkspaces(tenants: readonly SignInTenant[], recent: readon
   );
 }
 
-export function workspacePicker(
+function workspacePicker(
   tenants: readonly SignInTenant[],
   o: { recent?: readonly string[]; query?: string } = {},
 ): { actions: string; script: boolean } {

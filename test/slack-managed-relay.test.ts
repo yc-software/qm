@@ -86,7 +86,7 @@ describe("managed Slack relayed to a shared host without per-company credentials
     await db?.close();
   });
 
-  const call = (path: string, body: unknown, method = "POST", token = RELAY) =>
+  const call = (path: string, body: unknown, method: "POST" | "DELETE" = "POST", token = RELAY) =>
     fetch(`http://127.0.0.1:${port}/v1/slack/managed/${path}`, {
       method,
       headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
