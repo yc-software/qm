@@ -3,7 +3,7 @@ import { DeployAccessError, type DeployAccessErrorCode } from "../../deploy/depl
 import { deploymentView, type App } from "../app.ts";
 import { errMessage } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
-import { isObj, personalCapability } from "./shared.ts";
+import { isObj } from "./shared.ts";
 import { parseScopeId, type Permission } from "../../types.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import { livePersonCapability, resolveShareTarget as resolveShareTargetGrammar } from "../artifact-share.ts";
@@ -46,11 +46,11 @@ export function resolveShareTarget(
 
 export async function getDeploymentShares(ctx: ApiCtx): Promise<void> {
   const { res, app, params } = ctx;
-  const capability = personalCapability(ctx);
-  if (!capability) return sendJson(res, 403, { error: "forbidden" });
+  const principalId = ctx.capability?.actorId ?? ctx.actor?.p;
+  if (!principalId) return sendJson(res, 403, { error: "forbidden" });
   const deployment = await app.getDeployment(params.id!);
   if (!deployment) return sendJson(res, 404, { error: "not_found" });
-  if (deployment.ownerScopeId !== `personal:${capability.actorId}`)
+  if (deployment.ownerScopeId !== `personal:${principalId}`)
     return sendJson(res, 403, { error: "forbidden", message: "Only the owner can edit app permissions." });
   const externalSharing = await externalAppSharingAllowed(ctx.deps.featureFlags, deployment.ownerScopeId);
   return sendJson(res, 200, {
@@ -62,9 +62,12 @@ export async function getDeploymentShares(ctx: ApiCtx): Promise<void> {
 
 export async function shareDeployment(ctx: ApiCtx): Promise<void> {
   const { res, app, params, body } = ctx;
-  const capability = personalCapability(ctx);
-  if (!capability)
-    return sendJson(res, 403, { error: "forbidden", message: "sharing requires an agent capability token" });
+  const principalId = ctx.capability?.actorId ?? ctx.actor?.p;
+  if (!principalId)
+    return sendJson(res, 403, {
+      error: "forbidden",
+      message: "sharing requires a signed-in person or an agent capability token",
+    });
   const b = (isObj(body) ? body : {}) as {
     scope?: unknown;
     recipient?: unknown;
@@ -85,7 +88,7 @@ export async function shareDeployment(ctx: ApiCtx): Promise<void> {
         message: "public access and person/scope access must be changed separately",
       });
     try {
-      const deployment = await app.setDeploymentPublic(params.id!, b.public, { createdBy: capability.actorId });
+      const deployment = await app.setDeploymentPublic(params.id!, b.public, { createdBy: principalId });
       return sendJson(res, 200, {
         ok: true,
         public: deployment.public === true,
@@ -127,11 +130,11 @@ export async function shareDeployment(ctx: ApiCtx): Promise<void> {
   try {
     const invite =
       typeof b.email === "string" && permission === "read"
-        ? await app.inviteToDeployment(params.id!, b.email, capability.actorId, notify)
+        ? await app.inviteToDeployment(params.id!, b.email, principalId, notify)
         : undefined;
     const grantees =
       invite?.grantees ??
-      (await app.shareDeployment(params.id!, target.scope, permission, { createdBy: capability.actorId }, notify));
+      (await app.shareDeployment(params.id!, target.scope, permission, { createdBy: principalId }, notify));
     const orgGrant = grantees.find((g) => parseScopeId(g.scope).kind === "org");
     let reach = "owner-only";
     if (orgGrant) reach = `everyone in ${parseScopeId(orgGrant.scope).ref}`;

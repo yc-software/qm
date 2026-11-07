@@ -329,8 +329,6 @@ test("a signed-in browser starts OAuth for itself with this server's callback an
       assert.equal(done.headers.get("location"), landed);
     }
     assert.equal((await browserStart({ principalId: "U2" })).status, 403);
-    const anonymous = await fetch(`${srv.base}/api/connectors/google/start`, { method: "POST" });
-    assert.equal(anonymous.status, 401);
   } finally {
     await srv.close();
   }

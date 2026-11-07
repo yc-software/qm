@@ -67,10 +67,13 @@ async function resolveScopeNames(
 }
 
 const keychainRoute =
-  (handle: (ctx: ApiCtx, kc: NonNullable<ApiCtx["deps"]["keychain"]>, capability: CapabilityClaims) => Promise<void>) =>
+  (
+    handle: (ctx: ApiCtx, kc: NonNullable<ApiCtx["deps"]["keychain"]>, capability: CapabilityClaims) => Promise<void>,
+    signedInPerson = false,
+  ) =>
   async (ctx: ApiCtx): Promise<void> => {
     const { res, deps } = ctx;
-    const capability = personalCapability(ctx);
+    const capability = signedInPerson ? personalCapability(ctx) : ctx.capability;
     if (!deps.keychain)
       return sendJson(res, 503, {
         error: "keychain_unavailable",
@@ -185,14 +188,14 @@ const keychainOverview = keychainRoute(async ({ res, app, deps }, kc, { actorId 
     ...asks.map((ask) => ask.requesterScopeId),
   ]);
   return sendJson(res, 200, { credentials, connectorCredentials, grants, asks, scopeNames });
-});
+}, true);
 
 const deleteCredential = keychainRoute(async ({ res, deps, params }, kc, { actorId, scopeId }) => {
   const id = params.id!;
   const ok = await kc.remove(actorId, id);
   if (ok) audit(deps, { principalId: actorId, action: "keychain.delete", resource: id, scopeLabel: scopeId });
   return ok ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: "not_found" });
-});
+}, true);
 
 const listGrants = keychainRoute(async ({ res }, kc, { actorId, scopeId }) => {
   const mine = await kc.listGrants({ ownerId: actorId });
@@ -206,7 +209,7 @@ const revokeGrant = keychainRoute(async ({ res, deps, params }, kc, { actorId, s
   const ok = await kc.revokeGrant(actorId, id);
   if (ok) audit(deps, { principalId: actorId, action: "keychain.revoke", resource: id, scopeLabel: scopeId });
   return ok ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: "not_found" });
-});
+}, true);
 
 type KeychainStore = NonNullable<ApiCtx["deps"]["keychain"]>;
 

@@ -8,20 +8,8 @@ import { PayloadTooLargeError, readRawBody, sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import type { ApiCtx, BaseCtx, Route } from "./route.ts";
 
-function isCreateWebhook(b: unknown): b is CreateWebhookInput {
-  if (!isObj(b)) return false;
-  const v = b.verification;
-  return (
-    typeof b.ownerScopeId === "string" &&
-    typeof b.owner === "string" &&
-    typeof b.createdBy === "string" &&
-    typeof b.action === "string" &&
-    isObj(v) &&
-    isWebhookVerification(v) &&
-    (b.filters === undefined || isWebhookFilters(b.filters)) &&
-    (b.destination === undefined || isObj(b.destination))
-  );
-}
+const FILTERS_MESSAGE = "every filter requires a non-empty path and at least one non-empty value";
+const VERIFICATION_MESSAGE = "a supported signature scheme and non-empty signing secret are required";
 
 function isWebhookVerification(value: Record<string, unknown>): boolean {
   return (
@@ -93,7 +81,7 @@ function personWebhook(body: unknown, owner: string): CreateWebhookInput | { err
   if (v !== undefined && (!isObj(v) || typeof v.scheme !== "string"))
     return { error: "unsupported_verification", message: "verification requires a scheme" };
   if (body.filters !== undefined && !isWebhookFilters(body.filters))
-    return { error: "invalid_filters", message: "every filter requires a path and at least one value" };
+    return { error: "invalid_filters", message: FILTERS_MESSAGE };
   if (body.destination !== undefined)
     return {
       error: "invalid_destination",
@@ -101,14 +89,17 @@ function personWebhook(body: unknown, owner: string): CreateWebhookInput | { err
     };
   const action = String(body.action ?? "").trim();
   if (!action) return { error: "action_required", message: "an action (the agent's instructions) is required" };
-  const scheme = isObj(v) ? (v.scheme as Webhook["verification"]["scheme"]) : "hmac-sha256";
-  const secret = isObj(v) && v.secret ? String(v.secret) : randomBytes(32).toString("hex");
+  const verification = {
+    scheme: isObj(v) ? v.scheme : "hmac-sha256",
+    secret: isObj(v) && v.secret ? String(v.secret) : randomBytes(32).toString("hex"),
+  };
+  if (!isWebhookVerification(verification)) return { error: "bad_request", message: VERIFICATION_MESSAGE };
   return {
     ownerScopeId: `personal:${owner}`,
     owner,
     createdBy: owner,
     action,
-    verification: { scheme, secret },
+    verification: verification as Webhook["verification"],
     ...(body.filters ? { filters: body.filters as Webhook["filters"] } : {}),
   };
 }
@@ -119,16 +110,10 @@ async function createWebhook(ctx: ApiCtx): Promise<void> {
     const b = body as { verification?: unknown; action?: unknown; filters?: unknown; destinationKey?: unknown };
     const ver = isObj(b.verification) ? (b.verification as { scheme?: unknown; secret?: unknown }) : undefined;
     if (!ver || !isWebhookVerification(ver) || typeof b.action !== "string") {
-      return sendJson(res, 400, {
-        error: "bad_request",
-        message: "a supported signature scheme and non-empty signing secret are required",
-      });
+      return sendJson(res, 400, { error: "bad_request", message: VERIFICATION_MESSAGE });
     }
     if (b.filters !== undefined && !isWebhookFilters(b.filters)) {
-      return sendJson(res, 400, {
-        error: "bad_request",
-        message: "every filter requires a non-empty path and at least one non-empty value",
-      });
+      return sendJson(res, 400, { error: "bad_request", message: FILTERS_MESSAGE });
     }
     const result = await deps.control.createWebhook(
       {
@@ -148,8 +133,6 @@ async function createWebhook(ctx: ApiCtx): Promise<void> {
   if (!owner) return sendJson(res, 401, { error: "unauthorized", message: "portal identity required" });
   const input = personWebhook(body, owner);
   if ("error" in input) return sendJson(res, 400, input);
-  if (!isCreateWebhook(input))
-    return sendJson(res, 400, { error: "bad_request", message: "expected a CreateWebhookInput" });
   try {
     const webhook = await app.createWebhook(input);
     return sendJson(res, 200, { webhook, url: inboundUrl(deps.publicUrl, webhook.id) });

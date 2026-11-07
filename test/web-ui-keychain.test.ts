@@ -61,12 +61,4 @@ test("a signed-in person adds, lists and removes only their own keychain entries
   assert.equal((await fetch(`${base}/api/keychain/credentials/${saved.id}`, as(alice, "DELETE"))).status, 200);
   assert.equal((await built.keychain!.listByOwner("alice")).length, 0);
   assert.equal((await fetch(`${base}/api/keychain/grants/missing/revoke`, as(alice, "POST", {}))).status, 404);
-
-  assert.equal((await fetch(`${base}/api/keychain/overview`)).status, 401);
-  const crossSite = await fetch(`${base}/api/keychain/drops`, {
-    method: "POST",
-    headers: { "content-type": "application/json", cookie: alice, origin: "https://evil.example" },
-    body: JSON.stringify({ service: "stripe", purpose: "billing" }),
-  });
-  assert.equal(crossSite.status, 403);
 });

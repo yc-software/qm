@@ -80,8 +80,9 @@ function parseOAuthRoute(pathname: string): { provider: string; action: "start" 
   return { provider: decodeURIComponent(provider), action };
 }
 
-function safeReturnTo(value: string | null): string | undefined {
-  if (!value || !value.startsWith("/") || value.startsWith("//")) return undefined;
+function safeReturnTo(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value.startsWith("/") || value.startsWith("//") || value.includes("\\"))
+    return undefined;
   return value;
 }
 
@@ -370,17 +371,11 @@ async function oauthStart(ctx: ApiCtx): Promise<void> {
 async function browserOAuthStart(ctx: ApiCtx): Promise<void> {
   const base = ctx.deps.portalUrl!.replace(/\/$/, "");
   const provider = ctx.params.provider!;
-  const requested = isObj(ctx.body) ? ctx.body.returnTo : undefined;
-  const sameOrigin =
-    typeof requested === "string" &&
-    safeReturnTo(requested) !== undefined &&
-    !requested.includes("\\") &&
-    new URL(requested, base).origin === new URL(base).origin;
   return startOAuth(ctx, {
     provider,
     principalId: ctx.actor!.p,
     redirectUri: `${base}/v1/connectors/oauth/${encodeURIComponent(provider)}/callback`,
-    returnTo: sameOrigin ? requested : "/keychain",
+    returnTo: safeReturnTo(isObj(ctx.body) ? ctx.body.returnTo : undefined) ?? "/keychain",
     accountType: "default",
   });
 }
