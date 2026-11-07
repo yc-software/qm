@@ -158,6 +158,9 @@ const withRoute = (config: string, fields: Record<string, unknown>) => {
   return JSON.stringify(parsed);
 };
 
+const knowledge = (JSON.parse(value) as { providers: Array<Record<string, Record<string, unknown>>> }).providers[0]!;
+const scoped = { read: { ...knowledge.read, scopeArg: "scope" }, write: { ...knowledge.write, scopeArg: "scope" } };
+
 test("attestActor is an opt-in boolean on mcp providers only", () => {
   const mcp = (fields: Record<string, unknown>) => {
     const provider = parseMemoryProviderConfig(withRoute(withProvider(fields), { scopes: ["personal"] }), ENV)
@@ -191,13 +194,11 @@ test("an attested provider serves only personal scopes, so a shared conversation
         `memory route 1: provider knowledge sets attestActor, so it may serve only personal scopes, not ${shared}; an attested read returns that member's private memory`,
       ),
     );
-    assert.deepEqual(scopes([shared], value), [shared]);
+    assert.deepEqual(scopes([shared], withProvider(scoped)), [shared]);
   }
 });
 
-test("a provider serving personal and shared scopes must send the scope, so its server can keep a member's private memory out of shared conversations", () => {
-  const knowledge = (JSON.parse(value) as { providers: Array<Record<string, Record<string, unknown>>> }).providers[0]!;
-  const scoped = { read: { ...knowledge.read, scopeArg: "scope" }, write: { ...knowledge.write, scopeArg: "scope" } };
+test("a provider without scopeArg serves only personal scopes or only the org scope, so its server never pools conversations' memory", () => {
   const scopes = (provider: Record<string, unknown>, ...routes: Array<Record<string, unknown>>) => {
     const parsed = JSON.parse(withProvider(provider)) as { routes: Array<Record<string, unknown>> };
     parsed.routes.splice(1, 1, ...routes.map((route) => ({ provider: "knowledge", manage: false, ...route })));
@@ -207,24 +208,27 @@ test("a provider serving personal and shared scopes must send the scope, so its 
   };
   const refused = (op: string, listed: string) =>
     new RegExp(
-      `memory provider knowledge\\.${op} sets no scopeArg, but the provider serves personal and shared scopes \\(${listed}\\)`,
+      `memory provider knowledge\\.${op} sets no scopeArg, so its server cannot tell apart the scopes it serves \\(${listed}\\)`,
     );
+  assert.throws(() => scopes({}, { scopes: ["channel"] }), refused("read", "channel"));
   assert.throws(() => scopes({}, { scopes: ["personal", "channel"] }), refused("read", "personal, channel"));
+  assert.throws(() => scopes({}, { scopes: ["personal", "persona:p1"] }), refused("read", "personal, persona:p1"));
   assert.throws(
     () => scopes({}, { scopes: ["personal:U1"] }, { scopes: ["org:acme"], capture: "explicit" }),
     refused("read", "personal:U1, org:acme"),
   );
   assert.throws(
-    () => scopes({ read: scoped.read }, { scopes: ["personal", "team"], capture: "explicit" }),
-    refused("write", "personal, team"),
+    () => scopes({ read: scoped.read }, { scopes: ["group", "team"], capture: "explicit" }),
+    refused("write", "group, team"),
   );
-  assert.deepEqual(scopes(scoped, { scopes: ["personal", "channel"] }), ["personal", "channel"]);
-  assert.deepEqual(scopes({ read: scoped.read, write: undefined }, { scopes: ["personal", "org"] }), [
+  assert.deepEqual(scopes(scoped, { scopes: ["personal", "channel", "persona:p1"] }), [
     "personal",
-    "org",
+    "channel",
+    "persona:p1",
   ]);
+  assert.deepEqual(scopes({ read: scoped.read, write: undefined }, { scopes: ["group", "team"] }), ["group", "team"]);
   assert.deepEqual(scopes({}, { scopes: ["personal"] }, { scopes: ["personal:U1"] }), ["personal", "personal:U1"]);
-  assert.deepEqual(scopes({}, { scopes: ["channel", "org"] }), ["channel", "org"]);
+  assert.deepEqual(scopes({}, { scopes: ["org", "org:acme"] }), ["org", "org:acme"]);
 });
 
 test("a write operation maps its facts with factsArg or contentArg, not both", () => {
