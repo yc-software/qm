@@ -3,7 +3,7 @@ import { DeployAccessError, type DeployAccessErrorCode } from "../../deploy/depl
 import { deploymentView, type App } from "../app.ts";
 import { errMessage } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
-import { isObj, strictPostureRefuses } from "./shared.ts";
+import { isObj } from "./shared.ts";
 import { parseScopeId, type Permission } from "../../types.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import { livePersonCapability, resolveShareTarget as resolveShareTargetGrammar } from "../artifact-share.ts";
@@ -62,7 +62,6 @@ export async function getDeploymentShares(ctx: ApiCtx): Promise<void> {
 
 export async function shareDeployment(ctx: ApiCtx): Promise<void> {
   const { res, app, params, body } = ctx;
-  if (await strictPostureRefuses(ctx)) return;
   const principalId = ctx.capability?.actorId ?? ctx.actor?.p;
   if (!principalId)
     return sendJson(res, 403, {

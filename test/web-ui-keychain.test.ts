@@ -62,20 +62,3 @@ test("a signed-in person adds, lists and removes only their own keychain entries
   assert.equal((await built.keychain!.listByOwner("alice")).length, 0);
   assert.equal((await fetch(`${base}/api/keychain/grants/missing/revoke`, as(alice, "POST", {}))).status, 404);
 });
-
-test("a person whose own scope is strict keeps today's refusal of keychain and sharing writes from the browser", async (t) => {
-  const { base, built } = await core(t);
-  await built.config.setSecurityPosture("personal:alice", "strict");
-  const alice = browserSessionCookie("alice");
-  const refused = { error: "forbidden", message: "Strict posture blocks direct control-plane mutations" };
-  const drop = await fetch(`${base}/api/keychain/drops`, as(alice, "POST", { service: "stripe", purpose: "billing" }));
-  assert.deepEqual([drop.status, await drop.json()], [403, refused]);
-  const revoke = await fetch(`${base}/api/keychain/grants/missing/revoke`, as(alice, "POST", {}));
-  assert.deepEqual([revoke.status, await revoke.json()], [403, refused]);
-  const share = await fetch(
-    `${base}/api/deployments/missing/share`,
-    as(alice, "POST", { scope: "org", access: "view" }),
-  );
-  assert.deepEqual([share.status, await share.json()], [403, refused]);
-  assert.equal((await fetch(`${base}/api/keychain/overview`, as(alice))).status, 200);
-});

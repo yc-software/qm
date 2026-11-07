@@ -14,7 +14,7 @@ import { sendJson } from "../http.ts";
 import { normalizeInboundExpiresAt } from "../expiry.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import type { CapabilityClaims } from "../../auth/capability-token.ts";
-import { audit, personalCapability, resolveCapabilityDestination, strictPostureRefuses } from "./shared.ts";
+import { audit, personalCapability, resolveCapabilityDestination } from "./shared.ts";
 import { swallowAs } from "../../util/errors.ts";
 import { cronIdOf } from "../../sessions/session-store.ts";
 import { connectorHostLabel } from "../../connectors/oauth.ts";
@@ -73,7 +73,6 @@ const keychainRoute =
   ) =>
   async (ctx: ApiCtx): Promise<void> => {
     const { res, deps } = ctx;
-    if (signedInPerson && (await strictPostureRefuses(ctx))) return;
     const capability = signedInPerson ? personalCapability(ctx) : ctx.capability;
     if (!deps.keychain)
       return sendJson(res, 503, {
