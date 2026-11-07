@@ -2073,41 +2073,6 @@ const apiRoutes: readonly WebRoute[] = [
   },
   {
     method: "GET",
-    path: "/api/sessions/:id",
-    handle: async (c) => {
-      const { res, url, user } = c;
-      const id = c.params.id!;
-      const qs = new URLSearchParams({ viewer: user });
-      for (const p of ["tailTurns", "sinceSeq", "beforeSeq"] as const) {
-        const v = url.searchParams.get(p);
-        if (v !== null) qs.set(p, v);
-      }
-      const cancel = new AbortController();
-      const onClose = () => cancel.abort();
-      res.once("close", onClose);
-      try {
-        const portalTok = portalTokenStore.getStore();
-        return relay(
-          res,
-          await fetchCoreText({
-            origin: CORE,
-            secret: CORE_SIGNING_SECRET,
-            method: "GET",
-            path: `/v1/sessions/${encodeURIComponent(id)}?${qs.toString()}`,
-            headers: portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : undefined,
-            signal: AbortSignal.any([cancel.signal, AbortSignal.timeout(30_000)]),
-            retrySafeRead: true,
-          }),
-        );
-      } catch (error) {
-        if (!cancel.signal.aborted) throw error;
-      } finally {
-        res.off("close", onClose);
-      }
-    },
-  },
-  {
-    method: "GET",
     path: "/api/files/:id/content",
     handle: serveFileContent,
   },
@@ -3084,21 +3049,6 @@ const apiRoutes: readonly WebRoute[] = [
         void 0;
       }
       return json(res, 200, { crons, visible });
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/crons/:id/runs",
-    handle: async (c) => {
-      const { res, user } = c;
-      const id = c.params.id!;
-      return relay(
-        res,
-        await coreFetch(
-          "GET",
-          `/v1/crons/${encodeURIComponent(id)}/runs?principalId=${encodeURIComponent(user)}&limit=20`,
-        ),
-      );
     },
   },
   {

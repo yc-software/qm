@@ -111,6 +111,11 @@ test("a channel member can continue a teammate's shared web thread; outsiders an
   assert.ok(aliceTurn.status < 300, `alice's turn should be accepted (got ${aliceTurn.status})`);
   const session = await waitForSession("alice", "web:alice:s1");
   assert.equal(session.scopeId, "channel:C2");
+  const transcript = `${coreBase}/api/sessions/${encodeURIComponent(session.id)}?tailTurns=1`;
+  const aliceRead = await fetch(transcript, asUser("alice"));
+  assert.equal(aliceRead.status, 200);
+  assert.ok(Array.isArray(((await aliceRead.json()) as { items?: unknown }).items));
+  assert.equal((await fetch(transcript, asUser("mallory"))).status, 404);
 
   const bobTurn = await fetch(
     `${webBase}/api/turn`,

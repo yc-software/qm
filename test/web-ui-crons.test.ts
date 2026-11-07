@@ -13,17 +13,20 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 
 const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "webui-cron-")) }));
 const core = createServer(built.app, {
+  ...browserSessionDeps,
   replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
   signingSecret: SECRET,
   scheduler: built.scheduler,
 });
 core.listen(0);
 const corePort = (core.address() as AddressInfo).port;
+const coreBase = `http://localhost:${corePort}`;
 
 process.env.CORE_API_URL = `http://localhost:${corePort}`;
 process.env.CORE_SIGNING_SECRET = SECRET;
@@ -43,7 +46,7 @@ function asUser(user: string, init: RequestInit = {}): RequestInit {
     ...init,
     headers: {
       "content-type": "application/json",
-      cookie: `webuiuser=${encodeURIComponent(user)}`,
+      cookie: `webuiuser=${encodeURIComponent(user)}; ${browserSessionCookie(user)}`,
       [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: user, exp: Date.now() + 60_000 }, SECRET),
       ...init.headers,
     },
@@ -146,19 +149,27 @@ test("retained cron runs are private to people who can manage the cron", async (
     createdBy: "run-owner",
     ownerScopeId: "personal:run-owner",
   });
-  await built.crons.recordFire(cron.id, {
-    fireKey: "private-fire",
-    threadRef: "cron:private-fire",
-    firedAt: Date.now(),
-    status: "ok",
-    reply: "private result",
-    sessionId: "private-session",
-  });
+  const firedAt = Date.now();
+  for (let i = 0; i < 21; i++)
+    await built.crons.recordFire(cron.id, {
+      fireKey: `private-fire-${i}`,
+      threadRef: `cron:private-fire-${i}`,
+      firedAt: firedAt + i,
+      status: "ok",
+      reply: `private result ${i}`,
+      sessionId: "private-session",
+    });
 
-  const owner = await fetch(`${webBase}/api/crons/${cron.id}/runs`, asUser("run-owner"));
+  type Runs = { runs: Array<{ reply?: string }>; total: number };
+  const owner = await fetch(`${coreBase}/api/crons/${cron.id}/runs`, asUser("run-owner"));
   assert.equal(owner.status, 200);
-  assert.equal(((await owner.json()) as { runs: Array<{ reply?: string }> }).runs[0]?.reply, "private result");
-  assert.equal((await fetch(`${webBase}/api/crons/${cron.id}/runs`, asUser("other-user"))).status, 404);
+  const page = (await owner.json()) as Runs;
+  assert.deepEqual([page.runs.length, page.total, page.runs[0]?.reply], [20, 21, "private result 1"]);
+  const all = (await (
+    await fetch(`${coreBase}/api/crons/${cron.id}/runs?limit=50`, asUser("run-owner"))
+  ).json()) as Runs;
+  assert.equal(all.runs.length, 21);
+  assert.equal((await fetch(`${coreBase}/api/crons/${cron.id}/runs`, asUser("other-user"))).status, 404);
 
   await built.app.deleteCron(cron.id);
 });

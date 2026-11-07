@@ -318,22 +318,24 @@ async function runCronNow(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { ok: true, fireKey: result.fireKey });
 }
 
+const CRON_RUN_PAGE = 20;
+
 async function cronRuns(ctx: ApiCtx): Promise<void> {
   const { res, url, capability, app } = ctx;
   const id = ctx.params.id!;
   const rawLimit = url.searchParams.get("limit");
-  const limit = rawLimit === null ? undefined : Number(rawLimit);
+  const limit = rawLimit === null ? CRON_RUN_PAGE : Number(rawLimit);
   if (capability) {
-    const r = await ctx.deps.control.getCronRuns(id, limit !== undefined ? { limit } : {}, capability);
+    const r = await ctx.deps.control.getCronRuns(id, { limit }, capability);
     if (!r.ok) return sendJson(res, CRON_ERROR_STATUS[r.code] ?? 400, { error: r.code, message: r.message });
     return sendJson(res, 200, { cron: r.cron, runs: r.runs, total: r.total });
   }
   const cron = await gateSourceCron(ctx, id);
   if (!cron) return;
-  if (limit !== undefined && (!Number.isInteger(limit) || limit < 1)) {
+  if (!Number.isInteger(limit) || limit < 1) {
     return sendJson(res, 400, { error: "bad_request", message: "limit must be a positive integer" });
   }
-  const { runs, total } = await app.listCronFires(id, limit !== undefined ? { limit } : {});
+  const { runs, total } = await app.listCronFires(id, { limit });
   return sendJson(res, 200, { cron, runs, total });
 }
 
@@ -457,7 +459,7 @@ export const cronRoutes: ReadonlyArray<Route<ApiCtx>> = [
     { method: "POST", path: "/v1/crons/:id/disable", auth: "either", handle: disableCron },
     { method: "POST", path: "/v1/crons/:id/destination", auth: "either", handle: retargetCron },
     { method: "POST", path: "/v1/crons/:id/run", auth: "either", handle: runCronNow },
-    { method: "GET", path: "/v1/crons/:id/runs", auth: "either", handle: cronRuns },
+    { method: "GET", path: "/v1/crons/:id/runs", browser: true, auth: "either", handle: cronRuns },
     {
       match: (m, p) =>
         p.startsWith("/v1/crons/") &&
