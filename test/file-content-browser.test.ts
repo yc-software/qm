@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { createServer as createHttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { Readable } from "node:stream";
+import pg from "pg";
 import { createServer } from "../src/api/server.ts";
 import type { ServerDeps } from "../src/api/deps.ts";
 import { fileArtifactId } from "../src/files/file-artifact-store.ts";
@@ -110,12 +111,15 @@ test("inert types (PDF) are served without a CSP sandbox so the browser viewer r
   assert.equal(r.headers.get("x-content-type-options"), "nosniff");
 });
 
-test("every non-PDF type is sandboxed, and a mimetype naming several types is served as an opaque download", async (t) => {
+test("every non-PDF type is sandboxed, including a stored mimetype that names several types", async (t) => {
   const base = await frontDoor(t);
   const image = await fetch(`${base}/api/files/${ids.png}/content`, asAlice);
   assert.match(image.headers.get("content-security-policy") ?? "", /^sandbox\b/);
+  const pool = new pg.Pool({ connectionString: config.databaseUrl });
+  await pool.query("UPDATE file_artifacts SET mimetype = 'text/plain, text/html' WHERE id = $1", [ids.smuggled]);
+  await pool.end();
   const smuggled = await fetch(`${base}/api/files/${ids.smuggled}/content`, asAlice);
-  assert.equal(smuggled.headers.get("content-type"), "application/octet-stream");
+  assert.equal(smuggled.headers.get("content-type"), "text/plain, text/html; charset=utf-8");
   assert.match(smuggled.headers.get("content-security-policy") ?? "", /^sandbox\b/);
 });
 
