@@ -15,7 +15,7 @@ fi
 worktree=$(mktemp -d)
 cleanup() { git worktree remove --force "$worktree" >/dev/null 2>&1 || rm -rf "$worktree"; }
 trap cleanup EXIT
-git fetch --quiet --depth 1 origin "refs/tags/$base:refs/tags/$base" 2>/dev/null || true
+git rev-parse --verify --quiet "refs/tags/$base" >/dev/null || git fetch --quiet --depth 1 origin "refs/tags/$base:refs/tags/$base"
 git worktree add --quiet --detach "$worktree" "$base"
 
 secret() { node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("base64url"))'; }
