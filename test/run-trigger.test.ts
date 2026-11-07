@@ -367,16 +367,16 @@ describe("runTrigger: a turn abandoned while still queued leaves the fire retrya
         owner: "U1",
         ownerScopeId: scopeId("channel", "C1"),
         input: "report back",
-        fireKey: "webhook:w8:d1",
-        surface: "webhook",
-        threadRef: "webhook:w8:d1",
+        fireKey: "cron:c8:manual:1",
+        surface: "cron",
+        threadRef: "cron:c8:manual:1",
         destination: toChannel,
         redrivesHandOff: true,
         errorNotice: (s: string) => `⚠️ could not run: ${s}`,
       }),
-      (e: unknown) => e instanceof TurnHandedOff && e.runId === "r1",
+      (e: unknown) => e instanceof TurnHandedOff && /turn r1 was handed to a queue worker/.test(e.message),
     );
-    assert.equal(await d.idempotency.committed("webhook:w8:d1"), false);
+    assert.equal(await d.idempotency.committed("cron:c8:manual:1"), false);
     assert.deepEqual(await d.deliveries.pending("slack"), []);
   });
 });

@@ -46,11 +46,9 @@ export class TransientTurnFailure extends Error {
 }
 
 export class TurnHandedOff extends TransientTurnFailure {
-  readonly runId: string | undefined;
   constructor(runId: string | undefined) {
     super(`turn ${runId ?? ""} was handed to a queue worker at shutdown; its fire will be re-driven`);
     this.name = "TurnHandedOff";
-    this.runId = runId;
   }
 }
 

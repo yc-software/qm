@@ -79,7 +79,6 @@ export interface Webhook extends TriggerBase {
   filters?: WebhookFilter[];
   lastDeliveryId?: string;
   lastError?: string;
-  handedOff?: Record<string, string>;
 }
 
 export interface Monitor extends TriggerBase {

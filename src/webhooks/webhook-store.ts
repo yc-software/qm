@@ -38,7 +38,6 @@ export interface WebhookStore {
   setEnabled(id: string, enabled: boolean): Promise<void>;
   update(id: string, patch: { action: string }): Promise<Webhook | null>;
   recordFire(id: string, info: { at: number; deliveryId?: string; error?: string }): Promise<void>;
-  setHandedOff(id: string, deliveryId: string, runId: string | undefined): Promise<void>;
 }
 
 export function createWebhookStore(backing: DurableMap<Webhook>, history: DurableMap<WebhookHistory>): WebhookStore {
@@ -109,14 +108,6 @@ export function createWebhookStore(backing: DurableMap<Webhook>, history: Durabl
         lastFiredAt: info.at,
         ...(info.deliveryId ? { lastDeliveryId: info.deliveryId } : {}),
         lastError: info.error,
-      });
-    },
-    async setHandedOff(id, deliveryId, runId) {
-      await backing.update(id, (wh) => {
-        const handedOff = { ...wh.handedOff };
-        if (runId) handedOff[deliveryId] = runId;
-        else delete handedOff[deliveryId];
-        return { ...wh, handedOff };
       });
     },
   };
