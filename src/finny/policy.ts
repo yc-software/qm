@@ -3,8 +3,10 @@ import {
   FINNY_CHECK_IDS,
   type FinnyChangeKind,
   type FinnyCheckId,
+  type FinnyDeterministicEvidenceAuthority,
   type FinnyEvaluatorRef,
   type FinnyPolicySnapshot,
+  type FinnyVerdict,
 } from "./types.ts";
 
 export { FINNY_CHANGE_KINDS, FINNY_CHECK_IDS } from "./types.ts";
@@ -27,6 +29,44 @@ export function assertFinnyEvaluatorRef(evaluator: FinnyEvaluatorRef): void {
     evaluator.configurationDigest,
   ]) {
     if (typeof value !== "string" || !value.trim()) throw new Error("Finny evaluator authority is invalid");
+  }
+}
+
+const deterministicBlockCodes: Partial<Record<FinnyCheckId, string>> = {
+  "formula.recalculate": "FORMULA_MISMATCH",
+  "summary.crossfoot": "CROSSFOOT_MISMATCH",
+  "artifact.structure": "STRUCTURE_INVALID",
+};
+
+export function assertFinnyApprovedEvaluatorRef(evaluator: FinnyEvaluatorRef): void {
+  assertFinnyEvaluatorRef(evaluator);
+  if (
+    evaluator.contractVersion !== "finny.spreadsheet-worker.v2" ||
+    !/^[a-f0-9]{64}$/.test(evaluator.buildDigest) ||
+    !/^[a-f0-9]{64}$/.test(evaluator.configurationDigest)
+  ) {
+    throw new Error("Finny approved evaluator authority is invalid");
+  }
+}
+
+export function assertFinnyDeterministicAuthority(
+  authority: FinnyDeterministicEvidenceAuthority | undefined,
+  checkId: FinnyCheckId,
+  verdict: FinnyVerdict,
+  evaluator: FinnyEvaluatorRef,
+): void {
+  const expectedBlockCode = deterministicBlockCodes[checkId];
+  if (!expectedBlockCode) {
+    if (authority !== undefined) throw new Error("Finny non-deterministic evidence cannot claim evaluator authority");
+    return;
+  }
+  if (
+    !authority ||
+    authority.reasonSchemaVersion !== "finny.spreadsheet-worker.v2" ||
+    JSON.stringify(authority.evaluator) !== JSON.stringify(evaluator) ||
+    authority.reasonCode !== (verdict === "pass" ? "PASS" : expectedBlockCode)
+  ) {
+    throw new Error("Finny deterministic evidence authority is invalid");
   }
 }
 
@@ -75,7 +115,7 @@ export function assertFinnyPolicy(policy: FinnyPolicySnapshot): void {
 }
 
 export function initialFinnyPolicy(evaluator: FinnyEvaluatorRef): FinnyPolicySnapshot {
-  assertFinnyEvaluatorRef(evaluator);
+  assertFinnyApprovedEvaluatorRef(evaluator);
   return {
     policyVersion: FINNY_POLICY_VERSION,
     evaluator: { ...evaluator },
@@ -115,7 +155,7 @@ export function activateFinnyEvaluator(
   evaluator: FinnyEvaluatorRef,
 ): FinnyPolicySnapshot {
   assertFinnyPolicy(current);
-  assertFinnyEvaluatorRef(evaluator);
+  assertFinnyApprovedEvaluatorRef(evaluator);
   const deterministic = new Set<FinnyCheckId>(FINNY_DETERMINISTIC_CHECK_IDS);
   return {
     policyVersion: FINNY_POLICY_VERSION,

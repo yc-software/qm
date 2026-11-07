@@ -1,4 +1,5 @@
 import { createPostgresFinnyStore } from "./finny/postgres-store.ts";
+import { reconcileFinnyEvaluatorCorrections } from "./finny/evaluator-correction.ts";
 import {
   createPersistedDeterministicSpreadsheetWorker,
   type SpreadsheetCalculationEngine,
@@ -2177,7 +2178,6 @@ export function buildApp(
             resolveFinnyEvidenceFile(files, input, {
               maxArtifactBytes: config.finny!.spreadsheetEngine.maxArtifactBytes,
               maxEvidenceBytes: config.finny!.maxEvidenceBytes,
-              evaluator: config.finny!.spreadsheetEngine.evaluator,
             }),
         },
         artifactBinding: {
@@ -2227,6 +2227,10 @@ export function buildApp(
     let recoveryRequested = false;
     let recoveryRunning: Promise<void> | undefined;
     const reconcileRuntime = async () => {
+      await reconcileFinnyEvaluatorCorrections({
+        jobs: finnyJobs,
+        approvedEvaluator: config.finny!.spreadsheetEngine.evaluator,
+      });
       await reconcileFinnyRuntimeRecoveries({
         recoveries: () => finnyRuntime.pendingRecoveries(),
         coordinatorFor: async (scopeId, jobId) => {

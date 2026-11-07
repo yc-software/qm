@@ -67,6 +67,12 @@ export interface FinnyJob {
   updatedAt: number;
 }
 
+export interface FinnyDeterministicEvidenceAuthority {
+  evaluator: FinnyEvaluatorRef;
+  reasonSchemaVersion: "finny.spreadsheet-worker.v2";
+  reasonCode: string;
+}
+
 export interface FinnyAttestation {
   seq: number;
   id: string;
@@ -78,6 +84,7 @@ export interface FinnyAttestation {
   artifactDigest: string;
   issuerPrincipalId: string;
   issuerRunId: string;
+  deterministicAuthority?: FinnyDeterministicEvidenceAuthority;
   idempotencyKey: string;
   createdAt: number;
 }
@@ -164,6 +171,7 @@ export interface FinnyJobEventPayloads {
     evidenceDigest: string;
     issuerPrincipalId: string;
     issuerRunId: string;
+    deterministicAuthority?: FinnyDeterministicEvidenceAuthority;
     findings: FinnyAuditFinding[];
     findingPolicy: FinnyFindingPolicy;
     changeKinds: FinnyChangeKind[];
@@ -175,6 +183,7 @@ export interface FinnyJobEventPayloads {
     evidenceDigest: string;
     issuerPrincipalId: string;
     issuerRunId: string;
+    deterministicAuthority?: FinnyDeterministicEvidenceAuthority;
   };
   rework_requested: {
     blockedEventSequence: number;

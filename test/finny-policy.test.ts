@@ -97,7 +97,12 @@ test("blocked check invalidation is selected by Core", () => {
 
 test("evaluator activation advances only Core deterministic generations", () => {
   const before = initialFinnyPolicy(TEST_FINNY_EVALUATOR);
-  const evaluator = { ...before.evaluator, revision: "next", buildDigest: "sha256:next" };
+  const evaluator = {
+    ...before.evaluator,
+    revision: "next",
+    buildDigest: "2".repeat(64),
+    configurationDigest: "3".repeat(64),
+  };
   const after = activateFinnyEvaluator(before, evaluator);
   assert.deepEqual(after.evaluator, evaluator);
   assert.deepEqual(changedChecks(before, after), [...FINNY_DETERMINISTIC_CHECK_IDS]);

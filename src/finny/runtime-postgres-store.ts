@@ -660,6 +660,12 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
                        AND transition.event_index=1
                        AND transition.event_type='rework_requested'
                        AND NOT EXISTS (
+                         SELECT 1 FROM finny_job_events AS cancelled
+                          WHERE cancelled.job_id=actions.job_id
+                            AND cancelled.event_type='rework_cancelled'
+                            AND (cancelled.payload->>'reworkEventSequence')::bigint=transition.seq
+                       )
+                       AND NOT EXISTS (
                          SELECT 1 FROM finny_job_events AS artifact
                           WHERE artifact.job_id=actions.job_id
                             AND artifact.seq>transition.seq
@@ -727,6 +733,36 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
                 )
            )`
         : "";
+      const staleReverificationBinding = `
+        OR NOT EXISTS (
+          SELECT 1 FROM finny_runtime_bindings AS current_auditor
+           WHERE current_auditor.job_id=jobs.id
+             AND current_auditor.scope_id=jobs.scope_id
+             AND current_auditor.role='auditor'
+             AND current_auditor.active=TRUE
+        )
+        OR EXISTS (
+          SELECT 1 FROM finny_runtime_bindings AS expired_auditor
+           WHERE expired_auditor.job_id=jobs.id
+             AND expired_auditor.scope_id=jobs.scope_id
+             AND expired_auditor.role='auditor'
+             AND expired_auditor.active=TRUE
+             AND expired_auditor.expires_at IS NOT NULL
+             AND expired_auditor.expires_at <= ${Date.now()}
+        )
+        ${
+          hasRuns
+            ? `OR EXISTS (
+                 SELECT 1 FROM finny_runtime_bindings AS orphaned_auditor
+                 LEFT JOIN runs AS orphaned_run ON orphaned_run.id=orphaned_auditor.run_id
+                  WHERE orphaned_auditor.job_id=jobs.id
+                    AND orphaned_auditor.scope_id=jobs.scope_id
+                    AND orphaned_auditor.role='auditor'
+                    AND orphaned_auditor.active=TRUE
+                    AND orphaned_run.id IS NULL
+               )`
+            : ""
+        }`;
       const reopened = await q(
         `SELECT jobs.scope_id,jobs.id AS job_id,events.idempotency_key
            FROM finny_job_events AS events
@@ -758,6 +794,7 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
                    AND dispatch.idempotency_key LIKE events.idempotency_key || ':auditor-reverify:%'
               )
               ${terminalReverificationRetry}
+              ${staleReverificationBinding}
             )
           ORDER BY events.seq`,
       );

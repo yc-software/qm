@@ -1,4 +1,4 @@
-import { TEST_FINNY_EVALUATOR } from "./support/finny-fixture.ts";
+import { TEST_FINNY_EVALUATOR, testDeterministicAuthority } from "./support/finny-fixture.ts";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
@@ -81,6 +81,7 @@ async function attest(
     artifactDigest: job.artifactDigest,
     issuerPrincipalId: "U-auditor",
     issuerRunId: "run-auditor-1",
+    ...testDeterministicAuthority(checkId, verdict, job.policy.evaluator),
     idempotencyKey: randomUUID(),
   });
 }

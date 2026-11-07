@@ -1,11 +1,36 @@
-import { TEST_FINNY_EVALUATOR } from "./support/finny-fixture.ts";
+import { TEST_FINNY_EVALUATOR, testDeterministicAuthority } from "./support/finny-fixture.ts";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import { initialFinnyPolicy } from "../src/finny/policy.ts";
 import { FINNY_CHECK_IDS, type FinnyJobEvent } from "../src/finny/types.ts";
-import { createPostgresFinnyStore } from "../src/finny/postgres-store.ts";
+import { createPostgresFinnyStore as createRawPostgresFinnyStore } from "../src/finny/postgres-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+
+function createPostgresFinnyStore(connectionString: string) {
+  const store = createRawPostgresFinnyStore(connectionString);
+  return {
+    ...store,
+    recordAttestation(input: Parameters<typeof store.recordAttestation>[0]) {
+      return store.recordAttestation({
+        ...input,
+        ...testDeterministicAuthority(input.checkId, input.verdict, TEST_FINNY_EVALUATOR),
+      });
+    },
+    recordAuditPassed(input: Parameters<typeof store.recordAuditPassed>[0]) {
+      return store.recordAuditPassed({
+        ...input,
+        ...testDeterministicAuthority(input.checkId, "pass", TEST_FINNY_EVALUATOR),
+      });
+    },
+    recordAuditBlock(input: Parameters<typeof store.recordAuditBlock>[0]) {
+      return store.recordAuditBlock({
+        ...input,
+        ...testDeterministicAuthority(input.checkId, "block", TEST_FINNY_EVALUATOR),
+      });
+    },
+  };
+}
 
 const findingPolicy = {
   id: "finny-r5-test",

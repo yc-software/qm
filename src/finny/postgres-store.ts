@@ -12,6 +12,8 @@ import {
 import {
   FINNY_DETERMINISTIC_CHECK_IDS,
   activateFinnyEvaluator,
+  assertFinnyApprovedEvaluatorRef,
+  assertFinnyDeterministicAuthority,
   assertFinnyEvaluatorRef,
   assertFinnyPolicy,
   reviseFinnyPolicy,
@@ -212,6 +214,12 @@ const EVALUATOR_AUTHORITY_SCHEMA = [
    ))`,
 ];
 
+const DETERMINISTIC_ATTESTATION_SCHEMA = [
+  `ALTER TABLE finny_attestations ADD COLUMN IF NOT EXISTS deterministic_authority JSONB`,
+  `ALTER TABLE finny_attestations ADD CONSTRAINT finny_attestations_deterministic_authority_object
+     CHECK (deterministic_authority IS NULL OR jsonb_typeof(deterministic_authority) = 'object')`,
+];
+
 function rowToClarification(row: Record<string, unknown>): FinnyClarificationRequest {
   return {
     requestId: row.request_id as string,
@@ -294,6 +302,9 @@ function rowToAttestation(row: Record<string, unknown>): FinnyAttestation {
     artifactDigest: row.artifact_digest as string,
     issuerPrincipalId: row.issuer_principal_id as string,
     issuerRunId: row.issuer_run_id as string,
+    ...(row.deterministic_authority !== null
+      ? { deterministicAuthority: row.deterministic_authority as FinnyAttestation["deterministicAuthority"] }
+      : {}),
     idempotencyKey: row.idempotency_key as string,
     createdAt: Number(row.created_at),
   };
@@ -365,7 +376,8 @@ function sameAttestation(row: FinnyAttestation, input: RecordFinnyAttestationInp
     row.evidenceDigest === input.evidenceDigest &&
     row.artifactDigest === input.artifactDigest &&
     row.issuerPrincipalId === input.issuerPrincipalId &&
-    row.issuerRunId === input.issuerRunId
+    row.issuerRunId === input.issuerRunId &&
+    sameValue(row.deterministicAuthority, input.deterministicAuthority)
   );
 }
 
@@ -385,6 +397,7 @@ function auditAttestationInput(
     artifactDigest: input.artifactDigest,
     issuerPrincipalId: input.issuerPrincipalId,
     issuerRunId: input.issuerRunId,
+    ...(input.deterministicAuthority ? { deterministicAuthority: input.deterministicAuthority } : {}),
     idempotencyKey: `finny-audit-${digest}`,
   };
 }
@@ -409,8 +422,8 @@ async function insertAuditAttestation(
   const inserted = await db.query(
     `INSERT INTO finny_attestations(
       id, job_id, check_id, generation, verdict, evidence_digest, artifact_digest,
-      issuer_principal_id, issuer_run_id, idempotency_key, created_at
-    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+      issuer_principal_id, issuer_run_id, deterministic_authority, idempotency_key, created_at
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
     ON CONFLICT (idempotency_key) DO NOTHING RETURNING *`,
     [
       input.id,
@@ -422,6 +435,7 @@ async function insertAuditAttestation(
       input.artifactDigest,
       input.issuerPrincipalId,
       input.issuerRunId,
+      input.deterministicAuthority ? JSON.stringify(input.deterministicAuthority) : null,
       input.idempotencyKey,
       createdAt,
     ],
@@ -449,10 +463,12 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
     { id: "finny/store/0005-approval-readiness", statements: APPROVAL_READINESS_SCHEMA },
     { id: "finny/store/0006-approval-readiness-repair", statements: APPROVAL_READINESS_REPAIR_SCHEMA },
     { id: "finny/store/0007-evaluator-authority", statements: EVALUATOR_AUTHORITY_SCHEMA },
+    { id: "finny/store/0008-deterministic-attestation", statements: DETERMINISTIC_ATTESTATION_SCHEMA },
   ]);
   return {
     async createJob(input: CreateFinnyJobInput) {
       assertFinnyPolicy(input.policy);
+      assertFinnyApprovedEvaluatorRef(input.policy.evaluator);
       assertFinnyFindingPolicy(input.findingPolicy);
       const plan = validateFinnyPlanPresentation(input.plan);
       const planDigest = canonicalFinnyPlanDigest(plan);
@@ -731,13 +747,14 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
         const requiredGeneration = policy.requiredGenerations[input.checkId];
         if (requiredGeneration === undefined) throw new Error("Finny attestation is not for a required check");
         if (input.generation !== requiredGeneration) throw new Error("Finny attestation generation is not current");
+        assertFinnyDeterministicAuthority(input.deterministicAuthority, input.checkId, input.verdict, policy.evaluator);
         if (job.artifact_digest !== input.artifactDigest) throw new Error("Finny attestation artifact is not current");
         const now = Date.now();
         const inserted = await db.query(
           `INSERT INTO finny_attestations(
             id, job_id, check_id, generation, verdict, evidence_digest, artifact_digest,
-            issuer_principal_id, issuer_run_id, idempotency_key, created_at
-          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+            issuer_principal_id, issuer_run_id, deterministic_authority, idempotency_key, created_at
+          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
           ON CONFLICT (idempotency_key) DO NOTHING
           RETURNING *`,
           [
@@ -750,6 +767,7 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
             input.artifactDigest,
             input.issuerPrincipalId,
             input.issuerRunId,
+            input.deterministicAuthority ? JSON.stringify(input.deterministicAuthority) : null,
             input.idempotencyKey,
             now,
           ],
@@ -857,6 +875,7 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
           evidenceDigest: input.evidenceDigest,
           issuerPrincipalId: input.issuerPrincipalId,
           issuerRunId: input.issuerRunId,
+          ...(input.deterministicAuthority ? { deterministicAuthority: input.deterministicAuthority } : {}),
         };
         const attestationInput = auditAttestationInput(input, "pass");
         const existing = await eventsForIdempotency(db, input.idempotencyKey);
@@ -885,6 +904,7 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
           requiredGenerations: row.required_generations as Record<FinnyCheckId, number>,
         };
         assertCurrentAuditEvent(policy, input.checkId, input.generation);
+        assertFinnyDeterministicAuthority(input.deterministicAuthority, input.checkId, "pass", policy.evaluator);
         if (row.artifact_digest !== input.artifactDigest) throw new Error("Finny audit artifact is not current");
         const now = Date.now();
         const attestation = await insertAuditAttestation(db, attestationInput, now);
@@ -911,6 +931,7 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
           evidenceDigest: input.evidenceDigest,
           issuerPrincipalId: input.issuerPrincipalId,
           issuerRunId: input.issuerRunId,
+          ...(input.deterministicAuthority ? { deterministicAuthority: input.deterministicAuthority } : {}),
           findings: input.findings,
           findingPolicy: row.finding_policy as FinnyFindingPolicy,
           changeKinds: input.changeKinds,
@@ -948,6 +969,7 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
           requiredGenerations: row.required_generations as Record<FinnyCheckId, number>,
         };
         assertCurrentAuditEvent(policy, input.checkId, input.generation);
+        assertFinnyDeterministicAuthority(input.deterministicAuthority, input.checkId, "block", policy.evaluator);
         if (row.finding_policy === null) throw new Error("Finny finding policy is not configured");
         assertFinnyAuditFindings(input.findings, row.finding_policy as FinnyFindingPolicy);
         const revised = reviseFinnyPolicy(policy, input.changeKinds);
@@ -998,12 +1020,40 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
         return { events: [blocked, escalated], job: rowToJob(updated.rows[0]), deduped: false };
       });
     },
+    async evaluatorCorrectionCandidates(approvedEvaluator: FinnyEvaluatorRef) {
+      assertFinnyApprovedEvaluatorRef(approvedEvaluator);
+      const rows = await q(
+        `SELECT jobs.* FROM finny_jobs AS jobs
+          WHERE jobs.finalized_at IS NULL
+            AND jobs.artifact_digest IS NOT NULL
+            AND jobs.provisional_revision IS NOT NULL
+            AND jobs.unresolved_escalation_seq IS NULL
+            AND jobs.evaluator_ref <> $1::jsonb
+            AND (
+              jobs.pending_rework_seq IS NULL
+              OR EXISTS (
+                SELECT 1 FROM finny_job_events AS rework
+                JOIN finny_job_events AS blocked
+                  ON blocked.job_id=rework.job_id
+                 AND blocked.seq=(rework.payload->>'blockedEventSequence')::bigint
+                 AND blocked.event_type='audit_blocked'
+                 AND blocked.payload->>'checkId' IN ('formula.recalculate','summary.crossfoot','artifact.structure')
+               WHERE rework.job_id=jobs.id
+                 AND rework.seq=jobs.pending_rework_seq
+                 AND rework.event_type='rework_requested'
+              )
+            )
+          ORDER BY jobs.created_at,jobs.id`,
+        [JSON.stringify(approvedEvaluator)],
+      );
+      return rows.map(rowToJob);
+    },
     async recordEvaluatorCorrection(input: RecordFinnyEvaluatorCorrectionInput) {
       return withPgTransaction(await pool(), async (db) => {
         const row = await lockedJob(db, input.scopeId, input.jobId);
         assertNonEmpty(input.idempotencyKey, "event idempotency key");
         assertFinnyEvaluatorRef(input.fromEvaluator);
-        assertFinnyEvaluatorRef(input.toEvaluator);
+        assertFinnyApprovedEvaluatorRef(input.toEvaluator);
         if (sameValue(input.fromEvaluator, input.toEvaluator)) {
           throw new Error("Finny evaluator correction must activate a new evaluator");
         }
@@ -1196,6 +1246,12 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
             throw new Error(`Finny finalization has a stale generation for ${checkId}`);
           }
           if (attestation.verdict === "block") throw new Error(`Finny finalization has a BLOCK for ${checkId}`);
+          assertFinnyDeterministicAuthority(
+            attestation.deterministicAuthority,
+            checkId,
+            attestation.verdict,
+            policy.evaluator,
+          );
           if (attestation.artifactDigest !== row.artifact_digest) {
             throw new Error(`Finny finalization has stale artifact evidence for ${checkId}`);
           }

@@ -7,6 +7,7 @@ import type {
   FinnyClarificationDecision,
   FinnyClarificationOption,
   FinnyClarificationRequest,
+  FinnyDeterministicEvidenceAuthority,
   FinnyJob,
   FinnyJobEvent,
   FinnyFindingPolicy,
@@ -93,6 +94,7 @@ export interface RecordFinnyAttestationInput {
   artifactDigest: string;
   issuerPrincipalId: string;
   issuerRunId: string;
+  deterministicAuthority?: FinnyDeterministicEvidenceAuthority;
   idempotencyKey: string;
 }
 
@@ -105,6 +107,7 @@ export interface RecordFinnyAuditBlockInput {
   evidenceDigest: string;
   issuerPrincipalId: string;
   issuerRunId: string;
+  deterministicAuthority?: FinnyDeterministicEvidenceAuthority;
   findings: FinnyAuditFinding[];
   changeKinds: FinnyChangeKind[];
   resolution: { kind: "rework" } | { kind: "escalate"; reason: string };
@@ -128,6 +131,7 @@ export interface RecordFinnyAuditPassedInput {
   evidenceDigest: string;
   issuerPrincipalId: string;
   issuerRunId: string;
+  deterministicAuthority?: FinnyDeterministicEvidenceAuthority;
   idempotencyKey: string;
 }
 
@@ -174,6 +178,7 @@ export interface FinnyStore {
   recordArtifactReady(input: RecordFinnyArtifactReadyInput): Promise<FinnyEventResult<FinnyJobEvent<"artifact_ready">>>;
   recordAuditPassed(input: RecordFinnyAuditPassedInput): Promise<FinnyEventResult<FinnyJobEvent<"audit_passed">>>;
   recordAuditBlock(input: RecordFinnyAuditBlockInput): Promise<FinnyEventResult>;
+  evaluatorCorrectionCandidates(approvedEvaluator: FinnyEvaluatorRef): Promise<FinnyJob[]>;
   recordEvaluatorCorrection(input: RecordFinnyEvaluatorCorrectionInput): Promise<FinnyEventResult>;
   listEvents(scopeId: string, jobId: string, afterSequence?: number): Promise<FinnyJobEvent[]>;
   finalize(input: FinalizeFinnyInput, sign: FinnyReceiptSigner): Promise<FinnyFinalReceipt>;

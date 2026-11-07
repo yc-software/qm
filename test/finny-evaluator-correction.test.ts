@@ -3,17 +3,23 @@ import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import { FINNY_CHECK_IDS, initialFinnyPolicy } from "../src/finny/policy.ts";
 import { createPostgresFinnyStore } from "../src/finny/postgres-store.ts";
+import { reconcileFinnyEvaluatorCorrections } from "../src/finny/evaluator-correction.ts";
 import type { FinnyEvaluatorRef, FinnyJob } from "../src/finny/types.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 
 const EVALUATOR_V1: FinnyEvaluatorRef = {
   id: "spreadsheet-core",
   revision: "1",
-  buildDigest: "sha256:build-v1",
-  contractVersion: "finny-deterministic-v1",
-  configurationDigest: "sha256:config-v1",
+  buildDigest: "1".repeat(64),
+  contractVersion: "finny.spreadsheet-worker.v2",
+  configurationDigest: "2".repeat(64),
 };
-const EVALUATOR_V2: FinnyEvaluatorRef = { ...EVALUATOR_V1, revision: "2", buildDigest: "sha256:build-v2" };
+const EVALUATOR_V2: FinnyEvaluatorRef = {
+  ...EVALUATOR_V1,
+  revision: "2",
+  buildDigest: "3".repeat(64),
+  configurationDigest: "4".repeat(64),
+};
 const DETERMINISTIC = ["formula.recalculate", "summary.crossfoot", "artifact.structure"] as const;
 
 async function createJob(options: { artifact?: boolean } = { artifact: true }) {
@@ -73,6 +79,15 @@ async function pass(
     artifactDigest: job.artifactDigest!,
     issuerPrincipalId: "auditor",
     issuerRunId: randomUUID(),
+    ...(DETERMINISTIC.includes(checkId as (typeof DETERMINISTIC)[number])
+      ? {
+          deterministicAuthority: {
+            evaluator: job.policy.evaluator,
+            reasonSchemaVersion: "finny.spreadsheet-worker.v2" as const,
+            reasonCode: "PASS",
+          },
+        }
+      : {}),
     idempotencyKey: randomUUID(),
   });
 }
@@ -87,7 +102,12 @@ async function deterministicBlock(store: ReturnType<typeof createPostgresFinnySt
     evidenceDigest: "evidence:block",
     issuerPrincipalId: "auditor",
     issuerRunId: randomUUID(),
-    findings: [{ code: "FORMULA", message: "old evaluator reported a formula defect" }],
+    deterministicAuthority: {
+      evaluator: job.policy.evaluator,
+      reasonSchemaVersion: "finny.spreadsheet-worker.v2",
+      reasonCode: "FORMULA_MISMATCH",
+    },
+    findings: [{ code: "FORMULA_MISMATCH", message: "old evaluator reported a formula defect" }],
     changeKinds: ["formula"],
     resolution: { kind: "rework" },
     idempotencyKey: randomUUID(),
@@ -185,7 +205,12 @@ test("evaluator correction rejects stale authority, missing artifact, escalation
     evidenceDigest: "evidence:escalated",
     issuerPrincipalId: "auditor",
     issuerRunId: randomUUID(),
-    findings: [{ code: "FORMULA", message: "defect" }],
+    deterministicAuthority: {
+      evaluator: escalated.job.policy.evaluator,
+      reasonSchemaVersion: "finny.spreadsheet-worker.v2",
+      reasonCode: "FORMULA_MISMATCH",
+    },
+    findings: [{ code: "FORMULA_MISMATCH", message: "defect" }],
     changeKinds: ["formula"],
     resolution: { kind: "escalate", reason: "bounded retry exhausted" },
     idempotencyKey: randomUUID(),
@@ -206,4 +231,15 @@ test("a current PASS can finalize under the corrected evaluator while the old BL
   const events = await store.listEvents(job.scopeId, job.id);
   assert.ok(events.some((event) => event.type === "audit_blocked"));
   await assert.rejects(store.recordEvaluatorCorrection(correction(corrected.job)), /finalized/i);
+});
+
+test("Core activates the configured evaluator and reopens matching in-flight jobs idempotently", async () => {
+  const { store, job } = await createJob();
+  await deterministicBlock(store, job);
+  assert.equal(await reconcileFinnyEvaluatorCorrections({ jobs: store, approvedEvaluator: EVALUATOR_V2 }), 1);
+  const corrected = await store.getJob(job.scopeId, job.id);
+  assert.deepEqual(corrected?.policy.evaluator, EVALUATOR_V2);
+  assert.equal(corrected?.artifactDigest, job.artifactDigest);
+  assert.equal(corrected?.provisionalRevision, job.provisionalRevision);
+  assert.equal(await reconcileFinnyEvaluatorCorrections({ jobs: store, approvedEvaluator: EVALUATOR_V2 }), 0);
 });

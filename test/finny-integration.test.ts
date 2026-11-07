@@ -1,4 +1,3 @@
-import { TEST_FINNY_EVALUATOR } from "./support/finny-fixture.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createFinnyToolServiceFactory, finnySlackAuthority } from "../src/finny/integration.ts";
@@ -418,6 +417,7 @@ test("evidence authority derives immutable scoped file digests and verifies dete
   const artifactDigest = digestSpreadsheetArtifact(artifactBytes);
   const policy = {
     policyVersion: "finny-r5.1",
+    evaluator,
     requiredGenerations: {
       "source.completeness": 1,
       "financial.reconcile": 1,
@@ -528,7 +528,7 @@ test("evidence authority derives immutable scoped file digests and verifies dete
     provisionalRevision: "artifact-file",
     policy,
   } as FinnyJob;
-  assert.equal(
+  assert.deepEqual(
     await resolveFinnyEvidenceFile(
       files as any,
       {
@@ -540,7 +540,14 @@ test("evidence authority derives immutable scoped file digests and verifies dete
       },
       limits,
     ),
-    envelope.envelopeDigest,
+    {
+      evidenceDigest: envelope.envelopeDigest,
+      deterministicAuthority: {
+        evaluator,
+        reasonSchemaVersion: "finny.spreadsheet-worker.v2",
+        reasonCode: "PASS",
+      },
+    },
   );
 
   await assert.rejects(
@@ -558,7 +565,7 @@ test("evidence authority derives immutable scoped file digests and verifies dete
     /deterministic worker provenance/i,
   );
 
-  assert.equal(
+  assert.deepEqual(
     await resolveFinnyEvidenceFile(
       files as any,
       {
@@ -570,7 +577,7 @@ test("evidence authority derives immutable scoped file digests and verifies dete
       },
       limits,
     ),
-    createHash("sha256").update("generic evidence").digest("hex"),
+    { evidenceDigest: createHash("sha256").update("generic evidence").digest("hex") },
   );
   await assert.rejects(
     resolveFinnyEvidenceFile(
@@ -694,7 +701,7 @@ test("bound Auditor runs all current deterministic checks from one trusted evide
   const artifactBytes = new TextEncoder().encode("workbook");
   const { digestSpreadsheetArtifact } = await import("../src/finny/deterministic-spreadsheet-worker.ts");
   const { initialFinnyPolicy } = await import("../src/finny/policy.ts");
-  const policy = initialFinnyPolicy(TEST_FINNY_EVALUATOR);
+  const policy = initialFinnyPolicy(evaluator);
   const results = [
     {
       checkId: "formula.recalculate" as const,
@@ -766,7 +773,7 @@ test("deterministic BLOCK uses Core findings and stops before stale remaining re
   const artifactBytes = new TextEncoder().encode("blocked workbook");
   const { digestSpreadsheetArtifact } = await import("../src/finny/deterministic-spreadsheet-worker.ts");
   const { initialFinnyPolicy } = await import("../src/finny/policy.ts");
-  const policy = initialFinnyPolicy(TEST_FINNY_EVALUATOR);
+  const policy = initialFinnyPolicy(evaluator);
   const results = [
     {
       checkId: "formula.recalculate" as const,
@@ -821,7 +828,7 @@ test("deterministic evaluator ERROR records neither PASS nor BLOCK", async () =>
   const artifactBytes = new TextEncoder().encode("engine failure workbook");
   const { digestSpreadsheetArtifact } = await import("../src/finny/deterministic-spreadsheet-worker.ts");
   const { initialFinnyPolicy } = await import("../src/finny/policy.ts");
-  const policy = initialFinnyPolicy(TEST_FINNY_EVALUATOR);
+  const policy = initialFinnyPolicy(evaluator);
   const results = [
     {
       checkId: "formula.recalculate" as const,

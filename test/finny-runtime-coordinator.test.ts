@@ -1,4 +1,4 @@
-import { TEST_FINNY_EVALUATOR } from "./support/finny-fixture.ts";
+import { TEST_FINNY_EVALUATOR, testDeterministicAuthority } from "./support/finny-fixture.ts";
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import { test } from "node:test";
@@ -57,8 +57,11 @@ function coreRuntimeAuthority() {
       },
     },
     evidenceAuthority: {
-      async resolve(input: { evidenceFileId: string }) {
-        return input.evidenceFileId;
+      async resolve(input: { evidenceFileId: string; checkId: string; verdict: "pass" | "block" }) {
+        return {
+          evidenceDigest: input.evidenceFileId,
+          ...testDeterministicAuthority(input.checkId, input.verdict),
+        };
       },
     },
     workerPolicy: {
@@ -1041,7 +1044,10 @@ test("BLOCK retry reuses verified evidence after policy advances before dispatch
         if (input.job.policy.requiredGenerations[input.checkId] !== input.generation) {
           throw new Error("deterministic envelope generation advanced");
         }
-        return "verified-envelope-digest";
+        return {
+          evidenceDigest: "verified-envelope-digest",
+          ...testDeterministicAuthority(input.checkId, input.verdict, input.job.policy.evaluator),
+        };
       },
     },
     escalationDecision: {
@@ -1601,7 +1607,8 @@ test("evaluator correction dispatches Auditor-only reverification for the unchan
     evidenceDigest: "old-evaluator-evidence",
     issuerPrincipalId: "auditor-principal",
     issuerRunId: "auditor-run",
-    findings: [{ code: "CROSSFOOT_EVALUATION_ERROR", message: "Old evaluator rejected a supported term" }],
+    ...testDeterministicAuthority("summary.crossfoot", "block", job.policy.evaluator),
+    findings: [{ code: "CROSSFOOT_MISMATCH", message: "Old evaluator rejected a supported term" }],
     changeKinds: ["formula"],
     resolution: { kind: "rework" },
     idempotencyKey: "old-evaluator-block",
@@ -1672,4 +1679,187 @@ test("evaluator correction dispatches Auditor-only reverification for the unchan
   const corrected = await jobs.getJob(job.scopeId, job.id);
   assert.equal(corrected?.artifactDigest, "artifact-sha256");
   assert.equal(corrected?.provisionalRevision, "revision-1");
+});
+
+test("evaluator correction cancels an authorized stale BLOCK before Producer dispatch", async () => {
+  const { jobs, job, connectionString } = await approvedJob();
+  await jobs.recordArtifactReady({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    artifactDigest: "artifact-sha256",
+    provisionalRevision: "revision-1",
+    idempotencyKey: "artifact-before-cancelled-block",
+  });
+  const runtime = createPostgresFinnyRuntimeStore(connectionString);
+  await runtime.bindInitial({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    parentSessionId: "parent-session",
+    parentRunId: "parent-run",
+    parentPrincipalId: "U1",
+    producerExpiresAt: Date.now() + 60_000,
+    auditorExpiresAt: Date.now() + 60_000,
+    producerSessionId: "producer-session",
+    producerRunId: "producer-run",
+    auditorSessionId: "auditor-session",
+    auditorRunId: "auditor-run",
+    producerPrincipalId: "U1",
+    auditorPrincipalId: "U1",
+  });
+  const input = {
+    sessionId: "auditor-session",
+    runId: "auditor-run",
+    scopeId: job.scopeId,
+    jobId: job.id,
+    artifactDigest: "artifact-sha256",
+    checkId: "summary.crossfoot" as const,
+    generation: 1,
+    evidenceFileId: "old-evaluator-evidence-file",
+    findings: [{ code: "CROSSFOOT_MISMATCH", message: "Old evaluator mismatch" }],
+    idempotencyKey: "authorized-stale-block",
+  };
+  const recovery = {
+    artifactDigest: input.artifactDigest,
+    checkId: input.checkId,
+    generation: input.generation,
+    evidenceFileId: input.evidenceFileId,
+    findings: input.findings,
+  };
+  const deterministicAuthority = testDeterministicAuthority(
+    input.checkId,
+    "block",
+    TEST_FINNY_EVALUATOR,
+  ).deterministicAuthority!;
+  await runtime.authorizeAction({
+    ...input,
+    kind: "audit_blocked",
+    role: "auditor",
+    requestDigest: runtimeDigest(recovery),
+    authorityPayload: {
+      resolution: { kind: "rework" },
+      evidenceAuthority: { evidenceDigest: "old-evaluator-envelope", deterministicAuthority },
+      recovery,
+    },
+  });
+  const blocked = await jobs.recordAuditBlock({
+    scopeId: input.scopeId,
+    jobId: input.jobId,
+    artifactDigest: input.artifactDigest,
+    checkId: input.checkId,
+    generation: input.generation,
+    evidenceDigest: "old-evaluator-envelope",
+    deterministicAuthority,
+    issuerPrincipalId: "U1",
+    issuerRunId: input.runId,
+    findings: input.findings,
+    changeKinds: ["formula"],
+    resolution: { kind: "rework" },
+    idempotencyKey: input.idempotencyKey,
+  });
+  const evaluator = {
+    ...TEST_FINNY_EVALUATOR,
+    revision: "test-r3",
+    buildDigest: "4".repeat(64),
+    configurationDigest: "5".repeat(64),
+  };
+  await jobs.recordEvaluatorCorrection({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    fromEvaluator: blocked.job.policy.evaluator,
+    toEvaluator: evaluator,
+    idempotencyKey: "cancel-stale-block-with-r3",
+  });
+  assert.equal(
+    (await runtime.pendingRecoveries()).some((item) => item.kind === "audit_blocked"),
+    false,
+  );
+  let producerDispatches = 0;
+  const coordinator = createFinnyRuntimeCoordinator({
+    jobs,
+    runtime,
+    grants: createFinnyWorkerGrants(jobs, "runtime-test-secret"),
+    sessions: {
+      async open() {
+        throw new Error("unexpected open");
+      },
+    },
+    dispatcher: {
+      async dispatchPrivateIdempotent(message) {
+        if (message.role === "producer") producerDispatches += 1;
+      },
+    },
+    escalationDecision: {
+      async decide() {
+        throw new Error("committed resolution must be reused");
+      },
+    },
+    ...coreRuntimeAuthority(),
+  });
+  await coordinator.auditBlocked(input);
+  assert.equal(producerDispatches, 0);
+});
+
+test("expired delivered reverification grants return to recovery", async () => {
+  const { jobs, job, connectionString } = await approvedJob();
+  await jobs.recordArtifactReady({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    artifactDigest: "artifact-sha256",
+    provisionalRevision: "revision-1",
+    idempotencyKey: "artifact-before-expired-reverify",
+  });
+  const evaluator = {
+    ...TEST_FINNY_EVALUATOR,
+    revision: "test-r4",
+    buildDigest: "6".repeat(64),
+    configurationDigest: "7".repeat(64),
+  };
+  await jobs.recordEvaluatorCorrection({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    fromEvaluator: TEST_FINNY_EVALUATOR,
+    toEvaluator: evaluator,
+    idempotencyKey: "expired-reverify-r4",
+  });
+  const runtime = createPostgresFinnyRuntimeStore(connectionString);
+  await runtime.bindInitial({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    parentSessionId: "parent-session",
+    parentRunId: "parent-run",
+    parentPrincipalId: "U1",
+    producerExpiresAt: Date.now() + 60_000,
+    auditorExpiresAt: Date.now() + 60_000,
+    producerSessionId: "producer-session",
+    producerRunId: "producer-run",
+    auditorSessionId: "auditor-session",
+    auditorRunId: "auditor-run",
+    producerPrincipalId: "U1",
+    auditorPrincipalId: "U1",
+  });
+  const coordinator = createFinnyRuntimeCoordinator({
+    jobs,
+    runtime,
+    grants: createFinnyWorkerGrants(jobs, "runtime-test-secret"),
+    sessions: {
+      async open() {
+        throw new Error("existing Auditor binding should be used");
+      },
+    },
+    dispatcher: { async dispatchPrivateIdempotent() {} },
+    ...coreRuntimeAuthority(),
+  });
+  await coordinator.verificationReopened({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    idempotencyKey: "expired-reverify-r4",
+  });
+  const { q } = createPgPool(connectionString);
+  await q("UPDATE finny_runtime_bindings SET expires_at=$2 WHERE run_id=$1", ["auditor-run", Date.now() - 1]);
+  assert.equal(
+    (await runtime.pendingRecoveries()).some(
+      (item) => item.kind === "verification_reopened" && item.idempotencyKey === "expired-reverify-r4",
+    ),
+    true,
+  );
 });
