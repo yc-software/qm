@@ -89,12 +89,15 @@ lock below. A channel wears at most one persona; one persona can be worn by seve
 The setting is one row per channel in the `persona_channel_defaults` durable map, keyed by the
 channel scope: `{ scopeId: "channel:<id>", personaId, setBy, setAt }`, indexed on
 `personaId`. Like `sessions.persona_id` it has no foreign key: a deleted persona just stops
-applying. Setting or clearing it posts a notice in the channel.
+applying. Setting or clearing it posts a notice in the channel. The write is conditional on the
+row it read, so when two people change it at once only one wins; the other is checked again
+against the new setting.
 
 **The lock.** While a channel wears a persona, only the persona's writers and owners (held
 through a person, team or the org grant, never through the channel's own grant) or an org admin,
 on a turn they sent themselves, can change the channel's instructions, standing orders or
-skills, including sharing a skill into the channel. Everyone else is refused with an owner
+skills, including sharing a skill into the channel. A Slack bot's turn never counts as sent by
+a person, whatever grants the bot holds. Everyone else is refused with an owner
 named; a refusal never names a private channel, or its persona, to someone outside it.
 
 An access change is refused unless at least one owner grant remains on a person QM doesn't list as
