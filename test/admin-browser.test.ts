@@ -125,6 +125,8 @@ test("the browser reaches exactly the admin routes the admin pages use, and only
     [...NOT_ADMIN_PAGES].sort(),
   );
   assert.ok(admin.filter((r) => r.browser).every((r) => r.browser === "self"));
+  for (const route of apiRoutes)
+    if (route.admin) assert.ok("path" in route && route.path.startsWith("/v1/admin/"), "admin metadata off /v1/admin");
   for (const key of ADMIN_PAGES) {
     const [method, path] = key.split(" ") as [string, string];
     assert.equal(apiAlias(method, concrete(browserPath(path))), concrete(path), key);
@@ -163,29 +165,33 @@ test("an admin's cookie works the admin pages, naming other people as the subjec
   assert.equal(granted.status, 200, await granted.clone().text());
   const revoked = await call(admin, "DELETE", "/api/admin/grants/carol?scope=org%3Adefault-org&role=org_admin");
   assert.equal(revoked.status, 200, await revoked.clone().text());
-  const foreign = await call(admin, "POST", "/api/admin/grants", grant, "https://evil.example");
-  assert.equal(foreign.status, 403);
   const member = browserSessionCookie("alice");
   assert.equal((await call(member, "GET", "/api/admin/scopes")).status, 403);
   assert.equal((await call(member, "POST", "/api/admin/grants", grant)).status, 403);
   assert.equal((await call("", "GET", "/api/admin/scopes")).status, 401);
 });
 
-test("admin pages refuse an impersonating admin, even when the target is an admin", async (t) => {
+test("every admin page refuses an impersonating admin, even when the target is an admin, and foreign-origin writes", async (t) => {
   const call = await serve(t);
-  const impersonating = `${browserSessionCookie("admin-alice")}; ${browserImpersonationCookie("admin-alice", "admin-bob")}`;
-  for (const [method, path, body] of [
-    ["GET", "/api/admin/whoami"],
-    ["GET", "/v1/admin/whoami"],
-    ["GET", "/api/admin/scopes"],
-    ["GET", "/api/admin/connector-catalog"],
-    ["POST", "/api/admin/grants", { principalId: "carol", role: "org_admin", scopeId: "org:default-org" }],
-  ] as const) {
-    const refused = await call(impersonating, method, path, body);
+  const admin = browserSessionCookie("admin-alice");
+  const impersonating = `${admin}; ${browserImpersonationCookie("admin-alice", "admin-bob")}`;
+  for (const key of ADMIN_PAGES) {
+    const [method, path] = key.split(" ") as [string, string];
+    const body = method === "GET" ? undefined : {};
+    for (const url of [concrete(browserPath(path)), concrete(path)]) {
+      const refused = await call(impersonating, method, url, body);
+      assert.deepEqual(
+        [refused.status, await refused.json()],
+        [403, { error: "forbidden", message: "Unavailable while impersonating." }],
+        `${method} ${url}`,
+      );
+    }
+    if (method === "GET") continue;
+    const foreign = await call(admin, method, concrete(browserPath(path)), body, "https://evil.example");
     assert.deepEqual(
-      [refused.status, await refused.json()],
-      [403, { error: "forbidden", message: "Unavailable while impersonating." }],
-      path,
+      [foreign.status, ((await foreign.json()) as { message?: string }).message],
+      [403, "cross-origin request refused"],
+      key,
     );
   }
 });

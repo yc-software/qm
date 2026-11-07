@@ -250,6 +250,12 @@ describe("ui canvas and ui observe", () => {
       await script.text(),
       `((canvas) => {\ncanvas.send('hi')\n})(window.qmUiCanvasTake?.(${JSON.stringify(sessionId)}, ${rev}));\n`,
     );
+    for (const site of ["cross-site", "same-site"]) {
+      const included = await fetch(`${browserBase}/api/ui-canvas/${sessionId}/script.js?rev=${rev}`, {
+        headers: { cookie: owner, "sec-fetch-site": site, "sec-fetch-dest": "script" },
+      });
+      assert.equal(included.status, 403, site);
+    }
     const stale = await browser(owner, "GET", `/api/ui-canvas/${sessionId}/script.js?rev=${rev - 1}`);
     assert.deepEqual([stale.status, await body(stale)], [409, { error: "stale_revision" }]);
     assert.equal((await browser(browserSessionCookie("U2"), "GET", `/api/ui-canvas/${sessionId}`)).status, 404);

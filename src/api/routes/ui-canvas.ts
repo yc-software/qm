@@ -267,7 +267,10 @@ async function userCanvasContent(ctx: ApiCtx): Promise<void> {
 }
 
 async function userCanvasScript(ctx: ApiCtx): Promise<void> {
-  const { res, url, params } = ctx;
+  const { req, res, url, params } = ctx;
+  const site = req.headers["sec-fetch-site"];
+  if (site !== undefined && site !== "same-origin")
+    return sendJson(res, 403, { error: "forbidden", message: "cross-origin request refused" });
   const canvas = await userCanvasOf(ctx);
   if (!canvas) return;
   if (String(canvas.rev) !== url.searchParams.get("rev")) return sendJson(res, 409, { error: "stale_revision" });

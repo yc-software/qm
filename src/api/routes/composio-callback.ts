@@ -23,6 +23,7 @@ async function completeAuth(ctx: ApiCtx): Promise<void> {
       resource: "unknown",
       scopeLabel: scopeId("personal", access.principal),
     });
+  const base = new URL(ctx.deps.portalUrl!);
   const sessionUri = ctx.url.searchParams.get("session_uri");
   if (!sessionUri || sessionUri.length > 8192) {
     connectFailed();
@@ -56,7 +57,6 @@ async function completeAuth(ctx: ApiCtx): Promise<void> {
     resource: saved?.toolkit ?? "unknown",
     scopeLabel: scopeId("personal", access.principal),
   });
-  const base = new URL(ctx.deps.portalUrl!);
   const target =
     saved?.url && saved.expiresAt > Date.now()
       ? new URL(saved.url, base)

@@ -9,6 +9,7 @@ import { readBodyBytes, PayloadTooLargeError, relayStream } from "../../../plugi
 import { reportBackendError } from "../../../plugins/chassis/src/error-reporting.ts";
 import { errChain } from "../../../plugins/chassis/src/errors.ts";
 import { orgId } from "../../config.ts";
+import { MAX_BLOB_BYTES } from "../../persistence/blob-transfer.ts";
 import { createLiveVoice, dictationFormats, LIVE_MODEL, transcribe, VoiceProviderError } from "../../voice/voice.ts";
 import { extendBodyDeadline, sendJson } from "../http.ts";
 import type { ApiCtx, Route } from "./route.ts";
@@ -35,6 +36,11 @@ async function spool(req: IncomingMessage, signal: AbortSignal): Promise<{ file:
   await chmod(SPOOL_DIR, 0o700);
   const file = join(SPOOL_DIR, randomUUID());
   const out = fs.createWriteStream(file, { mode: 0o600 });
+  let received = 0;
+  req.on("data", (chunk: Buffer) => {
+    received += chunk.length;
+    if (received > MAX_BLOB_BYTES) out.destroy(new PayloadTooLargeError());
+  });
   try {
     relayStream(req, out, { onError: (error) => out.destroy(error) });
     await finished(out, { signal });
@@ -140,6 +146,10 @@ async function dictate(ctx: ApiCtx): Promise<void> {
     try {
       audio = await spool(req, clientGone);
     } catch (error) {
+      if (error instanceof PayloadTooLargeError) {
+        res.setHeader("connection", "close");
+        return sendJson(res, 413, { error: "payload_too_large", message: error.message });
+      }
       reportVoiceError(error, "dictation_upload", clientGone.aborted);
       if (clientGone.aborted) return;
       return sendJson(res, 503, {

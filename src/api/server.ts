@@ -276,7 +276,7 @@ async function gate(
         sendJson(res, signedIn.status, { error: signedIn.error, message: signedIn.message });
         return null;
       }
-      if (route?.browser === "self" && signedIn.imp) {
+      if ((route?.browser === "self" || route?.admin) && signedIn.imp) {
         sendJson(res, 403, { error: "forbidden", message: "Unavailable while impersonating." });
         return null;
       }
@@ -575,7 +575,8 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
         return;
       }
     }
-    if (!matched?.route.streamBody) rawBodies.set(req, await readRawBody(req, matched?.route.maxBodyBytes));
+    if (!matched?.route.streamBody || !usesBrowserSession(req, matched.route))
+      rawBodies.set(req, await readRawBody(req, matched?.route.maxBodyBytes));
     await ready;
     routing(req, res);
   }
