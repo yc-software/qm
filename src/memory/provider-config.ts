@@ -207,5 +207,31 @@ export function parseMemoryProviderConfig(
         `memory route ${i}: provider ${route.provider} sets attestActor, so it may serve only personal scopes, not ${shared.join(", ")}; an attested read returns that member's private memory, which a shared conversation would show to everyone in it (docs/memory-providers.md#attesting-the-member-attestactor)`,
       );
   }
+  const servers = new Map<string, { ids: Set<string>; names: string[] }>();
+  for (const provider of providers) {
+    if (provider.type !== "mcp") continue;
+    for (const op of ["read", "write"] as const) {
+      const operation = provider[op];
+      if (!operation || operation.scopeArg) continue;
+      const key = JSON.stringify([provider.url, operation.tool]);
+      const server = servers.get(key) ?? { ids: new Set<string>(), names: [] };
+      server.ids.add(provider.id);
+      server.names.push(`${provider.id}.${op}`);
+      servers.set(key, server);
+    }
+  }
+  for (const { ids, names } of servers.values()) {
+    const served = routes.filter((route) => ids.has(route.provider));
+    const scopes = [...new Set(served.flatMap((route) => route.scopes))];
+    const kinds = new Set(scopes.map((scope) => parseScopeId(scope).kind ?? scope));
+    const apart =
+      (scopes.length === 1 && parseScopeId(scopes[0]!).kind !== null) ||
+      (kinds.size === 1 && kinds.has("org")) ||
+      (kinds.size === 1 && kinds.has("personal") && served.every((route) => !route.manage));
+    if (scopes.length && !apart)
+      throw new Error(
+        `memory provider ${names.join(" and ")}: no scopeArg, so the server cannot tell apart the scopes it serves (${scopes.join(", ")}); operations without scopeArg that call one server tool may serve only one scope, the org scope, or personal scopes on routes that do not manage a notebook, whose reads carry no member, so set scopeArg on read and write (docs/memory-providers.md#troubleshooting)`,
+      );
+  }
   return { providers, routes };
 }
