@@ -327,6 +327,7 @@ export function createSwarmService(deps: {
       ...(source.scopeVersion ? { scopeVersion: source.scopeVersion } : {}),
       ...(source.unattendedGrants ? { unattendedGrants: source.unattendedGrants } : {}),
       ...(source.readOnly ? { readOnly: true } : {}),
+      ...(source.botActor ? { botActor: true } : {}),
       ...(source.skipMemory ? { skipMemory: true } : {}),
       ...(settings.turnMs === undefined ? {} : { turnWallClockMs: settings.turnMs }),
     };
