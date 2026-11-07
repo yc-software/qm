@@ -72,8 +72,7 @@ async function gateSourceCron(ctx: ApiCtx, id: string): Promise<Cron | null> {
     return null;
   }
   const principalId = url.searchParams.get("principalId");
-  if (!principalId) return cron;
-  if (await canAdministerCron(app, cron, principalId)) return cron;
+  if (principalId && (await canAdministerCron(app, cron, principalId))) return cron;
   sendJson(res, 404, { error: "not_found" });
   return null;
 }
@@ -86,9 +85,9 @@ async function gateSourceCronRead(ctx: ApiCtx, id: string): Promise<Cron | null>
     return null;
   }
   const principalId = url.searchParams.get("principalId");
-  if (!principalId || (await canAdministerCron(app, cron, principalId))) return cron;
-  const { visible } = await app.listCronsForViewer(principalId);
-  if (visible.some((candidate) => candidate.id === id)) return cron;
+  if (principalId && (await canAdministerCron(app, cron, principalId))) return cron;
+  if (principalId && (await app.listCronsForViewer(principalId)).visible.some((candidate) => candidate.id === id))
+    return cron;
   sendJson(res, 404, { error: "not_found" });
   return null;
 }
@@ -245,7 +244,7 @@ async function listCrons(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 200, { crons, visible });
   }
   const viewer = url.searchParams.get("viewer");
-  if (!viewer) return sendJson(res, 200, { crons: await app.listCrons() });
+  if (!viewer) return sendJson(res, 400, { error: "bad_request", message: "viewer required" });
   const { owned, visible } = await app.listCronsForViewer(viewer);
   const decorate = async (cron: Cron) => ({
     ...cron,

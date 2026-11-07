@@ -358,6 +358,116 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
     assert.equal(pendingBody.pending, null);
   });
 
+  it("binds the caller-named principalId of every person-scoped route to the portal actor", async () => {
+    const alice = await token("U1");
+    const outcome = async (method: string, path: string, body?: Record<string, unknown>, identity?: string) => {
+      const response = await fetch(`${base}${path}`, {
+        method,
+        headers: { "content-type": "application/json", ...(identity ? { "x-portal-identity": identity } : {}) },
+        ...(body ? { body: JSON.stringify(body) } : {}),
+      });
+      const text = await response.text();
+      if (response.status === 401) return "unauthorized";
+      if (response.status === 403 && text.includes("portal identity does not match the requested actor"))
+        return "mismatch";
+      return "handler";
+    };
+    const queryRoutes: [string, string][] = [
+      ["GET", "/v1/ui-state?key=sidebar"],
+      ["GET", "/v1/directory/channels?q=gen"],
+      ["GET", "/v1/runtime-config?scopeId=personal:U1"],
+      ["GET", "/v1/channel-header-pin?scopeId=personal:U1"],
+      ["GET", "/v1/ui/canvases/s1"],
+      ["POST", "/v1/webhooks/w1/enable"],
+      ["POST", "/v1/loops/l1/triage/preview"],
+      ["GET", "/v1/loops/l1/items/i1/image"],
+      ["GET", "/v1/deployments/d1"],
+    ];
+    for (const [method, path] of queryRoutes) {
+      const sep = path.includes("?") ? "&" : "?";
+      const body = method === "GET" ? undefined : {};
+      assert.deepEqual(
+        [
+          await outcome(method, `${path}${sep}principalId=U1`, body),
+          await outcome(method, `${path}${sep}principalId=U2`, body, alice),
+          await outcome(method, path, body, alice),
+          await outcome(method, `${path}${sep}principalId=U1`, body, alice),
+        ],
+        ["unauthorized", "mismatch", "mismatch", "handler"],
+        `${method} ${path}: no identity, another principal, no principalId, myself`,
+      );
+    }
+    const bodyRoutes: [string, string, Record<string, unknown>][] = [
+      ["PUT", "/v1/ui-state", { key: "sidebar", value: 1 }],
+      ["PUT", "/v1/contexts/policy", { scope: "channel:C1", orders: "" }],
+      ["PATCH", "/v1/projects/p1", { name: "renamed" }],
+      ["PUT", "/v1/projects/p1/slack-channel", { channel: "C1" }],
+      ["DELETE", "/v1/projects/p1/slack-channel", {}],
+      ["PUT", "/v1/runtime-config", { scopeId: "personal:U1", inherit: true }],
+      ["PUT", "/v1/channel-header-pin", { scopeId: "personal:U1", on: true }],
+      ["POST", "/v1/ui/canvases/s1", { pinned: true }],
+      ["POST", "/v1/ui/observe/c1/result", { snapshot: {} }],
+      ["POST", "/v1/suggested-activities", {}],
+      ["POST", "/v1/suggested-activities/dismiss", { id: "a1" }],
+      ["POST", "/v1/keychain/approvals/k1", { decision: "deny" }],
+    ];
+    for (const [method, path, body] of bodyRoutes) {
+      assert.deepEqual(
+        [
+          await outcome(method, path, { ...body, principalId: "U1" }),
+          await outcome(method, path, { ...body, principalId: "U2" }, alice),
+          await outcome(method, path, body, alice),
+          await outcome(method, path, { ...body, principalId: "U1" }, alice),
+        ],
+        ["unauthorized", "mismatch", "mismatch", "handler"],
+        `${method} ${path}: no identity, another principal, no principalId, myself`,
+      );
+    }
+    for (const path of ["/v1/custom-emoji", "/v1/suggested-activities"]) {
+      assert.deepEqual(
+        [await outcome("GET", path), await outcome("GET", path, undefined, alice)],
+        ["unauthorized", "handler"],
+        path,
+      );
+    }
+  });
+
+  it("deployment, cron and webhook handlers refuse a missing principal even without enforced identity", async () => {
+    const open = createInsecureTestServer(built.app, {});
+    await new Promise<void>((resolve) => open.listen(0, resolve));
+    try {
+      const openBase = `http://localhost:${(open.address() as AddressInfo).port}`;
+      const cron = await built.app.createCron({
+        ownerScopeId: "personal:U1",
+        owner: "U1",
+        createdBy: "U1",
+        schedule: { everyMs: 60_000 },
+        action: "private task",
+      });
+      const webhook = await built.app.createWebhook({
+        ownerScopeId: "personal:U1",
+        owner: "U1",
+        createdBy: "U1",
+        action: "private webhook",
+        verification: { scheme: "hmac-sha256", secret: "webhook-secret" },
+      });
+      for (const [method, path, status] of [
+        ["GET", "/v1/deployments", 400],
+        ["GET", "/v1/deployments/d1", 400],
+        ["GET", "/v1/crons", 400],
+        ["GET", `/v1/crons/${encodeURIComponent(cron.id)}`, 404],
+        ["DELETE", `/v1/crons/${encodeURIComponent(cron.id)}`, 404],
+        ["GET", "/v1/webhooks", 400],
+        ["POST", `/v1/webhooks/${webhook.id}/enable`, 404],
+      ] as const) {
+        assert.equal((await fetch(`${openBase}${path}`, { method })).status, status, `${method} ${path}`);
+      }
+      assert.ok(await built.app.getCron(cron.id), "the cron survives an unattributed delete");
+    } finally {
+      await new Promise<void>((resolve) => open.close(() => resolve()));
+    }
+  });
+
   it("a web turn whose body actor doesn't match the portal identity is rejected", async () => {
     const r = await post(
       "/v1/turns",
