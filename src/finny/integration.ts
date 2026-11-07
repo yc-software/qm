@@ -12,6 +12,7 @@ import { assertFinnyMaterialClarificationMatchesPlan } from "./plan.ts";
 import type { FinnyArtifactProposal } from "./integration-postgres-store.ts";
 import type {
   FinnyCheckId,
+  FinnyEvaluatorRef,
   FinnyJob,
   FinnyMaterialClarification,
   FinnyPlanPresentation,
@@ -336,6 +337,7 @@ export function createFinnyToolServiceFactory(deps: {
           const binding = {
             artifactDigest: job.artifactDigest,
             policyVersion: job.policy.policyVersion,
+            evaluator: deps.config.spreadsheetEngine.evaluator,
             checks: SPREADSHEET_WORKER_CHECK_IDS.map((checkId) => ({
               checkId,
               generation: job.policy.requiredGenerations[checkId],
@@ -361,6 +363,12 @@ export function createFinnyToolServiceFactory(deps: {
             evidenceFileId,
             binding,
           });
+          const evaluatorError = result.results.find((check) => check.verdict === "error");
+          if (evaluatorError?.verdict === "error") {
+            throw new Error(
+              `Deterministic spreadsheet evaluator error for ${evaluatorError.checkId}: ${evaluatorError.reason.code}`,
+            );
+          }
           let passes = 0;
           for (const check of result.results) {
             const idempotencyKey = `${input.idempotencyKey}:${check.checkId}:${check.generation}`;
@@ -482,7 +490,7 @@ export async function resolveFinnyEvidenceFile(
     generation: number;
     verdict: FinnyVerdict;
   },
-  limits: { maxArtifactBytes: number; maxEvidenceBytes: number },
+  limits: { maxArtifactBytes: number; maxEvidenceBytes: number; evaluator: FinnyEvaluatorRef },
 ): Promise<string> {
   const evidence = await immutableScopedFileBytes(
     files,
@@ -513,6 +521,7 @@ export async function resolveFinnyEvidenceFile(
   const binding = {
     artifactDigest: input.job.artifactDigest,
     policyVersion: input.job.policy.policyVersion,
+    evaluator: limits.evaluator,
     checks: SPREADSHEET_WORKER_CHECK_IDS.map((checkId) => ({
       checkId,
       generation: input.job.policy.requiredGenerations[checkId],

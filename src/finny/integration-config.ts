@@ -1,7 +1,7 @@
 import { isStrongSigningSecret } from "../auth/source-auth.ts";
 import { boolEnvStrict, numEnvStrict } from "../util/env.ts";
 import { assertFinnyFindingPolicy } from "./coordinator.ts";
-import type { FinnyFindingPolicy } from "./types.ts";
+import type { FinnyEvaluatorRef, FinnyFindingPolicy } from "./types.ts";
 
 export interface FinnySpreadsheetEngineConfig {
   url: string;
@@ -10,6 +10,7 @@ export interface FinnySpreadsheetEngineConfig {
   timeoutMs: number;
   maxResponseBytes: number;
   maxArtifactBytes: number;
+  evaluator: FinnyEvaluatorRef;
 }
 
 export interface FinnyIntegrationConfig {
@@ -35,12 +36,31 @@ const REQUIRED = [
   "FINNY_SPREADSHEET_ENGINE_TIMEOUT_MS",
   "FINNY_SPREADSHEET_ENGINE_MAX_RESPONSE_BYTES",
   "FINNY_SPREADSHEET_ENGINE_MAX_ARTIFACT_BYTES",
+  "FINNY_SPREADSHEET_EVALUATOR_ID",
+  "FINNY_SPREADSHEET_EVALUATOR_REVISION",
+  "FINNY_SPREADSHEET_EVALUATOR_BUILD_DIGEST",
+  "FINNY_SPREADSHEET_EVALUATOR_CONTRACT_VERSION",
+  "FINNY_SPREADSHEET_EVALUATOR_CONFIGURATION_DIGEST",
   "FINNY_MAX_EVIDENCE_BYTES",
 ] as const;
 
 function required(env: NodeJS.ProcessEnv, name: (typeof REQUIRED)[number]): string {
   const value = env[name]?.trim();
   if (!value) throw new Error(`${name} is required when FINNY_ENABLED=true`);
+  return value;
+}
+
+function sha256Digest(env: NodeJS.ProcessEnv, name: (typeof REQUIRED)[number]): string {
+  const value = required(env, name);
+  if (!/^[a-f0-9]{64}$/.test(value)) throw new Error(`${name} must be a lowercase SHA-256 digest`);
+  return value;
+}
+
+function evaluatorContractVersion(env: NodeJS.ProcessEnv): string {
+  const value = required(env, "FINNY_SPREADSHEET_EVALUATOR_CONTRACT_VERSION");
+  if (value !== "finny.spreadsheet-worker.v2") {
+    throw new Error("FINNY_SPREADSHEET_EVALUATOR_CONTRACT_VERSION must be finny.spreadsheet-worker.v2");
+  }
   return value;
 }
 
@@ -97,6 +117,13 @@ export function finnyIntegrationConfigFromEnv(env: NodeJS.ProcessEnv): FinnyInte
       timeoutMs: positiveInteger(env, "FINNY_SPREADSHEET_ENGINE_TIMEOUT_MS"),
       maxResponseBytes: positiveInteger(env, "FINNY_SPREADSHEET_ENGINE_MAX_RESPONSE_BYTES"),
       maxArtifactBytes: positiveInteger(env, "FINNY_SPREADSHEET_ENGINE_MAX_ARTIFACT_BYTES"),
+      evaluator: {
+        id: required(env, "FINNY_SPREADSHEET_EVALUATOR_ID"),
+        revision: required(env, "FINNY_SPREADSHEET_EVALUATOR_REVISION"),
+        buildDigest: sha256Digest(env, "FINNY_SPREADSHEET_EVALUATOR_BUILD_DIGEST"),
+        contractVersion: evaluatorContractVersion(env),
+        configurationDigest: sha256Digest(env, "FINNY_SPREADSHEET_EVALUATOR_CONFIGURATION_DIGEST"),
+      },
     },
     maxEvidenceBytes: positiveInteger(env, "FINNY_MAX_EVIDENCE_BYTES"),
   };

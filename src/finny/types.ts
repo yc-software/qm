@@ -1,3 +1,11 @@
+export interface FinnyEvaluatorRef {
+  readonly id: string;
+  readonly revision: string;
+  readonly buildDigest: string;
+  readonly contractVersion: string;
+  readonly configurationDigest: string;
+}
+
 export const FINNY_CHECK_IDS = [
   "source.completeness",
   "financial.reconcile",

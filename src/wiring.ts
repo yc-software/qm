@@ -2177,6 +2177,7 @@ export function buildApp(
             resolveFinnyEvidenceFile(files, input, {
               maxArtifactBytes: config.finny!.spreadsheetEngine.maxArtifactBytes,
               maxEvidenceBytes: config.finny!.maxEvidenceBytes,
+              evaluator: config.finny!.spreadsheetEngine.evaluator,
             }),
         },
         artifactBinding: {

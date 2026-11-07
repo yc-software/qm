@@ -56,6 +56,7 @@ export function createHttpSpreadsheetCalculationEngine(
   return Object.freeze({
     name: config.name,
     version: config.version,
+    evaluator: config.evaluator,
     async evaluate(input: SpreadsheetCalculationInput): Promise<readonly SpreadsheetWorkerResult[]> {
       if (input.artifactBytes.length > config.maxArtifactBytes) {
         throw new Error("Spreadsheet engine artifact exceeds the configured byte limit");

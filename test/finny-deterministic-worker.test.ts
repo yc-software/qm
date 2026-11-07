@@ -12,6 +12,14 @@ import {
 
 const artifact = new TextEncoder().encode("immutable workbook bytes");
 const artifactDigest = digestSpreadsheetArtifact(artifact);
+const evaluator = {
+  id: "libreoffice-calc",
+  revision: "24.2.7-r1",
+  buildDigest: "a".repeat(64),
+  contractVersion: "finny.spreadsheet-worker.v2",
+  configurationDigest: "b".repeat(64),
+} as const;
+
 const checks = [
   { checkId: "formula.recalculate" as const, generation: 3 },
   { checkId: "summary.crossfoot" as const, generation: 2 },
@@ -19,7 +27,23 @@ const checks = [
 ];
 
 function binding() {
-  return createSpreadsheetWorkerBinding({ artifactDigest, policyVersion: "finny-r5.1", checks });
+  return createSpreadsheetWorkerBinding({ artifactDigest, policyVersion: "finny-r5.1", evaluator, checks });
+}
+
+function canonical(value: unknown): string {
+  if (value === null || typeof value === "boolean" || typeof value === "number" || typeof value === "string")
+    return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  const object = value as Record<string, unknown>;
+  return `{${Object.keys(object)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${canonical(object[key])}`)
+    .join(",")}}`;
+}
+
+function recomputeEnvelopeDigest(envelope: Record<string, unknown>): string {
+  const { envelopeDigest: _, ...payload } = envelope;
+  return createHash("sha256").update(canonical(payload)).digest("base64url");
 }
 
 const results = [
@@ -27,6 +51,7 @@ const results = [
     checkId: "formula.recalculate" as const,
     generation: 3,
     verdict: "pass" as const,
+    reason: null,
     evidence: {
       kind: "formula-recalculation" as const,
       cells: [{ sheet: "Model", cell: "C9", formula: "=SUM(C2:C8)", calculatedValue: 42 }],
@@ -36,6 +61,7 @@ const results = [
     checkId: "summary.crossfoot" as const,
     generation: 2,
     verdict: "pass" as const,
+    reason: null,
     evidence: {
       kind: "cross-foot" as const,
       comparisons: [{ sheet: "Summary", reference: "B12", expected: 42, actual: 42, difference: 0 }],
@@ -45,6 +71,7 @@ const results = [
     checkId: "artifact.structure" as const,
     generation: 4,
     verdict: "pass" as const,
+    reason: null,
     evidence: {
       kind: "structure" as const,
       sheets: [{ name: "Model", rows: 9, columns: 3, formulas: 1 }],
@@ -56,6 +83,7 @@ function engine(output: unknown = results): SpreadsheetCalculationEngine {
   return {
     name: "fixture-engine",
     version: "1.0.0",
+    evaluator,
     async evaluate(input) {
       assert.deepEqual(Object.keys(input).sort(), ["artifactBytes", "binding"]);
       assert(Object.isFrozen(input.artifactBytes));
@@ -71,7 +99,12 @@ async function validEnvelope(): Promise<SpreadsheetWorkerEnvelope> {
 
 test("creates an immutable artifact, policy, check and generation binding", () => {
   const source = [...checks];
-  const value = createSpreadsheetWorkerBinding({ artifactDigest, policyVersion: "finny-r5.1", checks: source });
+  const value = createSpreadsheetWorkerBinding({
+    artifactDigest,
+    policyVersion: "finny-r5.1",
+    evaluator,
+    checks: source,
+  });
   source[0] = { checkId: "formula.recalculate", generation: 99 };
   assert(Object.isFrozen(value));
   assert(Object.isFrozen(value.checks));
@@ -79,7 +112,12 @@ test("creates an immutable artifact, policy, check and generation binding", () =
   assert.deepEqual(value.checks, checks);
   assert.throws(
     () =>
-      createSpreadsheetWorkerBinding({ artifactDigest, policyVersion: "finny-r5.1", checks: [checks[0]!, checks[0]!] }),
+      createSpreadsheetWorkerBinding({
+        artifactDigest,
+        policyVersion: "finny-r5.1",
+        evaluator,
+        checks: [checks[0]!, checks[0]!],
+      }),
     /duplicate/i,
   );
   assert.throws(
@@ -87,6 +125,7 @@ test("creates an immutable artifact, policy, check and generation binding", () =
       createSpreadsheetWorkerBinding({
         artifactDigest,
         policyVersion: "finny-r5.1",
+        evaluator,
         checks: [{ checkId: "meaning.actionability" as never, generation: 1 }],
       }),
     /check/i,
@@ -262,4 +301,97 @@ test("Core worker persists deterministic evidence with reserved immutable Files 
   assert.equal(puts[0].createdBy, SPREADSHEET_WORKER_PRINCIPAL_ID);
   assert.equal(puts[0].direction, "out");
   assert.deepEqual(JSON.parse(new TextDecoder().decode(puts[0].data)), await validEnvelope());
+});
+
+test("pins the complete evaluator identity and rejects a stale evaluator despite a recomputed digest", async () => {
+  const envelope = await validEnvelope();
+  assert.deepEqual(envelope.evaluator, evaluator);
+  const stale = structuredClone(envelope) as any;
+  stale.evaluator.revision = "24.2.6-r9";
+  const staleEngine = engine(results);
+  (staleEngine as any).evaluator = { ...evaluator, revision: "24.2.6-r9" };
+  await assert.rejects(
+    createDeterministicSpreadsheetWorker(staleEngine).run({ artifactBytes: artifact, binding: binding() }),
+    /evaluator/i,
+  );
+  // A stale producer cannot make the candidate trusted even after recomputing the canonical envelope digest.
+  stale.envelopeDigest = recomputeEnvelopeDigest(stale);
+  assert.notEqual(stale.envelopeDigest, envelope.envelopeDigest);
+  assert.throws(() => verifySpreadsheetWorkerEnvelope(artifact, binding(), stale), /evaluator/i);
+});
+
+test("rejects missing and unknown evaluator metadata", async () => {
+  const envelope = structuredClone(await validEnvelope()) as any;
+  delete envelope.evaluator.configurationDigest;
+  assert.throws(() => verifySpreadsheetWorkerEnvelope(artifact, binding(), envelope), /evaluator.*metadata|field/i);
+  const unknown = structuredClone(await validEnvelope()) as any;
+  unknown.evaluator.imageTag = "latest";
+  assert.throws(() => verifySpreadsheetWorkerEnvelope(artifact, binding(), unknown), /evaluator.*metadata|field/i);
+});
+
+test("enforces outcome-specific reasons and check-specific reason codes", async () => {
+  const formulaBlock = structuredClone(results) as any[];
+  formulaBlock[0] = {
+    ...formulaBlock[0],
+    verdict: "block",
+    reason: { code: "FORMULA_MISMATCH", references: ["Model!C9"] },
+  };
+  await createDeterministicSpreadsheetWorker(engine(formulaBlock)).run({ artifactBytes: artifact, binding: binding() });
+
+  for (const invalid of [
+    { ...results[0], verdict: "pass", reason: { code: "FORMULA_MISMATCH", references: ["Model!C9"] } },
+    { ...results[0], verdict: "block", reason: null },
+    { ...results[0], verdict: "block", reason: { code: "CROSSFOOT_MISMATCH", references: ["Model!C9"] } },
+    { ...results[0], verdict: "error", reason: { code: "FORMULA_MISMATCH", references: ["Model!C9"] } },
+    { ...results[0], verdict: "block", reason: { code: "FORMULA_MISMATCH", references: [] } },
+    {
+      ...results[0],
+      verdict: "block",
+      reason: { code: "FORMULA_MISMATCH", references: Array.from({ length: 101 }, (_, index) => `Model!A${index}`) },
+    },
+    { ...results[0], verdict: "block", reason: { code: "FORMULA_MISMATCH", references: ["x".repeat(257)] } },
+  ]) {
+    const candidate = structuredClone(results) as any[];
+    candidate[0] = invalid;
+    await assert.rejects(
+      createDeterministicSpreadsheetWorker(engine(candidate)).run({ artifactBytes: artifact, binding: binding() }),
+      /reason|code/i,
+    );
+  }
+});
+
+test("preserves evaluator errors as distinct from audit blocks", async () => {
+  const errors = structuredClone(results) as any[];
+  errors[0] = {
+    ...errors[0],
+    verdict: "error",
+    reason: { code: "FORMULA_EVALUATION_ERROR", references: ["Model!C9"] },
+  };
+  const envelope = await createDeterministicSpreadsheetWorker(engine(errors)).run({
+    artifactBytes: artifact,
+    binding: binding(),
+  });
+  assert.equal(envelope.results[0]?.verdict, "error");
+});
+
+test("rejects semantically false PASS outcomes", async () => {
+  const cases = [
+    { index: 0, evidence: { kind: "formula-recalculation", cells: [] } },
+    {
+      index: 1,
+      evidence: {
+        kind: "cross-foot",
+        comparisons: [{ sheet: "Summary", reference: "B12", expected: 42, actual: 41, difference: -1 }],
+      },
+    },
+    { index: 2, evidence: { kind: "structure", sheets: [] } },
+  ];
+  for (const item of cases) {
+    const candidate = structuredClone(results) as any[];
+    candidate[item.index].evidence = item.evidence;
+    await assert.rejects(
+      createDeterministicSpreadsheetWorker(engine(candidate)).run({ artifactBytes: artifact, binding: binding() }),
+      /pass.*evidence|evidence.*pass|inconsistent/i,
+    );
+  }
 });
