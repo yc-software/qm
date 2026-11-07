@@ -1,5 +1,6 @@
 import { createMcpClient } from "../mcp/mcp-client.ts";
 import { errMessage } from "../util/errors.ts";
+import type { AddressFetch } from "../util/network.ts";
 import { createMcpMemoryProvider, type McpMemoryOperation } from "./mcp-memory-provider.ts";
 import {
   MAX_PROVIDER_TIMEOUT_MS,
@@ -11,8 +12,17 @@ import { createMemorableMemoryProvider } from "./memorable/provider.ts";
 import { createSecretValueMasker } from "../security/secret-masking.ts";
 import type { Item } from "../sessions/items.ts";
 
-function operation(url: string, { auth, ...spec }: McpMemoryOperationConfig, timeoutMs: number): McpMemoryOperation {
-  return { client: createMcpClient({ url, auth: { mode: "client-credentials", ...auth }, fetch }), timeoutMs, ...spec };
+function operation(
+  url: string,
+  { auth, ...spec }: McpMemoryOperationConfig,
+  timeoutMs: number,
+  fetchFn: AddressFetch,
+): McpMemoryOperation {
+  return {
+    client: createMcpClient({ url, auth: { mode: "client-credentials", ...auth }, fetch: fetchFn }),
+    timeoutMs,
+    ...spec,
+  };
 }
 
 export const logMemoryProviderError = (error: unknown, provider: string, operation: string): void =>
@@ -20,8 +30,9 @@ export const logMemoryProviderError = (error: unknown, provider: string, operati
 
 export function createMemoryProviders(
   configs: MemoryProviderConfig["providers"],
-  opts: { sessionItems?: (sessionId: string) => Promise<Item[]> } = {},
+  opts: { sessionItems?: (sessionId: string) => Promise<Item[]>; fetch?: AddressFetch } = {},
 ): Record<string, MemoryService> {
+  const fetchFn = opts.fetch ?? fetch;
   const providers: Record<string, MemoryService> = {};
   for (const provider of configs) {
     if (provider.type === "memorable") {
@@ -38,8 +49,8 @@ export function createMemoryProviders(
       continue;
     }
     providers[provider.id] = createMcpMemoryProvider({
-      read: operation(provider.url, provider.read, provider.timeoutMs),
-      ...(provider.write ? { write: operation(provider.url, provider.write, MAX_PROVIDER_TIMEOUT_MS) } : {}),
+      read: operation(provider.url, provider.read, provider.timeoutMs, fetchFn),
+      ...(provider.write ? { write: operation(provider.url, provider.write, MAX_PROVIDER_TIMEOUT_MS, fetchFn) } : {}),
       attestActor: provider.attestActor,
     });
   }

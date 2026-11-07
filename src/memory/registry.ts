@@ -2,7 +2,12 @@ import { decryptSecret, encryptSecret, type SecretKey } from "../connectors/conn
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { parseScopeId, type ScopeId } from "../types.ts";
 import { errMessage } from "../util/errors.ts";
-import { MEMORY_PROVIDER_ID, parseMemoryProviderConfig, type MemoryProviderConfig } from "./provider-config.ts";
+import {
+  isPrivateHost,
+  MEMORY_PROVIDER_ID,
+  parseMemoryProviderConfig,
+  type MemoryProviderConfig,
+} from "./provider-config.ts";
 import type { MemoryCapturePolicy, MemoryProviderRoute } from "./provider-router.ts";
 
 export const MEMORY_REGISTRY_TABLE = "memory_registry";
@@ -203,6 +208,15 @@ function flag(value: unknown, field: string, fallback: boolean): boolean {
   return value;
 }
 
+function publicUrl(url: string): void {
+  if (!URL.canParse(url)) throw invalid("url is not a valid URL");
+  const { protocol, hostname } = new URL(url);
+  if (protocol !== "https:" || isPrivateHost(hostname))
+    throw invalid(
+      `url (${protocol}//${hostname}) must use HTTPS at a public address: QM refuses any brain whose name resolves to a private network, so a brain there belongs in MEMORY_PROVIDER_CONFIG (docs/memory-providers.md#memory-registry)`,
+    );
+}
+
 export function putBrain(record: MemoryRegistry, id: string, input: unknown, change: RegistryChange): MemoryRegistry {
   if (change.overlayIds.has(id)) throw conflict(`${id} comes from MEMORY_PROVIDER_CONFIG, which the API can't change`);
   const body = object(input);
@@ -211,6 +225,7 @@ export function putBrain(record: MemoryRegistry, id: string, input: unknown, cha
   if (typeof preset !== "string" || !presetOf({ preset }))
     throw invalid(`preset must be one of: ${Object.keys(BRAIN_PRESETS).join(", ")}`);
   const url = text(body.url ?? existing?.url, "url");
+  publicUrl(url);
   const clientSecret = body.clientSecret === undefined ? undefined : nonBlank(body.clientSecret, "clientSecret");
   const kept = url === existing?.url ? existing.auth.clientSecretEnc : undefined;
   const clientSecretEnc = clientSecret === undefined ? kept : encryptSecret(clientSecret, change.key);
