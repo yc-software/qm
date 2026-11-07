@@ -288,24 +288,23 @@ const ACTIVITY = `
      WHERE e.tenant_id = ${TENANT} AND ${authoredUserTurn("e")}
      GROUP BY 1, 2
   ), turns AS (
-    SELECT coalesce(l.user_id::text, d.alias) AS who, l.user_id, d.day, SUM(d.turns) AS turns, MAX(d.last_at) AS last_at
+    SELECT coalesce(l.user_id::text, d.alias) AS who, d.day, SUM(d.turns) AS turns, MAX(d.last_at) AS last_at
       FROM daily d LEFT JOIN user_links l ON l.alias_id = d.alias
-     GROUP BY 1, 2, 3
+     GROUP BY 1, 2
   ), per AS (
-    SELECT who, user_id, SUM(turns) AS turns, MAX(last_at) AS last_at, array_agg(day ORDER BY day) AS days
-      FROM turns GROUP BY who, user_id
+    SELECT who, SUM(turns) AS turns, MAX(last_at) AS last_at, array_agg(day ORDER BY day) AS days
+      FROM turns GROUP BY who
   ), member AS (
     SELECT coalesce(l.user_id::text, ${fold("p.principal_id")}) AS who, l.user_id, COUNT(DISTINCT p.session_id) AS sessions
       FROM participants p LEFT JOIN user_links l ON l.alias_id = ${fold("p.principal_id")}
      WHERE coalesce(btrim(p.principal_id), '') <> ''
      GROUP BY 1, 2
   )
-  SELECT coalesce(m.user_id, per.user_id) AS user_id, coalesce(u.primary_alias, m.who, per.who) AS principal_id,
-         coalesce(u.kind, 'person') AS kind, coalesce(m.sessions, 0) AS sessions, coalesce(per.turns, 0) AS turns,
-         per.last_at, per.days
+  SELECT m.user_id, coalesce(u.primary_alias, m.who) AS principal_id, coalesce(u.kind, 'person') AS kind,
+         m.sessions, coalesce(per.turns, 0) AS turns, per.last_at, per.days
     FROM member m
-    FULL JOIN per ON per.who = m.who
-    LEFT JOIN users u ON u.id = coalesce(m.user_id, per.user_id)`;
+    LEFT JOIN users u ON u.id = m.user_id
+    LEFT JOIN per ON per.who = m.who`;
 
 function toActivity(r: Record<string, unknown>): UserActivity {
   return {
