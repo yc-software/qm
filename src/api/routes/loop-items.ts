@@ -211,7 +211,7 @@ async function serveItemImage(ctx: ApiCtx): Promise<void> {
   }
   let upstream: Response;
   try {
-    upstream = await publicFetch(url, { headers: authHeader, redirect: "error" });
+    upstream = await publicFetch(url, { headers: authHeader, redirect: "follow" });
   } catch (e) {
     return sendJson(ctx.res, 502, { error: "upstream", message: errMessage(e) });
   }

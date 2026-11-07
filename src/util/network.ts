@@ -68,6 +68,9 @@ function toResponse(res: IncomingMessage, method: string): Response {
   return new Response(body, { status, statusText: res.statusMessage ?? "", headers });
 }
 
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+const MAX_REDIRECTS = 20;
+
 export type AddressFetch = (input: string | URL, init?: RequestInit) => Promise<Response>;
 
 function refusingLookup(refused: (ip: string) => boolean): LookupFunction {
@@ -92,7 +95,24 @@ export function addressGuardedFetch(
     "http:": new HttpAgent({ keepAlive: true, lookup }),
     "https:": new HttpsAgent({ keepAlive: true, lookup }),
   };
-  return (input, init = {}) => guardedRequest(new URL(input), init, { agents, refused, timeoutMs });
+  return async (input, init = {}) => {
+    let url = new URL(input);
+    let request = init;
+    for (let hop = 0; ; hop++) {
+      const res = await guardedRequest(url, request, { agents, refused, timeoutMs });
+      const location = res.headers.get("location");
+      if (request.redirect !== "follow" || !REDIRECT_STATUSES.has(res.status) || location === null) return res;
+      await res.body?.cancel();
+      if (hop === MAX_REDIRECTS) throw new TypeError(`too many redirects from ${new URL(input).origin}`);
+      const next = new URL(location, url);
+      const headers = new Headers(request.headers);
+      if (next.origin !== url.origin) headers.delete("authorization");
+      const method = (request.method ?? "GET").toUpperCase();
+      const asGet = (res.status === 303 && method !== "HEAD") || (res.status < 303 && method === "POST");
+      request = { ...request, headers, ...(asGet ? { method: "GET", body: null } : {}) };
+      url = next;
+    }
+  };
 }
 
 export const publicFetch = addressGuardedFetch(isPrivateNetworkIp);

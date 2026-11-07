@@ -3,7 +3,12 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { isIP, type AddressInfo } from "node:net";
-import { addressGuardedFetch, PrivateNetworkAddressError, publicFetch } from "../src/util/network.ts";
+import {
+  addressGuardedFetch,
+  isPrivateNetworkIp,
+  PrivateNetworkAddressError,
+  publicFetch,
+} from "../src/util/network.ts";
 import { createMcpClient } from "../src/mcp/mcp-client.ts";
 import { discoverOAuth } from "../src/mcp/oauth-discovery.ts";
 import { exchangeCode, setPublicOAuthClients } from "../src/connectors/oauth.ts";
@@ -93,6 +98,43 @@ test("address-guarded fetch sends bodies and headers and returns status, headers
   assert.equal((await loopback(`${base}/empty`)).status, 204);
   assert.equal((await loopback(`${base}/moved`)).status, 302);
   await assert.rejects(loopback(`${base}/moved`, { redirect: "error" }), /redirect from .* refused/);
+});
+
+test("address-guarded fetch follows redirects only when asked, re-checks every hop, and keeps credentials on their origin", async (t) => {
+  const log: string[] = [];
+  const cdn = await listen(t, (req, res) => {
+    log.push(`cdn ${req.method} ${req.headers.authorization ?? "-"}`);
+    res.writeHead(200, { "content-type": "image/png" }).end("png");
+  });
+  const files = await listen(t, (req, res) => {
+    log.push(`files ${req.method} ${req.url} ${req.headers.authorization ?? "-"}`);
+    const next: Record<string, string> = {
+      "/private": "/signed",
+      "/signed": `http://127.0.0.1:${cdn.port}/image.png`,
+      "/form": `http://127.0.0.1:${cdn.port}/done`,
+      "/metadata": "http://169.254.169.254/latest/meta-data/",
+    };
+    res.writeHead(req.url === "/form" ? 303 : 302, { location: next[req.url ?? ""] ?? req.url }).end();
+  });
+  const guarded = addressGuardedFetch((ip) => ip !== "127.0.0.1" && isPrivateNetworkIp(ip));
+  const base = `http://127.0.0.1:${files.port}`;
+
+  const image = await guarded(`${base}/private`, { headers: { authorization: "Bearer t" }, redirect: "follow" });
+  assert.equal(image.status, 200);
+  assert.equal(await image.text(), "png");
+  const form = await guarded(`${base}/form`, { method: "POST", body: "a=b", redirect: "follow" });
+  assert.equal(form.status, 200);
+  assert.deepEqual(log, [
+    "files GET /private Bearer t",
+    "files GET /signed Bearer t",
+    "cdn GET -",
+    "files POST /form -",
+    "cdn GET -",
+  ]);
+
+  await assert.rejects(guarded(`${base}/metadata`, { redirect: "follow" }), PrivateNetworkAddressError);
+  await assert.rejects(guarded(`${base}/loop`, { redirect: "follow" }), /too many redirects/);
+  assert.equal((await guarded(`${base}/private`)).status, 302);
 });
 
 test("address-guarded fetch gives up on an endpoint that never answers", async (t) => {
