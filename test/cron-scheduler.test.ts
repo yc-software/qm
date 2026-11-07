@@ -1718,7 +1718,7 @@ test("a failing cron posts one notice to its destination, then stays quiet until
     reason: "claude-sonnet-5 can't run here (runtime is no longer available).",
   };
   let clock = 1_000_000;
-  const { crons, deliveries, scheduler } = agent(
+  const { crons, deliveries, calls, scheduler } = agent(
     async () => result,
     undefined,
     undefined,
@@ -1747,6 +1747,13 @@ test("a failing cron posts one notice to its destination, then stays quiet until
   await runNowSettled(scheduler, cron.id);
   result = { status: "failed" };
   await runNowSettled(scheduler, cron.id);
+  assert.doesNotMatch(calls[0]?.text ?? "", /previous fire did not complete/);
+  assert.match(
+    calls[2]?.text ?? "",
+    /The previous fire did not complete \(refused: claude-sonnet-5 can't run here \(runtime is no longer available\)\)\..*running again/,
+    "the fire after a failure streak is told so it can say the cron recovered",
+  );
+  assert.doesNotMatch(calls[3]?.text ?? "", /previous fire did not complete/, "a fire after a success is not");
   const after = await texts();
   assert.equal(after.length, 3, "a failure after a success notifies again");
   assert.match(after[2]!, /^⚠️ Scheduled task “Daily standup” did not run: /);

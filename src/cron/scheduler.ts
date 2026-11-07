@@ -161,6 +161,7 @@ function renderCronFireInput(
   mentionRoster?: string,
   runtimeProblem?: string | null,
   refusedDelivery?: string,
+  previousFailure?: string,
 ): string {
   const task = cron.action ?? "";
   if (!task.trim()) return task;
@@ -176,6 +177,11 @@ function renderCronFireInput(
     `The retained fire log (cron tool, action="runs", id="${cron.id}") shows how prior fires went — useful when this run hits errors or surprising state.`,
     "If the task produces a briefing someone reads at a set time — a digest, summary, standup, rundown or follow-up list — post it even on a quiet run, as one line saying nothing is new. A task that checks for something and reports only when it finds it, or does upkeep, ends with finish_silently. The task's own posting rules win.",
     "Report what you verified, not what you started: work launched in this fire and still running is not progress yet. If the counts haven't moved since the last fire, treat that as a blocker to report, not a reason to stay silent.",
+    ...(readsNotes
+      ? [
+          "Report a problem once per outage, not on every fire. When you report one, say so in your note. If your note or the fire log shows an earlier fire already reported the same problem, don't report it again, even if the task says to report failures, unless it asks for repeats: leave it out of anything you post (finish silently if that was all), and note that it's still happening. When it clears, say so in one line.",
+        ]
+      : []),
     ...(readsNotes ? fireNoteLine(cron.lastFireNote) : []),
     ...(readsNotes
       ? [
@@ -186,6 +192,11 @@ function renderCronFireInput(
       ? [
           `This fire runs on the default model because the cron's own model can't run: ${runtimeProblem}`,
           `Tell the people this cron reports to, unless the fire log shows they already know. If the cron's model looks stale, you can change it (cron tool, action="patch", id="${cron.id}", runtime); it is used again as soon as it can run.`,
+        ]
+      : []),
+    ...(previousFailure
+      ? [
+          `The previous fire did not complete (${previousFailure}). Its destination got one notice when these failures began; later ones went only to the fire log. If this fire works, add one line saying the cron is running again.`,
         ]
       : []),
     ...(refusedDelivery
@@ -314,7 +325,13 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         {
           ...cronTriggerAuthority(cron),
           input: (homeRoster) =>
-            renderCronFireInput(cron, cronMentionRoster(cron, homeRoster), runtimeProblem, refusedDelivery),
+            renderCronFireInput(
+              cron,
+              cronMentionRoster(cron, homeRoster),
+              runtimeProblem,
+              refusedDelivery,
+              failingAlready ? flattenFireNote(previous.note ?? previous.status ?? "").replace(/\.$/, "") : undefined,
+            ),
           fireKey,
           threadRef,
           surface: "cron",
