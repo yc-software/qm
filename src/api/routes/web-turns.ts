@@ -186,7 +186,7 @@ async function webTurn(ctx: ApiCtx): Promise<void> {
       : undefined);
   const desktopClientId =
     typeof p.desktopClientId === "string" && p.desktopClientId.length === 36 ? p.desktopClientId : undefined;
-  const surfaceBriefing = isObj(p.surfaceBriefing) ? p.surfaceBriefing : undefined;
+  const surfaceBriefing = isObj(p.surfaceBriefing) && !Array.isArray(p.surfaceBriefing) ? p.surfaceBriefing : undefined;
   const timezone = trimmed(p.timezone, 64);
   return submitTurn(ctx, {
     ...(await webTurnBase(ctx, user, resolved.conversation, threadRef, text)),

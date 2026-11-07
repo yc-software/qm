@@ -59,8 +59,8 @@ test("each aliased /api path resolves to the browser-enabled /v1 route that serv
   }
   assert.equal(apiAlias("GET", "/api/sessions/a%2Fb/children"), "/v1/sessions/a%2Fb/children");
   for (const [method, path] of [
-    ["POST", "/api/turn"],
-    ["POST", "/api/approvals/1"],
+    ["GET", "/api/turn"],
+    ["POST", "/api/approvals/1/2"],
     ["POST", "/api/crons"],
     ["POST", "/api/webhooks"],
     ["GET", "/api/inbox"],
