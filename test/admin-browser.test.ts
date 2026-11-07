@@ -49,6 +49,7 @@ const ADMIN_PAGES = [
   "GET /v1/admin/memory-registry/bindings/:id",
   "PUT /v1/admin/memory-registry/bindings/:id",
   "DELETE /v1/admin/memory-registry/bindings/:id",
+  "PUT /v1/admin/memory-registry/member-brains",
   "GET /v1/admin/model-providers",
   "PUT /v1/admin/model-providers/:provider",
   "DELETE /v1/admin/model-providers/:provider",
