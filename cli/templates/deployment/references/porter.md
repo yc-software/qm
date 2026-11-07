@@ -88,3 +88,7 @@ push secrets as Porter env groups, and verify by signing in as the
 administrator and opening the Admin tab. Published-app serving needs nothing further: apps are reachable
 signed-in at `/d/<app>/`; setting `DEPLOY_APPS_DOMAIN` upgrades them to
 per-app subdomains (`docs/porter.md`, onboarding checklist).
+
+`porter/apps/core.yaml` gives core 60 seconds to stop: the default 30 s
+`SHUTDOWN_DRAIN_MS` plus 30 s to exit. Raise its
+`terminationGracePeriodSeconds` with any larger drain.
