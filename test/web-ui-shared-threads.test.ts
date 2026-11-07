@@ -134,10 +134,8 @@ test("a channel member can continue a teammate's shared web thread; outsiders an
     (await fetch(`${coreBase}/api/runs/active?threadRef=${encodeURIComponent("web:alice:s1")}`, asUser("bob"))).status,
     200,
   );
-  assert.equal(
-    (await fetch(`${coreBase}/api/runs/active?threadRef=${encodeURIComponent("dm:D1")}`, asUser("bob"))).status,
-    200,
-  );
+  const otherDm = await fetch(`${coreBase}/api/runs/active?threadRef=${encodeURIComponent("dm:D1")}`, asUser("bob"));
+  assert.deepEqual([otherDm.status, await otherDm.json()], [200, { runId: null, run: null }]);
 
   const personalClaim = await fetch(
     `${webBase}/api/turn`,

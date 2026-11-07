@@ -122,3 +122,35 @@ test("another user cannot inspect or control a session's swarm", async () => {
     assert.deepEqual(await refused.json(), { error: "only swarm controls are available here" });
   }
 });
+
+test("the active-run lookup finds a Slack DM or private-channel run only for someone who may use it", async () => {
+  await built.app.upsertChannels(
+    [{ channelId: "PRIVRUNS", name: "private-runs", isPrivate: true }],
+    [{ channelId: "PRIVRUNS", principalId: "alice" }],
+  );
+  const dm = `dm:D-${crypto.randomUUID()}`;
+  const channel = `ch:PRIVRUNS:${crypto.randomUUID()}`;
+  for (const conversation of [
+    { kind: "dm" as const, threadRef: dm, audience: [] },
+    { kind: "channel" as const, channelRef: "PRIVRUNS", threadRef: channel, audience: [] },
+  ]) {
+    const { run } = await built.runs.enqueue({
+      sessionId: conversation.threadRef,
+      request: {
+        surface: "slack",
+        actor: { id: "alice", type: "internal" },
+        origin: { kind: "human" },
+        conversation,
+        text: "private work",
+      },
+    });
+    const lookup = async (user: string) =>
+      (await fetch(
+        `${coreBase}/api/runs/active?threadRef=${encodeURIComponent(conversation.threadRef)}`,
+        browser(user),
+      ).then((r) => r.json())) as { runId: string | null; run: { status?: string } | null };
+    const own = await lookup("alice");
+    assert.deepEqual([own.runId, own.run?.status], [run.id, "pending"], conversation.kind);
+    assert.deepEqual(await lookup("bob"), { runId: null, run: null }, conversation.kind);
+  }
+});
