@@ -84,6 +84,14 @@ platform recycles.
 - **Guard the no-persistence case:** if `$DATA_DIR` is unset, the runtime has no durable
   app storage — don't build an app that quietly accumulates state on disk; say so and
   bake data in or fetch it live instead.
+- **Data belongs to one deployment.** Each deployment has its own `$DATA_DIR`. Update
+  the deployment people actually use, the one behind the link they open
+  (`GET /v1/deployments` lists names and URLs), not a name guessed from the directory.
+  Publishing the same source under a second name starts a separate app with empty data,
+  and anyone sent that link sees an empty app.
+- **Before saying data is lost, look.** Read it from the live app
+  (`GET /v1/deployments/:id/fetch`) and check the other deployments built from the same
+  source. An app that looks empty is usually a different deployment, not a wipe.
 - **Updating an existing stateful app?** If it writes _runtime_ state (a db, uploads,
   counters) anywhere else, move that state under `$DATA_DIR` as part of the update — do
   this on your own initiative; the user should never have to ask. Data deliberately baked
