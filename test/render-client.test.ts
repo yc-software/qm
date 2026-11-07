@@ -183,30 +183,6 @@ test("Render SDK adapter creates the default sandbox group of a workspace that h
   assert.equal(http.groupCreates(), creates);
 });
 
-test("Render SDK adapter starts a one-day sandbox on a workspace that caps lifetime at one day", async (t) => {
-  const fake = createFakeRender();
-  t.after(() => fake.cleanup());
-  const http = serveFakeRenderApi(t, fake);
-  http.capLifetime(86400);
-  const client = createSdkRenderClient({ apiKey: "secret", workspaceId: "tea-test" });
-  const created = await client.create({ lifetimeSec: 2592000 });
-  assert.equal(http.lifetimeOf(created.id), 86400);
-});
-
-test("Render SDK adapter runs scripts with the environment of the QM sandbox base image", async (t) => {
-  const fake = createFakeRender();
-  t.after(() => fake.cleanup());
-  serveFakeRenderApi(t, fake);
-  const client = createSdkRenderClient({ apiKey: "secret", workspaceId: "tea-test" });
-  const { id } = await client.create({ lifetimeSec: 3600 });
-  const result = await client.runScript(
-    id,
-    'echo "$VIRTUAL_ENV $ANONYMIZED_TELEMETRY $BROWSER_USE_CLOUD_SYNC"; echo "$PATH" | cut -d: -f1',
-    30,
-  );
-  assert.equal(result.stdout, "/opt/agent-venv false false\n/opt/agent-venv/bin\n");
-});
-
 test("Render SDK adapter waits for a checkpoint and keeps the provider reason when it fails", async (t) => {
   const statuses = ["creating", "available", "creating", "failed"];
   t.mock.method(globalThis, "fetch", async () => {

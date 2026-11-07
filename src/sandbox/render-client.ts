@@ -22,10 +22,6 @@ const CLEANUP_TIMEOUT_MS = 5_000;
 const CHECKPOINT_SETTLE_MS = 180_000;
 const SANDBOX_START_MS = 180_000;
 const STALE_SCRIPT_MINUTES = 5;
-const IMAGE_ENV =
-  'export PATH="/opt/agent-venv/bin:$PATH" VIRTUAL_ENV=/opt/agent-venv ANONYMIZED_TELEMETRY=false BROWSER_USE_CLOUD_SYNC=false\n';
-
-const DAY_SEC = 86400;
 
 const sdkErrors = {
   statusOf: (error: unknown): number | undefined =>
@@ -186,7 +182,7 @@ export function createSdkRenderClient(opts: SdkRenderClientOptions): RenderClien
   const runScript: RenderClient["runScript"] = async (sandboxId, script, timeoutSec) => {
     const path = `${RENDER_SCRIPT_DIR}/${randomUUID()}.sh`;
     const signal = AbortSignal.timeout(timeoutSec * 1000 + Math.min(CONTROL_TIMEOUT_MS, timeoutSec * 1000));
-    const prelude = `rm -f ${shq(path)}; find ${shq(RENDER_SCRIPT_DIR)} -type f -mmin +${STALE_SCRIPT_MINUTES} -delete 2>/dev/null\n${IMAGE_ENV}`;
+    const prelude = `rm -f ${shq(path)}; find ${shq(RENDER_SCRIPT_DIR)} -type f -mmin +${STALE_SCRIPT_MINUTES} -delete 2>/dev/null\n`;
     try {
       await retryOperation(
         (attempt) => api.upload(sandboxId, path, Buffer.from(prelude + script), undefined, { signal: attempt }),
@@ -208,19 +204,7 @@ export function createSdkRenderClient(opts: SdkRenderClientOptions): RenderClien
       if (snapshotId) source = { snapshotId };
       else if (image) source = { image };
       const created = await retryOperation(
-        () =>
-          api
-            .create({ plan: RENDER_SANDBOX_PLAN, timeoutSeconds: lifetimeSec, idleTimeoutSeconds: 0, ...source })
-            .catch((error: unknown) => {
-              if (!(error instanceof ClientError && error.code === "invalid_timeout_seconds" && lifetimeSec > DAY_SEC))
-                throw error;
-              return api.create({
-                plan: RENDER_SANDBOX_PLAN,
-                timeoutSeconds: DAY_SEC,
-                idleTimeoutSeconds: 0,
-                ...source,
-              });
-            }),
+        () => api.create({ plan: RENDER_SANDBOX_PLAN, timeoutSeconds: lifetimeSec, idleTimeoutSeconds: 0, ...source }),
         "refused",
         {
           ...sdkErrors,
