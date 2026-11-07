@@ -6,7 +6,6 @@ import { isStrongSigningSecret, MIN_SIGNING_SECRET_LENGTH } from "../auth/source
 import { orgId } from "../config.ts";
 import { canonicalPerson, samePerson } from "../directory/person.ts";
 import { reportFailure } from "../util/errors.ts";
-import { CAPABILITY_HEADER } from "./contract.ts";
 import type { ServerDeps } from "./deps.ts";
 import { apiRoutes } from "./routes/index.ts";
 import { compilePath, findRoute, type Route } from "./routes/route.ts";
@@ -99,6 +98,90 @@ export const API_ALIASES: ReadonlyMap<string, string> = new Map([
   ["PUT /api/channel-header-pin", "/v1/channel-header-pin"],
   ["POST /api/personas/:id/credentials", "/v1/personas/:id/credentials"],
   ["DELETE /api/personas/:id/credentials/:grantId", "/v1/personas/:id/credentials/:grantId"],
+  ["GET /api/files/by-name/content", "/v1/files/by-name/content"],
+  ["GET /api/files/:id/content", "/v1/files/:id/content"],
+  ["GET /api/files/:id/content/:name", "/v1/files/:id/content"],
+  ["GET /api/playgrounds/:id", "/v1/playgrounds/:id"],
+  ["POST /api/turn", "/v1/web/turn"],
+  ["POST /api/approvals/:requestId", "/v1/web/approvals/:requestId"],
+  ["POST /api/runs/:id/signal", "/v1/web/runs/:id/signal"],
+  ["GET /api/deliveries/events", "/v1/web/events"],
+  ["GET /me", "/v1/web/me"],
+  ["POST /api/runs/:id/withdraw", "/v1/runs/:id/withdraw"],
+  ["GET /api/composio/callback", "/v1/composio/callback"],
+  ["GET /api/dictation", "/v1/web/dictation"],
+  ["POST /api/dictation", "/v1/web/dictation"],
+  ["GET /api/voice", "/v1/web/voice"],
+  ["POST /api/voice/sessions", "/v1/web/voice/sessions"],
+  ["GET /api/ui-canvas/:sessionId", "/v1/ui/canvases/:sessionId"],
+  ["GET /api/ui-canvas/:sessionId/script.js", "/v1/ui/canvases/:sessionId/script.js"],
+  ["POST /api/ui-canvas/observe/:callId", "/v1/ui/observe/:callId/result"],
+  ["POST /api/ui-canvas/:sessionId", "/v1/ui/canvases/:sessionId"],
+  ["GET /api/admin/connector-catalog", "/v1/connectors/catalog"],
+  ["GET /api/crons", "/v1/crons"],
+  ["GET /api/composio/slack", "/v1/composio/slack"],
+  ["POST /api/composio/slack/authorize", "/v1/composio/slack/authorize"],
+  ["GET /api/composio/toolkits", "/v1/composio/toolkits"],
+  ["GET /api/composio/connections", "/v1/composio/connections"],
+  ["POST /api/composio/authorize", "/v1/composio/authorize"],
+  ["GET /api/contexts/:scope/ambient-policy", "/v1/contexts/:scope/ambient-policy"],
+  ["PUT /api/contexts/:scope/ambient-policy", "/v1/contexts/:scope/ambient-policy"],
+  ["GET /api/directory/resolve", "/v1/directory/resolve"],
+  ["POST /api/suggested-activities", "/v1/suggested-activities"],
+  ["POST /api/suggested-activities/dismiss", "/v1/suggested-activities/dismiss"],
+  ["POST /api/connectors/:provider/start", "/v1/connectors/oauth/:provider/start"],
+  ["GET /api/keychain/overview", "/v1/keychain/overview"],
+  ["POST /api/keychain/grants/:id/revoke", "/v1/keychain/grants/:id/revoke"],
+  ["POST /api/keychain/drops", "/v1/keychain/drops"],
+  ["DELETE /api/keychain/credentials/:id", "/v1/keychain/credentials/:id"],
+  ["GET /api/deployments", "/v1/deployments"],
+  ["GET /api/deployments/:id", "/v1/deployments/:id"],
+  ["GET /api/deployments/:id/share", "/v1/deployments/:id/share"],
+  ["POST /api/deployments/:id/share", "/v1/deployments/:id/share"],
+  ["POST /api/deployments/:id/display-name", "/v1/deployments/:id/display-name"],
+  ["POST /api/deployments/:id/name", "/v1/deployments/:id/name"],
+  ["POST /api/deployments/:id/embed-ancestors", "/v1/deployments/:id/embed-ancestors"],
+  ["POST /api/deployments/:id/archive", "/v1/deployments/:id/archive"],
+  ["POST /api/deployments/:id/restore", "/v1/deployments/:id/restore"],
+  ["POST /api/webhooks", "/v1/webhooks"],
+  ["POST /api/webhooks/:id/disable", "/v1/webhooks/:id/disable"],
+  ["POST /api/webhooks/:id/enable", "/v1/webhooks/:id/enable"],
+  ["POST /api/blobs", "/v1/web/blobs"],
+  ["POST /api/files/upload", "/v1/files/upload"],
+  ["GET /api/inbox", "/v1/inbox"],
+  ["POST /api/inbox/selection", "/v1/inbox/selection"],
+  ["POST /api/inbox/sent-chat", "/v1/loops/inbox/sent-chat"],
+  ["POST /api/inbox/sync-cron", "/v1/loops/inbox/sync-cron"],
+  ["GET /api/inbox/sent", "/v1/connectors/gmail/sent"],
+  ["GET /api/inbox/sent/:messageId", "/v1/connectors/gmail/sent/:messageId"],
+  ["GET /api/loops", "/v1/loops"],
+  ["POST /api/loops", "/v1/loops"],
+  ["GET /api/loops/:id", "/v1/loops/:id"],
+  ["PATCH /api/loops/:id", "/v1/loops/:id"],
+  ["DELETE /api/loops/:id", "/v1/loops/:id"],
+  ["GET /api/loops/:id/ingestion", "/v1/loops/:id/ingestion"],
+  ["POST /api/loops/:id/ingestion", "/v1/loops/:id/ingestion"],
+  ["PATCH /api/loops/:id/ingestion/:sourceId", "/v1/loops/:id/ingestion/:sourceId"],
+  ["POST /api/loops/:id/fire", "/v1/loops/:id/fire"],
+  ["POST /api/loops/:id/triage/preview", "/v1/loops/:id/triage/preview"],
+  ["POST /api/loops/:id/outputs/:outputId/decide", "/v1/loops/:id/outputs/:outputId/decide"],
+  ["POST /api/loops/:id/grants", "/v1/loops/:id/grants"],
+  ["POST /api/loops/:id/autopilot", "/v1/loops/:id/autopilot"],
+  ["GET /api/loops/:id/items", "/v1/loops/:id/items"],
+  ["GET /api/loops/:id/items/:itemId", "/v1/loops/:id/items/:itemId"],
+  ["GET /api/loops/:id/items/:itemId/image", "/v1/loops/:id/items/:itemId/image"],
+  ["POST /api/loops/:id/items/:itemId/action", "/v1/loops/:id/items/:itemId/action"],
+  ["POST /api/loops/:id/items/:itemId/followup", "/v1/loops/:id/items/:itemId/followup"],
+  ["GET /share/internal/:token", "/v1/web/shares/internal/:token"],
+  ["GET /share/external/:token", "/v1/web/shares/external/:token"],
+  ["GET /share/internal/:token/files/:fileId", "/v1/shared-sessions/:token/files/:fileId"],
+  ["GET /share/external/:token/files/:fileId", "/v1/public-shares/:token/files/:fileId"],
+  ["GET /connectors/oauth/:provider/callback", "/v1/web/connectors/oauth/:provider/callback"],
+  ...apiRoutes.flatMap((route): Array<[string, string]> =>
+    "path" in route && route.browser && route.path.startsWith("/v1/admin/")
+      ? [[`${route.method} /api/admin/${route.path.slice("/v1/admin/".length)}`, route.path]]
+      : [],
+  ),
 ]);
 
 const aliasMatchers = [...API_ALIASES].map(([key, target]) => {
@@ -113,7 +196,8 @@ export function apiAlias(method: string, pathname: string): string | null {
     const target = alias.target
       .map((seg) => (seg.startsWith(":") ? encodeURIComponent(params[seg.slice(1)]!) : seg))
       .join("/");
-    return findRoute(apiRoutes, method, target)?.route.browser ? target : null;
+    const route = findRoute(apiRoutes, method, target)?.route;
+    return route?.browser || route?.auth === "public" ? target : null;
   }
   return null;
 }
@@ -124,15 +208,6 @@ interface BrowserRefusal {
   status: 401 | 403 | 503;
   error: string;
   message: string;
-}
-
-export function usesBrowserSession(req: IncomingMessage, route: Pick<Route, "browser"> | undefined): boolean {
-  return (
-    route?.browser === true &&
-    req.headers[CAPABILITY_HEADER] === undefined &&
-    req.headers["x-signature"] === undefined &&
-    readCookie(req.headers.cookie, "portal_session") !== null
-  );
 }
 
 function misconfiguration(deps: ServerDeps): string | null {
@@ -157,6 +232,7 @@ export async function browserIdentity(
   req: IncomingMessage,
   method: string,
   deps: ServerDeps,
+  embeddable: boolean,
 ): Promise<PortalIdentity | BrowserRefusal> {
   const now = Date.now();
   const problem = misconfiguration(deps);
@@ -164,7 +240,7 @@ export async function browserIdentity(
     reportFailure("browser_session.misconfigured", new Error(problem));
     return { status: 503, error: "unavailable", message: "browser sign-in is not configured on this server" };
   }
-  const { secret, maxAgeSeconds, principals = [] } = deps.portalSession!;
+  const { secret, maxAgeSeconds, apiOrigins } = deps.portalSession!;
   const cookies = req.headers.cookie;
   const session = openSession(
     readCookie(cookies, "portal_session"),
@@ -177,7 +253,9 @@ export async function browserIdentity(
     return { status: 401, error: "unauthorized", message: "a sign-in session for this organization is required" };
   if (session.appOnly)
     return { status: 403, error: "app_only_session", message: "this sign-in only permits access to shared apps" };
-  if (method !== "GET" && method !== "HEAD" && !sameOriginRequest(req, originOf(deps.portalUrl!)))
+  const listedOrigin =
+    embeddable && typeof req.headers.origin === "string" && apiOrigins?.has(req.headers.origin) === true;
+  if (method !== "GET" && method !== "HEAD" && !listedOrigin && !sameOriginRequest(req, originOf(deps.portalUrl!)))
     return { status: 403, error: "forbidden", message: "cross-origin request refused" };
   for (const header of RELAY_IDENTITY_HEADERS) delete req.headers[header];
   await deps.identity?.refresh();
@@ -187,8 +265,6 @@ export async function browserIdentity(
     ? null
     : impersonationFor({ sub, org: session.org }, cookies, deriveKey(secret, "portal.impersonate.v1"), now);
   const target = imp && (await isAdmin(deps, sub)) ? imp.target : null;
-  if (principals.length > 0 && !principals.includes(target ?? sub))
-    return { status: 403, error: "forbidden", message: "this person is not on this server's web app allowlist" };
   return {
     p: target ?? sub,
     authenticatedAs: session.sub,

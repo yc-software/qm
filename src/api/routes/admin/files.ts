@@ -5,6 +5,8 @@ import { MAX_ATTACHMENT_BYTES, mimeFromName, safeAttachmentName } from "../../..
 import { contentDispositionAttachment, contentTypeWithUtf8Charset, sendJson } from "../../http.ts";
 import { relayStream } from "../../../../plugins/chassis/src/http.ts";
 import { audit, authorizeAdmin, requireScopedAdmin } from "../shared.ts";
+import { browserUploadFields, stageBrowserUpload } from "../blobs.ts";
+import { usesBrowserSession } from "../route.ts";
 import { type ApiCtx } from "../route.ts";
 import { discoverScopes, FILES_PAGE_SIZE } from "./common.ts";
 
@@ -133,7 +135,14 @@ export async function uploadAdminFile(ctx: ApiCtx): Promise<void> {
   if (!deps.blobTransfer)
     return sendJson(res, 501, { error: "not_configured", message: "blob transfer store not wired" });
   const { actor, scope } = authz;
-  const b = body as { blobId?: unknown; name?: unknown; mimetype?: unknown };
+  const streamed = usesBrowserSession(ctx.req, { browser: "self" });
+  const staged = streamed ? await stageBrowserUpload(ctx) : null;
+  if (streamed && !staged) return;
+  const b = (staged ? { blobId: staged.blobId, ...browserUploadFields(ctx) } : body) as {
+    blobId?: unknown;
+    name?: unknown;
+    mimetype?: unknown;
+  };
   const blobId = typeof b.blobId === "string" ? b.blobId.trim() : "";
   const name = safeAttachmentName(typeof b.name === "string" ? b.name : "");
   const mimetype =

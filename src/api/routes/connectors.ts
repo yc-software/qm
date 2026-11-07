@@ -27,8 +27,9 @@ import { personKey, samePerson } from "../../directory/person.ts";
 import { errMessage, swallowAs } from "../../util/errors.ts";
 import { normalizeInboundExpiresAt } from "../expiry.ts";
 import { sendJson, sendRedirect } from "../http.ts";
-import { audit } from "./shared.ts";
+import { audit, isObj } from "./shared.ts";
 import type { ApiCtx, BaseCtx, Route } from "./route.ts";
+import { forInboxLoopsPeople } from "./loops.ts";
 
 const OAUTH_STATE_MAX_AGE_MS = 10 * 60_000;
 function oauthStateSecret(deps: ServerDeps, signingSecret: string | undefined): string {
@@ -80,9 +81,10 @@ function parseOAuthRoute(pathname: string): { provider: string; action: "start" 
   return { provider: decodeURIComponent(provider), action };
 }
 
-function safeReturnTo(value: string | null): string | undefined {
-  if (!value || !value.startsWith("/") || value.startsWith("//")) return undefined;
-  return value;
+function safeReturnTo(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value.startsWith("/")) return undefined;
+  const url = new URL(value, "http://x");
+  return url.host === "x" && !url.pathname.startsWith("//") ? value : undefined;
 }
 
 function latestRefreshFailure(
@@ -131,20 +133,21 @@ async function connectorProviderStatus(
   return Object.fromEntries(entries);
 }
 
-async function oauthCallback(ctx: BaseCtx): Promise<void> {
-  const { res, deps, secret, url, pathname } = ctx;
-  const oauthRoute = parseOAuthRoute(pathname)!;
+type OAuthCallbackOutcome = { status: number; body: Record<string, unknown> } | { redirect: string };
+
+async function settleOAuthCallback(ctx: BaseCtx, provider: string): Promise<OAuthCallbackOutcome> {
+  const { deps, secret, url } = ctx;
   if (!deps.connectorTokens)
-    return sendJson(res, 501, { error: "not_configured", message: "connector token store not wired" });
+    return { status: 501, body: { error: "not_configured", message: "connector token store not wired" } };
   const code = url.searchParams.get("code") ?? "";
   const stateParam = url.searchParams.get("state") ?? "";
   const providerError = url.searchParams.get("error");
-  if (providerError) return sendJson(res, 400, { error: "oauth_denied", message: providerError });
-  if (!code || !stateParam) return sendJson(res, 400, { error: "bad_request", message: "code and state required" });
+  if (providerError) return { status: 400, body: { error: "oauth_denied", message: providerError } };
+  if (!code || !stateParam) return { status: 400, body: { error: "bad_request", message: "code and state required" } };
   let state;
   try {
     state = await resumeOAuthFlow(deps, secret, stateParam);
-    if (state.provider !== oauthRoute.provider) throw new Error("OAuth provider mismatch");
+    if (state.provider !== provider) throw new Error("OAuth provider mismatch");
     if (state.orgId !== undefined && state.orgId !== configOrgId()) {
       throw new Error("OAuth state is for a different org");
     }
@@ -155,8 +158,8 @@ async function oauthCallback(ctx: BaseCtx): Promise<void> {
       throw new Error("OAuth state was already used or replay protection is unavailable");
     }
     const accountType = state.accountType ?? "default";
-    const client = await resolverFor(deps)(oauthRoute.provider, { accountType });
-    const { hosts, token } = await exchangeCode(oauthRoute.provider, code, state.redirectUri, {
+    const client = await resolverFor(deps)(provider, { accountType });
+    const { hosts, token } = await exchangeCode(provider, code, state.redirectUri, {
       client,
       fetchImpl: deps.oauthFetch,
       accountType,
@@ -169,7 +172,7 @@ async function oauthCallback(ctx: BaseCtx): Promise<void> {
     audit(deps, {
       principalId: state.principalId,
       action: "connector.oauth.connected",
-      resource: oauthRoute.provider,
+      resource: provider,
       scopeLabel: state.principalId,
     });
     if (state.consentLinkId && deps.consentLinks) {
@@ -177,14 +180,33 @@ async function oauthCallback(ctx: BaseCtx): Promise<void> {
     }
     if (state.returnTo) {
       const dest = new URL(state.returnTo, "http://localhost");
-      dest.searchParams.set("connector", oauthRoute.provider);
+      dest.searchParams.set("connector", provider);
       dest.searchParams.set("status", "connected");
-      return sendRedirect(res, `${dest.pathname}${dest.search}${dest.hash}`);
+      return { redirect: `${dest.pathname}${dest.search}${dest.hash}` };
     }
-    return sendJson(res, 200, { ok: true, provider: oauthRoute.provider, principalId: state.principalId, hosts });
+    return { status: 200, body: { ok: true, provider, principalId: state.principalId, hosts } };
   } catch (e) {
-    return sendJson(res, 400, { error: "oauth_callback_failed", message: errMessage(e) });
+    return { status: 400, body: { error: "oauth_callback_failed", message: errMessage(e) } };
   }
+}
+
+async function oauthCallback(ctx: BaseCtx): Promise<void> {
+  const outcome = await settleOAuthCallback(ctx, parseOAuthRoute(ctx.pathname)!.provider);
+  if ("redirect" in outcome) return sendRedirect(ctx.res, outcome.redirect);
+  return sendJson(ctx.res, outcome.status, outcome.body);
+}
+
+async function oauthCallbackPage(ctx: ApiCtx): Promise<void> {
+  const shell = ctx.deps.web?.shell;
+  if (!shell) return sendJson(ctx.res, 404, { error: "not_found" });
+  const provider = ctx.params.provider!;
+  const outcome = await settleOAuthCallback(ctx, provider);
+  const ok = "redirect" in outcome || outcome.status === 200;
+  if (!ok)
+    console.warn(
+      `[connectors] ${JSON.stringify(provider)} callback page: ${outcome.status} ${JSON.stringify(outcome.body)}`,
+    );
+  return shell.connectorCallbackPage(ctx.res, provider, ok);
 }
 
 async function principalHasProvider(deps: ServerDeps, provider: string, principalId: string): Promise<boolean> {
@@ -348,21 +370,51 @@ async function consentMint(ctx: ApiCtx): Promise<void> {
   });
 }
 
+interface OAuthStart {
+  provider: string;
+  principalId: string;
+  redirectUri: string;
+  returnTo: string | undefined;
+  accountType: AccountType;
+}
+
 async function oauthStart(ctx: ApiCtx): Promise<void> {
-  const { res, deps, secret, url, pathname } = ctx;
-  const oauthRoute = parseOAuthRoute(pathname)!;
+  const { url, pathname } = ctx;
+  return startOAuth(ctx, {
+    provider: parseOAuthRoute(pathname)!.provider,
+    principalId: url.searchParams.get("principalId") ?? "",
+    redirectUri: url.searchParams.get("redirectUri") ?? "",
+    returnTo: safeReturnTo(url.searchParams.get("returnTo")),
+    accountType: parseAccountType(url.searchParams.get("accountType")),
+  });
+}
+
+async function browserOAuthStart(ctx: ApiCtx): Promise<void> {
+  if (!ctx.actor || !ctx.deps.portalUrl)
+    return sendJson(ctx.res, 401, { error: "unauthorized", message: "portal identity required" });
+  const base = ctx.deps.portalUrl.replace(/\/$/, "");
+  const provider = ctx.params.provider!;
+  return startOAuth(ctx, {
+    provider,
+    principalId: ctx.actor.p,
+    redirectUri: `${base}/v1/connectors/oauth/${encodeURIComponent(provider)}/callback`,
+    returnTo: safeReturnTo(isObj(ctx.body) ? ctx.body.returnTo : undefined) ?? "/keychain",
+    accountType: "default",
+  });
+}
+
+async function startOAuth(ctx: ApiCtx, start: OAuthStart): Promise<void> {
+  const { res, deps, secret } = ctx;
   if (!deps.connectorTokens)
     return sendJson(res, 501, { error: "not_configured", message: "connector token store not wired" });
-  const provider = oauthProvider(oauthRoute.provider);
+  const provider = oauthProvider(start.provider);
   if (!provider)
-    return sendJson(res, 404, { error: "not_found", message: `unknown OAuth provider: ${oauthRoute.provider}` });
-  const principalId = url.searchParams.get("principalId") ?? "";
-  const redirectUri = url.searchParams.get("redirectUri") ?? "";
+    return sendJson(res, 404, { error: "not_found", message: `unknown OAuth provider: ${start.provider}` });
+  const { principalId, redirectUri, accountType, returnTo } = start;
   if (!principalId || !redirectUri)
     return sendJson(res, 400, { error: "bad_request", message: "principalId and redirectUri required" });
-  const accountType = parseAccountType(url.searchParams.get("accountType"));
   try {
-    const client = await resolverFor(deps)(oauthRoute.provider, { accountType });
+    const client = await resolverFor(deps)(start.provider, { accountType });
     if (client.redirectAllowlist && !client.redirectAllowlist.includes(redirectUri)) {
       return sendJson(res, 400, {
         error: "redirect_not_allowed",
@@ -371,18 +423,16 @@ async function oauthStart(ctx: ApiCtx): Promise<void> {
     }
     const codeVerifier = provider.pkce ? generateCodeVerifier() : undefined;
     const state = await beginOAuthFlow(deps, secret, {
-      provider: oauthRoute.provider,
+      provider: start.provider,
       principalId,
       redirectUri,
       orgId: configOrgId(),
       ...(accountType !== "default" ? { accountType } : {}),
       clientRef: client.clientRef,
-      ...(safeReturnTo(url.searchParams.get("returnTo"))
-        ? { returnTo: safeReturnTo(url.searchParams.get("returnTo")) }
-        : {}),
+      ...(returnTo ? { returnTo } : {}),
       ...(codeVerifier ? { codeVerifier } : {}),
     });
-    const consentUrl = authorizeUrl(oauthRoute.provider, {
+    const consentUrl = authorizeUrl(start.provider, {
       redirectUri,
       state,
       client,
@@ -392,11 +442,11 @@ async function oauthStart(ctx: ApiCtx): Promise<void> {
     audit(deps, {
       principalId,
       action: "connector.oauth.start",
-      resource: oauthRoute.provider,
+      resource: start.provider,
       scopeLabel: principalId,
     });
     return sendJson(res, 200, {
-      provider: oauthRoute.provider,
+      provider: start.provider,
       principalId,
       accountType,
       hosts: provider.hosts,
@@ -548,10 +598,21 @@ export async function gmailSent(ctx: ApiCtx): Promise<void> {
 }
 
 export const connectorRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "GET", path: "/v1/connectors/gmail/sent/:messageId", auth: "source", handle: gmailSent },
-  { method: "GET", path: "/v1/connectors/gmail/sent", auth: "source", handle: gmailSent },
+  { method: "GET", path: "/v1/web/connectors/oauth/:provider/callback", auth: "public", handle: oauthCallbackPage },
+  ...forInboxLoopsPeople([
+    { method: "GET", path: "/v1/connectors/gmail/sent/:messageId", actor: "person", auth: "source", handle: gmailSent },
+    { method: "GET", path: "/v1/connectors/gmail/sent", actor: "person", auth: "source", handle: gmailSent },
+  ]),
   { method: "POST", path: "/v1/connectors/oauth/consent/mint", auth: { aud: "oauth-consent" }, handle: consentMint },
   { method: "GET", path: "/v1/connectors/oauth/consent/redeem/:linkId", auth: "source", handle: consentRedeem },
+  {
+    method: "POST",
+    path: "/v1/connectors/oauth/:provider/start",
+    browser: true,
+    actor: "person",
+    auth: "source",
+    handle: browserOAuthStart,
+  },
   {
     match: (m, p) => m === "GET" && parseOAuthRoute(p)?.action === "start",
     actor: "query.principalId",
@@ -575,5 +636,5 @@ export const connectorRoutes: ReadonlyArray<Route<ApiCtx>> = [
     handle: oauthRevoke,
   },
   { method: "POST", path: "/v1/connectors/token", actor: "body.principalId", auth: "source", handle: setToken },
-  { method: "GET", path: "/v1/connectors/catalog", auth: "either", handle: catalog },
+  { method: "GET", path: "/v1/connectors/catalog", browser: "self", actor: "person", auth: "either", handle: catalog },
 ];

@@ -324,17 +324,6 @@ test("PORTAL_IDENTITY_SECRET stays inside core, which both signs and verifies po
   assert.deepEqual([...secretDestinations(secret).keys()], ["core"]);
 });
 
-test("INBOX_USERS is an optional core secret, since core serves the web UI", () => {
-  const config = makeConfig();
-  const allowlist = secretByName(config, "INBOX_USERS");
-  assert.equal(allowlist.required, false);
-  assert.deepEqual(allowlist.services, ["core"]);
-  assert.deepEqual([...secretDestinations(allowlist).keys()], ["core"]);
-  assert.deepEqual(runtimeSecretNames("core", allowlist), ["INBOX_USERS"]);
-  assert.match(renderEnvExample(config), /Inbox, Calendar, and Design System\. \(core\)/);
-  assert.match(renderEnvExample(config), /^# INBOX_USERS=\s{2}# optional$/m);
-});
-
 test("the invitation-email pair reaches core as optional secrets on every topology", () => {
   for (const name of ["RESEND_API_KEY", "AUTH_EMAIL_FROM"]) {
     const alone = secretByName(makeConfig(), name);

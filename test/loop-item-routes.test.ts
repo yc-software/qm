@@ -1091,6 +1091,8 @@ test("an owner cannot trigger Slack avatar enrichment through item detail when I
 });
 
 test("an item's image never reaches core's own loopback, by address or by name", async (t) => {
+  const warned: string[] = [];
+  t.mock.method(console, "warn", (line: string) => warned.push(line));
   const dialed: string[] = [];
   const internal = createNetServer((socket) => {
     dialed.push(String(socket.remoteAddress));
@@ -1105,8 +1107,8 @@ test("an item's image never reaches core's own loopback, by address or by name",
   });
   for (const i of [0, 1]) {
     const out = await call(w, { method: "GET", path: `/v1/loops/${loop.id}/items/${item.id}/image?ctx=-1&i=${i}` });
-    assert.equal(out.status, 502);
-    assert.match((out.body as { message: string }).message, /private network address/);
+    assert.deepEqual([out.status, out.body], [502, { error: "upstream" }]);
+    assert.match(warned.at(-1) ?? "", /private network address/);
   }
   assert.deepEqual(dialed, []);
 });

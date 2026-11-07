@@ -60,6 +60,7 @@ async function extractFacts(
 interface Burst extends MemoryCaptureMetadata {
   scopeId: ScopeId;
   actorId?: string;
+  audienceScopeId?: ScopeId;
   conversationScopeId: ScopeId;
   sessionId?: string;
   idempotencyKey?: string;
@@ -72,6 +73,7 @@ type TurnEndCtx = MemoryCaptureMetadata & {
   input: string;
   reply: string;
   actorId?: string;
+  audienceScopeId?: ScopeId;
   conversationScopeId?: ScopeId;
   sessionId?: string;
   idempotencyKey?: string;
@@ -84,19 +86,30 @@ function createBurstBuffer(
   onError?: (e: unknown, burst: Burst) => void,
 ): (ctx: TurnEndCtx) => Promise<void> {
   const bursts = new Map<string, Burst>();
-  return async ({ scopeId, input, reply, actorId, conversationScopeId, sessionId, idempotencyKey, inheritedFacts }) => {
+  return async ({
+    scopeId,
+    input,
+    reply,
+    actorId,
+    audienceScopeId,
+    conversationScopeId,
+    sessionId,
+    idempotencyKey,
+    inheritedFacts,
+  }) => {
     const burst: Burst = {
       scopeId,
       conversationScopeId: conversationScopeId ?? scopeId,
       turns: [{ input, reply }],
       ...(inheritedFacts !== undefined ? { inheritedFacts: structuredClone(inheritedFacts) } : {}),
       ...(actorId !== undefined ? { actorId } : {}),
+      ...(audienceScopeId !== undefined ? { audienceScopeId } : {}),
       ...(sessionId !== undefined ? { sessionId } : {}),
       ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
     };
     if (quietMs <= 0) return flush(burst);
 
-    const key = `${scopeId}\0${burst.conversationScopeId}\0${actorId ?? ""}\0${sessionId ?? ""}`;
+    const key = `${scopeId}\0${burst.conversationScopeId}\0${actorId ?? ""}\0${sessionId ?? ""}\0${audienceScopeId ?? ""}`;
     const pending = bursts.get(key);
     if (pending) {
       pending.turns.push({ input, reply });
@@ -127,6 +140,7 @@ function burstCaptureContext(burst: Burst): MemoryCaptureContext {
     mode: "automatic",
     ...(burst.inheritedFacts !== undefined ? { inheritedFacts: burst.inheritedFacts } : {}),
     ...(burst.actorId ? { actorId: burst.actorId } : {}),
+    ...(burst.audienceScopeId ? { audienceScopeId: burst.audienceScopeId } : {}),
     conversationScopeId: burst.conversationScopeId,
     input: burst.turns.map((turn) => turn.input).join("\n\n"),
     reply: burst.turns.map((turn) => turn.reply).join("\n\n"),

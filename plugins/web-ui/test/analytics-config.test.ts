@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { analyticsHookConfig } from "../server/analytics-config.ts";
+import { analyticsHookConfig } from "../../chassis/src/analytics-config.ts";
 
 const config = (value: unknown) => analyticsHookConfig(JSON.stringify(value));
 

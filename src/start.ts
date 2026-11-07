@@ -1,4 +1,3 @@
-import { listedPrincipals } from "../plugins/chassis/src/principal-allowlist.ts";
 import { createManagedSlack } from "./surfaces/slack-managed.ts";
 import { randomBytes } from "node:crypto";
 import { lookup } from "node:dns/promises";
@@ -14,6 +13,14 @@ import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
 import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
 import { sessionLifetime } from "../plugins/portal/src/session.ts";
 import { startFrontDoor } from "./web/front-door.ts";
+import { sweepDictationSpool } from "./api/routes/voice.ts";
+import { parseAllowedOrigins } from "../plugins/portal/src/cors.ts";
+import { createWebEvents } from "./api/routes/web-events.ts";
+import { webMeConfig } from "./api/routes/web-me.ts";
+import { createWebShell } from "./web/shell.ts";
+import { resolveBranding } from "./resolution/branding.ts";
+import { orgScope } from "./config.ts";
+import { createBrandingCache } from "../plugins/chassis/src/branding.ts";
 
 export async function startQm(
   config: Config,
@@ -36,18 +43,32 @@ export async function startQm(
       })
     : undefined;
   const draining = new AbortController();
+  const web =
+    config.publicPort === undefined
+      ? undefined
+      : {
+          events: createWebEvents(built.app, built),
+          me: webMeConfig(env),
+          shell: createWebShell(
+            { ...config, publicPort: config.publicPort },
+            env,
+            createBrandingCache(() => resolveBranding(built.config, orgScope(), config.brandingDefault)).forRender,
+          ),
+        };
   const server = createServer(built.app, {
     ...serverDeps(config, built, slackEnvironmentState, slackConfig?.botToken),
     managedSlack,
+    ...(config.openaiApiKey ? { openaiApiKey: config.openaiApiKey } : {}),
     ...(env.PORTAL_SESSION_SECRET
       ? {
           portalSession: {
             secret: env.PORTAL_SESSION_SECRET,
             maxAgeSeconds: sessionLifetime(env).max,
-            principals: listedPrincipals(env.WEB_UI_PRINCIPALS),
+            apiOrigins: parseAllowedOrigins(env.PORTAL_API_ALLOWED_ORIGINS).origins,
           },
         }
       : {}),
+    ...(web ? { web } : {}),
     draining: draining.signal,
   });
 
@@ -58,10 +79,10 @@ export async function startQm(
   built.deploymentLayerRefresh.start();
   server.listen(config.port);
   await once(server, "listening");
+  void sweepDictationSpool();
   const frontDoor =
-    config.publicPort === undefined
-      ? undefined
-      : await startFrontDoor({ ...config, publicPort: config.publicPort }, env, server);
+    web && (await startFrontDoor({ ...config, publicPort: config.publicPort! }, env, server, web.shell));
+  web?.events.start();
 
   console.log(
     `[qm] listening on :${config.port} (org=${config.orgId}, ` +
@@ -164,6 +185,7 @@ export async function startQm(
       await built.runtime.stop(async () => {
         await deadline;
         frontDoor?.close();
+        await web?.events.stop();
         server.close();
         server.closeAllConnections();
       });

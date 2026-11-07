@@ -469,7 +469,7 @@ async function patchCronAsPerson(ctx: ApiCtx, cron: Cron, body: unknown): Promis
 
 export const cronRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/crons", actor: "body.createdBy", auth: "either", handle: createCron },
-  { method: "GET", path: "/v1/crons", actor: "query.viewer", auth: "either", handle: listCrons },
+  { method: "GET", path: "/v1/crons", browser: true, actor: "query.viewer", auth: "either", handle: listCrons },
   { method: "POST", path: "/v1/crons/:id/note", auth: "either", handle: noteCron },
   ...withActor("query.principalId", [
     { method: "POST", path: "/v1/crons/:id/disable", browser: true, auth: "either", handle: toggleCron(false) },

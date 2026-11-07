@@ -147,7 +147,7 @@ test("the documented gbrain recipe keeps the notebook first everywhere and sends
   const answered: Record<string, string[]> = {};
   for (const scope of ["personal:U0JORDAN", "channel:C0ROOM", "group:G0CREW", "team:T0ACME", "org:acme"]) {
     const { outcomes } = await withProviders("search", (report) =>
-      memory.recall(scope, { query: "seats", actorId: "U0JORDAN", maxChars: 6000, report }),
+      memory.recall(scope, { query: "seats", actorId: "U0JORDAN", audienceScopeId: scope, maxChars: 6000, report }),
     );
     answered[scope] = outcomes.map(({ provider, scope: answeredScope }) => `${provider}@${answeredScope}`).sort();
   }
@@ -159,7 +159,11 @@ test("the documented gbrain recipe keeps the notebook first everywhere and sends
     "org:acme": ["default@org:acme"],
   });
 
-  await memory.capture(JORDAN, ["Prefers window seats"], 1, "U0JORDAN", { mode: "automatic", actorId: "U0JORDAN" });
+  await memory.capture(JORDAN, ["Prefers window seats"], 1, "U0JORDAN", {
+    mode: "automatic",
+    actorId: "U0JORDAN",
+    audienceScopeId: JORDAN,
+  });
   assert.deepEqual(notebookWrites, ["Prefers window seats"]);
   assert.deepEqual(
     calls.map(({ name }) => name),
@@ -173,9 +177,20 @@ test("QM's gbrain requests satisfy the vendored contract's tools and actor rules
       ? { content: [{ type: "text", text: "" }], structuredContent: { facts: [], truncated: false } }
       : committed(1, "8c1f7a0e-0000-5000-8000-000000000002"),
   );
-  const context = { mode: "explicit" as const, actorId: "jordan@acme.example", conversationScopeId: JORDAN };
+  const context = {
+    mode: "explicit" as const,
+    actorId: "jordan@acme.example",
+    audienceScopeId: JORDAN,
+    conversationScopeId: JORDAN,
+  };
   await withProviders("search", (report) =>
-    memory.recall(JORDAN, { query: "seats", actorId: "jordan@acme.example", maxChars: 6000, report }),
+    memory.recall(JORDAN, {
+      query: "seats",
+      actorId: "jordan@acme.example",
+      audienceScopeId: JORDAN,
+      maxChars: 6000,
+      report,
+    }),
   );
   await writeFacts(memory, JORDAN, ["Prefers aisle seats", "Takes notes by hand"], "U0JORDAN", context, "run-1");
   await writeFacts(memory, JORDAN, ["Prefers aisle seats", "Takes notes by hand"], "U0JORDAN", context, "run-1");
@@ -229,7 +244,7 @@ test("gbrain's answers and refusals become the outcomes the contract classes the
   const recall = async (result: CallToolResult) => {
     answer = result;
     const { value, outcomes } = await withProviders("search", (report) =>
-      memory.recall(JORDAN, { query: "seats", actorId: "U0JORDAN", maxChars: 6000, report }),
+      memory.recall(JORDAN, { query: "seats", actorId: "U0JORDAN", audienceScopeId: JORDAN, maxChars: 6000, report }),
     );
     const rows = (value ?? []).filter(({ source }) => source?.provider === "gbrain").map(({ text }) => text);
     return { outcome: gbrainOutcomes(outcomes).join(","), rows };
@@ -267,6 +282,7 @@ test("gbrain's answers and refusals become the outcomes the contract classes the
       {
         mode: "explicit",
         actorId: "U0JORDAN",
+        audienceScopeId: JORDAN,
       },
       "run-1",
     );
@@ -326,7 +342,7 @@ test("a gbrain write's provenance stays within the contract's limit for a long s
     scope,
     ["Prefers aisle seats"],
     "U0JORDAN",
-    { mode: "explicit", actorId: "U0JORDAN", conversationScopeId: scope },
+    { mode: "explicit", actorId: "U0JORDAN", audienceScopeId: scope, conversationScopeId: scope },
     "run-3",
   );
   assert.deepEqual(gbrainOutcomes(outcomes), ["committed"]);
@@ -350,6 +366,7 @@ test("automatic capture of more than 20 facts reaches gbrain as writes within th
   await strategy.onTurnEnd!({
     scopeId: JORDAN,
     actorId: "U0JORDAN",
+    audienceScopeId: JORDAN,
     idempotencyKey: "run-4",
     input: "My seats",
     reply: "Noted",
@@ -390,6 +407,7 @@ test("a strict gbrain route that refuses a later batch still leaves every automa
     strategy.onTurnEnd!({
       scopeId: JORDAN,
       actorId: "U0JORDAN",
+      audienceScopeId: JORDAN,
       idempotencyKey: "run-5",
       input: "My seats",
       reply: "Noted",
@@ -418,6 +436,7 @@ test("a long conversation's recall asks gbrain with the member's message, within
     query: memoryRecallQuery(message, history),
     input: message,
     actorId: "U0JORDAN",
+    audienceScopeId: JORDAN,
     maxChars: 6000,
   });
 

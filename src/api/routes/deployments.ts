@@ -1,5 +1,4 @@
 import { externalAppSharingAllowed } from "../../feature-flags.ts";
-import { DeployAccessError, type DeployAccessErrorCode } from "../../deploy/deploy-service.ts";
 import { SocksProxyAgent } from "socks-proxy-agent";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
@@ -16,13 +15,12 @@ import { deploymentView, type App, type DeployInput, type RedeployInput } from "
 import { errMessage, reportFailureAs, swallowAs } from "../../util/errors.ts";
 import { escapeHtml, relayStream } from "../../../plugins/chassis/src/http.ts";
 import { canonicalPayload } from "../../../plugins/chassis/src/source-auth-sign.ts";
-import { sendJson, verifyOrReject } from "../http.ts";
+import { frameAncestorsDirective, sendJson, UNTRUSTED_CONTENT_SANDBOX_CSP, verifyOrReject } from "../http.ts";
 import { mintPortalIdentity, verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../auth/portal-identity.ts";
 import { audit, authorizeAdmin, isObj, orgScope } from "./shared.ts";
-import { parseScopeId, scopeId, type Permission } from "../../types.ts";
+import { scopeId, type Permission } from "../../types.ts";
 import type { ApiCtx, BaseCtx, Route } from "./route.ts";
 import { CONFIG_DEFAULTS } from "../../config.ts";
-import { livePersonCapability, resolveShareTarget as resolveShareTargetGrammar } from "../artifact-share.ts";
 import { verifyDeployGitAccess, viewerIdentityKey } from "../../deploy/access-token.ts";
 import { appAnnotationAsset } from "../../deploy/app-annotate.ts";
 import { APP_SHELL_PATH_PREFIX, appShellHtml } from "../../deploy/app-shell.ts";
@@ -217,12 +215,6 @@ function forwardableHeaders(req: BaseCtx["req"]): Record<string, string | string
   return out;
 }
 
-const APP_SANDBOX_CSP = "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads";
-
-function frameAncestorsDirective(ancestors: readonly string[]): string {
-  return `frame-ancestors 'self' ${ancestors.join(" ")}`;
-}
-
 function cspMentionsFrameAncestors(value: string | string[] | undefined): boolean {
   if (!value) return false;
   return (Array.isArray(value) ? value : [value]).some((v) => /frame-ancestors/i.test(v));
@@ -253,8 +245,8 @@ function gatewaySafeResponseHeaders(
   if (sandbox) {
     const existing = out["content-security-policy"];
     out["content-security-policy"] = existing
-      ? [...(Array.isArray(existing) ? existing : [existing]), APP_SANDBOX_CSP]
-      : APP_SANDBOX_CSP;
+      ? [...(Array.isArray(existing) ? existing : [existing]), UNTRUSTED_CONTENT_SANDBOX_CSP]
+      : UNTRUSTED_CONTENT_SANDBOX_CSP;
   }
   if (frameAncestors?.length && !out["x-frame-options"] && !cspMentionsFrameAncestors(out["content-security-policy"])) {
     const directive = frameAncestorsDirective(frameAncestors);
@@ -1298,6 +1290,10 @@ async function createDeployment(ctx: ApiCtx): Promise<void> {
   }
 }
 
+function webUrlOf(id: string): string {
+  return `/deployments/${encodeURIComponent(id)}/`;
+}
+
 async function listDeployments(ctx: ApiCtx): Promise<void> {
   const { res, app, url, secret, capability, actor } = ctx;
   const principalId = capability?.actorId ?? actor?.p ?? url.searchParams.get("principalId");
@@ -1306,9 +1302,10 @@ async function listDeployments(ctx: ApiCtx): Promise<void> {
   const baseUrl = gitUrlBase(ctx);
   const deployments = await Promise.all(
     visible.map(async (d) => {
-      if (!secret) return d;
+      const listed = { ...d, webUrl: webUrlOf(d.id) };
+      if (!secret) return listed;
       const git = await app.deploymentGitUrlFor(d.id, principalId, { secret, baseUrl });
-      return git ? { ...d, gitUrl: git.url } : d;
+      return git ? { ...listed, gitUrl: git.url } : listed;
     }),
   );
   return sendJson(res, 200, { deployments });
@@ -1390,7 +1387,7 @@ export async function getDeployment(ctx: ApiCtx): Promise<void> {
   const stored = await app.getDeployment(params.id!);
   const permission = stored ? await app.deploymentGitPermissionFor(stored.id, principalId) : null;
   if (!stored || !permission) return sendJson(res, 404, { error: "not_found" });
-  const deployment = { ...deploymentView(stored), permission };
+  const deployment = { ...deploymentView(stored), permission, webUrl: webUrlOf(stored.id) };
   if (!secret) return sendJson(res, 200, { deployment });
   const git = await app.deploymentGitUrlFor(deployment.id, principalId, { secret, baseUrl: gitUrlBase(ctx) });
   return sendJson(res, 200, { deployment: git ? { ...deployment, gitUrl: git.url } : deployment });
@@ -1518,25 +1515,6 @@ async function setDeploymentEmbedAncestors(ctx: ApiCtx): Promise<void> {
   }
 }
 
-async function setDeploymentConnectors(ctx: ApiCtx): Promise<void> {
-  const { res, app, params, body, capability, actor } = ctx;
-  const principalId = capability ? capability.actorId : actor?.p;
-  if (!principalId || (capability && !livePersonCapability(capability)))
-    return sendJson(res, 403, {
-      error: "forbidden",
-      message: "only the publisher, in a live conversation or signed in, can lend an app their connectors",
-    });
-  const connectors = (body as { connectors?: unknown }).connectors;
-  if (!Array.isArray(connectors) || !connectors.every((host) => typeof host === "string"))
-    return sendJson(res, 400, { error: "bad_request", message: "connectors (array of connected-app hosts) required" });
-  try {
-    const deployment = await app.setDeploymentConnectors(params.id!, connectors, { createdBy: principalId });
-    return sendJson(res, 200, { deployment: deploymentView(deployment) });
-  } catch (e) {
-    return sendShareFailure(res, e);
-  }
-}
-
 async function setDeploymentAlwaysOn(ctx: ApiCtx): Promise<void> {
   const { res, app, params, body } = ctx;
   const id = await deploymentId(app, params.id!);
@@ -1551,144 +1529,6 @@ async function setDeploymentAlwaysOn(ctx: ApiCtx): Promise<void> {
   } catch (e) {
     return sendJson(res, 400, { error: "always_on_failed", message: errMessage(e) });
   }
-}
-
-type ShareTarget =
-  | { kind: "ok"; scope: string; label: string }
-  | { kind: "none" }
-  | { kind: "ambiguous"; candidates: Array<{ principalId: string; displayName: string }> }
-  | { kind: "invalid"; message: string };
-
-export function resolveShareTarget(
-  app: App,
-  input: { scope?: string; recipient?: string; email?: string },
-): Promise<ShareTarget> {
-  return resolveShareTargetGrammar(app, input, {
-    allowEmail: true,
-    invalidScope: (scope) => `invalid scope "${scope}" — use "org" or a scope id like personal:<id> or org:<id>`,
-    targetRequired: 'a target is required: pass `scope` ("org" or a scope id) or `recipient` (a teammate\'s name)',
-  });
-}
-
-export async function getDeploymentShares(ctx: ApiCtx): Promise<void> {
-  const { res, app, params, capability } = ctx;
-  if (!capability) return sendJson(res, 403, { error: "forbidden" });
-  const deployment = await app.getDeployment(params.id!);
-  if (!deployment) return sendJson(res, 404, { error: "not_found" });
-  if (deployment.ownerScopeId !== `personal:${capability.actorId}`)
-    return sendJson(res, 403, { error: "forbidden", message: "Only the owner can edit app permissions." });
-  const externalSharing = await externalAppSharingAllowed(ctx.deps.featureFlags, deployment.ownerScopeId);
-  return sendJson(res, 200, {
-    public: deployment.public === true && externalSharing,
-    externalSharing,
-    grantees: await app.deploymentGrantees(deployment.id),
-  });
-}
-
-export async function shareDeployment(ctx: ApiCtx): Promise<void> {
-  const { res, app, params, body, capability } = ctx;
-  if (!capability)
-    return sendJson(res, 403, { error: "forbidden", message: "sharing requires an agent capability token" });
-  const b = (isObj(body) ? body : {}) as {
-    scope?: unknown;
-    recipient?: unknown;
-    email?: unknown;
-    access?: unknown;
-    public?: unknown;
-    notify?: unknown;
-  };
-  if (b.notify !== undefined && typeof b.notify !== "boolean")
-    return sendJson(res, 400, { error: "bad_request", message: "notify must be a boolean" });
-  const notify = { notify: b.notify };
-  if (b.public !== undefined) {
-    if (typeof b.public !== "boolean")
-      return sendJson(res, 400, { error: "bad_request", message: "public must be a boolean" });
-    if (b.scope !== undefined || b.recipient !== undefined || b.email !== undefined || b.access !== undefined)
-      return sendJson(res, 400, {
-        error: "bad_request",
-        message: "public access and person/scope access must be changed separately",
-      });
-    try {
-      const deployment = await app.setDeploymentPublic(params.id!, b.public, { createdBy: capability.actorId });
-      return sendJson(res, 200, {
-        ok: true,
-        public: deployment.public === true,
-        reach: deployment.public === true ? "anyone with the link" : "restricted",
-        grantees: await app.deploymentGrantees(deployment.id),
-      });
-    } catch (e) {
-      return sendShareFailure(res, e);
-    }
-  }
-  if (b.email !== undefined && typeof b.email !== "string")
-    return sendJson(res, 400, { error: "bad_request", message: "email must be a string" });
-  if (b.email !== undefined && (b.scope !== undefined || b.recipient !== undefined))
-    return sendJson(res, 400, { error: "bad_request", message: "pass only one of email, scope, or recipient" });
-  const access = typeof b.access === "string" ? b.access.toLowerCase() : "view";
-  if (access !== "view" && access !== "manage" && access !== "none") {
-    return sendJson(res, 400, { error: "bad_request", message: 'access must be "view", "manage", or "none"' });
-  }
-  let permission: Permission | null = "read";
-  if (access === "none") permission = null;
-  else if (access === "manage") permission = "write";
-  const target = await resolveShareTarget(app, {
-    ...(typeof b.scope === "string" ? { scope: b.scope } : {}),
-    ...(typeof b.recipient === "string" ? { recipient: b.recipient } : {}),
-    ...(typeof b.email === "string" ? { email: b.email } : {}),
-  });
-  if (target.kind === "invalid") return sendJson(res, 400, { error: "bad_request", message: target.message });
-  if (target.kind === "none")
-    return sendJson(res, 404, {
-      error: "recipient_not_found",
-      message: `no teammate matches "${String(b.recipient)}"`,
-    });
-  if (target.kind === "ambiguous")
-    return sendJson(res, 409, {
-      error: "ambiguous_recipient",
-      message: "more than one teammate matches",
-      candidates: target.candidates,
-    });
-  try {
-    const invite =
-      typeof b.email === "string" && permission === "read"
-        ? await app.inviteToDeployment(params.id!, b.email, capability.actorId, notify)
-        : undefined;
-    const grantees =
-      invite?.grantees ??
-      (await app.shareDeployment(params.id!, target.scope, permission, { createdBy: capability.actorId }, notify));
-    const orgGrant = grantees.find((g) => parseScopeId(g.scope).kind === "org");
-    let reach = "owner-only";
-    if (orgGrant) reach = `everyone in ${parseScopeId(orgGrant.scope).ref}`;
-    else if (grantees.length) reach = `${grantees.length} grantee${grantees.length === 1 ? "" : "s"}`;
-    const deployment = await app.getDeployment(params.id!);
-    return sendJson(res, 200, {
-      ok: true,
-      target: { scope: target.scope, label: target.label },
-      access,
-      reach,
-      ...(invite ? { invitation: invite.invitation } : {}),
-      public:
-        deployment?.public === true &&
-        (await externalAppSharingAllowed(ctx.deps.featureFlags, deployment.ownerScopeId)),
-      grantees,
-    });
-  } catch (e) {
-    return sendShareFailure(res, e);
-  }
-}
-
-const DEPLOY_ACCESS_STATUS: Record<DeployAccessErrorCode, number> = {
-  not_found: 404,
-  forbidden: 403,
-  external_sharing_disabled: 403,
-  public_links_unavailable: 409,
-  unknown_connector: 400,
-};
-
-function sendShareFailure(res: ApiCtx["res"], e: unknown): void {
-  if (e instanceof DeployAccessError)
-    return sendJson(res, DEPLOY_ACCESS_STATUS[e.code], { error: e.code, message: e.message });
-  return sendJson(res, 400, { error: "share_failed", message: errMessage(e) });
 }
 
 export const deploymentRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
@@ -1706,20 +1546,66 @@ export const deploymentRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
 
 export const deploymentRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/deployments", actor: "body.createdBy", auth: "source", handle: createDeployment },
-  { method: "GET", path: "/v1/deployments", actor: "query.principalId", auth: "either", handle: listDeployments },
-  { method: "GET", path: "/v1/deployments/:id", actor: "query.principalId", auth: "either", handle: getDeployment },
+  {
+    method: "GET",
+    path: "/v1/deployments",
+    browser: true,
+    actor: "query.principalId",
+    auth: "either",
+    handle: listDeployments,
+  },
+  {
+    method: "GET",
+    path: "/v1/deployments/:id",
+    browser: true,
+    actor: "query.principalId",
+    auth: "either",
+    handle: getDeployment,
+  },
   { method: "GET", path: "/v1/deployments/:id/fetch", auth: "either", handle: fetchDeployment },
   { method: "GET", path: "/v1/deployments/:id/logs", auth: "either", handle: deploymentLogs },
   { method: "GET", path: "/v1/deployments/:id/git-url", auth: "either", handle: deploymentGitUrl },
-  { method: "GET", path: "/v1/deployments/:id/share", actor: "person", auth: "either", handle: getDeploymentShares },
-  { method: "POST", path: "/v1/deployments/:id/share", auth: "either", handle: shareDeployment },
   { method: "POST", path: "/v1/deployments/:id/rollback", auth: "source", handle: rollbackDeployment },
   { method: "POST", path: "/v1/deployments/:id/redeploy", auth: "source", handle: redeployDeployment },
-  { method: "POST", path: "/v1/deployments/:id/archive", auth: "either", handle: archiveDeployment },
-  { method: "POST", path: "/v1/deployments/:id/restore", auth: "either", handle: restoreDeployment },
-  { method: "POST", path: "/v1/deployments/:id/name", auth: "either", handle: renameDeployment },
-  { method: "POST", path: "/v1/deployments/:id/display-name", auth: "either", handle: setDeploymentDisplayName },
+  {
+    method: "POST",
+    path: "/v1/deployments/:id/archive",
+    browser: true,
+    actor: "person",
+    auth: "either",
+    handle: archiveDeployment,
+  },
+  {
+    method: "POST",
+    path: "/v1/deployments/:id/restore",
+    browser: true,
+    actor: "person",
+    auth: "either",
+    handle: restoreDeployment,
+  },
+  {
+    method: "POST",
+    path: "/v1/deployments/:id/name",
+    browser: true,
+    actor: "person",
+    auth: "either",
+    handle: renameDeployment,
+  },
+  {
+    method: "POST",
+    path: "/v1/deployments/:id/display-name",
+    browser: true,
+    actor: "person",
+    auth: "either",
+    handle: setDeploymentDisplayName,
+  },
   { method: "POST", path: "/v1/deployments/:id/always-on", auth: "either", handle: setDeploymentAlwaysOn },
-  { method: "POST", path: "/v1/deployments/:id/embed-ancestors", auth: "either", handle: setDeploymentEmbedAncestors },
-  { method: "POST", path: "/v1/deployments/:id/connectors", auth: "either", handle: setDeploymentConnectors },
+  {
+    method: "POST",
+    path: "/v1/deployments/:id/embed-ancestors",
+    browser: true,
+    actor: "person",
+    auth: "either",
+    handle: setDeploymentEmbedAncestors,
+  },
 ];

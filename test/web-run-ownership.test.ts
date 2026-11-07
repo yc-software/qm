@@ -1,4 +1,3 @@
-import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../plugins/chassis/src/portal-identity.ts";
 import "./support/auto-fake-sprites.ts";
 
 import { test, after } from "node:test";
@@ -6,7 +5,6 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createServer as createHttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
@@ -26,30 +24,11 @@ const core = createServer(built.app, {
 });
 core.listen(0);
 const coreBase = `http://localhost:${(core.address() as AddressInfo).port}`;
-process.env.CORE_API_URL = coreBase;
-process.env.CORE_SIGNING_SECRET = SECRET;
-process.env.WEB_UI_PRINCIPALS = "";
-const { handler } = await import("../plugins/web-ui/server/index.ts");
-const web = createHttpServer(handler);
-web.listen(0);
-const webBase = `http://localhost:${(web.address() as AddressInfo).port}`;
 
 after(async () => {
-  await new Promise<void>((r) => web.close(() => r()));
   await new Promise<void>((r) => core.close(() => r()));
   await built.runtime.stop();
 });
-
-function as(user: string, init: RequestInit = {}): RequestInit {
-  return {
-    ...init,
-    headers: {
-      "content-type": "application/json",
-      [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: user, exp: Date.now() + 60_000 }, SECRET),
-      ...init.headers,
-    },
-  };
-}
 
 function browser(user: string, init: RequestInit = {}): RequestInit {
   return {
@@ -66,8 +45,8 @@ test("another user cannot see a run's queued text, or edit, withdraw or answer i
   const threadRef = `web:alice:${crypto.randomUUID()}`;
   const submit = async (text: string): Promise<string> => {
     const r = await fetch(
-      `${webBase}/api/turn`,
-      as("alice", { method: "POST", body: JSON.stringify({ text, threadRef, midTurn: "queue" }) }),
+      `${coreBase}/api/turn`,
+      browser("alice", { method: "POST", body: JSON.stringify({ text, threadRef, midTurn: "queue" }) }),
     );
     const runId = ((await r.json()) as { runId?: string }).runId;
     assert.ok(runId);
@@ -89,16 +68,21 @@ test("another user cannot see a run's queued text, or edit, withdraw or answer i
     }),
   );
   assert.equal(edit.status, 404);
-  assert.equal((await fetch(`${webBase}/api/runs/${queued}/withdraw`, as("bob", { method: "POST" }))).status, 404);
+  assert.equal(
+    (await fetch(`${coreBase}/api/runs/${queued}/withdraw`, browser("bob", { method: "POST" }))).status,
+    404,
+  );
   const answer = JSON.stringify({ kind: "client_result", callId: "c1", result: { content: "forged" } });
   assert.equal(
-    (await fetch(`${webBase}/api/runs/${live}/signal`, as("bob", { method: "POST", body: answer }))).status,
+    (await fetch(`${coreBase}/api/runs/${live}/signal`, browser("bob", { method: "POST", body: answer }))).status,
     404,
   );
   assert.deepEqual(await built.signals.takePending(live), []);
   const untouched = await built.runs.get(queued);
   assert.equal(untouched?.status, "pending");
   assert.equal(untouched?.request.text, "alice private second");
+  const withdrawn = await fetch(`${coreBase}/api/runs/${queued}/withdraw`, browser("alice", { method: "POST" }));
+  assert.deepEqual([withdrawn.status, ((await withdrawn.json()) as { withdrawn?: boolean }).withdrawn], [200, true]);
 });
 
 test("another user cannot inspect or control a session's swarm", async () => {

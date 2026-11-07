@@ -18,7 +18,6 @@ import { parseScopeId, scopeId as makeScopeId } from "../../types.ts";
 import type { Skill, SkillResolution } from "../../skills/skill-store.ts";
 import type { ItemKind } from "../../sessions/items-schema.ts";
 import { compactItem } from "../../sessions/items.ts";
-import { ByteSourceTooLargeError } from "../../files/durable-byte-store.ts";
 import {
   defaultModel,
   modelSupported,
@@ -31,9 +30,7 @@ import { errMessage } from "../../util/errors.ts";
 import { isSafeSkillName, SKILL_NAME_RULE } from "../../skills/skill-name.ts";
 import { SideChatAnchorError, SoulUpdateDeniedError, type SessionPageStatus } from "../app-types.ts";
 import { renderAgentApis } from "../agent-api-catalog.ts";
-import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../../auth/capability-token.ts";
-import { contentTypeWithUtf8Charset, sendJson, sendProblem } from "../http.ts";
-import { relayStream } from "../../../plugins/chassis/src/http.ts";
+import { sendJson, sendProblem } from "../http.ts";
 import { resolveBranding } from "../../resolution/branding.ts";
 import { audit, isObj, orgScope } from "./shared.ts";
 import {
@@ -332,22 +329,6 @@ async function getSessionBackgroundOutput(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, read);
 }
 
-async function getFileContent(ctx: ApiCtx): Promise<void> {
-  const { res, app, capability, actor } = ctx;
-  const id = ctx.params.id!;
-  const viewer = capability?.actorId ?? actor?.p;
-  if (!viewer) return sendJson(res, 401, { error: "capability_required" });
-  const opened = await app.openFileForViewer(id, viewer);
-  if (!opened) return sendJson(res, 404, { error: "not_found" });
-  res.writeHead(200, {
-    "content-type": contentTypeWithUtf8Charset(opened.mimetype || "application/octet-stream"),
-    "content-length": String(opened.sizeBytes),
-    "content-disposition": `inline; filename*=UTF-8''${encodeURIComponent(opened.name)}`,
-  });
-  relayStream(opened.stream, res);
-  return;
-}
-
 async function listFiles(ctx: ApiCtx): Promise<void> {
   const { res, app, url, capability, actor } = ctx;
   const viewer = capability?.actorId ?? actor?.p;
@@ -366,41 +347,6 @@ async function listFiles(ctx: ApiCtx): Promise<void> {
     scope ? (scope as ScopeId) : undefined,
   );
   return sendJson(res, 200, page);
-}
-
-async function uploadFile(ctx: ApiCtx): Promise<void> {
-  const { res, app, deps, body } = ctx;
-  if (!deps.blobTransfer)
-    return sendJson(res, 501, { error: "not_configured", message: "blob transfer store not wired" });
-  const b = isObj(body) ? body : {};
-  const principalId = typeof b.principalId === "string" ? b.principalId.trim() : "";
-  const blobId = typeof b.blobId === "string" ? b.blobId.trim() : "";
-  const name = typeof b.name === "string" ? b.name : "";
-  const mimetype = typeof b.mimetype === "string" ? b.mimetype : undefined;
-  const scopeId = typeof b.scopeId === "string" && b.scopeId ? (b.scopeId as ScopeId) : undefined;
-  if (!principalId || !blobId || !name)
-    return sendJson(res, 400, { error: "bad_request", message: "principalId, blobId, and name required" });
-  const opened = await deps.blobTransfer.open(blobId);
-  if (!opened) return sendJson(res, 404, { error: "not_found", message: "staged blob not found" });
-  try {
-    const file = await app.uploadFileForViewer(principalId, {
-      ...(scopeId ? { scopeId } : {}),
-      name,
-      ...(mimetype ? { mimetype } : {}),
-      data: opened.stream,
-    });
-    if (!file) {
-      opened.stream.destroy();
-      return sendJson(res, 403, { error: "forbidden", message: "you can only upload to your own contexts" });
-    }
-    return sendJson(res, 200, { file });
-  } catch (e) {
-    if (e instanceof ByteSourceTooLargeError)
-      return sendJson(res, 413, { error: "payload_too_large", message: e.message });
-    throw e;
-  } finally {
-    await deps.blobTransfer.delete(blobId);
-  }
 }
 
 async function patchSession(ctx: ApiCtx): Promise<void> {
@@ -761,19 +707,6 @@ async function selfMemory(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { scopeId: scope, facts: await memoryFacts(memory, scope) });
 }
 
-async function sessionCapability(ctx: ApiCtx): Promise<void> {
-  const { res, deps, actor } = ctx;
-  if (!actor) return sendJson(res, 401, { error: "unauthorized", message: "portal identity required" });
-  const secret = deps.capabilitySecret ?? ctx.secret;
-  if (!secret) return sendJson(res, 503, { error: "not_configured", message: "capability secret not set" });
-  const token = await mintCapabilityToken(
-    { actorId: actor.p, scopeId: makeScopeId("personal", actor.p), exp: Date.now() + CAPABILITY_TTL_MS },
-    secret,
-    deps.capabilityTokenCompression,
-  );
-  return sendJson(res, 200, { token });
-}
-
 async function listAgentApis(ctx: ApiCtx): Promise<void> {
   const { res, deps, capability } = ctx;
   if (!capability) return sendJson(res, 401, { error: "unauthorized", message: "agent capability token required" });
@@ -860,6 +793,7 @@ const searchMemory = agentMemory(async (ctx, memory, capability) => {
   const { value: results, problems } = await withProviders("search", (report) =>
     searchAcrossScopes(memory, scopes, query, typeof b.limit === "number" ? b.limit : 20, {
       actorId: capability.actorId,
+      ...(capability.audienceScopeId ? { audienceScopeId: capability.audienceScopeId } : {}),
       report,
     }),
   );
@@ -923,6 +857,7 @@ const captureFacts = writeMemory(async ({ res, deps, body }, memory, capability,
     {
       mode: "explicit",
       actorId: capability.actorId,
+      ...(capability.audienceScopeId ? { audienceScopeId: capability.audienceScopeId } : {}),
       conversationScopeId: capability.scopeId,
       ...(capability.sessionId ? { sessionId: capability.sessionId } : {}),
     },
@@ -1530,7 +1465,6 @@ export async function postSoul(ctx: ApiCtx): Promise<void> {
 export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...sessionSharingRoutes,
   ...suggestedActivityRoutes,
-  { method: "POST", path: "/v1/session-cap", actor: "system", auth: "source", handle: sessionCapability },
   { method: "GET", path: "/v1/conversations", auth: "either", handle: listAgentConversations },
   { method: "GET", path: "/v1/conversations/:id", auth: "either", handle: getAgentConversation },
   { method: "POST", path: "/v1/conversations/:id", auth: "either", handle: patchAgentConversation },
@@ -1557,7 +1491,6 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
     { method: "POST", path: "/v1/sessions/:id/fork", browser: true, auth: "source", handle: forkSession },
     { method: "POST", path: "/v1/sessions/:id/detach", browser: true, auth: "source", handle: detachSession },
     { method: "POST", path: "/v1/sessions/:id/goal/cancel", browser: true, auth: "source", handle: cancelSessionGoal },
-    { method: "POST", path: "/v1/files/upload", auth: "source", handle: uploadFile },
     { method: "POST", path: "/v1/sessions/:id", browser: true, auth: "source", handle: patchSession },
     { method: "PATCH", path: "/v1/memory", browser: true, auth: "source", handle: selfMemory },
     { method: "DELETE", path: "/v1/memory", browser: true, auth: "source", handle: selfMemory },
@@ -1602,7 +1535,6 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
     },
     { method: "GET", path: "/v1/sessions/:id/items/:seq", browser: true, auth: "source", handle: getSessionItem },
     { method: "GET", path: "/v1/sessions/:id", browser: true, auth: "source", handle: getSession },
-    { method: "GET", path: "/v1/files/:id/content", auth: "either", handle: getFileContent },
     { method: "GET", path: "/v1/files", browser: true, auth: "either", handle: listFiles },
   ]),
 ];
