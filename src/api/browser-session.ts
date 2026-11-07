@@ -106,6 +106,8 @@ export const API_ALIASES: ReadonlyMap<string, string> = new Map([
   ["POST /api/turn", "/v1/web/turn"],
   ["POST /api/approvals/:requestId", "/v1/web/approvals/:requestId"],
   ["POST /api/runs/:id/signal", "/v1/web/runs/:id/signal"],
+  ["GET /api/deliveries/events", "/v1/web/events"],
+  ["GET /me", "/v1/web/me"],
 ]);
 
 const aliasMatchers = [...API_ALIASES].map(([key, target]) => {

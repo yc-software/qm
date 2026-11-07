@@ -27,7 +27,7 @@ test.after(() => {
 });
 
 test("an unauthenticated request advertises portal mode so the client never offers the dev form", async () => {
-  const r = await fetch(`${base}/me`);
+  const r = await fetch(`${base}/api/directory/resolve?q=alice`);
   assert.equal(r.status, 401);
   assert.deepEqual(await r.json(), { error: "sign in", mode: "portal", reason: "unauthenticated" });
 });
@@ -43,25 +43,22 @@ test("POST /signin does not exist once a signing secret makes cookie auth dead",
 });
 
 test("a webuiuser cookie confers nothing in portal mode", async () => {
-  const r = await fetch(`${base}/me`, { headers: { cookie: "webuiuser=alice" } });
+  const r = await fetch(`${base}/api/directory/resolve?q=alice`, { headers: { cookie: "webuiuser=alice" } });
   assert.equal(r.status, 401);
   assert.equal((await r.json()).reason, "unauthenticated");
 });
 
 test("a verified principal outside WEB_UI_PRINCIPALS is not_allowed, not unauthenticated", async () => {
   const token = mintPortalIdentity({ p: "mallory", exp: Date.now() + 60_000 }, SECRET);
-  const r = await fetch(`${base}/me`, { headers: { [PORTAL_IDENTITY_HEADER]: token } });
+  const r = await fetch(`${base}/api/directory/resolve?q=alice`, { headers: { [PORTAL_IDENTITY_HEADER]: token } });
   assert.equal(r.status, 401);
   const body = await r.json();
   assert.equal(body.reason, "not_allowed");
   assert.equal(body.mode, "portal");
 });
 
-test("a verified allowed principal gets through and /me reports the mode", async () => {
+test("a verified allowed principal gets through", async () => {
   const token = mintPortalIdentity({ p: "alice", exp: Date.now() + 60_000 }, SECRET);
-  const r = await fetch(`${base}/me`, { headers: { [PORTAL_IDENTITY_HEADER]: token } });
+  const r = await fetch(`${base}/api/directory/resolve?q=alice`, { headers: { [PORTAL_IDENTITY_HEADER]: token } });
   assert.equal(r.status, 200);
-  const body = await r.json();
-  assert.equal(body.user, "alice");
-  assert.equal(body.mode, "portal");
 });

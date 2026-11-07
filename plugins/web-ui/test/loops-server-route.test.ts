@@ -11,12 +11,6 @@ const core = createServer((req: IncomingMessage, res) => {
   const path = new URL(req.url ?? "/", "http://core").pathname;
   res.setHeader("content-type", "application/json");
   if (path === "/v1/inbox/access") return void res.end(JSON.stringify({ enabled: true }));
-  if (req.method === "POST" && path === "/v1/session-cap") {
-    return void res.end(JSON.stringify({ token: "loops-test-cap" }));
-  }
-  if (req.method === "GET" && path === "/v1/admin/whoami") {
-    return void res.end(JSON.stringify({ permissions: ["member", "loops"] }));
-  }
   if (req.method === "GET" && path === "/v1/loops") {
     loopRequests++;
     return void res.end(JSON.stringify({ loops: [] }));
@@ -57,12 +51,8 @@ test.after(() => {
   core.close();
 });
 
-test("allowlisted user gets loops permission and loop routes pass through", async () => {
+test("loop routes pass through for an allowlisted user", async () => {
   const headers = identity("Alice@example.com");
-  const me = await fetch(`${base}/me`, { headers });
-  assert.equal(me.status, 200);
-  assert.deepEqual((await me.json()).permissions, ["member", "loops"]);
-
   const loops = await fetch(`${base}/api/loops`, { headers });
   assert.equal(loops.status, 200);
   assert.equal(loopRequests, 1);
@@ -77,12 +67,8 @@ test("allowlisted user gets loops permission and loop routes pass through", asyn
   assert.deepEqual(autopilotBody, { enabled: true });
 });
 
-test("user outside the allowlist lacks permission and loop routes return 403", async () => {
+test("loop routes return 403 for a user outside the allowlist", async () => {
   const headers = identity("bob@example.com");
-  const me = await fetch(`${base}/me`, { headers });
-  assert.equal(me.status, 200);
-  assert.deepEqual((await me.json()).permissions, ["member"]);
-
   const loops = await fetch(`${base}/api/loops`, { headers });
   assert.equal(loops.status, 403);
   assert.deepEqual(await loops.json(), { error: "forbidden" });

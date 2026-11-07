@@ -10,12 +10,12 @@ import { type ApiCtx, type BaseCtx, type Route } from "./route.ts";
 import { connectorRawRoutes, connectorRoutes } from "./connectors.ts";
 import { deploymentRawRoutes, deploymentRoutes } from "./deployments.ts";
 import { blobRoutes } from "./blobs.ts";
-import { sessionStateRawRoutes } from "./session-state.ts";
-import { loopItemEventsRawRoutes } from "./loop-item-events.ts";
 import { webhookRawRoutes, webhookRoutes } from "./webhooks.ts";
 import { runEventRoutes } from "./run-events.ts";
 import { turnRoutes } from "./turns.ts";
 import { webTurnRoutes } from "./web-turns.ts";
+import { webEventRoutes } from "./web-events.ts";
+import { webMeRoutes } from "./web-me.ts";
 import { credentialRoutes } from "./credentials.ts";
 import { brokerGitHttp, GIT_HTTP_BROKER_PREFIX } from "../git-http-broker.ts";
 import { keychainRoutes } from "./keychain.ts";
@@ -88,8 +88,6 @@ export const rawRoutes: ReadonlyArray<Route<BaseCtx>> = [
   ...connectorRawRoutes,
   ...deploymentRawRoutes,
   ...blobRoutes,
-  ...sessionStateRawRoutes,
-  ...loopItemEventsRawRoutes,
   ...webhookRawRoutes,
   ...loopIngressRawRoutes,
 ];
@@ -104,6 +102,8 @@ export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...deploymentLiveSmokeRoutes,
   ...turnRoutes,
   ...webTurnRoutes,
+  ...webEventRoutes,
+  ...webMeRoutes,
   ...runEventRoutes,
   ...credentialRoutes,
   ...keychainRoutes,

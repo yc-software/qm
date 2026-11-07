@@ -1,4 +1,4 @@
-import { parseSampleRate } from "../../chassis/src/timing.ts";
+import { parseSampleRate } from "./timing.ts";
 
 export function browserErrorConfig(
   env: NodeJS.ProcessEnv,

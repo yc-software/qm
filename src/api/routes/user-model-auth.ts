@@ -21,14 +21,18 @@ function connectProvider(raw: unknown): ModelProvider | null {
   return null;
 }
 
+export async function modelAuthStatus(deps: ApiCtx["deps"], principal: string) {
+  const required = (await deps.config?.getIndividualModelAuthDurable()) ?? false;
+  const connections = (await deps.userModelCredentials?.connections(principal)) ?? [];
+  const individualModelAuth = (await deps.config?.getIndividualModelAuthDurable(principal)) ?? false;
+  const account = (await deps.config?.getModelAccountDurable(principal)) ?? "company";
+  return { individualModelAuth, required, account, connections };
+}
+
 async function getStatus(ctx: ApiCtx): Promise<void> {
   const principal = caller(ctx);
   if (!principal) return sendJson(ctx.res, 401, { error: "unauthorized" });
-  const required = (await ctx.deps.config?.getIndividualModelAuthDurable()) ?? false;
-  const connections = (await ctx.deps.userModelCredentials?.connections(principal)) ?? [];
-  const individualModelAuth = (await ctx.deps.config?.getIndividualModelAuthDurable(principal)) ?? false;
-  const account = (await ctx.deps.config?.getModelAccountDurable(principal)) ?? "company";
-  return sendJson(ctx.res, 200, { individualModelAuth, required, account, connections });
+  return sendJson(ctx.res, 200, await modelAuthStatus(ctx.deps, principal));
 }
 
 async function setAccount(ctx: ApiCtx): Promise<void> {
