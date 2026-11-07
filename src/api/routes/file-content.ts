@@ -23,16 +23,8 @@ const PLAYGROUND_CSP = [
   "form-action 'none'",
 ].join("; ");
 
-function scriptCapable(contentType: string): boolean {
-  const mime = (contentType.split(";")[0] ?? "").trim().toLowerCase();
-  return (
-    mime === "text/html" ||
-    mime === "application/xhtml+xml" ||
-    mime === "image/svg+xml" ||
-    mime === "text/xml" ||
-    mime === "application/xml" ||
-    mime.endsWith("+xml")
-  );
+function servedType(mimetype: string): string {
+  return contentTypeWithUtf8Charset(/^[\x20-\x2b\x2d-\x7e]+$/.test(mimetype) ? mimetype : "application/octet-stream");
 }
 
 function viewerOf(ctx: ApiCtx): string | null {
@@ -59,7 +51,7 @@ function streamFile(ctx: ApiCtx, stream: NodeJS.ReadableStream): void {
 async function getFileContent(ctx: ApiCtx): Promise<void> {
   const opened = await openForViewer(ctx);
   if (!opened) return;
-  const contentType = contentTypeWithUtf8Charset(opened.mimetype || "application/octet-stream");
+  const contentType = servedType(opened.mimetype);
   const appsDomain = ctx.deps.deployAppsDomain;
   const ancestors = frameAncestorsDirective(appsDomain ? [`*.${appsDomain}`] : []);
   ctx.res.removeHeader("x-frame-options");
@@ -67,9 +59,10 @@ async function getFileContent(ctx: ApiCtx): Promise<void> {
     "content-type": contentType,
     "content-length": String(opened.sizeBytes),
     "content-disposition": `inline; filename*=UTF-8''${encodeURIComponent(opened.name)}`,
-    "content-security-policy": scriptCapable(contentType)
-      ? `${UNTRUSTED_CONTENT_SANDBOX_CSP}; ${ancestors}`
-      : ancestors,
+    "content-security-policy":
+      contentType.split(";")[0]!.trim().toLowerCase() === "application/pdf"
+        ? ancestors
+        : `${UNTRUSTED_CONTENT_SANDBOX_CSP}; ${ancestors}`,
     "x-content-type-options": "nosniff",
   });
   streamFile(ctx, opened.stream);
@@ -78,7 +71,7 @@ async function getFileContent(ctx: ApiCtx): Promise<void> {
 async function getPlayground(ctx: ApiCtx): Promise<void> {
   const opened = await openForViewer(ctx);
   if (!opened) return;
-  const contentType = contentTypeWithUtf8Charset(opened.mimetype || "application/octet-stream");
+  const contentType = servedType(opened.mimetype);
   if (!contentType.toLowerCase().startsWith("text/html")) {
     opened.stream.destroy();
     return sendJson(ctx.res, 415, { error: "not_a_playground" });
@@ -101,7 +94,7 @@ async function getFileByName(ctx: ApiCtx): Promise<void> {
   if (!viewer) return;
   let cursor: string | undefined;
   do {
-    const listed = await app.listFilesForViewer(viewer, { limit: 200, nameQuery: name, ...(cursor ? { cursor } : {}) });
+    const listed = await app.listFilesForViewer(viewer, { limit: 200, name, ...(cursor ? { cursor } : {}) });
     const newest = [...listed.owned, ...listed.shared]
       .filter((file) => file.name === name && file.openable)
       .sort((a, b) => b.createdAt - a.createdAt)[0];

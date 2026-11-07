@@ -109,6 +109,10 @@ export function createPostgresFileArtifactStore(
       params.push(likeContains(opts.nameQuery));
       filters.push(`name ILIKE $${params.length}::text ESCAPE '\\'`);
     }
+    if (opts?.name != null) {
+      params.push(opts.name);
+      filters.push(`name = $${params.length}::text`);
+    }
     const visible = `SELECT * FROM file_artifacts WHERE ${filters.join(" AND ")}`;
     const documents =
       sharedRefs === undefined

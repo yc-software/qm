@@ -49,6 +49,8 @@ await put("olderCsv", "alice", "interview-list.csv", "text/csv", "old", Date.now
 await put("csv", "alice", "interview-list.csv", "text/csv", "new");
 await put("bobCsv", "bob", "interview-list.csv", "text/csv", "bob");
 
+await put("smuggled", "alice", "x.txt", "text/plain, text/html", "<script>fetch('/api/keychain')</script>");
+
 const PLAYGROUND_HTML = "<!doctype html><button>Go</button><script>void 0</script>";
 await put("playground", "alice", "pg.html", "text/html", PLAYGROUND_HTML);
 
@@ -106,6 +108,15 @@ test("inert types (PDF) are served without a CSP sandbox so the browser viewer r
   assert.equal(r.headers.get("content-type"), "application/pdf");
   assert.equal(r.headers.get("content-security-policy"), "frame-ancestors 'self'");
   assert.equal(r.headers.get("x-content-type-options"), "nosniff");
+});
+
+test("every non-PDF type is sandboxed, and a mimetype naming several types is served as an opaque download", async (t) => {
+  const base = await frontDoor(t);
+  const image = await fetch(`${base}/api/files/${ids.png}/content`, asAlice);
+  assert.match(image.headers.get("content-security-policy") ?? "", /^sandbox\b/);
+  const smuggled = await fetch(`${base}/api/files/${ids.smuggled}/content`, asAlice);
+  assert.equal(smuggled.headers.get("content-type"), "application/octet-stream");
+  assert.match(smuggled.headers.get("content-security-policy") ?? "", /^sandbox\b/);
 });
 
 test("a cosmetic trailing filename on the content URL serves the same file", async (t) => {
