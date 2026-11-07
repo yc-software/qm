@@ -2308,12 +2308,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (deps.signingSecret && deps.apiBaseUrl && (deps.crons || deps.webhooks || deps.monitors)) {
           const nowMs = Date.now();
           const obligations = await Promise.all([
-            deps.crons?.ownedBy(scopeId) ?? [],
+            deps.crons?.scheduledIn(scopeId) ?? [],
             deps.webhooks?.ownedBy(scopeId) ?? [],
             deps.monitors?.ownedBy(scopeId) ?? [],
           ])
             .then(([crons, hooks, mons]) =>
               renderStandingObligations(
+                scopeId,
                 crons.filter(
                   (c) =>
                     c.enabled &&

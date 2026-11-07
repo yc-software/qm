@@ -83,17 +83,19 @@ test("scheduled work lists every title with a readable timing and no ids, owners
     action: "private instructions",
     schedule: { cron: "0 8 * * 1,3,5", timezone: "America/Los_Angeles" },
   }));
-  const text = renderStandingObligations(crons, [], []);
+  const text = renderStandingObligations("personal:U1", crons, [], []);
   assert.equal(text.split("\n").filter((line) => line.startsWith("- ")).length, 15);
   assert.match(text, /^- Task 3 — .*8:00 AM.*Mon.*Wed.*Fri/m);
   assert.doesNotMatch(text, /cron-1|private instructions|private-owner/);
   const fallback = renderStandingObligations(
+    "personal:U1",
     [{ ...crons[0]!, schedule: { cron: "0 8 * * FRI#L", timezone: "America/Los_Angeles" } }],
     [],
     [],
   );
   assert.match(fallback, /last Friday/);
   const mixed = renderStandingObligations(
+    "personal:U1",
     [crons[0]!, { ...crons[1]!, schedule: { cron: "30 9 * * 1-5", timezone: "Europe/London" } }],
     [],
     [],
@@ -114,9 +116,12 @@ test("schedules the short form can't express fall back to cronstrue's wording", 
     action: "x",
     schedule: { cron: expr, timezone: "UTC" },
   });
-  assert.match(renderStandingObligations([cron("0 8 * * 1-5")], [], []), /- T — 8:00 AM Mon\/Tue\/Wed\/Thu\/Fri$/m);
-  assert.match(renderStandingObligations([cron("0 8 * * 1#2")], [], []), /second Monday/);
-  assert.match(renderStandingObligations([cron("0 8 1 * *")], [], []), /day 1 of the month/);
+  assert.match(
+    renderStandingObligations("personal:U1", [cron("0 8 * * 1-5")], [], []),
+    /- T — 8:00 AM Mon\/Tue\/Wed\/Thu\/Fri$/m,
+  );
+  assert.match(renderStandingObligations("personal:U1", [cron("0 8 * * 1#2")], [], []), /second Monday/);
+  assert.match(renderStandingObligations("personal:U1", [cron("0 8 1 * *")], [], []), /day 1 of the month/);
 });
 
 const revision = (version: number, content: string, sessionId?: string) => ({

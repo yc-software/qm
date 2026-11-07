@@ -748,6 +748,65 @@ test("cron get honors read-only visibility: a delivery-targeted viewer reads, ne
   assert.equal(patched.ok ? "" : patched.code, "forbidden");
 });
 
+test("a cron delivering into a conversation is readable there without its task, and stays owner-managed", async () => {
+  const { built, control } = setup();
+  const group = {
+    key: "k-group",
+    type: "slack",
+    target: "G7",
+    audienceScopeId: scopeId("group", "G7"),
+    label: "group",
+  };
+  const inGroup = (actorId: string) =>
+    claims(actorId, group.audienceScopeId, { destinations: [group], defaultDestinationKey: group.key });
+  const created = await control.createCron(
+    { title: "Status update", schedule: { everyMs: 3_600_000 }, action: "read my private inbox" },
+    claims("U2"),
+  );
+  assert.ok(created.ok);
+  const id = created.cron.id;
+  assert.ok((await control.retargetCron(id, group.key, inGroup("U2"))).ok);
+  await built.app.setCronFireNote(id, { text: "private continuity", at: Date.now() });
+  await built.crons.recordFire(id, {
+    fireKey: "f1",
+    threadRef: "slack:G7",
+    firedAt: Date.now() - 1000,
+    endedAt: Date.now(),
+    status: "ok",
+    reply: "posted to the owner's DM before the move",
+  });
+  await built.crons.recordFire(id, {
+    fireKey: "f2",
+    threadRef: "slack:G7",
+    firedAt: Date.now() - 500,
+    endedAt: Date.now(),
+    status: "silent",
+    note: "nothing new from the private inbox",
+  });
+
+  const listed = await control.listCrons(inGroup("U3"));
+  assert.deepEqual(
+    listed.visible.map((c) => [c.id, c.title, c.action, c.lastFireNote]),
+    [[id, "Status update", undefined, undefined]],
+  );
+  const got = await control.getCron(id, inGroup("U3"));
+  assert.ok(got.ok);
+  assert.equal(got.cron.action, undefined);
+  assert.equal(got.cron.sessionRef, undefined);
+  const runs = await control.getCronRuns(id, {}, inGroup("U3"));
+  assert.ok(runs.ok);
+  assert.deepEqual(runs.runs.map((r) => [r.status, r.reply, r.note]).toSorted(), [
+    ["ok", undefined, undefined],
+    ["silent", undefined, undefined],
+  ]);
+  assert.equal(runs.cron.lastFireNote, undefined);
+
+  assert.equal((await control.patchCron(id, { title: "x" }, inGroup("U3"))).ok, false);
+  assert.equal((await control.runCron(id, inGroup("U3"))).ok, false);
+  assert.equal((await control.getCronRuns(id, {}, claims("U3"))).ok, false);
+  assert.deepEqual((await control.listCrons(claims("U3"))).visible, []);
+});
+
 test("webhook create surfaces the inbound url + the secret verbatim; list elides; disable is owner-gated", async () => {
   const { control } = setup();
   const r = await control.createWebhook(

@@ -3,7 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { Destination } from "../types.ts";
 import type { Cron, CronFireLogEntry, CronSchedule, CronScript, Webhook } from "../triggers/types.ts";
 import { cronScriptFrom, type CronScriptTrial } from "../cron/script.ts";
-import type { CreateCronInput, CronPatch } from "../cron/cron-store.ts";
+import { deliversInto, type CreateCronInput, type CronPatch } from "../cron/cron-store.ts";
 import type { CreateWebhookInput } from "../webhooks/webhook-store.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import {
@@ -207,6 +207,49 @@ async function ownsCron(
   if (actsAsScope(cron.owner, cron.ownerScopeId)) return app.isCurrentSharedScopeMember(actorId, cron.ownerScopeId);
   if (!(await (isActor ? isActor(cron.owner) : app.samePerson(cron.owner, actorId)))) return false;
   return !(await app.membershipControlsScope(cron.ownerScopeId)) || app.managesScope(actorId, cron.ownerScopeId);
+}
+
+function audienceView({
+  id,
+  ownerScopeId,
+  owner,
+  createdBy,
+  destination,
+  enabled,
+  createdAt,
+  lastFiredAt,
+  schedule,
+  nextFireAt,
+  title,
+  archived,
+}: Cron): Cron {
+  return {
+    id,
+    ownerScopeId,
+    owner,
+    createdBy,
+    destination,
+    enabled,
+    createdAt,
+    lastFiredAt,
+    schedule,
+    nextFireAt,
+    title,
+    archived,
+  };
+}
+
+function audienceFire({
+  fireKey,
+  threadRef,
+  firedAt,
+  scheduledAt,
+  status,
+  endedAt,
+  note,
+}: CronFireLogEntry): CronFireLogEntry {
+  const failure = status === "failed" || status === "refused";
+  return { fireKey, threadRef, firedAt, scheduledAt, status, endedAt, ...(failure ? { note } : {}) };
 }
 
 export async function canAdministerCron(
@@ -522,7 +565,10 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       const admits = await Promise.all(all.map((c) => canAdministerCron(app, c, capability.actorId, isActor)));
       const administered = all.filter((_, i) => admits[i]);
       const ids = new Set(administered.map((c) => c.id));
-      return { crons: administered, visible: visible.filter((c) => !ids.has(c.id)) };
+      const shared = visible.filter((c) => !ids.has(c.id));
+      for (const c of shared) ids.add(c.id);
+      const deliveredHere = all.filter((c) => !ids.has(c.id) && deliversInto(c, capability.scopeId)).map(audienceView);
+      return { crons: administered, visible: [...shared, ...deliveredHere] };
     },
 
     async getCron(id, capability) {
@@ -531,19 +577,22 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       if (await canAdministerCron(app, cron, capability.actorId)) return { ok: true, cron };
       const { visible } = await app.listCronsForViewer(capability.actorId);
       if (visible.some((c) => c.id === id)) return { ok: true, cron };
+      if (deliversInto(cron, capability.scopeId)) return { ok: true, cron: audienceView(cron) };
       return { ok: false, code: "forbidden", message: "not your cron" };
     },
 
     async getCronRuns(id, req, capability) {
       const cron = await app.getCron(id);
       if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
-      if (!(await canAdministerCron(app, cron, capability.actorId)))
+      const owner = await canAdministerCron(app, cron, capability.actorId);
+      if (!owner && !deliversInto(cron, capability.scopeId))
         return { ok: false, code: "forbidden", message: "not your cron" };
       if (req.limit !== undefined && (!Number.isSafeInteger(req.limit) || req.limit < 1)) {
         return { ok: false, code: "bad_request", message: "limit must be a positive integer" };
       }
       const { runs, total } = await app.listCronFires(id, req.limit !== undefined ? { limit: req.limit } : {});
-      return { ok: true, cron, runs, total };
+      if (owner) return { ok: true, cron, runs, total };
+      return { ok: true, cron: audienceView(cron), runs: runs.map(audienceFire), total };
     },
 
     async patchCron(id, req, capability, trial) {

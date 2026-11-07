@@ -56,7 +56,7 @@ export interface CronStore {
   create(input: CreateCronInput): Promise<Cron>;
   get(id: string): Promise<Cron | null>;
   list(): Promise<Cron[]>;
-  ownedBy(scopeId: string): Promise<Cron[]>;
+  scheduledIn(scopeId: string): Promise<Cron[]>;
   update(id: string, patch: CronPatch): Promise<Cron | null>;
   delete(id: string): Promise<void>;
   setEnabled(id: string, enabled: boolean): Promise<void>;
@@ -86,6 +86,10 @@ export function cronIsActive(cron: Pick<Cron, "enabled" | "archived" | "schedule
 
 export function cronTiedTo(cron: Pick<Cron, "destination" | "sessionRef">, threadRef: string): boolean {
   return cron.destination?.target === threadRef || cron.sessionRef === threadRef;
+}
+
+export function deliversInto(cron: Pick<Cron, "destination">, scopeId: string): boolean {
+  return cron.destination?.audienceScopeId === scopeId;
 }
 
 export function isDeferred(cron: Pick<Cron, "deferUntil">, now: number): boolean {
@@ -141,7 +145,13 @@ export function createCronStore(
     },
     get: (id) => backing.get(id),
     list: () => backing.all(),
-    ownedBy: (scopeId) => ownedBy(backing, scopeId),
+    async scheduledIn(scopeId) {
+      const [owned, delivered] = await Promise.all([
+        ownedBy(backing, scopeId),
+        backing.select({ where: { field: "destination.audienceScopeId", anyOfFold: [scopeId] } }),
+      ]);
+      return [...owned, ...delivered.filter((c) => deliversInto(c, scopeId) && c.ownerScopeId !== scopeId)];
+    },
     async update(id, patch) {
       const before = await backing.get(id);
       if (!before) return null;
