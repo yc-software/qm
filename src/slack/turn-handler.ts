@@ -272,6 +272,13 @@ export function createTurnHandler(deps: {
       return firstTs;
     };
 
+    const unpostable = (err: unknown): boolean => {
+      const code = slackErrorCode(err);
+      if (!code || !SLACK_PERMANENT_POST_ERRORS.has(code)) return false;
+      console.warn(`[slack-plugin] reply not postable ch=${inc.channel} ts=${inc.ts} (${code})`);
+      return true;
+    };
+
     const postEphemeral = async (msg: string, threadTs?: string): Promise<void> => {
       await client.chat
         .postEphemeral({
@@ -287,9 +294,7 @@ export function createTurnHandler(deps: {
       try {
         await postReply(msg, undefined, idempotencyKey);
       } catch (err) {
-        const code = slackErrorCode(err);
-        if (!code || !SLACK_PERMANENT_POST_ERRORS.has(code)) throw err;
-        console.warn(`[slack-plugin] note not postable ch=${inc.channel} ts=${inc.ts} (${code})`);
+        if (!unpostable(err)) throw err;
         if (inc.kind === "channel") await postEphemeral(msg);
       }
     };
@@ -679,7 +684,7 @@ export function createTurnHandler(deps: {
         const editNote = replyEditNote(result.retracted);
         const noteBlocks = editNote ? blocksWithContext(postText, [plainContext(editNote)]) : undefined;
         if (postText) await postReply(postText, noteBlocks, runKey);
-        if (uploadError) await postReply(uploadFailureNote(uploadError));
+        if (uploadError) await postNote(uploadFailureNote(uploadError));
         const { directives, dropped } = resolveReactionTargets(reactions, allowedTs);
         if (dropped) console.error(`[slack-plugin] dropped ${dropped} reaction(s) with an unresolvable message id`);
         await applyAndLogReactions(client, inc.channel, inc.ts, directives);
@@ -705,7 +710,7 @@ export function createTurnHandler(deps: {
           );
           return;
         }
-        throw err;
+        if (!unpostable(err)) throw err;
       }
     } else if (result.status === "pending_approval") {
       const pendingApprovals = result.pendingApprovals ?? [];
