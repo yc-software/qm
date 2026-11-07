@@ -5,7 +5,8 @@ import { MAX_ATTACHMENT_BYTES, mimeFromName, safeAttachmentName } from "../../..
 import { contentDispositionAttachment, contentTypeWithUtf8Charset, sendJson } from "../../http.ts";
 import { relayStream } from "../../../../plugins/chassis/src/http.ts";
 import { audit, authorizeAdmin, requireScopedAdmin } from "../shared.ts";
-import { stageBrowserUpload } from "../blobs.ts";
+import { browserUploadFields, stageBrowserUpload } from "../blobs.ts";
+import { usesBrowserSession } from "../route.ts";
 import { type ApiCtx } from "../route.ts";
 import { discoverScopes, FILES_PAGE_SIZE } from "./common.ts";
 
@@ -126,24 +127,17 @@ export async function listAdminFiles(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { scopeId: scope, files });
 }
 
-function browserUploadFields(ctx: ApiCtx): { name: string; mimetype: string } {
-  const contentType = ctx.req.headers["content-type"];
-  return {
-    name: ctx.url.searchParams.get("name")?.trim() || "file",
-    mimetype: typeof contentType === "string" ? contentType : "application/octet-stream",
-  };
-}
-
 export async function uploadAdminFile(ctx: ApiCtx): Promise<void> {
-  const { res, deps, body, capability } = ctx;
+  const { res, deps, body } = ctx;
   const authz = await requireScopedAdmin(ctx);
   if (!authz) return;
   if (!deps.files) return sendJson(res, 404, { error: "not_found", message: "file store not wired" });
   if (!deps.blobTransfer)
     return sendJson(res, 501, { error: "not_configured", message: "blob transfer store not wired" });
   const { actor, scope } = authz;
-  const staged = capability ? null : await stageBrowserUpload(ctx);
-  if (!capability && !staged) return;
+  const streamed = usesBrowserSession(ctx.req, { browser: "self" });
+  const staged = streamed ? await stageBrowserUpload(ctx) : null;
+  if (streamed && !staged) return;
   const b = (staged ? { blobId: staged.blobId, ...browserUploadFields(ctx) } : body) as {
     blobId?: unknown;
     name?: unknown;

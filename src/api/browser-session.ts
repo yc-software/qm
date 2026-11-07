@@ -6,7 +6,6 @@ import { isStrongSigningSecret, MIN_SIGNING_SECRET_LENGTH } from "../auth/source
 import { orgId } from "../config.ts";
 import { canonicalPerson, samePerson } from "../directory/person.ts";
 import { reportFailure } from "../util/errors.ts";
-import { CAPABILITY_HEADER } from "./contract.ts";
 import type { ServerDeps } from "./deps.ts";
 import { apiRoutes } from "./routes/index.ts";
 import { compilePath, findRoute, type Route } from "./routes/route.ts";
@@ -179,15 +178,6 @@ interface BrowserRefusal {
   status: 401 | 403 | 503;
   error: string;
   message: string;
-}
-
-export function usesBrowserSession(req: IncomingMessage, route: Pick<Route, "browser"> | undefined): boolean {
-  return (
-    route?.browser !== undefined &&
-    req.headers[CAPABILITY_HEADER] === undefined &&
-    req.headers["x-signature"] === undefined &&
-    readCookie(req.headers.cookie, "portal_session") !== null
-  );
 }
 
 function misconfiguration(deps: ServerDeps): string | null {

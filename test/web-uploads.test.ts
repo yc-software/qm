@@ -12,9 +12,12 @@ import { buildApp, serverDeps } from "../src/wiring.ts";
 import { stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { browserImpersonationCookie, browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
+import { signedHeaders, withSourceAuthNonce } from "../plugins/chassis/src/core-client.ts";
+
+const SIGNING = "web-uploads-signing-secret-0123456789";
 
 async function core(t: TestContext) {
-  const config = testConfig({ signingSecret: "web-uploads-signing-secret-0123456789" });
+  const config = testConfig({ signingSecret: SIGNING });
   const built = stopAtEnd(buildApp(config));
   const server = createServer(built.app, { ...serverDeps(config, built), ...browserSessionDeps });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -66,10 +69,12 @@ test("a file upload lands in the signed-in person's files with its name and cont
   assert.equal(uploaded.status, 200);
   const { file } = (await uploaded.json()) as { file: { id: string; name: string; mimetype: string } };
   assert.deepEqual([file.name, file.mimetype], ["notes é.txt", "text/plain"]);
-  const listed = await fetch(`${base}/api/files`, { headers: { cookie: browserSessionCookie("alice") } });
-  assert.match(await listed.text(), new RegExp(file.id));
+  const stored = await fetch(`${base}/api/files/${file.id}/content`, {
+    headers: { cookie: browserSessionCookie("alice") },
+  });
+  assert.equal(await stored.text(), "hello, file");
   const bobs = await fetch(`${base}/api/files`, { headers: { cookie: browserSessionCookie("bob") } });
-  assert.doesNotMatch(await bobs.text(), new RegExp(file.id));
+  assert.ok(!(await bobs.text()).includes(file.id));
   const named = await upload(base, `/api/files/upload?${query}&principalId=bob`, browserSessionCookie("alice"), bytes);
   assert.equal(named.status, 403);
   const elsewhere = new URLSearchParams({ sha: sha(bytes), scope: "personal:bob" });
@@ -87,8 +92,13 @@ test("an admin upload streams into the scope's files and refuses non-admins, imp
   const admin = browserSessionCookie("admin-alice");
   const uploaded = await upload(base, `/api/admin/files/upload?${query}`, admin, bytes);
   assert.equal(uploaded.status, 200, await uploaded.clone().text());
-  const { file } = (await uploaded.json()) as { file: { name: string; mimetype: string; scopeId: string } };
-  assert.deepEqual([file.name, file.mimetype, file.scopeId], ["policy.txt", "text/plain", "org:default-org"]);
+  const { file } = (await uploaded.json()) as {
+    file: { name: string; mimetype: string; scopeId: string; size: number };
+  };
+  assert.deepEqual(
+    [file.name, file.mimetype, file.scopeId, file.size],
+    ["policy.txt", "text/plain", "org:default-org", bytes.length],
+  );
   const missing = await upload(base, `/api/admin/files/upload?sha=${sha(bytes)}`, admin, bytes);
   assert.deepEqual([missing.status, ((await missing.json()) as { message: string }).message], [400, "scope required"]);
   assert.equal(
@@ -126,4 +136,32 @@ test("an upload the browser abandons midway leaves no partial blob and the serve
   const small = Buffer.from("still here");
   const after = await upload(base, `/api/blobs?sha=${sha(small)}`, browserSessionCookie("alice"), small);
   assert.equal(after.status, 200);
+});
+
+test("signed callers keep staging through /v1/blobs and registering by blobId, and cannot use the browser upload routes", async (t) => {
+  const { base } = await core(t);
+  const bytes = Buffer.from("signed admin notes");
+  const signed = (path: string, body: string | Buffer, tail: string, extra: Record<string, string> = {}) => {
+    const nonced = withSourceAuthNonce(path, SIGNING);
+    return fetch(`${base}${nonced}`, {
+      method: "POST",
+      headers: { ...signedHeaders(SIGNING, "POST", nonced, "", tail), ...extra },
+      body,
+    });
+  };
+  const browserBlob = await signed(`/v1/web/blobs?sha=${sha(bytes)}`, bytes, "");
+  assert.equal(browserBlob.status, 401);
+  const staged = await signed("/v1/blobs", bytes, sha(bytes), {
+    "content-type": "application/octet-stream",
+    "x-content-sha256": sha(bytes),
+  });
+  assert.equal(staged.status, 200);
+  const { blobId } = (await staged.json()) as { blobId: string };
+  const body = JSON.stringify({ blobId, name: "signed.txt", mimetype: "text/plain" });
+  const registered = await signed("/v1/admin/files/upload?scope=org:default-org", body, body, {
+    "x-admin-actor": "admin-alice@default-org",
+  });
+  assert.equal(registered.status, 200, await registered.clone().text());
+  const { file } = (await registered.json()) as { file: { name: string; size: number } };
+  assert.deepEqual([file.name, file.size], ["signed.txt", bytes.length]);
 });

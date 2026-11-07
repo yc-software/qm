@@ -26,13 +26,21 @@ import { errMessage } from "../util/errors.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { canonicalPayload } from "../../plugins/chassis/src/source-auth-sign.ts";
 import { armBodyDeadline, PayloadTooLargeError, readRawBody, sendJson, verifyOrReject } from "./http.ts";
-import { findRoute, run, type AdminAccess, type ApiCtx, type BaseCtx, type Route } from "./routes/route.ts";
+import {
+  findRoute,
+  run,
+  usesBrowserSession,
+  type AdminAccess,
+  type ApiCtx,
+  type BaseCtx,
+  type Route,
+} from "./routes/route.ts";
 import { apiRoutes, rawRoutes } from "./routes/index.ts";
 import { proxyDeploymentSubdomain } from "./routes/deployments.ts";
 import { CAPABILITY_HEADER } from "./contract.ts";
 import { livePersonCapability } from "./artifact-share.ts";
 import { canonicalPerson, samePerson } from "../directory/person.ts";
-import { apiAlias, browserIdentity, usesBrowserSession, withBrowserActor } from "./browser-session.ts";
+import { apiAlias, browserIdentity, withBrowserActor } from "./browser-session.ts";
 
 async function capabilityAdminDenied(
   access: AdminAccess,

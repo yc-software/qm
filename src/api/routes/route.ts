@@ -1,5 +1,7 @@
 import type { UNATTENDED_ADMIN_GRANTS } from "../control-service.ts";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { readCookie } from "../../../plugins/portal/src/session.ts";
+import { CAPABILITY_HEADER } from "../contract.ts";
 import { compilePath, findRoute } from "../../../plugins/chassis/src/router.ts";
 
 export { compilePath, findRoute };
@@ -63,4 +65,13 @@ export function withAdmin<C extends BaseCtx>(routes: Route<C>[]): Route<C>[] {
 export async function run<C extends BaseCtx>(route: Route<C>, params: Record<string, string>, ctx: C): Promise<void> {
   ctx.params = params;
   await withModelRequestContext(ctx.capability ?? {}, () => route.handle(ctx));
+}
+
+export function usesBrowserSession(req: IncomingMessage, route: Pick<Route, "browser"> | undefined): boolean {
+  return (
+    route?.browser !== undefined &&
+    req.headers[CAPABILITY_HEADER] === undefined &&
+    req.headers["x-signature"] === undefined &&
+    readCookie(req.headers.cookie, "portal_session") !== null
+  );
 }

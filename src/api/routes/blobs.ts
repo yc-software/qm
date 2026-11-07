@@ -9,11 +9,13 @@ import {
   MAX_STAGE_BLOB_BYTES,
 } from "../../persistence/blob-transfer.ts";
 import { CAPABILITY_HEADER } from "../contract.ts";
+import { usesBrowserSession } from "./route.ts";
 import { canonicalPayload } from "../../../plugins/chassis/src/source-auth-sign.ts";
 import { extendBodyDeadline, headerValue, sendJson, verifyOrReject } from "../http.ts";
 import { relayStream } from "../../../plugins/chassis/src/http.ts";
 
 const STAGE_UPLOAD_DEADLINE_MS = 1_800_000;
+const SHA256_HEX = /^[0-9a-f]{64}$/;
 import type { ApiCtx, BaseCtx, Route } from "./route.ts";
 
 type BlobDir = "read" | "write";
@@ -70,7 +72,7 @@ async function putBlob(ctx: BaseCtx): Promise<void> {
     return sendJson(res, 501, { error: "not_configured", message: "no blob transfer store wired" });
   }
   const declaredSha = headerValue(req, "x-content-sha256") ?? "";
-  if (ctx.secret && !headerValue(req, CAPABILITY_HEADER) && !/^[0-9a-f]{64}$/.test(declaredSha)) {
+  if (ctx.secret && !headerValue(req, CAPABILITY_HEADER) && !SHA256_HEX.test(declaredSha)) {
     req.resume();
     return sendJson(res, 400, { error: "bad_request", message: "x-content-sha256 (hex sha-256) required" });
   }
@@ -98,10 +100,22 @@ async function stageRequestBlob(ctx: BaseCtx, maxBytes: number, sha256: string):
   }
 }
 
+export function browserUploadFields(ctx: ApiCtx): { name: string; mimetype: string } {
+  const contentType = ctx.req.headers["content-type"];
+  return {
+    name: ctx.url.searchParams.get("name")?.trim() || "file",
+    mimetype: typeof contentType === "string" ? contentType : "application/octet-stream",
+  };
+}
+
 export async function stageBrowserUpload(ctx: ApiCtx): Promise<BlobInfo | null> {
   const { req, res, deps, url } = ctx;
+  if (!usesBrowserSession(req, { browser: true })) {
+    sendJson(res, 401, { error: "unauthorized", message: "a sign-in session for this organization is required" });
+    return null;
+  }
   const sha256 = url.searchParams.get("sha") ?? "";
-  if (!/^[0-9a-f]{64}$/.test(sha256)) {
+  if (!SHA256_HEX.test(sha256)) {
     req.resume();
     sendJson(res, 400, { error: "bad_request", message: "sha (hex sha-256) required" });
     return null;
@@ -135,14 +149,12 @@ async function getBlob(ctx: BaseCtx): Promise<void> {
 }
 
 async function uploadFile(ctx: ApiCtx): Promise<void> {
-  const { req, res, app, deps, url } = ctx;
+  const { res, app, deps, url } = ctx;
   const staged = await stageBrowserUpload(ctx);
   if (!staged) return;
   const { blobId } = staged;
   const principalId = ctx.actor!.p;
-  const name = url.searchParams.get("name")?.trim() || "file";
-  const contentType = req.headers["content-type"];
-  const mimetype = typeof contentType === "string" ? contentType : "application/octet-stream";
+  const { name, mimetype } = browserUploadFields(ctx);
   const scopeId = (url.searchParams.get("scope") || undefined) as ScopeId | undefined;
   const opened = await deps.blobTransfer!.open(blobId);
   if (!opened) return sendJson(res, 404, { error: "not_found", message: "staged blob not found" });
