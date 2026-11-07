@@ -133,20 +133,21 @@ async function connectorProviderStatus(
   return Object.fromEntries(entries);
 }
 
-async function oauthCallback(ctx: BaseCtx): Promise<void> {
-  const { res, deps, secret, url, pathname } = ctx;
-  const oauthRoute = parseOAuthRoute(pathname)!;
+type OAuthCallbackOutcome = { status: number; body: Record<string, unknown> } | { redirect: string };
+
+async function settleOAuthCallback(ctx: BaseCtx, provider: string): Promise<OAuthCallbackOutcome> {
+  const { deps, secret, url } = ctx;
   if (!deps.connectorTokens)
-    return sendJson(res, 501, { error: "not_configured", message: "connector token store not wired" });
+    return { status: 501, body: { error: "not_configured", message: "connector token store not wired" } };
   const code = url.searchParams.get("code") ?? "";
   const stateParam = url.searchParams.get("state") ?? "";
   const providerError = url.searchParams.get("error");
-  if (providerError) return sendJson(res, 400, { error: "oauth_denied", message: providerError });
-  if (!code || !stateParam) return sendJson(res, 400, { error: "bad_request", message: "code and state required" });
+  if (providerError) return { status: 400, body: { error: "oauth_denied", message: providerError } };
+  if (!code || !stateParam) return { status: 400, body: { error: "bad_request", message: "code and state required" } };
   let state;
   try {
     state = await resumeOAuthFlow(deps, secret, stateParam);
-    if (state.provider !== oauthRoute.provider) throw new Error("OAuth provider mismatch");
+    if (state.provider !== provider) throw new Error("OAuth provider mismatch");
     if (state.orgId !== undefined && state.orgId !== configOrgId()) {
       throw new Error("OAuth state is for a different org");
     }
@@ -157,8 +158,8 @@ async function oauthCallback(ctx: BaseCtx): Promise<void> {
       throw new Error("OAuth state was already used or replay protection is unavailable");
     }
     const accountType = state.accountType ?? "default";
-    const client = await resolverFor(deps)(oauthRoute.provider, { accountType });
-    const { hosts, token } = await exchangeCode(oauthRoute.provider, code, state.redirectUri, {
+    const client = await resolverFor(deps)(provider, { accountType });
+    const { hosts, token } = await exchangeCode(provider, code, state.redirectUri, {
       client,
       fetchImpl: deps.oauthFetch,
       accountType,
@@ -171,7 +172,7 @@ async function oauthCallback(ctx: BaseCtx): Promise<void> {
     audit(deps, {
       principalId: state.principalId,
       action: "connector.oauth.connected",
-      resource: oauthRoute.provider,
+      resource: provider,
       scopeLabel: state.principalId,
     });
     if (state.consentLinkId && deps.consentLinks) {
@@ -179,14 +180,28 @@ async function oauthCallback(ctx: BaseCtx): Promise<void> {
     }
     if (state.returnTo) {
       const dest = new URL(state.returnTo, "http://localhost");
-      dest.searchParams.set("connector", oauthRoute.provider);
+      dest.searchParams.set("connector", provider);
       dest.searchParams.set("status", "connected");
-      return sendRedirect(res, `${dest.pathname}${dest.search}${dest.hash}`);
+      return { redirect: `${dest.pathname}${dest.search}${dest.hash}` };
     }
-    return sendJson(res, 200, { ok: true, provider: oauthRoute.provider, principalId: state.principalId, hosts });
+    return { status: 200, body: { ok: true, provider, principalId: state.principalId, hosts } };
   } catch (e) {
-    return sendJson(res, 400, { error: "oauth_callback_failed", message: errMessage(e) });
+    return { status: 400, body: { error: "oauth_callback_failed", message: errMessage(e) } };
   }
+}
+
+async function oauthCallback(ctx: BaseCtx): Promise<void> {
+  const outcome = await settleOAuthCallback(ctx, parseOAuthRoute(ctx.pathname)!.provider);
+  if ("redirect" in outcome) return sendRedirect(ctx.res, outcome.redirect);
+  return sendJson(ctx.res, outcome.status, outcome.body);
+}
+
+async function oauthCallbackPage(ctx: ApiCtx): Promise<void> {
+  const shell = ctx.deps.web?.shell;
+  if (!shell) return sendJson(ctx.res, 404, { error: "not_found" });
+  const provider = ctx.params.provider!;
+  const outcome = await settleOAuthCallback(ctx, provider);
+  return shell.connectorCallbackPage(ctx.res, provider, "status" in outcome && outcome.status === 200);
 }
 
 async function principalHasProvider(deps: ServerDeps, provider: string, principalId: string): Promise<boolean> {
@@ -578,6 +593,7 @@ export async function gmailSent(ctx: ApiCtx): Promise<void> {
 }
 
 export const connectorRoutes: ReadonlyArray<Route<ApiCtx>> = [
+  { method: "GET", path: "/v1/web/connectors/oauth/:provider/callback", auth: "public", handle: oauthCallbackPage },
   ...forInboxLoopsPeople([
     { method: "GET", path: "/v1/connectors/gmail/sent/:messageId", actor: "person", auth: "source", handle: gmailSent },
     { method: "GET", path: "/v1/connectors/gmail/sent", actor: "person", auth: "source", handle: gmailSent },

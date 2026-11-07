@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { analyticsHookConfig } from "../../plugins/chassis/src/analytics-config.ts";
 import { browserErrorConfig } from "../../plugins/chassis/src/browser-error-config.ts";
 import { injectBranding, type OrgBranding } from "../../plugins/chassis/src/branding.ts";
-import { gzipAccepted, json, relayStream, sendBuffered } from "../../plugins/chassis/src/http.ts";
+import { escapeHtml, gzipAccepted, json, relayStream, sendBuffered } from "../../plugins/chassis/src/http.ts";
 import { readWebBundleLayout } from "../../cli/src/web-release.ts";
 import type { Config } from "../config.ts";
 import { s3Client } from "../persistence/s3.ts";
@@ -30,6 +30,7 @@ export interface WebReleases {
 export interface WebShell {
   serve(req: IncomingMessage, res: ServerResponse): Promise<void>;
   sharePage(res: ServerResponse, status: number, transcript: unknown): Promise<void>;
+  connectorCallbackPage(res: ServerResponse, provider: string, ok: boolean): void;
 }
 
 const BUNDLED_WEB_UI = fileURLToPath(new URL("../../plugins/web-ui/dist-web", import.meta.url));
@@ -102,7 +103,7 @@ function bundledReleases(store: WebReleaseStore): WebReleases {
   return createWebReleaseReader(store, { bundled: () => bundled ?? publishBundled() });
 }
 
-export function sharedSessionHtml(template: string, transcript: unknown): string {
+function sharedSessionHtml(template: string, transcript: unknown): string {
   const data = JSON.stringify(transcript).replace(/</g, "\\u003c");
   return template.replace(
     /<script id="shared-transcript" type="application\/json">\s*null\s*<\/script>/,
@@ -173,8 +174,15 @@ export function createWebShell(
   }
 
   async function serveStatic(res: ServerResponse, urlPath: string): Promise<void> {
-    const rel = posix.normalize(decodeURIComponent(urlPath)).replace(/^\/+/, "");
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(urlPath);
+    } catch {
+      return json(res, 400, { error: "bad_request" });
+    }
+    const rel = posix.normalize(decoded).replace(/^\/+/, "");
     if (rel === ".." || rel.startsWith("../") || rel.includes("\\")) return json(res, 403, { error: "forbidden" });
+    if (rel.includes("\0")) return json(res, 404, { error: "not_found" });
     if (!extname(rel) || rel === "index.html") return document(res, csp);
     let found: Awaited<ReturnType<WebReleases["file"]>>;
     try {
@@ -218,40 +226,25 @@ export function createWebShell(
     res.end(JSON.stringify(body));
   }
 
-  async function connectorCallback(res: ServerResponse, url: URL): Promise<void> {
-    const provider = url.pathname.slice("/connectors/oauth/".length, -"/callback".length);
-    const core = `http://127.0.0.1:${config.port}/v1/connectors/oauth/${encodeURIComponent(provider)}/callback`;
-    const ok = await fetch(`${core}${url.search}`, { redirect: "manual" }).then(
-      (response) => response.status >= 200 && response.status < 300,
-      (error: unknown) => {
-        reportFailure("web.connector_callback", error);
-        return false;
-      },
-    );
-    const query = `view=keychain&connector=${encodeURIComponent(provider)}&status=${ok ? "connected" : "error"}`;
-    const safe = query.replace(
-      /[&<>"']/g,
-      (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] ?? c,
-    );
-    sendBuffered(
-      res,
-      ok ? 200 : 400,
-      security({ "content-type": "text/html; charset=utf-8" }),
-      `<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0; url=../../../?${safe}"><title>Connector</title>`,
-    );
-  }
-
   return {
     async serve(req, res) {
       const url = new URL(req.url ?? "/", "http://localhost");
       const path = url.pathname;
       if (req.method !== "GET" || path.startsWith("/api/")) return json(res, 404, { error: "not found" });
       if (path === "/manifest.webmanifest") return manifest(res);
-      if (path.startsWith("/connectors/oauth/") && path.endsWith("/callback")) return connectorCallback(res, url);
       const slug = (url.searchParams.get("slug") ?? "").toLowerCase();
       if (path === "/app-edit" && appsDomain && /^[a-z0-9-]{1,63}$/.test(slug))
         return document(res, spaCsp(env, `'self' ${slug}.${appsDomain}`));
       return serveStatic(res, path === "/" ? "/index.html" : path);
+    },
+    connectorCallbackPage(res, provider, ok) {
+      const query = `view=keychain&connector=${encodeURIComponent(provider)}&status=${ok ? "connected" : "error"}`;
+      sendBuffered(
+        res,
+        ok ? 200 : 400,
+        security({ "content-type": "text/html; charset=utf-8" }),
+        `<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0; url=../../../?${escapeHtml(query)}"><title>Connector</title>`,
+      );
     },
     async sharePage(res, status, transcript) {
       let template: string;

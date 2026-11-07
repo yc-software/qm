@@ -20,6 +20,7 @@ import { webMeConfig } from "./api/routes/web-me.ts";
 import { createWebShell } from "./web/shell.ts";
 import { resolveBranding } from "./resolution/branding.ts";
 import { orgScope } from "./config.ts";
+import { createBrandingCache } from "../plugins/chassis/src/branding.ts";
 
 export async function startQm(
   config: Config,
@@ -42,15 +43,14 @@ export async function startQm(
       })
     : undefined;
   const draining = new AbortController();
+  const branding = createBrandingCache(() => resolveBranding(built.config, orgScope(), config.brandingDefault));
   const web =
     config.publicPort === undefined
       ? undefined
       : {
           events: createWebEvents(built.app, built),
           me: webMeConfig(env),
-          shell: createWebShell({ ...config, publicPort: config.publicPort }, env, () =>
-            resolveBranding(built.config, orgScope(), config.brandingDefault),
-          ),
+          shell: createWebShell({ ...config, publicPort: config.publicPort }, env, branding.forRender),
         };
   const server = createServer(built.app, {
     ...serverDeps(config, built, slackEnvironmentState, slackConfig?.botToken),

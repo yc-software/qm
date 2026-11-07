@@ -206,7 +206,12 @@ test("valid session: the browser request reaches core's web shell with its own s
   assert.equal(hit.lane, "shell");
   assert.equal(hit.method, "GET");
   assert.equal(hit.url, "/api/x?q=1");
-  assert.equal(hit.cookie, sessionCookie("U1"));
+  const { openSession, readCookie } = await import("../src/session.ts");
+  assert.match(hit.cookie ?? "", /^portal_session=[^;]+$/);
+  assert.equal(
+    openSession(readCookie(hit.cookie!, "portal_session"), sessionKey, Date.now(), "acme", SESSION_TTL_S)?.sub,
+    "U1",
+  );
 });
 
 test("a route core serves is handed to core's router, not the shell", async () => {

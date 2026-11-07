@@ -152,7 +152,7 @@ const secret = process.env.CORE_SIGNING_SECRET ?? `google-oauth-smoke-${randomUU
 const corePort = await freePort();
 const webPort = await freePort();
 const webBase = `http://127.0.0.1:${webPort}`;
-const redirectUri = `${webBase}/connectors/oauth/google/callback`;
+const redirectUri = `${webBase}/v1/connectors/oauth/google/callback`;
 const expectedRedirect = process.env.GOOGLE_OAUTH_REDIRECT_URI ?? process.env.GOOGLE_OAUTH_REGISTERED_REDIRECT_URI;
 
 if (expectedRedirect && expectedRedirect !== redirectUri) {
@@ -204,7 +204,7 @@ try {
   if (!state) throw new Error("Google consent URL is missing state");
 
   const forged = await fetch(
-    `${webBase}/connectors/oauth/google/callback?code=forged-smoke-code&state=forged-smoke-state`,
+    `${webBase}/v1/connectors/oauth/google/callback?code=forged-smoke-code&state=forged-smoke-state`,
     { redirect: "manual" },
   );
   if (forged.status !== 400)

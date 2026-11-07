@@ -7,6 +7,7 @@ export interface CoreHit {
   method: string;
   url: string;
   cookie: string | null;
+  headers: IncomingMessage["headers"];
   body: string;
 }
 
@@ -18,6 +19,7 @@ async function answer(hits: CoreHit[], lane: CoreHit["lane"], req: IncomingMessa
     method: req.method ?? "",
     url: req.url ?? "",
     cookie: req.headers.cookie ?? null,
+    headers: req.headers,
     body: Buffer.concat(chunks).toString("utf8"),
   };
   hits.push(hit);

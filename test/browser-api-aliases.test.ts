@@ -238,10 +238,14 @@ test("the public front door hands every browser request to core in-process", asy
   assert.deepEqual(Object.keys((await crons.json()) as object).sort(), ["crons", "visible"]);
   const unknown = await read(`${publicWebUrl}/api/not-a-route`);
   assert.deepEqual([unknown.status, await unknown.json()], [404, { error: "not found" }]);
-  const share = await fetch(`${publicWebUrl}/share/external/33333333-3333-4333-8333-333333333333`);
-  assert.deepEqual([share.status, ((await share.json()) as { error: string }).error], [503, "web_ui_unavailable"]);
+  const sharePath = "/share/external/33333333-3333-4333-8333-333333333333";
+  const [share, direct] = await Promise.all([
+    fetch(`${publicWebUrl}${sharePath}`),
+    fetch(`http://127.0.0.1:${port}${sharePath}`),
+  ]);
+  assert.deepEqual([share.status, await share.text()], [direct.status, await direct.text()]);
   const asset = await fetch(`${publicWebUrl}/assets/app.js`);
-  assert.deepEqual([asset.status, ((await asset.json()) as { error: string }).error], [404, "not_found"]);
+  assert.deepEqual([asset.status, await asset.json()], [404, { error: "not_found" }]);
   const internalShare = await fetch(`${publicWebUrl}/share/internal/33333333-3333-4333-8333-333333333333`);
   assert.equal(internalShare.status, 401);
   assert.equal((await read(`${publicWebUrl}/v1/sessions`)).status, 404);

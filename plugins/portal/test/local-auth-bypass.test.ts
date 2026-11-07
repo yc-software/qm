@@ -48,6 +48,11 @@ test("local auth bypass signs in loopback portal requests without OIDC", async (
   const key = deriveKey("local-auth-test-portal-secret", "portal.session.v1");
   const carried = openSession(readCookie(hit.cookie ?? "", "portal_session"), key, Date.now(), "acme", 604800);
   assert.equal(carried?.sub, "local-admin");
+  const stale = await fetch(`${base}/settings/users`, { headers: { cookie: "portal_session=from-another-instance" } });
+  const staleHit = (await stale.json()) as CoreHit;
+  assert.equal(staleHit.cookie?.match(/portal_session=/g)?.length, 1);
+  const replaced = openSession(readCookie(staleHit.cookie ?? "", "portal_session"), key, Date.now(), "acme", 604800);
+  assert.equal(replaced?.sub, "local-admin");
 });
 
 test("local auth bypass only treats loopback client addresses as local", () => {

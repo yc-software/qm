@@ -16,12 +16,19 @@ test("anonymous public shares and app assets reach core without a session and do
     [`/share/external/${token}/files/${token}?inline=1`, "handle"],
     ["/assets/shared-Abc123.js", "shell"],
   ] as const) {
-    const response = await fetch(`${base}${path}`, { redirect: "manual" });
+    const response = await fetch(`${base}${path}`, {
+      redirect: "manual",
+      headers: { "x-portal-identity": "forged", "x-qm-app-host": "1", "x-qm-client-ip": "10.0.0.1" },
+    });
     assert.equal(response.status, 200);
     const hit = (await response.json()) as CoreHit;
     assert.equal(hit.lane, lane);
     assert.equal(hit.method, "GET");
     assert.equal(hit.url, path);
+    assert.deepEqual(
+      ["x-portal-identity", "x-qm-app-host", "x-qm-client-ip"].filter((name) => name in hit.headers),
+      [],
+    );
   }
   const before = hits.length;
   for (const path of [

@@ -1252,8 +1252,8 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 
   if (core && method === "GET") {
     if (/^\/share\/external\/[a-f0-9-]{36}(?:\/files\/[a-f0-9-]{36})?$/.test(pathname) && core.serves(method, pathname))
-      return core.handle(req, res);
-    if (/^\/assets\/[a-zA-Z0-9_.-]+$/.test(pathname)) return core.shell(req, res);
+      return core.handle(withoutInternalHeaders(req), res);
+    if (/^\/assets\/[a-zA-Z0-9_.-]+$/.test(pathname)) return core.shell(withoutInternalHeaders(req), res);
   }
 
   if (!isDeployment) session ??= staleSession;
@@ -1307,12 +1307,20 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     }
   }
 
-  if (readCookie(req.headers.cookie, "portal_session") === null) {
-    const minted = `portal_session=${encodeURIComponent(seal(session, sessionKey))}`;
-    req.headers.cookie = req.headers.cookie ? `${req.headers.cookie}; ${minted}` : minted;
+  if (!openSession(readCookie(req.headers.cookie, "portal_session"), sessionKey, Date.now(), ORG, SESSION_MAX_TTL_S)) {
+    const others = (req.headers.cookie ?? "").split(";").map((part) => part.trim());
+    req.headers.cookie = [
+      ...others.filter((part) => part && !part.startsWith("portal_session=")),
+      `portal_session=${encodeURIComponent(seal(session, sessionKey))}`,
+    ].join("; ");
   }
-  if (core?.serves(method, pathname)) return core.handle(req, res);
-  return core ? core.shell(req, res) : json(res, 404, { error: "not_found" });
+  if (core?.serves(method, pathname)) return core.handle(withoutInternalHeaders(req), res);
+  return core ? core.shell(withoutInternalHeaders(req), res) : json(res, 404, { error: "not_found" });
+}
+
+function withoutInternalHeaders(req: IncomingMessage): IncomingMessage {
+  for (const header of [PORTAL_IDENTITY_HEADER, "x-qm-app-host", "x-qm-client-ip"]) delete req.headers[header];
+  return req;
 }
 
 async function desktopLogin(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {

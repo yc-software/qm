@@ -9,7 +9,7 @@ import { createServer } from "../src/api/server.ts";
 import { orgScope } from "../src/config.ts";
 import type { ScopeId } from "../src/types.ts";
 import { resolveBranding } from "../src/resolution/branding.ts";
-import { createWebShell, sharedSessionHtml, type WebReleases } from "../src/web/shell.ts";
+import { createWebShell, type WebReleases } from "../src/web/shell.ts";
 import { serverDeps } from "../src/wiring.ts";
 import { buildApp, stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -44,12 +44,7 @@ const env = {
   WEB_UI_ANALYTICS: JSON.stringify({ module: "https://cdn.example.com/a.js", connect: ["https://events.example.com"] }),
   SENTRY_BROWSER_DSN: "https://public@errors.example.com/1",
 };
-const probe = createHttpServer().listen(0, "127.0.0.1");
-await new Promise((resolve) => probe.once("listening", resolve));
-const corePort = (probe.address() as AddressInfo).port;
-await new Promise((resolve) => probe.close(resolve));
 const config = testConfig({
-  port: corePort,
   signingSecret: "web-shell-signing-secret-0123456789abcdef",
   publicWebUrl: "https://qm.test",
 });
@@ -66,7 +61,7 @@ const core = createServer(built.app, {
   web: { events: {} as never, me: { suggestedActivities: [] }, shell },
 });
 const front = createHttpServer((req, res) => void shell.serve(req, res));
-await new Promise<void>((resolve) => core.listen(corePort, "127.0.0.1", resolve));
+await new Promise<void>((resolve) => core.listen(0, "127.0.0.1", resolve));
 await new Promise<void>((resolve) => front.listen(0, "127.0.0.1", resolve));
 after(() => Promise.all([core, front].map((s) => new Promise<void>((resolve) => s.close(() => resolve())))));
 const coreBase = `http://127.0.0.1:${(core.address() as AddressInfo).port}`;
@@ -127,15 +122,9 @@ test("assets stream from their precompressed sibling or the raw file, and paths 
   assert.equal(plain.body.toString(), asset);
   assert.equal((await raw("/assets/missing.js")).status, 404);
   assert.equal((await raw("/assets/..%5c..%5cpackage.json")).status, 403);
+  assert.equal((await raw("/x%ZZ.js")).status, 400);
+  assert.equal((await raw("/x%00.js")).status, 404);
   assert.equal((await raw("/api/anything")).status, 404);
-});
-
-test("snapshot JSON cannot escape its inert script element", () => {
-  const template = '<script id="shared-transcript" type="application/json">\n null\n</script>';
-  const data = { messages: [{ role: "assistant", text: '</script><script src="/evil.js"></script>& $&' }] };
-  const output = sharedSessionHtml(template, data);
-  assert.equal((output.match(/<script/g) ?? []).length, 1);
-  assert.deepEqual(JSON.parse(output.slice(output.indexOf(">") + 1, output.lastIndexOf("</script>"))), data);
 });
 
 async function seedShare(token: string, audience: "internal" | "external"): Promise<void> {
@@ -147,7 +136,9 @@ async function seedShare(token: string, audience: "internal" | "external"): Prom
     audience,
     createdBy: "alice",
     createdAt: 1,
-    messages: [{ role: "assistant", text: '<script>alert("secret")</script>' }],
+    messages: [
+      { role: "assistant", text: '<script>alert("secret")</script></script><script src="/evil.js"></script>& $&' },
+    ],
     files: [],
   });
 }
@@ -162,8 +153,11 @@ test("share pages render the frozen snapshot from core for their audience only",
   const html = await internal.text();
   assert.ok(html.includes("\\u003cscript>"));
   assert.equal(html.includes('<script>alert("secret")</script>'), false);
+  assert.equal(html.includes('<script src="/evil.js">'), false);
   const snapshot = html.match(/<script id="shared-transcript" type="application\/json">([\s\S]*?)<\/script>/);
-  assert.equal(JSON.parse(snapshot![1]!).messages[0].role, "assistant");
+  assert.deepEqual(JSON.parse(snapshot![1]!).messages, [
+    { role: "assistant", text: '<script>alert("secret")</script></script><script src="/evil.js"></script>& $&' },
+  ]);
   assert.equal(internal.headers.get("cache-control"), "no-store");
   assert.equal(internal.headers.get("referrer-policy"), "no-referrer");
   assert.equal(internal.headers.get("x-robots-tag"), "noindex, nofollow");
@@ -182,7 +176,10 @@ test("share pages render the frozen snapshot from core for their audience only",
 });
 
 test("a legacy connector callback lands on the keychain page with an error when core rejects it", async () => {
-  const page = await raw("/connectors/oauth/google/callback?code=forged&state=forged");
+  const page = await fetch(`${coreBase}/connectors/oauth/google/callback?code=forged&state=forged`, {
+    headers: { cookie: browserSessionCookie("alice") },
+  });
   assert.equal(page.status, 400);
-  assert.match(page.body.toString(), /url=\.\.\/\.\.\/\.\.\/\?view=keychain&amp;connector=google&amp;status=error/);
+  assert.equal(page.headers.get("x-frame-options"), "SAMEORIGIN");
+  assert.match(await page.text(), /url=\.\.\/\.\.\/\.\.\/\?view=keychain&amp;connector=google&amp;status=error/);
 });

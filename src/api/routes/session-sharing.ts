@@ -123,10 +123,10 @@ const transcriptOf = (share: SessionShare) => ({
   messages: share.messages,
 });
 
-async function sharePage(ctx: ApiCtx): Promise<void> {
+async function sharePage(ctx: ApiCtx, external: boolean): Promise<void> {
   const shell = ctx.deps.web?.shell;
   if (!shell) return sendJson(ctx.res, 404, { error: "not_found" });
-  const share = await openShare(ctx, ctx.pathname.startsWith("/v1/web/shares/external/"));
+  const share = await openShare(ctx, external);
   if (typeof share === "number") return shell.sharePage(ctx.res, share, null);
   return shell.sharePage(ctx.res, 200, transcriptOf(share));
 }
@@ -182,7 +182,7 @@ export const sessionSharingRoutes: ReadonlyArray<Route> = [
     browser: true,
     actor: "person",
     auth: "source",
-    handle: sharePage,
+    handle: (ctx) => sharePage(ctx, false),
   },
-  { method: "GET", path: "/v1/web/shares/external/:token", auth: "public", handle: sharePage },
+  { method: "GET", path: "/v1/web/shares/external/:token", auth: "public", handle: (ctx) => sharePage(ctx, true) },
 ];
