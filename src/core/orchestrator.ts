@@ -944,12 +944,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       }
       const childFloor = delegatedSession?.spawnMeta?.readOnly === true;
       const strictReadOnly = input.readOnly === true || input.privateSessionMessage === true || childFloor;
-      const actAsActor =
-        actor.type === "internal" &&
-        !input.botActor &&
-        !input.proactiveOpener &&
-        (isPersonAuthored(authorizationOrigin.kind) ||
-          (input.origin.kind === "automation" && input.origin.useOwnerKeychain === true));
+      const actAsActor = actor.type === "internal" && !input.botActor;
       const mcpToolsReady = !external && deps.mcp ? deps.mcp.toolDefsFor(actor.id, scopeId, actAsActor) : undefined;
       const useMemory = !external && input.skipMemory !== true;
       const environmentId = external ? scopeId : await resolveEnvironmentId(deps.environments, scopeId);

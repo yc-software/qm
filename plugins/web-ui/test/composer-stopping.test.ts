@@ -98,6 +98,7 @@ test("stopping holds a disabled Stopping… button beside Send and queues every 
         hasUnresolvedApproval: () => false,
         turnRuntime: () => null,
         isStopping: () => stopping,
+        hasLiveRun: () => true,
         drawActiveChat: draw,
         stopLiveRun: async () => {
           stops++;

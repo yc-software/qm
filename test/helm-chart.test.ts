@@ -15,8 +15,9 @@ const options = { skip: !helmAvailable && "Helm 3 is required" };
 type Resource = {
   kind: string;
   stringData?: Record<string, string>;
-  metadata: { name: string; annotations?: Record<string, string> };
+  metadata: { name: string; annotations?: Record<string, string>; labels: Record<string, string> };
   spec: {
+    selector?: Record<string, unknown>;
     replicas: number;
     strategy?: { type: string; rollingUpdate?: null };
     accessModes?: string[];
@@ -25,6 +26,7 @@ type Resource = {
     ports?: { name: string; port: number; targetPort: number }[];
     rules?: { http: { paths: { backend: { service: { name: string; port: { number: number } } } }[] } }[];
     template: {
+      metadata: { annotations: Record<string, string>; labels: Record<string, string> };
       spec: {
         securityContext?: { fsGroup: number };
         volumes?: { name: string; persistentVolumeClaim: { claimName: string } }[];
@@ -101,6 +103,84 @@ function env(resources: Resource[], name = "core") {
     ...Object.fromEntries((container(resources, name).env ?? []).map((e) => [e.name, e.value])),
   };
 }
+
+test("Helm applies additional labels to all chart resources and preserves their standard labels", options, () => {
+  const values = {
+    serviceAccount: { create: true },
+    ingress: { enabled: true, hosts: ["qm.example.com"] },
+    services: { core: { persistence: { enabled: true } } },
+    secretEnv: { CORE_SIGNING_SECRET: "fixture" },
+  };
+  const baseline = render(values);
+  assert.deepEqual(render({ ...values, additionalLabels: {} }), baseline);
+  const additionalLabels = { "example.com/revision": "123", "example.com/enabled": "true", "example.com/empty": "" };
+  const labeled = render({ ...values, additionalLabels });
+  assert.deepEqual([...new Set(labeled.map((r) => r.kind))].sort(), [
+    "Deployment",
+    "Ingress",
+    "PersistentVolumeClaim",
+    "Secret",
+    "Service",
+    "ServiceAccount",
+  ]);
+  assert.equal(labeled.length, baseline.length);
+  for (const resource of labeled) {
+    const original = baseline.find((r) => r.kind === resource.kind && r.metadata.name === resource.metadata.name);
+    assert.ok(original);
+    assert.deepEqual(resource.metadata.labels, { ...original.metadata.labels, ...additionalLabels });
+    if (resource.kind === "Deployment" || resource.kind === "Service") {
+      assert.deepEqual(resource.spec.selector, original.spec.selector);
+    }
+    if (resource.kind === "Deployment") {
+      assert.deepEqual(resource.spec.template.metadata.labels, original.spec.template.metadata.labels);
+    }
+  }
+});
+
+test("Helm rejects additional labels that collide with chart-owned labels", options, () => {
+  for (const key of [
+    "helm.sh/chart",
+    "app.kubernetes.io/name",
+    "app.kubernetes.io/instance",
+    "app.kubernetes.io/managed-by",
+    "app.kubernetes.io/version",
+    "app.kubernetes.io/component",
+  ]) {
+    assert.throws(
+      () => render({ additionalLabels: { [key]: "override" } }),
+      (error) => {
+        assert.ok(error instanceof Error);
+        assert.ok(error.message.includes(`additionalLabels cannot override chart-owned label ${key}`));
+        return true;
+      },
+    );
+  }
+});
+
+test("Helm requires additional label values to be strings", options, () => {
+  for (const value of [123, true, null, {}, []]) {
+    assert.throws(
+      () => render({ additionalLabels: { "example.com/revision": value } }),
+      /additionalLabels value for example.com\/revision must be a string/,
+    );
+  }
+});
+
+test("Helm includes resource labels in the checksum only when the chart Secret renders", options, () => {
+  for (const secretEnv of [null, { CORE_SIGNING_SECRET: "fixture" }]) {
+    const before = render({ secretEnv });
+    const after = render({ secretEnv, additionalLabels: { "example.com/revision": "123" } });
+    const hasSecret = before.some((r) => r.kind === "Secret");
+    assert.equal(hasSecret, secretEnv !== null);
+    for (const name of ["core", "egress-proxy"]) {
+      const previous = deployment(before, name).spec.template.metadata.annotations["checksum/secret-env"];
+      const current = deployment(after, name).spec.template.metadata.annotations["checksum/secret-env"];
+      assert.ok(previous);
+      assert.ok(current);
+      assert.equal(current === previous, !hasSecret);
+    }
+  }
+});
 
 test("Helm requires an explicit compatible image and supports full digest references", options, () => {
   assert.throws(() => render({}, false), /imageRef.*image.tag/);

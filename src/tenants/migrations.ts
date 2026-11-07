@@ -1,4 +1,4 @@
-import type { PgMigrationDefinition } from "../persistence/pg-pool.ts";
+import { definePgMigration, PG_MIGRATIONS_TABLE, type PgMigrationDefinition } from "../persistence/pg-pool.ts";
 import { TENANT_APP_HANDLE_DNS_BOUND, TENANT_APP_HANDLES, TENANT_APP_HOSTS_BY_HANDLE } from "./app-handle.ts";
 
 const TENANCY_BASE: PgMigrationDefinition = {
@@ -94,6 +94,7 @@ interface TenantReference {
 
 export interface TenantTableOptions {
   references?: readonly TenantReference[];
+  tenanted?: readonly string[];
   before?: readonly string[];
   after?: readonly string[];
 }
@@ -162,26 +163,164 @@ function tenantReference({ table, name, columns, references, onDelete, deferrabl
     FOREIGN KEY (tenant_id, ${columns}) REFERENCES ${references}${deleteAction(columns, onDelete)}${deferrable ? " DEFERRABLE INITIALLY DEFERRED" : ""}`;
 }
 
+const TENANCY_EXPAND: readonly PgMigrationDefinition[] = [TENANCY_BASE, TENANT_SETTINGS, BOOT_TENANT];
+
+function expandColumn(table: string): string {
+  return `DO $tenant_column$
+DECLARE
+  existing uuid;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM tenants) THEN
+    IF to_regclass('qm_tenant') IS NOT NULL THEN
+      INSERT INTO tenants(id) SELECT id FROM qm_tenant;
+    ELSE
+      INSERT INTO tenants DEFAULT VALUES;
+    END IF;
+  END IF;
+  SELECT id INTO existing FROM tenants ORDER BY created_at, id LIMIT 1;
+  EXECUTE format('ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS tenant_id UUID NOT NULL DEFAULT %L', existing);
+END $tenant_column$`;
+}
+
+function addConstraint(table: string, name: string, also: string, definition: string): string {
+  return `DO $tenant_reference$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint c JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attname = 'tenant_id'
+     WHERE c.conrelid = '${table}'::regclass AND c.contype = 'f' AND c.conname IN ('${name}', '${also}')
+       AND a.attnum = ANY (c.conkey)
+  ) THEN
+    ALTER TABLE ${table} ADD CONSTRAINT ${name} ${definition} NOT VALID;
+  END IF;
+END $tenant_reference$`;
+}
+
+function tenantForeignKey(table: string): string {
+  return `${table}_tenant`;
+}
+
+function tenantReferenceName(name: string): string {
+  return `${name}_tenant`;
+}
+
+function unvalidatedReference({ table, name, columns, references, onDelete, deferrable }: TenantReference): string {
+  return addConstraint(
+    table,
+    tenantReferenceName(name),
+    name,
+    `FOREIGN KEY (tenant_id, ${columns}) REFERENCES ${references}${deleteAction(columns, onDelete)}${deferrable ? " DEFERRABLE INITIALLY DEFERRED" : ""}`,
+  );
+}
+
+function tenantExpansion(
+  id: string,
+  tables: readonly TenantTable[],
+  { references = [], tenanted = [] }: Pick<TenantTableOptions, "references" | "tenanted">,
+): PgMigrationDefinition[] {
+  const keys = tables.flatMap(tenantKeys);
+  const owners = [...tables.map(({ table }) => table), ...tenanted];
+  return [
+    ...TENANCY_EXPAND,
+    { id: `${id}/0-column`, statements: [LOCK_TIMEOUT, ...tables.map(({ table }) => expandColumn(table))] },
+    ...(keys.length ? [{ id: `${id}/2-keys`, statements: keys }] : []),
+    {
+      id: `${id}/2-references`,
+      statements: [
+        LOCK_TIMEOUT,
+        ...owners.map((table) =>
+          addConstraint(
+            table,
+            tenantForeignKey(table),
+            tenantForeignKey(table),
+            "FOREIGN KEY (tenant_id) REFERENCES tenants(id)",
+          ),
+        ),
+        ...references.map(unvalidatedReference),
+      ],
+    },
+  ];
+}
+
+const TENANT_REFERENCE_ADD = /^ALTER TABLE (\w+) ADD CONSTRAINT (\w+) FOREIGN KEY \(tenant_id\) REFERENCES tenants\(id\)$/;
+const COMPOSITE_REFERENCE_ADD = /^ALTER TABLE (\w+) ADD CONSTRAINT (\w+)\s+FOREIGN KEY \(tenant_id, /;
+
+function adoptedStatements(policy: readonly string[]): string[] {
+  const validations: string[] = [];
+  const rest = policy.flatMap((statement) => {
+    const tenantReference = TENANT_REFERENCE_ADD.exec(statement);
+    if (tenantReference) {
+      validations.push(`ALTER TABLE ${tenantReference[1]} VALIDATE CONSTRAINT ${tenantReference[2]}`);
+      return [];
+    }
+    const composite = COMPOSITE_REFERENCE_ADD.exec(statement);
+    if (composite) {
+      const [, table, name] = composite;
+      validations.push(`ALTER TABLE ${table} VALIDATE CONSTRAINT ${tenantReferenceName(name!)}`);
+      return [`ALTER TABLE ${table} RENAME CONSTRAINT ${tenantReferenceName(name!)} TO ${name}`];
+    }
+    if (/\bFOREIGN KEY\b/.test(statement) && /\bADD CONSTRAINT\b/.test(statement)) {
+      throw new Error(`tenancy: cannot adopt an unprepared foreign key: ${statement.slice(0, 120)}`);
+    }
+    return [statement];
+  });
+  return [...validations, ...rest];
+}
+
+function ledgerRow(migration: PgMigrationDefinition): string {
+  const { id, checksum } = definePgMigration(migration);
+  return `INSERT INTO ${PG_MIGRATIONS_TABLE}(id, checksum) VALUES ('${id}', '${checksum}') ON CONFLICT (id) DO NOTHING`;
+}
+
+const QUOTE = "$tenant_statement$";
+
+function adoptPolicy(id: string, policy: PgMigrationDefinition, before: readonly string[]): PgMigrationDefinition {
+  const statements = [...before, ...adoptedStatements(policy.statements)];
+  for (const statement of statements) {
+    if (statement.includes(QUOTE)) throw new Error(`tenancy: statement in ${policy.id} uses the reserved quote`);
+  }
+  return {
+    id,
+    statements: [
+      `DO $adopt_policy$
+BEGIN
+  IF EXISTS (SELECT 1 FROM ${PG_MIGRATIONS_TABLE} WHERE id = '${policy.id}') THEN
+    RETURN;
+  END IF;
+${statements.map((statement) => `  EXECUTE ${QUOTE}${statement}${QUOTE};`).join("\n")}
+  ${ledgerRow(policy)};
+END $adopt_policy$`,
+    ],
+  };
+}
+
 export function tenantTables(
   id: string,
   tables: readonly TenantTable[],
-  { references = [], before = [], after = [] }: TenantTableOptions = {},
+  { references = [], tenanted = [], before = [], after = [] }: TenantTableOptions = {},
 ): PgMigrationDefinition[] {
   const keys = tables.flatMap(tenantKeys);
+  const column = {
+    id: `${id}/1-column`,
+    statements: [LOCK_TIMEOUT, ...before, ...tables.map(({ table }) => tenantColumn(table))],
+  };
+  const policy = {
+    id: `${id}/3-policy`,
+    statements: [
+      LOCK_TIMEOUT,
+      ...references.map(({ table, name }) => `ALTER TABLE ${table} DROP CONSTRAINT ${name}`),
+      ...tables.flatMap(swapKeys),
+      ...references.map(tenantReference),
+      ...tables.flatMap(({ table }) => tenantRowSecurity(table)),
+      ...after,
+    ],
+  };
   return [
+    ...tenantExpansion(id, tables, { references, tenanted }),
+    { id: `${id}/0-stamp-column`, statements: [ledgerRow(column)] },
     ...TENANCY,
-    { id: `${id}/1-column`, statements: [LOCK_TIMEOUT, ...before, ...tables.map(({ table }) => tenantColumn(table))] },
+    column,
     ...(keys.length ? [{ id: `${id}/2-keys`, statements: keys }] : []),
-    {
-      id: `${id}/3-policy`,
-      statements: [
-        LOCK_TIMEOUT,
-        ...references.map(({ table, name }) => `ALTER TABLE ${table} DROP CONSTRAINT ${name}`),
-        ...tables.flatMap(swapKeys),
-        ...references.map(tenantReference),
-        ...tables.flatMap(({ table }) => tenantRowSecurity(table)),
-        ...after,
-      ],
-    },
+    adoptPolicy(`${id}/2-tenant-policy`, policy, before),
+    policy,
   ];
 }
