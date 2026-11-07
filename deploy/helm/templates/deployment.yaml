@@ -44,6 +44,10 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       serviceAccountName: {{ include "qm.serviceAccountName" $root }}
+      {{- if eq $name "core" }}
+      {{- $drainMs := int (coalesce (dig "SHUTDOWN_DRAIN_MS" "" ($svc.env | default dict)) (dig "SHUTDOWN_DRAIN_MS" "" ($root.Values.env | default dict)) 30000) }}
+      terminationGracePeriodSeconds: {{ add 30 (div (add $drainMs 999) 1000) }}
+      {{- end }}
       {{- if and (eq $name "core") $svc.persistence.enabled }}
       securityContext:
         fsGroup: 1000
