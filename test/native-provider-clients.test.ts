@@ -19,6 +19,7 @@ import {
   e2bEgressNetwork,
   E2B_EXEC_MARGIN_MS,
   E2bCommandLostError,
+  E2bSandboxBusyError,
   E2bSandboxGoneError,
 } from "../src/sandbox/e2b-client.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
@@ -104,10 +105,14 @@ mock.module("modal", {
 
 const e2bCalls: unknown[][] = [];
 let pauseError: Error | undefined;
+let busyPauses = 0;
 let startError: Error | undefined;
 let onDispatch: ((command: string) => void) | undefined;
 let waitError: Error | undefined;
 class FakeSandboxError extends Error {}
+class FakeServiceBusyError extends Error {
+  readonly statusCode = 503;
+}
 class FakeNotFoundError extends FakeSandboxError {}
 class FakeSandboxNotFoundError extends FakeNotFoundError {}
 class FakeFileNotFoundError extends FakeNotFoundError {}
@@ -154,6 +159,10 @@ const fakeE2bSandbox = (sandboxId: string) => ({
   },
   async pause(options: unknown) {
     e2bCalls.push(["pause", options]);
+    const busy = busyPauses > 0;
+    if (busy) busyPauses -= 1;
+    if (busy)
+      throw new FakeServiceBusyError("Sandbox cannot be paused right now because its node is busy, please retry");
     if (pauseError) throw pauseError;
     return false;
   },
@@ -183,6 +192,7 @@ mock.module("e2b", {
     SandboxNotFoundError: FakeSandboxNotFoundError,
     FileNotFoundError: FakeFileNotFoundError,
     TimeoutError: FakeTimeoutError,
+    ServiceBusyError: FakeServiceBusyError,
     CommandExitError: FakeCommandExitError,
     Sandbox: class {
       static list() {
@@ -396,12 +406,29 @@ test("E2B sends explicit pause lifecycle, reads state without connect, and surfa
   assert.equal(info.cpuCount, 2);
   assert.equal(info.memoryMb, 512);
   await session.pause();
-  assert.deepEqual(e2bCalls.at(-1), ["pause", { keepMemory: true }]);
+  const [kind, pauseOpts] = e2bCalls.at(-1)!;
+  assert.equal(kind, "pause");
+  assert.equal((pauseOpts as { keepMemory: boolean }).keepMemory, true);
+  assert.ok((pauseOpts as { signal: unknown }).signal instanceof AbortSignal, "the retry deadline can cancel a pause");
   pauseError = new Error("snapshot backlog");
   await assert.rejects(session.pause(), /snapshot backlog/);
   pauseError = undefined;
   await client.create({ metadata: {}, autoPause: false });
   assert.deepEqual((e2bCalls.at(-1)![2] as { lifecycle: unknown }).lifecycle, { onTimeout: "kill", autoResume: false });
+});
+
+test("E2B retries a pause refused by a busy host and names a host that stays busy", async () => {
+  const client = createSdkE2bClient({ apiKey: "test" });
+  const session = await client.create({ metadata: {}, autoPause: true });
+  e2bCalls.length = 0;
+  busyPauses = 2;
+  await session.pause();
+  assert.equal(e2bCalls.filter(([kind]) => kind === "pause").length, 3);
+  e2bCalls.length = 0;
+  busyPauses = 100;
+  await assert.rejects(session.pause(), E2bSandboxBusyError);
+  assert.ok(e2bCalls.filter(([kind]) => kind === "pause").length > 1);
+  busyPauses = 0;
 });
 
 test("E2B extends the sandbox timeout only when a command outlives the remaining lifetime, capped by the plan", async () => {

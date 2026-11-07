@@ -125,7 +125,7 @@ export interface SpritesSandboxOptions extends BlobStagingOptions {
   credentialPaths?: CredentialPathSpec[];
   connectorSdk?: () => Promise<ConnectorSdkBundle>;
   layerToolFiles?: () => readonly LayerInstallFile[];
-  onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
+  onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }, error?: unknown) => void;
 }
 
 interface RawExec {
@@ -157,9 +157,9 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
   const pressureEpisodes = new Set<string>();
   const checkpointBooks = new Map<string, SnapshotBookkeeping>();
 
-  const reportError = (category: string, code: string, message: string, scopeLabel?: string): void => {
+  const reportError = (category: string, code: string, message: string, scopeLabel?: string, error?: unknown): void => {
     try {
-      opts.onError?.({ category, code, message, ...(scopeLabel ? { scopeLabel } : {}) });
+      opts.onError?.({ category, code, message, ...(scopeLabel ? { scopeLabel } : {}) }, error);
     } catch (e) {
       swallow(`sprites-sandbox: ${code} report`, e);
     }
@@ -467,7 +467,7 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
           return { coldStart: !hydrated };
         } catch (e) {
           forget(name);
-          reportError("sandbox_hydrate", "hydrate_failed", errMessage(e), scope);
+          reportError("sandbox_hydrate", "hydrate_failed", errMessage(e), scope, e);
           await deleteSprite(name).catch((deleteErr) =>
             swallow("sprites-sandbox: delete after failed hydrate", deleteErr),
           );
