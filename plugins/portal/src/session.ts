@@ -141,17 +141,18 @@ export function clearCookie(name: string, path: string, secure: boolean, domain?
   return parts.join("; ");
 }
 
-export function sessionCookieHeaders(value: string, attrs: CookieOpts): string[] {
+export function sessionCookieHeaders(value: string, attrs: CookieOpts, staleDomain?: string): string[] {
+  const path = attrs.path ?? "/";
   return [
+    ...(!attrs.domain && staleDomain ? sessionClears(path, attrs.secure, staleDomain) : []),
     setCookie("portal_session", value, attrs),
     setCookie("portal_session_x", value, { ...attrs, sameSite: "None" }),
-    ...(attrs.domain
-      ? [
-          clearCookie("portal_session", attrs.path ?? "/", attrs.secure),
-          clearCookie("portal_session_x", attrs.path ?? "/", attrs.secure),
-        ]
-      : []),
+    ...(attrs.domain ? sessionClears(path, attrs.secure) : []),
   ];
+}
+
+function sessionClears(path: string, secure: boolean, domain?: string): string[] {
+  return [clearCookie("portal_session", path, secure, domain), clearCookie("portal_session_x", path, secure, domain)];
 }
 
 export function readCookie(header: string | undefined, name: string): string | null {
@@ -166,13 +167,12 @@ export function readCookie(header: string | undefined, name: string): string | n
   }
 }
 
-export function signedOutCookies(secure: boolean, domain: string | undefined): string[] {
+export function signedOutCookies(secure: boolean, domain: string | undefined, staleDomain?: string): string[] {
   return [
     clearCookie("portal_impersonate", "/", secure),
     clearCookie("portal_trusted_tmp", "/auth/trusted", secure),
-    clearCookie("portal_session", "/", secure, domain),
-    clearCookie("portal_session_x", "/", secure, domain),
-    ...(domain ? [clearCookie("portal_session", "/", secure), clearCookie("portal_session_x", "/", secure)] : []),
+    ...sessionClears("/", secure, domain),
+    ...(domain ? sessionClears("/", secure) : staleDomain ? sessionClears("/", secure, staleDomain) : []),
   ];
 }
 

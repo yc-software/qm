@@ -26,7 +26,7 @@ test.after(() => {
   upstream.close();
 });
 
-test("the cookie domain derives only when the apps domain sits under the portal host", () => {
+test("a stale parent-domain cookie is recognised only when the apps domain sits under the portal host", () => {
   assert.equal(derivedCookieDomain("qm.example.com", "apps.qm.example.com"), "qm.example.com");
   assert.equal(derivedCookieDomain("Example.com", "APPS.example.COM"), "example.com");
   assert.equal(
@@ -48,7 +48,7 @@ test("the cookie domain derives only when the apps domain sits under the portal 
   assert.equal(derivedCookieDomain("example.com", "appsXexample.com"), undefined, "dot-boundary required");
 });
 
-test("DEPLOY_APPS_DOMAIN alone yields a working portal apps setup — cookie domain derived, boot clean", () => {
+test("DEPLOY_APPS_DOMAIN alone yields a working portal apps setup with a clean boot", () => {
   assert.doesNotThrow(() => bootChecks());
 });
 

@@ -210,11 +210,12 @@ would hand anonymous sessions to surfaces that never see the `anon` flag. The
 deployment proxy (`/d/<app>/`), on by default for signed-in portals, turns
 itself off under the playground, and anonymous sessions are refused it at
 request time too. Outside the playground, `PORTAL_APPS_DOMAIN` defaults to
-`DEPLOY_APPS_DOMAIN`, and `PORTAL_COOKIE_DOMAIN` to the portal host itself when
-the apps domain sits directly under it (`apps.<portal host>`), so one core-side
-variable configures both processes. Any other layout needs an explicit
-`PORTAL_COOKIE_DOMAIN` — deriving a shared parent by guesswork risks landing on
-a public suffix browsers refuse. Anonymous sessions are also refused the `/connect/*` and
+`DEPLOY_APPS_DOMAIN`, so one core-side variable configures both processes. The
+session cookie stays host-only unless `PORTAL_COOKIE_DOMAIN` is set: app hosts
+get their own cookie through the `/auth/host` handoff, so a cookie scoped to the
+portal host would only leak the portal session to every host beneath it. Sign-in
+and sign-out also clear any session cookie an older release scoped to the portal
+host when the apps domain sits under it. Anonymous sessions are also refused the `/connect/*` and
 `/drop/*` flows, so a visitor can't attach real OAuth tokens or dropped secrets
 to a throwaway principal that a cleared cookie orphans.
 
