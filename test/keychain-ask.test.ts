@@ -704,7 +704,11 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
     assert.equal((await signed("U_BOB")).status, 403);
     const impersonation = await mintSignedPayload({ p: "U_ALICE", imp: "U_BOB", exp: Date.now() + 60_000 }, SECRET);
     const impersonated = await signed("U_ALICE", { "x-portal-identity": impersonation }, "once");
-    assert.equal(impersonated.status, 403, "an admin impersonating the owner cannot decide for them");
+    assert.deepEqual(
+      [impersonated.status, ((await impersonated.json()) as { message?: string }).message],
+      [403, "Sign in as yourself to decide on credential use."],
+      "an admin impersonating the owner cannot decide for them",
+    );
     const res = await signed("U_ALICE");
     assert.equal(res.status, 200);
     const view = (await res.json()) as any;
