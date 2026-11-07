@@ -881,7 +881,6 @@ function renewSessionCookie(req: IncomingMessage, res: ServerResponse): SessionC
   return renewed;
 }
 
-const draining = new AbortController();
 const server = createServer((req, res) => {
   const startedAt = performance.now();
   let errorLogged = false;
@@ -937,10 +936,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 
   void refreshSurfaceConfig();
 
-  if (method === "GET" && pathname === "/healthz")
-    return json(res, draining.signal.aborted ? 503 : 200, { ok: !draining.signal.aborted });
-
-  if (method === "GET" && pathname === "/readyz")
+  if (method === "GET" && (pathname === "/healthz" || pathname === "/readyz"))
     return proxyToUpstream(req, res, { baseUrl: CORE, path: pathname, search: "" }, ["accept"]);
 
   if (method === "GET" && (pathname === "/favicon.ico" || pathname === "/favicon.svg")) {
@@ -1863,7 +1859,8 @@ export async function startServer(options: { port: number; host?: string }): Pro
       host: "127.0.0.1",
       ...(trustedSignInLabel ? { trustedSignInLabel } : {}),
     });
-    for (const event of ["close", "error"]) server.once(event, () => broker.close());
+    server.once("close", () => broker.close());
+    server.once("error", () => broker.close());
   }
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -1890,4 +1887,4 @@ export async function startServer(options: { port: number; host?: string }): Pro
   });
 }
 
-export { draining, handle, server };
+export { handle, server };

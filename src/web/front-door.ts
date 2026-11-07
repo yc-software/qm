@@ -9,7 +9,6 @@ import { s3Client } from "../persistence/s3.ts";
 import { jitteredBackoffMs } from "../util/async.ts";
 import { reportFailure } from "../util/errors.ts";
 import { readWebBundleLayout } from "../../cli/src/web-release.ts";
-import { closeServer } from "../api/server.ts";
 import {
   createLocalWebReleaseStore,
   createS3WebReleaseStore,
@@ -27,7 +26,6 @@ interface WebSurface {
 interface PortalSurface {
   startServer(options: { port: number; host?: string }): Promise<void>;
   server: Server;
-  draining: AbortController;
 }
 
 const BUNDLED_WEB_UI = fileURLToPath(new URL("../../plugins/web-ui/dist-web", import.meta.url));
@@ -49,8 +47,7 @@ function webReleaseStore(config: Config): WebReleaseStore {
 export async function startFrontDoor(
   config: Config & { publicPort: number },
   env: NodeJS.ProcessEnv,
-  draining: AbortSignal,
-): Promise<{ close(deadline: number): Promise<void> }> {
+): Promise<{ close(): void }> {
   const store = webReleaseStore(config);
   const bundle = existsSync(join(BUNDLED_WEB_UI, "index.html")) ? readWebBundleLayout(BUNDLED_WEB_UI) : undefined;
   if (!bundle) console.log(`[web] this build carries no web UI bundle at ${BUNDLED_WEB_UI}; serving the live release`);
@@ -98,11 +95,13 @@ export async function startFrontDoor(
     webServer.closeAllConnections();
     throw error;
   }
-  draining.addEventListener("abort", () => portal.draining.abort(), { once: true });
+  const servers = [portal.server, webServer];
   return {
-    async close(deadline) {
-      await closeServer(portal.server, deadline);
-      await closeServer(webServer, deadline);
+    close() {
+      for (const server of servers) {
+        server.close();
+        server.closeAllConnections();
+      }
     },
   };
 }

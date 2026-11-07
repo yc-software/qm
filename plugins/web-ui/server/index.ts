@@ -555,7 +555,6 @@ async function pollWebDeliveries(): Promise<unknown> {
 
 const SSE_HEARTBEAT_MS = 15_000;
 const STATE_FEED_RECONNECT_MS = Number(process.env.STATE_FEED_RECONNECT_MS ?? 3_000);
-const coreFeeds = new AbortController();
 
 interface SessionStateFrame {
   threadRef?: string;
@@ -587,11 +586,12 @@ async function consumeCoreFeed(
   onReconnect?: () => void,
 ): Promise<void> {
   let dropped = false;
-  while (!coreFeeds.signal.aborted) {
+  for (;;) {
     try {
       const signedPath = withSourceAuthNonce(path, CORE_SIGNING_SECRET);
-      const headers = signedHeaders(CORE_SIGNING_SECRET, "GET", signedPath, "");
-      const r = await fetch(`${CORE}${signedPath}`, { headers, signal: coreFeeds.signal });
+      const r = await fetch(`${CORE}${signedPath}`, {
+        headers: signedHeaders(CORE_SIGNING_SECRET, "GET", signedPath, ""),
+      });
       if (r.status === 200 && r.body) {
         if (dropped) {
           dropped = false;
@@ -3685,8 +3685,9 @@ export async function startServer(options: { port: number; host: string; release
     `[web-ui] surface on http://${options.host}:${port} → core ${CORE} (org ${ORG})${WEB_UI_DEV ? " [vite hmr]" : ""}`,
   );
   if (ALLOW.length === 0) console.warn("[web-ui] WEB_UI_PRINCIPALS unset, any principal id may sign in (dev only)");
-  const t = setInterval(() => void drainWebDeliveries(), WEB_DELIVERY_POLL_MS).unref();
-  server.once("close", () => clearInterval(t)).once("close", () => coreFeeds.abort());
+  const t = setInterval(() => void drainWebDeliveries(), WEB_DELIVERY_POLL_MS);
+  t.unref?.();
+  server.once("close", () => clearInterval(t));
   void runStateFeed();
   void runInboxFeed();
   void sweepDictationSpool();

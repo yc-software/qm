@@ -14,39 +14,31 @@ async function freePort(): Promise<number> {
   return port;
 }
 
-async function statusOf(url: string): Promise<number | string> {
-  return fetch(url).then(
-    (response) => response.status,
+async function statusOf(url: string, init?: RequestInit): Promise<number | string> {
+  return fetch(url, init).then(
+    async (response) => (await response.text(), response.status),
     (error: { cause?: { code?: string } }) => error.cause?.code ?? "failed",
   );
 }
 
-function heldSlackReceiver(): { port: Promise<number>; received: Promise<void>; release(): void } {
-  let release = (): void => {};
-  let received = (): void => {};
-  const receivedOnce = new Promise<void>((resolve) => (received = resolve));
-  const released = new Promise<void>((resolve) => (release = resolve));
+async function slackReceiver(): Promise<number> {
   const receiver = createHttpServer((req, res) => {
-    received();
     req.resume();
-    void released.then(() => res.writeHead(200, { "content-type": "text/plain" }).end("held-and-answered"));
+    req.on("end", () => res.writeHead(200, { "content-type": "text/plain" }).end("answered"));
   });
-  const port = new Promise<number>((resolve) =>
-    receiver.listen(0, "127.0.0.1", () => resolve((receiver.address() as AddressInfo).port)),
-  );
+  await new Promise<void>((resolve) => receiver.listen(0, "127.0.0.1", resolve));
   receiver.unref();
-  return { port, received: receivedOnce, release };
+  return (receiver.address() as AddressInfo).port;
 }
 
-test("shutdown closes the front door before core, and core serves the front door's in-flight request", async (t) => {
-  const receiver = heldSlackReceiver();
+test("shutdown reports unhealthy and keeps the front door and core serving until the drain deadline", async (t) => {
   const [port, publicPort] = [await freePort(), await freePort()];
   const config = testConfig({
     allowUnauthenticatedCore: true,
     port,
     publicPort,
-    slackEventsPort: await receiver.port,
-    shutdownDrainMs: 10_000,
+    slackEventsPort: await slackReceiver(),
+    shutdownDrainMs: 1_500,
   });
   const qm = await startQm(config, { agent: createMockAgent(), env: process.env });
   let stopped: Promise<void> | undefined;
@@ -54,24 +46,19 @@ test("shutdown closes the front door before core, and core serves the front door
   t.after(stop);
   const core = `http://127.0.0.1:${port}`;
   const front = `http://127.0.0.1:${publicPort}`;
+  const slackEvent = () => statusOf(`${front}/slack/events`, { method: "POST", body: "{}" });
   assert.equal(await statusOf(`${front}/healthz`), 200);
   assert.equal(await statusOf(`${core}/healthz`), 200);
 
-  const inFlight = fetch(`${front}/slack/events`, { method: "POST", body: "{}" });
-  await receiver.received;
   const startedStopping = Date.now();
   const stopping = stop();
-
-  while ((await statusOf(`${front}/healthz`)) !== "ECONNREFUSED")
-    await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(await statusOf(`${front}/healthz`), 503);
+  assert.equal(await statusOf(`${front}/readyz`), 503);
   assert.equal(await statusOf(`${core}/healthz`), 503);
-  assert.equal(await statusOf(`${core}/readyz`), 503);
+  assert.equal(await slackEvent(), 200);
 
-  receiver.release();
-  const answered = await inFlight;
-  assert.equal(answered.status, 200);
-  assert.equal(await answered.text(), "held-and-answered");
   await stopping;
-  assert.ok(Date.now() - startedStopping < config.shutdownDrainMs, "nothing held core open until the drain deadline");
+  assert.ok(Date.now() - startedStopping >= config.shutdownDrainMs);
+  assert.equal(await statusOf(`${front}/healthz`), "ECONNREFUSED");
   assert.equal(await statusOf(`${core}/healthz`), "ECONNREFUSED");
 });

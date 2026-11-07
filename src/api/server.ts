@@ -614,11 +614,3 @@ export function createInsecureTestServer(app: App, deps: ServerOptions = {}): Se
   if (deps.signingSecret) throw new Error("createInsecureTestServer must not receive a signing secret");
   return buildServer(app, deps, true);
 }
-
-export async function closeServer(server: Server, deadline: number): Promise<void> {
-  const closed = new Promise<void>((resolve) => server.close(() => resolve()));
-  server.closeIdleConnections();
-  const overrun = setTimeout(() => server.closeAllConnections(), Math.max(0, deadline - Date.now()));
-  await closed;
-  clearTimeout(overrun);
-}

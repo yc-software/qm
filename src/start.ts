@@ -4,9 +4,10 @@ import { lookup } from "node:dns/promises";
 import { once } from "node:events";
 import type { Config } from "./config.ts";
 import { buildApp, serverDeps } from "./wiring.ts";
-import { closeServer, createServer } from "./api/server.ts";
+import { createServer } from "./api/server.ts";
 import { dockerDaemonFailure } from "./deploy/docker-deploy-provider.ts";
 import { errMessage, reportFailureAs } from "./util/errors.ts";
+import { sleep } from "./util/async.ts";
 import { slackAccountConfigsFromEnv, slackPluginConfigFromEnv, startSlackPlugin } from "./slack/index.ts";
 import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
 import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
@@ -53,7 +54,7 @@ export async function startQm(
   const frontDoor =
     config.publicPort === undefined
       ? undefined
-      : await startFrontDoor({ ...config, publicPort: config.publicPort }, env, draining.signal);
+      : await startFrontDoor({ ...config, publicPort: config.publicPort }, env);
 
   console.log(
     `[qm] listening on :${config.port} (org=${config.orgId}, ` +
@@ -147,16 +148,17 @@ export async function startQm(
     releaseInFlightRuns: () => built.runtime.releaseInFlightRuns(),
     async stop() {
       draining.abort();
-      const deadline = Date.now() + config.shutdownDrainMs;
+      const listenersClosed = sleep(config.shutdownDrainMs).then(() => {
+        frontDoor?.close();
+        server.close();
+        server.closeAllConnections();
+      });
       void slackRuntime.stop().catch((e: unknown) => console.error("[qm] slack plugin stop failed:", errMessage(e)));
       for (const runtime of slackAccountRuntimes)
         void runtime.stop().catch((e: unknown) => console.error("[qm] slack account stop failed:", errMessage(e)));
       void built.scheduler.stop().catch((e: unknown) => console.error("[qm] scheduler stop failed:", errMessage(e)));
       built.deploymentLayerRefresh.stop();
-      await built.runtime.stop(async () => {
-        await frontDoor?.close(deadline);
-        await closeServer(server, deadline);
-      });
+      await built.runtime.stop(() => listenersClosed);
     },
   };
 }
