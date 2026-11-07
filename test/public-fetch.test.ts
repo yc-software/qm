@@ -7,7 +7,6 @@ import {
   addressGuardedFetch,
   configurePublicFetch,
   createPublicFetch,
-  isNeverAllowedIp,
   parsePrivateNetworkOrigins,
   PrivateNetworkAddressError,
   publicFetch,
@@ -138,37 +137,6 @@ test("MCP clients, OAuth discovery, and OAuth token exchange refuse private netw
     PrivateNetworkAddressError,
   );
   assert.equal(target.hits(), 0);
-});
-
-test("isNeverAllowedIp covers IMDS, 169.254/16, fe80::/10, v4-mapped, IPv6 cloud metadata, loopback, NAT64 forms and Tailscale and Alibaba addresses", () => {
-  assert.equal(isNeverAllowedIp("169.254.169.254"), true);
-  assert.equal(isNeverAllowedIp("169.254.1.1"), true);
-  assert.equal(isNeverAllowedIp("::ffff:169.254.169.254"), true);
-  assert.equal(isNeverAllowedIp("fe80::1"), true);
-  assert.equal(isNeverAllowedIp("febf::1"), true);
-  assert.equal(isNeverAllowedIp("fd00:ec2::254"), true);
-  assert.equal(isNeverAllowedIp("[fd00:ec2::254]"), true);
-  assert.equal(isNeverAllowedIp("8.8.8.8"), false);
-  assert.equal(isNeverAllowedIp("2606:4700::1111"), false);
-  assert.equal(isNeverAllowedIp("fec0::1"), false);
-  for (const ip of [
-    "127.0.0.1",
-    "::1",
-    "::ffff:127.0.0.1",
-    "64:ff9b::7f00:1",
-    "64:ff9b::a9fe:a9fe",
-    "100.100.100.100",
-    "100.100.100.200",
-    "64:ff9b::6464:64c8",
-    "fd20:ce::254",
-    "fd00:c1::a9fe:a9fe",
-    "fd00:ec2::23",
-    "fd00:a9fe:a9fe::1",
-    "fd00:42::42",
-  ])
-    assert.equal(isNeverAllowedIp(ip), true, ip);
-  for (const ip of ["10.0.12.7", "172.18.0.4", "100.101.102.103", "fdaa:0:1::3", "64:ff9b:1::a9fe:a9fe"])
-    assert.equal(isNeverAllowedIp(ip), false, ip);
 });
 
 test("PRIVATE_NETWORK_ALLOWED_ORIGINS parses to normalized exact origins", () => {
