@@ -10,6 +10,7 @@ import {
   createRenderSandbox,
   type StoredRenderSandbox,
   type StoredRenderCleanup,
+  type StoredRenderNamespace,
   type StoredRenderScratch,
 } from "../src/sandbox/render-sandbox.ts";
 import { SandboxProvisionCleanupError, type SandboxHandle } from "../src/sandbox/sandbox.ts";
@@ -31,6 +32,7 @@ function setup(t: TestContext) {
   const store = testMap<StoredRenderSandbox>();
   const scratchStore = testMap<StoredRenderScratch>();
   const cleanupStore = testMap<StoredRenderCleanup>();
+  const namespaceStore = testMap<StoredRenderNamespace>();
   const advisoryLock = testAdvisoryLock();
   const errors: string[] = [];
   const ref = `ghcr.io/acme/sandbox-base:${"0".repeat(40)}@sha256:${"a".repeat(64)}`;
@@ -43,6 +45,7 @@ function setup(t: TestContext) {
       scratchStore: backing,
       cleanupStore,
       advisoryLock: lock,
+      namespaceStore,
       onError: ({ code }) => errors.push(code),
     });
   return { make, fake, store, scratchStore, errors };
