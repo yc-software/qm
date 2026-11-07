@@ -1,4 +1,5 @@
 import { createChatSurface } from "./chat";
+import { expireCronList } from "./session-scope";
 import { createComposerSurface, type ComposerOptions } from "./composer";
 import { densityTierFor, type DensityTier } from "./density";
 import { subscribeDeliveries } from "./core-bridge";
@@ -100,6 +101,7 @@ export function ensureDeliveryStream(): void {
         refreshTreesFor(event.threadRef);
         return;
       }
+      if (event.state === "idle") expireCronList();
       const { list, matched } = applySessionState(sessionsState.list, { ...event, state: event.state });
       if (matched) {
         sessionsState.list = list;
