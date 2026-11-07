@@ -1,3 +1,4 @@
+import { PassThrough } from "node:stream";
 import { verifyBlobTransferCapability } from "../../auth/capability-token.ts";
 import { ByteSourceTooLargeError } from "../../files/durable-byte-store.ts";
 import type { ScopeId } from "../../types.ts";
@@ -89,9 +90,12 @@ async function putBlob(ctx: BaseCtx): Promise<void> {
 async function stageRequestBlob(ctx: BaseCtx, maxBytes: number, sha256: string): Promise<BlobInfo | null> {
   const { req, res, deps } = ctx;
   extendBodyDeadline(req, STAGE_UPLOAD_DEADLINE_MS);
+  const body = new PassThrough();
+  relayStream(req, body, { onError: (error) => body.destroy(error) });
   try {
-    return await deps.blobTransfer!.put(req, { maxBytes, ...(sha256 ? { expectedSha256: sha256 } : {}) });
+    return await deps.blobTransfer!.put(body, { maxBytes, ...(sha256 ? { expectedSha256: sha256 } : {}) });
   } catch (e) {
+    req.unpipe(body);
     req.resume();
     if (e instanceof BlobTooLargeError) sendJson(res, 413, { error: "payload_too_large", message: e.message });
     else if (e instanceof BlobHashMismatchError) sendJson(res, 400, { error: "hash_mismatch", message: e.message });

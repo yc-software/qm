@@ -13,13 +13,14 @@ import { stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { browserImpersonationCookie, browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
 import { signedHeaders, withSourceAuthNonce } from "../plugins/chassis/src/core-client.ts";
+import { BlobTooLargeError } from "../src/persistence/blob-transfer.ts";
 
 const SIGNING = "web-uploads-signing-secret-0123456789";
 
-async function core(t: TestContext) {
+async function core(t: TestContext, overrides: Partial<ReturnType<typeof serverDeps>> = {}) {
   const config = testConfig({ signingSecret: SIGNING });
   const built = stopAtEnd(buildApp(config));
-  const server = createServer(built.app, { ...serverDeps(config, built), ...browserSessionDeps });
+  const server = createServer(built.app, { ...serverDeps(config, built), ...browserSessionDeps, ...overrides });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
   const port = (server.address() as AddressInfo).port;
@@ -164,4 +165,47 @@ test("signed callers keep staging through /v1/blobs and registering by blobId, a
   assert.equal(registered.status, 200, await registered.clone().text());
   const { file } = (await registered.json()) as { file: { name: string; size: number } };
   assert.deepEqual([file.name, file.size], ["signed.txt", bytes.length]);
+});
+
+test("an upload past the size limit gets its 413 while the browser is still sending", async (t) => {
+  const { port } = await core(t, {
+    blobTransfer: {
+      put: async (source: AsyncIterable<Buffer>) => {
+        let seen = 0;
+        for await (const chunk of source) if ((seen += chunk.length) > 1024 * 1024) throw new BlobTooLargeError();
+        throw new Error("the upload ended before the limit");
+      },
+    } as unknown as ReturnType<typeof serverDeps>["blobTransfer"],
+  });
+  const chunk = Buffer.alloc(256 * 1024);
+  const total = 256 * chunk.length;
+  const answer = await new Promise<string>((resolve, reject) => {
+    const req = request(
+      {
+        host: "127.0.0.1",
+        port,
+        method: "POST",
+        path: `/api/blobs?sha=${"0".repeat(64)}`,
+        headers: {
+          cookie: browserSessionCookie("alice"),
+          origin: browserSessionDeps.portalUrl,
+          "content-length": String(total),
+        },
+      },
+      (res) => {
+        let body = "";
+        res.on("data", (part) => (body += part));
+        res.on("end", () => resolve(`${res.statusCode} ${body}`));
+      },
+    );
+    req.on("error", reject);
+    let sent = 0;
+    const pump = () => {
+      if (sent >= total) return req.end();
+      sent += chunk.length;
+      req.write(chunk, () => setTimeout(pump, 5));
+    };
+    pump();
+  });
+  assert.equal(answer, '413 {"error":"payload_too_large","message":"blob exceeds the size limit"}');
 });
