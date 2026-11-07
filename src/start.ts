@@ -1,3 +1,4 @@
+import { listedPrincipals } from "../plugins/chassis/src/principal-allowlist.ts";
 import { createManagedSlack } from "./surfaces/slack-managed.ts";
 import { randomBytes } from "node:crypto";
 import { lookup } from "node:dns/promises";
@@ -43,10 +44,7 @@ export async function startQm(
           portalSession: {
             secret: env.PORTAL_SESSION_SECRET,
             maxAgeSeconds: sessionLifetime(env).max,
-            principals: (env.WEB_UI_PRINCIPALS ?? "")
-              .split(",")
-              .map((entry) => entry.trim())
-              .filter(Boolean),
+            principals: listedPrincipals(env.WEB_UI_PRINCIPALS),
           },
         }
       : {}),

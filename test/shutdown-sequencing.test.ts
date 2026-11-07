@@ -40,6 +40,7 @@ test("shutdown reports unhealthy and keeps the front door and core serving until
     slackEventsPort: await slackReceiver(),
     shutdownDrainMs: 1_500,
   });
+  process.env.PORTAL_SESSION_SECRET = "shutdown-sequencing-session-secret-0123456789";
   const qm = await startQm(config, { agent: createMockAgent(), env: process.env });
   let stopped: Promise<void> | undefined;
   const stop = (): Promise<void> => (stopped ??= qm.stop());

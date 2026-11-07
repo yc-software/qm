@@ -8,14 +8,13 @@ import { findRoute } from "../src/api/routes/route.ts";
 import { createServer } from "../src/api/server.ts";
 import { startQm } from "../src/start.ts";
 import { buildApp, serverDeps } from "../src/wiring.ts";
-import { deriveKey, seal } from "../plugins/portal/src/session.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
 import { stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
 
 const SIGNING = "browser-alias-signing-secret-0123456789";
 const PORTAL_IDENTITY = "browser-alias-identity-secret-0123456789";
-const SESSION = "browser-alias-session-secret-0123456789abc";
 const QUERY: Record<string, string> = {
   "/api/ui-state": "key=sidebar",
   "/api/scope-resources": "scope=personal:alice",
@@ -28,12 +27,6 @@ const aliases = [...API_ALIASES].map(([key, target]) => {
   return { method, path, target };
 });
 
-function sessionCookie(sub = "alice"): string {
-  const iat = Math.floor(Date.now() / 1000);
-  const claims = { k: "session", sub, org: "default-org", iat, exp: iat + 3600 };
-  return `portal_session=${encodeURIComponent(seal(claims, deriveKey(SESSION, "portal.session.v1")))}`;
-}
-
 async function freePort(): Promise<number> {
   const probe = createNetServer().listen(0, "127.0.0.1");
   await new Promise((resolve) => probe.once("listening", resolve));
@@ -45,10 +38,7 @@ async function freePort(): Promise<number> {
 async function core(t: TestContext): Promise<string> {
   const config = testConfig({ signingSecret: SIGNING, publicWebUrl: "https://qm.example.com" });
   const built = stopAtEnd(buildApp(config));
-  const server = createServer(built.app, {
-    ...serverDeps(config, built),
-    portalSession: { secret: SESSION, maxAgeSeconds: 3600 },
-  });
+  const server = createServer(built.app, { ...serverDeps(config, built), ...browserSessionDeps });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
   return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -75,12 +65,12 @@ test("each aliased /api path resolves to the browser-enabled /v1 route that serv
 
 test("each aliased path answers a cookie-only browser exactly as its /v1 route does, bound to the signed-in person", async (t) => {
   const base = await core(t);
-  const cookie = sessionCookie();
+  const cookie = browserSessionCookie("alice");
   for (const { path, target } of aliases) {
     const query = QUERY[path] ?? "";
     const viaAlias = await fetch(`${base}${concrete(path)}?${query}`, { headers: { cookie } });
     const direct = await fetch(`${base}${concrete(target)}?${query}`, { headers: { cookie } });
-    assert.ok(![401, 403, 503].includes(viaAlias.status), `${path} answered ${viaAlias.status}`);
+    assert.ok(viaAlias.status < 500 && ![401, 403].includes(viaAlias.status), `${path} answered ${viaAlias.status}`);
     assert.equal(viaAlias.status, direct.status, path);
     assert.deepEqual(await viaAlias.json(), await direct.json(), path);
     const other = await fetch(`${base}${concrete(path)}?${query}&principalId=bob&viewer=bob`, { headers: { cookie } });
@@ -95,7 +85,7 @@ test("a web release still calling /api reaches core for migrated reads and the w
   const publicWebUrl = `http://127.0.0.1:${publicPort}`;
   Object.assign(process.env, {
     PUBLIC_WEB_URL: publicWebUrl,
-    PORTAL_SESSION_SECRET: SESSION,
+    PORTAL_SESSION_SECRET: browserSessionDeps.portalSession.secret,
     CORE_SIGNING_SECRET: SIGNING,
     PORTAL_IDENTITY_SECRET: PORTAL_IDENTITY,
   });
@@ -104,7 +94,7 @@ test("a web release still calling /api reaches core for migrated reads and the w
     { agent: createMockAgent(), env: process.env },
   );
   t.after(() => qm.stop());
-  const cookie = sessionCookie();
+  const cookie = browserSessionCookie("alice");
   const read = (url: string) => fetch(url, { headers: { cookie } });
   const migrated = await read(`${publicWebUrl}/api/sessions`);
   assert.equal(migrated.status, 200);

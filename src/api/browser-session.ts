@@ -123,8 +123,7 @@ export async function browserIdentity(
   for (const header of RELAY_IDENTITY_HEADERS) delete req.headers[header];
   await deps.identity?.refresh();
   const sub = canonicalPerson(session.sub);
-  const origin = req.headers.origin;
-  const foreign = origin !== undefined && origin !== originOf(deps.portalUrl!);
+  const foreign = req.headers.origin !== undefined && !sameOriginRequest(req, originOf(deps.portalUrl!));
   const imp = foreign
     ? null
     : impersonationFor({ sub, org: session.org }, cookies, deriveKey(secret, "portal.impersonate.v1"), now);

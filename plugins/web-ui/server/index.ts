@@ -40,7 +40,7 @@ import {
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { createBrandingCache, injectBranding } from "../../chassis/src/branding.ts";
 import { parseSuggestedActivities } from "../../chassis/src/suggested-activities.ts";
-import { principalInAllowlist } from "../../chassis/src/principal-allowlist.ts";
+import { listedPrincipals, principalInAllowlist } from "../../chassis/src/principal-allowlist.ts";
 import { clientSurfaceOf } from "../../chassis/src/client-surface.ts";
 
 import {
@@ -59,10 +59,7 @@ const ALLOW_UNSIGNED_TEST_IDENTITY =
   process.env.NODE_ENV === "test" && process.env.ALLOW_UNSIGNED_TEST_IDENTITY === "1";
 const COOKIE_AUTH = !CORE_SIGNING_SECRET || ALLOW_UNSIGNED_TEST_IDENTITY;
 const AUTH_MODE = COOKIE_AUTH ? "dev" : "portal";
-const ALLOW = (process.env.WEB_UI_PRINCIPALS ?? "")
-  .split(",")
-  .map((s) => s.trim())
-  .filter(Boolean);
+const ALLOW = listedPrincipals(process.env.WEB_UI_PRINCIPALS);
 export function isInboxUser(principalId: string, configuredUsers = process.env.INBOX_USERS): boolean {
   return principalInAllowlist(principalId, configuredUsers);
 }

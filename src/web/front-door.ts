@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
-import type { IncomingMessage, Server, ServerResponse } from "node:http";
+import type { Server } from "node:http";
+import type { CoreHandoff } from "../../plugins/portal/src/index.ts";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -25,14 +26,7 @@ interface WebSurface {
 }
 
 interface PortalSurface {
-  startServer(options: {
-    port: number;
-    host?: string;
-    core: {
-      serves(method: string, pathname: string): boolean;
-      handle(req: IncomingMessage, res: ServerResponse): void;
-    };
-  }): Promise<void>;
+  startServer(options: { port: number; host?: string; core: CoreHandoff }): Promise<void>;
   server: Server;
 }
 
@@ -57,6 +51,7 @@ export async function startFrontDoor(
   env: NodeJS.ProcessEnv,
   core: Server,
 ): Promise<{ close(): void }> {
+  if (!env.PORTAL_SESSION_SECRET) throw new Error("PORTAL_SESSION_SECRET is required to serve the public port");
   const store = webReleaseStore(config);
   const bundle = existsSync(join(BUNDLED_WEB_UI, "index.html")) ? readWebBundleLayout(BUNDLED_WEB_UI) : undefined;
   if (!bundle) console.log(`[web] this build carries no web UI bundle at ${BUNDLED_WEB_UI}; serving the live release`);

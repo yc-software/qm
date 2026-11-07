@@ -881,7 +881,7 @@ function renewSessionCookie(req: IncomingMessage, res: ServerResponse): SessionC
   return renewed;
 }
 
-interface CoreHandoff {
+export interface CoreHandoff {
   serves(method: string, pathname: string): boolean;
   handle(req: IncomingMessage, res: ServerResponse): void;
 }
