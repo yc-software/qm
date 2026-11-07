@@ -124,6 +124,10 @@ const SCHEMA = [
 
 const EXPIRY_SCHEMA = [`ALTER TABLE finny_runtime_bindings ADD COLUMN IF NOT EXISTS expires_at BIGINT`];
 
+const DISPATCH_CANCELLATION_SCHEMA = [
+  `ALTER TABLE finny_runtime_dispatches ADD COLUMN IF NOT EXISTS cancelled_at BIGINT`,
+];
+
 function rowToBinding(row: Record<string, unknown>): FinnyRuntimeBinding {
   return {
     scopeId: row.scope_id as string,
@@ -153,6 +157,7 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
   const pg = createPgPool(connectionString, [
     { id: "finny/runtime/0001", statements: SCHEMA },
     { id: "finny/runtime/0002", statements: EXPIRY_SCHEMA },
+    { id: "finny/runtime/0003-dispatch-cancellation", statements: DISPATCH_CANCELLATION_SCHEMA },
   ]);
   const { q, pool } = pg;
   const dispatchLocks = createPostgresAdvisoryLock(pg);
@@ -764,20 +769,27 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
                )`
             : ""
         }`;
-      const orphanedReverificationSelect = hasRuns
+      const forceNewReverificationSelect = hasRuns
         ? `EXISTS (
-             SELECT 1 FROM finny_runtime_bindings AS orphaned_auditor
-             LEFT JOIN runs AS orphaned_run ON orphaned_run.id=orphaned_auditor.run_id
-              WHERE orphaned_auditor.job_id=jobs.id
-                AND orphaned_auditor.scope_id=jobs.scope_id
-                AND orphaned_auditor.role='auditor'
-                AND orphaned_auditor.active=TRUE
-                AND orphaned_run.id IS NULL
+             SELECT 1 FROM finny_runtime_bindings AS stale_auditor
+             LEFT JOIN runs AS stale_run ON stale_run.id=stale_auditor.run_id
+              WHERE stale_auditor.job_id=jobs.id
+                AND stale_auditor.scope_id=jobs.scope_id
+                AND stale_auditor.role='auditor'
+                AND stale_auditor.active=TRUE
+                AND (
+                  stale_run.id IS NULL
+                  OR stale_run.status='failed'
+                  OR (stale_run.status='done' AND (
+                    stale_run.last_stop IS NOT NULL
+                    OR stale_run.result LIKE '%"stopped":true%'
+                  ))
+                )
            )`
         : "FALSE";
       const reopened = await q(
         `SELECT jobs.scope_id,jobs.id AS job_id,events.idempotency_key,
-                ${orphanedReverificationSelect} AS force_new_auditor
+                ${forceNewReverificationSelect} AS force_new_auditor
            FROM finny_job_events AS events
            JOIN finny_jobs AS jobs ON jobs.id=events.job_id
           WHERE events.event_type='verification_reopened'
@@ -868,25 +880,41 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
             Date.now(),
           ],
         );
-        const rows = await q("SELECT * FROM finny_runtime_dispatches WHERE idempotency_key=$1", [input.idempotencyKey]);
-        const row = rows[0] as Record<string, unknown> | undefined;
-        if (
-          !row ||
-          row.scope_id !== input.scopeId ||
-          row.job_id !== input.jobId ||
-          row.session_id !== input.sessionId ||
-          row.run_id !== input.runId ||
-          row.kind !== input.kind ||
-          row.intent_digest !== intentDigest
-        ) {
-          throw new Error("Finny runtime dispatch idempotency conflict");
-        }
-        if (row.delivered_at !== null) return;
-        await send();
-        await q(
-          "UPDATE finny_runtime_dispatches SET delivered_at=$2 WHERE idempotency_key=$1 AND delivered_at IS NULL",
-          [input.idempotencyKey, Date.now()],
-        );
+        await withPgTransaction(await pool(), async (db) => {
+          const jobs = await db.query(
+            "SELECT pending_rework_seq FROM finny_jobs WHERE id=$1 AND scope_id=$2 FOR UPDATE",
+            [input.jobId, input.scopeId],
+          );
+          if (!jobs.rows[0]) throw new Error("Finny runtime dispatch job is unavailable");
+          const rows = await db.query("SELECT * FROM finny_runtime_dispatches WHERE idempotency_key=$1 FOR UPDATE", [
+            input.idempotencyKey,
+          ]);
+          const row = rows.rows[0] as Record<string, unknown> | undefined;
+          if (
+            !row ||
+            row.scope_id !== input.scopeId ||
+            row.job_id !== input.jobId ||
+            row.session_id !== input.sessionId ||
+            row.run_id !== input.runId ||
+            row.kind !== input.kind ||
+            row.intent_digest !== intentDigest
+          ) {
+            throw new Error("Finny runtime dispatch idempotency conflict");
+          }
+          if (row.delivered_at !== null || row.cancelled_at !== null) return;
+          if (input.kind === "producer_rework" && jobs.rows[0].pending_rework_seq === null) {
+            await db.query(
+              "UPDATE finny_runtime_dispatches SET cancelled_at=$2 WHERE idempotency_key=$1 AND delivered_at IS NULL",
+              [input.idempotencyKey, Date.now()],
+            );
+            return;
+          }
+          await send();
+          await db.query(
+            "UPDATE finny_runtime_dispatches SET delivered_at=$2 WHERE idempotency_key=$1 AND delivered_at IS NULL AND cancelled_at IS NULL",
+            [input.idempotencyKey, Date.now()],
+          );
+        });
       });
     },
   };

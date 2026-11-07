@@ -1959,3 +1959,86 @@ test("orphaned delivered reverification opens a replacement Auditor", async () =
   assert.equal(openedAuditors, 1);
   assert.equal((await runtime.currentRoleBinding(job.scopeId, job.id, "auditor"))?.runId, "replacement-auditor-run");
 });
+
+test("terminal delivered reverification opens a replacement Auditor", async () => {
+  const { jobs, job, connectionString } = await approvedJob();
+  const { q } = createPgPool(connectionString);
+  await q(`CREATE TABLE runs(id TEXT PRIMARY KEY,status TEXT NOT NULL,last_stop TEXT,result TEXT)`);
+  await q("INSERT INTO runs(id,status,last_stop,result) VALUES($1,'done','terminal',NULL)", ["terminal-auditor-run"]);
+  await jobs.recordArtifactReady({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    artifactDigest: "artifact-sha256",
+    provisionalRevision: "revision-1",
+    idempotencyKey: "artifact-before-terminal-reverify",
+  });
+  const evaluator = {
+    ...TEST_FINNY_EVALUATOR,
+    revision: "test-r6",
+    buildDigest: "a".repeat(64),
+    configurationDigest: "b".repeat(64),
+  };
+  await jobs.recordEvaluatorCorrection({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    fromEvaluator: TEST_FINNY_EVALUATOR,
+    toEvaluator: evaluator,
+    idempotencyKey: "terminal-reverify-r6",
+  });
+  const runtime = createPostgresFinnyRuntimeStore(connectionString);
+  await runtime.bindInitial({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    parentSessionId: "parent-session",
+    parentRunId: "parent-run",
+    parentPrincipalId: "U1",
+    producerExpiresAt: Date.now() + 60_000,
+    auditorExpiresAt: Date.now() + 60_000,
+    producerSessionId: "producer-session",
+    producerRunId: "producer-run",
+    auditorSessionId: "terminal-auditor-session",
+    auditorRunId: "terminal-auditor-run",
+    producerPrincipalId: "U1",
+    auditorPrincipalId: "U1",
+  });
+  const initial = createFinnyRuntimeCoordinator({
+    jobs,
+    runtime,
+    grants: createFinnyWorkerGrants(jobs, "runtime-test-secret"),
+    sessions: {
+      async open() {
+        throw new Error("initial binding should be reused");
+      },
+    },
+    dispatcher: { async dispatchPrivateIdempotent() {} },
+    ...coreRuntimeAuthority(),
+  });
+  await initial.verificationReopened({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    idempotencyKey: "terminal-reverify-r6",
+  });
+  const recovery = (await runtime.pendingRecoveries()).find(
+    (item) => item.kind === "verification_reopened" && item.idempotencyKey === "terminal-reverify-r6",
+  );
+  assert.equal(recovery?.kind === "verification_reopened" && recovery.forceNewAuditor, true);
+  const replacement = createFinnyRuntimeCoordinator({
+    jobs,
+    runtime,
+    grants: createFinnyWorkerGrants(jobs, "runtime-test-secret"),
+    sessions: {
+      async open() {
+        return {
+          ok: true as const,
+          sessionId: "terminal-replacement-session",
+          runId: "terminal-replacement-run",
+          title: "Finny Auditor",
+        };
+      },
+    },
+    dispatcher: { async dispatchPrivateIdempotent() {} },
+    ...coreRuntimeAuthority(),
+  });
+  await replacement.verificationReopened(recovery!);
+  assert.equal((await runtime.currentRoleBinding(job.scopeId, job.id, "auditor"))?.runId, "terminal-replacement-run");
+});

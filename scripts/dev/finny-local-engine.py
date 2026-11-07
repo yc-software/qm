@@ -51,15 +51,30 @@ def strict_b64(value: Any) -> bytes:
 
 
 def validate_binding(value: Any) -> dict[str, Any]:
-    if not isinstance(value, dict) or set(value) != {"artifactDigest", "policyVersion", "checks"}:
+    if not isinstance(value, dict) or set(value) != {"artifactDigest", "policyVersion", "evaluator", "checks"}:
         raise ValueError("binding shape is invalid")
     digest = value["artifactDigest"]
     policy = value["policyVersion"]
+    evaluator = value["evaluator"]
     checks = value["checks"]
     if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
         raise ValueError("artifactDigest must be lowercase SHA-256 hex")
     if not isinstance(policy, str) or not policy:
         raise ValueError("policyVersion is invalid")
+    if (
+        not isinstance(evaluator, dict)
+        or set(evaluator) != {"id", "revision", "buildDigest", "contractVersion", "configurationDigest"}
+        or not isinstance(evaluator.get("id"), str)
+        or not evaluator["id"]
+        or not isinstance(evaluator.get("revision"), str)
+        or not evaluator["revision"]
+        or evaluator.get("contractVersion") != "finny.spreadsheet-worker.v2"
+        or not isinstance(evaluator.get("buildDigest"), str)
+        or not re.fullmatch(r"[0-9a-f]{64}", evaluator["buildDigest"])
+        or not isinstance(evaluator.get("configurationDigest"), str)
+        or not re.fullmatch(r"[0-9a-f]{64}", evaluator["configurationDigest"])
+    ):
+        raise ValueError("binding evaluator is invalid")
     if not isinstance(checks, list) or not checks:
         raise ValueError("checks are invalid")
     seen: set[str] = set()
@@ -75,7 +90,7 @@ def validate_binding(value: Any) -> dict[str, Any]:
             raise ValueError("check generation is invalid")
         seen.add(check_id)
         normalized.append({"checkId": check_id, "generation": generation})
-    return {"artifactDigest": digest, "policyVersion": policy, "checks": normalized}
+    return {"artifactDigest": digest, "policyVersion": policy, "evaluator": evaluator, "checks": normalized}
 
 
 def formula_cells(workbook: Any) -> Iterable[tuple[str, str, str]]:
