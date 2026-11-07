@@ -185,6 +185,13 @@ export async function initializeBrowserErrors(me: Me): Promise<void> {
         browser.globalHandlersIntegration(),
         browser.linkedErrorsIntegration(),
         browser.extraErrorDataIntegration({ depth: 8 }),
+        browser.eventFiltersIntegration({
+          disableErrorDefaults: true,
+          ignoreErrors: [
+            "ResizeObserver loop completed with undelivered notifications.",
+            "ResizeObserver loop limit exceeded",
+          ],
+        }),
       ],
       attachStacktrace: true,
       sendClientReports: false,
