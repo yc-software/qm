@@ -44,12 +44,6 @@ export function requestPort(upstream: URL): string | undefined {
   return upstream.port || undefined;
 }
 
-function declaresFrameAncestors(headers: Record<string, string | string[]>): boolean {
-  const csp = headers["content-security-policy"];
-  const text = typeof csp === "string" ? csp : (csp?.join(",") ?? "");
-  return /(^|[;,])\s*frame-ancestors\s/i.test(text);
-}
-
 function relay(
   req: IncomingMessage,
   res: ServerResponse,
@@ -59,7 +53,6 @@ function relay(
     port?: string;
     path: string;
     headers: Record<string, string | string[]>;
-    honorFramePolicy?: boolean;
     forwardCookies?: boolean;
   },
 ): void {
@@ -85,7 +78,6 @@ function relay(
         out[k] = v;
       }
       if (out.vary !== undefined) out.vary = withVary(res, String(out.vary));
-      if (target.honorFramePolicy && declaresFrameAncestors(out)) res.removeHeader("x-frame-options");
       res.writeHead(upRes.statusCode ?? 502, out);
       relayStream(upRes, res);
     },
@@ -102,50 +94,6 @@ function relay(
     if (!res.writableFinished) up.destroy();
   });
   relayStream(req, up);
-}
-
-export interface SurfaceTarget {
-  upstreamBase: string;
-  forwardPath: string;
-  search: string;
-  cookieName: string;
-  principal: string;
-  displayName?: string;
-  impersonator?: string;
-  identitySecret?: string;
-  authenticatedPrincipal?: string;
-  nowMs?: number;
-}
-
-export function proxyToSurface(req: IncomingMessage, res: ServerResponse, t: SurfaceTarget): void {
-  const upstream = new URL(t.upstreamBase);
-  const cookie =
-    `${t.cookieName}=${encodeURIComponent(t.principal)}` +
-    (t.displayName ? `; ${t.cookieName}_name=${encodeURIComponent(t.displayName)}` : "") +
-    (t.impersonator ? `; webui_impersonator=${encodeURIComponent(t.impersonator)}` : "");
-  const base: Record<string, string> = { host: upstream.host, cookie };
-  if (t.identitySecret) {
-    const now = t.nowMs ?? Date.now();
-    base[PORTAL_IDENTITY_HEADER] = mintPortalIdentity(
-      {
-        p: t.principal,
-        ...(t.authenticatedPrincipal ? { authenticatedAs: t.authenticatedPrincipal } : {}),
-        ...(t.displayName ? { n: t.displayName } : {}),
-        ...(t.impersonator ? { imp: t.impersonator } : {}),
-        exp: now + IDENTITY_TTL_MS,
-      },
-      t.identitySecret,
-    );
-  }
-  const headers = safeForwardHeaders(req, base);
-  relay(req, res, {
-    protocol: upstream.protocol,
-    hostname: upstream.hostname,
-    port: requestPort(upstream),
-    path: `${upstream.pathname.replace(/\/$/, "")}${t.forwardPath}${t.search}`,
-    headers,
-    honorFramePolicy: true,
-  });
 }
 
 export const FORWARD_WEBHOOK_HEADERS = [
@@ -251,18 +199,22 @@ export function proxyToUpstream(
 
 export const FORWARD_BROKER_HEADERS = ["accept", "accept-language", "user-agent", "content-type"];
 
+export const INTERNAL_HEADERS = [
+  "x-signature",
+  "x-timestamp",
+  "x-as-principal",
+  "x-admin-actor",
+  "x-agent-capability",
+  PORTAL_IDENTITY_HEADER,
+  "x-qm-app-host",
+  "x-qm-client-ip",
+];
+
 export function proxyToAppHost(req: IncomingMessage, res: ServerResponse, coreBase: string, clientIp?: string): void {
   const upstream = new URL(coreBase);
   const blocked = new Set([
     ...DROP_RESPONSE_HEADERS,
-    "x-signature",
-    "x-timestamp",
-    "x-as-principal",
-    "x-admin-actor",
-    "x-agent-capability",
-    PORTAL_IDENTITY_HEADER,
-    "x-qm-app-host",
-    "x-qm-client-ip",
+    ...INTERNAL_HEADERS,
     "forwarded",
     "x-forwarded-host",
     "x-forwarded-proto",

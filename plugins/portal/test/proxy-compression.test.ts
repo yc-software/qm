@@ -3,14 +3,14 @@ import assert from "node:assert/strict";
 import { createServer, request as httpRequest, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { gunzipSync, gzipSync } from "node:zlib";
-import { FORWARD_AGENT_API_HEADERS, proxyToSurface, proxyToUpstream } from "../src/proxy.ts";
+import { FORWARD_AGENT_API_HEADERS, proxyToUpstream } from "../src/proxy.ts";
 
 const body = JSON.stringify({ rows: Array.from({ length: 200 }, (_, i) => ({ id: i, label: "repetitive" })) });
 const packedBody = gzipSync(Buffer.from(body));
 
 const upstream = createServer((req: IncomingMessage, res) => {
   req.resume();
-  if (req.url === "/stream") {
+  if (req.url === "/v1/stream") {
     res.writeHead(200, {
       "content-type": "text/event-stream; charset=utf-8",
       "cache-control": "no-cache, no-transform",
@@ -30,17 +30,7 @@ const upstreamBase = `http://localhost:${(upstream.address() as AddressInfo).por
 
 const portal = createServer((req, res) => {
   const path = new URL(req.url ?? "/", "http://portal").pathname;
-  if (path.startsWith("/v1/")) {
-    proxyToUpstream(req, res, { baseUrl: upstreamBase, path, search: "" }, FORWARD_AGENT_API_HEADERS);
-    return;
-  }
-  proxyToSurface(req, res, {
-    upstreamBase,
-    forwardPath: path,
-    search: "",
-    cookieName: "webuiuser",
-    principal: "alice",
-  });
+  proxyToUpstream(req, res, { baseUrl: upstreamBase, path, search: "" }, FORWARD_AGENT_API_HEADERS);
 });
 await new Promise<void>((r) => portal.listen(0, r));
 const base = `http://localhost:${(portal.address() as AddressInfo).port}`;
@@ -67,23 +57,15 @@ function get(path: string, headers: Record<string, string>): Promise<RawResponse
   });
 }
 
-test("the portal relays a gzipped surface response without re-encoding or mangling it", async () => {
-  const relayed = await get("/api/things", { "accept-encoding": "gzip" });
-  assert.equal(relayed.headers["content-encoding"], "gzip");
-  assert.equal(relayed.headers["vary"], "accept-encoding");
-  assert.deepEqual(relayed.body, packedBody);
-  assert.equal(gunzipSync(relayed.body).toString("utf8"), body);
-});
-
 test("the portal never hands a client an encoding it did not ask for", async () => {
-  const relayed = await get("/api/things", { "accept-encoding": "identity" });
+  const relayed = await get("/v1/sessions", { "accept-encoding": "identity" });
   assert.equal(relayed.headers["content-encoding"], undefined);
   assert.equal(relayed.body.toString("utf8"), body);
 });
 
 test("a relayed event stream still reaches the client before the response ends", async () => {
   const first = await new Promise<{ headers: IncomingMessage["headers"]; chunk: string }>((resolve, reject) => {
-    const req = httpRequest(`${base}/stream`, { headers: { "accept-encoding": "gzip" } }, (res) => {
+    const req = httpRequest(`${base}/v1/stream`, { headers: { "accept-encoding": "gzip" } }, (res) => {
       res.setEncoding("utf8");
       res.once("data", (chunk: string) => {
         resolve({ headers: res.headers, chunk });
@@ -100,8 +82,10 @@ test("a relayed event stream still reaches the client before the response ends",
   assert.equal(first.chunk, ": open\n\n");
 });
 
-test("the agent API path forwards accept-encoding so core can compress a large listing", async () => {
+test("the agent API path forwards accept-encoding and relays core's gzip without re-encoding it", async () => {
   const relayed = await get("/v1/sessions", { "accept-encoding": "gzip" });
   assert.equal(relayed.headers["content-encoding"], "gzip");
+  assert.equal(relayed.headers["vary"], "accept-encoding");
+  assert.deepEqual(relayed.body, packedBody);
   assert.equal(gunzipSync(relayed.body).toString("utf8"), body);
 });

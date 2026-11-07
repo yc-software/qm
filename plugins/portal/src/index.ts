@@ -33,7 +33,6 @@ import {
   type ImpersonationClaims,
   type TmpClaims,
   sessionLifetime,
-  impersonationFor,
 } from "./session.ts";
 import {
   pkcePair,
@@ -47,7 +46,6 @@ import {
   hostedDomainHint,
 } from "./oidc.ts";
 import {
-  proxyToSurface,
   proxyToDeployment,
   proxyToUpstream,
   proxyToAppHost,
@@ -57,6 +55,7 @@ import {
   FORWARD_OAUTH_HEADERS,
   FORWARD_BROKER_HEADERS,
   FORWARD_WEBHOOK_HEADERS,
+  INTERNAL_HEADERS,
 } from "./proxy.ts";
 import { signedHeaders, withSourceAuthNonce } from "../../chassis/src/core-client.ts";
 import { coreClaimStore, claimOnce, withinRateLimit, ClaimStoreUnavailableError } from "../../chassis/src/claims.ts";
@@ -143,8 +142,6 @@ async function fetchSurfaceConfig(): Promise<void> {
     void 0;
   }
 }
-
-const WEB_UI_UPSTREAM = (process.env.WEB_UI_UPSTREAM ?? "http://localhost:8096").replace(/\/$/, "");
 
 function isSlackIssuer(issuer: string): boolean {
   try {
@@ -884,6 +881,7 @@ function renewSessionCookie(req: IncomingMessage, res: ServerResponse): SessionC
 export interface CoreHandoff {
   serves(method: string, pathname: string): boolean;
   handle(req: IncomingMessage, res: ServerResponse): void;
+  shell(req: IncomingMessage, res: ServerResponse): Promise<void>;
 }
 
 let core: CoreHandoff | undefined;
@@ -1053,7 +1051,6 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   const cookieSession = renewSessionCookie(req, res);
   let session = cookieSession ?? currentSession(req);
   if (session && !cookieSession) setSession(res, sessionCookieSet(seal(session, sessionKey), session.sub));
-  const authenticatedPrincipal = session?.sub;
   let staleSession: SessionClaims | null = null;
   if (session && !session.anon && (!pathname.startsWith("/auth/") || pathname.startsWith("/auth/impersonate"))) {
     const canonical = await canonicalPrincipal(session.sub);
@@ -1254,15 +1251,10 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   if (!DEPLOYMENTS_ENABLED && (seg === "d" || seg === "deployments")) return json(res, 404, { error: "not_found" });
   const isDeployment = DEPLOYMENTS_ENABLED && (seg === "d" || seg === "deployments");
 
-  if (
-    method === "GET" &&
-    (/^\/share\/external\/[a-f0-9-]{36}(?:\/files\/[a-f0-9-]{36})?$/.test(pathname) ||
-      /^\/assets\/[a-zA-Z0-9_.-]+$/.test(pathname))
-  ) {
-    return proxyToUpstream(req, res, { baseUrl: WEB_UI_UPSTREAM, path: pathname, search: url.search }, [
-      "accept",
-      "accept-encoding",
-    ]);
+  if (core && method === "GET") {
+    if (/^\/share\/external\/[a-f0-9-]{36}(?:\/files\/[a-f0-9-]{36})?$/.test(pathname) && core.serves(method, pathname))
+      return core.handle(withoutInternalHeaders(req), res);
+    if (/^\/assets\/[a-zA-Z0-9_.-]+$/.test(pathname)) return core.shell(withoutInternalHeaders(req), res);
   }
 
   if (!isDeployment) session ??= staleSession;
@@ -1316,23 +1308,20 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     }
   }
 
-  if (core?.serves(method, pathname)) return core.handle(req, res);
+  if (!openSession(readCookie(req.headers.cookie, "portal_session"), sessionKey, Date.now(), ORG, SESSION_MAX_TTL_S)) {
+    const others = (req.headers.cookie ?? "").split(";").map((part) => part.trim());
+    req.headers.cookie = [
+      ...others.filter((part) => part && !part.startsWith("portal_session=")),
+      `portal_session=${encodeURIComponent(seal(session, sessionKey))}`,
+    ].join("; ");
+  }
+  if (core?.serves(method, pathname)) return core.handle(withoutInternalHeaders(req), res);
+  return core ? core.shell(withoutInternalHeaders(req), res) : json(res, 404, { error: "not_found" });
+}
 
-  const imp = crossOrigin ? null : impersonationFor(session, req.headers.cookie, impersonateKey, Date.now());
-  const impersonator = imp && (await isAdmin(session.sub)) ? session.sub : undefined;
-  const principal = imp && impersonator ? imp.target : session.sub;
-
-  return proxyToSurface(req, res, {
-    upstreamBase: WEB_UI_UPSTREAM,
-    forwardPath: pathname,
-    search: url.search,
-    cookieName: "webuiuser",
-    principal,
-    ...(!impersonator && session.name ? { displayName: session.name } : {}),
-    ...(impersonator ? { impersonator } : {}),
-    ...(PORTAL_IDENTITY_SECRET ? { identitySecret: PORTAL_IDENTITY_SECRET } : {}),
-    authenticatedPrincipal,
-  });
+function withoutInternalHeaders(req: IncomingMessage): IncomingMessage {
+  for (const header of INTERNAL_HEADERS) delete req.headers[header];
+  return req;
 }
 
 async function desktopLogin(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {

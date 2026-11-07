@@ -90,7 +90,6 @@ Object.assign(process.env, {
   PORTAL_IDENTITY_SECRET: identitySecret,
   PORTAL_TRUSTED_OIDC_ADMIN: adminEnabled ? "1" : "0",
   PORTAL_TRUSTED_OIDC_LABEL: preferenceEnabled ? "Company SSO" : "",
-  WEB_UI_UPSTREAM: issuer,
   OIDC_AUTH_ENDPOINT: "https://primary.example.test/authorize",
   OIDC_CLIENT_ID: "primary-client",
   PORTAL_LOCAL_AUTH_BYPASS: "0",

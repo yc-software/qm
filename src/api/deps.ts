@@ -1,4 +1,5 @@
 import type { WebEvents } from "./routes/web-events.ts";
+import type { WebShell } from "../web/shell.ts";
 import type { WebMeConfig } from "./routes/web-me.ts";
 import type { SlackWebClientFactory } from "../slack/web-client.ts";
 import type { TeamStore } from "../teams/teams.ts";
@@ -105,7 +106,7 @@ export interface ServerDeps {
     apiOrigins?: ReadonlySet<string>;
   };
   requireSignedPortalIdentity?: boolean;
-  web?: { events: WebEvents; me: WebMeConfig };
+  web?: { events: WebEvents; me: WebMeConfig; shell: WebShell };
   control: ControlService;
   replayDedupe?: ReplayDedupe;
   deploymentLiveSmoke?: { deploymentId: string; superseded(): boolean; run(): Promise<void> };

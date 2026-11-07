@@ -1,6 +1,6 @@
 # Core-hosted web front door and web UI releases
 
-Core is the only application workload besides the optional egress proxy. When `PUBLIC_PORT` is set, core serves the public front door on that port: the portal's sign-in and reverse proxy, the built-in auth broker on `127.0.0.1:8099` when `AUTH_EMBEDDED=1`, and the web UI server on a loopback port. Core's API stays on `PORT`. Every CLI target sets `PUBLIC_PORT=8000` and routes public traffic there; the API port stays private, except that on AWS a separate `apiUrl` host and the apps domain route by host header straight to core's API port through a second target group attached to core's port 8080. Slack remains in core.
+Core is the only application workload besides the optional egress proxy. When `PUBLIC_PORT` is set, core serves the public front door on that port: the portal's sign-in and reverse proxy, the built-in auth broker on `127.0.0.1:8099` when `AUTH_EMBEDDED=1`, and the web UI release, served in-process by core's web shell (`src/web/shell.ts`). Core's API stays on `PORT`. Every CLI target sets `PUBLIC_PORT=8000` and routes public traffic there; the API port stays private, except that on AWS a separate `apiUrl` host and the apps domain route by host header straight to core's API port through a second target group attached to core's port 8080. Slack remains in core.
 
 ## Web UI releases
 
@@ -39,4 +39,4 @@ The command uploads the assets, then the documents, then switches `live.json`, a
 
 There is no database migration. Session keys, the auth broker's signing key and the token secret keep their values and move to core.
 
-For source development, install root and web-ui dependencies. The dev supervisor runs one core process that serves the front door on the slot's public port; with `--watch` the web UI is served by Vite with hot reload instead of from releases, for local editing only.
+For source development, install root and web-ui dependencies. The dev supervisor runs one core process that serves the front door on the slot's public port and the web UI from releases; rebuild the bundle and run `dev up` to pick up front-end changes.
