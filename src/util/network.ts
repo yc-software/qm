@@ -85,7 +85,12 @@ export function addressGuardedFetch(
   });
   return (input, init = {}) =>
     fetch(input, { ...(init as UndiciRequestInit), redirect: init.redirect ?? "manual", dispatcher }).then(
-      (response) => response as Response,
+      (response) =>
+        new Response(response.body as ReadableStream<Uint8Array> | null, {
+          status: response.status,
+          statusText: response.statusText,
+          headers: [...response.headers],
+        }),
       (error: unknown) => {
         throw error instanceof TypeError && error.cause instanceof PrivateNetworkAddressError ? error.cause : error;
       },

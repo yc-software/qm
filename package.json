@@ -124,7 +124,7 @@
     "fast-json-stringify": {
       "fast-uri": "4.2.3"
     },
-    "undici": "8.12.3",
+    "undici": "$undici",
     "e2b": {
       "undici8": "npm:undici@8.12.3"
     },
