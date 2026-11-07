@@ -246,14 +246,42 @@ async function isCanvasTarget(ctx: ApiCtx, target: string): Promise<boolean> {
   return target === ALWAYS_ON_CANVAS || Boolean(await ctx.deps.sessions?.get(target));
 }
 
-async function userCanvasContent(ctx: ApiCtx): Promise<void> {
+async function userCanvasOf(ctx: ApiCtx): Promise<UiCanvas | null> {
   const { res, deps, url, params } = ctx;
   const principalId = url.searchParams.get("principalId") ?? "";
-  if (!principalId || !(await isCanvasTarget(ctx, params.sessionId!)))
-    return sendJson(res, 400, { error: "bad_request", message: "principalId and a session id required" });
-  if (!deps.uiState || !(await canvasEnabled(ctx, principalId))) return sendJson(res, 404, { error: "not_found" });
-  const canvas = await readUiCanvas(deps.uiState, principalId, params.sessionId!);
-  return canvas ? sendJson(res, 200, { canvas }) : sendJson(res, 404, { error: "not_found" });
+  if (!principalId || !(await isCanvasTarget(ctx, params.sessionId!))) {
+    sendJson(res, 400, { error: "bad_request", message: "principalId and a session id required" });
+    return null;
+  }
+  const canvas =
+    deps.uiState && (await canvasEnabled(ctx, principalId))
+      ? await readUiCanvas(deps.uiState, principalId, params.sessionId!)
+      : null;
+  if (!canvas) sendJson(res, 404, { error: "not_found" });
+  return canvas;
+}
+
+async function userCanvasContent(ctx: ApiCtx): Promise<void> {
+  const canvas = await userCanvasOf(ctx);
+  if (canvas) sendJson(ctx.res, 200, { canvas });
+}
+
+async function userCanvasScript(ctx: ApiCtx): Promise<void> {
+  const { req, res, url, params } = ctx;
+  const site = req.headers["sec-fetch-site"];
+  if (site !== undefined && site !== "same-origin")
+    return sendJson(res, 403, { error: "forbidden", message: "cross-origin request refused" });
+  const canvas = await userCanvasOf(ctx);
+  if (!canvas) return;
+  if (String(canvas.rev) !== url.searchParams.get("rev")) return sendJson(res, 409, { error: "stale_revision" });
+  res.writeHead(200, {
+    "content-type": "application/javascript; charset=utf-8",
+    "cache-control": "no-store",
+    "x-content-type-options": "nosniff",
+  });
+  res.end(
+    `((canvas) => {\n${canvas.js}\n})(window.qmUiCanvasTake?.(${JSON.stringify(params.sessionId!)}, ${Number(canvas.rev)}));\n`,
+  );
 }
 
 async function userCanvas(ctx: ApiCtx): Promise<void> {
@@ -283,10 +311,34 @@ export const uiCanvasRoutes: ReadonlyArray<Route<ApiCtx>> = [
   {
     method: "POST",
     path: "/v1/ui/observe/:callId/result",
+    browser: "self",
+    actor: "body.principalId",
     auth: "source",
     maxBodyBytes: 2_000_000,
     handle: observeResult,
   },
-  { method: "GET", path: "/v1/ui/canvases/:sessionId", auth: "source", handle: userCanvasContent },
-  { method: "POST", path: "/v1/ui/canvases/:sessionId", auth: "source", handle: userCanvas },
+  {
+    method: "GET",
+    path: "/v1/ui/canvases/:sessionId",
+    browser: "self",
+    actor: "query.principalId",
+    auth: "source",
+    handle: userCanvasContent,
+  },
+  {
+    method: "GET",
+    path: "/v1/ui/canvases/:sessionId/script.js",
+    browser: "self",
+    actor: "query.principalId",
+    auth: "source",
+    handle: userCanvasScript,
+  },
+  {
+    method: "POST",
+    path: "/v1/ui/canvases/:sessionId",
+    browser: "self",
+    actor: "body.principalId",
+    auth: "source",
+    handle: userCanvas,
+  },
 ];

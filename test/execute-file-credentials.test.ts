@@ -177,6 +177,33 @@ test("failed commands still persist refreshes", async (t) => {
   assert.equal(second.stdout, "refreshed");
 });
 
+test("large files written elsewhere in the temporary home neither block nor join the refresh", async (t) => {
+  const f = await fixture(t);
+  const result = await f
+    .context()
+    .execute(
+      'mkdir -p "$HOME/.cache/tool" && head -c 12000000 /dev/zero > "$HOME/.cache/tool/bin" && ' +
+        'printf refreshed > "$HOME/.aws/sso/cache/session.json" && printf done',
+      { credentials: ["aws"] },
+    );
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(result.stdout, "done");
+  const next = await f.keychain.materializeOwnById(owner, f.credential.id, scope);
+  if (next.kind !== "file") throw new Error("Expected files");
+  assert.deepEqual(
+    next.files.map((file) => [file.path, Buffer.from(file.contentBase64, "base64").toString()]),
+    [[".aws/sso/cache/session.json", "refreshed"]],
+  );
+});
+
+test("credential files that grow past the limit fail with the reason", async (t) => {
+  const f = await fixture(t);
+  await assert.rejects(
+    f.context().execute('head -c 12000000 /dev/zero > "$HOME/.aws/sso/cache/session.json"', { credentials: ["aws"] }),
+    /credential files archive is \d+ bytes, over the \d+-byte cap/,
+  );
+});
+
 test("concurrent file updates cannot overwrite a newer credential or its grants", async (t) => {
   const f = await fixture(t);
   const grant = await f.keychain.createGrant({

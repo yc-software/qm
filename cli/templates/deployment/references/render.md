@@ -47,7 +47,8 @@ Set these keys in `qm.config.jsonc`:
   Each published app starts with a separate 1 GB disk mounted at `/data`.
 - `env.core.SHUTDOWN_DRAIN_MS` (default 30000): how long a previous core
   instance gives in-flight turns after SIGTERM. Render ends that instance 300
-  seconds after SIGTERM, so keep the value below 290000.
+  seconds after SIGTERM and core needs up to 30 seconds after the drain to
+  exit, so keep the value at most 270000.
 - `publicUrl` and `apiUrl`: core serves both from one Render web service, so
   both start as its assigned `onrender.com` URL and work without DNS changes.
   To use custom domains, set them to HTTPS origins and run `qm up`. The CLI adds

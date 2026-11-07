@@ -196,6 +196,7 @@ export type AttachResult = { ok: true; files: AttachedFileMeta[]; staged: number
 export type AttachFiles = (files: readonly OutboundFile[], sandboxId?: string) => Promise<AttachResult>;
 
 export interface ToolContext extends SurfaceToolDeps {
+  withdrawApproval?: (card: string) => Promise<{ withdrawn: string[] }>;
   admin?: AdminToolAccess;
   selfApi?: SelfApiCall;
   runtime?(request: RuntimeRequest, signal?: AbortSignal): Promise<RuntimeResult>;
@@ -215,10 +216,10 @@ export interface ToolContext extends SurfaceToolDeps {
   ): Promise<ExecResult & { scratchReroute?: boolean }>;
   sandboxResources?(
     action: "list" | "create" | "default" | "retire",
-    input?: { backend?: string; name?: string; sandboxId?: string | null },
+    input?: { backend?: string; name?: string; sandboxId?: string | null; memoryGb?: number },
   ): Promise<unknown>;
   computerStatus(sandboxId?: string): Promise<ComputerStatus>;
-  restartComputer(sandboxId?: string): Promise<void>;
+  restartComputer(sandboxId?: string, memoryGb?: number): Promise<void>;
   read(path: string, signal?: AbortSignal, sandboxId?: string): Promise<ReadResult>;
   listSkills(
     query?: string,
@@ -508,6 +509,7 @@ export interface ToolContextDeps {
   memoryAccess?: { write?: ScopeId; read: ScopeId[] };
   mcp?: McpToolService;
   scopeId?: ScopeId;
+  actAsActor?: boolean;
   sessionHistory?: {
     search(q: string, limit?: number): Promise<string[]>;
     open(seq: number): Promise<string | null>;
@@ -727,7 +729,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       ? {
           async sandboxResources(
             action: "list" | "create" | "default" | "retire",
-            input?: { backend?: string; name?: string; sandboxId?: string | null },
+            input?: { backend?: string; name?: string; sandboxId?: string | null; memoryGb?: number },
           ): Promise<unknown> {
             const resources = deps.sandboxResources!;
             if (action === "list") {
@@ -758,7 +760,15 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
               return { defaultSandboxId: input.sandboxId };
             }
             if (!input?.backend || !deps.provisionResource) throw new Error("create requires an available backend");
-            const record = await resources.create(deps.createdBy, writableScopeId, input.backend, input.name);
+            const record = await resources.create(
+              deps.createdBy,
+              writableScopeId,
+              input.backend,
+              input.name,
+              undefined,
+              undefined,
+              input.memoryGb,
+            );
             await deps.provisionResource(record.id);
             return record;
           },
@@ -791,14 +801,18 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       }
       return probe(await deps.sandbox.computerStatus(writableScopeId), deps.provision);
     },
-    async restartComputer(requested?: string): Promise<void> {
-      const sandboxId = requested ?? deps.boundSandboxId;
+    async restartComputer(requested?: string, memoryGb?: number): Promise<void> {
+      const sandboxId =
+        requested ??
+        deps.boundSandboxId ??
+        (memoryGb === undefined ? undefined : (await deps.sandboxResources?.resolve(writableScopeId))?.id);
       if (sandboxId !== undefined) {
         const resources = deps.sandboxResources;
         if (!resources) throw new Error("sandbox inventory unavailable");
         await accessSandbox(sandboxId);
-        return resources.restart(deps.createdBy, sandboxId);
+        return resources.restart(deps.createdBy, sandboxId, memoryGb);
       }
+      if (memoryGb !== undefined) throw new Error("a memory size needs a computer from sandbox list");
       if (!deps.sandbox.restartComputer) {
         throw new CapabilityUnsupportedError(deps.sandbox.profile.backend, "restarting the computer");
       }
@@ -1149,12 +1163,12 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
 
     async callMcpTool(name: string, args: Record<string, unknown>, approval?: string): Promise<string> {
       if (!deps.mcp) throw new Error("no MCP connectors are configured");
-      return deps.mcp.call(name, args, deps.createdBy, approval, deps.scopeId);
+      return deps.mcp.call(name, args, deps.createdBy, approval, deps.scopeId, deps.actAsActor);
     },
 
     async mcpToolNeedsApproval(name: string, args: Record<string, unknown>): Promise<boolean> {
       if (!deps.mcp) throw new Error("no MCP connectors are configured");
-      return deps.mcp.needsApproval(name, args, deps.createdBy, deps.scopeId);
+      return deps.mcp.needsApproval(name, args, deps.createdBy, deps.scopeId, deps.actAsActor);
     },
 
     async awaitClientResult(callId, timeoutMs, signal, toolName) {

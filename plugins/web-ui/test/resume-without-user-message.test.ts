@@ -105,3 +105,14 @@ test("a run whose reply already landed is not something to attach to", () => {
   assert.equal(runIsTerminal({ status: "done", result: null }), true);
   assert.equal(runIsTerminal({ status: "running", result: null }), false);
 });
+
+test("attaching after a stopped turn keeps the stopped message out of the live reply", () => {
+  const history = itemsToMessages([
+    item("UserMessage", { seq: 0, createdAt: 10, text: "check" }),
+    item("AgentMessage", { seq: 1, createdAt: 11, text: "Partial answer", body: { stopped: true } }),
+    item("Stop", { seq: 2, createdAt: 12, body: { reason: "by user" } }),
+  ]);
+  const resumed = continuableMessages(history);
+  assert.deepEqual(resumed.popped, []);
+  assert.deepEqual(resumed.messages, [...history, resumeAnchor()]);
+});

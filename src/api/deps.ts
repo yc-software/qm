@@ -1,3 +1,6 @@
+import type { WebEvents } from "./routes/web-events.ts";
+import type { WebShell } from "../web/shell.ts";
+import type { WebMeConfig } from "./routes/web-me.ts";
 import type { SlackWebClientFactory } from "../slack/web-client.ts";
 import type { TeamStore } from "../teams/teams.ts";
 import type { DecisionStore } from "../decisions/store.ts";
@@ -84,6 +87,7 @@ export interface ServerDeps {
   requestBodyDeadlineMs?: number;
   externalSlackPolicies?: ExternalSlackPolicies;
   checkReadiness?: (signal: AbortSignal) => Promise<void>;
+  draining?: AbortSignal;
   modelGatewayTransport?: ModelGatewayTransportConfig;
   modelRoutes?: ModelRoutes;
   slackAccounts?: DurableMap<SlackAccountLink>;
@@ -96,7 +100,14 @@ export interface ServerDeps {
   capabilitySecret?: string;
   capabilityTokenCompression?: boolean;
   portalIdentitySecret?: string;
+  openaiApiKey?: string;
+  portalSession?: {
+    secret: string;
+    maxAgeSeconds: number;
+    apiOrigins?: ReadonlySet<string>;
+  };
   requireSignedPortalIdentity?: boolean;
+  web?: { events: WebEvents; me: WebMeConfig; shell: WebShell };
   control: ControlService;
   replayDedupe?: ReplayDedupe;
   deploymentLiveSmoke?: { deploymentId: string; superseded(): boolean; run(): Promise<void> };

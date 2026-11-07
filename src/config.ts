@@ -51,7 +51,7 @@ import {
 import { resolveSwarmSettings, type SwarmSettings } from "./swarms/swarm-settings.ts";
 
 export interface Config extends SandboxSettings, DeploySettings {
-  productAnalytics?: { apiKey: string; host?: string };
+  productAnalytics?: { url: string; token?: string };
   suggestedActivitiesEnabled?: boolean;
   suggestedActivitiesContext?: string;
   swarmsEnabled?: boolean;
@@ -357,6 +357,18 @@ function modelProviderEnvStrict(env: NodeJS.ProcessEnv): ModelProvider | undefin
   return declared;
 }
 
+function analyticsEventsUrl(raw: string): string {
+  let url: URL;
+  try {
+    url = new URL(raw.trim());
+  } catch {
+    url = new URL("invalid:");
+  }
+  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.hash)
+    throw new Error("ANALYTICS_EVENTS_URL must be an HTTP or HTTPS URL without credentials or a fragment");
+  return url.href;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const s3Endpoint = env.AWS_ENDPOINT_URL_S3?.trim();
   if (s3Endpoint) {
@@ -503,8 +515,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...optNum(env, "PUBLIC_PORT", "publicPort"),
     dataDir,
     orgId: env.ORG_ID ?? DEFAULT_ORG_ID,
-    ...(env.POSTHOG_API_KEY?.trim()
-      ? { productAnalytics: { apiKey: env.POSTHOG_API_KEY.trim(), host: env.POSTHOG_HOST?.trim() } }
+    ...(env.ANALYTICS_EVENTS_URL?.trim()
+      ? {
+          productAnalytics: {
+            url: analyticsEventsUrl(env.ANALYTICS_EVENTS_URL),
+            ...(env.ANALYTICS_EVENTS_TOKEN?.trim() ? { token: env.ANALYTICS_EVENTS_TOKEN.trim() } : {}),
+          },
+        }
       : {}),
     ...(env.DATABASE_URL ? { databaseUrl: env.DATABASE_URL } : {}),
     ...(env.DATABASE_POOL_URL ? { databasePoolUrl: env.DATABASE_POOL_URL } : {}),

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { tmpdir } from "node:os";
@@ -11,6 +12,7 @@ import { createResolutionService } from "../src/resolution/resolution-service.ts
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import type { Agent, AgentTurnInput } from "../src/agent/agent.ts";
 import { resumeInterruptedToolCall, type BridgedTool } from "../src/agent/turn-support.ts";
+import { toolCallApprovalKey } from "../src/core/approval-id.ts";
 import { createAgentTools, type ToolContextRef } from "../src/agent/agent-tools.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
@@ -216,6 +218,8 @@ function buildScenario() {
     input: string;
     continueTurn?: boolean;
     resumeToolCall?: ResumableToolCall;
+    approvedToolCalls?: AgentTurnInput["approvedToolCalls"];
+    toolApprovalGate?: AgentTurnInput["toolApprovalGate"];
     historyKinds: string[];
   }> = [];
   const agent: Agent = {
@@ -224,6 +228,8 @@ function buildScenario() {
         input: turn.input,
         ...(turn.continueTurn ? { continueTurn: true } : {}),
         ...(turn.resumeToolCall ? { resumeToolCall: turn.resumeToolCall } : {}),
+        ...(turn.approvedToolCalls ? { approvedToolCalls: turn.approvedToolCalls } : {}),
+        ...(turn.toolApprovalGate ? { toolApprovalGate: turn.toolApprovalGate } : {}),
         historyKinds: turn.history.map((e) => e.kind),
       });
       if (turn.resumeToolCall) {
@@ -411,3 +417,38 @@ for (const [label, resultTurn] of [
     );
   });
 }
+
+test("a retried turn runs an approved call its first attempt recorded but never started, through the gate, once", async () => {
+  const { orchestrator, sessions, runs, received, input } = buildScenario();
+  const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
+  const session = await sessions.getOrCreateByThread(conversation.threadRef, "dm", personal);
+  const writer = { sessionId: session.id, turnId: run.id };
+  const call = { callId: "approved_req7_aa11", requestId: "req7", tool: "history", input: { query: "budget" } };
+  const approvalKey = toolCallApprovalKey(call.tool, call.input);
+  await sessions.append(writer, { kind: "UserMessage", text: ASK });
+  await sessions.append(writer, {
+    kind: "ElicitationResponse",
+    elicitId: "req7",
+    approved: true,
+    author: "U1",
+    body: { command: "history", scope: "once", call, approvalKey },
+  });
+
+  await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 2 }));
+  const turn = received.at(-1)!;
+  assert.deepEqual(turn.approvedToolCalls, [call], "the stored call is run on the retry");
+  assert.equal(turn.toolApprovalGate?.(call.tool, approvalKey), true, "the retry carries the once-use approval");
+  assert.equal(turn.toolApprovalGate?.(call.tool, approvalKey), false, "and only once");
+
+  await sessions.append(
+    { sessionId: session.id, turnId: randomUUID() },
+    {
+      kind: "ToolCall",
+      tool: call.tool,
+      callId: call.callId,
+      body: { approvedRequestId: "req7" },
+    },
+  );
+  await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 3 }));
+  assert.equal(received.at(-1)!.approvedToolCalls, undefined, "a call that started in any run is never run again");
+});

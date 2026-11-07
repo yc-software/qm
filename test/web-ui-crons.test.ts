@@ -1,4 +1,3 @@
-import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../plugins/chassis/src/portal-identity.ts";
 import "./support/auto-fake-sprites.ts";
 
 import { test, after } from "node:test";
@@ -6,35 +5,27 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createServer as createHttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 
 const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "webui-cron-")) }));
 const core = createServer(built.app, {
+  ...browserSessionDeps,
   replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
   signingSecret: SECRET,
   scheduler: built.scheduler,
 });
 core.listen(0);
-const corePort = (core.address() as AddressInfo).port;
-
-process.env.CORE_API_URL = `http://localhost:${corePort}`;
-process.env.CORE_SIGNING_SECRET = SECRET;
-process.env.WEB_UI_PRINCIPALS = "";
-const { handler } = await import("../plugins/web-ui/server/index.ts");
-const web = createHttpServer(handler);
-web.listen(0);
-const webBase = `http://localhost:${(web.address() as AddressInfo).port}`;
+const coreBase = `http://localhost:${(core.address() as AddressInfo).port}`;
 
 after(async () => {
-  await new Promise<void>((r) => web.close(() => r()));
   await new Promise<void>((r) => core.close(() => r()));
 });
 
@@ -43,8 +34,8 @@ function asUser(user: string, init: RequestInit = {}): RequestInit {
     ...init,
     headers: {
       "content-type": "application/json",
-      cookie: `webuiuser=${encodeURIComponent(user)}`,
-      [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: user, exp: Date.now() + 60_000 }, SECRET),
+      cookie: browserSessionCookie(user),
+      origin: browserSessionDeps.portalUrl,
       ...init.headers,
     },
   };
@@ -65,76 +56,76 @@ test("list, rename, archive, disable, enable, run, delete are owner-gated", asyn
   });
   const id = created.id;
 
-  const aliceList = (await (await fetch(`${webBase}/api/crons`, asUser("alice"))).json()) as {
+  const aliceList = (await (await fetch(`${coreBase}/api/crons`, asUser("alice"))).json()) as {
     crons: Array<{ id: string }>;
   };
   assert.equal(aliceList.crons.length, 1);
   assert.equal(aliceList.crons[0]?.id, id);
 
-  const bobList = (await (await fetch(`${webBase}/api/crons`, asUser("bob"))).json()) as { crons: unknown[] };
+  const bobList = (await (await fetch(`${coreBase}/api/crons`, asUser("bob"))).json()) as { crons: unknown[] };
   assert.equal(bobList.crons.length, 0);
   for (const attempt of [
-    fetch(`${webBase}/api/crons/${id}/disable`, asUser("bob", { method: "POST" })),
-    fetch(`${webBase}/api/crons/${id}/enable`, asUser("bob", { method: "POST" })),
-    fetch(`${webBase}/api/crons/${id}/run`, asUser("bob", { method: "POST" })),
+    fetch(`${coreBase}/api/crons/${id}/disable`, asUser("bob", { method: "POST" })),
+    fetch(`${coreBase}/api/crons/${id}/enable`, asUser("bob", { method: "POST" })),
+    fetch(`${coreBase}/api/crons/${id}/run`, asUser("bob", { method: "POST" })),
     fetch(
-      `${webBase}/api/crons/${id}`,
+      `${coreBase}/api/crons/${id}`,
       asUser("bob", { method: "PATCH", body: JSON.stringify({ title: "Bob edit" }) }),
     ),
-    fetch(`${webBase}/api/crons/${id}`, asUser("bob", { method: "DELETE" })),
+    fetch(`${coreBase}/api/crons/${id}`, asUser("bob", { method: "DELETE" })),
   ]) {
     assert.equal((await attempt).status, 404);
   }
 
   const aliceRename = await fetch(
-    `${webBase}/api/crons/${id}`,
+    `${coreBase}/api/crons/${id}`,
     asUser("alice", { method: "PATCH", body: JSON.stringify({ title: "Inbox digest" }) }),
   );
   assert.equal(aliceRename.status, 200);
   assert.equal(((await aliceRename.json()) as CronBody).cron.title, "Inbox digest");
 
-  const aliceDisable = await fetch(`${webBase}/api/crons/${id}/disable`, asUser("alice", { method: "POST" }));
+  const aliceDisable = await fetch(`${coreBase}/api/crons/${id}/disable`, asUser("alice", { method: "POST" }));
   assert.equal(aliceDisable.status, 200);
-  let list = (await (await fetch(`${webBase}/api/crons`, asUser("alice"))).json()) as {
+  let list = (await (await fetch(`${coreBase}/api/crons`, asUser("alice"))).json()) as {
     crons: Array<{ enabled: boolean; archived?: boolean; title?: string }>;
   };
   assert.equal(list.crons[0]?.enabled, false);
   assert.equal(list.crons[0]?.title, "Inbox digest");
 
-  const aliceEnable = await fetch(`${webBase}/api/crons/${id}/enable`, asUser("alice", { method: "POST" }));
+  const aliceEnable = await fetch(`${coreBase}/api/crons/${id}/enable`, asUser("alice", { method: "POST" }));
   assert.equal(aliceEnable.status, 200);
-  list = (await (await fetch(`${webBase}/api/crons`, asUser("alice"))).json()) as {
+  list = (await (await fetch(`${coreBase}/api/crons`, asUser("alice"))).json()) as {
     crons: Array<{ enabled: boolean; archived?: boolean; title?: string }>;
   };
   assert.equal(list.crons[0]?.enabled, true);
 
-  const aliceRun = await fetch(`${webBase}/api/crons/${id}/run`, asUser("alice", { method: "POST" }));
+  const aliceRun = await fetch(`${coreBase}/api/crons/${id}/run`, asUser("alice", { method: "POST" }));
   assert.equal(aliceRun.status, 200);
 
   const aliceArchive = await fetch(
-    `${webBase}/api/crons/${id}`,
+    `${coreBase}/api/crons/${id}`,
     asUser("alice", { method: "PATCH", body: JSON.stringify({ archived: true }) }),
   );
   assert.equal(aliceArchive.status, 200);
   const archived = (await aliceArchive.json()) as CronBody;
   assert.equal(archived.cron.archived, true);
   assert.equal(archived.cron.enabled, false);
-  list = (await (await fetch(`${webBase}/api/crons`, asUser("alice"))).json()) as {
+  list = (await (await fetch(`${coreBase}/api/crons`, asUser("alice"))).json()) as {
     crons: Array<{ enabled: boolean; archived?: boolean; title?: string }>;
   };
   assert.equal(list.crons[0]?.archived, true);
   assert.equal(list.crons[0]?.enabled, false);
 
-  const aliceDelete = await fetch(`${webBase}/api/crons/${id}`, asUser("alice", { method: "DELETE" }));
+  const aliceDelete = await fetch(`${coreBase}/api/crons/${id}`, asUser("alice", { method: "DELETE" }));
   assert.equal(aliceDelete.status, 200);
-  list = (await (await fetch(`${webBase}/api/crons`, asUser("alice"))).json()) as {
+  list = (await (await fetch(`${coreBase}/api/crons`, asUser("alice"))).json()) as {
     crons: Array<{ enabled: boolean; archived?: boolean; title?: string }>;
   };
   assert.equal(list.crons.length, 0);
 });
 
 test("cron routes require a signed-in principal (401 without a cookie)", async () => {
-  assert.equal((await fetch(`${webBase}/api/crons`)).status, 401);
+  assert.equal((await fetch(`${coreBase}/api/crons`)).status, 401);
 });
 
 test("retained cron runs are private to people who can manage the cron", async () => {
@@ -146,19 +137,24 @@ test("retained cron runs are private to people who can manage the cron", async (
     createdBy: "run-owner",
     ownerScopeId: "personal:run-owner",
   });
-  await built.crons.recordFire(cron.id, {
-    fireKey: "private-fire",
-    threadRef: "cron:private-fire",
-    firedAt: Date.now(),
-    status: "ok",
-    reply: "private result",
-    sessionId: "private-session",
-  });
+  const firedAt = Date.now();
+  for (let i = 0; i < 21; i++)
+    await built.crons.recordFire(cron.id, {
+      fireKey: `private-fire-${i}`,
+      threadRef: `cron:private-fire-${i}`,
+      firedAt: firedAt + i,
+      status: "ok",
+      reply: `private result ${i}`,
+      sessionId: "private-session",
+    });
 
-  const owner = await fetch(`${webBase}/api/crons/${cron.id}/runs`, asUser("run-owner"));
-  assert.equal(owner.status, 200);
-  assert.equal(((await owner.json()) as { runs: Array<{ reply?: string }> }).runs[0]?.reply, "private result");
-  assert.equal((await fetch(`${webBase}/api/crons/${cron.id}/runs`, asUser("other-user"))).status, 404);
+  const page = await fetch(`${coreBase}/api/crons/${cron.id}/runs?limit=20`, asUser("run-owner"));
+  assert.equal(page.status, 200);
+  const { runs, total } = (await page.json()) as { runs: Array<{ reply?: string }>; total: number };
+  assert.deepEqual([runs.length, total, runs.at(-1)?.reply], [20, 21, "private result 20"]);
+  const huge = await fetch(`${coreBase}/api/crons/${cron.id}/runs?limit=99999999999999999999`, asUser("run-owner"));
+  assert.equal(huge.status, 400);
+  assert.equal((await fetch(`${coreBase}/api/crons/${cron.id}/runs`, asUser("other-user"))).status, 404);
 
   await built.app.deleteCron(cron.id);
 });
@@ -190,7 +186,7 @@ test("list splits owned crons from ones visible through shared scopes, and visib
   const dmCron = await mk({ destination: { type: "principal", target: "alice", audienceScopeId: "personal:alice" } });
   const personalCron = await mk({});
 
-  const aliceList = (await (await fetch(`${webBase}/api/crons`, asUser("alice"))).json()) as {
+  const aliceList = (await (await fetch(`${coreBase}/api/crons`, asUser("alice"))).json()) as {
     crons: Array<{ id: string; permission?: string }>;
     visible: Array<{ id: string; owner: string; scopeName?: string; permission?: string }>;
   };
@@ -203,7 +199,7 @@ test("list splits owned crons from ones visible through shared scopes, and visib
   assert.equal(aliceList.visible.find((c) => c.id === publicCron.id)?.scopeName, "general");
   assert.equal(aliceList.visible.find((c) => c.id === publicCron.id)?.permission, "read");
 
-  const bobList = (await (await fetch(`${webBase}/api/crons`, asUser("bob"))).json()) as {
+  const bobList = (await (await fetch(`${coreBase}/api/crons`, asUser("bob"))).json()) as {
     crons: Array<{ id: string }>;
     visible: unknown[];
   };
@@ -212,13 +208,13 @@ test("list splits owned crons from ones visible through shared scopes, and visib
   assert.equal(bobList.visible.length, 0);
 
   for (const attempt of [
-    fetch(`${webBase}/api/crons/${publicCron.id}/disable`, asUser("alice", { method: "POST" })),
-    fetch(`${webBase}/api/crons/${publicCron.id}/run`, asUser("alice", { method: "POST" })),
+    fetch(`${coreBase}/api/crons/${publicCron.id}/disable`, asUser("alice", { method: "POST" })),
+    fetch(`${coreBase}/api/crons/${publicCron.id}/run`, asUser("alice", { method: "POST" })),
     fetch(
-      `${webBase}/api/crons/${publicCron.id}`,
+      `${coreBase}/api/crons/${publicCron.id}`,
       asUser("alice", { method: "PATCH", body: JSON.stringify({ archived: true }) }),
     ),
-    fetch(`${webBase}/api/crons/${publicCron.id}`, asUser("alice", { method: "DELETE" })),
+    fetch(`${coreBase}/api/crons/${publicCron.id}`, asUser("alice", { method: "DELETE" })),
   ]) {
     assert.equal((await attempt).status, 404);
   }
@@ -247,15 +243,15 @@ test("a channel member sees a teammate's cron read-only via the web until the ow
   } as never);
   const aliceView = async () =>
     (
-      (await (await fetch(`${webBase}/api/crons`, asUser("alice"))).json()) as {
+      (await (await fetch(`${coreBase}/api/crons`, asUser("alice"))).json()) as {
         visible: Array<{ id: string; permission?: string }>;
       }
     ).visible.find((candidate) => candidate.id === privCron.id)?.permission;
 
   assert.equal(await aliceView(), "read");
-  const denied = await fetch(`${webBase}/api/crons/${privCron.id}/disable`, asUser("alice", { method: "POST" }));
+  const denied = await fetch(`${coreBase}/api/crons/${privCron.id}/disable`, asUser("alice", { method: "POST" }));
   assert.equal(denied.status, 404, "a member can't change someone else's cron");
-  const carolPriv = await fetch(`${webBase}/api/crons/${privCron.id}`, asUser("carol", { method: "DELETE" }));
+  const carolPriv = await fetch(`${coreBase}/api/crons/${privCron.id}`, asUser("carol", { method: "DELETE" }));
   assert.equal(carolPriv.status, 404, "a non-member is denied");
 
   await built.app.grant({
@@ -266,7 +262,7 @@ test("a channel member sees a teammate's cron read-only via the web until the ow
     grantedBy: "bob",
   });
   assert.equal(await aliceView(), "manage");
-  const aliceDisable = await fetch(`${webBase}/api/crons/${privCron.id}/disable`, asUser("alice", { method: "POST" }));
+  const aliceDisable = await fetch(`${coreBase}/api/crons/${privCron.id}/disable`, asUser("alice", { method: "POST" }));
   assert.equal(aliceDisable.status, 200, "a write grantee manages it");
   assert.equal((await built.app.getCron(privCron.id))!.owner, "bob");
 
@@ -285,7 +281,7 @@ test("cron runtime patches pass through the web API, validate, and clear", async
   const runtime = { modelId: "claude-sonnet-5" };
   const patch = (value: unknown) =>
     fetch(
-      `${webBase}/api/crons/${cron.id}`,
+      `${coreBase}/api/crons/${cron.id}`,
       asUser("alice", { method: "PATCH", body: JSON.stringify({ runtime: value }) }),
     );
   const selected = await patch(runtime);
@@ -295,4 +291,52 @@ test("cron runtime patches pass through the web API, validate, and clear", async
   assert.equal((await patch({ ...runtime, modelId: "does-not-exist" })).status, 400);
   assert.equal((await patch(null)).status, 200);
   assert.equal((await built.app.getCron(cron.id))?.runtime, null);
+});
+
+test("a browser cron edit accepts only the fields the web app edits", async () => {
+  const cron = await built.app.createCron({
+    title: "fields",
+    action: "check",
+    schedule: { everyMs: 60_000 },
+    owner: "alice",
+    createdBy: "alice",
+    ownerScopeId: "personal:alice",
+    destination: { type: "principal", target: "alice", audienceScopeId: "personal:alice" },
+  } as never);
+  const patch = (body: unknown) =>
+    fetch(`${coreBase}/api/crons/${cron.id}`, asUser("alice", { method: "PATCH", body: JSON.stringify(body) }));
+  for (const body of [
+    { unfurlLinks: false },
+    { unattendedGrants: ["admin.spend.read"] },
+    { session: false },
+    { action: "renamed task" },
+    { title: "ok", note: "extra" },
+    { task: "   " },
+    {},
+  ]) {
+    const refused = await patch(body);
+    assert.equal(refused.status, 400, JSON.stringify(body));
+    assert.match(((await refused.json()) as { message: string }).message, /^expected a cron patch: title/);
+  }
+  const after = (await built.app.getCron(cron.id))!;
+  assert.deepEqual(
+    [after.action, after.destination?.unfurlLinks, after.unattendedGrants],
+    ["check", undefined, undefined],
+  );
+  const edited = await patch({ title: "renamed", task: "check twice", enabled: false });
+  assert.equal(edited.status, 200);
+  assert.deepEqual(((await edited.json()) as CronBody).cron.enabled, false);
+  const privileged = await built.app.createCron({
+    title: "privileged",
+    action: "report spend",
+    schedule: { everyMs: 60_000 },
+    owner: "alice",
+    createdBy: "alice",
+    ownerScopeId: "personal:alice",
+  });
+  await built.app.updateCron(privileged.id, { enabled: false, unattendedGrants: ["admin.spend.read"] });
+  const enable = await fetch(`${coreBase}/api/crons/${privileged.id}/enable`, asUser("alice", { method: "POST" }));
+  assert.equal(enable.status, 403);
+  assert.equal((await built.app.getCron(privileged.id))!.enabled, false);
+  for (const id of [cron.id, privileged.id]) await built.app.deleteCron(id);
 });

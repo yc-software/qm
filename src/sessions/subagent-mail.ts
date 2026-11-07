@@ -230,6 +230,7 @@ async function parentTurn(
     "conversationHeader",
     "cronScript",
     "infrequentCron",
+    "personaId",
   ] as const)
     delete request[key];
   if (!originalParent) request.addressed = false;
