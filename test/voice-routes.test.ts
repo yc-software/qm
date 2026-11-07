@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { App } from "../src/api/app-types.ts";
 import type { ServerDeps } from "../src/api/deps.ts";
+import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
 import { browserImpersonationCookie, browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
 
 const testTmp = await mkdtemp(join(tmpdir(), "dictation-route-test-"));
@@ -396,4 +397,13 @@ test("voice relays only a sanitized SDP result and never a provider key", async 
     session: { id: "live_route" },
     transport: { type: "webrtc", sdp: "v=0\r\no=answer" },
   });
+});
+
+test("a signed caller's voice body is buffered and covered by its signature", async () => {
+  const path = "/v1/web/voice/sessions";
+  const signed = (body: string) => signedHeaders("voice-route-signing-secret-0123456789", "POST", path, body);
+  const forged = await fetch(`${base}${path}`, { method: "POST", headers: signed("{}"), body: offer });
+  assert.equal(forged.status, 401);
+  const matching = await fetch(`${base}${path}`, { method: "POST", headers: signed(offer), body: offer });
+  assert.deepEqual([matching.status, await matching.json()], [400, { error: "invalid_offer" }]);
 });
