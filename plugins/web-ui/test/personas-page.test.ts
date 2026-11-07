@@ -658,7 +658,8 @@ test("people and groups the Personas flag doesn't reach are marked with where an
   const channels = [...main.querySelectorAll(".persona-section")].find(
     (section) => section.querySelector("h3")?.textContent?.trim() === "Slack channels",
   )!;
-  assert.equal(channels.querySelector(".persona-item .hint")?.textContent?.trim(), orgNote);
+  assert.equal(channels.querySelector(".persona-item .hint"), null);
+  assert.equal(channels.querySelector(".permission-note")?.textContent?.trim(), orgNote);
 });
 
 test("Share on a list row and on the page open the same search on the page, with no dialog", async () => {

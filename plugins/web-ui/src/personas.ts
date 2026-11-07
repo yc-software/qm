@@ -399,8 +399,12 @@ function accessRowTpl(persona: PersonaDetail, grant: PersonaGrant, lastOwner: bo
   const label = grantLabel(grant);
   const manage = canSharePersona(persona.role);
   const blocked = manage && lastOwner ? { disabledHint: LAST_OWNER } : {};
-  return html`<div class="permission-row" data-scope=${grant.scopeId}>
-    ${avatarTpl({ key: grant.scopeId, name: label })}
+  return html`<div class="permission-row project-member-row" data-scope=${grant.scopeId}>
+    ${
+      grant.scopeId.startsWith("org:")
+        ? html`<span class="project-member-avatar" aria-hidden="true">${icon(Building2, 16)}</span>`
+        : avatarTpl({ key: grant.scopeId, name: label })
+    }
     <span class="permission-person-label" dir="auto"
       >${label}${manage && lastOwner ? html`<small>${LAST_OWNER}</small>` : nothing}${
         grant.personasEnabled ? nothing : html`<small>${flagOffNote(grant)}</small>`
@@ -542,13 +546,15 @@ function credentialsSection(persona: PersonaDetail, reload: (flash: string) => v
 function channelsSection(persona: PersonaDetail): TemplateResult {
   const owner = canSharePersona(persona.role);
   const channels = persona.access.filter((grant) => grant.scopeId.startsWith("channel:"));
+  const flagNotes = new Set(channels.filter((grant) => !grant.personasEnabled).map(flagOffNote));
+  const flagNote = [...flagNotes].map((note) => html`<p class="permission-note">${note}</p>`);
   const list = channels.length
     ? html`<div class="persona-skill-list">
         ${channels.map((grant) =>
           removableRow(
             html`<span class="persona-channel-glyph">${icon(Hash, 14)}</span>`,
             grantLabel(grant),
-            grant.personasEnabled ? "" : flagOffNote(grant),
+            "",
             owner ? `Remove ${grantLabel(grant)}` : null,
             () => void removeGrantee(persona, grant),
           ),
@@ -558,7 +564,7 @@ function channelsSection(persona: PersonaDetail): TemplateResult {
   return sectionTpl(
     "Slack channels",
     owner ? rowAction("Add channel", Plus, () => void openGranteePicker(persona.id, "channels")) : nothing,
-    html`${list}${granteePickerTpl(persona, "channels")}`,
+    html`${list}${flagNote}${granteePickerTpl(persona, "channels")}`,
     `People in these channels can ask QM to use ${persona.name} in a thread there. QM stays the default; they can't edit ${persona.name}.`,
   );
 }
