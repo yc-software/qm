@@ -172,6 +172,10 @@ export const API_ALIASES: ReadonlyMap<string, string> = new Map([
   ["GET /api/loops/:id/items/:itemId/image", "/v1/loops/:id/items/:itemId/image"],
   ["POST /api/loops/:id/items/:itemId/action", "/v1/loops/:id/items/:itemId/action"],
   ["POST /api/loops/:id/items/:itemId/followup", "/v1/loops/:id/items/:itemId/followup"],
+  ["GET /share/internal/:token", "/v1/web/shares/internal/:token"],
+  ["GET /share/external/:token", "/v1/web/shares/external/:token"],
+  ["GET /share/internal/:token/files/:fileId", "/v1/shared-sessions/:token/files/:fileId"],
+  ["GET /share/external/:token/files/:fileId", "/v1/public-shares/:token/files/:fileId"],
   ...apiRoutes.flatMap((route): Array<[string, string]> =>
     "path" in route && route.browser && route.path.startsWith("/v1/admin/")
       ? [[`${route.method} /api/admin/${route.path.slice("/v1/admin/".length)}`, route.path]]
@@ -191,7 +195,8 @@ export function apiAlias(method: string, pathname: string): string | null {
     const target = alias.target
       .map((seg) => (seg.startsWith(":") ? encodeURIComponent(params[seg.slice(1)]!) : seg))
       .join("/");
-    return findRoute(apiRoutes, method, target)?.route.browser ? target : null;
+    const route = findRoute(apiRoutes, method, target)?.route;
+    return route?.browser || route?.auth === "public" ? target : null;
   }
   return null;
 }

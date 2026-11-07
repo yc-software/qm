@@ -2,13 +2,13 @@
 
 The portal is the public front door of a QM deployment. Core runs it in-process on its public port
 (`PUBLIC_PORT`, see `src/web/front-door.ts`); it does provider-neutral **OIDC** sign-in (Google
-Workspace is the email-first deployment default) and reverse-proxies signed-in requests to the web UI
-server, which core runs on a loopback port:
+Workspace is the email-first deployment default) and hands signed-in requests to core in-process:
 
-| Path        | → upstream    | Notes                                                                         |
-| ----------- | ------------- | ----------------------------------------------------------------------------- |
-| `/*` (root) | web UI server | Pi web UI SPA, root-mounted (`/web-ui/*` 308-redirects to root for old links) |
-| `/settings` | web UI server | Administrator settings; core checks admin                                     |
+| Path        | → handled by       | Notes                                                                           |
+| ----------- | ------------------ | ------------------------------------------------------------------------------- |
+| `/api/*`    | core's cookie lane | `/api` aliases of browser-enabled `/v1` routes; core binds the signed-in person |
+| `/*` (root) | core's web shell   | Web UI release, root-mounted (`/web-ui/*` 308-redirects to root for old links)  |
+| `/settings` | core's web shell   | Administrator settings; core checks admin                                       |
 
 User deployments are never served on this authenticated origin; they use the dedicated apps domain.
 
@@ -37,11 +37,10 @@ surfaces. Core imports it; it does **not** import the core and talks to core onl
    the subject from userinfo. The verified `sub` **is** the core principal id. It mints a
    signed `portal_session` cookie (`{sub, org, auth, exp}`, HMAC, 7-day sliding lifetime with a
    30-day absolute maximum by default).
-3. **Proxy** — every other path requires a valid session. The portal picks the upstream by the
-   **exact first path segment**, strips the prefix, and proxies to the private upstream,
-   synthesizing the surface cookie for compatibility and attaching a short-lived signed portal
-   identity. Surfaces pass that identity to core, which verifies it before any user-scoped action.
-   Before proxying, the portal asks core for the session subject's canonical principal
+3. **Hand-off** — every other path requires a valid session. Aliased `/api` paths go to core's
+   request handler, which reads the `portal_session` cookie itself and binds the signed-in (or
+   admin-impersonated) person; everything else goes to core's web shell (`src/web/shell.ts`), which
+   serves the live web UI release. Before handing off, the portal asks core for the session subject's canonical principal
    (`GET /v1/principals/:id/canonical`, cached for a minute). A sign-in that an org admin has
    linked to another identity therefore acts as that person's canonical principal; see
    [`docs/principal-links.md`](../../docs/principal-links.md).
@@ -117,16 +116,12 @@ disposable test deployment: the test redeems real links for its configured admin
 
 ## Security model (the parts that must be right)
 
-- **Identity comes from verified OIDC or an operator-issued admin link.** The browser cannot assert an unsigned identity. The
-  upstream request is built **from scratch** — an _allowlist_ of safe headers
-  (`content-type`/`accept`/`user-agent`/…) plus the one synthesized cookie. The client's
-  headers and cookies are **never** forwarded, so a browser can't smuggle a forged
-  `webuiuser=`/`x-as-principal` into a 6PN-trusting upstream. Body framing is the one exception: the
-  relay copies the client's `content-length` (or sends chunked encoding), which Node's parser has already
-  validated, so the upstream framing matches the bytes piped and there's no CL/TE desync surface.
+- **Identity comes from verified OIDC or an operator-issued admin link.** The browser cannot assert an unsigned identity:
+  core derives the person from the sealed `portal_session` cookie and strips client-sent identity headers
+  (`x-admin-actor`, `x-as-principal`, …) before any handler runs.
 - **Routing decides once.** The router rejects pathologically-encoded targets (`%2f`, `%5c`,
   `%2e%2e`, `\`, `//`, NUL → 400) and selects the upstream by exact segment. Every path that is
-  not a deployment, auth or core passthrough goes to web-ui as the signed-in user, so no path
+  not a deployment, auth or core passthrough goes to core as the signed-in user, so no path
   spelling reaches a more privileged upstream.
 - **Admin is derived from ONE source — the core's `admin_grants`.** Settings pages live in web-ui
   under `/settings`, and every admin action is checked **per action** at the core — the live

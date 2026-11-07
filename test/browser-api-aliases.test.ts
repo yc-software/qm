@@ -42,7 +42,8 @@ const aliases = [...API_ALIASES]
     const [method, path] = key.split(" ", 2) as [string, string];
     return { method, path, target };
   })
-  .filter(({ path }) => !path.startsWith("/api/admin/"));
+  .filter(({ path }) => !path.startsWith("/api/admin/"))
+  .filter(({ method, target }) => findRoute(apiRoutes, method, concrete(target))?.route.auth !== "public");
 
 async function freePort(): Promise<number> {
   const probe = createNetServer().listen(0, "127.0.0.1");
@@ -213,7 +214,7 @@ test("browser writes act as the signed-in person or playground visitor under the
   assert.equal(forked.status, 200);
 });
 
-test("a web release still calling /api reaches core for migrated reads and the web server for the rest", async (t) => {
+test("the public front door hands every browser request to core in-process", async (t) => {
   const [port, publicPort] = await Promise.all([freePort(), freePort()]);
   const publicWebUrl = `http://127.0.0.1:${publicPort}`;
   Object.assign(process.env, {
@@ -232,9 +233,17 @@ test("a web release still calling /api reaches core for migrated reads and the w
   const migrated = await read(`${publicWebUrl}/api/sessions`);
   assert.equal(migrated.status, 200);
   assert.ok(Array.isArray(((await migrated.json()) as { sessions?: unknown }).sessions));
-  const relayed = await read(`${publicWebUrl}/api/crons`);
-  assert.equal(relayed.status, 200);
-  assert.deepEqual(Object.keys((await relayed.json()) as object).sort(), ["crons", "visible"]);
+  const crons = await read(`${publicWebUrl}/api/crons`);
+  assert.equal(crons.status, 200);
+  assert.deepEqual(Object.keys((await crons.json()) as object).sort(), ["crons", "visible"]);
+  const unknown = await read(`${publicWebUrl}/api/not-a-route`);
+  assert.deepEqual([unknown.status, await unknown.json()], [404, { error: "not found" }]);
+  const share = await fetch(`${publicWebUrl}/share/external/33333333-3333-4333-8333-333333333333`);
+  assert.deepEqual([share.status, ((await share.json()) as { error: string }).error], [503, "web_ui_unavailable"]);
+  const asset = await fetch(`${publicWebUrl}/assets/app.js`);
+  assert.deepEqual([asset.status, ((await asset.json()) as { error: string }).error], [404, "not_found"]);
+  const internalShare = await fetch(`${publicWebUrl}/share/internal/33333333-3333-4333-8333-333333333333`);
+  assert.equal(internalShare.status, 401);
   assert.equal((await read(`${publicWebUrl}/v1/sessions`)).status, 404);
   const stream = await read(`${publicWebUrl}/api/runs/missing/events`);
   assert.deepEqual([stream.status, await stream.json()], [404, { error: "not_found" }]);
@@ -247,7 +256,7 @@ test("a web release still calling /api reaches core for migrated reads and the w
   const migratedWrite = await write("POST", "/api/projects");
   assert.equal(migratedWrite.status, 400);
   assert.equal(((await migratedWrite.json()) as { message?: string }).message, "principalId and name required");
-  const relayedWrite = await write("POST", "/api/webhooks", '{"verification":{}}');
-  assert.equal(((await relayedWrite.json()) as { message?: string }).message, "verification requires a scheme");
+  const webhook = await write("POST", "/api/webhooks", '{"verification":{}}');
+  assert.equal(((await webhook.json()) as { message?: string }).message, "verification requires a scheme");
   assert.equal((await read(`http://127.0.0.1:${port}/api/sessions`)).status, 200);
 });

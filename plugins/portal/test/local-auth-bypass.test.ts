@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
+import { startWithFakeCore, type CoreHit } from "./fake-core.ts";
 
 const upstream = createServer((req: IncomingMessage, res) => {
   res.writeHead(200, { "content-type": "application/json" });
@@ -13,17 +14,15 @@ const upstreamUrl = `http://localhost:${(upstream.address() as AddressInfo).port
 process.env.PUBLIC_WEB_URL = "http://localhost:18197";
 process.env.PORTAL_SESSION_SECRET = "local-auth-test-portal-secret";
 process.env.CORE_SIGNING_SECRET = "local-auth-test-core-secret";
-process.env.WEB_UI_UPSTREAM = upstreamUrl;
 process.env.CORE_API_URL = upstreamUrl;
 process.env.PORTAL_LOCAL_AUTH_BYPASS = "1";
 process.env.PORTAL_DEV_PRINCIPAL = "local-admin";
 
-const { isLoopbackAddress, server } = await import("../src/index.ts");
-await new Promise<void>((r) => server.listen(0, r));
-const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+const { isLoopbackAddress } = await import("../src/index.ts");
+const { base, hits, close } = await startWithFakeCore();
 
 test.after(() => {
-  server.close();
+  close();
   upstream.close();
 });
 
@@ -42,9 +41,9 @@ test("local auth bypass signs in loopback portal requests without OIDC", async (
   const settings = await fetch(`${base}/settings/users`);
   assert.equal(settings.status, 200);
   assert.match(settings.headers.get("set-cookie") ?? "", /portal_session=[^;]+;/);
-  const body = (await settings.json()) as { url: string; cookie: string };
-  assert.equal(body.url, "/settings/users");
-  assert.equal(body.cookie, "webuiuser=local-admin");
+  const hit = (await settings.json()) as CoreHit;
+  assert.equal(hit.lane, "shell");
+  assert.equal(hit.url, "/settings/users");
 });
 
 test("local auth bypass only treats loopback client addresses as local", () => {
@@ -74,11 +73,13 @@ test("local auth bypass respects logout until explicit login", async () => {
   assert.equal(landing.status, 200);
   assert.match(await landing.text(), /You have signed out of this portal/);
 
+  const before = hits.length;
   const loggedOut = await fetch(`${base}/settings/users`, {
     headers: { cookie: "portal_local_logout=1" },
     redirect: "manual",
   });
   assert.equal(loggedOut.status, 401);
+  assert.equal(hits.length, before);
 
   const login = await fetch(`${base}/auth/login?returnTo=/settings/`, {
     headers: { cookie: "portal_local_logout=1" },

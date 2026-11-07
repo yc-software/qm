@@ -44,7 +44,6 @@ COPY plugins/onboarding ./plugins/onboarding
 COPY plugins/chassis ./plugins/chassis
 COPY plugins/auth/src ./plugins/auth/src
 COPY plugins/portal/src ./plugins/portal/src
-COPY plugins/web-ui/server ./plugins/web-ui/server
 COPY --from=web-ui-build /app/plugins/web-ui/dist-web ./plugins/web-ui/dist-web
 COPY tsconfig.json ./
 

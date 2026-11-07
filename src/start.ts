@@ -17,6 +17,9 @@ import { sweepDictationSpool } from "./api/routes/voice.ts";
 import { parseAllowedOrigins } from "../plugins/portal/src/cors.ts";
 import { createWebEvents } from "./api/routes/web-events.ts";
 import { webMeConfig } from "./api/routes/web-me.ts";
+import { createWebShell } from "./web/shell.ts";
+import { resolveBranding } from "./resolution/branding.ts";
+import { orgScope } from "./config.ts";
 
 export async function startQm(
   config: Config,
@@ -40,7 +43,15 @@ export async function startQm(
     : undefined;
   const draining = new AbortController();
   const web =
-    config.publicPort === undefined ? undefined : { events: createWebEvents(built.app, built), me: webMeConfig(env) };
+    config.publicPort === undefined
+      ? undefined
+      : {
+          events: createWebEvents(built.app, built),
+          me: webMeConfig(env),
+          shell: createWebShell({ ...config, publicPort: config.publicPort }, env, () =>
+            resolveBranding(built.config, orgScope(), config.brandingDefault),
+          ),
+        };
   const server = createServer(built.app, {
     ...serverDeps(config, built, slackEnvironmentState, slackConfig?.botToken),
     managedSlack,
@@ -67,9 +78,7 @@ export async function startQm(
   await once(server, "listening");
   void sweepDictationSpool();
   const frontDoor =
-    config.publicPort === undefined
-      ? undefined
-      : await startFrontDoor({ ...config, publicPort: config.publicPort }, env, server);
+    web && (await startFrontDoor({ ...config, publicPort: config.publicPort! }, env, server, web.shell));
   web?.events.start();
 
   console.log(
