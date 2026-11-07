@@ -32,11 +32,13 @@ const KEPT_TRACE_DATA = new Set([
   "messaging.message.receive.latency",
   "qm.surface",
   "qm.origin",
+  "qm.spawn",
+  "qm.parent_run",
   "qm.facts",
   "qm.recalled",
   "qm.skills",
 ]);
-const RUN_TAGS = ["messaging.message.id", "qm.surface", "qm.origin"];
+const RUN_TAGS = ["messaging.message.id", "qm.surface", "qm.origin", "qm.spawn", "qm.parent_run"];
 const SENT_ROOTS = new Set(["http.server", "queue.process"]);
 const SQL_VERBS = new Set(
   "SELECT INSERT UPDATE DELETE WITH BEGIN COMMIT ROLLBACK SAVEPOINT RELEASE CREATE ALTER DROP TRUNCATE SET RESET SHOW LISTEN UNLISTEN NOTIFY COPY LOCK VACUUM ANALYZE EXPLAIN DO CALL PREPARE EXECUTE DEALLOCATE DISCARD".split(
@@ -206,7 +208,7 @@ function internalTraceTargets(env: NodeJS.ProcessEnv): RegExp[] {
 
 function sampler(rate: number) {
   return ({ attributes, inheritOrSampleWith }: SamplingContext): number =>
-    attributes?.["qm.origin"] === "human" ? 1 : inheritOrSampleWith(rate);
+    attributes?.["qm.origin"] === "human" && !attributes["qm.spawn"] ? 1 : inheritOrSampleWith(rate);
 }
 
 export function initializeErrorReporting(
