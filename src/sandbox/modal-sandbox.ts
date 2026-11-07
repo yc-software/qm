@@ -28,11 +28,13 @@ import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
 import { sandboxScopeName } from "./exec-sandbox-base.ts";
 import { ModalNameConflictError, ModalSandboxGoneError, type ModalClient, type ModalSession } from "./modal-client.ts";
 import {
+  attemptSnapshot,
   createHomeSnapshotOps,
   HOME_SNAPSHOT_PRUNE,
   isJobComputerScope,
   snapshotDue,
   type HomeSnapshotStore,
+  type SnapshotBookkeeping,
 } from "./home-snapshot.ts";
 import type {
   AgentComputerProfile,
@@ -55,7 +57,7 @@ const swallowGone = (error: unknown): void => {
 };
 const SNAPSHOT_PRUNE = ["./.qm-hydrated", ...HOME_SNAPSHOT_PRUNE];
 
-export interface StoredModalSandbox {
+export interface StoredModalSandbox extends SnapshotBookkeeping {
   sandboxId: string;
   hydrationPending?: boolean;
   nativeSnapshotId?: string;
@@ -64,10 +66,7 @@ export interface StoredModalSandbox {
   recoveryError?: string;
   snapshotGeneration?: number;
   createdAtMs: number;
-  lastSnapshotMs?: number;
-  lastSnapshotAttemptMs?: number;
   lastActivityMs?: number;
-  homeDirty?: boolean;
   orgId?: string;
 }
 
@@ -99,8 +98,6 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
   const prefix = opts.namePrefix ?? "qm";
   const defaultTimeoutSec = opts.defaultTimeoutSec ?? 600;
   const snapshotIntervalMs = opts.nativeSnapshotIntervalMs ?? 5 * 60_000;
-  const lastSnapshotAttemptMs = (stored?: StoredModalSandbox | null): number =>
-    Math.max(stored?.lastSnapshotMs ?? 0, stored?.lastSnapshotAttemptMs ?? 0);
   const rotateAfterMs = opts.rotateAfterMs ?? 20 * 3600_000;
   const reapIdleMs = opts.reapIdleMs ?? 6 * 3600_000;
   const fileChunkBytes = opts.fileChunkBytes ?? 64 * 1024 * 1024;
@@ -572,11 +569,7 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
     return provisionQueue(scope, async () => {
       try {
         const current = await store.get(scope);
-        if (
-          !current ||
-          current.sandboxId !== rec.sandboxId ||
-          Date.now() - lastSnapshotAttemptMs(current) <= snapshotIntervalMs
-        )
+        if (!current || current.sandboxId !== rec.sandboxId || !snapshotDue(current, undefined, snapshotIntervalMs))
           return;
         await snapshotHome(scope, session);
       } catch (error) {
@@ -878,21 +871,16 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
         if (!session) return;
         const stored = await store.get(scope);
         if (!tdOpts?.homeUnchanged) await store.merge(scope, { homeDirty: true });
-        if (snapshotDue({ ...stored, lastSnapshotMs: lastSnapshotAttemptMs(stored) }, tdOpts, snapshotIntervalMs)) {
-          try {
-            await snapshotHome(scope, session);
-            await store.merge(scope, { lastActivityMs: Date.now() });
-          } catch (e) {
-            reportError("sandbox_snapshot", "teardown_snapshot_failed", errMessage(e), scope);
-            await store
-              .merge(scope, { lastActivityMs: Date.now() })
-              .catch(swallowAs("modal-sandbox: record activity", undefined));
-          }
-        } else {
-          await store
-            .merge(scope, { lastActivityMs: Date.now() })
-            .catch(swallowAs("modal-sandbox: record activity", undefined));
-        }
+        if (snapshotDue(stored, tdOpts, snapshotIntervalMs))
+          await attemptSnapshot(
+            stored,
+            (patch) => store.merge(scope, patch),
+            () => snapshotHome(scope, session),
+            (message) => reportError("sandbox_snapshot", "teardown_snapshot_failed", message, scope),
+          );
+        await store
+          .merge(scope, { lastActivityMs: Date.now() })
+          .catch(swallowAs("modal-sandbox: record activity", undefined));
       });
     },
 
@@ -947,7 +935,7 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
             continue;
           }
         }
-        if (now - lastSnapshotAttemptMs(rec) > snapshotIntervalMs) await refreshCheckpoint(scope, rec, session);
+        if (snapshotDue(rec, undefined, snapshotIntervalMs, now)) await refreshCheckpoint(scope, rec, session);
       }
       reaped += await sweepOrphans(now);
       return { reaped };

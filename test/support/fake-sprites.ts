@@ -44,6 +44,7 @@ export interface FakeSprites {
   failNext(status: number, opts?: InjectedFailure): void;
   refuseRestart(name: string): void;
   unhealthy(name: string, reason: string): void;
+  failCheckpoints(name: string, reason?: string): void;
   health(name: string, status: string, reason: string): void;
   refuseDelete(status?: number): void;
   rateLimitCreate(retryAfterSeconds: number): void;
@@ -174,6 +175,7 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
   const stallAfterRun = new Set<string>();
   const refusedRestart = new Set<string>();
   const unhealthy = new Map<string, string>();
+  const checkpointFailure = new Map<string, string>();
   const health = new Map<string, { status: string; reason: string }>();
   const brokenReadback = new Set<string>();
   const restarts: string[] = [];
@@ -362,6 +364,8 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
       return new Response(null, { status: 204 });
     }
     if (sub === "checkpoint" && method === "POST") {
+      const failure = checkpointFailure.get(name);
+      if (failure) return ndjson([{ type: "error", error: failure }]);
       const body = JSON.parse(toBuf(init?.body).toString() || "{}") as { comment?: string };
       const id = `v${++checkpointSeq}`;
       const dir = join(root, ".checkpoints", name, id);
@@ -466,6 +470,10 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
     },
     unhealthy: (name, reason) => {
       unhealthy.set(name, reason);
+    },
+    failCheckpoints: (name, reason) => {
+      if (reason) checkpointFailure.set(name, reason);
+      else checkpointFailure.delete(name);
     },
     refuseDelete: (status) => {
       refuseDeleteStatus = status;
