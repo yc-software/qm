@@ -25,7 +25,7 @@ async function serve(deps: Partial<ServerDeps> = {}, t?: TestContext): Promise<s
   const server = createServer(built.app, {
     ...serverDeps(config, built),
     ...browserSessionDeps,
-    webEvents: events,
+    web: { events, me: { suggestedActivities: [] } },
     ...deps,
   } as ServerDeps);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -98,7 +98,7 @@ test("the live-update stream answers with the relay's SSE headers and only to a 
   assert.equal(stream.response.headers.get("content-encoding"), null);
   await until(() => (stream.raw().startsWith(": open\n\n") ? true : undefined), "the open comment");
   assert.equal((await fetch(`${base}/api/deliveries/events`)).status, 401);
-  const unhosted = await serve({ webEvents: undefined }, t);
+  const unhosted = await serve({ web: undefined }, t);
   const response = await fetch(`${unhosted}/api/deliveries/events`, {
     headers: { cookie: browserSessionCookie("alice") },
   });
@@ -202,9 +202,8 @@ function fakeRes(): FakeRes & ServerResponse {
   return res as unknown as FakeRes & ServerResponse;
 }
 
-function fakeHub(pending: Delivery[] = []) {
+function fakeHub(t: TestContext, pending: Delivery[] = []) {
   const acked: string[] = [];
-  let enqueued: (type: string) => void = () => {};
   let state: (event: SessionStateEvent) => void = () => {};
   let stateResync: () => void = () => {};
   let ledger: (event: OwnedLedgerEvent) => void = () => {};
@@ -234,7 +233,6 @@ function fakeHub(pending: Delivery[] = []) {
     samePerson: async (a: string, b: string) => a === b,
   };
   const deps = {
-    deliveries: { onEnqueue: (fn: (type: string) => void) => ((enqueued = fn), () => {}) },
     loops: {
       store: {
         get: async (id: string) => {
@@ -247,9 +245,11 @@ function fakeHub(pending: Delivery[] = []) {
       refresh: async () => {},
       classify: (id: string) => ({ id, type: id === "carol" ? "deactivated" : "internal" }),
     },
-  } as unknown as Pick<ServerDeps, "deliveries" | "loops" | "identity">;
+  } as unknown as Pick<ServerDeps, "loops" | "identity">;
+  t.mock.timers.enable({ apis: ["setInterval"] });
   const hub = createWebEvents(app as never, deps);
   hub.start();
+  t.after(() => hub.stop());
   return {
     hub,
     acked,
@@ -257,16 +257,20 @@ function fakeHub(pending: Delivery[] = []) {
     managers,
     fail: (times: number) => (failures = times),
     drain: async () => {
-      enqueued("web");
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      t.mock.timers.tick(2_500);
+      await settled();
     },
     state: (event: SessionStateEvent) => state(event),
     stateResync: () => stateResync(),
     ledger: async (event: OwnedLedgerEvent) => {
       ledger(event);
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      await settled();
     },
   };
+}
+
+async function settled(): Promise<void> {
+  for (let i = 0; i < 10; i++) await new Promise((resolve) => setImmediate(resolve));
 }
 
 const delivery = (id: string, target: string, createdAt: number) =>
@@ -274,8 +278,7 @@ const delivery = (id: string, target: string, createdAt: number) =>
 
 test("a delivery nobody is watching waits a minute, then is acked without a frame", async (t) => {
   const now = Date.now();
-  const world = fakeHub([delivery("fresh", "web:bob:t", now), delivery("stale", "web:bob:t", now - 61_000)]);
-  t.after(() => world.hub.stop());
+  const world = fakeHub(t, [delivery("fresh", "web:bob:t", now), delivery("stale", "web:bob:t", now - 61_000)]);
   const alice = fakeRes();
   world.hub.stream("alice", alice);
   await world.drain();
@@ -284,48 +287,42 @@ test("a delivery nobody is watching waits a minute, then is acked without a fram
 });
 
 test("a failing delivery poll is reported once per outage and its recovery is logged", async (t) => {
-  const world = fakeHub();
-  t.after(() => world.hub.stop());
+  const world = fakeHub(t);
   const lines: string[] = [];
   const record = (...args: unknown[]) => void lines.push(String(args[0]));
-  t.mock.method(console, "warn", record);
+  t.mock.method(console, "error", record);
   t.mock.method(console, "log", record);
   const poll = () => lines.filter((line) => line.includes("web delivery poll"));
   world.fail(3);
   for (let i = 0; i < 3; i++) await world.drain();
   assert.equal(poll().length, 1);
-  assert.match(poll()[0]!, /^\[swallowed\] web: web delivery poll.*deliveries unavailable/);
+  assert.match(poll()[0]!, /^\[failed\] web: web delivery poll.*deliveries unavailable/);
   await world.drain();
   assert.deepEqual(poll().slice(1), ["[web] web delivery poll recovered"]);
 });
 
-test("session states go to their participants, or the web thread's owner, without the participant list", async (t) => {
-  const world = fakeHub();
-  t.after(() => world.hub.stop());
+test("a session state without participants goes to the web thread's owner, and resyncs reach everyone", async (t) => {
+  const world = fakeHub(t);
   const alice = fakeRes();
   const bob = fakeRes();
   world.hub.stream("alice", alice);
   world.hub.stream("bob", bob);
-  world.state({ threadRef: "ch:C1:1", state: "working", participants: ["bob"], at: 1 });
   world.state({ threadRef: "web:alice:t", state: "idle", at: 2 });
   world.state({ threadRef: "", state: "idle", at: 3 });
-  assert.deepEqual(parse(bob.text), [
-    { event: "session_state", data: { threadRef: "ch:C1:1", state: "working", at: 1 } },
-  ]);
   assert.deepEqual(parse(alice.text), [
     { event: "session_state", data: { threadRef: "web:alice:t", state: "idle", at: 2 } },
   ]);
+  assert.deepEqual(parse(bob.text), []);
   world.stateResync();
   assert.equal(parse(alice.text).at(-1)?.event, "session_state_resync");
   assert.equal(parse(bob.text).at(-1)?.event, "session_state_resync");
   bob.close();
   world.state({ threadRef: "web:bob:t", state: "idle", at: 4 });
-  assert.equal(parse(bob.text).length, 2);
+  assert.equal(parse(bob.text).length, 1);
 });
 
 test("inbox items reach exactly the active watchers who can administer the loop, including group scopes and aliases", async (t) => {
-  const world = fakeHub();
-  t.after(() => world.hub.stop());
+  const world = fakeHub(t);
   installPrincipalLinks({ canonical: (key) => (key === "bob-slack" ? "bob" : undefined), aliases: () => [] });
   t.after(() => installPrincipalLinks(null));
   world.owners.set("mine", "personal:alice");

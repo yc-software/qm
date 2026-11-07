@@ -22,11 +22,18 @@ function connectProvider(raw: unknown): ModelProvider | null {
 }
 
 export async function modelAuthStatus(deps: ApiCtx["deps"], principal: string) {
-  const required = (await deps.config?.getIndividualModelAuthDurable()) ?? false;
-  const connections = (await deps.userModelCredentials?.connections(principal)) ?? [];
-  const individualModelAuth = (await deps.config?.getIndividualModelAuthDurable(principal)) ?? false;
-  const account = (await deps.config?.getModelAccountDurable(principal)) ?? "company";
-  return { individualModelAuth, required, account, connections };
+  const [required, connections, individualModelAuth, account] = await Promise.all([
+    deps.config?.getIndividualModelAuthDurable(),
+    deps.userModelCredentials?.connections(principal),
+    deps.config?.getIndividualModelAuthDurable(principal),
+    deps.config?.getModelAccountDurable(principal),
+  ]);
+  return {
+    individualModelAuth: individualModelAuth ?? false,
+    required: required ?? false,
+    account: account ?? "company",
+    connections: connections ?? [],
+  };
 }
 
 async function getStatus(ctx: ApiCtx): Promise<void> {

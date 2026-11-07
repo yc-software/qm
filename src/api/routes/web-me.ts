@@ -4,12 +4,13 @@ import { principalInAllowlist, principalListed } from "../../../plugins/chassis/
 import { parseSuggestedActivities, type SuggestedActivity } from "../../../plugins/chassis/src/suggested-activities.ts";
 import { orgId } from "../../config.ts";
 import { resolveBranding } from "../../resolution/branding.ts";
-import { scopeId } from "../../types.ts";
 import { swallowAs } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import { orgScope } from "./shared.ts";
 import { modelAuthStatus } from "./user-model-auth.ts";
+import { adminPermissions } from "./admin/scope-config.ts";
+import { inboxPreviewEnabled } from "./inbox.ts";
 
 export interface WebMeConfig {
   analytics?: { module: string; options?: unknown };
@@ -33,24 +34,21 @@ export function webMeConfig(env: NodeJS.ProcessEnv): WebMeConfig {
 }
 
 async function permissionsOf(ctx: ApiCtx, user: string, loopsUsers: string | undefined): Promise<string[]> {
-  const { deps } = ctx;
-  const isAdmin = await (deps.admin?.adminStatusOf({ id: user, type: "internal" }) ?? Promise.resolve(null))
-    .then((status) => status?.isAdmin === true)
-    .catch(swallowAs("web: /me admin status", false));
-  const permissions = isAdmin ? ["admin"] : [];
-  const preview = await (deps.featureFlags?.enabled("inbox_loops", scopeId("personal", user)) ?? Promise.resolve(false))
-    .then((enabled) => enabled === true)
-    .catch(swallowAs("web: /me inbox preview flag", false));
+  const [admin, preview] = await Promise.all([
+    adminPermissions(ctx.deps, { id: user, type: "internal" }).catch(swallowAs("web: /me admin status", null)),
+    inboxPreviewEnabled(ctx.deps, user).catch(swallowAs("web: /me inbox preview flag", false)),
+  ]);
+  const permissions = [...(admin?.permissions ?? [])];
   if (preview && principalListed(user, loopsUsers)) permissions.push("loops");
-  if (preview && principalInAllowlist(user, deps.portalSession?.inboxUsers)) permissions.push("inbox");
+  if (preview && principalInAllowlist(user, ctx.deps.portalSession?.inboxUsers)) permissions.push("inbox");
   return permissions;
 }
 
 async function me(ctx: ApiCtx): Promise<void> {
   const { res, deps, app, actor } = ctx;
-  if (!actor) return sendJson(res, 401, { error: "unauthorized" });
+  const config = deps.web?.me;
+  if (!actor || !config) return sendJson(res, 404, { error: "not_found" });
   const user = actor.p;
-  const config = deps.webMe ?? { suggestedActivities: [] };
   const [permissions, workspaceUrl, auth, branding] = await Promise.all([
     permissionsOf(ctx, user, config.loopsUsers),
     app

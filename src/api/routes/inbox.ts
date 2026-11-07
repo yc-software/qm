@@ -239,12 +239,14 @@ async function inbox(ctx: ApiCtx): Promise<void> {
   if (view) sendJson(ctx.res, view.status, view.body);
 }
 
+export async function inboxPreviewEnabled(deps: ApiCtx["deps"], principalId: string): Promise<boolean> {
+  return (await deps.featureFlags?.enabled("inbox_loops", scopeId("personal", principalId))) === true;
+}
+
 async function access(ctx: ApiCtx): Promise<void> {
   const acting = actingPrincipal(ctx);
   if (!acting) return;
-  sendJson(ctx.res, 200, {
-    enabled: (await ctx.deps.featureFlags?.enabled("inbox_loops", scopeId("personal", acting.actorId))) === true,
-  });
+  sendJson(ctx.res, 200, { enabled: await inboxPreviewEnabled(ctx.deps, acting.actorId) });
 }
 
 export const inboxRoutes: ReadonlyArray<Route<ApiCtx>> = [

@@ -40,9 +40,7 @@ export async function startQm(
     : undefined;
   const draining = new AbortController();
   const web =
-    config.publicPort === undefined
-      ? undefined
-      : { webEvents: createWebEvents(built.app, built), webMe: webMeConfig(env) };
+    config.publicPort === undefined ? undefined : { events: createWebEvents(built.app, built), me: webMeConfig(env) };
   const server = createServer(built.app, {
     ...serverDeps(config, built, slackEnvironmentState, slackConfig?.botToken),
     managedSlack,
@@ -57,7 +55,7 @@ export async function startQm(
           },
         }
       : {}),
-    ...web,
+    ...(web ? { web } : {}),
     draining: draining.signal,
   });
 
@@ -72,7 +70,7 @@ export async function startQm(
     config.publicPort === undefined
       ? undefined
       : await startFrontDoor({ ...config, publicPort: config.publicPort }, env, server);
-  web?.webEvents.start();
+  web?.events.start();
 
   console.log(
     `[qm] listening on :${config.port} (org=${config.orgId}, ` +
@@ -175,7 +173,7 @@ export async function startQm(
       await built.runtime.stop(async () => {
         await deadline;
         frontDoor?.close();
-        await web?.webEvents.stop();
+        await web?.events.stop();
         server.close();
         server.closeAllConnections();
       });

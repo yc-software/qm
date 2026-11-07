@@ -4,7 +4,7 @@ import type { ServerDeps } from "../deps.ts";
 import type { SessionStateEvent } from "../../runs/session-state-bus.ts";
 import type { OwnedLedgerEvent } from "../../loops/ledger-events.ts";
 import { canonicalPerson } from "../../directory/person.ts";
-import { swallow } from "../../util/errors.ts";
+import { reportFailure, swallow } from "../../util/errors.ts";
 import { createSweeper } from "../../util/sweeper.ts";
 import { canAdministerLoop } from "./loops.ts";
 import type { ApiCtx, Route } from "./route.ts";
@@ -38,7 +38,7 @@ function ownerOfWebThread(threadRef: string): string | null {
   return i > 0 ? rest.slice(0, i) : null;
 }
 
-export function createWebEvents(app: HubApp, deps: Pick<ServerDeps, "deliveries" | "loops" | "identity">): WebEvents {
+export function createWebEvents(app: HubApp, deps: Pick<ServerDeps, "loops" | "identity">): WebEvents {
   const clients = new Map<string, Set<ServerResponse>>();
   const send = (user: string, event: string, data: unknown): void => {
     for (const res of clients.get(canonicalPerson(user)) ?? [])
@@ -60,7 +60,9 @@ export function createWebEvents(app: HubApp, deps: Pick<ServerDeps, "deliveries"
         const owner = canonicalPerson(ownerOfWebThread(d.destination.target) ?? "");
         if (clients.get(owner)?.size) send(owner, "delivery", { threadRef: d.destination.target });
         else if (now - d.createdAt < GIVEUP_MS) continue;
-        await app.ackDelivery(d.id).catch((e: unknown) => (failure ??= e));
+        await app
+          .ackDelivery(d.id)
+          .catch((e: unknown) => (failure ??= new Error(`ack delivery ${d.id}`, { cause: e })));
       }
     } catch (e) {
       failure = e;
@@ -72,7 +74,7 @@ export function createWebEvents(app: HubApp, deps: Pick<ServerDeps, "deliveries"
       failing = false;
       return;
     }
-    if (!failing) swallow("web: web delivery poll (further failures quiet until recovery)", failure);
+    if (!failing) reportFailure("web: web delivery poll (further failures quiet until recovery)", failure);
     failing = true;
   };
   const sweeper = createSweeper(drain, POLL_MS, { label: "web deliveries" });
@@ -138,7 +140,6 @@ export function createWebEvents(app: HubApp, deps: Pick<ServerDeps, "deliveries"
         app.subscribeLedgerEvents((event) => void forwardInboxItem(event), {
           onResync: () => broadcast("inbox_resync"),
         }),
-        deps.deliveries?.onEnqueue((type) => void (type === "web" && drain())) ?? (() => {}),
       ];
       sweeper.start();
     },
@@ -151,8 +152,8 @@ export function createWebEvents(app: HubApp, deps: Pick<ServerDeps, "deliveries"
 }
 
 function streamWebEvents(ctx: ApiCtx): void {
-  if (!ctx.deps.webEvents || !ctx.actor) return sendJson(ctx.res, 404, { error: "not_found" });
-  ctx.deps.webEvents.stream(ctx.actor.p, ctx.res);
+  if (!ctx.deps.web || !ctx.actor) return sendJson(ctx.res, 404, { error: "not_found" });
+  ctx.deps.web.events.stream(ctx.actor.p, ctx.res);
 }
 
 export const webEventRoutes: ReadonlyArray<Route<ApiCtx>> = [

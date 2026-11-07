@@ -33,7 +33,7 @@ async function serve(deps: Partial<ServerDeps> = {}): Promise<string> {
     ...serverDeps(config, built),
     ...browserSessionDeps,
     portalSession: { ...browserSessionDeps.portalSession, inboxUsers: "alice@example.com" },
-    webMe,
+    web: { events: {} as never, me: webMe },
     suggestedActivities: undefined,
     ...deps,
   } as ServerDeps);

@@ -106,8 +106,7 @@ export interface ServerDeps {
     apiOrigins?: ReadonlySet<string>;
   };
   requireSignedPortalIdentity?: boolean;
-  webEvents?: WebEvents;
-  webMe?: WebMeConfig;
+  web?: { events: WebEvents; me: WebMeConfig };
   control: ControlService;
   replayDedupe?: ReplayDedupe;
   deploymentLiveSmoke?: { deploymentId: string; superseded(): boolean; run(): Promise<void> };
