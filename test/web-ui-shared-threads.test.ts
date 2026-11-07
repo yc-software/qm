@@ -6,7 +6,6 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createServer as createHttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
@@ -28,16 +27,7 @@ core.listen(0);
 const corePort = (core.address() as AddressInfo).port;
 const coreBase = `http://localhost:${corePort}`;
 
-process.env.CORE_API_URL = `http://localhost:${corePort}`;
-process.env.CORE_SIGNING_SECRET = SECRET;
-process.env.WEB_UI_PRINCIPALS = "";
-const { handler } = await import("../plugins/web-ui/server/index.ts");
-const web = createHttpServer(handler);
-web.listen(0);
-const webBase = `http://localhost:${(web.address() as AddressInfo).port}`;
-
 after(async () => {
-  await new Promise<void>((r) => web.close(() => r()));
   await new Promise<void>((r) => core.close(() => r()));
   await built.runtime.stop();
 });
@@ -77,16 +67,6 @@ async function waitForSession(user: string, threadRef: string): Promise<SessionR
     await new Promise((r) => setTimeout(r, 100));
   }
 }
-
-test("/me carries the Slack workspace URL once the directory has one", async () => {
-  await built.app.setDirectoryWorkspaceUrl("https://acme.slack.com");
-  const me = (await (await fetch(`${webBase}/me`, asUser("alice"))).json()) as {
-    user: string;
-    slackWorkspaceUrl?: string | null;
-  };
-  assert.equal(me.user, "alice");
-  assert.equal(me.slackWorkspaceUrl, "https://acme.slack.com");
-});
 
 test("a channel member can continue a teammate's shared web thread; outsiders and personal claims can't", async () => {
   await built.app.upsertChannels(

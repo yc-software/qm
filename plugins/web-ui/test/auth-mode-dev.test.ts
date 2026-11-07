@@ -33,7 +33,7 @@ test.after(() => {
 });
 
 test("with no signing secret the surface advertises dev mode", async () => {
-  const r = await fetch(`${base}/me`);
+  const r = await fetch(`${base}/api/directory/resolve?q=alice`);
   assert.equal(r.status, 401);
   assert.deepEqual(await r.json(), { error: "sign in", mode: "dev", reason: "unauthenticated" });
 });
@@ -44,12 +44,8 @@ test("a bare principal id — not just an email — can sign in", async () => {
   const cookie = r.headers.get("set-cookie") ?? "";
   assert.match(cookie, /webuiuser=alice/);
 
-  const me = await fetch(`${base}/me`, { headers: { cookie: cookie.split(";")[0] } });
+  const me = await fetch(`${base}/api/directory/resolve?q=alice`, { headers: { cookie: cookie.split(";")[0] } });
   assert.equal(me.status, 200);
-  const body = await me.json();
-  assert.equal(body.user, "alice");
-  assert.equal(body.suggestedActivities, undefined);
-  assert.equal(body.mode, "dev");
 });
 
 test("a principal outside the allowlist is refused with a message naming the env var", async () => {

@@ -66,13 +66,14 @@ function requireLiveHuman(ctx: ApiCtx, acting: ActingPrincipal): boolean {
   return false;
 }
 
-export async function canAdministerLoop(ctx: ApiCtx, loop: Loop, acting: ActingPrincipal): Promise<boolean> {
-  const { app } = ctx;
-  if (await app.membershipControlsScope(loop.ownerScopeId)) {
-    return app.managesScope(acting.actorId, loop.ownerScopeId);
-  }
-  if (await app.samePerson(loop.owner, acting.actorId)) return true;
-  return app.managesScope(acting.actorId, loop.ownerScopeId);
+export async function canAdministerLoop(
+  app: Pick<ApiCtx["app"], "membershipControlsScope" | "managesScope" | "samePerson">,
+  loop: Loop,
+  actorId: string,
+): Promise<boolean> {
+  if (await app.membershipControlsScope(loop.ownerScopeId)) return app.managesScope(actorId, loop.ownerScopeId);
+  if (await app.samePerson(loop.owner, actorId)) return true;
+  return app.managesScope(actorId, loop.ownerScopeId);
 }
 
 export async function loadAdministrable(
@@ -90,7 +91,7 @@ export async function loadAdministrable(
     sendJson(ctx.res, 404, { error: "not_found", message: "no such loop" });
     return null;
   }
-  if (!(await canAdministerLoop(ctx, loop, acting))) {
+  if (!(await canAdministerLoop(ctx.app, loop, acting.actorId))) {
     sendJson(ctx.res, 403, { error: "forbidden", message: "you may not administer this loop" });
     return null;
   }
@@ -316,7 +317,7 @@ async function listLoops(ctx: ApiCtx): Promise<void> {
   const all = await deps.store.list();
   const visible: Loop[] = [];
   for (const loop of all) {
-    if (await canAdministerLoop(ctx, loop, acting)) visible.push(loop);
+    if (await canAdministerLoop(ctx.app, loop, acting.actorId)) visible.push(loop);
   }
   return sendJson(ctx.res, 200, { loops: visible });
 }

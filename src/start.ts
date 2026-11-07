@@ -15,6 +15,8 @@ import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
 import { sessionLifetime } from "../plugins/portal/src/session.ts";
 import { startFrontDoor } from "./web/front-door.ts";
 import { parseAllowedOrigins } from "../plugins/portal/src/cors.ts";
+import { createWebEvents } from "./api/routes/web-events.ts";
+import { webMeConfig } from "./api/routes/web-me.ts";
 
 export async function startQm(
   config: Config,
@@ -37,6 +39,8 @@ export async function startQm(
       })
     : undefined;
   const draining = new AbortController();
+  const web =
+    config.publicPort === undefined ? undefined : { events: createWebEvents(built.app, built), me: webMeConfig(env) };
   const server = createServer(built.app, {
     ...serverDeps(config, built, slackEnvironmentState, slackConfig?.botToken),
     managedSlack,
@@ -51,6 +55,7 @@ export async function startQm(
           },
         }
       : {}),
+    ...(web ? { web } : {}),
     draining: draining.signal,
   });
 
@@ -65,6 +70,7 @@ export async function startQm(
     config.publicPort === undefined
       ? undefined
       : await startFrontDoor({ ...config, publicPort: config.publicPort }, env, server);
+  web?.events.start();
 
   console.log(
     `[qm] listening on :${config.port} (org=${config.orgId}, ` +
@@ -167,6 +173,7 @@ export async function startQm(
       await built.runtime.stop(async () => {
         await deadline;
         frontDoor?.close();
+        await web?.events.stop();
         server.close();
         server.closeAllConnections();
       });

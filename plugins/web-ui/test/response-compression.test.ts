@@ -105,28 +105,3 @@ test("a static asset falls back to the raw file when the client cannot accept gz
   assert.equal(plain.headers["content-encoding"], undefined);
   assert.equal(plain.body.toString("utf8"), assetBody);
 });
-
-test("the delivery event stream still streams incrementally instead of buffering behind a compressor", async () => {
-  const first = await new Promise<{ headers: IncomingMessage["headers"]; chunk: string }>((resolve, reject) => {
-    const req = httpRequest(
-      `${base}/api/deliveries/events`,
-      { headers: { ...identityHeaders(), "accept-encoding": "gzip" } },
-      (res) => {
-        res.setEncoding("utf8");
-        res.once("data", (chunk: string) => {
-          resolve({ headers: res.headers, chunk });
-          req.destroy();
-        });
-      },
-    );
-    req.on("error", (err: NodeJS.ErrnoException) => {
-      if (err.code !== "ECONNRESET") reject(err);
-    });
-    req.end();
-    setTimeout(() => reject(new Error("no stream data arrived within 5s")), 5_000).unref();
-  });
-  assert.equal(first.headers["content-encoding"], undefined);
-  assert.equal(first.headers["content-type"], "text/event-stream; charset=utf-8");
-  assert.equal(first.headers["cache-control"], "no-cache, no-transform");
-  assert.equal(first.chunk, ": open\n\n");
-});

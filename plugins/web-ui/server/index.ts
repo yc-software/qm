@@ -1,9 +1,9 @@
 import "./instrument.ts";
 import { handleVoiceRoute, sweepDictationSpool } from "./voice-routes.ts";
-import { browserErrorConfig } from "./browser-error-config.ts";
-import { analyticsHookConfig } from "./analytics-config.ts";
+import { browserErrorConfig } from "../../chassis/src/browser-error-config.ts";
+import { analyticsHookConfig } from "../../chassis/src/analytics-config.ts";
 import { reportBackendError, withRequestContext } from "../../chassis/src/error-reporting.ts";
-import { errChain, swallow } from "../../chassis/src/errors.ts";
+import { errChain } from "../../chassis/src/errors.ts";
 import { composioCallbackUrl } from "./composio-return.ts";
 import { sharedSessionHtml } from "./shared-session.ts";
 import { uiCanvasRoutes } from "./ui-canvas-routes.ts";
@@ -15,7 +15,6 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, extname, join, posix } from "node:path";
 import { randomBytes } from "node:crypto";
-import { LRUCache } from "lru-cache";
 import {
   fetchCoreText,
   relayCoreStream,
@@ -39,7 +38,7 @@ import {
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { createBrandingCache, injectBranding } from "../../chassis/src/branding.ts";
 import { parseSuggestedActivities } from "../../chassis/src/suggested-activities.ts";
-import { listedPrincipals, principalInAllowlist } from "../../chassis/src/principal-allowlist.ts";
+import { listedPrincipals, principalInAllowlist, principalListed } from "../../chassis/src/principal-allowlist.ts";
 
 import {
   CORE_API_URL as CORE,
@@ -48,7 +47,6 @@ import {
   PORTAL_IDENTITY_SECRET,
 } from "../../chassis/src/env.ts";
 
-const welcomeCohort = process.env.WEB_UI_WELCOME_COHORT?.trim().slice(0, 40) || undefined;
 const suggestedActivities = parseSuggestedActivities(process.env.WEB_UI_SUGGESTED_ACTIVITIES);
 const PUBLIC_URL = (process.env.PUBLIC_WEB_URL ?? "http://localhost:8096").replace(/\/$/, "");
 const WEB_UI_DEV = process.env.WEB_UI_DEV === "1";
@@ -62,13 +60,7 @@ export function isInboxUser(principalId: string, configuredUsers = process.env.I
 }
 
 export function isLoopsUser(principalId: string, configuredUsers = process.env.LOOPS_USERS): boolean {
-  const normalizedPrincipalId = principalId.trim().toLowerCase();
-  if (!normalizedPrincipalId) return false;
-  return (configuredUsers ?? "")
-    .split(",")
-    .map((entry) => entry.trim().toLowerCase())
-    .filter(Boolean)
-    .includes(normalizedPrincipalId);
+  return principalListed(principalId, configuredUsers);
 }
 
 async function hasInboxLoopPreview(user: string): Promise<boolean> {
@@ -127,15 +119,6 @@ async function brandIndexHtml(html: string): Promise<string> {
 
 const portalTokenStore = new AsyncLocalStorage<string | undefined>();
 
-const deliveryClients = new Map<string, Set<ServerResponse>>();
-
-function ownerOfWebThread(threadRef: string): string | null {
-  if (!threadRef.startsWith("web:")) return null;
-  const rest = threadRef.slice("web:".length);
-  const i = rest.indexOf(":");
-  return i > 0 ? rest.slice(0, i) : null;
-}
-
 const CONTENT_TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
@@ -156,11 +139,9 @@ const CONTENT_TYPES: Record<string, string> = {
   ".wasm": "application/wasm",
 };
 
-const {
-  analytics: analyticsConfig,
-  scriptOrigins: analyticsScriptOrigins,
-  connectOrigins: analyticsOrigins,
-} = analyticsHookConfig(process.env.WEB_UI_ANALYTICS);
+const { scriptOrigins: analyticsScriptOrigins, connectOrigins: analyticsOrigins } = analyticsHookConfig(
+  process.env.WEB_UI_ANALYTICS,
+);
 const browserErrors = browserErrorConfig(process.env);
 const browserErrorOrigin = browserErrors ? new URL(browserErrors.dsn).origin : undefined;
 
@@ -215,10 +196,6 @@ function relay(res: ServerResponse, r: { status: number; text: string }): void {
 
 function sendHtml(res: ServerResponse, status: number, html: string): void {
   sendBuffered(res, status, withSecurityHeaders({ "content-type": "text/html; charset=utf-8" }), html);
-}
-
-function sseEvent(res: ServerResponse, event: string, data: unknown): void {
-  res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 }
 
 function mayManageDeployment(d: { permission?: unknown }): boolean {
@@ -314,200 +291,6 @@ function sessionCookie(id: string): string {
 const MAX_BODY_BYTES = 1_000_000;
 const readBody = (req: IncomingMessage): Promise<string> => readBodyCapped(req, MAX_BODY_BYTES);
 
-const slackUrlCache = new LRUCache<string, { url: string | null }>({ max: 1, ttl: 5 * 60_000 });
-async function slackWorkspaceUrl(): Promise<string | null> {
-  const hit = slackUrlCache.get("url");
-  if (hit) return hit.url;
-  let urlValue: string | null = null;
-  try {
-    const r = await coreFetch("GET", "/v1/directory/meta");
-    if (r.status === 200) urlValue = (JSON.parse(r.text) as { workspaceUrl?: string | null }).workspaceUrl ?? null;
-  } catch {
-    void 0;
-  }
-  slackUrlCache.set("url", { url: urlValue });
-  return urlValue;
-}
-
-const WEB_DELIVERY_POLL_MS = Number(process.env.WEB_DELIVERY_POLL_MS ?? 2500);
-const WEB_DELIVERY_GIVEUP_MS = 60_000;
-let deliveriesPollInFlight = false;
-let deliveriesPollFailing = false;
-
-interface PendingWebDelivery {
-  id: string;
-  createdAt: number;
-  destination?: { target?: string };
-}
-
-export async function drainWebDeliveries(): Promise<void> {
-  if (deliveriesPollInFlight) return;
-  deliveriesPollInFlight = true;
-  try {
-    noteDeliveriesPoll(await pollWebDeliveries());
-  } catch (e) {
-    noteDeliveriesPoll(e);
-  } finally {
-    deliveriesPollInFlight = false;
-  }
-}
-
-function noteDeliveriesPoll(failure: unknown): void {
-  if (failure === undefined) {
-    if (deliveriesPollFailing) console.log("[web-ui] web delivery poll recovered");
-    deliveriesPollFailing = false;
-    return;
-  }
-  if (!deliveriesPollFailing) swallow("web-ui: web delivery poll (further failures quiet until recovery)", failure);
-  deliveriesPollFailing = true;
-}
-
-async function pollWebDeliveries(): Promise<unknown> {
-  const r = await coreFetch("GET", "/v1/deliveries?type=web");
-  if (r.status !== 200) return new Error(`GET /v1/deliveries http ${r.status}: ${r.text.slice(0, 200)}`);
-  const pending = (JSON.parse(r.text) as { deliveries?: PendingWebDelivery[] }).deliveries ?? [];
-  const now = Date.now();
-  let failure: unknown;
-  for (const d of pending) {
-    const target = d.destination?.target ?? "";
-    const conns = deliveryClients.get(ownerOfWebThread(target) ?? "");
-    if (conns && conns.size) {
-      for (const res of conns) sseEvent(res, "delivery", { threadRef: target });
-    } else if (now - (d.createdAt ?? 0) < WEB_DELIVERY_GIVEUP_MS) {
-      continue;
-    }
-    try {
-      const ack = await coreFetch("POST", `/v1/deliveries/${encodeURIComponent(d.id)}/ack`);
-      if (ack.status !== 200)
-        failure ??= new Error(`ack delivery ${d.id} http ${ack.status}: ${ack.text.slice(0, 200)}`);
-    } catch (e) {
-      failure ??= e;
-    }
-  }
-  return failure;
-}
-
-const SSE_HEARTBEAT_MS = 15_000;
-const STATE_FEED_RECONNECT_MS = Number(process.env.STATE_FEED_RECONNECT_MS ?? 3_000);
-
-interface SessionStateFrame {
-  threadRef?: string;
-  state?: string;
-  participants?: string[];
-  [k: string]: unknown;
-}
-
-function forwardSessionState(frame: SessionStateFrame): void {
-  const threadRef = typeof frame.threadRef === "string" ? frame.threadRef : "";
-  if (!threadRef) return;
-  const targets = new Set<string>(
-    Array.isArray(frame.participants) ? frame.participants.filter((p): p is string => typeof p === "string") : [],
-  );
-  if (targets.size === 0) {
-    const owner = ownerOfWebThread(threadRef);
-    if (owner) targets.add(owner);
-  }
-  const { participants: _participants, ...visible } = frame;
-  for (const user of targets) {
-    for (const res of deliveryClients.get(user) ?? []) sseEvent(res, "session_state", visible);
-  }
-}
-
-async function consumeCoreFeed(
-  path: string,
-  eventName: string,
-  onEvent: (data: unknown) => void,
-  onReconnect?: () => void,
-): Promise<void> {
-  let dropped = false;
-  for (;;) {
-    try {
-      const signedPath = withSourceAuthNonce(path, CORE_SIGNING_SECRET);
-      const r = await fetch(`${CORE}${signedPath}`, {
-        headers: signedHeaders(CORE_SIGNING_SECRET, "GET", signedPath, ""),
-      });
-      if (r.status === 200 && r.body) {
-        if (dropped) {
-          dropped = false;
-          onReconnect?.();
-        }
-        const reader = r.body.getReader();
-        const decoder = new TextDecoder();
-        let buf = "";
-        for (;;) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          buf += decoder.decode(value, { stream: true });
-          const frames = buf.split("\n\n");
-          buf = frames.pop() ?? "";
-          for (const frame of frames) {
-            const lines = frame.split("\n");
-            if (lines.some((l) => l === `event: ${eventName}_resync`)) {
-              onReconnect?.();
-              continue;
-            }
-            if (!lines.some((l) => l === `event: ${eventName}`)) continue;
-            const data = lines.find((l) => l.startsWith("data: "))?.slice("data: ".length);
-            if (!data) continue;
-            try {
-              onEvent(JSON.parse(data));
-            } catch {
-              void 0;
-            }
-          }
-        }
-      }
-      dropped = true;
-    } catch {
-      dropped = true;
-    }
-    await new Promise((resolve) => setTimeout(resolve, STATE_FEED_RECONNECT_MS).unref());
-  }
-}
-
-function runStateFeed(): Promise<void> {
-  return consumeCoreFeed(
-    "/v1/session-state/events",
-    "session_state",
-    (data) => forwardSessionState(data as SessionStateFrame),
-    () => {
-      for (const conns of deliveryClients.values()) for (const res of conns) sseEvent(res, "session_state_resync", {});
-    },
-  );
-}
-
-function runInboxFeed(): Promise<void> {
-  return consumeCoreFeed(
-    "/v1/loop-items/events",
-    "loop_item",
-    (data) => void forwardInboxItem(data as { loopId?: string; itemId?: string; op?: string }),
-    resyncInbox,
-  );
-}
-
-function resyncInbox(): void {
-  for (const conns of deliveryClients.values()) for (const res of conns) sseEvent(res, "inbox_resync", {});
-}
-
-async function forwardInboxItem(ev: { loopId?: string; itemId?: string; op?: string }): Promise<void> {
-  if (!ev.loopId || !ev.itemId || !deliveryClients.size) return;
-  const r = await coreFetch(
-    "POST",
-    "/v1/inbox/viewers",
-    JSON.stringify({ loopId: ev.loopId, candidates: [...deliveryClients.keys()] }),
-  ).catch(() => null);
-  if (r?.status === 404) return;
-  let viewers: string[] | undefined;
-  try {
-    viewers = r?.status === 200 ? (JSON.parse(r.text) as { viewers?: string[] }).viewers : undefined;
-  } catch {
-    viewers = undefined;
-  }
-  if (!viewers) return resyncInbox();
-  const frame = { loopId: ev.loopId, itemId: ev.itemId, op: ev.op ?? "" };
-  for (const user of viewers) for (const res of deliveryClients.get(user) ?? []) sseEvent(res, "inbox_item", frame);
-}
-
 async function coreFetch(
   method: HttpMethod,
   pathWithQuery: string,
@@ -538,22 +321,6 @@ async function mintSessionCap(): Promise<{ token: string } | { status: number; t
   if (!token)
     return { status: 503, text: JSON.stringify({ error: "not_configured", message: "no session capability" }) };
   return { token };
-}
-
-async function coreFetchCap(
-  method: HttpMethod,
-  pathWithQuery: string,
-  rawBody = "",
-): Promise<{ status: number; text: string }> {
-  const cap = await mintSessionCap();
-  if (!("token" in cap)) return cap;
-  const r = await fetch(`${CORE}${pathWithQuery}`, {
-    method,
-    headers: { "content-type": "application/json", [CAPABILITY_HEADER]: cap.token },
-    ...(rawBody ? { body: rawBody } : {}),
-    redirect: "manual",
-  });
-  return { status: r.status, text: await r.text() };
 }
 
 async function relayCore(res: ServerResponse, method: HttpMethod, pathWithQuery: string, rawBody = ""): Promise<void> {
@@ -611,18 +378,6 @@ async function readJson<T extends object>(
     if (e instanceof PayloadTooLargeError) throw e;
     json(res, 400, { error: "bad_request" });
     return null;
-  }
-}
-
-async function userPermissions(): Promise<string[]> {
-  if (!CORE_SIGNING_SECRET) return [];
-  try {
-    const r = await coreFetchCap("GET", "/v1/admin/whoami");
-    if (r.status !== 200) return [];
-    const j = JSON.parse(r.text) as { permissions?: unknown };
-    return Array.isArray(j.permissions) ? j.permissions.filter((p): p is string => typeof p === "string") : [];
-  } catch {
-    return [];
   }
 }
 
@@ -1001,60 +756,6 @@ const apiRoutes: readonly WebRoute[] = [
         "/v1/composio/authorize",
         JSON.stringify({ toolkit: body.toolkit, ...(callbackUrl ? { callbackUrl } : {}) }),
       );
-    },
-  },
-  {
-    match: (_method, pathname) => pathname === "/me",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      res.setHeader("set-cookie", sessionCookie(user));
-      const [allPermissions, workspaceUrl, authStatus, activityConfig, companyBranding] = await Promise.all([
-        userPermissions(),
-        slackWorkspaceUrl(),
-        coreFetch("GET", `/v1/user-model-auth/status?principalId=${encodeURIComponent(user)}`, "", 5_000).catch(
-          () => null,
-        ),
-        coreFetch("GET", "/v1/suggested-activities", "", 2_000)
-          .then((response) => response.status === 200 && JSON.parse(response.text).enabled === true)
-          .catch(() => false),
-        brandingCache.forRender(),
-      ]);
-      if (authStatus === null || authStatus.status !== 200) {
-        return json(res, 503, {
-          error: "unavailable",
-          message: "the assistant is briefly unavailable — retry shortly",
-        });
-      }
-      const parsed = JSON.parse(authStatus.text) as {
-        individualModelAuth?: boolean;
-        account?: string;
-        connections?: { provider: string }[];
-      };
-      const permissions = allPermissions.filter((permission) => permission !== "loops" && permission !== "inbox");
-      if (await hasInboxLoopPreview(user)) {
-        if (isLoopsUser(user)) permissions.push("loops");
-        if (isInboxUser(user)) permissions.push("inbox");
-      }
-      return json(res, 200, {
-        user,
-        org: ORG,
-        companyName: companyBranding.orgName?.trim() || null,
-        ...(analyticsConfig && !resolveIdentity(req)?.impersonator ? { analytics: analyticsConfig } : {}),
-        ...(browserErrors && !resolveIdentity(req)?.impersonator ? { browserErrors } : {}),
-        mode: AUTH_MODE,
-        slackWorkspaceUrl: workspaceUrl,
-        individualModelAuth: parsed.individualModelAuth === true,
-        modelAuthConnected:
-          parsed.connections?.some(
-            (c) => !parsed.account || parsed.account === "personal" || parsed.account === c.provider,
-          ) ?? false,
-        impersonatedBy: resolveIdentity(req)?.impersonator ?? null,
-        displayName: resolveIdentity(req)?.name ?? null,
-        ...(welcomeCohort ? { welcomeCohort } : {}),
-        ...(activityConfig ? { suggestedActivitiesGeneration: true } : {}),
-        ...(suggestedActivities.length && !activityConfig ? { suggestedActivities } : {}),
-        permissions,
-      });
     },
   },
   {
@@ -1487,37 +1188,6 @@ const apiRoutes: readonly WebRoute[] = [
     },
   },
   {
-    method: "GET",
-    path: "/api/deliveries/events",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      res.writeHead(200, {
-        "content-type": "text/event-stream; charset=utf-8",
-        "cache-control": "no-cache, no-transform",
-        connection: "keep-alive",
-        "x-accel-buffering": "no",
-      });
-      res.write(": open\n\n");
-      let set = deliveryClients.get(user);
-      if (!set) {
-        set = new Set();
-        deliveryClients.set(user, set);
-      }
-      set.add(res);
-      const beat = setInterval(() => res.write(": ping\n\n"), SSE_HEARTBEAT_MS);
-      beat.unref?.();
-      req.on("close", () => {
-        clearInterval(beat);
-        const s = deliveryClients.get(user);
-        if (s) {
-          s.delete(res);
-          if (!s.size) deliveryClients.delete(user);
-        }
-      });
-      return;
-    },
-  },
-  {
     method: "POST",
     path: "/api/runs/:id/withdraw",
     handle: (c) => relayCore(c.res, "POST", `/v1/runs/${encodeURIComponent(c.params.id!)}/withdraw`),
@@ -1920,7 +1590,7 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
     );
   }
 
-  if (path === "/me" || path.startsWith("/api/")) {
+  if (path.startsWith("/api/")) {
     const user = cookieUser(req);
     if (!user) return unauthorized(res, req);
     if (["/api/dictation", "/api/voice", "/api/voice/sessions"].includes(path)) {
@@ -2000,11 +1670,6 @@ export async function startServer(options: { port: number; host: string; release
     `[web-ui] surface on http://${options.host}:${port} → core ${CORE} (org ${ORG})${WEB_UI_DEV ? " [vite hmr]" : ""}`,
   );
   if (ALLOW.length === 0) console.warn("[web-ui] WEB_UI_PRINCIPALS unset, any principal id may sign in (dev only)");
-  const t = setInterval(() => void drainWebDeliveries(), WEB_DELIVERY_POLL_MS);
-  t.unref?.();
-  server.once("close", () => clearInterval(t));
-  void runStateFeed();
-  void runInboxFeed();
   void sweepDictationSpool();
   return server;
 }

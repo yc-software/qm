@@ -23,10 +23,6 @@ const core = createServer((req: IncomingMessage, res) => {
       res.writeHead(200);
       return void res.end(JSON.stringify({ token: `cap-${sessionCapMints}` }));
     }
-    if (req.method === "GET" && u.startsWith("/v1/admin/whoami")) {
-      res.writeHead(200);
-      return void res.end(JSON.stringify({ isAdmin: false, permissions: [] }));
-    }
     if (req.method === "GET" && u.startsWith("/v1/keychain/overview")) {
       res.writeHead(200);
       return void res.end(
@@ -70,8 +66,8 @@ test("same-second session-cap mints stay unique past core's replay dedupe", asyn
   const realNow = Date.now;
   Date.now = () => FROZEN_NOW;
   try {
-    const me = await fetch(`${base}/me`, { headers });
-    assert.equal(me.status, 200);
+    const first = await fetch(`${base}/api/keychain/overview`, { headers });
+    assert.equal(first.status, 200);
 
     const overview = await fetch(`${base}/api/keychain/overview`, { headers });
     assert.equal(overview.status, 200, "second same-second mint must not be rejected as a replay");

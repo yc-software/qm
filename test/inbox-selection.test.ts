@@ -10,7 +10,6 @@ import { uiStateId } from "../src/surfaces/ui-state.ts";
 import type { PersistedUiState } from "../src/surfaces/ui-state.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import { ensureDefaultInboxLoops } from "../src/loops/inbox-loop.ts";
-import { installPrincipalLinks } from "../src/directory/person.ts";
 import { testConfigStore, testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 
@@ -401,61 +400,6 @@ test("email classification is projected only by the flagged inbox endpoint", asy
   for (const filter of ["all", "human", "triaged"]) {
     assert.equal((await disabled.call("GET", null, `filter=${filter}`)).status, 403);
   }
-});
-
-test("inbox viewers are exactly the active candidates who can administer the loop, including shared group scopes and aliases", async (t) => {
-  const store = createLoopStore(testMap());
-  const base = { createdBy: "alice", playbook: "triage", successCondition: "done" };
-  const { loop: personal } = await store.create({
-    ...base,
-    owner: "alice",
-    ownerScopeId: "personal:alice",
-    name: "Mine",
-  });
-  const { loop: group } = await store.create({ ...base, owner: "alice", ownerScopeId: "group:core", name: "Team" });
-  const members = new Set(["alice", "bob", "carol"]);
-  const route = inboxRoutes.find((r) => "path" in r && r.path === "/v1/inbox/viewers")!;
-  const ask = async (body: unknown, capability: unknown = null) => {
-    let status = 0;
-    let data: any;
-    await route.handle({
-      method: "POST",
-      body,
-      url: new URL("http://local/v1/inbox/viewers"),
-      capability,
-      deps: {
-        loops: { store },
-        identity: {
-          refresh: async () => {},
-          classify: (id: string) => ({ id, type: id === "carol" ? "deactivated" : "internal" }),
-        },
-      },
-      app: {
-        samePerson: async (a: string, b: string) => a === b,
-        membershipControlsScope: async (scope: string) => scope.startsWith("group:"),
-        managesScope: async (who: string, scope: string) => scope === "group:core" && members.has(who),
-      },
-      res: {
-        getHeader: () => undefined,
-        writeHead: (value: number) => {
-          status = value;
-        },
-        end: (value: string) => {
-          data = JSON.parse(value);
-        },
-      },
-    } as unknown as ApiCtx);
-    return { status, data };
-  };
-  const candidates = ["alice", "bob-slack", "carol", "mallory"];
-  installPrincipalLinks({ canonical: (key) => (key === "bob-slack" ? "bob" : undefined), aliases: () => [] });
-  t.after(() => installPrincipalLinks(null));
-  assert.deepEqual((await ask({ loopId: personal.id, candidates })).data.viewers, ["alice"]);
-  assert.deepEqual((await ask({ loopId: group.id, candidates })).data.viewers, ["alice", "bob-slack"]);
-  members.delete("alice");
-  assert.deepEqual((await ask({ loopId: group.id, candidates })).data.viewers, ["bob-slack"]);
-  assert.equal((await ask({ loopId: "missing", candidates })).status, 404);
-  assert.equal((await ask({ loopId: group.id, candidates }, { actorId: "mallory" })).status, 403);
 });
 
 test("the visible Slack feed includes fresh and cached avatars without returning message context", async () => {

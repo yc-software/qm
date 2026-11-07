@@ -1,4 +1,3 @@
-import { canonicalPerson } from "../../directory/person.ts";
 import { scopeId } from "../../types.ts";
 import type { Loop, LoopItem } from "../../loops/types.ts";
 import { ensureDefaultInboxLoops } from "../../loops/inbox-loop.ts";
@@ -103,7 +102,7 @@ export async function inboxView(ctx: ApiCtx): Promise<InboxView | null> {
   });
   const available: Loop[] = [];
   for (const loop of await deps.store.list()) {
-    if (loop.state !== "archived" && (await canAdministerLoop(ctx, loop, acting))) available.push(loop);
+    if (loop.state !== "archived" && (await canAdministerLoop(ctx.app, loop, acting.actorId))) available.push(loop);
   }
   let ids = Array.isArray(pref.value) ? pref.value.filter((value): value is string => typeof value === "string") : [];
   if (ctx.method === "PUT") {
@@ -240,37 +239,18 @@ async function inbox(ctx: ApiCtx): Promise<void> {
   if (view) sendJson(ctx.res, view.status, view.body);
 }
 
+export async function inboxPreviewEnabled(deps: ApiCtx["deps"], principalId: string): Promise<boolean> {
+  return (await deps.featureFlags?.enabled("inbox_loops", scopeId("personal", principalId))) === true;
+}
+
 async function access(ctx: ApiCtx): Promise<void> {
   const acting = actingPrincipal(ctx);
   if (!acting) return;
-  sendJson(ctx.res, 200, {
-    enabled: (await ctx.deps.featureFlags?.enabled("inbox_loops", scopeId("personal", acting.actorId))) === true,
-  });
-}
-
-async function viewers(ctx: ApiCtx): Promise<void> {
-  if (ctx.capability || ctx.actor) return sendJson(ctx.res, 403, { error: "forbidden" });
-  const body = isObj(ctx.body) ? ctx.body : {};
-  const loop = typeof body.loopId === "string" ? await loopDeps(ctx)?.store.get(body.loopId) : undefined;
-  if (!loop) return sendJson(ctx.res, 404, { error: "not_found" });
-  const candidates = Array.isArray(body.candidates)
-    ? [...new Set(body.candidates.filter((value): value is string => typeof value === "string"))]
-    : [];
-  const identity = ctx.deps.identity;
-  await identity?.refresh();
-  const allowed = await Promise.all(
-    candidates.map(
-      async (id) =>
-        (!identity || identity.classify(id).type === "internal") &&
-        canAdministerLoop(ctx, loop, { actorId: canonicalPerson(id), liveHuman: false }),
-    ),
-  );
-  sendJson(ctx.res, 200, { viewers: candidates.filter((_, i) => allowed[i]) });
+  sendJson(ctx.res, 200, { enabled: await inboxPreviewEnabled(ctx.deps, acting.actorId) });
 }
 
 export const inboxRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/inbox", actor: "query.principalId", auth: "source", handle: inbox },
-  { method: "POST", path: "/v1/inbox/viewers", actor: "system", auth: "source", handle: viewers },
   { method: "GET", path: "/v1/inbox/access", actor: "query.principalId", auth: "source", handle: access },
   { method: "PUT", path: "/v1/inbox", actor: "query.principalId", auth: "source", handle: inbox },
 ];
