@@ -201,7 +201,9 @@ async function oauthCallbackPage(ctx: ApiCtx): Promise<void> {
   if (!shell) return sendJson(ctx.res, 404, { error: "not_found" });
   const provider = ctx.params.provider!;
   const outcome = await settleOAuthCallback(ctx, provider);
-  return shell.connectorCallbackPage(ctx.res, provider, "status" in outcome && outcome.status === 200);
+  const ok = "redirect" in outcome || outcome.status === 200;
+  if (!ok) console.warn(`[connectors] ${provider} callback page: ${outcome.status} ${JSON.stringify(outcome.body)}`);
+  return shell.connectorCallbackPage(ctx.res, provider, ok);
 }
 
 async function principalHasProvider(deps: ServerDeps, provider: string, principalId: string): Promise<boolean> {

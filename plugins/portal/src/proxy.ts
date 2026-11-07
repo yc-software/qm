@@ -199,18 +199,22 @@ export function proxyToUpstream(
 
 export const FORWARD_BROKER_HEADERS = ["accept", "accept-language", "user-agent", "content-type"];
 
+export const INTERNAL_HEADERS = [
+  "x-signature",
+  "x-timestamp",
+  "x-as-principal",
+  "x-admin-actor",
+  "x-agent-capability",
+  PORTAL_IDENTITY_HEADER,
+  "x-qm-app-host",
+  "x-qm-client-ip",
+];
+
 export function proxyToAppHost(req: IncomingMessage, res: ServerResponse, coreBase: string, clientIp?: string): void {
   const upstream = new URL(coreBase);
   const blocked = new Set([
     ...DROP_RESPONSE_HEADERS,
-    "x-signature",
-    "x-timestamp",
-    "x-as-principal",
-    "x-admin-actor",
-    "x-agent-capability",
-    PORTAL_IDENTITY_HEADER,
-    "x-qm-app-host",
-    "x-qm-client-ip",
+    ...INTERNAL_HEADERS,
     "forwarded",
     "x-forwarded-host",
     "x-forwarded-proto",

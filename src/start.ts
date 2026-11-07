@@ -43,14 +43,17 @@ export async function startQm(
       })
     : undefined;
   const draining = new AbortController();
-  const branding = createBrandingCache(() => resolveBranding(built.config, orgScope(), config.brandingDefault));
   const web =
     config.publicPort === undefined
       ? undefined
       : {
           events: createWebEvents(built.app, built),
           me: webMeConfig(env),
-          shell: createWebShell({ ...config, publicPort: config.publicPort }, env, branding.forRender),
+          shell: createWebShell(
+            { ...config, publicPort: config.publicPort },
+            env,
+            createBrandingCache(() => resolveBranding(built.config, orgScope(), config.brandingDefault)).forRender,
+          ),
         };
   const server = createServer(built.app, {
     ...serverDeps(config, built, slackEnvironmentState, slackConfig?.botToken),

@@ -55,6 +55,7 @@ import {
   FORWARD_OAUTH_HEADERS,
   FORWARD_BROKER_HEADERS,
   FORWARD_WEBHOOK_HEADERS,
+  INTERNAL_HEADERS,
 } from "./proxy.ts";
 import { signedHeaders, withSourceAuthNonce } from "../../chassis/src/core-client.ts";
 import { coreClaimStore, claimOnce, withinRateLimit, ClaimStoreUnavailableError } from "../../chassis/src/claims.ts";
@@ -1319,7 +1320,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 }
 
 function withoutInternalHeaders(req: IncomingMessage): IncomingMessage {
-  for (const header of [PORTAL_IDENTITY_HEADER, "x-qm-app-host", "x-qm-client-ip"]) delete req.headers[header];
+  for (const header of INTERNAL_HEADERS) delete req.headers[header];
   return req;
 }
 
