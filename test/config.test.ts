@@ -1016,3 +1016,26 @@ test("The Render sandbox backend needs a tagged, digest-pinned RENDER_SANDBOX_IM
     enabledSandboxBackends(loadConfig({ ...secondary, RENDER_SANDBOX_IMAGE: RENDER_IMAGE })).includes("render"),
   );
 });
+
+test("PRIVATE_NETWORK_ALLOWED_ORIGINS is parsed at startup and a bad entry stops core without echoing it", () => {
+  assert.equal(loadConfig({}).privateNetworkAllowedOrigins.size, 0);
+  assert.deepEqual(
+    [
+      ...loadConfig({ PRIVATE_NETWORK_ALLOWED_ORIGINS: "http://gbrain:8787,https://brain.example-tailnet.ts.net" })
+        .privateNetworkAllowedOrigins,
+    ],
+    ["http://gbrain:8787", "https://brain.example-tailnet.ts.net"],
+  );
+  assert.throws(
+    () => loadConfig({ PRIVATE_NETWORK_ALLOWED_ORIGINS: "http://gbrain:8787,http://admin:hunter2@localhost:8787" }),
+    (e: unknown) => {
+      assert.match(String(e), /PRIVATE_NETWORK_ALLOWED_ORIGINS entry 2 \(http:\/\/localhost:8787\)/);
+      assert.doesNotMatch(String(e), /hunter2|admin/);
+      return true;
+    },
+  );
+  assert.throws(
+    () => loadConfig({ PRIVATE_NETWORK_ALLOWED_ORIGINS: "http://169.254.169.254" }),
+    /entry 1 \(http:\/\/169\.254\.169\.254\) is a loopback, link-local or cloud metadata address, which can never be allowed/,
+  );
+});

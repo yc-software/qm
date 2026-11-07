@@ -87,3 +87,30 @@ redirects. Updating an endpoint
 or credential host is an administrative trust decision. Tool call auditing records
 the initiating actor as before; authentication does not expand the audience allowed
 to receive the result.
+
+An operator can let core reach particular private services, such as a gbrain on the
+same Docker network, VPC or tailnet, by listing their exact origins in core's
+`PRIVATE_NETWORK_ALLOWED_ORIGINS` (`env.core` in `qm.config.jsonc`), separated by commas:
+`http://gbrain:8787,https://gbrain.example-tailnet.ts.net`. An entry is a scheme, host
+and port, with no path, query, fragment or credentials. A request to a listed origin
+may reach private addresses; a request to any other origin is refused as described
+above, and the refusal names this setting. Loopback, unspecified, link-local and cloud metadata
+addresses, including Tailscale's `100.100.100.100` and Alibaba Cloud's `100.100.100.200`,
+are never allowed: core refuses to start with one in the list, and refuses a listed
+name that resolves to one. Per-user endpoints still require HTTPS, and redirects stay
+refused. Only the deployment's environment sets the list. It is not an admin setting,
+and it does not open sandbox egress.
+
+- **Docker Compose.** List the service, such as `http://gbrain:8787`, and register
+  `http://gbrain:8787/mcp`. Core must run on the same Compose network. A server
+  registered as `localhost` or `127.0.0.1` stays refused; use the service name.
+- **Same VPC or private network.** List the address, such as `http://10.0.12.7:8787`,
+  or a name your DNS serves, such as `http://gbrain.internal:8787`.
+- **Tailscale.** List `https://gbrain.<tailnet>.ts.net`. Core's host must be on the
+  tailnet and resolve MagicDNS names; core's fetch uses no proxy.
+
+Prefer IP literals or fully qualified names your own DNS serves. A single-label name
+such as `gbrain` can fall through to resolver search domains, and a listed name is
+only as safe as its DNS. TLS to an IP literal needs a certificate that names the IP.
+Listing the Docker host (the bridge gateway or `host.docker.internal`) opens that
+host on the listed port.

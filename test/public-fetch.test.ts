@@ -3,7 +3,15 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { isIP, type AddressInfo } from "node:net";
-import { addressGuardedFetch, PrivateNetworkAddressError, publicFetch } from "../src/util/network.ts";
+import {
+  addressGuardedFetch,
+  configurePublicFetch,
+  createPublicFetch,
+  isNeverAllowedIp,
+  parsePrivateNetworkOrigins,
+  PrivateNetworkAddressError,
+  publicFetch,
+} from "../src/util/network.ts";
 import { createMcpClient } from "../src/mcp/mcp-client.ts";
 import { discoverOAuth } from "../src/mcp/oauth-discovery.ts";
 import { exchangeCode, setPublicOAuthClients } from "../src/connectors/oauth.ts";
@@ -104,11 +112,13 @@ test("address-guarded fetch gives up on an endpoint that never answers", async (
 test("MCP clients, OAuth discovery, and OAuth token exchange refuse private network endpoints by default", async (t) => {
   const target = await listen(t, (_req, res) => res.writeHead(500).end());
   const base = `http://127.0.0.1:${target.port}`;
+  const strict =
+    /127\.0\.0\.1 is a private network address; a deployment operator can allow this exact origin with PRIVATE_NETWORK_ALLOWED_ORIGINS/;
   await assert.rejects(createMcpClient({ url: `${base}/mcp`, auth: { mode: "none" } }).listTools(), (e: unknown) =>
-    /private network address/.test(errMessage(e)),
+    strict.test(errMessage(e)),
   );
   const discovered = await discoverOAuth(new URL(`${base}/mcp`));
-  assert.match(discovered.errors.join("; "), /127\.0\.0\.1 is a private network address/);
+  assert.match(discovered.errors.join("; "), strict);
   t.after(() => setPublicOAuthClients([]));
   setPublicOAuthClients([
     {
@@ -126,6 +136,148 @@ test("MCP clients, OAuth discovery, and OAuth token exchange refuse private netw
       client: { id: "public-client", secret: "", clientRef: "public:internal-crm" },
     }),
     PrivateNetworkAddressError,
+  );
+  assert.equal(target.hits(), 0);
+});
+
+test("the never-allow list covers loopback, unspecified, link-local and metadata addresses in every spelling", () => {
+  for (const ip of [
+    "127.0.0.1",
+    "::ffff:127.0.0.1",
+    "64:ff9b::7f00:1",
+    "169.254.169.254",
+    "::ffff:169.254.169.254",
+    "64:ff9b::a9fe:a9fe",
+    "169.254.170.2",
+    "0.0.0.0",
+    "::",
+    "::1",
+    "fe80::1",
+    "fd00:ec2::254",
+    "100.100.100.100",
+    "100.100.100.200",
+    "64:ff9b::6464:64c8",
+  ])
+    assert.equal(isNeverAllowedIp(ip), true, ip);
+  for (const ip of ["10.0.12.7", "172.18.0.4", "192.168.1.1", "100.101.102.103", "fdaa:0:1::3", "64:ff9b:1::a9fe:a9fe"])
+    assert.equal(isNeverAllowedIp(ip), false, ip);
+});
+
+test("PRIVATE_NETWORK_ALLOWED_ORIGINS parses to normalized exact origins", () => {
+  assert.equal(parsePrivateNetworkOrigins(undefined).size, 0);
+  assert.equal(parsePrivateNetworkOrigins(" , ").size, 0);
+  assert.deepEqual(
+    [
+      ...parsePrivateNetworkOrigins(
+        " HTTP://GBrain.:8787 ,http://gbrain:8787,https://brain.example-tailnet.ts.net:443/,http://10.0.12.7:80,,http://[FDAA:0:1::3]:8080",
+      ),
+    ],
+    ["http://gbrain:8787", "https://brain.example-tailnet.ts.net", "http://10.0.12.7", "http://[fdaa:0:1::3]:8080"],
+  );
+});
+
+test("PRIVATE_NETWORK_ALLOWED_ORIGINS refuses a bad entry by position and origin, never echoing the raw value", () => {
+  for (const [entry, reason] of [
+    ["not a url secret", /entry 2 is not a valid URL \(value not shown\)/],
+    ["ftp://secret.example", /entry 2 is not an http:\/\/ or https:\/\/ origin \(value not shown\)/],
+    ["http://admin:secret@gbrain:8787", /entry 2 \(http:\/\/gbrain:8787\) carries credentials/],
+    ["http://gbrain:8787/secret", /entry 2 \(http:\/\/gbrain:8787\) has a path, query or fragment/],
+    ["http://gbrain:8787/?", /entry 2 \(http:\/\/gbrain:8787\) has a path, query or fragment/],
+    ["http://gbrain:8787?secret", /entry 2 \(http:\/\/gbrain:8787\) has a path, query or fragment/],
+    ["http://gbrain:8787#secret", /entry 2 \(http:\/\/gbrain:8787\) has a path, query or fragment/],
+    [
+      "http://localhost:8787",
+      /entry 2 \(http:\/\/localhost:8787\) is a loopback, link-local or cloud metadata address/,
+    ],
+    ["http://localhost.:8787", /entry 2 \(http:\/\/localhost:8787\) is a loopback/],
+    ["http://brain.localhost", /entry 2 \(http:\/\/brain\.localhost\) is a loopback/],
+    ["http://127.1:8787", /entry 2 \(http:\/\/127\.0\.0\.1:8787\) is a loopback/],
+    ["http://[::1]", /entry 2 \(http:\/\/\[::1\]\) is a loopback/],
+    ["http://[::ffff:127.0.0.1]", /entry 2 \(http:\/\/\[::ffff:7f00:1\]\) is a loopback/],
+    ["http://0.0.0.0:8787", /entry 2 \(http:\/\/0\.0\.0\.0:8787\) is a loopback/],
+    ["http://169.254.169.254", /entry 2 \(http:\/\/169\.254\.169\.254\) is a loopback/],
+    ["http://[64:ff9b::a9fe:a9fe]", /entry 2 \(http:\/\/\[64:ff9b::a9fe:a9fe\]\) is a loopback/],
+    ["http://100.100.100.200", /entry 2 \(http:\/\/100\.100\.100\.200\) is a loopback/],
+    ["http://metadata.google.internal", /entry 2 \(http:\/\/metadata\.google\.internal\) is a loopback/],
+  ] as const) {
+    let message = "";
+    assert.throws(
+      () => parsePrivateNetworkOrigins(`http://gbrain:9090,${entry}`),
+      (e: unknown) => {
+        message = errMessage(e);
+        return reason.test(message);
+      },
+      entry,
+    );
+    assert.doesNotMatch(message, /secret|admin/, entry);
+  }
+});
+
+test("a listed origin still refuses a name that resolves to loopback, at dial time", async (t) => {
+  const target = await listen(t, (_req, res) => res.end("secret"));
+  const fetchListed = createPublicFetch(new Set([`http://localhost:${target.port}`]));
+  await assert.rejects(fetchListed(`http://localhost:${target.port}/`), (e: unknown) => {
+    assert.ok(e instanceof PrivateNetworkAddressError);
+    assert.match(
+      errMessage(e),
+      /^localhost resolves to a loopback, link-local or cloud metadata address, which PRIVATE_NETWORK_ALLOWED_ORIGINS never allows; point it at the service's own address$/,
+    );
+    return true;
+  });
+  assert.equal(target.hits(), 0);
+});
+
+test("only the exact listed origin gets the private-network allowance", async (t) => {
+  const target = await listen(t, (req, res) => {
+    if (req.url === "/moved") return void res.writeHead(302, { location: `http://127.0.0.1:${other.port}/` }).end();
+    res.end("listed");
+  });
+  const other = await listen(t, (_req, res) => res.end("unlisted"));
+  const listedOrigin = `http://127.0.0.1:${target.port}`;
+  const allowLoopback = createPublicFetch(new Set([listedOrigin]), () => false);
+  assert.equal(await (await allowLoopback(`${listedOrigin}/`)).text(), "listed");
+  await assert.rejects(allowLoopback(`http://localhost:${target.port}/`), (e: unknown) =>
+    /^localhost resolves to a private network address; a deployment operator can allow this exact origin with PRIVATE_NETWORK_ALLOWED_ORIGINS$/.test(
+      errMessage(e),
+    ),
+  );
+  await assert.rejects(allowLoopback(`http://127.0.0.1:${other.port}/`), PrivateNetworkAddressError);
+  await assert.rejects(allowLoopback(`${listedOrigin}/moved`, { redirect: "error" }), /redirect from .* refused/);
+  const unfollowed = await allowLoopback(`${listedOrigin}/moved`);
+  assert.equal(unfollowed.status, 302);
+  assert.equal(target.hits(), 3);
+  assert.equal(other.hits(), 0);
+});
+
+test("the configured public fetch is the default for MCP clients, discovery and token exchange", async (t) => {
+  const target = await listen(t, (_req, res) => res.writeHead(500).end());
+  t.after(() => configurePublicFetch(new Set()));
+  configurePublicFetch(new Set([`http://localhost:${target.port}`]));
+  const neverAllowed =
+    /localhost resolves to a loopback, link-local or cloud metadata address, which PRIVATE_NETWORK_ALLOWED_ORIGINS never allows/;
+  await assert.rejects(
+    createMcpClient({ url: `http://localhost:${target.port}/mcp`, auth: { mode: "none" } }).listTools(),
+    (e: unknown) => neverAllowed.test(errMessage(e)),
+  );
+  const discovered = await discoverOAuth(new URL(`http://localhost:${target.port}/mcp`));
+  assert.match(discovered.errors.join("; "), neverAllowed);
+  t.after(() => setPublicOAuthClients([]));
+  setPublicOAuthClients([
+    {
+      name: "internal-crm",
+      host: "crm.example.com",
+      authUrl: "https://crm.example.com/authorize",
+      tokenUrl: `http://localhost:${target.port}/token`,
+      scopes: [],
+      clientId: "public-client",
+      label: "CRM",
+    },
+  ]);
+  await assert.rejects(
+    exchangeCode("internal-crm", "code", "https://qm.example/cb", {
+      client: { id: "public-client", secret: "", clientRef: "public:internal-crm" },
+    }),
+    (e: unknown) => e instanceof PrivateNetworkAddressError && neverAllowed.test(errMessage(e)),
   );
   assert.equal(target.hits(), 0);
 });

@@ -7,9 +7,9 @@ import {
   createRelayAuditSink,
   tokenFromRequest,
   hostFromAuthority,
-  isBlockedDestinationIp,
   type EgressAuthzDeps,
 } from "../src/egress-authz-main.ts";
+import { isNeverAllowedIp } from "../src/util/network.ts";
 import { verifySignature } from "../src/auth/source-auth.ts";
 import { mintCapabilityToken, EGRESS_PROXY_AUD, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import type { EgressAuditRecord } from "../src/admin/egress-audit-sink.ts";
@@ -111,31 +111,31 @@ test("hostFromAuthority strips ports and IPv6 brackets", () => {
   assert.equal(hostFromAuthority(""), null);
 });
 
-test("isBlockedDestinationIp covers IMDS, 169.254/16, fe80::/10, v4-mapped, AWS v6 IMDS", () => {
-  assert.equal(isBlockedDestinationIp("169.254.169.254"), true);
-  assert.equal(isBlockedDestinationIp("169.254.1.1"), true);
-  assert.equal(isBlockedDestinationIp("::ffff:169.254.169.254"), true);
-  assert.equal(isBlockedDestinationIp("fe80::1"), true);
-  assert.equal(isBlockedDestinationIp("febf::1"), true);
-  assert.equal(isBlockedDestinationIp("fd00:ec2::254"), true);
-  assert.equal(isBlockedDestinationIp("[fd00:ec2::254]"), true);
-  assert.equal(isBlockedDestinationIp("8.8.8.8"), false);
-  assert.equal(isBlockedDestinationIp("2606:4700::1111"), false);
-  assert.equal(isBlockedDestinationIp("fec0::1"), false);
+test("isNeverAllowedIp covers IMDS, 169.254/16, fe80::/10, v4-mapped, AWS v6 IMDS", () => {
+  assert.equal(isNeverAllowedIp("169.254.169.254"), true);
+  assert.equal(isNeverAllowedIp("169.254.1.1"), true);
+  assert.equal(isNeverAllowedIp("::ffff:169.254.169.254"), true);
+  assert.equal(isNeverAllowedIp("fe80::1"), true);
+  assert.equal(isNeverAllowedIp("febf::1"), true);
+  assert.equal(isNeverAllowedIp("fd00:ec2::254"), true);
+  assert.equal(isNeverAllowedIp("[fd00:ec2::254]"), true);
+  assert.equal(isNeverAllowedIp("8.8.8.8"), false);
+  assert.equal(isNeverAllowedIp("2606:4700::1111"), false);
+  assert.equal(isNeverAllowedIp("fec0::1"), false);
 });
 
-test("isBlockedDestinationIp catches non-canonical spellings of blocked addresses", () => {
-  assert.equal(isBlockedDestinationIp("::ffff:a9fe:a9fe"), true);
-  assert.equal(isBlockedDestinationIp("[::ffff:a9fe:a9fe]"), true);
-  assert.equal(isBlockedDestinationIp("fd00:ec2:0:0:0:0:0:254"), true);
-  assert.equal(isBlockedDestinationIp("fd00:0ec2::0254"), true);
-  assert.equal(isBlockedDestinationIp("FE80::1"), true);
-  assert.equal(isBlockedDestinationIp("fe80::1%eth0"), true);
-  assert.equal(isBlockedDestinationIp("0.0.0.0"), true);
-  assert.equal(isBlockedDestinationIp("0.0.0.7"), true);
-  assert.equal(isBlockedDestinationIp("::"), true);
-  assert.equal(isBlockedDestinationIp("::ffff:0:0"), true);
-  assert.equal(isBlockedDestinationIp("[::]"), true);
+test("isNeverAllowedIp catches non-canonical spellings of blocked addresses", () => {
+  assert.equal(isNeverAllowedIp("::ffff:a9fe:a9fe"), true);
+  assert.equal(isNeverAllowedIp("[::ffff:a9fe:a9fe]"), true);
+  assert.equal(isNeverAllowedIp("fd00:ec2:0:0:0:0:0:254"), true);
+  assert.equal(isNeverAllowedIp("fd00:0ec2::0254"), true);
+  assert.equal(isNeverAllowedIp("FE80::1"), true);
+  assert.equal(isNeverAllowedIp("fe80::1%eth0"), true);
+  assert.equal(isNeverAllowedIp("0.0.0.0"), true);
+  assert.equal(isNeverAllowedIp("0.0.0.7"), true);
+  assert.equal(isNeverAllowedIp("::"), true);
+  assert.equal(isNeverAllowedIp("::ffff:0:0"), true);
+  assert.equal(isNeverAllowedIp("[::]"), true);
 });
 
 test("valid token, open policy => 200 + audited as ok with scope/principal", async () => {
@@ -325,6 +325,28 @@ test("denyPrivateNetworks rejects local-use and deprecated IPv6 ranges", async (
     } finally {
       await close(server);
     }
+  }
+});
+
+test("every posture denies NAT64 forms of never-allowed addresses, Tailscale and Alibaba metadata, and localhost names", async () => {
+  const token = await egressToken({ allowedHosts: [] });
+  for (const address of ["64:ff9b::a9fe:a9fe", "64:ff9b::7f00:1", "100.100.100.200", "100.100.100.100"]) {
+    const { server } = boot({ lookup: async () => [address] });
+    const port = await listen(server);
+    try {
+      assert.equal(await check(port, "service.example.com:443", token), 403, address);
+    } finally {
+      await close(server);
+    }
+  }
+  const { server } = boot({ lookup: async () => ["64:ff9b:1::a9fe:a9fe"] });
+  const port = await listen(server);
+  try {
+    assert.equal(await check(port, "service.example.com:443", token), 200);
+    assert.equal(await check(port, "localhost:443", token), 403);
+    assert.equal(await check(port, "brain.localhost.:443", token), 403);
+  } finally {
+    await close(server);
   }
 });
 
