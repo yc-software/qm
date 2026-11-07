@@ -199,12 +199,24 @@ export function parseMemoryProviderConfig(
       ...(typeof raw.failOpen === "boolean" ? { failOpen: raw.failOpen } : {}),
     };
   });
+  const personal = (scope: ScopeKind | ScopeId) => scope === "personal" || parseScopeId(scope).kind === "personal";
   for (const [i, route] of routes.entries()) {
     const target = providerById.get(route.provider);
-    const shared = route.scopes.filter((scope) => scope !== "personal" && parseScopeId(scope).kind !== "personal");
+    const shared = route.scopes.filter((scope) => !personal(scope));
     if (target?.type === "mcp" && target.attestActor && shared.length)
       throw new Error(
         `memory route ${i}: provider ${route.provider} sets attestActor, so it may serve only personal scopes, not ${shared.join(", ")}; an attested read returns that member's private memory, which a shared conversation would show to everyone in it (docs/memory-providers.md#attesting-the-member-attestactor)`,
+      );
+  }
+  for (const provider of providers) {
+    if (provider.type !== "mcp") continue;
+    const op = (["read", "write"] as const).find((name) => provider[name] && !provider[name].scopeArg);
+    const scopes = [
+      ...new Set(routes.filter((route) => route.provider === provider.id).flatMap((route) => route.scopes)),
+    ];
+    if (op && scopes.some(personal) && !scopes.every(personal))
+      throw new Error(
+        `memory provider ${provider.id}.${op} sets no scopeArg, but the provider serves personal and shared scopes (${scopes.join(", ")}), so its server cannot tell a member's private memory from a shared conversation's; set scopeArg on read and write, or route only personal or only shared scopes to it (docs/memory-providers.md#troubleshooting)`,
       );
   }
   return { providers, routes };

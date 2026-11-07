@@ -195,6 +195,38 @@ test("an attested provider serves only personal scopes, so a shared conversation
   }
 });
 
+test("a provider serving personal and shared scopes must send the scope, so its server can keep a member's private memory out of shared conversations", () => {
+  const knowledge = (JSON.parse(value) as { providers: Array<Record<string, Record<string, unknown>>> }).providers[0]!;
+  const scoped = { read: { ...knowledge.read, scopeArg: "scope" }, write: { ...knowledge.write, scopeArg: "scope" } };
+  const scopes = (provider: Record<string, unknown>, ...routes: Array<Record<string, unknown>>) => {
+    const parsed = JSON.parse(withProvider(provider)) as { routes: Array<Record<string, unknown>> };
+    parsed.routes.splice(1, 1, ...routes.map((route) => ({ provider: "knowledge", manage: false, ...route })));
+    return parseMemoryProviderConfig(JSON.stringify(parsed), ENV)
+      ?.routes.slice(1)
+      .flatMap((route) => route.scopes);
+  };
+  const refused = (op: string, listed: string) =>
+    new RegExp(
+      `memory provider knowledge\\.${op} sets no scopeArg, but the provider serves personal and shared scopes \\(${listed}\\)`,
+    );
+  assert.throws(() => scopes({}, { scopes: ["personal", "channel"] }), refused("read", "personal, channel"));
+  assert.throws(
+    () => scopes({}, { scopes: ["personal:U1"] }, { scopes: ["org:acme"], capture: "explicit" }),
+    refused("read", "personal:U1, org:acme"),
+  );
+  assert.throws(
+    () => scopes({ read: scoped.read }, { scopes: ["personal", "team"], capture: "explicit" }),
+    refused("write", "personal, team"),
+  );
+  assert.deepEqual(scopes(scoped, { scopes: ["personal", "channel"] }), ["personal", "channel"]);
+  assert.deepEqual(scopes({ read: scoped.read, write: undefined }, { scopes: ["personal", "org"] }), [
+    "personal",
+    "org",
+  ]);
+  assert.deepEqual(scopes({}, { scopes: ["personal"] }, { scopes: ["personal:U1"] }), ["personal", "personal:U1"]);
+  assert.deepEqual(scopes({}, { scopes: ["channel", "org"] }), ["channel", "org"]);
+});
+
 test("a write operation maps its facts with factsArg or contentArg, not both", () => {
   const write = (fields: Record<string, unknown>) => {
     const parsed = JSON.parse(value) as { providers: Array<{ write: Record<string, unknown> }> };
