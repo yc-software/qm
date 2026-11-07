@@ -58,6 +58,7 @@ export interface FinnyVerificationReopenedRecovery {
   scopeId: string;
   jobId: string;
   idempotencyKey: string;
+  forceNewAuditor?: boolean;
 }
 
 export type FinnyRuntimeRecovery =
@@ -763,8 +764,20 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
                )`
             : ""
         }`;
+      const orphanedReverificationSelect = hasRuns
+        ? `EXISTS (
+             SELECT 1 FROM finny_runtime_bindings AS orphaned_auditor
+             LEFT JOIN runs AS orphaned_run ON orphaned_run.id=orphaned_auditor.run_id
+              WHERE orphaned_auditor.job_id=jobs.id
+                AND orphaned_auditor.scope_id=jobs.scope_id
+                AND orphaned_auditor.role='auditor'
+                AND orphaned_auditor.active=TRUE
+                AND orphaned_run.id IS NULL
+           )`
+        : "FALSE";
       const reopened = await q(
-        `SELECT jobs.scope_id,jobs.id AS job_id,events.idempotency_key
+        `SELECT jobs.scope_id,jobs.id AS job_id,events.idempotency_key,
+                ${orphanedReverificationSelect} AS force_new_auditor
            FROM finny_job_events AS events
            JOIN finny_jobs AS jobs ON jobs.id=events.job_id
           WHERE events.event_type='verification_reopened'
@@ -805,6 +818,7 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
           scopeId: row.scope_id as string,
           jobId: row.job_id as string,
           idempotencyKey: row.idempotency_key as string,
+          ...((row.force_new_auditor as boolean) ? { forceNewAuditor: true } : {}),
         })),
       ];
     },

@@ -148,7 +148,12 @@ export async function reconcileFinnyRuntimeRecoveries(deps: {
     artifactReady(input: ArtifactReadyRuntimeInput): Promise<void>;
     auditPassed(input: AuditPassedRuntimeInput): Promise<void>;
     auditBlocked(input: AuditBlockedRuntimeInput): Promise<void>;
-    verificationReopened(input: { scopeId: string; jobId: string; idempotencyKey: string }): Promise<void>;
+    verificationReopened(input: {
+      scopeId: string;
+      jobId: string;
+      idempotencyKey: string;
+      forceNewAuditor?: boolean;
+    }): Promise<void>;
   }>;
   recordError(error: unknown, recovery: FinnyRuntimeRecovery): Promise<void>;
 }): Promise<void> {
@@ -453,7 +458,12 @@ export function createFinnyRuntimeCoordinator(deps: {
         },
       });
     },
-    async verificationReopened(input: { scopeId: string; jobId: string; idempotencyKey: string }): Promise<void> {
+    async verificationReopened(input: {
+      scopeId: string;
+      jobId: string;
+      idempotencyKey: string;
+      forceNewAuditor?: boolean;
+    }): Promise<void> {
       const job = await deps.jobs.getJob(input.scopeId, input.jobId);
       if (
         !job?.artifactDigest ||
@@ -466,6 +476,14 @@ export function createFinnyRuntimeCoordinator(deps: {
       }
       const dispatchPrefix = `${input.idempotencyKey}:auditor-reverify`;
       let auditor = await deps.runtime.currentRoleBinding(input.scopeId, input.jobId, "auditor");
+      if (auditor && input.forceNewAuditor) {
+        await deps.runtime.retireBinding({
+          sessionId: auditor.sessionId,
+          runId: auditor.runId,
+          role: "auditor",
+        });
+        auditor = null;
+      }
       if (!auditor) {
         const credentials = deps.workerPolicy.credentials(job, "auditor");
         const bindAuditor = (identity: { sessionId: string; runId: string }) =>
