@@ -167,6 +167,9 @@ test("the registry refuses a brain on a loopback or private address", () => {
     "https://169.254.169.254/latest",
     "http://brain.internal/mcp",
     "https://gbrain.local/mcp",
+    "https://localhost./mcp",
+    "https://brain.internal./mcp",
+    "https://gbrain.local../mcp",
   ])
     refused(
       () => personalBrain(EMPTY_MEMORY_REGISTRY, { url }),
