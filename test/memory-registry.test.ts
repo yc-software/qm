@@ -179,11 +179,15 @@ test("the registry refuses a brain on a loopback or private address", () => {
   assert.equal(personalBrain().brains[0]!.url, "https://brain.acme.example/mcp");
 });
 
-test("the registry checks a hostname of 200,000 dots in well under a second", () => {
-  const url = `https://a${".".repeat(200_000)}b/mcp`;
-  const started = performance.now();
-  assert.equal(personalBrain(EMPTY_MEMORY_REGISTRY, { url }).brains[0]!.url, url);
-  assert.ok(performance.now() - started < 1_000);
+test("the registry checks a url with 200,000 dots or slashes in well under a second", () => {
+  for (const url of [
+    `https://a${".".repeat(200_000)}b/mcp`,
+    `https://brain.acme.example/${"/".repeat(200_000)}x/mcp`,
+  ]) {
+    const started = performance.now();
+    assert.equal(personalBrain(EMPTY_MEMORY_REGISTRY, { url }).brains[0]!.url, url);
+    assert.ok(performance.now() - started < 1_000);
+  }
 });
 
 test("the env validator's rules apply to registry brains", () => {
