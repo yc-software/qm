@@ -129,7 +129,6 @@ type WebUserMessage = AgentMessage & {
   role: "user" | "user-with-attachments";
   content: string | Array<{ type: string; text?: string }>;
   attachments?: PiAttachment[];
-  clientTurnId?: string;
   sendFailure?: string;
 };
 

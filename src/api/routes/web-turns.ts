@@ -13,7 +13,6 @@ type WebConversation = TurnRequest["conversation"];
 type Refusal = { error: string; message: string };
 
 const SEND_KEY_PATTERN = /^[A-Za-z0-9._-]{1,128}$/;
-const CLIENT_TURN_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const APPROVAL_SCOPES = new Set(["once", "session", "always"]);
 
 function namespacedSendKey(user: string, raw: unknown): string | undefined {
@@ -75,7 +74,10 @@ async function inboxContext(ctx: ApiCtx): Promise<string> {
   for (let page = 0; page < 5; page++) {
     const url = new URL(`/v1/inbox${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`, ctx.url);
     const view = await inboxView({ ...ctx, method: "GET", url, pathname: url.pathname });
-    if (view?.status !== 200) throw new Error("Could not load inbox context. Try again.");
+    if (view?.status !== 200)
+      throw new Error("Could not load inbox context. Try again.", {
+        cause: new Error(`inbox listing answered ${view?.status ?? "nothing"}: ${JSON.stringify(view?.body ?? null)}`),
+      });
     const inbox = view.body as { total: number; nextCursor?: string | null; items: InboxPreview[] };
     total = inbox.total;
     items.push(...inbox.items);
@@ -132,6 +134,13 @@ async function webTurnBase(
 }
 
 function submitTurn(ctx: ApiCtx, turn: TurnRequest): Promise<void> {
+  const startedAt = performance.now();
+  ctx.res.once("finish", () => {
+    console.info("[web] turn response", {
+      status: ctx.res.statusCode,
+      elapsedMs: Math.round(performance.now() - startedAt),
+    });
+  });
   const body = { ...turn, ...(ctx.actor?.imp ? { analyticsSuppressed: true } : {}) };
   return postTurn({ ...ctx, body, url: new URL("/v1/turns?async=1", ctx.url) });
 }
@@ -179,11 +188,7 @@ async function webTurn(ctx: ApiCtx): Promise<void> {
   const resolved = await resolveWebConversation(ctx, user, threadRef, scope, trimmed(p.channelName, 200));
   if ("error" in resolved) return sendJson(ctx.res, 403, resolved);
   const privateConversation = threadRef.startsWith(`web:${user}:`) && resolved.conversation.kind === "dm";
-  const idempotencyKey =
-    namespacedSendKey(user, p.idempotencyKey) ??
-    (typeof p.clientTurnId === "string" && CLIENT_TURN_ID.test(p.clientTurnId)
-      ? `web:${user}:${p.clientTurnId}`
-      : undefined);
+  const idempotencyKey = namespacedSendKey(user, p.idempotencyKey);
   const desktopClientId =
     typeof p.desktopClientId === "string" && p.desktopClientId.length === 36 ? p.desktopClientId : undefined;
   const surfaceBriefing = isObj(p.surfaceBriefing) && !Array.isArray(p.surfaceBriefing) ? p.surfaceBriefing : undefined;
@@ -244,11 +249,7 @@ async function webApproval(ctx: ApiCtx): Promise<void> {
   const idempotencyKey = namespacedSendKey(user, p.idempotencyKey);
   return submitTurn(ctx, {
     ...replay,
-    approval: {
-      requestId,
-      approved: p.approved,
-      ...(APPROVAL_SCOPES.has(p.scope as string) ? { scope: p.scope as "once" | "session" | "always" } : {}),
-    },
+    approval: approvalOf({ ...p, requestId }),
     clientSurface: clientSurfaceOf(ctx.req.headers),
     ...(idempotencyKey ? { idempotencyKey } : {}),
   });

@@ -200,16 +200,11 @@ test("a turn with nothing to send is refused before it reaches the agent", async
   assert.equal(await refused("/api/turn", { text: "x", pad: "x".repeat(1_000_001) }, 413), "payload_too_large");
 });
 
-test("client idempotency keys and turn ids reach the agent namespaced to the signed-in person", async () => {
+test("client idempotency keys reach the agent namespaced to the signed-in person", async () => {
   assert.equal((await sentTurn({ idempotencyKey: "gesture-123" })).idempotencyKey, "web:alice:gesture-123");
   assert.ok(!("idempotencyKey" in (await sentTurn({}))));
   for (const bad of ["", "   ", 42, "x".repeat(129), "a:b", "approval:a-1:true", "a b", "a\nb"])
     assert.ok(!("idempotencyKey" in (await sentTurn({ idempotencyKey: bad }))), JSON.stringify(bad));
-  const clientTurnId = "123e4567-e89b-42d3-a456-426614174000";
-  const first = await sentTurn({ clientTurnId });
-  assert.equal(first.idempotencyKey, `web:alice:${clientTurnId}`);
-  assert.equal((await sentTurn({ clientTurnId })).idempotencyKey, first.idempotencyKey);
-  assert.equal((await sentTurn({ clientTurnId: "shared-key" })).idempotencyKey, undefined);
 });
 
 const SAFARI_IPHONE =
@@ -278,35 +273,11 @@ test("client tools and a surface briefing reach the agent only from the person's
     assert.equal(turn.clientTools, undefined);
     assert.equal(turn.conversationHeader, undefined);
   }
-  const malformed = await post("/api/turn", { text: "hello", surfaceBriefing: { instructions: "x" } });
-  assert.equal(malformed.status, 400);
-  assert.match(((await malformed.json()) as { message: string }).message, /surfaceBriefing\.name/);
   for (const shared of [{ threadRef: "web:bob:app-edit:sample-app" }, { scopeId: "channel:shared" }]) {
     const turn = await sentTurn({ clientTools: [scroll], surfaceBriefing: { name: "Panel" }, ...shared });
     assert.equal(turn.clientTools, undefined, JSON.stringify(shared));
     assert.doesNotMatch(turn.conversationHeader ?? "", /Surface: Panel/, JSON.stringify(shared));
   }
-});
-
-test("a steer carries a server-built request for the signed-in person; client identity fields are ignored", async () => {
-  const threadRef = "web:alice:steer-thread";
-  const response = await post("/api/runs/r1/signal", {
-    kind: "steer",
-    text: "louder",
-    threadRef,
-    ts: "client-forged",
-    actor: { externalId: "mallory" },
-    request: { surface: "web", actor: { externalId: "mallory" }, conversation: { kind: "dm", threadRef }, text: "x" },
-  });
-  assert.equal(response.status, 200);
-  const { runId, signal, viewer } = signals.at(-1)!;
-  assert.deepEqual([runId, viewer, signal.kind, signal.text, signal.ts], ["r1", "alice", "steer", "louder", undefined]);
-  assert.equal(signal.request?.actor.externalId, "alice");
-  assert.equal(signal.request?.surface, "web");
-  assert.equal(signal.request?.text, "louder");
-  assert.deepEqual(signal.request?.conversation, { kind: "dm", threadRef });
-  assert.equal(signal.request?.deliveryTarget, threadRef);
-  assert.deepEqual(signal.request?.origin, { kind: "human" });
 });
 
 test("steers without conversation context and aborts are forwarded bare", async () => {

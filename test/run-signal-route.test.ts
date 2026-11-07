@@ -368,6 +368,8 @@ test("web: a steer carries a server-built ts and TurnRequest for the signed-in u
   assert.equal(signal.request?.actor.externalId, "alice", "a client-supplied request/actor is ignored");
   assert.equal(signal.request?.surface, "web");
   assert.deepEqual(signal.request?.conversation, { kind: "dm", threadRef });
+  assert.equal(signal.request?.deliveryTarget, threadRef);
+  assert.deepEqual(signal.request?.origin, { kind: "human" });
 });
 
 test("web: inbox steering cannot omit or disguise its context to bypass rollout gates", async () => {
