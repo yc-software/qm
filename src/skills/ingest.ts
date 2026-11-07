@@ -33,14 +33,16 @@ export interface IngestPlan {
 
 function globToRegExp(glob: string): RegExp {
   const re = glob
-    .split("**")
-    .map((seg) =>
-      seg
+    .split(/(\*\*\/|\*\*)/)
+    .map((part) => {
+      if (part === "**/") return "(?:.*/)?";
+      if (part === "**") return ".*";
+      return part
         .split("*")
         .map((s) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&"))
-        .join("[^/]*"),
-    )
-    .join(".*");
+        .join("[^/]*");
+    })
+    .join("");
   return new RegExp(`^${re}$`);
 }
 function matchesAny(path: string, globs: string[] | undefined): boolean {
