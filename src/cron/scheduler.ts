@@ -20,7 +20,7 @@ import { hashId } from "../util/crypto.ts";
 import { utcMinute } from "../util/time.ts";
 import { errMessage, reportFailure, reportFailureAs } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
-import { TransientTurnFailure } from "../core/turn-error.ts";
+import { TurnHandedOff } from "../core/turn-error.ts";
 
 const TICK_LEASE_KEY = "cron:scheduler:tick";
 const CRON_FIRE_REPLY_MAX_CHARS = 2000;
@@ -318,7 +318,6 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           fireKey,
           threadRef,
           surface: "cron",
-          redrivesHandOff: true,
           ...(firesAtMostDaily(cron.schedule, scheduledAt ?? t) ? { infrequentCron: true } : {}),
           ...(cron.runtime && !runtimeProblem ? { runtime: cron.runtime } : {}),
           ...(cron.title ? { title: cron.title } : {}),
@@ -338,7 +337,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         },
       );
     } catch (e) {
-      if (e instanceof TransientTurnFailure) throw e;
+      if (e instanceof TurnHandedOff) throw e;
       await deps.crons.recordFire(cron.id, {
         fireKey,
         threadRef,

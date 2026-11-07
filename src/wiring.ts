@@ -2698,10 +2698,16 @@ export function buildApp(
     idempotency,
     identity,
     run: runTriggered,
+    runs,
     directory,
     currentScopeMembers,
     resolveRecipient,
   });
+  const webhookRedriveSweeper = createSweeper(
+    () => leaderLease.hold("webhook:redrive", () => webhookReceiver.redriveHandedOff()),
+    60_000,
+    { label: "webhook-redrive" },
+  );
   const deploymentKey = config.backgroundDeploymentId ?? config.buildSha;
   const instanceRegistry: InstanceRegistry =
     pgArtifactMap && deploymentKey && config.backgroundWorkEnabled
@@ -2843,6 +2849,7 @@ export function buildApp(
         })
         .catch(swallowAs("wiring: monitor resume failed", undefined));
       monitorRetentionSweeper.start();
+      webhookRedriveSweeper.start();
       spendSweeper?.start();
       llmCaptureSweeper?.start();
       semanticMemory.start();
@@ -2878,6 +2885,7 @@ export function buildApp(
       reaper.stop(),
       processReaper?.stop(),
       monitorRetentionSweeper.stop(),
+      webhookRedriveSweeper.stop(),
       spendSweeper?.stop(),
       llmCaptureSweeper?.stop(),
       semanticMemory.stop(),

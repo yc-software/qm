@@ -45,6 +45,13 @@ export class TransientTurnFailure extends Error {
   }
 }
 
+export class TurnHandedOff extends TransientTurnFailure {
+  constructor(runId: string | undefined) {
+    super(`turn ${runId ?? ""} was still waiting to finish when this process shut down`);
+    this.name = "TurnHandedOff";
+  }
+}
+
 export const TRANSIENT_ERROR_CODES: readonly ProviderErrorCode[] = ["rate_limit", "transient"];
 
 export function isTransientErrorCode(code: string | undefined): boolean {

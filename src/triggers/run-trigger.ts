@@ -6,7 +6,7 @@ import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import type { IdempotencyStore } from "../idempotency/idempotency-store.ts";
 import { turnModelOptions } from "../agent/runtime-choice.ts";
 import { userFacingFailureClause } from "../core/failure-copy.ts";
-import { TransientTurnFailure } from "../core/turn-error.ts";
+import { TurnHandedOff } from "../core/turn-error.ts";
 import { reachEnqueue } from "../reach/reach.ts";
 import { isVisible, type VisibilityDirectory } from "../directory/visibility.ts";
 import type { DirectoryMember, DirectoryStore, RecipientResolution } from "../directory/directory-store.ts";
@@ -56,7 +56,6 @@ export interface TriggerSpec extends Pick<TurnRequest, "model" | "fastMode" | "a
   readOnly?: boolean;
   turnWallClockMs?: number;
   errorNotice?: (noteOrStatus: string) => string;
-  redrivesHandOff?: boolean;
   onClaimed?: () => Promise<void>;
 }
 
@@ -321,10 +320,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       ...(liveDelivery ? { surfaceTools: true, addressed: true } : {}),
       idempotencyKey: spec.fireKey,
     });
-    if (res.status === "queued") {
-      if (!spec.redrivesHandOff) await sendErrorNotice(userFacingFailureClause(res));
-      throw new TransientTurnFailure(`turn ${res.runId ?? ""} was still waiting to finish when this process shut down`);
-    }
+    if (res.status === "queued") throw new TurnHandedOff(res.runId);
     status = res.status;
     errorCode = res.errorCode;
     reply = res.reply;

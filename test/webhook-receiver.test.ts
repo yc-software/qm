@@ -8,6 +8,7 @@ import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
+import type { Run } from "../src/runs/run-store.ts";
 import { testMap } from "./support/test-database.ts";
 
 const automationOrigin = (request?: { origin?: TurnOrigin }) =>
@@ -45,9 +46,11 @@ function agent(runResult: TurnResult = { status: "ok", reply: "DID-THE-WORK" }) 
   const deliveries = tracked(createDeliveryStore());
   const identity = tracked(createIdentityService(testMap(), { externalMembers: testMap() }));
   const calls: TurnRequest[] = [];
+  const turn = { result: runResult };
+  const finishedRuns = new Map<string, number | null>();
   const run = async (req: TurnRequest): Promise<TurnResult> => {
     calls.push(req);
-    return runResult;
+    return turn.result;
   };
   const receiver = createWebhookReceiver({
     webhooks,
@@ -55,8 +58,12 @@ function agent(runResult: TurnResult = { status: "ok", reply: "DID-THE-WORK" }) 
     idempotency: tracked(createIdempotencyStore(testMap())),
     identity,
     run,
+    runs: {
+      getByDedupKey: async (key) =>
+        finishedRuns.has(key) ? ({ id: "r1", finishedAt: finishedRuns.get(key) ?? null } as Run) : null,
+    },
   });
-  return { webhooks, deliveries, identity, calls, receiver };
+  return { webhooks, deliveries, identity, calls, receiver, turn, finishedRuns };
 }
 
 function githubReq(rawBody: string, deliveryId = "d-1", event = "issues") {
@@ -414,4 +421,45 @@ test("an edited task applies to the next delivery at the same URL and secret", a
   await flush();
   assert.match(calls[0]?.text ?? "", /new orders/);
   assert.doesNotMatch(calls[0]?.text ?? "", /old orders/);
+});
+
+test("a turn handed to a queue worker at shutdown is re-driven once it finishes, delivering its reply once", async () => {
+  const { webhooks, deliveries, calls, receiver, turn, finishedRuns } = agent({
+    status: "queued",
+    sessionId: "s1",
+    runId: "r1",
+  });
+  const wh = await webhooks.create({
+    ownerScopeId: scopeId("personal", "U1"),
+    owner: "U1",
+    createdBy: "U1",
+    action: "x",
+    verification: { scheme: "github", secret: SECRET },
+    destination: { type: "slack", target: "D1", audienceScopeId: scopeId("personal", "U1") },
+  });
+  await receiver.deliver(wh.id, githubReq("{}", "d-handoff"));
+  await flush();
+  assert.deepEqual(await deliveries.pending("slack"), []);
+  assert.equal((await webhooks.get(wh.id))?.lastError, undefined);
+
+  const fireKey = calls[0]!.idempotencyKey!;
+  const now = Date.now();
+  turn.result = { status: "ok", reply: "FINISHED-ON-A-WORKER", sessionId: "s1" };
+  await receiver.redriveHandedOff(now);
+  finishedRuns.set(fireKey, null);
+  await receiver.redriveHandedOff(now);
+  finishedRuns.set(fireKey, now - 1_000);
+  await receiver.redriveHandedOff(now);
+  assert.equal(calls.length, 1);
+
+  finishedRuns.set(fireKey, now - 120_000);
+  await receiver.redriveHandedOff(now);
+  await receiver.redriveHandedOff(now);
+  await flush();
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1]?.idempotencyKey, fireKey);
+  const pending = await deliveries.pending("slack");
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0]?.text, "FINISHED-ON-A-WORKER");
+  assert.equal(`webhook:${wh.id}:${(await webhooks.get(wh.id))?.lastDeliveryId}`, fireKey);
 });
