@@ -546,8 +546,8 @@ function credentialsSection(persona: PersonaDetail, reload: (flash: string) => v
 function channelsSection(persona: PersonaDetail): TemplateResult {
   const owner = canSharePersona(persona.role);
   const channels = persona.access.filter((grant) => grant.scopeId.startsWith("channel:"));
-  const flagOff = channels.find((grant) => !grant.personasEnabled);
-  const flagNote = flagOff ? html`<p class="permission-note">${flagOffNote(flagOff)}</p>` : nothing;
+  const flagNotes = new Set(channels.filter((grant) => !grant.personasEnabled).map(flagOffNote));
+  const flagNote = [...flagNotes].map((note) => html`<p class="permission-note">${note}</p>`);
   const list = channels.length
     ? html`<div class="persona-skill-list">
         ${channels.map((grant) =>
