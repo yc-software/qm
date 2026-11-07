@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readBoundedText } from "../src/util/bytes.ts";
+import { readBoundedBytes, readBoundedText } from "../src/util/bytes.ts";
 
 const tooLarge = () => new Error("too large");
 
@@ -37,4 +37,9 @@ test("readBoundedText stops reading and cancels the stream once it passes the ca
   const { response, cancelled } = streamed(["12345", "67890", "never read"]);
   await assert.rejects(readBoundedText(response, 8, tooLarge), /too large/);
   assert.equal(cancelled(), true);
+});
+
+test("readBoundedBytes returns binary bodies unchanged", async () => {
+  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff]);
+  assert.deepEqual([...(await readBoundedBytes(new Response(png), 6, tooLarge))], [...png]);
 });

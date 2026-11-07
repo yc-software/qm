@@ -3,12 +3,15 @@ import { swallowAs } from "./errors.ts";
 
 export type ByteSource = Uint8Array | AsyncIterable<Uint8Array>;
 
-export async function* asChunks(source: ByteSource): AsyncIterable<Uint8Array> {
+const bufferView = (bytes: Uint8Array): Buffer =>
+  Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+
+export async function* asChunks(source: ByteSource): AsyncIterable<Buffer> {
   if (source instanceof Uint8Array) {
-    yield source;
+    yield bufferView(source);
     return;
   }
-  yield* source;
+  for await (const chunk of source) yield bufferView(chunk);
 }
 
 export interface CollectedBytes {
@@ -24,8 +27,7 @@ export async function collectBytes(
   const hash = createHash("sha256");
   const chunks: Buffer[] = [];
   let size = 0;
-  for await (const chunk of asChunks(source)) {
-    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+  for await (const buf of asChunks(source)) {
     size += buf.length;
     if (opts?.maxBytes != null && size > opts.maxBytes) {
       throw opts.tooLarge ? opts.tooLarge() : new Error("byte source exceeds the size limit");
@@ -37,18 +39,22 @@ export async function collectBytes(
 }
 
 export async function readBoundedText(response: Response, maxBytes: number, tooLarge: () => Error): Promise<string> {
+  return new TextDecoder().decode(await readBoundedBytes(response, maxBytes, tooLarge));
+}
+
+export async function readBoundedBytes(response: Response, maxBytes: number, tooLarge: () => Error): Promise<Buffer> {
   const cancel = () => void response.body?.cancel().catch(swallowAs("bounded response cancel", undefined));
   if (Number(response.headers.get("content-length")) > maxBytes) {
     cancel();
     throw tooLarge();
   }
-  if (!response.body) return "";
+  if (!response.body) return Buffer.alloc(0);
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
   for (;;) {
     const { done, value } = await reader.read();
-    if (done) return new TextDecoder().decode(Buffer.concat(chunks, size));
+    if (done) return Buffer.concat(chunks, size);
     size += value.byteLength;
     if (size > maxBytes) {
       void reader.cancel().catch(swallowAs("bounded response cancel", undefined));

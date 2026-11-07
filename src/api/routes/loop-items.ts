@@ -4,6 +4,7 @@ import type { Loop, LoopItem, LoopSourcePayload } from "../../loops/types.ts";
 import { isAccountType } from "../../connectors/oauth.ts";
 import { canonicalJson } from "../../../cli/src/canonical-json.ts";
 import { errMessage } from "../../util/errors.ts";
+import { readBoundedBytes } from "../../util/bytes.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
@@ -218,8 +219,14 @@ async function serveItemImage(ctx: ApiCtx): Promise<void> {
   if (!upstream.ok || !upstream.body || !type.startsWith("image/")) {
     return sendJson(ctx.res, 502, { error: "upstream", message: `upstream returned ${upstream.status} ${type}` });
   }
-  const bytes = Buffer.from(await upstream.arrayBuffer());
-  if (bytes.length > IMAGE_MAX_BYTES) return sendJson(ctx.res, 502, { error: "upstream", message: "image too large" });
+  const imageTooLarge = new Error("image too large");
+  let bytes: Buffer;
+  try {
+    bytes = await readBoundedBytes(upstream, IMAGE_MAX_BYTES, () => imageTooLarge);
+  } catch (e) {
+    if (e !== imageTooLarge) throw e;
+    return sendJson(ctx.res, 502, { error: "upstream", message: imageTooLarge.message });
+  }
   ctx.res.writeHead(200, {
     "content-type": type,
     "content-length": String(bytes.length),

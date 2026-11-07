@@ -92,8 +92,7 @@ export function createLocalBlobTransferStore(dir: string): BlobTransferStore {
       const out = createWriteStream(partPath);
       let size = 0;
       try {
-        for await (const chunk of asChunks(source)) {
-          const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        for await (const buf of asChunks(source)) {
           size += buf.length;
           if (opts?.maxBytes != null && size > opts.maxBytes) throw new BlobTooLargeError();
           hash.update(buf);
@@ -231,8 +230,7 @@ export function createS3BlobTransferStore(options: S3BlobTransferOptions): BlobT
       };
 
       try {
-        for await (const chunk of asChunks(source)) {
-          const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        for await (const buf of asChunks(source)) {
           sizeBytes += buf.length;
           if (opts?.maxBytes != null && sizeBytes > opts.maxBytes) throw new BlobTooLargeError();
           hash.update(buf);

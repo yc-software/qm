@@ -6,6 +6,7 @@ import { WebClient } from "@slack/web-api";
 import {
   type RecentMessage,
   type SlackFile,
+  type StagedBlob,
   buildContextWindow,
   downloadSlackFile,
   isExternallyShared,
@@ -156,14 +157,14 @@ export function createSurfaceContextFulfiller(deps: {
       };
     }
     if (isOversize(file)) return { error: oversizeMsg(slackFileName(file)) };
-    let bytes: Uint8Array;
-    let blobId: string;
+    let staged: StagedBlob;
     try {
-      bytes = await downloadSlackFile(file, {
-        token: botToken,
-        ...(trustedFileHost ? { trustedHost: trustedFileHost } : {}),
-      });
-      ({ blobId } = await core.stageBlob(bytes));
+      staged = await core.stageBlob(
+        await downloadSlackFile(file, {
+          token: botToken,
+          ...(trustedFileHost ? { trustedHost: trustedFileHost } : {}),
+        }),
+      );
     } catch (err) {
       swallow("slack: surface-file fetch", err);
       return { error: `I couldn't read "${slackFileName(file)}" — it may be restricted, deleted, or too large for me` };
@@ -176,9 +177,9 @@ export function createSurfaceContextFulfiller(deps: {
       : undefined;
     return {
       file: {
-        blobId,
+        blobId: staged.blobId,
         name: slackFileName(file),
-        sizeBytes: bytes.length,
+        sizeBytes: staged.sizeBytes,
         ...(file.mimetype ? { mimetype: file.mimetype } : {}),
         ...(author ? { author } : {}),
       },
