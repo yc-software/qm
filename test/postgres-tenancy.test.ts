@@ -3,7 +3,13 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { DIRECTORY_MIGRATIONS } from "../src/directory/postgres-directory-store.ts";
-import { applyPgMigrations, createPgPool, definePgMigration, withPgTransaction } from "../src/persistence/pg-pool.ts";
+import {
+  applyPgMigrations,
+  createPgPool,
+  definePgMigration,
+  type PgMigrationDefinition,
+  withPgTransaction,
+} from "../src/persistence/pg-pool.ts";
 import { SESSION_MIGRATIONS, TENANT_BACKFILL } from "../src/sessions/session-schema.ts";
 import { withoutTenant, withTenant } from "../src/tenants/context.ts";
 import { TENANCY } from "../src/tenants/migrations.ts";
@@ -167,7 +173,7 @@ test("upgrading copies the existing tenant into tenants", { skip }, async () => 
 
 test("upgrading keeps every table on the existing tenant when another store migrates first", { skip }, async () => {
   const pool = new pg.Pool({ connectionString: testBareDatabaseUrl(), max: 1 });
-  const preTenancy = (m: { id: string }) =>
+  const preTenancy = (m: PgMigrationDefinition) =>
     !TENANCY.includes(m) && m !== TENANT_BACKFILL && !/-tenant|claim/.test(m.id);
   try {
     await applyPgMigrations(
