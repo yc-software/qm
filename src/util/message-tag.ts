@@ -14,7 +14,7 @@ export function isoFromTs(ts: string | undefined): string {
 
 export interface MessageTagAttrs {
   id?: string;
-  from?: "human" | "agent";
+  from?: "human" | "agent" | "bot";
   author?: string;
   authorId?: string;
   via?: string;
