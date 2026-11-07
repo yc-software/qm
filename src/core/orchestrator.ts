@@ -192,7 +192,7 @@ import {
   type OverheardEntryPayload,
 } from "../agent/replay.ts";
 import { errMessage, reportFailure, reportFailureAs, swallow, swallowAs } from "../util/errors.ts";
-import { headSlice, pgTextSafe } from "../util/text.ts";
+import { headSlice, pgTextSafe, trimTrailingSlashes } from "../util/text.ts";
 import { absoluteAppLinks } from "../util/markdown.ts";
 import {
   isModelBudget,
@@ -1709,7 +1709,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           deps.capabilityTokenCompression,
         );
         if (browserModel) {
-          connectorEnv.BROWSE_LAB_BASE_URL = `${deps.apiBaseUrl.replace(/\/+$/, "")}/v1/browser-model`;
+          connectorEnv.BROWSE_LAB_BASE_URL = `${trimTrailingSlashes(deps.apiBaseUrl)}/v1/browser-model`;
           connectorEnv.BROWSE_LAB_MODEL_TOKEN = await mintCapabilityToken(
             {
               ...scopeAttestation,
@@ -1724,7 +1724,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           );
         }
         if (deps.sandboxModels && allInternal && securityPolicy.posture !== "strict") {
-          connectorEnv.MODEL_GATEWAY_URL = `${deps.apiBaseUrl.replace(/\/+$/, "")}${SANDBOX_MODEL_PREFIX}`;
+          connectorEnv.MODEL_GATEWAY_URL = `${trimTrailingSlashes(deps.apiBaseUrl)}${SANDBOX_MODEL_PREFIX}`;
           connectorEnv.MODEL_GATEWAY_TOKEN = await mintCapabilityToken(
             { ...scopeAttestation, aud: SANDBOX_MODEL_AUD, exp: sandboxTokenExpiry },
             deps.capabilitySecret ?? deps.signingSecret,

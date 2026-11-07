@@ -6,6 +6,7 @@ import {
 import { sendJson } from "../../http.ts";
 import type { ApiCtx } from "../route.ts";
 import { audit, authorizeAdmin, orgScope } from "../shared.ts";
+import { trimTrailingSlashes } from "../../../util/text.ts";
 
 async function actor(ctx: ApiCtx) {
   const scope = orgScope(ctx.deps);
@@ -79,7 +80,7 @@ export async function putCustomProvider(ctx: ApiCtx): Promise<void> {
     id,
     name: body.name,
     protocol: body.protocol as CustomProviderProtocol,
-    baseUrl: body.baseUrl.trim().replace(/\/+$/, ""),
+    baseUrl: trimTrailingSlashes(body.baseUrl.trim()),
     models: Array.isArray(body.models) ? (body.models as CustomProviderSpec["models"]) : [],
   };
   const apiKey = typeof body.apiKey === "string" && body.apiKey.trim() ? body.apiKey.trim() : undefined;

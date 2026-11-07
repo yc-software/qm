@@ -27,6 +27,7 @@ import type {
   SandboxHandle,
   TeardownOptions,
 } from "./sandbox.ts";
+import { trimTrailingSlashes } from "../util/text.ts";
 
 const HOME_DIR = "/home/node";
 const WORKSPACE_BASENAME = "workspace";
@@ -120,7 +121,7 @@ export interface Agent37SandboxOptions {
 export function createAgent37Sandbox(opts: Agent37SandboxOptions): Sandbox {
   if (!opts.apiKey && !opts.fetchImpl) throw new Error("SANDBOX_BACKEND=agent37 requires AGENT37_API_KEY");
   const fetchImpl = opts.fetchImpl ?? fetch;
-  const baseUrl = (opts.baseUrl ?? DEFAULT_AGENT37_BASE_URL).replace(/\/+$/, "");
+  const baseUrl = trimTrailingSlashes(opts.baseUrl ?? DEFAULT_AGENT37_BASE_URL);
   const prefix = opts.namePrefix ?? "qm";
   const template = opts.template ?? DEFAULT_TEMPLATE;
   const resources = {

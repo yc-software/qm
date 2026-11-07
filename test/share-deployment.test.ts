@@ -30,6 +30,7 @@ import { createPostgresDirectoryStore } from "../src/directory/postgres-director
 import { testAdvisoryLock, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { allGrants } from "./support/acl-grants.ts";
+import { trimTrailingSlashes } from "../src/util/text.ts";
 
 const externalSharingOn = { enabled: async () => true } as unknown as FeatureFlagStore;
 
@@ -388,7 +389,7 @@ test('resolveShareTarget: scope "org"→org, scope id verbatim, recipient→pers
 const APP_FILES = [{ path: "server.js", data: new TextEncoder().encode("listen") }];
 const appSandbox = (): Sandbox => {
   const under = (dir: string) => {
-    const d = (dir ?? "").replace(/^\.?\/+/, "").replace(/\/+$/, "");
+    const d = trimTrailingSlashes((dir ?? "").replace(/^\.?\/+/, ""));
     return APP_FILES.filter((f) => !d || d === "." || f.path === d || f.path.startsWith(`${d}/`));
   };
   return {
