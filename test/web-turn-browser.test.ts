@@ -137,15 +137,13 @@ async function refused(path: string, body: unknown, status: number, user = "alic
   return ((await response.json()) as { error?: string }).error;
 }
 
-async function withInbox(users: string, enabled: readonly string[], run: () => Promise<void>): Promise<void> {
+async function withInbox(enabled: readonly string[], run: () => Promise<void>): Promise<void> {
   const flag = (user: string, on: boolean) =>
     built.featureFlags.setEnabled("inbox_loops", scopeId("personal", user), on, "test");
-  portalSession.inboxUsers = users;
   for (const user of enabled) await flag(user, true);
   try {
     await run();
   } finally {
-    delete portalSession.inboxUsers;
     for (const user of enabled) await flag(user, false);
   }
 }
@@ -348,7 +346,7 @@ test("worker and subagent approvals replay onto their own thread only when that 
 
 test("inbox chat loads fresh previews for the caller separately from the message", async () => {
   await seedInbox("ivy", 1);
-  await withInbox("ivy", ["ivy"], async () => {
+  await withInbox(["ivy"], async () => {
     const turn = await sentTurn(
       { text: "What needs my attention?", threadRef: "web:ivy:inbox", conversationHeader: "injected" },
       "ivy",
@@ -378,7 +376,7 @@ test("inbox context follows pages, bounds previews, and discloses incomplete cov
     ["quinn", 241, 200],
   ] as const) {
     await seedInbox(user, items, "x".repeat(10_000));
-    await withInbox(user, [user], async () => {
+    await withInbox([user], async () => {
       const context = (await sentTurn({ text: "Summarize", threadRef: `web:${user}:inbox` }, user)).conversationHeader!;
       const snapshot = JSON.parse(context.slice(context.indexOf('{"attentionCount"')));
       assert.equal(snapshot.attentionCount, items);
@@ -390,21 +388,16 @@ test("inbox context follows pages, bounds previews, and discloses incomplete cov
   }
 });
 
-test("inbox turns, steers and approvals need both the inbox allowlist and the inbox feature flag", async () => {
+test("inbox turns, steers and approvals need the inbox feature flag", async () => {
   await seedInbox("alice", 1);
   const steer = { kind: "steer", text: "Summarize", threadRef: "web:alice:inbox" };
-  for (const [users, enabled, error] of [
-    ["bob", ["alice"], "forbidden"],
-    ["alice", [], "feature_disabled"],
-  ] as const) {
-    await withInbox(users, enabled, async () => {
-      assert.equal(await refused("/api/turn", steer, 403), error);
-      assert.equal(await refused("/api/runs/run-1/signal", steer, 403), error);
-      assert.equal(await refused("/api/approvals/a-inbox", { approved: true }, 403), error);
-      await sentTurn({ text: "Hello", threadRef: "web:alice:ordinary" });
-    });
-  }
-  await withInbox("alice", ["alice"], async () => {
+  await withInbox(["bob"], async () => {
+    assert.equal(await refused("/api/turn", steer, 403), "feature_disabled");
+    assert.equal(await refused("/api/runs/run-1/signal", steer, 403), "feature_disabled");
+    assert.equal(await refused("/api/approvals/a-inbox", { approved: true }, 403), "feature_disabled");
+    await sentTurn({ text: "Hello", threadRef: "web:alice:ordinary" });
+  });
+  await withInbox(["alice"], async () => {
     assert.equal(await refused("/api/approvals/a-inbox-other", { approved: true }, 403), "forbidden_thread");
     assert.equal(await refused("/api/approvals/a-inbox-channel", { approved: true }, 403), "forbidden_scope");
     assert.equal((await post("/api/approvals/a-inbox", { approved: true })).status, 202);
@@ -415,7 +408,7 @@ test("inbox turns, steers and approvals need both the inbox allowlist and the in
 test("inbox chat fails closed when the flag service is missing or the inbox cannot be read", async (t) => {
   const unflagged = await serve({ featureFlags: undefined }, t);
   const unreadable = await serve({ loops: undefined }, t);
-  await withInbox("alice", ["alice"], async () => {
+  await withInbox(["alice"], async () => {
     for (const [at, status] of [
       [unflagged, 403],
       [unreadable, 500],

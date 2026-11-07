@@ -181,7 +181,6 @@ try {
     CORE_ORG_ID: orgId,
     CORE_SIGNING_SECRET: secret,
     PUBLIC_WEB_URL: webBase,
-    WEB_UI_PRINCIPALS: actor,
   });
   const webUi = await import("../plugins/web-ui/server/index.ts");
   web = await webUi.startServer({

@@ -29,6 +29,7 @@ import { normalizeInboundExpiresAt } from "../expiry.ts";
 import { sendJson, sendRedirect } from "../http.ts";
 import { audit, isObj } from "./shared.ts";
 import type { ApiCtx, BaseCtx, Route } from "./route.ts";
+import { forInboxLoopsPeople } from "./loops.ts";
 
 const OAUTH_STATE_MAX_AGE_MS = 10 * 60_000;
 function oauthStateSecret(deps: ServerDeps, signingSecret: string | undefined): string {
@@ -577,8 +578,10 @@ export async function gmailSent(ctx: ApiCtx): Promise<void> {
 }
 
 export const connectorRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "GET", path: "/v1/connectors/gmail/sent/:messageId", auth: "source", handle: gmailSent },
-  { method: "GET", path: "/v1/connectors/gmail/sent", auth: "source", handle: gmailSent },
+  ...forInboxLoopsPeople([
+    { method: "GET", path: "/v1/connectors/gmail/sent/:messageId", actor: "person", auth: "source", handle: gmailSent },
+    { method: "GET", path: "/v1/connectors/gmail/sent", actor: "person", auth: "source", handle: gmailSent },
+  ]),
   { method: "POST", path: "/v1/connectors/oauth/consent/mint", auth: { aud: "oauth-consent" }, handle: consentMint },
   { method: "GET", path: "/v1/connectors/oauth/consent/redeem/:linkId", auth: "source", handle: consentRedeem },
   {

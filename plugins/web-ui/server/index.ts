@@ -10,15 +10,7 @@ import type { Readable } from "node:stream";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, extname, join, posix } from "node:path";
-import {
-  fetchCoreText,
-  relayCoreStream,
-  signedHeaders,
-  withSourceAuthNonce,
-  relayCoreDownload,
-  type HttpMethod,
-} from "../../chassis/src/core-client.ts";
-import { findRoute } from "../../chassis/src/router.ts";
+import { fetchCoreText, relayCoreDownload, type HttpMethod } from "../../chassis/src/core-client.ts";
 import {
   json,
   gzipAccepted,
@@ -31,7 +23,6 @@ import {
 } from "../../chassis/src/http.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { createBrandingCache, injectBranding } from "../../chassis/src/branding.ts";
-import { listedPrincipals, principalInAllowlist, principalListed } from "../../chassis/src/principal-allowlist.ts";
 
 import {
   CORE_API_URL as CORE,
@@ -45,23 +36,6 @@ const ALLOW_UNSIGNED_TEST_IDENTITY =
   process.env.NODE_ENV === "test" && process.env.ALLOW_UNSIGNED_TEST_IDENTITY === "1";
 const COOKIE_AUTH = !CORE_SIGNING_SECRET || ALLOW_UNSIGNED_TEST_IDENTITY;
 const AUTH_MODE = COOKIE_AUTH ? "dev" : "portal";
-const ALLOW = listedPrincipals(process.env.WEB_UI_PRINCIPALS);
-export function isInboxUser(principalId: string, configuredUsers = process.env.INBOX_USERS): boolean {
-  return principalInAllowlist(principalId, configuredUsers);
-}
-
-export function isLoopsUser(principalId: string, configuredUsers = process.env.LOOPS_USERS): boolean {
-  return principalListed(principalId, configuredUsers);
-}
-
-async function hasInboxLoopPreview(user: string): Promise<boolean> {
-  try {
-    const response = await coreFetch("GET", `/v1/inbox/access?principalId=${encodeURIComponent(user)}`, "", 2_000);
-    return response.status === 200 && JSON.parse(response.text).enabled === true;
-  } catch {
-    return false;
-  }
-}
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -199,7 +173,7 @@ interface Identity {
   impersonator: string | null;
   portalVerified: boolean;
 }
-type Denial = "unauthenticated" | "not_allowed";
+type Denial = "unauthenticated";
 
 function authenticate(req: IncomingMessage): { identity: Identity } | { denied: Denial } {
   let user: string | null | undefined;
@@ -220,7 +194,6 @@ function authenticate(req: IncomingMessage): { identity: Identity } | { denied: 
     impersonator = cookie(req, "webui_impersonator");
   }
   if (!user) return { denied: "unauthenticated" };
-  if (ALLOW.length > 0 && !ALLOW.includes(user)) return { denied: "not_allowed" };
   return {
     identity: { user, name: name?.trim() || null, impersonator: impersonator ?? null, portalVerified: Boolean(claims) },
   };
@@ -264,18 +237,6 @@ async function coreFetch(
     body: rawBody,
     headers: portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : undefined,
     signal: timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined,
-  });
-}
-
-async function relayCore(res: ServerResponse, method: HttpMethod, pathWithQuery: string, rawBody = ""): Promise<void> {
-  const portalTok = portalTokenStore.getStore();
-  return relayCoreStream(res, {
-    origin: CORE,
-    secret: CORE_SIGNING_SECRET,
-    method,
-    path: pathWithQuery,
-    body: rawBody,
-    headers: portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : undefined,
   });
 }
 
@@ -406,314 +367,6 @@ async function serveVite(req: IncomingMessage, res: ServerResponse, path: string
   return true;
 }
 
-interface WebCtx {
-  req: IncomingMessage;
-  res: ServerResponse;
-  url: URL;
-  user: string;
-  params: Record<string, string>;
-}
-
-type WebRoute = { handle: (c: WebCtx) => unknown } & (
-  { method: string; path: string } | { match: (method: string, pathname: string) => boolean }
-);
-
-async function serveInboxItemImage(c: WebCtx): Promise<unknown> {
-  const { res, url } = c;
-  const qs = new URLSearchParams({ principalId: c.user });
-  const ctxParam = url.searchParams.get("ctx");
-  const iParam = url.searchParams.get("i");
-  if (ctxParam) qs.set("ctx", ctxParam);
-  if (iParam) qs.set("i", iParam);
-  const corePath = withSourceAuthNonce(
-    `/v1/loops/${encodeURIComponent(c.params.id!)}/items/${encodeURIComponent(c.params.itemId!)}/image?${qs.toString()}`,
-    CORE_SIGNING_SECRET,
-  );
-  const portalTok = portalTokenStore.getStore();
-  const r = await fetch(`${CORE}${corePath}`, {
-    headers: {
-      ...signedHeaders(CORE_SIGNING_SECRET, "GET", corePath, ""),
-      ...(portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : {}),
-    },
-  });
-  if (!r.ok || !r.body) {
-    res.writeHead(r.status === 404 ? 404 : 502, { "content-type": "application/json" });
-    return res.end(JSON.stringify({ error: r.status === 404 ? "not_found" : "upstream_error" }));
-  }
-  const contentType = r.headers.get("content-type") ?? "application/octet-stream";
-  res.writeHead(200, {
-    "content-type": contentType.startsWith("image/") ? contentType : "application/octet-stream",
-    "cache-control": "private, max-age=3600",
-    "content-security-policy": "sandbox",
-    "x-content-type-options": "nosniff",
-  });
-  return res.end(Buffer.from(await r.arrayBuffer()));
-}
-
-const apiRoutes: readonly WebRoute[] = [
-  {
-    method: "GET",
-    path: "/api/inbox",
-    handle: async (c) => {
-      const { res, user } = c;
-      const qs = new URLSearchParams({ principalId: user });
-      for (const key of ["cursor", "loopId", "view", "itemId", "filter"]) {
-        const value = c.url.searchParams.get(key);
-        if (value) qs.set(key, value);
-      }
-      return relayCore(res, "GET", `/v1/inbox?${qs}`);
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/inbox/sent-chat",
-    handle: async ({ req, res, user }) => {
-      if (!isInboxUser(user)) return json(res, 403, { error: "forbidden" });
-      res.setHeader("Cache-Control", "no-store");
-      return relayCore(res, "POST", "/v1/loops/inbox/sent-chat", await readBody(req));
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/inbox/selection",
-    handle: async (c) =>
-      relayCore(c.res, "PUT", `/v1/inbox?principalId=${encodeURIComponent(c.user)}`, await readBody(c.req)),
-  },
-  {
-    method: "POST",
-    path: "/api/inbox/sync-cron",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      return relayCore(
-        res,
-        "POST",
-        `/v1/loops/inbox/sync-cron?principalId=${encodeURIComponent(user)}`,
-        await readBody(req),
-      );
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/loops/:id/items",
-    handle: async (c) => {
-      const { res, user, url } = c;
-      const qs = new URLSearchParams({ principalId: user });
-      const state = url.searchParams.get("state");
-      if (state) qs.set("state", state);
-      return relayCore(res, "GET", `/v1/loops/${encodeURIComponent(c.params.id!)}/items?${qs.toString()}`);
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/loops/:id/items/:itemId",
-    handle: async (c) => {
-      const { res, user, params, url } = c;
-      const qs = new URLSearchParams({ principalId: user });
-      if (url.searchParams.get("refreshSource") === "1") qs.set("refreshSource", "1");
-      return relayCore(
-        res,
-        "GET",
-        `/v1/loops/${encodeURIComponent(params.id!)}/items/${encodeURIComponent(params.itemId!)}?${qs.toString()}`,
-      );
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/loops/:id/items/:itemId/image",
-    handle: serveInboxItemImage,
-  },
-  ...(["action", "followup"] as const).map((leaf): WebRoute => ({
-    method: "POST",
-    path: `/api/loops/:id/items/:itemId/${leaf}`,
-    handle: async (c) => {
-      const { req, res, user, params } = c;
-      return relayCore(
-        res,
-        "POST",
-        `/v1/loops/${encodeURIComponent(params.id!)}/items/${encodeURIComponent(params.itemId!)}/${leaf}?principalId=${encodeURIComponent(user)}`,
-        await readBody(req),
-      );
-    },
-  })),
-  {
-    method: "GET",
-    path: "/api/inbox/sent/:messageId",
-    handle: async ({ res, user, params, url }) => {
-      if (!isInboxUser(user)) return json(res, 403, { error: "forbidden" });
-      const query = new URLSearchParams();
-      const accountType = url.searchParams.get("accountType");
-      if (accountType) query.set("accountType", accountType);
-      res.setHeader("Cache-Control", "no-store");
-      return relayCore(
-        res,
-        "GET",
-        `/v1/connectors/gmail/sent/${encodeURIComponent(params.messageId!)}${query.size ? `?${query}` : ""}`,
-      );
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/inbox/sent",
-    handle: async ({ res, user, url }) => {
-      if (!isInboxUser(user)) return json(res, 403, { error: "forbidden" });
-      const params = new URLSearchParams();
-      for (const key of ["pageToken", "accountType"]) {
-        const value = url.searchParams.get(key);
-        if (value) params.set(key, value);
-      }
-      res.setHeader("Cache-Control", "no-store");
-      return relayCore(res, "GET", `/v1/connectors/gmail/sent?${params}`);
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/loops",
-    handle: async (c) => {
-      const { res, user } = c;
-      return relayCore(res, "GET", `/v1/loops?principalId=${encodeURIComponent(user)}`);
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/loops",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      return relayCore(res, "POST", `/v1/loops?principalId=${encodeURIComponent(user)}`, await readBody(req));
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/loops/:id",
-    handle: async (c) => {
-      const { res, user } = c;
-      return relayCore(
-        res,
-        "GET",
-        `/v1/loops/${encodeURIComponent(c.params.id!)}?principalId=${encodeURIComponent(user)}`,
-      );
-    },
-  },
-  {
-    method: "PATCH",
-    path: "/api/loops/:id",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      return relayCore(
-        res,
-        "PATCH",
-        `/v1/loops/${encodeURIComponent(c.params.id!)}?principalId=${encodeURIComponent(user)}`,
-        await readBody(req),
-      );
-    },
-  },
-  {
-    method: "DELETE",
-    path: "/api/loops/:id",
-    handle: async (c) => {
-      const { res, user } = c;
-      return relayCore(
-        res,
-        "DELETE",
-        `/v1/loops/${encodeURIComponent(c.params.id!)}?principalId=${encodeURIComponent(user)}`,
-      );
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/loops/:id/ingestion",
-    handle: async ({ res, user, params }) =>
-      relayCore(
-        res,
-        "GET",
-        `/v1/loops/${encodeURIComponent(params.id!)}/ingestion?principalId=${encodeURIComponent(user)}`,
-      ),
-  },
-  {
-    method: "POST",
-    path: "/api/loops/:id/ingestion",
-    handle: async ({ req, res, user, params }) =>
-      relayCore(
-        res,
-        "POST",
-        `/v1/loops/${encodeURIComponent(params.id!)}/ingestion?principalId=${encodeURIComponent(user)}`,
-        await readBody(req),
-      ),
-  },
-  {
-    method: "PATCH",
-    path: "/api/loops/:id/ingestion/:sourceId",
-    handle: async ({ req, res, user, params }) =>
-      relayCore(
-        res,
-        "PATCH",
-        `/v1/loops/${encodeURIComponent(params.id!)}/ingestion/${encodeURIComponent(params.sourceId!)}?principalId=${encodeURIComponent(user)}`,
-        await readBody(req),
-      ),
-  },
-  {
-    method: "POST",
-    path: "/api/loops/:id/fire",
-    handle: async (c) => {
-      const { res, user } = c;
-      return relayCore(
-        res,
-        "POST",
-        `/v1/loops/${encodeURIComponent(c.params.id!)}/fire?principalId=${encodeURIComponent(user)}`,
-      );
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/loops/:id/triage/preview",
-    handle: async ({ req, res, user, params }) =>
-      relayCore(
-        res,
-        "POST",
-        `/v1/loops/${encodeURIComponent(params.id!)}/triage/preview?principalId=${encodeURIComponent(user)}`,
-        await readBody(req),
-      ),
-  },
-  {
-    method: "POST",
-    path: "/api/loops/:id/outputs/:outputId/decide",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      return relayCore(
-        res,
-        "POST",
-        `/v1/loops/${encodeURIComponent(c.params.id!)}/outputs/${encodeURIComponent(c.params.outputId!)}/decide?principalId=${encodeURIComponent(user)}`,
-        await readBody(req),
-      );
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/loops/:id/grants",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      return relayCore(
-        res,
-        "POST",
-        `/v1/loops/${encodeURIComponent(c.params.id!)}/grants?principalId=${encodeURIComponent(user)}`,
-        await readBody(req),
-      );
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/loops/:id/autopilot",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      return relayCore(
-        res,
-        "POST",
-        `/v1/loops/${encodeURIComponent(c.params.id!)}/autopilot?principalId=${encodeURIComponent(user)}`,
-        await readBody(req),
-      );
-    },
-  },
-];
-
 const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
   const url = new URL(req.url ?? "/", "http://localhost");
   const path = url.pathname;
@@ -743,11 +396,6 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
     })();
     if (!id) return json(res, 400, { error: "bad_request", message: "Enter a principal to sign in as." });
-    if (ALLOW.length > 0 && !ALLOW.includes(id))
-      return json(res, 403, {
-        error: "not_allowed",
-        message: `${id.slice(0, 120)} isn't in this instance's allowed principals. Add it to WEB_UI_PRINCIPALS, or leave that unset to allow any principal.`,
-      });
     res.writeHead(200, {
       "set-cookie": sessionCookie(id),
       "content-type": "application/json",
@@ -820,23 +468,8 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
     );
   }
 
-  if (path.startsWith("/api/")) {
-    const user = cookieUser(req);
-    if (!user) return unauthorized(res, req);
-    const inboxPath = path === "/api/inbox" || path.startsWith("/api/inbox/");
-    const loopsPath = path === "/api/loops" || path.startsWith("/api/loops/");
-    if ((inboxPath || loopsPath) && !(await hasInboxLoopPreview(user)))
-      return json(res, 403, { error: "feature_disabled" });
-    if (inboxPath && !isInboxUser(user)) return json(res, 403, { error: "forbidden" });
-    const ledgerPath =
-      /^\/api\/loops\/[^/]+\/items(\/|$)/.test(path) || /^\/api\/loops\/[^/]+\/outputs\/[^/]+\/decide$/.test(path);
-    if (loopsPath && !isLoopsUser(user) && !(ledgerPath && isInboxUser(user))) {
-      return json(res, 403, { error: "forbidden" });
-    }
-    const found = findRoute(apiRoutes, method, path);
-    if (!found) return json(res, 404, { error: "not found" });
-    return found.route.handle({ req, res, url, user, params: found.params });
-  }
+  if (path.startsWith("/api/"))
+    return cookieUser(req) ? json(res, 404, { error: "not found" }) : unauthorized(res, req);
 
   if (method === "GET" && path === "/app-edit" && (await serveAppEditHtml(req, res, url))) return;
 
@@ -892,6 +525,5 @@ export async function startServer(options: { port: number; host: string; release
   console.log(
     `[web-ui] surface on http://${options.host}:${port} → core ${CORE} (org ${ORG})${WEB_UI_DEV ? " [vite hmr]" : ""}`,
   );
-  if (ALLOW.length === 0) console.warn("[web-ui] WEB_UI_PRINCIPALS unset, any principal id may sign in (dev only)");
   return server;
 }

@@ -12,8 +12,6 @@ await new Promise<void>((r) => core.listen(0, r));
 process.env.CORE_API_URL = `http://localhost:${(core.address() as AddressInfo).port}`;
 delete process.env.CORE_SIGNING_SECRET;
 delete process.env.PORTAL_IDENTITY_SECRET;
-process.env.WEB_UI_PRINCIPALS = "alice";
-process.env.LOOPS_USERS = "alice";
 process.env.ALLOW_UNSIGNED_TEST_IDENTITY = "0";
 
 const { handler } = await import("../server/index.ts");
@@ -34,7 +32,7 @@ test.after(() => {
 });
 
 test("with no signing secret the surface advertises dev mode", async () => {
-  const r = await fetch(`${base}/api/loops`);
+  const r = await fetch(`${base}/api/unknown`);
   assert.equal(r.status, 401);
   assert.deepEqual(await r.json(), { error: "sign in", mode: "dev", reason: "unauthenticated" });
 });
@@ -45,17 +43,8 @@ test("a bare principal id — not just an email — can sign in", async () => {
   const cookie = r.headers.get("set-cookie") ?? "";
   assert.match(cookie, /webuiuser=alice/);
 
-  const me = await fetch(`${base}/api/loops`, { headers: { cookie: cookie.split(";")[0] } });
-  assert.equal(me.status, 200);
-});
-
-test("a principal outside the allowlist is refused with a message naming the env var", async () => {
-  const r = await signin("mallory");
-  assert.equal(r.status, 403);
-  const body = await r.json();
-  assert.equal(body.error, "not_allowed");
-  assert.match(body.message, /WEB_UI_PRINCIPALS/);
-  assert.match(body.message, /mallory/);
+  const me = await fetch(`${base}/api/unknown`, { headers: { cookie: cookie.split(";")[0] } });
+  assert.equal(me.status, 404);
 });
 
 test("an empty principal is a 400 with guidance, distinct from being refused", async () => {
@@ -64,10 +53,4 @@ test("an empty principal is a 400 with guidance, distinct from being refused", a
   const body = await r.json();
   assert.equal(body.error, "bad_request");
   assert.match(body.message, /Enter a principal/);
-});
-
-test("an over-long principal is truncated in the echoed error", async () => {
-  const r = await signin("z".repeat(500));
-  assert.equal(r.status, 403);
-  assert.ok(((await r.json()).message as string).length < 400);
 });

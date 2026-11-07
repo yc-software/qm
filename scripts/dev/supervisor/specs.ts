@@ -38,7 +38,6 @@ export function buildChildSpecs(i: SpecInputs): ChildSpec[] {
           ? {
               PUBLIC_PORT: String(i.ports.portal),
               WEB_UI_BASE: i.webUiBasePath,
-              WEB_UI_PRINCIPALS: "",
               ...(i.watch ? { WEB_UI_DEV: "1" } : {}),
               PORTAL_SESSION_SECRET: i.portalSessionSecret,
               NODE_ENV: "development",
