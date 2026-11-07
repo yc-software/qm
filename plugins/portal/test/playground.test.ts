@@ -4,6 +4,7 @@ import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { spawn } from "node:child_process";
 import { deriveKey, seal, openSession, type SessionClaims } from "../src/session.ts";
+import { startWithFakeCore, type CoreHit } from "./fake-core.ts";
 
 const claimed = new Set<string>();
 let claimCalls = 0;
@@ -33,7 +34,6 @@ const upstreamUrl = `http://localhost:${(upstream.address() as AddressInfo).port
 process.env.PUBLIC_WEB_URL = "http://localhost:18196";
 process.env.PORTAL_SESSION_SECRET = "playground-test-portal-secret";
 process.env.CORE_SIGNING_SECRET = "playground-test-core-secret";
-process.env.WEB_UI_UPSTREAM = upstreamUrl;
 process.env.CORE_API_URL = upstreamUrl;
 process.env.PORTAL_PLAYGROUND = "1";
 process.env.PORTAL_PLAYGROUND_MINTS_PER_IP = "3";
@@ -41,12 +41,12 @@ const SESSION_TTL_S = 28800;
 process.env.PORTAL_SESSION_TTL_S = String(SESSION_TTL_S);
 delete process.env.PORTAL_LOCAL_AUTH_BYPASS;
 
-const { server, mintBucketOf } = await import("../src/index.ts");
-await new Promise<void>((r) => server.listen(0, r));
-const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+const { mintBucketOf } = await import("../src/index.ts");
+const { base, hits, close } = await startWithFakeCore();
+const sessionKey = deriveKey("playground-test-portal-secret", "portal.session.v1");
 
 test.after(() => {
-  server.close();
+  close();
   upstream.close();
 });
 
@@ -58,38 +58,50 @@ function sessionCookieOf(res: Response): string {
   return raw.split(";")[0]!;
 }
 
+function claimsOf(cookie: string): SessionClaims | null {
+  return openSession(decodeURIComponent(cookie.slice("portal_session=".length)), sessionKey, Date.now());
+}
+
 test("an unauthenticated browser visit mints an anonymous session pinned to the cookie", async () => {
   const first = await fetch(`${base}/`, { headers: HTML, redirect: "manual" });
   assert.equal(first.status, 200);
   const cookie = sessionCookieOf(first);
-  const body = (await first.json()) as { cookie: string };
-  const principal = /webuiuser=(playground-[0-9a-f]+)/.exec(body.cookie)?.[1];
-  assert.ok(principal, `expected a playground principal, got: ${body.cookie}`);
+  const claims = claimsOf(cookie);
+  assert.match(claims?.sub ?? "", /^playground-[0-9a-f]+$/);
+  assert.equal(claims?.anon, true);
+  assert.equal(((await first.json()) as CoreHit).lane, "shell");
 
   const callsBefore = claimCalls;
   const again = await fetch(`${base}/`, { headers: { ...HTML, cookie }, redirect: "manual" });
   assert.equal(again.status, 200);
-  const reuse = (await again.json()) as { cookie: string };
-  assert.match(reuse.cookie, new RegExp(`webuiuser=${principal}`));
+  const reuse = (await again.json()) as CoreHit;
+  assert.equal(reuse.lane, "shell");
+  assert.equal(reuse.cookie, cookie);
   assert.equal(claimCalls, callsBefore, "a returning session must not mint again");
 });
 
 test("API requests without a session still require sign-in", async () => {
+  const before = hits.length;
   const api = await fetch(`${base}/api/state`, { headers: { accept: "application/json" } });
   assert.equal(api.status, 401);
   const post = await fetch(`${base}/api/turn`, { method: "POST", headers: HTML });
   assert.equal(post.status, 401);
+  assert.equal(hits.length, before);
 });
 
-test("anonymous sessions reach settings paths only as their own playground principal", async () => {
+test("anonymous sessions reach settings paths only as their own playground guest session", async () => {
   const visit = await fetch(`${base}/`, { headers: HTML, redirect: "manual" });
   const cookie = sessionCookieOf(visit);
-  const principal = /webuiuser=(playground-[0-9a-f]+)/.exec(((await visit.json()) as { cookie: string }).cookie)?.[1];
-  assert.ok(principal);
+  const claims = claimsOf(cookie);
+  assert.match(claims?.sub ?? "", /^playground-[0-9a-f]+$/);
+  assert.equal(claims?.name, "Guest");
   for (const path of ["/settings/users"]) {
     const r = await fetch(`${base}${path}`, { headers: { accept: "application/json", cookie } });
     assert.equal(r.status, 200);
-    assert.equal(((await r.json()) as { cookie: string }).cookie, `webuiuser=${principal}; webuiuser_name=Guest`);
+    const hit = (await r.json()) as CoreHit;
+    assert.equal(hit.lane, "shell");
+    assert.equal(hit.url, path);
+    assert.equal(hit.cookie, cookie);
   }
 });
 
@@ -100,7 +112,6 @@ test("explicit sign-in still goes to the identity provider", async () => {
 });
 
 test("sliding renewal preserves the anon flag", async () => {
-  const key = deriveKey("playground-test-portal-secret", "portal.session.v1");
   const now = Math.floor(Date.now() / 1000);
   const aged: SessionClaims = {
     k: "session",
@@ -113,11 +124,11 @@ test("sliding renewal preserves the anon flag", async () => {
     exp: now + SESSION_TTL_S / 2 - 600,
   };
   const res = await fetch(`${base}/`, {
-    headers: { ...HTML, cookie: `portal_session=${encodeURIComponent(seal(aged, key))}` },
+    headers: { ...HTML, cookie: `portal_session=${encodeURIComponent(seal(aged, sessionKey))}` },
     redirect: "manual",
   });
   assert.equal(res.status, 200);
-  const renewed = openSession(decodeURIComponent(sessionCookieOf(res).split("=")[1]!), key, Date.now());
+  const renewed = claimsOf(sessionCookieOf(res));
   assert.ok(renewed, "expected a renewed session");
   assert.equal(renewed.anon, true);
   assert.equal(renewed.sub, "playground-deadbeef");

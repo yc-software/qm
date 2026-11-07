@@ -203,6 +203,62 @@ test("status and restart resolve the selected backing machine rather than legacy
   assert.deepEqual(provisioned, [record.backingScopeId, `restart:${record.backingScopeId}`]);
 });
 
+const sizedBackend = (sizes: Array<number | undefined>) => (backend: Sandbox) => {
+  backend.profile.sizesMemory = true;
+  const provision = backend.provision.bind(backend);
+  backend.provision = async (id, opts) => {
+    sizes.push(opts?.memoryGb);
+    return provision(id, opts);
+  };
+  backend.restartComputer = async (_scopeId, memoryGb) => {
+    sizes.push(memoryGb);
+  };
+};
+
+test("a computer's memory size is stored and reaches every later provision and restart", async () => {
+  const sizes: Array<number | undefined> = [];
+  const { resources, router } = fixture(sizedBackend(sizes));
+  const computer = await resources.create("alice", "personal:alice", "local", "big", undefined, undefined, 6);
+  await resources.setDefault("alice", "personal:alice", computer.id);
+  await router.provision("personal:alice");
+  await router.restartComputer!("personal:alice");
+  await resources.restart("alice", computer.id, 8);
+  await router.provision("personal:alice");
+  await resources.restart("alice", computer.id);
+  assert.deepEqual(sizes, [6, 6, 6, 8, 8, 8]);
+});
+
+test("a resize the backend refuses keeps the computer's old size", async () => {
+  const sizes: Array<number | undefined> = [];
+  const { resources, router } = fixture((backend) => {
+    sizedBackend(sizes)(backend);
+    backend.restartComputer = async (_scopeId, memoryGb) => {
+      sizes.push(memoryGb);
+      throw new Error("memory must not exceed 1Ti");
+    };
+  });
+  const computer = await resources.create("alice", "personal:alice", "local", "big", undefined, undefined, 6);
+  await resources.setDefault("alice", "personal:alice", computer.id);
+  await assert.rejects(resources.restart("alice", computer.id, 2000), /must not exceed 1Ti/);
+  await router.provision("personal:alice");
+  assert.deepEqual(sizes, [6, 2000, 6]);
+});
+
+test("a memory size is refused on a backend that takes none", async () => {
+  const { resources, records } = fixture();
+  await assert.rejects(
+    resources.create("alice", "personal:alice", "local", "big", undefined, undefined, 4),
+    /local computers take no memory size/,
+  );
+  assert.equal(
+    (await records.all()).some((record) => record.name === "big"),
+    false,
+  );
+  const computer = await resources.create("alice", "personal:alice", "local");
+  await assert.rejects(resources.restart("alice", computer.id, 4), /local computers take no memory size/);
+  assert.equal((await records.get(computer.id))?.memoryGb, undefined);
+});
+
 test("listing an untouched scope never invents a legacy machine", async () => {
   const { resources, provisioned } = fixture(undefined, []);
   assert.deepEqual(await resources.list("alice", "personal:alice"), {

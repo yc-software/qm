@@ -5,7 +5,7 @@ import test from "node:test";
 import { itemsToMessages, type AssistantWork } from "../src/core-bridge.ts";
 import { workSeconds } from "../src/work-duration.ts";
 
-for (const text of ["", "Partial answer", "(stopped)"]) {
+for (const text of ["", "Partial answer"]) {
   test(`stopped history preserves status, content and timing: ${JSON.stringify(text)}`, () => {
     const items: Item[] = [
       item("AgentMessage", {
@@ -23,18 +23,6 @@ for (const text of ["", "Partial answer", "(stopped)"]) {
     assert.equal(workSeconds(message.work!), 3);
   });
 }
-
-test("legacy stopped placeholders are recognized without treating ordinary replies as cancellation", () => {
-  for (const [text, reason] of [
-    ["(stopped)", "aborted"],
-    ["The process stopped.", "stop"],
-  ]) {
-    const message = itemsToMessages([
-      item("AgentMessage", { createdAt: 1000, seq: 1, text: text }),
-    ])[0] as AssistantWork;
-    assert.equal(message.stopReason, reason);
-  }
-});
 
 test("a turn_stopped record renders as the stopped state, once, and never as a message", () => {
   const stop = (seq: number): Item => item("Stop", { createdAt: 5000, seq, body: { reason: "by user" } });

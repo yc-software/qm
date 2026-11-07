@@ -7,6 +7,8 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp as buildAppRaw } from "./support/build-app.ts";
+import { mockHeldTurns } from "./support/mock-agent.ts";
+import { approvalCardId } from "../src/core/approval-id.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { TEST_CAPABILITY_SECRET, testConfig } from "./support/test-config.ts";
 import { runNowSettled, settle } from "./support/settle.ts";
@@ -487,6 +489,87 @@ test("an attested connector is offered and called only in the speaker's own DM, 
     "group:G1": ["wiki"],
   });
   assert.deepEqual(called, { "personal:U1": "sent", "channel:C1": "refused", "group:G1": "refused" });
+});
+
+test("a connector set to attest in any audience serves every person's channel turn, including unprompted and automated ones, but not bot turns", async () => {
+  const offered: string[][] = [];
+  const called: string[] = [];
+  const mock = createMockAgent();
+  const agent: Agent = {
+    ...mock,
+    shouldRespond: async () => ({ respond: true }),
+    runTurn: async (input) => {
+      offered.push((input.mcpTools ?? []).map((tool) => tool.name).sort());
+      for (const name of ["records", "strict"])
+        called.push(
+          await input.tools.callMcpTool(name, { operation: "search" }).then(
+            () => `${name} answered`,
+            (e: Error) => `${name} ${/answers only to them/.test(e.message) ? "refused" : "sent"}`,
+          ),
+        );
+      return mock.runTurn(input);
+    },
+  };
+  const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "ap-")) });
+  config.spritesSandbox.namePrefix ??= `test-${hashId([config.dataDir]).slice(0, 10)}`;
+  const built = buildApp(config, { agent });
+  for (const id of ["records", "strict"]) {
+    await built.mcpServers.put({
+      id,
+      name: id,
+      url: `https://127.0.0.1:9/${id}/mcp`,
+      auth: "bearer",
+      bearerToken: "t",
+      credentialScope: "shared",
+      catalog: true,
+      attestActor: true,
+      ...(id === "records" ? { attestAudience: "any" as const } : {}),
+      readOnly: true,
+      enabled: true,
+      updatedAt: Date.now(),
+      updatedBy: "admin",
+    });
+  }
+  await built.mcpToolService.refresh();
+  assert.equal((await built.app.turn(channel("hello"))).status, "ok");
+  await built.directory.replaceChannels(
+    [{ channelId: "C1", name: "c1", isPrivate: false }],
+    [{ channelId: "C1", principalId: "U1" }],
+  );
+  const cron = await built.app.createCron({
+    schedule: { firstFireAt: Date.now() + 3600_000 },
+    action: "check records",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("channel", "C1"),
+    destination: { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") },
+  });
+  await runNowSettled(built.scheduler, cron.id);
+  for (const extra of [
+    { origin: { kind: "ambient" as const, live: true } },
+    { origin: { kind: "automation" as const } },
+    { botActor: true },
+  ])
+    assert.equal((await built.app.turn(channel("hello", extra))).status, "ok");
+  assert.deepEqual(offered, [["records"], ["records"], ["records"], ["records"], []]);
+  assert.deepEqual(called, [
+    "records sent",
+    "strict refused",
+    "records sent",
+    "strict refused",
+    "records sent",
+    "strict refused",
+    "records sent",
+    "strict refused",
+    "records refused",
+    "strict refused",
+  ]);
+  assert.deepEqual(
+    (await built.auditLog.tail({ limit: 20, action: "mcp.call", resourceContains: "records/search" }))
+      .filter((event) => !/answers only to them/.test(event.status ?? ""))
+      .map((event) => event.principalId),
+    ["U1", "U1", "U1", "U1"],
+  );
 });
 
 test("execute runs in the sandbox via the primitive", async () => {
@@ -1153,6 +1236,36 @@ test("turn timezone rides the prompt and control-plane capability token", async 
   assert.equal(invalid.status, "ok");
   const invalidClaims = await verifyCapabilityToken(captured!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
   assert.equal(invalidClaims!.timezone, undefined, "invalid surface timezones are omitted from the token");
+});
+
+test("a turn's credential token says whether it may act as its actor in a shared conversation", async () => {
+  const { app, sandbox, serviceCreds, acl } = freshApp({
+    signingSecret: "test-secret",
+    apiBaseUrl: "https://core.example.com",
+  });
+  await serviceCreds.setServiceCredential("org:default-org", {
+    slug: "test-service",
+    name: "Test service",
+    secret: "synthetic",
+    host: "api.example.com",
+  });
+  await grantCred(acl, "org:default-org", "test-service");
+  let executed: Record<string, string> | undefined;
+  const run = sandbox.run.bind(sandbox);
+  sandbox.run = (handle, command, opts) => {
+    if (command === "echo who") executed = handle.env;
+    return run(handle, command, opts);
+  };
+  const ask = `!execute ${JSON.stringify({ command: "echo who", credentials: ["test-service"] })}`;
+  const actAsActor = async (request: TurnRequest) => {
+    executed = undefined;
+    assert.equal((await app.turn(request)).status, "ok");
+    return (await verifyCapabilityToken(executed!.AGENT_CREDENTIAL_TOKEN!, TEST_CAPABILITY_SECRET))!.actAsActor;
+  };
+  assert.equal(await actAsActor(channel(ask)), true);
+  assert.equal(await actAsActor(channel(ask, { origin: { kind: "ambient", live: true } })), true);
+  assert.equal(await actAsActor(channel(ask, { origin: { kind: "automation" } })), true);
+  assert.equal(await actAsActor(channel(ask, { botActor: true })), undefined);
 });
 
 for (const hours of [undefined, "72", "0", "none"]) {
@@ -2769,6 +2882,101 @@ test("disabling a grant mode suspends existing grants until it is re-enabled", a
   const restored = await app.turn(dm("!run git push --force origin release"));
   assert.equal(restored.status, "ok", "re-enabling the mode restores the grant without re-approval");
 });
+
+test("approving a declared call runs the stored call, not whatever the agent proposes next", async () => {
+  const { app, sessions } = freshApp();
+  const proposed = { to: "guests@example.com", sends_at: "2026-11-11T12:00:00+08:00" };
+  const drifted = { to: "guests@example.com", sends_at: "2026-11-11T04:00:00+00:00" };
+  const first = await app.turn(dm(`!declared ${JSON.stringify(proposed)}`));
+  assert.equal(first.status, "pending_approval");
+  const { requestId } = first.pendingApprovals![0]!;
+  assert.equal(first.pendingApprovals![0]!.executesOnApprove, true);
+
+  const approved = await app.turn(
+    dm(`!declared ${JSON.stringify(drifted)}`, { approval: { requestId, approved: true } }),
+  );
+  assert.equal(approved.status, "ok");
+  assert.equal(approved.reply, `sent ${JSON.stringify(proposed)}`, "the click ran the exact call the card showed");
+  assert.equal(await app.getApproval(requestId), null, "the card is spent");
+
+  const items = await sessions.getItems(approved.sessionId!);
+  const ran = items.filter((item) => item.body.approvedRequestId === requestId);
+  assert.deepEqual(
+    ran.map((item) => item.kind),
+    ["ToolCall", "ToolResult"],
+    "the approved call is recorded as one call and its result",
+  );
+});
+
+test("a withdrawn approval card can no longer be approved", async () => {
+  const { app } = freshApp();
+  const args = { to: "a@example.com", body: "hi" };
+  const raised = await app.turn(dm(`!declared-noted ${JSON.stringify(args)}`));
+  assert.equal(raised.status, "ok");
+  const card = raised.pendingApprovals![0]!;
+  assert.equal(card.blocksInput, false, "the person can keep talking while the card waits");
+  const cardId = approvalCardId(card.approvalKey!);
+
+  const withdrawn = await app.turn(dm(`!withdraw ${cardId}`));
+  assert.equal(withdrawn.reply, "withdrew example_send");
+  assert.equal(await app.getApproval(card.requestId), null);
+
+  const late = await app.turn(
+    dm(`!declared-noted ${JSON.stringify(args)}`, { approval: { requestId: card.requestId, approved: true } }),
+  );
+  assert.equal(late.status, "refused", "nothing runs for a withdrawn card");
+});
+
+for (const approved of [true, false]) {
+  test(`${approved ? "approving" : "denying"} while the requester's next turn runs hands the decision to that run`, async () => {
+    const { app, signals } = freshApp();
+    const args = { to: "a@example.com", body: approved ? "hi" : "bye" };
+    const raised = await app.turn(dm(`!declared-noted ${JSON.stringify(args)}`));
+    const { requestId } = raised.pendingApprovals![0]!;
+    const hold = `live-${approved}`;
+    const holding = app.turn(dm(`!hold ${hold}`));
+    let live = mockHeldTurns.get(hold);
+    for (let i = 0; !live && i < 200; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      live = mockHeldTurns.get(hold);
+    }
+    assert.ok(live?.resolveSteeredApproval, "the live run exposes the approval hook");
+    try {
+      const routed = await app.turn(
+        dm(`!declared-noted ${JSON.stringify(args)}`, {
+          async: true,
+          approval: { requestId, approved, ...(approved ? { scope: "once" as const } : {}) },
+        }),
+      );
+      assert.equal(routed.status, "queued");
+      assert.equal(routed.steered, true, "the click joins the live run instead of queueing behind it");
+      assert.equal(routed.runId, live.runId);
+
+      const delivered = (await signals.pending(live.runId!)).find(({ signal }) => signal.request?.approval);
+      assert.ok(delivered, "the decision waits on the live run's signal queue");
+      const outcome = await live.resolveSteeredApproval(delivered.signal.request!);
+      assert.equal(await app.getApproval(requestId), null, "the card is spent either way");
+      if (approved) {
+        assert.equal(outcome.kind, "run");
+        assert.deepEqual(outcome.kind === "run" ? outcome.call : null, {
+          ...(outcome.kind === "run" ? { callId: outcome.call.callId } : {}),
+          requestId,
+          tool: "example_send",
+          input: args,
+        });
+      } else assert.equal(outcome.kind, "denied");
+      assert.equal(
+        (await live.resolveSteeredApproval(delivered.signal.request!)).kind,
+        "ignored",
+        "a second delivery of the same click runs nothing",
+      );
+      await signals.acknowledge(live.runId!, delivered.id);
+    } finally {
+      mockHeldTurns.release(hold);
+      await holding;
+    }
+  });
+}
 
 test("a tool that declares approval runs once for the exact approved arguments", async () => {
   const { app, sessions } = freshApp();

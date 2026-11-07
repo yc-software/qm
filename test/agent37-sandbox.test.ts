@@ -244,13 +244,14 @@ test("create requests the template, the default shape and auto sleep", async () 
   assert.deepEqual(created?.resources, { cpu: 2, memory: 4, disk: 8 });
 });
 
-test("configured resources are requested at create and advertised in the profile", async () => {
-  const s = make({ template: "my-computer", cpus: 4, memoryGb: 8, diskGb: 20 });
-  const h = await s.provision(scope);
+test("configured resources and the computer's memory size are requested at create", async () => {
+  const s = make({ template: "my-computer", cpus: 4, diskGb: 20 });
+  const h = await s.provision(scope, { memoryGb: 8 });
   assert.equal(fake.instance(h.id)?.template, "my-computer");
   assert.deepEqual(fake.instance(h.id)?.resources, { cpu: 4, memory: 8, disk: 20 });
+  assert.equal(s.profile.sizesMemory, true);
   assert.equal(s.profile.spec?.cpus, 4);
-  assert.equal(s.profile.spec?.memoryMb, 8192);
+  assert.equal(s.profile.spec?.memoryMb, 4096);
   assert.equal(s.profile.spec?.diskGb, 20);
 });
 

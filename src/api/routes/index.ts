@@ -2,6 +2,8 @@ import { browserModelRoutes } from "./browser-model.ts";
 import { sandboxModelRoutes } from "./sandbox-model.ts";
 import { deploymentLiveSmokeRoutes } from "./deployment-live-smoke.ts";
 import { composioRoutes } from "./composio.ts";
+import { composioAuthorizeRoutes } from "./composio-authorize.ts";
+import { composioCallbackRoutes } from "./composio-callback.ts";
 import { composioTwitterMediaRoutes } from "./composio-twitter-media.ts";
 import { composioProxyRoutes } from "./composio-proxy.ts";
 import { loopIngressRoutes, loopIngressRawRoutes } from "./loop-ingress.ts";
@@ -9,12 +11,15 @@ import { sendJson } from "../http.ts";
 import { type ApiCtx, type BaseCtx, type Route } from "./route.ts";
 import { connectorRawRoutes, connectorRoutes } from "./connectors.ts";
 import { deploymentRawRoutes, deploymentRoutes } from "./deployments.ts";
-import { blobRoutes } from "./blobs.ts";
-import { sessionStateRawRoutes } from "./session-state.ts";
-import { loopItemEventsRawRoutes } from "./loop-item-events.ts";
+import { deploymentSharingRoutes } from "./deployment-sharing.ts";
+import { blobRoutes, browserUploadRoutes } from "./blobs.ts";
 import { webhookRawRoutes, webhookRoutes } from "./webhooks.ts";
 import { runEventRoutes } from "./run-events.ts";
 import { turnRoutes } from "./turns.ts";
+import { webTurnRoutes } from "./web-turns.ts";
+import { webEventRoutes } from "./web-events.ts";
+import { webMeRoutes } from "./web-me.ts";
+import { voiceRoutes } from "./voice.ts";
 import { credentialRoutes } from "./credentials.ts";
 import { brokerGitHttp, GIT_HTTP_BROKER_PREFIX } from "../git-http-broker.ts";
 import { keychainRoutes } from "./keychain.ts";
@@ -24,6 +29,7 @@ import { spendExport } from "./admin/spend.ts";
 import { skillPackRoutes } from "./skill-packs.ts";
 import { fileUploadRoutes } from "./file-uploads.ts";
 import { surfaceRoutes } from "./surface.ts";
+import { fileContentRoutes } from "./file-content.ts";
 import { cronRoutes } from "./crons.ts";
 import { loopRoutes } from "./loops.ts";
 import { reachRoutes } from "./reach.ts";
@@ -49,12 +55,18 @@ import { swarmRoutes } from "./swarms.ts";
 import { personaRoutes } from "./personas.ts";
 
 export const rawRoutes: ReadonlyArray<Route<BaseCtx>> = [
-  { method: "GET", path: "/healthz", auth: "public", handle: ({ res }) => sendJson(res, 200, { ok: true }) },
+  {
+    method: "GET",
+    path: "/healthz",
+    auth: "public",
+    handle: ({ res, deps }) => sendJson(res, deps.draining?.aborted ? 503 : 200, { ok: !deps.draining?.aborted }),
+  },
   {
     method: "GET",
     path: "/readyz",
     auth: "public",
     handle: async ({ res, deps }) => {
+      if (deps.draining?.aborted) return sendJson(res, 503, { ok: false });
       const controller = new AbortController();
       let timer: ReturnType<typeof setTimeout> | undefined;
       const deadline = new Promise<never>((_, reject) => {
@@ -80,14 +92,13 @@ export const rawRoutes: ReadonlyArray<Route<BaseCtx>> = [
   ...connectorRawRoutes,
   ...deploymentRawRoutes,
   ...blobRoutes,
-  ...sessionStateRawRoutes,
-  ...loopItemEventsRawRoutes,
   ...webhookRawRoutes,
   ...loopIngressRawRoutes,
 ];
 
 export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...browserModelRoutes,
+  ...browserUploadRoutes,
   ...sandboxModelRoutes,
   ...swarmRoutes,
   ...personaRoutes,
@@ -95,16 +106,23 @@ export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...deploymentLayerRoutes,
   ...deploymentLiveSmokeRoutes,
   ...turnRoutes,
+  ...webTurnRoutes,
+  ...webEventRoutes,
+  ...webMeRoutes,
+  ...voiceRoutes,
   ...runEventRoutes,
   ...credentialRoutes,
   ...keychainRoutes,
   ...secretDropRoutes,
   ...connectorRoutes,
   ...composioRoutes,
+  ...composioAuthorizeRoutes,
+  ...composioCallbackRoutes,
   ...composioTwitterMediaRoutes,
   ...composioProxyRoutes,
   ...adminRoutes,
   ...skillPackRoutes,
+  ...fileContentRoutes,
   ...surfaceRoutes,
   ...fileUploadRoutes,
   ...projectRoutes,
@@ -124,6 +142,7 @@ export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...emojiRoutes,
   ...inboxRoutes,
   ...deploymentRoutes,
+  ...deploymentSharingRoutes,
   ...egressAuditRoutes,
   ...authBrokerRoutes,
   ...userModelAuthRoutes,
