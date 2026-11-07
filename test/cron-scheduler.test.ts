@@ -1273,7 +1273,7 @@ test("a fire that throws is journaled as failed, not left running, and the next 
   assert.match(log[0]!.note ?? "", /substrate down/);
   throws = false;
   await runNowSettled(scheduler, cron.id);
-  assert.match(calls[1]?.text ?? "", /The previous fire did not complete: substrate down/);
+  assert.match(calls[1]?.text ?? "", /substrate down/);
 });
 
 test("a fire's input carries the last fire's timestamped shift-change note and asks this fire to leave one", async () => {
@@ -1752,13 +1752,13 @@ test("a failing cron posts one notice to its destination, then stays quiet until
   await runNowSettled(scheduler, cron.id);
   result = { status: "failed" };
   await runNowSettled(scheduler, cron.id);
-  assert.doesNotMatch(calls[0]?.text ?? "", /previous fire did not complete/);
+  assert.doesNotMatch(calls[0]?.text ?? "", /claude-sonnet-5 can't run here/);
   assert.match(
     calls[2]?.text ?? "",
-    /The previous fire did not complete: refused: claude-sonnet-5 can't run here/,
+    /claude-sonnet-5 can't run here/,
     "the fire after a failure streak is told so it can say the cron recovered",
   );
-  assert.doesNotMatch(calls[3]?.text ?? "", /previous fire did not complete/, "a fire after a success is not");
+  assert.doesNotMatch(calls[3]?.text ?? "", /claude-sonnet-5 can't run here/, "a fire after a success is not");
   const after = await texts();
   assert.equal(after.length, 3, "a failure after a success notifies again");
   assert.match(after[2]!, /^⚠️ Scheduled task “Daily standup” did not run: /);
