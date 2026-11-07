@@ -14,7 +14,6 @@ const core = createServer((req, res) => {
   req.on("data", (c: Buffer) => (body += c));
   req.on("end", () => {
     seen.push({ method: req.method, acceptEncoding: req.headers["accept-encoding"], body });
-    if (req.method === "DELETE") return void res.end(JSON.stringify({ echoed: JSON.parse(body) }));
     res.writeHead(200, { "content-type": "application/json" });
     res.write('{"sessions":[');
     res.once("close", () => heldClosed?.());
@@ -36,15 +35,14 @@ test.after(() => {
   core.close();
 });
 
-function get(path: string, headers: Record<string, string>, method = "GET", body?: string): Promise<IncomingMessage> {
+function get(path: string, headers: Record<string, string>): Promise<IncomingMessage> {
   const token = mintPortalIdentity({ p: "alice", exp: Date.now() + 60_000 }, secret);
   return new Promise((resolve, reject) => {
-    const req = request({ host: "127.0.0.1", port: (web.address() as AddressInfo).port, path, method }, resolve);
+    const req = request({ host: "127.0.0.1", port: (web.address() as AddressInfo).port, path }, resolve);
     req.setHeader(PORTAL_IDENTITY_HEADER, token);
     for (const [k, v] of Object.entries(headers)) req.setHeader(k, v);
-    if (body) req.setHeader("content-length", Buffer.byteLength(body));
     req.on("error", reject);
-    req.end(body);
+    req.end();
   });
 }
 
@@ -55,7 +53,7 @@ async function collect(res: IncomingMessage): Promise<Buffer> {
 }
 
 test("a relayed core read streams the first core bytes before core finishes the body", { timeout: 5_000 }, async () => {
-  const res = await get("/api/runtime-config", {});
+  const res = await get("/api/composio/slack", {});
   assert.equal(res.statusCode, 200);
   assert.equal(res.headers["content-type"], "application/json");
   assert.equal(seen.at(-1)?.acceptEncoding, "identity");
@@ -66,15 +64,9 @@ test("a relayed core read streams the first core bytes before core finishes the 
   assert.equal(first.toString() + rest.toString(), '{"sessions":[]}');
 });
 
-test("a relayed DELETE carries its JSON body to core", async () => {
-  const res = await get("/api/personas/p1/credentials/g1", {}, "DELETE");
-  assert.equal(res.statusCode, 200);
-  assert.deepEqual(JSON.parse((await collect(res)).toString()), { echoed: { principalId: "alice" } });
-});
-
 test("a browser that leaves mid-body closes the core response too", { timeout: 5_000 }, async () => {
   const closed = new Promise<void>((resolve) => (heldClosed = resolve));
-  const res = await get("/api/runtime-config", {});
+  const res = await get("/api/composio/slack", {});
   await once(res, "data");
   res.destroy();
   await Promise.race([

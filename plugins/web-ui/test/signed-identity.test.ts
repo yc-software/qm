@@ -7,7 +7,7 @@ import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/po
 let lastRead: { url: string; portalHeader: string | undefined } | null = null;
 const core = createServer((req: IncomingMessage, res) => {
   const u = req.url ?? "";
-  if (u.startsWith("/v1/runtime-config")) {
+  if (u.startsWith("/v1/crons")) {
     lastRead = { url: u, portalHeader: req.headers[PORTAL_IDENTITY_HEADER] as string | undefined };
     res.writeHead(200, { "content-type": "application/json" });
     return void res.end("{}");
@@ -35,44 +35,41 @@ test.after(() => {
 
 test("verifies the portal identity for the local principal and forwards the token to core", async () => {
   const token = mintPortalIdentity({ p: "alice", exp: Date.now() + 60_000 }, SECRET);
-  const r = await fetch(`${base}/api/runtime-config`, { headers: { [PORTAL_IDENTITY_HEADER]: token } });
+  const r = await fetch(`${base}/api/crons`, { headers: { [PORTAL_IDENTITY_HEADER]: token } });
   assert.equal(r.status, 200);
-  assert.match(lastRead?.url ?? "", /principalId=alice/);
+  assert.match(lastRead?.url ?? "", /viewer=alice/);
   assert.equal(lastRead?.portalHeader, token);
 });
 
 test("rejects an identity signed with the wrong key", async () => {
   const forged = mintPortalIdentity({ p: "alice", exp: Date.now() + 60_000 }, "attacker-key");
-  const r = await fetch(`${base}/api/runtime-config`, { headers: { [PORTAL_IDENTITY_HEADER]: forged } });
+  const r = await fetch(`${base}/api/crons`, { headers: { [PORTAL_IDENTITY_HEADER]: forged } });
   assert.equal(r.status, 401);
 });
 
 test("rejects an unsigned identity and a payload swapped under a valid signature", async () => {
   const claims = Buffer.from(JSON.stringify({ p: "alice", exp: Date.now() + 60_000 }), "utf8").toString("base64url");
   assert.equal(
-    (await fetch(`${base}/api/runtime-config`, { headers: { [PORTAL_IDENTITY_HEADER]: `${claims}.x` } })).status,
+    (await fetch(`${base}/api/crons`, { headers: { [PORTAL_IDENTITY_HEADER]: `${claims}.x` } })).status,
     401,
   );
 
   const signature = mintPortalIdentity({ p: "bob", exp: Date.now() + 60_000 }, SECRET).split(".")[1];
   const spliced = `${claims}.${signature}`;
-  assert.equal(
-    (await fetch(`${base}/api/runtime-config`, { headers: { [PORTAL_IDENTITY_HEADER]: spliced } })).status,
-    401,
-  );
+  assert.equal((await fetch(`${base}/api/crons`, { headers: { [PORTAL_IDENTITY_HEADER]: spliced } })).status, 401);
 });
 
 test("rejects an expired identity signed with the right key", async () => {
   const stale = mintPortalIdentity({ p: "alice", exp: Date.now() - 1_000 }, SECRET);
-  const r = await fetch(`${base}/api/runtime-config`, { headers: { [PORTAL_IDENTITY_HEADER]: stale } });
+  const r = await fetch(`${base}/api/crons`, { headers: { [PORTAL_IDENTITY_HEADER]: stale } });
   assert.equal(r.status, 401);
 });
 
 test("rejects a bare webuiuser cookie when source auth is configured", async () => {
-  const r = await fetch(`${base}/api/runtime-config`, { headers: { cookie: "webuiuser=alice" } });
+  const r = await fetch(`${base}/api/crons`, { headers: { cookie: "webuiuser=alice" } });
   assert.equal(r.status, 401);
 });
 
 test("rejects when neither a portal identity nor a cookie is present", async () => {
-  assert.equal((await fetch(`${base}/api/runtime-config`)).status, 401);
+  assert.equal((await fetch(`${base}/api/crons`)).status, 401);
 });

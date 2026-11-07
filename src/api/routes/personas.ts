@@ -225,8 +225,14 @@ export const personaRoutes: ReadonlyArray<Route<ApiCtx>> = [
       handle: restorePersonaVersion,
     },
     { method: "PUT", path: "/v1/personas/:id/access", browser: true, auth: "either", handle: setPersonaAccess },
-    { method: "POST", path: "/v1/personas/:id/credentials", auth: "either", handle: attachCredential },
-    { method: "DELETE", path: "/v1/personas/:id/credentials/:grantId", auth: "either", handle: detachCredential },
+    { method: "POST", path: "/v1/personas/:id/credentials", browser: true, auth: "either", handle: attachCredential },
+    {
+      method: "DELETE",
+      path: "/v1/personas/:id/credentials/:grantId",
+      browser: true,
+      auth: "either",
+      handle: detachCredential,
+    },
     { method: "PUT", path: "/v1/sessions/:id/persona", browser: true, auth: "either", handle: setSessionPersona },
   ]),
 ];

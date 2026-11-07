@@ -1364,15 +1364,13 @@ async function getSurfaceConfig(ctx: ApiCtx): Promise<void> {
 }
 
 async function runtimeTarget(ctx: ApiCtx): Promise<{ actorId: string; scope: ScopeId } | null> {
-  const actorId =
-    ctx.capability?.actorId ??
-    (isObj(ctx.body) && typeof ctx.body.principalId === "string"
-      ? ctx.body.principalId
-      : ctx.url.searchParams.get("principalId"));
-  const scope =
-    ctx.capability?.scopeId ??
-    (isObj(ctx.body) && typeof ctx.body.scopeId === "string" ? ctx.body.scopeId : ctx.url.searchParams.get("scopeId"));
-  if (!actorId || !scope) return null;
+  const param = (name: string): string | null => {
+    const value = isObj(ctx.body) ? ctx.body[name] : undefined;
+    return typeof value === "string" ? value : ctx.url.searchParams.get(name);
+  };
+  const actorId = ctx.capability?.actorId ?? param("principalId");
+  if (!actorId) return null;
+  const scope = ctx.capability?.scopeId ?? (param("scopeId") || makeScopeId("personal", actorId));
   const parsed = parseScopeId(scope);
   if (parsed.kind === "personal" && parsed.ref === actorId) return { actorId, scope: scope as ScopeId };
   if (ctx.capability && parsed.kind !== "org") return { actorId, scope: scope as ScopeId };
@@ -1551,8 +1549,8 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/soul", actor: "body.actorId", auth: "either", handle: postSoul },
   ...withActor("body.principalId", [
     { method: "PUT", path: "/v1/ui-state", browser: true, auth: "source", handle: putUiState },
-    { method: "PUT", path: "/v1/runtime-config", auth: "either", handle: putRuntimeConfig },
-    { method: "PUT", path: "/v1/channel-header-pin", auth: "either", handle: putChannelHeaderPin },
+    { method: "PUT", path: "/v1/runtime-config", browser: true, auth: "either", handle: putRuntimeConfig },
+    { method: "PUT", path: "/v1/channel-header-pin", browser: true, auth: "either", handle: putChannelHeaderPin },
     { method: "POST", path: "/v1/sessions/:id/title", browser: true, auth: "source", handle: regenerateSessionTitle },
     { method: "POST", path: "/v1/sessions/:id/expand", browser: true, auth: "source", handle: expandSideChat },
     { method: "POST", path: "/v1/sessions", browser: true, auth: "source", handle: spawnWebSession },
@@ -1577,8 +1575,8 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ]),
   ...withActor("query.principalId", [
     { method: "GET", path: "/v1/ui-state", browser: true, auth: "source", handle: getUiState },
-    { method: "GET", path: "/v1/runtime-config", auth: "either", handle: getRuntimeConfig },
-    { method: "GET", path: "/v1/channel-header-pin", auth: "either", handle: getChannelHeaderPin },
+    { method: "GET", path: "/v1/runtime-config", browser: true, auth: "either", handle: getRuntimeConfig },
+    { method: "GET", path: "/v1/channel-header-pin", browser: true, auth: "either", handle: getChannelHeaderPin },
     { method: "GET", path: "/v1/sessions/:id/side-chats", browser: true, auth: "source", handle: listSideChats },
     { method: "GET", path: "/v1/resources/search", browser: true, auth: "source", handle: searchResources },
     { method: "GET", path: "/v1/sessions/search", browser: true, auth: "source", handle: searchSessions },
