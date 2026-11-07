@@ -47,7 +47,7 @@ function agent(runResult: TurnResult = { status: "ok", reply: "DID-THE-WORK" }) 
   const identity = tracked(createIdentityService(testMap(), { externalMembers: testMap() }));
   const calls: TurnRequest[] = [];
   const turn = { result: runResult };
-  const finishedRuns = new Map<string, number | null>();
+  const runStatus = new Map<string, Run["status"]>();
   const run = async (req: TurnRequest): Promise<TurnResult> => {
     calls.push(req);
     return turn.result;
@@ -59,11 +59,13 @@ function agent(runResult: TurnResult = { status: "ok", reply: "DID-THE-WORK" }) 
     identity,
     run,
     runs: {
-      getByDedupKey: async (key) =>
-        finishedRuns.has(key) ? ({ id: "r1", finishedAt: finishedRuns.get(key) ?? null } as Run) : null,
+      get: async (id) => {
+        const status = runStatus.get(id);
+        return status ? ({ id, status } as Run) : null;
+      },
     },
   });
-  return { webhooks, deliveries, identity, calls, receiver, turn, finishedRuns };
+  return { webhooks, deliveries, identity, calls, receiver, turn, runStatus };
 }
 
 function githubReq(rawBody: string, deliveryId = "d-1", event = "issues") {
@@ -424,7 +426,7 @@ test("an edited task applies to the next delivery at the same URL and secret", a
 });
 
 test("a turn handed to a queue worker at shutdown is re-driven once it finishes, delivering its reply once", async () => {
-  const { webhooks, deliveries, calls, receiver, turn, finishedRuns } = agent({
+  const { webhooks, deliveries, calls, receiver, turn, runStatus } = agent({
     status: "queued",
     sessionId: "s1",
     runId: "r1",
@@ -440,26 +442,52 @@ test("a turn handed to a queue worker at shutdown is re-driven once it finishes,
   await receiver.deliver(wh.id, githubReq("{}", "d-handoff"));
   await flush();
   assert.deepEqual(await deliveries.pending("slack"), []);
-  assert.equal((await webhooks.get(wh.id))?.lastError, undefined);
+  const handedOff = await webhooks.get(wh.id);
+  assert.equal(handedOff?.lastError, undefined);
+  assert.deepEqual(Object.values(handedOff?.handedOff ?? {}), ["r1"]);
 
-  const fireKey = calls[0]!.idempotencyKey!;
-  const now = Date.now();
   turn.result = { status: "ok", reply: "FINISHED-ON-A-WORKER", sessionId: "s1" };
-  await receiver.redriveHandedOff(now);
-  finishedRuns.set(fireKey, null);
-  await receiver.redriveHandedOff(now);
-  finishedRuns.set(fireKey, now - 1_000);
-  await receiver.redriveHandedOff(now);
+  runStatus.set("r1", "running");
+  await receiver.redriveHandedOff();
   assert.equal(calls.length, 1);
 
-  finishedRuns.set(fireKey, now - 120_000);
-  await receiver.redriveHandedOff(now);
-  await receiver.redriveHandedOff(now);
+  runStatus.set("r1", "done");
+  await receiver.redriveHandedOff();
+  await receiver.redriveHandedOff();
   await flush();
   assert.equal(calls.length, 2);
-  assert.equal(calls[1]?.idempotencyKey, fireKey);
+  assert.equal(calls[1]?.idempotencyKey, calls[0]?.idempotencyKey);
   const pending = await deliveries.pending("slack");
   assert.equal(pending.length, 1);
   assert.equal(pending[0]?.text, "FINISHED-ON-A-WORKER");
-  assert.equal(`webhook:${wh.id}:${(await webhooks.get(wh.id))?.lastDeliveryId}`, fireKey);
+  const settled = await webhooks.get(wh.id);
+  assert.deepEqual(settled?.handedOff, {});
+  assert.equal(settled?.lastError, undefined);
+});
+
+test("a re-driven fire that fails is reported once and not re-driven again", async () => {
+  const { webhooks, deliveries, calls, receiver, turn, runStatus } = agent({
+    status: "queued",
+    sessionId: "s1",
+    runId: "r2",
+  });
+  const wh = await webhooks.create({
+    ownerScopeId: scopeId("personal", "U1"),
+    owner: "U1",
+    createdBy: "U1",
+    action: "x",
+    verification: { scheme: "github", secret: SECRET },
+    destination: { type: "slack", target: "D1", audienceScopeId: scopeId("personal", "U1") },
+  });
+  await receiver.deliver(wh.id, githubReq("{}", "d-failed"));
+  await flush();
+  turn.result = { status: "failed", reason: "boom", sessionId: "s1" };
+  runStatus.set("r2", "failed");
+  await receiver.redriveHandedOff();
+  await receiver.redriveHandedOff();
+  await flush();
+  assert.equal(calls.length, 2);
+  const pending = await deliveries.pending("slack");
+  assert.equal(pending.length, 1);
+  assert.match(pending[0]?.text ?? "", /did not complete/);
 });

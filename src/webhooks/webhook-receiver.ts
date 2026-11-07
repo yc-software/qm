@@ -6,23 +6,23 @@ import { runTrigger, type TriggerDeps } from "../triggers/run-trigger.ts";
 import { buildWebhookWakeEnvelope, capForEscaping } from "../wake/wake-envelope.ts";
 import { errMessage, reportFailure, reportFailureAs } from "../util/errors.ts";
 import { TurnHandedOff } from "../core/turn-error.ts";
-import type { RunStore } from "../runs/run-store.ts";
+import { isTerminal, type RunStore } from "../runs/run-store.ts";
+import type { AdmittedWork } from "../util/admitted-work.ts";
 
 export type DeliverResult = { status: 202 } | { status: 200; body: string } | { status: 401 } | { status: 404 };
 
 export interface WebhookReceiver {
   deliver(id: string, req: { headers: VerifierInput["headers"]; rawBody: string }): Promise<DeliverResult>;
-  redriveHandedOff(now?: number): Promise<void>;
+  redriveHandedOff(): Promise<void>;
 }
 
 export interface WebhookReceiverDeps extends TriggerDeps {
   webhooks: WebhookStore;
-  runs: Pick<RunStore, "getByDedupKey">;
+  runs: Pick<RunStore, "get">;
+  admittedWork?: AdmittedWork;
 }
 
 const MAX_EVENT_CHARS = 16_000;
-const REDRIVE_GRACE_MS = 60_000;
-const REDRIVE_WINDOW_MS = 6 * 60 * 60_000;
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
 
@@ -70,8 +70,6 @@ export function createWebhookReceiver(deps: WebhookReceiverDeps): WebhookReceive
     ...(deps.resolveRecipient ? { resolveRecipient: deps.resolveRecipient } : {}),
   };
 
-  const redriving = new Set<string>();
-
   async function fire(wh: Webhook, deliveryId: string, payload: string, at: Date): Promise<void> {
     const destination: Destination | undefined = wh.destination;
     await runTrigger(triggerDeps, {
@@ -88,6 +86,7 @@ export function createWebhookReceiver(deps: WebhookReceiverDeps): WebhookReceive
       securityScreenData: payload,
       fireKey: `webhook:${wh.id}:${deliveryId}`,
       surface: "webhook",
+      redrivesHandOff: true,
       ...(destination ? { destination } : {}),
       errorNotice: (s) => `⚠️ Webhook did not complete: ${s}`,
     })
@@ -103,29 +102,32 @@ export function createWebhookReceiver(deps: WebhookReceiverDeps): WebhookReceive
           ...(outcome.note ? { error: outcome.note } : {}),
         });
       })
-      .catch((e: unknown) => {
-        if (!(e instanceof TurnHandedOff))
-          void deps.webhooks
-            .recordFire(wh.id, { at: Date.now(), error: errMessage(e) })
-            .catch(reportFailureAs("webhook: persist fire failure", undefined, `webhook=${wh.id}`));
+      .catch(async (e: unknown) => {
         reportFailure("webhook: fire", e, `webhook=${wh.id}`);
+        await (
+          e instanceof TurnHandedOff
+            ? deps.webhooks.setHandedOff(wh.id, deliveryId, e.runId)
+            : deps.webhooks.recordFire(wh.id, { at: Date.now(), error: errMessage(e) })
+        ).catch(reportFailureAs("webhook: persist fire failure", undefined, `webhook=${wh.id}`));
       });
   }
 
   return {
-    async redriveHandedOff(now = Date.now()) {
+    async redriveHandedOff() {
       for (const wh of await deps.webhooks.list()) {
-        if (!wh.enabled) continue;
-        for (const event of await deps.webhooks.listEvents(wh.id)) {
-          const fireKey = `webhook:${wh.id}:${event.deliveryId}`;
-          if (event.receivedAt < now - REDRIVE_WINDOW_MS || redriving.has(fireKey)) continue;
-          if (await deps.idempotency.committed(fireKey)) continue;
-          const run = await deps.runs.getByDedupKey(fireKey);
-          if (!run?.finishedAt || run.finishedAt > now - REDRIVE_GRACE_MS) continue;
-          redriving.add(fireKey);
-          await fire(wh, event.deliveryId, event.payload, new Date(event.receivedAt)).finally(() =>
-            redriving.delete(fireKey),
-          );
+        const handedOff = Object.entries(wh.handedOff ?? {});
+        if (!wh.enabled || !handedOff.length) continue;
+        try {
+          const events = await deps.webhooks.listEvents(wh.id);
+          for (const [deliveryId, runId] of handedOff) {
+            const run = await deps.runs.get(runId);
+            if (run && !isTerminal(run.status)) continue;
+            await deps.webhooks.setHandedOff(wh.id, deliveryId, undefined);
+            const event = events.find((e) => e.deliveryId === deliveryId);
+            if (run && event) await fire(wh, deliveryId, event.payload, new Date(event.receivedAt));
+          }
+        } catch (e) {
+          reportFailure("webhook: re-drive", e, `webhook=${wh.id}`);
         }
       }
     },
@@ -157,7 +159,10 @@ export function createWebhookReceiver(deps: WebhookReceiverDeps): WebhookReceive
 
       const payload = renderPayload(parsed, req.rawBody);
       await deps.webhooks.recordEvent(wh.id, { deliveryId, receivedAt: Date.now(), payload });
-      void fire(wh, deliveryId, payload, new Date());
+      const work = () => fire(wh, deliveryId, payload, new Date());
+      void (deps.admittedWork?.run(work) ?? work()).catch(
+        reportFailureAs("webhook: fire", undefined, `webhook=${wh.id}`),
+      );
 
       return { status: 202 };
     },

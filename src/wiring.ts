@@ -2699,6 +2699,7 @@ export function buildApp(
     identity,
     run: runTriggered,
     runs,
+    admittedWork,
     directory,
     currentScopeMembers,
     resolveRecipient,

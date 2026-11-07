@@ -128,7 +128,7 @@ test("reportFailure logs every failure but marks only reportable ones as reporte
     [
       "[failed] scheduler: fire: stopped",
       "[failed] scheduler: tick: This deployment is not accepting synchronous work",
-      "[failed] webhook: fire: turn r9 was still waiting to finish when this process shut down [name=TurnHandedOff]",
+      "[failed] webhook: fire: turn r9 was handed to a queue worker at shutdown; its fire will be re-driven [name=TurnHandedOff runId=r9]",
       "[failed] loop: fire: loop: turn failed [name=TransientTurnFailure]",
       "[failed] scheduler: fire: boom",
       "[failed] worker: retry (run=r1): a string throw",

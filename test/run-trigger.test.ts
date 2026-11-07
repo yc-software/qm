@@ -338,22 +338,45 @@ it("keeps shadow webhook results out of terminal-run recovery", async () => {
 });
 
 describe("runTrigger: a turn abandoned while still queued leaves the fire retryable", () => {
-  it("throws a hand-off without a notice or spending the fire key", async () => {
+  it("sends the error notice and throws without spending the fire key", async () => {
     const d = deps(async () => ({ status: "queued", sessionId: "s1", runId: "r1" }));
     await assert.rejects(
       runTrigger(d, {
         owner: "U1",
         ownerScopeId: scopeId("channel", "C1"),
         input: "report back",
-        fireKey: "webhook:w7:d1",
-        surface: "webhook",
-        threadRef: "webhook:w7:d1",
+        fireKey: "loop:l7:2000",
+        surface: "loop",
+        threadRef: "loop:l7:2000",
         destination: toChannel,
         errorNotice: (s: string) => `⚠️ could not run: ${s}`,
       }),
-      (e: unknown) => e instanceof TurnHandedOff && /turn r1 was still waiting to finish/.test(e.message),
+      (e: unknown) =>
+        !(e instanceof TurnHandedOff) && /still waiting to finish when this process shut down/.test(String(e)),
     );
-    assert.equal(await d.idempotency.committed("webhook:w7:d1"), false);
+    assert.equal(await d.idempotency.committed("loop:l7:2000"), false);
+    const pending = await d.deliveries.pending("slack");
+    assert.equal(pending.length, 1);
+    assert.match(pending[0]!.text, /^⚠️ could not run:/);
+  });
+
+  it("a trigger that re-drives its unspent fire throws a hand-off carrying the run, without a notice", async () => {
+    const d = deps(async () => ({ status: "queued", sessionId: "s1", runId: "r1" }));
+    await assert.rejects(
+      runTrigger(d, {
+        owner: "U1",
+        ownerScopeId: scopeId("channel", "C1"),
+        input: "report back",
+        fireKey: "webhook:w8:d1",
+        surface: "webhook",
+        threadRef: "webhook:w8:d1",
+        destination: toChannel,
+        redrivesHandOff: true,
+        errorNotice: (s: string) => `⚠️ could not run: ${s}`,
+      }),
+      (e: unknown) => e instanceof TurnHandedOff && e.runId === "r1",
+    );
+    assert.equal(await d.idempotency.committed("webhook:w8:d1"), false);
     assert.deepEqual(await d.deliveries.pending("slack"), []);
   });
 });
