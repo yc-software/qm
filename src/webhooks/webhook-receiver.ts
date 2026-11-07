@@ -125,6 +125,7 @@ export function createWebhookReceiver(deps: WebhookReceiverDeps): WebhookReceive
             await deps.webhooks.setHandedOff(wh.id, deliveryId, undefined);
             const event = events.find((e) => e.deliveryId === deliveryId);
             if (run && event) await fire(wh, deliveryId, event.payload, new Date(event.receivedAt));
+            else console.warn(`[webhook] ${wh.id} delivery ${deliveryId}: run or event is gone; not re-driven`);
           }
         } catch (e) {
           reportFailure("webhook: re-drive", e, `webhook=${wh.id}`);
@@ -160,7 +161,7 @@ export function createWebhookReceiver(deps: WebhookReceiverDeps): WebhookReceive
       const payload = renderPayload(parsed, req.rawBody);
       await deps.webhooks.recordEvent(wh.id, { deliveryId, receivedAt: Date.now(), payload });
       const work = () => fire(wh, deliveryId, payload, new Date());
-      void (deps.admittedWork?.run(work) ?? work()).catch(
+      void (deps.admittedWork?.canRun() ? deps.admittedWork.run(work) : work()).catch(
         reportFailureAs("webhook: fire", undefined, `webhook=${wh.id}`),
       );
 

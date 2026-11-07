@@ -9,6 +9,7 @@ import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts"
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import type { Run } from "../src/runs/run-store.ts";
+import { createAdmittedWork, type AdmittedWork } from "../src/util/admitted-work.ts";
 import { testMap } from "./support/test-database.ts";
 
 const automationOrigin = (request?: { origin?: TurnOrigin }) =>
@@ -41,7 +42,7 @@ type AssertNo413 = DeliverResult["status"] extends 202 | 200 | 401 | 404 ? true 
 const _deliverStatusIsNot413: AssertNo413 = true;
 void _deliverStatusIsNot413;
 
-function agent(runResult: TurnResult = { status: "ok", reply: "DID-THE-WORK" }) {
+function agent(runResult: TurnResult = { status: "ok", reply: "DID-THE-WORK" }, admittedWork?: AdmittedWork) {
   const webhooks = tracked(createWebhookStore(testMap(), testMap()));
   const deliveries = tracked(createDeliveryStore());
   const identity = tracked(createIdentityService(testMap(), { externalMembers: testMap() }));
@@ -58,6 +59,7 @@ function agent(runResult: TurnResult = { status: "ok", reply: "DID-THE-WORK" }) 
     idempotency: tracked(createIdempotencyStore(testMap())),
     identity,
     run,
+    ...(admittedWork ? { admittedWork } : {}),
     runs: {
       get: async (id) => {
         const status = runStatus.get(id);
@@ -490,4 +492,20 @@ test("a re-driven fire that fails is reported once and not re-driven again", asy
   const pending = await deliveries.pending("slack");
   assert.equal(pending.length, 1);
   assert.match(pending[0]?.text ?? "", /did not complete/);
+});
+
+test("a delivery that arrives while admission is closed for shutdown still fires", async () => {
+  const admittedWork = createAdmittedWork();
+  admittedWork.pause();
+  const { webhooks, calls, receiver } = agent(undefined, admittedWork);
+  const wh = await webhooks.create({
+    ownerScopeId: scopeId("personal", "U1"),
+    owner: "U1",
+    createdBy: "U1",
+    action: "x",
+    verification: { scheme: "github", secret: SECRET },
+  });
+  assert.deepEqual(await receiver.deliver(wh.id, githubReq("{}", "d-draining")), { status: 202 });
+  await flush();
+  assert.equal(calls.length, 1);
 });
