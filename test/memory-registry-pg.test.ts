@@ -314,7 +314,7 @@ test("a stored brain whose id an env provider took leaves the env provider servi
     memory.query("personal:U1", "codename", 5, { actorId: "U1", report }),
   );
   assert.deepEqual(searched.problems, []);
-  assert.ok((searched.value ?? []).some((text) => text.includes(BRAIN_FACT)));
+  assert.ok((searched.value ?? []).some(({ text }) => text.includes(BRAIN_FACT)));
   const written = await writeFacts(
     memory,
     "personal:U1",

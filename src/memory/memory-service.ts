@@ -3,8 +3,10 @@ import type { MemoryDisclosure } from "./disclosure.ts";
 import {
   MemoryFactsMissing,
   captureProvenance,
+  factCandidate,
   factLine,
   mergeProvenance,
+  normalizeClaim,
   parseFactId,
   recentCandidates,
   renderFacts,
@@ -62,7 +64,7 @@ export interface MemoryService {
     author?: string,
     context?: MemoryCaptureContext,
   ): Promise<number>;
-  query(scopeId: ScopeId, q: string, limit?: number, context?: MemoryRecallContext): Promise<string[]>;
+  query(scopeId: ScopeId, q: string, limit?: number, context?: MemoryRecallContext): Promise<MemoryCandidate[]>;
   read(scopeId: ScopeId): Promise<string>;
   facts?(scopeId: ScopeId): Promise<MemoryFact[]>;
   edit?(scopeId: ScopeId, edits: MemoryEdit[], author?: string, context?: MemoryCaptureMetadata): Promise<void>;
@@ -70,16 +72,14 @@ export interface MemoryService {
   metadata?(): Promise<Map<ScopeId, { bytes: number; updatedAt?: number }>>;
 }
 
-export function queryFacts(facts: readonly MemoryFact[], q: string, limit: number): string[] {
+export function queryFacts(facts: readonly MemoryFact[], q: string, limit: number): MemoryCandidate[] {
   const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
   if (!terms.length) return [];
   return facts
     .filter((fact) => terms.every((term) => fact.text.toLowerCase().includes(term)))
     .slice(0, limit)
-    .map(factLine);
+    .map((fact) => ({ ...factCandidate(fact), text: factLine(fact) }));
 }
-
-const normalize = (text: string) => text.trim().toLowerCase();
 
 function cleanCapturedFacts(facts: string[]): string[] {
   return facts.flatMap((f) => {
@@ -142,10 +142,10 @@ export function createNotebookMemory(store: FactStore): MemoryService {
       if (!lines.length) return 0;
       const provenance = captureProvenance(scopeId, context);
       return store.transact(scopeId, async (tx) => {
-        const existing = new Map((await tx.list()).map((fact) => [normalize(fact.text), fact]));
+        const existing = new Map((await tx.list()).map((fact) => [normalizeClaim(fact.text), fact]));
         let added = 0;
         for (const text of lines) {
-          const key = normalize(text);
+          const key = normalizeClaim(text);
           const duplicate = existing.get(key);
           if (duplicate) {
             const merged = mergeProvenance([duplicate, provenance], duplicate.sensitivity);

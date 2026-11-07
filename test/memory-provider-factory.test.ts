@@ -10,7 +10,7 @@ import { recallText } from "./support/recall-text.ts";
 
 const defaultMemory: MemoryService = {
   async recall() {
-    return [{ text: "personal notebook", score: 0.2 }];
+    return [{ text: "personal notebook" }];
   },
   async capture(_scope, facts) {
     return facts.length;

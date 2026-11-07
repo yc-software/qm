@@ -161,7 +161,7 @@ test("query() retrieves matching facts and is scope-keyed (boundary-safe)", asyn
   const at = Date.UTC(2026, 4, 31);
   await mem.capture(personal, ["Owns the billing service", "Prefers terse replies"], at);
 
-  const hits = await mem.query(personal, "billing");
+  const hits = (await mem.query(personal, "billing")).map(({ text }) => text);
   assert.deepEqual(hits, ["#1 (2026-05-31) Owns the billing service"]);
   assert.deepEqual(await mem.query(personal, "kubernetes"), []);
   assert.deepEqual(await mem.query(channel, "handle"), []);
