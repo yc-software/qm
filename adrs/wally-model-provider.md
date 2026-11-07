@@ -13,4 +13,4 @@ Key validation, a turn and a tool call all went through QM's own path on both mo
 
 The question: is that the path you want for providers like ours, or would you take Wally in the built-in list next to OpenRouter? Given the config-matrix section of the spec we guessed the former, in which case this file is the whole change.
 
-One gap we hit: custom models are text-only, so image input on `deepseek-v4.1-flash` is not reachable through a custom provider.
+Two gaps we hit, both general to custom providers: custom models are text-only, so image input on `deepseek-v4.1-flash` is not reachable, and the settings form takes no prices, so cost shows as zero unless the provider is registered through the admin API with `input` and `output` per model.
