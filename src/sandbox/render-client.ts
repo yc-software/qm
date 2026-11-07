@@ -26,6 +26,8 @@ const IMAGE_ENV =
   'export PATH="/opt/agent-venv/bin:$PATH" VIRTUAL_ENV=/opt/agent-venv ANONYMIZED_TELEMETRY=false BROWSER_USE_CLOUD_SYNC=false\n';
 
 const DAY_SEC = 86400;
+const LIST_PAGE_SIZE = 100;
+const LIVE_STATUSES = ["creating", "running", "suspending", "suspended", "resuming"] as const;
 
 const sdkErrors = {
   statusOf: (error: unknown): number | undefined =>
@@ -39,7 +41,13 @@ export interface RenderSandboxInfo {
   expiresAtMs: number;
 }
 
+export interface RenderListedSandbox {
+  id: string;
+  createdAtMs: number;
+}
+
 interface RenderCreateOptions {
+  name?: string;
   snapshotId?: string;
   image?: string;
   lifetimeSec: number;
@@ -66,6 +74,7 @@ export interface RenderClient {
   create(options: RenderCreateOptions): Promise<RenderSandboxInfo>;
   importImage(source: string, name: string): Promise<RenderImage>;
   get(sandboxId: string): Promise<RenderSandboxInfo | null>;
+  listLive(name: string): Promise<RenderListedSandbox[]>;
   terminate(sandboxId: string): Promise<void>;
   runScript(
     sandboxId: string,
@@ -203,14 +212,21 @@ export function createSdkRenderClient(opts: SdkRenderClientOptions): RenderClien
     }
   };
   return {
-    async create({ snapshotId, image, lifetimeSec, onCreated }) {
+    async create({ name, snapshotId, image, lifetimeSec, onCreated }) {
       let source: { snapshotId: string } | { image: string } | Record<string, never> = {};
       if (snapshotId) source = { snapshotId };
       else if (image) source = { image };
+      const label = name ? { name } : {};
       const created = await retryOperation(
         () =>
           api
-            .create({ plan: RENDER_SANDBOX_PLAN, timeoutSeconds: lifetimeSec, idleTimeoutSeconds: 0, ...source })
+            .create({
+              plan: RENDER_SANDBOX_PLAN,
+              timeoutSeconds: lifetimeSec,
+              idleTimeoutSeconds: 0,
+              ...label,
+              ...source,
+            })
             .catch((error: unknown) => {
               if (!(error instanceof ClientError && error.code === "invalid_timeout_seconds" && lifetimeSec > DAY_SEC))
                 throw error;
@@ -218,6 +234,7 @@ export function createSdkRenderClient(opts: SdkRenderClientOptions): RenderClien
                 plan: RENDER_SANDBOX_PLAN,
                 timeoutSeconds: DAY_SEC,
                 idleTimeoutSeconds: 0,
+                ...label,
                 ...source,
               });
             }),
@@ -275,6 +292,21 @@ export function createSdkRenderClient(opts: SdkRenderClientOptions): RenderClien
       };
     },
     get,
+    async listLive(name) {
+      const listed: RenderListedSandbox[] = [];
+      for (let cursor: string | undefined; ;) {
+        const after = cursor ? { cursor } : {};
+        const page = await retryOperation(
+          () => api.list({ name, status: [...LIVE_STATUSES], limit: LIST_PAGE_SIZE, ...after }),
+          "idempotent",
+          { ...sdkErrors, timeoutMs: CONTROL_TIMEOUT_MS },
+        );
+        for (const entry of page)
+          listed.push({ id: entry.sandbox.id, createdAtMs: Date.parse(entry.sandbox.createdAt) });
+        if (page.length < LIST_PAGE_SIZE) return listed;
+        cursor = page.at(-1)!.cursor;
+      }
+    },
     terminate,
     runScript,
     async readFileBytes(sandboxId, absPath) {

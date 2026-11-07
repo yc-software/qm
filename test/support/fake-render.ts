@@ -55,6 +55,7 @@ export function createFakeRender() {
   const execFileAsync = promisify(execFile);
   const root = mkdtempSync(join(tmpdir(), "fake-render-"));
   const sandboxes = new Map<string, RenderSandboxInfo>();
+  const labels = new Map<string, { name?: string; createdAtMs: number }>();
   const snapshots = new Map<string, RenderSnapshot>();
   const snapshotSources = new Map<string, { sandboxId: string; name: string; requestedAtMs: number }>();
   const images = new Map<string, RenderImage & { name: string; source: string }>();
@@ -140,7 +141,7 @@ export function createFakeRender() {
     return image;
   };
   const client: RenderClient = {
-    async create({ snapshotId, image, lifetimeSec, onCreated }) {
+    async create({ name, snapshotId, image, lifetimeSec, onCreated }) {
       const id = `sbx-${sandboxes.size + 1}`;
       const info: RenderSandboxInfo = { id, status: "running", expiresAtMs: Date.now() + lifetimeSec * 1000 };
       if (snapshotId) {
@@ -154,6 +155,7 @@ export function createFakeRender() {
         mkdirSync(home(id), { recursive: true });
       }
       sandboxes.set(id, info);
+      labels.set(id, { ...(name ? { name } : {}), createdAtMs: Date.now() });
       createdFrom.push(snapshotId ?? image);
       try {
         await onCreated?.(id);
@@ -175,6 +177,13 @@ export function createFakeRender() {
     },
     async get(id) {
       return sandboxes.get(id) ?? null;
+    },
+    async listLive(name) {
+      return [...sandboxes.values()]
+        .filter(
+          (info) => labels.get(info.id)?.name === name && info.status !== "terminated" && info.status !== "errored",
+        )
+        .map((info) => ({ id: info.id, createdAtMs: labels.get(info.id)!.createdAtMs }));
     },
     async terminate(id) {
       if (terminateError ?? terminateErrors.get(id)) throw terminateError ?? terminateErrors.get(id);
@@ -275,6 +284,15 @@ export function createFakeRender() {
     loseCheckpointReply(status: RenderSnapshot["status"] = "available") {
       loseCheckpointReply = status;
     },
+    nameOf(sandboxId: string) {
+      return labels.get(sandboxId)?.name;
+    },
+    createdAtMs(sandboxId: string) {
+      return labels.get(sandboxId)?.createdAtMs;
+    },
+    age(sandboxId: string, ms: number) {
+      labels.get(sandboxId)!.createdAtMs -= ms;
+    },
     snapshotSource(snapshotId: string) {
       return snapshotSources.get(snapshotId);
     },
@@ -309,16 +327,17 @@ export function serveFakeRenderApi(
   let maxLifetimeSec: number | undefined;
   let groupCreates = 0;
   const uploads: Array<{ sandboxId: string; path: string; data: Buffer }> = [];
-  const lifetimes = new Map<string, { timeoutSeconds: number; createdAt: string }>();
+  const lifetimes = new Map<string, { timeoutSeconds: number }>();
   const sandboxJson = (id: string) => ({
     id,
+    name: fake.nameOf(id) ?? null,
     status: fake.sandboxes.get(id)!.status,
     plan: "starter",
     region: "oregon",
     networkPolicy: { type: "allow-all" },
     timeoutSeconds: 86400,
-    createdAt: new Date().toISOString(),
     ...lifetimes.get(id),
+    createdAt: new Date(fake.createdAtMs(id)!).toISOString(),
   });
   const snapshotJson = (snapshot: RenderSnapshot) => ({
     id: snapshot.id,
@@ -351,7 +370,12 @@ export function serveFakeRenderApi(
   const api = async (request: Request, path: string, query: URLSearchParams): Promise<Response> => {
     let match: RegExpExecArray | null;
     if (request.method === "POST" && path === "/sandboxes") {
-      const body = (await request.json()) as { snapshotId?: string; buildId?: string; timeoutSeconds?: number };
+      const body = (await request.json()) as {
+        name?: string;
+        snapshotId?: string;
+        buildId?: string;
+        timeoutSeconds?: number;
+      };
       if (maxLifetimeSec && (body.timeoutSeconds ?? 0) > maxLifetimeSec)
         return Response.json(
           {
@@ -361,12 +385,22 @@ export function serveFakeRenderApi(
           { status: 400 },
         );
       const { id } = await fake.client.create({
+        ...(body.name ? { name: body.name } : {}),
         ...(body.snapshotId ? { snapshotId: body.snapshotId } : {}),
         ...(body.buildId ? { image: body.buildId } : {}),
         lifetimeSec: body.timeoutSeconds ?? 86400,
       });
-      lifetimes.set(id, { timeoutSeconds: body.timeoutSeconds ?? 86400, createdAt: new Date().toISOString() });
+      lifetimes.set(id, { timeoutSeconds: body.timeoutSeconds ?? 86400 });
       return Response.json(sandboxJson(id), { status: 201 });
+    }
+    if (path === "/sandboxes" && request.method === "GET") {
+      const statuses = new Set(query.getAll("status"));
+      const matching = [...fake.sandboxes.values()].filter(
+        (info) => fake.nameOf(info.id) === query.get("name") && statuses.has(info.status),
+      );
+      const start = query.has("cursor") ? matching.findIndex((info) => info.id === query.get("cursor")) + 1 : 0;
+      const page = matching.slice(start, start + Number(query.get("limit") ?? 20));
+      return Response.json(page.map((info) => ({ sandbox: sandboxJson(info.id), cursor: info.id })));
     }
     if ((match = /^\/sandboxes\/([^/]+)$/.exec(path)))
       return fake.sandboxes.has(match[1]!) ? Response.json(sandboxJson(match[1]!)) : missing();
