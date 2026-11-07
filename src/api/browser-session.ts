@@ -103,6 +103,9 @@ export const API_ALIASES: ReadonlyMap<string, string> = new Map([
   ["GET /api/files/:id/content", "/v1/files/:id/content"],
   ["GET /api/files/:id/content/:name", "/v1/files/:id/content"],
   ["GET /api/playgrounds/:id", "/v1/playgrounds/:id"],
+  ["POST /api/turn", "/v1/web/turn"],
+  ["POST /api/approvals/:requestId", "/v1/web/approvals/:requestId"],
+  ["POST /api/runs/:id/signal", "/v1/web/runs/:id/signal"],
 ]);
 
 const aliasMatchers = [...API_ALIASES].map(([key, target]) => {
@@ -132,7 +135,7 @@ interface BrowserRefusal {
 
 export function usesBrowserSession(req: IncomingMessage, route: Pick<Route, "browser"> | undefined): boolean {
   return (
-    route?.browser === true &&
+    route?.browser !== undefined &&
     req.headers[CAPABILITY_HEADER] === undefined &&
     req.headers["x-signature"] === undefined &&
     readCookie(req.headers.cookie, "portal_session") !== null
@@ -161,6 +164,7 @@ export async function browserIdentity(
   req: IncomingMessage,
   method: string,
   deps: ServerDeps,
+  embeddable: boolean,
 ): Promise<PortalIdentity | BrowserRefusal> {
   const now = Date.now();
   const problem = misconfiguration(deps);
@@ -168,7 +172,7 @@ export async function browserIdentity(
     reportFailure("browser_session.misconfigured", new Error(problem));
     return { status: 503, error: "unavailable", message: "browser sign-in is not configured on this server" };
   }
-  const { secret, maxAgeSeconds, principals = [] } = deps.portalSession!;
+  const { secret, maxAgeSeconds, principals = [], apiOrigins } = deps.portalSession!;
   const cookies = req.headers.cookie;
   const session = openSession(
     readCookie(cookies, "portal_session"),
@@ -181,7 +185,9 @@ export async function browserIdentity(
     return { status: 401, error: "unauthorized", message: "a sign-in session for this organization is required" };
   if (session.appOnly)
     return { status: 403, error: "app_only_session", message: "this sign-in only permits access to shared apps" };
-  if (method !== "GET" && method !== "HEAD" && !sameOriginRequest(req, originOf(deps.portalUrl!)))
+  const listedOrigin =
+    embeddable && typeof req.headers.origin === "string" && apiOrigins?.has(req.headers.origin) === true;
+  if (method !== "GET" && method !== "HEAD" && !listedOrigin && !sameOriginRequest(req, originOf(deps.portalUrl!)))
     return { status: 403, error: "forbidden", message: "cross-origin request refused" };
   for (const header of RELAY_IDENTITY_HEADERS) delete req.headers[header];
   await deps.identity?.refresh();

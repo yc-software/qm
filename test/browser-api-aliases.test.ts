@@ -54,13 +54,13 @@ test("each aliased /api path resolves to the browser-enabled /v1 route that serv
     const resolved = apiAlias(method, concrete(path));
     assert.equal(resolved, concrete(target), path);
     const route = findRoute(apiRoutes, method, resolved!)?.route;
-    assert.equal(route?.browser, true, path);
+    assert.ok(route?.browser, path);
     assert.equal(route, findRoute(apiRoutes, method, concrete(target))?.route, path);
   }
   assert.equal(apiAlias("GET", "/api/sessions/a%2Fb/children"), "/v1/sessions/a%2Fb/children");
   for (const [method, path] of [
-    ["POST", "/api/turn"],
-    ["POST", "/api/approvals/1"],
+    ["GET", "/api/turn"],
+    ["POST", "/api/approvals/1/2"],
     ["POST", "/api/crons"],
     ["POST", "/api/webhooks"],
     ["GET", "/api/inbox"],

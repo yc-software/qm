@@ -12,3 +12,9 @@ export function browserSessionCookie(sub: string, extra: Record<string, unknown>
   const claims = { k: "session", sub, org: "default-org", iat, exp: iat + 3600, ...extra };
   return `portal_session=${encodeURIComponent(seal(claims, deriveKey(SECRET, "portal.session.v1")))}`;
 }
+
+export function browserImpersonationCookie(actor: string, target: string): string {
+  const iat = Math.floor(Date.now() / 1000);
+  const claims = { k: "impersonate", actor, target, org: "default-org", iat, exp: iat + 600 };
+  return `portal_impersonate=${encodeURIComponent(seal(claims, deriveKey(SECRET, "portal.impersonate.v1")))}`;
+}

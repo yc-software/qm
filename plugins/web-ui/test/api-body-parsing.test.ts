@@ -68,58 +68,12 @@ test("an empty body on a strict route is refused, not read as a field-clearing o
     ["POST", "/api/deployments/d1/display-name"],
     ["POST", "/api/deployments/d1/name"],
     ["POST", "/api/keychain/drops"],
-    ["POST", "/api/runs/r1/signal"],
   ] as const) {
     const r = await fetch(`${base}${path}`, { method, headers });
     assert.equal(r.status, 400, `${method} ${path} with no body must refuse`);
   }
   const reached = calls.slice(before).filter((c) => !c.url.startsWith("/v1/deployments?"));
   assert.equal(reached.length, 0, "no empty-body request may reach core (only the manage gate's list fetch may)");
-});
-
-test("a steer forwards a server-built TurnRequest; client-supplied identity fields are ignored", async () => {
-  const threadRef = "web:alice:steer-thread";
-  const r = await fetch(`${base}/api/runs/r1/signal`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      kind: "steer",
-      text: "louder",
-      threadRef,
-      ts: "client-forged",
-      actor: { externalId: "mallory" },
-      request: { surface: "web", actor: { externalId: "mallory" }, conversation: { kind: "dm", threadRef }, text: "x" },
-    }),
-  });
-  assert.equal(r.status, 200);
-  const forwarded = calls.at(-1);
-  assert.ok(forwarded?.url.startsWith("/v1/runs/r1/signal"));
-  const body = forwarded!.body as {
-    kind?: string;
-    text?: string;
-    ts?: string;
-    request?: { surface?: string; actor?: { externalId?: string }; conversation?: unknown; text?: string };
-  };
-  assert.equal(body.kind, "steer");
-  assert.equal(body.text, "louder");
-  assert.equal(body.ts, undefined, "a client-supplied ts is dropped; core mints its own");
-  assert.equal(body.request?.actor?.externalId, "alice", "the actor comes from the signed-in session");
-  assert.equal(body.request?.surface, "web");
-  assert.equal(body.request?.text, "louder");
-  assert.deepEqual(body.request?.conversation, { kind: "dm", threadRef });
-});
-
-test("ordinary steering without conversation context and abort preserve bare signal forwarding", async () => {
-  for (const body of [
-    { kind: "steer", text: "louder" },
-    { kind: "steer", text: "louder", threadRef: "" },
-    { kind: "steer", text: "louder", threadRef: "invalid" },
-    { kind: "abort" },
-  ]) {
-    const r = await fetch(`${base}/api/runs/r1/signal`, { method: "POST", headers, body: JSON.stringify(body) });
-    assert.equal(r.status, 200);
-    assert.deepEqual(calls.at(-1)?.body, { kind: body.kind, ...("text" in body ? { text: body.text } : {}) });
-  }
 });
 
 test("app authorization accepts existing browser payloads and validates new return context", async () => {

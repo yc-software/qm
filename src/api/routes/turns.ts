@@ -171,7 +171,7 @@ function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { e
   };
 }
 
-async function postTurn(ctx: ApiCtx): Promise<void> {
+export async function postTurn(ctx: ApiCtx): Promise<void> {
   const { res, app, url, body } = ctx;
   if (!isTurnRequest(body)) {
     return sendJson(res, 400, { error: "bad_request", message: "expected a TurnRequest" });
@@ -210,7 +210,7 @@ async function postRunDeliveryState(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { ok: true });
 }
 
-async function postRunSignal(ctx: ApiCtx): Promise<void> {
+export async function postRunSignal(ctx: ApiCtx): Promise<void> {
   const { res, app, body, actor } = ctx;
   const id = ctx.params.id!;
   const kind = isObj(body) && typeof body.kind === "string" ? body.kind : "";

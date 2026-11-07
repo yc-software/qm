@@ -1,4 +1,3 @@
-import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../plugins/chassis/src/portal-identity.ts";
 import "./support/auto-fake-sprites.ts";
 
 import { test, after } from "node:test";
@@ -7,7 +6,6 @@ import { randomUUID } from "node:crypto";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createServer as createHttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
@@ -30,16 +28,7 @@ core.listen(0);
 const corePort = (core.address() as AddressInfo).port;
 const coreBase = `http://localhost:${corePort}`;
 
-process.env.CORE_API_URL = coreBase;
-process.env.CORE_SIGNING_SECRET = SECRET;
-process.env.WEB_UI_PRINCIPALS = "";
-const { handler } = await import("../plugins/web-ui/server/index.ts");
-const web = createHttpServer(handler);
-web.listen(0);
-const webBase = `http://localhost:${(web.address() as AddressInfo).port}`;
-
 after(async () => {
-  await new Promise<void>((r) => web.close(() => r()));
   await new Promise<void>((r) => core.close(() => r()));
   await built.runtime.stop();
 });
@@ -49,8 +38,8 @@ function asUser(user: string, init: RequestInit = {}): RequestInit {
     ...init,
     headers: {
       "content-type": "application/json",
-      cookie: `webuiuser=${encodeURIComponent(user)}; ${browserSessionCookie(user)}`,
-      [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: user, exp: Date.now() + 60_000 }, SECRET),
+      cookie: browserSessionCookie(user),
+      origin: browserSessionDeps.portalUrl,
       ...init.headers,
     },
   };
@@ -75,7 +64,7 @@ function parseSse(body: string): Array<{ event: string; data: unknown }> {
 test("SSE streams partial frames then a terminal done frame carrying the reply", async () => {
   const submit = (await (
     await fetch(
-      `${webBase}/api/turn`,
+      `${coreBase}/api/turn`,
       asUser("alice", { method: "POST", body: JSON.stringify({ text: "stream me?" }) }),
     )
   ).json()) as { runId?: string };
@@ -108,7 +97,7 @@ test("SSE relays tool activity frames and folds them into the done frame", async
   await built.sandboxResources.setDefault("alice", "personal:alice", computer.id);
   const submit = (await (
     await fetch(
-      `${webBase}/api/turn`,
+      `${coreBase}/api/turn`,
       asUser("alice", { method: "POST", body: JSON.stringify({ text: "!run echo hi" }) }),
     )
   ).json()) as { runId?: string };
@@ -148,7 +137,7 @@ test("active run lookup returns the latest tracked run for the caller's web thre
   const threadRef = `web:alice:${randomUUID()}`;
   const submit = (await (
     await fetch(
-      `${webBase}/api/turn`,
+      `${coreBase}/api/turn`,
       asUser("alice", { method: "POST", body: JSON.stringify({ text: "track me", threadRef }) }),
     )
   ).json()) as { runId?: string };
@@ -175,7 +164,7 @@ test("active run lookup is cleared after the events stream reaches a terminal fr
   const threadRef = `web:alice:${randomUUID()}`;
   const submit = (await (
     await fetch(
-      `${webBase}/api/turn`,
+      `${coreBase}/api/turn`,
       asUser("alice", { method: "POST", body: JSON.stringify({ text: "cleanup me", threadRef }) }),
     )
   ).json()) as { runId?: string };
@@ -202,7 +191,7 @@ test("web command approval pause is durable and blocks fresh input for the threa
   const threadRef = `web:alice:${randomUUID()}`;
   const submit = (await (
     await fetch(
-      `${webBase}/api/turn`,
+      `${coreBase}/api/turn`,
       asUser("alice", {
         method: "POST",
         body: JSON.stringify({ text: "!run git push --force origin main", threadRef }),
@@ -224,7 +213,7 @@ test("web command approval pause is durable and blocks fresh input for the threa
   assert.ok(requestId);
 
   const blocked = await fetch(
-    `${webBase}/api/turn`,
+    `${coreBase}/api/turn`,
     asUser("alice", { method: "POST", body: JSON.stringify({ text: "can you keep going?", threadRef }) }),
   );
   assert.equal(blocked.status, 200);
@@ -233,7 +222,7 @@ test("web command approval pause is durable and blocks fresh input for the threa
   assert.equal(blockedBody.runId, undefined);
 
   const denied = await fetch(
-    `${webBase}/api/approvals/${encodeURIComponent(requestId)}`,
+    `${coreBase}/api/approvals/${encodeURIComponent(requestId)}`,
     asUser("alice", { method: "POST", body: JSON.stringify({ approved: false }) }),
   );
   assert.equal(denied.status, 202);
@@ -254,7 +243,7 @@ test("a completed long stream replays its bounded tail with absolute offsets and
   const text = "long output ".repeat(20_000) + "last sentence";
   const submit = (await (
     await fetch(
-      `${webBase}/api/turn`,
+      `${coreBase}/api/turn`,
       asUser("alice", {
         method: "POST",
         body: JSON.stringify({ text, threadRef: `web:alice:${randomUUID()}` }),

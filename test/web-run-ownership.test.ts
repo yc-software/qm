@@ -66,8 +66,8 @@ test("another user cannot see a run's queued text, or edit, withdraw or answer i
   const threadRef = `web:alice:${crypto.randomUUID()}`;
   const submit = async (text: string): Promise<string> => {
     const r = await fetch(
-      `${webBase}/api/turn`,
-      as("alice", { method: "POST", body: JSON.stringify({ text, threadRef, midTurn: "queue" }) }),
+      `${coreBase}/api/turn`,
+      browser("alice", { method: "POST", body: JSON.stringify({ text, threadRef, midTurn: "queue" }) }),
     );
     const runId = ((await r.json()) as { runId?: string }).runId;
     assert.ok(runId);
@@ -92,7 +92,7 @@ test("another user cannot see a run's queued text, or edit, withdraw or answer i
   assert.equal((await fetch(`${webBase}/api/runs/${queued}/withdraw`, as("bob", { method: "POST" }))).status, 404);
   const answer = JSON.stringify({ kind: "client_result", callId: "c1", result: { content: "forged" } });
   assert.equal(
-    (await fetch(`${webBase}/api/runs/${live}/signal`, as("bob", { method: "POST", body: answer }))).status,
+    (await fetch(`${coreBase}/api/runs/${live}/signal`, browser("bob", { method: "POST", body: answer }))).status,
     404,
   );
   assert.deepEqual(await built.signals.takePending(live), []);

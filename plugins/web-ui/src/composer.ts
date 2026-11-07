@@ -1,7 +1,7 @@
 import { emojiCompletion } from "./emoji-completion";
 import { composerInput, resizeComposerInput } from "./composer-input";
 import { reportHandledError } from "./browser-errors.ts";
-import { appEditSlug } from "./app-edit";
+import { appEditSlug } from "../../chassis/src/app-edit";
 import { runtimeConfigKey, loadRuntimeConfig, saveRuntimeConfig, subscribeRuntimeConfig } from "./runtime-config-store";
 import { getRuntimeConfig } from "./runtime-config-cache.ts";
 import type { Agent, AgentMessage } from "@earendil-works/pi-agent-core";

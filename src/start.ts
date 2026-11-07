@@ -14,6 +14,7 @@ import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
 import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
 import { sessionLifetime } from "../plugins/portal/src/session.ts";
 import { startFrontDoor } from "./web/front-door.ts";
+import { parseAllowedOrigins } from "../plugins/portal/src/cors.ts";
 
 export async function startQm(
   config: Config,
@@ -45,6 +46,8 @@ export async function startQm(
             secret: env.PORTAL_SESSION_SECRET,
             maxAgeSeconds: sessionLifetime(env).max,
             principals: listedPrincipals(env.WEB_UI_PRINCIPALS),
+            inboxUsers: env.INBOX_USERS,
+            apiOrigins: parseAllowedOrigins(env.PORTAL_API_ALLOWED_ORIGINS).origins,
           },
         }
       : {}),

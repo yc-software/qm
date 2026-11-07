@@ -271,7 +271,7 @@ async function gate(
     const rawToken = req.headers[PORTAL_IDENTITY_HEADER];
     const token = Array.isArray(rawToken) ? rawToken[0] : rawToken;
     if (browser) {
-      const signedIn = await browserIdentity(req, method, deps);
+      const signedIn = await browserIdentity(req, method, deps, route?.browser === "embed");
       if ("status" in signedIn) {
         sendJson(res, signedIn.status, { error: signedIn.error, message: signedIn.message });
         return null;

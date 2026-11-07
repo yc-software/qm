@@ -10,15 +10,6 @@ interface RecordedBlob {
   bytes: number;
 }
 const blobUploads: RecordedBlob[] = [];
-type TurnBody = {
-  attachments?: Array<{ name?: string; blobId?: string; sizeBytes?: number; mimetype?: string }>;
-  text?: string;
-  model?: string;
-};
-let lastTurnBody: TurnBody | null = null;
-const setTurnBody = (b: TurnBody | null): void => {
-  lastTurnBody = b;
-};
 
 const core = createServer((req: IncomingMessage, res) => {
   const u = req.url ?? "";
@@ -30,19 +21,6 @@ const core = createServer((req: IncomingMessage, res) => {
       blobUploads.push({ sha, bytes: size });
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ blobId: `blob-${sha.slice(0, 8)}`, sizeBytes: size }));
-    });
-  }
-  if (req.method === "POST" && u.startsWith("/v1/turns")) {
-    let body = "";
-    req.on("data", (c) => (body += c));
-    return void req.on("end", () => {
-      try {
-        setTurnBody(JSON.parse(body) as TurnBody);
-      } catch {
-        setTurnBody(null);
-      }
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ status: "queued", runId: "run-1" }));
     });
   }
   res.writeHead(404, { "content-type": "application/json" });
@@ -124,55 +102,4 @@ test("the sha rides as a query param (portal-safe): a custom header is NOT how t
   });
   assert.equal(r.status, 400, "a header-only sha is ignored — the route reads the query param");
   assert.equal(blobUploads.length, before, "no blob reached core for a header-only sha");
-});
-
-test("POST /api/turn forwards blobId attachments to core as references (no inline bytes)", async () => {
-  setTurnBody(null);
-  const r = await fetch(`${base}/api/turn`, {
-    method: "POST",
-    headers: { ...IDENTITY, "content-type": "application/json" },
-    body: JSON.stringify({
-      text: "here is a file",
-      threadRef: "web:alice:t1",
-      model: "gpt-5.6-sol",
-      attachments: [
-        { name: "big.bin", mimetype: "application/octet-stream", sizeBytes: 5242880, blobId: "blob-abc123" },
-      ],
-    }),
-  });
-  assert.equal(r.status, 200);
-  assert.ok(lastTurnBody, "core received the turn");
-  const atts = lastTurnBody!.attachments ?? [];
-  assert.equal(atts.length, 1, "the attachment is forwarded");
-  assert.equal(atts[0]!.blobId, "blob-abc123", "the turn carries the blobId reference");
-  assert.equal(atts[0]!.name, "big.bin");
-  assert.equal(atts[0]!.sizeBytes, 5242880);
-  assert.equal((atts[0] as Record<string, unknown>).contentBase64, undefined, "no inline bytes ride the turn body");
-  assert.equal(lastTurnBody!.model, "gpt-5.6-sol", "the selected model reaches core");
-});
-
-test("POST /api/turn drops an attachment with no blobId rather than forwarding junk", async () => {
-  setTurnBody(null);
-  const r = await fetch(`${base}/api/turn`, {
-    method: "POST",
-    headers: { ...IDENTITY, "content-type": "application/json" },
-    body: JSON.stringify({
-      text: "msg",
-      threadRef: "web:alice:t2",
-      attachments: [{ name: "no-blob.txt", mimetype: "text/plain", sizeBytes: 3 }],
-    }),
-  });
-  assert.equal(r.status, 200);
-  assert.equal((lastTurnBody!.attachments ?? []).length, 0, "a blobId-less attachment is dropped");
-});
-
-test("POST /api/turn accepts retired model ids from existing conversations", async () => {
-  for (const model of ["gpt-5.5", "claude-sonnet-4-6"]) {
-    const r = await fetch(`${base}/api/turn`, {
-      method: "POST",
-      headers: { ...IDENTITY, "content-type": "application/json" },
-      body: JSON.stringify({ text: "continue", threadRef: `web:alice:${model}`, model }),
-    });
-    assert.equal(r.status, 200, `${model} remains accepted during blue-green rollout`);
-  }
 });

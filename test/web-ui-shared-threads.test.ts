@@ -49,6 +49,7 @@ function asUser(user: string, init: RequestInit = {}): RequestInit {
       "content-type": "application/json",
       cookie: `webuiuser=${encodeURIComponent(user)}; ${browserSessionCookie(user)}`,
       [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: user, exp: Date.now() + 60_000 }, SECRET),
+      origin: browserSessionDeps.portalUrl,
       ...init.headers,
     },
   };
@@ -97,7 +98,7 @@ test("a channel member can continue a teammate's shared web thread; outsiders an
   );
 
   const aliceTurn = await fetch(
-    `${webBase}/api/turn`,
+    `${coreBase}/api/turn`,
     asUser("alice", {
       method: "POST",
       body: JSON.stringify({
@@ -121,7 +122,7 @@ test("a channel member can continue a teammate's shared web thread; outsiders an
   assert.equal((await cookieOnly("alice", "&viewer=mallory")).status, 403);
 
   const bobTurn = await fetch(
-    `${webBase}/api/turn`,
+    `${coreBase}/api/turn`,
     asUser("bob", {
       method: "POST",
       body: JSON.stringify({ text: "me too", threadRef: "web:alice:s1", scopeId: "channel:C2" }),
@@ -136,7 +137,7 @@ test("a channel member can continue a teammate's shared web thread; outsiders an
   );
 
   const personalClaim = await fetch(
-    `${webBase}/api/turn`,
+    `${coreBase}/api/turn`,
     asUser("bob", { method: "POST", body: JSON.stringify({ text: "sneak", threadRef: "web:alice:s1" }) }),
   );
   assert.equal(personalClaim.status, 403);
@@ -146,7 +147,7 @@ test("a channel member can continue a teammate's shared web thread; outsiders an
   );
 
   const outsider = await fetch(
-    `${webBase}/api/turn`,
+    `${coreBase}/api/turn`,
     asUser("mallory", {
       method: "POST",
       body: JSON.stringify({ text: "sneak", threadRef: "web:alice:s1", scopeId: "channel:C2" }),
@@ -164,7 +165,7 @@ test("a person's own chats stay writable whichever login started them; Slack thr
   const mine = await waitForSession("carol@example.com", "web:oidc:test:42:p1");
   assert.equal(mine.canContinue, true);
   const continued = await fetch(
-    `${webBase}/api/turn`,
+    `${coreBase}/api/turn`,
     asUser("carol@example.com", {
       method: "POST",
       body: JSON.stringify({ text: "again", threadRef: mine.threadRef, scopeId: mine.scopeId }),
@@ -179,7 +180,7 @@ test("a person's own chats stay writable whichever login started them; Slack thr
   );
 
   const other = await fetch(
-    `${webBase}/api/turn`,
+    `${coreBase}/api/turn`,
     asUser("dave", {
       method: "POST",
       body: JSON.stringify({ text: "sneak", threadRef: mine.threadRef, scopeId: mine.scopeId }),
@@ -194,7 +195,7 @@ test("someone who can start a chat in a public channel can keep going in it", as
     [{ channelId: "C4", principalId: "alice" }],
   );
   const first = await fetch(
-    `${webBase}/api/turn`,
+    `${coreBase}/api/turn`,
     asUser("erin", {
       method: "POST",
       body: JSON.stringify({ text: "hi", threadRef: "web:erin:t1", scopeId: "channel:C4", channelName: "town-square" }),
@@ -204,7 +205,7 @@ test("someone who can start a chat in a public channel can keep going in it", as
   const session = await waitForSession("erin", "web:erin:t1");
   assert.equal(session.canContinue, true);
   const second = await fetch(
-    `${webBase}/api/turn`,
+    `${coreBase}/api/turn`,
     asUser("erin", {
       method: "POST",
       body: JSON.stringify({ text: "more", threadRef: session.threadRef, scopeId: session.scopeId }),
