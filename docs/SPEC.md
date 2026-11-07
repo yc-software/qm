@@ -65,17 +65,26 @@ Hiding a symptom while leaving its true cause unfixed. Smells here are special c
 - **[qm#394](https://github.com/yc-software/qm/pull/394)** (2026-08-13): Memory tool silently coerces malformed `remember` calls (content/query/bare string) into facts instead of fixing the tool schema.
 - **[qm#469](https://github.com/yc-software/qm/pull/469)** (2026-08-13): Sandbox status collapses any unanswering shell into a 'wedged' verdict with baked-in 'restart the computer' advice.
 
-### Duplication (always reviewed, 7 examples)
+### Duplication (always reviewed, 5 examples)
 
-Giving the same behavior or fact multiple independent implementations or sources of truth. These copies drift, disagree, and multiply maintenance work; reuse the existing owner or consolidate the competing paths.
+Giving the same behavior multiple independent implementations. Stored facts kept in more than one place are Copied state. These copies drift, disagree, and multiply maintenance work; reuse the existing owner or consolidate the competing paths.
 
 - **[qm#1776](https://github.com/yc-software/qm/pull/1776)** (2026-09-30): Sprites cold-boot '503 Process not ready' exec re-send implemented on main after the same fix ([qm#1489](https://github.com/yc-software/qm/pull/1489)) had already landed only on the long-lived factory side branch.
-- **[qm#1520](https://github.com/yc-software/qm/pull/1520)** (2026-09-22): Factory required pasted factory-anthropic/-github/-linear/-slack keychain secrets duplicating core's own model auth and connectors (two sources of truth); QM-73..76 resolve from core config/owner connectors instead. _Status:_ wound back in [qm#1520](https://github.com/yc-software/qm/pull/1520), [qm#1522](https://github.com/yc-software/qm/pull/1522), [qm#1523](https://github.com/yc-software/qm/pull/1523), [qm#1524](https://github.com/yc-software/qm/pull/1524) (on factory branch).
 - **[qm#1476](https://github.com/yc-software/qm/pull/1476)** (2026-09-21): Context settings had its own model picker separate from the composer's; switched to reuse the composer model/preset picker. _Status:_ wound back in [qm#1476](https://github.com/yc-software/qm/pull/1476) (both plugins/web-ui/src/model-picker.ts and context-model.ts still exist).
-- **[qm#1272](https://github.com/yc-software/qm/pull/1272)** (2026-09-16): Session transcripts are kept in both session_entries and session_tape, with SESSION_TAPE_MODE shadow/serve choosing between them. Fixed in [qm#2273](https://github.com/yc-software/qm/pull/2273): code uses only session_entries. Both tables are now gone: `items` is the only transcript store.
 - **[qm#1185](https://github.com/yc-software/qm/pull/1185)** (2026-09-15): Each subscriber held its own LISTEN connection and pg-boss kept its own pool; consolidated to one listener per process and the shared query pool. _Status:_ wound back in [qm#1185](https://github.com/yc-software/qm/pull/1185).
 - **[qm#993](https://github.com/yc-software/qm/pull/993)** (2026-09-08): Chat search queried both the dedicated search index and legacy entry history for every visible conversation, causing timeouts. _Status:_ wound back in [qm#993](https://github.com/yc-software/qm/pull/993).
 - **[qm#488](https://github.com/yc-software/qm/pull/488)** (2026-08-13): Web-UI /api router had ~50 hand-copied body-parse/relay/path-decode fragments that drifted (some returned 400 instead of 413). _Status:_ wound back in [qm#488](https://github.com/yc-software/qm/pull/488).
+
+### Copied state (6 examples)
+
+Storing one fact in two or more fields, rows, or stores and keeping them in sync by hand. Every writer must update every copy; one missed write or one crash between writes and the copies disagree, and readers get whichever copy they happen to check. Worse than duplicated code: duplicated code drifts at review time, copied state drifts in production data. Store each fact once and derive the rest at read time; if a second store must react, have it read the owner rather than keep its own copy.
+
+- **Loop enabled three ways:** A loop's on/off lives in `LoopState`, `loop.enabled`, and its backing cron's `enabled`, synced best-effort by unguarded writers (loops route PATCH, governor quarantine, offboarding). _Status:_ still present on main.
+- **Run outcome in two fields:** `runs.status` becomes `done` even when the turn's own result is failed or refused, so readers of `status` alone report failures as successes and subagent status has to consult both. _Status:_ still present on main.
+- **Offboarding in two stores:** `users.offboarded_at` and a separate deactivation store (plus a per-process cache) both say whether a person is gone. Offboarding sets `offboarded_at` before deactivating sign-in, so a failed step leaves an offboarded user who can still sign in; directory deactivate/reactivate never touch `offboarded_at`. _Status:_ still present on main.
+- **Goal pause three ways:** A paused goal is `status: "paused"` plus `pauseReason`, and governor pauses also leave `governor.verdict: "pause"`; `parkGoal` and `applyGovernorVerdict` (`src/agent/goal.ts`) write different subsets. _Status:_ still present on main.
+- **[qm#1520](https://github.com/yc-software/qm/pull/1520)** (2026-09-22): Factory required pasted factory-anthropic/-github/-linear/-slack keychain secrets duplicating core's own model auth and connectors (two sources of truth); QM-73..76 resolve from core config/owner connectors instead. _Status:_ wound back in [qm#1520](https://github.com/yc-software/qm/pull/1520), [qm#1522](https://github.com/yc-software/qm/pull/1522), [qm#1523](https://github.com/yc-software/qm/pull/1523), [qm#1524](https://github.com/yc-software/qm/pull/1524) (on factory branch).
+- **[qm#1272](https://github.com/yc-software/qm/pull/1272)** (2026-09-16): Session transcripts are kept in both session_entries and session_tape, with SESSION_TAPE_MODE shadow/serve choosing between them. Fixed in [qm#2273](https://github.com/yc-software/qm/pull/2273): code uses only session_entries. Both tables are now gone: `items` is the only transcript store.
 
 ### Hand-rolling (always reviewed, 5 examples)
 
@@ -191,6 +200,14 @@ The UI form of a band-aid: if the UI needs a sentence to explain why it didn't d
 Gating behaviour on a category (origin, kind, role, surface) without listing what falls into it. Before adding or moving such a gate, grep every assignment of the category, list the real cases it catches, and say which of them change. A category named for its first use quietly grows to cover unrelated producers.
 
 - **Automation origin in the mid-turn router** (2026-11-03): [qm#2907](https://github.com/yc-software/qm/pull/2907) moved "a person's message never steers into a live automation turn", written for cron posts in shared Slack channels, into the one router for every surface. Automation origin also covers webhooks, job watches, loops, swarms, Slack ambient wakes, orphan-steer replays, and messages handed over from other conversations, so web steers into those turns were refused. _Status:_ [qm#3109](https://github.com/yc-software/qm/pull/3109) applies the gate only to messages that did not explicitly ask to steer.
+
+### Implicit state machines (3 examples)
+
+A lifecycle encoded as a status field, nullable timestamps, or boolean combos, written from many places with no single transition function. Writers overwrite whole records without checking the current state, terminal states quietly come back, and unnamed states (spent, stuck, expired) exist only as field combinations. First delete or derive: a field that can be computed from others should not be stored (see Copied state). Only the lifecycle that remains gets named states and one guarded `transition(from[], to)` (compare-and-set on the current state), never a general state-machine framework. `file_uploads` (`src/files/file-upload-store.ts`) is the model to copy.
+
+- **Spent one-shot crons** (2026-10-22): A fired one-shot stays `enabled` with a past `lastFiredAt`; "spent" is a field combination, not a state, and patched follow-up crons sat paused at a past fire time with nothing reporting it. `setEnabled(true)` also clears `archived`, resurrecting archived crons (`src/cron/cron-store.ts`). _Status:_ still present on main.
+- **Goal cancel race:** `setGoal` overwrites the whole goal row. The goal-bar cancel writes `cancelled` after waiting for running runs; a pending run claimed in the gap still reads the goal as active and writes it back. _Status:_ still present on main.
+- **Sandbox resource records:** `unverified/provisioning/ready/failed/retired` plus `cleanupPending`, `holders` and `jobOnly` are rewritten with whole-record `put` from six writers; `holders` updates skip the record lock, and `provisioning` only times out for job computers (`src/sandbox/sandbox-resources.ts`). _Status:_ still present on main.
 
 ### Historylessness (always reviewed, 5 examples)
 
