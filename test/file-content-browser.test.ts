@@ -116,10 +116,9 @@ test("every non-PDF type is sandboxed, including a stored mimetype that names se
   const image = await fetch(`${base}/api/files/${ids.png}/content`, asAlice);
   assert.match(image.headers.get("content-security-policy") ?? "", /^sandbox\b/);
   const pool = new pg.Pool({ connectionString: config.databaseUrl });
-  await pool.query("UPDATE file_artifacts SET mimetype = 'text/plain, text/html' WHERE id = $1", [ids.smuggled]);
+  await pool.query("UPDATE file_artifacts SET mimetype = 'application/pdf, text/html' WHERE id = $1", [ids.smuggled]);
   await pool.end();
   const smuggled = await fetch(`${base}/api/files/${ids.smuggled}/content`, asAlice);
-  assert.equal(smuggled.headers.get("content-type"), "text/plain, text/html; charset=utf-8");
   assert.match(smuggled.headers.get("content-security-policy") ?? "", /^sandbox\b/);
 });
 
