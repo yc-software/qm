@@ -114,7 +114,7 @@ test("reportFailure logs every failure but marks only reportable ones as reporte
   reportFailure("scheduler: tick", closed);
   assert.equal(errorAlreadyReported(closed), false, "admission closed during handoff is logged, never reported");
   const handedOff = new TurnHandedOff("r9");
-  reportFailure("webhook: fire", handedOff);
+  reportFailure("scheduler: fire re-drive", handedOff);
   assert.equal(errorAlreadyReported(handedOff), false, "a turn handed to a queue worker at shutdown is never reported");
   const transient = new TransientTurnFailure("loop: turn failed");
   reportFailure("loop: fire", transient);
@@ -128,7 +128,7 @@ test("reportFailure logs every failure but marks only reportable ones as reporte
     [
       "[failed] scheduler: fire: stopped",
       "[failed] scheduler: tick: This deployment is not accepting synchronous work",
-      "[failed] webhook: fire: turn r9 was handed to a queue worker at shutdown; its fire will be re-driven [name=TurnHandedOff]",
+      "[failed] scheduler: fire re-drive: turn r9 was handed to a queue worker at shutdown; its fire will be re-driven [name=TurnHandedOff]",
       "[failed] loop: fire: loop: turn failed [name=TransientTurnFailure]",
       "[failed] scheduler: fire: boom",
       "[failed] worker: retry (run=r1): a string throw",
