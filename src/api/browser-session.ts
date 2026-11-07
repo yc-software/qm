@@ -148,6 +148,30 @@ export const API_ALIASES: ReadonlyMap<string, string> = new Map([
   ["POST /api/webhooks/:id/enable", "/v1/webhooks/:id/enable"],
   ["POST /api/blobs", "/v1/web/blobs"],
   ["POST /api/files/upload", "/v1/files/upload"],
+  ["GET /api/inbox", "/v1/inbox"],
+  ["POST /api/inbox/selection", "/v1/inbox/selection"],
+  ["POST /api/inbox/sent-chat", "/v1/loops/inbox/sent-chat"],
+  ["POST /api/inbox/sync-cron", "/v1/loops/inbox/sync-cron"],
+  ["GET /api/inbox/sent", "/v1/connectors/gmail/sent"],
+  ["GET /api/inbox/sent/:messageId", "/v1/connectors/gmail/sent/:messageId"],
+  ["GET /api/loops", "/v1/loops"],
+  ["POST /api/loops", "/v1/loops"],
+  ["GET /api/loops/:id", "/v1/loops/:id"],
+  ["PATCH /api/loops/:id", "/v1/loops/:id"],
+  ["DELETE /api/loops/:id", "/v1/loops/:id"],
+  ["GET /api/loops/:id/ingestion", "/v1/loops/:id/ingestion"],
+  ["POST /api/loops/:id/ingestion", "/v1/loops/:id/ingestion"],
+  ["PATCH /api/loops/:id/ingestion/:sourceId", "/v1/loops/:id/ingestion/:sourceId"],
+  ["POST /api/loops/:id/fire", "/v1/loops/:id/fire"],
+  ["POST /api/loops/:id/triage/preview", "/v1/loops/:id/triage/preview"],
+  ["POST /api/loops/:id/outputs/:outputId/decide", "/v1/loops/:id/outputs/:outputId/decide"],
+  ["POST /api/loops/:id/grants", "/v1/loops/:id/grants"],
+  ["POST /api/loops/:id/autopilot", "/v1/loops/:id/autopilot"],
+  ["GET /api/loops/:id/items", "/v1/loops/:id/items"],
+  ["GET /api/loops/:id/items/:itemId", "/v1/loops/:id/items/:itemId"],
+  ["GET /api/loops/:id/items/:itemId/image", "/v1/loops/:id/items/:itemId/image"],
+  ["POST /api/loops/:id/items/:itemId/action", "/v1/loops/:id/items/:itemId/action"],
+  ["POST /api/loops/:id/items/:itemId/followup", "/v1/loops/:id/items/:itemId/followup"],
   ...apiRoutes.flatMap((route): Array<[string, string]> =>
     "path" in route && route.browser && route.path.startsWith("/v1/admin/")
       ? [[`${route.method} /api/admin/${route.path.slice("/v1/admin/".length)}`, route.path]]
@@ -210,7 +234,7 @@ export async function browserIdentity(
     reportFailure("browser_session.misconfigured", new Error(problem));
     return { status: 503, error: "unavailable", message: "browser sign-in is not configured on this server" };
   }
-  const { secret, maxAgeSeconds, principals = [], apiOrigins } = deps.portalSession!;
+  const { secret, maxAgeSeconds, apiOrigins } = deps.portalSession!;
   const cookies = req.headers.cookie;
   const session = openSession(
     readCookie(cookies, "portal_session"),
@@ -235,8 +259,6 @@ export async function browserIdentity(
     ? null
     : impersonationFor({ sub, org: session.org }, cookies, deriveKey(secret, "portal.impersonate.v1"), now);
   const target = imp && (await isAdmin(deps, sub)) ? imp.target : null;
-  if (principals.length > 0 && !principals.includes(target ?? sub))
-    return { status: 403, error: "forbidden", message: "this person is not on this server's web app allowlist" };
   return {
     p: target ?? sub,
     authenticatedAs: session.sub,

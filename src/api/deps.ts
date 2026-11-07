@@ -102,8 +102,6 @@ export interface ServerDeps {
   portalSession?: {
     secret: string;
     maxAgeSeconds: number;
-    principals?: string[];
-    inboxUsers?: string;
     apiOrigins?: ReadonlySet<string>;
   };
   requireSignedPortalIdentity?: boolean;

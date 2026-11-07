@@ -25,14 +25,12 @@ const webMe = webMeConfig({
   SENTRY_RELEASE: "release-1",
   WEB_UI_WELCOME_COHORT: " spring ",
   WEB_UI_SUGGESTED_ACTIVITIES: JSON.stringify(activities),
-  LOOPS_USERS: " other@example.com, ALICE@EXAMPLE.COM ",
 });
 
 async function serve(deps: Partial<ServerDeps> = {}): Promise<string> {
   const server = createServer(built.app, {
     ...serverDeps(config, built),
     ...browserSessionDeps,
-    portalSession: { ...browserSessionDeps.portalSession, inboxUsers: "alice@example.com" },
     web: { events: {} as never, me: webMe },
     suggestedActivities: undefined,
     ...deps,
@@ -86,14 +84,14 @@ test("an impersonating admin sees the target's /me, marked as impersonated and w
   assert.deepEqual((await me(browserSessionCookie("admin-alice"))).permissions, ["admin"]);
 });
 
-test("loops and inbox permissions need the inbox_loops flag and the matching allowlist", async () => {
+test("loops and inbox permissions follow the person's inbox_loops flag", async () => {
   const flag = (user: string, on: boolean) =>
     built.featureFlags.setEnabled("inbox_loops", scopeId("personal", user), on, "test");
   assert.deepEqual((await me(browserSessionCookie("alice@example.com"))).permissions, []);
   await flag("alice@example.com", true);
-  await flag("bob@example.com", true);
   assert.deepEqual((await me(browserSessionCookie("alice@example.com"))).permissions, ["loops", "inbox"]);
   assert.deepEqual((await me(browserSessionCookie("bob@example.com"))).permissions, []);
+  await flag("alice@example.com", false);
 });
 
 test("with suggestion generation on, /me leaves the fallback suggestions to the generation request", async () => {

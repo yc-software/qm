@@ -76,15 +76,19 @@ test("each aliased /api path resolves to the browser-enabled /v1 route that serv
     ["POST", "/api/approvals/1/2"],
     ["POST", "/api/crons"],
     ["POST", "/api/webhooks/1/update"],
-    ["GET", "/api/inbox"],
-    ["GET", "/api/loops/1/items"],
+    ["PUT", "/api/inbox"],
+    ["DELETE", "/api/loops/1/grants/2"],
     ["GET", "/v1/sessions"],
   ] as const)
     assert.equal(apiAlias(method, path), null, `${method} ${path}`);
 });
 
 test("each aliased path answers a cookie-only browser exactly as its /v1 route does, bound to the signed-in person", async (t) => {
-  const base = await core(t);
+  let flags: ReturnType<typeof buildApp>["featureFlags"] | undefined;
+  const base = await core(t, (built) => {
+    flags = built.featureFlags;
+  });
+  await flags!.setEnabled("inbox_loops", "personal:alice", true, "test");
   const cookie = browserSessionCookie("alice");
   for (const { path, target } of aliases.filter(({ method }) => method === "GET")) {
     const query = QUERY[path] ?? "";

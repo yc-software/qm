@@ -1,10 +1,10 @@
 import { clientSurfaceOf } from "../../../plugins/chassis/src/client-surface.ts";
-import { principalInAllowlist } from "../../../plugins/chassis/src/principal-allowlist.ts";
 import { appEditSlug } from "../../../plugins/chassis/src/app-edit.ts";
 import { isSubagentThreadRef } from "../../sessions/session-syscalls.ts";
-import { scopeId, type TurnRequest } from "../../types.ts";
+import type { TurnRequest } from "../../types.ts";
 import { sendJson } from "../http.ts";
 import { inboxView } from "./inbox.ts";
+import { inboxPreviewEnabled } from "./loops.ts";
 import { postRunSignal, postTurn } from "./turns.ts";
 import { isObj } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
@@ -44,15 +44,13 @@ async function resolveWebConversation(
   const inbox = `web:${user}:inbox`;
   if (/^web:.+:inbox$/.test(threadRef) && threadRef !== inbox)
     return { error: "forbidden_thread", message: "this conversation can only be continued from its own context" };
-  if (threadRef === inbox && !principalInAllowlist(user, ctx.deps.portalSession?.inboxUsers))
-    return { error: "forbidden", message: "inbox access is not enabled for this user" };
   const conversation = conversationForScope(threadRef, scope, channelName);
   if (!conversation || (threadRef === inbox && conversation.kind !== "dm"))
     return {
       error: "forbidden_scope",
       message: "you can only chat in your personal context or a shared context you're in",
     };
-  if (threadRef === inbox && !(await ctx.deps.featureFlags?.enabled("inbox_loops", scopeId("personal", user))))
+  if (threadRef === inbox && !(await inboxPreviewEnabled(ctx.deps, user)))
     return { error: "feature_disabled", message: "inbox access is not enabled for this user" };
   return { conversation };
 }

@@ -1,4 +1,3 @@
-import { scopeId } from "../../types.ts";
 import type { Loop, LoopItem } from "../../loops/types.ts";
 import { ensureDefaultInboxLoops } from "../../loops/inbox-loop.ts";
 import {
@@ -11,10 +10,10 @@ import {
 } from "../../loops/ledger-view.ts";
 import { uiStateId } from "../../surfaces/ui-state.ts";
 import { sendJson } from "../http.ts";
-import { actingPrincipal, canAdministerLoop, loopDeps } from "./loops.ts";
+import { actingPrincipal, canAdministerLoop, forInboxLoopsPeople, inboxPreviewEnabled, loopDeps } from "./loops.ts";
 import { cronSummary } from "./loop-items.ts";
 import { isObj } from "./shared.ts";
-import type { ApiCtx, Route } from "./route.ts";
+import { withActor, type ApiCtx, type Route } from "./route.ts";
 
 interface InboxView {
   status: number;
@@ -91,8 +90,7 @@ export async function inboxView(ctx: ApiCtx): Promise<InboxView | null> {
   if (!deps || !preferences) return reply(503, { error: "inbox_unavailable" });
   const acting = actingPrincipal(ctx);
   if (!acting) return null;
-  if (!(await ctx.deps.featureFlags?.enabled("inbox_loops", scopeId("personal", acting.actorId))))
-    return reply(403, { error: "feature_disabled" });
+  if (!(await inboxPreviewEnabled(ctx.deps, acting.actorId))) return reply(403, { error: "feature_disabled" });
   if (ctx.capability && ctx.capability.privateScope !== true) return reply(403, { error: "forbidden" });
   const defaults = await ensureDefaultInboxLoops(deps.store, acting.actorId);
   const id = uiStateId(acting.actorId, "inbox-loops");
@@ -105,7 +103,7 @@ export async function inboxView(ctx: ApiCtx): Promise<InboxView | null> {
     if (loop.state !== "archived" && (await canAdministerLoop(ctx.app, loop, acting.actorId))) available.push(loop);
   }
   let ids = Array.isArray(pref.value) ? pref.value.filter((value): value is string => typeof value === "string") : [];
-  if (ctx.method === "PUT") {
+  if (ctx.method === "POST") {
     const body = isObj(ctx.body) ? ctx.body : {};
     if (
       !Array.isArray(body.loopIds) ||
@@ -239,18 +237,10 @@ async function inbox(ctx: ApiCtx): Promise<void> {
   if (view) sendJson(ctx.res, view.status, view.body);
 }
 
-export async function inboxPreviewEnabled(deps: ApiCtx["deps"], principalId: string): Promise<boolean> {
-  return (await deps.featureFlags?.enabled("inbox_loops", scopeId("personal", principalId))) === true;
-}
-
-async function access(ctx: ApiCtx): Promise<void> {
-  const acting = actingPrincipal(ctx);
-  if (!acting) return;
-  sendJson(ctx.res, 200, { enabled: await inboxPreviewEnabled(ctx.deps, acting.actorId) });
-}
-
-export const inboxRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "GET", path: "/v1/inbox", actor: "query.principalId", auth: "source", handle: inbox },
-  { method: "GET", path: "/v1/inbox/access", actor: "query.principalId", auth: "source", handle: access },
-  { method: "PUT", path: "/v1/inbox", actor: "query.principalId", auth: "source", handle: inbox },
-];
+export const inboxRoutes: ReadonlyArray<Route<ApiCtx>> = withActor(
+  "query.principalId",
+  forInboxLoopsPeople([
+    { method: "GET", path: "/v1/inbox", auth: "source", handle: inbox },
+    { method: "POST", path: "/v1/inbox/selection", auth: "source", handle: inbox },
+  ]),
+);

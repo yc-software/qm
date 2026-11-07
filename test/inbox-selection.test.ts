@@ -70,7 +70,7 @@ test("default Loops are distinct, stable, and deliberate empty selections surviv
   assert.notEqual(first.data.selected[0].id, first.data.selected[1].id);
   await w.call();
   assert.equal((await w.deps.store.list()).length, 2);
-  assert.equal((await w.call("PUT", { loopIds: [] })).status, 200);
+  assert.equal((await w.call("POST", { loopIds: [] })).status, 200);
   assert.deepEqual((await w.call()).data.selected, []);
 });
 
@@ -88,7 +88,7 @@ test("archived Loops are neither offered nor selectable in the Inbox", async () 
   assert.ok((await w.call()).data.available.some((entry: any) => entry.id === loop.id));
   await w.deps.store.setState(loop.id, "archived");
   assert.ok((await w.call()).data.available.every((entry: any) => entry.id !== loop.id));
-  assert.equal((await w.call("PUT", { loopIds: [loop.id] })).status, 403);
+  assert.equal((await w.call("POST", { loopIds: [loop.id] })).status, 403);
 });
 
 test("selection reuses original items, counts items, omits heavy fields, and enforces access", async () => {
@@ -122,7 +122,7 @@ test("selection reuses original items, counts items, omits heavy fields, and enf
       title: "Patch",
       capturedBy: "agent",
     });
-  const selected = await w.call("PUT", { loopIds: [loop.id] });
+  const selected = await w.call("POST", { loopIds: [loop.id] });
   assert.equal(selected.data.total, 1);
   assert.equal(selected.data.selected[0].icon, "bug");
   assert.deepEqual(selected.data.selected[0].sources, ["gmail"]);
@@ -133,10 +133,10 @@ test("selection reuses original items, counts items, omits heavy fields, and enf
   const detail = await w.call("GET", null, `itemId=${item!.id}`);
   assert.equal(detail.data.outputs.length, 3);
   assert.equal(detail.data.item.proposal.data.body, "large proposal");
-  await w.call("PUT", { loopIds: [] });
+  await w.call("POST", { loopIds: [] });
   assert.equal((await w.deps.store.get(loop.id))!.state, "enabled");
-  assert.equal((await w.call("PUT", { loopIds: [loop.id] })).data.total, 1);
-  assert.equal((await w.call("PUT", { loopIds: [loop.id] }, "", "mallory")).status, 403);
+  assert.equal((await w.call("POST", { loopIds: [loop.id] })).data.total, 1);
+  assert.equal((await w.call("POST", { loopIds: [loop.id] }, "", "mallory")).status, 403);
   assert.equal((await w.call("GET", null, `itemId=${item!.id}`, "mallory")).status, 404);
 });
 
@@ -162,7 +162,7 @@ test("pagination is stable across equal timestamps and counts exceed the loaded 
 
 test("disabled rollout cannot create defaults or update selection", async () => {
   const w = world(false, async () => assert.fail("disabled Inbox must not refresh sources"));
-  for (const method of ["GET", "PUT"]) assert.equal((await w.call(method, { loopIds: [] })).status, 403);
+  for (const method of ["GET", "POST"]) assert.equal((await w.call(method, { loopIds: [] })).status, 403);
   assert.equal((await w.deps.store.list()).length, 0);
 });
 
@@ -223,7 +223,7 @@ test("the inbox feed reconciles selected owner Gmail loops before counting summa
   assert.equal(feed.data.total, 0);
   assert.deepEqual(feed.data.items, []);
   refreshed.length = 0;
-  await w.call("PUT", { loopIds: [] });
+  await w.call("POST", { loopIds: [] });
   await w.call();
   assert.deepEqual(refreshed, []);
 });

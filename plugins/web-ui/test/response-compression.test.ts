@@ -4,35 +4,17 @@ import { createServer, request as httpRequest, type IncomingMessage } from "node
 import type { AddressInfo } from "node:net";
 import { releaseFiles } from "./release-fixture.ts";
 import { gunzipSync, gzipSync } from "node:zlib";
-import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { sendBuffered } from "../../chassis/src/http.ts";
 
 const SECRET = "web-ui-compression-test";
-
-const relayedPayload = JSON.stringify({
-  sessions: Array.from({ length: 200 }, (_, i) => ({
-    id: `sess-${i}`,
-    title: "a repetitive session title that gzip should collapse",
-    surface: "web",
-    updatedAt: 1_700_000_000_000 + i,
-  })),
-});
-
 const core = createServer((req: IncomingMessage, res) => {
   req.resume();
-  sendBuffered(
-    res,
-    200,
-    { "content-type": "application/json" },
-    (req.url ?? "").startsWith("/v1/loops") ? relayedPayload : JSON.stringify({ enabled: true }),
-  );
+  sendBuffered(res, 200, { "content-type": "application/json" }, JSON.stringify({ enabled: true }));
 });
 await new Promise<void>((r) => core.listen(0, r));
 
 process.env.CORE_API_URL = `http://localhost:${(core.address() as AddressInfo).port}`;
 process.env.CORE_SIGNING_SECRET = SECRET;
-process.env.WEB_UI_PRINCIPALS = "alice";
-process.env.LOOPS_USERS = "alice";
 
 const assetName = "compression-fixture-Aa1Bb2Cc.js";
 const assetBody = `export const filler = ${JSON.stringify("x".repeat(50)).repeat(200)};\n`;
@@ -53,10 +35,6 @@ test.after(() => {
   core.close();
 });
 
-function identityHeaders(): Record<string, string> {
-  return { [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: "alice", exp: Date.now() + 60_000 }, SECRET) };
-}
-
 interface RawResponse {
   status: number;
   headers: Record<string, string | string[] | undefined>;
@@ -74,21 +52,6 @@ function get(path: string, headers: Record<string, string>): Promise<RawResponse
     req.end();
   });
 }
-
-test("a relayed core read is gzipped for a gzip-capable client and decodes to the identical bytes", async () => {
-  const packed = await get("/api/loops", { ...identityHeaders(), "accept-encoding": "gzip" });
-  assert.equal(packed.status, 200);
-  assert.equal(packed.headers["content-encoding"], "gzip");
-  assert.equal(packed.headers["vary"], "accept-encoding");
-  assert.ok(packed.body.length < relayedPayload.length / 4, `expected real compression, got ${packed.body.length}`);
-  assert.equal(gunzipSync(packed.body).toString("utf8"), relayedPayload);
-});
-
-test("a relayed core read is byte-identical and uncompressed without accept-encoding", async () => {
-  const plain = await get("/api/loops", identityHeaders());
-  assert.equal(plain.headers["content-encoding"], undefined);
-  assert.equal(plain.body.toString("utf8"), relayedPayload);
-});
 
 test("a static asset is served from its precompressed sibling, byte-identical once decoded", async () => {
   const packed = await get(`/assets/${assetName}`, { "accept-encoding": "gzip, deflate, br" });

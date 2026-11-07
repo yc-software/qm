@@ -21,9 +21,7 @@ import { browserSessionCookie, browserSessionDeps } from "./support/browser-sess
 const SECRET = "core-signing-secret".repeat(3);
 
 const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "run-signal-")) }));
-const portalSession: typeof browserSessionDeps.portalSession & { inboxUsers?: string } = {
-  ...browserSessionDeps.portalSession,
-};
+const portalSession = { ...browserSessionDeps.portalSession };
 const core = createServer(built.app, {
   ...browserSessionDeps,
   portalSession,
@@ -386,7 +384,6 @@ test("web: inbox steering cannot omit or disguise its context to bypass rollout 
   const steer = (body: Record<string, unknown>) =>
     fetch(`${coreBase}/api/runs/${run.id}/signal`, asUser("alice", { method: "POST", body: JSON.stringify(body) }));
   try {
-    portalSession.inboxUsers = "alice";
     for (const enabled of [false, true]) {
       await built.featureFlags.setEnabled("inbox_loops", scopeId("personal", "alice"), enabled, "test");
       for (const context of [{}, { threadRef: "" }, { threadRef: "invalid" }, { threadRef: "web:alice:ordinary" }]) {
@@ -409,15 +406,10 @@ test("web: inbox steering cannot omit or disguise its context to bypass rollout 
         assert.match(signals[0]?.request?.conversationHeader ?? "", /fresh snapshot/);
       }
     }
-    portalSession.inboxUsers = "bob";
-    const denied = await steer({ kind: "steer", text: "Prioritize these", threadRef });
-    assert.equal(denied.status, 403);
-    assert.deepEqual(await built.signals.takePending(run.id), []);
     const abort = await steer({ kind: "abort" });
     assert.equal(abort.status, 200);
   } finally {
     await built.featureFlags.setEnabled("inbox_loops", scopeId("personal", "alice"), false, "test");
-    delete portalSession.inboxUsers;
   }
 });
 
@@ -433,15 +425,15 @@ test("web: shared scopes cannot disguise an alias-owned inbox thread", async () 
       conversation: { kind: "dm", threadRef, audience: [{ id: user, type: "internal" }] },
     },
   });
+  await built.featureFlags.setEnabled("inbox_loops", scopeId("personal", user), true, "test");
   try {
-    portalSession.inboxUsers = "nobody";
-    for (const scopeId of ["channel:any", "group:any"]) {
+    for (const scope of ["channel:any", "group:any"]) {
       for (const path of ["/api/turn", `/api/runs/${run.id}/signal`]) {
         const response = await fetch(
           `${coreBase}${path}`,
           asUser(user, {
             method: "POST",
-            body: JSON.stringify({ kind: "steer", text: "Prioritize these", threadRef, scopeId }),
+            body: JSON.stringify({ kind: "steer", text: "Prioritize these", threadRef, scopeId: scope }),
           }),
         );
         assert.equal(response.status, 403);
@@ -449,7 +441,7 @@ test("web: shared scopes cannot disguise an alias-owned inbox thread", async () 
       }
     }
   } finally {
-    delete portalSession.inboxUsers;
+    await built.featureFlags.setEnabled("inbox_loops", scopeId("personal", user), false, "test");
   }
 });
 

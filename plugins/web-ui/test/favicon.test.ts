@@ -12,7 +12,6 @@ await new Promise<void>((r) => core.listen(0, r));
 
 process.env.CORE_API_URL = `http://localhost:${(core.address() as AddressInfo).port}`;
 process.env.CORE_SIGNING_SECRET = "web-ui-favicon-test";
-process.env.WEB_UI_PRINCIPALS = "alice";
 
 const { handler, serveReleasesFrom } = await import("../server/index.ts");
 serveReleasesFrom(

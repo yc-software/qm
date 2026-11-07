@@ -243,20 +243,6 @@ test("impersonation is ignored on requests from another origin", async () => {
   });
 });
 
-test("a server that lists its web principals refuses everyone else", async () => {
-  await withServer(
-    async (base) => {
-      const listed = await fetch(`${base}/v1/test/browser-read`, { headers: { cookie: sessionCookie() } });
-      assert.equal(listed.status, 200);
-      const unlisted = await fetch(`${base}/v1/test/browser-read`, {
-        headers: { cookie: sessionCookie({ sub: "mallory" }) },
-      });
-      assert.equal(unlisted.status, 403);
-    },
-    { portalSession: { secret: SESSION, maxAgeSeconds: 30 * 86400, principals: ["alice"] } },
-  );
-});
-
 test("impersonation is honoured only for an admin's own impersonation cookie", async () => {
   await withServer(async (base) => {
     seen.length = 0;

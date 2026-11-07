@@ -44,6 +44,22 @@ interface ActingPrincipal {
   liveHuman: boolean;
 }
 
+export async function inboxPreviewEnabled(deps: ApiCtx["deps"], principalId: string): Promise<boolean> {
+  return (await deps.featureFlags?.enabled("inbox_loops", scopeId("personal", principalId))) === true;
+}
+
+export function forInboxLoopsPeople(routes: Route<ApiCtx>[]): Route<ApiCtx>[] {
+  return routes.map((route) => ({
+    ...route,
+    browser: true,
+    handle: async (ctx) => {
+      if (ctx.actor && !(await inboxPreviewEnabled(ctx.deps, ctx.actor.p)))
+        return sendJson(ctx.res, 403, { error: "feature_disabled" });
+      return route.handle(ctx);
+    },
+  }));
+}
+
 export function actingPrincipal(ctx: ApiCtx): ActingPrincipal | null {
   if (ctx.capability) {
     return {
@@ -684,8 +700,8 @@ async function revokeShipGrant(ctx: ApiCtx): Promise<void> {
   return sendJson(ctx.res, 200, { grant: revoked });
 }
 
-export const loopRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  ...withActor("query.principalId", [
+export const loopRoutes: ReadonlyArray<Route<ApiCtx>> = withActor("query.principalId", [
+  ...forInboxLoopsPeople([
     { method: "POST", path: "/v1/loops/:id/triage/preview", auth: "source", handle: previewLoopTriage },
     { method: "POST", path: "/v1/loops", auth: "either", handle: createLoop },
     { method: "GET", path: "/v1/loops", auth: "either", handle: listLoops },
@@ -696,6 +712,6 @@ export const loopRoutes: ReadonlyArray<Route<ApiCtx>> = [
     { method: "POST", path: "/v1/loops/:id/outputs/:outputId/decide", auth: "either", handle: decideOutput },
     { method: "POST", path: "/v1/loops/:id/grants", auth: "either", handle: graduateShipAction },
     { method: "POST", path: "/v1/loops/:id/autopilot", auth: "either", handle: setAutopilot },
-    { method: "DELETE", path: "/v1/loops/:id/grants/:grantId", auth: "either", handle: revokeShipGrant },
   ]),
-];
+  { method: "DELETE", path: "/v1/loops/:id/grants/:grantId", auth: "either", handle: revokeShipGrant },
+]);
