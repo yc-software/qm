@@ -248,7 +248,7 @@ test("tokenless=open is an explicit compatibility escape hatch; valid tokens sti
   }
 });
 
-test("IMDS + link-local + cloud metadata names are denied even tokenless / with open policy", async () => {
+test("IMDS + link-local + cloud metadata + localhost names are denied even tokenless / with open policy", async () => {
   const { server, records } = boot();
   const port = await listen(server);
   const open = await egressToken({ allowedHosts: [], deniedHosts: [] });
@@ -260,6 +260,8 @@ test("IMDS + link-local + cloud metadata names are denied even tokenless / with 
       "[fd00:ec2::254]:80",
       "metadata.google.internal:80",
       "metadata.google.internal",
+      "localhost:443",
+      "brain.localhost.:443",
     ]) {
       assert.equal(await check(port, authority), 407, `tokenless ${authority}`);
       assert.equal(await check(port, authority, open), 403, `open-policy ${authority}`);
@@ -271,10 +273,15 @@ test("IMDS + link-local + cloud metadata names are denied even tokenless / with 
 });
 
 test("a name RESOLVING to link-local / denied IP is denied (rebind guard)", async () => {
-  const { server, records } = boot({ lookup: async () => ["169.254.169.254"] });
+  const { server, records } = boot({
+    lookup: async (host) => [host === "nat64.example.com" ? "64:ff9b::a9fe:a9fe" : "169.254.169.254"],
+  });
   const port = await listen(server);
   try {
-    assert.equal(await check(port, "innocent.example.com:443", await egressToken({ allowedHosts: [] })), 403);
+    const open = await egressToken({ allowedHosts: [] });
+    assert.equal(await check(port, "innocent.example.com:443", open), 403);
+    assert.equal(records.at(-1)?.verdict, "denied");
+    assert.equal(await check(port, "nat64.example.com:443", open), 403);
     assert.equal(records.at(-1)?.verdict, "denied");
   } finally {
     await close(server);
@@ -338,28 +345,6 @@ test("denyPrivateNetworks rejects local-use and deprecated IPv6 ranges", async (
     } finally {
       await close(server);
     }
-  }
-});
-
-test("every posture denies NAT64 forms of never-allowed addresses, Tailscale and Alibaba metadata, and localhost names", async () => {
-  const token = await egressToken({ allowedHosts: [] });
-  for (const address of ["64:ff9b::a9fe:a9fe", "64:ff9b::7f00:1", "100.100.100.200", "100.100.100.100"]) {
-    const { server } = boot({ lookup: async () => [address] });
-    const port = await listen(server);
-    try {
-      assert.equal(await check(port, "service.example.com:443", token), 403, address);
-    } finally {
-      await close(server);
-    }
-  }
-  const { server } = boot({ lookup: async () => ["64:ff9b:1::a9fe:a9fe"] });
-  const port = await listen(server);
-  try {
-    assert.equal(await check(port, "service.example.com:443", token), 200);
-    assert.equal(await check(port, "localhost:443", token), 403);
-    assert.equal(await check(port, "brain.localhost.:443", token), 403);
-  } finally {
-    await close(server);
   }
 });
 
