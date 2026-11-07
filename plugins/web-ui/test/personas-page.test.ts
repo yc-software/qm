@@ -282,7 +282,9 @@ function searchFor(root: ParentNode, text: string): HTMLInputElement {
 const resultNames = (root: ParentNode) =>
   [...root.querySelectorAll(".project-member-result .project-member-name")].map((n) => n.textContent?.trim());
 
-const putBody = () => calls.find((c) => c.method === "PUT")?.body;
+const accessPuts = () => calls.filter((c) => c.method === "PUT" && c.path.endsWith("/access"));
+
+const putBody = () => accessPuts()[0]?.body;
 
 const flash = (root: ParentNode) => root.querySelector(".action-notice")?.textContent?.trim();
 
@@ -548,10 +550,7 @@ test("the only owner's row says why it can't be demoted or removed, and nothing 
   calls = [];
   await pickRole(main, "personal:tester", "Can chat");
   await pickRole(main, "personal:tester", "Remove access");
-  assert.equal(
-    calls.some((c) => c.method === "PUT"),
-    false,
-  );
+  assert.deepEqual(accessPuts(), []);
 
   access = [
     { scopeId: "personal:tester", role: "owner", personasEnabled: true },
