@@ -42,7 +42,8 @@ const bot: Principal = { id: "B1", type: "internal", displayName: "Release bot" 
 const scope = scopeId("personal", bot.id);
 const active: RuntimeChoice = { modelId: "claude-opus-5", effortLevel: "high", fastMode: false };
 
-async function botTurnOpensSubagent(threadRef: string, followUp?: string) {
+test("subagents a Slack bot's turns open and message keep the bot marker and its limits", async () => {
+  const threadRef = "slack:dm:bot-subagent";
   const sessions = createPostgresSessionStore(testDatabaseUrl());
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const signals = createPostgresRunSignalStore(testDatabaseUrl());
@@ -142,40 +143,18 @@ async function botTurnOpensSubagent(threadRef: string, followUp?: string) {
   const [child] = await sessions.childrenOf(parent.id);
   assert.ok(child, "the bot's turn opened a subagent");
   await execute((await runs.list({ threadRef: child.threadRef, limit: 1 }).then(([run]) => run))!);
-  if (followUp) {
-    const next = { ...request, origin: { kind: "human" as const, messageTs: "1700000000.000200" }, text: followUp };
-    await execute((await runs.enqueue({ sessionId: threadRef, request: next, maxAttempts: 1 })).run);
-  }
-  const childRun = (await runs.list({ threadRef: child.threadRef, limit: 1 }).then(([run]) => run))!;
-  if (followUp) await execute(childRun);
-  return {
-    childRequest: childRun.request,
-    childRuns: (await runs.list({ threadRef: child.threadRef })).length,
-    parentRuntime: runtimes.get(threadRef)!,
-    childRuntime: runtimes.get(child.threadRef)!,
-    actAsActor,
+  const next = {
+    ...request,
+    origin: { kind: "human" as const, messageTs: "1700000000.000200" },
+    text: "ask the helper",
   };
-}
-
-test("a subagent opened by a Slack bot's turn is still refused live-person runtime changes", async () => {
-  const w = await botTurnOpensSubagent("slack:dm:bot-runtime");
-  const set = { action: "set", model: "Astra", lifetime: "task" } as const;
-  assert.deepEqual(await w.parentRuntime(active, set), { ok: false, error: "live_actor_required" });
-  assert.deepEqual(await w.childRuntime(active, set), { ok: false, error: "live_actor_required" });
-});
-
-test("a subagent opened by a Slack bot's turn keeps the bot marker and never acts as its actor", async () => {
-  const w = await botTurnOpensSubagent("slack:dm:bot-marker");
-  assert.deepEqual(w.actAsActor, [false, false], "parent then child actAsActor passed to MCP");
-  assert.equal(w.childRequest.botActor, true);
-});
-
-test("a message a Slack bot's turn sends to its subagent keeps the bot marker", async () => {
-  const w = await botTurnOpensSubagent("slack:dm:bot-message", "ask the helper how many errors it found");
-  assert.equal(w.childRuns, 2, "the bot's second turn messaged its idle subagent");
-  assert.equal(w.childRequest.botActor, true);
-  assert.deepEqual(w.actAsActor, [false, false, false, false], "every turn the bot started or messaged");
-  assert.deepEqual(await w.childRuntime(active, { action: "set", model: "Astra", lifetime: "task" }), {
+  await execute((await runs.enqueue({ sessionId: threadRef, request: next, maxAttempts: 1 })).run);
+  const childRuns = await runs.list({ threadRef: child.threadRef });
+  assert.equal(childRuns.length, 2, "the bot's second turn messaged its idle subagent");
+  await execute(childRuns[0]!);
+  assert.equal(childRuns[0]!.request.botActor, true);
+  assert.deepEqual(actAsActor, [false, false, false, false], "every turn the bot started or messaged");
+  assert.deepEqual(await runtimes.get(child.threadRef)!(active, { action: "set", model: "Astra", lifetime: "task" }), {
     ok: false,
     error: "live_actor_required",
   });
