@@ -1,6 +1,7 @@
 import { REQUEST_ID_HEADERS, reportBackendError } from "../../plugins/chassis/src/error-reporting.ts";
 import { errChain as errMessage, errDetail, failureCode } from "../../plugins/chassis/src/errors.ts";
 import { WorkAdmissionClosed } from "./admitted-work.ts";
+import { TurnHandedOff } from "../core/turn-error.ts";
 
 export { errChain as errMessage, failureCode, swallow, swallowAs } from "../../plugins/chassis/src/errors.ts";
 
@@ -19,7 +20,9 @@ export function errorAlreadyReported(e: unknown): boolean {
 }
 
 function isExpectedInterruption(e: unknown): boolean {
-  return (e instanceof Error && e.name === "AbortError") || e instanceof WorkAdmissionClosed;
+  return (
+    (e instanceof Error && e.name === "AbortError") || e instanceof WorkAdmissionClosed || e instanceof TurnHandedOff
+  );
 }
 
 export function reportFailure(context: string, e: unknown, detail?: string): void {
