@@ -53,7 +53,15 @@ export interface FinnyAuditBlockedRecovery {
   idempotencyKey: string;
 }
 
-export type FinnyRuntimeRecovery = FinnyArtifactReadyRecovery | FinnyAuditPassedRecovery | FinnyAuditBlockedRecovery;
+export interface FinnyVerificationReopenedRecovery {
+  kind: "verification_reopened";
+  scopeId: string;
+  jobId: string;
+  idempotencyKey: string;
+}
+
+export type FinnyRuntimeRecovery =
+  FinnyArtifactReadyRecovery | FinnyAuditPassedRecovery | FinnyAuditBlockedRecovery | FinnyVerificationReopenedRecovery;
 
 export interface InitialFinnyRuntimeBindings {
   scopeId: string;
@@ -666,7 +674,7 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
             )
           ORDER BY actions.created_at,actions.idempotency_key`,
       );
-      return rows.map((row) => {
+      const actionRecoveries: FinnyRuntimeRecovery[] = rows.map((row) => {
         const base = {
           sessionId: row.session_id as string,
           runId: row.run_id as string,
@@ -702,6 +710,66 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
           findings: payload.findings,
         };
       });
+      const terminalReverificationRetry = hasRuns
+        ? `OR EXISTS (
+             SELECT 1 FROM finny_runtime_bindings AS auditor_binding
+             JOIN runs AS auditor_run ON auditor_run.id=auditor_binding.run_id
+              WHERE auditor_binding.job_id=jobs.id
+                AND auditor_binding.scope_id=jobs.scope_id
+                AND auditor_binding.role='auditor'
+                AND auditor_binding.active=TRUE
+                AND (
+                  auditor_run.status='failed'
+                  OR (auditor_run.status='done' AND (
+                    auditor_run.last_stop IS NOT NULL
+                    OR auditor_run.result LIKE '%"stopped":true%'
+                  ))
+                )
+           )`
+        : "";
+      const reopened = await q(
+        `SELECT jobs.scope_id,jobs.id AS job_id,events.idempotency_key
+           FROM finny_job_events AS events
+           JOIN finny_jobs AS jobs ON jobs.id=events.job_id
+          WHERE events.event_type='verification_reopened'
+            AND jobs.finalized_at IS NULL
+            AND jobs.pending_rework_seq IS NULL
+            AND jobs.unresolved_escalation_seq IS NULL
+            AND jobs.artifact_digest IS NOT NULL
+            AND EXISTS (
+              SELECT 1
+                FROM jsonb_each_text(jobs.required_generations) AS required(check_id,generation)
+               WHERE NOT EXISTS (
+                 SELECT 1 FROM finny_job_events AS audit
+                  WHERE audit.job_id=jobs.id
+                    AND audit.event_type='audit_passed'
+                    AND audit.payload->>'artifactDigest'=jobs.artifact_digest
+                    AND audit.payload->>'checkId'=required.check_id
+                    AND (audit.payload->>'generation')::int=required.generation::int
+               )
+            )
+            AND (
+              NOT EXISTS (
+                SELECT 1 FROM finny_runtime_dispatches AS dispatch
+                 WHERE dispatch.job_id=jobs.id
+                   AND dispatch.scope_id=jobs.scope_id
+                   AND dispatch.kind='auditor_reverification'
+                   AND dispatch.delivered_at IS NOT NULL
+                   AND dispatch.idempotency_key LIKE events.idempotency_key || ':auditor-reverify:%'
+              )
+              ${terminalReverificationRetry}
+            )
+          ORDER BY events.seq`,
+      );
+      return [
+        ...actionRecoveries,
+        ...reopened.map((row) => ({
+          kind: "verification_reopened" as const,
+          scopeId: row.scope_id as string,
+          jobId: row.job_id as string,
+          idempotencyKey: row.idempotency_key as string,
+        })),
+      ];
     },
     async isDispatched(idempotencyKey: string): Promise<boolean> {
       const rows = await q(

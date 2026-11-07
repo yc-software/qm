@@ -17,14 +17,6 @@ export const FINNY_DETERMINISTIC_CHECK_IDS = [
   "artifact.structure",
 ] as const satisfies readonly FinnyCheckId[];
 
-export const FINNY_INITIAL_EVALUATOR: FinnyEvaluatorRef = {
-  id: "finny-spreadsheet-evaluator",
-  revision: "r5.1",
-  buildDigest: "builtin:finny-r5.1",
-  contractVersion: "finny.deterministic.v1",
-  configurationDigest: "builtin:finny-r5.1",
-};
-
 export function assertFinnyEvaluatorRef(evaluator: FinnyEvaluatorRef): void {
   if (!evaluator || typeof evaluator !== "object") throw new Error("Finny evaluator authority is invalid");
   for (const value of [
@@ -82,7 +74,7 @@ export function assertFinnyPolicy(policy: FinnyPolicySnapshot): void {
   }
 }
 
-export function initialFinnyPolicy(evaluator: FinnyEvaluatorRef = FINNY_INITIAL_EVALUATOR): FinnyPolicySnapshot {
+export function initialFinnyPolicy(evaluator: FinnyEvaluatorRef): FinnyPolicySnapshot {
   assertFinnyEvaluatorRef(evaluator);
   return {
     policyVersion: FINNY_POLICY_VERSION,

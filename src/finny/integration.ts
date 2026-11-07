@@ -221,7 +221,7 @@ export function createFinnyToolServiceFactory(deps: {
             id: jobId,
             scopeId: turn.scopeId,
             plan: planPresentation,
-            policy: initialFinnyPolicy(),
+            policy: initialFinnyPolicy(deps.config.spreadsheetEngine.evaluator),
             findingPolicy: deps.config.findingPolicy,
             originThreadRef: turn.originThreadRef,
           };

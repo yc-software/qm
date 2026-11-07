@@ -1,3 +1,4 @@
+import { TEST_FINNY_EVALUATOR } from "./support/finny-fixture.ts";
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import { test } from "node:test";
@@ -23,7 +24,7 @@ async function approvedJob() {
       destination: "Origin thread",
       clarifications: [],
     },
-    policy: initialFinnyPolicy(),
+    policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     findingPolicy: { id: "runtime-test", maxFindings: 4, maxCodeLength: 40, maxMessageLength: 200 },
     originThreadRef: `slack:C1:${randomUUID()}`,
   });
@@ -1273,6 +1274,9 @@ test("runtime reconciliation records a poison recovery and continues with later 
       async auditBlocked() {
         throw new Error("unexpected BLOCK recovery");
       },
+      async verificationReopened() {
+        throw new Error("unexpected reverification recovery");
+      },
     }),
     recordError: async (error, recovery) => {
       errors.push({ error, recovery });
@@ -1577,4 +1581,95 @@ test("restart replays escalation authority committed before the BLOCK event", as
   await coordinator.auditBlocked(input);
   assert.ok((await jobs.getJob(job.scopeId, job.id))?.unresolvedEscalationSequence);
   assert.deepEqual(await runtime.pendingRecoveries(), []);
+});
+
+test("evaluator correction dispatches Auditor-only reverification for the unchanged artifact", async () => {
+  const { jobs, job, connectionString } = await approvedJob();
+  await jobs.recordArtifactReady({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    artifactDigest: "artifact-sha256",
+    provisionalRevision: "revision-1",
+    idempotencyKey: "artifact-before-evaluator-correction",
+  });
+  await jobs.recordAuditBlock({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    artifactDigest: "artifact-sha256",
+    checkId: "summary.crossfoot",
+    generation: 1,
+    evidenceDigest: "old-evaluator-evidence",
+    issuerPrincipalId: "auditor-principal",
+    issuerRunId: "auditor-run",
+    findings: [{ code: "CROSSFOOT_EVALUATION_ERROR", message: "Old evaluator rejected a supported term" }],
+    changeKinds: ["formula"],
+    resolution: { kind: "rework" },
+    idempotencyKey: "old-evaluator-block",
+  });
+  const evaluator = {
+    ...TEST_FINNY_EVALUATOR,
+    revision: "test-r2",
+    buildDigest: "2".repeat(64),
+    configurationDigest: "3".repeat(64),
+  };
+  await jobs.recordEvaluatorCorrection({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    fromEvaluator: TEST_FINNY_EVALUATOR,
+    toEvaluator: evaluator,
+    idempotencyKey: "evaluator-correction-r2",
+  });
+  const runtime = createPostgresFinnyRuntimeStore(connectionString);
+  await runtime.bindInitial({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    parentSessionId: "parent-session",
+    parentRunId: "parent-run",
+    parentPrincipalId: "U1",
+    producerExpiresAt: Date.now() + 60_000,
+    auditorExpiresAt: Date.now() + 60_000,
+    producerSessionId: "producer-session",
+    producerRunId: "producer-run",
+    auditorSessionId: "auditor-session",
+    auditorRunId: "auditor-run",
+    producerPrincipalId: "U1",
+    auditorPrincipalId: "U1",
+  });
+  assert.deepEqual(await runtime.pendingRecoveries(), [
+    {
+      kind: "verification_reopened",
+      scopeId: job.scopeId,
+      jobId: job.id,
+      idempotencyKey: "evaluator-correction-r2",
+    },
+  ]);
+  const delivered: Array<{ idempotencyKey: string; role: string }> = [];
+  const coordinator = createFinnyRuntimeCoordinator({
+    jobs,
+    runtime,
+    grants: createFinnyWorkerGrants(jobs, "runtime-test-secret"),
+    sessions: {
+      async open() {
+        throw new Error("existing Auditor binding should be reused");
+      },
+    },
+    dispatcher: {
+      async dispatchPrivateIdempotent(message) {
+        delivered.push({ idempotencyKey: message.idempotencyKey, role: message.role });
+      },
+    },
+    ...coreRuntimeAuthority(),
+  });
+  await coordinator.verificationReopened({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    idempotencyKey: "evaluator-correction-r2",
+  });
+  assert.deepEqual(delivered, [
+    { idempotencyKey: "evaluator-correction-r2:auditor-reverify:auditor-run", role: "auditor" },
+  ]);
+  assert.deepEqual(await runtime.pendingRecoveries(), []);
+  const corrected = await jobs.getJob(job.scopeId, job.id);
+  assert.equal(corrected?.artifactDigest, "artifact-sha256");
+  assert.equal(corrected?.provisionalRevision, "revision-1");
 });

@@ -116,6 +116,7 @@ export async function reconcileFinnyRuntimeRecoveries(deps: {
     artifactReady(input: ArtifactReadyRuntimeInput): Promise<void>;
     auditPassed(input: AuditPassedRuntimeInput): Promise<void>;
     auditBlocked(input: AuditBlockedRuntimeInput): Promise<void>;
+    verificationReopened(input: { scopeId: string; jobId: string; idempotencyKey: string }): Promise<void>;
   }>;
   recordError(error: unknown, recovery: FinnyRuntimeRecovery): Promise<void>;
 }): Promise<void> {
@@ -124,7 +125,8 @@ export async function reconcileFinnyRuntimeRecoveries(deps: {
       const coordinator = await deps.coordinatorFor(recovery.scopeId, recovery.jobId);
       if (recovery.kind === "artifact_ready") await coordinator.artifactReady(recovery);
       else if (recovery.kind === "audit_passed") await coordinator.auditPassed(recovery);
-      else await coordinator.auditBlocked(recovery);
+      else if (recovery.kind === "audit_blocked") await coordinator.auditBlocked(recovery);
+      else await coordinator.verificationReopened(recovery);
     } catch (error) {
       await deps.recordError(error, recovery);
     }
@@ -404,6 +406,61 @@ export function createFinnyRuntimeCoordinator(deps: {
         role: "producer",
         principalId: producerCredentials.principalId,
         expiresAt: producerCredentials.expiresAt,
+      });
+    },
+    async verificationReopened(input: { scopeId: string; jobId: string; idempotencyKey: string }): Promise<void> {
+      const job = await deps.jobs.getJob(input.scopeId, input.jobId);
+      if (
+        !job?.artifactDigest ||
+        !job.provisionalRevision ||
+        job.pendingReworkSequence !== undefined ||
+        job.unresolvedEscalationSequence !== undefined ||
+        job.finalizedAt !== undefined
+      ) {
+        throw new Error("Finny reverification requires a current immutable artifact");
+      }
+      const dispatchPrefix = `${input.idempotencyKey}:auditor-reverify`;
+      let auditor = await deps.runtime.currentRoleBinding(input.scopeId, input.jobId, "auditor");
+      if (!auditor) {
+        const credentials = deps.workerPolicy.credentials(job, "auditor");
+        const bindAuditor = (identity: { sessionId: string; runId: string }) =>
+          deps.runtime.bindAuditor({
+            scopeId: input.scopeId,
+            jobId: input.jobId,
+            sessionId: identity.sessionId,
+            runId: identity.runId,
+            principalId: credentials.principalId,
+            expiresAt: credentials.expiresAt,
+          });
+        const openedAuditor = opened(
+          await deps.sessions.open({
+            requestId: `finny:${input.jobId}:auditor-reverify:${input.idempotencyKey}`,
+            name: "Finny Auditor",
+            task: "Await the evaluator-bound Finny reverification dispatch",
+            beforeEnqueue: async (identity) => {
+              await bindAuditor(identity);
+            },
+          }),
+          "Auditor",
+        );
+        auditor = await bindAuditor(openedAuditor);
+      }
+      const dispatchKey = `${dispatchPrefix}:${auditor.runId}`;
+      if (await deps.runtime.isDispatched(dispatchKey)) return;
+      const credentials = deps.workerPolicy.credentials(job, "auditor");
+      const task = deps.workerPolicy.task(job, "auditor");
+      await dispatch({
+        idempotencyKey: dispatchKey,
+        scopeId: input.scopeId,
+        jobId: input.jobId,
+        sessionId: auditor.sessionId,
+        runId: auditor.runId,
+        kind: "auditor_reverification",
+        intent: task,
+        message: task,
+        role: "auditor",
+        principalId: credentials.principalId,
+        expiresAt: credentials.expiresAt,
       });
     },
     async artifactReady(input: ArtifactReadyRuntimeInput): Promise<void> {

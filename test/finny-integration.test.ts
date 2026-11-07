@@ -1,3 +1,4 @@
+import { TEST_FINNY_EVALUATOR } from "./support/finny-fixture.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createFinnyToolServiceFactory, finnySlackAuthority } from "../src/finny/integration.ts";
@@ -693,7 +694,7 @@ test("bound Auditor runs all current deterministic checks from one trusted evide
   const artifactBytes = new TextEncoder().encode("workbook");
   const { digestSpreadsheetArtifact } = await import("../src/finny/deterministic-spreadsheet-worker.ts");
   const { initialFinnyPolicy } = await import("../src/finny/policy.ts");
-  const policy = initialFinnyPolicy();
+  const policy = initialFinnyPolicy(TEST_FINNY_EVALUATOR);
   const results = [
     {
       checkId: "formula.recalculate" as const,
@@ -705,12 +706,14 @@ test("bound Auditor runs all current deterministic checks from one trusted evide
       checkId: "summary.crossfoot" as const,
       generation: 1,
       verdict: "pass" as const,
+      reason: null,
       evidence: { kind: "cross-foot" as const, comparisons: [] },
     },
     {
       checkId: "artifact.structure" as const,
       generation: 1,
       verdict: "pass" as const,
+      reason: null,
       evidence: { kind: "structure" as const, sheets: [] },
     },
   ];
@@ -763,12 +766,13 @@ test("deterministic BLOCK uses Core findings and stops before stale remaining re
   const artifactBytes = new TextEncoder().encode("blocked workbook");
   const { digestSpreadsheetArtifact } = await import("../src/finny/deterministic-spreadsheet-worker.ts");
   const { initialFinnyPolicy } = await import("../src/finny/policy.ts");
-  const policy = initialFinnyPolicy();
+  const policy = initialFinnyPolicy(TEST_FINNY_EVALUATOR);
   const results = [
     {
       checkId: "formula.recalculate" as const,
       generation: 1,
       verdict: "block" as const,
+      reason: { code: "FORMULA_MISMATCH" as const, references: ["Summary!B9"] },
       evidence: { kind: "formula-recalculation" as const, cells: [] },
     },
     {
@@ -817,7 +821,7 @@ test("deterministic evaluator ERROR records neither PASS nor BLOCK", async () =>
   const artifactBytes = new TextEncoder().encode("engine failure workbook");
   const { digestSpreadsheetArtifact } = await import("../src/finny/deterministic-spreadsheet-worker.ts");
   const { initialFinnyPolicy } = await import("../src/finny/policy.ts");
-  const policy = initialFinnyPolicy();
+  const policy = initialFinnyPolicy(TEST_FINNY_EVALUATOR);
   const results = [
     {
       checkId: "formula.recalculate" as const,

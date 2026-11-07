@@ -1,3 +1,4 @@
+import { TEST_FINNY_EVALUATOR } from "./support/finny-fixture.ts";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
@@ -31,7 +32,7 @@ const createInput = () => ({
     clarifications: [],
   },
   artifactDigest: "artifact-sha256-v1",
-  policy: initialFinnyPolicy(),
+  policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
   originThreadRef: "slack:C1:100.1",
   provisionalRevision: "delivery-revision-1",
   findingPolicy,
@@ -116,7 +117,7 @@ test("BLOCK requests rework and advances only invalidated check generations", as
   assert.equal(result.job.policy.requiredGenerations["meaning.actionability"], 2);
   assert.equal(result.job.policy.requiredGenerations["artifact.structure"], 1);
   assert.equal(result.job.eventHead, result.events[1]?.seq);
-  assert.deepEqual(original.policy.requiredGenerations, initialFinnyPolicy().requiredGenerations);
+  assert.deepEqual(original.policy.requiredGenerations, initialFinnyPolicy(TEST_FINNY_EVALUATOR).requiredGenerations);
 });
 
 test("duplicate BLOCK submissions return the original transition without advancing policy again", async () => {
@@ -243,7 +244,7 @@ test("external escalation decisions are recorded without an internal retry cap",
   );
   const escalated = result.events.find((event): event is FinnyJobEvent<"escalated"> => event.type === "escalated");
   assert.equal(escalated?.payload.reason, "External policy requires controller review");
-  assert.deepEqual(result.job.policy, initialFinnyPolicy());
+  assert.deepEqual(result.job.policy, initialFinnyPolicy(TEST_FINNY_EVALUATOR));
 });
 
 test("BLOCK rejects findings beyond the bounded event contract", async () => {

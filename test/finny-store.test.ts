@@ -1,3 +1,4 @@
+import { TEST_FINNY_EVALUATOR } from "./support/finny-fixture.ts";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
@@ -22,7 +23,7 @@ const createInput = () => ({
   id: randomUUID(),
   scopeId: "personal:U1",
   plan: plan(),
-  policy: initialFinnyPolicy(),
+  policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
   findingPolicy: {
     id: "finny-r5-test",
     maxFindings: 8,

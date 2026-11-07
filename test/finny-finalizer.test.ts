@@ -1,3 +1,4 @@
+import { TEST_FINNY_EVALUATOR } from "./support/finny-fixture.ts";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
@@ -23,7 +24,7 @@ async function createApprovedJob(store: FinnyStore, action: FinnyApprovalAction 
       destination: "Origin thread",
       clarifications: [],
     },
-    policy: initialFinnyPolicy(),
+    policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     originThreadRef: `slack:C1:${randomUUID()}`,
     findingPolicy: {
       id: "finny-r5-test",

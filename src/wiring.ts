@@ -2241,6 +2241,7 @@ export function buildApp(
               await coordinator.auditBlocked(input);
               await afterRecoveredAuditBlocked(input);
             },
+            verificationReopened: (input) => coordinator.verificationReopened(input),
           };
         },
         recordError: async (error, recovery) => {
