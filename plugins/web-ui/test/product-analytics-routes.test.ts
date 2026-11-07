@@ -34,8 +34,11 @@ process.env.CORE_ORG_ID = "acme";
 process.env.CORE_SIGNING_SECRET = secret;
 process.env.PORTAL_IDENTITY_SECRET = secret;
 process.env.ALLOW_UNSIGNED_TEST_IDENTITY = "0";
-process.env.POSTHOG_API_KEY = "phc_test";
-process.env.POSTHOG_HOST = "https://us.i.posthog.com";
+process.env.WEB_UI_ANALYTICS = JSON.stringify({
+  module: "https://cdn.example.com/analytics.js",
+  connect: ["https://events.example.com"],
+  options: { key: "public" },
+});
 const { handler } = await import("../server/index.ts");
 const surface = createServer((req, res) => void handler(req, res));
 await new Promise<void>((resolve) => surface.listen(0, "127.0.0.1", resolve));
@@ -59,14 +62,16 @@ test("analytics config is authenticated, company-scoped and omitted during imper
   assert.equal((await fetch(`${base}/me`)).status, 401);
   const response = await fetch(`${base}/me`, { headers: headers() });
   const body = await response.json();
-  assert.deepEqual(body.analytics, { apiKey: "phc_test", host: "https://us.i.posthog.com" });
+  assert.deepEqual(body.analytics, { module: "https://cdn.example.com/analytics.js", options: { key: "public" } });
   const csp = (await fetch(`${base}/connectors/oauth/test/callback`)).headers.get("content-security-policy")!;
+  const directives = csp.split(";").map((directive) => directive.trim().split(/\s+/));
   assert.deepEqual(
-    csp
-      .split(";")
-      .map((directive) => directive.trim().split(/\s+/))
-      .find(([name]) => name === "connect-src"),
-    ["connect-src", "'self'", "https://us.i.posthog.com", "https://us-assets.i.posthog.com"],
+    directives.find(([name]) => name === "connect-src"),
+    ["connect-src", "'self'", "https://events.example.com"],
+  );
+  assert.deepEqual(
+    directives.find(([name]) => name === "script-src"),
+    ["script-src", "'self'", "'wasm-unsafe-eval'", "https://cdn.example.com"],
   );
   assert.equal(body.org, "acme");
   assert.equal(body.user, "alice@example.com");

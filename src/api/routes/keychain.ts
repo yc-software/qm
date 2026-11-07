@@ -384,6 +384,8 @@ async function handleApproval(ctx: ApiCtx): Promise<void> {
   const b = (body ?? {}) as { principalId?: unknown; decision?: unknown };
   if (!deps.keychainApprovals || typeof b.principalId !== "string" || !b.principalId)
     return sendJson(res, 404, { error: "not_found" });
+  if (ctx.actor?.imp)
+    return sendJson(res, 403, { error: "forbidden", message: "Sign in as yourself to decide on credential use." });
   try {
     if (b.decision !== "once" && b.decision !== "standing" && b.decision !== "deny")
       return sendJson(res, 400, {
@@ -407,5 +409,11 @@ export const keychainRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/keychain/grants/:id/revoke", actor: "system", auth: "either", handle: revokeGrant },
   { method: "POST", path: "/v1/keychain/asks", actor: "system", auth: "either", handle: createAsk },
   { method: "GET", path: "/v1/keychain/asks", auth: "either", handle: listAsks },
-  { method: "POST", path: "/v1/keychain/approvals/:id", auth: "source", handle: handleApproval },
+  {
+    method: "POST",
+    path: "/v1/keychain/approvals/:id",
+    actor: "body.principalId",
+    auth: "source",
+    handle: handleApproval,
+  },
 ];

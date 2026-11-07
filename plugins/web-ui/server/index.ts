@@ -1,7 +1,7 @@
 import "./instrument.ts";
 import { handleVoiceRoute, sweepDictationSpool } from "./voice-routes.ts";
 import { browserErrorConfig } from "./browser-error-config.ts";
-import { productAnalyticsConfig } from "./analytics-config.ts";
+import { analyticsHookConfig } from "./analytics-config.ts";
 import { reportBackendError, withRequestContext } from "../../chassis/src/error-reporting.ts";
 import { errChain, swallow } from "../../chassis/src/errors.ts";
 import { appEditSlug } from "../src/app-edit.ts";
@@ -189,13 +189,17 @@ const CONTENT_TYPES: Record<string, string> = {
   ".wasm": "application/wasm",
 };
 
-const { analytics: analyticsConfig, origins: analyticsOrigins } = productAnalyticsConfig(process.env);
+const {
+  analytics: analyticsConfig,
+  scriptOrigins: analyticsScriptOrigins,
+  connectOrigins: analyticsOrigins,
+} = analyticsHookConfig(process.env.WEB_UI_ANALYTICS);
 const browserErrors = browserErrorConfig(process.env);
 const browserErrorOrigin = browserErrors ? new URL(browserErrors.dsn).origin : undefined;
 
 const SPA_CSP = [
   "default-src 'self'",
-  "script-src 'self' 'wasm-unsafe-eval'",
+  `script-src 'self' 'wasm-unsafe-eval'${analyticsScriptOrigins.map((origin) => ` ${origin}`).join("")}`,
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https:",
   "font-src 'self' data:",
