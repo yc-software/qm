@@ -49,7 +49,7 @@ export function createRegistryMemoryService(opts: {
   overlay?: MemoryProviderConfig;
   registry: Pick<MemoryRegistryStore, "current" | "overlayIds" | "key">;
   sessionItems?: (sessionId: string) => Promise<Item[]>;
-  memberFetch?: AddressFetch;
+  registryFetch?: AddressFetch;
   onError?: (error: unknown, provider: string, operation: "recall" | "query" | "capture") => void;
 }): MemoryService {
   const overlayProviders = createMemoryProviders(opts.overlay?.providers ?? [], opts);
@@ -69,17 +69,13 @@ export function createRegistryMemoryService(opts: {
     try {
       const registry = readRegistry(record);
       const { config, disabled } = resolveMemoryRegistry(registry, opts.registry);
-      const owned = new Set(registry.brains.flatMap((brain) => (brain.owner ? [brain.id] : [])));
-      const memberFetch = opts.memberFetch ?? publicFetch;
       snapshot = {
         version,
         disabled: disabled.filter(({ code }) => code !== "id_taken").map(disabledRoute),
         service: config.routes.length
           ? routed(
               [...(opts.overlay?.routes ?? [NOTEBOOK_ROUTE]), ...config.routes],
-              createMemoryProviders(config.providers, {
-                fetchFor: (id) => (owned.has(id) ? memberFetch : undefined),
-              }),
+              createMemoryProviders(config.providers, { fetch: opts.registryFetch ?? publicFetch }),
             )
           : overlayOnly,
       };

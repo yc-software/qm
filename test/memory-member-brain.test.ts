@@ -33,7 +33,7 @@ function ownedBy(url: string, owner: string): MemoryRegistry {
     BRAIN,
     {
       preset: "gbrain-v1",
-      url,
+      url: "https://brain.alice.example/mcp",
       clientId: "qm-member",
       clientSecret: "member-secret",
       label: "Alice's brain",
@@ -41,16 +41,16 @@ function ownedBy(url: string, owner: string): MemoryRegistry {
     },
     change,
   );
-  const owned = { ...registered, brains: registered.brains.map((brain) => ({ ...brain, owner })) };
+  const owned = { ...registered, brains: registered.brains.map((brain) => ({ ...brain, url, owner })) };
   return putBinding(owned, BRAIN, { brain: BRAIN, scope: `personal:${owner}`, capture: "explicit" }, change);
 }
 
-function serving(record: MemoryRegistry, memberFetch?: AddressFetch) {
+function serving(record: MemoryRegistry, registryFetch?: AddressFetch) {
   const errors: unknown[] = [];
   const memory = createRegistryMemoryService({
     defaultMemory: notebook,
     registry: { ...emptyMemoryRegistry, current: async () => ({ version: "1", record }) },
-    ...(memberFetch ? { memberFetch } : {}),
+    ...(registryFetch ? { registryFetch } : {}),
     onError: (error) => void errors.push(error),
   });
   const search = () =>
