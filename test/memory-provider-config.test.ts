@@ -198,7 +198,7 @@ test("an attested provider serves only personal scopes, so a shared conversation
   }
 });
 
-test("a provider without scopeArg serves only personal scopes or only the org scope, so its server never pools conversations' memory", () => {
+test("a provider without scopeArg serves only scopes its server can tell apart, so it never pools conversations' memory", () => {
   const scopes = (provider: Record<string, unknown>, ...routes: Array<Record<string, unknown>>) => {
     const parsed = JSON.parse(withProvider(provider)) as { routes: Array<Record<string, unknown>> };
     parsed.routes.splice(1, 1, ...routes.map((route) => ({ provider: "knowledge", manage: false, ...route })));
@@ -213,6 +213,7 @@ test("a provider without scopeArg serves only personal scopes or only the org sc
   assert.throws(() => scopes({}, { scopes: ["channel"] }), refused("read", "channel"));
   assert.throws(() => scopes({}, { scopes: ["personal", "channel"] }), refused("read", "personal, channel"));
   assert.throws(() => scopes({}, { scopes: ["personal", "persona:p1"] }), refused("read", "personal, persona:p1"));
+  assert.throws(() => scopes({}, { scopes: ["personal"], manage: true }), refused("read", "personal"));
   assert.throws(
     () => scopes({}, { scopes: ["personal:U1"] }, { scopes: ["org:acme"], capture: "explicit" }),
     refused("read", "personal:U1, org:acme"),
@@ -229,6 +230,7 @@ test("a provider without scopeArg serves only personal scopes or only the org sc
   assert.deepEqual(scopes({ read: scoped.read, write: undefined }, { scopes: ["group", "team"] }), ["group", "team"]);
   assert.deepEqual(scopes({}, { scopes: ["personal"] }, { scopes: ["personal:U1"] }), ["personal", "personal:U1"]);
   assert.deepEqual(scopes({}, { scopes: ["org", "org:acme"] }), ["org", "org:acme"]);
+  assert.deepEqual(scopes({}, { scopes: ["persona:p1"], manage: true }), ["persona:p1"]);
 });
 
 test("a write operation maps its facts with factsArg or contentArg, not both", () => {

@@ -210,13 +210,16 @@ export function parseMemoryProviderConfig(
   for (const provider of providers) {
     if (provider.type !== "mcp") continue;
     const op = (["read", "write"] as const).find((name) => provider[name] && !provider[name].scopeArg);
-    const scopes = [
-      ...new Set(routes.filter((route) => route.provider === provider.id).flatMap((route) => route.scopes)),
-    ];
+    const served = routes.filter((route) => route.provider === provider.id);
+    const scopes = [...new Set(served.flatMap((route) => route.scopes))];
     const kinds = new Set(scopes.map((scope) => parseScopeId(scope).kind ?? scope));
-    if (op && kinds.size && !(kinds.size === 1 && (kinds.has("personal") || kinds.has("org"))))
+    const apart =
+      (scopes.length === 1 && parseScopeId(scopes[0]!).kind !== null) ||
+      (kinds.size === 1 && kinds.has("org")) ||
+      (kinds.size === 1 && kinds.has("personal") && served.every((route) => !route.manage));
+    if (op && scopes.length && !apart)
       throw new Error(
-        `memory provider ${provider.id}.${op} sets no scopeArg, so its server cannot tell apart the scopes it serves (${scopes.join(", ")}); without scopeArg a provider may serve only personal scopes or only the org scope, so set scopeArg on read and write (docs/memory-providers.md#troubleshooting)`,
+        `memory provider ${provider.id}.${op} sets no scopeArg, so its server cannot tell apart the scopes it serves (${scopes.join(", ")}); without scopeArg a provider may serve one scope, the org scope, or personal scopes on routes that do not manage a notebook, whose reads carry no member, so set scopeArg on read and write (docs/memory-providers.md#troubleshooting)`,
       );
   }
   return { providers, routes };
