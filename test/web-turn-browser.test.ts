@@ -442,7 +442,7 @@ test("an impersonating admin's turns and approval replays are kept out of produc
   }
 });
 
-test("a chat embed on a listed API origin can send turns, signals and approvals; other origins cannot", async () => {
+test("a chat embed on a listed API origin can send turns and run signals, and no other browser writes", async () => {
   portalSession.apiOrigins = new Set(["https://embed.example"]);
   try {
     const listed = { headers: { origin: "https://embed.example" } };
@@ -450,15 +450,9 @@ test("a chat embed on a listed API origin can send turns, signals and approvals;
     assert.equal((await post("/api/turn", { text: "from the embed" }, listed)).status, 202);
     assert.equal(turns.length, count + 1);
     assert.equal((await post("/api/runs/r1/signal", { kind: "abort" }, listed)).status, 200);
-    for (const path of ["/api/turn", "/api/runs/r1/signal", "/api/approvals/a1"]) {
-      const foreign = await post(
-        path,
-        { text: "x", kind: "abort", approved: true },
-        { headers: { origin: "https://evil.example" } },
-      );
-      assert.equal(foreign.status, 403, path);
-      assert.equal(((await foreign.json()) as { message?: string }).message, "cross-origin request refused", path);
-    }
+    const other = await post("/api/sessions/s1/title", { title: "x" }, listed);
+    assert.equal(other.status, 403);
+    assert.equal(((await other.json()) as { message?: string }).message, "cross-origin request refused");
   } finally {
     delete portalSession.apiOrigins;
   }

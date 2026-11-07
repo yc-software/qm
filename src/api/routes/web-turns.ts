@@ -283,11 +283,11 @@ async function webRunSignal(ctx: ApiCtx): Promise<void> {
 }
 
 export const webTurnRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "POST", path: "/v1/web/turn", browser: true, actor: "person", auth: "source", handle: webTurn },
+  { method: "POST", path: "/v1/web/turn", browser: "embed", actor: "person", auth: "source", handle: webTurn },
   {
     method: "POST",
     path: "/v1/web/approvals/:requestId",
-    browser: true,
+    browser: "embed",
     actor: "person",
     auth: "source",
     handle: webApproval,
@@ -295,7 +295,7 @@ export const webTurnRoutes: ReadonlyArray<Route<ApiCtx>> = [
   {
     method: "POST",
     path: "/v1/web/runs/:id/signal",
-    browser: true,
+    browser: "embed",
     actor: "person",
     auth: "source",
     maxBodyBytes: 6_000_000,

@@ -135,7 +135,7 @@ interface BrowserRefusal {
 
 export function usesBrowserSession(req: IncomingMessage, route: Pick<Route, "browser"> | undefined): boolean {
   return (
-    route?.browser === true &&
+    route?.browser !== undefined &&
     req.headers[CAPABILITY_HEADER] === undefined &&
     req.headers["x-signature"] === undefined &&
     readCookie(req.headers.cookie, "portal_session") !== null
@@ -164,6 +164,7 @@ export async function browserIdentity(
   req: IncomingMessage,
   method: string,
   deps: ServerDeps,
+  embeddable = false,
 ): Promise<PortalIdentity | BrowserRefusal> {
   const now = Date.now();
   const problem = misconfiguration(deps);
@@ -184,7 +185,8 @@ export async function browserIdentity(
     return { status: 401, error: "unauthorized", message: "a sign-in session for this organization is required" };
   if (session.appOnly)
     return { status: 403, error: "app_only_session", message: "this sign-in only permits access to shared apps" };
-  const listedOrigin = typeof req.headers.origin === "string" && apiOrigins?.has(req.headers.origin) === true;
+  const listedOrigin =
+    embeddable && typeof req.headers.origin === "string" && apiOrigins?.has(req.headers.origin) === true;
   if (method !== "GET" && method !== "HEAD" && !listedOrigin && !sameOriginRequest(req, originOf(deps.portalUrl!)))
     return { status: 403, error: "forbidden", message: "cross-origin request refused" };
   for (const header of RELAY_IDENTITY_HEADERS) delete req.headers[header];
