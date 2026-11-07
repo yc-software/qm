@@ -73,6 +73,13 @@ export function contentTypeWithUtf8Charset(contentType: string): string {
   return textual ? `${contentType}; charset=utf-8` : contentType;
 }
 
+export const UNTRUSTED_CONTENT_SANDBOX_CSP =
+  "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads";
+
+export function frameAncestorsDirective(ancestors: readonly string[]): string {
+  return ["frame-ancestors 'self'", ...ancestors].join(" ");
+}
+
 export function sendRedirect(res: ServerResponse, location: string): void {
   res.writeHead(302, { location });
   res.end();

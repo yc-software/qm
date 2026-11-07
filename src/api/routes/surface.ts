@@ -32,8 +32,7 @@ import { isSafeSkillName, SKILL_NAME_RULE } from "../../skills/skill-name.ts";
 import { SideChatAnchorError, SoulUpdateDeniedError, type SessionPageStatus } from "../app-types.ts";
 import { renderAgentApis } from "../agent-api-catalog.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../../auth/capability-token.ts";
-import { contentTypeWithUtf8Charset, sendJson, sendProblem } from "../http.ts";
-import { relayStream } from "../../../plugins/chassis/src/http.ts";
+import { sendJson, sendProblem } from "../http.ts";
 import { resolveBranding } from "../../resolution/branding.ts";
 import { audit, isObj, orgScope } from "./shared.ts";
 import {
@@ -330,22 +329,6 @@ async function getSessionBackgroundOutput(ctx: ApiCtx): Promise<void> {
   const read = await app.readSessionBackgroundOutput(id, processId, viewer, sinceCursor);
   if (!read) return sendJson(res, 404, { error: "not_found" });
   return sendJson(res, 200, read);
-}
-
-async function getFileContent(ctx: ApiCtx): Promise<void> {
-  const { res, app, capability, actor } = ctx;
-  const id = ctx.params.id!;
-  const viewer = capability?.actorId ?? actor?.p;
-  if (!viewer) return sendJson(res, 401, { error: "capability_required" });
-  const opened = await app.openFileForViewer(id, viewer);
-  if (!opened) return sendJson(res, 404, { error: "not_found" });
-  res.writeHead(200, {
-    "content-type": contentTypeWithUtf8Charset(opened.mimetype || "application/octet-stream"),
-    "content-length": String(opened.sizeBytes),
-    "content-disposition": `inline; filename*=UTF-8''${encodeURIComponent(opened.name)}`,
-  });
-  relayStream(opened.stream, res);
-  return;
 }
 
 async function listFiles(ctx: ApiCtx): Promise<void> {
@@ -1602,7 +1585,6 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
     },
     { method: "GET", path: "/v1/sessions/:id/items/:seq", browser: true, auth: "source", handle: getSessionItem },
     { method: "GET", path: "/v1/sessions/:id", browser: true, auth: "source", handle: getSession },
-    { method: "GET", path: "/v1/files/:id/content", auth: "either", handle: getFileContent },
     { method: "GET", path: "/v1/files", browser: true, auth: "either", handle: listFiles },
   ]),
 ];

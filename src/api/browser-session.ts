@@ -99,6 +99,10 @@ export const API_ALIASES: ReadonlyMap<string, string> = new Map([
   ["PUT /api/channel-header-pin", "/v1/channel-header-pin"],
   ["POST /api/personas/:id/credentials", "/v1/personas/:id/credentials"],
   ["DELETE /api/personas/:id/credentials/:grantId", "/v1/personas/:id/credentials/:grantId"],
+  ["GET /api/files/by-name/content", "/v1/files/by-name/content"],
+  ["GET /api/files/:id/content", "/v1/files/:id/content"],
+  ["GET /api/files/:id/content/:name", "/v1/files/:id/content"],
+  ["GET /api/playgrounds/:id", "/v1/playgrounds/:id"],
 ]);
 
 const aliasMatchers = [...API_ALIASES].map(([key, target]) => {
