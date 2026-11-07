@@ -4,7 +4,6 @@ import { api, type ProjectIcon } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { icon } from "./icons";
 import { projectIconTpl } from "./project-icon";
-import { canvasToast } from "./split";
 
 interface Version {
   version: number;
@@ -38,6 +37,7 @@ export interface HistoryOptions {
   action: (label: string, glyph: Parameters<typeof icon>[0], run: () => void) => TemplateResult;
   redraw: () => void;
   restored: (persona: unknown, flash: string) => void;
+  failed: (message: string) => void;
 }
 
 const PAGE = 20;
@@ -128,7 +128,7 @@ export function historySectionTpl(opts: HistoryOptions): TemplateResult {
       reset(entry);
       opts.restored(r.persona, `Rolled back to version ${version}.`);
     } catch (e) {
-      canvasToast(errMessage(e, "Couldn't roll back."));
+      opts.failed(errMessage(e, "Couldn't roll back."));
     }
   };
   const row = (version: Version) => {

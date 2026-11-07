@@ -48,6 +48,8 @@ let calls: Call[] = [];
 let disabled = false;
 let accessError = false;
 let access = defaultAccess();
+let holdDirectory = false;
+let releaseDirectory = () => {};
 
 const json = (body: unknown, status = 200) => Promise.resolve(Response.json(body, { status }));
 
@@ -97,8 +99,14 @@ const { vite, dom, close } = await browserEnv({
         },
       });
     }
-    if (path.startsWith("/api/directory/resolve"))
-      return json({ matches: [{ principalId: "bo@acme.com", displayName: "Bo Person", type: "internal" }] });
+    if (path.startsWith("/api/directory/resolve")) {
+      const found = () =>
+        json({ matches: [{ principalId: "bo@acme.com", displayName: "Bo Person", type: "internal" }] });
+      if (!holdDirectory) return found();
+      return new Promise<Response>((resolve) => {
+        releaseDirectory = () => void found().then(resolve);
+      });
+    }
     if (path.startsWith("/api/directory/channels"))
       return json({ channels: [{ scopeId: "channel:C1", channelId: "C1", name: "eng-launch", isPrivate: false }] });
     if (path === "/api/contexts")
@@ -162,6 +170,7 @@ beforeEach(() => {
   disabled = false;
   accessError = false;
   access = defaultAccess();
+  holdDirectory = false;
   dom.window.confirm = () => true;
   document.body.innerHTML = '<div id="app"></div><main></main>';
 });
@@ -528,6 +537,41 @@ test("an owner changes a person's role and removes them from the row, keeping an
   assert.ok(putBody());
   assert.equal(flash(main), "Removed Bo Person.");
   assert.equal(accessRow(main, "personal:bo@acme.com").querySelector("fieldset")!.disabled, false);
+  assert.equal(
+    main.querySelector(".persona-action-error[role=alert]")?.textContent?.trim(),
+    "a persona must keep at least one owner",
+  );
+});
+
+test("a search answered after the query changed shows nothing for the old query", async () => {
+  const { main } = await openPersonaPage("Ada");
+  button(main, "Add people").click();
+  await settle();
+  holdDirectory = true;
+  const input = searchFor(main, "b");
+  await settle();
+  input.value = "zz";
+  input.dispatchEvent(new window.Event("input"));
+  holdDirectory = false;
+  releaseDirectory();
+  await settle();
+  assert.deepEqual(resultNames(main), []);
+});
+
+test("opening Add people keeps an unsaved icon change, and Save sends it", async () => {
+  const { main } = await openPersonaPage("Ada");
+  main.querySelector<HTMLButtonElement>('button[aria-label="Choose an icon"]')!.click();
+  await settle();
+  document.querySelector<HTMLButtonElement>(".project-icon-picker-remove")!.click();
+  await settle();
+  button(main, "Add people").click();
+  await settle();
+  calls = [];
+  main
+    .querySelector<HTMLFormElement>("form.persona-form")!
+    .dispatchEvent(new window.Event("submit", { cancelable: true }));
+  await settle();
+  assert.equal(calls.find((c) => c.method === "PATCH")?.body?.icon, null);
 });
 
 test("the only owner's row says why it can't be demoted or removed, and nothing is sent", async () => {

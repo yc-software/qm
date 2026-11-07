@@ -594,6 +594,7 @@ function personaFactsTpl(persona: PersonaDetail, reload: (flash: string) => void
         setPersonaList([...personasState.list.filter((p) => p.id !== view.id), view]);
         reload(flash);
       },
+      failed: showActionError,
     })}
   `;
 }
@@ -617,6 +618,7 @@ async function saveAccess(
 ): Promise<boolean> {
   if (busyId) return false;
   busyId = persona.id;
+  actionError = "";
   clearTimeout(pickerTimer);
   pickerSeq++;
   if (picker) picker.searching = false;
@@ -631,8 +633,7 @@ async function saveAccess(
     return true;
   } catch (e) {
     busyId = null;
-    redrawDetail();
-    canvasToast(errMessage(e, "Couldn't save access."));
+    showActionError(errMessage(e, "Couldn't save access."));
     return false;
   }
 }
@@ -681,7 +682,7 @@ async function detachCredential(
     });
     reload(`Detached ${credential.service}.`);
   } catch (e) {
-    canvasToast(errMessage(e, "Couldn't detach that credential."));
+    showActionError(errMessage(e, "Couldn't detach that credential."));
   }
 }
 
@@ -790,6 +791,12 @@ let picker: GranteePicker | null = null;
 let pickerSeq = 0;
 let pickerTimer: ReturnType<typeof setTimeout> | undefined;
 let redrawDetail: () => void = () => {};
+let actionError = "";
+
+function showActionError(message: string): void {
+  actionError = message;
+  redrawDetail();
+}
 
 function resetPicker(): void {
   clearTimeout(pickerTimer);
@@ -804,7 +811,9 @@ function focusPicker(): void {
 async function openGranteePicker(personaId: string, kind: PickerKind): Promise<void> {
   resetPicker();
   picker = { personaId, kind, query: "", people: [], channels: [], searching: false, searched: false, error: "" };
-  await openPersona(personaId);
+  const shown = appState.mainEl?.firstElementChild;
+  if (shown instanceof HTMLElement && shown.dataset.persona === personaId) redrawDetail();
+  else await openPersona(personaId);
   focusPicker();
 }
 
@@ -867,6 +876,7 @@ function granteePickerTpl(persona: PersonaDetail, kind: PickerKind): TemplateRes
         @input=${(e: Event) => {
           current.query = (e.currentTarget as HTMLInputElement).value;
           clearTimeout(pickerTimer);
+          pickerSeq++;
           pickerTimer = setTimeout(() => void searchGrantees(), 200);
         }}
       />
@@ -1030,6 +1040,7 @@ function showPersonaDetail(persona: PersonaDetail, flash: string): void {
   const host = paneHost(persona.id);
   if (!host) return;
   syncPersonaUrl(persona.id);
+  actionError = "";
   const state: FormState = { icon: persona.icon ?? null, iconChanged: false, error: "", saving: false };
   const editable = canEditPersona(persona.role);
   const draw = () =>
@@ -1049,6 +1060,7 @@ function showPersonaDetail(persona: PersonaDetail, flash: string): void {
           Your role: ${ROLE_LABELS[persona.role]}${persona.version ? ` · version ${persona.version}` : ""}
         </div>
         ${flash ? html`<div class="action-notice" role="status">${flash}</div>` : nothing}
+        ${actionError ? html`<div class="form-error persona-action-error" role="alert">${actionError}</div>` : nothing}
         ${
           editable
             ? personaFormTpl(persona, state, draw)
