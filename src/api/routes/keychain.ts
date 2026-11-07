@@ -407,5 +407,11 @@ export const keychainRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/keychain/grants/:id/revoke", actor: "system", auth: "either", handle: revokeGrant },
   { method: "POST", path: "/v1/keychain/asks", actor: "system", auth: "either", handle: createAsk },
   { method: "GET", path: "/v1/keychain/asks", auth: "either", handle: listAsks },
-  { method: "POST", path: "/v1/keychain/approvals/:id", auth: "source", handle: handleApproval },
+  {
+    method: "POST",
+    path: "/v1/keychain/approvals/:id",
+    actor: "body.principalId",
+    auth: "source",
+    handle: handleApproval,
+  },
 ];

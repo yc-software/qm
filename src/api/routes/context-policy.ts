@@ -92,5 +92,5 @@ export async function setContextPolicy(ctx: ApiCtx): Promise<void> {
 
 export const contextPolicyRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/contexts/policy", actor: "query.principalId", auth: "source", handle: getContextPolicy },
-  { method: "PUT", path: "/v1/contexts/policy", auth: "source", handle: setContextPolicy },
+  { method: "PUT", path: "/v1/contexts/policy", actor: "body.principalId", auth: "source", handle: setContextPolicy },
 ];

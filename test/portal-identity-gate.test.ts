@@ -358,6 +358,67 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
     assert.equal(pendingBody.pending, null);
   });
 
+  it("binds the caller-named principalId of every person-scoped route to the portal actor", async () => {
+    const alice = await token("U1");
+    const mismatch = "portal identity does not match the requested actor";
+    const call = async (method: string, path: string, body: Record<string, unknown> | undefined, identity?: string) => {
+      const response = await fetch(`${base}${path}`, {
+        method,
+        headers: { "content-type": "application/json", ...(identity ? { "x-portal-identity": identity } : {}) },
+        ...(body ? { body: JSON.stringify(body) } : {}),
+      });
+      const text = await response.text();
+      return { status: response.status, gated: response.status === 401 || text.includes(mismatch) };
+    };
+    const queryRoutes: [string, string][] = [
+      ["GET", "/v1/ui-state?key=sidebar"],
+      ["GET", "/v1/directory/channels?q=gen"],
+      ["GET", "/v1/runtime-config?scopeId=personal:U1"],
+      ["GET", "/v1/channel-header-pin?scopeId=personal:U1"],
+      ["GET", "/v1/ui/canvases/s1"],
+      ["POST", "/v1/webhooks/w1/enable"],
+      ["POST", "/v1/loops/l1/triage/preview"],
+      ["GET", "/v1/deployments/d1"],
+    ];
+    for (const [method, path] of queryRoutes) {
+      const sep = path.includes("?") ? "&" : "?";
+      const body = method === "GET" ? undefined : {};
+      assert.equal((await call(method, `${path}${sep}principalId=U1`, body)).status, 401, `${path} without identity`);
+      const other = await call(method, `${path}${sep}principalId=U2`, body, alice);
+      assert.equal(other.status, 403, `${path} naming another principal`);
+      const missing = await call(method, path, body, alice);
+      assert.equal(missing.status, 403, `${path} without principalId`);
+      const mine = await call(method, `${path}${sep}principalId=U1`, body, alice);
+      assert.equal(mine.gated, false, `${path} as myself should reach the handler`);
+    }
+    const bodyRoutes: [string, string, Record<string, unknown>][] = [
+      ["PUT", "/v1/ui-state", { key: "sidebar", value: 1 }],
+      ["PUT", "/v1/contexts/policy", { scope: "channel:C1", orders: "" }],
+      ["PATCH", "/v1/projects/p1", { name: "renamed" }],
+      ["PUT", "/v1/projects/p1/slack-channel", { channel: "C1" }],
+      ["DELETE", "/v1/projects/p1/slack-channel", {}],
+      ["PUT", "/v1/runtime-config", { scopeId: "personal:U1", inherit: true }],
+      ["PUT", "/v1/channel-header-pin", { scopeId: "personal:U1", on: true }],
+      ["POST", "/v1/ui/canvases/s1", { pinned: true }],
+      ["POST", "/v1/ui/observe/c1/result", { snapshot: {} }],
+      ["POST", "/v1/suggested-activities", {}],
+      ["POST", "/v1/suggested-activities/dismiss", { id: "a1" }],
+      ["POST", "/v1/keychain/approvals/k1", { decision: "deny" }],
+    ];
+    for (const [method, path, body] of bodyRoutes) {
+      assert.equal((await call(method, path, { ...body, principalId: "U1" })).status, 401, `${path} without identity`);
+      const other = await call(method, path, { ...body, principalId: "U2" }, alice);
+      assert.equal(other.status, 403, `${method} ${path} naming another principal`);
+      assert.equal((await call(method, path, body, alice)).status, 403, `${method} ${path} without principalId`);
+      const mine = await call(method, path, { ...body, principalId: "U1" }, alice);
+      assert.equal(mine.gated, false, `${method} ${path} as myself should reach the handler`);
+    }
+    for (const path of ["/v1/custom-emoji", "/v1/suggested-activities"]) {
+      assert.equal((await call("GET", path, undefined)).status, 401, `${path} without identity`);
+      assert.equal((await call("GET", path, undefined, alice)).gated, false, `${path} with identity`);
+    }
+  });
+
   it("a web turn whose body actor doesn't match the portal identity is rejected", async () => {
     const r = await post(
       "/v1/turns",

@@ -205,7 +205,7 @@ async function channelMembership(ctx: ApiCtx): Promise<void> {
 export const directoryRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/principals/:id/canonical", auth: "source", handle: canonicalPrincipal },
   { method: "GET", path: "/v1/directory/meta", auth: "source", handle: directoryMeta },
-  { method: "GET", path: "/v1/directory/channels", auth: "source", handle: channelsFor },
+  { method: "GET", path: "/v1/directory/channels", actor: "query.principalId", auth: "source", handle: channelsFor },
   {
     method: "GET",
     path: "/v1/directory/channels/:channelId/members/:principalId",

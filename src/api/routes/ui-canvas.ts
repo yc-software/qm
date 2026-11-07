@@ -283,10 +283,17 @@ export const uiCanvasRoutes: ReadonlyArray<Route<ApiCtx>> = [
   {
     method: "POST",
     path: "/v1/ui/observe/:callId/result",
+    actor: "body.principalId",
     auth: "source",
     maxBodyBytes: 2_000_000,
     handle: observeResult,
   },
-  { method: "GET", path: "/v1/ui/canvases/:sessionId", auth: "source", handle: userCanvasContent },
-  { method: "POST", path: "/v1/ui/canvases/:sessionId", auth: "source", handle: userCanvas },
+  {
+    method: "GET",
+    path: "/v1/ui/canvases/:sessionId",
+    actor: "query.principalId",
+    auth: "source",
+    handle: userCanvasContent,
+  },
+  { method: "POST", path: "/v1/ui/canvases/:sessionId", actor: "body.principalId", auth: "source", handle: userCanvas },
 ];

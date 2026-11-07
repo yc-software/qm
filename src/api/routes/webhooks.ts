@@ -210,5 +210,11 @@ export const webhookRoutes: ReadonlyArray<Route<ApiCtx>> = [
     auth: "either",
     handle: disableWebhook,
   },
-  { method: "POST", path: "/v1/webhooks/:id/enable", auth: "either", handle: enableWebhook },
+  {
+    method: "POST",
+    path: "/v1/webhooks/:id/enable",
+    actor: "query.principalId",
+    auth: "either",
+    handle: enableWebhook,
+  },
 ];
