@@ -87,8 +87,7 @@ platform recycles.
 - **Data belongs to one deployment.** Each deployment has its own `$DATA_DIR`. Update
   the deployment people actually use, the one behind the link they open
   (`GET /v1/deployments` lists names and URLs), not a name guessed from the directory.
-  Publishing the same source under a second name starts a separate app with empty data,
-  and anyone sent that link sees an empty app.
+  Publishing the same source under a second name starts a separate app with empty data.
 - **Before saying data is lost, look.** Read it from the live app
   (`GET /v1/deployments/:id/fetch`) and check the other deployments built from the same
   source. An app that looks empty is usually a different deployment, not a wipe.
