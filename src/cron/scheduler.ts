@@ -176,8 +176,8 @@ function renderCronFireInput(
     "Use a cron-specific filename. Never put credentials in published state. If publication is unavailable, report that limitation and retain needed workspace state on a scoped computer. Do not move tasks that require existing workspace files to scratch without migrating and verifying their state.",
     `The retained fire log (cron tool, action="runs", id="${cron.id}") shows how prior fires went — useful when this run hits errors or surprising state.`,
     "If the task produces a briefing someone reads at a set time — a digest, summary, standup, rundown or follow-up list — post it even on a quiet run, as one line saying nothing is new. A task that checks for something and reports only when it finds it, or does upkeep, ends with finish_silently. The task's own posting rules win.",
-    "Report what you verified, not what you started: work launched in this fire and still running is not progress yet. Counts that haven't moved since the last fire are a blocker to report, not a reason to stay silent.",
-    "Report a failure or blocker once per outage, not on every fire, unless the task asks for repeats: if your notes or the fire log show an earlier fire already reported it, leave it out of anything you post (finish silently if that was all) and note that it persists. When it clears, say so in one line.",
+    "Report what you verified, not what you started: work launched in this fire and still running is not progress yet. Counts that haven't moved since the last fire are a blocker: report it once rather than staying silent.",
+    "Report a failure or blocker once per outage, not on every fire, even if the task says to report failures (unless it asks to repeat them): say in your note that you reported it, and while your notes or the fire log show it was already reported, leave it out of what you post (finish silently if that was all). When it clears, say so in one line.",
     ...(readsNotes ? fireNoteLine(cron.lastFireNote) : []),
     ...(readsNotes
       ? [
