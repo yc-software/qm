@@ -313,6 +313,8 @@ test("a signed-in browser starts OAuth for itself with this server's callback an
       ["/s/chat?layout=single", "/s/chat?layout=single&connector=google&status=connected"],
       ["https://evil.example/keychain", "/keychain?connector=google&status=connected"],
       ["//evil.example/keychain", "/keychain?connector=google&status=connected"],
+      ["/.//evil.example/keychain", "/keychain?connector=google&status=connected"],
+      ["/a/..//evil.example", "/keychain?connector=google&status=connected"],
       ["/\\evil.example", "/keychain?connector=google&status=connected"],
     ]) {
       const started = await browserStart({ returnTo, principalId: "U1" });

@@ -81,9 +81,9 @@ function parseOAuthRoute(pathname: string): { provider: string; action: "start" 
 }
 
 function safeReturnTo(value: unknown): string | undefined {
-  if (typeof value !== "string" || !value.startsWith("/") || value.startsWith("//") || value.includes("\\"))
-    return undefined;
-  return value;
+  if (typeof value !== "string" || !value.startsWith("/")) return undefined;
+  const url = new URL(value, "http://x");
+  return url.host === "x" && !url.pathname.startsWith("//") ? value : undefined;
 }
 
 function latestRefreshFailure(
