@@ -68,6 +68,17 @@ for (let pass = 0; pending.length && pass < 6; pass++) {
 
 await client.query("COMMIT");
 await client.end();
+const filled = { generated: [], identity: [], default: [] };
+for (const column of columns) {
+  const name = `${column.table_name}.${column.column_name}`;
+  if (column.is_generated === "ALWAYS") filled.generated.push(name);
+  else if (column.is_identity === "YES") filled.identity.push(name);
+  else if (column.column_default) filled.default.push(`${name} = ${column.column_default}`);
+}
+for (const [kind, names] of Object.entries(filled))
+  console.log(
+    `[upgrade-check] ${names.length} ${kind} columns left to Postgres${names.length ? `: ${names.join(", ")}` : ""}`,
+  );
 const preexisting = tables.size - seeded.length - failures.size;
 console.log(
   `[upgrade-check] ${tables.size} tables: ${seeded.length} seeded, ${preexisting} already had rows, ${failures.size} left empty`,
