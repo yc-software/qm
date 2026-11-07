@@ -148,7 +148,13 @@ test("PRIVATE_NETWORK_ALLOWED_ORIGINS parses to normalized exact origins", () =>
         " HTTP://GBrain.:8787 ,http://gbrain:8787,https://brain.example-tailnet.ts.net:443/,http://10.0.12.7:80,,http://[FDAA:0:1::3]:8080",
       ),
     ],
-    ["http://gbrain:8787", "https://brain.example-tailnet.ts.net", "http://10.0.12.7", "http://[fdaa:0:1::3]:8080"],
+    [
+      "http://gbrain.:8787",
+      "http://gbrain:8787",
+      "https://brain.example-tailnet.ts.net",
+      "http://10.0.12.7",
+      "http://[fdaa:0:1::3]:8080",
+    ],
   );
 });
 
@@ -162,7 +168,7 @@ test("PRIVATE_NETWORK_ALLOWED_ORIGINS refuses a bad entry by position and origin
       "http://localhost:8787",
       /entry 2 \(http:\/\/localhost:8787\) is a loopback, link-local or cloud metadata address/,
     ],
-    ["http://localhost.:8787", /entry 2 \(http:\/\/localhost:8787\) is a loopback/],
+    ["http://localhost.:8787", /entry 2 \(http:\/\/localhost\.:8787\) is a loopback/],
     ["http://127.1:8787", /entry 2 \(http:\/\/127\.0\.0\.1:8787\) is a loopback/],
     ["http://[fd7a:115c:a1e0::53]", /entry 2 \(http:\/\/\[fd7a:115c:a1e0::53\]\) is a loopback/],
   ] as const) {

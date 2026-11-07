@@ -115,7 +115,6 @@ export function parsePrivateNetworkOrigins(raw: string | undefined): ReadonlySet
       );
     if (url.username || url.password)
       throw new Error(`${at} (${url.origin}) carries credentials; remove them, since the list holds origins only`);
-    if (url.hostname.endsWith(".")) url.hostname = url.hostname.slice(0, -1);
     if (url.href !== `${url.origin}/`)
       throw new Error(`${at} (${url.origin}) has a path, query or fragment; list the origin alone, as ${url.origin}`);
     if (isNeverAllowedHost(url.hostname))
