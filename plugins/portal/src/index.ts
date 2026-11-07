@@ -118,9 +118,11 @@ const SESSION_TTL_S = Number(process.env.PORTAL_SESSION_TTL_S ?? 604800);
 const SESSION_MAX_TTL_S = Number(process.env.PORTAL_SESSION_MAX_TTL_S ?? Math.max(2592000, SESSION_TTL_S));
 const SESSION_RENEW_AFTER_S = Math.floor(SESSION_TTL_S / 2);
 const APPS_DOMAIN = process.env.PORTAL_APPS_DOMAIN || process.env.DEPLOY_APPS_DOMAIN || undefined;
-const COOKIE_DOMAIN =
-  process.env.PORTAL_COOKIE_DOMAIN ||
-  (APPS_DOMAIN ? derivedCookieDomain(hostOf(process.env.PUBLIC_WEB_URL ?? ""), APPS_DOMAIN) : undefined);
+const COOKIE_DOMAIN = process.env.PORTAL_COOKIE_DOMAIN || undefined;
+const STALE_COOKIE_DOMAIN =
+  !COOKIE_DOMAIN && APPS_DOMAIN
+    ? derivedCookieDomain(hostOf(process.env.PUBLIC_WEB_URL ?? ""), APPS_DOMAIN)
+    : undefined;
 const IS_PROD = process.env.NODE_ENV === "production";
 const SECURE_COOKIES = PUBLIC_URL.startsWith("https://");
 const ORIGIN = (() => {
@@ -264,7 +266,7 @@ const appHandoff = createAppHandoff({
   handoffKey: deriveKey(SESSION_SECRET ?? DEV_SECRET, "portal.handoff.v1"),
   claim: (jti) => claimTrusted(`handoff:${jti}`, Date.now() + 120_000),
   session: (req) => currentSession(req),
-  signOut: (res) => setSession(res, signedOutCookies(SECURE_COOKIES, COOKIE_DOMAIN)),
+  signOut: (res) => setSession(res, signedOutCookies(SECURE_COOKIES, COOKIE_DOMAIN, STALE_COOKIE_DOMAIN)),
   signInApp: (res, who) => setAuthenticatedSession(res, who.sub, who.name, false, who.t, false),
   page: (res, status, html) => sendHtml(res, status, html),
   errorHtml: (detail) => signInErrorHtml(detail),
@@ -677,7 +679,7 @@ function sessionCookieSet(value: string, sub: string, domainWide = true): string
     secure: SECURE_COOKIES,
     ...(COOKIE_DOMAIN && domainWide ? { domain: COOKIE_DOMAIN } : {}),
   };
-  return [...sessionCookieHeaders(value, attrs), ...loginProviderCookie(sub)];
+  return [...sessionCookieHeaders(value, attrs, STALE_COOKIE_DOMAIN), ...loginProviderCookie(sub)];
 }
 
 function setSession(res: ServerResponse, headers: string[]): void {
@@ -884,7 +886,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     const redirectTo = !AUTH_BROKER_UPSTREAM && signedOutSession && !signedOutSession.anon ? "/auth/signed-out" : "/";
     setSession(res, [
       ...(signedOutSession ? loginProviderCookie(signedOutSession.sub) : []),
-      ...signedOutCookies(SECURE_COOKIES, COOKIE_DOMAIN),
+      ...signedOutCookies(SECURE_COOKIES, COOKIE_DOMAIN, STALE_COOKIE_DOMAIN),
       clearCookie("portal_oidc_tmp", "/auth", SECURE_COOKIES),
       ...(AUTH_BROKER_UPSTREAM ? [clearCookie("qm_idp_session", AUTH_BROKER_PREFIX, true)] : []),
       ...(LOCAL_AUTH_BYPASS && isLoopbackAddress(req.socket.remoteAddress)
@@ -924,7 +926,8 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     const canonical = await canonicalPrincipal(session.sub, session.t);
     if (canonical instanceof IdentityRejected) {
       console.warn(`[portal] core no longer recognises this session; signing it out: ${canonical.message}`);
-      for (const cookie of signedOutCookies(SECURE_COOKIES, COOKIE_DOMAIN)) res.appendHeader("set-cookie", cookie);
+      for (const cookie of signedOutCookies(SECURE_COOKIES, COOKIE_DOMAIN, STALE_COOKIE_DOMAIN))
+        res.appendHeader("set-cookie", cookie);
       req.headers.cookie = withoutCookies(req.headers.cookie, new Set(["portal_session", "portal_impersonate"]));
       session = null;
     } else if (!canonical) return identityUnavailable(req, res);
