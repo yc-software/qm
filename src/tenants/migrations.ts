@@ -20,6 +20,18 @@ END $qm_bound_tenant$`,
   ],
 };
 
+const LEGACY_TENANT: PgMigrationDefinition = {
+  id: "0000-tenancy/legacy-tenant",
+  statements: [
+    `DO $legacy_tenant$
+BEGIN
+  IF to_regclass('qm_tenant') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM tenants) THEN
+    INSERT INTO tenants(id) SELECT id FROM qm_tenant;
+  END IF;
+END $legacy_tenant$`,
+  ],
+};
+
 const TENANT_SETTINGS: PgMigrationDefinition = {
   id: "0000-tenancy/settings",
   statements: [
@@ -61,6 +73,7 @@ const DROP_TENANT_HOSTS: PgMigrationDefinition = {
 
 export const TENANCY: readonly PgMigrationDefinition[] = [
   TENANCY_BASE,
+  LEGACY_TENANT,
   TENANT_SETTINGS,
   TENANT_ROW_SECURITY,
   BOOT_TENANT,
