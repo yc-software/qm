@@ -73,8 +73,10 @@ test("each aliased path answers a cookie-only browser exactly as its /v1 route d
     assert.ok(viaAlias.status < 500 && ![401, 403].includes(viaAlias.status), `${path} answered ${viaAlias.status}`);
     assert.equal(viaAlias.status, direct.status, path);
     assert.deepEqual(await viaAlias.json(), await direct.json(), path);
-    const other = await fetch(`${base}${concrete(path)}?${query}&principalId=bob&viewer=bob`, { headers: { cookie } });
-    assert.equal(other.status, 403, `${path} let alice name bob`);
+    const actor = findRoute(apiRoutes, "GET", concrete(target))?.route.actor ?? "";
+    const field = actor.startsWith("query.") ? actor.slice("query.".length) : "principalId";
+    const other = await fetch(`${base}${concrete(path)}?${query}&${field}=bob`, { headers: { cookie } });
+    assert.equal(other.status, 403, `${path} let alice name bob as ${field}`);
     const anonymous = await fetch(`${base}${concrete(path)}?${query}`);
     assert.equal(anonymous.status, 401, `${path} answered without a cookie`);
   }

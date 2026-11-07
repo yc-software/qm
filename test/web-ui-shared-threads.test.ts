@@ -112,10 +112,13 @@ test("a channel member can continue a teammate's shared web thread; outsiders an
   const session = await waitForSession("alice", "web:alice:s1");
   assert.equal(session.scopeId, "channel:C2");
   const transcript = `${coreBase}/api/sessions/${encodeURIComponent(session.id)}?tailTurns=1`;
-  const aliceRead = await fetch(transcript, asUser("alice"));
+  const cookieOnly = (user: string, query = "") =>
+    fetch(`${transcript}${query}`, { headers: { cookie: browserSessionCookie(user) } });
+  const aliceRead = await cookieOnly("alice");
   assert.equal(aliceRead.status, 200);
   assert.ok(Array.isArray(((await aliceRead.json()) as { items?: unknown }).items));
-  assert.equal((await fetch(transcript, asUser("mallory"))).status, 404);
+  assert.equal((await cookieOnly("mallory")).status, 404);
+  assert.equal((await cookieOnly("alice", "&viewer=mallory")).status, 403);
 
   const bobTurn = await fetch(
     `${webBase}/api/turn`,

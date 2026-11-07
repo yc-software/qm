@@ -332,7 +332,7 @@ async function cronRuns(ctx: ApiCtx): Promise<void> {
   }
   const cron = await gateSourceCron(ctx, id);
   if (!cron) return;
-  if (!Number.isInteger(limit) || limit < 1) {
+  if (!Number.isSafeInteger(limit) || limit < 1) {
     return sendJson(res, 400, { error: "bad_request", message: "limit must be a positive integer" });
   }
   const { runs, total } = await app.listCronFires(id, { limit });

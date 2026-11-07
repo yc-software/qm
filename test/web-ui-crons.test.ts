@@ -169,6 +169,8 @@ test("retained cron runs are private to people who can manage the cron", async (
     await fetch(`${coreBase}/api/crons/${cron.id}/runs?limit=50`, asUser("run-owner"))
   ).json()) as Runs;
   assert.equal(all.runs.length, 21);
+  const huge = await fetch(`${coreBase}/api/crons/${cron.id}/runs?limit=99999999999999999999`, asUser("run-owner"));
+  assert.equal(huge.status, 400);
   assert.equal((await fetch(`${coreBase}/api/crons/${cron.id}/runs`, asUser("other-user"))).status, 404);
 
   await built.app.deleteCron(cron.id);
