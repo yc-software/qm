@@ -1,3 +1,4 @@
+import { MIMEType } from "node:util";
 import { likeContains } from "../persistence/like.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import type { ScopeId } from "../types.ts";
@@ -44,7 +45,11 @@ const SCHEMA = [
 ];
 
 function storedMimetype(mimetype: string): string {
-  return /^[\x20-\x2b\x2d-\x7e]+$/.test(mimetype) ? mimetype : "application/octet-stream";
+  try {
+    return new MIMEType(mimetype).toString();
+  } catch {
+    return "application/octet-stream";
+  }
 }
 
 function rowToArtifact(r: Record<string, unknown>): FileArtifact {
@@ -77,12 +82,6 @@ export function createPostgresFileArtifactStore(
       id: "files/artifacts/0002",
       statements: [
         "CREATE TABLE IF NOT EXISTS file_artifact_deletions(id TEXT PRIMARY KEY, deleted_at BIGINT NOT NULL)",
-      ],
-    },
-    {
-      id: "files/artifacts/0003",
-      statements: [
-        "UPDATE file_artifacts SET mimetype = 'application/octet-stream' WHERE mimetype !~ '^[\\x20-\\x2b\\x2d-\\x7e]+$'",
       ],
     },
   ]);
