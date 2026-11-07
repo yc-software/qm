@@ -2,6 +2,7 @@ import { fromJSONSchema, z, ZodObject } from "zod";
 import type { ClientToolDeclaration, SurfaceBriefing, TurnOrigin, TurnRequest } from "../../types.ts";
 import { promptText } from "../../util/text.ts";
 import { samePerson } from "../../directory/person.ts";
+import { isTerminal } from "../../runs/run-store.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import { isClientSurface } from "../../../plugins/chassis/src/client-surface.ts";
@@ -283,12 +284,8 @@ async function getActiveRunForThread(ctx: ApiCtx): Promise<void> {
   if (!threadRef) return sendJson(res, 400, { error: "bad_request", message: "threadRef required" });
   const active = await app.activeRunForThread(threadRef, actor?.p);
   const run = active && (await app.getRun(active.runId, actor?.p));
-  const live = run && run.status !== "done" && run.status !== "failed" ? run : null;
-  return sendJson(res, 200, {
-    runId: live && active ? active.runId : null,
-    run: live,
-    ...(active?.queued ? { queued: active.queued } : {}),
-  });
+  const live = active && run && !isTerminal(run.status) ? { runId: active.runId, run } : { runId: null, run: null };
+  return sendJson(res, 200, { ...live, ...(active?.queued ? { queued: active.queued } : {}) });
 }
 
 async function patchQueuedRun(ctx: ApiCtx): Promise<void> {
