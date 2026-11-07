@@ -2,7 +2,7 @@ import { html, type TemplateResult } from "lit";
 import { ArrowUpRight, Check } from "lucide";
 import { icon } from "./icons";
 import { connectorLogo } from "./connector-logo";
-import { CONNECTOR_LABELS, connectorService, type ConnectorLink } from "./connector-link";
+import { connectorName, connectorService, type ConnectorLink } from "./connector-link";
 
 export function connectorCard(
   link: ConnectorLink,
@@ -10,7 +10,7 @@ export function connectorCard(
   withReturnTo: (url: string) => string = (url) => url,
 ): TemplateResult {
   const composio = link.provider === "composio";
-  const name = CONNECTOR_LABELS[link.provider]?.name ?? "your account";
+  const name = composio ? "your account" : connectorName(link.provider);
   const service = connectorService(link);
   if (!composio && connected) {
     return html`<div class="connector-widget connected" role="status">

@@ -149,7 +149,14 @@ import {
 } from "./timeline";
 import { activityItems, retractedReason, type Item } from "./items";
 import "./slack-setup";
-import { connectorLinksIn, stripConnectorLinks, type ConnectorLink } from "./connector-link";
+import {
+  connectorLinksIn,
+  connectorsRevision,
+  rememberConnectors,
+  stripConnectorLinks,
+  type ConnectorInfo,
+  type ConnectorLink,
+} from "./connector-link";
 import { deepLinkPath, sessionLink, UI_BASE } from "./deep-link";
 import type { ChatSurface, ConvCtx } from "./conv-types";
 import { errMessage, swallow } from "../../chassis/src/errors";
@@ -247,6 +254,7 @@ interface SettledRowKey {
   speakerLabel: string | undefined;
   edited: boolean;
   deleted: boolean;
+  connectorsRevision: number;
   tpl: TemplateResult | typeof nothing;
 }
 const settledRowCache = new WeakMap<object, SettledRowKey>();
@@ -272,6 +280,17 @@ function nextChatCta(): string {
 }
 const connectedConnectors = new Set<string>();
 const redrawHooks = new Set<() => void>();
+let connectorCatalogLoad: Promise<void> | null = null;
+
+function loadConnectorCatalog(): void {
+  connectorCatalogLoad ??= api<{ providers?: Record<string, ConnectorInfo> }>("/api/connectors").then(
+    (value) => {
+      rememberConnectors(value.providers ?? {});
+      for (const hook of redrawHooks) hook();
+    },
+    (error) => reportHandledError("web:connector_catalog", error),
+  );
+}
 let proactiveOpenerStarted = false;
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -1992,7 +2011,8 @@ export function createChatSurface(
       hit.forking === forking &&
       hit.speakerLabel === speakerLabel &&
       hit.edited === edited &&
-      hit.deleted === deleted
+      hit.deleted === deleted &&
+      hit.connectorsRevision === connectorsRevision()
     ) {
       return hit.tpl;
     }
@@ -2013,6 +2033,7 @@ export function createChatSurface(
       speakerLabel,
       edited,
       deleted,
+      connectorsRevision: connectorsRevision(),
       tpl,
     });
     return tpl;
@@ -2339,6 +2360,7 @@ export function createChatSurface(
 
   function connectorWidget(link: ConnectorLink): TemplateResult {
     if (link.provider === "slack-bot") return html`<qm-slack-setup></qm-slack-setup>`;
+    loadConnectorCatalog();
     return connectorCard(link, connectedConnectors.has(link.provider), withReturnTo);
   }
 

@@ -44,16 +44,14 @@ test("the legacy /v1 consent link is still detected and stripped during the migr
   assert.equal(links[0]!.url, LEGACY_URL);
 });
 
-test("branded consent cards require the trusted origin and a known provider", () => {
+test("branded consent cards require the trusted origin and a provider id", () => {
   assert.equal(
     connectorLinksIn("https://evil.example/connect/redeem/x?p=google", "https://agent.example.com").length,
     0,
   );
-  assert.equal(
-    connectorLinksIn("https://agent.example.com/connect/redeem/x?p=unknown", "https://agent.example.com").length,
-    0,
-  );
+  assert.equal(connectorLinksIn("https://agent.example.com/connect/redeem/x", "https://agent.example.com").length, 0);
   assert.equal(connectorLinksIn(URL, "https://agent.example.com").length, 1);
+  assert.deepEqual(connectorLinksIn("https://agent.example.com/connect/redeem/x?p=Acme%20CRM"), []);
 });
 
 test("surrounding prose is preserved", () => {
@@ -122,7 +120,7 @@ test("stripping removes only links actually rendered as cards", () => {
 });
 
 test("stripping a card does not remove the prefix of an unrecognized URL", () => {
-  const other = `${URL}unknown`;
+  const other = `${URL}/unknown`;
   const text = `${URL}\n${other}`;
   assert.equal(stripConnectorLinks(text, connectorLinksIn(text, "https://agent.example.com")), other);
 });

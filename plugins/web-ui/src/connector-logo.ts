@@ -27,7 +27,7 @@ const CONNECTOR_LOGOS: Record<string, string> = {
 };
 
 export function connectorLogo(id: string, logoUrl?: string): TemplateResult {
-  const path = CONNECTOR_LOGOS[id];
+  const path = Object.hasOwn(CONNECTOR_LOGOS, id) ? CONNECTOR_LOGOS[id] : undefined;
   if (!path && logoUrl && /^https:\/\/logos\.composio\.dev\/api\/[a-z0-9_-]{1,100}$/.test(logoUrl)) {
     return html`<span class="connector-logo connector-logo-remote" aria-hidden="true"
       >${icon(Plug, 18)}<img
