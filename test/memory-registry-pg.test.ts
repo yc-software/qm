@@ -432,7 +432,6 @@ test("org-admin routes: admins only, secrets write-only, env providers read-only
     JSON.parse((await api.call("GET", "/v1/admin/memory-registry", "admin-alice@default-org")).text).memberBrains,
     false,
   );
-  await new Promise((resolve) => setTimeout(resolve, 50));
   const rows = JSON.stringify(await built.auditLog.events());
   assert.match(rows, /memory-registry\.brain\.update/);
   assert.match(rows, /memory-registry\.binding\.delete/);
