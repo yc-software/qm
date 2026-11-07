@@ -296,6 +296,7 @@ test("Modal creates sandboxes with a real reservation, an idle backstop, tags an
     idleTimeoutMs: 6 * 3600_000 + 1000,
     cpu: 4,
     memoryMiB: 8192,
+    memoryLimitMiB: 8192,
     regions: ["us-west-2"],
     outboundDomainAllowlist: ["egress.example.com"],
   });

@@ -778,8 +778,13 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
           if (!(error instanceof ModalSandboxGoneError)) throw error;
         }
         if (session) {
-          if (!stored.hydrationPending) await snapshotHome(scopeId, session);
-          await session.terminate();
+          if (!stored.hydrationPending)
+            await snapshotHome(scopeId, session).catch((error: unknown) => {
+              if (!(error instanceof ModalSandboxGoneError)) throw error;
+            });
+          await session.terminate().catch((error: unknown) => {
+            if (!(error instanceof ModalSandboxGoneError)) throw error;
+          });
         }
         sessionByName.delete(name);
         await store.merge(scopeId, { hydrationPending: false, recoveryError: undefined });

@@ -246,6 +246,7 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
           idleTimeoutMs,
           cpu: opts.cpus ?? DEFAULT_CPUS,
           memoryMiB: createOpts.memoryGb ? createOpts.memoryGb * 1024 : DEFAULT_MEMORY_MB,
+          ...(createOpts.memoryGb ? { memoryLimitMiB: createOpts.memoryGb * 1024 } : {}),
           ...(opts.regions?.length ? { regions: opts.regions } : {}),
           ...network,
         });
