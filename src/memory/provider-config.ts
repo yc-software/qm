@@ -1,6 +1,7 @@
 import { parseScopeId, type ScopeId, type ScopeKind } from "../types.ts";
 import type { MemoryCapturePolicy, MemoryProviderRoute } from "./provider-router.ts";
 import { parseMemorableProvider, type MemorableMemoryProviderConfig } from "./memorable/config.ts";
+import { trimTrailingSlashes } from "../util/text.ts";
 
 const KINDS = new Set<ScopeKind>(["personal", "channel", "team", "org", "group"]);
 const ID = /^[a-z][a-z0-9-]{0,62}$/;
@@ -90,7 +91,7 @@ function privateMcpUrl(value: unknown, at: string): string {
     throw new Error(`${at} (${shown}) must not carry credentials or a #fragment. ${URL_HELP}`);
   if (url.protocol !== "https:" && !privateHttp)
     throw new Error(`${at} (${shown}) must use HTTPS or a recognized private HTTP host. ${URL_HELP}`);
-  return raw.replace(/\/+$/, "");
+  return trimTrailingSlashes(raw);
 }
 
 function operation(value: unknown, at: string, env: NodeJS.ProcessEnv): McpMemoryOperationConfig {
