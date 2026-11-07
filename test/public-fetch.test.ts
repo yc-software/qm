@@ -164,6 +164,7 @@ test("PRIVATE_NETWORK_ALLOWED_ORIGINS refuses a bad entry by position and origin
     ],
     ["http://localhost.:8787", /entry 2 \(http:\/\/localhost:8787\) is a loopback/],
     ["http://127.1:8787", /entry 2 \(http:\/\/127\.0\.0\.1:8787\) is a loopback/],
+    ["http://[fd7a:115c:a1e0::53]", /entry 2 \(http:\/\/\[fd7a:115c:a1e0::53\]\) is a loopback/],
   ] as const) {
     let message = "";
     assert.throws(

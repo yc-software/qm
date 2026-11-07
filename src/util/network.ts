@@ -61,6 +61,7 @@ for (const [network, prefix] of [
   ["fd00:c1::a9fe:a9fe", 128],
   ["fd00:a9fe:a9fe::1", 128],
   ["fd00:42::42", 128],
+  ["fd7a:115c:a1e0::53", 128],
 ] as const)
   NEVER_ALLOWED.addSubnet(network, prefix, "ipv6");
 
