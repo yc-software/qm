@@ -12,7 +12,7 @@ import { type ApiCtx, type BaseCtx, type Route } from "./route.ts";
 import { connectorRawRoutes, connectorRoutes } from "./connectors.ts";
 import { deploymentRawRoutes, deploymentRoutes } from "./deployments.ts";
 import { deploymentSharingRoutes } from "./deployment-sharing.ts";
-import { blobRoutes } from "./blobs.ts";
+import { blobRoutes, browserUploadRoutes } from "./blobs.ts";
 import { webhookRawRoutes, webhookRoutes } from "./webhooks.ts";
 import { runEventRoutes } from "./run-events.ts";
 import { turnRoutes } from "./turns.ts";
@@ -98,6 +98,7 @@ export const rawRoutes: ReadonlyArray<Route<BaseCtx>> = [
 
 export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...browserModelRoutes,
+  ...browserUploadRoutes,
   ...sandboxModelRoutes,
   ...swarmRoutes,
   ...personaRoutes,

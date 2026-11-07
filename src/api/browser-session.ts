@@ -147,6 +147,8 @@ export const API_ALIASES: ReadonlyMap<string, string> = new Map([
   ["POST /api/webhooks", "/v1/webhooks"],
   ["POST /api/webhooks/:id/disable", "/v1/webhooks/:id/disable"],
   ["POST /api/webhooks/:id/enable", "/v1/webhooks/:id/enable"],
+  ["POST /api/blobs", "/v1/web/blobs"],
+  ["POST /api/files/upload", "/v1/files/upload"],
   ...apiRoutes.flatMap((route): Array<[string, string]> =>
     "path" in route && route.browser && route.path.startsWith("/v1/admin/")
       ? [[`${route.method} /api/admin/${route.path.slice("/v1/admin/".length)}`, route.path]]

@@ -30,6 +30,7 @@ const ADMIN_PAGES = [
   "GET /v1/admin/files",
   "GET /v1/admin/files/download",
   "GET /v1/admin/files/read",
+  "POST /v1/admin/files/upload",
   "POST /v1/admin/grants",
   "DELETE /v1/admin/grants/:principalId",
   "GET /v1/admin/keychain",
@@ -91,7 +92,6 @@ const ADMIN_PAGES = [
 
 const NOT_ADMIN_PAGES = [
   "GET /v1/admin/deliveries/shadow",
-  "POST /v1/admin/files/upload",
   "POST /v1/admin/impersonate",
   "POST /v1/admin/impersonate/stop",
   "GET /v1/admin/sandboxes/:scopeId",
