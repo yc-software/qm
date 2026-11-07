@@ -2,6 +2,7 @@ import { browserModelRoutes } from "./browser-model.ts";
 import { sandboxModelRoutes } from "./sandbox-model.ts";
 import { deploymentLiveSmokeRoutes } from "./deployment-live-smoke.ts";
 import { composioRoutes } from "./composio.ts";
+import { composioCallbackRoutes } from "./composio-callback.ts";
 import { composioTwitterMediaRoutes } from "./composio-twitter-media.ts";
 import { composioProxyRoutes } from "./composio-proxy.ts";
 import { loopIngressRoutes, loopIngressRawRoutes } from "./loop-ingress.ts";
@@ -16,6 +17,7 @@ import { turnRoutes } from "./turns.ts";
 import { webTurnRoutes } from "./web-turns.ts";
 import { webEventRoutes } from "./web-events.ts";
 import { webMeRoutes } from "./web-me.ts";
+import { voiceRoutes } from "./voice.ts";
 import { credentialRoutes } from "./credentials.ts";
 import { brokerGitHttp, GIT_HTTP_BROKER_PREFIX } from "../git-http-broker.ts";
 import { keychainRoutes } from "./keychain.ts";
@@ -104,12 +106,14 @@ export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...webTurnRoutes,
   ...webEventRoutes,
   ...webMeRoutes,
+  ...voiceRoutes,
   ...runEventRoutes,
   ...credentialRoutes,
   ...keychainRoutes,
   ...secretDropRoutes,
   ...connectorRoutes,
   ...composioRoutes,
+  ...composioCallbackRoutes,
   ...composioTwitterMediaRoutes,
   ...composioProxyRoutes,
   ...adminRoutes,

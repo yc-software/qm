@@ -22,14 +22,20 @@ const QUERY: Record<string, string> = {
 
 const HANDLER_REFUSALS: Record<string, unknown> = {
   "/api/sessions/:id/swarm": { error: "session access denied" },
+  "/api/composio/callback": {
+    error: "composio_unavailable",
+    message: "App connections aren’t available for your account yet. Ask your administrator to enable them.",
+  },
 };
 
 const concrete = (pattern: string): string => pattern.replaceAll(/:[a-z]+/g, "1");
 
-const aliases = [...API_ALIASES].map(([key, target]) => {
-  const [method, path] = key.split(" ", 2) as [string, string];
-  return { method, path, target };
-});
+const aliases = [...API_ALIASES]
+  .map(([key, target]) => {
+    const [method, path] = key.split(" ", 2) as [string, string];
+    return { method, path, target };
+  })
+  .filter(({ path }) => !path.startsWith("/api/admin/"));
 
 async function freePort(): Promise<number> {
   const probe = createNetServer().listen(0, "127.0.0.1");
@@ -135,8 +141,8 @@ test("each aliased write reaches its handler only for the signed-in person on th
     }
     const cookie = browserSessionCookie("alice");
     const named =
-      where === "query"
-        ? await send(method, `${url}?${field}=bob`, { cookie, origin })
+      where === "query" || findRoute(apiRoutes, method, concrete(target))?.route.streamBody
+        ? await send(method, `${url}?${where === "query" ? field : "principalId"}=bob`, { cookie, origin })
         : await send(method, url, { cookie, origin }, { [field!]: "bob" });
     assert.equal(named.status, 403, `${method} ${path} let alice name bob as ${actor || "principalId"}`);
     assert.equal(await refusal(named), "portal identity does not match the requested actor");

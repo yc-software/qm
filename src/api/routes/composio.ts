@@ -580,54 +580,6 @@ async function execute(ctx: ApiCtx): Promise<void> {
   }
 }
 
-async function completeAuth(ctx: ApiCtx): Promise<void> {
-  if (!ctx.actor || ctx.actor.imp || ctx.capability)
-    return sendJson(ctx.res, 403, { error: "browser_identity_required" });
-  const access = await credential(ctx);
-  if (!access) return;
-  const connectFailed = () =>
-    audit(ctx.deps, {
-      principalId: access.principal,
-      action: "composio.connect_failed",
-      resource: "unknown",
-      scopeLabel: scopeId("personal", access.principal),
-    });
-  const sessionUri = (ctx.body as { sessionUri?: unknown } | null)?.sessionUri;
-  if (typeof sessionUri !== "string" || !sessionUri || sessionUri.length > 8192) {
-    connectFailed();
-    return sendJson(ctx.res, 400, { error: "invalid_session" });
-  }
-  const userId = composioUserId(orgId(), canonicalPerson(access.principal));
-  let accountId: string;
-  try {
-    const result = await request(ctx, access.key, "/connected_accounts/complete_auth", {
-      session_uri: sessionUri,
-      user_id: userId,
-    });
-    if (typeof result.connected_account_id !== "string" || !ACCOUNT_ID.test(result.connected_account_id))
-      throw new Error("Invalid account");
-    accountId = result.connected_account_id;
-  } catch (error) {
-    const mask = createExactSecretValueMasker([access.key]);
-    reportFailure("composio: complete-auth", new Error(mask(redactSecrets(errMessage(error)))));
-    connectFailed();
-    return sendJson(ctx.res, 400, {
-      error: "verification_failed",
-      message: "Sign in to the QM account that started this connection and try connecting again.",
-    });
-  }
-  const key = `${userId}:${accountId}`;
-  const saved = await ctx.deps.composioReturns?.get(key);
-  await ctx.deps.composioReturns?.delete(key);
-  audit(ctx.deps, {
-    principalId: access.principal,
-    action: "composio.connected",
-    resource: saved?.toolkit ?? "unknown",
-    scopeLabel: scopeId("personal", access.principal),
-  });
-  return sendJson(ctx.res, 200, { returnTo: saved && saved.expiresAt > Date.now() ? saved.url : null });
-}
-
 export interface ComposioReturn {
   url: string | null;
   toolkit: string;
@@ -881,7 +833,6 @@ async function completeSlack(ctx: ApiCtx): Promise<void> {
 export const composioRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/composio/tools", auth: "either", handle: tools },
   { method: "POST", path: "/v1/composio/execute", auth: "either", handle: execute },
-  { method: "POST", path: "/v1/composio/complete-auth", auth: "source", handle: completeAuth },
   {
     method: "POST",
     path: "/v1/composio/slack/reply-status",

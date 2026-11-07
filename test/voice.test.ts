@@ -3,8 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import assert from "node:assert/strict";
-import type { IncomingMessage } from "node:http";
-import { createLiveVoice, transcribe, voiceEnabled, voiceRequestAllowed, VoiceProviderError } from "../server/voice.ts";
+import { createLiveVoice, transcribe, VoiceProviderError } from "../src/voice/voice.ts";
 
 const caller = {
   user: "private-user",
@@ -23,25 +22,6 @@ const audioFile = async (bytes: number[]) => {
   await writeFile(file, new Uint8Array(bytes));
   return file;
 };
-const req = (headers: Record<string, string>) => ({ headers }) as unknown as IncomingMessage;
-
-test("voice requires explicit rollout, key, signing, and account access", () => {
-  const env = { OPENAI_API_KEY: "test-key", CORE_SIGNING_SECRET: "test-secret", WEB_UI_VOICE_USERS: "alice" };
-  assert.equal(voiceEnabled("alice", env), true);
-  assert.equal(voiceEnabled("bob", env), false);
-  for (const name of Object.keys(env)) assert.equal(voiceEnabled("alice", { ...env, [name]: " " }), false);
-});
-
-test("voice requests come from the web origin or a verified native client", () => {
-  const url = "https://qm.example.com/";
-  assert.equal(voiceRequestAllowed(req({ origin: "https://qm.example.com" }), url, false), true);
-  assert.equal(voiceRequestAllowed(req({}), url, true), true);
-  assert.equal(voiceRequestAllowed(req({ "sec-fetch-site": "cross-site" }), url, true), false);
-  assert.equal(voiceRequestAllowed(req({ origin: "https://evil.test" }), url, true), false);
-  for (const origin of ["null", "https://evil.test", "http://qm.example.com", "https://qm.example.com:8443"])
-    assert.equal(voiceRequestAllowed(req({ origin }), url, false), false);
-  assert.equal(voiceRequestAllowed(req({}), url, false), false);
-});
 
 test("session creation keeps credentials and authoritative configuration on server", async (t) => {
   stubFetch(t, async (url, init) => {

@@ -47,8 +47,9 @@ export type Route<C extends BaseCtx = ApiCtx> = {
   actor?: RouteActor;
   admin?: AdminAccess;
   allowedInStrict?: true;
-  browser?: true | "embed";
+  browser?: true | "embed" | "self";
   maxBodyBytes?: number;
+  streamBody?: true;
 } & ({ method: string; path: string } | { match: (method: string, pathname: string) => boolean });
 
 export function withActor<C extends BaseCtx>(actor: RouteActor, routes: Route<C>[]): Route<C>[] {

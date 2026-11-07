@@ -98,6 +98,7 @@ export interface ServerDeps {
   capabilitySecret?: string;
   capabilityTokenCompression?: boolean;
   portalIdentitySecret?: string;
+  openaiApiKey?: string;
   portalSession?: {
     secret: string;
     maxAgeSeconds: number;
