@@ -1271,7 +1271,7 @@ test("a queued refusal in a read-only channel acks its run delivery and tells on
   }
 });
 
-test("an answer that cannot be posted to a read-only channel is not an incoming-handler failure", async () => {
+test("an answer that cannot be posted to a read-only DM is not an incoming-handler failure", async () => {
   const f = await fixture();
   try {
     const gate: string[] = [];

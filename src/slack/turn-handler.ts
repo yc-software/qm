@@ -73,6 +73,7 @@ import type { Mirror } from "./mirror.ts";
 import type { ConversationSerializer } from "./conversation-view.ts";
 import { reactionTallies } from "./conversation-view.ts";
 import {
+  SLACK_AUTH_ERRORS,
   SLACK_PERMANENT_POST_ERRORS,
   slackErrorCode,
   type SlackMessageEvent,
@@ -274,7 +275,7 @@ export function createTurnHandler(deps: {
 
     const unpostable = (err: unknown): boolean => {
       const code = slackErrorCode(err);
-      if (!code || !SLACK_PERMANENT_POST_ERRORS.has(code)) return false;
+      if (!code || !SLACK_PERMANENT_POST_ERRORS.has(code) || SLACK_AUTH_ERRORS.has(code)) return false;
       console.warn(`[slack-plugin] reply not postable ch=${inc.channel} ts=${inc.ts} (${code})`);
       return true;
     };
