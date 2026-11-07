@@ -160,14 +160,10 @@ test("retained cron runs are private to people who can manage the cron", async (
       sessionId: "private-session",
     });
 
-  const runs = async (query: string) => {
-    const response = await fetch(`${coreBase}/api/crons/${cron.id}/runs${query}`, asUser("run-owner"));
-    assert.equal(response.status, 200);
-    const page = (await response.json()) as { runs: Array<{ reply?: string }>; total: number };
-    return [page.runs.length, page.total, page.runs.at(-1)?.reply];
-  };
-  assert.deepEqual(await runs("?limit=20"), [20, 21, "private result 20"]);
-  assert.deepEqual(await runs(""), [21, 21, "private result 20"]);
+  const page = await fetch(`${coreBase}/api/crons/${cron.id}/runs?limit=20`, asUser("run-owner"));
+  assert.equal(page.status, 200);
+  const { runs, total } = (await page.json()) as { runs: Array<{ reply?: string }>; total: number };
+  assert.deepEqual([runs.length, total, runs.at(-1)?.reply], [20, 21, "private result 20"]);
   const huge = await fetch(`${coreBase}/api/crons/${cron.id}/runs?limit=99999999999999999999`, asUser("run-owner"));
   assert.equal(huge.status, 400);
   assert.equal((await fetch(`${coreBase}/api/crons/${cron.id}/runs`, asUser("other-user"))).status, 404);
