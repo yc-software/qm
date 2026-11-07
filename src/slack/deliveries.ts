@@ -35,20 +35,11 @@ import type { Delivery } from "../types.ts";
 import type { TurnFlow } from "./turn-flow.ts";
 import { cleanAgentReplyForSlack, stripSlackDirectives } from "./messaging.ts";
 import { cronIdOf } from "../sessions/session-store.ts";
-import { slackErrorCode } from "./payloads.ts";
+import { SLACK_PERMANENT_POST_ERRORS, slackErrorCode } from "./payloads.ts";
 import { trimTrailingSlashes } from "../util/text.ts";
 
 const DELIVERY_CLAIM_MS = 15_000;
 const SLOW_DRAIN_ALARM_MS = 120_000;
-const PERMANENT_POST_ERRORS = new Set([
-  "channel_not_found",
-  "is_archived",
-  "account_inactive",
-  "user_not_found",
-  "cannot_reply_to_message",
-  "message_not_found",
-]);
-
 const TERMINAL_POST_ERRORS = new Set([
   "cannot_dm_bot",
   "cant_update_message",
@@ -202,7 +193,13 @@ export function createDeliveryPoller(deps: {
         void core.failDelivery(id, code).catch(swallowAs("slack-plugin: fail delivery", undefined));
         return;
       }
-      if (stage === "post" && gaveUp && code && PERMANENT_POST_ERRORS.has(code) && !undeliverableReported.has(id)) {
+      if (
+        stage === "post" &&
+        gaveUp &&
+        code &&
+        SLACK_PERMANENT_POST_ERRORS.has(code) &&
+        !undeliverableReported.has(id)
+      ) {
         if (undeliverableReported.size >= 5000) undeliverableReported.clear();
         undeliverableReported.add(id);
         void core
