@@ -74,9 +74,6 @@ const app = {
 async function frontDoor(t: TestContext, deps: Partial<ServerDeps> = {}): Promise<string> {
   const core = createServer(app, { ...serverDeps(config, built), ...browserSessionDeps, ...deps });
   const portal = createHttpServer((req, res) => {
-    res.setHeader("strict-transport-security", "max-age=63072000; includeSubDomains");
-    res.setHeader("referrer-policy", "no-referrer");
-    res.setHeader("x-content-type-options", "nosniff");
     res.setHeader("x-frame-options", "DENY");
     core.emit("request", req, res);
   });
@@ -98,8 +95,6 @@ test("inline file artifacts are sandboxed to an opaque origin (no same-origin XS
   assert.match(csp, /^sandbox\b/, "served under a CSP sandbox");
   assert.ok(!/allow-same-origin/.test(csp), "the sandbox never grants same-origin");
   assert.equal(r.headers.get("x-content-type-options"), "nosniff");
-  assert.equal(r.headers.get("strict-transport-security"), "max-age=63072000; includeSubDomains");
-  assert.equal(r.headers.get("referrer-policy"), "no-referrer");
   assert.match(csp, /frame-ancestors 'self'/, "our own surfaces may unfurl it inline");
   assert.equal(r.headers.get("x-frame-options"), null, "a blanket DENY would defeat frame-ancestors");
 });

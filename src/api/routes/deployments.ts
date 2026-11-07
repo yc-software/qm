@@ -16,7 +16,7 @@ import { deploymentView, type App, type DeployInput, type RedeployInput } from "
 import { errMessage, reportFailureAs, swallowAs } from "../../util/errors.ts";
 import { escapeHtml, relayStream } from "../../../plugins/chassis/src/http.ts";
 import { canonicalPayload } from "../../../plugins/chassis/src/source-auth-sign.ts";
-import { sendJson, verifyOrReject } from "../http.ts";
+import { frameAncestorsDirective, sendJson, UNTRUSTED_CONTENT_SANDBOX_CSP, verifyOrReject } from "../http.ts";
 import { mintPortalIdentity, verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../auth/portal-identity.ts";
 import { audit, authorizeAdmin, isObj, orgScope } from "./shared.ts";
 import { parseScopeId, scopeId, type Permission } from "../../types.ts";
@@ -217,12 +217,6 @@ function forwardableHeaders(req: BaseCtx["req"]): Record<string, string | string
   return out;
 }
 
-const APP_SANDBOX_CSP = "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads";
-
-function frameAncestorsDirective(ancestors: readonly string[]): string {
-  return `frame-ancestors 'self' ${ancestors.join(" ")}`;
-}
-
 function cspMentionsFrameAncestors(value: string | string[] | undefined): boolean {
   if (!value) return false;
   return (Array.isArray(value) ? value : [value]).some((v) => /frame-ancestors/i.test(v));
@@ -253,8 +247,8 @@ function gatewaySafeResponseHeaders(
   if (sandbox) {
     const existing = out["content-security-policy"];
     out["content-security-policy"] = existing
-      ? [...(Array.isArray(existing) ? existing : [existing]), APP_SANDBOX_CSP]
-      : APP_SANDBOX_CSP;
+      ? [...(Array.isArray(existing) ? existing : [existing]), UNTRUSTED_CONTENT_SANDBOX_CSP]
+      : UNTRUSTED_CONTENT_SANDBOX_CSP;
   }
   if (frameAncestors?.length && !out["x-frame-options"] && !cspMentionsFrameAncestors(out["content-security-policy"])) {
     const directive = frameAncestorsDirective(frameAncestors);
