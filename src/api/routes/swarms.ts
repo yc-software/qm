@@ -2,7 +2,7 @@ import { sendJson } from "../http.ts";
 import { errMessage } from "../../util/errors.ts";
 import type { SwarmCaller } from "../../swarms/swarm-service.ts";
 import { isObj } from "./shared.ts";
-import type { ApiCtx, Route } from "./route.ts";
+import { withActor, type ApiCtx, type Route } from "./route.ts";
 import { SPAWN_RUNTIME_FIELDS } from "../../swarms/swarm-runtime.ts";
 
 const ACTION_FIELDS: Record<string, string[]> = { context: ["context"], control: ["memberId", "state"] };
@@ -101,20 +101,8 @@ async function swarmRequest(ctx: ApiCtx): Promise<void> {
 export const swarmRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/swarm", auth: "either", handle: swarmRequest },
   { method: "POST", path: "/v1/swarm", auth: "either", handle: swarmRequest },
-  {
-    method: "GET",
-    path: "/v1/sessions/:id/swarm",
-    browser: true,
-    actor: "person",
-    auth: "source",
-    handle: swarmRequest,
-  },
-  {
-    method: "POST",
-    path: "/v1/sessions/:id/swarm",
-    browser: true,
-    actor: "person",
-    auth: "source",
-    handle: swarmRequest,
-  },
+  ...withActor("person", [
+    { method: "GET", path: "/v1/sessions/:id/swarm", browser: true, auth: "source", handle: swarmRequest },
+    { method: "POST", path: "/v1/sessions/:id/swarm", browser: true, auth: "source", handle: swarmRequest },
+  ]),
 ];
