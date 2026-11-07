@@ -709,7 +709,9 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       } catch (error) {
         return withCleanup(
           () => Promise.reject(error),
-          () => fileExecution!.finish(),
+          async () => {
+            await fileExecution!.finish();
+          },
         );
       }
     }
@@ -877,6 +879,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         "command",
         execOpts?.signal,
       );
+      let credentialNote: string | undefined;
       const r = await withCleanup(
         async (): Promise<ExecResult> => {
           const commandHandle = Object.keys(commandEnv).length
@@ -895,10 +898,14 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           }
         },
         async () => {
-          await fileExecution?.finish();
+          credentialNote = await fileExecution?.finish();
         },
       );
-      return { ...r, ...(scratchReroute ? { scratchReroute } : {}) };
+      return {
+        ...r,
+        ...(credentialNote ? { stderr: r.stderr ? `${r.stderr}\n${credentialNote}` : credentialNote } : {}),
+        ...(scratchReroute ? { scratchReroute } : {}),
+      };
     },
 
     async read(path: string, signal?: AbortSignal, sandboxId?: string): Promise<ReadResult> {

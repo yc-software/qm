@@ -235,6 +235,78 @@ test("symlink replacement is rejected and the ephemeral home is removed", async 
   await assert.rejects(access(execution.handle.env!.HOME!));
 });
 
+test("a credential directory replaced with a symlink is rejected and the saved login is untouched", async (t) => {
+  const f = await fixture(t);
+  const wal = { path: ".aws/cli/cache/session.db-wal", contentBase64: Buffer.from("scratch").toString("base64") };
+  await f.keychain.save({ ownerId: owner, service: "aws", files: [...files("original"), wal] });
+  await assert.rejects(
+    f.context().execute('rm -rf "$HOME/.aws/sso/cache"; ln -s /tmp "$HOME/.aws/sso/cache"', { credentials: ["aws"] }),
+    /symlinks/,
+  );
+  const next = await f.keychain.materializeOwnById(owner, f.credential.id, scope);
+  if (next.kind !== "file") throw new Error("Expected files");
+  assert.deepEqual(next.files.map((file) => [file.path, Buffer.from(file.contentBase64, "base64").toString()]).sort(), [
+    [".aws/cli/cache/session.db-wal", "scratch"],
+    [".aws/sso/cache/session.json", "original"],
+  ]);
+});
+
+test("a parent of a credential file replaced with a symlink is rejected and the saved login is untouched", async (t) => {
+  const f = await fixture(t);
+  const token = { path: ".tool-state/auth/token", contentBase64: Buffer.from("secret").toString("base64") };
+  await f.keychain.save({ ownerId: owner, service: "aws", files: [...files("original"), token] });
+  await assert.rejects(
+    f
+      .context()
+      .execute('rm -rf "$HOME/.tool-state"; ln -s "$(mktemp -d)" "$HOME/.tool-state"', { credentials: ["aws"] }),
+    /symlinks/,
+  );
+  const next = await f.keychain.materializeOwnById(owner, f.credential.id, scope);
+  if (next.kind !== "file") throw new Error("Expected files");
+  assert.deepEqual(next.files.map((file) => file.path).sort(), [
+    ".aws/sso/cache/session.json",
+    ".tool-state/auth/token",
+  ]);
+});
+
+test("a command that deletes a cached credential file keeps its output and saves the rest", async (t) => {
+  const f = await fixture(t);
+  const wal = { path: ".aws/cli/cache/session.db-wal", contentBase64: Buffer.from("scratch").toString("base64") };
+  await f.keychain.save({ ownerId: owner, service: "aws", files: [...files("original"), wal] });
+  const result = await f
+    .context()
+    .execute(
+      'printf refreshed > "$HOME/.aws/sso/cache/session.json"; rm "$HOME/.aws/cli/cache/session.db-wal"; echo done',
+      { credentials: ["aws"] },
+    );
+  assert.equal(result.code, 0);
+  assert.equal(result.stdout.trim(), "done");
+  assert.match(
+    result.stderr,
+    /\[credentials\] This command deleted \.aws\/cli\/cache\/session\.db-wal; the saved login no longer includes it\.$/,
+  );
+  const next = await f.keychain.materializeOwnById(owner, f.credential.id, scope);
+  if (next.kind !== "file") throw new Error("Expected files");
+  assert.deepEqual(
+    next.files.map((file) => [file.path, Buffer.from(file.contentBase64, "base64").toString()]),
+    [[".aws/sso/cache/session.json", "refreshed"]],
+  );
+  const second = await f.context().execute('cat "$HOME/.aws/sso/cache/session.json"', { credentials: ["aws"] });
+  assert.equal(second.stdout, "refreshed");
+  assert.equal(second.stderr, "");
+});
+
+test("a command that deletes every credential file leaves the saved login unchanged", async (t) => {
+  const f = await fixture(t);
+  const result = await f.context().execute('rm -rf "$HOME/.aws"; echo gone', { credentials: ["aws"] });
+  assert.equal(result.code, 0);
+  assert.equal(result.stdout.trim(), "gone");
+  assert.match(result.stderr, /deleted all of its credential files .*left unchanged/);
+  const next = await f.keychain.materializeOwnById(owner, f.credential.id, scope);
+  if (next.kind !== "file") throw new Error("Expected files");
+  assert.equal(Buffer.from(next.files[0]!.contentBase64, "base64").toString(), "original");
+});
+
 test("refreshes made through a use grant never change the owner's saved login", async (t) => {
   const f = await fixture(t);
   const grant = await f.keychain.createGrant({
