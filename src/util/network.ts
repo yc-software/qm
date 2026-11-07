@@ -58,6 +58,8 @@ const NEVER_ALLOWED = blockList(
     ["::1", 128],
     ["fe80::", 10],
     ["fd00:ec2::254", 128],
+    ["fd20:ce::254", 128],
+    ["fd00:c1::a9fe:a9fe", 128],
   ],
 );
 

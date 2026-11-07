@@ -111,7 +111,7 @@ test("hostFromAuthority strips ports and IPv6 brackets", () => {
   assert.equal(hostFromAuthority(""), null);
 });
 
-test("isNeverAllowedIp covers IMDS, 169.254/16, fe80::/10, v4-mapped, AWS v6 IMDS, loopback, NAT64 forms and Tailscale and Alibaba addresses", () => {
+test("isNeverAllowedIp covers IMDS, 169.254/16, fe80::/10, v4-mapped, AWS, GCP and OCI v6 IMDS, loopback, NAT64 forms and Tailscale and Alibaba addresses", () => {
   assert.equal(isNeverAllowedIp("169.254.169.254"), true);
   assert.equal(isNeverAllowedIp("169.254.1.1"), true);
   assert.equal(isNeverAllowedIp("::ffff:169.254.169.254"), true);
@@ -131,6 +131,8 @@ test("isNeverAllowedIp covers IMDS, 169.254/16, fe80::/10, v4-mapped, AWS v6 IMD
     "100.100.100.100",
     "100.100.100.200",
     "64:ff9b::6464:64c8",
+    "fd20:ce::254",
+    "fd00:c1::a9fe:a9fe",
   ])
     assert.equal(isNeverAllowedIp(ip), true, ip);
   for (const ip of ["10.0.12.7", "172.18.0.4", "100.101.102.103", "fdaa:0:1::3", "64:ff9b:1::a9fe:a9fe"])
