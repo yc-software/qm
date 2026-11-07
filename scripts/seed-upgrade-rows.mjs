@@ -11,7 +11,7 @@ const { rows: columns } = await client.query(`
   FROM information_schema.columns c
   JOIN pg_class k ON k.oid = format('%I.%I', c.table_schema, c.table_name)::regclass
   WHERE c.table_schema NOT IN ('pg_catalog', 'information_schema') AND c.table_schema NOT LIKE 'pg_toast%'
-    AND k.relkind IN ('r', 'p') AND NOT k.relispartition
+    AND k.relkind IN ('r', 'p')
   ORDER BY 1, c.ordinal_position`);
 
 const tables = new Map();
