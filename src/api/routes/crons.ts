@@ -1,7 +1,7 @@
 import { isCronRuntime } from "../../cron/runtime.ts";
 import { CRON_SCRIPT_TOOL_ONLY } from "../../cron/script.ts";
 import type { Cron } from "../../triggers/types.ts";
-import { FIRE_RETENTION_KEEP_PER_CRON, type CreateCronInput, type CronPatch } from "../../cron/cron-store.ts";
+import type { CreateCronInput, CronPatch } from "../../cron/cron-store.ts";
 import { describeRunNowRefusal } from "../../cron/scheduler.ts";
 import { DEFAULT_CRON_TIMEZONE, userScheduleFromBody } from "../../cron/schedule.ts";
 import type { CapabilityClaims } from "../../auth/capability-token.ts";
@@ -322,18 +322,18 @@ async function cronRuns(ctx: ApiCtx): Promise<void> {
   const { res, url, capability, app } = ctx;
   const id = ctx.params.id!;
   const rawLimit = url.searchParams.get("limit");
-  const limit = rawLimit === null ? FIRE_RETENTION_KEEP_PER_CRON : Number(rawLimit);
+  const limit = rawLimit === null ? undefined : Number(rawLimit);
   if (capability) {
-    const r = await ctx.deps.control.getCronRuns(id, { limit }, capability);
+    const r = await ctx.deps.control.getCronRuns(id, limit !== undefined ? { limit } : {}, capability);
     if (!r.ok) return sendJson(res, CRON_ERROR_STATUS[r.code] ?? 400, { error: r.code, message: r.message });
     return sendJson(res, 200, { cron: r.cron, runs: r.runs, total: r.total });
   }
   const cron = await gateSourceCron(ctx, id);
   if (!cron) return;
-  if (!Number.isSafeInteger(limit) || limit < 1) {
+  if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1)) {
     return sendJson(res, 400, { error: "bad_request", message: "limit must be a positive integer" });
   }
-  const { runs, total } = await app.listCronFires(id, { limit });
+  const { runs, total } = await app.listCronFires(id, limit !== undefined ? { limit } : {});
   return sendJson(res, 200, { cron, runs, total });
 }
 
