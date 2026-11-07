@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   createPostgresEnvironmentStore,
+  EnvironmentShareDenied,
   resolveEnvironmentId,
   type EnvironmentStore,
 } from "../src/environments/environment-store.ts";
@@ -12,7 +13,16 @@ import { testDatabaseUrl } from "./support/test-database.ts";
 describe("environments (the computer a conversation points at)", () => {
   let t = 1_000;
   const now = (): number => ++t;
-  const store = (): EnvironmentStore => createPostgresEnvironmentStore(testDatabaseUrl(), { now });
+  const members = new Set<string>();
+  const member = (principalId: string, scope: string) => `${principalId}@${scope}`;
+  const join = (principalId: string, scope: string) => members.add(member(principalId, scope));
+  const leave = (principalId: string, scope: string) => members.delete(member(principalId, scope));
+  const store = (url = testDatabaseUrl()): EnvironmentStore =>
+    createPostgresEnvironmentStore(url, {
+      now,
+      mayShare: async (principalId, scope) =>
+        scope === scopeId("personal", principalId) || members.has(member(principalId, scope)),
+    });
 
   it("an unattached scope resolves to its own default environment (id == scopeId)", async () => {
     const s = store();
@@ -77,5 +87,70 @@ describe("environments (the computer a conversation points at)", () => {
     await s.attach(scopeId("channel", "C-b"), env, "U-owner");
     const attached = (await s.attachmentsFor(env)).map((a) => a.scopeId).sort();
     assert.deepEqual(attached, [scopeId("channel", "C-a"), scopeId("channel", "C-b")].sort());
+  });
+
+  it("a room's environment shared by a member stops resolving once that member leaves the room", async () => {
+    const s = store();
+    const room = scopeId("channel", "C-room");
+    const dm = scopeId("personal", "U-mallory");
+    const otherRoom = scopeId("channel", "C-other");
+    join("U-mallory", room);
+    await s.create({ id: room, name: "room-box", ownerActorId: "U-mallory" });
+    await s.attach(dm, room, "U-mallory");
+    await s.attach(otherRoom, room, "U-mallory");
+    assert.equal(await resolveEnvironmentId(s, dm), room, "the share works while it stands");
+    assert.equal(await resolveEnvironmentId(s, otherRoom), room);
+
+    leave("U-mallory", room);
+    assert.equal(await resolveEnvironmentId(s, dm), dm, "the DM falls back to its own computer");
+    assert.equal(await resolveEnvironmentId(s, otherRoom), otherRoom, "so does the other room");
+    assert.deepEqual(await s.attachmentsFor(room), [], "a lapsed share is not reported as an attachment");
+    assert.equal(await resolveEnvironmentId(s, room), room, "the owning room itself is unaffected");
+  });
+
+  it("the person who named an environment has no authority over it after leaving its room", async () => {
+    const s = store();
+    const room = scopeId("channel", "C-named");
+    join("U-namer", room);
+    await s.create({ id: room, name: "named-box", ownerActorId: "U-namer" });
+    leave("U-namer", room);
+    await assert.rejects(s.attach(scopeId("personal", "U-namer"), room, "U-namer"), EnvironmentShareDenied);
+    assert.equal(await s.getAttachment(scopeId("personal", "U-namer")), null);
+  });
+
+  it("any current member of the owning room may share it, regardless of who named it", async () => {
+    const s = store();
+    const room = scopeId("channel", "C-team");
+    join("U-namer", room);
+    join("U-peer", room);
+    await s.create({ id: room, name: "team-box", ownerActorId: "U-namer" });
+    await s.attach(scopeId("personal", "U-peer"), room, "U-peer");
+    assert.equal(await resolveEnvironmentId(s, scopeId("personal", "U-peer")), room);
+    leave("U-namer", room);
+    assert.equal(
+      await resolveEnvironmentId(s, scopeId("personal", "U-peer")),
+      room,
+      "the namer leaving does not touch a share another member made",
+    );
+  });
+
+  it("attachments written before shares were checked are judged as shares when read", async () => {
+    const url = testDatabaseUrl();
+    const legacy = createPostgresEnvironmentStore(url, { now, mayShare: async () => true });
+    const room = scopeId("channel", "C-legacy");
+    const dm = scopeId("personal", "U-former");
+    await legacy.create({ id: room, name: "legacy-box", ownerActorId: "U-former" });
+    await legacy.attach(dm, room, "U-former");
+
+    const s = store(url);
+    assert.equal(await s.getAttachment(dm), null);
+    assert.deepEqual(await s.attachmentsFor(room), []);
+    assert.equal(
+      await resolveEnvironmentId(s, dm),
+      dm,
+      "a row its grantor can no longer stand behind is never followed",
+    );
+    join("U-former", room);
+    assert.equal(await resolveEnvironmentId(s, dm), room, "a row whose grantor is still a member keeps working");
   });
 });

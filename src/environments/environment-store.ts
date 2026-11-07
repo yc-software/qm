@@ -24,6 +24,16 @@ interface CreateEnvironmentInput {
   ownerActorId?: string | null;
 }
 
+export type MayShareEnvironment = (principalId: string, ownerScopeId: ScopeId) => Promise<boolean>;
+
+export class EnvironmentShareDenied extends Error {
+  readonly ownerScopeId: ScopeId;
+  constructor(ownerScopeId: ScopeId) {
+    super(`only a current member of ${ownerScopeId} can share its environment`);
+    this.ownerScopeId = ownerScopeId;
+  }
+}
+
 export interface EnvironmentStore {
   create(input: CreateEnvironmentInput): Promise<Environment>;
   get(id: string): Promise<Environment | null>;
@@ -61,9 +71,13 @@ function rowToAttachment(r: Record<string, unknown>): EnvironmentAttachment {
 
 export function createPostgresEnvironmentStore(
   connectionString: string,
-  opts: { now?: () => number } = {},
+  opts: { mayShare: MayShareEnvironment; now?: () => number },
 ): EnvironmentStore {
   const now = opts.now ?? (() => Date.now());
+  const standing = async (attachments: EnvironmentAttachment[]): Promise<EnvironmentAttachment[]> => {
+    const live = await Promise.all(attachments.map((a) => opts.mayShare(a.attachedBy, a.environmentId as ScopeId)));
+    return attachments.filter((_, i) => live[i]);
+  };
   const { q } = createPgPool(connectionString, [
     {
       id: "environments/store/0001",
@@ -102,6 +116,9 @@ export function createPostgresEnvironmentStore(
       return rows.map(rowToEnvironment);
     },
     async attach(scopeId, environmentId, attachedBy): Promise<void> {
+      if (!(await opts.mayShare(attachedBy, environmentId as ScopeId))) {
+        throw new EnvironmentShareDenied(environmentId as ScopeId);
+      }
       await q(
         `INSERT INTO environment_attachments(scope_id, environment_id, attached_by, attached_at)
          VALUES ($1,$2,$3,$4)
@@ -112,11 +129,11 @@ export function createPostgresEnvironmentStore(
     },
     async getAttachment(scopeId): Promise<EnvironmentAttachment | null> {
       const rows = await q("SELECT * FROM environment_attachments WHERE scope_id = $1", [scopeId]);
-      return rows[0] ? rowToAttachment(rows[0]) : null;
+      return (await standing(rows.map(rowToAttachment)))[0] ?? null;
     },
     async attachmentsFor(environmentId): Promise<EnvironmentAttachment[]> {
       const rows = await q("SELECT * FROM environment_attachments WHERE environment_id = $1", [environmentId]);
-      return rows.map(rowToAttachment);
+      return standing(rows.map(rowToAttachment));
     },
   };
 }
