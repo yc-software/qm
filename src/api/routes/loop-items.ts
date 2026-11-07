@@ -4,6 +4,7 @@ import type { Loop, LoopItem, LoopSourcePayload } from "../../loops/types.ts";
 import { isAccountType } from "../../connectors/oauth.ts";
 import { canonicalJson } from "../../../cli/src/canonical-json.ts";
 import { errMessage } from "../../util/errors.ts";
+import { publicFetch } from "../../util/network.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
@@ -210,7 +211,7 @@ async function serveItemImage(ctx: ApiCtx): Promise<void> {
   }
   let upstream: Response;
   try {
-    upstream = await fetch(url, { headers: authHeader, redirect: "follow" });
+    upstream = await publicFetch(url, { headers: authHeader, redirect: "follow" });
   } catch (e) {
     return sendJson(ctx.res, 502, { error: "upstream", message: errMessage(e) });
   }
