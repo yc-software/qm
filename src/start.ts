@@ -45,6 +45,7 @@ export async function startQm(
             secret: env.PORTAL_SESSION_SECRET,
             maxAgeSeconds: sessionLifetime(env).max,
             principals: listedPrincipals(env.WEB_UI_PRINCIPALS),
+            ...(env.INBOX_USERS ? { inboxUsers: env.INBOX_USERS } : {}),
           },
         }
       : {}),

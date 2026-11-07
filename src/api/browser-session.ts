@@ -103,6 +103,9 @@ export const API_ALIASES: ReadonlyMap<string, string> = new Map([
   ["GET /api/files/:id/content", "/v1/files/:id/content"],
   ["GET /api/files/:id/content/:name", "/v1/files/:id/content"],
   ["GET /api/playgrounds/:id", "/v1/playgrounds/:id"],
+  ["POST /api/turn", "/v1/web/turn"],
+  ["POST /api/approvals/:requestId", "/v1/web/approvals/:requestId"],
+  ["POST /api/runs/:id/signal", "/v1/web/runs/:id/signal"],
 ]);
 
 const aliasMatchers = [...API_ALIASES].map(([key, target]) => {
