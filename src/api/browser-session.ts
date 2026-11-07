@@ -191,21 +191,16 @@ export function withBrowserActor(
   body: unknown,
   principalId: string,
 ): unknown {
-  const own = (value: unknown) => typeof value === "string" && samePerson(value, principalId);
-  for (const named of new Set([field ?? "", "query.principalId", "body.principalId"])) {
-    const [where, name] = named.split(".", 2);
-    if (!name) continue;
-    const required = named === field;
-    if (where === "query") {
-      const values = url.searchParams.getAll(name);
-      if (values.length === 0 ? !required : !values.every(own)) continue;
-      url.searchParams.set(name, principalId);
-      req.url = `${url.pathname}${url.search}`;
-    } else if (where === "body" && body && typeof body === "object" && !Array.isArray(body)) {
-      const present = Object.hasOwn(body, name);
-      if (present ? !own((body as Record<string, unknown>)[name]) : !required) continue;
-      body = { ...body, [name]: principalId };
-    }
+  const [where, name] = (field ?? "").split(".", 2);
+  const own = (values: unknown[]) =>
+    values.every((value) => typeof value === "string" && samePerson(value, principalId));
+  if (where === "query" && name && own(url.searchParams.getAll(name))) {
+    url.searchParams.set(name, principalId);
+    req.url = `${url.pathname}${url.search}`;
+  }
+  if (where === "body" && name && body && typeof body === "object" && !Array.isArray(body)) {
+    if (own(Object.hasOwn(body, name) ? [(body as Record<string, unknown>)[name]] : []))
+      return { ...body, [name]: principalId };
   }
   return body;
 }
