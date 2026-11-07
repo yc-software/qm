@@ -29,7 +29,7 @@ import { builtInModelCatalog, selectableCatalog, selectableModelCatalog } from "
 import { errMessage } from "../../util/errors.ts";
 import { isSafeSkillName, SKILL_NAME_RULE } from "../../skills/skill-name.ts";
 import { SideChatAnchorError, SoulUpdateDeniedError, type SessionPageStatus } from "../app-types.ts";
-import { PersonaLocked } from "../../personas/channel-personas.ts";
+import { liveForLock, PersonaLocked } from "../../personas/channel-personas.ts";
 import { renderAgentApis } from "../agent-api-catalog.ts";
 import { sendJson, sendProblem } from "../http.ts";
 import { resolveBranding } from "../../resolution/branding.ts";
@@ -982,7 +982,7 @@ async function restoreSkill(ctx: ApiCtx): Promise<void> {
   }
   if (!principalId) return sendJson(ctx.res, 400, { error: "bad_request", message: "principalId required" });
   const restored = await ctx.app.restoreOwnedSkill(ctx.params.id!, principalId, {
-    liveActor: ctx.capability ? livePersonCapability(ctx.capability) && !ctx.capability.botActor : true,
+    liveActor: ctx.capability ? liveForLock(livePersonCapability(ctx.capability), ctx.capability.botActor) : true,
   });
   if (restored === "exists")
     return sendJson(ctx.res, 409, {
@@ -1123,7 +1123,7 @@ async function createSkill(ctx: ApiCtx): Promise<void> {
     name: b.name,
     description: b.description,
     body: b.body,
-    liveActor: capability ? livePersonCapability(capability) && !capability.botActor : true,
+    liveActor: capability ? liveForLock(livePersonCapability(capability), capability.botActor) : true,
   });
   if (!created)
     return sendJson(res, 409, {
@@ -1457,7 +1457,7 @@ export async function postSoul(ctx: ApiCtx): Promise<void> {
   try {
     const version = await app.updateSoul(scopeIdVal, content, actorId, {
       ...(allowSharedScope ? { allowSharedScope: true } : {}),
-      liveActor: capability ? livePersonCapability(capability) && !capability.botActor : true,
+      liveActor: capability ? liveForLock(livePersonCapability(capability), capability.botActor) : true,
     });
     return sendJson(res, 200, { ok: true, version });
   } catch (e) {

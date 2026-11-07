@@ -4,7 +4,7 @@ import { isObj } from "./shared.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
 import { KeychainError } from "../../credentials/keychain.ts";
 import type { PersonaResult } from "../../personas/persona-service.ts";
-import type { ChannelPersonaResult } from "../../personas/channel-personas.ts";
+import { liveForLock, type ChannelPersonaResult } from "../../personas/channel-personas.ts";
 import { livePersonCapability } from "../artifact-share.ts";
 import type { Cron } from "../../triggers/types.ts";
 
@@ -239,7 +239,7 @@ async function setChannelPersona(ctx: ApiCtx): Promise<void> {
   respondChannel(
     ctx,
     await channels.set(
-      { id: principalId, live: liveTurn(ctx) && ctx.capability?.botActor !== true },
+      { id: principalId, live: liveForLock(liveTurn(ctx), ctx.capability?.botActor) },
       ctx.params.channel!,
       personaId,
     ),

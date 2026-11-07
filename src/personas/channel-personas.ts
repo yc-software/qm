@@ -27,6 +27,10 @@ interface Actor {
   live: boolean;
 }
 
+export function liveForLock(live: boolean | undefined, bot: boolean | undefined): boolean {
+  return live === true && bot !== true;
+}
+
 export type ChannelPersonaResult =
   | { status: "ok"; value: { channelId: string; channelName: string; persona: Persona | null } }
   | { status: "not_found" | "forbidden" | "disabled" | "invalid"; message: string };
