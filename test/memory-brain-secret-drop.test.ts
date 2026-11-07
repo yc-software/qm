@@ -14,6 +14,7 @@ import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
 
 const SECRET = "memory-brain-drop-test-secret".repeat(2);
 const BRAIN = {
@@ -47,6 +48,7 @@ async function setup(
     auditLog: built.auditLog,
     admin: built.admin,
     memoryRegistry: registry,
+    ...browserSessionDeps,
     ...(opts.fireDropResolution ? { fireDropResolution: opts.fireDropResolution } : {}),
   });
   await new Promise<void>((resolve) => server.listen(0, resolve));
@@ -103,7 +105,19 @@ async function setup(
       .providers[0];
     return provider?.type === "mcp" ? provider.read.auth.clientSecret : undefined;
   };
-  return { built, change, mint, servedSecret };
+  const browserMint = async (principalId: string, body: unknown) => {
+    const res = await fetch(`${base}/api/keychain/drops`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        cookie: browserSessionCookie(principalId),
+        origin: browserSessionDeps.portalUrl,
+      },
+      body: JSON.stringify(body),
+    });
+    return { status: res.status, text: await res.text() };
+  };
+  return { built, change, mint, browserMint, servedSecret };
 }
 
 test("an org admin's brain link saves the client secret core-only, from a project whose members change and from a DM", async (t) => {
@@ -217,4 +231,14 @@ test("an unfilled brain link is never a pending sibling of a keychain drop in th
   assert.equal((await stripe.redeem("sk-stripe")).status, 200);
   await waited;
   assert.equal(fires[0]!.pendingSiblings, undefined);
+});
+
+test("a signed-in admin mints a brain link from the browser, and a signed-in member is refused", async (t) => {
+  const { browserMint } = await setup(t);
+  const brainDrop = { memoryBrain: "acme-personal", purpose: "connect it" };
+  const member = await browserMint("U-member", brainDrop);
+  assert.equal(member.status, 403, member.text);
+  const admin = await browserMint("admin-alice", brainDrop);
+  assert.equal(admin.status, 200, admin.text);
+  assert.match((JSON.parse(admin.text) as { formPath: string }).formPath, /^\/drop\//);
 });

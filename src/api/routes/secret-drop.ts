@@ -199,8 +199,12 @@ ${inputs}
   );
 }
 
-async function brainTarget(ctx: ApiCtx, b: Record<string, unknown>): Promise<SecretDropRecord["memoryBrain"] | null> {
-  const { res, deps, capability } = ctx;
+async function brainTarget(
+  ctx: ApiCtx,
+  b: Record<string, unknown>,
+  actorId: string,
+): Promise<SecretDropRecord["memoryBrain"] | null> {
+  const { res, deps } = ctx;
   if (!deps.memoryRegistry) {
     sendJson(res, 404, { error: "not_found" });
     return null;
@@ -213,7 +217,7 @@ async function brainTarget(ctx: ApiCtx, b: Record<string, unknown>): Promise<Sec
     });
     return null;
   }
-  if ((await adminStanding(deps, capability!.actorId)) !== "admin") {
+  if ((await adminStanding(deps, actorId)) !== "admin") {
     sendJson(res, 403, { error: "forbidden", message: "only an org admin can set a memory brain's secret" });
     return null;
   }
@@ -309,7 +313,7 @@ async function mintDrop(ctx: ApiCtx): Promise<void> {
     onBehalfOf?: unknown;
     memoryBrain?: unknown;
   };
-  const brain = b.memoryBrain === undefined ? undefined : await brainTarget(ctx, b);
+  const brain = b.memoryBrain === undefined ? undefined : await brainTarget(ctx, b, capability.actorId);
   if (brain === null) return;
   const service = brain ? `memory brain ${brain.id}` : b.service;
   if (typeof service !== "string" || !service.trim() || typeof b.purpose !== "string" || !b.purpose.trim()) {
