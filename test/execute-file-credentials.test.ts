@@ -235,6 +235,40 @@ test("symlink replacement is rejected and the ephemeral home is removed", async 
   await assert.rejects(access(execution.handle.env!.HOME!));
 });
 
+test("a credential directory replaced with a symlink is rejected and the saved login is untouched", async (t) => {
+  const f = await fixture(t);
+  const wal = { path: ".aws/cli/cache/session.db-wal", contentBase64: Buffer.from("scratch").toString("base64") };
+  await f.keychain.save({ ownerId: owner, service: "aws", files: [...files("original"), wal] });
+  await assert.rejects(
+    f.context().execute('rm -rf "$HOME/.aws/sso/cache"; ln -s /tmp "$HOME/.aws/sso/cache"', { credentials: ["aws"] }),
+    /symlinks/,
+  );
+  const next = await f.keychain.materializeOwnById(owner, f.credential.id, scope);
+  if (next.kind !== "file") throw new Error("Expected files");
+  assert.deepEqual(next.files.map((file) => [file.path, Buffer.from(file.contentBase64, "base64").toString()]).sort(), [
+    [".aws/cli/cache/session.db-wal", "scratch"],
+    [".aws/sso/cache/session.json", "original"],
+  ]);
+});
+
+test("a parent of a credential file replaced with a symlink is rejected and the saved login is untouched", async (t) => {
+  const f = await fixture(t);
+  const token = { path: ".tool-state/auth/token", contentBase64: Buffer.from("secret").toString("base64") };
+  await f.keychain.save({ ownerId: owner, service: "aws", files: [...files("original"), token] });
+  await assert.rejects(
+    f
+      .context()
+      .execute('rm -rf "$HOME/.tool-state"; ln -s "$(mktemp -d)" "$HOME/.tool-state"', { credentials: ["aws"] }),
+    /symlinks/,
+  );
+  const next = await f.keychain.materializeOwnById(owner, f.credential.id, scope);
+  if (next.kind !== "file") throw new Error("Expected files");
+  assert.deepEqual(next.files.map((file) => file.path).sort(), [
+    ".aws/sso/cache/session.json",
+    ".tool-state/auth/token",
+  ]);
+});
+
 test("a command that deletes a cached credential file keeps its output and saves the rest", async (t) => {
   const f = await fixture(t);
   const wal = { path: ".aws/cli/cache/session.db-wal", contentBase64: Buffer.from("scratch").toString("base64") };
