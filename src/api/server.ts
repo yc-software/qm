@@ -2,7 +2,7 @@ import { externalSlackCapabilityAllowed } from "./external-slack-capability.ts";
 import { MemoryDisclosureDenied } from "../memory/disclosure.ts";
 import { PersonaLocked } from "../personas/channel-personas.ts";
 import { MemoryFactsMissing } from "../memory/facts.ts";
-import { nameRequest, reportBackendError } from "../../plugins/chassis/src/error-reporting.ts";
+import { nameRequest, reportBackendError, withRequestContext } from "../../plugins/chassis/src/error-reporting.ts";
 import {
   createServer as createHttpServer,
   type IncomingMessage,
@@ -27,12 +27,21 @@ import { errMessage } from "../util/errors.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { canonicalPayload } from "../../plugins/chassis/src/source-auth-sign.ts";
 import { armBodyDeadline, PayloadTooLargeError, readRawBody, sendJson, verifyOrReject } from "./http.ts";
-import { findRoute, run, type AdminAccess, type ApiCtx, type BaseCtx, type Route } from "./routes/route.ts";
+import {
+  findRoute,
+  run,
+  usesBrowserSession,
+  type AdminAccess,
+  type ApiCtx,
+  type BaseCtx,
+  type Route,
+} from "./routes/route.ts";
 import { apiRoutes, rawRoutes } from "./routes/index.ts";
 import { proxyDeploymentSubdomain } from "./routes/deployments.ts";
 import { CAPABILITY_HEADER } from "./contract.ts";
 import { livePersonCapability } from "./artifact-share.ts";
 import { canonicalPerson, samePerson } from "../directory/person.ts";
+import { apiAlias, browserIdentity, withBrowserActor } from "./browser-session.ts";
 
 async function capabilityAdminDenied(
   access: AdminAccess,
@@ -198,12 +207,13 @@ async function gate(
   pathname: string,
   url: URL,
   raw: string,
-  route: Pick<Route, "auth" | "actor" | "admin" | "allowedInStrict"> | undefined,
+  route: Pick<Route, "auth" | "actor" | "admin" | "allowedInStrict" | "browser"> | undefined,
   params: Record<string, string>,
 ): Promise<GateResult | null> {
   const routeAuth = route?.auth;
   const { deps, secret, auth, requirePortalIdentity, allowUnsignedSourceAuth } = wiring;
   const isPublicRoute = routeAuth === "public";
+  const browser = !isPublicRoute && usesBrowserSession(req, route);
   const requiredAuth = typeof routeAuth === "object" ? routeAuth : null;
   const requiredAud = requiredAuth?.aud ?? null;
   let capability: CapabilityClaims | null = null;
@@ -230,6 +240,7 @@ async function gate(
       return null;
     }
   } else if (
+    !browser &&
     !(await verifyOrReject(
       req,
       res,
@@ -268,7 +279,18 @@ async function gate(
     const psecret = deps.portalIdentitySecret ?? secret;
     const rawToken = req.headers[PORTAL_IDENTITY_HEADER];
     const token = Array.isArray(rawToken) ? rawToken[0] : rawToken;
-    actor = token && psecret ? await verifyPortalIdentity(token, psecret, Date.now()) : null;
+    if (browser) {
+      const signedIn = await browserIdentity(req, method, deps, route?.browser === "embed");
+      if ("status" in signedIn) {
+        sendJson(res, signedIn.status, { error: signedIn.error, message: signedIn.message });
+        return null;
+      }
+      if ((route?.browser === "self" || route?.admin) && signedIn.imp) {
+        sendJson(res, 403, { error: "forbidden", message: "Unavailable while impersonating." });
+        return null;
+      }
+      actor = signedIn;
+    } else actor = token && psecret ? await verifyPortalIdentity(token, psecret, Date.now()) : null;
     if (actor && deps.identity) {
       const identity = deps.identity;
       const verified = ({ p, imp, authenticatedAs }: PortalIdentity) =>
@@ -281,7 +303,7 @@ async function gate(
     }
     if (actor)
       actor = { ...actor, p: canonicalPerson(actor.p), ...(actor.imp ? { imp: canonicalPerson(actor.imp) } : {}) };
-    if (!isPublicRoute && requirePortalIdentity) {
+    if (!isPublicRoute && (requirePortalIdentity || browser)) {
       const webTurn =
         method === "POST" &&
         pathname === "/v1/turns" &&
@@ -289,19 +311,25 @@ async function gate(
         typeof body === "object" &&
         (body as { surface?: unknown }).surface === "web";
       const routeActor = route?.actor ?? (WRITE_METHODS.has(method) ? "person" : undefined);
-      const needsActor = webTurn || (routeActor !== undefined && routeActor !== "system");
+      const needsActor = browser || webTurn || (routeActor !== undefined && routeActor !== "system");
       if (needsActor) {
-        if (!psecret || !actor) {
-          sendJson(res, 401, { error: "unauthorized", message: "portal identity required" });
+        if (!actor) {
+          const message = browser ? "principal is no longer active" : "portal identity required";
+          sendJson(res, 401, { error: "unauthorized", message });
           return null;
         }
+        if (browser) body = withBrowserActor(route?.actor, req, url, body, actor.p);
         const field = !webTurn && routeActor?.includes(".") ? routeActor : undefined;
-        let asserted: unknown = null;
-        if (webTurn) asserted = (body as { actor?: { externalId?: unknown } }).actor?.externalId ?? null;
-        else if (field) asserted = assertedActorField(field, url, body);
+        const fields = [field, ...(browser && !route?.admin ? ["query.principalId", "body.principalId"] : [])];
+        const claimed = [
+          ...fields.flatMap((f) => (f ? assertedActorValues(f, url, body) : [])),
+          ...(webTurn
+            ? [(body as { actor?: { externalId?: unknown } }).actor?.externalId ?? null].filter((v) => v !== null)
+            : []),
+        ];
         const actorId = actor.p;
         const matchesActor = (value: unknown): boolean => typeof value === "string" && samePerson(value, actorId);
-        if ((field && !matchesActor(asserted)) || (!field && asserted !== null && !matchesActor(asserted))) {
+        if ((field && claimed.length === 0) || !claimed.every(matchesActor)) {
           sendJson(res, 403, { error: "forbidden", message: "portal identity does not match the requested actor" });
           return null;
         }
@@ -311,11 +339,10 @@ async function gate(
   return { body, capability, actor };
 }
 
-function assertedActorField(field: string, url: URL, body: unknown): unknown {
+function assertedActorValues(field: string, url: URL, body: unknown): unknown[] {
   const [where, name] = field.split(".", 2) as [string, string];
-  if (where === "query") return url.searchParams.get(name);
-  const value = body && typeof body === "object" ? (body as Record<string, unknown>)[name] : undefined;
-  return typeof value === "string" ? value : null;
+  if (where === "query") return url.searchParams.getAll(name);
+  return body && typeof body === "object" && Object.hasOwn(body, name) ? [(body as Record<string, unknown>)[name]] : [];
 }
 
 function baseCtx(req: IncomingMessage, res: ServerResponse, wiring: Wiring): BaseCtx {
@@ -501,7 +528,9 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
   const server = createHttpServer((req, res) => {
     req.on("error", () => res.destroy());
     res.on("error", () => res.destroy());
-    void front(req, res).catch((err: unknown) => respondError(req, res, err));
+    void withRequestContext("core", req, res, () => front(req, res)).catch((err: unknown) =>
+      respondError(req, res, err),
+    );
   });
   const { fastify, routing } = buildFastify(wiring, server);
   const ready = Promise.resolve(fastify.ready());
@@ -513,7 +542,7 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
 
   async function front(req: IncomingMessage, res: ServerResponse): Promise<void> {
     armBodyDeadline(req, deps.requestBodyDeadlineMs ?? 30_000);
-    const base = baseCtx(req, res, wiring);
+    let base = baseCtx(req, res, wiring);
     if (await proxyDeploymentSubdomain(base)) {
       nameRequest(base.method, "/deployment-proxy/*");
       return;
@@ -522,9 +551,13 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
       sendJson(res, 404, { error: "not_found", message: `${base.method} ${base.pathname}` });
       return void req.resume();
     }
+    const alias = apiAlias(base.method, base.pathname);
+    if (alias) {
+      req.url = `${alias}${base.url.search}`;
+      base = baseCtx(req, res, wiring);
+    }
     const raw = findRoute(rawRoutes, base.method, base.pathname);
     if (raw) {
-      if ("path" in raw.route) nameRequest(base.method, raw.route.path);
       const routeAuth = raw.route.auth;
       if (typeof routeAuth === "object") {
         base.capability = await verifyCapability(req, res, wiring, base.method, base.pathname, routeAuth);
@@ -534,10 +567,15 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
       return;
     }
     const matched = findRoute(apiRoutes, base.method, base.pathname);
-    if (matched && "path" in matched.route) nameRequest(base.method, matched.route.path);
     const routeAuth = matched?.route.auth;
     const acceptsSourceAuth = !matched || routeAuth === "source" || routeAuth === "either";
-    if (wiring.secret && !capabilityFromHeaders(req) && routeAuth !== "public" && acceptsSourceAuth) {
+    if (
+      wiring.secret &&
+      !capabilityFromHeaders(req) &&
+      routeAuth !== "public" &&
+      acceptsSourceAuth &&
+      !usesBrowserSession(req, matched?.route)
+    ) {
       const timestamp = Number(req.headers["x-timestamp"] ?? 0);
       if (
         !Number.isFinite(timestamp) ||
@@ -551,7 +589,8 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
         return;
       }
     }
-    rawBodies.set(req, await readRawBody(req, matched?.route.maxBodyBytes));
+    if (!matched?.route.streamBody || !usesBrowserSession(req, matched.route))
+      rawBodies.set(req, await readRawBody(req, matched?.route.maxBodyBytes));
     await ready;
     routing(req, res);
   }

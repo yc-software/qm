@@ -29,18 +29,19 @@ test("sent chats are durable, idempotent, and isolated to the signed-in owner", 
       },
     },
   } as unknown as ApiCtx;
-  await ensureSentChat(ctx);
+  const sentChat = findRoute(loopItemRoutes, "POST", "/v1/loops/inbox/sent-chat")!.route.handle;
+  await sentChat(ctx);
   assert.equal(status, 403);
   assert.equal((await store.list()).length, 0);
   previewEnabled = true;
-  await ensureSentChat(ctx);
+  await sentChat(ctx);
   assert.equal(status, 200);
   const original = response!.item;
   assert.equal(original.state, "held");
   assert.equal((await store.get(original.loopId))!.owner, "alice");
   assert.equal((await items.get(original.id))!.sourcePayload!.snippet, "The sent email body");
   await items.appendThread(original.id, [{ role: "human", text: "Summarize this" }]);
-  await ensureSentChat(ctx);
+  await sentChat(ctx);
   assert.equal(response!.item.id, original.id);
   assert.equal(response!.item.thread[0]!.text, "Summarize this");
   await items.setProposal(original.id, { data: { body: "My unfinished draft" }, by: "human" });
@@ -52,7 +53,7 @@ test("sent chats are durable, idempotent, and isolated to the signed-in owner", 
     from: "New sender",
     text: "New context",
   };
-  await ensureSentChat(ctx);
+  await sentChat(ctx);
   const refreshed = (await items.get(original.id))!;
   assert.deepEqual(refreshed.proposal, proposal);
   assert.equal(refreshed.sourcePayload!.snippet, "New context");
@@ -61,14 +62,14 @@ test("sent chats are durable, idempotent, and isolated to the signed-in owner", 
   assert.equal(refreshed.sourceSummary, "New title");
   assert.equal((refreshed.sourcePayload!.gmail as { messageId: string }).messageId, "newer-message");
   ctx.body = { ...(ctx.body as object), accountType: "personal" };
-  await ensureSentChat(ctx);
+  await sentChat(ctx);
   assert.notEqual(response!.item.id, original.id);
   ctx.actor = { p: "bob" } as ApiCtx["actor"];
-  await ensureSentChat(ctx);
+  await sentChat(ctx);
   assert.notEqual(response!.item.id, original.id);
   assert.equal(response!.item.thread.length, 0);
   ctx.actor = undefined;
-  await ensureSentChat(ctx);
+  await sentChat(ctx);
   assert.equal(status, 403);
 });
 

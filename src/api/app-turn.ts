@@ -315,10 +315,14 @@ export function createTurnMethods(
         ...(req.unattendedGrants?.length ? { unattendedGrants: req.unattendedGrants } : {}),
         ...(req.cronScript && origin.kind === "automation" ? { cronScript: req.cronScript } : {}),
         ...(req.infrequentCron && origin.kind === "automation" ? { infrequentCron: true } : {}),
+        ...(req.personaId && origin.kind === "automation" && req.surface === "cron"
+          ? { personaId: req.personaId }
+          : {}),
         ...(req.botActor ? { botActor: true } : {}),
         ...(req.surfaceTools ? { surfaceTools: true } : {}),
         ...(req.clientTools?.length ? { clientTools: req.clientTools } : {}),
         desktopClientId: desktopClientForTurn({ ...req, origin }),
+        ...(req.clientSurface ? { clientSurface: req.clientSurface } : {}),
         ...(req.envelopeWrapped ? { envelopeWrapped: true } : {}),
         ...(typeof req.displayText === "string" && req.displayText ? { displayText: req.displayText } : {}),
         ...(req.addressed || origin.kind === "human" ? { addressed: true } : {}),

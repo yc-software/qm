@@ -540,7 +540,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
       if (!(await canAdministerCron(app, cron, capability.actorId)))
         return { ok: false, code: "forbidden", message: "not your cron" };
-      if (req.limit !== undefined && (!Number.isInteger(req.limit) || req.limit < 1)) {
+      if (req.limit !== undefined && (!Number.isSafeInteger(req.limit) || req.limit < 1)) {
         return { ok: false, code: "bad_request", message: "limit must be a positive integer" };
       }
       const { runs, total } = await app.listCronFires(id, req.limit !== undefined ? { limit: req.limit } : {});

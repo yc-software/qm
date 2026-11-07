@@ -259,7 +259,7 @@ test("the guidance tool, POST /v1/soul and the policy route are locked to the pe
     );
 
     const policy = (principalId: string) =>
-      call("PUT", "/v1/contexts/policy", { principalId, scope: DESIGN_SCOPE, orders: `orders from ${principalId}` });
+      call("PUT", `/v1/contexts/${DESIGN_SCOPE}/ambient-policy`, { principalId, orders: `orders from ${principalId}` });
     assert.equal((await policy(CY)).status, 403);
     assert.equal((await built.app.getChannelPolicy(DESIGN))?.orders ?? "", "");
     assert.equal((await policy(BOB)).status, 200);
@@ -470,7 +470,7 @@ test("a channel's own grant on the persona never unlocks the channel, and a refu
   ok(
     await personas.setAccess(ANN, ada.id, [
       { scopeId: personal(ANN), role: "owner" },
-      { scopeId: DESIGN_SCOPE, role: "write" },
+      { scopeId: DESIGN_SCOPE, role: "read" },
     ]),
   );
   ok(await wear());

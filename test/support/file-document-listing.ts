@@ -82,6 +82,14 @@ export async function assertDocumentListing(store: FileArtifactStore): Promise<v
     ["searched-name"],
     "name filtering precedes grouping and applies to shared documents too",
   );
+  assert.deepEqual(
+    [
+      (await store.listDocuments([], named, { name: "100%_Report.txt" })).files.map((f) => f.id),
+      (await store.listDocuments([], named, { name: "100%_Report" })).files.map((f) => f.id),
+    ],
+    [["searched-name"], []],
+    "an exact name matches the whole name literally",
+  );
   const scoped = await store.listDocuments([mine], refs, { createdInScope: elsewhere, limit: 1 });
   assert.deepEqual(
     scoped.files.map((f) => f.id),

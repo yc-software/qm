@@ -77,7 +77,7 @@ const FAMILIES: AgentApiFamily[] = [
   {
     when: (view) => view.personasEnabled,
     guidance:
-      "Personas are reusable agents (instructions, skills, notes, credentials) living in a persona:<id> scope; people hold owner, write or read on them through people (personal:), teams (team:), the org (org:) or Slack channels (channel:, usable only in that channel). Writers edit instructions with PATCH and add a skill by creating it with scopeId persona:<id> on POST /v1/skills or moving one in with the skills tool; only owners share, attach credentials or delete. Use the persona-fork skill to copy one. With personas on for the whole organization, a persona's owner can make it a Slack channel's persona: every conversation in that channel then wears it, and only the persona's owners and writers, or an org admin, can change that channel's instructions, standing orders or skills.",
+      "Personas are reusable agents (instructions, skills, notes, credentials) living in a persona:<id> scope; people hold owner, write or read on them through people (personal:), teams (team:), the org (org:) or Slack channels (channel:, read only, usable only in that channel). Writers edit instructions with PATCH and add a skill by creating it with scopeId persona:<id> on POST /v1/skills or moving one in with the skills tool; only owners share, attach credentials or delete. Use the persona-fork skill to copy one. With personas on for the whole organization, a persona's owner can make it a Slack channel's persona: every conversation in that channel then wears it, and only the persona's owners and writers, or an org admin, can change that channel's instructions, standing orders or skills.",
     routes: [
       { method: "GET", path: "/v1/personas", summary: "personas you hold a role on, with your role" },
       {
@@ -93,7 +93,20 @@ const FAMILIES: AgentApiFamily[] = [
       {
         method: "PATCH",
         path: "/v1/personas/:id",
-        summary: "{name?,description?,instructions?,icon?} edits it (write or owner)",
+        summary:
+          "{name?,description?,instructions?,icon?} edits it (write or owner); each change that alters a field records a new version",
+      },
+      {
+        method: "GET",
+        path: "/v1/personas/:id/versions",
+        summary:
+          "?before=&limit=&full=1 its versions newest first, 20 a page by default: number, who and when, plus name, description, instructions and icon with full=1; {versions, more}",
+      },
+      {
+        method: "POST",
+        path: "/v1/personas/:id/versions/:version/restore",
+        summary:
+          "rolls name, description, instructions and icon back to that version as a new version (write or owner)",
       },
       {
         method: "PUT",

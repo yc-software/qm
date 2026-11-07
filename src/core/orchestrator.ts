@@ -943,7 +943,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       }
       const childFloor = delegatedSession?.spawnMeta?.readOnly === true;
       const strictReadOnly = input.readOnly === true || input.privateSessionMessage === true || childFloor;
-      const mcpToolsReady = !external && deps.mcp ? deps.mcp.toolDefsFor(actor.id, scopeId) : undefined;
+      const actAsActor = actor.type === "internal" && !input.botActor;
+      const mcpToolsReady = !external && deps.mcp ? deps.mcp.toolDefsFor(actor.id, scopeId, actAsActor) : undefined;
       const useMemory = !external && input.skipMemory !== true;
       const environmentId = external ? scopeId : await resolveEnvironmentId(deps.environments, scopeId);
       resolution.writableScopeId = environmentId;
@@ -951,7 +952,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         external || !deps.personas
           ? null
           : await deps.personas.forTurn(
-              (await deps.sessions.getByThread(conversation.threadRef))?.personaId,
+              (await deps.sessions.getByThread(conversation.threadRef))?.personaId ?? input.personaId,
               actor.id,
               scopeId,
             );
@@ -1097,6 +1098,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       } else if (input.surfaceTools && input.origin.kind === "automation" && input.origin.destination) {
         defaultDestination = input.origin.destination;
       }
+      const wornPersona = persona ? { id: persona.persona.id, name: persona.persona.name } : undefined;
+      if (defaultDestination && wornPersona) defaultDestination = { ...defaultDestination, persona: wornPersona };
       const cronBlock =
         delivery.candidates.length > 1 && deps.signingSecret && deps.apiBaseUrl
           ? `\n\n${deliveryMenu(delivery.candidates, delivery.defaultKey)}`
@@ -1637,6 +1640,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         ...(conversation.publishMembers ? { members: conversation.publishMembers } : {}),
         ...(liveTurn ? { liveActor: true } : {}),
         ...(input.botActor ? { botActor: true } : {}),
+        ...(actAsActor ? { actAsActor: true } : {}),
       };
       if (!strictReadOnly && deps.signingSecret && deps.apiBaseUrl) {
         const destination = defaultDestination;
@@ -2769,7 +2773,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           memoryCaptureMetadata: () => ({ sessionId: session.id, inheritedFacts: captureDependencies() }),
           memoryScopeId,
           ...(memoryAccess ? { memoryAccess } : {}),
-          ...(!external && deps.mcp ? { mcp: deps.mcp, scopeId } : {}),
+          ...(!external && deps.mcp ? { mcp: deps.mcp, scopeId, actAsActor } : {}),
           ...(surface?.capabilities.nativeActor ? { actingSlackUserId: actor.id } : {}),
           ...(deps.deploymentLayer
             ? {
@@ -3994,6 +3998,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             sessionId: session.id,
             reply,
             ...(result.retracted?.length ? { retracted: result.retracted } : {}),
+            ...(wornPersona ? { persona: wornPersona } : {}),
             ...(result.stopped ? { stopped: true, ...stopScope } : {}),
             ...(stagedAttachments.length ? { attachments: stagedAttachments } : {}),
             ...(sourceUserSeq !== undefined ? { sourceUserSeq } : {}),
