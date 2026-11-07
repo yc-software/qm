@@ -150,7 +150,7 @@ test("retained cron runs are private to people who can manage the cron", async (
     ownerScopeId: "personal:run-owner",
   });
   const firedAt = Date.now();
-  for (let i = 0; i < 101; i++)
+  for (let i = 0; i < 21; i++)
     await built.crons.recordFire(cron.id, {
       fireKey: `private-fire-${i}`,
       threadRef: `cron:private-fire-${i}`,
@@ -160,16 +160,14 @@ test("retained cron runs are private to people who can manage the cron", async (
       sessionId: "private-session",
     });
 
-  type Runs = { runs: Array<{ reply?: string }>; total: number };
   const runs = async (query: string) => {
     const response = await fetch(`${coreBase}/api/crons/${cron.id}/runs${query}`, asUser("run-owner"));
     assert.equal(response.status, 200);
-    const page = (await response.json()) as Runs;
+    const page = (await response.json()) as { runs: Array<{ reply?: string }>; total: number };
     return [page.runs.length, page.total, page.runs.at(-1)?.reply];
   };
-  assert.deepEqual(await runs(""), [100, 101, "private result 100"]);
-  assert.deepEqual(await runs("?limit=20"), [20, 101, "private result 100"]);
-  assert.deepEqual(await runs("?limit=500"), [101, 101, "private result 100"]);
+  assert.deepEqual(await runs("?limit=20"), [20, 21, "private result 20"]);
+  assert.deepEqual(await runs(""), [21, 21, "private result 20"]);
   const huge = await fetch(`${coreBase}/api/crons/${cron.id}/runs?limit=99999999999999999999`, asUser("run-owner"));
   assert.equal(huge.status, 400);
   assert.equal((await fetch(`${coreBase}/api/crons/${cron.id}/runs`, asUser("other-user"))).status, 404);

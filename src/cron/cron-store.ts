@@ -1,12 +1,7 @@
 import type { Destination } from "../types.ts";
 import type { Cron, CronFireLogEntry, CronFireNote, CronSchedule, CronScript } from "../triggers/types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
-import {
-  FIRE_RETENTION_KEEP_PER_CRON,
-  type BeginFireResult,
-  type CronFireRecord,
-  type CronFireStore,
-} from "./fire-store.ts";
+import { type BeginFireResult, type CronFireRecord, type CronFireStore } from "./fire-store.ts";
 import {
   assertNoEscalation,
   buildTriggerBase,
@@ -51,6 +46,8 @@ export const DEFAULT_FIRE_RUNNING_STALE_MS = 24 * 60 * 60 * 1000;
 export const STRANDED_FIRE_NOTE = "fire never completed — stranded by a restart or crash";
 
 export const FIRE_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
+
+export const FIRE_RETENTION_KEEP_PER_CRON = 100;
 
 export interface CronStore {
   create(input: CreateCronInput): Promise<Cron>;

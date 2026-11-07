@@ -223,7 +223,7 @@ export function cronTools(kit: ToolKit) {
       limit: Type.Optional(
         Type.Integer({
           minimum: 1,
-          description: "list: page size (default 25, max 100). runs: latest N entries (default 100).",
+          description: "list: page size (default 25, max 100). runs: latest N entries.",
         }),
       ),
       offset: Type.Optional(Type.Integer({ minimum: 0, description: "list: page offset from the previous footer." })),
@@ -345,7 +345,7 @@ export function cronTools(kit: ToolKit) {
           const suffix =
             r.runs.length === r.total
               ? ""
-              : `\n(showing the latest ${r.runs.length} of ${r.total}; pass a larger limit for more)`;
+              : `\n(showing ${r.runs.length} of ${r.total}; omit limit for all retained entries)`;
           const noteLine =
             r.cron.lastFireNote && Number.isFinite(r.cron.lastFireNote.at)
               ? `\n(shift-change note (${utcMinute(r.cron.lastFireNote.at)}${r.cron.lastFireNote.by ? `, by ${r.cron.lastFireNote.by}` : ""}): ${r.cron.lastFireNote.text})`
