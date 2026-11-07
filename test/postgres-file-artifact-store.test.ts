@@ -259,24 +259,20 @@ test("shared file refs authorize only the exact record ID", { skip }, async () =
   await assertSharedRecordIdentity(createPostgresFileArtifactStore(URL!, createMemoryDurableByteStore()));
 });
 
-test(
-  "pg stores a mimetype that names several types or holds control characters as octet-stream",
-  { skip },
-  async () => {
-    const store = createPostgresFileArtifactStore(URL!, createMemoryDurableByteStore());
-    const smuggled = await store.put(
-      put({ id: fileArtifactId("smuggled", "out", 0), mimetype: "text/plain, text/html" }),
-    );
-    assert.equal(smuggled.artifact.mimetype, "application/octet-stream");
-    const pg = (await import("pg")).default;
-    const p = new pg.Pool({ connectionString: URL });
-    await p.query(
-      "INSERT INTO file_artifacts (id, owner_scope_id, path, name, mimetype, size_bytes, direction, created_by, created_at, updated_at) VALUES ('legacy', $1, 'a/x.txt', 'x.txt', 'text/plain, text/html', 1, 'out', 'U1', 1, 1)",
-      [owner],
-    );
-    await p.query("DELETE FROM qm_schema_migrations WHERE id = 'files/artifacts/0003'");
-    await p.end();
-    const migrated = createPostgresFileArtifactStore(URL!, createMemoryDurableByteStore());
-    assert.equal((await migrated.get("legacy"))?.mimetype, "application/octet-stream");
-  },
-);
+test("pg writes a multi-type mimetype as octet-stream and migration 0003 rewrites stored ones", { skip }, async () => {
+  const store = createPostgresFileArtifactStore(URL!, createMemoryDurableByteStore());
+  const smuggled = await store.put(
+    put({ id: fileArtifactId("smuggled", "out", 0), mimetype: "text/plain, text/html" }),
+  );
+  assert.equal(smuggled.artifact.mimetype, "application/octet-stream");
+  const pg = (await import("pg")).default;
+  const p = new pg.Pool({ connectionString: URL });
+  await p.query(
+    "INSERT INTO file_artifacts (id, owner_scope_id, path, name, mimetype, size_bytes, direction, created_by, created_at, updated_at) VALUES ('legacy', $1, 'a/x.txt', 'x.txt', 'text/plain, text/html', 1, 'out', 'U1', 1, 1)",
+    [owner],
+  );
+  await p.query("DELETE FROM qm_schema_migrations WHERE id = 'files/artifacts/0003'");
+  await p.end();
+  const migrated = createPostgresFileArtifactStore(URL!, createMemoryDurableByteStore());
+  assert.equal((await migrated.get("legacy"))?.mimetype, "application/octet-stream");
+});
