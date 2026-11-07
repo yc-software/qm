@@ -11,6 +11,7 @@ import { conversationScope } from "../resolution/resolution-service.ts";
 import { conversationWebUrl } from "../util/conversation-links.ts";
 import { createKeyedQueue, sleep } from "../util/async.ts";
 import { swallowAs } from "../util/errors.ts";
+import { SLACK_PERMANENT_POST_ERRORS, slackErrorCode } from "./payloads.ts";
 
 export interface SlackSessionStatusState {
   writer?: string;
@@ -156,15 +157,10 @@ export function createSlackSessionStatus(
             }
             if (!ongoing) await deleteIf(id, (row) => !leaseLost && row.writer === writer);
           } catch (error) {
-            const code = (error as { data?: { error?: string } }).data?.error;
+            const code = slackErrorCode(error) ?? "";
             if (
-              [
-                "channel_not_found",
-                "not_authorized",
-                "no_permission",
-                "thread_ts_not_allowed",
-                "message_not_found",
-              ].includes(code ?? "") &&
+              (SLACK_PERMANENT_POST_ERRORS.has(code) ||
+                ["not_authorized", "no_permission", "thread_ts_not_allowed"].includes(code)) &&
               !leaseLost
             )
               await deleteIf(id, (row) => !leaseLost && row.writer === writer);

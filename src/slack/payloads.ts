@@ -205,6 +205,17 @@ export const SLACK_AUTH_ERRORS: ReadonlySet<string> = new Set([
   "account_inactive",
 ]);
 
+export const SLACK_PERMANENT_POST_ERRORS: ReadonlySet<string> = new Set([
+  "channel_not_found",
+  "is_archived",
+  "account_inactive",
+  "user_not_found",
+  "cannot_reply_to_message",
+  "message_not_found",
+  "restricted_action",
+  "restricted_action_read_only_channel",
+]);
+
 export function isDirectChannelType(channelType: unknown): boolean {
   return channelType === "im" || channelType === "mpim";
 }
