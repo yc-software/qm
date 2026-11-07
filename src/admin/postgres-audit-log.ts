@@ -61,7 +61,7 @@ export function createPostgresAuditLog(connectionString: string): AuditLog {
   ]);
 
   const pendingWrites = new Set<Promise<void>>();
-  return {
+  const log: AuditLog = {
     record(e) {
       const write = q(`INSERT INTO audit_log(${COLS}) VALUES ($1,$2,$3,$4,$5,$6,$7)`, [
         e.at,
@@ -91,6 +91,15 @@ export function createPostgresAuditLog(connectionString: string): AuditLog {
     },
     async tail({ limit, scopeLabel, action, since, resourceContains }) {
       await Promise.allSettled(pendingWrites);
+      if (Array.isArray(action) && action.length !== 1) {
+        const batches = await Promise.all(
+          action.map((a) => log.tail({ limit, scopeLabel, action: a, since, resourceContains })),
+        );
+        return batches
+          .flat()
+          .sort((a, b) => b.at - a.at)
+          .slice(0, limit);
+      }
       const params: unknown[] = [];
       const conds: string[] = [];
       if (scopeLabel !== undefined) {
@@ -98,8 +107,8 @@ export function createPostgresAuditLog(connectionString: string): AuditLog {
         conds.push(`scope_label = $${params.length}`);
       }
       if (action !== undefined) {
-        params.push(action);
-        conds.push(typeof action === "string" ? `action = $${params.length}` : `action = ANY($${params.length})`);
+        params.push(typeof action === "string" ? action : action[0]);
+        conds.push(`action = $${params.length}`);
       }
       if (since !== undefined) {
         params.push(since);
@@ -118,4 +127,5 @@ export function createPostgresAuditLog(connectionString: string): AuditLog {
       return rows.map(rowToEvent);
     },
   };
+  return log;
 }

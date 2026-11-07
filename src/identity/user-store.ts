@@ -2,7 +2,7 @@ import type { PoolClient } from "pg";
 import { createPgPool, withPgTransaction, type PgMigrationDefinition } from "../persistence/pg-pool.ts";
 import { DIRECTORY_MIGRATIONS } from "../directory/postgres-directory-store.ts";
 import { SESSION_MIGRATIONS } from "../sessions/session-schema.ts";
-import { msOf, TENANT, userTurn } from "../sessions/items.ts";
+import { authoredUserTurn, msOf, TENANT } from "../sessions/items.ts";
 import { foldPrincipalId } from "../directory/person.ts";
 import { PERSONA_MIGRATIONS } from "../personas/persona-schema.ts";
 
@@ -281,26 +281,30 @@ function toLink(r: Record<string, unknown>): UserLink {
 }
 
 const ACTIVITY = `
-  WITH member AS (
-    SELECT DISTINCT coalesce(l.user_id::text, ${fold("p.principal_id")}) AS who, l.user_id, p.session_id
-      FROM participants p LEFT JOIN user_links l ON l.alias_id = ${fold("p.principal_id")}
-     WHERE coalesce(btrim(p.principal_id), '') <> ''
-  ), daily AS (
-    SELECT m.who, (${msOf("e.created_at")} / 86400000)::bigint AS day, COUNT(*) AS turns,
+  WITH daily AS (
+    SELECT ${fold("e.author")} AS alias, (${msOf("e.created_at")} / 86400000)::bigint AS day, COUNT(*) AS turns,
            ${msOf("MAX(e.created_at)")} AS last_at
-      FROM member m JOIN items e ON e.tenant_id = ${TENANT} AND e.session_id = m.session_id
-     WHERE ${userTurn("e")}
-     GROUP BY m.who, day
+      FROM items e
+     WHERE e.tenant_id = ${TENANT} AND ${authoredUserTurn("e")}
+     GROUP BY 1, 2
+  ), turns AS (
+    SELECT coalesce(l.user_id::text, d.alias) AS who, d.day, SUM(d.turns) AS turns, MAX(d.last_at) AS last_at
+      FROM daily d LEFT JOIN user_links l ON l.alias_id = d.alias
+     GROUP BY 1, 2
   ), per AS (
     SELECT who, SUM(turns) AS turns, MAX(last_at) AS last_at, array_agg(day ORDER BY day) AS days
-      FROM daily GROUP BY who
+      FROM turns GROUP BY who
+  ), member AS (
+    SELECT coalesce(l.user_id::text, ${fold("p.principal_id")}) AS who, l.user_id, COUNT(DISTINCT p.session_id) AS sessions
+      FROM participants p LEFT JOIN user_links l ON l.alias_id = ${fold("p.principal_id")}
+     WHERE coalesce(btrim(p.principal_id), '') <> ''
+     GROUP BY 1, 2
   )
   SELECT m.user_id, coalesce(u.primary_alias, m.who) AS principal_id, coalesce(u.kind, 'person') AS kind,
-         COUNT(DISTINCT m.session_id) AS sessions, coalesce(per.turns, 0) AS turns, per.last_at, per.days
+         m.sessions, coalesce(per.turns, 0) AS turns, per.last_at, per.days
     FROM member m
     LEFT JOIN users u ON u.id = m.user_id
-    LEFT JOIN per ON per.who = m.who
-   GROUP BY m.who, m.user_id, u.primary_alias, u.kind, per.turns, per.last_at, per.days`;
+    LEFT JOIN per ON per.who = m.who`;
 
 function toActivity(r: Record<string, unknown>): UserActivity {
   return {
