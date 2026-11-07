@@ -158,6 +158,20 @@ test("env provider ids are read-only and a stored collision disables the route",
   );
 });
 
+test("the registry refuses a brain on a loopback or private address, which only MEMORY_PROVIDER_CONFIG may name", () => {
+  for (const url of [
+    "http://localhost:8787/mcp",
+    "http://127.0.0.1:8787/mcp",
+    "https://10.0.0.7/mcp",
+    "https://[::1]/mcp",
+    "https://169.254.169.254/latest",
+    "http://brain.internal/mcp",
+    "https://gbrain.local/mcp",
+  ])
+    refused(() => personalBrain(EMPTY_MEMORY_REGISTRY, { url }), 400, /private network.*MEMORY_PROVIDER_CONFIG/);
+  assert.equal(personalBrain().brains[0]!.url, "https://brain.acme.example/mcp");
+});
+
 test("the env validator's rules apply to registry brains", () => {
   refused(() => personalBrain(EMPTY_MEMORY_REGISTRY, { url: "http://brain.example.com" }), 400, /must use HTTPS/);
   refused(() => personalBrain(EMPTY_MEMORY_REGISTRY, { preset: "gbrain-v9" }), 400, /preset must be one of/);

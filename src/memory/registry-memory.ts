@@ -1,6 +1,7 @@
 import type { Item } from "../sessions/items.ts";
 import { SCOPE_KINDS } from "../types.ts";
 import { reportFailure } from "../util/errors.ts";
+import { publicFetch, type AddressFetch } from "../util/network.ts";
 import { disclosedMemory, type MemoryDisclosure } from "./disclosure.ts";
 import type { MemoryService } from "./memory-service.ts";
 import type { MemoryProviderConfig } from "./provider-config.ts";
@@ -48,6 +49,7 @@ export function createRegistryMemoryService(opts: {
   overlay?: MemoryProviderConfig;
   registry: Pick<MemoryRegistryStore, "current" | "overlayIds" | "key">;
   sessionItems?: (sessionId: string) => Promise<Item[]>;
+  registryFetch?: AddressFetch;
   onError?: (error: unknown, provider: string, operation: "recall" | "query" | "capture") => void;
 }): MemoryService {
   const overlayProviders = createMemoryProviders(opts.overlay?.providers ?? [], opts);
@@ -72,7 +74,7 @@ export function createRegistryMemoryService(opts: {
         service: config.routes.length
           ? routed(
               [...(opts.overlay?.routes ?? [NOTEBOOK_ROUTE]), ...config.routes],
-              createMemoryProviders(config.providers),
+              createMemoryProviders(config.providers, { fetch: opts.registryFetch ?? publicFetch }),
             )
           : overlayOnly,
       };

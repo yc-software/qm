@@ -294,6 +294,8 @@ A brain is one MCP endpoint plus one OAuth client-credentials pair, used for rea
 
 A scope binds to a brain once, and a binding for the kind `personal` already covers every member's scope, so a brain bound to the kind can't also take a binding for one member, or the reverse. Capture is `off` or `explicit`; automatic capture into a brain isn't available yet.
 
+A brain's `url` must be a public `https://` address. QM refuses plain HTTP and any loopback or private host, such as `localhost`, `127.0.0.1`, `10.x`, `*.internal` or `*.local`, when the brain is registered (400), and it calls every registry brain the way it calls an admin-registered MCP server: on the address actually dialed, it refuses one that is loopback, link-local, private or unspecified, and it rejects HTTP redirects ([MCP connectors](./mcp-connectors.md)). A brain on a private network, such as one beside QM on a Docker network, belongs in `MEMORY_PROVIDER_CONFIG`, which only whoever deploys QM can set.
+
 QM is always an MCP client of gbrain and never gets gbrain's database URL or its owner admin token. The brain's operator provisions the client, the attest right and member links; QM only binds members to what was provisioned.
 
 ### API
