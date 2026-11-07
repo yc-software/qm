@@ -479,6 +479,14 @@ test("an admin edit's destination audience follows its target and cannot be supp
 
     assert.equal((await put({ type: "slack", target: "C9:3.4" })).status, 200);
     assert.deepEqual(await stored(), { type: "slack", target: "C9:3.4", audienceScopeId: "channel:C9" });
+
+    assert.equal((await put({ type: "principal", target: "oidc:H:alice" })).status, 200);
+    assert.equal((await put({ type: "principal", target: "oidc:H:bob" })).status, 200);
+    assert.deepEqual(
+      await stored(),
+      { type: "principal", target: "oidc:H:bob", audienceScopeId: "personal:oidc:H:bob" },
+      "a principal's audience is always that principal, even when its id contains a colon",
+    );
   } finally {
     await s.close();
   }
