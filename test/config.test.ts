@@ -1027,10 +1027,10 @@ test("PRIVATE_NETWORK_ALLOWED_ORIGINS is parsed at startup and a bad entry stops
     ["http://gbrain:8787", "https://brain.example-tailnet.ts.net"],
   );
   assert.throws(
-    () => loadConfig({ PRIVATE_NETWORK_ALLOWED_ORIGINS: "http://gbrain:8787,http://admin:hunter2@localhost:8787" }),
+    () => loadConfig({ PRIVATE_NETWORK_ALLOWED_ORIGINS: "http://gbrain:8787,http://admin:PASSWORD@localhost:8787" }),
     (e: unknown) => {
       assert.match(String(e), /PRIVATE_NETWORK_ALLOWED_ORIGINS entry 2 \(http:\/\/localhost:8787\)/);
-      assert.doesNotMatch(String(e), /hunter2|admin/);
+      assert.doesNotMatch(String(e), /PASSWORD|admin/);
       return true;
     },
   );

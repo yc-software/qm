@@ -156,7 +156,7 @@ test("PRIVATE_NETWORK_ALLOWED_ORIGINS refuses a bad entry by position and origin
   for (const [entry, reason] of [
     ["not a url secret", /entry 2 is not a valid URL \(value not shown\)/],
     ["ftp://secret.example", /entry 2 is not an http:\/\/ or https:\/\/ origin \(value not shown\)/],
-    ["http://admin:secret@gbrain:8787", /entry 2 \(http:\/\/gbrain:8787\) carries credentials/],
+    ["http://admin:PASSWORD@gbrain:8787", /entry 2 \(http:\/\/gbrain:8787\) carries credentials/],
     ["http://gbrain:8787/secret", /entry 2 \(http:\/\/gbrain:8787\) has a path, query or fragment/],
     [
       "http://localhost:8787",
@@ -201,8 +201,8 @@ test("a listed origin still refuses a name that resolves to loopback, at dial ti
   await assert.rejects(
     createMcpClient({ url: `http://localhost:${target.port}/mcp`, auth: { mode: "none" } }).listTools(),
     (e: unknown) =>
-      /localhost resolves to a loopback, link-local or cloud metadata address, which PRIVATE_NETWORK_ALLOWED_ORIGINS never allows; point it at the service's own address$/.test(
-        errMessage(e),
+      errMessage(e).endsWith(
+        "localhost resolves to a loopback, link-local or cloud metadata address, which PRIVATE_NETWORK_ALLOWED_ORIGINS never allows; point it at the service's own address",
       ),
   );
   assert.equal(target.hits(), 0);
