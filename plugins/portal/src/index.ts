@@ -1307,6 +1307,10 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     }
   }
 
+  if (readCookie(req.headers.cookie, "portal_session") === null) {
+    const minted = `portal_session=${encodeURIComponent(seal(session, sessionKey))}`;
+    req.headers.cookie = req.headers.cookie ? `${req.headers.cookie}; ${minted}` : minted;
+  }
   if (core?.serves(method, pathname)) return core.handle(req, res);
   return core ? core.shell(req, res) : json(res, 404, { error: "not_found" });
 }
