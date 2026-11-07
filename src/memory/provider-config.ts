@@ -78,8 +78,11 @@ const URL_HELP = `Accepted: https://<host>, or http:// on ${ACCEPTED_HOSTS.slice
 const namedPrivateHost = (hostname: string): boolean =>
   PRIVATE_HOSTS.includes(hostname) || PRIVATE_SUFFIXES.some((suffix) => hostname.endsWith(suffix));
 
-export const isPrivateHost = (hostname: string): boolean =>
-  namedPrivateHost(hostname.replace(/\.+$/, "")) || isPrivateNetworkIp(hostname);
+export const isPrivateHost = (hostname: string): boolean => {
+  let end = hostname.length;
+  while (hostname[end - 1] === ".") end--;
+  return namedPrivateHost(hostname.slice(0, end)) || isPrivateNetworkIp(hostname);
+};
 
 function privateMcpUrl(value: unknown, at: string): string {
   const raw = string(value, at);
