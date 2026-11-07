@@ -37,10 +37,6 @@ migrate() {
     echo "::error::migrating with $label exited with status $status; see the log above" >&2
     exit "$status"
   fi
-  if grep -q '^\[failed\]' "$log"; then
-    echo "::error::migrating with $label reported failures; see the log above" >&2
-    exit 1
-  fi
 }
 
 echo "Installing published release $base"

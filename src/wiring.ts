@@ -2966,6 +2966,7 @@ export function buildApp(
     app,
     checkReadiness: async (signal) => {
       await pgArtifactMap.pool.q("SELECT 1", [], { signal });
+      await configStore.hydrate?.();
     },
     deploymentLayer,
     deploymentLayerStore,
