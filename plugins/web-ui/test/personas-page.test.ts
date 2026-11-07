@@ -56,6 +56,7 @@ const { vite, dom, close } = await browserEnv({
   fetch: (input, init) => {
     const path = String(input);
     const method = init?.method ?? "GET";
+    if (path.startsWith("/api/ui-state")) return json({});
     calls.push({ method, path, body: typeof init?.body === "string" ? JSON.parse(init.body) : null });
     if (path === "/api/personas" && method === "GET")
       return disabled
