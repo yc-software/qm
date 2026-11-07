@@ -280,16 +280,19 @@ function toLink(r: Record<string, unknown>): UserLink {
   };
 }
 
-// Turns are credited to the person who wrote them (items.author), not to every participant of the
-// session: a shared channel would otherwise credit each member with everyone's messages, and the
-// participant fan-out made this a scan of all history per row (it timed out on prod). The partial
-// index items_user_turns_by_author (sessions/store/0057) covers this exact predicate.
 const ACTIVITY = `
-  WITH daily AS (
-    SELECT ${fold("e.author")} AS alias, (${msOf("e.created_at")} / 86400000)::bigint AS day, COUNT(*) AS turns,
+  WITH written AS (
+    SELECT e.author, e.session_id, (${msOf("e.created_at")} / 86400000)::bigint AS day, COUNT(*) AS turns,
            ${msOf("MAX(e.created_at)")} AS last_at
       FROM items e
-     WHERE e.tenant_id = ${TENANT} AND e.author IS NOT NULL AND ${userTurn("e")}
+     WHERE e.tenant_id = ${TENANT} AND e.author IS NOT NULL AND e.author NOT LIKE 'system:%' AND ${userTurn("e")}
+     GROUP BY 1, 2, 3
+  ), daily AS (
+    SELECT ${fold("w.author")} AS alias, w.day, SUM(w.turns) AS turns, MAX(w.last_at) AS last_at
+      FROM written w JOIN sessions s ON s.id = w.session_id
+     WHERE s.origin = 'conversation' AND s.parent_session_id IS NULL
+       AND coalesce(s.spawn_meta::jsonb -> 'surfaceOrigin' ->> 'audience', '') <> 'external'
+       AND coalesce(s.spawn_meta::jsonb -> 'origin' ->> 'kind', '') <> 'automation'
      GROUP BY 1, 2
   ), turns AS (
     SELECT coalesce(l.user_id::text, d.alias) AS who, l.user_id, d.day, SUM(d.turns) AS turns, MAX(d.last_at) AS last_at

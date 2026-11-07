@@ -58,12 +58,6 @@ export function createPostgresAuditLog(connectionString: string): AuditLog {
       id: "admin/audit-log/0002",
       statements: [`CREATE INDEX IF NOT EXISTS audit_log_by_action ON audit_log(action, at DESC)`],
     },
-    {
-      id: "admin/audit-log/0003",
-      statements: [
-        `CREATE INDEX CONCURRENTLY IF NOT EXISTS audit_log_by_action_at_id ON audit_log(action, at DESC, id DESC)`,
-      ],
-    },
   ]);
 
   const pendingWrites = new Set<Promise<void>>();
@@ -97,8 +91,6 @@ export function createPostgresAuditLog(connectionString: string): AuditLog {
     },
     async tail({ limit, scopeLabel, action, since, resourceContains }) {
       await Promise.allSettled(pendingWrites);
-      // One indexed walk per action, merged here: `action = ANY(...)` let the planner walk the whole
-      // log newest-first looking for rare actions (Security flags timed out on prod).
       if (Array.isArray(action) && action.length !== 1) {
         const batches = await Promise.all(
           action.map((a) => log.tail({ limit, scopeLabel, action: a, since, resourceContains })),
