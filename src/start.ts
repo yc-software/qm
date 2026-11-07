@@ -148,17 +148,18 @@ export async function startQm(
     releaseInFlightRuns: () => built.runtime.releaseInFlightRuns(),
     async stop() {
       draining.abort();
-      const listenersClosed = sleep(config.shutdownDrainMs).then(() => {
-        frontDoor?.close();
-        server.close();
-        server.closeAllConnections();
-      });
+      const deadline = sleep(config.shutdownDrainMs);
       void slackRuntime.stop().catch((e: unknown) => console.error("[qm] slack plugin stop failed:", errMessage(e)));
       for (const runtime of slackAccountRuntimes)
         void runtime.stop().catch((e: unknown) => console.error("[qm] slack account stop failed:", errMessage(e)));
       void built.scheduler.stop().catch((e: unknown) => console.error("[qm] scheduler stop failed:", errMessage(e)));
       built.deploymentLayerRefresh.stop();
-      await built.runtime.stop(() => listenersClosed);
+      await built.runtime.stop(async () => {
+        await deadline;
+        frontDoor?.close();
+        server.close();
+        server.closeAllConnections();
+      });
     },
   };
 }
