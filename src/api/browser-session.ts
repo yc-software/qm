@@ -4,7 +4,7 @@ import { originOf, sameOriginRequest } from "../../plugins/chassis/src/http.ts";
 import type { PortalIdentity } from "../auth/portal-identity.ts";
 import { isStrongSigningSecret, MIN_SIGNING_SECRET_LENGTH } from "../auth/source-auth.ts";
 import { orgId } from "../config.ts";
-import { canonicalPerson } from "../directory/person.ts";
+import { canonicalPerson, samePerson } from "../directory/person.ts";
 import { reportFailure } from "../util/errors.ts";
 import { CAPABILITY_HEADER } from "./contract.ts";
 import type { ServerDeps } from "./deps.ts";
@@ -191,19 +191,21 @@ export function withBrowserActor(
   body: unknown,
   principalId: string,
 ): unknown {
-  const [where, name] = (field ?? "").split(".", 2);
-  if (where === "query" && name && !url.searchParams.has(name)) {
-    url.searchParams.set(name, principalId);
-    req.url = `${url.pathname}${url.search}`;
+  const own = (value: unknown) => typeof value === "string" && samePerson(value, principalId);
+  for (const named of new Set([field ?? "", "query.principalId", "body.principalId"])) {
+    const [where, name] = named.split(".", 2);
+    if (!name) continue;
+    const required = named === field;
+    if (where === "query") {
+      const values = url.searchParams.getAll(name);
+      if (values.length === 0 ? !required : !values.every(own)) continue;
+      url.searchParams.set(name, principalId);
+      req.url = `${url.pathname}${url.search}`;
+    } else if (where === "body" && body && typeof body === "object" && !Array.isArray(body)) {
+      const present = Object.hasOwn(body, name);
+      if (present ? !own((body as Record<string, unknown>)[name]) : !required) continue;
+      body = { ...body, [name]: principalId };
+    }
   }
-  if (
-    where === "body" &&
-    name &&
-    body &&
-    typeof body === "object" &&
-    !Array.isArray(body) &&
-    !Object.hasOwn(body, name)
-  )
-    return { ...body, [name]: principalId };
   return body;
 }
