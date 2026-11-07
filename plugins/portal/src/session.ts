@@ -172,7 +172,8 @@ export function signedOutCookies(secure: boolean, domain: string | undefined, st
     clearCookie("portal_impersonate", "/", secure),
     clearCookie("portal_trusted_tmp", "/auth/trusted", secure),
     ...sessionClears("/", secure, domain),
-    ...(domain ? sessionClears("/", secure) : staleDomain ? sessionClears("/", secure, staleDomain) : []),
+    ...(domain ? sessionClears("/", secure) : []),
+    ...(!domain && staleDomain ? sessionClears("/", secure, staleDomain) : []),
   ];
 }
 
