@@ -1686,7 +1686,10 @@ function itemRowTpl(surface: InboxSurface, item: InboxItem, groupSize = 1): Temp
               <span class="inbox-item-heading">${heading}</span>
               <span class="inbox-item-sub">${sub}</span>
             </span>
-            <span class="inbox-item-snippet">${slackTextTpl(item, item.snippet, { links: false })}</span>
+            <span
+              class="inbox-item-snippet ${/^merge conflict$/i.test(item.snippet.trim()) ? "inbox-item-snippet-conflict" : ""}"
+              >${slackTextTpl(item, item.snippet, { links: false })}</span
+            >
           </span>
           <span class="inbox-item-side">
             ${slack ? nothing : participantsTpl(item)} ${priorityMarkTpl(item)} ${itemSideMark(item, handled)}
