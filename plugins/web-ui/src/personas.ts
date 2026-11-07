@@ -28,7 +28,7 @@ import { deepLinkPath, UI_BASE } from "./deep-link";
 import { switchView } from "./shell";
 import { openProjectIconPicker, projectIconTpl } from "./project-icon";
 import { peopleResults, type DirectoryMatch } from "./people-results";
-import { avatarTpl, closeFormMenus, menuSelect } from "./ui";
+import { avatarTpl, menuSelect } from "./ui";
 import { canvasToast } from "./split";
 import { tip } from "./tooltip";
 import { openSkillById, startSkillCreateIn } from "./skills";
@@ -63,6 +63,7 @@ interface PersonaGrant {
   grantedBy?: string;
   grantedAt?: number | string;
   label?: string;
+  personasEnabled: boolean;
 }
 
 interface PersonaDetail extends PersonaView {
@@ -196,6 +197,7 @@ function drawPersonasPage(): void {
   if (appState.currentView !== "personas" || !appState.mainEl) return;
   viewSeq++;
   syncPersonaUrl(null);
+  resetPicker();
   if (!pageHost || pageHost.parentElement !== appState.mainEl) {
     pageHost = document.createElement("div");
     pageHost.className = "pane personas-page";
@@ -247,7 +249,7 @@ function personaActions(persona: PersonaView, opts: { edit: boolean }): Template
     ${rowAction("Chat", MessageSquare, () => void chatWithPersona(persona))}
     ${rowAction("Fork", GitFork, () => forkPersona(persona))}
     ${opts.edit && canEditPersona(persona.role) ? rowAction("Edit", Pencil, () => void openPersona(persona.id)) : nothing}
-    ${canSharePersona(persona.role) ? rowAction("Share", Share2, () => void sharePersona(persona.id)) : nothing}
+    ${canSharePersona(persona.role) ? rowAction("Share", Share2, () => void openGranteePicker(persona.id, "people")) : nothing}
   `;
 }
 
@@ -366,33 +368,63 @@ async function openPersona(id: string, flash = ""): Promise<void> {
   }
 }
 
-function granteeLabel(scopeId: string, names: ReadonlyMap<string, string> = new Map()): string {
-  const named = names.get(scopeId);
-  if (named) return named;
+const orgName = (): string => appState.me?.companyName?.trim() || "your organization";
+
+function granteeLabel(scopeId: string): string {
   const [kind, ...rest] = scopeId.split(":");
   const ref = rest.join(":");
   if (kind === "personal") return ref === appState.me?.user ? "You" : ref;
-  if (kind === "org") return `Everyone at ${appState.me?.companyName?.trim() || "your organization"}`;
+  if (kind === "org") return `Everyone at ${orgName()}`;
   if (kind === "team") return `Team ${ref}`;
   if (kind === "channel") return `#${ref}`;
   return scopeId;
 }
 
+const isMe = (grant: Pick<PersonaGrant, "scopeId">): boolean => grant.scopeId === `personal:${appState.me?.user ?? ""}`;
+
 function grantLabel(grant: PersonaGrant): string {
-  if (grant.scopeId === `personal:${appState.me?.user ?? ""}`) return "You";
+  if (isMe(grant)) return "You";
   return grant.label ?? granteeLabel(grant.scopeId);
 }
 
-function accessListTpl(access: readonly PersonaGrant[]): TemplateResult {
-  return html`<div class="project-member-list persona-access-list">
-    ${access.map(
-      (grant) =>
-        html`<div class="permission-row">
-          ${avatarTpl({ key: grant.scopeId, name: grantLabel(grant) })}
-          <span class="permission-person-label" dir="auto">${grantLabel(grant)}</span>
-          <span class="permission-owner">${ROLE_LABELS[grant.role]}</span>
-        </div>`,
-    )}
+const LAST_OWNER = "The only owner. Make someone else an owner before changing this.";
+
+function flagOffNote(grant: PersonaGrant): string {
+  return grant.scopeId.startsWith("personal:")
+    ? "Can't use personas until an admin turns on the Personas feature flag for them in Admin → Customize → Feature flags."
+    : "Personas is off for the organization, so only people with the flag on can use this. An admin can turn it on for everyone in Admin → Customize → Feature flags.";
+}
+
+function accessRowTpl(persona: PersonaDetail, grant: PersonaGrant, lastOwner: boolean): TemplateResult {
+  const label = grantLabel(grant);
+  const manage = canSharePersona(persona.role);
+  const blocked = manage && lastOwner ? { disabledHint: LAST_OWNER } : {};
+  return html`<div class="permission-row" data-scope=${grant.scopeId}>
+    ${avatarTpl({ key: grant.scopeId, name: label })}
+    <span class="permission-person-label" dir="auto"
+      >${label}${manage && lastOwner ? html`<small>${LAST_OWNER}</small>` : nothing}${
+        grant.personasEnabled ? nothing : html`<small>${flagOffNote(grant)}</small>`
+      }</span
+    >
+    ${
+      manage
+        ? html`<fieldset class="permission-control" ?disabled=${busyId !== null}>
+            ${menuSelect({
+              value: grant.role,
+              ariaLabel: `Access for ${label}`,
+              options: [
+                ...ROLE_ORDER.map((role) => ({
+                  value: role,
+                  label: ROLE_LABELS[role],
+                  ...(role === "owner" ? {} : blocked),
+                })),
+                { value: "none", label: "Remove access", ...blocked },
+              ],
+              onSelect: (value) => void changeRole(persona, grant, value),
+            })}
+          </fieldset>`
+        : html`<span class="permission-owner">${ROLE_LABELS[grant.role]}</span>`
+    }
   </div>`;
 }
 
@@ -507,51 +539,51 @@ function credentialsSection(persona: PersonaDetail, reload: (flash: string) => v
   );
 }
 
-function channelsSection(persona: PersonaDetail, reload: (flash: string) => void): TemplateResult {
+function channelsSection(persona: PersonaDetail): TemplateResult {
   const owner = canSharePersona(persona.role);
   const channels = persona.access.filter((grant) => grant.scopeId.startsWith("channel:"));
-  const body = channels.length
+  const list = channels.length
     ? html`<div class="persona-skill-list">
         ${channels.map((grant) =>
           removableRow(
             html`<span class="persona-channel-glyph">${icon(Hash, 14)}</span>`,
-            grant.label ?? granteeLabel(grant.scopeId),
-            "",
-            owner ? `Remove ${grant.label ?? granteeLabel(grant.scopeId)}` : null,
-            () =>
-              void saveAccess(
-                persona,
-                persona.access.filter((g) => g.scopeId !== grant.scopeId),
-                reload,
-                "Channel removed.",
-              ),
+            grantLabel(grant),
+            grant.personasEnabled ? "" : flagOffNote(grant),
+            owner ? `Remove ${grantLabel(grant)}` : null,
+            () => void removeGrantee(persona, grant),
           ),
         )}
       </div>`
     : emptyTpl("No channels.");
   return sectionTpl(
     "Slack channels",
-    owner ? rowAction("Add channel", Plus, () => openPersonaShare(persona, () => reload("Access saved."))) : nothing,
-    body,
+    owner ? rowAction("Add channel", Plus, () => void openGranteePicker(persona.id, "channels")) : nothing,
+    html`${list}${granteePickerTpl(persona, "channels")}`,
     `People in these channels can ask QM to use ${persona.name} in a thread there. QM stays the default; they can't edit ${persona.name}.`,
   );
 }
 
-function accessSection(persona: PersonaDetail, reload: (flash: string) => void): TemplateResult {
+function accessSection(persona: PersonaDetail): TemplateResult {
+  const owner = canSharePersona(persona.role);
   const people = persona.access.filter((grant) => !grant.scopeId.startsWith("channel:"));
+  const owners = persona.access.filter((grant) => grant.role === "owner");
   return sectionTpl(
     "Who has access",
-    canSharePersona(persona.role)
-      ? rowAction("Share", Share2, () => openPersonaShare(persona, () => reload("Access saved.")))
-      : nothing,
-    accessListTpl(people),
+    owner ? rowAction("Add people", Plus, () => void openGranteePicker(persona.id, "people")) : nothing,
+    html`<div class="project-member-list persona-access-list">
+        ${people.map((grant) => accessRowTpl(persona, grant, owners.length === 1 && grant.role === "owner"))}
+      </div>
+      ${granteePickerTpl(persona, "people")}`,
+    owner
+      ? "Owners manage access and credentials, editors change its instructions and skills, and everyone else can chat with it."
+      : `Only owners can change who has access: ask ${new Intl.ListFormat("en", { type: "disjunction" }).format(owners.map(grantLabel))}.`,
   );
 }
 
 function personaFactsTpl(persona: PersonaDetail, reload: (flash: string) => void, redraw: () => void): TemplateResult {
   return html`
     ${skillsSection(persona)} ${cronsSection(persona)} ${credentialsSection(persona, reload)}
-    ${channelsSection(persona, reload)} ${accessSection(persona, reload)}
+    ${channelsSection(persona)} ${accessSection(persona)}
     ${historySectionTpl({
       persona,
       canEdit: canEditPersona(persona.role),
@@ -562,6 +594,7 @@ function personaFactsTpl(persona: PersonaDetail, reload: (flash: string) => void
         setPersonaList([...personasState.list.filter((p) => p.id !== view.id), view]);
         reload(flash);
       },
+      failed: showActionError,
     })}
   `;
 }
@@ -581,19 +614,60 @@ async function chatWithPrompt(persona: PersonaView, prompt: string): Promise<voi
 
 async function saveAccess(
   persona: PersonaDetail,
-  grants: readonly PersonaGrant[],
-  reload: (flash: string) => void,
-  flash: string,
-): Promise<void> {
+  change: (access: PersonaGrant[]) => Array<Pick<PersonaGrant, "scopeId" | "role">>,
+): Promise<boolean> {
+  if (busyId) return false;
+  busyId = persona.id;
+  actionError = "";
+  clearTimeout(pickerTimer);
+  pickerSeq++;
+  if (picker) picker.searching = false;
+  redrawDetail();
   try {
+    const { access } = await fetchPersona(persona.id);
     await api(`/api/personas/${encodeURIComponent(persona.id)}/access`, {
       method: "PUT",
-      body: JSON.stringify({ access: grants.map(({ scopeId, role }) => ({ scopeId, role })) }),
+      body: JSON.stringify({ access: change(access).map(({ scopeId, role }) => ({ scopeId, role })) }),
     });
-    reload(flash);
+    busyId = null;
+    return true;
   } catch (e) {
-    canvasToast(errMessage(e, "Couldn't save access."));
+    busyId = null;
+    showActionError(errMessage(e, "Couldn't save access."));
+    return false;
   }
+}
+
+async function addGrantee(persona: PersonaDetail, scopeId: string, label: string): Promise<void> {
+  const added = await saveAccess(persona, (access) =>
+    access.some((grant) => grant.scopeId === scopeId) ? access : [...access, { scopeId, role: "read" }],
+  );
+  if (!added) return;
+  if (picker) Object.assign(picker, { query: "", people: [], channels: [], searched: false, error: "" });
+  await openPersona(persona.id, `Added ${label}.`);
+  focusPicker();
+}
+
+async function changeRole(persona: PersonaDetail, grant: PersonaGrant, value: string | null): Promise<void> {
+  if (value === "none") return removeGrantee(persona, grant);
+  const role = ROLE_ORDER.find((r) => r === value);
+  if (!role || role === grant.role) return;
+  if (isMe(grant) && !window.confirm(`Change your own role on ${persona.name} to ${ROLE_LABELS[role]}?`)) return;
+  const saved = await saveAccess(persona, (access) =>
+    access.map((g) => (g.scopeId === grant.scopeId ? { scopeId: g.scopeId, role } : g)),
+  );
+  if (saved) await openPersona(persona.id, "Access saved.");
+}
+
+async function removeGrantee(persona: PersonaDetail, grant: PersonaGrant): Promise<void> {
+  const label = grantLabel(grant);
+  const question = isMe(grant)
+    ? `Remove yourself from ${persona.name}? You may lose access to it.`
+    : `Remove ${label} from ${persona.name}?`;
+  if (!window.confirm(question)) return;
+  if (!(await saveAccess(persona, (access) => access.filter((g) => g.scopeId !== grant.scopeId)))) return;
+  if (isMe(grant)) backToList();
+  else await openPersona(persona.id, `Removed ${label}.`);
 }
 
 async function detachCredential(
@@ -608,7 +682,7 @@ async function detachCredential(
     });
     reload(`Detached ${credential.service}.`);
   } catch (e) {
-    canvasToast(errMessage(e, "Couldn't detach that credential."));
+    showActionError(errMessage(e, "Couldn't detach that credential."));
   }
 }
 
@@ -698,6 +772,163 @@ interface ChannelMatch {
   channelId: string;
   name: string;
   isPrivate: boolean;
+}
+
+type PickerKind = "people" | "channels";
+
+interface GranteePicker {
+  personaId: string;
+  kind: PickerKind;
+  query: string;
+  people: DirectoryMatch[];
+  channels: ChannelMatch[];
+  searching: boolean;
+  searched: boolean;
+  error: string;
+}
+
+let picker: GranteePicker | null = null;
+let pickerSeq = 0;
+let pickerTimer: ReturnType<typeof setTimeout> | undefined;
+let redrawDetail: () => void = () => {};
+let actionError = "";
+
+function showActionError(message: string): void {
+  actionError = message;
+  redrawDetail();
+}
+
+function resetPicker(): void {
+  clearTimeout(pickerTimer);
+  pickerSeq++;
+  picker = null;
+}
+
+function focusPicker(): void {
+  document.querySelector<HTMLInputElement>("#persona-grantee-search")?.focus();
+}
+
+async function openGranteePicker(personaId: string, kind: PickerKind): Promise<void> {
+  resetPicker();
+  picker = { personaId, kind, query: "", people: [], channels: [], searching: false, searched: false, error: "" };
+  const shown = appState.mainEl?.firstElementChild;
+  if (shown instanceof HTMLElement && shown.dataset.persona === personaId) redrawDetail();
+  else await openPersona(personaId);
+  focusPicker();
+}
+
+async function searchGrantees(): Promise<void> {
+  const current = picker;
+  if (!current) return;
+  clearTimeout(pickerTimer);
+  const seq = ++pickerSeq;
+  const term = current.query.trim();
+  Object.assign(current, { searching: Boolean(term), searched: false, error: "" });
+  if (!term) Object.assign(current, { people: [], channels: [] });
+  redrawDetail();
+  if (!term) return;
+  const q = encodeURIComponent(term);
+  try {
+    const found =
+      current.kind === "people"
+        ? { people: (await api<{ matches?: DirectoryMatch[] }>(`/api/directory/resolve?q=${q}`)).matches ?? [] }
+        : { channels: (await api<{ channels?: ChannelMatch[] }>(`/api/directory/channels?q=${q}`)).channels ?? [] };
+    if (seq !== pickerSeq) return;
+    Object.assign(current, found, { searched: true });
+  } catch (e) {
+    if (seq !== pickerSeq) return;
+    current.error = errMessage(e, "Couldn't search.");
+  }
+  current.searching = false;
+  redrawDetail();
+}
+
+function granteePickerTpl(persona: PersonaDetail, kind: PickerKind): TemplateResult | typeof nothing {
+  const current = picker;
+  if (current?.personaId !== persona.id || current.kind !== kind || !canSharePersona(persona.role)) return nothing;
+  const granted = new Set(persona.access.map((grant) => grant.scopeId));
+  const people = current.people.filter((person) => !granted.has(`personal:${person.principalId}`));
+  const channels = current.channels.filter((channel) => !granted.has(channel.scopeId));
+  const orgScope = `org:${appState.me?.org ?? ""}`;
+  const saving = busyId !== null;
+  let status = current.error;
+  if (current.searching) status = "Searching…";
+  else if (!status && current.searched && !people.length && !channels.length)
+    status = kind === "people" ? "No one else matches that." : "No other channels you're in match that.";
+  return html`<form
+    class="project-member-picker persona-grantee-picker"
+    @submit=${(e: SubmitEvent) => {
+      e.preventDefault();
+      void searchGrantees();
+    }}
+  >
+    <label for="persona-grantee-search">${kind === "people" ? "Add people" : "Add a Slack channel"}</label>
+    <div class="project-member-search-row">
+      ${icon(Search, 16)}
+      <input
+        id="persona-grantee-search"
+        name="query"
+        type="search"
+        autocomplete="off"
+        placeholder=${kind === "people" ? "Search by name or handle" : "Search channels you're in"}
+        .value=${live(current.query)}
+        ?disabled=${saving}
+        @input=${(e: Event) => {
+          current.query = (e.currentTarget as HTMLInputElement).value;
+          clearTimeout(pickerTimer);
+          pickerSeq++;
+          pickerTimer = setTimeout(() => void searchGrantees(), 200);
+        }}
+      />
+      <button
+        class="project-icon-button"
+        type="button"
+        aria-label="Close"
+        ${tip("Close")}
+        @click=${() => {
+          resetPicker();
+          redrawDetail();
+        }}
+      >
+        ${icon(X, 15)}
+      </button>
+    </div>
+    ${
+      kind === "people"
+        ? peopleResults(
+            people,
+            saving,
+            (person) => void addGrantee(persona, `personal:${person.principalId}`, person.displayName),
+          )
+        : html`<div class="project-member-results">
+            ${channels.map(
+              (channel) =>
+                html`<button
+                  class="project-member-result"
+                  type="button"
+                  ?disabled=${saving}
+                  @click=${() => void addGrantee(persona, channel.scopeId, `#${channel.name}`)}
+                >
+                  <span class="persona-channel-glyph">${icon(channel.isPrivate ? Lock : Hash, 15)}</span>
+                  <span class="project-member-name" dir="auto">${channel.name}</span>${icon(Plus, 15)}
+                </button>`,
+            )}
+          </div>`
+    }
+    <div class=${`project-member-status${current.error ? " error" : ""}`} aria-live="polite">${status}</div>
+    ${
+      kind === "people" && !granted.has(orgScope)
+        ? html`<button
+            class="btn persona-share-org"
+            type="button"
+            ?disabled=${saving}
+            @click=${() => void addGrantee(persona, orgScope, granteeLabel(orgScope))}
+          >
+            ${icon(Building2, 15)}<span>Add everyone at ${orgName()}</span>
+          </button>`
+        : nothing
+    }
+  </form>`;
 }
 
 interface FormState {
@@ -809,6 +1040,7 @@ function showPersonaDetail(persona: PersonaDetail, flash: string): void {
   const host = paneHost(persona.id);
   if (!host) return;
   syncPersonaUrl(persona.id);
+  actionError = "";
   const state: FormState = { icon: persona.icon ?? null, iconChanged: false, error: "", saving: false };
   const editable = canEditPersona(persona.role);
   const draw = () =>
@@ -828,6 +1060,7 @@ function showPersonaDetail(persona: PersonaDetail, flash: string): void {
           Your role: ${ROLE_LABELS[persona.role]}${persona.version ? ` · version ${persona.version}` : ""}
         </div>
         ${flash ? html`<div class="action-notice" role="status">${flash}</div>` : nothing}
+        ${actionError ? html`<div class="form-error persona-action-error" role="alert">${actionError}</div>` : nothing}
         ${
           editable
             ? personaFormTpl(persona, state, draw)
@@ -846,6 +1079,7 @@ function showPersonaDetail(persona: PersonaDetail, flash: string): void {
       </div>`,
       host,
     );
+  redrawDetail = draw;
   draw();
 }
 
@@ -861,230 +1095,6 @@ async function deletePersona(persona: PersonaView): Promise<void> {
     },
     `Couldn't delete ${persona.name}.`,
   );
-}
-
-async function sharePersona(id: string): Promise<void> {
-  try {
-    const persona = await fetchPersona(id);
-    openPersonaShare(persona, () => {
-      if (appState.currentView !== "personas") return;
-      if (pageHost?.isConnected) backToList();
-      else void openPersona(id);
-    });
-  } catch (e) {
-    notice = errMessage(e, "Couldn't load who has access.");
-    drawPersonasPage();
-  }
-}
-
-function openPersonaShare(persona: PersonaDetail, onSaved: () => void): void {
-  const opener = document.activeElement as HTMLElement | null;
-  const dialog = document.createElement("dialog");
-  dialog.className = "project-dialog persona-share-dialog";
-  dialog.setAttribute("aria-labelledby", "persona-share-heading");
-  document.body.append(dialog);
-  let grants: Array<{ scopeId: string; role: PersonaRole }> = persona.access.map(({ scopeId, role }) => ({
-    scopeId,
-    role,
-  }));
-  const names = new Map<string, string>(
-    persona.access.flatMap((grant) => (grant.label ? [[grant.scopeId, grantLabel(grant)] as const] : [])),
-  );
-  let search = "";
-  let people: DirectoryMatch[] = [];
-  let channels: ChannelMatch[] = [];
-  let searching = false;
-  let searched = false;
-  let searchSeq = 0;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let busyNow = false;
-  let error = "";
-  const granted = (scopeId: string) => grants.some((grant) => grant.scopeId === scopeId);
-  const close = () => {
-    clearTimeout(timer);
-    searchSeq++;
-    closeFormMenus();
-    dialog.close();
-    dialog.remove();
-    if (opener?.isConnected) opener.focus();
-  };
-  dialog.addEventListener("cancel", (event) => {
-    event.preventDefault();
-    if (closeFormMenus()) return;
-    close();
-  });
-  const add = (scopeId: string, label?: string) => {
-    if (label) names.set(scopeId, label);
-    if (!granted(scopeId)) grants = [...grants, { scopeId, role: "read" }];
-    search = "";
-    people = [];
-    channels = [];
-    searched = false;
-    error = "";
-    draw();
-  };
-  const setRole = (scopeId: string, value: string | null) => {
-    grants =
-      value === "none"
-        ? grants.filter((grant) => grant.scopeId !== scopeId)
-        : grants.map((grant) =>
-            grant.scopeId === scopeId && value && value in ROLE_LABELS
-              ? { scopeId, role: value as PersonaRole }
-              : grant,
-          );
-    draw();
-  };
-  const runSearch = async () => {
-    const seq = ++searchSeq;
-    const term = search.trim();
-    if (!term) {
-      people = [];
-      channels = [];
-      searched = false;
-      searching = false;
-      draw();
-      return;
-    }
-    searching = true;
-    draw();
-    try {
-      const q = encodeURIComponent(term);
-      const [found, rooms] = await Promise.all([
-        api<{ matches?: DirectoryMatch[] }>(`/api/directory/resolve?q=${q}`),
-        api<{ channels?: ChannelMatch[] }>(`/api/directory/channels?q=${q}`),
-      ]);
-      if (seq !== searchSeq || !dialog.isConnected) return;
-      people = (found.matches ?? []).filter((person) => !granted(`personal:${person.principalId}`));
-      channels = (rooms.channels ?? []).filter((channel) => !granted(channel.scopeId));
-      searched = true;
-    } catch (e) {
-      if (seq === searchSeq) error = errMessage(e, "Couldn't search.");
-    } finally {
-      if (seq === searchSeq && dialog.isConnected) {
-        searching = false;
-        draw();
-      }
-    }
-  };
-  const save = async () => {
-    if (busyNow) return;
-    busyNow = true;
-    error = "";
-    draw();
-    try {
-      await api(`/api/personas/${encodeURIComponent(persona.id)}/access`, {
-        method: "PUT",
-        body: JSON.stringify({ access: grants }),
-      });
-      close();
-      onSaved();
-    } catch (e) {
-      error = errMessage(e, "Couldn't save access.");
-      busyNow = false;
-      if (dialog.isConnected) draw();
-    }
-  };
-  const orgScope = `org:${appState.me?.org ?? ""}`;
-  const draw = () =>
-    render(
-      html`
-        <div class="project-dialog-head">
-          <div>
-            <h2 id="persona-share-heading">Share ${persona.name}</h2>
-            <p>Owners manage access, editors change it, and everyone else can chat with it.</p>
-          </div>
-          <button class="chip-x" type="button" aria-label="Close" @click=${close}>${icon(X, 16)}</button>
-        </div>
-        <form
-          class="permission-search"
-          @submit=${(e: SubmitEvent) => {
-            e.preventDefault();
-            clearTimeout(timer);
-            void runSearch();
-          }}
-        >
-          <div class="project-member-search-row">
-            ${icon(Search, 16)}<input
-              aria-label="Add people or Slack channels"
-              placeholder="Add people or Slack channels"
-              type="search"
-              autocomplete="off"
-              .value=${live(search)}
-              @input=${(e: Event) => {
-                search = (e.currentTarget as HTMLInputElement).value;
-                searchSeq++;
-                searched = false;
-                clearTimeout(timer);
-                timer = setTimeout(() => void runSearch(), 200);
-              }}
-            />
-          </div>
-          ${peopleResults(people, busyNow, (person) => add(`personal:${person.principalId}`, person.displayName))}
-          <div class="project-member-results">
-            ${channels.map(
-              (channel) =>
-                html`<button
-                  class="project-member-result"
-                  type="button"
-                  ?disabled=${busyNow}
-                  @click=${() => add(channel.scopeId, `#${channel.name}`)}
-                >
-                  <span class="persona-channel-glyph">${icon(channel.isPrivate ? Lock : Hash, 15)}</span>
-                  <span class="project-member-name" dir="auto">${channel.name}</span>${icon(Plus, 15)}
-                </button>`,
-            )}
-          </div>
-          ${searching ? html`<p class="permission-note" role="status">Searching…</p>` : nothing}
-          ${
-            !searching && searched && !people.length && !channels.length
-              ? html`<p class="permission-note">No people or channels you're in match that.</p>`
-              : nothing
-          }
-          ${
-            granted(orgScope)
-              ? nothing
-              : html`<button class="btn persona-share-org" type="button" @click=${() => add(orgScope)}>
-                  ${icon(Building2, 15)}<span>Add ${granteeLabel(orgScope).toLowerCase()}</span>
-                </button>`
-          }
-          <p class="permission-note">Channel members can chat with ${persona.name} only in that channel.</p>
-        </form>
-        <div class="permission-section-label">Who has access</div>
-        <div class="project-member-list">
-          ${grants.map(
-            (grant) =>
-              html`<div class="permission-row" data-scope=${grant.scopeId}>
-                ${avatarTpl({ key: grant.scopeId, name: granteeLabel(grant.scopeId, names) })}
-                <span class="permission-person-label" dir="auto">${granteeLabel(grant.scopeId, names)}</span>
-                <fieldset class="permission-control" ?disabled=${busyNow}>
-                  ${menuSelect({
-                    value: grant.role,
-                    ariaLabel: `Access for ${granteeLabel(grant.scopeId, names)}`,
-                    options: [
-                      ...(grant.scopeId.startsWith("channel:") ? (["read"] as const) : ROLE_ORDER).map((role) => ({
-                        value: role,
-                        label: ROLE_LABELS[role],
-                      })),
-                      { value: "none", label: "Remove access" },
-                    ],
-                    onSelect: (value) => setRole(grant.scopeId, value),
-                  })}
-                </fieldset>
-              </div>`,
-          )}
-        </div>
-        ${error ? html`<p class="composer-error" role="alert">${error}</p>` : nothing}
-        <div class="project-dialog-actions actions">
-          <button class="btn" type="button" @click=${close}>Cancel</button>
-          <button class="btn primary" type="button" ?disabled=${busyNow} @click=${() => void save()}>
-            ${busyNow ? "Saving…" : "Save"}
-          </button>
-        </div>
-      `,
-      dialog,
-    );
-  draw();
-  dialog.showModal();
 }
 
 export function personaName(personaId: string): string {
