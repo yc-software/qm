@@ -37,7 +37,6 @@ export interface SessionClaims {
   org: string;
   name?: string;
   auth?: number;
-  anon?: boolean;
   appOnly?: boolean;
   iat: number;
   exp: number;
