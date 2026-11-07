@@ -13,12 +13,14 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 const PUBLIC = "https://core.public.example";
 
 const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "webui-wh-")) }));
 const core = createServer(built.app, {
+  ...browserSessionDeps,
   replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
   signingSecret: SECRET,
   webhookReceiver: built.webhookReceiver,
@@ -26,6 +28,7 @@ const core = createServer(built.app, {
 });
 core.listen(0);
 const corePort = (core.address() as AddressInfo).port;
+const coreBase = `http://localhost:${corePort}`;
 
 process.env.CORE_API_URL = `http://localhost:${corePort}`;
 process.env.CORE_SIGNING_SECRET = SECRET;
@@ -45,7 +48,7 @@ function asUser(user: string, init: RequestInit = {}): RequestInit {
     ...init,
     headers: {
       "content-type": "application/json",
-      cookie: `webuiuser=${encodeURIComponent(user)}`,
+      cookie: `webuiuser=${encodeURIComponent(user)}; ${browserSessionCookie(user)}`,
       [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: user, exp: Date.now() + 60_000 }, SECRET),
       ...init.headers,
     },
@@ -75,7 +78,7 @@ test("create scopes the webhook to the user; list, disable, and re-enable are ow
 
   const id = created.webhook.id;
 
-  const aliceList = (await (await fetch(`${webBase}/api/webhooks`, asUser("alice"))).json()) as {
+  const aliceList = (await (await fetch(`${coreBase}/api/webhooks`, asUser("alice"))).json()) as {
     webhooks: Array<{ id: string; url: string; enabled: boolean; verification: { secret?: string } }>;
   };
   assert.equal(aliceList.webhooks.length, 1);
@@ -83,25 +86,25 @@ test("create scopes the webhook to the user; list, disable, and re-enable are ow
   assert.equal(aliceList.webhooks[0]?.url, incoming(id));
   assert.equal(aliceList.webhooks[0]?.verification.secret, "***");
 
-  const bobList = (await (await fetch(`${webBase}/api/webhooks`, asUser("bob"))).json()) as { webhooks: unknown[] };
+  const bobList = (await (await fetch(`${coreBase}/api/webhooks`, asUser("bob"))).json()) as { webhooks: unknown[] };
   assert.equal(bobList.webhooks.length, 0);
   const bobDisable = await fetch(`${webBase}/api/webhooks/${id}/disable`, asUser("bob", { method: "POST" }));
   assert.equal(bobDisable.status, 404);
 
-  const stillEnabled = (await (await fetch(`${webBase}/api/webhooks`, asUser("alice"))).json()) as {
+  const stillEnabled = (await (await fetch(`${coreBase}/api/webhooks`, asUser("alice"))).json()) as {
     webhooks: Array<{ enabled: boolean }>;
   };
   assert.equal(stillEnabled.webhooks[0]?.enabled, true);
 
   const aliceDisable = await fetch(`${webBase}/api/webhooks/${id}/disable`, asUser("alice", { method: "POST" }));
   assert.equal(aliceDisable.status, 200);
-  const afterDisable = (await (await fetch(`${webBase}/api/webhooks`, asUser("alice"))).json()) as {
+  const afterDisable = (await (await fetch(`${coreBase}/api/webhooks`, asUser("alice"))).json()) as {
     webhooks: Array<{ enabled: boolean }>;
   };
   assert.equal(afterDisable.webhooks[0]?.enabled, false);
   const aliceEnable = await fetch(`${webBase}/api/webhooks/${id}/enable`, asUser("alice", { method: "POST" }));
   assert.equal(aliceEnable.status, 200);
-  const afterEnable = (await (await fetch(`${webBase}/api/webhooks`, asUser("alice"))).json()) as {
+  const afterEnable = (await (await fetch(`${coreBase}/api/webhooks`, asUser("alice"))).json()) as {
     webhooks: Array<{ enabled: boolean }>;
   };
   assert.equal(afterEnable.webhooks[0]?.enabled, true);
@@ -125,17 +128,17 @@ test("removed Project members cannot list or disable their former Project webhoo
     verification: { scheme: "github", secret: "project-secret" },
   });
 
-  const before = (await (await fetch(`${webBase}/api/webhooks`, asUser("hook-owner"))).json()) as {
+  const before = (await (await fetch(`${coreBase}/api/webhooks`, asUser("hook-owner"))).json()) as {
     webhooks: Array<{ id: string }>;
   };
   assert.ok(before.webhooks.some((candidate) => candidate.id === webhook.id));
-  const teammateList = (await (await fetch(`${webBase}/api/webhooks`, asUser("project-teammate"))).json()) as {
+  const teammateList = (await (await fetch(`${coreBase}/api/webhooks`, asUser("project-teammate"))).json()) as {
     webhooks: Array<{ id: string }>;
   };
   assert.ok(teammateList.webhooks.some((candidate) => candidate.id === webhook.id));
 
   assert.equal((await built.app.removeProjectMember(project.id, "project-owner", "hook-owner")).status, "ok");
-  const after = (await (await fetch(`${webBase}/api/webhooks`, asUser("hook-owner"))).json()) as {
+  const after = (await (await fetch(`${coreBase}/api/webhooks`, asUser("hook-owner"))).json()) as {
     webhooks: Array<{ id: string }>;
   };
   assert.ok(!after.webhooks.some((candidate) => candidate.id === webhook.id));
@@ -166,7 +169,7 @@ test("a provided secret is passed through verbatim (no auto-generation)", async 
 });
 
 test("webhook routes require a signed-in principal (401 without a cookie)", async () => {
-  assert.equal((await fetch(`${webBase}/api/webhooks`)).status, 401);
+  assert.equal((await fetch(`${coreBase}/api/webhooks`)).status, 401);
   const create = await fetch(`${webBase}/api/webhooks`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -229,12 +232,12 @@ test("webhook history is relayed with the authenticated viewer, not a query-stri
     }),
   );
   const { webhook } = (await res.json()) as { webhook: { id: string } };
-  const path = `${webBase}/api/webhooks/${webhook.id}/events`;
+  const path = `${coreBase}/api/webhooks/${webhook.id}/events`;
   const owner = await fetch(path, asUser("history-owner"));
   assert.equal(owner.status, 200);
   assert.deepEqual(await owner.json(), { events: [] });
-  const stranger = await fetch(`${path}?viewer=history-owner`, asUser("stranger"));
-  assert.equal(stranger.status, 404);
+  assert.equal((await fetch(path, asUser("stranger"))).status, 404);
+  assert.equal((await fetch(`${path}?viewer=history-owner`, asUser("stranger"))).status, 403);
 });
 
 test("create accepts every scheme core verifies, including Linear, and core rejects unknown schemes", async () => {

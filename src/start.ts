@@ -1,3 +1,4 @@
+import { listedPrincipals } from "../plugins/chassis/src/principal-allowlist.ts";
 import { createManagedSlack } from "./surfaces/slack-managed.ts";
 import { randomBytes } from "node:crypto";
 import { lookup } from "node:dns/promises";
@@ -39,7 +40,13 @@ export async function startQm(
     ...serverDeps(config, built, slackEnvironmentState, slackConfig?.botToken),
     managedSlack,
     ...(env.PORTAL_SESSION_SECRET
-      ? { portalSession: { secret: env.PORTAL_SESSION_SECRET, maxAgeSeconds: sessionLifetime(env).max } }
+      ? {
+          portalSession: {
+            secret: env.PORTAL_SESSION_SECRET,
+            maxAgeSeconds: sessionLifetime(env).max,
+            principals: listedPrincipals(env.WEB_UI_PRINCIPALS),
+          },
+        }
       : {}),
     draining: draining.signal,
   });
@@ -54,7 +61,7 @@ export async function startQm(
   const frontDoor =
     config.publicPort === undefined
       ? undefined
-      : await startFrontDoor({ ...config, publicPort: config.publicPort }, env);
+      : await startFrontDoor({ ...config, publicPort: config.publicPort }, env, server);
 
   console.log(
     `[qm] listening on :${config.port} (org=${config.orgId}, ` +

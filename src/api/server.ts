@@ -32,7 +32,7 @@ import { proxyDeploymentSubdomain } from "./routes/deployments.ts";
 import { CAPABILITY_HEADER } from "./contract.ts";
 import { livePersonCapability } from "./artifact-share.ts";
 import { canonicalPerson, samePerson } from "../directory/person.ts";
-import { browserIdentity, usesBrowserSession, withBrowserActor } from "./browser-session.ts";
+import { apiAlias, browserIdentity, usesBrowserSession, withBrowserActor } from "./browser-session.ts";
 
 async function capabilityAdminDenied(
   access: AdminAccess,
@@ -524,7 +524,7 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
 
   async function front(req: IncomingMessage, res: ServerResponse): Promise<void> {
     armBodyDeadline(req, deps.requestBodyDeadlineMs ?? 30_000);
-    const base = baseCtx(req, res, wiring);
+    let base = baseCtx(req, res, wiring);
     if (await proxyDeploymentSubdomain(base)) {
       nameRequest(base.method, "/deployment-proxy/*");
       return;
@@ -532,6 +532,11 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
     if (!canonicalPath(req, base.pathname)) {
       sendJson(res, 404, { error: "not_found", message: `${base.method} ${base.pathname}` });
       return void req.resume();
+    }
+    const alias = apiAlias(base.method, base.pathname);
+    if (alias) {
+      req.url = `${alias}${base.url.search}`;
+      base = baseCtx(req, res, wiring);
     }
     const raw = findRoute(rawRoutes, base.method, base.pathname);
     if (raw) {

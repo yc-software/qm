@@ -122,6 +122,7 @@ test("a running core serves each published web UI release without restarting", a
       PUBLIC_PORT: String(publicPort),
       PUBLIC_WEB_URL: `http://localhost:${publicPort}`,
       PORTAL_LOCAL_AUTH_BYPASS: "1",
+      PORTAL_SESSION_SECRET: "web-release-publish-test-session-secret-0123",
       PORTAL_DEV_PRINCIPAL: "dev@example.com",
       CONNECTOR_SECRET_KEY: "a".repeat(64),
       CORE_SIGNING_SECRET: "web-release-publish-test-signing-secret",

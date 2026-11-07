@@ -13,17 +13,20 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 
 const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "webui-shared-")) }));
 built.runtime.start();
 const core = createServer(built.app, {
+  ...browserSessionDeps,
   replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
   signingSecret: SECRET,
 });
 core.listen(0);
 const corePort = (core.address() as AddressInfo).port;
+const coreBase = `http://localhost:${corePort}`;
 
 process.env.CORE_API_URL = `http://localhost:${corePort}`;
 process.env.CORE_SIGNING_SECRET = SECRET;
@@ -44,7 +47,7 @@ function asUser(user: string, init: RequestInit = {}): RequestInit {
     ...init,
     headers: {
       "content-type": "application/json",
-      cookie: `webuiuser=${encodeURIComponent(user)}`,
+      cookie: `webuiuser=${encodeURIComponent(user)}; ${browserSessionCookie(user)}`,
       [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: user, exp: Date.now() + 60_000 }, SECRET),
       ...init.headers,
     },
@@ -59,7 +62,7 @@ interface SessionRow {
 }
 
 async function sessionsOf(user: string): Promise<SessionRow[]> {
-  const r = await fetch(`${webBase}/api/sessions`, asUser(user));
+  const r = await fetch(`${coreBase}/api/sessions`, asUser(user));
   assert.equal(r.status, 200);
   return ((await r.json()) as { sessions: SessionRow[] }).sessions;
 }

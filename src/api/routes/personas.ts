@@ -209,9 +209,9 @@ async function setSessionPersona(ctx: ApiCtx): Promise<void> {
 
 export const personaRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...withActor("query.principalId", [
-    { method: "GET", path: "/v1/personas", auth: "either", handle: listPersonas },
-    { method: "GET", path: "/v1/personas/:id", auth: "either", handle: getPersona },
-    { method: "GET", path: "/v1/personas/:id/versions", auth: "either", handle: listPersonaVersions },
+    { method: "GET", path: "/v1/personas", browser: true, auth: "either", handle: listPersonas },
+    { method: "GET", path: "/v1/personas/:id", browser: true, auth: "either", handle: getPersona },
+    { method: "GET", path: "/v1/personas/:id/versions", browser: true, auth: "either", handle: listPersonaVersions },
   ]),
   ...withActor("body.principalId", [
     { method: "POST", path: "/v1/personas", auth: "either", handle: createPersona },

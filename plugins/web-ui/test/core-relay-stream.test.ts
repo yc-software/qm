@@ -54,8 +54,8 @@ async function collect(res: IncomingMessage): Promise<Buffer> {
   return Buffer.concat(chunks);
 }
 
-test("session list streams the first core bytes before core finishes the body", { timeout: 5_000 }, async () => {
-  const res = await get("/api/sessions", {});
+test("a relayed core read streams the first core bytes before core finishes the body", { timeout: 5_000 }, async () => {
+  const res = await get("/api/runtime-config", {});
   assert.equal(res.statusCode, 200);
   assert.equal(res.headers["content-type"], "application/json");
   assert.equal(seen.at(-1)?.acceptEncoding, "identity");
@@ -76,7 +76,7 @@ test("a relayed DELETE carries its JSON body to core", async () => {
 
 test("a browser that leaves mid-body closes the core response too", { timeout: 5_000 }, async () => {
   const closed = new Promise<void>((resolve) => (heldClosed = resolve));
-  const res = await get("/api/sessions", {});
+  const res = await get("/api/runtime-config", {});
   await once(res, "data");
   res.destroy();
   await Promise.race([

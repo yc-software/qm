@@ -13,17 +13,20 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 
 const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "webui-mem-")) }));
 const core = createServer(built.app, {
+  ...browserSessionDeps,
   replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
   signingSecret: SECRET,
   memory: built.memory,
 });
 core.listen(0);
 const corePort = (core.address() as AddressInfo).port;
+const coreBase = `http://localhost:${corePort}`;
 
 process.env.CORE_API_URL = `http://localhost:${corePort}`;
 process.env.CORE_SIGNING_SECRET = SECRET;
@@ -43,7 +46,7 @@ function asUser(user: string, init: RequestInit = {}): RequestInit {
     ...init,
     headers: {
       "content-type": "application/json",
-      cookie: `webuiuser=${encodeURIComponent(user)}`,
+      cookie: `webuiuser=${encodeURIComponent(user)}; ${browserSessionCookie(user)}`,
       [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: user, exp: Date.now() + 60_000 }, SECRET),
       ...init.headers,
     },
@@ -53,12 +56,12 @@ function asUser(user: string, init: RequestInit = {}): RequestInit {
 type Facts = { facts: Array<{ id: string; text: string }> };
 
 test("a signed-in user lists, edits and forgets their own facts; identity is the cookie", async () => {
-  const empty = await fetch(`${webBase}/api/memory`, asUser("alice"));
+  const empty = await fetch(`${coreBase}/api/memory`, asUser("alice"));
   assert.equal(empty.status, 200);
   assert.deepEqual(((await empty.json()) as Facts).facts, []);
 
   await built.memory.capture("personal:alice", ["Calls me Al", "Lives in Oakland"], Date.UTC(2026, 0, 2));
-  const [al, oakland] = ((await (await fetch(`${webBase}/api/memory`, asUser("alice"))).json()) as Facts).facts;
+  const [al, oakland] = ((await (await fetch(`${coreBase}/api/memory`, asUser("alice"))).json()) as Facts).facts;
 
   const edit = await fetch(
     `${webBase}/api/memory`,
@@ -86,7 +89,7 @@ test("a signed-in user lists, edits and forgets their own facts; identity is the
 });
 
 test("memory routes require a signed-in principal", async () => {
-  assert.equal((await fetch(`${webBase}/api/memory`)).status, 401);
+  assert.equal((await fetch(`${coreBase}/api/memory`)).status, 401);
   assert.equal(
     (
       await fetch(`${webBase}/api/memory`, {

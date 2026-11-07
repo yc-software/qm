@@ -881,6 +881,13 @@ function renewSessionCookie(req: IncomingMessage, res: ServerResponse): SessionC
   return renewed;
 }
 
+export interface CoreHandoff {
+  serves(method: string, pathname: string): boolean;
+  handle(req: IncomingMessage, res: ServerResponse): void;
+}
+
+let core: CoreHandoff | undefined;
+
 const server = createServer((req, res) => {
   const startedAt = performance.now();
   let errorLogged = false;
@@ -1043,7 +1050,9 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     );
   }
 
-  let session = renewSessionCookie(req, res) ?? currentSession(req);
+  const cookieSession = renewSessionCookie(req, res);
+  let session = cookieSession ?? currentSession(req);
+  if (session && !cookieSession) setSession(res, sessionCookieSet(seal(session, sessionKey), session.sub));
   const authenticatedPrincipal = session?.sub;
   let staleSession: SessionClaims | null = null;
   if (session && !session.anon && (!pathname.startsWith("/auth/") || pathname.startsWith("/auth/impersonate"))) {
@@ -1306,6 +1315,8 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       return sendHtml(res, 503, notConfiguredHtml());
     }
   }
+
+  if (core?.serves(method, pathname)) return core.handle(req, res);
 
   const imp = crossOrigin ? null : impersonationFor(session, req.headers.cookie, impersonateKey, Date.now());
   const impersonator = imp && (await isAdmin(session.sub)) ? session.sub : undefined;
@@ -1847,8 +1858,9 @@ function validEmailDomain(value: string): boolean {
     );
 }
 
-export async function startServer(options: { port: number; host?: string }): Promise<void> {
+export async function startServer(options: { port: number; host?: string; core?: CoreHandoff }): Promise<void> {
   bootChecks();
+  core = options.core;
   if (process.env.AUTH_EMBEDDED === "1") {
     if (AUTH_BROKER_UPSTREAM !== "http://127.0.0.1:8099") {
       throw new Error("Embedded auth requires the loopback broker upstream");

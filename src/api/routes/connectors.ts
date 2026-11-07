@@ -561,6 +561,7 @@ export const connectorRoutes: ReadonlyArray<Route<ApiCtx>> = [
   {
     method: "GET",
     path: "/v1/connectors/oauth/status",
+    browser: true,
     actor: "query.principalId",
     auth: "source",
     handle: oauthStatus,
