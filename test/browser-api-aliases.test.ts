@@ -20,7 +20,9 @@ const QUERY: Record<string, string> = {
   "/api/scope-resources": "scope=personal:alice",
 };
 
-const GATE_REFUSALS = new Set(["portal identity does not match the requested actor", "cross-origin request refused"]);
+const HANDLER_REFUSALS: Record<string, unknown> = {
+  "/api/sessions/:id/swarm": { error: "session access denied" },
+};
 
 const concrete = (pattern: string): string => pattern.replaceAll(/:[a-z]+/g, "1");
 
@@ -77,12 +79,10 @@ test("each aliased path answers a cookie-only browser exactly as its /v1 route d
     const viaAlias = await fetch(`${base}${concrete(path)}?${query}`, { headers: { cookie } });
     const direct = await fetch(`${base}${concrete(target)}?${query}`, { headers: { cookie } });
     const answered = await viaAlias.json();
-    assert.ok(
-      viaAlias.status < 500 &&
-        viaAlias.status !== 401 &&
-        !(viaAlias.status === 403 && GATE_REFUSALS.has((answered as { message?: string }).message ?? "")),
-      `${path} answered ${viaAlias.status}`,
-    );
+    const expected = HANDLER_REFUSALS[path];
+    if (expected) assert.deepEqual([viaAlias.status, answered], [403, expected], path);
+    else
+      assert.ok(viaAlias.status < 500 && ![401, 403].includes(viaAlias.status), `${path} answered ${viaAlias.status}`);
     assert.equal(viaAlias.status, direct.status, path);
     assert.deepEqual(answered, await direct.json(), path);
     const actor = findRoute(apiRoutes, "GET", concrete(target))?.route.actor ?? "";
@@ -93,6 +93,8 @@ test("each aliased path answers a cookie-only browser exactly as its /v1 route d
     assert.equal(anonymous.status, 401, `${path} answered without a cookie`);
   }
 });
+
+const GATE_REFUSALS = new Set(["portal identity does not match the requested actor", "cross-origin request refused"]);
 
 async function refusal(response: Response): Promise<string> {
   const text = await response.text();
