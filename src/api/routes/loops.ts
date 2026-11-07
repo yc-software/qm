@@ -684,8 +684,8 @@ async function revokeShipGrant(ctx: ApiCtx): Promise<void> {
 }
 
 export const loopRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "POST", path: "/v1/loops/:id/triage/preview", auth: "source", handle: previewLoopTriage },
   ...withActor("query.principalId", [
+    { method: "POST", path: "/v1/loops/:id/triage/preview", auth: "source", handle: previewLoopTriage },
     { method: "POST", path: "/v1/loops", auth: "either", handle: createLoop },
     { method: "GET", path: "/v1/loops", auth: "either", handle: listLoops },
     { method: "GET", path: "/v1/loops/:id", auth: "either", handle: getLoop },

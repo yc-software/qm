@@ -7,7 +7,8 @@ import {
 } from "../../persistence/blob-transfer.ts";
 import { CAPABILITY_HEADER } from "../contract.ts";
 import { canonicalPayload } from "../../../plugins/chassis/src/source-auth-sign.ts";
-import { extendBodyDeadline, headerValue, pipeToResponse, sendJson, verifyOrReject } from "../http.ts";
+import { extendBodyDeadline, headerValue, sendJson, verifyOrReject } from "../http.ts";
+import { relayStream } from "../../../plugins/chassis/src/http.ts";
 
 const STAGE_UPLOAD_DEADLINE_MS = 1_800_000;
 import type { BaseCtx, Route } from "./route.ts";
@@ -98,7 +99,7 @@ async function getBlob(ctx: BaseCtx): Promise<void> {
   const blob = await deps.blobTransfer.open(id);
   if (!blob) return sendJson(res, 404, { error: "not_found" });
   res.writeHead(200, { "content-type": "application/octet-stream", "content-length": String(blob.sizeBytes) });
-  pipeToResponse(res, blob.stream, "blob read failed");
+  relayStream(blob.stream, res);
   return;
 }
 

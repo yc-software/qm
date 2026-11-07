@@ -382,6 +382,7 @@ async function linkInTransaction(client: PoolClient, link: UserLink): Promise<Us
     await q(`UPDATE user_links SET linked_by = $1 WHERE linked_by = $2`, [target, source]);
     await q(`UPDATE personas SET created_by = $1 WHERE created_by = $2`, [target, source]);
     await q(`UPDATE persona_access SET granted_by = $1 WHERE granted_by = $2`, [target, source]);
+    await q(`UPDATE persona_versions SET edited_by = $1 WHERE edited_by = $2`, [target, source]);
     await q(`DELETE FROM users WHERE id = $1`, [source]);
   }
   const linkedBy = link.linkedBy ? await ensureUserIn(client, foldPrincipalId(link.linkedBy)) : null;

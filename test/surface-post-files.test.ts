@@ -438,3 +438,44 @@ test("a text-only surface refuses reactions, deletes, file posts and attachments
   assert.equal((await createAttachStaging({ textOnly: true } as never).attach(["a.txt"])).ok, false);
   assert.deepEqual(await deliveries.pending("partner-chat"), []);
 });
+
+test("a post the agent sends to another channel keeps the conversation's persona", async () => {
+  const enqueued: Array<Record<string, unknown>> = [];
+  const persona = { id: "p-ada", name: "Ada" };
+  const tools = createSurfaceToolDeps({
+    deps: {
+      surfaces: testSurfaces(),
+      deliveries: {
+        async enqueue(d: Record<string, unknown>) {
+          enqueued.push(d);
+          return { id: `d${enqueued.length}` };
+        },
+      },
+      directory: {
+        async resolveChannel() {
+          return { kind: "one", channel: { channelId: "C_OTHER", name: "other", isPrivate: false } };
+        },
+        async channelMember() {
+          return true;
+        },
+      },
+    },
+    input: { surfaceTools: true },
+    actor: { id: "U1" },
+    conversation: { kind: "channel", channelRef: "C1" },
+    session: { id: "S1" },
+    defaultDestination: { type: "slack", target: "C1:1.0", audienceScopeId: "channel:C1", persona },
+    strictReadOnly: false,
+    postProvenance() {
+      return {};
+    },
+    postKeys: turnPostKeys("run-test"),
+    spine: { surfaceOutboundCount: 0, crossConversationPosts: 0 },
+  } as unknown as SurfaceToolsContext)!;
+  const r = await tools.reach("Hello from Ada", { channel: "other" });
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.deepEqual(
+    enqueued.map((d) => (d.destination as { target: string; persona?: unknown }).persona),
+    [persona],
+  );
+});

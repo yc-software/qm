@@ -1,4 +1,5 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
+import { type IncomingMessage, type OutgoingMessage, ServerResponse } from "node:http";
+import { Readable, type Writable } from "node:stream";
 import { gzip } from "node:zlib";
 
 const COMPRESS_MIN_BYTES = 1024;
@@ -73,6 +74,31 @@ export function json(res: ServerResponse, status: number, body: unknown): void {
   sendBuffered(res, status, { "content-type": "application/json" }, JSON.stringify(body));
 }
 
+export function relayStream(
+  source: NodeJS.ReadableStream | ReadableStream<Uint8Array>,
+  dest: OutgoingMessage | Writable,
+  options: { end?: boolean; onError?: (error: Error) => void } = {},
+): void {
+  const from =
+    source instanceof ReadableStream
+      ? Readable.fromWeb(source as Parameters<typeof Readable.fromWeb>[0])
+      : (source as Readable);
+  const release = (): void => {
+    if (dest instanceof ServerResponse) from.destroy();
+    else from.unpipe(dest);
+  };
+  from.on("error", (error: Error) => {
+    options.onError?.(error);
+    dest.destroy();
+  });
+  dest.on("error", release);
+  dest.on("close", () => {
+    if (!dest.writableFinished) release();
+  });
+  if (dest.destroyed) return release();
+  from.pipe(dest, { end: options.end ?? true });
+}
+
 export async function readBodyBytes(req: IncomingMessage, maxBytes = Infinity): Promise<Buffer> {
   const chunks: Buffer[] = [];
   let size = 0;
@@ -86,6 +112,14 @@ export async function readBodyBytes(req: IncomingMessage, maxBytes = Infinity): 
 
 export async function readBody(req: IncomingMessage, maxBytes = Infinity): Promise<string> {
   return (await readBodyBytes(req, maxBytes)).toString("utf8");
+}
+
+export function originOf(raw: string): string {
+  try {
+    return new URL(raw).origin;
+  } catch {
+    return "";
+  }
 }
 
 export function sameOriginRequest(req: IncomingMessage, expectedOrigin: string): boolean {

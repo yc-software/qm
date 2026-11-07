@@ -1390,7 +1390,7 @@ test("a child stopped on its own mails its partial output and wakes its top-leve
     const r = await rig();
     const { parent, run } = await stoppedChildRun(r, "found 2 of 3 call sites so far", {
       status: "ok",
-      reply: "(stopped)",
+      reply: "",
       stopped: true,
       ...(stopScope ? { stopScope } : {}),
     });

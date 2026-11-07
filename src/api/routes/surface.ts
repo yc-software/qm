@@ -32,7 +32,8 @@ import { isSafeSkillName, SKILL_NAME_RULE } from "../../skills/skill-name.ts";
 import { SideChatAnchorError, SoulUpdateDeniedError, type SessionPageStatus } from "../app-types.ts";
 import { renderAgentApis } from "../agent-api-catalog.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../../auth/capability-token.ts";
-import { contentTypeWithUtf8Charset, pipeToResponse, sendJson, sendProblem } from "../http.ts";
+import { contentTypeWithUtf8Charset, sendJson, sendProblem } from "../http.ts";
+import { relayStream } from "../../../plugins/chassis/src/http.ts";
 import { resolveBranding } from "../../resolution/branding.ts";
 import { audit, isObj, orgScope } from "./shared.ts";
 import {
@@ -343,7 +344,7 @@ async function getFileContent(ctx: ApiCtx): Promise<void> {
     "content-length": String(opened.sizeBytes),
     "content-disposition": `inline; filename*=UTF-8''${encodeURIComponent(opened.name)}`,
   });
-  pipeToResponse(res, opened.stream, "file read failed");
+  relayStream(opened.stream, res);
   return;
 }
 
@@ -1535,8 +1536,6 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/conversations", auth: "either", handle: listAgentConversations },
   { method: "GET", path: "/v1/conversations/:id", auth: "either", handle: getAgentConversation },
   { method: "POST", path: "/v1/conversations/:id", auth: "either", handle: patchAgentConversation },
-  { method: "GET", path: "/v1/ui-state", auth: "source", handle: getUiState },
-  { method: "PUT", path: "/v1/ui-state", auth: "source", handle: putUiState },
   { method: "GET", path: "/v1/apis", auth: "either", handle: listAgentApis },
   { method: "GET", path: "/v1/memory/self", auth: "either", handle: readOwnNotebook },
   { method: "POST", path: "/v1/memory/facts", auth: "either", handle: captureFacts },
@@ -1547,14 +1546,13 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/grants/revoke", actor: "system", auth: "source", handle: revokeGrant },
   { method: "POST", path: "/v1/share", auth: "either", handle: shareArtifact },
   { method: "GET", path: "/v1/surface-config", auth: "source", handle: getSurfaceConfig },
-  { method: "GET", path: "/v1/custom-emoji", auth: "source", handle: getCustomEmoji },
-  { method: "GET", path: "/v1/runtime-config", auth: "either", handle: getRuntimeConfig },
-  { method: "PUT", path: "/v1/runtime-config", auth: "either", handle: putRuntimeConfig },
-  { method: "GET", path: "/v1/channel-header-pin", auth: "either", handle: getChannelHeaderPin },
-  { method: "PUT", path: "/v1/channel-header-pin", auth: "either", handle: putChannelHeaderPin },
+  { method: "GET", path: "/v1/custom-emoji", actor: "person", auth: "source", handle: getCustomEmoji },
   { method: "GET", path: "/v1/soul", actor: "query.principalId", auth: "either", handle: getSoul },
   { method: "POST", path: "/v1/soul", actor: "body.actorId", auth: "either", handle: postSoul },
   ...withActor("body.principalId", [
+    { method: "PUT", path: "/v1/ui-state", auth: "source", handle: putUiState },
+    { method: "PUT", path: "/v1/runtime-config", auth: "either", handle: putRuntimeConfig },
+    { method: "PUT", path: "/v1/channel-header-pin", auth: "either", handle: putChannelHeaderPin },
     { method: "POST", path: "/v1/sessions/:id/title", auth: "source", handle: regenerateSessionTitle },
     { method: "POST", path: "/v1/sessions/:id/expand", auth: "source", handle: expandSideChat },
     { method: "POST", path: "/v1/sessions", auth: "source", handle: spawnWebSession },
@@ -1571,6 +1569,9 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
     { method: "POST", path: "/v1/skills/:id/restore", auth: "either", allowedInStrict: true, handle: restoreSkill },
   ]),
   ...withActor("query.principalId", [
+    { method: "GET", path: "/v1/ui-state", auth: "source", handle: getUiState },
+    { method: "GET", path: "/v1/runtime-config", auth: "either", handle: getRuntimeConfig },
+    { method: "GET", path: "/v1/channel-header-pin", auth: "either", handle: getChannelHeaderPin },
     { method: "GET", path: "/v1/sessions/:id/side-chats", auth: "source", handle: listSideChats },
     { method: "GET", path: "/v1/resources/search", auth: "source", handle: searchResources },
     { method: "GET", path: "/v1/sessions/search", auth: "source", handle: searchSessions },

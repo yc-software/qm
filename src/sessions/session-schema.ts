@@ -428,8 +428,27 @@ const SESSION_PERSONA: PgMigrationDefinition = {
   statements: [`SET LOCAL lock_timeout = '5s'`, `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS persona_id TEXT`],
 };
 
+const DROP_STOPPED_PLACEHOLDERS: PgMigrationDefinition = {
+  id: "sessions/store/0057-drop-stopped-placeholders",
+  statements: [
+    `CREATE TEMP TABLE stopped_placeholders ON COMMIT DROP AS
+      SELECT m.tenant_id, m.session_id, m.seq
+        FROM items m
+       WHERE m.kind = 'AgentMessage' AND m.variant IS DISTINCT FROM 'files_delivered'
+         AND m.search @@ 'stopped'::tsquery AND m.text = '(stopped)'
+         AND (SELECT p.kind FROM items p
+               WHERE p.tenant_id = m.tenant_id AND p.session_id = m.session_id AND p.seq < m.seq
+               ORDER BY p.seq DESC LIMIT 1) = 'Stop'`,
+    `SET LOCAL lock_timeout = '5s'`,
+    `ALTER TABLE items DISABLE TRIGGER items_delete_through_session`,
+    `DELETE FROM items i USING stopped_placeholders s
+      WHERE i.tenant_id = s.tenant_id AND i.session_id = s.session_id AND i.seq = s.seq`,
+    `ALTER TABLE items ENABLE TRIGGER items_delete_through_session`,
+  ],
+};
+
 const USER_TURNS_BY_AUTHOR: PgMigrationDefinition = {
-  id: "sessions/store/0057-user-turns-by-author",
+  id: "sessions/store/0058-user-turns-by-author",
   statements: [
     `CREATE INDEX CONCURRENTLY IF NOT EXISTS items_user_turns_by_author ON items(tenant_id, author, created_at)
       WHERE ${authoredUserTurn("items")}`,
@@ -448,6 +467,7 @@ export const SESSION_MIGRATIONS = [
   PARTICIPANT_MEMBERSHIP,
   DROP_TENANT_PREBUILD_INDEXES,
   SESSION_PERSONA,
+  DROP_STOPPED_PLACEHOLDERS,
   USER_TURNS_BY_AUTHOR,
 ];
 

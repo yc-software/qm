@@ -76,7 +76,6 @@ export interface AwsSandboxOptions extends BlobStagingOptions {
   snapshotIntervalMs?: number;
   defaultTimeoutSec?: number;
   cpus?: number;
-  memoryMb?: number;
   diskGb?: number;
   store: DurableMap<StoredMicrovm>;
   advisoryLock: AdvisoryLock;
@@ -120,7 +119,7 @@ export function createAwsSandbox(opts: AwsSandboxOptions): Sandbox {
   const rotateAfterMs = (opts.rotateAfterSeconds ?? 27_000) * 1000;
   const snapshotIntervalMs = opts.snapshotIntervalMs ?? 0;
   const cpus = opts.cpus ?? 4;
-  const memoryMb = opts.memoryMb ?? 8192;
+  const memoryMb = 8192;
   const diskGb = opts.diskGb ?? 8;
   const credentialPaths = opts.credentialPaths ?? [];
 

@@ -14,7 +14,7 @@ import { spawn } from "node:child_process";
 import { basename, dirname } from "node:path";
 import { deploymentView, type App, type DeployInput, type RedeployInput } from "../app.ts";
 import { errMessage, reportFailureAs, swallowAs } from "../../util/errors.ts";
-import { escapeHtml } from "../../../plugins/chassis/src/http.ts";
+import { escapeHtml, relayStream } from "../../../plugins/chassis/src/http.ts";
 import { canonicalPayload } from "../../../plugins/chassis/src/source-auth-sign.ts";
 import { sendJson, verifyOrReject } from "../http.ts";
 import { mintPortalIdentity, verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../auth/portal-identity.ts";
@@ -437,12 +437,12 @@ function proxyReachHttp2(
       const safeHeaders = gatewaySafeResponseHeaders(responseHeaders, sandbox, frameAncestors);
       if (frameAncestors !== undefined) res.removeHeader("content-security-policy");
       res.writeHead(status, safeHeaders);
-      up.pipe(res, { end: false });
+      relayStream(up, res, { end: false });
     });
     up.on("error", fail);
     if (replaySafe) up.end();
     else if (bufferedBody !== null) up.end(bufferedBody);
-    else req.pipe(up);
+    else relayStream(req, up);
   };
   start(false);
 }
@@ -595,12 +595,11 @@ async function proxyReach(
     (upRes) => {
       up.setTimeout(0);
       markUpstreamUp(upstreamKey);
-      upRes.on("error", () => res.destroy());
       armThrottleShield(upstreamKey, upRes.statusCode ?? 0, upRes);
       const headers = gatewaySafeResponseHeaders(upRes.headers, opts?.sandbox ?? false, opts?.frameAncestors);
       if (opts?.frameAncestors !== undefined) res.removeHeader("content-security-policy");
       res.writeHead(upRes.statusCode ?? 502, headers);
-      upRes.pipe(res);
+      relayStream(upRes, res);
     },
   );
   const dialMs = warmingDialTimeoutMs(
@@ -619,9 +618,8 @@ async function proxyReach(
     else if (!res.headersSent) sendJson(res, 502, { error: "bad_gateway", message: "deployment unreachable" });
     else res.end();
   });
-  req.on("error", () => up.destroy());
   if (bufferedBody !== null) up.end(bufferedBody);
-  else req.pipe(up);
+  else relayStream(req, up);
   return;
 }
 
@@ -1303,7 +1301,7 @@ async function createDeployment(ctx: ApiCtx): Promise<void> {
 async function listDeployments(ctx: ApiCtx): Promise<void> {
   const { res, app, url, secret, capability, actor } = ctx;
   const principalId = capability?.actorId ?? actor?.p ?? url.searchParams.get("principalId");
-  if (!principalId) return sendJson(res, 200, { deployments: (await app.listDeployments()).map(deploymentView) });
+  if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
   const visible = await app.listDeploymentsForViewer(principalId);
   const baseUrl = gitUrlBase(ctx);
   const deployments = await Promise.all(
@@ -1386,17 +1384,14 @@ async function fetchDeployment(ctx: ApiCtx): Promise<void> {
 }
 
 export async function getDeployment(ctx: ApiCtx): Promise<void> {
-  const { res, app, url, secret, capability, params } = ctx;
-  const principalId = capability ? capability.actorId : url.searchParams.get("principalId");
-  const id = params.id!;
-  const stored = await app.getDeployment(id);
-  const permission = stored && principalId ? await app.deploymentGitPermissionFor(stored.id, principalId) : null;
-  const deployment =
-    stored && (!principalId || permission)
-      ? { ...deploymentView(stored), ...(permission ? { permission } : {}) }
-      : undefined;
-  if (!deployment) return sendJson(res, 404, { error: "not_found" });
-  if (!principalId || !secret) return sendJson(res, 200, { deployment });
+  const { res, app, url, secret, capability, actor, params } = ctx;
+  const principalId = capability?.actorId ?? actor?.p ?? url.searchParams.get("principalId");
+  if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
+  const stored = await app.getDeployment(params.id!);
+  const permission = stored ? await app.deploymentGitPermissionFor(stored.id, principalId) : null;
+  if (!stored || !permission) return sendJson(res, 404, { error: "not_found" });
+  const deployment = { ...deploymentView(stored), permission };
+  if (!secret) return sendJson(res, 200, { deployment });
   const git = await app.deploymentGitUrlFor(deployment.id, principalId, { secret, baseUrl: gitUrlBase(ctx) });
   return sendJson(res, 200, { deployment: git ? { ...deployment, gitUrl: git.url } : deployment });
 }
@@ -1440,7 +1435,7 @@ async function redeployDeployment(ctx: ApiCtx): Promise<void> {
 
 async function callerMayManageDeployment(ctx: ApiCtx, id: string): Promise<boolean> {
   const principalId = ctx.capability?.actorId ?? ctx.actor?.p;
-  return !principalId || ctx.app.canManageDeployment(id, principalId, ctx.capability?.scopeId);
+  return principalId ? ctx.app.canManageDeployment(id, principalId, ctx.capability?.scopeId) : false;
 }
 
 export async function archiveDeployment(ctx: ApiCtx): Promise<void> {
@@ -1458,18 +1453,17 @@ export async function archiveDeployment(ctx: ApiCtx): Promise<void> {
 }
 
 export async function restoreDeployment(ctx: ApiCtx): Promise<void> {
-  const { res, app, params, capability, body } = ctx;
+  const { res, app, params, capability } = ctx;
   const id = await deploymentId(app, params.id!);
   if (!id) return sendJson(res, 404, { error: "not_found" });
   if (!(await callerMayManageDeployment(ctx, id)))
     return sendJson(res, 403, { error: "forbidden", message: "only someone who manages this app can restore it" });
   try {
-    const principalId =
-      capability?.actorId ??
-      ctx.actor?.p ??
-      (isObj(body) && typeof body.principalId === "string" ? body.principalId : undefined);
     return sendJson(res, 200, {
-      deployment: { ...deploymentView(await app.restoreDeployment(id, principalId)), permission: "write" },
+      deployment: {
+        ...deploymentView(await app.restoreDeployment(id, capability?.actorId ?? ctx.actor?.p)),
+        permission: "write",
+      },
     });
   } catch (e) {
     return sendJson(res, 400, { error: "restore_failed", message: errMessage(e) });
@@ -1713,7 +1707,7 @@ export const deploymentRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
 export const deploymentRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/deployments", actor: "body.createdBy", auth: "source", handle: createDeployment },
   { method: "GET", path: "/v1/deployments", actor: "query.principalId", auth: "either", handle: listDeployments },
-  { method: "GET", path: "/v1/deployments/:id", auth: "either", handle: getDeployment },
+  { method: "GET", path: "/v1/deployments/:id", actor: "query.principalId", auth: "either", handle: getDeployment },
   { method: "GET", path: "/v1/deployments/:id/fetch", auth: "either", handle: fetchDeployment },
   { method: "GET", path: "/v1/deployments/:id/logs", auth: "either", handle: deploymentLogs },
   { method: "GET", path: "/v1/deployments/:id/git-url", auth: "either", handle: deploymentGitUrl },

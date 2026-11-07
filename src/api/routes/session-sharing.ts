@@ -7,7 +7,8 @@ import {
   type SharedMessage,
 } from "../../sessions/session-share.ts";
 import { MAX_ATTACHMENT_BYTES } from "../../core/attachments.ts";
-import { pipeToResponse, sendJson } from "../http.ts";
+import { sendJson } from "../http.ts";
+import { relayStream } from "../../../plugins/chassis/src/http.ts";
 import { audit, isObj } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
@@ -132,7 +133,7 @@ async function readShare(ctx: ApiCtx): Promise<void> {
       "x-content-type-options": "nosniff",
       "referrer-policy": "no-referrer",
     });
-    pipeToResponse(res, opened.stream, "shared attachment read failed");
+    relayStream(opened.stream, res);
     return;
   }
   return sendJson(res, 200, { createdAt: share.createdAt, audience: share.audience, messages: share.messages });

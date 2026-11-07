@@ -12,6 +12,7 @@ import {
   type PersonaAccess,
   type PersonaFields,
   type PersonaStore,
+  type PersonaVersionPage,
 } from "./persona-store.ts";
 
 const personaScope = (id: string): ScopeId => scopeId("persona", id);
@@ -43,6 +44,12 @@ export interface PersonaService {
   create(principalId: string, input: unknown): Promise<PersonaResult<PersonaView>>;
   update(principalId: string, id: string, input: unknown): Promise<PersonaResult<PersonaView>>;
   remove(principalId: string, id: string): Promise<PersonaResult<true>>;
+  versions(
+    principalId: string,
+    id: string,
+    page: { before?: number; limit: number; full?: boolean },
+  ): Promise<PersonaResult<PersonaVersionPage>>;
+  restore(principalId: string, id: string, version: number): Promise<PersonaResult<PersonaView>>;
   setAccess(principalId: string, id: string, access: unknown): Promise<PersonaResult<PersonaAccess[]>>;
   attachCredential(principalId: string, id: string, credentialId: unknown): Promise<PersonaResult<{ grantId: string }>>;
   detachCredential(principalId: string, id: string, grantId: string): Promise<PersonaResult<true>>;
@@ -154,8 +161,28 @@ export function createPersonaService(deps: {
       return guarded<PersonaView>(principalId, id, "write", async (_persona, held) => {
         const fields = fieldsFrom(input, false);
         if (typeof fields === "string") return { status: "invalid", message: fields };
-        const updated = await store.update(id, fields);
+        const updated = await store.update(id, fields, principalId);
         return updated ? { status: "ok", value: { ...updated, role: held } } : { status: "not_found" };
+      });
+    },
+    versions(principalId, id, page) {
+      return guarded<PersonaVersionPage>(principalId, id, "read", async () => ({
+        status: "ok",
+        value: await store.versions(id, page),
+      }));
+    },
+    restore(principalId, id, version) {
+      return guarded<PersonaView>(principalId, id, "write", async (_persona, held) => {
+        const snapshot = await store.version(id, version);
+        if (!snapshot) return { status: "not_found" };
+        const { name, description, instructions, icon } = snapshot;
+        const restored = await store.update(
+          id,
+          { name, description, instructions, icon: icon ?? null },
+          principalId,
+          version,
+        );
+        return restored ? { status: "ok", value: { ...restored, role: held } } : { status: "not_found" };
       });
     },
     remove(principalId, id) {
@@ -177,6 +204,8 @@ export function createPersonaService(deps: {
             return { status: "invalid", message: `scopeId must be personal:, team:, org: or channel: (got ${target})` };
           if (!PERSONA_ROLES.includes(e.role as PersonaRole))
             return { status: "invalid", message: "role must be owner, write or read" };
+          if (kind === "channel" && e.role !== "read")
+            return { status: "invalid", message: "a Slack channel can only be given read access" };
           entries.push({ scopeId: target, role: e.role as PersonaRole });
         }
         if (new Set(entries.map((entry) => entry.scopeId)).size !== entries.length)

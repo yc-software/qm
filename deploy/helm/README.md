@@ -199,6 +199,11 @@ switching to an `exec` or `tcpSocket` handler. When overriding endpoint paths,
 update the startup probe too. Database unavailability should remove core from
 endpoints, not restart it through liveness.
 
+Core's `terminationGracePeriodSeconds` is its shutdown drain plus 30 seconds,
+taken from `SHUTDOWN_DRAIN_MS` in `services.core.env` or `env` (default 30000, so
+60 seconds). The chart cannot read a drain set through `secretEnv` or `envFrom`;
+set it in `env` so the pod is not killed mid-drain.
+
 ## Upgrading from chart 0.3
 
 Chart 0.4 runs the web UI, the sign-in portal and the sign-in broker inside

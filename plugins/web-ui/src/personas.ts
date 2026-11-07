@@ -1,6 +1,21 @@
 import { html, nothing, render, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
-import { Bot, Building2, GitFork, Hash, Lock, MessageSquare, Pencil, Plus, Search, Share2, Trash2, X } from "lucide";
+import {
+  Bot,
+  Building2,
+  GitFork,
+  Hash,
+  KeyRound,
+  Lock,
+  MessageSquare,
+  Pencil,
+  Plus,
+  Search,
+  Share2,
+  Sparkles,
+  Trash2,
+  X,
+} from "lucide";
 import { api, ApiError, type CoreSession, type ProjectIcon } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { icon } from "./icons";
@@ -9,15 +24,17 @@ import { appState } from "./shell-state";
 import { ensureContexts, personalScopeId } from "./contexts";
 import { openSession, renderList, replacePendingSession, sessionsState, startNewChat } from "./sessions";
 import { newChatDraftKey, saveDraft } from "./drafts";
+import { deepLinkPath, UI_BASE } from "./deep-link";
 import { switchView } from "./shell";
 import { openProjectIconPicker, projectIconTpl } from "./project-icon";
 import { peopleResults, type DirectoryMatch } from "./people-results";
 import { avatarTpl, closeFormMenus, menuSelect } from "./ui";
 import { canvasToast } from "./split";
 import { tip } from "./tooltip";
-import { openSkillById } from "./skills";
+import { openSkillById, startSkillCreateIn } from "./skills";
 import { cronTitle, openCronById, type CronView } from "./crons";
 import { cronScheduleSummary } from "./cron-format";
+import { historySectionTpl } from "./persona-history";
 
 type PersonaRole = "owner" | "write" | "read";
 
@@ -30,7 +47,14 @@ interface PersonaView {
   createdBy: string;
   createdAt: number | string;
   updatedAt: number | string;
+  version: number;
   role: PersonaRole;
+}
+
+interface OwnCredential {
+  id: string;
+  service: string;
+  accountLabel?: string;
 }
 
 interface PersonaGrant {
@@ -152,9 +176,13 @@ export async function renderPersonasPage(): Promise<void> {
   loading = true;
   drawPersonasPage();
   const seq = viewSeq;
+  const pending = pendingPersonaId;
+  pendingPersonaId = null;
   await loadPersonas();
   loading = false;
-  if (seq === viewSeq) drawPersonasPage();
+  if (seq !== viewSeq) return;
+  if (pending) await openPersona(pending);
+  else drawPersonasPage();
 }
 
 function backToList(): void {
@@ -167,6 +195,7 @@ function backToList(): void {
 function drawPersonasPage(): void {
   if (appState.currentView !== "personas" || !appState.mainEl) return;
   viewSeq++;
+  syncPersonaUrl(null);
   if (!pageHost || pageHost.parentElement !== appState.mainEl) {
     pageHost = document.createElement("div");
     pageHost.className = "pane personas-page";
@@ -290,13 +319,34 @@ function forkPersona(persona: PersonaView): void {
   startNewChat();
 }
 
-function paneHost(): HTMLElement | null {
+function paneHost(personaId = ""): HTMLElement | null {
   if (!appState.mainEl) return null;
   viewSeq++;
+  const current = appState.mainEl.firstElementChild;
+  if (personaId && current instanceof HTMLElement && current.dataset.persona === personaId) return current;
   const host = document.createElement("div");
   host.className = "resource-pane persona-pane";
+  host.dataset.persona = personaId;
   appState.mainEl.replaceChildren(host);
   return host;
+}
+
+let pendingPersonaId: string | null = null;
+
+export function openPersonaById(id: string): void {
+  pendingPersonaId = id;
+}
+
+export function routePersonasHistory(personaId: string | null): void {
+  if (appState.currentView !== "personas") return;
+  if (personaId) void openPersona(personaId);
+  else drawPersonasPage();
+}
+
+function syncPersonaUrl(personaId: string | null): void {
+  if (appState.currentView !== "personas") return;
+  const next = deepLinkPath(UI_BASE, "personas", null, null, personaId);
+  if (`${location.pathname}${location.search}` !== next) history.replaceState(null, "", next);
 }
 
 async function fetchPersona(id: string): Promise<PersonaDetail> {
@@ -346,67 +396,301 @@ function accessListTpl(access: readonly PersonaGrant[]): TemplateResult {
   </div>`;
 }
 
-function personaFactsTpl(persona: PersonaDetail): TemplateResult {
+function sectionTpl(
+  title: string,
+  actions: TemplateResult | typeof nothing,
+  body: TemplateResult,
+  hint?: string,
+): TemplateResult {
+  return html`<section class="persona-section">
+    <div class="persona-section-head">
+      <h3>${title}</h3>
+      <div class="persona-section-actions">${actions}</div>
+    </div>
+    ${body} ${hint ? html`<div class="hint">${hint}</div>` : nothing}
+  </section>`;
+}
+
+function emptyTpl(text: string): TemplateResult {
+  return html`<div class="persona-empty hint">${text}</div>`;
+}
+
+function removableRow(
+  glyph: TemplateResult,
+  name: string,
+  detail: string,
+  removeLabel: string | null,
+  onRemove: () => void,
+): TemplateResult {
+  return html`<div class="persona-item">
+    ${glyph}
+    <span class="persona-item-text">
+      <span class="persona-skill-name" dir="auto">${name}</span>
+      ${detail ? html`<span class="hint" dir="auto">${detail}</span>` : nothing}
+    </span>
+    ${
+      removeLabel
+        ? html`<button class="chip-x persona-item-remove" type="button" aria-label=${removeLabel} @click=${onRemove}>
+            ${icon(X, 14)}
+          </button>`
+        : nothing
+    }
+  </div>`;
+}
+
+function skillsSection(persona: PersonaDetail): TemplateResult {
+  const scopeId = `persona:${persona.id}`;
+  const actions = canEditPersona(persona.role)
+    ? html`${rowAction("New skill", Plus, () => startSkillCreateIn(scopeId, persona.name))}
+      ${rowAction(
+        "Ask QM",
+        Sparkles,
+        () => void chatWithPrompt(persona, `Write a skill for the ${persona.name} persona that `),
+      )}`
+    : nothing;
+  const body = persona.skills?.length
+    ? html`<div class="persona-skill-list">
+        ${persona.skills.map(
+          (skill) =>
+            html`<button class="persona-skill" type="button" @click=${() => openPersonaSkill(skill.id)}>
+              <span class="persona-skill-name">${skill.name}</span>
+              <span class="persona-skill-description hint" dir="auto">${skill.description}</span>
+            </button>`,
+        )}
+      </div>`
+    : emptyTpl("No skills yet.");
+  return sectionTpl("Skills", actions, body);
+}
+
+function cronsSection(persona: PersonaDetail): TemplateResult {
+  const body = persona.crons?.length
+    ? html`<div class="persona-skill-list">
+        ${persona.crons.map(
+          (cron) =>
+            html`<button class="persona-skill" type="button" @click=${() => openPersonaCron(cron.id)}>
+              <span class="persona-skill-name" dir="auto">${cronTitle(cron)}</span>
+              <span class="persona-skill-description hint"
+                >${cronScheduleSummary(cron)}${cron.enabled ? "" : " · paused"}</span
+              >
+            </button>`,
+        )}
+      </div>`
+    : emptyTpl("No crons yet.");
+  return sectionTpl(
+    "Crons",
+    rowAction("New cron", Plus, () => void chatWithPrompt(persona, "Set up a cron that ")),
+    body,
+    `A cron set up in a chat with ${persona.name} runs as ${persona.name}.`,
+  );
+}
+
+function credentialsSection(persona: PersonaDetail, reload: (flash: string) => void): TemplateResult {
+  const owner = canSharePersona(persona.role);
+  const body = persona.credentials.length
+    ? html`<div class="persona-skill-list">
+        ${persona.credentials.map((credential) =>
+          removableRow(
+            html`<span class="persona-channel-glyph">${icon(KeyRound, 14)}</span>`,
+            credential.service,
+            credential.ownerId === appState.me?.user ? "Yours" : `From ${credential.ownerId}`,
+            owner ? `Detach ${credential.service}` : null,
+            () => void detachCredential(persona, credential, reload),
+          ),
+        )}
+      </div>`
+    : emptyTpl("None attached.");
+  return sectionTpl(
+    "Credentials",
+    owner ? rowAction("Attach", Plus, () => void openCredentialPicker(persona, reload)) : nothing,
+    body,
+    `Everyone who can chat with ${persona.name} uses attached credentials through it, but never sees them.`,
+  );
+}
+
+function channelsSection(persona: PersonaDetail, reload: (flash: string) => void): TemplateResult {
+  const owner = canSharePersona(persona.role);
+  const channels = persona.access.filter((grant) => grant.scopeId.startsWith("channel:"));
+  const body = channels.length
+    ? html`<div class="persona-skill-list">
+        ${channels.map((grant) =>
+          removableRow(
+            html`<span class="persona-channel-glyph">${icon(Hash, 14)}</span>`,
+            grant.label ?? granteeLabel(grant.scopeId),
+            "",
+            owner ? `Remove ${grant.label ?? granteeLabel(grant.scopeId)}` : null,
+            () =>
+              void saveAccess(
+                persona,
+                persona.access.filter((g) => g.scopeId !== grant.scopeId),
+                reload,
+                "Channel removed.",
+              ),
+          ),
+        )}
+      </div>`
+    : emptyTpl("No channels.");
+  return sectionTpl(
+    "Slack channels",
+    owner ? rowAction("Add channel", Plus, () => openPersonaShare(persona, () => reload("Access saved."))) : nothing,
+    body,
+    `People in these channels can ask QM to use ${persona.name} in a thread there. QM stays the default; they can't edit ${persona.name}.`,
+  );
+}
+
+function accessSection(persona: PersonaDetail, reload: (flash: string) => void): TemplateResult {
+  const people = persona.access.filter((grant) => !grant.scopeId.startsWith("channel:"));
+  return sectionTpl(
+    "Who has access",
+    canSharePersona(persona.role)
+      ? rowAction("Share", Share2, () => openPersonaShare(persona, () => reload("Access saved.")))
+      : nothing,
+    accessListTpl(people),
+  );
+}
+
+function personaFactsTpl(persona: PersonaDetail, reload: (flash: string) => void, redraw: () => void): TemplateResult {
   return html`
-    <div class="field">
-      <label>Skills</label>
-      ${
-        persona.skills?.length
-          ? html`<div class="persona-skill-list">
-              ${persona.skills.map(
-                (skill) =>
-                  html`<button class="persona-skill" type="button" @click=${() => openPersonaSkill(skill.id)}>
-                    <span class="persona-skill-name">${skill.name}</span>
-                    <span class="persona-skill-description hint" dir="auto">${skill.description}</span>
-                  </button>`,
-              )}
-            </div>`
-          : html`<div class="value"><span class="hint">None yet.</span></div>`
-      }
-      ${
-        canEditPersona(persona.role)
-          ? html`<div class="hint">Ask QM to write a skill for ${persona.name}, or move one of yours into it.</div>`
-          : nothing
-      }
-    </div>
-    <div class="field">
-      <label>Crons</label>
-      ${
-        persona.crons?.length
-          ? html`<div class="persona-skill-list">
-              ${persona.crons.map(
-                (cron) =>
-                  html`<button class="persona-skill" type="button" @click=${() => openPersonaCron(cron.id)}>
-                    <span class="persona-skill-name" dir="auto">${cronTitle(cron)}</span>
-                    <span class="persona-skill-description hint"
-                      >${cronScheduleSummary(cron)}${cron.enabled ? "" : " · paused"}</span
-                    >
-                  </button>`,
-              )}
-            </div>`
-          : html`<div class="value"><span class="hint">None yet.</span></div>`
-      }
-    </div>
-    <div class="field">
-      <label>Credentials</label>
-      <div class="value persona-credentials">
-        ${
-          persona.credentials.length
-            ? persona.credentials.map((credential) => html`<span class="badge">${credential.service}</span>`)
-            : html`<span class="hint">None attached.</span>`
-        }
-      </div>
-      ${
-        canSharePersona(persona.role)
-          ? html`<div class="hint">Ask QM to attach one of your credentials to ${persona.name}.</div>`
-          : nothing
-      }
-    </div>
-    <div class="field">
-      <label>Who has access</label>
-      ${accessListTpl(persona.access)}
-    </div>
+    ${skillsSection(persona)} ${cronsSection(persona)} ${credentialsSection(persona, reload)}
+    ${channelsSection(persona, reload)} ${accessSection(persona, reload)}
+    ${historySectionTpl({
+      persona,
+      canEdit: canEditPersona(persona.role),
+      action: rowAction,
+      redraw,
+      restored: (updated, flash) => {
+        const view = updated as PersonaView;
+        setPersonaList([...personasState.list.filter((p) => p.id !== view.id), view]);
+        reload(flash);
+      },
+    })}
   `;
+}
+
+async function chatWithPrompt(persona: PersonaView, prompt: string): Promise<void> {
+  await busy(
+    persona,
+    async () => {
+      const session = await startPersonaChat(persona.id);
+      saveDraft(session.threadRef, prompt);
+      replacePendingSession(session.threadRef, session);
+      await openSession(session);
+    },
+    `Couldn't start a chat with ${persona.name}.`,
+  );
+}
+
+async function saveAccess(
+  persona: PersonaDetail,
+  grants: readonly PersonaGrant[],
+  reload: (flash: string) => void,
+  flash: string,
+): Promise<void> {
+  try {
+    await api(`/api/personas/${encodeURIComponent(persona.id)}/access`, {
+      method: "PUT",
+      body: JSON.stringify({ access: grants.map(({ scopeId, role }) => ({ scopeId, role })) }),
+    });
+    reload(flash);
+  } catch (e) {
+    canvasToast(errMessage(e, "Couldn't save access."));
+  }
+}
+
+async function detachCredential(
+  persona: PersonaDetail,
+  credential: PersonaDetail["credentials"][number],
+  reload: (flash: string) => void,
+): Promise<void> {
+  if (!window.confirm(`Detach ${credential.service} from ${persona.name}?`)) return;
+  try {
+    await api(`/api/personas/${encodeURIComponent(persona.id)}/credentials/${encodeURIComponent(credential.grantId)}`, {
+      method: "DELETE",
+    });
+    reload(`Detached ${credential.service}.`);
+  } catch (e) {
+    canvasToast(errMessage(e, "Couldn't detach that credential."));
+  }
+}
+
+async function openCredentialPicker(persona: PersonaDetail, reload: (flash: string) => void): Promise<void> {
+  const heading = `Attach a credential to ${persona.name}`;
+  const intro = "Pick one of your own. You can detach it any time.";
+  const opener = document.activeElement as HTMLElement | null;
+  const dialog = document.createElement("dialog");
+  dialog.className = "project-dialog persona-picker-dialog";
+  dialog.setAttribute("aria-label", heading);
+  document.body.append(dialog);
+  const close = () => {
+    dialog.close();
+    dialog.remove();
+    if (opener?.isConnected) opener.focus();
+  };
+  dialog.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    close();
+  });
+  let credentials: OwnCredential[] | null = null;
+  let error = "";
+  let busyNow = false;
+  const attached = new Set(persona.credentials.filter((c) => c.ownerId === appState.me?.user).map((c) => c.service));
+  const attach = async (credential: OwnCredential) => {
+    if (busyNow) return;
+    busyNow = true;
+    draw();
+    try {
+      await api(`/api/personas/${encodeURIComponent(persona.id)}/credentials`, {
+        method: "POST",
+        body: JSON.stringify({ credentialId: credential.id }),
+      });
+      close();
+      reload(`Attached ${credential.service}.`);
+    } catch (e) {
+      error = errMessage(e, "Couldn't attach that credential.");
+      busyNow = false;
+      if (dialog.isConnected) draw();
+    }
+  };
+  const credentialChoices = (): TemplateResult | TemplateResult[] => {
+    if (credentials === null) return html`<p class="permission-note" role="status">Loading your credentials…</p>`;
+    if (!credentials.length) return html`<p class="permission-note">You have no saved credentials yet.</p>`;
+    return credentials.map(
+      (credential) =>
+        html`<button
+          class="project-member-result"
+          type="button"
+          ?disabled=${busyNow || attached.has(credential.service)}
+          @click=${() => void attach(credential)}
+        >
+          <span class="persona-channel-glyph">${icon(KeyRound, 15)}</span>
+          <span class="project-member-name" dir="auto"
+            >${credential.service}${credential.accountLabel ? html` <span class="hint">${credential.accountLabel}</span>` : nothing}</span
+          >${attached.has(credential.service) ? html`<span class="hint">Attached</span>` : icon(Plus, 15)}
+        </button>`,
+    );
+  };
+  const draw = () =>
+    render(
+      html`<div class="project-dialog-head">
+          <div>
+            <h2>${heading}</h2>
+            <p>${intro}</p>
+          </div>
+          <button class="chip-x" type="button" aria-label="Close" @click=${close}>${icon(X, 16)}</button>
+        </div>
+        <div class="project-member-results persona-picker-list">${credentialChoices()}</div>
+        ${error ? html`<p class="composer-error" role="alert">${error}</p>` : nothing}`,
+      dialog,
+    );
+  draw();
+  dialog.showModal();
+  try {
+    const overview = await api<{ credentials?: OwnCredential[] }>("/api/keychain/overview");
+    credentials = (overview.credentials ?? []).slice().sort((a, b) => a.service.localeCompare(b.service));
+  } catch (e) {
+    credentials = [];
+    error = errMessage(e, "Couldn't load your credentials.");
+  }
+  if (dialog.isConnected) draw();
 }
 
 interface ChannelMatch {
@@ -522,8 +806,9 @@ function showNewPersonaForm(): void {
 }
 
 function showPersonaDetail(persona: PersonaDetail, flash: string): void {
-  const host = paneHost();
+  const host = paneHost(persona.id);
   if (!host) return;
+  syncPersonaUrl(persona.id);
   const state: FormState = { icon: persona.icon ?? null, iconChanged: false, error: "", saving: false };
   const editable = canEditPersona(persona.role);
   const draw = () =>
@@ -539,7 +824,9 @@ function showPersonaDetail(persona: PersonaDetail, flash: string): void {
             ${canSharePersona(persona.role) ? rowAction("Delete", Trash2, () => void deletePersona(persona)) : nothing}
           </div>
         </div>
-        <div class="persona-role hint">Your role: ${ROLE_LABELS[persona.role]}</div>
+        <div class="persona-role hint">
+          Your role: ${ROLE_LABELS[persona.role]}${persona.version ? ` · version ${persona.version}` : ""}
+        </div>
         ${flash ? html`<div class="action-notice" role="status">${flash}</div>` : nothing}
         ${
           editable
@@ -555,7 +842,7 @@ function showPersonaDetail(persona: PersonaDetail, flash: string): void {
                 </div>
               `
         }
-        ${personaFactsTpl(persona)}
+        ${personaFactsTpl(persona, (message) => void openPersona(persona.id, message), draw)}
       </div>`,
       host,
     );
@@ -774,7 +1061,10 @@ function openPersonaShare(persona: PersonaDetail, onSaved: () => void): void {
                     value: grant.role,
                     ariaLabel: `Access for ${granteeLabel(grant.scopeId, names)}`,
                     options: [
-                      ...ROLE_ORDER.map((role) => ({ value: role, label: ROLE_LABELS[role] })),
+                      ...(grant.scopeId.startsWith("channel:") ? (["read"] as const) : ROLE_ORDER).map((role) => ({
+                        value: role,
+                        label: ROLE_LABELS[role],
+                      })),
                       { value: "none", label: "Remove access" },
                     ],
                     onSelect: (value) => setRole(grant.scopeId, value),

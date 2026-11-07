@@ -11,8 +11,7 @@ import { uiCanvasRoutes } from "./ui-canvas-routes.ts";
 import { adminRoutes } from "./admin-routes.ts";
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { Readable } from "node:stream";
-import { pipeline } from "node:stream/promises";
+import type { Readable } from "node:stream";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, extname, join, posix } from "node:path";
@@ -34,6 +33,7 @@ import {
   readBody as readBodyCapped,
   cookie,
   PayloadTooLargeError,
+  relayStream,
   sendBuffered,
   serveFavicon,
 } from "../../chassis/src/http.ts";
@@ -1031,12 +1031,9 @@ async function serveStatic(res: ServerResponse, urlPath: string): Promise<void> 
     vary: "accept-encoding",
   });
   res.writeHead(200, found.gzip ? { ...headers, "content-encoding": "gzip" } : headers);
-  found.body.on("error", (error) => {
-    console.error(`[web-ui] streaming ${rel} failed: ${errChain(error)}`);
-    res.destroy();
+  relayStream(found.body, res, {
+    onError: (error) => console.error(`[web-ui] streaming ${rel} failed: ${errChain(error)}`),
   });
-  res.on("close", () => found.body.destroy());
-  found.body.pipe(res);
 }
 
 async function serveAppEditHtml(req: IncomingMessage, res: ServerResponse, url: URL): Promise<boolean> {
@@ -1206,7 +1203,7 @@ async function serveFileContent(c: WebCtx, playground = false): Promise<unknown>
       "x-frame-options": "SAMEORIGIN",
       "x-content-type-options": "nosniff",
     });
-    return pipeUpstreamFile(res, id, r.body);
+    return relayStream(r.body, res, { onError: fileStreamEnded(id) });
   }
 
   const csp = scriptCapableContentType(contentType)
@@ -1219,17 +1216,11 @@ async function serveFileContent(c: WebCtx, playground = false): Promise<unknown>
     "x-content-type-options": "nosniff",
   };
   res.writeHead(200, framedByOwnSurfaces(res, headers, csp));
-  return pipeUpstreamFile(res, id, r.body);
+  return relayStream(r.body, res, { onError: fileStreamEnded(id) });
 }
 
-async function pipeUpstreamFile(res: ServerResponse, id: string, body: ReadableStream<Uint8Array>): Promise<void> {
-  try {
-    await pipeline(Readable.fromWeb(body as Parameters<typeof Readable.fromWeb>[0]), res);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ERR_STREAM_PREMATURE_CLOSE")
-      console.warn(`[web-ui] file ${id} stream ended early: ${errChain(error)}`);
-  }
-}
+const fileStreamEnded = (id: string) => (error: Error) =>
+  console.warn(`[web-ui] file ${id} stream ended early: ${errChain(error)}`);
 
 const apiRoutes: readonly WebRoute[] = [
   {
@@ -1767,6 +1758,44 @@ const apiRoutes: readonly WebRoute[] = [
       ),
   },
   {
+    method: "GET",
+    path: "/api/personas/:id/versions",
+    handle: (c) => {
+      const query = new URLSearchParams({ principalId: c.user });
+      for (const key of ["before", "limit", "full"]) {
+        const value = c.url.searchParams.get(key);
+        if (value) query.set(key, value);
+      }
+      return relayCore(c.res, "GET", `/v1/personas/${encodeURIComponent(c.params.id!)}/versions?${query}`);
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/personas/:id/versions/:version/restore",
+    handle: (c) =>
+      relayWithPrincipal(
+        c,
+        "POST",
+        `/v1/personas/${encodeURIComponent(c.params.id!)}/versions/${encodeURIComponent(c.params.version!)}/restore`,
+      ),
+  },
+  {
+    method: "POST",
+    path: "/api/personas/:id/credentials",
+    handle: (c) => relayWithPrincipal(c, "POST", `/v1/personas/${encodeURIComponent(c.params.id!)}/credentials`),
+  },
+  {
+    method: "DELETE",
+    path: "/api/personas/:id/credentials/:grantId",
+    handle: (c) =>
+      relayCore(
+        c.res,
+        "DELETE",
+        `/v1/personas/${encodeURIComponent(c.params.id!)}/credentials/${encodeURIComponent(c.params.grantId!)}`,
+        JSON.stringify({ principalId: c.user }),
+      ),
+  },
+  {
     method: "PUT",
     path: "/api/personas/:id/access",
     handle: (c) => relayWithPrincipal(c, "PUT", `/v1/personas/${encodeURIComponent(c.params.id!)}/access`),
@@ -1839,14 +1868,6 @@ const apiRoutes: readonly WebRoute[] = [
         15_000,
       );
       return json(c.res, response.status, JSON.parse(response.text));
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/surface-config",
-    handle: async (c) => {
-      const { res } = c;
-      return relayCore(res, "GET", "/v1/surface-config");
     },
   },
   {
@@ -2464,14 +2485,6 @@ const apiRoutes: readonly WebRoute[] = [
   },
   {
     method: "GET",
-    path: "/api/keychain/credentials",
-    handle: async (c) => {
-      const { res } = c;
-      return relayCap(res, "GET", "/v1/keychain/credentials");
-    },
-  },
-  {
-    method: "GET",
     path: "/api/keychain/overview",
     handle: async (c) => {
       const { res } = c;
@@ -3026,9 +3039,7 @@ const apiRoutes: readonly WebRoute[] = [
           connection: "keep-alive",
           "x-accel-buffering": "no",
         });
-        const source = Readable.fromWeb(upstream.body as Parameters<typeof Readable.fromWeb>[0]);
-        source.on("error", () => res.destroy());
-        source.pipe(res);
+        relayStream(upstream.body, res);
       } catch {
         if (!controller.signal.aborted) {
           if (res.headersSent) res.destroy();
@@ -3534,11 +3545,8 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
     return res.end(JSON.stringify({ ok: true }));
   }
 
-  let oauthCallbackPrefix: string | null = null;
-  if (path.startsWith("/v1/connectors/oauth/")) oauthCallbackPrefix = "/v1/connectors/oauth/";
-  else if (path.startsWith("/connectors/oauth/")) oauthCallbackPrefix = "/connectors/oauth/";
-  if (method === "GET" && oauthCallbackPrefix && path.endsWith("/callback")) {
-    const provider = path.slice(oauthCallbackPrefix.length, -"/callback".length);
+  if (method === "GET" && path.startsWith("/connectors/oauth/") && path.endsWith("/callback")) {
+    const provider = path.slice("/connectors/oauth/".length, -"/callback".length);
     const corePath = `/v1/connectors/oauth/${encodeURIComponent(provider)}/callback${url.search}`;
     let ok: boolean;
     try {
@@ -3620,33 +3628,6 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
     const found = findRoute(apiRoutes, method, path);
     if (!found) return json(res, 404, { error: "not found" });
     return found.route.handle({ req, res, url, user, params: found.params });
-  }
-
-  if (method === "GET" && path.startsWith("/deployments/")) {
-    const user = cookieUser(req);
-    if (!user) return unauthorized(res, req);
-    const rest = path.slice("/deployments/".length);
-    const slash = rest.indexOf("/");
-    const id = decodeURIComponent(slash === -1 ? rest : rest.slice(0, slash));
-    const subPath = slash === -1 ? "/" : rest.slice(slash);
-    const corePath = `/d/${encodeURIComponent(id)}${subPath}${url.search}`;
-    const portalTok = portalTokenStore.getStore();
-    const headers: Record<string, string> = {
-      ...signedHeaders(CORE_SIGNING_SECRET, method, corePath, "", user),
-      "x-as-principal": user,
-      ...(portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : {}),
-    };
-    delete headers["content-type"];
-    const up = await fetch(`${CORE}${corePath}`, { method, headers, redirect: "manual" });
-    const outHeaders = Object.fromEntries(up.headers.entries());
-    delete outHeaders["content-encoding"];
-    delete outHeaders["content-length"];
-    res.writeHead(up.status, {
-      ...outHeaders,
-      "content-security-policy": UNTRUSTED_CONTENT_SANDBOX_CSP,
-      "x-content-type-options": "nosniff",
-    });
-    return res.end(Buffer.from(await up.arrayBuffer()));
   }
 
   if (method === "GET" && path === "/app-edit" && (await serveAppEditHtml(req, res, url))) return;

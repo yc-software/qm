@@ -2147,7 +2147,7 @@ export function createChatSurface(
       const msg = message as AssistantMessage;
       if ((msg as AssistantWork).retryableSend) return nothing;
       const work = (msg as AssistantWork).work;
-      const text = assistantDisplayText(messageText(msg), msg.stopReason).trim();
+      const text = assistantDisplayText(messageText(msg)).trim();
       const hasText = Boolean(text);
       const showWork =
         (msg as AssistantWork & { approvalDecision?: string }).approvalDecision !== "denied" &&
@@ -2222,10 +2222,7 @@ export function createChatSurface(
   }
 
   function copyableText(message: AgentMessage): string {
-    const raw =
-      message.role === "assistant"
-        ? assistantDisplayText(messageText(message), (message as AssistantMessage).stopReason)
-        : messageText(message);
+    const raw = message.role === "assistant" ? assistantDisplayText(messageText(message)) : messageText(message);
     if (!isReadOnlySlackView()) return raw;
     const role = (message as { role?: string }).role;
     return role === "user" || role === "user-with-attachments" ? slackWireToPlain(raw) : stripSlackDirectives(raw);
@@ -2370,8 +2367,7 @@ export function createChatSurface(
     return !chatState.agent && chatState.forkSession !== null && surfaceOf(chatState.forkSession) === "slack";
   }
 
-  function assistantDisplayText(text: string, stopReason?: string): string {
-    if (stopReason === "aborted" && text.trim() === "(stopped)") return "";
+  function assistantDisplayText(text: string): string {
     return isReadOnlySlackView() ? stripSlackDirectives(text) : text;
   }
 
@@ -2405,9 +2401,7 @@ export function createChatSurface(
         const workActive =
           hasWork && isStreaming && !streamingFinal && (work?.status === "working" || work?.status === "thinking");
         const text = isStreaming && work ? streamedAnswer(chunk.text, work) : chunk.text;
-        for (const [partIndex, part] of setupContent(
-          assistantDisplayText(workActive ? "" : text, message.stopReason),
-        ).entries()) {
+        for (const [partIndex, part] of setupContent(assistantDisplayText(workActive ? "" : text)).entries()) {
           if (part.type !== "text") {
             if (!(message as AssistantWork).persisted) continue;
             parts.push(
