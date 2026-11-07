@@ -37,11 +37,9 @@ export const logMemoryProviderError = (error: unknown, provider: string, operati
 
 export function createMemoryProviders(
   configs: MemoryProviderConfig["providers"],
-  opts: {
-    sessionItems?: (sessionId: string) => Promise<Item[]>;
-    fetchFor?: (providerId: string) => AddressFetch | undefined;
-  } = {},
+  opts: { sessionItems?: (sessionId: string) => Promise<Item[]>; fetch?: AddressFetch } = {},
 ): Record<string, MemoryService> {
+  const fetchFn = opts.fetch ?? fetch;
   const providers: Record<string, MemoryService> = {};
   for (const provider of configs) {
     if (provider.type === "memorable") {
@@ -57,7 +55,6 @@ export function createMemoryProviders(
       });
       continue;
     }
-    const fetchFn = opts.fetchFor?.(provider.id) ?? fetch;
     providers[provider.id] = createMcpMemoryProvider({
       read: operation(provider.url, provider.read, provider.timeoutMs, fetchFn),
       ...(provider.write ? { write: operation(provider.url, provider.write, MAX_PROVIDER_TIMEOUT_MS, fetchFn) } : {}),

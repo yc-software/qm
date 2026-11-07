@@ -3,8 +3,12 @@ import type { DurableMap } from "../persistence/durable-map.ts";
 import { parseScopeId, scopeId, type ScopeId } from "../types.ts";
 import { hashId } from "../util/crypto.ts";
 import { errMessage } from "../util/errors.ts";
-import { isPrivateNetworkIp } from "../util/network.ts";
-import { MEMORY_PROVIDER_ID, parseMemoryProviderConfig, type MemoryProviderConfig } from "./provider-config.ts";
+import {
+  isPrivateHost,
+  MEMORY_PROVIDER_ID,
+  parseMemoryProviderConfig,
+  type MemoryProviderConfig,
+} from "./provider-config.ts";
 import type { MemoryCapturePolicy, MemoryProviderRoute } from "./provider-router.ts";
 
 export const MEMORY_REGISTRY_TABLE = "memory_registry";
@@ -218,15 +222,11 @@ function flag(value: unknown, field: string, fallback: boolean): boolean {
 }
 
 function publicUrl(url: string): void {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    throw invalid("url is not a valid URL");
-  }
-  if (parsed.protocol !== "https:" || isPrivateNetworkIp(parsed.hostname))
+  if (!URL.canParse(url)) throw invalid("url is not a valid URL");
+  const { protocol, hostname } = new URL(url);
+  if (protocol !== "https:" || isPrivateHost(hostname))
     throw invalid(
-      `a member's brain needs a public https:// url, not ${parsed.protocol}//${parsed.hostname}; QM also refuses any name that resolves to a private address`,
+      `url (${protocol}//${hostname}) must use HTTPS at a public address: QM refuses any brain whose name resolves to a private network, so a brain there belongs in MEMORY_PROVIDER_CONFIG (docs/memory-providers.md#memory-registry)`,
     );
 }
 
@@ -245,7 +245,7 @@ export function putBrain(
   if (typeof preset !== "string" || !presetOf({ preset }))
     throw invalid(`preset must be one of: ${Object.keys(BRAIN_PRESETS).join(", ")}`);
   const url = text(body.url ?? existing?.url, "url");
-  if (brainOwner) publicUrl(url);
+  publicUrl(url);
   const clientSecret = body.clientSecret === undefined ? undefined : nonBlank(body.clientSecret, "clientSecret");
   const kept = url === existing?.url ? existing.auth.clientSecretEnc : undefined;
   const clientSecretEnc = clientSecret === undefined ? kept : encryptSecret(clientSecret, change.key);
