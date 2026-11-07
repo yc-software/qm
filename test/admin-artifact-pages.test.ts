@@ -456,13 +456,13 @@ test("an admin edit's destination audience follows its target and cannot be supp
       action: "ping",
       destination: dm,
     });
-    const put = (destination: unknown) =>
-      fetch(`${s.base}/v1/admin/crons/${encodeURIComponent(cron.id)}/destination?scope=personal:U1`, {
+    const put = (destination: unknown, id = cron.id) =>
+      fetch(`${s.base}/v1/admin/crons/${encodeURIComponent(id)}/destination?scope=personal:U1`, {
         method: "PUT",
         headers: { ...ALICE_ADMIN, "content-type": "application/json" },
         body: JSON.stringify({ destination }),
       });
-    const stored = async () => (await s.built.app.getCron(cron.id))?.destination;
+    const stored = async (id = cron.id) => (await s.built.app.getCron(id))?.destination;
 
     assert.equal((await put({ type: "slack", target: "C9", audienceScopeId: "personal:U1" })).status, 400);
     assert.deepEqual(await stored(), dm, "a caller-supplied audience is refused and changes nothing");
@@ -486,6 +486,21 @@ test("an admin edit's destination audience follows its target and cannot be supp
       await stored(),
       { type: "principal", target: "oidc:H:bob", audienceScopeId: "personal:oidc:H:bob" },
       "a principal's audience is always that principal, even when its id contains a colon",
+    );
+
+    const groupCron = await s.built.app.createCron({
+      ownerScopeId: "personal:U1",
+      owner: "U1",
+      createdBy: "U1",
+      schedule: { everyMs: 60_000 },
+      action: "ping",
+      destination: { type: "group", target: "G1", audienceScopeId: "group:G1" },
+    });
+    assert.equal((await put({ type: "slack", target: "G1:3.4" }, groupCron.id)).status, 200);
+    assert.deepEqual(
+      await stored(groupCron.id),
+      { type: "slack", target: "G1:3.4", audienceScopeId: "group:G1" },
+      "a group DM cron saved from the editor keeps its group audience",
     );
   } finally {
     await s.close();
