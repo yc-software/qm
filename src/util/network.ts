@@ -1,6 +1,6 @@
 import { lookup as dnsLookup } from "node:dns";
 import { BlockList, isIP, type LookupFunction } from "node:net";
-import { Agent, buildConnector, fetch, type RequestInit as UndiciRequestInit } from "undici";
+import { Agent, buildConnector, fetch } from "undici";
 
 const PRIVATE_NETWORKS = new BlockList();
 
@@ -83,8 +83,16 @@ export function addressGuardedFetch(
       connect(options, callback);
     },
   });
-  return (input, init = {}) =>
-    fetch(input, { ...(init as UndiciRequestInit), redirect: init.redirect ?? "manual", dispatcher }).then(
+  return async (input, init = {}) => {
+    const request = new Request(input, init);
+    return fetch(request.url, {
+      method: request.method,
+      headers: [...request.headers],
+      body: request.body ? await request.arrayBuffer() : null,
+      signal: init.signal,
+      redirect: init.redirect ?? "manual",
+      dispatcher,
+    }).then(
       (response) =>
         new Response(response.body as ReadableStream<Uint8Array> | null, {
           status: response.status,
@@ -95,6 +103,7 @@ export function addressGuardedFetch(
         throw error instanceof TypeError && error.cause instanceof PrivateNetworkAddressError ? error.cause : error;
       },
     );
+  };
 }
 
 export const publicFetch = addressGuardedFetch(isPrivateNetworkIp);

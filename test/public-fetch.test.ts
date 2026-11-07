@@ -95,6 +95,12 @@ test("address-guarded fetch sends bodies and headers and returns status, headers
     type: "application/x-www-form-urlencoded;charset=UTF-8",
     body: "a=b",
   });
+  const form = new FormData();
+  form.set("field", "value");
+  const multipart = await loopback(`${base}/echo`, { method: "POST", body: form });
+  const { type, body } = (await multipart.json()) as { type: string; body: string };
+  assert.match(type, /^multipart\/form-data; boundary=/);
+  assert.match(body, /name="field"\r\n\r\nvalue\r\n/);
   assert.equal((await loopback(`${base}/empty`)).status, 204);
   assert.equal((await loopback(`${base}/moved`)).status, 302);
   await assert.rejects(loopback(`${base}/moved`, { redirect: "error" }), (e: unknown) =>
