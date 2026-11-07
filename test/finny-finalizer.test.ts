@@ -1,0 +1,184 @@
+import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import { test } from "node:test";
+import { mintSignedPayload, verifySignedPayload } from "../src/auth/signed-token.ts";
+import { createFinnyFinalizer, createSignedFinnyFinalizer } from "../src/finny/finalizer.ts";
+import { FINNY_CHECK_IDS, initialFinnyPolicy } from "../src/finny/policy.ts";
+import { createPostgresFinnyStore } from "../src/finny/postgres-store.ts";
+import type { FinnyStore } from "../src/finny/store.ts";
+import type { FinnyApprovalAction, FinnyCheckId } from "../src/finny/types.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
+
+const SECRET = "finny-finalizer-test-secret";
+
+async function createApprovedJob(store: FinnyStore, action: FinnyApprovalAction = "approve") {
+  const input = {
+    id: randomUUID(),
+    scopeId: "personal:U1",
+    planDigest: `plan-${randomUUID()}`,
+    artifactDigest: `artifact-${randomUUID()}`,
+    policy: initialFinnyPolicy(),
+    originThreadRef: `slack:C1:${randomUUID()}`,
+    provisionalRevision: `revision-${randomUUID()}`,
+  };
+  await store.createJob(input);
+  await store.recordApproval({
+    scopeId: input.scopeId,
+    jobId: input.id,
+    requestId: randomUUID(),
+    actorId: "U1",
+    action,
+    planDigest: input.planDigest,
+    originThreadRef: input.originThreadRef,
+    decidedAt: Date.now(),
+  });
+  return input;
+}
+
+async function attest(
+  store: FinnyStore,
+  job: Awaited<ReturnType<typeof createApprovedJob>>,
+  checkId: FinnyCheckId,
+  verdict: "pass" | "block" = "pass",
+) {
+  return store.recordAttestation({
+    id: randomUUID(),
+    scopeId: job.scopeId,
+    jobId: job.id,
+    checkId,
+    generation: job.policy.requiredGenerations[checkId],
+    verdict,
+    evidenceDigest: `evidence-${randomUUID()}`,
+    issuerPrincipalId: "U-auditor",
+    issuerRunId: "run-auditor-1",
+    idempotencyKey: randomUUID(),
+  });
+}
+
+async function passChecks(
+  store: FinnyStore,
+  job: Awaited<ReturnType<typeof createApprovedJob>>,
+  checks: readonly FinnyCheckId[] = FINNY_CHECK_IDS,
+) {
+  for (const checkId of checks) await attest(store, job, checkId);
+}
+
+test("finalizer reads authoritative state and returns the same signed receipt for one idempotency key", async () => {
+  const store = createPostgresFinnyStore(testDatabaseUrl());
+  const job = await createApprovedJob(store);
+  await passChecks(store, job);
+  const finalizer = createSignedFinnyFinalizer(store, SECRET);
+  const idempotencyKey = randomUUID();
+  const receipt = await finalizer.finalize({ scopeId: job.scopeId, jobId: job.id, idempotencyKey });
+  assert.deepEqual(await verifySignedPayload(receipt.token, SECRET), receipt.payload);
+  assert.equal(receipt.payload.jobId, job.id);
+  assert.equal(receipt.payload.planDigest, job.planDigest);
+  assert.equal(receipt.payload.artifactDigest, job.artifactDigest);
+  assert.equal(receipt.payload.provisionalRevision, job.provisionalRevision);
+  const replay = await finalizer.finalize({ scopeId: job.scopeId, jobId: job.id, idempotencyKey });
+  assert.deepEqual(replay, receipt);
+  await assert.rejects(
+    finalizer.finalize({ scopeId: job.scopeId, jobId: job.id, idempotencyKey: randomUUID() }),
+    /different idempotency/i,
+  );
+  const stored = await store.getJob(job.scopeId, job.id);
+  assert.ok(stored?.approval?.consumedAt);
+  assert.deepEqual(stored?.finalReceipt, receipt);
+});
+
+test("finalizer rejects missing evidence and the latest BLOCK", async () => {
+  const store = createPostgresFinnyStore(testDatabaseUrl());
+  const missing = await createApprovedJob(store);
+  await passChecks(store, missing, FINNY_CHECK_IDS.slice(0, -1));
+  const finalizer = createSignedFinnyFinalizer(store, SECRET);
+  await assert.rejects(
+    finalizer.finalize({ scopeId: missing.scopeId, jobId: missing.id, idempotencyKey: randomUUID() }),
+    /missing.*lineage\.binding/i,
+  );
+
+  const blocked = await createApprovedJob(store);
+  await passChecks(store, blocked);
+  await attest(store, blocked, "financial.reconcile", "block");
+  await assert.rejects(
+    finalizer.finalize({ scopeId: blocked.scopeId, jobId: blocked.id, idempotencyKey: randomUUID() }),
+    /block.*financial\.reconcile/i,
+  );
+});
+
+test("finalizer rejects scope mismatch and non-approval", async () => {
+  const store = createPostgresFinnyStore(testDatabaseUrl());
+  const rejected = await createApprovedJob(store, "reject");
+  await passChecks(store, rejected);
+  const finalizer = createSignedFinnyFinalizer(store, SECRET);
+  await assert.rejects(
+    finalizer.finalize({ scopeId: "personal:U2", jobId: rejected.id, idempotencyKey: randomUUID() }),
+    /not found.*scope/i,
+  );
+  await assert.rejects(
+    finalizer.finalize({ scopeId: rejected.scopeId, jobId: rejected.id, idempotencyKey: randomUUID() }),
+    /approved/i,
+  );
+});
+
+test("signing failure rolls back approval consumption and finalization", async () => {
+  const store = createPostgresFinnyStore(testDatabaseUrl());
+  const job = await createApprovedJob(store);
+  await passChecks(store, job);
+  const broken = createFinnyFinalizer(store, async () => {
+    throw new Error("signer unavailable");
+  });
+  await assert.rejects(
+    broken.finalize({ scopeId: job.scopeId, jobId: job.id, idempotencyKey: randomUUID() }),
+    /signer unavailable/i,
+  );
+  const afterFailure = await store.getJob(job.scopeId, job.id);
+  assert.equal(afterFailure?.approval?.consumedAt, undefined);
+  assert.equal(afterFailure?.finalReceipt, undefined);
+
+  const receipt = await createSignedFinnyFinalizer(store, SECRET).finalize({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    idempotencyKey: randomUUID(),
+  });
+  assert.equal(receipt.payload.jobId, job.id);
+  await assert.rejects(attest(store, job, "lineage.binding", "block"), /finalized/i);
+});
+
+test("finalization serializes a concurrent BLOCK behind the job lock", async () => {
+  const store = createPostgresFinnyStore(testDatabaseUrl());
+  const job = await createApprovedJob(store);
+  await passChecks(store, job);
+  let releaseSigner: (() => void) | undefined;
+  let signerEntered: (() => void) | undefined;
+  const entered = new Promise<void>((resolve) => {
+    signerEntered = resolve;
+  });
+  const release = new Promise<void>((resolve) => {
+    releaseSigner = resolve;
+  });
+  const finalizer = createFinnyFinalizer(store, async (payload) => {
+    signerEntered?.();
+    await release;
+    return mintSignedPayload(payload, SECRET);
+  });
+  const finalizing = finalizer.finalize({ scopeId: job.scopeId, jobId: job.id, idempotencyKey: randomUUID() });
+  await entered;
+  const blocking = attest(store, job, "financial.reconcile", "block");
+  releaseSigner?.();
+  const receipt = await finalizing;
+  assert.equal(receipt.payload.jobId, job.id);
+  await assert.rejects(blocking, /finalized/i);
+});
+
+test("concurrent finalizers with the same key converge on one receipt", async () => {
+  const store = createPostgresFinnyStore(testDatabaseUrl());
+  const job = await createApprovedJob(store);
+  await passChecks(store, job);
+  const finalizer = createSignedFinnyFinalizer(store, SECRET);
+  const idempotencyKey = randomUUID();
+  const [first, second] = await Promise.all([
+    finalizer.finalize({ scopeId: job.scopeId, jobId: job.id, idempotencyKey }),
+    finalizer.finalize({ scopeId: job.scopeId, jobId: job.id, idempotencyKey }),
+  ]);
+  assert.deepEqual(second, first);
+});
