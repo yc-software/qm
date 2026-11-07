@@ -78,11 +78,14 @@ const URL_HELP = `Accepted: https://<host>, or http:// on ${ACCEPTED_HOSTS.slice
 const namedPrivateHost = (hostname: string): boolean =>
   PRIVATE_HOSTS.includes(hostname) || PRIVATE_SUFFIXES.some((suffix) => hostname.endsWith(suffix));
 
-export const isPrivateHost = (hostname: string): boolean => {
-  let end = hostname.length;
-  while (hostname[end - 1] === ".") end--;
-  return namedPrivateHost(hostname.slice(0, end)) || isPrivateNetworkIp(hostname);
+const trimTrailing = (value: string, char: string): string => {
+  let end = value.length;
+  while (value[end - 1] === char) end--;
+  return value.slice(0, end);
 };
+
+export const isPrivateHost = (hostname: string): boolean =>
+  namedPrivateHost(trimTrailing(hostname, ".")) || isPrivateNetworkIp(hostname);
 
 function privateMcpUrl(value: unknown, at: string): string {
   const raw = string(value, at);
@@ -98,7 +101,7 @@ function privateMcpUrl(value: unknown, at: string): string {
     throw new Error(`${at} (${shown}) must not carry credentials or a #fragment. ${URL_HELP}`);
   if (url.protocol !== "https:" && !privateHttp)
     throw new Error(`${at} (${shown}) must use HTTPS or a recognized private HTTP host. ${URL_HELP}`);
-  return raw.replace(/\/+$/, "");
+  return trimTrailing(raw, "/");
 }
 
 function operation(value: unknown, at: string, env: NodeJS.ProcessEnv): McpMemoryOperationConfig {
