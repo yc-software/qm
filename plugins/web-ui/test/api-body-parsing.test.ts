@@ -56,7 +56,7 @@ test.after(() => {
 
 test("a body that parses to a JSON primitive answers 400 — it never hangs the request", async () => {
   for (const raw of ["null", "false", "0", '""', "42"]) {
-    const r = await fetch(`${base}/api/ui-state`, { method: "PUT", headers, body: raw });
+    const r = await fetch(`${base}/api/runtime-config`, { method: "PUT", headers, body: raw });
     assert.equal(r.status, 400, `body ${raw} must answer, not hang`);
     assert.equal(((await r.json()) as { error?: string }).error, "bad_request");
   }
@@ -67,10 +67,6 @@ test("an empty body on a strict route is refused, not read as a field-clearing o
   for (const [method, path] of [
     ["POST", "/api/deployments/d1/display-name"],
     ["POST", "/api/deployments/d1/name"],
-    ["PATCH", "/api/memory"],
-    ["DELETE", "/api/memory"],
-    ["POST", "/api/sessions/s1"],
-    ["POST", "/api/connectors/revoke"],
     ["POST", "/api/keychain/drops"],
     ["POST", "/api/runs/r1/signal"],
   ] as const) {
@@ -126,13 +122,6 @@ test("ordinary steering without conversation context and abort preserve bare sig
   }
 });
 
-test("routes that historically tolerated an empty body still do", async () => {
-  const r = await fetch(`${base}/api/sessions/s1/fork`, { method: "POST", headers });
-  assert.equal(r.status, 200, "fork with no body still forks from the tail");
-  const forked = calls.at(-1);
-  assert.deepEqual(forked?.body, { principalId: "alice" });
-});
-
 test("app authorization accepts existing browser payloads and validates new return context", async () => {
   const authorize = (body: Record<string, unknown>) =>
     fetch(`${base}/api/composio/authorize`, {
@@ -163,17 +152,6 @@ test("app authorization accepts existing browser payloads and validates new retu
     assert.equal((await response.json()).error, "invalid_return_url");
   }
   assert.equal(calls.length, before);
-});
-
-test("app disconnection forwards only the chosen account to core", async () => {
-  const response = await fetch(`${base}/api/composio/disconnect`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ accountId: "ca_mine", user_id: "bob", principalId: "bob" }),
-  });
-  assert.equal(response.status, 200);
-  assert.ok(calls.at(-1)?.url.startsWith("/v1/composio/disconnect"));
-  assert.deepEqual(calls.at(-1)?.body, { accountId: "ca_mine" });
 });
 
 test("Composio verifier forwards only the opaque session and redirects safely", async () => {

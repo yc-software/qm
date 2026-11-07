@@ -67,11 +67,9 @@ test("a relayed core read streams the first core bytes before core finishes the 
 });
 
 test("a relayed DELETE carries its JSON body to core", async () => {
-  const res = await get("/api/memory", { "content-type": "application/json" }, "DELETE", '{"ids":["f1"]}');
+  const res = await get("/api/personas/p1/credentials/g1", {}, "DELETE");
   assert.equal(res.statusCode, 200);
-  assert.deepEqual(JSON.parse((await collect(res)).toString()), {
-    echoed: { principalId: "alice", ids: ["f1"] },
-  });
+  assert.deepEqual(JSON.parse((await collect(res)).toString()), { echoed: { principalId: "alice" } });
 });
 
 test("a browser that leaves mid-body closes the core response too", { timeout: 5_000 }, async () => {

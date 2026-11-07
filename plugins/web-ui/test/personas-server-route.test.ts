@@ -68,40 +68,15 @@ async function send(method: string, path: string, body?: unknown): Promise<Call>
   return { ...call, url: withoutNonce(call.url) };
 }
 
-test("persona writes carry the signed-in person, never one the browser names", async () => {
-  const cases: Array<[string, string, string]> = [
-    ["POST", "/api/personas", "/v1/personas"],
-    ["PATCH", "/api/personas/p1", "/v1/personas/p1"],
-    ["PUT", "/api/sessions/s1/persona", "/v1/sessions/s1/persona"],
-    ["POST", "/api/sessions", "/v1/sessions"],
-    ["POST", "/api/personas/p1/versions/2/restore", "/v1/personas/p1/versions/2/restore"],
-    ["POST", "/api/personas/p1/credentials", "/v1/personas/p1/credentials"],
-  ];
-  for (const [method, path, corePath] of cases) {
-    const call = await send(method, path, { principalId: "mallory", name: "Ada", personaId: "p1" });
-    assert.equal(call.method, method);
-    assert.equal(call.url, corePath);
-    assert.equal(call.body.principalId, "alice");
-    assert.equal(call.body.name, "Ada");
-  }
-  const removed = await send("DELETE", "/api/personas/p1");
+test("persona credential writes carry the signed-in person, never one the browser names", async () => {
+  const call = await send("POST", "/api/personas/p1/credentials", { principalId: "mallory", name: "Ada" });
   assert.deepEqual(
-    [removed.method, removed.url, removed.body],
-    ["DELETE", "/v1/personas/p1", { principalId: "alice" }],
+    [call.method, call.url, call.body.principalId, call.body.name],
+    ["POST", "/v1/personas/p1/credentials", "alice", "Ada"],
   );
   const detached = await send("DELETE", "/api/personas/p1/credentials/g%201");
   assert.deepEqual(
     [detached.method, detached.url, detached.body],
     ["DELETE", "/v1/personas/p1/credentials/g%201", { principalId: "alice" }],
   );
-});
-
-test("core's reason for refusing an access change reaches the browser", async () => {
-  const r = await fetch(`${base}/api/personas/p1/access`, {
-    method: "PUT",
-    headers,
-    body: JSON.stringify({ access: [] }),
-  });
-  assert.equal(r.status, 400);
-  assert.deepEqual(await r.json(), { error: "invalid", message: "a persona must keep at least one owner" });
 });

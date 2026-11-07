@@ -1263,71 +1263,6 @@ const apiRoutes: readonly WebRoute[] = [
   },
 
   { method: "GET", path: "/api/playgrounds/:id", handle: (c) => serveFileContent(c, true) },
-  {
-    method: "POST",
-    path: "/api/user-model-auth/account",
-    handle: async (c) => {
-      const p = JSON.parse((await readBody(c.req)) || "{}") as { account?: unknown; provider?: unknown };
-      return relayCore(
-        c.res,
-        "POST",
-        "/v1/user-model-auth/account",
-        JSON.stringify({ principalId: c.user, account: p.account, provider: p.provider }),
-      );
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/user-model-auth/api-key",
-    handle: async (c) => {
-      const p = JSON.parse((await readBody(c.req)) || "{}") as { provider?: unknown; apiKey?: unknown };
-      const body = JSON.stringify({ principalId: c.user, provider: p.provider, apiKey: p.apiKey });
-      return relayCore(c.res, "POST", "/v1/user-model-auth/api-key", body);
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/user-model-auth/disconnect",
-    handle: async (c) => {
-      const p = JSON.parse((await readBody(c.req)) || "{}") as { provider?: unknown };
-      return relayCore(
-        c.res,
-        "POST",
-        "/v1/user-model-auth/disconnect",
-        JSON.stringify({ principalId: c.user, provider: p.provider }),
-      );
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/user-model-auth/chatgpt/start",
-    handle: async (c) =>
-      relayCore(c.res, "POST", "/v1/user-model-auth/chatgpt/start", JSON.stringify({ principalId: c.user })),
-  },
-  {
-    method: "POST",
-    path: "/api/user-model-auth/chatgpt/poll",
-    handle: async (c) => {
-      const p = JSON.parse((await readBody(c.req)) || "{}") as { deviceAuthId?: unknown; userCode?: unknown };
-      const body = JSON.stringify({ principalId: c.user, deviceAuthId: p.deviceAuthId, userCode: p.userCode });
-      return relayCore(c.res, "POST", "/v1/user-model-auth/chatgpt/poll", body);
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/user-model-auth/claude/start",
-    handle: async (c) =>
-      relayCore(c.res, "POST", "/v1/user-model-auth/claude/start", JSON.stringify({ principalId: c.user })),
-  },
-  {
-    method: "POST",
-    path: "/api/user-model-auth/claude/complete",
-    handle: async (c) => {
-      const p = JSON.parse((await readBody(c.req)) || "{}") as { code?: unknown; verifier?: unknown };
-      const body = JSON.stringify({ principalId: c.user, code: p.code, verifier: p.verifier });
-      return relayCore(c.res, "POST", "/v1/user-model-auth/claude/complete", body);
-    },
-  },
 
   {
     method: "GET",
@@ -1351,15 +1286,6 @@ const apiRoutes: readonly WebRoute[] = [
       c.res.end();
     },
   },
-  ...["reply-status", "reply"].map((action) => ({
-    method: "POST",
-    path: `/api/composio/slack/${action}`,
-    handle: async (c: WebCtx) => {
-      const body = await readJson(c.req, c.res, false);
-      if (!body) return;
-      return relayCore(c.res, "POST", `/v1/composio/slack/${action}`, JSON.stringify(body));
-    },
-  })),
   { method: "GET", path: "/api/composio/slack", handle: (c) => relayCore(c.res, "GET", "/v1/composio/slack") },
   {
     method: "POST",
@@ -1374,16 +1300,6 @@ const apiRoutes: readonly WebRoute[] = [
       url.searchParams.set("slackReturn", String(body.state));
       c.res.setHeader("Cache-Control", "no-store");
       return relayCore(c.res, "POST", "/v1/composio/slack/authorize", JSON.stringify({ callbackUrl: url.href }));
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/composio/slack/complete",
-    handle: async (c) => {
-      const body = await readJson<{ ticket?: unknown }>(c.req, c.res, false);
-      if (!body) return;
-      c.res.setHeader("Cache-Control", "no-store");
-      return relayCore(c.res, "POST", "/v1/composio/slack/complete", JSON.stringify({ ticket: body.ticket }));
     },
   },
   {
@@ -1425,16 +1341,6 @@ const apiRoutes: readonly WebRoute[] = [
         "/v1/composio/authorize",
         JSON.stringify({ toolkit: body.toolkit, ...(callbackUrl ? { callbackUrl } : {}) }),
       );
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/composio/disconnect",
-    handle: async (c) => {
-      const body = await readJson<{ accountId?: unknown }>(c.req, c.res, false);
-      if (!body) return;
-      c.res.setHeader("Cache-Control", "no-store");
-      return relayCore(c.res, "POST", "/v1/composio/disconnect", JSON.stringify({ accountId: body.accountId }));
     },
   },
   {
@@ -1552,133 +1458,6 @@ const apiRoutes: readonly WebRoute[] = [
   },
   {
     method: "POST",
-    path: "/api/projects",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      const p = await readJson<{ name?: unknown }>(req, res);
-      if (!p) return;
-      const name = typeof p.name === "string" ? p.name.trim().slice(0, 200) : "";
-      if (!name) return json(res, 400, { error: "bad_request", message: "name required" });
-      return relayCore(res, "POST", "/v1/projects", JSON.stringify({ principalId: user, name }));
-    },
-  },
-  {
-    method: "PATCH",
-    path: "/api/projects/:id",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      const id = c.params.id!;
-      const p = await readJson<{ name?: unknown; icon?: unknown }>(req, res);
-      if (!p) return;
-      const name = typeof p.name === "string" ? p.name.trim().slice(0, 200) : "";
-      const hasIcon = Object.hasOwn(p, "icon");
-      if (!name && !hasIcon) return json(res, 400, { error: "bad_request", message: "name or icon required" });
-      return relayCore(
-        res,
-        "PATCH",
-        `/v1/projects/${encodeURIComponent(id)}`,
-        JSON.stringify({ principalId: user, ...(name ? { name } : {}), ...(hasIcon ? { icon: p.icon } : {}) }),
-      );
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/projects/:id/members",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      const id = c.params.id!;
-      const p = await readJson<{ memberId?: unknown }>(req, res);
-      if (!p) return;
-      const memberId = typeof p.memberId === "string" ? p.memberId.trim() : "";
-      if (!memberId) return json(res, 400, { error: "bad_request", message: "memberId required" });
-      return relayCore(
-        res,
-        "POST",
-        `/v1/projects/${encodeURIComponent(id)}/members`,
-        JSON.stringify({ principalId: user, memberId }),
-      );
-    },
-  },
-  {
-    method: "PUT",
-    path: "/api/projects/:id/slack-channel",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      const id = c.params.id!;
-      const p = await readJson<{ channel?: unknown }>(req, res);
-      if (!p) return;
-      const channel = typeof p.channel === "string" ? p.channel.trim().slice(0, 200) : "";
-      if (!channel) return json(res, 400, { error: "bad_request", message: "channel required" });
-      return relayCore(
-        res,
-        "PUT",
-        `/v1/projects/${encodeURIComponent(id)}/slack-channel`,
-        JSON.stringify({ principalId: user, channel }),
-      );
-    },
-  },
-  {
-    method: "DELETE",
-    path: "/api/projects/:id/slack-channel",
-    handle: async (c) => {
-      const { res, user } = c;
-      const id = c.params.id!;
-      return relayCore(
-        res,
-        "DELETE",
-        `/v1/projects/${encodeURIComponent(id)}/slack-channel`,
-        JSON.stringify({ principalId: user }),
-      );
-    },
-  },
-  {
-    method: "DELETE",
-    path: "/api/projects/:id/members/:memberId",
-    handle: async (c) => {
-      const { res, user } = c;
-      const id = c.params.id!;
-      const memberId = c.params.memberId!;
-      return relayCore(
-        res,
-        "DELETE",
-        `/v1/projects/${encodeURIComponent(id)}/members/${encodeURIComponent(memberId)}`,
-        JSON.stringify({ principalId: user }),
-      );
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/personas",
-    handle: (c) => relayWithPrincipal(c, "POST", "/v1/personas"),
-  },
-  {
-    method: "PATCH",
-    path: "/api/personas/:id",
-    handle: (c) => relayWithPrincipal(c, "PATCH", `/v1/personas/${encodeURIComponent(c.params.id!)}`),
-  },
-  {
-    method: "DELETE",
-    path: "/api/personas/:id",
-    handle: (c) =>
-      relayCore(
-        c.res,
-        "DELETE",
-        `/v1/personas/${encodeURIComponent(c.params.id!)}`,
-        JSON.stringify({ principalId: c.user }),
-      ),
-  },
-  {
-    method: "POST",
-    path: "/api/personas/:id/versions/:version/restore",
-    handle: (c) =>
-      relayWithPrincipal(
-        c,
-        "POST",
-        `/v1/personas/${encodeURIComponent(c.params.id!)}/versions/${encodeURIComponent(c.params.version!)}/restore`,
-      ),
-  },
-  {
-    method: "POST",
     path: "/api/personas/:id/credentials",
     handle: (c) => relayWithPrincipal(c, "POST", `/v1/personas/${encodeURIComponent(c.params.id!)}/credentials`),
   },
@@ -1692,21 +1471,6 @@ const apiRoutes: readonly WebRoute[] = [
         `/v1/personas/${encodeURIComponent(c.params.id!)}/credentials/${encodeURIComponent(c.params.grantId!)}`,
         JSON.stringify({ principalId: c.user }),
       ),
-  },
-  {
-    method: "PUT",
-    path: "/api/personas/:id/access",
-    handle: (c) => relayWithPrincipal(c, "PUT", `/v1/personas/${encodeURIComponent(c.params.id!)}/access`),
-  },
-  {
-    method: "POST",
-    path: "/api/sessions",
-    handle: (c) => relayWithPrincipal(c, "POST", "/v1/sessions"),
-  },
-  {
-    method: "PUT",
-    path: "/api/sessions/:id/persona",
-    handle: (c) => relayWithPrincipal(c, "PUT", `/v1/sessions/${encodeURIComponent(c.params.id!)}/persona`),
   },
   {
     method: "GET",
@@ -1754,16 +1518,6 @@ const apiRoutes: readonly WebRoute[] = [
         15_000,
       );
       return json(c.res, response.status, JSON.parse(response.text));
-    },
-  },
-  {
-    method: "PUT",
-    path: "/api/ui-state",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      const body = await readJson<Record<string, unknown>>(req, res);
-      if (!body) return;
-      return relayCore(res, "PUT", "/v1/ui-state", JSON.stringify({ ...body, principalId: user }));
     },
   },
   ...adminRoutes({
@@ -1916,147 +1670,6 @@ const apiRoutes: readonly WebRoute[] = [
     },
   },
   {
-    method: "POST",
-    path: "/api/skills",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      const p = await readJson<{ name?: unknown; description?: unknown; body?: unknown; scopeId?: unknown }>(req, res);
-      if (!p) return;
-      const draft: { name?: string; description?: string; body?: string; scopeId?: string } = {};
-      if (typeof p.name === "string") draft.name = p.name;
-      if (typeof p.description === "string") draft.description = p.description;
-      if (typeof p.body === "string") draft.body = p.body;
-      if (typeof p.scopeId === "string") draft.scopeId = p.scopeId;
-      return relayCore(res, "POST", "/v1/skills", JSON.stringify({ principalId: user, ...draft }));
-    },
-  },
-  {
-    method: "PUT",
-    path: "/api/skills/:id",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      const id = c.params.id!;
-      const p = await readJson<{ description?: unknown; body?: unknown }>(req, res);
-      if (!p) return;
-      const patch: { description?: string; body?: string } = {};
-      if (typeof p.description === "string") patch.description = p.description;
-      if (typeof p.body === "string") patch.body = p.body;
-      return relayCore(
-        res,
-        "PUT",
-        `/v1/skills/${encodeURIComponent(id)}`,
-        JSON.stringify({ principalId: user, ...patch }),
-      );
-    },
-  },
-  {
-    method: "DELETE",
-    path: "/api/skills/:id",
-    handle: async (c) => {
-      const { res, user } = c;
-      const id = c.params.id!;
-      return relayCore(res, "DELETE", `/v1/skills/${encodeURIComponent(id)}`, JSON.stringify({ principalId: user }));
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/skills/:id/restore",
-    handle: async (c) => {
-      const { res, user } = c;
-      const id = c.params.id!;
-      return relayCore(
-        res,
-        "POST",
-        `/v1/skills/${encodeURIComponent(id)}/restore`,
-        JSON.stringify({ principalId: user }),
-      );
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/sessions/:id/share",
-    handle: async ({ req, res, user, params }: WebCtx) => {
-      res.setHeader("Cache-Control", "no-store");
-      const body = await readJson<{ audience?: unknown }>(req, res);
-      if (!body) return;
-      return relayCore(
-        res,
-        "POST",
-        `/v1/sessions/${encodeURIComponent(params.id!)}/share`,
-        JSON.stringify({ principalId: user, audience: body.audience }),
-      );
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/sessions/:id/title",
-    handle: async (c) => {
-      const { res, user } = c;
-      const id = c.params.id!;
-      return relayCore(
-        res,
-        "POST",
-        `/v1/sessions/${encodeURIComponent(id)}/title`,
-        JSON.stringify({ principalId: user }),
-      );
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/sessions/:id/detach",
-    handle: async (c) => {
-      const { res, user } = c;
-      const id = c.params.id!;
-      return relayCore(
-        res,
-        "POST",
-        `/v1/sessions/${encodeURIComponent(id)}/detach`,
-        JSON.stringify({ principalId: user }),
-      );
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/sessions/:id/goal/cancel",
-    handle: async (c) => {
-      const { res, user } = c;
-      return relayCore(
-        res,
-        "POST",
-        `/v1/sessions/${encodeURIComponent(c.params.id!)}/goal/cancel`,
-        JSON.stringify({ principalId: user }),
-      );
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/sessions/:id/expand",
-    handle: async (c) =>
-      relayCore(
-        c.res,
-        "POST",
-        `/v1/sessions/${encodeURIComponent(c.params.id!)}/expand`,
-        JSON.stringify({ principalId: c.user }),
-      ),
-  },
-  {
-    method: "POST",
-    path: "/api/sessions/:id/fork",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      const id = c.params.id!;
-      const p = await readJson<{ upToSeq?: unknown; sideChat?: unknown }>(req, res);
-      if (!p) return;
-      const upToSeq = typeof p.upToSeq === "number" ? p.upToSeq : undefined;
-      return relayCore(
-        res,
-        "POST",
-        `/v1/sessions/${encodeURIComponent(id)}/fork`,
-        JSON.stringify({ principalId: user, upToSeq, sideChat: p.sideChat }),
-      );
-    },
-  },
-  {
     method: "GET",
     path: "/api/sessions/:id/swarm",
     handle: async (c) => relayCore(c.res, "GET", `/v1/sessions/${encodeURIComponent(c.params.id!)}/swarm`),
@@ -2082,69 +1695,6 @@ const apiRoutes: readonly WebRoute[] = [
     handle: serveFileContent,
   },
   {
-    method: "PATCH",
-    path: "/api/memory",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      const p = await readJson<{ facts?: unknown }>(req, res, false);
-      if (!p) return;
-      return relayCore(res, "PATCH", "/v1/memory", JSON.stringify({ principalId: user, facts: p.facts }));
-    },
-  },
-  {
-    method: "DELETE",
-    path: "/api/memory",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      const p = await readJson<{ ids?: unknown }>(req, res, false);
-      if (!p) return;
-      return relayCore(res, "DELETE", "/v1/memory", JSON.stringify({ principalId: user, ids: p.ids }));
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/sessions/:id",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      const id = c.params.id!;
-      const p = await readJson<{
-        title?: unknown;
-        archived?: unknown;
-        pinned?: unknown;
-        color?: unknown;
-        unread?: unknown;
-      }>(req, res, false);
-      if (!p) return;
-      const patch: {
-        title?: string | null;
-        archived?: boolean;
-        pinned?: boolean;
-        color?: string | null;
-        unread?: boolean;
-      } = {};
-      if (p.title === null || typeof p.title === "string") patch.title = p.title as string | null;
-      if (typeof p.archived === "boolean") patch.archived = p.archived;
-      if (typeof p.pinned === "boolean") patch.pinned = p.pinned;
-      if (p.color === null || typeof p.color === "string") patch.color = p.color as string | null;
-      if (typeof p.unread === "boolean") patch.unread = p.unread;
-      if (
-        patch.title === undefined &&
-        patch.archived === undefined &&
-        patch.pinned === undefined &&
-        patch.color === undefined &&
-        patch.unread === undefined
-      ) {
-        return json(res, 400, { error: "bad_request", message: "title, archived, pinned, color, or unread required" });
-      }
-      return relayCore(
-        res,
-        "POST",
-        `/v1/sessions/${encodeURIComponent(id)}`,
-        JSON.stringify({ principalId: user, ...patch }),
-      );
-    },
-  },
-  {
     method: "POST",
     path: "/api/connectors/:provider/start",
     handle: async (c) => {
@@ -2167,40 +1717,11 @@ const apiRoutes: readonly WebRoute[] = [
     },
   },
   {
-    method: "POST",
-    path: "/api/connectors/revoke",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      const p = await readJson<{ provider?: unknown; host?: unknown }>(req, res, false);
-      if (!p) return;
-      const provider = typeof p.provider === "string" ? p.provider : "";
-      const host = typeof p.host === "string" ? p.host : "";
-      if (!provider && !host) return json(res, 400, { error: "bad_request", message: "provider or host required" });
-      const rawBody = JSON.stringify({ principalId: user, ...(provider ? { provider } : { host }) });
-      return relayCore(res, "POST", "/v1/connectors/oauth/revoke", rawBody);
-    },
-  },
-  {
     method: "GET",
     path: "/api/keychain/overview",
     handle: async (c) => {
       const { res } = c;
       return relayCap(res, "GET", "/v1/keychain/overview");
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/keychain/approvals/:id",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      const p = await readJson<{ decision?: unknown }>(req, res, false);
-      if (!p) return;
-      return relayCore(
-        res,
-        "POST",
-        `/v1/keychain/approvals/${encodeURIComponent(c.params.id!)}`,
-        JSON.stringify({ principalId: user, decision: p.decision }),
-      );
     },
   },
   {
@@ -2687,15 +2208,6 @@ const apiRoutes: readonly WebRoute[] = [
     },
   },
   {
-    method: "PATCH",
-    path: "/api/runs/:id/input",
-    handle: async (c) => {
-      const body = await readJson<{ text?: unknown; expectedText?: unknown }>(c.req, c.res, false);
-      if (!body) return;
-      return relayCore(c.res, "PATCH", `/v1/runs/${encodeURIComponent(c.params.id!)}/input`, JSON.stringify(body));
-    },
-  },
-  {
     method: "POST",
     path: "/api/runs/:id/withdraw",
     handle: async (c) => {
@@ -3116,19 +2628,6 @@ const apiRoutes: readonly WebRoute[] = [
   },
   {
     method: "POST",
-    path: "/api/crons/:id/disable",
-    handle: async (c) => {
-      const { res, user } = c;
-      const id = c.params.id!;
-      return relayCore(
-        res,
-        "POST",
-        `/v1/crons/${encodeURIComponent(id)}/disable?principalId=${encodeURIComponent(user)}`,
-      );
-    },
-  },
-  {
-    method: "POST",
     path: "/api/crons/:id/enable",
     handle: async (c) => {
       const { res, user } = c;
@@ -3139,15 +2638,6 @@ const apiRoutes: readonly WebRoute[] = [
         `/v1/crons/${encodeURIComponent(id)}?principalId=${encodeURIComponent(user)}`,
         JSON.stringify({ enabled: true, archived: false }),
       );
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/crons/:id/run",
-    handle: async (c) => {
-      const { res, user } = c;
-      const id = c.params.id!;
-      return relayCore(res, "POST", `/v1/crons/${encodeURIComponent(id)}/run?principalId=${encodeURIComponent(user)}`);
     },
   },
   {
