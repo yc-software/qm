@@ -982,7 +982,7 @@ async function restoreSkill(ctx: ApiCtx): Promise<void> {
   }
   if (!principalId) return sendJson(ctx.res, 400, { error: "bad_request", message: "principalId required" });
   const restored = await ctx.app.restoreOwnedSkill(ctx.params.id!, principalId, {
-    liveActor: ctx.capability ? livePersonCapability(ctx.capability) : true,
+    liveActor: ctx.capability ? livePersonCapability(ctx.capability) && !ctx.capability.botActor : true,
   });
   if (restored === "exists")
     return sendJson(ctx.res, 409, {
@@ -1022,7 +1022,10 @@ async function updateSkill(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 400, { error: "bad_request", message: "description and body can't be blank" });
   }
   const liveActor = capability ? livePersonCapability(capability) : true;
-  const updated = await app.updateOwnedSkill(id, principalId, patch, { liveActor });
+  const updated = await app.updateOwnedSkill(id, principalId, patch, {
+    liveActor,
+    botActor: capability?.botActor === true,
+  });
   if (updated === "trigger_blocked")
     return sendJson(res, 403, { error: "forbidden", message: SHARED_SKILL_TRIGGER_REFUSAL });
   if (!updated) return sendJson(res, 404, { error: "not_found", message: "no such skill, or it isn't yours to edit" });
@@ -1053,7 +1056,7 @@ async function deleteSkill(ctx: ApiCtx): Promise<void> {
     principalId = b.principalId;
   }
   const liveActor = capability ? livePersonCapability(capability) : true;
-  const outcome = await app.deleteOwnedSkill({ principalId, id, liveActor });
+  const outcome = await app.deleteOwnedSkill({ principalId, id, liveActor, botActor: capability?.botActor === true });
   if (outcome === "missing") return sendJson(res, 404, { error: "not_found", message: "no such skill" });
   if (outcome === "trigger_blocked")
     return sendJson(res, 403, { error: "forbidden", message: SHARED_SKILL_TRIGGER_REFUSAL });
@@ -1120,7 +1123,7 @@ async function createSkill(ctx: ApiCtx): Promise<void> {
     name: b.name,
     description: b.description,
     body: b.body,
-    liveActor: capability ? livePersonCapability(capability) : true,
+    liveActor: capability ? livePersonCapability(capability) && !capability.botActor : true,
   });
   if (!created)
     return sendJson(res, 409, {
@@ -1454,7 +1457,7 @@ export async function postSoul(ctx: ApiCtx): Promise<void> {
   try {
     const version = await app.updateSoul(scopeIdVal, content, actorId, {
       ...(allowSharedScope ? { allowSharedScope: true } : {}),
-      liveActor: capability ? livePersonCapability(capability) : true,
+      liveActor: capability ? livePersonCapability(capability) && !capability.botActor : true,
     });
     return sendJson(res, 200, { ok: true, version });
   } catch (e) {

@@ -39,7 +39,7 @@ export interface ChannelPersonas {
 }
 
 export interface ChannelPersonasDeps {
-  defaults: Pick<DurableMap<ChannelPersonaDefault>, "get" | "put" | "delete">;
+  defaults: Pick<DurableMap<ChannelPersonaDefault>, "get" | "insertIfAbsent" | "update" | "deleteIf">;
   store: Pick<PersonaStore, "get" | "access">;
   personas: Pick<PersonaService, "role">;
   flags: Pick<FeatureFlagStore, "enabled">;
@@ -127,6 +127,23 @@ export function createChannelPersonas(deps: ChannelPersonasDeps): ChannelPersona
     });
   }
 
+  const sameRow = (seen: ChannelPersonaDefault) => (row: ChannelPersonaDefault) =>
+    row.personaId === seen.personaId && row.setAt === seen.setAt;
+
+  async function swap(
+    scope: ScopeId,
+    seen: ChannelPersonaDefault | null,
+    next: ChannelPersonaDefault,
+  ): Promise<boolean> {
+    if (!seen) return deps.defaults.insertIfAbsent(scope, next);
+    let swapped = false;
+    await deps.defaults.update(scope, (row) => {
+      swapped = sameRow(seen)(row);
+      return swapped ? next : row;
+    });
+    return swapped;
+  }
+
   async function announce(channelId: string, text: string, setAt: number): Promise<void> {
     try {
       await deps.deliveries.enqueue({
@@ -166,47 +183,49 @@ export function createChannelPersonas(deps: ChannelPersonasDeps): ChannelPersona
       const label = `#${channel.name}`;
       if (!actor.live || !deps.isActive(actor.id))
         return refuse("forbidden", `${label}'s persona is changed only by an active person, on a turn they sent`);
-      const row = await deps.defaults.get(scope);
-      const worn = row ? await deps.store.get(row.personaId) : null;
-      if (worn && worn.id !== personaId && !(await mayGovern(worn.id, actor)))
-        return refuse(
-          "forbidden",
-          `${label} wears the persona ${worn.name}; only its owners and writers, or an org admin, can change that`,
-        );
-      const setAt = now();
       const value = (persona: Persona | null) =>
         ({ status: "ok", value: { channelId: channel.channelId, channelName: channel.name, persona } }) as const;
-      if (personaId === null) {
-        if (!row) return value(null);
-        await deps.defaults.delete(scope);
-        audit(actor.id, "persona_channel_default_clear", row.personaId, scope);
-        if (worn)
-          await announce(
-            channel.channelId,
-            `This channel no longer wears the persona ${worn.name}. Its instructions, standing orders and skills are open to its members again.`,
-            setAt,
+      for (;;) {
+        const row = await deps.defaults.get(scope);
+        const worn = row ? await deps.store.get(row.personaId) : null;
+        if (worn && worn.id !== personaId && !(await mayGovern(worn.id, actor)))
+          return refuse(
+            "forbidden",
+            `${label} wears the persona ${worn.name}; only its owners and writers, or an org admin, can change that`,
           );
-        return value(null);
-      }
-      if ((await deps.directory.channelMembership(channel.channelId, actor.id)) !== true)
-        return refuse("forbidden", `only a member of ${label} can give it a persona`);
-      const persona = await deps.store.get(personaId);
-      const held = persona ? await deps.personas.role(actor.id, personaId) : null;
-      if (!persona || !held) return refuse("not_found", "no persona with that id that you hold a role on");
-      if (!atLeast(held, "owner"))
-        return refuse(
-          "forbidden",
-          `only an owner of ${persona.name} can make it ${label}'s persona, because that shares it, with its skills, notes and credentials, with everyone in ${label}`,
+        const setAt = now();
+        if (personaId === null) {
+          if (!row) return value(null);
+          if (!(await deps.defaults.deleteIf(scope, sameRow(row)))) continue;
+          audit(actor.id, "persona_channel_default_clear", row.personaId, scope);
+          if (worn)
+            await announce(
+              channel.channelId,
+              `This channel no longer wears the persona ${worn.name}. Its instructions, standing orders and skills are open to its members again.`,
+              setAt,
+            );
+          return value(null);
+        }
+        if ((await deps.directory.channelMembership(channel.channelId, actor.id)) !== true)
+          return refuse("forbidden", `only a member of ${label} can give it a persona`);
+        const persona = await deps.store.get(personaId);
+        const held = persona ? await deps.personas.role(actor.id, personaId) : null;
+        if (!persona || !held) return refuse("not_found", "no persona with that id that you hold a role on");
+        if (!atLeast(held, "owner"))
+          return refuse(
+            "forbidden",
+            `only an owner of ${persona.name} can make it ${label}'s persona, because that shares it, with its skills, notes and credentials, with everyone in ${label}`,
+          );
+        if (worn?.id === persona.id) return value(persona);
+        if (!(await swap(scope, row, { scopeId: scope, personaId, setBy: canonicalPerson(actor.id), setAt }))) continue;
+        audit(actor.id, "persona_channel_default_set", personaId, scope);
+        await announce(
+          channel.channelId,
+          `This channel now wears the persona ${persona.name}. Only ${persona.name}'s owners and writers, and org admins, can change this channel's instructions, standing orders and skills.`,
+          setAt,
         );
-      if (worn?.id === persona.id) return value(persona);
-      await deps.defaults.put(scope, { scopeId: scope, personaId, setBy: canonicalPerson(actor.id), setAt });
-      audit(actor.id, "persona_channel_default_set", personaId, scope);
-      await announce(
-        channel.channelId,
-        `This channel now wears the persona ${persona.name}. Only ${persona.name}'s owners and writers, and org admins, can change this channel's instructions, standing orders and skills.`,
-        setAt,
-      );
-      return value(persona);
+        return value(persona);
+      }
     },
 
     async assertMayInstruct(scope, actor) {

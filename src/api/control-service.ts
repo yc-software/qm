@@ -804,7 +804,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
           allowSharedScope: true,
           expectedVersion,
           sessionId: capability.sessionId,
-          liveActor: livePersonCapability(capability),
+          liveActor: livePersonCapability(capability) && !capability.botActor,
         });
         return { ok: true, version };
       } catch (e) {
@@ -916,7 +916,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
             return { ok: false, code: "forbidden", message: SHARED_SKILL_TRIGGER_REFUSAL };
           }
           await app.moveArtifactHome(req.type, home.id, toScope, capability.actorId, {
-            liveActor: livePersonCapability(capability),
+            liveActor: livePersonCapability(capability) && !capability.botActor,
           });
           return {
             ok: true,
@@ -941,7 +941,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
               permission,
               grantedBy: capability.actorId,
             },
-            { ...notify, liveActor: livePersonCapability(capability) },
+            { ...notify, liveActor: livePersonCapability(capability) && !capability.botActor },
           );
         return {
           ok: true,
