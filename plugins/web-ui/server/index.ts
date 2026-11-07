@@ -279,76 +279,6 @@ async function relayCore(res: ServerResponse, method: HttpMethod, pathWithQuery:
   });
 }
 
-function uploadFileName(url: URL): string {
-  return url.searchParams.get("name")?.trim() || "file";
-}
-
-async function stageUploadStream(req: IncomingMessage, sha256: string): Promise<Response> {
-  const corePath = withSourceAuthNonce("/v1/blobs", CORE_SIGNING_SECRET);
-  const headers = {
-    ...signedHeaders(CORE_SIGNING_SECRET, "POST", corePath, "", sha256),
-    "content-type": "application/octet-stream",
-    "x-content-sha256": sha256,
-  };
-  return fetch(`${CORE}${corePath}`, {
-    method: "POST",
-    headers,
-    body: req as unknown as RequestInit["body"],
-    duplex: "half",
-  } as RequestInit & { duplex: "half" });
-}
-
-function declaredSha(url: URL): string {
-  return url.searchParams.get("sha") ?? "";
-}
-
-async function uploadBlobFromRequest(req: IncomingMessage, res: ServerResponse, sha256: string): Promise<void> {
-  if (!/^[0-9a-f]{64}$/.test(sha256)) {
-    req.resume();
-    return json(res, 400, { error: "bad_request", message: "sha (hex sha-256) required" });
-  }
-  const staged = await stageUploadStream(req, sha256);
-  const headers = { "content-type": staged.headers.get("content-type") ?? "application/json" };
-  return sendBuffered(res, staged.status, headers, await staged.text());
-}
-
-async function uploadFileFromRequest(
-  req: IncomingMessage,
-  res: ServerResponse,
-  sha256: string,
-  name: string,
-  register: { path: string; fields: Record<string, string>; headers?: Record<string, string> },
-): Promise<void> {
-  if (!/^[0-9a-f]{64}$/.test(sha256)) {
-    req.resume();
-    return json(res, 400, { error: "bad_request", message: "sha (hex sha-256) required" });
-  }
-  const staged = await stageUploadStream(req, sha256);
-  const stagedText = await staged.text();
-  if (!staged.ok) {
-    const headers = { "content-type": staged.headers.get("content-type") ?? "application/json" };
-    return sendBuffered(res, staged.status, headers, stagedText);
-  }
-  const stagedBody = JSON.parse(stagedText) as { blobId: string };
-  const body = JSON.stringify({
-    ...register.fields,
-    name,
-    mimetype:
-      typeof req.headers["content-type"] === "string" ? req.headers["content-type"] : "application/octet-stream",
-    blobId: stagedBody.blobId,
-  });
-  const portalTok = portalTokenStore.getStore();
-  const registered = await fetchCoreText({
-    origin: CORE,
-    secret: CORE_SIGNING_SECRET,
-    method: "POST",
-    path: register.path,
-    body,
-    headers: register.headers ?? (portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : undefined),
-  });
-  return sendBuffered(res, registered.status, { "content-type": "application/json" }, registered.text);
-}
-
 export interface WebReleases {
   document(name: string): Promise<string>;
   file(path: string, gzip: boolean): Promise<{ body: Readable; gzip: boolean } | null>;
@@ -521,48 +451,6 @@ async function serveInboxItemImage(c: WebCtx): Promise<unknown> {
 }
 
 const apiRoutes: readonly WebRoute[] = [
-  {
-    method: "POST",
-    path: "/api/blobs",
-    handle: async (c) => {
-      const { req, res, url } = c;
-      return uploadBlobFromRequest(req, res, declaredSha(url));
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/files/upload",
-    handle: async (c) => {
-      const { req, res, url, user } = c;
-      const scope = url.searchParams.get("scope");
-      return uploadFileFromRequest(req, res, declaredSha(url), uploadFileName(url), {
-        path: "/v1/files/upload",
-        fields: { principalId: user, ...(scope ? { scopeId: scope } : {}) },
-      });
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/admin/files/upload",
-    handle: async (c) => {
-      const { req, res, url, user } = c;
-      const scope = url.searchParams.get("scope");
-      if (resolveIdentity(req)?.impersonator) {
-        req.resume();
-        return json(res, 403, { message: "Admin pages are unavailable while impersonating." });
-      }
-      if (!scope) {
-        req.resume();
-        return json(res, 400, { error: "bad_request", message: "scope required" });
-      }
-      const token = portalTokenStore.getStore();
-      return uploadFileFromRequest(req, res, declaredSha(url), uploadFileName(url), {
-        path: `/v1/admin/files/upload?scope=${encodeURIComponent(scope)}`,
-        fields: {},
-        headers: { "x-admin-actor": `${user}@${ORG}`, ...(token ? { [PORTAL_IDENTITY_HEADER]: token } : {}) },
-      });
-    },
-  },
   {
     method: "GET",
     path: "/api/inbox",
