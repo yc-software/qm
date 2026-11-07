@@ -44,6 +44,7 @@ export interface DeliveryStore {
   }): Promise<Delivery>;
   pending(type: string): Promise<Delivery[]>;
   claimPending(type: string, ttlMs: number, opts?: { oldestPerConversation?: boolean }): Promise<Delivery[]>;
+  retryAfter(id: string, delayMs: number): Promise<void>;
   listShadow(opts?: { limit?: number }): Promise<Delivery[]>;
   ack(id: string, at: number, slackApiMs?: number): Promise<void>;
   fail(id: string, reason: string, at: number): Promise<Delivery | null>;
@@ -136,6 +137,10 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
       });
       for (const d of rows) claimedUntil.set(d.id, now + ttlMs);
       return rows;
+    },
+    async retryAfter(id, delayMs) {
+      const d = deliveries.get(id);
+      if (d && d.deliveredAt === null && d.expiredAt === undefined) claimedUntil.set(id, Date.now() + delayMs);
     },
     async listShadow(opts) {
       const limit = Math.max(1, opts?.limit ?? 100);
