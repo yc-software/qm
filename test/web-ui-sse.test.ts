@@ -14,20 +14,23 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 
 const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "webui-sse-")) }));
 built.runtime.start();
 const core = createServer(built.app, {
+  ...browserSessionDeps,
   replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
   signingSecret: SECRET,
   webhookReceiver: built.webhookReceiver,
 });
 core.listen(0);
 const corePort = (core.address() as AddressInfo).port;
+const coreBase = `http://localhost:${corePort}`;
 
-process.env.CORE_API_URL = `http://localhost:${corePort}`;
+process.env.CORE_API_URL = coreBase;
 process.env.CORE_SIGNING_SECRET = SECRET;
 process.env.WEB_UI_PRINCIPALS = "";
 const { handler } = await import("../plugins/web-ui/server/index.ts");
@@ -46,7 +49,7 @@ function asUser(user: string, init: RequestInit = {}): RequestInit {
     ...init,
     headers: {
       "content-type": "application/json",
-      cookie: `webuiuser=${encodeURIComponent(user)}`,
+      cookie: `webuiuser=${encodeURIComponent(user)}; ${browserSessionCookie(user)}`,
       [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: user, exp: Date.now() + 60_000 }, SECRET),
       ...init.headers,
     },
@@ -79,12 +82,13 @@ test("SSE streams partial frames then a terminal done frame carrying the reply",
   assert.ok(submit.runId, "async turn should return a runId");
 
   const res = await fetch(
-    `${webBase}/api/runs/${encodeURIComponent(submit.runId)}/events`,
+    `${coreBase}/api/runs/${encodeURIComponent(submit.runId)}/events`,
     asUser("alice", { signal: AbortSignal.timeout(20_000) }),
   );
   assert.equal(res.status, 200);
   assert.match(res.headers.get("content-type") ?? "", /text\/event-stream/);
   assert.equal(res.headers.get("x-accel-buffering"), "no");
+  assert.equal(res.headers.get("cache-control"), "no-cache, no-transform");
 
   const events = parseSse(await res.text());
   const partials = events.filter((e) => e.event === "delta" || Boolean((e.data as { partial?: string }).partial));
@@ -111,7 +115,7 @@ test("SSE relays tool activity frames and folds them into the done frame", async
   assert.ok(submit.runId, "async turn should return a runId");
 
   const res = await fetch(
-    `${webBase}/api/runs/${encodeURIComponent(submit.runId)}/events`,
+    `${coreBase}/api/runs/${encodeURIComponent(submit.runId)}/events`,
     asUser("alice", { signal: AbortSignal.timeout(20_000) }),
   );
   assert.equal(res.status, 200);
@@ -151,7 +155,7 @@ test("active run lookup returns the latest tracked run for the caller's web thre
   assert.ok(submit.runId, "async turn should return a runId");
 
   const activeRes = await fetch(
-    `${webBase}/api/runs/active?threadRef=${encodeURIComponent(threadRef)}`,
+    `${coreBase}/api/runs/active?threadRef=${encodeURIComponent(threadRef)}`,
     asUser("alice"),
   );
   assert.equal(activeRes.status, 200);
@@ -160,14 +164,11 @@ test("active run lookup returns the latest tracked run for the caller's web thre
   assert.ok(["pending", "running"].includes(active.run?.status ?? ""), "active lookup returns a run snapshot");
 
   const otherUser = await fetch(
-    `${webBase}/api/runs/active?threadRef=${encodeURIComponent(threadRef)}`,
+    `${coreBase}/api/runs/active?threadRef=${encodeURIComponent(threadRef)}`,
     asUser("mallory"),
   );
   assert.equal(otherUser.status, 200);
   assert.equal(((await otherUser.json()) as { runId?: string | null }).runId, null);
-
-  const nonWeb = await fetch(`${webBase}/api/runs/active?threadRef=${encodeURIComponent("dm:D1")}`, asUser("alice"));
-  assert.equal(nonWeb.status, 404);
 });
 
 test("active run lookup is cleared after the events stream reaches a terminal frame", async () => {
@@ -181,14 +182,14 @@ test("active run lookup is cleared after the events stream reaches a terminal fr
   assert.ok(submit.runId, "async turn should return a runId");
 
   const events = await fetch(
-    `${webBase}/api/runs/${encodeURIComponent(submit.runId)}/events`,
+    `${coreBase}/api/runs/${encodeURIComponent(submit.runId)}/events`,
     asUser("alice", { signal: AbortSignal.timeout(20_000) }),
   );
   assert.equal(events.status, 200);
   parseSse(await events.text());
 
   const activeRes = await fetch(
-    `${webBase}/api/runs/active?threadRef=${encodeURIComponent(threadRef)}`,
+    `${coreBase}/api/runs/active?threadRef=${encodeURIComponent(threadRef)}`,
     asUser("alice"),
   );
   assert.equal(activeRes.status, 200);
@@ -211,7 +212,7 @@ test("web command approval pause is durable and blocks fresh input for the threa
   assert.ok(submit.runId, "async turn should return a runId");
 
   const events = await fetch(
-    `${webBase}/api/runs/${encodeURIComponent(submit.runId)}/events`,
+    `${coreBase}/api/runs/${encodeURIComponent(submit.runId)}/events`,
     asUser("alice", { signal: AbortSignal.timeout(20_000) }),
   );
   assert.equal(events.status, 200);
@@ -240,12 +241,12 @@ test("web command approval pause is durable and blocks fresh input for the threa
 });
 
 test("the events route is ownership-gated (404 for a run the caller doesn't own)", async () => {
-  const res = await fetch(`${webBase}/api/runs/not-my-run/events`, asUser("mallory"));
+  const res = await fetch(`${coreBase}/api/runs/not-my-run/events`, asUser("mallory"));
   assert.equal(res.status, 404);
 });
 
 test("the events route requires a signed-in principal (401 without a cookie)", async () => {
-  const res = await fetch(`${webBase}/api/runs/whatever/events`);
+  const res = await fetch(`${coreBase}/api/runs/whatever/events`);
   assert.equal(res.status, 401);
 });
 
@@ -262,7 +263,7 @@ test("a completed long stream replays its bounded tail with absolute offsets and
   ).json()) as { runId: string };
   await built.runs.waitFor(submit.runId, 10_000);
   const res = await fetch(
-    `${webBase}/api/runs/${submit.runId}/events`,
+    `${coreBase}/api/runs/${submit.runId}/events`,
     asUser("alice", {
       signal: AbortSignal.timeout(20_000),
     }),

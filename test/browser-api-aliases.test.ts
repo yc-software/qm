@@ -220,6 +220,8 @@ test("a web release still calling /api reaches core for migrated reads and the w
   assert.equal(relayed.status, 200);
   assert.deepEqual(Object.keys((await relayed.json()) as object).sort(), ["crons", "visible"]);
   assert.equal((await read(`${publicWebUrl}/v1/sessions`)).status, 404);
+  const stream = await read(`${publicWebUrl}/api/runs/missing/events`);
+  assert.deepEqual([stream.status, await stream.json()], [404, { error: "not_found" }]);
   const write = (method: string, path: string, body = "{}") =>
     fetch(`${publicWebUrl}${path}`, {
       method,

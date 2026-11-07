@@ -17,11 +17,13 @@ import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 
 const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "run-signal-")) }));
 const core = createServer(built.app, {
+  ...browserSessionDeps,
   replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
   signingSecret: SECRET,
   webhookReceiver: built.webhookReceiver,
@@ -74,7 +76,7 @@ function asUser(user: string, init: RequestInit = {}): RequestInit {
     ...init,
     headers: {
       "content-type": "application/json",
-      cookie: `webuiuser=${encodeURIComponent(user)}`,
+      cookie: `webuiuser=${encodeURIComponent(user)}; ${browserSessionCookie(user)}`,
       [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: user, exp: Date.now() + 60_000 }, SECRET),
       ...init.headers,
     },
@@ -505,7 +507,7 @@ test("web proxy: Project roster revisions revoke pending run status, signals, an
   assert.equal(queued.runToken, undefined);
 
   const discovered = (await (
-    await fetch(`${webBase}/api/runs/active?threadRef=${encodeURIComponent(threadRef)}`, asUser("project-member"))
+    await fetch(`${coreBase}/api/runs/active?threadRef=${encodeURIComponent(threadRef)}`, asUser("project-member"))
   ).json()) as { runId?: string | null; runToken?: string };
   assert.equal(
     discovered.runId,
@@ -516,13 +518,13 @@ test("web proxy: Project roster revisions revoke pending run status, signals, an
 
   assert.equal((await built.app.addProjectMember(project.id, "project-owner", "project-late-member")).status, "ok");
   const lateMember = (await (
-    await fetch(`${webBase}/api/runs/active?threadRef=${encodeURIComponent(threadRef)}`, asUser("project-late-member"))
+    await fetch(`${coreBase}/api/runs/active?threadRef=${encodeURIComponent(threadRef)}`, asUser("project-late-member"))
   ).json()) as { runId?: string | null };
   assert.equal(lateMember.runId, null, "joining a Project does not reveal a turn from the prior roster");
   assert.equal(
     (
       (await (
-        await fetch(`${webBase}/api/runs/active?threadRef=${encodeURIComponent(threadRef)}`, asUser("project-member"))
+        await fetch(`${coreBase}/api/runs/active?threadRef=${encodeURIComponent(threadRef)}`, asUser("project-member"))
       ).json()) as { runId?: string | null }
     ).runId,
     null,
@@ -530,7 +532,7 @@ test("web proxy: Project roster revisions revoke pending run status, signals, an
   );
 
   const outsider = (await (
-    await fetch(`${webBase}/api/runs/active?threadRef=${encodeURIComponent(threadRef)}`, asUser("project-outsider"))
+    await fetch(`${coreBase}/api/runs/active?threadRef=${encodeURIComponent(threadRef)}`, asUser("project-outsider"))
   ).json()) as { runId?: string | null };
   assert.equal(outsider.runId, null, "core's viewer gate hides the run from non-members");
 
@@ -552,7 +554,7 @@ test("web proxy: Project roster revisions revoke pending run status, signals, an
   assert.ok(current.runId);
   const currentDiscovery = (await (
     await fetch(
-      `${webBase}/api/runs/active?threadRef=${encodeURIComponent(currentThreadRef)}`,
+      `${coreBase}/api/runs/active?threadRef=${encodeURIComponent(currentThreadRef)}`,
       asUser("project-member"),
     )
   ).json()) as { runId?: string | null; runToken?: string };
@@ -560,18 +562,18 @@ test("web proxy: Project roster revisions revoke pending run status, signals, an
   assert.equal(currentDiscovery.runToken, undefined);
 
   const statusPath = `/api/runs/${encodeURIComponent(current.runId!)}`;
-  assert.equal((await fetch(`${webBase}${statusPath}`, asUser("project-member"))).status, 200);
+  assert.equal((await fetch(`${coreBase}${statusPath}`, asUser("project-member"))).status, 200);
 
   assert.equal((await built.app.removeProjectMember(project.id, "project-owner", "project-member")).status, "ok");
   assert.equal((await built.app.addProjectMember(project.id, "project-owner", "project-member")).status, "ok");
   const active = (await (
     await fetch(
-      `${webBase}/api/runs/active?threadRef=${encodeURIComponent(currentThreadRef)}`,
+      `${coreBase}/api/runs/active?threadRef=${encodeURIComponent(currentThreadRef)}`,
       asUser("project-member"),
     )
   ).json()) as { runId?: string | null };
   assert.equal(active.runId, null);
-  assert.equal((await fetch(`${webBase}${statusPath}`, asUser("project-member"))).status, 404);
+  assert.equal((await fetch(`${coreBase}${statusPath}`, asUser("project-member"))).status, 404);
 
   const signal = await fetch(
     `${webBase}/api/runs/${encodeURIComponent(current.runId!)}/signal`,
@@ -583,7 +585,7 @@ test("web proxy: Project roster revisions revoke pending run status, signals, an
   assert.equal(signal.status, 404);
 
   const events = await fetch(
-    `${webBase}/api/runs/${encodeURIComponent(current.runId!)}/events`,
+    `${coreBase}/api/runs/${encodeURIComponent(current.runId!)}/events`,
     asUser("project-member"),
   );
   assert.equal(events.status, 404);
@@ -724,7 +726,7 @@ test("web proxy: /api/runs/active tracks queued runs — the live one first, the
   assert.notEqual(first, second);
 
   const active1 = (await (
-    await fetch(`${webBase}/api/runs/active?threadRef=${encodeURIComponent(threadRef)}`, asUser("carol"))
+    await fetch(`${coreBase}/api/runs/active?threadRef=${encodeURIComponent(threadRef)}`, asUser("carol"))
   ).json()) as { runId?: string | null };
   assert.equal(active1.runId, first, "the oldest live run is the active one");
 
@@ -733,7 +735,7 @@ test("web proxy: /api/runs/active tracks queued runs — the live one first, the
   await built.runs.complete(first, claimed!.leaseToken!, { status: "ok", reply: "done" });
 
   const active2 = (await (
-    await fetch(`${webBase}/api/runs/active?threadRef=${encodeURIComponent(threadRef)}`, asUser("carol"))
+    await fetch(`${coreBase}/api/runs/active?threadRef=${encodeURIComponent(threadRef)}`, asUser("carol"))
   ).json()) as { runId?: string | null };
   assert.equal(active2.runId, second, "once the live run finishes, the queued one becomes active");
 });

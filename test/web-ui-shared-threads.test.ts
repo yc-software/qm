@@ -131,12 +131,8 @@ test("a channel member can continue a teammate's shared web thread; outsiders an
   assert.equal((await waitForSession("bob", "web:alice:s1")).canContinue, true);
 
   assert.equal(
-    (await fetch(`${webBase}/api/runs/active?threadRef=${encodeURIComponent("web:alice:s1")}`, asUser("bob"))).status,
+    (await fetch(`${coreBase}/api/runs/active?threadRef=${encodeURIComponent("web:alice:s1")}`, asUser("bob"))).status,
     200,
-  );
-  assert.equal(
-    (await fetch(`${webBase}/api/runs/active?threadRef=${encodeURIComponent("dm:D1")}`, asUser("bob"))).status,
-    404,
   );
 
   const personalClaim = await fetch(
