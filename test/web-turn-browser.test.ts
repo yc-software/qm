@@ -69,12 +69,12 @@ const app = {
     signals.push({ runId, signal, viewer });
     return { accepted: true };
   },
-  getApproval: async (requestId: string) => {
-    const record = approvals[requestId];
+  getApproval: async (requestId: string, viewer?: string) => {
+    const record = viewer === "alice" ? approvals[requestId] : undefined;
     return record ? { requestId, command: "git push", ...record } : null;
   },
-  getSessionForViewer: async (sessionId: string) => {
-    const session = sessions[sessionId];
+  getSessionForViewer: async (sessionId: string, viewer: string) => {
+    const session = viewer === "alice" ? sessions[sessionId] : undefined;
     return session ? { session: { id: sessionId, ...session } } : null;
   },
 } as unknown as App;
@@ -439,5 +439,27 @@ test("an impersonating admin's turns and approval replays are kept out of produc
       assert.equal(turn.analyticsSuppressed, cookie ? true : undefined, path);
       assert.equal(JSON.stringify(turn).includes("admin-ann"), false, path);
     }
+  }
+});
+
+test("a chat embed on a listed API origin can send turns, signals and approvals; other origins cannot", async () => {
+  portalSession.apiOrigins = new Set(["https://embed.example"]);
+  try {
+    const listed = { headers: { origin: "https://embed.example" } };
+    const count = turns.length;
+    assert.equal((await post("/api/turn", { text: "from the embed" }, listed)).status, 202);
+    assert.equal(turns.length, count + 1);
+    assert.equal((await post("/api/runs/r1/signal", { kind: "abort" }, listed)).status, 200);
+    for (const path of ["/api/turn", "/api/runs/r1/signal", "/api/approvals/a1"]) {
+      const foreign = await post(
+        path,
+        { text: "x", kind: "abort", approved: true },
+        { headers: { origin: "https://evil.example" } },
+      );
+      assert.equal(foreign.status, 403, path);
+      assert.equal(((await foreign.json()) as { message?: string }).message, "cross-origin request refused", path);
+    }
+  } finally {
+    delete portalSession.apiOrigins;
   }
 });

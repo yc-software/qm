@@ -1,6 +1,6 @@
 import { clientSurfaceOf } from "../../../plugins/chassis/src/client-surface.ts";
 import { principalInAllowlist } from "../../../plugins/chassis/src/principal-allowlist.ts";
-import { appEditSlug } from "../../../plugins/web-ui/src/app-edit.ts";
+import { appEditSlug } from "../../../plugins/chassis/src/app-edit.ts";
 import { isSubagentThreadRef } from "../../sessions/session-syscalls.ts";
 import { scopeId, type TurnRequest } from "../../types.ts";
 import { sendJson } from "../http.ts";

@@ -171,7 +171,7 @@ export async function browserIdentity(
     reportFailure("browser_session.misconfigured", new Error(problem));
     return { status: 503, error: "unavailable", message: "browser sign-in is not configured on this server" };
   }
-  const { secret, maxAgeSeconds, principals = [] } = deps.portalSession!;
+  const { secret, maxAgeSeconds, principals = [], apiOrigins } = deps.portalSession!;
   const cookies = req.headers.cookie;
   const session = openSession(
     readCookie(cookies, "portal_session"),
@@ -184,7 +184,8 @@ export async function browserIdentity(
     return { status: 401, error: "unauthorized", message: "a sign-in session for this organization is required" };
   if (session.appOnly)
     return { status: 403, error: "app_only_session", message: "this sign-in only permits access to shared apps" };
-  if (method !== "GET" && method !== "HEAD" && !sameOriginRequest(req, originOf(deps.portalUrl!)))
+  const listedOrigin = typeof req.headers.origin === "string" && apiOrigins?.has(req.headers.origin) === true;
+  if (method !== "GET" && method !== "HEAD" && !listedOrigin && !sameOriginRequest(req, originOf(deps.portalUrl!)))
     return { status: 403, error: "forbidden", message: "cross-origin request refused" };
   for (const header of RELAY_IDENTITY_HEADERS) delete req.headers[header];
   await deps.identity?.refresh();
