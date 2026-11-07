@@ -14,6 +14,7 @@ import {
   type FilePage,
   type FileSource,
   type ListOwnedOptions,
+  storedMimetype,
 } from "./file-artifact-store.ts";
 
 const SCHEMA = [
@@ -50,7 +51,7 @@ function rowToArtifact(r: Record<string, unknown>): FileArtifact {
     createdBy: r.created_by as string,
     name: r.name as string,
     path: r.path as string,
-    mimetype: r.mimetype as string,
+    mimetype: storedMimetype(r.mimetype as string),
     sizeBytes: Number(r.size_bytes),
     blobKey: (r.blob_key as string | null) ?? null,
     sha256: (r.sha256 as string | null) ?? null,
@@ -179,7 +180,7 @@ export function createPostgresFileArtifactStore(
             input.ownerScopeId,
             input.path,
             input.name,
-            input.mimetype,
+            storedMimetype(input.mimetype),
             sizeBytes,
             blobKey,
             sha256,

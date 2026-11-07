@@ -23,10 +23,6 @@ const PLAYGROUND_CSP = [
   "form-action 'none'",
 ].join("; ");
 
-function servedType(mimetype: string): string {
-  return contentTypeWithUtf8Charset(/^[\x20-\x2b\x2d-\x7e]+$/.test(mimetype) ? mimetype : "application/octet-stream");
-}
-
 function viewerOf(ctx: ApiCtx): string | null {
   const viewer = ctx.capability?.actorId ?? ctx.actor?.p;
   if (!viewer) sendJson(ctx.res, 401, { error: "capability_required" });
@@ -51,7 +47,7 @@ function streamFile(ctx: ApiCtx, stream: NodeJS.ReadableStream): void {
 async function getFileContent(ctx: ApiCtx): Promise<void> {
   const opened = await openForViewer(ctx);
   if (!opened) return;
-  const contentType = servedType(opened.mimetype);
+  const contentType = contentTypeWithUtf8Charset(opened.mimetype);
   const appsDomain = ctx.deps.deployAppsDomain;
   const ancestors = frameAncestorsDirective(appsDomain ? [`*.${appsDomain}`] : []);
   ctx.res.removeHeader("x-frame-options");
@@ -71,7 +67,7 @@ async function getFileContent(ctx: ApiCtx): Promise<void> {
 async function getPlayground(ctx: ApiCtx): Promise<void> {
   const opened = await openForViewer(ctx);
   if (!opened) return;
-  const contentType = servedType(opened.mimetype);
+  const contentType = contentTypeWithUtf8Charset(opened.mimetype);
   if (!contentType.toLowerCase().startsWith("text/html")) {
     opened.stream.destroy();
     return sendJson(ctx.res, 415, { error: "not_a_playground" });
@@ -96,7 +92,7 @@ async function getFileByName(ctx: ApiCtx): Promise<void> {
   do {
     const listed = await app.listFilesForViewer(viewer, { limit: 200, name, ...(cursor ? { cursor } : {}) });
     const newest = [...listed.owned, ...listed.shared]
-      .filter((file) => file.name === name && file.openable)
+      .filter((file) => file.openable)
       .sort((a, b) => b.createdAt - a.createdAt)[0];
     if (newest) return sendRedirect(res, `/api/files/${encodeURIComponent(newest.id)}/content`);
     cursor = listed.nextCursor;
