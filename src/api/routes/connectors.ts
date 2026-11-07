@@ -202,7 +202,10 @@ async function oauthCallbackPage(ctx: ApiCtx): Promise<void> {
   const provider = ctx.params.provider!;
   const outcome = await settleOAuthCallback(ctx, provider);
   const ok = "redirect" in outcome || outcome.status === 200;
-  if (!ok) console.warn(`[connectors] ${provider} callback page: ${outcome.status} ${JSON.stringify(outcome.body)}`);
+  if (!ok)
+    console.warn(
+      `[connectors] ${JSON.stringify(provider)} callback page: ${outcome.status} ${JSON.stringify(outcome.body)}`,
+    );
   return shell.connectorCallbackPage(ctx.res, provider, ok);
 }
 
