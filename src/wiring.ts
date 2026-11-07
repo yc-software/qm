@@ -942,7 +942,6 @@ export function buildApp(
         ...(modal.image ? { image: modal.image } : {}),
         ...(modal.environment ? { environment: modal.environment } : {}),
         ...(modal.cpus !== undefined ? { cpus: modal.cpus } : {}),
-        ...(modal.memoryMb !== undefined ? { memoryMb: modal.memoryMb } : {}),
         ...(modal.regions?.length ? { regions: modal.regions } : {}),
         ...(modal.sandboxTimeoutSec ? { sandboxTimeoutMs: modal.sandboxTimeoutSec * 1000 } : {}),
         ...(modal.reapIdleSec ? { idleTimeoutMs: 2 * modal.reapIdleSec * 1000 } : {}),
@@ -1419,6 +1418,9 @@ export function buildApp(
     overrides.agent ??
     createAgent({
       ...agentConfigOptions(config),
+      memorySizedBackends: Object.entries(sandboxBackends)
+        .filter(([, backend]) => backend?.profile.sizesMemory)
+        .map(([name]) => name),
       routes: modelRoutes,
       signals: runSignals,
     });
