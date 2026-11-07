@@ -23,7 +23,7 @@ test("publication posts company, principal and a deduplication id without app co
     { url: "https://events.example.com/ingest", token: "events-token" },
     async (url, init) => {
       assert.equal(url, "https://events.example.com/ingest");
-      assert.equal((init?.headers as Record<string, string>).authorization, "Bearer events-token");
+      assert.equal((init!.headers as Record<string, string>).authorization, "Bearer events-token");
       assert.equal(init?.redirect, "error");
       body = JSON.parse(String(init?.body));
       return new Response("ok");
