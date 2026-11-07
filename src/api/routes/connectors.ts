@@ -369,11 +369,13 @@ async function oauthStart(ctx: ApiCtx): Promise<void> {
 }
 
 async function browserOAuthStart(ctx: ApiCtx): Promise<void> {
-  const base = ctx.deps.portalUrl!.replace(/\/$/, "");
+  if (!ctx.actor || !ctx.deps.portalUrl)
+    return sendJson(ctx.res, 401, { error: "unauthorized", message: "portal identity required" });
+  const base = ctx.deps.portalUrl.replace(/\/$/, "");
   const provider = ctx.params.provider!;
   return startOAuth(ctx, {
     provider,
-    principalId: ctx.actor!.p,
+    principalId: ctx.actor.p,
     redirectUri: `${base}/v1/connectors/oauth/${encodeURIComponent(provider)}/callback`,
     returnTo: safeReturnTo(isObj(ctx.body) ? ctx.body.returnTo : undefined) ?? "/keychain",
     accountType: "default",
