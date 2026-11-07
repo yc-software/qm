@@ -150,8 +150,8 @@ test("a person sees their own deliveries, session states and inbox items and nob
     seen(alice, "inbox_item", (d) => d.loopId === loop.id),
     "alice's inbox item",
   );
-  assert.deepEqual(Object.keys(item.data as object), ["loopId", "itemId", "op"]);
-  assert.equal((item.data as { op: string }).op, "ingest");
+  const [ingested] = await built.loops.items.byLoop(loop.id);
+  assert.deepEqual(item.data, { loopId: loop.id, itemId: ingested!.id, op: "ingest" });
 
   built.sessionStateBus.emit({ threadRef: "web:bob:sentinel", state: "working", at: 3 });
   await until(
