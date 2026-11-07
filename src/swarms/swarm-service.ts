@@ -160,6 +160,7 @@ function dispatchContract(input: OrchestratorInput) {
     scopeVersion: input.scopeVersion,
     unattendedGrants: input.unattendedGrants,
     readOnly: input.readOnly,
+    botActor: input.botActor,
     skipMemory: input.skipMemory,
     model: input.model,
     thinkingLevel: input.thinkingLevel,
