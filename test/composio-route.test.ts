@@ -649,7 +649,9 @@ test("cron discovery accepts a current capability with distinct thread and sessi
 
 test("unknown tools and connections are caller errors that are answered without reporting a failure", async (t) => {
   const logged: string[] = [];
+  const warned: string[] = [];
   t.mock.method(console, "error", (...args: unknown[]) => logged.push(args.map(String).join(" ")));
+  t.mock.method(console, "warn", (...args: unknown[]) => warned.push(args.map(String).join(" ")));
   const notFound = () => new Response(JSON.stringify({ slug: "Tool_ToolNotFound" }), { status: 404 });
 
   const f = fixture();
@@ -664,6 +666,7 @@ test("unknown tools and connections are caller errors that are answered without 
   assert.equal(unknownTool.status, 404);
   assert.equal(unknownTool.data.error, "tool_not_found");
   assert.equal(f.calls.length, 2);
+  assert.match(warned.join("\n"), /http 404.*Tool_ToolNotFound/);
 
   const g = fixture();
   await g.own();
