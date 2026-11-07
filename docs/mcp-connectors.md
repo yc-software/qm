@@ -95,8 +95,8 @@ same Docker network, VPC or tailnet, by listing their exact origins in core's
 and port, with no path, query, fragment or credentials. A request to a listed origin
 may reach private addresses; a request to any other origin is refused as described
 above, and the refusal names this setting. Loopback, unspecified, link-local and cloud metadata
-addresses, including Tailscale's `100.100.100.100` and Alibaba Cloud's `100.100.100.200`,
-are never allowed: core refuses to start with one in the list, and refuses a listed
+addresses, including the IPv6 metadata addresses of AWS, Google Cloud, Oracle Cloud, Akamai and
+Scaleway, Tailscale's `100.100.100.100` and Alibaba Cloud's `100.100.100.200`, are never allowed: core refuses to start with one in the list, and refuses a listed
 name that resolves to one. Per-user endpoints still require HTTPS, and redirects stay
 refused. Only the deployment's environment sets the list. It is not an admin setting,
 and it does not open sandbox egress.

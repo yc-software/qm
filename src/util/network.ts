@@ -4,64 +4,65 @@ import { Agent as HttpsAgent, request as httpsRequest } from "node:https";
 import { BlockList, isIP, type LookupFunction } from "node:net";
 import { Readable } from "node:stream";
 
-type Subnet = readonly [network: string, prefix: number];
+const PRIVATE_NETWORKS = new BlockList();
 
-function blockList(ipv4: readonly Subnet[], ipv6: readonly Subnet[]): BlockList {
-  const list = new BlockList();
-  for (const [network, prefix] of ipv4) {
-    list.addSubnet(network, prefix, "ipv4");
-    list.addSubnet(`64:ff9b::${network}`, 96 + prefix, "ipv6");
-  }
-  for (const [network, prefix] of ipv6) list.addSubnet(network, prefix, "ipv6");
-  return list;
+for (const [network, prefix] of [
+  ["0.0.0.0", 8],
+  ["10.0.0.0", 8],
+  ["100.64.0.0", 10],
+  ["127.0.0.0", 8],
+  ["169.254.0.0", 16],
+  ["172.16.0.0", 12],
+  ["192.0.0.0", 24],
+  ["192.0.2.0", 24],
+  ["192.168.0.0", 16],
+  ["198.18.0.0", 15],
+  ["198.51.100.0", 24],
+  ["203.0.113.0", 24],
+  ["224.0.0.0", 4],
+  ["240.0.0.0", 4],
+] as const) {
+  PRIVATE_NETWORKS.addSubnet(network, prefix, "ipv4");
+  PRIVATE_NETWORKS.addSubnet(`64:ff9b::${network}`, 96 + prefix, "ipv6");
 }
 
-const PRIVATE_NETWORKS = blockList(
-  [
-    ["0.0.0.0", 8],
-    ["10.0.0.0", 8],
-    ["100.64.0.0", 10],
-    ["127.0.0.0", 8],
-    ["169.254.0.0", 16],
-    ["172.16.0.0", 12],
-    ["192.0.0.0", 24],
-    ["192.0.2.0", 24],
-    ["192.168.0.0", 16],
-    ["198.18.0.0", 15],
-    ["198.51.100.0", 24],
-    ["203.0.113.0", 24],
-    ["224.0.0.0", 4],
-    ["240.0.0.0", 4],
-  ],
-  [
-    ["::", 128],
-    ["::1", 128],
-    ["64:ff9b:1::", 48],
-    ["fc00::", 7],
-    ["fec0::", 10],
-    ["fe80::", 10],
-    ["ff00::", 8],
-    ["2001:db8::", 32],
-  ],
-);
+for (const [network, prefix] of [
+  ["::", 128],
+  ["::1", 128],
+  ["64:ff9b:1::", 48],
+  ["fc00::", 7],
+  ["fec0::", 10],
+  ["fe80::", 10],
+  ["ff00::", 8],
+  ["2001:db8::", 32],
+] as const)
+  PRIVATE_NETWORKS.addSubnet(network, prefix, "ipv6");
 
-const NEVER_ALLOWED = blockList(
-  [
-    ["0.0.0.0", 8],
-    ["127.0.0.0", 8],
-    ["169.254.0.0", 16],
-    ["100.100.100.100", 32],
-    ["100.100.100.200", 32],
-  ],
-  [
-    ["::", 128],
-    ["::1", 128],
-    ["fe80::", 10],
-    ["fd00:ec2::254", 128],
-    ["fd20:ce::254", 128],
-    ["fd00:c1::a9fe:a9fe", 128],
-  ],
-);
+const NEVER_ALLOWED = new BlockList();
+
+for (const [network, prefix] of [
+  ["0.0.0.0", 8],
+  ["127.0.0.0", 8],
+  ["169.254.0.0", 16],
+  ["100.100.100.100", 32],
+  ["100.100.100.200", 32],
+] as const) {
+  NEVER_ALLOWED.addSubnet(network, prefix, "ipv4");
+  NEVER_ALLOWED.addSubnet(`64:ff9b::${network}`, 96 + prefix, "ipv6");
+}
+
+for (const [network, prefix] of [
+  ["::", 128],
+  ["::1", 128],
+  ["fe80::", 10],
+  ["fd00:ec2::254", 128],
+  ["fd00:ec2::23", 128],
+  ["fd20:ce::254", 128],
+  ["fd00:c1::a9fe:a9fe", 128],
+  ["fd00:a9fe:a9fe::1", 128],
+  ["fd00:42::42", 128],
+] as const)
+  NEVER_ALLOWED.addSubnet(network, prefix, "ipv6");
 
 const NEVER_ALLOWED_HOSTS = ["localhost", "metadata.google.internal", "metadata.goog"];
 
@@ -74,17 +75,16 @@ function normalizedIp(raw: string): string | null {
   return isIP(value) ? value : null;
 }
 
-function inList(list: BlockList, raw: string): boolean {
-  const value = normalizedIp(raw);
-  return value !== null && list.check(value, isIP(value) === 4 ? "ipv4" : "ipv6");
-}
-
 export function isPrivateNetworkIp(raw: string): boolean {
-  return inList(PRIVATE_NETWORKS, raw);
+  const value = normalizedIp(raw);
+  if (!value) return false;
+  return PRIVATE_NETWORKS.check(value, isIP(value) === 4 ? "ipv4" : "ipv6");
 }
 
 export function isNeverAllowedIp(raw: string): boolean {
-  return inList(NEVER_ALLOWED, raw);
+  const value = normalizedIp(raw);
+  if (!value) return false;
+  return NEVER_ALLOWED.check(value, isIP(value) === 4 ? "ipv4" : "ipv6");
 }
 
 export function isNeverAllowedHost(raw: string): boolean {
