@@ -83,21 +83,21 @@ export interface McpToolDescriptor {
 export interface McpToolService {
   /** Current snapshot of injectable tools across enabled servers. */
   toolDefs(): McpToolDescriptor[];
-  toolDefsFor(principalId?: string, scopeId?: ScopeId, actAsActor?: boolean): Promise<McpToolDescriptor[]>;
+  toolDefsFor(principalId?: string, audienceScopeId?: ScopeId, actAsActor?: boolean): Promise<McpToolDescriptor[]>;
   /** Call a namespaced tool. Returns the tool's text output (clamped). */
   call(
     name: string,
     args: Record<string, unknown>,
     principalId?: string,
     approval?: string,
-    scopeId?: ScopeId,
+    audienceScopeId?: ScopeId,
     actAsActor?: boolean,
   ): Promise<string>;
   needsApproval(
     name: string,
     args: Record<string, unknown>,
     principalId?: string,
-    scopeId?: ScopeId,
+    audienceScopeId?: ScopeId,
     actAsActor?: boolean,
   ): Promise<boolean>;
   /** Force a registry re-read + tools/list refresh (admin save path, tests). */
@@ -155,10 +155,10 @@ function callResource(def: McpToolDescriptor, args: Record<string, unknown>): st
 function refuseOutsideAudience(
   server: McpServer,
   principalId: string | undefined,
-  scopeId: ScopeId | undefined,
+  audienceScopeId: ScopeId | undefined,
   actAsActor: boolean | undefined,
 ): void {
-  if (server.attestActor && !attestsInAudience(server.attestAudience, principalId, scopeId, actAsActor))
+  if (server.attestActor && !attestsInAudience(server.attestAudience, principalId, audienceScopeId, actAsActor))
     throw new OutsideAudience(`MCP server ${server.id}`);
 }
 
@@ -379,12 +379,12 @@ export function createMcpToolService(opts: {
 
   async function toolDefsFor(
     principalId?: string,
-    scopeId?: ScopeId,
+    audienceScopeId?: ScopeId,
     actAsActor?: boolean,
   ): Promise<McpToolDescriptor[]> {
     const current = snapshot.filter((t) => {
       const attested = attestedServers.get(t.serverId);
-      return !attested || attestsInAudience(attested.attestAudience, principalId, scopeId, actAsActor);
+      return !attested || attestsInAudience(attested.attestAudience, principalId, audienceScopeId, actAsActor);
     });
     const gated = perUserServers;
     if (!gated.size) return current;
@@ -409,7 +409,7 @@ export function createMcpToolService(opts: {
   return {
     toolDefs: () => snapshot,
     toolDefsFor,
-    async needsApproval(name, args, principalId, scopeId, actAsActor) {
+    async needsApproval(name, args, principalId, audienceScopeId, actAsActor) {
       const def = snapshot.find((t) => t.name === name);
       if (!def) throw new Error(`unknown MCP tool: ${name}`);
       if (!def.catalog) return def.needsApproval;
@@ -417,20 +417,20 @@ export function createMcpToolService(opts: {
       try {
         const server = await opts.servers.get(def.serverId);
         if (!server || !server.enabled) throw new Error(`MCP server ${def.serverId} is not available`);
-        refuseOutsideAudience(server, principalId, scopeId, actAsActor);
+        refuseOutsideAudience(server, principalId, audienceScopeId, actAsActor);
         return mcpToolNeedsApproval(server, (await catalogEntry(server, principalId, args.tool)).annotations);
       } catch (e) {
         record("call", callResource(def, args), `approval check error: ${errMessage(e)}`, principalId);
         throw e;
       }
     },
-    async call(name, args, principalId, approval, scopeId, actAsActor) {
+    async call(name, args, principalId, approval, audienceScopeId, actAsActor) {
       const def = snapshot.find((t) => t.name === name);
       if (!def) throw new Error(`unknown MCP tool: ${name}`);
       const server = await opts.servers.get(def.serverId);
       if (!server || !server.enabled) throw new Error(`MCP server ${def.serverId} is not available`);
       try {
-        refuseOutsideAudience(server, principalId, scopeId, actAsActor);
+        refuseOutsideAudience(server, principalId, audienceScopeId, actAsActor);
         if (def.catalog) return await callCatalog(server, args, principalId, approval);
         const client = await callerClient(server, principalId);
         if (def.signIn) {

@@ -508,7 +508,7 @@ export interface ToolContextDeps {
   memoryCaptureMetadata?: () => MemoryCaptureMetadata;
   memoryAccess?: { write?: ScopeId; read: ScopeId[] };
   mcp?: McpToolService;
-  scopeId?: ScopeId;
+  audienceScopeId?: ScopeId;
   actAsActor?: boolean;
   sessionHistory?: {
     search(q: string, limit?: number): Promise<string[]>;
@@ -1096,7 +1096,11 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         ? (report: OutcomeReport) => context.searchMemory(q, limit, scope, report)
         : memory &&
           ((report: OutcomeReport) =>
-            searchNotebooks(memory, deps.memoryAccess?.read ?? [], q, limit, scope, deps.createdBy, report));
+            searchNotebooks(memory, deps.memoryAccess?.read ?? [], q, limit, scope, {
+              actorId: deps.createdBy,
+              ...(deps.audienceScopeId ? { audienceScopeId: deps.audienceScopeId } : {}),
+              report,
+            }));
       if (!search) return null;
       const { value: hits, problems } = await withProviders("search", search);
       return hits === null ? null : { hits: hits ?? [], problems };
@@ -1125,6 +1129,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           ...deps.memoryCaptureMetadata?.(),
           mode: "explicit",
           actorId: deps.createdBy,
+          ...(deps.audienceScopeId ? { audienceScopeId: deps.audienceScopeId } : {}),
           conversationScopeId: writableScopeId,
         },
         deps.runId,
@@ -1163,12 +1168,12 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
 
     async callMcpTool(name: string, args: Record<string, unknown>, approval?: string): Promise<string> {
       if (!deps.mcp) throw new Error("no MCP connectors are configured");
-      return deps.mcp.call(name, args, deps.createdBy, approval, deps.scopeId, deps.actAsActor);
+      return deps.mcp.call(name, args, deps.createdBy, approval, deps.audienceScopeId, deps.actAsActor);
     },
 
     async mcpToolNeedsApproval(name: string, args: Record<string, unknown>): Promise<boolean> {
       if (!deps.mcp) throw new Error("no MCP connectors are configured");
-      return deps.mcp.needsApproval(name, args, deps.createdBy, deps.scopeId, deps.actAsActor);
+      return deps.mcp.needsApproval(name, args, deps.createdBy, deps.audienceScopeId, deps.actAsActor);
     },
 
     async awaitClientResult(callId, timeoutMs, signal, toolName) {
