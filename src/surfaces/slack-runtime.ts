@@ -7,6 +7,9 @@ export class SlackPluginStartCleanupError extends AggregateError {
   }
 }
 
+const START_RETRY_BASE_MS = 30_000;
+const START_RETRY_MAX_MS = 10 * 60_000;
+
 export interface ReloadableSlackConfig<Config> {
   version: string;
   config: Config;
@@ -18,7 +21,12 @@ export function createSlackRuntimeReconciler<Config>(opts: {
   intervalMs?: number;
   startPaused?: boolean;
   onError?: (error: unknown) => void;
+  now?: () => number;
+  random?: () => number;
 }) {
+  const now = opts.now ?? Date.now;
+  const random = opts.random ?? Math.random;
+  let failed: { version: string; delayMs: number; retryAt: number } | null = null;
   let active: { plugin: { stop(): Promise<void> }; version: string; config: Config } | null = null;
   let timer: NodeJS.Timeout | null = null;
   let inFlight: Promise<void> | null = null;
@@ -41,6 +49,7 @@ export function createSlackRuntimeReconciler<Config>(opts: {
       return;
     }
     if (desired.version === active?.version) return;
+    if (failed?.version === desired.version && now() < failed.retryAt) return;
     const previous = active;
     if (previous) {
       await previous.plugin.stop();
@@ -50,7 +59,11 @@ export function createSlackRuntimeReconciler<Config>(opts: {
     try {
       const plugin = await opts.startPlugin(desired.config);
       active = { plugin, version: desired.version, config: desired.config };
+      failed = null;
     } catch (error) {
+      const delayMs =
+        failed?.version === desired.version ? Math.min(failed.delayMs * 2, START_RETRY_MAX_MS) : START_RETRY_BASE_MS;
+      failed = { version: desired.version, delayMs, retryAt: now() + delayMs * (0.5 + random() / 2) };
       if (error instanceof SlackPluginStartCleanupError) {
         pendingCleanup = error.cleanup;
         throw error;
