@@ -1,3 +1,26 @@
+import { createPostgresFinnyStore } from "./finny/postgres-store.ts";
+import {
+  createPersistedDeterministicSpreadsheetWorker,
+  type SpreadsheetCalculationEngine,
+} from "./finny/deterministic-spreadsheet-worker.ts";
+import { createHttpSpreadsheetCalculationEngine } from "./finny/http-spreadsheet-engine.ts";
+import { createPostgresFinnyRuntimeStore } from "./finny/runtime-postgres-store.ts";
+import { createPostgresFinnyIntegrationStore } from "./finny/integration-postgres-store.ts";
+import { createFinnyWorkerGrants } from "./finny/worker-grants.ts";
+import { createSignedFinnyFinalizer } from "./finny/finalizer.ts";
+import { createFinnyApprovalService } from "./finny/approval-service.ts";
+import { createFinnyRuntimeCoordinator, reconcileFinnyRuntimeRecoveries } from "./finny/runtime-coordinator.ts";
+import {
+  createFinnyEscalationDecision,
+  createFinnyToolServiceFactory,
+  finnyFinalDelivery,
+  resolveFinnyEvidenceFile,
+  resolveFinnyFileArtifactProposal,
+} from "./finny/integration.ts";
+import { reconstructFinnyParentSyscalls } from "./finny/integration-runtime.ts";
+import { createFinnyCurrentJobReader } from "./finny/runtime-reader.ts";
+import type { FinnyApprovalBridge } from "./slack/finny-approvals.ts";
+import { createFinnyLoopExtension, type FinnyJobReader } from "../packages/finnyloop-pi/extensions/finnyloop.ts";
 import type { MemoryEmbedder } from "./model/embeddings.ts";
 import { nonDeploymentCredential, withDeploymentCredentials } from "./credentials/deployment-credentials.ts";
 import { resolveEmbeddingModel } from "./model/pi-models.ts";
@@ -521,6 +544,7 @@ export interface BuiltApp {
   sessionShareBytes: DurableByteStore;
   skillSyncEngine: SkillSyncEngine;
   slackCore: SlackCoreClient;
+  finnyCurrentJobReader?: ReturnType<typeof createFinnyCurrentJobReader>;
 }
 
 const MEMORY_CAPTURE_ENTRY_WINDOW = 2_000;
@@ -535,8 +559,17 @@ export function buildApp(
     modelVerificationProbe?: typeof probeModel;
     agent?: Agent;
     canClaimRuns?: () => boolean;
+    spreadsheetCalculationEngine?: SpreadsheetCalculationEngine;
   } = {},
 ): BuiltApp {
+  const spreadsheetCalculationEngine =
+    overrides.spreadsheetCalculationEngine ??
+    (config.finny?.spreadsheetEngine
+      ? createHttpSpreadsheetCalculationEngine(config.finny.spreadsheetEngine)
+      : undefined);
+  if (config.finny && !spreadsheetCalculationEngine) {
+    throw new Error("FINNY_ENABLED requires an approved spreadsheet calculation engine");
+  }
   const admittedWork = createAdmittedWork();
   let turnWaitShutdown = new AbortController();
   const createSweeper: typeof createUntrackedSweeper = (work, interval, options) =>
@@ -1415,12 +1448,20 @@ export function buildApp(
     companyModelId: (id: string) => companyModelId(id, directProviderAvailability),
     resolveFallbackRuntime: () => configStore.getPurposeRuntime("fallback"),
   });
+  let finnyCurrentJobReader: ReturnType<typeof createFinnyCurrentJobReader> | undefined;
+  const finnyHostReader: FinnyJobReader = {
+    readCurrentJob(input) {
+      if (!finnyCurrentJobReader) throw new Error("Authoritative Finny job reader is unavailable");
+      return finnyCurrentJobReader.readCurrentJob(input);
+    },
+  };
   const baseAgent =
     overrides.agent ??
     createAgent({
       ...agentConfigOptions(config),
       routes: modelRoutes,
       signals: runSignals,
+      ...(config.finny ? { extensionFactories: [createFinnyLoopExtension(finnyHostReader)] } : {}),
     });
   const fallback = {
     get modelId() {
@@ -2057,12 +2098,377 @@ export function buildApp(
         : []),
     ],
   });
+  let finnyApprovals: FinnyApprovalBridge | undefined;
+  let finnyTools: ReturnType<typeof createFinnyToolServiceFactory> | undefined;
+  let recoverFinny: (() => Promise<void>) | undefined;
+  let closeFinnyRecovery: (() => Promise<void>) | undefined;
+  if (config.finny) {
+    const finnyJobs = createPostgresFinnyStore(config.databaseUrl!);
+    const finnyRuntime = createPostgresFinnyRuntimeStore(config.databaseUrl!);
+    const finnyIntegration = createPostgresFinnyIntegrationStore(config.databaseUrl!);
+    const finnyRecoveryBus = createPostgresNotifyBus<{ at: number }>(
+      config.databaseUrl!,
+      "finny_runtime_recovery",
+      "finny-runtime-recovery",
+    );
+    const finnyGrants = createFinnyWorkerGrants(finnyJobs, config.finny.signingSecret);
+    const deterministicSpreadsheetWorker = createPersistedDeterministicSpreadsheetWorker({
+      engine: spreadsheetCalculationEngine!,
+      files,
+    });
+    const finnyFinalizer = createSignedFinnyFinalizer(finnyJobs, config.finny.signingSecret);
+    finnyCurrentJobReader = createFinnyCurrentJobReader({
+      jobs: finnyJobs,
+      runtime: finnyRuntime,
+      authenticateSession: async (sessionId) => Boolean(await sessions.get(sessionId)),
+    });
+    const escalationDecision = createFinnyEscalationDecision({
+      jobs: finnyJobs,
+      maxReworks: config.finny.maxReworks,
+    });
+    const coordinatorFor = async (scopeId: string, jobId: string) => {
+      const parent = await finnyIntegration.getParent(scopeId, jobId);
+      if (!parent) throw new Error("Finny parent binding is unavailable");
+      const syscalls = await reconstructFinnyParentSyscalls({ sessions, syscalls: sessionSyscalls, parent });
+      return createFinnyRuntimeCoordinator({
+        jobs: finnyJobs,
+        runtime: finnyRuntime,
+        grants: finnyGrants,
+        sessions: { open: (input) => syscalls.open(input) },
+        dispatcher: {
+          async dispatchPrivateIdempotent(input) {
+            const expiresAt = Math.max(input.expiresAt, Date.now() + config.finny!.workerGrantTtlMs);
+            const result = await syscalls.write({
+              target: input.sessionId,
+              text: input.message,
+              requestId: input.idempotencyKey,
+              wake: true,
+              interrupt: true,
+              async beforeEnqueue(next) {
+                const advanced = await finnyRuntime.advanceWorkerRun({
+                  sessionId: input.sessionId,
+                  expectedRunId: input.runId,
+                  runId: next.runId,
+                  scopeId,
+                  expiresAt,
+                });
+                if (!advanced) throw new Error("Finny worker run binding is no longer current");
+                await (input.role === "producer" ? finnyGrants.issueProducer : finnyGrants.issueAuditor)({
+                  scopeId,
+                  jobId,
+                  principalId: input.principalId,
+                  runId: next.runId,
+                  expiresAt,
+                });
+                return {
+                  text: JSON.stringify({
+                    schema: "finny-private-worker-dispatch.v1",
+                    task: input.message,
+                    authority: "server-bound",
+                  }),
+                };
+              },
+            });
+            if (!result.ok) throw new Error(`Finny private dispatch failed: ${result.message}`);
+          },
+        },
+        evidenceAuthority: {
+          resolve: (input) =>
+            resolveFinnyEvidenceFile(files, input, {
+              maxArtifactBytes: config.finny!.spreadsheetEngine.maxArtifactBytes,
+              maxEvidenceBytes: config.finny!.maxEvidenceBytes,
+            }),
+        },
+        artifactBinding: {
+          async resolve(input) {
+            const proposal = await finnyIntegration.getArtifactProposal(input.idempotencyKey);
+            if (
+              !proposal ||
+              proposal.scopeId !== input.scopeId ||
+              proposal.jobId !== input.jobId ||
+              proposal.sessionId !== input.sessionId ||
+              proposal.runId !== input.runId
+            )
+              throw new Error("Finny artifact proposal does not match current runtime authority");
+            return resolveFinnyFileArtifactProposal(files, proposal, config.finny!.spreadsheetEngine.maxArtifactBytes);
+          },
+        },
+        workerPolicy: {
+          credentials(job, role) {
+            return {
+              principalId: `${job.id}:${role}`,
+              expiresAt: Date.now() + config.finny!.workerGrantTtlMs,
+            };
+          },
+          task(job, role) {
+            return JSON.stringify({
+              schema: "finny-worker-task.v1",
+              role,
+              jobId: job.id,
+              scopeId: job.scopeId,
+              plan: job.plan,
+              policy: job.policy,
+              findingPolicy: job.findingPolicy,
+              artifactDigest: job.artifactDigest ?? null,
+              instruction:
+                role === "producer"
+                  ? "Produce the approved immutable file artifact, then report its file ID as provisionalRevision and SHA-256 as artifactDigest."
+                  : "Invoke deterministic_audit once for the mandatory spreadsheet checks, then independently audit every remaining required policy check and report immutable Files evidence through Finny.",
+            });
+          },
+        },
+        escalationDecision,
+        recoveryWake: () => finnyRecoveryBus.emit({ at: Date.now() }),
+      });
+    };
+    let afterRecoveredAuditPassed: (input: { scopeId: string; jobId: string }) => Promise<void> = async () => {};
+    let afterRecoveredAuditBlocked: (input: { scopeId: string; jobId: string }) => Promise<void> = async () => {};
+    let recoveryRequested = false;
+    let recoveryRunning: Promise<void> | undefined;
+    const reconcileRuntime = async () => {
+      await reconcileFinnyRuntimeRecoveries({
+        recoveries: () => finnyRuntime.pendingRecoveries(),
+        coordinatorFor: async (scopeId, jobId) => {
+          const coordinator = await coordinatorFor(scopeId, jobId);
+          return {
+            artifactReady: (input) => coordinator.artifactReady(input),
+            auditPassed: async (input) => {
+              await coordinator.auditPassed(input);
+              await afterRecoveredAuditPassed(input);
+            },
+            auditBlocked: async (input) => {
+              await coordinator.auditBlocked(input);
+              await afterRecoveredAuditBlocked(input);
+            },
+          };
+        },
+        recordError: async (error, recovery) => {
+          await errors.record(
+            {
+              category: "finny",
+              code: `recovery_${recovery.kind}`,
+              message: `job=${recovery.jobId} idempotency=${recovery.idempotencyKey}: ${errMessage(error)}`,
+              scopeLabel: recovery.scopeId,
+            },
+            error,
+          );
+        },
+      });
+    };
+    const requestRuntimeRecovery = () => {
+      recoveryRequested = true;
+      if (recoveryRunning) return;
+      recoveryRunning = (async () => {
+        while (recoveryRequested) {
+          recoveryRequested = false;
+          await reconcileRuntime()
+            .then(() => recoverFinny?.())
+            .catch(async (error) => {
+              await errors.record(
+                {
+                  category: "finny",
+                  code: "recovery_scan",
+                  message: errMessage(error),
+                  scopeLabel: `org:${config.orgId}`,
+                },
+                error,
+              );
+            });
+        }
+      })().finally(() => {
+        recoveryRunning = undefined;
+        if (recoveryRequested) requestRuntimeRecovery();
+      });
+    };
+    const stopFinnyRecovery = finnyRecoveryBus.subscribe(requestRuntimeRecovery, { onResync: requestRuntimeRecovery });
+    const finnyRecoverySweeper = createSweeper(
+      () =>
+        leaderLease.hold("finny:runtime-recovery", async () => {
+          requestRuntimeRecovery();
+          await recoveryRunning;
+        }),
+      config.reaperIntervalMs,
+      { label: "finny-runtime-recovery", immediate: true },
+    );
+    closeFinnyRecovery = async () => {
+      stopFinnyRecovery();
+      await finnyRecoverySweeper.stop();
+      await recoveryRunning;
+      await finnyRecoveryBus.close?.();
+    };
+    const afterApproved = async (input: { scopeId: string; jobId: string; requestId: string }) => {
+      const parent = await finnyIntegration.getParent(input.scopeId, input.jobId);
+      if (!parent || parent.requestId !== input.requestId)
+        throw new Error("Finny approval has no matching parent binding");
+      const coordinator = await coordinatorFor(input.scopeId, input.jobId);
+      await coordinator.afterApproved({
+        scopeId: input.scopeId,
+        jobId: input.jobId,
+        parentSessionId: parent.binding.sessionId,
+        parentRunId: parent.binding.runId,
+        idempotencyKey: `finny:${input.jobId}:${input.requestId}:approved`,
+      });
+    };
+    const deliverPlanApproval = async (input: { scopeId: string; jobId: string }) => {
+      const parent = await finnyIntegration.getParent(input.scopeId, input.jobId);
+      if (!parent) throw new Error("Finny plan approval has no bound destination");
+      await deliveries.enqueue({
+        destination: { ...parent.destination, finnyPlanRequestId: parent.requestId },
+        text: "Finny plan approval",
+        idempotencyKey: `finny-plan:${parent.requestId}`,
+      });
+    };
+    finnyApprovals = createFinnyApprovalService({
+      store: finnyJobs,
+      identity,
+      onApproved: afterApproved,
+      onClarificationReady: deliverPlanApproval,
+      onPostCommitError: async (error, input) => {
+        await errors.record(
+          {
+            category: "finny",
+            code: input.kind,
+            message: errMessage(error),
+            scopeLabel: input.scopeId,
+          },
+          error,
+        );
+      },
+    });
+    const deliverEscalation = async (job: import("./finny/types.ts").FinnyJob) => {
+      if (job.unresolvedEscalationSequence === undefined) return;
+      const parent = await finnyIntegration.getParent(job.scopeId, job.id);
+      if (!parent) throw new Error("Finny escalation has no bound destination");
+      await deliveries.enqueue({
+        destination: parent.destination,
+        text: `Finny job ${job.id} reached its configured rework limit and requires human review.`,
+        idempotencyKey: `finny-escalation:${job.id}:${job.unresolvedEscalationSequence}`,
+      });
+      await finnyRuntime.retireJob(job.scopeId, job.id);
+    };
+    const deliverFinal = async (
+      job: import("./finny/types.ts").FinnyJob,
+      receipt: import("./finny/types.ts").FinnyFinalReceipt,
+    ) => {
+      const parent = await finnyIntegration.getParent(job.scopeId, job.id);
+      if (!parent) throw new Error("Finny final delivery has no bound destination");
+      if (!config.publicWebUrl) throw new Error("Finny final delivery requires PUBLIC_WEB_URL");
+      await deliveries.enqueue(finnyFinalDelivery(parent, job, receipt, config.publicWebUrl));
+      await finnyRuntime.retireJob(job.scopeId, job.id);
+    };
+    const completeAuditPassed = async (input: { scopeId: string; jobId: string }) => {
+      if (!(await finnyIntegration.readyForFinalization(input.scopeId, input.jobId))) return;
+      const receipt = await finnyFinalizer.finalize({
+        scopeId: input.scopeId,
+        jobId: input.jobId,
+        idempotencyKey: `finny-auto-final:${input.jobId}`,
+      });
+      const job = await finnyJobs.getJob(input.scopeId, input.jobId);
+      if (!job) throw new Error("Finny finalized job is unavailable");
+      await deliverFinal(job, receipt);
+    };
+    const completeAuditBlocked = async (input: { scopeId: string; jobId: string }) => {
+      const job = await finnyJobs.getJob(input.scopeId, input.jobId);
+      if (job?.unresolvedEscalationSequence !== undefined) await deliverEscalation(job);
+    };
+    afterRecoveredAuditPassed = completeAuditPassed;
+    afterRecoveredAuditBlocked = completeAuditBlocked;
+    finnyTools = createFinnyToolServiceFactory({
+      config: config.finny,
+      jobs: finnyJobs,
+      runtime: finnyRuntime,
+      integration: finnyIntegration,
+      deliveries,
+      files,
+      deterministicSpreadsheetWorker,
+      coordinator: {
+        async artifactReady(input) {
+          await (await coordinatorFor(input.scopeId, input.jobId)).artifactReady(input);
+        },
+        async auditPassed(input) {
+          await (await coordinatorFor(input.scopeId, input.jobId)).auditPassed(input);
+          await completeAuditPassed(input);
+        },
+        async auditBlocked(input) {
+          await (await coordinatorFor(input.scopeId, input.jobId)).auditBlocked(input);
+          await completeAuditBlocked(input);
+        },
+      },
+      finalizer: finnyFinalizer,
+      async deliverFinal({ job, receipt }) {
+        await deliverFinal(job, receipt);
+      },
+    });
+    const recoverOne = async (kind: string, scopeId: string, jobId: string, work: () => Promise<void>) => {
+      try {
+        await work();
+      } catch (error) {
+        await errors.record(
+          {
+            category: "finny",
+            code: `recovery_${kind}`,
+            message: `job=${jobId}: ${errMessage(error)}`,
+            scopeLabel: scopeId,
+          },
+          error,
+        );
+      }
+    };
+    recoverFinny = async () => {
+      await finnyJobs.getJob("__finny_schema__", "__finny_schema__");
+      for (const intent of await finnyIntegration.pendingPlanIntents())
+        await recoverOne("plan_intent", intent.job.scopeId, intent.job.id, async () => {
+          const existing = await finnyJobs.getJob(intent.job.scopeId, intent.job.id);
+          if (!existing) await finnyJobs.createJob(intent.job);
+          await finnyIntegration.completePlanIntent(intent.parent, intent.clarification);
+        });
+      for (const pending of await finnyIntegration.pendingClarificationCards())
+        await recoverOne("clarification_card", pending.scopeId, pending.jobId, async () => {
+          await deliveries.enqueue({
+            destination: { ...pending.destination, finnyPlanRequestId: pending.clarificationRequestId },
+            text: pending.question,
+            idempotencyKey: `finny-clarification:${pending.clarificationRequestId}`,
+          });
+        });
+      for (const pending of await finnyIntegration.pendingApprovalCards())
+        await recoverOne("approval_card", pending.scopeId, pending.jobId, async () => {
+          await deliverPlanApproval({ scopeId: pending.scopeId, jobId: pending.jobId });
+        });
+      for (const pending of await finnyIntegration.approvedIncomplete())
+        await recoverOne("approved_dispatch", pending.scopeId, pending.jobId, async () => {
+          await afterApproved({ scopeId: pending.scopeId, jobId: pending.jobId, requestId: pending.requestId });
+        });
+      for (const pending of await finnyIntegration.approvedParents())
+        await recoverOne("approved_job", pending.scopeId, pending.jobId, async () => {
+          const job = await finnyJobs.getJob(pending.scopeId, pending.jobId);
+          if (!job) throw new Error("Finny approved recovery job is unavailable");
+          if (job.unresolvedEscalationSequence !== undefined) await deliverEscalation(job);
+          else if (await finnyIntegration.readyForFinalization(job.scopeId, job.id)) {
+            const receipt = await finnyFinalizer.finalize({
+              scopeId: job.scopeId,
+              jobId: job.id,
+              idempotencyKey: `finny-auto-final:${job.id}`,
+            });
+            await deliverFinal(job, receipt);
+          }
+        });
+      for (const finalized of await finnyIntegration.finalizedParents())
+        await recoverOne("final_delivery", finalized.scopeId, finalized.jobId, async () => {
+          const job = await finnyJobs.getJob(finalized.scopeId, finalized.jobId);
+          if (job?.finalReceipt) await deliverFinal(job, job.finalReceipt);
+        });
+    };
+    finnyRecoverySweeper.start();
+    requestRuntimeRecovery();
+  }
+
   const orchestratorDeps: OrchestratorDeps = {
     advisoryLock,
     admittedWork,
     sessionStateBus,
     externalSlackPolicies: config.externalSlackPolicies,
     sessionSyscalls,
+    ...(finnyTools ? { finnyTools } : {}),
     refreshModels,
     identity,
     users,
@@ -2346,6 +2752,7 @@ export function buildApp(
     identity,
     memory,
     ...(keychainApprovals ? { keychainApprovals } : {}),
+    ...(finnyApprovals ? { finnyApprovals } : {}),
     surfaceCache,
     taskAcknowledgements: artifactMap<TaskAckState>("slack_task_acknowledgements"),
     sessionStatus: artifactMap<SlackSessionStatusState>("slack_session_status"),
@@ -2367,6 +2774,13 @@ export function buildApp(
     ...(config.brandingDefault ? { brandingDefault: config.brandingDefault } : {}),
     ...(agent.pickAckEmoji ? { pickAckEmoji: (t, c) => agent.pickAckEmoji!(t, c) } : {}),
   });
+  if (recoverFinny)
+    void recoverFinny().catch((error) =>
+      errors.record(
+        { category: "finny", code: "recovery_failed", message: errMessage(error), scopeLabel: `org:${config.orgId}` },
+        error,
+      ),
+    );
   runs.onTerminal((run) => {
     void runs
       .activeForThread(run.sessionId)
@@ -2937,6 +3351,7 @@ export function buildApp(
           runSignals.close?.(),
           sessionStateBus.close?.(),
           ledgerEventBus.close?.(),
+          closeFinnyRecovery?.(),
           runActivity.close?.(),
           runStreamEvents.close?.(),
         ].map((closing) => closing?.catch(reportFailureAs("shutdown: close event stores", undefined))),
@@ -2975,6 +3390,7 @@ export function buildApp(
     signals: runSignals,
     sessionStateBus,
     sessionSyscalls,
+    ...(finnyCurrentJobReader ? { finnyCurrentJobReader } : {}),
     ledgerEventBus,
     surfaceCache,
     runtime,

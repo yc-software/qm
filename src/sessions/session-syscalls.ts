@@ -176,6 +176,11 @@ export function sessionContextOf(input: OrchestratorInput): SpawnMeta {
   };
 }
 
+function deterministicRunId(parts: readonly string[]): string {
+  const hex = hashId(parts, 32);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 const SESSION_MESSAGE_DEPTH_CAP = 8;
 const READ_DEFAULT_LIMIT = 30;
 const SESSION_LIST_LIMIT = 50;
@@ -193,13 +198,16 @@ export interface SessionOpenInput {
   thinkingLevel?: string;
   fastMode?: boolean;
   isolation?: ChildIsolationMode;
+  beforeEnqueue?: (binding: { sessionId: string; runId: string }) => Promise<{ text?: string } | void>;
 }
 
 type SessionOpenResult =
-  { ok: true; sessionId: string; title: string; isolation?: ChildIsolation } | { ok: false; message: string };
+  | { ok: true; sessionId: string; runId: string; title: string; isolation?: ChildIsolation }
+  | { ok: false; message: string };
 
 interface SessionWriteInput {
   target: string;
+  beforeEnqueue?: (binding: { sessionId: string; runId: string }) => Promise<{ text?: string } | void>;
   peer?: boolean;
   text?: string;
   interrupt?: boolean;
@@ -769,6 +777,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 return {
                   ok: true,
                   sessionId: existing.id,
+                  runId: initialRun.id,
                   title: visibleTitle(existing),
                   ...(existing.spawnMeta?.isolation ? { isolation: existing.spawnMeta.isolation } : {}),
                 };
@@ -833,13 +842,23 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 sessionSenderId: binding.session.id,
                 ...(binding.request.runId ? { delegatingRunId: binding.request.runId } : {}),
               };
-              await deps.runs.enqueue({
+              const dedupKey = `subagent-open:${threadRef}`;
+              const runId = deterministicRunId(["session-open-run", dedupKey]);
+              await input.beforeEnqueue?.({ sessionId: child.id, runId });
+              const enqueued = await deps.runs.enqueue({
+                id: runId,
                 sessionId: child.threadRef,
-                dedupKey: `subagent-open:${threadRef}`,
+                dedupKey,
                 request: deps.prepareRequest ? await deps.prepareRequest(request) : request,
                 maxAttempts: deps.maxAttempts,
               });
-              return { ok: true, sessionId: child.id, title, ...(isolation ? { isolation } : {}) };
+              return {
+                ok: true,
+                sessionId: child.id,
+                runId: enqueued.run.id,
+                title,
+                ...(isolation ? { isolation } : {}),
+              };
             })
             .catch((error): SessionOpenResult => ({ ok: false, message: errMessage(error) }));
         },
@@ -997,8 +1016,12 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               request.origin = sessionTurnOrigin(request.origin, stamped);
               request.sessionSenderId = binding.session.id;
               request.delegatingRunId = binding.request.runId;
+              const queuedRunId = deterministicRunId(["session-followup-run", dedupKey ?? messageId]);
+              const preparedEnqueue = await input.beforeEnqueue?.({ sessionId: target.id, runId: queuedRunId });
+              const queuedText = preparedEnqueue?.text?.trim() || stamped;
               await deps.runs
                 .enqueue({
+                  id: queuedRunId,
                   sessionId: target.threadRef,
                   dedupKey,
                   request: {
@@ -1006,8 +1029,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                     ...(privateMessage
                       ? { privateSessionMessage: true as const, sessionMessageDepth: messageDepth }
                       : {}),
-                    text: stamped,
-                    displayText: text,
+                    text: queuedText,
+                    displayText: preparedEnqueue?.text ? stamped : text,
                   },
                   maxAttempts: deps.maxAttempts,
                 })

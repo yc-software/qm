@@ -27,6 +27,7 @@ import {
   SettingsManager,
   type ToolDefinition,
   type AgentSession,
+  type ExtensionFactory,
 } from "@earendil-works/pi-coding-agent";
 import {
   type Api,
@@ -141,6 +142,7 @@ export interface AgentOptions {
   backgroundJobTtlMs?: number;
   backgroundJobTtlMaxMs?: number;
   signals?: RunSignalStore;
+  extensionFactories?: ExtensionFactory[];
 }
 
 export function agentConfigOptions(config: Config): AgentOptions {
@@ -652,7 +654,11 @@ export function stableCwd(prefix: string): string {
   return join(tmpdir(), `${prefix}-cwd`);
 }
 
-async function createIsolatedResources(prefix: string, systemPrompt: string): Promise<IsolatedResources> {
+async function createIsolatedResources(
+  prefix: string,
+  systemPrompt: string,
+  extensionFactories: ExtensionFactory[] = [],
+): Promise<IsolatedResources> {
   let cwd = stableCwd(prefix);
   let ephemeralCwd: string | undefined;
   try {
@@ -672,6 +678,7 @@ async function createIsolatedResources(prefix: string, systemPrompt: string): Pr
     systemPrompt,
     appendSystemPrompt: [],
     noExtensions: true,
+    extensionFactories,
     noSkills: true,
     noPromptTemplates: true,
     noThemes: true,
@@ -856,6 +863,7 @@ export function createAgent(opts?: AgentOptions): Agent {
     const { resourceLoader, settingsManager, cwd, agentDir, ephemeralCwd } = await createIsolatedResources(
       tempDirPrefix,
       systemPrompt,
+      opts?.extensionFactories,
     );
 
     let session: AgentSession;

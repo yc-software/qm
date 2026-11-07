@@ -24,6 +24,21 @@ const invalidatedChecks: Record<FinnyChangeKind, readonly FinnyCheckId[]> = {
   lineage: ["lineage.binding"],
 };
 
+const blockedCheckChangeKind: Record<FinnyCheckId, FinnyChangeKind> = {
+  "source.completeness": "source_or_logic",
+  "financial.reconcile": "source_or_logic",
+  "formula.recalculate": "formula",
+  "summary.crossfoot": "formula",
+  "meaning.actionability": "disclosure",
+  "artifact.integrity": "source_or_logic",
+  "artifact.structure": "presentation",
+  "lineage.binding": "lineage",
+};
+
+export function blockedCheckChangeKinds(checkId: FinnyCheckId): FinnyChangeKind[] {
+  return [blockedCheckChangeKind[checkId]];
+}
+
 const checkIds = new Set<string>(FINNY_CHECK_IDS);
 const changeKinds = new Set<string>(FINNY_CHANGE_KINDS);
 

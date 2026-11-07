@@ -203,6 +203,7 @@ export interface Destination {
   keychainAskId?: string;
   deploymentAccess?: { deploymentId: string; requesterId: string };
   commandApprovalId?: string;
+  finnyPlanRequestId?: string;
   type: string;
   target: string;
   audienceScopeId?: ScopeId;

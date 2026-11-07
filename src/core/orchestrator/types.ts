@@ -68,6 +68,7 @@ import type { SwarmService, SwarmTurn } from "../../swarms/swarm-service.ts";
 import type { ChannelPolicyStore } from "../../surface-cache/channel-policy-store.ts";
 import type { SurfaceCache } from "../../surface-cache/types.ts";
 import type { SurfaceRegistry } from "../../surfaces/registry.ts";
+import type { createFinnyToolServiceFactory } from "../../finny/integration.ts";
 
 export interface OrchestratorInput extends Omit<
   TurnRequest,
@@ -116,6 +117,7 @@ export interface OrchestratorDeps {
   sessions: SessionStore;
   sessionStateBus?: SessionStateBus;
   sessionSyscalls?: SessionSyscallsFactory;
+  finnyTools?: ReturnType<typeof createFinnyToolServiceFactory>;
   files: FileArtifactStore;
   toolOutput?: ToolOutputStore;
   sandbox: Sandbox;

@@ -15,24 +15,52 @@ async function createApprovedJob(store: FinnyStore, action: FinnyApprovalAction 
   const input = {
     id: randomUUID(),
     scopeId: "personal:U1",
-    planDigest: `plan-${randomUUID()}`,
-    artifactDigest: `artifact-${randomUUID()}`,
+    plan: {
+      title: "Finance pack",
+      phases: [{ name: "Prepare", owner: "MIS Expert", dependencies: [] }],
+      certification: "Independent checks",
+      deliverable: "Workbook",
+      destination: "Origin thread",
+      clarifications: [],
+    },
     policy: initialFinnyPolicy(),
     originThreadRef: `slack:C1:${randomUUID()}`,
-    provisionalRevision: `revision-${randomUUID()}`,
+    findingPolicy: {
+      id: "finny-r5-test",
+      maxFindings: 8,
+      maxCodeLength: 80,
+      maxMessageLength: 2_000,
+    },
   };
-  await store.createJob(input);
+  const created = await store.createJob(input);
+  const requestId = randomUUID();
+  await store.createApprovalRequest({
+    scopeId: input.scopeId,
+    jobId: input.id,
+    requestId,
+    authorizedActorId: "U1",
+  });
   await store.recordApproval({
     scopeId: input.scopeId,
     jobId: input.id,
-    requestId: randomUUID(),
+    requestId,
     actorId: "U1",
     action,
-    planDigest: input.planDigest,
     originThreadRef: input.originThreadRef,
     decidedAt: Date.now(),
   });
-  return input;
+  const artifactDigest = `artifact-${randomUUID()}`;
+  const provisionalRevision = `revision-${randomUUID()}`;
+  if (action === "approve") {
+    await store.recordArtifactReady({
+      scopeId: input.scopeId,
+      jobId: input.id,
+      artifactDigest,
+      provisionalRevision,
+      idempotencyKey: randomUUID(),
+    });
+  }
+  return { ...created, artifactDigest, provisionalRevision };
 }
 
 async function attest(
@@ -49,6 +77,7 @@ async function attest(
     generation: job.policy.requiredGenerations[checkId],
     verdict,
     evidenceDigest: `evidence-${randomUUID()}`,
+    artifactDigest: job.artifactDigest,
     issuerPrincipalId: "U-auditor",
     issuerRunId: "run-auditor-1",
     idempotencyKey: randomUUID(),
@@ -105,10 +134,9 @@ test("finalizer rejects missing evidence and the latest BLOCK", async () => {
   );
 });
 
-test("finalizer rejects scope mismatch and non-approval", async () => {
+test("finalizer rejects scope mismatch and a rejected artifact-free job", async () => {
   const store = createPostgresFinnyStore(testDatabaseUrl());
   const rejected = await createApprovedJob(store, "reject");
-  await passChecks(store, rejected);
   const finalizer = createSignedFinnyFinalizer(store, SECRET);
   await assert.rejects(
     finalizer.finalize({ scopeId: "personal:U2", jobId: rejected.id, idempotencyKey: randomUUID() }),
@@ -116,7 +144,7 @@ test("finalizer rejects scope mismatch and non-approval", async () => {
   );
   await assert.rejects(
     finalizer.finalize({ scopeId: rejected.scopeId, jobId: rejected.id, idempotencyKey: randomUUID() }),
-    /approved/i,
+    /artifact/i,
   );
 });
 
@@ -181,4 +209,28 @@ test("concurrent finalizers with the same key converge on one receipt", async ()
     finalizer.finalize({ scopeId: job.scopeId, jobId: job.id, idempotencyKey }),
   ]);
   assert.deepEqual(second, first);
+});
+
+test("finalizer rejects current-generation PASS attestations bound to another artifact", async () => {
+  const connectionString = testDatabaseUrl();
+  const store = createPostgresFinnyStore(connectionString);
+  const job = await createApprovedJob(store);
+  await passChecks(store, job);
+  const { default: pg } = await import("pg");
+  const client = new pg.Client({ connectionString });
+  await client.connect();
+  await client.query("UPDATE finny_jobs SET artifact_digest=$2, provisional_revision=$3 WHERE id=$1", [
+    job.id,
+    "replacement-artifact",
+    "replacement-revision",
+  ]);
+  await client.end();
+  await assert.rejects(
+    createSignedFinnyFinalizer(store, SECRET).finalize({
+      scopeId: job.scopeId,
+      jobId: job.id,
+      idempotencyKey: randomUUID(),
+    }),
+    /stale artifact evidence/i,
+  );
 });

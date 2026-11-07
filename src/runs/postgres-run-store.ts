@@ -311,8 +311,14 @@ END $base_schema$`,
     watchSession,
     ...(Number.isFinite(maxClaims) ? { maxClaims } : {}),
 
-    async enqueue({ sessionId, request, dedupKey, maxAttempts = 3 }: EnqueueInput): Promise<EnqueueResult> {
-      const id = randomUUID();
+    async enqueue({
+      id: requestedId,
+      sessionId,
+      request,
+      dedupKey,
+      maxAttempts = 3,
+    }: EnqueueInput): Promise<EnqueueResult> {
+      const id = requestedId ?? randomUUID();
       const delegating = request.delegatingRunId ? await getRun(request.delegatingRunId) : null;
       const priority = runPriority(request, delegating?.priority ?? null);
       for (;;) {
