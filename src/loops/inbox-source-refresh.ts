@@ -12,6 +12,7 @@ import { isObj, tokenFor, type ConnectorTokenSource } from "./sources/adapter.ts
 import { normalizeSlackApiUrl } from "../slack/config.ts";
 import { slackMessageContent } from "../slack/message-content.ts";
 import { GmailApiError, gmailApi } from "../connectors/gmail-api.ts";
+import { gmailToken } from "./sources/gmail.ts";
 import type { DirectoryStore } from "../directory/directory-store.ts";
 
 interface RefreshDeps {
@@ -25,6 +26,10 @@ interface RefreshDeps {
   slackApiUrl?: string;
   now?: () => number;
 }
+
+class SourceGoneError extends Error {}
+
+const goneSlackErrors = new Set(["channel_not_found", "thread_not_found"]);
 
 export type InboxSourceRefresh = (owner: string, items: LoopItem[], mode?: "avatars") => Promise<void>;
 
@@ -69,15 +74,17 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
     const timeoutMs = Math.max(1, Math.min(3000, deadline - now()));
     const rateLimit = (retry: number) =>
       limited.set(key, true, { ttl: Math.max(60, Number.isFinite(retry) ? retry : 60) * 1000 });
-    const failure = (cause: Error) =>
-      new Error("Couldn't refresh the source. Your item has not been dismissed.", { cause });
+    const failure = (cause: Error, gone = false) =>
+      gone
+        ? new SourceGoneError("The original conversation was deleted or is no longer accessible.", { cause })
+        : new Error("Couldn't refresh the source. Your item has not been dismissed.", { cause });
     if (source === "gmail") {
       try {
         return await gmailApi(token, fetchImpl)<Record<string, unknown>>(path, { timeoutMs });
       } catch (error) {
         if (!(error instanceof GmailApiError)) throw error;
         if (error.status === 429) rateLimit(error.retryAfterSeconds);
-        throw failure(error);
+        throw failure(error, error.status === 404);
       }
     }
     const res = await fetchImpl(`${slackBase}${path}`, {
@@ -87,12 +94,10 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
     if (res.status === 429) rateLimit(Number(res.headers.get("retry-after")));
     if (!res.ok) throw failure(new Error(`${source} ${method}: HTTP ${res.status}`));
     const body: unknown = await res.json();
-    if (!isObj(body) || body.ok === false)
-      throw failure(
-        new Error(
-          `${source} ${method}: ${isObj(body) && typeof body.error === "string" ? body.error : "Invalid response"}`,
-        ),
-      );
+    if (!isObj(body) || body.ok === false) {
+      const code = isObj(body) && typeof body.error === "string" ? body.error : "Invalid response";
+      throw failure(new Error(`${source} ${method}: ${code}`), goneSlackErrors.has(code));
+    }
     return body;
   }
 
@@ -196,9 +201,11 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
   async function refresh(owner: string, item: LoopItem): Promise<void> {
     const source = item.source;
     if (source !== "gmail" && source !== "slack") return;
-    if (source === "gmail" && isResolved(item)) return;
     const payload = item.sourcePayload ?? {};
-    const token = await tokenFor(deps.tokens, source === "gmail" ? "gmail.googleapis.com" : "slack.com", owner);
+    const gone = isObj(payload.sourceGone) && payload.sourceGone.sourceAt === item.sourceAt;
+    if (gone || (source === "gmail" && isResolved(item))) return;
+    const token =
+      source === "gmail" ? await gmailToken(deps.tokens, owner, item) : await tokenFor(deps.tokens, "slack.com", owner);
     if (!token) throw new Error(`${source === "gmail" ? "Google" : "Slack"} is not connected. Source not refreshed.`);
     if (source === "gmail") {
       const meta = isObj(payload.gmail) ? payload.gmail : {};
@@ -348,12 +355,14 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
         if (mode === "avatars") await refreshAvatars(owner, item);
         else await refresh(owner, item);
       } catch (e) {
-        recordFailure(owner, `Inbox item ${item.id}`, e);
+        const gone = e instanceof SourceGoneError;
+        if (!gone) recordFailure(owner, `Inbox item ${item.id}`, e);
         if (mode === "avatars") return;
         await deps.items.annotate(
           item.id,
           {
             sourceRefreshError: e instanceof Error ? e.message : "Source refresh failed.",
+            ...(gone ? { sourceGone: { sourceAt: item.sourceAt, error: errMessage(e.cause) } } : {}),
           },
           { expectedSourceAt: item.sourceAt },
         );

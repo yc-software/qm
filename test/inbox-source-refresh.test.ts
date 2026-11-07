@@ -119,6 +119,93 @@ test("provider failure or missing connection preserves the item with an explicit
   }
 });
 
+test("a deleted source conversation stops refreshing without logging an error; transient failures keep retrying", async () => {
+  const cases = [
+    { source: "gmail", meta: { threadId: "t1" }, fail: () => new Response("Not Found", { status: 404 }), gone: /404/ },
+    {
+      source: "slack",
+      meta: { channelId: "C1", ts: "1.0" },
+      fail: () => json({ ok: false, error: "channel_not_found" }),
+      gone: /conversations.info: channel_not_found/,
+    },
+    {
+      source: "slack",
+      meta: { channelId: "C1", ts: "1.0" },
+      fail: (url: string) =>
+        url.includes("conversations.info")
+          ? json({ ok: true, channel: {} })
+          : json({ ok: false, error: "thread_not_found" }),
+      gone: /conversations.replies: thread_not_found/,
+    },
+    { source: "gmail", meta: { threadId: "t1" }, fail: () => new Response("unavailable", { status: 503 }) },
+    {
+      source: "slack",
+      meta: { channelId: "C1", ts: "1.0" },
+      fail: () => json({ ok: false, error: "internal_error" }),
+    },
+  ];
+  for (const { source, meta, fail, gone } of cases) {
+    const { items, item } = await fixture(source, meta);
+    const errors = createPostgresErrorLog(testDatabaseUrl());
+    let reads = 0;
+    const refresh = (current: typeof item) =>
+      createInboxSourceRefresh({
+        featureFlags,
+        items,
+        tokens,
+        directory,
+        errors,
+        fetchImpl: async (url) => {
+          reads++;
+          return fail(String(url));
+        },
+      })("owner", [current]);
+    await refresh(item);
+    const after = (await items.get(item.id))!;
+    assert.equal(after.status, "ready");
+    assert.equal(after.proposal?.data.body, "Keep my edit");
+    const readsBefore = reads;
+    await refresh(after);
+    if (gone) {
+      assert.match(JSON.stringify(after.sourcePayload?.sourceGone), gone);
+      assert.match(String(after.sourcePayload?.sourceRefreshError), /deleted or is no longer accessible/);
+      assert.deepEqual(await errors.list(), []);
+      assert.equal(reads, readsBefore);
+      await items.ingest([
+        { loopId: "inbox", dedupeKey: "ask", source, sourceAt: 2000, sourcePayload: after.sourcePayload! },
+      ]);
+      await refresh((await items.get(item.id))!);
+      assert.ok(reads > readsBefore);
+    } else {
+      assert.equal(after.sourcePayload?.sourceGone, undefined);
+      assert.match(String(after.sourcePayload?.sourceRefreshError), /not been dismissed/);
+      assert.equal((await errors.list()).length, 2);
+      assert.ok(reads > readsBefore);
+    }
+  }
+});
+
+test("Gmail refresh reads the mailbox the item came from, not the first connected account", async () => {
+  for (const [meta, expected] of [
+    [{ threadId: "t1", accountType: "company" }, "Bearer token-company"],
+    [{ threadId: "t1", accountType: "default" }, "Bearer token-default"],
+  ] as const) {
+    const { items, item } = await fixture("gmail", meta);
+    const seen: string[] = [];
+    await createInboxSourceRefresh({
+      featureFlags,
+      items,
+      tokens: { connectorAccessToken: async (_host, _owner, accountType) => `token-${accountType ?? "default"}` },
+      directory,
+      fetchImpl: async (_url, init) => {
+        seen.push(String(new Headers(init?.headers).get("authorization")));
+        return json({ messages: [] });
+      },
+    })("owner", [item]);
+    assert.deepEqual(seen, [expected]);
+  }
+});
+
 test("a new inbound message during a provider read wins over the older own reply", async () => {
   const { items, item } = await fixture();
   await createInboxSourceRefresh({
