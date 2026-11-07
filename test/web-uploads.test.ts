@@ -212,3 +212,49 @@ test("an upload past the size limit gets its 413 while the browser is still send
   });
   assert.equal(answer, '413 {"error":"payload_too_large","message":"blob exceeds the size limit"}');
 });
+
+test("an admin upload dropped while its grant check is still running settles and leaves nothing staged", async (t) => {
+  let dropped!: () => void;
+  const clientGone = new Promise<void>((resolve) => (dropped = resolve));
+  let settled: "ok" | "rejected" | null = null;
+  const { port, transferDir } = await core(t, (deps) => ({
+    admin: Object.assign(Object.create(deps.admin!), {
+      listGrants: async () => {
+        await clientGone;
+        return deps.admin!.listGrants();
+      },
+    }),
+    blobTransfer: Object.assign(Object.create(deps.blobTransfer!), {
+      put: (...args: Parameters<NonNullable<Deps["blobTransfer"]>["put"]>) =>
+        deps.blobTransfer!.put(...args).then(
+          (info) => ((settled = "ok"), info),
+          (error: unknown) => {
+            settled = "rejected";
+            throw error;
+          },
+        ),
+    }),
+  }));
+  const bytes = Buffer.alloc(64 * 1024, 1);
+  const req = request({
+    host: "127.0.0.1",
+    port,
+    method: "POST",
+    path: `/api/admin/files/upload?scope=org:default-org&sha=${sha(bytes)}`,
+    headers: {
+      cookie: browserSessionCookie("admin-alice"),
+      origin: browserSessionDeps.portalUrl,
+      "content-length": String(bytes.length * 4),
+    },
+  });
+  req.on("error", () => undefined);
+  req.write(bytes.subarray(0, 1024), () =>
+    setTimeout(() => {
+      req.destroy();
+      setTimeout(dropped, 50);
+    }, 50),
+  );
+  for (let i = 0; i < 40 && settled === null; i++) await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(settled, "rejected");
+  assert.deepEqual(await readdir(transferDir).catch(() => []), []);
+});
