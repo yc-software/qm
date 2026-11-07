@@ -162,7 +162,7 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
     },
     removeDir(handle, relDir) {
       const remove = () => forHandle(handle).removeDir(handle, relDir);
-      return useHandle(handle, remove);
+      return handle.resourceId ? resources.cleanUp(handle.resourceId, remove) : remove();
     },
     removeDirAndList(handle, removeRelDir, listRelDir) {
       return useHandle(handle, () => removeDirAndList(forHandle(handle), handle, removeRelDir, listRelDir));
@@ -170,7 +170,7 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
     teardown(handle, tdOpts?: TeardownOptions): Promise<void> {
       const action = () => forHandle(handle).teardown(handle, tdOpts);
       return handle.resourceId
-        ? resources.use(
+        ? resources.cleanUp(
             handle.resourceId,
             action,
             !!tdOpts?.destroy || (!tdOpts?.keepWarm && !!forHandle(handle).profile.parksOnTeardown),
