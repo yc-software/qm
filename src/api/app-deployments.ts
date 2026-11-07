@@ -4,6 +4,7 @@ import { deploymentShareScope } from "../deploy/email-access.ts";
 import { errMessage } from "../util/errors.ts";
 import { DeployAccessError, type Reach } from "../deploy/deploy-service.ts";
 import { mintDeployGitAccess } from "../deploy/access-token.ts";
+import { deploymentAppUrl } from "../deploy/deploy-store.ts";
 
 import type { App, AppDeps, ViewerDeployment } from "./app-types.ts";
 import { deploymentView } from "./app-types.ts";
@@ -82,9 +83,7 @@ export function createDeploymentMethods(
         const grantees = previous.some((g) => g.scope === grantee && g.permission === "read")
           ? previous
           : await deps.deploy.shareDeployment(deployment.id, grantee, "read", { createdBy: actorId }, opts);
-        const appUrl = deps.deployAppsDomain
-          ? `https://${deployment.name ?? deployment.id}.${deps.deployAppsDomain}/`
-          : undefined;
+        const appUrl = deploymentAppUrl(deployment, deps.deployAppsDomain);
         if (alreadyShared)
           return { grantees, invitation: { emailSent: false, alreadyShared: true, ...(appUrl ? { appUrl } : {}) } };
         let emailSent = false;

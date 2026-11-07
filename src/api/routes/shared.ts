@@ -5,13 +5,25 @@ import { adminStatusFromGrants } from "../../admin/admin-service.ts";
 import { canonicalPerson, samePerson } from "../../directory/person.ts";
 import { isTerminal, type Run } from "../../runs/run-store.ts";
 import type { ServerDeps } from "../deps.ts";
-import type { ApiCtx } from "./route.ts";
+import type { ApiCtx, BaseCtx } from "./route.ts";
+import { constantTimeEqual } from "../../util/crypto.ts";
 import { headerValue, sendJson } from "../http.ts";
 import { currentModelRequestContext } from "../../model/request-context.ts";
 
 export const orgScope = (_deps?: unknown): string => configOrgScope();
 
 export { isObj } from "../../util/objects.ts";
+
+export function exportTokenAccepted(ctx: Pick<BaseCtx, "req" | "res">, token: string | undefined): boolean {
+  if (!token) {
+    sendJson(ctx.res, 404, { error: "not_found" });
+    return false;
+  }
+  const authorization = ctx.req.headers.authorization;
+  if (typeof authorization === "string" && constantTimeEqual(authorization, `Bearer ${token}`)) return true;
+  sendJson(ctx.res, 401, { error: "unauthorized" });
+  return false;
+}
 
 export function audit(deps: ServerDeps, e: Omit<AuditEvent, "at">): void {
   deps.auditLog?.record({ at: Date.now(), ...e });
