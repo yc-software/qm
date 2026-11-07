@@ -16,7 +16,7 @@ process.env.CORE_ORG_ID = "acme";
 process.env.CORE_SIGNING_SECRET = secret;
 process.env.PORTAL_IDENTITY_SECRET = secret;
 process.env.ALLOW_UNSIGNED_TEST_IDENTITY = "0";
-delete process.env.POSTHOG_API_KEY;
+delete process.env.WEB_UI_ANALYTICS;
 process.env.SENTRY_BROWSER_DSN = "https://public@sentry.example.com/1";
 process.env.SENTRY_RELEASE = "release-1";
 const { handler } = await import("../server/index.ts");
