@@ -29,10 +29,16 @@ migrate() {
   echo "::group::migrate with $label"
   local log
   log=$(mktemp)
-  (cd "$dir" && env -i PATH="$PATH" HOME="$HOME" DATABASE_URL="$DATABASE_URL" "${secrets[@]}" node src/migrate-main.ts) 2>&1 | tee "$log"
+  local status=0
+  (cd "$dir" && env -i PATH="$PATH" HOME="$HOME" DATABASE_URL="$DATABASE_URL" "${secrets[@]}" node src/migrate-main.ts) >"$log" 2>&1 || status=$?
+  cat "$log"
   echo "::endgroup::"
+  if [ "$status" -ne 0 ]; then
+    echo "::error::migrating with $label exited with status $status; see the log above" >&2
+    exit "$status"
+  fi
   if grep -q '^\[failed\]' "$log"; then
-    echo "::error::$label reported failures after migrating; see the log above" >&2
+    echo "::error::migrating with $label reported failures; see the log above" >&2
     exit 1
   fi
 }
