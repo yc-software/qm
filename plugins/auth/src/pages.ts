@@ -1,7 +1,7 @@
-import { createHash } from "node:crypto";
 import { escapeHtml } from "../../chassis/src/http.ts";
+import { inlineScript } from "../../chassis/src/inline-script.ts";
 
-const CONFIRM_SCRIPT = `(function () {
+const { text: CONFIRM_SCRIPT, hash: CONFIRM_SCRIPT_HASH } = inlineScript(`(function () {
   var key = "qm.signin.token";
   var fragment = new URLSearchParams(location.hash.slice(1)).get("token");
   if (fragment) {
@@ -13,9 +13,7 @@ const CONFIRM_SCRIPT = `(function () {
   if (token) { document.getElementById("token").value = token; return; }
   document.getElementById("confirm").disabled = true;
   document.getElementById("no-token").hidden = false;
-})();`;
-
-const CONFIRM_SCRIPT_HASH = `sha256-${createHash("sha256").update(CONFIRM_SCRIPT, "utf8").digest("base64")}`;
+})();`);
 
 export const PAGE_CSP =
   "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
