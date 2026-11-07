@@ -167,6 +167,9 @@ test("the registry refuses a brain on a loopback or private address", () => {
     "https://169.254.169.254/latest",
     "http://brain.internal/mcp",
     "https://gbrain.local/mcp",
+    "https://localhost./mcp",
+    "https://brain.internal./mcp",
+    "https://gbrain.local../mcp",
   ])
     refused(
       () => personalBrain(EMPTY_MEMORY_REGISTRY, { url }),
@@ -174,6 +177,13 @@ test("the registry refuses a brain on a loopback or private address", () => {
       /public address: QM never calls a registry brain on a private network/,
     );
   assert.equal(personalBrain().brains[0]!.url, "https://brain.acme.example/mcp");
+});
+
+test("the registry checks a hostname of 200,000 dots in well under a second", () => {
+  const url = `https://a${".".repeat(200_000)}b/mcp`;
+  const started = performance.now();
+  assert.equal(personalBrain(EMPTY_MEMORY_REGISTRY, { url }).brains[0]!.url, url);
+  assert.ok(performance.now() - started < 1_000);
 });
 
 test("the env validator's rules apply to registry brains", () => {

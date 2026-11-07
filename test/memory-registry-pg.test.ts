@@ -421,7 +421,6 @@ test("org-admin routes: admins only, secrets write-only, env providers read-only
     (await api.call("DELETE", "/v1/admin/memory-registry/bindings/alice", "admin-alice@default-org")).status,
     200,
   );
-  await new Promise((resolve) => setTimeout(resolve, 50));
   const rows = JSON.stringify(await built.auditLog.events());
   assert.match(rows, /memory-registry\.brain\.update/);
   assert.match(rows, /memory-registry\.binding\.delete/);
