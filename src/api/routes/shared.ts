@@ -19,6 +19,14 @@ export function personalCapability(ctx: Pick<ApiCtx, "capability" | "actor">): C
   return ctx.actor ? { actorId: ctx.actor.p, scopeId: scopeId("personal", ctx.actor.p), exp: ctx.actor.exp } : null;
 }
 
+export async function strictPostureRefuses(ctx: Pick<ApiCtx, "res" | "deps" | "method" | "capability" | "actor">) {
+  if (ctx.capability || !ctx.actor || ctx.method === "GET" || !ctx.deps.config) return false;
+  const posture = await ctx.deps.config.getSecurityPostureDurable(scopeId("personal", ctx.actor.p));
+  if (posture !== "strict") return false;
+  sendJson(ctx.res, 403, { error: "forbidden", message: "Strict posture blocks direct control-plane mutations" });
+  return true;
+}
+
 export function audit(deps: ServerDeps, e: Omit<AuditEvent, "at">): void {
   deps.auditLog?.record({ at: Date.now(), ...e });
 }

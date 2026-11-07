@@ -12,7 +12,13 @@ import { samePerson } from "../../directory/person.ts";
 import { escapeHtml } from "../../../plugins/chassis/src/http.ts";
 import { sendJson } from "../http.ts";
 import type { ApiCtx, Route } from "./route.ts";
-import { audit, personalCapability, resolveCapabilityDestination, verifiedConversationSpeaker } from "./shared.ts";
+import {
+  audit,
+  personalCapability,
+  resolveCapabilityDestination,
+  strictPostureRefuses,
+  verifiedConversationSpeaker,
+} from "./shared.ts";
 import { reportFailureAs, swallow } from "../../util/errors.ts";
 
 const TRIGGERED = "secret-drop links can only be minted on a turn a person sent — this turn was fired by a trigger";
@@ -171,6 +177,7 @@ ${inputs}
 
 async function mintDrop(ctx: ApiCtx): Promise<void> {
   const { res, deps, body, secret } = ctx;
+  if (await strictPostureRefuses(ctx)) return;
   const capability = personalCapability(ctx);
   if (!deps.keychain || !deps.secretDrops) return sendJson(res, 404, { error: "not_found" });
   if (!capability)
