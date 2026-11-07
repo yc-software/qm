@@ -20,6 +20,8 @@ const QUERY: Record<string, string> = {
   "/api/scope-resources": "scope=personal:alice",
 };
 
+const GATE_REFUSALS = new Set(["portal identity does not match the requested actor", "cross-origin request refused"]);
+
 const concrete = (pattern: string): string => pattern.replaceAll(/:[a-z]+/g, "1");
 
 const aliases = [...API_ALIASES].map(([key, target]) => {
@@ -57,9 +59,8 @@ test("each aliased /api path resolves to the browser-enabled /v1 route that serv
   for (const [method, path] of [
     ["POST", "/api/turn"],
     ["POST", "/api/approvals/1"],
-    ["PATCH", "/api/crons/1"],
-    ["DELETE", "/api/crons/1"],
-    ["POST", "/api/sessions/1/swarm"],
+    ["POST", "/api/crons"],
+    ["POST", "/api/webhooks"],
     ["GET", "/api/inbox"],
     ["GET", "/api/loops/1/items"],
     ["GET", "/api/files/1/content"],
@@ -75,9 +76,15 @@ test("each aliased path answers a cookie-only browser exactly as its /v1 route d
     const query = QUERY[path] ?? "";
     const viaAlias = await fetch(`${base}${concrete(path)}?${query}`, { headers: { cookie } });
     const direct = await fetch(`${base}${concrete(target)}?${query}`, { headers: { cookie } });
-    assert.ok(viaAlias.status < 500 && ![401, 403].includes(viaAlias.status), `${path} answered ${viaAlias.status}`);
+    const answered = await viaAlias.json();
+    assert.ok(
+      viaAlias.status < 500 &&
+        viaAlias.status !== 401 &&
+        !(viaAlias.status === 403 && GATE_REFUSALS.has((answered as { message?: string }).message ?? "")),
+      `${path} answered ${viaAlias.status}`,
+    );
     assert.equal(viaAlias.status, direct.status, path);
-    assert.deepEqual(await viaAlias.json(), await direct.json(), path);
+    assert.deepEqual(answered, await direct.json(), path);
     const actor = findRoute(apiRoutes, "GET", concrete(target))?.route.actor ?? "";
     const field = actor.startsWith("query.") ? actor.slice("query.".length) : "principalId";
     const other = await fetch(`${base}${concrete(path)}?${query}&${field}=bob`, { headers: { cookie } });
@@ -86,8 +93,6 @@ test("each aliased path answers a cookie-only browser exactly as its /v1 route d
     assert.equal(anonymous.status, 401, `${path} answered without a cookie`);
   }
 });
-
-const GATE_REFUSALS = new Set(["portal identity does not match the requested actor", "cross-origin request refused"]);
 
 async function refusal(response: Response): Promise<string> {
   const text = await response.text();
@@ -178,6 +183,11 @@ test("browser writes act as the signed-in person or playground visitor under the
     assert.equal(saved.status, 200, sub);
     const read = await fetch(`${base}/api/ui-state?key=sidebar`, { headers: { cookie } });
     assert.equal(((await read.json()) as { value?: unknown }).value, 1, sub);
+    const pinned = await write(cookie, "PUT", "/api/channel-header-pin", { on: false });
+    assert.deepEqual(await pinned.json(), { scopeId: `personal:${sub}`, on: false, configured: false }, sub);
+    const pin = await fetch(`${base}/api/channel-header-pin`, { headers: { cookie } });
+    assert.equal(((await pin.json()) as { scopeId?: string }).scopeId, `personal:${sub}`, sub);
+    assert.equal((await fetch(`${base}/api/runtime-config`, { headers: { cookie } })).status, 200, sub);
   }
   const session = await built.sessions.getOrCreateByThread("web:alice:fork-me", "dm", "personal:alice@example.com");
   await built.sessions.addParticipant(session.id, "alice@example.com", "Fork me");
@@ -208,19 +218,16 @@ test("a web release still calling /api reaches core for migrated reads and the w
   assert.equal(relayed.status, 200);
   assert.deepEqual(Object.keys((await relayed.json()) as object).sort(), ["crons", "visible"]);
   assert.equal((await read(`${publicWebUrl}/v1/sessions`)).status, 404);
-  const write = (method: string, path: string) =>
+  const write = (method: string, path: string, body = "{}") =>
     fetch(`${publicWebUrl}${path}`, {
       method,
       headers: { cookie, origin: publicWebUrl, "content-type": "application/json" },
-      body: "{}",
+      body,
     });
   const migratedWrite = await write("POST", "/api/projects");
   assert.equal(migratedWrite.status, 400);
   assert.equal(((await migratedWrite.json()) as { message?: string }).message, "principalId and name required");
-  const relayedWrite = await write("PATCH", "/api/crons/missing");
-  assert.equal(
-    ((await relayedWrite.json()) as { message?: string }).message,
-    "expected title, task, schedule, enabled, archived, or runtime",
-  );
+  const relayedWrite = await write("POST", "/api/webhooks", '{"verification":{}}');
+  assert.equal(((await relayedWrite.json()) as { message?: string }).message, "verification requires a scheme");
   assert.equal((await read(`http://127.0.0.1:${port}/api/sessions`)).status, 200);
 });

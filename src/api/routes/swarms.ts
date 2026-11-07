@@ -15,16 +15,11 @@ async function swarmRequest(ctx: ApiCtx): Promise<void> {
   else if (actor && params.id && !capability) {
     if (!(await app.getSessionForViewer(params.id, actor.p)))
       return sendJson(res, 403, { error: "session access denied" });
-    caller = {
-      kind: "human",
-      actorId: actor.p,
-      sessionId: params.id,
-      ...(isObj(body) && typeof body.runId === "string" ? { runId: body.runId } : {}),
-    };
+    caller = { kind: "human", actorId: actor.p, sessionId: params.id };
   } else return sendJson(res, 403, { error: "session-bound authentication required" });
   try {
     if (method === "GET") {
-      if (url.searchParams.get("read") === "1") {
+      if (caller.kind === "agent" && url.searchParams.get("read") === "1") {
         const messages = await app.swarms.read(caller, {
           after: Number(url.searchParams.get("after") ?? 0),
           waitMs: Number(url.searchParams.get("waitMs") ?? 0),
@@ -35,9 +30,9 @@ async function swarmRequest(ctx: ApiCtx): Promise<void> {
       return sendJson(res, 200, await app.swarms.inspect(caller));
     }
     if (!isObj(body)) throw new Error("expected an object");
+    if (caller.kind === "human" && body.action !== "control") throw new Error("only swarm controls are available here");
     const allowed = new Set([
       "action",
-      ...(caller.kind === "human" ? ["runId"] : []),
       ...(ACTION_FIELDS[String(body.action)] ?? ["requestId", "text"]),
       ...(body.action === "spawn" ? ["count", "context", "contexts", "forumSandboxId", ...SPAWN_RUNTIME_FIELDS] : []),
       ...(body.action === "send" ? ["audience", "replyTo", "wake"] : []),
@@ -106,6 +101,6 @@ async function swarmRequest(ctx: ApiCtx): Promise<void> {
 export const swarmRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/swarm", auth: "either", handle: swarmRequest },
   { method: "POST", path: "/v1/swarm", auth: "either", handle: swarmRequest },
-  { method: "GET", path: "/v1/sessions/:id/swarm", auth: "source", handle: swarmRequest },
-  { method: "POST", path: "/v1/sessions/:id/swarm", auth: "source", handle: swarmRequest },
+  { method: "GET", path: "/v1/sessions/:id/swarm", browser: true, auth: "source", handle: swarmRequest },
+  { method: "POST", path: "/v1/sessions/:id/swarm", browser: true, auth: "source", handle: swarmRequest },
 ];

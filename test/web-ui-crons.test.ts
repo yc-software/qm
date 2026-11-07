@@ -79,19 +79,19 @@ test("list, rename, archive, disable, enable, run, delete are owner-gated", asyn
   assert.equal(bobList.crons.length, 0);
   for (const attempt of [
     fetch(`${coreBase}/api/crons/${id}/disable`, asUser("bob", { method: "POST" })),
-    fetch(`${webBase}/api/crons/${id}/enable`, asUser("bob", { method: "POST" })),
+    fetch(`${coreBase}/api/crons/${id}/enable`, asUser("bob", { method: "POST" })),
     fetch(`${coreBase}/api/crons/${id}/run`, asUser("bob", { method: "POST" })),
     fetch(
-      `${webBase}/api/crons/${id}`,
+      `${coreBase}/api/crons/${id}`,
       asUser("bob", { method: "PATCH", body: JSON.stringify({ title: "Bob edit" }) }),
     ),
-    fetch(`${webBase}/api/crons/${id}`, asUser("bob", { method: "DELETE" })),
+    fetch(`${coreBase}/api/crons/${id}`, asUser("bob", { method: "DELETE" })),
   ]) {
     assert.equal((await attempt).status, 404);
   }
 
   const aliceRename = await fetch(
-    `${webBase}/api/crons/${id}`,
+    `${coreBase}/api/crons/${id}`,
     asUser("alice", { method: "PATCH", body: JSON.stringify({ title: "Inbox digest" }) }),
   );
   assert.equal(aliceRename.status, 200);
@@ -105,7 +105,7 @@ test("list, rename, archive, disable, enable, run, delete are owner-gated", asyn
   assert.equal(list.crons[0]?.enabled, false);
   assert.equal(list.crons[0]?.title, "Inbox digest");
 
-  const aliceEnable = await fetch(`${webBase}/api/crons/${id}/enable`, asUser("alice", { method: "POST" }));
+  const aliceEnable = await fetch(`${coreBase}/api/crons/${id}/enable`, asUser("alice", { method: "POST" }));
   assert.equal(aliceEnable.status, 200);
   list = (await (await fetch(`${webBase}/api/crons`, asUser("alice"))).json()) as {
     crons: Array<{ enabled: boolean; archived?: boolean; title?: string }>;
@@ -116,7 +116,7 @@ test("list, rename, archive, disable, enable, run, delete are owner-gated", asyn
   assert.equal(aliceRun.status, 200);
 
   const aliceArchive = await fetch(
-    `${webBase}/api/crons/${id}`,
+    `${coreBase}/api/crons/${id}`,
     asUser("alice", { method: "PATCH", body: JSON.stringify({ archived: true }) }),
   );
   assert.equal(aliceArchive.status, 200);
@@ -129,7 +129,7 @@ test("list, rename, archive, disable, enable, run, delete are owner-gated", asyn
   assert.equal(list.crons[0]?.archived, true);
   assert.equal(list.crons[0]?.enabled, false);
 
-  const aliceDelete = await fetch(`${webBase}/api/crons/${id}`, asUser("alice", { method: "DELETE" }));
+  const aliceDelete = await fetch(`${coreBase}/api/crons/${id}`, asUser("alice", { method: "DELETE" }));
   assert.equal(aliceDelete.status, 200);
   list = (await (await fetch(`${webBase}/api/crons`, asUser("alice"))).json()) as {
     crons: Array<{ enabled: boolean; archived?: boolean; title?: string }>;
@@ -224,10 +224,10 @@ test("list splits owned crons from ones visible through shared scopes, and visib
     fetch(`${coreBase}/api/crons/${publicCron.id}/disable`, asUser("alice", { method: "POST" })),
     fetch(`${coreBase}/api/crons/${publicCron.id}/run`, asUser("alice", { method: "POST" })),
     fetch(
-      `${webBase}/api/crons/${publicCron.id}`,
+      `${coreBase}/api/crons/${publicCron.id}`,
       asUser("alice", { method: "PATCH", body: JSON.stringify({ archived: true }) }),
     ),
-    fetch(`${webBase}/api/crons/${publicCron.id}`, asUser("alice", { method: "DELETE" })),
+    fetch(`${coreBase}/api/crons/${publicCron.id}`, asUser("alice", { method: "DELETE" })),
   ]) {
     assert.equal((await attempt).status, 404);
   }
@@ -264,7 +264,7 @@ test("a channel member sees a teammate's cron read-only via the web until the ow
   assert.equal(await aliceView(), "read");
   const denied = await fetch(`${coreBase}/api/crons/${privCron.id}/disable`, asUser("alice", { method: "POST" }));
   assert.equal(denied.status, 404, "a member can't change someone else's cron");
-  const carolPriv = await fetch(`${webBase}/api/crons/${privCron.id}`, asUser("carol", { method: "DELETE" }));
+  const carolPriv = await fetch(`${coreBase}/api/crons/${privCron.id}`, asUser("carol", { method: "DELETE" }));
   assert.equal(carolPriv.status, 404, "a non-member is denied");
 
   await built.app.grant({
@@ -294,7 +294,7 @@ test("cron runtime patches pass through the web API, validate, and clear", async
   const runtime = { modelId: "claude-sonnet-5" };
   const patch = (value: unknown) =>
     fetch(
-      `${webBase}/api/crons/${cron.id}`,
+      `${coreBase}/api/crons/${cron.id}`,
       asUser("alice", { method: "PATCH", body: JSON.stringify({ runtime: value }) }),
     );
   const selected = await patch(runtime);
@@ -304,4 +304,52 @@ test("cron runtime patches pass through the web API, validate, and clear", async
   assert.equal((await patch({ ...runtime, modelId: "does-not-exist" })).status, 400);
   assert.equal((await patch(null)).status, 200);
   assert.equal((await built.app.getCron(cron.id))?.runtime, null);
+});
+
+test("a browser cron edit accepts only the fields the web app edits", async () => {
+  const cron = await built.app.createCron({
+    title: "fields",
+    action: "check",
+    schedule: { everyMs: 60_000 },
+    owner: "alice",
+    createdBy: "alice",
+    ownerScopeId: "personal:alice",
+    destination: { type: "principal", target: "alice", audienceScopeId: "personal:alice" },
+  } as never);
+  const patch = (body: unknown) =>
+    fetch(`${coreBase}/api/crons/${cron.id}`, asUser("alice", { method: "PATCH", body: JSON.stringify(body) }));
+  for (const body of [
+    { unfurlLinks: false },
+    { unattendedGrants: ["admin.spend.read"] },
+    { session: false },
+    { action: "renamed task" },
+    { title: "ok", note: "extra" },
+    { task: "   " },
+    {},
+  ]) {
+    const refused = await patch(body);
+    assert.equal(refused.status, 400, JSON.stringify(body));
+    assert.match(((await refused.json()) as { message: string }).message, /^expected a cron patch: title/);
+  }
+  const after = (await built.app.getCron(cron.id))!;
+  assert.deepEqual(
+    [after.action, after.destination?.unfurlLinks, after.unattendedGrants],
+    ["check", undefined, undefined],
+  );
+  const edited = await patch({ title: "renamed", task: "check twice", enabled: false });
+  assert.equal(edited.status, 200);
+  assert.deepEqual(((await edited.json()) as CronBody).cron.enabled, false);
+  const privileged = await built.app.createCron({
+    title: "privileged",
+    action: "report spend",
+    schedule: { everyMs: 60_000 },
+    owner: "alice",
+    createdBy: "alice",
+    ownerScopeId: "personal:alice",
+  });
+  await built.app.updateCron(privileged.id, { enabled: false, unattendedGrants: ["admin.spend.read"] });
+  const enable = await fetch(`${coreBase}/api/crons/${privileged.id}/enable`, asUser("alice", { method: "POST" }));
+  assert.equal(enable.status, 403);
+  assert.equal((await built.app.getCron(privileged.id))!.enabled, false);
+  for (const id of [cron.id, privileged.id]) await built.app.deleteCron(id);
 });

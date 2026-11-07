@@ -85,6 +85,17 @@ export const API_ALIASES: ReadonlyMap<string, string> = new Map([
   ["PATCH /api/runs/:id/input", "/v1/runs/:id/input"],
   ["POST /api/crons/:id/disable", "/v1/crons/:id/disable"],
   ["POST /api/crons/:id/run", "/v1/crons/:id/run"],
+  ["POST /api/crons/:id/enable", "/v1/crons/:id/enable"],
+  ["PATCH /api/crons/:id", "/v1/crons/:id"],
+  ["DELETE /api/crons/:id", "/v1/crons/:id"],
+  ["GET /api/sessions/:id/swarm", "/v1/sessions/:id/swarm"],
+  ["POST /api/sessions/:id/swarm", "/v1/sessions/:id/swarm"],
+  ["GET /api/runtime-config", "/v1/runtime-config"],
+  ["PUT /api/runtime-config", "/v1/runtime-config"],
+  ["GET /api/channel-header-pin", "/v1/channel-header-pin"],
+  ["PUT /api/channel-header-pin", "/v1/channel-header-pin"],
+  ["POST /api/personas/:id/credentials", "/v1/personas/:id/credentials"],
+  ["DELETE /api/personas/:id/credentials/:grantId", "/v1/personas/:id/credentials/:grantId"],
 ]);
 
 const aliasMatchers = [...API_ALIASES].map(([key, target]) => {

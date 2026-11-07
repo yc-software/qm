@@ -1118,12 +1118,6 @@ interface WebCtx {
   params: Record<string, string>;
 }
 
-async function relayWithPrincipal(c: WebCtx, method: HttpMethod, path: string): Promise<void> {
-  const body = await readJson<Record<string, unknown>>(c.req, c.res);
-  if (!body) return;
-  return relayCore(c.res, method, path, JSON.stringify({ ...body, principalId: c.user }));
-}
-
 type WebRoute = { handle: (c: WebCtx) => unknown } & (
   { method: string; path: string } | { match: (method: string, pathname: string) => boolean }
 );
@@ -1457,22 +1451,6 @@ const apiRoutes: readonly WebRoute[] = [
     },
   },
   {
-    method: "POST",
-    path: "/api/personas/:id/credentials",
-    handle: (c) => relayWithPrincipal(c, "POST", `/v1/personas/${encodeURIComponent(c.params.id!)}/credentials`),
-  },
-  {
-    method: "DELETE",
-    path: "/api/personas/:id/credentials/:grantId",
-    handle: (c) =>
-      relayCore(
-        c.res,
-        "DELETE",
-        `/v1/personas/${encodeURIComponent(c.params.id!)}/credentials/${encodeURIComponent(c.params.grantId!)}`,
-        JSON.stringify({ principalId: c.user }),
-      ),
-  },
-  {
     method: "GET",
     path: "/api/directory/resolve",
     handle: async (c) => {
@@ -1626,64 +1604,6 @@ const apiRoutes: readonly WebRoute[] = [
       );
     },
   })),
-  {
-    method: "GET",
-    path: "/api/runtime-config",
-    handle: async (c) => {
-      const { res, url, user } = c;
-      const scopeId = url.searchParams.get("scopeId") || `personal:${user}`;
-      const qs = new URLSearchParams({ principalId: user, scopeId });
-      if (url.searchParams.get("account") === "company") qs.set("account", "company");
-      return relayCore(res, "GET", `/v1/runtime-config?${qs.toString()}`);
-    },
-  },
-  {
-    method: "PUT",
-    path: "/api/runtime-config",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      const body = await readJson<Record<string, unknown>>(req, res);
-      if (!body) return;
-      const scopeId = typeof body.scopeId === "string" && body.scopeId ? body.scopeId : `personal:${user}`;
-      return relayCore(res, "PUT", "/v1/runtime-config", JSON.stringify({ ...body, principalId: user, scopeId }));
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/channel-header-pin",
-    handle: async (c) => {
-      const { res, url, user } = c;
-      const scopeId = url.searchParams.get("scopeId") || `personal:${user}`;
-      const qs = new URLSearchParams({ principalId: user, scopeId });
-      return relayCore(res, "GET", `/v1/channel-header-pin?${qs.toString()}`);
-    },
-  },
-  {
-    method: "PUT",
-    path: "/api/channel-header-pin",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      const body = await readJson<Record<string, unknown>>(req, res);
-      if (!body) return;
-      const scopeId = typeof body.scopeId === "string" && body.scopeId ? body.scopeId : `personal:${user}`;
-      return relayCore(res, "PUT", "/v1/channel-header-pin", JSON.stringify({ ...body, principalId: user, scopeId }));
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/sessions/:id/swarm",
-    handle: async (c) => relayCore(c.res, "GET", `/v1/sessions/${encodeURIComponent(c.params.id!)}/swarm`),
-  },
-  {
-    method: "POST",
-    path: "/api/sessions/:id/swarm",
-    handle: async (c) => {
-      const body = await readJson<{ action?: unknown }>(c.req, c.res, false);
-      if (!body) return;
-      if (body.action !== "control") return json(c.res, 400, { error: "only swarm controls are available here" });
-      return relayCore(c.res, "POST", `/v1/sessions/${encodeURIComponent(c.params.id!)}/swarm`, JSON.stringify(body));
-    },
-  },
   {
     method: "GET",
     path: "/api/files/:id/content",
@@ -2561,92 +2481,6 @@ const apiRoutes: readonly WebRoute[] = [
         void 0;
       }
       return json(res, 200, { crons, visible });
-    },
-  },
-  {
-    method: "PATCH",
-    path: "/api/crons/:id",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      const id = c.params.id!;
-      let patch: {
-        title?: string;
-        task?: string;
-        schedule?: unknown;
-        enabled?: boolean;
-        archived?: boolean;
-        runtime?: unknown;
-      } = {};
-      try {
-        const p = JSON.parse(await readBody(req)) as {
-          title?: unknown;
-          task?: unknown;
-          schedule?: unknown;
-          enabled?: unknown;
-          archived?: unknown;
-          runtime?: unknown;
-        };
-        if ("runtime" in p) patch = { ...patch, runtime: p.runtime };
-        if ("title" in p) {
-          if (typeof p.title !== "string")
-            return json(res, 400, { error: "bad_request", message: "title must be a string" });
-          patch = { ...patch, title: p.title.trim() };
-        }
-        if ("task" in p) {
-          if (typeof p.task !== "string" || !p.task.trim())
-            return json(res, 400, { error: "bad_request", message: "task must be a non-empty string" });
-          patch = { ...patch, task: p.task.trim() };
-        }
-        if ("schedule" in p) patch = { ...patch, schedule: p.schedule };
-        if ("enabled" in p) {
-          if (typeof p.enabled !== "boolean")
-            return json(res, 400, { error: "bad_request", message: "enabled must be a boolean" });
-          patch = { ...patch, enabled: p.enabled };
-        }
-        if ("archived" in p) {
-          if (typeof p.archived !== "boolean")
-            return json(res, 400, { error: "bad_request", message: "archived must be a boolean" });
-          patch = { ...patch, archived: p.archived };
-        }
-      } catch (e) {
-        if (e instanceof PayloadTooLargeError) throw e;
-        return json(res, 400, { error: "bad_request", message: "expected JSON body" });
-      }
-      if (Object.keys(patch).length === 0)
-        return json(res, 400, {
-          error: "bad_request",
-          message: "expected title, task, schedule, enabled, archived, or runtime",
-        });
-      if (patch.archived === true) patch = { ...patch, enabled: false };
-      return relayCore(
-        res,
-        "PATCH",
-        `/v1/crons/${encodeURIComponent(id)}?principalId=${encodeURIComponent(user)}`,
-        JSON.stringify(patch),
-      );
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/crons/:id/enable",
-    handle: async (c) => {
-      const { res, user } = c;
-      const id = c.params.id!;
-      return relayCore(
-        res,
-        "PATCH",
-        `/v1/crons/${encodeURIComponent(id)}?principalId=${encodeURIComponent(user)}`,
-        JSON.stringify({ enabled: true, archived: false }),
-      );
-    },
-  },
-  {
-    method: "DELETE",
-    path: "/api/crons/:id",
-    handle: async (c) => {
-      const { res, user } = c;
-      const id = c.params.id!;
-      return relayCore(res, "DELETE", `/v1/crons/${encodeURIComponent(id)}?principalId=${encodeURIComponent(user)}`);
     },
   },
 ];

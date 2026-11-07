@@ -56,7 +56,7 @@ test.after(() => {
 
 test("a body that parses to a JSON primitive answers 400 — it never hangs the request", async () => {
   for (const raw of ["null", "false", "0", '""', "42"]) {
-    const r = await fetch(`${base}/api/runtime-config`, { method: "PUT", headers, body: raw });
+    const r = await fetch(`${base}/api/connectors/x/start`, { method: "POST", headers, body: raw });
     assert.equal(r.status, 400, `body ${raw} must answer, not hang`);
     assert.equal(((await r.json()) as { error?: string }).error, "bad_request");
   }
