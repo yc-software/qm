@@ -4,11 +4,7 @@ import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { releaseFiles } from "./release-fixture.ts";
 
-const core = createServer((req: IncomingMessage, res) => {
-  if ((req.url ?? "").startsWith("/v1/files/") && (req.url ?? "").includes("/content")) {
-    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-    return void res.end("<p>hi</p>");
-  }
+const core = createServer((_req: IncomingMessage, res) => {
   res.writeHead(404, { "content-type": "application/json" });
   res.end(JSON.stringify({ error: "not_found" }));
 });
@@ -28,13 +24,6 @@ const base = `http://localhost:${(surface.address() as AddressInfo).port}`;
 test.after(() => {
   surface.close();
   core.close();
-});
-
-test("with a deploy apps domain, file frames also name it: the app shell's chat panel is an ancestor", async () => {
-  const r = await fetch(`${base}/api/files/some-file/content`, { headers: { cookie: "webuiuser=alice" } });
-  assert.equal(r.status, 200);
-  assert.match(r.headers.get("content-security-policy") ?? "", /frame-ancestors 'self' \*\.apps\.test/);
-  assert.equal(r.headers.get("x-frame-options"), null);
 });
 
 test("the app-edit page states frame-ancestors of its own, which is what sheds the portal's blanket DENY", async () => {

@@ -193,25 +193,7 @@ function withSecurityHeaders(headers: Record<string, string>): Record<string, st
   };
 }
 
-const PLAYGROUND_CSP = [
-  "sandbox allow-scripts allow-pointer-lock",
-  "default-src 'none'",
-  "script-src 'unsafe-inline'",
-  "style-src 'unsafe-inline'",
-  "img-src data: blob:",
-  "media-src data: blob:",
-  "font-src data:",
-  "connect-src 'none'",
-  "worker-src blob:",
-  "base-uri 'none'",
-  "form-action 'none'",
-].join("; ");
-
-const UNTRUSTED_CONTENT_SANDBOX_CSP = "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads";
 const APPS_FRAME_DOMAIN = (process.env.DEPLOY_APPS_DOMAIN ?? "").toLowerCase();
-const FILE_FRAME_ANCESTORS = APPS_FRAME_DOMAIN
-  ? `frame-ancestors 'self' *.${APPS_FRAME_DOMAIN}`
-  : "frame-ancestors 'self'";
 
 function framedByOwnSurfaces(
   res: ServerResponse,
@@ -1090,18 +1072,6 @@ type WebRoute = { handle: (c: WebCtx) => unknown } & (
   { method: string; path: string } | { match: (method: string, pathname: string) => boolean }
 );
 
-function scriptCapableContentType(contentType: string): boolean {
-  const mime = (contentType.split(";")[0] ?? "").trim().toLowerCase();
-  return (
-    mime === "text/html" ||
-    mime === "application/xhtml+xml" ||
-    mime === "image/svg+xml" ||
-    mime === "text/xml" ||
-    mime === "application/xml" ||
-    mime.endsWith("+xml")
-  );
-}
-
 async function serveInboxItemImage(c: WebCtx): Promise<unknown> {
   const { res, url } = c;
   const qs = new URLSearchParams({ principalId: c.user });
@@ -1134,98 +1104,7 @@ async function serveInboxItemImage(c: WebCtx): Promise<unknown> {
   return res.end(Buffer.from(await r.arrayBuffer()));
 }
 
-async function serveFileContent(c: WebCtx, playground = false): Promise<unknown> {
-  const { res, user, url } = c;
-  const id = c.params.id!;
-  const corePath = withSourceAuthNonce(
-    `/v1/files/${encodeURIComponent(id)}/content?viewer=${encodeURIComponent(user)}`,
-    CORE_SIGNING_SECRET,
-  );
-  const portalTok = portalTokenStore.getStore();
-  const r = await fetch(`${CORE}${corePath}`, {
-    headers: {
-      ...signedHeaders(CORE_SIGNING_SECRET, "GET", corePath, ""),
-      ...(portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : {}),
-    },
-    redirect: "manual",
-  });
-  if (!r.ok || !r.body) {
-    res.writeHead(r.status === 404 ? 404 : 502, { "content-type": "application/json" });
-    return res.end(JSON.stringify({ error: r.status === 404 ? "not_found" : "upstream_error" }));
-  }
-  const contentType = r.headers.get("content-type") ?? "application/octet-stream";
-  if (playground && !contentType.toLowerCase().startsWith("text/html")) {
-    res.writeHead(415, { "content-type": "application/json" });
-    return res.end(JSON.stringify({ error: "not_a_playground" }));
-  }
-  if (playground) {
-    res.writeHead(200, {
-      "content-type": url.searchParams.get("source") === "1" ? "text/plain; charset=utf-8" : contentType,
-      "content-security-policy": PLAYGROUND_CSP,
-      "referrer-policy": "no-referrer",
-      "x-frame-options": "SAMEORIGIN",
-      "x-content-type-options": "nosniff",
-    });
-    return relayStream(r.body, res, { onError: fileStreamEnded(id) });
-  }
-
-  const csp = scriptCapableContentType(contentType)
-    ? `${UNTRUSTED_CONTENT_SANDBOX_CSP}; ${FILE_FRAME_ANCESTORS}`
-    : FILE_FRAME_ANCESTORS;
-  const headers = {
-    "content-type": contentType,
-    ...(r.headers.get("content-length") ? { "content-length": r.headers.get("content-length")! } : {}),
-    ...(r.headers.get("content-disposition") ? { "content-disposition": r.headers.get("content-disposition")! } : {}),
-    "x-content-type-options": "nosniff",
-  };
-  res.writeHead(200, framedByOwnSurfaces(res, headers, csp));
-  return relayStream(r.body, res, { onError: fileStreamEnded(id) });
-}
-
-const fileStreamEnded = (id: string) => (error: Error) =>
-  console.warn(`[web-ui] file ${id} stream ended early: ${errChain(error)}`);
-
 const apiRoutes: readonly WebRoute[] = [
-  {
-    method: "GET",
-    path: "/api/files/by-name/content",
-    handle: async (c) => {
-      const { res, url, user } = c;
-      const name = url.searchParams.get("name")?.trim();
-      if (!name) return json(res, 400, { error: "bad_request", message: "name required" });
-      let cursor: string | undefined;
-      let match: { id: string; createdAt: number } | undefined;
-      for (let page = 0; page < 50; page++) {
-        const qs = new URLSearchParams({ viewer: user, limit: "200" });
-        if (cursor) qs.set("cursor", cursor);
-        const listed = await coreFetch("GET", `/v1/files?${qs.toString()}`);
-        if (listed.status !== 200) return relay(res, listed);
-        let body: {
-          owned?: Array<{ id?: string; name?: string; createdAt?: number; openable?: boolean }>;
-          shared?: Array<{ id?: string; name?: string; createdAt?: number; openable?: boolean }>;
-          nextCursor?: string;
-        };
-        try {
-          body = JSON.parse(listed.text) as typeof body;
-        } catch {
-          return json(res, 502, { error: "upstream_error" });
-        }
-        for (const file of [...(body.owned ?? []), ...(body.shared ?? [])]) {
-          if (file.name !== name || file.openable === false || typeof file.id !== "string") continue;
-          const createdAt = typeof file.createdAt === "number" ? file.createdAt : 0;
-          if (!match || createdAt > match.createdAt) match = { id: file.id, createdAt };
-        }
-        cursor = body.nextCursor;
-        if (!cursor) break;
-      }
-      if (!match) return json(res, 404, { error: "not_found" });
-      res.writeHead(302, { location: `/api/files/${encodeURIComponent(match.id)}/content` });
-      return res.end();
-    },
-  },
-
-  { method: "GET", path: "/api/playgrounds/:id", handle: (c) => serveFileContent(c, true) },
-
   {
     method: "GET",
     path: "/api/composio/callback",
@@ -1572,16 +1451,6 @@ const apiRoutes: readonly WebRoute[] = [
       );
     },
   })),
-  {
-    method: "GET",
-    path: "/api/files/:id/content",
-    handle: serveFileContent,
-  },
-  {
-    method: "GET",
-    path: "/api/files/:id/content/:name",
-    handle: serveFileContent,
-  },
   {
     method: "POST",
     path: "/api/connectors/:provider/start",

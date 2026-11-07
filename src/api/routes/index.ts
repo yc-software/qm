@@ -24,6 +24,7 @@ import { spendExport } from "./admin/spend.ts";
 import { skillPackRoutes } from "./skill-packs.ts";
 import { fileUploadRoutes } from "./file-uploads.ts";
 import { surfaceRoutes } from "./surface.ts";
+import { fileContentRoutes } from "./file-content.ts";
 import { cronRoutes } from "./crons.ts";
 import { loopRoutes } from "./loops.ts";
 import { reachRoutes } from "./reach.ts";
@@ -111,6 +112,7 @@ export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...composioProxyRoutes,
   ...adminRoutes,
   ...skillPackRoutes,
+  ...fileContentRoutes,
   ...surfaceRoutes,
   ...fileUploadRoutes,
   ...projectRoutes,

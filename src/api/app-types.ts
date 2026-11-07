@@ -757,7 +757,7 @@ export interface FileListPage {
   nextCursor?: string;
 }
 
-interface OpenedFile {
+export interface OpenedFile {
   name: string;
   mimetype: string;
   sizeBytes: number;
