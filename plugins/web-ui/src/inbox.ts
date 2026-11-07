@@ -556,7 +556,8 @@ export async function refreshInbox(
     const next = [...combined.values()];
     const openId = fullSurface?.selectedId;
     const detail = openId ? inboxState.items.find((item) => item.id === openId && item.detailLoaded) : undefined;
-    inboxState.items = next;
+    const current = new Map(inboxState.items.map((item) => [item.id, item]));
+    inboxState.items = next.map((item) => newerItem(current.get(item.id), item));
     if (detail && inboxState.selected.some((loop) => loop.id === detail.loopId)) {
       upsertItem(detail);
       void loadDetail(detail.id, detail.loopId);
@@ -650,8 +651,8 @@ async function decideReview(
   output: ReviewOutput,
   decision: "ship" | "return",
   note = "",
-): Promise<boolean> {
-  if (acting.has(item.id)) return false;
+): Promise<true | string> {
+  if (acting.has(item.id)) return "Another action on this item is still running.";
   acting.add(item.id);
   drawAll();
   try {
@@ -665,8 +666,9 @@ async function decideReview(
     await refreshInbox({ silent: true });
     return true;
   } catch (error) {
-    notify(error instanceof Error ? error.message : "Could not confirm action");
-    return false;
+    const message = error instanceof Error ? error.message : "Could not confirm action";
+    notify(message);
+    return message;
   } finally {
     acting.delete(item.id);
     drawAll();
@@ -853,8 +855,16 @@ async function continueSentReply(item: InboxItem): Promise<void> {
   }
 }
 
+// Responses can land out of order; never let an older copy of an item replace a newer one.
+function newerItem(current: InboxItem | undefined, incoming: InboxItem): InboxItem {
+  if (!current) return incoming;
+  if (current.draftAt !== undefined && incoming.draftAt !== undefined && current.draftAt !== incoming.draftAt)
+    return incoming.draftAt < current.draftAt ? current : incoming;
+  return incoming.updatedAt < current.updatedAt ? current : incoming;
+}
+
 function replaceItem(next: InboxItem): void {
-  inboxState.items = inboxState.items.map((i) => (i.id === next.id ? next : i));
+  inboxState.items = inboxState.items.map((i) => (i.id === next.id ? newerItem(i, next) : i));
 }
 
 function notify(msg: string | null): void {
@@ -1038,9 +1048,10 @@ export async function askAgent(
   message: string,
   options?: ComposerSubmission,
   snapshot = { draft: effectiveDraft(item), conflictRevision: draftConflicts.get(item.id) ?? 0 },
-): Promise<boolean> {
+): Promise<true | string> {
   const text = message.trim();
-  if ((!text && !options?.attachments?.length) || chatting.has(item.id)) return false;
+  if (!text && !options?.attachments?.length) return "Write a message first.";
+  if (chatting.has(item.id)) return "The agent is still working on your last message.";
   const ready = item.outputs?.find((output) => output.state === "ready");
   if (ready && text && !options?.attachments?.length) return decideReview(item, ready, "return", text);
   const { draft, conflictRevision } = snapshot;
@@ -1070,8 +1081,9 @@ export async function askAgent(
     return true;
   } catch (e) {
     if (isDraftConflict(e)) await refetchItem(item);
-    notify(`The agent couldn't answer: ${e instanceof Error ? e.message : e}`);
-    return false;
+    const reason = `The agent couldn't answer: ${e instanceof Error ? e.message : e}`;
+    notify(reason);
+    return reason;
   } finally {
     chatting.delete(item.id);
     drawAll();
@@ -1340,8 +1352,8 @@ export function chatTpl(item: InboxItem, compact = false): TemplateResult {
             conflictRevision: draftConflicts.get(item.id) ?? 0,
           };
           return async (text, options) => {
-            if (!(await askAgent(item, text, options, snapshot)))
-              throw new Error("Could not complete the request. Your message has been kept.");
+            const result = await askAgent(item, text, options, snapshot);
+            if (result !== true) throw new Error(`${result} Your message has been kept.`);
           };
         },
       },
