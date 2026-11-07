@@ -68,5 +68,14 @@ for (let pass = 0; pending.length && pass < 6; pass++) {
 
 await client.query("COMMIT");
 await client.end();
-console.log(`[upgrade-check] seeded ${seeded.length} of ${tables.size} tables`);
+const preexisting = tables.size - seeded.length - failures.size;
+console.log(
+  `[upgrade-check] ${tables.size} tables: ${seeded.length} seeded, ${preexisting} already had rows, ${failures.size} left empty`,
+);
+for (const schema of new Set([...tables.keys()].map((table) => table.split(".")[0]))) {
+  const inSchema = (list) => list.filter((table) => table.startsWith(`${schema}.`)).length;
+  console.log(
+    `[upgrade-check] ${schema}: ${inSchema([...tables.keys()])} tables, ${inSchema(seeded)} seeded, ${inSchema([...failures.keys()])} left empty`,
+  );
+}
 for (const [table, reason] of failures) console.log(`[upgrade-check] left ${table} empty: ${reason}`);
