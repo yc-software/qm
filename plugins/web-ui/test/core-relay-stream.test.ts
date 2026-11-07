@@ -10,6 +10,10 @@ let releaseTail: (() => void) | undefined;
 let heldClosed: (() => void) | undefined;
 const seen: { method?: string; acceptEncoding?: string; body: string }[] = [];
 const core = createServer((req, res) => {
+  if (req.url?.startsWith("/v1/inbox/access")) {
+    res.writeHead(200, { "content-type": "application/json" });
+    return void res.end(JSON.stringify({ enabled: true }));
+  }
   let body = "";
   req.on("data", (c: Buffer) => (body += c));
   req.on("end", () => {
@@ -24,6 +28,7 @@ await once(core, "listening");
 process.env.CORE_API_URL = `http://127.0.0.1:${(core.address() as AddressInfo).port}`;
 process.env.CORE_SIGNING_SECRET = secret;
 process.env.WEB_UI_PRINCIPALS = "alice";
+process.env.LOOPS_USERS = "alice";
 const { handler } = await import("../server/index.ts");
 const web = createServer((req, res) => void handler(req, res)).listen(0, "127.0.0.1");
 await once(web, "listening");
@@ -53,7 +58,7 @@ async function collect(res: IncomingMessage): Promise<Buffer> {
 }
 
 test("a relayed core read streams the first core bytes before core finishes the body", { timeout: 5_000 }, async () => {
-  const res = await get("/api/composio/slack", {});
+  const res = await get("/api/loops", {});
   assert.equal(res.statusCode, 200);
   assert.equal(res.headers["content-type"], "application/json");
   assert.equal(seen.at(-1)?.acceptEncoding, "identity");
@@ -66,7 +71,7 @@ test("a relayed core read streams the first core bytes before core finishes the 
 
 test("a browser that leaves mid-body closes the core response too", { timeout: 5_000 }, async () => {
   const closed = new Promise<void>((resolve) => (heldClosed = resolve));
-  const res = await get("/api/composio/slack", {});
+  const res = await get("/api/loops", {});
   await once(res, "data");
   res.destroy();
   await Promise.race([

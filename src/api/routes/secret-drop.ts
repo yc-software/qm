@@ -12,7 +12,7 @@ import { samePerson } from "../../directory/person.ts";
 import { escapeHtml } from "../../../plugins/chassis/src/http.ts";
 import { sendJson } from "../http.ts";
 import type { ApiCtx, Route } from "./route.ts";
-import { audit, resolveCapabilityDestination, verifiedConversationSpeaker } from "./shared.ts";
+import { audit, personalCapability, resolveCapabilityDestination, verifiedConversationSpeaker } from "./shared.ts";
 import { reportFailureAs, swallow } from "../../util/errors.ts";
 
 const TRIGGERED = "secret-drop links can only be minted on a turn a person sent — this turn was fired by a trigger";
@@ -170,7 +170,8 @@ ${inputs}
 }
 
 async function mintDrop(ctx: ApiCtx): Promise<void> {
-  const { res, deps, body, capability, secret } = ctx;
+  const { res, deps, body, secret } = ctx;
+  const capability = personalCapability(ctx);
   if (!deps.keychain || !deps.secretDrops) return sendJson(res, 404, { error: "not_found" });
   if (!capability)
     return sendJson(res, 401, {
@@ -391,7 +392,7 @@ async function redeemDrop(ctx: ApiCtx): Promise<void> {
 }
 
 export const secretDropRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "POST", path: "/v1/keychain/drops", actor: "system", auth: "either", handle: mintDrop },
+  { method: "POST", path: "/v1/keychain/drops", browser: true, actor: "person", auth: "either", handle: mintDrop },
   { method: "GET", path: "/v1/keychain/drops/:id/form", auth: "source", handle: dropForm },
   { method: "POST", path: "/v1/keychain/drops/:id", actor: "system", auth: "source", handle: redeemDrop },
 ];

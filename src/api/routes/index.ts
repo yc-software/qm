@@ -2,6 +2,7 @@ import { browserModelRoutes } from "./browser-model.ts";
 import { sandboxModelRoutes } from "./sandbox-model.ts";
 import { deploymentLiveSmokeRoutes } from "./deployment-live-smoke.ts";
 import { composioRoutes } from "./composio.ts";
+import { composioAuthorizeRoutes } from "./composio-authorize.ts";
 import { composioCallbackRoutes } from "./composio-callback.ts";
 import { composioTwitterMediaRoutes } from "./composio-twitter-media.ts";
 import { composioProxyRoutes } from "./composio-proxy.ts";
@@ -10,6 +11,7 @@ import { sendJson } from "../http.ts";
 import { type ApiCtx, type BaseCtx, type Route } from "./route.ts";
 import { connectorRawRoutes, connectorRoutes } from "./connectors.ts";
 import { deploymentRawRoutes, deploymentRoutes } from "./deployments.ts";
+import { deploymentSharingRoutes } from "./deployment-sharing.ts";
 import { blobRoutes } from "./blobs.ts";
 import { webhookRawRoutes, webhookRoutes } from "./webhooks.ts";
 import { runEventRoutes } from "./run-events.ts";
@@ -113,6 +115,7 @@ export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...secretDropRoutes,
   ...connectorRoutes,
   ...composioRoutes,
+  ...composioAuthorizeRoutes,
   ...composioCallbackRoutes,
   ...composioTwitterMediaRoutes,
   ...composioProxyRoutes,
@@ -138,6 +141,7 @@ export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...emojiRoutes,
   ...inboxRoutes,
   ...deploymentRoutes,
+  ...deploymentSharingRoutes,
   ...egressAuditRoutes,
   ...authBrokerRoutes,
   ...userModelAuthRoutes,

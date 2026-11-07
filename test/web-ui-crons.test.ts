@@ -1,4 +1,3 @@
-import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../plugins/chassis/src/portal-identity.ts";
 import "./support/auto-fake-sprites.ts";
 
 import { test, after } from "node:test";
@@ -6,7 +5,6 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createServer as createHttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
@@ -25,19 +23,9 @@ const core = createServer(built.app, {
   scheduler: built.scheduler,
 });
 core.listen(0);
-const corePort = (core.address() as AddressInfo).port;
-const coreBase = `http://localhost:${corePort}`;
-
-process.env.CORE_API_URL = `http://localhost:${corePort}`;
-process.env.CORE_SIGNING_SECRET = SECRET;
-process.env.WEB_UI_PRINCIPALS = "";
-const { handler } = await import("../plugins/web-ui/server/index.ts");
-const web = createHttpServer(handler);
-web.listen(0);
-const webBase = `http://localhost:${(web.address() as AddressInfo).port}`;
+const coreBase = `http://localhost:${(core.address() as AddressInfo).port}`;
 
 after(async () => {
-  await new Promise<void>((r) => web.close(() => r()));
   await new Promise<void>((r) => core.close(() => r()));
 });
 
@@ -46,9 +34,8 @@ function asUser(user: string, init: RequestInit = {}): RequestInit {
     ...init,
     headers: {
       "content-type": "application/json",
-      cookie: `webuiuser=${encodeURIComponent(user)}; ${browserSessionCookie(user)}`,
+      cookie: browserSessionCookie(user),
       origin: browserSessionDeps.portalUrl,
-      [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: user, exp: Date.now() + 60_000 }, SECRET),
       ...init.headers,
     },
   };
@@ -69,13 +56,13 @@ test("list, rename, archive, disable, enable, run, delete are owner-gated", asyn
   });
   const id = created.id;
 
-  const aliceList = (await (await fetch(`${webBase}/api/crons`, asUser("alice"))).json()) as {
+  const aliceList = (await (await fetch(`${coreBase}/api/crons`, asUser("alice"))).json()) as {
     crons: Array<{ id: string }>;
   };
   assert.equal(aliceList.crons.length, 1);
   assert.equal(aliceList.crons[0]?.id, id);
 
-  const bobList = (await (await fetch(`${webBase}/api/crons`, asUser("bob"))).json()) as { crons: unknown[] };
+  const bobList = (await (await fetch(`${coreBase}/api/crons`, asUser("bob"))).json()) as { crons: unknown[] };
   assert.equal(bobList.crons.length, 0);
   for (const attempt of [
     fetch(`${coreBase}/api/crons/${id}/disable`, asUser("bob", { method: "POST" })),
@@ -99,7 +86,7 @@ test("list, rename, archive, disable, enable, run, delete are owner-gated", asyn
 
   const aliceDisable = await fetch(`${coreBase}/api/crons/${id}/disable`, asUser("alice", { method: "POST" }));
   assert.equal(aliceDisable.status, 200);
-  let list = (await (await fetch(`${webBase}/api/crons`, asUser("alice"))).json()) as {
+  let list = (await (await fetch(`${coreBase}/api/crons`, asUser("alice"))).json()) as {
     crons: Array<{ enabled: boolean; archived?: boolean; title?: string }>;
   };
   assert.equal(list.crons[0]?.enabled, false);
@@ -107,7 +94,7 @@ test("list, rename, archive, disable, enable, run, delete are owner-gated", asyn
 
   const aliceEnable = await fetch(`${coreBase}/api/crons/${id}/enable`, asUser("alice", { method: "POST" }));
   assert.equal(aliceEnable.status, 200);
-  list = (await (await fetch(`${webBase}/api/crons`, asUser("alice"))).json()) as {
+  list = (await (await fetch(`${coreBase}/api/crons`, asUser("alice"))).json()) as {
     crons: Array<{ enabled: boolean; archived?: boolean; title?: string }>;
   };
   assert.equal(list.crons[0]?.enabled, true);
@@ -123,7 +110,7 @@ test("list, rename, archive, disable, enable, run, delete are owner-gated", asyn
   const archived = (await aliceArchive.json()) as CronBody;
   assert.equal(archived.cron.archived, true);
   assert.equal(archived.cron.enabled, false);
-  list = (await (await fetch(`${webBase}/api/crons`, asUser("alice"))).json()) as {
+  list = (await (await fetch(`${coreBase}/api/crons`, asUser("alice"))).json()) as {
     crons: Array<{ enabled: boolean; archived?: boolean; title?: string }>;
   };
   assert.equal(list.crons[0]?.archived, true);
@@ -131,14 +118,14 @@ test("list, rename, archive, disable, enable, run, delete are owner-gated", asyn
 
   const aliceDelete = await fetch(`${coreBase}/api/crons/${id}`, asUser("alice", { method: "DELETE" }));
   assert.equal(aliceDelete.status, 200);
-  list = (await (await fetch(`${webBase}/api/crons`, asUser("alice"))).json()) as {
+  list = (await (await fetch(`${coreBase}/api/crons`, asUser("alice"))).json()) as {
     crons: Array<{ enabled: boolean; archived?: boolean; title?: string }>;
   };
   assert.equal(list.crons.length, 0);
 });
 
 test("cron routes require a signed-in principal (401 without a cookie)", async () => {
-  assert.equal((await fetch(`${webBase}/api/crons`)).status, 401);
+  assert.equal((await fetch(`${coreBase}/api/crons`)).status, 401);
 });
 
 test("retained cron runs are private to people who can manage the cron", async () => {
@@ -199,7 +186,7 @@ test("list splits owned crons from ones visible through shared scopes, and visib
   const dmCron = await mk({ destination: { type: "principal", target: "alice", audienceScopeId: "personal:alice" } });
   const personalCron = await mk({});
 
-  const aliceList = (await (await fetch(`${webBase}/api/crons`, asUser("alice"))).json()) as {
+  const aliceList = (await (await fetch(`${coreBase}/api/crons`, asUser("alice"))).json()) as {
     crons: Array<{ id: string; permission?: string }>;
     visible: Array<{ id: string; owner: string; scopeName?: string; permission?: string }>;
   };
@@ -212,7 +199,7 @@ test("list splits owned crons from ones visible through shared scopes, and visib
   assert.equal(aliceList.visible.find((c) => c.id === publicCron.id)?.scopeName, "general");
   assert.equal(aliceList.visible.find((c) => c.id === publicCron.id)?.permission, "read");
 
-  const bobList = (await (await fetch(`${webBase}/api/crons`, asUser("bob"))).json()) as {
+  const bobList = (await (await fetch(`${coreBase}/api/crons`, asUser("bob"))).json()) as {
     crons: Array<{ id: string }>;
     visible: unknown[];
   };
@@ -256,7 +243,7 @@ test("a channel member sees a teammate's cron read-only via the web until the ow
   } as never);
   const aliceView = async () =>
     (
-      (await (await fetch(`${webBase}/api/crons`, asUser("alice"))).json()) as {
+      (await (await fetch(`${coreBase}/api/crons`, asUser("alice"))).json()) as {
         visible: Array<{ id: string; permission?: string }>;
       }
     ).visible.find((candidate) => candidate.id === privCron.id)?.permission;

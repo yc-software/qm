@@ -27,7 +27,7 @@ import { personKey, samePerson } from "../../directory/person.ts";
 import { errMessage, swallowAs } from "../../util/errors.ts";
 import { normalizeInboundExpiresAt } from "../expiry.ts";
 import { sendJson, sendRedirect } from "../http.ts";
-import { audit } from "./shared.ts";
+import { audit, isObj } from "./shared.ts";
 import type { ApiCtx, BaseCtx, Route } from "./route.ts";
 
 const OAUTH_STATE_MAX_AGE_MS = 10 * 60_000;
@@ -348,21 +348,55 @@ async function consentMint(ctx: ApiCtx): Promise<void> {
   });
 }
 
+interface OAuthStart {
+  provider: string;
+  principalId: string;
+  redirectUri: string;
+  returnTo: string | undefined;
+  accountType: AccountType;
+}
+
 async function oauthStart(ctx: ApiCtx): Promise<void> {
-  const { res, deps, secret, url, pathname } = ctx;
-  const oauthRoute = parseOAuthRoute(pathname)!;
+  const { url, pathname } = ctx;
+  return startOAuth(ctx, {
+    provider: parseOAuthRoute(pathname)!.provider,
+    principalId: url.searchParams.get("principalId") ?? "",
+    redirectUri: url.searchParams.get("redirectUri") ?? "",
+    returnTo: safeReturnTo(url.searchParams.get("returnTo")),
+    accountType: parseAccountType(url.searchParams.get("accountType")),
+  });
+}
+
+async function browserOAuthStart(ctx: ApiCtx): Promise<void> {
+  const base = ctx.deps.portalUrl!.replace(/\/$/, "");
+  const provider = ctx.params.provider!;
+  const requested = isObj(ctx.body) ? ctx.body.returnTo : undefined;
+  const sameOrigin =
+    typeof requested === "string" &&
+    safeReturnTo(requested) !== undefined &&
+    !requested.includes("\\") &&
+    new URL(requested, base).origin === new URL(base).origin;
+  return startOAuth(ctx, {
+    provider,
+    principalId: ctx.actor!.p,
+    redirectUri: `${base}/v1/connectors/oauth/${encodeURIComponent(provider)}/callback`,
+    returnTo: sameOrigin ? requested : "/keychain",
+    accountType: "default",
+  });
+}
+
+async function startOAuth(ctx: ApiCtx, start: OAuthStart): Promise<void> {
+  const { res, deps, secret } = ctx;
   if (!deps.connectorTokens)
     return sendJson(res, 501, { error: "not_configured", message: "connector token store not wired" });
-  const provider = oauthProvider(oauthRoute.provider);
+  const provider = oauthProvider(start.provider);
   if (!provider)
-    return sendJson(res, 404, { error: "not_found", message: `unknown OAuth provider: ${oauthRoute.provider}` });
-  const principalId = url.searchParams.get("principalId") ?? "";
-  const redirectUri = url.searchParams.get("redirectUri") ?? "";
+    return sendJson(res, 404, { error: "not_found", message: `unknown OAuth provider: ${start.provider}` });
+  const { principalId, redirectUri, accountType, returnTo } = start;
   if (!principalId || !redirectUri)
     return sendJson(res, 400, { error: "bad_request", message: "principalId and redirectUri required" });
-  const accountType = parseAccountType(url.searchParams.get("accountType"));
   try {
-    const client = await resolverFor(deps)(oauthRoute.provider, { accountType });
+    const client = await resolverFor(deps)(start.provider, { accountType });
     if (client.redirectAllowlist && !client.redirectAllowlist.includes(redirectUri)) {
       return sendJson(res, 400, {
         error: "redirect_not_allowed",
@@ -371,18 +405,16 @@ async function oauthStart(ctx: ApiCtx): Promise<void> {
     }
     const codeVerifier = provider.pkce ? generateCodeVerifier() : undefined;
     const state = await beginOAuthFlow(deps, secret, {
-      provider: oauthRoute.provider,
+      provider: start.provider,
       principalId,
       redirectUri,
       orgId: configOrgId(),
       ...(accountType !== "default" ? { accountType } : {}),
       clientRef: client.clientRef,
-      ...(safeReturnTo(url.searchParams.get("returnTo"))
-        ? { returnTo: safeReturnTo(url.searchParams.get("returnTo")) }
-        : {}),
+      ...(returnTo ? { returnTo } : {}),
       ...(codeVerifier ? { codeVerifier } : {}),
     });
-    const consentUrl = authorizeUrl(oauthRoute.provider, {
+    const consentUrl = authorizeUrl(start.provider, {
       redirectUri,
       state,
       client,
@@ -392,11 +424,11 @@ async function oauthStart(ctx: ApiCtx): Promise<void> {
     audit(deps, {
       principalId,
       action: "connector.oauth.start",
-      resource: oauthRoute.provider,
+      resource: start.provider,
       scopeLabel: principalId,
     });
     return sendJson(res, 200, {
-      provider: oauthRoute.provider,
+      provider: start.provider,
       principalId,
       accountType,
       hosts: provider.hosts,
@@ -552,6 +584,14 @@ export const connectorRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/connectors/gmail/sent", auth: "source", handle: gmailSent },
   { method: "POST", path: "/v1/connectors/oauth/consent/mint", auth: { aud: "oauth-consent" }, handle: consentMint },
   { method: "GET", path: "/v1/connectors/oauth/consent/redeem/:linkId", auth: "source", handle: consentRedeem },
+  {
+    method: "POST",
+    path: "/v1/connectors/oauth/:provider/start",
+    browser: true,
+    actor: "person",
+    auth: "source",
+    handle: browserOAuthStart,
+  },
   {
     match: (m, p) => m === "GET" && parseOAuthRoute(p)?.action === "start",
     actor: "query.principalId",

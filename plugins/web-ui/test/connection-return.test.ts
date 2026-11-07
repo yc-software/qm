@@ -1,35 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { composioCallbackUrl } from "../server/composio-return.ts";
 import { saveConnectionAttempt, readConnectionAttempt, clearConnectionAttempt } from "../src/connection-return.ts";
 
 const state = "00000000-0000-4000-8000-000000000000";
-test("callbacks stay on the configured public origin and preserve the conversation", () => {
-  assert.equal(
-    composioCallbackUrl("https://qm.example", "/s/chat?layout=single", state),
-    `https://qm.example/s/chat?layout=single&composioReturn=${state}`,
-  );
-  assert.equal(
-    composioCallbackUrl("https://qm.example/web-ui", "/web-ui/s/chat", state),
-    `https://qm.example/web-ui/s/chat?composioReturn=${state}`,
-  );
-  assert.equal(
-    composioCallbackUrl("https://qm.example/web-ui", "/web-ui/settings", state),
-    `https://qm.example/web-ui/settings?composioReturn=${state}`,
-  );
-  for (const path of [
-    "https://evil.example/",
-    "//evil.example/",
-    "/\\evil.example/",
-    "/admin/",
-    "/s/chat/../../auth/logout",
-    "/s/chat\n",
-  ]) {
-    assert.equal(composioCallbackUrl("https://qm.example", path, state), null);
-  }
-  assert.equal(composioCallbackUrl("https://qm.example", "/", "bad"), null);
-});
-
 test("return context is bound to the user, nonce, path and expiry", () => {
   const values = new Map<string, string>();
   Object.defineProperty(globalThis, "sessionStorage", {

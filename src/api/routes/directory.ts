@@ -161,7 +161,7 @@ async function directoryMeta(ctx: ApiCtx): Promise<void> {
 const SLACK_ID_RE = /^[UW][A-Z0-9]{8,}$/;
 async function resolveDirectory(ctx: ApiCtx): Promise<void> {
   const { res, app, url } = ctx;
-  const q = (url.searchParams.get("q") ?? "").trim();
+  const q = (url.searchParams.get("q") ?? "").trim().slice(0, 80);
   if (!q) return sendJson(res, 400, { error: "bad_request", message: "q (a name to resolve) required" });
   const r = await app.resolveRecipient(q);
   let found: DirectoryMember[] = [];
@@ -220,7 +220,14 @@ export const directoryRoutes: ReadonlyArray<Route<ApiCtx>> = [
     auth: "source",
     handle: channelMembership,
   },
-  { method: "GET", path: "/v1/directory/resolve", actor: "person", auth: "either", handle: resolveDirectory },
+  {
+    method: "GET",
+    path: "/v1/directory/resolve",
+    browser: true,
+    actor: "person",
+    auth: "either",
+    handle: resolveDirectory,
+  },
   ...withActor("system", [
     { method: "POST", path: "/v1/principals/:id/deactivate", auth: "source", handle: deactivatePrincipal },
     { method: "POST", path: "/v1/principals/:id/reactivate", auth: "source", handle: reactivatePrincipal },

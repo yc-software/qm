@@ -14,7 +14,7 @@ import { sendJson } from "../http.ts";
 import { normalizeInboundExpiresAt } from "../expiry.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import type { CapabilityClaims } from "../../auth/capability-token.ts";
-import { audit, resolveCapabilityDestination } from "./shared.ts";
+import { audit, personalCapability, resolveCapabilityDestination } from "./shared.ts";
 import { swallowAs } from "../../util/errors.ts";
 import { cronIdOf } from "../../sessions/session-store.ts";
 import { connectorHostLabel } from "../../connectors/oauth.ts";
@@ -69,7 +69,8 @@ async function resolveScopeNames(
 const keychainRoute =
   (handle: (ctx: ApiCtx, kc: NonNullable<ApiCtx["deps"]["keychain"]>, capability: CapabilityClaims) => Promise<void>) =>
   async (ctx: ApiCtx): Promise<void> => {
-    const { res, deps, capability } = ctx;
+    const { res, deps } = ctx;
+    const capability = personalCapability(ctx);
     if (!deps.keychain)
       return sendJson(res, 503, {
         error: "keychain_unavailable",
@@ -403,10 +404,31 @@ async function handleApproval(ctx: ApiCtx): Promise<void> {
 export const keychainRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/keychain/credentials", actor: "system", auth: "either", handle: saveCredential },
   { method: "GET", path: "/v1/keychain/credentials", auth: "either", handle: listCredentials },
-  { method: "GET", path: "/v1/keychain/overview", auth: "either", handle: keychainOverview },
-  { method: "DELETE", path: "/v1/keychain/credentials/:id", actor: "system", auth: "either", handle: deleteCredential },
+  {
+    method: "GET",
+    path: "/v1/keychain/overview",
+    browser: true,
+    actor: "person",
+    auth: "either",
+    handle: keychainOverview,
+  },
+  {
+    method: "DELETE",
+    path: "/v1/keychain/credentials/:id",
+    browser: true,
+    actor: "person",
+    auth: "either",
+    handle: deleteCredential,
+  },
   { method: "GET", path: "/v1/keychain/grants", auth: "either", handle: listGrants },
-  { method: "POST", path: "/v1/keychain/grants/:id/revoke", actor: "system", auth: "either", handle: revokeGrant },
+  {
+    method: "POST",
+    path: "/v1/keychain/grants/:id/revoke",
+    browser: true,
+    actor: "person",
+    auth: "either",
+    handle: revokeGrant,
+  },
   { method: "POST", path: "/v1/keychain/asks", actor: "system", auth: "either", handle: createAsk },
   { method: "GET", path: "/v1/keychain/asks", auth: "either", handle: listAsks },
   {

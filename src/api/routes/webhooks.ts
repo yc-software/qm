@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import type { Webhook } from "../../triggers/types.ts";
 import { WEBHOOK_SCHEMES } from "../../webhooks/verifiers.ts";
 import type { CreateWebhookInput } from "../../webhooks/webhook-store.ts";
@@ -86,6 +87,32 @@ const WEBHOOK_ERROR_STATUS: Record<string, number> = {
   webhook_create_failed: 400,
 };
 
+function personWebhook(body: unknown, owner: string): CreateWebhookInput | { error: string; message: string } {
+  if (!isObj(body)) return { error: "bad_request", message: "expected JSON body" };
+  const v = body.verification;
+  if (v !== undefined && (!isObj(v) || typeof v.scheme !== "string"))
+    return { error: "unsupported_verification", message: "verification requires a scheme" };
+  if (body.filters !== undefined && !isWebhookFilters(body.filters))
+    return { error: "invalid_filters", message: "every filter requires a path and at least one value" };
+  if (body.destination !== undefined)
+    return {
+      error: "invalid_destination",
+      message: "choose webhook destinations with the agent so teammate and channel names can be resolved safely",
+    };
+  const action = String(body.action ?? "").trim();
+  if (!action) return { error: "action_required", message: "an action (the agent's instructions) is required" };
+  const scheme = isObj(v) ? (v.scheme as Webhook["verification"]["scheme"]) : "hmac-sha256";
+  const secret = isObj(v) && v.secret ? String(v.secret) : randomBytes(32).toString("hex");
+  return {
+    ownerScopeId: `personal:${owner}`,
+    owner,
+    createdBy: owner,
+    action,
+    verification: { scheme, secret },
+    ...(body.filters ? { filters: body.filters as Webhook["filters"] } : {}),
+  };
+}
+
 async function createWebhook(ctx: ApiCtx): Promise<void> {
   const { res, app, deps, body, capability } = ctx;
   if (capability) {
@@ -117,10 +144,14 @@ async function createWebhook(ctx: ApiCtx): Promise<void> {
       return sendJson(res, WEBHOOK_ERROR_STATUS[result.code] ?? 400, { error: result.code, message: result.message });
     return sendJson(res, 200, { webhook: result.webhook, url: result.url });
   }
-  if (!isCreateWebhook(body))
+  const owner = ctx.actor?.p;
+  if (!owner) return sendJson(res, 401, { error: "unauthorized", message: "portal identity required" });
+  const input = personWebhook(body, owner);
+  if ("error" in input) return sendJson(res, 400, input);
+  if (!isCreateWebhook(input))
     return sendJson(res, 400, { error: "bad_request", message: "expected a CreateWebhookInput" });
   try {
-    const webhook = await app.createWebhook(body);
+    const webhook = await app.createWebhook(input);
     return sendJson(res, 200, { webhook, url: inboundUrl(deps.publicUrl, webhook.id) });
   } catch (e) {
     return sendJson(res, 400, { error: "webhook_create_failed", message: errMessage(e) });
@@ -163,10 +194,9 @@ async function setWebhookEnabled(ctx: ApiCtx, enabled: boolean): Promise<void> {
   const principalId = capability?.actorId ?? actor?.p ?? url.searchParams.get("principalId");
   if (!principalId) return sendJson(res, 404, { error: "not_found" });
   if (!(await canAdministerWebhook(app, webhook, principalId))) {
-    const portalCaller = Boolean(capability || actor);
-    return sendJson(res, portalCaller ? 403 : 404, {
-      error: portalCaller ? "forbidden" : "not_found",
-      ...(portalCaller ? { message: "not your webhook" } : {}),
+    return sendJson(res, capability ? 403 : 404, {
+      error: capability ? "forbidden" : "not_found",
+      ...(capability ? { message: "not your webhook" } : {}),
     });
   }
   await app.setWebhookEnabled(id, enabled);
@@ -193,7 +223,7 @@ export const webhookRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
 ];
 
 export const webhookRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "POST", path: "/v1/webhooks", actor: "body.createdBy", auth: "either", handle: createWebhook },
+  { method: "POST", path: "/v1/webhooks", browser: true, actor: "person", auth: "either", handle: createWebhook },
   { method: "GET", path: "/v1/webhooks", browser: true, actor: "query.viewer", auth: "either", handle: listWebhooks },
   {
     method: "GET",
@@ -213,6 +243,7 @@ export const webhookRoutes: ReadonlyArray<Route<ApiCtx>> = [
   {
     method: "POST",
     path: "/v1/webhooks/:id/disable",
+    browser: true,
     actor: "query.principalId",
     auth: "either",
     handle: disableWebhook,
@@ -220,6 +251,7 @@ export const webhookRoutes: ReadonlyArray<Route<ApiCtx>> = [
   {
     method: "POST",
     path: "/v1/webhooks/:id/enable",
+    browser: true,
     actor: "query.principalId",
     auth: "either",
     handle: enableWebhook,

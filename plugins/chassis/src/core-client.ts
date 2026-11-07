@@ -8,8 +8,6 @@ import { signedRequestHeaders } from "./source-auth-sign.ts";
 
 export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
-export const CAPABILITY_HEADER = "x-agent-capability";
-
 export function signedHeaders(
   secret: string | undefined,
   method: string,
