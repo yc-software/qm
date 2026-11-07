@@ -206,21 +206,57 @@ test("a provider without scopeArg serves only scopes its server can tell apart, 
       ?.routes.slice(1)
       .flatMap((route) => route.scopes);
   };
-  const refused = (op: string, listed: string) =>
-    new RegExp(
-      `memory provider knowledge\\.${op} sets no scopeArg, so its server cannot tell apart the scopes it serves \\(${listed}\\)`,
+  const twins = (url: string, ...routes: Array<Record<string, unknown>>) => {
+    const parsed = JSON.parse(value) as {
+      providers: Array<Record<string, unknown>>;
+      routes: Array<Record<string, unknown>>;
+    };
+    parsed.providers.push({ ...parsed.providers[0], id: "twin", url });
+    parsed.routes.splice(1, 1, ...routes.map((route) => ({ manage: false, ...route })));
+    return parseMemoryProviderConfig(JSON.stringify(parsed), ENV)
+      ?.routes.slice(1)
+      .flatMap((route) => route.scopes);
+  };
+  const refused = (names: string, listed: string) => (error: unknown) =>
+    String(error).includes(
+      `memory provider ${names}: no scopeArg, so the server cannot tell apart the scopes it serves (${listed})`,
     );
-  assert.throws(() => scopes({}, { scopes: ["channel"] }), refused("read", "channel"));
-  assert.throws(() => scopes({}, { scopes: ["personal", "channel"] }), refused("read", "personal, channel"));
-  assert.throws(() => scopes({}, { scopes: ["personal", "persona:p1"] }), refused("read", "personal, persona:p1"));
-  assert.throws(() => scopes({}, { scopes: ["personal"], manage: true }), refused("read", "personal"));
+  assert.throws(() => scopes({}, { scopes: ["channel"] }), refused("knowledge.read", "channel"));
+  assert.throws(() => scopes({}, { scopes: ["personal", "channel"] }), refused("knowledge.read", "personal, channel"));
+  assert.throws(
+    () => scopes({}, { scopes: ["personal", "persona:p1"] }),
+    refused("knowledge.read", "personal, persona:p1"),
+  );
+  assert.throws(() => scopes({}, { scopes: ["personal"], manage: true }), refused("knowledge.read", "personal"));
   assert.throws(
     () => scopes({}, { scopes: ["personal:U1"] }, { scopes: ["org:acme"], capture: "explicit" }),
-    refused("read", "personal:U1, org:acme"),
+    refused("knowledge.read", "personal:U1, org:acme"),
   );
   assert.throws(
     () => scopes({ read: scoped.read }, { scopes: ["group", "team"], capture: "explicit" }),
-    refused("write", "group, team"),
+    refused("knowledge.write", "group, team"),
+  );
+  const sameServer = "http://memory-provider.internal:48081";
+  assert.throws(
+    () =>
+      twins(
+        sameServer,
+        { provider: "knowledge", scopes: ["channel:C1"] },
+        { provider: "twin", scopes: ["channel:C2"] },
+      ),
+    refused("knowledge.read and twin.read", "channel:C1, channel:C2"),
+  );
+  assert.throws(
+    () => twins(sameServer, { provider: "knowledge", scopes: ["personal"] }, { provider: "twin", scopes: ["org"] }),
+    refused("knowledge.read and twin.read", "personal, org"),
+  );
+  assert.deepEqual(
+    twins(
+      "http://other-provider.internal:48081",
+      { provider: "knowledge", scopes: ["channel:C1"] },
+      { provider: "twin", scopes: ["channel:C2"] },
+    ),
+    ["channel:C1", "channel:C2"],
   );
   assert.deepEqual(scopes(scoped, { scopes: ["personal", "channel", "persona:p1"] }), [
     "personal",
