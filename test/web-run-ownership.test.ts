@@ -51,6 +51,17 @@ function as(user: string, init: RequestInit = {}): RequestInit {
   };
 }
 
+function browser(user: string, init: RequestInit = {}): RequestInit {
+  return {
+    ...init,
+    headers: {
+      "content-type": "application/json",
+      cookie: browserSessionCookie(user),
+      origin: browserSessionDeps.portalUrl,
+    },
+  };
+}
+
 test("another user cannot see a run's queued text, or edit, withdraw or answer its runs", async () => {
   const threadRef = `web:alice:${crypto.randomUUID()}`;
   const submit = async (text: string): Promise<string> => {
@@ -71,8 +82,11 @@ test("another user cannot see a run's queued text, or edit, withdraw or answer i
   ]);
   assert.deepEqual(await (await discover("bob")).json(), { runId: null, run: null });
   const edit = await fetch(
-    `${webBase}/api/runs/${queued}/input`,
-    as("bob", { method: "PATCH", body: JSON.stringify({ text: "rewritten", expectedText: "alice private second" }) }),
+    `${coreBase}/api/runs/${queued}/input`,
+    browser("bob", {
+      method: "PATCH",
+      body: JSON.stringify({ text: "rewritten", expectedText: "alice private second" }),
+    }),
   );
   assert.equal(edit.status, 404);
   assert.equal((await fetch(`${webBase}/api/runs/${queued}/withdraw`, as("bob", { method: "POST" }))).status, 404);
@@ -95,14 +109,6 @@ test("another user cannot inspect or control a session's swarm", async () => {
   );
   await built.sessions.addParticipant(session.id, "alice");
   const path = `${coreBase}/api/sessions/${encodeURIComponent(session.id)}/swarm`;
-  const browser = (user: string, init: RequestInit = {}): RequestInit => ({
-    ...init,
-    headers: {
-      "content-type": "application/json",
-      cookie: browserSessionCookie(user),
-      origin: browserSessionDeps.portalUrl,
-    },
-  });
   const control = JSON.stringify({ action: "control", memberId: "m1", state: "stopped" });
   assert.notEqual((await fetch(path, browser("alice"))).status, 403);
   assert.equal((await fetch(path, browser("bob"))).status, 403);

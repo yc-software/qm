@@ -101,6 +101,20 @@ async function swarmRequest(ctx: ApiCtx): Promise<void> {
 export const swarmRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/swarm", auth: "either", handle: swarmRequest },
   { method: "POST", path: "/v1/swarm", auth: "either", handle: swarmRequest },
-  { method: "GET", path: "/v1/sessions/:id/swarm", browser: true, auth: "source", handle: swarmRequest },
-  { method: "POST", path: "/v1/sessions/:id/swarm", browser: true, auth: "source", handle: swarmRequest },
+  {
+    method: "GET",
+    path: "/v1/sessions/:id/swarm",
+    browser: true,
+    actor: "person",
+    auth: "source",
+    handle: swarmRequest,
+  },
+  {
+    method: "POST",
+    path: "/v1/sessions/:id/swarm",
+    browser: true,
+    actor: "person",
+    auth: "source",
+    handle: swarmRequest,
+  },
 ];

@@ -142,8 +142,8 @@ test("authenticated swarm API binds agent operations to the token and human oper
     const inspected = await fetch(`${base}${path}`, { headers: portalHeaders("GET") });
     assert.equal(inspected.status, 200);
     assert.equal(((await inspected.json()) as { peers: unknown[] }).peers.length, 3);
-    const unsigned = await fetch(`${base}${path}`, { headers: signedRequestHeaders(secret, "GET", path) });
-    assert.equal(unsigned.status, 403);
+    const anonymous = await fetch(`${base}${path}`, { headers: signedRequestHeaders(secret, "GET", path) });
+    assert.equal(anonymous.status, 401);
     const bodyWithoutIdentity = JSON.stringify({ ...spawn, requestId: "forged-human" });
     assert.equal(
       (
