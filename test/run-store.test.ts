@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import pg from "pg";
 import type { RunStore } from "../src/runs/run-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import type { Principal } from "../src/types.ts";
@@ -488,4 +489,19 @@ test("editing pending text preserves identity, order, attachments and rejects st
   assert.equal(await runs.editPendingText(first.id, "late", "revised"), false);
   await runs.fail(first.id, claimed!.leaseToken!, "retry", { retry: true });
   assert.equal(await runs.editPendingText(first.id, "retry edit", "revised"), false);
+});
+
+test("a completed run stores its result as text jsonb can read", async () => {
+  const url = testDatabaseUrl();
+  const { runs } = createPostgresRunStore(url);
+  const { run } = await runs.enqueue({ sessionId: "dm:nul", request: turn("hi") });
+  const lease = (await runs.claimById(run.id, "w", 60_000))!.leaseToken!;
+  await runs.complete(run.id, lease, { status: "ok", reply: "o\u0000k" });
+  const pool = new pg.Pool({ connectionString: url, max: 1 });
+  try {
+    const { rows } = await pool.query("SELECT result::jsonb->>'reply' AS reply FROM runs WHERE id = $1", [run.id]);
+    assert.deepEqual(rows, [{ reply: "ok" }]);
+  } finally {
+    await pool.end();
+  }
 });
