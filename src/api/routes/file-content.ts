@@ -1,5 +1,6 @@
 import { relayStream } from "../../../plugins/chassis/src/http.ts";
 import type { OpenedFile } from "../app-types.ts";
+import { errMessage } from "../../util/errors.ts";
 import { contentTypeWithUtf8Charset, sendJson } from "../http.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
 
@@ -53,7 +54,7 @@ async function openForViewer(ctx: ApiCtx): Promise<(OpenedFile & { contentType: 
 function streamFile(ctx: ApiCtx, opened: OpenedFile): void {
   const id = ctx.params.id!;
   relayStream(opened.stream, ctx.res, {
-    onError: (error) => console.warn(`[files] file ${id} stream ended early: ${error.message}`),
+    onError: (error) => console.warn(`[files] file ${id} stream ended early: ${errMessage(error)}`),
   });
 }
 
