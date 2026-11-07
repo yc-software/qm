@@ -36,7 +36,7 @@ async function spool(req: IncomingMessage, signal: AbortSignal): Promise<{ file:
   const file = join(SPOOL_DIR, randomUUID());
   const out = fs.createWriteStream(file, { mode: 0o600 });
   try {
-    relayStream(req, out);
+    relayStream(req, out, { onError: (error) => out.destroy(error) });
     await finished(out, { signal });
   } catch (error) {
     out.destroy();
