@@ -65,7 +65,7 @@ Native Markdown images use authenticated workspace file requests with an 8 MiB t
 
 ## Live voice
 
-Browse → Talk to QM opens native SwiftUI controls backed by the WebRTC iOS SDK. Web conversations also offer Talk to QM in their menu, keeping spoken tasks in that conversation. Enable the web service with `WEB_UI_VOICE_ENABLED=1`, `WEB_UI_VOICE_USERS` containing allowed principals, and server-only `OPENAI_API_KEY`. The existing `CORE_SIGNING_SECRET` and canonical portal `WEB_UI_PUBLIC_URL` are required. Never put a provider key in the iOS build settings.
+Browse → Talk to QM opens native SwiftUI controls backed by the WebRTC iOS SDK. Web conversations also offer Talk to QM in their menu, keeping spoken tasks in that conversation. Voice and dictation are available to everyone signed in when the server has `OPENAI_API_KEY`. Never put a provider key in the iOS build settings.
 
 The voice frontend uses `gpt-live-1` with `gpt-5.6-terra` Responses delegation. Completed structured `ask_qm` calls submit to the existing authenticated QM turn API; captions cannot execute tasks. QM keeps its configured runtime, tools, permissions, and approval flow. Task records are durable; live captions are temporary and the provider session uses `store: false`.
 

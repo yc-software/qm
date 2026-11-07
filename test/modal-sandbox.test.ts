@@ -1079,3 +1079,25 @@ test("released scratch handles cannot recreate a persistent sandbox", async () =
   await sandbox.teardown(handle, { destroy: true });
   await assert.rejects(sandbox.run(handle, "true"), /handle has been released/);
 });
+
+test("a computer's memory size reaches every Modal create, and a resize restart recreates at once or keeps the old size", async () => {
+  const sizes: Array<number | undefined> = [];
+  const s = make({
+    client: {
+      ...fake.client,
+      create: async (options: Parameters<ModalClient["create"]>[0]) => {
+        sizes.push(options.memoryGb);
+        if (options.memoryGb === 999) throw new Error("memory exceeds the largest worker");
+        return fake.client.create(options);
+      },
+    },
+  });
+  const h = await s.provision(scope, { memoryGb: 4 });
+  fake.terminate(h.id);
+  assert.equal((await s.run(h, "true")).code, 0);
+  await s.restartComputer!(scope, 8);
+  await assert.rejects(s.restartComputer!(scope, 999), /largest worker/);
+  assert.equal((await s.run(h, "true")).code, 0);
+  assert.deepEqual(sizes, [4, 4, 8, 999, 8]);
+  assert.equal(s.profile.sizesMemory, true);
+});

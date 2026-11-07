@@ -789,7 +789,7 @@ test("buildApp captures human run outcomes through the shared terminal hook", as
     events.push(JSON.parse(String(init.body)).event);
     return new Response("ok");
   });
-  const built = buildApp(testConfig({ productAnalytics: { apiKey: "test-token" } }));
+  const built = buildApp(testConfig({ productAnalytics: { url: "https://events.example.com/ingest" } }));
   try {
     const request: OrchestratorInput = { ...turn, origin: { kind: "human" }, surface: "slack" };
     for (const result of [{ status: "ok" }, { status: "failed" }, { status: "ok", stopped: true }] as const) {
@@ -809,7 +809,7 @@ test("web admission and replay preserve analytics exclusions", async (t) => {
     events.push(JSON.parse(String(init.body)).event);
     return new Response("ok");
   });
-  const built = buildApp(testConfig({ productAnalytics: { apiKey: "test-token" } }));
+  const built = buildApp(testConfig({ productAnalytics: { url: "https://events.example.com/ingest" } }));
   try {
     for (const flag of ["analyticsSuppressed", "proactiveOpener"] as const) {
       for (const status of ["ok", "failed"] as const) {

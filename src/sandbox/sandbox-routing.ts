@@ -72,7 +72,12 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
   async function computerTarget(scopeId: string) {
     const resource = await resources.resolve(scopeId);
     if (!resource) throw new NoDefaultSandboxError();
-    return { sandbox: backendFor(resource.backend), scopeId: resource.backingScopeId, resourceId: resource.id };
+    return {
+      sandbox: backendFor(resource.backend),
+      scopeId: resource.backingScopeId,
+      resourceId: resource.id,
+      memoryGb: resource.memoryGb,
+    };
   }
 
   const reportedGaps = new Set<string>();
@@ -116,9 +121,9 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
         provOpts?.sandboxId !== undefined ? await resources.get(provOpts.sandboxId) : await resources.resolve(scope);
       const backend = resource?.backend ?? defaultBackend;
       const sandbox = backendFor(backend);
-      const provision = async (target: ScopeId) => {
+      const provision = async (target: ScopeId, options = provOpts) => {
         try {
-          return await sandbox.provision(target, provOpts);
+          return await sandbox.provision(target, options);
         } catch (error) {
           if (error instanceof SandboxProvisionCleanupError) error.handle.backend = backend;
           throw error;
@@ -129,7 +134,8 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
         return { ...handle, backend, scopeId: scope };
       }
       if (!resource) throw new NoDefaultSandboxError();
-      const handle = await resources.use(resource.id, () => provision(resource.backingScopeId));
+      const sized = resource.memoryGb ? { ...provOpts, memoryGb: resource.memoryGb } : provOpts;
+      const handle = await resources.use(resource.id, () => provision(resource.backingScopeId, sized));
       return { ...handle, backend: resource.backend, scopeId: resource.ownerScopeId, resourceId: resource.id };
     },
 
@@ -240,7 +246,8 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
       ? {
           restartComputer: async (scopeId: string) => {
             const target = await computerTarget(scopeId);
-            const action = () => requireCap(target.sandbox, "restartComputer", scopeId).restartComputer(target.scopeId);
+            const action = () =>
+              requireCap(target.sandbox, "restartComputer", scopeId).restartComputer(target.scopeId, target.memoryGb);
             return resources.use(target.resourceId, action, true);
           },
         }

@@ -406,6 +406,7 @@ export interface SessionStore {
   setSpawnMeta(sessionId: string, meta: SpawnMeta): Promise<void>;
   setRuntime(sessionId: string, runtime: NonNullable<Session["runtime"]>): Promise<void>;
   setPersona(sessionId: string, personaId: string | null): Promise<void>;
+  threadsWithPersona(personaId: string, threadRefs: readonly string[]): Promise<Set<string>>;
   endedInFailure(sessionIds: readonly string[]): Promise<Set<string>>;
   childrenOf(parentSessionId: string): Promise<Session[]>;
   sideChatsOf(sessionId: string): Promise<Session[]>;

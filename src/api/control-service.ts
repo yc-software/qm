@@ -32,7 +32,7 @@ import {
 import { actsAsScope, parseScopeId, type Permission, type ScopeId } from "../types.ts";
 import { cronRef, encodeRef } from "../acl/resource-ref.ts";
 import type { App, VisibleCron } from "./app.ts";
-import { PersonaLocked } from "../personas/channel-personas.ts";
+import { liveForLock, PersonaLocked } from "../personas/channel-personas.ts";
 
 export interface CronCreateRequest {
   runtime?: Cron["runtime"];
@@ -540,7 +540,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
       if (!(await canAdministerCron(app, cron, capability.actorId)))
         return { ok: false, code: "forbidden", message: "not your cron" };
-      if (req.limit !== undefined && (!Number.isInteger(req.limit) || req.limit < 1)) {
+      if (req.limit !== undefined && (!Number.isSafeInteger(req.limit) || req.limit < 1)) {
         return { ok: false, code: "bad_request", message: "limit must be a positive integer" };
       }
       const { runs, total } = await app.listCronFires(id, req.limit !== undefined ? { limit: req.limit } : {});
@@ -804,7 +804,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
           allowSharedScope: true,
           expectedVersion,
           sessionId: capability.sessionId,
-          liveActor: livePersonCapability(capability),
+          liveActor: liveForLock(livePersonCapability(capability), capability.botActor),
         });
         return { ok: true, version };
       } catch (e) {
@@ -916,7 +916,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
             return { ok: false, code: "forbidden", message: SHARED_SKILL_TRIGGER_REFUSAL };
           }
           await app.moveArtifactHome(req.type, home.id, toScope, capability.actorId, {
-            liveActor: livePersonCapability(capability),
+            liveActor: liveForLock(livePersonCapability(capability), capability.botActor),
           });
           return {
             ok: true,
@@ -941,7 +941,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
               permission,
               grantedBy: capability.actorId,
             },
-            { ...notify, liveActor: livePersonCapability(capability) },
+            { ...notify, liveActor: liveForLock(livePersonCapability(capability), capability.botActor) },
           );
         return {
           ok: true,

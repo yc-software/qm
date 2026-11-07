@@ -91,6 +91,7 @@ export interface AgentToolsOptions {
   mcpTools?: McpToolDescriptor[];
   controlTools?: boolean;
   sandboxResources?: boolean;
+  memorySizedBackends?: string[];
   readOnly?: boolean;
   surfaceTools?: boolean;
   delegateWork?: boolean;

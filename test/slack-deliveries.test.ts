@@ -226,6 +226,35 @@ for (const type of ["slack", "group", "principal"]) {
   });
 }
 
+for (const [label, sourceThreadRef, webUiPublicUrl, footer] of [
+  [
+    "a persona post",
+    undefined,
+    "https://agent.example/web-ui/",
+    "Persona: <https://agent.example/web-ui/personas/p%201|Ada &lt;&amp;&gt;>",
+  ],
+  ["a persona post without a web UI", undefined, undefined, "Persona: Ada &lt;&amp;&gt;"],
+  [
+    "a persona's cron post",
+    "cron:c1:fire:123",
+    "https://agent.example",
+    "Persona: <https://agent.example/personas/p%201|Ada &lt;&amp;&gt;> · Weekly &lt;project&gt; &amp; check-in · <https://agent.example/crons/c1|Settings>",
+  ],
+] as const) {
+  test(`${label} names the persona in the footer`, async () => {
+    const { posts } = await deliver(
+      { persona: { id: "p 1", name: "Ada <&>" } },
+      sourceThreadRef,
+      webUiPublicUrl,
+      "Hello",
+    );
+    assert.deepEqual((posts[0]!.blocks as unknown[]).at(-1), {
+      type: "context",
+      elements: [{ type: "mrkdwn", text: footer, verbatim: true }],
+    });
+  });
+}
+
 test("ordinary deliveries omit cron settings even with a configured web UI", async () => {
   const { posts } = await deliver({ unfurlLinks: false }, "dm:D1", "https://agent.example/web-ui");
   assert.equal(posts[0]!.blocks, undefined);

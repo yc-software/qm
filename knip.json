@@ -16,6 +16,7 @@
         "scripts/aws-deploy-smoke.ts",
         "scripts/aws-litestream-smoke.ts",
         "scripts/e2b-live-smoke.mjs",
+        "scripts/seed-upgrade-rows.mjs",
         "scripts/modal-live-smoke.mjs",
         "scripts/dev/cli.ts",
         "scripts/dev/supervisor/main.ts",

@@ -78,6 +78,11 @@ for _ in {1..90}; do
     [[ "$status" != 200 ]] || { echo "the broker JWKS is reachable through the front door (HTTP $status)" >&2; exit 1; }
     status="$(curl -s -o /dev/null -w '%{http_code}' -H 'accept: text/html' "http://127.0.0.1:$port/")"
     [[ "$status" == 302 ]] || { echo "the front door answered / with HTTP $status instead of a sign-in redirect" >&2; exit 1; }
+    asset="$(docker exec "$container" node -p "require('node:fs').readdirSync('/data/web-ui/assets').find((name) => name.endsWith('.js'))")"
+    status="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/assets/$asset")"
+    [[ "$status" == 200 ]] || { echo "the front door answered /assets/$asset with HTTP $status" >&2; exit 1; }
+    type="$(curl -s -o /dev/null -w '%{content_type}' "http://127.0.0.1:$port/share/external/00000000-0000-4000-8000-000000000000")"
+    [[ "$type" == text/html* ]] || { echo "an external share page answered $type instead of the share page" >&2; exit 1; }
     echo "ok: core image serves the front door, embedded sign-in broker, and its web UI release $release"
     exit 0
   fi

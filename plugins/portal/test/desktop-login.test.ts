@@ -53,7 +53,6 @@ Object.assign(process.env, {
   CORE_SIGNING_SECRET: "desktop-core-secret",
   CORE_ORG_ID: browser.org,
   CORE_API_URL: coreUrl,
-  WEB_UI_UPSTREAM: coreUrl,
   PORTAL_LOCAL_AUTH_BYPASS: "0",
   PORTAL_PLAYGROUND: "0",
 });

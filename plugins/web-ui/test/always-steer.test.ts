@@ -30,6 +30,7 @@ test("a mid-run send with the steer preference asks core to steer and queues onl
     Element: dom.window.Element,
     Node: dom.window.Node,
     Event: dom.window.Event,
+    KeyboardEvent: dom.window.KeyboardEvent,
     customElements: dom.window.customElements,
     getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
     requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window),
@@ -111,6 +112,10 @@ test("a mid-run send with the steer preference asks core to steer and queues onl
         isStopping: () => false,
         hasLiveRun: () => live,
         hasUnresolvedApproval: () => false,
+        activePendingApprovals: () => [],
+        turnRuntime: () => null,
+        notePendingSessionOnSend() {},
+        scrollToBottom() {},
         currentTurnOptions: () => ({}),
         signalLiveRun: async (_kind: string, _text: string, queuedRunId: string) => {
           signalled.push(queuedRunId);
@@ -160,6 +165,49 @@ test("a mid-run send with the steer preference asks core to steer and queues onl
       );
       assert.equal(seenTags.has("Queued"), false);
       reset();
+    });
+
+    const cmdEnter = async (text: string): Promise<void> => {
+      const formHost = document.createElement("div");
+      document.body.append(formHost);
+      composer!.state.draft = text;
+      render(composer!.composerForm(agent), formHost);
+      formHost
+        .querySelector("textarea")!
+        .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true, cancelable: true }));
+      window.dispatchEvent(new KeyboardEvent("keyup", { key: "Meta" }));
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      formHost.remove();
+      draw();
+    };
+
+    await t.test("Cmd+Enter sends the opposite of the preference", async () => {
+      setAlwaysSteer(false);
+      await cmdEnter("flip to steer");
+      assert.deepEqual(turns.at(-1), { text: "flip to steer", midTurn: "steer" });
+      reset();
+      setAlwaysSteer(true);
+      await cmdEnter("flip to queue");
+      assert.deepEqual(turns.at(-1), { text: "flip to queue", midTurn: "queue" });
+      assert.deepEqual(chips(), ["Queued"]);
+      reset();
+    });
+
+    await t.test("holding Cmd flips the send button to the other action", async () => {
+      setAlwaysSteer(false);
+      const formHost = document.createElement("div");
+      document.body.append(formHost);
+      const label = (): string | null => {
+        render(composer!.composerForm(agent), formHost);
+        return formHost.querySelector(".send-btn")!.getAttribute("aria-label");
+      };
+      assert.match(label()!, /^Queue for after this turn \(/);
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Meta", metaKey: true }));
+      assert.equal(label(), "Steer the running task");
+      window.dispatchEvent(new KeyboardEvent("keyup", { key: "Meta" }));
+      assert.match(label()!, /^Queue for after this turn \(/);
+      formHost.remove();
+      setAlwaysSteer(true);
     });
 
     await t.test("a run that has no live handle asks core to queue", async () => {

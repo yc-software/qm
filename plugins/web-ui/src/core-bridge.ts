@@ -1,4 +1,5 @@
-import { desktopTurnId, serveDesktopRun } from "./desktop-computer.ts";
+import { desktopTurnId, serveDesktopRun, webClientSurface } from "./desktop-computer.ts";
+import { CLIENT_SURFACE_HEADER } from "../../chassis/src/client-surface.ts";
 import { reportHandledError, reportRequestTiming, stopBrowserErrors } from "./browser-errors.ts";
 import { captureMessage, stopAnalytics } from "./product-analytics.ts";
 import { streamedAnswer } from "./timeline.ts";
@@ -128,7 +129,6 @@ type WebUserMessage = AgentMessage & {
   role: "user" | "user-with-attachments";
   content: string | Array<{ type: string; text?: string }>;
   attachments?: PiAttachment[];
-  clientTurnId?: string;
   sendFailure?: string;
 };
 
@@ -665,8 +665,8 @@ export function continuableMessages(
     return { messages: [...kept, user as AgentMessage], popped };
   }
   while (kept.length && (kept[kept.length - 1] as { role?: string }).role === "assistant") {
-    const work = (kept.at(-1) as AssistantWork).work;
-    if (!input && work && workPausedForApproval(work)) {
+    const last = kept.at(-1) as AssistantWork;
+    if (last.stopReason === "aborted" || (!input && last.work && workPausedForApproval(last.work))) {
       kept.push(resumeAnchor());
       break;
     }
@@ -777,7 +777,6 @@ export class ApiError extends Error {
 
 export interface SigninRequired {
   mode?: "portal" | "dev";
-  reason?: "unauthenticated" | "not_allowed";
 }
 
 let onSigninRequired: ((detail: SigninRequired) => void) | null = null;
@@ -929,7 +928,10 @@ export async function loadChatPrefs(): Promise<void> {
 }
 
 export async function api<T = unknown>(path: string, init?: RequestInit): Promise<T> {
-  const r = await webFetch(withBase(path), { headers: { "content-type": "application/json" }, ...init });
+  const headers = new Headers({ "content-type": "application/json" });
+  new Headers(init?.headers).forEach((value, name) => headers.set(name, value));
+  headers.set(CLIENT_SURFACE_HEADER, webClientSurface());
+  const r = await webFetch(withBase(path), { ...init, headers });
   const text = await r.text();
   let body: unknown = {};
   try {
@@ -2322,7 +2324,7 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
         ...(typeof workStartedAt === "number" ? { startedAt: workStartedAt } : {}),
         ...(typeof workFinishedAt === "number" ? { finishedAt: workFinishedAt } : {}),
       };
-      const stopped = e.body.stopped === true || text.trim() === "(stopped)";
+      const stopped = e.body.stopped === true;
       if (text || pending.length || heldPosts.size || stopped) {
         spillHeldPosts();
         if (posted && text) {
