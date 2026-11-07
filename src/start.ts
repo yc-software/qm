@@ -39,7 +39,16 @@ export async function startQm(
     ...serverDeps(config, built, slackEnvironmentState, slackConfig?.botToken),
     managedSlack,
     ...(env.PORTAL_SESSION_SECRET
-      ? { portalSession: { secret: env.PORTAL_SESSION_SECRET, maxAgeSeconds: sessionLifetime(env).max } }
+      ? {
+          portalSession: {
+            secret: env.PORTAL_SESSION_SECRET,
+            maxAgeSeconds: sessionLifetime(env).max,
+            principals: (env.WEB_UI_PRINCIPALS ?? "")
+              .split(",")
+              .map((entry) => entry.trim())
+              .filter(Boolean),
+          },
+        }
       : {}),
     draining: draining.signal,
   });
@@ -54,7 +63,7 @@ export async function startQm(
   const frontDoor =
     config.publicPort === undefined
       ? undefined
-      : await startFrontDoor({ ...config, publicPort: config.publicPort }, env);
+      : await startFrontDoor({ ...config, publicPort: config.publicPort }, env, server);
 
   console.log(
     `[qm] listening on :${config.port} (org=${config.orgId}, ` +

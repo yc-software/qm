@@ -1,9 +1,10 @@
 import { existsSync } from "node:fs";
-import type { Server } from "node:http";
+import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { apiAlias } from "../api/browser-session.ts";
 import type { Config } from "../config.ts";
 import { s3Client } from "../persistence/s3.ts";
 import { jitteredBackoffMs } from "../util/async.ts";
@@ -24,7 +25,14 @@ interface WebSurface {
 }
 
 interface PortalSurface {
-  startServer(options: { port: number; host?: string }): Promise<void>;
+  startServer(options: {
+    port: number;
+    host?: string;
+    core: {
+      serves(method: string, pathname: string): boolean;
+      handle(req: IncomingMessage, res: ServerResponse): void;
+    };
+  }): Promise<void>;
   server: Server;
 }
 
@@ -47,6 +55,7 @@ function webReleaseStore(config: Config): WebReleaseStore {
 export async function startFrontDoor(
   config: Config & { publicPort: number },
   env: NodeJS.ProcessEnv,
+  core: Server,
 ): Promise<{ close(): void }> {
   const store = webReleaseStore(config);
   const bundle = existsSync(join(BUNDLED_WEB_UI, "index.html")) ? readWebBundleLayout(BUNDLED_WEB_UI) : undefined;
@@ -89,7 +98,13 @@ export async function startFrontDoor(
   env.WEB_UI_UPSTREAM = `http://127.0.0.1:${(webServer.address() as AddressInfo).port}`;
   const portal = (await import("../../plugins/portal/src/index.ts")) as PortalSurface;
   try {
-    await portal.startServer({ port: config.publicPort });
+    await portal.startServer({
+      port: config.publicPort,
+      core: {
+        serves: (method, pathname) => apiAlias(method, pathname) !== null,
+        handle: (req, res) => void core.emit("request", req, res),
+      },
+    });
   } catch (error) {
     webServer.close();
     webServer.closeAllConnections();

@@ -211,16 +211,50 @@ test("cross-origin writes are refused", async () => {
   });
 });
 
-test("apps-only and playground sign-ins are refused", async () => {
+test("apps-only sign-ins are refused and playground visitors act as themselves", async () => {
   await withServer(async (base) => {
     const appOnly = await fetch(`${base}/v1/test/browser-read`, {
       headers: { cookie: sessionCookie({ appOnly: true }) },
     });
     assert.equal(appOnly.status, 403);
     assert.equal((await errorOf(appOnly)).error, "app_only_session");
-    const anon = await fetch(`${base}/v1/test/browser-read`, { headers: { cookie: sessionCookie({ anon: true }) } });
-    assert.equal(anon.status, 403);
+    seen.length = 0;
+    const visitor = sessionCookie({ sub: "playground-guest", anon: true });
+    const anon = await fetch(`${base}/v1/test/browser-read`, { headers: { cookie: visitor } });
+    assert.equal(anon.status, 200);
+    assert.equal(seen[0]?.principalId, "playground-guest");
+    const other = await fetch(`${base}/v1/test/browser-read?principalId=alice`, { headers: { cookie: visitor } });
+    assert.equal(other.status, 403);
   });
+});
+
+test("impersonation is ignored on requests from another origin", async () => {
+  await withServer(async (base) => {
+    seen.length = 0;
+    const cookie = `${sessionCookie({ sub: "admin-alice" })}; ${impersonationCookie("admin-alice", "carol")}`;
+    const foreign = await fetch(`${base}/v1/test/browser-read`, {
+      headers: { cookie, origin: "https://embedder.example.com" },
+    });
+    assert.equal(foreign.status, 200);
+    assert.equal(seen[0]?.principalId, "admin-alice");
+    const own = await fetch(`${base}/v1/test/browser-read`, { headers: { cookie, origin: ORIGIN } });
+    assert.equal(own.status, 200);
+    assert.equal(seen[1]?.principalId, "carol");
+  });
+});
+
+test("a server that lists its web principals refuses everyone else", async () => {
+  await withServer(
+    async (base) => {
+      const listed = await fetch(`${base}/v1/test/browser-read`, { headers: { cookie: sessionCookie() } });
+      assert.equal(listed.status, 200);
+      const unlisted = await fetch(`${base}/v1/test/browser-read`, {
+        headers: { cookie: sessionCookie({ sub: "mallory" }) },
+      });
+      assert.equal(unlisted.status, 403);
+    },
+    { portalSession: { secret: SESSION, maxAgeSeconds: 30 * 86400, principals: ["alice"] } },
+  );
 });
 
 test("impersonation is honoured only for an admin's own impersonation cookie", async () => {

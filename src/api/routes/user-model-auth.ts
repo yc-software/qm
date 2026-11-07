@@ -168,7 +168,14 @@ async function claudeComplete(ctx: ApiCtx): Promise<void> {
 }
 
 export const userModelAuthRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "GET", path: "/v1/user-model-auth/status", actor: "query.principalId", auth: "source", handle: getStatus },
+  {
+    method: "GET",
+    path: "/v1/user-model-auth/status",
+    browser: true,
+    actor: "query.principalId",
+    auth: "source",
+    handle: getStatus,
+  },
   ...withActor("body.principalId", [
     { method: "POST", path: "/v1/user-model-auth/account", auth: "source", handle: setAccount },
     { method: "POST", path: "/v1/user-model-auth/api-key", auth: "source", handle: putApiKey },

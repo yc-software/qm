@@ -194,8 +194,15 @@ export const webhookRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
 
 export const webhookRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/webhooks", actor: "body.createdBy", auth: "either", handle: createWebhook },
-  { method: "GET", path: "/v1/webhooks", actor: "query.viewer", auth: "either", handle: listWebhooks },
-  { method: "GET", path: "/v1/webhooks/:id/events", actor: "query.viewer", auth: "either", handle: listWebhookEvents },
+  { method: "GET", path: "/v1/webhooks", browser: true, actor: "query.viewer", auth: "either", handle: listWebhooks },
+  {
+    method: "GET",
+    path: "/v1/webhooks/:id/events",
+    browser: true,
+    actor: "query.viewer",
+    auth: "either",
+    handle: listWebhookEvents,
+  },
   {
     method: "POST",
     path: "/v1/webhooks/:id/update",

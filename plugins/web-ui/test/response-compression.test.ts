@@ -9,7 +9,7 @@ import { sendBuffered } from "../../chassis/src/http.ts";
 
 const SECRET = "web-ui-compression-test";
 
-const sessionsPayload = JSON.stringify({
+const relayedPayload = JSON.stringify({
   sessions: Array.from({ length: 200 }, (_, i) => ({
     id: `sess-${i}`,
     title: "a repetitive session title that gzip should collapse",
@@ -24,7 +24,7 @@ const core = createServer((req: IncomingMessage, res) => {
     res,
     200,
     { "content-type": "application/json" },
-    (req.url ?? "").startsWith("/v1/sessions") ? sessionsPayload : "{}",
+    (req.url ?? "").startsWith("/v1/runtime-config") ? relayedPayload : "{}",
   );
 });
 await new Promise<void>((r) => core.listen(0, r));
@@ -74,19 +74,19 @@ function get(path: string, headers: Record<string, string>): Promise<RawResponse
   });
 }
 
-test("the session list is gzipped for a gzip-capable client and decodes to the identical bytes", async () => {
-  const packed = await get("/api/sessions", { ...identityHeaders(), "accept-encoding": "gzip" });
+test("a relayed core read is gzipped for a gzip-capable client and decodes to the identical bytes", async () => {
+  const packed = await get("/api/runtime-config", { ...identityHeaders(), "accept-encoding": "gzip" });
   assert.equal(packed.status, 200);
   assert.equal(packed.headers["content-encoding"], "gzip");
   assert.equal(packed.headers["vary"], "accept-encoding");
-  assert.ok(packed.body.length < sessionsPayload.length / 4, `expected real compression, got ${packed.body.length}`);
-  assert.equal(gunzipSync(packed.body).toString("utf8"), sessionsPayload);
+  assert.ok(packed.body.length < relayedPayload.length / 4, `expected real compression, got ${packed.body.length}`);
+  assert.equal(gunzipSync(packed.body).toString("utf8"), relayedPayload);
 });
 
-test("the session list is byte-identical and uncompressed without accept-encoding", async () => {
-  const plain = await get("/api/sessions", identityHeaders());
+test("a relayed core read is byte-identical and uncompressed without accept-encoding", async () => {
+  const plain = await get("/api/runtime-config", identityHeaders());
   assert.equal(plain.headers["content-encoding"], undefined);
-  assert.equal(plain.body.toString("utf8"), sessionsPayload);
+  assert.equal(plain.body.toString("utf8"), relayedPayload);
 });
 
 test("a static asset is served from its precompressed sibling, byte-identical once decoded", async () => {

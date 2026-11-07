@@ -1263,12 +1263,6 @@ const apiRoutes: readonly WebRoute[] = [
 
   { method: "GET", path: "/api/playgrounds/:id", handle: (c) => serveFileContent(c, true) },
   {
-    method: "GET",
-    path: "/api/user-model-auth/status",
-    handle: async (c) =>
-      relayCore(c.res, "GET", `/v1/user-model-auth/status?principalId=${encodeURIComponent(c.user)}`),
-  },
-  {
     method: "POST",
     path: "/api/user-model-auth/account",
     handle: async (c) => {
@@ -1518,76 +1512,6 @@ const apiRoutes: readonly WebRoute[] = [
   },
   {
     method: "GET",
-    path: "/api/resources/search",
-    handle: (c) =>
-      relayCore(
-        c.res,
-        "GET",
-        `/v1/resources/search?principalId=${encodeURIComponent(c.user)}&q=${encodeURIComponent((c.url.searchParams.get("q") ?? "").slice(0, 500))}`,
-      ),
-  },
-  {
-    method: "GET",
-    path: "/api/search",
-    handle: async (c) => {
-      const { res, url, user } = c;
-      const q = url.searchParams.get("q") ?? "";
-      const limit = url.searchParams.get("limit");
-      return relayCore(
-        res,
-        "GET",
-        `/v1/sessions/search?principalId=${encodeURIComponent(user)}&q=${encodeURIComponent(q)}${
-          limit ? `&limit=${encodeURIComponent(limit)}` : ""
-        }`,
-      );
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/sessions",
-    handle: async (c) => {
-      const { res, url, user } = c;
-      const qs = new URLSearchParams({ principalId: user });
-      for (const p of ["limit", "before", "status", "surface", "scope", "q"] as const) {
-        const v = url.searchParams.get(p);
-        if (v !== null) qs.set(p, v.slice(0, 500));
-      }
-      return relayCore(res, "GET", `/v1/sessions?${qs.toString()}`);
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/sessions/row",
-    handle: async (c) => {
-      const { res, url, user } = c;
-      const qs = new URLSearchParams({ principalId: user });
-      for (const p of ["id", "threadRef"] as const) {
-        const v = url.searchParams.get(p);
-        if (v !== null) qs.set(p, v);
-      }
-      return relayCore(res, "GET", `/v1/sessions/row?${qs.toString()}`);
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/sessions/:id/children",
-    handle: async (c) =>
-      relayCore(
-        c.res,
-        "GET",
-        `/v1/sessions/${encodeURIComponent(c.params.id!)}/children?principalId=${encodeURIComponent(c.user)}`,
-      ),
-  },
-  {
-    method: "GET",
-    path: "/api/contexts",
-    handle: async (c) => {
-      const { res, user } = c;
-      return relayCore(res, "GET", `/v1/contexts?principalId=${encodeURIComponent(user)}`);
-    },
-  },
-  {
-    method: "GET",
     path: "/api/contexts/:scope/ambient-policy",
     handle: async (c) => {
       const { res, user } = c;
@@ -1722,21 +1646,6 @@ const apiRoutes: readonly WebRoute[] = [
     },
   },
   {
-    method: "GET",
-    path: "/api/personas",
-    handle: (c) => relayCore(c.res, "GET", `/v1/personas?principalId=${encodeURIComponent(c.user)}`),
-  },
-  {
-    method: "GET",
-    path: "/api/personas/:id",
-    handle: (c) =>
-      relayCore(
-        c.res,
-        "GET",
-        `/v1/personas/${encodeURIComponent(c.params.id!)}?principalId=${encodeURIComponent(c.user)}`,
-      ),
-  },
-  {
     method: "POST",
     path: "/api/personas",
     handle: (c) => relayWithPrincipal(c, "POST", "/v1/personas"),
@@ -1756,18 +1665,6 @@ const apiRoutes: readonly WebRoute[] = [
         `/v1/personas/${encodeURIComponent(c.params.id!)}`,
         JSON.stringify({ principalId: c.user }),
       ),
-  },
-  {
-    method: "GET",
-    path: "/api/personas/:id/versions",
-    handle: (c) => {
-      const query = new URLSearchParams({ principalId: c.user });
-      for (const key of ["before", "limit", "full"]) {
-        const value = c.url.searchParams.get(key);
-        if (value) query.set(key, value);
-      }
-      return relayCore(c.res, "GET", `/v1/personas/${encodeURIComponent(c.params.id!)}/versions?${query}`);
-    },
   },
   {
     method: "POST",
@@ -1809,18 +1706,6 @@ const apiRoutes: readonly WebRoute[] = [
     method: "PUT",
     path: "/api/sessions/:id/persona",
     handle: (c) => relayWithPrincipal(c, "PUT", `/v1/sessions/${encodeURIComponent(c.params.id!)}/persona`),
-  },
-  {
-    method: "GET",
-    path: "/api/directory/channels",
-    handle: (c) => {
-      const q = (c.url.searchParams.get("q") ?? "").trim();
-      return relayCore(
-        c.res,
-        "GET",
-        `/v1/directory/channels?principalId=${encodeURIComponent(c.user)}&q=${encodeURIComponent(q)}`,
-      );
-    },
   },
   {
     method: "GET",
@@ -1868,21 +1753,6 @@ const apiRoutes: readonly WebRoute[] = [
         15_000,
       );
       return json(c.res, response.status, JSON.parse(response.text));
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/custom-emoji",
-    handle: async (c) => relayCore(c.res, "GET", "/v1/custom-emoji"),
-  },
-  {
-    method: "GET",
-    path: "/api/ui-state",
-    handle: async (c) => {
-      const { res, url, user } = c;
-      const key = url.searchParams.get("key") ?? "";
-      const qs = new URLSearchParams({ principalId: user, key });
-      return relayCore(res, "GET", `/v1/ui-state?${qs.toString()}`);
     },
   },
   {
@@ -2045,36 +1915,6 @@ const apiRoutes: readonly WebRoute[] = [
     },
   },
   {
-    method: "GET",
-    path: "/api/scope-resources",
-    handle: async (c) => {
-      const { res, url, user } = c;
-      const scope = url.searchParams.get("scope");
-      if (!scope) return json(res, 400, { error: "bad_request", message: "scope required" });
-      const qs = new URLSearchParams({ principalId: user, scope });
-      return relayCore(res, "GET", `/v1/scope-resources?${qs.toString()}`);
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/skills",
-    handle: async (c) => {
-      const { res, url, user } = c;
-      const qs = new URLSearchParams({ principalId: user });
-      if (url.searchParams.get("includeShadowed") === "1") qs.set("includeShadowed", "1");
-      return relayCore(res, "GET", `/v1/skills?${qs.toString()}`);
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/skills/:id",
-    handle: async (c) => {
-      const { res, user } = c;
-      const id = c.params.id!;
-      return relayCore(res, "GET", `/v1/skills/${encodeURIComponent(id)}?principalId=${encodeURIComponent(user)}`);
-    },
-  },
-  {
     method: "POST",
     path: "/api/skills",
     handle: async (c) => {
@@ -2188,16 +2028,6 @@ const apiRoutes: readonly WebRoute[] = [
     },
   },
   {
-    method: "GET",
-    path: "/api/sessions/:id/side-chats",
-    handle: async (c) =>
-      relayCore(
-        c.res,
-        "GET",
-        `/v1/sessions/${encodeURIComponent(c.params.id!)}/side-chats?principalId=${encodeURIComponent(c.user)}`,
-      ),
-  },
-  {
     method: "POST",
     path: "/api/sessions/:id/expand",
     handle: async (c) =>
@@ -2238,61 +2068,6 @@ const apiRoutes: readonly WebRoute[] = [
       if (!body) return;
       if (body.action !== "control") return json(c.res, 400, { error: "only swarm controls are available here" });
       return relayCore(c.res, "POST", `/v1/sessions/${encodeURIComponent(c.params.id!)}/swarm`, JSON.stringify(body));
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/sessions/:id/approvals",
-    handle: async (c) => {
-      const { res, user } = c;
-      const id = c.params.id!;
-      return relayCore(
-        res,
-        "GET",
-        `/v1/sessions/${encodeURIComponent(id)}/approvals?viewer=${encodeURIComponent(user)}`,
-      );
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/sessions/:id/background/:pid/output",
-    handle: async (c) => {
-      const { res, url, user } = c;
-      const id = c.params.id!;
-      const pid = c.params.pid!;
-      const sinceCursor = url.searchParams.get("sinceCursor") ?? "0";
-      return relayCore(
-        res,
-        "GET",
-        `/v1/sessions/${encodeURIComponent(id)}/background/${encodeURIComponent(pid)}/output?viewer=${encodeURIComponent(user)}&sinceCursor=${encodeURIComponent(sinceCursor)}`,
-      );
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/sessions/:id/background",
-    handle: async (c) => {
-      const { res, user } = c;
-      const id = c.params.id!;
-      return relayCore(
-        res,
-        "GET",
-        `/v1/sessions/${encodeURIComponent(id)}/background?viewer=${encodeURIComponent(user)}`,
-      );
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/sessions/:id/items/:seq",
-    handle: async (c) => {
-      const { res, user } = c;
-      const { id, seq } = c.params as { id: string; seq: string };
-      if (!/^\d+$/.test(seq)) return json(c.res, 404, { error: "not found" });
-      return relayCore(
-        res,
-        "GET",
-        `/v1/sessions/${encodeURIComponent(id)}/items/${seq}?viewer=${encodeURIComponent(user)}`,
-      );
     },
   },
   {
@@ -2339,42 +2114,6 @@ const apiRoutes: readonly WebRoute[] = [
     method: "GET",
     path: "/api/files/:id/content/:name",
     handle: serveFileContent,
-  },
-  {
-    method: "GET",
-    path: "/api/files",
-    handle: async (c) => {
-      const { res, url, user } = c;
-      const qs = new URLSearchParams({ viewer: user });
-      const limit = url.searchParams.get("limit");
-      if (limit) qs.set("limit", limit);
-      const cursor = url.searchParams.get("cursor");
-      if (cursor) qs.set("cursor", cursor);
-      const scope = url.searchParams.get("scope");
-      if (scope) qs.set("scope", scope);
-      return relayCore(res, "GET", `/v1/files?${qs.toString()}`);
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/memory",
-    handle: async (c) => {
-      const { res, user } = c;
-      return relayCore(res, "GET", `/v1/memory?principalId=${encodeURIComponent(user)}`);
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/spend",
-    handle: async (c) => {
-      const { res, url, user } = c;
-      const qs = new URLSearchParams({ principalId: user });
-      for (const key of ["from", "to", "bucket"]) {
-        const value = url.searchParams.get(key);
-        if (value) qs.set(key, value);
-      }
-      return relayCore(res, "GET", `/v1/spend?${qs.toString()}`);
-    },
   },
   {
     method: "PATCH",
@@ -2437,14 +2176,6 @@ const apiRoutes: readonly WebRoute[] = [
         `/v1/sessions/${encodeURIComponent(id)}`,
         JSON.stringify({ principalId: user, ...patch }),
       );
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/connectors",
-    handle: async (c) => {
-      const { res, user } = c;
-      return relayCore(res, "GET", `/v1/connectors/oauth/status?principalId=${encodeURIComponent(user)}`);
     },
   },
   {
@@ -3101,26 +2832,6 @@ const apiRoutes: readonly WebRoute[] = [
       const { res, user } = c;
       return relayCore(res, "GET", `/v1/loops?principalId=${encodeURIComponent(user)}`);
     },
-  },
-  {
-    method: "GET",
-    path: "/api/webhooks",
-    handle: async (c) => {
-      const { res, user } = c;
-      return relayCore(res, "GET", `/v1/webhooks?viewer=${encodeURIComponent(user)}`);
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/webhooks/:id/events",
-    handle: async ({ res, user, params }) =>
-      relay(
-        res,
-        await coreFetch(
-          "GET",
-          `/v1/webhooks/${encodeURIComponent(params.id!)}/events?viewer=${encodeURIComponent(user)}`,
-        ),
-      ),
   },
   {
     method: "POST",

@@ -41,6 +41,7 @@ test("local auth bypass signs in loopback portal requests without OIDC", async (
 
   const settings = await fetch(`${base}/settings/users`);
   assert.equal(settings.status, 200);
+  assert.match(settings.headers.get("set-cookie") ?? "", /portal_session=[^;]+;/);
   const body = (await settings.json()) as { url: string; cookie: string };
   assert.equal(body.url, "/settings/users");
   assert.equal(body.cookie, "webuiuser=local-admin");
