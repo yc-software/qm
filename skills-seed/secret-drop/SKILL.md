@@ -43,9 +43,9 @@ link-bound token, so a rebuilt URL will not work.
 
 ## A memory brain's client secret
 
-When an org admin registers a memory brain (`PUT /v1/admin/memory-registry/brains/<id>`), its
-client secret never goes through chat or the agent. Mint a brain link instead, on the admin's
-own turn:
+When an org admin registers a memory brain (`PUT /v1/admin/memory-registry/brains/<id>`), or a
+member connects their own (`PUT /v1/memory/brain`), its client secret never goes through chat or
+the agent. Mint a brain link instead, on that person's own turn:
 
 ```sh
 curl -fsS -X POST "$AGENT_API_URL/v1/keychain/drops" \
@@ -54,9 +54,9 @@ curl -fsS -X POST "$AGENT_API_URL/v1/keychain/drops" \
 ```
 
 - Only `memoryBrain` and `purpose`: no `service`, `fields`, `envKey` or `onBehalfOf`.
-- The form shows the admin where memory goes (the brain and who is bound to it) before they submit.
+- The form shows them where memory goes (the brain and who is bound to it) before they submit.
 - The secret goes straight to QM's memory registry. It never enters a keychain, can't be granted
   and is never on the agent's computer, so there is no handle to select and nothing wakes this
-  conversation. Ask the admin to tell you when they've submitted, then check
-  `GET /v1/admin/memory-registry` for `hasClientSecret`.
+  conversation. Ask them to tell you when they've submitted, then check `hasClientSecret` in
+  `GET /v1/admin/memory-registry` (admins) or `GET /v1/memory/brain` (a member's own brain).
 - If the brain's URL changed after the link was made, the link refuses; mint a fresh one.

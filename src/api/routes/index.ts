@@ -19,6 +19,7 @@ import { credentialRoutes } from "./credentials.ts";
 import { brokerGitHttp, GIT_HTTP_BROKER_PREFIX } from "../git-http-broker.ts";
 import { keychainRoutes } from "./keychain.ts";
 import { secretDropRoutes } from "./secret-drop.ts";
+import { memoryBrainRoutes } from "./memory-brain.ts";
 import { adminRoutes } from "./admin.ts";
 import { spendExport } from "./admin/spend.ts";
 import { skillPackRoutes } from "./skill-packs.ts";
@@ -99,6 +100,7 @@ export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...credentialRoutes,
   ...keychainRoutes,
   ...secretDropRoutes,
+  ...memoryBrainRoutes,
   ...connectorRoutes,
   ...composioRoutes,
   ...composioTwitterMediaRoutes,

@@ -36,7 +36,12 @@ export function createMcpMemoryProvider(opts: {
     const headers = opts.attestActor && person ? { "x-qm-actor": person } : undefined;
     const ms = deadline - Date.now();
     if (ms <= 0) throw new TimeoutError(`memory provider timed out after ${op.timeoutMs}ms`);
-    const result = await withTimeout(() => op.client.callTool(op.tool, args, headers), ms, "memory provider");
+    const stop = new AbortController();
+    const result = await withTimeout(
+      () => op.client.callTool(op.tool, args, headers, stop.signal),
+      ms,
+      "memory provider",
+    ).finally(() => stop.abort());
     reportEnvelope(mcpEnvelope(result));
     return result;
   };
