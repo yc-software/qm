@@ -5,7 +5,7 @@ import type { AddressInfo } from "node:net";
 
 const core = createServer((_req, res) => {
   res.writeHead(200, { "content-type": "application/json" });
-  res.end("{}");
+  res.end(JSON.stringify({ enabled: true }));
 });
 await new Promise<void>((r) => core.listen(0, r));
 
@@ -13,6 +13,7 @@ process.env.CORE_API_URL = `http://localhost:${(core.address() as AddressInfo).p
 delete process.env.CORE_SIGNING_SECRET;
 delete process.env.PORTAL_IDENTITY_SECRET;
 process.env.WEB_UI_PRINCIPALS = "alice";
+process.env.LOOPS_USERS = "alice";
 process.env.ALLOW_UNSIGNED_TEST_IDENTITY = "0";
 
 const { handler } = await import("../server/index.ts");
@@ -33,7 +34,7 @@ test.after(() => {
 });
 
 test("with no signing secret the surface advertises dev mode", async () => {
-  const r = await fetch(`${base}/api/directory/resolve?q=alice`);
+  const r = await fetch(`${base}/api/loops`);
   assert.equal(r.status, 401);
   assert.deepEqual(await r.json(), { error: "sign in", mode: "dev", reason: "unauthenticated" });
 });
@@ -44,7 +45,7 @@ test("a bare principal id — not just an email — can sign in", async () => {
   const cookie = r.headers.get("set-cookie") ?? "";
   assert.match(cookie, /webuiuser=alice/);
 
-  const me = await fetch(`${base}/api/directory/resolve?q=alice`, { headers: { cookie: cookie.split(";")[0] } });
+  const me = await fetch(`${base}/api/loops`, { headers: { cookie: cookie.split(";")[0] } });
   assert.equal(me.status, 200);
 });
 

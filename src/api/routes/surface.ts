@@ -31,7 +31,6 @@ import { errMessage } from "../../util/errors.ts";
 import { isSafeSkillName, SKILL_NAME_RULE } from "../../skills/skill-name.ts";
 import { SideChatAnchorError, SoulUpdateDeniedError, type SessionPageStatus } from "../app-types.ts";
 import { renderAgentApis } from "../agent-api-catalog.ts";
-import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../../auth/capability-token.ts";
 import { sendJson, sendProblem } from "../http.ts";
 import { resolveBranding } from "../../resolution/branding.ts";
 import { audit, isObj, orgScope } from "./shared.ts";
@@ -742,19 +741,6 @@ async function selfMemory(ctx: ApiCtx): Promise<void> {
   const action = method === "GET" ? "memory.self.read" : "memory.self.update";
   audit(deps, { principalId, action, resource: "memory", scopeLabel: scope });
   return sendJson(res, 200, { scopeId: scope, facts: await memoryFacts(memory, scope) });
-}
-
-async function sessionCapability(ctx: ApiCtx): Promise<void> {
-  const { res, deps, actor } = ctx;
-  if (!actor) return sendJson(res, 401, { error: "unauthorized", message: "portal identity required" });
-  const secret = deps.capabilitySecret ?? ctx.secret;
-  if (!secret) return sendJson(res, 503, { error: "not_configured", message: "capability secret not set" });
-  const token = await mintCapabilityToken(
-    { actorId: actor.p, scopeId: makeScopeId("personal", actor.p), exp: Date.now() + CAPABILITY_TTL_MS },
-    secret,
-    deps.capabilityTokenCompression,
-  );
-  return sendJson(res, 200, { token });
 }
 
 async function listAgentApis(ctx: ApiCtx): Promise<void> {
@@ -1513,7 +1499,6 @@ export async function postSoul(ctx: ApiCtx): Promise<void> {
 export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...sessionSharingRoutes,
   ...suggestedActivityRoutes,
-  { method: "POST", path: "/v1/session-cap", actor: "system", auth: "source", handle: sessionCapability },
   { method: "GET", path: "/v1/conversations", auth: "either", handle: listAgentConversations },
   { method: "GET", path: "/v1/conversations/:id", auth: "either", handle: getAgentConversation },
   { method: "POST", path: "/v1/conversations/:id", auth: "either", handle: patchAgentConversation },

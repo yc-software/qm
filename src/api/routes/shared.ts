@@ -1,5 +1,6 @@
 import { orgId as configOrgId, orgScope as configOrgScope } from "../../config.ts";
-import type { Principal } from "../../types.ts";
+import { scopeId, type Principal } from "../../types.ts";
+import type { CapabilityClaims } from "../../auth/capability-token.ts";
 import type { AuditEvent } from "../../audit/audit-log.ts";
 import { adminStatusFromGrants } from "../../admin/admin-service.ts";
 import { canonicalPerson, samePerson } from "../../directory/person.ts";
@@ -12,6 +13,11 @@ import { currentModelRequestContext } from "../../model/request-context.ts";
 export const orgScope = (_deps?: unknown): string => configOrgScope();
 
 export { isObj } from "../../util/objects.ts";
+
+export function personalCapability(ctx: Pick<ApiCtx, "capability" | "actor">): CapabilityClaims | null {
+  if (ctx.capability) return ctx.capability;
+  return ctx.actor ? { actorId: ctx.actor.p, scopeId: scopeId("personal", ctx.actor.p), exp: ctx.actor.exp } : null;
+}
 
 export function audit(deps: ServerDeps, e: Omit<AuditEvent, "at">): void {
   deps.auditLog?.record({ at: Date.now(), ...e });
