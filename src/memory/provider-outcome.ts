@@ -31,7 +31,16 @@ export async function withEnvelope<T>(run: () => Promise<T>): Promise<{ value: T
   return { value, envelope };
 }
 
+export class MemoryProviderDisabled extends Error {
+  readonly code: string;
+  constructor(code: string) {
+    super(`memory provider is disabled (${code})`);
+    this.code = code;
+  }
+}
+
 export function failedOutcome(error: unknown): Pick<MemoryProviderOutcome, "outcome" | "code"> {
+  if (error instanceof MemoryProviderDisabled) return { outcome: "disabled", code: error.code };
   if (error instanceof UnattestableActor || error instanceof OutsideAudience)
     return { outcome: "denied", code: error.code };
   if (error instanceof TimeoutError) return { outcome: "timed_out" };
@@ -42,7 +51,7 @@ export function failedOutcome(error: unknown): Pick<MemoryProviderOutcome, "outc
 }
 
 export interface MemoryProviderProblem {
-  code: "memory_provider_denied" | "memory_provider_timeout" | "memory_provider_failed";
+  code: "memory_provider_denied" | "memory_provider_timeout" | "memory_provider_failed" | "memory_provider_disabled";
   provider: string;
   detail: string;
   fix: string;
@@ -84,6 +93,13 @@ function problemOf(outcome: MemoryProviderOutcome, write: boolean): MemoryProvid
         provider,
         detail: `Memory provider ${provider} failed${reason}, so ${lost}.`,
         fix: `Check ${provider}'s logs, URL and tool names (${TROUBLESHOOTING}).`,
+      };
+    case "disabled":
+      return {
+        code: "memory_provider_disabled",
+        provider,
+        detail: `Memory provider ${provider} is registered for this scope but not serving it${reason}, so QM didn't call it.`,
+        fix: `Look up ${code ?? "the code"} in docs/memory-providers.md#memory-registry; GET /v1/admin/memory-registry shows the entry.`,
       };
     default:
       return undefined;

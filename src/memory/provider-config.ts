@@ -1,9 +1,10 @@
 import { parseScopeId, type ScopeId, type ScopeKind } from "../types.ts";
+import { isPrivateNetworkIp } from "../util/network.ts";
 import type { MemoryCapturePolicy, MemoryProviderRoute } from "./provider-router.ts";
 import { parseMemorableProvider, type MemorableMemoryProviderConfig } from "./memorable/config.ts";
 
 const KINDS = new Set<ScopeKind>(["personal", "channel", "team", "org", "group"]);
-const ID = /^[a-z][a-z0-9-]{0,62}$/;
+export const MEMORY_PROVIDER_ID = /^[a-z][a-z0-9-]{0,62}$/;
 const ARG = /^[a-zA-Z_][a-zA-Z0-9_]{0,63}$/;
 const ENV = /^[A-Z][A-Z0-9_]*$/;
 export const MAX_PROVIDER_TIMEOUT_MS = 30_000;
@@ -74,6 +75,18 @@ const PRIVATE_SUFFIXES = [".internal", ".flycast", ".local"];
 const ACCEPTED_HOSTS = [...PRIVATE_HOSTS, ...PRIVATE_SUFFIXES.map((suffix) => `*${suffix}`)];
 const URL_HELP = `Accepted: https://<host>, or http:// on ${ACCEPTED_HOSTS.slice(0, -1).join(", ")} or ${ACCEPTED_HOSTS.at(-1)}; see docs/memory-providers.md#troubleshooting.`;
 
+const namedPrivateHost = (hostname: string): boolean =>
+  PRIVATE_HOSTS.includes(hostname) || PRIVATE_SUFFIXES.some((suffix) => hostname.endsWith(suffix));
+
+const trimTrailing = (value: string, char: string): string => {
+  let end = value.length;
+  while (value[end - 1] === char) end--;
+  return value.slice(0, end);
+};
+
+export const isPrivateHost = (hostname: string): boolean =>
+  namedPrivateHost(trimTrailing(hostname, ".")) || isPrivateNetworkIp(hostname);
+
 function privateMcpUrl(value: unknown, at: string): string {
   const raw = string(value, at);
   let url: URL;
@@ -83,14 +96,12 @@ function privateMcpUrl(value: unknown, at: string): string {
     throw new Error(`${at} is not a valid URL (value not shown). ${URL_HELP}`);
   }
   const shown = `${url.protocol}//${url.hostname}`;
-  const privateHttp =
-    url.protocol === "http:" &&
-    (PRIVATE_HOSTS.includes(url.hostname) || PRIVATE_SUFFIXES.some((suffix) => url.hostname.endsWith(suffix)));
+  const privateHttp = url.protocol === "http:" && namedPrivateHost(url.hostname);
   if (url.username || url.password || url.hash)
     throw new Error(`${at} (${shown}) must not carry credentials or a #fragment. ${URL_HELP}`);
   if (url.protocol !== "https:" && !privateHttp)
     throw new Error(`${at} (${shown}) must use HTTPS or a recognized private HTTP host. ${URL_HELP}`);
-  return raw.replace(/\/+$/, "");
+  return trimTrailing(raw, "/");
 }
 
 function operation(value: unknown, at: string, env: NodeJS.ProcessEnv): McpMemoryOperationConfig {
@@ -151,7 +162,7 @@ export function parseMemoryProviderConfig(
   const providers = root.providers.map((value, i) => {
     const raw = object(value, `MEMORY_PROVIDER_CONFIG.providers[${i}]`);
     const id = string(raw.id, `MEMORY_PROVIDER_CONFIG.providers[${i}].id`);
-    if (!ID.test(id) || id === "default") throw new Error(`invalid memory provider id: ${id}`);
+    if (!MEMORY_PROVIDER_ID.test(id) || id === "default") throw new Error(`invalid memory provider id: ${id}`);
     if (raw.attestActor !== undefined && (raw.type !== "mcp" || typeof raw.attestActor !== "boolean"))
       throw new Error(`memory provider ${id}.attestActor must be true or false on an mcp provider`);
     if (raw.type === "memorable") return parseMemorableProvider(raw, id, env);

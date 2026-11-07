@@ -53,6 +53,15 @@ import {
 import { deleteModelProvider, getModelProviders, putModelProvider } from "./admin/model-providers.ts";
 import { deleteCustomProvider, getCustomProviders, putCustomProvider } from "./admin/custom-providers.ts";
 import { deleteMcpServer, getMcpServers, putMcpServer } from "./admin/mcp-servers.ts";
+import {
+  deleteMemoryBinding,
+  deleteMemoryBrain,
+  getMemoryBinding,
+  getMemoryBrain,
+  getMemoryRegistry,
+  putMemoryBinding,
+  putMemoryBrain,
+} from "./admin/memory-registry.ts";
 import { listSecurityFlags } from "./admin/security.ts";
 import { spend } from "./admin/spend.ts";
 import { listUnattendedGrants } from "./admin/unattended-grants.ts";
@@ -81,6 +90,8 @@ const IMPERSONATE = "impersonating a user is portal-only — the agent cannot ac
 const MCP_SERVERS =
   "registering or changing an MCP server is portal-only — the agent cannot change which tools it can call or which calls need approval";
 const LINKS = "identity links are portal-only — the agent cannot decide which sign-ins belong to one person";
+const MEMORY_REGISTRY_DELETE =
+  "deleting a memory brain or binding never goes through the agent — an org admin deletes it through the admin API outside chat";
 
 const routes: Route<ApiCtx>[] = [
   { method: "POST", path: "/v1/slack/managed/installation", auth: "public", handle: managedSlackRequest },
@@ -318,6 +329,55 @@ const routes: Route<ApiCtx>[] = [
       auth: "either",
       admin: { privateRead: "unless-org-scope" },
       handle: adminMemory,
+    },
+    {
+      method: "GET",
+      path: "/v1/admin/memory-registry",
+      auth: "either",
+      admin: { privateRead: "always" },
+      handle: getMemoryRegistry,
+    },
+    {
+      method: "GET",
+      path: "/v1/admin/memory-registry/brains/:id",
+      auth: "either",
+      admin: { privateRead: "always" },
+      handle: getMemoryBrain,
+    },
+    {
+      method: "PUT",
+      path: "/v1/admin/memory-registry/brains/:id",
+      auth: "either",
+      admin: { privateRead: "always" },
+      handle: putMemoryBrain,
+    },
+    {
+      method: "DELETE",
+      path: "/v1/admin/memory-registry/brains/:id",
+      auth: "either",
+      admin: { agent: { portalOnly: MEMORY_REGISTRY_DELETE } },
+      handle: deleteMemoryBrain,
+    },
+    {
+      method: "GET",
+      path: "/v1/admin/memory-registry/bindings/:id",
+      auth: "either",
+      admin: { privateRead: "always" },
+      handle: getMemoryBinding,
+    },
+    {
+      method: "PUT",
+      path: "/v1/admin/memory-registry/bindings/:id",
+      auth: "either",
+      admin: { privateRead: "always" },
+      handle: putMemoryBinding,
+    },
+    {
+      method: "DELETE",
+      path: "/v1/admin/memory-registry/bindings/:id",
+      auth: "either",
+      admin: { agent: { portalOnly: MEMORY_REGISTRY_DELETE } },
+      handle: deleteMemoryBinding,
     },
     { method: "POST", path: "/v1/admin/memory", auth: "either", handle: adminMemory },
     { method: "PATCH", path: "/v1/admin/memory", auth: "either", handle: adminMemory },

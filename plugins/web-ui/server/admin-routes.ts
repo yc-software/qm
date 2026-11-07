@@ -60,6 +60,7 @@ const ALLOWED: Record<string, string> = {
   "model-registry": "GET POST PUT DELETE",
   "custom-providers": "GET PUT DELETE",
   "mcp-servers": "GET PUT DELETE",
+  "memory-registry": "GET PUT DELETE",
 };
 
 export function adminRoutes(d: AdminRouteDeps) {

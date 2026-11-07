@@ -19,7 +19,7 @@ export const MEMORY_FILE = "memory/MEMORY.md";
 export interface MemoryProviderOutcome {
   provider: string;
   scope: ScopeId;
-  outcome: "ok" | "empty" | "committed" | "pending" | "unknown" | "denied" | "timed_out" | "failed";
+  outcome: "ok" | "empty" | "committed" | "pending" | "unknown" | "denied" | "timed_out" | "failed" | "disabled";
   ms: number;
   code?: string;
   added?: number;

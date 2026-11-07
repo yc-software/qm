@@ -26,6 +26,7 @@ export interface DurableMap<T> {
   deleteIf(id: string, predicate: (value: T) => boolean): Promise<boolean>;
   delete(id: string): Promise<void>;
   take(id: string): Promise<T | null>;
+  version(): Promise<string>;
 }
 
 const VERSIONS_TABLE = "durable_map_versions";
@@ -103,10 +104,13 @@ export function createPostgresMap<T>(
   }
   const CACHE_MAX_AGE_MS = 15_000;
   let cache: { v: string; fetchedAt: number; entries: Array<[string, T]> } | null = null;
-  async function snapshot(): Promise<Array<[string, T]>> {
+  async function version(): Promise<string> {
     await ready();
     const vRows = await pg.q(`SELECT v FROM ${VERSIONS_TABLE} WHERE tbl = '${table}'`);
-    const v = vRows.length ? String(vRows[0]!.v) : "";
+    return vRows.length ? String(vRows[0]!.v) : "";
+  }
+  async function snapshot(): Promise<Array<[string, T]>> {
+    const v = await version();
     if (!cache || cache.v !== v || Date.now() - cache.fetchedAt > CACHE_MAX_AGE_MS) {
       const rows = await pg.q(`SELECT id, json FROM ${table} ORDER BY id`);
       cache = { v, fetchedAt: Date.now(), entries: rows.map((row) => [row.id as string, row.json as T]) };
@@ -162,6 +166,7 @@ export function createPostgresMap<T>(
       return (await selectRows(query)).map(([, value]) => value);
     },
     selectEntries: selectRows,
+    version,
     async get(id) {
       await ready();
       const rows = await pg.q(`SELECT json FROM ${table} WHERE id = $1`, [id]);
