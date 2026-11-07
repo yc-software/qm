@@ -242,6 +242,7 @@ const routes: Route<ApiCtx>[] = [
       },
       handle: listAdminFiles,
     },
+    { method: "POST", path: "/v1/admin/files/upload", auth: "either", streamBody: true, handle: uploadAdminFile },
     {
       method: "GET",
       path: "/v1/admin/errors",
@@ -380,7 +381,6 @@ const routes: Route<ApiCtx>[] = [
       admin: { privateRead: "always" },
       handle: listAdminShadowDeliveries,
     },
-    { method: "POST", path: "/v1/admin/files/upload", auth: "either", handle: uploadAdminFile },
     {
       method: "GET",
       path: "/v1/admin/security/flags",
