@@ -1,7 +1,7 @@
 import type { Me } from "./shell-state";
 import { reportHandledError } from "./browser-errors.ts";
 
-export interface AnalyticsHook {
+interface AnalyticsHook {
   page?(view: string): void;
   track?(event: string, properties: { insertId: string }): void;
   stop?(): void;
