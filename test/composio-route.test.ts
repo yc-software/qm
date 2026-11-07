@@ -4,6 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { ServerResponse } from "node:http";
 import { composioRoutes, composioUserId } from "../src/api/routes/composio.ts";
+import { composioCallbackRoutes } from "../src/api/routes/composio-callback.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import type { ServerDeps } from "../src/api/deps.ts";
 import { createKeychain } from "../src/credentials/keychain.ts";
@@ -34,6 +35,7 @@ function fixture() {
     serviceCreds: keychain,
     acl,
     composioReturns: testMap(),
+    portalUrl: "https://qm.example",
     auditLog: {
       record: (e: { action: string; resource?: string }) => audits.push(e),
     } as unknown as ServerDeps["auditLog"],
@@ -64,12 +66,17 @@ function fixture() {
   ) {
     let status = 0;
     let text = "";
+    let location: string | undefined;
+    const headers: Record<string, string> = {};
     const url = new URL(path, "http://localhost");
     const res = {
-      setHeader() {},
+      setHeader(name: string, value: string) {
+        headers[name] = value;
+      },
       getHeader() {},
-      writeHead(code: number) {
+      writeHead(code: number, headers?: { location?: string }) {
         status = code;
+        location = headers?.location;
       },
       end(value: string) {
         text = value;
@@ -84,9 +91,9 @@ function fixture() {
       capability,
       actor: actor ? { p: actor, exp: Date.now() + 60_000, ...(impersonating ? { imp: "admin" } : {}) } : null,
     } as ApiCtx;
-    const route = composioRoutes.find((r) => "path" in r && r.path === url.pathname)!;
+    const route = [...composioRoutes, ...composioCallbackRoutes].find((r) => "path" in r && r.path === url.pathname)!;
     await route.handle(ctx);
-    return { status, data: JSON.parse(text), text };
+    return { status, data: text ? JSON.parse(text) : null, text, location, headers };
   }
   async function own(ownerId = "alice", service = "composio") {
     await keychain.save({ ownerId, service, envKey: "COMPOSIO_API_KEY", secret: "private-key" });
@@ -113,6 +120,8 @@ function fixture() {
   }
   return { invoke, own, shared, calls, replies, deps, app, audits };
 }
+
+const SETTINGS = "https://qm.example/?view=settings";
 
 test("Composio requires a verified actor and never uses another person's key", async () => {
   const f = fixture();
@@ -672,7 +681,7 @@ test("oversized provider responses are reported with their status", async () => 
 test("callback completion is browser-only and preserves the durable return URL", async () => {
   const f = fixture();
   await f.own();
-  assert.equal((await f.invoke("/v1/composio/complete-auth", { sessionUri: "opaque" }, null, privateCap)).status, 403);
+  assert.equal((await f.invoke("/v1/composio/callback?session_uri=opaque", undefined, null, privateCap)).status, 403);
   const url = "https://qm.example/s/chat?composioReturn=state";
   f.replies.push(
     { session_id: "trs_example" },
@@ -680,9 +689,8 @@ test("callback completion is browser-only and preserves the durable return URL",
   );
   assert.equal((await f.invoke("/v1/composio/authorize", { toolkit: "gmail", callbackUrl: url })).status, 200);
   f.replies.push({ connected_account_id: "ca_test", toolkit_slug: "gmail" });
-  assert.deepEqual((await f.invoke("/v1/composio/complete-auth", { sessionUri: "opaque", user_id: "bob" })).data, {
-    returnTo: url,
-  });
+  const verified = await f.invoke("/v1/composio/callback?session_uri=opaque&user_id=bob");
+  assert.deepEqual([verified.status, verified.location], [303, url]);
   assert.deepEqual(JSON.parse(f.calls[2]!.init!.body as string), {
     session_uri: "opaque",
     user_id: composioUserId(orgId(), "alice"),
@@ -703,10 +711,10 @@ test("connects without a return page are still audited on completion, and failed
   );
   assert.equal((await f.invoke("/v1/composio/authorize", { toolkit: "outlook" })).status, 200);
   f.replies.push({ connected_account_id: "ca_test" });
-  assert.deepEqual((await f.invoke("/v1/composio/complete-auth", { sessionUri: "opaque" })).data, { returnTo: null });
+  assert.equal((await f.invoke("/v1/composio/callback?session_uri=opaque")).location, SETTINGS);
   f.replies.push(new Response("bad", { status: 400 }));
-  assert.equal((await f.invoke("/v1/composio/complete-auth", { sessionUri: "opaque" })).status, 400);
-  assert.equal((await f.invoke("/v1/composio/complete-auth", { sessionUri: null })).status, 400);
+  assert.equal((await f.invoke("/v1/composio/callback?session_uri=opaque")).status, 400);
+  assert.equal((await f.invoke("/v1/composio/callback")).status, 400);
   assert.deepEqual(
     f.audits.filter((e) => e.action.startsWith("composio.conn")).map((e) => [e.action, e.resource]),
     [
@@ -797,6 +805,26 @@ test("shared org connections recheck grants for every audience member", async ()
   assert.equal((await f.invoke("/v1/composio/connections", undefined, null, cap)).status, 200);
 });
 
+test("the callback redirects only within the web origin and never caches", async () => {
+  const f = fixture();
+  await f.own();
+  const key = `${composioUserId(orgId(), "alice")}:ca_test`;
+  for (const [url, status, location] of [
+    ["https://qm.example//evil.example/path", 303, "https://qm.example//evil.example/path"],
+    ["https://evil.example/path", 400, undefined],
+  ] as const) {
+    await f.deps.composioReturns!.put(key, { url, toolkit: "gmail", expiresAt: Date.now() + 60_000 });
+    f.replies.push({ connected_account_id: "ca_test" });
+    const result = await f.invoke("/v1/composio/callback?session_uri=opaque");
+    assert.deepEqual([result.status, result.location], [status, location]);
+    assert.deepEqual(result.headers, { "cache-control": "no-store", "referrer-policy": "no-referrer" });
+  }
+  assert.equal(
+    (await f.invoke("/v1/composio/callback?session_uri=opaque", undefined, "alice", undefined, true)).status,
+    403,
+  );
+});
+
 test("expired callback returns are discarded after successful browser verification", async () => {
   const f = fixture();
   await f.own();
@@ -807,7 +835,7 @@ test("expired callback returns are discarded after successful browser verificati
     expiresAt: Date.now() - 1,
   });
   f.replies.push({ connected_account_id: "ca_test" });
-  assert.deepEqual((await f.invoke("/v1/composio/complete-auth", { sessionUri: "opaque" })).data, { returnTo: null });
+  assert.equal((await f.invoke("/v1/composio/callback?session_uri=opaque")).location, SETTINGS);
   assert.equal(await f.deps.composioReturns!.get(key), null);
 });
 
@@ -950,9 +978,8 @@ test("consent and browser verification use the canonical identity when signed in
     assert.equal(JSON.parse(String(f.calls[0]!.init?.body)).user_id, userId);
     assert.equal((await f.deps.composioReturns!.get(`${userId}:ca_linked`))?.url, callbackUrl);
     f.replies.push({ connected_account_id: "ca_linked", toolkit_slug: "gmail" });
-    const result = await f.invoke("/v1/composio/complete-auth", { sessionUri: "opaque" }, aliasId);
-    assert.equal(result.status, 200);
-    assert.deepEqual(result.data, { returnTo: callbackUrl });
+    const result = await f.invoke("/v1/composio/callback?session_uri=opaque", undefined, aliasId);
+    assert.deepEqual([result.status, result.location], [303, callbackUrl]);
     assert.deepEqual(JSON.parse(String(f.calls.at(-1)!.init?.body)), { session_uri: "opaque", user_id: userId });
     assert.equal((await f.deps.composioReturns!.entries()).length, 0);
   } finally {

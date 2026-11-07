@@ -108,6 +108,22 @@ export const API_ALIASES: ReadonlyMap<string, string> = new Map([
   ["POST /api/runs/:id/signal", "/v1/web/runs/:id/signal"],
   ["GET /api/deliveries/events", "/v1/web/events"],
   ["GET /me", "/v1/web/me"],
+  ["POST /api/runs/:id/withdraw", "/v1/runs/:id/withdraw"],
+  ["GET /api/composio/callback", "/v1/composio/callback"],
+  ["GET /api/dictation", "/v1/web/dictation"],
+  ["POST /api/dictation", "/v1/web/dictation"],
+  ["GET /api/voice", "/v1/web/voice"],
+  ["POST /api/voice/sessions", "/v1/web/voice/sessions"],
+  ["GET /api/ui-canvas/:sessionId", "/v1/ui/canvases/:sessionId"],
+  ["GET /api/ui-canvas/:sessionId/script.js", "/v1/ui/canvases/:sessionId/script.js"],
+  ["POST /api/ui-canvas/observe/:callId", "/v1/ui/observe/:callId/result"],
+  ["POST /api/ui-canvas/:sessionId", "/v1/ui/canvases/:sessionId"],
+  ["GET /api/admin/connector-catalog", "/v1/connectors/catalog"],
+  ...apiRoutes.flatMap((route): Array<[string, string]> =>
+    "path" in route && route.browser && route.path.startsWith("/v1/admin/")
+      ? [[`${route.method} /api/admin/${route.path.slice("/v1/admin/".length)}`, route.path]]
+      : [],
+  ),
 ]);
 
 const aliasMatchers = [...API_ALIASES].map(([key, target]) => {

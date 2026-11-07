@@ -4,30 +4,52 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { mkdir, mkdtemp, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { Writable } from "node:stream";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
+import type { App } from "../src/api/app-types.ts";
+import type { ServerDeps } from "../src/api/deps.ts";
+import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
+import { browserImpersonationCookie, browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
 
 const testTmp = await mkdtemp(join(tmpdir(), "dictation-route-test-"));
 process.env.TMPDIR = testTmp;
-process.env.CORE_SIGNING_SECRET = "voice-route-test";
-process.env.PUBLIC_WEB_URL = "https://qm.example.test";
-process.env.WEB_UI_VOICE_USERS = "alice";
-process.env.OPENAI_API_KEY = "voice-test-key";
-const { handler } = await import("../server/index.ts");
-const { sweepDictationSpool } = await import("../server/voice-routes.ts");
-const surface = createServer((req, res) => void handler(req, res));
-await new Promise<void>((resolve) => surface.listen(0, resolve));
-const base = `http://localhost:${(surface.address() as AddressInfo).port}`;
-const identity = (user = "alice") => ({
-  [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: user, exp: Date.now() + 60_000 }, "voice-route-test"),
-});
-const headers = { ...identity(), "content-type": "audio/mp4", origin: "https://qm.example.test" };
+const { createServer } = await import("../src/api/server.ts");
+const { sweepDictationSpool } = await import("../src/api/routes/voice.ts");
+
+async function serve(deps: Partial<ServerDeps>): Promise<string> {
+  const server = createServer(
+    {} as App,
+    {
+      signingSecret: "voice-route-signing-secret-0123456789",
+      replayDedupe: { claim: async () => true },
+      ...browserSessionDeps,
+      admin: { adminStatusOf: async ({ id }: { id: string }) => ({ isAdmin: id === "admin" }) },
+      ...deps,
+    } as ServerDeps,
+  );
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  test.after(() => {
+    server.closeAllConnections();
+    server.close();
+  });
+  return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+}
+
+const base = await serve({ openaiApiKey: "voice-test-key" });
+const keyless = await serve({});
+const origin = browserSessionDeps.portalUrl;
+const identity = (user = "alice") => ({ cookie: browserSessionCookie(user) });
+const impersonating = {
+  cookie: `${browserSessionCookie("admin")}; ${browserImpersonationCookie("admin", "alice")}`,
+};
+const headers = { ...identity(), "content-type": "audio/mp4", origin };
+const voiceHeaders = { ...identity(), "content-type": "application/json", origin };
+const offer = JSON.stringify({ sdp: "v=0\r\no=offer" });
 
 let openai: (req: IncomingMessage, res: ServerResponse) => void = (_req, res) => res.end("{}");
-const openaiStub = createServer((req, res) => openai(req, res));
+const openaiStub = createHttpServer((req, res) => openai(req, res));
 await new Promise<void>((resolve) => openaiStub.listen(0, resolve));
 const spoolDir = join(tmpdir(), "qm-dictation");
 const spooled = async () => new Set(await readdir(spoolDir).catch(() => []));
@@ -50,37 +72,57 @@ function reply(status: number, body: unknown, headers: Record<string, string> = 
 }
 
 test.after(() => {
-  surface.close();
   openaiStub.close();
   void rm(testTmp, { recursive: true, force: true });
 });
 
-test("dictation checks identity, origin, allowlist and format before provider access", async () => {
+test("dictation checks identity, origin, impersonation and format before provider access", async () => {
   for (const [requestHeaders, expected] of [
     [{}, 401],
-    [{ ...headers, ...identity("bob") }, 404],
-    [
-      {
-        ...headers,
-        [PORTAL_IDENTITY_HEADER]: mintPortalIdentity(
-          { p: "alice", imp: "admin", exp: Date.now() + 60_000 },
-          "voice-route-test",
-        ),
-      },
-      404,
-    ],
     [{ "content-type": "audio/mp4" }, 401],
+    [{ ...headers, ...impersonating }, 404],
     [{ ...headers, origin: "https://evil.test" }, 403],
+    [{ ...headers, origin: "null" }, 403],
+    [{ ...identity(), "content-type": "audio/mp4" }, 403],
     [{ ...headers, "content-type": "text/plain" }, 415],
   ] as const) {
     assert.equal(
       (await fetch(`${base}/api/dictation`, { method: "POST", headers: requestHeaders, body: "audio" })).status,
       expected,
+      JSON.stringify(requestHeaders),
     );
   }
-  const capability = await fetch(`${base}/api/dictation`, { headers: identity() });
-  assert.deepEqual(await capability.json(), { enabled: true, provider: "OpenAI" });
-  assert.equal(capability.headers.get("cache-control"), "no-store");
+  for (const user of ["alice", "bob"]) {
+    const capability = await fetch(`${base}/api/dictation`, { headers: identity(user) });
+    assert.deepEqual(await capability.json(), { enabled: true, provider: "OpenAI" });
+    assert.equal(capability.headers.get("cache-control"), "no-store");
+  }
+  assert.deepEqual(await (await fetch(`${base}/api/dictation`, { headers: impersonating })).json(), {
+    enabled: false,
+    provider: null,
+  });
+});
+
+test("without an OpenAI key nobody gets dictation or voice", async () => {
+  assert.deepEqual(await (await fetch(`${keyless}/api/dictation`, { headers: identity() })).json(), {
+    enabled: false,
+    provider: null,
+  });
+  assert.deepEqual(await (await fetch(`${keyless}/api/voice`, { headers: identity() })).json(), {
+    enabled: false,
+    model: "gpt-live-1",
+  });
+  const dictation = await fetch(`${keyless}/api/dictation`, { method: "POST", headers, body: "audio" });
+  assert.deepEqual(
+    [dictation.status, ((await dictation.json()) as { error?: string }).error],
+    [404, "dictation_disabled"],
+  );
+  const voice = await fetch(`${keyless}/api/voice/sessions`, {
+    method: "POST",
+    headers: { ...identity(), origin, "content-type": "application/json" },
+    body: offer,
+  });
+  assert.deepEqual([voice.status, ((await voice.json()) as { error?: string }).error], [404, "voice_disabled"]);
 });
 
 test("dictation uploads the whole recording to OpenAI and removes its spool file", async (t) => {
@@ -125,9 +167,13 @@ test("dictation survives OpenAI answering before reading the upload", async (t) 
 
 test("dictation maps OpenAI errors by code", async (t) => {
   routeOpenAIToStub(t);
-  const post = async () => {
+  const post = async (): Promise<Record<string, unknown>> => {
     const response = await fetch(`${base}/api/dictation`, { method: "POST", headers, body: "audio" });
-    return { status: response.status, retryAfter: response.headers.get("retry-after"), ...(await response.json()) };
+    return {
+      status: response.status,
+      retryAfter: response.headers.get("retry-after"),
+      ...((await response.json()) as Record<string, unknown>),
+    };
   };
   const cases: [number, string, Record<string, string>, Record<string, unknown>][] = [
     [
@@ -180,7 +226,7 @@ test("dictation reports storage failures as unavailable instead of hanging", asy
     signal: AbortSignal.timeout(5_000),
   });
   assert.equal(response.status, 503);
-  assert.equal((await response.json()).error, "dictation_unavailable");
+  assert.equal(((await response.json()) as { error?: string }).error, "dictation_unavailable");
   assert.deepEqual(await spooled(), new Set());
 });
 
@@ -208,7 +254,8 @@ test("empty and interrupted uploads never reach OpenAI or leave spool files", as
     reply(200, { text: "unexpected" })(req, res);
   };
   assert.equal(
-    (await (await fetch(`${base}/api/dictation`, { method: "POST", headers, body: "" })).json()).error,
+    ((await (await fetch(`${base}/api/dictation`, { method: "POST", headers, body: "" })).json()) as { error?: string })
+      .error,
     "empty_audio",
   );
   const controller = new AbortController();
@@ -246,7 +293,7 @@ test("dictation returns only transcript text and sanitizes provider failures", a
   assert.deepEqual(await result.json(), { text: "Review this draft." });
   const native = await fetch(`${base}/api/dictation`, {
     method: "POST",
-    headers: { ...identity(), "content-type": "audio/mp4" },
+    headers: { ...identity(), "content-type": "audio/mp4", origin, "x-qm-client": "ios" },
     body: "audio",
   });
   assert.equal(native.status, 200);
@@ -297,4 +344,66 @@ test("provider network failures log their cause chain", async (t) => {
   );
   assert.match(line ?? "", /fetch failed <- .*ECONNRESET.*socket hang up/);
   assert.match(line ?? "", /"path":"audio\/transcriptions"/);
+});
+
+test("voice sessions authenticate and refuse foreign origins and impersonation before spending", async () => {
+  assert.equal((await fetch(`${base}/api/voice/sessions`, { method: "POST", body: offer })).status, 401);
+  for (const [requestHeaders, expected] of [
+    [{ ...voiceHeaders, origin: "https://evil.test" }, 403],
+    [{ ...voiceHeaders, origin: "null" }, 403],
+    [{ ...voiceHeaders, ...impersonating }, 404],
+  ] as const) {
+    const response = await fetch(`${base}/api/voice/sessions`, {
+      method: "POST",
+      headers: requestHeaders,
+      body: offer,
+    });
+    assert.equal(response.status, expected, JSON.stringify(requestHeaders));
+  }
+  const capability = await fetch(`${base}/api/voice`, { headers: identity("bob") });
+  assert.deepEqual(await capability.json(), { enabled: true, model: "gpt-live-1" });
+  assert.equal(capability.headers.get("cache-control"), "no-store");
+});
+
+test("voice rejects invalid and oversized offers", async () => {
+  for (const body of ["{", "null", "[]", "{}", JSON.stringify({ sdp: "bad" })]) {
+    const response = await fetch(`${base}/api/voice/sessions`, { method: "POST", headers: voiceHeaders, body });
+    assert.equal(response.status, 400, body);
+  }
+  const large = await fetch(`${base}/api/voice/sessions`, {
+    method: "POST",
+    headers: voiceHeaders,
+    body: JSON.stringify({ sdp: "v=0" + "x".repeat(70_000) }),
+  });
+  assert.equal(large.status, 413);
+});
+
+test("voice relays only a sanitized SDP result and never a provider key", async (t) => {
+  const actualFetch = globalThis.fetch;
+  let providerCalls = 0;
+  t.mock.method(globalThis, "fetch", async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    if (String(input) !== "https://api.openai.com/v1/live/sessions") return actualFetch(input, init);
+    providerCalls++;
+    return Response.json({
+      session: { id: "live_route" },
+      transport: { type: "webrtc", sdp: "v=0\r\no=answer" },
+      api_key: "must-not-leak",
+    });
+  });
+  const response = await fetch(`${base}/api/voice/sessions`, { method: "POST", headers: voiceHeaders, body: offer });
+  assert.equal(response.status, 201);
+  assert.equal(providerCalls, 1);
+  assert.deepEqual(await response.json(), {
+    session: { id: "live_route" },
+    transport: { type: "webrtc", sdp: "v=0\r\no=answer" },
+  });
+});
+
+test("a signed caller's voice body is buffered and covered by its signature", async () => {
+  const path = "/v1/web/voice/sessions";
+  const signed = (body: string) => signedHeaders("voice-route-signing-secret-0123456789", "POST", path, body);
+  const forged = await fetch(`${base}${path}`, { method: "POST", headers: signed("{}"), body: offer });
+  assert.equal(forged.status, 401);
+  const matching = await fetch(`${base}${path}`, { method: "POST", headers: signed(offer), body: offer });
+  assert.deepEqual([matching.status, await matching.json()], [400, { error: "invalid_offer" }]);
 });

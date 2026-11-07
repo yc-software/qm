@@ -14,6 +14,7 @@ import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
 import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
 import { sessionLifetime } from "../plugins/portal/src/session.ts";
 import { startFrontDoor } from "./web/front-door.ts";
+import { sweepDictationSpool } from "./api/routes/voice.ts";
 import { parseAllowedOrigins } from "../plugins/portal/src/cors.ts";
 import { createWebEvents } from "./api/routes/web-events.ts";
 import { webMeConfig } from "./api/routes/web-me.ts";
@@ -44,6 +45,7 @@ export async function startQm(
   const server = createServer(built.app, {
     ...serverDeps(config, built, slackEnvironmentState, slackConfig?.botToken),
     managedSlack,
+    ...(config.openaiApiKey ? { openaiApiKey: config.openaiApiKey } : {}),
     ...(env.PORTAL_SESSION_SECRET
       ? {
           portalSession: {
@@ -66,6 +68,7 @@ export async function startQm(
   built.deploymentLayerRefresh.start();
   server.listen(config.port);
   await once(server, "listening");
+  void sweepDictationSpool();
   const frontDoor =
     config.publicPort === undefined
       ? undefined

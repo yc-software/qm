@@ -1,13 +1,10 @@
 import "./instrument.ts";
-import { handleVoiceRoute, sweepDictationSpool } from "./voice-routes.ts";
 import { browserErrorConfig } from "../../chassis/src/browser-error-config.ts";
 import { analyticsHookConfig } from "../../chassis/src/analytics-config.ts";
 import { reportBackendError, withRequestContext } from "../../chassis/src/error-reporting.ts";
 import { errChain } from "../../chassis/src/errors.ts";
 import { composioCallbackUrl } from "./composio-return.ts";
 import { sharedSessionHtml } from "./shared-session.ts";
-import { uiCanvasRoutes } from "./ui-canvas-routes.ts";
-import { adminRoutes } from "./admin-routes.ts";
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { Readable } from "node:stream";
@@ -679,28 +676,6 @@ async function serveInboxItemImage(c: WebCtx): Promise<unknown> {
 }
 
 const apiRoutes: readonly WebRoute[] = [
-  {
-    method: "GET",
-    path: "/api/composio/callback",
-    handle: async (c) => {
-      c.res.setHeader("Cache-Control", "no-store");
-      c.res.setHeader("Referrer-Policy", "no-referrer");
-      const result = await coreFetch(
-        "POST",
-        "/v1/composio/complete-auth",
-        JSON.stringify({ sessionUri: c.url.searchParams.get("session_uri") }),
-      );
-      if (result.status !== 200) return relay(c.res, result);
-      const data = JSON.parse(result.text) as { returnTo?: string | null };
-      const base = new URL(PUBLIC_URL);
-      const target = data.returnTo
-        ? new URL(data.returnTo, base)
-        : new URL("./?view=settings", `${PUBLIC_URL.replace(/\/$/, "")}/`);
-      if (target.origin !== base.origin) return json(c.res, 400, { error: "invalid_return_url" });
-      c.res.writeHead(303, { location: target.href });
-      c.res.end();
-    },
-  },
   { method: "GET", path: "/api/composio/slack", handle: (c) => relayCore(c.res, "GET", "/v1/composio/slack") },
   {
     method: "POST",
@@ -865,28 +840,28 @@ const apiRoutes: readonly WebRoute[] = [
       return json(c.res, response.status, JSON.parse(response.text));
     },
   },
-  ...adminRoutes({
-    origin: CORE,
-    secret: CORE_SIGNING_SECRET,
-    org: ORG,
-    portalHeaders: (): Record<string, string> => {
+  {
+    method: "POST",
+    path: "/api/admin/files/upload",
+    handle: async (c) => {
+      const { req, res, url, user } = c;
+      const scope = url.searchParams.get("scope");
+      if (resolveIdentity(req)?.impersonator) {
+        req.resume();
+        return json(res, 403, { message: "Admin pages are unavailable while impersonating." });
+      }
+      if (!scope) {
+        req.resume();
+        return json(res, 400, { error: "bad_request", message: "scope required" });
+      }
       const token = portalTokenStore.getStore();
-      return token ? { [PORTAL_IDENTITY_HEADER]: token } : {};
+      return uploadFileFromRequest(req, res, declaredSha(url), uploadFileName(url), {
+        path: `/v1/admin/files/upload?scope=${encodeURIComponent(scope)}`,
+        fields: {},
+        headers: { "x-admin-actor": `${user}@${ORG}`, ...(token ? { [PORTAL_IDENTITY_HEADER]: token } : {}) },
+      });
     },
-    impersonated: (req) => Boolean(resolveIdentity(req)?.impersonator),
-    readBody,
-    uploadFile: uploadFileFromRequest,
-    refreshBranding: () => brandingCache.refreshNow(),
-    json,
-  }),
-  ...uiCanvasRoutes({
-    impersonated: (req) => Boolean(resolveIdentity(req)?.impersonator),
-    coreFetch,
-    relayCore,
-    relay,
-    json,
-    readJson,
-  }),
+  },
   {
     method: "GET",
     path: "/api/inbox",
@@ -1186,11 +1161,6 @@ const apiRoutes: readonly WebRoute[] = [
         JSON.stringify({ principalId: user }),
       );
     },
-  },
-  {
-    method: "POST",
-    path: "/api/runs/:id/withdraw",
-    handle: (c) => relayCore(c.res, "POST", `/v1/runs/${encodeURIComponent(c.params.id!)}/withdraw`),
   },
   {
     method: "GET",
@@ -1593,13 +1563,6 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
   if (path.startsWith("/api/")) {
     const user = cookieUser(req);
     if (!user) return unauthorized(res, req);
-    if (["/api/dictation", "/api/voice", "/api/voice/sessions"].includes(path)) {
-      return handleVoiceRoute(req, res, path, resolveIdentity(req)!, {
-        org: ORG,
-        publicUrl: PUBLIC_URL,
-      });
-    }
-
     const inboxPath = path === "/api/inbox" || path.startsWith("/api/inbox/");
     const loopsPath = path === "/api/loops" || path.startsWith("/api/loops/");
     if ((inboxPath || loopsPath) && !(await hasInboxLoopPreview(user)))
@@ -1670,6 +1633,5 @@ export async function startServer(options: { port: number; host: string; release
     `[web-ui] surface on http://${options.host}:${port} → core ${CORE} (org ${ORG})${WEB_UI_DEV ? " [vite hmr]" : ""}`,
   );
   if (ALLOW.length === 0) console.warn("[web-ui] WEB_UI_PRINCIPALS unset, any principal id may sign in (dev only)");
-  void sweepDictationSpool();
   return server;
 }

@@ -1,9 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { Readable } from "node:stream";
-import type { IncomingMessage } from "node:http";
-import { sameOriginRequest } from "../../chassis/src/http.ts";
-import { principalInAllowlist } from "../../chassis/src/principal-allowlist.ts";
 
 export const LIVE_MODEL = "gpt-live-1";
 const TRANSCRIBE_MODEL = "gpt-transcribe";
@@ -47,27 +44,6 @@ function providerError(body: string): { code?: string; param?: string } {
 function wholeSeconds(value: unknown): number | undefined {
   if (typeof value !== "string" || !value || [...value].some((c) => c < "0" || c > "9")) return undefined;
   return Number(value);
-}
-
-export function openaiKey(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  return env.OPENAI_API_KEY?.trim() || undefined;
-}
-
-export function voiceEnabled(user: string, env: NodeJS.ProcessEnv = process.env): boolean {
-  return Boolean(
-    openaiKey(env) && env.CORE_SIGNING_SECRET?.trim() && principalInAllowlist(user, env.WEB_UI_VOICE_USERS),
-  );
-}
-
-export function voiceRequestAllowed(req: IncomingMessage, publicUrl: string, portalVerified: boolean): boolean {
-  let expected: string;
-  try {
-    expected = new URL(publicUrl).origin;
-  } catch {
-    return false;
-  }
-  if (sameOriginRequest(req, expected)) return true;
-  return portalVerified && req.headers.origin === undefined && req.headers["sec-fetch-site"] === undefined;
 }
 
 interface Caller {

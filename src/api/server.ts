@@ -276,6 +276,10 @@ async function gate(
         sendJson(res, signedIn.status, { error: signedIn.error, message: signedIn.message });
         return null;
       }
+      if ((route?.browser === "self" || route?.admin) && signedIn.imp) {
+        sendJson(res, 403, { error: "forbidden", message: "Unavailable while impersonating." });
+        return null;
+      }
       actor = signedIn;
     } else actor = token && psecret ? await verifyPortalIdentity(token, psecret, Date.now()) : null;
     if (actor && deps.identity) {
@@ -307,7 +311,7 @@ async function gate(
         }
         if (browser) body = withBrowserActor(route?.actor, req, url, body, actor.p);
         const field = !webTurn && routeActor?.includes(".") ? routeActor : undefined;
-        const fields = [field, ...(browser ? ["query.principalId", "body.principalId"] : [])];
+        const fields = [field, ...(browser && !route?.admin ? ["query.principalId", "body.principalId"] : [])];
         const claimed = [
           ...fields.flatMap((f) => (f ? assertedActorValues(f, url, body) : [])),
           ...(webTurn
@@ -571,7 +575,8 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
         return;
       }
     }
-    rawBodies.set(req, await readRawBody(req, matched?.route.maxBodyBytes));
+    if (!matched?.route.streamBody || !usesBrowserSession(req, matched.route))
+      rawBodies.set(req, await readRawBody(req, matched?.route.maxBodyBytes));
     await ready;
     routing(req, res);
   }

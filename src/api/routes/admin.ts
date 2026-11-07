@@ -139,12 +139,6 @@ const routes: Route<ApiCtx>[] = [
       handle: getCredentialUsageSummary,
     },
     { method: "GET", path: "/v1/admin/resources", auth: "either", handle: getAdminResources },
-    {
-      method: "GET",
-      path: "/v1/admin/unattended-grants",
-      auth: "either",
-      handle: (ctx) => listUnattendedGrants(ctx, routes),
-    },
     { method: "GET", path: "/v1/admin/retention", auth: "either", handle: retention },
     {
       method: "GET",
@@ -189,13 +183,6 @@ const routes: Route<ApiCtx>[] = [
         unattended: { grant: "admin.sessions.read", summary: "read a conversation transcript" },
       },
       handle: getAdminSession,
-    },
-    {
-      method: "GET",
-      path: "/v1/admin/deliveries/shadow",
-      auth: "either",
-      admin: { privateRead: "always" },
-      handle: listAdminShadowDeliveries,
     },
     {
       method: "GET",
@@ -245,7 +232,6 @@ const routes: Route<ApiCtx>[] = [
       },
       handle: downloadAdminFile,
     },
-    { method: "POST", path: "/v1/admin/files/upload", auth: "either", handle: uploadAdminFile },
     {
       method: "GET",
       path: "/v1/admin/files",
@@ -272,13 +258,6 @@ const routes: Route<ApiCtx>[] = [
         unattended: { grant: "admin.audit.read", summary: "read security audit events" },
       },
       handle: listAdminAudit,
-    },
-    {
-      method: "GET",
-      path: "/v1/admin/security/flags",
-      auth: "either",
-      admin: { privateRead: "always" },
-      handle: listSecurityFlags,
     },
     {
       method: "GET",
@@ -322,8 +301,6 @@ const routes: Route<ApiCtx>[] = [
     { method: "POST", path: "/v1/admin/memory", auth: "either", handle: adminMemory },
     { method: "PATCH", path: "/v1/admin/memory", auth: "either", handle: adminMemory },
     { method: "DELETE", path: "/v1/admin/memory", auth: "either", handle: adminMemory },
-    { method: "GET", path: "/v1/admin/sandboxes/:scopeId", auth: "either", handle: manageSandboxResources },
-    { method: "POST", path: "/v1/admin/sandboxes/:scopeId", auth: "either", handle: manageSandboxResources },
     { method: "GET", path: "/v1/admin/users", auth: "either", handle: listUsers },
     { method: "GET", path: "/v1/admin/directory", auth: "either", handle: searchDirectory },
     {
@@ -388,6 +365,31 @@ const routes: Route<ApiCtx>[] = [
     { method: "POST", path: "/v1/admin/users/invite", auth: "either", handle: inviteTeammate },
     { method: "POST", path: "/v1/admin/external-users", auth: "either", handle: inviteExternalUser },
     { method: "DELETE", path: "/v1/admin/external-users/:email", auth: "either", handle: revokeExternalUser },
+  ]).map((route) => ({ ...route, browser: "self" as const })),
+  ...withAdmin([
+    {
+      method: "GET",
+      path: "/v1/admin/unattended-grants",
+      auth: "either",
+      handle: (ctx) => listUnattendedGrants(ctx, routes),
+    },
+    {
+      method: "GET",
+      path: "/v1/admin/deliveries/shadow",
+      auth: "either",
+      admin: { privateRead: "always" },
+      handle: listAdminShadowDeliveries,
+    },
+    { method: "POST", path: "/v1/admin/files/upload", auth: "either", handle: uploadAdminFile },
+    {
+      method: "GET",
+      path: "/v1/admin/security/flags",
+      auth: "either",
+      admin: { privateRead: "always" },
+      handle: listSecurityFlags,
+    },
+    { method: "GET", path: "/v1/admin/sandboxes/:scopeId", auth: "either", handle: manageSandboxResources },
+    { method: "POST", path: "/v1/admin/sandboxes/:scopeId", auth: "either", handle: manageSandboxResources },
     {
       method: "POST",
       path: "/v1/admin/impersonate/stop",
