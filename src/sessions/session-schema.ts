@@ -1,4 +1,5 @@
 import type { PgMigrationDefinition } from "../persistence/pg-pool.ts";
+import { authoredUserTurn } from "./items.ts";
 import { TENANCY_BASE } from "../tenants/migrations.ts";
 import { DROP_TENANT_PREBUILD_INDEXES } from "../tenants/prebuilt-indexes.ts";
 
@@ -430,8 +431,8 @@ const SESSION_PERSONA: PgMigrationDefinition = {
 const USER_TURNS_BY_AUTHOR: PgMigrationDefinition = {
   id: "sessions/store/0057-user-turns-by-author",
   statements: [
-    `CREATE INDEX CONCURRENTLY IF NOT EXISTS items_user_turns_by_author ON items(tenant_id, author, session_id, created_at)
-      WHERE author IS NOT NULL AND author NOT LIKE 'system:%' AND kind IN ('UserMessage', 'SteeringMessage') AND NOT (body @> '{"overheard":true}')`,
+    `CREATE INDEX CONCURRENTLY IF NOT EXISTS items_user_turns_by_author ON items(tenant_id, author, created_at)
+      WHERE ${authoredUserTurn("items")}`,
   ],
 };
 

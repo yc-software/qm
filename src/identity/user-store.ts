@@ -2,7 +2,7 @@ import type { PoolClient } from "pg";
 import { createPgPool, withPgTransaction, type PgMigrationDefinition } from "../persistence/pg-pool.ts";
 import { DIRECTORY_MIGRATIONS } from "../directory/postgres-directory-store.ts";
 import { SESSION_MIGRATIONS } from "../sessions/session-schema.ts";
-import { msOf, TENANT, userTurn } from "../sessions/items.ts";
+import { authoredUserTurn, msOf, TENANT } from "../sessions/items.ts";
 import { foldPrincipalId } from "../directory/person.ts";
 import { PERSONA_MIGRATIONS } from "../personas/persona-schema.ts";
 
@@ -281,18 +281,11 @@ function toLink(r: Record<string, unknown>): UserLink {
 }
 
 const ACTIVITY = `
-  WITH written AS (
-    SELECT e.author, e.session_id, (${msOf("e.created_at")} / 86400000)::bigint AS day, COUNT(*) AS turns,
+  WITH daily AS (
+    SELECT ${fold("e.author")} AS alias, (${msOf("e.created_at")} / 86400000)::bigint AS day, COUNT(*) AS turns,
            ${msOf("MAX(e.created_at)")} AS last_at
       FROM items e
-     WHERE e.tenant_id = ${TENANT} AND e.author IS NOT NULL AND e.author NOT LIKE 'system:%' AND ${userTurn("e")}
-     GROUP BY 1, 2, 3
-  ), daily AS (
-    SELECT ${fold("w.author")} AS alias, w.day, SUM(w.turns) AS turns, MAX(w.last_at) AS last_at
-      FROM written w JOIN sessions s ON s.id = w.session_id
-     WHERE s.origin = 'conversation' AND s.parent_session_id IS NULL
-       AND coalesce(s.spawn_meta::jsonb -> 'surfaceOrigin' ->> 'audience', '') <> 'external'
-       AND coalesce(s.spawn_meta::jsonb -> 'origin' ->> 'kind', '') <> 'automation'
+     WHERE e.tenant_id = ${TENANT} AND ${authoredUserTurn("e")}
      GROUP BY 1, 2
   ), turns AS (
     SELECT coalesce(l.user_id::text, d.alias) AS who, l.user_id, d.day, SUM(d.turns) AS turns, MAX(d.last_at) AS last_at
