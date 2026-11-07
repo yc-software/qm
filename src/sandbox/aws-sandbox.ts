@@ -265,6 +265,7 @@ export function createAwsSandbox(opts: AwsSandboxOptions): Sandbox {
             reportError("sandbox_snapshot", "rotate_snapshot_failed", errMessage(e), scope),
           );
           await api.terminate(stored.microvmId).catch(() => {});
+          client.evict(stored.microvmId);
         }
       }
       const body = await launchBody(scope);
@@ -548,6 +549,7 @@ export function createAwsSandbox(opts: AwsSandboxOptions): Sandbox {
               await snapshotHome(scope, rec.microvmId);
             }
             await api.terminate(rec.microvmId);
+            client.evict(rec.microvmId);
             await store.delete(scope);
             reaped++;
           } catch (e) {
