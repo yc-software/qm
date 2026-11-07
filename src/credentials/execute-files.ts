@@ -248,7 +248,9 @@ async function finishExecutionFiles(
       `cd ${shq(home)} && [ ! -L ${shq(home)} ] && set -- && ` +
         `for p in ${roots.map((root) => shq(`./${root}`)).join(" ")}; do if [ -e "$p" ] || [ -L "$p" ]; then set -- "$@" "$p"; fi; done && ` +
         `: > ${shq(`${directory}/paths`)} && { [ $# -eq 0 ] || find "$@" -type f -print0 > ${shq(`${directory}/paths`)}; } && ` +
-        `: > ${shq(`${directory}/links`)} && { [ $# -eq 0 ] || find "$@" -type l -print0 > ${shq(`${directory}/links`)}; } && ` +
+        `: > ${shq(`${directory}/links`)} && for p in ${roots.map((root) => shq(`./${root}`)).join(" ")}; do ` +
+        `q=$(dirname "$p"); while [ "$q" != . ]; do if [ -L "$q" ]; then printf '%s\\0' "$q" >> ${shq(`${directory}/links`)}; fi; q=$(dirname "$q"); done; done && ` +
+        `{ [ $# -eq 0 ] || find "$@" -type l -print0 >> ${shq(`${directory}/links`)}; } && ` +
         `COPYFILE_DISABLE=1 tar --null -T ${shq(`${directory}/paths`)} -cf ${shq(`${directory}/files.tar`)} && ` +
         `size=$(wc -c < ${shq(`${directory}/files.tar`)}) && { [ "$size" -le ${archiveLimit} ] || ` +
         `{ echo "credential files archive is $size bytes, over the ${archiveLimit}-byte cap" >&2; exit 1; }; }`,
@@ -268,7 +270,9 @@ async function finishExecutionFiles(
     const linkList = await sandbox.readFileBytes({ ...handle, rootDir: directory }, "links");
     if (!linkList) throw permanent("Captured credential link list is missing");
     const links = new Set(Buffer.from(linkList).toString("utf8").split("\0").filter(Boolean).map(homeRelativePath));
-    if (plan.credentials.some(({ paths }) => paths.some((path) => links.has(path))))
+    const replaced = (path: string) =>
+      path.split("/").some((_, index, parts) => links.has(parts.slice(0, index + 1).join("/")));
+    if (plan.credentials.some(({ paths }) => paths.some(replaced)))
       throw permanent("Credential files were replaced with symlinks during execution");
     const notes: string[] = [];
     const results = await Promise.allSettled(
