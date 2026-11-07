@@ -14,7 +14,6 @@ import {
   type FilePage,
   type FileSource,
   type ListOwnedOptions,
-  storedMimetype,
 } from "./file-artifact-store.ts";
 
 const SCHEMA = [
@@ -44,6 +43,10 @@ const SCHEMA = [
     ON file_artifacts (created_in_scope, created_at DESC, id DESC) WHERE enabled = TRUE`,
 ];
 
+function storedMimetype(mimetype: string): string {
+  return /^[\x20-\x2b\x2d-\x7e]+$/.test(mimetype) ? mimetype : "application/octet-stream";
+}
+
 function rowToArtifact(r: Record<string, unknown>): FileArtifact {
   return {
     id: r.id as string,
@@ -51,7 +54,7 @@ function rowToArtifact(r: Record<string, unknown>): FileArtifact {
     createdBy: r.created_by as string,
     name: r.name as string,
     path: r.path as string,
-    mimetype: storedMimetype(r.mimetype as string),
+    mimetype: r.mimetype as string,
     sizeBytes: Number(r.size_bytes),
     blobKey: (r.blob_key as string | null) ?? null,
     sha256: (r.sha256 as string | null) ?? null,
@@ -74,6 +77,12 @@ export function createPostgresFileArtifactStore(
       id: "files/artifacts/0002",
       statements: [
         "CREATE TABLE IF NOT EXISTS file_artifact_deletions(id TEXT PRIMARY KEY, deleted_at BIGINT NOT NULL)",
+      ],
+    },
+    {
+      id: "files/artifacts/0003",
+      statements: [
+        "UPDATE file_artifacts SET mimetype = 'application/octet-stream' WHERE mimetype !~ '^[\\x20-\\x2b\\x2d-\\x7e]+$'",
       ],
     },
   ]);

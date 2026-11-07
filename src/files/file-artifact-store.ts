@@ -59,10 +59,6 @@ export interface ListOwnedOptions {
   name?: string;
 }
 
-export function storedMimetype(mimetype: string): string {
-  return /^[\x20-\x2b\x2d-\x7e]+$/.test(mimetype) ? mimetype : "application/octet-stream";
-}
-
 export type FileArtifactRef = Pick<FileArtifact, "ownerScopeId" | "id">;
 export class FileArtifactDeletedError extends Error {
   constructor() {
