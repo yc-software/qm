@@ -9,6 +9,8 @@ import {
   type ServerResponse,
   type Server,
 } from "node:http";
+import type { Duplex } from "node:stream";
+import { failUpgrade, isWebSocketUpgrade, responseOnSocket } from "../../plugins/chassis/src/websocket-relay.ts";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest, type HTTPMethods } from "fastify";
 import type { App } from "./app.ts";
 import type { ServerDeps } from "./deps.ts";
@@ -518,6 +520,10 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
       respondError(req, res, err),
     );
   });
+  server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+    socket.on("error", () => socket.destroy());
+    void upgradeFront(req, socket, head).catch((error: unknown) => failUpgrade(socket, "deployment-websocket", error));
+  });
   const { fastify, routing } = buildFastify(wiring, server);
   const ready = Promise.resolve(fastify.ready());
   ready.catch((err: unknown) => console.error("[server] fastify initialization failed:", errMessage(err)));
@@ -525,6 +531,14 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
   server.headersTimeout = 10_000;
   server.keepAliveTimeout = 5_000;
   server.maxConnections = 1024;
+
+  async function upgradeFront(req: IncomingMessage, socket: Duplex, head: Buffer): Promise<void> {
+    const res = isWebSocketUpgrade(req) ? responseOnSocket(req, socket) : null;
+    if (!res) return void socket.destroy();
+    const base: BaseCtx = { ...baseCtx(req, res, wiring), upgrade: { socket, head } };
+    if (await proxyDeploymentSubdomain(base)) return nameRequest(base.method, "/deployment-proxy/websocket");
+    sendJson(res, 404, { error: "not_found" });
+  }
 
   async function front(req: IncomingMessage, res: ServerResponse): Promise<void> {
     armBodyDeadline(req, deps.requestBodyDeadlineMs ?? 30_000);

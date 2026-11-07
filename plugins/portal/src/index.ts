@@ -11,6 +11,8 @@ import "./instrument.ts";
 import { provisionTrustedAdmin } from "./trusted-admin.ts";
 import { createHash } from "node:crypto";
 import { createServer, METHODS, type IncomingMessage, type ServerResponse } from "node:http";
+import { failUpgrade, isWebSocketUpgrade, responseOnSocket } from "../../chassis/src/websocket-relay.ts";
+import type { Duplex } from "node:stream";
 import { ADMIN_LOGIN_SCRIPT, ADMIN_LOGIN_SCRIPT_HASH, openAdminLogin } from "./admin-login.ts";
 import { LRUCache } from "lru-cache";
 import { createCanonicalResolver } from "./canonical.ts";
@@ -51,6 +53,7 @@ import {
   proxyToDeployment,
   proxyToUpstream,
   proxyToAppHost,
+  relayUpgradeToAppHost,
   FORWARD_AGENT_API_HEADERS,
   FORWARD_DEPLOYMENT_GIT_HEADERS,
   FORWARD_DEPLOYMENT_LAYER_HEADERS,
@@ -909,6 +912,26 @@ const server = createServer((req, res) => {
   });
 });
 
+function appLabelOf(host: string | undefined): string | null {
+  if (!APPS_DOMAIN) return null;
+  const requestHost = (host ?? "").toLowerCase().split(":")[0]!;
+  const apps = APPS_DOMAIN.toLowerCase();
+  if (requestHost === apps) return "";
+  return requestHost.endsWith(`.${apps}`) ? requestHost.slice(0, -apps.length - 1) : null;
+}
+
+const isAppLabel = (label: string): boolean => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label);
+
+server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+  socket.on("error", () => socket.destroy());
+  const res = responseOnSocket(req, socket);
+  if (!res) return void socket.destroy();
+  const label = appLabelOf(req.headers.host);
+  if (label !== null && isAppLabel(label) && isWebSocketUpgrade(req))
+    return relayUpgradeToAppHost(req, res, { socket, head }, CORE, clientIpOf(req));
+  void handle(req, res).catch((error: unknown) => failUpgrade(socket, "portal-websocket", error));
+});
+
 async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const method = req.method ?? "GET";
   const rawTarget = req.url ?? "/";
@@ -920,11 +943,9 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   res.setHeader("x-content-type-options", "nosniff");
   res.setHeader("x-frame-options", "DENY");
 
-  const requestHost = (req.headers.host ?? "").toLowerCase().split(":")[0]!;
-  const appSuffix = APPS_DOMAIN ? `.${APPS_DOMAIN.toLowerCase()}` : undefined;
-  if (appSuffix && (requestHost.endsWith(appSuffix) || requestHost === APPS_DOMAIN?.toLowerCase())) {
-    const label = requestHost.slice(0, -appSuffix.length);
-    if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label)) return json(res, 404, { error: "not_found" });
+  const appLabel = appLabelOf(req.headers.host);
+  if (appLabel !== null) {
+    if (!isAppLabel(appLabel)) return json(res, 404, { error: "not_found" });
     return proxyToAppHost(req, res, CORE, clientIpOf(req));
   }
 
