@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
+import { createPostgresAdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { FinnyAuditFinding, FinnyCheckId, FinnyWorkerRole } from "./types.ts";
 
 export type FinnyRuntimeRole = "parent" | FinnyWorkerRole;
@@ -140,10 +141,12 @@ interface FinnyRuntimeActionInput {
 }
 
 export function createPostgresFinnyRuntimeStore(connectionString: string) {
-  const { q, pool } = createPgPool(connectionString, [
+  const pg = createPgPool(connectionString, [
     { id: "finny/runtime/0001", statements: SCHEMA },
     { id: "finny/runtime/0002", statements: EXPIRY_SCHEMA },
   ]);
+  const { q, pool } = pg;
+  const dispatchLocks = createPostgresAdvisoryLock(pg);
   return {
     async bindParent(input: {
       scopeId: string;
@@ -154,7 +157,12 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
     }): Promise<void> {
       await q(
         `INSERT INTO finny_runtime_bindings(session_id,run_id,scope_id,job_id,role,principal_id,epoch,created_at)
-         VALUES($1,$2,$3,$4,'parent',$5,0,$6) ON CONFLICT(session_id) DO NOTHING`,
+         VALUES($1,$2,$3,$4,'parent',$5,0,$6)
+         ON CONFLICT(session_id) DO UPDATE SET run_id=EXCLUDED.run_id
+         WHERE finny_runtime_bindings.scope_id=EXCLUDED.scope_id
+           AND finny_runtime_bindings.job_id=EXCLUDED.job_id
+           AND finny_runtime_bindings.role='parent'
+           AND finny_runtime_bindings.principal_id=EXCLUDED.principal_id`,
         [input.sessionId, input.runId, input.scopeId, input.jobId, input.principalId, Date.now()],
       );
       const binding = await this.bindingForSession(input.sessionId);
@@ -312,6 +320,17 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
       const rows = await q(
         "SELECT * FROM finny_runtime_bindings WHERE scope_id=$1 AND job_id=$2 AND role=$3 AND active=TRUE AND (role='parent' OR expires_at>$4) ORDER BY epoch DESC LIMIT 1",
         [scopeId, jobId, role, Date.now()],
+      );
+      return rows[0] ? rowToBinding(rows[0]) : null;
+    },
+    async latestRoleBinding(
+      scopeId: string,
+      jobId: string,
+      role: FinnyRuntimeRole,
+    ): Promise<FinnyRuntimeBinding | null> {
+      const rows = await q(
+        "SELECT * FROM finny_runtime_bindings WHERE scope_id=$1 AND job_id=$2 AND role=$3 ORDER BY epoch DESC LIMIT 1",
+        [scopeId, jobId, role],
       );
       return rows[0] ? rowToBinding(rows[0]) : null;
     },
@@ -549,10 +568,31 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
       });
     },
     async pendingRecoveries(): Promise<FinnyRuntimeRecovery[]> {
+      const hasRuns = (await q("SELECT to_regclass('runs') IS NOT NULL AS exists"))[0]?.exists === true;
+      const terminalAuditorRetry = hasRuns
+        ? `OR EXISTS (
+             SELECT 1 FROM finny_runtime_bindings AS auditor_binding
+             JOIN runs AS auditor_run ON auditor_run.id=auditor_binding.run_id
+              WHERE auditor_binding.job_id=actions.job_id
+                AND auditor_binding.scope_id=actions.scope_id
+                AND auditor_binding.role='auditor'
+                AND auditor_binding.active=TRUE
+                AND (
+                  auditor_run.status='failed'
+                  OR (auditor_run.status='done' AND (
+                    auditor_run.last_stop IS NOT NULL
+                    OR auditor_run.result LIKE '%"stopped":true%'
+                  ))
+                )
+           )`
+        : "";
       const rows = await q(
         `SELECT actions.kind,actions.session_id,actions.run_id,actions.scope_id,actions.job_id,
                 actions.idempotency_key,CASE WHEN actions.kind='artifact_ready' THEN events.payload ELSE actions.authority_payload->'recovery' END AS payload
            FROM finny_runtime_actions AS actions
+           JOIN finny_jobs AS jobs
+             ON jobs.id=actions.job_id
+            AND jobs.scope_id=actions.scope_id
       LEFT JOIN finny_job_events AS events
              ON events.job_id=actions.job_id
             AND events.idempotency_key=actions.idempotency_key
@@ -562,21 +602,49 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
              ON dispatches.idempotency_key=actions.idempotency_key ||
                 CASE actions.kind WHEN 'artifact_ready' THEN ':auditor-grant' WHEN 'audit_blocked' THEN ':producer-rework' ELSE ':none' END
             AND dispatches.delivered_at IS NOT NULL
-          WHERE dispatches.idempotency_key IS NULL
-            AND (
-              (
-                actions.kind='artifact_ready' AND (
-                  events.seq IS NULL OR NOT EXISTS (
-                    SELECT 1 FROM finny_job_events AS audit
-                     WHERE audit.job_id=actions.job_id
-                       AND audit.seq>events.seq
-                       AND audit.event_type IN ('audit_passed','audit_blocked')
+          WHERE (
+              actions.kind='artifact_ready'
+              AND (
+                events.seq IS NULL OR (
+                  jobs.finalized_at IS NULL
+                  AND jobs.pending_rework_seq IS NULL
+                  AND jobs.unresolved_escalation_seq IS NULL
+                  AND jobs.artifact_digest IS NOT NULL
+                  AND EXISTS (
+                    SELECT 1
+                      FROM jsonb_each_text(jobs.required_generations) AS required(check_id,generation)
+                     WHERE NOT EXISTS (
+                       SELECT 1 FROM finny_job_events AS audit
+                        WHERE audit.job_id=actions.job_id
+                          AND audit.event_type='audit_passed'
+                          AND audit.payload->>'artifactDigest'=jobs.artifact_digest
+                          AND audit.payload->>'checkId'=required.check_id
+                          AND (audit.payload->>'generation')::int=required.generation::int
+                     )
                   )
                 )
-              ) OR
-              (actions.kind='audit_passed' AND events.seq IS NULL) OR
-              (
-                actions.kind='audit_blocked' AND (
+              )
+              AND (
+                NOT EXISTS (
+                  SELECT 1 FROM finny_runtime_dispatches AS auditor_dispatch
+                   WHERE auditor_dispatch.job_id=actions.job_id
+                     AND auditor_dispatch.scope_id=actions.scope_id
+                     AND auditor_dispatch.kind='auditor_grant'
+                     AND auditor_dispatch.delivered_at IS NOT NULL
+                     AND (
+                       auditor_dispatch.idempotency_key=actions.idempotency_key || ':auditor-grant'
+                       OR auditor_dispatch.idempotency_key LIKE actions.idempotency_key || ':auditor-grant:%'
+                     )
+                )
+                ${terminalAuditorRetry}
+              )
+            ) OR (
+              actions.kind<>'artifact_ready'
+              AND dispatches.idempotency_key IS NULL
+              AND (
+                (actions.kind='audit_passed' AND events.seq IS NULL) OR
+                (
+                  actions.kind='audit_blocked' AND (
                   EXISTS (
                     SELECT 1 FROM finny_job_events AS transition
                      WHERE transition.job_id=actions.job_id
@@ -591,6 +659,7 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
                        )
                   ) OR (
                     events.seq IS NULL AND actions.authority_payload->'resolution'->>'kind' IN ('rework','escalate')
+                  )
                   )
                 )
               )
@@ -641,6 +710,16 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
       );
       return rows[0]?.delivered === true;
     },
+    async hasDeliveredDispatch(prefix: string): Promise<boolean> {
+      const rows = await q(
+        `SELECT 1 FROM finny_runtime_dispatches
+          WHERE delivered_at IS NOT NULL
+            AND (idempotency_key=$1 OR idempotency_key LIKE $1 || ':%')
+          LIMIT 1`,
+        [prefix],
+      );
+      return rows.length > 0;
+    },
     async dispatchOnce(
       input: {
         idempotencyKey: string;
@@ -654,8 +733,8 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
       send: () => Promise<void>,
     ): Promise<void> {
       const intentDigest = createHash("sha256").update(input.intent).digest("base64url");
-      await withPgTransaction(await pool(), async (db) => {
-        await db.query(
+      await dispatchLocks.withLock(`finny-runtime-dispatch:${input.idempotencyKey}`, async () => {
+        await q(
           `INSERT INTO finny_runtime_dispatches(
             idempotency_key,scope_id,job_id,session_id,run_id,kind,intent_digest,created_at
           ) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(idempotency_key) DO NOTHING`,
@@ -670,10 +749,8 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
             Date.now(),
           ],
         );
-        const result = await db.query("SELECT * FROM finny_runtime_dispatches WHERE idempotency_key=$1 FOR UPDATE", [
-          input.idempotencyKey,
-        ]);
-        const row = result.rows[0] as Record<string, unknown> | undefined;
+        const rows = await q("SELECT * FROM finny_runtime_dispatches WHERE idempotency_key=$1", [input.idempotencyKey]);
+        const row = rows[0] as Record<string, unknown> | undefined;
         if (
           !row ||
           row.scope_id !== input.scopeId ||
@@ -687,10 +764,10 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
         }
         if (row.delivered_at !== null) return;
         await send();
-        await db.query("UPDATE finny_runtime_dispatches SET delivered_at=$2 WHERE idempotency_key=$1", [
-          input.idempotencyKey,
-          Date.now(),
-        ]);
+        await q(
+          "UPDATE finny_runtime_dispatches SET delivered_at=$2 WHERE idempotency_key=$1 AND delivered_at IS NULL",
+          [input.idempotencyKey, Date.now()],
+        );
       });
     },
   };

@@ -1,3 +1,4 @@
+import { Readable } from "node:stream";
 import { isSideChatAnchor } from "../../sessions/side-chat.ts";
 import type { CapabilityClaims } from "../../auth/capability-token.ts";
 import { memoryForRequest } from "./memory-access.ts";
@@ -358,16 +359,36 @@ async function listFiles(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, page);
 }
 
+const INLINE_FILE_UPLOAD_MAX_BYTES = 32 * 1024 * 1024;
+
 async function uploadFile(ctx: ApiCtx): Promise<void> {
-  const { res, app, deps, body } = ctx;
-  if (!deps.blobTransfer)
-    return sendJson(res, 501, { error: "not_configured", message: "blob transfer store not wired" });
+  const { res, app, deps, body, capability } = ctx;
   const b = isObj(body) ? body : {};
-  const principalId = typeof b.principalId === "string" ? b.principalId.trim() : "";
-  const blobId = typeof b.blobId === "string" ? b.blobId.trim() : "";
+  const principalId = capability?.actorId ?? (typeof b.principalId === "string" ? b.principalId.trim() : "");
   const name = typeof b.name === "string" ? b.name : "";
   const mimetype = typeof b.mimetype === "string" ? b.mimetype : undefined;
-  const scopeId = typeof b.scopeId === "string" && b.scopeId ? (b.scopeId as ScopeId) : undefined;
+  const scopeId =
+    capability?.scopeId ?? (typeof b.scopeId === "string" && b.scopeId ? (b.scopeId as ScopeId) : undefined);
+  if (capability) {
+    const encoded = typeof b.dataBase64 === "string" ? b.dataBase64.trim() : "";
+    if (!name || !encoded || !/^[A-Za-z0-9+/]+={0,2}$/.test(encoded))
+      return sendJson(res, 400, { error: "bad_request", message: "name and valid dataBase64 required" });
+    const data = Buffer.from(encoded, "base64");
+    if (data.length > INLINE_FILE_UPLOAD_MAX_BYTES)
+      return sendJson(res, 413, { error: "payload_too_large", message: "inline file exceeds 32 MiB" });
+    const file = await app.uploadFileForViewer(principalId, {
+      scopeId,
+      name,
+      ...(mimetype ? { mimetype } : {}),
+      data: Readable.from(data),
+    });
+    if (!file) return sendJson(res, 403, { error: "forbidden", message: "upload scope is unavailable" });
+    audit(deps, { principalId, action: "file.upload", resource: file.id, scopeLabel: capability.scopeId });
+    return sendJson(res, 200, { file, contentUrl: `/v1/files/${file.id}/content` });
+  }
+  if (!deps.blobTransfer)
+    return sendJson(res, 501, { error: "not_configured", message: "blob transfer store not wired" });
+  const blobId = typeof b.blobId === "string" ? b.blobId.trim() : "";
   if (!principalId || !blobId || !name)
     return sendJson(res, 400, { error: "bad_request", message: "principalId, blobId, and name required" });
   const opened = await deps.blobTransfer.open(blobId);
@@ -1522,7 +1543,7 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
     { method: "POST", path: "/v1/sessions/:id/fork", auth: "source", handle: forkSession },
     { method: "POST", path: "/v1/sessions/:id/detach", auth: "source", handle: detachSession },
     { method: "POST", path: "/v1/sessions/:id/goal/cancel", auth: "source", handle: cancelSessionGoal },
-    { method: "POST", path: "/v1/files/upload", auth: "source", handle: uploadFile },
+    { method: "POST", path: "/v1/files/upload", auth: "either", maxBodyBytes: 45 * 1024 * 1024, handle: uploadFile },
     { method: "POST", path: "/v1/sessions/:id", auth: "source", handle: patchSession },
     { method: "PATCH", path: "/v1/memory", auth: "source", handle: selfMemory },
     { method: "DELETE", path: "/v1/memory", auth: "source", handle: selfMemory },

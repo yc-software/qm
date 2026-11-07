@@ -225,21 +225,25 @@ export function createFinnyRuntimeCoordinator(deps: {
         task: "Await the artifact-bound Finny Auditor dispatch",
         beforeEnqueue: (identity) => bindWorker("auditor", identity),
       };
-      const [producerResult, auditorResult] = await Promise.all([
-        deps.sessions.open(openProducer),
-        deps.sessions.open(openAuditor),
-      ]);
+      // Session admission is guarded by one global lock. Open the two workers in
+      // deterministic order so they do not contend for that lock; once enqueued,
+      // their runs remain independent and can execute concurrently.
+      const producerResult = await deps.sessions.open(openProducer);
+      const auditorResult = await deps.sessions.open(openAuditor);
       const producer = opened(producerResult, "producer");
       const auditor = opened(auditorResult, "Auditor");
       await Promise.all([bindWorker("producer", producer), bindWorker("auditor", auditor)]);
-      const producerDispatchKey = `${startupKey}:producer-grant`;
+      const currentProducer = await deps.runtime.currentRoleBinding(input.scopeId, input.jobId, "producer");
+      if (!currentProducer || currentProducer.sessionId !== producer.sessionId)
+        throw new Error("Finny Producer runtime binding is unavailable");
+      const producerDispatchKey = `${startupKey}:producer-grant:${currentProducer.runId}`;
       if (!(await deps.runtime.isDispatched(producerDispatchKey))) {
         await dispatch({
           idempotencyKey: producerDispatchKey,
           scopeId: input.scopeId,
           jobId: input.jobId,
-          sessionId: producer.sessionId,
-          runId: producer.runId,
+          sessionId: currentProducer.sessionId,
+          runId: currentProducer.runId,
           kind: "producer_grant",
           intent: producerTask,
           message: producerTask,
@@ -430,9 +434,12 @@ export function createFinnyRuntimeCoordinator(deps: {
         idempotencyKey: input.idempotencyKey,
       });
       if (!ready.deduped) deps.recoveryWake?.({ kind: "artifact_ready", ...input });
-      const auditorDispatchKey = `${input.idempotencyKey}:auditor-grant`;
-      if (await deps.runtime.isDispatched(auditorDispatchKey)) return;
+      const auditorDispatchPrefix = `${input.idempotencyKey}:auditor-grant`;
       let auditor = await deps.runtime.currentRoleBinding(input.scopeId, input.jobId, "auditor");
+      if (!auditor) {
+        const latestAuditor = await deps.runtime.latestRoleBinding(input.scopeId, input.jobId, "auditor");
+        if (!latestAuditor?.active && (await deps.runtime.hasDeliveredDispatch(auditorDispatchPrefix))) return;
+      }
       if (!auditor) {
         const auditorCredentials = deps.workerPolicy.credentials(ready.job, "auditor");
         const bindAuditor = (identity: { sessionId: string; runId: string }) =>
@@ -457,6 +464,7 @@ export function createFinnyRuntimeCoordinator(deps: {
         );
         auditor = await bindAuditor(result);
       }
+      const auditorDispatchKey = `${auditorDispatchPrefix}:${auditor.runId}`;
       if (!(await deps.runtime.isDispatched(auditorDispatchKey))) {
         const currentJob = ready.job;
         const credentials = deps.workerPolicy.credentials(currentJob, "auditor");

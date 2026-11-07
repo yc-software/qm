@@ -71,24 +71,22 @@ function coreRuntimeAuthority() {
   };
 }
 
-test("opens producer and Auditor concurrently and dispatches only the producer grant after approval", async () => {
+test("admits producer and Auditor sequentially and dispatches only the producer grant after approval", async () => {
   const { jobs, job, connectionString } = await approvedJob();
   const runtime = createPostgresFinnyRuntimeStore(connectionString);
   const grants = createFinnyWorkerGrants(jobs, "runtime-test-secret");
   const opened: string[] = [];
   const openTasks: string[] = [];
-  let waiting = 0;
-  let release: (() => void) | undefined;
-  const barrier = new Promise<void>((resolve) => {
-    release = resolve;
-  });
+  let activeAdmissions = 0;
+  let maxConcurrentAdmissions = 0;
   const sessions = {
     async open(input: { name?: string; task: string }) {
+      activeAdmissions += 1;
+      maxConcurrentAdmissions = Math.max(maxConcurrentAdmissions, activeAdmissions);
       opened.push(input.name ?? "");
       openTasks.push(input.task);
-      waiting += 1;
-      if (waiting === 2) release?.();
-      await barrier;
+      await Promise.resolve();
+      activeAdmissions -= 1;
       const role = input.name === "Finny Auditor" ? "auditor" : "producer";
       return { ok: true as const, sessionId: `${role}-session`, runId: `${role}-run`, title: input.name ?? role };
     },
@@ -124,7 +122,8 @@ test("opens producer and Auditor concurrently and dispatches only the producer g
   });
 
   assert.equal(result, undefined);
-  assert.deepEqual(opened.sort(), ["Finny Auditor", "Finny Producer"]);
+  assert.deepEqual(opened, ["Finny Producer", "Finny Auditor"]);
+  assert.equal(maxConcurrentAdmissions, 1);
   assert.ok(openTasks.every((task) => !task.includes("approved workbook") && !task.includes("current artifact")));
   assert.equal(dispatched.length, 1);
   assert.equal(dispatched[0]?.sessionId, "producer-session");
@@ -134,6 +133,40 @@ test("opens producer and Auditor concurrently and dispatches only the producer g
   assert.equal((await runtime.currentBinding("parent-session"))?.role, "parent");
   assert.equal((await runtime.currentBinding("producer-session"))?.runId, "producer-run");
   assert.equal((await runtime.currentBinding("auditor-session"))?.role, "auditor");
+});
+
+test("parent binding refreshes its run only for the same job and principal", async () => {
+  const { job, connectionString } = await approvedJob();
+  const runtime = createPostgresFinnyRuntimeStore(connectionString);
+  const sessionId = randomUUID();
+  const firstRunId = randomUUID();
+  const nextRunId = randomUUID();
+  await runtime.bindParent({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    sessionId,
+    runId: firstRunId,
+    principalId: "U1",
+  });
+  await runtime.bindParent({
+    scopeId: job.scopeId,
+    jobId: job.id,
+    sessionId,
+    runId: nextRunId,
+    principalId: "U1",
+  });
+  assert.equal((await runtime.currentBinding(sessionId))?.runId, nextRunId);
+  await assert.rejects(
+    runtime.bindParent({
+      scopeId: job.scopeId,
+      jobId: job.id,
+      sessionId,
+      runId: randomUUID(),
+      principalId: "U2",
+    }),
+    /parent runtime binding idempotency conflict/,
+  );
+  assert.equal((await runtime.currentBinding(sessionId))?.runId, nextRunId);
 });
 
 test("rejects artifact readiness from a stale producer run", async () => {
@@ -438,7 +471,51 @@ test("replaying approved dispatch is idempotent", async () => {
   await coordinator.afterApproved(input);
 
   assert.equal(dispatched.length, 1);
-  assert.match(dispatched[0] ?? "", /^finny:.*:producer-grant$/);
+  assert.match(dispatched[0] ?? "", /^finny:.*:producer-grant:/);
+});
+
+test("a terminal Producer run receives a new idempotent grant generation", async () => {
+  const { jobs, job, connectionString } = await approvedJob();
+  const runtime = createPostgresFinnyRuntimeStore(connectionString);
+  const dispatched: string[] = [];
+  const coordinator = createFinnyRuntimeCoordinator({
+    jobs,
+    runtime,
+    grants: createFinnyWorkerGrants(jobs, "runtime-test-secret"),
+    sessions: {
+      async open(input) {
+        const role = input.name === "Finny Auditor" ? "auditor" : "producer";
+        return { ok: true as const, sessionId: `${role}-session`, runId: `${role}-run`, title: input.name ?? role };
+      },
+    },
+    dispatcher: {
+      async dispatchPrivateIdempotent(message) {
+        dispatched.push(message.idempotencyKey);
+      },
+    },
+    ...coreRuntimeAuthority(),
+  });
+  const input = {
+    scopeId: job.scopeId,
+    jobId: job.id,
+    parentSessionId: "parent-session",
+    parentRunId: "parent-run",
+    idempotencyKey: "approved-retry",
+  };
+
+  await coordinator.afterApproved(input);
+  await runtime.advanceWorkerRun({
+    sessionId: "producer-session",
+    expectedRunId: "producer-run",
+    runId: "terminal-producer-run",
+    scopeId: job.scopeId,
+    expiresAt: Date.now() + 60_000,
+  });
+  await coordinator.afterApproved(input);
+
+  assert.equal(dispatched.length, 2);
+  assert.notEqual(dispatched[0], dispatched[1]);
+  assert.match(dispatched[1] ?? "", /:producer-grant:terminal-producer-run$/);
 });
 
 test("an externally approved escalation stops worker actions instead of reworking", async () => {
@@ -694,6 +771,11 @@ test("concurrent approved callbacks converge through dispatcher idempotency", as
     },
     dispatcher: {
       async dispatchPrivateIdempotent(message) {
+        const visible = await createPgPool(connectionString).q(
+          "SELECT delivered_at FROM finny_runtime_dispatches WHERE idempotency_key=$1",
+          [message.idempotencyKey],
+        );
+        assert.equal(visible.length, 1, "dispatch intent must commit before the callback runs");
         dispatchCalls += 1;
         delivered.add(message.idempotencyKey);
       },
@@ -715,7 +797,7 @@ test("concurrent approved callbacks converge through dispatcher idempotency", as
 
   assert.equal(dispatchCalls, 1);
   assert.equal(delivered.size, 1);
-  assert.match([...delivered][0] ?? "", /^finny:.*:producer-grant$/);
+  assert.match([...delivered][0] ?? "", /^finny:.*:producer-grant:/);
 });
 
 test("artifact readiness derives artifact and Auditor grant authority from Core dependencies", async () => {
@@ -843,7 +925,7 @@ test("a completed artifact action replays after the producer binding retires", a
   resolvedArtifact = { artifactDigest: "newer-artifact", provisionalRevision: "newer-revision" };
   await coordinator.artifactReady(input);
 
-  assert.deepEqual([...delivered], ["artifact-replay-retired:auditor-grant"]);
+  assert.deepEqual([...delivered], ["artifact-replay-retired:auditor-grant:auditor-run"]);
 });
 
 test("audit outcomes derive issuer provenance from the authorized runtime binding", async () => {
@@ -1057,7 +1139,7 @@ test("artifact dispatch recovers from committed action authority without resolvi
     evidenceAuthority: coreRuntimeAuthority().evidenceAuthority,
   });
   await restarted.artifactReady(pending[0]!);
-  assert.deepEqual(delivered, ["artifact-crash-window:auditor-grant"]);
+  assert.deepEqual(delivered, ["artifact-crash-window:auditor-grant:auditor-run"]);
   assert.deepEqual(await runtime.pendingRecoveries(), []);
 });
 
@@ -1263,7 +1345,7 @@ test("restart replays artifact authority committed before the job event", async 
     evidenceAuthority: coreRuntimeAuthority().evidenceAuthority,
   });
   await coordinator.artifactReady(input);
-  assert.deepEqual(delivered, ["artifact-authorized-only:auditor-grant"]);
+  assert.deepEqual(delivered, ["artifact-authorized-only:auditor-grant:auditor-run"]);
 });
 
 test("restart replays BLOCK authority committed before the job event", async () => {

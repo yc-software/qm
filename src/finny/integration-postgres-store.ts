@@ -355,11 +355,32 @@ export function createPostgresFinnyIntegrationStore(connectionString: string) {
       return rows.map(parent);
     },
     async approvedIncomplete(): Promise<FinnyIntegrationParentRecord[]> {
+      const hasRuns = (await q("SELECT to_regclass('runs') IS NOT NULL AS exists"))[0]?.exists === true;
+      const terminalProducerRetry = hasRuns
+        ? `OR EXISTS (
+             SELECT 1 FROM finny_runtime_bindings b
+             JOIN runs r ON r.id=b.run_id
+              WHERE b.job_id=i.job_id AND b.scope_id=i.scope_id
+                AND b.role='producer' AND b.active=TRUE
+                AND (
+                  r.status='failed'
+                  OR (r.status='done' AND (r.last_stop IS NOT NULL OR r.result LIKE '%"stopped":true%'))
+                )
+           )`
+        : "";
       const rows = await q(
         `SELECT i.* FROM finny_integration_jobs i
          JOIN finny_jobs j ON j.id=i.job_id AND j.scope_id=i.scope_id
-         LEFT JOIN finny_runtime_dispatches d ON d.idempotency_key='finny:' || i.job_id || ':' || i.request_id || ':producer-grant' AND d.delivered_at IS NOT NULL
-         WHERE j.approval_action='approve' AND j.approval_consumed_at IS NULL AND d.idempotency_key IS NULL
+         WHERE j.approval_action='approve'
+           AND j.approval_consumed_at IS NULL
+           AND (
+             NOT EXISTS (
+               SELECT 1 FROM finny_runtime_dispatches d
+               WHERE d.job_id=i.job_id AND d.scope_id=i.scope_id
+                 AND d.kind='producer_grant' AND d.delivered_at IS NOT NULL
+             )
+             ${terminalProducerRetry}
+           )
          ORDER BY j.approval_decided_at, i.job_id`,
       );
       return rows.map(parent);

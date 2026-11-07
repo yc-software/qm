@@ -258,7 +258,7 @@ export function workspaceTools(kit: ToolKit) {
     name: "write",
     label: "write",
     description:
-      "Write a workspace file. To share it, upload it with POST /v1/files/uploads, then share the returned ID.",
+      "Write a workspace file. To persist a local artifact without S3, POST JSON {name,mimetype,dataBase64} to /v1/files/upload with the agent capability; the response includes immutable file.id and file.sha256. Large production uploads use /v1/files/uploads.",
     parameters: Type.Object({
       path: Type.String({ description: "Workspace-relative path." }),
       data: Type.String({ description: "File contents." }),
