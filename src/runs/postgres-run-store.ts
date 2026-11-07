@@ -78,6 +78,11 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
 
   const { query: q, close: closePool } = createPgPool(connectionString, [
     {
+      id: "runs/store/0010-drop-turn-metrics",
+      upgradeFrom: "runs/store/0009-claim-priority-index",
+      statements: [`SET LOCAL lock_timeout = '60s'`, `DROP TABLE IF EXISTS turn_metrics`],
+    },
+    {
       id: "runs/store/0011-base-schema",
       expectedChecksum: "77ca2d1c3ec5253374c0eadbf47d91d53c6d2c3fc7232079b33006bc9233a24e",
       statements: [

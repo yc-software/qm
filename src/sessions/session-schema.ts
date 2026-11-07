@@ -1,3 +1,4 @@
+import { PUBLISHED_SESSION_UPGRADE } from "./published-upgrade.ts";
 import type { PgMigrationDefinition } from "../persistence/pg-pool.ts";
 import { TENANCY_BASE } from "../tenants/migrations.ts";
 import { DROP_TENANT_PREBUILD_INDEXES } from "../tenants/prebuilt-indexes.ts";
@@ -448,6 +449,7 @@ const DROP_STOPPED_PLACEHOLDERS: PgMigrationDefinition = {
 
 export const SESSION_MIGRATIONS = [
   TENANCY_BASE,
+  ...PUBLISHED_SESSION_UPGRADE,
   SESSION_SCHEMA,
   MESSAGE_SEARCH_INDEX,
   DROP_ITEMS_SEARCH,
