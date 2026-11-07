@@ -47,6 +47,7 @@ function asUser(user: string, init: RequestInit = {}): RequestInit {
     headers: {
       "content-type": "application/json",
       cookie: `webuiuser=${encodeURIComponent(user)}; ${browserSessionCookie(user)}`,
+      origin: browserSessionDeps.portalUrl,
       [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: user, exp: Date.now() + 60_000 }, SECRET),
       ...init.headers,
     },
@@ -77,9 +78,9 @@ test("list, rename, archive, disable, enable, run, delete are owner-gated", asyn
   const bobList = (await (await fetch(`${webBase}/api/crons`, asUser("bob"))).json()) as { crons: unknown[] };
   assert.equal(bobList.crons.length, 0);
   for (const attempt of [
-    fetch(`${webBase}/api/crons/${id}/disable`, asUser("bob", { method: "POST" })),
+    fetch(`${coreBase}/api/crons/${id}/disable`, asUser("bob", { method: "POST" })),
     fetch(`${webBase}/api/crons/${id}/enable`, asUser("bob", { method: "POST" })),
-    fetch(`${webBase}/api/crons/${id}/run`, asUser("bob", { method: "POST" })),
+    fetch(`${coreBase}/api/crons/${id}/run`, asUser("bob", { method: "POST" })),
     fetch(
       `${webBase}/api/crons/${id}`,
       asUser("bob", { method: "PATCH", body: JSON.stringify({ title: "Bob edit" }) }),
@@ -96,7 +97,7 @@ test("list, rename, archive, disable, enable, run, delete are owner-gated", asyn
   assert.equal(aliceRename.status, 200);
   assert.equal(((await aliceRename.json()) as CronBody).cron.title, "Inbox digest");
 
-  const aliceDisable = await fetch(`${webBase}/api/crons/${id}/disable`, asUser("alice", { method: "POST" }));
+  const aliceDisable = await fetch(`${coreBase}/api/crons/${id}/disable`, asUser("alice", { method: "POST" }));
   assert.equal(aliceDisable.status, 200);
   let list = (await (await fetch(`${webBase}/api/crons`, asUser("alice"))).json()) as {
     crons: Array<{ enabled: boolean; archived?: boolean; title?: string }>;
@@ -111,7 +112,7 @@ test("list, rename, archive, disable, enable, run, delete are owner-gated", asyn
   };
   assert.equal(list.crons[0]?.enabled, true);
 
-  const aliceRun = await fetch(`${webBase}/api/crons/${id}/run`, asUser("alice", { method: "POST" }));
+  const aliceRun = await fetch(`${coreBase}/api/crons/${id}/run`, asUser("alice", { method: "POST" }));
   assert.equal(aliceRun.status, 200);
 
   const aliceArchive = await fetch(
@@ -220,8 +221,8 @@ test("list splits owned crons from ones visible through shared scopes, and visib
   assert.equal(bobList.visible.length, 0);
 
   for (const attempt of [
-    fetch(`${webBase}/api/crons/${publicCron.id}/disable`, asUser("alice", { method: "POST" })),
-    fetch(`${webBase}/api/crons/${publicCron.id}/run`, asUser("alice", { method: "POST" })),
+    fetch(`${coreBase}/api/crons/${publicCron.id}/disable`, asUser("alice", { method: "POST" })),
+    fetch(`${coreBase}/api/crons/${publicCron.id}/run`, asUser("alice", { method: "POST" })),
     fetch(
       `${webBase}/api/crons/${publicCron.id}`,
       asUser("alice", { method: "PATCH", body: JSON.stringify({ archived: true }) }),
@@ -261,7 +262,7 @@ test("a channel member sees a teammate's cron read-only via the web until the ow
     ).visible.find((candidate) => candidate.id === privCron.id)?.permission;
 
   assert.equal(await aliceView(), "read");
-  const denied = await fetch(`${webBase}/api/crons/${privCron.id}/disable`, asUser("alice", { method: "POST" }));
+  const denied = await fetch(`${coreBase}/api/crons/${privCron.id}/disable`, asUser("alice", { method: "POST" }));
   assert.equal(denied.status, 404, "a member can't change someone else's cron");
   const carolPriv = await fetch(`${webBase}/api/crons/${privCron.id}`, asUser("carol", { method: "DELETE" }));
   assert.equal(carolPriv.status, 404, "a non-member is denied");
@@ -274,7 +275,7 @@ test("a channel member sees a teammate's cron read-only via the web until the ow
     grantedBy: "bob",
   });
   assert.equal(await aliceView(), "manage");
-  const aliceDisable = await fetch(`${webBase}/api/crons/${privCron.id}/disable`, asUser("alice", { method: "POST" }));
+  const aliceDisable = await fetch(`${coreBase}/api/crons/${privCron.id}/disable`, asUser("alice", { method: "POST" }));
   assert.equal(aliceDisable.status, 200, "a write grantee manages it");
   assert.equal((await built.app.getCron(privCron.id))!.owner, "bob");
 

@@ -140,7 +140,14 @@ async function readShare(ctx: ApiCtx): Promise<void> {
 }
 
 export const sessionSharingRoutes: ReadonlyArray<Route> = [
-  { method: "POST", path: "/v1/sessions/:id/share", actor: "body.principalId", auth: "source", handle: createShare },
+  {
+    method: "POST",
+    path: "/v1/sessions/:id/share",
+    browser: true,
+    actor: "body.principalId",
+    auth: "source",
+    handle: createShare,
+  },
   ...(["shared-sessions", "public-shares"] as const).flatMap((prefix): Route[] => {
     const actor = prefix === "shared-sessions" ? ("query.viewer" as const) : undefined;
     return [

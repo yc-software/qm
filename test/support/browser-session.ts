@@ -7,8 +7,8 @@ export const browserSessionDeps = {
   portalUrl: "https://qm.test",
 };
 
-export function browserSessionCookie(sub: string): string {
+export function browserSessionCookie(sub: string, extra: Record<string, unknown> = {}): string {
   const iat = Math.floor(Date.now() / 1000);
-  const claims = { k: "session", sub, org: "default-org", iat, exp: iat + 3600 };
+  const claims = { k: "session", sub, org: "default-org", iat, exp: iat + 3600, ...extra };
   return `portal_session=${encodeURIComponent(seal(claims, deriveKey(SECRET, "portal.session.v1")))}`;
 }

@@ -35,9 +35,10 @@ async function freePort(): Promise<number> {
   return port;
 }
 
-async function core(t: TestContext): Promise<string> {
+async function core(t: TestContext, onBuilt: (built: ReturnType<typeof buildApp>) => void = () => {}): Promise<string> {
   const config = testConfig({ signingSecret: SIGNING, publicWebUrl: "https://qm.example.com" });
   const built = stopAtEnd(buildApp(config));
+  onBuilt(built);
   const server = createServer(built.app, { ...serverDeps(config, built), ...browserSessionDeps });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
@@ -54,7 +55,11 @@ test("each aliased /api path resolves to the browser-enabled /v1 route that serv
   }
   assert.equal(apiAlias("GET", "/api/sessions/a%2Fb/children"), "/v1/sessions/a%2Fb/children");
   for (const [method, path] of [
-    ["POST", "/api/sessions"],
+    ["POST", "/api/turn"],
+    ["POST", "/api/approvals/1"],
+    ["PATCH", "/api/crons/1"],
+    ["DELETE", "/api/crons/1"],
+    ["POST", "/api/sessions/1/swarm"],
     ["GET", "/api/inbox"],
     ["GET", "/api/loops/1/items"],
     ["GET", "/api/files/1/content"],
@@ -66,7 +71,7 @@ test("each aliased /api path resolves to the browser-enabled /v1 route that serv
 test("each aliased path answers a cookie-only browser exactly as its /v1 route does, bound to the signed-in person", async (t) => {
   const base = await core(t);
   const cookie = browserSessionCookie("alice");
-  for (const { path, target } of aliases) {
+  for (const { path, target } of aliases.filter(({ method }) => method === "GET")) {
     const query = QUERY[path] ?? "";
     const viaAlias = await fetch(`${base}${concrete(path)}?${query}`, { headers: { cookie } });
     const direct = await fetch(`${base}${concrete(target)}?${query}`, { headers: { cookie } });
@@ -80,6 +85,104 @@ test("each aliased path answers a cookie-only browser exactly as its /v1 route d
     const anonymous = await fetch(`${base}${concrete(path)}?${query}`);
     assert.equal(anonymous.status, 401, `${path} answered without a cookie`);
   }
+});
+
+const GATE_REFUSALS = new Set(["portal identity does not match the requested actor", "cross-origin request refused"]);
+
+async function refusal(response: Response): Promise<string> {
+  const text = await response.text();
+  try {
+    return (JSON.parse(text) as { message?: string }).message ?? "";
+  } catch {
+    return "";
+  }
+}
+
+test("each aliased write reaches its handler only for the signed-in person on the app's own origin, playground visitors included", async (t) => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (input, init) =>
+    new URL(input instanceof Request ? input.url : String(input)).hostname === "127.0.0.1"
+      ? realFetch(input, init)
+      : Promise.reject(new Error("no outbound network in this test"));
+  t.after(() => (globalThis.fetch = realFetch));
+  const base = await core(t);
+  const origin = browserSessionDeps.portalUrl;
+  const send = (method: string, path: string, headers: Record<string, string>, body: Record<string, string> = {}) =>
+    realFetch(`${base}${path}`, {
+      method,
+      headers: { "content-type": "application/json", ...headers },
+      body: JSON.stringify(body),
+    });
+  const writes = aliases.filter(({ method }) => method !== "GET");
+  assert.ok(writes.length > 0);
+  for (const { method, path, target } of writes) {
+    const url = concrete(path);
+    const actor = findRoute(apiRoutes, method, concrete(target))?.route.actor ?? "";
+    const [where, field] = actor.includes(".") ? actor.split(".", 2) : ["body", "principalId"];
+    for (const sub of ["alice", "playground-guest"]) {
+      const cookie = browserSessionCookie(sub, sub === "alice" ? {} : { anon: true });
+      const own = await send(method, url, { cookie, origin });
+      assert.ok(
+        own.status !== 401 && !(own.status === 403 && GATE_REFUSALS.has(await refusal(own))),
+        `${method} ${path} refused ${sub} (${own.status})`,
+      );
+    }
+    const cookie = browserSessionCookie("alice");
+    const named =
+      where === "query"
+        ? await send(method, `${url}?${field}=bob`, { cookie, origin })
+        : await send(method, url, { cookie, origin }, { [field!]: "bob" });
+    assert.equal(named.status, 403, `${method} ${path} let alice name bob as ${actor || "principalId"}`);
+    assert.equal(await refusal(named), "portal identity does not match the requested actor");
+    const foreign = await send(method, url, { cookie, origin: "https://evil.example" });
+    assert.equal(foreign.status, 403, `${method} ${path} accepted a cross-origin write`);
+    assert.equal(await refusal(foreign), "cross-origin request refused");
+    assert.equal((await send(method, url, { origin })).status, 401, `${method} ${path} answered without a cookie`);
+  }
+  for (const [method, path] of [
+    ["PATCH", "/api/memory"],
+    ["DELETE", "/api/memory"],
+    ["POST", "/api/sessions/1"],
+    ["POST", "/api/connectors/revoke"],
+  ] as const) {
+    const empty = await realFetch(`${base}${path}`, {
+      method,
+      headers: { cookie: browserSessionCookie("alice"), origin },
+    });
+    assert.equal(empty.status, 400, `${method} ${path} read an empty body as a change`);
+  }
+});
+
+test("browser writes act as the signed-in person or playground visitor under their canonical id", async (t) => {
+  let built!: ReturnType<typeof buildApp>;
+  const base = await core(t, (b) => (built = b));
+  const people = [
+    { sub: "alice@example.com", spelled: " ALICE@EXAMPLE.COM ", cookie: browserSessionCookie("alice@example.com") },
+    {
+      sub: "playground-guest",
+      spelled: "playground-guest",
+      cookie: browserSessionCookie("playground-guest", { anon: true }),
+    },
+  ];
+  const write = (cookie: string, method: string, path: string, body?: unknown) =>
+    fetch(`${base}${path}`, {
+      method,
+      headers: { cookie, origin: browserSessionDeps.portalUrl, "content-type": "application/json" },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+  for (const { sub, spelled, cookie } of people) {
+    const created = await write(cookie, "POST", "/api/projects", { name: "Launch", principalId: spelled });
+    assert.equal(created.status, 201, sub);
+    assert.equal(((await created.json()) as { project: { ownerId: string } }).project.ownerId, sub);
+    const saved = await write(cookie, "PUT", "/api/ui-state", { principalId: spelled, key: "sidebar", value: 1 });
+    assert.equal(saved.status, 200, sub);
+    const read = await fetch(`${base}/api/ui-state?key=sidebar`, { headers: { cookie } });
+    assert.equal(((await read.json()) as { value?: unknown }).value, 1, sub);
+  }
+  const session = await built.sessions.getOrCreateByThread("web:alice:fork-me", "dm", "personal:alice@example.com");
+  await built.sessions.addParticipant(session.id, "alice@example.com", "Fork me");
+  const forked = await write(people[0]!.cookie, "POST", `/api/sessions/${session.id}/fork`);
+  assert.equal(forked.status, 200);
 });
 
 test("a web release still calling /api reaches core for migrated reads and the web server for the rest", async (t) => {
@@ -105,5 +208,19 @@ test("a web release still calling /api reaches core for migrated reads and the w
   assert.equal(relayed.status, 200);
   assert.deepEqual(Object.keys((await relayed.json()) as object).sort(), ["crons", "visible"]);
   assert.equal((await read(`${publicWebUrl}/v1/sessions`)).status, 404);
+  const write = (method: string, path: string) =>
+    fetch(`${publicWebUrl}${path}`, {
+      method,
+      headers: { cookie, origin: publicWebUrl, "content-type": "application/json" },
+      body: "{}",
+    });
+  const migratedWrite = await write("POST", "/api/projects");
+  assert.equal(migratedWrite.status, 400);
+  assert.equal(((await migratedWrite.json()) as { message?: string }).message, "principalId and name required");
+  const relayedWrite = await write("PATCH", "/api/crons/missing");
+  assert.equal(
+    ((await relayedWrite.json()) as { message?: string }).message,
+    "expected title, task, schedule, enabled, archived, or runtime",
+  );
   assert.equal((await read(`http://127.0.0.1:${port}/api/sessions`)).status, 200);
 });

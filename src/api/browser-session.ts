@@ -4,7 +4,7 @@ import { originOf, sameOriginRequest } from "../../plugins/chassis/src/http.ts";
 import type { PortalIdentity } from "../auth/portal-identity.ts";
 import { isStrongSigningSecret, MIN_SIGNING_SECRET_LENGTH } from "../auth/source-auth.ts";
 import { orgId } from "../config.ts";
-import { canonicalPerson } from "../directory/person.ts";
+import { canonicalPerson, samePerson } from "../directory/person.ts";
 import { reportFailure } from "../util/errors.ts";
 import { CAPABILITY_HEADER } from "./contract.ts";
 import type { ServerDeps } from "./deps.ts";
@@ -42,6 +42,49 @@ export const API_ALIASES: ReadonlyMap<string, string> = new Map([
   ["GET /api/ui-state", "/v1/ui-state"],
   ["GET /api/custom-emoji", "/v1/custom-emoji"],
   ["GET /api/crons/:id/runs", "/v1/crons/:id/runs"],
+  ["POST /api/user-model-auth/account", "/v1/user-model-auth/account"],
+  ["POST /api/user-model-auth/api-key", "/v1/user-model-auth/api-key"],
+  ["POST /api/user-model-auth/disconnect", "/v1/user-model-auth/disconnect"],
+  ["POST /api/user-model-auth/chatgpt/start", "/v1/user-model-auth/chatgpt/start"],
+  ["POST /api/user-model-auth/chatgpt/poll", "/v1/user-model-auth/chatgpt/poll"],
+  ["POST /api/user-model-auth/claude/start", "/v1/user-model-auth/claude/start"],
+  ["POST /api/user-model-auth/claude/complete", "/v1/user-model-auth/claude/complete"],
+  ["POST /api/composio/slack/reply-status", "/v1/composio/slack/reply-status"],
+  ["POST /api/composio/slack/reply", "/v1/composio/slack/reply"],
+  ["POST /api/composio/slack/complete", "/v1/composio/slack/complete"],
+  ["POST /api/composio/disconnect", "/v1/composio/disconnect"],
+  ["POST /api/projects", "/v1/projects"],
+  ["PATCH /api/projects/:id", "/v1/projects/:id"],
+  ["POST /api/projects/:id/members", "/v1/projects/:id/members"],
+  ["DELETE /api/projects/:id/members/:memberId", "/v1/projects/:id/members/:memberId"],
+  ["PUT /api/projects/:id/slack-channel", "/v1/projects/:id/slack-channel"],
+  ["DELETE /api/projects/:id/slack-channel", "/v1/projects/:id/slack-channel"],
+  ["POST /api/personas", "/v1/personas"],
+  ["PATCH /api/personas/:id", "/v1/personas/:id"],
+  ["DELETE /api/personas/:id", "/v1/personas/:id"],
+  ["PUT /api/personas/:id/access", "/v1/personas/:id/access"],
+  ["POST /api/personas/:id/versions/:version/restore", "/v1/personas/:id/versions/:version/restore"],
+  ["POST /api/sessions", "/v1/sessions"],
+  ["POST /api/sessions/:id", "/v1/sessions/:id"],
+  ["PUT /api/sessions/:id/persona", "/v1/sessions/:id/persona"],
+  ["POST /api/sessions/:id/share", "/v1/sessions/:id/share"],
+  ["POST /api/sessions/:id/title", "/v1/sessions/:id/title"],
+  ["POST /api/sessions/:id/detach", "/v1/sessions/:id/detach"],
+  ["POST /api/sessions/:id/goal/cancel", "/v1/sessions/:id/goal/cancel"],
+  ["POST /api/sessions/:id/expand", "/v1/sessions/:id/expand"],
+  ["POST /api/sessions/:id/fork", "/v1/sessions/:id/fork"],
+  ["PUT /api/ui-state", "/v1/ui-state"],
+  ["POST /api/skills", "/v1/skills"],
+  ["PUT /api/skills/:id", "/v1/skills/:id"],
+  ["DELETE /api/skills/:id", "/v1/skills/:id"],
+  ["POST /api/skills/:id/restore", "/v1/skills/:id/restore"],
+  ["PATCH /api/memory", "/v1/memory"],
+  ["DELETE /api/memory", "/v1/memory"],
+  ["POST /api/connectors/revoke", "/v1/connectors/oauth/revoke"],
+  ["POST /api/keychain/approvals/:id", "/v1/keychain/approvals/:id"],
+  ["PATCH /api/runs/:id/input", "/v1/runs/:id/input"],
+  ["POST /api/crons/:id/disable", "/v1/crons/:id/disable"],
+  ["POST /api/crons/:id/run", "/v1/crons/:id/run"],
 ]);
 
 const aliasMatchers = [...API_ALIASES].map(([key, target]) => {
@@ -149,18 +192,15 @@ export function withBrowserActor(
   principalId: string,
 ): unknown {
   const [where, name] = (field ?? "").split(".", 2);
-  if (where === "query" && name && !url.searchParams.has(name)) {
+  const own = (values: unknown[]) =>
+    values.every((value) => typeof value === "string" && samePerson(value, principalId));
+  if (where === "query" && name && own(url.searchParams.getAll(name))) {
     url.searchParams.set(name, principalId);
     req.url = `${url.pathname}${url.search}`;
   }
-  if (
-    where === "body" &&
-    name &&
-    body &&
-    typeof body === "object" &&
-    !Array.isArray(body) &&
-    !Object.hasOwn(body, name)
-  )
-    return { ...body, [name]: principalId };
+  if (where === "body" && name && body && typeof body === "object" && !Array.isArray(body)) {
+    if (own(Object.hasOwn(body, name) ? [(body as Record<string, unknown>)[name]] : []))
+      return { ...body, [name]: principalId };
+  }
   return body;
 }

@@ -412,6 +412,7 @@ export const keychainRoutes: ReadonlyArray<Route<ApiCtx>> = [
   {
     method: "POST",
     path: "/v1/keychain/approvals/:id",
+    browser: true,
     actor: "body.principalId",
     auth: "source",
     handle: handleApproval,

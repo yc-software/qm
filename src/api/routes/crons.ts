@@ -454,9 +454,9 @@ export const cronRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/crons", actor: "query.viewer", auth: "either", handle: listCrons },
   { method: "POST", path: "/v1/crons/:id/note", auth: "either", handle: noteCron },
   ...withActor("query.principalId", [
-    { method: "POST", path: "/v1/crons/:id/disable", auth: "either", handle: disableCron },
+    { method: "POST", path: "/v1/crons/:id/disable", browser: true, auth: "either", handle: disableCron },
     { method: "POST", path: "/v1/crons/:id/destination", auth: "either", handle: retargetCron },
-    { method: "POST", path: "/v1/crons/:id/run", auth: "either", handle: runCronNow },
+    { method: "POST", path: "/v1/crons/:id/run", browser: true, auth: "either", handle: runCronNow },
     { method: "GET", path: "/v1/crons/:id/runs", browser: true, auth: "either", handle: cronRuns },
     {
       match: (m, p) =>
