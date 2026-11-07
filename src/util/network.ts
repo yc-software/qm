@@ -1,8 +1,6 @@
 import { lookup as dnsLookup } from "node:dns";
-import { Agent as HttpAgent, request as httpRequest, type IncomingMessage } from "node:http";
-import { Agent as HttpsAgent, request as httpsRequest } from "node:https";
 import { BlockList, isIP, type LookupFunction } from "node:net";
-import { Readable } from "node:stream";
+import { Agent, buildConnector, fetch, type RequestInit as UndiciRequestInit } from "undici";
 
 const PRIVATE_NETWORKS = new BlockList();
 
@@ -55,22 +53,6 @@ export function isPrivateNetworkIp(raw: string): boolean {
 
 export class PrivateNetworkAddressError extends Error {}
 
-const NULL_BODY_STATUSES = new Set([204, 205, 304]);
-
-function toResponse(res: IncomingMessage, method: string): Response {
-  const status = res.statusCode ?? 502;
-  const headers = new Headers();
-  for (const [name, value] of Object.entries(res.headers))
-    for (const item of [value ?? []].flat()) headers.append(name, item);
-  const nullBody = NULL_BODY_STATUSES.has(status) || method === "HEAD";
-  if (nullBody) res.resume();
-  const body = nullBody ? null : (Readable.toWeb(res) as ReadableStream<Uint8Array>);
-  return new Response(body, { status, statusText: res.statusMessage ?? "", headers });
-}
-
-const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
-const MAX_REDIRECTS = 20;
-
 export type AddressFetch = (input: string | URL, init?: RequestInit) => Promise<Response>;
 
 function refusingLookup(refused: (ip: string) => boolean): LookupFunction {
@@ -90,77 +72,24 @@ export function addressGuardedFetch(
   refused: (ip: string) => boolean,
   { timeoutMs = 300_000 }: { timeoutMs?: number } = {},
 ): AddressFetch {
-  const lookup = refusingLookup(refused);
-  const agents = {
-    "http:": new HttpAgent({ keepAlive: true, lookup }),
-    "https:": new HttpsAgent({ keepAlive: true, lookup }),
-  };
-  return async (input, init = {}) => {
-    let url = new URL(input);
-    let request = init;
-    for (let hop = 0; ; hop++) {
-      const res = await guardedRequest(url, request, { agents, refused, timeoutMs });
-      const location = res.headers.get("location");
-      if (request.redirect !== "follow" || !REDIRECT_STATUSES.has(res.status) || location === null) return res;
-      await res.body?.cancel();
-      if (hop === MAX_REDIRECTS) throw new TypeError(`too many redirects from ${new URL(input).origin}`);
-      const next = new URL(location, url);
-      const headers = new Headers(request.headers);
-      if (next.origin !== url.origin) headers.delete("authorization");
-      const method = (request.method ?? "GET").toUpperCase();
-      const asGet = (res.status === 303 && method !== "HEAD") || (res.status < 303 && method === "POST");
-      request = { ...request, headers, ...(asGet ? { method: "GET", body: null } : {}) };
-      url = next;
-    }
-  };
+  const connect = buildConnector({ lookup: refusingLookup(refused) });
+  const dispatcher = new Agent({
+    headersTimeout: timeoutMs,
+    bodyTimeout: timeoutMs,
+    connect: (options, callback) => {
+      const literal = normalizedIp(options.hostname);
+      if (literal && refused(literal))
+        return callback(new PrivateNetworkAddressError(`${options.hostname} is a private network address`), null);
+      connect(options, callback);
+    },
+  });
+  return (input, init = {}) =>
+    fetch(input, { ...(init as UndiciRequestInit), redirect: init.redirect ?? "manual", dispatcher }).then(
+      (response) => response as Response,
+      (error: unknown) => {
+        throw error instanceof TypeError && error.cause instanceof PrivateNetworkAddressError ? error.cause : error;
+      },
+    );
 }
 
 export const publicFetch = addressGuardedFetch(isPrivateNetworkIp);
-
-async function guardedRequest(
-  url: URL,
-  init: RequestInit,
-  guard: { agents: { "http:": HttpAgent; "https:": HttpsAgent }; refused: (ip: string) => boolean; timeoutMs: number },
-): Promise<Response> {
-  const { agents, refused, timeoutMs } = guard;
-  const agent = url.protocol === "https:" || url.protocol === "http:" ? agents[url.protocol] : undefined;
-  if (!agent) throw new TypeError(`unsupported URL protocol ${url.protocol}`);
-  const literal = normalizedIp(url.hostname);
-  if (literal && refused(literal)) throw new PrivateNetworkAddressError(`${url.hostname} is a private network address`);
-  const prepared = new Request(url, { method: init.method ?? "GET", headers: init.headers, body: init.body ?? null });
-  const method = prepared.method;
-  const headers = prepared.headers;
-  if (!headers.has("accept")) headers.set("accept", "*/*");
-  if (!headers.has("user-agent")) headers.set("user-agent", "node");
-  const body = prepared.body ? Buffer.from(await prepared.arrayBuffer()) : undefined;
-  if (body) headers.set("content-length", String(body.length));
-  init.signal?.throwIfAborted();
-  return new Promise((resolve, reject) => {
-    const request = url.protocol === "https:" ? httpsRequest : httpRequest;
-    const req = request(
-      url,
-      {
-        method,
-        agent,
-        timeout: timeoutMs,
-        headers: Object.fromEntries(headers),
-        ...(init.signal ? { signal: init.signal } : {}),
-      },
-      (res) => {
-        if (init.redirect === "error" && res.statusCode && res.statusCode >= 300 && res.statusCode < 400) {
-          res.destroy();
-          return reject(new TypeError(`redirect from ${url.origin} refused`));
-        }
-        try {
-          resolve(toResponse(res, method));
-        } catch (error) {
-          res.destroy();
-          reject(error);
-        }
-      },
-    );
-    req.on("timeout", () => req.destroy(new Error(`request to ${url.origin} timed out`)));
-    req.on("error", reject);
-    req.end(body);
-  });
-}

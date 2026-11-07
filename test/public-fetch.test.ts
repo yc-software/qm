@@ -97,7 +97,9 @@ test("address-guarded fetch sends bodies and headers and returns status, headers
   });
   assert.equal((await loopback(`${base}/empty`)).status, 204);
   assert.equal((await loopback(`${base}/moved`)).status, 302);
-  await assert.rejects(loopback(`${base}/moved`, { redirect: "error" }), /redirect from .* refused/);
+  await assert.rejects(loopback(`${base}/moved`, { redirect: "error" }), (e: unknown) =>
+    /unexpected redirect/.test(errMessage(e)),
+  );
 });
 
 test("address-guarded fetch follows redirects only when asked, re-checks every hop, and keeps credentials on their origin", async (t) => {
@@ -133,14 +135,18 @@ test("address-guarded fetch follows redirects only when asked, re-checks every h
   ]);
 
   await assert.rejects(guarded(`${base}/metadata`, { redirect: "follow" }), PrivateNetworkAddressError);
-  await assert.rejects(guarded(`${base}/loop`, { redirect: "follow" }), /too many redirects/);
+  await assert.rejects(guarded(`${base}/loop`, { redirect: "follow" }), (e: unknown) =>
+    /redirect count exceeded/.test(errMessage(e)),
+  );
   assert.equal((await guarded(`${base}/private`)).status, 302);
 });
 
 test("address-guarded fetch gives up on an endpoint that never answers", async (t) => {
   const silent = await listen(t, () => undefined);
   const impatient = addressGuardedFetch(() => false, { timeoutMs: 100 });
-  await assert.rejects(impatient(`http://127.0.0.1:${silent.port}/`), /timed out/);
+  await assert.rejects(impatient(`http://127.0.0.1:${silent.port}/`), (e: unknown) =>
+    /Headers Timeout/.test(errMessage(e)),
+  );
 });
 
 test("MCP clients, OAuth discovery, and OAuth token exchange refuse private network endpoints by default", async (t) => {
