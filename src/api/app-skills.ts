@@ -8,6 +8,7 @@ import { planIngest, importPack, collectSharedBundle, type ImportResult } from "
 import { computeBundleHash } from "../skills/skill-bundle-store.ts";
 import { persistedSkillRecordPaths, SKILL_MATERIALIZATION_LOCK } from "../skills/skill-collision.ts";
 import { triggerBlocksSharedSkill } from "./artifact-share.ts";
+import { liveForLock } from "../personas/channel-personas.ts";
 
 import type { App, AppDeps } from "./app-types.ts";
 import { parseRef } from "../acl/resource-ref.ts";
@@ -271,7 +272,10 @@ export function createSkillMethods(
       if (!skill || !(await canManageSkill(skill, principalId))) return null;
       if (triggerBlocksSharedSkill(skill.scopeId, opts?.liveActor === true)) return "trigger_blocked";
       if (skill.status === "archived") return null;
-      await assertMayInstructSkill({ id, homes: [skill.scopeId] }, { id: principalId, live: opts?.liveActor === true });
+      await assertMayInstructSkill(
+        { id, homes: [skill.scopeId] },
+        { id: principalId, live: liveForLock(opts?.liveActor, opts?.botActor) },
+      );
       const manifest = {
         ...skill.manifest,
         description: patch.description ?? skill.manifest.description,
@@ -435,12 +439,15 @@ export function createSkillMethods(
         return published;
       });
     },
-    async deleteOwnedSkill({ principalId, id, liveActor }) {
+    async deleteOwnedSkill({ principalId, id, liveActor, botActor }) {
       const skill = await deps.skills.get(id);
       if (!skill) return "missing";
       if (!(await canManageSkill(skill, principalId))) return "forbidden";
       if (triggerBlocksSharedSkill(skill.scopeId, liveActor === true)) return "trigger_blocked";
-      await assertMayInstructSkill({ id, homes: [skill.scopeId] }, { id: principalId, live: liveActor === true });
+      await assertMayInstructSkill(
+        { id, homes: [skill.scopeId] },
+        { id: principalId, live: liveForLock(liveActor, botActor) },
+      );
       await deps.skills.archive(id);
       deps.auditLog.record({
         at: Date.now(),

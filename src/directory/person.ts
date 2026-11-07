@@ -46,6 +46,18 @@ export function attestableAudience(actorId: string | undefined, scope: string | 
   return kind === "personal" && !isSystemActor(actorId) && samePerson(actorId, ref);
 }
 
+export type AttestAudience = "personal" | "any";
+
+export function attestsInAudience(
+  audience: AttestAudience | undefined,
+  actorId: string | undefined,
+  scope: string | undefined,
+  actAsActor: boolean | undefined,
+): boolean {
+  if (attestableAudience(actorId, scope)) return true;
+  return audience === "any" && actAsActor === true && !!actorId && !isSystemActor(actorId);
+}
+
 export function attestedPerson(id: string | undefined, callee: string): string {
   const actor = attestableActor(id && canonicalPerson(id));
   if (!actor)

@@ -1,3 +1,4 @@
+import { MIMEType } from "node:util";
 import { likeContains } from "../persistence/like.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import type { ScopeId } from "../types.ts";
@@ -42,6 +43,14 @@ const SCHEMA = [
   `CREATE INDEX IF NOT EXISTS file_artifacts_scope_created
     ON file_artifacts (created_in_scope, created_at DESC, id DESC) WHERE enabled = TRUE`,
 ];
+
+function storedMimetype(mimetype: string): string {
+  try {
+    return new MIMEType(mimetype).toString();
+  } catch {
+    return "application/octet-stream";
+  }
+}
 
 function rowToArtifact(r: Record<string, unknown>): FileArtifact {
   return {
@@ -109,6 +118,10 @@ export function createPostgresFileArtifactStore(
       params.push(likeContains(opts.nameQuery));
       filters.push(`name ILIKE $${params.length}::text ESCAPE '\\'`);
     }
+    if (opts?.name != null) {
+      params.push(opts.name);
+      filters.push(`name = $${params.length}::text`);
+    }
     const visible = `SELECT * FROM file_artifacts WHERE ${filters.join(" AND ")}`;
     const documents =
       sharedRefs === undefined
@@ -175,7 +188,7 @@ export function createPostgresFileArtifactStore(
             input.ownerScopeId,
             input.path,
             input.name,
-            input.mimetype,
+            storedMimetype(input.mimetype),
             sizeBytes,
             blobKey,
             sha256,

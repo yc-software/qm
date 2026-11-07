@@ -587,7 +587,7 @@ export interface App {
     id: string,
     principalId: string,
     patch: { description?: string; body?: string },
-    opts?: { liveActor?: boolean },
+    opts?: { liveActor?: boolean; botActor?: boolean },
   ): Promise<Skill | "trigger_blocked" | null>;
   restoreOwnedSkill(id: string, principalId: string, opts?: { liveActor?: boolean }): Promise<Skill | "exists" | null>;
   listSkillPacks(): Promise<SkillPack[]>;
@@ -611,6 +611,7 @@ export interface App {
     principalId: string;
     id: string;
     liveActor?: boolean;
+    botActor?: boolean;
   }): Promise<"missing" | "forbidden" | "trigger_blocked" | "deleted">;
   rollbackDeployment(id: string, version: number, actor?: string): Promise<void>;
   archiveDeployment(id: string): Promise<void>;

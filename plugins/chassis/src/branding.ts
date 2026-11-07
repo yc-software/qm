@@ -13,7 +13,6 @@ const FIRST_RENDER_WAIT_MS = 1_500;
 export interface BrandingCache {
   current(): OrgBranding;
   forRender(): Promise<OrgBranding>;
-  refreshNow(): Promise<void>;
 }
 
 export function createBrandingCache(fetchBranding: () => Promise<OrgBranding>): BrandingCache {
@@ -48,12 +47,6 @@ export function createBrandingCache(fetchBranding: () => Promise<OrgBranding>): 
         await Promise.race([inflight, new Promise((r) => setTimeout(r, FIRST_RENDER_WAIT_MS))]);
       }
       return value;
-    },
-    async refreshNow(): Promise<void> {
-      if (inflight) await inflight;
-      nextAt = 0;
-      kick();
-      if (inflight) await inflight;
     },
   };
 }

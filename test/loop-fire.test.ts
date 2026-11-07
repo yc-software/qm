@@ -1064,10 +1064,9 @@ function fakeFiles(entries: Array<{ name: string; body: string; ownerScopeId?: s
       return counter.opened;
     },
     store: {
-      async listOwnedByScopes(scopes: readonly string[], opts?: { nameQuery?: string; cursor?: string }) {
+      async listOwnedByScopes(scopes: readonly string[], opts?: { name?: string; cursor?: string }) {
         const matching = artifacts.filter(
-          (artifact) =>
-            scopes.includes(artifact.ownerScopeId) && (!opts?.nameQuery || artifact.name.includes(opts.nameQuery)),
+          (artifact) => scopes.includes(artifact.ownerScopeId) && (!opts?.name || artifact.name === opts.name),
         );
         const start = Number(opts?.cursor ?? 0);
         const files = matching.slice(start, start + 50);
@@ -1166,7 +1165,7 @@ test("the inbox sync pass scans since the last clean sync began, untouched by fa
   assert.ok(s.turns.at(-1)?.text?.includes(`since ${new Date(firstStart).toISOString()}`));
 });
 
-test("the voice profile loader takes only the exact file name, paging past other matches", async () => {
+test("the voice profile loader takes only the exact file name", async () => {
   const decoys = Array.from({ length: 60 }, (_, i) => ({ name: `email-voice-profile.md.bak${i}`, body: "old" }));
   const files = fakeFiles([...decoys, { name: EMAIL_VOICE_PROFILE_NAME, body: "Hard rule: opens with hey." }]);
   const loop = { owner: "josh", surface: "inbox:gmail", sources: ["gmail"] } as never;

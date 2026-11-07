@@ -16,13 +16,19 @@ async function until(check: () => boolean) {
   assert.ok(check());
 }
 
-test("Slack chats show a compact account link until the viewer can reply", async () => {
+test("Slack chats offer the account link once the check finds no link, rechecking on focus at most once a minute", async (t) => {
   let linked = false;
+  const bodies: Array<Record<string, unknown>> = [];
   const h = await harness({
     path: "/",
-    api: (path) =>
-      path.endsWith("/slack/reply-status") ? Response.json({ connected: linked, user: "Alice" }) : undefined,
+    api: (path, init) => {
+      if (!path.endsWith("/slack/reply-status")) return undefined;
+      bodies.push(JSON.parse(String(init?.body)));
+      return Response.json({ connected: linked, user: "Alice" });
+    },
   });
+  let now = Date.now();
+  t.mock.method(Date, "now", () => now);
   try {
     h.releaseSessions();
     await h.boot();
@@ -32,8 +38,14 @@ test("Slack chats show a compact account link until the viewer can reply", async
     assert.equal(document.querySelector("qm-slack-reply textarea"), null);
     assert.match(document.querySelector("qm-slack-reply")!.textContent!, /Send replies here as yourself/);
     linked = true;
+    now += 30_000;
+    window.dispatchEvent(new window.Event("focus"));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(bodies.length, 1);
+    now += 30_000;
     window.dispatchEvent(new window.Event("focus"));
     await until(() => !!document.querySelector("qm-slack-reply textarea"));
+    assert.equal(bodies.length, 2);
     assert.match(
       document.querySelector("qm-slack-reply .composer-input")!.getAttribute("placeholder")!,
       /Reply in Slack as Alice/,

@@ -4,7 +4,7 @@ import type { SlackReply } from "./slack-reply";
 import { assistantSidebar, assistantMessage } from "./assistant-sidebar";
 import { formatMessageTime } from "./message-time.ts";
 import { messageEntrySeqs, highlightMessage } from "./message-link.ts";
-import { appEditSlug } from "./app-edit";
+import { appEditSlug } from "../../chassis/src/app-edit";
 import { isConnectionReturn } from "./connection-return";
 import "./onboarding-welcome";
 import { welcomeIdeasPrompt } from "./welcome-ideas";
@@ -1384,7 +1384,7 @@ export function createChatSurface(
                 ${ctx.composer.state.error ? html`<div class="composer-error inline">${ctx.composer.state.error}</div>` : nothing}
               </div>
             </section>
-            ${slackReply ?? nothing}
+            ${slackReply ? html`<div class="chat-bottom-dock">${slackReply} ${scrollBottomButton()}</div>` : nothing}
           </div>
         `,
         host,
@@ -1814,10 +1814,7 @@ export function createChatSurface(
             <div class="chat-bottom-dock">
               ${goalStrip(agent)} ${ctx.composer.queuedStrip(agent)} ${subagentStrip()}
               ${swarmUi.strip(chatState.sessionId)} ${backgroundActivityStrip()} ${ctx.composer.composerForm(agent)}
-              ${ctx.pane ? nothing : suggestions}
-              <button class="scroll-bottom-btn" type="button" aria-label="Scroll to bottom" @click=${scrollToBottom}>
-                ${icon(ArrowDown, 16)}
-              </button>
+              ${ctx.pane ? nothing : suggestions} ${scrollBottomButton()}
             </div>
           </div>
           ${sideChats.view()}
@@ -2147,7 +2144,7 @@ export function createChatSurface(
       const msg = message as AssistantMessage;
       if ((msg as AssistantWork).retryableSend) return nothing;
       const work = (msg as AssistantWork).work;
-      const text = assistantDisplayText(messageText(msg), msg.stopReason).trim();
+      const text = assistantDisplayText(messageText(msg)).trim();
       const hasText = Boolean(text);
       const showWork =
         (msg as AssistantWork & { approvalDecision?: string }).approvalDecision !== "denied" &&
@@ -2222,10 +2219,7 @@ export function createChatSurface(
   }
 
   function copyableText(message: AgentMessage): string {
-    const raw =
-      message.role === "assistant"
-        ? assistantDisplayText(messageText(message), (message as AssistantMessage).stopReason)
-        : messageText(message);
+    const raw = message.role === "assistant" ? assistantDisplayText(messageText(message)) : messageText(message);
     if (!isReadOnlySlackView()) return raw;
     const role = (message as { role?: string }).role;
     return role === "user" || role === "user-with-attachments" ? slackWireToPlain(raw) : stripSlackDirectives(raw);
@@ -2370,8 +2364,7 @@ export function createChatSurface(
     return !chatState.agent && chatState.forkSession !== null && surfaceOf(chatState.forkSession) === "slack";
   }
 
-  function assistantDisplayText(text: string, stopReason?: string): string {
-    if (stopReason === "aborted" && text.trim() === "(stopped)") return "";
+  function assistantDisplayText(text: string): string {
     return isReadOnlySlackView() ? stripSlackDirectives(text) : text;
   }
 
@@ -2405,9 +2398,7 @@ export function createChatSurface(
         const workActive =
           hasWork && isStreaming && !streamingFinal && (work?.status === "working" || work?.status === "thinking");
         const text = isStreaming && work ? streamedAnswer(chunk.text, work) : chunk.text;
-        for (const [partIndex, part] of setupContent(
-          assistantDisplayText(workActive ? "" : text, message.stopReason),
-        ).entries()) {
+        for (const [partIndex, part] of setupContent(assistantDisplayText(workActive ? "" : text)).entries()) {
           if (part.type !== "text") {
             if (!(message as AssistantWork).persisted) continue;
             parts.push(
@@ -3773,6 +3764,12 @@ export function createChatSurface(
     }
     if (inlineHtmlName(file.name, file.mimetype)) return inlineHtmlFrame(file.name, href, file.sizeBytes, href);
     return fileChip(file.name, file.sizeBytes, href, file.mimetype);
+  }
+
+  function scrollBottomButton(): TemplateResult {
+    return html`<button class="scroll-bottom-btn" type="button" aria-label="Scroll to bottom" @click=${scrollToBottom}>
+      ${icon(ArrowDown, 16)}
+    </button>`;
   }
 
   function scrollToBottom(): void {

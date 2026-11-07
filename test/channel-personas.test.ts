@@ -29,6 +29,7 @@ const BOB = "bob@example.com";
 const CY = "cy@example.com";
 const DAN = "dan@example.com";
 const ADMIN = "admin-alice";
+const BOT = "B0DEPLOYBOT";
 const ADMIN_HEADER = { "x-admin-actor": "admin-alice@default-org" };
 const personal = (id: string) => scopeId("personal", id);
 const live = { liveActor: true };
@@ -155,6 +156,41 @@ const thread = (channel: string, root: string): TurnRequest["conversation"] => (
   channelRef: channel,
 });
 
+async function say(
+  built: Awaited<ReturnType<typeof setup>>["built"],
+  actor: string,
+  root: string,
+  text: string,
+  extra: Partial<TurnRequest> = {},
+) {
+  await built.app.turn({
+    ...turn(
+      actor,
+      {
+        ...thread(DESIGN, root),
+        audience: [{ externalId: actor }],
+        publishMembers: [ANN, BOB, CY].map((externalId) => ({ externalId })),
+      },
+      text,
+    ),
+    deliveryTarget: `${DESIGN}:${root}`,
+    async: true,
+    ...extra,
+  });
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    const session = await built.sessions.getByThread(`ch:${DESIGN}:${root}`);
+    const reply = session
+      ? (await built.sessions.getItems(session.id)).find(
+          (item) => item.kind === "AgentMessage" && item.variant === null && item.text,
+        )
+      : undefined;
+    if (reply) return;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  throw new Error("no reply");
+}
+
 test("a channel's persona needs personas on org-wide, an owner who is in the channel, and a live turn; the channel is told", async () => {
   const flagged = await setup({ orgFlag: false });
   assert.equal((await flagged.wear()).status, "disabled");
@@ -260,7 +296,7 @@ test("the guidance tool, POST /v1/soul and the policy route are locked to the pe
     );
 
     const policy = (principalId: string) =>
-      call("PUT", "/v1/contexts/policy", { principalId, scope: DESIGN_SCOPE, orders: `orders from ${principalId}` });
+      call("PUT", `/v1/contexts/${DESIGN_SCOPE}/ambient-policy`, { principalId, orders: `orders from ${principalId}` });
     assert.equal((await policy(CY)).status, 403);
     assert.equal((await built.app.getChannelPolicy(DESIGN))?.orders ?? "", "");
     assert.equal((await policy(BOB)).status, 200);
@@ -471,7 +507,7 @@ test("a channel's own grant on the persona never unlocks the channel, and a refu
   ok(
     await personas.setAccess(ANN, ada.id, [
       { scopeId: personal(ANN), role: "owner" },
-      { scopeId: DESIGN_SCOPE, role: "write" },
+      { scopeId: DESIGN_SCOPE, role: "read" },
     ]),
   );
   ok(await wear());
@@ -608,40 +644,13 @@ test("standing orders set from a channel turn are locked to the persona's writer
   const { built, wear } = await setup();
   ok(await wear());
   built.runtime.start();
-  const say = async (actor: string, root: string, text: string) => {
-    await built.app.turn({
-      ...turn(
-        actor,
-        {
-          ...thread(DESIGN, root),
-          audience: [{ externalId: actor }],
-          publishMembers: [ANN, BOB, CY].map((externalId) => ({ externalId })),
-        },
-        text,
-      ),
-      deliveryTarget: `${DESIGN}:${root}`,
-      async: true,
-    });
-    const deadline = Date.now() + 10_000;
-    while (Date.now() < deadline) {
-      const session = await built.sessions.getByThread(`ch:${DESIGN}:${root}`);
-      const reply = session
-        ? (await built.sessions.getItems(session.id)).find(
-            (item) => item.kind === "AgentMessage" && item.variant === null && item.text,
-          )
-        : undefined;
-      if (reply) return;
-      await new Promise((r) => setTimeout(r, 50));
-    }
-    throw new Error("no reply");
-  };
-  await say(CY, "1.1", "!set_standing_order be rude");
+  await say(built, CY, "1.1", "!set_standing_order be rude");
   assert.equal((await built.app.getChannelPolicy(DESIGN))?.orders ?? "", "");
   assert.deepEqual(
     (await refusals(built)).map((e) => e.principalId),
     [CY],
   );
-  await say(BOB, "2.2", "!set_standing_order be kind");
+  await say(built, BOB, "2.2", "!set_standing_order be kind");
   assert.equal((await built.app.getChannelPolicy(DESIGN))?.orders, "be kind");
 });
 
@@ -676,4 +685,39 @@ test("Slack posts in a channel carry its persona's name and icon: a unicode emoj
   assert.deepEqual((await worn()).C0PLAIN, { username: "Ada Lovelace", icon_emoji: ":heart:" });
   await built.featureFlags.setEnabled("personas", ORG, false, ADMIN);
   assert.deepEqual(await worn(), {});
+});
+
+test("a bot's turn never passes the lock, even when the org holds write on the persona", async () => {
+  const { built, personas, control, ada, wear } = await setup();
+  ok(
+    await personas.setAccess(ANN, ada.id, [
+      { scopeId: personal(ANN), role: "owner" },
+      { scopeId: ORG, role: "write" },
+    ]),
+  );
+  ok(await wear());
+  built.runtime.start();
+  await say(built, BOT, "3.3", "!set_standing_order be loud", { botActor: true });
+  assert.equal((await built.app.getChannelPolicy(DESIGN))?.orders ?? "", "");
+  const bot = toolsFor(control, { actorId: BOT, scopeId: DESIGN_SCOPE, liveActor: true, botActor: true });
+  assert.match(await bot("guidance", { action: "replace", scope: "conversation", content: "be loud" }), /^\[error\]/);
+  assert.equal(built.config.getSoul(DESIGN_SCOPE), null);
+  assert.deepEqual(
+    (await refusals(built)).map((e) => e.principalId),
+    [BOT, BOT],
+  );
+  await say(built, DAN, "4.4", "!set_standing_order be kind");
+  assert.equal((await built.app.getChannelPolicy(DESIGN))?.orders, "be kind");
+});
+
+test("two owners giving a channel a persona at the same moment can't both win", async () => {
+  const { personas, channels, ada } = await setup();
+  const bea = ok(await personas.create(CY, { name: "Bea", icon: { kind: "emoji", value: "🐝" } }));
+  const results = await Promise.all([
+    channels.set({ id: ANN, live: true }, "design", ada.id),
+    channels.set({ id: CY, live: true }, "design", bea.id),
+  ]);
+  const won = results.flatMap((r) => (r.status === "ok" ? [r.value.persona?.id] : []));
+  assert.equal(won.length, 1, JSON.stringify(results));
+  assert.equal((await channels.current(DESIGN_SCOPE))?.id, won[0]);
 });

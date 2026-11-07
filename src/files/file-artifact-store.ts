@@ -56,6 +56,7 @@ export interface ListOwnedOptions {
   includeDisabled?: boolean;
   createdInScope?: ScopeId;
   nameQuery?: string;
+  name?: string;
 }
 
 export type FileArtifactRef = Pick<FileArtifact, "ownerScopeId" | "id">;

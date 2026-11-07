@@ -174,12 +174,16 @@ export function createDeliveryPoller(deps: {
       ...(sender ? [plainContext(`Sent for @${sender}`)] : []),
       ...(d.destination.editNote ? [plainContext(d.destination.editNote)] : []),
     ];
-    if (!base || !id) return attribution;
-    const title = escapeSlackText(d.provenance?.sourceTitle?.trim() || "Cron");
-    return [
-      ...attribution,
-      { type: "mrkdwn", text: `${title} · <${base}/crons/${encodeURIComponent(id)}|Settings>`, verbatim: true },
-    ];
+    const persona = d.destination.persona;
+    const personaName = persona ? escapeSlackText(persona.name.trim() || "Persona") : "";
+    const parts = persona
+      ? [`Persona: ${base ? `<${base}/personas/${encodeURIComponent(persona.id)}|${personaName}>` : personaName}`]
+      : [];
+    if (base && id) {
+      const title = escapeSlackText(d.provenance?.sourceTitle?.trim() || "Cron");
+      parts.push(`${title} · <${base}/crons/${encodeURIComponent(id)}|Settings>`);
+    }
+    return parts.length ? [...attribution, { type: "mrkdwn", text: parts.join(" · "), verbatim: true }] : attribution;
   }
 
   const deliveryTracker = createDeliveryTracker();

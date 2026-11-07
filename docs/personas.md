@@ -19,6 +19,11 @@ foreign keys to `users(id)` exist wherever users are merged. The authoritative s
 - `persona_access`: one row per `(persona_id, grantee_scope_id)` with `role` owner, write
   or read, `granted_by UUID REFERENCES users(id)`, `granted_at`. Deleting the persona
   deletes its rows.
+- `persona_versions` (migration `users/v2/0005-persona-versions`): one row per
+  `(persona_id, version)` holding the name, description, instructions and icon as they
+  were saved, `edited_by UUID REFERENCES users(id)`, `edited_at`, and `restored_from`
+  when the save was a rollback. Creating a persona writes version 1; an edit that changes
+  nothing writes no version. Deleting the persona deletes its versions.
 - `sessions.persona_id`: nullable, no foreign key; a deleted persona just stops applying.
 
 Roles live in their own table rather than in `acl_grants`, whose permissions are only
@@ -36,7 +41,8 @@ notebook, and keychain grants to `persona:<id>`.
 | read  | chat; see its instructions, access list and attached credential names       |
 
 Holders are people (`personal:`), teams (`team:`), the org (`org:`) or Slack channels
-(`channel:`). A channel grant only applies to conversations in that channel. A person's
+(`channel:`). A channel can only hold read, and its grant only applies to conversations in
+that channel. A person's
 role is the highest one reaching them. Every persona keeps at least one owner.
 
 Checks sit where every path already flows: turn resolution (below) and the scope checks
@@ -57,6 +63,15 @@ A session's `persona_id` is set from the Personas page ("Chat") or by the agent
 If the sender has no role, the persona is skipped and the block says so. Writes (memory,
 files, crons) stay in the conversation's scope.
 
+A cron set up in a conversation with a persona fires as that persona: when it fires, the
+scheduler looks up the persona of the cron's home conversation and the fire's turn wears it
+under the same role check.
+
+Whatever a turn wearing a persona posts carries the persona's id and name on its delivery
+destination: replies, posts to other conversations, and cron output. Slack ends those
+messages with a `Persona: <name>` context line linking to the persona's page, next to the
+cron settings link when there is one.
+
 Unlike a project, a persona is not a place conversations live. A conversation with a
 persona stays in the scope it started in (your DM, a channel, a group), so only the
 people who could already see that conversation can see it. Holding a role on a persona,
@@ -74,7 +89,9 @@ lock below. A channel wears at most one persona; one persona can be worn by seve
 The setting is one row per channel in the `persona_channel_defaults` durable map, keyed by the
 channel scope: `{ scopeId: "channel:<id>", personaId, setBy, setAt }`, indexed on
 `personaId`. Like `sessions.persona_id` it has no foreign key: a deleted persona just stops
-applying. Setting or clearing it posts a notice in the channel.
+applying. Setting or clearing it posts a notice in the channel. The write is conditional on the
+row it read, so when two people change it at once only one wins; the other is checked again
+against the new setting.
 
 In Slack, QM speaks in that channel as the persona: replies, status cards and ephemeral
 notices carry the persona's name, and its icon when that maps to a Slack emoji, in
@@ -85,7 +102,8 @@ identity.
 **The lock.** While a channel wears a persona, only the persona's writers and owners (held
 through a person, team or the org grant, never through the channel's own grant) or an org admin,
 on a turn they sent themselves, can change the channel's instructions, standing orders or
-skills, including sharing a skill into the channel. Everyone else is refused with an owner
+skills, including sharing a skill into the channel. A Slack bot's turn never counts as sent by
+a person, whatever grants the bot holds. Everyone else is refused with an owner
 named; a refusal never names a private channel, or its persona, to someone outside it.
 
 An access change is refused unless at least one owner grant remains on a person QM doesn't list as
@@ -99,6 +117,28 @@ departure leaves with no active owner, and the admin it goes to; other deactivat
 already left without one, are picked up within five minutes. The departed owner's row stays, so
 reactivating them restores their role.
 
+## Page
+
+`/personas/<id>` is the persona's page. Under its instructions it has one section each for
+skills, crons, credentials, Slack channels, who has access, and history, each with its own
+add control for people whose role allows it:
+
+- **Skills**: "New skill" opens the skill editor homed in `persona:<id>`; "Ask QM" opens a
+  chat wearing the persona with a request started.
+- **Crons**: "New cron" opens a chat wearing the persona; a cron made there runs as it.
+- **Credentials** (owner): attach one of your own credentials or detach one.
+- **Slack channels** (owner): "Add channel" searches the channels you are in, in place; a
+  channel can only be given read.
+- **Who has access**: each person, team or org grant with its role. Owners add people or
+  everyone in the org ("Add people", or Share on the page or the Personas list opens the same
+  search), and change or remove a role from its row; each change saves at once. The last owner's
+  row can't be demoted or removed. Others see who the owners are. A grantee the `personas` flag
+  doesn't reach (the person, or the whole org for org, team and channel grants) is marked, with
+  where an admin turns it on.
+- **History**: loads on first open, 20 versions at a time with "Show older" for the rest,
+  each saying who saved it and when. Opening one shows it as it was. Writers can roll back to
+  any of them; a rollback is saved as a new version, so nothing is lost.
+
 ## Forking
 
 Forking has one owner, the `persona-fork` skill; the page's Fork button asks QM to run it.
@@ -108,8 +148,11 @@ access are never copied.
 
 ## API
 
-`GET|POST /v1/personas`, `GET|PATCH|DELETE /v1/personas/:id`,
+`GET|POST /v1/personas`, `GET|PATCH|DELETE /v1/personas/:id` (each access entry carries
+`personasEnabled`, whether the flag reaches that grantee),
 `PUT /v1/personas/:id/access`, `POST /v1/personas/:id/credentials`,
-`DELETE /v1/personas/:id/credentials/:grantId`, `PUT /v1/sessions/:id/persona`,
+`DELETE /v1/personas/:id/credentials/:grantId`, `GET /v1/personas/:id/versions` (newest first, 20 a page by default,
+`?before=&limit=`; who and when, with content only on `&full=1`),
+`POST /v1/personas/:id/versions/:version/restore`, `PUT /v1/sessions/:id/persona`,
 `GET|PUT /v1/channels/:channel/persona`. Listed in
 `/v1/apis` when the flag is on.
