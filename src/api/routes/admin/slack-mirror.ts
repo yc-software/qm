@@ -104,6 +104,7 @@ export async function listAmbientJudgments(ctx: ApiCtx): Promise<void> {
     scopeLabel: scope,
   });
   if (id) {
+    if (!Number.isSafeInteger(id)) return sendJson(res, 404, { error: "not_found" });
     const judgment = await store.get(id);
     if (!judgment) return sendJson(res, 404, { error: "not_found" });
     const workspaceUrl = deps.directory ? (await deps.directory.meta()).workspaceUrl : null;
@@ -147,6 +148,7 @@ export async function listAckEmojiPicks(ctx: ApiCtx): Promise<void> {
   const id = Number(url.searchParams.get("id"));
   audit(deps, { principalId: actor.id, action: "ack_emoji_picks.read", resource: channel ?? "all", scopeLabel: scope });
   if (id) {
+    if (!Number.isSafeInteger(id)) return sendJson(res, 404, { error: "not_found" });
     const pick = await store.get(id);
     if (!pick) return sendJson(res, 404, { error: "not_found" });
     const workspaceUrl = deps.directory ? (await deps.directory.meta()).workspaceUrl : null;
