@@ -83,6 +83,7 @@ export interface ServerDeps {
   requestBodyDeadlineMs?: number;
   externalSlackPolicies?: ExternalSlackPolicies;
   checkReadiness?: (signal: AbortSignal) => Promise<void>;
+  draining?: AbortSignal;
   modelGatewayTransport?: ModelGatewayTransportConfig;
   modelRoutes?: ModelRoutes;
   slackAccounts?: DurableMap<SlackAccountLink>;

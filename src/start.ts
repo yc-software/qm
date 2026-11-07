@@ -7,6 +7,7 @@ import { buildApp, serverDeps } from "./wiring.ts";
 import { createServer } from "./api/server.ts";
 import { dockerDaemonFailure } from "./deploy/docker-deploy-provider.ts";
 import { errMessage, reportFailureAs } from "./util/errors.ts";
+import { sleep } from "./util/async.ts";
 import { slackAccountConfigsFromEnv, slackPluginConfigFromEnv, startSlackPlugin } from "./slack/index.ts";
 import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
 import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
@@ -33,12 +34,14 @@ export async function startQm(
         reconcile: config.backgroundWorkEnabled ? () => slackRuntime.reconcile() : undefined,
       })
     : undefined;
+  const draining = new AbortController();
   const server = createServer(built.app, {
     ...serverDeps(config, built, slackEnvironmentState, slackConfig?.botToken),
     managedSlack,
     ...(env.PORTAL_SESSION_SECRET
       ? { portalSession: { secret: env.PORTAL_SESSION_SECRET, maxAgeSeconds: sessionLifetime(env).max } }
       : {}),
+    draining: draining.signal,
   });
 
   await built.config.hydrate?.();
@@ -142,18 +145,21 @@ export async function startQm(
   return {
     built,
     server,
-    frontDoor,
     releaseInFlightRuns: () => built.runtime.releaseInFlightRuns(),
     async stop() {
+      draining.abort();
+      const deadline = sleep(config.shutdownDrainMs);
       void slackRuntime.stop().catch((e: unknown) => console.error("[qm] slack plugin stop failed:", errMessage(e)));
       for (const runtime of slackAccountRuntimes)
         void runtime.stop().catch((e: unknown) => console.error("[qm] slack account stop failed:", errMessage(e)));
       void built.scheduler.stop().catch((e: unknown) => console.error("[qm] scheduler stop failed:", errMessage(e)));
       built.deploymentLayerRefresh.stop();
-      frontDoor?.close();
-      server.close();
-      server.closeIdleConnections();
-      await built.runtime.stop();
+      await built.runtime.stop(async () => {
+        await deadline;
+        frontDoor?.close();
+        server.close();
+        server.closeAllConnections();
+      });
     },
   };
 }

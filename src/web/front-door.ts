@@ -47,7 +47,7 @@ function webReleaseStore(config: Config): WebReleaseStore {
 export async function startFrontDoor(
   config: Config & { publicPort: number },
   env: NodeJS.ProcessEnv,
-): Promise<{ close(): void; terminate(): void }> {
+): Promise<{ close(): void }> {
   const store = webReleaseStore(config);
   const bundle = existsSync(join(BUNDLED_WEB_UI, "index.html")) ? readWebBundleLayout(BUNDLED_WEB_UI) : undefined;
   if (!bundle) console.log(`[web] this build carries no web UI bundle at ${BUNDLED_WEB_UI}; serving the live release`);
@@ -100,11 +100,8 @@ export async function startFrontDoor(
     close() {
       for (const server of servers) {
         server.close();
-        server.closeIdleConnections();
+        server.closeAllConnections();
       }
-    },
-    terminate() {
-      for (const server of servers) server.closeAllConnections();
     },
   };
 }

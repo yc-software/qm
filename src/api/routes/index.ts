@@ -49,12 +49,18 @@ import { swarmRoutes } from "./swarms.ts";
 import { personaRoutes } from "./personas.ts";
 
 export const rawRoutes: ReadonlyArray<Route<BaseCtx>> = [
-  { method: "GET", path: "/healthz", auth: "public", handle: ({ res }) => sendJson(res, 200, { ok: true }) },
+  {
+    method: "GET",
+    path: "/healthz",
+    auth: "public",
+    handle: ({ res, deps }) => sendJson(res, deps.draining?.aborted ? 503 : 200, { ok: !deps.draining?.aborted }),
+  },
   {
     method: "GET",
     path: "/readyz",
     auth: "public",
     handle: async ({ res, deps }) => {
+      if (deps.draining?.aborted) return sendJson(res, 503, { ok: false });
       const controller = new AbortController();
       let timer: ReturnType<typeof setTimeout> | undefined;
       const deadline = new Promise<never>((_, reject) => {

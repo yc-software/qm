@@ -936,11 +936,8 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 
   void refreshSurfaceConfig();
 
-  if (method === "GET" && pathname === "/healthz") return json(res, 200, { ok: true });
-
-  if (method === "GET" && pathname === "/readyz") {
+  if (method === "GET" && (pathname === "/healthz" || pathname === "/readyz"))
     return proxyToUpstream(req, res, { baseUrl: CORE, path: pathname, search: "" }, ["accept"]);
-  }
 
   if (method === "GET" && (pathname === "/favicon.ico" || pathname === "/favicon.svg")) {
     return serveFavicon(
