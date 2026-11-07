@@ -164,7 +164,7 @@ export async function browserIdentity(
   req: IncomingMessage,
   method: string,
   deps: ServerDeps,
-  embeddable = false,
+  embeddable: boolean,
 ): Promise<PortalIdentity | BrowserRefusal> {
   const now = Date.now();
   const problem = misconfiguration(deps);
