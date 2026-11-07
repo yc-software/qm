@@ -3,7 +3,7 @@ import { AsyncDirective } from "lit/async-directive.js";
 import { directive } from "lit/directive.js";
 import { workPausedForApproval, type WorkBlock } from "./core-bridge.ts";
 import { currentTextPhase } from "./timeline.ts";
-import { workDurationParts, workSeconds } from "./work-duration.ts";
+import { workDurationParts, workSeconds, workStart } from "./work-duration.ts";
 
 class LiveWorkDuration extends AsyncDirective {
   private timer: ReturnType<typeof setInterval> | undefined;
@@ -14,6 +14,10 @@ class LiveWorkDuration extends AsyncDirective {
 
   render(work: WorkBlock) {
     this.work = work;
+    if (workStart(work) == null) {
+      this.disconnected();
+      return "";
+    }
     this.seconds = workSeconds(work);
     this.sampledAt = Date.now();
     this.ticking =

@@ -69,3 +69,20 @@ test("the live label keeps its seconds in a two-digit slot without changing the 
   assert.equal(seconds(), "9");
   render(nothing, host);
 });
+
+test("a queued run shows no count until its start is known, then counts from that start", (t) => {
+  t.mock.timers.enable({ apis: ["Date", "setInterval"], now: 200_000 });
+  const work: WorkBlock = { status: "thinking", activity: [] };
+  const host = document.createElement("div");
+  const draw = () => render(html`${liveWorkDuration(work)}`, host);
+  draw();
+  t.mock.timers.tick(3000);
+  draw();
+  assert.equal(host.textContent, "", "no number that restarts from zero on every redraw");
+  work.startedAt = 201_000;
+  draw();
+  assert.equal(host.textContent, "2s");
+  t.mock.timers.tick(1000);
+  assert.equal(host.textContent, "3s");
+  render(nothing, host);
+});
