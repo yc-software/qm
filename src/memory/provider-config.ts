@@ -1,4 +1,5 @@
 import { parseScopeId, type ScopeId, type ScopeKind } from "../types.ts";
+import { isPrivateNetworkIp } from "../util/network.ts";
 import type { MemoryCapturePolicy, MemoryProviderRoute } from "./provider-router.ts";
 import { parseMemorableProvider, type MemorableMemoryProviderConfig } from "./memorable/config.ts";
 
@@ -74,6 +75,11 @@ const PRIVATE_SUFFIXES = [".internal", ".flycast", ".local"];
 const ACCEPTED_HOSTS = [...PRIVATE_HOSTS, ...PRIVATE_SUFFIXES.map((suffix) => `*${suffix}`)];
 const URL_HELP = `Accepted: https://<host>, or http:// on ${ACCEPTED_HOSTS.slice(0, -1).join(", ")} or ${ACCEPTED_HOSTS.at(-1)}; see docs/memory-providers.md#troubleshooting.`;
 
+const namedPrivateHost = (hostname: string): boolean =>
+  PRIVATE_HOSTS.includes(hostname) || PRIVATE_SUFFIXES.some((suffix) => hostname.endsWith(suffix));
+
+export const isPrivateHost = (hostname: string): boolean => namedPrivateHost(hostname) || isPrivateNetworkIp(hostname);
+
 function privateMcpUrl(value: unknown, at: string): string {
   const raw = string(value, at);
   let url: URL;
@@ -83,9 +89,7 @@ function privateMcpUrl(value: unknown, at: string): string {
     throw new Error(`${at} is not a valid URL (value not shown). ${URL_HELP}`);
   }
   const shown = `${url.protocol}//${url.hostname}`;
-  const privateHttp =
-    url.protocol === "http:" &&
-    (PRIVATE_HOSTS.includes(url.hostname) || PRIVATE_SUFFIXES.some((suffix) => url.hostname.endsWith(suffix)));
+  const privateHttp = url.protocol === "http:" && namedPrivateHost(url.hostname);
   if (url.username || url.password || url.hash)
     throw new Error(`${at} (${shown}) must not carry credentials or a #fragment. ${URL_HELP}`);
   if (url.protocol !== "https:" && !privateHttp)

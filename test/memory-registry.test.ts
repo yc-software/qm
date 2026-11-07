@@ -163,6 +163,20 @@ test("env provider ids are read-only and a stored collision disables the route",
   );
 });
 
+test("the registry refuses a brain on a loopback or private address, which only MEMORY_PROVIDER_CONFIG may name", () => {
+  for (const url of [
+    "http://localhost:8787/mcp",
+    "http://127.0.0.1:8787/mcp",
+    "https://10.0.0.7/mcp",
+    "https://[::1]/mcp",
+    "https://169.254.169.254/latest",
+    "http://brain.internal/mcp",
+    "https://gbrain.local/mcp",
+  ])
+    refused(() => personalBrain(EMPTY_MEMORY_REGISTRY, { url }), 400, /private network.*MEMORY_PROVIDER_CONFIG/);
+  assert.equal(personalBrain().brains[0]!.url, "https://brain.acme.example/mcp");
+});
+
 test("the env validator's rules apply to registry brains", () => {
   refused(() => personalBrain(EMPTY_MEMORY_REGISTRY, { url: "http://brain.example.com" }), 400, /must use HTTPS/);
   refused(() => personalBrain(EMPTY_MEMORY_REGISTRY, { preset: "gbrain-v9" }), 400, /preset must be one of/);
@@ -296,14 +310,12 @@ test("a member's own brain serves only their personal scope, as them, and names 
   refused(() => deleteMemberBrain(renamed, "U2"), 404, /no brain connected/);
 });
 
-test("a member's brain needs a public https url, whoever writes it", () => {
+test("a member's brain needs a public https url, whoever writes it, and so does an org brain", () => {
+  const publicHttps = /must use HTTPS at a public address/;
   for (const url of ["http://brain.alice.example/mcp", "https://[::1]/mcp"])
-    refused(() => aliceBrain(EMPTY_MEMORY_REGISTRY, { url }), 400, /public https:\/\/ url/);
-  refused(() => putBrain(aliceBrain(), ALICE_BRAIN, { url: "http://localhost:3131/mcp" }, change), 400, /public https/);
-  assert.equal(
-    personalBrain(EMPTY_MEMORY_REGISTRY, { url: "http://localhost:3131/mcp" }).brains[0]!.url,
-    "http://localhost:3131/mcp",
-  );
+    refused(() => aliceBrain(EMPTY_MEMORY_REGISTRY, { url }), 400, publicHttps);
+  refused(() => putBrain(aliceBrain(), ALICE_BRAIN, { url: "http://localhost:3131/mcp" }, change), 400, publicHttps);
+  refused(() => personalBrain(EMPTY_MEMORY_REGISTRY, { url: "http://localhost:3131/mcp" }), 400, publicHttps);
 });
 
 test("the org switch stops members' brains and refuses new ones, and leaves org brains serving", () => {

@@ -184,6 +184,7 @@ import {
 import type { DeployGitArchive } from "./deploy/deploy-git-store.ts";
 import type { MemoryService } from "./memory/memory-service.ts";
 import { createRegistryMemoryService } from "./memory/registry-memory.ts";
+import type { AddressFetch } from "./util/network.ts";
 import {
   createMemoryRegistryStore,
   MEMORY_REGISTRY_TABLE,
@@ -541,6 +542,7 @@ export function buildApp(
     decisionBackend?: DecisionBackend;
     credentialBrokers?: Record<string, AwsRoleBroker>;
     modelCredentialFetch?: typeof fetch;
+    memoryRegistryFetch?: AddressFetch;
     modelVerificationProbe?: typeof probeModel;
     agent?: Agent;
     canClaimRuns?: () => boolean;
@@ -781,6 +783,7 @@ export function buildApp(
       defaultMemory: semanticMemory.memory,
       ...(config.memoryProviderConfig ? { overlay: config.memoryProviderConfig } : {}),
       registry: memoryRegistry,
+      ...(overrides.memoryRegistryFetch ? { registryFetch: overrides.memoryRegistryFetch } : {}),
       sessionItems: (sessionId) => {
         if (!memorySessions.store) throw new Error("session store is not ready");
         return memorySessions.store.getItems(sessionId, { limit: MEMORY_CAPTURE_ENTRY_WINDOW });
