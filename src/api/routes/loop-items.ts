@@ -146,7 +146,7 @@ async function ingestItems(ctx: ApiCtx): Promise<void> {
   const classifyInboxEmail =
     loop.surface === "inbox:gmail" &&
     loop.ownerScopeId === scopeId("personal", loop.owner) &&
-    (await ctx.deps.featureFlags?.enabled("inbox_loops", scopeId("personal", loop.owner))) === true;
+    (await inboxPreviewEnabled(ctx.deps, loop.owner));
   const entries: IngestEntryInput[] = [];
   for (const [at, raw] of body.items.entries()) {
     const parsed = parseIngestEntry(loop, raw);
@@ -220,11 +220,13 @@ async function serveItemImage(ctx: ApiCtx): Promise<void> {
   try {
     upstream = await fetch(url, { headers: authHeader, redirect: "follow" });
   } catch (e) {
-    return sendJson(ctx.res, 502, { error: "upstream", message: errMessage(e) });
+    console.warn(`[loops] item image fetch failed: ${errMessage(e)}`);
+    return sendJson(ctx.res, 502, { error: "upstream" });
   }
   const type = upstream.headers.get("content-type") ?? "";
   if (!upstream.ok || !upstream.body || !type.startsWith("image/")) {
-    return sendJson(ctx.res, 502, { error: "upstream", message: `upstream returned ${upstream.status} ${type}` });
+    console.warn(`[loops] item image upstream returned ${upstream.status} ${type}`);
+    return sendJson(ctx.res, 502, { error: "upstream" });
   }
   const bytes = Buffer.from(await upstream.arrayBuffer());
   if (bytes.length > IMAGE_MAX_BYTES) return sendJson(ctx.res, 502, { error: "upstream", message: "image too large" });
