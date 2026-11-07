@@ -2213,7 +2213,7 @@ export function buildApp(
               artifactDigest: job.artifactDigest ?? null,
               instruction:
                 role === "producer"
-                  ? "Produce or reuse the approved workbook in the persistent sandbox. Include at least one recalculable SUM or SUBTOTAL formula in the summary so deterministic cross-foot evidence is non-empty. If a deterministic engine correction makes the current immutable workbook compliant, reuse that same immutable file and call finny_artifact_ready with a fresh idempotency key instead of changing financial bytes. Persist it by POSTing JSON {name,mimetype,dataBase64} to $AGENT_API_URL/v1/files/upload with x-agent-capability: $AGENT_API_TOKEN (use this local fallback, not /v1/files/uploads, when S3 is unavailable). Then call finny_artifact_ready with the returned immutable file.id as provisionalRevision and file.sha256 as artifactDigest."
+                  ? "Produce or reuse the approved workbook in the persistent sandbox. Persist it by POSTing JSON {name,mimetype,dataBase64} to $AGENT_API_URL/v1/files/upload with x-agent-capability: $AGENT_API_TOKEN (use this local fallback, not /v1/files/uploads, when S3 is unavailable). Then call finny_artifact_ready with the returned immutable file.id as provisionalRevision and file.sha256 as artifactDigest."
                   : "Invoke deterministic_audit once for the mandatory spreadsheet checks, then independently audit every remaining required policy check and report immutable Files evidence through Finny.",
             });
           },

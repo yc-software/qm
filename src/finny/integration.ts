@@ -351,6 +351,7 @@ export function createFinnyToolServiceFactory(deps: {
                 job.id,
                 job.artifactDigest,
                 job.policy.policyVersion,
+                binding.evaluator,
                 binding.checks,
                 input.idempotencyKey,
               ]),
@@ -375,10 +376,16 @@ export function createFinnyToolServiceFactory(deps: {
             if (check.verdict === "block") {
               const policy = job.findingPolicy;
               if (!policy) throw new Error("Finny job has no finding policy");
+              const references = check.reason.references.length
+                ? ` References: ${check.reason.references.join(", ")}.`
+                : "";
               const findings = [
                 {
-                  code: "DETERMINISTIC_BLOCK".slice(0, policy.maxCodeLength),
-                  message: deterministicBlockMessage(check).slice(0, policy.maxMessageLength),
+                  code: check.reason.code.slice(0, policy.maxCodeLength),
+                  message: `${check.checkId} blocked by deterministic evaluator.${references}`.slice(
+                    0,
+                    policy.maxMessageLength,
+                  ),
                 },
               ];
               await deps.coordinator.auditBlocked({
@@ -422,23 +429,6 @@ export function createFinnyToolServiceFactory(deps: {
       };
     },
   };
-}
-
-function deterministicBlockMessage(check: SpreadsheetWorkerResult): string {
-  if (check.checkId === "summary.crossfoot") {
-    if (check.evidence.comparisons.length === 0) {
-      return "summary.crossfoot failed deterministic audit: add at least one recalculable SUM or SUBTOTAL formula so the engine can independently cross-foot the summary";
-    }
-    const failed = check.evidence.comparisons
-      .filter((comparison) => Math.abs(comparison.difference) > Math.max(1e-7, Math.abs(comparison.expected) * 1e-9))
-      .slice(0, 3)
-      .map((comparison) => `${comparison.sheet}!${comparison.reference} difference=${comparison.difference}`);
-    return `summary.crossfoot failed deterministic audit${failed.length ? `: ${failed.join(", ")}` : ""}`;
-  }
-  if (check.checkId === "formula.recalculate") {
-    return "formula.recalculate failed deterministic audit: one or more workbook formulas did not recalculate to finite numeric values";
-  }
-  return "artifact.structure failed deterministic audit: the workbook has no valid non-empty worksheet structure";
 }
 
 const deterministicChecks = new Set<FinnyCheckId>(SPREADSHEET_WORKER_CHECK_IDS);
