@@ -17,8 +17,10 @@ function adminCronDestination(v: unknown, current: Destination | undefined): Des
   if (typeof d.target !== "string" || d.target.trim() === "") return null;
   if (d.onBehalfOf !== undefined && typeof d.onBehalfOf !== "string") return null;
   if (!Object.keys(d).every((k) => k === "type" || k === "target" || k === "onBehalfOf")) return null;
-  const derived = d.type === "principal" ? scopeId("personal", d.target) : scopeId("channel", d.target.split(":")[0]!);
-  const audienceScopeId = current?.type === d.type && current.target === d.target ? current.audienceScopeId : derived;
+  const conversation = d.target.split(":")[0]!;
+  const derived = d.type === "principal" ? scopeId("personal", d.target) : scopeId("channel", conversation);
+  const audienceScopeId =
+    current?.type === d.type && current.target.split(":")[0] === conversation ? current.audienceScopeId : derived;
   return {
     type: d.type,
     target: d.target,

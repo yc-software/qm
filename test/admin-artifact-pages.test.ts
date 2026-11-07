@@ -470,6 +470,13 @@ test("an admin edit's destination audience follows its target and cannot be supp
     assert.equal((await put({ type: "slack", target: "D1:1.2" })).status, 200);
     assert.deepEqual(await stored(), dm, "saving the same target keeps the audience the server stamped on it");
 
+    assert.equal((await put({ type: "slack", target: "D1:5.6" })).status, 200);
+    assert.deepEqual(
+      await stored(),
+      { ...dm, target: "D1:5.6" },
+      "another thread in the same conversation keeps the conversation's audience",
+    );
+
     assert.equal((await put({ type: "slack", target: "C9:3.4" })).status, 200);
     assert.deepEqual(await stored(), { type: "slack", target: "C9:3.4", audienceScopeId: "channel:C9" });
   } finally {
@@ -495,6 +502,7 @@ test("an admin edit cannot aim a cron at a channel its owner can't see by labell
       },
       { ownerScopeId: "personal:U1", destination: { type: "principal", target: "U1", audienceScopeId: "personal:U1" } },
     ];
+    const statuses: number[] = [];
     for (const home of homes) {
       const cron = await s.built.app.createCron({
         ...home,
@@ -503,23 +511,28 @@ test("an admin edit cannot aim a cron at a channel its owner can't see by labell
         schedule: { everyMs: 3_600_000 },
         message: `numbers from ${home.ownerScopeId}`,
       });
-      await fetch(
-        `${s.base}/v1/admin/crons/${encodeURIComponent(cron.id)}/destination?scope=${encodeURIComponent(home.ownerScopeId)}`,
-        {
-          method: "PUT",
-          headers: { ...ALICE_ADMIN, "content-type": "application/json" },
-          body: JSON.stringify({
-            destination: { type: "slack", target: "C-secret", audienceScopeId: home.ownerScopeId },
-          }),
-        },
-      );
-      await runNowSettled(s.built.scheduler, cron.id);
+      for (const destination of [
+        { type: "slack", target: "C-secret", audienceScopeId: home.ownerScopeId },
+        { type: "slack", target: "C-secret" },
+      ]) {
+        const put = await fetch(
+          `${s.base}/v1/admin/crons/${encodeURIComponent(cron.id)}/destination?scope=${encodeURIComponent(home.ownerScopeId)}`,
+          {
+            method: "PUT",
+            headers: { ...ALICE_ADMIN, "content-type": "application/json" },
+            body: JSON.stringify({ destination }),
+          },
+        );
+        statuses.push(put.status);
+        await runNowSettled(s.built.scheduler, cron.id);
+      }
     }
     assert.deepEqual(
       (await s.built.deliveries.pending("slack")).filter((d) => d.destination.target === "C-secret").map((d) => d.text),
       [],
       "neither cron's output reaches a channel its owner is not in",
     );
+    assert.deepEqual(statuses, [400, 200, 400, 200], "the labelled edit is refused and the plain retarget is accepted");
   } finally {
     await s.close();
   }
