@@ -56,9 +56,7 @@ async function getFileContent(ctx: ApiCtx): Promise<void> {
     "content-length": String(opened.sizeBytes),
     "content-disposition": `inline; filename*=UTF-8''${encodeURIComponent(opened.name)}`,
     "content-security-policy":
-      contentType.split(";")[0]!.trim().toLowerCase() === "application/pdf"
-        ? ancestors
-        : `${UNTRUSTED_CONTENT_SANDBOX_CSP}; ${ancestors}`,
+      contentType === "application/pdf" ? ancestors : `${UNTRUSTED_CONTENT_SANDBOX_CSP}; ${ancestors}`,
     "x-content-type-options": "nosniff",
   });
   streamFile(ctx, opened.stream);
