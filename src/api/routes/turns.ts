@@ -282,7 +282,13 @@ async function getActiveRunForThread(ctx: ApiCtx): Promise<void> {
   const threadRef = url.searchParams.get("threadRef") ?? "";
   if (!threadRef) return sendJson(res, 400, { error: "bad_request", message: "threadRef required" });
   const active = await app.activeRunForThread(threadRef, actor?.p);
-  return sendJson(res, 200, { runId: active?.runId ?? null, ...(active?.queued ? { queued: active.queued } : {}) });
+  const run = active && (await app.getRun(active.runId, actor?.p));
+  const live = run && run.status !== "done" && run.status !== "failed" ? run : null;
+  return sendJson(res, 200, {
+    runId: live && active ? active.runId : null,
+    run: live,
+    ...(active?.queued ? { queued: active.queued } : {}),
+  });
 }
 
 async function patchQueuedRun(ctx: ApiCtx): Promise<void> {
@@ -354,8 +360,8 @@ export const turnRoutes: ReadonlyArray<Route<ApiCtx>> = [
     handle: patchQueuedRun,
   },
   { method: "POST", path: "/v1/runs/:id/withdraw", auth: "source", handle: postRunWithdraw },
-  { method: "GET", path: "/v1/runs/:id", actor: "person", auth: "source", handle: getRun },
-  { method: "GET", path: "/v1/runs", actor: "person", auth: "source", handle: getActiveRunForThread },
+  { method: "GET", path: "/v1/runs/:id", browser: true, actor: "person", auth: "source", handle: getRun },
+  { method: "GET", path: "/v1/runs", browser: true, actor: "person", auth: "source", handle: getActiveRunForThread },
   { method: "GET", path: "/v1/deliveries", auth: "source", handle: listDeliveries },
   { method: "POST", path: "/v1/deliveries/:id/ack", actor: "system", auth: "source", handle: ackDelivery },
   { method: "POST", path: "/v1/deliveries/ack-by-key", actor: "system", auth: "source", handle: ackDeliveryByKey },

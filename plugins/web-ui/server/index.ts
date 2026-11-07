@@ -130,33 +130,6 @@ async function brandIndexHtml(html: string): Promise<string> {
 
 const portalTokenStore = new AsyncLocalStorage<string | undefined>();
 
-const runThreadKeys = new Map<string, string>();
-const activeRunsByThread = new Map<string, string[]>();
-
-function threadKey(user: string, threadRef: string): string {
-  return `${user}\0${threadRef}`;
-}
-
-function forgetRun(runId: string): void {
-  const key = runThreadKeys.get(runId);
-  if (key) {
-    const remaining = (activeRunsByThread.get(key) ?? []).filter((id) => id !== runId);
-    if (remaining.length) activeRunsByThread.set(key, remaining);
-    else activeRunsByThread.delete(key);
-  }
-  runThreadKeys.delete(runId);
-}
-
-function rememberRun(runId: string, user: string, threadRef: string): void {
-  if (runThreadKeys.size > 5000) {
-    const oldest = runThreadKeys.keys().next().value;
-    if (oldest !== undefined) forgetRun(oldest);
-  }
-  const key = threadKey(user, threadRef);
-  runThreadKeys.set(runId, key);
-  activeRunsByThread.set(key, [...(activeRunsByThread.get(key) ?? []), runId]);
-}
-
 const deliveryClients = new Map<string, Set<ServerResponse>>();
 
 function ownerOfWebThread(threadRef: string): string | null {
@@ -793,8 +766,6 @@ async function postTurnAndMint(
   req: IncomingMessage,
   res: ServerResponse,
   turn: Record<string, unknown>,
-  user: string,
-  threadRef: string,
 ): Promise<void> {
   const startedAt = performance.now();
   let runId: string | undefined;
@@ -814,10 +785,7 @@ async function postTurnAndMint(
     try {
       const parsed = JSON.parse(r.text) as Record<string, unknown> & { runId?: string };
       runId = parsed.runId;
-      if (runId) {
-        rememberRun(runId, user, threadRef);
-        return json(res, r.status, parsed);
-      }
+      if (runId) return json(res, r.status, parsed);
     } catch {
       void 0;
     }
@@ -1890,7 +1858,7 @@ const apiRoutes: readonly WebRoute[] = [
       };
       delete replay.idempotencyKey;
       if (idempotencyKey) replay.idempotencyKey = idempotencyKey;
-      return postTurnAndMint(req, res, replay, user, threadRef);
+      return postTurnAndMint(req, res, replay);
     },
   },
   {
@@ -1991,7 +1959,7 @@ const apiRoutes: readonly WebRoute[] = [
         ...(idempotencyKey ? { idempotencyKey } : {}),
         ...(midTurn ? { midTurn } : {}),
       };
-      return postTurnAndMint(req, res, turn, user, threadRef);
+      return postTurnAndMint(req, res, turn);
     },
   },
   {
@@ -2022,56 +1990,6 @@ const apiRoutes: readonly WebRoute[] = [
           if (!s.size) deliveryClients.delete(user);
         }
       });
-      return;
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/runs/active",
-    handle: async (c) => {
-      const { res, url, user } = c;
-      const threadRef = url.searchParams.get("threadRef") ?? "";
-      if (!threadRef.startsWith("web:") && !threadRef.startsWith(SUBAGENT_THREAD_PREFIX))
-        return json(res, 404, { error: "not_found" });
-      let queued: Array<{ runId: string; text: string; hasAttachments?: boolean }> = [];
-      let durableRunId: string | null = null;
-      const durable = await coreFetch("GET", `/v1/runs?threadRef=${encodeURIComponent(threadRef)}`);
-      if (durable.status >= 200 && durable.status < 300) {
-        try {
-          const parsed = JSON.parse(durable.text) as { runId?: string | null; queued?: typeof queued };
-          durableRunId = parsed.runId ?? null;
-          queued = parsed.queued ?? [];
-        } catch {
-          /* leave the queue empty; the run lookups below still answer */
-        }
-      }
-      const tryRun = async (runId: string, ownedByUser = true): Promise<boolean> => {
-        const r = await coreFetch("GET", `/v1/runs/${encodeURIComponent(runId)}`);
-        if (r.status < 200 || r.status >= 300) {
-          if (ownedByUser) forgetRun(runId);
-          return false;
-        }
-        let run: { status?: string };
-        try {
-          run = JSON.parse(r.text) as { status?: string };
-        } catch {
-          json(res, 502, { error: "bad_core_response" });
-          return true;
-        }
-        if (run.status === "done" || run.status === "failed") {
-          forgetRun(runId);
-          return false;
-        }
-        rememberRun(runId, user, threadRef);
-        const waiting = queued.filter((q) => q.runId !== runId);
-        json(res, 200, { runId, run, ...(waiting.length ? { queued: waiting } : {}) });
-        return true;
-      };
-      if (durableRunId && (await tryRun(durableRunId, false))) return;
-      for (const runId of Array.from(activeRunsByThread.get(threadKey(user, threadRef)) ?? [])) {
-        if (await tryRun(runId)) return;
-      }
-      json(res, 200, { runId: null, run: null, ...(queued.length ? { queued } : {}) });
       return;
     },
   },
@@ -2130,68 +2048,7 @@ const apiRoutes: readonly WebRoute[] = [
   {
     method: "POST",
     path: "/api/runs/:id/withdraw",
-    handle: async (c) => {
-      const { res } = c;
-      const id = c.params.id!;
-      const r = await coreFetch("POST", `/v1/runs/${encodeURIComponent(id)}/withdraw`);
-      if (r.status >= 200 && r.status < 300) forgetRun(id);
-      return relay(res, r);
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/runs/:id/events",
-    handle: async (c) => {
-      const { res } = c;
-      const id = c.params.id!;
-      const controller = new AbortController();
-      res.on("close", () => controller.abort());
-      const path = withSourceAuthNonce(`/v1/runs/${encodeURIComponent(id)}/events`, CORE_SIGNING_SECRET);
-      const portalTok = portalTokenStore.getStore();
-      try {
-        const upstream = await fetch(`${CORE}${path}`, {
-          headers: {
-            ...signedHeaders(CORE_SIGNING_SECRET, "GET", path, ""),
-            ...(portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : {}),
-          },
-          signal: controller.signal,
-          redirect: "manual",
-        });
-        if (controller.signal.aborted) return;
-        if (!upstream.ok || !upstream.body) {
-          json(res, upstream.status, { error: "stream_unavailable" });
-          return;
-        }
-        res.writeHead(200, {
-          "content-type": "text/event-stream; charset=utf-8",
-          "cache-control": "no-cache, no-transform",
-          connection: "keep-alive",
-          "x-accel-buffering": "no",
-        });
-        relayStream(upstream.body, res);
-      } catch {
-        if (!controller.signal.aborted) {
-          if (res.headersSent) res.destroy();
-          else json(res, 502, { error: "stream_unavailable" });
-        }
-      }
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/runs/:id",
-    handle: async (c) => {
-      const { res } = c;
-      const id = c.params.id!;
-      const r = await coreFetch("GET", `/v1/runs/${encodeURIComponent(id)}`);
-      try {
-        const s = (JSON.parse(r.text) as { status?: string }).status;
-        if (s === "done" || s === "failed") forgetRun(id);
-      } catch {
-        void 0;
-      }
-      return relay(res, r);
-    },
+    handle: (c) => relayCore(c.res, "POST", `/v1/runs/${encodeURIComponent(c.params.id!)}/withdraw`),
   },
   {
     method: "GET",

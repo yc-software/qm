@@ -76,7 +76,7 @@ test("another user cannot see a run's queued text, or edit, withdraw or answer i
   const live = await submit("alice private first");
   const queued = await submit("alice private second");
   const discover = (user: string) =>
-    fetch(`${webBase}/api/runs/active?threadRef=${encodeURIComponent(threadRef)}`, as(user));
+    fetch(`${coreBase}/api/runs/active?threadRef=${encodeURIComponent(threadRef)}`, browser(user));
   assert.deepEqual(((await (await discover("alice")).json()) as { queued?: Array<{ text: string }> }).queued, [
     { runId: queued, text: "alice private second" },
   ]);
