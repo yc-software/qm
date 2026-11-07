@@ -1,7 +1,7 @@
 import { isCronRuntime } from "../../cron/runtime.ts";
 import { CRON_SCRIPT_TOOL_ONLY } from "../../cron/script.ts";
 import type { Cron } from "../../triggers/types.ts";
-import type { CreateCronInput, CronPatch } from "../../cron/cron-store.ts";
+import { FIRE_RETENTION_KEEP_PER_CRON, type CreateCronInput, type CronPatch } from "../../cron/cron-store.ts";
 import { describeRunNowRefusal } from "../../cron/scheduler.ts";
 import { DEFAULT_CRON_TIMEZONE, userScheduleFromBody } from "../../cron/schedule.ts";
 import type { CapabilityClaims } from "../../auth/capability-token.ts";
@@ -318,13 +318,11 @@ async function runCronNow(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { ok: true, fireKey: result.fireKey });
 }
 
-const CRON_RUN_PAGE = 20;
-
 async function cronRuns(ctx: ApiCtx): Promise<void> {
   const { res, url, capability, app } = ctx;
   const id = ctx.params.id!;
   const rawLimit = url.searchParams.get("limit");
-  const limit = rawLimit === null ? CRON_RUN_PAGE : Number(rawLimit);
+  const limit = rawLimit === null ? FIRE_RETENTION_KEEP_PER_CRON : Number(rawLimit);
   if (capability) {
     const r = await ctx.deps.control.getCronRuns(id, { limit }, capability);
     if (!r.ok) return sendJson(res, CRON_ERROR_STATUS[r.code] ?? 400, { error: r.code, message: r.message });
