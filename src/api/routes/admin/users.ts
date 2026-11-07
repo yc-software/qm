@@ -455,7 +455,10 @@ export async function setUserOnboarding(ctx: ApiCtx): Promise<void> {
   }
   const personal = makeScopeId("personal", principalId);
   const today = new Date().toISOString().slice(0, 10);
-  await setOnboardingStatus(deps.memory, personal, status as OnboardingStatus, today, actor.id);
+  await setOnboardingStatus(deps.memory, personal, status as OnboardingStatus, today, {
+    actorId: actor.id,
+    context: "admin",
+  });
   audit(deps, {
     principalId: actor.id,
     action: "user.onboarding.set",
@@ -473,7 +476,7 @@ export async function resetUserToBrandNew(ctx: ApiCtx): Promise<void> {
   const { principalId } = await resolveAdminUser(deps, params.principalId!);
   const personal = makeScopeId("personal", principalId);
   const today = new Date().toISOString().slice(0, 10);
-  await setOnboardingStatus(deps.memory, personal, "not_started", today, actor.id);
+  await setOnboardingStatus(deps.memory, personal, "not_started", today, { actorId: actor.id, context: "admin" });
   let deletedSessions = 0;
   if (deps.sessions) {
     const own = (await deps.sessions.listByParticipant(principalId)).filter((s) => s.scopeId === personal);

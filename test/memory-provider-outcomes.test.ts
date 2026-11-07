@@ -114,7 +114,13 @@ test("an attested provider sends the canonical person on every request and the s
   const memory = configured(attested.url, { attestActor: true });
   await memory.recall("personal:U1", { query: "launch", actorId: "U1" });
   await memory.recall("personal:U1", { query: "launch", actorId: "u1@acme.test" });
-  await memory.capture("personal:U1", ["fact"], 1, "u1@acme.test", { mode: "explicit", actorId: "u1@acme.test" });
+  await memory.capture(
+    "personal:U1",
+    ["fact"],
+    1,
+    { actorId: "u1@acme.test", context: "conversation" },
+    { mode: "explicit" },
+  );
 
   assert.ok(attested.requests.length > 0);
   assert.deepEqual(new Set(attested.requests.map((request) => request.actor)), new Set(["U1"]));
@@ -157,7 +163,14 @@ test("an attested provider is called only for the person whose private conversat
   const memory = configured(mcp.url, { attestActor: true });
   for (const actorId of ["U2", "system:personal:U1", "system:digest"])
     assert.equal(recallText(await memory.recall("personal:U1", { query: "launch", actorId })), "notebook fact");
-  const write = await writeFacts(memory, "personal:U1", ["fact"], "U2", { mode: "explicit", actorId: "U2" }, undefined);
+  const write = await writeFacts(
+    memory,
+    "personal:U1",
+    ["fact"],
+    { actorId: "U2", context: "conversation" },
+    { mode: "explicit" },
+    undefined,
+  );
   assert.equal(write.added, 1);
   assert.deepEqual(external(write.outcomes), [{ outcome: "denied", code: "private_only" }]);
   assert.match(write.problems[0]?.fix ?? "", /own private conversation/);
@@ -166,8 +179,8 @@ test("an attested provider is called only for the person whose private conversat
       memory,
       "personal:U1",
       ["fact"],
-      actorId,
-      { mode: "explicit", actorId },
+      { actorId, context: "conversation" },
+      { mode: "explicit" },
       undefined,
     );
     assert.equal(skipped.added, 1);
@@ -197,7 +210,13 @@ test("a write refused for its audience is recorded and logged without failing th
     });
     const { outcomes, report } = sink();
     assert.equal(
-      await memory.capture("personal:U1", ["fact"], 1, "admin", { mode: "explicit", actorId: "admin", report }),
+      await memory.capture(
+        "personal:U1",
+        ["fact"],
+        1,
+        { actorId: "admin", context: "conversation" },
+        { mode: "explicit", report },
+      ),
       1,
     );
     assert.deepEqual(external(outcomes), [{ outcome: "denied", code: "private_only" }]);
@@ -351,14 +370,21 @@ test("explicit writes record committed, pending and unknown with a stable UUID i
   });
   const memory = routedWithTimeout(mcp.url, 200);
   const write = (facts: string[], turn?: string) =>
-    writeFacts(memory, "personal:U1", facts, "U1", { mode: "explicit", actorId: "U1" }, turn);
+    writeFacts(memory, "personal:U1", facts, { actorId: "U1", context: "conversation" }, { mode: "explicit" }, turn);
 
   const committed = await write(["fact"], "run-1");
   const repeated = await write(["fact"], "run-1");
   const pending = await write(["queued"], "run-1");
   await write(["fact"], "run-2");
   await write(["fact"]);
-  await writeFacts(memory, "personal:U2", ["fact"], "U1", { mode: "explicit", actorId: "U1" }, "run-1");
+  await writeFacts(
+    memory,
+    "personal:U2",
+    ["fact"],
+    { actorId: "U1", context: "conversation" },
+    { mode: "explicit" },
+    "run-1",
+  );
   const unknown = await write(["slow"], "run-1");
   release();
   await settled(mcp, 7);
@@ -402,7 +428,14 @@ test("timeoutMs bounds reads, and a write slower than it still commits", async (
   });
   const memory = configured(mcp.url, { timeoutMs: 100 });
   const read = await withProviders("search", (report) => memory.recall("personal:U1", { actorId: "U1", report }));
-  const written = await writeFacts(memory, "personal:U1", ["fact"], "U1", { mode: "explicit", actorId: "U1" }, "run-1");
+  const written = await writeFacts(
+    memory,
+    "personal:U1",
+    ["fact"],
+    { actorId: "U1", context: "conversation" },
+    { mode: "explicit" },
+    "run-1",
+  );
   await settled(mcp, 2);
 
   assert.deepEqual(external(read.outcomes), [{ outcome: "timed_out", code: undefined }]);
@@ -420,7 +453,14 @@ test("a failing built-in notebook write stays QM's own error, not a provider pro
   };
   const memory = configured(mcp.url, {}, ENV, broken);
   await assert.rejects(
-    writeFacts(memory, "personal:U1", ["fact"], "U1", { mode: "explicit", actorId: "U1" }, "run-1"),
+    writeFacts(
+      memory,
+      "personal:U1",
+      ["fact"],
+      { actorId: "U1", context: "conversation" },
+      { mode: "explicit" },
+      "run-1",
+    ),
     /notebook disk full/,
   );
 });

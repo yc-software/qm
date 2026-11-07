@@ -89,8 +89,14 @@ test("pg memory: notebooks written before the records column migrate into fact r
 test("pg memory: add, edit and delete by id; a bad id rolls back the whole call", { skip }, async () => {
   const memory = createPostgresMemoryService(URL!);
   const sid = scopeId("personal", "U1");
-  assert.equal(await memory.capture(sid, ["Prefers terse replies", "Owns billing"], at, "U1"), 2);
-  assert.equal(await memory.capture(sid, ["prefers terse replies"], at, "U1"), 0);
+  assert.equal(
+    await memory.capture(sid, ["Prefers terse replies", "Owns billing"], at, {
+      actorId: "U1",
+      context: "conversation",
+    }),
+    2,
+  );
+  assert.equal(await memory.capture(sid, ["prefers terse replies"], at, { actorId: "U1", context: "conversation" }), 0);
   const [terse, billing] = await memory.facts!(sid);
 
   await assert.rejects(

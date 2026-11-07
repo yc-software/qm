@@ -22,10 +22,14 @@ import {
   type MemoryRegistry,
 } from "../src/memory/registry.ts";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
+import type { Agent } from "../src/agent/agent.ts";
+import { createAgentTools } from "../src/agent/agent-tools.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { buildApp } from "./support/build-app.ts";
+import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { routedTo, startMcpTestServer, type McpTestServer } from "./support/mcp-test-server.ts";
-import { testConfig } from "./support/test-config.ts";
+import { createMockAgent } from "./support/mock-agent.ts";
+import { TEST_CAPABILITY_SECRET, testConfig } from "./support/test-config.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 
 const change = {
@@ -106,7 +110,13 @@ test("an already-built memory service serves a new binding, then stops at its re
     registry,
     registryFetch: routedTo(brain.url),
   });
-  await memory.capture("personal:U1", ["Alice prefers tea."], Date.now(), "U1", { mode: "explicit" });
+  await memory.capture(
+    "personal:U1",
+    ["Alice prefers tea."],
+    Date.now(),
+    { actorId: "U1", context: "conversation" },
+    { mode: "explicit" },
+  );
   const texts = async () => plain(await memory.recall("personal:U1", { actorId: "U1", query: "codename" }));
 
   assert.deepEqual(await texts(), ["Alice prefers tea."]);
@@ -124,10 +134,15 @@ test("an already-built memory service serves a new binding, then stops at its re
   );
   assert.equal(brain.requests.at(-1)?.actor, "U1");
 
-  await memory.capture("personal:U1", ["Alice's anchor is HMS-OSPREY-7."], Date.now(), "U1", {
-    mode: "explicit",
-    actorId: "U1",
-  });
+  await memory.capture(
+    "personal:U1",
+    ["Alice's anchor is HMS-OSPREY-7."],
+    Date.now(),
+    { actorId: "U1", context: "conversation" },
+    {
+      mode: "explicit",
+    },
+  );
   assert.equal(brain.calls.filter(({ tool }) => tool === "memory_write").length, 1);
 
   await registry.update((record) => deleteBinding(record, "alice"));
@@ -150,7 +165,7 @@ test("the first binding keeps notebook memory for other members, projects and ex
     ["personal:U2", "Bob bikes to work."],
     ["group:web-project-1", "The project ships on Fridays."],
   ] as const)
-    await memory.capture(scope, [fact], Date.now(), "U1", { mode: "automatic" });
+    await memory.capture(scope, [fact], Date.now(), { actorId: "U1", context: "conversation" }, { mode: "automatic" });
   await registry.update(personalBrain());
   await registry.update((record) =>
     putBinding(record, "alice", { brain: "acme-personal", scope: "personal:U1" }, change),
@@ -161,7 +176,16 @@ test("the first binding keeps notebook memory for other members, projects and ex
   assert.deepEqual(await recalled("personal:U1", "U1"), ["Alice walks to work.", BRAIN_FACT]);
   assert.deepEqual(await recalled("personal:U2", "U2"), ["Bob bikes to work."]);
   assert.deepEqual(await recalled("group:web-project-1", "U1"), ["The project ships on Fridays."]);
-  assert.equal(await memory.capture("personal:U2", ["Bob drinks coffee."], Date.now(), "U2", { mode: "automatic" }), 1);
+  assert.equal(
+    await memory.capture(
+      "personal:U2",
+      ["Bob drinks coffee."],
+      Date.now(),
+      { actorId: "U2", context: "conversation" },
+      { mode: "automatic" },
+    ),
+    1,
+  );
   assert.deepEqual(
     (await memory.facts!("personal:U1")).map((fact) => fact.text),
     ["Alice walks to work."],
@@ -269,13 +293,20 @@ test("a disabled binding reports a problem only for writes a served binding woul
   await registry.update((record) =>
     putBinding(record, "alice", { brain: "acme-personal", scope: "personal:U1", capture: "explicit" }, change),
   );
-  const problems = async (context: Omit<MemoryCaptureContext, "report">) =>
-    (await writeFacts(memory, "personal:U1", ["Prefers aisle seats"], "U1", context, undefined)).problems.map(
-      ({ code }) => code,
-    );
-  assert.deepEqual(await problems({ mode: "explicit", actorId: "U1" }), ["memory_provider_disabled"]);
-  assert.deepEqual(await problems({ mode: "explicit", actorId: "system:personal:U1" }), []);
-  assert.deepEqual(await problems({ mode: "explicit", actorId: "U1", conversationScopeId: "channel:C1" }), []);
+  const problems = async (actorId: string, context: Omit<MemoryCaptureContext, "report">) =>
+    (
+      await writeFacts(
+        memory,
+        "personal:U1",
+        ["Prefers aisle seats"],
+        { actorId, context: "conversation" },
+        context,
+        undefined,
+      )
+    ).problems.map(({ code }) => code);
+  assert.deepEqual(await problems("U1", { mode: "explicit" }), ["memory_provider_disabled"]);
+  assert.deepEqual(await problems("system:personal:U1", { mode: "explicit" }), []);
+  assert.deepEqual(await problems("U1", { mode: "explicit", conversationScopeId: "channel:C1" }), []);
   assert.deepEqual(brain.calls, []);
 });
 
@@ -319,8 +350,8 @@ test("a stored brain whose id an env provider took leaves the env provider servi
     memory,
     "personal:U1",
     ["Prefers aisle seats"],
-    "U1",
-    { mode: "explicit", actorId: "U1" },
+    { actorId: "U1", context: "conversation" },
+    { mode: "explicit" },
     undefined,
   );
   assert.deepEqual(written.problems, []);
@@ -334,14 +365,16 @@ function serve(built: ReturnType<typeof buildApp>) {
   const server = createInsecureTestServer(built.app, {
     admin: built.admin,
     auditLog: built.auditLog,
+    memory: built.memory,
     memoryRegistry: built.memoryRegistry,
+    capabilitySecret: TEST_CAPABILITY_SECRET,
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  const call = async (method: string, path: string, actor: string, body?: unknown) => {
+  const call = async (method: string, path: string, actor: string, body?: unknown, auth = "x-admin-actor") => {
     const res = await fetch(`${base}${path}`, {
       method,
-      headers: { "x-admin-actor": actor, ...(body ? { "content-type": "application/json" } : {}) },
+      headers: { [auth]: actor, ...(body ? { "content-type": "application/json" } : {}) },
       ...(body ? { body: JSON.stringify(body) } : {}),
     });
     return { status: res.status, text: await res.text() };
@@ -501,10 +534,15 @@ test("an admin's agent can register and bind a brain but never carries its secre
   const recall = () => memory.recall("personal:U1", { actorId: "U1", query: "codename" });
   await recall();
   await memory.query("personal:U1", "codename", 5, { actorId: "U1" });
-  await memory.capture("personal:U1", ["Alice's anchor is HMS-OSPREY-7."], Date.now(), "U1", {
-    mode: "explicit",
-    actorId: "U1",
-  });
+  await memory.capture(
+    "personal:U1",
+    ["Alice's anchor is HMS-OSPREY-7."],
+    Date.now(),
+    { actorId: "U1", context: "conversation" },
+    {
+      mode: "explicit",
+    },
+  );
   assert.deepEqual(live.calls, []);
   await built.memoryRegistry.update((record) =>
     putBrain(
@@ -664,4 +702,208 @@ test("blue-green: a binding written through one instance serves turns on the oth
   assert.doesNotMatch(await prompt(blue, "dm:U1:t3"), /BLACKBEARD-42/);
   assert.doesNotMatch(await prompt(restarted, "dm:U1:t4"), /BLACKBEARD-42/);
   assert.equal(brain.calls.length, recalls);
+});
+
+const ALICE_SCOPE = "personal:U1";
+const writes = (brain: { calls: BrainCall[] }) => brain.calls.filter(({ tool }) => tool === "memory_write").length;
+const notebook = async (built: ReturnType<typeof buildApp>) =>
+  ((await built.memory.facts!(ALICE_SCOPE)) ?? []).map(({ text }) => text);
+
+async function boundToBrain(t: { after(fn: () => Promise<void>): void }, agent?: Agent) {
+  const brain = await startBrain(t);
+  const built = buildApp(
+    testConfig({ signingSecret: "memory-authority-signing-secret", apiBaseUrl: "http://core.example.test" }),
+    { memoryRegistryFetch: routedTo(brain.url), ...(agent ? { agent } : {}) },
+  );
+  const api = serve(built);
+  t.after(api.close);
+  const bind = async () => {
+    const admin = "admin-alice@default-org";
+    const brainBody = {
+      preset: "gbrain-v1",
+      url: BRAIN_URL,
+      clientId: "qm-personal",
+      clientSecret: "personal-secret",
+      label: "Acme personal memory",
+    };
+    assert.equal(
+      (await api.call("PUT", "/v1/admin/memory-registry/brains/acme-personal", admin, brainBody)).status,
+      200,
+    );
+    const binding = { brain: "acme-personal", scope: ALICE_SCOPE, capture: "explicit" };
+    assert.equal((await api.call("PUT", "/v1/admin/memory-registry/bindings/alice", admin, binding)).status, 200);
+  };
+  return { brain, built, api, bind };
+}
+
+test("only Alice's own conversation writes to her brain; admin, onboarding and self-service change her notebook alone", async (t) => {
+  const { brain, built, api, bind } = await boundToBrain(t);
+  await bind();
+  const dm: TurnRequest = {
+    surface: "test",
+    actor: { externalId: "U1" },
+    conversation: { kind: "dm", threadRef: "dm:U1:own" },
+    text: "!memoryremember Alice drinks rooibos.",
+  };
+  assert.equal((await built.app.turn(dm)).reply, "remembered 1");
+  assert.equal(writes(brain), 1);
+  assert.equal(brain.requests.at(-1)?.actor, "U1");
+
+  const admin = "admin-alice@default-org";
+  const scoped = `/v1/admin/memory?scope=${encodeURIComponent(ALICE_SCOPE)}`;
+  assert.equal((await api.call("POST", scoped, admin, { facts: ["Alice sits at desk 4B."] })).status, 200);
+  assert.equal((await api.call("PUT", "/v1/admin/users/U1/onboarding", admin, { status: "completed" })).status, 200);
+  const desk = (await built.memory.facts!(ALICE_SCOPE)).find(({ text }) => text.includes("desk 4B"))!;
+  assert.equal(
+    (await api.call("PATCH", scoped, admin, { facts: [{ id: desk.id, text: "Alice sits at desk 5C." }] })).status,
+    200,
+  );
+  const rooibos = (await built.memory.facts!(ALICE_SCOPE)).find(({ text }) => text.includes("rooibos"))!;
+  const self = { principalId: "U1" };
+  assert.equal(
+    (
+      await api.call("PATCH", "/v1/memory", "U1", {
+        ...self,
+        facts: [{ id: rooibos.id, text: "Alice drinks mint tea." }],
+      })
+    ).status,
+    200,
+  );
+  const mint = (await built.memory.facts!(ALICE_SCOPE)).find(({ text }) => text.includes("mint"))!;
+  assert.equal((await api.call("DELETE", "/v1/memory", "U1", { ...self, ids: [mint.id] })).status, 200);
+
+  assert.deepEqual(
+    (await notebook(built)).map((text) => text.replace(/ on \d{4}-\d\d-\d\d\.$/, ".")),
+    ["Alice sits at desk 5C.", "Onboarding: completed v2."],
+  );
+  assert.equal(writes(brain), 1);
+  assert.ok(brain.requests.every(({ actor }) => actor === "U1"));
+});
+
+test("the nightly tidy changes the notebook alone, through its tools and its agent API token, with a brain bound", async (t) => {
+  const mock = createMockAgent();
+  const seen: { prompt: string; search: string[]; tools: string[] } = { prompt: "", search: [], tools: [] };
+  let ids: Record<string, string> = {};
+  const agent: Agent = {
+    ...mock,
+    async runTurn(input) {
+      if (!input.input.includes("Stored cron task:")) return mock.runTurn(input);
+      seen.prompt = [input.systemPrompt, input.environment, input.input].join("\n");
+      seen.tools = createAgentTools(
+        { current: input.tools },
+        { controlTools: true, ...(input.memoryNotebookOnly ? { memoryNotebookOnly: true } : {}) },
+      ).map(({ name }) => name);
+      seen.search = (await input.tools.memorySearch("Alice"))?.hits ?? [];
+      await input.tools.memoryEdit([{ id: ids.tea!, text: "Alice drinks tea every morning." }]);
+      await input.tools.memoryDelete([ids.daily!, ids.desk!]);
+      await input.tools.memoryAdd(["Alice sits at desk 4B."]);
+      return mock.runTurn({ ...input, input: "!run echo tidied" });
+    },
+  };
+  const { brain, built, api, bind } = await boundToBrain(t, agent);
+  await built.memory.capture(
+    ALICE_SCOPE,
+    ["Alice drinks tea.", "Alice drinks tea daily.", "Alice sat at desk 3A."],
+    Date.now(),
+    { actorId: "U1", context: "conversation" },
+    { mode: "explicit" },
+  );
+  const facts = await built.memory.facts!(ALICE_SCOPE);
+  const id = (needle: string) => facts.find(({ text }) => text.includes(needle))!.id;
+  ids = { tea: id("tea."), daily: id("daily"), desk: id("3A") };
+  await bind();
+  const ordinary = await built.app.turn({
+    surface: "test",
+    actor: { externalId: "U1" },
+    conversation: { kind: "dm", threadRef: "dm:U1:before-tidy" },
+    text: "!sysprompt",
+  });
+  assert.match(ordinary.reply ?? "", /BLACKBEARD-42/);
+  const before = brain.calls.length;
+
+  await selectDefaultSandbox(built, "U1", ALICE_SCOPE);
+  let token: string | undefined;
+  const provision = built.sandbox.provision.bind(built.sandbox);
+  built.sandbox.provision = (layers, opts) => {
+    token = opts?.env?.AGENT_API_TOKEN;
+    return provision(layers, opts);
+  };
+  const tidy = (await built.crons.list()).find((cron) => cron.ownerScopeId === ALICE_SCOPE)!;
+  const fired = await built.scheduler.runNow(tidy.id);
+  assert.ok(fired.started);
+  await fired.settled;
+  assert.equal((await built.crons.listFires(tidy.id, { limit: 1 })).runs[0]?.status, "ok");
+
+  assert.doesNotMatch(seen.prompt, /BLACKBEARD-42/);
+  assert.ok(seen.search.length > 0);
+  assert.ok(seen.search.every((hit) => !hit.includes("BLACKBEARD-42")));
+  assert.deepEqual(await notebook(built), ["Alice drinks tea every morning.", "Alice sits at desk 4B."]);
+
+  assert.ok(token);
+  const agentApi = (method: string, path: string, body: unknown) =>
+    api.call(method, path, token!, body, "x-agent-capability");
+  const searched = await agentApi("POST", "/v1/memory/search", { query: "Alice" });
+  assert.equal(searched.status, 200);
+  assert.doesNotMatch(searched.text, /BLACKBEARD-42/);
+  assert.equal((await agentApi("POST", "/v1/memory/facts", { facts: ["Alice parks in bay 7."] })).status, 200);
+  assert.ok((await notebook(built)).includes("Alice parks in bay 7."));
+  assert.ok(seen.tools.includes("memory"));
+  assert.deepEqual(
+    seen.tools.filter((name) => ["cron", "webhook", "goal"].includes(name)),
+    [],
+  );
+  for (const path of ["/v1/crons", "/v1/loops", "/v1/webhooks"]) {
+    const refused = await agentApi("POST", path, {});
+    assert.equal(refused.status, 403, path);
+    assert.match(refused.text, /notebook-only turn/, path);
+  }
+  const [fire] = (await built.crons.listFires(tidy.id, { limit: 1 })).runs;
+  const woken = await built.app.turn({
+    surface: "test",
+    actor: { externalId: "U1" },
+    conversation: { kind: "dm", threadRef: fire!.threadRef },
+    text: "!sysprompt",
+  });
+  assert.doesNotMatch(woken.reply ?? "", /BLACKBEARD-42/);
+  assert.equal(brain.calls.length, before);
+});
+
+test("Alice's own turn into a notebook-only subagent leaves her brain alone, and so does the subagent it opens", async (t) => {
+  const mock = createMockAgent();
+  const subagent = "agent:main:subagent:tidy-follow-up";
+  const agent: Agent = {
+    ...mock,
+    async runTurn(input) {
+      if (input.session.threadRef === subagent) await input.tools.sessionSyscalls!.open({ task: "check the notebook" });
+      return mock.runTurn(input);
+    },
+  };
+  const { brain, built, bind } = await boundToBrain(t, agent);
+  await bind();
+  await built.featureFlags.setEnabled("persistent_subagents", ALICE_SCOPE, true, "admin");
+  const alice = { id: "U1", type: "internal" as const };
+  const session = await built.sessions.getOrCreateByThread(subagent, "dm", ALICE_SCOPE);
+  await built.sessions.addParticipant(session.id, alice.id);
+  await built.sessions.setSpawnMeta(session.id, {
+    surface: "test",
+    actor: alice,
+    conversation: { kind: "dm", threadRef: "dm:U1:tidy", audience: [alice] },
+    memoryNotebookOnly: true,
+  });
+  const prompt = async (threadRef: string) =>
+    (
+      await built.app.turn({
+        surface: "test",
+        actor: { externalId: "U1" },
+        conversation: { kind: "dm", threadRef },
+        text: "!sysprompt",
+      })
+    ).reply ?? "";
+  assert.match(await prompt("dm:U1:ordinary"), /BLACKBEARD-42/);
+  const before = brain.calls.length;
+
+  assert.doesNotMatch(await prompt(subagent), /BLACKBEARD-42/);
+  const [helper] = await built.sessions.childrenOf(session.id);
+  assert.equal(helper?.spawnMeta?.memoryNotebookOnly, true);
+  assert.equal(brain.calls.length, before);
 });

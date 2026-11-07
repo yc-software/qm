@@ -23,7 +23,7 @@ import type { ErrorLog } from "../admin/error-log.ts";
 import type { LeaderLease } from "../persistence/leader-lease.ts";
 import type { Delivery, PendingApproval, ScopeId, TurnRequest, TurnResult } from "../types.ts";
 import type { SurfaceContextRequest, SurfaceContextResult } from "../reach/reach.ts";
-import { scopeId } from "../types.ts";
+import { scopeActor, scopeId } from "../types.ts";
 import type { MemoryService } from "../memory/memory-service.ts";
 import type { CachedMessage, ReadMessagesOpts, SurfaceCache, IngestEvent } from "../surface-cache/surface-cache.ts";
 import type { AckEmojiPickStore } from "../surface-cache/ack-emoji-pick-store.ts";
@@ -260,7 +260,8 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
     async noteSurfaceHistoryGap(container, note) {
       if (!deps.memory) return;
       const kind = (await deps.surfaceCache?.containerState(container))?.kind;
-      await deps.memory.capture(scopeId(kind === "group" ? "group" : "channel", container), [note], Date.now());
+      const scope = scopeId(kind === "group" ? "group" : "channel", container);
+      await deps.memory.capture(scope, [note], Date.now(), { actorId: scopeActor(scope), context: "maintenance" });
     },
 
     async readSurfaceMessages(container, opts) {

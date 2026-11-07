@@ -269,6 +269,7 @@ export function createTurnMethods(
             }
           : {}),
         ...(req.skipMemory ? { skipMemory: true } : {}),
+        ...(req.memoryNotebookOnly ? { memoryNotebookOnly: true } : {}),
         ...(req.unattendedGrants?.length ? { unattendedGrants: req.unattendedGrants } : {}),
         ...(req.cronScript && origin.kind === "automation" ? { cronScript: req.cronScript } : {}),
         ...(req.infrequentCron && origin.kind === "automation" ? { infrequentCron: true } : {}),

@@ -95,6 +95,9 @@ async function gbrain(
     async read() {
       return "";
     },
+    async facts() {
+      return [];
+    },
   };
   const memory = createRegistryMemoryService({
     registry: emptyMemoryRegistry,
@@ -161,7 +164,13 @@ test("the documented gbrain recipe keeps the notebook first everywhere and sends
     "org:acme": ["default@org:acme"],
   });
 
-  await memory.capture(JORDAN, ["Prefers window seats"], 1, "U0JORDAN", { mode: "automatic", actorId: "U0JORDAN" });
+  await memory.capture(
+    JORDAN,
+    ["Prefers window seats"],
+    1,
+    { actorId: "U0JORDAN", context: "conversation" },
+    { mode: "automatic" },
+  );
   assert.deepEqual(notebookWrites, ["Prefers window seats"]);
   assert.deepEqual(
     calls.map(({ name }) => name),
@@ -175,13 +184,14 @@ test("QM's gbrain requests satisfy the vendored contract's tools and actor rules
       ? { content: [{ type: "text", text: "" }], structuredContent: { facts: [], truncated: false } }
       : committed(1, "8c1f7a0e-0000-5000-8000-000000000002"),
   );
-  const context = { mode: "explicit" as const, actorId: "jordan@acme.example", conversationScopeId: JORDAN };
+  const by = { actorId: "jordan@acme.example", context: "conversation" as const };
+  const context = { mode: "explicit" as const, conversationScopeId: JORDAN };
   await withProviders("search", (report) =>
     memory.recall(JORDAN, { query: "seats", actorId: "jordan@acme.example", maxChars: 6000, report }),
   );
-  await writeFacts(memory, JORDAN, ["Prefers aisle seats", "Takes notes by hand"], "U0JORDAN", context, "run-1");
-  await writeFacts(memory, JORDAN, ["Prefers aisle seats", "Takes notes by hand"], "U0JORDAN", context, "run-1");
-  await writeFacts(memory, JORDAN, ["Prefers aisle seats", "Takes notes by hand"], "U0JORDAN", context, undefined);
+  await writeFacts(memory, JORDAN, ["Prefers aisle seats", "Takes notes by hand"], by, context, "run-1");
+  await writeFacts(memory, JORDAN, ["Prefers aisle seats", "Takes notes by hand"], by, context, "run-1");
+  await writeFacts(memory, JORDAN, ["Prefers aisle seats", "Takes notes by hand"], by, context, undefined);
 
   const [recall, ...writes] = calls;
   assert.deepEqual(calls.flatMap(violations), []);
@@ -265,10 +275,9 @@ test("gbrain's answers and refusals become the outcomes the contract classes the
       memory,
       JORDAN,
       ["Prefers aisle seats"],
-      "U0JORDAN",
+      { actorId: "U0JORDAN", context: "conversation" },
       {
         mode: "explicit",
-        actorId: "U0JORDAN",
       },
       "run-1",
     );
@@ -297,7 +306,7 @@ test("an attested gbrain write never speaks for anyone but the turn's member", a
     memory,
     "personal:U0ALICE",
     ["Onboarding: completed v1"],
-    "U0ADMIN",
+    { actorId: "U0ADMIN", context: "admin" },
     { mode: "explicit" },
     undefined,
   );
@@ -305,8 +314,8 @@ test("an attested gbrain write never speaks for anyone but the turn's member", a
     memory,
     "personal:U0ALICE",
     ["Channel history was missing"],
-    "U0ALICE",
-    { mode: "explicit", actorId: "system:channel:C0ROOM" },
+    { actorId: "system:channel:C0ROOM", context: "maintenance" },
+    { mode: "explicit" },
     "run-2",
   );
   assert.deepEqual(calls, []);
@@ -327,8 +336,8 @@ test("a gbrain write's provenance stays within the contract's limit for a long s
     memory,
     scope,
     ["Prefers aisle seats"],
-    "U0JORDAN",
-    { mode: "explicit", actorId: "U0JORDAN", conversationScopeId: scope },
+    { actorId: "U0JORDAN", context: "conversation" },
+    { mode: "explicit", conversationScopeId: scope },
     "run-3",
   );
   assert.deepEqual(gbrainOutcomes(outcomes), ["committed"]);

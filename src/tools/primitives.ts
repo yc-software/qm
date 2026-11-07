@@ -63,7 +63,7 @@ import { errMessage, withCleanup } from "../util/errors.ts";
 import { quotedData } from "../util/text.ts";
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
-import { MEMORY_FILE, type MemoryEdit, type MemoryService } from "../memory/memory-service.ts";
+import { MEMORY_FILE, turnAuthority, type MemoryEdit, type MemoryService } from "../memory/memory-service.ts";
 import {
   withProviders,
   writeFacts,
@@ -505,7 +505,7 @@ export interface ToolContextDeps {
   memory?: MemoryService;
   memoryScopeId?: ScopeId;
   memoryCaptureMetadata?: () => MemoryCaptureMetadata;
-  memoryAccess?: { write?: ScopeId; read: ScopeId[] };
+  memoryAccess?: { write?: ScopeId; read: ScopeId[]; notebookOnly?: true };
   mcp?: McpToolService;
   scopeId?: ScopeId;
   sessionHistory?: {
@@ -557,6 +557,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           ],
           audience: deps.publishContext?.publishMembers ?? [{ id: deps.createdBy, type: "internal" }],
           open: false,
+          ...(deps.memoryAccess?.notebookOnly ? { notebookOnly: true } : {}),
         })
       : undefined);
 
@@ -1106,11 +1107,10 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         memory,
         write,
         facts,
-        deps.createdBy,
+        turnAuthority(deps.createdBy, deps.memoryAccess),
         {
           ...deps.memoryCaptureMetadata?.(),
           mode: "explicit",
-          actorId: deps.createdBy,
           conversationScopeId: writableScopeId,
         },
         deps.runId,
@@ -1120,7 +1120,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     async memoryEdit(edits: MemoryEdit[]): Promise<true | null> {
       const write = deps.memoryAccess?.write;
       if (!memory?.edit || !write) return null;
-      await memory.edit(write, edits, deps.createdBy, {
+      await memory.edit(write, edits, turnAuthority(deps.createdBy, deps.memoryAccess), {
         ...deps.memoryCaptureMetadata?.(),
         conversationScopeId: writableScopeId,
       });
@@ -1130,7 +1130,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     async memoryDelete(ids: string[]): Promise<true | null> {
       const write = deps.memoryAccess?.write;
       if (!memory?.delete || !write) return null;
-      await memory.delete(write, ids, deps.createdBy);
+      await memory.delete(write, ids, turnAuthority(deps.createdBy, deps.memoryAccess));
       return true;
     },
 
