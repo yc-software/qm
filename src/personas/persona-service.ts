@@ -22,7 +22,7 @@ interface PersonaView extends Persona {
 }
 
 interface PersonaDetail extends PersonaView {
-  access: PersonaAccess[];
+  access: Array<PersonaAccess & { personasEnabled: boolean }>;
   credentials: Array<{ grantId: string; service: string; ownerId: string }>;
 }
 
@@ -141,10 +141,16 @@ export function createPersonaService(deps: {
       return { status: "ok", value: await store.listFor(await granteeScopes(principalId)) };
     },
     detail(principalId, id) {
-      return guarded<PersonaDetail>(principalId, id, "read", async (persona, held) => ({
-        status: "ok",
-        value: { ...persona, role: held, access: await store.access(id), credentials: await credentialsOf(id) },
-      }));
+      return guarded<PersonaDetail>(principalId, id, "read", async (persona, held) => {
+        const orgEnabled = await deps.flags.enabled("personas", deps.orgScope);
+        const access = await Promise.all(
+          (await store.access(id)).map(async (grant) => {
+            const { kind, ref } = parseScopeId(grant.scopeId);
+            return { ...grant, personasEnabled: kind === "personal" ? await enabledFor(ref) : orgEnabled };
+          }),
+        );
+        return { status: "ok", value: { ...persona, role: held, access, credentials: await credentialsOf(id) } };
+      });
     },
     async create(principalId, input) {
       if (!(await enabledFor(principalId))) return { status: "disabled" };

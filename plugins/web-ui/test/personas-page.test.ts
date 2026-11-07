@@ -32,9 +32,22 @@ const versions = [
   { version: 1, name: "Ada", description: "", instructions: "Ada instructions", editedBy: "tester", editedAt: 1 },
 ];
 
+interface Grant {
+  scopeId: string;
+  role: string;
+  label?: string;
+  personasEnabled: boolean;
+}
+
+const defaultAccess = (): Grant[] => [
+  { scopeId: "personal:tester", role: "owner", personasEnabled: true },
+  { scopeId: "channel:C9", role: "read", label: "design", personasEnabled: true },
+];
+
 let calls: Call[] = [];
 let disabled = false;
 let accessError = false;
+let access = defaultAccess();
 
 const json = (body: unknown, status = 200) => Promise.resolve(Response.json(body, { status }));
 
@@ -77,10 +90,7 @@ const { vite, dom, close } = await browserEnv({
       return json({
         persona: {
           ...found,
-          access: [
-            { scopeId: "personal:tester", role: "owner" },
-            { scopeId: "channel:C9", role: "read", label: "design" },
-          ],
+          access,
           version: 3,
           credentials: [{ grantId: "g-1", service: "github", ownerId: "tester" }],
         },
@@ -150,6 +160,8 @@ beforeEach(() => {
   calls = [];
   disabled = false;
   accessError = false;
+  access = defaultAccess();
+  dom.window.confirm = () => true;
   document.body.innerHTML = '<div id="app"></div><main></main>';
 });
 
@@ -259,34 +271,72 @@ test("a reader sees each part of the persona with nothing to add or remove", asy
   assert.equal(main.querySelector(".persona-item-remove"), null);
 });
 
-test("Add channel opens the share dialog, and a channel added there gets read access", async () => {
-  const { main } = await openPersonaPage("Ada");
-  button(main, "Add channel").click();
-  const dialog = document.querySelector<HTMLDialogElement>("dialog.persona-share-dialog")!;
-  const input = dialog.querySelector<HTMLInputElement>('input[aria-label="Add people or Slack channels"]')!;
-  input.value = "eng";
+function searchFor(root: ParentNode, text: string): HTMLInputElement {
+  const input = root.querySelector<HTMLInputElement>("#persona-grantee-search")!;
+  input.value = text;
   input.dispatchEvent(new window.Event("input"));
   input.closest("form")!.dispatchEvent(new window.Event("submit", { cancelable: true }));
+  return input;
+}
+
+const resultNames = (root: ParentNode) =>
+  [...root.querySelectorAll(".project-member-result .project-member-name")].map((n) => n.textContent?.trim());
+
+const putBody = () => calls.find((c) => c.method === "PUT")?.body;
+
+const flash = (root: ParentNode) => root.querySelector(".action-notice")?.textContent?.trim();
+
+const accessRow = (root: ParentNode, scope: string) =>
+  root.querySelector<HTMLElement>(`.permission-row[data-scope="${scope}"]`)!;
+
+function roleOptions(root: ParentNode, scope: string): HTMLButtonElement[] {
+  accessRow(root, scope).querySelector<HTMLButtonElement>(".menu-button")!.click();
+  return [...accessRow(root, scope).querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')];
+}
+
+async function pickRole(root: ParentNode, scope: string, label: string): Promise<void> {
+  roleOptions(root, scope)
+    .find((o) => o.textContent?.trim() === label)!
+    .click();
   await settle();
-  [...dialog.querySelectorAll<HTMLButtonElement>(".project-member-result")].at(-1)!.click();
+}
+
+test("Add channel searches your Slack channels on the page and adds one with chat access", async () => {
+  const { main } = await openPersonaPage("Ada");
+  button(main, "Add channel").click();
+  await settle();
+  const input = searchFor(main, "eng");
+  assert.equal(document.activeElement, input);
+  assert.equal(input.placeholder, "Search channels you're in");
+  await settle();
+  assert.deepEqual(resultNames(main), ["eng-launch"]);
+  assert.equal(
+    calls.some((c) => c.path.startsWith("/api/directory/resolve")),
+    false,
+  );
   calls = [];
-  button(dialog, "Save").click();
+  main.querySelector<HTMLButtonElement>(".project-member-result")!.click();
   await settle();
-  assert.deepEqual(calls.find((c) => c.method === "PUT")?.body, {
+  assert.deepEqual(putBody(), {
     access: [
       { scopeId: "personal:tester", role: "owner" },
       { scopeId: "channel:C9", role: "read" },
       { scopeId: "channel:C1", role: "read" },
     ],
   });
-  assert.equal(dialog.isConnected, false);
+  assert.equal(flash(main), "Added #eng-launch.");
+  assert.equal(document.querySelector("dialog"), null);
 
+  let asked = "";
+  dom.window.confirm = (question?: string) => {
+    asked = question ?? "";
+    return true;
+  };
   calls = [];
   main.querySelector<HTMLButtonElement>('button[aria-label="Remove design"]')!.click();
   await settle();
-  assert.deepEqual(calls.find((c) => c.method === "PUT")?.body, {
-    access: [{ scopeId: "personal:tester", role: "owner" }],
-  });
+  assert.equal(asked, "Remove design from Ada?");
+  assert.deepEqual(putBody(), { access: [{ scopeId: "personal:tester", role: "owner" }] });
 });
 
 test("an owner attaches one of their credentials and detaches one", async () => {
@@ -385,20 +435,6 @@ test("history lists versions on demand, shows what changed, and rolls back as a 
   assert.match(main.querySelector(".action-notice")?.textContent ?? "", /Rolled back to version 1/);
 });
 
-test("a Slack channel can only be given chat access in the share dialog", async () => {
-  const { main } = await mountPage();
-  button(main, "Share", "Ada").click();
-  await settle();
-  const dialog = document.querySelector<HTMLDialogElement>("dialog.persona-share-dialog")!;
-  const channelRow = dialog.querySelector<HTMLElement>('.permission-row[data-scope="channel:C9"]')!;
-  channelRow.querySelector<HTMLButtonElement>("button")!.click();
-  await settle();
-  assert.deepEqual(
-    [...channelRow.querySelectorAll('[role="menuitemradio"]')].map((o) => o.textContent?.trim()),
-    ["Can chat", "Remove access"],
-  );
-});
-
 test("an editor saves name, description and instructions with PATCH", async () => {
   const { main } = await mountPage();
   button(main, "Edit", "Bo").click();
@@ -416,58 +452,185 @@ test("an editor saves name, description and instructions with PATCH", async () =
   ]);
 });
 
-test("sharing stages grants and shows the server's reason when the last owner is removed", async () => {
-  const { main } = await mountPage();
-  button(main, "Share", "Ada").click();
+test("an owner adds people and everyone at the company on the page, and the search stays open for the next one", async () => {
+  const { main } = await openPersonaPage("Ada");
+  button(main, "Add people").click();
   await settle();
-  const dialog = document.querySelector<HTMLDialogElement>("dialog.persona-share-dialog")!;
-  assert.ok(dialog.open);
-  button(dialog, "Add everyone at acme").click();
-  assert.deepEqual(
-    [...dialog.querySelectorAll(".permission-row .permission-person-label")].map((l) => l.textContent?.trim()),
-    ["You", "design", "Everyone at Acme"],
-  );
+  searchFor(main, "b");
+  await settle();
+  assert.deepEqual(resultNames(main), ["Bo Person"]);
   calls = [];
-  button(dialog, "Save").click();
+  main.querySelector<HTMLButtonElement>(".project-member-result")!.click();
   await settle();
-  assert.deepEqual(calls.find((c) => c.method === "PUT")?.body, {
+  assert.deepEqual(putBody(), {
+    access: [
+      { scopeId: "personal:tester", role: "owner" },
+      { scopeId: "channel:C9", role: "read" },
+      { scopeId: "personal:bo@acme.com", role: "read" },
+    ],
+  });
+  assert.equal(flash(main), "Added Bo Person.");
+  const input = main.querySelector<HTMLInputElement>("#persona-grantee-search")!;
+  assert.equal(input.value, "");
+  assert.equal(document.activeElement, input);
+
+  calls = [];
+  button(main, "Add everyone at Acme").click();
+  await settle();
+  assert.deepEqual(putBody(), {
     access: [
       { scopeId: "personal:tester", role: "owner" },
       { scopeId: "channel:C9", role: "read" },
       { scopeId: "org:acme", role: "read" },
     ],
   });
-  assert.equal(dialog.isConnected, false);
-
-  accessError = true;
-  button(main, "Share", "Ada").click();
-  await settle();
-  const again = document.querySelector<HTMLDialogElement>("dialog.persona-share-dialog")!;
-  button(again, "Save").click();
-  await settle();
-  assert.equal(again.querySelector('[role="alert"]')?.textContent?.trim(), "a persona must keep at least one owner");
-  assert.ok(again.isConnected);
 });
 
-test("one search finds people and Slack channels, and either can be added", async () => {
+test("an owner changes a person's role and removes them from the row, keeping an unsaved instructions edit", async () => {
+  access = [
+    { scopeId: "personal:tester", role: "owner", personasEnabled: true },
+    { scopeId: "personal:bo@acme.com", role: "read", label: "Bo Person", personasEnabled: true },
+  ];
+  const { main } = await openPersonaPage("Ada");
+  const instructions = main.querySelector<HTMLTextAreaElement>("textarea[name=instructions]")!;
+  instructions.value = "A draft I haven't saved";
+  calls = [];
+  await pickRole(main, "personal:bo@acme.com", "Can edit");
+  assert.deepEqual(putBody(), {
+    access: [
+      { scopeId: "personal:tester", role: "owner" },
+      { scopeId: "personal:bo@acme.com", role: "write" },
+    ],
+  });
+  assert.equal(flash(main), "Access saved.");
+  assert.equal(
+    main.querySelector<HTMLTextAreaElement>("textarea[name=instructions]")!.value,
+    "A draft I haven't saved",
+  );
+
+  let asked = "";
+  dom.window.confirm = (question?: string) => {
+    asked = question ?? "";
+    return true;
+  };
+  calls = [];
+  await pickRole(main, "personal:bo@acme.com", "Remove access");
+  assert.equal(asked, "Remove Bo Person from Ada?");
+  assert.deepEqual(putBody(), { access: [{ scopeId: "personal:tester", role: "owner" }] });
+  assert.equal(flash(main), "Removed Bo Person.");
+
+  accessError = true;
+  calls = [];
+  await pickRole(main, "personal:bo@acme.com", "Can edit");
+  assert.ok(putBody());
+  assert.equal(flash(main), "Removed Bo Person.");
+  assert.equal(accessRow(main, "personal:bo@acme.com").querySelector("fieldset")!.disabled, false);
+});
+
+test("the only owner's row says why it can't be demoted or removed, and nothing is sent", async () => {
+  const { main } = await openPersonaPage("Ada");
+  assert.match(
+    accessRow(main, "personal:tester").textContent ?? "",
+    /The only owner\. Make someone else an owner before changing this\./,
+  );
+  assert.deepEqual(
+    roleOptions(main, "personal:tester").map((o) => [
+      o.textContent?.trim(),
+      o.getAttribute("aria-disabled") === "true",
+    ]),
+    [
+      ["Owner", false],
+      ["Can edit", true],
+      ["Can chat", true],
+      ["Remove access", true],
+    ],
+  );
+  calls = [];
+  await pickRole(main, "personal:tester", "Can chat");
+  await pickRole(main, "personal:tester", "Remove access");
+  assert.equal(
+    calls.some((c) => c.method === "PUT"),
+    false,
+  );
+
+  access = [
+    { scopeId: "personal:tester", role: "owner", personasEnabled: true },
+    { scopeId: "personal:bo@acme.com", role: "owner", label: "Bo Person", personasEnabled: true },
+  ];
+  const again = await openPersonaPage("Ada");
+  assert.doesNotMatch(again.main.querySelector(".persona-access-list")?.textContent ?? "", /The only owner/);
+  assert.equal(
+    roleOptions(again.main, "personal:tester").some((o) => o.getAttribute("aria-disabled") === "true"),
+    false,
+  );
+});
+
+test("a reader sees their role, the owners to ask, and no controls", async () => {
+  access = [
+    { scopeId: "personal:u-alice", role: "owner", label: "Alice Smith", personasEnabled: true },
+    { scopeId: "personal:u-bob", role: "owner", label: "Bob Jones", personasEnabled: true },
+    { scopeId: "personal:tester", role: "read", personasEnabled: true },
+  ];
+  const { main } = await openPersonaPage("Cy");
+  assert.match(main.querySelector(".persona-role")?.textContent ?? "", /Your role: Can chat/);
+  const section = main.querySelector(".persona-access-list")!.closest(".persona-section")!;
+  assert.deepEqual(
+    [...section.querySelectorAll(".permission-row")].map((row) => [
+      row.querySelector(".permission-person-label")?.textContent?.trim(),
+      row.querySelector(".permission-owner")?.textContent?.trim(),
+    ]),
+    [
+      ["Alice Smith", "Owner"],
+      ["Bob Jones", "Owner"],
+      ["You", "Can chat"],
+    ],
+  );
+  assert.match(section.textContent ?? "", /Only owners can change who has access: ask Alice Smith or Bob Jones\./);
+  assert.equal(section.querySelector(".permission-control"), null);
+  assert.equal(section.querySelector("#persona-grantee-search"), null);
+});
+
+test("people and groups the Personas flag doesn't reach are marked with where an admin turns it on", async () => {
+  access = [
+    { scopeId: "personal:tester", role: "owner", personasEnabled: true },
+    { scopeId: "personal:bo@acme.com", role: "read", label: "Bo Person", personasEnabled: false },
+    { scopeId: "org:acme", role: "read", personasEnabled: false },
+    { scopeId: "channel:C9", role: "read", label: "design", personasEnabled: false },
+  ];
+  const { main } = await openPersonaPage("Ada");
+  const notes = (scope: string) =>
+    [...accessRow(main, scope).querySelectorAll(".permission-person-label small")].map((n) => n.textContent?.trim());
+  const orgNote =
+    "Personas is off for the organization, so only people with the flag on can use this. An admin can turn it on for everyone in Admin → Customize → Feature flags.";
+  assert.deepEqual(notes("personal:tester"), ["The only owner. Make someone else an owner before changing this."]);
+  assert.deepEqual(notes("personal:bo@acme.com"), [
+    "Can't use personas until an admin turns on the Personas feature flag for them in Admin → Customize → Feature flags.",
+  ]);
+  assert.match(
+    accessRow(main, "org:acme").querySelector(".permission-person-label")?.textContent?.trim() ?? "",
+    /^Everyone at Acme/,
+  );
+  assert.deepEqual(notes("org:acme"), [orgNote]);
+  const channels = [...main.querySelectorAll(".persona-section")].find(
+    (section) => section.querySelector("h3")?.textContent?.trim() === "Slack channels",
+  )!;
+  assert.equal(channels.querySelector(".persona-item .hint")?.textContent?.trim(), orgNote);
+});
+
+test("Share on a list row and on the page open the same search on the page, with no dialog", async () => {
   const { main } = await mountPage();
   button(main, "Share", "Ada").click();
   await settle();
-  const dialog = document.querySelector<HTMLDialogElement>("dialog.persona-share-dialog")!;
-  const input = dialog.querySelector<HTMLInputElement>('input[aria-label="Add people or Slack channels"]')!;
-  input.value = "b";
-  input.dispatchEvent(new window.Event("input"));
-  input.closest("form")!.dispatchEvent(new window.Event("submit", { cancelable: true }));
+  assert.equal(document.querySelector("dialog"), null);
+  const input = main.querySelector<HTMLInputElement>("#persona-grantee-search")!;
+  assert.equal(document.activeElement, input);
+  assert.equal(input.closest(".persona-section")?.querySelector("h3")?.textContent, "Who has access");
+
+  main.querySelector<HTMLButtonElement>('.persona-grantee-picker button[aria-label="Close"]')!.click();
+  assert.equal(main.querySelector("#persona-grantee-search"), null);
+  button(main.querySelector(".persona-detail-actions")!, "Share").click();
   await settle();
-  assert.deepEqual(
-    [...dialog.querySelectorAll(".project-member-result .project-member-name")].map((n) => n.textContent?.trim()),
-    ["Bo Person", "eng-launch"],
-  );
-  [...dialog.querySelectorAll<HTMLButtonElement>(".project-member-result")].at(-1)!.click();
-  assert.deepEqual(
-    [...dialog.querySelectorAll(".permission-row .permission-person-label")].map((l) => l.textContent?.trim()),
-    ["You", "design", "#eng-launch"],
-  );
+  assert.equal(document.activeElement, main.querySelector("#persona-grantee-search"));
 });
 
 test("the conversation shows its persona, and clearing it unsets the session's persona", async () => {

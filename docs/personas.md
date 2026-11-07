@@ -88,8 +88,14 @@ add control for people whose role allows it:
   chat wearing the persona with a request started.
 - **Crons**: "New cron" opens a chat wearing the persona; a cron made there runs as it.
 - **Credentials** (owner): attach one of your own credentials or detach one.
-- **Slack channels** (owner): "Add channel" opens the share dialog, whose one search covers
-  people and channels you are in; a channel can only be given read.
+- **Slack channels** (owner): "Add channel" searches the channels you are in, in place; a
+  channel can only be given read.
+- **Who has access**: each person, team or org grant with its role. Owners add people or
+  everyone in the org ("Add people", or Share on the page or the Personas list opens the same
+  search), and change or remove a role from its row; each change saves at once. The last owner's
+  row can't be demoted or removed. Others see who the owners are. A grantee the `personas` flag
+  doesn't reach (the person, or the whole org for org, team and channel grants) is marked, with
+  where an admin turns it on.
 - **History**: loads on first open, 20 versions at a time with "Show older" for the rest,
   each saying who saved it and when. Opening one shows it as it was. Writers can roll back to
   any of them; a rollback is saved as a new version, so nothing is lost.
@@ -103,7 +109,8 @@ access are never copied.
 
 ## API
 
-`GET|POST /v1/personas`, `GET|PATCH|DELETE /v1/personas/:id`,
+`GET|POST /v1/personas`, `GET|PATCH|DELETE /v1/personas/:id` (each access entry carries
+`personasEnabled`, whether the flag reaches that grantee),
 `PUT /v1/personas/:id/access`, `POST /v1/personas/:id/credentials`,
 `DELETE /v1/personas/:id/credentials/:grantId`, `GET /v1/personas/:id/versions` (newest first, 20 a page by default,
 `?before=&limit=`; who and when, with content only on `&full=1`),
