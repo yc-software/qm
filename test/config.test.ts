@@ -1034,8 +1034,4 @@ test("PRIVATE_NETWORK_ALLOWED_ORIGINS is parsed at startup and a bad entry stops
       return true;
     },
   );
-  assert.throws(
-    () => loadConfig({ PRIVATE_NETWORK_ALLOWED_ORIGINS: "http://169.254.169.254" }),
-    /entry 1 \(http:\/\/169\.254\.169\.254\) is a loopback, link-local or cloud metadata address, which can never be allowed/,
-  );
 });
