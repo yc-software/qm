@@ -40,3 +40,23 @@ link-bound token, so a rebuilt URL will not work.
   granted to this conversation) and this conversation wakes with the new credential's handle.
   Select that handle in `execute.credentials` to get the declared env vars.
 - If the link expires or they used the wrong account, mint a fresh one.
+
+## A memory brain's client secret
+
+When an org admin registers a memory brain (`PUT /v1/admin/memory-registry/brains/<id>`), its
+client secret never goes through chat or the agent. Mint a brain link instead, on the admin's
+own turn:
+
+```sh
+curl -fsS -X POST "$AGENT_API_URL/v1/keychain/drops" \
+  -H "x-agent-capability: $AGENT_API_TOKEN" -H 'content-type: application/json' \
+  -d '{"memoryBrain":"acme-personal","purpose":"connect the Acme personal memory brain"}'
+```
+
+- Only `memoryBrain` and `purpose`: no `service`, `fields`, `envKey` or `onBehalfOf`.
+- The form shows the admin where memory goes (the brain and who is bound to it) before they submit.
+- The secret goes straight to QM's memory registry. It never enters a keychain, can't be granted
+  and is never on the agent's computer, so there is no handle to select and nothing wakes this
+  conversation. Ask the admin to tell you when they've submitted, then check
+  `GET /v1/admin/memory-registry` for `hasClientSecret`.
+- If the brain's URL changed after the link was made, the link refuses; mint a fresh one.

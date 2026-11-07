@@ -307,6 +307,20 @@ export function deleteBinding(record: MemoryRegistry, id: string): MemoryRegistr
   return { ...record, bindings: record.bindings.filter((binding) => binding.id !== id) };
 }
 
+export function setBrainSecret(
+  record: MemoryRegistry,
+  target: Pick<RegistryBrain, "id" | "url">,
+  clientSecret: string,
+  change: RegistryChange,
+): MemoryRegistry {
+  const brain = record.brains.find((entry) => entry.id === target.id);
+  if (!brain || brain.url !== target.url)
+    throw conflict(
+      `brain ${target.id} changed after this link was made, so the secret wasn't saved; ask for a fresh link`,
+    );
+  return putBrain(record, target.id, { clientSecret }, change);
+}
+
 export function redactBrain({ auth, ...rest }: RegistryBrain) {
   return { ...rest, auth: { clientId: auth.clientId, hasClientSecret: !!auth.clientSecretEnc } };
 }
