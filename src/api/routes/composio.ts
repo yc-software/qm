@@ -204,10 +204,13 @@ export async function request(
   return (await response.json()) as Record<string, unknown>;
 }
 
-function nullIfNotFound(key: string): (error: unknown) => null {
+function nullIfNotFound(key: string, lookup: string): (error: unknown) => null {
   return (error) => {
     if (!(error instanceof ComposioHttpError) || error.status !== 404) throw error;
-    swallow("composio: lookup not found", new Error(createExactSecretValueMasker([key])(redactSecrets(error.message))));
+    swallow(
+      `composio: ${lookup} not found`,
+      new Error(createExactSecretValueMasker([key])(redactSecrets(error.message))),
+    );
     return null;
   };
 }
@@ -364,7 +367,7 @@ export async function activeOwnedAccount(
   access: { key: string; principal: string },
   accountId: string,
 ): Promise<{ account: Record<string, unknown>; toolkit: string } | null> {
-  const owned = await ownedAccount(ctx, access, accountId).catch(nullIfNotFound(access.key));
+  const owned = await ownedAccount(ctx, access, accountId).catch(nullIfNotFound(access.key, `account ${accountId}`));
   return owned && owned.account.status === "ACTIVE" && owned.account.is_disabled !== true ? owned : null;
 }
 
@@ -536,7 +539,7 @@ async function execute(ctx: ApiCtx): Promise<void> {
       ctx,
       access.key,
       `/tools/${body.tool}?${new URLSearchParams({ toolkit_versions: body.version })}`,
-    ).catch(nullIfNotFound(access.key));
+    ).catch(nullIfNotFound(access.key, `tool ${resource}`));
     if (!tool)
       return sendJson(ctx.res, 404, {
         error: "tool_not_found",

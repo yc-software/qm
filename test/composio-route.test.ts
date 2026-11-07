@@ -666,7 +666,7 @@ test("unknown tools and connections are caller errors that are answered without 
   assert.equal(unknownTool.status, 404);
   assert.equal(unknownTool.data.error, "tool_not_found");
   assert.equal(f.calls.length, 2);
-  assert.match(warned.join("\n"), /http 404.*Tool_ToolNotFound/);
+  assert.match(warned.join("\n"), /tool ca_alice\/GMAIL_AUTH_TEST@20260901_00 not found.*http 404.*Tool_ToolNotFound/);
 
   const g = fixture();
   await g.own();
