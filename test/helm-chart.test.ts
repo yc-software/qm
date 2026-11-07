@@ -292,6 +292,7 @@ test("Helm gives core its shutdown drain plus 30 s before the kubelet kills it",
     120,
   );
   assert.equal(grace({ env: { SHUTDOWN_DRAIN_MS: 0 } }), 30);
+  assert.equal(grace({ env: { SHUTDOWN_DRAIN_MS: null } }), 60);
   assert.equal(grace({ env: { SHUTDOWN_DRAIN_MS: "9e4" } }), 120);
   assert.equal(
     grace({ env: { SHUTDOWN_DRAIN_MS: "90000" }, services: { core: { env: { SHUTDOWN_DRAIN_MS: "" } } } }),

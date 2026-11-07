@@ -47,7 +47,7 @@ spec:
       {{- if eq $name "core" }}
       {{- $drainMs := "" }}
       {{- range list ($root.Values.env | default dict) ($svc.env | default dict) }}
-      {{- if hasKey . "SHUTDOWN_DRAIN_MS" }}{{ $drainMs = toString (index . "SHUTDOWN_DRAIN_MS") | trim }}{{ end }}
+      {{- if hasKey . "SHUTDOWN_DRAIN_MS" }}{{ $v := index . "SHUTDOWN_DRAIN_MS" }}{{ $drainMs = ternary "" (toString $v) (kindIs "invalid" $v) | trim }}{{ end }}
       {{- end }}
       terminationGracePeriodSeconds: {{ add 30 (ceil (maxf 0 (divf (float64 ($drainMs | default "30000")) 1000))) }}
       {{- end }}
