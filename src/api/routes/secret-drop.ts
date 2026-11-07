@@ -20,7 +20,14 @@ import { canonicalPerson, samePerson } from "../../directory/person.ts";
 import { escapeHtml } from "../../../plugins/chassis/src/http.ts";
 import { sendJson } from "../http.ts";
 import type { ApiCtx, Route } from "./route.ts";
-import { adminStanding, audit, orgScope, resolveCapabilityDestination, verifiedConversationSpeaker } from "./shared.ts";
+import {
+  adminStanding,
+  audit,
+  orgScope,
+  personalCapability,
+  resolveCapabilityDestination,
+  verifiedConversationSpeaker,
+} from "./shared.ts";
 import { reportFailureAs, swallow } from "../../util/errors.ts";
 
 const TRIGGERED = "secret-drop links can only be minted on a turn a person sent — this turn was fired by a trigger";
@@ -199,8 +206,12 @@ ${inputs}
   );
 }
 
-async function brainTarget(ctx: ApiCtx, b: Record<string, unknown>): Promise<SecretDropRecord["memoryBrain"] | null> {
-  const { res, deps, capability } = ctx;
+async function brainTarget(
+  ctx: ApiCtx,
+  b: Record<string, unknown>,
+  actorId: string,
+): Promise<SecretDropRecord["memoryBrain"] | null> {
+  const { res, deps } = ctx;
   if (!deps.memoryRegistry) {
     sendJson(res, 404, { error: "not_found" });
     return null;
@@ -214,7 +225,7 @@ async function brainTarget(ctx: ApiCtx, b: Record<string, unknown>): Promise<Sec
     return null;
   }
   const record = readRegistry((await deps.memoryRegistry.current()).record);
-  const actor = canonicalPerson(capability!.actorId);
+  const actor = canonicalPerson(actorId);
   const brain = record.brains.find(({ id }) => id === b.memoryBrain);
   const refusal = brainRefusal(record, brain ?? { id: String(b.memoryBrain) }, actor, await adminStanding(deps, actor));
   if (refusal) {
@@ -296,7 +307,8 @@ async function saveBrainSecret(
 }
 
 async function mintDrop(ctx: ApiCtx): Promise<void> {
-  const { res, deps, body, capability, secret } = ctx;
+  const { res, deps, body, secret } = ctx;
+  const capability = personalCapability(ctx);
   if (!deps.keychain || !deps.secretDrops) return sendJson(res, 404, { error: "not_found" });
   if (!capability)
     return sendJson(res, 401, {
@@ -317,7 +329,7 @@ async function mintDrop(ctx: ApiCtx): Promise<void> {
     onBehalfOf?: unknown;
     memoryBrain?: unknown;
   };
-  const brain = b.memoryBrain === undefined ? undefined : await brainTarget(ctx, b);
+  const brain = b.memoryBrain === undefined ? undefined : await brainTarget(ctx, b, capability.actorId);
   if (brain === null) return;
   const service = brain ? `memory brain ${brain.id}` : b.service;
   if (typeof service !== "string" || !service.trim() || typeof b.purpose !== "string" || !b.purpose.trim()) {
@@ -520,7 +532,7 @@ async function redeemDrop(ctx: ApiCtx): Promise<void> {
 }
 
 export const secretDropRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "POST", path: "/v1/keychain/drops", actor: "system", auth: "either", handle: mintDrop },
+  { method: "POST", path: "/v1/keychain/drops", browser: true, actor: "person", auth: "either", handle: mintDrop },
   { method: "GET", path: "/v1/keychain/drops/:id/form", auth: "source", handle: dropForm },
   { method: "POST", path: "/v1/keychain/drops/:id", actor: "system", auth: "source", handle: redeemDrop },
 ];

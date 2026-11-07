@@ -45,6 +45,17 @@ test("Sprites proxy transition URLs are optional and parsed independently of the
   ]);
 });
 
+test("core posts analytics events only when ANALYTICS_EVENTS_URL is set", () => {
+  assert.equal(loadConfig({}).productAnalytics, undefined);
+  assert.deepEqual(
+    loadConfig({ ANALYTICS_EVENTS_URL: "http://analytics.internal/events", ANALYTICS_EVENTS_TOKEN: "t" })
+      .productAnalytics,
+    { url: "http://analytics.internal/events", token: "t" },
+  );
+  assert.throws(() => loadConfig({ ANALYTICS_EVENTS_URL: "ftp://x" }), /ANALYTICS_EVENTS_URL/);
+  assert.throws(() => loadConfig({ ANALYTICS_EVENTS_URL: "https://u:p@x.test/" }), /ANALYTICS_EVENTS_URL/);
+});
+
 test("capability compression is explicitly enabled after verifier rollout", () => {
   assert.equal(loadConfig({}).capabilityTokenCompression, false);
   assert.equal(loadConfig({ CAPABILITY_TOKEN_COMPRESSION: "0" }).capabilityTokenCompression, false);

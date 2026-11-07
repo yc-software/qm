@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { executesOnApprove } from "../core/orchestrator/approvals.ts";
 import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
 import type {
   PendingApproval,
@@ -167,6 +168,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
       ...(r.grantModes ? { grantModes: r.grantModes } : {}),
       blocksInput: r.blocksInput !== false,
       ...(r.kind === "approval" ? { kind: r.kind } : {}),
+      ...executesOnApprove(r),
     }));
   }
 
@@ -754,6 +756,17 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     }
     for (const signal of await deps.signals.takePending(runId)) {
       if (signal.kind === "abort" || signal.kind === "client_result") continue;
+      if (signal.request?.approval) {
+        let replayRunId: string | undefined;
+        try {
+          const { redeliveryKey: _redeliveryKey, clientTools: _clientTools, ...decision } = signal.request;
+          replayRunId = (await app.turn({ ...decision, async: true })).runId;
+        } catch (err) {
+          swallow(`signals: approval-decision replay for run ${runId}`, err);
+        }
+        drained.push({ signal, ...(replayRunId ? { replayRunId } : {}) });
+        continue;
+      }
       let replayRunId: string | undefined;
       let replayOutcomeKnown = true;
       if (signal.request) {

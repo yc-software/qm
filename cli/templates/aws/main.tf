@@ -8,6 +8,7 @@ locals {
   ingress = merge(
     { for name, paths in local.public_path_services : name => { service = name, port = var.services[name].internal_port, paths = paths, hosts = [], priority = 1 + index(sort(keys(local.public_path_services)), name) } },
     { core-public = { service = "core", port = var.services["core"].public_port, paths = ["/*"], hosts = [], priority = 50000 } },
+    length(var.core_public_hosts) > 0 ? { core = { service = "core", port = var.services["core"].internal_port, paths = [], hosts = sort(tolist(var.core_public_hosts)), priority = 1000 } } : {},
   )
   service_ingress         = { for name in keys(var.services) : name => { for key, route in local.ingress : key => route if route.service == name } }
   egress_proxy            = { for name, service in var.services : name => service if name == "egress-proxy" }

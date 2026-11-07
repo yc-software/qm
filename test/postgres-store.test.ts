@@ -3,6 +3,7 @@ import { test, before } from "node:test";
 import { randomUUID } from "node:crypto";
 import assert from "node:assert/strict";
 import { PARALLEL_EXCEPTION_QUERY } from "../src/deployment/postdeploy-smoke.ts";
+import { createPostgresUserStore } from "../src/identity/user-store.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { rowToSession } from "../src/sessions/session-rows.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
@@ -1266,61 +1267,6 @@ test("no plpgsql exception handler is marked parallel-safe anywhere in the schem
   }
 });
 
-test("pg attributedTurns: covering join credits only user entries, per principal/session/day", { skip }, async () => {
-  const s = createPostgresSessionStore(URL!);
-  const scope = scopeId("channel", "uet");
-  const a = await s.getOrCreateByThread("uetA", "channel", scope);
-  const b = await s.getOrCreateByThread("uetB", "channel", scope);
-  await s.addParticipant(a.id, "UET1");
-  await s.addParticipant(b.id, "UET1");
-  const writer = { sessionId: a.id };
-  const u0 = await s.append(writer, { kind: "UserMessage", text: "1" });
-  await s.append(writer, { kind: "AgentMessage", text: "ack" });
-  const u1 = await s.append(writer, { kind: "UserMessage", text: "2" });
-
-  const rows = await s.attributedTurns();
-  const forA = rows.filter((r) => r.sessionId === a.id);
-  assert.equal(forA.length, 1, "one (principal, session, day) bucket");
-  assert.equal(forA[0]!.principalId, "UET1");
-  assert.equal(forA[0]!.turns, 2, "only the two user entries; assistant excluded");
-  assert.equal(forA[0]!.firstAt, u0.createdAt);
-  assert.equal(forA[0]!.lastAt, u1.createdAt);
-  assert.equal(forA[0]!.day, Math.floor(u0.createdAt / 86_400_000));
-  assert.equal(
-    rows.some((r) => r.sessionId === b.id),
-    false,
-    "a session with no user entries yields no rows",
-  );
-});
-
-test("pg attributedTurns credits current participants with the session's user turns", { skip }, async () => {
-  const s = createPostgresSessionStore(URL!);
-  const scope = scopeId("channel", "cov");
-  const sess = await s.getOrCreateByThread("covA", "channel", scope);
-  await s.addParticipant(sess.id, "COV1");
-  const writer = { sessionId: sess.id };
-  const early = await s.append(writer, { kind: "UserMessage", text: "early" });
-  await s.addParticipant(sess.id, "COV2");
-  await s.addParticipant(sess.id, "COV3");
-  const late = await s.append(writer, { kind: "UserMessage", text: "late" });
-  await s.removeParticipant(sess.id, "COV3");
-
-  const rows = (await s.attributedTurns()).filter((r) => r.sessionId === sess.id);
-  for (const principalId of ["COV1", "COV2"]) {
-    const mine = rows.filter((r) => r.principalId === principalId);
-    assert.equal(
-      mine.reduce((n, r) => n + r.turns, 0),
-      2,
-    );
-    assert.equal(mine[0]!.firstAt, early.createdAt);
-    assert.equal(mine[0]!.lastAt, late.createdAt);
-  }
-  assert.equal(
-    rows.some((r) => r.principalId === "COV3"),
-    false,
-  );
-});
-
 test(
   "pg overheard catch-up entries are excluded from turns/preview/retention (jsonb payload filter)",
   { skip },
@@ -1350,13 +1296,6 @@ test(
     assert.equal(row.messages, 4, "messages still counts every durable entry");
     assert.equal(row.firstMessage, "the real question", "overheard is not the first message");
     assert.equal(row.lastMessage, "the real question", "overheard is not the last message");
-
-    const attributed = (await s.attributedTurns()).filter((t) => t.sessionId === a.id);
-    assert.equal(
-      attributed.reduce((n, t) => n + t.turns, 0),
-      1,
-      "retention counts only the real user turn",
-    );
   },
 );
 
@@ -1381,12 +1320,8 @@ test("pg null-byte payloads: stripped on write and counted alongside raw items",
   } finally {
     await raw.end();
   }
-  const attributed = (await s.attributedTurns()).filter((t) => t.sessionId === a.id);
-  assert.equal(
-    attributed.reduce((n, t) => n + t.turns, 0),
-    2,
-    "both user turns counted",
-  );
+  const activity = (await createPostgresUserStore(URL!).activity()).find((r) => r.principalId === "NUL1");
+  assert.equal(activity?.turns, 2, "both user turns counted");
   const lease2 = { sessionId: a.id };
   await s.append(lease2, { kind: "UserMessage", text: "z" });
   const row = (await s.scopeSessionSummaries(scope, false, { limit: 500 })).find((r) => r.id === a.id)!;

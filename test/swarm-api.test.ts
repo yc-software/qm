@@ -125,26 +125,13 @@ test("authenticated swarm API binds agent operations to the token and human oper
     const path = `/v1/sessions/${fixture.root.id}/swarm`;
     assert.equal((await fetch(`${base}${path}`, { headers })).status, 403);
     const portal = await mintPortalIdentity({ p: "alice", exp: Date.now() + 60_000 }, portalIdentitySecret);
-    const body = JSON.stringify({
-      action: "send",
-      requestId: "human",
-      audience: "all",
-      text: "Review",
+    const inspected = await fetch(`${base}${path}`, {
+      headers: signedRequestHeaders(secret, "GET", path, "", { "x-portal-identity": portal }),
     });
-    const human = await fetch(`${base}${path}`, {
-      method: "POST",
-      headers: signedRequestHeaders(secret, "POST", path, body, {
-        "x-portal-identity": portal,
-        "content-type": "application/json",
-      }),
-      body,
-    });
-    assert.equal(human.status, 202);
-    const humanData = (await human.json()) as { message: { author: string; actorId: string } };
-    assert.equal(humanData.message.author, "human");
-    assert.equal(humanData.message.actorId, "alice");
-    const unsigned = await fetch(`${base}${path}`, { headers: signedRequestHeaders(secret, "GET", path) });
-    assert.equal(unsigned.status, 403);
+    assert.equal(inspected.status, 200);
+    assert.equal(((await inspected.json()) as { peers: unknown[] }).peers.length, 3);
+    const anonymous = await fetch(`${base}${path}`, { headers: signedRequestHeaders(secret, "GET", path) });
+    assert.equal(anonymous.status, 401);
     const bodyWithoutIdentity = JSON.stringify({ ...spawn, requestId: "forged-human" });
     assert.equal(
       (

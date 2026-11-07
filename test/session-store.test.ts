@@ -19,35 +19,6 @@ test("sessionOrigin classifies trigger threads by prefix", () => {
   assert.equal(sessionOrigin(undefined), "conversation");
 });
 
-test("attributedTurns credits current participants and excludes overheard", async () => {
-  const store = createPostgresSessionStore(testDatabaseUrl());
-  const scope = scopeId("channel", "C1");
-  const s = await store.getOrCreateByThread("ch:C1:t1", "channel", scope);
-  await store.addParticipant(s.id, "U1");
-  const writer = { sessionId: s.id };
-  const early = await store.append(writer, { kind: "UserMessage", text: "early, U1 only" });
-  await store.addParticipant(s.id, "U2");
-  await store.append(writer, { kind: "UserMessage", text: "chatter", body: { overheard: true } });
-  await store.append(writer, { kind: "UserMessage", text: "both here" });
-  await store.removeParticipant(s.id, "U2");
-  const late = await store.append(writer, { kind: "UserMessage", text: "U1 only again" });
-
-  const rows = await store.attributedTurns();
-  const u1 = rows.filter((r) => r.principalId === "U1" && r.sessionId === s.id);
-  assert.equal(
-    u1.reduce((n, r) => n + r.turns, 0),
-    3,
-    "U1 gets all three real turns; overheard excluded",
-  );
-  assert.equal(u1[0]!.firstAt, early.createdAt);
-  assert.equal(u1[0]!.lastAt, late.createdAt);
-  assert.equal(
-    rows.some((r) => r.principalId === "U2" && r.sessionId === s.id),
-    false,
-    "a removed participant is credited with nothing",
-  );
-});
-
 test("scopeHasSessions + listByScope answer scope questions directly", async () => {
   const store = createPostgresSessionStore(testDatabaseUrl());
   const scope = scopeId("channel", "scoped");
@@ -163,13 +134,6 @@ test(`overheard catch-up entries are NOT counted as turns or as the first/last m
   assert.equal(row.firstMessage, "the real question", "the overheard row is not the first message");
   assert.equal(row.lastMessage, "the real question", "the overheard row is not the last message");
   assert.equal(row.messages, 4, "messages still counts every durable entry, overheard included");
-
-  const attributed = (await store.attributedTurns()).filter((t) => t.sessionId === s.id);
-  assert.equal(
-    attributed.reduce((n, t) => n + t.turns, 0),
-    1,
-    "retention/usage counts only the real user turn",
-  );
 });
 
 test(`scopeSessionSummaries paginates newest-activity-first`, async () => {
@@ -423,33 +387,6 @@ test(`listLlmRequests filters by turnSeq in the store (no load-all-then-filter)`
   assert.ok(
     meta.every((r) => r.model === "claude-x"),
     "metadata retained",
-  );
-});
-
-test(`attributedTurns credits only user entries, per session/day`, async () => {
-  const store = createPostgresSessionStore(testDatabaseUrl());
-  const scope = scopeId("personal", "U1");
-  const a = await store.getOrCreateByThread("t1", "dm", scope);
-  const b = await store.getOrCreateByThread("t2", "dm", scope);
-  await store.addParticipant(a.id, "U1");
-  await store.addParticipant(b.id, "U1");
-  const writer = { sessionId: a.id };
-  const u0 = await store.append(writer, { kind: "UserMessage", text: "1" });
-  await store.append(writer, { kind: "AgentMessage", text: "ack" });
-  const u1 = await store.append(writer, { kind: "UserMessage", text: "2" });
-
-  const rows = await store.attributedTurns();
-  const forA = rows.filter((r) => r.sessionId === a.id);
-  assert.equal(forA.length, 1, "one (principal, session, day) bucket");
-  assert.equal(forA[0]!.principalId, "U1");
-  assert.equal(forA[0]!.turns, 2, "only the two user entries; assistant excluded");
-  assert.equal(forA[0]!.firstAt, u0.createdAt);
-  assert.equal(forA[0]!.lastAt, u1.createdAt);
-  assert.equal(forA[0]!.day, Math.floor(u0.createdAt / 86_400_000));
-  assert.equal(
-    rows.some((r) => r.sessionId === b.id),
-    false,
-    "a session with no user entries yields no rows",
   );
 });
 

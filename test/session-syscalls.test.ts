@@ -1390,7 +1390,7 @@ test("a child stopped on its own mails its partial output and wakes its top-leve
     const r = await rig();
     const { parent, run } = await stoppedChildRun(r, "found 2 of 3 call sites so far", {
       status: "ok",
-      reply: "(stopped)",
+      reply: "",
       stopped: true,
       ...(stopScope ? { stopScope } : {}),
     });
@@ -2002,6 +2002,24 @@ test("writes revalidate access even while a target is running", async () => {
   }).forTurn({ session: r.room, scopeId: scope, request: { actor, conversation } });
   assert.equal((await api.write({ target: child.id, text: "hello" })).ok, false);
   assert.deepEqual(await r.signals.takePending(run!.id), []);
+});
+
+test("a refused helper start names who was refused where", async () => {
+  const r = await rig();
+  const api = createSessionSyscalls({
+    mailbox: r.mailbox,
+    sessions: r.sessions,
+    runs: r.runs,
+    signals: r.signals,
+    steerRun: r.steerRun,
+    advisoryLock: r.advisoryLock,
+    maxAttempts: 3,
+    authorize: async () => false,
+  }).forTurn({ session: r.room, scopeId: scope, request: { actor, conversation } });
+  const opened = await api.open({ task: "work" });
+  assert.equal(opened.ok, false);
+  const message = opened.ok ? "" : opened.message;
+  assert.ok(message.includes(actor.id) && message.includes(scope), message);
 });
 
 test("completion cannot expand the finished run's audience and retries after its return delay", async (t) => {
