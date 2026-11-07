@@ -330,7 +330,7 @@ async function cronRuns(ctx: ApiCtx): Promise<void> {
   }
   const cron = await gateSourceCron(ctx, id);
   if (!cron) return;
-  if (limit !== undefined && (!Number.isInteger(limit) || limit < 1)) {
+  if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1)) {
     return sendJson(res, 400, { error: "bad_request", message: "limit must be a positive integer" });
   }
   const { runs, total } = await app.listCronFires(id, limit !== undefined ? { limit } : {});
@@ -457,7 +457,7 @@ export const cronRoutes: ReadonlyArray<Route<ApiCtx>> = [
     { method: "POST", path: "/v1/crons/:id/disable", auth: "either", handle: disableCron },
     { method: "POST", path: "/v1/crons/:id/destination", auth: "either", handle: retargetCron },
     { method: "POST", path: "/v1/crons/:id/run", auth: "either", handle: runCronNow },
-    { method: "GET", path: "/v1/crons/:id/runs", auth: "either", handle: cronRuns },
+    { method: "GET", path: "/v1/crons/:id/runs", browser: true, auth: "either", handle: cronRuns },
     {
       match: (m, p) =>
         p.startsWith("/v1/crons/") &&

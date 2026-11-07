@@ -21,6 +21,7 @@ export const API_ALIASES: ReadonlyMap<string, string> = new Map([
   ["GET /api/sessions/:id/background", "/v1/sessions/:id/background"],
   ["GET /api/sessions/:id/background/:pid/output", "/v1/sessions/:id/background/:pid/output"],
   ["GET /api/sessions/:id/items/:seq", "/v1/sessions/:id/items/:seq"],
+  ["GET /api/sessions/:id", "/v1/sessions/:id"],
   ["GET /api/search", "/v1/sessions/search"],
   ["GET /api/resources/search", "/v1/resources/search"],
   ["GET /api/contexts", "/v1/contexts"],
@@ -40,6 +41,7 @@ export const API_ALIASES: ReadonlyMap<string, string> = new Map([
   ["GET /api/directory/channels", "/v1/directory/channels"],
   ["GET /api/ui-state", "/v1/ui-state"],
   ["GET /api/custom-emoji", "/v1/custom-emoji"],
+  ["GET /api/crons/:id/runs", "/v1/crons/:id/runs"],
 ]);
 
 const aliasMatchers = [...API_ALIASES].map(([key, target]) => {

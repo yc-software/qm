@@ -55,9 +55,9 @@ test("each aliased /api path resolves to the browser-enabled /v1 route that serv
   assert.equal(apiAlias("GET", "/api/sessions/a%2Fb/children"), "/v1/sessions/a%2Fb/children");
   for (const [method, path] of [
     ["POST", "/api/sessions"],
-    ["GET", "/api/crons/1/runs"],
+    ["GET", "/api/inbox"],
+    ["GET", "/api/loops/1/items"],
     ["GET", "/api/files/1/content"],
-    ["GET", "/api/sessions/1"],
     ["GET", "/v1/sessions"],
   ] as const)
     assert.equal(apiAlias(method, path), null, `${method} ${path}`);
@@ -73,8 +73,10 @@ test("each aliased path answers a cookie-only browser exactly as its /v1 route d
     assert.ok(viaAlias.status < 500 && ![401, 403].includes(viaAlias.status), `${path} answered ${viaAlias.status}`);
     assert.equal(viaAlias.status, direct.status, path);
     assert.deepEqual(await viaAlias.json(), await direct.json(), path);
-    const other = await fetch(`${base}${concrete(path)}?${query}&principalId=bob&viewer=bob`, { headers: { cookie } });
-    assert.equal(other.status, 403, `${path} let alice name bob`);
+    const actor = findRoute(apiRoutes, "GET", concrete(target))?.route.actor ?? "";
+    const field = actor.startsWith("query.") ? actor.slice("query.".length) : "principalId";
+    const other = await fetch(`${base}${concrete(path)}?${query}&${field}=bob`, { headers: { cookie } });
+    assert.equal(other.status, 403, `${path} let alice name bob as ${field}`);
     const anonymous = await fetch(`${base}${concrete(path)}?${query}`);
     assert.equal(anonymous.status, 401, `${path} answered without a cookie`);
   }

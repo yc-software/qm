@@ -1596,7 +1596,7 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
       handle: getSessionBackgroundOutput,
     },
     { method: "GET", path: "/v1/sessions/:id/items/:seq", browser: true, auth: "source", handle: getSessionItem },
-    { method: "GET", path: "/v1/sessions/:id", auth: "source", handle: getSession },
+    { method: "GET", path: "/v1/sessions/:id", browser: true, auth: "source", handle: getSession },
     { method: "GET", path: "/v1/files/:id/content", auth: "either", handle: getFileContent },
     { method: "GET", path: "/v1/files", browser: true, auth: "either", handle: listFiles },
   ]),
