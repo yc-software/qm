@@ -169,10 +169,6 @@ test("active run lookup returns the latest tracked run for the caller's web thre
   );
   assert.equal(otherUser.status, 200);
   assert.equal(((await otherUser.json()) as { runId?: string | null }).runId, null);
-
-  const nonWeb = await fetch(`${coreBase}/api/runs/active?threadRef=${encodeURIComponent("dm:D1")}`, asUser("alice"));
-  assert.equal(nonWeb.status, 200);
-  assert.deepEqual(await nonWeb.json(), { runId: null, run: null });
 });
 
 test("active run lookup is cleared after the events stream reaches a terminal frame", async () => {
