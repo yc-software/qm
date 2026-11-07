@@ -209,6 +209,7 @@ export const directoryRoutes: ReadonlyArray<Route<ApiCtx>> = [
   {
     method: "GET",
     path: "/v1/directory/channels/:channelId/members/:principalId",
+    actor: "system",
     auth: "source",
     handle: channelMembership,
   },

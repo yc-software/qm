@@ -136,10 +136,9 @@ async function listWebhooks(ctx: ApiCtx): Promise<void> {
   const { res, app, deps, capability, actor, url } = ctx;
   const all = await app.listWebhooks();
   const viewer = capability?.actorId ?? actor?.p ?? url.searchParams.get("viewer");
-  const isViewer = viewer ? await app.personMatcher(viewer) : undefined;
-  const allowed = viewer
-    ? await Promise.all(all.map((webhook) => canAdministerWebhook(app, webhook, viewer, isViewer)))
-    : all.map(() => true);
+  if (!viewer) return sendJson(res, 400, { error: "bad_request", message: "viewer required" });
+  const isViewer = await app.personMatcher(viewer);
+  const allowed = await Promise.all(all.map((webhook) => canAdministerWebhook(app, webhook, viewer, isViewer)));
   const visible = all.filter((_webhook, index) => allowed[index]);
   return sendJson(res, 200, {
     webhooks: visible.map((webhook) => ({ ...redactWebhook(webhook), url: inboundUrl(deps.publicUrl, webhook.id) })),
@@ -162,7 +161,8 @@ async function setWebhookEnabled(ctx: ApiCtx, enabled: boolean): Promise<void> {
   const webhook = await app.getWebhook(id);
   if (!webhook) return sendJson(res, 404, { error: "not_found" });
   const principalId = capability?.actorId ?? actor?.p ?? url.searchParams.get("principalId");
-  if (principalId && !(await canAdministerWebhook(app, webhook, principalId))) {
+  if (!principalId) return sendJson(res, 404, { error: "not_found" });
+  if (!(await canAdministerWebhook(app, webhook, principalId))) {
     const portalCaller = Boolean(capability || actor);
     return sendJson(res, portalCaller ? 403 : 404, {
       error: portalCaller ? "forbidden" : "not_found",

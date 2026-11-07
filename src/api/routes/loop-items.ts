@@ -612,8 +612,8 @@ function serializeItemAction(handler: (ctx: ApiCtx) => Promise<void>): (ctx: Api
 
 export const loopItemRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/loops/inbox/sent-chat", auth: "source", handle: ensureSentChat },
-  { method: "GET", path: "/v1/loops/:id/items/:itemId/image", auth: "source", handle: serveItemImage },
   ...withActor("query.principalId", [
+    { method: "GET", path: "/v1/loops/:id/items/:itemId/image", auth: "source", handle: serveItemImage },
     { method: "GET", path: "/v1/loops/inbox", auth: "either", handle: getInboxLoop },
     { method: "POST", path: "/v1/loops/inbox/sync-cron", auth: "source", handle: ensureInboxSyncCron },
     { method: "GET", path: "/v1/loops/:id/items", auth: "either", handle: listItems },

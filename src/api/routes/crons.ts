@@ -244,7 +244,7 @@ async function listCrons(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 200, { crons, visible });
   }
   const viewer = url.searchParams.get("viewer");
-  if (!viewer) return sendJson(res, 200, { crons: await app.listCrons() });
+  if (!viewer) return sendJson(res, 400, { error: "bad_request", message: "viewer required" });
   const { owned, visible } = await app.listCronsForViewer(viewer);
   const decorate = async (cron: Cron) => ({
     ...cron,

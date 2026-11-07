@@ -384,6 +384,8 @@ async function handleApproval(ctx: ApiCtx): Promise<void> {
   const b = (body ?? {}) as { principalId?: unknown; decision?: unknown };
   if (!deps.keychainApprovals || typeof b.principalId !== "string" || !b.principalId)
     return sendJson(res, 404, { error: "not_found" });
+  if (ctx.actor?.imp)
+    return sendJson(res, 403, { error: "forbidden", message: "Sign in as yourself to decide on credential use." });
   try {
     if (b.decision !== "once" && b.decision !== "standing" && b.decision !== "deny")
       return sendJson(res, 400, {

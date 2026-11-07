@@ -31,6 +31,7 @@ import { createIdempotencyStore, type IdempotencyRecord } from "../src/idempoten
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
+import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { fakeSprites } from "./support/auto-fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -688,11 +689,11 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
     };
     assert.deepEqual(await inline("U_ALICE"), [`keychain:${ask.id}`], "the owner sees the card inline in the session");
     const path = `/v1/keychain/approvals/${ask.id}`;
-    const signed = (principalId: string) => {
-      const body = JSON.stringify({ principalId, decision: "standing" });
+    const signed = (principalId: string, identity: Record<string, string> = {}, decision = "standing") => {
+      const body = JSON.stringify({ principalId, decision });
       return fetch(`${base}${path}`, {
         method: "POST",
-        headers: signedRequestHeaders(SECRET, "POST", path, body),
+        headers: { ...signedRequestHeaders(SECRET, "POST", path, body), ...identity },
         body,
       });
     };
@@ -701,6 +702,9 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
       200,
     );
     assert.equal((await signed("U_BOB")).status, 403);
+    const impersonation = await mintSignedPayload({ p: "U_ALICE", imp: "U_BOB", exp: Date.now() + 60_000 }, SECRET);
+    const impersonated = await signed("U_ALICE", { "x-portal-identity": impersonation }, "once");
+    assert.equal(impersonated.status, 403, "an admin impersonating the owner cannot decide for them");
     const res = await signed("U_ALICE");
     assert.equal(res.status, 200);
     const view = (await res.json()) as any;

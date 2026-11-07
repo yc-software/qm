@@ -16,11 +16,12 @@ export const suggestedActivityRoutes: Route[] = [
     path: "/v1/suggested-activities",
     actor: "body.principalId",
     auth: "source",
-    handle: async ({ res, deps, body }) => {
+    handle: async ({ res, deps, body, actor }) => {
       if (!deps.suggestedActivities) return sendJson(res, 404, { error: "not_found" });
       if (!isObj(body) || typeof body.principalId !== "string" || !body.principalId || body.principalId.length > 200) {
         return sendJson(res, 400, { error: "bad_request" });
       }
+      if (actor && actor.p !== body.principalId) return sendJson(res, 403, { error: "forbidden" });
       let seeds;
       try {
         seeds = parseSuggestedActivities(JSON.stringify(body.seeds ?? []));
@@ -50,7 +51,7 @@ export const suggestedActivityRoutes: Route[] = [
     path: "/v1/suggested-activities/dismiss",
     actor: "body.principalId",
     auth: "source",
-    handle: async ({ res, deps, body }) => {
+    handle: async ({ res, deps, body, actor }) => {
       if (!deps.suggestedActivities) return sendJson(res, 404, { error: "not_found" });
       if (
         !isObj(body) ||
@@ -62,6 +63,7 @@ export const suggestedActivityRoutes: Route[] = [
       ) {
         return sendJson(res, 400, { error: "bad_request" });
       }
+      if (actor && actor.p !== body.principalId) return sendJson(res, 403, { error: "forbidden" });
       if (!(await deps.suggestedActivities.dismiss(body.principalId, body.id))) {
         return sendJson(res, 404, { error: "not_found" });
       }

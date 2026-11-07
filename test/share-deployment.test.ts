@@ -155,7 +155,7 @@ function callDetail(app: ReturnType<typeof createApp>, capability: CapabilityCla
   return getDeployment(ctx).then(() => out);
 }
 
-test("manage endpoints (rename/display-name/archive): agent capability is owner-scoped, source auth is trusted", async () => {
+test("manage endpoints (rename/display-name/archive): agent capability is owner-scoped, no principal is refused", async () => {
   const { app, deploy } = apiHarness();
   const d = await app.deploy({
     ownerScopeId: scopeId("personal", "U1"),
@@ -178,7 +178,8 @@ test("manage endpoints (rename/display-name/archive): agent capability is owner-
   );
   assert.equal((await callManage(renameDeployment, app, cap("U1"), d.id, { name: "renamed" })).status, 200);
 
-  assert.equal((await callManage(archiveDeployment, app, null, d.id, {})).status, 200);
+  assert.equal((await callManage(archiveDeployment, app, null, d.id, {})).status, 403);
+  assert.equal((await callManage(archiveDeployment, app, cap("U1"), d.id, {})).status, 200);
   assert.equal((await deploy.reachDeployment("renamed", "U1")).status, "not_found");
 });
 
