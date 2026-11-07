@@ -103,6 +103,7 @@ test("finalizer reads authoritative state and returns the same signed receipt fo
   assert.equal(receipt.payload.jobId, job.id);
   assert.equal(receipt.payload.planDigest, job.planDigest);
   assert.equal(receipt.payload.artifactDigest, job.artifactDigest);
+  assert.deepEqual(receipt.payload.evaluator, job.policy.evaluator);
   assert.equal(receipt.payload.provisionalRevision, job.provisionalRevision);
   const replay = await finalizer.finalize({ scopeId: job.scopeId, jobId: job.id, idempotencyKey });
   assert.deepEqual(replay, receipt);

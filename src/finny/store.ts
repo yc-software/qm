@@ -10,6 +10,7 @@ import type {
   FinnyJob,
   FinnyJobEvent,
   FinnyFindingPolicy,
+  FinnyEvaluatorRef,
   FinnyFinalReceipt,
   FinnyFinalReceiptPayload,
   FinnyPlanPresentation,
@@ -136,6 +137,14 @@ export interface FinnyEventResult<T extends FinnyJobEvent = FinnyJobEvent> {
   deduped: boolean;
 }
 
+export interface RecordFinnyEvaluatorCorrectionInput {
+  scopeId: string;
+  jobId: string;
+  fromEvaluator: FinnyEvaluatorRef;
+  toEvaluator: FinnyEvaluatorRef;
+  idempotencyKey: string;
+}
+
 export interface FinalizeFinnyInput {
   scopeId: string;
   jobId: string;
@@ -165,6 +174,7 @@ export interface FinnyStore {
   recordArtifactReady(input: RecordFinnyArtifactReadyInput): Promise<FinnyEventResult<FinnyJobEvent<"artifact_ready">>>;
   recordAuditPassed(input: RecordFinnyAuditPassedInput): Promise<FinnyEventResult<FinnyJobEvent<"audit_passed">>>;
   recordAuditBlock(input: RecordFinnyAuditBlockInput): Promise<FinnyEventResult>;
+  recordEvaluatorCorrection(input: RecordFinnyEvaluatorCorrectionInput): Promise<FinnyEventResult>;
   listEvents(scopeId: string, jobId: string, afterSequence?: number): Promise<FinnyJobEvent[]>;
   finalize(input: FinalizeFinnyInput, sign: FinnyReceiptSigner): Promise<FinnyFinalReceipt>;
 }

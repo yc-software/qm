@@ -3,12 +3,40 @@ import {
   FINNY_CHECK_IDS,
   type FinnyChangeKind,
   type FinnyCheckId,
+  type FinnyEvaluatorRef,
   type FinnyPolicySnapshot,
 } from "./types.ts";
 
 export { FINNY_CHANGE_KINDS, FINNY_CHECK_IDS } from "./types.ts";
 
 export const FINNY_POLICY_VERSION = "finny-r5.1";
+
+export const FINNY_DETERMINISTIC_CHECK_IDS = [
+  "formula.recalculate",
+  "summary.crossfoot",
+  "artifact.structure",
+] as const satisfies readonly FinnyCheckId[];
+
+export const FINNY_INITIAL_EVALUATOR: FinnyEvaluatorRef = {
+  id: "finny-spreadsheet-evaluator",
+  revision: "r5.1",
+  buildDigest: "builtin:finny-r5.1",
+  contractVersion: "finny.deterministic.v1",
+  configurationDigest: "builtin:finny-r5.1",
+};
+
+export function assertFinnyEvaluatorRef(evaluator: FinnyEvaluatorRef): void {
+  if (!evaluator || typeof evaluator !== "object") throw new Error("Finny evaluator authority is invalid");
+  for (const value of [
+    evaluator.id,
+    evaluator.revision,
+    evaluator.buildDigest,
+    evaluator.contractVersion,
+    evaluator.configurationDigest,
+  ]) {
+    if (typeof value !== "string" || !value.trim()) throw new Error("Finny evaluator authority is invalid");
+  }
+}
 
 const invalidatedChecks: Record<FinnyChangeKind, readonly FinnyCheckId[]> = {
   source_or_logic: FINNY_CHECK_IDS,
@@ -43,6 +71,7 @@ const checkIds = new Set<string>(FINNY_CHECK_IDS);
 const changeKinds = new Set<string>(FINNY_CHANGE_KINDS);
 
 export function assertFinnyPolicy(policy: FinnyPolicySnapshot): void {
+  assertFinnyEvaluatorRef(policy.evaluator);
   if (policy.policyVersion !== FINNY_POLICY_VERSION) throw new Error("Finny policy version is invalid");
   const entries = Object.entries(policy.requiredGenerations);
   if (entries.length !== FINNY_CHECK_IDS.length) throw new Error("Finny policy check set is invalid");
@@ -53,9 +82,11 @@ export function assertFinnyPolicy(policy: FinnyPolicySnapshot): void {
   }
 }
 
-export function initialFinnyPolicy(): FinnyPolicySnapshot {
+export function initialFinnyPolicy(evaluator: FinnyEvaluatorRef = FINNY_INITIAL_EVALUATOR): FinnyPolicySnapshot {
+  assertFinnyEvaluatorRef(evaluator);
   return {
     policyVersion: FINNY_POLICY_VERSION,
+    evaluator: { ...evaluator },
     requiredGenerations: Object.fromEntries(FINNY_CHECK_IDS.map((checkId) => [checkId, 1])) as Record<
       FinnyCheckId,
       number
@@ -77,10 +108,30 @@ export function reviseFinnyPolicy(
   }
   return {
     policyVersion: FINNY_POLICY_VERSION,
+    evaluator: { ...current.evaluator },
     requiredGenerations: Object.fromEntries(
       FINNY_CHECK_IDS.map((checkId) => [
         checkId,
         current.requiredGenerations[checkId] + (invalidated.has(checkId) ? 1 : 0),
+      ]),
+    ) as Record<FinnyCheckId, number>,
+  };
+}
+
+export function activateFinnyEvaluator(
+  current: FinnyPolicySnapshot,
+  evaluator: FinnyEvaluatorRef,
+): FinnyPolicySnapshot {
+  assertFinnyPolicy(current);
+  assertFinnyEvaluatorRef(evaluator);
+  const deterministic = new Set<FinnyCheckId>(FINNY_DETERMINISTIC_CHECK_IDS);
+  return {
+    policyVersion: FINNY_POLICY_VERSION,
+    evaluator: { ...evaluator },
+    requiredGenerations: Object.fromEntries(
+      FINNY_CHECK_IDS.map((checkId) => [
+        checkId,
+        current.requiredGenerations[checkId] + (deterministic.has(checkId) ? 1 : 0),
       ]),
     ) as Record<FinnyCheckId, number>,
   };

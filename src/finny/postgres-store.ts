@@ -9,7 +9,13 @@ import {
   validateFinnyMaterialClarification,
   validateFinnyPlanPresentation,
 } from "./plan.ts";
-import { assertFinnyPolicy, reviseFinnyPolicy } from "./policy.ts";
+import {
+  FINNY_DETERMINISTIC_CHECK_IDS,
+  activateFinnyEvaluator,
+  assertFinnyEvaluatorRef,
+  assertFinnyPolicy,
+  reviseFinnyPolicy,
+} from "./policy.ts";
 import type {
   ClaimFinnyWorkerRunInput,
   CreateFinnyApprovalRequestInput,
@@ -23,6 +29,7 @@ import type {
   RecordFinnyClarificationDecisionInput,
   RecordFinnyArtifactReadyInput,
   RecordFinnyAuditBlockInput,
+  RecordFinnyEvaluatorCorrectionInput,
   RecordFinnyAuditPassedInput,
   RecordFinnyAttestationInput,
 } from "./store.ts";
@@ -30,6 +37,7 @@ import type {
   FinnyAttestation,
   FinnyCheckId,
   FinnyClarificationRequest,
+  FinnyEvaluatorRef,
   FinnyFinalReceipt,
   FinnyFinalReceiptPayload,
   FinnyJob,
@@ -188,6 +196,22 @@ const APPROVAL_READINESS_REPAIR_SCHEMA = [
       END`,
 ];
 
+const EVALUATOR_AUTHORITY_SCHEMA = [
+  `ALTER TABLE finny_jobs ADD COLUMN IF NOT EXISTS evaluator_ref JSONB`,
+  `UPDATE finny_jobs SET evaluator_ref=jsonb_build_object(
+     'id','legacy-unpinned','revision','legacy-unpinned','buildDigest','legacy-unpinned',
+     'contractVersion','legacy-unpinned','configurationDigest','legacy-unpinned'
+   ) WHERE evaluator_ref IS NULL`,
+  `ALTER TABLE finny_jobs ALTER COLUMN evaluator_ref SET NOT NULL`,
+  `ALTER TABLE finny_jobs ADD CONSTRAINT finny_jobs_evaluator_ref_object
+     CHECK (jsonb_typeof(evaluator_ref) = 'object')`,
+  `ALTER TABLE finny_job_events DROP CONSTRAINT IF EXISTS finny_job_events_event_type_check`,
+  `ALTER TABLE finny_job_events ADD CONSTRAINT finny_job_events_event_type_check CHECK (event_type IN (
+     'artifact_ready','audit_blocked','audit_passed','rework_requested','escalated',
+     'evaluator_revision_activated','evidence_invalidated','rework_cancelled','verification_reopened'
+   ))`,
+];
+
 function rowToClarification(row: Record<string, unknown>): FinnyClarificationRequest {
   return {
     requestId: row.request_id as string,
@@ -217,6 +241,7 @@ function validateClarification(input: CreateFinnyClarificationRequestInput): voi
 function rowToJob(row: Record<string, unknown>): FinnyJob {
   const policy: FinnyPolicySnapshot = {
     policyVersion: row.policy_version as string,
+    evaluator: row.evaluator_ref as FinnyEvaluatorRef,
     requiredGenerations: row.required_generations as Record<FinnyCheckId, number>,
   };
   const decidedAt = row.approval_decided_at;
@@ -423,6 +448,7 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
     { id: "finny/store/0004-clarifications", statements: CLARIFICATION_SCHEMA },
     { id: "finny/store/0005-approval-readiness", statements: APPROVAL_READINESS_SCHEMA },
     { id: "finny/store/0006-approval-readiness-repair", statements: APPROVAL_READINESS_REPAIR_SCHEMA },
+    { id: "finny/store/0007-evaluator-authority", statements: EVALUATOR_AUTHORITY_SCHEMA },
   ]);
   return {
     async createJob(input: CreateFinnyJobInput) {
@@ -433,9 +459,9 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
       const now = Date.now();
       const rows = await q(
         `INSERT INTO finny_jobs(
-          id, scope_id, plan_presentation, plan_digest, policy_version, required_generations,
+          id, scope_id, plan_presentation, plan_digest, policy_version, evaluator_ref, required_generations,
           finding_policy, origin_thread_ref, created_at, updated_at
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9)
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10)
         RETURNING *`,
         [
           input.id,
@@ -443,6 +469,7 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
           JSON.stringify(plan),
           planDigest,
           input.policy.policyVersion,
+          JSON.stringify(input.policy.evaluator),
           JSON.stringify(input.policy.requiredGenerations),
           JSON.stringify(input.findingPolicy),
           input.originThreadRef,
@@ -697,6 +724,7 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
         if (job.unresolved_escalation_seq !== null) throw new Error("Finny job has an unresolved escalation");
         const policy: FinnyPolicySnapshot = {
           policyVersion: job.policy_version as string,
+          evaluator: job.evaluator_ref as FinnyEvaluatorRef,
           requiredGenerations: job.required_generations as Record<FinnyCheckId, number>,
         };
         assertFinnyPolicy(policy);
@@ -790,6 +818,7 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
         }
         const currentPolicy: FinnyPolicySnapshot = {
           policyVersion: row.policy_version as string,
+          evaluator: row.evaluator_ref as FinnyEvaluatorRef,
           requiredGenerations: row.required_generations as Record<FinnyCheckId, number>,
         };
         const nextPolicy =
@@ -852,6 +881,7 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
         if (row.pending_rework_seq !== null) throw new Error("Finny job is awaiting a reworked artifact");
         const policy: FinnyPolicySnapshot = {
           policyVersion: row.policy_version as string,
+          evaluator: row.evaluator_ref as FinnyEvaluatorRef,
           requiredGenerations: row.required_generations as Record<FinnyCheckId, number>,
         };
         assertCurrentAuditEvent(policy, input.checkId, input.generation);
@@ -914,6 +944,7 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
         if (row.pending_rework_seq !== null) throw new Error("Finny job is awaiting a reworked artifact");
         const policy: FinnyPolicySnapshot = {
           policyVersion: row.policy_version as string,
+          evaluator: row.evaluator_ref as FinnyEvaluatorRef,
           requiredGenerations: row.required_generations as Record<FinnyCheckId, number>,
         };
         assertCurrentAuditEvent(policy, input.checkId, input.generation);
@@ -967,6 +998,142 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
         return { events: [blocked, escalated], job: rowToJob(updated.rows[0]), deduped: false };
       });
     },
+    async recordEvaluatorCorrection(input: RecordFinnyEvaluatorCorrectionInput) {
+      return withPgTransaction(await pool(), async (db) => {
+        const row = await lockedJob(db, input.scopeId, input.jobId);
+        assertNonEmpty(input.idempotencyKey, "event idempotency key");
+        assertFinnyEvaluatorRef(input.fromEvaluator);
+        assertFinnyEvaluatorRef(input.toEvaluator);
+        if (sameValue(input.fromEvaluator, input.toEvaluator)) {
+          throw new Error("Finny evaluator correction must activate a new evaluator");
+        }
+
+        const existing = await eventsForIdempotency(db, input.idempotencyKey);
+        assertEventReplayJob(existing, input.jobId);
+        if (existing.length) {
+          const activated = existing[0];
+          const reopened = existing.at(-1);
+          if (
+            (existing.length !== 3 && existing.length !== 4) ||
+            activated?.type !== "evaluator_revision_activated" ||
+            !sameValue(activated.payload, { fromEvaluator: input.fromEvaluator, toEvaluator: input.toEvaluator }) ||
+            existing[1]?.type !== "evidence_invalidated" ||
+            (existing.length === 4 && existing[2]?.type !== "rework_cancelled") ||
+            reopened?.type !== "verification_reopened" ||
+            !sameValue(reopened.payload.evaluator, input.toEvaluator)
+          ) {
+            throw new Error("Finny event idempotency key was reused");
+          }
+          return { events: existing, job: rowToJob(row), deduped: true };
+        }
+
+        if (row.finalized_at !== null) throw new Error("Finny job is already finalized");
+        if (row.unresolved_escalation_seq !== null) throw new Error("Finny job has an unresolved escalation");
+        if (!row.artifact_digest || !row.provisional_revision) {
+          throw new Error("Finny evaluator correction requires a bound artifact");
+        }
+        if (!sameValue(row.evaluator_ref, input.fromEvaluator)) {
+          throw new Error("Finny evaluator correction does not match the current evaluator");
+        }
+
+        const policy: FinnyPolicySnapshot = {
+          policyVersion: row.policy_version as string,
+          evaluator: row.evaluator_ref as FinnyEvaluatorRef,
+          requiredGenerations: row.required_generations as Record<FinnyCheckId, number>,
+        };
+        assertFinnyPolicy(policy);
+        const revised = activateFinnyEvaluator(policy, input.toEvaluator);
+
+        let cancelled: { reworkEventSequence: number; blockedEventSequence: number; checkId: FinnyCheckId } | undefined;
+        if (row.pending_rework_seq !== null) {
+          const transitionResult = await db.query("SELECT * FROM finny_job_events WHERE job_id=$1 AND seq=$2", [
+            input.jobId,
+            row.pending_rework_seq,
+          ]);
+          const transition = transitionResult.rows[0] ? rowToEvent(transitionResult.rows[0]) : undefined;
+          if (transition?.type !== "rework_requested") {
+            throw new Error("Finny pending rework is unrelated to evaluator correction");
+          }
+          const blockedResult = await db.query("SELECT * FROM finny_job_events WHERE job_id=$1 AND seq=$2", [
+            input.jobId,
+            transition.payload.blockedEventSequence,
+          ]);
+          const blocked = blockedResult.rows[0] ? rowToEvent(blockedResult.rows[0]) : undefined;
+          if (
+            blocked?.type !== "audit_blocked" ||
+            blocked.payload.artifactDigest !== row.artifact_digest ||
+            !FINNY_DETERMINISTIC_CHECK_IDS.includes(
+              blocked.payload.checkId as (typeof FINNY_DETERMINISTIC_CHECK_IDS)[number],
+            )
+          ) {
+            throw new Error("Finny pending rework is non-deterministic or unrelated to evaluator correction");
+          }
+          cancelled = {
+            reworkEventSequence: transition.seq,
+            blockedEventSequence: blocked.seq,
+            checkId: blocked.payload.checkId,
+          };
+        }
+
+        const now = Date.now();
+        const events: FinnyJobEvent[] = [];
+        events.push(
+          await insertEvent(
+            db,
+            input.jobId,
+            "evaluator_revision_activated",
+            { fromEvaluator: input.fromEvaluator, toEvaluator: input.toEvaluator },
+            input.idempotencyKey,
+            events.length,
+            now,
+          ),
+        );
+        events.push(
+          await insertEvent(
+            db,
+            input.jobId,
+            "evidence_invalidated",
+            {
+              fromEvaluator: input.fromEvaluator,
+              toEvaluator: input.toEvaluator,
+              checkIds: [...FINNY_DETERMINISTIC_CHECK_IDS],
+              previousRequiredGenerations: policy.requiredGenerations,
+              requiredGenerations: revised.requiredGenerations,
+            },
+            input.idempotencyKey,
+            events.length,
+            now,
+          ),
+        );
+        if (cancelled) {
+          events.push(
+            await insertEvent(db, input.jobId, "rework_cancelled", cancelled, input.idempotencyKey, events.length, now),
+          );
+        }
+        events.push(
+          await insertEvent(
+            db,
+            input.jobId,
+            "verification_reopened",
+            {
+              evaluator: input.toEvaluator,
+              previousRequiredGenerations: policy.requiredGenerations,
+              requiredGenerations: revised.requiredGenerations,
+            },
+            input.idempotencyKey,
+            events.length,
+            now,
+          ),
+        );
+        const eventHead = events.at(-1)!.seq;
+        const updated = await db.query(
+          `UPDATE finny_jobs SET evaluator_ref=$2, required_generations=$3,
+             pending_rework_seq=NULL, event_head=$4, updated_at=$5 WHERE id=$1 RETURNING *`,
+          [input.jobId, JSON.stringify(revised.evaluator), JSON.stringify(revised.requiredGenerations), eventHead, now],
+        );
+        return { events, job: rowToJob(updated.rows[0]), deduped: false };
+      });
+    },
     async listEvents(scopeId, jobId, afterSequence = 0) {
       const jobs = await q("SELECT id FROM finny_jobs WHERE id=$1 AND scope_id=$2", [jobId, scopeId]);
       if (!jobs[0]) throw new Error("Finny job was not found in this scope");
@@ -1006,6 +1173,7 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
         }
         const policy: FinnyPolicySnapshot = {
           policyVersion: row.policy_version as string,
+          evaluator: row.evaluator_ref as FinnyEvaluatorRef,
           requiredGenerations: row.required_generations as Record<FinnyCheckId, number>,
         };
         assertFinnyPolicy(policy);
@@ -1041,6 +1209,7 @@ export function createPostgresFinnyStore(connectionString: string): FinnyStore {
           planDigest: row.plan_digest as string,
           artifactDigest: row.artifact_digest as string,
           policyVersion: policy.policyVersion,
+          evaluator: policy.evaluator,
           requiredGenerations: policy.requiredGenerations,
           ledgerHead: observedHead,
           approvalRequestId: row.approval_request_id as string,

@@ -6,6 +6,8 @@ import {
   FINNY_POLICY_VERSION,
   initialFinnyPolicy,
   blockedCheckChangeKinds,
+  FINNY_DETERMINISTIC_CHECK_IDS,
+  activateFinnyEvaluator,
   reviseFinnyPolicy,
 } from "../src/finny/policy.ts";
 import type { FinnyChangeKind, FinnyPolicySnapshot } from "../src/finny/types.ts";
@@ -33,6 +35,7 @@ function changedChecks(before: FinnyPolicySnapshot, after: FinnyPolicySnapshot):
 test("initial policy requires every check at generation one", () => {
   const policy = initialFinnyPolicy();
   assert.equal(policy.policyVersion, FINNY_POLICY_VERSION);
+  assert.ok(policy.evaluator.id);
   assert.deepEqual(Object.keys(policy.requiredGenerations), [...FINNY_CHECK_IDS]);
   assert.deepEqual(
     Object.values(policy.requiredGenerations),
@@ -89,4 +92,20 @@ test("blocked check invalidation is selected by Core", () => {
   assert.deepEqual(blockedCheckChangeKinds("artifact.structure"), ["presentation"]);
   assert.deepEqual(blockedCheckChangeKinds("lineage.binding"), ["lineage"]);
   assert.deepEqual(blockedCheckChangeKinds("source.completeness"), ["source_or_logic"]);
+});
+
+test("evaluator activation advances only Core deterministic generations", () => {
+  const before = initialFinnyPolicy();
+  const evaluator = { ...before.evaluator, revision: "next", buildDigest: "sha256:next" };
+  const after = activateFinnyEvaluator(before, evaluator);
+  assert.deepEqual(after.evaluator, evaluator);
+  assert.deepEqual(changedChecks(before, after), [...FINNY_DETERMINISTIC_CHECK_IDS]);
+});
+
+test("policy requires a complete evaluator authority", () => {
+  const policy = initialFinnyPolicy();
+  assert.throws(
+    () => reviseFinnyPolicy({ ...policy, evaluator: { ...policy.evaluator, revision: "" } }, ["lineage"]),
+    /evaluator authority/i,
+  );
 });

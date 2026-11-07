@@ -25,6 +25,7 @@ export type FinnyChangeKind = (typeof FINNY_CHANGE_KINDS)[number];
 
 export interface FinnyPolicySnapshot {
   policyVersion: string;
+  evaluator: FinnyEvaluatorRef;
   requiredGenerations: Record<FinnyCheckId, number>;
 }
 
@@ -88,6 +89,7 @@ export interface FinnyFinalReceiptPayload {
   planDigest: string;
   artifactDigest: string;
   policyVersion: string;
+  evaluator: FinnyEvaluatorRef;
   requiredGenerations: Record<FinnyCheckId, number>;
   ledgerHead: number;
   approvalRequestId: string;
@@ -130,6 +132,10 @@ export const FINNY_JOB_EVENT_TYPES = [
   "audit_passed",
   "rework_requested",
   "escalated",
+  "evaluator_revision_activated",
+  "evidence_invalidated",
+  "rework_cancelled",
+  "verification_reopened",
 ] as const;
 
 export type FinnyJobEventType = (typeof FINNY_JOB_EVENT_TYPES)[number];
@@ -177,6 +183,27 @@ export interface FinnyJobEventPayloads {
   escalated: {
     blockedEventSequence: number;
     reason: string;
+  };
+  evaluator_revision_activated: {
+    fromEvaluator: FinnyEvaluatorRef;
+    toEvaluator: FinnyEvaluatorRef;
+  };
+  evidence_invalidated: {
+    fromEvaluator: FinnyEvaluatorRef;
+    toEvaluator: FinnyEvaluatorRef;
+    checkIds: FinnyCheckId[];
+    previousRequiredGenerations: Record<FinnyCheckId, number>;
+    requiredGenerations: Record<FinnyCheckId, number>;
+  };
+  rework_cancelled: {
+    reworkEventSequence: number;
+    blockedEventSequence: number;
+    checkId: FinnyCheckId;
+  };
+  verification_reopened: {
+    evaluator: FinnyEvaluatorRef;
+    previousRequiredGenerations: Record<FinnyCheckId, number>;
+    requiredGenerations: Record<FinnyCheckId, number>;
   };
 }
 
