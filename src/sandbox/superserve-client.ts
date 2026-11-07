@@ -61,8 +61,8 @@ export interface SuperserveCreateOptions {
 }
 
 export class SuperserveSandboxGoneError extends Error {
-  constructor(sandboxId: string, detail: string) {
-    super(`superserve sandbox ${sandboxId} is gone: ${detail}`);
+  constructor(sandboxId: string, detail: string, options?: ErrorOptions) {
+    super(`superserve sandbox ${sandboxId} is gone: ${detail}`, options);
     this.name = "SuperserveSandboxGoneError";
   }
 }
@@ -119,7 +119,7 @@ export function createSdkSuperserveClient(opts: SdkSuperserveClientOptions): Sup
   type SdkSandbox = Awaited<ReturnType<Sdk["Sandbox"]["create"]>>;
 
   const gone = (id: string, err: unknown): never => {
-    throw new SuperserveSandboxGoneError(id, errMessage(err));
+    throw new SuperserveSandboxGoneError(id, errMessage(err), { cause: err });
   };
 
   const wrap = (sbx: SdkSandbox): SuperserveSession => ({

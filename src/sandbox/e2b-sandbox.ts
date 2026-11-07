@@ -235,7 +235,9 @@ export function createE2bSandbox(opts: E2bSandboxOptions): Sandbox {
       } catch (e) {
         reportError("sandbox_hydrate", "hydrate_failed", errMessage(e), scope);
         sessionByName.delete(name);
-        await client.kill(session.sandboxId).catch(() => undefined);
+        await client.kill(session.sandboxId).catch((err: unknown) => {
+          reportError("sandbox_hydrate", "orphan_kill_failed", errMessage(err), scope);
+        });
         throw new Error(`e2b provision: home hydration failed (${errMessage(e)}); not risking the stored snapshot`, {
           cause: e,
         });
