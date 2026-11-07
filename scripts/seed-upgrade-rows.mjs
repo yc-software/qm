@@ -40,18 +40,19 @@ for (const [table, cols] of tables) {
 }
 
 const seeded = [];
+const unsupported = new Map();
 let failures = new Map();
-for (let pass = 0; pending.length && pass < 6; pass++) {
+for (let progressed = true; pending.length && progressed;) {
   const next = [];
   failures = new Map();
   for (const [table, cols] of pending) {
     const chosen = cols.filter((c) => c.is_generated !== "ALWAYS" && c.is_identity !== "YES" && !c.column_default);
     const values = chosen.map((c) => value(c));
-    const unsupported = chosen.filter((c, i) => values[i] === null);
-    if (unsupported.length) {
-      failures.set(
+    const missing = chosen.filter((c, i) => values[i] === null);
+    if (missing.length) {
+      unsupported.set(
         table,
-        `no synthetic value for ${unsupported.map((c) => `${c.column_name} (${c.udt_name})`).join(", ")}`,
+        `no synthetic value for ${missing.map((c) => `${c.column_name} (${c.udt_name})`).join(", ")}`,
       );
       continue;
     }
@@ -67,6 +68,7 @@ for (let pass = 0; pending.length && pass < 6; pass++) {
       next.push([table, cols]);
     }
   }
+  progressed = next.length < pending.length;
   pending = next;
 }
 
@@ -83,6 +85,7 @@ for (const [kind, names] of Object.entries(filled))
   console.log(
     `[upgrade-check] ${names.length} ${kind} columns left to Postgres${names.length ? `: ${names.join(", ")}` : ""}`,
   );
+for (const [table, reason] of unsupported) failures.set(table, reason);
 const preexisting = tables.size - seeded.length - failures.size;
 console.log(
   `[upgrade-check] ${tables.size} tables: ${seeded.length} seeded, ${preexisting} already had rows, ${failures.size} left empty`,
