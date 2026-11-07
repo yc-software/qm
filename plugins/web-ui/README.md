@@ -294,30 +294,34 @@ In web chat, an assistant reply can include `::connect-apps{}` as a standalone p
 
 ## Optional product analytics
 
-Set `POSTHOG_API_KEY` to a PostHog project ingestion token to enable browser
-analytics. `POSTHOG_HOST` defaults to `https://us.i.posthog.com` and must be an
-HTTPS origin. The authenticated `/me` response supplies this public configuration;
-the portal serves the same web application, so it needs no separate SDK.
+QM ships no analytics vendor. A deployment plugs its own in through two hooks.
 
-Events are explicit pageviews by navigation view, accepted `message_sent` events,
-and `session_started` for the first user message in a chat. Company grouping uses
-`CORE_ORG_ID`; user identities combine company and authenticated principal. Browser
-analytics is disabled during impersonation. Autocapture, exception capture,
-performance capture and feature flags are disabled. Event properties exclude chat
-content, URLs, query strings, titles and referrers. Delivery is best effort.
+Browser: set `WEB_UI_ANALYTICS` on the web UI to a JSON object:
 
-Session replay follows the PostHog project's own settings: recording runs only when
-the project enables it, and masking comes from the project's privacy and masking
-settings, so both are managed in PostHog rather than in deployment config. Console
-logs and network headers and bodies are never recorded, feature flags stay off, the
-recorder is bundled rather than loaded from PostHog's CDN, and the event property
-filter still applies; replay snapshots keep their payload. On PostHog Cloud the
-regional assets host that serves project remote config is allowed in the content
-security policy.
+- `module` (required): a same-origin path or HTTPS URL of an ES module the
+  deployment serves. It must export `createAnalytics({ org, user, options })`,
+  returning (or resolving to) an object with optional `page(view)`,
+  `track(event, { insertId })` and `stop()` methods.
+- `connect` (optional): HTTPS origins the module needs to reach; they are added to
+  `connect-src`. A cross-origin `module` URL's origin is added to `script-src`.
+- `options` (optional): any JSON, passed to `createAnalytics` unchanged.
 
-Set the same variables on core to capture `app_published` after a successful new
-application or version deployment. Publications use the application's creator and
-company, matching browser identity. No key means no analytics requests.
+The authenticated `/me` response supplies this configuration. The web UI loads the
+module after sign-in and never during impersonation, stops the previous instance on
+sign-out or identity change, and isolates module errors. It reports navigation views
+through `page`, and accepted `message_sent` events and `session_started` for the
+first user message in a chat through `track`, with stable insert IDs for
+deduplication. It passes no chat content, URLs, titles or referrers; anything else a
+module collects, such as session replay, and how it masks it, is the deployment's
+choice.
+
+Server: set `ANALYTICS_EVENTS_URL` on core to an HTTP or HTTPS endpoint, and
+optionally `ANALYTICS_EVENTS_TOKEN` (delivered as a secret) to send it as a bearer
+token. Core then POSTs JSON events
+`{ event, timestamp, company, principal, insert_id, properties }`, best effort with a
+two-second timeout. `app_published` follows a successful new application or version
+deployment, using the application's creator and company. Without a URL, core sends
+nothing.
 
 Core also captures `response_completed` and `response_failed` when a human turn
 reaches its final run state, including when a separate worker executes it.
