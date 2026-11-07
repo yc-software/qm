@@ -9,7 +9,6 @@ import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createServer, createInsecureTestServer } from "../src/api/server.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
-import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
 import { scopeId } from "../src/types.ts";
 import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
@@ -136,7 +135,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
     for (const path of [
       "/v1/memory?principalId=",
       "/v1/spend?principalId=",
-      "/v1/contexts/policy?scope=channel:C1&principalId=",
+      "/v1/contexts/channel%3AC1/ambient-policy?principalId=",
       "/v1/sessions/s1/background?viewer=",
       "/v1/shared-sessions/token?viewer=",
       "/v1/shared-sessions/token/files/file?viewer=",
@@ -306,7 +305,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
           headers: aliceHeaders,
         })
       ).status,
-      403,
+      404,
     );
 
     const deployment = {
@@ -399,7 +398,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
     }
     const bodyRoutes: [string, string, Record<string, unknown>][] = [
       ["PUT", "/v1/ui-state", { key: "sidebar", value: 1 }],
-      ["PUT", "/v1/contexts/policy", { scope: "channel:C1", orders: "" }],
+      ["PUT", "/v1/contexts/channel%3AC1/ambient-policy", { orders: "" }],
       ["PATCH", "/v1/projects/p1", { name: "renamed" }],
       ["PUT", "/v1/projects/p1/slack-channel", { channel: "C1" }],
       ["DELETE", "/v1/projects/p1/slack-channel", {}],
@@ -506,17 +505,6 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
       (await fetch(`${base}/v1/admin/whoami`, { headers: { "x-admin-actor": "U1@default-org" } })).status,
       401,
     );
-  });
-
-  it("POST /v1/session-cap mints a REAL capability token for the portal-verified user", async () => {
-    const r = await post("/v1/session-cap", {}, { "x-portal-identity": await token("U1") });
-    assert.equal(r.status, 200);
-    const body = (await r.json()) as { token: unknown };
-    assert.equal(typeof body.token, "string", "token must be the minted string, not a serialized Promise");
-    assert.ok((body.token as string).length > 0);
-    const claims = await verifyCapabilityToken(body.token as string, CAP);
-    assert.equal(claims?.actorId, "U1");
-    assert.equal(claims?.scopeId, "personal:U1");
   });
 });
 

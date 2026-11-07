@@ -24,7 +24,7 @@ const core = createServer((req: IncomingMessage, res) => {
     res,
     200,
     { "content-type": "application/json" },
-    (req.url ?? "").startsWith("/v1/composio/slack") ? relayedPayload : "{}",
+    (req.url ?? "").startsWith("/v1/loops") ? relayedPayload : JSON.stringify({ enabled: true }),
   );
 });
 await new Promise<void>((r) => core.listen(0, r));
@@ -32,6 +32,7 @@ await new Promise<void>((r) => core.listen(0, r));
 process.env.CORE_API_URL = `http://localhost:${(core.address() as AddressInfo).port}`;
 process.env.CORE_SIGNING_SECRET = SECRET;
 process.env.WEB_UI_PRINCIPALS = "alice";
+process.env.LOOPS_USERS = "alice";
 
 const assetName = "compression-fixture-Aa1Bb2Cc.js";
 const assetBody = `export const filler = ${JSON.stringify("x".repeat(50)).repeat(200)};\n`;
@@ -75,7 +76,7 @@ function get(path: string, headers: Record<string, string>): Promise<RawResponse
 }
 
 test("a relayed core read is gzipped for a gzip-capable client and decodes to the identical bytes", async () => {
-  const packed = await get("/api/composio/slack", { ...identityHeaders(), "accept-encoding": "gzip" });
+  const packed = await get("/api/loops", { ...identityHeaders(), "accept-encoding": "gzip" });
   assert.equal(packed.status, 200);
   assert.equal(packed.headers["content-encoding"], "gzip");
   assert.equal(packed.headers["vary"], "accept-encoding");
@@ -84,7 +85,7 @@ test("a relayed core read is gzipped for a gzip-capable client and decodes to th
 });
 
 test("a relayed core read is byte-identical and uncompressed without accept-encoding", async () => {
-  const plain = await get("/api/composio/slack", identityHeaders());
+  const plain = await get("/api/loops", identityHeaders());
   assert.equal(plain.headers["content-encoding"], undefined);
   assert.equal(plain.body.toString("utf8"), relayedPayload);
 });

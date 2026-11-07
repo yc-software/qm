@@ -4,6 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { ServerResponse } from "node:http";
 import { composioRoutes, composioUserId } from "../src/api/routes/composio.ts";
+import { composioAuthorizeRoutes } from "../src/api/routes/composio-authorize.ts";
 import { composioCallbackRoutes } from "../src/api/routes/composio-callback.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import type { ServerDeps } from "../src/api/deps.ts";
@@ -91,7 +92,9 @@ function fixture() {
       capability,
       actor: actor ? { p: actor, exp: Date.now() + 60_000, ...(impersonating ? { imp: "admin" } : {}) } : null,
     } as ApiCtx;
-    const route = [...composioRoutes, ...composioCallbackRoutes].find((r) => "path" in r && r.path === url.pathname)!;
+    const route = [...composioRoutes, ...composioAuthorizeRoutes, ...composioCallbackRoutes].find(
+      (r) => "path" in r && r.path === url.pathname,
+    )!;
     await route.handle(ctx);
     return { status, data: text ? JSON.parse(text) : null, text, location, headers };
   }
@@ -118,10 +121,14 @@ function fixture() {
         grantedBy: "admin",
       });
   }
-  return { invoke, own, shared, calls, replies, deps, app, audits };
+  const link = (account = "ca_test", url = "https://connect.composio.dev/link/lk_test") =>
+    replies.push({ session_id: "trs_test" }, { redirect_url: url, connected_account_id: account });
+  return { invoke, own, shared, link, calls, replies, deps, app, audits };
 }
 
 const SETTINGS = "https://qm.example/?view=settings";
+const STATE = "composio-return-state-0001";
+const RETURN_URL = `https://qm.example/s/chat?composioReturn=${STATE}`;
 
 test("Composio requires a verified actor and never uses another person's key", async () => {
   const f = fixture();
@@ -235,15 +242,13 @@ test("authorization supplies the callback and account binding without accepting 
   const f = fixture();
   await f.own();
   for (const callbackUrl of ["javascript:alert(1)", "http://evil.example/", "https://user:password@example.com/"]) {
-    assert.equal((await f.invoke("/v1/composio/authorize", { toolkit: "gmail", callbackUrl })).status, 400);
+    const r = await f.invoke("/v1/composio/authorize", { toolkit: "gmail", callbackUrl }, null, privateCap);
+    assert.equal(r.status, 400);
   }
   assert.equal(f.calls.length, 0);
   const callbackUrl = "https://qm.example/s/chat?composioReturn=nonce";
-  f.replies.push(
-    { session_id: "trs_test" },
-    { redirect_url: "https://connect.composio.dev/link/lk_test", connected_account_id: "ca_test" },
-  );
-  const r = await f.invoke("/v1/composio/authorize", { toolkit: "gmail", callbackUrl });
+  f.link();
+  const r = await f.invoke("/v1/composio/authorize", { toolkit: "gmail", callbackUrl }, null, privateCap);
   assert.equal(r.data.accountId, "ca_test");
   assert.equal(JSON.parse(String(f.calls[1]!.init?.body)).callback_url, callbackUrl);
 });
@@ -440,12 +445,11 @@ test("Slack connection links verified workspace identity to the web owner and pe
   f.deps.slackEnvBotToken = "bot-test";
   f.deps.slackInstallationFetch = (async () => Response.json({ ok: true, team_id: "T123" })) as typeof fetch;
   try {
-    f.replies.push(
-      { session_id: "trs_test" },
-      { redirect_url: "https://connect.composio.dev/link/lk_test", connected_account_id: "ca_test" },
-    );
-    const started = await f.invoke("/v1/composio/slack/authorize", {});
+    f.link();
+    const started = await f.invoke("/v1/composio/slack/authorize", { returnTo: "/settings", state: STATE });
     assert.equal(started.status, 200);
+    const callback = JSON.parse(String(f.calls[1]!.init?.body)).callback_url;
+    assert.equal(callback, `https://qm.example/settings?slackReturn=${STATE}`);
     const account = {
       id: "ca_test",
       user_id: composioUserId(orgId(), "alice"),
@@ -682,12 +686,11 @@ test("callback completion is browser-only and preserves the durable return URL",
   const f = fixture();
   await f.own();
   assert.equal((await f.invoke("/v1/composio/callback?session_uri=opaque", undefined, null, privateCap)).status, 403);
-  const url = "https://qm.example/s/chat?composioReturn=state";
-  f.replies.push(
-    { session_id: "trs_example" },
-    { redirect_url: "https://connect.composio.dev/link/lk_test", connected_account_id: "ca_test" },
-  );
-  assert.equal((await f.invoke("/v1/composio/authorize", { toolkit: "gmail", callbackUrl: url })).status, 200);
+  const url = RETURN_URL;
+  f.link();
+  const body = { toolkit: "gmail", returnTo: "/s/chat", state: STATE, callbackUrl: "https://evil.example/" };
+  const started = await f.invoke("/v1/composio/authorize", body);
+  assert.deepEqual([started.status, started.headers["Cache-Control"]], [200, "no-store"]);
   f.replies.push({ connected_account_id: "ca_test", toolkit_slug: "gmail" });
   const verified = await f.invoke("/v1/composio/callback?session_uri=opaque&user_id=bob");
   assert.deepEqual([verified.status, verified.location], [303, url]);
@@ -705,10 +708,7 @@ test("callback completion is browser-only and preserves the durable return URL",
 test("connects without a return page are still audited on completion, and failed completions too", async () => {
   const f = fixture();
   await f.own();
-  f.replies.push(
-    { session_id: "trs_example" },
-    { redirect_url: "https://connect.composio.dev/link/lk_test", connected_account_id: "ca_test" },
-  );
+  f.link();
   assert.equal((await f.invoke("/v1/composio/authorize", { toolkit: "outlook" })).status, 200);
   f.replies.push({ connected_account_id: "ca_test" });
   assert.equal((await f.invoke("/v1/composio/callback?session_uri=opaque")).location, SETTINGS);
@@ -967,14 +967,16 @@ test("consent and browser verification use the canonical identity when signed in
   installPrincipalLinks(links);
   const aliasId = "oidc:alice";
   const userId = composioUserId(orgId(), "alice");
-  const callbackUrl = "https://qm.example/s/chat?composioReturn=linked";
+  const callbackUrl = RETURN_URL;
   try {
     await links.link({ principalId: aliasId, canonicalId: "alice", evidence: "test", linkedBy: "admin" });
-    f.replies.push(
-      { session_id: "trs_linked" },
-      { redirect_url: "https://connect.composio.dev/link/lk_linked", connected_account_id: "ca_linked" },
+    f.link("ca_linked", "https://connect.composio.dev/link/lk_linked");
+    const started = await f.invoke(
+      "/v1/composio/authorize",
+      { toolkit: "gmail", returnTo: "/s/chat", state: STATE },
+      aliasId,
     );
-    assert.equal((await f.invoke("/v1/composio/authorize", { toolkit: "gmail", callbackUrl }, aliasId)).status, 200);
+    assert.equal(started.status, 200);
     assert.equal(JSON.parse(String(f.calls[0]!.init?.body)).user_id, userId);
     assert.equal((await f.deps.composioReturns!.get(`${userId}:ca_linked`))?.url, callbackUrl);
     f.replies.push({ connected_account_id: "ca_linked", toolkit_slug: "gmail" });
@@ -1047,10 +1049,7 @@ test("linked identities retain provider accounts and Slack status until unlinked
     f.replies.push({ ...account, id: "ca_expired", user_id: canonical, status: "EXPIRED" }, account);
     assert.equal((await f.invoke("/v1/composio/slack")).data.connected, true);
     await f.deps.slackAccounts.delete("alice");
-    f.replies.push(
-      { session_id: "trs_test" },
-      { redirect_url: "https://connect.composio.dev/link/lk_test", connected_account_id: "ca_test" },
-    );
+    f.link();
     assert.equal((await f.invoke("/v1/composio/authorize", { toolkit: "gmail" }, "oidc:alice")).status, 200);
     assert.equal(JSON.parse(String(f.calls[3]!.init?.body)).user_id, canonical);
     await f.deps.principalLinks.unlink("oidc:alice");

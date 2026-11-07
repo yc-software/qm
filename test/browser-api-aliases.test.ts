@@ -22,10 +22,17 @@ const QUERY: Record<string, string> = {
 
 const HANDLER_REFUSALS: Record<string, unknown> = {
   "/api/sessions/:id/swarm": { error: "session access denied" },
-  "/api/composio/callback": {
-    error: "composio_unavailable",
-    message: "App connections aren’t available for your account yet. Ask your administrator to enable them.",
-  },
+  ...Object.fromEntries(
+    ["/api/composio/callback", "/api/composio/slack", "/api/composio/toolkits", "/api/composio/connections"].map(
+      (path) => [
+        path,
+        {
+          error: "composio_unavailable",
+          message: "App connections aren’t available for your account yet. Ask your administrator to enable them.",
+        },
+      ],
+    ),
+  ),
 };
 
 const concrete = (pattern: string): string => pattern.replaceAll(/:[a-z]+/g, "1");
@@ -68,7 +75,7 @@ test("each aliased /api path resolves to the browser-enabled /v1 route that serv
     ["GET", "/api/turn"],
     ["POST", "/api/approvals/1/2"],
     ["POST", "/api/crons"],
-    ["POST", "/api/webhooks"],
+    ["POST", "/api/webhooks/1/update"],
     ["GET", "/api/inbox"],
     ["GET", "/api/loops/1/items"],
     ["GET", "/v1/sessions"],
