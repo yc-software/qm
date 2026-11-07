@@ -192,7 +192,7 @@ function renderCronFireInput(
       : []),
     ...(previousFailure
       ? [
-          `The previous fire did not complete: ${previousFailure}. If this fire works and the fire log shows people were told it stopped, say in one line that it is running again.`,
+          `The previous fire did not complete: ${previousFailure}. If this fire works, add one line saying the cron is running again.`,
         ]
       : []),
     ...(refusedDelivery
