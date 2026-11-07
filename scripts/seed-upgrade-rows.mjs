@@ -47,8 +47,12 @@ for (let pass = 0; pending.length && pass < 6; pass++) {
   for (const [table, cols] of pending) {
     const chosen = cols.filter((c) => c.is_generated !== "ALWAYS" && c.is_identity !== "YES" && !c.column_default);
     const values = chosen.map((c) => value(c));
-    if (values.includes(null)) {
-      failures.set(table, "unsupported column type");
+    const unsupported = chosen.filter((c, i) => values[i] === null);
+    if (unsupported.length) {
+      failures.set(
+        table,
+        `no synthetic value for ${unsupported.map((c) => `${c.column_name} (${c.udt_name})`).join(", ")}`,
+      );
       continue;
     }
     const sql = `INSERT INTO ${table} (${chosen.map((c) => `"${c.column_name}"`).join(", ")}) VALUES (${values.join(", ")})`;
