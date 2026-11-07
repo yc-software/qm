@@ -11,6 +11,14 @@ export const FINNY_CHECK_IDS = [
 
 export type FinnyCheckId = (typeof FINNY_CHECK_IDS)[number];
 
+export interface FinnyEvaluatorRef {
+  id: string;
+  revision: string;
+  buildDigest: string;
+  contractVersion: string;
+  configurationDigest: string;
+}
+
 export const FINNY_CHANGE_KINDS = ["source_or_logic", "formula", "disclosure", "presentation", "lineage"] as const;
 
 export type FinnyChangeKind = (typeof FINNY_CHANGE_KINDS)[number];
