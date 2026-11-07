@@ -17,10 +17,13 @@ import { BlobTooLargeError } from "../src/persistence/blob-transfer.ts";
 
 const SIGNING = "web-uploads-signing-secret-0123456789";
 
-async function core(t: TestContext, overrides: Partial<ReturnType<typeof serverDeps>> = {}) {
+type Deps = ReturnType<typeof serverDeps>;
+
+async function core(t: TestContext, overrides: (deps: Deps) => Partial<Deps> = () => ({})) {
   const config = testConfig({ signingSecret: SIGNING });
   const built = stopAtEnd(buildApp(config));
-  const server = createServer(built.app, { ...serverDeps(config, built), ...browserSessionDeps, ...overrides });
+  const deps = serverDeps(config, built);
+  const server = createServer(built.app, { ...deps, ...browserSessionDeps, ...overrides(deps) });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
   const port = (server.address() as AddressInfo).port;
@@ -168,15 +171,15 @@ test("signed callers keep staging through /v1/blobs and registering by blobId, a
 });
 
 test("an upload past the size limit gets its 413 while the browser is still sending", async (t) => {
-  const { port } = await core(t, {
+  const { port } = await core(t, () => ({
     blobTransfer: {
       put: async (source: AsyncIterable<Buffer>) => {
         let seen = 0;
         for await (const chunk of source) if ((seen += chunk.length) > 1024 * 1024) throw new BlobTooLargeError();
         throw new Error("the upload ended before the limit");
       },
-    } as unknown as ReturnType<typeof serverDeps>["blobTransfer"],
-  });
+    } as unknown as Deps["blobTransfer"],
+  }));
   const chunk = Buffer.alloc(256 * 1024);
   const total = 256 * chunk.length;
   const answer = await new Promise<string>((resolve, reject) => {

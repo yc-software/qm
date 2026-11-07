@@ -1,4 +1,4 @@
-import { PassThrough } from "node:stream";
+import { finished, PassThrough } from "node:stream";
 import { verifyBlobTransferCapability } from "../../auth/capability-token.ts";
 import { ByteSourceTooLargeError } from "../../files/durable-byte-store.ts";
 import type { ScopeId } from "../../types.ts";
@@ -91,7 +91,8 @@ async function stageRequestBlob(ctx: BaseCtx, maxBytes: number, sha256: string):
   const { req, res, deps } = ctx;
   extendBodyDeadline(req, STAGE_UPLOAD_DEADLINE_MS);
   const body = new PassThrough();
-  relayStream(req, body, { onError: (error) => body.destroy(error) });
+  finished(req, (error) => error && body.destroy(error));
+  relayStream(req, body);
   try {
     return await deps.blobTransfer!.put(body, { maxBytes, ...(sha256 ? { expectedSha256: sha256 } : {}) });
   } catch (e) {
