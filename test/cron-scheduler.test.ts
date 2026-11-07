@@ -1251,9 +1251,11 @@ test("a doubled manual run cannot double-fire: the second is refused with the in
   await third.settled;
 });
 
-test("a fire that throws is journaled as failed, not left running", async () => {
-  const { crons, scheduler } = agent(async () => {
-    throw new Error("substrate down");
+test("a fire that throws is journaled as failed, not left running, and the next fire is told", async () => {
+  let throws = true;
+  const { crons, calls, scheduler } = agent(async () => {
+    if (throws) throw new Error("substrate down");
+    return { status: "ok", reply: "done" };
   });
   const cron = await crons.create({
     schedule: { everyMs: 60_000 },
@@ -1269,6 +1271,9 @@ test("a fire that throws is journaled as failed, not left running", async () => 
   assert.equal(log.length, 1);
   assert.equal(log[0]!.status, "failed");
   assert.match(log[0]!.note ?? "", /substrate down/);
+  throws = false;
+  await runNowSettled(scheduler, cron.id);
+  assert.match(calls[1]?.text ?? "", /The previous fire did not complete: substrate down/);
 });
 
 test("a fire's input carries the last fire's timestamped shift-change note and asks this fire to leave one", async () => {
@@ -1750,7 +1755,7 @@ test("a failing cron posts one notice to its destination, then stays quiet until
   assert.doesNotMatch(calls[0]?.text ?? "", /previous fire did not complete/);
   assert.match(
     calls[2]?.text ?? "",
-    /The previous fire did not complete \(refused: claude-sonnet-5 can't run here \(runtime is no longer available\)\)\..*running again/,
+    /The previous fire did not complete: refused: claude-sonnet-5 can't run here/,
     "the fire after a failure streak is told so it can say the cron recovered",
   );
   assert.doesNotMatch(calls[3]?.text ?? "", /previous fire did not complete/, "a fire after a success is not");
