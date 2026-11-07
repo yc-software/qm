@@ -162,6 +162,7 @@ test("PRIVATE_NETWORK_ALLOWED_ORIGINS refuses a bad entry by position and origin
       "http://localhost:8787",
       /entry 2 \(http:\/\/localhost:8787\) is a loopback, link-local or cloud metadata address/,
     ],
+    ["http://localhost.:8787", /entry 2 \(http:\/\/localhost:8787\) is a loopback/],
     ["http://127.1:8787", /entry 2 \(http:\/\/127\.0\.0\.1:8787\) is a loopback/],
   ] as const) {
     let message = "";
@@ -193,17 +194,16 @@ test("only the exact listed origin gets the private-network allowance", async (t
   assert.equal(other.hits(), 0);
 });
 
-test("a listed origin still refuses a name that resolves to loopback, at dial time, through the configured publicFetch", async (t) => {
+test("a listed origin still refuses a name that resolves to loopback, at dial time, through an MCP client", async (t) => {
   const target = await listen(t, (_req, res) => res.end("secret"));
   t.after(() => configurePublicFetch(new Set()));
   configurePublicFetch(new Set([`http://localhost:${target.port}`]));
-  await assert.rejects(publicFetch(`http://localhost:${target.port}/`), (e: unknown) => {
-    assert.ok(e instanceof PrivateNetworkAddressError);
-    assert.match(
-      errMessage(e),
-      /^localhost resolves to a loopback, link-local or cloud metadata address, which PRIVATE_NETWORK_ALLOWED_ORIGINS never allows; point it at the service's own address$/,
-    );
-    return true;
-  });
+  await assert.rejects(
+    createMcpClient({ url: `http://localhost:${target.port}/mcp`, auth: { mode: "none" } }).listTools(),
+    (e: unknown) =>
+      /localhost resolves to a loopback, link-local or cloud metadata address, which PRIVATE_NETWORK_ALLOWED_ORIGINS never allows; point it at the service's own address$/.test(
+        errMessage(e),
+      ),
+  );
   assert.equal(target.hits(), 0);
 });
