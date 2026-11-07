@@ -66,7 +66,7 @@ export interface UserStore extends UserLinkStore {
   setDisplayName(alias: string, name: string): Promise<boolean>;
 }
 
-export const DISPLAY_NAME_MAX = 200;
+const DISPLAY_NAME_MAX = 200;
 
 export function cleanDisplayName(raw: unknown): string | undefined {
   if (typeof raw !== "string") return undefined;
