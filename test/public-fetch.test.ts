@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { isIP, type AddressInfo } from "node:net";
+import { setFlagsFromString } from "node:v8";
+import { runInNewContext } from "node:vm";
 import {
   addressGuardedFetch,
   isPrivateNetworkIp,
@@ -13,6 +15,7 @@ import { createMcpClient } from "../src/mcp/mcp-client.ts";
 import { discoverOAuth } from "../src/mcp/oauth-discovery.ts";
 import { exchangeCode, setPublicOAuthClients } from "../src/connectors/oauth.ts";
 import { errMessage } from "../src/util/errors.ts";
+import { sleep } from "../src/util/async.ts";
 
 async function listen(
   t: TestContext,
@@ -132,6 +135,21 @@ test("address-guarded fetch follows redirects when asked, re-checks every hop, a
   assert.deepEqual(log, ["files GET /private Bearer t", "files GET /signed Bearer t", "cdn GET -"]);
 
   await assert.rejects(guarded(`${base}/metadata`, { redirect: "follow" }), PrivateNetworkAddressError);
+});
+
+test("address-guarded fetch keeps a body the caller reads after garbage collection", async (t) => {
+  setFlagsFromString("--expose-gc");
+  const gc = runInNewContext("gc") as () => void;
+  const slow = await listen(t, (_req, res) => {
+    res.writeHead(200).write("a");
+    setTimeout(() => res.end("b"), 200);
+  });
+  const response = await addressGuardedFetch(() => false)(`http://127.0.0.1:${slow.port}/`);
+  for (let i = 0; i < 10; i++) {
+    gc();
+    await sleep(20);
+  }
+  assert.equal(await response.text(), "ab");
 });
 
 test("address-guarded fetch gives up on an endpoint that never answers", async (t) => {

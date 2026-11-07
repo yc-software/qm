@@ -1,5 +1,6 @@
 import { lookup as dnsLookup } from "node:dns";
 import { BlockList, isIP, type LookupFunction } from "node:net";
+import { TransformStream } from "node:stream/web";
 import { Agent, buildConnector, fetch } from "undici";
 
 const PRIVATE_NETWORKS = new BlockList();
@@ -94,7 +95,7 @@ export function addressGuardedFetch(
       dispatcher,
     }).then(
       (response) =>
-        new Response(response.body as ReadableStream<Uint8Array> | null, {
+        new Response((response.body?.pipeThrough(new TransformStream()) ?? null) as ReadableStream<Uint8Array> | null, {
           status: response.status,
           statusText: response.statusText,
           headers: [...response.headers],
