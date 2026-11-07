@@ -47,6 +47,33 @@ test("the app bar accepts the chat palette only from its portal iframe, even whi
   dom.window.close();
 });
 
+test("the app bar's tab icon follows the framed app's icon link", async () => {
+  const dom = new JSDOM(appShellHtml({ slug: "demo", portalUrl: "https://portal.example.com", path: "/app" }), {
+    url: "https://demo.apps.example.com",
+    runScripts: "outside-only",
+  });
+  const win = dom.window;
+  win.eval("window.fetch = async () => ({ ok: false });");
+  win.eval(win.document.querySelector("script")!.textContent!);
+  const frame = win.document.querySelector<HTMLIFrameElement>("#app")!.contentDocument!;
+  frame.appendChild(frame.createElement("html")).appendChild(frame.createElement("head"));
+  const icons = () =>
+    [...win.document.querySelectorAll<HTMLLinkElement>('link[rel~="icon"]')].map((l) => [l.href, l.type]);
+  const tick = () => new Promise((r) => setTimeout(r, 600));
+  assert.deepEqual(icons(), []);
+  const link = frame.createElement("link");
+  link.rel = "icon";
+  link.href = "/favicon.svg";
+  link.type = "image/svg+xml";
+  frame.head.appendChild(link);
+  await tick();
+  assert.deepEqual(icons(), [["https://demo.apps.example.com/favicon.svg", "image/svg+xml"]]);
+  link.remove();
+  await tick();
+  assert.deepEqual(icons(), []);
+  dom.window.close();
+});
+
 test("embedded chat publishes active colors and tracks theme changes from other tabs", async (t) => {
   const dom = new JSDOM("<iframe></iframe>", { url: "https://portal.example.com", runScripts: "outside-only" });
   const frame = dom.window.document.querySelector("iframe")!.contentWindow as unknown as DOMWindow;
