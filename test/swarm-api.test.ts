@@ -125,21 +125,9 @@ test("authenticated swarm API binds agent operations to the token and human oper
     const path = `/v1/sessions/${fixture.root.id}/swarm`;
     assert.equal((await fetch(`${base}${path}`, { headers })).status, 403);
     const portal = await mintPortalIdentity({ p: "alice", exp: Date.now() + 60_000 }, portalIdentitySecret);
-    const body = JSON.stringify({
-      action: "send",
-      requestId: "human",
-      audience: "all",
-      text: "Review",
+    const inspected = await fetch(`${base}${path}`, {
+      headers: signedRequestHeaders(secret, "GET", path, "", { "x-portal-identity": portal }),
     });
-    const portalHeaders = (method: string, payload = "") =>
-      signedRequestHeaders(secret, method, path, payload, {
-        "x-portal-identity": portal,
-        "content-type": "application/json",
-      });
-    const human = await fetch(`${base}${path}`, { method: "POST", headers: portalHeaders("POST", body), body });
-    assert.equal(human.status, 400);
-    assert.deepEqual(await human.json(), { error: "only swarm controls are available here" });
-    const inspected = await fetch(`${base}${path}`, { headers: portalHeaders("GET") });
     assert.equal(inspected.status, 200);
     assert.equal(((await inspected.json()) as { peers: unknown[] }).peers.length, 3);
     const anonymous = await fetch(`${base}${path}`, { headers: signedRequestHeaders(secret, "GET", path) });

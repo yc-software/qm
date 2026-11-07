@@ -236,19 +236,18 @@ with different content fails. Context updates are simple replacements.
 
 ## Human API
 
-Human callers use `GET` and `POST /v1/sessions/:id/swarm` through the existing
-source-authenticated API with a signed portal identity. The caller must already
-be allowed to view that session and belong to the swarm scope. Request actor
-and provenance selector fields are rejected rather than ignored. Arbitrary keys
-inside `context` remain permitted. Bodies and read parameters match the
-agent API. Initializing a root from this endpoint additionally requires a `runId`
-belonging to that session and actor. Human-origin actions are separately recorded;
-their asynchronous notifications still run unattended.
+Human callers use `GET` and `POST /v1/sessions/:id/swarm` (the web app's
+`/api/sessions/:id/swarm`) as the signed-in person. The caller must already be
+allowed to view that session and belong to the swarm scope. People can inspect the
+swarm and send `control` actions; `spawn`, `send`, `context` and message reads are
+agent-only. Request actor and provenance selector fields are rejected rather than
+ignored. Human-origin actions are separately recorded; their asynchronous
+notifications still run unattended.
 
 Agent operations require credentials bound to the exact session, run attempt, and
 unexpired execution lease. Swarm writes recheck that lease inside their database
 transaction; credentials from replaced attempts cannot authorize new work. Completed, failed, queued, and expired runs cannot authorize agent swarm
-operations. Authenticated human initialization may reference a historical run.
+operations.
 Worker sessions never inherit the root session's command or security-screen
 approval grants; a worker must obtain its own approval. Auto screening receives host-verified swarm delegation provenance, so routine delegated tasks and in-swarm reporting are distinguished from external instructions. Delegation does not authorize credential disclosure, permission changes, or overriding higher-priority instructions; those remain screened. Frozen swarm roster checks
 apply to swarm notifications, not ordinary human follow-ups in the root session.
