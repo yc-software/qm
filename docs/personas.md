@@ -110,6 +110,13 @@ An access change is refused unless at least one owner grant remains on a person 
 inactive, on a team, or on an org. Channel owner grants never count, and team and org owner grants
 count whether or not they reach anyone.
 
+**Owners leaving.** When a persona's last active owner is deactivated or offboarded, the
+default admin becomes an owner: the active org admin with the oldest grant, so the admins named
+in `ADMIN_GRANTS` at first boot come first. Offboarding someone lists each persona their
+departure leaves with no active owner, and the admin it goes to; other deactivations, and personas
+already left without one, are picked up within five minutes. The departed owner's row stays, so
+reactivating them restores their role.
+
 ## Page
 
 `/personas/<id>` is the persona's page. Under its instructions it has one section each for

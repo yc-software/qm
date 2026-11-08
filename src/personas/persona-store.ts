@@ -64,6 +64,8 @@ export interface PersonaStore {
   replaceAccess(id: string, access: ReadonlyArray<{ scopeId: ScopeId; role: PersonaRole }>, by: string): Promise<void>;
   roles(grantees: readonly ScopeId[], id?: string): Promise<Map<string, PersonaRole>>;
   listFor(grantees: readonly ScopeId[]): Promise<Array<Persona & { role: PersonaRole }>>;
+  ownerGrants(): Promise<Array<{ personaId: string; scopeId: ScopeId }>>;
+  addOwner(id: string, owner: ScopeId, by: string): Promise<void>;
 }
 
 const BEST_ROLE = `(ARRAY['read','write','owner'])[MAX(array_position(ARRAY['read','write','owner'], role))]`;
@@ -252,6 +254,24 @@ export function createPostgresPersonaStore(connectionString: string, opts: { id?
         [[...new Set(grantees)]],
       );
       return rows.map((r) => ({ ...toPersona(r), role: r.role as PersonaRole }));
+    },
+    async ownerGrants() {
+      const rows = await q(
+        "SELECT persona_id, grantee_scope_id FROM persona_access WHERE role = 'owner' ORDER BY persona_id, grantee_scope_id",
+      );
+      return rows.map((r) => ({ personaId: r.persona_id as string, scopeId: r.grantee_scope_id as ScopeId }));
+    },
+    async addOwner(id, owner, by) {
+      await withPgTransaction(await pool(), async (db) => {
+        const user = await ensureUserIn(db, foldPrincipalId(by));
+        await db.query(
+          `INSERT INTO persona_access (persona_id, grantee_scope_id, role, granted_by) VALUES ($1, $2, 'owner', $3)
+           ON CONFLICT (persona_id, grantee_scope_id) DO UPDATE
+             SET role = 'owner', granted_by = EXCLUDED.granted_by, granted_at = now()
+             WHERE persona_access.role <> 'owner'`,
+          [id, owner, user],
+        );
+      });
     },
   };
 }

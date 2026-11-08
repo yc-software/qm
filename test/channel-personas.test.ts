@@ -552,6 +552,94 @@ test("a persona access change that would leave no active owner is refused", asyn
   assert.equal((await personas.setAccess(ANN, ada.id, access(ANN))).status, "ok");
 });
 
+test("a persona's last active owner leaving hands it to the default admin, and offboarding names only the handovers it causes", async () => {
+  const { built, personas, control, ada, wear } = await setup();
+  ok(await wear());
+  const bea = ok(await personas.create(CY, { name: "Bea" }));
+  assert.deepEqual(await built.app.channelPersonas!.adoptOrphans(), []);
+  await built.identity.deactivate(ANN);
+
+  const { call, close } = serve(built);
+  try {
+    const preview = await call("POST", `/v1/admin/users/${CY}/offboard`, {}, ADMIN_HEADER);
+    assert.equal(preview.status, 200);
+    const planned = ((await preview.json()) as { changes: Array<Record<string, unknown>> }).changes.filter(
+      (c) => c.kind === "persona",
+    );
+    assert.deepEqual(planned, [{ kind: "persona", id: bea.id, label: "Bea → Alice Admin", action: "transfer_owner" }]);
+    assert.equal((await personas.detail(ADMIN, bea.id)).status, "not_found");
+
+    const adopted = await built.app.channelPersonas!.adoptOrphans();
+    assert.deepEqual(
+      adopted.map((h) => [h.persona.name, h.to]),
+      [["Ada", ADMIN]],
+    );
+    assert.deepEqual(
+      ok(await personas.detail(ADMIN, ada.id)).access.map((a) => [a.scopeId, a.role]),
+      [
+        [personal(ADMIN), "owner"],
+        [personal(ANN), "owner"],
+        [personal(BOB), "write"],
+      ],
+    );
+    assert.deepEqual(await built.app.channelPersonas!.adoptOrphans(), []);
+    assert.match(
+      await inChannel(control, ANN)("guidance", { action: "replace", scope: "conversation", content: "x" }),
+      /^\[error\]/,
+    );
+
+    const applied = await call("POST", `/v1/admin/users/${CY}/offboard`, { apply: true }, ADMIN_HEADER);
+    assert.equal(applied.status, 200);
+    const done = ((await applied.json()) as { changes: Array<Record<string, unknown>> }).changes.find(
+      (c) => c.kind === "persona",
+    );
+    assert.equal(done?.result, "done");
+    assert.equal(ok(await personas.detail(ADMIN, bea.id)).role, "owner");
+  } finally {
+    await close();
+  }
+  const handovers = (await built.auditLog.events()).filter((e) => e.action === "persona_owner_handover");
+  assert.deepEqual(
+    handovers.map((e) => [e.resource, e.detail]),
+    [
+      [ada.id, ADMIN],
+      [bea.id, ADMIN],
+    ],
+  );
+});
+
+test("offboarding skips a leaving default admin, and a persona with an owner who stays is not handed over", async () => {
+  const { built, personas } = await setup();
+  await built.app.upsertDirectory([
+    ...(await built.directory.list()),
+    { principalId: "admin-bob", displayName: "Bob Admin", type: "internal" },
+  ]);
+  const solo = ok(await personas.create(ADMIN, { name: "Solo" }));
+  const shared = ok(await personas.create(CY, { name: "Shared" }));
+  ok(
+    await personas.setAccess(CY, shared.id, [
+      { scopeId: personal(CY), role: "owner" },
+      { scopeId: personal(DAN), role: "owner" },
+    ]),
+  );
+
+  const { call, close } = serve(built);
+  try {
+    const planned = async (who: string, headers: Record<string, string>) =>
+      (
+        (await (await call("POST", `/v1/admin/users/${who}/offboard`, {}, headers)).json()) as {
+          changes: Array<Record<string, unknown>>;
+        }
+      ).changes.filter((c) => c.kind === "persona");
+    assert.deepEqual(await planned(ADMIN, { "x-admin-actor": "admin-bob@default-org" }), [
+      { kind: "persona", id: solo.id, label: "Solo → Bob Admin", action: "transfer_owner" },
+    ]);
+    assert.deepEqual(await planned(CY, ADMIN_HEADER), []);
+  } finally {
+    await close();
+  }
+});
+
 test("standing orders set from a channel turn are locked to the persona's writers", async () => {
   const { built, wear } = await setup();
   ok(await wear());
