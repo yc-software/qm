@@ -20,6 +20,7 @@ export async function swarmFixture(
     lock?: AdvisoryLock;
     backend?: Sandbox;
     runtime?: Pick<OrchestratorInput, "model" | "thinkingLevel" | "fastMode" | "botActor">;
+    channel?: string;
   } = {},
 ) {
   const sessions = options.sessions ?? createPostgresSessionStore(testDatabaseUrl());
@@ -66,7 +67,8 @@ export async function swarmFixture(
     backends: { modal: backend },
     defaultBackend: "modal",
     lock,
-    canUseScope: async (actorId, scopeId) => scopeId === `personal:${actorId}`,
+    canUseScope: async (actorId, scopeId) =>
+      scopeId === `personal:${actorId}` || (options.channel !== undefined && scopeId === `channel:${options.channel}`),
   });
   const sandbox = createSandboxRouter({
     backends: { modal: backend },
@@ -76,15 +78,17 @@ export async function swarmFixture(
   const actor = { id: "alice", type: "internal" as const };
   const root = await sessions.getOrCreateByThread(
     `web:alice:${randomUUID()}`,
-    "dm",
-    "personal:alice",
+    options.channel ? "channel" : "dm",
+    options.channel ? `channel:${options.channel}` : "personal:alice",
     undefined,
     "web",
   );
   await sessions.addParticipant(root.id, actor.id);
   const template: OrchestratorInput = {
     actor,
-    conversation: { kind: "dm", threadRef: root.threadRef, audience: [actor] },
+    conversation: options.channel
+      ? { kind: "channel", threadRef: root.threadRef, channelRef: options.channel, audience: [actor] }
+      : { kind: "dm", threadRef: root.threadRef, audience: [actor] },
     origin: { kind: "human" },
     text: "Start workers",
     surface: "slack",

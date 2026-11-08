@@ -412,6 +412,7 @@ export function createTurnMethods(
         modelAccount,
         ...(dedupKey ? { dedupKey } : {}),
         routed: Boolean(req.approval || req.spawned || replay),
+        ...(req.botActor ? { bot: true } : {}),
       };
       if (deps.signals && !queuedBefore && mayMeetLiveTurn(incoming)) {
         const ambientRef =
