@@ -18,6 +18,7 @@ import { createLayerToolInstaller } from "./layer-tool-install.ts";
 import { createHomeSnapshotOps, HOME_SNAPSHOT_PRUNE, snapshotDue, type HomeSnapshotStore } from "./home-snapshot.ts";
 import type { LayerInstallFile } from "../deployment/load-layer.ts";
 import type { AgentComputerProfile, ComputerStatus, ExecResult, Sandbox, TeardownOptions } from "./sandbox.ts";
+import { trimTrailingSlashes } from "../util/text.ts";
 
 const HOME_DIR = "/root";
 const HOME_TAR = `${HOME_DIR}/.qm-home.tar`;
@@ -88,7 +89,7 @@ export interface SmolmachinesSandboxOptions extends BlobStagingOptions {
 export function createSmolmachinesSandbox(opts: SmolmachinesSandboxOptions): Sandbox {
   if (!opts.token && !opts.fetchImpl) throw new Error("SANDBOX_BACKEND=smolmachines requires SMOLMACHINES_TOKEN");
   const fetchImpl = opts.fetchImpl ?? fetch;
-  const baseUrl = (opts.baseUrl ?? DEFAULT_SMOLMACHINES_BASE_URL).replace(/\/+$/, "");
+  const baseUrl = trimTrailingSlashes(opts.baseUrl ?? DEFAULT_SMOLMACHINES_BASE_URL);
   const prefix = opts.namePrefix ?? "qm";
   const image = opts.image ?? DEFAULT_IMAGE;
   const resources = {

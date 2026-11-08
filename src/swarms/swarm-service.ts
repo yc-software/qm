@@ -160,6 +160,7 @@ function dispatchContract(input: OrchestratorInput) {
     scopeVersion: input.scopeVersion,
     unattendedGrants: input.unattendedGrants,
     readOnly: input.readOnly,
+    botActor: input.botActor,
     skipMemory: input.skipMemory,
     model: input.model,
     thinkingLevel: input.thinkingLevel,
@@ -327,6 +328,7 @@ export function createSwarmService(deps: {
       ...(source.scopeVersion ? { scopeVersion: source.scopeVersion } : {}),
       ...(source.unattendedGrants ? { unattendedGrants: source.unattendedGrants } : {}),
       ...(source.readOnly ? { readOnly: true } : {}),
+      ...(source.botActor ? { botActor: true } : {}),
       ...(source.skipMemory ? { skipMemory: true } : {}),
       ...(settings.turnMs === undefined ? {} : { turnWallClockMs: settings.turnMs }),
     };

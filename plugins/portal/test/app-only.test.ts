@@ -54,7 +54,6 @@ Object.assign(process.env, {
   CORE_ORG_ID: "acme",
   CORE_SIGNING_SECRET: "app-only-core-secret",
   CORE_API_URL: upstreamUrl,
-  WEB_UI_UPSTREAM: upstreamUrl,
   AUTH_BROKER_UPSTREAM: upstreamUrl,
   PORTAL_APPS_DOMAIN: "apps.example.test",
   OIDC_ISSUER: upstreamUrl,

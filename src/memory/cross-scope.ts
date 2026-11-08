@@ -103,14 +103,10 @@ export async function searchNotebooks(
   query: string,
   limit: number | undefined,
   scope: ScopeId | undefined,
-  actorId: string | undefined,
-  report?: MemoryRecallContext["report"],
+  context: MemoryRecallContext,
 ): Promise<string[] | null> {
   if (!readable.length || (scope !== undefined && !readable.includes(scope))) return null;
-  const hits = await searchAcrossScopes(memory, scope === undefined ? readable : [scope], query, limit, {
-    actorId,
-    ...(report ? { report } : {}),
-  });
+  const hits = await searchAcrossScopes(memory, scope === undefined ? readable : [scope], query, limit, context);
   return hits.map((hit) => (readable.length > 1 || scope !== undefined ? `[${hit.scopeId}] ${hit.fact}` : hit.fact));
 }
 

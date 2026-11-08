@@ -101,7 +101,8 @@ safely receive such requests. Loopback, unspecified, link-local and cloud metada
 addresses, including the IPv6 metadata addresses of AWS, Google Cloud, Oracle Cloud, Akamai and
 Scaleway, Tailscale's `100.100.100.100` and `fd7a:115c:a1e0::53`, and Alibaba Cloud's `100.100.100.200`, are never allowed: core refuses to start with one in the list, and refuses a listed
 name that resolves to one. Per-user endpoints still require HTTPS, and redirects stay
-refused. Only the deployment's environment sets the list. It is not an admin setting,
+refused. A request that follows redirects, such as core fetching a loop item's image, never
+gets the allowance. Only the deployment's environment sets the list. It is not an admin setting,
 and it does not open sandbox egress.
 
 - **Docker Compose.** List the service, such as `http://gbrain:8787`, and register

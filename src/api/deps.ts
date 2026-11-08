@@ -1,4 +1,5 @@
 import type { WebEvents } from "./routes/web-events.ts";
+import type { WebShell } from "../web/shell.ts";
 import type { WebMeConfig } from "./routes/web-me.ts";
 import type { SlackWebClientFactory } from "../slack/web-client.ts";
 import type { TeamStore } from "../teams/teams.ts";
@@ -32,6 +33,7 @@ import type { CredentialUsageSink } from "../admin/credential-usage-sink.ts";
 import type { EgressAuditSink } from "../admin/egress-audit-sink.ts";
 import type { BrokerFetch } from "./credential-broker.ts";
 import type { GitHttpFetch } from "./git-http-broker.ts";
+import type { AddressFetch } from "../util/network.ts";
 import type { KeychainApprovals } from "../credentials/keychain-approval.ts";
 import type { AdminService } from "../admin/admin-service.ts";
 import type { Mailer } from "../../plugins/chassis/src/resend.ts";
@@ -105,7 +107,7 @@ export interface ServerDeps {
     apiOrigins?: ReadonlySet<string>;
   };
   requireSignedPortalIdentity?: boolean;
-  web?: { events: WebEvents; me: WebMeConfig };
+  web?: { events: WebEvents; me: WebMeConfig; shell: WebShell };
   control: ControlService;
   replayDedupe?: ReplayDedupe;
   deploymentLiveSmoke?: { deploymentId: string; superseded(): boolean; run(): Promise<void> };
@@ -142,6 +144,7 @@ export interface ServerDeps {
   egressAudit?: EgressAuditSink;
   brokerFetch?: BrokerFetch;
   gitHttpFetch?: GitHttpFetch;
+  itemImageFetch?: AddressFetch;
   baseModelDefault?: string;
   modelProviders?: ModelProviderAvailability;
   providerKeys?: ModelProviderAvailability;

@@ -3,6 +3,7 @@ import type { Receiver } from "@slack/bolt";
 import type { EnvelopeStaging } from "./envelope-staging.ts";
 import { botIdentityFromEnv } from "./delivery.ts";
 import { normalizeAllowFrom, parseAllowFrom } from "./allow-from.ts";
+import { trimTrailingSlashes } from "../util/text.ts";
 
 export const NO_RETRY = { retryConfig: { retries: 0 } } as const;
 export const HISTORY_NO_RETRY = { ...NO_RETRY, rejectRateLimitedCalls: true } as const;
@@ -113,7 +114,7 @@ export function slackPluginConfigFromEnv(
 }
 
 export function normalizeSlackApiUrl(raw: string): string {
-  const trimmed = raw.replace(/\/+$/, "");
+  const trimmed = trimTrailingSlashes(raw);
   return trimmed.endsWith("/api") ? `${trimmed}/` : `${trimmed}/api/`;
 }
 

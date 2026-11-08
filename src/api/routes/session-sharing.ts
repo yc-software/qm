@@ -103,26 +103,43 @@ async function createShare(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { share: { token: share.token, audience, createdAt: share.createdAt } });
 }
 
-async function readShare(ctx: ApiCtx): Promise<void> {
-  const { deps, app, res, params, url } = ctx;
-  res.setHeader("Cache-Control", "no-store");
+async function openShare(ctx: ApiCtx, external: boolean): Promise<SessionShare | 403 | 404> {
+  const { deps, app, params, url } = ctx;
   const share = await deps.sessionShares?.get(params.token!);
-  const external = ctx.pathname.startsWith("/v1/public-shares/");
-  if (!share || share.audience !== (external ? "external" : "internal"))
-    return sendJson(res, 404, { error: "not_found" });
+  if (!share || share.audience !== (external ? "external" : "internal")) return 404;
   await deps.identity?.refresh();
   if (!external) {
     const viewer = ctx.actor?.p ?? url.searchParams.get("viewer");
-    if (!viewer || !deps.identity?.isInternal(deps.identity.classify(viewer)))
-      return sendJson(res, 403, { error: "forbidden" });
+    if (!viewer || !deps.identity?.isInternal(deps.identity.classify(viewer))) return 403;
   }
-  if (!deps.identity?.isInternal(deps.identity.classify(share.createdBy)))
-    return sendJson(res, 404, { error: "not_found" });
-  if (!(await app.canViewSessionSnapshot(share.sessionId, share.createdBy)))
-    return sendJson(res, 404, { error: "not_found" });
+  if (!deps.identity?.isInternal(deps.identity.classify(share.createdBy))) return 404;
+  if (!(await app.canViewSessionSnapshot(share.sessionId, share.createdBy))) return 404;
+  return share;
+}
+
+const transcriptOf = (share: SessionShare) => ({
+  createdAt: share.createdAt,
+  audience: share.audience,
+  messages: share.messages,
+});
+
+async function sharePage(ctx: ApiCtx, external: boolean): Promise<void> {
+  const shell = ctx.deps.web?.shell;
+  if (!shell) return sendJson(ctx.res, 404, { error: "not_found" });
+  const share = await openShare(ctx, external);
+  if (typeof share === "number") return shell.sharePage(ctx.res, share, null);
+  return shell.sharePage(ctx.res, 200, transcriptOf(share));
+}
+
+async function readShare(ctx: ApiCtx): Promise<void> {
+  const { res, params, url } = ctx;
+  res.setHeader("Cache-Control", "no-store");
+  const share = await openShare(ctx, ctx.pathname.startsWith("/v1/public-shares/"));
+  if (share === 403) return sendJson(res, 403, { error: "forbidden" });
+  if (share === 404) return sendJson(res, 404, { error: "not_found" });
   if (params.fileId) {
     const file = share.files.find((file) => file.id === params.fileId);
-    const opened = file && (await deps.sessionShareBytes?.open(file.blobKey));
+    const opened = file && (await ctx.deps.sessionShareBytes?.open(file.blobKey));
     if (!file || !opened) return sendJson(res, 404, { error: "not_found" });
     const inline = url.searchParams.get("inline") === "1" && /^image\/(png|jpeg|gif|webp|avif)$/.test(file.mimetype);
     res.writeHead(200, {
@@ -136,7 +153,7 @@ async function readShare(ctx: ApiCtx): Promise<void> {
     relayStream(opened.stream, res);
     return;
   }
-  return sendJson(res, 200, { createdAt: share.createdAt, audience: share.audience, messages: share.messages });
+  return sendJson(res, 200, transcriptOf(share));
 }
 
 export const sessionSharingRoutes: ReadonlyArray<Route> = [
@@ -148,11 +165,24 @@ export const sessionSharingRoutes: ReadonlyArray<Route> = [
     auth: "source",
     handle: createShare,
   },
-  ...(["shared-sessions", "public-shares"] as const).flatMap((prefix): Route[] => {
-    const actor = prefix === "shared-sessions" ? ("query.viewer" as const) : undefined;
-    return [
-      { method: "GET", path: `/v1/${prefix}/:token`, actor, auth: "source", handle: readShare },
-      { method: "GET", path: `/v1/${prefix}/:token/files/:fileId`, actor, auth: "source", handle: readShare },
-    ];
-  }),
+  { method: "GET", path: "/v1/shared-sessions/:token", actor: "query.viewer", auth: "source", handle: readShare },
+  {
+    method: "GET",
+    path: "/v1/shared-sessions/:token/files/:fileId",
+    browser: true,
+    actor: "query.viewer",
+    auth: "source",
+    handle: readShare,
+  },
+  { method: "GET", path: "/v1/public-shares/:token", auth: "source", handle: readShare },
+  { method: "GET", path: "/v1/public-shares/:token/files/:fileId", auth: "public", handle: readShare },
+  {
+    method: "GET",
+    path: "/v1/web/shares/internal/:token",
+    browser: true,
+    actor: "person",
+    auth: "source",
+    handle: (ctx) => sharePage(ctx, false),
+  },
+  { method: "GET", path: "/v1/web/shares/external/:token", auth: "public", handle: (ctx) => sharePage(ctx, true) },
 ];

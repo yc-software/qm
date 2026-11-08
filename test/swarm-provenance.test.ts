@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { swarmFixture } from "./support/swarm-fixture.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 
-async function dispatch() {
-  const f = await swarmFixture();
+async function dispatch(options: Parameters<typeof swarmFixture>[0] = {}) {
+  const f = await swarmFixture(options);
   const [peer] = await f.service.spawn(f.caller, { requestId: "initial", text: "work" });
   await f.service.sweep();
   const caller = await f.workerCaller(peer!.id);
@@ -28,6 +28,14 @@ test("durable request provenance is independent of JSON object key order", async
   const f = await dispatch();
   assert.ok(await f.service.binding(f.input));
   assert.ok(await f.service.binding(reverseKeys(f.input) as OrchestratorInput));
+});
+
+test("a swarm worker started by a Slack bot's turn keeps the bot marker and binds", async () => {
+  const f = await dispatch({ runtime: { botActor: true } });
+  assert.equal(f.input.botActor, true);
+  assert.ok(await f.service.binding(f.input));
+  const { botActor: _botActor, ...unmarked } = f.input;
+  await assert.rejects(f.service.binding(unmarked), /forged swarm provenance/);
 });
 
 test("execution metadata does not change stable dispatch provenance", async () => {
