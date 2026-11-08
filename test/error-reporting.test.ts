@@ -384,7 +384,7 @@ test("provider refusals and key-account failures are logged but never reported; 
     const failures = {
       account: providerTurnError({ errorMessage: '402 billing', providerError: { status: 402, type: 'billing_error', code: 'insufficient_credits' } }),
       auth: providerTurnError({ errorMessage: '401 invalid x-api-key', providerError: { status: 401, type: 'authentication_error' } }),
-      refusal: providerTurnError({ errorMessage: 'cyber_policy: flagged' }),
+      refusal: providerTurnError({ api: 'openai-responses', errorMessage: 'cyber_policy: flagged' }),
       model_budget: providerTurnError({ errorMessage: '429 budget', providerError: { status: 429, type: 'budget_exceeded' } }),
       transient: providerTurnError({ errorMessage: '529 overloaded', providerError: { status: 529, type: 'overloaded_error' } }),
     };

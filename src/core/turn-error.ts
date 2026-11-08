@@ -119,7 +119,7 @@ export function turnFailureMessage(err: unknown): string {
   if (err instanceof ProviderTurnError && err.code === "refusal")
     return `${err.modelName ?? "The model"} declined this request under the provider's usage policy ("${err.message}"). Rephrase, or switch model.`;
   if (err instanceof ProviderTurnError && (err.code === "account" || err.code === "auth"))
-    return `The model key for ${err.modelName ?? "this model"} was refused by the provider ("${err.message}"). Whoever owns that key needs to fix billing or replace it.`;
+    return `The model key for ${err.modelName ?? "this model"} was refused by the provider ("${err.message}"). Whoever owns that key needs to fix its billing or access, or replace it.`;
   return (err instanceof NonRetryableTurnError || err instanceof ProviderTurnError) && err.message.trim()
     ? err.message
     : GENERIC_TURN_FAILURE;
