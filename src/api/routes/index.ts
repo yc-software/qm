@@ -24,6 +24,7 @@ import { credentialRoutes } from "./credentials.ts";
 import { brokerGitHttp, GIT_HTTP_BROKER_PREFIX } from "../git-http-broker.ts";
 import { keychainRoutes } from "./keychain.ts";
 import { secretDropRoutes } from "./secret-drop.ts";
+import { memoryBrainRoutes } from "./memory-brain.ts";
 import { adminRoutes } from "./admin.ts";
 import { spendExport } from "./admin/spend.ts";
 import { skillPackRoutes } from "./skill-packs.ts";
@@ -96,6 +97,19 @@ export const rawRoutes: ReadonlyArray<Route<BaseCtx>> = [
   ...loopIngressRawRoutes,
 ];
 
+function closedToNotebookOnly(routes: ReadonlyArray<Route<ApiCtx>>): Route<ApiCtx>[] {
+  return routes.map((route) => ({
+    ...route,
+    handle: (ctx) =>
+      ctx.method !== "GET" && ctx.capability?.memory?.notebookOnly
+        ? sendJson(ctx.res, 403, {
+            error: "forbidden",
+            message: "a notebook-only turn can't create or change crons, loops or webhooks",
+          })
+        : route.handle(ctx),
+  }));
+}
+
 export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...browserModelRoutes,
   ...browserUploadRoutes,
@@ -114,6 +128,7 @@ export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...credentialRoutes,
   ...keychainRoutes,
   ...secretDropRoutes,
+  ...memoryBrainRoutes,
   ...connectorRoutes,
   ...composioRoutes,
   ...composioAuthorizeRoutes,
@@ -127,12 +142,8 @@ export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...fileUploadRoutes,
   ...projectRoutes,
   ...contextPolicyRoutes,
-  ...cronRoutes,
-  ...loopItemRoutes,
-  ...loopRoutes,
   ...reachRoutes,
-  ...webhookRoutes,
-  ...loopIngressRoutes,
+  ...closedToNotebookOnly([...cronRoutes, ...loopItemRoutes, ...loopRoutes, ...webhookRoutes, ...loopIngressRoutes]),
   ...directoryRoutes,
   ...contextRoutes,
   ...pinRoutes,

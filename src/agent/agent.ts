@@ -101,6 +101,7 @@ export interface AgentTurnInput {
   runtimeControl?: RuntimeControl;
   runtimeActorId?: string;
   readOnly?: boolean;
+  memoryNotebookOnly?: boolean;
   surfaceTools?: boolean;
   delegateWork?: boolean;
   surfaceName?: string;

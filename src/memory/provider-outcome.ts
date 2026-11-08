@@ -6,7 +6,7 @@ import { TimeoutError } from "../util/async.ts";
 import { reportFailure } from "../util/errors.ts";
 import { OutsideAudience, UNATTESTABLE_ACTOR_FIX, UnattestableActor } from "../directory/person.ts";
 import type { ScopeId } from "../types.ts";
-import type { MemoryCaptureContext, MemoryProviderOutcome, MemoryService } from "./memory-service.ts";
+import type { MemoryAuthority, MemoryCaptureContext, MemoryProviderOutcome, MemoryService } from "./memory-service.ts";
 
 export const DENIED_CODES: ReadonlySet<string> = new Set([
   "actor_not_attested",
@@ -162,13 +162,13 @@ export async function writeFacts(
   memory: MemoryService,
   scope: ScopeId,
   facts: string[],
-  author: string | undefined,
+  by: MemoryAuthority,
   context: MemoryCaptureContext,
   turn: string | undefined,
 ): Promise<MemoryWrite> {
   const idempotencyKey = writeKey(turn ?? randomUUID(), scope, facts);
   const { value, outcomes, problems } = await withProviders("write", (report) =>
-    memory.capture(scope, facts, Date.now(), author, { ...context, idempotencyKey, report }),
+    memory.capture(scope, facts, Date.now(), by, { ...context, idempotencyKey, report }),
   );
   return { added: value ?? Math.max(0, ...outcomes.map(({ added }) => added ?? 0)), outcomes, problems };
 }

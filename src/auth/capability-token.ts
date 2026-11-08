@@ -32,6 +32,7 @@ export const CREDENTIAL_BROKER_AUD = "credential-broker";
 export const EGRESS_PROXY_AUD = "egress-proxy";
 export const BLOB_TRANSFER_AUD = "blob-transfer";
 export const SECRET_DROP_AUD = "secret-drop";
+export const MEMORY_BRAIN_DROP_AUD = "memory-brain-drop";
 
 interface BlobGrant {
   dir: "read" | "write";
@@ -61,7 +62,7 @@ export interface CapabilityClaims {
   egress?: EgressPolicy;
   blob?: BlobGrant;
   drop?: string;
-  memory?: { write?: ScopeId; orgWrite?: ScopeId; read: ScopeId[] };
+  memory?: { write?: ScopeId; orgWrite?: ScopeId; read: ScopeId[]; notebookOnly?: true };
   liveActor?: boolean;
   runId?: string;
   sessionId?: string;
