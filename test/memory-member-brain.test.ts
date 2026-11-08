@@ -54,7 +54,9 @@ function serving(record: MemoryRegistry, registryFetch?: AddressFetch) {
     onError: (error) => void errors.push(error),
   });
   const search = () =>
-    withProviders("search", (report) => memory.query("personal:U1", "bees", 5, { actorId: "U1", report }));
+    withProviders("search", (report) =>
+      memory.query("personal:U1", "bees", 5, { actorId: "U1", audienceScopeId: "personal:U1", report }),
+    );
   return { search, errors };
 }
 
