@@ -2,7 +2,7 @@ import { documentStub, type DocumentInput } from "../core/documents.ts";
 import { ProviderTurnError } from "../core/turn-error.ts";
 import { routeLabel, type ModelRoute } from "../model/model-route.ts";
 
-export const FALLBACK_CODES = new Set(["refusal", "model_unavailable", "model_budget", "auth"]);
+export const FALLBACK_CODES = new Set(["refusal", "model_unavailable", "model_budget", "auth", "account"]);
 export const DOCUMENT_REJECTION_CODES = new Set(["context_too_long", "bad_request"]);
 
 export function documentsDroppedNote(documents: readonly DocumentInput[]): string {
@@ -20,6 +20,7 @@ export function fallbackFailed(failure: ProviderTurnError, fallback: ModelRoute,
     retryable: false,
     status: failure.status,
     raw: failure.raw,
+    modelName: failure.modelName,
   });
 }
 
@@ -29,6 +30,7 @@ export function routeFailed(failure: ProviderTurnError, route: ModelRoute): Prov
     retryable: failure.retryable,
     status: failure.status,
     raw: failure.raw,
+    modelName: failure.modelName,
   });
 }
 

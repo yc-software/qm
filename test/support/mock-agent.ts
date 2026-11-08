@@ -7,6 +7,7 @@ import {
   type AgentTurnResult,
 } from "../../src/agent/agent.ts";
 import { NonRetryableTurnError, ProviderTurnError, TitleRejected } from "../../src/core/turn-error.ts";
+import { providerTurnError } from "../../src/model/provider-error.ts";
 import { NeedsApproval } from "../../src/tools/primitives.ts";
 import { toolCallApprovalKey } from "../../src/core/approval-id.ts";
 import { deterministicCompactSummary, estimateHistoryTokens } from "../../src/agent/context-compaction.ts";
@@ -270,6 +271,12 @@ export function createMockAgent(): Agent {
           retryable: false,
           status: 429,
           raw: '429: {"message":"ExceededBudget: Team=team-a over 1d budget.","type":"budget_exceeded"}',
+        });
+      } else if (command0 === "!policy-refusal") {
+        throw providerTurnError({
+          model: "claude-opus-4-8",
+          rawStopReason: "refusal",
+          errorMessage: "This request triggered restrictions on violative cyber content.",
         });
       } else if (command0.startsWith("!post-then-boom ")) {
         const rest = cmd.slice(cmd.indexOf("!post-then-boom ") + "!post-then-boom ".length);
