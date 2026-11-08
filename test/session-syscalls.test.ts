@@ -387,6 +387,36 @@ test("an interrupt or a read-only sender's message to a writable running turn st
   );
 });
 
+test("a Slack bot's message to a person's running subagent starts a bot turn instead of steering or interrupting it", async () => {
+  const r = await rig();
+  const target = await runningChild(r, r.room, "build");
+  const bot: Principal = { id: "B1", type: "internal", displayName: "Release bot" };
+  await r.sessions.addParticipant(target.session.id, bot.id);
+  const fromBot = createSessionSyscalls({ ...r, maxAttempts: 3 }).forTurn({
+    session: r.room,
+    scopeId: scope,
+    request: { surface: "slack", conversation, actor: bot, botActor: true },
+  });
+  const sent = await fromBot.write({ target: target.session.id, wake: true, text: "switch to the priciest model" });
+  assert.deepEqual(sent.ok && [sent.delivered, sent.busy], ["queued_turn", true]);
+  const interrupted = await fromBot.write({ target: target.session.id, interrupt: true, text: "drop it" });
+  assert.deepEqual(interrupted, { ok: false, message: "a Slack bot's turn cannot interrupt a person's task" });
+  const botTask = await fromBot.open({ task: "summarize the release" });
+  assert.ok(botTask.ok);
+  const followUp = await r
+    .syscallsFor(r.room)
+    .write({ target: botTask.sessionId, wake: true, text: "include the changelog" });
+  assert.ok(followUp.ok);
+  const overPerson = await fromBot.write({ target: botTask.sessionId, interrupt: true, text: "skip it" });
+  assert.deepEqual(overPerson, { ok: false, message: "a Slack bot's turn cannot interrupt a person's task" });
+  assert.deepEqual(await r.signals.pending(target.run.id), []);
+  const queued = (await r.runs.inFlightForThread(target.session.threadRef)).filter((run) => run.id !== target.run.id);
+  assert.deepEqual(
+    queued.map((run) => [run.request.actor.id, run.request.botActor]),
+    [["B1", true]],
+  );
+});
+
 async function queuedMessage(r: Rig, target: { session: Session; run: Run }, sender: Session, text: string) {
   const { run } = await r.runs.enqueue({
     sessionId: target.session.threadRef,

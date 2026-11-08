@@ -7,6 +7,7 @@ import { deployRef, encodeRef } from "../../acl/resource-ref.ts";
 import { externalMemberActive, validEmail } from "../../identity/external-members.ts";
 import { isObj, authorizeAdmin, orgScope, audit, activePrincipal } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
+import { trimTrailingSlashes } from "../../util/text.ts";
 
 const NAMESPACE = "authbroker:";
 const MAX_IDS = 64;
@@ -178,7 +179,7 @@ async function redeemInvitation(ctx: ApiCtx): Promise<void> {
     !isObj(claims) ||
     claims.purpose !== "teammate-invite" ||
     claims.org !== orgScope(deps) ||
-    claims.aud !== deps.portalUrl.replace(/\/+$/, "") ||
+    claims.aud !== trimTrailingSlashes(deps.portalUrl) ||
     typeof claims.email !== "string" ||
     typeof claims.iat !== "number" ||
     typeof claims.exp !== "number" ||

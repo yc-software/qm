@@ -42,6 +42,7 @@ import { createHttpEventsReceiver } from "./http-events.ts";
 import { parseChannelPage, parseLogLevel } from "./payloads.ts";
 import type { SlackCoreClient, SurfaceContextRequest } from "../api/slack-core-client.ts";
 import type { AuthTestResponse } from "@slack/web-api";
+import { trimTrailingSlashes } from "../util/text.ts";
 const { App } = bolt;
 
 export type { SlackCoreClient };
@@ -454,7 +455,7 @@ export async function startSlackPlugin(
     ids.botUserId = auth.user_id ?? "";
     ids.ownBotId = auth.bot_id ?? "";
     ids.botHandle = typeof auth.user === "string" ? auth.user : "";
-    ids.ownWorkspaceUrl = typeof auth.url === "string" ? auth.url.replace(/\/+$/, "") : "";
+    ids.ownWorkspaceUrl = typeof auth.url === "string" ? trimTrailingSlashes(auth.url) : "";
     if (!ids.ownTeamId || !ids.botUserId) {
       throw new Error("auth.test returned no team_id/user_id — refusing to start (cannot classify members safely)");
     }

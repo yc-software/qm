@@ -171,6 +171,7 @@ export function sessionContextOf(input: OrchestratorInput): SpawnMeta {
     ...(input.deliveryWebhook ? { deliveryWebhook: input.deliveryWebhook } : {}),
     ...(input.timezone ? { timezone: input.timezone } : {}),
     ...(input.readOnly ? { readOnly: true } : {}),
+    ...(input.botActor ? { botActor: true } : {}),
     ...(input.model ? { model: input.model } : {}),
     ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
     ...(input.fastMode !== undefined ? { fastMode: input.fastMode } : {}),
@@ -288,6 +289,7 @@ export interface SessionSyscallBinding {
     | "deliveryWebhook"
     | "timezone"
     | "readOnly"
+    | "botActor"
     | "scopeVersion"
     | "sessionParticipantIds"
     | "surfaceOrigin"
@@ -431,6 +433,7 @@ function childRunRequest(child: Session, meta: SpawnMeta, text: string, displayT
     displayText,
     envelopeWrapped: true,
     ...(meta.readOnly ? { readOnly: true } : {}),
+    ...(meta.botActor ? { botActor: true } : {}),
     ...(meta.model ? { model: meta.model } : {}),
     ...(meta.thinkingLevel ? { thinkingLevel: meta.thinkingLevel } : {}),
     ...(meta.fastMode !== undefined ? { fastMode: meta.fastMode } : {}),
@@ -571,6 +574,7 @@ export async function stopSessionRuns(
         recipientId: session.id,
         senderId: foreign.sender,
         actor: run.request.actor,
+        ...(run.request.botActor ? { botActor: true } : {}),
         audience: run.request.conversation.audience,
         text: run.request.text,
         createdAt: run.createdAt,
@@ -613,7 +617,8 @@ async function steerRunningTurn(
 ): Promise<"steered" | "replayed" | "refused" | undefined> {
   if (message.dedupKey && (await deps.signals.runForDedupeKey(message.dedupKey))) return "steered";
   const live = inFlight.find((run) => run.status === "running");
-  if (!live || (request.readOnly && !live.request.readOnly)) return undefined;
+  if (!live || (request.readOnly && !live.request.readOnly) || (request.botActor && !live.request.botActor))
+    return undefined;
   const steered = await deps.steerRun(live, {
     kind: "steer",
     text: message.text,
@@ -923,6 +928,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   origin: caller.origin,
                   unattendedGrants: caller.unattendedGrants,
                   readOnly: privateMessage || caller.readOnly || meta.readOnly || target.spawnMeta?.readOnly,
+                  botActor: caller.botActor,
                 },
                 "",
                 "",
@@ -935,6 +941,12 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   return { ok: false, message: "ordinary sessions accept private messages, not interrupts" };
                 if (caller.readOnly && !target.spawnMeta?.readOnly)
                   return { ok: false, message: "a read-only session cannot interrupt a writable task" };
+                if (
+                  caller.botActor &&
+                  (!target.spawnMeta?.botActor ||
+                    (await deps.runs.inFlightForThread(target.threadRef)).some((run) => !run.request.botActor))
+                )
+                  return { ok: false, message: "a Slack bot's turn cannot interrupt a person's task" };
               }
               const text = input.text?.trim();
               if (!text) {
@@ -969,6 +981,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   recipientId: target.id,
                   senderId: binding.session.id,
                   actor: caller.actor,
+                  ...(caller.botActor ? { botActor: true } : {}),
                   audience: caller.conversation.audience,
                   createdAt: Date.now(),
                 });

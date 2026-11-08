@@ -29,7 +29,7 @@ import { builtInModelCatalog, selectableCatalog, selectableModelCatalog } from "
 import { errMessage } from "../../util/errors.ts";
 import { isSafeSkillName, SKILL_NAME_RULE } from "../../skills/skill-name.ts";
 import { SideChatAnchorError, SoulUpdateDeniedError, type SessionPageStatus } from "../app-types.ts";
-import { liveForLock, PersonaLocked } from "../../personas/channel-personas.ts";
+import { PersonaLocked } from "../../personas/channel-personas.ts";
 import { renderAgentApis } from "../agent-api-catalog.ts";
 import { sendJson, sendProblem } from "../http.ts";
 import { resolveBranding } from "../../resolution/branding.ts";
@@ -794,6 +794,7 @@ const searchMemory = agentMemory(async (ctx, memory, capability) => {
   const { value: results, problems } = await withProviders("search", (report) =>
     searchAcrossScopes(memory, scopes, query, typeof b.limit === "number" ? b.limit : 20, {
       actorId: capability.actorId,
+      ...(capability.audienceScopeId ? { audienceScopeId: capability.audienceScopeId } : {}),
       report,
     }),
   );
@@ -857,6 +858,7 @@ const captureFacts = writeMemory(async ({ res, deps, body }, memory, capability,
     {
       mode: "explicit",
       actorId: capability.actorId,
+      ...(capability.audienceScopeId ? { audienceScopeId: capability.audienceScopeId } : {}),
       conversationScopeId: capability.scopeId,
       ...(capability.sessionId ? { sessionId: capability.sessionId } : {}),
     },
@@ -982,7 +984,7 @@ async function restoreSkill(ctx: ApiCtx): Promise<void> {
   }
   if (!principalId) return sendJson(ctx.res, 400, { error: "bad_request", message: "principalId required" });
   const restored = await ctx.app.restoreOwnedSkill(ctx.params.id!, principalId, {
-    liveActor: ctx.capability ? liveForLock(livePersonCapability(ctx.capability), ctx.capability.botActor) : true,
+    liveActor: ctx.capability ? livePersonCapability(ctx.capability) : true,
   });
   if (restored === "exists")
     return sendJson(ctx.res, 409, {
@@ -1123,7 +1125,7 @@ async function createSkill(ctx: ApiCtx): Promise<void> {
     name: b.name,
     description: b.description,
     body: b.body,
-    liveActor: capability ? liveForLock(livePersonCapability(capability), capability.botActor) : true,
+    liveActor: capability ? livePersonCapability(capability) : true,
   });
   if (!created)
     return sendJson(res, 409, {
@@ -1457,7 +1459,7 @@ export async function postSoul(ctx: ApiCtx): Promise<void> {
   try {
     const version = await app.updateSoul(scopeIdVal, content, actorId, {
       ...(allowSharedScope ? { allowSharedScope: true } : {}),
-      liveActor: capability ? liveForLock(livePersonCapability(capability), capability.botActor) : true,
+      liveActor: capability ? livePersonCapability(capability) : true,
     });
     return sendJson(res, 200, { ok: true, version });
   } catch (e) {

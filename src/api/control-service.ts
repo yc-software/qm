@@ -32,7 +32,7 @@ import {
 import { actsAsScope, parseScopeId, type Permission, type ScopeId } from "../types.ts";
 import { cronRef, encodeRef } from "../acl/resource-ref.ts";
 import type { App, VisibleCron } from "./app.ts";
-import { liveForLock, PersonaLocked } from "../personas/channel-personas.ts";
+import { PersonaLocked } from "../personas/channel-personas.ts";
 
 export interface CronCreateRequest {
   runtime?: Cron["runtime"];
@@ -804,7 +804,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
           allowSharedScope: true,
           expectedVersion,
           sessionId: capability.sessionId,
-          liveActor: liveForLock(livePersonCapability(capability), capability.botActor),
+          liveActor: livePersonCapability(capability),
         });
         return { ok: true, version };
       } catch (e) {
@@ -881,7 +881,12 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
 
       try {
         if (orgSkillCede) {
-          const promoted = await app.promoteSkill(home.id, toScope, capability.actorId, capability.liveActor === true);
+          const promoted = await app.promoteSkill(
+            home.id,
+            toScope,
+            capability.actorId,
+            capability.liveActor === true && livePersonCapability(capability),
+          );
           return {
             ok: true,
             verb: "promote",
@@ -893,7 +898,11 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
         }
 
         if (req.move) {
-          const deployPersonTransfer = req.type === "deploy" && toKind === "personal" && capability.liveActor === true;
+          const deployPersonTransfer =
+            req.type === "deploy" &&
+            toKind === "personal" &&
+            capability.liveActor === true &&
+            livePersonCapability(capability);
           if (toKind === "persona" && req.type !== "skill" && req.type !== "file") {
             return {
               ok: false,
@@ -916,7 +925,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
             return { ok: false, code: "forbidden", message: SHARED_SKILL_TRIGGER_REFUSAL };
           }
           await app.moveArtifactHome(req.type, home.id, toScope, capability.actorId, {
-            liveActor: liveForLock(livePersonCapability(capability), capability.botActor),
+            liveActor: livePersonCapability(capability),
           });
           return {
             ok: true,
@@ -941,7 +950,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
               permission,
               grantedBy: capability.actorId,
             },
-            { ...notify, liveActor: liveForLock(livePersonCapability(capability), capability.botActor) },
+            { ...notify, liveActor: livePersonCapability(capability) },
           );
         return {
           ok: true,
