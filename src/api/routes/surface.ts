@@ -34,6 +34,7 @@ import { builtInModelCatalog, selectableCatalog, selectableModelCatalog } from "
 import { errMessage } from "../../util/errors.ts";
 import { isSafeSkillName, SKILL_NAME_RULE } from "../../skills/skill-name.ts";
 import { SideChatAnchorError, SoulUpdateDeniedError, type SessionPageStatus } from "../app-types.ts";
+import { PersonaLocked } from "../../personas/channel-personas.ts";
 import { renderAgentApis } from "../agent-api-catalog.ts";
 import { sendJson, sendProblem } from "../http.ts";
 import { resolveBranding } from "../../resolution/branding.ts";
@@ -989,7 +990,9 @@ async function restoreSkill(ctx: ApiCtx): Promise<void> {
     return sendJson(ctx.res, 401, { error: "capability_required" });
   }
   if (!principalId) return sendJson(ctx.res, 400, { error: "bad_request", message: "principalId required" });
-  const restored = await ctx.app.restoreOwnedSkill(ctx.params.id!, principalId);
+  const restored = await ctx.app.restoreOwnedSkill(ctx.params.id!, principalId, {
+    liveActor: ctx.capability ? livePersonCapability(ctx.capability) : true,
+  });
   if (restored === "exists")
     return sendJson(ctx.res, 409, {
       error: "exists",
@@ -1028,7 +1031,10 @@ async function updateSkill(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 400, { error: "bad_request", message: "description and body can't be blank" });
   }
   const liveActor = capability ? livePersonCapability(capability) : true;
-  const updated = await app.updateOwnedSkill(id, principalId, patch, { liveActor });
+  const updated = await app.updateOwnedSkill(id, principalId, patch, {
+    liveActor,
+    botActor: capability?.botActor === true,
+  });
   if (updated === "trigger_blocked")
     return sendJson(res, 403, { error: "forbidden", message: SHARED_SKILL_TRIGGER_REFUSAL });
   if (!updated) return sendJson(res, 404, { error: "not_found", message: "no such skill, or it isn't yours to edit" });
@@ -1059,7 +1065,7 @@ async function deleteSkill(ctx: ApiCtx): Promise<void> {
     principalId = b.principalId;
   }
   const liveActor = capability ? livePersonCapability(capability) : true;
-  const outcome = await app.deleteOwnedSkill({ principalId, id, liveActor });
+  const outcome = await app.deleteOwnedSkill({ principalId, id, liveActor, botActor: capability?.botActor === true });
   if (outcome === "missing") return sendJson(res, 404, { error: "not_found", message: "no such skill" });
   if (outcome === "trigger_blocked")
     return sendJson(res, 403, { error: "forbidden", message: SHARED_SKILL_TRIGGER_REFUSAL });
@@ -1126,6 +1132,7 @@ async function createSkill(ctx: ApiCtx): Promise<void> {
     name: b.name,
     description: b.description,
     body: b.body,
+    liveActor: capability ? livePersonCapability(capability) : true,
   });
   if (!created)
     return sendJson(res, 409, {
@@ -1148,9 +1155,10 @@ async function createGrant(ctx: ApiCtx): Promise<void> {
   const { res, app, body } = ctx;
   if (!isGrant(body)) return sendJson(res, 400, { error: "bad_request", message: "expected a Grant" });
   try {
-    await app.grant(body);
+    await app.grant(body, { liveActor: true });
     return sendJson(res, 200, { ok: true });
   } catch (e) {
+    if (e instanceof PersonaLocked) throw e;
     return sendJson(res, 400, { error: "grant_failed", message: errMessage(e) });
   }
 }
@@ -1165,9 +1173,10 @@ async function revokeGrant(ctx: ApiCtx): Promise<void> {
     });
   }
   try {
-    await app.revokeGrant(b.ownerScopeId, b.ref, b.granteeScopeId, b.revokedBy);
+    await app.revokeGrant(b.ownerScopeId, b.ref, b.granteeScopeId, b.revokedBy, { liveActor: true });
     return sendJson(res, 200, { ok: true });
   } catch (e) {
+    if (e instanceof PersonaLocked) throw e;
     return sendJson(res, 400, { error: "revoke_failed", message: errMessage(e) });
   }
 }
@@ -1455,16 +1464,15 @@ export async function postSoul(ctx: ApiCtx): Promise<void> {
     Boolean(capability) ||
     (parseScopeId(scopeIdVal).kind !== "personal" && (await app.managesScope(actorId, scopeIdVal as ScopeId)));
   try {
-    const version = await app.updateSoul(
-      scopeIdVal,
-      content,
-      actorId,
-      allowSharedScope ? { allowSharedScope: true } : undefined,
-    );
+    const version = await app.updateSoul(scopeIdVal, content, actorId, {
+      ...(allowSharedScope ? { allowSharedScope: true } : {}),
+      liveActor: capability ? livePersonCapability(capability) : true,
+    });
     return sendJson(res, 200, { ok: true, version });
   } catch (e) {
     if (e instanceof SoulUpdateDeniedError)
       return sendJson(res, 403, { error: "soul_update_denied", message: e.message });
+    if (e instanceof PersonaLocked) throw e;
     return sendJson(res, 500, { error: "soul_update_failed", message: errMessage(e) });
   }
 }

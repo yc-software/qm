@@ -15,7 +15,7 @@ import { isManageableCreationScope, parseScopeId, scopeId } from "../types.ts";
 import { type ListOwnedOptions } from "../files/file-artifact-store.ts";
 import { isTerminal, RUN_WAIT_FALLBACK_MS, type Run, type SessionWatch } from "../runs/run-store.ts";
 import type { RunSignal } from "../runs/run-signal-store.ts";
-import { deployRef, encodeRef, parseRef } from "../acl/resource-ref.ts";
+import { deployRef, encodeRef, parseRef, skillRef } from "../acl/resource-ref.ts";
 import type { Skill } from "../skills/skill-store.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import {
@@ -547,6 +547,20 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     return principalManagesArtifactHome(skill.scopeId, skill.createdBy, principalId);
   }
 
+  async function assertMayInstructSkill(
+    change: { id?: string; homes: readonly ScopeId[]; grantee?: ScopeId },
+    actor: { id: string; live: boolean },
+  ): Promise<void> {
+    if (!deps.channelPersonas) return;
+    const reach = new Set<ScopeId>(change.grantee ? [change.grantee] : []);
+    for (const home of change.homes) {
+      reach.add(home);
+      if (change.id)
+        for (const g of await deps.acl.grantsFor(home, encodeRef(skillRef(change.id)))) reach.add(g.granteeScopeId);
+    }
+    for (const scope of reach) await deps.channelPersonas.assertMayInstruct(scope, actor);
+  }
+
   async function republishIfShared(skill: Skill, editorId: string): Promise<Skill> {
     if (skill.status === "published") return skill;
     const { kind } = parseScopeId(skill.scopeId);
@@ -870,6 +884,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     principalManagesArtifactHome,
     artifactAuthor,
     canManageSkill,
+    assertMayInstructSkill,
     republishIfShared,
     effectiveDeploymentPermission,
     artifactGrantPermission,
