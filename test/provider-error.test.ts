@@ -157,7 +157,7 @@ test("providerTurnError maps documented status, type and code without reading er
     }) as AssistantMessage;
   for (const [message, code, retryable] of [
     [failed({ status: 429, type: "budget_exceeded" }), "model_budget", false],
-    [failed({ status: 429, code: "insufficient_quota" }), "model_budget", false],
+    [failed({ status: 429, code: "insufficient_quota" }), "account", false],
     [failed({ status: 400, code: "context_length_exceeded" }), "context_too_long", false],
     [failed({ status: 401, type: "authentication_error" }), "auth", false],
     [failed({ status: 400, code: "cyber_policy" }), "refusal", false],

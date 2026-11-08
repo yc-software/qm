@@ -114,6 +114,10 @@ export function isProviderDecision(err: unknown): err is ProviderTurnError {
   return err instanceof ProviderTurnError && PROVIDER_DECISION_CODES.has(err.code);
 }
 
+export function turnErrorCode(err: unknown): string {
+  return isProviderDecision(err) ? err.code : "error";
+}
+
 export function turnFailureMessage(err: unknown): string {
   if (isModelBudget(err)) return MODEL_BUDGET_TEXT;
   if (err instanceof ProviderTurnError && err.code === "refusal")
