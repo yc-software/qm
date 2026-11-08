@@ -7,7 +7,6 @@ const TRANSIENT_TYPES = new Set(["overloaded_error", "api_error", "timeout_error
 const CONTEXT_CODES = new Set(["context_length_exceeded"]);
 const NOT_FOUND_CODES = new Set(["model_not_found"]);
 const POLICY_CODES = new Set(["cyber_policy"]);
-const RESPONSES_APIS = new Set(["openai-responses", "azure-openai-responses"]);
 const ACCOUNT_CODES = new Set(["insufficient_credits", "insufficient_quota"]);
 const ANTHROPIC_LOW_CREDIT = "credit balance is too low";
 const RETRYABLE_CODES = new Set<ProviderErrorCode>([...TRANSIENT_ERROR_CODES, "unknown"]);
@@ -25,21 +24,15 @@ function nearWindow(usage: ContextUsage | undefined): boolean {
 }
 
 type ProviderFailure = Pick<AssistantMessage, "providerError" | "rawStopReason" | "errorMessage"> &
-  Partial<Pick<AssistantMessage, "model" | "api">>;
-
-function responsesFailureCode(failed: ProviderFailure): string | undefined {
-  if (failed.providerError || !failed.api || !RESPONSES_APIS.has(failed.api)) return undefined;
-  return failed.errorMessage?.split(": ", 1)[0];
-}
+  Partial<Pick<AssistantMessage, "model">>;
 
 function providerErrorCode(failed: ProviderFailure, usage?: ContextUsage): ProviderErrorCode {
   const { status, type, code, body } = failed.providerError ?? {};
-  const failureCode = code ?? responsesFailureCode(failed);
-  if (failed.rawStopReason === "refusal" || (failureCode && POLICY_CODES.has(failureCode))) return "refusal";
+  if (failed.rawStopReason === "refusal" || (code && POLICY_CODES.has(code))) return "refusal";
   if (
     type === "billing_error" ||
     status === 402 ||
-    (failureCode && ACCOUNT_CODES.has(failureCode)) ||
+    (code && ACCOUNT_CODES.has(code)) ||
     (type === "invalid_request_error" && providerBodyMessage(body)?.includes(ANTHROPIC_LOW_CREDIT))
   )
     return "account";
