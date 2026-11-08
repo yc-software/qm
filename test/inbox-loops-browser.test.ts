@@ -14,7 +14,16 @@ import { browserSessionCookie, browserSessionDeps } from "./support/browser-sess
 const SECRET = "inbox-loops-browser-signing-secret-0123456789";
 const config = testConfig({ signingSecret: SECRET, capabilitySecret: SECRET, publicWebUrl: "https://qm.test" });
 const built = stopAtEnd(buildApp(config));
-const server = createServer(built.app, { ...serverDeps(config, built), ...browserSessionDeps });
+const itemImages = new Map<string, () => Response>();
+const server = createServer(built.app, {
+  ...serverDeps(config, built),
+  ...browserSessionDeps,
+  itemImageFetch: async (input) => {
+    const fake = itemImages.get(String(input));
+    if (!fake) throw new TypeError(`unexpected item image fetch ${String(input)}`);
+    return fake();
+  },
+});
 await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 after(() => new Promise<void>((resolve) => server.close(() => resolve())));
 const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -84,18 +93,13 @@ test("agents keep using loops through their capability without the person flag",
   assert.equal(response.status, 200, await response.clone().text());
 });
 
-test("an inbox item image is served only as a sandboxed, non-sniffable image", async (t) => {
+test("an inbox item image is served only as a sandboxed, non-sniffable image", async () => {
   const png = Buffer.from("89504e470d0a1a0a", "hex");
-  const realFetch = globalThis.fetch;
-  const upstream: Record<string, () => Response> = {
-    "https://images.example/a.png": () => new Response(png, { headers: { "content-type": "image/png" } }),
-    "https://internal.example/admin": () =>
-      new Response("<h1>admin</h1>", { status: 403, headers: { "content-type": "text/html" } }),
-  };
-  t.mock.method(globalThis, "fetch", (input: string | URL | Request, init?: RequestInit) => {
-    const fake = upstream[String(input)];
-    return fake ? Promise.resolve(fake()) : realFetch(input, init);
-  });
+  itemImages.set("https://images.example/a.png", () => new Response(png, { headers: { "content-type": "image/png" } }));
+  itemImages.set(
+    "https://internal.example/admin",
+    () => new Response("<h1>admin</h1>", { status: 403, headers: { "content-type": "text/html" } }),
+  );
   await flag("ivy", true);
   const loopId = await firstInboxLoop("ivy");
   await built.loops.items.ingest([

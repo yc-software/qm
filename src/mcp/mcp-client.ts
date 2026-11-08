@@ -6,6 +6,7 @@ import { OAuthError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { swallowAs } from "../util/errors.ts";
 import { publicFetch, type AddressFetch } from "../util/network.ts";
+import { trimTrailingSlashes } from "../util/text.ts";
 
 const MAX_TOOLS = 64;
 const CALL_TIMEOUT_MS = 300_000;
@@ -97,7 +98,7 @@ export interface McpClient {
 }
 
 export function createMcpClient(opts: { url: string; auth: McpAuth; fetch?: AddressFetch }): McpClient {
-  const trimmed = opts.url.replace(/\/+$/g, "");
+  const trimmed = trimTrailingSlashes(opts.url);
   const endpoint = new URL(new URL(trimmed).pathname === "/" ? `${trimmed}/mcp` : trimmed);
   const { auth } = opts;
   const fetchFn = opts.fetch ?? publicFetch;

@@ -158,6 +158,9 @@ const withRoute = (config: string, fields: Record<string, unknown>) => {
   return JSON.stringify(parsed);
 };
 
+const knowledge = (JSON.parse(value) as { providers: Array<Record<string, Record<string, unknown>>> }).providers[0]!;
+const scoped = { read: { ...knowledge.read, scopeArg: "scope" }, write: { ...knowledge.write, scopeArg: "scope" } };
+
 test("attestActor is an opt-in boolean on mcp providers only", () => {
   const mcp = (fields: Record<string, unknown>) => {
     const provider = parseMemoryProviderConfig(withRoute(withProvider(fields), { scopes: ["personal"] }), ENV)
@@ -191,8 +194,79 @@ test("an attested provider serves only personal scopes, so a shared conversation
         `memory route 1: provider knowledge sets attestActor, so it may serve only personal scopes, not ${shared}; an attested read returns that member's private memory`,
       ),
     );
-    assert.deepEqual(scopes([shared], value), [shared]);
+    assert.deepEqual(scopes([shared], withProvider(scoped)), [shared]);
   }
+});
+
+test("a provider without scopeArg serves only scopes its server can tell apart, so it never pools conversations' memory", () => {
+  const scopes = (provider: Record<string, unknown>, ...routes: Array<Record<string, unknown>>) => {
+    const parsed = JSON.parse(withProvider(provider)) as { routes: Array<Record<string, unknown>> };
+    parsed.routes.splice(1, 1, ...routes.map((route) => ({ provider: "knowledge", manage: false, ...route })));
+    return parseMemoryProviderConfig(JSON.stringify(parsed), ENV)
+      ?.routes.slice(1)
+      .flatMap((route) => route.scopes);
+  };
+  const twins = (url: string, ...routes: Array<Record<string, unknown>>) => {
+    const parsed = JSON.parse(value) as {
+      providers: Array<Record<string, unknown>>;
+      routes: Array<Record<string, unknown>>;
+    };
+    parsed.providers.push({ ...parsed.providers[0], id: "twin", url });
+    parsed.routes.splice(1, 1, ...routes.map((route) => ({ manage: false, ...route })));
+    return parseMemoryProviderConfig(JSON.stringify(parsed), ENV)
+      ?.routes.slice(1)
+      .flatMap((route) => route.scopes);
+  };
+  const refused = (names: string, listed: string) => (error: unknown) =>
+    String(error).includes(
+      `memory provider ${names}: no scopeArg, so the server cannot tell apart the scopes it serves (${listed})`,
+    );
+  assert.throws(() => scopes({}, { scopes: ["channel"] }), refused("knowledge.read", "channel"));
+  assert.throws(() => scopes({}, { scopes: ["personal", "channel"] }), refused("knowledge.read", "personal, channel"));
+  assert.throws(
+    () => scopes({}, { scopes: ["personal", "persona:p1"] }),
+    refused("knowledge.read", "personal, persona:p1"),
+  );
+  assert.throws(() => scopes({}, { scopes: ["personal"], manage: true }), refused("knowledge.read", "personal"));
+  assert.throws(
+    () => scopes({}, { scopes: ["personal:U1"] }, { scopes: ["org:acme"], capture: "explicit" }),
+    refused("knowledge.read", "personal:U1, org:acme"),
+  );
+  assert.throws(
+    () => scopes({ read: scoped.read }, { scopes: ["group", "team"], capture: "explicit" }),
+    refused("knowledge.write", "group, team"),
+  );
+  const sameServer = "http://memory-provider.internal:48081";
+  assert.throws(
+    () =>
+      twins(
+        sameServer,
+        { provider: "knowledge", scopes: ["channel:C1"] },
+        { provider: "twin", scopes: ["channel:C2"] },
+      ),
+    refused("knowledge.read and twin.read", "channel:C1, channel:C2"),
+  );
+  assert.throws(
+    () => twins(sameServer, { provider: "knowledge", scopes: ["personal"] }, { provider: "twin", scopes: ["org"] }),
+    refused("knowledge.read and twin.read", "personal, org"),
+  );
+  assert.deepEqual(
+    twins(
+      "http://other-provider.internal:48081",
+      { provider: "knowledge", scopes: ["channel:C1"] },
+      { provider: "twin", scopes: ["channel:C2"] },
+    ),
+    ["channel:C1", "channel:C2"],
+  );
+  assert.deepEqual(scopes(scoped, { scopes: ["personal", "channel", "persona:p1"] }), [
+    "personal",
+    "channel",
+    "persona:p1",
+  ]);
+  assert.deepEqual(scopes({ read: scoped.read, write: undefined }, { scopes: ["group", "team"] }), ["group", "team"]);
+  assert.deepEqual(scopes({}, { scopes: ["personal"] }, { scopes: ["personal:U1"] }), ["personal", "personal:U1"]);
+  assert.deepEqual(scopes({}, { scopes: ["org", "org:acme"] }), ["org", "org:acme"]);
+  assert.deepEqual(scopes({}, { scopes: ["persona:p1"], manage: true }), ["persona:p1"]);
 });
 
 test("a write operation maps its facts with factsArg or contentArg, not both", () => {
