@@ -114,7 +114,7 @@ test("pg map: rejects an unsafe table name (the DDL/DML interpolation guard)", (
   const factory = createPostgresMapFactory("postgres://unused");
   assert.throws(() => factory.map("bad name"), /invalid table name/);
   assert.throws(() => factory.map("crons;--"), /invalid table name/);
-  assert.throws(() => factory.map<{ owner: string }>("map_widgets", ["bad field" as "owner"]), /invalid index field/);
+  assert.throws(() => factory.map<{ owner: string }>("map_widgets", ["bad field" as "owner"]), /invalid map field/);
 });
 
 test(
@@ -583,14 +583,15 @@ test("pg map: an indexed select plans both branches through their indexes", { sk
   }
 });
 
-test("pg map: trigger stores list only the owner's rows", { skip }, async () => {
+test("pg map: a scope's crons are the ones it owns or receives", { skip }, async () => {
   const f = createPostgresMapFactory(URL!);
-  const crons = createCronStore(f.map<Cron>("map_owned_crons", ["ownerScopeId"]), {
+  const crons = createCronStore(f.map<Cron>("map_owned_crons", ["ownerScopeId", "destination.audienceScopeId"]), {
     fires: createPostgresCronFireStore(URL!),
   });
   const upper = scopeId("personal", "OwnerU");
   const lower = scopeId("personal", "owneru");
-  for (const owner of [upper, lower, scopeId("personal", "other")])
+  const other = scopeId("personal", "other");
+  for (const owner of [upper, lower, other])
     await crons.create({
       owner: owner.slice("personal:".length),
       createdBy: owner.slice("personal:".length),
@@ -598,8 +599,16 @@ test("pg map: trigger stores list only the owner's rows", { skip }, async () => 
       schedule: { everyMs: 60_000 },
       action: `check ${owner}`,
     });
-  assert.deepEqual(
-    (await crons.ownedBy(upper)).map((cron) => cron.ownerScopeId),
-    [upper],
-  );
+  await crons.create({
+    owner: "other",
+    createdBy: "other",
+    ownerScopeId: other,
+    schedule: { everyMs: 60_000 },
+    action: "report to OwnerU",
+    destination: { type: "web", target: "web:OwnerU:default", audienceScopeId: upper },
+  });
+  assert.deepEqual((await crons.scheduledIn(upper)).map((cron) => cron.action).toSorted(), [
+    `check ${upper}`,
+    "report to OwnerU",
+  ]);
 });

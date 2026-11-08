@@ -51,15 +51,15 @@ test("prompt inventories keep identical bytes across permutations, including cap
   }));
   checkOrder<Cron>(
     base.map((b) => ({ ...b, schedule: { everyMs: 60_000 }, action: b.id })),
-    (items) => renderStandingObligations(items, [], []),
+    (items) => renderStandingObligations("personal:U1", items, [], []),
   );
   checkOrder<Webhook>(
     base.map((b) => ({ ...b, action: b.id, verification: { scheme: "github" } })),
-    (items) => renderStandingObligations([], items, []),
+    (items) => renderStandingObligations("personal:U1", [], items, []),
   );
   checkOrder<Monitor>(
     base.map((b) => ({ ...b, processId: b.id, command: b.id, threadRef: "t", cursor: 0, expiresAt: 100 })),
-    (items) => renderStandingObligations([], [], items),
+    (items) => renderStandingObligations("personal:U1", [], [], items),
   );
   assert.match(deliveryMenu([{ key: "x", label: "X", type: "slack", target: "x" }], "x"), /X \(default/);
 });
