@@ -1,6 +1,8 @@
 import "./support/auto-fake-sprites.ts";
 
 import assert from "node:assert/strict";
+import { once } from "node:events";
+import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -18,7 +20,7 @@ const USER = { "content-type": "application/json", "x-admin-actor": "bob@default
 
 afterEach(() => setCustomProviders([]));
 
-function start(modelCredentialFetch: typeof fetch = async () => new Response(null, { status: 200 })): {
+function start(modelCredentialFetch?: typeof fetch): {
   base: string;
   built: BuiltApp;
   close: () => Promise<void>;
@@ -95,6 +97,35 @@ test("custom provider lifecycle: register, list, resolve, delete — admin only,
   } finally {
     await srv.close();
   }
+});
+
+test("key validation refuses an endpoint on a private network address without sending it the key", async (t) => {
+  let hits = 0;
+  const endpoint = createServer((_req, res) => {
+    hits++;
+    res.end("{}");
+  });
+  endpoint.listen(0, "127.0.0.1");
+  await once(endpoint, "listening");
+  t.after(() => endpoint.close());
+  const srv = start();
+  t.after(srv.close);
+  for (const [baseUrl, host] of [
+    [`http://127.0.0.1:${(endpoint.address() as AddressInfo).port}/v1`, "127.0.0.1"],
+    ["http://169.254.169.254/latest", "169.254.169.254"],
+  ]) {
+    const put = await fetch(`${srv.base}/v1/admin/custom-providers/acme-gateway`, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify({ ...BODY, baseUrl }),
+    });
+    assert.equal(put.status, 400, baseUrl);
+    assert.deepEqual(await put.json(), {
+      error: "bad_request",
+      message: `${host} is a private network address; a deployment operator can allow this exact origin with PRIVATE_NETWORK_ALLOWED_ORIGINS`,
+    });
+  }
+  assert.equal(hits, 0);
 });
 
 test("a rejected key blocks registration unless validate:false", async () => {
