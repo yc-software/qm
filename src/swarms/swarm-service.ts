@@ -150,6 +150,11 @@ function rosterMatches(current: readonly string[], expected: readonly string[]):
   return actual.size === frozen.size && [...actual].every((id) => frozen.has(id));
 }
 
+function assertCallerMayDirect(caller: SwarmCaller, swarm: Swarm): void {
+  if (caller.kind === "agent" && caller.claims.botActor && !swarm.template.botActor)
+    throw new Error("a Slack bot's turn cannot direct a person's swarm");
+}
+
 function dispatchContract(input: OrchestratorInput) {
   return {
     actor: input.actor,
@@ -601,6 +606,7 @@ export function createSwarmService(deps: {
     },
     async context(caller, context) {
       const { auth, swarm } = await load(caller);
+      assertCallerMayDirect(caller, swarm);
       const value = jsonContext(context, swarm.settings.contextBytes);
       const updated = await update(auth, (swarm) => {
         assertSwarmOpen(swarm);
@@ -657,6 +663,7 @@ export function createSwarmService(deps: {
           swarm.settings = next;
           if (next.lifetimeMs !== undefined) swarm.expiresAt = swarm.createdAt + next.lifetimeMs;
         }
+        assertCallerMayDirect(caller, swarm);
         assertSwarmOpen(swarm);
         const parent = swarm.members.find((member) => member.id === auth.memberId)!;
         if (parent.depth >= swarm.settings.depth) throw new Error("swarm depth budget exhausted");
@@ -753,6 +760,7 @@ export function createSwarmService(deps: {
           if (previous.signature !== fingerprint) throw new Error("requestId reused with different content");
           return;
         }
+        assertCallerMayDirect(caller, swarm);
         assertSwarmOpen(swarm);
         if (swarm.messages.length >= (swarm.settings.messages ?? Infinity))
           throw new Error("swarm message budget exhausted");
@@ -824,6 +832,7 @@ export function createSwarmService(deps: {
     enabledFor,
     async control(caller, input) {
       const { auth, swarm } = await load(caller);
+      assertCallerMayDirect(caller, swarm);
       if (!["active", "paused", "stopped"].includes(input.state)) throw new Error("invalid control state");
       const target = swarm.members.find((member) => member.id === input.memberId);
       if (!target) throw new Error("unknown swarm member");

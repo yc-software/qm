@@ -291,6 +291,7 @@ export interface SessionSyscallBinding {
     | "timezone"
     | "readOnly"
     | "memoryNotebookOnly"
+    | "botActor"
     | "scopeVersion"
     | "sessionParticipantIds"
     | "surfaceOrigin"
@@ -622,7 +623,8 @@ async function steerRunningTurn(
   if (
     !live ||
     (request.readOnly && !live.request.readOnly) ||
-    (request.memoryNotebookOnly && !live.request.memoryNotebookOnly)
+    (request.memoryNotebookOnly && !live.request.memoryNotebookOnly) ||
+    (request.botActor && !live.request.botActor)
   )
     return undefined;
   const steered = await deps.steerRun(live, {
@@ -948,6 +950,12 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   return { ok: false, message: "ordinary sessions accept private messages, not interrupts" };
                 if (caller.readOnly && !target.spawnMeta?.readOnly)
                   return { ok: false, message: "a read-only session cannot interrupt a writable task" };
+                if (
+                  caller.botActor &&
+                  (!target.spawnMeta?.botActor ||
+                    (await deps.runs.inFlightForThread(target.threadRef)).some((run) => !run.request.botActor))
+                )
+                  return { ok: false, message: "a Slack bot's turn cannot interrupt a person's task" };
               }
               const text = input.text?.trim();
               if (!text) {
