@@ -286,11 +286,8 @@ test("moving a brain drops its secret, and a brain with bindings can't be delete
 
 test("setting a brain's secret restates the url the secret goes to", () => {
   const registered = personalBrain(EMPTY_MEMORY_REGISTRY, { clientSecret: undefined });
-  refused(
-    () => putBrain(registered, "acme-personal", { clientSecret: "personal-secret" }, change),
-    400,
-    /must restate url/,
-  );
+  for (const body of [{ clientSecret: "personal-secret" }, { clientSecret: "personal-secret", url: null }])
+    refused(() => putBrain(registered, "acme-personal", body, change), 400, /must restate url/);
   const approved = putBrain(
     registered,
     "acme-personal",
