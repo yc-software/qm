@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { normalizeSchedule, validateUserSchedule } from "../src/cron/schedule.ts";
+import { advanceNextFireAt, normalizeSchedule, recoverNextFireAt, validateUserSchedule } from "../src/cron/schedule.ts";
 
 const now = Date.UTC(2026, 6, 1, 12, 0, 0);
 const DAY = 24 * 60 * 60 * 1000;
@@ -34,6 +34,30 @@ test("a calendar schedule with timezone is unaffected", () => {
   assert.equal(r.schedule.timezone, "America/Los_Angeles");
   assert.ok(r.nextFireAt && r.nextFireAt > now);
 });
+
+for (const [expression, normalized, dates] of [
+  ["0 9 ? * MON", "0 9 * * MON", ["2026-10-26T09:00:00Z", "2026-11-02T09:00:00Z", "2026-11-09T09:00:00Z"]],
+  ["0 9 1 * ?", "0 9 1 * *", ["2026-11-01T09:00:00Z", "2026-12-01T09:00:00Z", "2027-01-01T09:00:00Z"]],
+  ["0 9 ? * ?", "0 9 * * *", ["2026-10-22T09:00:00Z", "2026-10-23T09:00:00Z", "2026-10-24T09:00:00Z"]],
+  ["0 ? * * *", "0 * * * *", ["2026-10-22T01:00:00Z", "2026-10-22T02:00:00Z", "2026-10-22T03:00:00Z"]],
+  ["0 9 1 * MON", "0 9 1 * MON", ["2026-10-26T09:00:00Z", "2026-11-01T09:00:00Z", "2026-11-02T09:00:00Z"]],
+] as const) {
+  test(`calendar schedule ${expression} fires on its intended dates`, () => {
+    const start = Date.parse("2026-10-22T00:00:00Z");
+    const input = { cron: expression, timezone: "UTC" };
+    const { schedule, nextFireAt } = normalizeSchedule(input, start);
+    const expected = dates.map((date) => Date.parse(date));
+    let next = nextFireAt;
+    for (const at of expected) {
+      assert.equal(next, at);
+      next = advanceNextFireAt(schedule, at);
+    }
+    assert.equal(schedule.cron, normalized);
+    assert.equal(recoverNextFireAt(input, start, undefined, undefined), expected[0]);
+    assert.equal(recoverNextFireAt(input, start, expected[0], undefined), expected[1]);
+    assert.equal(advanceNextFireAt(input, expected[0]!), expected[1]);
+  });
+}
 
 test("rejects a one-shot firstFireAt in the past, naming the current clock", () => {
   assert.throws(
