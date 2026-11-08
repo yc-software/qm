@@ -607,9 +607,9 @@ export function createSwarmService(deps: {
     },
     async context(caller, context) {
       const { auth, swarm } = await load(caller);
-      assertCallerMayDirect(caller, auth, swarm);
       const value = jsonContext(context, swarm.settings.contextBytes);
       const updated = await update(auth, (swarm) => {
+        assertCallerMayDirect(caller, auth, swarm);
         assertSwarmOpen(swarm);
         swarm.members.find((member) => member.id === auth.memberId)!.context = value;
       });
@@ -816,15 +816,12 @@ export function createSwarmService(deps: {
           .filter((message) => message.seq > after && (!options.replyTo || message.replyTo === options.replyTo))
           .slice(0, 32);
       for (;;) {
+        if (caller.kind === "agent" && caller.claims.botActor && !botMayDirect(swarm, auth.memberId, auth.actorId))
+          return [];
         let messages = pick(swarm);
         const unread = (current: Swarm) =>
           pick(current).filter((message) => message.notifications[auth.memberId]?.state === "mailbox");
-        if (
-          caller.kind === "agent" &&
-          options.replyTo &&
-          unread(swarm).length &&
-          (!caller.claims.botActor || botMayDirect(swarm, auth.memberId, auth.actorId))
-        )
+        if (caller.kind === "agent" && options.replyTo && unread(swarm).length)
           messages = pick(
             await update(auth, (current) => {
               for (const message of unread(current)) message.notifications[auth.memberId] = { state: "handed" };
@@ -838,7 +835,6 @@ export function createSwarmService(deps: {
     enabledFor,
     async control(caller, input) {
       const { auth, swarm } = await load(caller);
-      assertCallerMayDirect(caller, auth, swarm);
       if (!["active", "paused", "stopped"].includes(input.state)) throw new Error("invalid control state");
       const target = swarm.members.find((member) => member.id === input.memberId);
       if (!target) throw new Error("unknown swarm member");
@@ -850,6 +846,7 @@ export function createSwarmService(deps: {
         if (!ancestor) throw new Error("agents may only control themselves or their descendants");
       }
       const updated = await update(auth, (current) => {
+        assertCallerMayDirect(caller, auth, current);
         const member = current.members.find((peer) => peer.id === target.id)!;
         if (member.control === "stopped") throw new Error("stopped workers cannot be resumed");
         if (input.state === "active") delete member.control;

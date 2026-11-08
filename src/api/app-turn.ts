@@ -114,7 +114,12 @@ export function createTurnMethods(
       live.push({ turn: { kind: "descendants", actorIds: descendants.map((run) => run.request.actor.id) } });
     return live;
   }
-  async function stopThread(threadRef: string, run: Run | undefined, tree: boolean, bot = false): Promise<boolean> {
+  async function stopThread(
+    threadRef: string,
+    run: Run | undefined,
+    tree: boolean,
+    botRunsOnly = false,
+  ): Promise<boolean> {
     if (!deps.signals) return false;
     const stopDeps = { sessions: deps.sessions, runs: deps.runs, signals: deps.signals };
     const scope = tree ? undefined : "session";
@@ -122,19 +127,20 @@ export function createTurnMethods(
     const stop = async () => {
       const session = await deps.sessions.getByThread(threadRef);
       if (session && tree) {
-        const stopped = await stopSessionTree(stopDeps, session, reason, bot);
-        await deps.settleTreeWakes?.(session, bot);
+        const stopped = await stopSessionTree(stopDeps, session, reason, botRunsOnly);
+        await deps.settleTreeWakes?.(session, botRunsOnly);
         return stopped;
       }
-      if (session) return (await stopSessionRuns(stopDeps, session, { reason, scope, botRunsOnly: bot })).length > 0;
-      if (!run || run.status === "done" || run.status === "failed" || (bot && !run.request.botActor)) return false;
+      if (session) return (await stopSessionRuns(stopDeps, session, { reason, scope, botRunsOnly })).length > 0;
+      if (!run || run.status === "done" || run.status === "failed" || (botRunsOnly && !run.request.botActor))
+        return false;
       await stopDeps.signals.send(run.id, { kind: "abort", reason, ...(scope ? { scope } : {}) });
       if (run.status === "pending") await deps.runs.withdraw(run.id);
       return true;
     };
     return deps.advisoryLock.withLock("session-tree-admission", stop);
   }
-  const stopRun = (run: Run, tree: boolean, bot = false) => stopThread(run.sessionId, run, tree, bot);
+  const stopRun = (run: Run, tree: boolean, botRunsOnly = false) => stopThread(run.sessionId, run, tree, botRunsOnly);
   const methods: ReturnType<typeof createTurnMethods> = {
     async turn(req: TurnRequest, replay?: { signalDedupKey: string }): Promise<TurnResult> {
       const historicalSlack = Object.keys(deps.externalSlackPolicies ?? {}).length

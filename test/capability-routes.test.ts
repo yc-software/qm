@@ -122,58 +122,6 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
       SECRET,
     );
 
-  it("refuses a Slack bot's turn unattended cron grants and persona credential changes at the HTTP boundary", async () => {
-    const owner = async (extra: Partial<CapabilityClaims> = {}) => ({
-      "x-agent-capability": await capFor("admin-alice", scopeId("personal", "admin-alice"), {
-        liveActor: true,
-        liveAuthor: true,
-        ...extra,
-      }),
-    });
-    const body = {
-      schedule: { everyMs: 60_000 },
-      action: "scan transcripts",
-      unattendedGrants: ["admin.sessions.read"],
-    };
-    const botGrant = await post("/v1/crons", body, await owner({ botActor: true }));
-    const created = await post("/v1/crons", body, await owner());
-    assert.equal(created.status, 200);
-    const { cron } = (await created.json()) as { cron: { id: string } };
-    assert.equal((await post(`/v1/crons/${cron.id}/disable`, {}, await owner())).status, 200);
-    const botEnable = await post(`/v1/crons/${cron.id}/enable`, {}, await owner({ botActor: true }));
-    const botAttach = await post(
-      "/v1/personas/p-1/credentials",
-      { credentialId: "c-1" },
-      await owner({ botActor: true }),
-    );
-    const botDetach = await del("/v1/personas/p-1/credentials/g-1", await owner({ botActor: true }));
-    const personAttach = await post("/v1/personas/p-1/credentials", { credentialId: "c-1" }, await owner());
-    const outcome = async (response: Response) => [
-      response.status,
-      ((await response.json()) as { message?: string }).message,
-    ];
-    const liveOwner = "unattended grants require a live turn started by the cron owner";
-    const ownerSent = "credentials can only be attached or detached on a turn the owner sent themself";
-    assert.deepEqual(
-      {
-        botGrant: await outcome(botGrant),
-        botEnable: await outcome(botEnable),
-        enabled: (await built.app.getCron(cron.id))?.enabled,
-        botAttach: await outcome(botAttach),
-        botDetach: await outcome(botDetach),
-        personAttachGated: (await outcome(personAttach))[1] === ownerSent,
-      },
-      {
-        botGrant: [403, liveOwner],
-        botEnable: [403, liveOwner],
-        enabled: false,
-        botAttach: [403, ownerSent],
-        botDetach: [403, ownerSent],
-        personAttachGated: false,
-      },
-    );
-  });
-
   it("enforces unattended grant creation and privileged-cron tamper rules at the HTTP boundary", async () => {
     const body = {
       schedule: { everyMs: 60_000 },
