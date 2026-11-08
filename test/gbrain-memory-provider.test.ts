@@ -83,7 +83,7 @@ async function gbrain(
   const notebookWrites: string[] = [];
   const notebook: MemoryService = {
     async recall() {
-      return [{ text: "notebook fact", score: 0.2 }];
+      return [{ text: "notebook fact" }];
     },
     async capture(_scope, facts) {
       notebookWrites.push(...facts);
@@ -139,7 +139,7 @@ const refusal = (code: string, reason?: string): CallToolResult => {
 };
 
 test("the documented gbrain recipe keeps the notebook first everywhere and sends only personal turns to gbrain", async (t) => {
-  const facts = [{ text: "Prefers aisle seats", date: "2026-10-30", kind: "preference" }];
+  const facts = [{ id: "41", text: "Prefers aisle seats", date: "2026-10-30", kind: "preference" }];
   const { calls, memory, notebookWrites } = await gbrain(t, (name) =>
     name === "memory_recall"
       ? { content: [{ type: "text", text: recallLines(facts) }], structuredContent: { facts, truncated: false } }
@@ -257,7 +257,7 @@ test("gbrain's answers and refusals become the outcomes the contract classes the
       content: [{ type: "text", text: recallLines(facts) }],
       structuredContent: { facts, truncated: false },
     }),
-    { outcome: "ok", rows: recallLines(facts).split("\n") },
+    { outcome: "ok", rows: facts.map(({ text, date, kind }) => `- (${date}; ${kind}) ${text}`) },
   );
   assert.deepEqual(
     await recall({ content: [{ type: "text", text: "" }], structuredContent: { facts: [], truncated: false } }),
@@ -420,7 +420,7 @@ test("a strict gbrain route that refuses a later batch still leaves every automa
 });
 
 test("a long conversation's recall asks gbrain with the member's message, within gbrain's question limit", async (t) => {
-  const quartet = [{ text: "Plays viola in a string quartet", date: "2026-11-02", kind: "fact" }];
+  const quartet = [{ id: "7", text: "Plays viola in a string quartet", date: "2026-11-02", kind: "fact" }];
   const { calls, memory } = await gbrain(t, (_name, args) => {
     const facts = String(args.query).trim().slice(0, 2000).includes("quartet") ? quartet : [];
     return { content: [{ type: "text", text: recallLines(facts) }], structuredContent: { facts, truncated: false } };

@@ -8,7 +8,7 @@ function provider(name: string, calls: string[]): MemoryService {
   return {
     async recall(scope, context?: MemoryRecallContext) {
       calls.push(`${name}:recall:${scope}:${context?.query ?? ""}`);
-      return [{ text: `${name} memory`, score: 0.2 }];
+      return [{ text: `${name} memory` }];
     },
     async capture(scope, facts, _at, _author, context?: MemoryCaptureContext) {
       calls.push(`${name}:capture:${scope}:${context?.mode ?? "explicit"}:${facts.join(",")}`);

@@ -49,6 +49,10 @@ export function untrustedText(value: string): string {
     .replaceAll("</", "<\\/");
 }
 
+export function flatText(value: string): string {
+  return value.replace(/[\s\u0085]+/g, " ").trim();
+}
+
 export function quotedData(value: string): string {
   const lines = untrustedText(value)
     .split("\n")

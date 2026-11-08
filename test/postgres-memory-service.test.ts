@@ -106,7 +106,10 @@ test("pg memory: add, edit and delete by id; a bad id rolls back the whole call"
   await memory.edit!(sid, [{ id: `#${terse!.id}`, text: "- (2020-01-01) Prefers short replies" }]);
   await memory.delete!(sid, [billing!.id]);
   const second = createPostgresMemoryService(URL!);
-  assert.deepEqual(await second.query(sid, "short", 5), [`#${terse!.id} (2026-05-31) Prefers short replies`]);
+  assert.deepEqual(
+    (await second.query(sid, "short", 5)).map(({ text }) => text),
+    [`#${terse!.id} (2026-05-31) Prefers short replies`],
+  );
   assert.equal(await second.read(sid), "- (2026-05-31) Prefers short replies");
   const [row] = await sql("SELECT deleted_at FROM memory_facts WHERE id = $1", [billing!.id]);
   assert.ok(row?.deleted_at, "delete keeps the row, marked deleted");
