@@ -332,6 +332,8 @@ export function deleteBinding(record: MemoryRegistry, id: string): MemoryRegistr
   return { ...record, bindings: record.bindings.filter((binding) => binding.id !== id) };
 }
 
+const RFC_9110_URI_LENGTH = 8_000;
+
 export function setBrainSecret(
   record: MemoryRegistry,
   target: Pick<RegistryBrain, "id" | "url">,
@@ -343,12 +345,14 @@ export function setBrainSecret(
     throw conflict(
       `brain ${target.id} changed after this link was made, so the secret wasn't saved; ask for a fresh link`,
     );
+  if (brain.owner && clientSecret.length > RFC_9110_URI_LENGTH)
+    throw invalid(
+      `this brain's client secret can be at most ${RFC_9110_URI_LENGTH} characters, the request-target length RFC 9110 asks HTTP software to accept`,
+    );
   return putBrain(record, target.id, { clientSecret, url: target.url }, change);
 }
 
 const MEMBER_BRAIN_FIELDS = new Set(["url", "clientId", "label"]);
-
-const RFC_9110_URI_LENGTH = 8_000;
 
 export const memberBrainsOn = (record: MemoryRegistry): boolean => record.memberBrains !== false;
 

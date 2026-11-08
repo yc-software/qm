@@ -265,6 +265,7 @@ test("an oversized or endless member brain response fails as soon as it passes t
   const elapsed = Date.now() - started;
   assert.ok(elapsed < 1_000, `the call took ${elapsed}ms`);
   assert.match(causes(flood.errors[0]), /larger than 1000000 bytes/);
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  for (let waited = 0; !closedAt && waited < 2_000; waited += 20)
+    await new Promise((resolve) => setTimeout(resolve, 20));
   assert.ok(closedAt > started && closedAt - started < 1_000, `the stream ran for ${closedAt - started}ms`);
 });

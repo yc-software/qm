@@ -320,7 +320,7 @@ A member who runs their own gbrain connects it as their personal memory from cha
 
 A member's brain gets the same transport as one an admin registered ([Brains and bindings](#brains-and-bindings)), and that covers its OAuth token request too. QM never leaves `https` for an `https` MCP server, so a brain's OAuth metadata can't point the token request, and the client secret in it, at an `http://` endpoint.
 
-A member's `url`, `clientId` and `label` together can be at most 8,000 characters, the request-target length RFC 9110 asks HTTP software to accept, so a member's brain never outgrows what one URL may carry. Every instance reloads the whole record after each change, and a single member save could otherwise add up to the API's 1,000,000-byte body limit to it. A save that changes nothing writes nothing.
+A member's `url`, `clientId` and `label` together can be at most 8,000 characters, the request-target length RFC 9110 asks HTTP software to accept, so a member's brain never outgrows what one URL may carry. The client secret a link saves for a member's brain has the same 8,000-character limit. Every instance reloads the whole record after each change, and a single member save could otherwise add up to the API's 1,000,000-byte body limit to it. A save that changes nothing writes nothing.
 
 An org admin's switch, `PUT /v1/admin/memory-registry/member-brains` with `{"enabled": false}`, stops every member's brain at once (code `member_brains_off`) and refuses new ones, without deleting them; `{"enabled": true}` turns them back on. It defaults on.
 
