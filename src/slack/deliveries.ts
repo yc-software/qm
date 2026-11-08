@@ -37,6 +37,7 @@ import type { TurnFlow } from "./turn-flow.ts";
 import { cleanAgentReplyForSlack, stripSlackDirectives } from "./messaging.ts";
 import { cronIdOf } from "../sessions/session-store.ts";
 import { slackErrorCode } from "./payloads.ts";
+import { trimTrailingSlashes } from "../util/text.ts";
 
 const DELIVERY_CLAIM_MS = 15_000;
 const SLOW_DRAIN_ALARM_MS = 120_000;
@@ -167,7 +168,7 @@ export function createDeliveryPoller(deps: {
     core.ackDelivery(id, body as { recipientThreadRef?: string; slackApiMs?: number } | undefined);
 
   function deliveryFooter(d: Delivery): Array<Record<string, unknown>> {
-    const base = deps.webUiPublicUrl?.trim().replace(/\/+$/, "");
+    const base = trimTrailingSlashes(deps.webUiPublicUrl?.trim() ?? "");
     const id = d.provenance?.trigger === "cron" ? cronIdOf(d.provenance.sourceThreadRef) : null;
     const sender = d.destination.relaySender?.trim().replace(/^@+/, "");
     const attribution = [
@@ -480,7 +481,7 @@ export function createDeliveryPoller(deps: {
                     reason: commandApproval.reason ?? "Approval required",
                     ...(deps.webUiPublicUrl && commandApproval.sessionId
                       ? {
-                          originUrl: `${deps.webUiPublicUrl.trim().replace(/\/+$/, "")}/s/${encodeURIComponent(commandApproval.sessionId)}`,
+                          originUrl: `${trimTrailingSlashes(deps.webUiPublicUrl.trim())}/s/${encodeURIComponent(commandApproval.sessionId)}`,
                         }
                       : {}),
                   },

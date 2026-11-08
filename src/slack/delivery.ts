@@ -3,6 +3,7 @@ import { errMessage, swallowAs } from "../util/errors.ts";
 import { safeChunks, safeClip } from "./safe-cut.ts";
 import { sleep } from "./util.ts";
 import { isExternallyShared, isMpim, type ChannelMeta } from "./identity.ts";
+import { trimTrailingSlashes } from "../util/text.ts";
 
 export interface SlackReplyArgs {
   channel: string;
@@ -85,7 +86,7 @@ export function slackReplyArgs(
 }
 
 export function scopeSurfaceUrl(webUiPublicUrl: string | undefined, scopeId: string): string | undefined {
-  const base = (webUiPublicUrl ?? "").trim().replace(/\/+$/, "");
+  const base = trimTrailingSlashes((webUiPublicUrl ?? "").trim());
   if (!base || !scopeId) return undefined;
   const personal = /^personal:([^@]+)@/.exec(scopeId);
   if (personal?.[1] && /^[a-z0-9._-]+$/i.test(personal[1])) return `${base}/projects/${personal[1].toLowerCase()}`;

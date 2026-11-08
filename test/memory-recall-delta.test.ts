@@ -201,6 +201,26 @@ test("provider lines stay counted while their provider answers, so a later refus
   );
 });
 
+test("a provider line from a binding that is now disabled is noted, not kept", () => {
+  const row = { scope: alice, text: "SHIPS ON FRIDAYS", source: { provider: "acme-personal", label: "Acme" } };
+  const answered = (outcome: MemoryProviderOutcome["outcome"]): MemoryProviderOutcome[] => [
+    {
+      provider: "acme-personal",
+      scope: alice,
+      outcome,
+      ms: 0,
+      ...(outcome === "disabled" ? { code: "secret_missing" } : {}),
+    },
+  ];
+  const first = memoryRecallDelta([row], [], all, new Map(), answered("ok"));
+  const next = memoryRecallDelta([], [entry(first.record)], all, new Map(), answered("disabled"));
+  assert.equal(
+    next.text,
+    "Some previously recalled memory sources are no longer included. Do not rely on memory from sources that are not currently authorized.",
+  );
+  assert.deepEqual(next.record.shown, []);
+});
+
 test("a provider line recorded before lines were keyed by provider is flagged, not silently kept", () => {
   const legacy = { shown: [{ scope: alice, hash: "0123456789abcdef" }] };
   assert.equal(

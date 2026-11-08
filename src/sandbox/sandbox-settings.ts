@@ -3,6 +3,7 @@ import type { LegacySandboxScopeDefaults } from "./sandbox-resource-upgrade.ts";
 import type { SandboxBackendName } from "./sandbox-routing.ts";
 import { parseScopeId } from "../types.ts";
 import { numEnvStrict, optNum } from "../util/env.ts";
+import { trimTrailingSlashes } from "../util/text.ts";
 
 export interface SandboxSettings {
   sandboxBackend: SandboxBackendName;
@@ -328,7 +329,7 @@ export function porterApiBaseUrl(env: NodeJS.ProcessEnv): string | undefined {
   const deployClusterId = numEnvStrict("PORTER_DEPLOY_CLUSTER_ID", env.PORTER_DEPLOY_CLUSTER_ID);
   const derived =
     deployProjectId !== undefined && deployClusterId !== undefined
-      ? `${(env.PORTER_DEPLOY_URL ?? "https://dashboard.porter.run").replace(/\/+$/, "")}/api/v2/alpha/projects/${deployProjectId}/clusters/${deployClusterId}`
+      ? `${trimTrailingSlashes(env.PORTER_DEPLOY_URL ?? "https://dashboard.porter.run")}/api/v2/alpha/projects/${deployProjectId}/clusters/${deployClusterId}`
       : undefined;
   return env.PORTER_SANDBOX_BASE_URL ?? derived;
 }

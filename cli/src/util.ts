@@ -416,3 +416,9 @@ export function promptHidden(name: string): Promise<string> {
     stdin.on("data", onData);
   });
 }
+
+export function trimTrailingSlashes(s: string): string {
+  let end = s.length;
+  while (end > 0 && s[end - 1] === "/") end--;
+  return s.slice(0, end);
+}

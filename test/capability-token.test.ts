@@ -124,6 +124,19 @@ test("scope authorization metadata is type-checked", async () => {
   );
 });
 
+test("a non-string audience scope fails verification", async () => {
+  assert.equal(
+    await verifyCapabilityToken(
+      await mintCapabilityToken(
+        claims({ audienceScopeId: { kind: "channel" } } as unknown as Partial<CapabilityClaims>),
+        SECRET,
+      ),
+      SECRET,
+    ),
+    null,
+  );
+});
+
 test("a tampered payload fails verification", async () => {
   const token = await mintCapabilityToken(claims(), SECRET);
   const [header, payload, sig] = token.split(".");

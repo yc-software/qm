@@ -16,6 +16,7 @@ import { detectOnboardingStatus, setOnboardingStatus, type OnboardingStatus } fr
 import { sendJson } from "../../http.ts";
 import { audit, authorizeAdmin, isObj, orgScope } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
+import { trimTrailingSlashes } from "../../../util/text.ts";
 
 const EXTERNAL_ORG_ADMIN_PORTAL_ONLY =
   "granting or removing org admin for an external user is portal-only — the agent cannot manage who governs the org";
@@ -72,7 +73,7 @@ export async function listUsers(ctx: ApiCtx): Promise<void> {
 }
 
 function signInUrlOf(deps: ApiCtx["deps"]): string | undefined {
-  return deps.portalUrl ? `${deps.portalUrl.replace(/\/+$/, "")}/auth/login` : undefined;
+  return deps.portalUrl ? `${trimTrailingSlashes(deps.portalUrl)}/auth/login` : undefined;
 }
 
 function endOfDayUtc(value: unknown): unknown {
@@ -178,14 +179,14 @@ async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<void> {
     scopeLabel: scope,
   });
   const signInUrl = teammate
-    ? `${deps.portalUrl!.replace(/\/+$/, "")}/auth/invite#token=${encodeURIComponent(
+    ? `${trimTrailingSlashes(deps.portalUrl!)}/auth/invite#token=${encodeURIComponent(
         await mintSignedPayload(
           {
             purpose: "teammate-invite",
             inviteId: member.inviteId,
             email,
             org: scope,
-            aud: deps.portalUrl!.replace(/\/+$/, ""),
+            aud: trimTrailingSlashes(deps.portalUrl!),
             iat: now,
             exp: now + 24 * 60 * 60 * 1000,
             jti: randomUUID(),

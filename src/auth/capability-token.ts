@@ -47,6 +47,7 @@ export interface CapabilityClaims {
   browserAccount?: "company" | "personal" | "openai" | "anthropic";
   aud?: string;
   scopeId: ScopeId;
+  audienceScopeId?: ScopeId;
   scopeVersion?: string;
   timezone?: string;
   destination?: Destination;
@@ -145,6 +146,7 @@ export async function verifyCapabilityToken(
     return null;
   if (claims.timezone !== undefined && !isValidCapabilityTimezone(claims.timezone)) return null;
   if (claims.scopeVersion !== undefined && typeof claims.scopeVersion !== "string") return null;
+  if (claims.audienceScopeId !== undefined && typeof claims.audienceScopeId !== "string") return null;
   if (claims.destinations !== undefined && !Array.isArray(claims.destinations)) return null;
   if (claims.ownerConnections !== undefined && typeof claims.ownerConnections !== "boolean") return null;
   if (claims.credentials !== undefined && !Array.isArray(claims.credentials)) return null;
