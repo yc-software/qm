@@ -243,7 +243,9 @@ test("a brain link refuses non-admins, other drop fields, unknown and moved brai
   await built.memoryRegistry.update((record) =>
     putBrain(record, "acme-personal", { url: "https://brain2.acme.example/mcp" }, change),
   );
-  assert.equal((await beforeMove.form()).status, 404, "a moved brain's link shows no form");
+  const movedForm = await beforeMove.form();
+  assert.equal(movedForm.status, 409, "a moved brain's link shows no form");
+  assert.match(movedForm.text, /removed or moved to another address/);
   const moved = await beforeMove.redeem("for-the-old-url");
   assert.equal(moved.status, 409);
   assert.match(JSON.parse(moved.text).message, /changed after this link was made/);
@@ -269,7 +271,7 @@ test("a brain link refuses non-admins, other drop fields, unknown and moved brai
   assert.equal(await servedSecret(), "after-the-move-back");
   const rows = JSON.stringify(await built.auditLog.events());
   assert.match(rows, /memory-registry\.brain\.secret\.refused/);
-  assert.match(rows, /acme-personal: brain acme-personal changed after this link was made/);
+  assert.equal(rows.match(/acme-personal: brain acme-personal changed after this link was made/g)?.length, 2);
   assert.doesNotMatch(rows, /for-the-old-url|from-a-former-admin/);
 });
 

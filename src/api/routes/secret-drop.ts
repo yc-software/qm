@@ -125,6 +125,22 @@ function dropNotYoursHtml(): string {
   );
 }
 
+function brainChangedHtml(): string {
+  return dropPage(
+    "Memory brain changed",
+    `<h1 id="title">This memory brain changed after the link was made</h1><p>The brain this link was made for was removed or moved to another address, so the link can't set its secret. It works again if the brain moves back. Otherwise, ask the agent for a fresh link.</p>`,
+  );
+}
+
+function auditBrainRefusal(deps: ApiCtx["deps"], drop: SecretDropRecord, message: string): void {
+  audit(deps, {
+    principalId: drop.ownerId,
+    action: "memory-registry.brain.secret.refused",
+    resource: `${drop.memoryBrain!.id}: ${message}`,
+    scopeLabel: orgScope(deps),
+  });
+}
+
 function dropScopeAuthorized(ctx: ApiCtx, rec: SecretDropRecord, claims?: CapabilityClaims): Promise<boolean> {
   const audienceScopeId = rec.audienceScopeId;
   if (!audienceScopeId || !isSharedScope(audienceScopeId)) return Promise.resolve(true);
@@ -240,13 +256,17 @@ async function brainTarget(
   return { id: brain.id, url: brain.url };
 }
 
-async function brainDestination(ctx: ApiCtx, rec: SecretDropRecord): Promise<BrainDestination | null | undefined> {
+async function brainDestination(
+  ctx: ApiCtx,
+  rec: SecretDropRecord,
+): Promise<BrainDestination | { refused: string } | undefined> {
   const target = rec.memoryBrain;
   if (!target) return undefined;
-  if (!ctx.deps.memoryRegistry) return null;
+  if (!ctx.deps.memoryRegistry) return { refused: "this core has no memory registry" };
   const record = readRegistry((await ctx.deps.memoryRegistry.current()).record);
   const brain = record.brains.find(({ id }) => id === target.id);
-  if (!brain || brain.url !== target.url) return null;
+  if (!brain) return { refused: `brain ${target.id} was removed after this link was made` };
+  if (brain.url !== target.url) return { refused: `brain ${target.id} changed after this link was made` };
   const url = new URL(target.url);
   return {
     label: brain.label,
@@ -272,12 +292,7 @@ async function saveBrainSecret(
   if (!registry) return sendJson(res, 404, { error: "not_found" });
   const target = drop.memoryBrain!;
   const refuse = (status: number, error: string, message: string) => {
-    audit(deps, {
-      principalId: drop.ownerId,
-      action: "memory-registry.brain.secret.refused",
-      resource: `${target.id}: ${message}`,
-      scopeLabel: orgScope(deps),
-    });
+    auditBrainRefusal(deps, drop, message);
     return sendJson(res, status, { error, message });
   };
   const owner = canonicalPerson(drop.ownerId);
@@ -428,9 +443,10 @@ async function dropForm(ctx: ApiCtx): Promise<void> {
     createdAt: peeked.rec.createdAt,
   };
   const brain = await brainDestination(ctx, peeked.rec);
-  if (brain === null) {
-    res.writeHead(404, { "content-type": "text/html; charset=utf-8" });
-    return void res.end(dropFormHtml(params.id!, null));
+  if (brain && "refused" in brain) {
+    auditBrainRefusal(deps, peeked.rec, brain.refused);
+    res.writeHead(409, { "content-type": "text/html; charset=utf-8" });
+    return void res.end(brainChangedHtml());
   }
   res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
   res.end(dropFormHtml(params.id!, rec, brain));
