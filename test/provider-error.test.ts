@@ -105,7 +105,7 @@ test("a 402 billing_error from the key's provider is an account failure with a p
   assert.deepEqual([err.code, err.status, err.retryable], ["account", 402, false]);
   assert.equal(
     turnFailureMessage(err),
-    `The model key for Claude Opus 4.8 was refused by the provider ("Model provider API error (billing_error): ${reason}"). Whoever owns that key needs to fix billing or replace it.`,
+    `The model key for Claude Opus 4.8 was refused by the provider ("Model provider API error (billing_error): ${reason}"). Whoever owns that key needs to fix its billing or access, or replace it.`,
   );
 });
 
@@ -160,7 +160,6 @@ test("providerTurnError maps documented status, type and code without reading er
     [failed({ status: 429, code: "insufficient_quota" }), "model_budget", false],
     [failed({ status: 400, code: "context_length_exceeded" }), "context_too_long", false],
     [failed({ status: 401, type: "authentication_error" }), "auth", false],
-    [failed({ status: 402, type: "billing_error", code: "insufficient_credits" }), "account", false],
     [failed({ status: 400, code: "cyber_policy" }), "refusal", false],
     [failed({ status: 429, type: "rate_limit_error" }), "rate_limit", true],
     [failed({ status: 404, type: "not_found_error" }), "not_found", false],
