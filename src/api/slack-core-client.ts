@@ -14,6 +14,8 @@ import type { KeychainApprovals } from "../credentials/keychain-approval.ts";
 import { createTaskAcknowledgements, type TaskAckState, type TaskAcknowledgements } from "../slack/task-ack.ts";
 import { orgId as configOrgId } from "../config.ts";
 import type { StagedEnvelope } from "../slack/envelope-staging.ts";
+import type { SlackPersona } from "../slack/delivery.ts";
+import { normalizeReaction } from "../slack/reactions.ts";
 import { resolveBranding } from "../resolution/branding.ts";
 import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
@@ -88,6 +90,7 @@ export interface SlackCoreClient {
   sessionStatus?: SlackSessionStatus;
   externalSlackParticipants(): Promise<boolean>;
   ackEmojiOverride(): Promise<string[] | null>;
+  channelPersonas?(): Promise<Map<string, SlackPersona>>;
   publishEmojiCatalog(emoji: Record<string, string>): Promise<void>;
   surfaceHeaderFacts(scope: ScopeId): Promise<{ agentLabel?: string; modelName: string }>;
   channelHeaderPinEnabled(scope: ScopeId): Promise<boolean>;
@@ -203,6 +206,16 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
 
     async ackEmojiOverride() {
       return await deps.config.getAckEmojiDurable(orgScope);
+    },
+
+    async channelPersonas() {
+      const personas = new Map<string, SlackPersona>();
+      for (const { channelId, persona } of (await deps.app.channelPersonas?.all()) ?? []) {
+        const emoji =
+          persona.icon && normalizeReaction(persona.icon.kind === "emoji" ? persona.icon.value : persona.icon.name);
+        personas.set(channelId, { username: persona.name, ...(emoji ? { icon_emoji: `:${emoji}:` } : {}) });
+      }
+      return personas;
     },
 
     async publishEmojiCatalog(emoji) {

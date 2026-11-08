@@ -4,7 +4,7 @@ import type { Directory } from "./directory.ts";
 import { parseBlockAction, parseInteractionBody } from "./payloads.ts";
 import { updateSlackMessage } from "./messaging.ts";
 import { escapeSlackText } from "./mrkdwn.ts";
-import { findPostedByKey, postWithVerify, slackReplyArgs } from "./delivery.ts";
+import { findPostedByKey, postWithVerify, refreshPersonas, slackEphemeralArgs, slackReplyArgs } from "./delivery.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { parseScopeId } from "../types.ts";
 import { trimTrailingSlashes } from "../util/text.ts";
@@ -128,16 +128,17 @@ export function registerKeychainApprovalActions(
     const parsed = parseBlockAction(action, ACTIONS);
     const { clickerId, channel, messageTs } = parseInteractionBody(body);
     if (!parsed || !clickerId) return;
+    await refreshPersonas(deps.core);
     const tell = async (text: string) => {
       const sent = channel
         ? await client.chat
-            .postEphemeral({ channel, user: clickerId, text })
+            .postEphemeral(slackEphemeralArgs(channel, clickerId, text))
             .then(() => true)
             .catch(swallowAs("slack: credential approval notice", false))
         : false;
       if (!sent) {
         await client.chat
-          .postMessage({ channel: clickerId, text })
+          .postMessage(slackReplyArgs(clickerId, text, undefined))
           .catch(swallowAs("slack: credential approval notice dm", undefined));
       }
     };

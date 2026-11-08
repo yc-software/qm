@@ -18,6 +18,7 @@ import { scopeId, type TurnRequest } from "../src/types.ts";
 import { encodeRef, skillRef } from "../src/acl/resource-ref.ts";
 import { PersonaLocked } from "../src/personas/channel-personas.ts";
 import type { PersonaResult } from "../src/personas/persona-service.ts";
+import { createSlackCoreClient, type SlackCoreClientDeps } from "../src/api/slack-core-client.ts";
 
 const SECRET = "channel-personas-test-secret".repeat(2);
 const ORG = scopeId("org", "default-org");
@@ -563,6 +564,39 @@ test("standing orders set from a channel turn are locked to the persona's writer
   );
   await say(built, BOB, "2.2", "!set_standing_order be kind");
   assert.equal((await built.app.getChannelPolicy(DESIGN))?.orders, "be kind");
+});
+
+test("Slack posts in a channel carry its persona's name and icon: a unicode emoji as its shortcode, a custom emoji as is", async () => {
+  const { built, personas, ada, wear } = await setup();
+  const slack = createSlackCoreClient({ app: built.app } as unknown as SlackCoreClientDeps);
+  const worn = async () => Object.fromEntries((await slack.channelPersonas!()).entries());
+  assert.deepEqual(await worn(), {});
+  assert.ok(
+    await built.app.upsertChannels(
+      [{ channelId: "C0PLAIN", name: "plain", isPrivate: false }],
+      [{ channelId: "C0PLAIN", principalId: ANN }],
+      Date.now(),
+      undefined,
+      undefined,
+      true,
+    ),
+  );
+  const bea = ok(await personas.create(ANN, { name: "Bea", icon: { kind: "custom", name: "bea-face" } }));
+  const cal = ok(await personas.create(ANN, { name: "Cal" }));
+  ok(await wear());
+  ok(await wear("open", bea.id));
+  ok(await wear("plain", cal.id));
+  assert.deepEqual(await worn(), {
+    [DESIGN]: { username: "Ada", icon_emoji: ":art:" },
+    C0OPEN: { username: "Bea", icon_emoji: ":bea-face:" },
+    C0PLAIN: { username: "Cal" },
+  });
+  ok(await personas.update(BOB, ada.id, { name: "Ada Lovelace", icon: { kind: "emoji", value: "❤️" } }));
+  assert.deepEqual((await worn())[DESIGN], { username: "Ada Lovelace", icon_emoji: ":heart:" });
+  ok(await wear("plain", ada.id));
+  assert.deepEqual((await worn()).C0PLAIN, { username: "Ada Lovelace", icon_emoji: ":heart:" });
+  await built.featureFlags.setEnabled("personas", ORG, false, ADMIN);
+  assert.deepEqual(await worn(), {});
 });
 
 test("a bot's turn never passes the lock, even when the org holds write on the persona", async () => {

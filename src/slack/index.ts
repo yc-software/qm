@@ -12,7 +12,12 @@ import bolt from "@slack/bolt";
 import { WebClient } from "@slack/web-api";
 import { createDeduper, createThreadTracker } from "./lib.ts";
 import { installDevIntrospection } from "./dev-introspection.ts";
-import { setDefaultBotIdentity, createSurfaceHeaderEnsurer, type SurfaceHeaderClient } from "./delivery.ts";
+import {
+  setDefaultBotIdentity,
+  createSurfaceHeaderEnsurer,
+  refreshPersonas,
+  type SurfaceHeaderClient,
+} from "./delivery.ts";
 import {
   NO_RETRY,
   HISTORY_NO_RETRY,
@@ -322,8 +327,8 @@ export async function startSlackPlugin(
   const statusAccount = () => `${ids.ownTeamId}:${ids.botUserId}`;
   let statusSync: Promise<void> | undefined;
   const reconcileStatus = () => {
-    statusSync ??= core.sessionStatus
-      ?.reconcile(statusClient, statusAccount())
+    statusSync ??= refreshPersonas(core)
+      .then(() => core.sessionStatus?.reconcile(statusClient, statusAccount()))
       .catch(swallowAs("slack: session status reconciliation", undefined))
       .finally(() => {
         statusSync = undefined;

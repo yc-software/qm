@@ -93,6 +93,12 @@ applying. Setting or clearing it posts a notice in the channel. The write is con
 row it read, so when two people change it at once only one wins; the other is checked again
 against the new setting.
 
+In Slack, QM speaks in that channel as the persona: replies, status cards and ephemeral
+notices carry the persona's name, and its icon when that maps to a Slack emoji, in
+place of `SLACK_BOT_DISPLAY_NAME` and `SLACK_BOT_ICON_EMOJI`. Setting, changing or clearing the
+persona shows in new posts within about ten seconds. The pinned channel header keeps QM's own
+identity.
+
 **The lock.** While a channel wears a persona, only the persona's writers and owners (held
 through a person, team or the org grant, never through the channel's own grant) or an org admin,
 on a turn they sent themselves, can change the channel's instructions, standing orders or

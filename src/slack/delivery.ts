@@ -1,3 +1,4 @@
+import { createTtlRefresh } from "../util/async.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { safeChunks, safeClip } from "./safe-cut.ts";
 import { sleep } from "./util.ts";
@@ -15,10 +16,12 @@ export interface SlackReplyArgs {
   unfurl_media?: boolean;
 }
 
-export interface BotIdentityOverride {
-  username?: string;
+export interface SlackPersona {
+  username: string;
   icon_emoji?: string;
 }
+
+export type BotIdentityOverride = Partial<SlackPersona>;
 
 export function botIdentityFromEnv(env: Record<string, string | undefined>): BotIdentityOverride {
   const username = (env.SLACK_BOT_DISPLAY_NAME ?? "").trim();
@@ -29,17 +32,41 @@ export function botIdentityFromEnv(env: Record<string, string | undefined>): Bot
   };
 }
 
+type PersonaCore = { channelPersonas?(): Promise<Map<string, SlackPersona>> };
+
+const PERSONA_REFRESH_TTL_MS = 10_000;
 let defaultIdentity: BotIdentityOverride = {};
+let personas: ReadonlyMap<string, SlackPersona> = new Map();
+let personaSource: { core: PersonaCore; refresh: (force?: boolean) => Promise<void> } | undefined;
+
 export function setDefaultBotIdentity(identity: BotIdentityOverride | undefined): void {
   defaultIdentity = identity ?? {};
 }
 
-export function botIdentityArgs(): BotIdentityOverride {
-  const id = defaultIdentity;
-  return {
-    ...(id.username ? { username: id.username } : {}),
-    ...(id.icon_emoji ? { icon_emoji: id.icon_emoji } : {}),
-  };
+export function personaFor(channel: string): BotIdentityOverride {
+  const persona = personas.get(channel);
+  return persona ? { ...defaultIdentity, ...persona } : defaultIdentity;
+}
+
+export function refreshPersonas(core: PersonaCore, force = false): Promise<void> {
+  if (!core.channelPersonas) return Promise.resolve();
+  if (personaSource?.core !== core)
+    personaSource = {
+      core,
+      refresh: createTtlRefresh(PERSONA_REFRESH_TTL_MS, async () => {
+        personas =
+          (await core.channelPersonas?.().catch(swallowAs("slack: channel persona refresh", undefined))) ?? personas;
+      }),
+    };
+  return personaSource.refresh(force);
+}
+
+export function slackEphemeralArgs(
+  channel: string,
+  user: string | undefined,
+  text: string,
+): { channel: string; user: string | undefined; text: string } & BotIdentityOverride {
+  return { channel, user, text, ...personaFor(channel) };
 }
 
 export function slackReplyArgs(
@@ -54,7 +81,7 @@ export function slackReplyArgs(
     ...(threadTs ? { thread_ts: threadTs } : {}),
     ...(threadTs && opts.threadOnly ? { reply_broadcast: false as const } : {}),
     ...(opts.unfurlLinks !== undefined ? { unfurl_links: opts.unfurlLinks, unfurl_media: opts.unfurlLinks } : {}),
-    ...botIdentityArgs(),
+    ...personaFor(channel),
   };
 }
 
@@ -122,7 +149,7 @@ export interface SurfaceHeaderClient {
 }
 
 export interface PinnedItem {
-  message?: { ts?: string; user?: string; text?: string };
+  message?: { ts?: string; user?: string; bot_id?: string; text?: string };
 }
 
 export function isSurfaceHeaderMessage(text: string | undefined): boolean {
@@ -134,10 +161,12 @@ export function isSurfaceHeaderMessage(text: string | undefined): boolean {
 export function findHeaderPin(
   items: PinnedItem[] | undefined,
   botUserId: string,
+  ownBotId = "",
 ): { ts: string; text: string } | undefined {
   for (const item of items ?? []) {
     const m = item.message;
-    if (m?.ts && m.user === botUserId && isSurfaceHeaderMessage(m.text)) return { ts: m.ts, text: m.text ?? "" };
+    const own = m?.user === botUserId || Boolean(ownBotId && m?.bot_id === ownBotId);
+    if (m?.ts && own && isSurfaceHeaderMessage(m.text)) return { ts: m.ts, text: m.text ?? "" };
   }
   return undefined;
 }
@@ -148,7 +177,7 @@ export function createSurfaceHeaderEnsurer(opts: {
   headerFacts(scope: string): Promise<{ agentLabel?: string; modelName: string }>;
   channelPinEnabled?(scope: string): Promise<boolean>;
   webUiPublicUrl: string | undefined;
-  ids: { botUserId: string };
+  ids: { botUserId: string; ownBotId?: string };
   maxTracked?: number;
 }): (
   client: SurfaceHeaderClient,
@@ -184,7 +213,11 @@ export function createSurfaceHeaderEnsurer(opts: {
             await client.conversations.setTopic({ channel, topic: desired });
         } else {
           if (isExternallyShared(info) || isMpim(info)) return;
-          const pinned = findHeaderPin((await client.pins.list({ channel })).items, opts.ids.botUserId);
+          const pinned = findHeaderPin(
+            (await client.pins.list({ channel })).items,
+            opts.ids.botUserId,
+            opts.ids.ownBotId,
+          );
           if (!enabled) {
             if (pinned) {
               await client.pins.remove({ channel, timestamp: pinned.ts });
@@ -192,11 +225,15 @@ export function createSurfaceHeaderEnsurer(opts: {
             }
           } else if (pinned) {
             if (unwrapSlackLinks(pinned.text) !== unwrapSlackLinks(desired))
-              await client.chat.update({ channel, ts: pinned.ts, text: desired });
+              await client.chat.update({ channel, ts: pinned.ts, text: desired, ...defaultIdentity });
           } else if (ensureOpts?.pinNew) {
-            const posted = await client.chat.postMessage(
-              slackReplyArgs(channel, desired, undefined, { unfurlLinks: false }),
-            );
+            const posted = await client.chat.postMessage({
+              channel,
+              text: desired,
+              unfurl_links: false,
+              unfurl_media: false,
+              ...defaultIdentity,
+            });
             if (posted.ts) await client.pins.add({ channel, timestamp: posted.ts });
           }
         }
