@@ -174,6 +174,7 @@ function dispatchContract(input: OrchestratorInput) {
     readOnly: input.readOnly,
     botActor: input.botActor,
     skipMemory: input.skipMemory,
+    memoryNotebookOnly: input.memoryNotebookOnly,
     model: input.model,
     thinkingLevel: input.thinkingLevel,
     fastMode: input.fastMode,
@@ -342,6 +343,11 @@ export function createSwarmService(deps: {
       ...(source.readOnly ? { readOnly: true } : {}),
       ...(source.botActor ? { botActor: true } : {}),
       ...(source.skipMemory ? { skipMemory: true } : {}),
+      ...(source.memoryNotebookOnly ||
+      session.spawnMeta?.memoryNotebookOnly ||
+      (caller.kind === "agent" && caller.claims.memory?.notebookOnly)
+        ? { memoryNotebookOnly: true }
+        : {}),
       ...(settings.turnMs === undefined ? {} : { turnWallClockMs: settings.turnMs }),
     };
     const createdAt = Date.now();

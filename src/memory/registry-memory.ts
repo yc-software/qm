@@ -115,24 +115,24 @@ export function createRegistryMemoryService(opts: {
           disabled.map((route) => route.query(scopeId, q, limit, context)),
         );
       },
-      async capture(scopeId, facts, at, author, context) {
+      async capture(scopeId, facts, at, by, context) {
         const { service, disabled } = await serve();
         return alongside(
-          service.capture(scopeId, facts, at, author, context),
-          disabled.map((route) => route.capture(scopeId, facts, at, author, context)),
+          service.capture(scopeId, facts, at, by, context),
+          disabled.map((route) => route.capture(scopeId, facts, at, by, context)),
         );
       },
       read: async (scopeId) => (await serve()).service.read(scopeId),
       facts: async (scopeId) => (await (await serve()).service.facts?.(scopeId)) ?? [],
-      async edit(scopeId, edits, author, context) {
+      async edit(scopeId, edits, by, context) {
         const { service } = await serve();
         if (!service.edit) throw new Error(`memory for ${scopeId} is not directly editable`);
-        await service.edit(scopeId, edits, author, context);
+        await service.edit(scopeId, edits, by, context);
       },
-      async delete(scopeId, ids, author) {
+      async delete(scopeId, ids, by) {
         const { service } = await serve();
         if (!service.delete) throw new Error(`memory for ${scopeId} is not directly editable`);
-        await service.delete(scopeId, ids, author);
+        await service.delete(scopeId, ids, by);
       },
       metadata: async () => (await (await serve()).service.metadata?.()) ?? new Map(),
     };

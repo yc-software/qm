@@ -171,6 +171,7 @@ export function sessionContextOf(input: OrchestratorInput): SpawnMeta {
     ...(input.deliveryWebhook ? { deliveryWebhook: input.deliveryWebhook } : {}),
     ...(input.timezone ? { timezone: input.timezone } : {}),
     ...(input.readOnly ? { readOnly: true } : {}),
+    ...(input.memoryNotebookOnly ? { memoryNotebookOnly: true } : {}),
     ...(input.botActor ? { botActor: true } : {}),
     ...(input.model ? { model: input.model } : {}),
     ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
@@ -289,6 +290,7 @@ export interface SessionSyscallBinding {
     | "deliveryWebhook"
     | "timezone"
     | "readOnly"
+    | "memoryNotebookOnly"
     | "botActor"
     | "scopeVersion"
     | "sessionParticipantIds"
@@ -433,6 +435,7 @@ function childRunRequest(child: Session, meta: SpawnMeta, text: string, displayT
     displayText,
     envelopeWrapped: true,
     ...(meta.readOnly ? { readOnly: true } : {}),
+    ...(meta.memoryNotebookOnly ? { memoryNotebookOnly: true } : {}),
     ...(meta.botActor ? { botActor: true } : {}),
     ...(meta.model ? { model: meta.model } : {}),
     ...(meta.thinkingLevel ? { thinkingLevel: meta.thinkingLevel } : {}),
@@ -617,7 +620,12 @@ async function steerRunningTurn(
 ): Promise<"steered" | "replayed" | "refused" | undefined> {
   if (message.dedupKey && (await deps.signals.runForDedupeKey(message.dedupKey))) return "steered";
   const live = inFlight.find((run) => run.status === "running");
-  if (!live || (request.readOnly && !live.request.readOnly) || (request.botActor && !live.request.botActor))
+  if (
+    !live ||
+    (request.readOnly && !live.request.readOnly) ||
+    (request.memoryNotebookOnly && !live.request.memoryNotebookOnly) ||
+    (request.botActor && !live.request.botActor)
+  )
     return undefined;
   const steered = await deps.steerRun(live, {
     kind: "steer",
@@ -930,6 +938,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   origin: caller.origin,
                   unattendedGrants: caller.unattendedGrants,
                   readOnly: privateMessage || caller.readOnly || meta.readOnly || target.spawnMeta?.readOnly,
+                  memoryNotebookOnly: caller.memoryNotebookOnly || meta.memoryNotebookOnly,
                   botActor: caller.botActor,
                 },
                 "",
@@ -943,6 +952,11 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   return { ok: false, message: "ordinary sessions accept private messages, not interrupts" };
                 if (caller.readOnly && !target.spawnMeta?.readOnly)
                   return { ok: false, message: "a read-only session cannot interrupt a writable task" };
+                if (caller.memoryNotebookOnly && !meta.memoryNotebookOnly)
+                  return {
+                    ok: false,
+                    message: "a notebook-only turn cannot interrupt a session that isn't notebook-only",
+                  };
                 if (
                   caller.botActor &&
                   (!target.spawnMeta?.botActor ||
@@ -993,6 +1007,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               if (!input.wake && !input.interrupt) return leaveMail();
               if (binding.request.privateSessionMessage)
                 return leaveMail("a private turn cannot start work in another session");
+              if (caller.memoryNotebookOnly && !meta.memoryNotebookOnly)
+                return leaveMail("a notebook-only turn cannot start work in a session that isn't notebook-only");
               if (isPeerMessage(binding.session, target)) {
                 if (caller.readOnly) return leaveMail("a read-only turn cannot start work in another conversation");
                 if (messageDepth > SESSION_MESSAGE_DEPTH_CAP)

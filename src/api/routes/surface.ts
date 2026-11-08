@@ -1,7 +1,12 @@
 import { isSideChatAnchor } from "../../sessions/side-chat.ts";
 import type { CapabilityClaims } from "../../auth/capability-token.ts";
 import { memoryForRequest } from "./memory-access.ts";
-import type { MemoryEdit, MemoryService } from "../../memory/memory-service.ts";
+import {
+  turnAuthority,
+  type MemoryAuthority,
+  type MemoryEdit,
+  type MemoryService,
+} from "../../memory/memory-service.ts";
 import {
   MAX_FACTS_PER_WRITE,
   problemLine,
@@ -693,14 +698,15 @@ async function selfMemory(ctx: ApiCtx): Promise<void> {
   const memory = memoryForRequest(ctx, principalId);
   if (!memory) return sendJson(res, 404, { error: "not_found" });
   const scope = makeScopeId("personal", principalId);
+  const by: MemoryAuthority = { actorId: principalId, context: "self" };
   if (method === "PATCH") {
     const edits = parseEdits(body);
     if (typeof edits === "string") return sendJson(res, 400, { error: "bad_request", message: edits });
-    await memory.edit?.(scope, edits, principalId);
+    await memory.edit?.(scope, edits, by);
   } else if (method === "DELETE") {
     const ids = parseIds(body);
     if (typeof ids === "string") return sendJson(res, 400, { error: "bad_request", message: ids });
-    await memory.delete?.(scope, ids, principalId);
+    await memory.delete?.(scope, ids, by);
   }
   const action = method === "GET" ? "memory.self.read" : "memory.self.update";
   audit(deps, { principalId, action, resource: "memory", scopeLabel: scope });
@@ -853,10 +859,9 @@ const captureFacts = writeMemory(async ({ res, deps, body }, memory, capability,
     memory,
     write,
     facts,
-    capability.actorId,
+    turnAuthority(capability.actorId, capability.memory),
     {
       mode: "explicit",
-      actorId: capability.actorId,
       ...(capability.audienceScopeId ? { audienceScopeId: capability.audienceScopeId } : {}),
       conversationScopeId: capability.scopeId,
       ...(capability.sessionId ? { sessionId: capability.sessionId } : {}),
@@ -876,7 +881,9 @@ const captureFacts = writeMemory(async ({ res, deps, body }, memory, capability,
 const editFacts = writeMemory(async ({ res, deps, body }, memory, capability, write) => {
   const edits = parseEdits(body);
   if (typeof edits === "string") return sendJson(res, 400, { error: "bad_request", message: edits });
-  await memory.edit?.(write, edits, capability.actorId, { conversationScopeId: capability.scopeId });
+  await memory.edit?.(write, edits, turnAuthority(capability.actorId, capability.memory), {
+    conversationScopeId: capability.scopeId,
+  });
   audit(deps, {
     principalId: capability.actorId,
     action: "memory.agent.edit",
@@ -889,7 +896,7 @@ const editFacts = writeMemory(async ({ res, deps, body }, memory, capability, wr
 const deleteFacts = writeMemory(async ({ res, deps, body }, memory, capability, write) => {
   const ids = parseIds(body);
   if (typeof ids === "string") return sendJson(res, 400, { error: "bad_request", message: ids });
-  await memory.delete?.(write, ids, capability.actorId);
+  await memory.delete?.(write, ids, turnAuthority(capability.actorId, capability.memory));
   audit(deps, {
     principalId: capability.actorId,
     action: "memory.agent.delete",

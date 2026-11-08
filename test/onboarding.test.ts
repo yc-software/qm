@@ -39,13 +39,13 @@ test("setOnboardingStatus replaces the marker fact and round-trips through detec
   const scope = scopeId("personal", "U1");
   await memory.capture(scope, ["some prefs", "onboarding:  Pending v2."], Date.UTC(2026, 5, 1));
 
-  await setOnboardingStatus(memory, scope, "completed", "2026-06-22", "admin");
+  await setOnboardingStatus(memory, scope, "completed", "2026-06-22", { actorId: "admin", context: "admin" });
   const completed = await memory.read(scope);
   assert.equal(detectOnboardingStatus(completed), "completed");
   assert.doesNotMatch(completed, /pending/i);
   assert.match(completed, /some prefs/);
 
-  await setOnboardingStatus(memory, scope, "not_started", "2026-06-22", "admin");
+  await setOnboardingStatus(memory, scope, "not_started", "2026-06-22", { actorId: "admin", context: "admin" });
   assert.equal(detectOnboardingStatus(await memory.read(scope)), "not_started");
   assert.match(await memory.read(scope), /some prefs/);
 });

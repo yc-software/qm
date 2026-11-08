@@ -1662,6 +1662,40 @@ test("child runs retain the managed roster and read-only floor", async () => {
   assert.deepEqual(run!.request.sessionParticipantIds, [actor.id]);
 });
 
+test("a notebook-only turn's subagent stays notebook-only, and so do later turns woken into it", async () => {
+  const r = await rig();
+  const deps = {
+    mailbox: r.mailbox,
+    sessions: r.sessions,
+    runs: r.runs,
+    signals: r.signals,
+    steerRun: r.steerRun,
+    advisoryLock: r.advisoryLock,
+    maxAttempts: 3,
+  };
+  const tidy = createSessionSyscalls(deps).forTurn({
+    session: r.room,
+    scopeId: scope,
+    request: { surface: "cron", actor, conversation, memoryNotebookOnly: true },
+  });
+  const out = await tidy.open({ task: "check the notebook" });
+  assert.ok(out.ok);
+  const child = await freshSession(r.sessions, out.sessionId);
+  assert.equal(child.spawnMeta?.memoryNotebookOnly, true);
+  const [run] = await r.runs.inFlightForThread(child.threadRef);
+  assert.equal(run!.request.memoryNotebookOnly, true);
+  const claimed = await r.runs.claimById(run!.id, "worker", 60_000);
+  await r.runs.complete(run!.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+  const conversationTurn = createSessionSyscalls(deps).forTurn({
+    session: r.room,
+    scopeId: scope,
+    request: { surface: "web", actor, conversation },
+  });
+  const queued = await conversationTurn.write({ wake: true, target: child.id, text: "check again" });
+  assert.ok(queued.ok);
+  assert.equal((await r.runs.inFlightForThread(child.threadRef))[0]!.request.memoryNotebookOnly, true);
+});
+
 test("terminal children remain recoverable until their return is acknowledged", async () => {
   const r = await rig();
   const out = await r.syscallsFor(r.room).open({ task: "finish" });
@@ -2042,6 +2076,51 @@ test("read-only callers cannot steer writable children and preserve the floor wh
   const queued = await api.write({ wake: true, target: child.id, text: "inspect only" });
   assert.ok(queued.ok);
   assert.equal((await r.runs.inFlightForThread(child.threadRef))[0]!.request.readOnly, true);
+});
+
+test("a notebook-only turn cannot start work in or interrupt a session that isn't notebook-only", async () => {
+  const r = await rig();
+  const deps = {
+    mailbox: r.mailbox,
+    sessions: r.sessions,
+    runs: r.runs,
+    signals: r.signals,
+    steerRun: r.steerRun,
+    advisoryLock: r.advisoryLock,
+    maxAttempts: 3,
+  };
+  const opened = await r.syscallsFor(r.room).open({ task: "work" });
+  assert.ok(opened.ok);
+  const ordinary = await freshSession(r.sessions, opened.sessionId);
+  const [run] = await r.runs.inFlightForThread(ordinary.threadRef);
+  const claimed = await r.runs.claimById(run!.id, "worker", 60_000);
+  const tidy = createSessionSyscalls(deps).forTurn({
+    session: r.room,
+    scopeId: scope,
+    request: { surface: "cron", actor, conversation, memoryNotebookOnly: true },
+  });
+  const interrupted = await tidy.write({ interrupt: true, target: ordinary.id });
+  assert.ok(!interrupted.ok);
+  assert.match(interrupted.message, /notebook-only/);
+  const steered = await tidy.write({ wake: true, target: ordinary.id, text: "change things" });
+  assert.ok(steered.ok);
+  assert.equal(steered.delivered, "queued_message");
+  assert.deepEqual(await r.signals.takePending(run!.id), []);
+  await r.runs.complete(run!.id, claimed!.leaseToken!, { status: "ok", reply: "finished" });
+  const woken = await tidy.write({ wake: true, target: ordinary.id, text: "change things" });
+  assert.ok(woken.ok);
+  assert.equal(woken.delivered, "queued_message");
+  assert.match(woken.notWoken ?? "", /notebook-only/);
+  assert.deepEqual(await r.runs.inFlightForThread(ordinary.threadRef), []);
+  const own = await tidy.open({ task: "check the notebook" });
+  assert.ok(own.ok);
+  const child = await freshSession(r.sessions, own.sessionId);
+  const [childRun] = await r.runs.inFlightForThread(child.threadRef);
+  const childClaim = await r.runs.claimById(childRun!.id, "worker", 60_000);
+  await r.runs.complete(childRun!.id, childClaim!.leaseToken!, { status: "ok", reply: "done" });
+  const again = await tidy.write({ wake: true, target: child.id, text: "check again" });
+  assert.ok(again.ok);
+  assert.equal((await r.runs.inFlightForThread(child.threadRef))[0]!.request.memoryNotebookOnly, true);
 });
 
 test("writes revalidate access even while a target is running", async () => {

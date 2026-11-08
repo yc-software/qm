@@ -43,7 +43,16 @@ test("MCP provider passes query, actor, and explicit writes through configured t
     recallText(await memory.recall("org:acme", { query: "launch", actorId: "u1", maxChars: 2000 })),
     "result",
   );
-  assert.equal(await memory.capture("org:acme", ["decision"], 10, "u1", { mode: "explicit", actorId: "u1" }), 1);
+  assert.equal(
+    await memory.capture(
+      "org:acme",
+      ["decision"],
+      10,
+      { actorId: "u1", context: "conversation" },
+      { mode: "explicit" },
+    ),
+    1,
+  );
   assert.deepEqual(calls, [
     { tool: "search_knowledge", args: { query: "launch", acting_user: "u1", namespace: "org:acme", max_chars: 2000 } },
     {
@@ -237,8 +246,11 @@ test("a write split into batches carries the turn's input and reply once", async
       replyArg: "reply",
     },
   });
-  const context = { mode: "automatic" as const, actorId: "u1", input: "my seats", reply: "noted" };
-  assert.equal(await memory.capture("org:acme", facts(45), 10, "u1", context), 45);
+  const context = { mode: "automatic" as const, input: "my seats", reply: "noted" };
+  assert.equal(
+    await memory.capture("org:acme", facts(45), 10, { actorId: "u1", context: "conversation" }, context),
+    45,
+  );
   assert.deepEqual(
     calls.map(({ args }) => [(args.facts as unknown[]).length, args.input, args.reply]),
     [
@@ -259,7 +271,7 @@ test("every batch of a split write shares the write's one deadline", async () =>
     write: { client: slow, tool: "write", timeoutMs: 250, factsArg: "facts" },
   });
   await assert.rejects(
-    memory.capture("org:acme", facts(60), 10, "u1", { mode: "automatic", actorId: "u1" }),
+    memory.capture("org:acme", facts(60), 10, { actorId: "u1", context: "conversation" }, { mode: "automatic" }),
     /timed out/,
   );
 });
@@ -279,11 +291,16 @@ test("a split write is pending when any of its batches is, with its last batch's
     },
     routes: [{ provider: "knowledge", scopes: ["org"], capture: "explicit", manage: false }],
   });
-  await memory.capture("org:acme", facts(21), 10, "u1", {
-    mode: "explicit",
-    actorId: "u1",
-    report: (outcome) => void outcomes.push(outcome),
-  });
+  await memory.capture(
+    "org:acme",
+    facts(21),
+    10,
+    { actorId: "u1", context: "conversation" },
+    {
+      mode: "explicit",
+      report: (outcome) => void outcomes.push(outcome),
+    },
+  );
   assert.equal(calls, 2);
   assert.deepEqual(
     outcomes.map(({ outcome, code }) => ({ outcome, code })),
@@ -309,7 +326,7 @@ test("a split write sends no batch once its deadline has passed", async () => {
     write: { client: blocking, tool: "write", timeoutMs: 100, factsArg: "facts" },
   });
   await assert.rejects(
-    memory.capture("org:acme", facts(60), 10, "u1", { mode: "automatic", actorId: "u1" }),
+    memory.capture("org:acme", facts(60), 10, { actorId: "u1", context: "conversation" }, { mode: "automatic" }),
     /timed out after 100ms/,
   );
   assert.equal(calls, 2);
