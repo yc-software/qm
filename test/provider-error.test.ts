@@ -146,6 +146,31 @@ test("OpenAI's cyber_policy response.failed is a refusal naming the model and qu
   );
 });
 
+test("Anthropic's refusal stop reason stays a refusal and quotes its explanation", async (t) => {
+  const explanation =
+    "This request triggered restrictions on violative cyber content and was blocked under Anthropic's Usage Policy.";
+  const usage = { input_tokens: 10, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+  const failed = await failedThrough(t, "anthropic-messages", (res) => {
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    const events = [
+      { type: "message_start", message: { id: "m", type: "message", role: "assistant", content: [], usage } },
+      {
+        type: "message_delta",
+        delta: { stop_reason: "refusal", stop_details: { explanation } },
+        usage: { output_tokens: 1 },
+      },
+      { type: "message_stop" },
+    ];
+    res.end(events.map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join(""));
+  });
+  const err = providerTurnError(failed);
+  assert.deepEqual([err.code, err.retryable], ["refusal", false]);
+  assert.equal(
+    turnFailureMessage(err),
+    `Claude Opus 4.8 declined this request under the provider's usage policy ("${explanation}"). Rephrase, or switch model.`,
+  );
+});
+
 test("providerTurnError maps documented status, type and code without reading errorMessage", () => {
   const failed = (providerError: AssistantMessage["providerError"], rawStopReason?: string) =>
     ({
