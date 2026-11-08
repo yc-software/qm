@@ -4013,11 +4013,11 @@ qm-draft .draft-card-label {
   color: var(--muted-foreground);
   font-size: 0.9em;
 }
-:is(code-block, qm-draft) copy-button {
+code-block copy-button {
   --accent: var(--secondary);
   --accent-foreground: var(--foreground);
 }
-:is(code-block, qm-draft) copy-button button {
+code-block copy-button button {
   border-color: transparent;
   box-shadow: none;
   color: var(--muted-foreground);
