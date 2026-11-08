@@ -388,7 +388,8 @@ test("org-admin routes: admins only, secrets write-only, env providers read-only
     }),
     { GBRAIN_ID: "id", GBRAIN_SECRET: "env-secret" },
   );
-  const built = buildApp(testConfig(overlay ? { memoryProviderConfig: overlay } : {}));
+  const config = testConfig(overlay ? { memoryProviderConfig: overlay } : {});
+  const built = buildApp(config);
   const api = serve(built);
   t.after(api.close);
   const brain = {
@@ -444,13 +445,27 @@ test("org-admin routes: admins only, secrets write-only, env providers read-only
     (await api.call("DELETE", "/v1/admin/memory-registry/bindings/alice", "admin-alice@default-org")).status,
     200,
   );
-  await built.memoryRegistry.update(() => ({ schema: 2, brains: [], bindings: [] }) as unknown as MemoryRegistry);
+  const switchOff = { enabled: false };
+  assert.equal(
+    (await api.call("PUT", "/v1/admin/memory-registry/member-brains", "U-nobody@default-org", switchOff)).status,
+    403,
+  );
+  const off = await api.call("PUT", "/v1/admin/memory-registry/member-brains", "admin-alice@default-org", switchOff);
+  assert.equal(JSON.parse(off.text).memberBrains, false);
+  assert.equal(
+    JSON.parse((await api.call("GET", "/v1/admin/memory-registry", "admin-alice@default-org")).text).memberBrains,
+    false,
+  );
+  await createPostgresMapFactory(config.databaseUrl!)
+    .map<MemoryRegistry>(MEMORY_REGISTRY_TABLE)
+    .put("org", { schema: 99 } as unknown as MemoryRegistry);
   const unreadable = await api.call("GET", "/v1/admin/memory-registry", "admin-alice@default-org");
   assert.equal(unreadable.status, 409);
   assert.equal(JSON.parse(unreadable.text).error, "conflict");
   const rows = JSON.stringify(await built.auditLog.events());
   assert.match(rows, /memory-registry\.brain\.update/);
   assert.match(rows, /memory-registry\.binding\.delete/);
+  assert.match(rows, /memory-registry\.member-brains\.update/);
   assert.doesNotMatch(rows, /never-shown-secret/);
 });
 
@@ -559,11 +574,14 @@ test("an admin's agent can register and bind a brain but never carries its secre
   );
 });
 
-test("an admin's agent reaches every registry route only where the registry may be shown", async (t) => {
+test("an agent reaches every registry route only where the registry may be shown", async (t) => {
   const secret = "memory-registry-private-read-secret".repeat(2);
-  const built = buildApp(
-    testConfig({ signingSecret: secret, capabilitySecret: secret, apiBaseUrl: "http://core.example.test" }),
-  );
+  const config = testConfig({
+    signingSecret: secret,
+    capabilitySecret: secret,
+    apiBaseUrl: "http://core.example.test",
+  });
+  const built = buildApp(config);
   await built.directory.replaceChannels(
     [{ channelId: "C1", name: "registry-admin", isPrivate: false }],
     [{ channelId: "C1", principalId: "admin-alice" }],
@@ -588,25 +606,26 @@ test("an admin's agent reaches every registry route only where the registry may 
       secret,
     );
   const call = async (cap: string, method: string, path: string, body: unknown) => {
-    const res = await fetch(
-      `http://localhost:${(server.address() as AddressInfo).port}/v1/admin/memory-registry${path}`,
-      {
-        method,
-        headers: { "x-agent-capability": cap, "content-type": "application/json" },
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      },
-    );
+    const res = await fetch(`http://localhost:${(server.address() as AddressInfo).port}${path}`, {
+      method,
+      headers: { "x-agent-capability": cap, "content-type": "application/json" },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
     return { status: res.status, text: await res.text() };
   };
   const routes = [
-    ["GET", "", undefined, 200],
-    ["GET", "/brains/acme-personal", undefined, 200],
-    ["GET", "/bindings/alice", undefined, 200],
-    ["PUT", "/brains/acme-personal", { label: "Acme memory" }, 200],
-    ["PUT", "/bindings/alice", {}, 200],
-    ["PUT", "/bindings/everyone", { brain: "acme-personal", scope: "personal" }, 409],
-    ["DELETE", "/bindings/alice", undefined, 403],
-    ["DELETE", "/brains/acme-personal", undefined, 403],
+    ["GET", "/v1/admin/memory-registry", undefined, 200],
+    ["GET", "/v1/admin/memory-registry/brains/acme-personal", undefined, 200],
+    ["GET", "/v1/admin/memory-registry/bindings/alice", undefined, 200],
+    ["PUT", "/v1/admin/memory-registry/brains/acme-personal", { label: "Acme memory" }, 200],
+    ["PUT", "/v1/admin/memory-registry/bindings/alice", {}, 200],
+    ["PUT", "/v1/admin/memory-registry/bindings/everyone", { brain: "acme-personal", scope: "personal" }, 409],
+    ["PUT", "/v1/admin/memory-registry/member-brains", { enabled: true }, 200],
+    ["DELETE", "/v1/admin/memory-registry/bindings/alice", undefined, 403],
+    ["DELETE", "/v1/admin/memory-registry/brains/acme-personal", undefined, 403],
+    ["GET", "/v1/memory/brain", undefined, 200],
+    ["PUT", "/v1/memory/brain", { url: "https://brain.alice.example/mcp", clientId: "alice-qm" }, 200],
+    ["DELETE", "/v1/memory/brain", undefined, 200],
   ] as const;
   const record = async () => JSON.stringify((await built.memoryRegistry.current()).record);
   const before = await record();
@@ -616,7 +635,7 @@ test("an admin's agent reaches every registry route only where the registry may 
     assert.equal(refused.status, 403, `${method} ${path}`);
     assert.match(
       refused.text,
-      method === "DELETE" ? /never goes through the agent/ : /ask the agent in a DM/,
+      method === "DELETE" && path.startsWith("/v1/admin/") ? /never goes through the agent/ : /ask the agent in a DM/,
       `${method} ${path}`,
     );
     assert.doesNotMatch(refused.text, /personal:U1|brain\.acme\.example|qm-personal|alice/, `${method} ${path}`);
@@ -625,6 +644,12 @@ test("an admin's agent reaches every registry route only where the registry may 
   const dm = await capabilityIn("personal:admin-alice");
   for (const [method, path, body, status] of routes)
     assert.equal((await call(dm, method, path, body)).status, status, `${method} ${path}`);
+  await createPostgresMapFactory(config.databaseUrl!)
+    .map<MemoryRegistry>(MEMORY_REGISTRY_TABLE)
+    .put("org", { schema: 99 } as unknown as MemoryRegistry);
+  const unreadable = await call(dm, "GET", "/v1/memory/brain", undefined);
+  assert.equal(unreadable.status, 409);
+  assert.equal(JSON.parse(unreadable.text).error, "conflict");
 });
 
 test("blue-green: a binding written through one instance serves turns on the other, in both directions", async (t) => {

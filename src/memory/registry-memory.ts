@@ -67,7 +67,8 @@ export function createRegistryMemoryService(opts: {
     const { version, record } = await opts.registry.current();
     if (version === snapshot.version) return snapshot;
     try {
-      const { config, disabled } = resolveMemoryRegistry(readRegistry(record), opts.registry);
+      const registry = readRegistry(record);
+      const { config, disabled } = resolveMemoryRegistry(registry, opts.registry);
       snapshot = {
         version,
         disabled: disabled.filter(({ code }) => code !== "id_taken").map(disabledRoute),

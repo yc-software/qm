@@ -12,6 +12,8 @@ import { createMemorableMemoryProvider } from "./memorable/provider.ts";
 import { createSecretValueMasker } from "../security/secret-masking.ts";
 import type { Item } from "../sessions/items.ts";
 
+const MAX_RESPONSE_BYTES = 1_000_000;
+
 function operation(
   url: string,
   { auth, ...spec }: McpMemoryOperationConfig,
@@ -19,7 +21,12 @@ function operation(
   fetchFn: AddressFetch,
 ): McpMemoryOperation {
   return {
-    client: createMcpClient({ url, auth: { mode: "client-credentials", ...auth }, fetch: fetchFn }),
+    client: createMcpClient({
+      url,
+      auth: { mode: "client-credentials", ...auth },
+      fetch: fetchFn,
+      maxResponseBytes: MAX_RESPONSE_BYTES,
+    }),
     timeoutMs,
     ...spec,
   };
