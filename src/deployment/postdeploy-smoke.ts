@@ -7,6 +7,7 @@ import { signedRequestHeaders } from "../../plugins/chassis/src/source-auth-sign
 import { loadConfig, type Config } from "../config.ts";
 import { errMessage } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
+import { trimTrailingSlashes } from "../util/text.ts";
 
 export const PARALLEL_EXCEPTION_QUERY = `
   SELECT n.nspname AS schema_name, p.proname AS function_name
@@ -70,7 +71,7 @@ export async function checkSlackCredentials(
 ): Promise<void> {
   if (!botToken) throw new Error("postdeploy smoke requires SLACK_BOT_TOKEN");
   if (!appToken) throw new Error("postdeploy smoke requires SLACK_APP_TOKEN");
-  const root = (apiUrl ?? "https://slack.com").replace(/\/+$/, "");
+  const root = trimTrailingSlashes(apiUrl ?? "https://slack.com");
   const base = root.endsWith("/api") ? `${root}/` : `${root}/api/`;
   for (const [method, token] of [
     ["auth.test", botToken],
@@ -130,7 +131,7 @@ export async function checkLiveSession(
   if (!sourceSecret) throw new Error("live session smoke requires CORE_SIGNING_SECRET");
   if (!portalIdentitySecret) throw new Error("live session smoke requires PORTAL_IDENTITY_SECRET");
   const principalId = firstAdminPrincipal(config.adminGrants);
-  const root = baseUrl.replace(/\/+$/, "");
+  const root = trimTrailingSlashes(baseUrl);
   const request = async (
     method: "GET" | "POST",
     path: string,

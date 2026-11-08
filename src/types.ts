@@ -1,3 +1,4 @@
+import type { ClientSurface } from "../plugins/chassis/src/client-surface.ts";
 import type { ResolvedSecurityPolicy } from "./security/security-posture.ts";
 import type { SharingPosture } from "./resolution/sharing-posture.ts";
 import type { SurfaceAccount, TurnSurfaceOrigin } from "./surfaces/contract.ts";
@@ -121,6 +122,7 @@ export interface SpawnMeta {
   deliveryWebhook?: DeliveryWebhook;
   timezone?: string;
   readOnly?: boolean;
+  botActor?: boolean;
   model?: string;
   thinkingLevel?: string;
   fastMode?: boolean;
@@ -214,6 +216,7 @@ export interface Destination {
   audienceScopeId?: ScopeId;
   onBehalfOf?: string;
   relaySender?: string;
+  persona?: { id: string; name: string };
   threadTs?: string;
   editRef?: string;
   unfurlLinks?: boolean;
@@ -367,6 +370,7 @@ export interface ClientToolResult {
 
 export interface TurnRequest {
   desktopClientId?: string;
+  clientSurface?: ClientSurface;
   midTurn?: "steer" | "queue";
   surfaceOrigin?: TurnSurfaceOrigin;
   sessionSenderId?: string;
@@ -395,6 +399,7 @@ export interface TurnRequest {
   unattendedGrants?: string[];
   cronScript?: import("./triggers/types.ts").CronScript;
   infrequentCron?: boolean;
+  personaId?: string;
   botActor?: boolean;
   conversationHeader?: string;
   priorTurns?: ConversationTurn[];
@@ -445,6 +450,12 @@ export interface PendingApproval {
   grantModes?: ApprovalGrantModes;
   blocksInput?: boolean;
   kind?: "approval" | "input";
+  executesOnApprove?: boolean;
+}
+
+export interface ApprovedToolCallSpec {
+  tool: string;
+  input: Record<string, unknown>;
 }
 
 export interface PendingApprovalRecord {
@@ -462,6 +473,7 @@ export interface PendingApprovalRecord {
   request?: TurnRequest;
   blocksInput?: boolean;
   kind?: "approval" | "input";
+  call?: ApprovedToolCallSpec;
 }
 
 type ApprovalScope = "once" | "session" | "always";
@@ -509,4 +521,5 @@ export interface TurnResult {
   runtime?: TurnRuntime;
   scriptVerdict?: string;
   retracted?: string[];
+  persona?: { id: string; name: string };
 }

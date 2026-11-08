@@ -89,6 +89,7 @@ type ParentMailDeps = Pick<
 
 interface ParentSource {
   actor: Principal;
+  botActor?: boolean;
   conversation: Pick<OrchestratorInput["conversation"], "audience">;
   runId?: string;
   delegatingRunId?: string;
@@ -189,6 +190,7 @@ async function parentTurn(
             : {}),
         },
         unattendedGrants: undefined,
+        botActor: source.botActor,
       };
   const { openFingerprint: _openFingerprint, ...request }: OrchestratorInput & Pick<SpawnMeta, "openFingerprint"> = {
     ...meta,
@@ -230,6 +232,7 @@ async function parentTurn(
     "conversationHeader",
     "cronScript",
     "infrequentCron",
+    "personaId",
   ] as const)
     delete request[key];
   if (!originalParent) request.addressed = false;
@@ -286,6 +289,7 @@ async function mailParent(
     recipientId: parent.id,
     senderId: child.id,
     actor: turn.prepared.actor,
+    ...(turn.prepared.botActor ? { botActor: true } : {}),
     audience: turn.prepared.conversation.audience,
     createdAt: Date.now(),
   });
@@ -377,6 +381,7 @@ async function wakeParentForMail(
             if (await runStopped(runs, deps.signals, message.senderRunId ?? message.delegatingRunId)) return "settled";
             const source = {
               actor: message.actor,
+              ...(message.botActor ? { botActor: true } : {}),
               conversation: { audience: message.audience },
               ...(message.delegatingRunId ? { delegatingRunId: message.delegatingRunId } : {}),
               ...(peer ? { peerDepth: message.peerDepth ?? 1 } : {}),

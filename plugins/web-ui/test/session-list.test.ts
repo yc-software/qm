@@ -190,7 +190,7 @@ test("a row's subagent indicators come from the server's counts, whatever childr
   const row = at("root", "web:u:root", 9, { subagents: { running: 2, waiting: 1 } });
   const cached = [row, at("c", "subagent:root:c", 1, { parentSessionId: "root" })];
   assert.equal(rowIndicators(row, null).awaiting, true);
-  assert.equal(conversationBackground(cached, "root", null)?.subagents, 3);
+  assert.equal(conversationBackground(cached, "root", null), null, "subagents alone light no background chip");
   assert.equal(rowIndicators(at("idle", "web:u:idle", 9), null).background, null);
 });
 
@@ -511,7 +511,6 @@ test("backgroundLabel: jobs, watches and crons fold into one chip with a spoken 
     jobs: 1,
     watches: 0,
     crons: 0,
-    subagents: 0,
     goal: false,
     label: "1 background job running",
   });
@@ -519,7 +518,6 @@ test("backgroundLabel: jobs, watches and crons fold into one chip with a spoken 
     jobs: 2,
     watches: 1,
     crons: 0,
-    subagents: 0,
     goal: false,
     label: "2 background jobs running · 1 watch armed",
   });
@@ -527,7 +525,6 @@ test("backgroundLabel: jobs, watches and crons fold into one chip with a spoken 
     jobs: 0,
     watches: 2,
     crons: 0,
-    subagents: 0,
     goal: false,
     label: "2 watches armed",
   });
@@ -535,7 +532,6 @@ test("backgroundLabel: jobs, watches and crons fold into one chip with a spoken 
     jobs: 0,
     watches: 0,
     crons: 1,
-    subagents: 0,
     goal: false,
     label: "1 cron scheduled here",
   });
@@ -543,7 +539,6 @@ test("backgroundLabel: jobs, watches and crons fold into one chip with a spoken 
     jobs: 0,
     watches: 1,
     crons: 2,
-    subagents: 0,
     goal: false,
     label: "1 watch armed · 2 crons scheduled here",
   });
@@ -562,7 +557,6 @@ test("rowIndicators: background counts flow through backgroundLabel — zero cou
     jobs: 2,
     watches: 1,
     crons: 0,
-    subagents: 0,
     goal: false,
     label: "2 background jobs running · 1 watch armed",
   });
@@ -571,7 +565,6 @@ test("rowIndicators: background counts flow through backgroundLabel — zero cou
     jobs: 0,
     watches: 0,
     crons: 3,
-    subagents: 0,
     goal: false,
     label: "3 crons scheduled here",
   });
@@ -588,7 +581,6 @@ test("conversationBackground: resolves the mounted conversation by session id", 
     jobs: 2,
     watches: 1,
     crons: 0,
-    subagents: 0,
     goal: false,
     label: "2 background jobs running · 1 watch armed",
   });
@@ -600,7 +592,6 @@ test("conversationBackground: falls back to threadRef while the conversation is 
     jobs: 0,
     watches: 1,
     crons: 0,
-    subagents: 0,
     goal: false,
     label: "1 watch armed",
   });
@@ -728,12 +719,10 @@ test("a goal lights the background chip with time worked, then the floor", () =>
     0,
     0,
     0,
-    0,
-    0,
     { activeMs: 600_000, runningSince: 600_000, floor: { minMs: 1_200_000 } },
     720_000,
   );
   assert.equal(row?.goal, true);
   assert.equal(row?.label, "goal · 12m worked · 20m floor");
-  assert.equal(backgroundLabel(0, 0, 0, 0, 0, { activeMs: 60_000 }, 9_999_999)?.label, "goal · 1m worked");
+  assert.equal(backgroundLabel(0, 0, 0, { activeMs: 60_000 }, 9_999_999)?.label, "goal · 1m worked");
 });

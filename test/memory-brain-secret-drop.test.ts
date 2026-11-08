@@ -4,7 +4,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
-import { CAPABILITY_TTL_MS, mintCapabilityToken, type CapabilityClaims } from "../src/auth/capability-token.ts";
+import {
+  CAPABILITY_TTL_MS,
+  mintCapabilityToken,
+  SECRET_DROP_AUD,
+  verifyCapabilityToken,
+  type CapabilityClaims,
+} from "../src/auth/capability-token.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { orgId } from "../src/config.ts";
 import {
@@ -21,6 +27,7 @@ import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
 
 const SECRET = "memory-brain-drop-test-secret".repeat(2);
 const BRAIN = {
@@ -63,6 +70,7 @@ async function setup(
     auditLog: built.auditLog,
     admin: built.admin,
     memoryRegistry: registry,
+    ...browserSessionDeps,
     ...(opts.fireDropResolution ? { fireDropResolution: opts.fireDropResolution } : {}),
   });
   await new Promise<void>((resolve) => server.listen(0, resolve));
@@ -104,11 +112,12 @@ async function setup(
     return {
       status: res.status,
       text,
+      token: t,
       form: () => signed("GET", `/v1/keychain/drops/${json!.dropId}/form?t=${encodeURIComponent(t)}`, "", actorId),
-      redeem: (secret: string) =>
+      redeem: (secret: string, token = t) =>
         signed(
           "POST",
-          `/v1/keychain/drops/${json!.dropId}?t=${encodeURIComponent(t)}`,
+          `/v1/keychain/drops/${json!.dropId}?t=${encodeURIComponent(token)}`,
           JSON.stringify({ secret }),
           actorId,
         ),
@@ -145,7 +154,19 @@ async function setup(
     const text = await res.text();
     return { status: res.status, text, json: JSON.parse(text) };
   };
-  return { base, built, change, mint, self, servedSecret };
+  const browserMint = async (principalId: string, body: unknown) => {
+    const res = await fetch(`${base}/api/keychain/drops`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        cookie: browserSessionCookie(principalId),
+        origin: browserSessionDeps.portalUrl,
+      },
+      body: JSON.stringify(body),
+    });
+    return { status: res.status, text: await res.text() };
+  };
+  return { base, built, change, mint, self, browserMint, servedSecret };
 }
 
 test("an org admin's brain link saves the client secret core-only, from a project whose members change and from a DM", async (t) => {
@@ -166,7 +187,7 @@ test("an org admin's brain link saves the client secret core-only, from a projec
   assert.equal(fromProject.status, 200);
   const form = await fromProject.form();
   assert.equal(form.status, 200);
-  assert.match(form.text, /Acme personal memory at https:\/\/brain\.acme\.example/);
+  assert.match(form.text, /Acme personal memory at https:\/\/brain\.acme\.example\/mcp<\/strong>/);
   assert.match(form.text, /every member&#39;s personal memory/);
   assert.equal((await built.app.addProjectMember(project.id, "admin-alice", "member-bob")).status, "ok");
   const saved = await fromProject.redeem("brain-secret-one");
@@ -183,10 +204,25 @@ test("an org admin's brain link saves the client secret core-only, from a projec
   assert.doesNotMatch(JSON.stringify((await built.memoryRegistry.current()).record), /brain-secret-/);
   assert.deepEqual(await built.keychain!.listByOwner("admin-alice"), [], "nothing enters a keychain");
   assert.deepEqual(await built.keychain!.listGrants({ ownerId: "admin-alice" }), [], "nothing is granted");
-  await new Promise((resolve) => setTimeout(resolve, 50));
   const rows = JSON.stringify(await built.auditLog.events());
   assert.match(rows, /memory-registry\.brain\.secret/);
   assert.doesNotMatch(rows, /brain-secret-/);
+});
+
+test("a brain link has its own link audience, so a core without brain links refuses it instead of saving the secret into a keychain", async (t) => {
+  const { built, mint, servedSecret } = await setup(t);
+  await built.app.upsertDirectory([{ principalId: "admin-alice", displayName: "Alice", type: "internal" }]);
+  const link = await mint("admin-alice", { memoryBrain: "acme-personal", purpose: "connect Acme personal memory" });
+  assert.equal(link.status, 200);
+  const claims = await verifyCapabilityToken(link.token, SECRET);
+  assert.ok(claims);
+  assert.notEqual(claims.aud, SECRET_DROP_AUD, "a core without brain links accepts only keychain drop links");
+  const asKeychainDrop = await mintCapabilityToken({ ...claims, aud: SECRET_DROP_AUD }, SECRET);
+  assert.equal((await link.redeem("brain-secret-swapped", asKeychainDrop)).status, 404);
+  assert.equal(await servedSecret(), undefined);
+  assert.equal((await link.redeem("brain-secret-own")).status, 200);
+  assert.equal(await servedSecret(), "brain-secret-own");
+  assert.deepEqual(await built.keychain!.listByOwner("admin-alice"), []);
 });
 
 test("a brain link refuses non-admins, other drop fields, unknown and moved brains, and a demoted admin, and stays usable after a refused save", async (t) => {
@@ -207,12 +243,16 @@ test("a brain link refuses non-admins, other drop fields, unknown and moved brai
   await built.memoryRegistry.update((record) =>
     putBrain(record, "acme-personal", { url: "https://brain2.acme.example/mcp" }, change),
   );
+  const movedForm = await beforeMove.form();
+  assert.equal(movedForm.status, 409, "a moved brain's link shows no form");
+  assert.match(movedForm.text, /removed or moved to another address/);
   const moved = await beforeMove.redeem("for-the-old-url");
   assert.equal(moved.status, 409);
   assert.match(JSON.parse(moved.text).message, /changed after this link was made/);
   assert.doesNotMatch(moved.text, /for-the-old-url/);
   assert.equal(await servedSecret(), undefined);
   await built.memoryRegistry.update((record) => putBrain(record, "acme-personal", { url: BRAIN.url }, change));
+  assert.equal((await beforeMove.form()).status, 200);
   assert.equal((await beforeMove.redeem("after-the-move-back")).status, 200);
   assert.equal(await servedSecret(), "after-the-move-back");
 
@@ -229,10 +269,9 @@ test("a brain link refuses non-admins, other drop fields, unknown and moved brai
   assert.equal(demoted.status, 403);
   assert.match(JSON.parse(demoted.text).message, /no longer set this brain's secret/);
   assert.equal(await servedSecret(), "after-the-move-back");
-  await new Promise((resolve) => setTimeout(resolve, 50));
   const rows = JSON.stringify(await built.auditLog.events());
   assert.match(rows, /memory-registry\.brain\.secret\.refused/);
-  assert.match(rows, /acme-personal: brain acme-personal changed after this link was made/);
+  assert.equal(rows.match(/acme-personal: brain acme-personal changed after this link was made/g)?.length, 2);
   assert.doesNotMatch(rows, /for-the-old-url|from-a-former-admin/);
 });
 
@@ -343,4 +382,14 @@ test("a member's brain fields are bounded, a repeated save writes nothing, and t
 
   assert.equal((await self("U-member", "DELETE")).status, 200);
   assert.equal((await stored()).schema, 1);
+});
+
+test("a signed-in admin mints a brain link from the browser, and a signed-in member is refused", async (t) => {
+  const { browserMint } = await setup(t);
+  const brainDrop = { memoryBrain: "acme-personal", purpose: "connect it" };
+  const member = await browserMint("U-member", brainDrop);
+  assert.equal(member.status, 403, member.text);
+  const admin = await browserMint("admin-alice", brainDrop);
+  assert.equal(admin.status, 200, admin.text);
+  assert.match((JSON.parse(admin.text) as { formPath: string }).formPath, /^\/drop\//);
 });

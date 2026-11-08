@@ -171,6 +171,7 @@ export function sessionContextOf(input: OrchestratorInput): SpawnMeta {
     ...(input.deliveryWebhook ? { deliveryWebhook: input.deliveryWebhook } : {}),
     ...(input.timezone ? { timezone: input.timezone } : {}),
     ...(input.readOnly ? { readOnly: true } : {}),
+    ...(input.botActor ? { botActor: true } : {}),
     ...(input.model ? { model: input.model } : {}),
     ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
     ...(input.fastMode !== undefined ? { fastMode: input.fastMode } : {}),
@@ -431,6 +432,7 @@ function childRunRequest(child: Session, meta: SpawnMeta, text: string, displayT
     displayText,
     envelopeWrapped: true,
     ...(meta.readOnly ? { readOnly: true } : {}),
+    ...(meta.botActor ? { botActor: true } : {}),
     ...(meta.model ? { model: meta.model } : {}),
     ...(meta.thinkingLevel ? { thinkingLevel: meta.thinkingLevel } : {}),
     ...(meta.fastMode !== undefined ? { fastMode: meta.fastMode } : {}),
@@ -571,6 +573,7 @@ export async function stopSessionRuns(
         recipientId: session.id,
         senderId: foreign.sender,
         actor: run.request.actor,
+        ...(run.request.botActor ? { botActor: true } : {}),
         audience: run.request.conversation.audience,
         text: run.request.text,
         createdAt: run.createdAt,
@@ -708,12 +711,15 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
         if (deps.enabled && !(await deps.enabled(binding.request.actor.id)))
           throw new Error("persistent subagents are not enabled for this user");
         const current = await deps.sessions.get(binding.session.id);
-        if (
-          !current ||
-          current.scopeId !== binding.scopeId ||
-          (deps.authorize && !(await deps.authorize(current, binding.request.actor.id)))
-        )
-          throw new Error("the sender no longer has access to this session");
+        if (!current) throw new Error("this session no longer exists; nothing was started or sent.");
+        if (current.scopeId !== binding.scopeId)
+          throw new Error(
+            `this session moved from ${binding.scopeId} to ${current.scopeId}; nothing was started or sent.`,
+          );
+        if (deps.authorize && !(await deps.authorize(current, binding.request.actor.id)))
+          throw new Error(
+            `${binding.request.actor.id} can't currently be confirmed as a member of ${binding.scopeId}, so helpers can't run here; nothing was started or sent.`,
+          );
         const request: OrchestratorInput = {
           ...binding.request,
           origin: binding.request.origin ?? { kind: "automation" },
@@ -920,6 +926,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   origin: caller.origin,
                   unattendedGrants: caller.unattendedGrants,
                   readOnly: privateMessage || caller.readOnly || meta.readOnly || target.spawnMeta?.readOnly,
+                  botActor: caller.botActor,
                 },
                 "",
                 "",
@@ -966,6 +973,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   recipientId: target.id,
                   senderId: binding.session.id,
                   actor: caller.actor,
+                  ...(caller.botActor ? { botActor: true } : {}),
                   audience: caller.conversation.audience,
                   createdAt: Date.now(),
                 });

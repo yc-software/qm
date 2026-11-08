@@ -35,6 +35,15 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- if .Chart.AppVersion }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 {{- end }}
+{{- range $key, $value := .Values.additionalLabels }}
+{{- if has $key (list "helm.sh/chart" "app.kubernetes.io/name" "app.kubernetes.io/instance" "app.kubernetes.io/managed-by" "app.kubernetes.io/version" "app.kubernetes.io/component") }}
+{{- fail (printf "additionalLabels cannot override chart-owned label %s" $key) }}
+{{- end }}
+{{- if not (kindIs "string" $value) }}
+{{- fail (printf "additionalLabels value for %s must be a string" $key) }}
+{{- end }}
+{{ $key | quote }}: {{ $value | quote }}
+{{- end }}
 {{- end -}}
 
 {{- define "qm.serviceAccountName" -}}

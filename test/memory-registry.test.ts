@@ -16,6 +16,11 @@ import {
   setMemberBrains,
   type MemoryRegistry,
 } from "../src/memory/registry.ts";
+import type { MemoryDisclosure } from "../src/memory/disclosure.ts";
+import type { MemoryService } from "../src/memory/memory-service.ts";
+import { createRegistryMemoryService } from "../src/memory/registry-memory.ts";
+import type { ScopeId } from "../src/types.ts";
+import { emptyMemoryRegistry } from "./support/memory-registry.ts";
 
 const change = {
   actor: "admin-alice",
@@ -343,7 +348,12 @@ test("the org switch stops members' brains and refuses new ones, and leaves org 
     { brain: "acme-personal", scope: "personal" },
     change,
   );
-  record = putBrain(record, ALICE_BRAIN, { clientSecret: "alice-secret" }, change);
+  record = putBrain(
+    record,
+    ALICE_BRAIN,
+    { clientSecret: "alice-secret", url: "https://brain.alice.example/mcp" },
+    change,
+  );
   const serving = (current: MemoryRegistry) => resolveMemoryRegistry(current, change);
   assert.deepEqual(
     serving(record).config.routes.map(({ provider }) => provider),
@@ -374,4 +384,43 @@ test("a brain's owner who is no longer an active member can't set its secret", (
     brainRefusal(record, record.brains[0]!, "U1", "inactive") ?? "",
     /only an org admin or the brain's owner/,
   );
+});
+
+test("setting a brain's secret restates the url the secret goes to", () => {
+  const registered = personalBrain(EMPTY_MEMORY_REGISTRY, { clientSecret: undefined });
+  for (const body of [{ clientSecret: "personal-secret" }, { clientSecret: "personal-secret", url: null }])
+    refused(() => putBrain(registered, "acme-personal", body, change), 400, /must restate url/);
+  const approved = putBrain(
+    registered,
+    "acme-personal",
+    { clientSecret: "personal-secret", url: "https://brain.acme.example/mcp" },
+    change,
+  );
+  assert.ok(approved.brains[0]!.auth.clientSecretEnc);
+});
+
+test("registry memory narrows chained disclosures in order", async () => {
+  const applied: string[] = [];
+  const recording = (path: readonly string[]): MemoryService => ({
+    recall: async () => {
+      applied.push(path.join(" > "));
+      return [];
+    },
+    capture: async () => 0,
+    query: async () => [],
+    read: async () => "",
+    withDisclosure: (access) => recording([...path, access.targetScope]),
+  });
+  const disclosure = (targetScope: ScopeId): MemoryDisclosure => ({
+    actor: { id: "alice", type: "internal" },
+    targetScope,
+    nativeScopes: [],
+    audience: [],
+    open: false,
+  });
+  const memory = createRegistryMemoryService({ defaultMemory: recording([]), registry: emptyMemoryRegistry });
+  await memory.withDisclosure!(disclosure("personal:alice")).withDisclosure!(disclosure("channel:room")).recall(
+    "personal:alice",
+  );
+  assert.deepEqual(applied, ["personal:alice > channel:room"]);
 });

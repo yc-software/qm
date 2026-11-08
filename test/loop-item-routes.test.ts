@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createServer as createNetServer, type AddressInfo } from "node:net";
 import { test } from "node:test";
 import { loopItemRoutes } from "../src/api/routes/loop-items.ts";
 import type { LoopServiceDeps } from "../src/api/routes/loops.ts";
@@ -1087,4 +1088,27 @@ test("an owner cannot trigger Slack avatar enrichment through item detail when I
   });
   assert.equal(result.status, 200);
   assert.deepEqual(await w.loops.items.get(item!.id), before);
+});
+
+test("an item's image never reaches core's own loopback, by address or by name", async (t) => {
+  const warned: string[] = [];
+  t.mock.method(console, "warn", (line: string) => warned.push(line));
+  const dialed: string[] = [];
+  const internal = createNetServer((socket) => {
+    dialed.push(String(socket.remoteAddress));
+    socket.destroy();
+  });
+  await new Promise<void>((resolve) => internal.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise<void>((resolve) => internal.close(() => resolve())));
+  const { port } = internal.address() as AddressInfo;
+  const { w, loop, item } = await seed(world(), {
+    ...ITEM,
+    images: [`https://127.0.0.1:${port}/latest/meta-data.png`, `https://localhost:${port}/admin.png`],
+  });
+  for (const i of [0, 1]) {
+    const out = await call(w, { method: "GET", path: `/v1/loops/${loop.id}/items/${item.id}/image?ctx=-1&i=${i}` });
+    assert.deepEqual([out.status, out.body], [502, { error: "upstream" }]);
+    assert.match(warned.at(-1) ?? "", /private network address/);
+  }
+  assert.deepEqual(dialed, []);
 });

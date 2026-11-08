@@ -29,6 +29,7 @@ import { turnRuntimePurpose } from "../core/turn-options.ts";
 import { turnModelOptions } from "../agent/runtime-choice.ts";
 import { samePerson } from "../directory/person.ts";
 import { swallowAs } from "../util/errors.ts";
+import { APPROVAL_DECISION_SIGNAL_TEXT, executesOnApprove } from "../core/orchestrator/approvals.ts";
 import { sleep } from "../util/async.ts";
 
 import type { App, AppDeps } from "./app-types.ts";
@@ -170,6 +171,48 @@ export function createTurnMethods(
         return (await deps.projects.withVersion(conversationRef, project.version, fn)) ?? null;
       }
 
+      async function routeApprovalIntoLiveRun(
+        request: TurnRequest,
+        decision: NonNullable<TurnRequest["approval"]>,
+        actorId: string,
+        threadRef: string,
+      ): Promise<TurnResult | null> {
+        const [record, session, live] = await Promise.all([
+          deps.approvals?.get(decision.requestId),
+          deps.sessions.getByThread(threadRef),
+          deps.runs.activeForThread(threadRef),
+        ]);
+        if (!record?.call || !session || (decision.approved && (decision.scope ?? "once") !== "once")) return null;
+        if (record.sessionId !== session.id || (await approvalResumable(session, actorId, record)) !== "ok")
+          return null;
+        if (!live || live.status !== "running" || leaseLapsed(live, Date.now())) return null;
+        if (
+          !samePerson(live.request.actor.id, actorId) ||
+          isSessionTurn(live.request) ||
+          !(isPersonAuthored(live.request.origin.kind) || spokenByPerson(live.request.origin))
+        )
+          return null;
+        const dedupeKey = `approval:${decision.requestId}:${record.createdAt ?? 0}:${decision.approved}:${live.id}`;
+        const routedRunId = await withCurrentProjectRoster(async () => {
+          await deps.signals!.send(live.id, {
+            kind: "steer",
+            text: APPROVAL_DECISION_SIGNAL_TEXT,
+            ts: dedupeKey,
+            request: { ...request, approval: decision },
+            dedupeKey,
+          });
+          return live.id;
+        });
+        if (!routedRunId)
+          return { status: "refused", reason: "project membership changed; retry from the current project" };
+        const after = await deps.runs.get(live.id);
+        if (after && !isTerminal(after.status)) return { status: "queued", runId: live.id, steered: true };
+        const own = (await replayOrphanedRunSignals(live.id)).find((d) => d.signal.dedupeKey === dedupeKey);
+        return own?.replayRunId
+          ? { status: "queued", runId: own.replayRunId }
+          : { status: "queued", runId: live.id, steered: true };
+      }
+
       const approvedRequest = req.approval ? (await deps.approvals?.get(req.approval.requestId))?.request : undefined;
       const sameApprovedMessage =
         approvedRequest?.text === req.text &&
@@ -272,10 +315,14 @@ export function createTurnMethods(
         ...(req.unattendedGrants?.length ? { unattendedGrants: req.unattendedGrants } : {}),
         ...(req.cronScript && origin.kind === "automation" ? { cronScript: req.cronScript } : {}),
         ...(req.infrequentCron && origin.kind === "automation" ? { infrequentCron: true } : {}),
+        ...(req.personaId && origin.kind === "automation" && req.surface === "cron"
+          ? { personaId: req.personaId }
+          : {}),
         ...(req.botActor ? { botActor: true } : {}),
         ...(req.surfaceTools ? { surfaceTools: true } : {}),
         ...(req.clientTools?.length ? { clientTools: req.clientTools } : {}),
         desktopClientId: desktopClientForTurn({ ...req, origin }),
+        ...(req.clientSurface ? { clientSurface: req.clientSurface } : {}),
         ...(req.envelopeWrapped ? { envelopeWrapped: true } : {}),
         ...(typeof req.displayText === "string" && req.displayText ? { displayText: req.displayText } : {}),
         ...(req.addressed || origin.kind === "human" ? { addressed: true } : {}),
@@ -322,6 +369,11 @@ export function createTurnMethods(
         return undefined;
       };
       let request = input;
+
+      if (req.approval && deps.signals && !isSubagentThreadRef(conversation.threadRef)) {
+        const routed = await routeApprovalIntoLiveRun(req, req.approval, actor.id, conversation.threadRef);
+        if (routed) return routed;
+      }
 
       const redeliveryKey = req.approval ? undefined : req.redeliveryKey;
       if (redeliveryKey && deps.signals) {
@@ -495,7 +547,8 @@ export function createTurnMethods(
         const session = await deps.sessions.get(record.sessionId);
         if (!session || !(await approvalVisibleToViewer(session, viewer, record))) return null;
       }
-      return { requestId, ...record };
+      const { call: _call, ...view } = record;
+      return { requestId, ...view, ...executesOnApprove(record) };
     },
 
     async listSessionApprovals(sessionId, viewer) {

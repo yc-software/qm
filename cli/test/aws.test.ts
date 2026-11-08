@@ -44,6 +44,7 @@ import { awsObjectStoreBucket } from "../src/terraform.ts";
 import { withAwsLease } from "../src/aws-lease.ts";
 import { manifestRef } from "../src/manifest.ts";
 import { hostingProvider } from "../src/backends/registry.ts";
+import { awsCoreHostnames } from "../src/aws-routing.ts";
 
 process.env.QM_AWS_ROLLOUT_POLL_MS = "5";
 process.env.QM_AWS_LIVE_PROBE_POLL_MS = "5";
@@ -65,22 +66,72 @@ const productionRuleArn = (route: string): string =>
 interface FrontDoor {
   blueGreen?: boolean;
   frontDoorTargetGroup?: string;
+  apiHosts?: string[];
+  apiTargetGroup?: string;
 }
 
+const coreApiAlternate = "core-api-alternate";
+
 function frontDoorAttachments(door: FrontDoor): Array<Record<string, unknown>> {
+  const attachment = (route: string, name: string, alternate: string, containerPort: number) => ({
+    targetGroupArn: targetGroupArn(name),
+    containerName: "core",
+    containerPort,
+    ...(door.blueGreen
+      ? {
+          advancedConfiguration: {
+            alternateTargetGroupArn: targetGroupArn(alternate, 2),
+            productionListenerRule: productionRuleArn(route),
+          },
+        }
+      : {}),
+  });
   return [
-    {
-      targetGroupArn: targetGroupArn(door.frontDoorTargetGroup ?? awsTargetGroupName(config, "core-public")),
-      ...(door.blueGreen
-        ? {
-            advancedConfiguration: {
-              alternateTargetGroupArn: targetGroupArn(frontDoorAlternate, 2),
-              productionListenerRule: productionRuleArn("core-public"),
-            },
-          }
-        : {}),
-    },
+    attachment(
+      "core-public",
+      door.frontDoorTargetGroup ?? awsTargetGroupName(config, "core-public"),
+      frontDoorAlternate,
+      8000,
+    ),
+    ...(door.apiHosts?.length ? [attachment("core", door.apiTargetGroup ?? "core-api", coreApiAlternate, 8080)] : []),
   ];
+}
+
+function coreApiRoute(door: FrontDoor): {
+  groups: Array<{ TargetGroupArn: string; TargetGroupName: string }>;
+  rules: Array<Record<string, unknown>>;
+} {
+  if (!door.apiHosts?.length) return { groups: [], rules: [] };
+  const name = door.apiTargetGroup ?? "core-api";
+  const primary = targetGroupArn(name);
+  const alternate = targetGroupArn(coreApiAlternate, 2);
+  return {
+    groups: [
+      { TargetGroupArn: primary, TargetGroupName: name },
+      ...(door.blueGreen ? [{ TargetGroupArn: alternate, TargetGroupName: coreApiAlternate }] : []),
+    ],
+    rules: [
+      {
+        RuleArn: productionRuleArn("core"),
+        Priority: "1000",
+        IsDefault: false,
+        Actions: [
+          door.blueGreen
+            ? {
+                Type: "forward",
+                ForwardConfig: {
+                  TargetGroups: [
+                    { TargetGroupArn: primary, Weight: 1 },
+                    { TargetGroupArn: alternate, Weight: 0 },
+                  ],
+                },
+              }
+            : { Type: "forward", TargetGroupArn: primary },
+        ],
+        Conditions: [{ Field: "host-header", HostHeaderConfig: { Values: door.apiHosts } }],
+      },
+    ],
+  };
 }
 
 function fakeAws(
@@ -103,6 +154,7 @@ function fakeAws(
   const groups = [
     { TargetGroupArn: targetArn, TargetGroupName: frontDoorName },
     ...(ingress.blueGreen ? [{ TargetGroupArn: alternateArn, TargetGroupName: frontDoorAlternate }] : []),
+    ...coreApiRoute(ingress).groups,
   ];
   const baseRules: Array<Record<string, unknown>> = ingress.blueGreen
     ? [
@@ -125,6 +177,7 @@ function fakeAws(
         },
       ]
     : [];
+  baseRules.unshift(...coreApiRoute(ingress).rules);
   if (ingress.sharedHost) {
     (baseRules.at(-1)!.Conditions as unknown[]).push({
       Field: "host-header",
@@ -269,7 +322,10 @@ function statefulAws(
   restore: () => void;
 } {
   const state = join(dir, "aws-state.json");
-  const door: FrontDoor = { blueGreen: Boolean(opts.blueGreenBakePolls) };
+  const door: FrontDoor = {
+    blueGreen: Boolean(opts.blueGreenBakePolls),
+    apiHosts: configured.aws?.sharedAlb ? [] : awsCoreHostnames(configured),
+  };
   const services = Object.fromEntries(
     Object.entries(configured.aws!.services).map(([name, spec]) => [
       spec.ecsService,
@@ -1106,7 +1162,7 @@ test("AWS deploy requires the live ALB to send everything but declared routes to
   };
   try {
     await run("AWS_FAKE_DEFAULT_404", /listener default does not route only to the core front door/);
-    await run("AWS_FAKE_EXTRA_RULE", /ALB has non-default rules beyond the declared plugin routes/);
+    await run("AWS_FAKE_EXTRA_RULE", /ALB has non-default rules beyond the declared plugin and core API routes/);
     await run("AWS_FAKE_DEFAULT_FORWARD", /blue\/green listener default must return a fixed 404 response/, true);
     await run("AWS_FAKE_EXTRA_RULE", /blue\/green ALB has unexpected non-default rules/, true);
   } finally {
@@ -1114,62 +1170,111 @@ test("AWS deploy requires the live ALB to send everything but declared routes to
   }
 });
 
-test("AWS front door carries a separate apiUrl host and apps domain on core's /* route alone", () => {
+test("AWS routes a separate apiUrl host and apps domain straight to core's API target group", () => {
   const configured: QmConfig = {
     ...config,
     apiUrl: "https://api.agent.acme.example",
     env: { ...config.env, core: { ...config.env.core, AWS_DEPLOY_APPS_DOMAIN: "apps.agent.acme.example" } },
   };
+  const hosts = awsCoreHostnames(configured);
+  assert.deepEqual(hosts, ["api.agent.acme.example", "*.apps.agent.acme.example"]);
   const front = targetGroupArn(awsTargetGroupName(config, "core-public"));
-  const coreApi = targetGroupArn(awsTargetGroupName(config, "core"));
   for (const blueGreen of [false, true]) {
-    const dir = mkdtempSync(join(tmpdir(), "qm-aws-front-door-"));
-    const fake = fakeAws(dir, "", { blueGreen });
-    const attached = new Map([["core", { loadBalancers: frontDoorAttachments({ blueGreen }) }]]);
-    const run = (env: "AWS_FAKE_CORE_HOST_RULE" | "AWS_FAKE_FRONT_DOOR_HOST", value: string, expected: RegExp) => {
-      process.env[env] = value;
+    const check = (
+      door: FrontDoor,
+      routed: QmConfig,
+      attachments: Array<Record<string, unknown>>,
+      expected?: RegExp,
+    ) => {
+      const dir = mkdtempSync(join(tmpdir(), "qm-aws-core-api-"));
+      const fake = fakeAws(dir, "", door);
       try {
-        assert.throws(() => assertAwsPublicRouting(configured, attached), expected);
+        const services = new Map([["core", { loadBalancers: attachments }]]);
+        if (expected) assert.throws(() => assertAwsPublicRouting(routed, services), expected);
+        else
+          assert.deepEqual([...assertAwsPublicRouting(routed, services)].sort(), [
+            ["core", targetGroupArn(door.apiTargetGroup ?? "core-api")],
+            ["core-public", front],
+          ]);
       } finally {
-        delete process.env[env];
+        fake.restore();
+        rmSync(dir, { recursive: true, force: true });
       }
     };
-    try {
-      assert.deepEqual([...assertAwsPublicRouting(configured, attached)], [["core-public", front]]);
-      if (blueGreen)
-        assert.throws(
-          () =>
-            assertAwsPublicRouting(
-              { ...configured, env: config.env, aws: { ...config.aws!, sharedAlb: true, alb: "shared" } },
-              attached,
-            ),
-          /shared ALB requires one blue\/green core front-door ingress without additional public routes/,
-        );
-      assert.throws(
-        () => assertAwsPublicRouting(configured, new Map([["core", { loadBalancers: [] }]])),
-        /ECS service core is not attached to its core-public target group/,
+    const door: FrontDoor = { blueGreen, apiHosts: hosts };
+    const attached = frontDoorAttachments(door);
+    const unattached =
+      /ECS service core must be attached to one target group on container port 8080 for core's API host rules \(api\.agent\.acme\.example, \*\.apps\.agent\.acme\.example\)/;
+    const legacy = { ...door, apiTargetGroup: "legacy-api-tg" };
+    check(door, configured, attached);
+    check(legacy, configured, frontDoorAttachments(legacy));
+    check({ blueGreen }, configured, frontDoorAttachments({ blueGreen }), unattached);
+    check(door, configured, attached.slice(0, 1), unattached);
+    check(door, configured, [attached[0]!, { ...attached[1]!, containerPort: 8000 }], unattached);
+    check(
+      door,
+      configured,
+      [attached[0]!, { ...attached[1]!, targetGroupArn: targetGroupArn("elsewhere") }],
+      /target group for core is missing/,
+    );
+    check(
+      { blueGreen, apiHosts: ["api.agent.acme.example"] },
+      configured,
+      attached,
+      blueGreen
+        ? /blue\/green ALB rule for core does not match its production route/
+        : /core API host rules must route api\.agent\.acme\.example, \*\.apps\.agent\.acme\.example to core's API target group/,
+    );
+    check(
+      { blueGreen, apiHosts: [...hosts, "other.example"] },
+      configured,
+      attached,
+      blueGreen
+        ? /blue\/green ALB rule for core does not match its production route/
+        : /core API host rules must match only api\.agent\.acme\.example, \*\.apps\.agent\.acme\.example by host header/,
+    );
+    check(door, config, frontDoorAttachments({ blueGreen }), /ALB has target groups for private or unknown services/);
+    if (blueGreen)
+      check(
+        door,
+        { ...configured, env: config.env, aws: { ...config.aws!, sharedAlb: true, alb: "shared" } },
+        attached,
+        /shared ALB requires one blue\/green core front-door ingress without additional public routes/,
       );
-      run(
-        "AWS_FAKE_CORE_HOST_RULE",
-        coreApi,
-        blueGreen
-          ? /blue\/green ALB has unexpected non-default rules/
-          : /non-default rules beyond the declared plugin routes/,
-      );
-      if (blueGreen)
-        run(
-          "AWS_FAKE_FRONT_DOOR_HOST",
-          "1",
-          /blue\/green ALB rule for core-public does not match its production route/,
-        );
-    } finally {
-      fake.restore();
-      rmSync(dir, { recursive: true, force: true });
-    }
   }
 });
 
-test("AWS up accepts a separate apiUrl host and apps domain behind the front door and rejects a leftover core host rule", async () => {
+test("AWS live routing rejects a core host rule when no separate apiUrl host or apps domain is configured", () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-aws-front-door-"));
+  for (const blueGreen of [false, true]) {
+    const fake = fakeAws(dir, "", { blueGreen });
+    const attached = new Map([["core", { loadBalancers: frontDoorAttachments({ blueGreen }) }]]);
+    try {
+      process.env.AWS_FAKE_CORE_HOST_RULE = targetGroupArn(awsTargetGroupName(config, "core-public"));
+      assert.throws(
+        () => assertAwsPublicRouting(config, attached),
+        blueGreen
+          ? /blue\/green ALB has unexpected non-default rules/
+          : /non-default rules beyond the declared plugin and core API routes/,
+      );
+      delete process.env.AWS_FAKE_CORE_HOST_RULE;
+      if (blueGreen) {
+        process.env.AWS_FAKE_FRONT_DOOR_HOST = "1";
+        assert.throws(
+          () => assertAwsPublicRouting(config, attached),
+          /blue\/green ALB rule for core-public does not match its production route/,
+        );
+      }
+    } finally {
+      delete process.env.AWS_FAKE_CORE_HOST_RULE;
+      delete process.env.AWS_FAKE_FRONT_DOOR_HOST;
+      fake.restore();
+    }
+  }
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("AWS up deploys core attached to its front-door and API target groups for a separate apiUrl host and apps domain", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-aws-host-split-"));
   const dockerBin = join(dir, "docker");
   writeFileSync(dockerBin, `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
@@ -1210,10 +1315,10 @@ test("AWS up accepts a separate apiUrl host and apps domain behind the front doo
     await run(hostSplitConfig({ apiUrl: bothHosts.apiUrl }));
     await run(hostSplitConfig({ appsDomain: bothHosts.appsDomain }));
     await run(
-      hostSplitConfig(bothHosts),
+      hostSplitConfig({}),
       "AWS_FAKE_CORE_HOST_RULE",
-      /ALB has non-default rules beyond the declared plugin routes/,
-      targetGroupArn(awsTargetGroupName(config, "core")),
+      /ALB has non-default rules beyond the declared plugin and core API routes/,
+      targetGroupArn(awsTargetGroupName(config, "core-public")),
     );
     await run(
       hostSplitConfig(bothHosts),
@@ -2712,10 +2817,9 @@ test("AWS optional-secret activation restores prior tasks when a later service r
     linear: state.services["acme-linear"].taskDefinition,
   };
   const arns = Object.fromEntries(
-    [...required.map((secret) => secret.name), "INBOX_USERS"].map((name) => [
-      name,
-      "arn:aws:secretsmanager:us-west-2:123456789012:secret:test-AbCdEf",
-    ]),
+    required
+      .map((secret) => secret.name)
+      .map((name) => [name, "arn:aws:secretsmanager:us-west-2:123456789012:secret:test-AbCdEf"]),
   );
   for (const workload of ["core", "linear"] as const) {
     const repository = secretsConfig.aws!.services[workload]!.ecrRepository;
