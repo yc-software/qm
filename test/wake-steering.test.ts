@@ -352,6 +352,54 @@ test("a Slack bot's mid-turn message never steers into or stops a person's live 
   );
 });
 
+test("a Slack bot's stop on its own live run leaves a person's queued turn and subagents running", async () => {
+  const built = freshApp();
+  const channel = "C_BOT_STOP";
+  const root = "1260.1";
+  const threadRef = `ch:${channel}:${root}`;
+  const bot = { externalId: "B1", displayName: "Release bot" };
+  const person = { id: "U1", type: "internal" as const };
+  const fromBot = await built.app.turn({
+    ...mention("@bot cut the release", channel, root),
+    actor: bot,
+    botActor: true,
+  });
+  assert.ok(await built.runs.claimById(fromBot.runId!, "worker", 30_000));
+  const session = await built.sessions.getOrCreateByThread(threadRef, "channel", "personal:U1");
+  const personRequest = (sessionThread: string, text: string) => ({
+    actor: person,
+    conversation: { kind: "channel" as const, threadRef: sessionThread, channelRef: channel, audience: [person] },
+    text,
+    origin: { kind: "human" as const },
+  });
+  const { run: queued } = await built.runs.enqueue({
+    sessionId: threadRef,
+    request: personRequest(threadRef, "and then the notes"),
+  });
+  const child = await built.sessions.getOrCreateByThread(
+    "agent:main:subagent:person-child",
+    "channel",
+    session.scopeId,
+  );
+  await built.sessions.setParentSession(child.id, session.id);
+  const { run: childRun } = await built.runs.enqueue({
+    sessionId: child.threadRef,
+    request: personRequest(child.threadRef, "background work"),
+  });
+  assert.ok(await built.runs.claimById(childRun.id, "worker", 30_000));
+
+  const stop = await built.app.turn({ ...mention("stop", channel, root), actor: bot, botActor: true });
+  assert.deepEqual(
+    {
+      stopped: stop.stopped ?? false,
+      bot: (await built.signals.takePending(fromBot.runId!)).map((signal) => signal.kind),
+      queued: (await built.runs.get(queued.id))?.status,
+      child: (await built.signals.takePending(childRun.id)).map((signal) => signal.kind),
+    },
+    { stopped: true, bot: ["abort"], queued: "pending", child: [] },
+  );
+});
+
 test("a person's verbatim thread-follow (authored detection) also enqueues behind a live AUTOMATION run", async () => {
   const built = freshApp();
   const channel = "C13";

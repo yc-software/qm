@@ -1,12 +1,16 @@
 import {
+  AGENT_SECRET_REFUSAL,
   deleteBinding,
   deleteBrain,
+  memberBrainsOn,
   MemoryRegistryError,
   putBinding,
   putBrain,
   readRegistry,
   redactBrain,
+  REGISTRY_ERRORS,
   resolveMemoryRegistry,
+  setMemberBrains,
   type MemoryRegistry,
   type MemoryRegistryStore,
   type RegistryChange,
@@ -14,13 +18,6 @@ import {
 import { sendJson } from "../../http.ts";
 import type { ApiCtx } from "../route.ts";
 import { audit, authorizeAdmin, orgScope } from "../shared.ts";
-
-const ERRORS = { 400: "bad_request", 404: "not_found", 409: "conflict" } as const;
-
-function registryError(ctx: ApiCtx, error: unknown): void {
-  if (!(error instanceof MemoryRegistryError)) throw error;
-  sendJson(ctx.res, error.status, { error: ERRORS[error.status], message: error.message });
-}
 
 async function registryAdmin(ctx: ApiCtx) {
   const actor = await authorizeAdmin(ctx, orgScope(ctx.deps));
@@ -34,11 +31,45 @@ async function registryAdmin(ctx: ApiCtx) {
 
 function view(record: MemoryRegistry, registry: MemoryRegistryStore) {
   return {
+    memberBrains: memberBrainsOn(record),
     brains: record.brains.map(redactBrain),
     bindings: record.bindings,
     disabled: resolveMemoryRegistry(record, registry).disabled,
     overlay: [...registry.overlayIds],
   };
+}
+
+export function registryError(ctx: ApiCtx, error: unknown): void {
+  if (!(error instanceof MemoryRegistryError)) throw error;
+  sendJson(ctx.res, error.status, { error: REGISTRY_ERRORS[error.status], message: error.message });
+}
+
+export async function writeRegistry(
+  ctx: ApiCtx,
+  write: {
+    actor: string;
+    registry: MemoryRegistryStore;
+    action: string;
+    resource: string;
+    apply: (record: MemoryRegistry, change: RegistryChange) => MemoryRegistry;
+    show: (record: MemoryRegistry) => object;
+  },
+): Promise<void> {
+  const { actor, registry } = write;
+  try {
+    const record = await registry.update((current) =>
+      write.apply(current, { actor, now: Date.now(), overlayIds: registry.overlayIds, key: registry.key }),
+    );
+    audit(ctx.deps, {
+      principalId: actor,
+      action: write.action,
+      resource: write.resource,
+      scopeLabel: orgScope(ctx.deps),
+    });
+    return sendJson(ctx.res, 200, { ok: true, ...write.show(record) });
+  } catch (error) {
+    return registryError(ctx, error);
+  }
 }
 
 async function change(
@@ -49,16 +80,14 @@ async function change(
   const authorized = await registryAdmin(ctx);
   if (!authorized) return;
   const { actor, registry } = authorized;
-  const id = ctx.params.id ?? "";
-  try {
-    const record = await registry.update((current) =>
-      apply(current, { actor: actor.id, now: Date.now(), overlayIds: registry.overlayIds, key: registry.key }),
-    );
-    audit(ctx.deps, { principalId: actor.id, action, resource: id, scopeLabel: orgScope(ctx.deps) });
-    return sendJson(ctx.res, 200, { ok: true, ...view(record, registry) });
-  } catch (error) {
-    return registryError(ctx, error);
-  }
+  return writeRegistry(ctx, {
+    actor: actor.id,
+    registry,
+    action,
+    resource: ctx.params.id ?? "memory-registry",
+    apply,
+    show: (record) => view(record, registry),
+  });
 }
 
 async function read(ctx: ApiCtx, pick?: (full: ReturnType<typeof view>) => object | undefined): Promise<void> {
@@ -97,10 +126,7 @@ export const getMemoryBinding = (ctx: ApiCtx) =>
 
 function putAgentBrain(record: MemoryRegistry, id: string, body: unknown, c: RegistryChange): MemoryRegistry {
   if ((body as { clientSecret?: unknown } | null)?.clientSecret !== undefined)
-    throw new MemoryRegistryError(
-      400,
-      "a brain's client secret never goes through the agent: register the brain without clientSecret, then set it through the admin API outside chat",
-    );
+    throw new MemoryRegistryError(400, AGENT_SECRET_REFUSAL);
   const next = putBrain(record, id, body, c);
   const url = ({ brains }: MemoryRegistry) => brains.find((brain) => brain.id === id)?.url;
   if (url(record) !== undefined && url(next) !== url(record))
@@ -124,3 +150,6 @@ export const putMemoryBinding = (ctx: ApiCtx) =>
 
 export const deleteMemoryBinding = (ctx: ApiCtx) =>
   change(ctx, "memory-registry.binding.delete", (record) => deleteBinding(record, ctx.params.id ?? ""));
+
+export const putMemberBrains = (ctx: ApiCtx) =>
+  change(ctx, "memory-registry.member-brains.update", (record) => setMemberBrains(record, ctx.body));

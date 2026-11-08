@@ -35,6 +35,12 @@ export function adminActorFrom(ctx: Pick<ApiCtx, "req" | "deps" | "capability" |
   return actor ? { ...actor, id: canonicalPerson(actor.id) } : null;
 }
 
+export async function adminStanding(deps: ServerDeps, principalId: string): Promise<"inactive" | "admin" | "member"> {
+  const id = canonicalPerson(principalId);
+  if (!(await activePrincipal(deps, id))) return "inactive";
+  return adminStatusFromGrants((await deps.admin?.listGrants()) ?? [], id).isAdmin ? "admin" : "member";
+}
+
 export async function authorizeAdmin(
   ctx: Pick<ApiCtx, "req" | "res" | "deps" | "capability" | "actor">,
   scope: string,
@@ -44,13 +50,13 @@ export async function authorizeAdmin(
     sendJson(res, 404, { error: "not_found" });
     return null;
   }
-  const grants = await deps.admin.listGrants();
   const actor = adminActorFrom(ctx);
-  if (actor && !(await activePrincipal(deps, actor.id))) {
+  const standing = actor ? await adminStanding(deps, actor.id) : "member";
+  if (standing === "inactive") {
     sendJson(res, 403, { error: "forbidden", message: "this principal is no longer active" });
     return null;
   }
-  if (actor && adminStatusFromGrants(grants, actor.id).isAdmin) {
+  if (actor && standing === "admin") {
     Object.assign(currentModelRequestContext(), { actorId: actor.id, scopeId: scope });
     return actor;
   }

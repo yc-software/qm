@@ -502,13 +502,15 @@ export async function settleTreeWakes(
     runs: Pick<RunStore, "pendingReturns" | "markReturned" | "deferReturn">;
   },
   root: Session,
+  botRunsOnly = false,
 ): Promise<void> {
   const tree = (await treeSessions(deps.sessions, root)).filter((session) => session.scopeId === root.scopeId);
   for (const message of await deps.mailbox.wakesFor(...tree.map((session) => session.id)))
-    await deps.mailbox.settle(message.recipientId, message.id);
+    if (!botRunsOnly || message.botActor) await deps.mailbox.settle(message.recipientId, message.id);
   const threadRefs = tree.map((session) => session.threadRef);
   for (const run of await deps.runs.pendingReturns(Number.MAX_SAFE_INTEGER, "", threadRefs))
-    await returnSubagentRun(deps, run, true).catch(swallowAs("sessions: settle tree return", undefined));
+    if (!botRunsOnly || run.request.botActor)
+      await returnSubagentRun(deps, run, true).catch(swallowAs("sessions: settle tree return", undefined));
 }
 
 function turnText(items: readonly Item[], shared: (seq: number) => boolean, run: Run): string | undefined {

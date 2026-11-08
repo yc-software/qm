@@ -4,19 +4,57 @@ import { TimeoutError, withTimeout } from "../util/async.ts";
 import { attestableAudience, attestedPerson, OutsideAudience } from "../directory/person.ts";
 import { MemoryRecallWithheld } from "./disclosure.ts";
 import type { MemoryRecallContext, MemoryService } from "./memory-service.ts";
+import type { MemoryCandidate } from "./facts.ts";
 import { DENIED_CODES, MAX_FACTS_PER_WRITE, reportEnvelope } from "./provider-outcome.ts";
 import type { McpMemoryOperationConfig } from "./provider-config.ts";
 import { RECALL_MESSAGE_CHARS } from "./semantic-recall.ts";
+import { flatText } from "../util/text.ts";
 
 const MAX_PROVENANCE_CHARS = 200;
 
 export type McpMemoryOperation = Omit<McpMemoryOperationConfig, "auth"> & { client: McpClient; timeoutMs: number };
 
 function resultText(result: CallToolResult): string {
-  if (DENIED_CODES.has(mcpEnvelope(result).code ?? "")) return "";
   if (result.content.some((block) => block.type === "text")) return mcpResultText(result);
   return result.structuredContent == null ? "" : JSON.stringify(result.structuredContent);
 }
+
+interface ProviderFact {
+  id: string;
+  text: string;
+  date?: unknown;
+  kind?: unknown;
+}
+
+function providerFacts(result: CallToolResult): ProviderFact[] | undefined {
+  const facts = (result.structuredContent as { facts?: unknown } | undefined)?.facts;
+  if (facts === undefined) return undefined;
+  if (!Array.isArray(facts))
+    throw new McpCallError(`memory provider returned facts as ${facts === null ? "null" : typeof facts}, not a list`, {
+      code: "malformed_fact",
+    });
+  facts.forEach((fact: Partial<ProviderFact> | null, index) => {
+    if (typeof fact?.id !== "string" || typeof fact.text !== "string")
+      throw new McpCallError(
+        `memory provider returned fact ${index} with id ${typeof fact?.id} and text ${typeof fact?.text}; both must be strings`,
+        { code: "malformed_fact" },
+      );
+    if (!fact.id || /[\s\u0085]/.test(fact.id))
+      throw new McpCallError(`memory provider returned fact ${index} with an id that is empty or holds whitespace`, {
+        code: "malformed_fact",
+      });
+  });
+  return (facts as ProviderFact[]).map((fact) => ({ ...fact, text: flatText(fact.text) })).filter((fact) => fact.text);
+}
+
+const stamped = (fact: ProviderFact) => {
+  const stamp = [fact.date, fact.kind]
+    .filter((part) => typeof part === "string")
+    .map(flatText)
+    .filter(Boolean)
+    .join("; ");
+  return stamp ? `(${stamp}) ${fact.text}` : fact.text;
+};
 
 export function createMcpMemoryProvider(opts: {
   read: McpMemoryOperation;
@@ -38,12 +76,17 @@ export function createMcpMemoryProvider(opts: {
     const headers = opts.attestActor && person ? { "x-qm-actor": person } : undefined;
     const ms = deadline - Date.now();
     if (ms <= 0) throw new TimeoutError(`memory provider timed out after ${op.timeoutMs}ms`);
-    const result = await withTimeout(() => op.client.callTool(op.tool, args, headers), ms, "memory provider");
+    const stop = new AbortController();
+    const result = await withTimeout(
+      () => op.client.callTool(op.tool, args, headers, stop.signal),
+      ms,
+      "memory provider",
+    ).finally(() => stop.abort());
     reportEnvelope(mcpEnvelope(result));
     return result;
   };
 
-  const read = async (scopeId: string, query: string, context?: MemoryRecallContext): Promise<string> => {
+  const read = async (scopeId: string, query: string, context?: MemoryRecallContext): Promise<CallToolResult> => {
     const op = opts.read;
     const question = context?.input?.trim().slice(0, RECALL_MESSAGE_CHARS) || query;
     const args: Record<string, unknown> = { [op.queryArg ?? "query"]: question };
@@ -54,26 +97,42 @@ export function createMcpMemoryProvider(opts: {
       throw error instanceof OutsideAudience ? new MemoryRecallWithheld(scopeId) : error;
     });
     const { code } = mcpEnvelope(result);
-    if (code && code !== "actor_unlinked" && DENIED_CODES.has(code))
-      throw new McpCallError(`memory provider refused the read (${code})`, { code });
-    const text = resultText(result);
-    return maxChars && text.length > maxChars ? text.slice(0, maxChars) : text;
+    if (code === "actor_unlinked") return { content: [] };
+    if (code && DENIED_CODES.has(code)) throw new McpCallError(`memory provider refused the read (${code})`, { code });
+    return result;
+  };
+
+  const rows = (result: CallToolResult, maxChars: number | undefined, bullet: string): MemoryCandidate[] => {
+    const facts = providerFacts(result);
+    if (!facts) {
+      const text = resultText(result);
+      return (maxChars && text.length > maxChars ? text.slice(0, maxChars) : text)
+        .split("\n")
+        .filter((line) => line.trim())
+        .map((line) => ({ text: line }));
+    }
+    const fitting: MemoryCandidate[] = [];
+    let room = (maxChars || Infinity) + 1;
+    for (const fact of facts) {
+      const text = `${bullet}${stamped(fact)}`;
+      if (text.length + 1 > room) continue;
+      room -= text.length + 1;
+      fitting.push({ ref: fact.id, claim: fact.text, text });
+    }
+    return fitting;
   };
 
   return {
     attestActor: opts.attestActor ?? false,
     async recall(scopeId, context) {
-      const text = await read(scopeId, context?.query ?? "", context);
-      return text
-        .split("\n")
-        .filter((line) => line.trim())
-        .map((line) => ({ text: line, score: 0.2 }));
+      const result = await read(scopeId, context?.query ?? "", context);
+      return rows(result, context?.maxChars, "- ");
     },
 
-    async capture(scopeId, facts, at, author, context) {
+    async capture(scopeId, facts, at, by, context) {
       const op = opts.write;
       if (!op) throw new Error("memory provider write is not configured");
-      const actor = opts.attestActor ? context?.actorId : (context?.actorId ?? author);
+      const actor = by?.actorId;
       const provenance = (context?.conversationScopeId ?? scopeId).slice(0, MAX_PROVENANCE_CHARS);
       const size = op.factsArg ? MAX_FACTS_PER_WRITE : facts.length;
       const deadline = Date.now() + op.timeoutMs;
@@ -97,10 +156,10 @@ export function createMcpMemoryProvider(opts: {
     },
 
     async query(scopeId, q, limit = 20, context) {
-      const text = await read(scopeId, q, context);
-      return text ? text.split("\n").filter(Boolean).slice(0, limit) : [];
+      const result = await read(scopeId, q, context);
+      return rows(result, context?.maxChars, "").slice(0, limit);
     },
 
-    read: (scopeId) => read(scopeId, ""),
+    read: async (scopeId) => resultText(await read(scopeId, "")),
   };
 }

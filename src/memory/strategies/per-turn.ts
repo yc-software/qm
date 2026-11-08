@@ -139,7 +139,6 @@ function burstCaptureContext(burst: Burst): MemoryCaptureContext {
   return {
     mode: "automatic",
     ...(burst.inheritedFacts !== undefined ? { inheritedFacts: burst.inheritedFacts } : {}),
-    ...(burst.actorId ? { actorId: burst.actorId } : {}),
     ...(burst.audienceScopeId ? { audienceScopeId: burst.audienceScopeId } : {}),
     conversationScopeId: burst.conversationScopeId,
     input: burst.turns.map((turn) => turn.input).join("\n\n"),
@@ -160,7 +159,13 @@ export function createPerTurnStrategy(deps: {
     const { facts, sensitivity } = await extractFacts(deps.agent, burst.turns);
     if (!facts.length) return;
     const at = Date.now();
-    await deps.memory.capture(burst.scopeId, facts, at, burst.actorId, { ...burstCaptureContext(burst), sensitivity });
+    await deps.memory.capture(
+      burst.scopeId,
+      facts,
+      at,
+      burst.actorId ? { actorId: burst.actorId, context: "conversation" } : undefined,
+      { ...burstCaptureContext(burst), sensitivity },
+    );
   }
 
   return {

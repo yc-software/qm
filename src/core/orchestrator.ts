@@ -951,6 +951,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       }
       const childFloor = delegatedSession?.spawnMeta?.readOnly === true;
       const strictReadOnly = input.readOnly === true || input.privateSessionMessage === true || childFloor;
+      const notebookOnly =
+        input.memoryNotebookOnly === true ||
+        delegatedSession?.spawnMeta?.memoryNotebookOnly === true ||
+        (await deps.notebookOnlyMemory?.(conversation.threadRef)) === true;
       const actAsActor = actor.type === "internal" && !input.botActor;
       const mcpToolsReady =
         !external && deps.mcp ? deps.mcp.toolDefsFor(actor.id, audienceScopeId, actAsActor) : undefined;
@@ -995,6 +999,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         resolution,
         memoryPolicy,
         useMemory,
+        notebookOnly,
         memory: deps.memory,
         files: deps.files,
         skills: deps.skills,
@@ -2700,7 +2705,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           scopeId: scopeId as ScopeId,
           orgScopeId: resolution.orgScopeId,
           liveTurn,
-          request: { ...input, readOnly: strictReadOnly, cancel: turnAbort.signal },
+          request: { ...input, readOnly: strictReadOnly, memoryNotebookOnly: notebookOnly, cancel: turnAbort.signal },
           switchedRuntime: () => switchedRuntime,
         });
         const liveNote = async () =>
@@ -2774,7 +2779,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               }
             : {}),
           ...(deps.webhookPublicUrl ? { webhookPublicUrl: deps.webhookPublicUrl } : {}),
-          ...(humanInput && !external ? { humanTurn: true } : {}),
+          ...(humanInput && !external && !input.botActor ? { humanTurn: true } : {}),
           ...(deps.toolOutput ? { toolOutput: deps.toolOutput, sessionId: session.id } : {}),
           ...(surfaceToolDeps ? { surface: surfaceToolDeps } : {}),
           ...(turnSessionSyscalls ? { sessionSyscalls: turnSessionSyscalls } : {}),
@@ -3539,6 +3544,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             documents: initialDocuments,
             ...(Object.keys(requestedRuntime).length ? { runtime: requestedRuntime } : {}),
             ...(strictReadOnly ? { readOnly: true } : {}),
+            ...(notebookOnly ? { memoryNotebookOnly: true } : {}),
             surfaceName,
             ...(toolSurface ? { surfacePrompt: surfaceToolPrompt(toolSurface) } : {}),
             delegateWork,

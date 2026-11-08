@@ -2174,6 +2174,7 @@ export function buildApp(
     ...(processes ? { processes } : {}),
     monitors,
     crons,
+    notebookOnlyMemory: (threadRef) => memoryTidy.managesThread(threadRef),
     webhooks,
     resolveSessionRuntime,
     directory,
@@ -2292,7 +2293,7 @@ export function buildApp(
   };
   const app = createApp({
     errors,
-    settleTreeWakes: (root) => settleTreeWakes(subagentMail, root),
+    settleTreeWakes: (root, botRunsOnly) => settleTreeWakes(subagentMail, root, botRunsOnly),
     teams,
     externalSlackPolicies: config.externalSlackPolicies,
     admittedWork,
@@ -2660,6 +2661,7 @@ export function buildApp(
   const scheduler = createScheduler({
     admittedWork,
     skipFire: async (cron) => (await memoryTidy.skipFire(cron)) ?? suggestedActivities.skipFire(cron),
+    notebookOnlyMemory: (cron) => memoryTidy.manages(cron),
     runtimeError: (scope, runtime) => availableRuntimeError({ deps: runtimeDeps }, scope, runtime, "cron"),
     deleteCron: (id) => app.deleteCron(id),
     advisoryLock,

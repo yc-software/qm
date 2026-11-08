@@ -83,7 +83,8 @@ tokens. Per-user endpoints require HTTPS. Core refuses MCP server, OAuth discove
 and OAuth token endpoints that resolve to loopback, link-local, private, or
 unspecified addresses, checked on the address actually dialed. HTTP redirects are
 rejected for every MCP authentication mode, and OAuth token requests do not follow
-redirects. Updating an endpoint
+redirects. A server reached over HTTPS can't send any of its requests, the OAuth token
+request included, to plain HTTP. Updating an endpoint
 or credential host is an administrative trust decision. Tool call auditing records
 the initiating actor as before; authentication does not expand the audience allowed
 to receive the result.

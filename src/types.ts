@@ -122,6 +122,7 @@ export interface SpawnMeta {
   deliveryWebhook?: DeliveryWebhook;
   timezone?: string;
   readOnly?: boolean;
+  memoryNotebookOnly?: boolean;
   botActor?: boolean;
   model?: string;
   thinkingLevel?: string;
@@ -413,6 +414,7 @@ export interface TurnRequest {
   fastMode?: boolean;
   readOnly?: boolean;
   skipMemory?: boolean;
+  memoryNotebookOnly?: boolean;
   surfaceTools?: boolean;
   addressed?: boolean;
   envelopeWrapped?: boolean;

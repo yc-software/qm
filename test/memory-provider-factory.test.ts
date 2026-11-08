@@ -10,7 +10,7 @@ import { recallText } from "./support/recall-text.ts";
 
 const defaultMemory: MemoryService = {
   async recall() {
-    return [{ text: "personal notebook", score: 0.2 }];
+    return [{ text: "personal notebook" }];
   },
   async capture(_scope, facts) {
     return facts.length;
@@ -52,8 +52,20 @@ test("configured provider runs OAuth MCP recall and explicit capture end to end"
 
   assert.equal(recallText(await memory.recall("personal:u1", { query: "launch", actorId: "u1" })), "personal notebook");
   assert.equal(recallText(await memory.recall("org:acme", { query: "launch", actorId: "u1" })), "org knowledge");
-  assert.equal(await memory.capture("org:acme", ["decision"], 1, "u1", { mode: "automatic" }), 0);
-  assert.equal(await memory.capture("org:acme", ["decision"], 1, "u1", { mode: "explicit" }), 1);
+  assert.equal(
+    await memory.capture(
+      "org:acme",
+      ["decision"],
+      1,
+      { actorId: "u1", context: "conversation" },
+      { mode: "automatic" },
+    ),
+    0,
+  );
+  assert.equal(
+    await memory.capture("org:acme", ["decision"], 1, { actorId: "u1", context: "conversation" }, { mode: "explicit" }),
+    1,
+  );
 
   assert.deepEqual(mcp.tokenRequests, ["ro", "rw"]);
   assert.deepEqual(

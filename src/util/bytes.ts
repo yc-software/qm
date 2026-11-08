@@ -36,24 +36,25 @@ export async function collectBytes(
   return { data: Buffer.concat(chunks), sizeBytes: size, sha256: hash.digest("hex") };
 }
 
-export async function readBoundedText(response: Response, maxBytes: number, tooLarge: () => Error): Promise<string> {
-  const cancel = () => void response.body?.cancel().catch(swallowAs("bounded response cancel", undefined));
+export function boundedResponse(response: Response, maxBytes: number, tooLarge: () => Error): Response {
   if (Number(response.headers.get("content-length")) > maxBytes) {
-    cancel();
+    void response.body?.cancel().catch(swallowAs("bounded response cancel", undefined));
     throw tooLarge();
   }
-  if (!response.body) return "";
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
+  if (!response.body) return response;
   let size = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) return new TextDecoder().decode(Buffer.concat(chunks, size));
-    size += value.byteLength;
-    if (size > maxBytes) {
-      void reader.cancel().catch(swallowAs("bounded response cancel", undefined));
-      throw tooLarge();
-    }
-    chunks.push(value);
-  }
+  const body = response.body.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        size += chunk.byteLength;
+        if (size > maxBytes) controller.error(tooLarge());
+        else controller.enqueue(chunk);
+      },
+    }),
+  );
+  return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
+}
+
+export async function readBoundedText(response: Response, maxBytes: number, tooLarge: () => Error): Promise<string> {
+  return boundedResponse(response, maxBytes, tooLarge).text();
 }
