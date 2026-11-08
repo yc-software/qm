@@ -325,6 +325,7 @@ test("a fallback that fails for its own reason reports that reason, not the orig
       assert.equal(error.code, "bad_request");
       assert.equal(isProviderDecision(error), false);
       assert.match(error.message, /fallback .*shared model gateway.*unsupported schema/s);
+      assert.match(error.raw, /unsupported schema/);
     },
   );
 });

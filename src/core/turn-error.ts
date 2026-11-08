@@ -114,7 +114,7 @@ export function isProviderDecision(err: unknown): err is ProviderTurnError {
   return err instanceof ProviderTurnError && PROVIDER_DECISION_CODES.has(err.code);
 }
 
-export function turnErrorCode(err: unknown): string {
+export function turnErrorCode(err: unknown): ProviderErrorCode | "error" {
   return isProviderDecision(err) ? err.code : "error";
 }
 
