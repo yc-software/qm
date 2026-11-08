@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createConfiguredMemoryService } from "../src/memory/provider-factory.ts";
+import { createRegistryMemoryService } from "../src/memory/registry-memory.ts";
+import { emptyMemoryRegistry } from "./support/memory-registry.ts";
 import { parseMemoryProviderConfig } from "../src/memory/provider-config.ts";
 import { withProviders, writeFacts } from "../src/memory/provider-outcome.ts";
 import { installPrincipalLinks, OutsideAudience } from "../src/directory/person.ts";
@@ -39,9 +40,10 @@ function configured(
   env: Record<string, string> = ENV,
   defaultMemory: MemoryService = notebook,
 ) {
-  return createConfiguredMemoryService({
+  return createRegistryMemoryService({
+    registry: emptyMemoryRegistry,
     defaultMemory,
-    config: parseMemoryProviderConfig(
+    overlay: parseMemoryProviderConfig(
       JSON.stringify({
         providers: [
           {
@@ -110,9 +112,14 @@ test("an attested provider sends the canonical person on every request and the s
     },
   });
   const memory = configured(attested.url, { attestActor: true });
-  await memory.recall("personal:U1", { query: "launch", actorId: "U1" });
-  await memory.recall("personal:U1", { query: "launch", actorId: "u1@acme.test" });
-  await memory.capture("personal:U1", ["fact"], 1, "u1@acme.test", { mode: "explicit", actorId: "u1@acme.test" });
+  const audienceScopeId = "personal:U1";
+  await memory.recall("personal:U1", { query: "launch", actorId: "U1", audienceScopeId });
+  await memory.recall("personal:U1", { query: "launch", actorId: "u1@acme.test", audienceScopeId });
+  await memory.capture("personal:U1", ["fact"], 1, "u1@acme.test", {
+    mode: "explicit",
+    actorId: "u1@acme.test",
+    audienceScopeId,
+  });
 
   assert.ok(attested.requests.length > 0);
   assert.deepEqual(new Set(attested.requests.map((request) => request.actor)), new Set(["U1"]));
@@ -153,26 +160,52 @@ test("an attested provider is called only for the person whose private conversat
   t.after(() => installPrincipalLinks(null));
   const mcp = await startMcpTestServer(t, { tools: TOOLS, clients: { ro: "x", rw: "y" } });
   const memory = configured(mcp.url, { attestActor: true });
-  for (const actorId of ["U2", "system:personal:U1", "system:digest"])
-    assert.equal(recallText(await memory.recall("personal:U1", { query: "launch", actorId })), "notebook fact");
-  const write = await writeFacts(memory, "personal:U1", ["fact"], "U2", { mode: "explicit", actorId: "U2" }, undefined);
-  assert.equal(write.added, 1);
-  assert.deepEqual(external(write.outcomes), [{ outcome: "denied", code: "private_only" }]);
-  assert.match(write.problems[0]?.fix ?? "", /own private conversation/);
+  const refused: Array<[string, string | undefined]> = [
+    ["U2", "personal:U1"],
+    ["U1", "personal:U2"],
+    ["U1", "channel:C1"],
+    ["U1", undefined],
+  ];
+  for (const [actorId, audienceScopeId] of refused) {
+    const reader = { actorId, ...(audienceScopeId ? { audienceScopeId } : {}) };
+    assert.equal(recallText(await memory.recall("personal:U1", { query: "launch", ...reader })), "notebook fact");
+    const write = await writeFacts(
+      memory,
+      "personal:U1",
+      ["fact"],
+      actorId,
+      { mode: "explicit", ...reader },
+      undefined,
+    );
+    assert.equal(write.added, 1);
+    assert.deepEqual(external(write.outcomes), [{ outcome: "denied", code: "private_only" }]);
+    assert.match(write.problems[0]?.fix ?? "", /own private conversation/);
+  }
   for (const actorId of ["system:personal:U1", "system:digest"]) {
+    const reader = { actorId, audienceScopeId: "personal:U1" };
+    assert.equal(recallText(await memory.recall("personal:U1", { query: "launch", ...reader })), "notebook fact");
     const skipped = await writeFacts(
       memory,
       "personal:U1",
       ["fact"],
       actorId,
-      { mode: "explicit", actorId },
+      { mode: "explicit", ...reader },
       undefined,
     );
     assert.equal(skipped.added, 1);
     assert.deepEqual(external(skipped.outcomes), []);
   }
+  const intoAnother = await writeFacts(
+    memory,
+    "personal:U2",
+    ["fact"],
+    "U1",
+    { mode: "explicit", actorId: "U1", audienceScopeId: "personal:U1" },
+    undefined,
+  );
+  assert.deepEqual(external(intoAnother.outcomes), [{ outcome: "denied", code: "private_only" }]);
   assert.equal(mcp.requests.length, 0);
-  await memory.recall("personal:U1", { query: "launch", actorId: "U1" });
+  await memory.recall("personal:U1", { query: "launch", actorId: "U1", audienceScopeId: "personal:U1" });
   assert.deepEqual(new Set(mcp.requests.map((request) => request.actor)), new Set(["U1"]));
 });
 
@@ -467,9 +500,12 @@ test("a notebook failure in another scope still fails a search that a strict pro
   const { outcomes, report } = sink();
   await assert.rejects(
     withProviders("search", (r) =>
-      searchNotebooks(memory, ["personal:U1", "org:acme"], "deploys", 20, undefined, "U1", (outcome) => {
-        report(outcome);
-        r(outcome);
+      searchNotebooks(memory, ["personal:U1", "org:acme"], "deploys", 20, undefined, {
+        actorId: "U1",
+        report: (outcome) => {
+          report(outcome);
+          r(outcome);
+        },
       }),
     ),
   );

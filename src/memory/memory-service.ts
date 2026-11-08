@@ -19,7 +19,7 @@ export const MEMORY_FILE = "memory/MEMORY.md";
 export interface MemoryProviderOutcome {
   provider: string;
   scope: ScopeId;
-  outcome: "ok" | "empty" | "committed" | "pending" | "unknown" | "denied" | "timed_out" | "failed";
+  outcome: "ok" | "empty" | "committed" | "pending" | "unknown" | "denied" | "timed_out" | "failed" | "disabled";
   ms: number;
   code?: string;
   added?: number;
@@ -34,6 +34,7 @@ export interface MemoryRecallContext extends MemoryOutcomeSink {
   input?: string;
   disclosedFacts?: Promise<ReadonlyMap<ScopeId, readonly MemoryFact[]>>;
   actorId?: string;
+  audienceScopeId?: ScopeId;
   sessionId?: string;
   maxChars?: number;
 }
@@ -41,6 +42,7 @@ export interface MemoryRecallContext extends MemoryOutcomeSink {
 export interface MemoryCaptureContext extends MemoryCaptureMetadata, MemoryOutcomeSink {
   mode: "explicit" | "automatic";
   actorId?: string;
+  audienceScopeId?: ScopeId;
   input?: string;
   reply?: string;
   idempotencyKey?: string;

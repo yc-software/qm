@@ -1,11 +1,11 @@
 import { sendJson } from "../http.ts";
 import { swallowAs } from "../../util/errors.ts";
 import { isObj } from "./shared.ts";
+import { livePersonCapability } from "../artifact-share.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
 import { KeychainError } from "../../credentials/keychain.ts";
 import type { PersonaResult } from "../../personas/persona-service.ts";
 import { liveForLock, type ChannelPersonaResult } from "../../personas/channel-personas.ts";
-import { livePersonCapability } from "../artifact-share.ts";
 import type { Cron } from "../../triggers/types.ts";
 
 function principalOf(ctx: ApiCtx, from: "query" | "body"): string | null {

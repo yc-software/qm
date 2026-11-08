@@ -22,6 +22,7 @@ import type { ModelProvider, ModelProviderAvailability } from "../model/pi-model
 import type { CustomProviderStore, ModelCredentialStore } from "../model/model-credential-store.ts";
 import type { UserModelCredentialStore } from "../model/user-model-credential-store.ts";
 import type { McpServerStore } from "../mcp/mcp-server-store.ts";
+import type { MemoryRegistryStore } from "../memory/registry.ts";
 import type { McpToolService } from "../mcp/mcp-tool-service.ts";
 import type { ReplayDedupe } from "../auth/replay-dedupe.ts";
 import type { FetchLike, OAuthClientResolver } from "../connectors/oauth.ts";
@@ -33,6 +34,7 @@ import type { CredentialUsageSink } from "../admin/credential-usage-sink.ts";
 import type { EgressAuditSink } from "../admin/egress-audit-sink.ts";
 import type { BrokerFetch } from "./credential-broker.ts";
 import type { GitHttpFetch } from "./git-http-broker.ts";
+import type { AddressFetch } from "../util/network.ts";
 import type { KeychainApprovals } from "../credentials/keychain-approval.ts";
 import type { AdminService } from "../admin/admin-service.ts";
 import type { Mailer } from "../../plugins/chassis/src/resend.ts";
@@ -143,6 +145,7 @@ export interface ServerDeps {
   egressAudit?: EgressAuditSink;
   brokerFetch?: BrokerFetch;
   gitHttpFetch?: GitHttpFetch;
+  itemImageFetch?: AddressFetch;
   baseModelDefault?: string;
   modelProviders?: ModelProviderAvailability;
   providerKeys?: ModelProviderAvailability;
@@ -150,6 +153,7 @@ export interface ServerDeps {
   userModelCredentials?: UserModelCredentialStore;
   mcpServers?: McpServerStore;
   mcpToolService?: McpToolService;
+  memoryRegistry?: MemoryRegistryStore;
   modelCredentialFetch?: typeof fetch;
   modelRegistry?: ModelOverlayStore;
   modelVerifier?: ModelVerifier;

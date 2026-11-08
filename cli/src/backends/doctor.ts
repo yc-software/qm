@@ -9,7 +9,7 @@ import {
   type QmConfig,
 } from "../config.ts";
 import { CliError, errMessage, step, warn } from "../log.ts";
-import { capture, deploymentSecretValue, flyBin, readEnvFile, which } from "../util.ts";
+import { capture, deploymentSecretValue, flyBin, readEnvFile, trimTrailingSlashes, which } from "../util.ts";
 import { serviceSecretValue } from "../secrets.ts";
 import { emailTransportConfigured, smtpTlsMode, smtpTransport } from "../preflight.ts";
 
@@ -86,7 +86,7 @@ async function slackApi(
 }
 
 function slackMethodUrl(method: string, apiUrl?: string): string {
-  const base = (apiUrl || "https://slack.com").replace(/\/+$/, "");
+  const base = trimTrailingSlashes(apiUrl || "https://slack.com");
   return `${base.endsWith("/api") ? base : `${base}/api`}/${method}`;
 }
 

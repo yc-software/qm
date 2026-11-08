@@ -6,6 +6,7 @@ import { createMockAgent } from "./support/mock-agent.ts";
 import type { ModelUtilities } from "../src/agent/agent.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { settle } from "./support/settle.ts";
 
 const SCOPE = "user:U1";
 
@@ -107,4 +108,34 @@ test("automatic capture carries the full turn and delivery context", async () =>
     sessionId: "session-1",
     idempotencyKey: "run-1",
   });
+});
+test("turns of one session answered to different audiences are captured apart, each under its own audience", async () => {
+  const captures: Array<Parameters<ReturnType<typeof freshMemory>["memory"]["capture"]>> = [];
+  const { memory } = freshMemory();
+  const wrapped = {
+    ...memory,
+    async capture(...args: Parameters<typeof memory.capture>) {
+      captures.push(args);
+      return memory.capture(...args);
+    },
+  };
+  const strategy = createPerTurnStrategy({
+    agent: { oneShot: () => Promise.resolve("- Durable fact") },
+    memory: wrapped,
+    captureQuietMs: 30,
+  });
+  const turn = { scopeId: "personal:U1", actorId: "U1", sessionId: "session-1", reply: "answer" };
+  await strategy.onTurnEnd!({ ...turn, audienceScopeId: "personal:U1", input: "private question" });
+  await strategy.onTurnEnd!({ ...turn, input: "question answered to a channel" });
+  await settle(async () => captures.length === 2);
+
+  assert.deepEqual(
+    captures
+      .map(([, , , , context]) => ({ input: context?.input, audienceScopeId: context?.audienceScopeId }))
+      .sort((x, y) => String(x.input).localeCompare(String(y.input))),
+    [
+      { input: "private question", audienceScopeId: "personal:U1" },
+      { input: "question answered to a channel", audienceScopeId: undefined },
+    ],
+  );
 });

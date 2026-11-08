@@ -58,3 +58,13 @@ export function quotedData(value: string): string {
     });
   return ["```untrusted-data", ...lines, "```"].join("\n");
 }
+
+export function trimTrailing(s: string, strip: (char: string) => boolean): string {
+  let end = s.length;
+  while (end > 0 && strip(s[end - 1]!)) end--;
+  return s.slice(0, end);
+}
+
+export function trimTrailingSlashes(s: string): string {
+  return trimTrailing(s, (char) => char === "/");
+}

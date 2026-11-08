@@ -321,6 +321,37 @@ test("a person's reply never steers into a live AUTOMATION run — it enqueues b
   );
 });
 
+test("a Slack bot's mid-turn message never steers into or stops a person's live run — it enqueues its own bot turn", async () => {
+  const built = freshApp();
+  const channel = "C_BOT";
+  const root = "1250.1";
+  const first = await built.app.turn(mention("@bot file the ticket", channel, root));
+  const liveRunId = first.runId!;
+  assert.ok(await built.runs.claimById(liveRunId, "worker", 30_000));
+
+  const fromBot = await built.app.turn({
+    ...mention("@bot switch to the priciest model", channel, root),
+    actor: { externalId: "B1", displayName: "Release bot" },
+    botActor: true,
+  });
+  assert.notEqual(fromBot.runId, liveRunId, "the bot's message got its own run, not a steer into the person's");
+  assert.equal((await built.signals.takePending(liveRunId)).length, 0, "no signal was sent to the person's run");
+  assert.equal((await built.runs.get(fromBot.runId!))?.request.botActor, true);
+  const botStop = await built.app.turn({
+    ...mention("stop", channel, root),
+    actor: { externalId: "B1", displayName: "Release bot" },
+    botActor: true,
+  });
+  assert.deepEqual(
+    {
+      stopped: botStop.stopped ?? false,
+      signals: (await built.signals.takePending(liveRunId)).map((signal) => signal.kind),
+      status: (await built.runs.get(liveRunId))?.status,
+    },
+    { stopped: false, signals: [], status: "running" },
+  );
+});
+
 test("a person's verbatim thread-follow (authored detection) also enqueues behind a live AUTOMATION run", async () => {
   const built = freshApp();
   const channel = "C13";

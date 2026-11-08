@@ -11,6 +11,7 @@ import {
   SIGNATURE_HEADER,
   TIMESTAMP_HEADER,
 } from "./protocol.ts";
+import { trimTrailingSlashes } from "../../util/text.ts";
 
 const REQUEST_TIMEOUT_MS = 15_000;
 export const PARTNER_CHAT_CLAIM_MS = 4 * REQUEST_TIMEOUT_MS;
@@ -43,7 +44,7 @@ export function partnerChatSender(deps: {
   fetch?: typeof fetch;
   now?: () => number;
 }): Send {
-  const endpoint = `${deps.url.replace(/\/+$/, "")}/agent_app/messages`;
+  const endpoint = `${trimTrailingSlashes(deps.url)}/agent_app/messages`;
   const send = deps.fetch ?? fetch;
   const now = deps.now ?? Date.now;
 

@@ -794,6 +794,7 @@ const searchMemory = agentMemory(async (ctx, memory, capability) => {
   const { value: results, problems } = await withProviders("search", (report) =>
     searchAcrossScopes(memory, scopes, query, typeof b.limit === "number" ? b.limit : 20, {
       actorId: capability.actorId,
+      ...(capability.audienceScopeId ? { audienceScopeId: capability.audienceScopeId } : {}),
       report,
     }),
   );
@@ -857,6 +858,7 @@ const captureFacts = writeMemory(async ({ res, deps, body }, memory, capability,
     {
       mode: "explicit",
       actorId: capability.actorId,
+      ...(capability.audienceScopeId ? { audienceScopeId: capability.audienceScopeId } : {}),
       conversationScopeId: capability.scopeId,
       ...(capability.sessionId ? { sessionId: capability.sessionId } : {}),
     },
