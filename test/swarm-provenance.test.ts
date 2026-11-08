@@ -100,6 +100,62 @@ test("a Slack bot on a person's swarm roster cannot direct the person's workers"
   );
 });
 
+test("a Slack bot that started a swarm cannot direct the work a person later sent into it", async () => {
+  const f = await swarmFixture({ channel: "C1" });
+  if (f.caller.kind !== "agent") throw new Error("wrong caller");
+  await f.sessions.addParticipant(f.root.id, "release-bot");
+  await f.runs.complete(f.caller.claims.runId!, f.caller.claims.runLeaseToken!, { status: "ok", reply: "idle" });
+  const rootTurn = async (actorId: string, botActor: boolean) => {
+    const { run } = await f.runs.enqueue({
+      sessionId: f.root.threadRef,
+      request: { ...f.template, actor: { id: actorId, type: "internal" }, ...(botActor ? { botActor } : {}) },
+    });
+    const claim = (await f.runs.claimById(run.id, "root-turn", 60_000))!;
+    const caller: SwarmCaller = {
+      kind: "agent",
+      claims: {
+        ...f.caller.claims,
+        actorId,
+        runId: run.id,
+        runAttempt: claim.attempts,
+        runLeaseToken: claim.leaseToken!,
+        ...(botActor ? { botActor } : {}),
+      },
+    };
+    return { caller, done: () => f.runs.complete(run.id, claim.leaseToken!, { status: "ok", reply: "done" }) };
+  };
+  const first = await rootTurn("release-bot", true);
+  await f.service.spawn(first.caller, { requestId: "bot-initial", text: "bot work" });
+  await first.done();
+  const person = await rootTurn("alice", false);
+  const [worker] = await f.service.spawn(person.caller, { requestId: "person-spawn", text: "person work" });
+  await person.done();
+  await f.service.sweep();
+  const bot = await rootTurn("release-bot", true);
+  const outcome = (work: Promise<unknown>) =>
+    work.then(
+      () => "accepted",
+      (error: unknown) => errMessage(error),
+    );
+  const sent = await outcome(
+    f.service.send(bot.caller, { requestId: "bot-send", audience: [worker!.id], text: "drop that, do this" }),
+  );
+  const stopped = await outcome(f.service.control(bot.caller, { memberId: worker!.id, state: "stopped" }));
+  const rewritten = await outcome(f.service.context(bot.caller, { plan: "bot plan" }));
+  const swarm = (await f.store.get(f.root.id))!;
+  const refused = "a Slack bot's turn cannot direct a person's swarm";
+  assert.deepEqual(
+    {
+      sent,
+      stopped,
+      rewritten,
+      workerControl: swarm.members.find((member) => member.id === worker!.id)!.control,
+      rootContext: swarm.members.find((member) => member.id === f.root.id)!.context,
+    },
+    { sent: refused, stopped: refused, rewritten: refused, workerControl: undefined, rootContext: {} },
+  );
+});
+
 test("execution metadata does not change stable dispatch provenance", async () => {
   const f = await dispatch();
   assert.ok(

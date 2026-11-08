@@ -2276,7 +2276,7 @@ export function buildApp(
   };
   const app = createApp({
     errors,
-    settleTreeWakes: (root) => settleTreeWakes(subagentMail, root),
+    settleTreeWakes: (root, botRunsOnly) => settleTreeWakes(subagentMail, root, botRunsOnly),
     teams,
     externalSlackPolicies: config.externalSlackPolicies,
     admittedWork,

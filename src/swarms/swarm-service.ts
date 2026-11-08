@@ -150,8 +150,15 @@ function rosterMatches(current: readonly string[], expected: readonly string[]):
   return actual.size === frozen.size && [...actual].every((id) => frozen.has(id));
 }
 
-function assertCallerMayDirect(caller: SwarmCaller, swarm: Swarm): void {
-  if (caller.kind === "agent" && caller.claims.botActor && !swarm.template.botActor)
+function botMayDirect(swarm: Swarm, memberId: string, actorId: string): boolean {
+  return (
+    swarm.template.botActor === true &&
+    (memberId !== swarm.id || swarm.messages.every((message) => message.actorId === actorId))
+  );
+}
+
+function assertCallerMayDirect(caller: SwarmCaller, auth: Authority, swarm: Swarm): void {
+  if (caller.kind === "agent" && caller.claims.botActor && !botMayDirect(swarm, auth.memberId, auth.actorId))
     throw new Error("a Slack bot's turn cannot direct a person's swarm");
 }
 
@@ -600,7 +607,7 @@ export function createSwarmService(deps: {
     },
     async context(caller, context) {
       const { auth, swarm } = await load(caller);
-      assertCallerMayDirect(caller, swarm);
+      assertCallerMayDirect(caller, auth, swarm);
       const value = jsonContext(context, swarm.settings.contextBytes);
       const updated = await update(auth, (swarm) => {
         assertSwarmOpen(swarm);
@@ -657,7 +664,7 @@ export function createSwarmService(deps: {
           swarm.settings = next;
           if (next.lifetimeMs !== undefined) swarm.expiresAt = swarm.createdAt + next.lifetimeMs;
         }
-        assertCallerMayDirect(caller, swarm);
+        assertCallerMayDirect(caller, auth, swarm);
         assertSwarmOpen(swarm);
         const parent = swarm.members.find((member) => member.id === auth.memberId)!;
         if (parent.depth >= swarm.settings.depth) throw new Error("swarm depth budget exhausted");
@@ -754,7 +761,7 @@ export function createSwarmService(deps: {
           if (previous.signature !== fingerprint) throw new Error("requestId reused with different content");
           return;
         }
-        assertCallerMayDirect(caller, swarm);
+        assertCallerMayDirect(caller, auth, swarm);
         assertSwarmOpen(swarm);
         if (swarm.messages.length >= (swarm.settings.messages ?? Infinity))
           throw new Error("swarm message budget exhausted");
@@ -812,7 +819,12 @@ export function createSwarmService(deps: {
         let messages = pick(swarm);
         const unread = (current: Swarm) =>
           pick(current).filter((message) => message.notifications[auth.memberId]?.state === "mailbox");
-        if (caller.kind === "agent" && options.replyTo && unread(swarm).length)
+        if (
+          caller.kind === "agent" &&
+          options.replyTo &&
+          unread(swarm).length &&
+          (!caller.claims.botActor || botMayDirect(swarm, auth.memberId, auth.actorId))
+        )
           messages = pick(
             await update(auth, (current) => {
               for (const message of unread(current)) message.notifications[auth.memberId] = { state: "handed" };
@@ -826,7 +838,7 @@ export function createSwarmService(deps: {
     enabledFor,
     async control(caller, input) {
       const { auth, swarm } = await load(caller);
-      assertCallerMayDirect(caller, swarm);
+      assertCallerMayDirect(caller, auth, swarm);
       if (!["active", "paused", "stopped"].includes(input.state)) throw new Error("invalid control state");
       const target = swarm.members.find((member) => member.id === input.memberId);
       if (!target) throw new Error("unknown swarm member");
@@ -890,7 +902,7 @@ export function createSwarmService(deps: {
       const target = input.swarm ?? (session && turnTarget(session));
       if (!target) return [];
       const swarm = await store.get(target.swarmId);
-      if (!swarm) return [];
+      if (!swarm || (input.botActor && !botMayDirect(swarm, target.recipientId, input.actor.id))) return [];
       const mine = swarm.messages.filter((message) => {
         const state = message.notifications[target.recipientId]?.state;
         return state === "mailbox" || (state === "queued" && !options.mailboxOnly);
