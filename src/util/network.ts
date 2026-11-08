@@ -181,6 +181,7 @@ export function addressGuardedFetch(
 }
 
 export function createPublicFetch(origins: ReadonlySet<string>, listedRefused = isNeverAllowedIp): AddressFetch {
+  const following = addressGuardedFetch(isPrivateNetworkIp);
   const strict = addressGuardedFetch(isPrivateNetworkIp, {
     refusal:
       "a private network address; a deployment operator can allow this exact origin with PRIVATE_NETWORK_ALLOWED_ORIGINS",
@@ -189,8 +190,10 @@ export function createPublicFetch(origins: ReadonlySet<string>, listedRefused = 
     refusal:
       "a loopback, link-local or cloud metadata address, which PRIVATE_NETWORK_ALLOWED_ORIGINS never allows; point it at the service's own address",
   });
-  return (input, init) =>
-    (init?.redirect !== "follow" && origins.has(new URL(input).origin) ? listed : strict)(input, init);
+  return (input, init) => {
+    if (init?.redirect === "follow") return following(input, init);
+    return (origins.has(new URL(input).origin) ? listed : strict)(input, init);
+  };
 }
 
 let configuredPublicFetch = createPublicFetch(new Set());

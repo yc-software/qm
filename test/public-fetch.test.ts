@@ -252,7 +252,9 @@ test("only the exact listed origin gets the private-network allowance", async (t
     ),
   );
   await assert.rejects(allowLoopback(`http://127.0.0.1:${other.port}/`), PrivateNetworkAddressError);
-  await assert.rejects(allowLoopback(`${listedOrigin}/`, { redirect: "follow" }), PrivateNetworkAddressError);
+  await assert.rejects(allowLoopback(`${listedOrigin}/`, { redirect: "follow" }), (e: unknown) =>
+    /^127\.0\.0\.1 is a private network address$/.test(errMessage(e)),
+  );
   assert.equal(target.hits(), 1);
   assert.equal(other.hits(), 0);
 });
