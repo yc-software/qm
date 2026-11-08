@@ -320,7 +320,7 @@ export function setBrainSecret(
     throw conflict(
       `brain ${target.id} changed after this link was made, so the secret wasn't saved; ask for a fresh link`,
     );
-  return putBrain(record, target.id, { clientSecret }, change);
+  return putBrain(record, target.id, { clientSecret, url: target.url }, change);
 }
 
 export function redactBrain({ auth, ...rest }: RegistryBrain) {
