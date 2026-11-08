@@ -357,7 +357,7 @@ test("a member connects their own brain from chat and sets its secret through th
 });
 
 test("a member's brain fields are bounded, a repeated save writes nothing, and the record is schema 2 while it holds one", async (t) => {
-  const { built, self } = await setup(t);
+  const { built, mint, self } = await setup(t);
   const own = { url: "https://brain.member.example/mcp", clientId: "member-qm" };
   const stored = async () => {
     const { version, record } = await built.memoryRegistry.current();
@@ -385,6 +385,13 @@ test("a member's brain fields are bounded, a repeated save writes nothing, and t
   );
   assert.equal((await self("U-member", "PUT", { label: "Mine" })).status, 200);
   assert.notEqual((await stored()).version, saved.version);
+
+  const link = await mint("U-member", { memoryBrain: memberBrainId("U-member"), purpose: "connect my brain" });
+  const before = await stored();
+  const oversized = await link.redeem(long);
+  assert.equal(oversized.status, 400, oversized.text);
+  assert.match(JSON.parse(oversized.text).message, /client secret can be at most 8000 characters/);
+  assert.deepEqual(await stored(), before);
 
   assert.equal((await self("U-member", "DELETE")).status, 200);
   assert.equal((await stored()).schema, 1);
