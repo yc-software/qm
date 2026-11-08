@@ -1789,15 +1789,13 @@ export function buildApp(
     sessions,
     ...(keychain ? { keychain } : {}),
   });
-  const canReadScope = createCanReadScope({ managedGroups: projects, directory, identity, teams, sessions, personas });
-  const canWriteScope = createCanWriteScope({ managedGroups: projects, directory, identity, teams, personas });
-  const canManageScope = createCanManageScope({ managedGroups: projects, directory, identity, sessions, personas });
-  const managesArtifactHome = createManagesArtifactHome(
-    { managedGroups: projects, directory, identity, teams, personas },
-    canManageScope,
-  );
-  const currentScopeMembers = createCurrentScopeMembers({ managedGroups: projects, directory, identity });
-  const isCurrentSharedScopeMember = createIsCurrentSharedScopeMember({ managedGroups: projects, directory, identity });
+  const scopeAccess = { managedGroups: projects, directory, identity, teams, sessions, personas };
+  const canReadScope = createCanReadScope(scopeAccess);
+  const canWriteScope = createCanWriteScope(scopeAccess);
+  const canManageScope = createCanManageScope(scopeAccess);
+  const managesArtifactHome = createManagesArtifactHome(scopeAccess);
+  const currentScopeMembers = createCurrentScopeMembers(scopeAccess);
+  const isCurrentSharedScopeMember = createIsCurrentSharedScopeMember(scopeAccess);
   membership.canReadScope = canReadScope;
   membership.canManageScope = canManageScope;
   membership.canUseSandboxScope = async (actorId, scopeId) =>
@@ -2163,7 +2161,7 @@ export function buildApp(
     resolveSessionRuntime,
     directory,
     isCurrentSharedScopeMember,
-    currentScopeMembers: createCurrentScopeMembers({ managedGroups: projects, directory, identity }, true),
+    currentScopeMembers: createCurrentScopeMembers(scopeAccess, true),
     managedGroups: projects,
     projects,
     personas,
