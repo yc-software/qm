@@ -343,10 +343,16 @@ test("a member connects their own brain from chat and sets its secret through th
     readRegistry((await built.memoryRegistry.current()).record).brains.some((brain) => brain.id === id),
     false,
   );
-  await new Promise((resolve) => setTimeout(resolve, 50));
-  const rows = JSON.stringify(await built.auditLog.events());
-  for (const action of ["member-brain.update", "member-brain.delete", "brain.secret.refused"])
-    assert.ok(rows.includes(`memory-registry.${action}`), action);
+  const actions = ["member-brain.update", "member-brain.delete", "brain.secret.refused"].map(
+    (action) => `memory-registry.${action}`,
+  );
+  let rows = "";
+  for (let waited = 0; waited < 2_000; waited += 20) {
+    rows = JSON.stringify(await built.auditLog.events());
+    if (actions.every((action) => rows.includes(action))) break;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  for (const action of actions) assert.ok(rows.includes(action), action);
   assert.doesNotMatch(rows, /member-secret-/);
 });
 
