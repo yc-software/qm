@@ -150,6 +150,11 @@ function rosterMatches(current: readonly string[], expected: readonly string[]):
   return actual.size === frozen.size && [...actual].every((id) => frozen.has(id));
 }
 
+function assertCallerMayDirect(caller: SwarmCaller, swarm: Swarm): void {
+  if (caller.kind === "agent" && caller.claims.botActor && !swarm.template.botActor)
+    throw new Error("a Slack bot's turn cannot send work to a person's swarm");
+}
+
 function dispatchContract(input: OrchestratorInput) {
   return {
     actor: input.actor,
@@ -651,6 +656,7 @@ export function createSwarmService(deps: {
           swarm.settings = next;
           if (next.lifetimeMs !== undefined) swarm.expiresAt = swarm.createdAt + next.lifetimeMs;
         }
+        assertCallerMayDirect(caller, swarm);
         assertSwarmOpen(swarm);
         const parent = swarm.members.find((member) => member.id === auth.memberId)!;
         if (parent.depth >= swarm.settings.depth) throw new Error("swarm depth budget exhausted");
@@ -747,6 +753,7 @@ export function createSwarmService(deps: {
           if (previous.signature !== fingerprint) throw new Error("requestId reused with different content");
           return;
         }
+        assertCallerMayDirect(caller, swarm);
         assertSwarmOpen(swarm);
         if (swarm.messages.length >= (swarm.settings.messages ?? Infinity))
           throw new Error("swarm message budget exhausted");

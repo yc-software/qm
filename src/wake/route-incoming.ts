@@ -20,6 +20,7 @@ export interface Incoming {
   modelAccount?: string;
   dedupKey?: string;
   routed: boolean;
+  bot?: boolean;
 }
 
 export type LiveTurn =
@@ -30,6 +31,7 @@ export type LiveTurn =
       modelAccount?: string;
       dedupKey?: string | null;
       handlesThisMessage: boolean;
+      bot?: boolean;
     }
   | { kind: "descendants"; actorIds: string[] };
 
@@ -45,7 +47,8 @@ type TurnReason =
   | "account"
   | "automation-live"
   | "unprompted-live"
-  | "queue-preference";
+  | "queue-preference"
+  | "bot-message";
 
 export type IncomingRoute =
   { kind: "turn"; reason: TurnReason } | { kind: "steer" } | { kind: "abort" } | { kind: "drop"; reason: "empty" };
@@ -69,6 +72,7 @@ export function liveTurnOf(run: Run, handlesThisMessage = false): LiveTurn {
     ...(run.request.modelAccount ? { modelAccount: run.request.modelAccount } : {}),
     dedupKey: run.dedupKey ?? null,
     handlesThisMessage,
+    ...(run.request.botActor ? { bot: true } : {}),
   };
 }
 
@@ -92,6 +96,7 @@ export function routeIncoming(message: Incoming, live: LiveTurn | null, prefs: I
     message.modelAccount === live.modelAccount &&
     (message.modelAccount === "company" || message.actorId === live.actorId);
   if (!sameAccount) return { kind: "turn", reason: "account" };
+  if (message.bot && !live.bot) return { kind: "turn", reason: "bot-message" };
   if (!live.handlesThisMessage) {
     if (live.origin === "automation" && message.person && prefs.midTurn !== "steer")
       return { kind: "turn", reason: "automation-live" };

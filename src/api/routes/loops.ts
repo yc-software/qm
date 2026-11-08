@@ -66,7 +66,7 @@ export function actingPrincipal(ctx: ApiCtx): ActingPrincipal | null {
       actorId: ctx.capability.actorId,
       scopeId: ctx.capability.scopeId as ScopeId,
       capability: ctx.capability,
-      liveHuman: ctx.actor?.p !== undefined || ctx.capability.liveActor === true,
+      liveHuman: ctx.actor?.p !== undefined || (ctx.capability.liveActor === true && !ctx.capability.botActor),
     };
   }
   if (ctx.actor?.p) return { actorId: ctx.actor.p, liveHuman: true };
