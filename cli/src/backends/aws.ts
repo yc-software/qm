@@ -74,6 +74,7 @@ import {
   settleAll,
   sleep,
   streamLabeled,
+  trimTrailingSlashes,
 } from "../util.ts";
 import { doctorCommon } from "./doctor.ts";
 import { checkControlledLiveSession } from "../live-session.ts";
@@ -168,7 +169,7 @@ export const awsDeploymentLayerTransport: DeploymentLayerTransport = httpDeploym
     const url = new URL(config.apiUrl ?? config.publicUrl);
     if (url.protocol !== "https:" || url.username || url.password || url.hash)
       throw new CliError("AWS deployment-layer URL must be HTTPS without credentials or a fragment");
-    url.pathname = `${url.pathname.replace(/\/+$/, "")}/v1/deployment-layer`;
+    url.pathname = `${trimTrailingSlashes(url.pathname)}/v1/deployment-layer`;
     return url;
   },
   request: awsCoreRequest,
@@ -2948,7 +2949,7 @@ function awsLiveSessionRequest(config: QmConfig): (body: string) => Promise<{ st
   if (isInvalidSecret("CORE_SIGNING_SECRET", signing) || control.trim().length < 32 || control === signing)
     throw new CliError("deployment control requires a distinct secret of at least 32 characters");
   const url = new URL(config.publicUrl);
-  url.pathname = `${url.pathname.replace(/\/+$/, "")}/v1/deployment/live-session`;
+  url.pathname = `${trimTrailingSlashes(url.pathname)}/v1/deployment/live-session`;
   url.search = "";
   url.hash = "";
   return (body) => {

@@ -4,6 +4,7 @@ import { canonicalPerson } from "../../directory/person.ts";
 import { sendJson } from "../http.ts";
 import { audit, isObj, orgScope } from "./shared.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
+import { trimTrailingSlashes } from "../../util/text.ts";
 
 const numOrUndef = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
 
@@ -77,9 +78,8 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
       message: `member type must be one of: ${PRINCIPAL_TYPES.join(", ")}`,
     });
   }
-  if (typeof b.workspaceUrl === "string" && /^https:\/\/[^\s/]+$/.test(b.workspaceUrl.replace(/\/+$/, ""))) {
-    await app.setDirectoryWorkspaceUrl(b.workspaceUrl.replace(/\/+$/, ""));
-  }
+  const workspaceUrl = typeof b.workspaceUrl === "string" ? trimTrailingSlashes(b.workspaceUrl) : "";
+  if (/^https:\/\/[^\s/]+$/.test(workspaceUrl)) await app.setDirectoryWorkspaceUrl(workspaceUrl);
   let memberCount: number | undefined;
   if (Array.isArray(b.members)) {
     const members = b.members

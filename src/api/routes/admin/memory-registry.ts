@@ -39,6 +39,11 @@ function view(record: MemoryRegistry, registry: MemoryRegistryStore) {
   };
 }
 
+export function registryError(ctx: ApiCtx, error: unknown): void {
+  if (!(error instanceof MemoryRegistryError)) throw error;
+  sendJson(ctx.res, error.status, { error: REGISTRY_ERRORS[error.status], message: error.message });
+}
+
 export async function writeRegistry(
   ctx: ApiCtx,
   write: {
@@ -63,8 +68,7 @@ export async function writeRegistry(
     });
     return sendJson(ctx.res, 200, { ok: true, ...write.show(record) });
   } catch (error) {
-    if (!(error instanceof MemoryRegistryError)) throw error;
-    return sendJson(ctx.res, error.status, { error: REGISTRY_ERRORS[error.status], message: error.message });
+    return registryError(ctx, error);
   }
 }
 
@@ -96,7 +100,12 @@ async function read(ctx: ApiCtx, pick?: (full: ReturnType<typeof view>) => objec
     resource: ctx.params.id ?? "memory-registry",
     scopeLabel: orgScope(ctx.deps),
   });
-  const full = view(readRegistry((await registry.current()).record), registry);
+  let full: ReturnType<typeof view>;
+  try {
+    full = view(readRegistry((await registry.current()).record), registry);
+  } catch (error) {
+    return registryError(ctx, error);
+  }
   const found = pick ? pick(full) : full;
   return found ? sendJson(ctx.res, 200, found) : sendJson(ctx.res, 404, { error: "not_found" });
 }

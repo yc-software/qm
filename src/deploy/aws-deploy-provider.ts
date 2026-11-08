@@ -22,6 +22,7 @@ import {
   waitAppReady,
   type AppErrorSink,
 } from "./shared-deploy-provider.ts";
+import { trimTrailingSlashes } from "../util/text.ts";
 
 const AGENT_PORT_DEFAULT = 8080;
 const APP_PORT_DEFAULT = 8081;
@@ -137,7 +138,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
   const appsDomain = opts.appsDomain;
   const tokenTtlMinutes = opts.tokenTtlMinutes ?? 30;
   const dataBucket = opts.dataBucket;
-  const dataPrefix = (opts.dataPrefix ?? "deploy-data").replace(/\/+$/, "");
+  const dataPrefix = trimTrailingSlashes(opts.dataPrefix ?? "deploy-data");
   const snapshotIntervalMs = opts.snapshotIntervalMs ?? 5 * 60_000;
   const s3: Pick<S3Client, "send"> | undefined = dataBucket
     ? (opts.s3 ?? new S3Client({ region, ...(opts.profile ? { profile: opts.profile } : {}) }))
