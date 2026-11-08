@@ -247,7 +247,8 @@ notifications still run unattended.
 Agent operations require credentials bound to the exact session, run attempt, and
 unexpired execution lease. Swarm writes recheck that lease inside their database
 transaction; credentials from replaced attempts cannot authorize new work. Completed, failed, queued, and expired runs cannot authorize agent swarm
-operations.
+operations. A Slack bot's turn cannot direct a person's swarm: `spawn`, `send`,
+`context` and `control` refuse it unless a bot's turn started the swarm.
 Worker sessions never inherit the root session's command or security-screen
 approval grants; a worker must obtain its own approval. Auto screening receives host-verified swarm delegation provenance, so routine delegated tasks and in-swarm reporting are distinguished from external instructions. Delegation does not authorize credential disclosure, permission changes, or overriding higher-priority instructions; those remain screened. Frozen swarm roster checks
 apply to swarm notifications, not ordinary human follow-ups in the root session.
