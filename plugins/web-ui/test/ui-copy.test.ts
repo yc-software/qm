@@ -56,3 +56,29 @@ test("rapid copy feedback toggles a class and never rewrites the button markup",
     else delete (globalThis as { navigator?: Navigator }).navigator;
   }
 });
+
+test("failed copies retain error evidence without claiming success or logging the text", async (t) => {
+  const navigatorDescriptor = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: {
+      clipboard: {
+        writeText: async () => {
+          throw new Error("Clipboard denied");
+        },
+      },
+    },
+  });
+  const warn = t.mock.method(console, "warn", () => {});
+  try {
+    const button = new JSDOM("<button>Copy</button>").window.document.querySelector("button")!;
+    await copyText("Private draft content", button);
+    assert.equal(button.classList.contains("copied"), false);
+    assert.equal(warn.mock.callCount(), 1);
+    assert.match(warn.mock.calls[0]!.arguments[0], /Clipboard denied/);
+    assert.doesNotMatch(warn.mock.calls[0]!.arguments[0], /Private draft content/);
+  } finally {
+    if (navigatorDescriptor) Object.defineProperty(globalThis, "navigator", navigatorDescriptor);
+    else delete (globalThis as { navigator?: Navigator }).navigator;
+  }
+});
