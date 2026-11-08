@@ -9,6 +9,7 @@ import {
   isNonRetryable,
   NonRetryableTurnError,
   ProviderTurnError,
+  turnErrorCode,
   turnFailureMessage,
 } from "../core/turn-error.ts";
 import {
@@ -173,7 +174,7 @@ async function attemptRun(
         tenant,
         {
           category: "turn",
-          code: "error",
+          code: turnErrorCode(err),
           message: `run ${run.id}: ${errMessage(err)}`,
           scopeLabel: conversationScope(run.request.conversation, run.request.actor.id),
         },
