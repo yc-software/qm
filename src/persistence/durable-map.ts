@@ -35,7 +35,7 @@ export function createPostgresMap<T>(
   table: string,
   indexedFields: readonly Extract<keyof T, string>[] = [],
 ): DurableMap<T> {
-  if (!/^[a-z_][a-z0-9_]*$/i.test(table)) throw new Error(`invalid table name: ${table}`);
+  if (!/^[a-z_][a-z0-9_]*$/.test(table)) throw new Error(`invalid table name: ${table}`);
   const migration = {
     id: `durable-map/${table}/0001`,
     statements: [
@@ -43,8 +43,43 @@ export function createPostgresMap<T>(
       `CREATE TABLE IF NOT EXISTS ${VERSIONS_TABLE} (tbl TEXT PRIMARY KEY, v BIGINT NOT NULL)`,
     ],
   };
+  const versionFunction = {
+    id: "durable-map/0000-version-function",
+    statements: [
+      `CREATE OR REPLACE FUNCTION durable_map_version() RETURNS trigger LANGUAGE plpgsql AS $fn$
+      DECLARE
+        bumped BIGINT;
+      BEGIN
+        IF TG_LEVEL = 'ROW' THEN
+          NEW.rv := current_setting('durable_map.v_' || TG_TABLE_NAME)::bigint;
+          RETURN NEW;
+        END IF;
+        INSERT INTO ${VERSIONS_TABLE} (tbl, v) VALUES (TG_TABLE_NAME, 1)
+        ON CONFLICT (tbl) DO UPDATE SET v = ${VERSIONS_TABLE}.v + 1
+        RETURNING v INTO bumped;
+        PERFORM set_config('durable_map.v_' || TG_TABLE_NAME, bumped::text, true);
+        RETURN NULL;
+      END
+      $fn$`,
+    ],
+  };
+  const rowVersion = {
+    id: `durable-map/${table}/0002-row-version`,
+    statements: [
+      `SET LOCAL lock_timeout = '3s'`,
+      `ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS rv BIGINT NOT NULL DEFAULT 0`,
+      `DROP TRIGGER IF EXISTS ${table}_version ON ${table}`,
+      `CREATE TRIGGER ${table}_version BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON ${table}
+      FOR EACH STATEMENT EXECUTE FUNCTION durable_map_version()`,
+      `DROP TRIGGER IF EXISTS ${table}_row_version ON ${table}`,
+      `CREATE TRIGGER ${table}_row_version BEFORE INSERT OR UPDATE ON ${table}
+      FOR EACH ROW EXECUTE FUNCTION durable_map_version()`,
+    ],
+  };
   const migrations = [
     migration,
+    versionFunction,
+    rowVersion,
     ...indexedFields.flatMap((field) => {
       if (!/^[a-z_][a-z0-9_]*$/i.test(field)) throw new Error(`invalid index field: ${field}`);
       return [
@@ -92,24 +127,40 @@ export function createPostgresMap<T>(
     }
     return readyP;
   }
-  const bumpSql = `INSERT INTO ${VERSIONS_TABLE} (tbl, v) VALUES ('${table}', 1)
-     ON CONFLICT (tbl) DO UPDATE SET v = ${VERSIONS_TABLE}.v + 1`;
-  async function withBump<R>(fn: (client: PoolClient) => Promise<R>): Promise<R> {
+  const versionLockSql = `INSERT INTO ${VERSIONS_TABLE} (tbl, v) VALUES ('${table}', 0)
+     ON CONFLICT (tbl) DO UPDATE SET v = ${VERSIONS_TABLE}.v`;
+  async function withVersionLock<R>(fn: (client: PoolClient) => Promise<R>): Promise<R> {
     await ready();
     return withPgTransaction(await pg.pool(), async (client) => {
-      await client.query(bumpSql);
+      await client.query(versionLockSql);
       return fn(client);
     });
   }
-  const CACHE_MAX_AGE_MS = 15_000;
-  let cache: { v: string; fetchedAt: number; entries: Array<[string, T]> } | null = null;
+  let cache: { v: string; entries: Array<[string, T]> } | null = null;
+  async function applyChanges(since: { v: string; entries: Array<[string, T]> }) {
+    const rows = await pg.q(
+      `SELECT ver.v::text AS v, (SELECT count(*) FROM ${table})::int AS n, t.id, t.json
+       FROM ${VERSIONS_TABLE} ver LEFT JOIN ${table} t ON t.rv > $1::bigint
+       WHERE ver.tbl = '${table}'`,
+      [since.v],
+    );
+    if (!rows.length) return null;
+    const byId = new Map(since.entries);
+    for (const row of rows) {
+      if (row.id === null) continue;
+      if (!byId.has(row.id as string)) return null;
+      byId.set(row.id as string, row.json as T);
+    }
+    return byId.size === rows[0]!.n ? { v: rows[0]!.v as string, entries: [...byId] } : null;
+  }
   async function snapshot(): Promise<Array<[string, T]>> {
     await ready();
     const vRows = await pg.q(`SELECT v FROM ${VERSIONS_TABLE} WHERE tbl = '${table}'`);
     const v = vRows.length ? String(vRows[0]!.v) : "";
-    if (!cache || cache.v !== v || Date.now() - cache.fetchedAt > CACHE_MAX_AGE_MS) {
+    if (cache && cache.v !== v) cache = cache.v && v && BigInt(v) > BigInt(cache.v) ? await applyChanges(cache) : null;
+    if (!cache) {
       const rows = await pg.q(`SELECT id, json FROM ${table} ORDER BY id`);
-      cache = { v, fetchedAt: Date.now(), entries: rows.map((row) => [row.id as string, row.json as T]) };
+      cache = { v, entries: rows.map((row) => [row.id as string, row.json as T]) };
     }
     return structuredClone(cache.entries);
   }
@@ -168,7 +219,7 @@ export function createPostgresMap<T>(
       return rows.length ? (rows[0]!.json as T) : null;
     },
     async put(id, value) {
-      await withBump((client) =>
+      await withVersionLock((client) =>
         client.query(
           `INSERT INTO ${table} (id, json) VALUES ($1, $2)
            ON CONFLICT (id) DO UPDATE SET json = EXCLUDED.json`,
@@ -177,7 +228,7 @@ export function createPostgresMap<T>(
       );
     },
     async putIfAbsent(id, value) {
-      const res = await withBump((client) =>
+      const res = await withVersionLock((client) =>
         client.query(
           `INSERT INTO ${table} (id, json) VALUES ($1, $2)
            ON CONFLICT (id) DO UPDATE SET json = ${table}.json
@@ -188,7 +239,7 @@ export function createPostgresMap<T>(
       return res.rows[0]!.json as T;
     },
     async insertIfAbsent(id, value) {
-      const inserted = await withBump((client) =>
+      const inserted = await withVersionLock((client) =>
         client.query(
           `INSERT INTO ${table} (id, json) VALUES ($1, $2)
            ON CONFLICT (id) DO NOTHING`,
@@ -201,7 +252,7 @@ export function createPostgresMap<T>(
       const entries = Object.entries(patch);
       const removeKeys = entries.filter(([, v]) => v === undefined).map(([k]) => k);
       const set = Object.fromEntries(entries.filter(([, v]) => v !== undefined));
-      const res = await withBump((client) =>
+      const res = await withVersionLock((client) =>
         client.query(`UPDATE ${table} SET json = (json - $2::text[]) || $3::jsonb WHERE id = $1 RETURNING json`, [
           id,
           removeKeys,
@@ -211,7 +262,7 @@ export function createPostgresMap<T>(
       return res.rows.length ? (res.rows[0]!.json as T) : null;
     },
     async update(id, fn) {
-      return withBump(async (client) => {
+      return withVersionLock(async (client) => {
         const current = await client.query(`SELECT json FROM ${table} WHERE id = $1 FOR UPDATE`, [id]);
         if (!current.rows[0]) return null;
         const next = fn(current.rows[0].json as T);
@@ -221,7 +272,7 @@ export function createPostgresMap<T>(
     },
     async mutateMany(updates) {
       if (!updates.length) return [];
-      return withBump(async (client) => {
+      return withVersionLock(async (client) => {
         const rows = await client.query(
           `SELECT id, json FROM ${table} WHERE id = ANY($1::text[]) ORDER BY id FOR UPDATE`,
           [updates.map(({ id }) => id)],
@@ -242,7 +293,7 @@ export function createPostgresMap<T>(
       });
     },
     async deleteIf(id, predicate) {
-      return withBump(async (client) => {
+      return withVersionLock(async (client) => {
         const current = await client.query(`SELECT json FROM ${table} WHERE id = $1 FOR UPDATE`, [id]);
         if (!current.rows[0] || !predicate(current.rows[0].json as T)) return false;
         await client.query(`DELETE FROM ${table} WHERE id = $1`, [id]);
@@ -250,10 +301,12 @@ export function createPostgresMap<T>(
       });
     },
     async delete(id) {
-      await withBump((client) => client.query(`DELETE FROM ${table} WHERE id = $1`, [id]));
+      await withVersionLock((client) => client.query(`DELETE FROM ${table} WHERE id = $1`, [id]));
     },
     async take(id) {
-      const res = await withBump((client) => client.query(`DELETE FROM ${table} WHERE id = $1 RETURNING json`, [id]));
+      const res = await withVersionLock((client) =>
+        client.query(`DELETE FROM ${table} WHERE id = $1 RETURNING json`, [id]),
+      );
       return res.rows.length ? (res.rows[0]!.json as T) : null;
     },
   };
