@@ -27,6 +27,34 @@ test("detaching a subagent session requires current channel membership", async (
   assert.deepEqual(await built.app.detachSession(child.id, "U1"), { detached: true });
 });
 
+test("a replayed steer on a scheduled turn's subagent keeps where its answer goes", async () => {
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "session-signal-destination-")) }));
+  const root = await built.sessions.getOrCreateByThread("web:U1:cron-root", "dm", "personal:U1");
+  const child = await built.sessions.getOrCreateByThread("agent:main:subagent:cron-child", "dm", "personal:U1");
+  await built.sessions.setParentSession(child.id, root.id);
+  const destination = { type: "principal", target: "U2", audienceScopeId: "personal:U2", onBehalfOf: "U1" };
+  const { run } = await built.runs.enqueue({
+    sessionId: child.threadRef,
+    request: {
+      actor: { id: "U1", type: "internal" },
+      conversation: { kind: "dm", threadRef: child.threadRef, audience: [{ id: "U1", type: "internal" }] },
+      text: "work",
+      origin: { kind: "automation", screenData: "work", destination, useOwnerKeychain: true },
+    },
+  });
+  const claimed = await built.runs.claimById(run.id, "worker", 60_000);
+  await built.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+  await built.signals.send(run.id, { kind: "steer", text: "also check the launch" });
+  await built.app.replayOrphanedRunSignals(run.id);
+  const replays = (await built.runs.inFlightForThread(child.threadRef)).filter((candidate) =>
+    candidate.dedupKey?.startsWith("session-signal:"),
+  );
+  assert.deepEqual(
+    replays.map((replay) => replay.request.origin),
+    [{ kind: "automation", screenData: "also check the launch", destination, useOwnerKeychain: true }],
+  );
+});
+
 test("late human child messages retain their sender and revalidate access", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "session-human-replay-")) }));
   await built.app.upsertDirectory([

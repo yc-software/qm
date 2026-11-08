@@ -114,7 +114,7 @@ export function readRegistry(value: unknown): MemoryRegistry {
   if (value === null || value === undefined) return EMPTY_MEMORY_REGISTRY;
   const record = value as Partial<MemoryRegistry>;
   if (record.schema !== 1 || !Array.isArray(record.brains) || !Array.isArray(record.bindings))
-    throw new Error("the memory registry record has a shape this QM build doesn't know");
+    throw conflict("the memory registry record has a shape this QM build doesn't know");
   return record as MemoryRegistry;
 }
 
@@ -227,6 +227,8 @@ export function putBrain(record: MemoryRegistry, id: string, input: unknown, cha
   const url = text(body.url ?? existing?.url, "url");
   publicUrl(url);
   const clientSecret = body.clientSecret === undefined ? undefined : nonBlank(body.clientSecret, "clientSecret");
+  if (clientSecret !== undefined && (body.url === undefined || body.url === null))
+    throw invalid("a request that sets clientSecret must restate url, so the secret goes only to a url it names");
   const kept = url === existing?.url ? existing.auth.clientSecretEnc : undefined;
   const clientSecretEnc = clientSecret === undefined ? kept : encryptSecret(clientSecret, change.key);
   const timeoutMs = body.timeoutMs ?? existing?.timeoutMs;

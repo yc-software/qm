@@ -192,7 +192,7 @@ import {
   type OverheardEntryPayload,
 } from "../agent/replay.ts";
 import { errMessage, reportFailure, reportFailureAs, swallow, swallowAs } from "../util/errors.ts";
-import { headSlice, pgTextSafe } from "../util/text.ts";
+import { headSlice, pgTextSafe, trimTrailingSlashes } from "../util/text.ts";
 import { absoluteAppLinks } from "../util/markdown.ts";
 import {
   isModelBudget,
@@ -202,7 +202,7 @@ import {
   turnFailureMessage,
   turnFailureItem,
 } from "./turn-error.ts";
-import { personKey, rosterIds, samePerson } from "../directory/person.ts";
+import { attestableAudience, personKey, rosterIds, samePerson } from "../directory/person.ts";
 import type { FeatureName } from "../feature-flags.ts";
 import { sleep } from "../util/async.ts";
 import { hashId } from "../util/crypto.ts";
@@ -657,6 +657,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
       const resolution = await deps.resolution.resolve(conversation, actor, external);
       const scopeId = deps.resolution.scopeFor(conversation, actor);
+      const automationDestination = input.origin.kind === "automation" ? input.origin.destination : undefined;
+      const audienceScopeId =
+        !automationDestination ||
+        automationDestination.audienceScopeId === scopeId ||
+        (attestableAudience(actor.id, scopeId) && attestableAudience(actor.id, automationDestination.audienceScopeId))
+          ? scopeId
+          : undefined;
       const audit = (event: Omit<AuditEvent, "at" | "principalId" | "scopeLabel">) =>
         deps.auditLog.record({ at: Date.now(), principalId: actor.id, scopeLabel: scopeId, ...event });
       const spendLimit = spendLimits
@@ -944,7 +951,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const childFloor = delegatedSession?.spawnMeta?.readOnly === true;
       const strictReadOnly = input.readOnly === true || input.privateSessionMessage === true || childFloor;
       const actAsActor = actor.type === "internal" && !input.botActor;
-      const mcpToolsReady = !external && deps.mcp ? deps.mcp.toolDefsFor(actor.id, scopeId, actAsActor) : undefined;
+      const mcpToolsReady =
+        !external && deps.mcp ? deps.mcp.toolDefsFor(actor.id, audienceScopeId, actAsActor) : undefined;
       const useMemory = !external && input.skipMemory !== true;
       const environmentId = external ? scopeId : await resolveEnvironmentId(deps.environments, scopeId);
       resolution.writableScopeId = environmentId;
@@ -978,6 +986,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         origin: authorizationOrigin,
         trustedLiveHuman: liveAuthorTurn,
         targetScope: scopeId,
+        ...(audienceScopeId ? { audienceScopeId } : {}),
         config: deps.config,
         sessions: deps.sessions,
         isCurrentSharedScopeMember,
@@ -997,11 +1006,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const isWeb = input.surface === "web";
       const surfaceTool = input.surface ?? "slack";
       const surfaceHints = surface?.promptHints;
-      const automationDestination = input.origin.kind === "automation" ? input.origin.destination?.type : undefined;
       const surfaceName =
         automationDestination === undefined
           ? (input.surface ?? "slack")
-          : (deps.surfaces.get(automationDestination)?.kind ?? "slack");
+          : (deps.surfaces.get(automationDestination.type)?.kind ?? "slack");
       const toolSurface = deps.surfaces.get(surfaceName || "slack");
       const branding = await resolveBranding(deps.config, resolution.orgScopeId, deps.brandingDefault);
       const botName = branding.selfLabel ?? "QM";
@@ -1636,6 +1644,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         ...(external ? { externalSlack: true as const } : {}),
         actorId: actor.id,
         scopeId,
+        ...(audienceScopeId ? { audienceScopeId } : {}),
         ...(input.scopeVersion ? { scopeVersion: input.scopeVersion } : {}),
         ...(conversation.publishMembers ? { members: conversation.publishMembers } : {}),
         ...(liveTurn ? { liveActor: true } : {}),
@@ -1700,7 +1709,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           deps.capabilityTokenCompression,
         );
         if (browserModel) {
-          connectorEnv.BROWSE_LAB_BASE_URL = `${deps.apiBaseUrl.replace(/\/+$/, "")}/v1/browser-model`;
+          connectorEnv.BROWSE_LAB_BASE_URL = `${trimTrailingSlashes(deps.apiBaseUrl)}/v1/browser-model`;
           connectorEnv.BROWSE_LAB_MODEL_TOKEN = await mintCapabilityToken(
             {
               ...scopeAttestation,
@@ -1715,7 +1724,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           );
         }
         if (deps.sandboxModels && allInternal && securityPolicy.posture !== "strict") {
-          connectorEnv.MODEL_GATEWAY_URL = `${deps.apiBaseUrl.replace(/\/+$/, "")}${SANDBOX_MODEL_PREFIX}`;
+          connectorEnv.MODEL_GATEWAY_URL = `${trimTrailingSlashes(deps.apiBaseUrl)}${SANDBOX_MODEL_PREFIX}`;
           connectorEnv.MODEL_GATEWAY_TOKEN = await mintCapabilityToken(
             { ...scopeAttestation, aud: SANDBOX_MODEL_AUD, exp: sandboxTokenExpiry },
             deps.capabilitySecret ?? deps.signingSecret,
@@ -2772,7 +2781,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           memoryCaptureMetadata: () => ({ sessionId: session.id, inheritedFacts: captureDependencies() }),
           memoryScopeId,
           ...(memoryAccess ? { memoryAccess } : {}),
-          ...(!external && deps.mcp ? { mcp: deps.mcp, scopeId, actAsActor } : {}),
+          ...(!external && deps.mcp ? { mcp: deps.mcp, actAsActor } : {}),
+          ...(audienceScopeId ? { audienceScopeId } : {}),
           ...(surface?.capabilities.nativeActor ? { actingSlackUserId: actor.id } : {}),
           ...(deps.deploymentLayer
             ? {
@@ -3879,6 +3889,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               await onTurnEnd({
                 scopeId: memoryScopeId,
                 conversationScopeId: scopeId,
+                ...(audienceScopeId ? { audienceScopeId } : {}),
                 inheritedFacts: captureDependencies(),
                 input: turnInput,
                 reply,
