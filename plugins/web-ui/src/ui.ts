@@ -1,4 +1,3 @@
-import { swallow } from "../../chassis/src/errors.ts";
 import { previewFile } from "./file-open.ts";
 import { html, nothing, type TemplateResult } from "lit";
 import { keyed } from "lit/directives/keyed.js";
@@ -299,8 +298,7 @@ const copyFeedback = new WeakMap<HTMLButtonElement, ReturnType<typeof setTimeout
 export async function copyText(text: string, btn?: HTMLButtonElement): Promise<void> {
   try {
     await navigator.clipboard.writeText(text);
-  } catch (error) {
-    swallow("web-ui: copy text", error);
+  } catch {
     return;
   }
   if (!btn) return;
