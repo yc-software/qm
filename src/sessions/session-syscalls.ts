@@ -941,6 +941,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   return { ok: false, message: "ordinary sessions accept private messages, not interrupts" };
                 if (caller.readOnly && !target.spawnMeta?.readOnly)
                   return { ok: false, message: "a read-only session cannot interrupt a writable task" };
+                if (caller.botActor && !target.spawnMeta?.botActor)
+                  return { ok: false, message: "a Slack bot's turn cannot interrupt a person's task" };
               }
               const text = input.text?.trim();
               if (!text) {

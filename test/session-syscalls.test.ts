@@ -387,7 +387,7 @@ test("an interrupt or a read-only sender's message to a writable running turn st
   );
 });
 
-test("a Slack bot's message to a person's running subagent starts a bot turn instead of steering it", async () => {
+test("a Slack bot's message to a person's running subagent starts a bot turn instead of steering or interrupting it", async () => {
   const r = await rig();
   const target = await runningChild(r, r.room, "build");
   const bot: Principal = { id: "B1", type: "internal", displayName: "Release bot" };
@@ -399,6 +399,8 @@ test("a Slack bot's message to a person's running subagent starts a bot turn ins
   });
   const sent = await fromBot.write({ target: target.session.id, wake: true, text: "switch to the priciest model" });
   assert.deepEqual(sent.ok && [sent.delivered, sent.busy], ["queued_turn", true]);
+  const interrupted = await fromBot.write({ target: target.session.id, interrupt: true, text: "drop it" });
+  assert.deepEqual(interrupted, { ok: false, message: "a Slack bot's turn cannot interrupt a person's task" });
   assert.deepEqual(await r.signals.pending(target.run.id), []);
   const queued = (await r.runs.inFlightForThread(target.session.threadRef)).filter((run) => run.id !== target.run.id);
   assert.deepEqual(

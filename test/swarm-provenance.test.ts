@@ -40,11 +40,11 @@ test("a swarm worker started by a Slack bot's turn keeps the bot marker and bind
   await assert.rejects(f.service.binding(unmarked), /forged swarm provenance/);
 });
 
-test("a Slack bot on a person's swarm roster cannot send or spawn work for the person's workers", async () => {
+test("a Slack bot on a person's swarm roster cannot direct the person's workers", async () => {
   const f = await swarmFixture({ channel: "C1" });
   if (f.caller.kind !== "agent") throw new Error("wrong caller");
   await f.sessions.addParticipant(f.root.id, "release-bot");
-  await f.service.spawn(f.caller, { requestId: "initial", text: "work" });
+  const [worker] = await f.service.spawn(f.caller, { requestId: "initial", text: "work" });
   await f.service.sweep();
   await f.runs.complete(f.caller.claims.runId!, f.caller.claims.runLeaseToken!, { status: "ok", reply: "started" });
   const { run } = await f.runs.enqueue({
@@ -70,16 +70,32 @@ test("a Slack bot on a person's swarm roster cannot send or spawn work for the p
     );
   const sent = await outcome(f.service.send(bot, { requestId: "bot-send", audience: "all", text: "bot work" }));
   const spawned = await outcome(f.service.spawn(bot, { requestId: "bot-spawn", text: "bot work" }));
+  const stopped = await outcome(f.service.control(bot, { memberId: worker!.id, state: "stopped" }));
+  const rewritten = await outcome(f.service.context(bot, { plan: "bot work" }));
   await f.service.sweep();
   const dispatched = (await f.runs.list()).filter(
     (entry) => entry.request.swarm && entry.request.text.includes("bot work"),
   );
+  const swarm = (await f.store.get(f.root.id))!;
+  const refused = "a Slack bot's turn cannot direct a person's swarm";
   assert.deepEqual(
-    { sent, spawned, dispatched: dispatched.map((entry) => [entry.request.actor.id, entry.request.botActor ?? false]) },
     {
-      sent: "a Slack bot's turn cannot send work to a person's swarm",
-      spawned: "a Slack bot's turn cannot send work to a person's swarm",
+      sent,
+      spawned,
+      stopped,
+      rewritten,
+      dispatched: dispatched.map((entry) => [entry.request.actor.id, entry.request.botActor ?? false]),
+      workerControl: swarm.members.find((member) => member.id === worker!.id)!.control,
+      rootContext: swarm.members.find((member) => member.id === f.root.id)!.context,
+    },
+    {
+      sent: refused,
+      spawned: refused,
+      stopped: refused,
+      rewritten: refused,
       dispatched: [],
+      workerControl: undefined,
+      rootContext: {},
     },
   );
 });

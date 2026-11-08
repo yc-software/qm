@@ -152,7 +152,7 @@ function rosterMatches(current: readonly string[], expected: readonly string[]):
 
 function assertCallerMayDirect(caller: SwarmCaller, swarm: Swarm): void {
   if (caller.kind === "agent" && caller.claims.botActor && !swarm.template.botActor)
-    throw new Error("a Slack bot's turn cannot send work to a person's swarm");
+    throw new Error("a Slack bot's turn cannot direct a person's swarm");
 }
 
 function dispatchContract(input: OrchestratorInput) {
@@ -600,6 +600,7 @@ export function createSwarmService(deps: {
     },
     async context(caller, context) {
       const { auth, swarm } = await load(caller);
+      assertCallerMayDirect(caller, swarm);
       const value = jsonContext(context, swarm.settings.contextBytes);
       const updated = await update(auth, (swarm) => {
         assertSwarmOpen(swarm);
@@ -825,6 +826,7 @@ export function createSwarmService(deps: {
     enabledFor,
     async control(caller, input) {
       const { auth, swarm } = await load(caller);
+      assertCallerMayDirect(caller, swarm);
       if (!["active", "paused", "stopped"].includes(input.state)) throw new Error("invalid control state");
       const target = swarm.members.find((member) => member.id === input.memberId);
       if (!target) throw new Error("unknown swarm member");
