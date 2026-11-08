@@ -150,6 +150,25 @@ test("a rejected key blocks registration unless validate:false", async () => {
   }
 });
 
+test("a key check that cannot reach the endpoint reports why instead of a rejected key", async () => {
+  const srv = start(async () => {
+    throw new TypeError("fetch failed", { cause: new Error("getaddrinfo ENOTFOUND llm.acme.internal") });
+  });
+  try {
+    const put = await fetch(`${srv.base}/v1/admin/custom-providers/acme-gateway`, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify(BODY),
+    });
+    assert.equal(put.status, 400);
+    const body = (await put.json()) as { error: string; message: string };
+    assert.equal(body.error, "bad_request");
+    assert.match(body.message, /^fetch failed <- .*getaddrinfo ENOTFOUND llm\.acme\.internal/);
+  } finally {
+    await srv.close();
+  }
+});
+
 test("bad specs are refused with a reason", async () => {
   const srv = start();
   try {

@@ -7,7 +7,8 @@ import { sendJson } from "../../http.ts";
 import type { ApiCtx } from "../route.ts";
 import { audit, authorizeAdmin, orgScope } from "../shared.ts";
 import { trimTrailingSlashes } from "../../../util/text.ts";
-import { PrivateNetworkAddressError, publicFetch } from "../../../util/network.ts";
+import { publicFetch } from "../../../util/network.ts";
+import { errMessage } from "../../../util/errors.ts";
 
 async function actor(ctx: ApiCtx) {
   const scope = orgScope(ctx.deps);
@@ -25,17 +26,12 @@ async function validateKey(
     protocol === "anthropic"
       ? { "x-api-key": apiKey, "anthropic-version": "2023-06-01" }
       : { authorization: `Bearer ${apiKey}` };
-  try {
-    const response = await (ctx.deps.modelCredentialFetch ?? publicFetch)(url, {
-      headers,
-      redirect: "error",
-      signal: AbortSignal.timeout(5_000),
-    });
-    return response.ok;
-  } catch (e) {
-    if (e instanceof PrivateNetworkAddressError) throw e;
-    return false;
-  }
+  const response = await (ctx.deps.modelCredentialFetch ?? publicFetch)(url, {
+    headers,
+    redirect: "error",
+    signal: AbortSignal.timeout(5_000),
+  });
+  return response.ok;
 }
 
 export async function getCustomProviders(ctx: ApiCtx): Promise<void> {
@@ -92,7 +88,7 @@ export async function putCustomProvider(ctx: ApiCtx): Promise<void> {
     }
     await ctx.deps.customProviders.upsert(spec, apiKey, authorized.id);
   } catch (e) {
-    return sendJson(ctx.res, 400, { error: "bad_request", message: (e as Error).message });
+    return sendJson(ctx.res, 400, { error: "bad_request", message: errMessage(e) });
   }
   await ctx.deps.refreshCustomProviders?.();
   audit(ctx.deps, {
