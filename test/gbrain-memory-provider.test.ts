@@ -6,13 +6,14 @@ import { Errors } from "typebox/value";
 import { installPrincipalLinks } from "../src/directory/person.ts";
 import type { MemoryProviderOutcome, MemoryService } from "../src/memory/memory-service.ts";
 import { parseMemoryProviderConfig } from "../src/memory/provider-config.ts";
-import { createConfiguredMemoryService } from "../src/memory/provider-factory.ts";
+import { createRegistryMemoryService } from "../src/memory/registry-memory.ts";
 import { withProviders, writeFacts } from "../src/memory/provider-outcome.ts";
 import { createPerTurnStrategy } from "../src/memory/strategies/per-turn.ts";
 import { recallAcrossScopes } from "../src/memory/cross-scope.ts";
 import { memoryRecallQuery } from "../src/memory/semantic-recall.ts";
 import { type NewItem, storedItem } from "../src/sessions/items.ts";
 import { startMcpTestServer } from "./support/mcp-test-server.ts";
+import { emptyMemoryRegistry } from "./support/memory-registry.ts";
 
 const contract = JSON.parse(
   readFileSync(new URL("./fixtures/gbrain/qm-memory-provider-v1.json", import.meta.url), "utf8"),
@@ -95,9 +96,10 @@ async function gbrain(
       return "";
     },
   };
-  const memory = createConfiguredMemoryService({
+  const memory = createRegistryMemoryService({
+    registry: emptyMemoryRegistry,
     defaultMemory: notebook,
-    config: parseMemoryProviderConfig(
+    overlay: parseMemoryProviderConfig(
       JSON.stringify({ ...recipe, routes, providers: [{ ...recipe.providers[0], url: server.url }] }),
       SECRETS,
     ),
