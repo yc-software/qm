@@ -2,6 +2,7 @@ import { orgId as configOrgId } from "../../config.ts";
 import {
   mintCapabilityToken,
   verifyCapabilityToken,
+  MEMORY_BRAIN_DROP_AUD,
   SECRET_DROP_AUD,
   type CapabilityClaims,
 } from "../../auth/capability-token.ts";
@@ -37,7 +38,7 @@ function dropGone(reason: "not_found" | "expired"): string {
 
 interface BrainDestination {
   label: string;
-  origin: string;
+  endpoint: string;
   scopes: string[];
 }
 
@@ -144,7 +145,7 @@ async function dropLinkClaims(
   const claims = await verifyCapabilityToken(token, capSecret);
   if (
     !claims ||
-    claims.aud !== SECRET_DROP_AUD ||
+    claims.aud !== (rec.memoryBrain ? MEMORY_BRAIN_DROP_AUD : SECRET_DROP_AUD) ||
     claims.drop !== dropId ||
     !samePerson(claims.actorId, rec.ownerId) ||
     (rec.audienceScopeId && claims.scopeId !== rec.audienceScopeId)
@@ -185,7 +186,7 @@ function dropFormHtml(
 <div class="request"><p>The agent asked for this so it can:</p><strong>${purpose_}</strong>${requested_ ? `<span class="requested">Requested ${requested_}</span>` : ""}</div>
 ${
   brain
-    ? `<div class="request"><p>Where conversation text goes:</p><strong>${escapeHtml(brain.label)} at ${escapeHtml(brain.origin)}</strong><span class="requested">Once the secret is saved, QM sends this brain recall queries and saved facts for ${escapeHtml(brain.scopes.length ? brain.scopes.join(", ") : "no one yet: nothing is bound to it")}.</span></div>`
+    ? `<div class="request"><p>Where conversation text goes:</p><strong>${escapeHtml(brain.label)} at ${escapeHtml(brain.endpoint)}</strong><span class="requested">Once the secret is saved, QM sends this brain recall queries and saved facts for ${escapeHtml(brain.scopes.length ? brain.scopes.join(", ") : "no one yet: nothing is bound to it")}.</span></div>`
     : ""
 }
 <form id=f>
@@ -231,14 +232,17 @@ async function brainTarget(
   return { id: brain.id, url: brain.url };
 }
 
-async function brainDestination(ctx: ApiCtx, rec: SecretDropRecord): Promise<BrainDestination | undefined> {
+async function brainDestination(ctx: ApiCtx, rec: SecretDropRecord): Promise<BrainDestination | null | undefined> {
   const target = rec.memoryBrain;
-  if (!target || !ctx.deps.memoryRegistry) return undefined;
+  if (!target) return undefined;
+  if (!ctx.deps.memoryRegistry) return null;
   const record = readRegistry((await ctx.deps.memoryRegistry.current()).record);
   const brain = record.brains.find(({ id }) => id === target.id);
+  if (!brain || brain.url !== target.url) return null;
+  const url = new URL(target.url);
   return {
-    label: brain?.label ?? target.id,
-    origin: new URL(target.url).origin,
+    label: brain.label,
+    endpoint: `${url.origin}${url.pathname}`,
     scopes: record.bindings
       .filter((binding) => binding.brain === target.id)
       .map(({ scope }) => (scope === "personal" ? "every member's personal memory" : scope)),
@@ -374,7 +378,7 @@ async function mintDrop(ctx: ApiCtx): Promise<void> {
       ...(capability.botActor ? { botActor: true } : {}),
       ...(capability.liveActor ? { liveActor: true } : {}),
       ...(capability.members ? { members: capability.members } : {}),
-      aud: SECRET_DROP_AUD,
+      aud: brain ? MEMORY_BRAIN_DROP_AUD : SECRET_DROP_AUD,
       drop: dropId,
       exp: Date.now() + SECRET_DROP_TTL_MS,
     },
@@ -407,8 +411,13 @@ async function dropForm(ctx: ApiCtx): Promise<void> {
     fields: peeked.rec.fields,
     createdAt: peeked.rec.createdAt,
   };
+  const brain = await brainDestination(ctx, peeked.rec);
+  if (brain === null) {
+    res.writeHead(404, { "content-type": "text/html; charset=utf-8" });
+    return void res.end(dropFormHtml(params.id!, null));
+  }
   res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-  res.end(dropFormHtml(params.id!, rec, await brainDestination(ctx, peeked.rec)));
+  res.end(dropFormHtml(params.id!, rec, brain));
 }
 
 async function redeemDrop(ctx: ApiCtx): Promise<void> {
