@@ -673,7 +673,7 @@ export interface AppDeps {
   runStreamEvents?: EventBus<RunStreamEvent>;
   runActivity?: RunActivityStore;
   signals?: RunSignalStore;
-  settleTreeWakes?: (root: Session) => Promise<void>;
+  settleTreeWakes?: (root: Session, botRunsOnly?: boolean) => Promise<void>;
   modelCredentials?: ModelCredentialStore;
   userModelCredentials?: UserModelCredentialStore;
   mcpServers?: McpServerStore;

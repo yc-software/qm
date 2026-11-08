@@ -2772,7 +2772,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               }
             : {}),
           ...(deps.webhookPublicUrl ? { webhookPublicUrl: deps.webhookPublicUrl } : {}),
-          ...(humanInput && !external ? { humanTurn: true } : {}),
+          ...(humanInput && !external && !input.botActor ? { humanTurn: true } : {}),
           ...(deps.toolOutput ? { toolOutput: deps.toolOutput, sessionId: session.id } : {}),
           ...(surfaceToolDeps ? { surface: surfaceToolDeps } : {}),
           ...(turnSessionSyscalls ? { sessionSyscalls: turnSessionSyscalls } : {}),

@@ -31,6 +31,7 @@ import { testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { isAgentReply, isHidden, isUserItem, messageTs, type Item, USER_ITEM_KINDS } from "../src/sessions/items.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
 import type { Agent } from "../src/agent/agent.ts";
+import { createAgentTools, type ToolContextRef } from "../src/agent/agent-tools.ts";
 import { brokerCredentialCall } from "../src/api/credential-broker.ts";
 import { principalDestination } from "../src/reach/reach.ts";
 import { installPrincipalLinks } from "../src/directory/person.ts";
@@ -882,6 +883,58 @@ test("live bot attestation reaches control, OAuth, and egress capabilities", asy
     assert.equal(claims?.liveActor, true);
     assert.deepEqual(claims?.members, [{ id: "B-LEGACY", type: "internal" }]);
   }
+});
+
+test("a Slack bot's message in a person's thread can neither cancel nor resume the person's goal", async () => {
+  const base = createMockAgent();
+  const agent: Agent = {
+    ...base,
+    async runTurn(turn) {
+      const ref: ToolContextRef = {
+        current: turn.tools,
+        scopeLabel: turn.scopeLabel,
+        emit: turn.emit,
+        goal: turn.goal ?? null,
+        ...(turn.saveGoal ? { saveGoal: turn.saveGoal } : {}),
+      };
+      const goal = createAgentTools(ref).find((tool) => tool.name === "goal")!.execute as unknown as (
+        id: string,
+        input: unknown,
+      ) => Promise<unknown>;
+      await goal(
+        `goal-${turn.runId}`,
+        turn.input.includes("grind")
+          ? { action: "create", objective: "grind on the release notes", floor: { minTurns: 40 } }
+          : { action: "update", status: turn.goal?.status === "paused" ? "resume" : "cancel", note: "the bot asked" },
+      );
+      return { reply: "done", modelCalls: 1 };
+    },
+  };
+  const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "ap-")) });
+  config.spritesSandbox.namePrefix ??= `test-${hashId([config.dataDir]).slice(0, 10)}`;
+  const built = buildApp(config, { agent });
+  const bot = { externalId: "B1", displayName: "Release bot", isBot: true };
+  const fromBot = (text: string) =>
+    channel(text, {
+      actor: bot,
+      botActor: true,
+      origin: { kind: "human" },
+      conversation: { kind: "channel", threadRef: "ch:C1:t1", channelRef: "C1", audience: [bot] },
+    });
+  assert.equal(
+    (await built.app.turn(channel("grind on the release notes", { origin: { kind: "human" } }))).status,
+    "ok",
+  );
+  const session = (await built.sessions.getByThread("ch:C1:t1"))!;
+  const goalStatus = async () => (await built.sessions.goals([session.id])).get(session.id)?.status;
+  assert.equal(await goalStatus(), "active");
+  assert.equal((await built.app.turn(fromBot("cancel the goal"))).status, "ok");
+  const afterCancel = await goalStatus();
+  const paused = (await built.sessions.goals([session.id])).get(session.id)!;
+  paused.status = "paused";
+  await built.sessions.setGoal({ sessionId: session.id }, paused);
+  assert.equal((await built.app.turn(fromBot("resume the goal"))).status, "ok");
+  assert.deepEqual({ afterCancel, afterResume: await goalStatus() }, { afterCancel: "active", afterResume: "paused" });
 });
 
 test("Composio backend access is announced without delivering the project key", async () => {

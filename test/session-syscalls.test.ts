@@ -550,10 +550,18 @@ test("a subagent cannot start a turn in a top-level conversation that is not its
   assert.equal((await r.runs.inFlightForThread(ordinary.threadRef)).length, 0);
 });
 
-async function parentRun(r: Rig) {
+async function parentRun(r: Rig, botActor = false) {
   const { run } = await r.runs.enqueue({
     sessionId: r.room.threadRef,
-    request: { actor, conversation, surface: "slack", deliveryTarget: "D1", origin: { kind: "human" }, text: "go" },
+    request: {
+      actor,
+      conversation,
+      surface: "slack",
+      deliveryTarget: "D1",
+      origin: { kind: "human" },
+      text: "go",
+      ...(botActor ? { botActor } : {}),
+    },
   });
   const claimed = await r.runs.claimById(run.id, "worker", 60_000);
   const api = createSessionSyscalls({ ...r, maxAttempts: 3 }).forTurn({
@@ -630,8 +638,8 @@ test("a user's Stop on the parent leaves its subagent working, and the subagent'
   assert.match((await r.mailbox.pending(r.room.id))[0]!.text, /lead finished/);
 });
 
-async function delegatedLanes(r: Rig, tasks: string[]) {
-  const opener = await parentRun(r);
+async function delegatedLanes(r: Rig, tasks: string[], botActor = false) {
+  const opener = await parentRun(r, botActor);
   const lanes = [];
   for (const task of tasks) {
     const opened = await opener.api.open({ task });
@@ -700,6 +708,29 @@ test("stopping everything leaves the tree's waiting results and questions as mai
   const mail = await r.mailbox.pending(r.room.id);
   assert.equal(mail.length, 4);
   assert.ok(mail.every((message) => message.wake === undefined));
+});
+
+test("a Slack bot's stop settles only the bot's own waiting results and questions in the tree", async () => {
+  const r = await rig();
+  const deps = { ...r, maxAttempts: 3, delegationEnabled: async () => true };
+  const [person] = await delegatedLanes(r, ["person work"]);
+  const [bot] = await delegatedLanes(r, ["bot work"], true);
+  for (const lane of [person!, bot!]) {
+    await lane.api.write({ target: "parent", wake: true, text: "which region?", requestId: "q1" });
+    await r.runs.complete(lane.run.id, lane.leaseToken, { status: "ok", reply: "result" });
+    assert.equal(await deliverSubagentMail(deps, (await r.runs.get(lane.run.id))!), false);
+    await r.runs.deferReturn(lane.run.id, 60_000);
+  }
+  await settleTreeWakes(deps, r.room, true);
+  assert.deepEqual(
+    {
+      returns: (await r.runs.pendingReturns(100, "", [person!.session.threadRef, bot!.session.threadRef])).map(
+        (run) => run.id,
+      ),
+      wakes: [...new Set((await r.mailbox.wakesFor(r.room.id)).map((message) => message.senderId))],
+    },
+    { returns: [person!.run.id], wakes: [person!.session.id] },
+  );
 });
 
 test("settling a stopped tree skips a result it cannot deliver and only returns ordinary runs of subagents", async () => {

@@ -135,6 +135,29 @@ export async function swarmFixture(
       },
     };
   };
+  const rootTurn = async (actorId: string, botActor: boolean) => {
+    const { run } = await runs.enqueue({
+      sessionId: root.threadRef,
+      request: { ...template, actor: { id: actorId, type: "internal" }, ...(botActor ? { botActor } : {}) },
+    });
+    const claim = (await runs.claimById(run.id, "root-turn", 60_000))!;
+    const turn: SwarmCaller = {
+      kind: "agent",
+      claims: {
+        ...caller.claims,
+        actorId,
+        runId: run.id,
+        runAttempt: claim.attempts,
+        runLeaseToken: claim.leaseToken!,
+        ...(botActor ? { botActor } : {}),
+      },
+    };
+    return {
+      caller: turn,
+      claim,
+      done: () => runs.complete(run.id, claim.leaseToken!, { status: "ok", reply: "done" }),
+    };
+  };
   return {
     service,
     serviceOptions,
@@ -151,6 +174,7 @@ export async function swarmFixture(
     root,
     caller,
     workerCaller,
+    rootTurn,
     template,
   };
 }

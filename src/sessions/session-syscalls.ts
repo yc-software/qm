@@ -522,7 +522,7 @@ export const ANCESTOR_STOP = "because the parent session was stopped";
 export const USER_STOP = "by user";
 export const USER_STOP_ALL = "by user (subagents too)";
 
-type StopRequest = { reason?: string | undefined; scope?: StopScope };
+type StopRequest = { reason?: string | undefined; scope?: StopScope; botRunsOnly?: boolean };
 
 export const sparesDescendants = (scope: StopScope | undefined): boolean => scope === "run" || scope === "session";
 
@@ -565,7 +565,7 @@ export async function stopSessionRuns(
 ): Promise<{ id: string; withdrawn: boolean }[]> {
   const stopped: { id: string; withdrawn: boolean }[] = [];
   for (const run of await deps.runs.inFlightForThread(session.threadRef)) {
-    if (interrupt && !interruptible(run)) continue;
+    if ((interrupt && !interruptible(run)) || (stop.botRunsOnly && !run.request.botActor)) continue;
     const sender = interrupt && unstarted(run) ? run.request.sessionSenderId : undefined;
     const foreign = interrupt && sender && sender !== interrupt.by ? { mailbox: interrupt.mailbox, sender } : undefined;
     if (foreign)
@@ -638,10 +638,12 @@ export async function stopSessionTree(
   },
   root: Session,
   reason?: string,
+  botRunsOnly?: boolean,
 ): Promise<boolean> {
   let stopped = false;
   for (const session of await treeSessions(deps.sessions, root)) {
-    const stop: StopRequest = session.id === root.id ? { reason } : { reason: ANCESTOR_STOP, scope: "ancestor" };
+    const stop: StopRequest =
+      session.id === root.id ? { reason, botRunsOnly } : { reason: ANCESTOR_STOP, scope: "ancestor", botRunsOnly };
     if (session.scopeId === root.scopeId && (await stopSessionRuns(deps, session, stop)).length) stopped = true;
   }
   return stopped;
