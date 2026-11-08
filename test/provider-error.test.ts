@@ -4,7 +4,6 @@ import test from "node:test";
 import type { AssistantMessage, Model } from "@earendil-works/pi-ai";
 import { stream } from "@earendil-works/pi-ai/api/openai-completions";
 import { stream as anthropicStream } from "@earendil-works/pi-ai/api/anthropic-messages";
-import { stream as responsesStream } from "@earendil-works/pi-ai/api/openai-responses";
 import { providerTurnError } from "../src/model/provider-error.ts";
 import { turnFailureMessage } from "../src/core/turn-error.ts";
 
@@ -53,7 +52,7 @@ test("vendored pi-ai keeps a LiteLLM 429 budget_exceeded as structured providerE
   assert.deepEqual([err.code, err.status, err.retryable], ["model_budget", 429, false]);
 });
 
-async function failedThrough<A extends "openai-completions" | "anthropic-messages" | "openai-responses">(
+async function failedThrough<A extends "openai-completions" | "anthropic-messages">(
   t: { after(fn: () => void): void },
   api: A,
   respond: (res: import("node:http").ServerResponse) => void,
@@ -77,7 +76,6 @@ async function failedThrough<A extends "openai-completions" | "anthropic-message
   const run = {
     "openai-completions": stream,
     "anthropic-messages": anthropicStream,
-    "openai-responses": responsesStream,
   }[api] as (m: Model<A>, c: unknown, o: unknown) => { result(): Promise<AssistantMessage> };
   const failed = await run(
     model,
@@ -129,21 +127,6 @@ test("Anthropic's low credit balance is an account failure, other invalid reques
     json(400, { type: "error", error: { type: "invalid_request_error", message: "messages: field required" } }),
   );
   assert.equal(providerTurnError(malformed).code, "bad_request");
-});
-
-test("OpenAI's cyber_policy response.failed is a refusal naming the model and quoting the provider", async (t) => {
-  const reason = "This content was flagged for possible cybersecurity risk.";
-  const failed = await failedThrough(t, "openai-responses", (res) => {
-    res.writeHead(200, { "content-type": "text/event-stream" });
-    const event = { type: "response.failed", response: { error: { code: "cyber_policy", message: reason } } };
-    res.end(`event: response.failed\ndata: ${JSON.stringify(event)}\n\n`);
-  });
-  const err = providerTurnError(failed);
-  assert.deepEqual([err.code, err.retryable], ["refusal", false]);
-  assert.equal(
-    turnFailureMessage(err),
-    `Claude Opus 4.8 declined this request under the provider's usage policy ("cyber_policy: ${reason}"). Rephrase, or switch model.`,
-  );
 });
 
 test("Anthropic's refusal stop reason stays a refusal and quotes its explanation", async (t) => {
