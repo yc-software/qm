@@ -4013,17 +4013,20 @@ qm-draft .draft-card-label {
   color: var(--muted-foreground);
   font-size: 0.9em;
 }
-code-block copy-button {
+:is(code-block, qm-draft) copy-button {
   --accent: var(--secondary);
   --accent-foreground: var(--foreground);
 }
-code-block copy-button button {
+:is(code-block, qm-draft) copy-button button {
   border-color: transparent;
   box-shadow: none;
   color: var(--muted-foreground);
 }
 code-block copy-button button > span {
   display: none;
+}
+qm-draft copy-button svg {
+  transform: scale(0.8125);
 }
 qm-draft .draft-card-body {
   white-space: pre-wrap;

@@ -537,14 +537,7 @@ test("streaming Mermaid keeps source and preserves the component on completion",
   block.remove();
 });
 
-test("draft fences become copyable cards that keep the same element while streaming", async (t) => {
-  const clipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
-  const writeText = t.mock.fn(async (_text: string) => {});
-  Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
-  t.after(() => {
-    if (clipboard) Object.defineProperty(navigator, "clipboard", clipboard);
-    else Reflect.deleteProperty(navigator, "clipboard");
-  });
+test("draft fences become copyable cards that keep the same element while streaming", async () => {
   const block = new StableMarkdown();
   block.isStreaming = true;
   block.content = "Here's a draft:\n\n```draft\nHi team, quick question about";
@@ -558,13 +551,9 @@ test("draft fences become copyable cards that keep the same element while stream
   await block.updateComplete;
   assert.equal(block.querySelector("qm-draft"), card);
   await (card as unknown as { updateComplete: Promise<unknown> }).updateComplete;
-  const copy = card.querySelector<HTMLButtonElement>('button[aria-label="Copy draft"]')!;
-  assert.ok(copy);
-  assert.equal(card.querySelector("[title]"), null);
-  copy.click();
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(writeText.mock.calls[0]?.arguments[0], "Hi team, quick question about **main**.\n\nThanks!");
-  assert.equal(card.querySelector(".draft-card-body")?.textContent, writeText.mock.calls[0]?.arguments[0]);
+  const copy = card.querySelector("copy-button") as unknown as { text: string };
+  assert.equal(copy.text, "Hi team, quick question about **main**.\n\nThanks!");
+  assert.equal(card.querySelector(".draft-card-body")?.textContent, copy.text);
   assert.equal(block.querySelectorAll("code-block").length, 1);
   block.remove();
 });
