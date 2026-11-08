@@ -4025,6 +4025,9 @@ qm-draft .draft-card-label {
 code-block copy-button button > span {
   display: none;
 }
+qm-draft copy-button svg {
+  transform: scale(0.8125);
+}
 qm-draft .draft-card-body {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
