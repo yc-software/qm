@@ -82,7 +82,9 @@ export function routeIncoming(message: Incoming, live: LiveTurn | null, prefs: I
   if (live.kind === "run" && message.dedupKey && message.dedupKey === live.dedupKey)
     return { kind: "turn", reason: "duplicate" };
   const starters = live.kind === "run" ? [live.actorId] : live.actorIds;
+  const botIntoPersonsWork = message.bot && !(live.kind === "run" && live.bot);
   if (
+    !botIntoPersonsWork &&
     stopsLiveWork(
       message,
       starters.some((id) => samePerson(message.actorId, id)),
@@ -96,7 +98,7 @@ export function routeIncoming(message: Incoming, live: LiveTurn | null, prefs: I
     message.modelAccount === live.modelAccount &&
     (message.modelAccount === "company" || message.actorId === live.actorId);
   if (!sameAccount) return { kind: "turn", reason: "account" };
-  if (message.bot && !live.bot) return { kind: "turn", reason: "bot-message" };
+  if (botIntoPersonsWork) return { kind: "turn", reason: "bot-message" };
   if (!live.handlesThisMessage) {
     if (live.origin === "automation" && message.person && prefs.midTurn !== "steer")
       return { kind: "turn", reason: "automation-live" };
