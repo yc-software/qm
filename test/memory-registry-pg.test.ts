@@ -444,6 +444,10 @@ test("org-admin routes: admins only, secrets write-only, env providers read-only
     (await api.call("DELETE", "/v1/admin/memory-registry/bindings/alice", "admin-alice@default-org")).status,
     200,
   );
+  await built.memoryRegistry.update(() => ({ schema: 2, brains: [], bindings: [] }) as unknown as MemoryRegistry);
+  const unreadable = await api.call("GET", "/v1/admin/memory-registry", "admin-alice@default-org");
+  assert.equal(unreadable.status, 409);
+  assert.equal(JSON.parse(unreadable.text).error, "conflict");
   const rows = JSON.stringify(await built.auditLog.events());
   assert.match(rows, /memory-registry\.brain\.update/);
   assert.match(rows, /memory-registry\.binding\.delete/);
@@ -523,7 +527,7 @@ test("an admin's agent can register and bind a brain but never carries its secre
     putBrain(
       record,
       "acme-personal",
-      { clientSecret: "personal-secret" },
+      { clientSecret: "personal-secret", url: BRAIN_URL },
       {
         actor: "admin-alice",
         now: Date.now(),

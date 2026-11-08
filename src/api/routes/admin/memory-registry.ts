@@ -17,6 +17,11 @@ import { audit, authorizeAdmin, orgScope } from "../shared.ts";
 
 const ERRORS = { 400: "bad_request", 404: "not_found", 409: "conflict" } as const;
 
+function registryError(ctx: ApiCtx, error: unknown): void {
+  if (!(error instanceof MemoryRegistryError)) throw error;
+  sendJson(ctx.res, error.status, { error: ERRORS[error.status], message: error.message });
+}
+
 async function registryAdmin(ctx: ApiCtx) {
   const actor = await authorizeAdmin(ctx, orgScope(ctx.deps));
   if (!actor) return null;
@@ -52,8 +57,7 @@ async function change(
     audit(ctx.deps, { principalId: actor.id, action, resource: id, scopeLabel: orgScope(ctx.deps) });
     return sendJson(ctx.res, 200, { ok: true, ...view(record, registry) });
   } catch (error) {
-    if (!(error instanceof MemoryRegistryError)) throw error;
-    return sendJson(ctx.res, error.status, { error: ERRORS[error.status], message: error.message });
+    return registryError(ctx, error);
   }
 }
 
@@ -67,7 +71,12 @@ async function read(ctx: ApiCtx, pick?: (full: ReturnType<typeof view>) => objec
     resource: ctx.params.id ?? "memory-registry",
     scopeLabel: orgScope(ctx.deps),
   });
-  const full = view(readRegistry((await registry.current()).record), registry);
+  let full: ReturnType<typeof view>;
+  try {
+    full = view(readRegistry((await registry.current()).record), registry);
+  } catch (error) {
+    return registryError(ctx, error);
+  }
   const found = pick ? pick(full) : full;
   return found ? sendJson(ctx.res, 200, found) : sendJson(ctx.res, 404, { error: "not_found" });
 }

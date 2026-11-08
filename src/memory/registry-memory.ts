@@ -85,12 +85,13 @@ export function createRegistryMemoryService(opts: {
     return snapshot;
   }
 
-  function view(access?: MemoryDisclosure): MemoryService {
+  function view(accesses: readonly MemoryDisclosure[] = []): MemoryService {
     const views = new WeakMap<MemoryService, MemoryService>();
     const disclose = (service: MemoryService): MemoryService => {
-      if (!access) return service;
+      if (!accesses.length) return service;
       let disclosed = views.get(service);
-      if (!disclosed) views.set(service, (disclosed = disclosedMemory(service, access)));
+      if (!disclosed)
+        views.set(service, (disclosed = accesses.reduce((memory, access) => disclosedMemory(memory, access), service)));
       return disclosed;
     };
     const serve = async (): Promise<Snapshot> => {
@@ -98,7 +99,7 @@ export function createRegistryMemoryService(opts: {
       return { service: disclose(service), disabled: disabled.map(disclose) };
     };
     return {
-      withDisclosure: (next) => view(next),
+      withDisclosure: (next) => view([...accesses, next]),
       async recall(scopeId, context) {
         const { service, disabled } = await serve();
         return alongside(
