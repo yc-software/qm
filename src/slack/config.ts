@@ -3,7 +3,7 @@ import type { Receiver } from "@slack/bolt";
 import type { EnvelopeStaging } from "./envelope-staging.ts";
 import { botIdentityFromEnv } from "./delivery.ts";
 import { normalizeAllowFrom, parseAllowFrom } from "./allow-from.ts";
-import { trimTrailingSlashes } from "../util/text.ts";
+import { trimTrailing, trimTrailingSlashes } from "../util/text.ts";
 
 export const NO_RETRY = { retryConfig: { retries: 0 } } as const;
 export const HISTORY_NO_RETRY = { ...NO_RETRY, rejectRateLimitedCalls: true } as const;
@@ -51,7 +51,9 @@ export function parseAckEmoji(raw: string | undefined): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
   for (const part of (raw ?? "").split(/[\s,]+/)) {
-    const name = part.replace(/^:+/, "").replace(/:+$/, "").trim().toLowerCase();
+    const name = trimTrailing(part.replace(/^:+/, ""), (char) => char === ":")
+      .trim()
+      .toLowerCase();
     if (!name || seen.has(name) || !/^[a-z0-9_+-]+$/.test(name)) continue;
     seen.add(name);
     out.push(name);

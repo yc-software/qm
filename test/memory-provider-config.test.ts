@@ -333,3 +333,19 @@ test("provider URL errors name only the protocol and host and never echo secrets
     );
   }
 });
+
+test("plain HTTP reaches a private memory provider only on an origin the operator listed", () => {
+  const brain = withProvider({ url: "http://gbrain:8787/mcp" });
+  assert.throws(
+    () => parseMemoryProviderConfig(brain, ENV),
+    /\(http:\/\/gbrain\) must use HTTPS or a recognized private HTTP host/,
+  );
+  const listed = { ...ENV, PRIVATE_NETWORK_ALLOWED_ORIGINS: "http://gbrain:8787" };
+  const provider = parseMemoryProviderConfig(brain, listed)?.providers[0];
+  assert.ok(provider?.type === "mcp");
+  assert.equal(provider.url, "http://gbrain:8787/mcp");
+  assert.throws(
+    () => parseMemoryProviderConfig(withProvider({ url: "http://gbrain:9090/mcp" }), listed),
+    /must use HTTPS or a recognized private HTTP host/,
+  );
+});

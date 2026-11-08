@@ -1,5 +1,5 @@
 import { parseScopeId, type ScopeId, type ScopeKind } from "../types.ts";
-import { isPrivateNetworkIp } from "../util/network.ts";
+import { isPrivateNetworkIp, parsePrivateNetworkOrigins } from "../util/network.ts";
 import type { MemoryCapturePolicy, MemoryProviderRoute } from "./provider-router.ts";
 import { parseMemorableProvider, type MemorableMemoryProviderConfig } from "./memorable/config.ts";
 import { trimTrailingSlashes } from "../util/text.ts";
@@ -74,7 +74,7 @@ function string(value: unknown, at: string): string {
 const PRIVATE_HOSTS = ["localhost", "127.0.0.1"];
 const PRIVATE_SUFFIXES = [".internal", ".flycast", ".local"];
 const ACCEPTED_HOSTS = [...PRIVATE_HOSTS, ...PRIVATE_SUFFIXES.map((suffix) => `*${suffix}`)];
-const URL_HELP = `Accepted: https://<host>, or http:// on ${ACCEPTED_HOSTS.slice(0, -1).join(", ")} or ${ACCEPTED_HOSTS.at(-1)}; see docs/memory-providers.md#troubleshooting.`;
+const URL_HELP = `Accepted: https://<host>, http:// on ${ACCEPTED_HOSTS.slice(0, -1).join(", ")} or ${ACCEPTED_HOSTS.at(-1)}, or http:// on an origin listed in PRIVATE_NETWORK_ALLOWED_ORIGINS; see docs/memory-providers.md#troubleshooting.`;
 
 const namedPrivateHost = (hostname: string): boolean =>
   PRIVATE_HOSTS.includes(hostname) || PRIVATE_SUFFIXES.some((suffix) => hostname.endsWith(suffix));
@@ -88,7 +88,7 @@ const trimTrailing = (value: string, char: string): string => {
 export const isPrivateHost = (hostname: string): boolean =>
   namedPrivateHost(trimTrailing(hostname, ".")) || isPrivateNetworkIp(hostname);
 
-function privateMcpUrl(value: unknown, at: string): string {
+function privateMcpUrl(value: unknown, at: string, allowedOrigins: ReadonlySet<string>): string {
   const raw = string(value, at);
   let url: URL;
   try {
@@ -97,7 +97,7 @@ function privateMcpUrl(value: unknown, at: string): string {
     throw new Error(`${at} is not a valid URL (value not shown). ${URL_HELP}`);
   }
   const shown = `${url.protocol}//${url.hostname}`;
-  const privateHttp = url.protocol === "http:" && namedPrivateHost(url.hostname);
+  const privateHttp = url.protocol === "http:" && (namedPrivateHost(url.hostname) || allowedOrigins.has(url.origin));
   if (url.username || url.password || url.hash)
     throw new Error(`${at} (${shown}) must not carry credentials or a #fragment. ${URL_HELP}`);
   if (url.protocol !== "https:" && !privateHttp)
@@ -158,6 +158,7 @@ export function parseMemoryProviderConfig(
     throw new Error("MEMORY_PROVIDER_CONFIG must be valid JSON");
   }
   const root = object(parsed, "MEMORY_PROVIDER_CONFIG");
+  const allowedOrigins = parsePrivateNetworkOrigins(env.PRIVATE_NETWORK_ALLOWED_ORIGINS);
   if (!Array.isArray(root.providers) || !Array.isArray(root.routes))
     throw new Error("MEMORY_PROVIDER_CONFIG requires providers and routes arrays");
   const providers = root.providers.map((value, i) => {
@@ -172,7 +173,7 @@ export function parseMemoryProviderConfig(
     return {
       id,
       type: "mcp" as const,
-      url: privateMcpUrl(raw.url, `memory provider ${id}.url`),
+      url: privateMcpUrl(raw.url, `memory provider ${id}.url`, allowedOrigins),
       timeoutMs,
       attestActor: raw.attestActor === true,
       read: operation(raw.read, `memory provider ${id}.read`, env),
