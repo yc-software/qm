@@ -373,6 +373,36 @@ test("trace context goes only to QM's own services", async () => {
   assert.ok(internal.outbound.some((h) => typeof h["sentry-trace"] === "string"));
 });
 
+test("provider refusals and key-account failures are logged but never reported; transient provider failures are", async () => {
+  const { events, code, output } = await runReporting(`
+    console.error = () => {};
+    const { reportFailure } = await import('./src/util/errors.ts');
+    const { withErrorReporting } = await import('./src/admin/error-log.ts');
+    const { providerTurnError } = await import('./src/model/provider-error.ts');
+    const logged = [];
+    const errors = withErrorReporting({ record: (e) => logged.push(e.code), flush: async () => {}, list: async () => [], count: async () => 0 });
+    const failures = {
+      account: providerTurnError({ errorMessage: '402 billing', providerError: { status: 402, type: 'billing_error', code: 'insufficient_credits' } }),
+      auth: providerTurnError({ errorMessage: '401 invalid x-api-key', providerError: { status: 401, type: 'authentication_error' } }),
+      refusal: providerTurnError({ errorMessage: 'cyber_policy: flagged' }),
+      model_budget: providerTurnError({ errorMessage: '429 budget', providerError: { status: 429, type: 'budget_exceeded' } }),
+      transient: providerTurnError({ errorMessage: '529 overloaded', providerError: { status: 529, type: 'overloaded_error' } }),
+    };
+    for (const [code, error] of Object.entries(failures)) errors.record({ category: 'turn', code, message: error.raw, scopeLabel: 'private-scope' }, error);
+    reportFailure('model verification', providerTurnError({ errorMessage: '402', providerError: { status: 402 } }));
+    reportFailure('model verification', providerTurnError({ errorMessage: '500', providerError: { status: 500 } }));
+    await flushErrorReporting();
+    console.log(JSON.stringify(logged));
+    process.exit(0);
+  `);
+  assert.equal(code, 0);
+  assert.deepEqual(JSON.parse(output.trim()), ["account", "auth", "refusal", "model_budget", "transient"]);
+  assert.deepEqual(
+    events.map((event) => event.tags.error_code),
+    ["turn:transient", "model_verification"],
+  );
+});
+
 test("reportFailure sends one classified event per distinct failure and skips cancellations and recorded errors", async () => {
   const { events, code, output } = await runReporting(`
     console.error = (line) => console.log(line);

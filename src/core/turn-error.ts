@@ -22,6 +22,7 @@ export type ProviderErrorCode =
   | "rate_limit"
   | "refusal"
   | "auth"
+  | "account"
   | "context_too_long"
   | "not_found"
   | "model_unavailable"
@@ -34,9 +35,16 @@ export class ProviderTurnError extends Error {
   readonly retryable: boolean;
   readonly status?: number;
   readonly raw: string;
+  readonly modelName?: string;
   constructor(
     message: string,
-    info: { code: ProviderErrorCode; retryable: boolean; status?: number | undefined; raw: string },
+    info: {
+      code: ProviderErrorCode;
+      retryable: boolean;
+      status?: number | undefined;
+      raw: string;
+      modelName?: string | undefined;
+    },
   ) {
     super(message);
     this.name = "ProviderTurnError";
@@ -44,6 +52,7 @@ export class ProviderTurnError extends Error {
     this.retryable = info.retryable;
     if (info.status !== undefined) this.status = info.status;
     this.raw = info.raw;
+    if (info.modelName !== undefined) this.modelName = info.modelName;
   }
 }
 
@@ -99,8 +108,18 @@ export function isModelBudget(err: unknown): err is ProviderTurnError {
   return err instanceof ProviderTurnError && err.code === "model_budget";
 }
 
+const PROVIDER_DECISION_CODES = new Set<ProviderErrorCode>(["refusal", "auth", "account", "model_budget"]);
+
+export function isProviderDecision(err: unknown): err is ProviderTurnError {
+  return err instanceof ProviderTurnError && PROVIDER_DECISION_CODES.has(err.code);
+}
+
 export function turnFailureMessage(err: unknown): string {
   if (isModelBudget(err)) return MODEL_BUDGET_TEXT;
+  if (err instanceof ProviderTurnError && err.code === "refusal")
+    return `${err.modelName ?? "The model"} declined this request under the provider's usage policy ("${err.message}"). Rephrase, or switch model.`;
+  if (err instanceof ProviderTurnError && (err.code === "account" || err.code === "auth"))
+    return `The model key for ${err.modelName ?? "this model"} was refused by the provider ("${err.message}"). Whoever owns that key needs to fix billing or replace it.`;
   return (err instanceof NonRetryableTurnError || err instanceof ProviderTurnError) && err.message.trim()
     ? err.message
     : GENERIC_TURN_FAILURE;

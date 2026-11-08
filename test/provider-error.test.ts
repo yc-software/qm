@@ -3,7 +3,10 @@ import { createServer } from "node:http";
 import test from "node:test";
 import type { AssistantMessage, Model } from "@earendil-works/pi-ai";
 import { stream } from "@earendil-works/pi-ai/api/openai-completions";
+import { stream as anthropicStream } from "@earendil-works/pi-ai/api/anthropic-messages";
+import { stream as responsesStream } from "@earendil-works/pi-ai/api/openai-responses";
 import { providerTurnError } from "../src/model/provider-error.ts";
+import { turnFailureMessage } from "../src/core/turn-error.ts";
 
 test("vendored pi-ai keeps a LiteLLM 429 budget_exceeded as structured providerError", async (t) => {
   const body = {
@@ -50,6 +53,99 @@ test("vendored pi-ai keeps a LiteLLM 429 budget_exceeded as structured providerE
   assert.deepEqual([err.code, err.status, err.retryable], ["model_budget", 429, false]);
 });
 
+async function failedThrough<A extends "openai-completions" | "anthropic-messages" | "openai-responses">(
+  t: { after(fn: () => void): void },
+  api: A,
+  respond: (res: import("node:http").ServerResponse) => void,
+): Promise<AssistantMessage> {
+  const server = createServer((_req, res) => respond(res));
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  const { port } = server.address() as { port: number };
+  const model = {
+    id: "claude-opus-4-8",
+    name: "test-model",
+    api,
+    provider: api === "anthropic-messages" ? "anthropic" : "openai",
+    baseUrl: api === "anthropic-messages" ? `http://127.0.0.1:${port}` : `http://127.0.0.1:${port}/v1`,
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 1000,
+    maxTokens: 100,
+  } as Model<A>;
+  const run = {
+    "openai-completions": stream,
+    "anthropic-messages": anthropicStream,
+    "openai-responses": responsesStream,
+  }[api] as (m: Model<A>, c: unknown, o: unknown) => { result(): Promise<AssistantMessage> };
+  const failed = await run(
+    model,
+    { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
+    { apiKey: "test-key", maxRetries: 0 },
+  ).result();
+  assert.equal(failed.stopReason, "error");
+  return failed;
+}
+
+const json = (status: number, body: unknown) => (res: import("node:http").ServerResponse) => {
+  res.writeHead(status, { "content-type": "application/json" });
+  res.end(JSON.stringify(body));
+};
+
+test("a 402 billing_error from the key's provider is an account failure with a plain notice", async (t) => {
+  const reason =
+    "Billing account is not in good standing for this request. Add credits or resolve the billing issue before retrying.";
+  const failed = await failedThrough(
+    t,
+    "openai-completions",
+    json(402, { error: { message: reason, type: "billing_error", code: "insufficient_credits" } }),
+  );
+  const err = providerTurnError(failed);
+  assert.deepEqual([err.code, err.status, err.retryable], ["account", 402, false]);
+  assert.equal(
+    turnFailureMessage(err),
+    `The model key for Claude Opus 4.8 was refused by the provider ("Model provider API error (billing_error): ${reason}"). Whoever owns that key needs to fix billing or replace it.`,
+  );
+});
+
+test("Anthropic's low credit balance is an account failure, other invalid requests stay bad_request", async (t) => {
+  const lowCredit = await failedThrough(
+    t,
+    "anthropic-messages",
+    json(400, {
+      type: "error",
+      error: {
+        type: "invalid_request_error",
+        message:
+          "Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.",
+      },
+    }),
+  );
+  assert.deepEqual([providerTurnError(lowCredit).code, providerTurnError(lowCredit).retryable], ["account", false]);
+  const malformed = await failedThrough(
+    t,
+    "anthropic-messages",
+    json(400, { type: "error", error: { type: "invalid_request_error", message: "messages: field required" } }),
+  );
+  assert.equal(providerTurnError(malformed).code, "bad_request");
+});
+
+test("OpenAI's cyber_policy response.failed is a refusal naming the model and quoting the provider", async (t) => {
+  const reason = "This content was flagged for possible cybersecurity risk.";
+  const failed = await failedThrough(t, "openai-responses", (res) => {
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    const event = { type: "response.failed", response: { error: { code: "cyber_policy", message: reason } } };
+    res.end(`event: response.failed\ndata: ${JSON.stringify(event)}\n\n`);
+  });
+  const err = providerTurnError(failed);
+  assert.deepEqual([err.code, err.retryable], ["refusal", false]);
+  assert.equal(
+    turnFailureMessage(err),
+    `Claude Opus 4.8 declined this request under the provider's usage policy ("cyber_policy: ${reason}"). Rephrase, or switch model.`,
+  );
+});
+
 test("providerTurnError maps documented status, type and code without reading errorMessage", () => {
   const failed = (providerError: AssistantMessage["providerError"], rawStopReason?: string) =>
     ({
@@ -64,6 +160,8 @@ test("providerTurnError maps documented status, type and code without reading er
     [failed({ status: 429, code: "insufficient_quota" }), "model_budget", false],
     [failed({ status: 400, code: "context_length_exceeded" }), "context_too_long", false],
     [failed({ status: 401, type: "authentication_error" }), "auth", false],
+    [failed({ status: 402, type: "billing_error", code: "insufficient_credits" }), "account", false],
+    [failed({ status: 400, code: "cyber_policy" }), "refusal", false],
     [failed({ status: 429, type: "rate_limit_error" }), "rate_limit", true],
     [failed({ status: 404, type: "not_found_error" }), "not_found", false],
     [failed({ status: 404, code: "model_not_found" }), "not_found", false],
