@@ -154,6 +154,10 @@ test("subagents a Slack bot's turns open and message keep the bot marker and its
   await execute(childRuns[0]!);
   assert.equal(childRuns[0]!.request.botActor, true);
   assert.deepEqual(actAsActor, [false, false, false, false], "every turn the bot started or messaged");
+  assert.deepEqual(await runtimes.get(threadRef)!(active, { action: "set", model: "Astra", lifetime: "task" }), {
+    ok: false,
+    error: "live_actor_required",
+  });
   assert.deepEqual(await runtimes.get(child.threadRef)!(active, { action: "set", model: "Astra", lifetime: "task" }), {
     ok: false,
     error: "live_actor_required",

@@ -1,6 +1,7 @@
 import { sendJson } from "../http.ts";
 import { swallowAs } from "../../util/errors.ts";
 import { isObj } from "./shared.ts";
+import { livePersonCapability } from "../artifact-share.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
 import { KeychainError } from "../../credentials/keychain.ts";
 import type { PersonaResult } from "../../personas/persona-service.ts";
@@ -156,7 +157,7 @@ async function setPersonaAccess(ctx: ApiCtx): Promise<void> {
 }
 
 function liveOwnerTurn(ctx: ApiCtx): boolean {
-  if (!ctx.capability || ctx.capability.liveAuthor === true || ctx.capability.liveActor === true) return true;
+  if (!ctx.capability || livePersonCapability(ctx.capability)) return true;
   sendJson(ctx.res, 403, {
     error: "forbidden",
     message: "credentials can only be attached or detached on a turn the owner sent themself",

@@ -879,7 +879,12 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
 
       try {
         if (orgSkillCede) {
-          const promoted = await app.promoteSkill(home.id, toScope, capability.actorId, capability.liveActor === true);
+          const promoted = await app.promoteSkill(
+            home.id,
+            toScope,
+            capability.actorId,
+            capability.liveActor === true && livePersonCapability(capability),
+          );
           return {
             ok: true,
             verb: "promote",
@@ -891,7 +896,11 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
         }
 
         if (req.move) {
-          const deployPersonTransfer = req.type === "deploy" && toKind === "personal" && capability.liveActor === true;
+          const deployPersonTransfer =
+            req.type === "deploy" &&
+            toKind === "personal" &&
+            capability.liveActor === true &&
+            livePersonCapability(capability);
           if (toKind === "persona" && req.type !== "skill" && req.type !== "file") {
             return {
               ok: false,
