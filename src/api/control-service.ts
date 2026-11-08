@@ -32,7 +32,7 @@ import {
 import { actsAsScope, parseScopeId, type Permission, type ScopeId } from "../types.ts";
 import { cronRef, encodeRef } from "../acl/resource-ref.ts";
 import type { App, VisibleCron } from "./app.ts";
-import { liveForLock, PersonaLocked } from "../personas/channel-personas.ts";
+import { PersonaLocked } from "../personas/channel-personas.ts";
 
 export interface CronCreateRequest {
   runtime?: Cron["runtime"];
@@ -804,7 +804,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
           allowSharedScope: true,
           expectedVersion,
           sessionId: capability.sessionId,
-          liveActor: liveForLock(livePersonCapability(capability), capability.botActor),
+          liveActor: livePersonCapability(capability),
         });
         return { ok: true, version };
       } catch (e) {
@@ -925,7 +925,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
             return { ok: false, code: "forbidden", message: SHARED_SKILL_TRIGGER_REFUSAL };
           }
           await app.moveArtifactHome(req.type, home.id, toScope, capability.actorId, {
-            liveActor: liveForLock(livePersonCapability(capability), capability.botActor),
+            liveActor: livePersonCapability(capability),
           });
           return {
             ok: true,
@@ -950,7 +950,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
               permission,
               grantedBy: capability.actorId,
             },
-            { ...notify, liveActor: liveForLock(livePersonCapability(capability), capability.botActor) },
+            { ...notify, liveActor: livePersonCapability(capability) },
           );
         return {
           ok: true,

@@ -5,7 +5,7 @@ import { livePersonCapability } from "../artifact-share.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
 import { KeychainError } from "../../credentials/keychain.ts";
 import type { PersonaResult } from "../../personas/persona-service.ts";
-import { liveForLock, type ChannelPersonaResult } from "../../personas/channel-personas.ts";
+import type { ChannelPersonaResult } from "../../personas/channel-personas.ts";
 import type { Cron } from "../../triggers/types.ts";
 
 function principalOf(ctx: ApiCtx, from: "query" | "body"): string | null {
@@ -236,14 +236,7 @@ async function setChannelPersona(ctx: ApiCtx): Promise<void> {
   const personaId = isObj(ctx.body) ? ctx.body.personaId : undefined;
   if (personaId !== null && (typeof personaId !== "string" || !personaId))
     return sendJson(ctx.res, 400, { error: "bad_request", message: "personaId (string or null) required" });
-  respondChannel(
-    ctx,
-    await channels.set(
-      { id: principalId, live: liveForLock(liveTurn(ctx), ctx.capability?.botActor) },
-      ctx.params.channel!,
-      personaId,
-    ),
-  );
+  respondChannel(ctx, await channels.set({ id: principalId, live: liveTurn(ctx) }, ctx.params.channel!, personaId));
 }
 
 export const personaRoutes: ReadonlyArray<Route<ApiCtx>> = [
