@@ -5,8 +5,6 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createInsecureTestServer } from "../src/api/server.ts";
-import type { AddressInfo } from "node:net";
 import { buildApp } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
@@ -46,14 +44,6 @@ async function heardProbe(bus: { emit(e: SessionStateEvent): void }, got: Sessio
   for (let attempt = 0; attempt < 100 && !got.some((e) => e.threadRef === "web:U1:probe"); attempt++) {
     bus.emit({ threadRef: "web:U1:probe", state: "idle", at: 1 });
     await waitFor(() => got.some((e) => e.threadRef === "web:U1:probe"), 100);
-  }
-}
-
-function parseFrame(data: string): SessionStateEvent | null {
-  try {
-    return JSON.parse(data) as SessionStateEvent;
-  } catch {
-    return null;
   }
 }
 
@@ -186,50 +176,6 @@ test("a shed event for an unknown thread still reaches subscribers, just without
   assert.ok(event);
   assert.equal(event.participants, undefined);
   assert.equal(event.participantsShed, undefined);
-});
-
-test("GET /v1/session-state/events streams transitions as SSE frames", async () => {
-  const built = freshApp();
-  built.runtime.start();
-  const core = createInsecureTestServer(built.app, { webhookReceiver: built.webhookReceiver });
-  core.listen(0);
-  const base = `http://localhost:${(core.address() as AddressInfo).port}`;
-  try {
-    const res = await fetch(`${base}/v1/session-state/events`, { signal: AbortSignal.timeout(15_000) });
-    assert.equal(res.status, 200);
-    assert.match(res.headers.get("content-type") ?? "", /text\/event-stream/);
-
-    await built.app.turn(dm(`!run ${BLOCKED_CMD}`, "web:U1:sse"));
-
-    const reader = res.body!.getReader();
-    let buf = "";
-    const frames: SessionStateEvent[] = [];
-    const deadline = Date.now() + 10_000;
-    while (Date.now() < deadline) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buf += new TextDecoder().decode(value);
-      for (const frame of buf.split("\n\n")) {
-        const data = frame
-          .split("\n")
-          .find((l) => l.startsWith("data: "))
-          ?.slice("data: ".length);
-        if (!data) continue;
-        const ev = parseFrame(data);
-        if (ev && ev.threadRef === "web:U1:sse" && ev.state !== "metadata" && !frames.some((f) => f.state === ev.state))
-          frames.push(ev);
-      }
-      if (frames.some((f) => f.state === "awaiting_approval")) break;
-    }
-    await reader.cancel().catch(() => {});
-    assert.deepEqual(
-      frames.map((f) => f.state),
-      ["working", "awaiting_approval"],
-    );
-  } finally {
-    await new Promise<void>((r) => core.close(() => r()));
-    await built.runtime.stop();
-  }
 });
 
 function resolvedDm(text: string, thread: string): OrchestratorInput {

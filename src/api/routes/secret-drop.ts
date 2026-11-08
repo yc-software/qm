@@ -2,6 +2,7 @@ import { orgId as configOrgId } from "../../config.ts";
 import {
   mintCapabilityToken,
   verifyCapabilityToken,
+  MEMORY_BRAIN_DROP_AUD,
   SECRET_DROP_AUD,
   type CapabilityClaims,
 } from "../../auth/capability-token.ts";
@@ -20,7 +21,14 @@ import { canonicalPerson, samePerson } from "../../directory/person.ts";
 import { escapeHtml } from "../../../plugins/chassis/src/http.ts";
 import { sendJson } from "../http.ts";
 import type { ApiCtx, Route } from "./route.ts";
-import { adminStanding, audit, orgScope, resolveCapabilityDestination, verifiedConversationSpeaker } from "./shared.ts";
+import {
+  adminStanding,
+  audit,
+  orgScope,
+  personalCapability,
+  resolveCapabilityDestination,
+  verifiedConversationSpeaker,
+} from "./shared.ts";
 import { reportFailureAs, swallow } from "../../util/errors.ts";
 
 const TRIGGERED = "secret-drop links can only be minted on a turn a person sent — this turn was fired by a trigger";
@@ -37,7 +45,7 @@ function dropGone(reason: "not_found" | "expired"): string {
 
 interface BrainDestination {
   label: string;
-  origin: string;
+  endpoint: string;
   scopes: string[];
 }
 
@@ -117,6 +125,22 @@ function dropNotYoursHtml(): string {
   );
 }
 
+function brainChangedHtml(): string {
+  return dropPage(
+    "Memory brain changed",
+    `<h1 id="title">This memory brain changed after the link was made</h1><p>The brain this link was made for was removed or moved to another address, so the link can't set its secret. It works again if the brain moves back. Otherwise, ask the agent for a fresh link.</p>`,
+  );
+}
+
+function auditBrainRefusal(deps: ApiCtx["deps"], drop: SecretDropRecord, message: string): void {
+  audit(deps, {
+    principalId: drop.ownerId,
+    action: "memory-registry.brain.secret.refused",
+    resource: `${drop.memoryBrain!.id}: ${message}`,
+    scopeLabel: orgScope(deps),
+  });
+}
+
 function dropScopeAuthorized(ctx: ApiCtx, rec: SecretDropRecord, claims?: CapabilityClaims): Promise<boolean> {
   const audienceScopeId = rec.audienceScopeId;
   if (!audienceScopeId || !isSharedScope(audienceScopeId)) return Promise.resolve(true);
@@ -144,7 +168,7 @@ async function dropLinkClaims(
   const claims = await verifyCapabilityToken(token, capSecret);
   if (
     !claims ||
-    claims.aud !== SECRET_DROP_AUD ||
+    claims.aud !== (rec.memoryBrain ? MEMORY_BRAIN_DROP_AUD : SECRET_DROP_AUD) ||
     claims.drop !== dropId ||
     !samePerson(claims.actorId, rec.ownerId) ||
     (rec.audienceScopeId && claims.scopeId !== rec.audienceScopeId)
@@ -185,7 +209,7 @@ function dropFormHtml(
 <div class="request"><p>The agent asked for this so it can:</p><strong>${purpose_}</strong>${requested_ ? `<span class="requested">Requested ${requested_}</span>` : ""}</div>
 ${
   brain
-    ? `<div class="request"><p>Where conversation text goes:</p><strong>${escapeHtml(brain.label)} at ${escapeHtml(brain.origin)}</strong><span class="requested">Once the secret is saved, QM sends this brain recall queries and saved facts for ${escapeHtml(brain.scopes.length ? brain.scopes.join(", ") : "no one yet: nothing is bound to it")}.</span></div>`
+    ? `<div class="request"><p>Where conversation text goes:</p><strong>${escapeHtml(brain.label)} at ${escapeHtml(brain.endpoint)}</strong><span class="requested">Once the secret is saved, QM sends this brain recall queries and saved facts for ${escapeHtml(brain.scopes.length ? brain.scopes.join(", ") : "no one yet: nothing is bound to it")}.</span></div>`
     : ""
 }
 <form id=f>
@@ -199,8 +223,12 @@ ${inputs}
   );
 }
 
-async function brainTarget(ctx: ApiCtx, b: Record<string, unknown>): Promise<SecretDropRecord["memoryBrain"] | null> {
-  const { res, deps, capability } = ctx;
+async function brainTarget(
+  ctx: ApiCtx,
+  b: Record<string, unknown>,
+  actorId: string,
+): Promise<SecretDropRecord["memoryBrain"] | null> {
+  const { res, deps } = ctx;
   if (!deps.memoryRegistry) {
     sendJson(res, 404, { error: "not_found" });
     return null;
@@ -214,7 +242,7 @@ async function brainTarget(ctx: ApiCtx, b: Record<string, unknown>): Promise<Sec
     return null;
   }
   const record = readRegistry((await deps.memoryRegistry.current()).record);
-  const actor = canonicalPerson(capability!.actorId);
+  const actor = canonicalPerson(actorId);
   const brain = record.brains.find(({ id }) => id === b.memoryBrain);
   const refusal = brainRefusal(record, brain ?? { id: String(b.memoryBrain) }, actor, await adminStanding(deps, actor));
   if (refusal) {
@@ -228,14 +256,21 @@ async function brainTarget(ctx: ApiCtx, b: Record<string, unknown>): Promise<Sec
   return { id: brain.id, url: brain.url };
 }
 
-async function brainDestination(ctx: ApiCtx, rec: SecretDropRecord): Promise<BrainDestination | undefined> {
+async function brainDestination(
+  ctx: ApiCtx,
+  rec: SecretDropRecord,
+): Promise<BrainDestination | { refused: string } | undefined> {
   const target = rec.memoryBrain;
-  if (!target || !ctx.deps.memoryRegistry) return undefined;
+  if (!target) return undefined;
+  if (!ctx.deps.memoryRegistry) return { refused: "this core has no memory registry" };
   const record = readRegistry((await ctx.deps.memoryRegistry.current()).record);
   const brain = record.brains.find(({ id }) => id === target.id);
+  if (!brain) return { refused: `brain ${target.id} was removed after this link was made` };
+  if (brain.url !== target.url) return { refused: `brain ${target.id} changed after this link was made` };
+  const url = new URL(target.url);
   return {
-    label: brain?.label ?? target.id,
-    origin: new URL(target.url).origin,
+    label: brain.label,
+    endpoint: `${url.origin}${url.pathname}`,
     scopes: record.bindings
       .filter((binding) => binding.brain === target.id)
       .map(({ scope }) => {
@@ -257,12 +292,7 @@ async function saveBrainSecret(
   if (!registry) return sendJson(res, 404, { error: "not_found" });
   const target = drop.memoryBrain!;
   const refuse = (status: number, error: string, message: string) => {
-    audit(deps, {
-      principalId: drop.ownerId,
-      action: "memory-registry.brain.secret.refused",
-      resource: `${target.id}: ${message}`,
-      scopeLabel: orgScope(deps),
-    });
+    auditBrainRefusal(deps, drop, message);
     return sendJson(res, status, { error, message });
   };
   const owner = canonicalPerson(drop.ownerId);
@@ -296,7 +326,8 @@ async function saveBrainSecret(
 }
 
 async function mintDrop(ctx: ApiCtx): Promise<void> {
-  const { res, deps, body, capability, secret } = ctx;
+  const { res, deps, body, secret } = ctx;
+  const capability = personalCapability(ctx);
   if (!deps.keychain || !deps.secretDrops) return sendJson(res, 404, { error: "not_found" });
   if (!capability)
     return sendJson(res, 401, {
@@ -317,7 +348,7 @@ async function mintDrop(ctx: ApiCtx): Promise<void> {
     onBehalfOf?: unknown;
     memoryBrain?: unknown;
   };
-  const brain = b.memoryBrain === undefined ? undefined : await brainTarget(ctx, b);
+  const brain = b.memoryBrain === undefined ? undefined : await brainTarget(ctx, b, capability.actorId);
   if (brain === null) return;
   const service = brain ? `memory brain ${brain.id}` : b.service;
   if (typeof service !== "string" || !service.trim() || typeof b.purpose !== "string" || !b.purpose.trim()) {
@@ -378,7 +409,7 @@ async function mintDrop(ctx: ApiCtx): Promise<void> {
       ...(capability.botActor ? { botActor: true } : {}),
       ...(capability.liveActor ? { liveActor: true } : {}),
       ...(capability.members ? { members: capability.members } : {}),
-      aud: SECRET_DROP_AUD,
+      aud: brain ? MEMORY_BRAIN_DROP_AUD : SECRET_DROP_AUD,
       drop: dropId,
       exp: Date.now() + SECRET_DROP_TTL_MS,
     },
@@ -411,8 +442,14 @@ async function dropForm(ctx: ApiCtx): Promise<void> {
     fields: peeked.rec.fields,
     createdAt: peeked.rec.createdAt,
   };
+  const brain = await brainDestination(ctx, peeked.rec);
+  if (brain && "refused" in brain) {
+    auditBrainRefusal(deps, peeked.rec, brain.refused);
+    res.writeHead(409, { "content-type": "text/html; charset=utf-8" });
+    return void res.end(brainChangedHtml());
+  }
   res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-  res.end(dropFormHtml(params.id!, rec, await brainDestination(ctx, peeked.rec)));
+  res.end(dropFormHtml(params.id!, rec, brain));
 }
 
 async function redeemDrop(ctx: ApiCtx): Promise<void> {
@@ -520,7 +557,7 @@ async function redeemDrop(ctx: ApiCtx): Promise<void> {
 }
 
 export const secretDropRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "POST", path: "/v1/keychain/drops", actor: "system", auth: "either", handle: mintDrop },
+  { method: "POST", path: "/v1/keychain/drops", browser: true, actor: "person", auth: "either", handle: mintDrop },
   { method: "GET", path: "/v1/keychain/drops/:id/form", auth: "source", handle: dropForm },
   { method: "POST", path: "/v1/keychain/drops/:id", actor: "system", auth: "source", handle: redeemDrop },
 ];

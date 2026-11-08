@@ -24,6 +24,7 @@ import type { CurrentScopeMembers } from "./scope-membership.ts";
 
 type ContextInput = Omit<Parameters<typeof sharingSourcesForTurn>[0], "posture"> & {
   resolution: Resolution;
+  audienceScopeId?: ScopeId;
   external?: boolean;
   audience: Principal[];
   acl: Pick<AclStore, "sharedOfKindForAudience">;
@@ -82,6 +83,10 @@ export async function resolveTurnContext(input: ContextInput) {
     currentScopeMembers: input.currentScopeMembers,
   };
   const memory = disclosedMemory(input.memory, disclosure);
+  const reader = {
+    actorId: input.actor.id,
+    ...(input.audienceScopeId ? { audienceScopeId: input.audienceScopeId } : {}),
+  };
   const handles = [...resolution.grantedHandles, ...(await carriedFileHandles(sharingSources, input.files))];
   const memoryLabels = await memoryRecallLabels(read, input.directory, input.projects);
   return {
@@ -120,7 +125,7 @@ export async function resolveTurnContext(input: ContextInput) {
             {
               query,
               ...(text ? { input: text } : {}),
-              actorId: input.actor.id,
+              ...reader,
               maxChars: RECALL_MAX_CHARS,
               ...(disclosedFacts ? { disclosedFacts } : {}),
               ...(report ? { report } : {}),
@@ -135,7 +140,10 @@ export async function resolveTurnContext(input: ContextInput) {
       scope?: ScopeId,
       report?: MemoryRecallContext["report"],
     ): Promise<string[] | null> => {
-      const hits = await searchNotebooks(memory, read, query, limit, scope, input.actor.id, report);
+      const hits = await searchNotebooks(memory, read, query, limit, scope, {
+        ...reader,
+        ...(report ? { report } : {}),
+      });
       if (hits) for (const source of scope === undefined ? read : [scope]) recordRead(source, "memory");
       return hits;
     },

@@ -60,7 +60,7 @@ docker run -d --name "$container" --network "$network" --group-add "$socket_grou
   -e MODEL_GATEWAY_URL -e MODEL_GATEWAY_API_KEY -e MODEL_GATEWAY_API_KEY_HEADER -e MODEL_GATEWAY_MODELS \
   -e "EXPECTED_SOURCE_SHA=$source_sha" -e "QM_CORE_CONTAINER=$container" \
   -e "DATABASE_URL=postgres://postgres:$database_password@$database:5432/qm" -e "CONNECTOR_SECRET_KEY=$connector_secret_key" \
-  -e "LOCAL_SANDBOX_IMAGE=$local_image" -e LOCAL_SANDBOX_CPUS=2 -e LOCAL_SANDBOX_MEMORY_MB=2048 \
+  -e "LOCAL_SANDBOX_IMAGE=$local_image" -e LOCAL_SANDBOX_CPUS=2 \
   -e PI_MODEL=claude-haiku-4-5 \
   "$core_image" node test/live-slack/local-provider.ts >/dev/null
 followed=0

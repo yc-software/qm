@@ -114,11 +114,19 @@ test("a registry brain is called only through the guarded fetch, which refuses p
       onError: (error) => void errors.push(error),
     });
 
-  const refused = await serving().recall("personal:U1", { query: "bees", actorId: "U1" });
+  const refused = await serving().recall("personal:U1", {
+    query: "bees",
+    actorId: "U1",
+    audienceScopeId: "personal:U1",
+  });
   assert.equal(recallText(refused), "personal notebook");
   assert.match(String((errors[0] as Error | undefined)?.cause ?? errors[0]), /private network address/);
   assert.deepEqual([brain.requests, brain.tokenRequests], [[], []]);
 
-  const allowed = await serving(loopbackFetch).recall("personal:U1", { query: "bees", actorId: "U1" });
+  const allowed = await serving(loopbackFetch).recall("personal:U1", {
+    query: "bees",
+    actorId: "U1",
+    audienceScopeId: "personal:U1",
+  });
   assert.match(recallText(allowed), /Alice keeps bees\./);
 });

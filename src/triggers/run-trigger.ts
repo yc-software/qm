@@ -51,6 +51,7 @@ export interface TriggerSpec extends Pick<
   destination?: Destination;
   message?: string;
   threadRef?: string;
+  personaId?: string;
   unattendedGrants?: string[];
   cronScript?: CronScript;
   shadow?: boolean;
@@ -303,6 +304,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       },
       ...(spec.unattendedGrants && grantsHomedWithOwner(spec) ? { unattendedGrants: spec.unattendedGrants } : {}),
       ...(spec.cronScript ? { cronScript: spec.cronScript } : {}),
+      ...(spec.personaId ? { personaId: spec.personaId } : {}),
       ...(spec.infrequentCron ? { infrequentCron: true } : {}),
       ...(spec.runtime ? { model: spec.runtime.modelId } : {}),
       ...turnModelOptions({
@@ -351,7 +353,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       }
       await reachEnqueue({
         deliveries: deps.deliveries,
-        destination: spec.destination,
+        destination: res.persona ? { ...spec.destination, persona: res.persona } : spec.destination,
         text: res.reply ?? "",
         ...(res.attachments?.length ? { attachments: res.attachments } : {}),
         idempotencyKey: spec.fireKey,

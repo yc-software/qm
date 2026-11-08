@@ -106,6 +106,7 @@ import { createPostgresMapFactory, type DurableMap } from "./persistence/durable
 import type { PersistedUiState, UiStateStore } from "./surfaces/ui-state.ts";
 import { slackUserClientFactory } from "./loops/sources/slack.ts";
 import { configurePgCaTrust, configurePgPooling } from "./persistence/pg-pool.ts";
+import { configurePublicFetch } from "./util/network.ts";
 import { createPostgresLeaderLease, type LeaderLease } from "./persistence/leader-lease.ts";
 import { createPostgresAdvisoryLock, type AdvisoryLock } from "./persistence/advisory-lock.ts";
 import type {
@@ -398,7 +399,7 @@ import { type probeModel, type ProviderKeys } from "./model/model-runtime.ts";
 
 export interface Runtime {
   start(services?: BackgroundServices): void;
-  stop(): Promise<void>;
+  stop(beforeClose?: () => Promise<void>): Promise<void>;
   releaseInFlightRuns(): Promise<void>;
 }
 
@@ -406,7 +407,6 @@ export function stopWithBackstop(
   runtime: Pick<Runtime, "stop" | "releaseInFlightRuns">,
   shutdownDrainMs: number,
   label: string,
-  beforeExit?: () => void,
 ): void {
   const hardExit = setTimeout(() => {
     console.error(`[${label}] drain overran; releasing in-flight leases before forced exit`);
@@ -422,7 +422,6 @@ export function stopWithBackstop(
     async () => {
       await flushErrorReporting();
       clearTimeout(hardExit);
-      beforeExit?.();
       process.exit();
     },
     (e: unknown) => {
@@ -564,6 +563,7 @@ export function buildApp(
     ...(config.databaseCaCert ? { cert: config.databaseCaCert } : {}),
     ...(config.databaseCaCertFile ? { certFile: config.databaseCaCertFile } : {}),
   });
+  configurePublicFetch(config.privateNetworkAllowedOrigins);
   const reusedConnectorKey = [
     ["CORE_SIGNING_SECRET", config.signingSecret],
     ["CAPABILITY_SECRET", config.capabilitySecret],
@@ -960,7 +960,6 @@ export function buildApp(
         ...(modal.image ? { image: modal.image } : {}),
         ...(modal.environment ? { environment: modal.environment } : {}),
         ...(modal.cpus !== undefined ? { cpus: modal.cpus } : {}),
-        ...(modal.memoryMb !== undefined ? { memoryMb: modal.memoryMb } : {}),
         ...(modal.regions?.length ? { regions: modal.regions } : {}),
         ...(modal.sandboxTimeoutSec ? { sandboxTimeoutMs: modal.sandboxTimeoutSec * 1000 } : {}),
         ...(modal.reapIdleSec ? { idleTimeoutMs: 2 * modal.reapIdleSec * 1000 } : {}),
@@ -1437,6 +1436,9 @@ export function buildApp(
     overrides.agent ??
     createAgent({
       ...agentConfigOptions(config),
+      memorySizedBackends: Object.entries(sandboxBackends)
+        .filter(([, backend]) => backend?.profile.sizesMemory)
+        .map(([name]) => name),
       routes: modelRoutes,
       signals: runSignals,
     });
@@ -2950,7 +2952,7 @@ export function buildApp(
       drain.start(services);
     },
     releaseInFlightRuns,
-    async stop() {
+    async stop(beforeClose) {
       renderBasePreparing?.abort();
       const draining = drain.stop();
       await stopBackground();
@@ -2962,6 +2964,7 @@ export function buildApp(
       ]).catch(swallowAs("wiring: worker drain failed", undefined));
       await releaseInFlightRuns();
       await draining;
+      await beforeClose?.();
       stopStreamSync();
       await Promise.all(
         [
@@ -2984,6 +2987,7 @@ export function buildApp(
     app,
     checkReadiness: async (signal) => {
       await pgArtifactMap.pool.q("SELECT 1", [], { signal });
+      await configStore.hydrate?.();
     },
     deploymentLayer,
     deploymentLayerStore,

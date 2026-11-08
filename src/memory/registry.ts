@@ -122,7 +122,7 @@ export function readRegistry(value: unknown): MemoryRegistry {
   if (value === null || value === undefined) return EMPTY_MEMORY_REGISTRY;
   const record = value as Partial<MemoryRegistry>;
   if ((record.schema !== 1 && record.schema !== 2) || !Array.isArray(record.brains) || !Array.isArray(record.bindings))
-    throw new Error("the memory registry record has a shape this QM build doesn't know");
+    throw conflict("the memory registry record has a shape this QM build doesn't know");
   return record as MemoryRegistry;
 }
 
@@ -247,6 +247,8 @@ export function putBrain(
   const url = text(body.url ?? existing?.url, "url");
   publicUrl(url);
   const clientSecret = body.clientSecret === undefined ? undefined : nonBlank(body.clientSecret, "clientSecret");
+  if (clientSecret !== undefined && (body.url === undefined || body.url === null))
+    throw invalid("a request that sets clientSecret must restate url, so the secret goes only to a url it names");
   const kept = url === existing?.url ? existing.auth.clientSecretEnc : undefined;
   const clientSecretEnc = clientSecret === undefined ? kept : encryptSecret(clientSecret, change.key);
   const timeoutMs = body.timeoutMs ?? existing?.timeoutMs;
@@ -341,7 +343,7 @@ export function setBrainSecret(
     throw conflict(
       `brain ${target.id} changed after this link was made, so the secret wasn't saved; ask for a fresh link`,
     );
-  return putBrain(record, target.id, { clientSecret }, change);
+  return putBrain(record, target.id, { clientSecret, url: target.url }, change);
 }
 
 const MEMBER_BRAIN_FIELDS = new Set(["url", "clientId", "label"]);

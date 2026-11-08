@@ -152,7 +152,7 @@ test("the documented gbrain recipe keeps the notebook first everywhere and sends
   const answered: Record<string, string[]> = {};
   for (const scope of ["personal:U0JORDAN", "channel:C0ROOM", "group:G0CREW", "team:T0ACME", "org:acme"]) {
     const { outcomes } = await withProviders("search", (report) =>
-      memory.recall(scope, { query: "seats", actorId: "U0JORDAN", maxChars: 6000, report }),
+      memory.recall(scope, { query: "seats", actorId: "U0JORDAN", audienceScopeId: scope, maxChars: 6000, report }),
     );
     answered[scope] = outcomes.map(({ provider, scope: answeredScope }) => `${provider}@${answeredScope}`).sort();
   }
@@ -169,7 +169,7 @@ test("the documented gbrain recipe keeps the notebook first everywhere and sends
     ["Prefers window seats"],
     1,
     { actorId: "U0JORDAN", context: "conversation" },
-    { mode: "automatic" },
+    { mode: "automatic", audienceScopeId: JORDAN },
   );
   assert.deepEqual(notebookWrites, ["Prefers window seats"]);
   assert.deepEqual(
@@ -185,9 +185,15 @@ test("QM's gbrain requests satisfy the vendored contract's tools and actor rules
       : committed(1, "8c1f7a0e-0000-5000-8000-000000000002"),
   );
   const by = { actorId: "jordan@acme.example", context: "conversation" as const };
-  const context = { mode: "explicit" as const, conversationScopeId: JORDAN };
+  const context = { mode: "explicit" as const, audienceScopeId: JORDAN, conversationScopeId: JORDAN };
   await withProviders("search", (report) =>
-    memory.recall(JORDAN, { query: "seats", actorId: "jordan@acme.example", maxChars: 6000, report }),
+    memory.recall(JORDAN, {
+      query: "seats",
+      actorId: "jordan@acme.example",
+      audienceScopeId: JORDAN,
+      maxChars: 6000,
+      report,
+    }),
   );
   await writeFacts(memory, JORDAN, ["Prefers aisle seats", "Takes notes by hand"], by, context, "run-1");
   await writeFacts(memory, JORDAN, ["Prefers aisle seats", "Takes notes by hand"], by, context, "run-1");
@@ -241,7 +247,7 @@ test("gbrain's answers and refusals become the outcomes the contract classes the
   const recall = async (result: CallToolResult) => {
     answer = result;
     const { value, outcomes } = await withProviders("search", (report) =>
-      memory.recall(JORDAN, { query: "seats", actorId: "U0JORDAN", maxChars: 6000, report }),
+      memory.recall(JORDAN, { query: "seats", actorId: "U0JORDAN", audienceScopeId: JORDAN, maxChars: 6000, report }),
     );
     const rows = (value ?? []).filter(({ source }) => source?.provider === "gbrain").map(({ text }) => text);
     return { outcome: gbrainOutcomes(outcomes).join(","), rows };
@@ -278,6 +284,7 @@ test("gbrain's answers and refusals become the outcomes the contract classes the
       { actorId: "U0JORDAN", context: "conversation" },
       {
         mode: "explicit",
+        audienceScopeId: JORDAN,
       },
       "run-1",
     );
@@ -337,7 +344,7 @@ test("a gbrain write's provenance stays within the contract's limit for a long s
     scope,
     ["Prefers aisle seats"],
     { actorId: "U0JORDAN", context: "conversation" },
-    { mode: "explicit", conversationScopeId: scope },
+    { mode: "explicit", audienceScopeId: scope, conversationScopeId: scope },
     "run-3",
   );
   assert.deepEqual(gbrainOutcomes(outcomes), ["committed"]);
@@ -361,6 +368,7 @@ test("automatic capture of more than 20 facts reaches gbrain as writes within th
   await strategy.onTurnEnd!({
     scopeId: JORDAN,
     actorId: "U0JORDAN",
+    audienceScopeId: JORDAN,
     idempotencyKey: "run-4",
     input: "My seats",
     reply: "Noted",
@@ -401,6 +409,7 @@ test("a strict gbrain route that refuses a later batch still leaves every automa
     strategy.onTurnEnd!({
       scopeId: JORDAN,
       actorId: "U0JORDAN",
+      audienceScopeId: JORDAN,
       idempotencyKey: "run-5",
       input: "My seats",
       reply: "Noted",
@@ -429,6 +438,7 @@ test("a long conversation's recall asks gbrain with the member's message, within
     query: memoryRecallQuery(message, history),
     input: message,
     actorId: "U0JORDAN",
+    audienceScopeId: JORDAN,
     maxChars: 6000,
   });
 

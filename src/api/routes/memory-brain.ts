@@ -13,7 +13,7 @@ import {
   type RegistryChange,
 } from "../../memory/registry.ts";
 import { sendJson } from "../http.ts";
-import { writeRegistry } from "./admin/memory-registry.ts";
+import { registryError, writeRegistry } from "./admin/memory-registry.ts";
 import { parseScopeId, scopeId } from "../../types.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import { adminStanding, audit, orgScope } from "./shared.ts";
@@ -75,7 +75,13 @@ async function getOwnBrain(ctx: ApiCtx): Promise<void> {
     resource: memberBrainId(owner),
     scopeLabel: orgScope(ctx.deps),
   });
-  return sendJson(ctx.res, 200, ownBrain(readRegistry((await registry.current()).record), registry, owner));
+  let record: MemoryRegistry;
+  try {
+    record = readRegistry((await registry.current()).record);
+  } catch (error) {
+    return registryError(ctx, error);
+  }
+  return sendJson(ctx.res, 200, ownBrain(record, registry, owner));
 }
 
 async function changeOwnBrain(

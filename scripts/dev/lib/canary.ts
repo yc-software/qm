@@ -1,3 +1,5 @@
+import { trimTrailingSlashes } from "../../../src/util/text.ts";
+
 export interface CanaryChannelCandidate {
   id: string;
   name: string;
@@ -21,7 +23,7 @@ export async function discoverCanaryChannel(
   try {
     for (let page = 0; page < 5; page++) {
       const url =
-        `${apiBase.replace(/\/+$/, "")}/users.conversations?types=public_channel,private_channel&exclude_archived=true&limit=200` +
+        `${trimTrailingSlashes(apiBase)}/users.conversations?types=public_channel,private_channel&exclude_archived=true&limit=200` +
         (cursor ? `&cursor=${encodeURIComponent(cursor)}` : "");
       const res = await fetchImpl(url, {
         headers: { authorization: `Bearer ${botToken}` },

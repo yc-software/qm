@@ -21,7 +21,7 @@ export async function swarmFixture(
     runs?: RunStore;
     lock?: AdvisoryLock;
     backend?: Sandbox;
-    runtime?: Pick<OrchestratorInput, "model" | "thinkingLevel" | "fastMode">;
+    runtime?: Pick<OrchestratorInput, "model" | "thinkingLevel" | "fastMode" | "botActor">;
     request?: Pick<OrchestratorInput, "memoryNotebookOnly">;
     spawnMeta?: Pick<SpawnMeta, "memoryNotebookOnly">;
     claims?: Pick<CapabilityClaims, "memory">;

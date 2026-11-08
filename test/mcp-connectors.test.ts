@@ -133,7 +133,7 @@ test("mcp client mints client-credentials tokens on the server's origin and reus
     url: mcp.url,
     auth: { mode: "client-credentials", clientId: "id", clientSecret: "guess" },
   });
-  await assert.rejects(wrong.listTools());
+  await assert.rejects(wrong.listTools(), { code: "invalid_client", status: 401 });
 });
 
 test("mcp client never sends client credentials to an authorization server on another origin", async (t) => {
@@ -189,6 +189,13 @@ test("destructive annotations mark MCP tools for approval unless the server over
   assert.deepEqual(await approvals({}), { read: false, drop: true, plain: false });
   assert.deepEqual(await approvals({ approval: "all" }), { read: true, drop: true, plain: true });
   assert.deepEqual(await approvals({ approval: "none" }), { read: false, drop: false, plain: false });
+  const readOnly = async (partial: Partial<McpServer>) => {
+    await store.put(server({ url: mcp.url, ...partial }));
+    await service.refresh();
+    return Object.fromEntries(service.toolDefs().map((d) => [d.remoteName, d.readOnly]));
+  };
+  assert.deepEqual(await readOnly({ readOnly: false }), { read: true, drop: false, plain: false });
+  assert.deepEqual(await readOnly({ readOnly: true }), { read: true, drop: true, plain: true });
   service.close();
 });
 
@@ -643,4 +650,46 @@ test("optional intent and locale parameters are left out of the schema the model
   assert.deepEqual(Object.keys(schemas.crm_translate!.properties as object), ["text", "locale"]);
   assert.equal(await service.call("crm_search", { query: "tacos" }), "ok");
   assert.deepEqual(sent, [{ query: "tacos" }]);
+});
+
+test("a connector set to attest in any audience acts as the signed-in person who asked, wherever they ask, and never for anyone else", async (t) => {
+  const mcp = await startMcpTestServer(t, {
+    tools: [{ name: "find-record", description: "Find a record", inputSchema: { type: "object" } }],
+  });
+  const store = createMcpServerStore(testMap<McpServer>());
+  const service = createMcpToolService({ fetch: loopbackFetch, servers: store, refreshIntervalMs: 3600_000 });
+  const attested = { url: mcp.url, catalog: true, attestActor: true } as const;
+  await store.put(server({ id: "records", name: "Records", ...attested, attestAudience: "any" }));
+  await store.put(server({ id: "strict", name: "Strict", ...attested }));
+  await service.refresh();
+  const offered = async (principalId: string, scopeId: string, actAsActor?: boolean) =>
+    (await service.toolDefsFor(principalId, scopeId, actAsActor)).map((d) => d.serverId).sort();
+  assert.deepEqual(await offered("U1", "personal:U1"), ["records", "strict"]);
+  assert.deepEqual(await offered("U1", "channel:C1", true), ["records"]);
+  assert.deepEqual(await offered("U1", "group:G1", true), ["records"]);
+  assert.deepEqual(await offered("G9", "channel:C1", false), []);
+  assert.deepEqual(await offered("U1", "channel:C1"), []);
+  assert.deepEqual(await offered("system:channel:C1", "channel:C1", true), []);
+
+  const invoke = { operation: "invoke", tool: "find-record", arguments: {} };
+  const privateOnly = /answers only to them in their own private conversation/;
+  assert.equal(await service.needsApproval("records", invoke, "U1", "channel:C1", true), false);
+  await service.call("records", invoke, "U1", undefined, "channel:C1", true);
+  await service.call("records", invoke, "U2", undefined, "personal:U1", true);
+  await assert.rejects(service.call("records", invoke, "G9", undefined, "channel:C1", false), privateOnly);
+  await assert.rejects(service.call("records", invoke, "U1", undefined, "channel:C1"), privateOnly);
+  await assert.rejects(
+    service.call("records", invoke, "system:channel:C1", undefined, "channel:C1", true),
+    privateOnly,
+  );
+  await assert.rejects(
+    service.call("records", invoke, "jörg@example.com", undefined, "channel:C1", true),
+    (error: unknown) => error instanceof UnattestableActor,
+  );
+  await assert.rejects(service.call("strict", invoke, "U1", undefined, "channel:C1", true), privateOnly);
+  assert.deepEqual(
+    mcp.requests.filter((r) => r.rpc === "tools/call").map((r) => r.actor),
+    ["U1", "U2"],
+  );
+  service.close();
 });

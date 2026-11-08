@@ -192,6 +192,7 @@ export function replayableRequest(input: OrchestratorInput): TurnRequest {
     ...(input.analyticsSuppressed ? { analyticsSuppressed: true } : {}),
     ...(input.proactiveOpener ? { proactiveOpener: true } : {}),
     origin: input.origin,
+    ...(input.botActor ? { botActor: true } : {}),
     ...(input.conversationHeader ? { conversationHeader: input.conversationHeader } : {}),
     ...(input.priorTurns?.length ? { priorTurns: input.priorTurns } : {}),
     ...(input.overheard?.length ? { overheard: input.overheard } : {}),

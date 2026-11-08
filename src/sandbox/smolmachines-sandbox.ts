@@ -18,6 +18,7 @@ import { createLayerToolInstaller } from "./layer-tool-install.ts";
 import { createHomeSnapshotOps, HOME_SNAPSHOT_PRUNE, snapshotDue, type HomeSnapshotStore } from "./home-snapshot.ts";
 import type { LayerInstallFile } from "../deployment/load-layer.ts";
 import type { AgentComputerProfile, ComputerStatus, ExecResult, Sandbox, TeardownOptions } from "./sandbox.ts";
+import { trimTrailingSlashes } from "../util/text.ts";
 
 const HOME_DIR = "/root";
 const HOME_TAR = `${HOME_DIR}/.qm-home.tar`;
@@ -70,7 +71,6 @@ export interface SmolmachinesSandboxOptions extends BlobStagingOptions {
   namePrefix?: string;
   image?: string;
   cpus?: number;
-  memoryMb?: number;
   diskGb?: number;
   autoStopSec?: number;
   defaultTimeoutSec?: number;
@@ -89,17 +89,17 @@ export interface SmolmachinesSandboxOptions extends BlobStagingOptions {
 export function createSmolmachinesSandbox(opts: SmolmachinesSandboxOptions): Sandbox {
   if (!opts.token && !opts.fetchImpl) throw new Error("SANDBOX_BACKEND=smolmachines requires SMOLMACHINES_TOKEN");
   const fetchImpl = opts.fetchImpl ?? fetch;
-  const baseUrl = (opts.baseUrl ?? DEFAULT_SMOLMACHINES_BASE_URL).replace(/\/+$/, "");
+  const baseUrl = trimTrailingSlashes(opts.baseUrl ?? DEFAULT_SMOLMACHINES_BASE_URL);
   const prefix = opts.namePrefix ?? "qm";
   const image = opts.image ?? DEFAULT_IMAGE;
   const resources = {
     ...(opts.cpus ? { cpus: opts.cpus } : {}),
-    ...(opts.memoryMb ? { memoryMb: opts.memoryMb } : {}),
     ...(opts.diskGb ? { diskGb: opts.diskGb } : {}),
   };
   const defaultTimeoutSec = opts.defaultTimeoutSec ?? 600;
   const snapshotIntervalMs = opts.snapshotIntervalMs ?? 0;
   const store = opts.store;
+  const sizeByName = new Map<string, number>();
   const advisoryLock = opts.advisoryLock;
   const lifecycleKey = (scope: string): string => `smolmachines-provision:${prefix}:${scope}`;
   const egressProxyHost = opts.egressProxyUrl ? new URL(opts.egressProxyUrl).hostname : undefined;
@@ -165,10 +165,12 @@ export function createSmolmachinesSandbox(opts: SmolmachinesSandboxOptions): San
   }
 
   async function createMachine(name: string, ephemeral: boolean): Promise<{ info: MachineInfo; created: boolean }> {
+    const memoryGb = ephemeral ? undefined : sizeByName.get(name);
+    const sized = { ...resources, ...(memoryGb ? { memoryMb: memoryGb * 1024 } : {}) };
     const res = await api("POST", "/v1/machines", {
       name,
       source: { type: "image", reference: image },
-      ...(Object.keys(resources).length ? { resources } : {}),
+      ...(Object.keys(sized).length ? { resources: sized } : {}),
       network,
       workdir: HOME_DIR,
       ephemeral,
@@ -455,6 +457,7 @@ export function createSmolmachinesSandbox(opts: SmolmachinesSandboxOptions): San
   const idleNote = opts.autoStopSec ? `; stops after ${opts.autoStopSec}s idle and restarts on the next command` : "";
   const profile: AgentComputerProfile = {
     backend: "smolmachines",
+    sizesMemory: true,
     writablePersistence: "resident_disk",
     processSessions: true,
     egressEnforcement: egressProxyHost ? "domain" : "none",
@@ -468,7 +471,7 @@ export function createSmolmachinesSandbox(opts: SmolmachinesSandboxOptions): San
         return visibleNotInstalled(["gh", "aws", "gcloud", "kubectl", "flyctl", "glab"], opts.extraTools ?? []);
       },
       cpus: opts.cpus ?? DEFAULT_CPUS,
-      memoryMb: opts.memoryMb ?? DEFAULT_MEMORY_MB,
+      memoryMb: DEFAULT_MEMORY_MB,
       ...(opts.diskGb ? { diskGb: opts.diskGb } : {}),
       homeDir: HOME_DIR,
       workdir: base.workspaceDir,
@@ -520,7 +523,14 @@ export function createSmolmachinesSandbox(opts: SmolmachinesSandboxOptions): San
     listProcesses: procSessions.listProcesses,
     ...execFileOps,
     ...blobStaging,
-    provision: base.provision,
+    provision(scope, provOpts) {
+      if (!provOpts?.scratch) {
+        const name = sandboxScopeName(prefix, scope);
+        if (provOpts?.memoryGb) sizeByName.set(name, provOpts.memoryGb);
+        else sizeByName.delete(name);
+      }
+      return base.provision(scope, provOpts);
+    },
     run: base.run,
     writeFileBytes: base.writeFileBytes,
     writeFile: base.writeFile,

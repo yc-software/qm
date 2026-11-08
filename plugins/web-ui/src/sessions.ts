@@ -113,7 +113,6 @@ import type { Conversation } from "./conv-types";
 import {
   startNewChatInCanvas,
   mountRestoredCanvas,
-  focusedPaneConversation,
   openBackgroundInCanvas,
   beginSessionDrag,
   endPaneDrag,
@@ -634,12 +633,6 @@ export function openNewChat(scopeId: string | null, name: string | null, threadR
   return conv;
 }
 
-export function startNewChatInLastScope(): void {
-  const mounted = (focusedPaneConversation() ?? mainConversation()).state;
-  const scopeId = mounted.scopeId ?? visibleSessions().find((s) => !s.archived)?.scopeId ?? null;
-  startNewChat(scopeId, scopeId ? projectName(scopeId) : null);
-}
-
 function startProjectChat(event: Event, scopeId: string, name: string | null): void {
   event.stopPropagation();
   startNewChat(scopeId, name);
@@ -949,7 +942,7 @@ function statusMarks(ind: RowIndicators): TemplateResult {
 export function backgroundIcons(background: NonNullable<RowIndicators["background"]>): TemplateResult {
   return html`${background.jobs > 0 ? icon(Cog, 11) : nothing}${background.watches > 0 ? icon(Binoculars, 11) : nothing}${
     background.crons > 0 ? icon(Clock3, 11) : nothing
-  }${background.subagents > 0 ? icon(Bot, 11) : nothing}${background.goal ? icon(Target, 11) : nothing}`;
+  }${background.goal ? icon(Target, 11) : nothing}`;
 }
 
 function backgroundChip(s: CoreSession, ind: RowIndicators): TemplateResult | typeof nothing {

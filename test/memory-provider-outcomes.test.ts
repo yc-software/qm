@@ -112,14 +112,15 @@ test("an attested provider sends the canonical person on every request and the s
     },
   });
   const memory = configured(attested.url, { attestActor: true });
-  await memory.recall("personal:U1", { query: "launch", actorId: "U1" });
-  await memory.recall("personal:U1", { query: "launch", actorId: "u1@acme.test" });
+  const audienceScopeId = "personal:U1";
+  await memory.recall("personal:U1", { query: "launch", actorId: "U1", audienceScopeId });
+  await memory.recall("personal:U1", { query: "launch", actorId: "u1@acme.test", audienceScopeId });
   await memory.capture(
     "personal:U1",
     ["fact"],
     1,
     { actorId: "u1@acme.test", context: "conversation" },
-    { mode: "explicit" },
+    { mode: "explicit", audienceScopeId },
   );
 
   assert.ok(attested.requests.length > 0);
@@ -161,33 +162,55 @@ test("an attested provider is called only for the person whose private conversat
   t.after(() => installPrincipalLinks(null));
   const mcp = await startMcpTestServer(t, { tools: TOOLS, clients: { ro: "x", rw: "y" } });
   const memory = configured(mcp.url, { attestActor: true });
-  for (const actorId of ["U2", "system:personal:U1", "system:digest"])
-    assert.equal(recallText(await memory.recall("personal:U1", { query: "launch", actorId })), "notebook fact");
-  const write = await writeFacts(
-    memory,
-    "personal:U1",
-    ["fact"],
-    { actorId: "U2", context: "conversation" },
-    { mode: "explicit" },
-    undefined,
-  );
-  assert.equal(write.added, 1);
-  assert.deepEqual(external(write.outcomes), [{ outcome: "denied", code: "private_only" }]);
-  assert.match(write.problems[0]?.fix ?? "", /own private conversation/);
+  const refused: Array<[string, string | undefined]> = [
+    ["U2", "personal:U1"],
+    ["U1", "personal:U2"],
+    ["U1", "channel:C1"],
+    ["U1", undefined],
+  ];
+  for (const [actorId, audienceScopeId] of refused) {
+    const audience = audienceScopeId ? { audienceScopeId } : {};
+    assert.equal(
+      recallText(await memory.recall("personal:U1", { query: "launch", actorId, ...audience })),
+      "notebook fact",
+    );
+    const write = await writeFacts(
+      memory,
+      "personal:U1",
+      ["fact"],
+      { actorId, context: "conversation" },
+      { mode: "explicit", ...audience },
+      undefined,
+    );
+    assert.equal(write.added, 1);
+    assert.deepEqual(external(write.outcomes), [{ outcome: "denied", code: "private_only" }]);
+    assert.match(write.problems[0]?.fix ?? "", /own private conversation/);
+  }
   for (const actorId of ["system:personal:U1", "system:digest"]) {
+    const reader = { actorId, audienceScopeId: "personal:U1" };
+    assert.equal(recallText(await memory.recall("personal:U1", { query: "launch", ...reader })), "notebook fact");
     const skipped = await writeFacts(
       memory,
       "personal:U1",
       ["fact"],
       { actorId, context: "conversation" },
-      { mode: "explicit" },
+      { mode: "explicit", audienceScopeId: reader.audienceScopeId },
       undefined,
     );
     assert.equal(skipped.added, 1);
     assert.deepEqual(external(skipped.outcomes), []);
   }
+  const intoAnother = await writeFacts(
+    memory,
+    "personal:U2",
+    ["fact"],
+    { actorId: "U1", context: "conversation" },
+    { mode: "explicit", audienceScopeId: "personal:U1" },
+    undefined,
+  );
+  assert.deepEqual(external(intoAnother.outcomes), [{ outcome: "denied", code: "private_only" }]);
   assert.equal(mcp.requests.length, 0);
-  await memory.recall("personal:U1", { query: "launch", actorId: "U1" });
+  await memory.recall("personal:U1", { query: "launch", actorId: "U1", audienceScopeId: "personal:U1" });
   assert.deepEqual(new Set(mcp.requests.map((request) => request.actor)), new Set(["U1"]));
 });
 
@@ -509,9 +532,12 @@ test("a notebook failure in another scope still fails a search that a strict pro
   const { outcomes, report } = sink();
   await assert.rejects(
     withProviders("search", (r) =>
-      searchNotebooks(memory, ["personal:U1", "org:acme"], "deploys", 20, undefined, "U1", (outcome) => {
-        report(outcome);
-        r(outcome);
+      searchNotebooks(memory, ["personal:U1", "org:acme"], "deploys", 20, undefined, {
+        actorId: "U1",
+        report: (outcome) => {
+          report(outcome);
+          r(outcome);
+        },
       }),
     ),
   );
