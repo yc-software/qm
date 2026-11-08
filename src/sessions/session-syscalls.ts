@@ -950,6 +950,11 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   return { ok: false, message: "ordinary sessions accept private messages, not interrupts" };
                 if (caller.readOnly && !target.spawnMeta?.readOnly)
                   return { ok: false, message: "a read-only session cannot interrupt a writable task" };
+                if (caller.memoryNotebookOnly && !meta.memoryNotebookOnly)
+                  return {
+                    ok: false,
+                    message: "a notebook-only turn cannot interrupt a session that isn't notebook-only",
+                  };
                 if (
                   caller.botActor &&
                   (!target.spawnMeta?.botActor ||
@@ -1000,6 +1005,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               if (!input.wake && !input.interrupt) return leaveMail();
               if (binding.request.privateSessionMessage)
                 return leaveMail("a private turn cannot start work in another session");
+              if (caller.memoryNotebookOnly && !meta.memoryNotebookOnly)
+                return leaveMail("a notebook-only turn cannot start work in a session that isn't notebook-only");
               if (isPeerMessage(binding.session, target)) {
                 if (caller.readOnly) return leaveMail("a read-only turn cannot start work in another conversation");
                 if (messageDepth > SESSION_MESSAGE_DEPTH_CAP)
