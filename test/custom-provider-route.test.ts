@@ -169,6 +169,20 @@ test("a key check that cannot reach the endpoint reports why instead of a reject
   }
 });
 
+test("a key that is not a valid header value is refused without echoing it", async (t) => {
+  const srv = start();
+  t.after(srv.close);
+  const put = await fetch(`${srv.base}/v1/admin/custom-providers/acme-gateway`, {
+    method: "PUT",
+    headers: ADMIN,
+    body: JSON.stringify({ ...BODY, apiKey: "sk-acme-secret\nX" }),
+  });
+  assert.equal(put.status, 400);
+  const text = await put.text();
+  assert.equal(text.includes("sk-acme-secret"), false);
+  assert.equal((JSON.parse(text) as { error: string }).error, "bad_request");
+});
+
 test("bad specs are refused with a reason", async () => {
   const srv = start();
   try {

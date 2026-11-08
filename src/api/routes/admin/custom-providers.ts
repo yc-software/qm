@@ -1,3 +1,4 @@
+import { validateHeaderValue } from "node:http";
 import {
   CUSTOM_PROVIDER_PROTOCOLS,
   type CustomProviderSpec,
@@ -80,6 +81,7 @@ export async function putCustomProvider(ctx: ApiCtx): Promise<void> {
   const apiKey = typeof body.apiKey === "string" && body.apiKey.trim() ? body.apiKey.trim() : undefined;
   const shouldValidate = body.validate !== false && apiKey !== undefined;
   try {
+    if (apiKey !== undefined) validateHeaderValue("apiKey", apiKey);
     if (shouldValidate && !(await validateKey(ctx, spec.protocol, spec.baseUrl, apiKey!))) {
       return sendJson(ctx.res, 400, {
         error: "invalid_api_key",
