@@ -133,7 +133,7 @@ test("a Slack bot's turn in a person's swarm root leaves the person's swarm repl
   });
   await f.runs.complete(f.caller.claims.runId!, f.caller.claims.runLeaseToken!, { status: "ok", reply: "started" });
   const { caller: bot, claim } = await f.rootTurn("release-bot", true);
-  const read = await f.service.read(bot, { replyTo: brief.id });
+  await assert.rejects(f.service.read(bot, { replyTo: brief.id }), /cannot direct a person's swarm/);
   const mailbox = await openSwarmMailbox({
     swarms: f.service,
     input: { ...claim.request, runId: claim.id, runLeaseToken: claim.leaseToken!, attempt: claim.attempts },
@@ -143,5 +143,5 @@ test("a Slack bot's turn in a person's swarm root leaves the person's swarm repl
   const states = (await f.store.get(f.root.id))!.messages
     .filter((message) => message.id === answer.id || message.id === note.id)
     .map((message) => message.notifications[f.root.id]!.state);
-  assert.deepEqual({ read, shown: mailbox.text, states }, { read: [], shown: "", states: ["mailbox", "mailbox"] });
+  assert.deepEqual({ shown: mailbox.text, states }, { shown: "", states: ["mailbox", "mailbox"] });
 });

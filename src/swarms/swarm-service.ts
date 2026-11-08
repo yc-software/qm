@@ -815,19 +815,16 @@ export function createSwarmService(deps: {
         current.messages
           .filter((message) => message.seq > after && (!options.replyTo || message.replyTo === options.replyTo))
           .slice(0, 32);
-      const hidden = (current: Swarm) =>
-        caller.kind === "agent" && caller.claims.botActor && !botMayDirect(current, auth.memberId, auth.actorId);
       for (;;) {
-        if (hidden(swarm)) return [];
+        assertCallerMayDirect(caller, auth, swarm);
         let messages = pick(swarm);
         const unread = (current: Swarm) =>
           pick(current).filter((message) => message.notifications[auth.memberId]?.state === "mailbox");
         if (caller.kind === "agent" && options.replyTo && unread(swarm).length) {
           const updated = await update(auth, (current) => {
-            if (hidden(current)) return;
+            assertCallerMayDirect(caller, auth, current);
             for (const message of unread(current)) message.notifications[auth.memberId] = { state: "handed" };
           });
-          if (hidden(updated)) return [];
           messages = pick(updated);
         }
         if (messages.length || Date.now() >= deadline) return messages;

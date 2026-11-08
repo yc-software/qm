@@ -445,7 +445,10 @@ export function createTurnMethods(
           });
           if (stopped === null)
             return { status: "refused", reason: "project membership changed; retry from the current project" };
-          if (!stopped) console.error(`[turn] stop in ${conversation.threadRef} found no live work to stop`);
+          if (!stopped)
+            console.error(
+              `[turn] stop in ${conversation.threadRef} found no live ${incoming.bot ? "bot " : ""}work to stop`,
+            );
           return { status: "silent", steered: true, stopped };
         }
         if (route.kind === "drop") return { status: "refused", reason: "empty message" };
