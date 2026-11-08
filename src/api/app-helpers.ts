@@ -32,6 +32,7 @@ import { actorAssertionActive } from "../identity/identity-service.ts";
 import type { Deployment } from "../deploy/deploy-store.ts";
 import { reportFailureAs, swallow, swallowAs } from "../util/errors.ts";
 import { adminSessionUrl } from "../util/admin-links.ts";
+import { sessionTurnOrigin } from "../core/turn-origin.ts";
 import {
   openGroupViaSurface,
   resolveReachTarget,
@@ -742,7 +743,14 @@ export function createAppHelpers(deps: AppDeps, app: App) {
             } = completed.request;
             const { run } = await deps.runs.enqueue({
               sessionId: completed.sessionId,
-              request: { ...request, text: signal.text, origin: { kind: "automation", screenData: signal.text } },
+              request: {
+                ...request,
+                text: signal.text,
+                origin: sessionTurnOrigin(
+                  completed.request.origin?.kind === "automation" ? completed.request.origin : undefined,
+                  signal.text,
+                ),
+              },
               dedupKey,
               maxAttempts: deps.maxAttempts,
             });
