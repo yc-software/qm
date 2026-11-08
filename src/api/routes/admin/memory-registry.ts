@@ -99,7 +99,7 @@ function putAgentBrain(record: MemoryRegistry, id: string, body: unknown, c: Reg
   if ((body as { clientSecret?: unknown } | null)?.clientSecret !== undefined)
     throw new MemoryRegistryError(
       400,
-      "a brain's client secret never goes through the agent: register the brain without clientSecret, then set it through the admin API outside chat",
+      'a brain\'s client secret never goes through the agent: register the brain without clientSecret, then mint a link for it with POST /v1/keychain/drops {"memoryBrain":"<brain id>","purpose":"…"}',
     );
   const next = putBrain(record, id, body, c);
   const url = ({ brains }: MemoryRegistry) => brains.find((brain) => brain.id === id)?.url;
