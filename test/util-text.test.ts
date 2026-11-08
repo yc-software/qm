@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { headSlice, tailSlice, jsonbStringify, trimTrailingSlashes } from "../src/util/text.ts";
+import { headSlice, tailSlice, jsonbStringify, trimTrailing, trimTrailingSlashes } from "../src/util/text.ts";
 
 test("headSlice and tailSlice pass short strings through and cut long ones", () => {
   assert.equal(headSlice("abc", 5), "abc");
@@ -62,4 +62,12 @@ test("trimTrailingSlashes removes only the slashes at the end", () => {
   assert.equal(trimTrailingSlashes("https://example.com/"), "https://example.com");
   assert.equal(trimTrailingSlashes("a//b///"), "a//b");
   assert.equal(trimTrailingSlashes("/a/b"), "/a/b");
+});
+
+test("trimTrailing removes only the trailing characters the predicate accepts", () => {
+  const dotOrSpace = (char: string) => /[.\s]/.test(char);
+  assert.equal(trimTrailing("", dotOrSpace), "");
+  assert.equal(trimTrailing(". .", dotOrSpace), "");
+  assert.equal(trimTrailing("a. b. \u00a0.", dotOrSpace), "a. b");
+  assert.equal(trimTrailing(".a", dotOrSpace), ".a");
 });
