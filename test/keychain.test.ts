@@ -491,6 +491,31 @@ describe("connectors are grantable like any keychain record", () => {
   });
 });
 
+test("revoking a once-grant that is claimed mid-revoke keeps it used", async () => {
+  const grants = testMap<KeychainGrant>();
+  const k = createKeychain({ lock: testAdvisoryLock(), creds: testMap(), grants, asks: testMap(), key: KEY });
+  const cred = await k.save(GH);
+  const grant = await k.createGrant({
+    credentialId: cred.id,
+    ownerId: "U1",
+    audienceScopeId: "channel:C1",
+    mode: "once",
+    purpose: "clone once",
+  });
+  const get = grants.get.bind(grants);
+  let raced = false;
+  grants.get = async (id) => {
+    const seen = await get(id);
+    if (!raced && seen?.status === "active") {
+      raced = true;
+      await materializeGrant(k, grant.id, "channel:C1", "U2");
+    }
+    return seen;
+  };
+  assert.equal(await k.revokeGrant("U1", grant.id), true);
+  assert.equal((await get(grant.id))!.status, "used");
+});
+
 test("standing grants are reusable, revocable, and die with the credential", async () => {
   const k = kc();
   const cred = await k.save(GH);
