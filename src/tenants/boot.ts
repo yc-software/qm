@@ -11,13 +11,19 @@ export async function readBootTenant(databaseUrl: string): Promise<string | unde
 }
 
 let booted: string | undefined;
+let bootRead = false;
 
 export function bootTenant(): string | undefined {
   return booted;
 }
 
+export function tenancyBooted(): boolean {
+  return bootRead;
+}
+
 export async function bindBootTenant(read: () => Promise<string | undefined>): Promise<string | undefined> {
   booted = await read();
+  bootRead = true;
   return booted;
 }
 

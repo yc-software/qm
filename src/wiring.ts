@@ -232,6 +232,7 @@ import { s3Client } from "./persistence/s3.ts";
 import { createS3SnapshotStore } from "./sandbox/home-snapshot.ts";
 import { createModalSandbox, type StoredModalSandbox } from "./sandbox/modal-sandbox.ts";
 import { createSdkModalClient } from "./sandbox/modal-client.ts";
+import { tenantModalClient } from "./sandbox/tenant-sandbox-shape.ts";
 import { createPorterSandbox } from "./sandbox/porter-sandbox.ts";
 import { createSandboxRouter, type SandboxBackendName } from "./sandbox/sandbox-routing.ts";
 import {
@@ -988,24 +989,31 @@ export function buildApp(
   };
   const buildModal = (): Sandbox => {
     const modal = config.modalSandbox;
-    if (!modal.tokenId || !modal.tokenSecret)
+    const { tokenId, tokenSecret } = modal;
+    if (!tokenId || !tokenSecret)
       throw new Error("SANDBOX_BACKEND=modal requires MODAL_TOKEN_ID and MODAL_TOKEN_SECRET");
     return createModalSandbox({
       advisoryLock,
-      client: createSdkModalClient({
-        tokenId: modal.tokenId,
-        tokenSecret: modal.tokenSecret,
-        appName: modal.appName ?? "qm",
-        ...(modal.image ? { image: modal.image } : {}),
-        ...(modal.environment ? { environment: modal.environment } : {}),
-        ...(modal.cpus !== undefined ? { cpus: modal.cpus } : {}),
-        ...(modal.memoryMb !== undefined ? { memoryMb: modal.memoryMb } : {}),
-        ...(modal.regions?.length ? { regions: modal.regions } : {}),
-        ...(modal.sandboxTimeoutSec ? { sandboxTimeoutMs: modal.sandboxTimeoutSec * 1000 } : {}),
-        ...(modal.reapIdleSec ? { idleTimeoutMs: 2 * modal.reapIdleSec * 1000 } : {}),
-        ...(modal.snapshotRetentionSec !== undefined ? { snapshotRetentionMs: modal.snapshotRetentionSec * 1000 } : {}),
-        ...(modal.egressProxyUrl ? { egressProxyUrl: modal.egressProxyUrl } : {}),
-      }),
+      client: tenantModalClient(
+        { appName: modal.appName ?? "qm", ...(modal.environment ? { environment: modal.environment } : {}) },
+        (shape) =>
+          createSdkModalClient({
+            tokenId,
+            tokenSecret,
+            appName: shape.appName,
+            ...(modal.image ? { image: modal.image } : {}),
+            ...(shape.environment ? { environment: shape.environment } : {}),
+            ...(modal.cpus !== undefined ? { cpus: modal.cpus } : {}),
+            ...(modal.memoryMb !== undefined ? { memoryMb: modal.memoryMb } : {}),
+            ...(modal.regions?.length ? { regions: modal.regions } : {}),
+            ...(modal.sandboxTimeoutSec ? { sandboxTimeoutMs: modal.sandboxTimeoutSec * 1000 } : {}),
+            ...(modal.reapIdleSec ? { idleTimeoutMs: 2 * modal.reapIdleSec * 1000 } : {}),
+            ...(modal.snapshotRetentionSec !== undefined
+              ? { snapshotRetentionMs: modal.snapshotRetentionSec * 1000 }
+              : {}),
+            ...(modal.egressProxyUrl ? { egressProxyUrl: modal.egressProxyUrl } : {}),
+          }),
+      ),
       ...(modal.namePrefix ? { namePrefix: modal.namePrefix } : {}),
       ...(modal.defaultTimeoutSec ? { defaultTimeoutSec: modal.defaultTimeoutSec } : {}),
       ...(modal.nativeSnapshotIntervalSec !== undefined

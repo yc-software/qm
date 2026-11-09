@@ -35,6 +35,7 @@ import {
   type HomeSnapshotStore,
 } from "./home-snapshot.ts";
 import { claimThenBind } from "../tenants/claim.ts";
+import { TenantKeyedMap, tenantModalNamePrefix } from "./tenant-sandbox-shape.ts";
 import type {
   AgentComputerProfile,
   ComputerStatus,
@@ -97,7 +98,8 @@ export interface ModalSandboxOptions extends BlobStagingOptions {
 
 export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
   const client = opts.client;
-  const prefix = opts.namePrefix ?? "qm";
+  const deploymentPrefix = opts.namePrefix ?? "qm";
+  const namePrefix = (): Promise<string> => tenantModalNamePrefix(deploymentPrefix);
   const defaultTimeoutSec = opts.defaultTimeoutSec ?? 600;
   const snapshotIntervalMs = opts.nativeSnapshotIntervalMs ?? 5 * 60_000;
   const lastSnapshotAttemptMs = (stored?: StoredModalSandbox | null): number =>
@@ -113,7 +115,7 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
   const orphanFirstSeenMs = new Map<string, number>();
   const tags = (kind: "scope" | "scratch"): Record<string, string> => ({
     "qm-org": configOrgId(),
-    "qm-prefix": prefix,
+    "qm-prefix": deploymentPrefix,
     "qm-kind": kind,
   });
   const workspaceDir = `${HOME_DIR}/${WORKSPACE_BASENAME}`;
@@ -123,10 +125,10 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
   const provisionQueue = <T>(scope: string, action: () => Promise<T>): Promise<T> =>
     localQueue(scope, () => advisoryLock.withLock(`modal-provision:${scope}`, action));
 
-  const sessionByName = new Map<string, ModalSession>();
-  const scopeByName = new Map<string, string>();
-  const scratchKeyByName = new Map<string, string>();
-  const activeScratch = new Map<string, number>();
+  const sessionByName = new TenantKeyedMap<ModalSession>();
+  const scopeByName = new TenantKeyedMap<string>();
+  const scratchKeyByName = new TenantKeyedMap<string>();
+  const activeScratch = new TenantKeyedMap<number>();
 
   const reportError = (category: string, code: string, message: string, scopeLabel?: string): void => {
     opts.onError?.({ category, code, message, ...(scopeLabel ? { scopeLabel } : {}) });
@@ -371,7 +373,7 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
   }
 
   async function ensureScratch(key: string): Promise<{ name: string; coldStart: boolean }> {
-    const name = sandboxScopeName(`${prefix}-scratch`, key);
+    const name = sandboxScopeName(`${await namePrefix()}-scratch`, key);
     return provisionQueue(`scratch:${key}`, async () => {
       scratchKeyByName.set(name, key);
       const active = activeScratch.get(name) ?? 0;
@@ -514,7 +516,7 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
   const blobStaging = createBackendBlobStaging("modal", (id, script, t) => execRaw(id, script, t), opts);
 
   async function destroyStoredScope(scope: string): Promise<void> {
-    const name = sandboxScopeName(prefix, scope);
+    const name = sandboxScopeName(await namePrefix(), scope);
     const stored = await store.get(scope);
     const cached = sessionByName.get(name);
     const ids = new Set([stored?.sandboxId, cached?.sandboxId].filter((id): id is string => !!id));
@@ -618,7 +620,7 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
 
   async function reapIdleScope(scope: string, rec: StoredModalSandbox, now: number, cutoff: number): Promise<number> {
     if (rec.hydrationPending || (rec.orgId && rec.orgId !== configOrgId())) return 0;
-    const name = sandboxScopeName(prefix, scope);
+    const name = sandboxScopeName(await namePrefix(), scope);
     scopeByName.set(name, scope);
     let session: ModalSession | undefined;
     try {
@@ -720,7 +722,7 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
       if (scratch) {
         ({ name, coldStart } = await ensureScratch(scratch.key));
       } else {
-        name = sandboxScopeName(prefix, scope);
+        name = sandboxScopeName(await namePrefix(), scope);
         scopeByName.set(name, scope);
         ({ coldStart } = await ensureSession(scope, name, provOpts?.onStatus));
       }
@@ -794,7 +796,7 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
     ...(homeSnapshots
       ? {
           async persistHomeSnapshot(scopeId: string): Promise<void> {
-            const name = sandboxScopeName(prefix, scopeId);
+            const name = sandboxScopeName(await namePrefix(), scopeId);
             scopeByName.set(name, scopeId);
             const { session } = await ensureSession(scopeId, name);
             await provisionQueue(scopeId, async () => {
@@ -809,7 +811,7 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
       await provisionQueue(scopeId, async () => {
         const stored = await store.get(scopeId);
         if (!stored) return;
-        const name = sandboxScopeName(prefix, scopeId);
+        const name = sandboxScopeName(await namePrefix(), scopeId);
         let session: ModalSession | undefined;
         try {
           session = await client.fromId(stored.sandboxId);
@@ -826,7 +828,7 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
     },
 
     async computerStatus(scopeId: string): Promise<ComputerStatus> {
-      const name = sandboxScopeName(prefix, scopeId);
+      const name = sandboxScopeName(await namePrefix(), scopeId);
       const stored = await store.get(scopeId);
       if (!stored) return { machine: "no sandbox provisioned yet", provisioned: false, guestResponsive: false };
       const recovery = {

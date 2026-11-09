@@ -23,6 +23,11 @@ export const tenantSettingsSchema = z
     orgSlug: z.string().refine(isDnsLabel, "expected a lowercase org slug"),
     handle: appHandleSchema,
     slackBridgeToken: z.string().regex(/^[\x21-\x7e]{16,}$/, "expected a Slack service bridge token"),
+    spritesToken: text,
+    spritesNamePrefix: z.string().regex(/^[a-z0-9][a-z0-9-]{0,49}$/, "expected a lowercase sandbox name prefix"),
+    modalAppName: text,
+    modalEnvironment: text,
+    modalNamePrefix: z.string().regex(/^[a-z0-9][a-z0-9-]{0,49}$/, "expected a lowercase sandbox name prefix"),
     /** False while this deployment is not serving the tenant (mid-copy or rolled back); sign-in then hides it. */
     serving: z.boolean(),
   })
