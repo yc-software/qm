@@ -74,6 +74,10 @@ test("MCP admin validates and preserves credential scope, without returning secr
   assert.equal((await put({ readOnly: true })).status, 200);
   assert.equal((await put({})).status, 200);
   assert.equal((await store.get("crm"))?.readOnly, true, "an update that omits readOnly keeps it");
+  assert.equal((await put({ enabled: false })).status, 200);
+  assert.equal((await put({})).status, 200);
+  assert.equal((await store.get("crm"))?.enabled, false, "an update that omits enabled keeps it");
+  assert.equal((await put({ enabled: true })).status, 200);
   const saved = await put({
     credentialScope: "per-user",
     credentialHost: "accounts.example.com",
