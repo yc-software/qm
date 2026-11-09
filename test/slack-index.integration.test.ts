@@ -556,6 +556,43 @@ test("a mid-turn message that STEERS the live run does not post the reply twice"
   }
 });
 
+test("a stop with no reply text tells only the person who stopped it, in the thread", async () => {
+  const f = await fixture();
+  try {
+    f.core.holdRun("R5");
+    const ask = { channel: "C1", channel_type: "channel", user: "U1", text: "<@UBOT> long job", ts: "700.1" };
+    f.client.messagesByChannel.set("C1", [ask]);
+    const first = f.app.emitEvent("app_mention", ask);
+    await waitFor(() => f.core.polled.length === 1);
+    f.core.queuedRunId = undefined;
+    f.core.result = { status: "silent", steered: true, stopped: true };
+    const stop = {
+      channel: "C1",
+      channel_type: "channel",
+      user: "U2",
+      text: "<@UBOT> stop",
+      ts: "700.2",
+      thread_ts: "700.1",
+    };
+    f.client.messagesByChannel.set("C1", [ask, stop]);
+    await f.app.emitEvent("app_mention", stop);
+    f.core.finishRun({ status: "ok", reply: "", stopped: true });
+    await first;
+
+    assert.deepEqual(
+      f.client.ephemerals.map((e) => ({ channel: e.channel, user: e.user, text: e.text, thread_ts: e.thread_ts })),
+      [{ channel: "C1", user: "U2", text: "Stopped.", thread_ts: "700.1" }],
+    );
+    assert.equal(
+      f.client.posts.some((p) => /Stopped\.|\(no response\)/.test(String(p.text ?? ""))),
+      false,
+      "nothing about the stop is posted to the thread",
+    );
+  } finally {
+    await f.stop();
+  }
+});
+
 test("a queued run's ok reply carries the recovery delivery's marker, so a replay reuses it", async () => {
   const f = await fixture();
   try {
