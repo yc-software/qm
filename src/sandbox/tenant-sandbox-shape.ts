@@ -48,7 +48,7 @@ export interface ModalShape {
   environment?: string;
 }
 
-export async function tenantModalShape(base: ModalShape): Promise<ModalShape> {
+async function tenantModalShape(base: ModalShape): Promise<ModalShape> {
   const bound = await tenantSandboxSettings();
   if (!bound) return base;
   const environment = bound.settings.modalEnvironment ?? base.environment;
