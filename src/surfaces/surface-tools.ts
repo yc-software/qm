@@ -126,6 +126,9 @@ export async function replayRecordedSurfaceAnswer(ctx: {
   const { deps, input, defaultDestination } = ctx;
   const posted = completedSurfaceEnqueues(ctx.turnItems, ctx.userSeq, ctx.surfaceName);
   if (!input.addressed || posted > 0 || !defaultDestination || !deps.deliveries || !input.runId) return;
+  const keys = turnPostKeys(input.runId);
+  const fallbackKey = keys.key(defaultDestination, posted + 1);
+  if ((await deps.deliveries.existingKeys([fallbackKey])).has(fallbackKey)) return;
   const ackKey = `ack:${input.runId}`;
   const ack = (await deps.deliveries.listBySourceSession(ctx.session.id, ctx.session.threadRef)).find(
     (d) => d.idempotencyKey === ackKey,
@@ -136,7 +139,7 @@ export async function replayRecordedSurfaceAnswer(ctx: {
     deliveries: deps.deliveries,
     destination: defaultDestination,
     text,
-    key: turnPostKeys(input.runId).key(defaultDestination, posted),
+    key: keys.key(defaultDestination, posted),
     postProvenance: ctx.postProvenance,
   });
 }

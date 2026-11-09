@@ -1361,21 +1361,23 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         console.error(
           `[orchestrator] turn.already_answered attempt=${input.attempt} run=${input.runId} thread=${conversation.threadRef} answerSeq=${recordedAnswer.seq}`,
         );
-        if (recordedAnswer.stopped) return { status: "silent", sessionId: session.id, stopped: true };
+        const stopped = recordedAnswer.stopped ? { stopped: true } : {};
+        if (recordedAnswer.cancelled) return { status: "silent", sessionId: session.id, ...stopped };
         const text = absoluteAppLinks(recordedAnswer.text, deps.publicWebUrl);
         if (surfaceToolsActive({ deps, input, strictReadOnly, defaultDestination })) {
-          await replayRecordedSurfaceAnswer({
-            deps,
-            input,
-            session,
-            defaultDestination,
-            surfaceName,
-            turnItems: recorded.items,
-            userSeq: recordedTurn.userSeq,
-            text,
-            postProvenance,
-          });
-          return { status: "silent", sessionId: session.id };
+          if (!recordedAnswer.stopped)
+            await replayRecordedSurfaceAnswer({
+              deps,
+              input,
+              session,
+              defaultDestination,
+              surfaceName,
+              turnItems: recorded.items,
+              userSeq: recordedTurn.userSeq,
+              text,
+              postProvenance,
+            });
+          return { status: "silent", sessionId: session.id, ...stopped };
         }
         return text.trim()
           ? {
@@ -1384,8 +1386,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               reply: text,
               sourceUserSeq: recordedTurn.userSeq,
               sourceAssistantEntrySeq: recordedAnswer.seq,
+              ...stopped,
             }
-          : { status: "silent", sessionId: session.id };
+          : { status: "silent", sessionId: session.id, ...stopped };
       }
 
       audit({
