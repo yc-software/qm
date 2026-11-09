@@ -18,6 +18,19 @@ interface Change {
 
 type Step = Change & { run: () => Promise<unknown> };
 
+const signInStep = ({ identity }: ApiCtx["deps"], principalId: string): Step[] =>
+  identity && identity.deactivationSource(principalId) !== "manual"
+    ? [
+        {
+          kind: "principal",
+          id: principalId,
+          label: "sign-in",
+          action: "deactivate",
+          run: () => identity.deactivate(principalId),
+        },
+      ]
+    : [];
+
 async function plan(ctx: ApiCtx, actorId: string, principalId: string): Promise<Step[]> {
   const { app, deps } = ctx;
   const isThem = deps.directory
@@ -32,8 +45,6 @@ async function plan(ctx: ApiCtx, actorId: string, principalId: string): Promise<
   const step = (kind: string, id: string, label: string | undefined, action: string, run: () => Promise<unknown>) =>
     steps.push({ kind, id, label: label || id, action, run });
 
-  if (deps.identity && deps.identity.deactivationSource(principalId) !== "manual")
-    step("principal", principalId, "sign-in", "deactivate", () => deps.identity!.deactivate(principalId));
   for (const c of await app.listCrons())
     if (!c.loopId && !c.archived && (await owns(c.owner, c.ownerScopeId)))
       step("cron", c.id, c.title ?? "", "disable_and_archive", () =>
@@ -91,9 +102,14 @@ export async function offboardUser(ctx: ApiCtx): Promise<void> {
   const { principalId } = await resolveAdminUser(deps, params.principalId!);
   if (samePerson(principalId, actor.id))
     return sendJson(res, 400, { error: "bad_request", message: "you cannot offboard yourself" });
+  const signIn = signInStep(deps, principalId);
   const steps = await plan(ctx, actor.id, principalId);
   if (input.apply !== true)
-    return sendJson(res, 200, { principalId, applied: false, changes: steps.map(({ run: _, ...change }) => change) });
+    return sendJson(res, 200, {
+      principalId,
+      applied: false,
+      changes: [...signIn, ...steps].map(({ run: _, ...change }) => change),
+    });
   const changes: Change[] = [];
   const execute = async ({ run, ...change }: Step): Promise<Change> => {
     try {
@@ -113,9 +129,9 @@ export async function offboardUser(ctx: ApiCtx): Promise<void> {
     changes.push(change);
     return change;
   };
-  const signIn = steps[0]?.kind === "principal" ? steps.shift() : undefined;
-  if (signIn && (await execute(signIn)).result === "failed")
-    return sendJson(res, 502, { error: "deactivate_failed", principalId, applied: false, changes });
+  for (const step of signIn)
+    if ((await execute(step)).result === "failed")
+      return sendJson(res, 502, { error: "deactivate_failed", principalId, applied: false, changes });
   const user = await deps.admin!.users.markOffboarded(principalId, actor.id);
   for (const step of steps) await execute(step);
   return sendJson(res, 200, { principalId, applied: true, changes, user });
