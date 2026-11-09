@@ -74,7 +74,7 @@ test("scrollbar presentation follows transitions between single and split views"
 
 test("layout mutations preserve bottom following and an earlier reading anchor independently", () => {
   const dom = new JSDOM(
-    '<main><section class="chat-scroll"><div class="message-stack"><article data-index="0"><p>Reading here</p></article></div></section><section class="chat-scroll"></section></main>',
+    '<main><section class="chat-scroll"><div class="message-stack"><article data-index="0"><qm-markdown><p>Reading here</p></qm-markdown></article></div></section><section class="chat-scroll"></section></main>',
   );
   const root = dom.window.document.querySelector("main")!;
   const [reading, following] = [...root.querySelectorAll<HTMLElement>("section")];
@@ -1237,7 +1237,8 @@ function readingFixture(rows: number[]) {
       let row = nodes[index];
       if (!row) {
         row = document.createElement("article");
-        row.append(document.createElement("p"));
+        row.append(document.createElement("qm-markdown"));
+        row.firstElementChild!.append(document.createElement("p"));
         stack.append(row);
       }
       row.dataset.index = String(index);
@@ -1262,8 +1263,10 @@ function readingFixture(rows: number[]) {
   const rect = (element: Element): DOMRect => {
     const row = element.closest<HTMLElement>("[data-index]")!;
     const index = [...stack.children].indexOf(row);
-    const y = 20 + above(element) - top;
-    return { top: y, bottom: y + (heights[index] ?? 0), height: heights[index] ?? 0 } as DOMRect;
+    const own = (element as HTMLElement).dataset;
+    const y = 20 + above(element) - top + Number(own.y ?? 0);
+    const height = own.h ? Number(own.h) : (heights[index] ?? 0);
+    return { top: y, bottom: y + height, height } as DOMRect;
   };
   const originalRect = dom.window.Element.prototype.getBoundingClientRect;
   dom.window.HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
@@ -1434,6 +1437,28 @@ test("following discards the old reading spot so a later pause does not jump bac
     f.viewport.cancelFollow();
     f.layout();
     assert.equal(f.s.scrollTop, 1000);
+  } finally {
+    f.close();
+  }
+});
+
+test("work summaries above the reply never become the reading anchor, so reshaping them leaves the reply still", () => {
+  const f = readingFixture([300, 600, 300]);
+  try {
+    const row = f.stack.children[1]!;
+    const doc = f.stack.ownerDocument;
+    const summary = doc.createElement("summary");
+    summary.textContent = "Ran a command";
+    Object.assign(summary.dataset, { y: "0", h: "20" });
+    row.prepend(summary);
+    const reply = row.querySelector("p")!;
+    Object.assign(reply.dataset, { y: "40", h: "560" });
+    f.scroll(290);
+    const before = reply.getBoundingClientRect().top;
+    summary.dataset.y = "20";
+    reply.dataset.y = "80";
+    f.layout();
+    assert.equal(reply.getBoundingClientRect().top, before);
   } finally {
     f.close();
   }

@@ -1,4 +1,4 @@
-const READING_BLOCKS = ":is(p, h1, h2, h3, h4, h5, h6, pre, li, table, blockquote, summary)";
+const READING_BLOCKS = "qm-markdown :is(p, h1, h2, h3, h4, h5, h6, pre, li, table, blockquote)";
 
 interface ReadingAnchor {
   element: HTMLElement;
@@ -11,11 +11,11 @@ function rowKey(element: HTMLElement): string {
   return element.closest<HTMLElement>("[data-entry-seqs]")?.dataset.entrySeqs ?? "";
 }
 
-function readingAnchor(stack: HTMLElement, edge: number, origin: number, skip: string): ReadingAnchor | null {
+function readingAnchor(stack: HTMLElement, line: number, origin: number, skip: string): ReadingAnchor | null {
   for (const row of stack.querySelectorAll<HTMLElement>("[data-index]")) {
-    if (row.closest(skip) || row.getBoundingClientRect().bottom <= edge) continue;
+    if (row.closest(skip) || row.getBoundingClientRect().bottom <= line) continue;
     const block = [...row.querySelectorAll<HTMLElement>(READING_BLOCKS)].find(
-      (node) => !node.closest(skip) && node.textContent?.trim() && node.getBoundingClientRect().bottom > edge,
+      (node) => !node.closest(skip) && node.textContent?.trim() && node.getBoundingClientRect().bottom > line,
     );
     const element = block ?? row;
     return {
@@ -71,6 +71,7 @@ export function preserveTranscriptScroll(root: HTMLElement): () => void {
 }
 
 const CONDENSED_LINES = 2;
+const READING_LINE = 1 / 3;
 const NEAR_TOP = 400;
 const AWAY_FROM_BOTTOM = 160;
 
@@ -191,7 +192,8 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
   function captureAnchor(): void {
     if (!scroller || !stack || following) return;
     const { origin, edge } = readingEdges();
-    anchor = readingAnchor(stack, edge, origin, ".latest-prompt.stuck");
+    const focus = edge + (origin + scroller.clientHeight - edge) * READING_LINE;
+    anchor = readingAnchor(stack, focus, origin, ".latest-prompt.stuck");
     below = distanceToBottom();
   }
 
