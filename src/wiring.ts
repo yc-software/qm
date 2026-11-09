@@ -368,6 +368,7 @@ import { createAdminService, parseAdminGrants, type AdminService } from "./admin
 import { createAdminGrantStore } from "./admin/admin-grant-store.ts";
 import { createPostgresAdminGrantStore } from "./admin/postgres-admin-grant-store.ts";
 import { createProjectStore, type Project, type ProjectStore } from "./projects/project-store.ts";
+import { createPersonaHandover } from "./personas/persona-handover.ts";
 import { createPersonaService } from "./personas/persona-service.ts";
 import { createPostgresPersonaStore } from "./personas/persona-store.ts";
 import { withErrorReporting, type ErrorLog } from "./admin/error-log.ts";
@@ -1777,17 +1778,26 @@ export function buildApp(
         (await directory.get(email))?.type === "internal")
     );
   };
+  const isActiveMember = (principalId: string) => identity.isInternal(identity.classify(principalId));
   const projects = createProjectStore(artifactMap<Project>("projects"), {
-    isActiveMember: (principalId) => identity.isInternal(identity.classify(principalId)),
+    isActiveMember,
     advisoryLock,
   });
+  const personaStore = createPostgresPersonaStore(databaseUrl);
   const personas = createPersonaService({
-    store: createPostgresPersonaStore(databaseUrl),
+    store: personaStore,
     flags: featureFlags,
     orgScope: scopeId("org", config.orgId),
     teams,
     sessions,
+    isActive: isActiveMember,
     ...(keychain ? { keychain } : {}),
+  });
+  const personaHandover = createPersonaHandover({
+    store: personaStore,
+    isActive: isActiveMember,
+    orgAdmins: async () => (await admin.listGrants()).filter((grant) => grant.role === "org_admin"),
+    auditLog,
   });
   const canReadScope = createCanReadScope({ managedGroups: projects, directory, identity, teams, sessions, personas });
   const canWriteScope = createCanWriteScope({ managedGroups: projects, directory, identity, teams, personas });
@@ -2328,6 +2338,7 @@ export function buildApp(
       : {}),
     projects,
     personas,
+    personaHandover,
     environments,
     deploy: deployService,
     deployAppsDomain: config.awsDeploy.appsDomain,
@@ -2798,6 +2809,15 @@ export function buildApp(
         { label: "llm-capture-retention" },
       )
     : null;
+  const personaOwnerSweeper = createSweeper(
+    () =>
+      leaderLease.hold("personas:owner-handover", async () => {
+        await identity.refresh(true);
+        await personaHandover.adoptOrphans();
+      }),
+    5 * 60_000,
+    { label: "persona-owner-handover" },
+  );
   const monitorRetentionSweeper = createSweeper(
     () => leaderLease.hold("monitor:retention:sweep", () => monitors.deleteDefunct(Date.now())),
     MONITOR_RETENTION_SWEEP_MS,
@@ -2863,6 +2883,7 @@ export function buildApp(
         })
         .catch(swallowAs("wiring: monitor resume failed", undefined));
       monitorRetentionSweeper.start();
+      personaOwnerSweeper.start();
       spendSweeper?.start();
       llmCaptureSweeper?.start();
       semanticMemory.start();
@@ -2898,6 +2919,7 @@ export function buildApp(
       reaper.stop(),
       processReaper?.stop(),
       monitorRetentionSweeper.stop(),
+      personaOwnerSweeper.stop(),
       spendSweeper?.stop(),
       llmCaptureSweeper?.stop(),
       semanticMemory.stop(),

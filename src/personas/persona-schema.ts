@@ -1,4 +1,5 @@
 import type { PgMigrationDefinition } from "../persistence/pg-pool.ts";
+import { parseScopeId, type ScopeId } from "../types.ts";
 
 export const PERSONA_ROLES = ["read", "write", "owner"] as const;
 export type PersonaRole = (typeof PERSONA_ROLES)[number];
@@ -6,6 +7,10 @@ export type PersonaRole = (typeof PERSONA_ROLES)[number];
 const roleRank = (role: PersonaRole | null | undefined): number => (role ? PERSONA_ROLES.indexOf(role) + 1 : 0);
 export const atLeast = (role: PersonaRole | null | undefined, floor: PersonaRole): boolean =>
   roleRank(role) >= roleRank(floor);
+export const activeHolder = (holder: ScopeId, isActive: (principalId: string) => boolean): boolean => {
+  const { kind, ref } = parseScopeId(holder);
+  return kind !== "channel" && (kind !== "personal" || isActive(ref!));
+};
 
 export const PERSONA_MIGRATIONS: PgMigrationDefinition[] = [
   {
@@ -64,6 +69,21 @@ export const PERSONA_MIGRATIONS: PgMigrationDefinition[] = [
     statements: [
       `ALTER TABLE persona_access ADD COLUMN IF NOT EXISTS pinned BOOLEAN NOT NULL DEFAULT false`,
       `CREATE UNIQUE INDEX IF NOT EXISTS persona_access_one_pin ON persona_access(grantee_scope_id) WHERE pinned`,
+      `DO $$ BEGIN
+         IF to_regclass('persona_channel_defaults') IS NOT NULL THEN
+           INSERT INTO persona_access (persona_id, grantee_scope_id, role, granted_by, pinned)
+           SELECT p.id, d.id, 'read',
+                  COALESCE(
+                    (SELECT l.user_id FROM user_links l WHERE l.alias_id = d.json->>'setBy'),
+                    p.created_by),
+                  true
+             FROM persona_channel_defaults d
+             JOIN personas p ON p.id = d.json->>'personaId'
+            WHERE d.id LIKE 'channel:%'
+           ON CONFLICT (persona_id, grantee_scope_id) DO UPDATE SET pinned = true;
+           DROP TABLE persona_channel_defaults;
+         END IF;
+       END $$`,
     ],
   },
 ];
