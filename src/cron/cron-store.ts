@@ -78,10 +78,11 @@ export interface CronStore {
   due(now: number): Promise<Array<Cron & { scheduledAt: number }>>;
 }
 
-export function cronIsActive(cron: Pick<Cron, "enabled" | "archived" | "schedule" | "lastFiredAt">): boolean {
+export function cronIsActive(
+  cron: Pick<Cron, "enabled" | "archived" | "schedule" | "createdAt" | "lastFiredAt" | "nextFireAt">,
+): boolean {
   if (!cron.enabled || cron.archived) return false;
-  const oneShot = cron.schedule.cron === undefined && cron.schedule.everyMs === undefined;
-  return !(oneShot && cron.lastFiredAt !== undefined);
+  return recoverNextFireAt(cron.schedule, cron.createdAt, cron.lastFiredAt, cron.nextFireAt) !== undefined;
 }
 
 export function cronTiedTo(cron: Pick<Cron, "destination" | "sessionRef">, threadRef: string): boolean {

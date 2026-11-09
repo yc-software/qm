@@ -94,10 +94,11 @@ test("session:false and triggered turns leave a cron untied, and patch ties or u
   assert.ok(!(await built.app.listSessions("U1")).find((s) => s.threadRef === THREAD)?.crons);
 });
 
-test("a one-shot cron stops counting as active once it has fired", () => {
-  const base = { enabled: true, archived: false, schedule: { firstFireAt: 5 } };
+test("a one-shot cron stays active until it fires, and again once rescheduled", () => {
+  const base = { enabled: true, archived: false, createdAt: 1, schedule: { firstFireAt: 5 }, nextFireAt: 5 };
   assert.equal(cronIsActive(base), true);
-  assert.equal(cronIsActive({ ...base, lastFiredAt: 6 }), false);
+  assert.equal(cronIsActive({ ...base, nextFireAt: undefined, lastFiredAt: 6 }), false);
+  assert.equal(cronIsActive({ ...base, schedule: { firstFireAt: 9 }, nextFireAt: 9, lastFiredAt: 6 }), true);
   assert.equal(cronIsActive({ ...base, schedule: { everyMs: 60_000, firstFireAt: 5 }, lastFiredAt: 6 }), true);
   assert.equal(cronIsActive({ ...base, archived: true }), false);
 });

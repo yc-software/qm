@@ -163,6 +163,7 @@ import { collectBlob } from "../persistence/blob-transfer.ts";
 import { skillsIndex } from "../skills/materialize.ts";
 import { isIdeasConversation, PROACTIVE_OPENER_PROMPT } from "../onboarding/onboarding.ts";
 import { runCronScript } from "../cron/script.ts";
+import { cronIsActive } from "../cron/cron-store.ts";
 import { createToolContext, NeedsApproval, CommandDenied, type CommandCredential } from "../tools/primitives.ts";
 import type { FileArtifact } from "../files/file-artifact-store.ts";
 import { artifactImageLoader } from "../agent/replay-images.ts";
@@ -2339,14 +2340,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ])
             .then(([crons, hooks, mons]) =>
               renderStandingObligations(
-                crons.filter(
-                  (c) =>
-                    c.enabled &&
-                    !c.archived &&
-                    (c.schedule.cron != null ||
-                      c.schedule.everyMs != null ||
-                      (c.schedule.firstFireAt ?? c.createdAt) > nowMs),
-                ),
+                crons.filter(cronIsActive),
                 hooks.filter((w) => w.enabled),
                 mons.filter((m) => m.enabled && m.expiresAt > nowMs),
               ),
