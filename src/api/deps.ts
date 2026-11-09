@@ -19,7 +19,11 @@ import type { DurableByteStore } from "../files/durable-byte-store.ts";
 import type { SessionShareStore } from "../sessions/session-share.ts";
 import type { ModelOverlayStore } from "../model/model-overlay-store.ts";
 import type { ModelProvider, ModelProviderAvailability } from "../model/pi-models.ts";
-import type { CustomProviderStore, ModelCredentialStore } from "../model/model-credential-store.ts";
+import type {
+  CustomProviderKeyStatus,
+  CustomProviderStore,
+  ModelCredentialStore,
+} from "../model/model-credential-store.ts";
 import type { UserModelCredentialStore } from "../model/user-model-credential-store.ts";
 import type { McpServerStore } from "../mcp/mcp-server-store.ts";
 import type { MemoryRegistryStore } from "../memory/registry.ts";
@@ -160,6 +164,7 @@ export interface ServerDeps {
   refreshModels?: () => Promise<void>;
   customProviders?: CustomProviderStore;
   refreshCustomProviders?: () => Promise<void>;
+  customProviderStatuses?: () => Promise<CustomProviderKeyStatus[]>;
   brandingDefault?: OrgBranding;
   companySubscriptionAuth?: ModelProvider;
   admin?: AdminService;

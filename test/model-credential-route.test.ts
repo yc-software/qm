@@ -62,6 +62,7 @@ test("admin model credentials are encrypted, write-only, live, and removable", a
         { provider: "openai", configured: false, source: "absent" },
         { provider: "openrouter", configured: false, source: "absent" },
       ],
+      customProviders: [],
       models: [
         { id: "claude-opus-5-5", name: "Claude Opus 5.5", provider: "anthropic" },
         { id: "claude-fable-5-1", name: "Claude Fable 5.1", provider: "anthropic" },

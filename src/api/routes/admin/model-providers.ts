@@ -61,12 +61,14 @@ export async function getModelProviders(ctx: ApiCtx): Promise<void> {
   });
   const cached =
     ctx.url.searchParams.get("catalog") === "cached" ? cachedModelCatalog(ctx.deps.modelCredentialFetch) : undefined;
-  const [providers, models] = await Promise.all([
+  const [providers, customProviders, models] = await Promise.all([
     ctx.deps.modelCredentials.statuses(),
+    ctx.deps.customProviderStatuses?.() ?? [],
     cached?.models ?? selectableModelCatalog(ctx.deps.modelCredentialFetch),
   ]);
   return sendJson(ctx.res, 200, {
     providers,
+    customProviders,
     models,
     ...(cached?.refreshing ? { modelCatalogRefreshing: true } : {}),
     ...(ctx.deps.companySubscriptionAuth ? { subscriptionAuth: { provider: ctx.deps.companySubscriptionAuth } } : {}),

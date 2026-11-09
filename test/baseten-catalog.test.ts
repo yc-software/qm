@@ -160,7 +160,7 @@ test("a model whose output limit nears or fills its window still gets a quarter 
   assert.equal(contextTokenBudgetForModel("custom/baseten/small-output"), 40_000);
 });
 
-test("BASETEN_API_KEY offers Baseten's live catalog and an admin baseten provider takes precedence", async () => {
+test("BASETEN_API_KEY offers Baseten's live catalog and an admin baseten provider takes precedence", async (t) => {
   const requests: Array<{ url: string; auth: string | null }> = [];
   const modelCredentialFetch = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
@@ -188,6 +188,12 @@ test("BASETEN_API_KEY offers Baseten's live catalog and an admin baseten provide
       modelCatalog: Record<string, { name: string; provider: string }>;
     };
   };
+  const keyStatus = async (provider: string) => {
+    const res = await fetch(`${base}/v1/admin/model-providers?catalog=cached`, { headers: ADMIN });
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as { customProviders: Array<{ provider: string }> };
+    return body.customProviders.find((row) => row.provider === provider);
+  };
   try {
     const body = await runtimeConfig();
     assert.ok(body.models.includes("custom/baseten/zai-org/GLM-5.3"));
@@ -201,6 +207,7 @@ test("BASETEN_API_KEY offers Baseten's live catalog and an admin baseten provide
     assert.deepEqual(vl?.input, ["text", "image"]);
     assert.equal(vl?.upstreamId, "nvidia/Nemotron-VL");
     assert.equal(vl?.baseUrl, "https://inference.baseten.co/v1");
+    assert.deepEqual(await keyStatus("baseten"), { provider: "baseten", configured: true, source: "environment" });
 
     const put = await fetch(`${base}/v1/admin/custom-providers/baseten`, {
       method: "PUT",
@@ -218,6 +225,26 @@ test("BASETEN_API_KEY offers Baseten's live catalog and an admin baseten provide
     const after = await runtimeConfig();
     assert.ok(after.models.includes("custom/baseten/my-finetune"));
     assert.ok(!after.models.includes("custom/baseten/zai-org/GLM-5.3"));
+    assert.deepEqual(await keyStatus("baseten"), { provider: "baseten", configured: true, source: "admin" });
+
+    const keyless = await fetch(`${base}/v1/admin/custom-providers/acme`, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify({
+        name: "Acme",
+        protocol: "openai",
+        baseUrl: "https://llm.acme.example/v1",
+        models: [{ id: "acme-1" }],
+        validate: false,
+      }),
+    });
+    assert.equal(keyless.status, 200);
+    assert.deepEqual(await keyStatus("acme"), { provider: "acme", configured: false, source: "absent" });
+
+    t.mock.method(built.customProviders, "resolveKey", async () => {
+      throw new Error("unsupported state or unable to authenticate data");
+    });
+    assert.deepEqual(await keyStatus("baseten"), { provider: "baseten", configured: false, source: "absent" });
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await built.runtime.stop();

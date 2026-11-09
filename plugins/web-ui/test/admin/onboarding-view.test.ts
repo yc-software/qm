@@ -83,19 +83,32 @@ test("without subscription auth an unconfigured provider still needs a key", asy
   assert.match(elements["onboarding-model-summary"]!.textContent, /cannot run until its Anthropic key is configured/);
 });
 
-test("a custom provider model is ready without a built-in provider key", async () => {
+test("a custom provider model is ready when its provider reports a key", async () => {
   const elements = await runLoadOnboarding(
     {
       providers: UNCONFIGURED_PROVIDERS,
+      customProviders: [{ provider: "baseten", configured: true, source: "environment" }],
       models: [{ id: "custom/baseten/zai-org/GLM-5.3", name: "GLM 5.3", provider: "baseten" }],
     },
     { baseModelDefault: "custom/baseten/zai-org/GLM-5.3" },
   );
   assert.equal(elements["onboarding-model-badge"]!.textContent, "Ready");
-  assert.match(
-    elements["onboarding-model-summary"]!.textContent,
-    /^custom\/baseten\/zai-org\/GLM-5\.3 · .* custom provider$/,
-  );
+  assert.equal(elements["onboarding-model-summary"]!.textContent, "custom/baseten/zai-org/GLM-5.3 · deployment key");
+});
+
+test("a custom provider model without a usable key still needs one", async () => {
+  for (const customProviders of [[{ provider: "acme", configured: false, source: "absent" }], []]) {
+    const elements = await runLoadOnboarding(
+      {
+        providers: UNCONFIGURED_PROVIDERS,
+        customProviders,
+        models: [{ id: "custom/acme/acme-1", name: "Acme 1", provider: "acme" }],
+      },
+      { baseModelDefault: "custom/acme/acme-1" },
+    );
+    assert.equal(elements["onboarding-model-badge"]!.textContent, "Needs a key");
+    assert.match(elements["onboarding-model-summary"]!.textContent, /^custom\/acme\/acme-1 cannot run until its/);
+  }
 });
 
 test("a stored key keeps its summary even when a subscription also carries auth", async () => {

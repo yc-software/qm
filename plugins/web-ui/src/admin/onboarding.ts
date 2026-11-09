@@ -164,16 +164,15 @@ export class Onboarding {
       this.providers.find((row) => row.configured)?.provider ||
       this.providers[0]?.provider ||
       "";
-    const status = this.providers.find((row) => row.provider === provider);
+    const status = [...this.providers, ...(models.data.customProviders || [])].find(
+      (row: Data) => row.provider === provider,
+    );
     const subscriptionAuth = models.data.subscriptionAuth;
     const subscriptionReady = Boolean(subscriptionAuth && subscriptionAuth.provider === provider);
-    // A custom provider carries its own key, so it has no row among the built-in provider keys.
-    const customReady = baseModel.startsWith("custom/") && !status;
-    const ready = Boolean(baseModel) && (Boolean(status?.configured) || subscriptionReady || customReady);
+    const ready = Boolean(baseModel) && (Boolean(status?.configured) || subscriptionReady);
     let summary = "No base model is configured yet. Pick a provider and model below.";
     if (baseModel) {
       summary = baseModel + " cannot run until its " + this.label(provider) + " key is configured.";
-      if (customReady) summary = baseModel + " · " + this.label(provider) + " custom provider";
       if (subscriptionReady) summary = baseModel + " · authenticated by subscription — no API key needed.";
       if (status?.configured)
         summary = baseModel + " · " + (status.source === "admin" ? "admin-managed key" : "deployment key");
