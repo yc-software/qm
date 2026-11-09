@@ -7,7 +7,7 @@ import pg from "pg";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { applyPgMigrations, definePgMigration } from "../src/persistence/pg-pool.ts";
 import { PUBLISHED_SESSION_UPGRADE } from "../src/sessions/published-upgrade.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { testBareDatabaseUrl } from "./support/test-database.ts";
 
 const exec = promisify(execFile);
 const skip = !process.env.DATABASE_URL;
@@ -35,7 +35,7 @@ for (const interrupted of [false, true]) {
     `upgrade a populated published 0.1.15 database and restart; restart after history copy: ${interrupted}`,
     { skip },
     async () => {
-      const url = testDatabaseUrl();
+      const url = testBareDatabaseUrl();
       const db = new pg.Pool({ connectionString: url });
       try {
         await db.query(await readFile(new URL("fixtures/upgrades/0.1.15.sql", import.meta.url), "utf8"));
@@ -124,7 +124,7 @@ for (const interrupted of [false, true]) {
 }
 
 test("published surface upgrade preserves request carriers, Slack access and destinations", { skip }, async () => {
-  const url = testDatabaseUrl();
+  const url = testBareDatabaseUrl();
   const db = new pg.Pool({ connectionString: url });
   try {
     await migrate(url);
