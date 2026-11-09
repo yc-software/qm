@@ -1042,11 +1042,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         frameVars.userName = cleanBrandingLabel(actor.displayName, 80) ?? "there";
         frameVars.userEmail = actor.id.includes("@") ? actor.id : undefined;
       }
+      const sideChat = (await deps.sessions.getByThread(conversation.threadRef))?.sideChat;
+      const focusedSideChat = Boolean(sideChat && !sideChat.expanded);
       const sessionSyscalls =
-        !external && deps.sessionSyscalls && (delegationEnabled || actorFeatures.has("persistent_subagents"))
+        !focusedSideChat &&
+        !external &&
+        deps.sessionSyscalls &&
+        (delegationEnabled || actorFeatures.has("persistent_subagents"))
           ? deps.sessionSyscalls
           : undefined;
-      const delegateWork = requiresDelegation(input, delegationEnabled);
+      const delegateWork = !focusedSideChat && requiresDelegation(input, delegationEnabled);
       let modeFrame = applyPromptVars(frameMd, frameVars);
       if (delegateWork)
         modeFrame +=
