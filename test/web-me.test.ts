@@ -56,6 +56,7 @@ test("/me describes the signed-in person, the company and the web app's settings
     user: "bob@example.com",
     org: orgId(),
     companyName: "Acme",
+    workspace: null,
     analytics: { module: "https://cdn.example.com/analytics.js", options: { key: "public" } },
     browserErrors: { dsn: "https://public@sentry.example.com/1", release: "release-1" },
     mode: "portal",
