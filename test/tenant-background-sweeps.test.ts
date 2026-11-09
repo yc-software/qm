@@ -28,6 +28,8 @@ import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { scopeId } from "../src/types.ts";
 import { boundTenant, currentTenant, withTenant } from "../src/tenants/context.ts";
+import { onTenantLoad } from "../src/tenants/cache.ts";
+import { loadTenantSettings } from "../src/tenants/settings.ts";
 import { createModalSandbox, type StoredModalSandbox } from "../src/sandbox/modal-sandbox.ts";
 import { createMemorySnapshotStore } from "../src/sandbox/home-snapshot.ts";
 import { installFakeModal } from "./support/fake-modal.ts";
@@ -341,6 +343,7 @@ describeTwoTenants("background sweeps claim across tenants and work each row und
 
   it("modal deep-idle reaping checkpoints each tenant's idle computer under that tenant", async () => {
     const fake = installFakeModal();
+    const stopSettingsLoad = onTenantLoad(() => loadTenantSettings(db.app));
     try {
       await createPostgresMap(db.owner, "t_tenant_modal").claimIds();
       const store = createPostgresMap<StoredModalSandbox>(db.app, "t_tenant_modal");
@@ -369,6 +372,7 @@ describeTwoTenants("background sweeps claim across tenants and work each row und
           assert.equal(await modal.readFile(restored, "work.txt"), tenant);
         });
     } finally {
+      stopSettingsLoad();
       fake.cleanup();
     }
   });
