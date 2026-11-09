@@ -1022,6 +1022,15 @@ test("an env.core.SANDBOX_BACKEND override is the backend every reader sees", ()
   withConfig({ sandbox: { backend: "agent37" }, env: { core: { SANDBOX_BACKEND: "e2b" } } }, ({ path }) =>
     assert.equal(sandboxCoreEnv(loadConfigAt(path).config).env.SANDBOX_BACKEND, "e2b"),
   );
+  withConfig({ env: { core: { SANDBOX_BACKEND: "local" } } }, ({ path }) => {
+    const { config } = loadConfigAt(path);
+    assert.equal(localSandboxActive(config), true);
+    assert.deepEqual(sandboxCoreEnv(config).env, { SANDBOX_BACKEND: "local" });
+  });
+  withConfig(
+    { target: "fly", sandbox: { backend: "agent37" }, env: { core: { SANDBOX_BACKEND: "sprites" } } },
+    ({ path }) => assert.equal(sandboxCoreEnv(loadConfigAt(path).config).env.SANDBOX_BACKEND, undefined),
+  );
   for (const scopes of ["invalid", "[]", "null", "42"]) {
     withConfig({ sandbox: { backend: "local" }, env: { core: { SANDBOX_SCOPE_BACKENDS: scopes } } }, ({ path }) =>
       assert.doesNotThrow(() => loadConfigAt(path)),
