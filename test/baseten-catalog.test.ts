@@ -9,7 +9,7 @@ import { test, afterEach } from "node:test";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp, serverDeps } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
-import { basetenCatalogModels } from "../src/model/baseten.ts";
+import { basetenCatalogModels, createBasetenCatalog } from "../src/model/baseten.ts";
 import { resolveCustomModel, setCustomProviders } from "../src/model/custom-providers.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
@@ -55,13 +55,30 @@ test("Baseten's model list maps to tool-capable models with per-million prices",
   const [glm, vl] = models;
   assert.equal(glm?.reasoning, true);
   assert.equal(glm?.contextWindow, 202_752);
-  assert.equal(glm?.maxTokens, undefined);
+  assert.equal(glm?.maxTokens, 202_752);
   assert.ok(Math.abs((glm?.input ?? 0) - 0.6) < 1e-9);
   assert.ok(Math.abs((glm?.output ?? 0) - 2.2) < 1e-9);
   assert.ok(Math.abs((glm?.cacheRead ?? 0) - 0.11) < 1e-9);
   assert.equal(vl?.image, true);
   assert.equal(vl?.maxTokens, 32_768);
   assert.throws(() => basetenCatalogModels({ error: "nope" }), /invalid/);
+  const unpriced = { data: [{ ...CATALOG.data[1], pricing: {} }] };
+  assert.deepEqual(basetenCatalogModels(unpriced), []);
+});
+
+test("the key goes only to Baseten's own endpoint and the last good list survives an outage", async () => {
+  let up = true;
+  const fetcher = (async () =>
+    up ? Response.json(CATALOG) : new Response("down", { status: 503 })) as unknown as typeof fetch;
+  const catalog = createBasetenCatalog("bt-test-key", fetcher);
+  const [builtIn] = await catalog.providers([]);
+  assert.equal(builtIn?.baseUrl, "https://inference.baseten.co/v1");
+  assert.deepEqual(catalog.keys([]), { baseten: "bt-test-key" });
+  const keylessAdmin = { ...builtIn!, baseUrl: "https://elsewhere.example/v1", models: [{ id: "m" }] };
+  assert.deepEqual(catalog.keys([keylessAdmin]), {});
+  assert.deepEqual(await catalog.providers([keylessAdmin]), []);
+  up = false;
+  assert.equal((await catalog.providers([]))[0]?.models.length, 2);
 });
 
 test("BASETEN_API_KEY offers Baseten's live catalog and an admin baseten provider takes precedence", async () => {

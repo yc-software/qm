@@ -1,8 +1,10 @@
 import { createTtlRefresh } from "../util/async.ts";
 import { swallow } from "../util/errors.ts";
-import type { CustomProviderSpec } from "./custom-providers.ts";
+import { readBoundedText } from "../util/bytes.ts";
+import { validateCustomProviderSpec, type CustomProviderSpec } from "./custom-providers.ts";
+import { MAX_CATALOG_BYTES } from "./model-catalog.ts";
 
-export const BASETEN_PROVIDER_ID = "baseten";
+const BASETEN_PROVIDER_ID = "baseten";
 const BASETEN_BASE_URL = "https://inference.baseten.co/v1";
 const CATALOG_TTL_MS = 5 * 60_000;
 
@@ -29,11 +31,19 @@ export function basetenCatalogModels(body: unknown): BasetenModel[] {
     const raw = candidate as Record<string, unknown>;
     const features = strings(raw.supported_features);
     const contextWindow = positiveInteger(raw.context_length);
-    if (typeof raw.id !== "string" || !raw.id || !features.includes("tools") || !contextWindow) return [];
     const pricing = (raw.pricing ?? {}) as Record<string, unknown>;
-    const maxTokens = positiveInteger(raw.max_completion_tokens);
     const input = perMillion(pricing.prompt);
     const output = perMillion(pricing.completion);
+    if (
+      typeof raw.id !== "string" ||
+      !raw.id ||
+      !features.includes("tools") ||
+      !contextWindow ||
+      input === undefined ||
+      output === undefined
+    )
+      return [];
+    const maxTokens = positiveInteger(raw.max_completion_tokens);
     const cacheRead = perMillion(pricing.input_cache_read);
     return [
       {
@@ -42,9 +52,9 @@ export function basetenCatalogModels(body: unknown): BasetenModel[] {
         reasoning: features.includes("reasoning"),
         ...(strings(raw.input_modalities).includes("image") ? { image: true } : {}),
         contextWindow,
-        ...(maxTokens && maxTokens < contextWindow ? { maxTokens } : {}),
-        ...(input !== undefined ? { input } : {}),
-        ...(output !== undefined ? { output } : {}),
+        ...(maxTokens ? { maxTokens: Math.min(maxTokens, contextWindow) } : {}),
+        input,
+        output,
         ...(cacheRead !== undefined ? { cacheRead } : {}),
       },
     ];
@@ -60,18 +70,33 @@ export function createBasetenCatalog(apiKey: string, fetcher: typeof fetch = fet
         signal: AbortSignal.timeout(5_000),
       });
       if (!response.ok) throw new Error(`Baseten model list returned ${response.status}`);
-      const models = basetenCatalogModels(await response.json());
-      provider = models.length
+      const text = await readBoundedText(
+        response,
+        MAX_CATALOG_BYTES,
+        () => new Error("Baseten model list is too large"),
+      );
+      const models = basetenCatalogModels(JSON.parse(text));
+      const next: CustomProviderSpec | undefined = models.length
         ? { id: BASETEN_PROVIDER_ID, name: "Baseten", protocol: "openai", baseUrl: BASETEN_BASE_URL, models }
         : undefined;
+      if (next) validateCustomProviderSpec(next);
+      provider = next;
     } catch (error) {
       swallow("[model] Baseten catalog refresh", error);
     }
   });
+  let first: Promise<void> | undefined;
+  const adminOwnsId = (enabled: readonly CustomProviderSpec[]): boolean =>
+    enabled.some((p) => p.id === BASETEN_PROVIDER_ID);
   return {
-    async providers(): Promise<CustomProviderSpec[]> {
-      await refresh();
+    async providers(enabled: readonly CustomProviderSpec[]): Promise<CustomProviderSpec[]> {
+      if (adminOwnsId(enabled)) return [];
+      if (!first) await (first = refresh());
+      else void refresh();
       return provider ? [provider] : [];
+    },
+    keys(enabled: readonly CustomProviderSpec[]): Record<string, string> {
+      return adminOwnsId(enabled) ? {} : { [BASETEN_PROVIDER_ID]: apiKey };
     },
   };
 }
