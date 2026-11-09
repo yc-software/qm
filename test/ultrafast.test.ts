@@ -89,3 +89,38 @@ for (const [baseId, shortCost, longCost] of [
     });
   }
 }
+
+test("an Ultrafast request served on another tier is charged what Pi charges the base model on that tier", async (t) => {
+  const runtime = await buildModelRuntime({ openai: "test-key" });
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  const tokens = { input_tokens: 12_000, output_tokens: 3_000, total_tokens: 15_000 };
+  for (const servedTier of ["flex", "priority", "default"]) {
+    globalThis.fetch = (async () => {
+      const response = { id: "resp_1", status: "completed", service_tier: servedTier, output: [], usage: tokens };
+      const body = [
+        { type: "response.created", response: { ...response, status: "in_progress" } },
+        { type: "response.completed", response },
+      ]
+        .map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
+        .join("");
+      return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+    const served = await runtime
+      .stream(
+        getRequiredModel("gpt-6-astra"),
+        { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+        {
+          transport: "sse",
+          maxRetries: 0,
+        },
+      )
+      .result();
+    const usage = { ...zeroUsage(), input: tokens.input_tokens, output: tokens.output_tokens };
+    const charged = piUsageToCallUsage(usage, getRequiredModel("gpt-6-astra-ultrafast"), false, servedTier)!;
+    assert.ok(served.usage.cost.total > 0);
+    assert.ok(Math.abs(charged.costUsd - served.usage.cost.total) < 1e-9, `${servedTier}: ${charged.costUsd}`);
+  }
+});

@@ -6,6 +6,8 @@ import {
   type Model,
   type StreamOptions,
 } from "@earendil-works/pi-ai";
+import { MAX_PROVIDER_ERROR_BODY_CHARS, truncateErrorText } from "@earendil-works/pi-ai/utils/error-body";
+import { isRecord } from "../agent/provider-payload.ts";
 
 export interface ProviderErrorInfo {
   status?: number;
@@ -18,13 +20,8 @@ export type CapturedAssistantMessage = AssistantMessage & { providerError?: Prov
 
 type CaptureOptions = Pick<StreamOptions, "fetch" | "onPayload" | "onProviderStreamEvent" | "signal">;
 
-const MAX_ERROR_BODY_CHARS = 4000;
 const SERVED_TIER_APIS = new Set(["openai-responses", "azure-openai-responses"]);
 const SERVED_TIER_EVENTS = new Set(["response.completed", "response.incomplete"]);
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function firstString(...values: unknown[]): string | undefined {
   for (const value of values) {
@@ -40,7 +37,7 @@ function parseBody(text: string): unknown {
   try {
     return JSON.parse(trimmed) as unknown;
   } catch {
-    return trimmed.slice(0, MAX_ERROR_BODY_CHARS);
+    return truncateErrorText(trimmed, MAX_PROVIDER_ERROR_BODY_CHARS);
   }
 }
 

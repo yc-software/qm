@@ -8,7 +8,13 @@ const CONTEXT_CODES = new Set(["context_length_exceeded"]);
 const QUOTA_CODES = new Set(["insufficient_quota"]);
 const NOT_FOUND_CODES = new Set(["model_not_found"]);
 const RETRYABLE_CODES = new Set<ProviderErrorCode>([...TRANSIENT_ERROR_CODES, "unknown"]);
-const STOP_REASON_FAILURE_APIS = new Set(["anthropic-messages", "openai-completions", "bedrock-converse-stream"]);
+const DELIBERATE_STOP_REASONS = new Set([
+  "refusal",
+  "sensitive",
+  "content_filter",
+  "guardrail_intervened",
+  "content_filtered",
+]);
 
 export interface ContextUsage {
   contextWindow?: number | undefined;
@@ -22,12 +28,7 @@ function nearWindow(usage: ContextUsage | undefined): boolean {
   return !!contextWindow && !!lastInputTokens && lastInputTokens >= contextWindow * NEAR_WINDOW_RATIO;
 }
 
-type ProviderFailure = Pick<AssistantMessage, "rawStopReason" | "errorMessage"> &
-  Partial<Pick<AssistantMessage, "api">> & { providerError?: ProviderErrorInfo };
-
-function providerStopped(failed: ProviderFailure): boolean {
-  return !!failed.rawStopReason && (!failed.api || STOP_REASON_FAILURE_APIS.has(failed.api));
-}
+type ProviderFailure = Pick<AssistantMessage, "rawStopReason" | "errorMessage"> & { providerError?: ProviderErrorInfo };
 
 function providerErrorCode(failed: ProviderFailure, usage?: ContextUsage): ProviderErrorCode {
   if (failed.rawStopReason === "refusal") return "refusal";
@@ -63,6 +64,7 @@ export function providerTurnError(failed: ProviderFailure, usage?: ContextUsage)
     ? `Model provider API error${type ? ` (${type})` : ""}: ${bodyMessage}`
     : raw || "The agent stopped with an error";
   const retryable =
-    RETRYABLE_CODES.has(code) && !(code === "unknown" && (status !== undefined || providerStopped(failed)));
+    RETRYABLE_CODES.has(code) &&
+    !(code === "unknown" && (status !== undefined || DELIBERATE_STOP_REASONS.has(failed.rawStopReason ?? "")));
   return new ProviderTurnError(message, { code, retryable, status, raw });
 }

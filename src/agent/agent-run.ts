@@ -187,28 +187,6 @@ export function continuableContext<M extends { role?: unknown }>(messages: reado
   return role === "user" || role === "toolResult" ? messages.slice(0, end) : null;
 }
 
-interface ContinueTrigger {
-  messageType: "custom";
-  message: object;
-}
-
-interface SessionRunInternals {
-  _prepareRun(trigger: ContinueTrigger): Promise<unknown[]>;
-  _startRun(trigger: ContinueTrigger): Promise<void>;
-}
-
-async function continueAssistantTurn(session: AgentSession): Promise<void> {
-  const run = session as unknown as SessionRunInternals;
-  const prepareRun = run._prepareRun;
-  run._prepareRun = async (trigger) =>
-    (await prepareRun.call(run, trigger)).filter((message) => message !== trigger.message);
-  try {
-    await run._startRun({ messageType: "custom", message: {} });
-  } finally {
-    run._prepareRun = prepareRun;
-  }
-}
-
 interface PiSeedTarget {
   agent?: { state?: { messages?: unknown[] } };
   sessionManager?: { appendMessage?: (message: unknown) => unknown };
@@ -851,7 +829,7 @@ export function createAgent(opts?: AgentOptions): Agent {
             : undefined;
           wallClock = await raceTurnWallClock(
             continueTurn
-              ? continueAssistantTurn(entry.agentSession)
+              ? entry.agentSession.agent.continue()
               : entry.agentSession.prompt(modelPrompt, images ? { images } : undefined),
             {
               capMs: raceCapMs(),
