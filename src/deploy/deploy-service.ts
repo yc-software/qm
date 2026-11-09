@@ -443,10 +443,10 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       return withDeployLock(id, async () => {
         const before = await deps.deployStore.get(id);
         if (before) await withdrawLoanUnlessPublisher(before, options?.actor);
-        await deps.deployStore.setCurrentVersion(id, version);
-        const v = await deps.deployStore.versionOf(id, version);
         const d = await deps.deployStore.get(id);
-        if (!d || !v) return;
+        if (!d) return;
+        const v = await deps.deployStore.versionOf(id, version);
+        if (!v) throw new Error(`no such version ${version}`);
         const endpoint = await applyVersion(id, v, before?.appliedVersion ?? before?.currentVersion, options?.alwaysOn);
         await markVersionRunning(id, v.version, endpoint);
         deps.auditLog.record({

@@ -103,7 +103,6 @@ export interface DeployStore {
   get(id: string): Promise<Deployment | null>;
   getByName(name: string): Promise<Deployment | null>;
   list(): Promise<Deployment[]>;
-  setCurrentVersion(id: string, version: number): Promise<void>;
   setVersionImage(id: string, version: number, image: string): Promise<void>;
   setStatus(id: string, status: DeploymentStatus): Promise<void>;
   setEndpoint(id: string, endpoint: DeployEndpoint | null): Promise<void>;
@@ -305,7 +304,6 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
       const parentCommit = currentVersionOf(d)?.commit;
       const v = await makeVersion(id, version, input, parentCommit);
       d.versions.push(v);
-      d.currentVersion = version;
       await backingMap.put(id, d);
       await updateVersionRef(id, v);
       return v;
@@ -327,7 +325,6 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
         ...(current?.commit ? { parentCommit: current.commit } : {}),
       };
       d.versions.push(v);
-      d.currentVersion = version;
       await backingMap.put(id, d);
       await updateVersionRef(id, v);
       return v;
@@ -345,14 +342,6 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
     async list() {
       const [ds, accessAt] = await Promise.all([backingMap.all(), access.readAll()]);
       return ds.map((d) => withAccess(d, accessAt.get(d.id)));
-    },
-    async setCurrentVersion(id, version) {
-      const d = await backingMap.get(id);
-      if (!d) return;
-      const v = d.versions.find((x) => x.version === version);
-      if (!v) throw new Error(`no such version ${version}`);
-      d.currentVersion = version;
-      await backingMap.put(id, d);
     },
     async setVersionImage(id, version, image) {
       const d = await backingMap.get(id);
@@ -423,6 +412,7 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
       const v = d.versions.find((x) => x.version === version);
       if (!v) throw new Error(`no such version ${version}`);
       d.appliedVersion = version;
+      d.currentVersion = version;
       await backingMap.put(id, d);
       await updateAppliedRef(id, v);
     },
