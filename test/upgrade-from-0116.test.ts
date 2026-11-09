@@ -17,6 +17,8 @@ const FIXTURE = new URL("./fixtures/v0.1.16-seeded.sql.gz", import.meta.url);
 const RELEASE_TENANT = "5870d898-0d55-4acc-bfc6-7beb49f91455";
 const REPLACED_TABLES = new Set([
   "public.acl_grants_version",
+  "public.deployment_identity",
+  "public.durable_map_versions",
   "public.principal_links",
   "public.qm_schema_migrations",
   "public.qm_tenant",

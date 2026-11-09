@@ -119,3 +119,35 @@ END $retire_tenant_keys$`,
     ],
   };
 }
+
+export const REPAIR_0116_CONSTRAINTS: PgMigrationDefinition = {
+  id: "0000-tenancy/base/retire-0116-keys/repair",
+  statements: [
+    `DO $repair_0116$
+DECLARE
+  constraint_keys CONSTANT text[] := ARRAY[${CONSTRAINT_KEYS.map((name) => `'${name}'`).join(", ")}];
+  n text;
+  t regclass;
+BEGIN
+  IF EXISTS (SELECT 1 FROM qm_schema_migrations WHERE id LIKE '%-tenants/1-column') THEN
+    RETURN;
+  END IF;
+  FOREACH n IN ARRAY constraint_keys LOOP
+    SELECT i.indrelid::regclass INTO t
+      FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+     WHERE c.relname = n AND c.relnamespace = current_schema()::regnamespace AND i.indisunique
+       AND NOT EXISTS (SELECT 1 FROM pg_constraint k WHERE k.conindid = i.indexrelid);
+    IF t IS NOT NULL THEN
+      EXECUTE format('ALTER TABLE %s ADD CONSTRAINT %I UNIQUE USING INDEX %I', t, n, n);
+    END IF;
+  END LOOP;
+  IF to_regclass('acl_grants') IS NOT NULL
+     AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'acl_grants'::regclass AND tgname = 'acl_grants_truncate') THEN
+    DROP TRIGGER acl_grants_truncate ON acl_grants;
+    DROP TRIGGER IF EXISTS acl_grants_bump ON acl_grants;
+    CREATE TRIGGER acl_grants_bump AFTER INSERT OR UPDATE OR DELETE OR TRUNCATE ON acl_grants
+      FOR EACH STATEMENT EXECUTE FUNCTION acl_grants_bump_version();
+  END IF;
+END $repair_0116$`,
+  ],
+};

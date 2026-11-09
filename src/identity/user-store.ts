@@ -254,7 +254,7 @@ export const USER_SCHEMA_MIGRATIONS: PgMigrationDefinition[] = [
          CHECK (display_name IS NULL OR (display_name <> '' AND char_length(display_name) <= ${DISPLAY_NAME_MAX}))`,
     ],
   },
-].sort((a, b) => a.id.localeCompare(b.id));
+].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 
 const COLUMNS = `u.id, u.primary_alias, u.kind,
   ARRAY(SELECT a.alias_id FROM user_links a WHERE a.user_id = u.id
