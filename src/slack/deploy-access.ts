@@ -73,20 +73,19 @@ export async function decideDeploymentAccess(
   const d = await app.getDeployment(deploymentId);
   if (!d) throw new Error("That app no longer exists.");
   const label = d.displayName ?? d.name ?? d.id;
+  const grantee = scopeId("personal", requesterId);
+  const existing = (await app.deploymentGrantees(deploymentId)).find((g) => g.scope === grantee);
   if (approve) {
-    const grantee = scopeId("personal", requesterId);
-    const existing = (await app.deploymentGrantees(deploymentId)).find(
-      (g) => g.scope === grantee && g.permission === "write",
-    );
     await app.grant({
       ownerScopeId: home.ownerScopeId,
       ref: home.grantRef,
       granteeScopeId: grantee,
-      permission: existing?.permission ?? "read",
+      permission: existing?.permission === "write" ? "write" : "read",
       grantedBy: actor.id,
     });
     return `Approved. ${requesterId} can now open "${label}".`;
   }
+  if (existing) return `Already approved. ${requesterId} can open "${label}".`;
   await app.enqueueDelivery({
     destination: principalDestination(requesterId, actor.id),
     text: `${actor.id} declined your request for access to "${label}".`,
