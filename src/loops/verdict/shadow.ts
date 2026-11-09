@@ -10,9 +10,11 @@ import { isResolved } from "../ledger-view.ts";
 import { draftOf } from "../sources/adapter.ts";
 import { changedSinceLastLook, SourceRateLimited, type ConversationFetcher } from "./fetch.ts";
 import { newestTs } from "./transcript.ts";
-import { runVerdict, type VerdictModel } from "./verdict.ts";
+import { runVerdict, writeDraft, type VerdictInput, type VerdictModel } from "./verdict.ts";
 
 export const INBOX_VERDICT_DISAGREEMENT = "inbox.verdict_disagreement";
+const ITEMS_PER_PASS = 100;
+const CONCURRENCY = 4;
 
 export interface InboxVerdictDeps {
   featureFlags: Pick<FeatureFlagStore, "enabled">;
@@ -23,8 +25,6 @@ export interface InboxVerdictDeps {
   errors?: Pick<ErrorLog, "record">;
   ownerName?: (owner: string) => Promise<string | undefined>;
   now?: () => number;
-  maxItemsPerPass?: number;
-  concurrency?: number;
 }
 
 export type InboxVerdictPass = (loop: Loop, voiceProfile?: string) => Promise<void>;
@@ -44,8 +44,6 @@ function passOrder(a: LoopItem, b: LoopItem): number {
 
 export function createInboxVerdictPass(deps: InboxVerdictDeps): InboxVerdictPass {
   const now = deps.now ?? Date.now;
-  const maxItems = deps.maxItemsPerPass ?? 100;
-  const concurrency = deps.concurrency ?? 4;
 
   function fail(owner: string, item: LoopItem, error: unknown): void {
     deps.errors?.record(
@@ -66,15 +64,32 @@ export function createInboxVerdictPass(deps: InboxVerdictDeps): InboxVerdictPass
     const { conversation } = outcome;
     if (!changedSinceLastLook(item, conversation)) return;
     const lastSeenTs = newestTs(conversation)!;
-    const result = await runVerdict(deps.model, {
+    const previousDraft = draftOf(item)?.body;
+    const input: VerdictInput = {
       owner: { id: owner, ...(ownerName ? { name: ownerName } : {}) },
       conversation,
-      ...(draftOf(item)?.body ? { previousDraft: draftOf(item)!.body } : {}),
+      ...(previousDraft ? { previousDraft } : {}),
       ...(voiceProfile ? { voiceProfile } : {}),
       now: now(),
-    });
-    const verdict: LoopItemVerdict = { ...result, lastSeenTs, ledgerState: ledgerClassification(item), at: now() };
+    };
+    const result = await runVerdict(deps.model, input);
+    let draft: string | null = null;
+    let draftFailure: unknown;
+    if (result.state === "needs_reply")
+      try {
+        draft = await writeDraft(deps.model, input, result.waitingTs);
+      } catch (error) {
+        draftFailure = error;
+      }
+    const verdict: LoopItemVerdict = {
+      ...result,
+      draft,
+      lastSeenTs,
+      ledgerState: ledgerClassification(item),
+      at: now(),
+    };
     await deps.items.setVerdict(item.id, verdict);
+    if (draftFailure !== undefined) fail(owner, item, draftFailure);
     if (disagrees(verdict))
       deps.audit.record({
         at: verdict.at,
@@ -90,12 +105,12 @@ export function createInboxVerdictPass(deps: InboxVerdictDeps): InboxVerdictPass
   return async (loop, voiceProfile) => {
     try {
       if (!(await deps.featureFlags.enabled("inbox_verdict", personalScope(loop.owner)))) return;
-      const items = (await deps.items.byLoop(loop.id)).sort(passOrder).slice(0, maxItems);
+      const items = (await deps.items.byLoop(loop.id)).sort(passOrder).slice(0, ITEMS_PER_PASS);
       const ownerName = await deps.ownerName?.(loop.owner);
       const stopped = new Set<string>();
-      for (let index = 0; index < items.length; index += concurrency) {
+      for (let index = 0; index < items.length; index += CONCURRENCY) {
         await Promise.all(
-          items.slice(index, index + concurrency).map(async (item) => {
+          items.slice(index, index + CONCURRENCY).map(async (item) => {
             if (!item.source || stopped.has(item.source)) return;
             try {
               await one(loop, item, ownerName, voiceProfile);

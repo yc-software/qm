@@ -14,7 +14,7 @@ export interface Conversation {
   messages: TranscriptMessage[];
 }
 
-const TRANSCRIPT_TAIL = 30;
+export const TRANSCRIPT_TAIL = 30;
 const MESSAGE_CHARS = 3000;
 
 export function newestTs(conversation: Pick<Conversation, "messages">): string | undefined {
@@ -31,11 +31,16 @@ export function transcriptWindow(conversation: Conversation, tail = TRANSCRIPT_T
   return root && !window.includes(root) ? [root, ...window] : window;
 }
 
+function clipMarked(text: string): string {
+  if (text.length <= MESSAGE_CHARS) return text;
+  return `${text.slice(0, MESSAGE_CHARS)} [cut ${text.length - MESSAGE_CHARS} chars]`;
+}
+
 export function renderTranscript(messages: readonly TranscriptMessage[]): string {
   return messages
     .map((message) => {
       const who = message.owner ? `owner (${message.author})` : message.author;
-      const body = message.text.trim().slice(0, MESSAGE_CHARS) || "(no text)";
+      const body = clipMarked(message.text.trim()) || "(no text)";
       const files = message.attachments
         ? ` [${message.attachments} attachment${message.attachments === 1 ? "" : "s"}]`
         : "";

@@ -44,15 +44,25 @@ async function slackFixture(overrides: Record<string, unknown> = {}) {
   return { items, item: (await items.byLoop(loop.id))[0]! };
 }
 
-function slackApi(messages: Array<Record<string, unknown>>, calls: string[] = []) {
-  return async (url: string | URL | Request) => {
-    const path = new URL(String(url)).pathname.split("/").at(-1)!;
-    calls.push(path);
-    if (path === "auth.test") return json({ ok: true, user_id: "U_REGAN" });
-    if (path === "conversations.info") return json({ ok: true, channel: { is_im: true } });
-    if (path === "conversations.history") return json({ ok: true, messages: [...messages].reverse() });
-    return json({ ok: false, error: `unexpected ${path}` });
-  };
+function slackApi(messages: Array<Record<string, unknown>>, calls: string[] = [], pageSize = 200) {
+  return (_token: string) => ({
+    apiCall: async (method: string, params: Record<string, unknown> = {}) => {
+      calls.push(method);
+      if (method === "auth.test") return { ok: true, user_id: "U_REGAN" };
+      if (method === "conversations.history") {
+        const newestFirst = [...messages].reverse();
+        const start = typeof params.cursor === "string" ? Number(params.cursor) : 0;
+        const page = newestFirst.slice(start, start + pageSize);
+        const next = start + pageSize < newestFirst.length ? String(start + pageSize) : "";
+        return { ok: true, messages: page, response_metadata: { next_cursor: next } };
+      }
+      if (method === "conversations.replies") {
+        const root = messages.find((m) => m.ts === params.ts);
+        return { ok: true, messages: root ? [root, ...messages.filter((m) => m.thread_ts === params.ts)] : [] };
+      }
+      throw new Error(`unexpected ${method}`);
+    },
+  });
 }
 
 function scriptedModel(replies: string[]) {
@@ -125,7 +135,7 @@ test("the fetcher reports a change only when the newest message differs from the
     { ts: "1000.000200", user: "U_REGAN", text: "github.com/x/y" },
   ];
   const calls: string[] = [];
-  const fetchConversation = createConversationFetcher({ tokens, fetchImpl: slackApi(history, calls) });
+  const fetchConversation = createConversationFetcher({ tokens, slackClient: slackApi(history, calls) });
   const first = await fetchConversation(OWNER, item);
   assert.equal(first.kind, "conversation");
   if (first.kind !== "conversation") return;
@@ -144,7 +154,39 @@ test("the fetcher reports a change only when the newest message differs from the
     ],
   );
   assert.equal(calls.filter((call) => call === "auth.test").length, 1);
-  assert.equal(calls.filter((call) => call === "conversations.info").length, 1);
+});
+
+test("Slack history pages back until the window holds 30 messages and the owner's last message", async () => {
+  const { item } = await slackFixture();
+  const history = [
+    { ts: "1.000001", user: "U_REGAN", text: "owner long ago" },
+    ...Array.from({ length: 70 }, (_, i) => ({ ts: `2.${String(i).padStart(6, "0")}`, user: "U_JOSH", text: `m${i}` })),
+  ];
+  const calls: string[] = [];
+  const fetchConversation = createConversationFetcher({ tokens, slackClient: slackApi(history, calls, 25) });
+  const outcome = await fetchConversation(OWNER, item);
+  assert.equal(outcome.kind, "conversation");
+  if (outcome.kind !== "conversation") return;
+  assert.equal(outcome.conversation.messages.length, 71);
+  assert.equal(outcome.conversation.messages[0]!.owner, true);
+  assert.equal(outcome.conversation.messages.at(-1)!.ts, "2.000069");
+  assert.equal(calls.filter((call) => call === "conversations.history").length, 3);
+
+  const threaded = await slackFixture({
+    slack: { channelId: "C1", ts: "2.000003", threadTs: "2.000003", isDirectMessage: false },
+  });
+  const thread = [
+    { ts: "2.000003", user: "U_JOSH", text: "root" },
+    { ts: "2.000004", user: "U_REGAN", text: "reply", thread_ts: "2.000003" },
+    { ts: "9.000000", user: "U_JOSH", text: "unrelated channel message" },
+  ];
+  const result = await createConversationFetcher({ tokens, slackClient: slackApi(thread) })(OWNER, threaded.item);
+  assert.ok(result.kind === "conversation");
+  assert.deepEqual(
+    result.conversation.messages.map((m) => m.text),
+    ["root", "reply"],
+  );
+  assert.equal(result.conversation.rootTs, "2.000003");
 });
 
 test("Gmail threads mark SENT messages as the owner's, drop drafts and decode plain-text bodies", async () => {
@@ -230,7 +272,7 @@ test("shadow pass stores the verdict, leaves status and payload alone, and audit
     items,
     audit,
     model,
-    fetch: createConversationFetcher({ tokens, fetchImpl: slackApi(history) }),
+    fetch: createConversationFetcher({ tokens, slackClient: slackApi(history) }),
     ownerName: async () => "Regan",
     now: () => 5_000_000,
   });
@@ -282,7 +324,7 @@ test("a textless message after the owner's answer still gets a fresh verdict and
     items,
     audit,
     model,
-    fetch: createConversationFetcher({ tokens, fetchImpl: slackApi(history) }),
+    fetch: createConversationFetcher({ tokens, slackClient: slackApi(history) }),
   })(loop);
   assert.equal(prompts.length, 1);
   assert.match(prompts[0]!, /Josh: \(no text\) \[1 attachment\]/);
@@ -319,7 +361,7 @@ test("the pass does nothing when the flag is off and logs model failures without
       audit,
       model,
       errors: errorLog,
-      fetch: createConversationFetcher({ tokens, fetchImpl: slackApi(history, calls) }),
+      fetch: createConversationFetcher({ tokens, slackClient: slackApi(history, calls) }),
     });
   await make(false)(loop);
   assert.deepEqual(calls, []);
@@ -331,7 +373,41 @@ test("the pass does nothing when the flag is off and logs model failures without
   assert.equal(events.length, 0);
   assert.equal(errors.length, 1);
   assert.equal(errors[0]!.code, "verdict_failed");
-  assert.match(errors[0]!.message, /verdict was not a JSON object/);
+  assert.match(errors[0]!.message, /verdict was not a JSON object: "not json at all"/);
+});
+
+test("a failed draft keeps the verdict, stores no draft, and records the model's reply in the error log", async () => {
+  const { items, item } = await slackFixture();
+  const history = [{ ts: "1000.000100", user: "U_JOSH", text: "Do you have a link to the repo?" }];
+  const errors: Array<{ code: string; message: string }> = [];
+  const model: VerdictModel = {
+    verdict: async () => '{"state":"needs_reply","reason":"open ask","waiting_ts":"1000.000100"}',
+    draft: async () => "Sure thing, here you go",
+  };
+  await createInboxVerdictPass({
+    featureFlags: on,
+    items,
+    audit: auditRecorder().audit,
+    model,
+    errors: { record: (event: { code: string; message: string }) => void errors.push(event) },
+    fetch: createConversationFetcher({ tokens, slackClient: slackApi(history) }),
+  })(loop);
+  const after = (await items.get(item.id))!;
+  assert.equal(after.verdict?.state, "needs_reply");
+  assert.equal(after.verdict?.draft, null);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0]!.message, /draft was not \{"draft": string\}: "Sure thing, here you go"/);
+});
+
+test("long message bodies are cut with a visible marker instead of silently", () => {
+  const conversation: Conversation = {
+    source: "gmail",
+    label: "Email thread",
+    messages: [message(1, false, "x".repeat(3500))],
+  };
+  const prompt = renderVerdictPrompt({ owner: { id: OWNER }, conversation, now: 0 });
+  assert.match(prompt, /x{3000} \[cut 500 chars\]/);
+  assert.doesNotMatch(prompt, /x{3001}/);
 });
 
 test("the verdict prompt marks owner messages and carries the conversation label", () => {
