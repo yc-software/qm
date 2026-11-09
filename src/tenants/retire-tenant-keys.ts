@@ -1,4 +1,5 @@
 import type { PgMigrationDefinition } from "../persistence/pg-pool.ts";
+import { TENANCY_BASE } from "./migrations.ts";
 
 export const RETIRE_TENANT_KEYS: PgMigrationDefinition = {
   id: "0000-tenancy/retire-tenant-keys",
@@ -84,10 +85,16 @@ BEGIN
     EXECUTE format('ALTER TABLE %I DROP COLUMN tenant_id', t.relname);
   END LOOP;
   ALTER TABLE tenants DISABLE ROW LEVEL SECURITY, NO FORCE ROW LEVEL SECURITY;
+  DROP TRIGGER IF EXISTS tenants_retire_hosts ON tenants;
+  DROP TABLE IF EXISTS retired_tenant_hosts, tenant_hosts;
+  DROP FUNCTION IF EXISTS qm_retire_tenant_hosts(), qm_host_tenant(text), qm_tenant_settings(), qm_sole_tenant();
+  ALTER TABLE tenants DROP COLUMN IF EXISTS settings;
+  DROP INDEX IF EXISTS deployments_name_lookup;
 
   FOR r IN SELECT conrelid::regclass AS tbl, conname, def FROM retired_fks LOOP
     EXECUTE format('ALTER TABLE %s ADD CONSTRAINT %I %s', r.tbl, r.conname, r.def);
   END LOOP;
 END $retire_tenant_keys$`,
+    TENANCY_BASE.statements[1]!,
   ],
 };
