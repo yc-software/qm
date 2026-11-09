@@ -1324,20 +1324,29 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           firstMessageTitle = titles.titleFromFirstMessage(session, scopeId, titleText, descriptiveTitles);
       };
 
+      const postProvenance = (deliveryKey: string): DeliveryProvenance =>
+        turnDeliveryProvenance({
+          origin: input.origin,
+          surface: input.surface,
+          fireKey: deliveryKey,
+          sourceScopeId: scopeId as ScopeId,
+          sourceThreadRef: session.threadRef,
+          sourceSessionId: session.id,
+        });
+
       const isRetry = (input.attempt ?? 1) > 1;
-      const recordedTurnForRun = async (): Promise<RecordedTurn | null> => {
+      const recordedTurnForRun = async (): Promise<{ turn: RecordedTurn | null; items: Item[] } | null> => {
         if (!input.runId || !deps.runs) return null;
         const seq = (await deps.runs.get(input.runId))?.turnUserSeq;
         if (seq == null) return null;
         const items = await deps.sessions.getItems(session.id);
         if (!items.some((item) => item.seq === seq)) return null;
-        return turnAtSeq(
-          items.filter((item) => item.seq >= seq),
-          seq,
-        );
+        const turnItems = items.filter((item) => item.seq >= seq);
+        return { turn: turnAtSeq(turnItems, seq), items: turnItems };
       };
-      const recordedTurn = isRetry ? await recordedTurnForRun() : null;
-      if (recordedTurn?.answer) {
+      const recorded = isRetry ? await recordedTurnForRun() : null;
+      const recordedTurn = recorded?.turn;
+      if (recorded && recordedTurn?.answer) {
         const recordedAnswer = recordedTurn.answer;
         audit({
           action: "turn.already_answered",
@@ -1347,18 +1356,31 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         console.error(
           `[orchestrator] turn.already_answered attempt=${input.attempt} run=${input.runId} thread=${conversation.threadRef} answerSeq=${recordedAnswer.seq}`,
         );
-        const replayStopped = recordedAnswer.stopped ? { stopped: true } : {};
-        const surfaceToolTurn = surfaceToolsActive({ deps, input, strictReadOnly, defaultDestination });
-        return recordedAnswer.text.trim() && !surfaceToolTurn
+        if (recordedAnswer.stopped) return { status: "silent", sessionId: session.id, stopped: true };
+        const text = absoluteAppLinks(recordedAnswer.text, deps.publicWebUrl);
+        if (surfaceToolsActive({ deps, input, strictReadOnly, defaultDestination })) {
+          const posted = completedSurfaceEnqueues(recorded.items, recordedTurn.userSeq, surfaceName);
+          if (input.addressed && posted === 0 && text.trim() && defaultDestination && deps.deliveries && input.runId) {
+            const directKey = turnPostKeys(input.runId).key(defaultDestination, posted);
+            await reachEnqueue({
+              deliveries: deps.deliveries,
+              destination: defaultDestination,
+              text,
+              idempotencyKey: directKey,
+              provenance: postProvenance(directKey),
+            });
+          }
+          return { status: "silent", sessionId: session.id };
+        }
+        return text.trim()
           ? {
               status: "ok",
               sessionId: session.id,
-              reply: absoluteAppLinks(recordedAnswer.text, deps.publicWebUrl),
+              reply: text,
               sourceUserSeq: recordedTurn.userSeq,
               sourceAssistantEntrySeq: recordedAnswer.seq,
-              ...replayStopped,
             }
-          : { status: "silent", sessionId: session.id, ...replayStopped };
+          : { status: "silent", sessionId: session.id };
       }
 
       audit({
@@ -2611,15 +2633,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               e,
             ),
         };
-        const postProvenance = (deliveryKey: string): DeliveryProvenance =>
-          turnDeliveryProvenance({
-            origin: input.origin,
-            surface: input.surface,
-            fireKey: deliveryKey,
-            sourceScopeId: scopeId as ScopeId,
-            sourceThreadRef: session.threadRef,
-            sourceSessionId: session.id,
-          });
         const earlyTaskAck =
           surface?.capabilities.liveReplies === true &&
           humanInput &&
