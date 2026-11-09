@@ -1,3 +1,4 @@
+import type { PersonaHandover } from "../personas/persona-handover.ts";
 import type { PersonaService } from "../personas/persona-service.ts";
 import type { TeamStore } from "../teams/teams.ts";
 import type { CronScriptTrial } from "../cron/script.ts";
@@ -283,6 +284,7 @@ export interface App {
   tenantFor: import("../tenants/lookup.ts").TenantLookup["tenantFor"];
   swarms?: SwarmService;
   personas?: PersonaService;
+  personaHandover?: PersonaHandover;
   turn(req: TurnRequest, replay?: { signalDedupKey: string }): Promise<TurnResult>;
   getApproval(
     requestId: string,
@@ -657,6 +659,7 @@ interface DeploymentGitPrincipals {
 
 export interface AppDeps {
   personas?: PersonaService;
+  personaHandover?: PersonaHandover;
   externalSlackPolicies?: ExternalSlackPolicies;
   admittedWork?: AdmittedWork;
   shutdown?: () => AbortSignal;
@@ -675,7 +678,7 @@ export interface AppDeps {
   runStreamEvents?: EventBus<RunStreamEvent>;
   runActivity?: RunActivityStore;
   signals?: RunSignalStore;
-  settleTreeWakes?: (root: Session) => Promise<void>;
+  settleTreeWakes?: (root: Session, botRunsOnly?: boolean) => Promise<void>;
   modelCredentials?: ModelCredentialStore;
   userModelCredentials?: UserModelCredentialStore;
   mcpServers?: McpServerStore;

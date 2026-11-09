@@ -3,7 +3,7 @@ import { slackReply } from "./slack-reply.ts";
 import { nativeSlackConfigured, nativeSlackConnection } from "./slack-native.ts";
 import { isBackendCredential } from "../../credentials/keychain.ts";
 import { livePersonCapability } from "../artifact-share.ts";
-import { mintSignedPayload, verifySignedPayload } from "../../auth/signed-token.ts";
+import { verifySignedPayload } from "../../auth/signed-token.ts";
 import { canonicalPerson, personIds, samePerson } from "../../directory/person.ts";
 import { PrincipalLinkError } from "../../identity/principal-links.ts";
 import { createHash } from "node:crypto";
@@ -240,100 +240,6 @@ async function catalog(ctx: ApiCtx): Promise<void> {
     });
   } catch {
     return sendJson(ctx.res, 502, { error: "composio_unavailable", message: "Could not load apps. Please try again." });
-  }
-}
-
-async function authorize(ctx: ApiCtx, linkSlack = false): Promise<void> {
-  if (ctx.capability && !livePersonCapability(ctx.capability))
-    return sendJson(ctx.res, 403, { error: "human_consent_required" });
-  const access = await credential(ctx);
-  if (!access) return;
-  const toolkit = linkSlack ? "slack" : (ctx.body as { toolkit?: unknown } | null)?.toolkit;
-  if (linkSlack && (!ctx.deps.signingSecret || !ctx.deps.principalLinks || ctx.actor?.imp))
-    return sendJson(ctx.res, 403, { error: "link_unavailable", message: "Sign in as yourself to connect Slack." });
-  if (typeof toolkit !== "string" || !/^[a-z0-9_-]{1,100}$/.test(toolkit))
-    return sendJson(ctx.res, 400, { error: "invalid_toolkit" });
-  const callbackUrl = (ctx.body as { callbackUrl?: unknown }).callbackUrl;
-  if (callbackUrl !== undefined) {
-    try {
-      if (typeof callbackUrl !== "string" || callbackUrl.length > 4096) throw new Error("Invalid callback");
-      const callback = new URL(callbackUrl);
-      if (
-        callback.username ||
-        callback.password ||
-        callback.hash ||
-        !(
-          callback.protocol === "https:" ||
-          (callback.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(callback.hostname))
-        )
-      )
-        throw new Error("Invalid callback");
-    } catch {
-      return sendJson(ctx.res, 400, { error: "invalid_callback" });
-    }
-  }
-  const userId = composioUserId(externalOrgId(), canonicalPerson(access.principal));
-  try {
-    const session = await request(ctx, access.key, "/tool_router/session", {
-      user_id: userId,
-      toolkits: { enable: [toolkit] },
-      manage_connections: { enable: false },
-      workbench: { enable: false },
-    });
-    if (typeof session.session_id !== "string" || !/^trs_[a-zA-Z0-9_-]+$/.test(session.session_id))
-      throw new Error("Invalid session");
-    const link = await request(ctx, access.key, `/tool_router/session/${encodeURIComponent(session.session_id)}/link`, {
-      toolkit,
-      ...(callbackUrl ? { callback_url: callbackUrl } : {}),
-    });
-    if (typeof link.connected_account_id !== "string" || !ACCOUNT_ID.test(link.connected_account_id))
-      throw new Error("Invalid account");
-    await ctx.deps.composioReturns?.put(`${userId}:${link.connected_account_id}`, {
-      url: typeof callbackUrl === "string" ? callbackUrl : null,
-      toolkit,
-      expiresAt: Date.now() + 20 * 60_000,
-    });
-    const url = new URL(String(link.redirect_url));
-    if (
-      !(
-        (url.origin === "https://connect.composio.dev" && /^\/link\/lk_[a-zA-Z0-9_-]+$/.test(url.pathname)) ||
-        (url.origin === "https://app.composio.dev" && /^\/link\/lt_[a-zA-Z0-9_-]+$/.test(url.pathname))
-      ) ||
-      url.username ||
-      url.password
-    )
-      throw new Error("Invalid authorization URL");
-    audit(ctx.deps, {
-      principalId: access.principal,
-      action: "composio.authorize",
-      resource: toolkit,
-      scopeLabel: scopeId("personal", access.principal),
-    });
-    const ticket = linkSlack
-      ? await mintSignedPayload(
-          {
-            purpose: "slack-account-link",
-            principal: access.principal,
-            org: orgId(),
-            accountId: link.connected_account_id,
-            exp: Date.now() + 20 * 60_000,
-          },
-          ctx.deps.signingSecret!,
-        )
-      : undefined;
-    return sendJson(ctx.res, 200, {
-      url: url.href,
-      accountId: link.connected_account_id,
-      ...(ticket ? { ticket } : {}),
-    });
-  } catch (error) {
-    // Keep the cause for operators (secret-redacted); the user only sees a generic message.
-    const mask = createExactSecretValueMasker([access.key]);
-    reportFailure("composio: authorize", new Error(mask(redactSecrets(errMessage(error)))), `toolkit=${toolkit}`);
-    return sendJson(ctx.res, 502, {
-      error: "composio_authorization_failed",
-      message: "Could not start authorization. Please try again.",
-    });
   }
 }
 
@@ -581,54 +487,6 @@ async function execute(ctx: ApiCtx): Promise<void> {
     reportFailure("composio: execute", new Error(mask(redactSecrets(errMessage(error)))), `tool=${body.tool}`);
     return sendExecutionFailure(ctx, error, mask, "composio_execution_failed");
   }
-}
-
-async function completeAuth(ctx: ApiCtx): Promise<void> {
-  if (!ctx.actor || ctx.actor.imp || ctx.capability)
-    return sendJson(ctx.res, 403, { error: "browser_identity_required" });
-  const access = await credential(ctx);
-  if (!access) return;
-  const connectFailed = () =>
-    audit(ctx.deps, {
-      principalId: access.principal,
-      action: "composio.connect_failed",
-      resource: "unknown",
-      scopeLabel: scopeId("personal", access.principal),
-    });
-  const sessionUri = (ctx.body as { sessionUri?: unknown } | null)?.sessionUri;
-  if (typeof sessionUri !== "string" || !sessionUri || sessionUri.length > 8192) {
-    connectFailed();
-    return sendJson(ctx.res, 400, { error: "invalid_session" });
-  }
-  const userId = composioUserId(externalOrgId(), canonicalPerson(access.principal));
-  let accountId: string;
-  try {
-    const result = await request(ctx, access.key, "/connected_accounts/complete_auth", {
-      session_uri: sessionUri,
-      user_id: userId,
-    });
-    if (typeof result.connected_account_id !== "string" || !ACCOUNT_ID.test(result.connected_account_id))
-      throw new Error("Invalid account");
-    accountId = result.connected_account_id;
-  } catch (error) {
-    const mask = createExactSecretValueMasker([access.key]);
-    reportFailure("composio: complete-auth", new Error(mask(redactSecrets(errMessage(error)))));
-    connectFailed();
-    return sendJson(ctx.res, 400, {
-      error: "verification_failed",
-      message: "Sign in to the QM account that started this connection and try connecting again.",
-    });
-  }
-  const key = `${userId}:${accountId}`;
-  const saved = await ctx.deps.composioReturns?.get(key);
-  await ctx.deps.composioReturns?.delete(key);
-  audit(ctx.deps, {
-    principalId: access.principal,
-    action: "composio.connected",
-    resource: saved?.toolkit ?? "unknown",
-    scopeLabel: scopeId("personal", access.principal),
-  });
-  return sendJson(ctx.res, 200, { returnTo: saved && saved.expiresAt > Date.now() ? saved.url : null });
 }
 
 export interface ComposioReturn {
@@ -884,15 +742,47 @@ async function completeSlack(ctx: ApiCtx): Promise<void> {
 export const composioRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/composio/tools", auth: "either", handle: tools },
   { method: "POST", path: "/v1/composio/execute", auth: "either", handle: execute },
-  { method: "POST", path: "/v1/composio/complete-auth", auth: "source", handle: completeAuth },
-  { method: "POST", path: "/v1/composio/slack/reply-status", auth: "source", handle: (ctx) => slackReply(ctx, false) },
-  { method: "POST", path: "/v1/composio/slack/reply", auth: "source", handle: (ctx) => slackReply(ctx, true) },
-  { method: "GET", path: "/v1/composio/slack", auth: "source", handle: slackStatus },
-  { method: "POST", path: "/v1/composio/slack/authorize", auth: "source", handle: (ctx) => authorize(ctx, true) },
-  { method: "POST", path: "/v1/composio/slack/complete", auth: "source", handle: completeSlack },
-  { method: "GET", path: "/v1/composio/connections", auth: "either", handle: connections },
-  { method: "GET", path: "/v1/composio/toolkits", auth: "either", handle: catalog },
-  { method: "POST", path: "/v1/composio/authorize", auth: "either", handle: authorize },
-  { method: "POST", path: "/v1/composio/disconnect", auth: "either", handle: disconnect },
+  {
+    method: "POST",
+    path: "/v1/composio/slack/reply-status",
+    browser: true,
+    actor: "person",
+    auth: "source",
+    handle: (ctx) => slackReply(ctx, false),
+  },
+  {
+    method: "POST",
+    path: "/v1/composio/slack/reply",
+    browser: true,
+    actor: "person",
+    auth: "source",
+    handle: (ctx) => slackReply(ctx, true),
+  },
+  { method: "GET", path: "/v1/composio/slack", browser: true, actor: "person", auth: "source", handle: slackStatus },
+  {
+    method: "POST",
+    path: "/v1/composio/slack/complete",
+    browser: true,
+    actor: "person",
+    auth: "source",
+    handle: completeSlack,
+  },
+  {
+    method: "GET",
+    path: "/v1/composio/connections",
+    browser: true,
+    actor: "person",
+    auth: "either",
+    handle: connections,
+  },
+  { method: "GET", path: "/v1/composio/toolkits", browser: true, actor: "person", auth: "either", handle: catalog },
+  {
+    method: "POST",
+    path: "/v1/composio/disconnect",
+    browser: true,
+    actor: "person",
+    auth: "either",
+    handle: disconnect,
+  },
   { method: "GET", path: "/v1/composio/identity", auth: "either", handle: identity },
 ];

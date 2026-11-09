@@ -5,13 +5,16 @@ import type { TeamStore } from "../teams/teams.ts";
 import type { Keychain } from "../credentials/keychain.ts";
 import { parseScopeId, scopeId, type ScopeId, type Session } from "../types.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
-import { PERSONA_ROLES, atLeast, type PersonaRole } from "./persona-schema.ts";
+import { PERSONA_ROLES, activeHolder, atLeast, type PersonaRole } from "./persona-schema.ts";
 import {
+  PersonaChannelPinned,
   PersonaOwnerRequired,
+  type PersonaAccessEntry,
   type Persona,
   type PersonaAccess,
   type PersonaFields,
   type PersonaStore,
+  type PersonaVersionPage,
 } from "./persona-store.ts";
 
 const personaScope = (id: string): ScopeId => scopeId("persona", id);
@@ -21,7 +24,7 @@ interface PersonaView extends Persona {
 }
 
 interface PersonaDetail extends PersonaView {
-  access: PersonaAccess[];
+  access: Array<PersonaAccess & { personasEnabled: boolean }>;
   credentials: Array<{ grantId: string; service: string; ownerId: string }>;
 }
 
@@ -33,6 +36,7 @@ export type PersonaResult<T> =
 export interface PersonaForTurn {
   persona: Persona;
   scope: ScopeId;
+  pinned?: boolean;
 }
 
 export interface PersonaService {
@@ -43,6 +47,12 @@ export interface PersonaService {
   create(principalId: string, input: unknown): Promise<PersonaResult<PersonaView>>;
   update(principalId: string, id: string, input: unknown): Promise<PersonaResult<PersonaView>>;
   remove(principalId: string, id: string): Promise<PersonaResult<true>>;
+  versions(
+    principalId: string,
+    id: string,
+    page: { before?: number; limit: number; full?: boolean },
+  ): Promise<PersonaResult<PersonaVersionPage>>;
+  restore(principalId: string, id: string, version: number): Promise<PersonaResult<PersonaView>>;
   setAccess(principalId: string, id: string, access: unknown): Promise<PersonaResult<PersonaAccess[]>>;
   attachCredential(principalId: string, id: string, credentialId: unknown): Promise<PersonaResult<{ grantId: string }>>;
   detachCredential(principalId: string, id: string, grantId: string): Promise<PersonaResult<true>>;
@@ -84,6 +94,7 @@ export function createPersonaService(deps: {
   orgScope: ScopeId;
   teams?: Pick<TeamStore, "forTurn">;
   sessions: Pick<SessionStore, "setPersona">;
+  isActive: (principalId: string) => boolean;
   keychain?: Pick<Keychain, "grantsForScope" | "createGrant" | "revokeGrant">;
 }): PersonaService {
   const { store } = deps;
@@ -134,10 +145,16 @@ export function createPersonaService(deps: {
       return { status: "ok", value: await store.listFor(await granteeScopes(principalId)) };
     },
     detail(principalId, id) {
-      return guarded<PersonaDetail>(principalId, id, "read", async (persona, held) => ({
-        status: "ok",
-        value: { ...persona, role: held, access: await store.access(id), credentials: await credentialsOf(id) },
-      }));
+      return guarded<PersonaDetail>(principalId, id, "read", async (persona, held) => {
+        const orgEnabled = await deps.flags.enabled("personas", deps.orgScope);
+        const access = await Promise.all(
+          (await store.access(id)).map(async (grant) => {
+            const { kind, ref } = parseScopeId(grant.scopeId);
+            return { ...grant, personasEnabled: kind === "personal" ? await enabledFor(ref) : orgEnabled };
+          }),
+        );
+        return { status: "ok", value: { ...persona, role: held, access, credentials: await credentialsOf(id) } };
+      });
     },
     async create(principalId, input) {
       if (!(await enabledFor(principalId))) return { status: "disabled" };
@@ -154,8 +171,28 @@ export function createPersonaService(deps: {
       return guarded<PersonaView>(principalId, id, "write", async (_persona, held) => {
         const fields = fieldsFrom(input, false);
         if (typeof fields === "string") return { status: "invalid", message: fields };
-        const updated = await store.update(id, fields);
+        const updated = await store.update(id, fields, principalId);
         return updated ? { status: "ok", value: { ...updated, role: held } } : { status: "not_found" };
+      });
+    },
+    versions(principalId, id, page) {
+      return guarded<PersonaVersionPage>(principalId, id, "read", async () => ({
+        status: "ok",
+        value: await store.versions(id, page),
+      }));
+    },
+    restore(principalId, id, version) {
+      return guarded<PersonaView>(principalId, id, "write", async (_persona, held) => {
+        const snapshot = await store.version(id, version);
+        if (!snapshot) return { status: "not_found" };
+        const { name, description, instructions, icon } = snapshot;
+        const restored = await store.update(
+          id,
+          { name, description, instructions, icon: icon ?? null },
+          principalId,
+          version,
+        );
+        return restored ? { status: "ok", value: { ...restored, role: held } } : { status: "not_found" };
       });
     },
     remove(principalId, id) {
@@ -168,7 +205,7 @@ export function createPersonaService(deps: {
     setAccess(principalId, id, access) {
       return guarded<PersonaAccess[]>(principalId, id, "owner", async () => {
         if (!Array.isArray(access)) return { status: "invalid", message: "access must be an array" };
-        const entries: Array<{ scopeId: ScopeId; role: PersonaRole }> = [];
+        const entries: PersonaAccessEntry[] = [];
         for (const entry of access as unknown[]) {
           const e = (entry ?? {}) as Record<string, unknown>;
           const target = typeof e.scopeId === "string" ? e.scopeId.trim() : "";
@@ -177,14 +214,25 @@ export function createPersonaService(deps: {
             return { status: "invalid", message: `scopeId must be personal:, team:, org: or channel: (got ${target})` };
           if (!PERSONA_ROLES.includes(e.role as PersonaRole))
             return { status: "invalid", message: "role must be owner, write or read" };
-          entries.push({ scopeId: target, role: e.role as PersonaRole });
+          if (kind === "channel" && e.role !== "read")
+            return { status: "invalid", message: "a Slack channel can only be given read access" };
+          if (e.pinned !== undefined && typeof e.pinned !== "boolean")
+            return { status: "invalid", message: "pinned must be a boolean" };
+          if (e.pinned && kind !== "channel")
+            return { status: "invalid", message: "only a Slack channel can be pinned" };
+          entries.push({ scopeId: target, role: e.role as PersonaRole, ...(e.pinned ? { pinned: true } : {}) });
         }
         if (new Set(entries.map((entry) => entry.scopeId)).size !== entries.length)
           return { status: "invalid", message: "each scope may appear once" };
+        const staysOwner = ({ scopeId: holder, role }: { scopeId: ScopeId; role: PersonaRole }) =>
+          role === "owner" && activeHolder(holder, deps.isActive);
+        if (entries.some((entry) => entry.role === "owner") && !entries.some(staysOwner))
+          return { status: "invalid", message: "a persona needs at least one active owner" };
         try {
           await store.replaceAccess(id, entries, principalId);
         } catch (e) {
-          if (e instanceof PersonaOwnerRequired) return { status: "invalid", message: e.message };
+          if (e instanceof PersonaOwnerRequired || e instanceof PersonaChannelPinned)
+            return { status: "invalid", message: e.message };
           throw e;
         }
         return { status: "ok", value: await store.access(id) };
@@ -226,6 +274,11 @@ export function createPersonaService(deps: {
       return { status: "ok", value: { ...persona, role: held } };
     },
     async forTurn(personaId, actorId, contextScope) {
+      let pinned = false;
+      if (!personaId && parseScopeId(contextScope).kind === "channel" && (await enabledFor(actorId))) {
+        personaId = (await store.pinnedIn(contextScope)) ?? undefined;
+        pinned = Boolean(personaId);
+      }
       if (!personaId) return null;
       if (!(await enabledFor(actorId)))
         return "Personas are turned off for this person, so this turn runs without one.";
@@ -234,16 +287,20 @@ export function createPersonaService(deps: {
       const held = await role(actorId, personaId, contextScope);
       if (!held)
         return `This conversation uses the persona "${persona.name}", but the person who sent this message has no access to it, so this turn runs without it.`;
-      return { persona, scope: personaScope(personaId) };
+      return { persona, scope: personaScope(personaId), ...(pinned ? { pinned: true } : {}) };
     },
   };
 }
 
-export function personaPrompt({ persona, scope }: PersonaForTurn): string {
+export function personaPrompt({ persona, scope, pinned }: PersonaForTurn): string {
   const lines = [
     `## Persona: ${persona.name}`,
     `You are acting as the persona "${persona.name}" (${scope}). Its skills, notes and credentials come from that scope; who is in the room and where your writes land still come from this conversation. Organization instructions take precedence over the persona's.`,
   ];
+  if (pinned)
+    lines.push(
+      `This channel pinned ${persona.name}. An owner can unpin it on the persona page; one conversation can pick another persona.`,
+    );
   if (persona.description.trim()) lines.push(`Purpose: ${persona.description.trim()}`);
   if (persona.instructions.trim()) lines.push("", persona.instructions.trim());
   return lines.join("\n");

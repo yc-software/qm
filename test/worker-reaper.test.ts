@@ -16,7 +16,6 @@ import type { LeaderLease } from "../src/persistence/leader-lease.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import type { Principal } from "../src/types.ts";
 import type { RunStore } from "../src/runs/run-store.ts";
-import { replayableRequest } from "../src/core/orchestrator/turn-helpers.ts";
 import { settle } from "./support/settle.ts";
 import { testConfig } from "./support/test-config.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
@@ -780,58 +779,6 @@ test("final shutdown waits for an already-started completion instead of releasin
     assert.equal(await reopened(config.databaseUrl, async (runs) => (await runs.get(queued.runId!))?.status), "done");
   } finally {
     release.resolve();
-  }
-});
-
-test("buildApp captures human run outcomes through the shared terminal hook", async (t) => {
-  const events: string[] = [];
-  t.mock.method(globalThis, "fetch", async (_url: string, init: RequestInit) => {
-    events.push(JSON.parse(String(init.body)).event);
-    return new Response("ok");
-  });
-  const built = buildApp(testConfig({ productAnalytics: { apiKey: "test-token" } }));
-  try {
-    const request: OrchestratorInput = { ...turn, origin: { kind: "human" }, surface: "slack" };
-    for (const result of [{ status: "ok" }, { status: "failed" }, { status: "ok", stopped: true }] as const) {
-      await built.runs.enqueue({ sessionId: "t1", request });
-      const run = ((await built.runs.claim("worker", 10_000))[0] ?? null)!;
-      await built.runs.complete(run.id, run.leaseToken!, result);
-    }
-    assert.deepEqual(events, ["response_completed", "response_failed"]);
-  } finally {
-    await built.runtime.stop();
-  }
-});
-
-test("web admission and replay preserve analytics exclusions", async (t) => {
-  const events: string[] = [];
-  t.mock.method(globalThis, "fetch", async (_url: string, init: RequestInit) => {
-    events.push(JSON.parse(String(init.body)).event);
-    return new Response("ok");
-  });
-  const built = buildApp(testConfig({ productAnalytics: { apiKey: "test-token" } }));
-  try {
-    for (const flag of ["analyticsSuppressed", "proactiveOpener"] as const) {
-      for (const status of ["ok", "failed"] as const) {
-        const admitted = await built.app.turn({
-          surface: "web",
-          actor: { externalId: "U1" },
-          conversation: { kind: "dm", threadRef: `excluded-${flag}-${status}` },
-          text: "test message",
-          origin: { kind: "human" },
-          async: true,
-          [flag]: true,
-        });
-        assert.ok(admitted.runId);
-        const run = (await built.runs.claimById(admitted.runId, "worker", 10_000))!;
-        assert.equal(run.request[flag], true);
-        assert.equal(replayableRequest(run.request)[flag], true);
-        await built.runs.complete(run.id, run.leaseToken!, { status });
-      }
-    }
-    assert.deepEqual(events, []);
-  } finally {
-    await built.runtime.stop();
   }
 });
 

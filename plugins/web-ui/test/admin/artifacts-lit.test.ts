@@ -91,7 +91,7 @@ test("cron list opens a detail page whose destination edit sends the API payload
   const inputs = f.host.querySelectorAll<HTMLInputElement>(".card input");
   assert.equal(inputs[0]!.placeholder, "principal id");
   type(f, inputs[0]!, "alice");
-  type(f, inputs[2]!, "bob");
+  type(f, inputs[1]!, "bob");
   button(f.host, "Save destination").click();
   await f.settle();
   const put = f.requests.find((r) => r.method === "PUT")!;

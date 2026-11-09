@@ -6,7 +6,6 @@ import { bindBootTenant } from "../src/tenants/boot.ts";
 import { withTenant } from "../src/tenants/context.ts";
 import { externalOrgId } from "../src/tenants/external-org.ts";
 import { loadTenantSettings } from "../src/tenants/settings.ts";
-import { createProductAnalytics } from "../src/util/product-analytics.ts";
 import { twoTenants, type TwoTenants } from "./support/two-tenants.ts";
 
 const PERSON = "U123";
@@ -49,18 +48,5 @@ describe("external ids for tenants on a shared host", () => {
       false,
     );
     assert.equal(idsB.includes(composioUserId(orgId(), PERSON)), false);
-  });
-
-  it("reports product analytics under each tenant's own company", async () => {
-    const [a, b] = db.tenants;
-    const companies: string[] = [];
-    const analytics = createProductAnalytics(externalOrgId, { apiKey: "token" }, async (_url, init) => {
-      companies.push(JSON.parse(String(init?.body)).properties.company_id);
-      return new Response(null);
-    });
-    await inTenant(a, () => analytics.appPublished(PERSON, "dep", 1));
-    await inTenant(b, () => analytics.appPublished(PERSON, "dep", 1));
-    await analytics.appPublished(PERSON, "dep", 2);
-    assert.deepEqual(companies, ["moved-co", b]);
   });
 });

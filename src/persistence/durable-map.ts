@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { perTenant } from "../tenants/cache.ts";
 import {
   createPgPool,
@@ -39,6 +40,7 @@ export interface DurableMap<T> {
   claimTenants(): Promise<ClaimedRow[]>;
   deleteBefore(field: Extract<keyof T, string>, cutoff: number): Promise<void>;
   claimTenantsWhere(field: Extract<keyof T, string>, value: string): Promise<ClaimedRow[]>;
+  version(): Promise<string>;
 }
 
 const VERSIONS_TABLE = "durable_map_versions";
@@ -189,14 +191,19 @@ export function createPostgresMap<T>(
   }
   const CACHE_MAX_AGE_MS = 15_000;
   const caches = perTenant<{ last?: { v: string; fetchedAt: number; entries: Array<[string, T]> } }>(() => ({}));
+  async function version(): Promise<string> {
+    await ready();
+    if (!tenanted) return randomUUID();
+    const vRows = await pg.q(`SELECT v FROM ${VERSIONS_TABLE} WHERE tbl = '${table}'`);
+    return vRows.length ? String(vRows[0]!.v) : "";
+  }
   async function snapshot(): Promise<Array<[string, T]>> {
     await ready();
     if (!tenanted) {
       const rows = await pg.q(`SELECT id, json FROM ${table} ORDER BY id`);
       return rows.map((row) => [row.id as string, row.json as T]);
     }
-    const vRows = await pg.q(`SELECT v FROM ${VERSIONS_TABLE} WHERE tbl = '${table}'`);
-    const v = vRows.length ? String(vRows[0]!.v) : "";
+    const v = await version();
     const cache = caches();
     if (!cache.last || cache.last.v !== v || Date.now() - cache.last.fetchedAt > CACHE_MAX_AGE_MS) {
       const rows = await pg.q(`SELECT id, json FROM ${table} ORDER BY id`);
@@ -273,6 +280,7 @@ export function createPostgresMap<T>(
       await ready();
       return claimRows(pg, claimTenantsWhereName(table, field), [value]);
     },
+    version,
     async get(id) {
       await ready();
       const rows = await pg.q(`SELECT json FROM ${table} WHERE id = $1`, [id]);

@@ -91,7 +91,7 @@ import {
 import { openCronById, renderCronsPage, resetActiveCron, routeCronsHistory } from "./crons";
 import { renderLoopsPage, resetActiveLoop } from "./loops";
 import { openWebhookById, renderWebhooksPage, resetActiveWebhook, routeWebhooksHistory } from "./webhooks";
-import { loadPersonas, renderPersonasPage } from "./personas";
+import { loadPersonas, openPersonaById, renderPersonasPage, routePersonasHistory } from "./personas";
 import { renderFiles } from "./files";
 import { setScopedSession } from "./session-scope";
 import { openChatSearch } from "./search";
@@ -149,7 +149,7 @@ let pendingCanvasRestore: Promise<void> | null = null;
 
 setSigninRequiredHandler((detail) => {
   authMode = detail.mode ?? authMode;
-  renderAuthGate(gateFor(authMode, detail.reason));
+  renderAuthGate(gateFor(authMode));
 });
 
 onExitCanvas(() => exitSplitIfActive());
@@ -177,6 +177,7 @@ function openViewAt(view: View, item: string | null, historyMode: "push" | "repl
   if (view === "crons" && item) openCronById(item);
   if (view === "webhooks" && item) openWebhookById(item);
   if (view === "skills" && item) openSkillById(item);
+  if (view === "personas" && item) openPersonaById(item);
   switchView(view, historyMode);
   if (view === "inbox") routeInboxHistory(item);
 }
@@ -399,21 +400,6 @@ function portalGate() {
   `);
 }
 
-function deniedGate() {
-  return gateShell(html`
-    <h1>You don't have access</h1>
-    <p class="signin-body">
-      Your account is signed in and verified — it just isn't allowed on this instance. Ask an administrator to add you.
-    </p>
-    <button class="btn" type="button" @click=${signOut}>Sign out</button>
-    ${
-      authMode === "dev"
-        ? html`<div class="hint">This instance lists its principals in <b>WEB_UI_PRINCIPALS</b>.</div>`
-        : nothing
-    }
-  `);
-}
-
 function retryBoot(): void {
   void bootSafely();
 }
@@ -477,10 +463,7 @@ function devGate(gate: { value?: string; error?: string; pending?: boolean }) {
 }
 
 export type AuthGate =
-  | { kind: "portal" }
-  | { kind: "denied" }
-  | { kind: "unreachable" }
-  | { kind: "dev"; value?: string; error?: string; pending?: boolean };
+  { kind: "portal" } | { kind: "unreachable" } | { kind: "dev"; value?: string; error?: string; pending?: boolean };
 
 export function renderAuthGate(gate: AuthGate): void {
   stopAnalytics();
@@ -491,8 +474,6 @@ export function renderAuthGate(gate: AuthGate): void {
     switch (gate.kind) {
       case "portal":
         return portalGate();
-      case "denied":
-        return deniedGate();
       case "unreachable":
         return unreachableGate();
       default:
@@ -502,8 +483,7 @@ export function renderAuthGate(gate: AuthGate): void {
   render(body, appEl as HTMLElement);
 }
 
-function gateFor(mode: AuthMode, reason: "unauthenticated" | "not_allowed" | undefined): AuthGate {
-  if (reason === "not_allowed") return { kind: "denied" };
+function gateFor(mode: AuthMode): AuthGate {
   return mode === "dev" ? { kind: "dev" } : { kind: "portal" };
 }
 
@@ -1021,13 +1001,14 @@ export function replacePanePreservingFocus(host: HTMLElement): void {
 window.addEventListener("popstate", () => {
   if (!appState.me) return;
   cancelNavigation();
-  const routed = ["crons", "webhooks", "inbox", "skills"];
+  const routed = ["crons", "webhooks", "inbox", "skills", "personas"];
   const { view: linkedView, session, item } = parseDeepLink(UI_BASE, location.pathname, location.search);
   const view = isView(linkedView) ? linkedView : "chats";
   if (view === appState.currentView && routed.includes(view)) {
     if (view === "crons") routeCronsHistory(item);
     else if (view === "webhooks") routeWebhooksHistory(item);
     else if (view === "skills") routeSkillsHistory(item);
+    else if (view === "personas") routePersonasHistory(item);
     else routeInboxHistory(item);
     return;
   }
@@ -1130,7 +1111,7 @@ export async function boot(): Promise<void> {
   if (r.status === 401) {
     const body = (await r.json().catch(() => ({}))) as SigninRequired;
     authMode = body.mode ?? "portal";
-    renderAuthGate(gateFor(authMode, body.reason));
+    renderAuthGate(gateFor(authMode));
     return;
   }
   if (!r.ok) {

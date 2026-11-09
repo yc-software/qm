@@ -19,6 +19,7 @@ export function tenantMap<T>(): DurableMap<T> & { reads: string[] } {
   };
   return {
     reads,
+    version: async () => String(Math.random()),
     async all() {
       reads.push(currentTenant());
       return [...own().values()];

@@ -1,4 +1,4 @@
-import { reportBackendError } from "../../plugins/chassis/src/error-reporting.ts";
+import { REQUEST_ID_HEADERS, reportBackendError } from "../../plugins/chassis/src/error-reporting.ts";
 import { errChain as errMessage, errDetail, failureCode } from "../../plugins/chassis/src/errors.ts";
 import { WorkAdmissionClosed } from "./admitted-work.ts";
 
@@ -39,8 +39,6 @@ export function reportFailureAs<T>(context: string, fallback: T, detail?: string
     return fallback;
   };
 }
-
-const REQUEST_ID_HEADERS = ["x-request-id", "x-amzn-requestid", "fly-request-id", "render-request-id"];
 
 export function withRequestId(message: string, headers: Headers): string {
   for (const name of REQUEST_ID_HEADERS) {

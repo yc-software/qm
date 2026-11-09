@@ -136,6 +136,18 @@ async function freshSession(sessions: SessionStore, id: string): Promise<Session
   return s;
 }
 
+test("side chats cannot launch subagents until opened as a full session", async () => {
+  const r = await rig();
+  const sideChat = { entrySeq: 0, quote: "selected passage", occurrence: 0, expanded: false };
+  const blocked = await r.syscallsFor({ ...r.room, sideChat }).open({ task: "research this passage" });
+  assert.equal(blocked.ok, false);
+  assert.deepEqual(await r.sessions.childrenOf(r.room.id), []);
+  const opened = await r
+    .syscallsFor({ ...r.room, sideChat: { ...sideChat, expanded: true } })
+    .open({ task: "research this passage" });
+  assert.equal(opened.ok, true);
+});
+
 test("open creates a child session with parent pointer, spawn meta, and a queued task run", async () => {
   const r = await rig();
   const out = await r.syscallsFor(r.room).open({ task: "build a personal website for alex", name: "website" });
@@ -387,6 +399,36 @@ test("an interrupt or a read-only sender's message to a writable running turn st
   );
 });
 
+test("a Slack bot's message to a person's running subagent starts a bot turn instead of steering or interrupting it", async () => {
+  const r = await rig();
+  const target = await runningChild(r, r.room, "build");
+  const bot: Principal = { id: "B1", type: "internal", displayName: "Release bot" };
+  await r.sessions.addParticipant(target.session.id, bot.id);
+  const fromBot = createSessionSyscalls({ ...r, maxAttempts: 3 }).forTurn({
+    session: r.room,
+    scopeId: scope,
+    request: { surface: "slack", conversation, actor: bot, botActor: true },
+  });
+  const sent = await fromBot.write({ target: target.session.id, wake: true, text: "switch to the priciest model" });
+  assert.deepEqual(sent.ok && [sent.delivered, sent.busy], ["queued_turn", true]);
+  const interrupted = await fromBot.write({ target: target.session.id, interrupt: true, text: "drop it" });
+  assert.deepEqual(interrupted, { ok: false, message: "a Slack bot's turn cannot interrupt a person's task" });
+  const botTask = await fromBot.open({ task: "summarize the release" });
+  assert.ok(botTask.ok);
+  const followUp = await r
+    .syscallsFor(r.room)
+    .write({ target: botTask.sessionId, wake: true, text: "include the changelog" });
+  assert.ok(followUp.ok);
+  const overPerson = await fromBot.write({ target: botTask.sessionId, interrupt: true, text: "skip it" });
+  assert.deepEqual(overPerson, { ok: false, message: "a Slack bot's turn cannot interrupt a person's task" });
+  assert.deepEqual(await r.signals.pending(target.run.id), []);
+  const queued = (await r.runs.inFlightForThread(target.session.threadRef)).filter((run) => run.id !== target.run.id);
+  assert.deepEqual(
+    queued.map((run) => [run.request.actor.id, run.request.botActor]),
+    [["B1", true]],
+  );
+});
+
 async function queuedMessage(r: Rig, target: { session: Session; run: Run }, sender: Session, text: string) {
   const { run } = await r.runs.enqueue({
     sessionId: target.session.threadRef,
@@ -520,10 +562,18 @@ test("a subagent cannot start a turn in a top-level conversation that is not its
   assert.equal((await r.runs.inFlightForThread(ordinary.threadRef)).length, 0);
 });
 
-async function parentRun(r: Rig) {
+async function parentRun(r: Rig, botActor = false) {
   const { run } = await r.runs.enqueue({
     sessionId: r.room.threadRef,
-    request: { actor, conversation, surface: "slack", deliveryTarget: "D1", origin: { kind: "human" }, text: "go" },
+    request: {
+      actor,
+      conversation,
+      surface: "slack",
+      deliveryTarget: "D1",
+      origin: { kind: "human" },
+      text: "go",
+      ...(botActor ? { botActor } : {}),
+    },
   });
   const claimed = await r.runs.claimById(run.id, "worker", 60_000);
   const api = createSessionSyscalls({ ...r, maxAttempts: 3 }).forTurn({
@@ -600,8 +650,8 @@ test("a user's Stop on the parent leaves its subagent working, and the subagent'
   assert.match((await r.mailbox.pending(r.room.id))[0]!.text, /lead finished/);
 });
 
-async function delegatedLanes(r: Rig, tasks: string[]) {
-  const opener = await parentRun(r);
+async function delegatedLanes(r: Rig, tasks: string[], botActor = false) {
+  const opener = await parentRun(r, botActor);
   const lanes = [];
   for (const task of tasks) {
     const opened = await opener.api.open({ task });
@@ -670,6 +720,29 @@ test("stopping everything leaves the tree's waiting results and questions as mai
   const mail = await r.mailbox.pending(r.room.id);
   assert.equal(mail.length, 4);
   assert.ok(mail.every((message) => message.wake === undefined));
+});
+
+test("a Slack bot's stop settles only the bot's own waiting results and questions in the tree", async () => {
+  const r = await rig();
+  const deps = { ...r, maxAttempts: 3, delegationEnabled: async () => true };
+  const [person] = await delegatedLanes(r, ["person work"]);
+  const [bot] = await delegatedLanes(r, ["bot work"], true);
+  for (const lane of [person!, bot!]) {
+    await lane.api.write({ target: "parent", wake: true, text: "which region?", requestId: "q1" });
+    await r.runs.complete(lane.run.id, lane.leaseToken, { status: "ok", reply: "result" });
+    assert.equal(await deliverSubagentMail(deps, (await r.runs.get(lane.run.id))!), false);
+    await r.runs.deferReturn(lane.run.id, 60_000);
+  }
+  await settleTreeWakes(deps, r.room, true);
+  assert.deepEqual(
+    {
+      returns: (await r.runs.pendingReturns(100, "", [person!.session.threadRef, bot!.session.threadRef])).map(
+        (run) => run.id,
+      ),
+      wakes: [...new Set((await r.mailbox.wakesFor(r.room.id)).map((message) => message.senderId))],
+    },
+    { returns: [person!.run.id], wakes: [person!.session.id] },
+  );
 });
 
 test("settling a stopped tree skips a result it cannot deliver and only returns ordinary runs of subagents", async () => {
@@ -1390,7 +1463,7 @@ test("a child stopped on its own mails its partial output and wakes its top-leve
     const r = await rig();
     const { parent, run } = await stoppedChildRun(r, "found 2 of 3 call sites so far", {
       status: "ok",
-      reply: "(stopped)",
+      reply: "",
       stopped: true,
       ...(stopScope ? { stopScope } : {}),
     });
@@ -1599,6 +1672,40 @@ test("child runs retain the managed roster and read-only floor", async () => {
   assert.equal(run!.request.readOnly, true);
   assert.equal(run!.request.scopeVersion, "roster-version");
   assert.deepEqual(run!.request.sessionParticipantIds, [actor.id]);
+});
+
+test("a notebook-only turn's subagent stays notebook-only, and so do later turns woken into it", async () => {
+  const r = await rig();
+  const deps = {
+    mailbox: r.mailbox,
+    sessions: r.sessions,
+    runs: r.runs,
+    signals: r.signals,
+    steerRun: r.steerRun,
+    advisoryLock: r.advisoryLock,
+    maxAttempts: 3,
+  };
+  const tidy = createSessionSyscalls(deps).forTurn({
+    session: r.room,
+    scopeId: scope,
+    request: { surface: "cron", actor, conversation, memoryNotebookOnly: true },
+  });
+  const out = await tidy.open({ task: "check the notebook" });
+  assert.ok(out.ok);
+  const child = await freshSession(r.sessions, out.sessionId);
+  assert.equal(child.spawnMeta?.memoryNotebookOnly, true);
+  const [run] = await r.runs.inFlightForThread(child.threadRef);
+  assert.equal(run!.request.memoryNotebookOnly, true);
+  const claimed = await r.runs.claimById(run!.id, "worker", 60_000);
+  await r.runs.complete(run!.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+  const conversationTurn = createSessionSyscalls(deps).forTurn({
+    session: r.room,
+    scopeId: scope,
+    request: { surface: "web", actor, conversation },
+  });
+  const queued = await conversationTurn.write({ wake: true, target: child.id, text: "check again" });
+  assert.ok(queued.ok);
+  assert.equal((await r.runs.inFlightForThread(child.threadRef))[0]!.request.memoryNotebookOnly, true);
 });
 
 test("terminal children remain recoverable until their return is acknowledged", async () => {
@@ -1981,6 +2088,51 @@ test("read-only callers cannot steer writable children and preserve the floor wh
   const queued = await api.write({ wake: true, target: child.id, text: "inspect only" });
   assert.ok(queued.ok);
   assert.equal((await r.runs.inFlightForThread(child.threadRef))[0]!.request.readOnly, true);
+});
+
+test("a notebook-only turn cannot start work in or interrupt a session that isn't notebook-only", async () => {
+  const r = await rig();
+  const deps = {
+    mailbox: r.mailbox,
+    sessions: r.sessions,
+    runs: r.runs,
+    signals: r.signals,
+    steerRun: r.steerRun,
+    advisoryLock: r.advisoryLock,
+    maxAttempts: 3,
+  };
+  const opened = await r.syscallsFor(r.room).open({ task: "work" });
+  assert.ok(opened.ok);
+  const ordinary = await freshSession(r.sessions, opened.sessionId);
+  const [run] = await r.runs.inFlightForThread(ordinary.threadRef);
+  const claimed = await r.runs.claimById(run!.id, "worker", 60_000);
+  const tidy = createSessionSyscalls(deps).forTurn({
+    session: r.room,
+    scopeId: scope,
+    request: { surface: "cron", actor, conversation, memoryNotebookOnly: true },
+  });
+  const interrupted = await tidy.write({ interrupt: true, target: ordinary.id });
+  assert.ok(!interrupted.ok);
+  assert.match(interrupted.message, /notebook-only/);
+  const steered = await tidy.write({ wake: true, target: ordinary.id, text: "change things" });
+  assert.ok(steered.ok);
+  assert.equal(steered.delivered, "queued_message");
+  assert.deepEqual(await r.signals.takePending(run!.id), []);
+  await r.runs.complete(run!.id, claimed!.leaseToken!, { status: "ok", reply: "finished" });
+  const woken = await tidy.write({ wake: true, target: ordinary.id, text: "change things" });
+  assert.ok(woken.ok);
+  assert.equal(woken.delivered, "queued_message");
+  assert.match(woken.notWoken ?? "", /notebook-only/);
+  assert.deepEqual(await r.runs.inFlightForThread(ordinary.threadRef), []);
+  const own = await tidy.open({ task: "check the notebook" });
+  assert.ok(own.ok);
+  const child = await freshSession(r.sessions, own.sessionId);
+  const [childRun] = await r.runs.inFlightForThread(child.threadRef);
+  const childClaim = await r.runs.claimById(childRun!.id, "worker", 60_000);
+  await r.runs.complete(childRun!.id, childClaim!.leaseToken!, { status: "ok", reply: "done" });
+  const again = await tidy.write({ wake: true, target: child.id, text: "check again" });
+  assert.ok(again.ok);
+  assert.equal((await r.runs.inFlightForThread(child.threadRef))[0]!.request.memoryNotebookOnly, true);
 });
 
 test("writes revalidate access even while a target is running", async () => {
@@ -2885,7 +3037,6 @@ for (const addressed of [true, false]) {
       fastMode: false,
       skipMemory: true,
       turnWallClockMs: 120000,
-      analyticsSuppressed: true,
     };
     const transient: Partial<OrchestratorInput> = {
       runId: "old-run",

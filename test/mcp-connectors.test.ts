@@ -133,7 +133,7 @@ test("mcp client mints client-credentials tokens on the server's origin and reus
     url: mcp.url,
     auth: { mode: "client-credentials", clientId: "id", clientSecret: "guess" },
   });
-  await assert.rejects(wrong.listTools());
+  await assert.rejects(wrong.listTools(), { code: "invalid_client", status: 401 });
 });
 
 test("mcp client never sends client credentials to an authorization server on another origin", async (t) => {

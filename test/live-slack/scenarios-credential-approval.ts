@@ -2,6 +2,7 @@ import { createHmac } from "node:crypto";
 import { assert, type Actor, type Ctx, type Env, type Scenario } from "./harness.ts";
 import { sleep, type SlackMessage } from "./slack.ts";
 import { signedRequestHeaders } from "../../plugins/chassis/src/source-auth-sign.ts";
+import { trimTrailingSlashes } from "../../src/util/text.ts";
 
 const EVENTS_URL = () =>
   process.env.SLACK_EVENTS_TARGET_URL ?? `http://127.0.0.1:${process.env.SLACK_EVENTS_PORT ?? "8182"}/slack/events`;
@@ -62,7 +63,7 @@ async function approveOnWeb(env: Env, owner: Actor, card: SlackMessage): Promise
       .members[0]?.principalId ?? owner.userId;
   const path = `/v1/keychain/approvals/${encodeURIComponent(askId)}`;
   const body = JSON.stringify({ principalId, decision: "standing" });
-  const res = await fetch(`${(process.env.CORE_API_URL ?? "http://localhost:8181").replace(/\/+$/, "")}${path}`, {
+  const res = await fetch(`${trimTrailingSlashes(process.env.CORE_API_URL ?? "http://localhost:8181")}${path}`, {
     method: "POST",
     headers: signedRequestHeaders(process.env.CORE_SIGNING_SECRET ?? "", "POST", path, body),
     body,

@@ -84,9 +84,12 @@ export interface SchedulerDeps {
   };
   sweepAsks?: (now: number) => Promise<void>;
   jobQueue?: CronJobQueue;
-  sessions?: TriggerDeps["sessions"];
+  sessions?: NonNullable<TriggerDeps["sessions"]> & {
+    getByThread(threadRef: string): Promise<{ personaId?: string } | null>;
+  };
   resolveRecipient?: TriggerDeps["resolveRecipient"];
   skipFire?: (cron: Cron) => Promise<string | undefined>;
+  notebookOnlyMemory?: (cron: Cron) => Promise<boolean>;
   deleteCron?: (id: string) => Promise<void>;
   fireLoop?: (
     loopId: string,
@@ -293,12 +296,14 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     let outcome: Awaited<ReturnType<typeof runTrigger>>;
     try {
       const runtimeProblem = cron.runtime ? await deps.runtimeError?.(cron.ownerScopeId, cron.runtime) : null;
+      const personaId = cron.sessionRef ? (await deps.sessions?.getByThread(cron.sessionRef))?.personaId : undefined;
       const refusedDelivery =
         previous && cron.destination
           ? (await deps.deliveries.listBySourceSession(previous.sessionId ?? "", previous.threadRef))
               .filter((d) => d.failedReason && d.destination.target === cron.destination!.target)
               .at(-1)?.failedReason
           : undefined;
+      const notebookOnly = await deps.notebookOnlyMemory?.(cron);
       outcome = await runTrigger(
         {
           deliveries: deps.deliveries,
@@ -321,7 +326,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           ...(firesAtMostDaily(cron.schedule, scheduledAt ?? t) ? { infrequentCron: true } : {}),
           ...(cron.runtime && !runtimeProblem ? { runtime: cron.runtime } : {}),
           ...(cron.title ? { title: cron.title } : {}),
+          ...(personaId ? { personaId } : {}),
           ...(cron.script ? { cronScript: cron.script } : {}),
+          ...(notebookOnly ? { memoryNotebookOnly: true } : {}),
           onClaimed: async () => {
             await deps.crons.beginFire(cron.id, runningEntry);
           },

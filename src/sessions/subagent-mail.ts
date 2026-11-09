@@ -90,6 +90,7 @@ type ParentMailDeps = Pick<
 
 interface ParentSource {
   actor: Principal;
+  botActor?: boolean;
   conversation: Pick<OrchestratorInput["conversation"], "audience">;
   runId?: string;
   delegatingRunId?: string;
@@ -190,6 +191,7 @@ async function parentTurn(
             : {}),
         },
         unattendedGrants: undefined,
+        botActor: source.botActor,
       };
   const { openFingerprint: _openFingerprint, ...request }: OrchestratorInput & Pick<SpawnMeta, "openFingerprint"> = {
     ...meta,
@@ -231,6 +233,7 @@ async function parentTurn(
     "conversationHeader",
     "cronScript",
     "infrequentCron",
+    "personaId",
   ] as const)
     delete request[key];
   if (!originalParent) request.addressed = false;
@@ -287,6 +290,7 @@ async function mailParent(
     recipientId: parent.id,
     senderId: child.id,
     actor: turn.prepared.actor,
+    ...(turn.prepared.botActor ? { botActor: true } : {}),
     audience: turn.prepared.conversation.audience,
     createdAt: Date.now(),
   });
@@ -380,6 +384,7 @@ async function wakeParentForMail(
             if (await runStopped(runs, deps.signals, message.senderRunId ?? message.delegatingRunId)) return "settled";
             const source = {
               actor: message.actor,
+              ...(message.botActor ? { botActor: true } : {}),
               conversation: { audience: message.audience },
               ...(message.delegatingRunId ? { delegatingRunId: message.delegatingRunId } : {}),
               ...(peer ? { peerDepth: message.peerDepth ?? 1 } : {}),
@@ -500,13 +505,15 @@ export async function settleTreeWakes(
     runs: Pick<RunStore, "pendingReturns" | "markReturned" | "deferReturn">;
   },
   root: Session,
+  botRunsOnly = false,
 ): Promise<void> {
   const tree = (await treeSessions(deps.sessions, root)).filter((session) => session.scopeId === root.scopeId);
   for (const message of await deps.mailbox.wakesFor(...tree.map((session) => session.id)))
-    await deps.mailbox.settle(message.recipientId, message.id);
+    if (!botRunsOnly || message.botActor) await deps.mailbox.settle(message.recipientId, message.id);
   const threadRefs = tree.map((session) => session.threadRef);
   for (const run of await deps.runs.pendingReturns(Number.MAX_SAFE_INTEGER, "", threadRefs))
-    await returnSubagentRun(deps, run, true).catch(swallowAs("sessions: settle tree return", undefined));
+    if (!botRunsOnly || run.request.botActor)
+      await returnSubagentRun(deps, run, true).catch(swallowAs("sessions: settle tree return", undefined));
 }
 
 function turnText(items: readonly Item[], shared: (seq: number) => boolean, run: Run): string | undefined {

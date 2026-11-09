@@ -33,6 +33,7 @@ export const CREDENTIAL_BROKER_AUD = "credential-broker";
 export const EGRESS_PROXY_AUD = "egress-proxy";
 export const BLOB_TRANSFER_AUD = "blob-transfer";
 export const SECRET_DROP_AUD = "secret-drop";
+export const MEMORY_BRAIN_DROP_AUD = "memory-brain-drop";
 
 interface BlobGrant {
   dir: "read" | "write";
@@ -49,6 +50,7 @@ export interface CapabilityClaims {
   browserAccount?: "company" | "personal" | "openai" | "anthropic";
   aud?: string;
   scopeId: ScopeId;
+  audienceScopeId?: ScopeId;
   scopeVersion?: string;
   timezone?: string;
   destination?: Destination;
@@ -62,7 +64,7 @@ export interface CapabilityClaims {
   egress?: EgressPolicy;
   blob?: BlobGrant;
   drop?: string;
-  memory?: { write?: ScopeId; orgWrite?: ScopeId; read: ScopeId[] };
+  memory?: { write?: ScopeId; orgWrite?: ScopeId; read: ScopeId[]; notebookOnly?: true };
   liveActor?: boolean;
   runId?: string;
   sessionId?: string;
@@ -149,6 +151,7 @@ export async function verifyCapabilityToken(
     return null;
   if (claims.timezone !== undefined && !isValidCapabilityTimezone(claims.timezone)) return null;
   if (claims.scopeVersion !== undefined && typeof claims.scopeVersion !== "string") return null;
+  if (claims.audienceScopeId !== undefined && typeof claims.audienceScopeId !== "string") return null;
   if (claims.destinations !== undefined && !Array.isArray(claims.destinations)) return null;
   if (claims.ownerConnections !== undefined && typeof claims.ownerConnections !== "boolean") return null;
   if (claims.credentials !== undefined && !Array.isArray(claims.credentials)) return null;

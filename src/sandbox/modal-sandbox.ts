@@ -127,6 +127,7 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
 
   const sessionByName = new TenantKeyedMap<ModalSession>();
   const scopeByName = new TenantKeyedMap<string>();
+  const sizeByScope = new TenantKeyedMap<number>();
   const scratchKeyByName = new TenantKeyedMap<string>();
   const activeScratch = new TenantKeyedMap<number>();
 
@@ -211,7 +212,7 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
     }
     let session: ModalSession;
     try {
-      session = await client.create({ name, tags: tags("scope") });
+      session = await client.create({ name, tags: tags("scope"), memoryGb: sizeByScope.get(scope) });
     } catch (err) {
       if (!(err instanceof ModalNameConflictError)) throw err;
       const adopted = await client.fromName(name);
@@ -457,6 +458,7 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
   const profile: AgentComputerProfile = {
     backend: "modal",
     writablePersistence: "provider_managed",
+    sizesMemory: true,
     processSessions: true,
     egressEnforcement: opts.egressProxyUrl ? "domain" : "none",
     spec: {
@@ -724,6 +726,8 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
       } else {
         name = sandboxScopeName(await namePrefix(), scope);
         scopeByName.set(name, scope);
+        if (provOpts?.memoryGb) sizeByScope.set(scope, provOpts.memoryGb);
+        else sizeByScope.delete(scope);
         ({ coldStart } = await ensureSession(scope, name, provOpts?.onStatus));
       }
 
@@ -807,7 +811,7 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
         }
       : {}),
 
-    async restartComputer(scopeId: string): Promise<void> {
+    async restartComputer(scopeId: string, memoryGb?: number): Promise<void> {
       await provisionQueue(scopeId, async () => {
         const stored = await store.get(scopeId);
         if (!stored) return;
@@ -819,12 +823,27 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
           if (!(error instanceof ModalSandboxGoneError)) throw error;
         }
         if (session) {
-          if (!stored.hydrationPending) await snapshotHome(scopeId, session);
-          await session.terminate();
+          if (!stored.hydrationPending)
+            await snapshotHome(scopeId, session).catch((error: unknown) => {
+              if (!(error instanceof ModalSandboxGoneError)) throw error;
+            });
+          await session.terminate().catch((error: unknown) => {
+            if (!(error instanceof ModalSandboxGoneError)) throw error;
+          });
         }
         sessionByName.delete(name);
         await store.merge(scopeId, { hydrationPending: false, recoveryError: undefined });
       });
+      if (memoryGb === undefined) return;
+      const previous = sizeByScope.get(scopeId);
+      sizeByScope.set(scopeId, memoryGb);
+      try {
+        await ensureSession(scopeId, sandboxScopeName(await namePrefix(), scopeId));
+      } catch (error) {
+        if (previous === undefined) sizeByScope.delete(scopeId);
+        else sizeByScope.set(scopeId, previous);
+        throw error;
+      }
     },
 
     async computerStatus(scopeId: string): Promise<ComputerStatus> {

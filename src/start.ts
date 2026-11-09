@@ -7,6 +7,7 @@ import { buildApp, serverDeps } from "./wiring.ts";
 import { createServer } from "./api/server.ts";
 import { dockerDaemonFailure } from "./deploy/docker-deploy-provider.ts";
 import { errMessage, reportFailureAs, swallowAs } from "./util/errors.ts";
+import { sleep } from "./util/async.ts";
 import { slackAccountConfigsFromEnv, slackPluginConfigFromEnv, startSlackPlugin } from "./slack/index.ts";
 import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
 import { createTenantSlackRuntimes } from "./surfaces/slack-tenants.ts";
@@ -14,8 +15,22 @@ import type { SlackPluginConfig } from "./slack/config.ts";
 import { cronQueueMisconfigured, installCronQueue } from "./cron/job-queue.ts";
 import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
 import { bindBootTenant, inBootTenant, readBootTenant } from "./tenants/boot.ts";
-import { loadTenant } from "./tenants/cache.ts";
+import { loadTenant, perTenant } from "./tenants/cache.ts";
+import { sessionLifetime } from "../plugins/portal/src/session.ts";
 import { startFrontDoor } from "./web/front-door.ts";
+import { sweepDictationSpool } from "./api/routes/voice.ts";
+import { parseAllowedOrigins } from "../plugins/portal/src/cors.ts";
+import { createWebEvents } from "./api/routes/web-events.ts";
+import { webMeConfig } from "./api/routes/web-me.ts";
+import { createWebShell } from "./web/shell.ts";
+import { resolveBranding } from "./resolution/branding.ts";
+import { orgScope } from "./config.ts";
+import { createBrandingCache, type OrgBranding } from "../plugins/chassis/src/branding.ts";
+
+function tenantBranding(load: () => Promise<OrgBranding>): () => Promise<OrgBranding> {
+  const caches = perTenant(() => createBrandingCache(load));
+  return () => caches().forRender();
+}
 
 function envSlackAccountRuntimes(
   env: NodeJS.ProcessEnv,
@@ -63,9 +78,34 @@ export async function startQm(
         reconcile: config.backgroundWorkEnabled ? () => slackRuntime.reconcile() : undefined,
       })
     : undefined;
+  const draining = new AbortController();
+  const web =
+    config.publicPort === undefined
+      ? undefined
+      : {
+          events: createWebEvents(built.app, built),
+          me: webMeConfig(env),
+          shell: createWebShell(
+            { ...config, publicPort: config.publicPort },
+            env,
+            tenantBranding(() => resolveBranding(built.config, orgScope(), config.brandingDefault)),
+          ),
+        };
   const server = createServer(built.app, {
     ...serverDeps(config, built, slackEnvironmentState, slackConfig?.botToken),
     managedSlack,
+    ...(config.openaiApiKey ? { openaiApiKey: config.openaiApiKey } : {}),
+    ...(env.PORTAL_SESSION_SECRET
+      ? {
+          portalSession: {
+            secret: env.PORTAL_SESSION_SECRET,
+            maxAgeSeconds: sessionLifetime(env).max,
+            apiOrigins: parseAllowedOrigins(env.PORTAL_API_ALLOWED_ORIGINS).origins,
+          },
+        }
+      : {}),
+    ...(web ? { web } : {}),
+    draining: draining.signal,
   });
 
   await inBootTenant(tenant, async () => {
@@ -75,10 +115,10 @@ export async function startQm(
   });
   server.listen(config.port);
   await once(server, "listening");
+  void sweepDictationSpool();
   const frontDoor =
-    config.publicPort === undefined
-      ? undefined
-      : await startFrontDoor({ ...config, publicPort: config.publicPort }, env);
+    web && (await startFrontDoor({ ...config, publicPort: config.publicPort! }, env, server, web.shell));
+  web?.events.start();
 
   console.log(
     `[qm] listening on :${config.port} (org=${config.orgId}, ` +
@@ -177,18 +217,22 @@ export async function startQm(
   return {
     built,
     server,
-    frontDoor,
     releaseInFlightRuns: () => built.runtime.releaseInFlightRuns(),
     async stop() {
+      draining.abort();
+      const deadline = sleep(config.shutdownDrainMs);
       void slackRuntime.stop().catch((e: unknown) => console.error("[qm] slack plugin stop failed:", errMessage(e)));
       for (const runtime of slackAccountRuntimes)
         void runtime.stop().catch((e: unknown) => console.error("[qm] slack account stop failed:", errMessage(e)));
       void built.scheduler.stop().catch((e: unknown) => console.error("[qm] scheduler stop failed:", errMessage(e)));
       built.deploymentLayerRefresh.stop();
-      frontDoor?.close();
-      server.close();
-      server.closeIdleConnections();
-      await built.runtime.stop();
+      await built.runtime.stop(async () => {
+        await deadline;
+        frontDoor?.close();
+        await web?.events.stop();
+        server.close();
+        server.closeAllConnections();
+      });
     },
   };
 }

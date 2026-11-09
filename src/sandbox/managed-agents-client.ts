@@ -2,6 +2,7 @@ import { fileURLToPath } from "node:url";
 import { fetchWithRetry } from "../util/async.ts";
 import { errMessage, swallowAs, withRequestId } from "../util/errors.ts";
 import { openManagedAgentsTunnel, SANDBOX_AGENT_PORT, type ManagedAgentsTunnel } from "./managed-agents-tunnel.ts";
+import { trimTrailingSlashes } from "../util/text.ts";
 
 export interface ManagedAgentsCommandResult {
   stdout: string;
@@ -307,7 +308,7 @@ async function dialSandboxAgent(localPort: number, readyTimeoutMs: number): Prom
 }
 
 export function createSdkManagedAgentsClient(opts: SdkManagedAgentsClientOptions): ManagedAgentsClient {
-  const apiBaseUrl = (opts.apiBaseUrl ?? DEFAULT_API_BASE_URL).replace(/\/+$/, "");
+  const apiBaseUrl = trimTrailingSlashes(opts.apiBaseUrl ?? DEFAULT_API_BASE_URL);
   const template = opts.template ?? DEFAULT_TEMPLATE;
   const maxCommandMs = opts.maxCommandMs ?? DEFAULT_MAX_COMMAND_MS;
   const stallProbeMs = opts.stallProbeMs ?? STALL_PROBE_MS;

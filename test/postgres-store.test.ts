@@ -1309,7 +1309,7 @@ test("pg null-byte payloads: stripped on write and counted alongside raw items",
   const a = await s.getOrCreateByThread("nulA", "channel", scope);
   await s.addParticipant(a.id, "NUL1");
   const writer = { sessionId: a.id };
-  const e = await s.append(writer, { kind: "UserMessage", text: "a\u0000b" });
+  const e = await s.append(writer, { kind: "UserMessage", text: "a\u0000b", author: "NUL1" });
   assert.equal(e.text, "ab", "append returns the sanitized text, matching what is stored");
   assert.equal((await s.getItems(a.id))[0]!.text, "ab", "null byte stripped at write");
 
@@ -1317,7 +1317,7 @@ test("pg null-byte payloads: stripped on write and counted alongside raw items",
   const raw = new pg.Pool({ connectionString: URL });
   try {
     await raw.query(
-      "INSERT INTO items(tenant_id, session_id, seq, kind, body, created_at) VALUES (qm_bound_tenant(),$1,$2,'UserMessage',$3,to_timestamp($4 / 1000.0))",
+      "INSERT INTO items(tenant_id, session_id, seq, kind, author, body, created_at) VALUES (qm_bound_tenant(),$1,$2,'UserMessage','NUL1',$3,to_timestamp($4 / 1000.0))",
       [a.id, 1, { text: "xy" }, Date.now()],
     );
     await raw.query("UPDATE sessions SET messages = NULL, turns = NULL, last_activity = NULL WHERE id = $1", [a.id]);
@@ -1371,7 +1371,7 @@ test(
       assert.equal(legacy.lastActivity, entries[entries.length - 1]!.createdAt, "last-activity = newest entry");
 
       await raw.query(
-        "INSERT INTO items(tenant_id, session_id, seq, kind, body, created_at) VALUES (qm_bound_tenant(),$1,$2,'UserMessage',$3,to_timestamp($4 / 1000.0))",
+        "INSERT INTO items(tenant_id, session_id, seq, kind, author, body, created_at) VALUES (qm_bound_tenant(),$1,$2,'UserMessage','NUL1',$3,to_timestamp($4 / 1000.0))",
         [a.id, 4, { text: "from the old instance" }, Date.now()],
       );
       const lease2 = { sessionId: a.id };

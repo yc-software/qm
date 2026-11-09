@@ -215,7 +215,6 @@ function cronDetail(page: AdminPage, all: Row[], id: string) {
   const current = () => ({
     type: cron.destination?.type === "principal" ? "principal" : "slack",
     target: cron.destination?.target || "",
-    audienceScopeId: cron.destination?.audienceScopeId || "",
     onBehalfOf: cron.destination?.onBehalfOf || "",
   });
   const draft = current();
@@ -232,7 +231,6 @@ function cronDetail(page: AdminPage, all: Row[], id: string) {
       : {
           type: draft.type,
           target: draft.target.trim(),
-          ...(draft.audienceScopeId.trim() ? { audienceScopeId: draft.audienceScopeId.trim() } : {}),
           ...(draft.type === "principal" && draft.onBehalfOf.trim() ? { onBehalfOf: draft.onBehalfOf.trim() } : {}),
         };
     const submitted = JSON.stringify(draft);
@@ -283,11 +281,6 @@ function cronDetail(page: AdminPage, all: Row[], id: string) {
               .value=${draft.target}
               placeholder=${draft.type === "principal" ? "principal id" : "Slack channel/thread id"}
               @input=${field("target")} /></label
-          ><label
-            >Audience scope<input
-              .value=${draft.audienceScopeId}
-              placeholder=${draft.type === "principal" ? "personal:U123" : "channel:C123"}
-              @input=${field("audienceScopeId")} /></label
           ><label
             >On behalf of<input
               .value=${draft.onBehalfOf}

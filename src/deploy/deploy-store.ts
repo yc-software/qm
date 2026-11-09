@@ -1,3 +1,4 @@
+import { trimTrailingSlashes } from "../util/text.ts";
 import { randomUUID } from "node:crypto";
 import type { ScopeId } from "../types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
@@ -45,7 +46,7 @@ export function appUrlOf(
   const handle = tenantAppHandle();
   if (appsDomain && handle) return `https://${appHostLabel(handle, ref)}.${appsDomain.toLowerCase()}/`;
   const path = `/d/${encodeURIComponent(ref)}/`;
-  return publicUrlOf(d.endpoint) ?? (sharedWebUrl ? `${sharedWebUrl.replace(/\/+$/, "")}${path}` : undefined);
+  return publicUrlOf(d.endpoint) ?? (sharedWebUrl ? `${trimTrailingSlashes(sharedWebUrl)}${path}` : undefined);
 }
 
 export function publicUrlOf(endpoint: DeployEndpoint | null | undefined): string | undefined {

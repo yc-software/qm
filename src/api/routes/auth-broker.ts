@@ -12,6 +12,7 @@ import { tenantAllowsEmail } from "../../tenants/settings.ts";
 import { boundTenant } from "../../tenants/context.ts";
 import { bootTenant } from "../../tenants/boot.ts";
 import { labelOfAppHost, splitAppLabel } from "../../tenants/app-handle.ts";
+import { trimTrailingSlashes } from "../../util/text.ts";
 
 const NAMESPACE = "authbroker:";
 const MAX_IDS = 64;
@@ -265,7 +266,7 @@ async function redeemInvitation(ctx: ApiCtx): Promise<void> {
     !isObj(claims) ||
     claims.purpose !== "teammate-invite" ||
     claims.org !== orgScope(deps) ||
-    claims.aud !== deps.portalUrl.replace(/\/+$/, "") ||
+    claims.aud !== trimTrailingSlashes(deps.portalUrl) ||
     typeof claims.email !== "string" ||
     typeof claims.iat !== "number" ||
     typeof claims.exp !== "number" ||

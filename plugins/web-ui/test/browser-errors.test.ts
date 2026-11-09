@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { initializeBrowserErrors, reportHandledError, stopBrowserErrors } from "../src/browser-errors.ts";
-import { browserErrorConfig } from "../server/browser-error-config.ts";
+import { browserErrorConfig } from "../../chassis/src/browser-error-config.ts";
 import { ApiError } from "../src/core-bridge.ts";
 import type { Me } from "../src/shell-state.ts";
 

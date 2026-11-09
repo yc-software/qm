@@ -29,6 +29,7 @@ type Resource = {
       metadata: { annotations: Record<string, string>; labels: Record<string, string> };
       spec: {
         securityContext?: { fsGroup: number };
+        terminationGracePeriodSeconds?: number;
         volumes?: { name: string; persistentVolumeClaim: { claimName: string } }[];
         containers: {
           image: string;
@@ -279,6 +280,25 @@ test("Helm serves core's API and public front door on consistent ports", options
   assert.throws(() => render({ env: { PUBLIC_PORT: "9999" } }), /PUBLIC_PORT conflicts/);
   assert.throws(() => render({ services: { core: { publicPort: 8080 } } }), /must differ/);
   assert.throws(() => render({ services: { "egress-proxy": { port: 49000 } } }), /Envoy listener is fixed/);
+});
+
+test("Helm gives core its shutdown drain plus 30 s before the kubelet kills it", options, () => {
+  const grace = (values: object = {}, name = "core") =>
+    deployment(render(values), name).spec.template.spec.terminationGracePeriodSeconds;
+  assert.equal(grace(), 60);
+  assert.equal(grace({ env: { SHUTDOWN_DRAIN_MS: "45001" } }), 76);
+  assert.equal(
+    grace({ env: { SHUTDOWN_DRAIN_MS: "1000" }, services: { core: { env: { SHUTDOWN_DRAIN_MS: "90000" } } } }),
+    120,
+  );
+  assert.equal(grace({ env: { SHUTDOWN_DRAIN_MS: 0 } }), 30);
+  assert.equal(grace({ env: { SHUTDOWN_DRAIN_MS: null } }), 60);
+  assert.equal(grace({ env: { SHUTDOWN_DRAIN_MS: "9e4" } }), 120);
+  assert.equal(
+    grace({ env: { SHUTDOWN_DRAIN_MS: "90000" }, services: { core: { env: { SHUTDOWN_DRAIN_MS: "" } } } }),
+    60,
+  );
+  assert.equal(grace({}, "egress-proxy"), undefined);
 });
 
 test("Helm separates core startup/readiness from liveness and allows probe overrides", options, () => {

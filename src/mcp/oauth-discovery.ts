@@ -2,6 +2,7 @@ import { buildDiscoveryUrls, registerClient } from "@modelcontextprotocol/sdk/cl
 import { OAuthMetadataSchema, type OAuthMetadata } from "@modelcontextprotocol/sdk/shared/auth.js";
 import { errMessage } from "../util/errors.ts";
 import { publicFetch, type AddressFetch } from "../util/network.ts";
+import { trimTrailingSlashes } from "../util/text.ts";
 
 const OAUTH_REQUEST_TIMEOUT_MS = 5_000;
 
@@ -53,7 +54,7 @@ async function fetchMeta(
 }
 
 function wellKnown(base: URL, suffix: string): string[] {
-  const path = base.pathname.replace(/\/+$/, "");
+  const path = trimTrailingSlashes(base.pathname);
   return [...new Set([`${base.origin}/.well-known/${suffix}${path}`, `${base.origin}/.well-known/${suffix}`])];
 }
 

@@ -159,7 +159,7 @@ test("the same sign-in is a separate user in each tenant, and a link stays in it
   }
 });
 
-test("activity is one row per user across every linked sign-in, counting only real user turns", async () => {
+test("activity is one row per user across every linked sign-in, counting only the turns each person wrote", async () => {
   const sessions = createPostgresSessionStore(url);
   const roster = store();
   const pat = unique("pat");
@@ -178,11 +178,20 @@ test("activity is one row per user across every linked sign-in, counting only re
   await sessions.addParticipant(channel.id, pat);
   await sessions.addParticipant(channel.id, slack);
   await sessions.addParticipant(channel.id, quiet);
-  const first = await sessions.append({ sessionId: dm.id }, { kind: "UserMessage", text: "hi" });
+  const first = await sessions.append(
+    { sessionId: dm.id },
+    { kind: "UserMessage", text: "hi", author: pat.toUpperCase() },
+  );
   await sessions.append({ sessionId: dm.id }, { kind: "AgentMessage", text: "hello" });
-  await sessions.append({ sessionId: channel.id }, { kind: "UserMessage", text: "chatter", body: { overheard: true } });
+  await sessions.append(
+    { sessionId: channel.id },
+    { kind: "UserMessage", text: "chatter", author: pat, body: { overheard: true } },
+  );
   await sessions.addParticipant(channel.id, stranger);
-  const last = await sessions.append({ sessionId: channel.id }, { kind: "SteeringMessage", text: "also" });
+  const last = await sessions.append(
+    { sessionId: channel.id },
+    { kind: "SteeringMessage", text: "also", author: slack },
+  );
   await sessions.removeParticipant(channel.id, quiet);
 
   const rows = await roster.activity();
@@ -200,7 +209,7 @@ test("activity is one row per user across every linked sign-in, counting only re
       lastSeenAt: last.createdAt,
       days: undefined,
     },
-    "both sessions once; the channel's turn is credited once, not once per sign-in; agent and overheard excluded",
+    "both sessions once; turns written under either sign-in count once each; agent and overheard excluded",
   );
   assert.deepEqual(mine[0]!.days, [
     ...new Set([first.createdAt, last.createdAt].map((t) => Math.floor(t / 86_400_000))),
@@ -212,8 +221,8 @@ test("activity is one row per user across every linked sign-in, counting only re
   );
   assert.deepEqual(
     rows.filter((r) => r.principalId === stranger).map((r) => [r.userId, r.kind, r.sessions, r.turns]),
-    [[null, "person", 1, 1]],
-    "a participant with no user row still counts, under their own sign-in",
+    [[null, "person", 1, 0]],
+    "a participant with no user row still counts, under their own sign-in, but is not credited with others' turns",
   );
 });
 

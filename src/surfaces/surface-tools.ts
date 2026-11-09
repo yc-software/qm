@@ -159,7 +159,8 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       { mayOpenGroup: opts?.mayOpenGroup === true },
     );
     if (!r.ok) return { ok: false, message: r.message };
-    return { ok: true, destination: r.destination };
+    const persona = currentDestination.persona;
+    return { ok: true, destination: persona ? { ...r.destination, persona } : r.destination };
   };
   const enqueue = async (
     destination: Destination,

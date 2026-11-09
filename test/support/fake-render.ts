@@ -3,7 +3,7 @@ import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { constants, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { TestContext } from "node:test";
 import {
@@ -55,6 +55,7 @@ export function createFakeRender() {
   const execFileAsync = promisify(execFile);
   const root = mkdtempSync(join(tmpdir(), "fake-render-"));
   const sandboxes = new Map<string, RenderSandboxInfo>();
+  const labels = new Map<string, { name?: string; createdAtMs: number }>();
   const snapshots = new Map<string, RenderSnapshot>();
   const snapshotSources = new Map<string, { sandboxId: string; name: string; requestedAtMs: number }>();
   const images = new Map<string, RenderImage & { name: string; source: string }>();
@@ -82,17 +83,16 @@ export function createFakeRender() {
     if (path.startsWith(`${RENDER_SCRIPT_DIR}/`)) return `${home(id)}${path}`;
     return path.replace(/^\/tmp\//, `${home(id)}/tmp/`).replace(/^\/root(?![A-Za-z0-9_-])/, home(id));
   };
+  const translate = (id: string, script: string): string =>
+    script
+      .replace(/\/tmp\//g, `${home(id)}/tmp/`)
+      .replace(/\/root(?![A-Za-z0-9_-])/g, home(id))
+      .replace(/tar --no-recursion --null -T ('[^']+') -cf ('[^']+')/g, "xargs -0 tar --no-recursion -cf $2 -- < $1")
+      .replaceAll(RENDER_SCRIPT_DIR, `${home(id)}${RENDER_SCRIPT_DIR}`);
   const execute = async (id: string, script: string) => {
     mkdirSync(join(home(id), "tmp"), { recursive: true });
     const file = join(root, `run-${randomUUID()}.sh`);
-    writeFileSync(
-      file,
-      script
-        .replace(/\/tmp\//g, `${home(id)}/tmp/`)
-        .replace(/\/root(?![A-Za-z0-9_-])/g, home(id))
-        .replace(/tar --no-recursion --null -T ('[^']+') -cf ('[^']+')/g, "xargs -0 tar --no-recursion -cf $2 -- < $1")
-        .replaceAll(RENDER_SCRIPT_DIR, `${home(id)}${RENDER_SCRIPT_DIR}`),
-    );
+    writeFileSync(file, translate(id, script));
     try {
       const result = await execFileAsync("/bin/sh", [file], {
         encoding: "utf8",
@@ -102,20 +102,21 @@ export function createFakeRender() {
       });
       return { stdout: result.stdout, stderr: result.stderr, exitCode: 0 };
     } catch (error) {
-      const result = error as Error & { code?: number; stdout?: string; stderr?: string };
-      if (typeof result.code !== "number") throw new Error(result.message, { cause: error });
-      return { stdout: result.stdout ?? "", stderr: result.stderr ?? "", exitCode: result.code };
+      const result = error as Error & { code?: number; signal?: NodeJS.Signals; stdout?: string; stderr?: string };
+      const exitCode = result.signal ? 128 + constants.signals[result.signal] : result.code;
+      if (typeof exitCode !== "number") throw new Error(result.message, { cause: error });
+      return { stdout: result.stdout ?? "", stderr: result.stderr ?? "", exitCode };
     } finally {
       rmSync(file, { force: true });
     }
   };
   const runProxyCommand = async (id: string, command: string) => {
     requireRunning(id);
-    const spooled = /^timeout \d+ sh '([^']+)'$/.exec(command);
-    if (!spooled) return execute(id, command);
-    const script = mapped(id, spooled[1]!);
-    if (!existsSync(script)) return { stdout: "", stderr: `sh: cannot open ${spooled[1]}`, exitCode: 2 };
-    return execute(id, readFileSync(script, "utf8"));
+    for (const [path] of command.matchAll(new RegExp(`${RENDER_SCRIPT_DIR}/[0-9a-f-]+\\.sh`, "g"))) {
+      const script = mapped(id, path);
+      if (existsSync(script)) writeFileSync(script, translate(id, readFileSync(script, "utf8")));
+    }
+    return execute(id, command);
   };
   const startImport = (source: string, name: string) => {
     imports.push({ source, name });
@@ -140,7 +141,7 @@ export function createFakeRender() {
     return image;
   };
   const client: RenderClient = {
-    async create({ snapshotId, image, lifetimeSec, onCreated }) {
+    async create({ name, snapshotId, image, lifetimeSec, onCreated }) {
       const id = `sbx-${sandboxes.size + 1}`;
       const info: RenderSandboxInfo = { id, status: "running", expiresAtMs: Date.now() + lifetimeSec * 1000 };
       if (snapshotId) {
@@ -154,6 +155,7 @@ export function createFakeRender() {
         mkdirSync(home(id), { recursive: true });
       }
       sandboxes.set(id, info);
+      labels.set(id, { ...(name ? { name } : {}), createdAtMs: Date.now() });
       createdFrom.push(snapshotId ?? image);
       try {
         await onCreated?.(id);
@@ -175,6 +177,13 @@ export function createFakeRender() {
     },
     async get(id) {
       return sandboxes.get(id) ?? null;
+    },
+    async listLive(name) {
+      return [...sandboxes.values()]
+        .filter(
+          (info) => labels.get(info.id)?.name === name && info.status !== "terminated" && info.status !== "errored",
+        )
+        .map((info) => ({ id: info.id, createdAtMs: labels.get(info.id)!.createdAtMs }));
     },
     async terminate(id) {
       if (terminateError ?? terminateErrors.get(id)) throw terminateError ?? terminateErrors.get(id);
@@ -275,6 +284,15 @@ export function createFakeRender() {
     loseCheckpointReply(status: RenderSnapshot["status"] = "available") {
       loseCheckpointReply = status;
     },
+    nameOf(sandboxId: string) {
+      return labels.get(sandboxId)?.name;
+    },
+    createdAtMs(sandboxId: string) {
+      return labels.get(sandboxId)?.createdAtMs;
+    },
+    age(sandboxId: string, ms: number) {
+      labels.get(sandboxId)!.createdAtMs -= ms;
+    },
     snapshotSource(snapshotId: string) {
       return snapshotSources.get(snapshotId);
     },
@@ -306,19 +324,19 @@ export function serveFakeRenderApi(
   let groupName: string | undefined = "Default";
   let groupCreatedElsewhere: string | undefined;
   let groupWithoutDefault = false;
-  let maxLifetimeSec: number | undefined;
   let groupCreates = 0;
   const uploads: Array<{ sandboxId: string; path: string; data: Buffer }> = [];
-  const lifetimes = new Map<string, { timeoutSeconds: number; createdAt: string }>();
+  const lifetimes = new Map<string, { timeoutSeconds: number }>();
   const sandboxJson = (id: string) => ({
     id,
+    name: fake.nameOf(id) ?? null,
     status: fake.sandboxes.get(id)!.status,
     plan: "starter",
     region: "oregon",
     networkPolicy: { type: "allow-all" },
     timeoutSeconds: 86400,
-    createdAt: new Date().toISOString(),
     ...lifetimes.get(id),
+    createdAt: new Date(fake.createdAtMs(id)!).toISOString(),
   });
   const snapshotJson = (snapshot: RenderSnapshot) => ({
     id: snapshot.id,
@@ -351,22 +369,29 @@ export function serveFakeRenderApi(
   const api = async (request: Request, path: string, query: URLSearchParams): Promise<Response> => {
     let match: RegExpExecArray | null;
     if (request.method === "POST" && path === "/sandboxes") {
-      const body = (await request.json()) as { snapshotId?: string; buildId?: string; timeoutSeconds?: number };
-      if (maxLifetimeSec && (body.timeoutSeconds ?? 0) > maxLifetimeSec)
-        return Response.json(
-          {
-            message: `timeoutSeconds must be between 1 and ${maxLifetimeSec} seconds for Hobby workspaces`,
-            code: "invalid_timeout_seconds",
-          },
-          { status: 400 },
-        );
+      const body = (await request.json()) as {
+        name?: string;
+        snapshotId?: string;
+        buildId?: string;
+        timeoutSeconds?: number;
+      };
       const { id } = await fake.client.create({
+        ...(body.name ? { name: body.name } : {}),
         ...(body.snapshotId ? { snapshotId: body.snapshotId } : {}),
         ...(body.buildId ? { image: body.buildId } : {}),
         lifetimeSec: body.timeoutSeconds ?? 86400,
       });
-      lifetimes.set(id, { timeoutSeconds: body.timeoutSeconds ?? 86400, createdAt: new Date().toISOString() });
+      lifetimes.set(id, { timeoutSeconds: body.timeoutSeconds ?? 86400 });
       return Response.json(sandboxJson(id), { status: 201 });
+    }
+    if (path === "/sandboxes" && request.method === "GET") {
+      const statuses = new Set(query.getAll("status"));
+      const matching = [...fake.sandboxes.values()].filter(
+        (info) => fake.nameOf(info.id) === query.get("name") && statuses.has(info.status),
+      );
+      const start = query.has("cursor") ? matching.findIndex((info) => info.id === query.get("cursor")) + 1 : 0;
+      const page = matching.slice(start, start + Number(query.get("limit") ?? 20));
+      return Response.json(page.map((info) => ({ sandbox: sandboxJson(info.id), cursor: info.id })));
     }
     if ((match = /^\/sandboxes\/([^/]+)$/.exec(path)))
       return fake.sandboxes.has(match[1]!) ? Response.json(sandboxJson(match[1]!)) : missing();
@@ -488,7 +513,5 @@ export function serveFakeRenderApi(
     groupCreates: () => groupCreates,
     createSandboxGroupDuringNextRequest: (name: string) => (groupCreatedElsewhere = name),
     sandboxGroupName: () => groupName,
-    capLifetime: (seconds: number) => (maxLifetimeSec = seconds),
-    lifetimeOf: (id: string) => lifetimes.get(id)?.timeoutSeconds,
   };
 }

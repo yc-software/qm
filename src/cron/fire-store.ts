@@ -24,6 +24,8 @@ export interface CronFireStore {
   latestForThread(cronId: string, threadRef: string): Promise<CronFireLogEntry | undefined>;
 }
 
+export const FIRE_RETENTION_KEEP_PER_CRON = 100;
+
 interface FireColumn {
   name: string;
   cast: "text" | "bigint";
@@ -208,28 +210,20 @@ export function createPostgresCronFireStore(connectionString: string): CronFireS
       return (await claimRows({ q }, "claim_pruned_cron_fires", [keepPerCron, endedBefore])).length;
     },
     async listByCron(cronId, opts) {
-      if (opts?.limit !== undefined && opts.limit <= 0) {
+      const limit = opts?.limit ?? FIRE_RETENTION_KEEP_PER_CRON;
+      if (limit <= 0) {
         const counted = await q(`SELECT COUNT(*)::int AS total FROM cron_fires WHERE cron_id = $1`, [cronId]);
         return { runs: [], total: Number(counted[0]?.total ?? 0) };
       }
-      if (opts?.limit !== undefined) {
-        const rows = await q(
-          `SELECT ${FIRE_COLUMNS}, COUNT(*) OVER ()::int AS total FROM cron_fires
-            WHERE cron_id = $1
-            ORDER BY fired_at DESC, fire_key DESC
-            LIMIT $2`,
-          [cronId, opts.limit],
-        );
-        const total = rows.length ? Number(rows[0]!.total) : 0;
-        return { runs: rows.reverse().map(rowToEntry), total };
-      }
       const rows = await q(
-        `SELECT ${FIRE_COLUMNS} FROM cron_fires
+        `SELECT ${FIRE_COLUMNS}, COUNT(*) OVER ()::int AS total FROM cron_fires
           WHERE cron_id = $1
-          ORDER BY fired_at, fire_key`,
-        [cronId],
+          ORDER BY fired_at DESC, fire_key DESC
+          LIMIT $2`,
+        [cronId, limit],
       );
-      return { runs: rows.map(rowToEntry), total: rows.length };
+      const total = rows.length ? Number(rows[0]!.total) : 0;
+      return { runs: rows.reverse().map(rowToEntry), total };
     },
     async listByThreadRefs(threadRefs) {
       if (!threadRefs.length) return [];

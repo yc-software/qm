@@ -1,6 +1,6 @@
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
-import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
+import { createPostgresCronFireStore, FIRE_RETENTION_KEEP_PER_CRON } from "../src/cron/fire-store.ts";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { scopeId } from "../src/types.ts";
@@ -75,6 +75,17 @@ test("pg cron_fires: listByCron pages the latest N with the full total", { skip 
   assert.deepEqual(
     runs.map((r) => r.fireKey),
     ["k2", "k3"],
+  );
+});
+
+test("pg cron_fires: without a limit listByCron returns the runs retention always keeps", { skip }, async () => {
+  const fires = createPostgresCronFireStore(URL!);
+  for (let i = 0; i <= FIRE_RETENTION_KEEP_PER_CRON; i++)
+    await fires.record("c-default", { fireKey: `k${i}`, threadRef: `t-${i}`, firedAt: i + 1, status: "ok" });
+  const { runs, total } = await fires.listByCron("c-default");
+  assert.deepEqual(
+    [runs.length, total, runs[0]?.fireKey, runs.at(-1)?.fireKey],
+    [FIRE_RETENTION_KEEP_PER_CRON, FIRE_RETENTION_KEEP_PER_CRON + 1, "k1", `k${FIRE_RETENTION_KEEP_PER_CRON}`],
   );
 });
 

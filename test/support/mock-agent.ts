@@ -257,7 +257,7 @@ export function createMockAgent(): Agent {
           else turn.cancel.addEventListener("abort", () => resolve(), { once: true });
         });
         await recordStoppedTurn(turn, "");
-        return { reply: "(stopped)", stopped: true, modelCalls: 1 };
+        return { reply: "", stopped: true, modelCalls: 1 };
       } else if (command0.startsWith("!post-lost-result ")) {
         const msg = cmd.slice(cmd.indexOf("!post-lost-result ") + "!post-lost-result ".length);
         await record({ kind: "ToolCall", tool: "slack", body: { action: "post", bytes: msg.length } });

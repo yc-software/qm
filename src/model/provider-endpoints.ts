@@ -3,6 +3,7 @@ import { isGatewayModelId } from "./gateway-models.ts";
 import { currentModelRequestContext } from "./request-context.ts";
 import { attestableActor } from "../directory/person.ts";
 import { tenantSettings } from "../tenants/settings.ts";
+import { trimTrailingSlashes } from "../util/text.ts";
 
 export const PROVIDER_IDS = ["anthropic", "openai", "openrouter"] as const;
 type ProviderId = (typeof PROVIDER_IDS)[number];
@@ -16,7 +17,7 @@ const PROVIDER_BASE_URL_ENV: Record<ProviderId, string> = {
 export type ProviderBaseUrls = Partial<Record<ProviderId, string>>;
 
 export function gatewayRoot(url: string): string {
-  return url.replace(/\/+$/, "").replace(/\/v1$/, "");
+  return trimTrailingSlashes(url).replace(/\/v1$/, "");
 }
 
 export interface ModelGatewayTransportConfig {
@@ -30,7 +31,7 @@ export interface ModelGatewayTransportConfig {
 }
 
 export function parseProviderBaseUrl(envName: string, value: string): string {
-  const trimmed = value.trim().replace(/\/+$/, "");
+  const trimmed = trimTrailingSlashes(value.trim());
   let url: URL;
   try {
     url = new URL(trimmed);

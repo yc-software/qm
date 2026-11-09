@@ -172,6 +172,15 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       await q("UPDATE sessions SET persona_id = $2 WHERE id = $1", [sessionId, personaId]);
     },
 
+    async threadsWithPersona(personaId, threadRefs): Promise<Set<string>> {
+      if (!threadRefs.length) return new Set();
+      const rows = await q("SELECT thread_ref FROM sessions WHERE thread_ref = ANY($1::text[]) AND persona_id = $2", [
+        threadRefs,
+        personaId,
+      ]);
+      return new Set(rows.map((r) => r.thread_ref as string));
+    },
+
     async endedInFailure(sessionIds): Promise<Set<string>> {
       if (!sessionIds.length) return new Set();
       const rows = await q(

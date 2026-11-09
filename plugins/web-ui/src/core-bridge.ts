@@ -129,7 +129,6 @@ type WebUserMessage = AgentMessage & {
   role: "user" | "user-with-attachments";
   content: string | Array<{ type: string; text?: string }>;
   attachments?: PiAttachment[];
-  clientTurnId?: string;
   sendFailure?: string;
 };
 
@@ -667,8 +666,8 @@ export function continuableMessages(
     return { messages: [...kept, user as AgentMessage], popped };
   }
   while (kept.length && (kept[kept.length - 1] as { role?: string }).role === "assistant") {
-    const work = (kept.at(-1) as AssistantWork).work;
-    if (!input && work && workPausedForApproval(work)) {
+    const last = kept.at(-1) as AssistantWork;
+    if (last.stopReason === "aborted" || (!input && last.work && workPausedForApproval(last.work))) {
       kept.push(resumeAnchor());
       break;
     }
@@ -779,7 +778,6 @@ export class ApiError extends Error {
 
 export interface SigninRequired {
   mode?: "portal" | "dev";
-  reason?: "unauthenticated" | "not_allowed";
 }
 
 let onSigninRequired: ((detail: SigninRequired) => void) | null = null;
@@ -2327,7 +2325,7 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
         ...(typeof workStartedAt === "number" ? { startedAt: workStartedAt } : {}),
         ...(typeof workFinishedAt === "number" ? { finishedAt: workFinishedAt } : {}),
       };
-      const stopped = e.body.stopped === true || text.trim() === "(stopped)";
+      const stopped = e.body.stopped === true;
       if (typeof e.body.via === "string" && text.trim()) {
         spillHeldPosts();
         flushWork("", e.createdAt);

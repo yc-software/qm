@@ -118,7 +118,6 @@ export interface SpritesSandboxOptions extends BlobStagingOptions {
   defaultTimeoutSec?: number;
   egressProxyUrl?: string;
   egressProxyAdditionalUrls?: string[];
-  memoryMb?: number;
   checkpointIntervalMs?: number;
   snapshots?: HomeSnapshotStore;
   initializationStore: DurableMap<{ pending: boolean }>;
@@ -171,7 +170,8 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
   const checkpointIntervalMs = opts.checkpointIntervalMs ?? CHECKPOINT_INTERVAL_MS;
 
   const ensured = new Set<string>();
-  const resourcesApplied = new Set<string>();
+  const sizeByName = new Map<string, number>();
+  const appliedSize = new Map<string, number>();
   const egressPolicyByName = new Map<string, string>();
   const pressureEpisodes = new Set<string>();
   const checkpointBooks = new Map<string, SnapshotBookkeeping>();
@@ -343,11 +343,12 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
   }
 
   async function applyResources(name: string): Promise<void> {
-    if (opts.memoryMb === undefined || resourcesApplied.has(name)) return;
+    const memoryGb = sizeByName.get(name);
+    if (memoryGb === undefined || appliedSize.get(name) === memoryGb) return;
     await attempt(`resources policy ${name}`, () =>
-      sprite(name).updateResourcesPolicy({ memory: { limitMB: opts.memoryMb! } }),
+      sprite(name).updateResourcesPolicy({ memory: { limitMB: memoryGb * 1024 } }),
     );
-    resourcesApplied.add(name);
+    appliedSize.set(name, memoryGb);
   }
 
   async function spriteExists(name: string): Promise<boolean> {
@@ -439,7 +440,7 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
 
   const forget = (name: string): void => {
     ensured.delete(name);
-    resourcesApplied.delete(name);
+    appliedSize.delete(name);
     pressureEpisodes.delete(name);
     egressPolicyByName.delete(name);
     checkpointBooks.delete(name);
@@ -509,6 +510,7 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
 
   const profile: AgentComputerProfile = {
     backend: "sprites",
+    sizesMemory: true,
     writablePersistence: "resident_disk",
     processSessions: true,
     egressEnforcement: opts.egressProxyUrl ? "domain" : "none",
@@ -522,7 +524,6 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
         return visibleNotInstalled(["gh", "aws", "gcloud", "kubectl", "flyctl", "glab"], opts.extraTools ?? []);
       },
       cpus: SPRITE_CPUS,
-      ...(opts.memoryMb !== undefined ? { memoryMb: opts.memoryMb } : {}),
       diskGb: SPRITE_DISK_GB,
       homeDir: HOME_DIR,
       workdir: base.workspaceDir,
@@ -583,7 +584,14 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
     listProcesses: procSessions.listProcesses,
     ...execFileOps,
     ...blobStaging,
-    provision: base.provision,
+    async provision(scope, provOpts) {
+      if (!provOpts?.scratch) {
+        const name = await nameFor(scope);
+        if (provOpts?.memoryGb) sizeByName.set(name, provOpts.memoryGb);
+        else sizeByName.delete(name);
+      }
+      return base.provision(scope, provOpts);
+    },
     run: base.run,
     writeFileBytes: base.writeFileBytes,
     writeFile: base.writeFile,
@@ -659,11 +667,23 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
       };
     },
 
-    async restartComputer(scopeId: string): Promise<void> {
+    async restartComputer(scopeId: string, memoryGb?: number): Promise<void> {
       const name = await nameFor(scopeId);
       return base.provisionQueue(`restart:${name}`, () =>
         withLifecycle(name, async () => {
           await requireInitialized(name);
+          if (memoryGb !== undefined) {
+            const previous = sizeByName.get(name);
+            sizeByName.set(name, memoryGb);
+            appliedSize.delete(name);
+            try {
+              await applyResources(name);
+            } catch (error) {
+              if (previous === undefined) sizeByName.delete(name);
+              else sizeByName.set(name, previous);
+              throw error;
+            }
+          }
           forget(name);
           const s = sprite(name);
           const restartFailure = await s.restart().then(
