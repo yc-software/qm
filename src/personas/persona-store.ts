@@ -54,8 +54,8 @@ export interface PersonaAccessEntry {
 }
 
 export class PersonaChannelPinned extends Error {
-  constructor(channel: ScopeId) {
-    super(`${channel} already has another persona pinned; unpin it there first`);
+  constructor(channel: ScopeId, cause?: unknown) {
+    super(`${channel} already has another persona pinned; unpin it there first`, { cause });
   }
 }
 
@@ -251,7 +251,7 @@ export function createPostgresPersonaStore(connectionString: string, opts: { id?
             )
             .catch((e: unknown) => {
               if ((e as { constraint?: string }).constraint === "persona_access_one_pin")
-                throw new PersonaChannelPinned(entry.scopeId);
+                throw new PersonaChannelPinned(entry.scopeId, e);
               throw e;
             });
       });
