@@ -95,13 +95,13 @@ export function createIdentityService(
     const existing = deactivated.get(key);
     if (existing && (existing.source === "manual" || existing.source === source)) return;
     const record: DeactivationRecord = { principalId: externalId, source, at: Date.now() };
-    deactivated.set(key, record);
     await store.put(foldPrincipalId(externalId), record);
+    deactivated.set(key, record);
   }
 
   async function reactivateNow(externalId: string): Promise<void> {
-    deactivated.delete(personKey(externalId));
     for (const key of storeKeys(externalId)) await store.delete(key);
+    deactivated.delete(personKey(externalId));
   }
 
   return {
@@ -135,14 +135,14 @@ export function createIdentityService(
     },
     putExternalMember(m: ExternalMember): Promise<void> {
       return exclusive(async () => {
-        externals.set(personKey(m.email), m);
         await externalStore.put(foldPrincipalId(m.email), m);
+        externals.set(personKey(m.email), m);
       });
     },
     removeExternalMember(principalId: string): Promise<void> {
       return exclusive(async () => {
-        externals.delete(personKey(principalId));
         for (const key of storeKeys(principalId)) await externalStore.delete(key);
+        externals.delete(personKey(principalId));
       });
     },
     refresh,

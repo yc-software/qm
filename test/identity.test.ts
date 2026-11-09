@@ -179,3 +179,24 @@ test("a manual deactivation survives roster churn — only reactivate() clears i
   await svc.reactivate("U-fired");
   assert.equal(svc.classify("U-fired").type, "internal");
 });
+
+test("a failed external-member write does not shield the person from directory sync", async () => {
+  const externalMembers = testMap<ExternalMember>();
+  externalMembers.put = async () => {
+    throw new Error("store down");
+  };
+  const svc = createIdentityService(testMap(), { externalMembers });
+  const now = Date.now();
+  await assert.rejects(
+    svc.putExternalMember({
+      email: "pat@partner.example",
+      role: "member",
+      expiresAt: null,
+      invitedBy: "admin-alice",
+      createdAt: now,
+      updatedAt: now,
+    }),
+  );
+  assert.equal(svc.externalMember("pat@partner.example"), undefined);
+  assert.deepEqual((await svc.recordDirectorySync(["pat@partner.example"], [])).deactivated, ["pat@partner.example"]);
+});
