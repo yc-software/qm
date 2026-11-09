@@ -16,6 +16,7 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import {
   createRenderSandbox,
   type StoredRenderCleanup,
+  type StoredRenderNamespace,
   type StoredRenderSandbox,
   type StoredRenderScratch,
 } from "./sandbox/render-sandbox.ts";
@@ -1093,6 +1094,7 @@ export function buildApp(
       store: renderBodies,
       scratchStore: renderScratch,
       cleanupStore: renderCleanup,
+      namespaceStore: artifactMap<StoredRenderNamespace>("render_sandbox_namespace"),
       advisoryLock,
       extraTools: deploymentLayer.advertisedTools,
       credentialPaths: deploymentLayer.credentialPaths,

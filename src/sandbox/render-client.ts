@@ -22,6 +22,8 @@ const CLEANUP_TIMEOUT_MS = 5_000;
 const CHECKPOINT_SETTLE_MS = 180_000;
 const SANDBOX_START_MS = 180_000;
 const STALE_SCRIPT_MINUTES = 5;
+const LIST_PAGE_SIZE = 100;
+const LIVE_STATUSES = ["creating", "running", "suspending", "suspended", "resuming"] as const;
 
 const sdkErrors = {
   statusOf: (error: unknown): number | undefined =>
@@ -35,7 +37,13 @@ export interface RenderSandboxInfo {
   expiresAtMs: number;
 }
 
+export interface RenderListedSandbox {
+  id: string;
+  createdAtMs: number;
+}
+
 interface RenderCreateOptions {
+  name?: string;
   snapshotId?: string;
   image?: string;
   lifetimeSec: number;
@@ -62,6 +70,7 @@ export interface RenderClient {
   create(options: RenderCreateOptions): Promise<RenderSandboxInfo>;
   importImage(source: string, name: string): Promise<RenderImage>;
   get(sandboxId: string): Promise<RenderSandboxInfo | null>;
+  listLive(name: string): Promise<RenderListedSandbox[]>;
   terminate(sandboxId: string): Promise<void>;
   runScript(
     sandboxId: string,
@@ -199,12 +208,20 @@ export function createSdkRenderClient(opts: SdkRenderClientOptions): RenderClien
     }
   };
   return {
-    async create({ snapshotId, image, lifetimeSec, onCreated }) {
+    async create({ name, snapshotId, image, lifetimeSec, onCreated }) {
       let source: { snapshotId: string } | { image: string } | Record<string, never> = {};
       if (snapshotId) source = { snapshotId };
       else if (image) source = { image };
+      const label = name ? { name } : {};
       const created = await retryOperation(
-        () => api.create({ plan: RENDER_SANDBOX_PLAN, timeoutSeconds: lifetimeSec, idleTimeoutSeconds: 0, ...source }),
+        () =>
+          api.create({
+            plan: RENDER_SANDBOX_PLAN,
+            timeoutSeconds: lifetimeSec,
+            idleTimeoutSeconds: 0,
+            ...label,
+            ...source,
+          }),
         "refused",
         {
           ...sdkErrors,
@@ -259,6 +276,21 @@ export function createSdkRenderClient(opts: SdkRenderClientOptions): RenderClien
       };
     },
     get,
+    async listLive(name) {
+      const listed: RenderListedSandbox[] = [];
+      for (let cursor: string | undefined; ;) {
+        const after = cursor ? { cursor } : {};
+        const page = await retryOperation(
+          () => api.list({ name, status: [...LIVE_STATUSES], limit: LIST_PAGE_SIZE, ...after }),
+          "idempotent",
+          { ...sdkErrors, timeoutMs: CONTROL_TIMEOUT_MS },
+        );
+        for (const entry of page)
+          listed.push({ id: entry.sandbox.id, createdAtMs: Date.parse(entry.sandbox.createdAt) });
+        if (page.length < LIST_PAGE_SIZE) return listed;
+        cursor = page.at(-1)!.cursor;
+      }
+    },
     terminate,
     runScript,
     async readFileBytes(sandboxId, absPath) {
