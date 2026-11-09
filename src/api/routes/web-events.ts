@@ -9,6 +9,10 @@ import { createSweeper } from "../../util/sweeper.ts";
 import { canAdministerLoop } from "./loops.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import { sendJson } from "../http.ts";
+import { bootTenant, tenancyBooted } from "../../tenants/boot.ts";
+import { boundTenant, withTenant } from "../../tenants/context.ts";
+import { claimThenBind } from "../../tenants/claim.ts";
+import type { DeliveryStore } from "../../delivery/delivery-store.ts";
 
 const POLL_MS = 2_500;
 const GIVEUP_MS = 60_000;
@@ -38,14 +42,20 @@ function ownerOfWebThread(threadRef: string): string | null {
   return i > 0 ? rest.slice(0, i) : null;
 }
 
-export function createWebEvents(app: HubApp, deps: Pick<ServerDeps, "loops" | "identity">): WebEvents {
-  const clients = new Map<string, Set<ServerResponse>>();
-  const send = (user: string, event: string, data: unknown): void => {
-    for (const res of clients.get(canonicalPerson(user)) ?? [])
+const laneOf = (tenant: string | undefined): string => tenant ?? bootTenant() ?? "";
+
+export function createWebEvents(
+  app: HubApp,
+  deps: Pick<ServerDeps, "loops" | "identity"> & { deliveries?: Pick<DeliveryStore, "undeliveredTenants"> },
+): WebEvents {
+  const lanes = new Map<string, Map<string, Set<ServerResponse>>>();
+  const clientsOf = (tenant: string | undefined) => lanes.get(laneOf(tenant)) ?? new Map<string, Set<ServerResponse>>();
+  const send = (tenant: string | undefined, user: string, event: string, data: unknown): void => {
+    for (const res of clientsOf(tenant).get(canonicalPerson(user)) ?? [])
       res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   };
   const broadcast = (event: string): void => {
-    for (const user of clients.keys()) send(user, event, {});
+    for (const [lane, clients] of lanes) for (const user of clients.keys()) send(lane, user, event, {});
   };
 
   let draining = false;
@@ -56,14 +66,20 @@ export function createWebEvents(app: HubApp, deps: Pick<ServerDeps, "loops" | "i
     let failure: unknown;
     try {
       const now = Date.now();
-      for (const d of await app.pendingDeliveries("web")) {
-        const owner = canonicalPerson(ownerOfWebThread(d.destination.target) ?? "");
-        if (clients.get(owner)?.size) send(owner, "delivery", { threadRef: d.destination.target });
-        else if (now - d.createdAt < GIVEUP_MS) continue;
-        await app
-          .ackDelivery(d.id)
-          .catch((e: unknown) => (failure ??= new Error(`ack delivery ${d.id}`, { cause: e })));
-      }
+      const drainLane = async (): Promise<void> => {
+        const tenant = boundTenant();
+        for (const d of await app.pendingDeliveries("web")) {
+          const owner = canonicalPerson(ownerOfWebThread(d.destination.target) ?? "");
+          if (clientsOf(tenant).get(owner)?.size) send(tenant, owner, "delivery", { threadRef: d.destination.target });
+          else if (now - d.createdAt < GIVEUP_MS) continue;
+          await app
+            .ackDelivery(d.id)
+            .catch((e: unknown) => (failure ??= new Error(`ack delivery ${d.id}`, { cause: e })));
+        }
+      };
+      const deliveries = deps.deliveries;
+      if (tenancyBooted() && deliveries) await claimThenBind(() => deliveries.undeliveredTenants("web"), drainLane);
+      else await drainLane();
     } catch (e) {
       failure = e;
     } finally {
@@ -81,19 +97,20 @@ export function createWebEvents(app: HubApp, deps: Pick<ServerDeps, "loops" | "i
 
   const forwardSessionState = (event: SessionStateEvent): void => {
     if (typeof event.threadRef !== "string" || !event.threadRef) return;
-    const { participants, ...visible } = event;
+    const { participants, tenantId, ...visible } = event;
+    const tenant = tenantId ?? boundTenant();
     const owner = ownerOfWebThread(event.threadRef);
     const targets = new Set((participants ?? []).map(canonicalPerson));
     if (targets.size === 0 && owner) targets.add(canonicalPerson(owner));
-    for (const user of targets) send(user, "session_state", visible);
+    for (const user of targets) send(tenant, user, "session_state", visible);
   };
 
-  const viewersOf = async (loopId: string): Promise<string[] | null> => {
+  const viewersOf = async (loopId: string, tenant: string | undefined): Promise<string[] | null> => {
     const loop = await deps.loops?.store.get(loopId);
     if (!loop) return null;
     const identity = deps.identity;
     await identity?.refresh();
-    const candidates = [...clients.keys()];
+    const candidates = [...clientsOf(tenant).keys()];
     const allowed = await Promise.all(
       candidates.map(
         async (id) => (!identity || identity.classify(id).type === "internal") && canAdministerLoop(app, loop, id),
@@ -102,20 +119,29 @@ export function createWebEvents(app: HubApp, deps: Pick<ServerDeps, "loops" | "i
     return candidates.filter((_, i) => allowed[i]);
   };
   const forwardInboxItem = async (event: OwnedLedgerEvent): Promise<void> => {
-    if (!event.loopId || !event.itemId || !clients.size) return;
-    const viewers = await viewersOf(event.loopId).catch((e: unknown) => {
+    const tenant = event.tenantId ?? (tenancyBooted() ? bootTenant() : undefined);
+    if (!event.loopId || !event.itemId || !clientsOf(tenant).size) return;
+    if (tenancyBooted() && !tenant) return;
+    const lookup = () => viewersOf(event.loopId, tenant);
+    const viewers = await (tenant ? withTenant(tenant, lookup) : lookup()).catch((e: unknown) => {
       swallow("web: inbox item viewers", e);
       return undefined;
     });
-    if (viewers === undefined) return broadcast("inbox_resync");
+    if (viewers === undefined) {
+      for (const user of clientsOf(tenant).keys()) send(tenant, user, "inbox_resync", {});
+      return;
+    }
     const frame = { loopId: event.loopId, itemId: event.itemId, op: event.op ?? "" };
-    for (const user of viewers ?? []) send(user, "inbox_item", frame);
+    for (const user of viewers ?? []) send(tenant, user, "inbox_item", frame);
   };
 
   let unsubscribe: Array<() => void> = [];
   return {
     stream(user, res) {
       const key = canonicalPerson(user);
+      const lane = laneOf(boundTenant());
+      const clients = lanes.get(lane) ?? new Map<string, Set<ServerResponse>>();
+      lanes.set(lane, clients);
       res.writeHead(200, {
         "content-type": "text/event-stream; charset=utf-8",
         "cache-control": "no-cache, no-transform",
@@ -131,6 +157,7 @@ export function createWebEvents(app: HubApp, deps: Pick<ServerDeps, "loops" | "i
         clearInterval(beat);
         set.delete(res);
         if (!set.size && clients.get(key) === set) clients.delete(key);
+        if (!clients.size && lanes.get(lane) === clients) lanes.delete(lane);
       });
     },
     start() {

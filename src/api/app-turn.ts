@@ -1,4 +1,5 @@
 import { externalSlackRequestAllowed } from "../resolution/external-slack.ts";
+import { createPersonNames } from "../identity/person-names.ts";
 import { turnModelRefusal } from "./runtime-config.ts";
 import type { Run } from "../runs/run-store.ts";
 import {
@@ -38,6 +39,7 @@ import { STALE_LEASE_GRACE_MS } from "./app-types.ts";
 const PARTICIPANT_REHYDRATE_TIMEOUT_MS = 5_000;
 import type { AppHelpers } from "./app-helpers.ts";
 import type { AmbientHelpers } from "./app-ambient.ts";
+import { boundTenant, withTenant } from "../tenants/context.ts";
 
 const freshSteerTs = () => `${Date.now()}.${crypto.randomUUID().slice(0, 8)}`;
 
@@ -153,7 +155,12 @@ export function createTurnMethods(
         };
       await deps.refreshModels?.();
       await deps.identity.refresh();
-      const actor: Principal = deps.identity.resolve(req.actor);
+      const personNames = createPersonNames({ users: deps.users });
+      const withStoredNames = async (people: Principal[]): Promise<Principal[]> => {
+        const names = await personNames.storedNames(people.filter((p) => !p.displayName?.trim()).map((p) => p.id));
+        return people.map((p) => (names.has(p.id) ? { ...p, displayName: names.get(p.id)! } : p));
+      };
+      const [actor] = (await withStoredNames([deps.identity.resolve(req.actor)])) as [Principal];
       if (!deps.identity.isInternal(actor)) {
         return {
           status: "refused",
@@ -251,11 +258,13 @@ export function createTurnMethods(
       const rawAudience = req.conversation.audience ?? [req.actor];
       const audience: Principal[] =
         project?.audience ??
-        rawAudience.map((a) => {
-          const p = deps.identity.classify(a.externalId, a.isExternalGuest);
-          if (p.id === actor.id) return actor;
-          return a.displayName ? { ...p, displayName: a.displayName } : p;
-        });
+        (await withStoredNames(
+          rawAudience.map((a) => {
+            const p = deps.identity.classify(a.externalId, a.isExternalGuest);
+            if (p.id === actor.id) return actor;
+            return a.displayName ? { ...p, displayName: a.displayName } : p;
+          }),
+        ));
       if (!audience.some((p) => p.id === actor.id)) audience.push(actor);
 
       const publishMembers =
@@ -510,7 +519,7 @@ export function createTurnMethods(
       const { run, deduped } = enqueued;
       if (deduped && redeliveryKey && run.dedupKey === redeliveryKey) return { status: "silent" };
       if (spineRouted && !deduped) markTriggerHandled(input as OrchestratorInput);
-      if (spineRouted) deps.engaged?.engage(conversation.threadRef);
+      if (spineRouted) deps.engaged?.engage({ tenantId: run.tenantId, threadRef: conversation.threadRef });
       const terminalResult = deduped && isTerminal(run.status) ? run.result : null;
       if (req.async && !terminalResult) return { status: "queued", runId: run.id };
       const result = terminalResult ? await withAdminLink(terminalResult) : await awaitRun(run.id);
@@ -539,8 +548,13 @@ export function createTurnMethods(
         tail = tail.then(step).catch(swallowAs("session-state: subscriber", undefined));
       };
       const onResync = opts?.onResync;
+      const tenant = boundTenant();
       return deps.sessionStateBus.subscribe(
-        (event) => queue(async () => cb(await rehydrate(event))),
+        ({ tenantId, ...event }) => {
+          if (tenant && tenantId && tenantId !== tenant) return;
+          const owner = tenantId ?? tenant;
+          queue(async () => cb(await (owner ? withTenant(owner, () => rehydrate(event)) : rehydrate(event))));
+        },
         onResync ? { onResync: () => queue(onResync) } : undefined,
       );
     },

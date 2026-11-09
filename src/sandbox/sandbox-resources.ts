@@ -1,3 +1,5 @@
+import { tenantSandboxChoice } from "./tenant-sandbox-shape.ts";
+import { perTenant } from "../tenants/cache.ts";
 import { withLiveTurnMembership } from "../resolution/scope-membership.ts";
 import { randomUUID } from "node:crypto";
 import type { DurableMap } from "../persistence/durable-map.ts";
@@ -6,6 +8,7 @@ import { parseScopeId, type CommandPolicy, type EgressPolicy, type ScopeId } fro
 import type { SandboxBackendName } from "./sandbox-routing.ts";
 import type { Sandbox, AgentComputerSpec, ProvisionOptions, ComputerStatus, EgressEnforcement } from "./sandbox.ts";
 import { JOB_COMPUTER_SCOPE_PREFIX } from "./home-snapshot.ts";
+import { claimThenBind } from "../tenants/claim.ts";
 
 export interface SandboxResource {
   id: string;
@@ -69,7 +72,7 @@ export interface SandboxResources {
     jobOnly?: boolean,
     memoryGb?: number,
   ): Promise<SandboxResource>;
-  jobComputers(): Promise<SandboxResource[]>;
+  eachJobComputer(work: (computer: SandboxResource) => Promise<void>): Promise<void>;
   retireJobComputer(id: string, seenState: SandboxResource["state"]): Promise<void>;
   access(actorId: string, id: string): Promise<SandboxResource>;
   status(actorId: string, id: string): Promise<ComputerStatus>;
@@ -81,7 +84,7 @@ export interface SandboxResources {
   setDefault(actorId: string, scopeId: ScopeId, id: string | null): Promise<void>;
   resolve(scopeId: ScopeId): Promise<SandboxResource | null>;
   get(id: string): Promise<SandboxResource>;
-  defaultBackend(): SandboxBackendName;
+  defaultBackend(): Promise<SandboxBackendName>;
 }
 
 export class SandboxAccessError extends Error {}
@@ -90,7 +93,7 @@ const JOB_ONLY_REFUSAL =
   "this computer belongs to a background job that uses private credentials; only that job's own controls can reach it";
 
 export async function preferredBackend(resources: SandboxResources, scopeId: ScopeId): Promise<SandboxBackendName> {
-  return (await resources.resolve(scopeId))?.backend ?? resources.defaultBackend();
+  return (await resources.resolve(scopeId))?.backend ?? (await resources.defaultBackend());
 }
 
 export async function accessConversationSandbox(
@@ -118,14 +121,15 @@ export function createSandboxResources(opts: {
   lock: AdvisoryLock;
   canUseScope(actorId: string, scopeId: ScopeId): Promise<boolean>;
 }): SandboxResources {
-  let upgraded: Promise<void> | undefined;
+  const upgraded = perTenant<{ done?: Promise<void> }>(() => ({}));
   const initialize = async (): Promise<void> => {
     if (!opts.upgrade) return;
-    upgraded ??= opts.upgrade().catch((error: unknown) => {
-      upgraded = undefined;
+    const state = upgraded();
+    state.done ??= opts.upgrade().catch((error: unknown) => {
+      state.done = undefined;
       throw error;
     });
-    await upgraded;
+    await state.done;
   };
   const actionsFor = (backend: Sandbox | undefined): string[] => {
     if (!backend) return [];
@@ -195,7 +199,12 @@ export function createSandboxResources(opts: {
         canUseScope: async (actorId, scopeId) =>
           withLiveTurnMembership(opts.canUseScope, { ...turn, verified: await turn.isCurrent() })(actorId, scopeId),
       }),
-    defaultBackend: () => opts.defaultBackend,
+    async defaultBackend() {
+      const { backend } = await tenantSandboxChoice({ backend: opts.defaultBackend, scopeBackends: {} });
+      if (!opts.backends[backend])
+        throw new Error(`sandbox backend unavailable: ${backend}; this deployment does not run it`);
+      return backend;
+    },
     initialize,
     get,
     use,
@@ -236,9 +245,11 @@ export function createSandboxResources(opts: {
         }),
       );
     },
-    async jobComputers() {
-      await initialize();
-      return (await opts.records.all()).filter((record) => record.jobOnly);
+    async eachJobComputer(work) {
+      await claimThenBind(opts.records.claimTenants, async () => {
+        await initialize();
+        for (const record of await opts.records.all()) if (record.jobOnly) await work(record);
+      });
     },
     async retireJobComputer(id, seenState) {
       await opts.lock.withLock(`sandbox-resource:${id}`, async () => {

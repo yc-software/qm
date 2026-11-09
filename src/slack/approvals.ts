@@ -364,12 +364,12 @@ export function createApprovals(deps: {
         const cleanedContinuation = cleanAgentReplyForSlack(result.reply ?? "");
         const replyBody = stripAckPrefix(cleanedContinuation.text, ctx.ackedFirstBlock);
         const { reactions } = cleanedContinuation;
-        let reply = result.stopped ? "Stopped." : "(no response)";
+        let reply = result.stopped ? "" : "(no response)";
         if (replyBody) reply = toSlackMrkdwn(replyBody);
         else if (result.attachments?.length || reactions.length) reply = "Done.";
-        if (cardIsRemote) {
+        if (cardIsRemote || !reply) {
           await updateCard(decisionCard());
-          await postApprovalFollowup(client, ctx, reply);
+          if (reply) await postApprovalFollowup(client, ctx, reply);
         } else {
           const replyBlocks = slackSectionBlocks(reply);
           await updateSlackMessage(
@@ -390,6 +390,11 @@ export function createApprovals(deps: {
         }
         const { directives } = resolveReactionTargets(reactions, ctx.allowedTs ?? new Set());
         await applyAndLogReactions(client, ctx.channel, ctx.triggerTs, directives);
+        return;
+      }
+
+      if (result.status === "silent") {
+        await updateCard(decisionCard());
         return;
       }
 

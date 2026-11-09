@@ -56,6 +56,7 @@ import {
 } from "./triage.ts";
 import type { TriagePatch } from "./item-ledger.ts";
 import { adapterForItem } from "./sources/index.ts";
+import { claimThenBind } from "../tenants/claim.ts";
 import type { InboxQuietCheck } from "./inbox-quiet-check.ts";
 
 export interface LoopFireDeps {
@@ -986,15 +987,11 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
   }
 
   async function sweepStale(now: number): Promise<void> {
-    for (const loop of await deps.loops.list()) {
-      if (
-        loop.state === "enabled" &&
-        loop.governor?.staleFireMs !== undefined &&
-        now - (loop.lastFiredAt ?? loop.createdAt) > loop.governor.staleFireMs
-      ) {
-        await applyGovernor(loop.id, undefined, now);
-      }
-    }
+    await claimThenBind(deps.loops.claimTenants, async () => {
+      for (const { id, state, governor, lastFiredAt, createdAt } of await deps.loops.list())
+        if (state === "enabled" && now - (lastFiredAt ?? createdAt) > (governor?.staleFireMs ?? Infinity))
+          await applyGovernor(id, undefined, now);
+    });
   }
 
   async function itemTurn(

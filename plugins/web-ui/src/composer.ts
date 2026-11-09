@@ -48,7 +48,7 @@ import {
   type ModelOptionValue,
 } from "./model-options";
 import { modelSupportsFastMode } from "./pi-models";
-import type { ComposerSurface, ConvCtx } from "./conv-types";
+import type { ComposerSurface, ConvCtx, SteeringRun } from "./conv-types";
 import { bumpSessionActivity, dropPendingSession, renderList } from "./sessions";
 import { appState } from "./shell";
 import { base64ToText, bytesToBase64, insertIntoDraft, pasteChipLabel } from "./paste-text";
@@ -304,9 +304,9 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     );
   }
 
-  const steeringRuns = new Map<string, Array<QueuedRun & { ts: string }>>();
+  const steeringRuns = new Map<string, Array<SteeringRun & { ts: string }>>();
 
-  function steeringRunsFor(threadRef: string | null, agent: Agent): QueuedRun[] {
+  function steeringRunsFor(threadRef: string | null, agent: Agent): SteeringRun[] {
     const steering = threadRef ? steeringRuns.get(threadRef) : undefined;
     if (!threadRef || !steering) return [];
     const settled = !agent.state.isStreaming && !ctx.chat.hasLiveRun();
@@ -1390,7 +1390,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       return ctx.chat.drawActiveChat(agent);
     }
     const steer = willSteer(agent, flipSteer);
-    if (!(await enqueueTurn(agent, threadRef, text, uploaded, queuedFilesKey(sendable), steer))) {
+    if (!(await enqueueTurn(agent, threadRef, text, uploaded, queuedFilesKey(sendable), steer, sendable))) {
       if (stillHere()) restoreStagedOnFailure(text, sendable, composerState.error);
     }
     ctx.chat.drawActiveChat(agent);
@@ -1411,6 +1411,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     attachments: CoreAttachment[] = [],
     filesKey = "",
     steer = false,
+    staged: Attachment[] = [],
   ): Promise<boolean> {
     const idempotencyKey = queueSendKey(threadRef, text, filesKey);
     try {
@@ -1424,8 +1425,9 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
         steer ? "steer" : "queue",
       );
       failedQueueSend = null;
-      bumpSessionActivity(threadRef, text);
-      if (steerTs) markSteering(threadRef, { ...queued, ts: steerTs });
+      bumpSessionActivity(threadRef);
+      if (steerTs)
+        markSteering(threadRef, { ...queued, ts: steerTs, ...(staged.length ? { attachments: staged } : {}) });
       else if (!steered) addQueuedRun(threadRef, queued);
       return true;
     } catch (err) {
@@ -1494,7 +1496,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     setQueuedRuns(threadRef, [...queuedRunsFor(threadRef).filter((r) => r.runId !== queued.runId), queued]);
   }
 
-  function markSteering(threadRef: string, steering: QueuedRun & { ts: string }): void {
+  function markSteering(threadRef: string, steering: SteeringRun & { ts: string }): void {
     steeringRuns.set(threadRef, [
       ...(steeringRuns.get(threadRef) ?? []).filter((run) => run.ts !== steering.ts),
       steering,
@@ -1521,7 +1523,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       steered = outcome.ok;
       if (outcome.ok || outcome.replayed) {
         forgetQueuedRun(threadRef, queued.runId);
-        bumpSessionActivity(threadRef, queued.text);
+        bumpSessionActivity(threadRef);
         if (
           !outcome.ok &&
           outcome.replayed &&
@@ -1626,7 +1628,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       return;
     }
     if (ctx.chat.state.threadRef) {
-      bumpSessionActivity(ctx.chat.state.threadRef, text);
+      bumpSessionActivity(ctx.chat.state.threadRef);
       ctx.chat.state.pendingSend = ctx.chat.state.threadRef;
       renderList();
     }

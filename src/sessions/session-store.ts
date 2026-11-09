@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { TenantLookup } from "../tenants/lookup.ts";
 import type { ScopeId, Session, SessionType, SpawnMeta } from "../types.ts";
 import type { GoalRecord } from "../agent/goal.ts";
 import { isUserItem, type Item, type NewItem } from "./items.ts";
@@ -389,6 +390,7 @@ interface SessionFacts {
 }
 
 export interface SessionStore {
+  tenantLookup: TenantLookup;
   getOrCreateByThread(
     threadRef: string,
     type: SessionType,
@@ -444,7 +446,6 @@ export interface SessionStore {
   descendantsOf(rootIds: readonly string[]): Promise<SessionDescendant[]>;
   inheritedOrigin(session: Pick<Session, "id" | "parentSessionId">): Promise<SessionOrigin>;
   listDescendantsForParticipant(rootId: string, principalId: string, limit: number): Promise<Session[]>;
-  lastUserPreviews(sessionIds: readonly string[]): Promise<Map<string, string>>;
   getForParticipant(sessionId: string, principalId: string): Promise<Session | null>;
   sameScopeAncestors(threadRefs: readonly string[]): Promise<Session[]>;
 

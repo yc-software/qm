@@ -133,17 +133,16 @@ async function connectorProviderStatus(
   return Object.fromEntries(entries);
 }
 
-type OAuthCallbackOutcome = { status: number; body: Record<string, unknown> } | { redirect: string };
-
-async function settleOAuthCallback(ctx: BaseCtx, provider: string): Promise<OAuthCallbackOutcome> {
-  const { deps, secret, url } = ctx;
+async function oauthCallback(ctx: BaseCtx): Promise<void> {
+  const { deps, secret, url, res } = ctx;
+  const provider = parseOAuthRoute(ctx.pathname)!.provider;
   if (!deps.connectorTokens)
-    return { status: 501, body: { error: "not_configured", message: "connector token store not wired" } };
+    return sendJson(res, 501, { error: "not_configured", message: "connector token store not wired" });
   const code = url.searchParams.get("code") ?? "";
   const stateParam = url.searchParams.get("state") ?? "";
   const providerError = url.searchParams.get("error");
-  if (providerError) return { status: 400, body: { error: "oauth_denied", message: providerError } };
-  if (!code || !stateParam) return { status: 400, body: { error: "bad_request", message: "code and state required" } };
+  if (providerError) return sendJson(res, 400, { error: "oauth_denied", message: providerError });
+  if (!code || !stateParam) return sendJson(res, 400, { error: "bad_request", message: "code and state required" });
   let state;
   try {
     state = await resumeOAuthFlow(deps, secret, stateParam);
@@ -182,31 +181,12 @@ async function settleOAuthCallback(ctx: BaseCtx, provider: string): Promise<OAut
       const dest = new URL(state.returnTo, "http://localhost");
       dest.searchParams.set("connector", provider);
       dest.searchParams.set("status", "connected");
-      return { redirect: `${dest.pathname}${dest.search}${dest.hash}` };
+      return sendRedirect(res, `${dest.pathname}${dest.search}${dest.hash}`);
     }
-    return { status: 200, body: { ok: true, provider, principalId: state.principalId, hosts } };
+    return sendJson(res, 200, { ok: true, provider, principalId: state.principalId, hosts });
   } catch (e) {
-    return { status: 400, body: { error: "oauth_callback_failed", message: errMessage(e) } };
+    return sendJson(res, 400, { error: "oauth_callback_failed", message: errMessage(e) });
   }
-}
-
-async function oauthCallback(ctx: BaseCtx): Promise<void> {
-  const outcome = await settleOAuthCallback(ctx, parseOAuthRoute(ctx.pathname)!.provider);
-  if ("redirect" in outcome) return sendRedirect(ctx.res, outcome.redirect);
-  return sendJson(ctx.res, outcome.status, outcome.body);
-}
-
-async function oauthCallbackPage(ctx: ApiCtx): Promise<void> {
-  const shell = ctx.deps.web?.shell;
-  if (!shell) return sendJson(ctx.res, 404, { error: "not_found" });
-  const provider = ctx.params.provider!;
-  const outcome = await settleOAuthCallback(ctx, provider);
-  const ok = "redirect" in outcome || outcome.status === 200;
-  if (!ok)
-    console.warn(
-      `[connectors] ${JSON.stringify(provider)} callback page: ${outcome.status} ${JSON.stringify(outcome.body)}`,
-    );
-  return shell.connectorCallbackPage(ctx.res, provider, ok);
 }
 
 async function principalHasProvider(deps: ServerDeps, provider: string, principalId: string): Promise<boolean> {
@@ -545,8 +525,18 @@ async function catalog(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { catalog: entries });
 }
 
+const OAUTH_FLOW_TENANT = {
+  by: "oauth_flow",
+  key: (_params: Record<string, string>, url: URL) => url.searchParams.get("state") ?? undefined,
+} as const;
+
 export const connectorRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
-  { match: (m, p) => m === "GET" && parseOAuthRoute(p)?.action === "callback", auth: "public", handle: oauthCallback },
+  {
+    match: (m, p) => m === "GET" && parseOAuthRoute(p)?.action === "callback",
+    auth: "public",
+    tenant: OAUTH_FLOW_TENANT,
+    handle: oauthCallback,
+  },
 ];
 
 export async function gmailSent(ctx: ApiCtx): Promise<void> {
@@ -598,13 +588,18 @@ export async function gmailSent(ctx: ApiCtx): Promise<void> {
 }
 
 export const connectorRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "GET", path: "/v1/web/connectors/oauth/:provider/callback", auth: "public", handle: oauthCallbackPage },
   ...forInboxLoopsPeople([
     { method: "GET", path: "/v1/connectors/gmail/sent/:messageId", actor: "person", auth: "source", handle: gmailSent },
     { method: "GET", path: "/v1/connectors/gmail/sent", actor: "person", auth: "source", handle: gmailSent },
   ]),
   { method: "POST", path: "/v1/connectors/oauth/consent/mint", auth: { aud: "oauth-consent" }, handle: consentMint },
-  { method: "GET", path: "/v1/connectors/oauth/consent/redeem/:linkId", auth: "source", handle: consentRedeem },
+  {
+    method: "GET",
+    path: "/v1/connectors/oauth/consent/redeem/:linkId",
+    auth: "source",
+    tenant: { by: "consent_link", key: (params) => params.linkId },
+    handle: consentRedeem,
+  },
   {
     method: "POST",
     path: "/v1/connectors/oauth/:provider/start",

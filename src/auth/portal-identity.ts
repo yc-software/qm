@@ -1,3 +1,4 @@
+import { isTenantId } from "../tenants/context.ts";
 import { mintSignedPayload, verifySignedPayload } from "./signed-token.ts";
 
 export interface PortalIdentity {
@@ -5,6 +6,7 @@ export interface PortalIdentity {
   authenticatedAs?: string;
   n?: string;
   imp?: string;
+  t?: string;
   exp: number;
 }
 
@@ -23,6 +25,7 @@ export async function verifyPortalIdentity(
   if (!claims || typeof claims.p !== "string" || !claims.p || typeof claims.exp !== "number") return null;
   if (claims.authenticatedAs !== undefined && (typeof claims.authenticatedAs !== "string" || !claims.authenticatedAs))
     return null;
+  if (claims.t !== undefined && !isTenantId(claims.t)) return null;
   if (nowMs > claims.exp) return null;
   return claims;
 }

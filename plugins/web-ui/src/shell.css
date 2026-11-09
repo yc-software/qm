@@ -684,18 +684,6 @@ a.chat-row-open {
   font-weight: 500;
   color: var(--muted-foreground);
 }
-.session-row.last-message-title .session {
-  flex-direction: column;
-  align-items: stretch;
-  gap: 1px;
-}
-.session .row-detail {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 11px;
-  color: var(--muted-foreground);
-}
 .group-dm-title {
   display: inline-flex;
   align-items: center;

@@ -56,6 +56,7 @@ test("/me describes the signed-in person, the company and the web app's settings
     user: "bob@example.com",
     org: orgId(),
     companyName: "Acme",
+    workspace: null,
     analytics: { module: "https://cdn.example.com/analytics.js", options: { key: "public" } },
     browserErrors: { dsn: "https://public@sentry.example.com/1", release: "release-1" },
     mode: "portal",
@@ -82,6 +83,15 @@ test("an impersonating admin sees the target's /me, marked as impersonated and w
   assert.equal(body.browserErrors, undefined);
   assert.deepEqual(body.permissions, []);
   assert.deepEqual((await me(browserSessionCookie("admin-alice"))).permissions, ["admin"]);
+});
+
+test("an admin impersonating another admin gets no admin pages, since every admin route refuses impersonation", async () => {
+  const cookie = `${browserSessionCookie("admin-alice")}; ${browserImpersonationCookie("admin-alice", "admin-bob")}`;
+  const body = await me(cookie);
+  assert.equal(body.user, "admin-bob");
+  assert.deepEqual(body.permissions, []);
+  assert.deepEqual((await me(browserSessionCookie("admin-bob"))).permissions, ["admin"]);
+  assert.equal((await fetch(`${base}/api/admin/users`, { headers: { cookie } })).status, 403);
 });
 
 test("loops and inbox permissions follow the person's inbox_loops flag", async () => {

@@ -4,6 +4,7 @@ import "./slack-reply";
 import type { SlackReply } from "./slack-reply";
 import { assistantSidebar, assistantMessage } from "./assistant-sidebar";
 import { formatMessageTime } from "./message-time.ts";
+import { assistantSpeakerText } from "./via-label.ts";
 import { messageEntrySeqs, highlightMessage } from "./message-link.ts";
 import { appEditSlug } from "../../chassis/src/app-edit";
 import { isConnectionReturn } from "./connection-return";
@@ -1960,8 +1961,8 @@ export function createChatSurface(
     const forking = pendingFork !== null;
     const speaker = speakerLabelFor(message);
     const speakerLabel =
-      message.role === "assistant" && chatState.labelSpeakers
-        ? chatState.assistantSpeakerLabel
+      message.role === "assistant" && (chatState.labelSpeakers || (message as AssistantWork).via)
+        ? assistantSpeakerText(chatState.assistantSpeakerLabel || brandName(), (message as AssistantWork).via)
         : speaker && `${speaker}\n${speakerMember(message)?.avatarUrl ?? ""}`;
     const edited = Boolean((message as { edited?: boolean }).edited);
     const deleted = Boolean((message as { deleted?: boolean }).deleted);
@@ -2192,18 +2193,20 @@ export function createChatSurface(
           ${msg.stopReason === "error" && msg.errorMessage ? html`<div class="composer-error inline">${msg.errorMessage}</div>` : nothing}`,
           meta: isStreaming ? nothing : messageMeta(msg, index),
         });
+      const via = (msg as AssistantWork).via;
+      const labeled = chatState.labelSpeakers || Boolean(via);
       return html`
         <article
-          class="message-row assistant-row ${chatState.labelSpeakers ? "named-assistant-row" : ""} ${isStreaming ? "streaming" : ""}"
+          class="message-row assistant-row ${labeled ? "named-assistant-row" : ""} ${isStreaming ? "streaming" : ""}"
           data-index=${index}
           data-entry-seqs=${messageEntrySeqs(message)
             .filter((seq) => !inlineSteers.has(seq))
             .join(" ")}
         >
           ${
-            chatState.labelSpeakers
+            labeled
               ? html`<div class="speaker-label">
-                  ${brandMark()}<span>${chatState.assistantSpeakerLabel}</span>${speakerTime(msg)}
+                  ${brandMark()}<span>${assistantSpeakerText(chatState.assistantSpeakerLabel || brandName(), via)}</span>${speakerTime(msg)}
                 </div>`
               : nothing
           }
@@ -3279,11 +3282,13 @@ export function createChatSurface(
       (q) =>
         html`<div class="inline-steer waiting-steer" aria-busy="true">
           ${chatMessage(
-            {
-              role: "user",
-              content: q.text || (q.hasAttachments ? "(files)" : ""),
-              steered: true,
-            } as unknown as AgentMessage,
+            (q.attachments?.length
+              ? { role: "user-with-attachments", content: q.text, attachments: q.attachments, steered: true }
+              : {
+                  role: "user",
+                  content: q.text || (q.hasAttachments ? "(files)" : ""),
+                  steered: true,
+                }) as unknown as AgentMessage,
             -1,
             false,
             true,

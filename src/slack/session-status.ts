@@ -196,10 +196,9 @@ export function createSlackSessionStatus(
       }).catch(swallowAs("slack: start session status", undefined));
     },
     async reconcile(client: StatusClient, account: string) {
-      for (const [id, state] of await store.entries()) {
-        if (state.account !== account) continue;
-        await sync(client, id).catch(swallowAs("slack: reconcile session status", undefined));
-      }
+      for (const [id, state] of await store.entries())
+        if (state.account === account)
+          await sync(client, id).catch(swallowAs("slack: reconcile session status", undefined));
     },
   };
 }
