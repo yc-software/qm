@@ -6,8 +6,14 @@ import { join } from "node:path";
 import { createSdkRenderClient, RENDER_SCRIPT_DIR } from "../src/sandbox/render-client.ts";
 import { createFakeRender, serveFakeRenderApi } from "./support/fake-render.ts";
 
+const literal = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const SPOOLED = new RegExp(
-  `^sh -c 'timeout -k \\d+ (\\d+) sh '\\\\''(${RENDER_SCRIPT_DIR.replaceAll(".", "\\.")}/[0-9a-f-]{36}\\.sh)'\\\\''; exit \\$\\?'$`,
+  [
+    `^${literal("sh -c 's=$(date +%s); $(command -v setsid) timeout -k 5 ")}(\\d+)${literal(" sh '\\''")}`,
+    `(${literal(RENDER_SCRIPT_DIR)}/[0-9a-f-]{36}\\.sh)`,
+    literal("'\\'' & p=$!; wait $p; rc=$?; if [ $rc -eq 124 ] || [ $rc -eq 137 ]; then [ $(($(date +%s) - s)) -lt "),
+    `\\1${literal(" ] || kill -s KILL -- -$p 2>/dev/null; fi; exit $rc'")}$`,
+  ].join(""),
 );
 const cleanup = (path: string): string =>
   `rm -f '${path}'; find '${RENDER_SCRIPT_DIR}' -type f -mmin +5 -delete 2>/dev/null\n`;
@@ -533,7 +539,7 @@ test("Render SDK adapter keeps scripts and secrets out of run token requests and
     assert.equal(request.body.includes(payload.slice(0, 64)), false);
   }
   assert.match((JSON.parse(runs[0]!.body) as { command: string }).command, SPOOLED);
-  assert.ok(http.proxyCommands.every((command) => command.length < 200 && !command.includes(secret)));
+  assert.ok(http.proxyCommands.every((command) => command.length < 400 && !command.includes(secret)));
   assert.equal(http.uploads.length, 1);
   assert.ok(http.uploads[0]!.path.startsWith(`${RENDER_SCRIPT_DIR}/`));
   const spoolDir = join(fake.home(id), RENDER_SCRIPT_DIR);

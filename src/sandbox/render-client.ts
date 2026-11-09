@@ -203,7 +203,9 @@ export function createSdkRenderClient(opts: SdkRenderClientOptions): RenderClien
       );
       return await exec(
         sandboxId,
-        `sh -c ${shq(`timeout -k ${KILL_AFTER_SEC} ${timeoutSec} sh ${shq(path)}; exit $?`)}`,
+        `sh -c ${shq(
+          `s=$(date +%s); $(command -v setsid) timeout -k ${KILL_AFTER_SEC} ${timeoutSec} sh ${shq(path)} & p=$!; wait $p; rc=$?; if [ $rc -eq 124 ] || [ $rc -eq 137 ]; then [ $(($(date +%s) - s)) -lt ${timeoutSec} ] || kill -s KILL -- -$p 2>/dev/null; fi; exit $rc`,
+        )}`,
         signal,
       );
     } catch (error) {

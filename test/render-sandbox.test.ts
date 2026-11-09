@@ -119,7 +119,7 @@ test("Render keeps turn and background process secrets out of run token requests
     const { command } = JSON.parse(request.body) as { command: string };
     assert.match(
       command,
-      /^(sh -c 'timeout -k \d+ \d+ sh '\\''\/dev\/\.qm-run\/[0-9a-f-]{36}\.sh'\\''; exit \$\?'|test -f '[^']+')$/,
+      /^(sh -c 's=\$\(date \+%s\); \$\(command -v setsid\) timeout -k \d+ (\d+) sh '\\''\/dev\/\.qm-run\/[0-9a-f-]{36}\.sh'\\'' & p=\$!; wait \$p; rc=\$\?; if \[ \$rc -eq 124 \] \|\| \[ \$rc -eq 137 \]; then \[ \$\(\(\$\(date \+%s\) - s\)\) -lt \2 \] \|\| kill -s KILL -- -\$p 2>\/dev\/null; fi; exit \$rc'|test -f '[^']+')$/,
     );
   }
 });

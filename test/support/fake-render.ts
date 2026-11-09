@@ -83,20 +83,18 @@ export function createFakeRender() {
     if (path.startsWith(`${RENDER_SCRIPT_DIR}/`)) return `${home(id)}${path}`;
     return path.replace(/^\/tmp\//, `${home(id)}/tmp/`).replace(/^\/root(?![A-Za-z0-9_-])/, home(id));
   };
-  const execute = async (id: string, script: string, wrapper: string[] = []) => {
+  const translate = (id: string, script: string): string =>
+    script
+      .replace(/\/tmp\//g, `${home(id)}/tmp/`)
+      .replace(/\/root(?![A-Za-z0-9_-])/g, home(id))
+      .replace(/tar --no-recursion --null -T ('[^']+') -cf ('[^']+')/g, "xargs -0 tar --no-recursion -cf $2 -- < $1")
+      .replaceAll(RENDER_SCRIPT_DIR, `${home(id)}${RENDER_SCRIPT_DIR}`);
+  const execute = async (id: string, script: string) => {
     mkdirSync(join(home(id), "tmp"), { recursive: true });
     const file = join(root, `run-${randomUUID()}.sh`);
-    writeFileSync(
-      file,
-      script
-        .replace(/\/tmp\//g, `${home(id)}/tmp/`)
-        .replace(/\/root(?![A-Za-z0-9_-])/g, home(id))
-        .replace(/tar --no-recursion --null -T ('[^']+') -cf ('[^']+')/g, "xargs -0 tar --no-recursion -cf $2 -- < $1")
-        .replaceAll(RENDER_SCRIPT_DIR, `${home(id)}${RENDER_SCRIPT_DIR}`),
-    );
+    writeFileSync(file, translate(id, script));
     try {
-      const [command, ...args] = [...wrapper, "/bin/sh", file];
-      const result = await execFileAsync(command!, args, {
+      const result = await execFileAsync("/bin/sh", [file], {
         encoding: "utf8",
         env: { PATH: "/usr/bin:/bin:/usr/sbin:/sbin", HOME: home(id), COPYFILE_DISABLE: "1" },
         maxBuffer: 16 * 1024 * 1024,
@@ -114,11 +112,11 @@ export function createFakeRender() {
   };
   const runProxyCommand = async (id: string, command: string) => {
     requireRunning(id);
-    const spooled = /^sh -c 'timeout -k (\d+) (\d+) sh '\\''([^']+)'\\''; exit \$\?'$/.exec(command);
-    if (!spooled) return execute(id, command);
-    const script = mapped(id, spooled[3]!);
-    if (!existsSync(script)) return { stdout: "", stderr: `sh: cannot open ${spooled[3]}`, exitCode: 2 };
-    return execute(id, readFileSync(script, "utf8"), ["timeout", "-k", spooled[1]!, spooled[2]!]);
+    for (const [path] of command.matchAll(new RegExp(`${RENDER_SCRIPT_DIR}/[0-9a-f-]+\\.sh`, "g"))) {
+      const script = mapped(id, path);
+      if (existsSync(script)) writeFileSync(script, translate(id, readFileSync(script, "utf8")));
+    }
+    return execute(id, command);
   };
   const startImport = (source: string, name: string) => {
     imports.push({ source, name });
