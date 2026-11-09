@@ -324,7 +324,6 @@ export function serveFakeRenderApi(
   let groupName: string | undefined = "Default";
   let groupCreatedElsewhere: string | undefined;
   let groupWithoutDefault = false;
-  let maxLifetimeSec: number | undefined;
   let groupCreates = 0;
   const uploads: Array<{ sandboxId: string; path: string; data: Buffer }> = [];
   const lifetimes = new Map<string, { timeoutSeconds: number }>();
@@ -376,14 +375,6 @@ export function serveFakeRenderApi(
         buildId?: string;
         timeoutSeconds?: number;
       };
-      if (maxLifetimeSec && (body.timeoutSeconds ?? 0) > maxLifetimeSec)
-        return Response.json(
-          {
-            message: `timeoutSeconds must be between 1 and ${maxLifetimeSec} seconds for Hobby workspaces`,
-            code: "invalid_timeout_seconds",
-          },
-          { status: 400 },
-        );
       const { id } = await fake.client.create({
         ...(body.name ? { name: body.name } : {}),
         ...(body.snapshotId ? { snapshotId: body.snapshotId } : {}),
@@ -522,7 +513,5 @@ export function serveFakeRenderApi(
     groupCreates: () => groupCreates,
     createSandboxGroupDuringNextRequest: (name: string) => (groupCreatedElsewhere = name),
     sandboxGroupName: () => groupName,
-    capLifetime: (seconds: number) => (maxLifetimeSec = seconds),
-    lifetimeOf: (id: string) => lifetimes.get(id)?.timeoutSeconds,
   };
 }
