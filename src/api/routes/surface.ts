@@ -569,7 +569,7 @@ async function getSessionRow(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 400, { error: "bad_request", message: "principalId and id or threadRef required" });
   const session = await app.sessionRow(principalId, id ? { id } : { threadRef });
   if (!session) return sendJson(res, 404, { error: "not_found" });
-  return sendJson(res, 200, { session: session });
+  return sendJson(res, 200, { session });
 }
 
 async function searchResources(ctx: ApiCtx): Promise<void> {
