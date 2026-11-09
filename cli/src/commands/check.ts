@@ -97,7 +97,6 @@ export function runChecks(
         secretNames.has(name) ||
         (/(?:_SECRET|_TOKEN|_KEY|_CREDENTIALS?|PASSWORD)$/.test(name) &&
           !name.endsWith("PUBLIC_KEY") &&
-          !(name === "POSTHOG_API_KEY" && /^phc_[A-Za-z0-9]+$/.test(value)) &&
           !/^[.~/]/.test(value));
       if (secretish) {
         configError(

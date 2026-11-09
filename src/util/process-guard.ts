@@ -1,8 +1,13 @@
+import { describeActiveRequest } from "../../plugins/chassis/src/error-reporting.ts";
 import { errMessage } from "./errors.ts";
 
 export function shutdownOnUncaught(label: string, shutdown: (reason: string) => void): void {
   const onFatal = (kind: string) => (e: unknown) => {
-    console.error(`[${label}] ${kind}; draining and exiting:`, e instanceof Error && e.stack ? e.stack : errMessage(e));
+    const request = describeActiveRequest();
+    console.error(
+      `[${label}] ${kind}${request ? ` ${request}` : ""}; draining and exiting:`,
+      e instanceof Error && e.stack ? e.stack : errMessage(e),
+    );
     process.exitCode = 1;
     shutdown(kind);
   };

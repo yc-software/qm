@@ -102,8 +102,9 @@ export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor, notice?: 
   }
   if (run.result?.status === "ok" && (run.result.reply || run.result.attachments?.length)) {
     const editNote = replyEditNote(run.result.retracted);
+    const persona = run.result.persona;
     return {
-      destination: editNote ? { ...destination, editNote } : destination,
+      destination: { ...destination, ...(editNote ? { editNote } : {}), ...(persona ? { persona } : {}) },
       text: run.result.reply ?? "",
       ...(run.result.attachments?.length ? { attachments: run.result.attachments } : {}),
       provenance,

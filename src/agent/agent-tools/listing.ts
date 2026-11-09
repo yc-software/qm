@@ -1,8 +1,8 @@
+import { flatText } from "../../util/text.ts";
+
 const LIST_PAGE_SIZE = 25;
 const LIST_PAGE_MAX = 100;
 const LIST_TASK_PREVIEW_CHARS = 200;
-
-const flatText = (s: string): string => s.replace(/[\s\u0085]+/g, " ").trim();
 
 export function previewText(s: string, max = LIST_TASK_PREVIEW_CHARS): string {
   const f = flatText(s);

@@ -24,11 +24,13 @@ import type { CurrentScopeMembers } from "./scope-membership.ts";
 
 type ContextInput = Omit<Parameters<typeof sharingSourcesForTurn>[0], "posture"> & {
   resolution: Resolution;
+  audienceScopeId?: ScopeId;
   external?: boolean;
   audience: Principal[];
   acl: Pick<AclStore, "sharedOfKindForAudience">;
   memoryPolicy: MemoryPolicy;
   useMemory: boolean;
+  notebookOnly?: boolean;
   memory: MemoryService;
   files: FileArtifactStore;
   skills?: SkillStore;
@@ -52,7 +54,11 @@ export async function resolveTurnContext(input: ContextInput) {
   ];
   const memoryAccess =
     (useMemory && memoryPolicy.capture !== "off") || read.length
-      ? { ...(useMemory && memoryPolicy.capture !== "off" ? { write: memoryScopeId } : {}), read }
+      ? {
+          ...(useMemory && memoryPolicy.capture !== "off" ? { write: memoryScopeId } : {}),
+          read,
+          ...(input.notebookOnly ? { notebookOnly: true as const } : {}),
+        }
       : undefined;
   const recordRead = (scope: ScopeId, resource: string) => {
     if (!sharingSources.includes(scope)) return;
@@ -71,11 +77,16 @@ export async function resolveTurnContext(input: ContextInput) {
     nativeScopes: baseRecallScopes,
     audience: input.audience,
     open: resolution.sharingPosture === "open",
+    ...(input.notebookOnly ? { notebookOnly: true } : {}),
     config: input.config,
     isCurrentSharedScopeMember: input.isCurrentSharedScopeMember,
     currentScopeMembers: input.currentScopeMembers,
   };
   const memory = disclosedMemory(input.memory, disclosure);
+  const reader = {
+    actorId: input.actor.id,
+    ...(input.audienceScopeId ? { audienceScopeId: input.audienceScopeId } : {}),
+  };
   const handles = [...resolution.grantedHandles, ...(await carriedFileHandles(sharingSources, input.files))];
   const memoryLabels = await memoryRecallLabels(read, input.directory, input.projects);
   return {
@@ -114,7 +125,7 @@ export async function resolveTurnContext(input: ContextInput) {
             {
               query,
               ...(text ? { input: text } : {}),
-              actorId: input.actor.id,
+              ...reader,
               maxChars: RECALL_MAX_CHARS,
               ...(disclosedFacts ? { disclosedFacts } : {}),
               ...(report ? { report } : {}),
@@ -129,7 +140,10 @@ export async function resolveTurnContext(input: ContextInput) {
       scope?: ScopeId,
       report?: MemoryRecallContext["report"],
     ): Promise<string[] | null> => {
-      const hits = await searchNotebooks(memory, read, query, limit, scope, input.actor.id, report);
+      const hits = await searchNotebooks(memory, read, query, limit, scope, {
+        ...reader,
+        ...(report ? { report } : {}),
+      });
       if (hits) for (const source of scope === undefined ? read : [scope]) recordRead(source, "memory");
       return hits;
     },

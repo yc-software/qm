@@ -1,7 +1,8 @@
+import { sideChatExcerpt } from "./side-chat-excerpt";
 import { emojiCompletion } from "./emoji-completion";
 import { composerInput, resizeComposerInput } from "./composer-input";
 import { reportHandledError } from "./browser-errors.ts";
-import { appEditSlug } from "./app-edit";
+import { appEditSlug } from "../../chassis/src/app-edit";
 import { runtimeConfigKey, loadRuntimeConfig, saveRuntimeConfig, subscribeRuntimeConfig } from "./runtime-config-store";
 import { getRuntimeConfig } from "./runtime-config-cache.ts";
 import type { Agent, AgentMessage } from "@earendil-works/pi-agent-core";
@@ -11,7 +12,7 @@ import { FolderDropError, folderToZipFile, isFolderReadError, splitDropItems, ty
 import { html, nothing, render, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
 import { repeat } from "lit/directives/repeat.js";
-import { ArrowUp, Box, CornerDownRight, FileText, Paperclip, Square, X } from "lucide";
+import { ArrowUp, Box, CornerDownRight, FileText, ListEnd, Paperclip, Square, X, type IconNode } from "lucide";
 import {
   api,
   ApiError,
@@ -786,7 +787,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     });
   }
 
-  function sendButton(label: string): TemplateResult {
+  function sendButton(label: string, glyph: IconNode = ArrowUp): TemplateResult {
     return html`<button
       class="send-btn"
       type="submit"
@@ -794,7 +795,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       ${tip(label)}
       ?disabled=${!composerCanSend()}
     >
-      ${icon(ArrowUp, 16)}
+      ${icon(glyph, 16)}
     </button>`;
   }
 
@@ -805,14 +806,37 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
         <button class="stop-btn" type="button" aria-label="Stopping…" disabled>${icon(Square, 16)}</button>
         ${sendButton("Send")}
       `;
-    const label = alwaysSteer() && canSteer(agent) ? "Steer the running task" : "Queue for after this turn";
+    const steer = willSteer(agent, flipHeld);
     return html`
       <button class="stop-btn" type="button" aria-label="Stop" ${tip("Stop")} @click=${() => stopStreaming(agent)}>
         ${icon(Square, 16)}
       </button>
-      ${sendButton(label)}
+      ${sendButton(sendWhileWorkingLabel(agent, steer), steer ? CornerDownRight : ListEnd)}
     `;
   }
+
+  function willSteer(agent: Agent, flip: boolean): boolean {
+    return alwaysSteer() !== flip && canSteer(agent);
+  }
+
+  function sendWhileWorkingLabel(agent: Agent, steer: boolean): string {
+    const action = steer ? "Steer the running task" : "Queue for after this turn";
+    if (!canSteer(agent) || flipHeld) return action;
+    const flipKey = ["Mac", "iPhone", "iPad", "iPod"].some((p) => navigator.platform.startsWith(p)) ? "⌘" : "Ctrl+";
+    return `${action} (${flipKey}↵ to ${steer ? "queue" : "steer"})`;
+  }
+
+  let flipHeld = false;
+  const trackFlipKey = (e: KeyboardEvent | FocusEvent): void => {
+    const held = e instanceof KeyboardEvent && (e.metaKey || e.ctrlKey);
+    if (held === flipHeld) return;
+    flipHeld = held;
+    const agent = ctx.chat.state.agent;
+    if (agent && canSteer(agent)) ctx.chat.drawActiveChat(agent);
+  };
+  window.addEventListener("keydown", trackFlipKey);
+  window.addEventListener("keyup", trackFlipKey);
+  window.addEventListener("blur", trackFlipKey);
 
   function canSteer(agent: Agent): boolean {
     return agent.state.isStreaming && !ctx.chat.isStopping() && ctx.chat.hasLiveRun();
@@ -1224,7 +1248,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
 
   function submitComposer(e: Event, agent: Agent): void {
     e.preventDefault();
-    void sendPrompt(agent);
+    void sendPrompt(agent, flipHeld);
   }
 
   function onDraftInput(e: InputEvent, agent: Agent): void {
@@ -1317,7 +1341,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     }
     if (e.key !== "Enter" || e.shiftKey) return;
     e.preventDefault();
-    void sendPrompt(agent);
+    void sendPrompt(agent, e.metaKey || e.ctrlKey);
   }
 
   function stopStreaming(agent: Agent): void {
@@ -1344,7 +1368,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       : mintSendKey();
   }
 
-  async function queueDraft(agent: Agent): Promise<void> {
+  async function queueDraft(agent: Agent, flipSteer = false): Promise<void> {
     const threadRef = ctx.chat.state.threadRef;
     const text = composerState.draft.trim();
     const staged = composerState.attachments;
@@ -1365,7 +1389,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       if (stillHere()) restoreStagedOnFailure(text, sendable, composerState.error || "Could not queue the files.");
       return ctx.chat.drawActiveChat(agent);
     }
-    const steer = alwaysSteer() && canSteer(agent);
+    const steer = willSteer(agent, flipSteer);
     if (!(await enqueueTurn(agent, threadRef, text, uploaded, queuedFilesKey(sendable), steer))) {
       if (stillHere()) restoreStagedOnFailure(text, sendable, composerState.error);
     }
@@ -1551,20 +1575,20 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   };
   window.addEventListener("qm:prepare-update", preventUnsafeUpdate);
 
-  async function sendPrompt(agent: Agent): Promise<void> {
+  async function sendPrompt(agent: Agent, flipSteer = false): Promise<void> {
     pendingSubmissions++;
     try {
-      await sendPromptNow(agent);
+      await sendPromptNow(agent, flipSteer);
     } finally {
       pendingSubmissions--;
       if (disposed && !pendingSubmissions) window.removeEventListener("qm:prepare-update", preventUnsafeUpdate);
     }
   }
 
-  async function sendPromptNow(agent: Agent): Promise<void> {
+  async function sendPromptNow(agent: Agent, flipSteer = false): Promise<void> {
     if (!composerCanSend()) return;
     if (composerState.pasteView) closePasteView(agent);
-    if (agent.state.isStreaming) return queueDraft(agent);
+    if (agent.state.isStreaming) return queueDraft(agent, flipSteer);
     const draft = composerState.draft.trim();
     if (!draft && composerState.attachments.length === 0) return;
     const sideChat = ctx.chat.state.forkSession?.sideChat;
@@ -1573,12 +1597,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       !sideChat.expanded &&
       !agent.state.messages.length &&
       (options.includeSideChatExcerpt?.() ?? true)
-        ? `${sideChat.quote
-            .split("\n")
-            .map((line) => `> ${line}`)
-            .join("\n")}
-
-${draft}`
+        ? sideChatExcerpt(sideChat.quote) + draft
         : draft;
     const submit = options.prepareSubmit?.();
     if (submit) {
@@ -2009,6 +2028,9 @@ ${draft}`
 
   function dispose(): void {
     disposed = true;
+    window.removeEventListener("keydown", trackFlipKey);
+    window.removeEventListener("keyup", trackFlipKey);
+    window.removeEventListener("blur", trackFlipKey);
     if (!pendingSubmissions) window.removeEventListener("qm:prepare-update", preventUnsafeUpdate);
     window.removeEventListener("model-account-changed", refreshAccount);
     document.removeEventListener("visibilitychange", revalidateRuntime);

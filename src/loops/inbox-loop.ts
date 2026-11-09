@@ -145,22 +145,11 @@ export async function loadInboxVoiceProfile(
   loop: Loop,
 ): Promise<string | undefined> {
   if (inboxSource(loop) !== "gmail") return undefined;
-  const scopes = [scopeId("personal", loop.owner)];
-  let cursor: string | undefined;
-  do {
-    const page = await files.listOwnedByScopes(scopes, {
-      nameQuery: EMAIL_VOICE_PROFILE_NAME,
-      ...(cursor ? { cursor } : {}),
-    });
-    const artifact = page.files.find((file) => file.name === EMAIL_VOICE_PROFILE_NAME);
-    if (artifact) {
-      const opened = await files.open(artifact.id);
-      if (!opened) return undefined;
-      return (await text(opened.stream)).trim() || undefined;
-    }
-    cursor = page.nextCursor;
-  } while (cursor);
-  return undefined;
+  const [artifact] = (
+    await files.listOwnedByScopes([scopeId("personal", loop.owner)], { name: EMAIL_VOICE_PROFILE_NAME, limit: 1 })
+  ).files;
+  const opened = artifact ? await files.open(artifact.id) : null;
+  return opened ? (await text(opened.stream)).trim() || undefined : undefined;
 }
 
 export function inboxTaskContext(loop: Loop, voiceProfile?: string): InboxTaskContext {

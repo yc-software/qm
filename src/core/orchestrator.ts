@@ -192,7 +192,7 @@ import {
   type OverheardEntryPayload,
 } from "../agent/replay.ts";
 import { errMessage, reportFailure, reportFailureAs, swallow, swallowAs } from "../util/errors.ts";
-import { headSlice, pgTextSafe } from "../util/text.ts";
+import { headSlice, pgTextSafe, trimTrailingSlashes } from "../util/text.ts";
 import { absoluteAppLinks } from "../util/markdown.ts";
 import {
   isModelBudget,
@@ -202,7 +202,7 @@ import {
   turnFailureMessage,
   turnFailureItem,
 } from "./turn-error.ts";
-import { personKey, rosterIds, samePerson } from "../directory/person.ts";
+import { attestableAudience, personKey, rosterIds, samePerson } from "../directory/person.ts";
 import type { FeatureName } from "../feature-flags.ts";
 import { sleep } from "../util/async.ts";
 import { hashId } from "../util/crypto.ts";
@@ -657,6 +657,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
       const resolution = await deps.resolution.resolve(conversation, actor, external);
       const scopeId = deps.resolution.scopeFor(conversation, actor);
+      const automationDestination = input.origin.kind === "automation" ? input.origin.destination : undefined;
+      const audienceScopeId =
+        !automationDestination ||
+        automationDestination.audienceScopeId === scopeId ||
+        (attestableAudience(actor.id, scopeId) && attestableAudience(actor.id, automationDestination.audienceScopeId))
+          ? scopeId
+          : undefined;
       const audit = (event: Omit<AuditEvent, "at" | "principalId" | "scopeLabel">) =>
         deps.auditLog.record({ at: Date.now(), principalId: actor.id, scopeLabel: scopeId, ...event });
       const spendLimit = spendLimits
@@ -943,13 +950,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       }
       const childFloor = delegatedSession?.spawnMeta?.readOnly === true;
       const strictReadOnly = input.readOnly === true || input.privateSessionMessage === true || childFloor;
-      const actAsActor =
-        actor.type === "internal" &&
-        !input.botActor &&
-        !input.proactiveOpener &&
-        (isPersonAuthored(authorizationOrigin.kind) ||
-          (input.origin.kind === "automation" && input.origin.useOwnerKeychain === true));
-      const mcpToolsReady = !external && deps.mcp ? deps.mcp.toolDefsFor(actor.id, scopeId, actAsActor) : undefined;
+      const notebookOnly =
+        input.memoryNotebookOnly === true ||
+        delegatedSession?.spawnMeta?.memoryNotebookOnly === true ||
+        (await deps.notebookOnlyMemory?.(conversation.threadRef)) === true;
+      const actAsActor = actor.type === "internal" && !input.botActor;
+      const mcpToolsReady =
+        !external && deps.mcp ? deps.mcp.toolDefsFor(actor.id, audienceScopeId, actAsActor) : undefined;
       const useMemory = !external && input.skipMemory !== true;
       const environmentId = external ? scopeId : await resolveEnvironmentId(deps.environments, scopeId);
       resolution.writableScopeId = environmentId;
@@ -957,7 +964,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         external || !deps.personas
           ? null
           : await deps.personas.forTurn(
-              (await deps.sessions.getByThread(conversation.threadRef))?.personaId,
+              (await deps.sessions.getByThread(conversation.threadRef))?.personaId ?? input.personaId,
               actor.id,
               scopeId,
             );
@@ -983,6 +990,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         origin: authorizationOrigin,
         trustedLiveHuman: liveAuthorTurn,
         targetScope: scopeId,
+        ...(audienceScopeId ? { audienceScopeId } : {}),
         config: deps.config,
         sessions: deps.sessions,
         isCurrentSharedScopeMember,
@@ -990,6 +998,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         resolution,
         memoryPolicy,
         useMemory,
+        notebookOnly,
         memory: deps.memory,
         files: deps.files,
         skills: deps.skills,
@@ -1002,11 +1011,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const isWeb = input.surface === "web";
       const surfaceTool = input.surface ?? "slack";
       const surfaceHints = surface?.promptHints;
-      const automationDestination = input.origin.kind === "automation" ? input.origin.destination?.type : undefined;
       const surfaceName =
         automationDestination === undefined
           ? (input.surface ?? "slack")
-          : (deps.surfaces.get(automationDestination)?.kind ?? "slack");
+          : (deps.surfaces.get(automationDestination.type)?.kind ?? "slack");
       const toolSurface = deps.surfaces.get(surfaceName || "slack");
       const branding = await resolveBranding(deps.config, resolution.orgScopeId, deps.brandingDefault);
       const botName = branding.selfLabel ?? "QM";
@@ -1034,11 +1042,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         frameVars.userName = cleanBrandingLabel(actor.displayName, 80) ?? "there";
         frameVars.userEmail = actor.id.includes("@") ? actor.id : undefined;
       }
+      const sideChat = (await deps.sessions.getByThread(conversation.threadRef))?.sideChat;
+      const focusedSideChat = Boolean(sideChat && !sideChat.expanded);
       const sessionSyscalls =
-        !external && deps.sessionSyscalls && (delegationEnabled || actorFeatures.has("persistent_subagents"))
+        !focusedSideChat &&
+        !external &&
+        deps.sessionSyscalls &&
+        (delegationEnabled || actorFeatures.has("persistent_subagents"))
           ? deps.sessionSyscalls
           : undefined;
-      const delegateWork = requiresDelegation(input, delegationEnabled);
+      const delegateWork = !focusedSideChat && requiresDelegation(input, delegationEnabled);
       let modeFrame = applyPromptVars(frameMd, frameVars);
       if (delegateWork)
         modeFrame +=
@@ -1103,6 +1116,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       } else if (input.surfaceTools && input.origin.kind === "automation" && input.origin.destination) {
         defaultDestination = input.origin.destination;
       }
+      const wornPersona = persona
+        ? {
+            id: persona.persona.id,
+            name: persona.persona.name,
+            ...(persona.persona.icon ? { icon: persona.persona.icon } : {}),
+          }
+        : undefined;
+      if (defaultDestination && wornPersona) defaultDestination = { ...defaultDestination, persona: wornPersona };
       const cronBlock =
         delivery.candidates.length > 1 && deps.signingSecret && deps.apiBaseUrl
           ? `\n\n${deliveryMenu(delivery.candidates, delivery.defaultKey)}`
@@ -1639,6 +1660,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         ...(external ? { externalSlack: true as const } : {}),
         actorId: actor.id,
         scopeId,
+        ...(audienceScopeId ? { audienceScopeId } : {}),
         ...(input.scopeVersion ? { scopeVersion: input.scopeVersion } : {}),
         ...(conversation.publishMembers ? { members: conversation.publishMembers } : {}),
         ...(liveTurn ? { liveActor: true } : {}),
@@ -1703,7 +1725,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           deps.capabilityTokenCompression,
         );
         if (browserModel) {
-          connectorEnv.BROWSE_LAB_BASE_URL = `${deps.apiBaseUrl.replace(/\/+$/, "")}/v1/browser-model`;
+          connectorEnv.BROWSE_LAB_BASE_URL = `${trimTrailingSlashes(deps.apiBaseUrl)}/v1/browser-model`;
           connectorEnv.BROWSE_LAB_MODEL_TOKEN = await mintCapabilityToken(
             {
               ...scopeAttestation,
@@ -1718,7 +1740,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           );
         }
         if (deps.sandboxModels && allInternal && securityPolicy.posture !== "strict") {
-          connectorEnv.MODEL_GATEWAY_URL = `${deps.apiBaseUrl.replace(/\/+$/, "")}${SANDBOX_MODEL_PREFIX}`;
+          connectorEnv.MODEL_GATEWAY_URL = `${trimTrailingSlashes(deps.apiBaseUrl)}${SANDBOX_MODEL_PREFIX}`;
           connectorEnv.MODEL_GATEWAY_TOKEN = await mintCapabilityToken(
             { ...scopeAttestation, aud: SANDBOX_MODEL_AUD, exp: sandboxTokenExpiry },
             deps.capabilitySecret ?? deps.signingSecret,
@@ -2692,7 +2714,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           scopeId: scopeId as ScopeId,
           orgScopeId: resolution.orgScopeId,
           liveTurn,
-          request: { ...input, readOnly: strictReadOnly, cancel: turnAbort.signal },
+          request: { ...input, readOnly: strictReadOnly, memoryNotebookOnly: notebookOnly, cancel: turnAbort.signal },
           switchedRuntime: () => switchedRuntime,
         });
         const liveNote = async () =>
@@ -2766,7 +2788,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               }
             : {}),
           ...(deps.webhookPublicUrl ? { webhookPublicUrl: deps.webhookPublicUrl } : {}),
-          ...(humanInput && !external ? { humanTurn: true } : {}),
+          ...(humanInput && !external && !input.botActor ? { humanTurn: true } : {}),
           ...(deps.toolOutput ? { toolOutput: deps.toolOutput, sessionId: session.id } : {}),
           ...(surfaceToolDeps ? { surface: surfaceToolDeps } : {}),
           ...(turnSessionSyscalls ? { sessionSyscalls: turnSessionSyscalls } : {}),
@@ -2775,7 +2797,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           memoryCaptureMetadata: () => ({ sessionId: session.id, inheritedFacts: captureDependencies() }),
           memoryScopeId,
           ...(memoryAccess ? { memoryAccess } : {}),
-          ...(!external && deps.mcp ? { mcp: deps.mcp, scopeId, actAsActor } : {}),
+          ...(!external && deps.mcp ? { mcp: deps.mcp, actAsActor } : {}),
+          ...(audienceScopeId ? { audienceScopeId } : {}),
           ...(surface?.capabilities.nativeActor ? { actingSlackUserId: actor.id } : {}),
           ...(deps.deploymentLayer
             ? {
@@ -3530,6 +3553,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             documents: initialDocuments,
             ...(Object.keys(requestedRuntime).length ? { runtime: requestedRuntime } : {}),
             ...(strictReadOnly ? { readOnly: true } : {}),
+            ...(notebookOnly ? { memoryNotebookOnly: true } : {}),
             surfaceName,
             ...(toolSurface ? { surfacePrompt: surfaceToolPrompt(toolSurface) } : {}),
             delegateWork,
@@ -3882,6 +3906,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               await onTurnEnd({
                 scopeId: memoryScopeId,
                 conversationScopeId: scopeId,
+                ...(audienceScopeId ? { audienceScopeId } : {}),
                 inheritedFacts: captureDependencies(),
                 input: turnInput,
                 reply,
@@ -4000,6 +4025,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             sessionId: session.id,
             reply,
             ...(result.retracted?.length ? { retracted: result.retracted } : {}),
+            ...(wornPersona ? { persona: wornPersona } : {}),
             ...(result.stopped ? { stopped: true, ...stopScope } : {}),
             ...(stagedAttachments.length ? { attachments: stagedAttachments } : {}),
             ...(sourceUserSeq !== undefined ? { sourceUserSeq } : {}),

@@ -21,6 +21,15 @@ test("parseAckEmoji: normalizes colons/case, splits on commas and spaces, drops 
   assert.deepEqual(parseAckEmoji(" , ::, !!"), []);
 });
 
+test("parseAckEmoji strips a long run of trailing colons promptly", () => {
+  assert.deepEqual(parseAckEmoji(":smile::"), ["smile"]);
+  const started = performance.now();
+  const names = parseAckEmoji(`smile${":".repeat(100_000)}x`);
+  const elapsedMs = performance.now() - started;
+  assert.deepEqual(names, []);
+  assert.ok(elapsedMs < 1_000, `parseAckEmoji took ${Math.round(elapsedMs)} ms`);
+});
+
 test("config store: ack emoji set/get/clear roundtrip, durable read included", async () => {
   const config = testConfigStore(ORG);
   assert.equal(config.getAckEmoji(ORG), null);

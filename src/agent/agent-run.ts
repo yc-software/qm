@@ -145,6 +145,7 @@ export interface AgentOptions {
   captureRequests?: boolean;
   controlTools?: boolean;
   sandboxResources?: boolean;
+  memorySizedBackends?: string[];
   turnWallClockMs?: number;
   execTimeoutMs?: number;
   execTimeoutCeilingMs?: number;
@@ -796,11 +797,13 @@ export function createAgent(opts?: AgentOptions): Agent {
       ...(turn.surfacePrompt ? { surfacePrompt: turn.surfacePrompt } : {}),
       ...(turn.clientTools?.length ? { clientTools: turn.clientTools } : {}),
       ...(turn.readOnly ? { readOnly: true } : {}),
+      ...(turn.memoryNotebookOnly ? { memoryNotebookOnly: true } : {}),
       ...(opts?.execTimeoutMs !== undefined ? { execTimeoutMs: opts.execTimeoutMs } : {}),
       ...(opts?.execTimeoutCeilingMs !== undefined ? { execTimeoutCeilingMs: opts.execTimeoutCeilingMs } : {}),
       ...(opts?.backgroundJobTtlMs !== undefined ? { backgroundJobTtlMs: opts.backgroundJobTtlMs } : {}),
       ...(opts?.backgroundJobTtlMaxMs !== undefined ? { backgroundJobTtlMaxMs: opts.backgroundJobTtlMaxMs } : {}),
       sandboxResources: opts?.sandboxResources,
+      ...(opts?.memorySizedBackends?.length ? { memorySizedBackends: opts.memorySizedBackends } : {}),
     });
   }
   async function createTurnSession(
@@ -1552,7 +1555,7 @@ export function createAgent(opts?: AgentOptions): Agent {
           const partial = lastFreshAssistant
             ? textFromContent((lastFreshAssistant as { content?: unknown }).content)
             : "";
-          const reply = partial.trim() ? partial : "(stopped)";
+          const reply = partial.trim() ? partial : "";
           await settleGoal(userAborted);
           await recordStoppedTurn(
             turn,

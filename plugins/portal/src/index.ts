@@ -6,7 +6,7 @@ import {
   openDesktopLogin,
 } from "./desktop-login.ts";
 import { INVITE_LOGIN_SCRIPT, INVITE_LOGIN_SCRIPT_HASH } from "./invite-login.ts";
-import { reportBackendError } from "../../chassis/src/error-reporting.ts";
+import { reportBackendError, withRequestContext } from "../../chassis/src/error-reporting.ts";
 import "./instrument.ts";
 import { provisionTrustedAdmin } from "./trusted-admin.ts";
 import { createHash } from "node:crypto";
@@ -32,6 +32,7 @@ import {
   type SessionClaims,
   type ImpersonationClaims,
   type TmpClaims,
+  sessionLifetime,
 } from "./session.ts";
 import {
   pkcePair,
@@ -45,7 +46,6 @@ import {
   hostedDomainHint,
 } from "./oidc.ts";
 import {
-  proxyToSurface,
   proxyToDeployment,
   proxyToUpstream,
   proxyToAppHost,
@@ -55,6 +55,7 @@ import {
   FORWARD_OAUTH_HEADERS,
   FORWARD_BROKER_HEADERS,
   FORWARD_WEBHOOK_HEADERS,
+  INTERNAL_HEADERS,
 } from "./proxy.ts";
 import { signedHeaders, withSourceAuthNonce } from "../../chassis/src/core-client.ts";
 import { coreClaimStore, claimOnce, withinRateLimit, ClaimStoreUnavailableError } from "../../chassis/src/claims.ts";
@@ -69,6 +70,7 @@ import {
   readBody,
   PayloadTooLargeError,
   sameOriginRequest as sameOriginFor,
+  originOf,
   isLoopbackUrl,
   isSecureOrLoopbackUrl,
 } from "../../chassis/src/http.ts";
@@ -83,8 +85,7 @@ import { isDeploymentGitRoute } from "../../chassis/src/deployment-git.ts";
 
 const PUBLIC_URL = (process.env.PUBLIC_WEB_URL ?? "http://localhost:8097").replace(/\/$/, "");
 const SESSION_SECRET = process.env.PORTAL_SESSION_SECRET;
-const SESSION_TTL_S = Number(process.env.PORTAL_SESSION_TTL_S ?? 604800);
-const SESSION_MAX_TTL_S = Number(process.env.PORTAL_SESSION_MAX_TTL_S ?? Math.max(2592000, SESSION_TTL_S));
+const { ttl: SESSION_TTL_S, max: SESSION_MAX_TTL_S } = sessionLifetime();
 const SESSION_RENEW_AFTER_S = Math.floor(SESSION_TTL_S / 2);
 const APPS_DOMAIN = process.env.PORTAL_APPS_DOMAIN || process.env.DEPLOY_APPS_DOMAIN || undefined;
 const COOKIE_DOMAIN =
@@ -92,13 +93,7 @@ const COOKIE_DOMAIN =
   (APPS_DOMAIN ? derivedCookieDomain(hostOf(process.env.PUBLIC_WEB_URL ?? ""), APPS_DOMAIN) : undefined);
 const IS_PROD = process.env.NODE_ENV === "production";
 const SECURE_COOKIES = PUBLIC_URL.startsWith("https://");
-const ORIGIN = (() => {
-  try {
-    return new URL(PUBLIC_URL).origin;
-  } catch {
-    return "";
-  }
-})();
+const ORIGIN = originOf(PUBLIC_URL);
 const API_ALLOWED_ORIGINS = parseAllowedOrigins(process.env.PORTAL_API_ALLOWED_ORIGINS);
 const LOCAL_AUTH_BYPASS_REQUESTED = process.env.PORTAL_LOCAL_AUTH_BYPASS === "1";
 const LOCAL_AUTH_BYPASS = LOCAL_AUTH_BYPASS_REQUESTED && !IS_PROD && isLoopbackUrl(PUBLIC_URL);
@@ -147,8 +142,6 @@ async function fetchSurfaceConfig(): Promise<void> {
     void 0;
   }
 }
-
-const WEB_UI_UPSTREAM = (process.env.WEB_UI_UPSTREAM ?? "http://localhost:8096").replace(/\/$/, "");
 
 function isSlackIssuer(issuer: string): boolean {
   try {
@@ -376,14 +369,6 @@ export function hostIsWithinDomain(host: string, domain: string): boolean {
   const h = host.toLowerCase();
   const d = domain.toLowerCase().replace(/^\./, "");
   return !!h && !!d && (h === d || h.endsWith(`.${d}`));
-}
-
-function originOf(raw: string): string {
-  try {
-    return new URL(raw).origin;
-  } catch {
-    return "";
-  }
 }
 
 export function isPrivateNetworkUrl(raw: string): boolean {
@@ -893,6 +878,14 @@ function renewSessionCookie(req: IncomingMessage, res: ServerResponse): SessionC
   return renewed;
 }
 
+export interface CoreHandoff {
+  serves(method: string, pathname: string): boolean;
+  handle(req: IncomingMessage, res: ServerResponse): void;
+  shell(req: IncomingMessage, res: ServerResponse): Promise<void>;
+}
+
+let core: CoreHandoff | undefined;
+
 const server = createServer((req, res) => {
   const startedAt = performance.now();
   let errorLogged = false;
@@ -905,7 +898,7 @@ const server = createServer((req, res) => {
         Math.round(performance.now() - startedAt),
       );
   });
-  void handle(req, res).catch((err: unknown) => {
+  void withRequestContext("portal", req, res, () => handle(req, res)).catch((err: unknown) => {
     errorLogged = true;
     reportBackendError(err);
     console.error("[portal] 500 %s %s: %s", req.method ?? "?", (req.url ?? "?").split("?")[0], String(err));
@@ -948,11 +941,8 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 
   void refreshSurfaceConfig();
 
-  if (method === "GET" && pathname === "/healthz") return json(res, 200, { ok: true });
-
-  if (method === "GET" && pathname === "/readyz") {
+  if (method === "GET" && (pathname === "/healthz" || pathname === "/readyz"))
     return proxyToUpstream(req, res, { baseUrl: CORE, path: pathname, search: "" }, ["accept"]);
-  }
 
   if (method === "GET" && (pathname === "/favicon.ico" || pathname === "/favicon.svg")) {
     return serveFavicon(
@@ -1058,8 +1048,9 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     );
   }
 
-  let session = renewSessionCookie(req, res) ?? currentSession(req);
-  const authenticatedPrincipal = session?.sub;
+  const cookieSession = renewSessionCookie(req, res);
+  let session = cookieSession ?? currentSession(req);
+  if (session && !cookieSession) setSession(res, sessionCookieSet(seal(session, sessionKey), session.sub));
   let staleSession: SessionClaims | null = null;
   if (session && !session.anon && (!pathname.startsWith("/auth/") || pathname.startsWith("/auth/impersonate"))) {
     const canonical = await canonicalPrincipal(session.sub);
@@ -1260,15 +1251,10 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   if (!DEPLOYMENTS_ENABLED && (seg === "d" || seg === "deployments")) return json(res, 404, { error: "not_found" });
   const isDeployment = DEPLOYMENTS_ENABLED && (seg === "d" || seg === "deployments");
 
-  if (
-    method === "GET" &&
-    (/^\/share\/external\/[a-f0-9-]{36}(?:\/files\/[a-f0-9-]{36})?$/.test(pathname) ||
-      /^\/assets\/[a-zA-Z0-9_.-]+$/.test(pathname))
-  ) {
-    return proxyToUpstream(req, res, { baseUrl: WEB_UI_UPSTREAM, path: pathname, search: url.search }, [
-      "accept",
-      "accept-encoding",
-    ]);
+  if (core && method === "GET") {
+    if (/^\/share\/external\/[a-f0-9-]{36}(?:\/files\/[a-f0-9-]{36})?$/.test(pathname) && core.serves(method, pathname))
+      return core.handle(withoutInternalHeaders(req), res);
+    if (/^\/assets\/[a-zA-Z0-9_.-]+$/.test(pathname)) return core.shell(withoutInternalHeaders(req), res);
   }
 
   if (!isDeployment) session ??= staleSession;
@@ -1322,27 +1308,20 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     }
   }
 
-  let principal = session.sub;
-  let impersonator: string | undefined;
-  if (!crossOrigin) {
-    const imp = openImpersonation(readCookie(req.headers.cookie, "portal_impersonate"), impersonateKey, Date.now());
-    if (imp && imp.actor === session.sub && imp.org === session.org && (await isAdmin(session.sub))) {
-      principal = imp.target;
-      impersonator = session.sub;
-    }
+  if (!openSession(readCookie(req.headers.cookie, "portal_session"), sessionKey, Date.now(), ORG, SESSION_MAX_TTL_S)) {
+    const others = (req.headers.cookie ?? "").split(";").map((part) => part.trim());
+    req.headers.cookie = [
+      ...others.filter((part) => part && !part.startsWith("portal_session=")),
+      `portal_session=${encodeURIComponent(seal(session, sessionKey))}`,
+    ].join("; ");
   }
+  if (core?.serves(method, pathname)) return core.handle(withoutInternalHeaders(req), res);
+  return core ? core.shell(withoutInternalHeaders(req), res) : json(res, 404, { error: "not_found" });
+}
 
-  return proxyToSurface(req, res, {
-    upstreamBase: WEB_UI_UPSTREAM,
-    forwardPath: pathname,
-    search: url.search,
-    cookieName: "webuiuser",
-    principal,
-    ...(!impersonator && session.name ? { displayName: session.name } : {}),
-    ...(impersonator ? { impersonator } : {}),
-    ...(PORTAL_IDENTITY_SECRET ? { identitySecret: PORTAL_IDENTITY_SECRET } : {}),
-    authenticatedPrincipal,
-  });
+function withoutInternalHeaders(req: IncomingMessage): IncomingMessage {
+  for (const header of INTERNAL_HEADERS) delete req.headers[header];
+  return req;
 }
 
 async function desktopLogin(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
@@ -1868,8 +1847,9 @@ function validEmailDomain(value: string): boolean {
     );
 }
 
-export async function startServer(options: { port: number; host?: string }): Promise<void> {
+export async function startServer(options: { port: number; host?: string; core?: CoreHandoff }): Promise<void> {
   bootChecks();
+  core = options.core;
   if (process.env.AUTH_EMBEDDED === "1") {
     if (AUTH_BROKER_UPSTREAM !== "http://127.0.0.1:8099") {
       throw new Error("Embedded auth requires the loopback broker upstream");

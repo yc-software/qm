@@ -46,6 +46,13 @@ final class ClientTests: XCTestCase {
   }
 
   @MainActor
+  func testRequestsIdentifyTheIOSClientSurface() throws {
+    let client = APIClient(baseURL: URL(string: "https://\(UUID().uuidString).example.test")!)
+    let request = try client.request("api/turn", body: ["text": "hello"])
+    XCTAssertEqual(request.value(forHTTPHeaderField: "X-QM-Client"), "ios")
+  }
+
+  @MainActor
   func testLateResponseCannotRestoreSignedOutSession() async throws {
     let configuration = URLSessionConfiguration.ephemeral
     configuration.protocolClasses = [LateResponseProtocol.self]
