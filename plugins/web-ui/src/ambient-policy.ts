@@ -66,14 +66,7 @@ export async function loadAmbientPolicy(scopeId: string, onChange: () => void): 
   try {
     const r = await api<PolicyWire>(`/api/contexts/${encodeURIComponent(scopeId)}/ambient-policy`);
     if (seq !== loadSeq) return;
-    ambientPolicyState.orders = r.policy.orders;
-    ambientPolicyState.ambientEnabled = r.policy.ambientEnabled ?? null;
-    ambientPolicyState.bots = Object.entries(r.policy.bots).map(([name, p]) => ({
-      name,
-      mode: p.mode,
-      ...(p.rollupHours !== undefined ? { rollupHours: p.rollupHours } : {}),
-    }));
-    ambientPolicyState.baseUpdatedAt = r.policy.updatedAt;
+    applyPolicy(r);
   } catch (e) {
     if (seq !== loadSeq) return;
     ambientPolicyState.notice = errMessage(e, "Couldn't load this scope's standing orders.");
@@ -84,6 +77,17 @@ export async function loadAmbientPolicy(scopeId: string, onChange: () => void): 
       redraw();
     }
   }
+}
+
+function applyPolicy({ policy }: PolicyWire): void {
+  ambientPolicyState.orders = policy.orders;
+  ambientPolicyState.ambientEnabled = policy.ambientEnabled ?? null;
+  ambientPolicyState.bots = Object.entries(policy.bots).map(([name, p]) => ({
+    name,
+    mode: p.mode,
+    ...(p.rollupHours !== undefined ? { rollupHours: p.rollupHours } : {}),
+  }));
+  ambientPolicyState.baseUpdatedAt = policy.updatedAt;
 }
 
 function markDirty(): void {
@@ -102,6 +106,7 @@ async function save(): Promise<void> {
     if (!name) continue;
     bots[name] = { mode: b.mode, ...(b.mode === "rollup" && b.rollupHours ? { rollupHours: b.rollupHours } : {}) };
   }
+  const seq = loadSeq;
   ambientPolicyState.saving = true;
   redraw();
   try {
@@ -114,23 +119,20 @@ async function save(): Promise<void> {
         baseUpdatedAt: ambientPolicyState.baseUpdatedAt,
       }),
     });
-    ambientPolicyState.orders = r.policy.orders;
-    ambientPolicyState.ambientEnabled = r.policy.ambientEnabled ?? null;
-    ambientPolicyState.bots = Object.entries(r.policy.bots).map(([name, p]) => ({
-      name,
-      mode: p.mode,
-      ...(p.rollupHours !== undefined ? { rollupHours: p.rollupHours } : {}),
-    }));
-    ambientPolicyState.baseUpdatedAt = r.policy.updatedAt;
+    if (seq !== loadSeq) return;
+    applyPolicy(r);
     ambientPolicyState.dirty = false;
     ambientPolicyState.notice = "Saved.";
     ambientPolicyState.noticeKind = "saved";
   } catch (e) {
+    if (seq !== loadSeq) return;
     ambientPolicyState.notice = errMessage(e, "Couldn't save. Try again.");
     ambientPolicyState.noticeKind = "error";
   } finally {
-    ambientPolicyState.saving = false;
-    redraw();
+    if (seq === loadSeq) {
+      ambientPolicyState.saving = false;
+      redraw();
+    }
   }
 }
 
