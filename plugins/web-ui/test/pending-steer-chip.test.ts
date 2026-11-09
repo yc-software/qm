@@ -153,9 +153,8 @@ test("a steered queued message shows in the transcript as waiting until model in
         await composer!.submit();
         const row = composer!.waitingSteers(agent).find((q) => q.text === "look at this");
         assert.equal(composer!.state.error, "");
-        assert.equal(row?.text, "look at this");
         assert.deepEqual(
-          (row as { attachments?: Array<{ fileName: string }> }).attachments?.map((a) => a.fileName),
+          row?.attachments?.map((a) => a.fileName),
           ["shot.png"],
         );
         agentState.messages.push({

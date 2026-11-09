@@ -48,7 +48,7 @@ import {
   type ModelOptionValue,
 } from "./model-options";
 import { modelSupportsFastMode } from "./pi-models";
-import type { ComposerSurface, ConvCtx } from "./conv-types";
+import type { ComposerSurface, ConvCtx, SteeringRun } from "./conv-types";
 import { bumpSessionActivity, dropPendingSession, renderList } from "./sessions";
 import { appState } from "./shell";
 import { base64ToText, bytesToBase64, insertIntoDraft, pasteChipLabel } from "./paste-text";
@@ -304,8 +304,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     );
   }
 
-  type SteeringRun = QueuedRun & { ts: string; attachments?: Attachment[] };
-  const steeringRuns = new Map<string, SteeringRun[]>();
+  const steeringRuns = new Map<string, Array<SteeringRun & { ts: string }>>();
 
   function steeringRunsFor(threadRef: string | null, agent: Agent): SteeringRun[] {
     const steering = threadRef ? steeringRuns.get(threadRef) : undefined;
@@ -1497,7 +1496,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     setQueuedRuns(threadRef, [...queuedRunsFor(threadRef).filter((r) => r.runId !== queued.runId), queued]);
   }
 
-  function markSteering(threadRef: string, steering: SteeringRun): void {
+  function markSteering(threadRef: string, steering: SteeringRun & { ts: string }): void {
     steeringRuns.set(threadRef, [
       ...(steeringRuns.get(threadRef) ?? []).filter((run) => run.ts !== steering.ts),
       steering,
