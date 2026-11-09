@@ -1683,8 +1683,8 @@ test("a shared thread keeps one byte-identical system prompt until compaction; c
   t.mock.timers.tick(2 * 3_600_000);
   const third = await turn(teammate);
   assert.equal(third.system, first.system, "a new cron and an expired credential must not change the system prompt");
-  assert.match(third.environment, /^\+ .*Weekly digest/m);
-  assert.match(third.environment, /^- .*NPM_TOKEN/m);
+  assert.match(third.environment, /Added to "Scheduled here[^"]*":\n- Weekly digest/);
+  assert.match(third.environment, /Removed from "Credentials › U1":\n.*NPM_TOKEN/);
 
   const fired = await turn(actor, { kind: "automation", destination: { type: "test", target: thread } });
   assert.equal(fired.system, first.system, "a scheduled fire must not change the system prompt");

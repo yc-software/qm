@@ -93,7 +93,8 @@ test("parent reads persisted side-chat exchanges on its next turn without a synt
   assert.equal(inputs.length, 2);
   await turn("web:U1:context-parent", "Continue with the agreed retry decision");
   assert.equal(inputs.length, 3);
-  const [discussion] = discussions(inputs[2]!.systemPrompt);
+  assert.equal(inputs[2]!.systemPrompt, inputs[0]!.systemPrompt);
+  const [discussion] = discussions(inputs[2]!.environment ?? "");
   assert.equal(discussion.sessionId, child.session.id);
   assert.ok(
     discussion.messages.some((message: { text: string }) => message.text === "The retry decision is five attempts"),
@@ -106,7 +107,7 @@ test("parent reads persisted side-chat exchanges on its next turn without a synt
   await app.expandSideChat("U1", child.session.id);
   await turn(child.session.threadRef, "Now this is a normal session");
   await turn("web:U1:context-parent", "Any remaining side discussions?");
-  assert.deepEqual(discussions(inputs.at(-1)!.systemPrompt), []);
+  assert.deepEqual(discussions(inputs.at(-1)!.environment ?? ""), []);
 });
 
 test("side-chat context pages messages and reports exchanges omitted by the model budget", async () => {

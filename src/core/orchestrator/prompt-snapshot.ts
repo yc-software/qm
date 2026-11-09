@@ -55,17 +55,18 @@ export function promptChanges(snapshot: string, fresh: string): string {
   const removed = minus(before, labeledLines(fresh));
   const added = minus(labeledLines(fresh), before);
   if (!removed.length && !added.length) return "";
-  const count = (lines: Labeled[], label: string) => lines.filter((line) => line.label === label).length;
-  const line = (sign: string, { label, text }: Labeled) => `${sign} ${label ? `${label}: ` : ""}${text}`;
-  const gone = new Set(
-    removed.filter((l) => l.label && count(before, l.label) > 1 && count(removed, l.label) === count(before, l.label)),
-  );
-  const summarized = [...new Set([...gone].map((l) => l.label))];
+  const grouped = (lines: Labeled[], verb: "Removed" | "Added") =>
+    [...new Set(lines.map((l) => l.label))].flatMap((label) => {
+      const texts = lines.filter((l) => l.label === label).map((l) => l.text);
+      const total = before.filter((l) => l.label === label).length;
+      if (!label) return [`${verb}:`, ...texts];
+      if (verb === "Removed" && total > 1 && texts.length === total) return [`Removed all of "${label}".`];
+      return [`${verb} ${verb === "Removed" ? "from" : "to"} "${label}":`, ...texts];
+    });
   return [
     "## Changed since the system prompt",
-    "The system prompt was written earlier in this conversation. For this turn, these lines were removed (-) from it or added (+) to it:",
-    ...summarized.map((label) => `- ${label}: all ${count(before, label)} lines`),
-    ...removed.filter((l) => !gone.has(l)).map((l) => line("-", l)),
-    ...added.map((l) => line("+", l)),
+    "The system prompt was written earlier in this conversation. For this turn, its sections differ as follows:",
+    ...grouped(removed, "Removed"),
+    ...grouped(added, "Added"),
   ].join("\n");
 }

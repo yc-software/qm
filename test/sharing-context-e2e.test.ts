@@ -522,8 +522,8 @@ test("Open speaker keychain uses a disposable computer, follows the speaker, and
   }
   const ambientPrompt = await b.turn("!sysprompt", true, "U2", { origin: { kind: "ambient", live: true } });
   const ambientNote = ambientPrompt.split("<environment>")[1] ?? "";
-  assert.match(ambientNote, /^\+ Credentials › U2: - `npm:/m);
-  assert.match(ambientNote, /^- Credentials › U1: /m);
+  assert.match(ambientNote, /Added to "Credentials › U2":(?:\n- .*)*`npm:/);
+  assert.match(ambientNote, /Removed all of "Credentials › U1"/);
   assert.match(await b.turn(`!run ${probe}`, true, "U2"), /^unset\|unset\|absent\|/);
   await b.directory.replaceGroups([
     { groupId: "G1", principalId: "U1" },
