@@ -96,7 +96,7 @@ enum TapKind {
 struct TapContext {
     context: Option<Arc<Context>>,
     retained: Option<Arc<RetainedState>>,
-    activity: Option<Arc<Registry>>,
+    activity: Option<(Arc<Registry>, Arc<AtomicBool>)>,
     kind: TapKind,
 }
 
@@ -188,9 +188,9 @@ unsafe extern "C-unwind" fn receive(_: CGEventTapProxy, kind: CGEventType, event
     if let Some(retained) = &callback.retained {
         return retained.receive(callback.kind, kind, unsafe { event.as_ref() }, event.as_ptr());
     }
-    if let Some(activity) = &callback.activity {
+    if let Some((activity, failed)) = &callback.activity {
         if kind.0 >= u32::MAX - 1 {
-            activity_failure().store(true, Ordering::Release);
+            failed.store(true, Ordering::Release);
             return event.as_ptr();
         }
         let value = unsafe { event.as_ref() };
@@ -342,25 +342,21 @@ impl Drop for ActivationTransition {
     }
 }
 
-static ACTIVITY_FAILURE: AtomicBool = AtomicBool::new(false);
-
-fn activity_failure() -> &'static AtomicBool {
-    &ACTIVITY_FAILURE
-}
-
 pub struct ActivityWatcher {
     stop: Arc<AtomicBool>,
+    failed: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
 
 impl ActivityWatcher {
     pub fn begin(activity: Arc<Registry>) -> Result<Self, Failure> {
-        ACTIVITY_FAILURE.store(false, Ordering::Release);
+        let failed = Arc::new(AtomicBool::new(false));
+        let tapped = Arc::clone(&failed);
         let stop = Arc::new(AtomicBool::new(false));
         let quit = Arc::clone(&stop);
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         let thread = thread::spawn(move || {
-            let tap = Tap::create(TapContext { context: None, retained: None, activity: Some(activity), kind: TapKind::Intervention });
+            let tap = Tap::create(TapContext { context: None, retained: None, activity: Some((activity, tapped)), kind: TapKind::Intervention });
             let Ok(_tap) = tap else {
                 let _ = ready_tx.send(Err(tap.err().unwrap()));
                 return;
@@ -372,7 +368,7 @@ impl ActivityWatcher {
             }
         });
         match ready_rx.recv_timeout(Duration::from_millis(350)) {
-            Ok(Ok(())) => Ok(Self { stop, thread: Some(thread) }),
+            Ok(Ok(())) => Ok(Self { stop, failed, thread: Some(thread) }),
             result => {
                 stop.store(true, Ordering::Release);
                 let _ = thread.join();
@@ -388,7 +384,7 @@ impl ActivityWatcher {
     }
 
     pub fn check(&self) -> Result<(), Failure> {
-        if ACTIVITY_FAILURE.load(Ordering::Acquire) {
+        if self.failed.load(Ordering::Acquire) {
             Err(Failure::new(ErrorCode::ActionFailed, "Focus protection event tap was disabled; stopped"))
         } else {
             Ok(())
