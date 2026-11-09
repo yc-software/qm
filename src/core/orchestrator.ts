@@ -2539,6 +2539,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 ownerScopeId: scopeId,
                 threadRef: conversation.threadRef,
                 ...(defaultDestination ? { destination: defaultDestination } : {}),
+                returnsToParent: isSubagentThreadRef(conversation.threadRef) && Boolean(session.parentSessionId),
               })
             : undefined;
 

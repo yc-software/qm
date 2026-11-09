@@ -15,7 +15,7 @@ function armed(r: BackgroundWatchResult): BackgroundWatchArmedResult {
   return r;
 }
 
-async function agent(readOutputTail: ReadOutputTail = async () => ({ outputTail: "" }), threadRef = "thread-1") {
+async function agent(readOutputTail: ReadOutputTail = async () => ({ outputTail: "" }), returnsToParent = false) {
   const store = createMonitorStore(testMap());
   const registry = createPostgresProcessRegistry(testDatabaseUrl());
   const rec = await registry.register({
@@ -34,17 +34,18 @@ async function agent(readOutputTail: ReadOutputTail = async () => ({ outputTail:
     scopeId: SCOPE,
     owner: "U1",
     ownerScopeId: scopeId("personal", "U1"),
-    threadRef,
+    threadRef: "thread-1",
     destination: { type: "slack", target: "D1", audienceScopeId: scopeId("personal", "U1") },
+    returnsToParent,
     graceMs: 1000,
   });
   return { store, registry, broker, rec };
 }
 
-test("a watch armed in a subagent session has no destination, so its result reaches the user through the parent", async () => {
-  const { broker, store } = await agent(undefined, "agent:main:subagent:child-1");
+test("a watch armed by a child that returns to its parent has no destination, so its result reaches the user through the parent", async () => {
+  const { broker, store } = await agent(undefined, true);
   const m = await store.get(armed(await broker.watch("p-1")).monitorId);
-  assert.equal(m?.threadRef, "agent:main:subagent:child-1");
+  assert.equal(m?.threadRef, "thread-1");
   assert.equal(m?.destination, undefined);
 });
 
