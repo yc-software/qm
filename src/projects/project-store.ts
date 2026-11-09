@@ -294,17 +294,18 @@ export function createProjectStore(
           }
           outcome.status = "ok";
           const current = project.slackChannel;
-          if (!link) {
-            if (!current) return project;
-            changed = true;
-            const { slackChannel: _dropped, channelMemberIds: _members, ...rest } = project;
-            return rest;
-          }
-          if (current && current.channelId === link.channelId && current.channelName === link.channelName)
+          if (!current && !link) return project;
+          if (current && current.channelId === link?.channelId && current.channelName === link.channelName)
             return project;
           changed = true;
+          const { slackChannel: _dropped, channelMemberIds: _members, ...rest } = project;
+          let base: Project = rest;
+          if (current?.channelId === link?.channelId) base = project;
+          else if (project.channelMemberIds?.length)
+            base = { ...rest, updatedAt: Math.max(now(), project.updatedAt + 1) };
+          if (!link) return base;
           return {
-            ...project,
+            ...base,
             slackChannel: {
               channelId: link.channelId,
               channelName: link.channelName,

@@ -229,8 +229,15 @@ test("ProjectStore derives membership from the linked channel roster", async () 
   assert.equal((await projects.slackChannel(groupRef))?.channelName, "eng-renamed");
   assert.equal(await projects.version(groupRef), versionAfter);
 
-  // unlink drops the derived members with the link
+  const relinked = await projects.setSlackChannel(project.id, "owner", { channelId: "C2", channelName: "ops" });
+  assert.ok(relinked.status === "ok" && relinked.changed);
+  assert.deepEqual(await projects.members(groupRef), ["owner"], "relinking drops the old channel's members");
+  assert.notEqual(await projects.version(groupRef), versionAfter, "and bumps the roster version");
+  await projects.syncChannelMembers(project.id, ["chan-pal"]);
+
+  const versionBeforeUnlink = await projects.version(groupRef);
   await projects.setSlackChannel(project.id, "owner", null);
+  assert.notEqual(await projects.version(groupRef), versionBeforeUnlink, "unlinking bumps the roster version");
   assert.deepEqual(await projects.members(groupRef), ["owner"]);
   assert.equal(await projects.membership(groupRef, "chan-pal"), false);
 });
