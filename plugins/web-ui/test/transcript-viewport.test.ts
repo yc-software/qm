@@ -1464,3 +1464,19 @@ test("work summaries above the reply never become the reading anchor, so reshapi
     f.close();
   }
 });
+
+test("the scroll event echoing the viewport's own correction does not re-anchor the reader", () => {
+  const f = readingFixture([300, 300, 300, 300]);
+  try {
+    f.scroll(650);
+    const before = f.top("Paragraph 2");
+    f.heights[1] = 480;
+    f.layout();
+    f.heights[0] = 400;
+    f.s.dispatchEvent(new f.s.ownerDocument.defaultView!.Event("scroll"));
+    f.layout();
+    assert.equal(f.top("Paragraph 2"), before);
+  } finally {
+    f.close();
+  }
+});

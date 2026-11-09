@@ -348,7 +348,8 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
 
   function onScroll(): void {
     if (!scroller || contentUpdates.size > 0) return;
-    if (scroller.scrollTop !== lastTop) showScrollbar();
+    const moved = scroller.scrollTop !== lastTop;
+    if (moved) showScrollbar();
     const movingUp = scroller.scrollTop < lastTop;
     const atBottom = scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop <= 1;
     const resumeFollowing = atBottom && (following || !movingUp);
@@ -356,7 +357,7 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
     lastTop = scroller.scrollTop;
     syncSticky();
     if (resumeFollowing) setFollowing(true);
-    else captureAnchor();
+    else if (moved) captureAnchor();
     if (movingUp) loadEarlier();
   }
 
