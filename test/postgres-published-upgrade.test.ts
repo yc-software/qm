@@ -245,3 +245,41 @@ test("published surface upgrade preserves request carriers, Slack access and des
     await db.end();
   }
 });
+
+test("upgrade a published 0.1.16 database and record a new conversation and its spend", { skip }, async () => {
+  const url = testDatabaseUrl();
+  const db = new pg.Pool({ connectionString: url });
+  try {
+    await db.query(await readFile(new URL("fixtures/upgrades/0.1.16.sql", import.meta.url), "utf8"));
+    await db.query("SET search_path = public");
+    await migrate(url);
+    const sessions = createPostgresSessionStore(url);
+    const session = await sessions.getOrCreateByThread("web:after-upgrade", "dm", "personal:alice");
+    await sessions.append({ sessionId: session.id }, { kind: "AgentMessage", text: "After upgrade" });
+    await db.query(
+      `INSERT INTO session_llm_requests(id, session_id, step, model, scope_label, created_at, usage_json)
+      VALUES ('request', $1, 0, 'model', 'personal:alice', 86400000, '{"input":1,"output":1,"cost":{"total":0.01}}')`,
+      [session.id],
+    );
+    assert.deepEqual(
+      (await db.query("SELECT session_id, day FROM session_spend_dirty ORDER BY session_id NULLS LAST")).rows,
+      [
+        { session_id: session.id, day: null },
+        { session_id: null, day: "1" },
+      ],
+    );
+    const unique = await db.query(
+      "SELECT conname FROM pg_constraint WHERE contype = 'u' AND conname = ANY($1) ORDER BY conname",
+      [["runs_idempotency_key_key", "session_spend_dirty_day_writer_key", "sessions_thread_ref_key"]],
+    );
+    assert.deepEqual(
+      unique.rows.map((row) => row.conname),
+      ["runs_idempotency_key_key", "session_spend_dirty_day_writer_key", "sessions_thread_ref_key"],
+    );
+    const ledger = (await db.query("SELECT id, checksum FROM qm_schema_migrations ORDER BY id")).rows;
+    await migrate(url);
+    assert.deepEqual((await db.query("SELECT id, checksum FROM qm_schema_migrations ORDER BY id")).rows, ledger);
+  } finally {
+    await db.end();
+  }
+});

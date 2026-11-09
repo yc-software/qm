@@ -4,6 +4,20 @@ import { sameGrantSet, type GrantPersistence } from "./acl-store.ts";
 import { refPrefix } from "./resource-ref.ts";
 import { likeEscape } from "../persistence/like.ts";
 
+export const ACL_GRANTS_BUMP = [
+  `CREATE OR REPLACE FUNCTION acl_grants_bump_version() RETURNS trigger LANGUAGE plpgsql AS $fn$
+      BEGIN
+        INSERT INTO acl_grants_version(only_row, v) VALUES (TRUE, 1)
+        ON CONFLICT (only_row) DO UPDATE SET v = acl_grants_version.v + 1;
+        RETURN NULL;
+      END
+      $fn$`,
+  `DROP TRIGGER IF EXISTS acl_grants_bump ON acl_grants`,
+  `CREATE TRIGGER acl_grants_bump
+      AFTER INSERT OR UPDATE OR DELETE OR TRUNCATE ON acl_grants
+      FOR EACH STATEMENT EXECUTE FUNCTION acl_grants_bump_version()`,
+];
+
 export function rowToGrant(r: Record<string, unknown>): Grant {
   return {
     ownerScopeId: r.owner_scope_id as ScopeId,
@@ -37,17 +51,7 @@ export function createPostgresGrantStore(connectionString: string): GrantPersist
         v        BIGINT NOT NULL
       )`,
         `INSERT INTO acl_grants_version(only_row, v) VALUES (TRUE, 0) ON CONFLICT (only_row) DO NOTHING`,
-        `CREATE OR REPLACE FUNCTION acl_grants_bump_version() RETURNS trigger LANGUAGE plpgsql AS $fn$
-      BEGIN
-        INSERT INTO acl_grants_version(only_row, v) VALUES (TRUE, 1)
-        ON CONFLICT (only_row) DO UPDATE SET v = acl_grants_version.v + 1;
-        RETURN NULL;
-      END
-      $fn$`,
-        `DROP TRIGGER IF EXISTS acl_grants_bump ON acl_grants`,
-        `CREATE TRIGGER acl_grants_bump
-      AFTER INSERT OR UPDATE OR DELETE OR TRUNCATE ON acl_grants
-      FOR EACH STATEMENT EXECUTE FUNCTION acl_grants_bump_version()`,
+        ...ACL_GRANTS_BUMP,
       ],
     },
     {

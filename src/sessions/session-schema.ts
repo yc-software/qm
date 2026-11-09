@@ -1,9 +1,11 @@
 import { PUBLISHED_SESSION_UPGRADE } from "./published-upgrade.ts";
+import { SPEND_INVALIDATION } from "./spend-invalidation.ts";
 import type { PgMigrationDefinition } from "../persistence/pg-pool.ts";
 import { authoredUserTurn } from "./items.ts";
 import { TENANCY_BASE } from "../tenants/migrations.ts";
 import { DROP_TENANT_PREBUILD_INDEXES } from "../tenants/prebuilt-indexes.ts";
 import { RETIRE_TENANT_KEYS } from "../tenants/retire-tenant-keys.ts";
+import { RETIRE_TENANT_LEFTOVERS } from "../tenants/retire-tenant-leftovers.ts";
 
 export const SPEND_INDEXABLE = `(spend_usage_json(usage_json) IS NOT NULL
   AND octet_length(session_id) + octet_length(model) + octet_length(usage_json) <= 2000)`;
@@ -174,34 +176,7 @@ BEGIN
     UNIQUE (day, writer),
     CHECK (num_nonnulls(day, session_id) = 1)
   );
-  CREATE FUNCTION invalidate_request_spend() RETURNS trigger LANGUAGE plpgsql AS $invalidate_request_spend$
-           BEGIN
-             INSERT INTO session_spend_dirty(day)
-             SELECT DISTINCT floor(at::numeric / 86400000)::bigint
-               FROM (VALUES
-                 (CASE WHEN TG_OP <> 'INSERT' AND OLD.usage_json IS NOT NULL THEN OLD.created_at END),
-                 (CASE WHEN TG_OP <> 'DELETE' AND NEW.usage_json IS NOT NULL THEN NEW.created_at END)
-               ) changed(at) WHERE at IS NOT NULL
-             ON CONFLICT DO NOTHING;
-             RETURN NULL;
-           END $invalidate_request_spend$;
-  CREATE TRIGGER session_llm_requests_spend_dirty
-    AFTER INSERT OR UPDATE OF created_at, session_id, model, usage_json OR DELETE ON session_llm_requests
-    FOR EACH ROW EXECUTE FUNCTION invalidate_request_spend();
-  CREATE FUNCTION invalidate_session_spend() RETURNS trigger LANGUAGE plpgsql AS $invalidate_session_spend$
-           BEGIN
-             IF TG_OP = 'UPDATE' AND ROW(OLD.id, OLD.scope_id, OLD.origin, OLD.thread_ref, OLD.parent_session_id)
-                  IS NOT DISTINCT FROM ROW(NEW.id, NEW.scope_id, NEW.origin, NEW.thread_ref, NEW.parent_session_id) THEN
-               RETURN NULL;
-             END IF;
-             INSERT INTO session_spend_dirty(session_id)
-             SELECT DISTINCT id FROM (VALUES (OLD.id), (NEW.id)) changed(id) WHERE id IS NOT NULL;
-             RETURN NULL;
-           END $invalidate_session_spend$;
-  CREATE TRIGGER sessions_spend_dirty
-    AFTER INSERT OR UPDATE OF id, scope_id, origin, thread_ref, parent_session_id OR DELETE ON sessions
-    FOR EACH ROW EXECUTE FUNCTION invalidate_session_spend();
-
+${SPEND_INVALIDATION}
   CREATE TABLE qm_tenant(id UUID PRIMARY KEY);
   CREATE UNIQUE INDEX qm_tenant_singleton ON qm_tenant((true));
   INSERT INTO qm_tenant(id) VALUES (gen_random_uuid());
@@ -460,6 +435,7 @@ const USER_TURNS_BY_AUTHOR: PgMigrationDefinition = {
 export const SESSION_MIGRATIONS = [
   TENANCY_BASE,
   RETIRE_TENANT_KEYS,
+  RETIRE_TENANT_LEFTOVERS,
   ...PUBLISHED_SESSION_UPGRADE,
   SESSION_SCHEMA,
   MESSAGE_SEARCH_INDEX,
