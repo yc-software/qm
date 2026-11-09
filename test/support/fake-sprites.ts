@@ -23,6 +23,7 @@ export interface SpritesCall {
   method: string;
   path: string;
   script?: string;
+  token?: string;
 }
 
 export interface InjectedFailure {
@@ -280,7 +281,8 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
 
   const fetchImpl = async (url: URL, init?: RequestInit): Promise<Response> => {
     const method = init?.method ?? "GET";
-    calls.push({ method, path: url.pathname + url.search });
+    const token = new Headers(init?.headers).get("authorization")?.replace(/^Bearer /, "");
+    calls.push({ method, path: url.pathname + url.search, ...(token ? { token } : {}) });
     const at = injected.findIndex((f) => !f.match || f.match({ method, path: url.pathname }));
     if (at >= 0) {
       const [next] = injected.splice(at, 1);
