@@ -363,18 +363,10 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
       await backingMap.put(id, d);
     },
     async setStatus(id, status) {
-      const d = await backingMap.get(id);
-      if (d) {
-        d.status = status;
-        await backingMap.put(id, d);
-      }
+      await backingMap.merge(id, { status });
     },
     async setEndpoint(id, endpoint) {
-      const d = await backingMap.get(id);
-      if (d) {
-        d.endpoint = endpoint;
-        await backingMap.put(id, d);
-      }
+      await backingMap.merge(id, { endpoint });
     },
     async setName(id, name) {
       const d = await backingMap.get(id);
