@@ -430,7 +430,6 @@ export interface TurnRequest {
   timezone?: string;
   approval?: { requestId: string; approved: boolean; scope?: ApprovalScope };
   proactiveOpener?: boolean;
-  analyticsSuppressed?: boolean;
   spawned?: boolean;
   idempotencyKey?: string;
   redeliveryKey?: string;

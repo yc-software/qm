@@ -3025,7 +3025,6 @@ for (const addressed of [true, false]) {
       fastMode: false,
       skipMemory: true,
       turnWallClockMs: 120000,
-      analyticsSuppressed: true,
     };
     const transient: Partial<OrchestratorInput> = {
       runId: "old-run",
