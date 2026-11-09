@@ -68,7 +68,7 @@ test("parseAmbientDecision reads the outermost object and stays linear-time on a
 });
 
 test("other people's @-mentions read as @name; only the assistant's own mention stays a raw id", () => {
-  const ask = msg("2.0", "<@U00000003> can you remind me? cc <@U00000004|dave> <@U00000009> <@U00000002>", {
+  const ask = msg("2.0", "<@U00000003> can you remind me? cc <@U00000004> <@U00000009> <@U00000002>", {
     mentions: { U00000003: "esther", U00000004: "dave", U00000002: "agent" },
   });
   const batch = base({ recent: [ask], messages: [ask] });

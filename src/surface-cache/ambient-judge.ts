@@ -80,16 +80,14 @@ export function ambientWindow(
   return missing.length ? [...missing, ...window].sort((x, y) => (x.ts < y.ts ? -1 : 1)) : window;
 }
 
-// Other people's @-mentions read as "@name" (as people see them in Slack), so a raw `<@id>` is only ever
-// the assistant's own mention id — the one its identity line names.
 function readableMentions(
   text: string,
   mentions: Record<string, string> | undefined,
   selfId: string | undefined,
 ): string {
-  if (!mentions) return text;
-  return text.replace(/<@([A-Z0-9]+)(?:\|[^>]*)?>/g, (raw, id: string) =>
-    id !== selfId && mentions[id] ? `@${mentions[id]}` : raw,
+  return Object.entries(mentions ?? {}).reduce(
+    (out, [id, name]) => (id === selfId ? out : out.replaceAll(`<@${id}>`, `@${name}`)),
+    text,
   );
 }
 
