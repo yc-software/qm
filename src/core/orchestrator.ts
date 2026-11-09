@@ -2351,9 +2351,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               ),
             )
             .catch(swallowAs("orchestrator: standing-obligations read", null));
-          turnContextBlocks["Scheduled here"] =
+          turnContextBlocks["Crons scheduled here"] =
             obligations ??
-            "## Scheduled here\nScheduled-work status is unavailable; check the live inventories before scheduling.";
+            "## Crons scheduled here\nScheduled-work status is unavailable; check the live inventories before scheduling.";
         }
         if (actorIsOrgAdmin) turnEvents.push("The sender is an org admin.");
         if (input.origin.kind === "automation" && input.origin.destination && !input.surfaceTools) {

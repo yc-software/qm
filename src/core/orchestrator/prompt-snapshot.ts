@@ -63,10 +63,5 @@ export function promptChanges(snapshot: string, fresh: string): string {
       if (verb === "Removed" && total > 1 && texts.length === total) return [`Removed all of "${label}".`];
       return [`${verb} ${verb === "Removed" ? "from" : "to"} "${label}":`, ...texts];
     });
-  return [
-    "## Changed since the system prompt",
-    "The system prompt was written earlier in this conversation. For this turn, its sections differ as follows:",
-    ...grouped(removed, "Removed"),
-    ...grouped(added, "Added"),
-  ].join("\n");
+  return ["## Changed since the system prompt", ...grouped(removed, "Removed"), ...grouped(added, "Added")].join("\n");
 }

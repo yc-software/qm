@@ -558,7 +558,7 @@ test("standing obligations: this scope's pending triggers render; other scopes' 
   const prompt = b.reply ?? "";
 
   assert.match(prompt, /schedule the wake-up in the same turn/);
-  assert.match(prompt, /\n## Scheduled here \(America\/Los_Angeles\)\n/);
+  assert.match(prompt, /\n## Crons scheduled here \(America\/Los_Angeles\)\n/);
   assert.match(prompt, /Vendor status — every 5 min$/m);
   assert.match(prompt, /Legal follow-up — once at/);
   assert.doesNotMatch(prompt, /poll the vendor status page|follow up with legal/);
@@ -1564,7 +1564,7 @@ test("scheduled-work changes ride the next turn's environment note without rewri
   for (const turn of seen) assert.equal(turn.systemPrompt, seen[0]!.systemPrompt);
   assert.match(seen[0]!.systemPrompt, /Nothing is scheduled here/);
   assert.match(seen[1]!.environment ?? "", /Synthetic status/);
-  assert.doesNotMatch(seen[2]!.environment ?? "", /Synthetic status|Scheduled here/);
+  assert.doesNotMatch(seen[2]!.environment ?? "", /Synthetic status|Crons scheduled here/);
   assert.match(seen[3]!.environment ?? "", /Scheduled-work status is unavailable/);
   for (const turn of seen) assert.doesNotMatch(turn.environment ?? "", /Other Linux|8 vCPU|\/new\/workspace/);
   assert.deepEqual(seen[1]!.history, originalItems);
@@ -1683,7 +1683,7 @@ test("a shared thread keeps one byte-identical system prompt until compaction; c
   t.mock.timers.tick(2 * 3_600_000);
   const third = await turn(teammate);
   assert.equal(third.system, first.system, "a new cron and an expired credential must not change the system prompt");
-  assert.match(third.environment, /Added to "Scheduled here[^"]*":\n- Weekly digest/);
+  assert.match(third.environment, /Added to "Crons scheduled here[^"]*":\n- Weekly digest/);
   assert.match(third.environment, /Removed from "Credentials › U1":\n.*NPM_TOKEN/);
 
   const fired = await turn(actor, { kind: "automation", destination: { type: "test", target: thread } });

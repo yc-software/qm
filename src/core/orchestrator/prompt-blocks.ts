@@ -274,7 +274,7 @@ export function renderStandingObligations(crons: Cron[], webhooks: Webhook[], mo
       .map((m) => `- Job watch: ${summary(m.purpose ?? m.command)}`),
   ];
   return [
-    `## Scheduled here${zones.length === 1 ? ` (${zones[0]})` : ""}`,
+    `## Crons scheduled here${zones.length === 1 ? ` (${zones[0]})` : ""}`,
     ...(lines.length ? lines : ["Nothing is scheduled here."]),
   ].join("\n");
 }
@@ -307,7 +307,7 @@ const SYSTEM_CONTEXT_ORDER = [
   "Files",
   "Sandboxes",
   "Model access",
-  "Scheduled here",
+  "Crons scheduled here",
   "Credentials",
   "Skills",
 ] as const;
