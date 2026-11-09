@@ -36,7 +36,8 @@ export function createSideChatController(ctx: ConvCtx) {
   let pendingDraft = "";
   let maximized = false;
   let includeExcerpt = true;
-  const previews = new Map<string, string>();
+  const previews = new Map<string, { text: string }>();
+  let previewFrame: number | null = null;
   let error = "";
   let epoch = 0;
   const redraw = () => ctx.chat.drawActiveChat();
@@ -46,6 +47,15 @@ export function createSideChatController(ctx: ConvCtx) {
   let returnFocus: HTMLElement | null = null;
   const anchors = new Map<HTMLElement, { session: CoreSession; range: Range }[]>();
   const observedRows = new Map<HTMLElement, HTMLElement>();
+  let paintPending = false;
+  function scheduleHighlights() {
+    if (paintPending) return;
+    paintPending = true;
+    queueMicrotask(() => {
+      paintPending = false;
+      paintHighlights();
+    });
+  }
   let hovered: string | undefined;
   let choices = new Set<string>();
   const highlightResize = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => paintHighlights());
@@ -76,7 +86,7 @@ export function createSideChatController(ctx: ConvCtx) {
         return lines.map((line, index) => ({ session, index, line }));
       });
       const existing = new Map(
-        Array.from(host.querySelectorAll<HTMLElement>(".side-chat-highlight")).map((element) => [
+        Array.from(host.querySelectorAll<HTMLElement>(":scope > .side-chat-highlight")).map((element) => [
           element.dataset.key,
           element,
         ]),
@@ -168,10 +178,11 @@ export function createSideChatController(ctx: ConvCtx) {
 
   async function loadPreview(session: CoreSession) {
     const id = sourceId;
-    previews.set(session.id, "Loading…");
+    const preview = { text: "Loading…" };
+    previews.set(session.id, preview);
     try {
       const { items } = await fetchTranscript(session.id, { tailTurns: 1 });
-      if (sourceId !== id) return;
+      if (sourceId !== id || previews.get(session.id) !== preview) return;
       const replies = items.filter(
         (item) =>
           item.seq > (session.forkBoundarySeq ?? -1) &&
@@ -179,14 +190,17 @@ export function createSideChatController(ctx: ConvCtx) {
           item.variant === null &&
           !isHidden(item),
       );
-      previews.set(session.id, replies.map((item) => item.text ?? "").join("\n\n"));
-      redraw();
+      preview.text = replies.map((item) => item.text ?? "").join("\n\n");
     } catch (cause) {
       reportHandledError("web:side_chat_preview", cause);
-      if (sourceId !== id) return;
-      previews.set(session.id, "Could not load preview. Open the side chat to retry.");
-      redraw();
+      if (sourceId !== id || previews.get(session.id) !== preview) return;
+      preview.text = "Could not load preview. Open the side chat to retry.";
     }
+    if (previewFrame === null)
+      previewFrame = window.requestAnimationFrame(() => {
+        previewFrame = null;
+        if (sourceId === id) redraw();
+      });
   }
 
   function refreshHighlights() {
@@ -196,7 +210,6 @@ export function createSideChatController(ctx: ConvCtx) {
       (result) => {
         if (sourceId !== id) return;
         chats = result.sessions ?? [];
-        for (const chat of chats) if (!previews.has(chat.id)) void loadPreview(chat);
         redraw();
       },
       (cause) => {
@@ -233,11 +246,13 @@ export function createSideChatController(ctx: ConvCtx) {
     const id = ctx.chat.state.sessionId;
     if (id === sourceId) return;
     close();
+    if (previewFrame !== null) window.cancelAnimationFrame(previewFrame);
+    previewFrame = null;
     sourceId = id;
     highlightResize?.disconnect();
     observedRows.clear();
     for (const host of anchors.keys())
-      host.querySelectorAll(".side-chat-highlight").forEach((element) => element.remove());
+      host.querySelectorAll(":scope > .side-chat-highlight").forEach((element) => element.remove());
     anchors.clear();
     paintHighlights();
     chats = [];
@@ -460,6 +475,12 @@ export function createSideChatController(ctx: ConvCtx) {
 
   return {
     sync,
+    onDelivery(threadRef: string) {
+      const chat = chats.find((session) => session.threadRef === threadRef);
+      if (!chat) return;
+      previews.delete(chat.id);
+      redraw();
+    },
     select,
     dismissSelection,
     onScroll() {
@@ -473,8 +494,11 @@ export function createSideChatController(ctx: ConvCtx) {
       document.removeEventListener("mouseup", selectionEnded, true);
       selecting = false;
       close();
+      sourceId = null;
+      if (previewFrame !== null) window.cancelAnimationFrame(previewFrame);
+      previewFrame = null;
       for (const host of anchors.keys())
-        host.querySelectorAll(".side-chat-highlight").forEach((element) => element.remove());
+        host.querySelectorAll(":scope > .side-chat-highlight").forEach((element) => element.remove());
       anchors.clear();
       observedRows.clear();
       highlightResize?.disconnect();
@@ -500,18 +524,11 @@ export function createSideChatController(ctx: ConvCtx) {
       return html`<div
         class="side-chat-markers ${matches.some((chat) => choices.has(chat.id)) ? "choosing" : ""}"
         ${ref((element) => {
-          if (!element) return;
+          if (!element || !matches.length) return;
           const host = element as HTMLElement;
           queueMicrotask(() => {
-            for (const key of anchors.keys()) {
-              if (key.isConnected) continue;
-              highlightResize?.unobserve(key);
-              const previous = observedRows.get(key);
-              if (previous) highlightResize?.unobserve(previous);
-              observedRows.delete(key);
-              anchors.delete(key);
-            }
             if (!host.isConnected) return;
+            for (const chat of matches) if (!previews.has(chat.id)) void loadPreview(chat);
             const row = host.previousElementSibling;
             anchors.set(
               host,
@@ -527,7 +544,7 @@ export function createSideChatController(ctx: ConvCtx) {
               observedRows.set(host, row as HTMLElement);
               highlightResize?.observe(row);
             }
-            paintHighlights();
+            scheduleHighlights();
           });
         })}
       >
@@ -553,7 +570,7 @@ export function createSideChatController(ctx: ConvCtx) {
                   ? this.card()
                   : html`
                       <div class="side-chat-preview">
-                        ${markdown(previews.get(chat.id) || "Start the conversation about this passage.")}
+                        ${markdown(previews.get(chat.id)?.text || "Start the conversation about this passage.")}
                       </div>
                       <button class="side-chat-reply" @click=${() => void show(chat)}>Open conversation</button>
                     `

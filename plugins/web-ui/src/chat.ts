@@ -767,6 +767,7 @@ export function createChatSurface(
   }
 
   function onDelivery(threadRef: string): void {
+    sideChats.onDelivery(threadRef);
     const ro = readOnlyView;
     if (ro && threadRef === ro.threadRef) {
       void fetchTranscript(ro.id, ro.anchorSeq !== null ? { sinceSeq: ro.anchorSeq } : { tailTurns: TAIL_TURNS })

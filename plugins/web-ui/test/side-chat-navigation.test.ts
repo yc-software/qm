@@ -39,6 +39,7 @@ test("overlapping passages offer each chat and delayed expansion never overrides
     release = resolve;
   });
   let expanding = false;
+  let previewText = "Answer about";
   let waiting = false;
   const h = await harness({
     path: "/s/source",
@@ -69,7 +70,7 @@ test("overlapping passages offer each chat and delayed expansion never overrides
               ...items,
               item("AgentMessage", {
                 seq: 1,
-                text: `Answer about ${side.title}`,
+                text: `${previewText} ${side.title}`,
                 variant: null,
                 createdAt: Date.now(),
               }),
@@ -111,6 +112,12 @@ test("overlapping passages offer each chat and delayed expansion never overrides
       );
       assert.match(document.querySelector(".side-chat-markers")!.textContent!, /Answer about Crash recovery/);
       assert.match(document.querySelector(".side-chat-markers")!.textContent!, /Answer about Retry ordering/);
+      previewText = "Completed response about";
+      h.visibleConversation().onDelivery(sides[0]!.threadRef);
+      await until(() => document.querySelector(".side-chat-preview")?.textContent?.includes(previewText) === true);
+      previewText = "Answer about";
+      h.visibleConversation().onDelivery(sides[0]!.threadRef);
+      await until(() => document.querySelector(".side-chat-preview")?.textContent?.includes(previewText) === true);
       Object.defineProperty(window.Range.prototype, "getClientRects", {
         configurable: true,
         value: () => [{ left: 100, right: 160, top: 100, bottom: 120, width: 60, height: 20 }],
