@@ -227,7 +227,7 @@ END $base_schema$`,
           ifExpiredAt,
           countsAsError ? 1 : 0,
           Date.now() + Math.max(0, opts?.retryAfterMs ?? 0),
-          JSON.stringify(opts?.stop ?? (countsAsError ? { kind: "error" } : { kind: "lease_expired" })),
+          jsonbStringify(opts?.stop ?? (countsAsError ? { kind: "error" } : { kind: "lease_expired" })),
         ],
       );
       return { requeued: rowCount > 0, applied: rowCount > 0 };
@@ -241,7 +241,7 @@ END $base_schema$`,
       `UPDATE runs SET status='failed', result=$4, lease_token=NULL, lease_expires_at=NULL, worker_id=NULL, finished_at=$5,
          error_attempts=error_attempts+$6
        WHERE id=$1 AND lease_token=$2 AND status='running' AND ($3::bigint IS NULL OR lease_expires_at <= $3) RETURNING ${NOTIFY_SESSION_AVAILABLE}`,
-      [run.id, run.leaseToken, ifExpiredAt, JSON.stringify(result), Date.now(), countsAsError ? 1 : 0],
+      [run.id, run.leaseToken, ifExpiredAt, jsonbStringify(result), Date.now(), countsAsError ? 1 : 0],
     );
     if (rowCount > 0) settle(await getRun(run.id));
     return { requeued: false, applied: rowCount > 0 };
@@ -379,7 +379,7 @@ END $base_schema$`,
     async releaseLease(runId, leaseToken, stop, retryAfter = 0): Promise<boolean> {
       const { rowCount } = await q(
         `UPDATE runs SET status='pending', lease_token=NULL, lease_expires_at=NULL, worker_id=NULL, last_stop=COALESCE($3, last_stop), preemptions=preemptions+$4, retry_after=GREATEST(retry_after, $5) WHERE id=$1 AND lease_token=$2 AND status='running' RETURNING ${NOTIFY_SESSION_AVAILABLE}`,
-        [runId, leaseToken, stop ? JSON.stringify(stop) : null, stop?.kind === "parked" ? 1 : 0, retryAfter],
+        [runId, leaseToken, stop ? jsonbStringify(stop) : null, stop?.kind === "parked" ? 1 : 0, retryAfter],
       );
       return rowCount > 0;
     },
@@ -388,7 +388,7 @@ END $base_schema$`,
       const { rowCount } = await q(
         `UPDATE runs SET status='done', result=$1, lease_token=NULL, lease_expires_at=NULL, finished_at=$2
          WHERE id=$3 AND lease_token=$4 RETURNING ${NOTIFY_SESSION_AVAILABLE}`,
-        [JSON.stringify(result), Date.now(), runId, leaseToken],
+        [jsonbStringify(result), Date.now(), runId, leaseToken],
       );
       if (rowCount > 0) {
         settle(await getRun(runId));
@@ -424,11 +424,11 @@ END $base_schema$`,
         leaseToken === null
           ? await q(
               "UPDATE runs SET delivery_state=(COALESCE(delivery_state, '{}')::jsonb || $1::jsonb)::text WHERE id=$2",
-              [JSON.stringify(state), runId],
+              [jsonbStringify(state), runId],
             )
           : await q(
               "UPDATE runs SET delivery_state=(COALESCE(delivery_state, '{}')::jsonb || $1::jsonb)::text WHERE id=$2 AND lease_token=$3",
-              [JSON.stringify(state), runId, leaseToken],
+              [jsonbStringify(state), runId, leaseToken],
             );
       return rowCount > 0;
     },
