@@ -158,17 +158,8 @@ export function withoutUnsentPending(list: CoreSession[], threadRef: string): Co
   return list.filter((s) => s.id !== "" || s.threadRef !== threadRef);
 }
 
-export function bumpActivity(list: CoreSession[], threadRef: string, at: number, sent?: string): CoreSession[] {
-  return list.map((s) => {
-    if (s.threadRef !== threadRef) return s;
-    return sent?.trim() && s.lastUserPreview !== undefined
-      ? { ...s, lastActivityAt: at, lastUserPreview: sent }
-      : { ...s, lastActivityAt: at };
-  });
-}
-
-export function lastMessageTitle(s: CoreSession): string | null {
-  return s.lastUserPreview?.trim() || null;
+export function bumpActivity(list: CoreSession[], threadRef: string, at: number): CoreSession[] {
+  return list.map((s) => (s.threadRef === threadRef ? { ...s, lastActivityAt: at } : s));
 }
 
 export function upsertSessions(prev: CoreSession[], rows: readonly CoreSession[]): CoreSession[] {
