@@ -250,7 +250,10 @@ function stepBlocks(e: Item, step: ReplayStep): Positioned[] {
       type: "toolCall",
       id: e.callId,
       name: e.tool ?? "tool",
-      arguments: argumentsJson === undefined ? recordedToolArguments(e) : recordedWireArguments(argumentsJson, e),
+      arguments:
+        argumentsJson === undefined
+          ? (recordedToolArguments(e) as ToolCall["arguments"])
+          : recordedWireArguments(argumentsJson, e),
       ...wire,
     };
     return [{ index: at, block }];
@@ -268,7 +271,7 @@ function recordedWireArguments(argumentsJson: string, call: Item): ToolCall["arg
     return JSON.parse(argumentsJson) as ToolCall["arguments"];
   } catch (e) {
     swallow(`replay: unparseable recorded arguments for ${String(call.tool)} call ${String(call.callId)}`, e);
-    return recordedToolArguments(call);
+    return recordedToolArguments(call) as ToolCall["arguments"];
   }
 }
 
@@ -425,7 +428,7 @@ export function reconstructMessagesFromHistory(
         type: "toolCall",
         id: e.callId,
         name: e.tool ?? "tool",
-        arguments: recordedToolArguments(e),
+        arguments: recordedToolArguments(e) as ToolCall["arguments"],
       };
       if (prior?.kind === "ToolCall" && batch && raw.at(-1) === batch) batch.content.push(block);
       else {

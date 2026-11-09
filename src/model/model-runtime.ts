@@ -14,7 +14,6 @@ import {
   type ProviderHeaders,
   type Usage,
 } from "@earendil-works/pi-ai";
-import { getServiceTierCostMultiplier } from "@earendil-works/pi-ai/api/openai-responses";
 import type { LlmCallUsage } from "../sessions/session-store.ts";
 import { claudeSubscriptionBetas } from "./claude-subscription.ts";
 import { gatewayModelsJson, gatewayModelsVersion } from "./gateway-models.ts";
@@ -38,6 +37,7 @@ import {
   modelSupportsFastMode,
   resolveModel,
 } from "./pi-models.ts";
+import { captureProviderResponse } from "./provider-capture.ts";
 import { providerTurnError } from "./provider-error.ts";
 import { PrivateNetworkAddressError, publicFetch } from "../util/network.ts";
 import { errMessage } from "../util/errors.ts";
@@ -82,11 +82,17 @@ function servedTierCard(
   if (request && servedTier && servedTier !== request.service_tier) {
     const base = resolveModel(request.model);
     return base?.cost
-      ? ({ ...base, cost: scaleCost(base.cost, getServiceTierCostMultiplier(base, servedTier)) } as Model<Api>)
+      ? ({ ...base, cost: scaleCost(base.cost, servedTierCostMultiplier(base.id, servedTier)) } as Model<Api>)
       : undefined;
   }
   const servedFast = model.api === "anthropic-messages" && servedTier ? servedTier === "fast" : fast && !servedTier;
   return servedFast ? ({ ...model, cost: scaleCost(model.cost, FAST_COST_MULTIPLIER) } as Model<Api>) : undefined;
+}
+
+function servedTierCostMultiplier(modelId: string, servedTier: string): number {
+  if (servedTier === "flex") return 0.5;
+  if (servedTier === "priority" || servedTier === "fast") return modelId === "gpt-5.5" ? 2.5 : 2;
+  return 1;
 }
 
 export interface ProviderKeys {
@@ -132,7 +138,7 @@ export async function buildModelRuntime(
   const modelsPath = customModelsPath();
   const runtime = await ModelRuntime.create({ credentials, modelsPath });
   for (const [provider, apiKey] of Object.entries(apiKeys)) {
-    if (apiKey) await runtime.setRuntimeApiKey(provider, apiKey, { allowNetwork: false });
+    if (apiKey) await runtime.setRuntimeApiKey(provider, apiKey);
   }
   if (modelGateway) {
     const providers = new Set(
@@ -242,12 +248,16 @@ export async function buildModelRuntime(
     options?: ModelsApiStreamOptions<TApi>,
   ) => {
     const routed = route(model, options as ModelsSimpleStreamOptions | undefined);
-    return stream(routed.model as Model<TApi>, context, routed.options as unknown as ModelsApiStreamOptions<TApi>);
+    const capture = captureProviderResponse(routed.model, routed.options);
+    return capture.annotate(
+      stream(routed.model as Model<TApi>, context, capture.options as unknown as ModelsApiStreamOptions<TApi>),
+    );
   }) as typeof runtime.stream;
   const streamSimple = runtime.streamSimple.bind(runtime);
   runtime.streamSimple = ((model: Model<Api>, context: Context, options?: ModelsSimpleStreamOptions) => {
     const routed = route(model, options);
-    return streamSimple(routed.model, context, routed.options);
+    const capture = captureProviderResponse(routed.model, routed.options);
+    return capture.annotate(streamSimple(routed.model, context, capture.options));
   }) as typeof runtime.streamSimple;
   return runtime;
 }

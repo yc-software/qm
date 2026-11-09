@@ -1,5 +1,6 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { ProviderTurnError, TRANSIENT_ERROR_CODES, type ProviderErrorCode } from "../core/turn-error.ts";
+import type { ProviderErrorInfo } from "./provider-capture.ts";
 
 const AUTH_TYPES = new Set(["authentication_error", "permission_error", "invalid_api_key"]);
 const TRANSIENT_TYPES = new Set(["overloaded_error", "api_error", "timeout_error"]);
@@ -7,6 +8,7 @@ const CONTEXT_CODES = new Set(["context_length_exceeded"]);
 const QUOTA_CODES = new Set(["insufficient_quota"]);
 const NOT_FOUND_CODES = new Set(["model_not_found"]);
 const RETRYABLE_CODES = new Set<ProviderErrorCode>([...TRANSIENT_ERROR_CODES, "unknown"]);
+const STOP_REASON_FAILURE_APIS = new Set(["anthropic-messages", "openai-completions", "bedrock-converse-stream"]);
 
 export interface ContextUsage {
   contextWindow?: number | undefined;
@@ -20,7 +22,12 @@ function nearWindow(usage: ContextUsage | undefined): boolean {
   return !!contextWindow && !!lastInputTokens && lastInputTokens >= contextWindow * NEAR_WINDOW_RATIO;
 }
 
-type ProviderFailure = Pick<AssistantMessage, "providerError" | "rawStopReason" | "errorMessage">;
+type ProviderFailure = Pick<AssistantMessage, "rawStopReason" | "errorMessage"> &
+  Partial<Pick<AssistantMessage, "api">> & { providerError?: ProviderErrorInfo };
+
+function providerStopped(failed: ProviderFailure): boolean {
+  return !!failed.rawStopReason && (!failed.api || STOP_REASON_FAILURE_APIS.has(failed.api));
+}
 
 function providerErrorCode(failed: ProviderFailure, usage?: ContextUsage): ProviderErrorCode {
   if (failed.rawStopReason === "refusal") return "refusal";
@@ -56,6 +63,6 @@ export function providerTurnError(failed: ProviderFailure, usage?: ContextUsage)
     ? `Model provider API error${type ? ` (${type})` : ""}: ${bodyMessage}`
     : raw || "The agent stopped with an error";
   const retryable =
-    RETRYABLE_CODES.has(code) && !(code === "unknown" && (status !== undefined || failed.rawStopReason));
+    RETRYABLE_CODES.has(code) && !(code === "unknown" && (status !== undefined || providerStopped(failed)));
   return new ProviderTurnError(message, { code, retryable, status, raw });
 }

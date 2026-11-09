@@ -108,7 +108,7 @@ test("company browser inference runs on the session route through the gateway", 
   assert.equal(result.model, model);
   assert.equal(result.choices[0]?.message.content, "done");
   assert.deepEqual(calls[0], {
-    url: "/v1/messages",
+    url: "/v1/messages?beta=true",
     auth: `Bearer ${key}`,
     model: "anthropic/claude-opus-5",
     context: {

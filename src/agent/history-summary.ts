@@ -39,8 +39,10 @@ export async function summarizeHistory(history: Item[], model: Model<Api>, strea
     "low",
     async (summaryModel, context, options) => {
       let sentCap: number | undefined;
+      const maxTokens = summaryModel.maxTokens > 0 ? summaryModel.maxTokens : undefined;
       const stream = await streamFn(summaryModel, context, {
         ...options,
+        ...(maxTokens ? { maxTokens } : {}),
         onPayload: async (payload, payloadModel) => {
           const transformed = options?.onPayload ? await options.onPayload(payload, payloadModel) : undefined;
           sentCap = outputCap(transformed === undefined ? payload : transformed);
@@ -52,7 +54,7 @@ export async function summarizeHistory(history: Item[], model: Model<Api>, strea
       if (result.stopReason === "length") {
         const reasoning = result.usage.reasoning ?? "not reported";
         throw new Error(
-          `Compaction did not complete (length): the summary hit the ${sentCap ?? options?.maxTokens}-token output limit (output tokens ${result.usage.output}, reasoning tokens ${reasoning})`,
+          `Compaction did not complete (length): the summary hit the ${sentCap ?? maxTokens}-token output limit (output tokens ${result.usage.output}, reasoning tokens ${reasoning})`,
         );
       }
       if (result.stopReason !== "stop") {

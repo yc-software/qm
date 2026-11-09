@@ -86,6 +86,8 @@ test("Opus 5.5 inherits adaptive thinking without off, with its own rates and li
   assert.deepEqual(model.thinkingLevelMap, { xhigh: "xhigh", max: "max", off: null });
   assert.deepEqual(model.compat, {
     forceAdaptiveThinking: true,
+    supportsMidConvoSystemMessages: true,
+    supportsMidConvoToolChanges: true,
     supportsTemperature: false,
     supportsStrictTools: true,
   });
