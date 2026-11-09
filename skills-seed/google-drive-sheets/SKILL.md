@@ -209,6 +209,28 @@ Other common requests in the same `requests[]` array: `deleteContentRange`
 `insertInlineImage`. Create a new doc with `POST https://docs.googleapis.com/v1/documents`
 and a `{"title":"..."}` body. Report the document id/link and what changed.
 
+Before writing, check that the connected account can edit the file. A `403` saying
+comment-only access isn't enough means the connected Google account is only a commenter,
+which is a sharing problem, not a connection problem:
+
+```bash
+curl -sS 'https://www.googleapis.com/drive/v3/about?fields=user(emailAddress)' \
+  -H "Authorization: Bearer $VAULT_TOKEN_WWW_GOOGLEAPIS_COM"
+curl -sS 'https://www.googleapis.com/drive/v3/files/DOCUMENT_ID?fields=capabilities(canEdit,canComment)&supportsAllDrives=true' \
+  -H "Authorization: Bearer $VAULT_TOKEN_WWW_GOOGLEAPIS_COM"
+```
+
+If `canEdit` is false, name the connected email and ask the user to share the file with it as
+Editor, or to reconnect as the account that can edit. If `canComment` is true, offer to post
+the text as a comment meanwhile (also a write, so get approval):
+
+```bash
+curl -sS -X POST 'https://www.googleapis.com/drive/v3/files/DOCUMENT_ID/comments?fields=id' \
+  -H "Authorization: Bearer $VAULT_TOKEN_WWW_GOOGLEAPIS_COM" \
+  -H 'content-type: application/json' \
+  --data '{"content":"Suggested text: ..."}'
+```
+
 ## Edit a Google Slides presentation
 
 Slides editing uses the Slides API (`slides.googleapis.com`). Read the deck to find slide

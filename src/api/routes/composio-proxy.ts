@@ -43,6 +43,36 @@ function toolkitsFor(url: URL): string[] {
     .map(([toolkit]) => toolkit);
 }
 
+const BASE_ROUTE_TTL_MS = 60 * 60_000;
+const baseRoutes = new Map<string, { route: readonly [host: string, pathPrefix: string] | null; expiresAt: number }>();
+
+async function baseRoute(
+  ctx: ApiCtx,
+  key: string,
+  toolkit: string,
+): Promise<readonly [host: string, pathPrefix: string] | null> {
+  const cached = baseRoutes.get(toolkit);
+  if (cached && cached.expiresAt > Date.now()) return cached.route;
+  const info = await request(ctx, key, `/toolkits/${encodeURIComponent(toolkit)}`).catch(() => null);
+  if (!info) return null;
+  let route: readonly [string, string] | null = null;
+  if (info.is_local_toolkit !== true && typeof info.base_url === "string" && !info.base_url.includes("{")) {
+    const base = URL.canParse(info.base_url) ? new URL(info.base_url) : null;
+    if (base && base.protocol === "https:" && !base.username && !base.password && !base.port && !base.search)
+      route = [base.hostname, base.pathname.replace(/\/+$/, "") + "/"];
+  }
+  baseRoutes.set(toolkit, { route, expiresAt: Date.now() + BASE_ROUTE_TTL_MS });
+  return route;
+}
+
+async function baseRouteReaches(ctx: ApiCtx, key: string, toolkit: string, url: URL): Promise<boolean> {
+  if (Object.hasOwn(APP_CONNECTION_ROUTES, toolkit)) return false;
+  const route = await baseRoute(ctx, key, toolkit);
+  if (!route) return false;
+  const [host, prefix] = route;
+  return url.hostname === host && (url.pathname + "/").startsWith(prefix);
+}
+
 function allowedSummary(): string {
   return Object.entries(APP_CONNECTION_ROUTES)
     .map(([toolkit, routes]) => `${toolkit}: ${routes.map(([host, prefix]) => `${host}${prefix ?? ""}`).join(", ")}`)
@@ -126,41 +156,46 @@ async function pickAccount(
   input: ProxyInput,
   toolkits: string[],
 ): Promise<string | null> {
+  const reaches = async (toolkit: string) =>
+    toolkits.length ? toolkits.includes(toolkit) : baseRouteReaches(ctx, access.key, toolkit, input.url);
+  const notAllowed = (message: string) => {
+    sendJson(ctx.res, 403, { error: "url_not_allowed", message });
+    return null;
+  };
   if (input.accountId) {
     const owned = await activeOwnedAccount(ctx, access, input.accountId);
     if (!owned) {
       sendJson(ctx.res, 403, { error: "connection_not_authorized" });
       return null;
     }
-    if (!toolkits.includes(owned.toolkit)) {
-      sendJson(ctx.res, 403, {
-        error: "url_not_allowed",
-        message: `A ${owned.toolkit} connection cannot call ${input.url.hostname}${input.url.pathname}.`,
-      });
-      return null;
-    }
+    if (!(await reaches(owned.toolkit)))
+      return notAllowed(`A ${owned.toolkit} connection cannot call ${input.url.hostname}${input.url.pathname}.`);
     return input.accountId;
   }
   const userIds = composioUserIds(access.principal);
   const query = new URLSearchParams({
     user_ids: userIds.join(","),
-    toolkit_slugs: toolkits.join(","),
+    ...(toolkits.length ? { toolkit_slugs: toolkits.join(",") } : {}),
     statuses: "ACTIVE",
     limit: "100",
   });
   const data = await request(ctx, access.key, `/connected_accounts?${query}`);
   if (!Array.isArray(data.items)) throw new Error("Invalid accounts");
-  const accounts = (data.items as Array<ComposioAccountRecord | null>)
-    .filter((item) => usableAccount(item, userIds))
-    .filter((item) => toolkits.includes(item.toolkit.slug));
+  const accounts: Array<ComposioAccountRecord & { id: string; toolkit: { slug: string } }> = [];
+  for (const item of data.items as Array<ComposioAccountRecord | null>)
+    if (usableAccount(item, userIds) && (await reaches(item.toolkit.slug))) accounts.push(item);
   if (accounts.length === 1) return accounts[0]!.id;
-  if (accounts.length === 0)
+  if (accounts.length === 0) {
+    if (!toolkits.length)
+      return notAllowed(
+        `No connected app's API covers ${input.url.hostname}${input.url.pathname}. Raw requests reach a connected app's own API base URL, or for these apps: ${allowedSummary()}. Connect the app (composio skill), or use /v1/composio/execute for apps without a REST base URL.`,
+      );
     sendJson(ctx.res, 409, {
       error: "not_connected",
       toolkits,
       message: `No active ${toolkits.join(" or ")} connection. Ask the user to connect it (composio skill), then retry.`,
     });
-  else
+  } else
     sendJson(ctx.res, 409, {
       error: "choose_account",
       accounts: accounts.map((item) => ({ id: item.id, toolkit: item.toolkit.slug })),
@@ -223,11 +258,6 @@ async function proxy(ctx: ApiCtx): Promise<void> {
   const input = parse(ctx.body);
   if (typeof input === "string") return sendJson(ctx.res, 400, { error: "invalid_request", message: input });
   const toolkits = toolkitsFor(input.url);
-  if (!toolkits.length)
-    return sendJson(ctx.res, 403, {
-      error: "url_not_allowed",
-      message: `Raw requests only reach a connected app's own API (${allowedSummary()}). For other apps use /v1/composio/execute.`,
-    });
   const mask = createExactSecretValueMasker([access.key]);
   const resource = `${input.method} ${input.url.hostname}${input.url.pathname}`;
   let account: string | null = null;
