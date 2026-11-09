@@ -1,27 +1,71 @@
+const READING_BLOCKS = ":is(p, h1, h2, h3, h4, h5, h6, pre, li, table, blockquote, summary)";
+
+interface ReadingAnchor {
+  element: HTMLElement;
+  text: string;
+  row: string;
+  offset: number;
+}
+
+function rowKey(element: HTMLElement): string {
+  return element.closest<HTMLElement>("[data-entry-seqs]")?.dataset.entrySeqs ?? "";
+}
+
+function readingAnchor(stack: HTMLElement, edge: number, origin: number, skip: string): ReadingAnchor | null {
+  for (const row of stack.querySelectorAll<HTMLElement>("[data-index]")) {
+    if (row.closest(skip) || row.getBoundingClientRect().bottom <= edge) continue;
+    const block = [...row.querySelectorAll<HTMLElement>(READING_BLOCKS)].find(
+      (node) => !node.closest(skip) && node.textContent?.trim() && node.getBoundingClientRect().bottom > edge,
+    );
+    const element = block ?? row;
+    return {
+      element,
+      text: block?.textContent?.slice(0, 160) ?? "",
+      row: rowKey(element),
+      offset: element.getBoundingClientRect().top - origin,
+    };
+  }
+  return null;
+}
+
+function locateAnchor(stack: HTMLElement, anchor: ReadingAnchor, origin: number): HTMLElement | null {
+  const { element, text, row } = anchor;
+  const same = (node: HTMLElement): boolean =>
+    (!text || !!node.textContent?.startsWith(text)) && (!row || rowKey(node) === row);
+  if (stack.contains(element) && same(element)) return element;
+  if (!text) return row ? stack.querySelector<HTMLElement>(`[data-entry-seqs="${row}"]`) : null;
+  const matches = [...stack.querySelectorAll<HTMLElement>(element.tagName)].filter(
+    (node) => node.textContent?.startsWith(text) && (!row || !rowKey(node) || rowKey(node) === row),
+  );
+  const distance = (node: HTMLElement): number => Math.abs(node.getBoundingClientRect().top - origin - anchor.offset);
+  return matches.find((node) => row && rowKey(node) === row) ?? matches.sort((a, b) => distance(a) - distance(b))[0] ?? null;
+}
+
 export function preserveTranscriptScroll(root: HTMLElement): () => void {
   const snapshots = [...root.querySelectorAll<HTMLElement>(".chat-scroll")]
     .filter((element) => element.clientHeight > 0)
     .map((element) => {
       const top = element.getBoundingClientRect().top;
-      const anchor = [
-        ...element.querySelectorAll<HTMLElement>(".message-stack :is(p, h1, h2, h3, h4, h5, h6, pre, li, table)"),
-      ].find((node) => !node.closest(".user-row") && node.getBoundingClientRect().bottom > top);
+      const stack = element.querySelector<HTMLElement>(".message-stack");
       return {
         element,
+        stack,
         scrollTop: element.scrollTop,
         bottom: element.scrollHeight - element.clientHeight - element.scrollTop <= 1,
-        anchor,
-        offset: anchor ? anchor.getBoundingClientRect().top - top : 0,
+        anchor: stack ? readingAnchor(stack, top, top, ".user-row") : null,
       };
     });
   return () => {
-    for (const snapshot of snapshots) {
-      const { element, anchor } = snapshot;
+    for (const { element, stack, scrollTop, bottom, anchor } of snapshots) {
       if (!root.contains(element) || element.clientHeight === 0) continue;
-      if (snapshot.bottom) element.scrollTop = element.scrollHeight;
-      else if (anchor && element.contains(anchor))
-        element.scrollTop += anchor.getBoundingClientRect().top - element.getBoundingClientRect().top - snapshot.offset;
-      else element.scrollTop = snapshot.scrollTop;
+      if (bottom) {
+        element.scrollTop = element.scrollHeight;
+        continue;
+      }
+      const top = element.getBoundingClientRect().top;
+      const found = anchor && stack && element.contains(stack) ? locateAnchor(stack, anchor, top) : null;
+      if (found && anchor) element.scrollTop += found.getBoundingClientRect().top - top - anchor.offset;
+      else element.scrollTop = scrollTop;
     }
   };
 }
@@ -54,11 +98,13 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
   let geometryDistance: number | null = null;
   let filledAtSize: number | null = null;
   let heldStack: HTMLElement | null = null;
+  let anchor: ReadingAnchor | null = null;
+  let below = 0;
   const contentUpdates = new Set<Promise<void>>();
 
   function setFollowing(value: boolean): void {
     following = value;
-    if (scroller) scroller.style.overflowAnchor = value ? "none" : "";
+    if (value) anchor = null;
     syncAway();
   }
 
@@ -70,7 +116,7 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
   }
 
   function holdHeight(): void {
-    if (!following || !stack || heldStack) return;
+    if (!stack || heldStack) return;
     heldStack = stack;
     heldStack.style.minHeight = `${heldStack.getBoundingClientRect().height}px`;
   }
@@ -123,10 +169,46 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
     syncSticky();
   }
 
+  function distanceToBottom(): number {
+    return scroller ? scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop : 0;
+  }
+
   function syncAway(): void {
     if (!scroller) return;
-    const away = !following && scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop > AWAY_FROM_BOTTOM;
+    const away = !following && distanceToBottom() > AWAY_FROM_BOTTOM;
     scroller.toggleAttribute("data-away-from-bottom", away);
+    if (!away) scroller.removeAttribute("data-new-below");
+  }
+
+  function readingEdges(): { origin: number; edge: number } {
+    const origin = scroller!.getBoundingClientRect().top + scroller!.clientTop;
+    const stuck = prompt?.classList.contains("stuck") ? prompt.getBoundingClientRect().bottom : 0;
+    return { origin, edge: Math.max(origin + (pins?.getBoundingClientRect().height ?? 0), stuck) };
+  }
+
+  function captureAnchor(): void {
+    if (!scroller || !stack || following) return;
+    const { origin, edge } = readingEdges();
+    anchor = readingAnchor(stack, edge, origin, ".latest-prompt.stuck");
+    below = distanceToBottom();
+  }
+
+  function restoreAnchor(): void {
+    if (!scroller || !stack || following || contentUpdates.size > 0) return;
+    if (!anchor || scroller.scrollTop !== lastTop) return captureAnchor();
+    const { origin } = readingEdges();
+    const element = locateAnchor(stack, anchor, origin);
+    if (!element) return captureAnchor();
+    anchor.element = element;
+    const shift = element.getBoundingClientRect().top - origin - anchor.offset;
+    if (Math.abs(shift) >= 0.5) {
+      scroller.scrollTop += shift;
+      lastTop = scroller.scrollTop;
+    }
+    const distance = distanceToBottom();
+    if (distance > below + 1 && scroller.hasAttribute("data-away-from-bottom"))
+      scroller.setAttribute("data-new-below", "");
+    below = distance;
   }
 
   function syncSticky(): void {
@@ -266,6 +348,7 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
     lastTop = scroller.scrollTop;
     syncSticky();
     if (resumeFollowing) setFollowing(true);
+    else captureAnchor();
     if (movingUp) loadEarlier();
   }
 
@@ -291,10 +374,14 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
     button.click();
   }
 
-  function beforeRender(): void {
-    if (!scroller || contentUpdates.size > 0) return;
+  function catchUpScroll(): boolean {
+    if (!scroller || contentUpdates.size > 0) return false;
     if (scroller.scrollTop !== lastTop) onScroll();
-    holdHeight();
+    return true;
+  }
+
+  function beforeRender(): void {
+    if (catchUpScroll()) holdHeight();
   }
 
   function onContentUpdating(event: Event): void {
@@ -308,11 +395,24 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
   }
 
   function afterRender(): void {
-    if (!scroller || !following || contentUpdates.size > 0) return;
+    if (!scroller || contentUpdates.size > 0) return;
+    if (!following) return settle();
     lastTop = scroller.scrollTop;
     if (frame !== null) cancelAnimationFrame(frame);
     frame = null;
     follow();
+  }
+
+  function settle(): void {
+    if (frame !== null) return;
+    const element = scroller;
+    frame = requestAnimationFrame(() => {
+      frame = null;
+      if (element !== scroller || following || contentUpdates.size > 0) return;
+      releaseHeight();
+      restoreAnchor();
+      syncSticky();
+    });
   }
 
   function onWheel(event: WheelEvent): void {
@@ -342,11 +442,13 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
     scroller?.style.removeProperty("--chat-sticky-top");
     scroller?.style.removeProperty("overflow-anchor");
     scroller?.removeAttribute("data-away-from-bottom");
+    scroller?.removeAttribute("data-new-below");
     releaseHeight();
     clearPrompt();
     scroller = pins = prompt = stack = content = null;
     lastTop = 0;
     following = false;
+    anchor = null;
     filledAtSize = null;
     contentUpdates.clear();
   }
@@ -358,6 +460,7 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
       dispose();
       scroller = element;
       lastTop = scroller?.scrollTop ?? 0;
+      scroller?.style.setProperty("overflow-anchor", "none");
       setFollowing(false);
       scroller?.addEventListener("qm-content-updating", onContentUpdating);
       scroller?.addEventListener("scroll", onScroll, { passive: true });
@@ -367,7 +470,8 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
       if (typeof ResizeObserver !== "undefined") {
         observer = new ResizeObserver((entries = []) => {
           if (entries.some((entry) => entry.target === scroller) || contentChanged()) remeasure = true;
-          beforeRender();
+          restoreAnchor();
+          if (catchUpScroll() && following) holdHeight();
           syncSticky();
           follow();
           fillViewport();
