@@ -141,6 +141,31 @@ export async function resolveSandbox(opts: {
     return { backend: "agent37", env, detail: "Agent37 (api.agent37.com)", publicApiUrl: apiUrl, warnings };
   }
 
+  if (backend === "baseten") {
+    const apiKey = opts.baseEnv.BASETEN_API_KEY?.trim();
+    const image = opts.baseEnv.BASETEN_SANDBOX_IMAGE?.trim();
+    if (!apiKey || !image)
+      throw new Error(
+        "--sandbox baseten requires BASETEN_API_KEY and BASETEN_SANDBOX_IMAGE in the environment (build the image with scripts/build-baseten-sandbox-image.ts)",
+      );
+    let apiUrl = opts.baseEnv.PUBLIC_API_URL || null;
+    if (!apiUrl) {
+      apiUrl = await startQuickTunnel(opts.corePort, opts.lock, opts.log);
+      if (!apiUrl)
+        warnings.push(
+          "cloudflared tunnel didn't come up -- agent self-API (crons/sends) won't be reachable from the sandbox",
+        );
+    }
+    const env: Record<string, string> = {
+      SANDBOX_BACKEND: "baseten",
+      BASETEN_API_KEY: apiKey,
+      BASETEN_SANDBOX_IMAGE: image,
+      BASETEN_SANDBOX_NAME_PREFIX: opts.baseEnv.BASETEN_SANDBOX_NAME_PREFIX || "qmdev",
+    };
+    if (apiUrl) env.PUBLIC_API_URL = apiUrl;
+    return { backend: "baseten", env, detail: "Baseten Sandboxes (api.baseten.co)", publicApiUrl: apiUrl, warnings };
+  }
+
   if (backend === "superserve") {
     const apiKey = opts.baseEnv.SUPERSERVE_API_KEY?.trim();
     const template = opts.baseEnv.SUPERSERVE_TEMPLATE?.trim();

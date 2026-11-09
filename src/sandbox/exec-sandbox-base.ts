@@ -19,27 +19,28 @@ const PREP_TIMEOUT_SEC = 60;
 const MAX_SANDBOX_NAME = 63;
 const HASH_LEN = 6;
 
-export const sandboxScopeName = (prefix: string, id: string): string => {
+export const sandboxScopeName = (prefix: string, id: string, maxLength = MAX_SANDBOX_NAME): string => {
   const cleaned = id
     .toLowerCase()
     .replace(/[^a-z0-9-]+/g, "-")
     .replace(/^-+|-+$/g, "");
   const name = `${prefix}-${cleaned.slice(0, 40).replace(/-+$/, "") || "scope"}-${shortHash(id)}`;
   // Names that already fit are kept byte-for-byte so existing computers stay addressable.
-  if (name.length <= MAX_SANDBOX_NAME) return name;
+  if (name.length <= maxLength) return name;
   // Over budget (long deployment prefix, or prefix + "-scratch"): shorten the readable parts and
   // hash the full untruncated name so distinct prefixes/ids still map to distinct names.
   const hash = shortHash(name);
-  const slugBudget = MAX_SANDBOX_NAME - prefix.length - HASH_LEN - 2;
+  const slugBudget = maxLength - prefix.length - HASH_LEN - 2;
   const slug = slugBudget > 0 ? cleaned.slice(0, slugBudget).replace(/-+$/, "") : "";
   if (slug) return `${prefix}-${slug}-${hash}`;
-  const head = prefix.slice(0, MAX_SANDBOX_NAME - HASH_LEN - 1).replace(/-+$/, "");
+  const head = prefix.slice(0, maxLength - HASH_LEN - 1).replace(/-+$/, "");
   return head ? `${head}-${hash}` : hash;
 };
 
 export interface ExecSandboxBaseDeps {
   label: string;
   prefix: string;
+  maxNameLength?: number;
   homeDir: string;
   defaultTimeoutSec: number;
   credentialPaths: CredentialPathSpec[];
@@ -84,7 +85,7 @@ export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBas
   const activeScratch = new Map<string, number>();
 
   async function ensureScratch(key: string): Promise<{ name: string; coldStart: boolean }> {
-    const name = sandboxScopeName(`${prefix}-scratch`, key);
+    const name = sandboxScopeName(`${prefix}-scratch`, key, deps.maxNameLength);
     return provisionQueue(`scratch:${key}`, async () => {
       scratchKeyByName.set(name, key);
       const active = activeScratch.get(name) ?? 0;
@@ -160,7 +161,7 @@ export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBas
     if (scratch) {
       ({ name, coldStart } = await ensureScratch(scratch.key));
     } else {
-      name = sandboxScopeName(prefix, scope);
+      name = sandboxScopeName(prefix, scope, deps.maxNameLength);
       scopeByName.set(name, scope);
       ({ coldStart } = await provisionQueue(scope, () => deps.ensureResident(name, provOpts?.onStatus)));
     }

@@ -26,6 +26,7 @@ export type SandboxBackendName =
   | "modal"
   | "porter"
   | "agent37"
+  | "baseten"
   | "superserve"
   | "do-managed-agents"
   | "render";
