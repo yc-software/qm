@@ -75,9 +75,10 @@ test("a preflight from an unlisted origin, or for a route outside the chat API, 
 });
 
 test("an allowlisted origin can POST a turn with the session cookie, and can read the answer", async () => {
+  const cookie = sessionCookie("U1");
   const r = await fetch(`${base}/api/turn`, {
     method: "POST",
-    headers: { cookie: sessionCookie("U1"), origin: EMBEDDER, "content-type": "application/json" },
+    headers: { cookie, origin: EMBEDDER, "content-type": "application/json" },
     body: JSON.stringify({ text: "hi" }),
   });
   assert.equal(r.status, 200);
@@ -88,7 +89,7 @@ test("an allowlisted origin can POST a turn with the session cookie, and can rea
   assert.equal(hit.lane, "shell");
   assert.equal(hit.url, "/api/turn");
   assert.equal(hit.body, JSON.stringify({ text: "hi" }));
-  assert.equal(hit.cookie, sessionCookie("U1"));
+  assert.equal(hit.cookie, cookie);
 });
 
 test("Vary: Origin is sent on chat routes whatever the origin", async () => {
