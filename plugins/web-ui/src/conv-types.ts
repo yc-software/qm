@@ -146,7 +146,7 @@ export interface ComposerSurface {
   state: ComposerState;
   composerForm(agent: Agent, header?: TemplateResult | typeof nothing): TemplateResult;
   queuedStrip(agent: Agent): TemplateResult | typeof import("lit").nothing;
-  waitingSteers(agent: Agent): QueuedRun[];
+  waitingSteers(agent: Agent): Array<QueuedRun & { attachments?: Attachment[] }>;
   queuedRunsFor(threadRef: string | null): QueuedRun[];
   setQueuedRuns(threadRef: string, runs: QueuedRun[]): void;
   resetComposer(): void;

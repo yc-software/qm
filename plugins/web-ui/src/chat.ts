@@ -3302,11 +3302,13 @@ export function createChatSurface(
       (q) =>
         html`<div class="inline-steer waiting-steer" aria-busy="true">
           ${chatMessage(
-            {
-              role: "user",
-              content: q.text || (q.hasAttachments ? "(files)" : ""),
-              steered: true,
-            } as unknown as AgentMessage,
+            (q.attachments?.length
+              ? { role: "user-with-attachments", content: q.text, attachments: q.attachments, steered: true }
+              : {
+                  role: "user",
+                  content: q.text || (q.hasAttachments ? "(files)" : ""),
+                  steered: true,
+                }) as unknown as AgentMessage,
             -1,
             false,
             true,
