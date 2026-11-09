@@ -2,16 +2,30 @@ export interface TranscriptMessage {
   ts: string;
   at: number;
   author: string;
+  authorId?: string;
+  authorDetail?: string;
   owner: boolean;
   text: string;
+  images?: string[];
   attachments?: number;
+  reply?: { messageId: string; rfcMessageId?: string; to: string[]; cc: string[] };
+}
+
+export interface Participant {
+  id: string;
+  name: string;
+  avatarUrl?: string;
 }
 
 export interface Conversation {
   source: "slack" | "gmail";
   label: string;
+  externalUrl?: string;
   rootTs?: string;
   messages: TranscriptMessage[];
+  participants?: Participant[];
+  slack?: { channelId: string; threadTs?: string; isDirectMessage: boolean; channelLabel: string };
+  gmail?: { threadId: string; subject?: string; accountEmail?: string };
 }
 
 export const TRANSCRIPT_TAIL = 30;
@@ -31,9 +45,9 @@ export function transcriptWindow(conversation: Conversation, tail = TRANSCRIPT_T
   return root && !window.includes(root) ? [root, ...window] : window;
 }
 
-function clipMarked(text: string): string {
-  if (text.length <= MESSAGE_CHARS) return text;
-  return `${text.slice(0, MESSAGE_CHARS)} [cut ${text.length - MESSAGE_CHARS} chars]`;
+function clipMarked(text: string, max = MESSAGE_CHARS): string {
+  if (text.length <= max) return text;
+  return `${text.slice(0, max)} [cut ${text.length - max} chars]`;
 }
 
 export function renderTranscript(messages: readonly TranscriptMessage[]): string {

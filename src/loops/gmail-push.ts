@@ -1,6 +1,6 @@
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import type { ConnectorTokenSource } from "./sources/adapter.ts";
-import { conversationEvent, type IngressEntry } from "./ingress.ts";
+import { conversationChanged, type IngressEntry } from "./ingress.ts";
 import { GmailApiError, gmailApi } from "../connectors/gmail-api.ts";
 
 export interface GmailPushConfig {
@@ -88,12 +88,7 @@ export function createGmailPushClient(tokens: ConnectorTokenSource, config: Gmai
           const at = Number(message.internalDate);
           if (!message.threadId || !Number.isFinite(at)) throw new Error("Gmail returned invalid message metadata");
           if (sent) {
-            await ingest([
-              conversationEvent(
-                { loopId, sourceKey: message.threadId, source: "gmail" },
-                { author: "owner", at, ...(message.snippet ? { text: message.snippet } : {}) },
-              ),
-            ]);
+            await ingest([conversationChanged({ loopId, sourceKey: message.threadId, source: "gmail" }, at)]);
             continue;
           }
           await ingest([

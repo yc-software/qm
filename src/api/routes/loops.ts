@@ -362,11 +362,6 @@ async function getLoop(ctx: ApiCtx): Promise<void> {
         ? {
             ...item,
             ...(item.sourcePayload ? { sourcePayload: agentSourcePayload(item.sourcePayload, item.source) } : {}),
-            ...(item.inboxPreview
-              ? {
-                  inboxPreview: agentSourcePayload(item.inboxPreview, item.source),
-                }
-              : {}),
           }
         : item,
     ),

@@ -20,10 +20,9 @@ export interface Verdict {
   state: LoopVerdictState;
   reason: string;
   waitingTs: string | null;
-  draft: string | null;
 }
 
-export type ParsedVerdict = { ok: true; verdict: Omit<Verdict, "draft"> } | { ok: false; error: string };
+export type ParsedVerdict = { ok: true; verdict: Verdict } | { ok: false; error: string };
 
 const STATES: readonly LoopVerdictState[] = ["needs_reply", "resolved", "noise"];
 const REASON_CHARS = 300;
@@ -126,7 +125,7 @@ function parseDraft(reply: string | undefined): string {
   return draft.trim();
 }
 
-export async function runVerdict(model: VerdictModel, input: VerdictInput): Promise<Omit<Verdict, "draft">> {
+export async function runVerdict(model: VerdictModel, input: VerdictInput): Promise<Verdict> {
   const parsed = parseVerdict(await model.verdict(VERDICT_PROMPT, renderVerdictPrompt(input)));
   if (!parsed.ok) throw new Error(parsed.error);
   return parsed.verdict;

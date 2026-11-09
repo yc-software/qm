@@ -3,6 +3,7 @@ import type {
   LoopItem,
   LoopItemPriority,
   LoopItemTriage,
+  LoopItemVerdict,
   LoopProposal,
   LoopSourcePayload,
   LoopThreadMessage,
@@ -71,6 +72,7 @@ export interface LedgerItemView {
   actionKind?: string;
   actionResult?: string;
   triage?: LoopItemTriage;
+  verdict?: LoopItemVerdict;
   outputIds: string[];
   createdAt: number;
   updatedAt: number;
@@ -79,7 +81,6 @@ export interface LedgerItemView {
 export function agentSourcePayload(payload: LoopSourcePayload, source?: string): LoopSourcePayload {
   if (source !== "slack") return payload;
   const result = { ...payload };
-  delete result.slackAvatarsRefreshAt;
   for (const key of ["participants", "context"]) {
     if (Array.isArray(result[key]))
       result[key] = result[key].map((entry: unknown) => {
@@ -115,6 +116,7 @@ export function ledgerItemView(item: LoopItem, loop: Pick<Loop, "triage">, forAg
     ...(item.actionKind !== undefined ? { actionKind: item.actionKind } : {}),
     ...(item.actionResult !== undefined ? { actionResult: item.actionResult } : {}),
     ...(triage ? { triage } : {}),
+    ...(item.verdict ? { verdict: item.verdict } : {}),
   };
 }
 
