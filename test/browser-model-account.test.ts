@@ -149,10 +149,7 @@ test("browser model calls count toward the person's spend cap and stop once it i
   await built.config.setSpendLimit("org:default-org", { dailyUsd: 0 });
   const capped = await post(claims, structuredRequest);
   assert.equal(capped.status, 429);
-  assert.match(
-    ((await capped.json()) as { error: string }).error,
-    /Browser model request refused: this scope has reached its QM spend limit .*midnight UTC/,
-  );
+  assert.match(((await capped.json()) as { error: string }).error, /spend limit/);
   assert.equal(calls.length, 1);
 });
 

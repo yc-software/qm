@@ -119,9 +119,10 @@ function usageParts(s: SpendLimitStatus): string[] {
   ];
 }
 
+const resets = (s: SpendLimitStatus): string => (s.over === "daily" ? "at midnight UTC" : "on the 1st (UTC)");
+
 export function spendLimitRefusal(s: SpendLimitStatus): string {
-  const resets = s.over === "daily" ? "at midnight UTC" : "on the 1st (UTC)";
-  return `This has reached its QM spend limit (${usageParts(s).join(", ")}), so I can't run until it resets ${resets}. An admin can raise the limit.`;
+  return `This has reached its QM spend limit (${usageParts(s).join(", ")}), so I can't run until it resets ${resets(s)}. An admin can raise the limit.`;
 }
 
 export function spendLimitNote(s: SpendLimitStatus): string {
@@ -130,6 +131,5 @@ export function spendLimitNote(s: SpendLimitStatus): string {
 }
 
 export function spendLimitBlock(s: SpendLimitStatus, what: string): string {
-  const resets = s.over === "daily" ? "at midnight UTC" : "on the 1st (UTC)";
-  return `${what} refused: this scope has reached its QM spend limit (${usageParts(s).join(", ")}) and resets ${resets}. Tell the person; an admin can raise the limit.`;
+  return `${what} refused: this scope has reached its QM spend limit (${usageParts(s).join(", ")}) and resets ${resets(s)}. Tell the person; an admin can raise the limit.`;
 }

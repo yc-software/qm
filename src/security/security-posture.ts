@@ -63,6 +63,7 @@ ${SECURITY_SCREEN_OUTPUT_CONTRACT}`;
  * turn's step sequence, so they are stamped with this sentinel.
  */
 export const SECURITY_SCREEN_STEP = -1;
+export const BROWSER_MODEL_STEP = -2;
 
 export interface SecurityScreenVerdict {
   decision: "auto" | "strict";

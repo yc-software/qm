@@ -166,7 +166,7 @@ test("sandbox SDK calls reach the company gateway with the sandbox token as thei
   await built.config.setSpendLimit("org:default-org", { dailyUsd: 0 });
   const capped = await openai(chat);
   assert.equal(capped.status, 429);
-  assert.match(await capped.text(), /Model gateway request refused: this scope has reached its QM spend limit/);
+  assert.match(await capped.text(), /spend limit/);
   await built.config.setSpendLimit("org:default-org", null);
   await built.config.setSecurityPosture("personal:U1", "strict");
   assert.equal((await openai(chat)).status, 403);

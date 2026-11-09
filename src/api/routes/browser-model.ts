@@ -5,9 +5,8 @@ import { routeLabel } from "../../model/model-route.ts";
 import { errMessage, reportFailure, reportFailureAs } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
 import { spendLimitBlock } from "../../ratelimit/spend-limits.ts";
+import { BROWSER_MODEL_STEP } from "../../security/security-posture.ts";
 import type { ApiCtx, Route } from "./route.ts";
-
-const BROWSER_MODEL_STEP = -2;
 
 const REQUEST_FIELDS = new Set([
   "model",
