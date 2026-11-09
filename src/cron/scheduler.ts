@@ -284,7 +284,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         status: result.status ?? "ok",
         ...(result.note ? { note: truncate(result.note, CRON_FIRE_REPLY_MAX_CHARS) } : {}),
       });
-      if (isOneShotSchedule(cron.schedule)) await deps.crons.setEnabled(cron.id, false);
+      if (isOneShotSchedule(cron.schedule)) await deps.crons.retireOneShot(cron.id, cron.schedule);
       return { authzFailed: false };
     }
     const previous = (await deps.crons.listFires(cron.id, { limit: 2 })).runs
@@ -369,7 +369,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     if (outcome.ownerLeft) await (deps.deleteCron ? deps.deleteCron(cron.id) : deps.crons.delete(cron.id));
     else if (outcome.authzFailed) await deps.crons.setEnabled(cron.id, false);
     if (outcome.authzFailed) return { authzFailed: true };
-    if (isOneShotSchedule(cron.schedule)) await deps.crons.setEnabled(cron.id, false);
+    if (isOneShotSchedule(cron.schedule)) await deps.crons.retireOneShot(cron.id, cron.schedule);
     return { authzFailed: false };
   }
 
@@ -443,7 +443,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         await withCronLifecycle(cron.id, true, async () => {
           if (stopped || observed !== epoch) return;
           const { authzFailed } = await fire(cron, t, `cron:${cron.id}:${cron.scheduledAt}`, cron.scheduledAt);
-          if (!authzFailed) await deps.crons.markFired(cron.id, t, cron.scheduledAt);
+          if (!authzFailed) await deps.crons.markFired(cron.id, t, cron.scheduledAt, cron.schedule);
         });
       } catch (e) {
         reportFailure("scheduler: fire", e);

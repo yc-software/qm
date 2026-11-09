@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import type { Destination } from "../types.ts";
 import type { Cron, CronFireLogEntry, CronFireNote, CronSchedule, CronScript } from "../triggers/types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
@@ -70,7 +71,8 @@ export interface CronStore {
   firesByThreadRefs(threadRefs: readonly string[]): Promise<CronFireRecord[]>;
   latestFireForThread(id: string, threadRef: string): Promise<CronFireLogEntry | undefined>;
   setFireNote(id: string, note: CronFireNote): Promise<"applied" | "superseded" | "missing">;
-  markFired(id: string, at: number, scheduledAt?: number): Promise<void>;
+  markFired(id: string, at: number, scheduledAt?: number, firedSchedule?: CronSchedule): Promise<void>;
+  retireOneShot(id: string, firedSchedule: CronSchedule): Promise<void>;
   markAttempted(id: string, at: number): Promise<void>;
   defer(id: string, until: number): Promise<void>;
   claimSlot(id: string, scheduledAt: number, at: number): Promise<boolean>;
@@ -200,15 +202,18 @@ export function createCronStore(
       if ((await backing.update(id, apply)) === null) return "missing";
       return applied ? "applied" : "superseded";
     },
-    async markFired(id, at, scheduledAt) {
-      const cron = await backing.get(id);
-      if (!cron) return;
-      const advanceFrom = isCalendarSchedule(cron.schedule) ? (scheduledAt ?? at) : at;
-      await backing.merge(id, {
-        lastFiredAt: at,
-        nextFireAt: advanceNextFireAt(cron.schedule, advanceFrom),
-        deferUntil: undefined,
+    async markFired(id, at, scheduledAt, firedSchedule) {
+      await backing.update(id, (cron) => {
+        if (firedSchedule && !isDeepStrictEqual(cron.schedule, firedSchedule)) return cron;
+        const advanceFrom = isCalendarSchedule(cron.schedule) ? (scheduledAt ?? at) : at;
+        const { deferUntil: _cleared, ...rest } = cron;
+        return { ...rest, lastFiredAt: at, nextFireAt: advanceNextFireAt(cron.schedule, advanceFrom) };
       });
+    },
+    async retireOneShot(id, firedSchedule) {
+      await backing.update(id, (cron) =>
+        isDeepStrictEqual(cron.schedule, firedSchedule) ? { ...cron, enabled: false } : cron,
+      );
     },
     async claimSlot(id, scheduledAt, at) {
       let claimed = false;

@@ -114,6 +114,20 @@ test("a one-shot cron (no everyMs) fires once at firstFireAt and never again", a
   assert.deepEqual(ids(await store.due(9_999_999_999)), []);
 });
 
+test("a one-shot rescheduled during its own fire keeps the new schedule when the fire ends", async () => {
+  const store = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const cron = await store.create({ ...base, schedule: { firstFireAt: 5_000_000 } });
+  await store.update(cron.id, { schedule: { firstFireAt: 8_000_000 }, enabled: true });
+  await store.retireOneShot(cron.id, cron.schedule);
+  await store.markFired(cron.id, 5_000_000, 5_000_000, cron.schedule);
+  const after = (await store.get(cron.id))!;
+  assert.equal(after.enabled, true);
+  assert.equal(after.nextFireAt, 8_000_000);
+  assert.deepEqual(ids(await store.due(8_000_000)), [cron.id]);
+  await store.retireOneShot(cron.id, after.schedule);
+  assert.equal((await store.get(cron.id))?.enabled, false);
+});
+
 test("old persisted interval rows without nextFireAt still recover their due cursor", async () => {
   const backing = testMap<Cron>();
   await backing.put("old", {
