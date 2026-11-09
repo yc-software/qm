@@ -2,7 +2,7 @@ import { approvalCardId, toolCallApprovalKey } from "../../core/approval-id.ts";
 import { canonicalJson } from "../../../cli/src/canonical-json.ts";
 import { type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { tracePhase } from "../../../plugins/chassis/src/error-reporting.ts";
+import { startPhase, tracePhase } from "../../../plugins/chassis/src/error-reporting.ts";
 import { errMessage, reportFailure, swallow, swallowAs } from "../../util/errors.ts";
 import { redactCommand } from "../../sandbox/exec-process-session.ts";
 import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
@@ -211,11 +211,38 @@ export function withToolApprovalGate(
   } as ToolDefinition;
 }
 
+export function startToolStep(ref: ToolContextRef): void {
+  ref.toolStep = true;
+  openGap(ref);
+}
+
+export function endToolStep(ref: ToolContextRef): void {
+  ref.toolStep = false;
+  closeGap(ref);
+}
+
+function openGap(ref: ToolContextRef): void {
+  ref.stepPhase ??= startPhase("step.gap", { "qm.step": ref.modelCalls ?? 0 });
+}
+
+function closeGap(ref: ToolContextRef): void {
+  ref.stepPhase?.end();
+  ref.stepPhase = undefined;
+}
+
 export function withToolSpan(tool: ToolDefinition, ref: ToolContextRef): ToolDefinition {
   return {
     ...tool,
-    execute: (...args: Parameters<ToolDefinition["execute"]>) =>
-      tracePhase("step.tool", () => tool.execute(...args), { name: tool.name, parent: ref.stepPhase }),
+    async execute(...args: Parameters<ToolDefinition["execute"]>) {
+      if (!ref.toolsRunning) closeGap(ref);
+      ref.toolsRunning = (ref.toolsRunning ?? 0) + 1;
+      try {
+        return await tracePhase("step.tool", () => tool.execute(...args), { name: tool.name });
+      } finally {
+        ref.toolsRunning -= 1;
+        if (!ref.toolsRunning && ref.toolStep) openGap(ref);
+      }
+    },
   } as ToolDefinition;
 }
 
