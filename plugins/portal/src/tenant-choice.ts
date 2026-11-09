@@ -22,6 +22,7 @@ export interface VerifiedSignIn {
 
 export interface TrustedSignIn {
   sub: string;
+  subject: string;
   name: string;
 }
 
@@ -359,7 +360,7 @@ export function createTenantChoice(deps: TenantChoiceDeps) {
       email: identity.email,
       principal: identity.sub,
     });
-    const who = { sub: identity.sub, name: identity.name };
+    const who = { sub: identity.sub, subject: identity.subject, name: identity.name };
     const pin = identity.tenant ?? (await deps.pin(identity.returnTo));
     if (found.shared && !found.tenants.length)
       return deps.sendHtml(res, 403, pin === undefined ? deps.noWorkspaceHtml(identity.email) : noAccessHtml());

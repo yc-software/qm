@@ -1420,19 +1420,6 @@ async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL):
   setSession(res, [clearCookie("portal_trusted_tmp", "/auth/trusted", SECURE_COOKIES)]);
   try {
     const identity = await trustedEntry.finish(readCookie(req.headers.cookie, "portal_trusted_tmp"), url, workspaceFor);
-    if (trustedAdminEnabled) {
-      await provisionTrustedAdmin(
-        {
-          core: CORE,
-          signingSecret: CORE_SIGNING_SECRET!,
-          identitySecret: PORTAL_IDENTITY_SECRET!,
-          org: ORG,
-          issuer: trustedOidc!.issuer,
-        },
-        identity.subject,
-      );
-      adminCache.delete(identity.sub);
-    }
     await tenantChoice.settleTrusted(req, res, identity);
   } catch (error) {
     console.warn(`[portal] trusted sign-in failed: ${errMessage(error)}`);
@@ -1613,6 +1600,20 @@ async function finishTrustedSignIn(
   returnTo: string,
   tenant?: string,
 ): Promise<void> {
+  if (trustedAdminEnabled) {
+    await provisionTrustedAdmin(
+      {
+        core: CORE,
+        signingSecret: CORE_SIGNING_SECRET!,
+        identitySecret: PORTAL_IDENTITY_SECRET!,
+        org: ORG,
+        issuer: trustedOidc!.issuer,
+      },
+      who.subject,
+      tenant,
+    );
+    adminCache.delete(who.sub);
+  }
   await signedInNames.record(who.sub, who.name, tenant);
   setAuthenticatedSession(res, who.sub, who.name, false, tenant);
   res.writeHead(302, { location: sanitizeReturnTo(returnTo, PUBLIC_URL, APPS_DOMAIN), "cache-control": "no-store" });

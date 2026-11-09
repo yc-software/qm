@@ -1,10 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { CompactSign } from "jose";
 import { signedHeaders, withSourceAuthNonce } from "../../chassis/src/core-client.ts";
+import { trustedPrincipal } from "./trusted-entry.ts";
+import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 
 export async function provisionTrustedAdmin(
   config: { core: string; signingSecret: string; identitySecret: string; org: string; issuer: string },
   subject: string,
+  tenant?: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<void> {
   const claims = {
@@ -22,7 +25,17 @@ export async function provisionTrustedAdmin(
   const body = JSON.stringify({ assertion });
   const response = await fetchImpl(`${config.core}${path}`, {
     method: "POST",
-    headers: signedHeaders(config.signingSecret, "POST", path, body),
+    headers: {
+      ...signedHeaders(config.signingSecret, "POST", path, body),
+      ...(tenant
+        ? {
+            [PORTAL_IDENTITY_HEADER]: mintPortalIdentity(
+              { p: trustedPrincipal(config.issuer, subject), t: tenant, exp: Date.now() + 60_000 },
+              config.identitySecret,
+            ),
+          }
+        : {}),
+    },
     body,
     signal: AbortSignal.timeout(5_000),
   });

@@ -8,7 +8,7 @@ import { externalMemberActive, validEmail } from "../../identity/external-member
 import { isObj, authorizeAdmin, orgScope, audit, activePrincipal } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 import { inTenant } from "../../tenants/claim.ts";
-import { tenantAllowsEmail } from "../../tenants/settings.ts";
+import { tenantAllowsEmail, tenantSettings } from "../../tenants/settings.ts";
 import { boundTenant } from "../../tenants/context.ts";
 import { bootTenant } from "../../tenants/boot.ts";
 import { labelOfAppHost, splitAppLabel } from "../../tenants/app-handle.ts";
@@ -207,7 +207,7 @@ async function brokerSession(ctx: ApiCtx): Promise<void> {
 
 async function trustedAdmin(ctx: ApiCtx): Promise<void> {
   const { deps, res, body } = ctx;
-  if (!boundTenant()) {
+  if (!boundTenant() || (multitenant() && tenantSettings().trustedOidcAdmin !== true)) {
     res.writeHead(204);
     return void res.end();
   }

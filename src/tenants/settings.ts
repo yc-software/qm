@@ -39,6 +39,7 @@ export const tenantSettingsSchema = z
     sandboxBackend,
     sandboxScopeBackends: z.partialRecord(z.enum(SCOPE_KINDS), sandboxBackend),
     serving: z.boolean(),
+    trustedOidcAdmin: z.boolean(),
   })
   .partial()
   .strict();

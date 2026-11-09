@@ -17,15 +17,18 @@ import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { withoutTenant } from "../src/tenants/context.ts";
 import { bindBootTenant } from "../src/tenants/boot.ts";
+import { inTenant } from "../src/tenants/claim.ts";
+import { twoTenants } from "./support/two-tenants.ts";
 
 const signingSecret = "core-test-secret".repeat(3);
 const identitySecret = "portal-test-secret".repeat(3);
 const issuer = "https://identity.example.test";
-function start(enabled = true) {
+function start(enabled = true, databaseUrl?: string) {
   const built = buildApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "trusted-admin-")),
       orgId: "default-org",
+      ...(databaseUrl ? { databaseUrl } : {}),
       ...(enabled ? { trustedOidcAdminIssuer: issuer } : {}),
     }),
   );
@@ -34,7 +37,7 @@ function start(enabled = true) {
     capabilitySecret: "capability-secret".repeat(3),
     portalIdentitySecret: identitySecret,
     requireSignedPortalIdentity: true,
-    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+    replayDedupe: createPostgresReplayDedupe(databaseUrl ?? testDatabaseUrl()),
     admin: built.admin,
     identity: built.identity,
     auditLog: built.auditLog,
@@ -143,4 +146,27 @@ test("on a shared host with no tenant bound, a trusted sign-in grants admin nowh
   const config = { core: s.base, signingSecret, identitySecret, org: "default-org", issuer };
   await withoutTenant(() => provisionTrustedAdmin(config, "founder-shared"));
   assert.deepEqual(await s.built.admin.listGrants(), before);
+});
+
+test("on a shared host, a trusted sign-in grants admin only in a settled tenant that opted in", async (t) => {
+  await bindBootTenant(async () => undefined);
+  t.after(() => bindBootTenant(async () => TEST_TENANT));
+  const db = await twoTenants();
+  t.after(() => db.close());
+  const [optedIn, other] = db.tenants;
+  await db.owner.q(`UPDATE tenants SET settings = '{"trustedOidcAdmin":true}'::jsonb WHERE id = $1`, [optedIn]);
+  const s = withoutTenant(() => start(true, db.appDatabaseUrl));
+  t.after(s.close);
+  const config = { core: s.base, signingSecret, identitySecret, org: "default-org", issuer };
+  const principal = { id: trustedPrincipal(issuer, "founder-mt"), type: "internal" as const };
+  const isAdminIn = (tenant: string) =>
+    inTenant(tenant, async () => (await s.built.admin.adminStatusOf(principal)).isAdmin);
+  await withoutTenant(() => provisionTrustedAdmin(config, "founder-mt", other));
+  assert.equal(await isAdminIn(other), false);
+  assert.equal(await isAdminIn(optedIn), false);
+  await withoutTenant(() => provisionTrustedAdmin(config, "founder-mt", optedIn));
+  assert.equal(await isAdminIn(optedIn), true);
+  assert.equal(await isAdminIn(other), false);
+  await withoutTenant(() => provisionTrustedAdmin(config, "founder-mt"));
+  assert.equal(await isAdminIn(other), false);
 });

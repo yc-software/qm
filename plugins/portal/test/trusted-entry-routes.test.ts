@@ -13,6 +13,8 @@ const claims = new Set<string>();
 let claimAvailable = true;
 let adminAvailable = true;
 let adminRequests = 0;
+const adminTenants: Array<string | undefined> = [];
+let signInTenants: Array<{ id: string }> = [];
 let signedInName = "Test Founder";
 let subject = "person-7";
 let storedName: string | null = null;
@@ -76,6 +78,9 @@ const upstream = createServer((req, res) => {
       );
     if (url.pathname === "/v1/auth/trusted/admin") {
       adminRequests++;
+      const identity = req.headers["x-portal-identity"] as string | undefined;
+      const carried = identity ? verifyPortalIdentity(identity, identitySecret, Date.now()) : null;
+      adminTenants.push(carried?.t);
       let body = "";
       for await (const chunk of req) body += chunk;
       const { payload } = await compactVerify(JSON.parse(body).assertion, Buffer.from(identitySecret));
@@ -87,6 +92,8 @@ const upstream = createServer((req, res) => {
       res.statusCode = adminAvailable ? 200 : 503;
       return res.end(JSON.stringify({ ok: adminAvailable }));
     }
+    if (url.pathname === "/v1/auth/broker/principal-tenants")
+      return res.end(JSON.stringify({ tenants: signInTenants, shared: signInTenants.length > 0 }));
     if (url.pathname === "/v1/auth/broker/claim") {
       if (!claimAvailable) {
         res.statusCode = 503;
@@ -186,6 +193,7 @@ test("trusted route issues an ordinary scoped session, clears transient cookies,
   assert.equal(response.status, 302);
   assert.equal(response.headers.get("location"), "/");
   assert.equal(adminRequests, adminEnabled ? 1 : 0);
+  assert.deepEqual(adminTenants, adminEnabled ? [undefined] : []);
   const cookies = response.headers.getSetCookie();
   assert.ok(cookies.some((cookie) => cookie.startsWith("portal_trusted_tmp=") && cookie.includes("Max-Age=0")));
   const sessionCookie = cookies
@@ -391,3 +399,40 @@ test("a nameless session linked to an email shows the email, not the raw sign-in
     subject = "person-7";
   }
 });
+
+test(
+  "trusted administrator provisioning names only the workspace the person settles in",
+  { skip: !adminEnabled },
+  async () => {
+    const [only, first, second] = [crypto.randomUUID(), crypto.randomUUID(), crypto.randomUUID()];
+    try {
+      signInTenants = [{ id: only }];
+      const single = await start();
+      const settled = await fetch(single.callback, { redirect: "manual", headers: { cookie: single.cookie } });
+      assert.equal(settled.status, 302);
+      assert.equal(adminTenants.at(-1), only);
+      signInTenants = [{ id: first }, { id: second }];
+      const before = adminRequests;
+      const login = await start();
+      const picker = await fetch(login.callback, { redirect: "manual", headers: { cookie: login.cookie } });
+      assert.equal(picker.status, 200);
+      assert.equal(adminRequests, before);
+      const choice = picker.headers.getSetCookie().find((cookie) => cookie.startsWith("portal_tenant_choice="))!;
+      const chosen = await fetch(`${base}/auth/tenant`, {
+        method: "POST",
+        redirect: "manual",
+        headers: {
+          origin: process.env.PUBLIC_WEB_URL!,
+          cookie: choice.split(";")[0]!,
+          "content-type": "application/x-www-form-urlencoded",
+        },
+        body: `tenant=${second}`,
+      });
+      assert.equal(chosen.status, 302);
+      assert.equal(adminRequests, before + 1);
+      assert.equal(adminTenants.at(-1), second);
+    } finally {
+      signInTenants = [];
+    }
+  },
+);
