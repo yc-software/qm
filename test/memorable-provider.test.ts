@@ -56,10 +56,16 @@ test("automatic capture derives a redacted procedure from the session and relays
       return { ok: true };
     },
   });
-  const count = await provider.capture(personal, ["ignored fact"], Date.now(), "U1", {
-    mode: "automatic",
-    sessionId: "s1",
-  });
+  const count = await provider.capture(
+    personal,
+    ["ignored fact"],
+    Date.now(),
+    { actorId: "U1", context: "conversation" },
+    {
+      mode: "automatic",
+      sessionId: "s1",
+    },
+  );
   assert.equal(count, 1);
   assert.equal(relayed.length, 1);
   const [capture] = relayed;
@@ -81,8 +87,20 @@ test("explicit writes and captures without a session are ignored", async () => {
       return { ok: true };
     },
   });
-  assert.equal(await provider.capture(personal, ["fact"], 1, "U1", { mode: "explicit", sessionId: "s1" }), 0);
-  assert.equal(await provider.capture(personal, ["fact"], 1, "U1", { mode: "automatic" }), 0);
+  assert.equal(
+    await provider.capture(
+      personal,
+      ["fact"],
+      1,
+      { actorId: "U1", context: "conversation" },
+      { mode: "explicit", sessionId: "s1" },
+    ),
+    0,
+  );
+  assert.equal(
+    await provider.capture(personal, ["fact"], 1, { actorId: "U1", context: "conversation" }, { mode: "automatic" }),
+    0,
+  );
   assert.equal(relays, 0);
 });
 
@@ -93,7 +111,16 @@ test("a refused relay surfaces as an error", async () => {
     loadItems: async () => trace,
     relay: async () => ({ ok: false, reason: "consent deny" }),
   });
-  await assert.rejects(provider.capture(personal, [], 1, "U1", { mode: "automatic", sessionId: "s1" }), /consent deny/);
+  await assert.rejects(
+    provider.capture(
+      personal,
+      [],
+      1,
+      { actorId: "U1", context: "conversation" },
+      { mode: "automatic", sessionId: "s1" },
+    ),
+    /consent deny/,
+  );
 });
 
 test("procedures are not an editable notebook", async () => {

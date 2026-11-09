@@ -154,15 +154,6 @@ export interface Participant {
   principalId: string;
 }
 
-export interface AttributedTurn {
-  principalId: string;
-  sessionId: string;
-  day: number;
-  turns: number;
-  firstAt: number;
-  lastAt: number;
-}
-
 export type SessionOrigin = "conversation" | "cron" | "webhook" | "monitor" | "loop" | "swarm";
 
 const ORIGINS = "(cron|webhook|monitor|loop|swarm)";
@@ -414,6 +405,8 @@ export interface SessionStore {
   setParentSession(sessionId: string, parentSessionId: string | null): Promise<void>;
   setSpawnMeta(sessionId: string, meta: SpawnMeta): Promise<void>;
   setRuntime(sessionId: string, runtime: NonNullable<Session["runtime"]>): Promise<void>;
+  setPersona(sessionId: string, personaId: string | null): Promise<void>;
+  threadsWithPersona(personaId: string, threadRefs: readonly string[]): Promise<Set<string>>;
   endedInFailure(sessionIds: readonly string[]): Promise<Set<string>>;
   childrenOf(parentSessionId: string): Promise<Session[]>;
   sideChatsOf(sessionId: string): Promise<Session[]>;
@@ -485,8 +478,6 @@ export interface SessionStore {
   scopeActivity(): Promise<ScopeActivity[]>;
 
   scopeConversationCount(scope: ScopeId): Promise<number>;
-
-  attributedTurns(): Promise<AttributedTurn[]>;
 
   spendRollup(range: { from: number; to: number }): Promise<SpendRow[]>;
 

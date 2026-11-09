@@ -2520,6 +2520,44 @@ test("sandbox management and explicit execution preserve independent target argu
   assert.equal(sink.lastExecOpts?.sandboxId, "box-a");
 });
 
+test("sandbox offers memory_gib only when a configured provider sizes memory, and names those providers", async () => {
+  const schema = (memorySizedBackends?: string[]) =>
+    createAgentTools(
+      { current: fakeToolContext(), emit: async () => undefined, scopeLabel: "personal:U1" },
+      { sandboxResources: true, ...(memorySizedBackends ? { memorySizedBackends } : {}) },
+    ).find((t) => t.name === "sandbox")!.parameters as { properties: Record<string, { description?: string }> };
+  assert.equal(schema().properties.memory_gib, undefined);
+  assert.equal(schema([]).properties.memory_gib, undefined);
+  assert.match(schema(["porter", "modal"]).properties.memory_gib?.description ?? "", /porter, modal only/);
+});
+
+test("sandbox memory_gib reaches create and restart only", async () => {
+  const operations: unknown[] = [];
+  const restarts: unknown[][] = [];
+  const tc: ToolContext = {
+    ...fakeToolContext(),
+    sandboxResources: async (action, input) => {
+      operations.push({ action, input });
+      return { ok: true };
+    },
+    restartComputer: async (...args) => {
+      restarts.push(args);
+    },
+  };
+  const tools = createAgentTools(
+    { current: tc, emit: async () => undefined, scopeLabel: "personal:U1" },
+    { sandboxResources: true, memorySizedBackends: ["porter"] },
+  );
+  const sandbox = tools.find((t) => t.name === "sandbox")!;
+  await call(sandbox, { action: "create", backend: "porter", name: "big", memory_gib: 6, purpose: "p" });
+  await call(sandbox, { action: "restart", sandbox_id: "box-a", memory_gib: 8, purpose: "p" });
+  await call(sandbox, { action: "retire", sandbox_id: "box-a", memory_gib: 8, purpose: "p" });
+  assert.deepEqual(operations, [
+    { action: "create", input: { backend: "porter", name: "big", sandboxId: undefined, memoryGb: 6 } },
+  ]);
+  assert.deepEqual(restarts, [["box-a", 8]]);
+});
+
 test("execute and background dispatch every process action and preserves cursors, signals, targets and watches", async () => {
   const calls: Array<{ method: string; args: unknown[] }> = [];
   const entries: Array<Record<string, unknown>> = [];
@@ -3421,6 +3459,7 @@ test("subagents send_message wakes by default and says what happened", async () 
   const replies: Array<Awaited<ReturnType<NonNullable<typeof tc.sessionSyscalls>["write"]>>> = [
     { ok: true, sessionId: "child", title: "child", delivered: "queued_turn", busy: false },
     { ok: true, sessionId: "child", title: "child", delivered: "queued_turn", busy: true },
+    { ok: true, sessionId: "child", title: "child", delivered: "steered", busy: true },
     { ok: true, sessionId: "child", title: "child", delivered: "queued_message", busy: false },
     { ok: true, sessionId: "child", title: "child", delivered: "queued_message", busy: true },
     {
@@ -3452,6 +3491,10 @@ test("subagents send_message wakes by default and says what happened", async () 
     /^Queued for "child": it is busy and starts on this when its current turn ends/,
   );
   assert.equal(
+    await send({}),
+    `Delivered into "child"'s running turn; it sees this at its next step. Don't re-send it.`,
+  );
+  assert.equal(
     await send({ wake: false }),
     `Left in "child"'s mailbox. It is idle and won't see this until something wakes it.`,
   );
@@ -3465,6 +3508,7 @@ test("subagents send_message wakes by default and says what happened", async () 
   assert.deepEqual(
     writes.map(({ wake, interrupt }) => [wake, interrupt]),
     [
+      [true, undefined],
       [true, undefined],
       [true, undefined],
       [false, undefined],

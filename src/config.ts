@@ -26,6 +26,7 @@ import {
 } from "./memory/policy.ts";
 import { parseMemoryStrategyKind, type MemoryStrategyKind } from "./memory/strategy.ts";
 import { parseMemoryProviderConfig, type MemoryProviderConfig } from "./memory/provider-config.ts";
+import { parsePrivateNetworkOrigins } from "./util/network.ts";
 import { sanitizeBranding } from "./resolution/branding.ts";
 import type { OrgBranding } from "./resolution/config-store.ts";
 import { CORE_SECRET_SPECS, validateCoreSecretEnv } from "./deployment/secret-schema.ts";
@@ -51,7 +52,6 @@ import {
 import { resolveSwarmSettings, type SwarmSettings } from "./swarms/swarm-settings.ts";
 
 export interface Config extends SandboxSettings, DeploySettings {
-  productAnalytics?: { apiKey: string; host?: string };
   suggestedActivitiesEnabled?: boolean;
   suggestedActivitiesContext?: string;
   swarmsEnabled?: boolean;
@@ -70,6 +70,7 @@ export interface Config extends SandboxSettings, DeploySettings {
   securityPosture: SecurityPosture;
   sharingPosture: SharingPosture;
   egressServiceHosts?: string[];
+  privateNetworkAllowedOrigins: ReadonlySet<string>;
   brandingDefault?: OrgBranding;
   modelId?: string;
   codexAuthCredential?: string;
@@ -491,6 +492,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   ) {
     throw new Error("SLACK_EVENTS_PORT must be an integer from 1 through 65535");
   }
+  const privateNetworkAllowedOrigins = parsePrivateNetworkOrigins(env.PRIVATE_NETWORK_ALLOWED_ORIGINS);
   const memoryProviderConfig = parseMemoryProviderConfig(env.MEMORY_PROVIDER_CONFIG, env);
   return {
     suggestedActivitiesEnabled: boolEnvStrict("SUGGESTED_ACTIVITIES_ENABLED", env.SUGGESTED_ACTIVITIES_ENABLED) ?? true,
@@ -503,9 +505,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...optNum(env, "PUBLIC_PORT", "publicPort"),
     dataDir,
     orgId: env.ORG_ID ?? DEFAULT_ORG_ID,
-    ...(env.POSTHOG_API_KEY?.trim()
-      ? { productAnalytics: { apiKey: env.POSTHOG_API_KEY.trim(), host: env.POSTHOG_HOST?.trim() } }
-      : {}),
     ...(env.DATABASE_URL ? { databaseUrl: env.DATABASE_URL } : {}),
     ...(env.DATABASE_POOL_URL ? { databasePoolUrl: env.DATABASE_POOL_URL } : {}),
     ...(env.DATABASE_POOL_CA_CERT ? { databasePoolCaCert: env.DATABASE_POOL_CA_CERT } : {}),
@@ -637,6 +636,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     memoryCapture: parseMemoryCaptureMode(env.MEMORY_CAPTURE),
     memoryStrategy: parseMemoryStrategyKind(env.MEMORY_STRATEGY),
     ...(memoryProviderConfig ? { memoryProviderConfig } : {}),
+    privateNetworkAllowedOrigins,
     memoryCaptureQuietMs:
       numEnvStrict("MEMORY_CAPTURE_QUIET_MS", env.MEMORY_CAPTURE_QUIET_MS) ?? DEFAULT_CAPTURE_QUIET_MS,
     ...optNum(env, "MEMORY_CAPTURE_MAX_TURNS", "memoryCaptureMaxTurns"),

@@ -748,6 +748,24 @@ test("cron get honors read-only visibility: a delivery-targeted viewer reads, ne
   assert.equal(patched.ok ? "" : patched.code, "forbidden");
 });
 
+test("a Slack bot's turn is not a live person: it cannot register webhooks or set unattended cron grants", async () => {
+  const { control } = setup();
+  const bot = claims("admin-bob", scopeId("personal", "admin-bob"), { liveActor: true, botActor: true });
+  const webhook = await control.createWebhook(
+    { action: "handle the event", verification: { scheme: "github", secret: "shh-secret" } },
+    bot,
+    "https://portal.example",
+  );
+  const cron = await control.createCron(
+    { schedule: { everyMs: 3_600_000 }, action: "scan failures", unattendedGrants: ["admin.sessions.read"] },
+    bot,
+  );
+  assert.deepEqual(
+    [webhook.ok ? "registered" : webhook.code, cron.ok ? "granted" : cron.code],
+    ["forbidden", "forbidden"],
+  );
+});
+
 test("webhook create surfaces the inbound url + the secret verbatim; list elides; disable is owner-gated", async () => {
   const { control } = setup();
   const r = await control.createWebhook(

@@ -7,9 +7,9 @@ import {
   createRelayAuditSink,
   tokenFromRequest,
   hostFromAuthority,
-  isBlockedDestinationIp,
   type EgressAuthzDeps,
 } from "../src/egress-authz-main.ts";
+import { isNeverAllowedIp } from "../src/util/network.ts";
 import { verifySignature } from "../src/auth/source-auth.ts";
 import { mintCapabilityToken, EGRESS_PROXY_AUD, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import type { EgressAuditRecord } from "../src/admin/egress-audit-sink.ts";
@@ -111,31 +111,49 @@ test("hostFromAuthority strips ports and IPv6 brackets", () => {
   assert.equal(hostFromAuthority(""), null);
 });
 
-test("isBlockedDestinationIp covers IMDS, 169.254/16, fe80::/10, v4-mapped, AWS v6 IMDS", () => {
-  assert.equal(isBlockedDestinationIp("169.254.169.254"), true);
-  assert.equal(isBlockedDestinationIp("169.254.1.1"), true);
-  assert.equal(isBlockedDestinationIp("::ffff:169.254.169.254"), true);
-  assert.equal(isBlockedDestinationIp("fe80::1"), true);
-  assert.equal(isBlockedDestinationIp("febf::1"), true);
-  assert.equal(isBlockedDestinationIp("fd00:ec2::254"), true);
-  assert.equal(isBlockedDestinationIp("[fd00:ec2::254]"), true);
-  assert.equal(isBlockedDestinationIp("8.8.8.8"), false);
-  assert.equal(isBlockedDestinationIp("2606:4700::1111"), false);
-  assert.equal(isBlockedDestinationIp("fec0::1"), false);
+test("isNeverAllowedIp covers IMDS, 169.254/16, fe80::/10, v4-mapped, IPv6 cloud metadata, loopback, NAT64 forms and Tailscale and Alibaba addresses", () => {
+  assert.equal(isNeverAllowedIp("169.254.169.254"), true);
+  assert.equal(isNeverAllowedIp("169.254.1.1"), true);
+  assert.equal(isNeverAllowedIp("::ffff:169.254.169.254"), true);
+  assert.equal(isNeverAllowedIp("fe80::1"), true);
+  assert.equal(isNeverAllowedIp("febf::1"), true);
+  assert.equal(isNeverAllowedIp("fd00:ec2::254"), true);
+  assert.equal(isNeverAllowedIp("[fd00:ec2::254]"), true);
+  assert.equal(isNeverAllowedIp("8.8.8.8"), false);
+  assert.equal(isNeverAllowedIp("2606:4700::1111"), false);
+  assert.equal(isNeverAllowedIp("fec0::1"), false);
+  for (const ip of [
+    "127.0.0.1",
+    "::1",
+    "::ffff:127.0.0.1",
+    "64:ff9b::7f00:1",
+    "64:ff9b::a9fe:a9fe",
+    "100.100.100.100",
+    "100.100.100.200",
+    "64:ff9b::6464:64c8",
+    "fd20:ce::254",
+    "fd00:c1::a9fe:a9fe",
+    "fd00:ec2::23",
+    "fd00:a9fe:a9fe::1",
+    "fd00:42::42",
+  ])
+    assert.equal(isNeverAllowedIp(ip), true, ip);
+  for (const ip of ["10.0.12.7", "172.18.0.4", "100.101.102.103", "fdaa:0:1::3", "64:ff9b:1::a9fe:a9fe"])
+    assert.equal(isNeverAllowedIp(ip), false, ip);
 });
 
-test("isBlockedDestinationIp catches non-canonical spellings of blocked addresses", () => {
-  assert.equal(isBlockedDestinationIp("::ffff:a9fe:a9fe"), true);
-  assert.equal(isBlockedDestinationIp("[::ffff:a9fe:a9fe]"), true);
-  assert.equal(isBlockedDestinationIp("fd00:ec2:0:0:0:0:0:254"), true);
-  assert.equal(isBlockedDestinationIp("fd00:0ec2::0254"), true);
-  assert.equal(isBlockedDestinationIp("FE80::1"), true);
-  assert.equal(isBlockedDestinationIp("fe80::1%eth0"), true);
-  assert.equal(isBlockedDestinationIp("0.0.0.0"), true);
-  assert.equal(isBlockedDestinationIp("0.0.0.7"), true);
-  assert.equal(isBlockedDestinationIp("::"), true);
-  assert.equal(isBlockedDestinationIp("::ffff:0:0"), true);
-  assert.equal(isBlockedDestinationIp("[::]"), true);
+test("isNeverAllowedIp catches non-canonical spellings of blocked addresses", () => {
+  assert.equal(isNeverAllowedIp("::ffff:a9fe:a9fe"), true);
+  assert.equal(isNeverAllowedIp("[::ffff:a9fe:a9fe]"), true);
+  assert.equal(isNeverAllowedIp("fd00:ec2:0:0:0:0:0:254"), true);
+  assert.equal(isNeverAllowedIp("fd00:0ec2::0254"), true);
+  assert.equal(isNeverAllowedIp("FE80::1"), true);
+  assert.equal(isNeverAllowedIp("fe80::1%eth0"), true);
+  assert.equal(isNeverAllowedIp("0.0.0.0"), true);
+  assert.equal(isNeverAllowedIp("0.0.0.7"), true);
+  assert.equal(isNeverAllowedIp("::"), true);
+  assert.equal(isNeverAllowedIp("::ffff:0:0"), true);
+  assert.equal(isNeverAllowedIp("[::]"), true);
 });
 
 test("valid token, open policy => 200 + audited as ok with scope/principal", async () => {
@@ -235,7 +253,7 @@ test("tokenless=open is an explicit compatibility escape hatch; valid tokens sti
   }
 });
 
-test("IMDS + link-local + cloud metadata names are denied even tokenless / with open policy", async () => {
+test("IMDS + link-local + cloud metadata + localhost names are denied even tokenless / with open policy", async () => {
   const { server, records } = boot();
   const port = await listen(server);
   const open = await egressToken({ allowedHosts: [], deniedHosts: [] });
@@ -247,6 +265,8 @@ test("IMDS + link-local + cloud metadata names are denied even tokenless / with 
       "[fd00:ec2::254]:80",
       "metadata.google.internal:80",
       "metadata.google.internal",
+      "localhost:443",
+      "brain.localhost.:443",
     ]) {
       assert.equal(await check(port, authority), 407, `tokenless ${authority}`);
       assert.equal(await check(port, authority, open), 403, `open-policy ${authority}`);

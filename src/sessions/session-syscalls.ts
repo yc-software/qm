@@ -25,7 +25,8 @@ import { openRuntime, parentRuntime } from "./subagent-runtime.ts";
 import type { RuntimeChoice } from "../agent/agent.ts";
 import type { OrchestratorInput } from "../core/orchestrator/types.ts";
 import type { Run, RunStore } from "../runs/run-store.ts";
-import type { RunSignalStore } from "../runs/run-signal-store.ts";
+import { replayableRequest } from "../core/orchestrator/turn-helpers.ts";
+import type { RunSignal, RunSignalStore } from "../runs/run-signal-store.ts";
 import type { SessionStore } from "./session-store.ts";
 import { xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
 import { isPeerMessage, wakeOwnParent, wakePeer } from "./subagent-mail.ts";
@@ -170,6 +171,8 @@ export function sessionContextOf(input: OrchestratorInput): SpawnMeta {
     ...(input.deliveryWebhook ? { deliveryWebhook: input.deliveryWebhook } : {}),
     ...(input.timezone ? { timezone: input.timezone } : {}),
     ...(input.readOnly ? { readOnly: true } : {}),
+    ...(input.memoryNotebookOnly ? { memoryNotebookOnly: true } : {}),
+    ...(input.botActor ? { botActor: true } : {}),
     ...(input.model ? { model: input.model } : {}),
     ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
     ...(input.fastMode !== undefined ? { fastMode: input.fastMode } : {}),
@@ -212,7 +215,7 @@ type SessionWriteResult =
       ok: true;
       sessionId: string;
       title: string;
-      delivered: "queued_turn" | "interrupted" | "queued_message";
+      delivered: "queued_turn" | "steered" | "interrupted" | "queued_message";
       busy?: boolean;
       notWoken?: string;
     }
@@ -287,6 +290,8 @@ export interface SessionSyscallBinding {
     | "deliveryWebhook"
     | "timezone"
     | "readOnly"
+    | "memoryNotebookOnly"
+    | "botActor"
     | "scopeVersion"
     | "sessionParticipantIds"
     | "surfaceOrigin"
@@ -337,7 +342,11 @@ export interface SessionSyscallDeps {
     SubagentActivityDeps["sessions"];
   runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "getByDedupKey" | "get" | "withdraw"> &
     SubagentActivityDeps["runs"];
-  signals: Pick<RunSignalStore, "send" | "pending">;
+  signals: Pick<RunSignalStore, "send" | "pending" | "runForDedupeKey">;
+  steerRun(
+    run: Run,
+    signal: RunSignal,
+  ): Promise<{ sent: boolean; terminal?: boolean; drained?: boolean; replayRunId?: string }>;
   maxAttempts: number;
   advisoryLock: AdvisoryLock;
   prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
@@ -426,6 +435,8 @@ function childRunRequest(child: Session, meta: SpawnMeta, text: string, displayT
     displayText,
     envelopeWrapped: true,
     ...(meta.readOnly ? { readOnly: true } : {}),
+    ...(meta.memoryNotebookOnly ? { memoryNotebookOnly: true } : {}),
+    ...(meta.botActor ? { botActor: true } : {}),
     ...(meta.model ? { model: meta.model } : {}),
     ...(meta.thinkingLevel ? { thinkingLevel: meta.thinkingLevel } : {}),
     ...(meta.fastMode !== undefined ? { fastMode: meta.fastMode } : {}),
@@ -514,7 +525,7 @@ export const ANCESTOR_STOP = "because the parent session was stopped";
 export const USER_STOP = "by user";
 export const USER_STOP_ALL = "by user (subagents too)";
 
-type StopRequest = { reason?: string | undefined; scope?: StopScope };
+type StopRequest = { reason?: string | undefined; scope?: StopScope; botRunsOnly?: boolean };
 
 export const sparesDescendants = (scope: StopScope | undefined): boolean => scope === "run" || scope === "session";
 
@@ -557,7 +568,7 @@ export async function stopSessionRuns(
 ): Promise<{ id: string; withdrawn: boolean }[]> {
   const stopped: { id: string; withdrawn: boolean }[] = [];
   for (const run of await deps.runs.inFlightForThread(session.threadRef)) {
-    if (interrupt && !interruptible(run)) continue;
+    if ((interrupt && !interruptible(run)) || (stop.botRunsOnly && !run.request.botActor)) continue;
     const sender = interrupt && unstarted(run) ? run.request.sessionSenderId : undefined;
     const foreign = interrupt && sender && sender !== interrupt.by ? { mailbox: interrupt.mailbox, sender } : undefined;
     if (foreign)
@@ -566,6 +577,7 @@ export async function stopSessionRuns(
         recipientId: session.id,
         senderId: foreign.sender,
         actor: run.request.actor,
+        ...(run.request.botActor ? { botActor: true } : {}),
         audience: run.request.conversation.audience,
         text: run.request.text,
         createdAt: run.createdAt,
@@ -600,6 +612,32 @@ async function acceptedFollowup(
   return { ok: true, sessionId: target.id, title, delivered: "queued_turn", busy: others.length > 0 };
 }
 
+async function steerRunningTurn(
+  deps: Pick<SessionSyscallDeps, "signals" | "steerRun">,
+  inFlight: Run[],
+  request: OrchestratorInput,
+  message: { text: string; dedupKey: string | undefined },
+): Promise<"steered" | "replayed" | "refused" | undefined> {
+  if (message.dedupKey && (await deps.signals.runForDedupeKey(message.dedupKey))) return "steered";
+  const live = inFlight.find((run) => run.status === "running");
+  if (
+    !live ||
+    (request.readOnly && !live.request.readOnly) ||
+    (request.memoryNotebookOnly && !live.request.memoryNotebookOnly) ||
+    (request.botActor && !live.request.botActor)
+  )
+    return undefined;
+  const steered = await deps.steerRun(live, {
+    kind: "steer",
+    text: message.text,
+    ts: `${Date.now()}.${randomUUID().slice(0, 8)}`,
+    request: { ...replayableRequest(request), spawned: true },
+    ...(message.dedupKey ? { dedupeKey: message.dedupKey } : {}),
+  });
+  if (!steered.terminal) return "steered";
+  return steered.drained && !steered.replayRunId ? "refused" : "replayed";
+}
+
 export async function stopSessionTree(
   deps: {
     sessions: Pick<SessionStore, "childrenOf">;
@@ -608,10 +646,12 @@ export async function stopSessionTree(
   },
   root: Session,
   reason?: string,
+  botRunsOnly?: boolean,
 ): Promise<boolean> {
   let stopped = false;
   for (const session of await treeSessions(deps.sessions, root)) {
-    const stop: StopRequest = session.id === root.id ? { reason } : { reason: ANCESTOR_STOP, scope: "ancestor" };
+    const stop: StopRequest =
+      session.id === root.id ? { reason, botRunsOnly } : { reason: ANCESTOR_STOP, scope: "ancestor", botRunsOnly };
     if (session.scopeId === root.scopeId && (await stopSessionRuns(deps, session, stop)).length) stopped = true;
   }
   return stopped;
@@ -683,12 +723,15 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
         if (deps.enabled && !(await deps.enabled(binding.request.actor.id)))
           throw new Error("persistent subagents are not enabled for this user");
         const current = await deps.sessions.get(binding.session.id);
-        if (
-          !current ||
-          current.scopeId !== binding.scopeId ||
-          (deps.authorize && !(await deps.authorize(current, binding.request.actor.id)))
-        )
-          throw new Error("the sender no longer has access to this session");
+        if (!current) throw new Error("this session no longer exists; nothing was started or sent.");
+        if (current.scopeId !== binding.scopeId)
+          throw new Error(
+            `this session moved from ${binding.scopeId} to ${current.scopeId}; nothing was started or sent.`,
+          );
+        if (deps.authorize && !(await deps.authorize(current, binding.request.actor.id)))
+          throw new Error(
+            `${binding.request.actor.id} can't currently be confirmed as a member of ${binding.scopeId}, so helpers can't run here; nothing was started or sent.`,
+          );
         const request: OrchestratorInput = {
           ...binding.request,
           origin: binding.request.origin ?? { kind: "automation" },
@@ -895,6 +938,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   origin: caller.origin,
                   unattendedGrants: caller.unattendedGrants,
                   readOnly: privateMessage || caller.readOnly || meta.readOnly || target.spawnMeta?.readOnly,
+                  memoryNotebookOnly: caller.memoryNotebookOnly || meta.memoryNotebookOnly,
+                  botActor: caller.botActor,
                 },
                 "",
                 "",
@@ -907,6 +952,17 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   return { ok: false, message: "ordinary sessions accept private messages, not interrupts" };
                 if (caller.readOnly && !target.spawnMeta?.readOnly)
                   return { ok: false, message: "a read-only session cannot interrupt a writable task" };
+                if (caller.memoryNotebookOnly && !meta.memoryNotebookOnly)
+                  return {
+                    ok: false,
+                    message: "a notebook-only turn cannot interrupt a session that isn't notebook-only",
+                  };
+                if (
+                  caller.botActor &&
+                  (!target.spawnMeta?.botActor ||
+                    (await deps.runs.inFlightForThread(target.threadRef)).some((run) => !run.request.botActor))
+                )
+                  return { ok: false, message: "a Slack bot's turn cannot interrupt a person's task" };
               }
               const text = input.text?.trim();
               if (!text) {
@@ -941,6 +997,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   recipientId: target.id,
                   senderId: binding.session.id,
                   actor: caller.actor,
+                  ...(caller.botActor ? { botActor: true } : {}),
                   audience: caller.conversation.audience,
                   createdAt: Date.now(),
                 });
@@ -950,6 +1007,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               if (!input.wake && !input.interrupt) return leaveMail();
               if (binding.request.privateSessionMessage)
                 return leaveMail("a private turn cannot start work in another session");
+              if (caller.memoryNotebookOnly && !meta.memoryNotebookOnly)
+                return leaveMail("a notebook-only turn cannot start work in a session that isn't notebook-only");
               if (isPeerMessage(binding.session, target)) {
                 if (caller.readOnly) return leaveMail("a read-only turn cannot start work in another conversation");
                 if (messageDepth > SESSION_MESSAGE_DEPTH_CAP)
@@ -983,6 +1042,26 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               const dedupKey = input.requestId ? `subagent-followup:${messageId}` : undefined;
               const accepted = await acceptedFollowup(deps.runs, dedupKey, target, stamped, title);
               if (accepted) return accepted;
+              request.origin = sessionTurnOrigin(request.origin, stamped);
+              request.sessionSenderId = binding.session.id;
+              request.delegatingRunId = binding.request.runId;
+              const steered =
+                input.interrupt || privateMessage
+                  ? undefined
+                  : await steerRunningTurn(
+                      deps,
+                      inFlight,
+                      { ...request, text: stamped, displayText: text },
+                      {
+                        text,
+                        dedupKey,
+                      },
+                    );
+              if (steered === "steered")
+                return { ok: true, sessionId: target.id, title, delivered: "steered", busy: true };
+              if (steered === "replayed") return { ok: true, sessionId: target.id, title, delivered: "queued_turn" };
+              if (steered === "refused")
+                return { ok: false, message: `subagent "${title}" finished its turn and did not accept this message.` };
               const stopped = input.interrupt
                 ? await stopSessionRuns(
                     deps,
@@ -994,9 +1073,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                     },
                   )
                 : [];
-              request.origin = sessionTurnOrigin(request.origin, stamped);
-              request.sessionSenderId = binding.session.id;
-              request.delegatingRunId = binding.request.runId;
               await deps.runs
                 .enqueue({
                   sessionId: target.threadRef,

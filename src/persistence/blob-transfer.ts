@@ -26,7 +26,7 @@ export const MAX_STAGE_BLOB_BYTES = 12_000_000_000;
 
 export const S3_PART_BYTES = 16 * 1024 * 1024;
 
-interface BlobInfo {
+export interface BlobInfo {
   blobId: string;
   sizeBytes: number;
   sha256: string;

@@ -52,6 +52,7 @@ async function call(
   liveActor = true,
   isAdmin = true,
   managesScope = false,
+  botActor = false,
 ): Promise<{ status: number; body: unknown }> {
   const found = findRoute(loopRoutes as ReadonlyArray<Route<ApiCtx>>, method, path);
   assert.ok(found, `no route for ${method} ${path}`);
@@ -69,6 +70,7 @@ async function call(
             actorId: actor,
             scopeId: scopeId("personal", actor),
             ...(liveActor ? { liveActor: true } : {}),
+            ...(botActor ? { botActor: true } : {}),
             destinations: [{ key: "alerts", label: "Alerts", type: "slack", target: "C-alerts" }],
           }
         : null,
@@ -399,6 +401,25 @@ test("graduating a ship action refuses one the loop never declared", async () =>
   const grants = await deps.grants.byLoop(id);
   assert.equal(grants.length, 1);
   assert.equal(grants[0]?.label, "lint");
+});
+
+test("a Slack bot's turn is not live-human evidence for its loop's ship gates", async () => {
+  const deps = services();
+  const bot = (method: string, path: string, body?: unknown) =>
+    call(deps, method, path, body, "release-bot", "capability", true, true, false, true);
+  const autoGate = await bot("POST", "/v1/loops", { ...CREATE, shipActions: [{ action: "open_pr", gate: "auto" }] });
+  const created = await bot("POST", "/v1/loops", CREATE);
+  const id = (created.body as { loop: { id: string } }).loop.id;
+  const grant = await bot("POST", `/v1/loops/${id}/grants`, { shipAction: "open_pr" });
+  const autopilot = await bot("POST", `/v1/loops/${id}/autopilot`, { enabled: true });
+  assert.deepEqual(
+    [autoGate, grant, autopilot].map(({ status, body }) => [status, (body as { error?: string }).error]),
+    [
+      [403, "human_required"],
+      [403, "human_required"],
+      [403, "human_required"],
+    ],
+  );
 });
 
 test("decisions and grants require verified live-human evidence", async () => {

@@ -32,6 +32,7 @@ export const CREDENTIAL_BROKER_AUD = "credential-broker";
 export const EGRESS_PROXY_AUD = "egress-proxy";
 export const BLOB_TRANSFER_AUD = "blob-transfer";
 export const SECRET_DROP_AUD = "secret-drop";
+export const MEMORY_BRAIN_DROP_AUD = "memory-brain-drop";
 
 interface BlobGrant {
   dir: "read" | "write";
@@ -47,6 +48,7 @@ export interface CapabilityClaims {
   browserAccount?: "company" | "personal" | "openai" | "anthropic";
   aud?: string;
   scopeId: ScopeId;
+  audienceScopeId?: ScopeId;
   scopeVersion?: string;
   timezone?: string;
   destination?: Destination;
@@ -60,7 +62,7 @@ export interface CapabilityClaims {
   egress?: EgressPolicy;
   blob?: BlobGrant;
   drop?: string;
-  memory?: { write?: ScopeId; orgWrite?: ScopeId; read: ScopeId[] };
+  memory?: { write?: ScopeId; orgWrite?: ScopeId; read: ScopeId[]; notebookOnly?: true };
   liveActor?: boolean;
   runId?: string;
   sessionId?: string;
@@ -70,6 +72,7 @@ export interface CapabilityClaims {
   deployment?: string;
   botActor?: boolean;
   liveAuthor?: boolean;
+  actAsActor?: boolean;
   triggered?: boolean;
   grants?: string[];
   threadRef?: string;
@@ -144,6 +147,7 @@ export async function verifyCapabilityToken(
     return null;
   if (claims.timezone !== undefined && !isValidCapabilityTimezone(claims.timezone)) return null;
   if (claims.scopeVersion !== undefined && typeof claims.scopeVersion !== "string") return null;
+  if (claims.audienceScopeId !== undefined && typeof claims.audienceScopeId !== "string") return null;
   if (claims.destinations !== undefined && !Array.isArray(claims.destinations)) return null;
   if (claims.ownerConnections !== undefined && typeof claims.ownerConnections !== "boolean") return null;
   if (claims.credentials !== undefined && !Array.isArray(claims.credentials)) return null;
@@ -157,6 +161,7 @@ export async function verifyCapabilityToken(
   if (claims.liveActor !== undefined && typeof claims.liveActor !== "boolean") return null;
   if (claims.botActor !== undefined && typeof claims.botActor !== "boolean") return null;
   if (claims.liveAuthor !== undefined && typeof claims.liveAuthor !== "boolean") return null;
+  if (claims.actAsActor !== undefined && typeof claims.actAsActor !== "boolean") return null;
   if (claims.blob !== undefined && claims.blob?.dir !== "read" && claims.blob?.dir !== "write") return null;
   if (claims.drop !== undefined && typeof claims.drop !== "string") return null;
   if (claims.runId !== undefined && typeof claims.runId !== "string") return null;

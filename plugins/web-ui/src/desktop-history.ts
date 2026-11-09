@@ -3,6 +3,7 @@ import { html, nothing, render, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { icon } from "./icons";
 import { tip } from "./tooltip";
+import { inDesktopApp } from "./desktop-computer";
 
 type NavigationLike = {
   canGoBack: boolean;
@@ -11,7 +12,6 @@ type NavigationLike = {
 };
 
 const navigationApi = () => (window as { navigation?: NavigationLike }).navigation;
-const inDesktopApp = () => Boolean((window as { qmDesktop?: unknown }).qmDesktop);
 
 let host: HTMLElement | undefined;
 let listening = false;

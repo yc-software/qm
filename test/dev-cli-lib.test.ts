@@ -475,7 +475,7 @@ test("Slack-only dependency preparation needs no web installation or build", asy
   const worktree = mkdtempSync(join(tmpdir(), "qm-dev-deps-"));
   try {
     mkdirSync(join(worktree, "node_modules/emoji-datasource"), { recursive: true });
-    await ensureDeps(worktree, { web: false, watch: false, webUiBasePath: "/" }, () => {
+    await ensureDeps(worktree, { web: false, webUiBasePath: "/" }, () => {
       assert.fail("Slack-only startup must not install or build web dependencies");
     });
   } finally {

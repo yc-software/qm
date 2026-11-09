@@ -114,6 +114,7 @@ export function createMessagingMethods(
   | "resolveChannel"
   | "directoryMembers"
   | "directoryChannels"
+  | "directoryChannelsFor"
   | "directoryMember"
   | "samePerson"
   | "personMatcher"
@@ -521,6 +522,9 @@ export function createMessagingMethods(
     directoryChannels() {
       return deps.directory.listChannels();
     },
+    directoryChannelsFor(principalId) {
+      return deps.directory.listChannelsFor(principalId);
+    },
     async directoryMember(principalId) {
       return (
         (await deps.directory.get(principalId)) ??
@@ -617,6 +621,8 @@ export function createMessagingMethods(
         baseDestination = withThread(baseDestination, input.threadTs);
       }
       const sender = await deps.directory.get(input.senderId).catch(() => null);
+      const persona = input.currentDestination?.persona;
+      if (persona && !input.react && !input.delete) baseDestination = { ...baseDestination, persona };
       const delivery = await reachEnqueue({
         deliveries: deps.deliveries,
         destination: withEdit(

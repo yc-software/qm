@@ -4,6 +4,7 @@ import { canonicalPerson } from "../../directory/person.ts";
 import { sendJson } from "../http.ts";
 import { audit, isObj, orgScope } from "./shared.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
+import { trimTrailingSlashes } from "../../util/text.ts";
 
 const numOrUndef = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
 
@@ -77,9 +78,8 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
       message: `member type must be one of: ${PRINCIPAL_TYPES.join(", ")}`,
     });
   }
-  if (typeof b.workspaceUrl === "string" && /^https:\/\/[^\s/]+$/.test(b.workspaceUrl.replace(/\/+$/, ""))) {
-    await app.setDirectoryWorkspaceUrl(b.workspaceUrl.replace(/\/+$/, ""));
-  }
+  const workspaceUrl = typeof b.workspaceUrl === "string" ? trimTrailingSlashes(b.workspaceUrl) : "";
+  if (/^https:\/\/[^\s/]+$/.test(workspaceUrl)) await app.setDirectoryWorkspaceUrl(workspaceUrl);
   let memberCount: number | undefined;
   if (Array.isArray(b.members)) {
     const members = b.members
@@ -161,7 +161,7 @@ async function directoryMeta(ctx: ApiCtx): Promise<void> {
 const SLACK_ID_RE = /^[UW][A-Z0-9]{8,}$/;
 async function resolveDirectory(ctx: ApiCtx): Promise<void> {
   const { res, app, url } = ctx;
-  const q = (url.searchParams.get("q") ?? "").trim();
+  const q = (url.searchParams.get("q") ?? "").trim().slice(0, 80);
   if (!q) return sendJson(res, 400, { error: "bad_request", message: "q (a name to resolve) required" });
   const r = await app.resolveRecipient(q);
   let found: DirectoryMember[] = [];
@@ -172,6 +172,28 @@ async function resolveDirectory(ctx: ApiCtx): Promise<void> {
     return slackId ? { ...m, slackId } : m;
   });
   return sendJson(res, 200, { matches });
+}
+
+async function channelsFor(ctx: ApiCtx): Promise<void> {
+  const principalId = (ctx.url.searchParams.get("principalId") ?? "").trim();
+  if (!principalId) return sendJson(ctx.res, 400, { error: "bad_request", message: "principalId required" });
+  const typed = (ctx.url.searchParams.get("q") ?? "").trim().toLowerCase();
+  const term = typed.startsWith("#") ? typed.slice(1) : typed;
+  const rank = (name: string) => {
+    const lower = name.toLowerCase();
+    if (lower === term) return 0;
+    return lower.startsWith(term) ? 1 : 2;
+  };
+  const channels = (await ctx.app.directoryChannelsFor(principalId))
+    .filter((channel) => channel.name.toLowerCase().includes(term))
+    .sort((a, b) => rank(a.name) - rank(b.name) || Number(a.name > b.name) - Number(a.name < b.name))
+    .map((channel) => ({
+      scopeId: `channel:${channel.channelId}`,
+      channelId: channel.channelId,
+      name: channel.name,
+      isPrivate: channel.isPrivate === true,
+    }));
+  return sendJson(ctx.res, 200, { channels });
 }
 
 async function channelMembership(ctx: ApiCtx): Promise<void> {
@@ -185,11 +207,27 @@ export const directoryRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/directory/meta", auth: "source", handle: directoryMeta },
   {
     method: "GET",
+    path: "/v1/directory/channels",
+    browser: true,
+    actor: "query.principalId",
+    auth: "source",
+    handle: channelsFor,
+  },
+  {
+    method: "GET",
     path: "/v1/directory/channels/:channelId/members/:principalId",
+    actor: "system",
     auth: "source",
     handle: channelMembership,
   },
-  { method: "GET", path: "/v1/directory/resolve", actor: "person", auth: "either", handle: resolveDirectory },
+  {
+    method: "GET",
+    path: "/v1/directory/resolve",
+    browser: true,
+    actor: "person",
+    auth: "either",
+    handle: resolveDirectory,
+  },
   ...withActor("system", [
     { method: "POST", path: "/v1/principals/:id/deactivate", auth: "source", handle: deactivatePrincipal },
     { method: "POST", path: "/v1/principals/:id/reactivate", auth: "source", handle: reactivatePrincipal },

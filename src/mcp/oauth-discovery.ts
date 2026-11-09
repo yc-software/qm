@@ -1,6 +1,10 @@
-import { buildDiscoveryUrls } from "@modelcontextprotocol/sdk/client/auth.js";
+import { buildDiscoveryUrls, registerClient } from "@modelcontextprotocol/sdk/client/auth.js";
+import { OAuthMetadataSchema, type OAuthMetadata } from "@modelcontextprotocol/sdk/shared/auth.js";
 import { errMessage } from "../util/errors.ts";
 import { publicFetch, type AddressFetch } from "../util/network.ts";
+import { trimTrailingSlashes } from "../util/text.ts";
+
+const OAUTH_REQUEST_TIMEOUT_MS = 5_000;
 
 export function httpsUrl(v: unknown): string | undefined {
   if (typeof v !== "string") return undefined;
@@ -23,6 +27,7 @@ export interface DiscoveredOAuth {
   authorize?: string;
   token?: string;
   scopes?: string[];
+  registrable?: OAuthMetadata;
   errors: string[];
 }
 
@@ -33,7 +38,7 @@ async function fetchMeta(
 ): Promise<Record<string, unknown> | undefined> {
   let r: Response;
   try {
-    r = await fetchFn(url, { redirect: "error", signal: AbortSignal.timeout(5_000) });
+    r = await fetchFn(url, { redirect: "error", signal: AbortSignal.timeout(OAUTH_REQUEST_TIMEOUT_MS) });
   } catch (e) {
     errors.push(`${url}: ${errMessage(e)}`);
     return undefined;
@@ -49,7 +54,7 @@ async function fetchMeta(
 }
 
 function wellKnown(base: URL, suffix: string): string[] {
-  const path = base.pathname.replace(/\/+$/, "");
+  const path = trimTrailingSlashes(base.pathname);
   return [...new Set([`${base.origin}/.well-known/${suffix}${path}`, `${base.origin}/.well-known/${suffix}`])];
 }
 
@@ -70,9 +75,32 @@ export async function discoverOAuth(resource: URL, fetchFn: AddressFetch = publi
       const authorize = httpsUrl(server.authorization_endpoint);
       const token = httpsUrl(server.token_endpoint);
       if (!authorize || !token) errors.push(`${candidate}: missing or non-HTTPS authorization/token endpoint`);
-      return { authorize, token, scopes, errors };
+      const registrable = httpsUrl(server.registration_endpoint)
+        ? OAuthMetadataSchema.safeParse(server).data
+        : undefined;
+      return { authorize, token, scopes, ...(registrable ? { registrable } : {}), errors };
     }
     return { scopes, errors };
   }
   return { errors };
+}
+
+export async function registerPublicClient(
+  metadata: OAuthMetadata,
+  redirectUris: string[],
+  fetchFn: AddressFetch = publicFetch,
+): Promise<string> {
+  const client = await registerClient(metadata.issuer, {
+    metadata,
+    clientMetadata: {
+      client_name: "QM",
+      redirect_uris: redirectUris,
+      grant_types: ["authorization_code", "refresh_token"],
+      response_types: ["code"],
+      token_endpoint_auth_method: "none",
+    },
+    fetchFn: (url, init) =>
+      fetchFn(url, { ...init, redirect: "error", signal: AbortSignal.timeout(OAUTH_REQUEST_TIMEOUT_MS) }),
+  });
+  return client.client_id;
 }

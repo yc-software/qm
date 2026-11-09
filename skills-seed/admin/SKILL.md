@@ -215,8 +215,11 @@ GET /v1/admin/users            → roster + admin status (org-wide)
 Users lists the `users` table, the people and apps QM has met: someone joins on their own first
 message (not a non-person actor; a Slack id is recorded as the person the directory maps it to),
 when invited as a teammate, or when made an admin. Each row has a generated `userId`; `principalId`
-is the person's main sign-in. Linking merges a sign-in's user into its person's. Rows carry
-`kind` (`person` or `app`, for Slack apps), `firstSeenAt` and `source`; activity counts are computed.
+is the person's main sign-in and `aliases` lists every sign-in that resolves to them. Linking merges
+a sign-in's user into its person's. Rows carry `kind` (`person` or `app`, for Slack apps), `firstSeenAt`
+and `source`; session and turn counts add up activity across all of the user's sign-ins. Any
+`/v1/admin/users/<id>` route takes either the `userId` or any sign-in. Spend and Keychain people carry
+`userId` too, and retention counts each person (not each sign-in) once, leaving apps out.
 
 ## External users
 

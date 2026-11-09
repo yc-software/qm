@@ -1,3 +1,4 @@
+import type { PersonaService } from "../../personas/persona-service.ts";
 import type { AdmittedWork } from "../../util/admitted-work.ts";
 import type { TraceCarrier } from "../../../plugins/chassis/src/error-reporting.ts";
 import type { GoalCreateInput } from "../../agent/goal.ts";
@@ -161,6 +162,7 @@ export interface OrchestratorDeps {
   processes?: ProcessRegistry;
   monitors?: MonitorStore;
   crons?: CronStore;
+  notebookOnlyMemory?: (threadRef: string) => Promise<boolean>;
   webhooks?: WebhookStore;
   control?: ControlService;
   runtime?: RuntimeService;
@@ -179,6 +181,7 @@ export interface OrchestratorDeps {
   deliveries?: DeliveryStore;
   directory?: DirectoryStore;
   projects?: Pick<ProjectStore, "recognizes" | "name">;
+  personas?: Pick<PersonaService, "forTurn">;
   isCurrentSharedScopeMember?: IsCurrentSharedScopeMember;
   currentScopeMembers?: import("../../resolution/scope-membership.ts").CurrentScopeMembers;
   managedGroups?: Pick<ManagedGroupDirectory, "recognizes" | "members" | "version" | "withVersion" | "slackChannel">;

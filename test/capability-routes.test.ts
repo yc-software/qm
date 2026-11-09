@@ -206,6 +206,10 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
       ).status,
       403,
     );
+    const unattended = { "x-agent-capability": await capFor("admin-alice") };
+    assert.equal((await post(`/v1/crons/${cron.id}/disable`, {}, unattended)).status, 200);
+    assert.equal((await post(`/v1/crons/${cron.id}/enable`, {}, unattended)).status, 403);
+    assert.equal((await built.app.getCron(cron.id))?.enabled, false);
     assert.equal(
       (
         await post(
@@ -519,6 +523,12 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     ).json()) as any;
     const res = await post(`/v1/crons/${created.cron.id}/disable`, {}, { "x-agent-capability": await capFor("U2") });
     assert.equal(res.status, 403);
+    const enable = await post(`/v1/crons/${created.cron.id}/enable`, {}, { "x-agent-capability": await capFor("U2") });
+    assert.equal(enable.status, 403);
+    const owner = { "x-agent-capability": await capFor("U1") };
+    assert.equal((await post(`/v1/crons/${created.cron.id}/disable`, {}, owner)).status, 200);
+    assert.equal((await post(`/v1/crons/${created.cron.id}/enable`, {}, owner)).status, 200);
+    assert.equal((await built.app.getCron(created.cron.id))?.enabled, true);
   });
 
   it("creates a cron at a chosen destinationKey (the whole channel), audience from the token", async () => {

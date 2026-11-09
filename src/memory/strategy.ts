@@ -13,6 +13,7 @@ export interface MemoryStrategy {
       input: string;
       reply: string;
       actorId?: string;
+      audienceScopeId?: ScopeId;
       conversationScopeId?: ScopeId;
       sessionId?: string;
       idempotencyKey?: string;

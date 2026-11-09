@@ -3,10 +3,13 @@ import test from "node:test";
 import { suggestedActivityRoutes } from "../src/api/routes/suggested-activities.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 
+const SEEDS = [{ id: "app", title: "Build an app", prompt: "Build a private project tracker.", icon: "app" }];
+
 async function request(body: unknown, enabled: boolean, actor = "alice") {
   let status = 0;
   let result: unknown;
   let calls = 0;
+  let seeds: unknown;
   const route = suggestedActivityRoutes.find((entry) => "method" in entry && entry.method === "POST")!;
   assert.equal(route.auth, "source");
   await route.handle({
@@ -14,9 +17,11 @@ async function request(body: unknown, enabled: boolean, actor = "alice") {
     actor: { p: actor, exp: Date.now() + 1000 },
     deps: enabled
       ? {
+          web: { me: { suggestedActivities: SEEDS } },
           suggestedActivities: {
-            get: async () => {
+            get: async (_principalId: string, configured: unknown) => {
               calls++;
+              seeds = configured;
               return { activities: [], pending: false };
             },
           },
@@ -32,7 +37,7 @@ async function request(body: unknown, enabled: boolean, actor = "alice") {
       },
     },
   } as unknown as ApiCtx);
-  return { status, result, calls };
+  return { status, result, calls, seeds };
 }
 
 test("disabled generation cannot call a model", async () => {
@@ -40,6 +45,7 @@ test("disabled generation cannot call a model", async () => {
     status: 404,
     result: { error: "not_found" },
     calls: 0,
+    seeds: undefined,
   });
 });
 
@@ -48,21 +54,18 @@ test("signed actor cannot generate for another principal", async () => {
     status: 403,
     result: { error: "forbidden" },
     calls: 0,
+    seeds: undefined,
   });
 });
 
-test("generation validates inputs before invoking the model", async () => {
-  for (const body of [
-    {},
-    { principalId: "" },
-    { principalId: "alice", seeds: [{}] },
-    { principalId: "alice", timezone: "not/a/timezone" },
-  ]) {
+test("generation validates inputs before invoking the model and uses the configured seeds", async () => {
+  for (const body of [{}, { principalId: "" }, { principalId: "alice", timezone: "not/a/timezone" }]) {
     assert.equal((await request(body, true)).status, 400);
   }
-  assert.deepEqual(await request({ principalId: "alice" }, true), {
+  assert.deepEqual(await request({ principalId: "alice", seeds: [] }, true), {
     status: 200,
     result: { activities: [], pending: false },
     calls: 1,
+    seeds: SEEDS,
   });
 });
