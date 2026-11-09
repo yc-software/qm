@@ -95,6 +95,7 @@ test("the curated catalog contains only current model families", () => {
     SELECTABLE_BASE_MODELS.map((model) => model.id),
     [
       "claude-opus-5-5",
+      "claude-fable-5-2",
       "claude-fable-5-1",
       "claude-fable-5",
       "claude-opus-5",
@@ -226,6 +227,15 @@ test("context token budget is half of each model's real input room", () => {
     tiers: undefined,
   });
   assert.equal(contextTokenBudgetForModel("claude-fable-5-1"), 150_000, "a 1M window is capped, not halved");
+  const fable52 = getRequiredModel("claude-fable-5-2");
+  assert.equal(String(fable52.provider), "anthropic");
+  assert.equal(fable52.contextWindow, 1_000_000);
+  assert.equal(fable52.maxTokens, 128_000);
+  assert.deepEqual(fable52.cost, { input: 8, output: 40, cacheRead: 0.2, cacheWrite: 10, tiers: undefined });
+  assert.equal(fable52.thinkingLevelMap?.off, null, "Fable 5.2 thinking is always on");
+  assert.equal(modelSupportsFastMode("claude-fable-5-2"), true);
+  assert.equal(modelSupportsFastMode("claude-fable-5-1"), false);
+  assert.equal(contextTokenBudgetForModel("claude-fable-5-2"), 150_000);
   const opus55 = getRequiredModel("claude-opus-5-5");
   assert.equal(opus55.contextWindow, 1_000_000);
   assert.equal(opus55.maxTokens, 128_000);
