@@ -104,7 +104,8 @@ export function computeRetention(input: RetentionInput): RetentionReport {
       turns: { p50: percentile(turnCounts, 50), p95: percentile(turnCounts, 95) },
     },
     totals: { users: users.length, sessions: sessionCount },
-    attribution: "Per user across linked sign-ins, apps excluded; turns are credited to their author, so a scheduled run a person owns counts as theirs.",
+    attribution:
+      "Per user across linked sign-ins, apps excluded; turns are credited to their author, so a scheduled run a person owns counts as theirs.",
     note: "Derived per-request over all sessions × entries; move to a materialized daily rollup if volume grows.",
   };
 }
