@@ -145,7 +145,28 @@ const migrations: readonly PgMigrationDefinition[] = [
   },
 ];
 
-export const PUBLISHED_SESSION_UPGRADE = migrations.map((migration) => ({
+const RELEASE_TENANT_SEED: PgMigrationDefinition = {
+  id: "sessions/store/0034-tenant-seed",
+  statements: [
+    `DO $release_tenant_seed$
+     DECLARE
+       boot uuid;
+     BEGIN
+       IF to_regclass('qm_tenant') IS NOT NULL OR to_regclass('items') IS NOT NULL
+          OR to_regprocedure('qm_boot_tenant()') IS NULL THEN
+         RETURN;
+       END IF;
+       EXECUTE 'SELECT qm_boot_tenant()' INTO boot;
+       IF boot IS NOT NULL THEN
+         CREATE TABLE qm_tenant(id UUID PRIMARY KEY);
+         CREATE UNIQUE INDEX qm_tenant_singleton ON qm_tenant((true));
+         INSERT INTO qm_tenant(id) VALUES (boot);
+       END IF;
+     END $release_tenant_seed$`,
+  ],
+};
+
+export const PUBLISHED_SESSION_UPGRADE = [...migrations, RELEASE_TENANT_SEED].map((migration) => ({
   ...migration,
   upgradeFrom: "sessions/store/0033-client-tools",
 }));
