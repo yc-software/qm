@@ -947,11 +947,11 @@ function ensureItemSource(item: InboxItem): void {
 
 async function refetchItem(item: InboxItem, refreshSource = false): Promise<void> {
   try {
-    const { item: fresh } = await api<{ item: LedgerItem }>(
+    const { item: fresh, outputs } = await api<{ item: LedgerItem; outputs: ReviewOutput[] }>(
       `/api/loops/${encodeURIComponent(item.loopId)}/items/${encodeURIComponent(item.id)}${refreshSource ? "?refreshSource=1" : ""}`,
     );
     updateSentChat(fresh);
-    replaceItem({ ...toInboxItem(fresh), detailLoaded: true });
+    replaceItem({ ...toInboxItem(fresh), outputs, detailLoaded: true });
     drawAll();
   } catch {
     void refreshInbox({ silent: true });
@@ -1065,8 +1065,8 @@ export async function askAgent(
         }),
       });
       updateSentChat(next);
-      replaceItem({ ...toInboxItem(next), outputs: item.outputs, detailLoaded: true });
     });
+    await refetchItem(item);
     return true;
   } catch (e) {
     if (isDraftConflict(e)) await refetchItem(item);
