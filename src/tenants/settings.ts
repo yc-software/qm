@@ -3,9 +3,26 @@ import type { PgPool } from "../persistence/pg-pool.ts";
 import { loadTenant, perTenant } from "./cache.ts";
 import { boundTenant } from "./context.ts";
 import { appHandleSchema, appLabelLimitError } from "./app-handle.ts";
+import { SCOPE_KINDS } from "../types.ts";
 import { isDnsLabel } from "../../plugins/chassis/src/dns-label.ts";
 
 const text = z.string().min(1);
+
+const sandboxBackend = z.enum([
+  "sprites",
+  "aws",
+  "local",
+  "smolmachines",
+  "e2b",
+  "modal",
+  "porter",
+  "agent37",
+  "superserve",
+  "do-managed-agents",
+  "render",
+]);
+
+const namePrefix = z.string().regex(/^[a-z0-9][a-z0-9-]{0,49}$/, "expected a lowercase sandbox name prefix");
 
 const emailOrDomain = z
   .string()
@@ -24,10 +41,15 @@ export const tenantSettingsSchema = z
     handle: appHandleSchema,
     slackBridgeToken: z.string().regex(/^[\x21-\x7e]{16,}$/, "expected a Slack service bridge token"),
     spritesToken: text,
-    spritesNamePrefix: z.string().regex(/^[a-z0-9][a-z0-9-]{0,49}$/, "expected a lowercase sandbox name prefix"),
+    spritesNamePrefix: namePrefix,
     modalAppName: text,
     modalEnvironment: text,
-    modalNamePrefix: z.string().regex(/^[a-z0-9][a-z0-9-]{0,49}$/, "expected a lowercase sandbox name prefix"),
+    modalNamePrefix: namePrefix,
+    superserveApiKey: text,
+    superserveTemplate: text,
+    superserveNamePrefix: namePrefix,
+    sandboxBackend,
+    sandboxScopeBackends: z.partialRecord(z.enum(SCOPE_KINDS), sandboxBackend),
     /** False while this deployment is not serving the tenant (mid-copy or rolled back); sign-in then hides it. */
     serving: z.boolean(),
   })

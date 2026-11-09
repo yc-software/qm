@@ -72,7 +72,7 @@ import type { SessionShare, SessionShareStore } from "./sessions/session-share.t
 import { createModelOverlayStore, type ModelOverlayStore } from "./model/model-overlay-store.ts";
 import { mkdirSync } from "node:fs";
 import type { StagedEnvelope } from "./slack/envelope-staging.ts";
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 import {
   baseModelProviders,
@@ -82,7 +82,7 @@ import {
   type Config,
 } from "./config.ts";
 import type { ServerDeps } from "./api/deps.ts";
-import { enabledSandboxBackends } from "./sandbox/sandbox-settings.ts";
+import { enabledSandboxBackends, superserveGenerationKey } from "./sandbox/sandbox-settings.ts";
 import {
   actorAssertionActive,
   createIdentityService,
@@ -232,7 +232,7 @@ import { s3Client } from "./persistence/s3.ts";
 import { createS3SnapshotStore } from "./sandbox/home-snapshot.ts";
 import { createModalSandbox, type StoredModalSandbox } from "./sandbox/modal-sandbox.ts";
 import { createSdkModalClient } from "./sandbox/modal-client.ts";
-import { tenantModalClient } from "./sandbox/tenant-sandbox-shape.ts";
+import { tenantModalClient, tenantSandboxChoice, tenantSuperserveSandbox } from "./sandbox/tenant-sandbox-shape.ts";
 import { createPorterSandbox } from "./sandbox/porter-sandbox.ts";
 import { createSandboxRouter, type SandboxBackendName } from "./sandbox/sandbox-routing.ts";
 import {
@@ -1053,53 +1053,43 @@ export function buildApp(
   const superserveEpochs = processMap<StoredConfigEpoch>("superserve_config_epochs");
   const buildSuperserve = (): Sandbox => {
     const ss = config.superserveSandbox;
-    if (!ss.apiKey) throw new Error("SANDBOX_BACKEND=superserve requires SUPERSERVE_API_KEY");
+    if (!ss.apiKey && config.sandboxBackend === "superserve")
+      throw new Error("SANDBOX_BACKEND=superserve requires SUPERSERVE_API_KEY");
     if (!ss.template)
       throw new Error("SANDBOX_BACKEND=superserve requires SUPERSERVE_TEMPLATE (a ready qm-agent-<release> template)");
     const keepWarmSec = Math.ceil(config.backgroundJobTtlMaxMs / 1000);
-    const generationKey = createHash("sha256")
-      .update(
-        JSON.stringify([
-          config.buildSha ?? "",
-          ss.template,
-          ss.namePrefix ?? "",
-          ss.homeDir ?? "",
-          ss.idlePauseSec ?? null,
-          ss.retentionSec ?? null,
-          keepWarmSec,
-          [...(ss.egressAllow ?? [])].sort(),
-          [...(ss.egressDeny ?? [])].sort(),
-        ]),
-      )
-      .digest("hex")
-      .slice(0, 32);
-    return createSuperserveSandbox({
-      configEpoch: ss.configGeneration ?? createConfigEpochResolver(superserveEpochs, generationKey, advisoryLock),
-      client: createSdkSuperserveClient({
-        apiKey: ss.apiKey,
-        ...(ss.baseUrl ? { baseUrl: ss.baseUrl } : {}),
-        ...(ss.template ? { template: ss.template } : {}),
-      }),
-      ...(ss.namePrefix ? { namePrefix: ss.namePrefix } : {}),
+    const generationKey = superserveGenerationKey(ss, config.buildSha, keepWarmSec);
+    const configEpoch = ss.configGeneration ?? createConfigEpochResolver(superserveEpochs, generationKey, advisoryLock);
+    const base = {
+      ...(ss.apiKey ? { apiKey: ss.apiKey } : {}),
+      namePrefix: ss.namePrefix ?? "qm",
       template: ss.template,
-      ...(ss.homeDir ? { homeDir: ss.homeDir } : {}),
-      ...(ss.idlePauseSec !== undefined ? { idlePauseSec: ss.idlePauseSec } : {}),
-      keepWarmSec,
-      ...(ss.retentionSec !== undefined ? { retentionSec: ss.retentionSec } : {}),
-      ...(ss.egressAllow ? { egressAllow: ss.egressAllow } : {}),
-      ...(ss.egressDeny ? { egressDeny: ss.egressDeny } : {}),
-      ...(ss.defaultTimeoutSec ? { defaultTimeoutSec: ss.defaultTimeoutSec } : {}),
-      advisoryLock,
-      extraTools: deploymentLayer.advertisedTools,
-      credentialPaths: deploymentLayer.credentialPaths,
-      layerToolFiles: () => deploymentLayer.installFiles,
-      blobTransfer,
-      ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-      ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-      ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
-      store: superserveBodies,
-      onError: sandboxOnError,
-    });
+    };
+    return tenantSuperserveSandbox(base, ({ apiKey, namePrefix, template = ss.template }) =>
+      createSuperserveSandbox({
+        configEpoch,
+        client: createSdkSuperserveClient({ apiKey, ...(ss.baseUrl ? { baseUrl: ss.baseUrl } : {}), template }),
+        namePrefix,
+        template,
+        ...(ss.homeDir ? { homeDir: ss.homeDir } : {}),
+        ...(ss.idlePauseSec !== undefined ? { idlePauseSec: ss.idlePauseSec } : {}),
+        keepWarmSec,
+        ...(ss.retentionSec !== undefined ? { retentionSec: ss.retentionSec } : {}),
+        ...(ss.egressAllow ? { egressAllow: ss.egressAllow } : {}),
+        ...(ss.egressDeny ? { egressDeny: ss.egressDeny } : {}),
+        ...(ss.defaultTimeoutSec ? { defaultTimeoutSec: ss.defaultTimeoutSec } : {}),
+        advisoryLock,
+        extraTools: deploymentLayer.advertisedTools,
+        credentialPaths: deploymentLayer.credentialPaths,
+        layerToolFiles: () => deploymentLayer.installFiles,
+        blobTransfer,
+        ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
+        ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
+        ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
+        store: superserveBodies,
+        onError: sandboxOnError,
+      }),
+    );
   };
   const buildAws = (): Sandbox => {
     if (!config.awsSandbox.s3Bucket) throw new Error("SANDBOX_BACKEND=aws requires AWS_SANDBOX_S3_BUCKET");
@@ -1177,16 +1167,19 @@ export function buildApp(
   const sandboxResources = createSandboxResources({
     records: sandboxRecords,
     defaults: sandboxDefaults,
-    upgrade: () =>
-      upgradeLegacySandboxes({
+    upgrade: async () => {
+      const choice = await tenantSandboxChoice({
+        backend: config.sandboxBackend,
+        scopeBackends: config.legacySandboxScopeDefaults ?? {},
+      });
+      await upgradeLegacySandboxes({
         availableBackends: Object.keys(sandboxBackends) as SandboxBackendName[],
         records: sandboxRecords,
         defaults: sandboxDefaults,
         marker: artifactMap<{ activatedAt: string }>("sandbox_resource_rollout"),
         routes: () => artifactMap<LegacyRoute>("sandbox_routing").entries(),
         lock: advisoryLock,
-        legacyBackend: (scope) =>
-          legacySandboxBackendForScope(scope, config.sandboxBackend, config.legacySandboxScopeDefaults),
+        legacyBackend: (scope) => legacySandboxBackendForScope(scope, choice.backend, choice.scopeBackends),
         specFor: (backend) => sandboxBackends[backend]?.profile.spec,
         legacyScopes: async () => [
           ...(await sessions.distinctScopes()).map((scope) => scope.scopeId),
@@ -1199,18 +1192,17 @@ export function buildApp(
             awsBodies.entries(),
             superserveBodies.entries(),
           ]);
+          const bind = (backend: SandboxBackendName, rows: Array<[string, { sandboxId: string }]>) =>
+            rows.map(([scopeId, body]) => ({ scopeId, backend, machineId: body.sandboxId }));
           return [
-            ...e2b.map(([scopeId, body]) => ({ scopeId, backend: "e2b" as const, machineId: body.sandboxId })),
-            ...modal.map(([scopeId, body]) => ({ scopeId, backend: "modal" as const, machineId: body.sandboxId })),
+            ...bind("e2b", e2b),
+            ...bind("modal", modal),
             ...aws.map(([scopeId, body]) => ({ scopeId, backend: "aws" as const, machineId: body.microvmId })),
-            ...superserve.map(([scopeId, body]) => ({
-              scopeId,
-              backend: "superserve" as const,
-              machineId: body.sandboxId,
-            })),
+            ...bind("superserve", superserve),
           ];
         },
-      }),
+      });
+    },
     backends: sandboxBackends,
     defaultBackend: config.sandboxBackend,
     lock: advisoryLock,

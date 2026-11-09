@@ -719,7 +719,7 @@ test("resource activation honors scope defaults and preserves explicit legacy pr
   assert.equal((await resources.resolve("channel:room"))?.backend, "sprites");
   assert.equal((await resources.resolve("personal:existing"))?.backend, "aws");
   assert.equal(await resources.resolve("personal:new"), null);
-  assert.equal(resources.defaultBackend(), "sprites");
+  assert.equal(await resources.defaultBackend(), "sprites");
   assert.equal(legacySandboxBackendForScope("org", "sprites", scopeDefaults), "sprites");
 });
 
