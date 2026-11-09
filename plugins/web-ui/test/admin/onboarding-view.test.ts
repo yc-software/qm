@@ -83,6 +83,21 @@ test("without subscription auth an unconfigured provider still needs a key", asy
   assert.match(elements["onboarding-model-summary"]!.textContent, /cannot run until its Anthropic key is configured/);
 });
 
+test("a custom provider model is ready without a built-in provider key", async () => {
+  const elements = await runLoadOnboarding(
+    {
+      providers: UNCONFIGURED_PROVIDERS,
+      models: [{ id: "custom/baseten/zai-org/GLM-5.3", name: "GLM 5.3", provider: "baseten" }],
+    },
+    { baseModelDefault: "custom/baseten/zai-org/GLM-5.3" },
+  );
+  assert.equal(elements["onboarding-model-badge"]!.textContent, "Ready");
+  assert.match(
+    elements["onboarding-model-summary"]!.textContent,
+    /^custom\/baseten\/zai-org\/GLM-5\.3 · .* custom provider$/,
+  );
+});
+
 test("a stored key keeps its summary even when a subscription also carries auth", async () => {
   const elements = await runLoadOnboarding({
     providers: [

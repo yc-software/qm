@@ -313,7 +313,13 @@ async function assembleAndPrepare(spec: BootSpec): Promise<SpecInputs> {
     log,
   });
   for (const w of assembled.warnings) phase("env", "warn", w);
-  phase("env", "ok", `live turns (anthropic key from ${assembled.anthropicKeySource})`);
+  phase(
+    "env",
+    "ok",
+    assembled.anthropicKeySource
+      ? `live turns (anthropic key from ${assembled.anthropicKeySource})`
+      : `live turns (${assembled.env.OPENAI_API_KEY ? "OPENAI_API_KEY" : "BASETEN_API_KEY"})`,
+  );
 
   phase("deps", "start");
   await ensureDeps(worktree, { web: spec.web, webUiBasePath: spec.callerEnv.DEV_INSTANCE_WEB_UI_BASE || "/" }, log);
