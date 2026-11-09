@@ -152,6 +152,7 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
   };
   const exec = async (name: string, script: string, timeoutSec: number): Promise<ExecResult> => {
     const sandboxId = await idFor(name, true);
+    const startedAtMs = Date.now();
     const result = await client.runScript(sandboxId, script, timeoutSec).catch(async (error: unknown) => {
       const scope = base.scopeFor(name);
       const info = scope ? await client.get(sandboxId).catch(() => undefined) : undefined;
@@ -162,7 +163,9 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
         cause: error,
       });
     });
-    return { stdout: result.stdout, stderr: result.stderr, code: result.exitCode, timedOut: result.exitCode === 124 };
+    const timedOut =
+      (result.exitCode === 124 || result.exitCode === 137) && Date.now() - startedAtMs >= timeoutSec * 1000;
+    return { stdout: result.stdout, stderr: result.stderr, code: result.exitCode, timedOut };
   };
   const writeAbsBytes = async (name: string, path: string, data: Uint8Array): Promise<void> =>
     client.writeFileBytes(await idFor(name, true), path, data);
@@ -636,12 +639,7 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
         const stored = await store.get(scope);
         if (!stored) return;
         const info = await client.get(stored.sandboxId);
-        if (info?.status !== "running") return;
-        await withUse(name, async () => {
-          await checkpoint(scope, stored, await hasLiveProcesses(info.id));
-          await client.terminate(info.id);
-          await store.merge(scope, { stopped: true });
-        });
+        await withUse(name, () => replace(scope, stored, info));
       });
     },
     async reapDeepIdle(idleMs) {
@@ -733,6 +731,14 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
       try {
         const info = await client.get(stored.sandboxId);
         const running = info?.status === "running";
+        if (!running && stored.checkpoint && stored.checkpoint.expiresAtMs > Date.now())
+          return {
+            machine: `Render sandbox ${stored.sandboxId}: ${info?.status ?? "missing"}`,
+            lifecycleState: "paused",
+            provisioned: true,
+            guestResponsive: false,
+            recovery,
+          };
         const response = running ? await client.runScript(stored.sandboxId, "true", 10) : null;
         return {
           machine: `Render sandbox ${stored.sandboxId}: ${info?.status ?? "missing"}`,

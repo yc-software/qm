@@ -3,7 +3,7 @@ import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { constants, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { TestContext } from "node:test";
 import {
@@ -83,17 +83,16 @@ export function createFakeRender() {
     if (path.startsWith(`${RENDER_SCRIPT_DIR}/`)) return `${home(id)}${path}`;
     return path.replace(/^\/tmp\//, `${home(id)}/tmp/`).replace(/^\/root(?![A-Za-z0-9_-])/, home(id));
   };
+  const translate = (id: string, script: string): string =>
+    script
+      .replace(/\/tmp\//g, `${home(id)}/tmp/`)
+      .replace(/\/root(?![A-Za-z0-9_-])/g, home(id))
+      .replace(/tar --no-recursion --null -T ('[^']+') -cf ('[^']+')/g, "xargs -0 tar --no-recursion -cf $2 -- < $1")
+      .replaceAll(RENDER_SCRIPT_DIR, `${home(id)}${RENDER_SCRIPT_DIR}`);
   const execute = async (id: string, script: string) => {
     mkdirSync(join(home(id), "tmp"), { recursive: true });
     const file = join(root, `run-${randomUUID()}.sh`);
-    writeFileSync(
-      file,
-      script
-        .replace(/\/tmp\//g, `${home(id)}/tmp/`)
-        .replace(/\/root(?![A-Za-z0-9_-])/g, home(id))
-        .replace(/tar --no-recursion --null -T ('[^']+') -cf ('[^']+')/g, "xargs -0 tar --no-recursion -cf $2 -- < $1")
-        .replaceAll(RENDER_SCRIPT_DIR, `${home(id)}${RENDER_SCRIPT_DIR}`),
-    );
+    writeFileSync(file, translate(id, script));
     try {
       const result = await execFileAsync("/bin/sh", [file], {
         encoding: "utf8",
@@ -103,20 +102,21 @@ export function createFakeRender() {
       });
       return { stdout: result.stdout, stderr: result.stderr, exitCode: 0 };
     } catch (error) {
-      const result = error as Error & { code?: number; stdout?: string; stderr?: string };
-      if (typeof result.code !== "number") throw new Error(result.message, { cause: error });
-      return { stdout: result.stdout ?? "", stderr: result.stderr ?? "", exitCode: result.code };
+      const result = error as Error & { code?: number; signal?: NodeJS.Signals; stdout?: string; stderr?: string };
+      const exitCode = result.signal ? 128 + constants.signals[result.signal] : result.code;
+      if (typeof exitCode !== "number") throw new Error(result.message, { cause: error });
+      return { stdout: result.stdout ?? "", stderr: result.stderr ?? "", exitCode };
     } finally {
       rmSync(file, { force: true });
     }
   };
   const runProxyCommand = async (id: string, command: string) => {
     requireRunning(id);
-    const spooled = /^timeout \d+ sh '([^']+)'$/.exec(command);
-    if (!spooled) return execute(id, command);
-    const script = mapped(id, spooled[1]!);
-    if (!existsSync(script)) return { stdout: "", stderr: `sh: cannot open ${spooled[1]}`, exitCode: 2 };
-    return execute(id, readFileSync(script, "utf8"));
+    for (const [path] of command.matchAll(new RegExp(`${RENDER_SCRIPT_DIR}/[0-9a-f-]+\\.sh`, "g"))) {
+      const script = mapped(id, path);
+      if (existsSync(script)) writeFileSync(script, translate(id, readFileSync(script, "utf8")));
+    }
+    return execute(id, command);
   };
   const startImport = (source: string, name: string) => {
     imports.push({ source, name });

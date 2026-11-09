@@ -6,7 +6,15 @@ import { join } from "node:path";
 import { createSdkRenderClient, RENDER_SCRIPT_DIR } from "../src/sandbox/render-client.ts";
 import { createFakeRender, serveFakeRenderApi } from "./support/fake-render.ts";
 
-const SPOOLED = new RegExp(`^timeout (\\d+) sh '${RENDER_SCRIPT_DIR.replaceAll(".", "\\.")}/[0-9a-f-]{36}\\.sh'$`);
+const literal = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const SPOOLED = new RegExp(
+  [
+    `^${literal("sh -c 's=$(date +%s); $(command -v setsid) timeout -k 5 ")}(\\d+)${literal(" sh '\\''")}`,
+    `(${literal(RENDER_SCRIPT_DIR)}/[0-9a-f-]{36}\\.sh)`,
+    literal("'\\'' & p=$!; wait $p; rc=$?; if [ $rc -eq 124 ] || [ $rc -eq 137 ]; then [ $(($(date +%s) - s)) -lt "),
+    `\\1${literal(" ] || kill -s KILL -- -$p 2>/dev/null; fi; exit $rc'")}$`,
+  ].join(""),
+);
 const cleanup = (path: string): string =>
   `rm -f '${path}'; find '${RENDER_SCRIPT_DIR}' -type f -mmin +5 -delete 2>/dev/null\n`;
 
@@ -304,7 +312,7 @@ test("Render SDK adapter keeps stdout, stderr, and nonzero exit status of an upl
   assert.match(command, SPOOLED);
   assert.equal(SPOOLED.exec(command)![1], "10");
   assert.deepEqual(JSON.parse(sent[3]!.body), { command });
-  const path = command.slice(command.indexOf("'") + 1, -1);
+  const path = SPOOLED.exec(command)![2]!;
   assert.ok(sent[1]!.body.startsWith(cleanup(path)));
   assert.ok(sent[1]!.body.endsWith("\nexample command"));
 });
@@ -507,7 +515,7 @@ test("Render SDK adapter rejects truncated streams and removes the uploaded scri
     .map((request) => (JSON.parse(request.body) as { command: string }).command);
   assert.equal(commands.length, 2);
   assert.match(commands[0]!, SPOOLED);
-  assert.equal(commands[1], `rm -f ${commands[0]!.slice(commands[0]!.indexOf("'"))}`);
+  assert.equal(commands[1], `rm -f '${SPOOLED.exec(commands[0]!)![2]}'`);
 });
 
 test("Render SDK adapter keeps scripts and secrets out of run token requests and runs scripts past the argument limit", async (t) => {
@@ -531,7 +539,7 @@ test("Render SDK adapter keeps scripts and secrets out of run token requests and
     assert.equal(request.body.includes(payload.slice(0, 64)), false);
   }
   assert.match((JSON.parse(runs[0]!.body) as { command: string }).command, SPOOLED);
-  assert.ok(http.proxyCommands.every((command) => command.length < 200 && !command.includes(secret)));
+  assert.ok(http.proxyCommands.every((command) => command.length < 400 && !command.includes(secret)));
   assert.equal(http.uploads.length, 1);
   assert.ok(http.uploads[0]!.path.startsWith(`${RENDER_SCRIPT_DIR}/`));
   const spoolDir = join(fake.home(id), RENDER_SCRIPT_DIR);
@@ -574,7 +582,7 @@ test("Render SDK adapter bounds a stalled run token request by the script deadli
   const client = createSdkRenderClient({ apiKey: "secret", workspaceId: "tea-test" });
   const started = Date.now();
   await assert.rejects(client.runScript("sbx-test", "sleep 60", 1));
-  assert.ok(Date.now() - started < 5_000);
+  assert.ok(Date.now() - started < 15_000);
   assert.equal(commands.length, 2);
   assert.match(commands[0]!, SPOOLED);
   assert.match(commands[1]!, /^rm -f '/);
