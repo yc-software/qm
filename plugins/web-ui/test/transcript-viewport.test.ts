@@ -1366,11 +1366,12 @@ test("earlier messages prepended into reused rows keep the reader on the same te
   }
 });
 
-test("a reply rebuilt at settle is found again by its text and kept in place", () => {
+test("a reply rebuilt at settle is found again by its text even though its row key changed", () => {
   const f = readingFixture([300, 300, 600]);
   try {
     f.texts[2] = "";
     f.draw();
+    f.stack.children[2]!.setAttribute("data-entry-seqs", "150");
     f.scroll(750);
     const streaming = f.stack.children[2]!.querySelector("p")!;
     streaming.textContent = "Reply so far";

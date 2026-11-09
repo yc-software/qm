@@ -30,15 +30,18 @@ function readingAnchor(stack: HTMLElement, line: number, origin: number, skip: s
 
 function locateAnchor(stack: HTMLElement, anchor: ReadingAnchor, origin: number): HTMLElement | null {
   const { element, text, row } = anchor;
-  const same = (node: HTMLElement): boolean =>
-    (!text || !!node.textContent?.startsWith(text)) && (!row || rowKey(node) === row);
-  if (stack.contains(element) && same(element)) return element;
+  const kept = stack.contains(element) && (!text || !!element.textContent?.startsWith(text));
+  if (kept && (!row || rowKey(element) === row)) return element;
   if (!text) return row ? stack.querySelector<HTMLElement>(`[data-entry-seqs="${row}"]`) : null;
-  const matches = [...stack.querySelectorAll<HTMLElement>(element.tagName)].filter(
-    (node) => node.textContent?.startsWith(text) && (!row || !rowKey(node) || rowKey(node) === row),
+  const matches = [...stack.querySelectorAll<HTMLElement>(element.tagName)].filter((node) =>
+    node.textContent?.startsWith(text),
   );
   const distance = (node: HTMLElement): number => Math.abs(node.getBoundingClientRect().top - origin - anchor.offset);
-  return matches.find((node) => row && rowKey(node) === row) ?? matches.sort((a, b) => distance(a) - distance(b))[0] ?? null;
+  return (
+    matches.find((node) => row && rowKey(node) === row) ??
+    (kept ? element : matches.sort((a, b) => distance(a) - distance(b))[0]) ??
+    null
+  );
 }
 
 export function preserveTranscriptScroll(root: HTMLElement): () => void {
@@ -204,6 +207,7 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
     const element = locateAnchor(stack, anchor, origin);
     if (!element) return captureAnchor();
     anchor.element = element;
+    anchor.row = rowKey(element);
     const shift = element.getBoundingClientRect().top - origin - anchor.offset;
     if (Math.abs(shift) >= 0.5) {
       scroller.scrollTop += shift;
