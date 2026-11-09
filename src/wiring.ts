@@ -1,3 +1,4 @@
+import type { PromptSnapshot } from "./core/orchestrator/prompt-snapshot.ts";
 import type { MemoryEmbedder } from "./model/embeddings.ts";
 import { nonDeploymentCredential, withDeploymentCredentials } from "./credentials/deployment-credentials.ts";
 import { resolveEmbeddingModel } from "./model/pi-models.ts";
@@ -2167,6 +2168,7 @@ export function buildApp(
     deliveries,
     approvals,
     approvalGrants: artifactMap<CommandApprovalGrant>("approval_grants", ["actorId"]),
+    promptSnapshots: artifactMap<PromptSnapshot>("prompt_snapshots"),
     ...(processes ? { processes } : {}),
     monitors,
     crons,
