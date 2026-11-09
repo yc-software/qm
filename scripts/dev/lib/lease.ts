@@ -200,6 +200,7 @@ export function leaseReclaimReason(lease: LeaseInfo, nowSec = nowEpoch()): strin
     return "supervisor dead, heartbeat stale";
   }
   if (lease.heartbeat) return null;
+  if (lease.meta.booting === "1" && pidAlive(Number(lease.meta.owner_pid ?? 0))) return null;
   if (day !== todayYmd(nowSec)) return `started on ${day}, not today`;
   if (age > RECLAIM_AFTER_SEC) return `age ${formatAge(age)} exceeds ${formatAge(RECLAIM_AFTER_SEC)}`;
   return null;
