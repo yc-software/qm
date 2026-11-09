@@ -340,9 +340,16 @@ test("env assembly precedence: caller > login shell > dev.env > worktree .env", 
   assert.equal(fromDotenv.anthropicKeySource, "the worktree .env");
 
   writeFileSync(join(worktree, ".env"), "");
+  const basetenOnly = await assembleEnv({
+    worktree,
+    callerEnv: { BASETEN_API_KEY: "bt" },
+    log,
+    probeLoginShell: async () => "",
+  });
+  assert.equal(basetenOnly.env.BASETEN_API_KEY, "bt", "a Baseten key alone runs live turns");
   await assert.rejects(
     assembleEnv({ worktree, callerEnv: {}, log, probeLoginShell: async () => "" }),
-    /ANTHROPIC_API_KEY or OPENAI_API_KEY is required/,
+    /ANTHROPIC_API_KEY, OPENAI_API_KEY or BASETEN_API_KEY is required/,
   );
   const openaiOnly = await assembleEnv({
     worktree,
