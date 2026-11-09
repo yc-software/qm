@@ -4,7 +4,7 @@ import { parseScopeId, scopeId, type ScopeId } from "../types.ts";
 import { activeHolder } from "./persona-schema.ts";
 import type { Persona, PersonaStore } from "./persona-store.ts";
 
-export interface OwnerHandover {
+interface OwnerHandover {
   persona: Persona;
   to: string;
 }
