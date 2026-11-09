@@ -81,6 +81,7 @@ import { resolveEnvironmentId } from "../environments/environment-store.ts";
 import type { SessionWriter } from "../sessions/session-store.ts";
 import { CONFIG_DEFAULTS } from "../config.ts";
 import { contextSummary, sessionOrigin } from "../sessions/session-store.ts";
+import { adminStatusFromGrants } from "../admin/admin-service.ts";
 import { promptChanges, systemPromptSnapshot, turnFrameNote } from "./orchestrator/prompt-snapshot.ts";
 import { currentModelRequestContext, withModelRequestContext } from "../model/request-context.ts";
 import { supportsProcessSessions, supportsScopeProfile } from "../sandbox/sandbox.ts";
@@ -1654,6 +1655,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       }
       let actorIsOrgAdmin = false;
       let orgMemoryWrite: ScopeId | undefined;
+      const orgMemoryWritable = useMemory && memoryPolicy.capture !== "off" && resolution.orgScopeId !== memoryScopeId;
       let controlClaims: CapabilityClaims | undefined;
       const sandboxTokenTtlMs = deps.sandboxCapabilityTtlMs ?? SANDBOX_CAPABILITY_TTL_MS;
       const sandboxTokenExpiry = sandboxTokenTtlMs === 0 ? 0 : Date.now() + sandboxTokenTtlMs;
@@ -1676,15 +1678,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             .adminStatusOf(actor)
             .catch(swallowAs("orchestrator: admin status for turn", { isAdmin: false }));
           actorIsOrgAdmin = status.isAdmin;
-          if (
-            actorIsOrgAdmin &&
-            liveTurn &&
-            useMemory &&
-            memoryPolicy.capture !== "off" &&
-            resolution.orgScopeId !== memoryScopeId
-          ) {
-            orgMemoryWrite = resolution.orgScopeId;
-          }
+          if (actorIsOrgAdmin && liveTurn && orgMemoryWritable) orgMemoryWrite = resolution.orgScopeId;
         }
         const memoryClaim = memoryAccess
           ? { ...memoryAccess, read: baseRecallScopes, ...(orgMemoryWrite ? { orgWrite: orgMemoryWrite } : {}) }
@@ -2321,11 +2315,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (appConnections)
           systemPrompt +=
             "\n\n## Connected app access\nComposio is configured in the backend. Load the composio skill and use /v1/composio through the authenticated agent API. Apps that have their own skill work over these connections too; prefer that skill. No Composio project key is delivered to your computer; the backend checks account ownership and context access.";
-        if (deps.admin && !external && !strictReadOnly) {
+        const adminGrants =
+          deps.admin && !external && !strictReadOnly && deps.signingSecret && deps.apiBaseUrl
+            ? await deps.admin.listGrants().catch(swallowAs("orchestrator: admin grants", []))
+            : [];
+        if (conversation.audience.some((p) => adminStatusFromGrants(adminGrants, p.id).isAdmin)) {
           systemPrompt +=
             "\n\n## Acting for an org admin\n" +
             "When a turn's context says the sender is an org admin, your token inherits that for that turn: anything they could do in the admin dashboard — inspect or govern any scope's config/SOUL, memory, transcripts, files, audit — they can do through you. The admin skill documents the whole API surface; read it before acting" +
-            (useMemory && memoryPolicy.capture !== "off" && resolution.orgScopeId !== memoryScopeId
+            (orgMemoryWritable
               ? ', and for plain "remember this org-wide" requests the lighter path is `"scope":"org"` on the memory self-API (memory skill)'
               : "") +
             ". You're acting as them: confirm before any mutation, and say exactly what you changed. Hard limits the API enforces: private-content reads require a DM or an Open conversation on a live admin turn (organization, personal, and conversation sharing restrictions all apply); admin grant changes and impersonation are portal-only. Open admin reads can expose private data to everyone in the conversation: retrieve and report only what the request needs. Admin access to other people's private sessions, memory and files is for running and repairing the system, not a shortcut to answer questions about them: when a request needs something only another person's private context holds, use the hand-off skill even if admin access could reach it." +

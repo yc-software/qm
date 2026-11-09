@@ -11,7 +11,7 @@ export async function systemPromptSnapshot(
   sessionId: string,
   fresh: PromptSnapshot,
 ): Promise<PromptSnapshot> {
-  const kept = await store.putIfAbsent(sessionId, fresh);
+  const kept = (await store.get(sessionId)) ?? (await store.putIfAbsent(sessionId, fresh));
   if (kept.epoch >= fresh.epoch) return kept;
   return (await store.update(sessionId, (current) => (current.epoch >= fresh.epoch ? current : fresh))) ?? fresh;
 }

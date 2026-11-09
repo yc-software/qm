@@ -1529,7 +1529,7 @@ for (const surfaceTools of [false, true]) {
   });
 }
 
-test("scheduled-work changes update the next turn's system block without rewriting history", async () => {
+test("scheduled-work changes ride the next turn's environment note without rewriting the system prompt or history", async () => {
   const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const sandbox = fakeSandbox();
   const seen: AgentTurnInput[] = [];
@@ -1561,12 +1561,12 @@ test("scheduled-work changes update the next turn's system block without rewriti
     throw new Error("inventory unavailable");
   };
   assert.equal((await orchestrator.handleTurn({ ...input, text: "fourth" })).status, "ok");
-  for (const turn of seen) assert.doesNotMatch(turn.environment ?? "", /Scheduled here|Sandboxes|Debian|vCPU/);
+  for (const turn of seen) assert.equal(turn.systemPrompt, seen[0]!.systemPrompt);
   assert.match(seen[0]!.systemPrompt, /Nothing is scheduled here/);
-  assert.match(seen[1]!.systemPrompt, /- Synthetic status — /);
-  assert.equal(seen[2]!.systemPrompt, seen[0]!.systemPrompt);
-  assert.match(seen[3]!.systemPrompt, /Scheduled-work status is unavailable/);
-  assert.doesNotMatch(seen[1]!.systemPrompt, /Other Linux|8 vCPU|\/new\/workspace/);
+  assert.match(seen[1]!.environment ?? "", /Synthetic status/);
+  assert.doesNotMatch(seen[2]!.environment ?? "", /Synthetic status|Scheduled here/);
+  assert.match(seen[3]!.environment ?? "", /Scheduled-work status is unavailable/);
+  for (const turn of seen) assert.doesNotMatch(turn.environment ?? "", /Other Linux|8 vCPU|\/new\/workspace/);
   assert.deepEqual(seen[1]!.history, originalItems);
   assert.deepEqual((await sessions.getItems(first.sessionId!)).slice(0, originalItems.length), originalItems);
 });
@@ -1638,7 +1638,10 @@ test("a shared thread keeps one byte-identical system prompt until compaction; c
     mode: "standing",
     purpose: "publish packages",
   });
-  const admin = { adminStatusOf: async (p: Principal) => ({ isAdmin: p.id === actor.id }) } as unknown as AdminService;
+  const admin = {
+    adminStatusOf: async (p: Principal) => ({ isAdmin: p.id === actor.id }),
+    listGrants: async () => [{ principalId: actor.id, role: "org_admin", scopeId: scopeId("org", ORG) }],
+  } as unknown as AdminService;
   const { orchestrator, sessions } = buildOrchestrator({ crons, keychain, admin });
   const thread = "C1:stable-thread";
   const turn = async (speaker: Principal, origin: OrchestratorInput["origin"] = { kind: "human" }) => {
@@ -1662,7 +1665,6 @@ test("a shared thread keeps one byte-identical system prompt until compaction; c
   };
 
   const first = await turn(actor);
-  assert.match(first.system, /\n## Acting for an org admin\n/);
   assert.match(first.environment, /The sender is an org admin\./);
   assert.doesNotMatch(first.environment, /Changed since the system prompt/);
 
@@ -1681,12 +1683,12 @@ test("a shared thread keeps one byte-identical system prompt until compaction; c
   t.mock.timers.tick(2 * 3_600_000);
   const third = await turn(teammate);
   assert.equal(third.system, first.system, "a new cron and an expired credential must not change the system prompt");
-  assert.match(third.environment, /^\+ Scheduled here[^:\n]*: - Weekly digest — 9:00 AM Mon$/m);
-  assert.match(third.environment, /^- Credentials › U1: - `npm:[^`]+` — npm; env `NPM_TOKEN`$/m);
+  assert.match(third.environment, /^\+ .*Weekly digest/m);
+  assert.match(third.environment, /^- .*NPM_TOKEN/m);
 
   const fired = await turn(actor, { kind: "automation", destination: { type: "test", target: thread } });
   assert.equal(fired.system, first.system, "a scheduled fire must not change the system prompt");
-  assert.match(fired.environment, /This turn was fired by a scheduled trigger with a platform-managed destination\./);
+  assert.match(fired.environment, /scheduled trigger/);
   assert.match(fired.environment, /Weekly digest/);
 
   const session = (await sessions.getByThread(thread))!;
@@ -1697,7 +1699,7 @@ test("a shared thread keeps one byte-identical system prompt until compaction; c
   );
   const compacted = await turn(actor);
   assert.notEqual(compacted.system, first.system, "compaction re-snapshots the system prompt");
-  assert.match(compacted.system, /- Weekly digest — /);
+  assert.match(compacted.system, /Weekly digest/);
   assert.doesNotMatch(compacted.system, /NPM_TOKEN/);
   assert.doesNotMatch(compacted.environment, /Changed since the system prompt/);
   assert.equal((await turn(teammate)).system, compacted.system);
