@@ -549,7 +549,9 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
         app,
         inbound,
         () => serve(req, res, base, raw, matched),
-        () => identityTenant(req, deps.portalIdentitySecret ?? deps.signingSecret),
+        async () =>
+          (await identityTenant(req, deps.portalIdentitySecret ?? deps.signingSecret)) ??
+          (usesBrowserSession(req, route) ? (browserSessionTenant(req, deps) ?? bootTenant()) : undefined),
       );
     await withRequestTenant(
       req,

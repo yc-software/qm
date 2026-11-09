@@ -157,6 +157,7 @@ async function readShare(ctx: ApiCtx): Promise<void> {
 }
 
 const SHARE_TENANT = { by: "share", key: (params: Record<string, string>) => params.token } as const;
+const BROWSER_SHARE_TENANT = { ...SHARE_TENANT, signedTenantFirst: true } as const;
 
 export const sessionSharingRoutes: ReadonlyArray<Route> = [
   {
@@ -179,7 +180,7 @@ export const sessionSharingRoutes: ReadonlyArray<Route> = [
         ...(shared ? { browser: true as const } : {}),
         actor,
         auth: shared ? "source" : "public",
-        tenant,
+        tenant: shared ? BROWSER_SHARE_TENANT : tenant,
         handle: readShare,
       },
     ];
@@ -190,7 +191,7 @@ export const sessionSharingRoutes: ReadonlyArray<Route> = [
     browser: true,
     actor: "person",
     auth: "source",
-    tenant: SHARE_TENANT,
+    tenant: BROWSER_SHARE_TENANT,
     handle: (ctx) => sharePage(ctx, false),
   },
   {
