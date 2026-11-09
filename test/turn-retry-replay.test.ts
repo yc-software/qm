@@ -11,7 +11,7 @@ import type { Agent } from "../src/agent/agent.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
-import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
+import { createDeliveryStore, turnDeliveryProvenance } from "../src/delivery/delivery-store.ts";
 import { scopeId, type Conversation, type Principal } from "../src/types.ts";
 import { type Item, type NewItem, USER_ITEM_KINDS } from "../src/sessions/items.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
@@ -400,6 +400,35 @@ test("a retried surface-tool turn delivers a recorded reply its first attempt di
     "the reply is delivered once across repeated retries",
   );
   assert.equal(turns.length, 0);
+});
+
+test("a retried surface-tool turn does not repeat the acknowledgement its first attempt already posted", async () => {
+  const scenario = buildScenario();
+  const { orchestrator, runs, deliveries } = scenario;
+  const run = (await runs.enqueue({ sessionId: slackThread, request: slackInput("", 1) })).run;
+  await seedSlackTurn(scenario, run.id, [
+    { kind: "UserMessage", text: ASK },
+    { kind: "AgentMessage", text: `Checking now. ${ANSWER}` },
+  ]);
+  await deliveries.enqueue({
+    destination: { type: "slack", target: "C1:100.1" },
+    text: "Checking now.",
+    idempotencyKey: `ack:${run.id}`,
+    provenance: turnDeliveryProvenance({
+      origin: { kind: "direct" },
+      surface: "slack",
+      fireKey: `ack:${run.id}`,
+      sourceScopeId: scopeId("channel", "C1"),
+      sourceThreadRef: slackThread,
+    }),
+  });
+
+  assert.equal((await orchestrator.handleTurn(slackInput(run.id, 2))).status, "silent");
+  assert.deepEqual(
+    (await deliveries.pending("slack")).map((d) => d.text),
+    ["Checking now.", ANSWER],
+    "the replayed reply leaves out the acknowledgement already in the thread",
+  );
 });
 
 test("a retried surface-tool turn whose model already posted does not deliver its trailing text", async () => {
