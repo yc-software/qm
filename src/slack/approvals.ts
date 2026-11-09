@@ -14,9 +14,7 @@ import {
   createThreadTracker,
   recoveredApprovalContext,
   resolveReactionTargets,
-  refreshPersonas,
   slackReplyArgs,
-  slackEphemeralArgs,
   toSlackMrkdwn,
   uploadAttachments,
   uploadFailureNote,
@@ -148,21 +146,22 @@ export function createApprovals(deps: {
     await ack();
     const parsed = parseBlockAction(action, APPROVAL_ACTION_IDS);
     if (!parsed) return;
-    await refreshPersonas(core);
     const { actionId, value: requestId } = parsed;
 
     let ctx = pendingSlackApprovals.get(requestId);
     const click = parseInteractionBody(body);
     const { clickerId, messageTs, messageThreadTs } = click;
     const channel = click.channel ?? ctx?.channel ?? "";
-    const tellClicker = (text: string) =>
-      client.chat
-        .postEphemeral(slackEphemeralArgs(channel, clickerId, text))
-        .catch(swallowAs("slack: chat.postEphemeral", undefined));
 
     if (pendingSlackApprovals.busy(requestId)) {
       if (channel && clickerId) {
-        await tellClicker("This approval is being resolved right now — give it a moment.");
+        await client.chat
+          .postEphemeral({
+            channel,
+            user: clickerId,
+            text: "This approval is being resolved right now — give it a moment.",
+          })
+          .catch(swallowAs("slack: chat.postEphemeral", undefined));
       }
       return;
     }
@@ -170,7 +169,13 @@ export function createApprovals(deps: {
     const fetched = channel ? await fetchStoredApproval(requestId) : ({ state: "unavailable" } as const);
     if (fetched.state === "unavailable" && !ctx) {
       if (channel && clickerId) {
-        await tellClicker("I couldn't check on that approval just now — try the button again in a moment.");
+        await client.chat
+          .postEphemeral({
+            channel,
+            user: clickerId,
+            text: "I couldn't check on that approval just now — try the button again in a moment.",
+          })
+          .catch(swallowAs("slack: chat.postEphemeral", undefined));
       }
       return;
     }
@@ -184,7 +189,13 @@ export function createApprovals(deps: {
           "_That approval request expired or was withdrawn — let me know when you want to try again._",
         ).catch(swallowAs("slack: update approval message", undefined));
       } else if (channel && clickerId) {
-        await tellClicker("That approval request expired or was withdrawn — let me know when you want to try again.");
+        await client.chat
+          .postEphemeral({
+            channel,
+            user: clickerId,
+            text: "That approval request expired or was withdrawn — let me know when you want to try again.",
+          })
+          .catch(swallowAs("slack: chat.postEphemeral", undefined));
       }
       return;
     }
@@ -219,7 +230,13 @@ export function createApprovals(deps: {
           "_That approval request expired or was withdrawn — let me know when you want to try again._",
         ).catch(swallowAs("slack: update approval message", undefined));
       } else if (channel && clickerId) {
-        await tellClicker("That approval request expired or was withdrawn — let me know when you want to try again.");
+        await client.chat
+          .postEphemeral({
+            channel,
+            user: clickerId,
+            text: "That approval request expired or was withdrawn — let me know when you want to try again.",
+          })
+          .catch(swallowAs("slack: chat.postEphemeral", undefined));
       }
       return;
     }
@@ -228,13 +245,25 @@ export function createApprovals(deps: {
       clickerId === ctx.requesterId ||
       (ctx.recovered === true && (await directory.classifyActor(client, clickerId)).externalId === ctx.requesterId);
     if (!requesterMatches) {
-      await tellClicker("Only the person who requested this command can approve or deny it.");
+      await client.chat
+        .postEphemeral({
+          channel,
+          user: clickerId,
+          text: "Only the person who requested this command can approve or deny it.",
+        })
+        .catch(swallowAs("slack: chat.postEphemeral", undefined));
       return;
     }
 
     const begun = pendingSlackApprovals.begin(requestId);
     if (begun.state === "busy") {
-      await tellClicker("Still working on your previous click — give it a moment.");
+      await client.chat
+        .postEphemeral({
+          channel,
+          user: clickerId,
+          text: "Still working on your previous click — give it a moment.",
+        })
+        .catch(swallowAs("slack: chat.postEphemeral", undefined));
       return;
     }
     if (begun.state !== "ready") return;

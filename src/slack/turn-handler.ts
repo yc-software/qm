@@ -21,6 +21,7 @@ import {
   DEFAULT_ACK_REACTIONS,
   REACTION_DETECT_GUIDANCE,
   REACTION_INSTRUCTION,
+  botIdentityArgs,
   buildReactionTurnText,
   createAckPresenter,
   createDeduper,
@@ -52,10 +53,7 @@ import {
   resolveMentions,
   resolveReactionTargets,
   shouldSurfaceReaction,
-  personaFor,
-  refreshPersonas,
   slackReplyArgs,
-  slackEphemeralArgs,
   blocksWithContext,
   plainContext,
   threadHasBotStake,
@@ -219,7 +217,6 @@ export function createTurnHandler(deps: {
       ids.botUserId && ids.botHandle ? new Map([[ids.botUserId, ids.botHandle]]) : undefined,
     );
     if (!hasContent(text, inc.files)) return;
-    await refreshPersonas(core);
 
     let audience: ActorAssertion[] = [actor];
     let channelRef: string | undefined;
@@ -259,7 +256,7 @@ export function createTurnHandler(deps: {
     const ephemeralOrSay = async (msg: string): Promise<void> => {
       if (inc.kind === "channel") {
         await client.chat
-          .postEphemeral(slackEphemeralArgs(inc.channel, inc.userId, msg))
+          .postEphemeral({ channel: inc.channel, user: inc.userId, text: msg })
           .catch(swallowAs("slack: chat.postEphemeral", undefined));
       } else {
         await postReply(msg);
@@ -407,7 +404,7 @@ export function createTurnHandler(deps: {
       goalNotice = createGoalNoticePresenter({
         post: (text, blocks) => postReply(text, blocks),
         update: (ts, text, blocks) =>
-          client.chat.update({ channel: inc.channel, ts, text, blocks, ...personaFor(inc.channel) }).then(() => {}),
+          client.chat.update({ channel: inc.channel, ts, text, blocks, ...botIdentityArgs() }).then(() => {}),
         onError: (error) => console.error("[slack-plugin] goal notice update failed:", (error as Error).message),
       });
     }
@@ -771,22 +768,19 @@ export function createTurnHandler(deps: {
     channel: string,
     ts: string,
     full: boolean,
-  ): Promise<
-    { text: string; threadTs?: string; reactions: ReactionTally[]; authorId?: string; own: boolean } | undefined
-  > {
+  ): Promise<{ text: string; threadTs?: string; reactions: ReactionTally[]; authorId?: string } | undefined> {
     try {
       const res = await client.reactions.get({ channel, timestamp: ts, full });
       const m = res?.message;
       if (!m) return undefined;
       return {
-        own: Boolean((ids.botUserId && m.user === ids.botUserId) || (ids.ownBotId && m.bot_id === ids.ownBotId)),
         text: decodeSlackEntities(slackMessageContent(m).text.trim()),
         ...(m.thread_ts && m.thread_ts !== ts ? { threadTs: String(m.thread_ts) } : {}),
         reactions: reactionTallies(m.reactions),
         ...(m.user ? { authorId: String(m.user) } : {}),
       };
-    } catch (error) {
-      return swallowAs("slack: reacted message read", undefined)(error);
+    } catch {
+      return undefined;
     }
   }
 
@@ -803,22 +797,20 @@ export function createTurnHandler(deps: {
     if (!reactorId || !channel || !messageTs || !emoji) return;
 
     const isDM = channel.startsWith("D");
+    const onBotMessage = Boolean(ids.botUserId && evt.item_user === ids.botUserId);
     const onFollowedRoot = threads.get(channel, messageTs) === true;
-    const surfaces = (onBotMessage: boolean) =>
-      shouldSurfaceReaction({
+    if (
+      !shouldSurfaceReaction({
         itemType: evt.item?.type,
         reactorId,
         botUserId: ids.botUserId,
         isDM,
         onBotMessage,
         onFollowedRoot,
-      });
-    if (!surfaces(true)) return;
-    const reacted = evt.item_user ? undefined : getReactedMessage(client, channel, messageTs, added);
-    const onBotMessage = evt.item_user
-      ? Boolean(ids.botUserId && evt.item_user === ids.botUserId)
-      : Boolean((await reacted)?.own);
-    if (!surfaces(onBotMessage)) return;
+      })
+    ) {
+      return;
+    }
 
     const flightKey = `${channel}:${messageTs}:${emoji}:${reactorId}:${added ? "+" : "-"}`;
     if (reactionsInFlight.has(flightKey)) return;
@@ -854,7 +846,7 @@ export function createTurnHandler(deps: {
           }
           const reactorName = reactor.displayName || "Someone";
 
-          const msg = await (reacted ?? getReactedMessage(client, channel, messageTs, added));
+          const msg = await getReactedMessage(client, channel, messageTs, added);
           let authorName: string | undefined;
           if (!onBotMessage && msg?.authorId && msg.authorId !== reactorId) {
             authorName = (await classifyActor(client, msg.authorId)).displayName;

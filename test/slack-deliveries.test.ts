@@ -2,8 +2,6 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createDeliveryPoller } from "../src/slack/deliveries.ts";
 import { SLACK_POST_SPLIT_LIMIT } from "../src/slack/lib.ts";
-import { refreshPersonas, setDefaultBotIdentity, type SlackPersona } from "../src/slack/delivery.ts";
-import { deliverKeychainCard, registerKeychainApprovalActions } from "../src/slack/keychain-approvals.ts";
 
 const mixedFiles = [
   { name: "first.png", mimetype: "image/png", sizeBytes: 2, blobId: "B1" },
@@ -25,8 +23,6 @@ async function deliver(
     loseAck?: boolean;
     approval?: unknown;
     updateError?: string;
-    personas?: Record<string, SlackPersona>;
-    personasBefore?: Record<string, SlackPersona>;
   } = {},
 ) {
   const delivery = {
@@ -56,9 +52,7 @@ async function deliver(
       messages: history,
     };
   };
-  let personas = row.personasBefore ?? row.personas;
   const core = {
-    channelPersonas: async () => new Map(Object.entries(personas ?? {})),
     holdDeliveryDispatch: (fn: (lost: Promise<void>) => Promise<unknown>) => fn(new Promise<void>(() => {})),
     getApproval: async () => row.approval ?? null,
     readBlob: async (id: string) => Buffer.from(id),
@@ -111,10 +105,6 @@ async function deliver(
     clientForIdentity: () => client,
   });
 
-  if (row.personasBefore) {
-    await refreshPersonas(core);
-    personas = row.personas;
-  }
   await poller.pollDeliveries(client);
   return { acknowledgements, uploads, posts, updates, failures, marks, probes, conversationsOpened };
 }
@@ -512,172 +502,4 @@ test("a reply revised by the reply check carries a plain-text edit note footer",
     type: "context",
     elements: [{ type: "plain_text", text: "Edited after a reply check: em dash", emoji: false }],
   });
-});
-
-const ADA: SlackPersona = { username: "Ada", icon_emoji: ":art:" };
-const BOLT: SlackPersona = { username: "Bolt", icon_emoji: ":art:" };
-const identityOf = (args: Record<string, unknown>) => ({
-  username: args.username,
-  icon_emoji: args.icon_emoji,
-});
-
-test("a queued delivery into a bound channel posts every split part as its persona, while its files stay QM's", async () => {
-  const { posts, uploads } = await deliver({}, undefined, undefined, "word ".repeat(2_000), {
-    personas: { C1: ADA },
-  });
-  assert.ok(posts.length >= 2, "the delivery split into parts");
-  for (const post of posts) assert.deepEqual(identityOf(post), ADA);
-  assert.equal(uploads.length, 1);
-  assert.deepEqual(identityOf(uploads[0]!), { username: undefined, icon_emoji: undefined });
-});
-
-test("a queued delivery into an unbound channel keeps the default identity after a bound one", async () => {
-  await deliver({}, undefined, undefined, "first", { personas: { C1: BOLT } });
-  const { posts } = await deliver({}, undefined, undefined, "second", { personas: { C2: ADA } });
-  assert.deepEqual(identityOf(posts[0]!), { username: undefined, icon_emoji: undefined });
-});
-
-test("edits in a bound channel carry its persona, and edits elsewhere carry the default identity", async (t) => {
-  setDefaultBotIdentity({ username: "QM", icon_emoji: ":robot_face:" });
-  t.after(() => setDefaultBotIdentity(undefined));
-  const explicit = await deliver({ target: "C1", edit: { messageTs: "99.100" } }, undefined, undefined, "fixed", {
-    personas: { C1: ADA },
-  });
-  const finalized = await deliver({ editRef: "99.200" }, undefined, undefined, "final reply", {
-    personas: { C1: ADA },
-  });
-  const updates = [...explicit.updates, ...finalized.updates];
-  assert.equal(updates.length, 2);
-  for (const update of updates) assert.deepEqual(identityOf(update), ADA);
-  assert.deepEqual([...explicit.posts, ...finalized.posts], []);
-  const unbound = await deliver({ target: "C1", edit: { messageTs: "99.300" } }, undefined, undefined, "fixed again", {
-    personas: { C2: ADA },
-  });
-  assert.equal(unbound.updates.length, 1);
-  assert.deepEqual(identityOf(unbound.updates[0]!), {
-    username: "QM",
-    icon_emoji: ":robot_face:",
-  });
-});
-
-test("a delivery drain posts under a persona set moments earlier, inside the refresh window", async () => {
-  setDefaultBotIdentity({ username: "QM", icon_emoji: ":robot_face:" });
-  try {
-    const { posts } = await deliver({ target: "C1" }, undefined, undefined, "This channel now wears the persona Ada.", {
-      personasBefore: {},
-      personas: { C1: ADA },
-    });
-    assert.equal(posts.length, 1);
-    assert.deepEqual(identityOf(posts[0]!), ADA);
-  } finally {
-    setDefaultBotIdentity(undefined);
-    await refreshPersonas({ channelPersonas: async () => new Map() });
-  }
-});
-
-test("a keychain approval card delivered into a bound channel carries the persona", async () => {
-  await refreshPersonas({ channelPersonas: async () => new Map([["C1", BOLT]]) });
-  const posts: Record<string, unknown>[] = [];
-  const client = {
-    chat: {
-      postMessage: async (args: Record<string, unknown>) => {
-        posts.push(args);
-        return { ts: "5.5", channel: args.channel };
-      },
-    },
-    conversations: { replies: async () => ({ messages: [] }), history: async () => ({ messages: [] }) },
-  };
-  const core = {
-    keychainApprovals: {
-      card: async () => ({
-        ask: {
-          id: "K1",
-          status: "pending",
-          requestedMode: "once",
-          requesterScopeId: "channel:C1",
-          createdAt: Date.now(),
-        },
-        service: "github",
-        conversation: "#design",
-      }),
-    },
-  };
-  try {
-    await deliverKeychainCard(
-      core as never,
-      client,
-      { idempotencyKey: "ask:K1:notice", destination: { keychainAskId: "K1" } },
-      "C1",
-      "1.1",
-    );
-  } finally {
-    await refreshPersonas({ channelPersonas: async () => new Map() });
-  }
-  assert.equal(posts.length, 1);
-  assert.ok(Array.isArray(posts[0]!.blocks), "the card carries its buttons");
-  assert.deepEqual(identityOf(posts[0]!), { ...BOLT });
-});
-
-test("a follower that does not hold the delivery lease reads no personas, and its card click still edits as the persona", async () => {
-  await refreshPersonas({ channelPersonas: async () => new Map() });
-  let personaReads = 0;
-  const updates: Record<string, unknown>[] = [];
-  const client = {
-    chat: {
-      update: async (args: Record<string, unknown>) => {
-        updates.push(args);
-        return { ok: true };
-      },
-    },
-  };
-  const core = {
-    channelPersonas: async () => {
-      personaReads++;
-      return new Map([["C1", ADA]]);
-    },
-    holdDeliveryDispatch: async () => null,
-    keychainApprovals: {
-      decide: async () => ({
-        ask: {
-          id: "K1",
-          status: "approved",
-          requestedMode: "once",
-          requesterScopeId: "channel:C1",
-          createdAt: Date.now(),
-        },
-        service: "github",
-        conversation: "#design",
-      }),
-    },
-  };
-  let click: (args: unknown) => Promise<void> = async () => {};
-  registerKeychainApprovalActions(
-    {
-      action: (_pattern, handler) => {
-        click = handler;
-      },
-    },
-    { core: core as never, directory: { classifyActor: async () => ({ externalId: "ada@example.com" }) } as never },
-  );
-  const poller = createDeliveryPoller({
-    core: core as never,
-    flow: {} as never,
-    threads: {} as never,
-    clientForIdentity: () => client,
-  });
-  try {
-    assert.equal(await poller.pollDeliveries(client), false, "a follower runs no drain");
-    assert.equal(personaReads, 0, "a follower's lease retry reads no personas");
-    await click({
-      ack: async () => {},
-      body: { user: { id: "U1" }, channel: { id: "C1" }, message: { ts: "5.5" } },
-      action: { action_id: "keychain_allow_once", value: "K1" },
-      client,
-    });
-  } finally {
-    await refreshPersonas({ channelPersonas: async () => new Map() });
-  }
-  assert.equal(updates.length, 1);
-  assert.equal(updates[0]!.ts, "5.5");
-  assert.deepEqual(identityOf(updates[0]!), ADA);
 });

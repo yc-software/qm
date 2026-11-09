@@ -1,5 +1,4 @@
 import { personaPrompt } from "../personas/persona-service.ts";
-import { liveForLock } from "../personas/channel-personas.ts";
 import { isAgentReply, isOverheard, isUserItem, type Item, type NewItem, stepMessage } from "../sessions/items.ts";
 import type { ItemKind } from "../sessions/items-schema.ts";
 import { countTokens } from "../util/tokens.ts";
@@ -2685,7 +2684,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           postProvenance,
           postKeys,
           spine,
-          livePerson: liveForLock(liveAuthorTurn, input.botActor),
         });
         const attachStaging = createAttachStaging({
           sandbox: deps.sandbox,
