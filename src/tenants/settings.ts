@@ -8,19 +8,7 @@ import { isDnsLabel } from "../../plugins/chassis/src/dns-label.ts";
 
 const text = z.string().min(1);
 
-const sandboxBackend = z.enum([
-  "sprites",
-  "aws",
-  "local",
-  "smolmachines",
-  "e2b",
-  "modal",
-  "porter",
-  "agent37",
-  "superserve",
-  "do-managed-agents",
-  "render",
-]);
+const sandboxBackend = z.enum(["sprites", "modal", "superserve"]);
 
 const namePrefix = z.string().regex(/^[a-z0-9][a-z0-9-]{0,49}$/, "expected a lowercase sandbox name prefix");
 

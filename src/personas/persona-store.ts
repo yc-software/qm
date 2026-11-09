@@ -1,3 +1,4 @@
+import { claimRows, type ClaimedRow } from "../tenants/claim.ts";
 import { randomUUID } from "node:crypto";
 import { createPgPool, withPgTransaction, type Rows } from "../persistence/pg-pool.ts";
 import { DIRECTORY_MIGRATIONS } from "../directory/postgres-directory-store.ts";
@@ -67,6 +68,7 @@ export interface PersonaFields {
 }
 
 export interface PersonaStore {
+  claimTenants?(): Promise<ClaimedRow[]>;
   create(input: PersonaFields & { name: string }, owner: ScopeId, by: string): Promise<Persona>;
   get(id: string): Promise<Persona | null>;
   update(id: string, fields: PersonaFields, by: string, restoredFrom?: number): Promise<Persona | null>;
@@ -146,6 +148,7 @@ export function createPostgresPersonaStore(connectionString: string, opts: { id?
   ]);
   const nextId = opts.id ?? randomUUID;
   return {
+    claimTenants: () => claimRows({ q }, "claim_persona_tenants"),
     async create(input, owner, by) {
       const id = nextId();
       return withPgTransaction(await pool(), async (db) => {

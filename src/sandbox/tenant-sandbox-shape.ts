@@ -113,9 +113,11 @@ async function tenantSuperserveShape(base: SuperserveShape): Promise<SuperserveS
   if (!bound) return base;
   const { superserveApiKey, superserveNamePrefix, superserveTemplate } = bound.settings;
   const template = superserveTemplate ?? base.template;
-  const shape = superserveApiKey
-    ? { apiKey: superserveApiKey, namePrefix: superserveNamePrefix ?? base.namePrefix }
-    : { ...(base.apiKey ? { apiKey: base.apiKey } : {}), namePrefix: tenantNamePrefix(base.namePrefix, bound.tenant) };
+  const apiKey = superserveApiKey ?? base.apiKey;
+  const shape = {
+    ...(apiKey ? { apiKey } : {}),
+    namePrefix: superserveNamePrefix ?? tenantNamePrefix(base.namePrefix, bound.tenant),
+  };
   return { ...shape, ...(template ? { template } : {}) };
 }
 

@@ -116,11 +116,11 @@ describeTwoTenants("per-tenant sandbox backend", (db) => {
     assert.deepEqual(provisioned, ["superserve", "sprites"]);
     const record = await withTenant(a, () => resources.create("u", scope, "superserve"));
     assert.equal(record.backend, "superserve");
-    await set(b, { sandboxBackend: "e2b" });
+    await set(b, { sandboxBackend: "modal" });
     try {
       await assert.rejects(
         withTenant(b, () => resources.defaultBackend()),
-        /sandbox backend unavailable: e2b; this deployment does not run it/,
+        /sandbox backend unavailable: modal; this deployment does not run it/,
       );
     } finally {
       await set(b, {});
@@ -148,7 +148,7 @@ describeTwoTenants("per-tenant sandbox backend", (db) => {
     assert.deepEqual(ran, ["moved-key", "deploy-key", "moved-key"]);
     assert.deepEqual(made, [
       { apiKey: "deploy-key", namePrefix: "qm", template: "deploy-tpl" },
-      { apiKey: "moved-key", namePrefix: "qm", template: "moved-tpl" },
+      { apiKey: "moved-key", namePrefix: tenantNamePrefix("qm", a), template: "moved-tpl" },
       { apiKey: "deploy-key", namePrefix: tenantNamePrefix("qm", b), template: "deploy-tpl" },
     ]);
     await set(a, { superserveApiKey: "moved-key", superserveNamePrefix: "qm-moved", superserveTemplate: "moved-tpl" });

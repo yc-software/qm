@@ -306,7 +306,7 @@ import { createUserModelCredentialStore, type UserModelCredentialStore } from ".
 import { type ModelGatewayTransportConfig, setProviderBaseUrls } from "./model/provider-endpoints.ts";
 import { setCustomProviders } from "./model/custom-providers.ts";
 import { createPostgresSessionStore } from "./sessions/postgres-session-store.ts";
-import { bootTenant } from "./tenants/boot.ts";
+import { bootTenant, inBootTenant, tenancyBooted } from "./tenants/boot.ts";
 import { createPostgresToolOutputStore } from "./sessions/tool-output.ts";
 import { LLM_CAPTURE_RETENTION_MS, type SessionStore } from "./sessions/session-store.ts";
 import { keychainCompanyChatGPTAuth, type CompanyChatGPTAuth } from "./model/company-chatgpt-auth.ts";
@@ -2882,8 +2882,13 @@ export function buildApp(
   const personaOwnerSweeper = createSweeper(
     () =>
       leaderLease.hold("personas:owner-handover", async () => {
-        await identity.refresh(true);
-        await personaHandover.adoptOrphans();
+        const handOver = async () => {
+          await identity.refresh(true);
+          await personaHandover.adoptOrphans();
+        };
+        const claim = personaStore.claimTenants;
+        if (bootTenant() !== undefined || !tenancyBooted() || !claim) await inBootTenant(bootTenant(), handOver);
+        else await claimThenBind(() => claim(), handOver);
       }),
     5 * 60_000,
     { label: "persona-owner-handover" },

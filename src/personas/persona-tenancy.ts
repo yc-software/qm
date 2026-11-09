@@ -1,5 +1,6 @@
 import { definePgMigration, type PgMigrationDefinition } from "../persistence/pg-pool.ts";
 import { TENANCY, tenantRowSecurity, tenantTables } from "../tenants/migrations.ts";
+import { claimFunction } from "../tenants/claim.ts";
 import { PERSONA_MIGRATIONS } from "./persona-schema.ts";
 
 const PERSONA_VERSION_TENANCY = tenantTables(
@@ -102,4 +103,20 @@ END $persona_catch_up$`,
   };
 }
 
-export const PERSONA_TENANCY: PgMigrationDefinition[] = [catchUp(), ...PERSONA_VERSION_TENANCY, ...PIN_TENANCY];
+const PERSONA_CLAIMS: PgMigrationDefinition = {
+  id: "users/v2/0007-persona-claims",
+  statements: [
+    claimFunction(
+      "claim_persona_tenants",
+      "",
+      "SELECT DISTINCT tenant_id, 'personas'::text FROM personas ORDER BY tenant_id",
+    ),
+  ],
+};
+
+export const PERSONA_TENANCY: PgMigrationDefinition[] = [
+  PERSONA_CLAIMS,
+  catchUp(),
+  ...PERSONA_VERSION_TENANCY,
+  ...PIN_TENANCY,
+];
