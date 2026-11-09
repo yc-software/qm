@@ -1,6 +1,7 @@
 import type { PgMigrationDefinition } from "../persistence/pg-pool.ts";
 import { TENANCY_BASE } from "../tenants/migrations.ts";
 import { DROP_TENANT_PREBUILD_INDEXES } from "../tenants/prebuilt-indexes.ts";
+import { RETIRE_TENANT_KEYS } from "../tenants/retire-tenant-keys.ts";
 
 export const SPEND_INDEXABLE = `(spend_usage_json(usage_json) IS NOT NULL
   AND octet_length(session_id) + octet_length(model) + octet_length(usage_json) <= 2000)`;
@@ -448,6 +449,7 @@ const DROP_STOPPED_PLACEHOLDERS: PgMigrationDefinition = {
 
 export const SESSION_MIGRATIONS = [
   TENANCY_BASE,
+  RETIRE_TENANT_KEYS,
   SESSION_SCHEMA,
   MESSAGE_SEARCH_INDEX,
   DROP_ITEMS_SEARCH,
