@@ -311,12 +311,7 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
       ).rows.map((row) => [row.id, row.checksum]),
     );
     for (const migration of migrations) {
-      if (migration.upgradeFrom && !ledger.has(migration.upgradeFrom)) {
-        const predecessor = await client.query(`SELECT 1 FROM ${PG_MIGRATIONS_TABLE} WHERE id = $1`, [
-          migration.upgradeFrom,
-        ]);
-        if (!predecessor.rowCount) continue;
-      }
+      if (migration.upgradeFrom && !ledger.has(migration.upgradeFrom)) continue;
       const applied = ledger.get(migration.id);
       if (applied !== undefined) {
         if (applied !== migration.checksum) {
@@ -344,6 +339,7 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
           migration.id,
           migration.checksum,
         ]);
+        ledger.set(migration.id, migration.checksum);
         continue;
       }
       if (migration.statements.some((statement) => concurrentIndexName(statement))) {
@@ -380,6 +376,7 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
           migration.id,
           migration.checksum,
         ]);
+        ledger.set(migration.id, migration.checksum);
         continue;
       }
       await client.query("BEGIN");
@@ -399,6 +396,7 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
           migration.id,
           migration.checksum,
         ]);
+        ledger.set(migration.id, migration.checksum);
         await client.query("COMMIT");
       } catch (error) {
         discard = await rollbackOrReport(client, `pg-pool: rollback migration ${migration.id}`);
