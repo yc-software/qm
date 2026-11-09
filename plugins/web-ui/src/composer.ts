@@ -1,3 +1,4 @@
+import { sideChatExcerpt } from "./side-chat-excerpt";
 import { emojiCompletion } from "./emoji-completion";
 import { composerInput, resizeComposerInput } from "./composer-input";
 import { reportHandledError } from "./browser-errors.ts";
@@ -1596,12 +1597,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       !sideChat.expanded &&
       !agent.state.messages.length &&
       (options.includeSideChatExcerpt?.() ?? true)
-        ? `${sideChat.quote
-            .split("\n")
-            .map((line) => `> ${line}`)
-            .join("\n")}
-
-${draft}`
+        ? sideChatExcerpt(sideChat.quote) + draft
         : draft;
     const submit = options.prepareSubmit?.();
     if (submit) {

@@ -136,6 +136,18 @@ async function freshSession(sessions: SessionStore, id: string): Promise<Session
   return s;
 }
 
+test("side chats cannot launch subagents until opened as a full session", async () => {
+  const r = await rig();
+  const sideChat = { entrySeq: 0, quote: "selected passage", occurrence: 0, expanded: false };
+  const blocked = await r.syscallsFor({ ...r.room, sideChat }).open({ task: "research this passage" });
+  assert.equal(blocked.ok, false);
+  assert.deepEqual(await r.sessions.childrenOf(r.room.id), []);
+  const opened = await r
+    .syscallsFor({ ...r.room, sideChat: { ...sideChat, expanded: true } })
+    .open({ task: "research this passage" });
+  assert.equal(opened.ok, true);
+});
+
 test("open creates a child session with parent pointer, spawn meta, and a queued task run", async () => {
   const r = await rig();
   const out = await r.syscallsFor(r.room).open({ task: "build a personal website for alex", name: "website" });

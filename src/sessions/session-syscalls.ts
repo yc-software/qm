@@ -787,6 +787,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           await deps.mailbox?.acknowledge(binding.session.id, ids);
         },
         async open(input) {
+          if (binding.session.sideChat && !binding.session.sideChat.expanded)
+            return { ok: false, message: "Side chats cannot launch subagents. Open this chat as a session first." };
           return lock
             .withLock("session-tree-admission", async (): Promise<SessionOpenResult> => {
               if (binding.request.swarm || binding.session.threadRef.startsWith("swarm:"))

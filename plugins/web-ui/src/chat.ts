@@ -1,3 +1,4 @@
+import { sideChatExcerpt } from "./side-chat-excerpt";
 import { createSideChatController } from "./side-chat";
 import "./slack-reply";
 import type { SlackReply } from "./slack-reply";
@@ -362,6 +363,10 @@ export function createChatSurface(
     updateSpeakerLabels([...messages, ...[...inlineSteers.values()].map((steer) => steer.message)]);
   }
 
+  function isSideChatSurface(): boolean {
+    return Boolean(ctx.container()?.closest(".side-chat-panel"));
+  }
+
   function updateSpeakerLabels(messages: AgentMessage[]): void {
     const names = new Set<string>();
     for (const m of messages) {
@@ -370,14 +375,16 @@ export function createChatSurface(
         names.add(speaker.trim());
     }
     const viewer = appState.me?.displayName?.trim().toLowerCase();
-    chatState.labelSpeakers = names.size > 1 || (Boolean(viewer) && [...names].some((n) => n.toLowerCase() !== viewer));
+    chatState.labelSpeakers =
+      isSideChatSurface() || names.size > 1 || (Boolean(viewer) && [...names].some((n) => n.toLowerCase() !== viewer));
     chatState.assistantSpeakerLabel = chatState.labelSpeakers ? brandName() : "";
   }
 
   function speakerLabelFor(message: AgentMessage): string | undefined {
     if (!chatState.labelSpeakers) return undefined;
     const speaker = (message as { speaker?: string }).speaker;
-    return typeof speaker === "string" && speaker.trim() ? speaker.trim() : undefined;
+    if (typeof speaker === "string" && speaker.trim()) return speaker.trim();
+    return isSideChatSurface() ? appState.me?.displayName || "You" : undefined;
   }
 
   function speakerMember(message: AgentMessage): { principalId: string; avatarUrl?: string } | undefined {
@@ -389,14 +396,21 @@ export function createChatSurface(
     return { principalId: speakerId, avatarUrl: speakerAvatar(speakerId) };
   }
 
+  function speakerTime(message: AgentMessage): TemplateResult | typeof nothing {
+    const ts = (message as { timestamp?: number }).timestamp;
+    return isSideChatSurface() && ts !== undefined
+      ? html`<time class="speaker-time">${formatMessageTime(ts)}</time>`
+      : nothing;
+  }
+
   function speakerLabelTpl(speaker: string | undefined, message: AgentMessage): TemplateResult | typeof nothing {
     if (!speaker) return nothing;
     const member = speakerMember(message);
     return html`<div class="speaker-label">
       ${avatarTpl({ key: member?.principalId ?? speaker, name: speaker, avatarUrl: member?.avatarUrl })}<span
         title=${speaker}
-        >${speaker.split(/\s+/, 1)[0]!.toLowerCase()}</span
-      >
+        >${isSideChatSurface() ? speaker : speaker.split(/\s+/, 1)[0]!.toLowerCase()}</span
+      >${speakerTime(message)}
     </div>`;
   }
   let transcriptRefreshGeneration = 0;
@@ -753,6 +767,7 @@ export function createChatSurface(
   }
 
   function onDelivery(threadRef: string): void {
+    sideChats.onDelivery(threadRef);
     const ro = readOnlyView;
     if (ro && threadRef === ro.threadRef) {
       void fetchTranscript(ro.id, ro.anchorSeq !== null ? { sinceSeq: ro.anchorSeq } : { tailTurns: TAIL_TURNS })
@@ -1714,7 +1729,7 @@ export function createChatSurface(
     if (messages.length) {
       messageContent = messages.map(
         (m, i) =>
-          html`${settledChatMessage(m, i - inheritedOffset, agent.state.isStreaming && m === agent.state.streamingMessage)}${sideChats.markers(messageEntrySeqs(m))}`,
+          html`${settledChatMessage(m, i - inheritedOffset, agent.state.isStreaming && m === agent.state.streamingMessage)}${sideChats.markers(messageEntrySeqs(m), i - inheritedOffset + chatState.inheritedMessages.length)}`,
       );
     }
     const tier = ctx.density();
@@ -1802,7 +1817,9 @@ export function createChatSurface(
               @scroll=${sideChats.onScroll}
             >
               ${pinnedStrip()}
-              <div class="message-stack ${emptyChat ? "empty-stack" : ""}">
+              <div
+                class="message-stack ${emptyChat ? "empty-stack" : ""} ${sideChats.hasChats() ? "with-side-chats" : ""}"
+              >
                 ${showWelcome ? welcomeGreeting(!messages.length) : nothing} ${inheritedHeader()}
                 ${chatState.earlierCount > 0 ? earlierNotice() : nothing} ${messageContent} ${waitingSteerRows(agent)}
                 ${glanceTier ? nothing : liveWorkStatus(agent)}
@@ -2040,6 +2057,10 @@ export function createChatSurface(
         `;
       }
 
+      const rawText = messageText(message);
+      const quote = isSideChatSurface() && index === 0 ? chatState.forkSession?.sideChat?.quote : undefined;
+      const excerpt = quote ? sideChatExcerpt(quote) : "";
+      const displayText = excerpt && rawText.startsWith(excerpt) ? rawText.slice(excerpt.length) : rawText;
       const attachments = ((message as UserMessageWithAttachments).attachments ?? []) as UserAttachmentView[];
       const sendFailure = (message as { sendFailure?: string }).sendFailure;
       const steered = Boolean((message as { steered?: boolean }).steered);
@@ -2076,7 +2097,7 @@ export function createChatSurface(
             ?hidden=${!messageText(message).trim() && !edited && !deleted}
           >
             <div class="pin-content">
-              ${isReadOnlySlackView() ? slackWireBubble(messageText(message)) : markdown(messageText(message))}
+              ${isReadOnlySlackView() ? slackWireBubble(displayText) : markdown(displayText)}
               ${edited || deleted ? html`<span class="revision-badge">(${deleted ? "deleted" : "edited"})</span>` : nothing}
             </div>
             <button class="pin-toggle" type="button" hidden aria-expanded="false">
@@ -2204,7 +2225,9 @@ export function createChatSurface(
         >
           ${
             chatState.labelSpeakers
-              ? html`<div class="speaker-label">${brandMark()}<span>${chatState.assistantSpeakerLabel}</span></div>`
+              ? html`<div class="speaker-label">
+                  ${brandMark()}<span>${chatState.assistantSpeakerLabel}</span>${speakerTime(msg)}
+                </div>`
               : nothing
           }
           <div class="assistant-body">
