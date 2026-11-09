@@ -72,25 +72,11 @@ let deployToast: { deployment: DeploymentView; text: string; undo?: boolean } | 
 let deployRefreshSeq = 0;
 
 function statusLabel(d: DeploymentView): string {
-  if (
-    d.status === "running" &&
-    d.appliedVersion !== undefined &&
-    d.currentVersion !== undefined &&
-    d.appliedVersion !== d.currentVersion
-  )
-    return "Deploying";
   const status = d.status || "unknown";
   return status.charAt(0).toLocaleUpperCase() + status.slice(1);
 }
 
 function statusClass(d: DeploymentView): string {
-  if (
-    d.status === "running" &&
-    d.appliedVersion !== undefined &&
-    d.currentVersion !== undefined &&
-    d.appliedVersion !== d.currentVersion
-  )
-    return "deploying";
   if (d.status === "running") return "running";
   if (d.status === "archived") return "archived";
   return "stopped";
@@ -297,7 +283,6 @@ function drawDeployDetail(d: DeploymentView, loading = false): void {
 
         <div class="deploy-summary">
           <span>Live v${d.appliedVersion ?? d.currentVersion ?? "—"}</span>
-          ${d.currentVersion !== undefined && d.appliedVersion !== undefined && d.currentVersion !== d.appliedVersion ? html`<span>Latest v${d.currentVersion}</span>` : nothing}
           ${deploymentLatestAt(d) ? html`<span ${tip(new Date(deploymentLatestAt(d)).toLocaleString())}>Updated ${relTime(deploymentLatestAt(d))}</span>` : nothing}
         </div>
         <div class="deploy-access-line">
@@ -370,7 +355,7 @@ function drawDeployDetail(d: DeploymentView, loading = false): void {
                       <div class="deploy-version-row">
                         <div>
                           <strong>v${version.version}</strong
-                          >${version.version === d.appliedVersion ? html`<span class="badge ok">Live</span>` : nothing}${version.version === d.currentVersion && version.version !== d.appliedVersion ? html`<span class="badge">Latest</span>` : nothing}
+                          >${version.version === d.appliedVersion ? html`<span class="badge ok">Live</span>` : nothing}
                         </div>
                         <div>
                           <span>${new Date(version.createdAt).toLocaleString()}</span>
