@@ -51,7 +51,8 @@ import {
   proxyToAppHost,
   FORWARD_AGENT_API_HEADERS,
   FORWARD_DEPLOYMENT_GIT_HEADERS,
-  FORWARD_DEPLOYMENT_LAYER_HEADERS,
+  FORWARD_SANDBOX_MODEL_HEADERS,
+  FORWARD_SOURCE_SIGNED_HEADERS,
   FORWARD_OAUTH_HEADERS,
   FORWARD_BROKER_HEADERS,
   FORWARD_WEBHOOK_HEADERS,
@@ -752,8 +753,9 @@ function hasAgentCapability(req: IncomingMessage): boolean {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-function isDeploymentLayerPassthrough(method: string, pathname: string): boolean {
-  return (method === "GET" || method === "PUT") && pathname === "/v1/deployment-layer";
+function isSourceSignedPassthrough(method: string, pathname: string): boolean {
+  if (pathname === "/v1/deployment-layer") return method === "GET" || method === "PUT";
+  return method === "POST" && pathname === "/v1/egress-audit";
 }
 
 function loginProviderCookie(sub: string): string[] {
@@ -1213,7 +1215,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 
   if (method === "POST" && pathname === "/v1/deployment/live-session") {
     return proxyToUpstream(req, res, { baseUrl: CORE, path: pathname, search: url.search }, [
-      ...FORWARD_DEPLOYMENT_LAYER_HEADERS,
+      ...FORWARD_SOURCE_SIGNED_HEADERS,
       "authorization",
     ]);
   }
@@ -1227,12 +1229,21 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     );
   }
 
-  if (isDeploymentLayerPassthrough(method, pathname)) {
+  if (isSourceSignedPassthrough(method, pathname)) {
     return proxyToUpstream(
       req,
       res,
       { baseUrl: CORE, path: pathname, search: url.search },
-      FORWARD_DEPLOYMENT_LAYER_HEADERS,
+      FORWARD_SOURCE_SIGNED_HEADERS,
+    );
+  }
+
+  if (pathname.startsWith("/v1/sandbox-model/")) {
+    return proxyToUpstream(
+      req,
+      res,
+      { baseUrl: CORE, path: pathname, search: url.search },
+      FORWARD_SANDBOX_MODEL_HEADERS,
     );
   }
 

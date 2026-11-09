@@ -16,7 +16,12 @@ let deploymentLayerRequests = 0;
 const VALID_SOURCE_SIGNATURE = "v0=valid-source-signature";
 
 const upstream = createServer((req: IncomingMessage, res) => {
-  if (req.url === "/readyz" || req.url?.startsWith("/slack/events") || req.url?.startsWith("/v1/spend/export")) {
+  if (
+    req.url === "/readyz" ||
+    req.url?.startsWith("/slack/events") ||
+    req.url?.startsWith("/v1/spend/export") ||
+    req.url?.startsWith("/v1/sandbox-model/")
+  ) {
     const chunks: Buffer[] = [];
     req.on("data", (chunk: Buffer) => chunks.push(chunk));
     return void req.on("end", () => {
@@ -32,7 +37,11 @@ const upstream = createServer((req: IncomingMessage, res) => {
       res.end(JSON.stringify({ url: req.url, headers: req.headers, body: Buffer.concat(chunks).toString("utf8") }));
     });
   }
-  if (req.url?.startsWith("/v1/deployment-layer") || req.url?.startsWith("/v1/deployment/live-session")) {
+  if (
+    req.url?.startsWith("/v1/deployment-layer") ||
+    req.url?.startsWith("/v1/deployment/live-session") ||
+    req.url?.startsWith("/v1/egress-audit")
+  ) {
     deploymentLayerRequests++;
     if (req.headers["x-timestamp"] !== "123" || req.headers["x-signature"] !== VALID_SOURCE_SIGNATURE) {
       res.writeHead(401, { "content-type": "application/json" });
@@ -686,6 +695,83 @@ test("the exact deployment-layer route carries source auth to core without widen
     404,
   );
   assert.equal(deploymentLayerRequests, before + 2, "nearby source-auth paths never reach core");
+});
+
+test("the egress proxy's signed audit relay reaches core without a capability header", async () => {
+  const before = deploymentLayerRequests;
+  const records = JSON.stringify({ records: [{ host: "example.com", decision: "allow" }] });
+  const relayed = await fetch(`${base}/v1/egress-audit`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-timestamp": "123",
+      "x-signature": VALID_SOURCE_SIGNATURE,
+      "x-as-principal": "must-not-cross",
+      cookie: "portal_session=must-not-cross",
+    },
+    body: records,
+  });
+  assert.equal(relayed.status, 200);
+  const body = (await relayed.json()) as { url: string; body: string; headers: Record<string, string> };
+  assert.equal(body.url, "/v1/egress-audit");
+  assert.equal(body.body, records);
+  assert.equal(body.headers["x-signature"], VALID_SOURCE_SIGNATURE);
+  assert.equal(body.headers["x-as-principal"], undefined);
+  assert.equal(body.headers.cookie, undefined);
+
+  const unsigned = await fetch(`${base}/v1/egress-audit`, { method: "POST", body: records });
+  assert.equal(unsigned.status, 401, "core remains the source-auth authority");
+  assert.equal(deploymentLayerRequests, before + 2);
+
+  for (const [method, path] of [
+    ["GET", "/v1/egress-audit"],
+    ["POST", "/v1/egress-audit/extra"],
+  ] as const)
+    assert.equal(
+      (
+        await fetch(`${base}${path}`, {
+          method,
+          headers: { "x-timestamp": "123", "x-signature": VALID_SOURCE_SIGNATURE },
+        })
+      ).status,
+      404,
+      `${method} ${path}`,
+    );
+  assert.equal(deploymentLayerRequests, before + 2, "nearby source-auth paths never reach core");
+});
+
+test("sandbox model gateway calls reach core with their bearer token and no browser credentials", async () => {
+  const request = JSON.stringify({ model: "m", messages: [] });
+  const response = await fetch(`${base}/v1/sandbox-model/v1/chat/completions?stream=1`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: "Bearer sandbox-model-token",
+      "anthropic-version": "2023-06-01",
+      "x-as-principal": "must-not-cross",
+      cookie: "portal_session=must-not-cross",
+    },
+    body: request,
+  });
+  assert.equal(response.status, 200);
+  const body = (await response.json()) as { url: string; body: string; headers: Record<string, string> };
+  assert.equal(body.url, "/v1/sandbox-model/v1/chat/completions?stream=1");
+  assert.equal(body.body, request);
+  assert.equal(body.headers.authorization, "Bearer sandbox-model-token");
+  assert.equal(body.headers["anthropic-version"], "2023-06-01");
+  assert.equal(body.headers["x-as-principal"], undefined);
+  assert.equal(body.headers.cookie, undefined);
+
+  for (const credential of ["x-api-key", "x-agent-capability"]) {
+    const models = await fetch(`${base}/v1/sandbox-model/v1/models`, {
+      headers: { [credential]: "sandbox-model-token" },
+    });
+    assert.equal(
+      ((await models.json()) as { headers: Record<string, string> }).headers[credential],
+      "sandbox-model-token",
+    );
+  }
+  assert.equal((await fetch(`${base}/v1/sandbox-model`)).status, 404);
 });
 
 test("agent capabilities do not bypass the connect/drop browser session gates", async () => {
