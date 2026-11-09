@@ -250,7 +250,7 @@ export function sandboxCoreEnv(
     sb.backend === "superserve" || effectiveSandboxBackend(config) === "superserve"
       ? effectiveSandboxBackend(config)
       : sb.backend;
-  if (backend === "agent37" || backend === "superserve" || backend === "e2b") {
+  if (backend === "agent37" || backend === "baseten" || backend === "superserve" || backend === "e2b") {
     env.SANDBOX_BACKEND = backend;
     return { env, missingSecrets };
   }
@@ -719,6 +719,11 @@ function validate(raw: unknown, path: string): QmConfig {
   ) {
     throw new CliError(
       `${path}: "env.core.SANDBOX_BACKEND" is blank — name the backend core should run, or remove the key; every target forwards env.core verbatim, so a blank value leaves core with no backend`,
+    );
+  }
+  if (effectiveSandboxBackend({ env, sandbox }) === "baseten" && !env.core?.BASETEN_SANDBOX_IMAGE?.trim()) {
+    throw new CliError(
+      `${path}: the baseten sandbox backend requires env.core.BASETEN_SANDBOX_IMAGE (the image scripts/build-baseten-sandbox-image.ts prints); core refuses to start without it`,
     );
   }
   if (effectiveSandboxBackend({ env, sandbox }) === "superserve" && !env.core?.SUPERSERVE_TEMPLATE?.trim()) {
@@ -1656,7 +1661,7 @@ function validateSandbox(raw: unknown, path: string, target: Target): SandboxCon
       );
     }
   }
-  if (out.backend === "agent37" || out.backend === "superserve" || out.backend === "e2b") {
+  if (out.backend === "agent37" || out.backend === "baseten" || out.backend === "superserve" || out.backend === "e2b") {
     const stray = (["app", "image", "baseImage", "env", "secretEnv"] as const).filter((key) => out[key] !== undefined);
     if (stray.length) {
       throw new CliError(

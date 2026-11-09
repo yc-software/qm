@@ -456,6 +456,13 @@ test("SANDBOX_BACKEND: unset defaults to local (dev only); the retired secondary
   assert.throws(() => loadConfig({ SANDBOX_BACKEND: "sprites" }), /SPRITES_TOKEN/);
   assert.throws(() => loadConfig({ SANDBOX_BACKEND: "agent37" }), /AGENT37_API_KEY/);
   assert.equal(loadConfig({ SANDBOX_BACKEND: "agent37", AGENT37_API_KEY: "sk_live_k" }).sandboxBackend, "agent37");
+  assert.throws(() => loadConfig({ SANDBOX_BACKEND: "baseten" }), /BASETEN_API_KEY/);
+  assert.throws(() => loadConfig({ SANDBOX_BACKEND: "baseten", BASETEN_API_KEY: "bt_k" }), /BASETEN_SANDBOX_IMAGE/);
+  assert.equal(
+    loadConfig({ SANDBOX_BACKEND: "baseten", BASETEN_API_KEY: "bt_k", BASETEN_SANDBOX_IMAGE: "sandbox/qm:latest" })
+      .sandboxBackend,
+    "baseten",
+  );
   assert.throws(() => loadConfig({ SANDBOX_BACKEND: "superserve" }), /SUPERSERVE_API_KEY/);
   assert.throws(
     () => loadConfig({ SANDBOX_BACKEND: "superserve", SUPERSERVE_API_KEY: "ss_live_k" }),
