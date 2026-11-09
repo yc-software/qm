@@ -521,7 +521,9 @@ function conditionMatches(config: QmConfig, condition: SecretCondition): boolean
   if (condition.kind === "background-work-control")
     return config.target === "aws" && config.aws?.backgroundWorkControl === true;
   if (condition.kind === "sandbox-backend") {
-    return (effectiveSandboxBackend(config) ?? targetEnvDefault(config, "core", "SANDBOX_BACKEND")) === condition.backend;
+    return (
+      (effectiveSandboxBackend(config) ?? targetEnvDefault(config, "core", "SANDBOX_BACKEND")) === condition.backend
+    );
   }
   if (condition.kind === "service-enabled") return config.services.includes(condition.service);
   if (condition.kind === "service-absent") return !config.services.includes(condition.service);
