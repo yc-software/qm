@@ -388,4 +388,8 @@ export async function exerciseDeliveryFail(makeStore: (opts: { maxAgeMs: number 
   assert.equal(again.id, card.id);
   assert.equal(again.failedReason, "cannot_dm_bot", "re-enqueuing the same key does not revive a failed row");
   assert.deepEqual(await store.claimPending("principal", 60_000), []);
+  await store.ack(card.id, Date.now());
+  const delivered = await store.get(card.id);
+  assert.ok(delivered?.deliveredAt, "a late success from a lapsed sender still lands");
+  assert.equal(delivered?.failedReason, undefined, "and the row stops reporting the refusal");
 }
