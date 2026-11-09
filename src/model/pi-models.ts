@@ -348,7 +348,7 @@ export function contextTokenBudgetForModel(id: string): number | undefined {
   const window = model?.contextWindow;
   const output = model?.maxTokens;
   if (typeof window !== "number" || window <= 0 || typeof output !== "number" || output <= 0) return undefined;
-  const reserved = output < window ? output : 0;
+  const reserved = Math.min(output, Math.floor(window * CONTEXT_BUDGET_FRACTION));
   return Math.min(CONTEXT_BUDGET_CAP_TOKENS, Math.floor((window - reserved) * CONTEXT_BUDGET_FRACTION));
 }
 

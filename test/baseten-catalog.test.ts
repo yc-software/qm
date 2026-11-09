@@ -94,17 +94,25 @@ test("the key goes only to Baseten's own endpoint and the last good list survive
   }
 });
 
-test("a model whose output limit equals its window still gets a compaction budget", () => {
+test("a model whose output limit nears or fills its window still gets a quarter of it as compaction budget", () => {
   setCustomProviders([
     {
       id: "baseten",
       name: "Baseten",
       protocol: "openai",
       baseUrl: "https://inference.baseten.co/v1",
-      models: basetenCatalogModels(CATALOG),
+      models: [
+        ...basetenCatalogModels(CATALOG),
+        { id: "almost-full", contextWindow: 100_000, maxTokens: 99_999 },
+        { id: "half-output", contextWindow: 100_000, maxTokens: 50_000 },
+        { id: "small-output", contextWindow: 100_000, maxTokens: 20_000 },
+      ],
     },
   ]);
-  assert.equal(contextTokenBudgetForModel("custom/baseten/zai-org/GLM-5.3"), Math.floor(202_752 / 2));
+  assert.equal(contextTokenBudgetForModel("custom/baseten/zai-org/GLM-5.3"), Math.floor(202_752 / 4));
+  assert.equal(contextTokenBudgetForModel("custom/baseten/almost-full"), 25_000);
+  assert.equal(contextTokenBudgetForModel("custom/baseten/half-output"), 25_000);
+  assert.equal(contextTokenBudgetForModel("custom/baseten/small-output"), 40_000);
 });
 
 test("BASETEN_API_KEY offers Baseten's live catalog and an admin baseten provider takes precedence", async () => {
