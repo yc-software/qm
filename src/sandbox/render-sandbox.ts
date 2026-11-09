@@ -353,7 +353,6 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
       if (stored) {
         await clearCredentials(created.id);
       }
-      await releaseFromCleanup(scope, created.id);
       await store.put(scope, {
         ...stored,
         sandboxId: created.id,
@@ -375,6 +374,7 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
         .catch(swallowAs("render-sandbox: discard untracked sandbox", undefined));
       throw error;
     }
+    await releaseFromCleanup(scope, created.id);
   }
 
   async function holdForCleanup(scope: string, sandboxId: string): Promise<void> {
