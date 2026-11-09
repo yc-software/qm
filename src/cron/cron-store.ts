@@ -71,8 +71,8 @@ export interface CronStore {
   firesByThreadRefs(threadRefs: readonly string[]): Promise<CronFireRecord[]>;
   latestFireForThread(id: string, threadRef: string): Promise<CronFireLogEntry | undefined>;
   setFireNote(id: string, note: CronFireNote): Promise<"applied" | "superseded" | "missing">;
-  markFired(id: string, at: number, scheduledAt?: number, firedSchedule?: CronSchedule): Promise<void>;
-  retireOneShot(id: string, firedSchedule: CronSchedule): Promise<void>;
+  markFired(fired: Pick<Cron, "id" | "schedule">, at: number, scheduledAt?: number): Promise<void>;
+  retireOneShot(fired: Pick<Cron, "id" | "schedule">): Promise<void>;
   markAttempted(id: string, at: number): Promise<void>;
   defer(id: string, until: number): Promise<void>;
   claimSlot(id: string, scheduledAt: number, at: number): Promise<boolean>;
@@ -202,17 +202,17 @@ export function createCronStore(
       if ((await backing.update(id, apply)) === null) return "missing";
       return applied ? "applied" : "superseded";
     },
-    async markFired(id, at, scheduledAt, firedSchedule) {
-      await backing.update(id, (cron) => {
-        if (firedSchedule && !isDeepStrictEqual(cron.schedule, firedSchedule)) return cron;
+    async markFired(fired, at, scheduledAt) {
+      await backing.update(fired.id, (cron) => {
+        if (!isDeepStrictEqual(cron.schedule, fired.schedule)) return cron;
         const advanceFrom = isCalendarSchedule(cron.schedule) ? (scheduledAt ?? at) : at;
         const { deferUntil: _cleared, ...rest } = cron;
         return { ...rest, lastFiredAt: at, nextFireAt: advanceNextFireAt(cron.schedule, advanceFrom) };
       });
     },
-    async retireOneShot(id, firedSchedule) {
-      await backing.update(id, (cron) =>
-        isDeepStrictEqual(cron.schedule, firedSchedule) ? { ...cron, enabled: false } : cron,
+    async retireOneShot(fired) {
+      await backing.update(fired.id, (cron) =>
+        isDeepStrictEqual(cron.schedule, fired.schedule) ? { ...cron, enabled: false } : cron,
       );
     },
     async claimSlot(id, scheduledAt, at) {

@@ -20,7 +20,7 @@ test("crons persist to the backing map (a second store instance reads them back)
     createdBy: "U1",
     destination: { type: "dm", target: "U1" },
   });
-  await s1.markFired(c.id, 123);
+  await s1.markFired(c, 123);
 
   const s2 = createCronStore(map, { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const got = await s2.get(c.id);
