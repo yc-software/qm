@@ -1,6 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseAmbientDecision, renderAmbientPrompt, type AmbientBatch } from "../src/surface-cache/ambient-judge.ts";
+import {
+  parseAmbientDecision,
+  recentWakeMessages,
+  renderAmbientPrompt,
+  type AmbientBatch,
+} from "../src/surface-cache/ambient-judge.ts";
 import type { CachedMessage } from "../src/surface-cache/surface-cache.ts";
 
 const base = (over: Partial<AmbientBatch>): AmbientBatch => ({
@@ -60,4 +65,17 @@ test("parseAmbientDecision reads the outermost object and stays linear-time on a
   assert.deepEqual(parseAmbientDecision("{".repeat(60_000)), { act: false });
   const elapsed = performance.now() - started;
   assert.ok(elapsed < 1_000, `brace flood took ${Math.round(elapsed)}ms`);
+});
+
+test("other people's @-mentions read as @name; only the assistant's own mention stays a raw id", () => {
+  const ask = msg("2.0", "<@U00000003> can you remind me? cc <@U00000004|dave> <@U00000009> <@U00000002>", {
+    mentions: { U00000003: "esther", U00000004: "dave", U00000002: "agent" },
+  });
+  const batch = base({ recent: [ask], messages: [ask] });
+  const [wake] = recentWakeMessages(batch);
+  assert.equal(wake!.text, "@esther can you remind me? cc @dave <@U00000009> <@U00000002>");
+  const line = renderAmbientPrompt(batch)
+    .split("\n")
+    .find((l) => l.includes("<message "));
+  assert.match(line!, />@esther can you remind me\? cc @dave &lt;@U00000009&gt; &lt;@U00000002&gt;</);
 });
