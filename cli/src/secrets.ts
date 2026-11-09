@@ -1,6 +1,6 @@
 import { generateKeyPairSync, randomBytes } from "node:crypto";
 import { serviceHost, type DeclaredServiceName } from "./services.ts";
-import { effectiveModelProvider, type ModelProvider, type QmConfig } from "./config.ts";
+import { effectiveModelProvider, effectiveSandboxBackend, type ModelProvider, type QmConfig } from "./config.ts";
 import { TARGET_ENV_DEFAULTS } from "./target-env-defaults.ts";
 import { deploymentSecretValue, isInvalidSecret } from "./util.ts";
 
@@ -521,11 +521,7 @@ function conditionMatches(config: QmConfig, condition: SecretCondition): boolean
   if (condition.kind === "background-work-control")
     return config.target === "aws" && config.aws?.backgroundWorkControl === true;
   if (condition.kind === "sandbox-backend") {
-    const backend =
-      config.env.core?.SANDBOX_BACKEND ??
-      config.sandbox?.backend ??
-      targetEnvDefault(config, "core", "SANDBOX_BACKEND");
-    return backend?.trim() === condition.backend;
+    return (effectiveSandboxBackend(config) ?? targetEnvDefault(config, "core", "SANDBOX_BACKEND")) === condition.backend;
   }
   if (condition.kind === "service-enabled") return config.services.includes(condition.service);
   if (condition.kind === "service-absent") return !config.services.includes(condition.service);
