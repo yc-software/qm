@@ -77,6 +77,7 @@ export async function startQm(
   await built.identity.refresh();
   await built.deploymentLayerReady;
   built.deploymentLayerRefresh.start();
+  await built.checkReadiness(new AbortController().signal);
   server.listen(config.port);
   await once(server, "listening");
   void sweepDictationSpool();

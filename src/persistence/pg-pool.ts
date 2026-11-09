@@ -305,21 +305,23 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
         applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
       )`,
     );
+    const ledger = new Map(
+      (
+        await client.query<{ id: string; checksum: string }>(`SELECT id, checksum FROM ${PG_MIGRATIONS_TABLE}`)
+      ).rows.map((row) => [row.id, row.checksum]),
+    );
     for (const migration of migrations) {
-      if (migration.upgradeFrom) {
+      if (migration.upgradeFrom && !ledger.has(migration.upgradeFrom)) {
         const predecessor = await client.query(`SELECT 1 FROM ${PG_MIGRATIONS_TABLE} WHERE id = $1`, [
           migration.upgradeFrom,
         ]);
         if (!predecessor.rowCount) continue;
       }
-      const applied = await client.query<{ checksum: string }>(
-        `SELECT checksum FROM ${PG_MIGRATIONS_TABLE} WHERE id = $1`,
-        [migration.id],
-      );
-      if (applied.rows[0]) {
-        if (applied.rows[0].checksum !== migration.checksum) {
+      const applied = ledger.get(migration.id);
+      if (applied !== undefined) {
+        if (applied !== migration.checksum) {
           throw new Error(
-            `pg-pool: migration ${migration.id} checksum mismatch (database=${applied.rows[0].checksum}, source=${migration.checksum})`,
+            `pg-pool: migration ${migration.id} checksum mismatch (database=${applied}, source=${migration.checksum})`,
           );
         }
         continue;

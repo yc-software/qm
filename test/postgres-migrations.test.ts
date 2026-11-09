@@ -309,3 +309,31 @@ for (const lock of ["qm:schema-maintenance", "qm:schema-migrations"]) {
     }
   });
 }
+
+test("an applied migration set is checked against the ledger in one read", { skip }, async () => {
+  const pool = new pg.Pool({ connectionString: databaseUrl, max: 1 });
+  const { id } = names();
+  const migrations = Array.from({ length: 50 }, (_, n) =>
+    definePgMigration({ id: `${id}/${String(n).padStart(2, "0")}`, statements: ["SELECT 1"] }),
+  );
+  try {
+    await applyPgMigrations(pool, migrations);
+    const client = await pool.connect();
+    const ledgerReads: string[] = [];
+    const query = client.query.bind(client) as (...args: unknown[]) => unknown;
+    (client as unknown as { query: (...args: unknown[]) => unknown }).query = (...args: unknown[]) => {
+      if (typeof args[0] === "string" && args[0].includes(PG_MIGRATIONS_TABLE)) ledgerReads.push(args[0]);
+      return query(...args);
+    };
+    client.release();
+    await applyPgMigrations(pool, migrations);
+    assert.equal(ledgerReads.filter((text) => text.startsWith("SELECT")).length, 1);
+    await assert.rejects(
+      applyPgMigrations(pool, [definePgMigration({ id: migrations[0]!.id, statements: ["SELECT 2"] })]),
+      /checksum mismatch/,
+    );
+  } finally {
+    await pool.query(`DELETE FROM ${PG_MIGRATIONS_TABLE} WHERE id LIKE $1`, [`${id}/%`]);
+    await pool.end();
+  }
+});
