@@ -161,7 +161,7 @@ export function createRecorder(ref: ToolContextRef) {
         .map((c) => c.text ?? "")
         .join("\n");
       const parked = ref.current?.toolOutput ? await parkIfOverCap(ref.current.toolOutput, t, callId) : null;
-      const output = parked?.output;
+      let output = parked?.output;
       let result = parked?.text ?? capResultText(t);
       const resultTruncated = result !== t;
       if (result !== t) {
@@ -211,6 +211,7 @@ export function createRecorder(ref: ToolContextRef) {
             quarantineReason: "screen_verdict",
             ...(screen.reason ? { securityReason: screen.reason } : {}),
           };
+          output = undefined;
           isError = true;
           if (releaseRequested) {
             if (!screen.approvalRequested)

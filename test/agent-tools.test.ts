@@ -755,6 +755,14 @@ test("a result over the inline cap keeps its head and tail and parks the full te
   const uncapped = emitted.find((e) => e.kind === "ToolResult")!;
   assert.equal(uncapped.body.output, undefined, "0 turns the cap off");
   assert.ok(uncapped.text?.includes("line 1000"));
+
+  await pool.q("UPDATE qm_settings SET value = '100' WHERE key = 'tool_result_inline_tokens'");
+  clock.at += 60_000;
+  emitted.length = 0;
+  ref.screenToolResult = async () => ({ outcome: "quarantine" });
+  await call(execute, { command: "seq", purpose: "Run test command" });
+  const quarantined = emitted.find((e) => e.kind === "ToolResult")!;
+  assert.equal(quarantined.body.output, undefined, "a quarantined result keeps no reference to the withheld text");
   await pool.close();
 });
 
