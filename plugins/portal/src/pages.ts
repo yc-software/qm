@@ -6,7 +6,6 @@ import { errMessage } from "../../chassis/src/errors.ts";
 import { HARBOUR_SCENE_PATH, HARBOUR_STYLE, harbourScene } from "../../chassis/src/harbour.ts";
 
 let brandSource: () => string | undefined = () => undefined;
-/** Where card pages read the deployment's label (wordmark and title suffix) from; "QM" when it has none. */
 export function setCardBrandSource(source: () => string | undefined): void {
   brandSource = source;
 }
@@ -69,7 +68,6 @@ ${HARBOUR_STYLE}
 </html>`;
 }
 
-/** Signed in on the shared host, but the account belongs to no workspace here. */
 export function noWorkspaceHtml(email: string | null): string {
   const brand = brandLabel();
   return cardPage({

@@ -130,7 +130,6 @@ export async function verifyIdToken(
   return payload as JWTPayload & Record<string, unknown>;
 }
 
-/** Core declined to admit the account (as opposed to a deployment allow-list or provider problem). */
 export class AdmissionRefusedError extends Error {}
 
 export interface PrincipalRule {

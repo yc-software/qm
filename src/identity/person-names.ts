@@ -1,5 +1,6 @@
 import type { DirectoryStore } from "../directory/directory-store.ts";
 import { samePerson } from "../directory/person.ts";
+import { swallowAs } from "../util/errors.ts";
 import type { UserRecord, UserStore } from "./user-store.ts";
 
 export const UNKNOWN_PERSON = "Unknown person";
@@ -37,9 +38,11 @@ export function createPersonNames(deps: {
   directory?: Pick<DirectoryStore, "get">;
 }): PersonNames {
   const resolve = async (ids: readonly string[]): Promise<Map<string, UserRecord>> =>
-    ids.length && deps.users ? await deps.users.resolve(ids).catch(() => new Map<string, UserRecord>()) : new Map();
+    ids.length && deps.users
+      ? await deps.users.resolve(ids).catch(swallowAs("person names: resolve users", new Map<string, UserRecord>()))
+      : new Map();
   const directoryName = async (id: string): Promise<string | undefined> =>
-    realName(id, (await deps.directory?.get(id).catch(() => null))?.displayName);
+    realName(id, (await deps.directory?.get(id).catch(swallowAs("person names: directory lookup", null)))?.displayName);
   return {
     async storedNames(principalIds) {
       const found = await resolve(principalIds);

@@ -1,4 +1,5 @@
 import { sendJson } from "../http.ts";
+import { swallowAs } from "../../util/errors.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import type { EgressAuditRecord } from "../../admin/egress-audit-sink.ts";
 import { bootTenant } from "../../tenants/boot.ts";
@@ -52,14 +53,17 @@ async function ingestEgressAudit(ctx: ApiCtx): Promise<void> {
   const boot = bootTenant();
   const lookup = deps.sessions?.tenantLookup;
   const exists = async (tenant: string): Promise<boolean> =>
-    tenant === boot || ((await lookup?.exists(tenant).catch(() => false)) ?? false);
+    tenant === boot ||
+    ((await lookup?.exists(tenant).catch(swallowAs(`egress audit: tenant ${tenant} lookup`, false))) ?? false);
   const byTenant = new Map<string, Array<Omit<EgressAuditRecord, "ts">>>();
   for (const raw of records) {
     const parsed = parseRecord(raw);
     const tenant = parsed?.tenant;
     if (!parsed || !tenant) continue;
     const { tenant: _tenant, ...record } = parsed;
-    byTenant.set(tenant, [...(byTenant.get(tenant) ?? []), record]);
+    const batch = byTenant.get(tenant);
+    if (batch) batch.push(record);
+    else byTenant.set(tenant, [record]);
   }
   let accepted = 0;
   for (const [tenant, batch] of byTenant) {
@@ -68,7 +72,7 @@ async function ingestEgressAudit(ctx: ApiCtx): Promise<void> {
     const ok = await inTenant(tenant, async () => {
       for (const record of batch) sink.record(record);
       return true;
-    }).catch(() => false);
+    }).catch(swallowAs(`egress audit: records for tenant ${tenant}`, false));
     if (ok) accepted += batch.length;
   }
   return sendJson(res, 200, { accepted, rejected: records.length - accepted });

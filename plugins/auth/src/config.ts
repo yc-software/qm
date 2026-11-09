@@ -29,7 +29,6 @@ export interface AuthConfig {
   passwordLimitPerEmail: number;
   passwordLimitPerIp: number;
   emailFrom: string;
-  /** False when AUTH_EMAIL_SIGN_IN is off: no email-link form, and email-link requests are refused. */
   emailSignIn: boolean;
   brandName: string;
   faviconSvg: string | undefined;

@@ -142,9 +142,7 @@ function openChoice(token: string | null, key: Buffer, now: number): ChoiceClaim
   return p as unknown as ChoiceClaims;
 }
 
-/** Up to this many workspaces show as plain buttons; more get a search field. */
 const PICKER_BUTTONS_MAX = 6;
-/** With a search field, at most this many workspaces show at once. */
 const PICKER_RESULTS_MAX = 8;
 const RECENT_MAX = 8;
 const RECENT_COOKIE = "portal_recent_workspaces";
@@ -183,7 +181,6 @@ function readRecent(cookieHeader: string | undefined): string[] {
   return (readCookie(cookieHeader, RECENT_COOKIE) ?? "").split(".").filter(isTenantId).slice(0, RECENT_MAX);
 }
 
-/** Recently chosen workspaces first (most recent first), then the rest by name. */
 function orderWorkspaces(tenants: readonly SignInTenant[], recent: readonly string[]): SignInTenant[] {
   const rank = (id: string): number => {
     const i = recent.indexOf(id);
@@ -254,7 +251,6 @@ export interface TenantChoiceDeps {
   pin: (returnTo: string) => Promise<string | undefined>;
   cardPage: (o: CardPage) => string;
   signInErrorHtml: (detail: string) => string;
-  /** The page for an account that belongs to no workspace on the shared host. */
   noWorkspaceHtml: (email: string | null) => string;
   sendHtml: (res: ServerResponse, status: number, html: string, scriptHash?: string) => void;
   finishSignIn: (res: ServerResponse, signIn: VerifiedSignIn, returnTo: string, tenant?: string) => Promise<void>;
@@ -393,7 +389,6 @@ export function createTenantChoice(deps: TenantChoiceDeps) {
     return finish(res, choice, choice.returnTo, tenant);
   }
 
-  /** The picker's search without JavaScript: GET /auth/tenant?q=… re-renders the filtered list. */
   async function search(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
     const choice = openChoice(readCookie(req.headers.cookie, "portal_tenant_choice"), deps.key, Date.now());
     if (!choice || (!choice.signIn && !choice.trusted)) return expired(res);

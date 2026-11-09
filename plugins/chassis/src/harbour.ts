@@ -65,7 +65,6 @@ export const HARBOUR_STYLE = `<style>
   }
 </style>`;
 
-/** The painting, the deployment's wordmark and the caption, behind the page's card. */
 export function harbourScene(label: string): string {
   return `<figure class="harbour">
       <img src="${HARBOUR_SCENE_PATH}" alt="Sailing ships resting on still, sunlit water in Becalmed off Halfway Rock by Fitz Henry Lane.">

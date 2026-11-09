@@ -50,7 +50,6 @@ export const tenantSettingsSchema = z
     superserveNamePrefix: namePrefix,
     sandboxBackend,
     sandboxScopeBackends: z.partialRecord(z.enum(SCOPE_KINDS), sandboxBackend),
-    /** False while this deployment is not serving the tenant (mid-copy or rolled back); sign-in then hides it. */
     serving: z.boolean(),
   })
   .partial()
