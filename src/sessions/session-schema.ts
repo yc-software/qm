@@ -472,6 +472,7 @@ const SESSION_TABLES = tenantTables(
     { table: "llm_prompt_envelopes", primaryKey: "hash" },
   ],
   {
+    tenanted: ["items", "blobs"],
     references: [
       {
         table: "items",
