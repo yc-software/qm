@@ -525,8 +525,18 @@ async function catalog(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { catalog: entries });
 }
 
+const OAUTH_FLOW_TENANT = {
+  by: "oauth_flow",
+  key: (_params: Record<string, string>, url: URL) => url.searchParams.get("state") ?? undefined,
+} as const;
+
 export const connectorRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
-  { match: (m, p) => m === "GET" && parseOAuthRoute(p)?.action === "callback", auth: "public", handle: oauthCallback },
+  {
+    match: (m, p) => m === "GET" && parseOAuthRoute(p)?.action === "callback",
+    auth: "public",
+    tenant: OAUTH_FLOW_TENANT,
+    handle: oauthCallback,
+  },
 ];
 
 export async function gmailSent(ctx: ApiCtx): Promise<void> {
@@ -583,7 +593,13 @@ export const connectorRoutes: ReadonlyArray<Route<ApiCtx>> = [
     { method: "GET", path: "/v1/connectors/gmail/sent", actor: "person", auth: "source", handle: gmailSent },
   ]),
   { method: "POST", path: "/v1/connectors/oauth/consent/mint", auth: { aud: "oauth-consent" }, handle: consentMint },
-  { method: "GET", path: "/v1/connectors/oauth/consent/redeem/:linkId", auth: "source", handle: consentRedeem },
+  {
+    method: "GET",
+    path: "/v1/connectors/oauth/consent/redeem/:linkId",
+    auth: "source",
+    tenant: { by: "consent_link", key: (params) => params.linkId },
+    handle: consentRedeem,
+  },
   {
     method: "POST",
     path: "/v1/connectors/oauth/:provider/start",

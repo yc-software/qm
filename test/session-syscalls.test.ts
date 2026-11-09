@@ -67,7 +67,7 @@ async function rig(opts?: {
   const sessions = createPostgresSessionStore(testDatabaseUrl());
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const signals = createPostgresRunSignalStore(testDatabaseUrl());
-  const mailbox = createSessionMailbox(testMap<SessionMessage>());
+  const mailbox = createSessionMailbox(testMap<SessionMessage>(["recipientId", "wake"]));
   const advisoryLock = testAdvisoryLock();
   const steerRun: SessionSyscallDeps["steerRun"] = async (run, signal) => ({
     sent: await signals.send(run.id, signal),

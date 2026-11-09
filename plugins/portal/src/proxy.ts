@@ -140,6 +140,7 @@ export interface DeploymentTarget {
   principal: string;
   signingSecret: string | undefined;
   identitySecret?: string;
+  tenant?: string;
 }
 
 export function proxyToDeployment(req: IncomingMessage, res: ServerResponse, t: DeploymentTarget): void {
@@ -150,7 +151,7 @@ export function proxyToDeployment(req: IncomingMessage, res: ServerResponse, t: 
   const base: Record<string, string> = { host: core.host, "x-as-principal": t.principal, ...signed };
   if (t.identitySecret)
     base[PORTAL_IDENTITY_HEADER] = mintPortalIdentity(
-      { p: t.principal, exp: Date.now() + IDENTITY_TTL_MS },
+      { p: t.principal, ...(t.tenant ? { t: t.tenant } : {}), exp: Date.now() + IDENTITY_TTL_MS },
       t.identitySecret,
     );
   const headers = safeForwardHeaders(req, base);

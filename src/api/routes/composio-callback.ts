@@ -1,6 +1,6 @@
+import { externalOrgId } from "../../tenants/external-org.ts";
 import { canonicalPerson } from "../../directory/person.ts";
 import { scopeId } from "../../types.ts";
-import { orgId } from "../../config.ts";
 import { sendJson } from "../http.ts";
 import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
 import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
@@ -29,7 +29,7 @@ async function completeAuth(ctx: ApiCtx): Promise<void> {
     connectFailed();
     return sendJson(ctx.res, 400, { error: "invalid_session" });
   }
-  const userId = composioUserId(orgId(), canonicalPerson(access.principal));
+  const userId = composioUserId(externalOrgId(), canonicalPerson(access.principal));
   let accountId: string;
   try {
     const result = await request(ctx, access.key, "/connected_accounts/complete_auth", {

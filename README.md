@@ -126,8 +126,10 @@ posture. `observe` only records verdicts in the audit log. `enforce` quarantines
 flagged content pending release approval, except under Dangerous, which caps
 screening at `observe`.
 
-The predeclared command policy — approval rules and hard denials for things like
-recursive deletes or destructive SQL — applies in every posture, Dangerous included.
+Command policy ships with no rules. An administrator can add approval rules and hard
+denials, for example for recursive deletes or destructive SQL, in the admin Command policy
+card or with `PUT /v1/admin/scopes/<scopeId>/command-policy`. Configured rules apply in
+every posture, Dangerous included.
 
 Sharing posture is independent:
 

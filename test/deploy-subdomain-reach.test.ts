@@ -143,7 +143,8 @@ test("reachDeployment: a provider without resolveEndpoint returns the frozen sto
 });
 
 function appServingUpstream(upstreamPort: number) {
-  const deployStore = createDeployStore(testDeployBackings());
+  const backings = testDeployBackings();
+  const deployStore = createDeployStore(backings);
   const deploy = createDeployService({
     ...singleProcessDeps(),
     deployStore,
@@ -160,7 +161,7 @@ function appServingUpstream(upstreamPort: number) {
     deploy,
     acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
     directory: createPostgresDirectoryStore(testDatabaseUrl()),
-    sessions: createPostgresSessionStore(testDatabaseUrl()),
+    sessions: createPostgresSessionStore(backings.databaseUrl),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
   } as unknown as Parameters<typeof createApp>[0]);
   return app;
