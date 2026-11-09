@@ -101,6 +101,8 @@ export interface PgMigrationDefinition {
   expectedChecksum?: string;
   legacyId?: string;
   autocommit?: true;
+  prepare?: readonly string[];
+  upgradeFrom?: string;
 }
 
 export interface PgMigration extends PgMigrationDefinition {
@@ -250,6 +252,8 @@ export function definePgMigration({
   expectedChecksum,
   legacyId,
   autocommit,
+  prepare = [],
+  upgradeFrom,
 }: PgMigrationDefinition): PgMigration {
   if (!/^[a-z0-9][a-z0-9._/-]*$/i.test(id) || id.includes("..")) {
     throw new Error(`pg-pool: invalid migration id ${JSON.stringify(id)}`);
@@ -263,8 +267,12 @@ export function definePgMigration({
       `pg-pool: migration ${id} source checksum mismatch (expected=${expectedChecksum}, actual=${checksum})`,
     );
   }
+  const preparation = prepare.map((statement) => statement.trim()).filter(Boolean);
+  for (const statement of preparation) assertOneStatement(statement);
   return {
     id,
+    ...(preparation.length ? { prepare: preparation } : {}),
+    ...(upgradeFrom ? { upgradeFrom } : {}),
     statements: normalized,
     checksum,
     ...(legacyId ? { legacyId } : {}),
@@ -330,6 +338,12 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
       );
     }
     for (const migration of migrations) {
+      if (migration.upgradeFrom) {
+        const predecessor = await client.query(`SELECT 1 FROM ${PG_MIGRATIONS_TABLE} WHERE id = $1`, [
+          migration.upgradeFrom,
+        ]);
+        if (!predecessor.rowCount) continue;
+      }
       const applied = await client.query<{ checksum: string }>(
         `SELECT checksum FROM ${PG_MIGRATIONS_TABLE} WHERE id = $1`,
         [migration.id],
@@ -343,6 +357,18 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
         continue;
       }
       await mayMigrate(migration);
+      if (migration.prepare) {
+        await client.query("SET statement_timeout = 0");
+        try {
+          for (const statement of migration.prepare) await client.query(statement);
+        } catch (error) {
+          await client
+            .query("RESET statement_timeout")
+            .catch(swallowAs(`pg-pool: reset statement timeout after preparing ${migration.id}`, undefined));
+          throw error;
+        }
+        await client.query("RESET statement_timeout");
+      }
       if (migration.autocommit) {
         for (const statement of migration.statements) await client.query(statement);
         await client.query(`INSERT INTO ${PG_MIGRATIONS_TABLE}(id, checksum) VALUES ($1, $2)`, [

@@ -147,26 +147,3 @@ export function connectWrongRecipientHtml(o: { provider: string; alreadyConnecte
     icon: LOCK_ICON,
   });
 }
-
-export function playgroundBusyHtml(): string {
-  return cardPage({
-    title: "Playground is busy",
-    heading: "The playground is busy",
-    msg: "We couldn't start a fresh playground session for you right now. Waiting a little while and reloading resolves most cases.",
-    icon: ALERT_ICON,
-    warn: true,
-    actions: `<a class="btn primary" href="/">Try again</a>`,
-    help: "Playground sessions are limited per visitor to keep the demo responsive for everyone.",
-  });
-}
-
-export function playgroundRestrictedHtml(): string {
-  return cardPage({
-    title: "Not available in the playground",
-    heading: "Not available in the playground",
-    msg: "Connecting accounts and dropping secrets are disabled for anonymous playground sessions — clearing your cookie would orphan real credentials.",
-    icon: LOCK_ICON,
-    actions: `<a class="btn primary" href="/">Back to the playground</a>`,
-    help: "Sign in with a real account at /auth/login to use this link.",
-  });
-}

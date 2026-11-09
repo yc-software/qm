@@ -179,7 +179,6 @@ export const API_ALIASES: ReadonlyMap<string, string> = new Map([
   ["GET /share/external/:token", "/v1/web/shares/external/:token"],
   ["GET /share/internal/:token/files/:fileId", "/v1/shared-sessions/:token/files/:fileId"],
   ["GET /share/external/:token/files/:fileId", "/v1/public-shares/:token/files/:fileId"],
-  ["GET /connectors/oauth/:provider/callback", "/v1/web/connectors/oauth/:provider/callback"],
   ...apiRoutes.flatMap((route): Array<[string, string]> =>
     "path" in route && route.browser && route.path.startsWith("/v1/admin/")
       ? [[`${route.method} /api/admin/${route.path.slice("/v1/admin/".length)}`, route.path]]

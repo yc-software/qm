@@ -30,11 +30,6 @@ export const FEATURES = {
   },
   external_app_sharing: { label: "External app sharing (public links, outside emails)" },
   loop_triage: { label: "Loop triage (prioritize and consolidate)" },
-  sidebar_last_message_titles: {
-    label: "Sidebar titles from last message (experimental)",
-    personalOnly: true,
-    hint: "Titles each sidebar chat with the last message sent in it and shows the usual title beneath. In shared chats that message may be from someone else. Applies on the next sidebar refresh.",
-  },
   swarms: { label: "Swarms", personalOnly: true },
   team_scopes: { label: "Team scopes" },
   ui_canvas: {

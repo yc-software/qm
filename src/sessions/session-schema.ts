@@ -1,3 +1,4 @@
+import { PUBLISHED_SESSION_UPGRADE } from "./published-upgrade.ts";
 import type { PgMigrationDefinition } from "../persistence/pg-pool.ts";
 import { authoredUserTurn } from "./items.ts";
 import { TENANCY, tenantRowSecurity, tenantTables } from "../tenants/migrations.ts";
@@ -557,6 +558,7 @@ const USER_TURNS_BY_AUTHOR: PgMigrationDefinition = {
 
 export const SESSION_MIGRATIONS = [
   ...TENANCY,
+  ...PUBLISHED_SESSION_UPGRADE,
   SESSION_SCHEMA,
   MESSAGE_SEARCH_INDEX,
   DROP_ITEMS_SEARCH,

@@ -33,7 +33,9 @@ export function webMeConfig(env: NodeJS.ProcessEnv): WebMeConfig {
 
 async function permissionsOf(ctx: ApiCtx, user: string): Promise<string[]> {
   const [admin, preview] = await Promise.all([
-    adminPermissions(ctx.deps, { id: user, type: "internal" }).catch(swallowAs("web: /me admin status", null)),
+    ctx.actor?.imp
+      ? null
+      : adminPermissions(ctx.deps, { id: user, type: "internal" }).catch(swallowAs("web: /me admin status", null)),
     inboxPreviewEnabled(ctx.deps, user).catch(swallowAs("web: /me inbox preview flag", false)),
   ]);
   const permissions = [...(admin?.permissions ?? [])];

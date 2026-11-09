@@ -103,7 +103,9 @@ hostname with a Let's Encrypt certificate, so this path needs no DNS record, no 
 certificate, and no ingress controller. Core is that public service: Porter routes its
 hostname to core's front door on port 8000, which serves sign-in, the web UI and the
 agent-facing API. Core's own API port, 8080, is not declared to Porter and stays
-private.
+private. Core's `terminationGracePeriodSeconds` is 60: its default 30-second
+`SHUTDOWN_DRAIN_MS` plus 30 seconds to close stores and flush error reports. Raise
+it to match if you lengthen the drain.
 
 Two things `porter apply` will not do for you:
 

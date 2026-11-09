@@ -268,23 +268,25 @@ test("a signed-in user keeps their last known identity while core cannot answer 
 test("/settings reaches the web UI as the signed-in user without an admin probe", async () => {
   const before = whoamiProbes;
   for (const path of ["/settings/users"]) {
-    const r = await fetch(`${base}${path}`, { headers: { cookie: sessionCookie("U1") } });
+    const cookie = sessionCookie("U1");
+    const r = await fetch(`${base}${path}`, { headers: { cookie } });
     assert.equal(r.status, 200);
     const hit = (await r.json()) as CoreHit;
     assert.equal(hit.lane, "shell");
     assert.equal(hit.url, path);
-    assert.equal(hit.cookie, sessionCookie("U1"));
+    assert.equal(hit.cookie, cookie);
   }
   assert.equal(whoamiProbes, before);
 });
 
 test("an unclaimed prefix falls through to the web UI surface (its SPA owns unknown paths)", async () => {
-  const r = await fetch(`${base}/nope/x`, { headers: { cookie: sessionCookie("U1") } });
+  const cookie = sessionCookie("U1");
+  const r = await fetch(`${base}/nope/x`, { headers: { cookie } });
   assert.equal(r.status, 200);
   const hit = (await r.json()) as CoreHit;
   assert.equal(hit.lane, "shell");
   assert.equal(hit.url, "/nope/x");
-  assert.equal(hit.cookie, sessionCookie("U1"));
+  assert.equal(hit.cookie, cookie);
 });
 
 test("an unmatched /v1 path is a hard 404, never the SPA shell", async () => {
@@ -301,12 +303,13 @@ test("path confusion: encoded separators are rejected, and a normalized traversa
     assert.equal(r.status, 400, `expected 400 for ${p}, got ${r.status}`);
   }
   assert.equal(hits.length, before);
-  const collapsed = await fetch(`${base}/web-ui/%2e%2e/admin/api/me`, { headers: { cookie: sessionCookie("U1") } });
+  const cookie = sessionCookie("U1");
+  const collapsed = await fetch(`${base}/web-ui/%2e%2e/admin/api/me`, { headers: { cookie } });
   assert.equal(collapsed.status, 200);
   const hit = (await collapsed.json()) as CoreHit;
   assert.equal(hit.lane, "shell");
   assert.equal(hit.url, "/admin/api/me");
-  assert.equal(hit.cookie, sessionCookie("U1"));
+  assert.equal(hit.cookie, cookie);
 });
 
 test("CSRF: a non-GET without a same-origin Origin is refused", async () => {
@@ -505,9 +508,9 @@ test("new human path /drop/:id: form GET reaches the core /v1 drop form with x-d
   assert.equal(ob.headers["x-drop-owner"], "owner@acme");
 });
 
-test("deployments are ON by default — /d/ proxies to core for a signed-in session", async () => {
+test("/d/ proxies to core for a signed-in session", async () => {
   const r = await fetch(`${base}/d/some-app/`, { headers: { cookie: sessionCookie("U1") } });
-  assert.notEqual(r.status, 404, "the /d/ route exists without PORTAL_DEPLOYMENTS_ENABLED");
+  assert.notEqual(r.status, 404, "the /d/ route exists");
 });
 
 test("auth/login sets the tmp cookie and 302s to the IdP with PKCE+state+nonce", async () => {
@@ -547,12 +550,13 @@ test("auth/logout: a no-JS HTML form POST gets a 303 redirect to / (cookies stil
 });
 
 test("root: a signed-in session proxies straight to the web UI; signed-out bounces to login", async () => {
-  const r = await fetch(`${base}/`, { headers: { cookie: sessionCookie("U1"), accept: "text/html" } });
+  const cookie = sessionCookie("U1");
+  const r = await fetch(`${base}/`, { headers: { cookie, accept: "text/html" } });
   assert.equal(r.status, 200);
   const hit = (await r.json()) as CoreHit;
   assert.equal(hit.lane, "shell");
   assert.equal(hit.url, "/");
-  assert.equal(hit.cookie, sessionCookie("U1"));
+  assert.equal(hit.cookie, cookie);
 
   const before = hits.length;
   const out = await fetch(`${base}/`, { headers: { accept: "text/html" }, redirect: "manual" });

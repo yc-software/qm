@@ -135,6 +135,7 @@ import { createPostgresAppPageViewLog, DEPLOYMENT_TABLES, type AppPageViewLog } 
 import type { BudgetTracker } from "./ratelimit/budget.ts";
 import { BUDGET_MIGRATIONS, createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
 import { createCronStore, DROP_RUN_AS_MIGRATION, type CronStore } from "./cron/cron-store.ts";
+import { PUBLISHED_ORIGIN_UPGRADE, PUBLISHED_ORIGIN_COMPLETE } from "./surfaces/published-upgrade.ts";
 import { RETIRED_ORIGIN_SWEEP_MIGRATION } from "./surfaces/origin-migration.ts";
 import { DROP_RECIPIENT_CONSENT_MIGRATION } from "./triggers/trigger-store.ts";
 import { createPostgresCronFireStore } from "./cron/fire-store.ts";
@@ -1982,6 +1983,8 @@ export function buildApp(
     },
   };
   pgArtifactMap.pool.registerMigration(DROP_RUN_AS_MIGRATION);
+  pgArtifactMap.pool.registerMigration(PUBLISHED_ORIGIN_UPGRADE);
+  pgArtifactMap.pool.registerMigration(PUBLISHED_ORIGIN_COMPLETE);
   pgArtifactMap.pool.registerMigration(RETIRED_ORIGIN_SWEEP_MIGRATION);
   pgArtifactMap.pool.registerMigration(DROP_RECIPIENT_CONSENT_MIGRATION);
   pgArtifactMap.pool.registerMigration({

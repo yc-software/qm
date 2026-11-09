@@ -26,7 +26,6 @@ interface HandoffSession {
   sub: string;
   name?: string;
   t?: string;
-  anon?: boolean;
   appOnly?: boolean;
 }
 
@@ -138,7 +137,7 @@ export function createAppHandoff(deps: AppHandoffDeps) {
       const app = await target(to);
       if (!app) return deps.page(res, 400, deps.errorHtml("unknown app address"));
       const session = deps.session(req);
-      if (!session || session.anon || session.appOnly || session.t !== app.tenant) {
+      if (!session || session.appOnly || session.t !== app.tenant) {
         deps.signOut(res);
         return redirect(res, `/auth/login?returnTo=${encodeURIComponent(`/auth/host?to=${encodeURIComponent(to)}`)}`);
       }

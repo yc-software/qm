@@ -55,6 +55,22 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     },
   },
   {
+    id: "claude-fable-5-2",
+    name: "Claude Fable 5.2",
+    fastMode: true,
+    webui: true,
+    base: true,
+    clone: {
+      template: "claude-fable-5",
+      input: 8,
+      output: 40,
+      cacheRead: 0.2,
+      cacheWrite: 10,
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+    },
+  },
+  {
     id: "claude-fable-5-1",
     name: "Claude Fable 5.1",
     fastMode: false,
