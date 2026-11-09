@@ -188,12 +188,12 @@ test("decline only notifies and leaves access unchanged; duplicate clicks dedupe
   assert.match(notices[0]!.text, /declined your request/);
 });
 
-test("declining after an approval keeps the grant and tells no one they were declined", async (t) => {
+test("declining after an approval takes the access back", async (t) => {
   const f = await fixture(t);
   await f.decide();
-  assert.match(await f.decide(owner, false), /^Not declined:/);
-  assert.deepEqual(await f.grants(), [{ scope: person(requester), permission: "read" }]);
-  assert.equal((await f.notices()).filter((n) => /declined/.test(n.text)).length, 0);
+  assert.match(await f.decide(owner, false), /^Declined\./);
+  assert.deepEqual(await f.grants(), []);
+  assert.equal((await f.notices()).filter((n) => /declined/.test(n.text)).length, 1);
 });
 
 test("direct share paths notify only after successful grants; org, self and revoke stay silent", async (t) => {
