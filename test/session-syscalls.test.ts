@@ -2470,7 +2470,7 @@ test("queued results recheck source-entry visibility after a participant leaves"
   assert.equal((await r.mailbox.pending(shared.id)).length, 1);
 });
 
-test("enabled coordinators and their children can delegate", async () => {
+test("coordinators and their children can delegate", async () => {
   const r = await rig();
   const factory = createSessionSyscalls({ ...r, maxAttempts: 3, enabled: async () => true });
   const api = factory.forTurn({
@@ -2700,6 +2700,32 @@ async function delegatedHumanRig(context: Partial<OrchestratorInput> = {}) {
   return { ...r, parent: parent.run, child, run, api };
 }
 
+test("completion wakes run Slack parents as coordinators unless the author is external", async () => {
+  const author = { surface: "slack", account: "T1", id: "U1" };
+  for (const surfaceOrigin of [
+    { audience: "internal" as const, workspace: "T1", author },
+    {
+      audience: "external" as const,
+      workspace: "T1",
+      author,
+      access: { companyDomains: [], companyTeamIds: [], serviceCredentials: [] },
+    },
+  ]) {
+    const r = await delegatedHumanRig({ surfaceOrigin });
+    const claimed = await r.runs.claimById(r.run.id, "w1", 60000);
+    await r.runs.complete(r.run.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+    for (const pending of await r.runs.inFlightForThread(r.room.threadRef)) {
+      const parentTurn = await r.runs.claimById(pending.id, "parent", 60_000);
+      await r.runs.complete(pending.id, parentTurn!.leaseToken!, { status: "silent" });
+    }
+    await deliverSubagentMail({ ...r, maxAttempts: 3 }, (await r.runs.get(r.run.id))!);
+    const wake = await r.runs.getByDedupKey(`subagent-return:${r.run.id}`);
+    assert.ok(wake);
+    assert.equal(wake.request.surfaceOrigin?.audience, surfaceOrigin.audience);
+    assert.equal(wake.request.surfaceTools, surfaceOrigin.audience === "internal" ? true : undefined);
+  }
+});
+
 test("a bound delegated follow-up does not overwrite its completed foreground response", async () => {
   const r = await delegatedHumanRig({
     surface: "web",
@@ -2775,7 +2801,7 @@ test("unrelated automated follow-ups cannot borrow earlier human authority", asy
   assert.equal(await delegatedAuthorizationOrigin(next.request, r), undefined);
 });
 
-test("a later participant cannot change a completion's actor, rollout, destination, or grants", async () => {
+test("a later participant cannot change a completion's actor, destination, or grants", async () => {
   const r = await rig();
   const bob: Principal = { id: "U2", type: "internal" };
   const sharedScope = scopeId("channel", "C1");
