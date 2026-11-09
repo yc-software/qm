@@ -1,0 +1,129 @@
+import "./support/auto-fake-sprites.ts";
+
+import assert from "node:assert/strict";
+import type { AddressInfo } from "node:net";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { test, afterEach } from "node:test";
+import { createInsecureTestServer } from "../src/api/server.ts";
+import { buildApp, serverDeps } from "../src/wiring.ts";
+import { testConfig } from "./support/test-config.ts";
+import { basetenCatalogModels } from "../src/model/baseten.ts";
+import { resolveCustomModel, setCustomProviders } from "../src/model/custom-providers.ts";
+
+const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
+
+const CATALOG = {
+  object: "list",
+  data: [
+    {
+      id: "zai-org/GLM-5.3",
+      name: "GLM 5.3",
+      context_length: 202_752,
+      max_completion_tokens: 202_752,
+      pricing: { prompt: "0.0000006", completion: "0.0000022", input_cache_read: "0.00000011" },
+      supported_features: ["tools", "reasoning", "json_mode"],
+      input_modalities: ["text"],
+    },
+    {
+      id: "nvidia/Nemotron-VL",
+      name: "Nemotron VL",
+      context_length: 131_072,
+      max_completion_tokens: 32_768,
+      pricing: { prompt: "0.0000002", completion: "0.0000006" },
+      supported_features: ["tools"],
+      input_modalities: ["text", "image"],
+    },
+    {
+      id: "decision-models/no-tools",
+      name: "No tools",
+      context_length: 8_192,
+      supported_features: ["json_mode"],
+    },
+  ],
+};
+
+afterEach(() => setCustomProviders([]));
+
+test("Baseten's model list maps to tool-capable models with per-million prices", () => {
+  const models = basetenCatalogModels(CATALOG);
+  assert.deepEqual(
+    models.map((m) => m.id),
+    ["zai-org/GLM-5.3", "nvidia/Nemotron-VL"],
+  );
+  const [glm, vl] = models;
+  assert.equal(glm?.reasoning, true);
+  assert.equal(glm?.contextWindow, 202_752);
+  assert.equal(glm?.maxTokens, undefined);
+  assert.ok(Math.abs((glm?.input ?? 0) - 0.6) < 1e-9);
+  assert.ok(Math.abs((glm?.output ?? 0) - 2.2) < 1e-9);
+  assert.ok(Math.abs((glm?.cacheRead ?? 0) - 0.11) < 1e-9);
+  assert.equal(vl?.image, true);
+  assert.equal(vl?.maxTokens, 32_768);
+  assert.throws(() => basetenCatalogModels({ error: "nope" }), /invalid/);
+});
+
+test("BASETEN_API_KEY offers Baseten's live catalog and an admin baseten provider takes precedence", async () => {
+  const requests: Array<{ url: string; auth: string | null }> = [];
+  const modelCredentialFetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    requests.push({ url, auth: new Headers(init?.headers).get("authorization") });
+    if (url === "https://inference.baseten.co/v1/models") return Response.json(CATALOG);
+    return new Response(null, { status: 200 });
+  }) as typeof fetch;
+  const config = testConfig({
+    dataDir: mkdtempSync(join(tmpdir(), "baseten-catalog-")),
+    basetenApiKey: "bt-test-key",
+  });
+  const built = buildApp(config, { modelCredentialFetch });
+  const deps = serverDeps(config, built);
+  const server = createInsecureTestServer(built.app, deps);
+  server.listen(0);
+  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const runtimeConfig = async () => {
+    const res = await fetch(
+      `${base}/v1/runtime-config?principalId=admin-alice@default-org&scopeId=personal:admin-alice@default-org`,
+      { headers: ADMIN },
+    );
+    assert.equal(res.status, 200);
+    return (await res.json()) as {
+      models: string[];
+      modelCatalog: Record<string, { name: string; provider: string }>;
+    };
+  };
+  try {
+    const body = await runtimeConfig();
+    assert.ok(body.models.includes("custom/baseten/zai-org/GLM-5.3"));
+    assert.ok(!body.models.includes("custom/baseten/decision-models/no-tools"));
+    assert.equal(body.modelCatalog["custom/baseten/zai-org/GLM-5.3"]?.provider, "baseten");
+    assert.deepEqual(
+      requests.filter((r) => r.url.includes("baseten")).map((r) => r.auth),
+      ["Bearer bt-test-key"],
+    );
+    const vl = resolveCustomModel("custom/baseten/nvidia/Nemotron-VL");
+    assert.deepEqual(vl?.input, ["text", "image"]);
+    assert.equal(vl?.upstreamId, "nvidia/Nemotron-VL");
+    assert.equal(vl?.baseUrl, "https://inference.baseten.co/v1");
+
+    const put = await fetch(`${base}/v1/admin/custom-providers/baseten`, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify({
+        name: "Baseten (dedicated)",
+        protocol: "openai",
+        baseUrl: "https://model-abc.api.baseten.co/environments/production/sync/v1",
+        models: [{ id: "my-finetune" }],
+        apiKey: "bt-admin-key",
+        validate: false,
+      }),
+    });
+    assert.equal(put.status, 200);
+    const after = await runtimeConfig();
+    assert.ok(after.models.includes("custom/baseten/my-finetune"));
+    assert.ok(!after.models.includes("custom/baseten/zai-org/GLM-5.3"));
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await built.runtime.stop();
+  }
+});

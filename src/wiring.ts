@@ -295,6 +295,7 @@ import { refreshChatGPTTokens, refreshClaudeTokens } from "./model/subscription-
 import { createUserModelCredentialStore, type UserModelCredentialStore } from "./model/user-model-credential-store.ts";
 import { type ModelGatewayTransportConfig, setProviderBaseUrls } from "./model/provider-endpoints.ts";
 import { setCustomProviders } from "./model/custom-providers.ts";
+import { BASETEN_PROVIDER_ID, createBasetenCatalog } from "./model/baseten.ts";
 import { createPostgresSessionStore } from "./sessions/postgres-session-store.ts";
 import { createPostgresToolOutputStore } from "./sessions/tool-output.ts";
 import { LLM_CAPTURE_RETENTION_MS, type SessionStore } from "./sessions/session-store.ts";
@@ -1331,8 +1332,15 @@ export function buildApp(
     fetchImpl: overrides.modelCredentialFetch,
   });
   const modelRegistry = createModelOverlayStore(artifactMap("model_registry"), writeModelRegistry, modelVerifier);
+  const basetenCatalog = config.basetenApiKey
+    ? createBasetenCatalog(config.basetenApiKey, overrides.modelCredentialFetch)
+    : undefined;
   const refreshCustomProviders = async () => {
-    setCustomProviders(await customProviders.enabled());
+    const enabled = await customProviders.enabled();
+    const builtIn = enabled.some((p) => p.id === BASETEN_PROVIDER_ID)
+      ? []
+      : ((await basetenCatalog?.providers()) ?? []);
+    setCustomProviders([...enabled, ...builtIn]);
   };
   const refreshModels = async () => {
     await gatewayCatalog?.refresh();
@@ -1371,6 +1379,7 @@ export function buildApp(
       ...(anthropic ? { anthropic } : {}),
       ...(openai ? { openai } : {}),
       ...(openrouter ? { openrouter } : {}),
+      ...(config.basetenApiKey ? { [BASETEN_PROVIDER_ID]: config.basetenApiKey } : {}),
       ...customKeys,
     };
   };
