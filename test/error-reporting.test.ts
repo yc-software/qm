@@ -427,11 +427,14 @@ test("human turns are always traced while other runs follow the configured rate"
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
     await fetch('http://127.0.0.1:' + server.address().port + '/v1/things', { headers: { 'sentry-trace': 'fedcba9876543210fedcba9876543210-fedcba9876543210-0' } });
     server.close();
+    let parentTrace;
     for (let i = 0; i < 20; i++) {
-      await traceQueued(undefined, 'human-run', { 'messaging.message.id': 'run-' + i, 'qm.surface': 'slack', 'qm.origin': 'human' }, async () => {});
+      await traceQueued(undefined, 'human-run', { 'messaging.message.id': 'run-' + i, 'qm.surface': 'slack', 'qm.origin': 'human' }, async () => { parentTrace = traceCarrier(); });
       await traceQueued(undefined, 'cron-run', { 'qm.surface': 'cron', 'qm.origin': 'automation' }, async () => {});
       await traceQueued(undefined, 'subagent-run', { 'qm.origin': 'direct' }, async () => {});
+      await traceQueued(undefined, 'untraced-child-run', { 'qm.origin': 'human', 'qm.spawn': 'delegated' }, async () => {});
     }
+    await traceQueued(parentTrace, 'traced-child-run', { 'qm.origin': 'human', 'qm.spawn': 'delegated', 'qm.parent_run': 'parent-run' }, async () => {});
     await traceQueued(declined, 'human-after-unsampled-request', { 'qm.origin': 'human' }, async () => {});
     await traceQueued(declined, 'cron-after-unsampled-request', { 'qm.origin': 'automation' }, async () => {});
     await flushErrorReporting();
@@ -444,13 +447,17 @@ test("human turns are always traced while other runs follow the configured rate"
   assert.equal(names.filter((name) => name === "human-run").length, 20);
   assert.ok(names.includes("human-after-unsampled-request"));
   assert.deepEqual(
-    names.filter((name) => !name.startsWith("human-")),
+    names.filter((name) => !name.startsWith("human-") && name !== "traced-child-run"),
     [],
-    "automation, direct and request transactions keep the configured rate and inherited decisions",
+    "automation, direct, delegated and request transactions keep the configured rate and inherited decisions",
   );
   const human = sampled.transactions.find((event) => event.transaction === "human-run")!;
   assert.equal(human.contexts.trace.data["sentry.sample_rate"], 1);
   assert.equal(human.tags["qm.origin"], "human");
   assert.equal(human.tags["qm.surface"], "slack");
   assert.match(human.tags["messaging.message.id"], /^run-\d+$/);
+  const child = sampled.transactions.find((event) => event.transaction === "traced-child-run")!;
+  assert.ok(child, "a delegated run inherits its sampled parent's decision");
+  assert.equal(child.tags["qm.spawn"], "delegated");
+  assert.equal(child.tags["qm.parent_run"], "parent-run");
 });
