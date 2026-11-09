@@ -17,7 +17,6 @@ export const FEATURES = {
     personalOnly: true,
     hint: "Persistent subagents are available for personal scopes only.",
   },
-  responsive_spine: { label: "Responsive spine (delegation)", personalOnly: true },
   inbox_loops: { label: "Inbox Loops" },
   slack_loading_indicator: {
     label: "Slack loading indicator (experimental)",
