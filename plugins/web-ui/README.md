@@ -287,9 +287,8 @@ In web chat, an assistant reply can include `::connect-apps{}` as a standalone p
 
 ## Optional product analytics
 
-QM ships no analytics vendor. A deployment plugs its own in through two hooks.
-
-Browser: set `WEB_UI_ANALYTICS` on the web UI to a JSON object:
+QM ships no analytics vendor. A deployment plugs its own in by setting
+`WEB_UI_ANALYTICS` on the web UI to a JSON object:
 
 - `module` (required): a same-origin path or HTTPS URL of an ES module the
   deployment serves. It must export `createAnalytics({ org, user, options })`,
@@ -307,24 +306,6 @@ first user message in a chat through `track`, with stable insert IDs for
 deduplication. It passes no chat content, URLs, titles or referrers; anything else a
 module collects, such as session replay, and how it masks it, is the deployment's
 choice.
-
-Server: set `ANALYTICS_EVENTS_URL` on core to an HTTP or HTTPS endpoint, and
-optionally `ANALYTICS_EVENTS_TOKEN` (delivered as a secret) to send it as a bearer
-token. Core then POSTs JSON events
-`{ event, timestamp, company, principal, insert_id, properties }`, best effort with a
-two-second timeout. `app_published` follows a successful new application or version
-deployment, using the application's creator and company. Without a URL, core sends
-nothing.
-
-Core also captures `response_completed` and `response_failed` when a human turn
-reaches its final run state, including when a separate worker executes it.
-`completion_boundary=run` means processing finished, not confirmed delivery to the
-user. Successful silent or reaction-only results count as completed processing.
-`result_status` distinguishes those results; `surface` identifies web or Slack.
-Automation, automatic openers, impersonated turns, stopped turns, refusals, queued
-results and pending approvals do not emit outcomes. Retries emit only at the final
-run state. Stable insert IDs support deduplication. These best-effort events are
-not a complete reliability ledger and contain no response text or raw errors.
 
 ## Optional browser error reporting
 

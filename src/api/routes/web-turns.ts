@@ -139,8 +139,7 @@ function submitTurn(ctx: ApiCtx, turn: TurnRequest): Promise<void> {
       elapsedMs: Math.round(performance.now() - startedAt),
     });
   });
-  const body = { ...turn, ...(ctx.actor?.imp ? { analyticsSuppressed: true } : {}) };
-  return postTurn({ ...ctx, body, url: new URL("/v1/turns?async=1", ctx.url) });
+  return postTurn({ ...ctx, body: turn, url: new URL("/v1/turns?async=1", ctx.url) });
 }
 
 function attachmentsOf(raw: unknown): NonNullable<TurnRequest["attachments"]> {

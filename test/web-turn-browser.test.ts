@@ -11,7 +11,7 @@ import { scopeId, type TurnRequest } from "../src/types.ts";
 import { serverDeps } from "../src/wiring.ts";
 import { buildApp, stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { browserImpersonationCookie, browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
+import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
 
 const config = testConfig({ signingSecret: "web-turn-browser-signing-secret-0123456" });
 const built = stopAtEnd(buildApp(config));
@@ -173,7 +173,6 @@ test("the server writes who sent a turn and where it goes; the browser's own cla
       deliveryTarget: "dm:D9",
       origin: { kind: "cron" },
       conversationHeader: "injected",
-      analyticsSuppressed: true,
     },
     { cookie },
   );
@@ -187,7 +186,6 @@ test("the server writes who sent a turn and where it goes; the browser's own cla
   assert.deepEqual(turn.origin, { kind: "human" });
   assert.equal(turn.text, "hello there");
   assert.equal(turn.conversationHeader, undefined);
-  assert.equal(turn.analyticsSuppressed, undefined);
   assert.equal(turn.async, true);
   assert.equal((await sentTurn({ threadRef: "dm:D1" })).conversation.threadRef, "web:alice:default");
 });
@@ -419,20 +417,6 @@ test("inbox chat fails closed when the flag service is missing or the inbox cann
       assert.equal(turns.length, count);
     }
   });
-});
-
-test("an impersonating admin's turns and approval replays are kept out of product analytics", async () => {
-  const impersonating = `${browserSessionCookie("admin-ann")}; ${browserImpersonationCookie("admin-ann", "alice")}`;
-  for (const cookie of [undefined, impersonating]) {
-    for (const path of ["/api/turn", "/api/approvals/a-1"]) {
-      const body = { text: "test turn", approved: true, analyticsSuppressed: false };
-      assert.equal((await post(path, body, cookie ? { cookie } : {})).status, 202, path);
-      const turn = turns.at(-1)!;
-      assert.equal(turn.actor.externalId, "alice");
-      assert.equal(turn.analyticsSuppressed, cookie ? true : undefined, path);
-      assert.equal(JSON.stringify(turn).includes("admin-ann"), false, path);
-    }
-  }
 });
 
 test("a chat embed on a listed API origin can send turns and run signals, and no other browser writes", async () => {
