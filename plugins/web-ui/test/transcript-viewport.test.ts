@@ -1195,23 +1195,29 @@ test("a held height waits for in-flight content renders before it is released", 
   }
 });
 
-test("cancelling a follow drops its held height, and a reader's redraw holds height only until the settle frame", () => {
+test("a reader keeps a rising height floor until following resumes, so no shrink can clamp them", () => {
   const f = fixture();
   const stack = f.s.querySelector<HTMLElement>(".message-stack")!;
-  stack.getBoundingClientRect = () => ({ height: 1000 }) as DOMRect;
+  let height = 1000;
+  stack.getBoundingClientRect = () => ({ height: Math.max(height, parseFloat(stack.style.minHeight) || 0) }) as DOMRect;
   try {
-    f.viewport.beforeRender();
-    assert.equal(stack.style.minHeight, "1000px");
-    f.viewport.cancelFollow();
-    assert.equal(stack.style.minHeight, "");
     f.scroll(600);
     f.viewport.beforeRender();
     assert.equal(stack.style.minHeight, "1000px");
     f.viewport.afterRender();
+    f.flush();
     assert.equal(stack.style.minHeight, "1000px");
+    height = 700;
+    f.viewport.beforeRender();
+    assert.equal(stack.style.minHeight, "1000px");
+    height = 1200;
+    f.viewport.beforeRender();
+    assert.equal(stack.style.minHeight, "1200px");
+    f.viewport.cancelFollow();
+    assert.equal(stack.style.minHeight, "1200px");
+    f.viewport.follow(true);
     f.flush();
     assert.equal(stack.style.minHeight, "");
-    assert.equal(f.s.scrollTop, 600);
   } finally {
     f.close();
   }

@@ -112,13 +112,15 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
     setFollowing(false);
     if (frame !== null) cancelAnimationFrame(frame);
     frame = null;
-    releaseHeight();
   }
 
   function holdHeight(): void {
-    if (!stack || heldStack) return;
+    if (!stack || (heldStack && following)) return;
+    if (heldStack !== stack) releaseHeight();
+    const height = stack.getBoundingClientRect().height;
+    if (heldStack && height <= parseFloat(heldStack.style.minHeight)) return;
     heldStack = stack;
-    heldStack.style.minHeight = `${heldStack.getBoundingClientRect().height}px`;
+    heldStack.style.minHeight = `${height}px`;
   }
 
   function releaseHeight(): void {
@@ -409,7 +411,6 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
     frame = requestAnimationFrame(() => {
       frame = null;
       if (element !== scroller || following || contentUpdates.size > 0) return;
-      releaseHeight();
       restoreAnchor();
       syncSticky();
     });
@@ -483,6 +484,7 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
     if (stack !== nextStack) {
       changed = true;
       filledAtSize = null;
+      releaseHeight();
       if (stack) observer?.unobserve(stack);
       stack = nextStack;
       if (stack) observer?.observe(stack);
