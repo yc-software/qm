@@ -118,7 +118,6 @@ type PendingSeed = { kind: "v2"; layout: SerializedDockview } | { kind: "v1"; se
 let canvasHost: HTMLElement | null = null;
 let dockApi: DockviewApi | null = null;
 let toastEl: HTMLElement | null = null;
-let lastLayout: SerializedDockview | null = null;
 let pendingSeed: PendingSeed | null = null;
 const paneContents = new Map<string, PaneContent>();
 const paneTabs = new Set<PaneTab>();
@@ -143,9 +142,9 @@ let suspended = false;
 function persist(): void {
   if (suspended) return;
   try {
-    if (dockApi) lastLayout = dockApi.toJSON();
+    const layout = dockApi?.toJSON() ?? (pendingSeed?.kind === "v2" ? pendingSeed.layout : null);
     persistedUpdatedAt = Date.now();
-    const payload = { v: 2, active: splitState.active, layout: lastLayout, updatedAt: persistedUpdatedAt };
+    const payload = { v: 2, active: splitState.active, layout, updatedAt: persistedUpdatedAt };
     localStorage.setItem(STORE_KEY, JSON.stringify(payload));
     pushRemoteSoon(payload);
   } catch (e) {
@@ -320,9 +319,7 @@ function ensureCanvas(): boolean {
   const seed = pendingSeed;
   pendingSeed = null;
   try {
-    if (lastLayout) {
-      dockApi.fromJSON(lastLayout);
-    } else if (seed?.kind === "v2") {
+    if (seed?.kind === "v2") {
       dockApi.fromJSON(seed.layout);
     } else if (seed?.kind === "v1") {
       seedFromV1(dockApi, seed.seeds);
@@ -330,7 +327,6 @@ function ensureCanvas(): boolean {
   } catch {
     disposeDock();
     canvasHost.replaceChildren();
-    lastLayout = null;
     dockApi = buildDock();
   }
   ensureDeliveryStream();
@@ -385,13 +381,8 @@ onPhoneChange((phone) => {
   if (phone) {
     if (!splitState.active) return;
     const focused = focusedPaneSession();
-    if (dockApi) lastLayout = dockApi.toJSON();
-
+    flushRemoteNow();
     suspended = true;
-    if (persistTimer !== null) {
-      window.clearTimeout(persistTimer);
-      persistTimer = null;
-    }
     splitState.active = false;
     splitState.focusedId = null;
     disposeDock();
@@ -423,7 +414,7 @@ onPhoneChange((phone) => {
 
 export function exitSplitIfActive(): void {
   if (!splitState.active) return;
-  if (dockApi) lastLayout = dockApi.toJSON();
+  if (dockApi) pendingSeed = { kind: "v2", layout: dockApi.toJSON() };
   splitState.active = false;
   splitState.focusedId = null;
   syncDocumentTitle();
@@ -449,12 +440,12 @@ function adoptPersisted(raw: unknown): void {
     if (typeof o.updatedAt === "number") persistedUpdatedAt = o.updatedAt;
     pendingSeed = null;
     splitState.active = false;
-    if (o.active !== true || !o.layout || typeof o.layout !== "object") return;
+    if (!o.layout || typeof o.layout !== "object") return;
     const panels = (o.layout as { panels?: object }).panels;
     const n = panels && typeof panels === "object" ? Object.keys(panels).length : 0;
     if (n < 1 || n > MAX_PANES || serializedTileCount(o.layout) > MAX_TILES) return;
     pendingSeed = { kind: "v2", layout: o.layout as SerializedDockview };
-    splitState.active = true;
+    splitState.active = o.active === true;
     return;
   }
   const seeds = v1PaneSeeds(raw);
@@ -495,7 +486,7 @@ export async function adoptRemoteSplit(pending: Promise<UiStateRecord | null>): 
 }
 
 export function restoredCanvasNeedsSessionList(): boolean {
-  if (!pendingSeed) return false;
+  if (!splitState.active || !pendingSeed) return false;
   if (pendingSeed.kind === "v1") return pendingSeed.seeds.some((seed) => paneNeedsSessionList(seed));
   return layoutNeedsSessionList(pendingSeed.layout);
 }
