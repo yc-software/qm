@@ -127,8 +127,8 @@ export async function reactivateUser(ctx: ApiCtx): Promise<void> {
   if (!actor) return;
   if (!deps.identity) return sendJson(res, 404, { error: "not_found" });
   const { principalId } = await resolveAdminUser(deps, params.principalId!);
-  const user = await deps.admin!.users.markReactivated(principalId);
   await deps.identity.reactivate(principalId);
+  const user = await deps.admin!.users.markReactivated(principalId);
   audit(deps, {
     principalId: actor.id,
     action: "principal.reactivate",

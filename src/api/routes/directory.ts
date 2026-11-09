@@ -23,12 +23,8 @@ async function reactivatePrincipal(ctx: ApiCtx): Promise<void> {
   if (!deps.identity) return sendJson(res, 404, { error: "not_found" });
   const id = ctx.params.id!;
   if (!id) return sendJson(res, 404, { error: "not_found" });
-  if ((await deps.admin?.users.get(id))?.offboardedAt !== undefined)
-    return sendJson(res, 409, {
-      error: "offboarded",
-      message: "reactivate offboarded people from the admin users page",
-    });
   await deps.identity.reactivate(id);
+  await deps.admin?.users.markReactivated(id);
   audit(deps, { principalId: id, action: "principal.reactivate", resource: "principal", scopeLabel: orgScope(deps) });
   return sendJson(res, 200, { ok: true, principalId: id, active: true });
 }

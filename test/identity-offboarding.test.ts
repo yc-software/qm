@@ -114,12 +114,13 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
     );
   });
 
-  it("the reactivate route will not re-enable someone an admin offboarded", async () => {
+  it("reactivating through the principals route also clears an admin's offboarding", async () => {
     await built.identity.deactivate("U-offboarded");
     await built.admin.users.markOffboarded("U-offboarded", "admin-alice");
     const on = await signedPost("/v1/principals/U-offboarded/reactivate");
-    assert.equal(on.status, 409);
-    assert.equal(built.identity.classify("U-offboarded").type, "guest");
+    assert.equal(on.status, 200);
+    assert.equal(built.identity.classify("U-offboarded").type, "internal");
+    assert.equal((await built.admin.users.get("U-offboarded"))?.offboardedAt, undefined);
   });
 
   it("an agent capability token cannot reach the principals routes (source-auth only)", async () => {
