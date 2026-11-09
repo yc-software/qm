@@ -1,4 +1,5 @@
 import type { PgMigrationDefinition } from "../persistence/pg-pool.ts";
+import { retire0116Tenancy } from "./retire-0116-tenancy.ts";
 import { TENANT_APP_HANDLE_DNS_BOUND, TENANT_APP_HANDLES, TENANT_APP_HOSTS_BY_HANDLE } from "./app-handle.ts";
 
 const TENANCY_BASE: PgMigrationDefinition = {
@@ -73,6 +74,7 @@ const DROP_TENANT_HOSTS: PgMigrationDefinition = {
 
 export const TENANCY: readonly PgMigrationDefinition[] = [
   TENANCY_BASE,
+  retire0116Tenancy(TENANCY_BASE.statements[1]!),
   LEGACY_TENANT,
   TENANT_SETTINGS,
   TENANT_ROW_SECURITY,
