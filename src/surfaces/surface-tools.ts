@@ -39,7 +39,13 @@ import { parseBotLedger, type BotPolicy, type ChannelPolicy } from "../surface-c
 import { isoFromTs } from "../util/message-tag.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { adminSessionUrl } from "../util/admin-links.ts";
-import { replaceThreadSegment, type TurnPostKeys } from "../core/orchestrator/turn-helpers.ts";
+import {
+  completedSurfaceEnqueues,
+  replaceThreadSegment,
+  turnPostKeys,
+  type TurnPostKeys,
+} from "../core/orchestrator/turn-helpers.ts";
+import type { Item } from "../sessions/items.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "../core/orchestrator/types.ts";
 
 const SURFACE_READ_MAX = 200;
@@ -83,6 +89,29 @@ export function surfaceToolsActive(
   ctx: Pick<SurfaceToolsContext, "deps" | "input" | "strictReadOnly" | "defaultDestination">,
 ): boolean {
   return !ctx.strictReadOnly && !!ctx.input.surfaceTools && !!ctx.defaultDestination && !!ctx.deps.deliveries;
+}
+
+export async function replayRecordedSurfaceAnswer(ctx: {
+  deps: Pick<OrchestratorDeps, "deliveries">;
+  input: Pick<OrchestratorInput, "addressed" | "runId">;
+  defaultDestination: Destination | undefined;
+  surfaceName: string;
+  turnItems: readonly Item[];
+  userSeq: number;
+  text: string;
+  postProvenance: (deliveryKey: string) => DeliveryProvenance;
+}): Promise<void> {
+  const { deps, input, defaultDestination, text } = ctx;
+  const posted = completedSurfaceEnqueues(ctx.turnItems, ctx.userSeq, ctx.surfaceName);
+  if (!input.addressed || posted > 0 || !text.trim() || !defaultDestination || !deps.deliveries || !input.runId) return;
+  const directKey = turnPostKeys(input.runId).key(defaultDestination, posted);
+  await reachEnqueue({
+    deliveries: deps.deliveries,
+    destination: defaultDestination,
+    text,
+    idempotencyKey: directKey,
+    provenance: ctx.postProvenance(directKey),
+  });
 }
 
 export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps | undefined {

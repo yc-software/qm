@@ -258,7 +258,12 @@ import { createTurnSandboxes } from "./orchestrator/sandboxes.ts";
 import { isolationBrief } from "../sessions/child-isolation.ts";
 import type { EgressPolicy } from "../types.ts";
 import { isOpenScopeMember } from "../resolution/sharing-access.ts";
-import { createSurfaceToolDeps, surfaceToolsActive, type SpineState } from "../surfaces/surface-tools.ts";
+import {
+  createSurfaceToolDeps,
+  replayRecordedSurfaceAnswer,
+  surfaceToolsActive,
+  type SpineState,
+} from "../surfaces/surface-tools.ts";
 import { createAttachStaging } from "./orchestrator/attach-tool.ts";
 import { reconcileMessageRevisions, revisionAnchorAt } from "../slack/message-revisions.ts";
 import { type ProviderKeys } from "../model/model-runtime.ts";
@@ -1359,17 +1364,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (recordedAnswer.stopped) return { status: "silent", sessionId: session.id, stopped: true };
         const text = absoluteAppLinks(recordedAnswer.text, deps.publicWebUrl);
         if (surfaceToolsActive({ deps, input, strictReadOnly, defaultDestination })) {
-          const posted = completedSurfaceEnqueues(recorded.items, recordedTurn.userSeq, surfaceName);
-          if (input.addressed && posted === 0 && text.trim() && defaultDestination && deps.deliveries && input.runId) {
-            const directKey = turnPostKeys(input.runId).key(defaultDestination, posted);
-            await reachEnqueue({
-              deliveries: deps.deliveries,
-              destination: defaultDestination,
-              text,
-              idempotencyKey: directKey,
-              provenance: postProvenance(directKey),
-            });
-          }
+          await replayRecordedSurfaceAnswer({
+            deps,
+            input,
+            defaultDestination,
+            surfaceName,
+            turnItems: recorded.items,
+            userSeq: recordedTurn.userSeq,
+            text,
+            postProvenance,
+          });
           return { status: "silent", sessionId: session.id };
         }
         return text.trim()
