@@ -196,19 +196,6 @@ async function oauthCallback(ctx: BaseCtx): Promise<void> {
   return sendJson(ctx.res, outcome.status, outcome.body);
 }
 
-async function oauthCallbackPage(ctx: ApiCtx): Promise<void> {
-  const shell = ctx.deps.web?.shell;
-  if (!shell) return sendJson(ctx.res, 404, { error: "not_found" });
-  const provider = ctx.params.provider!;
-  const outcome = await settleOAuthCallback(ctx, provider);
-  const ok = "redirect" in outcome || outcome.status === 200;
-  if (!ok)
-    console.warn(
-      `[connectors] ${JSON.stringify(provider)} callback page: ${outcome.status} ${JSON.stringify(outcome.body)}`,
-    );
-  return shell.connectorCallbackPage(ctx.res, provider, ok);
-}
-
 async function principalHasProvider(deps: ServerDeps, provider: string, principalId: string): Promise<boolean> {
   const p = oauthProvider(provider);
   if (!p || !deps.connectorTokens) return false;
@@ -598,7 +585,6 @@ export async function gmailSent(ctx: ApiCtx): Promise<void> {
 }
 
 export const connectorRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "GET", path: "/v1/web/connectors/oauth/:provider/callback", auth: "public", handle: oauthCallbackPage },
   ...forInboxLoopsPeople([
     { method: "GET", path: "/v1/connectors/gmail/sent/:messageId", actor: "person", auth: "source", handle: gmailSent },
     { method: "GET", path: "/v1/connectors/gmail/sent", actor: "person", auth: "source", handle: gmailSent },
