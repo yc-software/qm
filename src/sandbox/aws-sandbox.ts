@@ -257,6 +257,7 @@ export function createAwsSandbox(opts: AwsSandboxOptions): Sandbox {
           endpointById.set(stored.microvmId, stored.endpoint);
           scopeByMicrovm.set(stored.microvmId, scope);
           await ensureRunning(stored.microvmId, desc);
+          await store.merge(scope, { lastActivityMs: Date.now() });
           return { id: stored.microvmId, endpoint: stored.endpoint, coldStart: false };
         }
         if (alive && stale) {
@@ -288,6 +289,7 @@ export function createAwsSandbox(opts: AwsSandboxOptions): Sandbox {
         endpoint: body.endpoint,
         ...(opts.imageVersion ? { imageVersion: opts.imageVersion } : {}),
         createdAtMs: Date.now(),
+        lastActivityMs: Date.now(),
         ...(hydrated ? { lastSnapshotMs: Date.now(), homeDirty: false } : {}),
         orgId: configOrgId(),
       });

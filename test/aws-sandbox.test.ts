@@ -345,3 +345,17 @@ test("failed overlapping preparation releases only its own sandbox lease", async
   await sb.teardown(first);
   assert.equal(fake.bodies.get(first.id)?.state, "SUSPENDED");
 });
+
+test("a body reused by another process is not deep-idle reaped mid-turn", async () => {
+  const fake = installFakeMicrovm();
+  const store = testMap<import("../src/sandbox/aws-sandbox.ts").StoredMicrovm>();
+  const deps = singleProcessDeps();
+  const reaper = makeSandbox(fake, { store, ...deps });
+  const worker = makeSandbox(fake, { store, ...deps });
+  const scope = scopeId("personal", "U-cross-process");
+  await worker.teardown(await worker.provision(scope));
+  await store.merge(scope, { lastActivityMs: 1, lastSnapshotMs: 1 });
+  const held = await worker.provision(scope);
+  assert.equal((await reaper.reapDeepIdle!(60_000)).reaped, 0);
+  assert.equal((await worker.run(held, "echo alive")).stdout.trim(), "alive");
+});
