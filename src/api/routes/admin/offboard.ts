@@ -67,7 +67,7 @@ async function plan(ctx: ApiCtx, actorId: string, principalId: string): Promise<
           await computers!.setDefault(actorId, c.ownerScopeId, null);
         await computers!.retire(actorId, c.id);
       });
-  const personas = app.channelPersonas;
+  const personas = app.personaHandover;
   for (const handover of (await personas?.handovers(isThem)) ?? []) {
     const to = (await deps.directory?.get(handover.to))?.displayName || handover.to;
     step("persona", handover.persona.id, `${handover.persona.name} → ${to}`, "transfer_owner", () =>

@@ -32,7 +32,6 @@ import {
 import { actsAsScope, parseScopeId, type Permission, type ScopeId } from "../types.ts";
 import { cronRef, encodeRef } from "../acl/resource-ref.ts";
 import type { App, VisibleCron } from "./app.ts";
-import { PersonaLocked } from "../personas/channel-personas.ts";
 
 export interface CronCreateRequest {
   runtime?: Cron["runtime"];
@@ -194,7 +193,7 @@ export interface ControlService {
 type SoulWriteFailureCode = "soul_update_denied" | "soul_version_conflict" | "soul_update_failed";
 
 function soulWriteFailureCode(e: unknown): SoulWriteFailureCode {
-  if (e instanceof SoulUpdateDeniedError || e instanceof PersonaLocked) return "soul_update_denied";
+  if (e instanceof SoulUpdateDeniedError) return "soul_update_denied";
   if (e instanceof SoulVersionConflictError) return "soul_version_conflict";
   return "soul_update_failed";
 }
@@ -804,7 +803,6 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
           allowSharedScope: true,
           expectedVersion,
           sessionId: capability.sessionId,
-          liveActor: livePersonCapability(capability),
         });
         return { ok: true, version };
       } catch (e) {
@@ -924,9 +922,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
           ) {
             return { ok: false, code: "forbidden", message: SHARED_SKILL_TRIGGER_REFUSAL };
           }
-          await app.moveArtifactHome(req.type, home.id, toScope, capability.actorId, {
-            liveActor: livePersonCapability(capability),
-          });
+          await app.moveArtifactHome(req.type, home.id, toScope, capability.actorId);
           return {
             ok: true,
             verb: "move",
@@ -950,7 +946,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
               permission,
               grantedBy: capability.actorId,
             },
-            { ...notify, liveActor: livePersonCapability(capability) },
+            notify,
           );
         return {
           ok: true,
@@ -962,7 +958,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
           permission,
         };
       } catch (e) {
-        if (e instanceof AdminError || e instanceof PersonaLocked) {
+        if (e instanceof AdminError) {
           return { ok: false, code: "forbidden", message: errMessage(e) };
         }
         return { ok: false, code: "share_failed", message: errMessage(e) };

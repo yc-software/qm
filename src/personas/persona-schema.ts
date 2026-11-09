@@ -64,4 +64,26 @@ export const PERSONA_MIGRATIONS: PgMigrationDefinition[] = [
       `UPDATE persona_access SET role = 'read' WHERE grantee_scope_id LIKE 'channel:%' AND role <> 'read'`,
     ],
   },
+  {
+    id: "users/v2/0006-persona-channel-pins",
+    statements: [
+      `ALTER TABLE persona_access ADD COLUMN IF NOT EXISTS pinned BOOLEAN NOT NULL DEFAULT false`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS persona_access_one_pin ON persona_access(grantee_scope_id) WHERE pinned`,
+      `DO $$ BEGIN
+         IF to_regclass('persona_channel_defaults') IS NOT NULL THEN
+           INSERT INTO persona_access (persona_id, grantee_scope_id, role, granted_by, pinned)
+           SELECT p.id, d.id, 'read',
+                  COALESCE(
+                    (SELECT l.user_id FROM user_links l WHERE l.alias_id = d.json->>'setBy'),
+                    p.created_by),
+                  true
+             FROM persona_channel_defaults d
+             JOIN personas p ON p.id = d.json->>'personaId'
+            WHERE d.id LIKE 'channel:%'
+           ON CONFLICT (persona_id, grantee_scope_id) DO UPDATE SET pinned = true;
+           DROP TABLE persona_channel_defaults;
+         END IF;
+       END $$`,
+    ],
+  },
 ];

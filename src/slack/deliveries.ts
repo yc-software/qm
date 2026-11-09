@@ -8,6 +8,7 @@ import { deliverKeychainCard } from "./keychain-approvals.ts";
 import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 import { performance } from "node:perf_hooks";
 import {
+  botIdentityArgs,
   createDeliveryTracker,
   createThreadTracker,
   deliverWithRetry,
@@ -16,8 +17,6 @@ import {
   openConversationFor,
   findPostedByKey,
   parseDeliveryTarget,
-  personaFor,
-  refreshPersonas,
   statusPlaceholderKey,
   postWithVerify,
   recoveryVerifyOldest,
@@ -322,7 +321,7 @@ export function createDeliveryPoller(deps: {
                       ...slackSectionBlocks(text),
                       ...(footer.length ? [{ type: "context", elements: footer }] : []),
                     ],
-                    ...personaFor(channel),
+                    ...botIdentityArgs(d.destination.persona),
                     ...(unfurlLinks !== undefined ? { unfurl_links: unfurlLinks, unfurl_media: unfurlLinks } : {}),
                   })
                   .catch((err: unknown) => {
@@ -358,7 +357,9 @@ export function createDeliveryPoller(deps: {
                     (err as Error).message,
                   );
                   await client.chat
-                    .postMessage(slackReplyArgs(channel, uploadFailureNote(err), root))
+                    .postMessage(
+                      slackReplyArgs(channel, uploadFailureNote(err), root, { persona: d.destination.persona }),
+                    )
                     .catch(swallowAs("slack: post upload-failure note", undefined));
                 }
               };
@@ -399,7 +400,7 @@ export function createDeliveryPoller(deps: {
                     ts: editRef,
                     text,
                     ...(footerBlocks ? { blocks: footerBlocks } : {}),
-                    ...personaFor(channel),
+                    ...botIdentityArgs(d.destination.persona),
                     metadata: deliveryMetadata(d.idempotencyKey ?? d.id),
                     ...(unfurlLinks !== undefined ? { unfurl_links: unfurlLinks, unfurl_media: unfurlLinks } : {}),
                   });
@@ -415,6 +416,7 @@ export function createDeliveryPoller(deps: {
                 {
                   ...slackReplyArgs(channel, text, threadTs, {
                     unfurlLinks: runId ? false : d.destination.unfurlLinks,
+                    persona: d.destination.persona,
                   }),
                   ...(footerBlocks ? { blocks: footerBlocks } : {}),
                 },
@@ -499,7 +501,10 @@ export function createDeliveryPoller(deps: {
                 const posted = await postWithVerify(
                   client,
                   {
-                    ...slackReplyArgs(channel, text, threadTs, { unfurlLinks: d.destination.unfurlLinks }),
+                    ...slackReplyArgs(channel, text, threadTs, {
+                      unfurlLinks: d.destination.unfurlLinks,
+                      persona: d.destination.persona,
+                    }),
                     ...(blocks ? { blocks } : {}),
                   },
                   d.idempotencyKey ?? d.id,
@@ -522,7 +527,11 @@ export function createDeliveryPoller(deps: {
               }
               if (uploadError) {
                 await client.chat
-                  .postMessage(slackReplyArgs(channel, uploadFailureNote(uploadError), threadTs))
+                  .postMessage(
+                    slackReplyArgs(channel, uploadFailureNote(uploadError), threadTs, {
+                      persona: d.destination.persona,
+                    }),
+                  )
                   .catch(swallowAs("slack: post principal upload-failure note", undefined));
               }
               return { recipientThreadRef: dmThreadRef(channel, threadTs) };
@@ -546,7 +555,6 @@ export function createDeliveryPoller(deps: {
       });
       const leaseLost = (): boolean => lostFlag;
       const cycleStart = Date.now();
-      await refreshPersonas(core, true);
       const rowCounts = await Promise.all([
         deliverToConversations(client, leaseLost),
         deliverToPrincipals(client, leaseLost),

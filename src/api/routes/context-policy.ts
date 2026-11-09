@@ -58,7 +58,6 @@ export async function setContextPolicy(ctx: ApiCtx): Promise<void> {
   if (!deps.channelPolicy)
     return sendJson(res, 404, { error: "not_found", message: "not available on this deployment" });
   if (!(await memberScope(ctx, principalId, scope))) return sendJson(res, 403, { error: "forbidden" });
-  await ctx.app.channelPersonas?.assertMayInstruct(scope, { id: principalId, live: true });
   if (typeof b.orders !== "string")
     return sendJson(res, 400, { error: "bad_request", message: "orders (string) required" });
   if (b.orders.length > MAX_ORDERS_CHARS)

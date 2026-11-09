@@ -1,5 +1,4 @@
 import { personaPrompt } from "../personas/persona-service.ts";
-import { liveForLock } from "../personas/channel-personas.ts";
 import { isAgentReply, isOverheard, isUserItem, type Item, type NewItem, stepMessage } from "../sessions/items.ts";
 import type { ItemKind } from "../sessions/items-schema.ts";
 import { countTokens } from "../util/tokens.ts";
@@ -1112,7 +1111,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       } else if (input.surfaceTools && input.origin.kind === "automation" && input.origin.destination) {
         defaultDestination = input.origin.destination;
       }
-      const wornPersona = persona ? { id: persona.persona.id, name: persona.persona.name } : undefined;
+      const wornPersona = persona
+        ? {
+            id: persona.persona.id,
+            name: persona.persona.name,
+            ...(persona.persona.icon ? { icon: persona.persona.icon } : {}),
+          }
+        : undefined;
       if (defaultDestination && wornPersona) defaultDestination = { ...defaultDestination, persona: wornPersona };
       const cronBlock =
         delivery.candidates.length > 1 && deps.signingSecret && deps.apiBaseUrl
@@ -2685,7 +2690,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           postProvenance,
           postKeys,
           spine,
-          livePerson: liveForLock(liveAuthorTurn, input.botActor),
         });
         const attachStaging = createAttachStaging({
           sandbox: deps.sandbox,

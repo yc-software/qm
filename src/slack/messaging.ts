@@ -4,8 +4,8 @@ import {
   MAX_REACTIONS_PER_TURN,
   SLACK_TEXT_LIMIT,
   applyReactions,
+  botIdentityArgs,
   extractReactions,
-  personaFor,
   stripReactionDirectives,
 } from "./lib.ts";
 
@@ -24,7 +24,7 @@ export async function updateSlackMessage(
     channel,
     ts,
     text: text.length > SLACK_TEXT_LIMIT ? `${text.slice(0, SLACK_TEXT_LIMIT - 1)}…` : text,
-    ...personaFor(channel),
+    ...botIdentityArgs(),
     unfurl_links: false,
     unfurl_media: false,
     blocks: blocks ?? [],

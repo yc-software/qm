@@ -2,9 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   slackReplyArgs,
-  slackEphemeralArgs,
-  personaFor,
-  refreshPersonas,
+  botIdentityArgs,
   botIdentityFromEnv,
   encodeDeliveryTarget,
   parseDeliveryTarget,
@@ -24,7 +22,6 @@ import {
   scopeSurfaceUrl,
   onBotJoinedChannel,
 } from "../src/slack/lib.ts";
-import { setDefaultBotIdentity, type SlackPersona } from "../src/slack/delivery.ts";
 
 test("slackReplyArgs keeps channel replies thread-only and never broadcasts them", () => {
   assert.deepEqual(slackReplyArgs("C1", "reply", "123.45", { threadOnly: true }), {
@@ -55,109 +52,35 @@ test("botIdentityFromEnv reads the display-name/icon knobs and trims them", () =
   );
 });
 
-test("personaFor/slackReplyArgs stay a no-op without an env override or a channel persona", () => {
-  assert.deepEqual(personaFor("C1"), {});
+test("botIdentityArgs/slackReplyArgs stay a no-op without an env override", () => {
+  assert.deepEqual(botIdentityArgs(), {});
   assert.deepEqual(slackReplyArgs("C1", "reply", undefined), {
     channel: "C1",
     text: "reply",
   });
 });
 
-const ADA: SlackPersona = { username: "Ada", icon_emoji: ":art:" };
-const BOLT: SlackPersona = { username: "Bolt", icon_emoji: ":art:" };
-const QM_DEFAULT = { username: "QM", icon_emoji: ":robot_face:" };
-
-function personaSource(initial: Record<string, SlackPersona>) {
-  const source = {
-    personas: new Map(Object.entries(initial)),
-    fail: false,
-    reads: 0,
-    async channelPersonas() {
-      source.reads++;
-      if (source.fail) throw new Error("core unreachable");
-      return new Map(source.personas);
-    },
-  };
-  return source;
-}
-
-async function bindPersonas(t: { after(fn: () => Promise<void>): void }, initial: Record<string, SlackPersona>) {
-  setDefaultBotIdentity(QM_DEFAULT);
-  const source = personaSource(initial);
-  await refreshPersonas(source);
-  t.after(async () => {
-    setDefaultBotIdentity(undefined);
-    await refreshPersonas({ channelPersonas: async () => new Map() });
-  });
-  return source;
-}
-
-test("a bound channel's persona replaces the env identity on replies and ephemerals; unbound channels keep the env identity, and a persona without an icon keeps the env icon", async (t) => {
-  await bindPersonas(t, { CADA: ADA, CBOLT: BOLT, CPLAIN: { username: "Plain" } });
-  assert.deepEqual(slackReplyArgs("CADA", "hi", "1.1", { threadOnly: true }), {
-    channel: "CADA",
-    text: "hi",
-    thread_ts: "1.1",
-    reply_broadcast: false,
+test("a post from a persona turn goes out under the persona's name and icon", () => {
+  const ada = { id: "p1", name: "Ada" };
+  assert.deepEqual(botIdentityArgs({ ...ada, icon: { kind: "emoji", value: "🎨" } }), {
     username: "Ada",
     icon_emoji: ":art:",
   });
-  assert.deepEqual(slackReplyArgs("CBOLT", "hi", undefined), {
-    channel: "CBOLT",
-    text: "hi",
-    username: "Bolt",
-    icon_emoji: ":art:",
-  });
-  assert.deepEqual(slackEphemeralArgs("CADA", "U1", "only you"), {
-    channel: "CADA",
-    user: "U1",
-    text: "only you",
+  assert.deepEqual(botIdentityArgs({ ...ada, icon: { kind: "emoji", value: "❤️" } }), {
     username: "Ada",
-    icon_emoji: ":art:",
+    icon_emoji: ":heart:",
   });
-  assert.deepEqual(slackReplyArgs("CPLAIN", "hi", undefined), {
-    channel: "CPLAIN",
+  assert.deepEqual(botIdentityArgs({ ...ada, icon: { kind: "custom", name: "ada-face" } }), {
+    username: "Ada",
+    icon_emoji: ":ada-face:",
+  });
+  assert.deepEqual(botIdentityArgs(ada), { username: "Ada" }, "no icon keeps the app's own");
+  assert.deepEqual(slackReplyArgs("C1", "hi", "1.2", { persona: ada }), {
+    channel: "C1",
     text: "hi",
-    username: "Plain",
-    icon_emoji: ":robot_face:",
+    thread_ts: "1.2",
+    username: "Ada",
   });
-  assert.deepEqual(slackReplyArgs("COTHER", "hi", undefined), { channel: "COTHER", text: "hi", ...QM_DEFAULT });
-  assert.deepEqual(slackEphemeralArgs("D1", "U1", "dm"), { channel: "D1", user: "U1", text: "dm", ...QM_DEFAULT });
-});
-
-test("a persona refresh picks up a rename, and a failed refresh keeps the last personas", async (t) => {
-  const source = await bindPersonas(t, { CADA: ADA });
-  assert.equal(slackReplyArgs("CADA", "hi", undefined).username, "Ada");
-  source.personas.set("CADA", { ...ADA, username: "Ada Lovelace" });
-  await refreshPersonas(source, true);
-  assert.equal(slackReplyArgs("CADA", "hi", undefined).username, "Ada Lovelace");
-  source.fail = true;
-  await refreshPersonas(source, true);
-  assert.equal(slackReplyArgs("CADA", "hi", undefined).username, "Ada Lovelace");
-  source.fail = false;
-  source.personas.delete("CADA");
-  await refreshPersonas(source, true);
-  assert.deepEqual(personaFor("CADA"), QM_DEFAULT);
-  await refreshPersonas({});
-  assert.deepEqual(personaFor("CADA"), QM_DEFAULT);
-});
-
-test("concurrent persona refreshes share one core read, and later ones inside the freshness window read nothing unless forced", async (t) => {
-  setDefaultBotIdentity(QM_DEFAULT);
-  t.after(async () => {
-    setDefaultBotIdentity(undefined);
-    await refreshPersonas({ channelPersonas: async () => new Map() });
-  });
-  const source = personaSource({ CADA: ADA });
-  await Promise.all([refreshPersonas(source), refreshPersonas(source), refreshPersonas(source)]);
-  assert.equal(source.reads, 1);
-  source.personas.set("CADA", BOLT);
-  await refreshPersonas(source);
-  assert.equal(source.reads, 1);
-  assert.equal(personaFor("CADA").username, "Ada");
-  await refreshPersonas(source, true);
-  assert.equal(source.reads, 2);
-  assert.equal(personaFor("CADA").username, "Bolt");
 });
 
 test("slackReplyArgs can suppress Slack link and media unfurls per message", () => {
@@ -729,7 +652,6 @@ function headerHarness(
     pinsListed: 0,
     posted: [] as string[],
     updated: [] as string[],
-    updatedWith: [] as Array<Record<string, unknown>>,
     pinned: [] as string[],
     unpinned: [] as string[],
     deleted: [] as string[],
@@ -743,10 +665,9 @@ function headerHarness(
         pinned = { ts: "99.0", user: "U0BOT", text };
         return { ts: "99.0" };
       },
-      update: async (args: { ts: string; text: string }) => {
-        calls.updated.push(args.text);
-        calls.updatedWith.push(args);
-        if (pinned && pinned.ts === args.ts) pinned = { ...pinned, text: args.text };
+      update: async ({ ts, text }: { ts: string; text: string }) => {
+        calls.updated.push(text);
+        if (pinned && pinned.ts === ts) pinned = { ...pinned, text };
         return {};
       },
       delete: async ({ ts }: { ts: string }) => {
@@ -939,69 +860,6 @@ test("surface header ensurer updates an existing pinned header in place instead 
     "Using Claude Haiku 4.5 here. <https://claw.acme.dev/projects/channel/C1|More settings>",
   ]);
   assert.equal(h.readPin()?.text.startsWith("Using Claude Haiku 4.5"), true);
-});
-
-test("a bound channel's pinned header is edited under QM's own identity, not the channel's persona", async (t) => {
-  await bindPersonas(t, { C1: ADA });
-  const h = headerHarness(
-    undefined,
-    "Claude Haiku 4.5",
-    "channel",
-    "Using Claude Opus 4.8 here. <https://claw.acme.dev/projects/channel/C1|More settings>",
-  );
-  h.ensure(h.client, "C1");
-  await h.flush();
-  assert.equal(h.calls.updatedWith.length, 1);
-  assert.equal(h.calls.updatedWith[0]!.username, QM_DEFAULT.username);
-  assert.equal(h.calls.updatedWith[0]!.icon_emoji, QM_DEFAULT.icon_emoji);
-});
-
-test("a header pinned under a persona is still the bot's own, so it is edited in place instead of pinned again", async () => {
-  const calls = { posted: 0, pinned: 0, updated: [] as string[] };
-  const client = {
-    chat: {
-      postMessage: async () => {
-        calls.posted += 1;
-        return { ts: "9.0" };
-      },
-      update: async ({ ts }: { ts: string }) => {
-        calls.updated.push(ts);
-        return {};
-      },
-    },
-    pins: {
-      list: async () => ({
-        items: [
-          {
-            message: {
-              ts: "5.0",
-              subtype: "bot_message",
-              bot_id: "B0BOT",
-              username: "Ada",
-              text: "Using Claude Opus 4.8 here. <https://claw.acme.dev/projects/channel/C1|More settings>",
-            },
-          },
-        ],
-      }),
-      add: async () => {
-        calls.pinned += 1;
-        return {};
-      },
-    },
-    conversations: {
-      info: async () => ({ channel: {} }),
-      setTopic: async () => ({}),
-    },
-  };
-  const ensure = createSurfaceHeaderEnsurer({
-    headerFacts: async () => ({ modelName: "Claude Haiku 4.5" }),
-    channelPinEnabled: async () => true,
-    webUiPublicUrl: "https://claw.acme.dev",
-    ids: { botUserId: "U0BOT", ownBotId: "B0BOT" },
-  });
-  ensure(client as any, "C1", "channel:C1", "channel", { pinNew: true });
-  await new Promise((r) => setTimeout(r, 30));
-  assert.deepEqual(calls, { posted: 0, pinned: 0, updated: ["5.0"] });
 });
 
 test("the pinned header is off by default — join creates nothing until the scope opts in", async () => {
@@ -1336,52 +1194,4 @@ test("postWithVerify: a replay of split blocks posts only the missing batch", as
     res.parts?.map((part) => part.reused ?? false),
     [true, false],
   );
-});
-
-test("the join welcome and every part of a split reply carry a bound channel's persona, while its pinned header stays under QM's own identity", async (t) => {
-  await bindPersonas(t, { CADA: ADA });
-  const posts: Array<Record<string, any>> = [];
-  const client = {
-    chat: {
-      postMessage: async (args: Record<string, any>) => {
-        posts.push(args);
-        return { ts: String(posts.length), channel: args.channel };
-      },
-      update: async () => ({}),
-      delete: async () => ({}),
-    },
-    pins: { list: async () => ({ items: [] }), add: async () => ({}), remove: async () => ({}) },
-    conversations: {
-      info: async () => ({ channel: {} }),
-      setTopic: async () => ({}),
-      history: async () => ({ messages: [] }),
-      replies: async () => ({ messages: [] }),
-    },
-  };
-  await onBotJoinedChannel({
-    client,
-    channel: "CADA",
-    joinerUserId: BOT,
-    botUserId: BOT,
-    webUiPublicUrl: WEB_BASE,
-    syncDirectory: async () => {},
-  });
-  const ensure = createSurfaceHeaderEnsurer({
-    headerFacts: async () => ({ modelName: "Claude Opus 4.8" }),
-    channelPinEnabled: async () => true,
-    webUiPublicUrl: WEB_BASE,
-    ids: { botUserId: BOT },
-  });
-  ensure(client as any, "CADA", "channel:CADA", "channel", { pinNew: true });
-  for (let i = 0; i < 50 && posts.length < 2; i++) await new Promise((r) => setTimeout(r, 2));
-  await postWithVerify(client as any, { ...slackReplyArgs("CADA", "word ".repeat(2_000), "1.1") }, "run:split");
-  assert.ok(posts.length >= 5, "welcome, header and at least three reply parts");
-  const headers = posts.filter((post) => isSurfaceHeaderMessage(post.text));
-  assert.equal(headers.length, 1);
-  assert.equal(headers[0]!.username, QM_DEFAULT.username);
-  assert.equal(headers[0]!.icon_emoji, QM_DEFAULT.icon_emoji);
-  for (const post of posts.filter((p) => !isSurfaceHeaderMessage(p.text))) {
-    assert.equal(post.username, "Ada");
-    assert.equal(post.icon_emoji, ":art:");
-  }
 });

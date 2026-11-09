@@ -45,16 +45,31 @@ Holders are people (`personal:`), teams (`team:`), the org (`org:`) or Slack cha
 that channel. A person's
 role is the highest one reaching them. Every persona keeps at least one owner.
 
+An owner can also **pin** a persona in a channel it's shared with (`pinned: true` on that
+channel's access entry, column `persona_access.pinned`, migration
+`users/v2/0006-persona-channel-pins`). A channel pins at most one persona; pinning a second
+one is refused until the first is unpinned. Removing the channel's grant unpins it.
+
 Checks sit where every path already flows: turn resolution (below) and the scope checks
 (`canReadScope` / `canWriteScope` / `canManageScope`), so skill moves into a persona need
 write. Only an owner can attach a credential, only their own, and only on a turn they
 sent; readers use it through the persona but never hold it.
 
+**Owners leaving.** When a persona's last active owner is deactivated or offboarded, the
+default admin becomes an owner: the active org admin with the oldest grant, so the admins named
+in `ADMIN_GRANTS` at first boot come first. Offboarding someone lists each persona their
+departure leaves with no active owner, and the admin it goes to; other deactivations, and personas
+already left without one, are picked up within five minutes. The departed owner's row stays, so
+reactivating them restores their role.
+
 ## Turns
 
 A session's `persona_id` is set from the Personas page ("Chat") or by the agent
-(`PUT /v1/sessions/:id/persona`). On each turn, if the sender holds a role on the persona
-(counting the conversation's channel), the turn:
+(`PUT /v1/sessions/:id/persona`). A conversation in a channel with a pinned persona and no
+persona of its own wears the pinned one; the `## Persona` block then says the channel pinned
+it and how to change that. There is no lock: the channel's own instructions and skills
+still apply, and anyone may still pick another persona for one conversation. On each turn,
+if the sender holds a role on the persona (counting the conversation's channel), the turn:
 
 - reads `persona:<id>` as an extra read-only scope (its skills and notes);
 - offers keychain grants to `persona:<id>` alongside the conversation's own;
@@ -68,54 +83,20 @@ scheduler looks up the persona of the cron's home conversation and the fire's tu
 under the same role check.
 
 Whatever a turn wearing a persona posts carries the persona's id and name on its delivery
-destination: replies, posts to other conversations, and cron output. Slack ends those
-messages with a `Persona: <name>` context line linking to the persona's page, next to the
-cron settings link when there is one.
+destination: replies, posts to other conversations, and cron output. Slack posts and
+edits those messages under the persona's name and icon, ahead of any deployment-wide
+`SLACK_BOT_DISPLAY_NAME`/`SLACK_BOT_ICON_EMOJI` override (needs `chat:write.customize`, which
+the app manifest requests) (a Unicode emoji maps to its Slack
+shortcode; a custom emoji is used by name; no icon keeps the default), and ends them with a
+`Persona: <name>` context line linking to the persona's page, next to the cron settings
+link when there is one. File uploads and the in-progress task card still show the app's own
+identity, since Slack doesn't let an app rename those.
 
 Unlike a project, a persona is not a place conversations live. A conversation with a
 persona stays in the scope it started in (your DM, a channel, a group), so only the
 people who could already see that conversation can see it. Holding a role on a persona,
 even owner, shows you nothing of other people's chats with it; the sidebar groups only
 your own conversations under the persona.
-
-## Channel personas
-
-When `personas` is on for the whole org (never per person), an owner of a persona who is in a
-Slack channel can make it that channel's persona (`PUT /v1/channels/:channel/persona`). Every
-conversation in the channel then wears it, for every sender, as if the channel held read on it;
-a session's own persona is ignored there and can't be set. Changing or clearing it takes the
-lock below. A channel wears at most one persona; one persona can be worn by several channels.
-
-The setting is one row per channel in the `persona_channel_defaults` durable map, keyed by the
-channel scope: `{ scopeId: "channel:<id>", personaId, setBy, setAt }`, indexed on
-`personaId`. Like `sessions.persona_id` it has no foreign key: a deleted persona just stops
-applying. Setting or clearing it posts a notice in the channel. The write is conditional on the
-row it read, so when two people change it at once only one wins; the other is checked again
-against the new setting.
-
-In Slack, QM speaks in that channel as the persona: replies, status cards and ephemeral
-notices carry the persona's name, and its icon when that maps to a Slack emoji, in
-place of `SLACK_BOT_DISPLAY_NAME` and `SLACK_BOT_ICON_EMOJI`. Setting, changing or clearing the
-persona shows in new posts within about ten seconds. The pinned channel header keeps QM's own
-identity.
-
-**The lock.** While a channel wears a persona, only the persona's writers and owners (held
-through a person, team or the org grant, never through the channel's own grant) or an org admin,
-on a turn they sent themselves, can change the channel's instructions, standing orders or
-skills, including sharing a skill into the channel. A Slack bot's turn never counts as sent by
-a person, whatever grants the bot holds. Everyone else is refused with an owner
-named; a refusal never names a private channel, or its persona, to someone outside it.
-
-An access change is refused unless at least one owner grant remains on a person QM doesn't list as
-inactive, on a team, or on an org. Channel owner grants never count, and team and org owner grants
-count whether or not they reach anyone.
-
-**Owners leaving.** When a persona's last active owner is deactivated or offboarded, the
-default admin becomes an owner: the active org admin with the oldest grant, so the admins named
-in `ADMIN_GRANTS` at first boot come first. Offboarding someone lists each persona their
-departure leaves with no active owner, and the admin it goes to; other deactivations, and personas
-already left without one, are picked up within five minutes. The departed owner's row stays, so
-reactivating them restores their role.
 
 ## Page
 
@@ -153,6 +134,5 @@ access are never copied.
 `PUT /v1/personas/:id/access`, `POST /v1/personas/:id/credentials`,
 `DELETE /v1/personas/:id/credentials/:grantId`, `GET /v1/personas/:id/versions` (newest first, 20 a page by default,
 `?before=&limit=`; who and when, with content only on `&full=1`),
-`POST /v1/personas/:id/versions/:version/restore`, `PUT /v1/sessions/:id/persona`,
-`GET|PUT /v1/channels/:channel/persona`. Listed in
+`POST /v1/personas/:id/versions/:version/restore`, `PUT /v1/sessions/:id/persona`. Listed in
 `/v1/apis` when the flag is on.

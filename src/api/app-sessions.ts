@@ -1194,12 +1194,6 @@ export function createSessionMethods(
         };
         await deps.deploy.assertShareAllowed(g.ownerScopeId, g.granteeScopeId, g.permission);
       }
-      const ref = parseRef(g.ref);
-      if (ref.kind === "skill")
-        await h.assertMayInstructSkill(
-          { id: ref.id, homes: [g.ownerScopeId], grantee: g.granteeScopeId },
-          { id: g.grantedBy, live: opts?.liveActor === true },
-        );
       await deps.acl.grant(g, await artifactAuthor(g.ownerScopeId, g.ref));
       deps.auditLog.record({
         at: Date.now(),
@@ -1208,6 +1202,7 @@ export function createSessionMethods(
         resource: g.ref,
         scopeLabel: g.granteeScopeId,
       });
+      const ref = parseRef(g.ref);
       if (ref.kind === "deploy" && opts?.notify !== false)
         await notifyDeploymentShared(
           deps,
@@ -1217,13 +1212,7 @@ export function createSessionMethods(
           g.grantedBy,
         );
     },
-    async revokeGrant(ownerScopeId, ref, granteeScopeId, revokedBy, opts) {
-      const parsed = parseRef(ref);
-      if (parsed.kind === "skill")
-        await h.assertMayInstructSkill(
-          { id: parsed.id, homes: [ownerScopeId], grantee: granteeScopeId },
-          { id: revokedBy, live: opts?.liveActor === true },
-        );
+    async revokeGrant(ownerScopeId, ref, granteeScopeId, revokedBy) {
       await deps.acl.revoke(ownerScopeId, ref, granteeScopeId, revokedBy, await artifactAuthor(ownerScopeId, ref));
       deps.auditLog.record({
         at: Date.now(),
@@ -1289,7 +1278,7 @@ export function createSessionMethods(
         : null;
     },
 
-    async moveArtifactHome(type, id, toScope, movedBy, opts) {
+    async moveArtifactHome(type, id, toScope, movedBy) {
       if (type === "deploy") {
         await deps.deploy.transferDeploymentOwner(id, toScope, { callerId: movedBy });
         return;
@@ -1297,11 +1286,6 @@ export function createSessionMethods(
       if (type !== "skill") {
         throw new Error(`moving a ${type}'s home isn't supported — share it instead (add a grant)`);
       }
-      const from = (await deps.skills.get(id))?.scopeId;
-      await h.assertMayInstructSkill(
-        { id, homes: from ? [from, toScope] : [toScope] },
-        { id: movedBy, live: opts?.liveActor === true },
-      );
       await deps.skills.move(id, toScope);
       deps.auditLog.record({
         at: Date.now(),
@@ -1334,7 +1318,6 @@ export function createSessionMethods(
       if (!allowedPersonal && !allowedShared) {
         throw new SoulUpdateDeniedError();
       }
-      await deps.channelPersonas?.assertMayInstruct(scopeIdValue, { id: actorId, live: opts?.liveActor === true });
       const write = async (): Promise<number> => {
         let snapshot: Awaited<ReturnType<typeof deps.config.captureSoulSnapshot>> | undefined;
         try {

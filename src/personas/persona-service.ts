@@ -7,7 +7,9 @@ import { parseScopeId, scopeId, type ScopeId, type Session } from "../types.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import { PERSONA_ROLES, activeHolder, atLeast, type PersonaRole } from "./persona-schema.ts";
 import {
+  PersonaChannelPinned,
   PersonaOwnerRequired,
+  type PersonaAccessEntry,
   type Persona,
   type PersonaAccess,
   type PersonaFields,
@@ -34,6 +36,7 @@ export type PersonaResult<T> =
 export interface PersonaForTurn {
   persona: Persona;
   scope: ScopeId;
+  pinned?: boolean;
 }
 
 export interface PersonaService {
@@ -91,9 +94,8 @@ export function createPersonaService(deps: {
   orgScope: ScopeId;
   teams?: Pick<TeamStore, "forTurn">;
   sessions: Pick<SessionStore, "setPersona">;
-  keychain?: Pick<Keychain, "grantsForScope" | "createGrant" | "revokeGrant">;
   isActive: (principalId: string) => boolean;
-  channelPersona?: (scope: ScopeId) => Promise<Persona | undefined>;
+  keychain?: Pick<Keychain, "grantsForScope" | "createGrant" | "revokeGrant">;
 }): PersonaService {
   const { store } = deps;
   const enabledFor = (principalId: string) => deps.flags.enabled("personas", scopeId("personal", principalId));
@@ -203,7 +205,7 @@ export function createPersonaService(deps: {
     setAccess(principalId, id, access) {
       return guarded<PersonaAccess[]>(principalId, id, "owner", async () => {
         if (!Array.isArray(access)) return { status: "invalid", message: "access must be an array" };
-        const entries: Array<{ scopeId: ScopeId; role: PersonaRole }> = [];
+        const entries: PersonaAccessEntry[] = [];
         for (const entry of access as unknown[]) {
           const e = (entry ?? {}) as Record<string, unknown>;
           const target = typeof e.scopeId === "string" ? e.scopeId.trim() : "";
@@ -214,7 +216,11 @@ export function createPersonaService(deps: {
             return { status: "invalid", message: "role must be owner, write or read" };
           if (kind === "channel" && e.role !== "read")
             return { status: "invalid", message: "a Slack channel can only be given read access" };
-          entries.push({ scopeId: target, role: e.role as PersonaRole });
+          if (e.pinned !== undefined && typeof e.pinned !== "boolean")
+            return { status: "invalid", message: "pinned must be a boolean" };
+          if (e.pinned && kind !== "channel")
+            return { status: "invalid", message: "only a Slack channel can be pinned" };
+          entries.push({ scopeId: target, role: e.role as PersonaRole, ...(e.pinned ? { pinned: true } : {}) });
         }
         if (new Set(entries.map((entry) => entry.scopeId)).size !== entries.length)
           return { status: "invalid", message: "each scope may appear once" };
@@ -225,7 +231,8 @@ export function createPersonaService(deps: {
         try {
           await store.replaceAccess(id, entries, principalId);
         } catch (e) {
-          if (e instanceof PersonaOwnerRequired) return { status: "invalid", message: e.message };
+          if (e instanceof PersonaOwnerRequired || e instanceof PersonaChannelPinned)
+            return { status: "invalid", message: e.message };
           throw e;
         }
         return { status: "ok", value: await store.access(id) };
@@ -256,12 +263,6 @@ export function createPersonaService(deps: {
     },
     async assign(principalId, session, personaId) {
       if (!(await enabledFor(principalId))) return { status: "disabled" };
-      const worn = await deps.channelPersona?.(session.scopeId);
-      if (worn && worn.id !== personaId)
-        return {
-          status: "invalid",
-          message: `this channel wears the persona "${worn.name}" for every conversation in it; its owners and writers can change that`,
-        };
       if (personaId === null) {
         await deps.sessions.setPersona(session.id, null);
         return { status: "ok", value: null };
@@ -273,8 +274,11 @@ export function createPersonaService(deps: {
       return { status: "ok", value: { ...persona, role: held } };
     },
     async forTurn(personaId, actorId, contextScope) {
-      const worn = await deps.channelPersona?.(contextScope);
-      if (worn) return { persona: worn, scope: personaScope(worn.id) };
+      let pinned = false;
+      if (!personaId && parseScopeId(contextScope).kind === "channel" && (await enabledFor(actorId))) {
+        personaId = (await store.pinnedIn(contextScope)) ?? undefined;
+        pinned = Boolean(personaId);
+      }
       if (!personaId) return null;
       if (!(await enabledFor(actorId)))
         return "Personas are turned off for this person, so this turn runs without one.";
@@ -283,16 +287,20 @@ export function createPersonaService(deps: {
       const held = await role(actorId, personaId, contextScope);
       if (!held)
         return `This conversation uses the persona "${persona.name}", but the person who sent this message has no access to it, so this turn runs without it.`;
-      return { persona, scope: personaScope(personaId) };
+      return { persona, scope: personaScope(personaId), ...(pinned ? { pinned: true } : {}) };
     },
   };
 }
 
-export function personaPrompt({ persona, scope }: PersonaForTurn): string {
+export function personaPrompt({ persona, scope, pinned }: PersonaForTurn): string {
   const lines = [
     `## Persona: ${persona.name}`,
     `You are acting as the persona "${persona.name}" (${scope}). Its skills, notes and credentials come from that scope; who is in the room and where your writes land still come from this conversation. Organization instructions take precedence over the persona's.`,
   ];
+  if (pinned)
+    lines.push(
+      `This channel pinned ${persona.name}. An owner can unpin it on the persona page; one conversation can pick another persona.`,
+    );
   if (persona.description.trim()) lines.push(`Purpose: ${persona.description.trim()}`);
   if (persona.instructions.trim()) lines.push("", persona.instructions.trim());
   return lines.join("\n");

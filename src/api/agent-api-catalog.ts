@@ -77,7 +77,7 @@ const FAMILIES: AgentApiFamily[] = [
   {
     when: (view) => view.personasEnabled,
     guidance:
-      "Personas are reusable agents (instructions, skills, notes, credentials) living in a persona:<id> scope; people hold owner, write or read on them through people (personal:), teams (team:), the org (org:) or Slack channels (channel:, read only, usable only in that channel). Writers edit instructions with PATCH and add a skill by creating it with scopeId persona:<id> on POST /v1/skills or moving one in with the skills tool; only owners share, attach credentials or delete. Use the persona-fork skill to copy one. With personas on for the whole organization, a persona's owner can make it a Slack channel's persona: every conversation in that channel then wears it, and only the persona's owners and writers, or an org admin, can change that channel's instructions, standing orders or skills.",
+      "Personas are reusable agents (instructions, skills, notes, credentials) living in a persona:<id> scope; people hold owner, write or read on them through people (personal:), teams (team:), the org (org:) or Slack channels (channel:, read only, usable only in that channel). Writers edit instructions with PATCH and add a skill by creating it with scopeId persona:<id> on POST /v1/skills or moving one in with the skills tool; only owners share, attach credentials or delete. Use the persona-fork skill to copy one.",
     routes: [
       { method: "GET", path: "/v1/personas", summary: "personas you hold a role on, with your role" },
       {
@@ -112,7 +112,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "PUT",
         path: "/v1/personas/:id/access",
         summary:
-          "{access:[{scopeId,role:'owner'|'write'|'read'}]} replaces who holds which role (owner; at least one owner stays)",
+          "{access:[{scopeId,role:'owner'|'write'|'read',pinned?}]} replaces who holds which role (owner; at least one owner stays). pinned:true on a channel: entry pins the persona there, so every conversation in that channel wears it and posts under its name and icon; a channel pins one persona at most",
       },
       {
         method: "POST",
@@ -130,17 +130,6 @@ const FAMILIES: AgentApiFamily[] = [
         path: "/v1/sessions/:id/persona",
         summary:
           "{personaId|null} switches this conversation (your own session id) to a persona you can use here, from the next turn",
-      },
-      {
-        method: "GET",
-        path: "/v1/channels/:channel/persona",
-        summary: "the persona a Slack channel (id or name) wears for every conversation in it, or null",
-      },
-      {
-        method: "PUT",
-        path: "/v1/channels/:channel/persona",
-        summary:
-          "{personaId|null} makes a persona you own the channel's persona (you must be in the channel), or clears it (its owners or writers, or an org admin), on a turn you sent",
       },
     ],
   },
