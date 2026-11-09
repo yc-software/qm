@@ -25,7 +25,7 @@ async function upgrade(owner: PgPool): Promise<void> {
 }
 
 async function beforeUsers(owner: PgPool, linksTenanted: boolean): Promise<void> {
-  await owner.q(`DROP TABLE users, user_links, personas, persona_access CASCADE`);
+  await owner.q(`DROP TABLE users, user_links, personas, persona_access, persona_versions CASCADE`);
   await owner.q(`DELETE FROM qm_schema_migrations WHERE id LIKE 'users/%'`);
   await owner.q(
     linksTenanted

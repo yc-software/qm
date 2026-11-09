@@ -142,7 +142,7 @@ BEGIN
     END IF;
   END LOOP;
   IF to_regclass('acl_grants') IS NOT NULL
-     AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'acl_grants'::regclass AND tgname = 'acl_grants_truncate') THEN
+     AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = to_regclass('acl_grants') AND tgname = 'acl_grants_truncate') THEN
     DROP TRIGGER acl_grants_truncate ON acl_grants;
     DROP TRIGGER IF EXISTS acl_grants_bump ON acl_grants;
     CREATE TRIGGER acl_grants_bump AFTER INSERT OR UPDATE OR DELETE OR TRUNCATE ON acl_grants
