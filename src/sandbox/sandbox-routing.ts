@@ -119,7 +119,7 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
     async provision(scope: ScopeId, provOpts?: ProvisionOptions): Promise<SandboxHandle> {
       const resource =
         provOpts?.sandboxId !== undefined ? await resources.get(provOpts.sandboxId) : await resources.resolve(scope);
-      const backend = resource?.backend ?? defaultBackend;
+      const backend = resource?.backend ?? (provOpts?.scratch ? await resources.defaultBackend() : defaultBackend);
       const sandbox = backendFor(backend);
       const provision = async (target: ScopeId, options = provOpts) => {
         try {

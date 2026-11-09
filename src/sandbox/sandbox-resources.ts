@@ -1,3 +1,4 @@
+import { tenantSandboxChoice } from "./tenant-sandbox-shape.ts";
 import { perTenant } from "../tenants/cache.ts";
 import { withLiveTurnMembership } from "../resolution/scope-membership.ts";
 import { randomUUID } from "node:crypto";
@@ -83,7 +84,7 @@ export interface SandboxResources {
   setDefault(actorId: string, scopeId: ScopeId, id: string | null): Promise<void>;
   resolve(scopeId: ScopeId): Promise<SandboxResource | null>;
   get(id: string): Promise<SandboxResource>;
-  defaultBackend(): SandboxBackendName;
+  defaultBackend(): Promise<SandboxBackendName>;
 }
 
 export class SandboxAccessError extends Error {}
@@ -92,7 +93,7 @@ const JOB_ONLY_REFUSAL =
   "this computer belongs to a background job that uses private credentials; only that job's own controls can reach it";
 
 export async function preferredBackend(resources: SandboxResources, scopeId: ScopeId): Promise<SandboxBackendName> {
-  return (await resources.resolve(scopeId))?.backend ?? resources.defaultBackend();
+  return (await resources.resolve(scopeId))?.backend ?? (await resources.defaultBackend());
 }
 
 export async function accessConversationSandbox(
@@ -198,7 +199,12 @@ export function createSandboxResources(opts: {
         canUseScope: async (actorId, scopeId) =>
           withLiveTurnMembership(opts.canUseScope, { ...turn, verified: await turn.isCurrent() })(actorId, scopeId),
       }),
-    defaultBackend: () => opts.defaultBackend,
+    async defaultBackend() {
+      const { backend } = await tenantSandboxChoice({ backend: opts.defaultBackend, scopeBackends: {} });
+      if (!opts.backends[backend])
+        throw new Error(`sandbox backend unavailable: ${backend}; this deployment does not run it`);
+      return backend;
+    },
     initialize,
     get,
     use,

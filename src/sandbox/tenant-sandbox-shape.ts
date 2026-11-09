@@ -4,6 +4,9 @@ import { loadTenant } from "../tenants/cache.ts";
 import { boundTenant } from "../tenants/context.ts";
 import { loadedTenantSettings, type TenantSettings } from "../tenants/settings.ts";
 import type { ModalClient } from "./modal-client.ts";
+import type { Sandbox } from "./sandbox.ts";
+import type { LegacySandboxScopeDefaults } from "./sandbox-resource-upgrade.ts";
+import type { SandboxBackendName } from "./sandbox-routing.ts";
 
 interface TenantSandboxSettings {
   tenant: string;
@@ -84,6 +87,68 @@ export function tenantModalClient(base: ModalShape, make: (shape: ModalShape) =>
     terminate: async (sandboxId) => (await byId()).terminate(sandboxId),
     ...(listRunning ? { listRunning } : {}),
   };
+}
+
+export interface SandboxChoice {
+  backend: SandboxBackendName;
+  scopeBackends: LegacySandboxScopeDefaults;
+}
+
+export async function tenantSandboxChoice(base: SandboxChoice): Promise<SandboxChoice> {
+  const bound = await tenantSandboxSettings();
+  if (!bound) return base;
+  const { sandboxBackend, sandboxScopeBackends } = bound.settings;
+  if (!sandboxBackend && !sandboxScopeBackends) return base;
+  return { backend: sandboxBackend ?? base.backend, scopeBackends: sandboxScopeBackends ?? {} };
+}
+
+export interface SuperserveShape {
+  apiKey?: string;
+  namePrefix: string;
+  template?: string;
+}
+
+async function tenantSuperserveShape(base: SuperserveShape): Promise<SuperserveShape> {
+  const bound = await tenantSandboxSettings();
+  if (!bound) return base;
+  const { superserveApiKey, superserveNamePrefix, superserveTemplate } = bound.settings;
+  const template = superserveTemplate ?? base.template;
+  const shape = superserveApiKey
+    ? { apiKey: superserveApiKey, namePrefix: superserveNamePrefix ?? base.namePrefix }
+    : { ...(base.apiKey ? { apiKey: base.apiKey } : {}), namePrefix: tenantNamePrefix(base.namePrefix, bound.tenant) };
+  return { ...shape, ...(template ? { template } : {}) };
+}
+
+export function tenantSuperserveSandbox(
+  base: SuperserveShape,
+  make: (shape: SuperserveShape & { apiKey: string }) => Sandbox,
+): Sandbox {
+  const sandboxes = new Map<string, Sandbox>();
+  const keyOf = (shape: SuperserveShape & { apiKey: string }): string =>
+    JSON.stringify([shape.apiKey, shape.namePrefix, shape.template ?? ""]);
+  const deployment = make({ ...base, apiKey: base.apiKey ?? "" });
+  if (base.apiKey) sandboxes.set(keyOf({ ...base, apiKey: base.apiKey }), deployment);
+  const current = async (): Promise<Sandbox> => {
+    const shape = await tenantSuperserveShape(base);
+    const apiKey = shape.apiKey;
+    if (!apiKey) throw new Error("superserve has no API key for this tenant; set superserveApiKey in its settings");
+    const key = keyOf({ ...shape, apiKey });
+    let sandbox = sandboxes.get(key);
+    if (!sandbox) sandboxes.set(key, (sandbox = make({ ...shape, apiKey })));
+    return sandbox;
+  };
+  const delegated = Object.fromEntries(
+    Object.entries(deployment)
+      .filter(([, value]) => typeof value === "function")
+      .map(([name]) => [
+        name,
+        async (...args: unknown[]): Promise<unknown> => {
+          const sandbox = (await current()) as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>;
+          return sandbox[name]!(...args);
+        },
+      ]),
+  );
+  return { ...delegated, profile: deployment.profile } as unknown as Sandbox;
 }
 
 export class TenantKeyedMap<V> extends Map<string, V> {

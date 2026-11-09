@@ -1955,7 +1955,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       turnContextBlocks["Sandboxes"] = turnSandboxResources
         ? renderSandboxProviders(
             providerProfiles.map((profile) => profile.name),
-            turnSandboxResources.defaultBackend(),
+            await turnSandboxResources.defaultBackend(),
             true,
             providerProfiles.filter((profile) => profile.egressEnforcement === "domain").map((profile) => profile.name),
           )
