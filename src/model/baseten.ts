@@ -76,11 +76,23 @@ export function createBasetenCatalog(apiKey: string, fetcher: typeof fetch = fet
         () => new Error("Baseten model list is too large"),
       );
       const models = basetenCatalogModels(JSON.parse(text));
-      const next: CustomProviderSpec | undefined = models.length
-        ? { id: BASETEN_PROVIDER_ID, name: "Baseten", protocol: "openai", baseUrl: BASETEN_BASE_URL, models }
-        : undefined;
-      if (next) validateCustomProviderSpec(next);
-      provider = next;
+      const spec = (kept: BasetenModel[]): CustomProviderSpec => ({
+        id: BASETEN_PROVIDER_ID,
+        name: "Baseten",
+        protocol: "openai",
+        baseUrl: BASETEN_BASE_URL,
+        models: kept,
+      });
+      const valid = models.filter((model) => {
+        try {
+          validateCustomProviderSpec(spec([model]));
+          return true;
+        } catch (error) {
+          swallow(`[model] Baseten model ${model.id} skipped`, error);
+          return false;
+        }
+      });
+      provider = valid.length ? spec(valid) : undefined;
     } catch (error) {
       swallow("[model] Baseten catalog refresh", error);
     }

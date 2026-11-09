@@ -347,9 +347,9 @@ export function contextTokenBudgetForModel(id: string): number | undefined {
   const model = resolveModel(id);
   const window = model?.contextWindow;
   const output = model?.maxTokens;
-  if (typeof window !== "number" || window <= 0 || typeof output !== "number" || output <= 0 || output >= window)
-    return undefined;
-  return Math.min(CONTEXT_BUDGET_CAP_TOKENS, Math.floor((window - output) * CONTEXT_BUDGET_FRACTION));
+  if (typeof window !== "number" || window <= 0 || typeof output !== "number" || output <= 0) return undefined;
+  const reserved = output < window ? output : 0;
+  return Math.min(CONTEXT_BUDGET_CAP_TOKENS, Math.floor((window - reserved) * CONTEXT_BUDGET_FRACTION));
 }
 
 export function modelHasPrices(model: Pick<Model<Api>, "cost">): boolean {

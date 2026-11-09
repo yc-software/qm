@@ -5,12 +5,13 @@ import type { AddressInfo } from "node:net";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test, afterEach } from "node:test";
+import { test, afterEach, mock } from "node:test";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp, serverDeps } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
 import { basetenCatalogModels, createBasetenCatalog } from "../src/model/baseten.ts";
 import { resolveCustomModel, setCustomProviders } from "../src/model/custom-providers.ts";
+import { contextTokenBudgetForModel } from "../src/model/pi-models.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 
@@ -68,8 +69,11 @@ test("Baseten's model list maps to tool-capable models with per-million prices",
 
 test("the key goes only to Baseten's own endpoint and the last good list survives an outage", async () => {
   let up = true;
-  const fetcher = (async () =>
-    up ? Response.json(CATALOG) : new Response("down", { status: 503 })) as unknown as typeof fetch;
+  let calls = 0;
+  const fetcher = (async () => {
+    calls++;
+    return up ? Response.json(CATALOG) : new Response("down", { status: 503 });
+  }) as unknown as typeof fetch;
   const catalog = createBasetenCatalog("bt-test-key", fetcher);
   const [builtIn] = await catalog.providers([]);
   assert.equal(builtIn?.baseUrl, "https://inference.baseten.co/v1");
@@ -78,7 +82,29 @@ test("the key goes only to Baseten's own endpoint and the last good list survive
   assert.deepEqual(catalog.keys([keylessAdmin]), {});
   assert.deepEqual(await catalog.providers([keylessAdmin]), []);
   up = false;
-  assert.equal((await catalog.providers([]))[0]?.models.length, 2);
+  mock.timers.enable({ apis: ["Date"], now: Date.now() });
+  try {
+    mock.timers.tick(6 * 60_000);
+    await catalog.providers([]);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(calls, 2);
+    assert.equal((await catalog.providers([]))[0]?.models.length, 2);
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test("a model whose output limit equals its window still gets a compaction budget", () => {
+  setCustomProviders([
+    {
+      id: "baseten",
+      name: "Baseten",
+      protocol: "openai",
+      baseUrl: "https://inference.baseten.co/v1",
+      models: basetenCatalogModels(CATALOG),
+    },
+  ]);
+  assert.equal(contextTokenBudgetForModel("custom/baseten/zai-org/GLM-5.3"), Math.floor(202_752 / 2));
 });
 
 test("BASETEN_API_KEY offers Baseten's live catalog and an admin baseten provider takes precedence", async () => {
