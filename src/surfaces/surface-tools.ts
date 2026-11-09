@@ -79,6 +79,12 @@ function postedFileMetas(attachments: readonly OutgoingAttachment[]): PostedFile
   }));
 }
 
+export function surfaceToolsActive(
+  ctx: Pick<SurfaceToolsContext, "deps" | "input" | "strictReadOnly" | "defaultDestination">,
+): boolean {
+  return !ctx.strictReadOnly && !!ctx.input.surfaceTools && !!ctx.defaultDestination && !!ctx.deps.deliveries;
+}
+
 export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps | undefined {
   const {
     deps,
@@ -87,7 +93,6 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
     conversation,
     session,
     scopeId,
-    strictReadOnly,
     defaultDestination,
     blobTransfer,
     fileRegistration,
@@ -96,7 +101,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
     postKeys,
     spine,
   } = ctx;
-  if (strictReadOnly || !(input.surfaceTools && defaultDestination && deps.deliveries)) return undefined;
+  if (!surfaceToolsActive(ctx) || !defaultDestination || !deps.deliveries) return undefined;
   const deliveries = deps.deliveries;
   const currentDestination = defaultDestination;
   const textOnly = (d: Destination) => deps.surfaces.get(d.type)?.capabilities.textOnly === true;
