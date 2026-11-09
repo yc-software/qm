@@ -364,10 +364,12 @@ export function createApprovals(deps: {
         const cleanedContinuation = cleanAgentReplyForSlack(result.reply ?? "");
         const replyBody = stripAckPrefix(cleanedContinuation.text, ctx.ackedFirstBlock);
         const { reactions } = cleanedContinuation;
-        let reply = result.stopped ? "Stopped." : "(no response)";
+        let reply = result.stopped ? "" : "(no response)";
         if (replyBody) reply = toSlackMrkdwn(replyBody);
         else if (result.attachments?.length || reactions.length) reply = "Done.";
-        if (cardIsRemote) {
+        if (!reply) {
+          await updateCard(decisionCard());
+        } else if (cardIsRemote) {
           await updateCard(decisionCard());
           await postApprovalFollowup(client, ctx, reply);
         } else {
