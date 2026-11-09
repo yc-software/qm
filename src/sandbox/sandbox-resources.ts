@@ -331,7 +331,7 @@ export function createSandboxResources(opts: {
         await opts.records.put(id, record);
         const sandbox = opts.backends[record.backend]!;
         try {
-          const handle = await sandbox.provision(record.backingScopeId, {
+          await sandbox.provision(record.backingScopeId, {
             ...(await opts.provisionOptions?.(scopeId)),
             ...(memoryGb ? { memoryGb } : {}),
           });
