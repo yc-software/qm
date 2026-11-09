@@ -201,7 +201,11 @@ export function createSdkRenderClient(opts: SdkRenderClientOptions): RenderClien
         "idempotent",
         { ...sdkErrors, signal, timeoutMs: TRANSFER_TIMEOUT_MS },
       );
-      return await exec(sandboxId, `timeout -k ${KILL_AFTER_SEC} ${timeoutSec} sh ${shq(path)}`, signal);
+      return await exec(
+        sandboxId,
+        `sh -c ${shq(`timeout -k ${KILL_AFTER_SEC} ${timeoutSec} sh ${shq(path)}; exit $?`)}`,
+        signal,
+      );
     } catch (error) {
       if (error instanceof SandboxEndedError) throw error;
       await exec(sandboxId, `rm -f ${shq(path)}`, AbortSignal.timeout(CLEANUP_TIMEOUT_MS)).catch(

@@ -7,7 +7,7 @@ import { createSdkRenderClient, RENDER_SCRIPT_DIR } from "../src/sandbox/render-
 import { createFakeRender, serveFakeRenderApi } from "./support/fake-render.ts";
 
 const SPOOLED = new RegExp(
-  `^timeout -k \\d+ (\\d+) sh '${RENDER_SCRIPT_DIR.replaceAll(".", "\\.")}/[0-9a-f-]{36}\\.sh'$`,
+  `^sh -c 'timeout -k \\d+ (\\d+) sh '\\\\''(${RENDER_SCRIPT_DIR.replaceAll(".", "\\.")}/[0-9a-f-]{36}\\.sh)'\\\\''; exit \\$\\?'$`,
 );
 const cleanup = (path: string): string =>
   `rm -f '${path}'; find '${RENDER_SCRIPT_DIR}' -type f -mmin +5 -delete 2>/dev/null\n`;
@@ -306,7 +306,7 @@ test("Render SDK adapter keeps stdout, stderr, and nonzero exit status of an upl
   assert.match(command, SPOOLED);
   assert.equal(SPOOLED.exec(command)![1], "10");
   assert.deepEqual(JSON.parse(sent[3]!.body), { command });
-  const path = command.slice(command.indexOf("'") + 1, -1);
+  const path = SPOOLED.exec(command)![2]!;
   assert.ok(sent[1]!.body.startsWith(cleanup(path)));
   assert.ok(sent[1]!.body.endsWith("\nexample command"));
 });
@@ -509,7 +509,7 @@ test("Render SDK adapter rejects truncated streams and removes the uploaded scri
     .map((request) => (JSON.parse(request.body) as { command: string }).command);
   assert.equal(commands.length, 2);
   assert.match(commands[0]!, SPOOLED);
-  assert.equal(commands[1], `rm -f ${commands[0]!.slice(commands[0]!.indexOf("'"))}`);
+  assert.equal(commands[1], `rm -f '${SPOOLED.exec(commands[0]!)![2]}'`);
 });
 
 test("Render SDK adapter keeps scripts and secrets out of run token requests and runs scripts past the argument limit", async (t) => {

@@ -114,7 +114,7 @@ export function createFakeRender() {
   };
   const runProxyCommand = async (id: string, command: string) => {
     requireRunning(id);
-    const spooled = /^timeout -k (\d+) (\d+) sh '([^']+)'$/.exec(command);
+    const spooled = /^sh -c 'timeout -k (\d+) (\d+) sh '\\''([^']+)'\\''; exit \$\?'$/.exec(command);
     if (!spooled) return execute(id, command);
     const script = mapped(id, spooled[3]!);
     if (!existsSync(script)) return { stdout: "", stderr: `sh: cannot open ${spooled[3]}`, exitCode: 2 };
