@@ -9,6 +9,7 @@ import {
   Lock,
   MessageSquare,
   Pencil,
+  Pin,
   Plus,
   Search,
   Share2,
@@ -64,6 +65,7 @@ interface PersonaGrant {
   grantedAt?: number | string;
   label?: string;
   personasEnabled: boolean;
+  pinned?: boolean;
 }
 
 interface PersonaDetail extends PersonaView {
@@ -457,6 +459,7 @@ function removableRow(
   detail: string,
   removeLabel: string | null,
   onRemove: () => void,
+  action: TemplateResult | typeof nothing = nothing,
 ): TemplateResult {
   return html`<div class="persona-item">
     ${glyph}
@@ -464,6 +467,7 @@ function removableRow(
       <span class="persona-skill-name" dir="auto">${name}</span>
       ${detail ? html`<span class="hint" dir="auto">${detail}</span>` : nothing}
     </span>
+    ${action}
     ${
       removeLabel
         ? html`<button class="chip-x persona-item-remove" type="button" aria-label=${removeLabel} @click=${onRemove}>
@@ -554,9 +558,20 @@ function channelsSection(persona: PersonaDetail): TemplateResult {
           removableRow(
             html`<span class="persona-channel-glyph">${icon(Hash, 14)}</span>`,
             grantLabel(grant),
-            "",
+            grant.pinned ? `Pinned: QM answers as ${persona.name} here` : "",
             owner ? `Remove ${grantLabel(grant)}` : null,
             () => void removeGrantee(persona, grant),
+            owner
+              ? html`<button
+                  class="btn persona-action"
+                  type="button"
+                  ?disabled=${busyId !== null}
+                  aria-pressed=${grant.pinned ? "true" : "false"}
+                  @click=${() => void togglePin(persona, grant)}
+                >
+                  ${icon(Pin, 14)}<span>${grant.pinned ? "Unpin" : "Pin"}</span>
+                </button>`
+              : nothing,
           ),
         )}
       </div>`
@@ -565,7 +580,7 @@ function channelsSection(persona: PersonaDetail): TemplateResult {
     "Slack channels",
     owner ? rowAction("Add channel", Plus, () => void openGranteePicker(persona.id, "channels")) : nothing,
     html`${list}${flagNote}${granteePickerTpl(persona, "channels")}`,
-    `People in these channels can ask QM to use ${persona.name} in a thread there. QM stays the default; they can't edit ${persona.name}.`,
+    `People in these channels can ask QM to use ${persona.name} in a thread there; they can't edit ${persona.name}. Pin it in a channel to make every conversation there ${persona.name}, posting under its name and icon.`,
   );
 }
 
@@ -620,7 +635,7 @@ async function chatWithPrompt(persona: PersonaView, prompt: string): Promise<voi
 
 async function saveAccess(
   persona: PersonaDetail,
-  change: (access: PersonaGrant[]) => Array<Pick<PersonaGrant, "scopeId" | "role">>,
+  change: (access: PersonaGrant[]) => Array<Pick<PersonaGrant, "scopeId" | "role" | "pinned">>,
 ): Promise<boolean> {
   if (busyId) return false;
   busyId = persona.id;
@@ -633,7 +648,9 @@ async function saveAccess(
     const { access } = await fetchPersona(persona.id);
     await api(`/api/personas/${encodeURIComponent(persona.id)}/access`, {
       method: "PUT",
-      body: JSON.stringify({ access: change(access).map(({ scopeId, role }) => ({ scopeId, role })) }),
+      body: JSON.stringify({
+        access: change(access).map(({ scopeId, role, pinned }) => ({ scopeId, role, ...(pinned ? { pinned } : {}) })),
+      }),
     });
     busyId = null;
     return true;
@@ -660,9 +677,18 @@ async function changeRole(persona: PersonaDetail, grant: PersonaGrant, value: st
   if (!role || role === grant.role) return;
   if (isMe(grant) && !window.confirm(`Change your own role on ${persona.name} to ${ROLE_LABELS[role]}?`)) return;
   const saved = await saveAccess(persona, (access) =>
-    access.map((g) => (g.scopeId === grant.scopeId ? { scopeId: g.scopeId, role } : g)),
+    access.map((g) => (g.scopeId === grant.scopeId ? { ...g, role } : g)),
   );
   if (saved) await openPersona(persona.id, "Access saved.");
+}
+
+async function togglePin(persona: PersonaDetail, grant: PersonaGrant): Promise<void> {
+  const label = `#${grantLabel(grant).replace(/^#/, "")}`;
+  const pinned = !grant.pinned;
+  const saved = await saveAccess(persona, (access) =>
+    access.map((g) => (g.scopeId === grant.scopeId ? { ...g, pinned } : g)),
+  );
+  if (saved) await openPersona(persona.id, pinned ? `Pinned in ${label}.` : `Unpinned from ${label}.`);
 }
 
 async function removeGrantee(persona: PersonaDetail, grant: PersonaGrant): Promise<void> {

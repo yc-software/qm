@@ -44,6 +44,19 @@ export interface PersonaAccess {
   role: PersonaRole;
   grantedBy: string;
   grantedAt: number;
+  pinned?: boolean;
+}
+
+export interface PersonaAccessEntry {
+  scopeId: ScopeId;
+  role: PersonaRole;
+  pinned?: boolean;
+}
+
+export class PersonaChannelPinned extends Error {
+  constructor(channel: ScopeId) {
+    super(`${channel} already has another persona pinned; unpin it there first`);
+  }
 }
 
 export interface PersonaFields {
@@ -61,7 +74,8 @@ export interface PersonaStore {
   version(id: string, version: number): Promise<PersonaVersion | null>;
   remove(id: string): Promise<boolean>;
   access(id: string): Promise<PersonaAccess[]>;
-  replaceAccess(id: string, access: ReadonlyArray<{ scopeId: ScopeId; role: PersonaRole }>, by: string): Promise<void>;
+  replaceAccess(id: string, access: ReadonlyArray<PersonaAccessEntry>, by: string): Promise<void>;
+  pinnedIn(channel: ScopeId): Promise<string | null>;
   roles(grantees: readonly ScopeId[], id?: string): Promise<Map<string, PersonaRole>>;
   listFor(grantees: readonly ScopeId[]): Promise<Array<Persona & { role: PersonaRole }>>;
 }
@@ -211,6 +225,7 @@ export function createPostgresPersonaStore(connectionString: string, opts: { id?
         role: r.role as PersonaRole,
         grantedBy: r.granted_by_alias as string,
         grantedAt: ms(r.granted_at),
+        ...(r.pinned ? { pinned: true } : {}),
       }));
     },
     async replaceAccess(id, access, by) {
@@ -224,14 +239,24 @@ export function createPostgresPersonaStore(connectionString: string, opts: { id?
           kept,
         ]);
         for (const entry of access)
-          await db.query(
-            `INSERT INTO persona_access (persona_id, grantee_scope_id, role, granted_by) VALUES ($1, $2, $3, $4)
+          await db
+            .query(
+              `INSERT INTO persona_access (persona_id, grantee_scope_id, role, pinned, granted_by) VALUES ($1, $2, $3, $4, $5)
              ON CONFLICT (persona_id, grantee_scope_id) DO UPDATE
-               SET role = EXCLUDED.role, granted_by = EXCLUDED.granted_by, granted_at = now()
-               WHERE persona_access.role IS DISTINCT FROM EXCLUDED.role`,
-            [id, entry.scopeId, entry.role, user],
-          );
+               SET role = EXCLUDED.role, pinned = EXCLUDED.pinned, granted_by = EXCLUDED.granted_by, granted_at = now()
+               WHERE (persona_access.role, persona_access.pinned) IS DISTINCT FROM (EXCLUDED.role, EXCLUDED.pinned)`,
+              [id, entry.scopeId, entry.role, entry.pinned === true, user],
+            )
+            .catch((e: unknown) => {
+              if ((e as { constraint?: string }).constraint === "persona_access_one_pin")
+                throw new PersonaChannelPinned(entry.scopeId);
+              throw e;
+            });
       });
+    },
+    async pinnedIn(channel) {
+      const rows = await q("SELECT persona_id FROM persona_access WHERE grantee_scope_id = $1 AND pinned", [channel]);
+      return (rows[0]?.persona_id as string | undefined) ?? null;
     },
     async roles(grantees, id) {
       const rows = await q(

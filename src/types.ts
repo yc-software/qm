@@ -3,6 +3,7 @@ import type { ResolvedSecurityPolicy } from "./security/security-posture.ts";
 import type { SharingPosture } from "./resolution/sharing-posture.ts";
 import type { SurfaceAccount, TurnSurfaceOrigin } from "./surfaces/contract.ts";
 import type { SessionOrigin } from "./sessions/session-store.ts";
+import type { ProjectIcon } from "./projects/project-store.ts";
 
 export type PrincipalType = "internal" | "guest";
 
@@ -30,6 +31,12 @@ function isScopeKind(s: string): s is ScopeKind {
 
 export function scopeId(kind: ScopeKind, ref: string): ScopeId {
   return `${kind}:${ref}`;
+}
+
+export interface WornPersona {
+  id: string;
+  name: string;
+  icon?: ProjectIcon;
 }
 
 export function personalScope(principalId: string): ScopeId {
@@ -217,7 +224,7 @@ export interface Destination {
   audienceScopeId?: ScopeId;
   onBehalfOf?: string;
   relaySender?: string;
-  persona?: { id: string; name: string };
+  persona?: WornPersona;
   threadTs?: string;
   editRef?: string;
   unfurlLinks?: boolean;
@@ -523,5 +530,5 @@ export interface TurnResult {
   runtime?: TurnRuntime;
   scriptVerdict?: string;
   retracted?: string[];
-  persona?: { id: string; name: string };
+  persona?: WornPersona;
 }

@@ -313,6 +313,20 @@ async function pickRole(root: ParentNode, scope: string, label: string): Promise
   await settle();
 }
 
+test("an owner pins the persona in a channel from its row", async () => {
+  const { main } = await openPersonaPage("Ada");
+  calls = [];
+  button(main, "Pin").click();
+  await settle();
+  assert.deepEqual(putBody(), {
+    access: [
+      { scopeId: "personal:tester", role: "owner" },
+      { scopeId: "channel:C9", role: "read", pinned: true },
+    ],
+  });
+  assert.equal(flash(main), "Pinned in #design.");
+});
+
 test("Add channel searches your Slack channels on the page and adds one with chat access", async () => {
   const { main } = await openPersonaPage("Ada");
   button(main, "Add channel").click();

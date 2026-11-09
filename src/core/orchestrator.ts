@@ -1111,7 +1111,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       } else if (input.surfaceTools && input.origin.kind === "automation" && input.origin.destination) {
         defaultDestination = input.origin.destination;
       }
-      const wornPersona = persona ? { id: persona.persona.id, name: persona.persona.name } : undefined;
+      const wornPersona = persona
+        ? {
+            id: persona.persona.id,
+            name: persona.persona.name,
+            ...(persona.persona.icon ? { icon: persona.persona.icon } : {}),
+          }
+        : undefined;
       if (defaultDestination && wornPersona) defaultDestination = { ...defaultDestination, persona: wornPersona };
       const cronBlock =
         delivery.candidates.length > 1 && deps.signingSecret && deps.apiBaseUrl

@@ -59,4 +59,11 @@ export const PERSONA_MIGRATIONS: PgMigrationDefinition[] = [
       `UPDATE persona_access SET role = 'read' WHERE grantee_scope_id LIKE 'channel:%' AND role <> 'read'`,
     ],
   },
+  {
+    id: "users/v2/0006-persona-channel-pins",
+    statements: [
+      `ALTER TABLE persona_access ADD COLUMN IF NOT EXISTS pinned BOOLEAN NOT NULL DEFAULT false`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS persona_access_one_pin ON persona_access(grantee_scope_id) WHERE pinned`,
+    ],
+  },
 ];

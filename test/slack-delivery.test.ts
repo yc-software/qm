@@ -60,6 +60,29 @@ test("botIdentityArgs/slackReplyArgs stay a no-op without an env override", () =
   });
 });
 
+test("a post from a persona turn goes out under the persona's name and icon", () => {
+  const ada = { id: "p1", name: "Ada" };
+  assert.deepEqual(botIdentityArgs({ ...ada, icon: { kind: "emoji", value: "🎨" } }), {
+    username: "Ada",
+    icon_emoji: ":art:",
+  });
+  assert.deepEqual(botIdentityArgs({ ...ada, icon: { kind: "emoji", value: "❤️" } }), {
+    username: "Ada",
+    icon_emoji: ":heart:",
+  });
+  assert.deepEqual(botIdentityArgs({ ...ada, icon: { kind: "custom", name: "ada-face" } }), {
+    username: "Ada",
+    icon_emoji: ":ada-face:",
+  });
+  assert.deepEqual(botIdentityArgs(ada), { username: "Ada" }, "no icon keeps the app's own");
+  assert.deepEqual(slackReplyArgs("C1", "hi", "1.2", { persona: ada }), {
+    channel: "C1",
+    text: "hi",
+    thread_ts: "1.2",
+    username: "Ada",
+  });
+});
+
 test("slackReplyArgs can suppress Slack link and media unfurls per message", () => {
   assert.deepEqual(slackReplyArgs("C1", "see https://x.com/a/status/1", undefined, { unfurlLinks: false }), {
     channel: "C1",

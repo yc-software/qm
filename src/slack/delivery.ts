@@ -3,6 +3,8 @@ import { safeChunks, safeClip } from "./safe-cut.ts";
 import { sleep } from "./util.ts";
 import { isExternallyShared, isMpim, type ChannelMeta } from "./identity.ts";
 import { trimTrailingSlashes } from "../util/text.ts";
+import type { WornPersona } from "../types.ts";
+import { EMOJI_NAME_BY_CHAR } from "./emoji-map.ts";
 
 export interface SlackReplyArgs {
   channel: string;
@@ -34,11 +36,20 @@ export function setDefaultBotIdentity(identity: BotIdentityOverride | undefined)
   defaultIdentity = identity ?? {};
 }
 
-export function botIdentityArgs(): BotIdentityOverride {
+function slackEmojiName(icon: WornPersona["icon"]): string | undefined {
+  if (icon?.kind === "custom") return icon.name;
+  if (icon?.kind === "emoji") return EMOJI_NAME_BY_CHAR[icon.value.replace(/\uFE0F/g, "")];
+  return undefined;
+}
+
+export function botIdentityArgs(persona?: WornPersona): BotIdentityOverride {
   const id = defaultIdentity;
+  const username = persona?.name.trim() || id.username;
+  const personaEmoji = slackEmojiName(persona?.icon);
+  const icon_emoji = personaEmoji ? `:${personaEmoji}:` : id.icon_emoji;
   return {
-    ...(id.username ? { username: id.username } : {}),
-    ...(id.icon_emoji ? { icon_emoji: id.icon_emoji } : {}),
+    ...(username ? { username } : {}),
+    ...(icon_emoji ? { icon_emoji } : {}),
   };
 }
 
@@ -46,7 +57,7 @@ export function slackReplyArgs(
   channel: string,
   text: string,
   threadTs: string | undefined,
-  opts: { threadOnly?: boolean; unfurlLinks?: boolean } = {},
+  opts: { threadOnly?: boolean; unfurlLinks?: boolean; persona?: WornPersona } = {},
 ): SlackReplyArgs {
   return {
     channel,
@@ -54,7 +65,7 @@ export function slackReplyArgs(
     ...(threadTs ? { thread_ts: threadTs } : {}),
     ...(threadTs && opts.threadOnly ? { reply_broadcast: false as const } : {}),
     ...(opts.unfurlLinks !== undefined ? { unfurl_links: opts.unfurlLinks, unfurl_media: opts.unfurlLinks } : {}),
-    ...botIdentityArgs(),
+    ...botIdentityArgs(opts.persona),
   };
 }
 

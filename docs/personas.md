@@ -45,6 +45,11 @@ Holders are people (`personal:`), teams (`team:`), the org (`org:`) or Slack cha
 that channel. A person's
 role is the highest one reaching them. Every persona keeps at least one owner.
 
+An owner can also **pin** a persona in a channel it's shared with (`pinned: true` on that
+channel's access entry, column `persona_access.pinned`, migration
+`users/v2/0006-persona-channel-pins`). A channel pins at most one persona; pinning a second
+one is refused until the first is unpinned. Removing the channel's grant unpins it.
+
 Checks sit where every path already flows: turn resolution (below) and the scope checks
 (`canReadScope` / `canWriteScope` / `canManageScope`), so skill moves into a persona need
 write. Only an owner can attach a credential, only their own, and only on a turn they
@@ -53,8 +58,11 @@ sent; readers use it through the persona but never hold it.
 ## Turns
 
 A session's `persona_id` is set from the Personas page ("Chat") or by the agent
-(`PUT /v1/sessions/:id/persona`). On each turn, if the sender holds a role on the persona
-(counting the conversation's channel), the turn:
+(`PUT /v1/sessions/:id/persona`). A conversation in a channel with a pinned persona and no
+persona of its own wears the pinned one; the `## Persona` block then says the channel pinned
+it and how to change that. There is no lock: the channel's own instructions and skills
+still apply, and anyone may still pick another persona for one conversation. On each turn,
+if the sender holds a role on the persona (counting the conversation's channel), the turn:
 
 - reads `persona:<id>` as an extra read-only scope (its skills and notes);
 - offers keychain grants to `persona:<id>` alongside the conversation's own;
@@ -68,9 +76,14 @@ scheduler looks up the persona of the cron's home conversation and the fire's tu
 under the same role check.
 
 Whatever a turn wearing a persona posts carries the persona's id and name on its delivery
-destination: replies, posts to other conversations, and cron output. Slack ends those
-messages with a `Persona: <name>` context line linking to the persona's page, next to the
-cron settings link when there is one.
+destination: replies, posts to other conversations, and cron output. Slack posts and
+edits those messages under the persona's name and icon, ahead of any deployment-wide
+`SLACK_BOT_DISPLAY_NAME`/`SLACK_BOT_ICON_EMOJI` override (needs `chat:write.customize`, which
+the app manifest requests) (a Unicode emoji maps to its Slack
+shortcode; a custom emoji is used by name; no icon keeps the default), and ends them with a
+`Persona: <name>` context line linking to the persona's page, next to the cron settings
+link when there is one. File uploads and the in-progress task card still show the app's own
+identity, since Slack doesn't let an app rename those.
 
 Unlike a project, a persona is not a place conversations live. A conversation with a
 persona stays in the scope it started in (your DM, a channel, a group), so only the
