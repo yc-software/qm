@@ -15,7 +15,8 @@ BEGIN
     SELECT a.attrelid AS rel, a.attnum AS num, c.relname
       FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid
      WHERE c.relnamespace = current_schema()::regnamespace AND c.relkind = 'r'
-       AND a.attname = 'tenant_id' AND NOT a.attisdropped;
+       AND a.attname = 'tenant_id' AND NOT a.attisdropped
+       AND EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = c.oid AND p.polname = 'tenant_isolation');
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint k JOIN tenant_cols tc ON tc.rel = k.conrelid
      WHERE k.contype = 'p' AND k.conkey[1] = tc.num AND NOT tc.relname = ANY(kept || registry)
