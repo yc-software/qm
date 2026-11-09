@@ -270,14 +270,17 @@ export function createSkillMethods(
       const skill = await deps.skills.get(id);
       if (!skill || !(await canManageSkill(skill, principalId))) return null;
       if (triggerBlocksSharedSkill(skill.scopeId, opts?.liveActor === true)) return "trigger_blocked";
-      if (skill.status === "archived") return null;
-      const manifest = {
-        ...skill.manifest,
-        description: patch.description ?? skill.manifest.description,
-        body: patch.body ?? skill.manifest.body,
-      };
-      const updated = await deps.skills.update(id, manifest);
-      const live = await republishIfShared(updated, principalId);
+      const live = await deps.skills.withNameLock(skill.scopeId, skill.manifest.name, async () => {
+        const current = await deps.skills.get(id);
+        if (!current || current.status === "archived") return null;
+        const updated = await deps.skills.update(id, {
+          ...current.manifest,
+          description: patch.description ?? current.manifest.description,
+          body: patch.body ?? current.manifest.body,
+        });
+        return republishIfShared(updated, principalId);
+      });
+      if (!live) return null;
       deps.auditLog.record({
         at: Date.now(),
         principalId,
