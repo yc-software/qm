@@ -126,6 +126,10 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
   const scopeByName = new Map<string, string>();
   const sizeByScope = new Map<string, number>();
   const scratchKeyByName = new Map<string, string>();
+  const cachedFor = (name: string, sandboxId: string | undefined): ModalSession | undefined => {
+    const session = sessionByName.get(name);
+    return session && session.sandboxId === sandboxId ? session : undefined;
+  };
   const activeScratch = new Map<string, number>();
 
   const reportError = (category: string, code: string, message: string, scopeLabel?: string): void => {
@@ -297,7 +301,7 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
         Date.now() - stored.createdAtMs > rotateAfterMs &&
         Date.now() >= (rotationHoldUntil.get(scope) ?? 0);
 
-      const cached = sessionByName.get(name);
+      const cached = cachedFor(name, stored?.sandboxId);
       if (cached && !stale) return { session: cached, coldStart: false };
 
       if (stored && !stale) {
@@ -828,10 +832,7 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
         };
       try {
         scopeByName.set(name, scopeId);
-        let session = sessionByName.get(name);
-        if (!session) {
-          session = await client.fromId(stored.sandboxId);
-        }
+        const session = cachedFor(name, stored.sandboxId) ?? (await client.fromId(stored.sandboxId));
         const r = await session.runCommand("echo responsive", { timeoutMs: 30_000 });
         return {
           machine,
@@ -908,7 +909,7 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
         scopeByName.set(name, scope);
         let session: ModalSession | undefined;
         try {
-          session = sessionByName.get(name) ?? (await client.fromId(rec.sandboxId));
+          session = cachedFor(name, rec.sandboxId) ?? (await client.fromId(rec.sandboxId));
         } catch (e) {
           if (!(e instanceof ModalSandboxGoneError)) {
             reportError("sandbox_reap", "deep_idle_probe_failed", errMessage(e), scope);
@@ -918,7 +919,9 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
         if (!session) {
           sessionByName.delete(name);
           if (!rec.nativeSnapshotId)
-            await store.delete(scope).catch(swallowAs("modal-sandbox: forget retired sandbox", undefined));
+            await store
+              .deleteIf(scope, (current) => current.sandboxId === rec.sandboxId && !current.nativeSnapshotId)
+              .catch(swallowAs("modal-sandbox: forget retired sandbox", undefined));
           else if (checkpointRenewalDue(rec, now)) await renewCheckpoint(scope, name, rec);
           continue;
         }
@@ -936,7 +939,9 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
             if (e instanceof ModalSandboxGoneError) {
               sessionByName.delete(name);
               if (!rec.nativeSnapshotId)
-                await store.delete(scope).catch(swallowAs("modal-sandbox: forget retired sandbox", undefined));
+                await store
+                  .deleteIf(scope, (current) => current.sandboxId === rec.sandboxId && !current.nativeSnapshotId)
+                  .catch(swallowAs("modal-sandbox: forget retired sandbox", undefined));
             } else {
               reportError("sandbox_reap", "deep_idle_probe_failed", errMessage(e), scope);
             }
