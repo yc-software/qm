@@ -3,26 +3,26 @@ import { TENANCY, tenantRowSecurity, tenantTables } from "../tenants/migrations.
 import { PERSONA_MIGRATIONS } from "./persona-schema.ts";
 
 const PERSONA_VERSION_TENANCY = tenantTables(
-  "users/v2/0007-tenants",
+  "users/v2/0004-tenants/2-persona-versions",
   [{ table: "persona_versions", primaryKey: "persona_id, version" }],
   {
-    after: [
-      `ALTER TABLE persona_versions ADD CONSTRAINT persona_versions_persona_id_fkey
-         FOREIGN KEY (tenant_id, persona_id) REFERENCES personas(tenant_id, id) ON DELETE CASCADE`,
-      `ALTER TABLE persona_versions ADD CONSTRAINT persona_versions_edited_by_fkey
-         FOREIGN KEY (tenant_id, edited_by) REFERENCES users(tenant_id, id)`,
+    references: [
+      {
+        table: "persona_versions",
+        name: "persona_versions_persona_id_fkey",
+        columns: "persona_id",
+        references: "personas(tenant_id, id)",
+        onDelete: "CASCADE",
+      },
+      {
+        table: "persona_versions",
+        name: "persona_versions_edited_by_fkey",
+        columns: "edited_by",
+        references: "users(tenant_id, id)",
+      },
     ],
   },
 ).filter((migration) => !TENANCY.includes(migration));
-
-const RELEASE_PERSONA_VERSIONS: PgMigrationDefinition = {
-  id: "users/v2/0004-tenants/2-release-persona-versions",
-  statements: [
-    `SET LOCAL lock_timeout = '5s'`,
-    `ALTER TABLE IF EXISTS persona_versions DROP CONSTRAINT IF EXISTS persona_versions_persona_id_fkey,
-       DROP CONSTRAINT IF EXISTS persona_versions_edited_by_fkey`,
-  ],
-};
 
 const PIN_TENANCY: PgMigrationDefinition[] = [
   {
@@ -48,7 +48,7 @@ function catchUp(): PgMigrationDefinition {
   const settled = [...PERSONA_MIGRATIONS.slice(1), ...PERSONA_VERSION_TENANCY, ...PIN_TENANCY];
   const ledger = settled.map((migration) => `('${migration.id}', '${definePgMigration(migration).checksum}')`);
   return {
-    id: "users/v2/0004-tenants/4-persona-catch-up",
+    id: "users/v2/0004-tenants/2-persona-catch-up",
     statements: [
       `DO $persona_catch_up$
 BEGIN
@@ -103,7 +103,6 @@ END $persona_catch_up$`,
 }
 
 export const PERSONA_TENANCY: PgMigrationDefinition[] = [
-  RELEASE_PERSONA_VERSIONS,
   catchUp(),
   ...PERSONA_VERSION_TENANCY,
   ...PIN_TENANCY,
