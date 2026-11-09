@@ -109,8 +109,10 @@ export function createE2bDeployProvider(opts: E2bDeployProviderOptions): DeployP
     });
   }
 
-  const forget = (d: Deployment): Promise<void> =>
-    store.delete(d.id).catch((err) => swallow("e2b-deploy: drop dead body pointer", err));
+  const forget = (d: Deployment, sandboxId: string): Promise<unknown> =>
+    store
+      .deleteIf(d.id, (cur) => cur.sandboxId === sandboxId)
+      .catch((err) => swallow("e2b-deploy: drop dead body pointer", err));
 
   async function connectStored(d: Deployment): Promise<{ stored: StoredE2bDeployBody; session: E2bSession } | null> {
     const stored = await store.get(d.id);
@@ -119,7 +121,7 @@ export function createE2bDeployProvider(opts: E2bDeployProviderOptions): DeployP
       return { stored, session: await client.connect(stored.sandboxId) };
     } catch (e) {
       if (!(e instanceof E2bSandboxGoneError)) throw e;
-      await forget(d);
+      await forget(d, stored.sandboxId);
       return null;
     }
   }
@@ -132,7 +134,7 @@ export function createE2bDeployProvider(opts: E2bDeployProviderOptions): DeployP
       return stored;
     } catch (e) {
       if (!(e instanceof E2bSandboxGoneError)) throw e;
-      await forget(d);
+      await forget(d, stored.sandboxId);
       return null;
     }
   }
@@ -203,7 +205,7 @@ export function createE2bDeployProvider(opts: E2bDeployProviderOptions): DeployP
         const stored = await store.get(d.id);
         if (stored) await client.kill(stored.sandboxId);
         await killStrays(d);
-        await forget(d);
+        await store.delete(d.id).catch((err) => swallow("e2b-deploy: destroy clear pointer", err));
       }),
   };
 }
