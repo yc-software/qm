@@ -18,7 +18,6 @@ export interface SandboxResource {
   legacy: boolean;
   state: "unverified" | "provisioning" | "ready" | "failed" | "retired";
   availableActions?: string[];
-  machineId?: string;
   cleanupPending?: boolean;
   holders?: string[];
   spec?: AgentComputerSpec;
@@ -339,7 +338,6 @@ export function createSandboxResources(opts: {
           const ready: SandboxResource = {
             ...record,
             state: "ready",
-            machineId: handle.id,
             spec: sandbox.profile.spec,
           };
           await opts.records.put(id, ready);

@@ -13,7 +13,6 @@ export interface SandboxResourceUpgradeMarker {
 export interface LegacySandboxBinding {
   scopeId: string;
   backend: SandboxBackendName;
-  machineId?: string;
 }
 
 export type LegacySandboxScopeDefaults = Partial<Record<ScopeKind, SandboxBackendName>>;
@@ -101,7 +100,6 @@ export async function upgradeLegacySandboxes(opts: {
         createdAt: new Date().toISOString(),
         legacy: true,
         state: "unverified",
-        ...(binding.machineId ? { machineId: binding.machineId } : {}),
         ...(spec ? { spec } : {}),
       });
     }

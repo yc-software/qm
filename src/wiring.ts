@@ -1155,14 +1155,10 @@ export function buildApp(
             superserveBodies.entries(),
           ]);
           return [
-            ...e2b.map(([scopeId, body]) => ({ scopeId, backend: "e2b" as const, machineId: body.sandboxId })),
-            ...modal.map(([scopeId, body]) => ({ scopeId, backend: "modal" as const, machineId: body.sandboxId })),
-            ...aws.map(([scopeId, body]) => ({ scopeId, backend: "aws" as const, machineId: body.microvmId })),
-            ...superserve.map(([scopeId, body]) => ({
-              scopeId,
-              backend: "superserve" as const,
-              machineId: body.sandboxId,
-            })),
+            ...e2b.map(([scopeId]) => ({ scopeId, backend: "e2b" as const })),
+            ...modal.map(([scopeId]) => ({ scopeId, backend: "modal" as const })),
+            ...aws.map(([scopeId]) => ({ scopeId, backend: "aws" as const })),
+            ...superserve.map(([scopeId]) => ({ scopeId, backend: "superserve" as const })),
           ];
         },
       }),
