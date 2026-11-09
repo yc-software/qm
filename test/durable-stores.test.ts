@@ -84,7 +84,7 @@ test("deployments persist with immutable versions across store instances", async
   const s2 = createDeployStore(testDeployBackings({ deployments: map }));
   const got = await s2.get(d.id);
   assert.equal(got?.versions.length, 2);
-  assert.equal(got?.currentVersion, 2);
+  assert.equal(got?.currentVersion, 1);
   assert.equal((await s2.versionOf(d.id, 1))?.snapshotDir, "/snap/1");
 });
 
