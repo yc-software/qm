@@ -346,7 +346,7 @@ html:not([data-qm-desktop="darwin"]) .layout.sidebar-closed .history-nav {
 .new-chat-nav {
   margin-top: 4px;
 }
-.phone-nav-toggle {
+#sidebar-top .phone-nav-toggle {
   display: none;
 }
 a.navrow,
