@@ -540,3 +540,24 @@ test("QA: a custom provider saved without a key check cannot reach a loopback ad
     redirector.close();
   }
 });
+
+test("QA: a stored custom provider key that no HTTP header can carry stays out of model calls and their errors", async () => {
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "qa-custom-header-key-")) }));
+  await built.customProviders.upsert(
+    { id: "legacy", name: "Legacy", protocol: "openai", baseUrl: "https://llm.example.test/v1", models: [{ id: "m" }] },
+    "sk-legacy-first\nsk-legacy-second",
+    "admin-alice@default-org",
+  );
+  await built.refreshCustomProviders();
+  const route = await built.modelRoutes.route("custom/legacy/m");
+  assert.equal(route.keys.legacy, undefined);
+  const runtime = await buildModelRuntime(route.keys, route.gateway, "turn");
+  const reply = await runtime
+    .streamSimple(route.model, {
+      systemPrompt: "terse",
+      messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
+    })
+    .result();
+  assert.equal(reply.stopReason, "error");
+  assert.doesNotMatch(String(reply.errorMessage), /sk-legacy/);
+});
