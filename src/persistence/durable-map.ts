@@ -64,13 +64,17 @@ function claimTenantsWhereName(table: string, field: string): string {
   return `claim_${table}_tenants_by_${field.toLowerCase()}`;
 }
 
+function assertTableName(table: string): void {
+  if (!/^[a-z_][a-z0-9_]*$/i.test(table)) throw new Error(`invalid table name: ${table}`);
+}
+
 function mapMigrations(
   table: string,
   indexedFields: readonly string[],
   tenancy: readonly PgMigrationDefinition[],
   extraMigrations: readonly PgMigrationDefinition[],
 ): PgMigrationDefinition[] {
-  if (!/^[a-z_][a-z0-9_]*$/i.test(table)) throw new Error(`invalid table name: ${table}`);
+  assertTableName(table);
   const claim = {
     id: `durable-map/${table}/0020-claim-ids`,
     statements: [claimFunction(`claim_${table}`, "", `SELECT tenant_id, id FROM ${table} ORDER BY tenant_id, id`)],
@@ -163,9 +167,11 @@ export function createPostgresMap<T>(
   pg: PgPool,
   table: string,
   indexedFields: readonly Extract<keyof T, string>[] = [],
-  tenancy: readonly PgMigrationDefinition[] = durableMapTenancy(table),
+  tenancyOverride?: readonly PgMigrationDefinition[],
   extraMigrations: readonly PgMigrationDefinition[] = [],
 ): DurableMap<T> {
+  assertTableName(table);
+  const tenancy = tenancyOverride ?? durableMapTenancy(table);
   const migrations = mapMigrations(table, indexedFields, tenancy, extraMigrations);
   for (const definition of migrations) pg.registerMigration(definition);
   let readyP: Promise<void> | null = null;
