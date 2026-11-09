@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createHash } from "node:crypto";
 import { exportJWK, generateKeyPair, SignJWT, compactVerify } from "jose";
-import { deriveKey, openSession } from "../src/session.ts";
+import { deriveKey, openSession, readCookie } from "../src/session.ts";
 import { verifyPortalIdentity } from "../../chassis/src/portal-identity.ts";
 
 const preferenceEnabled = process.env.TRUSTED_LOGIN_LABEL_TEST !== "0";
@@ -74,11 +74,6 @@ const upstream = createServer((req, res) => {
               },
         ),
       );
-    if (url.pathname === "/api/me") {
-      const token = req.headers["x-portal-identity"] as string | undefined;
-      surfaceNames.push(token ? verifyPortalIdentity(token, identitySecret, Date.now())?.n : undefined);
-      return res.end("{}");
-    }
     if (url.pathname === "/v1/auth/trusted/admin") {
       adminRequests++;
       let body = "";
@@ -136,8 +131,27 @@ Object.assign(process.env, {
   }),
   PORTAL_TRUSTED_OIDC_CLIENT_SECRET: "trusted-client-secret-of-at-least-32-characters",
 });
-const { server } = await import("../src/index.ts");
-await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+const { server, startServer } = await import("../src/index.ts");
+await startServer({
+  port: 0,
+  host: "127.0.0.1",
+  core: {
+    serves: (method, pathname) => pathname === "/api/me",
+    handle: (req, res) => {
+      const carried = openSession(
+        readCookie(req.headers.cookie, "portal_session"),
+        deriveKey(sessionSecret, "portal.session.v1"),
+        Date.now(),
+        "test-company",
+      );
+      surfaceNames.push(carried?.name);
+      res.end("{}");
+    },
+    shell: async (_req, res) => {
+      res.end("{}");
+    },
+  },
+});
 const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 test.after(() => {
   server.close();

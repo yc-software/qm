@@ -40,8 +40,4 @@ export function verifyPortalIdentity(token: string, secret: string, nowMs: numbe
   return claims;
 }
 
-export function portalIdentityTenant(token: string | undefined, secret: string | undefined): string | undefined {
-  return token && secret ? verifyPortalIdentity(token, secret, Date.now())?.t : undefined;
-}
-
 export const PORTAL_IDENTITY_HEADER = "x-portal-identity";

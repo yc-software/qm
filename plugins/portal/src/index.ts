@@ -1192,11 +1192,14 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     }
   }
 
-  if (!openSession(readCookie(req.headers.cookie, "portal_session"), sessionKey, Date.now(), ORG, SESSION_MAX_TTL_S)) {
+  const carried = storedSession(req);
+  const named = carried && !carried.name && session.name ? { ...carried, name: session.name } : null;
+  const handedOver = carried ? named : session;
+  if (handedOver) {
     const others = (req.headers.cookie ?? "").split(";").map((part) => part.trim());
     req.headers.cookie = [
       ...others.filter((part) => part && !part.startsWith("portal_session=")),
-      `portal_session=${encodeURIComponent(seal(session, sessionKey))}`,
+      `portal_session=${encodeURIComponent(seal(handedOver, sessionKey))}`,
     ].join("; ");
   }
   if (core?.serves(method, pathname)) return core.handle(withoutInternalHeaders(req), res);
