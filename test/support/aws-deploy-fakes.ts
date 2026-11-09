@@ -87,9 +87,11 @@ export function fakeDaemon(
     execCode?: (cmd: string, url: string) => number;
     execStdout?: (cmd: string) => string;
     readB64?: (path: string) => string;
+    curl?: (url: string, method: "GET" | "PUT") => number;
   } = {},
 ) {
   const execs: string[] = [];
+  const reads: string[] = [];
   const writes: Array<{ path: string; b64: string }> = [];
   const fetchImpl = (async (url: string | URL, init?: { body?: string }) => {
     const u = String(url);
@@ -101,7 +103,11 @@ export function fakeDaemon(
     });
     if (u.endsWith("/health")) return ok({ ok: true });
     if (u.endsWith("/exec")) {
-      execs.push(body.cmd ?? "");
+      const cmd = body.cmd ?? "";
+      execs.push(cmd);
+      const url = /^url = "([^"]+)"$/m.exec(cmd)?.[1];
+      const transferCode = url && opts.curl ? opts.curl(url, / -T /.test(cmd) ? "PUT" : "GET") : 0;
+      if (transferCode !== 0) return ok({ stdout: "", stderr: "curl: (22)", code: 6, timedOut: false });
       return ok({
         stdout: opts.execStdout?.(body.cmd ?? "") ?? "",
         stderr: "",
@@ -113,10 +119,11 @@ export function fakeDaemon(
       writes.push({ path: body.path!, b64: body.b64! });
       return ok({ ok: true });
     }
+    if (u.endsWith("/read")) reads.push(body.path ?? "");
     if (u.endsWith("/read")) return ok({ b64: opts.readB64?.(body.path ?? "") ?? "" });
     return ok({});
   }) as unknown as typeof fetch;
-  return { fetchImpl, execs, writes };
+  return { fetchImpl, execs, writes, reads };
 }
 
 export function fakeS3(objects: Map<string, Uint8Array> = new Map()) {
@@ -128,6 +135,16 @@ export function fakeS3(objects: Map<string, Uint8Array> = new Map()) {
       calls.push(`${kind}:${key}`);
       if (kind === "PutObjectCommand") objects.set(key, cmd.input.Body!);
       if (kind === "DeleteObjectCommand") objects.delete(key);
+      if (kind === "HeadObjectCommand") {
+        const bytes = objects.get(key);
+        if (!bytes) {
+          const e = new Error("not found") as Error & { name: string; $metadata: { httpStatusCode: number } };
+          e.name = "NotFound";
+          e.$metadata = { httpStatusCode: 404 };
+          throw e;
+        }
+        return { ContentLength: bytes.length };
+      }
       if (kind === "GetObjectCommand") {
         const bytes = objects.get(key);
         if (!bytes) {
@@ -152,6 +169,29 @@ export function fakeS3(objects: Map<string, Uint8Array> = new Map()) {
     },
   };
   return { s3: s3 as unknown as Pick<import("@aws-sdk/client-s3").S3Client, "send">, objects, calls };
+}
+
+export const PRESIGN_HOST = "https://bkt.s3.example";
+
+export async function fakePresign(
+  cmd: { constructor: { name: string }; input: { Key?: string } },
+  expiresInSec: number,
+): Promise<string> {
+  const method = cmd.constructor.name === "PutObjectCommand" ? "PUT" : "GET";
+  return `${PRESIGN_HOST}/${cmd.input.Key}?X-Amz-Expires=${expiresInSec}&X-Amz-Signature=${method}`;
+}
+
+export function vmBucket(objects: Map<string, Uint8Array>, tar: () => Uint8Array = () => Buffer.from("TAR")) {
+  const transfers: Array<{ method: "GET" | "PUT"; key: string }> = [];
+  const curl = (url: string, method: "GET" | "PUT"): number => {
+    const u = new URL(url);
+    const key = decodeURIComponent(u.pathname.slice(1));
+    transfers.push({ method, key });
+    if (u.searchParams.get("X-Amz-Signature") !== method) return 22;
+    if (method === "PUT") objects.set(key, tar());
+    return method === "GET" && !objects.has(key) ? 22 : 0;
+  };
+  return { curl, transfers };
 }
 
 export function fakeSts() {
@@ -187,6 +227,7 @@ export function provider(
     api,
     fetchImpl,
     store,
+    presign: fakePresign,
     ...extra,
   });
 }

@@ -14,6 +14,7 @@ import {
   localSnapshot,
   provider,
   version,
+  vmBucket,
   written,
 } from "./support/aws-deploy-fakes.ts";
 
@@ -544,15 +545,13 @@ test("profile: scale-to-zero is platform-managed and reconcile is in place", () 
 
 test("app data: a fresh body hydrates /data from the S3 snapshot before the app starts", async () => {
   const { api } = fakeApi();
-  const { fetchImpl, execs, writes } = fakeDaemon();
   const { s3, objects } = fakeS3(new Map([[`deploy-data/${ID}.tar`, Buffer.from("TARBYTES")]]));
+  const vm = vmBucket(objects);
+  const { fetchImpl, execs } = fakeDaemon({ curl: vm.curl });
   const p = provider(api, fetchImpl, testMap<StoredDeployBody>(), { dataBucket: "bkt", s3 });
   await p.apply(deployment(ID), version(localSnapshot("a", "1")));
 
-  assert.ok(
-    writes.some((w) => w.path.startsWith("/tmp/qm-data-")),
-    "snapshot tar shipped into the body",
-  );
+  assert.deepEqual(vm.transfers, [{ method: "GET", key: `deploy-data/${ID}.tar` }], "the body pulls its snapshot");
   const extractAt = execs.findIndex((c) => c.includes("tar -xf") && c.includes("/data"));
   const startAt = execs.findIndex((c) => c.includes("setsid"));
   assert.ok(extractAt >= 0, "snapshot extracted into /data");
@@ -566,10 +565,8 @@ test("app data: a fresh body hydrates /data from the S3 snapshot before the app 
 
 test("app data: rotating a body past the 8h window snapshots /data to S3 before terminating it", async () => {
   const { api, counts, vms } = fakeApi();
-  const { fetchImpl } = fakeDaemon({
-    readB64: (p) => (p.startsWith("/tmp/qm-data-") ? Buffer.from("NEWTAR").toString("base64") : ""),
-  });
   const { s3, objects } = fakeS3();
+  const { fetchImpl } = fakeDaemon({ curl: vmBucket(objects, () => Buffer.from("NEWTAR")).curl });
   const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store, { dataBucket: "bkt", s3 });
   vms.set("mvm-old", { state: "RUNNING", endpoint: "mvm-old.lambda-microvm.us-west-2.on.aws" });
@@ -609,10 +606,8 @@ test("app data: an empty /data is never uploaded — a fresh body can't clobber 
 
 test("app data: a warm reach past the snapshot interval snapshots /data and stamps the pointer", async () => {
   const { api } = fakeApi();
-  const { fetchImpl } = fakeDaemon({
-    readB64: (p) => (p.startsWith("/tmp/qm-data-") ? Buffer.from("LIVE").toString("base64") : ""),
-  });
   const { s3, objects } = fakeS3();
+  const { fetchImpl } = fakeDaemon({ curl: vmBucket(objects, () => Buffer.from("LIVE")).curl });
   const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store, { dataBucket: "bkt", s3, snapshotIntervalMs: 0 });
   const d = deployment(ID);
@@ -631,7 +626,7 @@ test("app data: a warm reach past the snapshot interval snapshots /data and stam
 
 test("app data: a failed rotate snapshot defers the rotation — the stale body keeps serving instead of losing its /data", async () => {
   const { api, counts, vms } = fakeApi();
-  const { fetchImpl } = fakeDaemon();
+  const { fetchImpl } = fakeDaemon({ curl: () => 22 });
   const { s3 } = fakeS3();
   const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store, { dataBucket: "bkt", s3 });
@@ -678,7 +673,7 @@ test("app data: an over-cap /data is skipped loudly, never uploaded or thrown", 
 
 test("app data: a deferred rotation serves the stale body from resolveEndpoint instead of forcing re-apply per reach", async () => {
   const { api, counts, vms } = fakeApi();
-  const { fetchImpl } = fakeDaemon();
+  const { fetchImpl } = fakeDaemon({ curl: () => 22 });
   const { s3 } = fakeS3();
   const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store, { dataBucket: "bkt", s3 });

@@ -13,6 +13,7 @@ import {
   localSnapshot,
   provider,
   version,
+  vmBucket,
 } from "./support/aws-deploy-fakes.ts";
 import { tenantMap } from "./support/tenant-map.ts";
 
@@ -21,33 +22,36 @@ const B = randomUUID();
 
 before(() => bindBootTenant(async () => undefined));
 
-const hydrated = (writes: Array<{ path: string }>): boolean => writes.some((w) => w.path.startsWith("/tmp/qm-data-"));
-
 test("app data on a shared host: each tenant reads only its own snapshot, never a shared key", async () => {
-  const { s3 } = fakeS3(
+  const { s3, objects } = fakeS3(
     new Map([
       [`deploy-data/${A}/${ID}.tar`, Buffer.from("A")],
       [`deploy-data/${ID}.tar`, Buffer.from("SHARED")],
     ]),
   );
   const { api } = fakeApi();
-  const a = fakeDaemon();
-  const b = fakeDaemon();
+  const va = vmBucket(objects);
+  const vb = vmBucket(objects);
+  const a = fakeDaemon({ curl: va.curl });
+  const b = fakeDaemon({ curl: vb.curl });
   const store = tenantMap<StoredDeployBody>();
   const pa = provider(api, a.fetchImpl, store, { dataBucket: "bkt", s3 });
   const pb = provider(api, b.fetchImpl, store, { dataBucket: "bkt", s3 });
   await withTenant(A, () => pa.apply(deployment(ID), version(localSnapshot("a", "1"))));
   await withTenant(B, () => pb.apply(deployment(ID), version(localSnapshot("a", "1"))));
-  assert.equal(hydrated(a.writes), true, "tenant A restores its own data");
-  assert.equal(hydrated(b.writes), false, "tenant B sees neither A's data nor the shared key");
+  assert.deepEqual(
+    va.transfers,
+    [{ method: "GET", key: `deploy-data/${A}/${ID}.tar` }],
+    "tenant A restores its own data",
+  );
+  assert.deepEqual(vb.transfers, [], "tenant B sees neither A's data nor the shared key");
 });
 
 test("app data on a shared host: snapshots land under the tenant's own key", async () => {
   const { api, vms } = fakeApi();
-  const { fetchImpl } = fakeDaemon({
-    readB64: (p) => (p.startsWith("/tmp/qm-data-") ? Buffer.from(`${boundTenant()}`).toString("base64") : ""),
-  });
   const { s3, objects } = fakeS3();
+  const vm = vmBucket(objects, () => Buffer.from(`${boundTenant()}`));
+  const { fetchImpl } = fakeDaemon({ curl: vm.curl });
   const store = tenantMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store, { dataBucket: "bkt", s3 });
   for (const tenant of [A, B]) {

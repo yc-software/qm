@@ -1,4 +1,5 @@
-import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { orgId as configOrgId } from "../config.ts";
 import { AssumeRoleCommand, STSClient } from "@aws-sdk/client-sts";
 import type { Deployment, DeploymentVersion } from "./deploy-store.ts";
@@ -41,7 +42,9 @@ const DATA_CREDS_TTL_SEC = 3600;
 const DATA_CREDS_REFRESH_MS = 45 * 60_000;
 const DATA_CREDS_RETRY_MS = 60_000;
 const failureBackoffStamp = (): number => Date.now() - DATA_CREDS_REFRESH_MS + DATA_CREDS_RETRY_MS;
-const MAX_DATA_TAR_BYTES = 180 * 1024 * 1024;
+const MAX_DATA_TAR_BYTES = 2 * 1024 * 1024 * 1024;
+const DATA_URL_TTL_SEC = 3600;
+const DATA_TRANSFER_TIMEOUT_SEC = 900;
 const MAX_APP_BYTES = 100 * 1024 * 1024;
 const READY_PATH = `${APP_DIR}/.qm-ready`;
 const APP_READY_WINDOW_SEC = 60;
@@ -71,6 +74,8 @@ export interface StoredDeployBody {
   orgId?: string;
 }
 
+type DataPresigner = (command: GetObjectCommand | PutObjectCommand, expiresInSec: number) => Promise<string>;
+
 export interface AwsDeployProviderOptions {
   region: string;
   profile?: string;
@@ -96,6 +101,7 @@ export interface AwsDeployProviderOptions {
   api?: AwsMicrovmApi;
   fetchImpl?: typeof fetch;
   s3?: Pick<S3Client, "send">;
+  presign?: DataPresigner;
   sts?: Pick<STSClient, "send">;
   onError?: AppErrorSink;
 }
@@ -143,9 +149,20 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
   const dataBucket = opts.dataBucket;
   const dataPrefix = trimTrailingSlashes(opts.dataPrefix ?? "deploy-data");
   const snapshotIntervalMs = opts.snapshotIntervalMs ?? 5 * 60_000;
-  const s3: Pick<S3Client, "send"> | undefined = dataBucket
-    ? (opts.s3 ?? new S3Client({ region, ...(opts.profile ? { profile: opts.profile } : {}) }))
+  const nativeS3 = dataBucket
+    ? new S3Client({
+        region,
+        ...(opts.profile ? { profile: opts.profile } : {}),
+        requestChecksumCalculation: "WHEN_REQUIRED",
+      })
     : undefined;
+  const s3: Pick<S3Client, "send"> | undefined = dataBucket ? (opts.s3 ?? nativeS3) : undefined;
+  const presign: DataPresigner =
+    opts.presign ??
+    ((command, expiresIn) => {
+      if (!nativeS3) throw new Error("data snapshot presigning needs a data bucket");
+      return getSignedUrl(nativeS3, command, { expiresIn });
+    });
   const dataRoleArn = opts.dataRoleArn;
   const litestream = !!(dataBucket && dataRoleArn);
   const sts: Pick<STSClient, "send"> | undefined = litestream
@@ -170,7 +187,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
     }
   }
 
-  const { tokenFor, daemon, execRaw, writeAbs, waitDaemon, ensureRunning, evict } = createMicrovmClient(api, {
+  const { tokenFor, execRaw, writeAbs, waitDaemon, ensureRunning, evict } = createMicrovmClient(api, {
     agentPort,
     tokenTtlMinutes,
     ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
@@ -185,14 +202,6 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
     const img = await api.findImage(opts.imageIdentifier);
     if (!img) throw new Error(`AWS deploy image not found: ${opts.imageIdentifier}`);
     return (resolvedImageArn = img.imageArn);
-  }
-
-  async function readAbsBytes(id: string, endpoint: string, absPath: string): Promise<Uint8Array | null> {
-    const res = await daemon(id, endpoint, "/read", { path: absPath });
-    if (res.status === 404) return null;
-    if (res.status !== 200)
-      throw new Error(`microVM read ${absPath} failed (${res.status}): ${res.text.slice(0, 200)}`);
-    return Buffer.from((JSON.parse(res.text) as { b64: string }).b64, "base64");
   }
 
   async function mintDataCreds(
@@ -272,6 +281,8 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
     if (r.code !== 0) throw new Error(`litestream refresh failed (code ${r.code}): ${r.stderr.slice(0, 400)}`);
   }
 
+  const curlWith = (url: string): string => `-K - <<'QMDATAURL'\nurl = "${url}"\nQMDATAURL`;
+
   async function snapshotData(deploymentId: string, id: string, endpoint: string): Promise<boolean> {
     if (!s3 || !dataBucket) return false;
     const tarPath = dataTarPath();
@@ -282,40 +293,45 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
         `[ -n "$(find . -mindepth 1 ${ff} -print -quit)" ] || exit 3; tar -cf ${shq(tarPath)} ${excl} . || { rm -f ${shq(tarPath)}; exit 5; }; ` +
         `else [ -n "$(find . -mindepth 1 -print -quit)" ] || exit 3; tar -cf ${shq(tarPath)} . || { rm -f ${shq(tarPath)}; exit 5; }; fi`
       : `[ -n "$(find . -mindepth 1 -print -quit)" ] || exit 3; tar -cf ${shq(tarPath)} . || { rm -f ${shq(tarPath)}; exit 5; }`;
-    const script =
-      `cd ${shq(DATA_DIR)} 2>/dev/null || exit 3; ${tarCmd}; ` +
-      `[ "$(wc -c < ${shq(tarPath)})" -le ${MAX_DATA_TAR_BYTES} ] || { rm -f ${shq(tarPath)}; exit 4; }`;
-    const made = await execRaw(id, endpoint, script, 180);
+    const url = await presign(
+      new PutObjectCommand({ Bucket: dataBucket, Key: dataKeyFor(deploymentId) }),
+      DATA_URL_TTL_SEC,
+    );
+    const script = [
+      `cd ${shq(DATA_DIR)} 2>/dev/null || exit 3; ${tarCmd}`,
+      `[ "$(wc -c < ${shq(tarPath)})" -le ${MAX_DATA_TAR_BYTES} ] || { rm -f ${shq(tarPath)}; exit 4; }`,
+      `curl -fsS --retry 3 -o /dev/null -T ${shq(tarPath)} ${curlWith(url)}`,
+      `rc=$?; rm -f ${shq(tarPath)}; [ $rc -eq 0 ] || exit 6`,
+    ].join("\n");
+    const made = await execRaw(id, endpoint, script, DATA_TRANSFER_TIMEOUT_SEC);
     if (made.code === 3) return false;
     if (made.code === 4) {
       swallow("aws-deploy: data snapshot skipped, /data over size cap", new Error(deploymentId));
       return false;
     }
+    if (made.code === 6) throw new Error(`data snapshot upload failed: ${made.stderr.slice(0, 200)}`);
     if (made.code !== 0) throw new Error(`data snapshot tar failed (code ${made.code}): ${made.stderr.slice(0, 200)}`);
-    const tar = await readAbsBytes(id, endpoint, tarPath);
-    await execRaw(id, endpoint, `rm -f ${shq(tarPath)}`, 30).catch(
-      swallowAs("aws-deploy: remove data snapshot tar", undefined),
-    );
-    if (!tar?.length) throw new Error("data snapshot read-back empty");
-    await s3.send(new PutObjectCommand({ Bucket: dataBucket, Key: dataKeyFor(deploymentId), Body: tar }));
     return true;
+  }
+
+  async function snapshotExists(client: Pick<S3Client, "send">, bucket: string, key: string): Promise<boolean> {
+    try {
+      const head = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+      return (head.ContentLength ?? 0) > 0;
+    } catch (e) {
+      const code = (e as { name?: string })?.name ?? "";
+      const status = (e as { $metadata?: { httpStatusCode?: number } })?.$metadata?.httpStatusCode;
+      if (/NoSuchKey|NotFound/.test(code) || status === 404) return false;
+      throw e;
+    }
   }
 
   async function hydrateData(deploymentId: string, id: string, endpoint: string): Promise<void> {
     if (!s3 || !dataBucket) return;
-    let tar: Uint8Array | null;
-    try {
-      const got = await s3.send(new GetObjectCommand({ Bucket: dataBucket, Key: dataKeyFor(deploymentId) }));
-      tar = (await got.Body?.transformToByteArray()) ?? null;
-    } catch (e) {
-      const code = (e as { name?: string })?.name ?? "";
-      const status = (e as { $metadata?: { httpStatusCode?: number } })?.$metadata?.httpStatusCode;
-      if (/NoSuchKey|NotFound/.test(code) || status === 404) return;
-      throw e;
-    }
-    if (!tar?.length) return;
+    const key = dataKeyFor(deploymentId);
+    if (!(await snapshotExists(s3, dataBucket, key))) return;
+    const url = await presign(new GetObjectCommand({ Bucket: dataBucket, Key: key }), DATA_URL_TTL_SEC);
     const tarPath = dataTarPath();
-    await writeAbs(id, endpoint, tarPath, tar);
     const exclude = litestream
       ? ` --exclude='./.app.db-litestream'` +
         ` --transform='s|^\\./app\\.db$|./app.db.tar-fallback|'` +
@@ -323,12 +339,14 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
         ` --transform='s|^\\./app\\.db-shm$|./app.db.tar-fallback-shm|'` +
         ` --transform='s|^\\./app\\.db-journal$|./app.db.tar-fallback-journal|'`
       : "";
-    const r = await execRaw(
-      id,
-      endpoint,
-      `mkdir -p ${shq(DATA_DIR)} && cd ${shq(DATA_DIR)} && tar -xf ${shq(tarPath)}${exclude}; rc=$?; rm -f ${shq(tarPath)}; exit $rc`,
-      180,
-    );
+    const script = [
+      `mkdir -p ${shq(DATA_DIR)} && cd ${shq(DATA_DIR)} || exit 7`,
+      `curl -fsS --retry 3 -o ${shq(tarPath)} ${curlWith(url)}`,
+      `[ $? -eq 0 ] || { rm -f ${shq(tarPath)}; exit 6; }`,
+      `tar -xf ${shq(tarPath)}${exclude}; rc=$?; rm -f ${shq(tarPath)}; exit $rc`,
+    ].join("\n");
+    const r = await execRaw(id, endpoint, script, DATA_TRANSFER_TIMEOUT_SEC);
+    if (r.code === 6) throw new Error(`data hydrate download failed: ${r.stderr.slice(0, 200)}`);
     if (r.code !== 0) throw new Error(`data hydrate extract failed: ${r.stderr.slice(0, 200)}`);
   }
 
