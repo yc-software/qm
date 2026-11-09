@@ -46,7 +46,21 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
   const recordJudgment = (j: Parameters<AmbientJudgmentStore["record"]>[0]): void => {
     void deps.ambientJudgments?.record(j).catch(reportFailureAs("ambient: record judgment", undefined));
   };
-  async function judgeAmbientContainer(
+  const judging = new Map<string, Promise<unknown>>();
+  function judgeAmbientContainer(
+    surface: string,
+    container: string,
+    opts?: { reason?: "messages" | "scheduled" },
+  ): Promise<AmbientDecision> {
+    const key = `${surface}:${container}`;
+    const judge = () => judgeAmbientOnce(surface, container, opts);
+    const run = (judging.get(key) ?? Promise.resolve()).then(judge, judge);
+    const tail = run.catch(() => undefined);
+    judging.set(key, tail);
+    void tail.then(() => judging.get(key) === tail && judging.delete(key));
+    return run;
+  }
+  async function judgeAmbientOnce(
     surface: string,
     container: string,
     opts?: { reason?: "messages" | "scheduled" },
@@ -81,7 +95,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
                   : { lastJudgedTs: rawLatestTs, lastJudgedAt: Date.now() },
             },
           ])
-          .catch(() => undefined);
+          .catch(reportFailureAs("ambient: advance cursor", undefined));
     };
     if (!delta.length && !scheduled) {
       await advanceCursor();

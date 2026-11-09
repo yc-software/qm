@@ -359,6 +359,24 @@ test("the ambient watermark advances so a batch is judged once, not re-judged ev
   }
 });
 
+test("overlapping judge passes for one channel judge a batch once", async () => {
+  const built = freshApp();
+  try {
+    const container = "C-overlap";
+    await built.app.setChannelPolicy(container, "flag launch talk", "U-admin");
+    await built.app.ingestSurfaceEvents([{ container, ts: "1.0", authorId: "U1", text: "not a match", createdAt: 1 }]);
+    await Promise.all([
+      built.app.judgeAmbientContainer("slack", container),
+      built.app.judgeAmbientContainer("slack", container),
+      built.app.judgeAmbientContainer("slack", container),
+    ]);
+    await sleep(200);
+    assert.equal((await listFull(built.ambientJudgments!, { container })).length, 1);
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
 test("mirror read interface: ingest is queryable by search + readMessages + activeThreads", async () => {
   const built = freshApp();
   try {
