@@ -75,7 +75,6 @@ import { resolveTurnContext } from "../resolution/turn-context.ts";
 import { reachEnqueue } from "../reach/reach.ts";
 import { interimReplyDelivery, turnGuidance } from "./orchestrator/reply-check.ts";
 import { turnDeliveryProvenance } from "../delivery/delivery-store.ts";
-import { replyEditNote } from "../delivery/run-result-delivery.ts";
 import type { DirectoryStore, DirectoryMember } from "../directory/directory-store.ts";
 import { resolveEnvironmentId } from "../environments/environment-store.ts";
 import type { SessionWriter } from "../sessions/session-store.ts";
@@ -260,6 +259,7 @@ import type { EgressPolicy } from "../types.ts";
 import { isOpenScopeMember } from "../resolution/sharing-access.ts";
 import {
   createSurfaceToolDeps,
+  enqueueDirectReply,
   replayRecordedSurfaceAnswer,
   surfaceToolsActive,
   type SpineState,
@@ -1367,6 +1367,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           await replayRecordedSurfaceAnswer({
             deps,
             input,
+            session,
             defaultDestination,
             surfaceName,
             turnItems: recorded.items,
@@ -3839,14 +3840,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           const primaryReply = stripAckPrefix(result.reply ?? "", spineAckText).trim();
           if (input.addressed && primaryReply && defaultDestination && deps.deliveries) {
             try {
-              const directKey = postKeys.key(defaultDestination, postKeys.take());
-              const editNote = replyEditNote(result.retracted);
-              await reachEnqueue({
+              await enqueueDirectReply({
                 deliveries: deps.deliveries,
-                destination: editNote ? { ...defaultDestination, editNote } : defaultDestination,
+                destination: defaultDestination,
                 text: primaryReply,
-                idempotencyKey: directKey,
-                provenance: postProvenance(directKey),
+                key: postKeys.key(defaultDestination, postKeys.take()),
+                postProvenance,
+                ...(result.retracted ? { retracted: result.retracted } : {}),
               });
               spine.surfaceOutboundCount += 1;
               if (input.runId) deps.turnStream?.markSurfacePosted(input.runId);
@@ -3867,13 +3867,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               const fallback = stripAckPrefix(result.reply ?? "", spineAckText).trim();
               if (fallback && defaultDestination && deps.deliveries) {
                 try {
-                  const fallbackKey = postKeys.key(defaultDestination, postKeys.take());
-                  await reachEnqueue({
+                  await enqueueDirectReply({
                     deliveries: deps.deliveries,
                     destination: defaultDestination,
                     text: fallback,
-                    idempotencyKey: fallbackKey,
-                    provenance: postProvenance(fallbackKey),
+                    key: postKeys.key(defaultDestination, postKeys.take()),
+                    postProvenance,
                   });
                   spine.surfaceOutboundCount += 1;
                   if (input.runId) deps.turnStream?.markSurfacePosted(input.runId);

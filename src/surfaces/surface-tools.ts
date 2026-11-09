@@ -42,9 +42,12 @@ import { adminSessionUrl } from "../util/admin-links.ts";
 import {
   completedSurfaceEnqueues,
   replaceThreadSegment,
+  stripAckPrefix,
   turnPostKeys,
   type TurnPostKeys,
 } from "../core/orchestrator/turn-helpers.ts";
+import { replyEditNote } from "../delivery/run-result-delivery.ts";
+import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import type { Item } from "../sessions/items.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "../core/orchestrator/types.ts";
 
@@ -91,9 +94,28 @@ export function surfaceToolsActive(
   return !ctx.strictReadOnly && !!ctx.input.surfaceTools && !!ctx.defaultDestination && !!ctx.deps.deliveries;
 }
 
+export async function enqueueDirectReply(ctx: {
+  deliveries: DeliveryStore;
+  destination: Destination;
+  text: string;
+  key: string;
+  postProvenance: (deliveryKey: string) => DeliveryProvenance;
+  retracted?: readonly string[];
+}): Promise<void> {
+  const editNote = replyEditNote(ctx.retracted);
+  await reachEnqueue({
+    deliveries: ctx.deliveries,
+    destination: editNote ? { ...ctx.destination, editNote } : ctx.destination,
+    text: ctx.text,
+    idempotencyKey: ctx.key,
+    provenance: ctx.postProvenance(ctx.key),
+  });
+}
+
 export async function replayRecordedSurfaceAnswer(ctx: {
   deps: Pick<OrchestratorDeps, "deliveries">;
   input: Pick<OrchestratorInput, "addressed" | "runId">;
+  session: Pick<Session, "id" | "threadRef">;
   defaultDestination: Destination | undefined;
   surfaceName: string;
   turnItems: readonly Item[];
@@ -101,16 +123,21 @@ export async function replayRecordedSurfaceAnswer(ctx: {
   text: string;
   postProvenance: (deliveryKey: string) => DeliveryProvenance;
 }): Promise<void> {
-  const { deps, input, defaultDestination, text } = ctx;
+  const { deps, input, defaultDestination } = ctx;
   const posted = completedSurfaceEnqueues(ctx.turnItems, ctx.userSeq, ctx.surfaceName);
-  if (!input.addressed || posted > 0 || !text.trim() || !defaultDestination || !deps.deliveries || !input.runId) return;
-  const directKey = turnPostKeys(input.runId).key(defaultDestination, posted);
-  await reachEnqueue({
+  if (!input.addressed || posted > 0 || !defaultDestination || !deps.deliveries || !input.runId) return;
+  const ackKey = `ack:${input.runId}`;
+  const ack = (await deps.deliveries.listBySourceSession(ctx.session.id, ctx.session.threadRef)).find(
+    (d) => d.idempotencyKey === ackKey,
+  )?.text;
+  const text = stripAckPrefix(ctx.text, ack).trim();
+  if (!text) return;
+  await enqueueDirectReply({
     deliveries: deps.deliveries,
     destination: defaultDestination,
     text,
-    idempotencyKey: directKey,
-    provenance: ctx.postProvenance(directKey),
+    key: turnPostKeys(input.runId).key(defaultDestination, posted),
+    postProvenance: ctx.postProvenance,
   });
 }
 
