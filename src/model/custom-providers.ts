@@ -11,6 +11,8 @@ interface CustomModelSpec {
   maxTokens?: number;
   input?: number;
   output?: number;
+  cacheRead?: number;
+  image?: boolean;
 }
 
 export interface CustomProviderSpec {
@@ -44,8 +46,12 @@ export function validateCustomProviderSpec(spec: CustomProviderSpec): void {
     if (!m.id?.trim() || m.id.length > 200) throw new Error("every model needs an id (<=200 chars)");
     if (m.name !== undefined && (typeof m.name !== "string" || m.name.length > 200))
       throw new Error(`model "${m.id}": name must be a string of 200 chars or fewer`);
-    if (m.reasoning !== undefined && typeof m.reasoning !== "boolean")
-      throw new Error(`model "${m.id}": reasoning must be a boolean`);
+    for (const [field, v] of [
+      ["reasoning", m.reasoning],
+      ["image", m.image],
+    ] as const) {
+      if (v !== undefined && typeof v !== "boolean") throw new Error(`model "${m.id}": ${field} must be a boolean`);
+    }
     if (seen.has(m.id)) throw new Error(`duplicate model id "${m.id}"`);
     seen.add(m.id);
     for (const [field, v] of [
@@ -59,6 +65,7 @@ export function validateCustomProviderSpec(spec: CustomProviderSpec): void {
     for (const [field, v] of [
       ["input", m.input],
       ["output", m.output],
+      ["cacheRead", m.cacheRead],
     ] as const) {
       if (v !== undefined && (typeof v !== "number" || !Number.isFinite(v) || v < 0)) {
         throw new Error(`model "${m.id}": ${field} must be a non-negative number`);
@@ -100,8 +107,8 @@ function toRuntimeModel(provider: CustomProviderSpec, m: CustomModelSpec): Custo
     api: customProviderApi(provider.protocol),
     baseUrl: provider.baseUrl,
     reasoning: m.reasoning ?? false,
-    input: ["text"],
-    cost: { input: m.input ?? 0, output: m.output ?? 0, cacheRead: 0, cacheWrite: 0 },
+    input: m.image ? ["text", "image"] : ["text"],
+    cost: { input: m.input ?? 0, output: m.output ?? 0, cacheRead: m.cacheRead ?? 0, cacheWrite: 0 },
     contextWindow: m.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
     maxTokens: m.maxTokens ?? DEFAULT_MAX_TOKENS,
   };
@@ -158,10 +165,11 @@ export function customModelsJson(): { providers: Record<string, unknown> } | und
           api: customProviderApi(spec.protocol),
           models: [...registry.values()]
             .filter((m) => m.provider === spec.id)
-            .map(({ id, name, reasoning, contextWindow, maxTokens, cost }) => ({
+            .map(({ id, name, reasoning, input, contextWindow, maxTokens, cost }) => ({
               id,
               name,
               reasoning,
+              input,
               contextWindow,
               maxTokens,
               cost,

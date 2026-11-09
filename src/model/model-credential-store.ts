@@ -100,6 +100,12 @@ export function createModelCredentialStore(input: {
   };
 }
 
+export interface CustomProviderKeyStatus {
+  provider: string;
+  configured: boolean;
+  source: "admin" | "environment" | "absent";
+}
+
 export interface StoredCustomProvider extends CustomProviderSpec {
   apiKeyEnc?: string;
   disabled?: boolean;

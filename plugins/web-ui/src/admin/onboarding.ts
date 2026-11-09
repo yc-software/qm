@@ -164,7 +164,9 @@ export class Onboarding {
       this.providers.find((row) => row.configured)?.provider ||
       this.providers[0]?.provider ||
       "";
-    const status = this.providers.find((row) => row.provider === provider);
+    const status = [...this.providers, ...(models.data.customProviders || [])].find(
+      (row: Data) => row.provider === provider,
+    );
     const subscriptionAuth = models.data.subscriptionAuth;
     const subscriptionReady = Boolean(subscriptionAuth && subscriptionAuth.provider === provider);
     const ready = Boolean(baseModel) && (Boolean(status?.configured) || subscriptionReady);
