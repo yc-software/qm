@@ -103,8 +103,8 @@ export function createDeliveryPoller(deps: {
       let complete = true;
       for (const t of types) {
         try {
-          const claimed = await core.claimDeliveries(t, claimMs);
           const at = Date.now();
+          const claimed = await core.claimDeliveries(t, claimMs);
           for (const r of claimed) expiresAt.set(r.id, at + claimMs);
           rows.push(...claimed);
         } catch {
