@@ -214,6 +214,34 @@ test("deliverWithRetry: transient post failures recover before the cap", async (
   assert.ok(!h.tracker.givenUp("d1"));
 });
 
+test("deliverWithRetry: an ack that gives up is retried as an ack after the bench, never re-posted", async () => {
+  const tracker = createDeliveryTracker({ maxAttempts: 2, giveUpRetryMs: 20 });
+  let posts = 0;
+  let ackFails = 2;
+  const acks: unknown[] = [];
+  const cycle = () =>
+    deliverWithRetry({
+      tracker,
+      id: "d1",
+      post: async () => {
+        posts++;
+        return "body";
+      },
+      ack: async (body) => {
+        if (ackFails-- > 0) throw new Error("core 503");
+        acks.push(body);
+      },
+      onError: () => {},
+    });
+  await cycle();
+  await cycle();
+  assert.ok(tracker.givenUp("d1"));
+  await new Promise((r) => setTimeout(r, 30));
+  await cycle();
+  assert.equal(posts, 1);
+  assert.deepEqual(acks, ["body"]);
+});
+
 test("createDeliveryTracker: a posted-but-unacked entry evicted by the cap is given up on, never re-posted", () => {
   const t = createDeliveryTracker({ maxAttempts: 5, maxTracked: 2 });
   t.markPosted("a");
