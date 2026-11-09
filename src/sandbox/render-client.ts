@@ -192,7 +192,7 @@ export function createSdkRenderClient(opts: SdkRenderClientOptions): RenderClien
   const runScript: RenderClient["runScript"] = async (sandboxId, script, timeoutSec) => {
     const path = `${RENDER_SCRIPT_DIR}/${randomUUID()}.sh`;
     const signal = AbortSignal.timeout(
-      (timeoutSec + KILL_AFTER_SEC) * 1000 + Math.min(CONTROL_TIMEOUT_MS, timeoutSec * 1000),
+      (timeoutSec + KILL_AFTER_SEC) * 1000 + Math.min(CONTROL_TIMEOUT_MS, Math.max(timeoutSec, KILL_AFTER_SEC) * 1000),
     );
     const prelude = `rm -f ${shq(path)}; find ${shq(RENDER_SCRIPT_DIR)} -type f -mmin +${STALE_SCRIPT_MINUTES} -delete 2>/dev/null\n`;
     try {

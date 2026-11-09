@@ -576,7 +576,7 @@ test("Render SDK adapter bounds a stalled run token request by the script deadli
   const client = createSdkRenderClient({ apiKey: "secret", workspaceId: "tea-test" });
   const started = Date.now();
   await assert.rejects(client.runScript("sbx-test", "sleep 60", 1));
-  assert.ok(Date.now() - started < 10_000);
+  assert.ok(Date.now() - started < 15_000);
   assert.equal(commands.length, 2);
   assert.match(commands[0]!, SPOOLED);
   assert.match(commands[1]!, /^rm -f '/);
