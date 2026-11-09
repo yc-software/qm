@@ -258,7 +258,7 @@ import { createTurnSandboxes } from "./orchestrator/sandboxes.ts";
 import { isolationBrief } from "../sessions/child-isolation.ts";
 import type { EgressPolicy } from "../types.ts";
 import { isOpenScopeMember } from "../resolution/sharing-access.ts";
-import { createSurfaceToolDeps, type SpineState } from "../surfaces/surface-tools.ts";
+import { createSurfaceToolDeps, surfaceToolsActive, type SpineState } from "../surfaces/surface-tools.ts";
 import { createAttachStaging } from "./orchestrator/attach-tool.ts";
 import { reconcileMessageRevisions, revisionAnchorAt } from "../slack/message-revisions.ts";
 import { type ProviderKeys } from "../model/model-runtime.ts";
@@ -1347,15 +1347,18 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         console.error(
           `[orchestrator] turn.already_answered attempt=${input.attempt} run=${input.runId} thread=${conversation.threadRef} answerSeq=${recordedAnswer.seq}`,
         );
-        return recordedAnswer.text.trim()
+        const replayStopped = recordedAnswer.stopped ? { stopped: true } : {};
+        const surfaceToolTurn = surfaceToolsActive({ deps, input, strictReadOnly, defaultDestination });
+        return recordedAnswer.text.trim() && !surfaceToolTurn
           ? {
               status: "ok",
               sessionId: session.id,
               reply: absoluteAppLinks(recordedAnswer.text, deps.publicWebUrl),
               sourceUserSeq: recordedTurn.userSeq,
               sourceAssistantEntrySeq: recordedAnswer.seq,
+              ...replayStopped,
             }
-          : { status: "silent", sessionId: session.id };
+          : { status: "silent", sessionId: session.id, ...replayStopped };
       }
 
       audit({
