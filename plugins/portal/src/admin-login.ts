@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { inlineScript } from "../../chassis/src/inline-script.ts";
 import { deriveKey, open } from "./session.ts";
 
 export function openAdminLogin(token: string, secret: string, publicUrl: string, nowMs = Date.now()) {
@@ -29,7 +29,7 @@ export function openAdminLogin(token: string, secret: string, publicUrl: string,
   return { email: sub, jti, expiresAtMs: exp * 1000 };
 }
 
-export const ADMIN_LOGIN_SCRIPT = `(function () {
+export const { text: ADMIN_LOGIN_SCRIPT, hash: ADMIN_LOGIN_SCRIPT_HASH } = inlineScript(`(function () {
   var token = new URLSearchParams(location.hash.slice(1)).get("token");
   history.replaceState(null, "", location.pathname);
   try {
@@ -43,6 +43,4 @@ export const ADMIN_LOGIN_SCRIPT = `(function () {
   } catch (e) {
     document.getElementById("admin-email").textContent = "This link is missing or invalid. Generate a new link with qm admin-login.";
   }
-})();`;
-
-export const ADMIN_LOGIN_SCRIPT_HASH = `sha256-${createHash("sha256").update(ADMIN_LOGIN_SCRIPT).digest("base64")}`;
+})();`);
