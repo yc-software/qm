@@ -1424,7 +1424,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
         steer ? "steer" : "queue",
       );
       failedQueueSend = null;
-      bumpSessionActivity(threadRef, text);
+      bumpSessionActivity(threadRef);
       if (steerTs) markSteering(threadRef, { ...queued, ts: steerTs });
       else if (!steered) addQueuedRun(threadRef, queued);
       return true;
@@ -1521,7 +1521,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       steered = outcome.ok;
       if (outcome.ok || outcome.replayed) {
         forgetQueuedRun(threadRef, queued.runId);
-        bumpSessionActivity(threadRef, queued.text);
+        bumpSessionActivity(threadRef);
         if (
           !outcome.ok &&
           outcome.replayed &&
@@ -1626,7 +1626,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       return;
     }
     if (ctx.chat.state.threadRef) {
-      bumpSessionActivity(ctx.chat.state.threadRef, text);
+      bumpSessionActivity(ctx.chat.state.threadRef);
       ctx.chat.state.pendingSend = ctx.chat.state.threadRef;
       renderList();
     }
