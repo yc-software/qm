@@ -222,7 +222,28 @@ test("offboarding previews, then disables, revokes, archives and retires what th
   }
 });
 
-test("if the offboarding record can't be written, offboarding fails before changing anything", async () => {
+test("if sign-in can't be turned off, offboarding records nothing and changes nothing else", async () => {
+  const s = await start();
+  try {
+    s.built.identity.deactivate = async () => {
+      throw new Error("identity store down");
+    };
+    const r = await s.offboard("U1", { apply: true });
+    assert.equal(r.status, 502);
+    const body: any = await r.json();
+    assert.deepEqual(
+      body.changes.map((c: any) => [c.kind, c.result]),
+      [["principal", "failed"]],
+    );
+    assert.deepEqual(s.archivedApps, [], "nothing else runs");
+    const detail: any = await (await fetch(`${s.base}/v1/admin/users/U1`, { headers: ADMIN })).json();
+    assert.equal(detail.user?.offboardedAt, undefined, "the roster does not claim they are offboarded");
+  } finally {
+    await s.close();
+  }
+});
+
+test("if the offboarding record can't be written, nothing beyond sign-in changes", async () => {
   const s = await start();
   try {
     s.built.admin.users.markOffboarded = async () => {
@@ -230,7 +251,7 @@ test("if the offboarding record can't be written, offboarding fails before chang
     };
     const r = await s.offboard("U1", { apply: true });
     assert.notEqual(r.status, 200);
-    assert.equal(s.built.identity.classify("U1").type, "internal", "sign-in stays on");
+    assert.deepEqual(s.archivedApps, [], "nothing else runs");
   } finally {
     await s.close();
   }

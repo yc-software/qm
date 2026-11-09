@@ -92,28 +92,33 @@ export async function offboardUser(ctx: ApiCtx): Promise<void> {
   if (samePerson(principalId, actor.id))
     return sendJson(res, 400, { error: "bad_request", message: "you cannot offboard yourself" });
   const steps = await plan(ctx, actor.id, principalId);
-  const user = input.apply === true ? await deps.admin!.users.markOffboarded(principalId, actor.id) : undefined;
+  if (input.apply !== true)
+    return sendJson(res, 200, { principalId, applied: false, changes: steps.map(({ run: _, ...change }) => change) });
   const changes: Change[] = [];
-  for (const { run, ...change } of steps) {
-    if (input.apply === true) {
-      try {
-        await run();
-        change.result = "done";
-      } catch (e) {
-        Object.assign(change, { result: "failed", error: errMessage(e) });
-      }
-      audit(deps, {
-        principalId: actor.id,
-        action: `user.offboard.${change.kind}.${change.action}`,
-        resource: change.id,
-        scopeLabel: orgScope(deps),
-        status: change.result,
-        detail: [principalId, change.error].filter(Boolean).join(": "),
-      });
+  const execute = async ({ run, ...change }: Step): Promise<Change> => {
+    try {
+      await run();
+      change.result = "done";
+    } catch (e) {
+      Object.assign(change, { result: "failed", error: errMessage(e) });
     }
+    audit(deps, {
+      principalId: actor.id,
+      action: `user.offboard.${change.kind}.${change.action}`,
+      resource: change.id,
+      scopeLabel: orgScope(deps),
+      status: change.result,
+      detail: [principalId, change.error].filter(Boolean).join(": "),
+    });
     changes.push(change);
-  }
-  return sendJson(res, 200, { principalId, applied: input.apply === true, changes, ...(user ? { user } : {}) });
+    return change;
+  };
+  const signIn = steps[0]?.kind === "principal" ? steps.shift() : undefined;
+  if (signIn && (await execute(signIn)).result === "failed")
+    return sendJson(res, 502, { error: "deactivate_failed", principalId, applied: false, changes });
+  const user = await deps.admin!.users.markOffboarded(principalId, actor.id);
+  for (const step of steps) await execute(step);
+  return sendJson(res, 200, { principalId, applied: true, changes, user });
 }
 
 export async function reactivateUser(ctx: ApiCtx): Promise<void> {

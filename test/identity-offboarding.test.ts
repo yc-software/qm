@@ -50,6 +50,7 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
       signingSecret: SECRET,
       identity: built.identity,
       auditLog: built.auditLog,
+      admin: built.admin,
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -111,6 +112,14 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
     assert.ok(
       (await built.auditLog.events()).some((e) => e.action === "principal.reactivate" && e.principalId === "U-manual"),
     );
+  });
+
+  it("the reactivate route will not re-enable someone an admin offboarded", async () => {
+    await built.identity.deactivate("U-offboarded");
+    await built.admin.users.markOffboarded("U-offboarded", "admin-alice");
+    const on = await signedPost("/v1/principals/U-offboarded/reactivate");
+    assert.equal(on.status, 409);
+    assert.equal(built.identity.classify("U-offboarded").type, "guest");
   });
 
   it("an agent capability token cannot reach the principals routes (source-auth only)", async () => {
