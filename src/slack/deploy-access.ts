@@ -85,7 +85,8 @@ export async function decideDeploymentAccess(
     });
     return `Approved. ${requesterId} can now open "${label}".`;
   }
-  if (existing) return `Already approved. ${requesterId} can open "${label}".`;
+  if (existing)
+    return `Not declined: ${requesterId} already has access to "${label}". Remove it from the app's sharing settings to revoke.`;
   await app.enqueueDelivery({
     destination: principalDestination(requesterId, actor.id),
     text: `${actor.id} declined your request for access to "${label}".`,
