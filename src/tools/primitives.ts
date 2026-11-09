@@ -60,10 +60,10 @@ import type { AclStore } from "../acl/acl-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import type { OutboundFile } from "../core/attachments.ts";
 import { errMessage, withCleanup } from "../util/errors.ts";
-import { quotedData } from "../util/text.ts";
+import { quotedData, trimTrailingSlashes } from "../util/text.ts";
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
-import { MEMORY_FILE, type MemoryEdit, type MemoryService } from "../memory/memory-service.ts";
+import { MEMORY_FILE, turnAuthority, type MemoryEdit, type MemoryService } from "../memory/memory-service.ts";
 import {
   withProviders,
   writeFacts,
@@ -506,9 +506,9 @@ export interface ToolContextDeps {
   memory?: MemoryService;
   memoryScopeId?: ScopeId;
   memoryCaptureMetadata?: () => MemoryCaptureMetadata;
-  memoryAccess?: { write?: ScopeId; read: ScopeId[] };
+  memoryAccess?: { write?: ScopeId; read: ScopeId[]; notebookOnly?: true };
   mcp?: McpToolService;
-  scopeId?: ScopeId;
+  audienceScopeId?: ScopeId;
   actAsActor?: boolean;
   sessionHistory?: {
     search(q: string, limit?: number): Promise<string[]>;
@@ -559,6 +559,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           ],
           audience: deps.publishContext?.publishMembers ?? [{ id: deps.createdBy, type: "internal" }],
           open: false,
+          ...(deps.memoryAccess?.notebookOnly ? { notebookOnly: true } : {}),
         })
       : undefined);
 
@@ -1096,7 +1097,11 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         ? (report: OutcomeReport) => context.searchMemory(q, limit, scope, report)
         : memory &&
           ((report: OutcomeReport) =>
-            searchNotebooks(memory, deps.memoryAccess?.read ?? [], q, limit, scope, deps.createdBy, report));
+            searchNotebooks(memory, deps.memoryAccess?.read ?? [], q, limit, scope, {
+              actorId: deps.createdBy,
+              ...(deps.audienceScopeId ? { audienceScopeId: deps.audienceScopeId } : {}),
+              report,
+            }));
       if (!search) return null;
       const { value: hits, problems } = await withProviders("search", search);
       return hits === null ? null : { hits: hits ?? [], problems };
@@ -1120,11 +1125,11 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         memory,
         write,
         facts,
-        deps.createdBy,
+        turnAuthority(deps.createdBy, deps.memoryAccess),
         {
           ...deps.memoryCaptureMetadata?.(),
           mode: "explicit",
-          actorId: deps.createdBy,
+          ...(deps.audienceScopeId ? { audienceScopeId: deps.audienceScopeId } : {}),
           conversationScopeId: writableScopeId,
         },
         deps.runId,
@@ -1134,7 +1139,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     async memoryEdit(edits: MemoryEdit[]): Promise<true | null> {
       const write = deps.memoryAccess?.write;
       if (!memory?.edit || !write) return null;
-      await memory.edit(write, edits, deps.createdBy, {
+      await memory.edit(write, edits, turnAuthority(deps.createdBy, deps.memoryAccess), {
         ...deps.memoryCaptureMetadata?.(),
         conversationScopeId: writableScopeId,
       });
@@ -1144,7 +1149,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     async memoryDelete(ids: string[]): Promise<true | null> {
       const write = deps.memoryAccess?.write;
       if (!memory?.delete || !write) return null;
-      await memory.delete(write, ids, deps.createdBy);
+      await memory.delete(write, ids, turnAuthority(deps.createdBy, deps.memoryAccess));
       return true;
     },
 
@@ -1163,12 +1168,12 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
 
     async callMcpTool(name: string, args: Record<string, unknown>, approval?: string): Promise<string> {
       if (!deps.mcp) throw new Error("no MCP connectors are configured");
-      return deps.mcp.call(name, args, deps.createdBy, approval, deps.scopeId, deps.actAsActor);
+      return deps.mcp.call(name, args, deps.createdBy, approval, deps.audienceScopeId, deps.actAsActor);
     },
 
     async mcpToolNeedsApproval(name: string, args: Record<string, unknown>): Promise<boolean> {
       if (!deps.mcp) throw new Error("no MCP connectors are configured");
-      return deps.mcp.needsApproval(name, args, deps.createdBy, deps.scopeId, deps.actAsActor);
+      return deps.mcp.needsApproval(name, args, deps.createdBy, deps.audienceScopeId, deps.actAsActor);
     },
 
     async awaitClientResult(callId, timeoutMs, signal, toolName) {
@@ -1362,7 +1367,7 @@ async function collectTree(
   handle: SandboxHandle,
   dir?: string,
 ): Promise<Array<{ path: string; data: Uint8Array }>> {
-  const base = (dir ?? "").replace(/^\.?\/+/, "").replace(/\/+$/, "");
+  const base = trimTrailingSlashes((dir ?? "").replace(/^\.?\/+/, ""));
   if (supportsAgentComputerExport(sandbox)) {
     try {
       const entries = await sandbox.exportFiles(handle, {
@@ -1388,15 +1393,15 @@ async function collectTree(
 }
 
 function isUnderAnyDir(path: string, dirs: readonly string[]): boolean {
-  const p = path.replace(/^\.?\/+/, "").replace(/\/+$/, "");
+  const p = trimTrailingSlashes(path.replace(/^\.?\/+/, ""));
   return dirs.some((raw) => {
-    const dir = raw.replace(/^\.?\/+/, "").replace(/\/+$/, "");
+    const dir = trimTrailingSlashes(raw.replace(/^\.?\/+/, ""));
     return dir !== "" && (p === dir || p.startsWith(`${dir}/`));
   });
 }
 
 function filesUnder(snapshot: Array<{ path: string; data: Uint8Array }>, dir?: string): DeployFile[] {
-  const d = (dir ?? "").replace(/^\.?\/+/, "").replace(/\/+$/, "");
+  const d = trimTrailingSlashes((dir ?? "").replace(/^\.?\/+/, ""));
   if (!d || d === ".") return snapshot.map((f) => ({ path: f.path, data: f.data }));
   const prefix = `${d}/`;
   return snapshot

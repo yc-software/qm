@@ -26,13 +26,21 @@ import { errMessage } from "../util/errors.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { canonicalPayload } from "../../plugins/chassis/src/source-auth-sign.ts";
 import { armBodyDeadline, PayloadTooLargeError, readRawBody, sendJson, verifyOrReject } from "./http.ts";
-import { findRoute, run, type AdminAccess, type ApiCtx, type BaseCtx, type Route } from "./routes/route.ts";
+import {
+  findRoute,
+  run,
+  usesBrowserSession,
+  type AdminAccess,
+  type ApiCtx,
+  type BaseCtx,
+  type Route,
+} from "./routes/route.ts";
 import { apiRoutes, rawRoutes } from "./routes/index.ts";
 import { proxyDeploymentSubdomain } from "./routes/deployments.ts";
 import { CAPABILITY_HEADER } from "./contract.ts";
 import { livePersonCapability } from "./artifact-share.ts";
 import { canonicalPerson, samePerson } from "../directory/person.ts";
-import { browserIdentity, usesBrowserSession, withBrowserActor } from "./browser-session.ts";
+import { apiAlias, browserIdentity, withBrowserActor } from "./browser-session.ts";
 
 async function capabilityAdminDenied(
   access: AdminAccess,
@@ -271,9 +279,13 @@ async function gate(
     const rawToken = req.headers[PORTAL_IDENTITY_HEADER];
     const token = Array.isArray(rawToken) ? rawToken[0] : rawToken;
     if (browser) {
-      const signedIn = await browserIdentity(req, method, deps);
+      const signedIn = await browserIdentity(req, method, deps, route?.browser === "embed");
       if ("status" in signedIn) {
         sendJson(res, signedIn.status, { error: signedIn.error, message: signedIn.message });
+        return null;
+      }
+      if ((route?.browser === "self" || route?.admin) && signedIn.imp) {
+        sendJson(res, 403, { error: "forbidden", message: "Unavailable while impersonating." });
         return null;
       }
       actor = signedIn;
@@ -307,7 +319,7 @@ async function gate(
         }
         if (browser) body = withBrowserActor(route?.actor, req, url, body, actor.p);
         const field = !webTurn && routeActor?.includes(".") ? routeActor : undefined;
-        const fields = [field, ...(browser ? ["query.principalId", "body.principalId"] : [])];
+        const fields = [field, ...(browser && !route?.admin ? ["query.principalId", "body.principalId"] : [])];
         const claimed = [
           ...fields.flatMap((f) => (f ? assertedActorValues(f, url, body) : [])),
           ...(webTurn
@@ -524,7 +536,7 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
 
   async function front(req: IncomingMessage, res: ServerResponse): Promise<void> {
     armBodyDeadline(req, deps.requestBodyDeadlineMs ?? 30_000);
-    const base = baseCtx(req, res, wiring);
+    let base = baseCtx(req, res, wiring);
     if (await proxyDeploymentSubdomain(base)) {
       nameRequest(base.method, "/deployment-proxy/*");
       return;
@@ -532,6 +544,11 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
     if (!canonicalPath(req, base.pathname)) {
       sendJson(res, 404, { error: "not_found", message: `${base.method} ${base.pathname}` });
       return void req.resume();
+    }
+    const alias = apiAlias(base.method, base.pathname);
+    if (alias) {
+      req.url = `${alias}${base.url.search}`;
+      base = baseCtx(req, res, wiring);
     }
     const raw = findRoute(rawRoutes, base.method, base.pathname);
     if (raw) {
@@ -566,7 +583,8 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
         return;
       }
     }
-    rawBodies.set(req, await readRawBody(req, matched?.route.maxBodyBytes));
+    if (!matched?.route.streamBody || !usesBrowserSession(req, matched.route))
+      rawBodies.set(req, await readRawBody(req, matched?.route.maxBodyBytes));
     await ready;
     routing(req, res);
   }

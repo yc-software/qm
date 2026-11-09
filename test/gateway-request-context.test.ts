@@ -350,7 +350,7 @@ test("API work carries its token's turn, the admin replaying screens, or the mem
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 
-  await built.memory.capture("personal:U2", ["Prefers tea"], Date.now(), "U2");
+  await built.memory.capture("personal:U2", ["Prefers tea"], Date.now(), { actorId: "U2", context: "conversation" });
   assert.deepEqual(sent("memory_classification"), {
     "x-qm-actor": pseudonym("U2"),
     "x-qm-scope": `personal:${pseudonym("U2")}`,

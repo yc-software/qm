@@ -104,6 +104,31 @@ test("readers chat, writers edit, only owners share, and the last owner cannot b
   assert.deepEqual(ok(await personas.list(ALICE)), []);
 });
 
+test("the access list says which grantees the personas flag reaches", async () => {
+  const { built, personas, enable } = setup();
+  await enable(ALICE);
+  await built.featureFlags.setEnabled("personas", scopeId("team", "T_DESIGN"), true, "admin");
+  const ada = ok(await personas.create(ALICE, { name: "Ada" }));
+  ok(
+    await personas.setAccess(ALICE, ada.id, [
+      { scopeId: scopeId("personal", ALICE), role: "owner" },
+      { scopeId: scopeId("personal", BOB), role: "read" },
+      { scopeId: scopeId("team", "T_DESIGN"), role: "read" },
+      { scopeId: scopeId("org", orgId()), role: "read" },
+    ]),
+  );
+  const reach = async () =>
+    ok(await personas.detail(ALICE, ada.id)).access.map((grant) => [grant.scopeId, grant.personasEnabled]);
+  assert.deepEqual(await reach(), [
+    [scopeId("personal", ALICE), true],
+    [scopeId("org", orgId()), false],
+    [scopeId("personal", BOB), false],
+    [scopeId("team", "T_DESIGN"), false],
+  ]);
+  await built.featureFlags.setEnabled("personas", scopeId("org", orgId()), true, "admin");
+  assert.ok((await reach()).every(([, enabled]) => enabled === true));
+});
+
 test("a conversation's persona shapes the turn only for people who hold a role on it", async () => {
   const { built, personas, enable, sysprompt } = setup();
   for (const who of [ALICE, BOB, CAROL]) await enable(who);
@@ -446,4 +471,38 @@ test("what a persona conversation posts carries the persona, so Slack can name i
       .map((d) => d.destination.persona),
     [{ id: ada.id, name: "Ada" }],
   );
+});
+
+test("a persona pinned in a channel is worn by every conversation there until it's unpinned", async () => {
+  const { personas, enable, sysprompt } = setup();
+  for (const who of [ALICE, CAROL]) await enable(who);
+  const ada = ok(await personas.create(ALICE, { name: "Ada", icon: { kind: "emoji", value: "🎨" } }));
+  const bea = ok(await personas.create(ALICE, { name: "Bea" }));
+  const owner = { scopeId: scopeId("personal", ALICE), role: "owner" as const };
+  const channel = { scopeId: "channel:C_PIN", role: "read" as const };
+  const thread = (n: number) => ({ kind: "channel" as const, channelRef: "C_PIN", threadRef: `channel:C_PIN:t${n}` });
+
+  assert.equal((await sysprompt(CAROL, thread(1))).reply.includes("## Persona"), false);
+  assert.equal(
+    (await personas.setAccess(ALICE, ada.id, [{ ...owner, pinned: true }])).status,
+    "invalid",
+    "only a channel can be pinned",
+  );
+  ok(await personas.setAccess(ALICE, ada.id, [owner, { ...channel, pinned: true }]));
+  assert.equal(
+    ok(await personas.detail(ALICE, ada.id)).access.find((a) => a.scopeId === "channel:C_PIN")?.pinned,
+    true,
+  );
+
+  assert.match((await sysprompt(CAROL, thread(2))).reply, /## Persona: Ada/);
+
+  const second = await personas.setAccess(ALICE, bea.id, [owner, { ...channel, pinned: true }]);
+  assert.equal(second.status, "invalid");
+  assert.match((second as { message: string }).message, /already has another persona pinned/);
+  ok(await personas.setAccess(ALICE, bea.id, [owner, channel]));
+
+  ok(await personas.setAccess(ALICE, ada.id, [owner, channel]));
+  assert.equal((await sysprompt(CAROL, thread(3))).reply.includes("## Persona"), false, "unpinned");
+  ok(await personas.setAccess(ALICE, bea.id, [owner, { ...channel, pinned: true }]));
+  assert.match((await sysprompt(CAROL, thread(4))).reply, /## Persona: Bea/);
 });

@@ -162,6 +162,7 @@ export interface OrchestratorDeps {
   processes?: ProcessRegistry;
   monitors?: MonitorStore;
   crons?: CronStore;
+  notebookOnlyMemory?: (threadRef: string) => Promise<boolean>;
   webhooks?: WebhookStore;
   control?: ControlService;
   runtime?: RuntimeService;

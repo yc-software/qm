@@ -6,7 +6,7 @@ import { TimeoutError } from "../util/async.ts";
 import { reportFailure } from "../util/errors.ts";
 import { OutsideAudience, UNATTESTABLE_ACTOR_FIX, UnattestableActor } from "../directory/person.ts";
 import type { ScopeId } from "../types.ts";
-import type { MemoryCaptureContext, MemoryProviderOutcome, MemoryService } from "./memory-service.ts";
+import type { MemoryAuthority, MemoryCaptureContext, MemoryProviderOutcome, MemoryService } from "./memory-service.ts";
 
 export const DENIED_CODES: ReadonlySet<string> = new Set([
   "actor_not_attested",
@@ -31,7 +31,16 @@ export async function withEnvelope<T>(run: () => Promise<T>): Promise<{ value: T
   return { value, envelope };
 }
 
+export class MemoryProviderDisabled extends Error {
+  readonly code: string;
+  constructor(code: string) {
+    super(`memory provider is disabled (${code})`);
+    this.code = code;
+  }
+}
+
 export function failedOutcome(error: unknown): Pick<MemoryProviderOutcome, "outcome" | "code"> {
+  if (error instanceof MemoryProviderDisabled) return { outcome: "disabled", code: error.code };
   if (error instanceof UnattestableActor || error instanceof OutsideAudience)
     return { outcome: "denied", code: error.code };
   if (error instanceof TimeoutError) return { outcome: "timed_out" };
@@ -42,7 +51,7 @@ export function failedOutcome(error: unknown): Pick<MemoryProviderOutcome, "outc
 }
 
 export interface MemoryProviderProblem {
-  code: "memory_provider_denied" | "memory_provider_timeout" | "memory_provider_failed";
+  code: "memory_provider_denied" | "memory_provider_timeout" | "memory_provider_failed" | "memory_provider_disabled";
   provider: string;
   detail: string;
   fix: string;
@@ -84,6 +93,13 @@ function problemOf(outcome: MemoryProviderOutcome, write: boolean): MemoryProvid
         provider,
         detail: `Memory provider ${provider} failed${reason}, so ${lost}.`,
         fix: `Check ${provider}'s logs, URL and tool names (${TROUBLESHOOTING}).`,
+      };
+    case "disabled":
+      return {
+        code: "memory_provider_disabled",
+        provider,
+        detail: `Memory provider ${provider} is registered for this scope but not serving it${reason}, so QM didn't call it.`,
+        fix: `Look up ${code ?? "the code"} in docs/memory-providers.md#memory-registry; GET /v1/admin/memory-registry shows the entry.`,
       };
     default:
       return undefined;
@@ -146,13 +162,13 @@ export async function writeFacts(
   memory: MemoryService,
   scope: ScopeId,
   facts: string[],
-  author: string | undefined,
+  by: MemoryAuthority,
   context: MemoryCaptureContext,
   turn: string | undefined,
 ): Promise<MemoryWrite> {
   const idempotencyKey = writeKey(turn ?? randomUUID(), scope, facts);
   const { value, outcomes, problems } = await withProviders("write", (report) =>
-    memory.capture(scope, facts, Date.now(), author, { ...context, idempotencyKey, report }),
+    memory.capture(scope, facts, Date.now(), by, { ...context, idempotencyKey, report }),
   );
   return { added: value ?? Math.max(0, ...outcomes.map(({ added }) => added ?? 0)), outcomes, problems };
 }

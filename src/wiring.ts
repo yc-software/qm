@@ -24,7 +24,6 @@ import { createSdkRenderClient } from "./sandbox/render-client.ts";
 import { createRenderBase, type StoredRenderBase } from "./sandbox/render-base.ts";
 import { createKeychainApprovals, type KeychainApprovals } from "./credentials/keychain-approval.ts";
 import { flushErrorReporting, tracePhase } from "../plugins/chassis/src/error-reporting.ts";
-import { createProductAnalytics } from "./util/product-analytics.ts";
 import { createAdmittedWork } from "./util/admitted-work.ts";
 import { runSessionSmoke } from "./deployment/postdeploy-smoke.ts";
 import { loadConnectorSdk } from "./sandbox/connector-sdk.ts";
@@ -107,6 +106,7 @@ import { createPostgresMapFactory, type DurableMap } from "./persistence/durable
 import type { PersistedUiState, UiStateStore } from "./surfaces/ui-state.ts";
 import { slackUserClientFactory } from "./loops/sources/slack.ts";
 import { configurePgCaTrust, configurePgPooling } from "./persistence/pg-pool.ts";
+import { configurePublicFetch } from "./util/network.ts";
 import { createPostgresLeaderLease, type LeaderLease } from "./persistence/leader-lease.ts";
 import { createPostgresAdvisoryLock, type AdvisoryLock } from "./persistence/advisory-lock.ts";
 import type {
@@ -184,7 +184,14 @@ import {
 } from "./resolution/scope-membership.ts";
 import type { DeployGitArchive } from "./deploy/deploy-git-store.ts";
 import type { MemoryService } from "./memory/memory-service.ts";
-import { createConfiguredMemoryService } from "./memory/provider-factory.ts";
+import { createRegistryMemoryService } from "./memory/registry-memory.ts";
+import type { AddressFetch } from "./util/network.ts";
+import {
+  createMemoryRegistryStore,
+  MEMORY_REGISTRY_TABLE,
+  type MemoryRegistry,
+  type MemoryRegistryStore,
+} from "./memory/registry.ts";
 import { createPostgresMemoryService } from "./memory/postgres-memory-service.ts";
 import { createMcpServerStore, type McpServer, type McpServerStore } from "./mcp/mcp-server-store.ts";
 import { createMcpToolService, type McpToolService } from "./mcp/mcp-tool-service.ts";
@@ -361,6 +368,7 @@ import { createAdminService, parseAdminGrants, type AdminService } from "./admin
 import { createAdminGrantStore } from "./admin/admin-grant-store.ts";
 import { createPostgresAdminGrantStore } from "./admin/postgres-admin-grant-store.ts";
 import { createProjectStore, type Project, type ProjectStore } from "./projects/project-store.ts";
+import { createPersonaHandover } from "./personas/persona-handover.ts";
 import { createPersonaService } from "./personas/persona-service.ts";
 import { createPostgresPersonaStore } from "./personas/persona-store.ts";
 import { withErrorReporting, type ErrorLog } from "./admin/error-log.ts";
@@ -467,6 +475,7 @@ export interface BuiltApp {
   refreshCustomProviders: () => Promise<void>;
   mcpServers: McpServerStore;
   mcpToolService: McpToolService;
+  memoryRegistry: MemoryRegistryStore;
   acl: AclStore;
   skills: SkillStore;
   skillBundles: SkillBundleStore;
@@ -533,6 +542,7 @@ export function buildApp(
     decisionBackend?: DecisionBackend;
     credentialBrokers?: Record<string, AwsRoleBroker>;
     modelCredentialFetch?: typeof fetch;
+    memoryRegistryFetch?: AddressFetch;
     modelVerificationProbe?: typeof probeModel;
     agent?: Agent;
     canClaimRuns?: () => boolean;
@@ -554,6 +564,7 @@ export function buildApp(
     ...(config.databaseCaCert ? { cert: config.databaseCaCert } : {}),
     ...(config.databaseCaCertFile ? { certFile: config.databaseCaCertFile } : {}),
   });
+  configurePublicFetch(config.privateNetworkAllowedOrigins);
   const reusedConnectorKey = [
     ["CORE_SIGNING_SECRET", config.signingSecret],
     ["CAPABILITY_SECRET", config.capabilitySecret],
@@ -763,10 +774,17 @@ export function buildApp(
     createSweeper,
   });
   const memorySessions: { store?: SessionStore } = {};
+  const memoryRegistry = createMemoryRegistryStore({
+    map: artifactMap<MemoryRegistry>(MEMORY_REGISTRY_TABLE),
+    key: deriveConnectorKey(config.connectorSecretKey ?? randomBytes(32), "memory-registry"),
+    ...(config.memoryProviderConfig ? { overlay: config.memoryProviderConfig } : {}),
+  });
   const baseMemory: MemoryService = withMemoryTidy(
-    createConfiguredMemoryService({
+    createRegistryMemoryService({
       defaultMemory: semanticMemory.memory,
-      config: config.memoryProviderConfig,
+      ...(config.memoryProviderConfig ? { overlay: config.memoryProviderConfig } : {}),
+      registry: memoryRegistry,
+      ...(overrides.memoryRegistryFetch ? { registryFetch: overrides.memoryRegistryFetch } : {}),
       sessionItems: (sessionId) => {
         if (!memorySessions.store) throw new Error("session store is not ready");
         return memorySessions.store.getItems(sessionId, { limit: MEMORY_CAPTURE_ENTRY_WINDOW });
@@ -1572,8 +1590,6 @@ export function buildApp(
           },
         })
       : undefined;
-  const productAnalytics = createProductAnalytics(config.orgId, config.productAnalytics);
-  runs.onTerminal((run) => void productAnalytics.responseFinished(run));
 
   let processes: ProcessRegistry | undefined;
   if (supportsProcessSessions(sandbox)) {
@@ -1761,17 +1777,26 @@ export function buildApp(
         (await directory.get(email))?.type === "internal")
     );
   };
+  const isActiveMember = (principalId: string) => identity.isInternal(identity.classify(principalId));
   const projects = createProjectStore(artifactMap<Project>("projects"), {
-    isActiveMember: (principalId) => identity.isInternal(identity.classify(principalId)),
+    isActiveMember,
     advisoryLock,
   });
+  const personaStore = createPostgresPersonaStore(databaseUrl);
   const personas = createPersonaService({
-    store: createPostgresPersonaStore(databaseUrl),
+    store: personaStore,
     flags: featureFlags,
     orgScope: scopeId("org", config.orgId),
     teams,
     sessions,
+    isActive: isActiveMember,
     ...(keychain ? { keychain } : {}),
+  });
+  const personaHandover = createPersonaHandover({
+    store: personaStore,
+    isActive: isActiveMember,
+    orgAdmins: async () => (await admin.listGrants()).filter((grant) => grant.role === "org_admin"),
+    auditLog,
   });
   const canReadScope = createCanReadScope({ managedGroups: projects, directory, identity, teams, sessions, personas });
   const canWriteScope = createCanWriteScope({ managedGroups: projects, directory, identity, teams, personas });
@@ -1796,7 +1821,6 @@ export function buildApp(
     deployAppsDomain: config.awsDeploy.appsDomain,
     publicLinksAvailable: !!(config.awsDeploy.appsDomain && config.awsDeploy.gateSecret),
     publicWebUrl: config.publicWebUrl,
-    appPublished: productAnalytics.appPublished,
     deployStore,
     provider: deployProvider,
     deployDir: join(config.dataDir, "deployments"),
@@ -2143,6 +2167,7 @@ export function buildApp(
     ...(processes ? { processes } : {}),
     monitors,
     crons,
+    notebookOnlyMemory: (threadRef) => memoryTidy.managesThread(threadRef),
     webhooks,
     resolveSessionRuntime,
     directory,
@@ -2260,7 +2285,7 @@ export function buildApp(
   };
   const app = createApp({
     errors,
-    settleTreeWakes: (root) => settleTreeWakes(subagentMail, root),
+    settleTreeWakes: (root, botRunsOnly) => settleTreeWakes(subagentMail, root, botRunsOnly),
     teams,
     externalSlackPolicies: config.externalSlackPolicies,
     admittedWork,
@@ -2311,6 +2336,7 @@ export function buildApp(
       : {}),
     projects,
     personas,
+    personaHandover,
     environments,
     deploy: deployService,
     deployAppsDomain: config.awsDeploy.appsDomain,
@@ -2627,6 +2653,7 @@ export function buildApp(
   const scheduler = createScheduler({
     admittedWork,
     skipFire: async (cron) => (await memoryTidy.skipFire(cron)) ?? suggestedActivities.skipFire(cron),
+    notebookOnlyMemory: (cron) => memoryTidy.manages(cron),
     runtimeError: (scope, runtime) => availableRuntimeError({ deps: runtimeDeps }, scope, runtime, "cron"),
     deleteCron: (id) => app.deleteCron(id),
     advisoryLock,
@@ -2780,6 +2807,15 @@ export function buildApp(
         { label: "llm-capture-retention" },
       )
     : null;
+  const personaOwnerSweeper = createSweeper(
+    () =>
+      leaderLease.hold("personas:owner-handover", async () => {
+        await identity.refresh(true);
+        await personaHandover.adoptOrphans();
+      }),
+    5 * 60_000,
+    { label: "persona-owner-handover" },
+  );
   const monitorRetentionSweeper = createSweeper(
     () => leaderLease.hold("monitor:retention:sweep", () => monitors.deleteDefunct(Date.now())),
     MONITOR_RETENTION_SWEEP_MS,
@@ -2845,6 +2881,7 @@ export function buildApp(
         })
         .catch(swallowAs("wiring: monitor resume failed", undefined));
       monitorRetentionSweeper.start();
+      personaOwnerSweeper.start();
       spendSweeper?.start();
       llmCaptureSweeper?.start();
       semanticMemory.start();
@@ -2880,6 +2917,7 @@ export function buildApp(
       reaper.stop(),
       processReaper?.stop(),
       monitorRetentionSweeper.stop(),
+      personaOwnerSweeper.stop(),
       spendSweeper?.stop(),
       llmCaptureSweeper?.stop(),
       semanticMemory.stop(),
@@ -2969,6 +3007,7 @@ export function buildApp(
     app,
     checkReadiness: async (signal) => {
       await pgArtifactMap.pool.q("SELECT 1", [], { signal });
+      await configStore.hydrate?.();
     },
     deploymentLayer,
     deploymentLayerStore,
@@ -3014,6 +3053,7 @@ export function buildApp(
     refreshCustomProviders,
     mcpServers,
     mcpToolService,
+    memoryRegistry,
     acl,
     skills,
     skillBundles,
@@ -3127,6 +3167,7 @@ export function serverDeps(
     refreshCustomProviders: built.refreshCustomProviders,
     mcpServers: built.mcpServers,
     mcpToolService: built.mcpToolService,
+    memoryRegistry: built.memoryRegistry,
     ...(config.brandingDefault ? { brandingDefault: config.brandingDefault } : {}),
     ...(subscriptionAuth ? { companySubscriptionAuth: subscriptionAuth } : {}),
     connectorTokens: built.connectorTokens,

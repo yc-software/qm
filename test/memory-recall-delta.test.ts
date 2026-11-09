@@ -120,7 +120,7 @@ test("id-less provider lines inject only new lines over 20 turns, and timeouts o
         reportEnvelope({ code: "actor_unlinked" });
         return [];
       }
-      return Array.from({ length: 6 }, (_, k) => ({ text: line(window + k), score: 0.2 }));
+      return Array.from({ length: 6 }, (_, k) => ({ text: line(window + k) }));
     },
     async capture() {
       return 0;
@@ -201,6 +201,26 @@ test("provider lines stay counted while their provider answers, so a later refus
   );
 });
 
+test("a provider line from a binding that is now disabled is noted, not kept", () => {
+  const row = { scope: alice, text: "SHIPS ON FRIDAYS", source: { provider: "acme-personal", label: "Acme" } };
+  const answered = (outcome: MemoryProviderOutcome["outcome"]): MemoryProviderOutcome[] => [
+    {
+      provider: "acme-personal",
+      scope: alice,
+      outcome,
+      ms: 0,
+      ...(outcome === "disabled" ? { code: "secret_missing" } : {}),
+    },
+  ];
+  const first = memoryRecallDelta([row], [], all, new Map(), answered("ok"));
+  const next = memoryRecallDelta([], [entry(first.record)], all, new Map(), answered("disabled"));
+  assert.equal(
+    next.text,
+    "Some previously recalled memory sources are no longer included. Do not rely on memory from sources that are not currently authorized.",
+  );
+  assert.deepEqual(next.record.shown, []);
+});
+
 test("a provider line recorded before lines were keyed by provider is flagged, not silently kept", () => {
   const legacy = { shown: [{ scope: alice, hash: "0123456789abcdef" }] };
   assert.equal(
@@ -217,7 +237,7 @@ test("a multi-line provider block that shares a line with an earlier one is inje
   let block = "Procedure: deploy staging\n1. Back up the database\n2. Deploy to staging";
   const procedures: MemoryService = {
     async recall() {
-      return [{ text: block, score: 0.2 }];
+      return [{ text: block }];
     },
     async capture() {
       return 0;

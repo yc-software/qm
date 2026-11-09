@@ -1,15 +1,13 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
+import { trimTrailing, trimTrailingSlashes } from "../util/text.ts";
 
 export function bytes(data: string | Uint8Array): Uint8Array {
   return typeof data === "string" ? Buffer.from(data, "utf8") : data;
 }
 
 function isGitMetadataComponent(part: string): boolean {
-  const p = part
-    .normalize("NFC")
-    .replace(/[.\s]+$/, "")
-    .toLowerCase();
+  const p = trimTrailing(part.normalize("NFC"), (char) => /[.\s]/.test(char)).toLowerCase();
   return p === ".git" || /^git~[0-9]+$/.test(p);
 }
 
@@ -18,10 +16,7 @@ export function carriesGitMetadata(path: string): boolean {
 }
 
 export function normalizeRelPath(path: string): string {
-  const p = path
-    .replace(/\\/g, "/")
-    .replace(/^\.\/+/, "")
-    .replace(/\/+$/, "");
+  const p = trimTrailingSlashes(path.replace(/\\/g, "/").replace(/^\.\/+/, ""));
   const parts = p.split("/").filter(Boolean);
   if (
     !parts.length ||
@@ -35,7 +30,7 @@ export function normalizeRelPath(path: string): string {
 }
 
 export function posixJoin(base: string, rel: string): string {
-  return `${base.replace(/\/+$/, "")}/${rel.replace(/^\/+/, "")}`;
+  return `${trimTrailingSlashes(base)}/${rel.replace(/^\/+/, "")}`;
 }
 
 export async function readTree(

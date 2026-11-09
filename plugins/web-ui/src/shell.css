@@ -4025,6 +4025,9 @@ qm-draft .draft-card-label {
 code-block copy-button button > span {
   display: none;
 }
+qm-draft copy-button svg {
+  transform: scale(0.8125);
+}
 qm-draft .draft-card-body {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -13475,4 +13478,35 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   gap: 6px;
   align-self: flex-start;
   margin-top: 8px;
+}
+.persona-detail .hint {
+  color: var(--muted-foreground);
+}
+.persona-section > .hint {
+  margin-top: 4px;
+  font-size: var(--font-12-5);
+  line-height: 1.45;
+}
+.persona-section > .permission-note {
+  margin: 0;
+  line-height: 1.45;
+}
+.persona-detail > .action-notice,
+.persona-detail > .persona-action-error {
+  position: sticky;
+  top: -24px;
+  z-index: 2;
+  box-shadow: 0 -12px 0 4px var(--background);
+}
+@media (max-width: 860px) {
+  :where(html:not(.desktop-embed)) .persona-detail > .action-notice,
+  :where(html:not(.desktop-embed)) .persona-detail > .persona-action-error {
+    top: 0;
+  }
+}
+.persona-action-error {
+  padding: 9px 11px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--destructive) 10%, var(--background));
+  font-size: var(--font-13);
 }

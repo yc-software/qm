@@ -1005,3 +1005,22 @@ test("The Render sandbox backend needs a tagged, digest-pinned RENDER_SANDBOX_IM
     enabledSandboxBackends(loadConfig({ ...secondary, RENDER_SANDBOX_IMAGE: RENDER_IMAGE })).includes("render"),
   );
 });
+
+test("PRIVATE_NETWORK_ALLOWED_ORIGINS is parsed at startup and a bad entry stops core without echoing it", () => {
+  assert.equal(loadConfig({}).privateNetworkAllowedOrigins.size, 0);
+  assert.deepEqual(
+    [
+      ...loadConfig({ PRIVATE_NETWORK_ALLOWED_ORIGINS: "http://gbrain:8787,https://brain.example-tailnet.ts.net" })
+        .privateNetworkAllowedOrigins,
+    ],
+    ["http://gbrain:8787", "https://brain.example-tailnet.ts.net"],
+  );
+  assert.throws(
+    () => loadConfig({ PRIVATE_NETWORK_ALLOWED_ORIGINS: "http://gbrain:8787,http://admin:PASSWORD@localhost:8787" }),
+    (e: unknown) => {
+      assert.match(String(e), /PRIVATE_NETWORK_ALLOWED_ORIGINS entry 2 \(http:\/\/localhost:8787\)/);
+      assert.doesNotMatch(String(e), /PASSWORD|admin/);
+      return true;
+    },
+  );
+});

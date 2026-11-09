@@ -18,6 +18,7 @@ import {
   type SandboxHandle,
   type StageOptions,
 } from "./sandbox.ts";
+import { trimTrailingSlashes } from "../util/text.ts";
 
 const posixDirname = (p: string): string => p.slice(0, Math.max(0, p.lastIndexOf("/"))) || "/";
 
@@ -35,7 +36,7 @@ export function workspacePathOf(rootDir: string, absPath: string): string | null
 
 export function posixJoin(base: string, rel: string): string {
   const clean = workspaceRel((rel.startsWith("/") && workspacePathOf(base, rel)) || rel);
-  return clean ? `${base.replace(/\/+$/, "")}/${clean}` : base;
+  return clean ? `${trimTrailingSlashes(base)}/${clean}` : base;
 }
 
 export interface ExecFileOpsDeps {
@@ -304,7 +305,7 @@ export function createBackendBlobStaging(
 
 function createExecBlobStaging(deps: ExecBlobStagingDeps): ExecBlobStaging {
   const { label, exec, proxyPrefix, capabilityHeader, mintToken } = deps;
-  const base = deps.apiBaseUrl.replace(/\/+$/, "");
+  const base = trimTrailingSlashes(deps.apiBaseUrl);
   const timeoutSec = deps.timeoutSec ?? 300;
   return {
     async stageInAbs(handle, abs, blobId, callTimeoutSec): Promise<void> {

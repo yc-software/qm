@@ -595,7 +595,7 @@ function cronRunHistory(c: CronView): TemplateResult {
 async function loadCronRuns(id: string): Promise<void> {
   cronRunsLoading.add(id);
   try {
-    const result = await api<{ runs: CronRunView[] }>(`/api/crons/${encodeURIComponent(id)}/runs`);
+    const result = await api<{ runs: CronRunView[] }>(`/api/crons/${encodeURIComponent(id)}/runs?limit=20`);
     cronRuns.set(id, result.runs ?? []);
   } catch (error) {
     cronActionNotice = errMessage(error, "Couldn't load run history.");

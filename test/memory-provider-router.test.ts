@@ -1,14 +1,19 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createRoutedMemoryService } from "../src/memory/provider-router.ts";
-import type { MemoryCaptureContext, MemoryRecallContext, MemoryService } from "../src/memory/memory-service.ts";
+import type {
+  MemoryAuthority,
+  MemoryCaptureContext,
+  MemoryRecallContext,
+  MemoryService,
+} from "../src/memory/memory-service.ts";
 import { recallText } from "./support/recall-text.ts";
 
 function provider(name: string, calls: string[]): MemoryService {
   return {
     async recall(scope, context?: MemoryRecallContext) {
       calls.push(`${name}:recall:${scope}:${context?.query ?? ""}`);
-      return [{ text: `${name} memory`, score: 0.2 }];
+      return [{ text: `${name} memory` }];
     },
     async capture(scope, facts, _at, _author, context?: MemoryCaptureContext) {
       calls.push(`${name}:capture:${scope}:${context?.mode ?? "explicit"}:${facts.join(",")}`);
@@ -34,9 +39,24 @@ test("routes recall and capture independently by scope and policy", async () => 
   });
   assert.equal(recallText(await memory.recall("personal:u1", { query: "launch" })), "notebook memory");
   assert.equal(recallText(await memory.recall("org:acme", { query: "launch" })), "knowledge memory");
-  assert.equal(await memory.capture("personal:u1", ["prefers terse replies"], 1, "u1", { mode: "automatic" }), 1);
-  assert.equal(await memory.capture("org:acme", ["runbook"], 1, "u1", { mode: "automatic" }), 0);
-  assert.equal(await memory.capture("org:acme", ["runbook"], 1, "u1", { mode: "explicit" }), 1);
+  assert.equal(
+    await memory.capture(
+      "personal:u1",
+      ["prefers terse replies"],
+      1,
+      { actorId: "u1", context: "conversation" },
+      { mode: "automatic" },
+    ),
+    1,
+  );
+  assert.equal(
+    await memory.capture("org:acme", ["runbook"], 1, { actorId: "u1", context: "conversation" }, { mode: "automatic" }),
+    0,
+  );
+  assert.equal(
+    await memory.capture("org:acme", ["runbook"], 1, { actorId: "u1", context: "conversation" }, { mode: "explicit" }),
+    1,
+  );
   assert.deepEqual(calls, [
     "notebook:recall:personal:u1:launch",
     "knowledge:recall:org:acme:launch",
@@ -101,7 +121,13 @@ test("external capture failures degrade to the remaining provider", async () => 
     ],
     onError: (error, providerId, operation) => errors.push(`${providerId}:${operation}:${String(error)}`),
   });
-  const stored = await memory.capture("org:acme", ["fact"], 1, "U1", { mode: "automatic" });
+  const stored = await memory.capture(
+    "org:acme",
+    ["fact"],
+    1,
+    { actorId: "U1", context: "conversation" },
+    { mode: "automatic" },
+  );
   assert.ok(stored >= 0);
   assert.ok(
     calls.some((c) => c.startsWith("notebook:capture")),
@@ -116,7 +142,10 @@ test("external capture failures degrade to the remaining provider", async () => 
       { provider: "strict", scopes: ["org"], capture: "automatic", manage: false, failOpen: false },
     ],
   });
-  await assert.rejects(strictMemory.capture("org:acme", ["fact"], 1, "U1", { mode: "automatic" }), /offline/);
+  await assert.rejects(
+    strictMemory.capture("org:acme", ["fact"], 1, { actorId: "U1", context: "conversation" }, { mode: "automatic" }),
+    /offline/,
+  );
 });
 
 test("cross-origin capture only reaches providers that preserve structured provenance", async () => {
@@ -131,21 +160,72 @@ test("cross-origin capture only reaches providers that preserve structured prove
     ],
   });
   assert.equal(
-    await memory.capture("personal:alice", ["Synthetic fact"], 1, "alice", {
-      mode: "automatic",
-      conversationScopeId: "group:private",
-      inheritedFacts: [],
-      sensitivity: "sensitive",
-    }),
+    await memory.capture(
+      "personal:alice",
+      ["Synthetic fact"],
+      1,
+      { actorId: "alice", context: "conversation" },
+      {
+        mode: "automatic",
+        conversationScopeId: "group:private",
+        inheritedFacts: [],
+        sensitivity: "sensitive",
+      },
+    ),
     1,
   );
   assert.deepEqual(calls, ["notebook:capture:personal:alice:automatic:Synthetic fact"]);
   calls.length = 0;
-  await memory.capture("personal:alice", ["Native fact"], 1, "alice", {
-    mode: "explicit",
-    conversationScopeId: "personal:alice",
-  });
+  await memory.capture(
+    "personal:alice",
+    ["Native fact"],
+    1,
+    { actorId: "alice", context: "conversation" },
+    {
+      mode: "explicit",
+      conversationScopeId: "personal:alice",
+    },
+  );
   assert.equal(calls.length, 2);
+});
+
+test("only a conversation's capture reaches a provider that isn't a notebook", async () => {
+  const calls: string[] = [];
+  const notebook = provider("notebook", calls);
+  notebook.facts = async () => [];
+  const memory = createRoutedMemoryService({
+    providers: { notebook, brain: provider("brain", calls) },
+    routes: [
+      { provider: "notebook", scopes: ["personal"], capture: "automatic" },
+      { provider: "brain", scopes: ["personal"], capture: "explicit", manage: false },
+    ],
+  });
+  const authorities: Array<MemoryAuthority | undefined> = [
+    undefined,
+    { actorId: "", context: "conversation" },
+    { actorId: "alice", context: "self" },
+    { actorId: "admin-bob", context: "admin" },
+    { actorId: "system:personal:alice", context: "maintenance" },
+  ];
+  for (const by of authorities) {
+    calls.length = 0;
+    assert.equal(await memory.capture("personal:alice", ["Prefers tea"], 1, by, { mode: "explicit" }), 1);
+    assert.deepEqual(calls, ["notebook:capture:personal:alice:explicit:Prefers tea"], JSON.stringify(by));
+  }
+  calls.length = 0;
+  await memory.capture(
+    "personal:alice",
+    ["Prefers tea"],
+    1,
+    { actorId: "alice", context: "conversation" },
+    {
+      mode: "explicit",
+    },
+  );
+  assert.deepEqual(calls, [
+    "notebook:capture:personal:alice:explicit:Prefers tea",
+    "brain:capture:personal:alice:explicit:Prefers tea",
+  ]);
 });
 
 test("fact edits route to the managing provider and fail loudly when it can't edit", async () => {

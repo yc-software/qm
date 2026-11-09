@@ -4,7 +4,7 @@ import type { SlackReply } from "./slack-reply";
 import { assistantSidebar, assistantMessage } from "./assistant-sidebar";
 import { formatMessageTime } from "./message-time.ts";
 import { messageEntrySeqs, highlightMessage } from "./message-link.ts";
-import { appEditSlug } from "./app-edit";
+import { appEditSlug } from "../../chassis/src/app-edit";
 import { isConnectionReturn } from "./connection-return";
 import "./onboarding-welcome";
 import { welcomeIdeasPrompt } from "./welcome-ideas";
@@ -1384,7 +1384,7 @@ export function createChatSurface(
                 ${ctx.composer.state.error ? html`<div class="composer-error inline">${ctx.composer.state.error}</div>` : nothing}
               </div>
             </section>
-            ${slackReply ?? nothing}
+            ${slackReply ? html`<div class="chat-bottom-dock">${slackReply} ${scrollBottomButton()}</div>` : nothing}
           </div>
         `,
         host,
@@ -1814,10 +1814,7 @@ export function createChatSurface(
             <div class="chat-bottom-dock">
               ${goalStrip(agent)} ${ctx.composer.queuedStrip(agent)} ${subagentStrip()}
               ${swarmUi.strip(chatState.sessionId)} ${backgroundActivityStrip()} ${ctx.composer.composerForm(agent)}
-              ${ctx.pane ? nothing : suggestions}
-              <button class="scroll-bottom-btn" type="button" aria-label="Scroll to bottom" @click=${scrollToBottom}>
-                ${icon(ArrowDown, 16)}
-              </button>
+              ${ctx.pane ? nothing : suggestions} ${scrollBottomButton()}
             </div>
           </div>
           ${sideChats.view()}
@@ -3767,6 +3764,12 @@ export function createChatSurface(
     }
     if (inlineHtmlName(file.name, file.mimetype)) return inlineHtmlFrame(file.name, href, file.sizeBytes, href);
     return fileChip(file.name, file.sizeBytes, href, file.mimetype);
+  }
+
+  function scrollBottomButton(): TemplateResult {
+    return html`<button class="scroll-bottom-btn" type="button" aria-label="Scroll to bottom" @click=${scrollToBottom}>
+      ${icon(ArrowDown, 16)}
+    </button>`;
   }
 
   function scrollToBottom(): void {

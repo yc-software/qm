@@ -114,7 +114,12 @@ export function createTurnMethods(
       live.push({ turn: { kind: "descendants", actorIds: descendants.map((run) => run.request.actor.id) } });
     return live;
   }
-  async function stopThread(threadRef: string, run: Run | undefined, tree: boolean): Promise<boolean> {
+  async function stopThread(
+    threadRef: string,
+    run: Run | undefined,
+    tree: boolean,
+    botRunsOnly = false,
+  ): Promise<boolean> {
     if (!deps.signals) return false;
     const stopDeps = { sessions: deps.sessions, runs: deps.runs, signals: deps.signals };
     const scope = tree ? undefined : "session";
@@ -122,19 +127,20 @@ export function createTurnMethods(
     const stop = async () => {
       const session = await deps.sessions.getByThread(threadRef);
       if (session && tree) {
-        const stopped = await stopSessionTree(stopDeps, session, reason);
-        await deps.settleTreeWakes?.(session);
+        const stopped = await stopSessionTree(stopDeps, session, reason, botRunsOnly);
+        await deps.settleTreeWakes?.(session, botRunsOnly);
         return stopped;
       }
-      if (session) return (await stopSessionRuns(stopDeps, session, { reason, scope })).length > 0;
-      if (!run || run.status === "done" || run.status === "failed") return false;
+      if (session) return (await stopSessionRuns(stopDeps, session, { reason, scope, botRunsOnly })).length > 0;
+      if (!run || run.status === "done" || run.status === "failed" || (botRunsOnly && !run.request.botActor))
+        return false;
       await stopDeps.signals.send(run.id, { kind: "abort", reason, ...(scope ? { scope } : {}) });
       if (run.status === "pending") await deps.runs.withdraw(run.id);
       return true;
     };
     return deps.advisoryLock.withLock("session-tree-admission", stop);
   }
-  const stopRun = (run: Run, tree: boolean) => stopThread(run.sessionId, run, tree);
+  const stopRun = (run: Run, tree: boolean, botRunsOnly = false) => stopThread(run.sessionId, run, tree, botRunsOnly);
   const methods: ReturnType<typeof createTurnMethods> = {
     async turn(req: TurnRequest, replay?: { signalDedupKey: string }): Promise<TurnResult> {
       const historicalSlack = Object.keys(deps.externalSlackPolicies ?? {}).length
@@ -291,9 +297,6 @@ export function createTurnMethods(
         text: req.text,
         ...(req.gatewayContext ? { gatewayContext: req.gatewayContext } : {}),
         ...(req.proactiveOpener ? { proactiveOpener: true } : {}),
-        ...(req.analyticsSuppressed || (sameApprovedMessage && approvedRequest?.analyticsSuppressed)
-          ? { analyticsSuppressed: true }
-          : {}),
         ...(req.conversationHeader ? { conversationHeader: req.conversationHeader } : {}),
         ...(req.priorTurns?.length ? { priorTurns: req.priorTurns } : {}),
         ...(req.overheard?.length ? { overheard: req.overheard } : {}),
@@ -312,6 +315,7 @@ export function createTurnMethods(
             }
           : {}),
         ...(req.skipMemory ? { skipMemory: true } : {}),
+        ...(req.memoryNotebookOnly ? { memoryNotebookOnly: true } : {}),
         ...(req.unattendedGrants?.length ? { unattendedGrants: req.unattendedGrants } : {}),
         ...(req.cronScript && origin.kind === "automation" ? { cronScript: req.cronScript } : {}),
         ...(req.infrequentCron && origin.kind === "automation" ? { infrequentCron: true } : {}),
@@ -412,6 +416,7 @@ export function createTurnMethods(
         modelAccount,
         ...(dedupKey ? { dedupKey } : {}),
         routed: Boolean(req.approval || req.spawned || replay),
+        ...(req.botActor ? { bot: true } : {}),
       };
       if (deps.signals && !queuedBefore && mayMeetLiveTurn(incoming)) {
         const ambientRef =
@@ -430,14 +435,18 @@ export function createTurnMethods(
         if (route.kind === "abort") {
           const stopped = await withCurrentProjectRoster(async () => {
             const own = candidates.find(({ run }) => run?.sessionId === conversation.threadRef)?.run;
-            let any = await stopThread(conversation.threadRef, own, true);
+            let any = await stopThread(conversation.threadRef, own, true, incoming.bot);
             for (const { run } of routes.filter((r) => r.route.kind === "abort"))
-              if (run && run.sessionId !== conversation.threadRef) any = (await stopRun(run, true)) || any;
+              if (run && run.sessionId !== conversation.threadRef)
+                any = (await stopRun(run, true, incoming.bot)) || any;
             return any;
           });
           if (stopped === null)
             return { status: "refused", reason: "project membership changed; retry from the current project" };
-          if (!stopped) console.error(`[turn] stop in ${conversation.threadRef} found no live work to stop`);
+          if (!stopped)
+            console.error(
+              `[turn] stop in ${conversation.threadRef} found no live ${incoming.bot ? "bot " : ""}work to stop`,
+            );
           return { status: "silent", steered: true, stopped };
         }
         if (route.kind === "drop") return { status: "refused", reason: "empty message" };

@@ -148,8 +148,8 @@ The dev instance should exercise the real system:
   Docker Postgres container
 - production data is never copied into a dev instance
 - captured model context: request capture is on unless overridden, so you can read back what the model was actually sent
-- fast local edits: runs Node surfaces with `--watch` and serves the web UI through
-  Vite HMR on the dev surface instead of a separate browser build loop
+- fast local edits: runs Node surfaces with `--watch`; the web UI bundle is built on
+  `up` and served as a release, so rebuild with `dev up` after front-end edits
 - stale pool recovery: `status` shows each deploy's start time and age; if all pool
   apps are taken, `up` reclaims a slot not started today or older than 4 hours
 - local admin seed: for a self-provisioned local DB, empty `admin_grants` are seeded

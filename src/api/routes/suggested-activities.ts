@@ -1,4 +1,3 @@
-import { parseSuggestedActivities } from "../../../plugins/chassis/src/suggested-activities.ts";
 import { samePerson } from "../../directory/person.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
@@ -15,6 +14,7 @@ export const suggestedActivityRoutes: Route[] = [
   {
     method: "POST",
     path: "/v1/suggested-activities",
+    browser: true,
     actor: "body.principalId",
     auth: "source",
     handle: async ({ res, deps, body, actor }) => {
@@ -23,12 +23,6 @@ export const suggestedActivityRoutes: Route[] = [
         return sendJson(res, 400, { error: "bad_request" });
       }
       if (actor && !samePerson(actor.p, body.principalId)) return sendJson(res, 403, { error: "forbidden" });
-      let seeds;
-      try {
-        seeds = parseSuggestedActivities(JSON.stringify(body.seeds ?? []));
-      } catch {
-        return sendJson(res, 400, { error: "bad_request" });
-      }
       const timezone = body.timezone ?? "UTC";
       if (typeof timezone !== "string" || timezone.length > 100) return sendJson(res, 400, { error: "bad_request" });
       try {
@@ -39,7 +33,7 @@ export const suggestedActivityRoutes: Route[] = [
       return sendJson(
         res,
         200,
-        await deps.suggestedActivities.get(body.principalId, seeds, {
+        await deps.suggestedActivities.get(body.principalId, deps.web?.me.suggestedActivities ?? [], {
           timezone,
           poll: body.poll === true,
           refresh: body.refresh === true,
@@ -50,6 +44,7 @@ export const suggestedActivityRoutes: Route[] = [
   {
     method: "POST",
     path: "/v1/suggested-activities/dismiss",
+    browser: true,
     actor: "body.principalId",
     auth: "source",
     handle: async ({ res, deps, body, actor }) => {

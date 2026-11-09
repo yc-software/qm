@@ -3,6 +3,7 @@ import type { ResolvedSecurityPolicy } from "./security/security-posture.ts";
 import type { SharingPosture } from "./resolution/sharing-posture.ts";
 import type { SurfaceAccount, TurnSurfaceOrigin } from "./surfaces/contract.ts";
 import type { SessionOrigin } from "./sessions/session-store.ts";
+import type { ProjectIcon } from "./projects/project-store.ts";
 
 export type PrincipalType = "internal" | "guest";
 
@@ -19,7 +20,7 @@ export interface Principal {
   displayName?: string;
 }
 
-const SCOPE_KINDS = ["personal", "channel", "team", "org", "group", "persona"] as const;
+export const SCOPE_KINDS = ["personal", "channel", "team", "org", "group", "persona"] as const;
 export type ScopeKind = (typeof SCOPE_KINDS)[number];
 
 export type ScopeId = string;
@@ -30,6 +31,12 @@ function isScopeKind(s: string): s is ScopeKind {
 
 export function scopeId(kind: ScopeKind, ref: string): ScopeId {
   return `${kind}:${ref}`;
+}
+
+export interface WornPersona {
+  id: string;
+  name: string;
+  icon?: ProjectIcon;
 }
 
 export function personalScope(principalId: string): ScopeId {
@@ -122,6 +129,8 @@ export interface SpawnMeta {
   deliveryWebhook?: DeliveryWebhook;
   timezone?: string;
   readOnly?: boolean;
+  memoryNotebookOnly?: boolean;
+  botActor?: boolean;
   model?: string;
   thinkingLevel?: string;
   fastMode?: boolean;
@@ -215,7 +224,7 @@ export interface Destination {
   audienceScopeId?: ScopeId;
   onBehalfOf?: string;
   relaySender?: string;
-  persona?: { id: string; name: string };
+  persona?: WornPersona;
   threadTs?: string;
   editRef?: string;
   unfurlLinks?: boolean;
@@ -412,6 +421,7 @@ export interface TurnRequest {
   fastMode?: boolean;
   readOnly?: boolean;
   skipMemory?: boolean;
+  memoryNotebookOnly?: boolean;
   surfaceTools?: boolean;
   addressed?: boolean;
   envelopeWrapped?: boolean;
@@ -420,7 +430,6 @@ export interface TurnRequest {
   timezone?: string;
   approval?: { requestId: string; approved: boolean; scope?: ApprovalScope };
   proactiveOpener?: boolean;
-  analyticsSuppressed?: boolean;
   spawned?: boolean;
   idempotencyKey?: string;
   redeliveryKey?: string;
@@ -520,5 +529,5 @@ export interface TurnResult {
   runtime?: TurnRuntime;
   scriptVerdict?: string;
   retracted?: string[];
-  persona?: { id: string; name: string };
+  persona?: WornPersona;
 }

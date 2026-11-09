@@ -1,3 +1,4 @@
+import { validateHeaderValue } from "node:http";
 import {
   CUSTOM_PROVIDER_PROTOCOLS,
   type CustomProviderSpec,
@@ -6,17 +7,15 @@ import {
 import { sendJson } from "../../http.ts";
 import type { ApiCtx } from "../route.ts";
 import { audit, authorizeAdmin, orgScope } from "../shared.ts";
+import { trimTrailingSlashes } from "../../../util/text.ts";
+import { publicFetch } from "../../../util/network.ts";
+import { errMessage } from "../../../util/errors.ts";
 
 async function actor(ctx: ApiCtx) {
   const scope = orgScope(ctx.deps);
   return authorizeAdmin(ctx, scope);
 }
 
-/**
- * Key validation against the registered endpoint, protocol-appropriate.
- * A gateway may not implement a models listing, so callers can skip
- * with {"validate": false} — the registration is admin-only either way.
- */
 async function validateKey(
   ctx: ApiCtx,
   protocol: CustomProviderProtocol,
@@ -28,15 +27,12 @@ async function validateKey(
     protocol === "anthropic"
       ? { "x-api-key": apiKey, "anthropic-version": "2023-06-01" }
       : { authorization: `Bearer ${apiKey}` };
-  try {
-    const response = await (ctx.deps.modelCredentialFetch ?? fetch)(url, {
-      headers,
-      signal: AbortSignal.timeout(5_000),
-    });
-    return response.ok;
-  } catch {
-    return false;
-  }
+  const response = await (ctx.deps.modelCredentialFetch ?? publicFetch)(url, {
+    headers,
+    redirect: "error",
+    signal: AbortSignal.timeout(5_000),
+  });
+  return response.ok;
 }
 
 export async function getCustomProviders(ctx: ApiCtx): Promise<void> {
@@ -79,21 +75,22 @@ export async function putCustomProvider(ctx: ApiCtx): Promise<void> {
     id,
     name: body.name,
     protocol: body.protocol as CustomProviderProtocol,
-    baseUrl: body.baseUrl.trim().replace(/\/+$/, ""),
+    baseUrl: trimTrailingSlashes(body.baseUrl.trim()),
     models: Array.isArray(body.models) ? (body.models as CustomProviderSpec["models"]) : [],
   };
   const apiKey = typeof body.apiKey === "string" && body.apiKey.trim() ? body.apiKey.trim() : undefined;
   const shouldValidate = body.validate !== false && apiKey !== undefined;
-  if (shouldValidate && !(await validateKey(ctx, spec.protocol, spec.baseUrl, apiKey!))) {
-    return sendJson(ctx.res, 400, {
-      error: "invalid_api_key",
-      message: `${spec.baseUrl} rejected this API key (pass "validate": false to skip for endpoints without a models listing)`,
-    });
-  }
   try {
+    if (apiKey !== undefined) validateHeaderValue("apiKey", apiKey);
+    if (shouldValidate && !(await validateKey(ctx, spec.protocol, spec.baseUrl, apiKey!))) {
+      return sendJson(ctx.res, 400, {
+        error: "invalid_api_key",
+        message: `${spec.baseUrl} rejected this API key (pass "validate": false to skip for endpoints without a models listing)`,
+      });
+    }
     await ctx.deps.customProviders.upsert(spec, apiKey, authorized.id);
   } catch (e) {
-    return sendJson(ctx.res, 400, { error: "bad_request", message: (e as Error).message });
+    return sendJson(ctx.res, 400, { error: "bad_request", message: errMessage(e) });
   }
   await ctx.deps.refreshCustomProviders?.();
   audit(ctx.deps, {

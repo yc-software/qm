@@ -112,7 +112,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "PUT",
         path: "/v1/personas/:id/access",
         summary:
-          "{access:[{scopeId,role:'owner'|'write'|'read'}]} replaces who holds which role (owner; at least one owner stays)",
+          "{access:[{scopeId,role:'owner'|'write'|'read',pinned?}]} replaces who holds which role (owner; at least one owner stays). pinned:true on a channel: entry pins the persona there, so every conversation in that channel wears it and posts under its name and icon; a channel pins one persona at most",
       },
       {
         method: "POST",
@@ -519,6 +519,17 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
+    when: (v) => livePersonCapability(v.claims) && !v.claims.triggered,
+    routes: [
+      {
+        method: "GET|PUT|DELETE",
+        path: "/v1/memory/brain",
+        summary:
+          "the speaker's own memory brain, a gbrain they run: read it (with the principal id their gbrain must link), connect or change it ({url, clientId, label?}, never the client secret), or disconnect it; see the memory skill",
+      },
+    ],
+  },
+  {
     when: (v) => !!v.claims.memory?.orgWrite,
     routes: [
       {
@@ -556,7 +567,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST",
         path: "/v1/keychain/drops",
         summary:
-          "mint a single-use, expiring link for someone to enter a new credential into their keychain — follow the `secret-drop` skill",
+          "mint a single-use, expiring link for someone to enter a new credential into their keychain, or (body {memoryBrain, purpose}, for an org admin or the brain's own member) a memory brain's client secret, which QM's core keeps and never puts in a keychain — follow the `secret-drop` skill",
       },
     ],
   },
@@ -696,6 +707,11 @@ const FAMILIES: AgentApiFamily[] = [
         path: "/v1/admin/scopes/:scopeId/:resource",
         summary:
           "govern a scope: soul | security-posture | command-policy | egress | connectors | service-credentials | runtime ({ modelId })",
+      },
+      {
+        method: "PUT",
+        path: "/v1/admin/memory-registry/member-brains",
+        summary: "turn members' own memory brains on or off for the whole org ({enabled}); off stops every one at once",
       },
       {
         method: "GET|POST|PATCH|DELETE",

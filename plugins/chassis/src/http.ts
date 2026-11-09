@@ -138,11 +138,6 @@ export function sameOriginRequest(req: IncomingMessage, expectedOrigin: string):
   return site === "same-origin" && (originMatches || origin === undefined || origin === "null");
 }
 
-export function cookie(req: IncomingMessage, name: string): string | null {
-  const m = (req.headers.cookie ?? "").match(new RegExp(`(?:^|;\\s*)${name}=([^;]+)`));
-  return m ? decodeURIComponent(m[1] ?? "") || null : null;
-}
-
 export function escapeHtml(s: string): string {
   return s.replace(
     /[&<>"']/g,

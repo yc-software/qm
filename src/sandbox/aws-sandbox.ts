@@ -33,6 +33,7 @@ import {
   ephemeralCredLinkScript,
   type CredentialPathSpec,
 } from "../credentials/resident-paths.ts";
+import { trimTrailingSlashes } from "../util/text.ts";
 
 const HOME_DIR = "/root";
 const WORKSPACE_BASENAME = "workspace";
@@ -112,7 +113,7 @@ export function createAwsSandbox(opts: AwsSandboxOptions): Sandbox {
 
   const ingress = opts.ingressConnectorArns?.length ? opts.ingressConnectorArns : [DEFAULT_INGRESS(region)];
   const egress = opts.egressConnectorArns?.length ? opts.egressConnectorArns : [DEFAULT_EGRESS(region)];
-  const s3Prefix = (opts.s3Prefix ?? "sandbox-home").replace(/\/+$/, "");
+  const s3Prefix = trimTrailingSlashes(opts.s3Prefix ?? "sandbox-home");
   const agentPort = opts.agentPort ?? 8080;
   const defaultTimeoutSec = opts.defaultTimeoutSec ?? 600;
   const maximumDurationInSeconds = opts.maximumDurationInSeconds ?? 28_800;

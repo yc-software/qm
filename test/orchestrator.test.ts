@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { buildApp as buildAppRaw } from "./support/build-app.ts";
 import { mockHeldTurns } from "./support/mock-agent.ts";
 import { approvalCardId } from "../src/core/approval-id.ts";
-import { scopeId, type TurnRequest } from "../src/types.ts";
+import { scopeId, type Destination, type TurnRequest } from "../src/types.ts";
 import { TEST_CAPABILITY_SECRET, testConfig } from "./support/test-config.ts";
 import { runNowSettled, settle } from "./support/settle.ts";
 import { failedTurnError } from "./support/failed-turn.ts";
@@ -31,6 +31,12 @@ import { testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { isAgentReply, isHidden, isUserItem, messageTs, type Item, USER_ITEM_KINDS } from "../src/sessions/items.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
 import type { Agent } from "../src/agent/agent.ts";
+import { createAgentTools, type ToolContextRef } from "../src/agent/agent-tools.ts";
+import { brokerCredentialCall } from "../src/api/credential-broker.ts";
+import { principalDestination } from "../src/reach/reach.ts";
+import { installPrincipalLinks } from "../src/directory/person.ts";
+import { parseMemoryProviderConfig } from "../src/memory/provider-config.ts";
+import { startMcpTestServer } from "./support/mcp-test-server.ts";
 
 const automationOrigin = (request?: { origin?: TurnOrigin }) =>
   request?.origin?.kind === "automation" ? request.origin : undefined;
@@ -491,6 +497,194 @@ test("an attested connector is offered and called only in the speaker's own DM, 
   assert.deepEqual(called, { "personal:U1": "sent", "channel:C1": "refused", "group:G1": "refused" });
 });
 
+test("a scheduled turn attests its owner only when the answer goes back to the owner alone", async (t) => {
+  const knowledge = await startMcpTestServer(t, {
+    tools: ["search_knowledge", "write_knowledge"].map((name) => ({ name, inputSchema: { type: "object" as const } })),
+    clients: { ro: "x", rw: "y" },
+  });
+  const memoryProviderConfig = parseMemoryProviderConfig(
+    JSON.stringify({
+      providers: [
+        {
+          id: "knowledge",
+          type: "mcp",
+          url: knowledge.url,
+          attestActor: true,
+          read: { tool: "search_knowledge", clientIdEnv: "RO_ID", clientSecretEnv: "RO_SECRET" },
+          write: { tool: "write_knowledge", clientIdEnv: "RW_ID", clientSecretEnv: "RW_SECRET" },
+        },
+      ],
+      routes: [
+        { provider: "default", scopes: ["personal"], capture: "automatic" },
+        { provider: "knowledge", scopes: ["personal"], capture: "explicit", manage: false },
+      ],
+    }),
+    { RO_ID: "ro", RO_SECRET: "x", RW_ID: "rw", RW_SECRET: "y" },
+  );
+  let turn: { offered: string[]; called: string; calledAny: string } | undefined;
+  const mock = createMockAgent();
+  const agent: Agent = {
+    ...mock,
+    runTurn: async (input) => {
+      const call = (name: string) =>
+        input.tools.callMcpTool(name, { operation: "search" }).then(
+          () => "answered",
+          (e: Error) => (/answers only to them/.test(e.message) ? "refused" : "sent"),
+        );
+      turn = {
+        offered: (input.mcpTools ?? []).map((tool) => tool.name),
+        called: await call("records"),
+        calledAny: await call("shared"),
+      };
+      await input.tools.memoryAdd(["the launch moved to Friday"]);
+      await input.tools.execute("echo broker", { credentials: ["attested-api", "shared-api"] });
+      return mock.runTurn(input);
+    },
+  };
+  const config = testConfig({
+    dataDir: mkdtempSync(join(tmpdir(), "ap-")),
+    signingSecret: "test-secret",
+    apiBaseUrl: "https://core.example.com",
+    memoryProviderConfig,
+  });
+  config.spritesSandbox.namePrefix ??= `test-${hashId([config.dataDir]).slice(0, 10)}`;
+  const { app, sandbox, serviceCreds, acl, deliveries, identity, mcpServers, mcpToolService } = buildApp(config, {
+    agent,
+  });
+  for (const [id, attestActor] of [
+    ["records", true],
+    ["wiki", false],
+    ["shared", true],
+  ] as const) {
+    await mcpServers.put({
+      id,
+      name: id,
+      url: `https://127.0.0.1:9/${id}/mcp`,
+      auth: "bearer",
+      bearerToken: "t",
+      credentialScope: "shared",
+      catalog: true,
+      ...(attestActor ? { attestActor } : {}),
+      ...(id === "shared" ? { attestAudience: "any" as const } : {}),
+      readOnly: true,
+      enabled: true,
+      updatedAt: Date.now(),
+      updatedBy: "admin",
+    });
+  }
+  await mcpToolService.refresh();
+  const org = scopeId("org", "default-org");
+  for (const [slug, injection] of [
+    ["attested-api", { actor: true }],
+    ["shared-api", { actor: true, audience: "any" as const }],
+  ] as const) {
+    await serviceCreds.setServiceCredential(org, {
+      slug,
+      name: slug,
+      secret: "synthetic",
+      host: "api.example.com",
+      injection,
+    });
+    await grantCred(acl, org, slug);
+  }
+  let credentialToken: string | undefined;
+  const run = sandbox.run.bind(sandbox);
+  sandbox.run = (handle, command, opts) => {
+    if (command === "echo broker") credentialToken = handle.env?.AGENT_CREDENTIAL_TOKEN;
+    return run(handle, command, opts);
+  };
+  const idempotency = createIdempotencyStore(testMap());
+  const fire = async (
+    name: string,
+    destination: Destination,
+    ownerScopeId = scopeId("personal", "U1"),
+    surface = "cron",
+  ) => {
+    turn = undefined;
+    credentialToken = undefined;
+    const before = knowledge.requests.length;
+    const out = await runTrigger(
+      { deliveries, idempotency, identity, run: (req) => app.turn(req) },
+      {
+        owner: "U1",
+        ownerScopeId,
+        input: "how is the launch going?",
+        fireKey: `${surface}:${name}:1`,
+        surface,
+        destination,
+      },
+    );
+    assert.equal(out.status, "ok", out.note);
+    const claims = (await verifyCapabilityToken(credentialToken!, TEST_CAPABILITY_SECRET))!;
+    const broker = async (credential: string) => {
+      const res = await brokerCredentialCall({
+        claims,
+        body: { credential, url: "https://api.example.com/v1/me" },
+        orgScopeId: org,
+        reader: serviceCreds,
+        fetchImpl: async () => ({ status: 200, text: async () => "{}" }),
+      });
+      return (res.json as { error?: string }).error ?? res.status;
+    };
+    return {
+      ...turn!,
+      broker: await broker("attested-api"),
+      brokerAny: await broker("shared-api"),
+      memory: [
+        ...new Set(
+          knowledge.requests
+            .slice(before)
+            .filter((request) => request.rpc === "tools/call")
+            .map((request) => request.actor),
+        ),
+      ],
+    };
+  };
+  const refused = {
+    offered: ["shared", "wiki"],
+    called: "refused",
+    calledAny: "sent",
+    broker: "private_only",
+    brokerAny: 200,
+    memory: [],
+  };
+  const attested = {
+    offered: ["records", "shared", "wiki"],
+    called: "sent",
+    calledAny: "sent",
+    broker: 200,
+    brokerAny: 200,
+    memory: ["U1"],
+  };
+  installPrincipalLinks({ canonical: (key) => (key === "u1@example.test" ? "U1" : undefined), aliases: () => [] });
+  t.after(() => installPrincipalLinks(null));
+  assert.deepEqual(
+    {
+      dmToTeammate: await fire("dm-to-teammate", principalDestination("U2", "U1")),
+      personalToChannel: await fire("personal-to-channel", {
+        type: "slack",
+        target: "C1",
+        audienceScopeId: scopeId("channel", "C1"),
+      }),
+      channelToOwner: await fire("channel-to-owner", principalDestination("U1", "U1"), scopeId("channel", "C1")),
+      dmToOwner: await fire("dm-to-owner", principalDestination("U1", "U1")),
+      dmToOwnerAlias: await fire("dm-to-owner-alias", {
+        ...principalDestination("U1", "U1"),
+        audienceScopeId: scopeId("personal", "u1@example.test"),
+      }),
+      dmWebhookToTeammate: await fire("dm-webhook-to-teammate", principalDestination("U2", "U1"), undefined, "webhook"),
+    },
+    {
+      dmToTeammate: refused,
+      personalToChannel: refused,
+      channelToOwner: refused,
+      dmToOwner: attested,
+      dmToOwnerAlias: attested,
+      dmWebhookToTeammate: refused,
+    },
+  );
+});
+
 test("a connector set to attest in any audience serves every person's channel turn, including unprompted and automated ones, but not bot turns", async () => {
   const offered: string[][] = [];
   const called: string[] = [];
@@ -689,6 +883,58 @@ test("live bot attestation reaches control, OAuth, and egress capabilities", asy
     assert.equal(claims?.liveActor, true);
     assert.deepEqual(claims?.members, [{ id: "B-LEGACY", type: "internal" }]);
   }
+});
+
+test("a Slack bot's message in a person's thread can neither cancel nor resume the person's goal", async () => {
+  const base = createMockAgent();
+  const agent: Agent = {
+    ...base,
+    async runTurn(turn) {
+      const ref: ToolContextRef = {
+        current: turn.tools,
+        scopeLabel: turn.scopeLabel,
+        emit: turn.emit,
+        goal: turn.goal ?? null,
+        ...(turn.saveGoal ? { saveGoal: turn.saveGoal } : {}),
+      };
+      const goal = createAgentTools(ref).find((tool) => tool.name === "goal")!.execute as unknown as (
+        id: string,
+        input: unknown,
+      ) => Promise<unknown>;
+      await goal(
+        `goal-${turn.runId}`,
+        turn.input.includes("grind")
+          ? { action: "create", objective: "grind on the release notes", floor: { minTurns: 40 } }
+          : { action: "update", status: turn.goal?.status === "paused" ? "resume" : "cancel", note: "the bot asked" },
+      );
+      return { reply: "done", modelCalls: 1 };
+    },
+  };
+  const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "ap-")) });
+  config.spritesSandbox.namePrefix ??= `test-${hashId([config.dataDir]).slice(0, 10)}`;
+  const built = buildApp(config, { agent });
+  const bot = { externalId: "B1", displayName: "Release bot", isBot: true };
+  const fromBot = (text: string) =>
+    channel(text, {
+      actor: bot,
+      botActor: true,
+      origin: { kind: "human" },
+      conversation: { kind: "channel", threadRef: "ch:C1:t1", channelRef: "C1", audience: [bot] },
+    });
+  assert.equal(
+    (await built.app.turn(channel("grind on the release notes", { origin: { kind: "human" } }))).status,
+    "ok",
+  );
+  const session = (await built.sessions.getByThread("ch:C1:t1"))!;
+  const goalStatus = async () => (await built.sessions.goals([session.id])).get(session.id)?.status;
+  assert.equal(await goalStatus(), "active");
+  assert.equal((await built.app.turn(fromBot("cancel the goal"))).status, "ok");
+  const afterCancel = await goalStatus();
+  const paused = (await built.sessions.goals([session.id])).get(session.id)!;
+  paused.status = "paused";
+  await built.sessions.setGoal({ sessionId: session.id }, paused);
+  assert.equal((await built.app.turn(fromBot("resume the goal"))).status, "ok");
+  assert.deepEqual({ afterCancel, afterResume: await goalStatus() }, { afterCancel: "active", afterResume: "paused" });
 });
 
 test("Composio backend access is announced without delivering the project key", async () => {

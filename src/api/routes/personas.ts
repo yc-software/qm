@@ -1,6 +1,7 @@
 import { sendJson } from "../http.ts";
 import { swallowAs } from "../../util/errors.ts";
 import { isObj } from "./shared.ts";
+import { livePersonCapability } from "../artifact-share.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
 import { KeychainError } from "../../credentials/keychain.ts";
 import type { PersonaResult } from "../../personas/persona-service.ts";
@@ -156,7 +157,7 @@ async function setPersonaAccess(ctx: ApiCtx): Promise<void> {
 }
 
 function liveOwnerTurn(ctx: ApiCtx): boolean {
-  if (!ctx.capability || ctx.capability.liveAuthor === true || ctx.capability.liveActor === true) return true;
+  if (!ctx.capability || livePersonCapability(ctx.capability)) return true;
   sendJson(ctx.res, 403, {
     error: "forbidden",
     message: "credentials can only be attached or detached on a turn the owner sent themself",
@@ -209,23 +210,30 @@ async function setSessionPersona(ctx: ApiCtx): Promise<void> {
 
 export const personaRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...withActor("query.principalId", [
-    { method: "GET", path: "/v1/personas", auth: "either", handle: listPersonas },
-    { method: "GET", path: "/v1/personas/:id", auth: "either", handle: getPersona },
-    { method: "GET", path: "/v1/personas/:id/versions", auth: "either", handle: listPersonaVersions },
+    { method: "GET", path: "/v1/personas", browser: true, auth: "either", handle: listPersonas },
+    { method: "GET", path: "/v1/personas/:id", browser: true, auth: "either", handle: getPersona },
+    { method: "GET", path: "/v1/personas/:id/versions", browser: true, auth: "either", handle: listPersonaVersions },
   ]),
   ...withActor("body.principalId", [
-    { method: "POST", path: "/v1/personas", auth: "either", handle: createPersona },
-    { method: "PATCH", path: "/v1/personas/:id", auth: "either", handle: updatePersona },
-    { method: "DELETE", path: "/v1/personas/:id", auth: "either", handle: deletePersona },
+    { method: "POST", path: "/v1/personas", browser: true, auth: "either", handle: createPersona },
+    { method: "PATCH", path: "/v1/personas/:id", browser: true, auth: "either", handle: updatePersona },
+    { method: "DELETE", path: "/v1/personas/:id", browser: true, auth: "either", handle: deletePersona },
     {
       method: "POST",
       path: "/v1/personas/:id/versions/:version/restore",
+      browser: true,
       auth: "either",
       handle: restorePersonaVersion,
     },
-    { method: "PUT", path: "/v1/personas/:id/access", auth: "either", handle: setPersonaAccess },
-    { method: "POST", path: "/v1/personas/:id/credentials", auth: "either", handle: attachCredential },
-    { method: "DELETE", path: "/v1/personas/:id/credentials/:grantId", auth: "either", handle: detachCredential },
-    { method: "PUT", path: "/v1/sessions/:id/persona", auth: "either", handle: setSessionPersona },
+    { method: "PUT", path: "/v1/personas/:id/access", browser: true, auth: "either", handle: setPersonaAccess },
+    { method: "POST", path: "/v1/personas/:id/credentials", browser: true, auth: "either", handle: attachCredential },
+    {
+      method: "DELETE",
+      path: "/v1/personas/:id/credentials/:grantId",
+      browser: true,
+      auth: "either",
+      handle: detachCredential,
+    },
+    { method: "PUT", path: "/v1/sessions/:id/persona", browser: true, auth: "either", handle: setSessionPersona },
   ]),
 ];
