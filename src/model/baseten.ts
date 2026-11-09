@@ -1,8 +1,7 @@
 import { createTtlRefresh } from "../util/async.ts";
 import { swallow } from "../util/errors.ts";
-import { readBoundedText } from "../util/bytes.ts";
 import { validateCustomProviderSpec, type CustomProviderSpec } from "./custom-providers.ts";
-import { MAX_CATALOG_BYTES } from "./model-catalog.ts";
+import { fetchCatalogData, perMillion, positiveInteger } from "./model-catalog.ts";
 
 const BASETEN_PROVIDER_ID = "baseten";
 const BASETEN_BASE_URL = "https://inference.baseten.co/v1";
@@ -10,22 +9,11 @@ const CATALOG_TTL_MS = 5 * 60_000;
 
 type BasetenModel = CustomProviderSpec["models"][number];
 
-function positiveInteger(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
-}
-
-function perMillion(value: unknown): number | undefined {
-  const parsed = typeof value === "string" || typeof value === "number" ? Number(value) : Number.NaN;
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed * 1_000_000 : undefined;
-}
-
 function strings(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
 
-export function basetenCatalogModels(body: unknown): BasetenModel[] {
-  const data = (body as { data?: unknown } | null)?.data;
-  if (!Array.isArray(data)) throw new Error("Baseten model list is invalid");
+export function basetenCatalogModels(data: readonly unknown[]): BasetenModel[] {
   return data.flatMap((candidate): BasetenModel[] => {
     if (!candidate || typeof candidate !== "object") return [];
     const raw = candidate as Record<string, unknown>;
@@ -65,17 +53,11 @@ export function createBasetenCatalog(apiKey: string, fetcher: typeof fetch = fet
   let provider: CustomProviderSpec | undefined;
   const refresh = createTtlRefresh(CATALOG_TTL_MS, async () => {
     try {
-      const response = await fetcher(`${BASETEN_BASE_URL}/models`, {
-        headers: { authorization: `Bearer ${apiKey}` },
-        signal: AbortSignal.timeout(5_000),
-      });
-      if (!response.ok) throw new Error(`Baseten model list returned ${response.status}`);
-      const text = await readBoundedText(
-        response,
-        MAX_CATALOG_BYTES,
-        () => new Error("Baseten model list is too large"),
+      const models = basetenCatalogModels(
+        await fetchCatalogData(fetcher, `${BASETEN_BASE_URL}/models`, "Baseten model list", {
+          authorization: `Bearer ${apiKey}`,
+        }),
       );
-      const models = basetenCatalogModels(JSON.parse(text));
       const spec = (kept: BasetenModel[]): CustomProviderSpec => ({
         id: BASETEN_PROVIDER_ID,
         name: "Baseten",

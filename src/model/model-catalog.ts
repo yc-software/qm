@@ -19,7 +19,7 @@ export interface ModelCatalogEntry {
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models?supported_parameters=tools&sort=most-popular";
 const OPENROUTER_MODEL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._:+-]*$/;
 
-export const MAX_CATALOG_BYTES = 2 * 1024 * 1024;
+const MAX_CATALOG_BYTES = 2 * 1024 * 1024;
 const MAX_CATALOG_MODELS = 1_000;
 const CACHE_TTL_MS = 5 * 60_000;
 const FAILURE_TTL_MS = 30_000;
@@ -58,23 +58,50 @@ function finiteNumber(value: unknown): number | undefined {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
 }
 
+export function positiveInteger(value: unknown): number | undefined {
+  const parsed = finiteNumber(value);
+  return parsed !== undefined && Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+export function perMillion(value: unknown): number | undefined {
+  const parsed = finiteNumber(value);
+  return parsed !== undefined && Number.isFinite(parsed * 1_000_000) ? parsed * 1_000_000 : undefined;
+}
+
+export async function fetchCatalogData(
+  fetcher: typeof fetch,
+  url: string,
+  label: string,
+  headers?: Record<string, string>,
+): Promise<unknown[]> {
+  const response = await fetcher(url, { ...(headers ? { headers } : {}), signal: AbortSignal.timeout(5_000) });
+  if (!response.ok) throw new Error(`${label} returned ${response.status}`);
+  const body = JSON.parse(
+    await readBoundedText(response, MAX_CATALOG_BYTES, () => new Error(`${label} is too large`)),
+  ) as {
+    data?: unknown;
+  } | null;
+  if (!Array.isArray(body?.data)) throw new Error(`${label} is invalid`);
+  return body.data;
+}
+
 function parseOpenRouterModel(candidate: unknown): ModelCatalogEntry | undefined {
   if (!candidate || typeof candidate !== "object") return undefined;
   const raw = candidate as Record<string, unknown>;
   const id = raw.id;
   const name = raw.name;
   const supportedParameters = raw.supported_parameters;
-  const contextWindow = finiteNumber(raw.context_length);
+  const contextWindow = positiveInteger(raw.context_length);
   const topProvider = raw.top_provider;
   const maxTokens =
     topProvider && typeof topProvider === "object"
-      ? finiteNumber((topProvider as Record<string, unknown>).max_completion_tokens)
+      ? positiveInteger((topProvider as Record<string, unknown>).max_completion_tokens)
       : undefined;
   const pricing = raw.pricing;
-  const promptPrice =
-    pricing && typeof pricing === "object" ? finiteNumber((pricing as Record<string, unknown>).prompt) : undefined;
-  const completionPrice =
-    pricing && typeof pricing === "object" ? finiteNumber((pricing as Record<string, unknown>).completion) : undefined;
+  const inputPrice =
+    pricing && typeof pricing === "object" ? perMillion((pricing as Record<string, unknown>).prompt) : undefined;
+  const outputPrice =
+    pricing && typeof pricing === "object" ? perMillion((pricing as Record<string, unknown>).completion) : undefined;
   const architecture = raw.architecture;
   const inputModalities =
     architecture && typeof architecture === "object"
@@ -92,20 +119,12 @@ function parseOpenRouterModel(candidate: unknown): ModelCatalogEntry | undefined
   )
     return undefined;
   const knownOpenRouter = resolveModel(id)?.provider === "openrouter";
-  const inputPrice = promptPrice === undefined ? undefined : promptPrice * 1_000_000;
-  const outputPrice = completionPrice === undefined ? undefined : completionPrice * 1_000_000;
   if (
     contextWindow === undefined ||
-    !Number.isSafeInteger(contextWindow) ||
-    contextWindow <= 0 ||
     maxTokens === undefined ||
-    !Number.isSafeInteger(maxTokens) ||
-    maxTokens <= 0 ||
     maxTokens > contextWindow ||
     inputPrice === undefined ||
-    !Number.isFinite(inputPrice) ||
     outputPrice === undefined ||
-    !Number.isFinite(outputPrice) ||
     !Array.isArray(inputModalities) ||
     !inputModalities.includes("text")
   )
@@ -126,13 +145,8 @@ function parseOpenRouterModel(candidate: unknown): ModelCatalogEntry | undefined
 }
 
 async function fetchOpenRouterModels(fetcher: typeof fetch): Promise<ModelCatalogEntry[]> {
-  const response = await fetcher(OPENROUTER_MODELS_URL, { signal: AbortSignal.timeout(5_000) });
-  if (!response.ok) throw new Error(`OpenRouter catalog returned ${response.status}`);
-  const body = JSON.parse(
-    await readBoundedText(response, MAX_CATALOG_BYTES, () => new Error("OpenRouter catalog is too large")),
-  ) as { data?: unknown };
-  if (!Array.isArray(body.data)) throw new Error("OpenRouter catalog is invalid");
-  return body.data.slice(0, MAX_CATALOG_MODELS).flatMap((candidate) => {
+  const data = await fetchCatalogData(fetcher, OPENROUTER_MODELS_URL, "OpenRouter catalog");
+  return data.slice(0, MAX_CATALOG_MODELS).flatMap((candidate) => {
     const model = parseOpenRouterModel(candidate);
     return model ? [model] : [];
   });

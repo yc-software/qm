@@ -14,7 +14,14 @@ import {
   writeState,
 } from "../lib/lease.ts";
 import { slotPorts, slotTokens, poolStore } from "../lib/pool.ts";
-import { assembleEnv, completeDevSecuritySecrets, currentBranch, gitHead, seedEnvFromMain } from "../lib/envctx.ts";
+import {
+  assembleEnv,
+  completeDevSecuritySecrets,
+  currentBranch,
+  gitHead,
+  liveTurnsKey,
+  seedEnvFromMain,
+} from "../lib/envctx.ts";
 import { ensureDeps } from "../lib/deps.ts";
 import { destroyLocalDevSandboxes, resolveSandbox, type SandboxResolution } from "../lib/sandbox.ts";
 import { adminGrantCount, checkPostgres, ensureLocalPostgres, firstAdminPrincipal } from "../lib/postgres.ts";
@@ -313,13 +320,7 @@ async function assembleAndPrepare(spec: BootSpec): Promise<SpecInputs> {
     log,
   });
   for (const w of assembled.warnings) phase("env", "warn", w);
-  phase(
-    "env",
-    "ok",
-    assembled.anthropicKeySource
-      ? `live turns (anthropic key from ${assembled.anthropicKeySource})`
-      : `live turns (${assembled.env.OPENAI_API_KEY ? "OPENAI_API_KEY" : "BASETEN_API_KEY"})`,
-  );
+  phase("env", "ok", `live turns (${liveTurnsKey(assembled)})`);
 
   phase("deps", "start");
   await ensureDeps(worktree, { web: spec.web, webUiBasePath: spec.callerEnv.DEV_INSTANCE_WEB_UI_BASE || "/" }, log);

@@ -48,7 +48,7 @@ const CATALOG = {
 afterEach(() => setCustomProviders([]));
 
 test("Baseten's model list maps to tool-capable models with per-million prices", () => {
-  const models = basetenCatalogModels(CATALOG);
+  const models = basetenCatalogModels(CATALOG.data);
   assert.deepEqual(
     models.map((m) => m.id),
     ["zai-org/GLM-5.3", "nvidia/Nemotron-VL"],
@@ -62,9 +62,12 @@ test("Baseten's model list maps to tool-capable models with per-million prices",
   assert.ok(Math.abs((glm?.cacheRead ?? 0) - 0.11) < 1e-9);
   assert.equal(vl?.image, true);
   assert.equal(vl?.maxTokens, 32_768);
-  assert.throws(() => basetenCatalogModels({ error: "nope" }), /invalid/);
-  const unpriced = { data: [{ ...CATALOG.data[1], pricing: {} }] };
-  assert.deepEqual(basetenCatalogModels(unpriced), []);
+  assert.deepEqual(basetenCatalogModels([{ ...CATALOG.data[1], pricing: {} }]), []);
+});
+
+test("a Baseten reply without a model list offers no Baseten models", async () => {
+  const fetcher = (async () => Response.json({ error: "nope" })) as unknown as typeof fetch;
+  assert.deepEqual(await createBasetenCatalog("bt-test-key", fetcher).providers([]), []);
 });
 
 test("the key goes only to Baseten's own endpoint and the last good list survives an outage", async () => {
@@ -102,7 +105,7 @@ test("a model whose output limit nears or fills its window still gets a quarter 
       protocol: "openai",
       baseUrl: "https://inference.baseten.co/v1",
       models: [
-        ...basetenCatalogModels(CATALOG),
+        ...basetenCatalogModels(CATALOG.data),
         { id: "almost-full", contextWindow: 100_000, maxTokens: 99_999 },
         { id: "half-output", contextWindow: 100_000, maxTokens: 50_000 },
         { id: "small-output", contextWindow: 100_000, maxTokens: 20_000 },
