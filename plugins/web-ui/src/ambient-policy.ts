@@ -3,6 +3,7 @@ import { api } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { fieldSelect } from "./ui";
 import { tip } from "./tooltip";
+import { reportHandledError } from "./browser-errors";
 
 const BOT_MODES = ["ignore", "rollup", "action", "user"] as const;
 type BotMode = (typeof BOT_MODES)[number];
@@ -125,7 +126,7 @@ async function save(): Promise<void> {
     ambientPolicyState.notice = "Saved.";
     ambientPolicyState.noticeKind = "saved";
   } catch (e) {
-    if (seq !== loadSeq) return;
+    if (seq !== loadSeq) return reportHandledError("ambient_policy_save", e);
     ambientPolicyState.notice = errMessage(e, "Couldn't save. Try again.");
     ambientPolicyState.noticeKind = "error";
   } finally {
