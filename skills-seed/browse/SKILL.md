@@ -69,7 +69,8 @@ becoming the default):
 - Managed model access: core supplies `BROWSE_LAB_MODEL`, `BROWSE_LAB_MODEL_TOKEN`
   and `BROWSE_LAB_BASE_URL` automatically. All browser model calls use this route;
   never request a separate browser model key. The browser runs on the session's own
-  model and account, so it bills whatever the turn bills. Claude subscription access is
+  model and account, so it bills whatever the turn bills and counts toward the
+  same spend cap; a 429 naming the spend limit means the cap is reached, so stop and tell the person. Claude subscription access is
   unsupported. If model access is missing or fails, report the error (it names the model
   and the account it billed) and ask the person to correct their AI access in Settings;
   never switch accounts or models yourself.

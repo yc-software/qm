@@ -52,6 +52,8 @@ export function parseSpendLimit(body: unknown): { value: SpendLimit | null } | {
   return { value: limit };
 }
 
+export type SpendLimits = ReturnType<typeof createSpendLimits>;
+
 export function createSpendLimits(deps: SpendLimitDeps) {
   const now = deps.now ?? Date.now;
   const cacheMs = deps.cacheMs ?? CACHE_MS;
@@ -125,4 +127,9 @@ export function spendLimitRefusal(s: SpendLimitStatus): string {
 export function spendLimitNote(s: SpendLimitStatus): string {
   const whose = s.orgDefault ? "the org's per-person default" : "this scope's own limit";
   return `Spend cap here (${whose}): ${usageParts(s).join(", ")}, UTC. At the cap, new turns here are refused until it resets.`;
+}
+
+export function spendLimitBlock(s: SpendLimitStatus, what: string): string {
+  const resets = s.over === "daily" ? "at midnight UTC" : "on the 1st (UTC)";
+  return `${what} refused: this scope has reached its QM spend limit (${usageParts(s).join(", ")}) and resets ${resets}. Tell the person; an admin can raise the limit.`;
 }

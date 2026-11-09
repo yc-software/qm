@@ -1,7 +1,8 @@
 import { SANDBOX_MODEL_AUD } from "../../auth/capability-token.ts";
 import { gatewayActorId, gatewayKey, gatewayRoot, modelGatewayHeaders } from "../../model/provider-endpoints.ts";
 import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
-import { reportFailure } from "../../util/errors.ts";
+import { reportFailure, reportFailureAs } from "../../util/errors.ts";
+import { spendLimitBlock } from "../../ratelimit/spend-limits.ts";
 import { SANDBOX_MODEL_PREFIX } from "../contract.ts";
 import { sendJson } from "../http.ts";
 import { relayStream } from "../../../plugins/chassis/src/http.ts";
@@ -32,9 +33,12 @@ async function denied(ctx: ApiCtx): Promise<boolean> {
     sendJson(res, 503, { error: { message: "no model gateway is configured" } });
     return true;
   }
-  const [posture, budget] = await Promise.all([
+  const [posture, budget, spend] = await Promise.all([
     deps.config?.getSecurityPostureDurable(capability.scopeId),
     deps.budget?.check(capability.actorId),
+    deps.spendLimits
+      ?.status(capability.scopeId)
+      .catch(reportFailureAs("sandbox model: spend limit", null, capability.scopeId)),
   ]);
   if (posture === "strict") {
     sendJson(res, 403, { error: { message: "model requests are disabled in strict posture" } });
@@ -42,6 +46,10 @@ async function denied(ctx: ApiCtx): Promise<boolean> {
   }
   if (budget && !budget.allowed) {
     sendJson(res, 429, { error: { message: "your model budget for this window is spent" } });
+    return true;
+  }
+  if (spend?.over) {
+    sendJson(res, 429, { error: { message: spendLimitBlock(spend, "Model gateway request") } });
     return true;
   }
   return false;

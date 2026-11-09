@@ -2,9 +2,12 @@ import { loadPersonalModelAuth } from "../../core/individual-auth-routing.ts";
 import { BrowserCompletionError, completeBrowserRequest } from "../../model/browser-completion.ts";
 import { BROWSER_MODEL_AUD } from "../../auth/capability-token.ts";
 import { routeLabel } from "../../model/model-route.ts";
-import { errMessage, reportFailure } from "../../util/errors.ts";
+import { errMessage, reportFailure, reportFailureAs } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
+import { spendLimitBlock } from "../../ratelimit/spend-limits.ts";
 import type { ApiCtx, Route } from "./route.ts";
+
+const BROWSER_MODEL_STEP = -2;
 
 const REQUEST_FIELDS = new Set([
   "model",
@@ -41,6 +44,10 @@ async function browserModel(ctx: ApiCtx): Promise<void> {
   )
     return sendJson(res, 400, { error: "invalid browser model request" });
   if (!deps.modelRoutes) return sendJson(res, 503, { error: "browser model unavailable" });
+  const spend = await deps.spendLimits
+    ?.status(capability.scopeId)
+    .catch(reportFailureAs("browser model: spend limit", null, capability.scopeId));
+  if (spend?.over) return sendJson(res, 429, { error: spendLimitBlock(spend, "Browser model request") });
   const controller = new AbortController();
   const abort = () => controller.abort();
   res.once("close", abort);
@@ -70,7 +77,25 @@ async function browserModel(ctx: ApiCtx): Promise<void> {
     sendJson(
       res,
       200,
-      await completeBrowserRequest(route, input, AbortSignal.any([controller.signal, AbortSignal.timeout(120_000)])),
+      await completeBrowserRequest(
+        route,
+        input,
+        AbortSignal.any([controller.signal, AbortSignal.timeout(120_000)]),
+        async (usage) => {
+          const sessionId = capability.sessionId;
+          if (!sessionId || !deps.sessions) return;
+          await deps.sessions
+            .recordLlmRequest(sessionId, {
+              turnSeq: null,
+              step: BROWSER_MODEL_STEP,
+              model: route.modelId,
+              scopeLabel: capability.scopeId,
+              truncated: false,
+              usage,
+            })
+            .catch(reportFailureAs("browser model: usage record", undefined, capability.scopeId));
+        },
+      ),
     );
   } catch (error) {
     if (error instanceof BrowserCompletionError) return sendJson(res, error.status, { error: error.message });

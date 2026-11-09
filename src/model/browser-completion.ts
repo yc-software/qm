@@ -1,6 +1,7 @@
 import { Type } from "typebox";
 import type { Context, ImageContent, TextContent } from "@earendil-works/pi-ai";
-import { buildModelRuntime, zeroUsage } from "./model-runtime.ts";
+import { buildModelRuntime, piUsageToCallUsage, zeroUsage } from "./model-runtime.ts";
+import type { LlmCallUsage } from "../sessions/session-store.ts";
 import { routeLabel, type ModelRoute } from "./model-route.ts";
 
 function object(value: unknown): Record<string, unknown> | undefined {
@@ -15,7 +16,12 @@ export class BrowserCompletionError extends Error {
   }
 }
 
-export async function completeBrowserRequest(route: ModelRoute, body: Record<string, unknown>, signal: AbortSignal) {
+export async function completeBrowserRequest(
+  route: ModelRoute,
+  body: Record<string, unknown>,
+  signal: AbortSignal,
+  onUsage?: (usage: LlmCallUsage | null) => Promise<void>,
+) {
   const { model } = route;
   if (body.tools || body.tool_choice || body.parallel_tool_calls || !Array.isArray(body.messages))
     throw new BrowserCompletionError("Unsupported browser completion request");
@@ -95,6 +101,7 @@ export async function completeBrowserRequest(route: ModelRoute, body: Record<str
         }
       : undefined,
   });
+  await onUsage?.(piUsageToCallUsage(result.usage, model, false, undefined));
   if (result.stopReason === "error" || result.stopReason === "aborted" || result.stopReason === "length")
     throw new BrowserCompletionError(
       `${routeLabel(route)} could not complete the browser request: ${result.errorMessage ?? result.stopReason}`,

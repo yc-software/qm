@@ -133,6 +133,29 @@ test("browser requests run on the person's own Claude key, as their session does
   assert.equal(calls.length, 1);
 });
 
+test("browser model calls count toward the person's spend cap and stop once it is reached", async (t) => {
+  const { built, calls, post } = await browserEndpoint(t, () => anthropicToolResult({ done: true }));
+  await built.config.setPersonalModelAuth("U1", true, "anthropic");
+  await built.userModelCredentials.setApiKey("U1", "anthropic", "personal-claude-key");
+  const claims = { browserAccount: "anthropic" as const, browserModel: "claude-opus-5" };
+
+  assert.equal((await post(claims, structuredRequest)).status, 200);
+  const [recorded] = await built.sessions.listLlmRequests("browser-session");
+  assert.equal(recorded?.scopeLabel, "personal:U1");
+  assert.equal(recorded?.model, "claude-opus-5");
+  assert.equal(recorded?.usage?.input, 10);
+  assert.ok((recorded?.usage?.costUsd ?? 0) > 0);
+
+  await built.config.setSpendLimit("org:default-org", { dailyUsd: 0 });
+  const capped = await post(claims, structuredRequest);
+  assert.equal(capped.status, 429);
+  assert.match(
+    ((await capped.json()) as { error: string }).error,
+    /Browser model request refused: this scope has reached its QM spend limit .*midnight UTC/,
+  );
+  assert.equal(calls.length, 1);
+});
+
 test("a failed browser request names the model and the account it billed", async (t) => {
   const { built, post } = await browserEndpoint(
     t,

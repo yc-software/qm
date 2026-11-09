@@ -43,6 +43,7 @@ import type { CredentialUsageSink } from "../../admin/credential-usage-sink.ts";
 import type { AuditLog } from "../../audit/audit-log.ts";
 import type { SecurityScreener } from "../../security/security-screener.ts";
 import type { BudgetTracker } from "../../ratelimit/budget.ts";
+import type { SpendLimits } from "../../ratelimit/spend-limits.ts";
 import type { ControlService } from "../../api/control-service.ts";
 import type { Agent, RuntimeChoice, SessionRoute } from "../../agent/agent.ts";
 import type { AdminService } from "../../admin/admin-service.ts";
@@ -124,6 +125,7 @@ export interface OrchestratorDeps {
   advisoryLock: AdvisoryLock;
   auditLog: AuditLog;
   budget?: BudgetTracker;
+  spendLimits?: SpendLimits;
   maxContextTokens?: number;
   execTimeoutMs: number;
   execTimeoutCeilingMs: number;

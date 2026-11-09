@@ -77,6 +77,7 @@ import {
   baseModelProviders,
   companySubscriptionAuth,
   configuredModel,
+  orgId,
   providerKeysPresent,
   type Config,
 } from "./config.ts";
@@ -134,6 +135,7 @@ import { createPostgresAuditLog } from "./admin/postgres-audit-log.ts";
 import { createPostgresAppPageViewLog, DEPLOYMENT_TABLES, type AppPageViewLog } from "./deploy/page-views.ts";
 import type { BudgetTracker } from "./ratelimit/budget.ts";
 import { BUDGET_MIGRATIONS, createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
+import { createSpendLimits, type SpendLimits } from "./ratelimit/spend-limits.ts";
 import { createCronStore, DROP_RUN_AS_MIGRATION, type CronStore } from "./cron/cron-store.ts";
 import { PUBLISHED_ORIGIN_UPGRADE, PUBLISHED_ORIGIN_COMPLETE } from "./surfaces/published-upgrade.ts";
 import { RETIRED_ORIGIN_SWEEP_MIGRATION } from "./surfaces/origin-migration.ts";
@@ -503,6 +505,7 @@ export interface BuiltApp {
   loopIngress: LoopIngressService;
   admin: AdminService;
   budget: BudgetTracker | undefined;
+  spendLimits: SpendLimits | undefined;
   errors: ErrorLog;
   crons: CronStore;
   credentialUsage: CredentialUsageSink;
@@ -1345,6 +1348,14 @@ export function buildApp(
 
   const sessions: SessionStore = createPostgresSessionStore(databaseUrl);
   memorySessions.store = sessions;
+  const spendReport = sessions.spendReport?.bind(sessions);
+  const spendLimits = spendReport
+    ? createSpendLimits({
+        orgId,
+        getSpendLimit: (scope) => configStore.getSpendLimitDurable(scope),
+        spendReport,
+      })
+    : undefined;
   const toolOutput = createPostgresToolOutputStore({
     pool: pgArtifactMap.pool,
     bytesFor: (prefix) =>
@@ -2184,6 +2195,7 @@ export function buildApp(
     connectorTokens,
     auditLog,
     budget,
+    spendLimits,
     agent,
     memory,
     deploy: deployService,
@@ -3116,6 +3128,7 @@ export function buildApp(
     modelGatewayTransport: gatewayTransport,
     modelRoutes,
     budget,
+    spendLimits,
     modelCredentials,
     userModelCredentials,
     modelRegistry,
@@ -3261,6 +3274,7 @@ export function serverDeps(
       ? { inviteMailer: resendMailer(config.resendApiKey, config.emailFrom) }
       : {}),
     budget: built.budget,
+    spendLimits: built.spendLimits,
     acl: built.acl,
     credentialUsage: built.credentialUsage,
     featureFlags: built.featureFlags,

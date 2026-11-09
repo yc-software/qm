@@ -78,6 +78,7 @@ import type { UiStateStore } from "../surfaces/ui-state.ts";
 import type { SessionStateBus } from "../runs/session-state-bus.ts";
 import type { ConnectorTokenSource, SlackUserClient } from "../loops/sources/adapter.ts";
 import type { BudgetTracker } from "../ratelimit/budget.ts";
+import type { SpendLimits } from "../ratelimit/spend-limits.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { AppPageViewLog } from "../deploy/page-views.ts";
 import type { SlackInstallationStore, SlackSocketAppIdReader } from "../surfaces/slack-installation.ts";
@@ -169,6 +170,7 @@ export interface ServerDeps {
   emailAuthDomain?: string;
   slackAllowFrom?: readonly string[];
   budget?: BudgetTracker;
+  spendLimits?: SpendLimits;
   sessions?: SessionStore;
   auditLog?: AuditLog;
   errors?: ErrorLog;
