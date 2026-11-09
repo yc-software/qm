@@ -3,7 +3,7 @@ import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { constants, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { TestContext } from "node:test";
 import {
@@ -83,7 +83,7 @@ export function createFakeRender() {
     if (path.startsWith(`${RENDER_SCRIPT_DIR}/`)) return `${home(id)}${path}`;
     return path.replace(/^\/tmp\//, `${home(id)}/tmp/`).replace(/^\/root(?![A-Za-z0-9_-])/, home(id));
   };
-  const execute = async (id: string, script: string) => {
+  const execute = async (id: string, script: string, wrapper: string[] = []) => {
     mkdirSync(join(home(id), "tmp"), { recursive: true });
     const file = join(root, `run-${randomUUID()}.sh`);
     writeFileSync(
@@ -95,7 +95,8 @@ export function createFakeRender() {
         .replaceAll(RENDER_SCRIPT_DIR, `${home(id)}${RENDER_SCRIPT_DIR}`),
     );
     try {
-      const result = await execFileAsync("/bin/sh", [file], {
+      const [command, ...args] = [...wrapper, "/bin/sh", file];
+      const result = await execFileAsync(command!, args, {
         encoding: "utf8",
         env: { PATH: "/usr/bin:/bin:/usr/sbin:/sbin", HOME: home(id), COPYFILE_DISABLE: "1" },
         maxBuffer: 16 * 1024 * 1024,
@@ -103,20 +104,21 @@ export function createFakeRender() {
       });
       return { stdout: result.stdout, stderr: result.stderr, exitCode: 0 };
     } catch (error) {
-      const result = error as Error & { code?: number; stdout?: string; stderr?: string };
-      if (typeof result.code !== "number") throw new Error(result.message, { cause: error });
-      return { stdout: result.stdout ?? "", stderr: result.stderr ?? "", exitCode: result.code };
+      const result = error as Error & { code?: number; signal?: NodeJS.Signals; stdout?: string; stderr?: string };
+      const exitCode = result.signal ? 128 + constants.signals[result.signal] : result.code;
+      if (typeof exitCode !== "number") throw new Error(result.message, { cause: error });
+      return { stdout: result.stdout ?? "", stderr: result.stderr ?? "", exitCode };
     } finally {
       rmSync(file, { force: true });
     }
   };
   const runProxyCommand = async (id: string, command: string) => {
     requireRunning(id);
-    const spooled = /^timeout \d+ sh '([^']+)'$/.exec(command);
+    const spooled = /^timeout -k (\d+) (\d+) sh '([^']+)'$/.exec(command);
     if (!spooled) return execute(id, command);
-    const script = mapped(id, spooled[1]!);
-    if (!existsSync(script)) return { stdout: "", stderr: `sh: cannot open ${spooled[1]}`, exitCode: 2 };
-    return execute(id, readFileSync(script, "utf8"));
+    const script = mapped(id, spooled[3]!);
+    if (!existsSync(script)) return { stdout: "", stderr: `sh: cannot open ${spooled[3]}`, exitCode: 2 };
+    return execute(id, readFileSync(script, "utf8"), ["timeout", "-k", spooled[1]!, spooled[2]!]);
   };
   const startImport = (source: string, name: string) => {
     imports.push({ source, name });

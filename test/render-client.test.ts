@@ -6,7 +6,9 @@ import { join } from "node:path";
 import { createSdkRenderClient, RENDER_SCRIPT_DIR } from "../src/sandbox/render-client.ts";
 import { createFakeRender, serveFakeRenderApi } from "./support/fake-render.ts";
 
-const SPOOLED = new RegExp(`^timeout (\\d+) sh '${RENDER_SCRIPT_DIR.replaceAll(".", "\\.")}/[0-9a-f-]{36}\\.sh'$`);
+const SPOOLED = new RegExp(
+  `^timeout -k \\d+ (\\d+) sh '${RENDER_SCRIPT_DIR.replaceAll(".", "\\.")}/[0-9a-f-]{36}\\.sh'$`,
+);
 const cleanup = (path: string): string =>
   `rm -f '${path}'; find '${RENDER_SCRIPT_DIR}' -type f -mmin +5 -delete 2>/dev/null\n`;
 
@@ -574,7 +576,7 @@ test("Render SDK adapter bounds a stalled run token request by the script deadli
   const client = createSdkRenderClient({ apiKey: "secret", workspaceId: "tea-test" });
   const started = Date.now();
   await assert.rejects(client.runScript("sbx-test", "sleep 60", 1));
-  assert.ok(Date.now() - started < 5_000);
+  assert.ok(Date.now() - started < 10_000);
   assert.equal(commands.length, 2);
   assert.match(commands[0]!, SPOOLED);
   assert.match(commands[1]!, /^rm -f '/);

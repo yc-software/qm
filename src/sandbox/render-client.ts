@@ -24,6 +24,7 @@ const SANDBOX_START_MS = 180_000;
 const STALE_SCRIPT_MINUTES = 5;
 const LIST_PAGE_SIZE = 100;
 const LIVE_STATUSES = ["creating", "running", "suspending", "suspended", "resuming"] as const;
+const KILL_AFTER_SEC = 5;
 
 const sdkErrors = {
   statusOf: (error: unknown): number | undefined =>
@@ -190,7 +191,9 @@ export function createSdkRenderClient(opts: SdkRenderClientOptions): RenderClien
   };
   const runScript: RenderClient["runScript"] = async (sandboxId, script, timeoutSec) => {
     const path = `${RENDER_SCRIPT_DIR}/${randomUUID()}.sh`;
-    const signal = AbortSignal.timeout(timeoutSec * 1000 + Math.min(CONTROL_TIMEOUT_MS, timeoutSec * 1000));
+    const signal = AbortSignal.timeout(
+      (timeoutSec + KILL_AFTER_SEC) * 1000 + Math.min(CONTROL_TIMEOUT_MS, timeoutSec * 1000),
+    );
     const prelude = `rm -f ${shq(path)}; find ${shq(RENDER_SCRIPT_DIR)} -type f -mmin +${STALE_SCRIPT_MINUTES} -delete 2>/dev/null\n`;
     try {
       await retryOperation(
@@ -198,7 +201,7 @@ export function createSdkRenderClient(opts: SdkRenderClientOptions): RenderClien
         "idempotent",
         { ...sdkErrors, signal, timeoutMs: TRANSFER_TIMEOUT_MS },
       );
-      return await exec(sandboxId, `timeout ${timeoutSec} sh ${shq(path)}`, signal);
+      return await exec(sandboxId, `timeout -k ${KILL_AFTER_SEC} ${timeoutSec} sh ${shq(path)}`, signal);
     } catch (error) {
       if (error instanceof SandboxEndedError) throw error;
       await exec(sandboxId, `rm -f ${shq(path)}`, AbortSignal.timeout(CLEANUP_TIMEOUT_MS)).catch(

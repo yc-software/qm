@@ -12,7 +12,7 @@ import {
 } from "../src/sandbox/render-sandbox.ts";
 import { createLocalBlobTransferStore } from "../src/persistence/blob-transfer.ts";
 import { scopeId } from "../src/types.ts";
-import { supportsAgentComputerExport, supportsProcessSessions } from "../src/sandbox/sandbox.ts";
+import { computerVerdict, supportsAgentComputerExport, supportsProcessSessions } from "../src/sandbox/sandbox.ts";
 import { pollProcess } from "../src/sandbox/process-poll.ts";
 import { createSdkRenderClient } from "../src/sandbox/render-client.ts";
 import { createRenderBase, type RenderBase, type StoredRenderBase } from "../src/sandbox/render-base.ts";
@@ -117,7 +117,7 @@ test("Render keeps turn and background process secrets out of run token requests
   }
   for (const request of runs) {
     const { command } = JSON.parse(request.body) as { command: string };
-    assert.match(command, /^(timeout \d+ sh '\/dev\/\.qm-run\/[0-9a-f-]{36}\.sh'|test -f '[^']+')$/);
+    assert.match(command, /^(timeout -k \d+ \d+ sh '\/dev\/\.qm-run\/[0-9a-f-]{36}\.sh'|test -f '[^']+')$/);
   }
 });
 
@@ -1191,4 +1191,77 @@ test("Render restores its published native snapshot after the database reply is 
   const next = make();
   const restored = await next.provision(scope);
   assert.equal(await next.readFile(restored, "work"), "published before reply loss");
+});
+
+test("Render restarts a computer from its checkpoint so the same turn keeps working", async (t) => {
+  const { make, fake, store, scope } = setup(t);
+  const sandbox = make();
+  const handle = await sandbox.provision(scope);
+  await sandbox.writeFile(handle, "restart-marker.txt", "still here");
+  const first = (await store.get(scope))!.sandboxId;
+  await sandbox.restartComputer!(scope);
+  const restarted = (await store.get(scope))!;
+  assert.equal(fake.sandboxes.get(first)?.status, "terminated");
+  assert.notEqual(restarted.sandboxId, first);
+  assert.equal(restarted.stopped, undefined);
+  assert.equal((await sandbox.run(handle, "cat restart-marker.txt")).stdout, "still here");
+  assert.equal(computerVerdict(await sandbox.computerStatus!(scope)), "ok");
+});
+
+test("Render reports a stopped computer that has a checkpoint as paused without probing it", async (t) => {
+  const { make, fake, store, scope } = setup(t);
+  const sandbox = make();
+  const handle = await sandbox.provision(scope);
+  await sandbox.writeFile(handle, "kept", "work");
+  await sandbox.teardown(handle);
+  await store.merge(scope, { lastActivityMs: Date.now() - 7200_000 });
+  assert.deepEqual(await sandbox.reapDeepIdle!(3600_000), { reaped: 1 });
+  const runScript = t.mock.method(fake.client, "runScript");
+  const status = await sandbox.computerStatus!(scope);
+  assert.equal(status.lifecycleState, "paused");
+  assert.equal(status.provisioned, true);
+  assert.equal(computerVerdict(status), "ok");
+  assert.equal(runScript.mock.callCount(), 0);
+  const restored = await sandbox.provision(scope);
+  assert.equal(await sandbox.readFile(restored, "kept"), "work");
+  assert.equal((await sandbox.computerStatus!(scope)).lifecycleState, "running");
+});
+
+test("Render reports a computer without a usable checkpoint as down, not paused", async (t) => {
+  const { make, fake, store, scope } = setup(t);
+  const sandbox = make();
+  await sandbox.provision(scope);
+  const stored = (await store.get(scope))!;
+  await fake.client.terminate(stored.sandboxId);
+  await store.merge(scope, { checkpoint: { ...stored.checkpoint!, expiresAtMs: Date.now() - 1 } });
+  const status = await sandbox.computerStatus!(scope);
+  assert.equal(status.lifecycleState, undefined);
+  assert.equal(computerVerdict(status), "down");
+});
+
+test(
+  "Render returns a command that ignores TERM as a timeout with its partial output",
+  { timeout: 60_000 },
+  async (t) => {
+    const { make, scope } = setup(t, { http: true });
+    const sandbox = make();
+    const handle = await sandbox.provision(scope);
+    const started = Date.now();
+    const hung = await sandbox.run(handle, "trap '' TERM; echo start; sleep 60; echo never", { timeoutMs: 1_000 });
+    assert.equal(hung.timedOut, true);
+    assert.equal(hung.stdout, "start\n");
+    assert.ok(Date.now() - started < 15_000);
+    assert.equal((await sandbox.run(handle, "echo alive")).stdout, "alive\n");
+  },
+);
+
+test("Render does not report a command that exits 124 or 137 on its own as a timeout", async (t) => {
+  const { make, scope } = setup(t, { http: true });
+  const sandbox = make();
+  const handle = await sandbox.provision(scope);
+  for (const code of [124, 137]) {
+    const result = await sandbox.run(handle, `exit ${code}`, { timeoutMs: 30_000 });
+    assert.equal(result.code, code);
+    assert.equal(result.timedOut, false);
+  }
 });
