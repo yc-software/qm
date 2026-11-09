@@ -1,4 +1,3 @@
-import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
 import type { AdmittedWork } from "../util/admitted-work.ts";
 import type { TurnRequest, TurnResult } from "../types.ts";
 import type { Monitor } from "../triggers/types.ts";
@@ -161,7 +160,7 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
       surface: "monitor",
       threadRef: m.threadRef,
       redrivesHandOff: true,
-      ...(m.destination && !isSubagentThreadRef(m.threadRef) ? { destination: m.destination } : {}),
+      ...(m.destination ? { destination: m.destination } : {}),
       ...(withErrorNotice
         ? {
             errorNotice: (s) =>

@@ -1,3 +1,4 @@
+import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
 import type { Destination, ScopeId } from "../types.ts";
 import type { Monitor } from "../triggers/types.ts";
 import type { MonitorStore } from "./monitor-store.ts";
@@ -147,7 +148,7 @@ export function createMonitorBroker(deps: MonitorBrokerDeps): MonitorBroker {
         owner: deps.owner,
         createdBy: deps.owner,
         ownerScopeId: deps.ownerScopeId,
-        ...(deps.destination ? { destination: deps.destination } : {}),
+        ...(deps.destination && !isSubagentThreadRef(deps.threadRef) ? { destination: deps.destination } : {}),
         processId,
         command: rec.command,
         ...(rec.purpose ? { purpose: rec.purpose } : {}),

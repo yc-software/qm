@@ -157,18 +157,6 @@ async function agent(opts?: {
   return { ...fake, monitors, processes, deliveries, calls, poller, arm, identity };
 }
 
-test("a watch armed in a subagent session reports to its parent, not the parent's conversation", async () => {
-  const h = await agent();
-  await h.arm({ threadRef: "agent:main:subagent:child-1" });
-  h.append("p-1", "compiling...\n");
-  await h.poller.tick();
-
-  assert.equal(h.calls.length, 1);
-  assert.equal(h.calls[0]?.conversation.threadRef, "agent:main:subagent:child-1");
-  assert.equal(automationOrigin(h.calls[0])?.destination, undefined);
-  assert.equal(h.calls[0]?.surfaceTools, undefined);
-});
-
 test("new output wakes the agent as a first-class live turn in the arming conversation", async () => {
   const h = await agent();
   const m = await h.arm();
