@@ -21,8 +21,8 @@ const OPENROUTER_MODEL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0
 
 const MAX_CATALOG_BYTES = 2 * 1024 * 1024;
 const MAX_CATALOG_MODELS = 1_000;
-const CACHE_TTL_MS = 5 * 60_000;
-const FAILURE_TTL_MS = 30_000;
+export const CACHE_TTL_MS = 5 * 60_000;
+export const FAILURE_TTL_MS = 30_000;
 
 interface CacheEntry {
   customVersion?: number;

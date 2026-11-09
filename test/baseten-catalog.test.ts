@@ -97,6 +97,48 @@ test("the key goes only to Baseten's own endpoint and the last good list survive
   }
 });
 
+test("a failed first fetch is retried within a minute, not after the full catalog TTL", async () => {
+  let up = false;
+  let calls = 0;
+  const fetcher = (async () => {
+    calls++;
+    return up ? Response.json(CATALOG) : new Response("down", { status: 503 });
+  }) as unknown as typeof fetch;
+  mock.timers.enable({ apis: ["Date"], now: Date.now() });
+  try {
+    const catalog = createBasetenCatalog("bt-test-key", fetcher);
+    assert.deepEqual(await catalog.providers([]), []);
+    up = true;
+    mock.timers.tick(10_000);
+    await catalog.providers([]);
+    assert.equal(calls, 1, "a failure is not retried on every call");
+    mock.timers.tick(31_000);
+    await catalog.providers([]);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(calls, 2);
+    assert.equal((await catalog.providers([]))[0]?.models.length, 2);
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test("callers that arrive while the first fetch is pending all get Baseten's models", async () => {
+  const reply = Promise.withResolvers<Response>();
+  let calls = 0;
+  const fetcher = (async () => {
+    calls++;
+    return reply.promise;
+  }) as unknown as typeof fetch;
+  const catalog = createBasetenCatalog("bt-test-key", fetcher);
+  const first = catalog.providers([]);
+  const second = catalog.providers([]);
+  reply.resolve(Response.json(CATALOG));
+  const [a, b] = await Promise.all([first, second]);
+  assert.equal(a[0]?.models.length, 2);
+  assert.equal(b[0]?.models.length, 2);
+  assert.equal(calls, 1);
+});
+
 test("a model whose output limit nears or fills its window still gets a quarter of it as compaction budget", () => {
   setCustomProviders([
     {

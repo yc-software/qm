@@ -1,11 +1,9 @@
-import { createTtlRefresh } from "../util/async.ts";
 import { swallow } from "../util/errors.ts";
 import { validateCustomProviderSpec, type CustomProviderSpec } from "./custom-providers.ts";
-import { fetchCatalogData, perMillion, positiveInteger } from "./model-catalog.ts";
+import { CACHE_TTL_MS, FAILURE_TTL_MS, fetchCatalogData, perMillion, positiveInteger } from "./model-catalog.ts";
 
 const BASETEN_PROVIDER_ID = "baseten";
 const BASETEN_BASE_URL = "https://inference.baseten.co/v1";
-const CATALOG_TTL_MS = 5 * 60_000;
 
 type BasetenModel = CustomProviderSpec["models"][number];
 
@@ -51,7 +49,10 @@ export function basetenCatalogModels(data: readonly unknown[]): BasetenModel[] {
 
 export function createBasetenCatalog(apiKey: string, fetcher: typeof fetch = fetch) {
   let provider: CustomProviderSpec | undefined;
-  const refresh = createTtlRefresh(CATALOG_TTL_MS, async () => {
+  let expiresAt = 0;
+  let loading: Promise<void> | undefined;
+  let first: Promise<void> | undefined;
+  const load = async () => {
     try {
       const models = basetenCatalogModels(
         await fetchCatalogData(fetcher, `${BASETEN_BASE_URL}/models`, "Baseten model list", {
@@ -75,18 +76,23 @@ export function createBasetenCatalog(apiKey: string, fetcher: typeof fetch = fet
         }
       });
       provider = valid.length ? spec(valid) : undefined;
+      expiresAt = Date.now() + CACHE_TTL_MS;
     } catch (error) {
       swallow("[model] Baseten catalog refresh", error);
+      expiresAt = Date.now() + FAILURE_TTL_MS;
     }
-  });
-  let first: Promise<void> | undefined;
+  };
+  const refresh = () =>
+    (loading ??= load().finally(() => {
+      loading = undefined;
+    }));
   const adminOwnsId = (enabled: readonly CustomProviderSpec[]): boolean =>
     enabled.some((p) => p.id === BASETEN_PROVIDER_ID);
   return {
     async providers(enabled: readonly CustomProviderSpec[]): Promise<CustomProviderSpec[]> {
       if (adminOwnsId(enabled)) return [];
-      if (!first) await (first = refresh());
-      else void refresh();
+      await (first ??= refresh());
+      if (Date.now() >= expiresAt) void refresh();
       return provider ? [provider] : [];
     },
     keys(enabled: readonly CustomProviderSpec[]): Record<string, string> {
