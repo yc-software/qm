@@ -167,6 +167,7 @@ export function createE2bSandbox(opts: E2bSandboxOptions): Sandbox {
           noteInfo(info);
           await store.merge(scope, {
             preservationState: "running",
+            preservationError: undefined,
             ...(info ? { nativePause: info.onTimeout === "pause" } : {}),
           });
           return adopt(session);
@@ -185,6 +186,8 @@ export function createE2bSandbox(opts: E2bSandboxOptions): Sandbox {
             ...stored,
             sandboxId: session.sandboxId,
             createdAtMs: Date.now(),
+            preservationState: "running",
+            preservationError: undefined,
             nativePause: info?.onTimeout === "pause",
           });
           return adopt(session);
