@@ -828,10 +828,10 @@ test("Render waits for the new instance nonce through old responses, lost deploy
   assert.notEqual(pending.pending!.readinessNonce, firstNonce);
   assert.equal(pending.pending!.readinessNonce, f.manifestNonce);
   assert.equal(f.credentialCalls.includes("revoke"), false);
-  assert.equal(await f.provider.resolveEndpoint!(d, v1), null);
+  assert.deepEqual(await f.provider.resolveEndpoint!(d, v1), endpoint, "visitors keep reaching the live version");
   f.readinessNonce = null;
   const restarted = f.restart(sha);
-  assert.equal(await restarted.resolveEndpoint!(d, v1), null);
+  assert.deepEqual(await restarted.resolveEndpoint!(d, v1), endpoint);
   await assert.rejects(restarted.apply(d, v2), /unconfirmed deployment/);
   assert.equal((await f.store.get(d.id))!.pending!.readinessNonce, pending.pending!.readinessNonce);
   f.readinessNonce = undefined;
