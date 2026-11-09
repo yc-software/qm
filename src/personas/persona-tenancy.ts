@@ -102,8 +102,4 @@ END $persona_catch_up$`,
   };
 }
 
-export const PERSONA_TENANCY: PgMigrationDefinition[] = [
-  catchUp(),
-  ...PERSONA_VERSION_TENANCY,
-  ...PIN_TENANCY,
-];
+export const PERSONA_TENANCY: PgMigrationDefinition[] = [catchUp(), ...PERSONA_VERSION_TENANCY, ...PIN_TENANCY];
