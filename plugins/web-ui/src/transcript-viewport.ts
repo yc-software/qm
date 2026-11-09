@@ -20,7 +20,7 @@ function readingAnchor(stack: HTMLElement, line: number, origin: number, skip: s
     const element = block ?? row;
     return {
       element,
-      text: block?.textContent?.slice(0, 160) ?? "",
+      text: block?.textContent ?? "",
       row: rowKey(element),
       offset: element.getBoundingClientRect().top - origin,
     };
@@ -186,24 +186,24 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
     if (!away) scroller.removeAttribute("data-new-below");
   }
 
-  function readingEdges(): { origin: number; edge: number } {
-    const origin = scroller!.getBoundingClientRect().top + scroller!.clientTop;
-    const stuck = prompt?.classList.contains("stuck") ? prompt.getBoundingClientRect().bottom : 0;
-    return { origin, edge: Math.max(origin + (pins?.getBoundingClientRect().height ?? 0), stuck) };
+  function viewportTop(): number {
+    return scroller!.getBoundingClientRect().top + scroller!.clientTop;
   }
 
   function captureAnchor(): void {
     if (!scroller || !stack || following) return;
-    const { origin, edge } = readingEdges();
-    const focus = edge + (origin + scroller.clientHeight - edge) * READING_LINE;
-    anchor = readingAnchor(stack, focus, origin, ".latest-prompt.stuck");
+    const origin = viewportTop();
+    const stuck = prompt?.classList.contains("stuck") ? prompt.getBoundingClientRect().bottom : 0;
+    const edge = Math.max(origin + (pins?.getBoundingClientRect().height ?? 0), stuck);
+    const line = edge + (origin + scroller.clientHeight - edge) * READING_LINE;
+    anchor = readingAnchor(stack, line, origin, ".latest-prompt.stuck");
     below = distanceToBottom();
   }
 
   function restoreAnchor(): void {
     if (!scroller || !stack || following || contentUpdates.size > 0) return;
     if (!anchor || scroller.scrollTop !== lastTop) return captureAnchor();
-    const { origin } = readingEdges();
+    const origin = viewportTop();
     const element = locateAnchor(stack, anchor, origin);
     if (!element) return captureAnchor();
     anchor.element = element;
