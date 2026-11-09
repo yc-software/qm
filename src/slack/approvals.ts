@@ -367,11 +367,9 @@ export function createApprovals(deps: {
         let reply = result.stopped ? "" : "(no response)";
         if (replyBody) reply = toSlackMrkdwn(replyBody);
         else if (result.attachments?.length || reactions.length) reply = "Done.";
-        if (!reply) {
+        if (cardIsRemote || !reply) {
           await updateCard(decisionCard());
-        } else if (cardIsRemote) {
-          await updateCard(decisionCard());
-          await postApprovalFollowup(client, ctx, reply);
+          if (reply) await postApprovalFollowup(client, ctx, reply);
         } else {
           const replyBlocks = slackSectionBlocks(reply);
           await updateSlackMessage(
