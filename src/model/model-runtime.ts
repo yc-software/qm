@@ -39,6 +39,7 @@ import {
   resolveModel,
 } from "./pi-models.ts";
 import { providerTurnError } from "./provider-error.ts";
+import { publicFetch } from "../util/network.ts";
 
 export function piUsageToCallUsage(
   u: Partial<Usage> | undefined,
@@ -188,6 +189,7 @@ export async function buildModelRuntime(
       const candidate = withRequestHeaders(model, true, false, apiKeys[String(model.provider)]);
       const passthrough = {
         ...retained(options),
+        ...(hasCustomModelPrefix(model.id) ? { fetch: publicFetch } : {}),
         onPayload: async (payload: unknown) => {
           const transformed = options?.onPayload ? await options.onPayload(payload, model) : undefined;
           return applyThinkingBinding(transformed === undefined ? payload : transformed, candidate);
