@@ -2215,9 +2215,6 @@ button.subagent-chip:hover {
 .streaming-text {
   position: relative;
 }
-.streaming-text.live-stream {
-  overflow-anchor: none;
-}
 
 qm-markdown .tok-in {
   animation: tok-in 0.18s ease-out both;
