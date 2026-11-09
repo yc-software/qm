@@ -757,7 +757,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
         const failed = await recordFailedFire(loopId, summary.firstError);
         return { ...failed, note: `${failed.note}; ${note}` };
       }
-      if (discover) await deps.loops.recordScan(loopId, firedAt);
+      if (summary.scanned) await deps.loops.recordScan(loopId, firedAt);
       await deps.loops.recordFireOutcome(loopId, "ok");
       await applyGovernor(loopId);
       return { status: "silent", note };

@@ -83,7 +83,9 @@ function service(
     outputs,
     grants,
     files: overrides?.files ?? fakeFiles([]).store,
-    inboxPass: overrides?.inboxPass ?? (async () => ({ discovered: 0, checked: 0, verdicts: 0, failures: [] })),
+    inboxPass:
+      overrides?.inboxPass ??
+      (async (_loop, options) => ({ discovered: 0, checked: 0, verdicts: 0, failures: [], scanned: options.discover })),
     trigger: {
       deliveries: deliveries.store as never,
       idempotency,
@@ -852,12 +854,10 @@ const RATE_LIMITED = new ProviderTurnError("Model provider API error (rate_limit
 });
 
 function recordingPass(
-  respond: (loop: { id: string }, options: InboxPassOptions) => Promise<InboxPassSummary> | InboxPassSummary = () => ({
-    discovered: 0,
-    checked: 0,
-    verdicts: 0,
-    failures: [],
-  }),
+  respond: (loop: { id: string }, options: InboxPassOptions) => Promise<InboxPassSummary> | InboxPassSummary = (
+    _loop,
+    options,
+  ) => ({ discovered: 0, checked: 0, verdicts: 0, failures: [], scanned: options.discover }),
 ) {
   const calls: InboxPassOptions[] = [];
   const pass: InboxPass = async (loop, options) => {
@@ -868,7 +868,13 @@ function recordingPass(
 }
 
 test("inbox fires run the fetch and verdict pass instead of an agent turn", async () => {
-  const { pass, calls } = recordingPass(() => ({ discovered: 2, checked: 5, verdicts: 3, failures: [] }));
+  const { pass, calls } = recordingPass((_loop, options) => ({
+    discovered: 2,
+    checked: 5,
+    verdicts: 3,
+    failures: [],
+    scanned: options.discover,
+  }));
   const s = service(() => "never", { inboxPass: pass });
   const loop = await makeLoop(s.loops, { surface: "inbox:slack", sources: ["slack"] });
   const before = Date.now();
@@ -889,7 +895,7 @@ test("inbox pass exceptions count once and recover on a successful retry", async
   let fail = true;
   const { pass } = recordingPass(() => {
     if (fail) throw new Error("connector unavailable");
-    return { discovered: 0, checked: 1, verdicts: 0, failures: [] };
+    return { discovered: 0, checked: 1, verdicts: 0, failures: [], scanned: true };
   });
   const s = service(() => "never", { inboxPass: pass });
   const loop = await makeLoop(s.loops, { surface: "inbox:slack", sources: ["slack"] });
@@ -909,6 +915,7 @@ test("an inbox pass where every conversation failed is a failed fire that keeps 
     checked: 2,
     verdicts: 0,
     failures: ["Slack rate limited; the next sync will retry", "Slack rate limited; the next sync will retry"],
+    scanned: false,
     firstError: new TransientTurnFailure("Slack rate limited; the next sync will retry"),
   }));
   const s = service(() => "never", { inboxPass: pass });
@@ -926,6 +933,7 @@ test("a partly failed inbox pass is a clean fire that reports the failures", asy
     checked: 3,
     verdicts: 2,
     failures: ['verdict was not a JSON object: "nope"'],
+    scanned: true,
   }));
   const s = service(() => "never", { inboxPass: pass });
   const loop = await makeLoop(s.loops, { surface: "inbox:slack", sources: ["slack"] });
@@ -940,7 +948,7 @@ test("inbox fires do not quarantine on a rate-limited pass", async () => {
   let fail = true;
   const { pass } = recordingPass(() => {
     if (fail) throw RATE_LIMITED;
-    return { discovered: 0, checked: 0, verdicts: 0, failures: [] };
+    return { discovered: 0, checked: 0, verdicts: 0, failures: [], scanned: true };
   });
   const s = service(() => "never", { inboxPass: pass });
   const loop = await makeLoop(s.loops, { surface: "inbox:slack", sources: ["slack"] });
@@ -1096,11 +1104,13 @@ test("a Slack loop never reads the email voice profile", async () => {
 });
 
 test("the scan watermark moves only on a clean discovery fire, untouched by failures or item-only fires", async () => {
-  let outcome: "ok" | "failed" | "transient" = "ok";
-  const { pass } = recordingPass(() => {
+  let outcome: "ok" | "failed" | "transient" | "unscanned" = "ok";
+  const { pass } = recordingPass((_loop, options) => {
     if (outcome === "failed") throw new Error("connector unavailable");
     if (outcome === "transient") throw RATE_LIMITED;
-    return { discovered: 0, checked: 0, verdicts: 0, failures: [] };
+    if (outcome === "unscanned")
+      return { discovered: 0, checked: 3, verdicts: 2, failures: ["search is down"], scanned: false };
+    return { discovered: 0, checked: 0, verdicts: 0, failures: [], scanned: options.discover };
   });
   const s = service(() => "never", { inboxPass: pass });
   const loop = await makeLoop(s.loops, {
@@ -1116,6 +1126,8 @@ test("the scan watermark moves only on a clean discovery fire, untouched by fail
   await s.fire.fire(loop.id, "sync-2");
   outcome = "failed";
   await s.fire.fire(loop.id, "sync-3");
+  outcome = "unscanned";
+  assert.equal((await s.fire.fire(loop.id, "sync-3b")).status, "silent");
   outcome = "ok";
   await s.fire.fire(loop.id, "push:1", undefined, { enumerate: false });
   assert.equal((await s.loops.get(loop.id))?.lastScanAt, firstStart);

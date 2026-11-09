@@ -5,7 +5,7 @@ import { personalScope } from "../../types.ts";
 import { errMessage } from "../../util/errors.ts";
 import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
 import { isResolved } from "../ledger-view.ts";
-import { draftOf } from "../sources/adapter.ts";
+import { draftOf, isObj } from "../sources/adapter.ts";
 import { INBOX_LEDGER_MAX_ITEMS, INBOX_LEDGER_RETENTION_MS } from "../inbox-loop.ts";
 import { changedSinceLastLook, SourceRateLimited, type ConversationFetcher } from "./fetch.ts";
 import { scanSince, type Discoverer } from "./discover.ts";
@@ -33,6 +33,7 @@ export interface InboxPassSummary {
   checked: number;
   verdicts: number;
   failures: string[];
+  scanned: boolean;
   firstError?: unknown;
 }
 
@@ -43,6 +44,12 @@ const CONCURRENCY = 4;
 function passOrder(a: LoopItem, b: LoopItem): number {
   const open = Number(isResolved(a)) - Number(isResolved(b));
   return open || (a.verdict?.at ?? 0) - (b.verdict?.at ?? 0);
+}
+
+function alwaysRead(item: LoopItem): boolean {
+  if (!item.verdict || item.status === "queued") return true;
+  const slack = isObj(item.sourcePayload?.slack) ? item.sourcePayload.slack : undefined;
+  return slack !== undefined && typeof slack.threadTs === "string" && slack.isDirectMessage !== true;
 }
 
 function onlyOwnerSince(item: LoopItem, messages: Array<{ ts: string; at: number; owner: boolean }>): boolean {
@@ -109,24 +116,32 @@ export function createInboxPass(deps: InboxPassDeps): InboxPass {
   }
 
   return async (loop, options) => {
-    const summary: InboxPassSummary = { discovered: 0, checked: 0, verdicts: 0, failures: [] };
+    const summary: InboxPassSummary = { discovered: 0, checked: 0, verdicts: 0, failures: [], scanned: false };
     const fail = (code: string, message: string, error: unknown) => {
       summary.failures.push(errMessage(error));
       summary.firstError ??= error;
       record(loop.owner, code, message, error);
     };
+    let active: Set<string> | undefined;
     if (options.discover)
       try {
         const tracked = new Set((await deps.items.byLoop(loop.id)).map((item) => item.sourceKey));
-        const fresh = (await deps.discover(loop, scanSince(loop, now()))).filter(
-          (entry) => !tracked.has(entry.dedupeKey),
-        );
+        const found = await deps.discover(loop, scanSince(loop, now()));
+        active = new Set(found.map((entry) => entry.dedupeKey));
+        const fresh = found.filter((entry) => !tracked.has(entry.dedupeKey));
         if (fresh.length) summary.discovered = (await deps.items.ingest(fresh)).created;
+        summary.scanned = true;
       } catch (error) {
         fail("discover_failed", `Inbox scan for loop ${loop.id}: ${errMessage(error)}`, error);
       }
-    const items = (await deps.items.byLoop(loop.id)).sort(passOrder);
-    const ownerName = await deps.ownerName?.(loop.owner).catch(() => undefined);
+    const everything = options.discover && !summary.scanned;
+    const items = (await deps.items.byLoop(loop.id))
+      .filter((item) => everything || alwaysRead(item) || active?.has(item.sourceKey))
+      .sort(passOrder);
+    const ownerName = await deps.ownerName?.(loop.owner).catch((error: unknown) => {
+      record(loop.owner, "owner_name_failed", `Inbox owner name for loop ${loop.id}: ${errMessage(error)}`, error);
+      return undefined;
+    });
     let stopped = false;
     for (let index = 0; index < items.length && !stopped; index += CONCURRENCY) {
       await Promise.all(

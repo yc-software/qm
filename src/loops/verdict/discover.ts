@@ -7,7 +7,6 @@ import type { SourceClients } from "./fetch.ts";
 const SCAN_OVERLAP_MS = 30 * 60 * 1000;
 const FIRST_SCAN_MS = 3 * 24 * 60 * 60 * 1000;
 const SLACK_SEARCH_COUNT = 100;
-const SLACK_SEARCH_PAGES = 5;
 const GMAIL_PAGE = 100;
 
 export type Discoverer = (loop: Loop, since: number) => Promise<IngestEntryInput[]>;
@@ -34,7 +33,7 @@ export function createDiscoverer(clients: SourceClients): Discoverer {
     const after = new Date(since).toISOString().slice(0, 10);
     const found = new Map<string, IngestEntryInput>();
     for (const query of [`with:me -from:me after:${after}`, `<@${identity.userId}> after:${after}`]) {
-      for (let page = 1; page <= SLACK_SEARCH_PAGES; page++) {
+      for (let page = 1; ; page++) {
         const body = await clients.slackCall(loop.owner, token, "search.messages", {
           query,
           sort: "timestamp",

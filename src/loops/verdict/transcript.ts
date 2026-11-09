@@ -45,7 +45,7 @@ export function transcriptWindow(conversation: Conversation, tail = TRANSCRIPT_T
   return root && !window.includes(root) ? [root, ...window] : window;
 }
 
-function clipMarked(text: string, max = MESSAGE_CHARS): string {
+export function clipMarked(text: string, max = MESSAGE_CHARS): string {
   if (text.length <= max) return text;
   return `${text.slice(0, max)} [cut ${text.length - max} chars]`;
 }

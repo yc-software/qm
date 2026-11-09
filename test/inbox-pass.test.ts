@@ -352,7 +352,7 @@ test("the pass stores the verdict and transcript, leaves human state alone, and 
     now: () => 5_000_000,
   });
   const summary = await pass(loop, { discover: false });
-  assert.deepEqual(summary, { discovered: 0, checked: 1, verdicts: 1, failures: [] });
+  assert.deepEqual(summary, { discovered: 0, checked: 1, verdicts: 1, failures: [], scanned: false });
   const after = (await items.get(item.id))!;
   assert.equal(after.status, "ready");
   assert.equal(after.proposal, undefined);
@@ -429,17 +429,17 @@ test("a sent item stays handled when only the owner's own messages arrived since
     items,
     model,
     fetch: createConversationFetcher(clientsFor(world)),
-    discover: async () => [],
+    discover: async () => [{ loopId: loop.id, dedupeKey: "D1", source: "slack", sourcePayload: { title: "DM" } }],
   });
   world.history.pop();
-  await pass(loop, { discover: false });
+  await pass(loop, { discover: true });
   await items.recordAction(item.id, { kind: "send", outcome: "actioned", result: "github.com/x/y" });
   world.history.push({ ts: "1762275400.000200", user: "U_REGAN", text: "github.com/x/y" });
-  await pass(loop, { discover: false });
+  await pass(loop, { discover: true });
   assert.equal(prompts.length, 1);
   assert.equal((await items.get(item.id))!.status, "shipped");
   world.history.push({ ts: "1762275400.000300", user: "U_JOSH", text: "thanks!" });
-  await pass(loop, { discover: false });
+  await pass(loop, { discover: true });
   assert.equal(prompts.length, 2);
   const after = (await items.get(item.id))!;
   assert.equal(after.status, "ready");
@@ -500,6 +500,86 @@ test("discovery ingests new Slack DMs and mentions and Gmail threads, keyed like
   })(loop, { discover: true });
   assert.equal(summary.discovered, 2);
   assert.equal((await items.byLoop(loop.id)).length, 3);
+});
+
+test("a scheduled pass reads only conversations with activity, stubs, and channel threads", async () => {
+  const items = createLoopItemLedger(testMap());
+  const slackMeta = (channelId: string, extra: Record<string, unknown> = {}) => ({
+    channelId,
+    ts: "1762275400.000100",
+    isDirectMessage: true,
+    channelLabel: "DM",
+    ...extra,
+  });
+  await items.ingest([
+    {
+      loopId: loop.id,
+      dedupeKey: "quiet",
+      source: "slack",
+      sourceAt: 1,
+      sourcePayload: { title: "quiet", slack: slackMeta("D_QUIET") },
+    },
+    {
+      loopId: loop.id,
+      dedupeKey: "active",
+      source: "slack",
+      sourceAt: 1,
+      sourcePayload: { title: "active", slack: slackMeta("D_ACTIVE") },
+    },
+    {
+      loopId: loop.id,
+      dedupeKey: "stub",
+      source: "slack",
+      sourceAt: 1,
+      sourcePayload: { title: "stub", slack: slackMeta("D_STUB") },
+    },
+    {
+      loopId: loop.id,
+      dedupeKey: "C1:1.1",
+      source: "slack",
+      sourceAt: 1,
+      sourcePayload: {
+        title: "#eng",
+        slack: { channelId: "C1", ts: "1.1", threadTs: "1.1", isDirectMessage: false, channelLabel: "#eng" },
+      },
+    },
+  ]);
+  const verdict = { state: "resolved" as const, reason: "seen", waitingTs: null, lastSeenTs: "x", at: 1 };
+  for (const key of ["quiet", "active", "C1:1.1"]) {
+    const item = (await items.byLoop(loop.id)).find((row) => row.sourceKey === key)!;
+    await items.recordVerdict(item.id, { verdict, sourcePayload: item.sourcePayload!, sourceAt: 1 });
+  }
+  const fetched: string[] = [];
+  const fetchConversation = async (_owner: string, item: LoopItem) => {
+    fetched.push(item.sourceKey);
+    return { kind: "skipped" as const, reason: "not_connected" as const };
+  };
+  const { model } = scriptedModel([]);
+  let discoverFails = false;
+  const pass = createInboxPass({
+    items,
+    model,
+    fetch: fetchConversation,
+    discover: async () => {
+      if (discoverFails) throw new Error("search is down");
+      return [{ loopId: loop.id, dedupeKey: "active", source: "slack", sourcePayload: { title: "active" } }];
+    },
+  });
+  const scheduled = await pass(loop, { discover: true });
+  assert.equal(scheduled.scanned, true);
+  assert.deepEqual(fetched.sort(), ["C1:1.1", "active", "stub"]);
+
+  fetched.length = 0;
+  const itemOnly = await pass(loop, { discover: false });
+  assert.equal(itemOnly.scanned, false);
+  assert.deepEqual(fetched.sort(), ["C1:1.1", "stub"]);
+
+  fetched.length = 0;
+  discoverFails = true;
+  const blind = await pass(loop, { discover: true });
+  assert.equal(blind.scanned, false);
+  assert.deepEqual(blind.failures, ["search is down"]);
+  assert.deepEqual(fetched.sort(), ["C1:1.1", "active", "quiet", "stub"]);
 });
 
 test("the pass skips items without a usable source reference and logs model failures without throwing", async () => {
