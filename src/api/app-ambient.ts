@@ -72,7 +72,15 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
     const advanceCursor = async (): Promise<void> => {
       if (deps.ambientCursors && rawDelta.length && rawLatestTs)
         await deps.ambientCursors
-          .put(cursorKey, { lastJudgedTs: rawLatestTs, lastJudgedAt: Date.now() })
+          .mutateMany([
+            {
+              id: cursorKey,
+              apply: (current) =>
+                current && current.lastJudgedTs >= rawLatestTs
+                  ? current
+                  : { lastJudgedTs: rawLatestTs, lastJudgedAt: Date.now() },
+            },
+          ])
           .catch(() => undefined);
     };
     if (!delta.length && !scheduled) {
