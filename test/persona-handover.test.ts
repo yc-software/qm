@@ -160,3 +160,18 @@ test("offboarding skips a leaving default admin, and a persona with an owner who
     await close();
   }
 });
+
+test("a persona access change that would leave no active owner is refused", async () => {
+  const { built, personas, ada } = await setup();
+  await built.identity.deactivate(DAN);
+  const access = (owner: string) => [
+    { scopeId: personal(owner), role: "owner" as const },
+    { scopeId: personal(BOB), role: "write" as const },
+  ];
+  assert.equal((await personas.setAccess(ANN, ada.id, access(DAN))).status, "invalid");
+  assert.equal(
+    (await personas.setAccess(ANN, ada.id, [{ scopeId: scopeId("channel", "C0DESIGN"), role: "owner" }])).status,
+    "invalid",
+  );
+  assert.equal((await personas.setAccess(ANN, ada.id, access(ANN))).status, "ok");
+});
