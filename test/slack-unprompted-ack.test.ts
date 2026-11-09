@@ -16,6 +16,7 @@ function agent(run: (hooks: any) => Promise<unknown>) {
   const posts: string[] = [];
   const postArgs: Array<Record<string, unknown>> = [];
   const turns: any[] = [];
+  const acked: string[] = [];
   const client = {
     reactions: {
       add: async ({ name, timestamp }: { name: string; timestamp: string }) => {
@@ -42,7 +43,7 @@ function agent(run: (hooks: any) => Promise<unknown>) {
     },
     flow: {
       inFlightRuns: { add() {}, delete() {}, has: () => false },
-      ackRunDelivery() {},
+      ackRunDelivery: (runId: string) => acked.push(runId),
       callCore: async (turn: any, hooks: any) => {
         turns.push(turn);
         return run(hooks);
@@ -80,7 +81,7 @@ function agent(run: (hooks: any) => Promise<unknown>) {
     unprompted: true,
     prefetched: { actor, info: { id: "C1", name: "eng" } as any, audience: [actor] },
   };
-  return { handler, client, followup, reactions, posts, postArgs, turns };
+  return { handler, client, followup, reactions, posts, postArgs, turns, acked };
 }
 
 test("an unmentioned thread followup QM answers gets the ack reaction added then cleared", async () => {
@@ -120,6 +121,16 @@ test("an answered followup whose reply post fails still clears its ack", async (
   };
   await h.handler.handleIncoming(h.followup, h.client);
   assert.deepEqual(h.reactions, ["+eyes@2.000", "-eyes@2.000"]);
+});
+
+test("an unprompted followup whose run fails stays quiet and closes its run delivery", async () => {
+  const h = agent(async (hooks) => {
+    await hooks.onQueued?.("r1");
+    return { status: "failed", reason: "model error" };
+  });
+  await h.handler.handleIncoming(h.followup, h.client);
+  assert.deepEqual(h.posts, []);
+  assert.deepEqual(h.acked, ["r1"]);
 });
 
 test("synthetic reaction turns never receive ack hooks", async () => {
