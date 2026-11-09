@@ -530,7 +530,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const authoredDetection =
         input.origin.kind === "ambient" && input.origin.live === true && conversation.kind !== "dm";
       const actorFeatures = (await deps.featureFlags?.enabledFor(personalScope(actor.id))) ?? new Set<FeatureName>();
-      const delegationEnabled = !external && actorFeatures.has("responsive_spine");
       const descriptiveTitles = actorFeatures.has("descriptive_session_titles");
       const delegatedOrigin =
         !external && deps.runs
@@ -1044,14 +1043,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       }
       const sideChat = (await deps.sessions.getByThread(conversation.threadRef))?.sideChat;
       const focusedSideChat = Boolean(sideChat && !sideChat.expanded);
-      const sessionSyscalls =
-        !focusedSideChat &&
-        !external &&
-        deps.sessionSyscalls &&
-        (delegationEnabled || actorFeatures.has("persistent_subagents"))
-          ? deps.sessionSyscalls
-          : undefined;
-      const delegateWork = !focusedSideChat && requiresDelegation(input, delegationEnabled);
+      const sessionSyscalls = !focusedSideChat && !external ? deps.sessionSyscalls : undefined;
+      const delegateWork = !focusedSideChat && requiresDelegation(input);
       let modeFrame = applyPromptVars(frameMd, frameVars);
       if (delegateWork)
         modeFrame +=
@@ -2546,6 +2539,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 ownerScopeId: scopeId,
                 threadRef: conversation.threadRef,
                 ...(defaultDestination ? { destination: defaultDestination } : {}),
+                returnsToParent: isSubagentThreadRef(conversation.threadRef) && Boolean(session.parentSessionId),
               })
             : undefined;
 

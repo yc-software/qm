@@ -74,7 +74,6 @@ export function renderSubagentMail(input: {
 export interface SubagentMailDeps {
   signals?: Pick<RunSignalStore, "pending">;
   deliveries?: Pick<DeliveryStore, "enqueue">;
-  delegationEnabled?: (actorId: string) => Promise<boolean>;
   mailbox: SessionMailbox;
   sessions: Pick<SessionStore, "get" | "getByThread" | "latestItemSeq" | "visibleItems" | "childrenOf">;
   runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "getByDedupKey" | "withdraw"> & Partial<Pick<RunStore, "get">>;
@@ -82,10 +81,7 @@ export interface SubagentMailDeps {
   prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
 }
 
-type ParentMailDeps = Pick<
-  SubagentMailDeps,
-  "mailbox" | "runs" | "maxAttempts" | "prepareRequest" | "delegationEnabled"
->;
+type ParentMailDeps = Pick<SubagentMailDeps, "mailbox" | "runs" | "maxAttempts" | "prepareRequest">;
 
 interface ParentSource {
   actor: Principal;
@@ -257,9 +253,7 @@ async function wakeParent(
   }
   if (existing && (existing.status === "done" || existing.status === "failed")) return "settled";
   if ((await deps.runs.inFlightForThread(parent.threadRef)).length) return "busy";
-  const surfaceTools =
-    meta.surfaceTools === true ||
-    requiresDelegation(prepared, (await deps.delegationEnabled?.(prepared.actor.id)) === true);
+  const surfaceTools = meta.surfaceTools === true || requiresDelegation(prepared);
   await deps.runs.enqueue({
     sessionId: parent.threadRef,
     dedupKey: wake.dedupKey,
