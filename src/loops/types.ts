@@ -102,8 +102,21 @@ export interface LoopItemTriage {
   pinned?: Array<"priority" | "group">;
 }
 
+export type LoopVerdictState = "needs_reply" | "resolved" | "noise";
+
+export interface LoopItemVerdict {
+  state: LoopVerdictState;
+  reason: string;
+  waitingTs: string | null;
+  draft: string | null;
+  lastSeenTs: string;
+  ledgerState: Exclude<LoopVerdictState, "noise">;
+  at: number;
+}
+
 export interface LoopItem {
   triage?: LoopItemTriage;
+  verdict?: LoopItemVerdict;
   inboxPreview?: LoopSourcePayload;
   id: string;
   loopId: string;

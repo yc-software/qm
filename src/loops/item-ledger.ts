@@ -5,6 +5,7 @@ import type {
   LoopItem,
   LoopItemStatus,
   LoopItemTriage,
+  LoopItemVerdict,
   LoopProposal,
   LoopSourcePayload,
   LoopThreadMessage,
@@ -81,6 +82,7 @@ export interface LoopItemLedger {
   ): Promise<LoopItem | null>;
   appendThread(id: string, messages: Array<Omit<LoopThreadMessage, "id" | "at">>): Promise<LoopItem | null>;
   setTriage(id: string, patch: TriagePatch, by: "agent" | "human"): Promise<LoopItem | null>;
+  setVerdict(id: string, verdict: LoopItemVerdict): Promise<LoopItem | null>;
   recordAction(id: string, input: RecordActionInput): Promise<LoopItem | null>;
   reopen(id: string, opts?: { sentReply?: boolean }): Promise<LoopItem | null>;
   prune(loopId: string, options: PruneOptions): Promise<number>;
@@ -428,6 +430,9 @@ export function createLoopItemLedger(
       });
       if (applied) emit(after, "triage");
       return applied ? after : null;
+    },
+    setVerdict(id, verdict) {
+      return update(id, (item) => ({ ...item, verdict }));
     },
     async recordAction(id, input) {
       let applied = false;

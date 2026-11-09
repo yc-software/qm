@@ -135,6 +135,8 @@ import { createLoopStore } from "./loops/loop-store.ts";
 import { createLoopItemLedger } from "./loops/item-ledger.ts";
 import { createPostgresLedgerEventBus, type LedgerEventBus } from "./loops/ledger-events.ts";
 import { createInboxSourceRefresh } from "./loops/inbox-source-refresh.ts";
+import { createInboxVerdictPass } from "./loops/verdict/shadow.ts";
+import { createConversationFetcher } from "./loops/verdict/fetch.ts";
 import { createInboxRealtime } from "./loops/inbox-realtime.ts";
 import { createLoopOutputStore } from "./loops/output-store.ts";
 import { createShipGrantStore } from "./loops/ship-grant-store.ts";
@@ -302,7 +304,7 @@ import { createPostgresToolOutputStore } from "./sessions/tool-output.ts";
 import { LLM_CAPTURE_RETENTION_MS, type SessionStore } from "./sessions/session-store.ts";
 import { keychainCompanyChatGPTAuth, type CompanyChatGPTAuth } from "./model/company-chatgpt-auth.ts";
 import { keychainEnvCredential } from "./credentials/keychain-env-credential.ts";
-import { createAgent, agentConfigOptions } from "./agent/agent-run.ts";
+import { createAgent, agentConfigOptions, oneShot } from "./agent/agent-run.ts";
 import { withResolvedRuntime, resolveRuntimeChoice } from "./agent/runtime-choice.ts";
 import { selectableModelCatalog } from "./model/model-catalog.ts";
 import type { Agent, RuntimeChoice, SessionRoute } from "./agent/agent.ts";
@@ -2605,6 +2607,29 @@ export function buildApp(
           inboxQuiet: createInboxQuietCheck({
             tokens: keychain,
             ...(config.slack?.apiUrl ? { slackApiUrl: config.slack.apiUrl } : {}),
+          }),
+          inboxVerdict: createInboxVerdictPass({
+            featureFlags,
+            items: loopItems,
+            audit: auditLog,
+            errors,
+            fetch: createConversationFetcher({
+              tokens: keychain,
+              directory,
+              ...(config.slack?.apiUrl ? { slackApiUrl: config.slack.apiUrl } : {}),
+            }),
+            model: {
+              verdict: (system, prompt) => agent.oneShot?.(system, prompt, "decision") ?? Promise.resolve(undefined),
+              draft: async (system, prompt) => {
+                const route = modelRoutes.servable(await modelRoutes.route(modelRoutes.baseModelId()));
+                if (!route) return undefined;
+                return oneShot("pi-inbox-draft", route.model, route.keys, system, prompt, {
+                  modelGateway: route.gateway,
+                  purpose: "decision",
+                });
+              },
+            },
+            ownerName: async (owner) => (await directory.get(owner))?.displayName || undefined,
           }),
         }
       : {}),

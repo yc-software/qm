@@ -19,6 +19,11 @@ export const FEATURES = {
   },
   responsive_spine: { label: "Responsive spine (delegation)", personalOnly: true },
   inbox_loops: { label: "Inbox Loops" },
+  inbox_verdict: {
+    label: "Inbox verdict (shadow)",
+    personalOnly: true,
+    hint: "Re-reads each Inbox conversation on the sync cycle and asks one model pass whether the selected people still owe a reply. The verdict is stored on the item and compared with the Inbox's current classification; disagreements are written to the audit log. Nothing changes in the Inbox UI.",
+  },
   slack_loading_indicator: {
     label: "Slack loading indicator (experimental)",
     hint: "Shows an activity card in Slack threads, including background work and monitors. After five minutes, the card links to the web conversation. Everyone in a shared thread can see it. Top-level DMs stay unchanged. Turning this off leaves existing cards.",

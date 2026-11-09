@@ -57,6 +57,7 @@ import {
 import type { TriagePatch } from "./item-ledger.ts";
 import { adapterForItem } from "./sources/index.ts";
 import type { InboxQuietCheck } from "./inbox-quiet-check.ts";
+import type { InboxVerdictPass } from "./verdict/shadow.ts";
 
 export interface LoopFireDeps {
   admittedWork?: AdmittedWork;
@@ -71,6 +72,7 @@ export interface LoopFireDeps {
   files: Pick<FileArtifactStore, "listOwnedByScopes" | "open">;
   trigger: TriggerDeps;
   inboxQuiet?: InboxQuietCheck;
+  inboxVerdict?: InboxVerdictPass;
 }
 
 interface LoopFireResult {
@@ -775,6 +777,8 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
       } catch (error) {
         failure = error;
       }
+      if (!quiet?.quiet && deps.inboxVerdict)
+        await deps.inboxVerdict(loop, await voiceProfile().catch(() => undefined));
       if (failure === undefined) {
         await deps.loops.recordScan(loopId, firedAt);
         await deps.loops.recordFireOutcome(loopId, "ok");
