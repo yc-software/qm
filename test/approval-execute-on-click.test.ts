@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createAgent } from "../src/agent/agent-run.ts";
-import { approvedCallsOnEarlierAttempt } from "../src/core/orchestrator/approvals.ts";
+import { approvedCallsOnEarlierAttempt, withdrawCallApprovals } from "../src/core/orchestrator/approvals.ts";
 import { createModelRoutes } from "../src/model/model-route.ts";
 import type { AgentTurnInput, SteeredApproval } from "../src/agent/agent.ts";
 import type { Item, NewItem } from "../src/sessions/items.ts";
@@ -290,4 +290,23 @@ test("a retried turn only finishes approved calls the same person decided", () =
   } as unknown as Item;
   assert.equal(approvedCallsOnEarlierAttempt([decided], "U2").unstarted.length, 0);
   assert.deepEqual(approvedCallsOnEarlierAttempt([decided], "U1").unstarted, [{ call, approvalKey: "tool-call:abc" }]);
+});
+
+test("withdrawing a card that a concurrent click already decided reports and audits nothing", async () => {
+  const key = `tool-call:${"a".repeat(64)}`;
+  const record = {
+    sessionId: "s1",
+    command: "example_send",
+    approvalKey: key,
+    call: { tool: "example_send", input: {} },
+    request: { actor: { id: "internal:U1", externalId: "U1" } },
+  };
+  const audited: unknown[] = [];
+  const pending = {
+    selectEntries: async () => [["r1", record]],
+    take: async () => null,
+  } as unknown as Parameters<typeof withdrawCallApprovals>[0];
+  const out = await withdrawCallApprovals(pending, "s1", "U1", "a".repeat(12), (event) => audited.push(event));
+  assert.deepEqual(out.withdrawn, []);
+  assert.deepEqual(audited, []);
 });
