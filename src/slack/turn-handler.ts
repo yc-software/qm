@@ -6,6 +6,7 @@ import {
 } from "./external-access.ts";
 import type { SlackRateLimitNotice } from "./rate-limit-notice.ts";
 import type { SlackHistoryReader } from "./history.ts";
+import type { SlackIdentityMode } from "./identity.ts";
 import { slackFailureText } from "./turn-flow.ts";
 import { errMessage, reportFailure, reportFailureAs, swallowAs } from "../util/errors.ts";
 import {
@@ -120,10 +121,10 @@ export interface TurnHandler {
 export function botAuthoredActor(
   actor: ActorAssertion,
   inc: { botAuthored?: boolean; userId: string | undefined },
+  identityMode: SlackIdentityMode,
 ): ActorAssertion {
-  return inc.botAuthored && inc.userId && !actor.isBot && actor.externalId === inc.userId
-    ? { ...actor, isBot: true }
-    : actor;
+  const unresolved = identityMode === "email" && !!inc.userId && actor.externalId === inc.userId;
+  return inc.botAuthored && unresolved && !actor.isBot ? { ...actor, isBot: true } : actor;
 }
 
 function channelType(kind: SlackConversationKind, conversationKind: SlackConversationKind): string {
@@ -223,7 +224,7 @@ export function createTurnHandler(deps: {
       return;
     if (deps.externalAccess && inc.unprompted) inc = { ...inc, unprompted: false };
     if (deps.allowActor && !deps.allowActor(classified.actor)) return;
-    const actor = botAuthoredActor(classified.actor, inc);
+    const actor = botAuthoredActor(classified.actor, inc, ids.identityMode);
     const timezone = classified.timezone;
     const text = resolveMentions(
       decodeSlackEntities(inc.rawText).trim(),

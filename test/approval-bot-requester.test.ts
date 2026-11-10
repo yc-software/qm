@@ -58,17 +58,18 @@ test("an undeliverable approval is settled as declined once, with the reason rec
   assert.equal(appended.length, 2, "a second failure report changes nothing");
 });
 
-test("bot-authored Slack messages keep bot provenance unless the author resolved to another identity", () => {
+test("bot-authored Slack messages keep bot provenance only when the author stayed a raw Slack id in email identity mode", () => {
+  const bot = { externalId: "UBOT1", displayName: "Bot" };
+  assert.deepEqual(botAuthoredActor(bot, { botAuthored: true, userId: "UBOT1" }, "email"), { ...bot, isBot: true });
+  assert.deepEqual(botAuthoredActor(bot, { userId: "UBOT1" }, "email"), bot);
   assert.deepEqual(
-    botAuthoredActor({ externalId: "UBOT1", displayName: "Bot" }, { botAuthored: true, userId: "UBOT1" }),
-    {
-      externalId: "UBOT1",
-      displayName: "Bot",
-      isBot: true,
-    },
+    botAuthoredActor({ externalId: "a@example.com" }, { botAuthored: true, userId: "U2" }, "email"),
+    { externalId: "a@example.com" },
+    "a person posting through an app keeps their identity",
   );
-  assert.deepEqual(botAuthoredActor({ externalId: "U1" }, { userId: "U1" }), { externalId: "U1" });
-  assert.deepEqual(botAuthoredActor({ externalId: "a@example.com" }, { botAuthored: true, userId: "U2" }), {
-    externalId: "a@example.com",
-  });
+  assert.deepEqual(
+    botAuthoredActor({ externalId: "U3" }, { botAuthored: true, userId: "U3" }, "slack-id"),
+    { externalId: "U3" },
+    "slack-id mode can't tell a person posting through an app from a bot, so it relies on the profile",
+  );
 });
