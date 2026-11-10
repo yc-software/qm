@@ -27,9 +27,6 @@ import { withModelRequestContext } from "../model/request-context.ts";
 
 import type { App, AppDeps } from "./app-types.ts";
 
-/** How long a judge pass owns its batch; a pass that dies mid-judge frees the batch after this. */
-const AMBIENT_CLAIM_MS = 5 * 60_000;
-
 export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
   function shouldRouteToSpine(input: OrchestratorInput): boolean {
     const { conversation } = input;
@@ -66,19 +63,14 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
     ]);
     return [...parents!, ...ownReplies.flat()];
   }
-  const judging = new Map<string, Promise<unknown>>();
   function judgeAmbientContainer(
     surface: string,
     container: string,
     opts?: { reason?: "messages" | "scheduled" },
   ): Promise<AmbientDecision> {
-    const key = `${surface}:${container}`;
-    const judge = () => judgeAmbientOnce(surface, container, opts);
-    const run = (judging.get(key) ?? Promise.resolve()).then(judge, judge);
-    const tail = run.catch(() => undefined);
-    judging.set(key, tail);
-    void tail.then(() => judging.get(key) === tail && judging.delete(key));
-    return run;
+    return deps.advisoryLock.withLock(`ambient-judge:${orgIdOf()}:${surface}:${container}`, () =>
+      judgeAmbientOnce(surface, container, opts),
+    );
   }
   async function judgeAmbientOnce(
     surface: string,
@@ -107,36 +99,13 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
           .mutateMany([
             {
               id: cursorKey,
-              apply: (current) => {
-                const { claimTs, claimUntil, ...rest } = current ?? { lastJudgedTs: "" };
-                const mine = claimTs !== undefined && claimTs <= rawLatestTs;
-                const claim = mine || claimTs === undefined ? {} : { claimTs, claimUntil };
-                return rest.lastJudgedTs >= rawLatestTs
-                  ? { ...rest, ...claim }
-                  : { lastJudgedTs: rawLatestTs, lastJudgedAt: Date.now(), ...claim };
-              },
+              apply: (current) =>
+                current && current.lastJudgedTs >= rawLatestTs
+                  ? current
+                  : { lastJudgedTs: rawLatestTs, lastJudgedAt: Date.now() },
             },
           ])
           .catch(reportFailureAs("ambient: advance cursor", undefined));
-    };
-    // Durable claim: of all passes (any process) that read this cursor, only one judges the batch.
-    const claimBatch = async (): Promise<boolean> => {
-      if (!deps.ambientCursors || !rawDelta.length) return true;
-      const now = Date.now();
-      let won = false;
-      await deps.ambientCursors.insertIfAbsent(cursorKey, { lastJudgedTs: "" });
-      await deps.ambientCursors.mutateMany([
-        {
-          id: cursorKey,
-          apply: (current) => {
-            const row = current ?? { lastJudgedTs: "" };
-            if (row.lastJudgedTs !== (after ?? "") || (row.claimUntil ?? 0) > now) return row;
-            won = true;
-            return { ...row, claimTs: rawLatestTs, claimUntil: now + AMBIENT_CLAIM_MS };
-          },
-        },
-      ]);
-      return won;
     };
     if (!delta.length && !scheduled) {
       await advanceCursor();
@@ -152,7 +121,6 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
         });
       if (held) return { act: false };
     }
-    if (!(await claimBatch())) return { act: false };
     const tsFrom = delta.reduce((min, m) => (min === "" || m.ts < min ? m.ts : min), "");
     const tsTo = delta.reduce((max, m) => (m.ts > max ? m.ts : max), "");
     const watchReason =
