@@ -113,6 +113,7 @@ export async function startQm(
     if (tenant) await loadTenant().catch(swallowAs("boot tenant load", undefined));
     await built.deploymentLayerReady;
     built.deploymentLayerRefresh.start();
+    await built.checkReadiness(new AbortController().signal);
   });
   server.listen(config.port);
   await once(server, "listening");
